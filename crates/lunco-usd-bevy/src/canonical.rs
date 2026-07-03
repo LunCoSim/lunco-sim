@@ -15,12 +15,24 @@
 //! notices. The runtime/session edit-target sublayer, EditTarget authoring, and
 //! the chunked physics-aware projector land in later slices (S2/S3).
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use openusd::sdf::Path as SdfPath;
 use openusd::usd::{CommittedChange, Stage, StageSinkId};
 
 use crate::view::StageView;
+
+/// A `Send` in-memory recipe for building a canonical [`Stage`]: the resolved
+/// root layer identifier + the full transitive `.usda` layer-closure bytes
+/// (from [`fetch_layer_closure`](crate::compose)). This crosses the async→main
+/// boundary the `!Send` `Stage` cannot: an asset loader fetches the recipe
+/// off-thread, a main-thread system builds the `CanonicalStage` from it.
+#[derive(Clone)]
+pub struct StageRecipe {
+    pub root_id: String,
+    pub bytes: HashMap<String, Vec<u8>>,
+}
 
 /// One committed change, owned + `Send`, as drained from the stage sink.
 /// (`CommittedChange` borrows the stage; we copy the paths out so the inbox can
@@ -78,6 +90,13 @@ impl CanonicalStage {
         }
     }
 
+    /// Build a `CanonicalStage` from a fetched [`StageRecipe`] — the main-thread
+    /// build path for the runtime scene load (async fetch → this).
+    pub fn from_recipe(recipe: &StageRecipe) -> anyhow::Result<Self> {
+        let stage = crate::compose::build_stage_from_closure(recipe)?;
+        Ok(Self::from_stage(stage, recipe.root_id.clone()))
+    }
+
     /// A [`StageView`] over the composed stage for typed reads.
     pub fn view(&self) -> StageView<'_> {
         StageView::new(&self.stage)
@@ -99,5 +118,47 @@ impl CanonicalStage {
             self.generation += 1;
         }
         drained
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod recipe_tests {
+    //! Ph0′ S2d: the runtime build primitive — a `StageRecipe` (what the loader
+    //! fetches off-thread) builds, on the main thread, a `CanonicalStage` whose
+    //! composed reads match the known-good file-composed stage.
+
+    use super::*;
+    use crate::compose::compose_file_to_stage;
+    use crate::view::StageView;
+
+    const FIXTURE: &str = "#usda 1.0\n\ndef Xform \"Root\"\n{\n    def Cube \"Box\"\n    {\n        double size = 3\n    }\n}\n";
+
+    #[test]
+    fn from_recipe_builds_composed_stage() {
+        let dir = std::env::temp_dir().join("lunco_recipe_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("scene.usda");
+        std::fs::write(&f, FIXTURE).unwrap();
+
+        // Recipe mirrors what `fetch_layer_closure` produces for a ref-less scene:
+        // root keyed by the SAME canonical id the resolver uses.
+        let root_id = crate::resolver::canonicalize(f.to_str().unwrap(), None);
+        let bytes = HashMap::from([(root_id.clone(), std::fs::read(&f).unwrap())]);
+        let recipe = StageRecipe { root_id, bytes };
+
+        let cstage = CanonicalStage::from_recipe(&recipe).expect("from_recipe builds a stage");
+        let view = cstage.view();
+        let prims: Vec<String> = view.prim_paths().iter().map(|p| p.to_string()).collect();
+        assert!(
+            prims.iter().any(|p| p == "/Root/Box"),
+            "recipe-built stage must contain /Root/Box, got {prims:?}"
+        );
+        assert_eq!(view.value::<f64>(&SdfPath::new("/Root/Box").unwrap(), "size"), Some(3.0));
+
+        // And it composes identically to the known-good file-composed path.
+        let ref_stage = compose_file_to_stage(&f).expect("file compose");
+        let ref_prims: Vec<String> =
+            StageView::new(&ref_stage).prim_paths().iter().map(|p| p.to_string()).collect();
+        assert_eq!(prims, ref_prims, "recipe-built stage must match file-composed stage");
     }
 }

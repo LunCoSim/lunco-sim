@@ -32,6 +32,7 @@ use openusd::sdf::{self, Path as SdfPath, PathListOp, SpecData, SpecType, Value}
 use openusd::usd::{PrimPredicate, Stage};
 use openusd::usda;
 
+use crate::canonical::StageRecipe;
 use crate::resolver::{canonicalize, is_binary_asset, resolve_binary_uri, LuncoUsdResolver};
 
 /// Fetch the full transitive `.usda` closure, compose it, and flatten the
@@ -61,6 +62,22 @@ pub(crate) async fn compose_to_stage(
     root_asset_path: &str,
     root_bytes: Vec<u8>,
 ) -> Result<Stage> {
+    let recipe = fetch_layer_closure(load_context, root_asset_path, root_bytes).await?;
+    build_stage_from_closure(&recipe)
+}
+
+/// Async BFS that fetches the full transitive `.usda` layer closure into an
+/// in-memory, `Send` [`StageRecipe`] — the **fetch** half of [`compose_to_stage`].
+/// Split out so the (main-thread, `!Send`) `Stage` build can be deferred: an
+/// asset loader fetches the recipe off-thread, then a main-thread system builds
+/// the canonical `Stage` from it (Ph0′ [`CanonicalStage::from_recipe`]).
+///
+/// [`CanonicalStage::from_recipe`]: crate::canonical::CanonicalStage::from_recipe
+pub(crate) async fn fetch_layer_closure(
+    load_context: &mut LoadContext<'_>,
+    root_asset_path: &str,
+    root_bytes: Vec<u8>,
+) -> Result<StageRecipe> {
     let root_id = canonicalize(root_asset_path, None);
 
     // 1. Pre-fetch BFS — keyed by the SAME canonical id the resolver will use.
@@ -98,14 +115,19 @@ pub(crate) async fn compose_to_stage(
         }
     }
 
-    // 2. Compose (filesystem-free).
-    let resolver = LuncoUsdResolver::new(bytes);
-    let stage = Stage::builder()
-        .resolver(resolver)
-        .open(&root_id)
-        .map_err(|e| anyhow!("USD composition error: {e}"))?;
+    Ok(StageRecipe { root_id, bytes })
+}
 
-    Ok(stage)
+/// Compose an in-memory layer closure ([`StageRecipe`]) into a live openusd
+/// [`Stage`] via PCP — filesystem-free, synchronous, main-thread-safe. The
+/// **build** half of [`compose_to_stage`]; also the runtime path a main-thread
+/// system uses to (re)build a `CanonicalStage` from a fetched recipe.
+pub(crate) fn build_stage_from_closure(recipe: &StageRecipe) -> Result<Stage> {
+    let resolver = LuncoUsdResolver::new(recipe.bytes.clone());
+    Stage::builder()
+        .resolver(resolver)
+        .open(&recipe.root_id)
+        .map_err(|e| anyhow!("USD composition error: {e}"))
 }
 
 /// Walk a parsed layer's specs and collect the non-binary `.usda`

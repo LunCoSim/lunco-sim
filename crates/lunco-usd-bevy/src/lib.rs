@@ -56,9 +56,11 @@ pub mod author;
 pub mod usd_data;
 pub mod view;
 pub mod canonical;
+pub mod read;
 use usd_data::UsdDataExt;
 pub use view::StageView;
-pub use canonical::{CanonicalStage, RawStageChange};
+pub use canonical::{CanonicalStage, RawStageChange, StageRecipe};
+pub use read::UsdRead;
 pub use compose::compose_native_fs;
 #[cfg(not(target_arch = "wasm32"))]
 pub use compose::compose_file_to_stage;
@@ -1694,20 +1696,20 @@ pub fn read_rel_target(reader: &UsdData, prim_path: &SdfPath, rel_name: &str) ->
 /// documented silent-`None` "bodies launched into orbit" bug, where a
 /// `point3f` anchor (parsed as `[f32;3]`) read through a single-type
 /// path returned `None` and defaulted the joint anchor to zero.
-pub fn read_vec3_f64(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<[f64; 3]> {
+pub fn read_vec3_f64<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<[f64; 3]> {
     // Fixed-size array forms first (`point3f`/`float3` → `[f32;3]`,
     // `point3d`/`double3` → `[f64;3]`).
-    if let Some(v) = reader.prim_attribute_value::<[f32; 3]>(path, attr) {
+    if let Some(v) = reader.scalar::<[f32; 3]>(path, attr) {
         return Some([v[0] as f64, v[1] as f64, v[2] as f64]);
     }
-    if let Some(v) = reader.prim_attribute_value::<[f64; 3]>(path, attr) {
+    if let Some(v) = reader.scalar::<[f64; 3]>(path, attr) {
         return Some([v[0], v[1], v[2]]);
     }
     // `Vec<f32>`/`Vec<f64>` array forms (rare in authored USD).
-    if let Some(v) = reader.prim_attribute_value::<Vec<f32>>(path, attr) {
+    if let Some(v) = reader.scalar::<Vec<f32>>(path, attr) {
         if v.len() >= 3 { return Some([v[0] as f64, v[1] as f64, v[2] as f64]); }
     }
-    if let Some(v) = reader.prim_attribute_value::<Vec<f64>>(path, attr) {
+    if let Some(v) = reader.scalar::<Vec<f64>>(path, attr) {
         if v.len() >= 3 { return Some([v[0], v[1], v[2]]); }
     }
     None
@@ -2595,14 +2597,14 @@ pub enum ShapeDims {
 /// an unsupported type. **The defaults here are the single source of
 /// truth** for both `lunco-usd-avian` (→ `Collider`) and this crate
 /// (→ `Mesh`); changing one here changes both, so they can't drift.
-pub fn read_shape_dims(reader: &UsdData, path: &SdfPath, type_name: &str) -> Option<ShapeDims> {
+pub fn read_shape_dims<R: UsdRead>(reader: &R, path: &SdfPath, type_name: &str) -> Option<ShapeDims> {
     let dims = match type_name {
         "Cube" => {
-            let size = reader.prim_attribute_value::<f64>(path, "size").unwrap_or(2.0);
+            let size = reader.scalar::<f64>(path, "size").unwrap_or(2.0);
             let legacy_extents = match (
-                reader.prim_attribute_value::<f64>(path, "width"),
-                reader.prim_attribute_value::<f64>(path, "height"),
-                reader.prim_attribute_value::<f64>(path, "depth"),
+                reader.scalar::<f64>(path, "width"),
+                reader.scalar::<f64>(path, "height"),
+                reader.scalar::<f64>(path, "depth"),
             ) {
                 (Some(w), Some(h), Some(d)) => Some([w, h, d]),
                 _ => None,
@@ -2610,23 +2612,23 @@ pub fn read_shape_dims(reader: &UsdData, path: &SdfPath, type_name: &str) -> Opt
             ShapeDims::Cube { size, legacy_extents }
         }
         "Sphere" => ShapeDims::Sphere {
-            radius: reader.prim_attribute_value::<f64>(path, "radius").unwrap_or(1.0),
+            radius: reader.scalar::<f64>(path, "radius").unwrap_or(1.0),
         },
         "Cylinder" => ShapeDims::Cylinder {
-            radius: reader.prim_attribute_value::<f64>(path, "radius").unwrap_or(1.0),
-            height: reader.prim_attribute_value::<f64>(path, "height").unwrap_or(2.0),
+            radius: reader.scalar::<f64>(path, "radius").unwrap_or(1.0),
+            height: reader.scalar::<f64>(path, "height").unwrap_or(2.0),
         },
         "Cone" => ShapeDims::Cone {
-            radius: reader.prim_attribute_value::<f64>(path, "radius").unwrap_or(1.0),
-            height: reader.prim_attribute_value::<f64>(path, "height").unwrap_or(2.0),
+            radius: reader.scalar::<f64>(path, "radius").unwrap_or(1.0),
+            height: reader.scalar::<f64>(path, "height").unwrap_or(2.0),
         },
         "Capsule" => ShapeDims::Capsule {
-            radius: reader.prim_attribute_value::<f64>(path, "radius").unwrap_or(0.5),
-            height: reader.prim_attribute_value::<f64>(path, "height").unwrap_or(1.0),
+            radius: reader.scalar::<f64>(path, "radius").unwrap_or(0.5),
+            height: reader.scalar::<f64>(path, "height").unwrap_or(1.0),
         },
         "Plane" => ShapeDims::Plane {
-            width: reader.prim_attribute_value::<f64>(path, "width").unwrap_or(2.0),
-            length: reader.prim_attribute_value::<f64>(path, "length").unwrap_or(2.0),
+            width: reader.scalar::<f64>(path, "width").unwrap_or(2.0),
+            length: reader.scalar::<f64>(path, "length").unwrap_or(2.0),
         },
         _ => return None,
     };
@@ -2638,10 +2640,9 @@ pub fn read_shape_dims(reader: &UsdData, path: &SdfPath, type_name: &str) -> Opt
 /// cover integer arrays, so mesh topology (`faceVertexCounts` /
 /// `faceVertexIndices`) is matched directly. `None` if absent or not an int
 /// array.
-fn read_int_array(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<Vec<i32>> {
-    let attr_path = path.append_property(attr).ok()?;
-    match reader.field(&attr_path, "default")? {
-        Value::IntVec(v) => Some(v.clone()),
+fn read_int_array<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<Vec<i32>> {
+    match reader.attr_value(path, attr)? {
+        Value::IntVec(v) => Some(v),
         Value::Int64Vec(v) => Some(v.iter().map(|&x| x as i32).collect()),
         _ => None,
     }
@@ -2657,11 +2658,11 @@ fn read_int_array(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<Vec<i3
 /// shape `Collider::trimesh` consumes. Triangle winding is irrelevant for
 /// collision, so `orientation` is ignored. `None` if the topology attributes
 /// are absent/empty or an index is out of range (malformed mesh).
-pub fn read_usd_mesh_indexed(
-    reader: &UsdData,
+pub fn read_usd_mesh_indexed<R: UsdRead>(
+    reader: &R,
     path: &SdfPath,
 ) -> Option<(Vec<[f32; 3]>, Vec<[u32; 3]>)> {
-    let points = reader.prim_attribute_value::<Vec<[f32; 3]>>(path, "points")?;
+    let points = reader.scalar::<Vec<[f32; 3]>>(path, "points")?;
     let counts = read_int_array(reader, path, "faceVertexCounts")?;
     let indices = read_int_array(reader, path, "faceVertexIndices")?;
     if points.is_empty() || counts.is_empty() || indices.is_empty() {

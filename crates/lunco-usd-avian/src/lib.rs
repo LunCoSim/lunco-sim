@@ -49,7 +49,7 @@ use avian3d::prelude::*;
 use avian3d::physics_transform::{Position, Rotation};
 use lunco_usd_bevy::{
     has_api_schema, read_rel_target, read_shape_dims, read_transform_from_usd,
-    read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims, UsdAnimated, UsdVisualSynced,
+    read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims, UsdAnimated, UsdRead, UsdVisualSynced,
 };
 pub use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset, UsdInstanceRoot};
 use openusd::sdf::Path as SdfPath;
@@ -340,8 +340,8 @@ fn collect_child_colliders_from_usd(
 ///
 /// **Legacy fallback for `Cube`**: `width`/`height`/`depth` still accepted so
 /// unmigrated `.usda` files keep working (those author full dims at scale=1).
-fn build_collider_from_usd(reader: &UsdData, sdf_path: &SdfPath) -> Option<Collider> {
-    let ty = reader.prim_type_name(sdf_path)?;
+fn build_collider_from_usd<R: UsdRead>(reader: &R, sdf_path: &SdfPath) -> Option<Collider> {
+    let ty = reader.type_name(sdf_path)?;
 
     // Native UsdGeomMesh → static triangle-mesh collider, decoded from the
     // SAME `points`/`faceVertexIndices` `lunco-usd-bevy` renders (one geometry
@@ -404,7 +404,7 @@ fn build_collider_from_usd(reader: &UsdData, sdf_path: &SdfPath) -> Option<Colli
 /// `set_scale` with the authored count (overriding Avian's `10` only for scaled
 /// round shapes). Blocked on Avian: while it hardcodes `10`, any runtime scale
 /// edit re-clobbers our value, so a clean realtime story needs Avian's knob first.
-fn apply_collider_scale(mut collider: Collider, reader: &UsdData, sdf_path: &SdfPath) -> Collider {
+fn apply_collider_scale<R: UsdRead>(mut collider: Collider, reader: &R, sdf_path: &SdfPath) -> Collider {
     let scale = read_vec3_attribute(reader, sdf_path, "xformOp:scale")
         .map(|v| (v.x, v.y, v.z))
         .unwrap_or((1.0, 1.0, 1.0));
@@ -1075,7 +1075,7 @@ fn read_token_attribute(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<
 /// (the 4-branch `[f32;3]→[f64;3]→Vec<f32>→Vec<f64>` ladder). Keeping the
 /// reader f64 end-to-end is what avoids the documented silent-`None`
 /// "bodies launched into orbit" bug for `physics:localPos*` anchors.
-fn read_vec3_attribute(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<DVec3> {
+fn read_vec3_attribute<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<DVec3> {
     lunco_usd_bevy::read_vec3_f64(reader, path, attr).map(|v| DVec3::new(v[0], v[1], v[2]))
 }
 
@@ -1228,3 +1228,44 @@ fn apply_rigid_body_mass_props(
 #[derive(Component, Reflect, Default)]
 #[reflect(Component, Default)]
 pub struct ShouldBeDynamic;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod collider_parity_tests {
+    //! Ph0′ S2c: the collider read path is generic over `UsdRead`, so a collider
+    //! built from the live `StageView` must equal one built from the flattened
+    //! `sdf::Data` — proof that re-pointing the physics extractor at the canonical
+    //! stage is behaviour-preserving for geometry (the highest-risk physics read).
+
+    use super::build_collider_from_usd;
+    use lunco_usd_bevy::{compose_file, compose_file_to_stage, StageView};
+    use openusd::sdf::Path as SdfPath;
+
+    // A Cube with a non-uniform scale exercises `read_shape_dims` (size) AND the
+    // `apply_collider_scale` → `read_vec3_f64` path (the double-scaling-sensitive one).
+    const FIXTURE: &str = "#usda 1.0\n\ndef Cube \"Box\"\n{\n    double size = 2\n    float3 xformOp:scale = (2, 3, 4)\n    uniform token[] xformOpOrder = [\"xformOp:scale\"]\n}\n";
+
+    #[test]
+    fn collider_from_stageview_matches_flatten() {
+        let dir = std::env::temp_dir().join("lunco_collider_parity");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("box.usda");
+        std::fs::write(&f, FIXTURE).unwrap();
+
+        let stage = compose_file_to_stage(&f).expect("compose stage");
+        let flat = compose_file(&f).expect("flatten");
+        let view = StageView::new(&stage);
+        let path = SdfPath::new("/Box").unwrap();
+
+        let c_view = build_collider_from_usd(&view, &path);
+        let c_flat = build_collider_from_usd(&flat, &path);
+        assert!(
+            c_view.is_some() && c_flat.is_some(),
+            "both sources must build a collider"
+        );
+        assert_eq!(
+            format!("{:?}", c_view.unwrap()),
+            format!("{:?}", c_flat.unwrap()),
+            "StageView-built collider must equal flatten-built collider (incl. scale)"
+        );
+    }
+}
