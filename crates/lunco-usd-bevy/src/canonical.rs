@@ -232,3 +232,63 @@ mod recipe_tests {
         assert_eq!(prims, ref_prims, "recipe-built stage must match file-composed stage");
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod sync_system_tests {
+    //! Ph0′ S2d-wiring: the `sync_canonical_stages` SYSTEM, in a minimal Bevy
+    //! App, must turn a loaded `UsdStageAsset` (carrying a `StageRecipe`) into a
+    //! live `CanonicalStage` in the `CanonicalStages` resource — the exact runtime
+    //! path the headless server exercises on scene load.
+
+    use super::*;
+    use bevy::asset::{AssetApp, AssetPlugin};
+    use bevy::prelude::*;
+    use std::sync::Arc;
+
+    const FIXTURE: &str =
+        "#usda 1.0\n\ndef Xform \"Root\"\n{\n    def Cube \"Box\"\n    {\n        double size = 3\n    }\n}\n";
+
+    #[test]
+    fn sync_canonical_stages_builds_stage_from_loaded_asset() {
+        let dir = std::env::temp_dir().join("lunco_sync_system_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("scene.usda");
+        std::fs::write(&f, FIXTURE).unwrap();
+
+        let root_id = crate::resolver::canonicalize(f.to_str().unwrap(), None);
+        let bytes = HashMap::from([(root_id.clone(), std::fs::read(&f).unwrap())]);
+        let recipe = StageRecipe { root_id, bytes };
+        // A reader for the asset (the field the legacy path uses); the system
+        // itself only reads `recipe`.
+        let stage = crate::compose::build_stage_from_closure(&recipe).unwrap();
+        let reader = Arc::new(crate::compose::flatten_stage(&stage).unwrap());
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(AssetPlugin::default())
+            .init_asset::<crate::UsdStageAsset>()
+            .init_non_send_resource::<CanonicalStages>()
+            .add_systems(Update, sync_canonical_stages);
+
+        // `Assets::add` emits `AssetEvent::Added`, which the system reads.
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<crate::UsdStageAsset>>()
+            .add(crate::UsdStageAsset { reader, recipe: Some(recipe) });
+
+        // One frame flushes the asset event; the next lets the system act on it.
+        app.update();
+        app.update();
+
+        let stages = app
+            .world()
+            .get_non_send_resource::<CanonicalStages>()
+            .expect("CanonicalStages resource present");
+        assert_eq!(stages.len(), 1, "exactly one canonical stage built from the loaded asset");
+        let cs = stages.get(handle.id()).expect("canonical stage keyed by the asset id");
+        assert!(
+            cs.view().prim_paths().iter().any(|p| p.to_string() == "/Root/Box"),
+            "the runtime canonical stage exposes the composed scene"
+        );
+    }
+}

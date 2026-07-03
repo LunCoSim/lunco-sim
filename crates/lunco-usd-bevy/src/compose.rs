@@ -35,39 +35,8 @@ use openusd::usda;
 use crate::canonical::StageRecipe;
 use crate::resolver::{canonicalize, is_binary_asset, resolve_binary_uri, LuncoUsdResolver};
 
-/// Fetch the full transitive `.usda` closure, compose it, and flatten the
-/// composed stage to a `TextReader`. `root_asset_path` is the asset-source
-/// relative path of the layer being loaded (e.g.
-/// `scenes/sandbox/sandbox_scene.usda`); `root_bytes` are its raw bytes.
-pub(crate) async fn compose_to_data(
-    load_context: &mut LoadContext<'_>,
-    root_asset_path: &str,
-    root_bytes: Vec<u8>,
-) -> Result<sdf::Data> {
-    let stage = compose_to_stage(load_context, root_asset_path, root_bytes).await?;
-    // 3. Flatten composed stage → TextReader. `flatten_stage` discovers binary
-    //    arcs from the composed layer stack and anchors their URIs on the
-    //    composed prims via each prim's composition stack.
-    flatten_stage(&stage)
-}
-
-/// Fetch the full transitive `.usda` closure and compose it into a **live**
-/// openusd [`Stage`], WITHOUT flattening. This is the canonical-document build
-/// path (Ph0′): the returned `Stage` is `!Send` and must stay on the main
-/// thread (a `NonSend` resource); it retains layers, edit targets, and change
-/// sinks that the flattened `sdf::Data` loses. [`compose_to_data`] is the thin
-/// wrapper that flattens this for the legacy asset pipeline.
-pub(crate) async fn compose_to_stage(
-    load_context: &mut LoadContext<'_>,
-    root_asset_path: &str,
-    root_bytes: Vec<u8>,
-) -> Result<Stage> {
-    let recipe = fetch_layer_closure(load_context, root_asset_path, root_bytes).await?;
-    build_stage_from_closure(&recipe)
-}
-
 /// Async BFS that fetches the full transitive `.usda` layer closure into an
-/// in-memory, `Send` [`StageRecipe`] — the **fetch** half of [`compose_to_stage`].
+/// in-memory, `Send` [`StageRecipe`] — the **fetch** half of the loader's compose path.
 /// Split out so the (main-thread, `!Send`) `Stage` build can be deferred: an
 /// asset loader fetches the recipe off-thread, then a main-thread system builds
 /// the canonical `Stage` from it (Ph0′ [`CanonicalStage::from_recipe`]).
@@ -120,7 +89,7 @@ pub(crate) async fn fetch_layer_closure(
 
 /// Compose an in-memory layer closure ([`StageRecipe`]) into a live openusd
 /// [`Stage`] via PCP — filesystem-free, synchronous, main-thread-safe. The
-/// **build** half of [`compose_to_stage`]; also the runtime path a main-thread
+/// **build** half of the loader's compose path; also the runtime path a main-thread
 /// system uses to (re)build a `CanonicalStage` from a fetched recipe.
 pub(crate) fn build_stage_from_closure(recipe: &StageRecipe) -> Result<Stage> {
     let resolver = LuncoUsdResolver::new(recipe.bytes.clone());
