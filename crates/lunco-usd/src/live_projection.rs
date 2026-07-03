@@ -191,7 +191,7 @@ pub(crate) fn project_pending_live_imports(world: &mut World) {
         let generation = doc_generation(world, doc);
         let handle = world
             .resource_mut::<Assets<UsdStageAsset>>()
-            .add(UsdStageAsset { reader: Arc::new(reader) });
+            .add(UsdStageAsset { reader: Arc::new(reader), recipe: None });
         let label = fs_path
             .file_name()
             .map(|f| f.to_string_lossy().into_owned())

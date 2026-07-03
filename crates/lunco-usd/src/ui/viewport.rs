@@ -594,6 +594,7 @@ fn install_active_doc(world: &mut World, doc: DocumentId) {
     };
     let asset = UsdStageAsset {
         reader: std::sync::Arc::new(reader),
+        recipe: None,
     };
     let handle = world
         .resource_mut::<Assets<UsdStageAsset>>()

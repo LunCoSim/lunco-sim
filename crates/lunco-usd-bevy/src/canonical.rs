@@ -121,6 +121,76 @@ impl CanonicalStage {
     }
 }
 
+/// The set of live canonical stages, keyed by the `UsdStageAsset` they were
+/// built from — the runtime home of the Ph0′ canonical document. `NonSend`
+/// (each `CanonicalStage` holds an `Rc`-backed `Stage`). Parallels
+/// `Assets<UsdStageAsset>`: a consumer that has an entity's
+/// `UsdPrimPath.stage_handle` can look up the matching live stage here.
+#[derive(Default)]
+pub struct CanonicalStages {
+    by_asset: HashMap<bevy::asset::AssetId<crate::UsdStageAsset>, CanonicalStage>,
+}
+
+impl CanonicalStages {
+    /// The live canonical stage built from `asset`, if any.
+    pub fn get(&self, asset: bevy::asset::AssetId<crate::UsdStageAsset>) -> Option<&CanonicalStage> {
+        self.by_asset.get(&asset)
+    }
+
+    pub fn get_mut(
+        &mut self,
+        asset: bevy::asset::AssetId<crate::UsdStageAsset>,
+    ) -> Option<&mut CanonicalStage> {
+        self.by_asset.get_mut(&asset)
+    }
+
+    pub fn len(&self) -> usize {
+        self.by_asset.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_asset.is_empty()
+    }
+}
+
+/// Main-thread system (Ph0′): when a `UsdStageAsset` finishes loading with a
+/// [`StageRecipe`], build its live [`CanonicalStage`] and stash it in
+/// [`CanonicalStages`]. Additive — runs ALONGSIDE the flattened-asset path; the
+/// legacy extractors are untouched until the S2e cutover. `NonSend` because the
+/// built `Stage` is `!Send`, so this system is pinned to the main thread.
+pub fn sync_canonical_stages(
+    mut events: bevy::prelude::MessageReader<bevy::asset::AssetEvent<crate::UsdStageAsset>>,
+    assets: bevy::prelude::Res<bevy::asset::Assets<crate::UsdStageAsset>>,
+    mut stages: bevy::prelude::NonSendMut<CanonicalStages>,
+) {
+    use bevy::asset::AssetEvent;
+    for event in events.read() {
+        match event {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } => {
+                let Some(asset) = assets.get(*id) else { continue };
+                let Some(recipe) = asset.recipe.as_ref() else { continue };
+                match CanonicalStage::from_recipe(recipe) {
+                    Ok(cs) => {
+                        bevy::log::info!(
+                            "[canonical] built CanonicalStage for {:?} ({} prims)",
+                            id,
+                            cs.view().prim_paths().len()
+                        );
+                        stages.by_asset.insert(*id, cs);
+                    }
+                    Err(e) => {
+                        bevy::log::warn!("[canonical] from_recipe failed for {id:?}: {e}");
+                    }
+                }
+            }
+            AssetEvent::Removed { id } | AssetEvent::Unused { id } => {
+                stages.by_asset.remove(id);
+            }
+            _ => {}
+        }
+    }
+}
+
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod recipe_tests {
     //! Ph0′ S2d: the runtime build primitive — a `StageRecipe` (what the loader

@@ -59,7 +59,7 @@ pub mod canonical;
 pub mod read;
 use usd_data::UsdDataExt;
 pub use view::StageView;
-pub use canonical::{CanonicalStage, RawStageChange, StageRecipe};
+pub use canonical::{CanonicalStage, CanonicalStages, RawStageChange, StageRecipe};
 pub use read::UsdRead;
 pub use compose::compose_native_fs;
 #[cfg(not(target_arch = "wasm32"))]
@@ -143,6 +143,10 @@ impl Plugin for UsdBevyPlugin {
             // lunco-core's `register_core_resources` (e.g. a focused test app)
             // still has it. Idempotent — a no-op if core already registered it.
             .init_resource::<lunco_core::SceneViewport>()
+            // Ph0′: the live canonical stages, built main-thread from each
+            // loaded `UsdStageAsset`'s `StageRecipe` (`sync_canonical_stages`).
+            // `NonSend` — holds `!Send` openusd `Stage`s.
+            .init_non_send_resource::<canonical::CanonicalStages>()
             .add_systems(Startup, load_diagnostic_label_font)
             .add_observer(on_usd_prim_added)
             .add_observer(light::on_usd_light_added)
@@ -182,6 +186,9 @@ impl Plugin for UsdBevyPlugin {
                 Update,
                 (
                     sync_usd_visuals.run_if(bevy::ecs::schedule::common_conditions::on_message::<AssetEvent<UsdStageAsset>>),
+                    // Ph0′: build the live canonical stage from each loaded
+                    // asset's recipe (additive; legacy path untouched).
+                    canonical::sync_canonical_stages.run_if(bevy::ecs::schedule::common_conditions::on_message::<AssetEvent<UsdStageAsset>>),
                     // Upgrades parked runtime-instance descendants to a
                     // hierarchical `Derived` id (gap G2/B.1) once their root id
                     // is allocated. Cheap: the query is empty unless a runtime
@@ -251,6 +258,12 @@ pub struct UsdStageAsset {
     /// Flattened, composed scene data (all references resolved). Send-safe
     /// `sdf::Data`; query it with the [`usd_data`] helpers.
     pub reader: Arc<UsdData>,
+    /// The `Send` layer-closure recipe for rebuilding the live canonical
+    /// [`Stage`](openusd::usd::Stage) on the main thread (Ph0′). `Some` for
+    /// assets produced by the async [`UsdLoader`]; `None` for in-memory /
+    /// preview constructions that never fetched a closure. A main-thread system
+    /// ([`canonical::sync_canonical_stages`]) turns this into a `CanonicalStage`.
+    pub recipe: Option<StageRecipe>,
 }
 
 #[derive(Default, TypePath)]
@@ -290,13 +303,18 @@ impl AssetLoader for UsdLoader {
 
         // Compose with openusd's PCP engine — references, payloads, variant
         // selection, and relationship-target translation — through our in-memory
-        // `LuncoUsdResolver` (filesystem-free, native + wasm), then flatten the
-        // composed stage into a Send-safe `sdf::Data` for the downstream visual /
-        // physics / cosim readers (`Stage` is `!Send`, so it can't cross here).
-        let data = compose::compose_to_data(load_context, &root_asset_path, bytes).await?;
+        // `LuncoUsdResolver` (filesystem-free, native + wasm). Fetch the layer
+        // closure into a `Send` recipe FIRST (so the canonical live `Stage` can be
+        // rebuilt on the main thread — `Stage` is `!Send`, can't cross here), then
+        // build+flatten it into a Send-safe `sdf::Data` for the downstream visual /
+        // physics / cosim readers. The recipe rides along in the asset (Ph0′).
+        let recipe = compose::fetch_layer_closure(load_context, &root_asset_path, bytes).await?;
+        let stage = compose::build_stage_from_closure(&recipe)?;
+        let data = compose::flatten_stage(&stage)?;
 
         Ok(UsdStageAsset {
             reader: Arc::new(data),
+            recipe: Some(recipe),
         })
     }
 
