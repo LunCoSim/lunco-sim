@@ -101,6 +101,7 @@ authoritative list. Highlights:
 - **Timeline (Layer 2):** `compile_timeline`, `timeline_step`.
 - **Selection toolkit:** `all_of_type`, `min_by`/`max_by`, `count_where`, `nearest_where`/`farthest_where`, `has_component`, `kind`.
 - **View / cutscenes:** `set_camera(name)` — cut the scene viewport to a `def Camera` by name (leaf or full USD path); pairs with a timeline for cutscene camera changes. `possess(vessel)`, `notify(msg)`.
+- **Tutorial HUD** ([`hud.rhai`](../assets/scripting/prelude/hud.rhai)): `hint(msg)`/`clear_hint()` (sticky instruction), `spotlight(anchor, caption)`/`clear_spotlight()` (dim + ring a workbench widget by `HelpAnchors` key), `objectives_hud(list)` (or just declare a `mission(me)` — it auto-publishes), `coach_step(steps, i)` (a guided coach-mark tour step; advance the cursor in `on_event`). This is how tutorials are authored — a tutorial is just a scenario. See [`tutorials/README.md`](../assets/tutorials/README.md).
 
 Add helpers freely — editing the prelude needs no Rust rebuild.
 
@@ -135,6 +136,26 @@ A **tool library** is a named bundle of reusable policy, callable as
 - Examples: [`formation.rhai`](../assets/scripting/tools/formation.rhai) (formation flying), [`survey.rhai`](../assets/scripting/tools/survey.rhai) (lawnmower survey pattern).
 - Discover: `ListToolLibraries`, `GetToolLibrary { name }`.
 - **Persistence:** registered libraries are mirrored to `<twin>/tools/*.rhai` and reloaded when the Twin opens.
+
+## 7a. Policy hooks (decision functions)
+
+Distinct from scenarios: a **policy hook** is a small *pure* rhai function —
+`ctx` in → a value out — that a Rust seam consults **by id** at a decision point.
+Authored under [`policy/`](../assets/scripting/policy), registered under a
+`HookId`, and **hot-rewritable** (replace the file, or `SetScriptedPolicy` the
+same id) — so behavior that used to be hardcoded is data, no rebuild.
+
+- [`control_authority.rhai`](../assets/scripting/policy/control_authority.rhai)
+  (`control.authority.take`) — may `taker` take a vessel from its current owner?
+  (spec 034). Returns `bool`.
+- [`boot.rhai`](../assets/scripting/policy/boot.rhai) (`boot.entry`) — what does an
+  app do at **startup**? `ctx = #{ onboarded, first_start_id, has_scene_arg,
+  automated }` → `#{ command, params }` (the seam dispatches it — e.g.
+  `StartTutorial` to onboard) or `()` (the app loads its default). This is where
+  "first run → show the tutorial, not the default scene" lives.
+
+The seam supplies context Rust alone can see (argv, roles, first-run flag); the
+*decision* is entirely the policy's. Consulted via `lunco_hooks::invoke(id, &[ctx])`.
 
 ## 8. Persistence
 

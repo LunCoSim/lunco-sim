@@ -57,11 +57,16 @@ pub struct LunCoScriptingPlugin;
 #[cfg(feature = "rhai")]
 fn register_builtin_policies() {
     // (policy file stem, hook id, entry fn)
-    const BUILTINS: &[(&str, &str, &str)] = &[(
-        "control_authority",
-        lunco_core::session::CONTROL_AUTHORITY_HOOK,
-        "may_take_control",
-    )];
+    const BUILTINS: &[(&str, &str, &str)] = &[
+        (
+            "control_authority",
+            lunco_core::session::CONTROL_AUTHORITY_HOOK,
+            "may_take_control",
+        ),
+        // Boot-entry policy: what does the app do at startup? (onboard / load /
+        // resume / nothing). Consulted by `lunco_tutorial::consult_boot`.
+        ("boot", lunco_core::session::BOOT_HOOK, "boot_entry"),
+    ];
     for (stem, hook_id, entry) in BUILTINS {
         let Some(src) = lunco_assets::scripting::policy(stem) else {
             warn!("[policy] built-in policy '{stem}' missing from embedded assets");

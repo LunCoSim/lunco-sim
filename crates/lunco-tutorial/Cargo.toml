@@ -2,7 +2,7 @@
 name = "lunco-tutorial"
 version = "0.1.0-dev"
 edition = "2021"
-description = "Data-driven, Rhai-scripted tutorial system: a registry of tutorials, a dockable launcher panel, progress persistence, and the runtime-fidelity toggle command. Sits on top of the scripting/HUD substrate — no simulation logic of its own."
+description = "Unified tutorial launcher for every workbench app: a registry of tutorials, a dockable launcher panel + menu, progress persistence, F1, and the runtime-fidelity toggle. A tutorial is ONE thing — a `.rhai` scenario — which the launcher runs on a host entity; the scenario sets up its own environment (`load_scene`, `open_class`). No scene-vs-script duality, no simulation logic of its own."
 
 [dependencies]
 bevy = { workspace = true }
@@ -13,11 +13,20 @@ lunco-core = { path = "../lunco-core" }
 # `Panel` / `PanelCtx` / `WorkbenchAppExt::register_panel` for the launcher,
 # and `TutorialHud` to clear the HUD on skip.
 lunco-workbench = { path = "../lunco-workbench" }
-# `ApiCommandEvent` — StartTutorial dispatches `LoadScene` generically, so this
-# crate needs no dependency on whichever crate defines the scene-load command.
+# `ApiCommandEvent` — the fidelity toggle & notifications dispatch generically.
 lunco-api = { path = "../lunco-api" }
 # Persisted per-tutorial progress (completed set + last-started).
 lunco-settings = { path = "../lunco-settings" }
+# The ONE delivery: `RunScenario` attaches a tutorial's `.rhai` to a host entity.
+lunco-scripting = { path = "../lunco-scripting" }
+# `tutorial_source(rel)` — loads a tutorial's `.rhai` (disk on native, embedded
+# on wasm). Every tutorial in every app flows through this one loader.
+lunco-assets = { path = "../lunco-assets" }
+# `EditorIntent::ShowTutorial` — F1 → the keybinding→intent→command path.
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+# The boot-entry hook: `consult_boot` invokes the `BOOT_HOOK` rhai policy to
+# decide startup (onboard / load / nothing) — no onboarding logic in Rust.
+lunco-hooks = { path = "../lunco-hooks" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

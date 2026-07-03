@@ -15,10 +15,11 @@
 
 use include_dir::{include_dir, Dir};
 
-/// The lunica tutorial orchestrators, embedded at compile time. On native this
-/// is the fallback when the on-disk file is missing (packaged app); on wasm it
-/// is the only source.
-static LUNICA: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../assets/tutorials/lunica");
+/// The tutorial orchestrators (and any tutorial data), embedded at compile time.
+/// On native this is the fallback when the on-disk file is missing (a packaged
+/// app run outside the repo); on wasm it is the only source. Recursive, so it
+/// covers per-app subdirs (`lunica/…`, `first_drive/…`, …).
+static TUTORIALS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../assets/tutorials");
 
 /// The learning-paths curriculum as raw JSON (`assets/tutorials/learning_paths.json`).
 /// The lunica Welcome panel parses this into its `LearningPathRegistry`. Edit the
@@ -30,27 +31,28 @@ pub fn learning_paths_json() -> &'static str {
     ))
 }
 
-/// Load a lunica tutorial orchestrator's rhai source by file stem
-/// (`"overview"`, `"run"`, `"onboarding"`, …).
+/// Load a tutorial orchestrator's rhai source by its path **relative to
+/// `assets/tutorials/`** (e.g. `"lunica/overview.rhai"`, `"first_drive/first_drive.rhai"`).
 ///
-/// **Native:** reads `<`[`assets_dir`](crate::assets_dir)`>/tutorials/lunica/<stem>.rhai`
-/// from disk on every call, so editing a tutorial and re-launching it replays the
-/// change with no rebuild (the "edit scripts in realtime" path). Falls back to the
-/// embedded copy when the file is absent (a packaged binary run outside the repo).
+/// This is the single source for EVERY tutorial in EVERY app — a tutorial is
+/// just a `.rhai` scenario, so the shared launcher loads them all through here.
+///
+/// **Native:** reads `<`[`assets_dir`](crate::assets_dir)`>/tutorials/<rel>` from
+/// disk on every call, so editing a tutorial and re-launching it replays the
+/// change with no rebuild (the live-authoring path). Falls back to the embedded
+/// copy when the file is absent (a packaged binary run outside the repo).
 /// **wasm:** always returns the embedded copy. `None` if no such tutorial exists.
-pub fn lunica_tutorial_source(stem: &str) -> Option<String> {
+pub fn tutorial_source(rel: &str) -> Option<String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let path = crate::assets_dir()
-            .join("tutorials/lunica")
-            .join(format!("{stem}.rhai"));
+        let path = crate::assets_dir().join("tutorials").join(rel);
         if let Ok(src) = std::fs::read_to_string(&path) {
             return Some(src);
         }
         // fall through to the embedded copy
     }
-    LUNICA
-        .get_file(format!("{stem}.rhai"))
+    TUTORIALS
+        .get_file(rel)
         .and_then(|f| f.contents_utf8())
         .map(str::to_string)
 }

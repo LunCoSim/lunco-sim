@@ -79,13 +79,23 @@ impl Plugin for SandboxUiPlugin {
             .add_plugins(lunco_sandbox_edit::SandboxEditPlugin)
             .add_plugins(lunco_sandbox_edit::ui::SandboxEditUiPlugin)
             .add_plugins(lunco_materials::ShaderMaterialPlugin)
-            // Data-driven, Rhai-scripted tutorial system: launcher panel +
-            // Start/Skip/SetSubsystemEnabled commands + progress persistence.
-            // The objectives/hint HUD + spotlight it drives live in the workbench.
+            // The shared tutorial launcher: registry + 🎓 menu + panel +
+            // Start/Skip/SetSubsystemEnabled + progress + onboarding + F1.
             .add_plugins(lunco_tutorial::TutorialPlugin)
-            // Rover-specific panels and the attach-a-model click flow.
+            // Rover panels + register the sandbox's tutorials. ONE closure: Bevy
+            // keys plugin uniqueness by type-name, and every `|app| {…}` in this
+            // `build` shares the name `{{closure}}` — a second one panics
+            // ("plugin already added"). So all app-level registration goes here.
             .add_plugins(|app: &mut App| {
+                use lunco_tutorial::{TutorialAppExt, TutorialMeta as T};
                 use lunco_workbench::WorkbenchAppExt;
+                // Tutorials: each is ONE source — a standalone `.rhai` that
+                // `load_scene`s its own environment; the chain (sandbox-intro →
+                // first-drive → lander) is data (`next`), not a USD `nextScene`.
+                app.register_tutorial(T { id: "sandbox-intro", title: "Sandbox Intro", blurb: "A guided coach-mark tour of the workspace — viewport, browser, inspector, console. Chains into First Drive.", app: "sandbox", difficulty: "beginner", script: "sandbox/sandbox_intro.rhai", first_start: true, next: Some("first-drive") });
+                app.register_tutorial(T { id: "first-drive", title: "First Drive", blurb: "Take control of a rover and drive it to a flag on the lunar surface. Teaches possession and driving.", app: "sandbox", difficulty: "beginner", script: "sandbox/first_drive.rhai", first_start: false, next: Some("lander-mission") });
+                app.register_tutorial(T { id: "lander-mission", title: "Lander & Rover Mission", blurb: "Watch a powered descent land a rover, then drive the deployed rover through a course.", app: "sandbox", difficulty: "intermediate", script: "sandbox/lander_mission.rhai", first_start: false, next: None });
+                // Rover-specific panels and the attach-a-model click flow.
                 app.register_panel(code_panel::CodePanel);
                 app.register_panel(models_palette::ModelsPalette);
                 app.init_resource::<models_palette::AttachState>();

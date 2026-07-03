@@ -8,6 +8,11 @@
 //! and no Rust.
 
 fn on_start(me) {
+    // One source: the tutorial IS this script, and it sets up its own environment.
+    // Load the env-only scene (rover, flag, avatar); the mission below find()s its
+    // entities once they spawn. The scenario runs on an independent host entity, so
+    // it survives its own load_scene.
+    load_scene("tutorials/sandbox/first_drive.usda");
     hint("Welcome to LunCoSim! Let's drive a rover on the Moon.");
     notify_kind("Tutorial: First Drive", "info");
 }
