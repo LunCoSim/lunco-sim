@@ -30,7 +30,10 @@
 //! to constant `throttle`/`steer` setpoints.
 
 use bevy::prelude::*;
-use lunco_behavior::{Action, BoxNode, Node, Parallel, ParallelPolicy, Repeat, Selector, Sequence, Status};
+use lunco_behavior::{
+    Action, BoxNode, Force, Invert, Node, Parallel, ParallelPolicy, ReactiveSelector,
+    ReactiveSequence, Repeat, Retry, Selector, Sequence, Status,
+};
 use lunco_core::session::{AuthorityRole, SessionRbac, UserSession};
 use lunco_core::{Command, on_command, register_commands};
 use lunco_core::{GlobalEntityId, NetworkRole, SessionId, SessionRegistry};
@@ -81,9 +84,31 @@ impl Autopilot {
 
 // ── Behaviour tree ───────────────────────────────────────────────────────────
 
+/// Live kinematic state of a track/follow/intercept target this tick.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TargetState {
+    /// World position.
+    pub pos: Vec3,
+    /// World velocity (units/s), finite-differenced across ticks — zero on the first
+    /// sighting and while the sim is paused. Lead-pursuit ([`BehaviorSpec::Intercept`])
+    /// aims ahead along this; plain [`BehaviorSpec::Follow`] ignores it.
+    pub vel: Vec3,
+}
+
+/// Live kinematic state of candidate targets this tick, keyed by [`GlobalEntityId`]
+/// (the api_id a scenario names). Built once per tick by [`drive_autopilots`] and
+/// shared into every [`DriveCtx`]; the [`BehaviorSpec::Follow`] / [`BehaviorSpec::Intercept`]
+/// leaves resolve their target through it, so they track a mover.
+pub type TargetStates = std::collections::HashMap<u64, TargetState>;
+
 /// Per-tick bridge the behaviour tree reads/writes: the vessel's world pose in,
-/// the desired setpoint out. A leaf reads `pos`/`fwd` and writes `out`.
+/// the desired setpoint out. A leaf reads `pos`/`fwd` (and, for tracking leaves,
+/// `targets`) and writes `out`.
 pub struct DriveCtx {
+    /// The autopilot's own vessel [`GlobalEntityId`], so sensing leaves can exclude
+    /// themselves from the [`targets`](Self::targets) snapshot (a vessel isn't its own
+    /// obstacle). `0` when unknown.
+    pub self_gid: u64,
     /// Vessel world position.
     pub pos: Vec3,
     /// Vessel forward (unit).
@@ -94,6 +119,11 @@ pub struct DriveCtx {
     pub now: f64,
     /// Setpoint the leaves write: `(throttle, steer, brake)` in `[-1, 1]`.
     pub out: (f64, f64, f64),
+    /// Live kinematic state of other entities this tick, keyed by [`GlobalEntityId`].
+    /// Tracking leaves ([`BehaviorSpec::Follow`]/[`BehaviorSpec::Intercept`]) look their
+    /// moving target up here. Cheap `Arc` clone per autopilot; empty for pose-only
+    /// leaves. See [`TargetStates`].
+    pub targets: std::sync::Arc<TargetStates>,
 }
 
 /// Data description of an autopilot behaviour tree — authored as rhai/JSON DATA
@@ -201,6 +231,147 @@ pub enum BehaviorSpec {
     },
     /// Hold the brakes (`Success`).
     Brake,
+    /// Turn in place to face `target` (steer only, no throttle); `Success` once the
+    /// heading is within `tolerance` degrees. Aim before driving, point an
+    /// instrument/antenna, or orient a lander.
+    Face {
+        /// World point to face `[x, y, z]`.
+        target: [f32; 3],
+        /// Heading tolerance in degrees that counts as "facing".
+        #[serde(default = "default_face_tol")]
+        tolerance: f64,
+    },
+    /// Always succeed immediately — a no-op / placeholder (e.g. a `selector`
+    /// fallthrough or a stubbed branch).
+    Succeed,
+    /// Always fail immediately — a placeholder / forced-failure branch.
+    Fail,
+
+    // ── Reactive composites (re-evaluate guards every tick) ──────────────────
+    /// Like [`Sequence`](Self::Sequence) but re-ticks from the first child every
+    /// tick, so guard children stay live: `reactive_sequence([arrived_inverted?,
+    /// drive_to])` keeps driving *while* not-arrived and re-checks each frame.
+    ReactiveSequence {
+        /// Ordered children (typically guard(s) then an action).
+        children: Vec<BehaviorSpec>,
+    },
+    /// Like [`Selector`](Self::Selector) but re-ticks from the highest priority
+    /// child every tick, so a higher option preempts a lower one mid-run — the
+    /// priority arbiter (e.g. avoid-if-blocked, else cruise).
+    ReactiveSelector {
+        /// Ordered alternatives, highest priority first.
+        children: Vec<BehaviorSpec>,
+    },
+
+    // ── Decorators (single-child wrappers) ───────────────────────────────────
+    /// Negate a child's result (`Success` ↔ `Failure`) — turn a condition into its
+    /// opposite, e.g. `invert(arrived)` = "not yet arrived".
+    Invert {
+        /// The wrapped subtree.
+        child: Box<BehaviorSpec>,
+    },
+    /// Force any terminal result of the child to `Success` — a best-effort step that
+    /// must never fail its parent sequence.
+    ForceSuccess {
+        /// The wrapped subtree.
+        child: Box<BehaviorSpec>,
+    },
+    /// Force any terminal result of the child to `Failure` — force an abort.
+    ForceFailure {
+        /// The wrapped subtree.
+        child: Box<BehaviorSpec>,
+    },
+    /// Retry the child on `Failure` up to `times` attempts, then give up
+    /// (`Failure`); a child `Success` ends it early. The failure-side mirror of
+    /// [`Repeat`](Self::Repeat) — re-attempt a flaky maneuver before conceding.
+    Retry {
+        /// Number of failures tolerated before the retry itself fails.
+        times: usize,
+        /// The wrapped subtree.
+        child: Box<BehaviorSpec>,
+    },
+    /// Run the child but abort with `Failure` if it stays `Running` longer than
+    /// `seconds` of mission time (a child terminal before then passes through). The
+    /// watchdog for "attempt X for N seconds, else fall back". On timeout it brakes.
+    Timeout {
+        /// Mission-time budget in seconds.
+        #[serde(default = "default_wait")]
+        seconds: f64,
+        /// The wrapped subtree.
+        child: Box<BehaviorSpec>,
+    },
+    /// Follow a **moving** entity (named by its [`GlobalEntityId`]/api_id): steer
+    /// toward its *live* position every tick, holding station within `radius`.
+    /// Unlike [`DriveTo`](Self::DriveTo) it never finishes — it stays `Running` while
+    /// the target is resolvable, and `Failure` (braking) if the target vanishes, so a
+    /// fallback branch can take over.
+    Follow {
+        /// [`GlobalEntityId`] (api_id) of the entity to follow.
+        target: u64,
+        /// Cruise speed `[0, 1]`.
+        #[serde(default = "default_speed")]
+        speed: f64,
+        /// Station-keeping radius — hold this far off the target (world units).
+        #[serde(default = "default_follow_radius")]
+        radius: f32,
+    },
+    /// Lead-pursuit a **moving** entity: aim `lead` seconds *ahead* of the target
+    /// along its velocity (so you cut it off instead of chasing its tail), and
+    /// `Success` on contact — within `radius` of its actual position. `Failure`
+    /// (braking) if the target vanishes. Unlike [`Follow`](Self::Follow) (open-ended
+    /// station-keeping) this is a catch-it pursuit that finishes.
+    Intercept {
+        /// [`GlobalEntityId`] (api_id) of the entity to intercept.
+        target: u64,
+        /// Cruise speed `[0, 1]`.
+        #[serde(default = "default_speed")]
+        speed: f64,
+        /// Contact radius that counts as intercepted (world units).
+        #[serde(default = "default_radius")]
+        radius: f32,
+        /// Seconds to lead the target — how far ahead along its velocity to aim.
+        #[serde(default = "default_lead")]
+        lead: f64,
+    },
+    /// Condition leaf: `Success` if another known vessel is within `distance` and
+    /// inside a forward cone of `cone` degrees (something's in the way), else
+    /// `Failure`. Vessel-vs-vessel proximity sensing off the `targets` snapshot
+    /// (self excluded) — pair with a `reactive_selector` for "stop/steer if blocked,
+    /// else drive". Writes no setpoint.
+    ObstacleAhead {
+        /// How far ahead to look (world units).
+        #[serde(default = "default_obstacle_dist")]
+        distance: f32,
+        /// Full width of the forward detection cone, in degrees.
+        #[serde(default = "default_cone")]
+        cone: f64,
+    },
+    /// Condition leaf: `Success` if the vessel's heading is within `tolerance`
+    /// degrees of `target`, else `Failure`. The read-only guard counterpart to
+    /// [`Face`](Self::Face) — gate a drive on being pointed the right way.
+    Facing {
+        /// World point to test the heading against.
+        target: [f32; 3],
+        /// Heading tolerance in degrees.
+        #[serde(default = "default_face_tol")]
+        tolerance: f64,
+    },
+    /// Hold position (braked) and stay `Running` forever — a "stay put" action, e.g.
+    /// under a `parallel`/`reactive_sequence` while a guard keeps holding. Unlike
+    /// [`Brake`](Self::Brake) (which `Success`es and lets a sequence advance), `hold`
+    /// never finishes.
+    Hold,
+    /// Decorator: run the child, but after it `Success`es block re-entry (return
+    /// `Failure`) for `seconds` of mission time — rate-limits an action so it can't
+    /// re-fire every tick (fire a thruster, drop a marker, re-plan). `Running`/
+    /// `Failure` pass through and set no cooldown.
+    Cooldown {
+        /// Mission-time lockout after each success, in seconds.
+        #[serde(default = "default_wait")]
+        seconds: f64,
+        /// The wrapped subtree.
+        child: Box<BehaviorSpec>,
+    },
 }
 
 /// Completion rule for a [`BehaviorSpec::Parallel`], mapped to
@@ -233,6 +404,21 @@ fn default_radius() -> f32 {
 fn default_wait() -> f64 {
     1.0
 }
+fn default_face_tol() -> f64 {
+    8.0
+}
+fn default_follow_radius() -> f32 {
+    5.0
+}
+fn default_lead() -> f64 {
+    1.0
+}
+fn default_obstacle_dist() -> f32 {
+    6.0
+}
+fn default_cone() -> f64 {
+    60.0
+}
 
 /// Compile a [`BehaviorSpec`] (rhai/JSON data) into a tickable tree. The composite
 /// nodes come from the [`lunco_behavior`] kernel; the leaves are this crate's Rust
@@ -263,6 +449,39 @@ pub fn build_tree(spec: &BehaviorSpec) -> BoxNode<DriveCtx> {
         BehaviorSpec::Wait { seconds } => Box::new(WaitNode::new(*seconds)),
         BehaviorSpec::Cruise { throttle, steer } => leaf_cruise(*throttle, *steer),
         BehaviorSpec::Brake => leaf_brake(),
+        BehaviorSpec::Face { target, tolerance } => {
+            leaf_face(Vec3::from_array(*target), *tolerance)
+        }
+        BehaviorSpec::Succeed => Box::new(Action::new(|_: &mut DriveCtx| Status::Success)),
+        BehaviorSpec::Fail => Box::new(Action::new(|_: &mut DriveCtx| Status::Failure)),
+        BehaviorSpec::ReactiveSequence { children } => {
+            Box::new(ReactiveSequence::new(children.iter().map(build_tree).collect()))
+        }
+        BehaviorSpec::ReactiveSelector { children } => {
+            Box::new(ReactiveSelector::new(children.iter().map(build_tree).collect()))
+        }
+        BehaviorSpec::Invert { child } => Box::new(Invert::new(build_tree(child))),
+        BehaviorSpec::ForceSuccess { child } => Box::new(Force::succeed(build_tree(child))),
+        BehaviorSpec::ForceFailure { child } => Box::new(Force::fail(build_tree(child))),
+        BehaviorSpec::Retry { times, child } => Box::new(Retry::times(*times, build_tree(child))),
+        BehaviorSpec::Timeout { seconds, child } => {
+            Box::new(TimeoutNode::new(*seconds, build_tree(child)))
+        }
+        BehaviorSpec::Follow { target, speed, radius } => leaf_follow(*target, *speed, *radius),
+        BehaviorSpec::Intercept { target, speed, radius, lead } => {
+            leaf_intercept(*target, *speed, *radius, *lead)
+        }
+        BehaviorSpec::ObstacleAhead { distance, cone } => leaf_obstacle_ahead(*distance, *cone),
+        BehaviorSpec::Facing { target, tolerance } => {
+            leaf_facing(Vec3::from_array(*target), *tolerance)
+        }
+        BehaviorSpec::Hold => Box::new(Action::new(|ctx: &mut DriveCtx| {
+            ctx.out = (0.0, 0.0, 1.0);
+            Status::Running
+        })),
+        BehaviorSpec::Cooldown { seconds, child } => {
+            Box::new(CooldownNode::new(*seconds, build_tree(child)))
+        }
     }
 }
 
@@ -327,6 +546,129 @@ fn leaf_arrived(target: Vec3, radius: f32) -> BoxNode<DriveCtx> {
     }))
 }
 
+/// Condition leaf: `Success` if another known vessel sits within `distance` and
+/// inside the forward cone of `cone_deg` degrees — a proximity sense over the
+/// `targets` snapshot, excluding `self_gid` (a vessel isn't its own obstacle).
+/// Writes no setpoint. Vessel-vs-vessel only (no terrain/collider raycast — that
+/// needs a spatial-query provider the headless crate deliberately doesn't pull in).
+fn leaf_obstacle_ahead(distance: f32, cone_deg: f64) -> BoxNode<DriveCtx> {
+    let cos_half = (cone_deg * 0.5).to_radians().cos() as f32;
+    Box::new(Action::new(move |ctx: &mut DriveCtx| {
+        let fwd = ctx.fwd.normalize_or_zero();
+        for (gid, st) in ctx.targets.iter() {
+            if *gid == ctx.self_gid {
+                continue; // not my own obstacle
+            }
+            let to = st.pos - ctx.pos;
+            let d = to.length();
+            if d < 1e-3 || d > distance {
+                continue;
+            }
+            if fwd.dot(to / d) >= cos_half {
+                return Status::Success; // something is ahead within the cone
+            }
+        }
+        Status::Failure
+    }))
+}
+
+/// Condition leaf: `Success` if the vessel's heading is within `tolerance_deg`
+/// degrees of `target`, else `Failure`. Read-only guard counterpart to
+/// [`leaf_face`] — gate a drive on being pointed the right way.
+fn leaf_facing(target: Vec3, tolerance_deg: f64) -> BoxNode<DriveCtx> {
+    let align_dot = tolerance_deg.to_radians().cos();
+    Box::new(Action::new(move |ctx: &mut DriveCtx| {
+        let to = target - ctx.pos;
+        let dist = to.length();
+        if dist < 1e-3 {
+            return Status::Success;
+        }
+        if ctx.fwd.normalize_or_zero().dot(to / dist) as f64 >= align_dot {
+            Status::Success
+        } else {
+            Status::Failure
+        }
+    }))
+}
+
+/// Leaf: follow a **moving** entity by its [`GlobalEntityId`]. Each tick it looks
+/// the target's live position up in [`DriveCtx::targets`] and steers toward it with
+/// the shared [`nav_setpoint`] math, holding station (braking) within `radius`.
+/// Never terminates with `Success` — following is open-ended, so it stays `Running`
+/// while the target resolves and returns `Failure` (braking) if it drops out of the
+/// map (despawned / out of scope), letting a fallback branch take the wheel.
+fn leaf_follow(target_gid: u64, speed: f64, radius: f32) -> BoxNode<DriveCtx> {
+    Box::new(Action::new(move |ctx: &mut DriveCtx| match ctx.targets.get(&target_gid) {
+        Some(st) => {
+            // Reuse the drive math; within `radius` it returns brake+arrived, which
+            // for a follow means "hold station here", so we stay Running regardless.
+            let (throttle, steer, brake, _arrived) = nav_setpoint(ctx.pos, ctx.fwd, st.pos, speed, radius);
+            ctx.out = (throttle, steer, brake);
+            Status::Running
+        }
+        None => {
+            ctx.out = (0.0, 0.0, 1.0); // target lost → brake and let a fallback take over
+            Status::Failure
+        }
+    }))
+}
+
+/// Leaf: lead-pursuit a **moving** entity — aim `lead` seconds ahead of the target
+/// along its velocity ([`TargetState::vel`]) so the pursuer cuts it off rather than
+/// tailing it, driving toward that predicted point. `Success` on **contact** (within
+/// `radius` of the target's *actual* position — a catch-it pursuit that finishes,
+/// unlike open-ended [`leaf_follow`]); `Failure` (braking) if the target vanishes.
+fn leaf_intercept(target_gid: u64, speed: f64, radius: f32, lead: f64) -> BoxNode<DriveCtx> {
+    Box::new(Action::new(move |ctx: &mut DriveCtx| match ctx.targets.get(&target_gid) {
+        Some(st) => {
+            let aim = st.pos + st.vel * lead as f32; // predicted lead point
+            let (throttle, steer, brake, _) = nav_setpoint(ctx.pos, ctx.fwd, aim, speed, radius);
+            ctx.out = (throttle, steer, brake);
+            // Done when we reach the TARGET itself (not the lead point) within radius.
+            if (st.pos - ctx.pos).length() < radius {
+                Status::Success
+            } else {
+                Status::Running
+            }
+        }
+        None => {
+            ctx.out = (0.0, 0.0, 1.0); // target lost → brake, let a fallback take over
+            Status::Failure
+        }
+    }))
+}
+
+/// Leaf: turn in place to face `target` — steer toward it with **no throttle**, so
+/// the skid rover pivots without translating; `Success` once the heading is within
+/// `tolerance_deg` degrees of the target. Uses the same yaw-plane steering sign as
+/// [`nav_setpoint`]. Relative direction, so floating-origin invariant.
+fn leaf_face(target: Vec3, tolerance_deg: f64) -> BoxNode<DriveCtx> {
+    let align_dot = tolerance_deg.to_radians().cos();
+    Box::new(Action::new(move |ctx: &mut DriveCtx| {
+        let to = target - ctx.pos;
+        let dist = to.length();
+        if dist < 1e-3 {
+            ctx.out = (0.0, 0.0, 0.0);
+            return Status::Success; // sitting on the target: nothing to face
+        }
+        let to = to / dist;
+        let fwd = ctx.fwd.normalize_or_zero();
+        let dot = fwd.dot(to) as f64;
+        if dot >= align_dot {
+            ctx.out = (0.0, 0.0, 0.0); // aligned → release, hold heading
+            return Status::Success;
+        }
+        let cy = fwd.z * to.x - fwd.x * to.z;
+        let steer: f32 = if dot < 0.0 {
+            if cy >= 0.0 { -1.0 } else { 1.0 } // target behind → hard pivot toward it
+        } else {
+            (-cy * 2.5).clamp(-1.0, 1.0)
+        };
+        ctx.out = (0.0, steer as f64, 0.0); // steer only — pivot in place
+        Status::Running
+    }))
+}
+
 /// Leaf: hold the brakes for `seconds` of **mission time**, then `Success`. On the
 /// first tick it latches a deadline `now + seconds` against [`DriveCtx::now`]
 /// ([`lunco_time::WorldTime::sim_secs`]) — so a paused or warped sim pauses the wait
@@ -359,6 +701,88 @@ impl Node<DriveCtx> for WaitNode {
 
     fn reset(&mut self) {
         self.deadline = None;
+    }
+}
+
+/// Decorator: run `child`, but abort with `Failure` if it stays `Running` past
+/// `seconds` of **mission time** (a child terminal before then passes straight
+/// through). The clock is [`DriveCtx::now`], so — like [`WaitNode`] — the budget
+/// freezes under pause/warp. This is a *domain* decorator (it needs the context's
+/// clock, and it brakes on timeout), so it lives here, not in the clock-free kernel.
+pub struct TimeoutNode {
+    seconds: f64,
+    child: BoxNode<DriveCtx>,
+    /// Mission-time instant to abort at; `None` until the first tick latches it.
+    deadline: Option<f64>,
+}
+
+impl TimeoutNode {
+    /// A watchdog that fails `child` if it runs longer than `seconds` of mission time.
+    pub fn new(seconds: f64, child: BoxNode<DriveCtx>) -> Self {
+        Self { seconds, child, deadline: None }
+    }
+}
+
+impl Node<DriveCtx> for TimeoutNode {
+    fn tick(&mut self, ctx: &mut DriveCtx) -> Status {
+        let deadline = *self.deadline.get_or_insert(ctx.now + self.seconds);
+        if ctx.now >= deadline {
+            self.reset();
+            ctx.out = (0.0, 0.0, 1.0); // timed out → brake instead of the last command
+            return Status::Failure;
+        }
+        match self.child.tick(ctx) {
+            Status::Running => Status::Running,
+            terminal => {
+                self.reset();
+                terminal
+            }
+        }
+    }
+
+    fn reset(&mut self) {
+        self.deadline = None;
+        self.child.reset();
+    }
+}
+
+/// Decorator: run `child`, but after each `Success` block re-entry (return
+/// `Failure`) for `seconds` of **mission time** — a rate limiter, so a one-shot
+/// action (fire a thruster, drop a marker, re-plan) can't re-fire every tick.
+/// `Running`/`Failure` pass through and arm no cooldown. Clock is [`DriveCtx::now`],
+/// so the lockout freezes under pause/warp.
+pub struct CooldownNode {
+    seconds: f64,
+    child: BoxNode<DriveCtx>,
+    /// Mission-time instant the child may next run; `0.0` = ready now.
+    ready_at: f64,
+}
+
+impl CooldownNode {
+    /// A rate limiter that locks `child` out for `seconds` after each success.
+    pub fn new(seconds: f64, child: BoxNode<DriveCtx>) -> Self {
+        Self { seconds, child, ready_at: 0.0 }
+    }
+}
+
+impl Node<DriveCtx> for CooldownNode {
+    fn tick(&mut self, ctx: &mut DriveCtx) -> Status {
+        if ctx.now < self.ready_at {
+            return Status::Failure; // still cooling down — don't even tick the child
+        }
+        match self.child.tick(ctx) {
+            Status::Success => {
+                self.ready_at = ctx.now + self.seconds;
+                self.child.reset();
+                Status::Success
+            }
+            other => other, // Running / Failure: no cooldown armed
+        }
+    }
+
+    fn reset(&mut self) {
+        self.ready_at = 0.0;
+        self.child.reset();
     }
 }
 
@@ -460,6 +884,15 @@ pub fn setup_autopilot_session(
     }
 }
 
+/// Per-system memory of last tick's target positions + mission time, so
+/// [`drive_autopilots`] can finite-difference a world velocity for lead-pursuit
+/// ([`BehaviorSpec::Intercept`]). Held in a `Local`, so it is private to the system.
+#[derive(Default)]
+pub struct PrevTargets {
+    poses: std::collections::HashMap<u64, Vec3>,
+    now: f64,
+}
+
 /// Fixed-tick driver: every engaged autopilot that still **owns** its vessel emits
 /// one `SetPorts`. If it has an [`AutopilotBehavior`] tree, tick it against the
 /// vessel's world pose to get the setpoint (glue in the tree, math in the Rust
@@ -472,9 +905,34 @@ pub fn drive_autopilots(
     mut q: Query<(&Autopilot, Option<&mut AutopilotBehavior>)>,
     q_gid: Query<&GlobalEntityId>,
     q_xf: Query<&GlobalTransform>,
+    q_targets: Query<(&GlobalEntityId, &GlobalTransform)>,
+    mut prev: Local<PrevTargets>,
     mut commands: Commands,
 ) {
+    if q.is_empty() {
+        return; // no autopilots → skip the per-tick target snapshot entirely
+    }
     let now = world_time.sim_secs; // the one clock — waits freeze under pause/warp
+    // One snapshot of every identifiable entity's world pose + a finite-difference
+    // velocity (this pos minus last tick's, over the mission-clock delta), shared
+    // (cheap Arc clone) into each autopilot's ctx so `follow`/`intercept` can track a
+    // mover. Velocity is zero on first sighting and under pause (dt == 0).
+    let dt = (now - prev.now).max(0.0);
+    let states: TargetStates = q_targets
+        .iter()
+        .map(|(gid, xf)| {
+            let pos = xf.translation();
+            let vel = if dt > 1e-6 {
+                prev.poses.get(&gid.get()).map(|&p| (pos - p) / dt as f32).unwrap_or(Vec3::ZERO)
+            } else {
+                Vec3::ZERO
+            };
+            (gid.get(), TargetState { pos, vel })
+        })
+        .collect();
+    prev.poses = states.iter().map(|(k, s)| (*k, s.pos)).collect();
+    prev.now = now;
+    let targets = std::sync::Arc::new(states);
     for (ap, behavior) in &mut q {
         if !ap.engaged {
             continue;
@@ -487,10 +945,12 @@ pub fn drive_autopilots(
         let (throttle, steer, brake) = match (behavior, q_xf.get(ap.vessel).ok()) {
             (Some(mut tree), Some(xf)) => {
                 let mut ctx = DriveCtx {
+                    self_gid: gid.get(),
                     pos: xf.translation(),
                     fwd: xf.forward().as_vec3(),
                     now,
                     out: (ap.throttle, ap.steer, 0.0),
+                    targets: targets.clone(),
                 };
                 tree.0.tick(&mut ctx);
                 ctx.out

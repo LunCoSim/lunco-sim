@@ -1,6 +1,10 @@
 //! The behaviour-tree node model: a [`Status`], the object-safe [`Node`] trait,
-//! and the standard composites ([`Sequence`], [`Selector`], [`Parallel`],
-//! [`Repeat`]) plus closure leaf adapters ([`Action`]).
+//! and the standard nodes —
+//! - composites [`Sequence`], [`Selector`], [`Parallel`], [`Repeat`], [`Retry`];
+//! - reactive composites [`ReactiveSequence`], [`ReactiveSelector`], which re-tick
+//!   from the first child every tick so guards stay live;
+//! - decorators [`Invert`] and [`Force`];
+//! - the [`Action`] closure leaf.
 //!
 //! Every node is generic over a host-supplied context `Ctx` — the tree carries
 //! no world/engine/language dependency of its own. The scripting layer supplies
@@ -9,11 +13,14 @@
 //! deterministic, unit-testable, and shared by every runtime.
 //!
 //! Composites reset themselves on a terminal result (`Success`/`Failure`) so a
-//! finished subtree is fresh when re-entered (e.g. under a [`Repeat`]).
+//! finished subtree is fresh when re-entered (e.g. under a [`Repeat`]). The
+//! reactive composites additionally reset the children they skipped this tick, so
+//! a preempted branch never carries stale state into its next run.
 //!
-//! Hierarchical growth (later): decorators (invert/succeed/cooldown), a
-//! priority/utility selector, and named reusable subtrees are all just new
-//! `Node` impls — no change to this core.
+//! Hierarchical growth (later): a priority/utility selector that *scores* children
+//! and named reusable subtrees are just new `Node` impls — no change to this core.
+//! Time-bounded decorators (timeout/cooldown) need a clock, so they live in the
+//! consuming layer that owns a context (see `lunco-autopilot`).
 
 /// Result of ticking a [`Node`] once.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -263,6 +270,224 @@ impl<Ctx: ?Sized> Node<Ctx> for Repeat<Ctx> {
     }
 }
 
+/// Retries a child on `Failure` up to a fixed number of attempts, or forever — the
+/// mirror of [`Repeat`] (which re-runs on `Success`). A child `Success` ends the
+/// retry with `Success`; once the failure budget is spent it ends with `Failure`.
+/// Use for a flaky maneuver that's worth another go (re-attempt a dock, a burn, a
+/// grasp) before conceding to a fallback branch.
+pub struct Retry<Ctx: ?Sized> {
+    child: BoxNode<Ctx>,
+    /// `None` = retry forever; `Some(n)` = give up with `Failure` after `n` failures.
+    budget: Option<usize>,
+    failed: usize,
+}
+
+impl<Ctx: ?Sized> Retry<Ctx> {
+    /// Retry `child` until it succeeds, giving up (`Failure`) after `count` failures.
+    pub fn times(count: usize, child: BoxNode<Ctx>) -> Self {
+        Self { child, budget: Some(count), failed: 0 }
+    }
+
+    /// Retry `child` forever until it succeeds (a failure never ends it).
+    pub fn forever(child: BoxNode<Ctx>) -> Self {
+        Self { child, budget: None, failed: 0 }
+    }
+}
+
+impl<Ctx: ?Sized> Node<Ctx> for Retry<Ctx> {
+    fn tick(&mut self, ctx: &mut Ctx) -> Status {
+        // A zero-attempt retry has no budget to spend → immediate failure.
+        if self.budget == Some(0) {
+            return Status::Failure;
+        }
+        match self.child.tick(ctx) {
+            Status::Running => Status::Running,
+            Status::Success => {
+                self.reset();
+                Status::Success
+            }
+            Status::Failure => {
+                self.failed += 1;
+                if self.budget.is_some_and(|n| self.failed >= n) {
+                    self.reset();
+                    Status::Failure
+                } else {
+                    self.child.reset();
+                    Status::Running
+                }
+            }
+        }
+    }
+
+    fn reset(&mut self) {
+        self.failed = 0;
+        self.child.reset();
+    }
+}
+
+// ── Decorators (single-child wrappers) ───────────────────────────────────────
+
+/// Inverts a child's terminal result: `Success` ↔ `Failure` (`Running` passes
+/// through). The standard way to use a condition as its negation — wrap an
+/// `arrived`-style guard so a branch runs *until* the condition holds.
+pub struct Invert<Ctx: ?Sized> {
+    child: BoxNode<Ctx>,
+}
+
+impl<Ctx: ?Sized> Invert<Ctx> {
+    /// Wrap `child`, negating its terminal result.
+    pub fn new(child: BoxNode<Ctx>) -> Self {
+        Self { child }
+    }
+}
+
+impl<Ctx: ?Sized> Node<Ctx> for Invert<Ctx> {
+    fn tick(&mut self, ctx: &mut Ctx) -> Status {
+        match self.child.tick(ctx) {
+            Status::Success => Status::Failure,
+            Status::Failure => Status::Success,
+            Status::Running => Status::Running,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.child.reset();
+    }
+}
+
+/// Maps a child's terminal result to a fixed one (`Running` passes through).
+/// [`Force::succeed`] makes a best-effort child never fail its parent sequence
+/// (optional recovery, cosmetic step); [`Force::fail`] forces an abort regardless
+/// of the child's own result.
+pub struct Force<Ctx: ?Sized> {
+    child: BoxNode<Ctx>,
+    forced: Status,
+}
+
+impl<Ctx: ?Sized> Force<Ctx> {
+    /// Wrap `child` so any terminal result becomes `Success`.
+    pub fn succeed(child: BoxNode<Ctx>) -> Self {
+        Self { child, forced: Status::Success }
+    }
+
+    /// Wrap `child` so any terminal result becomes `Failure`.
+    pub fn fail(child: BoxNode<Ctx>) -> Self {
+        Self { child, forced: Status::Failure }
+    }
+}
+
+impl<Ctx: ?Sized> Node<Ctx> for Force<Ctx> {
+    fn tick(&mut self, ctx: &mut Ctx) -> Status {
+        match self.child.tick(ctx) {
+            Status::Running => Status::Running,
+            _ => self.forced,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.child.reset();
+    }
+}
+
+// ── Reactive composites (re-evaluate from the first child every tick) ─────────
+
+/// Like [`Sequence`], but **reactive**: it re-ticks its children from the first one
+/// on every tick instead of latching the running child, so earlier *condition*
+/// children are re-checked continuously. This is the "do B **while** A holds"
+/// node — `reactive_sequence([safe?, drive])` re-evaluates `safe?` each frame and
+/// bails the instant it fails, where a plain [`Sequence`] would latch `drive` as
+/// running and never look at `safe?` again. Returns `Running` while a child is
+/// running, `Failure` on the first child failure, `Success` only when every child
+/// succeeds within one tick.
+pub struct ReactiveSequence<Ctx: ?Sized> {
+    children: Vec<BoxNode<Ctx>>,
+}
+
+impl<Ctx: ?Sized> ReactiveSequence<Ctx> {
+    /// Build a reactive sequence over the given ordered children.
+    pub fn new(children: Vec<BoxNode<Ctx>>) -> Self {
+        Self { children }
+    }
+}
+
+impl<Ctx: ?Sized> Node<Ctx> for ReactiveSequence<Ctx> {
+    fn tick(&mut self, ctx: &mut Ctx) -> Status {
+        for i in 0..self.children.len() {
+            match self.children[i].tick(ctx) {
+                Status::Failure => {
+                    self.reset();
+                    return Status::Failure;
+                }
+                Status::Running => {
+                    // Later children didn't run this tick; drop any state they held
+                    // from a previous frame so re-entry is clean.
+                    for c in &mut self.children[i + 1..] {
+                        c.reset();
+                    }
+                    return Status::Running;
+                }
+                Status::Success => {}
+            }
+        }
+        self.reset();
+        Status::Success
+    }
+
+    fn reset(&mut self) {
+        for c in &mut self.children {
+            c.reset();
+        }
+    }
+}
+
+/// Like [`Selector`], but **reactive**: it re-ticks from the highest-priority child
+/// every tick, so a higher-priority option can preempt a lower one mid-run. This is
+/// the priority-arbiter node — `reactive_selector([avoid_if_blocked, cruise])`
+/// re-checks the obstacle guard each frame and switches to avoidance the instant it
+/// trips, then back to cruise when clear. Returns `Success` on the first child
+/// success, `Running` while a child is running, `Failure` only when every child
+/// fails within one tick.
+pub struct ReactiveSelector<Ctx: ?Sized> {
+    children: Vec<BoxNode<Ctx>>,
+}
+
+impl<Ctx: ?Sized> ReactiveSelector<Ctx> {
+    /// Build a reactive selector (priority fallback) over the given children.
+    pub fn new(children: Vec<BoxNode<Ctx>>) -> Self {
+        Self { children }
+    }
+}
+
+impl<Ctx: ?Sized> Node<Ctx> for ReactiveSelector<Ctx> {
+    fn tick(&mut self, ctx: &mut Ctx) -> Status {
+        for i in 0..self.children.len() {
+            match self.children[i].tick(ctx) {
+                Status::Success => {
+                    self.reset();
+                    return Status::Success;
+                }
+                Status::Running => {
+                    // A higher-priority child took over; reset the lower-priority
+                    // children so a preempted running branch starts fresh next time.
+                    for c in &mut self.children[i + 1..] {
+                        c.reset();
+                    }
+                    return Status::Running;
+                }
+                Status::Failure => {}
+            }
+        }
+        self.reset();
+        Status::Failure
+    }
+
+    fn reset(&mut self) {
+        for c in &mut self.children {
+            c.reset();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -387,5 +612,82 @@ mod tests {
         let mut ctx = ();
         assert_eq!(a.tick(&mut ctx), Status::Running);
         assert_eq!(a.tick(&mut ctx), Status::Success);
+    }
+
+    #[test]
+    fn invert_swaps_terminals_passes_running() {
+        let mut ctx = ();
+        assert_eq!(Invert::new(Countdown::new(0, Status::Success)).tick(&mut ctx), Status::Failure);
+        assert_eq!(Invert::new(Countdown::new(0, Status::Failure)).tick(&mut ctx), Status::Success);
+        // Running passes straight through.
+        assert_eq!(Invert::new(Countdown::new(1, Status::Success)).tick(&mut ctx), Status::Running);
+    }
+
+    #[test]
+    fn force_maps_any_terminal_to_fixed() {
+        let mut ctx = ();
+        // A failing child never fails its parent under Force::succeed.
+        assert_eq!(Force::succeed(Countdown::new(0, Status::Failure)).tick(&mut ctx), Status::Success);
+        // A succeeding child still fails under Force::fail.
+        assert_eq!(Force::fail(Countdown::new(0, Status::Success)).tick(&mut ctx), Status::Failure);
+        // Running is not a terminal, so it passes through.
+        assert_eq!(Force::succeed(Countdown::new(2, Status::Failure)).tick(&mut ctx), Status::Running);
+    }
+
+    #[test]
+    fn retry_gives_up_after_budget_but_takes_a_success() {
+        let mut ctx = ();
+        // times(2): two failures exhaust the budget → Failure.
+        let mut r = Retry::times(2, Countdown::new(0, Status::Failure));
+        assert_eq!(r.tick(&mut ctx), Status::Running); // 1st failure → retry
+        assert_eq!(r.tick(&mut ctx), Status::Failure); // 2nd failure → give up
+
+        // A child that fails once then would-succeed: Retry re-runs it. Here a leaf
+        // that succeeds on its 2nd tick, under times(3), succeeds (never exhausts).
+        let mut n = 0;
+        let flaky = Box::new(Action::new(move |_: &mut ()| {
+            n += 1;
+            if n >= 2 { Status::Success } else { Status::Failure }
+        })) as BoxNode<()>;
+        let mut r2 = Retry::times(3, flaky);
+        assert_eq!(r2.tick(&mut ctx), Status::Running); // fail #1 → retry
+        assert_eq!(r2.tick(&mut ctx), Status::Success); // now succeeds
+    }
+
+    #[test]
+    fn reactive_sequence_rechecks_the_guard_every_tick() {
+        // guard: Success for the first 2 ticks, then Failure (a condition that goes
+        // false while the action is still running). action: always Running.
+        let mut g = 0;
+        let guard = Box::new(Action::new(move |_: &mut ()| {
+            g += 1;
+            if g <= 2 { Status::Success } else { Status::Failure }
+        })) as BoxNode<()>;
+        let action = Countdown::new(999, Status::Success); // effectively "always Running"
+        let mut seq = ReactiveSequence::new(vec![guard, action]);
+        let mut ctx = ();
+        assert_eq!(seq.tick(&mut ctx), Status::Running); // guard ok, action running
+        assert_eq!(seq.tick(&mut ctx), Status::Running); // guard ok, action running
+        // A plain Sequence would have latched the running action and NEVER re-check
+        // the guard; the reactive one re-evaluates it and bails.
+        assert_eq!(seq.tick(&mut ctx), Status::Failure); // guard now false → Failure
+    }
+
+    #[test]
+    fn reactive_selector_lets_a_higher_priority_child_preempt() {
+        // high-priority: Failure for the first 2 ticks, then Success (a condition
+        // that trips on). low-priority: always Running (the default action).
+        let mut h = 0;
+        let high = Box::new(Action::new(move |_: &mut ()| {
+            h += 1;
+            if h <= 2 { Status::Failure } else { Status::Success }
+        })) as BoxNode<()>;
+        let low = Countdown::new(999, Status::Success); // always Running
+        let mut sel = ReactiveSelector::new(vec![high, low]);
+        let mut ctx = ();
+        assert_eq!(sel.tick(&mut ctx), Status::Running); // high fails → low runs
+        assert_eq!(sel.tick(&mut ctx), Status::Running); // high fails → low runs
+        // Reactive: the high-priority child is re-checked and preempts the low one.
+        assert_eq!(sel.tick(&mut ctx), Status::Success); // high now succeeds
     }
 }
