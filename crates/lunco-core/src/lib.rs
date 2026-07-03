@@ -47,8 +47,11 @@ pub mod subsystems;
 
 pub mod derived;
 
+pub mod mobility;
+
 pub use architecture::*;
 pub use derived::RebuildOnChange;
+pub use mobility::Mobility;
 pub use mocks::*;
 pub use telemetry::*;
 pub use log::*;

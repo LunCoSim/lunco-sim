@@ -101,52 +101,84 @@ fn avian_list(world: &World, entity: Entity, out: &mut Vec<PortRef>) {
     }
 }
 
-/// Resolve the first avian port named `name` whose causality satisfies `dir_ok`,
-/// scanning [`AVIAN`] groups in precedence order and skipping groups whose gating
-/// component is absent on `entity`. The returned reference is `'static` (groups
-/// are `const`), so callers may drop the immutable `world` borrow and re-borrow
-/// it mutably before invoking the port's `write`.
-fn find_avian_port(
+/// Encode an avian slot: `(group index << 16) | port index` into [`AVIAN`]. The
+/// slot is a process-local [`lunco_core::ports::ResolvedPort`] locator — never
+/// serialized (see the value model note in `lunco_core::ports`).
+fn avian_slot(group_index: usize, port_index: usize) -> u64 {
+    ((group_index as u64) << 16) | (port_index as u64)
+}
+
+/// Decode an avian slot back to its `'static` [`AvianPort`] (groups are `const`).
+/// `None` if the slot is out of range (a stale slot from a bumped table).
+fn avian_decode(slot: u64) -> Option<&'static AvianPort> {
+    let gi = (slot >> 16) as usize;
+    let pi = (slot & 0xffff) as usize;
+    AVIAN.get(gi)?.ports.get(pi)
+}
+
+/// Resolve the first avian port named `name` whose causality satisfies `dir_ok`
+/// to its [`avian_slot`], scanning [`AVIAN`] groups in precedence order and
+/// skipping groups whose gating component is absent on `entity`. This is the
+/// ONE scan (group-presence + name compare); once resolved, the hot loop reads
+/// by slot with a single component access and no re-scan.
+fn avian_resolve(
     world: &World,
     entity: Entity,
     name: &str,
     dir_ok: fn(PortDirection) -> bool,
-) -> Option<&'static AvianPort> {
-    for group in AVIAN {
+) -> Option<u64> {
+    for (gi, group) in AVIAN.iter().enumerate() {
         if !(group.present)(world, entity) {
             continue;
         }
-        for p in group.ports {
+        for (pi, p) in group.ports.iter().enumerate() {
             if p.name == name && dir_ok(p.dir) {
-                return Some(p);
+                return Some(avian_slot(gi, pi));
             }
         }
     }
     None
 }
 
-fn avian_read_output(world: &World, entity: Entity, name: &str) -> Option<f64> {
-    let port = find_avian_port(world, entity, name, |d| {
-        matches!(d, PortDirection::Out | PortDirection::InOut)
-    })?;
-    port.read?(world, entity)
+fn avian_resolve_output(world: &World, entity: Entity, name: &str) -> Option<u64> {
+    avian_resolve(world, entity, name, |d| matches!(d, PortDirection::Out | PortDirection::InOut))
 }
 
-fn avian_read_input(world: &World, entity: Entity, name: &str) -> Option<f64> {
-    let port = find_avian_port(world, entity, name, |d| {
-        matches!(d, PortDirection::In | PortDirection::InOut)
-    })?;
-    port.read?(world, entity)
+fn avian_resolve_input(world: &World, entity: Entity, name: &str) -> Option<u64> {
+    avian_resolve(world, entity, name, |d| matches!(d, PortDirection::In | PortDirection::InOut))
 }
 
-fn avian_write_input(world: &mut World, entity: Entity, name: &str, value: f64) -> bool {
-    let Some(port) = find_avian_port(world, entity, name, |d| {
-        matches!(d, PortDirection::In | PortDirection::InOut)
-    }) else {
+/// Read the value at a resolved avian slot. The port's `read` does the single
+/// component access, returning `None` if that component was removed since
+/// resolution — so a stale slot degrades to "no value" (skipped), never a wrong
+/// read.
+fn avian_read_slot(world: &World, entity: Entity, slot: u64) -> Option<f64> {
+    avian_decode(slot)?.read?(world, entity)
+}
+
+fn avian_write_slot(world: &mut World, entity: Entity, slot: u64, value: f64) -> bool {
+    let Some(port) = avian_decode(slot) else {
         return false;
     };
     match port.write {
         Some(write) => write(world, entity, value),
+        None => false,
+    }
+}
+
+// The name-based ops are DERIVED from the resolve→slot model (no duplicated scan):
+// resolve once, then read/write by slot.
+fn avian_read_output(world: &World, entity: Entity, name: &str) -> Option<f64> {
+    avian_read_slot(world, entity, avian_resolve_output(world, entity, name)?)
+}
+
+fn avian_read_input(world: &World, entity: Entity, name: &str) -> Option<f64> {
+    avian_read_slot(world, entity, avian_resolve_input(world, entity, name)?)
+}
+
+fn avian_write_input(world: &mut World, entity: Entity, name: &str, value: f64) -> bool {
+    match avian_resolve_input(world, entity, name) {
+        Some(slot) => avian_write_slot(world, entity, slot, value),
         None => false,
     }
 }
@@ -170,15 +202,28 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
         }
         false
     },
+    // No fast path: registered first, so a name read already hits on one
+    // `get::<SimComponent>` — resolution would not remove the map lookup.
+    resolve_output: None,
+    resolve_input: None,
+    read_slot: None,
+    write_slot: None,
 };
 
 /// Avian rigid bodies + revolute/prismatic joints, folded from the [`AVIAN`]
-/// spec table.
+/// spec table. Exposes the resolve→slot fast path: registered behind
+/// `SimComponent`, its name reads otherwise pay a `get::<SimComponent>` miss plus
+/// up to six group-presence checks + a name scan — resolution collapses that to a
+/// single component access per tick.
 const AVIAN_BACKEND: PortBackend = PortBackend {
     list: avian_list,
     read_output: avian_read_output,
     read_input: avian_read_input,
     write_input: avian_write_input,
+    resolve_output: Some(avian_resolve_output),
+    resolve_input: Some(avian_resolve_input),
+    read_slot: Some(avian_read_slot),
+    write_slot: Some(avian_write_slot),
 };
 
 /// SysML/hardware [`PhysicalPort`] — one bidirectional `f32` scalar named `value`.
@@ -215,6 +260,11 @@ const PHYSICAL_PORT_BACKEND: PortBackend = PortBackend {
         }
         false
     },
+    // Single fixed port on one component — name-based is already a single `get`.
+    resolve_output: None,
+    resolve_input: None,
+    read_slot: None,
+    write_slot: None,
 };
 
 /// SysML/hardware [`DigitalPort`] — one bidirectional `i16` register named `raw`,
@@ -254,6 +304,11 @@ const DIGITAL_PORT_BACKEND: PortBackend = PortBackend {
         }
         false
     },
+    // Single fixed register on one component — name-based is already a single `get`.
+    resolve_output: None,
+    resolve_input: None,
+    read_slot: None,
+    write_slot: None,
 };
 
 /// Register the cosim engine's builtin port backends into `registry`, in

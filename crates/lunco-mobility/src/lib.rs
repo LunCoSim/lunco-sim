@@ -875,6 +875,14 @@ const FSW_COMMAND_BACKEND: PortBackend = PortBackend {
         }
         false
     },
+    // Map-backed: name-based write is one `get::<FlightSoftware>` + a map lookup.
+    // A resolve→slot fast path here would need a name interner (the slot can't
+    // carry the string) — a documented follow-up if the drive-command write fold
+    // shows up in profiling, not needed for correctness.
+    resolve_output: None,
+    resolve_input: None,
+    read_slot: None,
+    write_slot: None,
 };
 
 /// Derive each controllable's FSW command surface from USD: for any entity that has

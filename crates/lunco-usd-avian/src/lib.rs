@@ -74,6 +74,7 @@ impl Plugin for UsdAvianPlugin {
         //   both bodies into its island graph (FixedUpdate-driven).
         //   `run_if(any pending)` makes it idle when no joints await.
         app.register_type::<ShouldBeDynamic>()
+            .register_type::<lunco_core::Mobility>()
             .add_observer(on_add_usd_prim)
             .add_observer(process_usd_avian_prims)
             .add_systems(
@@ -83,8 +84,66 @@ impl Plugin for UsdAvianPlugin {
                     build_terrain_mesh_colliders
                         .run_if(any_with_component::<PendingTerrainCollider>),
                     enforce_kinematic_on_animated,
+                    project_mobility_to_rigid_body,
                 ),
             );
+    }
+}
+
+/// Project a source-declared [`Mobility`](lunco_core::Mobility) onto the live
+/// avian `RigidBody` for bodies the USD spawn path didn't already build — so a
+/// rhai / Modelica / editor source can spawn a physics body by declaring its
+/// mobility alone (one knob, no avian dependency upstream).
+///
+/// Gated `Without<RigidBody>` so it NEVER overrides a body the USD path manages
+/// (including the transient `Kinematic` a settling `Dynamic` body wears via
+/// `ShouldBeDynamic`), and `Changed<Mobility>` so it's empty in steady state. A
+/// declared-mobility change on a body that already has a `RigidBody` (a live
+/// static⇄dynamic flip) is intentionally out of scope here — it needs engine-
+/// aware transition handling and is a documented follow-up.
+fn project_mobility_to_rigid_body(
+    mut commands: Commands,
+    q: Query<
+        (Entity, &lunco_core::Mobility),
+        (Changed<lunco_core::Mobility>, Without<RigidBody>),
+    >,
+) {
+    for (entity, mobility) in &q {
+        let body = match mobility {
+            lunco_core::Mobility::Static => RigidBody::Static,
+            lunco_core::Mobility::Kinematic => RigidBody::Kinematic,
+            lunco_core::Mobility::Dynamic => RigidBody::Dynamic,
+        };
+        commands.entity(entity).insert(body);
+    }
+}
+
+#[cfg(test)]
+mod mobility_tests {
+    use super::*;
+
+    #[test]
+    fn projects_declared_mobility_but_never_overrides_a_managed_body() {
+        let mut app = App::new();
+        app.add_systems(Update, project_mobility_to_rigid_body);
+
+        // A bare declaration (rhai/Modelica source) → projected to a body.
+        let bare = app.world_mut().spawn(lunco_core::Mobility::Dynamic).id();
+        // A USD-managed `Dynamic` body mid-settle wears a transient `Kinematic`;
+        // the projector must NOT stomp it back to `Dynamic`.
+        let managed = app
+            .world_mut()
+            .spawn((lunco_core::Mobility::Dynamic, RigidBody::Kinematic))
+            .id();
+
+        app.update();
+
+        assert_eq!(app.world().get::<RigidBody>(bare), Some(&RigidBody::Dynamic));
+        assert_eq!(
+            app.world().get::<RigidBody>(managed),
+            Some(&RigidBody::Kinematic),
+            "projector must not override a body the spawn path already manages"
+        );
     }
 }
 
@@ -108,7 +167,11 @@ fn enforce_kinematic_on_animated(
 ) {
     for (entity, body) in &q {
         if matches!(body, RigidBody::Dynamic) {
-            commands.entity(entity).insert(RigidBody::Kinematic);
+            // Animation is the motion authority → the declared mobility is now
+            // Kinematic, matching the demoted body type.
+            commands
+                .entity(entity)
+                .insert((RigidBody::Kinematic, lunco_core::Mobility::Kinematic));
         }
     }
 }
@@ -530,6 +593,7 @@ fn process_usd_avian_prims(
         if has_terrain_api {
             commands.entity(entity).insert((
                 RigidBody::Static,
+                lunco_core::Mobility::Static,
                 lunco_terrain_globe::TerrainTile,
             ));
             // Primitive terrain (Cube/Sphere/Cylinder) → intrinsic collider.
@@ -563,7 +627,7 @@ fn process_usd_avian_prims(
             .prim_attribute_value::<String>(&sdf_path, "lunco:triggerZone")
             .filter(|z| !z.trim().is_empty())
         {
-            commands.entity(entity).insert(RigidBody::Static);
+            commands.entity(entity).insert((RigidBody::Static, lunco_core::Mobility::Static));
             add_collider_from_usd(&mut commands, entity, reader, &sdf_path);
             // On the dedicated TRIGGER layer (membership), filtering ALL so it
             // still overlaps the rover for `enter`/`exit` events — but the wheel
@@ -602,14 +666,18 @@ fn process_usd_avian_prims(
             let kinematic = reader
                 .prim_attribute_value::<bool>(&sdf_path, "physics:kinematicEnabled")
                 .unwrap_or(false);
-            let body = if kinematic {
-                RigidBody::Kinematic
+            // Declared mobility (structure) vs the live body type (state): a
+            // `Dynamic`-declared body spawns `Kinematic` and settles to `Dynamic`
+            // via `ShouldBeDynamic`, so record the intent separately.
+            let (body, mobility) = if kinematic {
+                (RigidBody::Kinematic, lunco_core::Mobility::Kinematic)
             } else {
                 commands.entity(entity).insert(ShouldBeDynamic);
-                RigidBody::Kinematic
+                (RigidBody::Kinematic, lunco_core::Mobility::Dynamic)
             };
             commands.entity(entity).insert((
                 body,
+                mobility,
                 lunco_core::SelectableRoot,
             ));
 
@@ -629,7 +697,7 @@ fn process_usd_avian_prims(
             // Part of parent's compound body — pure visual, no physics components.
             // Exception: root-level (no parent) → static collider.
             if q_child_of.get(entity).is_err() {
-                commands.entity(entity).insert(RigidBody::Static);
+                commands.entity(entity).insert((RigidBody::Static, lunco_core::Mobility::Static));
                 add_collider_from_usd(&mut commands, entity, reader, &sdf_path);
             }
 
@@ -639,13 +707,14 @@ fn process_usd_avian_prims(
             if let Some(true) = reader.prim_attribute_value::<bool>(&sdf_path, "physics:rigidBodyEnabled") {
                 commands.entity(entity).insert((
                     RigidBody::Kinematic,
+                    lunco_core::Mobility::Dynamic,
                     ShouldBeDynamic,
                     lunco_core::SelectableRoot,
                 ));
                 apply_rigid_body_mass_props(&mut commands, entity, reader, &sdf_path);
                 add_collider_from_usd(&mut commands, entity, reader, &sdf_path);
             } else if let Some(false) = reader.prim_attribute_value::<bool>(&sdf_path, "physics:rigidBodyEnabled") {
-                commands.entity(entity).insert(RigidBody::Static);
+                commands.entity(entity).insert((RigidBody::Static, lunco_core::Mobility::Static));
                 add_collider_from_usd(&mut commands, entity, reader, &sdf_path);
             }
 
