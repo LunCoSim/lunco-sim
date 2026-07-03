@@ -132,24 +132,17 @@ fn register_release_backend(reg: Option<ResMut<lunco_core::ports::PortRegistry>>
     }
 }
 
-/// Ensure both bodies of every fixed joint carry a [`ReleaseActuator`], so the
-/// `release` port exists on any dockable vessel — STABLY and independent of
-/// possession (a vessel is releasable because it's jointed, not because it's
-/// currently driven). Gating this on `ControlBinding` was possession-dependent and
-/// the actuator vanished on release; keying it off the joint fixes that.
-fn attach_release_to_joint_bodies(
-    joints: Query<&avian3d::prelude::FixedJoint>,
-    have: Query<(), With<ReleaseActuator>>,
+/// Give the CONTROL entity of every control-bound vessel a [`ReleaseActuator`], so
+/// its `release` port is where the control binding actually writes. (A USD prim can
+/// spawn several entities sharing one `UsdPrimPath` — the control/model entity vs the
+/// physics-body entity a joint references; the binding targets the former, so the
+/// actuator must live there. `joint_release_system` bridges to the joint by path.)
+fn attach_release_actuator(
     mut commands: Commands,
+    q: Query<Entity, (Added<lunco_core::ControlBinding>, Without<ReleaseActuator>)>,
 ) {
-    for j in &joints {
-        for body in [j.body1, j.body2] {
-            if have.get(body).is_err() {
-                if let Ok(mut e) = commands.get_entity(body) {
-                    e.try_insert(ReleaseActuator::default());
-                }
-            }
-        }
+    for e in &q {
+        commands.entity(e).insert(ReleaseActuator::default());
     }
 }
 
@@ -157,28 +150,26 @@ fn attach_release_to_joint_bodies(
 /// to another body. The principled generalization of the old G-to-detach: any
 /// possessed vessel, any dock joint, no per-scene name matching.
 fn joint_release_system(
-    mut q: Query<(Entity, &mut ReleaseActuator)>,
+    mut vessels: Query<(&mut ReleaseActuator, &UsdPrimPath)>,
     joints: Query<(Entity, &avian3d::prelude::FixedJoint)>,
+    body_paths: Query<&UsdPrimPath>,
     mut commands: Commands,
 ) {
-    for (vessel, mut act) in &mut q {
+    for (mut act, vpath) in &mut vessels {
         if act.cmd > 0.5 {
             if !act.latched {
                 act.latched = true;
-                let mut matched = 0;
+                // Bridge control-entity → physics-body by shared USD path: detach any
+                // fixed joint whose bodies resolve to this vessel's prim path.
                 for (je, j) in &joints {
-                    if j.body1 == vessel || j.body2 == vessel {
-                        matched += 1;
-                        info!("RELEASE: vessel {vessel:?} detaching joint {je:?}");
+                    let hit = [j.body1, j.body2].into_iter().any(|b| {
+                        body_paths.get(b).is_ok_and(|p| p.path == vpath.path)
+                    });
+                    if hit {
+                        info!("RELEASE: vessel {} detaching joint {je:?}", vpath.path);
                         commands.trigger(DetachJoint { target: je });
                     }
                 }
-                info!(
-                    "RELEASE-DIAG: vessel {vessel:?} cmd={} fired; {} joints total, {} matched",
-                    act.cmd,
-                    joints.iter().count(),
-                    matched
-                );
             }
         } else {
             act.latched = false;
@@ -2842,7 +2833,7 @@ impl Plugin for SpawnCommandPlugin {
         // ReleaseActuator to every control-bound vessel, and edge-detect → detach.
         app.register_type::<ReleaseActuator>();
         app.add_systems(Startup, register_release_backend);
-        app.add_systems(Update, (attach_release_to_joint_bodies, joint_release_system));
+        app.add_systems(Update, (attach_release_actuator, joint_release_system));
         app.add_systems(
             Update,
             remove_legacy_ground_prim.run_if(obstacle_field_scene_changed),
