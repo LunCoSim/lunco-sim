@@ -6,7 +6,7 @@ fn steps() {
         #{ anchor: "panel.modelica_plot",           focus: (),          title: "Graphs",           body: "Multi-axis plots, one set per document. Pick signals to trace, put fast + slow signals on separate axes, and snapshot a run to overlay against later ones." },
         #{ anchor: "panel.modelica_diagnostics",    focus: "modelica_diagnostics",   title: "Diagnostics",      body: "Compile and solver problems land here with severities. Click a diagnostic to jump straight to the offending line in the source." },
         #{ anchor: "panel.modelica_console",        focus: "modelica_console",       title: "Console",          body: "The running log — compile progress, solver messages, and any script output stream here. Your first stop when something looks off." },
-        #{ anchor: "",                              focus: (),                       title: "Last stop",        body: "You can model, run, sweep, and read results. Finish with “Automate” — drive all of this from scripts. 🎓 Tutorials menu." },
+        #{ anchor: "",                              focus: (),                       title: "Last stop",        body: "You can model, run, sweep, and read results. Finish with “Automate” — drive all of this from scripts. Continue when you're ready." },
     ]
 }
 

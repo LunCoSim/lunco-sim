@@ -45,7 +45,7 @@ fn on_event(me, evt) {
     if this.i >= s.len() {
         end_tour();
         notify_kind("Tour complete!", "success");
-        emit("MISSION_COMPLETE", 0);   // triggers the USD `lunco:nextScene` chain
+        emit("MISSION_COMPLETE", 0);   // marks the lesson done + advances the `next:` chain (→ First Drive)
     } else {
         show(s, this.i);
     }

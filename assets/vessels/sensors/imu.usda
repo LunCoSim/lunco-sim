@@ -1,0 +1,27 @@
+#usda 1.0
+(
+    defaultPrim = "Imu"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Reusable IMU (inertial measurement unit) sensor — a library primitive. Reference
+# it onto any vessel with `prepend references` + a local `xformOp:translate` for the
+# mount point, exactly like the markers:
+#
+#   def "IMU" (prepend references = @../../vessels/sensors/imu.usda@</Imu>)
+#   { double3 xformOp:translate = (0, 0, 0); uniform token[] xformOpOrder = ["xformOp:translate"] }
+#
+# Backed by `lunco_cosim::sensors::ImuSensor` (gated on `lunco:sensor:imu`). It
+# exposes world-frame linear acceleration (`accel_x/y/z`) and body-frame specific
+# force (`spec_force_x/y/z`, what a real accelerometer measures: a − g rotated into
+# the body). Composed with the rigid body's `quat_*` / `angvel_*` it is a full
+# 9-DOF IMU — the attitude source a GNC reads for orientation instead of a
+# god-view body pose. Honours a body-local mount `lunco:sensor:offset`.
+# Invisible: no geometry, pure telemetry.
+def Xform "Imu"
+{
+    token visibility = "invisible"
+    custom bool lunco:sensor:imu = true
+    custom double3 lunco:sensor:offset = (0.0, 0.0, 0.0)
+}

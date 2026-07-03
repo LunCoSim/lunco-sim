@@ -105,17 +105,25 @@ def Xform "LanderTest"
 
         string lunco:vessel = "true"
 
-        # Cosim: bind the lander GNC (Lander.mo) and self-wire its I/O.
-        #   thrust        --> force_local_y  (actuate, body-frame)
-        #   height        --> altitude       (PID measurement)
-        #   velocity_y    --> descent_rate   (PID damping term)
-        #   gravity_accel --> g              (env-correct gravity feed-forward; lunar ≈ 1.62)
+        # Cosim: bind the lander GNC (Lander.mo) and wire it to SENSORS, not the
+        # god-view body. The low-level control LAW lives in the Modelica model; it
+        # reads what a real lander senses:
+        #   Altimeter.range  --> altitude      (see AltimeterToLander below)
+        #   velocity_y       --> descent_rate  (vertical-velocity estimate)
+        #   IMU / body quat  --> q_w..q_z      (attitude, to rotate thrust to world)
+        #   g                =  1.62 (model param; lunar gravity is constant)
+        # and drives force/torque OUT to Avian. A `manual` port (unwired → 0) is the
+        # authority gate: 0 = GNC flies (baseline/lowest tier), 1 = obey the external
+        # command (a possessing autopilot/human overrides). Priority order is DATA in
+        # `lunco:controlLayers` below; who-wins is decided by possession + rhai, never
+        # computed here. See models/Lander.mo.
         string lunco:modelicaModel = "models/Lander.mo"
-        # Actuator I/O only: force/torque OUT (Modelica -> Avian), orientation quat
-        # IN (rotates thrust to world), throttle OUT (telemetry/flame). The GNC-only
-        # feeds (position/velocity/angvel/gravity) were dropped with the GNC — the
-        # rhai autopilot reads pose/velocity from the avian ports directly.
-        string lunco:simWires = "force_x:force_x,force_y:force_y,force_z:force_z,torque_x:torque_x,torque_y:torque_y,torque_z:torque_z,quat_w:q_w,quat_x:q_x,quat_y:q_y,quat_z:q_z,throttle:throttle"
+        string lunco:simWires = "force_x:force_x,force_y:force_y,force_z:force_z,torque_x:torque_x,torque_y:torque_y,torque_z:torque_z,quat_w:q_w,quat_x:q_x,quat_y:q_y,quat_z:q_z,velocity_y:descent_rate,throttle:throttle"
+
+        # Control-authority tiers on this vessel, ascending priority (DATA, not code).
+        # gnc = the onboard Modelica baseline; a possessing autopilot/human outbids it.
+        # The `manual` gate + possession arbiter enforce it; this declares the order.
+        custom string lunco:controlLayers = "gnc:0, autopilot:1, human:2"
 
         # Modelica `when` events: threshold crossings of the model's continuous
         # OUTPUT signals become discrete events on the bus (edge detection in Rust,
@@ -128,7 +136,9 @@ def Xform "LanderTest"
         # script (doc 34, Decision 1). The script monitors the GNC's propellant
         # port and disarms a dry engine; it does NOT fly the descent.
         custom string lunco:scriptPath = "scenarios/lander_subsystems.rhai"
-        custom string lunco:params = "speed=5.0, angular_speed=2.0"
+        # GNC descent tuning (overrides Lander.mo defaults): rest_altitude = altimeter
+        # range (m) at leg contact, kv = descent-rate tracking gain.
+        custom string lunco:params = "rest_altitude=1.5, kv=1.2"
 
         # ── Physics hull ──
         # Enabling colliders on the footpads switches this rigid body into
@@ -148,17 +158,25 @@ def Xform "LanderTest"
             bool physics:collisionEnabled = true
         }
 
-        # Altimeter sensor tool - raycasts downwards and outputs "range" port
-        def Xform "Altimeter"
+        # ── Onboard sensors (reusable library primitives, referenced) ──
+        # Altimeter: downward range-finder → `range` port (the GNC's altitude).
+        # Mounted at the nozzle bottom, casting -Y.
+        def "Altimeter" (
+            prepend references = @../../vessels/sensors/altimeter.usda@</Altimeter>
+        )
         {
-            token visibility = "invisible"
-            custom bool lunco:sensor:range = true
-            custom token lunco:sensor:rangeAxis = "-Y"
-            custom float lunco:sensor:rangeMax = 150.0
-            custom token lunco:sensor:rangeOutOfRangeMode = "IdealAltitude"
-            custom bool lunco:sensor:rangeVisualize = true
-            custom double3 lunco:sensor:offset = (0.0, 0.0, 0.0)
-            double3 xformOp:translate = (0.0, -3.3, 0.0) # centered locally at nozzle bottom
+            double3 xformOp:translate = (0.0, -3.3, 0.0) # nozzle bottom
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
+
+        # IMU: 9-DOF attitude + accel source. Its orientation (with the body's
+        # `quat_*`/`angvel_*`) is what the GNC reads for thrust-vector orientation.
+        # Mounted at the body centre of mass.
+        def "IMU" (
+            prepend references = @../../vessels/sensors/imu.usda@</Imu>
+        )
+        {
+            double3 xformOp:translate = (0.0, 0.0, 0.0) # at CoM
             uniform token[] xformOpOrder = ["xformOp:translate"]
         }
 

@@ -1,84 +1,77 @@
-// Lander onboard software — referenced from USD by `lunco:scriptPath` on the
-// `/LanderTest/Lander` prim; runs ON the lander entity. Two jobs: (1) AUTO-LAND
-// GUIDANCE (below) — the GNC now lives here as rhai policy and WRITES the command
-// ports (`external_throttle`/`pitch`/`roll`/`yaw`), since `Lander.mo` is now a
-// pure commands->force actuator (auto and manual share one command interface);
-// (2) supervisory monitoring — touchdown latch + fuel-event reactions.
+// Lander onboard supervisory software — referenced from USD by `lunco:scriptPath`
+// on `/LanderTest/Lander`, runs ON the lander entity. The GNC control LAW now
+// lives in `Lander.mo` (Modelica); this script is HIGH-LEVEL POLICY ONLY — no
+// control math:
+//   (1) AUTHORITY GATE — hand the lander from the GNC to the pilot on manual input
+//       by writing the model's `manual` port (gnc < human). Re-arm to the GNC when
+//       lifted back into the air. This is the flag-policy that flips the model's
+//       one authority bit on events; the arbitration order is DATA in the USD
+//       `lunco:controlLayers`, the selection math is the model's arithmetic gate.
+//   (2) SUPERVISORY — latch touchdown (a compound low-AND-slow predicate) and react
+//       to the native Modelica fuel `when` events (`lunco:portEvents`).
 //
-// EVENT-DRIVEN, no port polling:
-//  - Fuel thresholds are NATIVE Modelica `when` events now (`lunco:portEvents` on
-//    the Lander prim turns `m_prop` crossings into `lander_low_fuel` /
-//    `lander_depleted`); this script only REACTS to them in on_event.
-//  - Touchdown is a COMPOUND condition (low AND slow) — not a single port edge —
-//    so it stays a latched rhai edge here, and is emitted as `lander_touchdown`
-//    for the mission scenario to wait on.
+// EVENT-DRIVEN: no per-tick control loop here anymore — the GNC flies itself.
+
+fn on_start(me) {
+    this.touchdown = false;
+    this.manual = false;
+    set(me, "manual", 0.0);        // GNC drives by default — the lowest authority tier
+    set(me, "engine_enable", 1.0); // armed for the autonomous descent
+}
 
 fn on_tick(me) {
-    let target_ent = find("/LanderTest/LandingLocation");
-
-    // If the lander has touchdown but is moved back up into the air (Y > 5.5),
-    // reset touchdown latch and re-arm the engine so the pilot can fly it again.
     let pos = world_pos(me);
-    if pos != () && pos[1] > 5.5 {
-        if this.touchdown == true {
-            this.touchdown = false;
-            set(me, "engine_enable", 1.0);
-            print("[Lander] Lander moved in the air - re-arming engine and resetting touchdown.");
-        }
+
+    // Lifted back into the air (Y > 5.5) → reset to a fresh autonomous descent:
+    // re-arm the engine and hand control back to the GNC (manual = 0).
+    if pos != () && pos[1] > 5.5 && this.touchdown == true {
+        this.touchdown = false;
+        this.manual = false;
+        set(me, "engine_enable", 1.0);
+        set(me, "manual", 0.0);
+        print("[Lander] Lifted - re-arming engine, GNC re-engaged.");
     }
 
-    // ── AUTO-LAND GUIDANCE ──────────────────────────────────────────────────
-    // The lander's GNC now lives HERE (rhai policy), not in Lander.mo — the model
-    // is a pure commands->force actuator. We read pose + velocity and WRITE the
-    // same command ports a pilot would (`external_throttle`/`pitch`/`roll`/`yaw`),
-    // so auto and manual share one interface. NOTE: manual-takeover arbitration is
-    // a higher layer (TODO) — today the autopilot flies until touchdown, then idles.
-    if this.touchdown != true && pos != () {
-        // Horizontal target: the landing pad, else hold current x/z (pure descent).
-        let tx = pos[0];
-        let tz = pos[2];
-        if target_ent != () {
-            let tp = world_pos(target_ent);
-            if tp != () { tx = tp[0]; tz = tp[2]; }
-        }
-        // World velocities from the cosim state ports (() -> 0 if unavailable).
-        let vy = get(me, "velocity_y"); if vy == () { vy = 0.0; }
-        let vx = get(me, "velocity_x"); if vx == () { vx = 0.0; }
-        let vz = get(me, "velocity_z"); if vz == () { vz = 0.0; }
-        let alt = pos[1];
-
-        // Vertical: descent-rate schedule (fast up high, gentle near ground) +
-        // throttle = hover feed-forward (m*g/F_max ~= 0.054) + PD on descent rate.
-        // Kept as flat `let`s so no single expression trips rhai's expr-depth cap.
-        let vy_sched = clamp(alt * 0.25, 0.4, 6.0);
-        let target_vy = -vy_sched;
-        let hover = (2000.0 * 1.62) / 60000.0;
-        let thr = hover + 0.05 * (target_vy - vy);
-        set(me, "external_throttle", clamp(thr, 0.0, 1.0));
-
-        // Horizontal: tilt to null position error + damp lateral drift, assuming
-        // near-upright small angles (world +X ~ roll, +Z ~ pitch). Gentle gains,
-        // kept small so it never flips the lander; live-tune later.
-        let ex = tx - pos[0];
-        let ez = tz - pos[2];
-        let roll_cmd = 0.05 * ex - 0.20 * vx;
-        let pitch_cmd = 0.05 * ez - 0.20 * vz;
-        set(me, "roll", clamp(roll_cmd, -0.4, 0.4));
-        set(me, "pitch", clamp(pitch_cmd, -0.4, 0.4));
-        set(me, "yaw", 0.0);
-    } else if this.touchdown == true {
-        // Settled on the legs — cut thrust so it rests.
-        set(me, "external_throttle", 0.0);
-    }
-
-    // Touchdown: settled on the legs (low altitude + near-zero vertical rate).
-    // Latched so it emits exactly once. Detection is hoisted to a top-level fn so
-    // on_tick's nesting stays under rhai's expr-depth cap (prelude-style split).
+    // Touchdown latch: settled on the legs (low + slow). A PREDICATE, not control
+    // math. Emits exactly once for the mission scenario to wait on; the mission
+    // then safes the engine. Hoisted to a top-level fn so on_tick stays shallow.
+    let target_ent = find("/LanderTest/LandingLocation");
     if this.touchdown != true && __lander_settled(me, target_ent) {
         this.touchdown = true;
         emit("lander_touchdown");
         print("[Lander] Touchdown - settled on legs.");
     }
+}
+
+fn on_event(me, evt) {
+    // AUTHORITY: a flight-control keypress hands the lander from the GNC to the
+    // pilot (human outranks gnc) — the same yield-on-input rule the rover autopilot
+    // uses. Flip the model's `manual` gate to 1 so it actuates the external command.
+    // (Full possession-aware arbitration arrives when scenarios can observe vessel
+    // ownership; until then this best-effort key rule covers single-player.)
+    if this.touchdown != true && this.manual != true && __is_flight_key(evt.name) {
+        this.manual = true;
+        set(me, "manual", 1.0);
+        notify_kind("Manual override - you have the lander.", "info");
+        print("[Lander] Manual override - pilot has control.");
+    }
+
+    // Native Modelica fuel `when` events (from `lunco:portEvents`).
+    if evt.name == "lander_low_fuel" {
+        notify_kind("Lander low on fuel.", "warn");
+        print("[Lander] LOW FUEL.");
+    } else if evt.name == "lander_depleted" {
+        // Auto-disarm a dry engine (clobber-safe via the port path).
+        set(me, "engine_enable", 0.0);
+        notify_kind("Propellant depleted - engine disarmed.", "warn");
+        print("[Lander] Propellant depleted - engine disarmed.");
+    }
+}
+
+// The flight-control keys that mean "the pilot is flying the lander now".
+fn __is_flight_key(name) {
+    name == "key:KeyW" || name == "key:KeyS" || name == "key:KeyA" ||
+    name == "key:KeyD" || name == "key:Space" || name == "key:ShiftLeft"
 }
 
 // True once the lander has settled: within range of the pad (or no pad), low
@@ -109,18 +102,4 @@ fn __lander_settled(me, target_ent) {
     let vy = get(me, "velocity_y");
     if vy == () { return false; }
     vy > -0.1 && vy < 0.1
-}
-
-fn on_event(me, evt) {
-    // React to the native Modelica port-edge events (from `lunco:portEvents`).
-    if evt.name == "lander_low_fuel" {
-        notify_kind("Lander low on fuel.", "warn");
-        print("[Lander] LOW FUEL.");
-    } else if evt.name == "lander_depleted" {
-        // Auto-disarm a dry engine so it can't command phantom thrust. Cut via
-        // the port path (clobber-safe through SimComponent.inputs).
-        set(me, "engine_enable", 0.0);
-        notify_kind("Propellant depleted - engine disarmed.", "warn");
-        print("[Lander] Propellant depleted - engine disarmed.");
-    }
 }

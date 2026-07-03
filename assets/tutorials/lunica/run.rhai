@@ -6,7 +6,7 @@ fn steps() {
         #{ anchor: "model_view.compile_buttons",  focus: (),                     title: "Two run modes",      body: "🚀 Interactive — compile, then step in real time; sliders drive inputs live and signals stream into Graphs.\n⏩ Fast Run — batch, headless: integrate 0 → t_end then dump results. Best for sweeps and reproducibility." },
         #{ anchor: "panel.modelica_inspector",    focus: "modelica_inspector",   title: "Live Inputs",        body: "During an Interactive run, Telemetry lists every parameter and input. Drag a slider to drive an input at simulation rate and watch the model respond." },
         #{ anchor: "panel.modelica_plot",         focus: (),        title: "Watch it move",      body: "Toggle a signal to trace and it appears in Graphs as the sim runs. Try Fast Run for the whole 0 → t_end curve at once." },
-        #{ anchor: "",                            focus: (),                     title: "Go further",         body: "Next: sweep parameters without editing source. Pick “Experiments & Sweeps” from the 🎓 Tutorials menu." },
+        #{ anchor: "",                            focus: (),                     title: "Go further",         body: "Next: sweep parameters without editing source. Continue when you're ready." },
     ]
 }
 
