@@ -7254,6 +7254,7 @@ dependencies = [
  "lunco-robotics",
  "lunco-sandbox-edit",
  "lunco-scripting",
+ "lunco-settings",
  "lunco-storage",
  "lunco-terrain-globe",
  "lunco-terrain-surface",
@@ -7268,6 +7269,7 @@ dependencies = [
  "lunco-workspace",
  "mimalloc",
  "openusd",
+ "serde",
  "wasm-bindgen",
  "web-sys",
 ]

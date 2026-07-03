@@ -45,7 +45,13 @@ pub fn sync_collider(
                 let radius = ((3.0 * volume) / (4.0 * std::f64::consts::PI)).cbrt();
                 if let Ok(mut collider) = q_colliders.get_mut(entity) {
                     *collider = Collider::sphere(radius);
-                    commands.entity(entity).insert(LastColliderVolume(volume));
+                    // `try_insert`: a doc-backed scene reload / obstacle-field churn
+                    // can despawn this body between our query and the command flush.
+                    // The plain `.insert` panics on a dead entity under Bevy 0.18's
+                    // command error handler (observed crashing the sandbox on the
+                    // default scene). The memo is best-effort — a despawned body has
+                    // no collider to gate — so silently skipping is correct.
+                    commands.entity(entity).try_insert(LastColliderVolume(volume));
                 }
             }
         }

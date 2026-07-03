@@ -66,6 +66,11 @@ lunco-fsw = { path = "../lunco-fsw" }
 # in non-server builds via Cargo feature unification.)
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-render = { path = "../lunco-render" }
+# Engine light-handling policy (ShadowCastingSettings) is a client render
+# concern, so the settings dep rides the `ui` feature (see `light_policy.rs`).
+lunco-settings = { path = "../lunco-settings", optional = true }
+# serde derives for the `ShadowCastingSettings` settings section (ui-gated).
+serde = { workspace = true, optional = true }
 # `default-features = false` drops celestial's egui inspector (`CelestialUiPlugin`,
 # not used by the sandbox bin). The `celestial` feature still pulls embed-assets.
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
@@ -167,6 +172,8 @@ ui = [
     "dep:lunco-doc",
     "dep:lunco-theme",
     "dep:lunco-ui",
+    "dep:lunco-settings",
+    "dep:serde",
     "dep:bevy_egui",
     "bevy/bevy_winit",
     "bevy/x11",
