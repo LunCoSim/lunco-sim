@@ -6808,6 +6808,7 @@ dependencies = [
  "lunco-behavior",
  "lunco-core",
  "lunco-cosim",
+ "lunco-time",
  "serde",
  "serde_json",
 ]

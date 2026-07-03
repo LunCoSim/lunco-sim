@@ -24,6 +24,10 @@ fn build() -> App {
         .insert_resource(NetworkRole::Standalone)
         .init_resource::<SessionRegistry>()
         .init_resource::<SessionRbac>()
+        // The one clock the driver reads (`WorldTime.sim_secs`). These constant-drive
+        // tests don't dwell, so the default `0.0` is fine; a real app gets it from
+        // `TimePlugin` (which `AutopilotPlugin` guard-adds).
+        .init_resource::<lunco_time::WorldTime>()
         .init_resource::<DriveLog>()
         .add_observer(capture)
         // Add the autopilot systems directly (not the full plugin) so this stays a
