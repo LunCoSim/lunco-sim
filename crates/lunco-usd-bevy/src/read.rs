@@ -40,6 +40,15 @@ pub trait UsdRead {
     {
         self.attr_value(prim, name).and_then(|v| v.get::<T>())
     }
+
+    /// Whether `prim` applies the named API schema (its composed `apiSchemas`) —
+    /// the physics extractor's body/collider/terrain detection read
+    /// (`PhysicsRigidBodyAPI` / `PhysicsCollisionAPI` / `PhysxTerrainAPI`).
+    fn has_api_schema(&self, prim: &SdfPath, schema: &str) -> bool;
+
+    /// First composed target of relationship `name` on `prim`, as a path string
+    /// (e.g. a joint's `physics:body0`). Composed = PCP-translated.
+    fn rel_target(&self, prim: &SdfPath, name: &str) -> Option<String>;
 }
 
 impl UsdRead for StageView<'_> {
@@ -60,6 +69,25 @@ impl UsdRead for StageView<'_> {
             .ok()
             .flatten()
     }
+
+    fn has_api_schema(&self, prim: &SdfPath, schema: &str) -> bool {
+        self.stage()
+            .prim(prim.clone())
+            .api_schemas()
+            .map(|v| v.iter().any(|s| s.as_str() == schema))
+            .unwrap_or(false)
+    }
+
+    fn rel_target(&self, prim: &SdfPath, name: &str) -> Option<String> {
+        self.stage()
+            .prim(prim.clone())
+            .relationship(name)
+            .targets()
+            .unwrap_or_default()
+            .into_iter()
+            .next()
+            .map(|p| p.to_string())
+    }
 }
 
 impl UsdRead for openusd::sdf::Data {
@@ -70,6 +98,14 @@ impl UsdRead for openusd::sdf::Data {
     fn attr_value(&self, prim: &SdfPath, name: &str) -> Option<Value> {
         let attr = prim.append_property(name).ok()?;
         self.field(&attr, "default").cloned()
+    }
+
+    fn has_api_schema(&self, prim: &SdfPath, schema: &str) -> bool {
+        crate::has_api_schema(self, prim, schema)
+    }
+
+    fn rel_target(&self, prim: &SdfPath, name: &str) -> Option<String> {
+        crate::read_rel_target(self, prim, name)
     }
 }
 
@@ -100,6 +136,13 @@ def Xform "Shapes"
     {
         int[] faceVertexCounts = [3]
         int[] faceVertexIndices = [0, 1, 2]
+    }
+
+    def Xform "Body" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI"]
+    )
+    {
+        rel physics:body0 = </Shapes/Box>
     }
 }
 "#;
@@ -148,5 +191,23 @@ def Xform "Shapes"
         // The generic reads themselves run against BOTH sources.
         assert!(crate::read_shape_dims(&view, &box_p, "Cube").is_some());
         assert!(crate::read_shape_dims(&flat, &box_p, "Cube").is_some());
+
+        // Physics detection reads (has_api_schema / rel_target) agree — the reads
+        // the observer flip (S2e-ii) needs.
+        let body = SdfPath::new("/Shapes/Body").unwrap();
+        assert_eq!(
+            UsdRead::has_api_schema(&view, &body, "PhysicsRigidBodyAPI"),
+            UsdRead::has_api_schema(&flat, &body, "PhysicsRigidBodyAPI"),
+        );
+        assert!(UsdRead::has_api_schema(&flat, &body, "PhysicsRigidBodyAPI"));
+        assert!(!UsdRead::has_api_schema(&view, &body, "PhysxTerrainAPI"));
+        assert_eq!(
+            UsdRead::rel_target(&view, &body, "physics:body0"),
+            UsdRead::rel_target(&flat, &body, "physics:body0"),
+        );
+        assert_eq!(
+            UsdRead::rel_target(&flat, &body, "physics:body0").as_deref(),
+            Some("/Shapes/Box")
+        );
     }
 }
