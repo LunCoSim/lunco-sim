@@ -50,10 +50,17 @@ pub struct PendingForces {
 /// Ensure `entity` carries [`PendingForces`], then mutate it. The `force_*`
 /// write closures use this so an un-driven body stays clean until first written.
 fn with_pending(world: &mut World, entity: Entity, set: impl FnOnce(&mut PendingForces)) -> bool {
-    if world.get::<PendingForces>(entity).is_none() {
-        world.entity_mut(entity).insert(PendingForces::default());
+    // The port binding may name a body that a concurrent scene reload just
+    // despawned (LoadScene tears the old scene down while propagation is still
+    // running). `entity_mut` would panic on that stale id, so fetch fallibly and
+    // bail cleanly — next tick propagates against the fresh scene.
+    let Ok(mut em) = world.get_entity_mut(entity) else {
+        return false;
+    };
+    if !em.contains::<PendingForces>() {
+        em.insert(PendingForces::default());
     }
-    if let Some(mut pf) = world.get_mut::<PendingForces>(entity) {
+    if let Some(mut pf) = em.get_mut::<PendingForces>() {
         set(&mut pf);
         true
     } else {

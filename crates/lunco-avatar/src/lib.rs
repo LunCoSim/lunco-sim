@@ -2401,6 +2401,11 @@ pub struct RoverNameTagSettings {
     /// Camera distance (world units) past which the tag is fully faded out and culled.
     /// Tags begin fading from [`reference_distance`](Self::reference_distance) toward this.
     pub max_distance: f32,
+    /// Force the tags on even in single-player. Name tags exist to identify OTHER
+    /// players, so by default they are **suppressed in solo play** (a standalone
+    /// session — including one where a local AI autopilot drives a rover; that's
+    /// still solo, not a wire peer). Set `true` to always render them.
+    pub show_always: bool,
 }
 
 impl Default for RoverNameTagSettings {
@@ -2411,6 +2416,7 @@ impl Default for RoverNameTagSettings {
             vertical_offset: 2.0,
             reference_distance: 15.0,
             max_distance: 150.0,
+            show_always: false,
         }
     }
 }

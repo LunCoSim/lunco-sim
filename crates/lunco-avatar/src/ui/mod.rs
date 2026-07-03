@@ -273,9 +273,20 @@ pub fn draw_rover_name_tags(
     registry: Res<SessionRegistry>,
     profiles: Res<SessionProfiles>,
     settings: Res<RoverNameTagSettings>,
+    net_role: Option<Res<lunco_core::NetworkRole>>,
     q_camera: Query<(&Camera, &GlobalTransform), With<Avatar>>,
     q_rovers: Query<(&GlobalEntityId, &GlobalTransform)>,
 ) {
+    // Solo suppression: name tags label OTHER players, who only exist on a wire.
+    // In single-player — a `Standalone` role, *including* a session where a local
+    // AI autopilot possesses a rover (still solo, not a networked peer) — hide
+    // them entirely unless the user opts into `show_always`. (`NetworkRole` absent
+    // ⇒ treat as Standalone/solo.)
+    let networked = net_role.map(|r| r.is_networked()).unwrap_or(false);
+    if !settings.show_always && !networked {
+        return;
+    }
+
     // The avatar camera is the one rendering this client's viewport. Without it
     // (e.g. headless / pre-spawn) there is nothing to project against.
     let Some((camera, cam_gtf)) = q_camera.iter().next() else { return };
