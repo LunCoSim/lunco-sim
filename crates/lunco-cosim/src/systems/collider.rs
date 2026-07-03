@@ -45,7 +45,12 @@ pub fn sync_collider(
                 let radius = ((3.0 * volume) / (4.0 * std::f64::consts::PI)).cbrt();
                 if let Ok(mut collider) = q_colliders.get_mut(entity) {
                     *collider = Collider::sphere(radius);
-                    commands.entity(entity).insert(LastColliderVolume(volume));
+                    // `try_insert`, not `insert`: a `LoadScene` can despawn this
+                    // entity between the query and this deferred command applying
+                    // (scene-reload cleanup). `insert` would panic on the dead
+                    // entity; `try_insert` is a no-op — the whole entity is going
+                    // away anyway.
+                    commands.entity(entity).try_insert(LastColliderVolume(volume));
                 }
             }
         }

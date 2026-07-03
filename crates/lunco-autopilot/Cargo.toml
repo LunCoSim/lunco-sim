@@ -17,6 +17,10 @@ serde_json = { workspace = true }
 # Control is the ONE generic `SetPorts` command (a batch of named input-port
 # writes); the autopilot emits it exactly like the keyboard and scripts do.
 lunco-cosim = { path = "../lunco-cosim" }
+# ALL time comes from the mission-time spine: `WorldTime.sim_secs` is the single
+# clock the behaviour tree reads (so waits freeze under pause/warp) — never Bevy's
+# `Time`. AutopilotPlugin guard-adds `TimePlugin` so the clock is always present.
+lunco-time = { path = "../lunco-time" }
 
 [lints]
 workspace = true

@@ -30,7 +30,7 @@
 //! to constant `throttle`/`steer` setpoints.
 
 use bevy::prelude::*;
-use lunco_behavior::{Action, BoxNode, Node, Repeat, Selector, Sequence, Status};
+use lunco_behavior::{Action, BoxNode, Node, Parallel, ParallelPolicy, Repeat, Selector, Sequence, Status};
 use lunco_core::session::{AuthorityRole, SessionRbac, UserSession};
 use lunco_core::{Command, on_command, register_commands};
 use lunco_core::{GlobalEntityId, NetworkRole, SessionId, SessionRegistry};
@@ -88,6 +88,10 @@ pub struct DriveCtx {
     pub pos: Vec3,
     /// Vessel forward (unit).
     pub fwd: Vec3,
+    /// Current mission time in seconds — [`lunco_time::WorldTime::sim_secs`], the one
+    /// clock (never Bevy's `Time`). Time-based leaves such as [`WaitNode`] latch a
+    /// deadline against it, so they freeze whenever the sim is paused or warped.
+    pub now: f64,
     /// Setpoint the leaves write: `(throttle, steer, brake)` in `[-1, 1]`.
     pub out: (f64, f64, f64),
 }
@@ -112,13 +116,33 @@ pub enum BehaviorSpec {
         /// Ordered children.
         children: Vec<BehaviorSpec>,
     },
-    /// Fallback: the first child that doesn't fail.
+    /// Fallback: the first child that doesn't fail. Pair with [`Arrived`](Self::Arrived)
+    /// guards for real branching (e.g. "if arrived brake, else drive").
     Selector {
         /// Ordered alternatives.
         children: Vec<BehaviorSpec>,
     },
+    /// Tick every child each tick, resolving by `require` (all succeed / any
+    /// succeeds). Use for "do X while monitoring Y" — e.g. drive while a watchdog
+    /// condition races to abort.
+    Parallel {
+        /// `all` (default) = succeed when all children succeed, fail on any failure;
+        /// `one` = succeed as soon as any child succeeds.
+        #[serde(default)]
+        require: ParallelRequire,
+        /// Concurrent children.
+        children: Vec<BehaviorSpec>,
+    },
     /// Repeat a child forever (a patrol loop wraps its `sequence` in this).
     Forever {
+        /// The repeated subtree.
+        child: Box<BehaviorSpec>,
+    },
+    /// Repeat a child until it has succeeded `times` times, then succeed. A child
+    /// failure fails the repeat.
+    Repeat {
+        /// Number of successful completions before the repeat itself succeeds.
+        times: usize,
         /// The repeated subtree.
         child: Box<BehaviorSpec>,
     },
@@ -133,6 +157,39 @@ pub enum BehaviorSpec {
         #[serde(default = "default_radius")]
         radius: f32,
     },
+    /// Loop a list of waypoints forever, driving to each in turn and optionally
+    /// dwelling (braked) at each for `dwell` seconds. Sugar for
+    /// `forever(sequence([drive_to, wait?]...))` — the common patrol pattern as one
+    /// node. See [`build_tree`].
+    Patrol {
+        /// Ordered world-space waypoints `[[x, y, z], ...]`.
+        waypoints: Vec<[f32; 3]>,
+        /// Cruise speed `[0, 1]`.
+        #[serde(default = "default_speed")]
+        speed: f64,
+        /// Arrival radius per waypoint (world units).
+        #[serde(default = "default_radius")]
+        radius: f32,
+        /// Seconds to hold (braked) at each waypoint before moving on (`0` = none).
+        #[serde(default)]
+        dwell: f64,
+    },
+    /// Condition leaf: `Success` when within `radius` of `target`, else `Failure`.
+    /// The guard that makes [`Selector`](Self::Selector) fallbacks meaningful.
+    Arrived {
+        /// World-space point to test against.
+        target: [f32; 3],
+        /// Radius that counts as "arrived".
+        #[serde(default = "default_radius")]
+        radius: f32,
+    },
+    /// Hold position (braked) for `seconds`, then `Success`. Resets its timer when a
+    /// parent restarts it, so it dwells correctly each patrol lap.
+    Wait {
+        /// Seconds to hold.
+        #[serde(default = "default_wait")]
+        seconds: f64,
+    },
     /// Drive constant `throttle`/`steer` (always `Running`).
     Cruise {
         /// Forward setpoint `[-1, 1]`.
@@ -146,11 +203,35 @@ pub enum BehaviorSpec {
     Brake,
 }
 
+/// Completion rule for a [`BehaviorSpec::Parallel`], mapped to
+/// [`ParallelPolicy`]. Defaults to `all`.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParallelRequire {
+    /// Succeed when all children succeed; fail on the first failure.
+    #[default]
+    All,
+    /// Succeed as soon as any child succeeds; fail when all fail.
+    One,
+}
+
+impl From<ParallelRequire> for ParallelPolicy {
+    fn from(r: ParallelRequire) -> Self {
+        match r {
+            ParallelRequire::All => ParallelPolicy::RequireAll,
+            ParallelRequire::One => ParallelPolicy::RequireOne,
+        }
+    }
+}
+
 fn default_speed() -> f64 {
     0.6
 }
 fn default_radius() -> f32 {
     3.0
+}
+fn default_wait() -> f64 {
+    1.0
 }
 
 /// Compile a [`BehaviorSpec`] (rhai/JSON data) into a tickable tree. The composite
@@ -165,13 +246,43 @@ pub fn build_tree(spec: &BehaviorSpec) -> BoxNode<DriveCtx> {
         BehaviorSpec::Selector { children } => {
             Box::new(Selector::new(children.iter().map(build_tree).collect()))
         }
+        BehaviorSpec::Parallel { require, children } => {
+            Box::new(Parallel::new((*require).into(), children.iter().map(build_tree).collect()))
+        }
         BehaviorSpec::Forever { child } => Box::new(Repeat::forever(build_tree(child))),
+        BehaviorSpec::Repeat { times, child } => Box::new(Repeat::times(*times, build_tree(child))),
         BehaviorSpec::DriveTo { target, speed, radius } => {
             leaf_drive_to(Vec3::from_array(*target), *speed, *radius)
         }
+        BehaviorSpec::Patrol { waypoints, speed, radius, dwell } => {
+            build_patrol(waypoints, *speed, *radius, *dwell)
+        }
+        BehaviorSpec::Arrived { target, radius } => {
+            leaf_arrived(Vec3::from_array(*target), *radius)
+        }
+        BehaviorSpec::Wait { seconds } => Box::new(WaitNode::new(*seconds)),
         BehaviorSpec::Cruise { throttle, steer } => leaf_cruise(*throttle, *steer),
         BehaviorSpec::Brake => leaf_brake(),
     }
+}
+
+/// Compile a [`BehaviorSpec::Patrol`] to `forever(sequence([drive_to (+ wait?)…]))`.
+/// Each waypoint becomes a `drive_to`; a non-zero `dwell` appends a braked
+/// [`WaitNode`] so the rover pauses before moving on. The whole leg-sequence loops
+/// forever — the `forever` resets it each lap, which resets the waits' timers.
+fn build_patrol(waypoints: &[[f32; 3]], speed: f64, radius: f32, dwell: f64) -> BoxNode<DriveCtx> {
+    let legs: Vec<BoxNode<DriveCtx>> = waypoints
+        .iter()
+        .map(|wp| {
+            let drive = leaf_drive_to(Vec3::from_array(*wp), speed, radius);
+            if dwell > 0.0 {
+                Box::new(Sequence::new(vec![drive, Box::new(WaitNode::new(dwell))])) as BoxNode<DriveCtx>
+            } else {
+                drive
+            }
+        })
+        .collect();
+    Box::new(Repeat::forever(Box::new(Sequence::new(legs))))
 }
 
 /// Leaf: steer toward `target` (Rust nav math); `Success` once within `radius`.
@@ -201,6 +312,54 @@ fn leaf_brake() -> BoxNode<DriveCtx> {
         ctx.out = (0.0, 0.0, 1.0);
         Status::Success
     }))
+}
+
+/// Condition leaf: `Success` if within `radius` of `target`, else `Failure`. Reads
+/// the pose only — writes no setpoint — so a [`Selector`] can branch on it without
+/// disturbing the drive command chosen by the taken branch.
+fn leaf_arrived(target: Vec3, radius: f32) -> BoxNode<DriveCtx> {
+    Box::new(Action::new(move |ctx: &mut DriveCtx| {
+        if (target - ctx.pos).length() < radius {
+            Status::Success
+        } else {
+            Status::Failure
+        }
+    }))
+}
+
+/// Leaf: hold the brakes for `seconds` of **mission time**, then `Success`. On the
+/// first tick it latches a deadline `now + seconds` against [`DriveCtx::now`]
+/// ([`lunco_time::WorldTime::sim_secs`]) — so a paused or warped sim pauses the wait
+/// too, because that clock stops. Stateful, so — unlike an [`Action`] closure, whose
+/// default `reset` is a no-op — it implements [`Node`] directly to clear the deadline
+/// when a parent (e.g. a patrol `forever`) restarts it, dwelling afresh each lap.
+pub struct WaitNode {
+    seconds: f64,
+    /// Mission-time instant to complete at; `None` until the first tick latches it.
+    deadline: Option<f64>,
+}
+
+impl WaitNode {
+    /// A wait leaf that holds for `seconds` of mission time.
+    pub fn new(seconds: f64) -> Self {
+        Self { seconds, deadline: None }
+    }
+}
+
+impl Node<DriveCtx> for WaitNode {
+    fn tick(&mut self, ctx: &mut DriveCtx) -> Status {
+        ctx.out = (0.0, 0.0, 1.0); // hold position while waiting
+        let deadline = *self.deadline.get_or_insert(ctx.now + self.seconds);
+        if ctx.now >= deadline {
+            Status::Success
+        } else {
+            Status::Running
+        }
+    }
+
+    fn reset(&mut self) {
+        self.deadline = None;
+    }
 }
 
 /// The autopilot's compiled behaviour tree. Insert/replace this component to change
@@ -309,11 +468,13 @@ pub fn setup_autopilot_session(
 /// to the human's yield in `drive_from_bindings`.
 pub fn drive_autopilots(
     registry: Res<SessionRegistry>,
+    world_time: Res<lunco_time::WorldTime>,
     mut q: Query<(&Autopilot, Option<&mut AutopilotBehavior>)>,
     q_gid: Query<&GlobalEntityId>,
     q_xf: Query<&GlobalTransform>,
     mut commands: Commands,
 ) {
+    let now = world_time.sim_secs; // the one clock — waits freeze under pause/warp
     for (ap, behavior) in &mut q {
         if !ap.engaged {
             continue;
@@ -328,6 +489,7 @@ pub fn drive_autopilots(
                 let mut ctx = DriveCtx {
                     pos: xf.translation(),
                     fwd: xf.forward().as_vec3(),
+                    now,
                     out: (ap.throttle, ap.steer, 0.0),
                 };
                 tree.0.tick(&mut ctx);
@@ -433,6 +595,13 @@ pub struct AutopilotPlugin;
 
 impl Plugin for AutopilotPlugin {
     fn build(&self, app: &mut App) {
+        // The behaviour tree reads mission time from `WorldTime`; guarantee the
+        // time spine is present (guarded — harmless where usd-bevy/celestial/etc.
+        // already added it). Headless-safe: `TimePlugin` is resources + schedule
+        // steps, no rendering.
+        if !app.is_plugin_added::<lunco_time::TimePlugin>() {
+            app.add_plugins(lunco_time::TimePlugin);
+        }
         app.add_systems(Update, setup_autopilot_session);
         app.add_systems(FixedUpdate, drive_autopilots);
         register_all_commands(app);

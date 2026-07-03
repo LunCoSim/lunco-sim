@@ -54,6 +54,20 @@ fn on_event(me, evt) {
 // flag hands-free, auto-passing the lesson (great for CI/regression); in release
 // it returns () so a human plays. This is the "if DEBUG, autopilot" pattern —
 // conditional behaviour lives in the scenario, keyed off is_debug().
+// A world point `standoff` metres SHORT of the flag along the rover→flag line.
+// We aim the final creep here, not at the flag itself: the rover's reported pose is
+// its chassis CENTRE and the body is a couple of metres long, so driving the centre
+// onto the flag pole just rams it and rocks back. Parking the centre a body-length
+// short lands the nose right at the flag. Recomputed live is stable — we never get
+// nearer the flag than `standoff`, so the rover→flag direction never degenerates.
+fn aim_short_of(rover, flag, standoff) {
+    let rp = world_pos(rover);
+    let fp = world_pos(flag);
+    if rp == () || fp == () { return fp; }
+    let d = vnorm(vsub(fp, rp));                        // unit rover → flag
+    vsub(fp, [d[0]*standoff, d[1]*standoff, d[2]*standoff])
+}
+
 fn task(me) {
     if !is_debug() { return; }        // release: no autopilot
     seq([
@@ -61,8 +75,18 @@ fn task(me) {
         once(|m| { cmd("PossessVessel", #{ target: find("/FirstDrive/Rover") });
                    notify_kind("[debug] autopilot engaged", "info"); }),
         wait(0.5),
-        step(|m| nav_to(find("/FirstDrive/Rover"), world_pos(find("/FirstDrive/Flag")), 1.0, 4.0),
-             |m| arrived(find("/FirstDrive/Rover"), world_pos(find("/FirstDrive/Flag")), 4.0)),
-        once(|m| brake(find("/FirstDrive/Rover"))),
+        // Phase 1: cruise toward the flag at a moderate speed until within 8 m.
+        step(|m| nav_to(find("/FirstDrive/Rover"), world_pos(find("/FirstDrive/Flag")), 0.6, 8.0),
+             |m| arrived(find("/FirstDrive/Rover"), world_pos(find("/FirstDrive/Flag")), 8.0)),
+        // Phase 2: creep SLOWLY to a point 1.5 m short of the flag (an offset in
+        // front of it) and stop there — so the rover's centre parks a body-length
+        // out with its nose AT the flag, instead of ramming through and settling
+        // ~2.3 m back. Aiming short, not just braking, is what puts it on the flag.
+        step(|m| nav_to(find("/FirstDrive/Rover"), aim_short_of(find("/FirstDrive/Rover"), find("/FirstDrive/Flag"), 1.5), 0.15, 0.6),
+             |m| arrived(find("/FirstDrive/Rover"), aim_short_of(find("/FirstDrive/Rover"), find("/FirstDrive/Flag"), 1.5), 0.6)),
+        // Brake and HOLD for a couple of sim-seconds so it parks instead of coasting.
+        // A raw step map: `act` re-brakes every tick while the `secs` dwell holds the
+        // step, so the brake persists (a single pulse would let it roll onward).
+        #{ act: |m| brake(find("/FirstDrive/Rover")), secs: 2.0 },
     ])
 }
