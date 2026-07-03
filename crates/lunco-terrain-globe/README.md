@@ -16,8 +16,10 @@ whole celestial bodies seen from orbit.
 >   avian heightfield colliders + big_space per-tile anchoring for local ground,
 >   plus surface/regolith detail.
 >
-> A future orbit→surface bridge is a *composite* `HeightSource` returning the
-> site DEM inside a georeferenced region and the globe height outside it.
+> The orbit→surface bridge is `CompositeHeightSource` (in `lunco-terrain-core`):
+> the site DEM inside a georeferenced region, the globe height outside it. The core
+> type exists; live app-wiring is the remaining step. See the design narrative in
+> [`docs/architecture/terrain-substrate.md`](../../docs/architecture/terrain-substrate.md).
 
 ## Responsibility
 

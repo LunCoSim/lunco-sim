@@ -38,6 +38,7 @@ We are evolving from a high-fidelity sandbox into a complete autonomous mission 
 | [`scripting-guide.md`](scripting-guide.md) | How to write rhai scenarios — lifecycle, verbs, sequencing, tools, persistence |
 | [`rhai-integration-design.md`](rhai-integration-design.md) | Rhai scripting design rationale + as-built reference |
 | [`architecture/`](architecture/) | Design narrative — how LunCoSim is structured |
+| [`architecture/terrain-substrate.md`](architecture/terrain-substrate.md) | Terrain height oracle — one `HeightSource` model from orbit to rover; USD layers, three channels, error-driven detail, solar-system scale |
 | [`architecture/01-ontology.md`](architecture/01-ontology.md) | Terminology reference — Space System, Port, Connection, Attribute |
 | `../specs/` | Detailed feature specifications (contracts for implementation) |
 | `../crates/<crate>/README.md` | Per-crate quick-start (use this when you want to use a crate) |
