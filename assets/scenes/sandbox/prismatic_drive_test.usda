@@ -91,8 +91,8 @@ def Xform "SandboxScene"
         # Y so the two coincide at rest -> displacement 0 when undriven.
         point3f physics:localPos0 = (0.0, 0.0, 0.0)
         point3f physics:localPos1 = (0.0, 2.0, 0.0)
-        float physics:limitLower = -3.0
-        float physics:limitUpper = 0.5
+        float physics:lowerLimit = -3.0
+        float physics:upperLimit = 0.5
 
         # UsdPhysicsDriveAPI:linear — standard position drive. Enabled at load
         # (a target is authored), so the Platform deploys to -1.5 m and holds.

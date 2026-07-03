@@ -351,7 +351,23 @@ fn build_collider_from_usd<R: UsdRead>(reader: &R, sdf_path: &SdfPath) -> Option
         let (verts, tris) = read_usd_mesh_indexed(reader, sdf_path)?;
         let verts: Vec<DVec3> =
             verts.into_iter().map(|v| DVec3::new(v[0] as f64, v[1] as f64, v[2] as f64)).collect();
-        return Some(apply_collider_scale(Collider::trimesh(verts, tris), reader, sdf_path));
+        // Standard `UsdPhysicsMeshCollisionAPI physics:approximation` selects how
+        // the render mesh becomes a collider. Default (unauthored / `none` /
+        // `meshSimplification`) = exact triangle mesh — correct for STATIC terrain.
+        // `convexHull`/`convexDecomposition` produce the solid volumes a DYNAMIC
+        // body needs (a trimesh can't be a moving rigid body in parry). Read via
+        // the standard token so it works off either the live stage or the flatten.
+        let collider = match read_token_attribute(reader, sdf_path, "physics:approximation").as_deref() {
+            Some("convexHull") => {
+                Collider::convex_hull(verts.clone()).unwrap_or_else(|| Collider::trimesh(verts, tris))
+            }
+            Some("convexDecomposition") => Collider::convex_decomposition(verts, tris),
+            // `boundingCube`/`boundingSphere`/`meshSimplification` aren't mapped
+            // to a distinct parry shape yet — fall back to the exact trimesh
+            // rather than silently mis-sizing the body.
+            _ => Collider::trimesh(verts, tris),
+        };
+        return Some(apply_collider_scale(collider, reader, sdf_path));
     }
 
     // Dimensions (+ their magic defaults) come from the canonical
@@ -1412,6 +1428,42 @@ mod collider_parity_tests {
             format!("{:?}", c_view.unwrap()),
             format!("{:?}", c_flat.unwrap()),
             "StageView-built collider must equal flatten-built collider (incl. scale)"
+        );
+    }
+
+    // A UsdGeomMesh pyramid: default → exact trimesh; `physics:approximation =
+    // "convexHull"` (standard UsdPhysicsMeshCollisionAPI) → a convex hull. The
+    // two must be DIFFERENT colliders, proving the standard token is honoured.
+    const MESH_FIXTURE: &str = "#usda 1.0\n\
+        def Mesh \"Tri\"\n{\n\
+            point3f[] points = [(0,0,0),(2,0,0),(2,2,0),(0,2,0),(1,1,2)]\n\
+            int[] faceVertexCounts = [3,3,3,3]\n\
+            int[] faceVertexIndices = [0,1,4, 1,2,4, 2,3,4, 3,0,4]\n\
+        }\n\
+        def Mesh \"Hull\" ( prepend apiSchemas = [\"PhysicsCollisionAPI\", \"PhysicsMeshCollisionAPI\"] )\n{\n\
+            point3f[] points = [(0,0,0),(2,0,0),(2,2,0),(0,2,0),(1,1,2)]\n\
+            int[] faceVertexCounts = [3,3,3,3]\n\
+            int[] faceVertexIndices = [0,1,4, 1,2,4, 2,3,4, 3,0,4]\n\
+            uniform token physics:approximation = \"convexHull\"\n\
+        }\n";
+
+    #[test]
+    fn mesh_collision_approximation_selects_convex_hull() {
+        let dir = std::env::temp_dir().join("lunco_collider_approx");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("mesh.usda");
+        std::fs::write(&f, MESH_FIXTURE).unwrap();
+        let stage = compose_file_to_stage(&f).expect("compose stage");
+        let view = StageView::new(&stage);
+
+        let trimesh = build_collider_from_usd(&view, &SdfPath::new("/Tri").unwrap())
+            .expect("default mesh → trimesh collider");
+        let hull = build_collider_from_usd(&view, &SdfPath::new("/Hull").unwrap())
+            .expect("convexHull approximation → collider");
+        assert_ne!(
+            format!("{trimesh:?}"),
+            format!("{hull:?}"),
+            "`physics:approximation = convexHull` must build a DIFFERENT collider than the default trimesh"
         );
     }
 }
