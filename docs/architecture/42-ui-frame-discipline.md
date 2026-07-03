@@ -5,6 +5,27 @@
 **TL;DR:** Per-frame work is the anti-default; prefer observers / change-detection / fingerprints / generation-gates.
 Push heavy work off-thread or behind a cache; profile before optimizing.
 
+> **Frame *count* is fixed at vsync by design — the lever is per-frame *cost*, not
+> redraw frequency.** While focused, both binaries run
+> `WinitSettings { focused_mode: UpdateMode::Continuous }`
+> (`lunco-sandbox/src/ui/mod.rs:55`, `lunco-modelica/src/bin/lunica.rs:177`), so
+> the app redraws *every* vsync interval and never idles while focused — this is
+> deliberate (vsync = Fifo present / `requestAnimationFrame` acts as the frame
+> timer; see the comment at `ui/mod.rs:41-49`). Reactive/low-power kicks in only
+> when **unfocused and not networked**. Consequences a would-be optimizer must
+> internalize:
+> - **"Idle FPS spikes" is a misnomer while focused** — there is no idle; every
+>   frame renders. A spike is one frame doing too much *work*, not the app failing
+>   to sleep. Chase per-frame cost (this whole doc + the caching substrates), not
+>   redraw scheduling.
+> - **`egui::request_repaint()` is near-moot for focused frame count** — Continuous
+>   already forces a redraw regardless of who calls it. The ~15 call sites are
+>   trigger/animation-gated and matter only in the *unfocused* reactive window.
+> - **Switching `focused_mode` to `Reactive` is out of scope** — it was considered
+>   and left Continuous on purpose. If you revisit it, it's a frame-*pacing*
+>   decision (input latency, vsync interaction, web `requestAnimationFrame`), a
+>   different axis from the per-frame-work discipline below. Don't conflate them.
+
 The app ships with a real-time 3D scene, a Modelica simulator, and a
 heavyweight egui UI on top. The frame budget is shared — UI work that
 looks "cheap in isolation" still competes with the physics step and
