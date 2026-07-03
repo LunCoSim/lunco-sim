@@ -2729,11 +2729,11 @@ pub fn read_usd_mesh_indexed<R: UsdRead>(
 /// indices reference out-of-range points (malformed mesh). Rendering only —
 /// native-mesh **colliders** are still the glTF side-channel's job
 /// (see `resolver.rs` `TODO(glb-composability)`).
-pub fn build_usd_mesh(reader: &UsdData, path: &SdfPath) -> Option<Mesh> {
+pub fn build_usd_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> {
     use bevy::asset::RenderAssetUsages;
     use bevy::render::render_resource::PrimitiveTopology;
 
-    let points = reader.prim_attribute_value::<Vec<[f32; 3]>>(path, "points")?;
+    let points = reader.scalar::<Vec<[f32; 3]>>(path, "points")?;
     let counts = read_int_array(reader, path, "faceVertexCounts")?;
     let indices = read_int_array(reader, path, "faceVertexIndices")?;
     if points.is_empty() || counts.is_empty() || indices.is_empty() {
@@ -2742,11 +2742,11 @@ pub fn build_usd_mesh(reader: &UsdData, path: &SdfPath) -> Option<Mesh> {
 
     // Optional vertex attributes. `primvars:st` is the de-facto UV channel;
     // accept the bare `st`/`st0` spellings some exporters emit.
-    let normals = reader.prim_attribute_value::<Vec<[f32; 3]>>(path, "normals");
+    let normals = reader.scalar::<Vec<[f32; 3]>>(path, "normals");
     let uvs = reader
-        .prim_attribute_value::<Vec<[f32; 2]>>(path, "primvars:st")
-        .or_else(|| reader.prim_attribute_value::<Vec<[f32; 2]>>(path, "primvars:st0"))
-        .or_else(|| reader.prim_attribute_value::<Vec<[f32; 2]>>(path, "st"));
+        .scalar::<Vec<[f32; 2]>>(path, "primvars:st")
+        .or_else(|| reader.scalar::<Vec<[f32; 2]>>(path, "primvars:st0"))
+        .or_else(|| reader.scalar::<Vec<[f32; 2]>>(path, "st"));
 
     let n_corners = indices.len();
     let normals_per_vertex = normals.as_ref().is_some_and(|n| n.len() == points.len());
@@ -3828,5 +3828,43 @@ mod default_prim_attr_tests {
     #[test]
     fn unparseable_text_is_none() {
         assert!(read_default_prim_attr("this is not USDA", "lunco:description").is_none());
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod mesh_view_parity_tests {
+    //! Ph0′ visual-flip: `build_usd_mesh` (render geometry) off a live `StageView`
+    //! must equal the flatten — the mesh analog of the collider parity, and the
+    //! core geometry read the visual extractor needs.
+    use crate::compose::{compose_file, compose_file_to_stage};
+    use crate::{build_usd_mesh, StageView};
+    use openusd::sdf::Path as SdfPath;
+
+    #[test]
+    fn build_usd_mesh_from_stageview_matches_flatten() {
+        let dir = std::env::temp_dir().join("lunco_mesh_view_parity");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("mesh.usda");
+        std::fs::write(
+            &f,
+            "#usda 1.0\n\ndef Mesh \"M\"\n{\n    point3f[] points = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]\n    int[] faceVertexCounts = [4]\n    int[] faceVertexIndices = [0, 1, 2, 3]\n}\n",
+        )
+        .unwrap();
+
+        let stage = compose_file_to_stage(&f).expect("stage");
+        let flat = compose_file(&f).expect("flatten");
+        let view = StageView::new(&stage);
+        let m = SdfPath::new("/M").unwrap();
+
+        let live = build_usd_mesh(&view, &m).expect("live mesh");
+        let baked = build_usd_mesh(&flat, &m).expect("flat mesh");
+
+        assert_eq!(live.count_vertices(), baked.count_vertices(), "vertex count");
+        assert_eq!(live.count_vertices(), 6, "quad fan-triangulates to 6 verts");
+        assert_eq!(
+            format!("{:?}", live.attribute(bevy::mesh::Mesh::ATTRIBUTE_POSITION)),
+            format!("{:?}", baked.attribute(bevy::mesh::Mesh::ATTRIBUTE_POSITION)),
+            "live mesh positions must equal the flattened mesh positions"
+        );
     }
 }

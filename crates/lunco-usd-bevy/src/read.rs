@@ -65,6 +65,12 @@ pub trait UsdRead {
     {
         self.attr_value_at(prim, name, time).and_then(|v| v.get::<T>())
     }
+
+    /// The glTF/binary asset URI resolved for `prim` (`lunco:resolvedAsset`) —
+    /// authored, or synthesized from a binary (glTF) reference/payload in the
+    /// prim's composition stack. On the flattened reader this reads the attr
+    /// `flatten_stage` synthesized; on the live stage it is synthesized here.
+    fn resolved_asset(&self, prim: &SdfPath) -> Option<String>;
 }
 
 impl UsdRead for StageView<'_> {
@@ -124,6 +130,16 @@ impl UsdRead for StageView<'_> {
         }
         attr.get::<Value>().ok().flatten()
     }
+
+    fn resolved_asset(&self, prim: &SdfPath) -> Option<String> {
+        // Authored value wins; else synthesize from a binary arc in the stack.
+        if let Some(authored) = self.value_str(prim, "lunco:resolvedAsset") {
+            return Some(authored);
+        }
+        let sites = self.binary_sites()?;
+        let stack = self.stage().prim(prim.clone()).prim_stack().ok()?;
+        stack.iter().find_map(|site| sites.get(site)).cloned()
+    }
 }
 
 impl UsdRead for openusd::sdf::Data {
@@ -150,6 +166,16 @@ impl UsdRead for openusd::sdf::Data {
 
     fn attr_value_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<Value> {
         crate::value_at(self, prim, name, time)
+    }
+
+    fn resolved_asset(&self, prim: &SdfPath) -> Option<String> {
+        // The flatten already synthesized `lunco:resolvedAsset` onto the prim.
+        match self.attr_value(prim, "lunco:resolvedAsset")? {
+            Value::String(s) => Some(s),
+            Value::Token(s) => Some(s.to_string()),
+            Value::AssetPath(a) => Some(a.as_str().to_string()),
+            _ => None,
+        }
     }
 }
 

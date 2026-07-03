@@ -60,6 +60,9 @@ pub struct CanonicalStage {
     inbox: Arc<Mutex<Vec<RawStageChange>>>,
     #[allow(dead_code)] // held to keep the sink alive for the stage's lifetime
     sink_id: StageSinkId,
+    /// Precomputed binary (glTF) arc sites for `lunco:resolvedAsset` synthesis
+    /// off the live stage (what `flatten_stage` does for the baked path).
+    binary_sites: crate::compose::BinarySites,
     /// Bumped by the drain step on each observed change (debug / asserts).
     pub generation: u64,
 }
@@ -80,12 +83,16 @@ impl CanonicalStage {
                 });
             }
         });
+        // Precompute the binary-arc sites once (glTF/DEM resolution) so the live
+        // `resolved_asset` read doesn't rescan every layer per prim.
+        let binary_sites = crate::compose::discover_binary_sites(&stage);
         Self {
             stage,
             scene_layer: scene_layer.into(),
             runtime_layer: String::new(),
             inbox,
             sink_id,
+            binary_sites,
             generation: 0,
         }
     }
@@ -97,9 +104,10 @@ impl CanonicalStage {
         Ok(Self::from_stage(stage, recipe.root_id.clone()))
     }
 
-    /// A [`StageView`] over the composed stage for typed reads.
+    /// A [`StageView`] over the composed stage for typed reads — carrying the
+    /// precomputed binary-arc sites so `resolved_asset` synthesizes glTF URIs.
     pub fn view(&self) -> StageView<'_> {
-        StageView::new(&self.stage)
+        StageView::with_binary_sites(&self.stage, &self.binary_sites)
     }
 
     /// The underlying stage (escape hatch for authoring / reads not yet wrapped).
@@ -289,6 +297,44 @@ mod sync_system_tests {
         assert!(
             cs.view().prim_paths().iter().any(|p| p.to_string() == "/Root/Box"),
             "the runtime canonical stage exposes the composed scene"
+        );
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod resolved_asset_tests {
+    //! Ph0′ visual-cutover prerequisite: `resolved_asset` synthesized off the
+    //! LIVE stage must equal the `lunco:resolvedAsset` `flatten_stage` bakes —
+    //! the glTF/DEM URI the visual extractor needs. A scene → wrapper → glb
+    //! payload (the Perseverance "usda→glb" shape).
+
+    use super::*;
+    use crate::compose::{compose_native_fs, compose_native_fs_to_stage};
+    use crate::UsdRead;
+    use openusd::sdf::Path as SdfPath;
+
+    #[test]
+    fn resolved_asset_synth_matches_flatten_on_live_stage() {
+        let dir = std::env::temp_dir().join("lunco_resolved_asset_live");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("wrapper.usda"),
+            "#usda 1.0\n(\n    defaultPrim = \"Structure\"\n)\ndef Xform \"Structure\"\n{\n    def Xform \"Visual\" (\n        prepend payload = @model.glb@\n    )\n    {\n        string lunco:assetMode = \"scene\"\n    }\n}\n",
+        )
+        .unwrap();
+        let scene = "#usda 1.0\ndef Xform \"Scene\"\n{\n    def Xform \"Bldg\" (\n        prepend references = @wrapper.usda@\n    )\n    {\n    }\n}\n";
+
+        let stage = compose_native_fs_to_stage(scene, &dir).expect("live stage");
+        let cs = CanonicalStage::from_stage(stage, "scene");
+        let flat = compose_native_fs(scene, &dir).expect("flatten");
+
+        let visual = SdfPath::new("/Scene/Bldg/Visual").unwrap();
+        let live = cs.view().resolved_asset(&visual);
+        let baked = UsdRead::resolved_asset(&flat, &visual);
+        assert_eq!(live, baked, "live resolved_asset synth must equal the flatten's");
+        assert!(
+            live.as_deref().is_some_and(|u| u.ends_with("model.glb")),
+            "live stage must synthesize the glb URI on the composed prim, got {live:?}"
         );
     }
 }

@@ -260,8 +260,15 @@ pub(crate) fn flatten_stage(stage: &Stage) -> Result<sdf::Data> {
 /// COMPOSED prim, so a glTF `payload`/`reference` authored inside a referenced
 /// `.usda` wrapper surfaces on the composed prim — not only arcs authored
 /// directly in the root layer, as the previous layer-local match required.
-fn discover_binary_sites(stage: &Stage) -> HashMap<(String, SdfPath), String> {
+pub(crate) type BinarySites = HashMap<(String, SdfPath), String>;
+
+pub(crate) fn discover_binary_sites(stage: &Stage) -> BinarySites {
     let mut sites: HashMap<(String, SdfPath), String> = HashMap::new();
+    // Force every reachable reference/payload layer to load so `layer_identifiers()`
+    // sees the whole stack. `flatten_stage` gets this for free by traversing first;
+    // called standalone (canonical build) a binary arc authored in a referenced /
+    // payload wrapper would otherwise be missed (its layer isn't loaded yet).
+    let _ = stage.traverse(PrimPredicate::DEFAULT, |_| {});
     for layer_id in stage.layer_identifiers() {
         let Some(layer) = stage.layer(&layer_id) else { continue };
         let data = layer.data();
@@ -303,6 +310,17 @@ fn discover_binary_sites(stage: &Stage) -> HashMap<(String, SdfPath), String> {
 /// asset loader uses on both platforms.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn compose_native_fs(source: &str, base_dir: &std::path::Path) -> Option<sdf::Data> {
+    // `flatten_stage` discovers binary-asset arcs (glTF payloads/references)
+    // across the composed layer stack and anchors each on its composed prim.
+    flatten_stage(&compose_native_fs_to_stage(source, base_dir)?).ok()
+}
+
+/// The live-[`Stage`] sibling of [`compose_native_fs`] — composes an in-memory
+/// root layer + on-disk sublayers through the binary-stubbing [`FsResolver`],
+/// WITHOUT flattening. For the canonical-document path and for `resolved_asset`
+/// synth tests (glTF payloads can't compose through openusd's `DefaultResolver`).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn compose_native_fs_to_stage(source: &str, base_dir: &std::path::Path) -> Option<Stage> {
     use crate::resolver::normalize;
 
     // Synthetic absolute id for the in-memory root, placed under `base_dir` so
@@ -314,11 +332,7 @@ pub fn compose_native_fs(source: &str, base_dir: &std::path::Path) -> Option<sdf
         root_id: root_id.clone(),
         root_bytes: source.as_bytes().to_vec(),
     };
-    let stage = Stage::builder().resolver(resolver).open(&root_id).ok()?;
-
-    // `flatten_stage` discovers binary-asset arcs (glTF payloads/references)
-    // across the composed layer stack and anchors each on its composed prim.
-    flatten_stage(&stage).ok()
+    Stage::builder().resolver(resolver).open(&root_id).ok()
 }
 
 #[cfg(target_arch = "wasm32")]

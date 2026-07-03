@@ -21,16 +21,35 @@ use openusd::usd::{PrimPredicate, Stage};
 /// [`UsdDataExt`]: crate::usd_data::UsdDataExt
 pub struct StageView<'a> {
     stage: &'a Stage,
+    /// Precomputed binary (glTF) arc sites, so `resolved_asset` can synthesize
+    /// `lunco:resolvedAsset` off the LIVE stage the way `flatten_stage` does.
+    /// `None` for a bare `StageView::new` (tests / non-canonical reads).
+    binary_sites: Option<&'a crate::compose::BinarySites>,
 }
 
 impl<'a> StageView<'a> {
     pub fn new(stage: &'a Stage) -> Self {
-        Self { stage }
+        Self { stage, binary_sites: None }
+    }
+
+    /// Construct with the stage's precomputed binary-arc sites (from
+    /// [`CanonicalStage`](crate::CanonicalStage)), enabling `resolved_asset`.
+    pub(crate) fn with_binary_sites(
+        stage: &'a Stage,
+        sites: &'a crate::compose::BinarySites,
+    ) -> Self {
+        Self { stage, binary_sites: Some(sites) }
     }
 
     /// The underlying stage (escape hatch for reads not yet wrapped).
     pub fn stage(&self) -> &Stage {
         self.stage
+    }
+
+    /// The precomputed binary-arc sites, if this view carries them (used by the
+    /// `UsdRead::resolved_asset` synth).
+    pub(crate) fn binary_sites(&self) -> Option<&crate::compose::BinarySites> {
+        self.binary_sites
     }
 
     /// A prim's composed `typeName` (e.g. `"Xform"`, `"Mesh"`), if any.
