@@ -77,7 +77,6 @@ pub mod perspective_command;
 pub mod picker;
 pub mod status_bus;
 pub mod theme_command;
-pub mod tour_driver;
 pub mod tracked_task;
 pub mod tutorial_overlay;
 pub mod twin_browser;
@@ -382,12 +381,10 @@ impl Plugin for WorkbenchPlugin {
         if !app.is_plugin_added::<tutorial_overlay::TutorialOverlayPlugin>() {
             app.add_plugins(tutorial_overlay::TutorialOverlayPlugin);
         }
-        // Data-driven guided-tour driver: plays coach-mark tours registered as
-        // data in the `TourCatalog` (no scripting runtime), so the lunica
-        // workbench and the sandbox share one tour renderer.
-        if !app.is_plugin_added::<tour_driver::TourDriverPlugin>() {
-            app.add_plugins(tour_driver::TourDriverPlugin);
-        }
+        // NOTE: guided tours are now driven by rhai scenarios (the coach card is
+        // rendered by `tutorial_overlay` and advanced by the running scenario's
+        // `on_event`). The old data-driven `tour_driver` (`TourCatalog`/`TourDef`)
+        // had zero registrants once lunica moved to rhai tutorials and was removed.
         if !app.is_plugin_added::<perf_hud::PerfHudPlugin>() {
             app.add_plugins(perf_hud::PerfHudPlugin);
         }

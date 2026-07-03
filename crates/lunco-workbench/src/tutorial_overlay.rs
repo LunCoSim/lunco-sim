@@ -324,9 +324,8 @@ enum CalloutSide {
     Centred,
 }
 
-/// Fire a tour-navigation event on the bus. The data driver (and rhai tours)
-/// advance on these; `data` carries the jump index for `cmd:TutorialGoto` and
-/// the pin flag for `cmd:TutorialPin`.
+/// Fire a tour-navigation event on the bus. The running rhai tour advances on
+/// these in its `on_event`; `data` carries the jump index for `cmd:TutorialGoto`.
 fn emit_tour(commands: &mut Commands, name: &str, data: lunco_core::TelemetryValue) {
     commands.trigger(lunco_core::TelemetryEvent {
         name: name.to_string(),
@@ -340,16 +339,13 @@ fn emit_tour(commands: &mut Commands, name: &str, data: lunco_core::TelemetryVal
 /// Draw the guided-tour coach mark: scrim + pulsing ring on the step's anchor,
 /// a speech-bubble tail, and a themed card with a full-width accent banner,
 /// body, progress bar, clickable jump-dots, and Back / Skip / Next·Done
-/// controls (plus a "show on next start" toggle for data tours). Controls fire
-/// `cmd:Tutorial{Next,Back,Skip,Goto,Pin}` on the bus; the driver advances on
-/// them. Matches the lunica product tour's polish so both apps share one card.
+/// controls. Controls fire `cmd:Tutorial{Next,Back,Skip,Goto}` on the bus; the
+/// running rhai tour advances on them. Shared by lunica and the sandbox.
 fn draw_tour(
     mut egui_ctx: EguiContexts,
     hud: Res<TutorialHud>,
     anchors: Res<crate::HelpAnchors>,
     theme: Option<Res<lunco_theme::Theme>>,
-    active: Option<Res<crate::tour_driver::ActiveTour>>,
-    seen: Option<Res<crate::tour_driver::TourSeen>>,
     mut commands: Commands,
 ) {
     let Some(step) = hud.tour.clone() else { return };
@@ -364,13 +360,6 @@ fn draw_tour(
     let card_fill = {
         let [r, g, b, _] = theme.tokens.surface_raised.to_array();
         egui::Color32::from_rgba_unmultiplied(r, g, b, 250)
-    };
-
-    // "Show on next start" checkbox — only meaningful while a *data* tour is
-    // active (rhai tours don't track a persisted seen-set).
-    let (show_checkbox, seen_now) = match (active.as_ref().and_then(|a| a.id), seen.as_ref()) {
-        (Some(id), Some(seen)) => (true, seen.seen.iter().any(|s| s == id.as_str())),
-        _ => (false, false),
     };
 
     let target = if step.anchor.is_empty() {
@@ -487,7 +476,6 @@ fn draw_tour(
     let mut back = false;
     let mut skip = false;
     let mut goto: Option<usize> = None;
-    let mut pin: Option<bool> = None;
 
     egui::Area::new(egui::Id::new("lunco_tour_card"))
         .order(egui::Order::Tooltip)
@@ -638,21 +626,6 @@ fn draw_tour(
                                     },
                                 );
                             });
-
-                            if show_checkbox {
-                                ui.add_space(4.0);
-                                let mut show_next = !seen_now;
-                                if ui
-                                    .checkbox(&mut show_next, "Show on next start")
-                                    .on_hover_text(
-                                        "Re-open this tour automatically next time you \
-                                         launch the app.",
-                                    )
-                                    .changed()
-                                {
-                                    pin = Some(show_next);
-                                }
-                            }
                         });
                 });
         });
@@ -668,9 +641,6 @@ fn draw_tour(
     }
     if let Some(i) = goto {
         emit_tour(&mut commands, "cmd:TutorialGoto", lunco_core::TelemetryValue::I64(i as i64));
-    }
-    if let Some(b) = pin {
-        emit_tour(&mut commands, "cmd:TutorialPin", lunco_core::TelemetryValue::Bool(b));
     }
 }
 

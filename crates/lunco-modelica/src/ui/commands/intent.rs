@@ -52,6 +52,10 @@ pub fn resolve_editor_intent(
             });
         }
         EditorIntent::NewDocument => {}
+        // Doc-agnostic: handled by the tutorial launcher's own resolver
+        // (`resolve_show_tutorial_intent` in `ui/help_overlay.rs`), which needs
+        // no active document. No-op here.
+        EditorIntent::ShowTutorial => {}
     }
 }
 

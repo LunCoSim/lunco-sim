@@ -77,6 +77,17 @@ fn register_builtin_policies() {
 impl Plugin for LunCoScriptingPlugin {
     fn build(&self, app: &mut App) {
         info!("Initializing LunCo Scripting Bridge...");
+
+        // Scripting is INDEPENDENT of the HTTP API. `cmd()` dispatches through the
+        // transport-free command core (reflect dispatcher + entity registry), so
+        // we self-supply it here rather than assuming `LunCoApiPlugin` was added.
+        // An app can now embed scripting with NO API server and scripts still
+        // reach every `#[Command]`. Guarded, so it composes with `LunCoApiPlugin`
+        // (which adds the same core) in either order. Only the rhai/python
+        // backends pull `lunco-api`, hence the cfg.
+        #[cfg(any(feature = "rhai", feature = "python"))]
+        lunco_api::ensure_command_core(app);
+
         python::initialize_python();
 
         if !app.is_plugin_added::<source_asset::PythonSourceAssetPlugin>() {

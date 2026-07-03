@@ -24,6 +24,18 @@ fn coach(index, total, anchor, title, body) {
 }
 fn end_tour()                  { cmd("ClearTour") }
 
+/// Render step `i` of a `steps` array of `#{ anchor, title, body, focus }`:
+/// focus the named singleton panel (if `focus` is set) so its spotlight anchor
+/// is on screen, then draw the coach card. Pairs with the standard on_event
+/// cursor pattern (`this.i`) so a whole guided tour is just a `steps()` table +
+/// two thin hooks. `focus` is optional — omit it (or set `()`), and no panel is
+/// touched.
+fn coach_step(steps, i) {
+    let s = steps[i];
+    if s.focus != () { cmd("FocusPanel", #{ id: s.focus }); }
+    coach(i, steps.len(), s.anchor, s.title, s.body);
+}
+
 /// Glyph for an objective state: pending •, active ▸, complete ✓, failed ✗.
 fn __obj_glyph(state) {
     if state == "complete" { "✓" }

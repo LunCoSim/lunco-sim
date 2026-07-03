@@ -1372,6 +1372,17 @@ fn build_modelica_core(app: &mut App) {
             .run_if(resource_added::<lunco_doc_bevy::JournalResource>),
     );
 
+    // In-app rhai scripting runtime: `RunScenario` (attach + hot-reload a
+    // scenario to an entity), the `cmd()`/prelude world-bridge, and the REPL.
+    // This is what lets the workbench be DRIVEN by scripts and what the
+    // rhai-authored lunica tutorials run on. `LunCoScriptingPlugin` self-supplies
+    // the transport-free command core, so this works with NO API server —
+    // scripting stays independent of the `lunco-api` feature. Guarded/idempotent.
+    #[cfg(feature = "scripting")]
+    if !app.is_plugin_added::<lunco_scripting::LunCoScriptingPlugin>() {
+        app.add_plugins(lunco_scripting::LunCoScriptingPlugin);
+    }
+
     // Experiments / Fast Run: backend-agnostic registry + this crate's
     // ModelicaRunner binding. UI for the Run buttons and Experiments
     // panel is layered in `ui::experiments_panel` (Step 5+).

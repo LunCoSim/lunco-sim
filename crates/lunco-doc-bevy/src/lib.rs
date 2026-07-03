@@ -386,6 +386,11 @@ pub enum EditorIntent {
     /// resolvers handle this without any active-doc ownership check —
     /// "new" by definition has no existing target.
     NewDocument,
+    /// Open the app's guided tutorial / product tour (default: `F1`). Like
+    /// [`NewDocument`](Self::NewDocument), it targets no document — a
+    /// domain resolver (e.g. lunica's tutorial launcher) turns it into a
+    /// concrete launch command. Apps with no tutorial simply ignore it.
+    ShowTutorial,
 }
 
 /// A key chord (modifier + key) that triggers an [`EditorIntent`].
@@ -443,6 +448,7 @@ impl Default for Keybindings {
         map.insert(KeyChord::ctrl(KeyCode::KeyW), EditorIntent::Close);
         map.insert(KeyChord::ctrl(KeyCode::KeyN), EditorIntent::NewDocument);
         map.insert(KeyChord::plain(KeyCode::F5), EditorIntent::Compile);
+        map.insert(KeyChord::plain(KeyCode::F1), EditorIntent::ShowTutorial);
         Self { map }
     }
 }

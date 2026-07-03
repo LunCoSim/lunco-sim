@@ -1,290 +1,392 @@
-//! The lunica product tour, as **data**.
+//! The lunica tutorial curriculum — **rhai-driven** guided lessons.
 //!
-//! Lunica has no scripting runtime, so its guided tour is registered as a
-//! `Vec<TourStepDef>` in the shared [`lunco_workbench::tour_driver::TourCatalog`]
-//! and played by the shared coach-card driver — the *same* renderer the sandbox
-//! drives from rhai. One tour engine, two apps (spec 011 §6 migration).
+//! ## Tutorials are scripts now, not Rust data
 //!
-//! This module now only contributes the lunica-specific pieces the generic
-//! driver can't know about:
-//! - the ten tour steps themselves (titles, bodies, `HelpAnchors` keys, and the
-//!   panel each step auto-focuses);
-//! - a Help-menu "🎓 Show Tour" entry (publishes a [`HelpTourRequest`]);
-//! - opening the `CascadedRCFilter` demo model while the tour runs, so the
-//!   model-view steps (Text / Diagram / Icon, Compilation modes, Graphs) have
-//!   real content to spotlight. Closed again when the tour ends.
+//! Lunica used to hardcode a single ten-step tour as a `Vec<TourStepDef>` in this
+//! file. Now that the workbench hosts the rhai scripting runtime
+//! ([`lunco_scripting::LunCoScriptingPlugin`], added in `build_modelica_core`),
+//! each tutorial is an ordinary **scenario** authored in
+//! `assets/tutorials/lunica/*.rhai` — the *same* substrate the sandbox tutorials
+//! use. A lesson calls `coach_step()` (HUD prelude) to spotlight a widget and
+//! draw a card, and advances its `this.i` cursor in `on_event` on the card's
+//! Back/Next/Skip/dot bus events. No tour state machine in Rust.
 //!
-//! First-start auto-open and step navigation live in the shared driver
-//! (persisted under `settings.json` → `tour_seen`), so this file no longer owns
-//! a "seen" flag, a renderer, or an advance state machine.
+//! This module is just the thin **launcher shell**:
+//! - [`TUTORIALS`] — the catalog (id/title/blurb). The `.rhai` source is loaded
+//!   at launch from `lunco_assets` (disk on native, embedded on wasm).
+//! - a top-level **🎓 Tutorials** menu + a Help-menu "Show Tour" entry.
+//! - launch = load `assets/tutorials/lunica/<id>.rhai` via
+//!   [`lunco_assets::tutorials::lunica_tutorial_source`] and attach it to a
+//!   persistent host entity via [`RunScenario`](lunco_scripting::commands::RunScenario).
+//!   On native the source is read fresh each launch, so editing a tutorial and
+//!   replaying it shows the change with **no rebuild** — real live authoring.
+//! - first-run onboarding + completion ticks. Completion ✓ persists in
+//!   [`LunicaTutorialProgress`]; the onboarding *gate* is itself rhai
+//!   (`onboarding.rhai`), persisting the old `tour_seen` flag via [`TutorialSeen`].
 //!
-//! (`CascadedRCFilter` has no MSL dependency, so it loads fast — unlike
-//! `AnnotatedRocketStage`, which pulls in the Modelica Standard Library and
-//! stalls the tour on first launch.)
+//! Because `cmd()` dispatches through the transport-free command core that
+//! scripting self-supplies, none of this needs the HTTP API — scripting is
+//! independent of the API server.
 
 use bevy::prelude::*;
-use lunco_doc::DocumentId;
-use lunco_workbench::tour_driver::{ActiveTour, TourCatalog, TourDef, TourStepDef};
-use lunco_workbench::{HelpTourRequest, PerspectiveId, WorkbenchLayout};
 
-use crate::state::ModelicaDocumentRegistry;
+/// The perspective whose help popup shows a "Show Tour" button. Publishing a
+/// [`HelpTourRequest`](lunco_workbench::HelpTourRequest) for it (the button, or
+/// our Help-menu entry) launches the Overview lesson.
+#[cfg(feature = "scripting")]
+const TOUR_PERSPECTIVE: lunco_workbench::PerspectiveId =
+    lunco_workbench::PerspectiveId("modelica_analyze");
 
-/// The perspective the lunica tour belongs to. Its help popup declares
-/// `has_tour`, so its "Show Tour" button publishes a [`HelpTourRequest`] for
-/// this id, which the shared driver maps to the tour registered below.
-const TOUR_PERSPECTIVE: PerspectiveId = PerspectiveId("modelica_analyze");
-
-/// Demo-doc lifecycle state for the tour. The generic driver spotlights widgets
-/// but can't know lunica needs a model open to *have* those widgets — so we open
-/// `CascadedRCFilter` when the tour starts and close it when it ends. These are
-/// tick-staged flags so the exclusive doc-manage system runs independently of
-/// the tour driver.
-#[derive(Resource, Default)]
-pub struct HelpOverlayState {
-    /// "Open the demo on the next frame."
-    wants_open_doc: bool,
-    /// "Capture the resulting active doc id the frame after."
-    wants_capture_doc: bool,
-    /// "Close the demo we opened."
-    wants_close_doc: bool,
-    /// The bundled demo we opened for the tour's duration (`None` if the user
-    /// already had it open — then the tour must not take ownership of it).
-    tutorial_doc: Option<DocumentId>,
+/// One lunica tutorial's catalog entry (id/title/blurb) — what the menu needs to
+/// list + launch. The rhai orchestrator lives on disk and is loaded by id.
+#[cfg(feature = "scripting")]
+#[derive(Clone, Copy)]
+struct LunicaTutorial {
+    /// Stable id (kebab-case). Progress + launch key off this.
+    id: &'static str,
+    /// Menu label.
+    title: &'static str,
+    /// One-line "what this teaches", shown on hover.
+    blurb: &'static str,
+    // The rhai orchestrator is `assets/tutorials/lunica/<id>.rhai`, loaded at
+    // launch by `lunco_assets::tutorials::lunica_tutorial_source(id)` — disk on
+    // native (live-editable), embedded on wasm. The id IS the file stem, so the
+    // catalog needs no source field.
 }
+
+/// The curriculum: one first-run Overview + focused, à-la-carte lessons, each on
+/// one concept. Add a lesson by dropping a `.rhai` under `assets/tutorials/lunica/`
+/// and adding a row here — no engine change.
+#[cfg(feature = "scripting")]
+const TUTORIALS: &[LunicaTutorial] = &[
+    LunicaTutorial {
+        id: "overview",
+        title: "Lunica Overview",
+        blurb: "A 90-second guided tour of the whole workbench — start here.",
+    },
+    LunicaTutorial {
+        id: "workspace",
+        title: "1 · Your Workspace",
+        blurb: "Twins, the browser, read-only libraries, and learning paths.",
+    },
+    LunicaTutorial {
+        id: "model",
+        title: "2 · Open & View a Model",
+        blurb: "The four views (Text/Diagram/Icon/Docs) + graphical composition.",
+    },
+    LunicaTutorial {
+        id: "run",
+        title: "3 · Compile & Run",
+        blurb: "Interactive vs Fast Run, and driving inputs live.",
+    },
+    LunicaTutorial {
+        id: "experiments",
+        title: "4 · Experiments & Sweeps",
+        blurb: "Override parameters and sweep them without editing source.",
+    },
+    LunicaTutorial {
+        id: "plots",
+        title: "5 · Plots & Results",
+        blurb: "Reading a run: graphs, diagnostics, and the console.",
+    },
+    LunicaTutorial {
+        id: "scripting",
+        title: "6 · Automate (API + MCP)",
+        blurb: "Drive the workbench from scripts, the HTTP API, and MCP.",
+    },
+];
+
+/// Persisted tutorial progress, under the `"lunica_tutorial_progress"` key of
+/// `settings.json`.
+#[cfg(feature = "scripting")]
+#[derive(Resource, serde::Serialize, serde::Deserialize, Default, Clone, PartialEq, Debug)]
+pub struct LunicaTutorialProgress {
+    /// Ids whose lesson reported `MISSION_COMPLETE`.
+    completed: Vec<String>,
+    /// The lesson currently running (set on launch), so a `MISSION_COMPLETE` is
+    /// attributed correctly.
+    current: Option<String>,
+}
+
+#[cfg(feature = "scripting")]
+impl lunco_settings::SettingsSection for LunicaTutorialProgress {
+    const KEY: &'static str = "lunica_tutorial_progress";
+}
+
+/// Persisted "already onboarded" flag — the reimplementation of the old
+/// `tour_seen` state, now **owned by rhai**. The onboarding *decision* (is this a
+/// first run? show the overview?) lives in `assets/tutorials/lunica/onboarding.rhai`,
+/// which reads and writes this flag with `get_setting`/`set_setting(
+/// "TutorialSeen.onboarded", ..)`. It is therefore [`Reflect`]-registered (so the
+/// rhai settings verbs can reach it) and persisted under the **`tour_seen`** key —
+/// preserving the pre-rhai tour's setting. Rust only stores it; the policy is rhai.
+#[cfg(feature = "scripting")]
+#[derive(Resource, Reflect, serde::Serialize, serde::Deserialize, Default, Clone, PartialEq, Debug)]
+#[reflect(Resource)]
+pub struct TutorialSeen {
+    /// Whether first-run onboarding has already happened (persisted).
+    pub onboarded: bool,
+}
+
+#[cfg(feature = "scripting")]
+impl lunco_settings::SettingsSection for TutorialSeen {
+    const KEY: &'static str = "tour_seen";
+}
+
+/// The persistent entity every tutorial scenario attaches to. Spawned lazily on
+/// the first launch; re-launching a lesson hot-reloads the scenario on it.
+#[cfg(feature = "scripting")]
+#[derive(Resource, Default)]
+struct LunicaTutorialHost(Option<Entity>);
 
 pub struct HelpOverlayPlugin;
 
 impl Plugin for HelpOverlayPlugin {
+    #[cfg(feature = "scripting")]
     fn build(&self, app: &mut App) {
-        app.init_resource::<HelpOverlayState>();
-        app.add_systems(Startup, (register_help_entry, register_lunica_tour));
-        app.add_systems(Update, (sync_demo_doc_with_tour, manage_tutorial_doc));
+        use lunco_settings::AppSettingsExt;
+        app.init_resource::<LunicaTutorialHost>();
+        app.register_settings_section::<LunicaTutorialProgress>();
+        // `tour_seen` flag — reflect-registered so `onboarding.rhai` reads/writes it.
+        app.register_type::<TutorialSeen>();
+        app.register_settings_section::<TutorialSeen>();
+        launcher::register(app); // LaunchTutorial command + F1 intent resolver
+        app.add_systems(Startup, register_menus);
+        app.add_systems(Update, (attach_onboarding_once, consume_show_tour_request));
+        app.add_observer(mark_completion);
     }
+
+    // Scripting off (a rare `ui`-without-`scripting` build): no rhai runtime to
+    // run tutorials, so the launcher is a no-op. The workbench still compiles.
+    #[cfg(not(feature = "scripting"))]
+    fn build(&self, _app: &mut App) {}
 }
 
-/// One tour step. `focus` is a singleton `PanelId` the driver opens on entry.
-fn step(anchor: &str, title: &str, body: &str, focus: Option<&str>) -> TourStepDef {
-    TourStepDef {
-        anchor: anchor.to_string(),
-        title: title.to_string(),
-        body: body.to_string(),
-        focus_panel: focus.map(str::to_string),
+// Everything below needs the scripting runtime (RunScenario) — gated so the
+// module still compiles without it.
+#[cfg(feature = "scripting")]
+mod launcher {
+    use super::*;
+    use bevy_egui::egui;
+    use lunco_core::{on_command, register_commands, Command};
+    use lunco_doc_bevy::EditorIntent;
+    use lunco_workbench::{tutorial_overlay::TutorialHud, HelpTourRequest, WorkbenchLayout};
+
+    /// Launch a lunica tutorial by id — the single command **every** entry point
+    /// funnels through: the 🎓 Tutorials menu, F1 (via the intent resolver below),
+    /// the HTTP API, MCP, and other scripts. Reflect-dispatched, so `cmd(
+    /// "LaunchTutorial", #{ id: "run" })` works from rhai too.
+    #[Command(default)]
+    pub struct LaunchTutorial {
+        /// The [`TUTORIALS`] id to launch (e.g. `"overview"`, `"run"`).
+        pub id: String,
     }
-}
 
-/// Register the ten-step lunica tour as data. `first_start: true` so it
-/// auto-opens once on a fresh install (the shared driver tracks "seen").
-fn register_lunica_tour(mut catalog: ResMut<TourCatalog>) {
-    catalog.register(
-        TOUR_PERSPECTIVE,
-        TourDef {
-            first_start: true,
-            steps: vec![
-                step(
-                    "",
-                    "Welcome to Lunica",
-                    "Lunica (LunCoSim Modelica Workbench) — a quick interactive tour. \
-                     Use ◀ ▶ or the arrow keys. Esc to skip.",
-                    None,
-                ),
-                step(
-                    "panel.lunco_twin_browser",
-                    "Twin Browser",
-                    "Your workspace lives here. A Twin is a folder of .mo files + a \
-                     manifest. Bundled demos and the Modelica Standard Library are \
-                     read-only — duplicate to edit.",
-                    Some("lunco_twin_browser"),
-                ),
-                step(
-                    "model_view.view_toggles",
-                    "Text · Diagram · Icon",
-                    "Four live views of the same model: 📝 Text source, 🔗 Diagram \
-                     (wired components), 🎨 Icon (the class's own annotation), and \
-                     📖 Docs.",
-                    None,
-                ),
-                step(
-                    "model_view.compile_buttons",
-                    "Compilation modes",
-                    "Two ways to compile and run a model:\n\
-                     • 🚀 Interactive — compile then step in real time; live \
-                       sliders drive inputs, signals stream into Graphs.\n\
-                     • ⏩ Fast Run — batch, headless; integrate 0 → t_end \
-                       then dump results to plot. Best for sweeps and \
-                       reproducibility.",
-                    None,
-                ),
-                step(
-                    "panel.modelica_plot",
-                    "Graphs",
-                    "Multi-axis plots, per document. Pick signals, snapshot a run \
-                     to compare against future ones. Lives in the bottom dock by \
-                     default — next to Experiments, Diagnostics, Console, Journal.",
-                    None,
-                ),
-                step(
-                    "panel.modelica_plot",
-                    "Rearrange tabs",
-                    "Every tab is draggable. Drop one next to another to split \
-                     the area; drop it on a tab strip to add it as a sibling. \
-                     Great for watching signals next to the model while it runs.",
-                    None,
-                ),
-                step(
-                    "panel.modelica_experiments",
-                    "Experiments",
-                    "Override any parameter without editing source. Fast Run does a \
-                     one-shot batch; scheduled runs sweep override lists.",
-                    Some("modelica_experiments"),
-                ),
-                step(
-                    "panel.modelica_inspector",
-                    "Telemetry",
-                    "Live parameters, inputs, and variable plot toggles. In \
-                     Interactive mode, sliders here drive inputs at simulation \
-                     rate.",
-                    Some("modelica_inspector"),
-                ),
-                step(
-                    "menu.help",
-                    "Scripting — HTTP API & MCP",
-                    "Every UI action has a typed Command. POST to /api/commands, or \
-                     drive the workbench from an LLM agent over MCP.",
-                    None,
-                ),
-                step(
-                    "",
-                    "You're set",
-                    "Reopen this tour any time from Help → Show Tour, or press F1.",
-                    None,
-                ),
-            ],
-        },
-    );
-}
+    #[on_command(LaunchTutorial)]
+    fn on_launch_tutorial(trigger: On<LaunchTutorial>, mut commands: Commands) {
+        let id = trigger.event().id.clone();
+        // `launch` needs `&mut World` (spawns the host, triggers RunScenario); an
+        // observer only has `Commands`, so defer to an exclusive closure.
+        commands.queue(move |world: &mut World| launch(world, &id));
+    }
 
-/// Add a Help-menu "Show Tour" entry. Publishes a [`HelpTourRequest`] for the
-/// tour's perspective; the shared driver starts the registered tour.
-fn register_help_entry(world: &mut World) {
-    let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() else {
-        return;
-    };
-    layout.register_help_menu(|ui, world, _layout| {
-        if ui
-            .button("🎓 Show Tour")
-            .on_hover_text("Replay the guided interactive tour of the workbench")
-            .clicked()
-        {
-            world.resource_mut::<HelpTourRequest>().0 = Some(TOUR_PERSPECTIVE);
-            ui.close();
+    /// Keybinding → intent → command: `lunco-doc-bevy` maps `F1` to
+    /// [`EditorIntent::ShowTutorial`]; this resolver turns that intent into the
+    /// [`LaunchTutorial`] command (Overview). One shared path with the menu / API.
+    pub(super) fn resolve_show_tutorial_intent(trigger: On<EditorIntent>, mut commands: Commands) {
+        if matches!(*trigger.event(), EditorIntent::ShowTutorial) {
+            commands.trigger(LaunchTutorial { id: "overview".to_string() });
         }
-    });
-}
-
-/// Open the demo model when the lunica tour starts and close it when it ends,
-/// by watching the shared [`ActiveTour`] for our perspective. Drives the flags
-/// that [`manage_tutorial_doc`] acts on.
-fn sync_demo_doc_with_tour(
-    active: Res<ActiveTour>,
-    mut state: ResMut<HelpOverlayState>,
-    mut was_active: Local<bool>,
-) {
-    let now = active.id == Some(TOUR_PERSPECTIVE);
-    if now && !*was_active {
-        if state.tutorial_doc.is_none() {
-            state.wants_open_doc = true;
-        }
-    } else if !now && *was_active {
-        state.wants_close_doc = true;
     }
-    *was_active = now;
-}
 
-/// Exclusive system: opens `CascadedRCFilter` when the tour starts, captures the
-/// resulting active doc id, and closes that doc when the tour ends. Runs as
-/// `&mut World` because `open_class` and the close intent both need it.
-fn manage_tutorial_doc(world: &mut World) {
-    // Step 1 — fire the open. Next-frame capture flag is set so we pick up the
-    // new active doc once the open-observer has run.
-    let wants_open = world.resource::<HelpOverlayState>().wants_open_doc;
-    if wants_open {
-        // Only the tour-opened doc may be torn down on finish. If the user
-        // already has the demo model open (a restored session, or a manual
-        // open), the tour must NOT take ownership of it — otherwise closing the
-        // tour would close the user's document. In that case leave
-        // `tutorial_doc` None and capture disarmed, so the teardown in Step 3 is
-        // a no-op and the user's doc stays put.
-        let already_open = world
-            .get_resource::<ModelicaDocumentRegistry>()
-            .and_then(|reg| reg.find_bundled("CascadedRCFilter.mo"))
-            .is_some();
-        if already_open {
-            let mut state = world.resource_mut::<HelpOverlayState>();
-            state.wants_open_doc = false;
-            state.wants_capture_doc = false;
-            state.tutorial_doc = None;
+    register_commands!(on_launch_tutorial,);
+
+    /// Register the launch command + the F1/`ShowTutorial` intent resolver.
+    pub(super) fn register(app: &mut App) {
+        register_all_commands(app);
+        app.add_observer(resolve_show_tutorial_intent);
+    }
+
+    /// Spawn (once) and return the host entity that scenarios attach to.
+    fn ensure_host(world: &mut World) -> Entity {
+        if let Some(e) = world.resource::<LunicaTutorialHost>().0 {
+            return e;
+        }
+        let e = world.spawn(Name::new("LunicaTutorialHost")).id();
+        world.resource_mut::<LunicaTutorialHost>().0 = Some(e);
+        e
+    }
+
+    /// Launch lesson `id`: attach its rhai source to the host (hot-reloads on
+    /// re-run), and record it as current. The scenario's `on_start` takes over
+    /// from there (spotlight + card).
+    pub(super) fn launch(world: &mut World, id: &str) {
+        let Some(tut) = TUTORIALS.iter().find(|t| t.id == id) else {
+            warn!("[lunica-tutorial] unknown id '{id}'");
             return;
-        }
-        crate::ui::panels::package_browser::open_class(
-            world,
-            crate::class_ref::ClassRef::bundled(["CascadedRCFilter"]),
-            false,
-        );
-        let mut state = world.resource_mut::<HelpOverlayState>();
-        state.wants_open_doc = false;
-        state.wants_capture_doc = true;
-        return;
-    }
-
-    // Step 2 — capture. Reads whatever active_document the open observer landed
-    // on. The open may resolve a frame or more late (the bundled source still
-    // has to parse), so keep the capture flag armed until a doc actually shows
-    // up — otherwise a fast skip leaves `tutorial_doc` None and the demo leaks.
-    let wants_capture = world.resource::<HelpOverlayState>().wants_capture_doc;
-    if wants_capture {
-        let active = world
-            .resource::<lunco_workspace::WorkspaceResource>()
-            .active_document;
-        let mut state = world.resource_mut::<HelpOverlayState>();
-        if active.is_some() {
-            state.tutorial_doc = active;
-            state.wants_capture_doc = false;
-        }
-    }
-
-    // Step 3 — close. Triggers `EditorIntent::Close` while the tour doc is
-    // active; the doc's own observer handles tab teardown.
-    let wants_close = world.resource::<HelpOverlayState>().wants_close_doc;
-    if wants_close {
-        // Prefer the captured id; if capture never landed (fast skip before the
-        // open resolved), fall back to whatever the tour left active so the demo
-        // is still torn down.
-        let (captured, pending) = {
-            let s = world.resource::<HelpOverlayState>();
-            (s.tutorial_doc, s.wants_capture_doc)
         };
-        let doc = captured.or_else(|| {
-            if pending {
-                world
-                    .resource::<lunco_workspace::WorkspaceResource>()
-                    .active_document
-            } else {
-                None
+        // The asset crate owns the disk-vs-embed policy: on native this reads the
+        // `.rhai` fresh from `assets/tutorials/lunica/<id>.rhai` each launch, so a
+        // user can edit a lesson and replay it live; on wasm it's the embedded copy.
+        let Some(source) = lunco_assets::tutorials::lunica_tutorial_source(id) else {
+            warn!("[lunica-tutorial] no source for '{id}'");
+            return;
+        };
+        let host = ensure_host(world);
+        info!("[lunica-tutorial] launching '{}'", tut.title);
+        world.trigger(lunco_scripting::commands::RunScenario {
+            target: host,
+            source,
+            params: String::new(),
+        });
+        if let Some(mut p) = world.get_resource_mut::<LunicaTutorialProgress>() {
+            p.current = Some(id.to_string());
+        }
+    }
+
+    /// Stop the running lesson: clear the coach card + hint + spotlight. The
+    /// idle scenario stays attached (harmless); the next launch replaces it.
+    fn stop(world: &mut World) {
+        if let Some(mut hud) = world.get_resource_mut::<TutorialHud>() {
+            hud.tour = None;
+            hud.hint.clear();
+            hud.spotlight = None;
+        }
+        if let Some(mut p) = world.get_resource_mut::<LunicaTutorialProgress>() {
+            p.current = None;
+        }
+    }
+
+    /// Register the top-level **🎓 Tutorials** menu and the Help-menu entry.
+    pub(super) fn register_menus(world: &mut World) {
+        let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() else {
+            return;
+        };
+
+        // Dedicated top-level menu, listing every lesson with a completion tick.
+        layout.register_custom_menu("🎓 Tutorials", |ui, world| {
+            let progress = world
+                .get_resource::<LunicaTutorialProgress>()
+                .cloned()
+                .unwrap_or_default();
+            let running = progress.current.is_some();
+
+            ui.label(egui::RichText::new("Interactive, scripted lessons").weak().small());
+            ui.separator();
+
+            for (idx, tut) in TUTORIALS.iter().enumerate() {
+                let done = progress.completed.iter().any(|c| c == tut.id);
+                let glyph = if done { "✓" } else { "🎓" };
+                let resp = ui
+                    .button(format!("{glyph}  {}", tut.title))
+                    .on_hover_text(tut.blurb);
+                if resp.clicked() {
+                    world.trigger(LaunchTutorial { id: tut.id.to_string() });
+                    ui.close();
+                }
+                // A rule after the Overview separates it from the focused set.
+                if idx == 0 {
+                    ui.separator();
+                }
+            }
+
+            ui.separator();
+            ui.add_enabled_ui(running, |ui| {
+                if ui.button("⏹ Stop tutorial").clicked() {
+                    stop(world);
+                    ui.close();
+                }
+            });
+        });
+
+        // Keep the familiar Help ▸ Show Tour entry pointed at the Overview.
+        layout.register_help_menu(|ui, world, _layout| {
+            if ui
+                .button("🎓 Show Tour")
+                .on_hover_text("Replay the guided overview of the workbench")
+                .clicked()
+            {
+                world.trigger(LaunchTutorial { id: "overview".to_string() });
+                ui.close();
             }
         });
-        if let Some(doc) = doc {
-            // Make the tour doc active so `EditorIntent::Close` (which closes the
-            // active document) targets the right one.
-            world
-                .resource_mut::<lunco_workspace::WorkspaceResource>()
-                .active_document = Some(doc);
-            world.trigger(lunco_doc_bevy::EditorIntent::Close);
+    }
+
+    /// The perspective help popup's "Show Tour" button publishes a
+    /// [`HelpTourRequest`] for our perspective. Consume it → launch the Overview.
+    pub(super) fn consume_show_tour_request(world: &mut World) {
+        let hit = {
+            let mut req = world.resource_mut::<HelpTourRequest>();
+            if req.0 == Some(TOUR_PERSPECTIVE) {
+                req.0 = None;
+                true
+            } else {
+                false
+            }
+        };
+        if hit {
+            world.trigger(LaunchTutorial { id: "overview".to_string() });
         }
-        let mut state = world.resource_mut::<HelpOverlayState>();
-        state.tutorial_doc = None;
-        state.wants_close_doc = false;
-        // Disarm capture too — a late open resolving after teardown must not
-        // re-adopt a doc the tour no longer owns.
-        state.wants_capture_doc = false;
+    }
+
+    /// Attach the rhai onboarding gate once per process — ~1s after start (so the
+    /// layout settles), skipping automated `--api` / `--no-ui` sessions. This only
+    /// TRIGGERS; the *decision* (first run? show the overview? remember it) lives
+    /// in `onboarding.rhai`, which self-gates on the persisted `tour_seen` flag.
+    /// So an already-onboarded user just gets an inert scenario attached (a no-op).
+    pub(super) fn attach_onboarding_once(world: &mut World, mut ticks: Local<u32>) {
+        const DONE: u32 = u32::MAX;
+        const SETTLE_TICKS: u32 = 60; // ~1s at 60fps
+
+        if *ticks == DONE {
+            return;
+        }
+        *ticks += 1;
+        if *ticks < SETTLE_TICKS {
+            return;
+        }
+        *ticks = DONE;
+
+        // Don't hijack automation / explicit API sessions.
+        if std::env::args().any(|a| a == "--api" || a == "--no-ui") {
+            return;
+        }
+
+        // If the user already launched a lesson during the settle window, don't
+        // clobber it with the onboarding gate.
+        if world.resource::<LunicaTutorialProgress>().current.is_some() {
+            return;
+        }
+
+        let Some(source) = lunco_assets::tutorials::lunica_tutorial_source("onboarding") else {
+            return;
+        };
+        let host = ensure_host(world);
+        world.trigger(lunco_scripting::commands::RunScenario {
+            target: host,
+            source,
+            params: String::new(),
+        });
+    }
+
+    /// On `MISSION_COMPLETE`, mark the current lesson complete (for the menu ✓).
+    pub(super) fn mark_completion(
+        trigger: On<lunco_core::TelemetryEvent>,
+        mut progress: ResMut<LunicaTutorialProgress>,
+    ) {
+        if trigger.event().name != "MISSION_COMPLETE" {
+            return;
+        }
+        if let Some(id) = progress.current.take() {
+            if !progress.completed.iter().any(|c| c == &id) {
+                info!("[lunica-tutorial] completed '{id}'");
+                progress.completed.push(id);
+            }
+        }
     }
 }
+
+#[cfg(feature = "scripting")]
+use launcher::{
+    attach_onboarding_once, consume_show_tour_request, mark_completion, register_menus,
+};
