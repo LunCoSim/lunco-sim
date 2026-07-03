@@ -234,7 +234,70 @@ fn on_spawn_dem_terrain(
     );
 }
 
-register_commands!(on_spawn_dem_terrain);
+/// Dig or raise the terrain with a smooth radial brush: `amplitude` metres at the
+/// centre — **negative digs, positive raises** — falling to zero at `radius`. `(x, z)`
+/// are terrain-local metres. Appends an edit layer to every DEM terrain; the
+/// `Changed<TerrainLayerStack>` re-bake lands it in the tiles AND the collider, so the
+/// rover drives exactly the hole/berm you see. Reachable from rhai / API / MCP as a
+/// command: `cmd("BrushTerrain", #{x, z, radius, amplitude})`.
+#[Command(default)]
+pub struct BrushTerrain {
+    pub x: f32,
+    pub z: f32,
+    pub radius: f32,
+    pub amplitude: f32,
+}
+
+#[on_command(BrushTerrain)]
+fn on_brush_terrain(
+    trigger: On<BrushTerrain>,
+    mut terrains: Query<&mut crate::terrain_layers::TerrainLayerStack>,
+) {
+    let ev = trigger.event();
+    if ev.radius <= 0.0 {
+        return;
+    }
+    // TODO(identity→USD): applies to every terrain (matches the obstacle-spec path).
+    // Scope to a target terrain by prim path once layers carry USD identity.
+    for mut stack in &mut terrains {
+        stack.0.push(crate::terrain_layers::dig_layer(
+            [ev.x as f64, ev.z as f64],
+            ev.radius as f64,
+            ev.amplitude as f64,
+        ));
+    }
+}
+
+/// Flatten the terrain toward `target_y` within `radius`, blending back to the
+/// existing surface at the edge — the "level a landing pad" tool. `(x, z)` are
+/// terrain-local metres. Reachable as `cmd("FlattenTerrain", #{x, z, radius, target_y})`.
+#[Command(default)]
+pub struct FlattenTerrain {
+    pub x: f32,
+    pub z: f32,
+    pub radius: f32,
+    pub target_y: f32,
+}
+
+#[on_command(FlattenTerrain)]
+fn on_flatten_terrain(
+    trigger: On<FlattenTerrain>,
+    mut terrains: Query<&mut crate::terrain_layers::TerrainLayerStack>,
+) {
+    let ev = trigger.event();
+    if ev.radius <= 0.0 {
+        return;
+    }
+    for mut stack in &mut terrains {
+        stack.0.push(crate::terrain_layers::flatten_layer(
+            [ev.x as f64, ev.z as f64],
+            ev.radius as f64,
+            ev.target_y as f64,
+        ));
+    }
+}
+
+register_commands!(on_spawn_dem_terrain, on_brush_terrain, on_flatten_terrain);
 
 /// What the off-thread build produces, ready to assemble into entities.
 struct DemBuild {

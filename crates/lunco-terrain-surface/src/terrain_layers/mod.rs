@@ -20,6 +20,7 @@
 //! stamp layer can be moved into the off-thread bake task.
 
 mod craters;
+mod edits;
 mod rocks;
 mod shader;
 
@@ -32,6 +33,7 @@ use lunco_obstacle_field::field::HeightGrid;
 use crate::stream_viz::DemHeightField;
 
 pub use craters::{crater_layer, make_crater_layer};
+pub use edits::{dig_layer, flatten_layer, EditLayer};
 pub use rocks::{rock_layer, TerrainRock};
 
 /// Rebuild the `craters`/`rocks` layers of `stack` from a typed [`ObstacleFieldSpec`]
@@ -45,12 +47,12 @@ pub fn apply_obstacle_spec_to_stack(
     spec: &lunco_obstacle_field::spec::ObstacleFieldSpec,
 ) {
     // Drop the existing crater/rock layers; keep the rest in order.
+    // TODO(identity→USD): retaining by *kind* forces a single layer per kind — it
+    // nukes every "craters" layer to replace one. Address layers by USD prim path
+    // instead so several same-kind layers coexist and only the edited one changes.
     stack.0.retain(|l| !matches!(l.id(), "craters" | "rocks"));
-    // The near-field high-fidelity crater overlay extent isn't in the spec — keep
-    // the established default (the value the USD `detailRegionM` defaults to).
-    const DETAIL_REGION_M: f32 = 400.0;
     if spec.craters.enabled && spec.craters.density > 0.0 {
-        stack.0.push(crater_layer(spec.craters, spec.seed, DETAIL_REGION_M));
+        stack.0.push(crater_layer(spec.craters, spec.seed));
     }
     if spec.rocks.enabled && spec.rocks.density > 0.0 {
         // Rocks scatter across the WHOLE DEM (the layer clamps `f32::MAX` to the grid
@@ -117,7 +119,18 @@ pub struct LayerScatterCx<'a, 'w, 's> {
 /// own file) to add a composable layer type with no changes to the build/scatter/
 /// regenerate systems.
 pub trait TerrainLayer: Send + Sync + 'static {
-    /// Stable id (logging / debugging).
+    /// Layer **kind** (`"craters"`, `"rocks"`, …) — selects behaviour via the parser
+    /// registry; NOT an instance identity (every crater layer returns `"craters"`).
+    ///
+    // TODO(identity→USD): a layer's *identity* is its source USD prim path, not this
+    // kind string. Carry the `SdfPath` from the parser through the projection so a
+    // specific layer can be addressed / edited / removed / reordered (a `UsdOp` on that
+    // path). This unblocks several same-kind layers (see `retain` in
+    // `apply_obstacle_spec_to_stack`, which nukes ALL "craters" to replace one), dynamic
+    // tool edits, and the schema-derived inspector. Do NOT synthesise a Rust-side id —
+    // the prim path already is unique/stable/dynamic. Post-networking the canonical
+    // StageSink projects per-prim by path, so this folds in for free.
+    // See docs/architecture/terrain-substrate.md → "Dynamic modification".
     fn id(&self) -> &'static str;
     /// Stamp height deltas into the working grid (off-thread in the DEM build, and on
     /// the main thread on regenerate). Default: contributes no height.

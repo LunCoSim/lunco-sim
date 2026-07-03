@@ -155,14 +155,10 @@ impl HeightGrid {
 /// raised rim lip at `d≈1` (the key cue under raking light), then a low outward
 /// ejecta apron to ~1.5 r.
 pub fn crater_delta(d: f32, depth: f32, rim_height: f32) -> f32 {
-    let bowl = if d < 1.0 { -depth * (1.0 - d * d * d * d) } else { 0.0 };
-    let rim = rim_height * (-((d - 0.98) / 0.14).powi(2)).exp();
-    let apron = if (1.0..1.6).contains(&d) {
-        rim_height * 0.25 * (-((d - 1.15) / 0.30).powi(2)).exp()
-    } else {
-        0.0
-    };
-    bowl + rim + apron
+    // Delegate to the canonical `f64` profile in `lunco-terrain-core` so the
+    // rasterised stamp here and the analytic `CraterField` sampled by the tile
+    // baker + collider share ONE cross-section — no second copy to drift.
+    lunco_terrain_core::crater_profile(d as f64, depth as f64, rim_height as f64) as f32
 }
 
 /// Smooth normals for a row-major `res×res` vertex grid via central differences

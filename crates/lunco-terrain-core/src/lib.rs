@@ -22,15 +22,27 @@
 //! orbit→surface bridge is a *composite* `HeightSource` that returns the site DEM
 //! inside a georeferenced region and the globe height outside it.
 
+pub mod carve;
+pub mod collider;
+pub mod crater;
 pub mod derive;
+pub mod error;
+pub mod modifier;
 pub mod quadtree;
+pub mod quantize;
 pub mod source;
 pub mod tile;
 
+pub use carve::{CarveField, CarvePrimitive};
+pub use collider::{prepare_collider_heights, slope_limit_grid};
+pub use crater::{crater_profile, Crater, CraterField, Craters, CRATER_REACH};
+pub use error::measure_node_error;
+pub use modifier::{BrushModifier, FlattenModifier, HeightModifier, LayeredHeightSource};
 pub use derive::{
     ao_map, hazard_from_slope, normal_map, pack_normal_rgba8, pack_surface_rgba8,
     roughness_from_slope, slope_map,
 };
 pub use quadtree::{QuadCoord, Quadtree, Selected, Square};
+pub use quantize::{quantize, QuantizedHeightSource};
 pub use source::{AnalyticHeightSource, CompositeHeightSource, HeightSource};
 pub use tile::{TileCoord, TileGrid};
