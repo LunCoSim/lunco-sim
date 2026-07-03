@@ -273,14 +273,26 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             .resource::<AssetServer>()
             .load::<UsdStageAsset>(twin_path.clone());
 
+        // Moves: author each translate onto the LIVE canonical stage. Its change
+        // sink fires and `project_stage_changes` moves the entity incrementally —
+        // no whole-scene reload, and no doc-diff entity write here (this is the
+        // "author onto the stage → sink → project" loop). The move also rides the
+        // overlay (set above), so a later structural rebuild preserves it.
         if let Some(batch) = &batch {
-            if !batch.translate_paths.is_empty() {
-                crate::live_consume::apply_translates(
-                    world,
-                    handle.id(),
-                    &composed,
-                    &batch.translate_paths,
-                );
+            for path in &batch.translate_paths {
+                let Ok(sp) = openusd::sdf::Path::new(path) else { continue };
+                let Some(v) = lunco_usd_bevy::read_vec3_f64(&composed, &sp, "xformOp:translate")
+                else {
+                    continue;
+                };
+                if let Some(cs) = world
+                    .get_non_send_resource::<lunco_usd_bevy::CanonicalStages>()
+                    .and_then(|s| s.get(handle.id()))
+                {
+                    if let Err(e) = cs.author_translate(&sp, v) {
+                        warn!("[twin] author translate {path}: {e}");
+                    }
+                }
             }
         }
 

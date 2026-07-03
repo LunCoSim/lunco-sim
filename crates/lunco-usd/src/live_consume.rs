@@ -92,38 +92,6 @@ pub(crate) fn classify_changes_since(
     Some(ChangeBatch { translate_paths, resync_paths, needs_structural, full_reload })
 }
 
-/// Apply the composed `xformOp:translate` for each `path` to its live entity
-/// (scoped to the scene's `stage_handle_id`), mirroring `instantiate_usd_prim`'s
-/// decode via [`lunco_usd_bevy::get_attribute_as_vec3`]. Unlike instantiation we
-/// apply even a zero translate — an explicit move to the origin is a real edit,
-/// not a spawn-position default to preserve. Skips paths with no live entity yet
-/// (not instantiated) — a following structural reload would cover them.
-pub(crate) fn apply_translates<R: UsdRead>(
-    world: &mut World,
-    stage_handle_id: AssetId<UsdStageAsset>,
-    composed: &R,
-    paths: &[String],
-) {
-    for path in paths {
-        let Ok(sdf_path) = SdfPath::new(path) else {
-            continue;
-        };
-        let Some(v) = lunco_usd_bevy::get_attribute_as_vec3(composed, &sdf_path, TRANSLATE_ATTR) else {
-            continue;
-        };
-        let target = {
-            let mut q = world.query::<(Entity, &UsdPrimPath)>();
-            q.iter(world)
-                .find(|(_, upp)| upp.stage_handle.id() == stage_handle_id && upp.path == *path)
-                .map(|(e, _)| e)
-        };
-        let Some(entity) = target else { continue };
-        if let Some(mut tf) = world.entity_mut(entity).get_mut::<Transform>() {
-            tf.translation = v;
-        }
-    }
-}
-
 /// The live entity projecting `path` in the scene scoped to `stage_handle_id`,
 /// if one exists.
 fn find_live_entity(

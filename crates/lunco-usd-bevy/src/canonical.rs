@@ -130,6 +130,68 @@ impl CanonicalStage {
         &self.stage
     }
 
+    /// Author `xformOp:translate = value` onto the composed prim at `path` (root
+    /// edit target) — this fires the change sink, so the projection bridge
+    /// ([`project_stage_changes`](crate::project_stage_changes) via
+    /// `lunco-usd`) reconciles the move in place. Synthesizes `xformOpOrder` only
+    /// when the prim composes none, so an existing xform stack is never
+    /// clobbered.
+    ///
+    /// The `CanonicalStage` is the live **projection** (rebuilt from the recipe on
+    /// a structural reload), so authoring here updates the live view + drives the
+    /// sink WITHOUT touching the document's save data (`UsdDocument.base`, which
+    /// stays the durable/serialized truth).
+    pub fn author_translate(&self, path: &SdfPath, value: [f64; 3]) -> anyhow::Result<()> {
+        use anyhow::anyhow;
+        self.stage
+            .create_attribute(format!("{}.xformOp:translate", path.as_str()), "double3")
+            .map_err(|e| anyhow!("author translate at {path}: {e}"))?
+            .set(value)
+            .map_err(|e| anyhow!("set translate at {path}: {e}"))?;
+        let has_order = self
+            .stage
+            .prim(path.clone())
+            .attribute("xformOpOrder")
+            .get::<openusd::sdf::Value>()
+            .ok()
+            .flatten()
+            .is_some();
+        if !has_order {
+            let order = crate::author::parse_attribute_value("token[]", "[\"xformOp:translate\"]")
+                .map_err(|e| anyhow!("xformOpOrder value: {e}"))?;
+            self.stage
+                .create_attribute(format!("{}.xformOpOrder", path.as_str()), "token[]")
+                .map_err(|e| anyhow!("author xformOpOrder at {path}: {e}"))?
+                .set(order)
+                .map_err(|e| anyhow!("set xformOpOrder at {path}: {e}"))?;
+        }
+        Ok(())
+    }
+
+    /// Define a prim of `type_name` at `path` (root edit target) — fires the sink
+    /// so the projection bridge spawns it. For a referenced spawn, follow with
+    /// [`author_reference`](Self::author_reference).
+    pub fn author_prim(&self, path: &SdfPath, type_name: Option<&str>) -> anyhow::Result<()> {
+        use anyhow::anyhow;
+        let prim = self
+            .stage
+            .define_prim(path.clone())
+            .map_err(|e| anyhow!("define_prim {path}: {e}"))?;
+        if let Some(t) = type_name {
+            prim.set_type_name(t).map_err(|e| anyhow!("set_type_name {path}: {e}"))?;
+        }
+        Ok(())
+    }
+
+    /// Remove the prim at `path` from the root edit target — fires the sink so the
+    /// projection bridge despawns its subtree.
+    pub fn remove_prim_at(&self, path: &SdfPath) -> anyhow::Result<bool> {
+        use anyhow::anyhow;
+        self.stage
+            .remove_prim(path.clone())
+            .map_err(|e| anyhow!("remove_prim {path}: {e}"))
+    }
+
     /// Drain and clear the change inbox, bumping `generation` if anything landed.
     pub fn drain_changes(&mut self) -> Vec<RawStageChange> {
         let drained = self
@@ -433,5 +495,58 @@ mod resolved_asset_tests {
             live.as_deref().is_some_and(|u| u.ends_with("model.glb")),
             "live stage must synthesize the glb URI on the composed prim, got {live:?}"
         );
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod authoring_tests {
+    //! Keystone (write half): authoring op-deltas onto the live `CanonicalStage`
+    //! fires the change sink, so the projection bridge reconciles the edit — the
+    //! "author onto the stage → sink → project" loop, headless.
+
+    use super::*;
+    use crate::UsdRead;
+
+    const SCENE: &str =
+        "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n    def Xform \"Rover\"\n    {\n    }\n}\n";
+
+    fn touches(changes: &[RawStageChange], path: &str) -> bool {
+        changes.iter().any(|c| {
+            c.info_only.iter().chain(c.resynced.iter()).any(|p| p.to_string() == path)
+        })
+    }
+
+    #[test]
+    fn authoring_translate_prim_remove_fires_sink() {
+        let recipe = StageRecipe::from_source("scene.usda", SCENE);
+        let mut cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
+        let _ = cs.drain_changes(); // clear any initial notices
+
+        // MOVE: author a translate → sink reports the prim; it composes live.
+        let rover = SdfPath::new("/World/Rover").unwrap();
+        cs.author_translate(&rover, [1.0, 2.0, 3.0]).expect("author translate");
+        assert!(touches(&cs.drain_changes(), "/World/Rover"), "translate fires the sink");
+        assert_eq!(
+            crate::read_vec3_f64(&cs.view(), &rover, "xformOp:translate"),
+            Some([1.0, 2.0, 3.0]),
+            "the authored translate composes on the live stage"
+        );
+
+        // SPAWN (plain): define a prim → resync; it's live.
+        let r2 = SdfPath::new("/World/Rover2").unwrap();
+        cs.author_prim(&r2, Some("Xform")).expect("author prim");
+        assert!(
+            cs.drain_changes().iter().any(|c| c.resynced.iter().any(|p| p.to_string() == "/World/Rover2")),
+            "defining a prim fires a resync"
+        );
+        assert!(cs.view().has_prim(&r2), "the defined prim is live on the stage");
+
+        // REMOVE: drop it → resync; it's gone.
+        assert!(cs.remove_prim_at(&r2).expect("remove prim"));
+        assert!(
+            cs.drain_changes().iter().any(|c| c.resynced.iter().any(|p| p.to_string() == "/World/Rover2")),
+            "removing a prim fires a resync"
+        );
+        assert!(!cs.view().has_prim(&r2), "the removed prim is gone from the stage");
     }
 }
