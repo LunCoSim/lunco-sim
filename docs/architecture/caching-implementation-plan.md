@@ -140,7 +140,26 @@ zero `resolve_bound_shader` 2-hop traversal, zero topology scans. Schedule:
   2-hop traversal + 3 field lookups eliminated. Scales with animated-entity
   count × framerate. **Risk:** low (must invalidate on stage reload). **Size:** M.
 
-### 0.3b Fold avian port resolution into `CompiledWiring` — RISK RE-ASSESSED, DEFERRED
+### 0.3b Fold avian port resolution into `CompiledWiring` — ✅ SHIPPED as Substrate D
+> **Status update (verified against code 2026-07-03).** This item was deferred
+> below on 2026-07-02, then **built** as the ports resolve→handle substrate. The
+> deferral analysis is kept for history, but the verdict was reversed: the safe
+> form (a `lunco-core` resolve-API + handle cache in `CompiledWiring`) was
+> implemented and landed. See `ports-system-design.md` for the design.
+> **In code today:** `find_avian_port` is **removed**; `ResolvedPort { backend,
+> slot }` exists (`lunco-core/src/ports.rs:180`); `PortBackend` exposes
+> `resolve_output`/`resolve_input`/`read_slot`/`write_slot` (fn-pointer fields,
+> `:155-165`); the avian backend wires all four (`lunco-cosim/src/ports.rs:218-226`)
+> and its name-based ops are now *derived* from resolve→slot (no duplicated scan).
+> `CompiledWiring::rebuild` resolves each endpoint once
+> (`propagate.rs:100-110`, storing `Option<ResolvedPort>`); per-tick propagation
+> exchanges by handle via `read_resolved`/`write_resolved` with a name-path
+> fallback for non-fast-path backends / stale handles (`propagate.rs:177-195`).
+> Invalidation rides `RebuildOnChange` on the `SimConnection` set; a component
+> swap without a wiring change is covered by the per-tick fallback.
+
+<details><summary>Original deferral analysis (2026-07-02, superseded)</summary>
+
 - **File:** `crates/lunco-cosim/src/ports.rs:109` `find_avian_port` — per wire
   endpoint per tick, up to 6 component-presence checks + ~30 `name ==` compares.
 - **Closer read changes the picture** (2026-07-02):
@@ -167,6 +186,8 @@ zero `resolve_bound_shader` 2-hop traversal, zero topology scans. Schedule:
   sweep itself called "modest at today's wire counts." **Deferred** until wire/
   port counts grow enough to justify it; the name-based path (0.3) is correct and
   simple. Revisit as a dedicated, fully-invalidated change, not a Phase-0 quick win.
+
+</details>
 
 ### Tracked / low-priority (not new work here)
 - **CQ-217** (`lunco-scripting/src/lib.rs:224-236`): Python source re-parsed +
