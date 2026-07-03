@@ -1076,6 +1076,24 @@ fn setup_sandbox(world: &mut World) {
         ChildOf(grid),
     ));
 
+    // ── Boot-entry policy (GUI only) ─────────────────────────────────────────
+    // Before loading the default scene, consult the shared boot policy
+    // (`boot.rhai`, via `lunco_tutorial::consult_boot`). On a first interactive
+    // run it TAKES OVER — onboards with a tutorial that `load_scene`s its own
+    // environment — so we skip the default load and there's no load-then-replace
+    // race. Explicit `--scene` / `--api` → the policy stands down and we load
+    // normally. Headless (no `ui`, no tutorial engine) never onboards → loads.
+    // The world shell (grid + Sun) above is set up regardless, so a taking-over
+    // tutorial scene still has it.
+    #[cfg(feature = "ui")]
+    {
+        let has_scene_arg = std::env::args().any(|a| a == "--scene");
+        let automated = std::env::args().any(|a| a == "--api" || a == "--no-ui");
+        if lunco_tutorial::consult_boot(world, has_scene_arg, automated) {
+            return;
+        }
+    }
+
     // --- Load scene from USD ---
     // Resolve the absolute path to find the enclosing Twin folder.
     let pb = std::path::PathBuf::from(&scene_path);

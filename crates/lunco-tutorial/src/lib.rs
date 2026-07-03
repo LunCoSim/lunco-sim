@@ -1,63 +1,72 @@
-//! Data-driven, Rhai-scripted tutorial system.
+//! The unified tutorial launcher — for **every** workbench app (lunica, sandbox, …).
 //!
-//! A **tutorial is data**: a USD scene (`*.usda`) that sets up the environment
-//! and, via `lunco:scriptPath`, attaches a `*.rhai` orchestrator. The orchestrator
-//! uses the ordinary scripting substrate — the task sequencer, the declarative
-//! `mission(me)` objectives, `wait_for`/`requires_event` on the TelemetryEvent
-//! bus (including `cmd:*` UI actions), and the persistent HUD (`hint`,
-//! `objectives_hud`, `spotlight`) — so tutorial *logic* needs no Rust.
+//! ## One source: a tutorial is a `.rhai` scenario
 //!
-//! This crate adds only the surrounding shell:
-//! - [`TutorialRegistry`] — the catalog of available tutorials.
-//! - [`TutorialsPanel`] — a dockable launcher listing them with progress.
-//! - [`StartTutorial`] / [`SkipTutorial`] — load a tutorial's scene / clear the HUD.
-//! - [`TutorialProgress`] — persisted completed-set, updated on `MISSION_COMPLETE`.
-//! - [`SetSubsystemEnabled`] — the progressive-fidelity toggle (flips
-//!   [`SubsystemToggles`](lunco_core::subsystems::SubsystemToggles)).
+//! There is no scene-vs-script duality. A tutorial is a single rhai scenario
+//! (`assets/tutorials/<script>`), and the launcher runs it by attaching it to a
+//! persistent **host entity** via [`RunScenario`](lunco_scripting::commands::RunScenario).
+//! Whatever environment the lesson needs, it sets up *itself* in `on_start`:
+//! `load_scene("scenes/…")` for a 3D lesson, `cmd("OpenClass", …)` for a modeling
+//! lesson, `set_subsystem(…)` for progressive fidelity, nothing for a pure UI
+//! tour. The coach card, spotlight, and objectives all come from the shared HUD
+//! (`lunco-workbench::tutorial_overlay`) + the rhai prelude.
 //!
-//! It is UI-gated and holds no simulation state — headless CI/CD engineering
-//! runs pay nothing (spec 011, "Architectural Separation").
+//! So this crate is the thin **shell** shared by all apps:
+//! - [`TutorialRegistry`] — the catalog; apps register their own tutorials via
+//!   [`TutorialAppExt::register_tutorial`] after adding [`TutorialPlugin`].
+//! - a top-level **🎓 Tutorials** menu + a dockable [`TutorialsPanel`].
+//! - [`StartTutorial`] — load `<script>` and run it on the host (the single
+//!   launch path; menu, F1, HTTP API, MCP, and other scripts all funnel here).
+//! - first-run onboarding ([`TutorialProgress::onboarded`]), completion ticks
+//!   (on `MISSION_COMPLETE`), a data-driven chain ([`TutorialMeta::next`]), F1
+//!   (via [`EditorIntent::ShowTutorial`](lunco_doc_bevy::EditorIntent)), and the
+//!   progressive-fidelity toggle ([`SetSubsystemEnabled`]).
+//!
+//! UI-gated and holds no simulation state — headless CI/CD pays nothing.
 
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiPrimaryContextPass};
+use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use lunco_core::subsystems::{SubsystemToggles, SUBSYSTEMS};
-use lunco_core::{on_command, register_commands, Command, NextScene, Severity, TelemetryEvent, TelemetryValue};
+use lunco_core::{on_command, register_commands, Command, Severity, TelemetryEvent, TelemetryValue};
+use lunco_doc_bevy::EditorIntent;
+use lunco_settings::AppSettingsExt;
 use lunco_workbench::tutorial_overlay::TutorialHud;
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt};
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt, WorkbenchLayout};
 use serde::{Deserialize, Serialize};
 
-/// One tutorial's catalog entry. The heavy content (scene + script) is on disk;
-/// this is just what the launcher needs to list and start it.
-#[derive(Clone, Debug)]
+/// One tutorial's catalog entry. The lesson itself is the `.rhai` at `script`;
+/// this is what the menu/panel needs to list + launch it.
+#[derive(Clone, Copy, Debug)]
 pub struct TutorialMeta {
-    /// Stable id (kebab-case). Progress and `StartTutorial` key off this.
+    /// Stable id (kebab-case). Progress, chaining, and [`StartTutorial`] key off this.
     pub id: &'static str,
     /// Display title.
     pub title: &'static str,
-    /// One-line description shown under the title.
+    /// One-line description shown under the title / on hover.
     pub blurb: &'static str,
-    /// Which app it targets — `"sandbox"`, `"lunica"`, or `"any"`. The launcher
-    /// may filter on this; today it lists all.
+    /// Which app it targets — `"sandbox"`, `"lunica"`, or `"any"` (informational;
+    /// each app registers only its own tutorials).
     pub app: &'static str,
     /// Difficulty tag (`"beginner"` / `"intermediate"` / …) shown as a chip.
     pub difficulty: &'static str,
-    /// Asset-relative path to the tutorial's USD scene, loaded by [`StartTutorial`].
-    /// The chain to the NEXT tutorial is NOT here — it lives in the scene's USD
-    /// (`lunco:nextScene`), so each tutorial declares its own successor as data.
-    pub scene: &'static str,
+    /// The orchestrator's path **relative to `assets/tutorials/`** (e.g.
+    /// `"lunica/overview.rhai"`, `"first_drive/first_drive.rhai"`). Loaded at
+    /// launch by [`lunco_assets::tutorials::tutorial_source`] — disk on native
+    /// (live-editable), embedded on wasm.
+    pub script: &'static str,
     /// Auto-launch this tutorial once on the user's first run (persisted via
-    /// [`TutorialProgress::onboarded`]). At most one built-in should set it —
-    /// the first-run onboarding entry point.
+    /// [`TutorialProgress::onboarded`]). At most one registered tutorial should
+    /// set it — the onboarding entry point.
     pub first_start: bool,
+    /// The id of the tutorial to chain to when this one completes
+    /// (`MISSION_COMPLETE`). Data, not code — replaces the old USD `nextScene`.
+    /// `None` = the chain ends here.
+    pub next: Option<&'static str>,
 }
 
-/// The catalog of registered tutorials. Populated in [`TutorialPlugin::build`]
-/// with the built-ins; extend at app-build time with [`register_tutorial`](Self::register_tutorial).
-///
-/// Tutorials are registered in code (not filesystem-scanned) so the catalog is
-/// identical on native, packaged, and wasm builds — the *content* still lives in
-/// data files; only the one-line catalog entry is code. A native `meta.toml`
-/// scan can augment this later without changing the panel or commands.
+/// The catalog of registered tutorials. Empty until an app registers its own via
+/// [`TutorialAppExt::register_tutorial`] — this crate ships no built-ins so the
+/// same engine serves every app with only that app's lessons in its registry.
 #[derive(Resource, Default, Clone)]
 pub struct TutorialRegistry {
     pub tutorials: Vec<TutorialMeta>,
@@ -71,30 +80,37 @@ impl TutorialRegistry {
         }
     }
 
-    fn get(&self, id: &str) -> Option<&TutorialMeta> {
-        self.tutorials.iter().find(|t| t.id == id)
+    fn get(&self, id: &str) -> Option<TutorialMeta> {
+        self.tutorials.iter().find(|t| t.id == id).copied()
     }
 }
 
-/// Persisted tutorial progress. Stored under the `"tutorial_progress"` key of
-/// `settings.json`.
+/// Register a tutorial at app-build time. Add [`TutorialPlugin`] first (it inits
+/// the registry), then call this for each lesson.
+pub trait TutorialAppExt {
+    fn register_tutorial(&mut self, meta: TutorialMeta) -> &mut Self;
+}
+
+impl TutorialAppExt for App {
+    fn register_tutorial(&mut self, meta: TutorialMeta) -> &mut Self {
+        self.world_mut()
+            .resource_mut::<TutorialRegistry>()
+            .register_tutorial(meta);
+        self
+    }
+}
+
+/// Persisted tutorial progress, under the `"tutorial_progress"` key of `settings.json`.
 #[derive(Resource, Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
 pub struct TutorialProgress {
     /// Ids of tutorials whose mission reported `MISSION_COMPLETE`.
     pub completed: Vec<String>,
     /// The tutorial currently running (set by [`StartTutorial`], cleared on
-    /// completion/skip) — so a `MISSION_COMPLETE` event is attributed correctly.
+    /// completion/skip) — so a `MISSION_COMPLETE` is attributed correctly.
     pub current: Option<String>,
-    /// First-run onboarding has been offered. Set once the `first_start`
-    /// tutorial auto-launches, so it never re-fires on later launches.
-    /// `#[serde(default)]` keeps older `settings.json` (no field) loading.
-    #[serde(default)]
-    pub onboarded: bool,
-    /// When `true`, a finished scenario chains straight to its `lunco:nextScene`
-    /// successor with no prompt (the old behaviour). When `false` (the default),
-    /// completion instead raises the [`PendingAdvance`] confirm popup so the user
-    /// decides whether to move on — no more silent "reboot" into the next scene.
-    /// Toggled from the popup's checkbox / the Tutorials panel; persisted.
+    /// When `true`, a finished tutorial chains straight to its [`TutorialMeta::next`]
+    /// with no prompt; when `false` (default), completion raises the [`PendingAdvance`]
+    /// confirm popup. Toggled from the popup / panel; persisted.
     #[serde(default)]
     pub autoproceed: bool,
 }
@@ -109,32 +125,51 @@ impl lunco_settings::SettingsSection for TutorialProgress {
     const KEY: &'static str = "tutorial_progress";
 }
 
-/// A completed scenario is waiting on the user's confirmation before loading its
-/// declared successor. `Some(path)` while the [`draw_advance_prompt`] popup is
-/// showing; cleared when the user chooses Continue or Stay. Empty (the default)
-/// means no prompt is pending. Not persisted — it is transient per-completion.
+/// Persisted "first-run onboarding done" flag — read by the boot policy
+/// (`boot.rhai`) via the scripting settings verbs, and by [`consult_boot`].
+/// Reflect-registered (key `tour_seen`, preserved from the pre-rhai tour) so the
+/// rhai side can reach it. The *decision* to onboard lives in the hook; Rust only
+/// stores the flag.
+#[derive(Resource, Reflect, Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
+#[reflect(Resource)]
+pub struct TutorialSeen {
+    /// Whether first-run onboarding has already happened.
+    pub onboarded: bool,
+}
+
+impl lunco_settings::SettingsSection for TutorialSeen {
+    const KEY: &'static str = "tour_seen";
+}
+
+/// The persistent entity every tutorial scenario attaches to. Spawned lazily on
+/// the first launch; re-launching hot-reloads the scenario on it.
+#[derive(Resource, Default)]
+struct TutorialHost(Option<Entity>);
+
+/// A completed tutorial is waiting on the user's confirmation before starting its
+/// declared successor. `Some(id)` while the [`draw_advance_prompt`] popup shows;
+/// cleared on Continue/Stay. Not persisted — transient per-completion.
 #[derive(Resource, Default, Clone)]
 pub struct PendingAdvance(pub Option<String>);
 
 // ── Commands ────────────────────────────────────────────────────────────────
 
-/// Start a tutorial by id: load its scene (which auto-attaches the orchestrator
-/// script) and record it as current. Rhai/API: `cmd("StartTutorial", #{ id })`.
+/// Start a tutorial by id: load its `.rhai` and run it on the host entity, and
+/// record it as current. The single launch path — menu, F1, HTTP API, MCP, and
+/// other scripts (`cmd("StartTutorial", #{ id })`) all route here.
 #[Command(default)]
 pub struct StartTutorial {
     /// The [`TutorialMeta::id`] to start.
     pub id: String,
 }
 
-/// Stop the current tutorial: clear the HUD (hint, objectives, spotlight) and
-/// forget the current id. Does not unload the scene. Rhai/API: `cmd("SkipTutorial")`.
+/// Stop the current tutorial: clear the HUD (hint, objectives, spotlight, coach
+/// card) and forget the current id. Leaves any loaded scene. `cmd("SkipTutorial")`.
 #[Command(default)]
 pub struct SkipTutorial {}
 
 /// Enable/disable a simulation subsystem at runtime (progressive fidelity).
-/// `name` must be in [`SUBSYSTEMS`]; unknown names are rejected. Flips
-/// [`SubsystemToggles`] and lands `subsystem:<name>` on the event bus. Rhai:
-/// `set_subsystem(name, on)`.
+/// `name` must be in [`SUBSYSTEMS`]. Rhai: `set_subsystem(name, on)`.
 #[Command(default)]
 pub struct SetSubsystemEnabled {
     /// Subsystem key from the [`SUBSYSTEMS`] allow-list.
@@ -143,28 +178,41 @@ pub struct SetSubsystemEnabled {
     pub on: bool,
 }
 
+/// Spawn (once) and return the host entity that tutorial scenarios attach to.
+fn ensure_host(world: &mut World) -> Entity {
+    if let Some(e) = world.resource::<TutorialHost>().0 {
+        return e;
+    }
+    let e = world.spawn(Name::new("TutorialHost")).id();
+    world.resource_mut::<TutorialHost>().0 = Some(e);
+    e
+}
+
 #[on_command(StartTutorial)]
-fn on_start_tutorial(
-    trigger: On<StartTutorial>,
-    registry: Res<TutorialRegistry>,
-    mut progress: ResMut<TutorialProgress>,
-    mut commands: Commands,
-) {
+fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
     let id = trigger.event().id.clone();
-    let Some(meta) = registry.get(&id) else {
-        warn!("[tutorial] StartTutorial: unknown id '{id}'");
-        return;
-    };
-    info!("[tutorial] starting '{}' → {}", meta.title, meta.scene);
-    // Dispatch LoadScene generically through the API bus so this crate needs no
-    // dependency on whichever crate owns the scene-load command. The scene's
-    // `lunco:scriptPath` orchestrator drives the HUD from there.
-    commands.trigger(lunco_api::ApiCommandEvent {
-        command: "LoadScene".to_string(),
-        params: serde_json::json!({ "path": meta.scene }),
-        id: 0,
+    // `ensure_host` + `RunScenario` need `&mut World`; an observer only has
+    // `Commands`, so defer to an exclusive closure.
+    commands.queue(move |world: &mut World| {
+        let Some(meta) = world.resource::<TutorialRegistry>().get(&id) else {
+            warn!("[tutorial] StartTutorial: unknown id '{id}'");
+            return;
+        };
+        // Native reads the `.rhai` fresh from disk each launch (edit-and-replay);
+        // wasm serves the embedded copy — the asset crate owns that policy.
+        let Some(source) = lunco_assets::tutorials::tutorial_source(meta.script) else {
+            warn!("[tutorial] no source for '{id}' ({})", meta.script);
+            return;
+        };
+        let host = ensure_host(world);
+        info!("[tutorial] starting '{}' → {}", meta.title, meta.script);
+        world.trigger(lunco_scripting::commands::RunScenario {
+            target: host,
+            source,
+            params: String::new(),
+        });
+        world.resource_mut::<TutorialProgress>().current = Some(id);
     });
-    progress.current = Some(id);
 }
 
 #[on_command(SkipTutorial)]
@@ -172,6 +220,7 @@ fn on_skip_tutorial(_t: On<SkipTutorial>, mut hud: ResMut<TutorialHud>, mut prog
     hud.hint.clear();
     hud.objectives.clear();
     hud.spotlight = None;
+    hud.tour = None;
     progress.current = None;
 }
 
@@ -199,16 +248,12 @@ fn on_set_subsystem_enabled(
 
 register_commands!(on_start_tutorial, on_skip_tutorial, on_set_subsystem_enabled,);
 
-/// On `MISSION_COMPLETE`, record the completion and auto-advance the chain by
-/// loading the scene named in USD (`lunco:nextScene` → [`NextScene`]) — the
-/// scenario manager. The chain lives entirely in DATA: each tutorial's scene
-/// declares its own successor, so there is NO per-tutorial Rust and no central
-/// campaign object. Works regardless of how the current scene was launched
-/// (`--scene`, the panel, or a prior chain step), since it reads the loaded
-/// world, not `TutorialProgress`.
+/// On `MISSION_COMPLETE`, record the completion and advance the chain by starting
+/// the current tutorial's [`TutorialMeta::next`] — the chain lives entirely in
+/// DATA (each tutorial names its successor's id), so there is no per-tutorial Rust.
 fn on_mission_complete(
     trigger: On<TelemetryEvent>,
-    q_next: Query<&NextScene>,
+    registry: Res<TutorialRegistry>,
     mut progress: ResMut<TutorialProgress>,
     mut pending: ResMut<PendingAdvance>,
     mut commands: Commands,
@@ -216,61 +261,37 @@ fn on_mission_complete(
     if trigger.event().name != "MISSION_COMPLETE" {
         return;
     }
-    // Mark the current tutorial complete (for the launcher's ✓), if one is tracked.
-    if let Some(id) = progress.current.take() {
-        if !progress.is_completed(&id) {
-            info!("[tutorial] completed '{id}'");
-            progress.completed.push(id);
-        }
+    // Attribute the completion to whatever tutorial is running.
+    let Some(id) = progress.current.take() else {
+        return;
+    };
+    if !progress.is_completed(&id) {
+        info!("[tutorial] completed '{id}'");
+        progress.completed.push(id.clone());
     }
-    // Successor scene declared in USD, if any. No successor → the chain simply
-    // ends here (nothing loads).
-    let Some(next) = q_next.iter().map(|n| n.0.clone()).find(|s| !s.is_empty()) else {
+    // Successor by id (data chain). None → the chain ends here.
+    let Some(next) = registry.get(&id).and_then(|m| m.next) else {
         return;
     };
     if progress.autoproceed {
-        // Opt-in: chain straight through with no prompt (the old behaviour).
-        info!("[tutorial] auto-advancing → scene '{next}'");
-        commands.trigger(lunco_api::ApiCommandEvent {
-            command: "ShowNotification".to_string(),
-            params: serde_json::json!({ "text": "Loading next scene…", "kind": "success" }),
-            id: 0,
-        });
-        commands.trigger(lunco_api::ApiCommandEvent {
-            command: "LoadScene".to_string(),
-            params: serde_json::json!({ "path": next }),
-            id: 0,
-        });
+        info!("[tutorial] auto-advancing → '{next}'");
+        commands.trigger(StartTutorial { id: next.to_string() });
     } else {
-        // Default: ask first. The popup ([`draw_advance_prompt`]) decides.
-        info!("[tutorial] scenario complete — awaiting confirm to advance → '{next}'");
-        pending.0 = Some(next);
+        info!("[tutorial] complete — awaiting confirm to advance → '{next}'");
+        pending.0 = Some(next.to_string());
     }
 }
 
-/// A tidy display name for a scene asset path (`tutorials/first_drive/first_drive.usda`
-/// → `First Drive`): prefer a registered tutorial's title, else the file stem.
-fn pretty_scene(registry: &TutorialRegistry, scene: &str) -> String {
-    if let Some(t) = registry.tutorials.iter().find(|t| t.scene == scene) {
-        return t.title.to_string();
-    }
-    let stem = scene.rsplit('/').next().unwrap_or(scene).trim_end_matches(".usda");
-    stem.split(['_', '-'])
-        .filter(|w| !w.is_empty())
-        .map(|w| {
-            let mut c = w.chars();
-            c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+/// A tidy display name for a tutorial id: prefer its registered title, else the id.
+fn pretty_tutorial(registry: &TutorialRegistry, id: &str) -> String {
+    registry.get(id).map(|m| m.title.to_string()).unwrap_or_else(|| id.to_string())
 }
 
-/// Modal confirm popup shown when a scenario finishes and a successor is queued
-/// (unless [`TutorialProgress::autoproceed`] is set). Continue loads the next
-/// scene; Stay dismisses. The checkbox flips `autoproceed` so future completions
-/// skip the prompt.
+/// Modal confirm popup shown when a tutorial finishes and a successor is queued
+/// (unless [`TutorialProgress::autoproceed`]). Continue starts the next tutorial;
+/// Stay dismisses. The checkbox flips `autoproceed`.
 fn draw_advance_prompt(
-    mut egui_ctx: bevy_egui::EguiContexts,
+    mut egui_ctx: EguiContexts,
     mut pending: ResMut<PendingAdvance>,
     mut progress: ResMut<TutorialProgress>,
     registry: Res<TutorialRegistry>,
@@ -282,15 +303,12 @@ fn draw_advance_prompt(
     let Ok(ctx) = egui_ctx.ctx_mut() else {
         return;
     };
-    let next_title = pretty_scene(&registry, &next);
+    let next_title = pretty_tutorial(&registry, &next);
 
     let mut proceed = false;
     let mut dismiss = false;
-    let screen = ctx.screen_rect();
-    // Render the scrim + panel at `Order::Tooltip`, which paints ABOVE
-    // `Order::Foreground` — where the rover name-tags (and every other overlay)
-    // live. `egui::Modal` only reaches Foreground, so it *ties* with the name-tag
-    // and loses; hand-rolling the layer guarantees the prompt is on top of ALL UI.
+    let screen = ctx.content_rect();
+    // Render at `Order::Tooltip` so the prompt paints above every overlay.
     egui::Area::new(egui::Id::new("tutorial_advance_scrim"))
         .order(egui::Order::Tooltip)
         .fixed_pos(screen.min)
@@ -298,7 +316,6 @@ fn draw_advance_prompt(
         .show(ctx, |ui| {
             ui.painter()
                 .rect_filled(screen, 0.0, egui::Color32::from_black_alpha(160));
-            // Swallow clicks aimed at the scene/overlays behind the prompt.
             ui.allocate_rect(screen, egui::Sense::click());
         });
     egui::Area::new(egui::Id::new("tutorial_advance_prompt"))
@@ -307,14 +324,14 @@ fn draw_advance_prompt(
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.set_max_width(360.0);
-                ui.heading("🎓 Scenario complete");
+                ui.heading("🎓 Tutorial complete");
                 ui.separator();
                 ui.label(format!("Continue to “{next_title}”?"));
                 ui.add_space(6.0);
                 let mut auto = progress.autoproceed;
                 if ui
                     .checkbox(&mut auto, "Continue automatically from now on")
-                    .on_hover_text("Skip this prompt and chain straight to the next scenario.")
+                    .on_hover_text("Skip this prompt and chain straight to the next tutorial.")
                     .changed()
                 {
                     progress.autoproceed = auto;
@@ -330,80 +347,193 @@ fn draw_advance_prompt(
                 });
             });
         });
-    // Esc keeps the user in the current scene.
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         dismiss = true;
     }
 
     if proceed {
-        commands.trigger(lunco_api::ApiCommandEvent {
-            command: "LoadScene".to_string(),
-            params: serde_json::json!({ "path": next }),
-            id: 0,
-        });
+        commands.trigger(StartTutorial { id: next });
         pending.0 = None;
     } else if dismiss {
         pending.0 = None;
     }
 }
 
-/// Auto-launch the first-run onboarding tutorial once. Fires ~1 s after start
-/// (so the default scene has settled before we swap to the tutorial scene) and
-/// only for a genuine interactive first run: skipped when `--scene` or `--api`
-/// is on the command line (automated / explicit-scene sessions), and naturally
-/// absent headless (the plugin is UI-gated). Gated by the persisted
-/// [`TutorialProgress::onboarded`] flag so it never re-fires.
-fn first_start_autolaunch(
-    mut ticks: Local<u32>,
+/// Keybinding → intent → command: `lunco-doc-bevy` maps `F1` to
+/// [`EditorIntent::ShowTutorial`]; this turns that intent into a [`StartTutorial`]
+/// for the app's onboarding (`first_start`) tutorial — or the first registered
+/// one if none is flagged.
+fn resolve_show_tutorial_intent(
+    trigger: On<EditorIntent>,
     registry: Res<TutorialRegistry>,
-    mut progress: ResMut<TutorialProgress>,
     mut commands: Commands,
 ) {
-    const DONE: u32 = u32::MAX;
-    const SETTLE_TICKS: u32 = 60; // ~1 s at 60 fps
-
-    if *ticks == DONE {
+    if !matches!(*trigger.event(), EditorIntent::ShowTutorial) {
         return;
     }
-    if progress.onboarded {
-        *ticks = DONE;
-        return;
-    }
-    *ticks += 1;
-    if *ticks < SETTLE_TICKS {
-        return;
-    }
-    *ticks = DONE; // act at most once per process
-
-    // Don't hijack automated or explicit-scene launches — those aren't
-    // first-run onboarding. Leaving `onboarded` false means a later plain
-    // launch still onboards.
-    if std::env::args().any(|a| a == "--scene" || a == "--api") {
-        return;
-    }
-
-    let Some(meta) = registry
+    let id = registry
         .tutorials
         .iter()
-        .find(|t| t.first_start && !progress.is_completed(t.id))
-    else {
-        // Nothing to onboard (already completed, or none flagged) — mark done
-        // so we stop checking on every future launch.
-        progress.onboarded = true;
-        return;
-    };
-    info!("[tutorial] first-run onboarding → {}", meta.title);
-    progress.onboarded = true;
-    commands.trigger(StartTutorial { id: meta.id.to_string() });
+        .find(|t| t.first_start)
+        .or_else(|| registry.tutorials.first())
+        .map(|t| t.id);
+    if let Some(id) = id {
+        commands.trigger(StartTutorial { id: id.to_string() });
+    }
 }
 
-// ── Launcher panel ────────────────────────────────────────────────────────
+/// A perspective help popup's "🎓 Show Tour" button publishes a
+/// [`HelpTourRequest`](lunco_workbench::HelpTourRequest). Consume it → start the
+/// app's onboarding (`first_start`) tutorial. Works for any app/perspective.
+fn consume_tour_request(
+    mut req: ResMut<lunco_workbench::HelpTourRequest>,
+    registry: Res<TutorialRegistry>,
+    mut commands: Commands,
+) {
+    if req.0.is_none() {
+        return;
+    }
+    let id = registry
+        .tutorials
+        .iter()
+        .find(|t| t.first_start)
+        .or_else(|| registry.tutorials.first())
+        .map(|t| t.id);
+    if let Some(id) = id {
+        req.0 = None;
+        commands.trigger(StartTutorial { id: id.to_string() });
+    }
+}
+
+/// Read argv for the boot ctx (rhai can't). Returns `(has_scene_arg, automated)`.
+fn boot_env() -> (bool, bool) {
+    let (mut has_scene, mut automated) = (false, false);
+    for a in std::env::args() {
+        match a.as_str() {
+            "--scene" => has_scene = true,
+            "--api" | "--no-ui" => automated = true,
+            _ => {}
+        }
+    }
+    (has_scene, automated)
+}
+
+/// [`HookValue`](lunco_hooks::HookValue) → `serde_json::Value`, for a boot
+/// directive's `params` (the command dispatcher expects JSON).
+fn hookvalue_to_json(v: &lunco_hooks::HookValue) -> serde_json::Value {
+    use lunco_hooks::HookValue as H;
+    use serde_json::Value as J;
+    match v {
+        H::Unit => J::Null,
+        H::Int(i) => J::from(*i),
+        H::Float(f) => serde_json::Number::from_f64(*f).map(J::Number).unwrap_or(J::Null),
+        H::Bool(b) => J::Bool(*b),
+        H::Str(s) => J::String(s.clone()),
+        H::Array(a) => J::Array(a.iter().map(hookvalue_to_json).collect()),
+        H::Map(m) => J::Object(m.iter().map(|(k, v)| (k.clone(), hookvalue_to_json(v))).collect()),
+    }
+}
+
+/// Consult the **boot-entry policy** ([`BOOT_HOOK`](lunco_core::session::BOOT_HOOK),
+/// authored in `boot.rhai`) and dispatch its `#{ command, params }` directive, if
+/// any. Returns `true` when the policy TOOK OVER (a command was dispatched) — the
+/// caller then skips its own default load; `false` = "load your default."
+///
+/// This is the single startup-decision seam: onboarding, "load the tutorial not
+/// the default scene," resume, deep-links — all live in the rhai policy, not here.
+/// Rust only marshals the context Rust alone can see (argv, first-run flag) and
+/// dispatches generically. Marks onboarding done on take-over, so a repeat consult
+/// (e.g. the shared [`boot_seam`] after a sandbox's own `consult_boot`) no-ops.
+pub fn consult_boot(world: &mut World, has_scene_arg: bool, automated: bool) -> bool {
+    use lunco_hooks::HookValue as H;
+    let onboarded = world.get_resource::<TutorialSeen>().map(|s| s.onboarded).unwrap_or(false);
+    let first_start_id = world
+        .get_resource::<TutorialRegistry>()
+        .and_then(|r| r.tutorials.iter().find(|t| t.first_start).map(|t| t.id.to_string()));
+    let mut ctx = vec![
+        ("onboarded".to_string(), H::Bool(onboarded)),
+        ("has_scene_arg".to_string(), H::Bool(has_scene_arg)),
+        ("automated".to_string(), H::Bool(automated)),
+    ];
+    if let Some(id) = &first_start_id {
+        ctx.push(("first_start_id".to_string(), H::Str(id.clone())));
+    }
+    let out = match lunco_hooks::invoke(lunco_core::session::BOOT_HOOK, &[H::Map(ctx)]) {
+        Some(Ok(v)) => v,
+        _ => return false, // no hook / policy fault → the app loads its default
+    };
+    let Some(command) = out.get("command").and_then(|c| c.as_str()) else {
+        return false; // policy returned () → "do nothing", app loads its default
+    };
+    let params = out
+        .get("params")
+        .map(hookvalue_to_json)
+        .unwrap_or(serde_json::Value::Object(Default::default()));
+    info!("[tutorial] boot policy → {command}");
+    world.trigger(lunco_api::ApiCommandEvent { command: command.to_string(), params, id: 0 });
+    if let Some(mut s) = world.get_resource_mut::<TutorialSeen>() {
+        s.onboarded = true;
+    }
+    true
+}
+
+/// Startup boot seam for apps with **no** Startup scene load of their own (e.g.
+/// lunica): once, on the first frame, consult the boot policy. Apps that DO load a
+/// scene at Startup (the sandbox) call [`consult_boot`] there instead and skip
+/// their default load on take-over; this then no-ops (onboarding already marked).
+fn boot_seam(world: &mut World, mut done: Local<bool>) {
+    if *done {
+        return;
+    }
+    *done = true;
+    let (has_scene, automated) = boot_env();
+    consult_boot(world, has_scene, automated);
+}
+
+// ── Menu + launcher panel ───────────────────────────────────────────────────
+
+/// Register the top-level **🎓 Tutorials** menu, listing the app's tutorials with
+/// a completion tick; clicking starts one. Shared by every workbench app.
+fn register_tutorials_menu(world: &mut World) {
+    let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() else {
+        return;
+    };
+    layout.register_custom_menu("🎓 Tutorials", |ui, world| {
+        let registry = world.get_resource::<TutorialRegistry>().cloned().unwrap_or_default();
+        let progress = world.get_resource::<TutorialProgress>().cloned().unwrap_or_default();
+        if registry.tutorials.is_empty() {
+            ui.label(egui::RichText::new("(no tutorials registered)").weak().italics());
+            return;
+        }
+        ui.label(egui::RichText::new("Interactive, scripted lessons").weak().small());
+        ui.separator();
+        for meta in &registry.tutorials {
+            let done = progress.is_completed(meta.id);
+            let glyph = if done { "✓" } else { "🎓" };
+            if ui
+                .button(format!("{glyph}  {}", meta.title))
+                .on_hover_text(meta.blurb)
+                .clicked()
+            {
+                world.trigger(StartTutorial { id: meta.id.to_string() });
+                ui.close();
+            }
+        }
+        ui.separator();
+        ui.add_enabled_ui(progress.current.is_some(), |ui| {
+            if ui.button("⏹ Stop tutorial").clicked() {
+                world.trigger(SkipTutorial {});
+                ui.close();
+            }
+        });
+    });
+}
 
 /// Panel id for the tutorials launcher.
 pub const TUTORIALS_PANEL_ID: PanelId = PanelId("tutorials");
 
 /// Dockable launcher: lists registered tutorials with a completion tick and a
-/// Start button; offers Stop while a tutorial is running.
+/// Start button; offers Stop while one is running.
 pub struct TutorialsPanel;
 
 impl Panel for TutorialsPanel {
@@ -425,11 +555,10 @@ impl Panel for TutorialsPanel {
         ui.heading("🎓 Tutorials");
         ui.label(egui::RichText::new("Interactive, scripted lessons.").weak().small());
 
-        // Chain preference: ask before each next scene, or roll straight through.
         let mut auto = progress.autoproceed;
         if ui
-            .checkbox(&mut auto, "Auto-continue to next scenario")
-            .on_hover_text("When off, a popup asks before loading each next scenario.")
+            .checkbox(&mut auto, "Auto-continue to next tutorial")
+            .on_hover_text("When off, a popup asks before starting each next tutorial.")
             .changed()
         {
             ctx.resource_scope::<TutorialProgress, ()>(|_ctx, p| p.autoproceed = auto);
@@ -442,7 +571,7 @@ impl Panel for TutorialsPanel {
         }
 
         if let Some(cur) = &progress.current {
-            let title = registry.get(cur).map(|m| m.title).unwrap_or(cur.as_str());
+            let title = registry.get(cur).map(|m| m.title.to_string()).unwrap_or_else(|| cur.clone());
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(format!("▶ Running: {title}")).color(egui::Color32::from_rgb(120, 200, 255)));
                 if ui.small_button("Stop").clicked() {
@@ -478,61 +607,27 @@ impl Panel for TutorialsPanel {
     }
 }
 
-/// The built-in tutorial catalog. Both point at real, shipped scenes; the
-/// scene's `lunco:scriptPath` supplies the lesson logic.
-fn builtin_tutorials() -> Vec<TutorialMeta> {
-    vec![
-        TutorialMeta {
-            id: "sandbox-intro",
-            title: "Sandbox Intro",
-            blurb: "A guided coach-mark tour of the workspace — viewport, browser, inspector, console. Advances with Back / Next / Skip. Chains into First Drive.",
-            app: "sandbox",
-            difficulty: "beginner",
-            scene: "tutorials/sandbox_intro/sandbox_intro.usda",
-            first_start: true,
-        },
-        TutorialMeta {
-            id: "first-drive",
-            title: "First Drive",
-            blurb: "Take control of a rover and drive it to a flag on the lunar surface. Teaches possession and driving — every step advances when you actually do it.",
-            app: "sandbox",
-            difficulty: "beginner",
-            scene: "tutorials/first_drive/first_drive.usda",
-            first_start: false,
-        },
-        TutorialMeta {
-            id: "lander-rover-mission",
-            title: "Lander & Rover Mission",
-            blurb: "Watch a powered descent land a rover, then drive the deployed rover through a waypoint course. A full multi-vehicle mission scene.",
-            app: "sandbox",
-            difficulty: "intermediate",
-            scene: "scenes/sandbox/lander_test.usda",
-            first_start: false,
-        },
-    ]
-}
-
-/// Adds the registry (seeded with built-ins), persisted progress, the three
-/// commands, the mission-complete observer, and the launcher panel. UI-gated:
-/// panel + commands are harmless headless (the panel just isn't drawn).
+/// Adds the registry, persisted progress, the commands, the mission-complete +
+/// F1 observers, onboarding, the confirm popup, the 🎓 menu, and the launcher
+/// panel. Apps register their tutorials with [`TutorialAppExt::register_tutorial`]
+/// after adding this. UI-gated: harmless headless (the panel/menu just aren't drawn).
 pub struct TutorialPlugin;
 
 impl Plugin for TutorialPlugin {
     fn build(&self, app: &mut App) {
-        use lunco_settings::AppSettingsExt;
-
-        let mut registry = TutorialRegistry::default();
-        for t in builtin_tutorials() {
-            registry.register_tutorial(t);
-        }
-        app.insert_resource(registry);
+        app.init_resource::<TutorialRegistry>();
+        app.init_resource::<TutorialHost>();
         app.init_resource::<PendingAdvance>();
         app.register_settings_section::<TutorialProgress>();
+        // `tour_seen` flag — reflect-registered so the boot policy (`boot.rhai`)
+        // reads it and `consult_boot` marshals it into the boot ctx.
+        app.register_type::<TutorialSeen>();
+        app.register_settings_section::<TutorialSeen>();
         register_all_commands(app);
         app.add_observer(on_mission_complete);
-        app.add_systems(Update, first_start_autolaunch);
-        // The confirm-advance popup draws in the egui pass (same schedule the
-        // workbench overlays use).
+        app.add_observer(resolve_show_tutorial_intent);
+        app.add_systems(Startup, register_tutorials_menu);
+        app.add_systems(Update, (boot_seam, consume_tour_request));
         app.add_systems(EguiPrimaryContextPass, draw_advance_prompt);
         app.register_panel(TutorialsPanel);
     }

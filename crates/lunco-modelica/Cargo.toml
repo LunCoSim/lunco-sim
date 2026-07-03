@@ -43,7 +43,7 @@ server = ["lunco-api", "lunco-api/transport-http"]
 # feature — `lunco-scripting` self-supplies the transport-free command core, so
 # `cmd()` works with no HTTP server. On `default` so the GUI ships with it; drop
 # it (`--no-default-features`) for a scripting-free compile-core build.
-scripting = ["dep:lunco-scripting"]
+scripting = ["dep:lunco-scripting", "dep:lunco-tutorial"]
 # Opt-in Tracy profiler hook. Off by default because tracy-client-sys needs a
 # C++ compile that breaks on wasm32 and on Windows MSVC 2019 (missing
 # `RelationProcessorDie` enumerant in pre-2004 Win10 SDKs). Enable with
@@ -196,6 +196,10 @@ lunco-api = { path = "../lunco-api", optional = true, default-features = false }
 # (the transport-free command core) — no HTTP transport, keeping scripting
 # independent of the API server.
 lunco-scripting = { path = "../lunco-scripting", optional = true }
+# The unified tutorial launcher (registry + 🎓 menu + panel + StartTutorial +
+# onboarding + F1). Lunica registers its lessons into it; the launcher runs each
+# as a rhai scenario. Optional behind `scripting` (it needs `RunScenario`).
+lunco-tutorial = { path = "../lunco-tutorial", optional = true }
 # PERF-CRITICAL: compile-time static max level for the `log` facade.
 #
 # Why: parol_runtime (rumoca's parser engine) calls `log::trace!` in its

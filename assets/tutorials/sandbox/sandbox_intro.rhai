@@ -28,6 +28,9 @@ fn show(s, i) {
 }
 
 fn on_start(me) {
+    // One source: the tutorial script loads its own light backdrop so the
+    // "Viewport" step has something to frame.
+    load_scene("tutorials/sandbox/sandbox_intro.usda");
     this.i = 0;
     show(steps(), 0);
 }

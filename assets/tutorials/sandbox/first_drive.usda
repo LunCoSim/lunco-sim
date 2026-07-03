@@ -72,13 +72,8 @@ def Xform "FirstDrive"
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    # The lesson orchestrator: a non-physical prim owning the tutorial mission.
-    def Scope "Scenario"
-    {
-        custom string lunco:scenario = "first-drive"
-        custom string lunco:scriptPath = "tutorials/first_drive/first_drive.rhai"
-        # Tutorial chain (data, not code): when this mission completes, the tutorial
-        # manager auto-loads this scene next. Each lesson names its own successor.
-        custom string lunco:nextScene = "scenes/sandbox/lander_test.usda"
-    }
+    # Environment only. The tutorial ORCHESTRATOR is the standalone
+    # `first_drive.rhai` (run by the launcher on a host entity); it `load_scene`s
+    # this file in `on_start`. No embedded `lunco:scriptPath` — a tutorial is one
+    # source (the .rhai), and the chain lives in the launcher registry, not USD.
 }

@@ -58,11 +58,7 @@ def Xform "SandboxIntro"
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    def Scope "Scenario"
-    {
-        custom string lunco:scenario = "sandbox-intro"
-        custom string lunco:scriptPath = "tutorials/sandbox_intro/tour.rhai"
-        # On finishing the tour, chain to the First Drive lesson.
-        custom string lunco:nextScene = "tutorials/first_drive/first_drive.usda"
-    }
+    # Environment only — the orchestrator is the standalone `tour.rhai` (run on a
+    # host entity), which `load_scene`s this backdrop in `on_start`. The chain
+    # (→ First Drive) lives in the launcher registry (`next`), not in USD.
 }

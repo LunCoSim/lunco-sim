@@ -91,10 +91,28 @@ pub mod text_node;
 pub mod wasm_autosave;
 pub mod wasm_clipboard;
 pub mod welcome_progress;
-pub mod help_overlay;
 /// Debounced AST reparse driver — see module docs.
 pub mod input_activity;
 pub mod wire_router;
+
+/// Lunica's tutorial catalog, registered into the shared `lunco-tutorial` engine.
+/// Each entry names the rhai orchestrator under `assets/tutorials/lunica/`; the
+/// launcher loads it (disk on native, embedded on wasm) and runs it on a host.
+/// Ids are `lunica-*` so they don't collide with other apps in the shared
+/// `tutorial_progress` settings. Overview is the first-run onboarding entry.
+#[cfg(feature = "scripting")]
+fn lunica_tutorials() -> [lunco_tutorial::TutorialMeta; 7] {
+    use lunco_tutorial::TutorialMeta as T;
+    [
+        T { id: "lunica-overview", title: "Lunica Overview", blurb: "A 90-second guided tour of the whole workbench — start here.", app: "lunica", difficulty: "beginner", script: "lunica/overview.rhai", first_start: true, next: None },
+        T { id: "lunica-workspace", title: "1 · Your Workspace", blurb: "Twins, the browser, read-only libraries, and learning paths.", app: "lunica", difficulty: "beginner", script: "lunica/workspace.rhai", first_start: false, next: None },
+        T { id: "lunica-model", title: "2 · Open & View a Model", blurb: "The four views (Text/Diagram/Icon/Docs) + graphical composition.", app: "lunica", difficulty: "beginner", script: "lunica/model.rhai", first_start: false, next: None },
+        T { id: "lunica-run", title: "3 · Compile & Run", blurb: "Interactive vs Fast Run, and driving inputs live.", app: "lunica", difficulty: "beginner", script: "lunica/run.rhai", first_start: false, next: None },
+        T { id: "lunica-experiments", title: "4 · Experiments & Sweeps", blurb: "Override parameters and sweep them without editing source.", app: "lunica", difficulty: "intermediate", script: "lunica/experiments.rhai", first_start: false, next: None },
+        T { id: "lunica-plots", title: "5 · Plots & Results", blurb: "Reading a run: graphs, diagnostics, and the console.", app: "lunica", difficulty: "beginner", script: "lunica/plots.rhai", first_start: false, next: None },
+        T { id: "lunica-scripting", title: "6 · Automate (API + MCP)", blurb: "Drive the workbench from scripts, the HTTP API, and MCP.", app: "lunica", difficulty: "intermediate", script: "lunica/scripting.rhai", first_start: false, next: None },
+    ]
+}
 /// Modelica section of the Twin Browser — class-tree contributed by
 /// this crate to `lunco-workbench`'s `BrowserSectionRegistry`.
 pub mod browser_section;
@@ -712,16 +730,18 @@ impl Plugin for ModelicaUiPlugin {
         // fires — drives the progress dots on the learning paths.
         app.add_plugins(welcome_progress::WelcomeProgressPlugin);
 
-        // The lunica tutorial launcher: the 🎓 Tutorials menu + the rhai-authored
-        // lessons (`assets/tutorials/lunica/*.rhai`), the `LaunchTutorial` command,
-        // first-run onboarding, and F1 (via `EditorIntent::ShowTutorial`).
-        // Reachable thereafter from the 🎓 Tutorials menu, Help → Show Tour, or F1.
-        // Apps that embed the Modelica workbench as a *secondary* workspace
-        // (sandbox's Design tab) pre-insert `ModelicaUiConfig { include_help_overlay:
-        // false, .. }` to suppress it — there's no point coaching a sandbox user
-        // through lunica's onboarding.
+        // The tutorial launcher is the SHARED `lunco-tutorial` engine (🎓 menu +
+        // panel + `StartTutorial` + onboarding + F1). Lunica just registers its
+        // rhai lessons (`assets/tutorials/lunica/*.rhai`) into it; the launcher
+        // runs each as a scenario on a host entity. Apps that embed the Modelica
+        // workbench as a *secondary* workspace (sandbox's Design tab) pre-insert
+        // `ModelicaUiConfig { include_help_overlay: false, .. }` to suppress it.
+        #[cfg(feature = "scripting")]
         if config.include_help_overlay {
-            app.add_plugins(help_overlay::HelpOverlayPlugin);
+            app.add_plugins(lunco_tutorial::TutorialPlugin);
+            for meta in lunica_tutorials() {
+                <App as lunco_tutorial::TutorialAppExt>::register_tutorial(app, meta);
+            }
         }
 
         // Reflect-registered query providers exposed over the
@@ -958,10 +978,11 @@ impl Plugin for ModelicaUiPlugin {
                         lunco_workbench::HelpMouse { interaction: "Drag port → port", description: "Connect two component ports" },
                         lunco_workbench::HelpMouse { interaction: "Scroll", description: "Zoom the diagram canvas" },
                     ],
-                    // Only offer the tour where it actually exists: the
-                    // HelpOverlayPlugin (and its tour-request consumer) is
-                    // gated on this same flag. Embedded-as-secondary hosts
-                    // (sandbox's Design tab) set it false → no dead button.
+                    // Only offer the tour where the tutorial launcher runs: the
+                    // shared `lunco-tutorial` engine consumes this perspective's
+                    // `HelpTourRequest` → the onboarding tutorial. Gated on the
+                    // same flag; embedded-as-secondary hosts (sandbox's Design
+                    // tab) set it false → no dead button.
                     has_tour: config.include_help_overlay,
                 },
             );

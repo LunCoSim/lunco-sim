@@ -1,15 +1,14 @@
 //! Lunica Overview — the first-run guided tour, authored in rhai.
 //!
-//! This is the coach-mark tour the old data-driven `TourDef` used to hardcode in
-//! Rust (`help_overlay.rs`). It is now an ordinary scenario: `coach()` renders
-//! each step's spotlight + card, and `on_event` moves the `this.i` cursor on the
-//! card's Back/Next/Skip/dot events — the SAME engine the sandbox tutorials use.
-//! Because a tutorial is just a script, users can edit this file and re-run it
-//! live (the launcher hot-reloads via `RunScenario`).
+//! An ordinary tutorial scenario: `coach_step(steps, i)` renders each step's
+//! spotlight + card, and `on_event` moves the `this.i` cursor on the card's
+//! Back/Next/Skip/dot events — the SAME shared engine every tutorial uses.
+//! Because a tutorial is just a script, you can edit this file and re-run it live
+//! from the 🎓 Tutorials menu (native reads it fresh; `RunScenario` hot-reloads).
+//! On a first run the boot policy (`policy/boot.rhai`) starts this automatically.
 //!
-//! `steps()` is a FUNCTION (rhai named fns can't see script-level consts) and
-//! `show(s, i)` takes the steps as an argument (`this` is bound only in the hook
-//! the engine calls, not in helpers it calls).
+//! `steps()` is a FUNCTION (rhai named fns can't see script-level consts); `this`
+//! is bound only in the hook the engine calls, not in helpers it calls.
 
 fn steps() {
     [

@@ -689,6 +689,13 @@ pub const AUTHORIZE_HOOK: &str = "rbac.authorize";
 /// its current owner). See [`may_take_control`].
 pub const CONTROL_AUTHORITY_HOOK: &str = "control.authority.take";
 
+/// Hook id for the **boot-entry** policy: consulted once at app startup to decide
+/// what the launch should do — onboard (start a tutorial), load a scene, resume,
+/// or nothing (let the app load its default). The policy is a pure decision:
+/// `ctx` in → a `#{ command, params }` map (dispatched generically) or `()` out.
+/// Authored in `assets/scripting/policy/boot.rhai`; hot-rewritable by this id.
+pub const BOOT_HOOK: &str = "boot.entry";
+
 /// Per-command authorization policy, resolved by [`authorize`].
 ///
 /// The registry is the single seam through which RBAC is introduced later
