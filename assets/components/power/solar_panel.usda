@@ -9,6 +9,7 @@
 # Per OpenUSD spec: root Xform has PhysicsRigidBodyAPI,
 # children have PhysicsCollisionAPI only.
 def Xform "SolarPanel" (
+    kind = "component"
     prepend apiSchemas = ["PhysicsRigidBodyAPI"]
 )
 {

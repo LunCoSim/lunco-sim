@@ -13,7 +13,9 @@
 # Drop it anywhere with `prepend references` + `xformOp:translate`. Transparency
 # uses the standard `primvars:displayOpacity` (folded into base-color alpha +
 # AlphaMode::Blend by lunco-usd-bevy).
-def Xform "WaypointMarker"
+def Xform "WaypointMarker" (
+    kind = "component"
+)
 {
     custom string lunco:waypoint = "true"
 

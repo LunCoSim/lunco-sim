@@ -27,6 +27,7 @@
 #   }
 
 def Sphere "ModelicaBalloon" (
+    kind = "component"
     prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
 )
 {

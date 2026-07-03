@@ -6,7 +6,9 @@
 )
 
 # Wall — static cuboid barrier.
-def Xform "Wall"
+def Xform "Wall" (
+    kind = "component"
+)
 {
     def Cube "Body" (
         prepend apiSchemas = ["PhysicsCollisionAPI"]

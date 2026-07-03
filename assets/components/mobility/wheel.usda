@@ -9,6 +9,7 @@
 # Modelica class: LunCo.Mobility.Wheel.Motorized
 
 def Cylinder "Wheel" (
+    kind = "component"
     prepend apiSchemas = ["LunCoMobilityComponentAPI"]
 )
 {

@@ -274,6 +274,33 @@ pub enum UsdOp {
         /// Absolute target paths the relationship points at.
         targets: Vec<String>,
     },
+    /// Author the attribute-**connection** targets (`connectionPaths`) of
+    /// attribute `name` on the prim at `path`. Connections are USD's typed
+    /// dataflow edge — the primitive UsdShade builds every input/output wire
+    /// on, generalized beyond shading. This is how a port/SSP wiring cutover
+    /// authors an edge: the consuming attribute (`inputs:voltage`, an FMI/SSP
+    /// input connector) `.connect`s to a producing property (`outputs:…`).
+    ///
+    /// The attribute spec is created if absent (using `type_name`, exactly like
+    /// [`UsdOp::SetAttribute`]), so a connection can be authored on a
+    /// not-yet-materialised port. `sources` replaces any prior connection list
+    /// (explicit list-op, set-semantics — not append); an **empty** `sources`
+    /// authors an explicitly-empty list, i.e. clears the connection. The
+    /// inverse restores the prior full source.
+    SetConnection {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim that owns the attribute.
+        path: String,
+        /// The attribute name (e.g. `inputs:voltage`).
+        name: String,
+        /// The USD type name of the attribute (e.g. `float`), used to create
+        /// the spec if it does not exist yet on the target layer.
+        type_name: String,
+        /// Absolute property paths this attribute connects to
+        /// (e.g. `/Bus/Node.outputs:v`). Empty clears the connection.
+        sources: Vec<String>,
+    },
     /// Move the prim at `from_path` to `to_path` — one op covering both
     /// **rename** (same parent, new leaf) and **reparent** (new parent), since
     /// both are a namespace move. The destination parent must already exist. The
@@ -655,6 +682,7 @@ impl Document for UsdDocument {
             | UsdOp::SetTimeSample { edit_target, .. }
             | UsdOp::RemoveTimeSample { edit_target, .. }
             | UsdOp::SetRelationship { edit_target, .. }
+            | UsdOp::SetConnection { edit_target, .. }
             | UsdOp::MovePrim { edit_target, .. } => edit_target.clone(),
         };
         let target = TargetLayer::from_id(&id).ok_or_else(|| {
@@ -925,6 +953,39 @@ impl Document for UsdDocument {
                     .create_relationship(format!("{path}.{name}"))
                     .map_err(author_err)?
                     .set_targets(target_paths)
+                    .map_err(author_err)?;
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
+                Ok(inverse)
+            }
+
+            UsdOp::SetConnection {
+                path,
+                name,
+                type_name,
+                sources,
+                ..
+            } => {
+                self.require_prim_anywhere(&path)?;
+                let source_paths = sources
+                    .iter()
+                    .map(|s| {
+                        SdfPath::new(s).map_err(|e| {
+                            DocumentError::ValidationFailed(format!(
+                                "SetConnection `{name}`: invalid source `{s}`: {e}"
+                            ))
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let inverse = self.coarse_inverse(target, &id);
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                // Create-if-absent (like SetAttribute) so a connection can be
+                // authored on a not-yet-materialised port, then author the
+                // `connectionPaths` list op (explicit; empty clears).
+                stage
+                    .create_attribute(format!("{path}.{name}"), type_name.as_str())
+                    .map_err(author_err)?
+                    .set_connections(source_paths)
                     .map_err(author_err)?;
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
@@ -1344,6 +1405,54 @@ mod tests {
         assert!(
             doc.data().spec(&rel).is_some(),
             "material:binding relationship authored on /Geom"
+        );
+    }
+
+    #[test]
+    fn set_connection_authors_and_clears_connection_paths() {
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(23),
+            "#usda 1.0\ndef Xform \"Load\"\n{\n}\ndef Xform \"Bus\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/conn.usda"),
+        );
+        // Wire the consuming input to a producing output. The attribute spec
+        // does not exist yet — the op must create it (create-if-absent).
+        doc.apply(UsdOp::SetConnection {
+            edit_target: LayerId::root(),
+            path: "/Load".into(),
+            name: "inputs:voltage".into(),
+            type_name: "float".into(),
+            sources: vec!["/Bus.outputs:v".into()],
+        })
+        .unwrap();
+        let attr = SdfPath::new("/Load.inputs:voltage").unwrap();
+        let conns = |doc: &UsdDocument| -> Vec<String> {
+            match doc.data().spec(&attr).and_then(|s| s.get("connectionPaths")) {
+                Some(sdf::Value::PathListOp(op)) => op
+                    .explicit_items
+                    .iter()
+                    .map(|p| p.as_str().to_string())
+                    .collect(),
+                _ => Vec::new(),
+            }
+        };
+        assert_eq!(
+            conns(&doc),
+            vec!["/Bus.outputs:v".to_string()],
+            "connectionPaths authored on the consuming input"
+        );
+        // Empty `sources` clears the connection (same op, one canonical form).
+        doc.apply(UsdOp::SetConnection {
+            edit_target: LayerId::root(),
+            path: "/Load".into(),
+            name: "inputs:voltage".into(),
+            type_name: "float".into(),
+            sources: vec![],
+        })
+        .unwrap();
+        assert!(
+            conns(&doc).is_empty(),
+            "empty sources clears the connection"
         );
     }
 

@@ -10,6 +10,7 @@
 # backend rather than Modelica.
 
 def Sphere "PythonBalloon" (
+    kind = "component"
     prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
 )
 {
