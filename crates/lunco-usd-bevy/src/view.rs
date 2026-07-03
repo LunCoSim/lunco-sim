@@ -92,6 +92,30 @@ impl<'a> StageView<'a> {
             .unwrap_or_default()
     }
 
+    /// First composed target of relationship `name` on `prim` (`None` if
+    /// absent/empty). Mirrors the legacy `read_rel_target` free helper.
+    pub fn rel_target(&self, prim: &SdfPath, name: &str) -> Option<SdfPath> {
+        self.rel_targets(prim, name).into_iter().next()
+    }
+
+    /// Whether `prim` applies the named API schema, by exact token match against
+    /// its composed `apiSchemas`. Mirrors the `has_api_schema` free helper — the
+    /// read `lunco-usd-avian`'s physics extractor uses for body/collider/terrain
+    /// detection (`PhysicsRigidBodyAPI` / `PhysicsCollisionAPI` / `PhysxTerrainAPI`).
+    pub fn has_api_schema(&self, prim: &SdfPath, schema_name: &str) -> bool {
+        self.stage
+            .prim(prim.clone())
+            .api_schemas()
+            .map(|v| v.iter().any(|s| s.as_str() == schema_name))
+            .unwrap_or(false)
+    }
+
+    /// Attribute `name` on `prim` as a 3-vector (`double3`/`float3`). Mirrors the
+    /// legacy `get_attribute_as_vec3` free helper.
+    pub fn value_vec3(&self, prim: &SdfPath, name: &str) -> Option<[f64; 3]> {
+        self.value::<[f64; 3]>(prim, name)
+    }
+
     /// Every live (active, defined, non-abstract) composed prim path, in
     /// traversal order — the same set the flattened reader contains.
     pub fn prim_paths(&self) -> Vec<SdfPath> {
@@ -148,6 +172,26 @@ mod parity_tests {
                 view.prim_type_name(&p),
                 flat.prim_type_name(&p),
                 "typeName mismatch at {p} in {path:?}"
+            );
+        }
+
+        // 2b. Same apiSchemas per prim (the physics-extractor detection read).
+        for p in view.prim_paths() {
+            let flat_schemas: Vec<String> = match flat.field(&p, "apiSchemas") {
+                Some(Value::TokenVec(v)) => v.iter().map(|t| t.to_string()).collect(),
+                Some(Value::Token(t)) => vec![t.to_string()],
+                Some(Value::String(s)) => vec![s.clone()],
+                _ => Vec::new(),
+            };
+            for schema in &flat_schemas {
+                assert!(
+                    view.has_api_schema(&p, schema),
+                    "StageView missing apiSchema `{schema}` at {p} in {path:?}"
+                );
+            }
+            assert!(
+                !view.has_api_schema(&p, "__NoSuchSchema__"),
+                "false-positive apiSchema at {p}"
             );
         }
 
