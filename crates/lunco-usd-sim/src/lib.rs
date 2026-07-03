@@ -376,9 +376,8 @@ fn process_usd_sim_prims(
     q_child_of: Query<&ChildOf>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
     stages: Res<Assets<UsdStageAsset>>,
-    // Ph0′ CUTOVER: read the LIVE canonical stage (source of truth), built on
-    // demand from the asset recipe; fall back to the flattened `stage.reader`
-    // only for recipe-less legacy assets (dual-source during transition).
+    // Read the LIVE canonical stage (source of truth), built on demand from
+    // the asset recipe.
     mut canonical: NonSendMut<CanonicalStages>,
     // The active-scene sun: the avatar camera's exposure is read from the SAME
     // resource the sun illuminance comes from, so they can't drift (a dimmed
@@ -431,23 +430,17 @@ fn process_usd_sim_prims(
     let mut seen_stages: std::collections::HashSet<Handle<UsdStageAsset>> = Default::default();
     for prim_path in q_all_prims.iter() {
         if !seen_stages.insert(prim_path.stage_handle.clone()) { continue; }
-        // Dual-source: scan the live canonical stage (preferred, built on demand
-        // from the recipe) or the flattened reader for recipe-less legacy assets.
+        // Scan the live canonical stage, built on demand from the recipe.
         let id = prim_path.stage_handle.id();
-        let live = canonical.get(id).is_some() || {
-            let recipe = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone());
-            recipe.as_ref().and_then(|r| canonical.get_or_build(id, r)).is_some()
-        };
-        if live {
-            let cs = canonical.get(id).expect("just built");
-            collect_joint_scan_read(
-                &cs.view(), &prim_path.stage_handle, &mut joint_targets, &mut articulation_roots,
-            );
-        } else if let Some(stage) = stages.get(&prim_path.stage_handle) {
-            collect_joint_scan_read(
-                &*stage.reader, &prim_path.stage_handle, &mut joint_targets, &mut articulation_roots,
-            );
+        if canonical.get(id).is_none() {
+            if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
+                canonical.get_or_build(id, &recipe);
+            }
         }
+        let Some(cs) = canonical.get(id) else { continue };
+        collect_joint_scan_read(
+            &cs.view(), &prim_path.stage_handle, &mut joint_targets, &mut articulation_roots,
+        );
     }
 
     // --- Pass 2: Process all prims ---
@@ -469,31 +462,22 @@ fn process_usd_sim_prims(
             continue;
         }
 
-        // Dual-source: prefer the live canonical stage (built on demand from the
-        // recipe), fall back to the flattened reader for recipe-less legacy
-        // assets. Acquired per entity — `get_or_build` is cached, so the whole
-        // prim cascade shares one composed stage.
+        // Read the live canonical stage, built on demand from the recipe.
+        // Acquired per entity — `get_or_build` is cached, so the whole prim
+        // cascade shares one composed stage.
         let id = prim_path.stage_handle.id();
-        let live = canonical.get(id).is_some() || {
-            let recipe = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone());
-            recipe.as_ref().and_then(|r| canonical.get_or_build(id, r)).is_some()
-        };
-        if live {
-            let cs = canonical.get(id).expect("just built");
-            process_usd_sim_prim_read(
-                &cs.view(), entity, prim_path, sdf_path.clone(), maybe_tf, maybe_mesh, maybe_mat,
-                maybe_shader_mat, maybe_child_of, wait_for_visuals, &joint_targets,
-                &articulation_roots, &q_existing_floating_origins, &q_provisional_cameras,
-                &q_grids, active_sun.as_deref(), &mut commands,
-            );
-        } else if let Some(stage) = stages.get(&prim_path.stage_handle) {
-            process_usd_sim_prim_read(
-                &*stage.reader, entity, prim_path, sdf_path.clone(), maybe_tf, maybe_mesh, maybe_mat,
-                maybe_shader_mat, maybe_child_of, wait_for_visuals, &joint_targets,
-                &articulation_roots, &q_existing_floating_origins, &q_provisional_cameras,
-                &q_grids, active_sun.as_deref(), &mut commands,
-            );
+        if canonical.get(id).is_none() {
+            if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
+                canonical.get_or_build(id, &recipe);
+            }
         }
+        let Some(cs) = canonical.get(id) else { continue };
+        process_usd_sim_prim_read(
+            &cs.view(), entity, prim_path, sdf_path.clone(), maybe_tf, maybe_mesh, maybe_mat,
+            maybe_shader_mat, maybe_child_of, wait_for_visuals, &joint_targets,
+            &articulation_roots, &q_existing_floating_origins, &q_provisional_cameras,
+            &q_grids, active_sun.as_deref(), &mut commands,
+        );
     }
 }
 

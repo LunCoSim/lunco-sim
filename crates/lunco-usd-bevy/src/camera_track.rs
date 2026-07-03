@@ -38,8 +38,8 @@ use lunco_time::{AnimationPreview, Playback, ResolvedDomains, TimeBinding, World
 
 use crate::camera_switch::ActivateCamera;
 use crate::{
-    attr_has_time_samples, read_token_timesamples, stage_time_codes_per_second, SdfPath,
-    UsdPrimPath, UsdStageAsset,
+    attr_has_time_samples, read_token_timesamples, stage_time_codes_per_second, CanonicalStages,
+    SdfPath, UsdPrimPath, UsdStageAsset,
 };
 
 /// The token channel a camera track keys: which camera is live over time.
@@ -94,15 +94,16 @@ fn held_camera(keys: &[(f64, String)], t: f64) -> Option<&str> {
 /// asset is loaded. Gated on `Without<CameraTrackPlan>`, so it retries per frame
 /// only for tracks not yet planned and is empty in steady state.
 pub fn plan_camera_tracks(
-    stages: Res<Assets<UsdStageAsset>>,
+    canonical: NonSend<CanonicalStages>,
     mut commands: Commands,
     q: Query<(Entity, &UsdPrimPath), (With<CameraTrack>, Without<CameraTrackPlan>)>,
 ) {
     for (entity, prim) in &q {
-        let Some(stage) = stages.get(&prim.stage_handle) else {
+        let Some(cs) = canonical.get(prim.stage_handle.id()) else {
             continue;
         };
-        let reader = &*stage.reader;
+        let view = cs.view();
+        let reader = &view;
         let Ok(sdf_path) = SdfPath::new(prim.path.as_str()) else {
             continue;
         };
@@ -128,7 +129,7 @@ pub fn plan_camera_tracks(
 /// leaves an explicit binding intact; absent time spine → stays on the world clock.
 pub fn bind_camera_tracks_to_preview(
     preview: Option<Res<AnimationPreview>>,
-    stages: Res<Assets<UsdStageAsset>>,
+    canonical: NonSend<CanonicalStages>,
     mut commands: Commands,
     q: Query<(Entity, &UsdPrimPath), (Added<CameraTrack>, Without<TimeBinding>)>,
     mut playback: Query<&mut Playback>,
@@ -142,10 +143,11 @@ pub fn bind_camera_tracks_to_preview(
             .entity(entity)
             .insert(TimeBinding { domain: preview.domain });
         // Union the track's key span (seconds) into the range to grow the domain.
-        if let Some(stage) = stages.get(&prim.stage_handle) {
+        if let Some(cs) = canonical.get(prim.stage_handle.id()) {
+            let view = cs.view();
             if let Ok(sp) = SdfPath::new(prim.path.as_str()) {
-                let tcps = stage_time_codes_per_second(&stage.reader);
-                let keys = read_token_timesamples(&stage.reader, &sp, ACTIVE_CAMERA_ATTR);
+                let tcps = stage_time_codes_per_second(&view);
+                let keys = read_token_timesamples(&view, &sp, ACTIVE_CAMERA_ATTR);
                 if let (Some(first), Some(last)) = (keys.first(), keys.last()) {
                     let (a, b) = (first.0 / tcps, last.0 / tcps);
                     span = Some(match span {

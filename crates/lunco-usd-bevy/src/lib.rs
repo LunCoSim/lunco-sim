@@ -42,7 +42,6 @@ pub use openusd::sdf::Path as SdfPath;
 pub use openusd::sdf::Data as UsdData;
 use openusd::sdf::Value;
 use big_space::prelude::CellCoord;
-use std::sync::Arc;
 
 mod resolver;
 mod compose;
@@ -255,18 +254,19 @@ lunco_core::register_commands!(camera_switch::on_set_active_camera);
 
 /// A Bevy Asset representing a loaded USD Stage.
 ///
-/// Contains a flattened USD reader with all external references resolved.
-/// Created by the `UsdLoader` asset loader when a `.usda` file is loaded.
+/// Carries the `Send` layer-closure [`StageRecipe`] from which the live,
+/// composed canonical [`Stage`](openusd::usd::Stage) is (re)built on the main
+/// thread — the single source of truth every USD reader consumes. Created by the
+/// `UsdLoader` asset loader when a `.usda` file is loaded.
 #[derive(Asset, TypePath, Clone)]
 pub struct UsdStageAsset {
-    /// Flattened, composed scene data (all references resolved). Send-safe
-    /// `sdf::Data`; query it with the [`usd_data`] helpers.
-    pub reader: Arc<UsdData>,
-    /// The `Send` layer-closure recipe for rebuilding the live canonical
-    /// [`Stage`](openusd::usd::Stage) on the main thread (Ph0′). `Some` for
-    /// assets produced by the async [`UsdLoader`]; `None` for in-memory /
-    /// preview constructions that never fetched a closure. A main-thread system
-    /// ([`canonical::sync_canonical_stages`]) turns this into a `CanonicalStage`.
+    /// The `Send` layer-closure recipe for building the live canonical
+    /// [`Stage`](openusd::usd::Stage) on the main thread. `Some` for assets
+    /// produced by the async [`UsdLoader`]; `None` for in-memory / preview
+    /// constructions that never fetched a closure (those instantiate nothing). A
+    /// main-thread system ([`canonical::sync_canonical_stages`]) — or the
+    /// on-demand [`CanonicalStages::get_or_build`] — turns this into a
+    /// `CanonicalStage`.
     pub recipe: Option<StageRecipe>,
 }
 
@@ -305,21 +305,16 @@ impl AssetLoader for UsdLoader {
             }
         };
 
-        // Compose with openusd's PCP engine — references, payloads, variant
-        // selection, and relationship-target translation — through our in-memory
-        // `LuncoUsdResolver` (filesystem-free, native + wasm). Fetch the layer
-        // closure into a `Send` recipe FIRST (so the canonical live `Stage` can be
-        // rebuilt on the main thread — `Stage` is `!Send`, can't cross here), then
-        // build+flatten it into a Send-safe `sdf::Data` for the downstream visual /
-        // physics / cosim readers. The recipe rides along in the asset (Ph0′).
+        // Fetch the transitive layer closure into a `Send` [`StageRecipe`]. That
+        // is the whole asset: the `!Send` composed `Stage` can't cross the
+        // async→main boundary, so a main-thread system
+        // ([`canonical::sync_canonical_stages`]) — or the on-demand
+        // `get_or_build` at first read — builds the live `CanonicalStage` from
+        // this recipe through the in-memory `LuncoUsdResolver` (filesystem-free,
+        // native + wasm). No flattening: the composed stage IS the source.
         let recipe = compose::fetch_layer_closure(load_context, &root_asset_path, bytes).await?;
-        let stage = compose::build_stage_from_closure(&recipe)?;
-        let data = compose::flatten_stage(&stage)?;
 
-        Ok(UsdStageAsset {
-            reader: Arc::new(data),
-            recipe: Some(recipe),
-        })
+        Ok(UsdStageAsset { recipe: Some(recipe) })
     }
 
     fn extensions(&self) -> &[&str] {
@@ -569,37 +564,28 @@ fn instantiate_usd_prim(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) {
-    // Ph0′ CUTOVER: the LIVE canonical stage is the source of truth. It is built
-    // on demand here (first read) so it is available regardless of system
-    // ordering vs. the synchronous `on_usd_prim_added` observer cascade — meshes,
-    // materials, lights, cameras, and transforms come off the composed `Stage`
-    // directly. `lunco:resolvedAsset` is *synthesized* on the live stage (it is
-    // authored only post-flatten), read via `UsdRead::resolved_asset`.
-    //
-    // The flattened `stage.reader` is used ONLY for legacy assets that carry no
-    // `StageRecipe` (e.g. `live_projection` / test constructions) — those will be
-    // migrated to build recipes, after which the flatten is deleted outright.
+    // The LIVE canonical stage is the single source of truth: meshes, materials,
+    // lights, cameras, and transforms come off the composed `Stage` directly, and
+    // `lunco:resolvedAsset` is *synthesized* on it (read via
+    // `UsdRead::resolved_asset`). Built on demand from the asset's recipe if not
+    // already present (so it is available regardless of system ordering vs. the
+    // synchronous `on_usd_prim_added` observer cascade). A scene whose asset
+    // carries no recipe (or fails to build) is skipped — every runtime scene
+    // loads through the recipe-building async loader.
     let id = prim_path.stage_handle.id();
-    // Already built (recipe-built earlier, or directly inserted by a main-thread
-    // construction site like `live_projection`), else build on demand from the
-    // asset's recipe.
-    let live = canonical.get(id).is_some() || {
-        let recipe = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone());
-        recipe.as_ref().and_then(|r| canonical.get_or_build(id, r)).is_some()
-    };
-    if live {
-        let cs = canonical.get(id).expect("just built");
-        debug!("[canonical] visual instantiate off LIVE stage: {}", prim_path.path);
-        instantiate_usd_prim_read(
-            &cs.view(), entity, prim_path, existing_vis, existing_tf, load_into_grid,
-            is_instance_root, inherited_member, commands, asset_server, meshes, materials,
-        );
-    } else if let Some(stage) = stages.get(&prim_path.stage_handle) {
-        instantiate_usd_prim_read(
-            &*stage.reader, entity, prim_path, existing_vis, existing_tf, load_into_grid,
-            is_instance_root, inherited_member, commands, asset_server, meshes, materials,
-        );
+    if canonical.get(id).is_none() {
+        if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
+            canonical.get_or_build(id, &recipe);
+        }
     }
+    let Some(cs) = canonical.get(id) else {
+        warn!("[canonical] no live stage for {} — skipping visual instantiate", prim_path.path);
+        return;
+    };
+    instantiate_usd_prim_read(
+        &cs.view(), entity, prim_path, existing_vis, existing_tf, load_into_grid,
+        is_instance_root, inherited_member, commands, asset_server, meshes, materials,
+    );
 }
 
 /// The visual extractor body, generic over the read source ([`UsdRead`]) — it
@@ -1856,11 +1842,16 @@ pub fn prim_is_animated<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
 /// so the samplers multiply their resolved time (seconds) by this to get the
 /// time code to evaluate. Defaults to 24.0 (USD spec) when unauthored or
 /// non-positive — the latter guards a malformed stage from freezing animation.
-pub fn stage_time_codes_per_second(reader: &UsdData) -> f64 {
-    reader
-        .field_as::<f64>(&SdfPath::abs_root(), "timeCodesPerSecond")
-        .filter(|t| *t > 0.0)
-        .unwrap_or(24.0)
+pub fn stage_time_codes_per_second<R: UsdRead>(reader: &R) -> f64 {
+    // `UsdRead::time_codes_per_second` already defaults to 24 when unauthored;
+    // guard a malformed non-positive opinion (either source) so it can't freeze
+    // animation (division by a zero/negative rate).
+    let tcps = reader.time_codes_per_second();
+    if tcps > 0.0 {
+        tcps
+    } else {
+        24.0
+    }
 }
 
 /// Held-sampled token/string attribute at time code `time` (USD tokens hold,
@@ -1868,12 +1859,16 @@ pub fn stage_time_codes_per_second(reader: &UsdData) -> f64 {
 /// held sample isn't a token/string/asset value. The animated twin of
 /// [`read_token`] — note tokens can't go through `prim_attribute_value_at::<String>`
 /// because `String::try_from(Value::Token)` fails on openusd `main`.
-pub(crate) fn read_token_at(reader: &UsdData, path: &SdfPath, attr: &str, time: f64) -> Option<String> {
-    let attr_path = path.append_property(attr).ok()?;
-    let Some(Value::TimeSamples(samples)) = reader.field(&attr_path, "timeSamples") else {
+pub(crate) fn read_token_at<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str, time: f64) -> Option<String> {
+    // Gate on authored `timeSamples` (never fall back to `default`): a token
+    // channel with no samples isn't animated. `attr_value_at` evaluates the
+    // samples — for a non-lerpable token type openusd's Linear interpolation
+    // falls back to Held (the nearest previous sample), matching the prior
+    // explicit Held read.
+    if !reader.has_time_samples(path, attr) {
         return None;
-    };
-    match openusd::usd::evaluate(samples, time, openusd::usd::InterpolationType::Held)? {
+    }
+    match reader.attr_value_at(path, attr, time)? {
         Value::String(s) => Some(s),
         Value::Token(s) => Some(s.to_string()),
         Value::AssetPath(a) => Some(a.as_str().to_string()),
@@ -1886,32 +1881,23 @@ pub(crate) fn read_token_at(reader: &UsdData, path: &SdfPath, attr: &str, time: 
 /// held value through [`read_token_at`] — so it doesn't depend on the inner
 /// sample value type. `None`/empty when the attribute carries no token samples.
 /// Used to build the [`camera_track::CameraTrackPlan`] key list once.
-pub(crate) fn read_token_timesamples(
-    reader: &UsdData,
+pub(crate) fn read_token_timesamples<R: UsdRead>(
+    reader: &R,
     path: &SdfPath,
     attr: &str,
 ) -> Vec<(f64, String)> {
-    let Ok(attr_path) = path.append_property(attr) else {
-        return Vec::new();
-    };
-    let Some(Value::TimeSamples(samples)) = reader.field(&attr_path, "timeSamples") else {
-        return Vec::new();
-    };
-    samples
-        .iter()
-        .filter_map(|s| read_token_at(reader, path, attr, s.0).map(|name| (s.0, name)))
+    reader
+        .time_sample_times(path, attr)
+        .into_iter()
+        .filter_map(|t| read_token_at(reader, path, attr, t).map(|name| (t, name)))
         .collect()
 }
 
 /// The authored time-code span `(first, last)` of one attribute's `timeSamples`
 /// (samples are stored ascending, so the ends are the first/last keys). `None`
 /// when the attribute has no samples.
-fn attr_sample_span(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<(f64, f64)> {
-    let attr_path = path.append_property(attr).ok()?;
-    match reader.field(&attr_path, "timeSamples")? {
-        Value::TimeSamples(s) if !s.is_empty() => Some((s.first()?.0, s.last()?.0)),
-        _ => None,
-    }
+fn attr_sample_span<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<(f64, f64)> {
+    reader.time_sample_span(path, attr)
 }
 
 /// The authored time span `(start, end)` in **seconds** across all of `path`'s
@@ -1920,7 +1906,7 @@ fn attr_sample_span(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<(f64
 /// stage `timeCodesPerSecond`. `None` when nothing is sampled. The transport
 /// uses this to bound the preview playhead to the real clip length instead of a
 /// guessed range.
-pub fn animated_time_range(reader: &UsdData, path: &SdfPath) -> Option<(f64, f64)> {
+pub fn animated_time_range<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<(f64, f64)> {
     let mut spans: Vec<(f64, f64)> = Vec::new();
     for op in ["xformOp:translate", "xformOp:scale", "xformOp:transform"] {
         spans.extend(attr_sample_span(reader, path, op));
@@ -1947,19 +1933,19 @@ pub fn animated_time_range(reader: &UsdData, path: &SdfPath) -> Option<(f64, f64
 /// Time-sampled scalar float at time code `time`, accepting both `float` and
 /// `double` authored types (`inputs:opacity` is commonly either). `None` for a
 /// static channel so the caller leaves the material untouched.
-fn read_f32_at(reader: &UsdData, path: &SdfPath, attr: &str, time: f64) -> Option<f32> {
+fn read_f32_at<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str, time: f64) -> Option<f32> {
     if !attr_has_time_samples(reader, path, attr) {
         return None;
     }
     reader
-        .prim_attribute_value_at::<f32>(path, attr, time)
-        .or_else(|| reader.prim_attribute_value_at::<f64>(path, attr, time).map(|v| v as f32))
+        .scalar_at::<f32>(path, attr, time)
+        .or_else(|| reader.scalar_at::<f64>(path, attr, time).map(|v| v as f32))
 }
 
 /// Sample one xform-op channel **only if it is animated** (has `timeSamples`),
 /// evaluated at `time`. Returns `None` for static channels so the caller leaves
 /// the instantiated value untouched.
-fn sample_animated_vec3(reader: &UsdData, path: &SdfPath, attr: &str, time: f64) -> Option<[f64; 3]> {
+fn sample_animated_vec3<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str, time: f64) -> Option<[f64; 3]> {
     if !attr_has_time_samples(reader, path, attr) {
         return None;
     }
@@ -1994,13 +1980,14 @@ fn sample_animated_vec3(reader: &UsdData, path: &SdfPath, attr: &str, time: f64)
 /// read values at `t`. Re-derived after a stage hot-reload via
 /// [`clear_animation_plans_on_stage_reload`].
 pub fn plan_usd_animation(
-    stages: Res<Assets<UsdStageAsset>>,
+    canonical: NonSend<CanonicalStages>,
     mut commands: Commands,
     q: Query<(Entity, &UsdPrimPath), (With<UsdAnimated>, Without<AnimationPlan>)>,
 ) {
     for (entity, prim) in &q {
-        let Some(stage) = stages.get(&prim.stage_handle) else { continue };
-        let reader = &*stage.reader;
+        let Some(cs) = canonical.get(prim.stage_handle.id()) else { continue };
+        let view = cs.view();
+        let reader = &view;
         let Ok(sdf_path) = SdfPath::new(prim.path.as_str()) else { continue };
 
         // Transform: an authored `xformOpOrder` drives the whole stack; else a
@@ -2075,7 +2062,7 @@ pub fn clear_animation_plans_on_stage_reload(
 pub fn sample_usd_animation(
     world: Res<lunco_time::WorldTime>,
     resolved: Res<lunco_time::ResolvedDomains>,
-    stages: Res<Assets<UsdStageAsset>>,
+    canonical: NonSend<CanonicalStages>,
     mut q: Query<
         (
             &UsdPrimPath,
@@ -2088,8 +2075,9 @@ pub fn sample_usd_animation(
     >,
 ) {
     for (prim, plan, mut tf, mut vis, binding) in &mut q {
-        let Some(stage) = stages.get(&prim.stage_handle) else { continue };
-        let reader = &*stage.reader;
+        let Some(cs) = canonical.get(prim.stage_handle.id()) else { continue };
+        let view = cs.view();
+        let reader = &view;
         let sdf_path = &plan.path;
 
         // Resolve this entity's clock — its bound `TimeDomain` (per-object /
@@ -2164,7 +2152,7 @@ pub fn sample_usd_animation(
 pub fn sample_usd_material_animation(
     world: Res<lunco_time::WorldTime>,
     resolved: Res<lunco_time::ResolvedDomains>,
-    stages: Res<Assets<UsdStageAsset>>,
+    canonical: NonSend<CanonicalStages>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     q: Query<
         (
@@ -2179,8 +2167,9 @@ pub fn sample_usd_material_animation(
     for (prim, plan, mat_handle, binding) in &q {
         // Cheap gate: the plan already resolved the shader + which channels move.
         let Some(mat) = &plan.material else { continue };
-        let Some(stage) = stages.get(&prim.stage_handle) else { continue };
-        let reader = &*stage.reader;
+        let Some(cs) = canonical.get(prim.stage_handle.id()) else { continue };
+        let view = cs.view();
+        let reader = &view;
         let sdf_path = &plan.path;
 
         let secs = lunco_time::domain_time(&resolved, binding, &world);
@@ -2233,7 +2222,7 @@ pub fn sample_usd_material_animation(
 /// transport scrub bar and clamp/loop track the real clip length.
 pub fn bind_animated_to_preview(
     preview: Option<Res<lunco_time::AnimationPreview>>,
-    stages: Res<Assets<UsdStageAsset>>,
+    canonical: NonSend<CanonicalStages>,
     mut commands: Commands,
     q: Query<(Entity, &UsdPrimPath), (Added<UsdAnimated>, Without<lunco_time::TimeBinding>)>,
     mut playback: Query<&mut lunco_time::Playback>,
@@ -2245,9 +2234,10 @@ pub fn bind_animated_to_preview(
             .entity(entity)
             .insert(lunco_time::TimeBinding { domain: preview.domain });
         // Union this clip's authored span into the range we'll grow the domain to.
-        if let Some(stage) = stages.get(&prim.stage_handle) {
+        if let Some(cs) = canonical.get(prim.stage_handle.id()) {
+            let view = cs.view();
             if let Ok(sp) = SdfPath::new(prim.path.as_str()) {
-                if let Some((a, b)) = animated_time_range(&stage.reader, &sp) {
+                if let Some((a, b)) = animated_time_range(&view, &sp) {
                     span = Some(match span {
                         Some((lo, hi)) => (lo.min(a), hi.max(b)),
                         None => (a, b),
@@ -3218,7 +3208,7 @@ pub fn reveal_placeholder_on_failure(
     mut commands: Commands,
     time: Res<Time>,
     asset_server: Res<AssetServer>,
-    stages: Res<Assets<UsdStageAsset>>,
+    canonical: NonSend<CanonicalStages>,
     cfg: Res<DiagnosticLabelConfig>,
     scene_roots: Query<(Entity, &SceneRoot, &GlobalTransform, &PlaceholderAssetUri, &UsdPrimPath), (With<GlbPlaceholder>, Without<DiagnosticStub>)>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -3254,8 +3244,9 @@ pub fn reveal_placeholder_on_failure(
             let mut scale = Vec3::ONE;
 
             // Attempt to resolve dimensions from USD prim attributes
-            if let Some(stage) = stages.get(&prim_path.stage_handle) {
-                let reader = &*stage.reader;
+            if let Some(cs) = canonical.get(prim_path.stage_handle.id()) {
+                let view = cs.view();
+                let reader = &view;
 
                 // Navigate up from the current prim to its parent to find the sibling "Placeholder"
                 let parent_path = prim_path.path.rsplitn(2, '/').nth(1).unwrap_or("");
@@ -3266,7 +3257,7 @@ pub fn reveal_placeholder_on_failure(
                     if let Ok(sdf_path) = SdfPath::new(path) {
                         if let Some(s) = get_attribute_as_vec3(reader, &sdf_path, "xformOp:scale") {
                             Some(s)
-                        } else if let Some(size) = reader.prim_attribute_value::<f64>(&sdf_path, "size") {
+                        } else if let Some(size) = reader.scalar::<f64>(&sdf_path, "size") {
                             Some(Vec3::splat(size as f32))
                         } else {
                             None

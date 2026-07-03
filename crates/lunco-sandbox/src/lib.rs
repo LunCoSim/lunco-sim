@@ -45,7 +45,7 @@ use lunco_hardware::LunCoHardwarePlugin;
 // RTT viewport UI plugins are `ui`-only (added by `SandboxUiPlugin`).
 use lunco_usd::{LoadScene, UsdPlugins, UsdPrimPath, UsdStageAsset};
 // The USD-reading terrain systems read the LIVE canonical stage via `StageView`
-// (which implements `UsdRead`), falling back to the flattened `stage.reader`.
+// (which implements `UsdRead`).
 use lunco_usd_bevy::UsdRead;
 use bevy::asset::AssetLoadFailedEvent;
 
@@ -668,26 +668,23 @@ fn bind_terrain_layers(
             continue;
         };
 
-        // Dual-source: read the LIVE canonical stage (built on demand from the
-        // asset's recipe) — the source of truth — and fall back to the flattened
-        // `stage.reader` only for recipe-less legacy assets. Both go through the
-        // same `UsdRead` read body (`read_authored_layer_maps`).
+        // Read the LIVE canonical stage (built on demand from the asset's recipe)
+        // — the source of truth — through the `UsdRead` read body
+        // (`read_authored_layer_maps`).
         let id = prim_path.stage_handle.id();
-        let live = canonical.get(id).is_some() || {
-            let recipe = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone());
-            recipe.as_ref().and_then(|r| canonical.get_or_build(id, r)).is_some()
+        if canonical.get(id).is_none() {
+            if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
+                canonical.get_or_build(id, &recipe);
+            }
+        }
+        let Some(cs) = canonical.get(id) else {
+            // No live stage (asset carries no recipe / build failed) — retry next frame.
+            continue;
         };
         // Collect the authored (role, rel-path, weight) before touching the
         // material, so we can wait for the Twin + material without half-binding.
-        let authored: Vec<(&LayerRole, String, f32)> = if live {
-            let view = canonical.get(id).expect("just built").view();
-            read_authored_layer_maps(&view, &sdf, ROLES)
-        } else if let Some(stage) = stages.get(&prim_path.stage_handle) {
-            read_authored_layer_maps(&*stage.reader, &sdf, ROLES)
-        } else {
-            // Stage not loaded yet — retry next frame.
-            continue;
-        };
+        let authored: Vec<(&LayerRole, String, f32)> =
+            read_authored_layer_maps(&cs.view(), &sdf, ROLES);
 
         if authored.is_empty() {
             // No layer authored — stop re-scanning this terrain.
@@ -848,22 +845,19 @@ fn refresh_layered_terrain_layers(
             continue;
         }
         let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else { continue };
-        // Dual-source: prefer the LIVE canonical stage (reflects the in-place edit
-        // that raised this Modified event); fall back to the flattened reader for
-        // recipe-less legacy assets.
+        // Read the LIVE canonical stage (reflects the in-place edit that raised
+        // this Modified event).
         let id = prim_path.stage_handle.id();
-        let live = canonical.get(id).is_some() || {
-            let recipe = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone());
-            recipe.as_ref().and_then(|r| canonical.get_or_build(id, r)).is_some()
-        };
-        let stack = if live {
-            let view = canonical.get(id).expect("just built").view();
-            parse_terrain_layer_stack(&view, &sdf, &registry)
-        } else if let Some(stage) = stages.get(&prim_path.stage_handle) {
-            parse_terrain_layer_stack(&*stage.reader, &sdf, &registry)
-        } else {
+        if canonical.get(id).is_none() {
+            if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
+                canonical.get_or_build(id, &recipe);
+            }
+        }
+        let Some(cs) = canonical.get(id) else {
+            // No live stage (asset carries no recipe / build failed) — skip.
             continue;
         };
+        let stack = parse_terrain_layer_stack(&cs.view(), &sdf, &registry);
         commands.entity(entity).insert(stack);
     }
 }
@@ -878,16 +872,16 @@ fn bridge_usd_dem_terrain(
     mut commands: Commands,
 ) {
     for (entity, prim_path) in &q {
-        // Dual-source: read the LIVE canonical stage (built on demand from the
-        // asset's recipe) — the source of truth — and fall back to the flattened
-        // `stage.reader` only for recipe-less legacy assets. Wait until at least one
-        // source is available before reading attrs.
+        // Read the LIVE canonical stage (built on demand from the asset's recipe)
+        // — the source of truth. Wait until it is available before reading attrs.
         let id = prim_path.stage_handle.id();
-        let live = canonical.get(id).is_some() || {
-            let recipe = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone());
-            recipe.as_ref().and_then(|r| canonical.get_or_build(id, r)).is_some()
-        };
-        if !live && stages.get(&prim_path.stage_handle).is_none() {
+        if canonical.get(id).is_none() {
+            if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
+                canonical.get_or_build(id, &recipe);
+            }
+        }
+        if canonical.get(id).is_none() {
+            // No live stage (asset carries no recipe / build failed) — retry next frame.
             continue;
         }
         let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else {
@@ -895,18 +889,11 @@ fn bridge_usd_dem_terrain(
             continue;
         };
         commands.entity(entity).insert(DemBridged); // examined — don't re-scan
-        if live {
-            let view = canonical.get(id).expect("just built").view();
-            bridge_dem_prim_read(
-                &view, entity, prim_path, &sdf, &twins, &registry,
-                obstacle_spec.bypass_change_detection(), &mut commands,
-            );
-        } else if let Some(stage) = stages.get(&prim_path.stage_handle) {
-            bridge_dem_prim_read(
-                &*stage.reader, entity, prim_path, &sdf, &twins, &registry,
-                obstacle_spec.bypass_change_detection(), &mut commands,
-            );
-        }
+        let cs = canonical.get(id).expect("checked above");
+        bridge_dem_prim_read(
+            &cs.view(), entity, prim_path, &sdf, &twins, &registry,
+            obstacle_spec.bypass_change_detection(), &mut commands,
+        );
     }
 }
 

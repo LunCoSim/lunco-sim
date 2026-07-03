@@ -109,24 +109,18 @@ fn ensure_footprint(
                 spawn_lift: entry.spawn_lift,
             });
         if cached.footprint.is_none() {
-            // Ph0′ dual-source: derive the footprint off the LIVE canonical
+            // Ph0′ canonical-only: derive the footprint off the LIVE canonical
             // stage (the source of truth), built on demand from the asset's
-            // recipe. Falls back to the flattened `stage.reader` for recipe-less
-            // legacy assets. Both readers implement `UsdRead`, so the geometry
-            // is identical.
+            // recipe.
             let id = cached.handle.id();
-            let live = canonical.get(id).is_some() || {
-                let recipe = stages.get(&cached.handle).and_then(|a| a.recipe.clone());
-                recipe.as_ref().and_then(|r| canonical.get_or_build(id, r)).is_some()
-            };
-            cached.footprint = if live {
-                let view = canonical.get(id).expect("just built").view();
-                lunco_usd_bevy::wheel_footprint(&view, &cached.root_prim)
-            } else {
-                stages
-                    .get(&cached.handle)
-                    .and_then(|stage| lunco_usd_bevy::wheel_footprint(&*stage.reader, &cached.root_prim))
-            };
+            if canonical.get(id).is_none() {
+                if let Some(recipe) = stages.get(&cached.handle).and_then(|a| a.recipe.clone()) {
+                    canonical.get_or_build(id, &recipe);
+                }
+            }
+            cached.footprint = canonical
+                .get(id)
+                .and_then(|cs| lunco_usd_bevy::wheel_footprint(&cs.view(), &cached.root_prim));
             if let Some(fp) = cached.footprint {
                 info!(
                     "[spawn] derived footprint for {}: half_w={:.3} half_l={:.3} depth={:.3}",

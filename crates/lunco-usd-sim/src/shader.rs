@@ -49,38 +49,29 @@ pub fn apply_usd_shader_materials(
     // asset — e.g. headless tests using `MinimalPlugins` without the materials
     // plugin. Production always registers it, so behaviour there is unchanged.
     materials: Option<ResMut<Assets<ShaderMaterial>>>,
-    // Ph0′ CUTOVER: read the LIVE canonical stage (source of truth), built on
-    // demand from the asset's recipe; fall back to the flattened `stage.reader`
-    // only for recipe-less legacy assets (dual-source during transition).
+    // Read the LIVE canonical stage (source of truth), built on demand from
+    // the asset's recipe.
     mut canonical: NonSendMut<CanonicalStages>,
     mut commands: Commands,
 ) {
     let Some(mut materials) = materials else { return };
     for (entity, prim_path) in q.iter() {
         let id = prim_path.stage_handle.id();
-        let live = canonical.get(id).is_some() || {
-            let recipe = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone());
-            recipe.as_ref().and_then(|r| canonical.get_or_build(id, r)).is_some()
-        };
-        // Neither the live stage nor the flatten is available yet → retry next
-        // frame (do NOT mark resolved).
-        if !live && stages.get(&prim_path.stage_handle).is_none() {
-            continue;
+        if canonical.get(id).is_none() {
+            if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
+                canonical.get_or_build(id, &recipe);
+            }
         }
+        // No live stage (asset carries no recipe / build failed) yet → retry next
+        // frame (do NOT mark resolved).
+        let Some(cs) = canonical.get(id) else { continue };
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
             commands.entity(entity).insert(UsdShaderResolved);
             continue;
         };
-        if live {
-            let cs = canonical.get(id).expect("just built");
-            apply_usd_shader_material_read(
-                &cs.view(), entity, prim_path, &sdf_path, &mut materials, &asset_server, &mut commands,
-            );
-        } else if let Some(stage) = stages.get(&prim_path.stage_handle) {
-            apply_usd_shader_material_read(
-                &*stage.reader, entity, prim_path, &sdf_path, &mut materials, &asset_server, &mut commands,
-            );
-        }
+        apply_usd_shader_material_read(
+            &cs.view(), entity, prim_path, &sdf_path, &mut materials, &asset_server, &mut commands,
+        );
     }
 }
 

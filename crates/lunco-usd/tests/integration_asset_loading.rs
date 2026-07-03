@@ -41,7 +41,6 @@ use lunco_usd_bevy::usd_data::UsdDataExt;
 use openusd::sdf::{AbstractData, Path as SdfPath};
 use avian3d::prelude::*;
 use big_space::prelude::CellCoord;
-use std::sync::Arc;
 use std::path::Path;
 
 // ============================================================
@@ -53,6 +52,27 @@ fn compose_asset_from_file(file_path: &Path) -> UsdData {
     // resolving relative references anchored at the file's own directory.
     compose_file(file_path)
         .unwrap_or_else(|e| panic!("Composition failed for {}: {e}", file_path.display()))
+}
+
+/// Compose a `.usda` (with its external references) into a live canonical stage
+/// and publish it into `CanonicalStages` keyed by a fresh `UsdStageAsset` handle
+/// — the recipe path for file-with-refs scenes. `StageRecipe::from_source` only
+/// resolves a single in-memory layer, so these ref-carrying scene/rover files
+/// compose the full closure via `compose_file_to_stage` and insert the wrapped
+/// stage directly (the door the live-doc projection uses).
+fn add_canonical_from_file(app: &mut App, file_path: &Path) -> Handle<UsdStageAsset> {
+    let handle = {
+        let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
+        stages.add(UsdStageAsset { recipe: None })
+    };
+    let stage = compose_file_to_stage(file_path)
+        .unwrap_or_else(|e| panic!("Composition failed for {}: {e}", file_path.display()));
+    let cstage = CanonicalStage::from_stage(stage, file_path.display().to_string());
+    app.world_mut()
+        .get_non_send_resource_mut::<CanonicalStages>()
+        .expect("CanonicalStages resource (UsdBevyPlugin)")
+        .insert(handle.id(), cstage);
+    handle
 }
 
 // ============================================================
@@ -112,7 +132,6 @@ fn test_sandbox_scene_composes() {
 // ============================================================
 
 fn load_rover_through_bevy(file_path: &Path, prim_path: &str) -> App {
-    let composed = compose_asset_from_file(file_path);
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(AssetPlugin::default());
@@ -124,8 +143,7 @@ fn load_rover_through_bevy(file_path: &Path, prim_path: &str) -> App {
         app.init_asset::<bevy::shader::Shader>();
     app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
 
-    let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-    let handle = stages.add(UsdStageAsset { reader: Arc::new(composed) });
+    let handle = add_canonical_from_file(&mut app, file_path);
 
     app.world_mut().spawn((
         Name::new("TestRover"),
@@ -339,8 +357,6 @@ fn test_rover_sim_processing_after_async_load() {
         let p = Path::new("../../assets/").join(f);
         let label = f;
 
-        let composed = compose_file(&p).unwrap_or_else(|e| panic!("{label} composition failed: {e}"));
-
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(AssetPlugin::default());
@@ -352,9 +368,8 @@ fn test_rover_sim_processing_after_async_load() {
         app.init_asset::<bevy::shader::Shader>();
         app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
 
-        // Add stage asset directly (synchronously, like tests do)
-        let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-        let handle = stages.add(UsdStageAsset { reader: Arc::new(composed) });
+        // Publish the live canonical stage (composed off the ref-carrying file).
+        let handle = add_canonical_from_file(&mut app, &p);
 
         app.world_mut().spawn((
             Name::new("TestRover"),

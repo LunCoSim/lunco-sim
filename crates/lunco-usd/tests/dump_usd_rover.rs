@@ -9,7 +9,6 @@ use lunco_usd_sim::*;
 use avian3d::prelude::*;
 use lunco_mobility::WheelRaycast;
 use lunco_fsw::FlightSoftware;
-use std::sync::Arc;
 use std::path::Path;
 use big_space::prelude::CellCoord;
 
@@ -17,8 +16,6 @@ use big_space::prelude::CellCoord;
 fn test_dump_usd_rover_state() {
     let usd_path = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap()
         .join("assets/vessels/rovers/skid_rover.usda");
-
-    let composed = compose_file(&usd_path).expect("compose skid_rover");
 
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
@@ -29,8 +26,19 @@ fn test_dump_usd_rover_state() {
     app.init_asset::<Image>();
     app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
 
-    let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-    let handle = stages.add(UsdStageAsset { reader: Arc::new(composed) });
+    // File references (wheel.usda / drivetrain sublayers) → compose the full
+    // closure to a live stage and publish it into `CanonicalStages` (from_source
+    // can't resolve external refs off a lone in-memory layer).
+    let handle = {
+        let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
+        stages.add(UsdStageAsset { recipe: None })
+    };
+    let stage = compose_file_to_stage(&usd_path).expect("compose skid_rover");
+    let cstage = CanonicalStage::from_stage(stage, usd_path.display().to_string());
+    app.world_mut()
+        .get_non_send_resource_mut::<CanonicalStages>()
+        .expect("CanonicalStages resource (UsdBevyPlugin)")
+        .insert(handle.id(), cstage);
 
     // Spawn with position
     let rover = app.world_mut().spawn((

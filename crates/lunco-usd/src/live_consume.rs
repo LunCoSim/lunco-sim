@@ -32,7 +32,7 @@ pub(crate) struct ChangeBatch {
     pub translate_paths: Vec<String>,
     /// Prim paths that got a structural `Resync` (spawn / remove / rename of a
     /// concrete prim) — reconciled one subtree at a time by
-    /// [`reconcile_structural`] (E2-2/E2-3), never re-instantiating siblings.
+    /// [`reconcile_structural_live`] (E2-2/E2-3), never re-instantiating siblings.
     pub resync_paths: Vec<String>,
     /// Whether any change needs structural work: a `Resync`, a `FullReload`, an
     /// `InfoOnly` for some other attribute, or a change-ring overflow.
@@ -137,50 +137,6 @@ fn find_live_entity(
         .map(|(e, _)| e)
 }
 
-/// Reconcile a scene's live entities against the *fresh* composed `reader` for
-/// the set of structurally-changed `resync_paths` (E2-2 despawn + E2-3 spawn).
-///
-/// Each `Resync` names exactly the prim that was added or removed, so for each
-/// path we compare "present in the new composed stage" against "has a live
-/// entity":
-/// - **absent + live** → the prim was removed → [`despawn_usd_subtree`] (with
-///   worker cleanup) — the only branch that runs for a delete.
-/// - **present + not live** → the prim was added → [`spawn_usd_child`], which
-///   re-fires the loader for just that subtree.
-/// - otherwise (present+live, or absent+not-live) there's nothing structural to
-///   do for this path — an attribute-level edit on an existing prim arrives as
-///   its own `InfoOnly` delta, and a vanished-and-already-gone prim is settled.
-///
-/// `reader` must be the asset store's current reader for `stage_handle_id` (E1
-/// swaps it synchronously before calling; E1b calls after the async reload
-/// lands), so a spawned child's `on_usd_prim_added` observer sees the new prim.
-///
-/// [`despawn_usd_subtree`]: lunco_usd_sim::cosim::despawn_usd_subtree
-/// [`spawn_usd_child`]: lunco_usd_sim::cosim::spawn_usd_child
-pub(crate) fn reconcile_structural<R: UsdRead>(
-    world: &mut World,
-    stage_handle_id: AssetId<UsdStageAsset>,
-    reader: &R,
-    resync_paths: &[String],
-) {
-    for path in resync_paths {
-        let Ok(sdf_path) = SdfPath::new(path) else {
-            continue;
-        };
-        let exists = reader.has_prim(&sdf_path);
-        let live = find_live_entity(world, stage_handle_id, path);
-        match (exists, live) {
-            (false, Some(entity)) => {
-                lunco_usd_sim::cosim::despawn_usd_subtree(world, entity);
-            }
-            (true, None) => {
-                lunco_usd_sim::cosim::spawn_usd_child(world, stage_handle_id, reader, path);
-            }
-            _ => {}
-        }
-    }
-}
-
 /// Projection bridge (Step 1): drain every live [`CanonicalStage`]'s change-sink
 /// inbox and reconcile the ECS scene off the **live composed stage** — the read
 /// counterpart to authoring onto the stage. This is what turns the openusd
@@ -272,10 +228,9 @@ pub(crate) fn apply_translates_live(
 /// Reconcile the live entities of the scene scoped to `id` against the **live
 /// [`CanonicalStage`]** for the structurally-changed `resync_paths`: spawn the
 /// added (present in the stage, no live entity), despawn the removed (absent,
-/// but a live entity survives). The canonical counterpart of
-/// [`reconcile_structural`] — reads the live stage via short borrows (the
+/// but a live entity survives). Reads the live stage via short borrows (the
 /// `!Send` stage can't be held across the ECS mutation), so the sink bridge and
-/// the doc-diff refresh share one reconciler and one source.
+/// the doc-diff twin refresh share one reconciler and one source.
 ///
 /// `resync_paths` is applied in caller order; the caller sorts parent-before-
 /// child so a subtree root spawns first and its `on_usd_prim_added` observer
@@ -402,7 +357,6 @@ mod tests {
         use bevy::asset::AssetApp;
         use bevy::prelude::*;
         use lunco_usd_bevy::{CanonicalStages, StageRecipe};
-        use std::sync::Arc;
 
         const SCENE: &str =
             "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
@@ -414,11 +368,10 @@ mod tests {
 
         // An asset carrying the ref-less in-memory scene + its build recipe.
         let recipe = StageRecipe::from_source("scene.usda", SCENE);
-        let reader = Arc::new(openusd::usda::parse(SCENE).unwrap());
         let handle = app
             .world_mut()
             .resource_mut::<Assets<UsdStageAsset>>()
-            .add(UsdStageAsset { reader, recipe: Some(recipe.clone()) });
+            .add(UsdStageAsset { recipe: Some(recipe.clone()) });
         let id = handle.id();
 
         // Build the live stage on demand, then drain its initial change set so

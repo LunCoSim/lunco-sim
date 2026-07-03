@@ -73,10 +73,7 @@ fn recipe_asset_instantiates_off_live_canonical_stage() {
     let recipe = StageRecipe::from_source("inmemory://scene.usda", SCENE);
     let handle = {
         let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-        // `reader` is the transition-only flatten fallback; a recipe is present,
-        // so the dispatcher never reads it. Parse the same source for it.
-        let reader = std::sync::Arc::new(openusd::usda::parse(SCENE).expect("parse"));
-        stages.add(UsdStageAsset { reader, recipe: Some(recipe) })
+        stages.add(UsdStageAsset { recipe: Some(recipe) })
     };
     let stage_id = handle.id();
 
@@ -136,15 +133,17 @@ fn recipe_asset_instantiates_off_live_canonical_stage() {
 }
 
 #[test]
-fn recipeless_asset_still_instantiates_via_flatten_fallback() {
-    // The transition invariant: a legacy `recipe: None` asset (live_projection /
-    // older constructions, pre-step-1) still renders via the flattened reader, so
-    // nothing regresses while the construction sites are migrated.
+fn recipeless_asset_builds_no_canonical_and_is_skipped() {
+    // Post-collapse invariant: the flatten fallback is GONE — the canonical stage
+    // is the single source. An asset with no recipe builds no canonical stage, so
+    // the visual dispatcher SKIPS it (no stage → no instantiation), rather than
+    // falling back to the flattened reader. Every runtime scene now loads through
+    // the recipe-building async loader, so recipe-less assets don't occur in
+    // production; this pins the skip-not-crash behavior.
     let mut app = app();
     let handle = {
         let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-        let reader = std::sync::Arc::new(openusd::usda::parse(SCENE).expect("parse"));
-        stages.add(UsdStageAsset { reader, recipe: None })
+        stages.add(UsdStageAsset { recipe: None })
     };
     app.world_mut().spawn((
         Name::new("World"),
@@ -153,14 +152,13 @@ fn recipeless_asset_still_instantiates_via_flatten_fallback() {
     app.update();
     app.update();
 
-    // No recipe ⇒ no canonical stage; the flatten fallback still produced the mesh.
+    // No recipe ⇒ no canonical stage ⇒ the dispatcher skips (no children spawned).
     assert!(
         app.world().get_non_send_resource::<CanonicalStages>().unwrap().get(handle.id()).is_none(),
         "a recipe-less asset builds no canonical stage"
     );
-    let box_e = entity_at(&mut app, "/World/Box").expect("Box prim entity");
     assert!(
-        app.world().get::<Mesh3d>(box_e).is_some(),
-        "flatten fallback must still produce the mesh for recipe-less assets"
+        entity_at(&mut app, "/World/Box").is_none(),
+        "with the flatten fallback removed, a recipe-less asset is skipped — no children instantiated"
     );
 }

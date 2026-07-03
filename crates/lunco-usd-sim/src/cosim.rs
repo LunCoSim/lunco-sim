@@ -114,24 +114,24 @@ pub fn process_usd_cosim_prims(
     mut commands: Commands,
     query: Query<(Entity, &UsdPrimPath), Without<UsdSourcedCosim>>,
     stages: Res<Assets<UsdStageAsset>>,
-    // Ph0′ CUTOVER: read the LIVE canonical stage (source of truth), built on
-    // demand from the asset's recipe; fall back to the flattened `stage.reader`
-    // only for recipe-less legacy assets (dual-source during transition).
+    // Read the LIVE canonical stage (source of truth), built on demand from
+    // the asset's recipe.
     mut canonical: NonSendMut<CanonicalStages>,
     asset_server: Res<AssetServer>,
 ) {
     for (entity, prim_path) in query.iter() {
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { continue; };
 
-        // Acquire a read source: the live canonical stage (preferred, built on
-        // demand from the asset recipe) or the flattened reader. If neither is
-        // available yet the asset is still loading — retry next frame WITHOUT
-        // marking, so the prim stays in the `Without<UsdSourcedCosim>` query.
+        // Acquire a read source: the live canonical stage, built on demand from
+        // the asset recipe. If it is not available yet the asset is still
+        // loading — retry next frame WITHOUT marking, so the prim stays in the
+        // `Without<UsdSourcedCosim>` query.
         let id = prim_path.stage_handle.id();
-        let live = canonical.get(id).is_some() || {
-            let recipe = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone());
-            recipe.as_ref().and_then(|r| canonical.get_or_build(id, r)).is_some()
-        };
+        if canonical.get(id).is_none() {
+            if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
+                canonical.get_or_build(id, &recipe);
+            }
+        }
 
         // Mark examined up front so each prim is inspected exactly once.
         // Without this, every *non-cosim* prim (wheels, ground, ramps — the
@@ -143,18 +143,13 @@ pub fn process_usd_cosim_prims(
         // Safe: every other `UsdSourcedCosim` consumer also requires a
         // `ModelicaModel` / `SimComponent` / `ScriptedModel` that a non-cosim
         // prim never gains, so marking it here matches nothing downstream.
-        if live {
-            commands.entity(entity).insert(UsdSourcedCosim);
-            let cs = canonical.get(id).expect("just built");
-            process_usd_cosim_prim_read(
-                &cs.view(), entity, prim_path, &sdf_path, &mut commands, &asset_server,
-            );
-        } else if let Some(stage) = stages.get(&prim_path.stage_handle) {
-            commands.entity(entity).insert(UsdSourcedCosim);
-            process_usd_cosim_prim_read(
-                &*stage.reader, entity, prim_path, &sdf_path, &mut commands, &asset_server,
-            );
-        }
+        // No live stage (asset carries no recipe / build failed) yet — skip,
+        // leaving the prim in the `Without<UsdSourcedCosim>` query to retry.
+        let Some(cs) = canonical.get(id) else { continue };
+        commands.entity(entity).insert(UsdSourcedCosim);
+        process_usd_cosim_prim_read(
+            &cs.view(), entity, prim_path, &sdf_path, &mut commands, &asset_server,
+        );
     }
 }
 
@@ -623,8 +618,7 @@ pub fn process_usd_cosim_wires(
     q_unprocessed: Query<(Entity, &UsdPrimPath), Without<UsdSourcedWire>>,
     q_all: Query<(Entity, &UsdPrimPath)>,
     stages: Res<Assets<UsdStageAsset>>,
-    // Ph0′ CUTOVER: prefer the LIVE canonical stage (built on demand from the
-    // recipe), fall back to the flattened reader for recipe-less legacy assets.
+    // Read the LIVE canonical stage, built on demand from the recipe.
     mut canonical: NonSendMut<CanonicalStages>,
 ) {
     // Bail before building the path index in the common steady-state
@@ -648,16 +642,13 @@ pub fn process_usd_cosim_wires(
     for (entity, prim_path) in q_unprocessed.iter() {
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { continue; };
         let id = prim_path.stage_handle.id();
-        let live = canonical.get(id).is_some() || {
-            let recipe = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone());
-            recipe.as_ref().and_then(|r| canonical.get_or_build(id, r)).is_some()
-        };
-        if live {
-            let cs = canonical.get(id).expect("just built");
-            process_usd_cosim_wire_read(&cs.view(), entity, prim_path, &sdf_path, &by_path, &mut commands);
-        } else if let Some(stage) = stages.get(&prim_path.stage_handle) {
-            process_usd_cosim_wire_read(&*stage.reader, entity, prim_path, &sdf_path, &by_path, &mut commands);
+        if canonical.get(id).is_none() {
+            if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
+                canonical.get_or_build(id, &recipe);
+            }
         }
+        let Some(cs) = canonical.get(id) else { continue };
+        process_usd_cosim_wire_read(&cs.view(), entity, prim_path, &sdf_path, &by_path, &mut commands);
     }
 }
 

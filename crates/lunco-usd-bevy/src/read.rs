@@ -90,12 +90,10 @@ pub trait UsdRead {
     fn is_active(&self, prim: &SdfPath) -> bool;
 
     /// Whether a prim exists at `prim` in the composed scene — the existence
-    /// test the incremental structural reconcile ([`reconcile_structural`]) uses
-    /// to tell a spawn (present in the stage, no live entity) from a remove
-    /// (absent, but a live entity survives). On the live stage this is
-    /// `Prim::is_valid`; on the flatten it is a spec lookup.
-    ///
-    /// [`reconcile_structural`]: crate::view::StageView
+    /// test the incremental structural reconcile uses to tell a spawn (present in
+    /// the stage, no live entity) from a remove (absent, but a live entity
+    /// survives). On the live stage this is `Prim::is_valid`; on the flatten it
+    /// is a spec lookup.
     fn has_prim(&self, prim: &SdfPath) -> bool;
 
     /// The stage's `defaultPrim` bare name (no leading slash), or `None` when the
@@ -108,6 +106,28 @@ pub trait UsdRead {
     /// [`UsdAnimated`](crate::UsdAnimated) tagging uses so only genuinely
     /// animated prims are sampled per frame.
     fn has_time_samples(&self, prim: &SdfPath, name: &str) -> bool;
+
+    /// The stage's `timeCodesPerSecond` — seconds × this = time code (USD maps a
+    /// time code `t` to `t / tcps` seconds). On `StageView` this is the composed
+    /// stage metadata; on the flatten it is the pseudo-root `timeCodesPerSecond`
+    /// field. Defaults to 24.0 (USD spec) when unauthored; callers apply their
+    /// own non-positive guard.
+    fn time_codes_per_second(&self) -> f64;
+
+    /// The authored `timeSamples` time codes of attribute `name` on `prim`,
+    /// ascending. Empty when the attribute carries no `timeSamples`. Feeds the
+    /// animated-clip span ([`time_sample_span`](Self::time_sample_span)) and the
+    /// camera-track key enumeration.
+    fn time_sample_times(&self, prim: &SdfPath, name: &str) -> Vec<f64>;
+
+    /// The authored `timeSamples` span `(first, last)` of attribute `name` on
+    /// `prim` — the min/max sample time codes. Provided from
+    /// [`time_sample_times`](Self::time_sample_times) (samples are stored
+    /// ascending). `None` when the attribute is unsampled.
+    fn time_sample_span(&self, prim: &SdfPath, name: &str) -> Option<(f64, f64)> {
+        let ts = self.time_sample_times(prim, name);
+        Some((*ts.first()?, *ts.last()?))
+    }
 }
 
 impl UsdRead for StageView<'_> {
@@ -221,6 +241,21 @@ impl UsdRead for StageView<'_> {
             .flatten()
             .is_some_and(|s| !s.is_empty())
     }
+
+    fn time_codes_per_second(&self) -> f64 {
+        self.stage().time_codes_per_second()
+    }
+
+    fn time_sample_times(&self, prim: &SdfPath, name: &str) -> Vec<f64> {
+        self.stage()
+            .prim(prim.clone())
+            .attribute(name)
+            .time_samples()
+            .ok()
+            .flatten()
+            .map(|s| s.iter().map(|(t, _)| *t).collect())
+            .unwrap_or_default()
+    }
 }
 
 impl UsdRead for openusd::sdf::Data {
@@ -295,6 +330,25 @@ impl UsdRead for openusd::sdf::Data {
             .ok()
             .and_then(|ap| self.field(&ap, "timeSamples"))
             .is_some_and(|v| matches!(v, Value::TimeSamples(_)))
+    }
+
+    fn time_codes_per_second(&self) -> f64 {
+        // Pseudo-root `timeCodesPerSecond` (flattened onto abs-root); default 24.0
+        // (USD spec) when unauthored. The non-positive guard lives in the free
+        // `stage_time_codes_per_second` wrapper, shared with the live path.
+        self.field_as::<f64>(&SdfPath::abs_root(), "timeCodesPerSecond")
+            .unwrap_or(24.0)
+    }
+
+    fn time_sample_times(&self, prim: &SdfPath, name: &str) -> Vec<f64> {
+        prim.append_property(name)
+            .ok()
+            .and_then(|ap| self.field(&ap, "timeSamples"))
+            .and_then(|v| match v {
+                Value::TimeSamples(s) => Some(s.iter().map(|(t, _)| *t).collect()),
+                _ => None,
+            })
+            .unwrap_or_default()
     }
 }
 

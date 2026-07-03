@@ -206,6 +206,30 @@ impl CanonicalStages {
         self.by_asset.is_empty()
     }
 
+    /// Force-rebuild the live stage for `asset` from `recipe`, **replacing** any
+    /// existing one (and its sink). Used when an async asset reload lands (twin
+    /// overlay edits) and the reconcile must read the *post-edit* composed stage:
+    /// rebuilding inline here — from the reloaded asset's own fresh recipe — makes
+    /// the reconcile self-contained, with no ordering dependency on the separate
+    /// [`sync_canonical_stages`] system that reacts to the same asset event.
+    /// Returns `false` if the build fails.
+    pub fn rebuild(
+        &mut self,
+        asset: bevy::asset::AssetId<crate::UsdStageAsset>,
+        recipe: &crate::StageRecipe,
+    ) -> bool {
+        match CanonicalStage::from_recipe(recipe) {
+            Ok(cs) => {
+                self.by_asset.insert(asset, cs);
+                true
+            }
+            Err(e) => {
+                bevy::log::warn!("[canonical] rebuild from recipe failed for {asset:?}: {e}");
+                false
+            }
+        }
+    }
+
     /// Build the canonical stage for `asset` from its `recipe` **on demand** if
     /// not already present, and return a reference to it.
     ///
@@ -332,7 +356,6 @@ mod sync_system_tests {
     use super::*;
     use bevy::asset::{AssetApp, AssetPlugin};
     use bevy::prelude::*;
-    use std::sync::Arc;
 
     const FIXTURE: &str =
         "#usda 1.0\n\ndef Xform \"Root\"\n{\n    def Cube \"Box\"\n    {\n        double size = 3\n    }\n}\n";
@@ -347,10 +370,6 @@ mod sync_system_tests {
         let root_id = crate::resolver::canonicalize(f.to_str().unwrap(), None);
         let bytes = HashMap::from([(root_id.clone(), std::fs::read(&f).unwrap())]);
         let recipe = StageRecipe { root_id, bytes };
-        // A reader for the asset (the field the legacy path uses); the system
-        // itself only reads `recipe`.
-        let stage = crate::compose::build_stage_from_closure(&recipe).unwrap();
-        let reader = Arc::new(crate::compose::flatten_stage(&stage).unwrap());
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -363,7 +382,7 @@ mod sync_system_tests {
         let handle = app
             .world_mut()
             .resource_mut::<Assets<crate::UsdStageAsset>>()
-            .add(crate::UsdStageAsset { reader, recipe: Some(recipe) });
+            .add(crate::UsdStageAsset { recipe: Some(recipe) });
 
         // One frame flushes the asset event; the next lets the system act on it.
         app.update();

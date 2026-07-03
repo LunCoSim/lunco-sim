@@ -327,10 +327,20 @@ pub(crate) fn collect_reloaded_twin_assets(
 }
 
 /// Run the structural reconciles whose twin asset reload has now landed: for a
-/// per-prim batch, [`reconcile_structural`](crate::live_consume::reconcile_structural)
-/// against the fresh reader; for a `full` batch, an in-place whole-scene
-/// rebuild. Reconciles whose reload hasn't arrived yet are retried next frame.
+/// per-prim batch,
+/// [`reconcile_structural_live`](crate::live_consume::reconcile_structural_live)
+/// against the freshly-rebuilt live stage; for a `full` batch, an in-place
+/// whole-scene rebuild. Reconciles whose reload hasn't arrived yet are retried
+/// next frame.
+///
+/// The reload rebuilds the composed stage from the twin overlay; we rebuild the
+/// scene's [`CanonicalStage`](lunco_usd_bevy::CanonicalStage) inline from the
+/// reloaded asset's fresh recipe so the reconcile reads the *post-edit* composed
+/// stage — self-contained, no flatten, and no ordering race with the separate
+/// `sync_canonical_stages` system that reacts to the same asset event.
 pub(crate) fn drain_twin_reconciles(world: &mut World) {
+    use lunco_usd_bevy::CanonicalStages;
+
     let loaded = std::mem::take(&mut world.resource_mut::<ReloadedTwinAssets>().ids);
     if loaded.is_empty() {
         return;
@@ -345,21 +355,28 @@ pub(crate) fn drain_twin_reconciles(world: &mut World) {
             still.push(item);
             continue;
         }
-        // Fresh, fully-resolved reader from the asset store.
-        let reader = world
+        // Rebuild the live stage from the reloaded asset's fresh recipe so the
+        // reconcile below reads the post-edit composed stage.
+        let recipe = world
             .resource::<Assets<UsdStageAsset>>()
             .get(item.handle_id)
-            .map(|a| a.reader.clone());
-        let Some(reader) = reader else {
-            continue; // asset gone — drop the reconcile
+            .and_then(|a| a.recipe.clone());
+        let Some(recipe) = recipe else {
+            continue; // asset gone / no recipe — drop the reconcile
         };
+        let rebuilt = world
+            .get_non_send_resource_mut::<CanonicalStages>()
+            .map(|mut stages| stages.rebuild(item.handle_id, &recipe))
+            .unwrap_or(false);
+        if !rebuilt {
+            continue; // canonical build failed — skip rather than reconcile stale
+        }
         if item.full {
             full_rebuild_twin_scene(world, item.handle_id);
         } else {
-            crate::live_consume::reconcile_structural(
+            crate::live_consume::reconcile_structural_live(
                 world,
                 item.handle_id,
-                &*reader,
                 &item.resync_paths,
             );
         }

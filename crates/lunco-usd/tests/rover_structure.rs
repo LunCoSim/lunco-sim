@@ -39,13 +39,30 @@ fn chassis_child(app: &App, rover: Entity, label: impl std::fmt::Display) -> Ent
         .find(|&c| app.world().get::<Name>(c).map(|n| n.as_str().contains("Chassis")).unwrap_or(false))
         .unwrap_or_else(|| panic!("{label}: rover has no Chassis child"))
 }
-use std::sync::Arc;
 use std::path::Path;
 
-fn compose_and_load(file_path: &Path, prim_path: &str) -> App {
-    let composed = compose_file(file_path)
+/// Build the live canonical stage for a rover `.usda` (which references
+/// `wheel.usda` / drivetrain sublayers) and publish it into `CanonicalStages`
+/// keyed by a fresh `UsdStageAsset` handle. File-with-external-refs scenes can't
+/// use `StageRecipe::from_source` (a lone in-memory layer won't resolve the
+/// refs), so we compose the full closure via `compose_file_to_stage` and insert
+/// the wrapped stage directly — the same door the live-doc projection uses.
+fn add_canonical_from_file(app: &mut App, file_path: &Path) -> Handle<UsdStageAsset> {
+    let handle = {
+        let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
+        stages.add(UsdStageAsset { recipe: None })
+    };
+    let stage = compose_file_to_stage(file_path)
         .unwrap_or_else(|e| panic!("Composition failed for {}: {e}", file_path.display()));
+    let cstage = CanonicalStage::from_stage(stage, file_path.display().to_string());
+    app.world_mut()
+        .get_non_send_resource_mut::<CanonicalStages>()
+        .expect("CanonicalStages resource (UsdBevyPlugin)")
+        .insert(handle.id(), cstage);
+    handle
+}
 
+fn compose_and_load(file_path: &Path, prim_path: &str) -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(AssetPlugin::default());
@@ -57,8 +74,7 @@ fn compose_and_load(file_path: &Path, prim_path: &str) -> App {
     app.init_asset::<bevy::shader::Shader>();
     app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
 
-    let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-    let handle = stages.add(UsdStageAsset { reader: Arc::new(composed) });
+    let handle = add_canonical_from_file(&mut app, file_path);
 
     app.world_mut().spawn((
         Name::new("TestRover"),
@@ -90,8 +106,6 @@ fn compose_and_load(file_path: &Path, prim_path: &str) -> App {
 #[test]
 fn headless_server_builds_wheel_physics_without_shader_material() {
     let file = Path::new("../../assets/vessels/rovers/skid_rover.usda");
-    let composed = compose_file(file)
-        .unwrap_or_else(|e| panic!("Composition failed for {}: {e}", file.display()));
 
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
@@ -106,10 +120,7 @@ fn headless_server_builds_wheel_physics_without_shader_material() {
     app.insert_resource(NoRenderVisuals); // the fix under test
     app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
 
-    let handle = app
-        .world_mut()
-        .resource_mut::<Assets<UsdStageAsset>>()
-        .add(UsdStageAsset { reader: Arc::new(composed) });
+    let handle = add_canonical_from_file(&mut app, file);
     app.world_mut().spawn((
         Name::new("HeadlessRover"),
         UsdPrimPath { stage_handle: handle, path: "/SkidRover".to_string() },

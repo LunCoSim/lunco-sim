@@ -1,6 +1,5 @@
 use bevy::prelude::*;
 use lunco_usd_bevy::*;
-use std::sync::Arc;
 
 #[test]
 fn test_usd_material_binding_parsing() {
@@ -51,10 +50,12 @@ def Xform "World"
 }
 "#;
 
-    let reader = Arc::new(openusd::usda::parse(usda_content).expect("parse USDA"));
-
+    // The material resolves off the live canonical stage, built on demand from
+    // this recipe (single in-memory layer, no external refs → `from_source`).
     let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-    let stage_handle = stages.add(UsdStageAsset { reader, recipe: None });
+    let stage_handle = stages.add(UsdStageAsset {
+        recipe: Some(StageRecipe::from_source("scene.usda", usda_content)),
+    });
 
     // Spawn the MeshWithMaterial entity representing the USD prim
     let test_entity = app.world_mut().spawn((
@@ -139,11 +140,11 @@ def Xform "World"
 }
 "#;
 
-    let reader = Arc::new(openusd::usda::parse(usda_content).expect("parse USDA"));
-
     let stage_handle = {
         let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-        stages.add(UsdStageAsset { reader, recipe: None })
+        stages.add(UsdStageAsset {
+            recipe: Some(StageRecipe::from_source("scene.usda", usda_content)),
+        })
     };
 
     let test_entity = app.world_mut().spawn((
@@ -196,13 +197,21 @@ def Xform "World"
 }
 "#;
 
-    let updated_reader = Arc::new(openusd::usda::parse(updated_usda_content).expect("parse updated USDA"));
-
-    // Update the reader inside the asset in-place
+    // Re-author the USD: rebuild the live canonical stage from a NEW recipe made
+    // from the updated source (the canonical model's re-derive path — replaces
+    // the old in-place `asset.reader = ...` swap). `rebuild` drops the previous
+    // stage + sink and composes the post-edit one, so the re-instantiation below
+    // reads the new material off the live stage.
     {
-        let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-        let asset = stages.get_mut(&stage_handle).unwrap();
-        asset.reader = updated_reader;
+        let new_recipe = StageRecipe::from_source("scene.usda", updated_usda_content);
+        let mut canonical = app
+            .world_mut()
+            .get_non_send_resource_mut::<CanonicalStages>()
+            .unwrap();
+        assert!(
+            canonical.rebuild(stage_handle.id(), &new_recipe),
+            "rebuilding the canonical stage from the updated recipe must succeed"
+        );
     }
 
     // Trigger visual sync again on the entity by removing UsdVisualSynced and triggering UsdPrimPath addition
@@ -239,10 +248,11 @@ fn material_for(usda: &str, prim_path: &str) -> StandardMaterial {
     app.init_asset::<Image>();
     app.add_plugins(UsdBevyPlugin);
 
-    let reader = Arc::new(openusd::usda::parse(usda).expect("parse USDA"));
     let stage_handle = {
         let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-        stages.add(UsdStageAsset { reader, recipe: None })
+        stages.add(UsdStageAsset {
+            recipe: Some(StageRecipe::from_source("scene.usda", usda)),
+        })
     };
     let entity = app
         .world_mut()
