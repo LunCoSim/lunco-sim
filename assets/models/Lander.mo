@@ -9,16 +9,30 @@ model Lander
    branch-free arithmetic gate below — ALL control math stays here; who-wins is
    decided UPSTREAM (possession arbiter + rhai policy), never computed in rhai/USD."
 
-  // ── Vehicle parameters ──
-  parameter Real vehicle_mass = 2000.0 "Vehicle mass (kg) — keep == USD physics:mass";
+  // ── Structural parameters (fixed at init from `lunco:params`; change = re-init/reload) ──
   parameter Real max_thrust = 60000.0 "Max engine thrust (N)";
   parameter Real v_e = 2900.0 "Effective exhaust velocity (m/s)";
 
-  // ── GNC descent schedule / gain ──
-  parameter Real kv = 1.2 "Descent-rate tracking gain (P on velocity error)";
-  parameter Real rest_altitude = 1.5 "Altimeter range (m) at leg contact (~1.7) — the hover target; sit just below it";
-  parameter Real descent_slope = 0.6 "Descent-speed schedule slope (m/s of descent per metre above rest)";
-  parameter Real vy_max = 6.0 "Max commanded descent speed (m/s)";
+  // ── Live-tunable gains & authorities ──────────────────────────────────────
+  // INPUTS, so they are editable AT SIM-RATE with no relaunch — Inspector sliders
+  // during an Interactive run, `set(lander, "kv", …)` from rhai/REPL, or the HTTP
+  // API / MCP `set_input`. Their init comes from `lunco:params`; each may also be
+  // simWired from a USD-derived port (e.g. `mass`, `inertia_*`) instead of a magic
+  // constant — so tuning is realtime and provenance is the USD model.
+  input Real vehicle_mass = 2000.0 "Vehicle mass (kg) — wire from the body `mass` port";
+  input Real kv = 1.2 "Descent-rate tracking gain (P on velocity error)";
+  input Real rest_altitude = 1.5 "Altimeter range (m) at leg contact (~1.7) — the hover target; sit just below it";
+  input Real descent_slope = 0.6 "Descent-speed schedule slope (m/s of descent per metre above rest)";
+  input Real vy_max = 6.0 "Max commanded descent speed (m/s)";
+  input Real spool_tau = 0.4 "Command spool-lag time constant (s)";
+  // Attitude authority as a target ANGULAR ACCELERATION per unit stick (rad/s^2);
+  // the commanded torque is τ = I·α using the body's SENSED inertia (`inertia_*`,
+  // wired from the Avian body). Control effort thus scales with the real mass
+  // distribution (USD-derived), never a magic N*m constant.
+  input Real ang_authority = 7.0 "Commanded angular acceleration per unit stick (rad/s^2)";
+  input Real inertia_xx = 6250.0 "Body moment of inertia about X (kg*m^2) — wired from body `inertia_xx`";
+  input Real inertia_yy = 6250.0 "Body moment of inertia about Y (kg*m^2) — wired from body `inertia_yy`";
+  input Real inertia_zz = 6250.0 "Body moment of inertia about Z (kg*m^2) — wired from body `inertia_zz`";
 
   // ── Authority gate (WRITTEN by the possession/rhai policy layer — NOT computed here) ──
   input Real manual = 0.0 "0 = GNC autonomous (baseline authority); 1 = obey external command (override)";
@@ -88,18 +102,18 @@ equation
   //    (not a nested `if`) is the form rumoca's reconstructor evaluates correctly. ──
   cmd_throttle = manual * filter_throttle + (1.0 - manual) * gnc_throttle;
 
-  // Spool lag on the MANUAL stick only (tau = 0.4s).
-  der(filter_throttle) = (external_throttle - filter_throttle) / 0.4;
-  der(filter_pitch) = (pitch - filter_pitch) / 0.4;
-  der(filter_roll) = (roll - filter_roll) / 0.4;
-  der(filter_yaw) = (yaw - filter_yaw) / 0.4;
+  // Spool lag on the MANUAL stick only (time constant `spool_tau`).
+  der(filter_throttle) = (external_throttle - filter_throttle) / spool_tau;
+  der(filter_pitch) = (pitch - filter_pitch) / spool_tau;
+  der(filter_roll) = (roll - filter_roll) / spool_tau;
+  der(filter_yaw) = (yaw - filter_yaw) / spool_tau;
 
   // Local command force (body +Y) & torque. Attitude is manual-only (the vertical
   // GNC issues no torque); gate torque by `manual` so autonomous descent stays hands-off.
   f_loc_y = cmd_throttle * max_thrust;
-  t_loc_x = manual * filter_pitch * 45000.0;
-  t_loc_y = manual * filter_yaw * 45000.0;
-  t_loc_z = manual * filter_roll * 45000.0;
+  t_loc_x = manual * filter_pitch * inertia_xx * ang_authority;   // τ = I·α, pitch about X
+  t_loc_y = manual * filter_yaw * inertia_yy * ang_authority;     // τ = I·α, yaw   about Y
+  t_loc_z = manual * filter_roll * inertia_zz * ang_authority;    // τ = I·α, roll  about Z
 
   // Rotate the local +Y thrust into the world frame by the body quaternion.
   f_world_x = 2.0 * (q_x*q_y + q_w*q_z) * f_loc_y;

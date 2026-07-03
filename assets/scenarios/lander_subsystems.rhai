@@ -15,8 +15,9 @@
 fn on_start(me) {
     this.touchdown = false;
     this.manual = false;
-    set(me, "manual", 0.0);        // GNC drives by default — the lowest authority tier
-    set(me, "engine_enable", 1.0); // armed for the autonomous descent
+    // GNC drives by default (manual defaults to 0 in the model — the lowest
+    // authority tier); the engine is armed for the autonomous descent.
+    set(me, "engine_enable", 1.0);
 }
 
 fn on_tick(me) {
