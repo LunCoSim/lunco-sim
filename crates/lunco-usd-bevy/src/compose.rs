@@ -28,7 +28,7 @@ use std::collections::HashMap;
 use anyhow::{anyhow, Result};
 use bevy::asset::{AssetPath, LoadContext};
 use openusd::ar::ResolvedPath;
-use openusd::sdf::{self, AbstractData, Path as SdfPath, PathListOp, SpecData, SpecType, Value};
+use openusd::sdf::{self, Path as SdfPath, PathListOp, SpecData, SpecType, Value};
 use openusd::usd::{PrimPredicate, Stage};
 use openusd::usda;
 
@@ -43,6 +43,24 @@ pub(crate) async fn compose_to_data(
     root_asset_path: &str,
     root_bytes: Vec<u8>,
 ) -> Result<sdf::Data> {
+    let stage = compose_to_stage(load_context, root_asset_path, root_bytes).await?;
+    // 3. Flatten composed stage → TextReader. `flatten_stage` discovers binary
+    //    arcs from the composed layer stack and anchors their URIs on the
+    //    composed prims via each prim's composition stack.
+    flatten_stage(&stage)
+}
+
+/// Fetch the full transitive `.usda` closure and compose it into a **live**
+/// openusd [`Stage`], WITHOUT flattening. This is the canonical-document build
+/// path (Ph0′): the returned `Stage` is `!Send` and must stay on the main
+/// thread (a `NonSend` resource); it retains layers, edit targets, and change
+/// sinks that the flattened `sdf::Data` loses. [`compose_to_data`] is the thin
+/// wrapper that flattens this for the legacy asset pipeline.
+pub(crate) async fn compose_to_stage(
+    load_context: &mut LoadContext<'_>,
+    root_asset_path: &str,
+    root_bytes: Vec<u8>,
+) -> Result<Stage> {
     let root_id = canonicalize(root_asset_path, None);
 
     // 1. Pre-fetch BFS — keyed by the SAME canonical id the resolver will use.
@@ -87,10 +105,7 @@ pub(crate) async fn compose_to_data(
         .open(&root_id)
         .map_err(|e| anyhow!("USD composition error: {e}"))?;
 
-    // 3. Flatten composed stage → TextReader. `flatten_stage` discovers binary
-    //    arcs from the composed layer stack and anchors their URIs on the
-    //    composed prims via each prim's composition stack.
-    flatten_stage(&stage)
+    Ok(stage)
 }
 
 /// Walk a parsed layer's specs and collect the non-binary `.usda`
@@ -132,7 +147,7 @@ fn discover_arcs(data: &sdf::Data) -> Vec<String> {
 /// Binary-asset arcs (glTF/OBJ/STL) authored anywhere in the composed layer
 /// stack surface as `lunco:resolvedAsset` attributes, anchored on their COMPOSED
 /// prim (see [`discover_binary_sites`]).
-fn flatten_stage(stage: &Stage) -> Result<sdf::Data> {
+pub(crate) fn flatten_stage(stage: &Stage) -> Result<sdf::Data> {
     let mut data: HashMap<SdfPath, SpecData> = HashMap::new();
 
     // Pseudo-root: carries `defaultPrim` (deferred root-prim resolution) and the
@@ -330,13 +345,21 @@ pub fn compose_native_fs(_source: &str, _base_dir: &std::path::Path) -> Option<s
 /// reference tree resolves exactly as authored.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn compose_file(path: &std::path::Path) -> Result<sdf::Data> {
+    // `flatten_stage` surfaces binary-asset arcs (glTF/…) as `lunco:resolvedAsset`
+    // across the whole composed layer stack, anchored on each composed prim.
+    flatten_stage(&compose_file_to_stage(path)?)
+}
+
+/// Compose a USD layer from disk into a **live** [`Stage`] without flattening —
+/// the stage-returning sibling of [`compose_file`], for the canonical-document
+/// path and for parity tests that compare live-stage reads against the flattened
+/// result. Native + synchronous (`DefaultResolver`).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn compose_file_to_stage(path: &std::path::Path) -> Result<Stage> {
     let id = path
         .to_str()
         .ok_or_else(|| anyhow!("non-UTF8 USD path: {path:?}"))?;
-    let stage = Stage::open(id).map_err(|e| anyhow!("USD composition error for {id}: {e}"))?;
-    // `flatten_stage` surfaces binary-asset arcs (glTF/…) as `lunco:resolvedAsset`
-    // across the whole composed layer stack, anchored on each composed prim.
-    flatten_stage(&stage)
+    Stage::open(id).map_err(|e| anyhow!("USD composition error for {id}: {e}"))
 }
 
 /// Resolver for the native-fs viewport path: the root layer is held in memory;

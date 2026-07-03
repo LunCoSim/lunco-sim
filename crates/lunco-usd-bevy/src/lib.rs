@@ -54,8 +54,14 @@ pub mod camera_track;
 pub use camera_switch::SetActiveCamera;
 pub mod author;
 pub mod usd_data;
+pub mod view;
+pub mod canonical;
 use usd_data::UsdDataExt;
+pub use view::StageView;
+pub use canonical::{CanonicalStage, RawStageChange};
 pub use compose::compose_native_fs;
+#[cfg(not(target_arch = "wasm32"))]
+pub use compose::compose_file_to_stage;
 #[cfg(not(target_arch = "wasm32"))]
 pub use compose::compose_file;
 pub use light::{FallbackSceneLight, UsdAuthoredLight};
