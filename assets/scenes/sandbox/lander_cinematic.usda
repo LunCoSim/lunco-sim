@@ -63,6 +63,23 @@ over "LanderTest"
         float2 clippingRange = (0.1, 200000.0)
     }
 
+    # ── CameraTrack: the cuts as DATA (doc 35, slice 1) ──
+    # `lunco:activeCamera` is a held-interpolated token channel: at each key time
+    # (seconds, since timeCodesPerSecond=1) the named camera becomes live. The
+    # camera-track sampler fires `SetActiveCamera` on every cut, so these three
+    # fixed-time beats are DATA on the timeline instead of imperative
+    # `set_camera(...)` calls in the rhai director — and they scrub with the
+    # animation transport. The gated cuts (PadCam on touchdown, RoverCam on
+    # deploy) stay in the rhai script, which writes them on their sim events.
+    def Scope "CameraTrack"
+    {
+        token lunco:activeCamera.timeSamples = {
+            0:  "WideTrack",
+            6:  "TrackCam",
+            12: "DescentCam",
+        }
+    }
+
     # ── PadCam: static low-angle pad camera for the touchdown beat ──
     # A plain `def Camera` (no timeSamples) → its `lunco:cameraLookAt` aim is
     # baked once at spawn and preserved. Sits beside the pad looking up so the

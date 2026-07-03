@@ -29,28 +29,30 @@ fn at_wp(n, r) {
 fn task(me) {
     seq([
         // ── Beat 1: wide heroic establishing (mounted, auto-framing) ─────────
-        // Progressive mounted cameras (wide → medium → onboard) all ride the
-        // descending lander and auto-aim, so each cut is correctly framed and the
-        // sequence reads as a continuous push-in / zoom toward the surface.
+        // The camera CUTS for the fixed-time beats (WideTrack@0 → TrackCam@6 →
+        // DescentCam@12) now live as DATA on the scene's `CameraTrack`
+        // (`lunco:activeCamera.timeSamples`); the camera-track sampler fires them
+        // as the animation transport advances. This director only starts the
+        // transport and narrates — it no longer imperatively `set_camera(...)`s
+        // the timed cuts (doc 35, slice 1). Progressive mounted cameras (wide →
+        // medium → onboard) all ride the descending lander and auto-aim, so each
+        // cut reads as a continuous push-in / zoom toward the surface.
         once(|m| {
-            play_animation();              // drive any keyframed dolly cameras
-            set_camera("WideTrack");
+            play_animation();              // advance the timeline → the CameraTrack cuts
             show_wp(2, false);
             show_wp(3, false);
             notify_kind("T-0 - powered descent from orbit.", "info");
         }),
         wait(6.0),
 
-        // ── Beat 2: closer external tracking shot ────────────────────────────
+        // ── Beat 2: closer external tracking shot (cut driven by CameraTrack) ─
         once(|m| {
-            set_camera("TrackCam");
             notify_kind("Tracking powered descent.", "info");
         }),
         wait(6.0),
 
-        // ── Beat 3: onboard descent POV for final approach ──────────────────
+        // ── Beat 3: onboard descent POV (cut driven by CameraTrack) ─────────
         once(|m| {
-            set_camera("DescentCam");
             notify_kind("Final approach - onboard view.", "info");
         }),
 
