@@ -2568,7 +2568,7 @@ pub struct WheelFootprint {
 ///
 /// Returns `None` when no wheel prims are found (non-vehicle assets use the
 /// caller's default footprint).
-pub fn wheel_footprint(reader: &UsdData, root_prim: &str) -> Option<WheelFootprint> {
+pub fn wheel_footprint<R: UsdRead>(reader: &R, root_prim: &str) -> Option<WheelFootprint> {
     let Ok(root) = SdfPath::new(root_prim) else { return None };
     let mut contacts: Vec<bevy::math::DVec3> = Vec::new();
     let root_tf = local_transform_at(reader, &root, 0.0).unwrap_or_default();
@@ -2597,14 +2597,14 @@ pub fn wheel_footprint(reader: &UsdData, root_prim: &str) -> Option<WheelFootpri
 
 /// Recursive helper for [`wheel_footprint`]: DFS the prim tree composing
 /// transforms, and record each wheel's ground contact in the root's level frame.
-fn collect_wheel_contacts(
-    reader: &UsdData,
+fn collect_wheel_contacts<R: UsdRead>(
+    reader: &R,
     path: &SdfPath,
     parent_tf: Transform,
     contacts: &mut Vec<bevy::math::DVec3>,
 ) {
-    for child in reader.prim_children(path) {
-        if !reader.prim_is_active(&child) {
+    for child in reader.children(path) {
+        if !reader.is_active(&child) {
             continue;
         }
         // `parent_tf * local` composes the child's transform in the root frame
@@ -2614,11 +2614,11 @@ fn collect_wheel_contacts(
         let local = local_transform_at(reader, &child, 0.0).unwrap_or_default();
         let world = parent_tf * local;
         if reader
-            .prim_attribute_value::<i32>(&child, "physxVehicleWheel:index")
+            .scalar::<i32>(&child, "physxVehicleWheel:index")
             .is_some()
         {
             let radius = reader
-                .prim_attribute_value::<f64>(&child, "radius")
+                .scalar::<f64>(&child, "radius")
                 .unwrap_or(0.25);
             let center = world.translation.as_dvec3();
             contacts.push(bevy::math::DVec3::new(

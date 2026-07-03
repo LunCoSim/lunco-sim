@@ -7264,6 +7264,7 @@ dependencies = [
  "lunco-twin-journal",
  "lunco-ui",
  "lunco-usd",
+ "lunco-usd-bevy",
  "lunco-web",
  "lunco-workbench",
  "lunco-workspace",

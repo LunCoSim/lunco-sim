@@ -43,7 +43,10 @@ use lunco_mobility::LunCoMobilityPlugin;
 use lunco_hardware::LunCoHardwarePlugin;
 // USD core (scene load + collider build) is always needed; the Twin browser /
 // RTT viewport UI plugins are `ui`-only (added by `SandboxUiPlugin`).
-use lunco_usd::{LoadScene, UsdDataExt, UsdPlugins, UsdPrimPath, UsdStageAsset};
+use lunco_usd::{LoadScene, UsdPlugins, UsdPrimPath, UsdStageAsset};
+// The USD-reading terrain systems read the LIVE canonical stage via `StageView`
+// (which implements `UsdRead`), falling back to the flattened `stage.reader`.
+use lunco_usd_bevy::UsdRead;
 use bevy::asset::AssetLoadFailedEvent;
 
 /// Re-exported so the (bevy-free) bin crates can return it from `main` to
@@ -615,6 +618,28 @@ struct LayerRole {
 /// (meso normal — overrides the derived bake). Maps only render when the prim's
 /// `shaderPath` is `terrain_layered.wgsl` (which declares the bindings); with
 /// `regolith.wgsl` the slots are simply ignored. One-shot per terrain.
+/// Read the authored `(role, rel-path, weight)` triples off `sdf` via any
+/// [`UsdRead`] source — the live `StageView` or the flattened reader — so the
+/// binding is identical whichever plane supplied the stage.
+#[cfg(feature = "ui")]
+fn read_authored_layer_maps<R: UsdRead>(
+    reader: &R,
+    sdf: &openusd::sdf::Path,
+    roles: &'static [LayerRole],
+) -> Vec<(&'static LayerRole, String, f32)> {
+    roles
+        .iter()
+        .filter_map(|role| {
+            let map_attr = format!("lunco:terrain:layer:{}:map", role.name);
+            let rel = reader.scalar::<String>(sdf, &map_attr)?;
+            let weight = reader
+                .scalar::<f32>(sdf, &format!("lunco:terrain:layer:{}:weight", role.name))
+                .unwrap_or(1.0);
+            Some((role, rel, weight))
+        })
+        .collect()
+}
+
 #[cfg(feature = "ui")]
 fn bind_terrain_layers(
     q: Query<
@@ -625,6 +650,7 @@ fn bind_terrain_layers(
     twins: Res<lunco_assets::twin_source::TwinRoots>,
     asset_server: Res<AssetServer>,
     mut mats: ResMut<Assets<lunco_materials::ShaderMaterial>>,
+    mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
     mut commands: Commands,
 ) {
     use lunco_materials::ParamValue;
@@ -637,26 +663,31 @@ fn bind_terrain_layers(
     ];
 
     for (entity, prim_path, mat3d) in &q {
-        let Some(stage) = stages.get(&prim_path.stage_handle) else { continue };
         let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else {
             commands.entity(entity).insert(TerrainLayersBound);
             continue;
         };
-        let reader = &*stage.reader;
 
+        // Dual-source: read the LIVE canonical stage (built on demand from the
+        // asset's recipe) — the source of truth — and fall back to the flattened
+        // `stage.reader` only for recipe-less legacy assets. Both go through the
+        // same `UsdRead` read body (`read_authored_layer_maps`).
+        let id = prim_path.stage_handle.id();
+        let live = canonical.get(id).is_some() || {
+            let recipe = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone());
+            recipe.as_ref().and_then(|r| canonical.get_or_build(id, r)).is_some()
+        };
         // Collect the authored (role, rel-path, weight) before touching the
         // material, so we can wait for the Twin + material without half-binding.
-        let authored: Vec<(&LayerRole, String, f32)> = ROLES
-            .iter()
-            .filter_map(|role| {
-                let map_attr = format!("lunco:terrain:layer:{}:map", role.name);
-                let rel = reader.prim_attribute_value::<String>(&sdf, &map_attr)?;
-                let weight = reader
-                    .prim_attribute_value::<f32>(&sdf, &format!("lunco:terrain:layer:{}:weight", role.name))
-                    .unwrap_or(1.0);
-                Some((role, rel, weight))
-            })
-            .collect();
+        let authored: Vec<(&LayerRole, String, f32)> = if live {
+            let view = canonical.get(id).expect("just built").view();
+            read_authored_layer_maps(&view, &sdf, ROLES)
+        } else if let Some(stage) = stages.get(&prim_path.stage_handle) {
+            read_authored_layer_maps(&*stage.reader, &sdf, ROLES)
+        } else {
+            // Stage not loaded yet — retry next frame.
+            continue;
+        };
 
         if authored.is_empty() {
             // No layer authored — stop re-scanning this terrain.
@@ -690,48 +721,48 @@ fn bind_terrain_layers(
 /// USD-backed [`LayerAttrSource`](lunco_terrain_surface::LayerAttrSource): reads a
 /// child layer prim's attributes through the stage reader, so terrain-surface's layer
 /// parsers stay USD-free. Generic over the reader so we needn't name its concrete type.
-struct UsdLayerAttrs<'a, R: lunco_usd::UsdDataExt> {
+struct UsdLayerAttrs<'a, R: UsdRead> {
     reader: &'a R,
     sdf: openusd::sdf::Path,
 }
 
-impl<R: lunco_usd::UsdDataExt> lunco_terrain_surface::LayerAttrSource for UsdLayerAttrs<'_, R> {
+impl<R: UsdRead> lunco_terrain_surface::LayerAttrSource for UsdLayerAttrs<'_, R> {
     fn get_f32(&self, name: &str) -> Option<f32> {
-        self.reader.prim_attribute_value::<f32>(&self.sdf, name)
+        self.reader.scalar::<f32>(&self.sdf, name)
     }
     fn get_i64(&self, name: &str) -> Option<i64> {
-        self.reader.prim_attribute_value::<i32>(&self.sdf, name).map(|v| v as i64)
+        self.reader.scalar::<i32>(&self.sdf, name).map(|v| v as i64)
     }
     fn get_string(&self, name: &str) -> Option<String> {
-        self.reader.prim_attribute_value::<String>(&self.sdf, name)
+        self.reader.scalar::<String>(&self.sdf, name)
     }
     fn get_bool(&self, name: &str) -> Option<bool> {
-        self.reader.prim_attribute_value::<bool>(&self.sdf, name)
+        self.reader.scalar::<bool>(&self.sdf, name)
     }
 }
 
 /// The `dem` (ground) child layer prim of a layered terrain, if authored.
-fn find_dem_layer<R: lunco_usd::UsdDataExt>(
+fn find_dem_layer<R: UsdRead>(
     reader: &R,
     terrain: &openusd::sdf::Path,
 ) -> Option<openusd::sdf::Path> {
     reader
-        .prim_children(terrain)
+        .children(terrain)
         .into_iter()
-        .find(|c| reader.prim_attribute_value::<String>(c, "lunco:layer").as_deref() == Some("dem"))
+        .find(|c| reader.scalar::<String>(c, "lunco:layer").as_deref() == Some("dem"))
 }
 
 /// Parse the non-ground child layer prims (`craters`/`rocks`/`shader`/…) into the
 /// composable [`TerrainLayerStack`](lunco_terrain_surface::TerrainLayerStack) via the
 /// registry. Shared by the bridge (initial build) and the live-edit refresh.
-fn parse_terrain_layer_stack<R: lunco_usd::UsdDataExt>(
+fn parse_terrain_layer_stack<R: UsdRead>(
     reader: &R,
     terrain: &openusd::sdf::Path,
     registry: &lunco_terrain_surface::TerrainLayerParserRegistry,
 ) -> lunco_terrain_surface::TerrainLayerStack {
     let mut stack = lunco_terrain_surface::TerrainLayerStack::default();
-    for child in reader.prim_children(terrain) {
-        let Some(layer_type) = reader.prim_attribute_value::<String>(&child, "lunco:layer") else {
+    for child in reader.children(terrain) {
+        let Some(layer_type) = reader.scalar::<String>(&child, "lunco:layer") else {
             continue;
         };
         if layer_type == "dem" {
@@ -756,31 +787,31 @@ fn parse_terrain_layer_stack<R: lunco_usd::UsdDataExt>(
 /// `new(0.2, mode, mode*4, 0.6)`) so a subsequent panel edit starts from the authored
 /// look rather than jumping. Writes the resource only (no `UpdateObstacleFieldSpec`,
 /// no re-stamp — the terrain already built from the same USD stack).
-fn sync_obstacle_spec_from_usd<R: lunco_usd::UsdDataExt>(
+fn sync_obstacle_spec_from_usd<R: UsdRead>(
     reader: &R,
     terrain: &openusd::sdf::Path,
     spec: &mut lunco_obstacle_field::spec::ObstacleFieldSpec,
 ) {
     use lunco_obstacle_field::spec::SizeDist;
-    for child in reader.prim_children(terrain) {
-        match reader.prim_attribute_value::<String>(&child, "lunco:layer").as_deref() {
+    for child in reader.children(terrain) {
+        match reader.scalar::<String>(&child, "lunco:layer").as_deref() {
             Some("craters") => {
-                let density = reader.prim_attribute_value::<f32>(&child, "density").unwrap_or(0.0);
-                let mode = reader.prim_attribute_value::<f32>(&child, "sizeMode").unwrap_or(22.0);
+                let density = reader.scalar::<f32>(&child, "density").unwrap_or(0.0);
+                let mode = reader.scalar::<f32>(&child, "sizeMode").unwrap_or(22.0);
                 spec.craters.enabled = density > 0.0;
                 spec.craters.density = density;
                 spec.craters.depth_ratio =
-                    reader.prim_attribute_value::<f32>(&child, "depthRatio").unwrap_or(0.3);
+                    reader.scalar::<f32>(&child, "depthRatio").unwrap_or(0.3);
                 spec.craters.rim_height_ratio =
-                    reader.prim_attribute_value::<f32>(&child, "rimRatio").unwrap_or(0.5);
+                    reader.scalar::<f32>(&child, "rimRatio").unwrap_or(0.5);
                 spec.craters.size = SizeDist::new(8.0, mode, 40.0, 0.7);
-                if let Some(seed) = reader.prim_attribute_value::<i32>(&child, "seed") {
+                if let Some(seed) = reader.scalar::<i32>(&child, "seed") {
                     spec.seed = seed as u64;
                 }
             }
             Some("rocks") => {
-                let density = reader.prim_attribute_value::<f32>(&child, "density").unwrap_or(0.0);
-                let mode = reader.prim_attribute_value::<f32>(&child, "sizeMode").unwrap_or(0.6);
+                let density = reader.scalar::<f32>(&child, "density").unwrap_or(0.0);
+                let mode = reader.scalar::<f32>(&child, "sizeMode").unwrap_or(0.6);
                 spec.rocks.enabled = density > 0.0;
                 spec.rocks.density = density;
                 spec.rocks.size = SizeDist::new(0.2, mode, (mode * 4.0).max(2.5), 0.6);
@@ -800,6 +831,7 @@ fn refresh_layered_terrain_layers(
     stages: Res<Assets<lunco_usd::UsdStageAsset>>,
     registry: Res<lunco_terrain_surface::TerrainLayerParserRegistry>,
     q: Query<(Entity, &lunco_usd::UsdPrimPath), With<lunco_terrain_surface::DemTerrainSurface>>,
+    mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
     mut commands: Commands,
 ) {
     let mut modified = std::collections::HashSet::new();
@@ -815,9 +847,23 @@ fn refresh_layered_terrain_layers(
         if !modified.contains(&prim_path.stage_handle.id()) {
             continue;
         }
-        let Some(stage) = stages.get(&prim_path.stage_handle) else { continue };
         let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else { continue };
-        let stack = parse_terrain_layer_stack(&*stage.reader, &sdf, &registry);
+        // Dual-source: prefer the LIVE canonical stage (reflects the in-place edit
+        // that raised this Modified event); fall back to the flattened reader for
+        // recipe-less legacy assets.
+        let id = prim_path.stage_handle.id();
+        let live = canonical.get(id).is_some() || {
+            let recipe = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone());
+            recipe.as_ref().and_then(|r| canonical.get_or_build(id, r)).is_some()
+        };
+        let stack = if live {
+            let view = canonical.get(id).expect("just built").view();
+            parse_terrain_layer_stack(&view, &sdf, &registry)
+        } else if let Some(stage) = stages.get(&prim_path.stage_handle) {
+            parse_terrain_layer_stack(&*stage.reader, &sdf, &registry)
+        } else {
+            continue;
+        };
         commands.entity(entity).insert(stack);
     }
 }
@@ -828,143 +874,182 @@ fn bridge_usd_dem_terrain(
     twins: Res<lunco_assets::twin_source::TwinRoots>,
     registry: Res<lunco_terrain_surface::TerrainLayerParserRegistry>,
     mut obstacle_spec: ResMut<lunco_obstacle_field::ObstacleFieldSpec>,
+    mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
     mut commands: Commands,
 ) {
     for (entity, prim_path) in &q {
-        // Wait until the prim's stage asset is loaded (read attrs from it).
-        let Some(stage) = stages.get(&prim_path.stage_handle) else { continue };
+        // Dual-source: read the LIVE canonical stage (built on demand from the
+        // asset's recipe) — the source of truth — and fall back to the flattened
+        // `stage.reader` only for recipe-less legacy assets. Wait until at least one
+        // source is available before reading attrs.
+        let id = prim_path.stage_handle.id();
+        let live = canonical.get(id).is_some() || {
+            let recipe = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone());
+            recipe.as_ref().and_then(|r| canonical.get_or_build(id, r)).is_some()
+        };
+        if !live && stages.get(&prim_path.stage_handle).is_none() {
+            continue;
+        }
         let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else {
             commands.entity(entity).insert(DemBridged);
             continue;
         };
-        let reader = &*stage.reader;
         commands.entity(entity).insert(DemBridged); // examined — don't re-scan
-
-        // A DEM-backed terrain: `lunco:assetMode = "dem"` (or "layered"). Its surface
-        // is COMPOSED from child LAYER prims (`lunco:layer = "dem" | "craters" |
-        // "rocks" | "shader" | …`) — add a layer by adding a prim. The `dem` (ground)
-        // layer supplies the heightmap source + window; the rest stamp/scatter/shade.
-        let asset_mode = reader.prim_attribute_value::<String>(&sdf, "lunco:assetMode");
-        if !matches!(asset_mode.as_deref(), Some("dem") | Some("layered")) {
-            continue;
-        }
-
-        // The ground (`dem`) layer + the composable stack (craters/rocks/shader/…),
-        // parsed from the child layer prims (helpers shared with the live-edit refresh).
-        let dem_layer_sdf = find_dem_layer(reader, &sdf);
-        let stack = parse_terrain_layer_stack(reader, &sdf, &registry);
-        // Seed the Inspector's shared spec from the authored values so the panel opens
-        // showing THIS scene's craters/rocks, not the resource defaults. `bypass_change_
-        // detection` so it doesn't look like a runtime edit (no networked re-broadcast).
-        sync_obstacle_spec_from_usd(reader, &sdf, obstacle_spec.bypass_change_detection());
-
-        // DEM/ground parameters: prefer a `dem` child layer prim (plain attr names);
-        // fall back to the Terrain prim's own `lunco:terrain:*` attrs (back-compat).
-        let dem = dem_layer_sdf.clone();
-        let attr_f32 = |name: &str, legacy: &str| -> Option<f32> {
-            dem.as_ref()
-                .and_then(|d| reader.prim_attribute_value::<f32>(d, name))
-                .or_else(|| reader.prim_attribute_value::<f32>(&sdf, legacy))
-        };
-        let attr_i32 = |name: &str, legacy: &str| -> Option<i32> {
-            dem.as_ref()
-                .and_then(|d| reader.prim_attribute_value::<i32>(d, name))
-                .or_else(|| reader.prim_attribute_value::<i32>(&sdf, legacy))
-        };
-        let attr_bool = |name: &str, legacy: &str| -> Option<bool> {
-            dem.as_ref()
-                .and_then(|d| reader.prim_attribute_value::<bool>(d, name))
-                .or_else(|| reader.prim_attribute_value::<bool>(&sdf, legacy))
-        };
-
-        let rel = dem
-            .as_ref()
-            .and_then(|d| reader.prim_attribute_value::<String>(d, "demSource"))
-            .or_else(|| reader.prim_attribute_value::<String>(&sdf, "lunco:terrain:demSource"));
-        let Some(rel) = rel else {
-            warn!("[usd-dem] prim {} is a DEM terrain but has no dem-layer demSource", prim_path.path);
-            continue;
-        };
-        let Some((_, root)) = twins.primary() else {
-            warn!("[usd-dem] no open Twin to resolve DEM source '{rel}'");
-            continue;
-        };
-        let uri = root.join(&rel).to_string_lossy().to_string();
-        // `windowM` = side length (m) realized at native res. 0 = whole map; >0 = side;
-        // absent/negative = a safe 4 km window (avoid an accidental full-map build).
-        let half_window = match attr_f32("windowM", "lunco:terrain:windowM") {
-            Some(w) if w == 0.0 => f64::INFINITY,
-            Some(w) if w > 0.0 => (w * 0.5) as f64,
-            _ => 2048.0,
-        };
-        // `targetRes` = visual-quality downsample target (samples/side). ≤ 0 = native.
-        let target_res = attr_i32("targetRes", "lunco:terrain:targetRes")
-            .filter(|&r| r > 0)
-            .map(|r| r as usize)
-            .unwrap_or(0);
-        // `lodViz` = stream CDLOD tiles (default ON) vs one static mesh.
-        let lod_viz = attr_bool("lodViz", "lunco:terrain:lodViz").unwrap_or(true);
-        // `colliderRing` = stream a per-rover collider ring vs one static collider.
-        let collider_ring = attr_bool("colliderRing", "lunco:terrain:colliderRing").unwrap_or(false);
-        // `detailUpsample` = INTELLIGENT UPSCALING factor: bilinearly upscale the coarse
-        // DEM ground before stamping craters, so generated craters get high fidelity
-        // (sub-DEM-res rims) decoupled from the ~5 m source. ≤ 1 = native.
-        let detail_upsample = attr_i32("detailUpsample", "lunco:terrain:detailUpsample")
-            .filter(|&u| u > 1)
-            .map(|u| u as usize)
-            .unwrap_or(1);
-
-        let layer_count = stack.0.len();
-        commands.entity(entity).insert((
-            lunco_terrain_surface::DemTerrainRequest {
-                uri,
-                half_window,
-                target_res,
-                lod_viz,
-                collider_ring,
-                with_default_material: false,
-                detail_upsample,
-            },
-            stack,
-            lunco_terrain_surface::DemTerrainSurface,
-        ));
-        // Georeference (#5): the `lunco:anchor:*` lat/lon/height anchor + the stage
-        // `metersPerUnit`. The terrain math is metres, so a non-1 `metersPerUnit`
-        // is recorded but flagged loudly (we don't rescale the DEM). Attach a
-        // `TerrainGeoref` whenever any of these are authored.
-        let anchor_lat = reader.prim_attribute_value::<f64>(&sdf, "lunco:anchor:lat");
-        let anchor_lon = reader.prim_attribute_value::<f64>(&sdf, "lunco:anchor:lon");
-        let anchor_height = reader.prim_attribute_value::<f64>(&sdf, "lunco:anchor:height");
-        let meters_per_unit = reader.prim_attribute_value::<f64>(&sdf, "metersPerUnit");
-        if let Some(mpu) = meters_per_unit {
-            if (mpu - 1.0).abs() >= 1e-6 {
-                warn!(
-                    "[usd-dem] prim {} authors metersPerUnit={mpu}; terrain assumes 1 m/unit — \
-                     heights/colliders are NOT rescaled",
-                    prim_path.path
-                );
-            }
-        }
-        if anchor_lat.is_some() || anchor_lon.is_some() || anchor_height.is_some() {
-            let georef = lunco_terrain_surface::TerrainGeoref {
-                center_lat_deg: anchor_lat.unwrap_or(0.0),
-                center_lon_deg: anchor_lon.unwrap_or(0.0),
-                anchor_height_m: anchor_height.unwrap_or(0.0),
-                meters_per_unit: meters_per_unit.unwrap_or(1.0),
-            };
-            commands.entity(entity).insert(georef);
-            info!(
-                "[usd-dem] georef: lat {:.4} lon {:.4} height {:.1} m (mpu {})",
-                georef.center_lat_deg, georef.center_lon_deg, georef.anchor_height_m, georef.meters_per_unit
+        if live {
+            let view = canonical.get(id).expect("just built").view();
+            bridge_dem_prim_read(
+                &view, entity, prim_path, &sdf, &twins, &registry,
+                obstacle_spec.bypass_change_detection(), &mut commands,
+            );
+        } else if let Some(stage) = stages.get(&prim_path.stage_handle) {
+            bridge_dem_prim_read(
+                &*stage.reader, entity, prim_path, &sdf, &twins, &registry,
+                obstacle_spec.bypass_change_detection(), &mut commands,
             );
         }
+    }
+}
+
+/// The DEM-bridge read body, generic over the read source ([`UsdRead`]) — reads
+/// the authored `lunco:assetMode` / child-layer / anchor attributes off either the
+/// live [`StageView`](lunco_usd_bevy::StageView) or the flattened `sdf::Data`,
+/// identically, and attaches the terrain request + composed stack + georef.
+/// Extracted from `bridge_usd_dem_terrain` for the dual-source cutover.
+#[allow(clippy::too_many_arguments)]
+fn bridge_dem_prim_read<R: UsdRead>(
+    reader: &R,
+    entity: Entity,
+    prim_path: &lunco_usd::UsdPrimPath,
+    sdf: &openusd::sdf::Path,
+    twins: &lunco_assets::twin_source::TwinRoots,
+    registry: &lunco_terrain_surface::TerrainLayerParserRegistry,
+    obstacle_spec: &mut lunco_obstacle_field::spec::ObstacleFieldSpec,
+    commands: &mut Commands,
+) {
+    // A DEM-backed terrain: `lunco:assetMode = "dem"` (or "layered"). Its surface
+    // is COMPOSED from child LAYER prims (`lunco:layer = "dem" | "craters" |
+    // "rocks" | "shader" | …`) — add a layer by adding a prim. The `dem` (ground)
+    // layer supplies the heightmap source + window; the rest stamp/scatter/shade.
+    let asset_mode = reader.scalar::<String>(sdf, "lunco:assetMode");
+    if !matches!(asset_mode.as_deref(), Some("dem") | Some("layered")) {
+        return;
+    }
+
+    // The ground (`dem`) layer + the composable stack (craters/rocks/shader/…),
+    // parsed from the child layer prims (helpers shared with the live-edit refresh).
+    let dem_layer_sdf = find_dem_layer(reader, sdf);
+    let stack = parse_terrain_layer_stack(reader, sdf, registry);
+    // Seed the Inspector's shared spec from the authored values so the panel opens
+    // showing THIS scene's craters/rocks, not the resource defaults (caller passes
+    // `bypass_change_detection` so it doesn't look like a runtime edit).
+    sync_obstacle_spec_from_usd(reader, sdf, obstacle_spec);
+
+    // DEM/ground parameters: prefer a `dem` child layer prim (plain attr names);
+    // fall back to the Terrain prim's own `lunco:terrain:*` attrs (back-compat).
+    let dem = dem_layer_sdf.clone();
+    let attr_f32 = |name: &str, legacy: &str| -> Option<f32> {
+        dem.as_ref()
+            .and_then(|d| reader.scalar::<f32>(d, name))
+            .or_else(|| reader.scalar::<f32>(sdf, legacy))
+    };
+    let attr_i32 = |name: &str, legacy: &str| -> Option<i32> {
+        dem.as_ref()
+            .and_then(|d| reader.scalar::<i32>(d, name))
+            .or_else(|| reader.scalar::<i32>(sdf, legacy))
+    };
+    let attr_bool = |name: &str, legacy: &str| -> Option<bool> {
+        dem.as_ref()
+            .and_then(|d| reader.scalar::<bool>(d, name))
+            .or_else(|| reader.scalar::<bool>(sdf, legacy))
+    };
+
+    let rel = dem
+        .as_ref()
+        .and_then(|d| reader.scalar::<String>(d, "demSource"))
+        .or_else(|| reader.scalar::<String>(sdf, "lunco:terrain:demSource"));
+    let Some(rel) = rel else {
+        warn!("[usd-dem] prim {} is a DEM terrain but has no dem-layer demSource", prim_path.path);
+        return;
+    };
+    let Some((_, root)) = twins.primary() else {
+        warn!("[usd-dem] no open Twin to resolve DEM source '{rel}'");
+        return;
+    };
+    let uri = root.join(&rel).to_string_lossy().to_string();
+    // `windowM` = side length (m) realized at native res. 0 = whole map; >0 = side;
+    // absent/negative = a safe 4 km window (avoid an accidental full-map build).
+    let half_window = match attr_f32("windowM", "lunco:terrain:windowM") {
+        Some(w) if w == 0.0 => f64::INFINITY,
+        Some(w) if w > 0.0 => (w * 0.5) as f64,
+        _ => 2048.0,
+    };
+    // `targetRes` = visual-quality downsample target (samples/side). ≤ 0 = native.
+    let target_res = attr_i32("targetRes", "lunco:terrain:targetRes")
+        .filter(|&r| r > 0)
+        .map(|r| r as usize)
+        .unwrap_or(0);
+    // `lodViz` = stream CDLOD tiles (default ON) vs one static mesh.
+    let lod_viz = attr_bool("lodViz", "lunco:terrain:lodViz").unwrap_or(true);
+    // `colliderRing` = stream a per-rover collider ring vs one static collider.
+    let collider_ring = attr_bool("colliderRing", "lunco:terrain:colliderRing").unwrap_or(false);
+    // `detailUpsample` = INTELLIGENT UPSCALING factor: bilinearly upscale the coarse
+    // DEM ground before stamping craters, so generated craters get high fidelity
+    // (sub-DEM-res rims) decoupled from the ~5 m source. ≤ 1 = native.
+    let detail_upsample = attr_i32("detailUpsample", "lunco:terrain:detailUpsample")
+        .filter(|&u| u > 1)
+        .map(|u| u as usize)
+        .unwrap_or(1);
+
+    let layer_count = stack.0.len();
+    commands.entity(entity).insert((
+        lunco_terrain_surface::DemTerrainRequest {
+            uri,
+            half_window,
+            target_res,
+            lod_viz,
+            collider_ring,
+            with_default_material: false,
+            detail_upsample,
+        },
+        stack,
+        lunco_terrain_surface::DemTerrainSurface,
+    ));
+    // Georeference (#5): the `lunco:anchor:*` lat/lon/height anchor + the stage
+    // `metersPerUnit`. The terrain math is metres, so a non-1 `metersPerUnit`
+    // is recorded but flagged loudly (we don't rescale the DEM). Attach a
+    // `TerrainGeoref` whenever any of these are authored.
+    let anchor_lat = reader.scalar::<f64>(sdf, "lunco:anchor:lat");
+    let anchor_lon = reader.scalar::<f64>(sdf, "lunco:anchor:lon");
+    let anchor_height = reader.scalar::<f64>(sdf, "lunco:anchor:height");
+    let meters_per_unit = reader.scalar::<f64>(sdf, "metersPerUnit");
+    if let Some(mpu) = meters_per_unit {
+        if (mpu - 1.0).abs() >= 1e-6 {
+            warn!(
+                "[usd-dem] prim {} authors metersPerUnit={mpu}; terrain assumes 1 m/unit — \
+                 heights/colliders are NOT rescaled",
+                prim_path.path
+            );
+        }
+    }
+    if anchor_lat.is_some() || anchor_lon.is_some() || anchor_height.is_some() {
+        let georef = lunco_terrain_surface::TerrainGeoref {
+            center_lat_deg: anchor_lat.unwrap_or(0.0),
+            center_lon_deg: anchor_lon.unwrap_or(0.0),
+            anchor_height_m: anchor_height.unwrap_or(0.0),
+            meters_per_unit: meters_per_unit.unwrap_or(1.0),
+        };
+        commands.entity(entity).insert(georef);
         info!(
-            "[usd-dem] bridged layered terrain prim {} → DEM '{rel}' (target_res {target_res}, \
-             lod_viz {lod_viz}, collider_ring {collider_ring}, detail_upsample {detail_upsample}, \
-             {layer_count} composed layer(s))",
-            prim_path.path
+            "[usd-dem] georef: lat {:.4} lon {:.4} height {:.1} m (mpu {})",
+            georef.center_lat_deg, georef.center_lon_deg, georef.anchor_height_m, georef.meters_per_unit
         );
     }
+    info!(
+        "[usd-dem] bridged layered terrain prim {} → DEM '{rel}' (target_res {target_res}, \
+         lod_viz {lod_viz}, collider_ring {collider_ring}, detail_upsample {detail_upsample}, \
+         {layer_count} composed layer(s))",
+        prim_path.path
+    );
 }
 
 /// The headless runner: the Modelica/spawn cores a windowed build gets

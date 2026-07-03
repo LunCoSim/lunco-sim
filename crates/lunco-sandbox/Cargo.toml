@@ -79,6 +79,10 @@ lunco-scripting = { path = "../lunco-scripting" }
 # USD core (scene load + collider build) is always needed; its Twin-browser /
 # viewport egui UI rides `lunco-usd/ui`, re-enabled below by the `ui` feature.
 lunco-usd = { path = "../lunco-usd", default-features = false }
+# Live canonical stage read path (`CanonicalStages` / `StageView` / `UsdRead`):
+# the USD-reading systems below read the LIVE composed stage first, falling back
+# to the flattened `stage.reader` only for recipe-less legacy assets.
+lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 # USD→DEM bridge: read `lunco:terrain:demSource` off authored terrain prims.
 openusd = { workspace = true }
 # `lunco-sandbox-edit` is NOT optional: the headless server needs its

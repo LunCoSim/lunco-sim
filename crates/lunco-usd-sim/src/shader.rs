@@ -22,8 +22,9 @@
 //! Adding a new consumer needs no special handling — the ordering guarantees it.
 
 use bevy::prelude::*;
-use lunco_usd_bevy::usd_data::UsdDataExt;
-use lunco_usd_bevy::{get_attribute_as_vec3, UsdData, UsdPrimPath, UsdStageAsset, UsdVisualSynced};
+use lunco_usd_bevy::{
+    get_attribute_as_vec3, CanonicalStages, UsdPrimPath, UsdRead, UsdStageAsset, UsdVisualSynced,
+};
 use openusd::sdf::Path as SdfPath;
 use lunco_materials::{apply_param, ShaderMaterial};
 
@@ -48,68 +49,101 @@ pub fn apply_usd_shader_materials(
     // asset — e.g. headless tests using `MinimalPlugins` without the materials
     // plugin. Production always registers it, so behaviour there is unchanged.
     materials: Option<ResMut<Assets<ShaderMaterial>>>,
+    // Ph0′ CUTOVER: read the LIVE canonical stage (source of truth), built on
+    // demand from the asset's recipe; fall back to the flattened `stage.reader`
+    // only for recipe-less legacy assets (dual-source during transition).
+    mut canonical: NonSendMut<CanonicalStages>,
     mut commands: Commands,
 ) {
     let Some(mut materials) = materials else { return };
     for (entity, prim_path) in q.iter() {
-        // Stage not loaded yet → retry next frame (do NOT mark resolved).
-        let Some(stage) = stages.get(&prim_path.stage_handle) else { continue };
+        let id = prim_path.stage_handle.id();
+        let live = canonical.get(id).is_some() || {
+            let recipe = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone());
+            recipe.as_ref().and_then(|r| canonical.get_or_build(id, r)).is_some()
+        };
+        // Neither the live stage nor the flatten is available yet → retry next
+        // frame (do NOT mark resolved).
+        if !live && stages.get(&prim_path.stage_handle).is_none() {
+            continue;
+        }
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
             commands.entity(entity).insert(UsdShaderResolved);
             continue;
         };
-        let reader = &*stage.reader;
-
-        // From here on the prim is evaluated regardless of outcome.
-        commands.entity(entity).insert(UsdShaderResolved);
-
-        let mat_type: Option<String> =
-            reader.prim_attribute_value(&sdf_path, "primvars:materialType");
-        if !matches!(mat_type.as_deref(), Some("shader") | Some("usd_shader")) {
-            continue;
-        }
-
-        let Some(shader_path) =
-            reader.prim_attribute_value::<String>(&sdf_path, "primvars:shaderPath")
-        else {
-            warn!(
-                "[shader] prim {} has materialType=shader but no primvars:shaderPath",
-                prim_path.path
+        if live {
+            let cs = canonical.get(id).expect("just built");
+            apply_usd_shader_material_read(
+                &cs.view(), entity, prim_path, &sdf_path, &mut materials, &asset_server, &mut commands,
             );
-            continue;
-        };
-
-        // ROBUSTNESS: refuse a shader that isn't a usable material shader. A pure
-        // library (`#define_import_path`, meant to be `#import`ed — e.g.
-        // pbr_lit.wgsl) has no `@fragment` entry, so binding a ShaderMaterial to it
-        // builds an INVALID render pipeline that wgpu rejects on EVERY frame (the
-        // `opaque_mesh_pipeline` validation storm → dropped frames / viewport
-        // blink, and it poisons the pipeline cache until the app restarts). Keep
-        // the StandardMaterial (displayColor) instead so the app renders normally.
-        if !shader_has_fragment_entry(&shader_path) {
-            warn!(
-                "[shader] prim {} → '{}' has no `@fragment` entry point (it looks \
-                 like a shader LIBRARY, not a material shader). Keeping the \
-                 StandardMaterial to avoid an invalid render pipeline. Point \
-                 primvars:shaderPath at a whole shader (one with `@fragment fn …`).",
-                prim_path.path, shader_path
+        } else if let Some(stage) = stages.get(&prim_path.stage_handle) {
+            apply_usd_shader_material_read(
+                &*stage.reader, entity, prim_path, &sdf_path, &mut materials, &asset_server, &mut commands,
             );
-            continue;
         }
-
-        // Shader chosen by `primvars:shaderPath` (e.g. "shaders/wheel.wgsl");
-        // generic colors/params come from primvars.
-        let mut material = ShaderMaterial::default();
-        read_authored_params(reader, &sdf_path, &mut material);
-        material.shader = asset_server.load(&shader_path);
-
-        debug!("[shader] applied {} to {}", shader_path, prim_path.path);
-        let handle = materials.add(material);
-        commands
-            .entity(entity)
-            .remove::<MeshMaterial3d<StandardMaterial>>()
-            .insert(MeshMaterial3d(handle));
     }
+}
+
+/// Per-prim shader authoring, generic over the read source ([`UsdRead`]) — drives
+/// off either the live canonical `StageView` or the flattened `sdf::Data`,
+/// identically. Marks the prim [`UsdShaderResolved`] the moment its stage is
+/// readable (whether or not it ends up wanting a shader).
+#[allow(clippy::too_many_arguments)]
+fn apply_usd_shader_material_read<R: UsdRead>(
+    reader: &R,
+    entity: Entity,
+    prim_path: &UsdPrimPath,
+    sdf_path: &SdfPath,
+    materials: &mut Assets<ShaderMaterial>,
+    asset_server: &AssetServer,
+    commands: &mut Commands,
+) {
+    // From here on the prim is evaluated regardless of outcome.
+    commands.entity(entity).insert(UsdShaderResolved);
+
+    let mat_type: Option<String> = reader.scalar(sdf_path, "primvars:materialType");
+    if !matches!(mat_type.as_deref(), Some("shader") | Some("usd_shader")) {
+        return;
+    }
+
+    let Some(shader_path) = reader.scalar::<String>(sdf_path, "primvars:shaderPath") else {
+        warn!(
+            "[shader] prim {} has materialType=shader but no primvars:shaderPath",
+            prim_path.path
+        );
+        return;
+    };
+
+    // ROBUSTNESS: refuse a shader that isn't a usable material shader. A pure
+    // library (`#define_import_path`, meant to be `#import`ed — e.g.
+    // pbr_lit.wgsl) has no `@fragment` entry, so binding a ShaderMaterial to it
+    // builds an INVALID render pipeline that wgpu rejects on EVERY frame (the
+    // `opaque_mesh_pipeline` validation storm → dropped frames / viewport
+    // blink, and it poisons the pipeline cache until the app restarts). Keep
+    // the StandardMaterial (displayColor) instead so the app renders normally.
+    if !shader_has_fragment_entry(&shader_path) {
+        warn!(
+            "[shader] prim {} → '{}' has no `@fragment` entry point (it looks \
+             like a shader LIBRARY, not a material shader). Keeping the \
+             StandardMaterial to avoid an invalid render pipeline. Point \
+             primvars:shaderPath at a whole shader (one with `@fragment fn …`).",
+            prim_path.path, shader_path
+        );
+        return;
+    }
+
+    // Shader chosen by `primvars:shaderPath` (e.g. "shaders/wheel.wgsl");
+    // generic colors/params come from primvars.
+    let mut material = ShaderMaterial::default();
+    read_authored_params(reader, sdf_path, &mut material);
+    material.shader = asset_server.load(&shader_path);
+
+    debug!("[shader] applied {} to {}", shader_path, prim_path.path);
+    let handle = materials.add(material);
+    commands
+        .entity(entity)
+        .remove::<MeshMaterial3d<StandardMaterial>>()
+        .insert(MeshMaterial3d(handle));
 }
 
 /// True if `shader_path` is a usable material shader — i.e. it declares a
@@ -160,22 +194,17 @@ fn shader_has_fragment_entry(_shader_path: &str) -> bool {
 /// A prim's attributes are child specs at `<prim>.<attr>`, so we enumerate the
 /// reader's specs and keep the ones directly under this prim (split on the USD
 /// `.` property separator) — no hardcoded parameter names.
-fn read_authored_params(reader: &UsdData, sdf_path: &SdfPath, m: &mut ShaderMaterial) {
-    let prefix = format!("{}.", sdf_path.as_str());
-    let attr_names: Vec<String> = reader
-        .iter()
-        .filter_map(|(p, _)| p.as_str().strip_prefix(&prefix).map(str::to_string))
-        .collect();
-    for attr in attr_names {
+fn read_authored_params<R: UsdRead>(reader: &R, sdf_path: &SdfPath, m: &mut ShaderMaterial) {
+    for attr in reader.attr_names(sdf_path) {
         let Some(name) = attr.strip_prefix("primvars:") else { continue };
         if name == "materialType" || name == "shaderPath" {
             continue;
         }
         if let Some(c) = get_attribute_as_vec3(reader, sdf_path, &attr) {
             apply_param(m, name, &format!("{},{},{}", c.x, c.y, c.z));
-        } else if let Some(v) = reader.prim_attribute_value::<f32>(sdf_path, &attr) {
+        } else if let Some(v) = reader.scalar::<f32>(sdf_path, &attr) {
             apply_param(m, name, &v.to_string());
-        } else if let Some(v) = reader.prim_attribute_value::<f64>(sdf_path, &attr) {
+        } else if let Some(v) = reader.scalar::<f64>(sdf_path, &attr) {
             apply_param(m, name, &(v as f32).to_string());
         }
     }

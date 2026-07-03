@@ -55,7 +55,7 @@ use bevy::math::{DQuat, DVec3};
 use avian3d::prelude::*;
 use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
 pub use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdInstanceRoot};
-use lunco_usd_bevy::{has_api_schema, read_rel_target, usd_data::UsdDataExt};
+use lunco_usd_bevy::{CanonicalStages, UsdRead};
 use lunco_usd_avian::ShouldBeDynamic;
 use openusd::sdf::Path as SdfPath;
 use lunco_mobility::{WheelRaycast, DifferentialCoupling};
@@ -376,6 +376,10 @@ fn process_usd_sim_prims(
     q_child_of: Query<&ChildOf>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
     stages: Res<Assets<UsdStageAsset>>,
+    // Ph0′ CUTOVER: read the LIVE canonical stage (source of truth), built on
+    // demand from the asset recipe; fall back to the flattened `stage.reader`
+    // only for recipe-less legacy assets (dual-source during transition).
+    mut canonical: NonSendMut<CanonicalStages>,
     // The active-scene sun: the avatar camera's exposure is read from the SAME
     // resource the sun illuminance comes from, so they can't drift (a dimmed
     // sun under a bright-tuned camera blacked the viewport). `Option` so the
@@ -427,25 +431,22 @@ fn process_usd_sim_prims(
     let mut seen_stages: std::collections::HashSet<Handle<UsdStageAsset>> = Default::default();
     for prim_path in q_all_prims.iter() {
         if !seen_stages.insert(prim_path.stage_handle.clone()) { continue; }
-        let Some(stage) = stages.get(&prim_path.stage_handle) else { continue; };
-        // Borrow — `stage.reader` is `Arc<TextReader>`; `(*…).clone()` deep-copied
-        // the whole stage `HashMap<String, sdf::Value>` once per stage. The
-        // reads below (`iter`/`get`/`read_rel_target`) only need `&self`.
-        let reader = &*stage.reader;
-        for (path, _spec) in reader.iter() {
-            let type_name = reader.prim_type_name(path);
-            if type_name.as_deref() == Some("PhysicsRevoluteJoint") {
-                if let Some(body1) = read_rel_target(reader, path, "physics:body1") {
-                    debug!("USD joint dispatch: {} → wheel {}", path.as_str(), body1);
-                    joint_targets.insert(
-                        (prim_path.stage_handle.clone(), body1),
-                        path.as_str().to_string(),
-                    );
-                }
-                if let Some(body0) = read_rel_target(reader, path, "physics:body0") {
-                    articulation_roots.insert((prim_path.stage_handle.clone(), body0));
-                }
-            }
+        // Dual-source: scan the live canonical stage (preferred, built on demand
+        // from the recipe) or the flattened reader for recipe-less legacy assets.
+        let id = prim_path.stage_handle.id();
+        let live = canonical.get(id).is_some() || {
+            let recipe = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone());
+            recipe.as_ref().and_then(|r| canonical.get_or_build(id, r)).is_some()
+        };
+        if live {
+            let cs = canonical.get(id).expect("just built");
+            collect_joint_scan_read(
+                &cs.view(), &prim_path.stage_handle, &mut joint_targets, &mut articulation_roots,
+            );
+        } else if let Some(stage) = stages.get(&prim_path.stage_handle) {
+            collect_joint_scan_read(
+                &*stage.reader, &prim_path.stage_handle, &mut joint_targets, &mut articulation_roots,
+            );
         }
     }
 
@@ -454,7 +455,6 @@ fn process_usd_sim_prims(
         // Per-prim escape hatch: the recovery watchdog stamped this prim after it
         // was deferred too long, so stop waiting for its visual (as if headless).
         let wait_for_visuals = visuals_coming && force_build.is_none();
-        let Some(stage) = stages.get(&prim_path.stage_handle) else { continue; };
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { continue; };
 
         // Bail when this prim lives under a `UsdPreviewOnly` scene
@@ -469,9 +469,84 @@ fn process_usd_sim_prims(
             continue;
         }
 
-        // Borrow, not deep-clone (per prim, every frame until the scene
-        // settles — see the pass-1 note above). All reads below are `&self`.
-        let reader = &*stage.reader;
+        // Dual-source: prefer the live canonical stage (built on demand from the
+        // recipe), fall back to the flattened reader for recipe-less legacy
+        // assets. Acquired per entity — `get_or_build` is cached, so the whole
+        // prim cascade shares one composed stage.
+        let id = prim_path.stage_handle.id();
+        let live = canonical.get(id).is_some() || {
+            let recipe = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone());
+            recipe.as_ref().and_then(|r| canonical.get_or_build(id, r)).is_some()
+        };
+        if live {
+            let cs = canonical.get(id).expect("just built");
+            process_usd_sim_prim_read(
+                &cs.view(), entity, prim_path, sdf_path.clone(), maybe_tf, maybe_mesh, maybe_mat,
+                maybe_shader_mat, maybe_child_of, wait_for_visuals, &joint_targets,
+                &articulation_roots, &q_existing_floating_origins, &q_provisional_cameras,
+                &q_grids, active_sun.as_deref(), &mut commands,
+            );
+        } else if let Some(stage) = stages.get(&prim_path.stage_handle) {
+            process_usd_sim_prim_read(
+                &*stage.reader, entity, prim_path, sdf_path.clone(), maybe_tf, maybe_mesh, maybe_mat,
+                maybe_shader_mat, maybe_child_of, wait_for_visuals, &joint_targets,
+                &articulation_roots, &q_existing_floating_origins, &q_provisional_cameras,
+                &q_grids, active_sun.as_deref(), &mut commands,
+            );
+        }
+    }
+}
+
+/// Per-stage joint scan (Pass 1), generic over the read source ([`UsdRead`]):
+/// collects `PhysicsRevoluteJoint` `body1` targets (wheel dispatch) and `body0`
+/// targets (articulation roots) off either the live canonical `StageView` or the
+/// flattened `sdf::Data`, identically.
+fn collect_joint_scan_read<R: UsdRead>(
+    reader: &R,
+    stage_handle: &Handle<UsdStageAsset>,
+    joint_targets: &mut HashMap<(Handle<UsdStageAsset>, String), String>,
+    articulation_roots: &mut std::collections::HashSet<(Handle<UsdStageAsset>, String)>,
+) {
+    for path in reader.prim_paths() {
+        if reader.type_name(&path).as_deref() == Some("PhysicsRevoluteJoint") {
+            if let Some(body1) = reader.rel_target(&path, "physics:body1") {
+                debug!("USD joint dispatch: {} → wheel {}", path.as_str(), body1);
+                joint_targets.insert(
+                    (stage_handle.clone(), body1),
+                    path.as_str().to_string(),
+                );
+            }
+            if let Some(body0) = reader.rel_target(&path, "physics:body0") {
+                articulation_roots.insert((stage_handle.clone(), body0));
+            }
+        }
+    }
+}
+
+/// Per-prim sim-schema extractor (Pass 2), generic over the read source
+/// ([`UsdRead`]) — maps one composed prim's authored `lunco:*` / PhysX-vehicle
+/// schemas to its sim/avatar/wheel components off either the live canonical
+/// `StageView` or the flattened `sdf::Data`, identically.
+#[allow(clippy::too_many_arguments)]
+fn process_usd_sim_prim_read<R: UsdRead>(
+    reader: &R,
+    entity: Entity,
+    prim_path: &UsdPrimPath,
+    sdf_path: SdfPath,
+    maybe_tf: Option<&Transform>,
+    maybe_mesh: Option<&Mesh3d>,
+    maybe_mat: Option<&MeshMaterial3d<StandardMaterial>>,
+    maybe_shader_mat: Option<&MeshMaterial3d<lunco_materials::ShaderMaterial>>,
+    maybe_child_of: Option<&ChildOf>,
+    wait_for_visuals: bool,
+    joint_targets: &HashMap<(Handle<UsdStageAsset>, String), String>,
+    articulation_roots: &std::collections::HashSet<(Handle<UsdStageAsset>, String)>,
+    q_existing_floating_origins: &Query<Entity, With<FloatingOrigin>>,
+    q_provisional_cameras: &Query<Entity, With<ProvisionalAvatarCamera>>,
+    q_grids: &Query<Entity, With<Grid>>,
+    active_sun: Option<&lunco_environment::LunarSun>,
+    mut commands: &mut Commands,
+) {
         let existing_tf = maybe_tf.cloned().unwrap_or_default();
 
         // --- Network replication policy, derived from USD ---
@@ -484,15 +559,15 @@ fn process_usd_sim_prims(
         // walk + `setup_physical_wheel` side-effect. See USD_REPLICATION_POLICY.md.
         let net_key = (prim_path.stage_handle.clone(), prim_path.path.clone());
         if articulation_roots.contains(&net_key)
-            || has_api_schema(reader, &sdf_path, "PhysicsArticulationRootAPI")
+            || reader.has_api_schema(&sdf_path, "PhysicsArticulationRootAPI")
         {
             commands.entity(entity).insert(lunco_core::ArticulatedVehicle);
         }
         if joint_targets.contains_key(&net_key) {
             commands.entity(entity).insert(lunco_core::ArticulatedLink);
         }
-        let net_replicate = reader.prim_attribute_value::<bool>(&sdf_path, "lunco:net:replicate");
-        let net_authority = reader.prim_attribute_value::<String>(&sdf_path, "lunco:net:authority");
+        let net_replicate = reader.scalar::<bool>(&sdf_path, "lunco:net:replicate");
+        let net_authority = reader.scalar::<String>(&sdf_path, "lunco:net:authority");
         let (net_excluded, net_opaque) =
             net_override_markers(net_replicate, net_authority.as_deref());
         if net_excluded {
@@ -509,10 +584,10 @@ fn process_usd_sim_prims(
         let sensor_offset = lunco_usd_bevy::read_vec3_f64(reader, &sdf_path, "lunco:sensor:offset")
             .map(|v| DVec3::new(v[0], v[1], v[2]))
             .unwrap_or(DVec3::ZERO);
-        if reader.prim_attribute_value::<bool>(&sdf_path, "lunco:sensor:imu").is_some() {
+        if reader.scalar::<bool>(&sdf_path, "lunco:sensor:imu").is_some() {
             commands.entity(entity).insert(lunco_cosim::sensors::ImuSensor::mounted(sensor_offset));
         }
-        if reader.prim_attribute_value::<bool>(&sdf_path, "lunco:sensor:range").is_some() {
+        if reader.scalar::<bool>(&sdf_path, "lunco:sensor:range").is_some() {
             let axis = match lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:sensor:rangeAxis").as_deref() {
                 Some("X") => DVec3::X,
                 Some("-X") => DVec3::NEG_X,
@@ -523,7 +598,7 @@ fn process_usd_sim_prims(
                 _ => DVec3::NEG_Y,
             };
             let max_distance = reader
-                .prim_attribute_value::<f32>(&sdf_path, "lunco:sensor:rangeMax")
+                .scalar::<f32>(&sdf_path, "lunco:sensor:rangeMax")
                 .map(|v| v as f64)
                 .unwrap_or(100.0);
             let out_of_range_mode = match lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:sensor:rangeOutOfRangeMode").as_deref() {
@@ -533,7 +608,7 @@ fn process_usd_sim_prims(
                 _ => lunco_cosim::sensors::OutOfRangeMode::MaxDistance,
             };
             let visualize = reader
-                .prim_attribute_value::<bool>(&sdf_path, "lunco:sensor:rangeVisualize")
+                .scalar::<bool>(&sdf_path, "lunco:sensor:rangeVisualize")
                 .unwrap_or(false);
             commands.entity(entity).insert(lunco_cosim::sensors::RangeSensor {
                 offset: sensor_offset,
@@ -545,12 +620,12 @@ fn process_usd_sim_prims(
                 ..default()
             });
         }
-        if reader.prim_attribute_value::<bool>(&sdf_path, "lunco:sensor:contact").is_some() {
+        if reader.scalar::<bool>(&sdf_path, "lunco:sensor:contact").is_some() {
             commands.entity(entity).insert(lunco_cosim::sensors::ContactSensor::default());
         }
 
         // 0. Detect Avatar prim
-        if reader.prim_attribute_value::<String>(&sdf_path, "lunco:avatar").is_some() {
+        if reader.scalar::<String>(&sdf_path, "lunco:avatar").is_some() {
             info!("Detected Avatar prim at {}, setting up camera", prim_path.path);
             // `big_space` enforces "exactly one `FloatingOrigin` per
             // `BigSpace`". Other crates (e.g. `lunco-celestial`'s
@@ -579,11 +654,11 @@ fn process_usd_sim_prims(
                     commands.entity(prov).despawn();
                 }
             }
-            let camera_mode = reader.prim_attribute_value::<String>(&sdf_path, "lunco:cameraMode")
+            let camera_mode = reader.scalar::<String>(&sdf_path, "lunco:cameraMode")
                 .unwrap_or_else(|| "freeflight".to_string());
-            let mut yaw = reader.prim_attribute_value::<f32>(&sdf_path, "lunco:cameraYaw")
+            let mut yaw = reader.scalar::<f32>(&sdf_path, "lunco:cameraYaw")
                 .unwrap_or(std::f32::consts::PI * 0.8);
-            let mut pitch = reader.prim_attribute_value::<f32>(&sdf_path, "lunco:cameraPitch")
+            let mut pitch = reader.scalar::<f32>(&sdf_path, "lunco:cameraPitch")
                 .unwrap_or(-0.3);
 
             // `lunco:cameraLookAt` (double3, scene-local): when authored,
@@ -632,7 +707,6 @@ fn process_usd_sim_prims(
             // a lighting/camera bug. Keep workbench cameras SMAA-free; MSAA (the
             // `Camera3d` default) handles geometry-edge AA.
             let ev100 = active_sun
-                .as_deref()
                 .copied()
                 .unwrap_or_default()
                 .exposure_ev100;
@@ -742,7 +816,7 @@ fn process_usd_sim_prims(
         // 1. Detect PhysxVehicleContextAPI (The Rover Root)
         // Creates FlightSoftware with 4 digital ports (the control surface =
         // the possessable/controllable signal; no separate Vessel marker)
-        if has_api_schema(reader, &sdf_path, "PhysxVehicleContextAPI") {
+        if reader.has_api_schema(&sdf_path, "PhysxVehicleContextAPI") {
             info!("Intercepted PhysxVehicleContextAPI for {}, initializing Flight Software", prim_path.path);
 
             let mut port_map = HashMap::new();
@@ -758,7 +832,7 @@ fn process_usd_sim_prims(
             // wire/rhai/Modelica mix drives — arbitrary topology authored in USD,
             // not hardcoded here. Deduped against the canonical set.
             if let Some(extra) =
-                reader.prim_attribute_value::<String>(&sdf_path, "lunco:drivePorts")
+                reader.scalar::<String>(&sdf_path, "lunco:drivePorts")
             {
                 for name in extra.split_whitespace() {
                     if !port_names.iter().any(|n| n == name) {
@@ -790,7 +864,7 @@ fn process_usd_sim_prims(
             // downstream code that needs to know wheels and chassis
             // are kinematically coupled even after the wheels are
             // reparented out of the Bevy hierarchy.
-            if has_api_schema(reader, &sdf_path, "PhysicsArticulationRootAPI") {
+            if reader.has_api_schema(&sdf_path, "PhysicsArticulationRootAPI") {
                 commands.entity(entity).insert(ArticulationRoot);
                 info!("Detected PhysicsArticulationRootAPI on {}", prim_path.path);
             }
@@ -804,7 +878,7 @@ fn process_usd_sim_prims(
         // explicit `lunco:driveMix` linear table. There is NO per-arch Rust
         // component/branch — `apply_drive_mix` looks the named kernel up and runs it.
         let drive_mix = if let Some(hook_id) =
-            reader.prim_attribute_value::<String>(&sdf_path, "lunco:driveKernel")
+            reader.scalar::<String>(&sdf_path, "lunco:driveKernel")
         {
             // Scripted (rhai) kernel: the hook computes the per-port outputs, so it
             // takes precedence over the built-in skid/linear schemas. `apply_drive_mix`
@@ -812,14 +886,14 @@ fn process_usd_sim_prims(
             info!("Scripted drive kernel '{}' for {}", hook_id, prim_path.path);
             Some(DriveMix::scripted(&hook_id))
         } else if let Some(spec) =
-            reader.prim_attribute_value::<String>(&sdf_path, "lunco:driveMix")
+            reader.scalar::<String>(&sdf_path, "lunco:driveMix")
         {
             info!("Explicit linear driveMix for {}", prim_path.path);
             Some(DriveMix::parse_linear(&spec))
-        } else if has_api_schema(reader, &sdf_path, "PhysxVehicleTankDifferentialAPI") {
+        } else if reader.has_api_schema(&sdf_path, "PhysxVehicleTankDifferentialAPI") {
             info!("Tank differential (skid kernel) for {}", prim_path.path);
             Some(DriveMix::skid("drive_left", "drive_right"))
-        } else if has_api_schema(reader, &sdf_path, "PhysxVehicleAckermannSteeringAPI") {
+        } else if reader.has_api_schema(&sdf_path, "PhysxVehicleAckermannSteeringAPI") {
             // Ackermann: non-differential drive (both sides get throttle) + a
             // dedicated steering port; the front wheels castor (see steering gate).
             info!("Ackermann steering (linear kernel) for {}", prim_path.path);
@@ -835,14 +909,14 @@ fn process_usd_sim_prims(
         // bodies gets a soft coupling that averages their pitch (keeps the body
         // level over rough ground). Defer-resolved once both rockers spawn.
         if let (Some(rocker_a), Some(rocker_b)) = (
-            read_rel_target(reader, &sdf_path, "lunco:differential:rockerA"),
-            read_rel_target(reader, &sdf_path, "lunco:differential:rockerB"),
+            reader.rel_target(&sdf_path, "lunco:differential:rockerA"),
+            reader.rel_target(&sdf_path, "lunco:differential:rockerB"),
         ) {
             let read_f = |name: &str, dflt: f64| {
                 reader
-                    .prim_attribute_value::<f32>(&sdf_path, name)
+                    .scalar::<f32>(&sdf_path, name)
                     .map(|v| v as f64)
-                    .or_else(|| reader.prim_attribute_value::<f64>(&sdf_path, name))
+                    .or_else(|| reader.scalar::<f64>(&sdf_path, name))
                     .unwrap_or(dflt)
             };
             let axis = match lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:differential:axis").as_deref() {
@@ -865,7 +939,7 @@ fn process_usd_sim_prims(
         }
 
         // 3. Detect PhysxVehicleWheelAPI (The Wheel Intercept)
-        if let Some(radius) = reader.prim_attribute_value::<f32>(&sdf_path, "physxVehicleWheel:radius") {
+        if let Some(radius) = reader.scalar::<f32>(&sdf_path, "physxVehicleWheel:radius") {
             // Skip if mesh doesn't exist yet — sync_usd_visuals may not have processed
             // this prim. We'll retry next frame (not marking UsdSimProcessed).
             // Headless (no renderer) or recovered (watchdog): the mesh never
@@ -873,7 +947,7 @@ fn process_usd_sim_prims(
             // (`setup_raycast_wheel` handles a `None` mesh: it skips the visual child).
             if maybe_mesh.is_none() && wait_for_visuals {
                 debug!("Wheel {} has no mesh yet, skipping until next frame", prim_path.path);
-                continue;
+                return;
             }
 
             // Backstop for the USD-authored shader. `apply_usd_shader_materials`
@@ -887,9 +961,9 @@ fn process_usd_sim_prims(
             // a shader but it hasn't landed, retry next frame (don't mark
             // UsdSimProcessed).
             let wants_shader = matches!(
-                reader.prim_attribute_value::<String>(&sdf_path, "primvars:materialType").as_deref(),
+                reader.scalar::<String>(&sdf_path, "primvars:materialType").as_deref(),
                 Some("shader") | Some("usd_shader")
-            ) && reader.prim_attribute_value::<String>(&sdf_path, "primvars:shaderPath").is_some();
+            ) && reader.scalar::<String>(&sdf_path, "primvars:shaderPath").is_some();
             // Headless (no renderer): the `ShaderMaterial` is produced by a
             // render-side observer that never runs without a GPU, so waiting for
             // it deferred the wheel FOREVER — the server then never built the
@@ -899,7 +973,7 @@ fn process_usd_sim_prims(
             // unless the watchdog recovered this prim after a deadlock.
             if wants_shader && maybe_shader_mat.is_none() && wait_for_visuals {
                 debug!("Wheel {} awaits ShaderMaterial from observer, deferring", prim_path.path);
-                continue;
+                return;
             }
             info!("Intercepted PhysxVehicleWheelAPI for {}", prim_path.path);
 
@@ -907,16 +981,16 @@ fn process_usd_sim_prims(
             let p_drive = commands.spawn((PhysicalPort::default(), Name::new("PhysicalPort_Drive"))).id();
             let p_steer = commands.spawn((PhysicalPort::default(), Name::new("PhysicalPort_Steer"))).id();
 
-            let index = reader.prim_attribute_value::<i32>(&sdf_path, "physxVehicleWheel:index").unwrap_or(0);
+            let index = reader.scalar::<i32>(&sdf_path, "physxVehicleWheel:index").unwrap_or(0);
 
             // G4: optional per-wheel actuator binding. A token naming the FSW
             // drive/steer port this wheel listens to — extracts the rover's
             // wiring topology from `try_wire_wheel`'s hardcoded index parity
             // into USD, enabling per-wheel drive and non-2×N layouts.
             let drive_port_name =
-                reader.prim_attribute_value::<String>(&sdf_path, "lunco:drivePort");
+                reader.scalar::<String>(&sdf_path, "lunco:drivePort");
             let steer_port_name =
-                reader.prim_attribute_value::<String>(&sdf_path, "lunco:steerPort");
+                reader.scalar::<String>(&sdf_path, "lunco:steerPort");
 
             // Mark for wiring — the try_wire_wheel system will connect ports once FSW exists
             commands.entity(entity).insert(PendingWheelWiring {
@@ -934,11 +1008,11 @@ fn process_usd_sim_prims(
             // wheel realises it as a real prismatic spring-damper. Same
             // authored data, two constructions.
             let suspension = SuspensionParams {
-                rest_length: reader.prim_attribute_value::<f32>(&sdf_path, "physxVehicleSuspension:restLength")
+                rest_length: reader.scalar::<f32>(&sdf_path, "physxVehicleSuspension:restLength")
                     .unwrap_or(0.7) as f64,
-                spring_k: reader.prim_attribute_value::<f32>(&sdf_path, "physxVehicleSuspension:springStiffness")
+                spring_k: reader.scalar::<f32>(&sdf_path, "physxVehicleSuspension:springStiffness")
                     .unwrap_or(15000.0) as f64,
-                damping_c: reader.prim_attribute_value::<f32>(&sdf_path, "physxVehicleSuspension:springDamping")
+                damping_c: reader.scalar::<f32>(&sdf_path, "physxVehicleSuspension:springDamping")
                     .unwrap_or(3000.0) as f64,
             };
 
@@ -946,9 +1020,9 @@ fn process_usd_sim_prims(
             // vehicle schema (`PhysxVehicleWheelAPI` / `PhysxVehicleEngineAPI` /
             // `PhysxVehicleTireAPI`) plus standard UsdPhysics `physics:mass`.
             let read_f = |name: &str| -> Option<f64> {
-                reader.prim_attribute_value::<f32>(&sdf_path, name)
+                reader.scalar::<f32>(&sdf_path, name)
                     .map(|v| v as f64)
-                    .or_else(|| reader.prim_attribute_value::<f64>(&sdf_path, name))
+                    .or_else(|| reader.scalar::<f64>(&sdf_path, name))
             };
             // Mass (UsdPhysicsMassAPI) → rotational inertia. `physxVehicleWheel:moi`
             // overrides the derived ½·m·r² if explicitly authored.
@@ -1012,7 +1086,7 @@ fn process_usd_sim_prims(
             // `SteeringActuator` (joint or raycast), so the model is identical.
             let parent_prim = &prim_path.path[..prim_path.path.rfind('/').unwrap_or(0)];
             let is_ackermann = SdfPath::new(parent_prim)
-                .map(|p| has_api_schema(reader, &p, "PhysxVehicleAckermannSteeringAPI"))
+                .map(|p| reader.has_api_schema(&p, "PhysxVehicleAckermannSteeringAPI"))
                 .unwrap_or(false);
             let steer_for_wheel = if index < 2 && is_ackermann { Some(p_steer) } else { None };
             if joint_targets.contains_key(&key) {
@@ -1047,7 +1121,6 @@ fn process_usd_sim_prims(
         }
 
         commands.entity(entity).insert(UsdSimProcessed);
-    }
 }
 
 /// Pure mapping of the `lunco:net:*` override attributes to replication markers,

@@ -14,7 +14,7 @@
 //! (`read_shape_dims`, `read_int_array`). Schema/relationship/mesh/scale reads
 //! migrate onto this same seam in later slices.
 
-use openusd::sdf::{Path as SdfPath, Value};
+use openusd::sdf::{Path as SdfPath, SpecType, Value};
 
 use crate::usd_data::UsdDataExt;
 use crate::view::StageView;
@@ -52,6 +52,18 @@ pub trait UsdRead {
 
     /// Immediate composed prim children of `prim`.
     fn children(&self, prim: &SdfPath) -> Vec<SdfPath>;
+
+    /// Every live composed prim path (active, defined, non-abstract), in
+    /// traversal order — the set a per-stage scan iterates. On the live stage
+    /// this is `Stage::traverse`; on the flatten it is the `Prim`-typed specs.
+    fn prim_paths(&self) -> Vec<SdfPath>;
+
+    /// The leaf names of every authored property on `prim` (e.g.
+    /// `"primvars:baseColor"`, `"xformOp:translate"`) — the set the shader
+    /// authoring pass enumerates to apply arbitrary `primvars:*`. On the live
+    /// stage this is `Prim::property_names`; on the flatten it is the child
+    /// specs directly under `<prim>.`.
+    fn attr_names(&self, prim: &SdfPath) -> Vec<String>;
 
     /// The composed value of attribute `name` on `prim` at time code `time` —
     /// authored `timeSamples` (interpolated) win, else the `default` opinion.
@@ -141,6 +153,19 @@ impl UsdRead for StageView<'_> {
             .unwrap_or_default()
     }
 
+    fn prim_paths(&self) -> Vec<SdfPath> {
+        // Inherent `StageView::prim_paths` (composed traversal).
+        StageView::prim_paths(self)
+    }
+
+    fn attr_names(&self, prim: &SdfPath) -> Vec<String> {
+        self.stage()
+            .prim(prim.clone())
+            .property_names()
+            .map(|ns| ns.iter().map(|t| t.to_string()).collect())
+            .unwrap_or_default()
+    }
+
     fn attr_value_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<Value> {
         let attr = self.stage().prim(prim.clone()).attribute(name);
         if let Ok(Some(samples)) = attr.time_samples() {
@@ -205,6 +230,22 @@ impl UsdRead for openusd::sdf::Data {
 
     fn children(&self, prim: &SdfPath) -> Vec<SdfPath> {
         UsdDataExt::prim_children(self, prim)
+    }
+
+    fn prim_paths(&self) -> Vec<SdfPath> {
+        self.iter()
+            .filter(|(_, s)| s.ty == SpecType::Prim)
+            .map(|(p, _)| p.clone())
+            .collect()
+    }
+
+    fn attr_names(&self, prim: &SdfPath) -> Vec<String> {
+        // A prim's properties are child specs at `<prim>.<name>`; keep the ones
+        // directly under this prim (leaf name after the USD `.` separator).
+        let prefix = format!("{}.", prim.as_str());
+        self.iter()
+            .filter_map(|(p, _)| p.as_str().strip_prefix(&prefix).map(str::to_string))
+            .collect()
     }
 
     fn attr_value_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<Value> {
