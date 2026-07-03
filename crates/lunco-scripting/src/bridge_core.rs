@@ -357,6 +357,30 @@ fn resolve_entity(world: &World, gid: u64) -> Option<Entity> {
         .resolve(&GlobalEntityId::from_raw(gid))
 }
 
+/// The session id currently controlling `gid`'s vessel (`0` = the local human, the
+/// autopilot band for an AI), or `None` if nobody owns it. Reads the same
+/// [`SessionRegistry`] ownership the possession arbiter uses, so a scenario can
+/// answer "is this rover controlled, and by whom?" **uniformly across human and AI**
+/// drivers — the observability the audit flagged as missing.
+pub fn owner_of(gid: u64) -> Option<u64> {
+    with_world(|world| Some(world.get_resource::<SessionRegistry>()?.owner_of(gid)?.0)).flatten()
+}
+
+/// The role of `gid`'s controlling session — `"AiAgent"` (an autopilot),
+/// `"Owner"`/`"Operator"` (a human), … — or `None` if unowned. Falls back to
+/// `"Owner"` for an owned-but-unregistered (local) session. The human-vs-AI test.
+pub fn controller_role(gid: u64) -> Option<String> {
+    with_world(|world| {
+        let owner = world.get_resource::<SessionRegistry>()?.owner_of(gid)?;
+        let role = world
+            .get_resource::<SessionRbac>()
+            .and_then(|rbac| rbac.sessions.get(&owner.0).map(|s| format!("{:?}", s.role)))
+            .unwrap_or_else(|| "Owner".to_string());
+        Some(role)
+    })
+    .flatten()
+}
+
 // ── Verbs: write (cmd) ──────────────────────────────────────────────────────
 
 /// Fire a command by name through `ApiCommandEvent` (the same entry point the

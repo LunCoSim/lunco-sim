@@ -21,6 +21,10 @@ lunco-cosim = { path = "../lunco-cosim" }
 # clock the behaviour tree reads (so waits freeze under pause/warp) — never Bevy's
 # `Time`. AutopilotPlugin guard-adds `TimePlugin` so the clock is always present.
 lunco-time = { path = "../lunco-time" }
+# Physics-backed spatial queries for HEADLESS obstacle sensing: the `sense_clearance`
+# system casts a forward ray-fan via avian `SpatialQuery` (runs fine with no render).
+# Same workspace avian as the rest of the sim, so no extra feature surface.
+avian3d = { workspace = true }
 
 [lints]
 workspace = true

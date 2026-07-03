@@ -62,6 +62,9 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 | `find(name)` | id (`-1` if none) | entity id by `Name` |
 | `name(id)` | string \| `()` | reverse of `find` |
 | `parent(id)` / `children(id)` | id \| `()` / `[id,…]` | hierarchy traversal |
+| `owner_of(id)` | session id \| `()` | who controls the vessel (`0` = local human, autopilot band = an AI); `()` if unowned |
+| `controller(id)` | string \| `()` | driver's role — `"AiAgent"` (autopilot) vs `"Owner"`/`"Operator"` (human) — the human-vs-AI test |
+| `is_controlled(id)` | bool | is any session (human or autopilot) driving it |
 | `list_entities()` | `[#{id,name,type,pos}]` | every registered entity (filter/select in-script) |
 | `add(id, "Comp", #{fields})` | bool | **structural** — insert/replace a reflected component (built from default + fields); needs `#[reflect(Default)]` |
 | `remove(id, "Comp")` | bool | **structural** — strip a reflected component |
