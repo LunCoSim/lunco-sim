@@ -34,20 +34,20 @@ fn at_wp(n, r) {
 fn task(me) {
     seq([
         once(|m| {
-            possess(find("/LanderTest/Lander"));
-            // Course starts with only the first dome showing.
+            // Camera rides along WITHOUT possessing: `follow` inserts a chase camera
+            // (SpringArmCamera) but no ControllerLink, so the lander stays UNPOSSESSED
+            // and its onboard GNC keeps driving via the `gnc_throttle:external_throttle`
+            // self-wire. (Possession would let the idle control binding write 0 and
+            // fight the wire — so it's reserved for a human deliberately taking over.)
+            follow(find("/LanderTest/Lander"));
             show_wp(2, false);
             show_wp(3, false);
             notify_kind("Powered descent - the GNC is flying the lander down.", "info");
         }),
-        // The lander's OWN script emits `lander_touchdown` when it settles — wait
-        // for that event instead of polling world state here.
+        // The lander's supervisor emits `lander_touchdown` when it settles.
         wait_for("lander_touchdown"),
-        // Disarm the GNC via the PORT path (`set`) — clobber-safe through
-        // SimComponent.inputs. (`set_input` is the API, not a rhai verb.)
         once(|m| {
-            set(find("/LanderTest/Lander"), "engine_enable", 0.0);
-            notify_kind("Touchdown. Engine safed.", "success");
+            notify_kind("Touchdown.", "success");
         }),
         wait(1.5),                                       // brief settle (sim seconds)
         once(|m| {
