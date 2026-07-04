@@ -1091,6 +1091,7 @@ fn refresh_docbacked_terrain_from_doc(
             &lunco_usd::UsdPrimPath,
             &TerrainDocument,
             Option<&mut TerrainDocGeneration>,
+            Has<lunco_terrain_surface::DemBaseGrid>,
         ),
         With<lunco_terrain_surface::DemTerrainSurface>,
     >,
@@ -1100,20 +1101,42 @@ fn refresh_docbacked_terrain_from_doc(
     // resolution only — the name isn't bound, so it can't clash).
     use lunco_doc::Document as _;
     let Some(registry) = registry else { return };
-    for (entity, prim_path, td, tracker) in &mut terrains {
+    for (entity, prim_path, td, tracker, has_base_grid) in &mut terrains {
         let doc = lunco_doc::DocumentId::new(td.doc);
         let Some(host) = registry.host(doc) else { continue };
         let cur_gen = host.document().generation();
-        if let Some(mut g) = tracker {
-            if g.0 == cur_gen {
-                continue; // document unchanged since our last re-bake
+        match tracker {
+            Some(mut g) => {
+                if g.0 == cur_gen {
+                    continue; // document unchanged since our last re-bake
+                }
+                g.0 = cur_gen; // live edit — re-bake from composed below
             }
-            g.0 = cur_gen;
-        } else {
-            // First sight: seed the tracker only. The stack is already current from
-            // the initial bridge parse, so re-baking now would be a wasted re-stamp.
-            commands.entity(entity).insert(TerrainDocGeneration(cur_gen));
-            continue;
+            None => {
+                // First sight. The initial bridge parse (`bridge_usd_dem_terrain`) read
+                // the BASE stage only, so a runtime overlay restored from
+                // `.lunco/runtime/…` on `DocumentOpened` (e.g. a crater/rock layer the
+                // user disabled last session) is NOT reflected in the just-built terrain.
+                // If such an overlay exists we MUST re-bake from the composed (base ⊕
+                // runtime) doc — otherwise the persisted disable is silently ignored and
+                // the terrain shows the base values on every launch. `start_dem_restamp`
+                // needs the retained `DemBaseGrid`, so wait for the async DEM build to
+                // deposit it before triggering. With no runtime overlay the bridge parse
+                // is authoritative → seed + skip (no wasted startup re-stamp).
+                let has_runtime_override = host
+                    .document()
+                    .runtime_data()
+                    .iter()
+                    .any(|(_, spec)| spec.ty == openusd::sdf::SpecType::Prim);
+                if has_runtime_override && !has_base_grid {
+                    continue; // retry next frame, once the base grid is built
+                }
+                commands.entity(entity).insert(TerrainDocGeneration(cur_gen));
+                if !has_runtime_override {
+                    continue; // nothing persisted to re-apply
+                }
+                // fall through: re-parse composed + insert stack → one startup re-bake
+            }
         }
         let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else { continue };
         let composed = host.document().composed();
@@ -1161,6 +1184,14 @@ fn on_obstacle_spec_authored(
 ) {
     let Some(mut registry) = registry else { return };
     let spec = &trigger.event().spec;
+    // The USD crater/rock layer parsers use `density > 0` as the on/off signal
+    // (`parse_crater_layer`/`parse_rock_layer` drop the layer at density ≤ 0), so the
+    // Inspector's `enabled` checkbox must fold into the authored density here — else an
+    // unchecked-but-nonzero layer re-parses as still-on and stays visible. Author the
+    // EFFECTIVE density (0 when disabled); the live in-memory spec keeps the real value,
+    // so re-checking restores it within the session.
+    let crater_density = if spec.craters.enabled { spec.craters.density } else { 0.0 };
+    let rock_density = if spec.rocks.enabled { spec.rocks.density } else { 0.0 };
     for (prim_path, td) in &terrains {
         let Some(stage) = stages.get(&prim_path.stage_handle) else { continue };
         let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else { continue };
@@ -1170,14 +1201,14 @@ fn on_obstacle_spec_authored(
             let path = child.as_str().to_string();
             match reader.prim_attribute_value::<String>(&child, "lunco:layer").as_deref() {
                 Some("craters") => {
-                    info!("[obstacle-usd] authoring craters density={} sizeMode={} enabled={} → {path} (doc {})", spec.craters.density, spec.craters.size.mode, spec.craters.enabled, td.doc);
-                    author_layer_attr(&mut registry, doc, &path, "density", "float", spec.craters.density.to_string());
+                    info!("[obstacle-usd] authoring craters density={crater_density} (enabled={}) sizeMode={} → {path} (doc {})", spec.craters.enabled, spec.craters.size.mode, td.doc);
+                    author_layer_attr(&mut registry, doc, &path, "density", "float", crater_density.to_string());
                     author_layer_attr(&mut registry, doc, &path, "sizeMode", "float", spec.craters.size.mode.to_string());
                     author_layer_attr(&mut registry, doc, &path, "depthRatio", "float", spec.craters.depth_ratio.to_string());
                     author_layer_attr(&mut registry, doc, &path, "rimRatio", "float", spec.craters.rim_height_ratio.to_string());
                 }
                 Some("rocks") => {
-                    author_layer_attr(&mut registry, doc, &path, "density", "float", spec.rocks.density.to_string());
+                    author_layer_attr(&mut registry, doc, &path, "density", "float", rock_density.to_string());
                     author_layer_attr(&mut registry, doc, &path, "sizeMode", "float", spec.rocks.size.mode.to_string());
                 }
                 _ => {}

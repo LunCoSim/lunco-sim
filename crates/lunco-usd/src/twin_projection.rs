@@ -334,6 +334,27 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                 {
                     needs_structural = false;
                 }
+            } else if needs_structural && b.full_reload && synced.is_some() {
+                // A `FullReload` from restoring a persisted runtime overlay on session
+                // reopen (`restore_runtime` commits the `.lunco/runtime` layer as one
+                // blanket reload). A whole-scene reload would despawn + re-instantiate
+                // EVERYTHING — which for a moonbase-style scene drops referenced vessels
+                // and duplicates the heavy terrain. If every prim the overlay touches is
+                // inside the exempt terrain branch (its ancestors on the way down, or the
+                // subtree itself), the reload is unnecessary:
+                // `refresh_docbacked_terrain_from_doc` applies those attrs in place. An
+                // overlay that touches anything OUTSIDE that branch (e.g. a persisted
+                // spawn) still reloads so the new prim instantiates.
+                let exempt = exempt_subtree_paths(world, handle.id());
+                let overlay = runtime_overlay_prim_paths(world, doc);
+                if !exempt.is_empty()
+                    && !overlay.is_empty()
+                    && overlay
+                        .iter()
+                        .all(|p| path_under_any(p, &exempt) || path_ancestor_of_any(p, &exempt))
+                {
+                    needs_structural = false;
+                }
             }
         }
         if needs_structural {
@@ -370,6 +391,30 @@ fn path_under_any(path: &str, prefixes: &[String]) -> bool {
     prefixes.iter().any(|pre| {
         path == pre || path.strip_prefix(pre.as_str()).is_some_and(|rest| rest.starts_with('/'))
     })
+}
+
+/// True if `path` equals, or is a strict *ancestor* of, any prefix in `prefixes`
+/// (the mirror of [`path_under_any`]): `/World` is an ancestor of `/World/dem`.
+fn path_ancestor_of_any(path: &str, prefixes: &[String]) -> bool {
+    prefixes.iter().any(|pre| {
+        pre == path || pre.strip_prefix(path).is_some_and(|rest| rest.starts_with('/'))
+    })
+}
+
+/// Every prim path carrying an opinion in `doc`'s runtime overlay (the restored
+/// session layer) — the intermediate `over` scopes included. Used to decide
+/// whether a `FullReload`-classed restore is confined to an exempt terrain
+/// subtree and can therefore skip the whole-scene reload.
+fn runtime_overlay_prim_paths(world: &World, doc: DocumentId) -> Vec<String> {
+    let Some(host) = world.resource::<UsdDocumentRegistry>().host(doc) else {
+        return Vec::new();
+    };
+    host.document()
+        .runtime_data()
+        .iter()
+        .filter(|(_, spec)| spec.ty == openusd::sdf::SpecType::Prim)
+        .map(|(path, _)| path.as_str().to_string())
+        .collect()
 }
 
 /// Buffer the ids of twin scene assets that finished (re)loading this frame, so
