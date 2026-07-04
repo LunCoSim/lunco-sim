@@ -333,16 +333,17 @@ fn first_reference(spec: &openusd::sdf::SpecData) -> Option<String> {
 /// Whether an op has no incremental live-stage author yet, so the projector must
 /// rebuild the scene from the composed source rather than replay it: a
 /// whole-source replace, a namespace move (re-keys entities by path; whole-source
-/// undo may also change surviving prims' attribute values), or a keyframe /
-/// relationship edit (authoring those onto a live stage isn't wired). The common
-/// interactive ops — translate, attribute, spawn, remove — return `false` and
-/// replay incrementally via [`apply_incremental_op_to_stage`].
+/// undo may also change surviving prims' attribute values), a keyframe *removal*
+/// (openusd exposes no live-stage sample removal — unlike `SetTimeSample`, which
+/// authors incrementally), or a relationship edit (authoring that onto a live
+/// stage isn't wired). The common interactive ops — translate, attribute, spawn,
+/// remove, keyframe *authoring* — return `false` and replay incrementally via
+/// [`apply_incremental_op_to_stage`].
 fn op_needs_rebuild(op: &UsdOp) -> bool {
     matches!(
         op,
         UsdOp::ReplaceSource { .. }
             | UsdOp::MovePrim { .. }
-            | UsdOp::SetTimeSample { .. }
             | UsdOp::RemoveTimeSample { .. }
             | UsdOp::SetRelationship { .. }
     )
@@ -424,9 +425,51 @@ fn apply_incremental_op_to_stage(
                 }
             }
         }
+        UsdOp::SetTimeSample { path, name, type_name, time, value, .. } => {
+            let Ok(sp) = openusd::sdf::Path::new(path) else { return };
+            let v = match lunco_usd_bevy::author::parse_attribute_value(type_name, value) {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!("[twin] parse keyframe {path}.{name} ({type_name}) @ {time}: {e}");
+                    return;
+                }
+            };
+            let authored = match world
+                .get_non_send_resource::<CanonicalStages>()
+                .and_then(|s| s.get(scene_id))
+            {
+                Some(cs) => match cs.author_time_sample(&sp, name, type_name, *time, v) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        warn!("[twin] author keyframe {path}.{name} @ {time}: {e}");
+                        false
+                    }
+                },
+                None => false,
+            };
+            // The per-frame sampler (`sample_usd_animation`) reads the live stage,
+            // so a key on an ALREADY-animated prim shows up next tick with no
+            // refresh. But the FIRST key turns a static prim animated — its entity
+            // isn't `UsdAnimated` yet, so re-instantiate the subtree to let the
+            // extractor tag + plan it. Steady-state keyframing stays refresh-free.
+            if authored && !prim_entity_is_animated(world, scene_id, path) {
+                refresh_prim_subtree(world, scene_id, path);
+            }
+        }
         // Coarse ops never reach here (the caller rebuilds for them).
         _ => {}
     }
+}
+
+/// Whether the live entity projecting `path` in `scene_id` is already tagged
+/// [`UsdAnimated`](lunco_usd_bevy::UsdAnimated) — so the per-frame animation
+/// sampler already drives it and a fresh keyframe needs no re-instantiation. False
+/// when the prim is static (or has no live entity yet), which is when a first
+/// keyframe must trigger a subtree refresh to (re-)tag it.
+fn prim_entity_is_animated(world: &mut World, scene_id: AssetId<UsdStageAsset>, path: &str) -> bool {
+    let mut q = world.query::<(&UsdPrimPath, Option<&lunco_usd_bevy::UsdAnimated>)>();
+    q.iter(world)
+        .any(|(upp, anim)| upp.stage_handle.id() == scene_id && upp.path == *path && anim.is_some())
 }
 
 /// Author a spawn onto the live stage: a plain prim authors immediately; a

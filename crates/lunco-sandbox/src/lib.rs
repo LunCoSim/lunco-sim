@@ -364,6 +364,61 @@ fn replay_scenario_journal(
     }
 }
 
+/// Scenario distribution Layer B for **Modelica** — the parallel of
+/// [`replay_scenario_journal`] for the model domain. The journal plane, its merge,
+/// and the strategy-honoring op selector are all domain-generic; only this consume
+/// leg is per-domain. Selects the merged, not-yet-applied `Modelica` op entries via
+/// [`domain_ops_after`](lunco_networking::journal_plane::domain_ops_after)
+/// (`DomainKind::Modelica`) — so a scripted merge policy reorders Modelica replay
+/// identically to USD — and applies each through `ModelicaDocumentRegistry::replay_op`
+/// (no re-recording).
+///
+/// Resources are `Option`: the Modelica registry / journal aren't present in every
+/// app configuration (a pure-USD headless build), so this no-ops when either is
+/// absent. Single active model for now — the same cross-peer `DocumentId` limitation
+/// the USD leg documents (selection is by author, which one open model makes
+/// sufficient); with more than one open model it defers rather than misroute.
+#[cfg(feature = "networking")]
+fn replay_scenario_journal_modelica(
+    role: Res<lunco_core::NetworkRole>,
+    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
+    registry: Option<ResMut<lunco_modelica::state::ModelicaDocumentRegistry>>,
+    // Modelica-domain entry ids already projected (its own once-per-entry guard,
+    // independent of the USD driver's applied-set).
+    mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
+) {
+    let (Some(journal), Some(mut registry)) = (journal, registry) else {
+        return;
+    };
+    let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
+        None
+    } else {
+        let Some(manifest) = remote.manifest.as_ref() else {
+            return;
+        };
+        manifest.journal_head.as_ref()
+    };
+    // Single active Modelica model (see doc note); >1 open model → defer.
+    let docs: Vec<_> = registry.iter().map(|(id, _)| id).collect();
+    let [doc] = docs.as_slice() else {
+        return;
+    };
+    let doc = *doc;
+    let me = journal.local_author();
+    let pending = lunco_networking::journal_plane::domain_ops_after(
+        &journal,
+        base,
+        &me,
+        &applied,
+        lunco_twin_journal::DomainKind::Modelica,
+    );
+    for (id, op) in pending {
+        registry.replay_op(doc, &op);
+        applied.insert(id);
+    }
+}
+
 /// The shared, headless-safe core: the persistent world shell, physics, cosim,
 /// USD scene load, mobility/hardware/controller/avatar, environment, the HTTP
 /// API, and networking. Added unconditionally by both the GUI and the server, so
@@ -555,6 +610,9 @@ impl Plugin for SandboxCorePlugin {
             // (bidirectional — clients see the host's edits, the host sees
             // clients'; no-op when no scenario/journal is present).
             app.add_systems(Update, replay_scenario_journal);
+            // Same Layer B for Modelica models — the journal plane is domain-generic;
+            // this is the parallel per-domain consume leg for `DomainKind::Modelica`.
+            app.add_systems(Update, replay_scenario_journal_modelica);
             // Connect-menu bridge adapter + egui presence/tutorial overlays. Pulls
             // bevy_egui, so it's GUI-only and gated on `ui` (CQ-601) — the headless
             // server omits it. The host still answers runtime JoinServer/LeaveServer

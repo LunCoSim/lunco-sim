@@ -27,56 +27,33 @@ use lunco_twin_journal::MergeStrategy;
 
 use crate::sync::{SyncEnvelope, SyncOutbox};
 
-/// Which internal decision point a scripted policy fills.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PolicyKind {
-    /// Convergent journal merge order ([`lunco_twin_journal::MergePolicy`]).
-    Merge,
-    /// The RBAC authorization gate ([`lunco_core::session::AUTHORIZE_HOOK`]).
-    Authorize,
-    /// A vehicle drive kernel — a rhai hook named by `lunco:driveKernel` /
-    /// [`lunco_core::kernels::DriveMix::kernel`], consumed by `apply_drive_mix`.
-    DriveKernel,
-}
+/// The reserved policy **seam** (hook id) that drives the journal's convergent
+/// merge order: a policy authored under this seam flips the journal's
+/// [`MergeStrategy`] to `Scripted(seam)`. Every other seam is an open, self-
+/// registering hook id (control-authority, drive-kernel, or any future decision
+/// point) — no closed taxonomy (`feedback_less_rust_more_dynamic_registries`).
+pub const MERGE_SEAM: &str = "journal.merge.order";
 
-impl PolicyKind {
-    /// Parse a `kind` string from the command / API surface.
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "merge" => Some(Self::Merge),
-            "authorize" | "authz" | "rbac" => Some(Self::Authorize),
-            "drivekernel" | "drive_kernel" | "kernel" => Some(Self::DriveKernel),
-            _ => None,
-        }
-    }
-
-    /// Convergent/replicated policies (merge, drive kernel) must be a pure function
-    /// of their inputs and identical on every peer; authorization is host-only and
-    /// carries no such contract.
-    fn deterministic(self) -> bool {
-        !matches!(self, PolicyKind::Authorize)
-    }
-
-    /// The hook id this policy MUST register under. Authorization is pinned to the
-    /// gate's well-known id (that's the id [`lunco_core::session::authorize`]
-    /// consults); the others use the caller-supplied id.
-    fn effective_hook_id(self, requested: &str) -> String {
-        match self {
-            PolicyKind::Authorize => lunco_core::session::AUTHORIZE_HOOK.to_string(),
-            _ => requested.to_string(),
-        }
-    }
-}
-
-/// One scripted policy: a rhai `source` whose `entry` function fills the hook of
-/// kind `kind`, registered under `hook_id` (ignored for `Authorize`, which pins to
-/// the gate's id).
+/// One scripted policy: a rhai `source` whose `entry` function fills the hook at
+/// `seam` (the hook id string directly — e.g. [`lunco_core::session::AUTHORIZE_HOOK`],
+/// [`MERGE_SEAM`], a `lunco:driveKernel` id, or any open seam). `deterministic`
+/// gates rhai scope reuse: convergent/replicated seams (merge, drive) must be
+/// deterministic; the host-only authorization gate need not be.
+///
+/// This is the projected form of a `LuncoPolicy` USD prim — its
+/// `lunco:policy:{seam,entry,source,deterministic}` attributes map one-to-one — so
+/// a policy authored in USD rides the journal/sync/persist path with no
+/// policy-specific machinery.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PolicyDef {
-    pub kind: PolicyKind,
-    pub hook_id: String,
+    /// The hook id this policy registers under (open seam-id, no enum).
+    pub seam: String,
+    /// The rhai entry function name.
     pub entry: String,
+    /// The rhai source defining `entry` (+ helpers).
     pub source: String,
+    /// Whether the hook is deterministic (fresh rhai scope per invoke).
+    pub deterministic: bool,
 }
 
 /// The active scripted policies on THIS peer. Host-authoritative: set via
@@ -93,38 +70,78 @@ pub struct ScriptedPolicyMsg {
     pub policies: Vec<PolicyDef>,
 }
 
-/// Compile+register the policy's rhai hook and **activate** it: a `Merge` policy
-/// also flips the journal's [`MergeStrategy`]; `Authorize` registers under the
-/// gate's hook id so [`lunco_core::session::authorize`] consults it; a
-/// `DriveKernel` just registers the rhai hook by id; `apply_drive_mix` invokes it
-/// for any vessel whose `DriveMix.kernel` names that id. Re-registering hot-replaces
-/// (idempotent for a stable source).
+/// Compile+register the policy's rhai hook and **activate** it: a policy at
+/// [`MERGE_SEAM`] also flips the journal's [`MergeStrategy`] to `Scripted(seam)`;
+/// an [`AUTHORIZE_HOOK`](lunco_core::session::AUTHORIZE_HOOK)-seam policy is
+/// consulted by [`lunco_core::session::authorize`]; any other seam just registers
+/// the hook by id (e.g. a `lunco:driveKernel` id `apply_drive_mix` invokes).
+/// Re-registering hot-replaces (idempotent for a stable source).
 pub fn apply_policy(def: &PolicyDef, journal: Option<&JournalResource>) -> Result<(), String> {
-    let id = def.kind.effective_hook_id(&def.hook_id);
-    lunco_hooks_rhai::register_rhai_hook(&id, &def.entry, &def.source, def.kind.deterministic())?;
-    if def.kind == PolicyKind::Merge {
+    lunco_hooks_rhai::register_rhai_hook(&def.seam, &def.entry, &def.source, def.deterministic)?;
+    if def.seam == MERGE_SEAM {
         if let Some(j) = journal {
-            j.with_write(|jj| jj.set_merge_strategy(MergeStrategy::Scripted(id)));
+            j.with_write(|jj| jj.set_merge_strategy(MergeStrategy::Scripted(def.seam.clone())));
         }
     }
     Ok(())
 }
 
-/// Host entry point: upsert `def` into `registry` (replacing any prior policy it
-/// supersedes) and apply it. `Merge`/`Authorize` are singletons (one active each);
-/// `DriveKernel`s are keyed by `hook_id` (many vehicles, distinct kernels).
+/// Deactivate a policy whose prim/definition vanished: unregister its hook, and if
+/// it drove the journal merge order, reset the strategy to the built-in
+/// [`MergeStrategy::Default`]. The counterpart of [`apply_policy`] used by
+/// [`project_policies`] when a `LuncoPolicy` prim is removed (closes the
+/// "unregister has no production callers" gap).
+pub fn retract_policy(seam: &str, journal: Option<&JournalResource>) {
+    lunco_hooks::unregister(seam);
+    if seam == MERGE_SEAM {
+        if let Some(j) = journal {
+            j.with_write(|jj| jj.set_merge_strategy(MergeStrategy::Default));
+        }
+    }
+}
+
+/// Host entry point: upsert `def` into `registry` (replacing any prior policy at
+/// the same seam) and apply it. Seams are singletons — one active hook per id.
 pub fn set_policy(
     registry: &mut ScriptedPolicyRegistry,
     def: PolicyDef,
     journal: Option<&JournalResource>,
 ) -> Result<(), String> {
     apply_policy(&def, journal)?;
-    registry.policies.retain(|p| match def.kind {
-        PolicyKind::DriveKernel => !(p.kind == def.kind && p.hook_id == def.hook_id),
-        _ => p.kind != def.kind,
-    });
+    registry.policies.retain(|p| p.seam != def.seam);
     registry.policies.push(def);
     Ok(())
+}
+
+/// **Reactive projection** of the full desired policy set (e.g. the composed
+/// `LuncoPolicy` prims of a stage) into the live hook registry: register every
+/// `desired` policy, **retract any previously-active seam no longer present**, and
+/// leave `registry` holding exactly `desired` as the derived activation cache.
+///
+/// This is the activation half of "policy is a projected USD prim": the caller
+/// reads the composed stage into `desired` `PolicyDef`s and calls this; a seam that
+/// disappeared (its prim was deleted, or a stronger layer removed the opinion) is
+/// unregistered and its merge strategy reset — so activation exactly tracks the
+/// authored/composed state, on every peer, with no bespoke broadcast.
+pub fn project_policies(
+    desired: Vec<PolicyDef>,
+    registry: &mut ScriptedPolicyRegistry,
+    journal: Option<&JournalResource>,
+) {
+    // Retract seams that were active but are no longer desired.
+    let keep: std::collections::HashSet<&str> = desired.iter().map(|p| p.seam.as_str()).collect();
+    for prev in &registry.policies {
+        if !keep.contains(prev.seam.as_str()) {
+            retract_policy(&prev.seam, journal);
+        }
+    }
+    // (Re-)register every desired policy — hot-replace is idempotent.
+    for def in &desired {
+        if let Err(e) = apply_policy(def, journal) {
+            warn!("[policy] failed to project seam '{}': {e}", def.seam);
+        }
+    }
+    registry.policies = desired;
 }
 
 /// Client: apply an inbound policy set — register+activate each, and mirror the set
@@ -135,12 +152,7 @@ pub fn apply_inbound_policies(
     registry: &mut ScriptedPolicyRegistry,
     journal: Option<&JournalResource>,
 ) {
-    for def in &msg.policies {
-        if let Err(e) = apply_policy(def, journal) {
-            warn!("[policy-plane] failed to apply inbound {:?} policy '{}': {e}", def.kind, def.hook_id);
-        }
-    }
-    registry.policies = msg.policies.clone();
+    project_policies(msg.policies.clone(), registry, journal);
 }
 
 /// Host: when the policy registry changes, broadcast the full set to all peers
@@ -171,14 +183,18 @@ pub fn broadcast_scripted_policies(
 /// for you); do not hand-register divergent scripts per peer.
 #[lunco_core::Command(default)]
 pub struct SetScriptedPolicy {
-    /// `"merge"`, `"authorize"`, or `"drive_kernel"`.
-    pub kind: String,
-    /// Hook id to register under (ignored for `authorize`, pinned to the gate id).
-    pub hook_id: String,
+    /// The seam (hook id) to register under — an open id, e.g.
+    /// `"journal.merge.order"` ([`MERGE_SEAM`]), `"rbac.authorize"`, or a
+    /// `lunco:driveKernel` id.
+    pub seam: String,
     /// The rhai entry function name (e.g. `"cmp"`).
     pub entry: String,
     /// The rhai source defining `entry` (+ any helpers / consts).
     pub source: String,
+    /// Whether the hook is deterministic (fresh rhai scope per invoke). Convergent
+    /// seams (merge, drive) must be `true`; the host-only authorize gate may be
+    /// `false`.
+    pub deterministic: bool,
 }
 
 #[lunco_core::on_command(SetScriptedPolicy)]
@@ -188,19 +204,16 @@ fn on_set_scripted_policy(
     journal: Option<Res<JournalResource>>,
 ) {
     let cmd = trigger.event();
-    let Some(kind) = PolicyKind::parse(&cmd.kind) else {
-        warn!("[policy] unknown policy kind '{}' (want merge|authorize|drive_kernel)", cmd.kind);
-        return;
-    };
     let def = PolicyDef {
-        kind,
-        hook_id: cmd.hook_id.clone(),
+        seam: cmd.seam.clone(),
         entry: cmd.entry.clone(),
         source: cmd.source.clone(),
+        deterministic: cmd.deterministic,
     };
+    let seam = def.seam.clone();
     match set_policy(&mut registry, def, journal.as_deref()) {
-        Ok(()) => info!("[policy] activated {kind:?} policy '{}' (broadcasting to peers)", cmd.hook_id),
-        Err(e) => warn!("[policy] failed to activate {kind:?} policy: {e}"),
+        Ok(()) => info!("[policy] activated policy at seam '{seam}' (broadcasting to peers)"),
+        Err(e) => warn!("[policy] failed to activate policy at seam '{seam}': {e}"),
     }
 }
 
@@ -210,91 +223,85 @@ lunco_core::register_commands!(on_set_scripted_policy);
 mod tests {
     use super::*;
 
-    #[test]
-    fn kind_parse_is_lenient() {
-        assert_eq!(PolicyKind::parse("Merge"), Some(PolicyKind::Merge));
-        assert_eq!(PolicyKind::parse("rbac"), Some(PolicyKind::Authorize));
-        assert_eq!(PolicyKind::parse(" drive_kernel "), Some(PolicyKind::DriveKernel));
-        assert_eq!(PolicyKind::parse("nonsense"), None);
+    fn policy(seam: &str, src: &str, deterministic: bool) -> PolicyDef {
+        PolicyDef { seam: seam.into(), entry: "cmp".into(), source: src.into(), deterministic }
     }
 
     #[test]
-    fn apply_merge_policy_registers_hook_and_sets_strategy() {
+    fn apply_merge_seam_policy_registers_hook_and_sets_strategy() {
         use lunco_twin_journal::{AuthorId, TwinId};
         let journal = JournalResource::new(TwinId::new("t"), AuthorId::new("me"));
-        let def = PolicyDef {
-            kind: PolicyKind::Merge,
-            hook_id: "test.policy.merge".into(),
-            entry: "cmp".into(),
-            source: "fn cmp(a, b) { 0 }".into(),
-        };
-        apply_policy(&def, Some(&journal)).unwrap();
+        apply_policy(&policy(MERGE_SEAM, "fn cmp(a, b) { 0 }", true), Some(&journal)).unwrap();
         // Hook registered…
-        assert!(lunco_hooks::get("test.policy.merge").is_some());
-        // …and the journal now linearizes via the scripted strategy.
+        assert!(lunco_hooks::get(MERGE_SEAM).is_some());
+        // …and the journal now linearizes via the scripted strategy at that seam.
         journal.with_read(|j| {
-            assert_eq!(*j.merge_strategy(), MergeStrategy::Scripted("test.policy.merge".into()));
+            assert_eq!(*j.merge_strategy(), MergeStrategy::Scripted(MERGE_SEAM.into()));
         });
-        lunco_hooks::unregister("test.policy.merge");
+        lunco_hooks::unregister(MERGE_SEAM);
     }
 
     #[test]
-    fn authorize_policy_pins_to_the_gate_hook_id() {
-        // Whatever hook_id is requested, an authorize policy MUST register under
-        // the gate's well-known id (else `authorize()` never consults it).
-        let def = PolicyDef {
-            kind: PolicyKind::Authorize,
-            hook_id: "ignored.custom.id".into(),
-            entry: "allow".into(),
-            source: "fn allow(ctx) { true }".into(),
-        };
-        apply_policy(&def, None).unwrap();
+    fn authorize_seam_policy_is_consulted_by_the_gate() {
+        // A policy authored at the gate's seam registers there so `authorize()`
+        // consults it — the seam IS the id (open, no enum-pinning).
+        apply_policy(
+            &policy(lunco_core::session::AUTHORIZE_HOOK, "fn cmp(ctx) { true }", false),
+            None,
+        )
+        .unwrap();
         assert!(lunco_hooks::get(lunco_core::session::AUTHORIZE_HOOK).is_some());
-        assert!(lunco_hooks::get("ignored.custom.id").is_none());
         lunco_hooks::unregister(lunco_core::session::AUTHORIZE_HOOK);
     }
 
     #[test]
-    fn set_policy_upserts_singletons_and_keys_kernels() {
+    fn set_policy_upserts_by_seam() {
         let mut reg = ScriptedPolicyRegistry::default();
-        let merge = |src: &str| PolicyDef {
-            kind: PolicyKind::Merge,
-            hook_id: "m".into(),
-            entry: "cmp".into(),
-            source: src.into(),
-        };
-        set_policy(&mut reg, merge("fn cmp(a,b){0}"), None).unwrap();
-        set_policy(&mut reg, merge("fn cmp(a,b){1}"), None).unwrap();
-        // Merge is a singleton — the second replaces the first.
-        assert_eq!(reg.policies.iter().filter(|p| p.kind == PolicyKind::Merge).count(), 1);
+        set_policy(&mut reg, policy("m", "fn cmp(a,b){0}", true), None).unwrap();
+        set_policy(&mut reg, policy("m", "fn cmp(a,b){1}", true), None).unwrap();
+        // A seam is a singleton — the second replaces the first.
+        assert_eq!(reg.policies.iter().filter(|p| p.seam == "m").count(), 1);
         assert_eq!(reg.policies[0].source, "fn cmp(a,b){1}");
 
-        // Distinct drive kernels coexist (keyed by hook_id).
-        let kernel = |id: &str| PolicyDef {
-            kind: PolicyKind::DriveKernel,
-            hook_id: id.into(),
-            entry: "k".into(),
-            source: "fn k(c){#{}}".into(),
-        };
-        set_policy(&mut reg, kernel("left"), None).unwrap();
-        set_policy(&mut reg, kernel("right"), None).unwrap();
-        assert_eq!(reg.policies.iter().filter(|p| p.kind == PolicyKind::DriveKernel).count(), 2);
+        // Distinct seams coexist.
+        set_policy(&mut reg, policy("left", "fn cmp(c){#{}}", true), None).unwrap();
+        set_policy(&mut reg, policy("right", "fn cmp(c){#{}}", true), None).unwrap();
+        assert_eq!(reg.policies.len(), 3);
 
         lunco_hooks::unregister("m");
         lunco_hooks::unregister("left");
         lunco_hooks::unregister("right");
     }
 
+    /// The reactive projector activates every desired policy and **retracts** a
+    /// seam that disappeared — the diff that makes activation track the composed
+    /// USD stage (a deleted `LuncoPolicy` prim unregisters its hook).
+    #[test]
+    fn project_policies_registers_desired_and_retracts_vanished() {
+        let mut reg = ScriptedPolicyRegistry::default();
+        // Round 1: two policies projected + registered.
+        project_policies(
+            vec![policy("a.seam", "fn cmp(){1}", true), policy("b.seam", "fn cmp(){2}", true)],
+            &mut reg,
+            None,
+        );
+        assert!(lunco_hooks::get("a.seam").is_some());
+        assert!(lunco_hooks::get("b.seam").is_some());
+
+        // Round 2: `b.seam` vanished from the composed set → retracted (unregistered).
+        project_policies(vec![policy("a.seam", "fn cmp(){1}", true)], &mut reg, None);
+        assert!(lunco_hooks::get("a.seam").is_some(), "still-desired seam stays active");
+        assert!(lunco_hooks::get("b.seam").is_none(), "vanished seam is unregistered");
+        assert_eq!(reg.policies.len(), 1, "registry is the derived active-set cache");
+
+        lunco_hooks::unregister("a.seam");
+    }
+
     #[test]
     fn policy_envelope_roundtrips_through_the_wire_codec() {
         // The plane rides the same positional codec as every other envelope, so
-        // PolicyDef must be codec-clean (all Strings + a plain enum).
-        let policies = vec![PolicyDef {
-            kind: PolicyKind::DriveKernel,
-            hook_id: "k".into(),
-            entry: "k".into(),
-            source: "fn k(c){#{}}".into(),
-        }];
+        // PolicyDef must be codec-clean (all Strings + a bool).
+        let policies = vec![policy("k", "fn cmp(c){#{}}", true)];
         let env = SyncEnvelope::ScriptedPolicy(ScriptedPolicyMsg { policies: policies.clone() });
         let bytes = crate::shared::serialize_env(&env).expect("serialize");
         let Some(SyncEnvelope::ScriptedPolicy(back)) = crate::shared::deserialize_env(&bytes) else {
