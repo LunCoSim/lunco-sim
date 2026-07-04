@@ -19,9 +19,18 @@ lunco-time = { path = "../lunco-time" }
 # type to satisfy the orphan rule); `lunco-terrain-core` is the pure leaf that
 # defines the trait. (The former `lunco-terrain` dep was unused and was removed.)
 lunco-terrain-core = { workspace = true }
+# Journal plane: a live `ObstacleFieldSpec` tweak is recorded as a `DomainKind::
+# ObstacleField` op so it persists + syncs like every other domain. `lunco-doc`
+# supplies `DocumentId` (the op key); `lunco-doc-bevy` the `JournalResource`
+# handle; `lunco-twin-journal` the `OpPayload` trait (impl'd here to satisfy the
+# orphan rule, since `ObstacleFieldOp` is defined here).
+lunco-doc = { path = "../lunco-doc" }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-twin-journal = { path = "../lunco-twin-journal" }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

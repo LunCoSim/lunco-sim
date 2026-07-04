@@ -27,6 +27,10 @@ pub mod tool_libs;
 /// (`<twin>/timelines/*.json`; `ListTimelines`/`GetTimeline`/`RunStoredTimeline`).
 #[cfg(feature = "rhai")]
 pub mod timelines;
+/// Journaling for named registrations (tool libraries + timelines) — so a
+/// `RegisterToolLibrary`/`RegisterTimeline` syncs + persists via the journal plane.
+#[cfg(feature = "rhai")]
+pub mod registration_journal;
 /// Scripting adapter onto the unified diagnostics store (`ScriptStatus` query).
 #[cfg(feature = "rhai")]
 pub mod diagnostics;

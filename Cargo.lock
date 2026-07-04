@@ -7155,7 +7155,6 @@ dependencies = [
  "lunco-hash",
  "lunco-hooks",
  "lunco-hooks-rhai",
- "lunco-obstacle-field",
  "lunco-sandbox-edit",
  "lunco-settings",
  "lunco-storage",
@@ -7190,11 +7189,15 @@ dependencies = [
  "bevy_mesh",
  "big_space",
  "lunco-core",
+ "lunco-doc",
+ "lunco-doc-bevy",
  "lunco-terrain-core",
  "lunco-time",
+ "lunco-twin-journal",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

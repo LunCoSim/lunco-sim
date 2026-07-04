@@ -332,11 +332,20 @@ fn on_register_tool_library(
     // persist the library to the active Twin's `tools/` dir. `None` (headless /
     // no-twin) just keeps the in-memory registration.
     ws: Option<Res<lunco_workspace::WorkspaceResource>>,
+    // Journal handle (present once wired). Records the registration as a
+    // `DomainKind::ToolLibrary` op so it syncs to peers + persists cross-platform.
+    // The command isn't on the command bus, so this only fires for LOCAL
+    // registrations; remote peers' registrations arrive via the replay leg
+    // (which calls `register_tool_library` directly, not this command).
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) -> Result<Ack, String> {
     if cmd.name.is_empty() {
         return Err("RegisterToolLibrary: `name` must not be empty".to_string());
     }
     crate::tool_libs::register_tool_library(&cmd.name, &cmd.source);
+    if let Some(journal) = journal.as_ref() {
+        crate::registration_journal::record_tool_library(journal, &cmd.name, &cmd.source);
+    }
     // Twin persistence: mirror the in-memory registration to
     // `<twin>/tools/<name>.rhai` so it survives a restart (loaded back by the
     // TwinAdded observer). Native only — no filesystem on wasm.
@@ -527,6 +536,10 @@ fn on_register_timeline(
     // Optional: present only with the workspace plugin; used to persist to the
     // active Twin's `timelines/` dir. `None` (headless / no-twin) keeps it in-memory.
     ws: Option<Res<lunco_workspace::WorkspaceResource>>,
+    // Journal handle (present once wired). Records the registration as a
+    // `DomainKind::Timeline` op so it syncs + persists via the journal plane;
+    // fires for LOCAL registrations only (remote ones arrive via the replay leg).
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) -> Result<Ack, String> {
     if cmd.name.is_empty() {
         return Err("RegisterTimeline: `name` must not be empty".to_string());
@@ -534,6 +547,9 @@ fn on_register_timeline(
     // Reject malformed timelines at store time, not at run time.
     parse_timeline_steps(&cmd.timeline).map_err(|e| format!("RegisterTimeline: {e}"))?;
     store.insert(cmd.name.clone(), cmd.timeline.clone());
+    if let Some(journal) = journal.as_ref() {
+        crate::registration_journal::record_timeline(journal, &cmd.name, &cmd.timeline);
+    }
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(root) = ws
         .as_ref()

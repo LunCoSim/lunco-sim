@@ -140,6 +140,17 @@ pub enum DomainKind {
     /// Shader source edits (`ShaderDocument` — WGSL `SetSource`). Recorded so a live
     /// shader edit hot-reloads AND syncs/persists like a rhai script or Modelica model.
     Shader,
+    /// Obstacle-field generation config (`ObstacleFieldSpec` — the singleton
+    /// crater/rock tuning). Recorded so a live spec tweak persists + syncs through
+    /// the journal plane (replacing the former bespoke host→client broadcast).
+    ObstacleField,
+    /// Named rhai **tool library** registration (`RegisterToolLibrary` — shared
+    /// selection/behaviour policy callable from any scenario). Journaled so a
+    /// registration syncs to peers and survives a restart like any other domain.
+    ToolLibrary,
+    /// Named mission **timeline** registration (`RegisterTimeline` — declarative
+    /// step data stored in the `TimelineStore`). Journaled for the same reason.
+    Timeline,
     Other(String),
 }
 

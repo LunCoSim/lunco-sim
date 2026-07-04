@@ -1783,9 +1783,23 @@ pub fn persist_property_to_runtime_layer(
     if matches!(cmd.property.as_str(), "shader" | "visible") {
         return;
     }
-    // Only scalar tunes persist (layer weights etc.); non-scalar values are live-only.
-    let Ok(scalar) = cmd.value.trim().parse::<f32>() else {
+    // Parse the value into a typed USD attribute. A single float persists as
+    // `float`; three comma-separated floats persist as a `color3f` vector — the
+    // shape shader colours/vectors (`cell_a`, `tint`, …) take. `read_authored_params`
+    // reads BOTH back on reload (vec3 first, then scalar), so both round-trip with
+    // no loader change. Any other arity (or a non-numeric value) stays live-only.
+    let parts: Vec<&str> = cmd.value.split(',').collect();
+    let floats: Vec<f32> = parts.iter().filter_map(|s| s.trim().parse::<f32>().ok()).collect();
+    if floats.len() != parts.len() {
         return;
+    }
+    let (type_name, value) = match floats.len() {
+        1 => ("float".to_string(), floats[0].to_string()),
+        3 => (
+            "color3f".to_string(),
+            format!("({}, {}, {})", floats[0], floats[1], floats[2]),
+        ),
+        _ => return,
     };
     let Some(workspace) = workspace else { return };
     let Some(doc) = workspace.0.active_document else { return };
@@ -1817,10 +1831,101 @@ pub fn persist_property_to_runtime_layer(
             edit_target: LayerId::runtime(),
             path: prim.path.clone(),
             name,
-            type_name: "float".to_string(),
-            value: scalar.to_string(),
+            type_name,
+            value,
         },
     });
+}
+
+/// Persist a `SetEnvironmentLight` sun tweak into the active USD document's
+/// runtime overlay — the environment twin of [`persist_property_to_runtime_layer`].
+///
+/// [`lunco_environment::on_set_environment_light`] mutates the live
+/// `DirectionalLight` for immediate feedback but writes nothing back to USD, so a
+/// sun tweak is lost on reload. This decoupled observer authors the changed
+/// fields as `SetAttribute`s onto the sun's `DistantLight` prim in
+/// `LayerId::runtime()`, using the SAME attribute names the loader
+/// (`lunco_usd_bevy::light`) already reads back — so illuminance / colour /
+/// shadow-range knobs round-trip on reload and ride the Twin journal like every
+/// other USD edit. (Live peer-sync then follows the USD projection, exactly as
+/// the move / property persisters do — no bespoke light broadcast.)
+///
+/// Scope: the fields with an existing loader reader. Sun **direction** (needs a
+/// rotation-authoring op — there is no `SetRotate` yet) and the render-only knobs
+/// (exposure / bloom / earthshine / ambient — no `DistantLight` attribute reads
+/// them back yet) stay live-only for now.
+///
+/// Targets every non-earthshine `DistantLight` the active document owns
+/// (`SetEnvironmentLight` itself is global). Ownership-guarded like the other
+/// persisters; no-op when no USD doc is active (headless).
+pub fn persist_environment_light_to_runtime_layer(
+    trigger: On<lunco_environment::SetEnvironmentLight>,
+    usd_registry: Res<UsdDocumentRegistry>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    q_sun: Query<
+        &UsdPrimPath,
+        (
+            With<lunco_usd_bevy::UsdAuthoredLight>,
+            With<DirectionalLight>,
+            Without<lunco_environment::Earthshine>,
+        ),
+    >,
+    mut commands: Commands,
+) {
+    let cmd = trigger.event();
+    let Some(workspace) = workspace else { return };
+    let Some(doc) = workspace.0.active_document else { return };
+    let Some(host) = usd_registry.host(doc) else { return };
+
+    // Collect only the fields that HAVE a matching loader reader, so every attr
+    // authored here round-trips on reload (name, USD type, USD-literal value).
+    let mut attrs: Vec<(&str, &str, String)> = Vec::new();
+    if let Some(lux) = cmd.illuminance {
+        attrs.push(("inputs:intensity", "float", lux.to_string()));
+    }
+    if let Some([r, g, b]) = cmd.sun_color {
+        attrs.push(("inputs:color", "color3f", format!("({r}, {g}, {b})")));
+    }
+    if let Some(v) = cmd.shadow_max_distance {
+        attrs.push(("lunco:shadow:maxDistance", "float", v.to_string()));
+    }
+    if let Some(v) = cmd.shadow_first_cascade_bound {
+        attrs.push(("lunco:shadow:firstCascadeFarBound", "float", v.to_string()));
+    }
+    if let Some(v) = cmd.shadow_depth_bias {
+        attrs.push(("lunco:shadow:depthBias", "float", v.to_string()));
+    }
+    if let Some(v) = cmd.shadow_normal_bias {
+        attrs.push(("lunco:shadow:normalBias", "float", v.to_string()));
+    }
+    if attrs.is_empty() {
+        return;
+    }
+
+    for prim in &q_sun {
+        // Ownership guard: only author for suns the active document actually
+        // holds (base or runtime), so an engine-fallback sun never gets opinions.
+        let Ok(prim_sdf) = lunco_usd_bevy::SdfPath::new(&prim.path) else {
+            continue;
+        };
+        let owned = host.document().data().spec(&prim_sdf).is_some()
+            || host.document().runtime_data().spec(&prim_sdf).is_some();
+        if !owned {
+            continue;
+        }
+        for (name, type_name, value) in &attrs {
+            commands.trigger(ApplyUsdOp {
+                doc,
+                op: UsdOp::SetAttribute {
+                    edit_target: LayerId::runtime(),
+                    path: prim.path.clone(),
+                    name: (*name).to_string(),
+                    type_name: (*type_name).to_string(),
+                    value: value.clone(),
+                },
+            });
+        }
+    }
 }
 
 /// Persist a runtime **spawn** into the active USD document's runtime layer
@@ -2808,6 +2913,10 @@ impl Plugin for SpawnCommandPlugin {
         // overlay (non-destructive; Save stays base-only). Decoupled from the
         // live-mutation handler above, like the move/spawn persisters.
         app.add_observer(persist_property_to_runtime_layer);
+        // #14: persist a `SetEnvironmentLight` sun tweak (illuminance / colour /
+        // shadow range) as `SetAttribute`s on the sun's DistantLight prim, using
+        // the names the loader already reads back — so it round-trips + journals.
+        app.add_observer(persist_environment_light_to_runtime_layer);
         app.add_observer(on_focus_entity_by_id);
         // NOTE: `SelectEntity`/`on_select_entity` are editor-only (they drive the
         // Inspector highlight + gizmo) and live in the `ui`-gated `selection`

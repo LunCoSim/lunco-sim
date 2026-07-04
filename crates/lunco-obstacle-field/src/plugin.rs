@@ -93,8 +93,18 @@ fn on_update_obstacle_field_spec(
     trigger: On<UpdateObstacleFieldSpec>,
     mut spec: ResMut<ObstacleFieldSpec>,
     mut ev: MessageWriter<RegenerateField>,
+    // Journal handle: present once wired (networked / persisted sessions). Every
+    // local spec edit is recorded as a `DomainKind::ObstacleField` op so it
+    // persists + syncs through the journal plane. Remote peers' edits arrive via
+    // the replay leg (which sets the resource directly, NOT this command), so this
+    // handler only ever fires for a *local* edit — no wire re-record to guard.
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) {
-    *spec = trigger.event().spec.clone();
+    let next = trigger.event().spec.clone();
+    if let Some(journal) = journal.as_ref() {
+        crate::journal::record_set_spec(journal, &spec, &next);
+    }
+    *spec = next;
     ev.write(RegenerateField);
     info!("[ObstacleField] Spec updated and regeneration triggered.");
 }

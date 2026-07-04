@@ -2670,39 +2670,14 @@ lunco_core::register_commands!(
     on_set_follow_opt_in,
 );
 
-/// Host: when ObstacleFieldSpec is updated, broadcast UpdateObstacleFieldSpec command to all clients.
-pub fn sync_obstacle_field_spec(
-    role: Res<NetworkRole>,
-    spec: Option<Res<lunco_obstacle_field::ObstacleFieldSpec>>,
-    mut outbox: ResMut<SyncOutbox>,
-    type_registry: Res<AppTypeRegistry>,
-    local: Res<LocalSession>,
-) {
-    if !role.is_host() {
-        return;
-    }
-    let Some(spec) = spec else {
-        return;
-    };
-    if spec.is_changed() {
-        let cmd = lunco_obstacle_field::plugin::UpdateObstacleFieldSpec {
-            spec: spec.clone(),
-        };
-        let type_name = "UpdateObstacleFieldSpec".to_string();
-        let type_reg = type_registry.read();
-        if type_reg.get_with_short_type_path(&type_name).is_some() {
-            let serializer = TypedReflectSerializer::new(&cmd, &type_reg);
-            if let Ok(data_val) = serde_json::to_value(&serializer) {
-                if let Ok(data) = serde_json::to_string(&data_val) {
-                    let mut mutation = Mutation::local(SyncCommand { type_name, data });
-                    mutation.origin = local.0;
-                    outbox.0.push((SyncChannel::CommandBus, SyncEnvelope::Command(mutation)));
-                    info!("[net] Broadcast ObstacleFieldSpec update to clients.");
-                }
-            }
-        }
-    }
-}
+// NOTE: the obstacle-field spec no longer rides a bespoke host→client command
+// broadcast. It is journaled as a `DomainKind::ObstacleField` op at its command
+// chokepoint (`lunco_obstacle_field::journal`) and rides the domain-generic
+// journal plane like every other domain — so a tweak now syncs BOTH directions
+// (any peer can tune), persists across a restart, and joins the canonical twin
+// history. The sandbox `replay_scenario_journal_obstacle` leg installs a peer's
+// spec + regenerates. (Was `sync_obstacle_field_spec`; removed per the
+// "each datum one plane / kill bespoke broadcast" taxonomy.)
 
 impl Plugin for SyncPlugin {
     fn build(&self, app: &mut App) {
@@ -2777,7 +2752,6 @@ impl Plugin for SyncPlugin {
                 apply_tutorial_mirroring,
                 update_tutor_lifecycle,
                 block_action_states,
-                sync_obstacle_field_spec,
                 // B4 Phase 1: compute per-peer AOI interest sets (host-only, throttled
                 // to `interest_hz`). The server-side `assemble_and_send_snapshots`
                 // routes pose updates by these sets.

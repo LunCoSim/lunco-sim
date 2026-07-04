@@ -564,6 +564,133 @@ fn replay_scenario_journal_shader(
     }
 }
 
+/// Per-domain journal consume leg for `DomainKind::ObstacleField` — installs a
+/// peer's journaled obstacle-field spec onto the local `ObstacleFieldSpec` and
+/// fires `RegenerateField`. This is what replaced the former bespoke host→client
+/// broadcast (`sync_obstacle_field_spec`): the spec now rides the journal plane,
+/// so a tweak syncs BOTH directions and persists. No single-doc limitation (the
+/// spec is a singleton). No-ops when the spec resource / journal are absent.
+#[cfg(feature = "networking")]
+fn replay_scenario_journal_obstacle(
+    role: Res<lunco_core::NetworkRole>,
+    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
+    spec: Option<ResMut<lunco_obstacle_field::ObstacleFieldSpec>>,
+    mut regen: MessageWriter<lunco_obstacle_field::RegenerateField>,
+    mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
+) {
+    let (Some(journal), Some(mut spec)) = (journal, spec) else {
+        return;
+    };
+    let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
+        None
+    } else {
+        let Some(manifest) = remote.manifest.as_ref() else {
+            return;
+        };
+        manifest.journal_head.as_ref()
+    };
+    let me = journal.local_author();
+    let pending = lunco_networking::journal_plane::domain_ops_after(
+        &journal,
+        base,
+        &me,
+        &applied,
+        lunco_twin_journal::DomainKind::ObstacleField,
+    );
+    for (id, op) in pending {
+        if let Some(new_spec) = lunco_obstacle_field::journal::replay_spec(&op) {
+            // Install the peer's spec + regenerate. Sets the resource directly
+            // (NOT the `UpdateObstacleFieldSpec` command), so no re-record.
+            *spec = new_spec;
+            regen.write(lunco_obstacle_field::RegenerateField);
+        }
+        applied.insert(id);
+    }
+}
+
+/// Per-domain journal consume leg for `DomainKind::ToolLibrary` — re-registers a
+/// peer's journaled rhai tool library into the process-global tool registry
+/// (hot-replacing any prior one; the runtime picks it up on its next refresh).
+/// Tool libraries are process-global (reachable from the rhai engine outside the
+/// ECS), so this needs no ECS resource beyond the journal. No-ops when absent.
+#[cfg(feature = "networking")]
+fn replay_scenario_journal_tools(
+    role: Res<lunco_core::NetworkRole>,
+    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
+    mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
+) {
+    let Some(journal) = journal else {
+        return;
+    };
+    let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
+        None
+    } else {
+        let Some(manifest) = remote.manifest.as_ref() else {
+            return;
+        };
+        manifest.journal_head.as_ref()
+    };
+    let me = journal.local_author();
+    let pending = lunco_networking::journal_plane::domain_ops_after(
+        &journal,
+        base,
+        &me,
+        &applied,
+        lunco_twin_journal::DomainKind::ToolLibrary,
+    );
+    for (id, op) in pending {
+        if let Some((name, source)) =
+            lunco_scripting::registration_journal::replay_tool_library(&op)
+        {
+            lunco_scripting::tool_libs::register_tool_library(&name, &source);
+        }
+        applied.insert(id);
+    }
+}
+
+/// Per-domain journal consume leg for `DomainKind::Timeline` — stores a peer's
+/// journaled mission timeline in the local `TimelineStore` (hot-replacing any
+/// prior one), so `RunStoredTimeline`/`ListTimelines` see it. No-ops when the
+/// store / journal are absent.
+#[cfg(feature = "networking")]
+fn replay_scenario_journal_timeline(
+    role: Res<lunco_core::NetworkRole>,
+    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
+    store: Option<ResMut<lunco_scripting::timelines::TimelineStore>>,
+    mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
+) {
+    let (Some(journal), Some(mut store)) = (journal, store) else {
+        return;
+    };
+    let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
+        None
+    } else {
+        let Some(manifest) = remote.manifest.as_ref() else {
+            return;
+        };
+        manifest.journal_head.as_ref()
+    };
+    let me = journal.local_author();
+    let pending = lunco_networking::journal_plane::domain_ops_after(
+        &journal,
+        base,
+        &me,
+        &applied,
+        lunco_twin_journal::DomainKind::Timeline,
+    );
+    for (id, op) in pending {
+        if let Some((name, timeline)) =
+            lunco_scripting::registration_journal::replay_timeline(&op)
+        {
+            store.insert(name, timeline);
+        }
+        applied.insert(id);
+    }
+}
+
 /// Result-artifact writer: on `RunCompleted`, the host serializes the finished
 /// `RunResult` to `<twin>/results/<experiment-id>.json` so it rides the **content
 /// plane** — the twin file-walk CID's `results/` (a non-dot dir) and the manifest
@@ -1275,6 +1402,18 @@ impl Plugin for SandboxCorePlugin {
             // Same Layer B for shaders (`DomainKind::Shader`): a peer's WGSL edit
             // projects onto the local ShaderRegistry + hot-reloads Assets<Shader>.
             app.add_systems(Update, replay_scenario_journal_shader);
+            // Same Layer B for config/registration domains: obstacle-field spec
+            // (replaces the old bespoke broadcast — now bidirectional), rhai tool
+            // libraries, and mission timelines. Each installs a peer's journaled
+            // op onto the local resource/registry/store.
+            app.add_systems(
+                Update,
+                (
+                    replay_scenario_journal_obstacle,
+                    replay_scenario_journal_tools,
+                    replay_scenario_journal_timeline,
+                ),
+            );
             // Presence/rebuild resources are consumed by the systems below for any
             // role; init here (idempotent with the host-side init) so a standalone
             // or client app never hits a missing resource.
