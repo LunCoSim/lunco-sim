@@ -2719,6 +2719,10 @@ impl Plugin for SyncPlugin {
             .init_resource::<crate::scenario_sync::AssetDownloads>()
             .init_resource::<crate::scenario_sync::IncomingAssetChunks>()
             .init_resource::<crate::scenario_sync::PendingAssetRequests>()
+            // Inbound asset offers, pushed by the shared `drain_sync_inbox`
+            // (`InboundClientCtx`) on every peer — so it must exist regardless of
+            // role, not only after `setup_host`.
+            .init_resource::<crate::scenario_sync::PendingAssetOffers>()
             .init_resource::<crate::scenario_sync::AssetPersist>()
             // Scripted-policy plane: the active rhai policy set (merge / authz /
             // drive-kernel). Host-authoritative; clients fill it from the host's
