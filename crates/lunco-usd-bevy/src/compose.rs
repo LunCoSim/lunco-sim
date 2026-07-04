@@ -33,7 +33,9 @@ use openusd::usd::{PrimPredicate, Stage};
 use openusd::usda;
 
 use crate::canonical::StageRecipe;
-use crate::resolver::{canonicalize, is_binary_asset, resolve_binary_uri, LuncoUsdResolver};
+use crate::resolver::{
+    canonicalize, is_binary_asset, resolve_binary_uri, LuncoUsdResolver, SharedLayerBytes,
+};
 
 /// Async BFS that fetches the full transitive `.usda` layer closure into an
 /// in-memory, `Send` [`StageRecipe`] — the **fetch** half of the loader's compose path.
@@ -87,16 +89,31 @@ pub(crate) async fn fetch_layer_closure(
     Ok(StageRecipe { root_id, bytes })
 }
 
-/// Compose an in-memory layer closure ([`StageRecipe`]) into a live openusd
-/// [`Stage`] via PCP — filesystem-free, synchronous, main-thread-safe. The
-/// **build** half of the loader's compose path; also the runtime path a main-thread
-/// system uses to (re)build a `CanonicalStage` from a fetched recipe.
+/// Test-only convenience: the composed [`Stage`] alone, discarding the resolver
+/// handle. Production builds go through [`build_stage_with_resolver`] (via
+/// [`CanonicalStage::from_recipe`](crate::canonical::CanonicalStage::from_recipe))
+/// so runtime referenced spawns can inject layer bytes into the live resolver.
+#[cfg(test)]
 pub(crate) fn build_stage_from_closure(recipe: &StageRecipe) -> Result<Stage> {
+    Ok(build_stage_with_resolver(recipe)?.0)
+}
+
+/// Like [`build_stage_from_closure`], but also returns the resolver's
+/// [`SharedLayerBytes`] handle so the caller (the [`CanonicalStage`]) can inject
+/// additional layer closures at runtime — the substrate for authoring a
+/// **referenced spawn** onto a live stage: add the spawned asset's bytes here,
+/// then author the `references` arc, and PCP composes the subtree on the next
+/// read (demand-driven resolution).
+///
+/// [`CanonicalStage`]: crate::canonical::CanonicalStage
+pub(crate) fn build_stage_with_resolver(recipe: &StageRecipe) -> Result<(Stage, SharedLayerBytes)> {
     let resolver = LuncoUsdResolver::new(recipe.bytes.clone());
-    Stage::builder()
+    let shared = resolver.shared();
+    let stage = Stage::builder()
         .resolver(resolver)
         .open(&recipe.root_id)
-        .map_err(|e| anyhow!("USD composition error: {e}"))
+        .map_err(|e| anyhow!("USD composition error: {e}"))?;
+    Ok((stage, shared))
 }
 
 /// Walk a parsed layer's specs and collect the non-binary `.usda`

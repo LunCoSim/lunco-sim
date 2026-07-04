@@ -110,33 +110,29 @@ impl Plugin for UsdCommandsPlugin {
         // `<twin>/.lunco/runtime/<scene>.usda`, parallel to the journal.
         app.add_observer(crate::runtime_persistence::on_doc_opened_load_runtime);
         app.add_observer(crate::runtime_persistence::on_doc_changed_save_runtime);
-        // Projection bridge: drain each live `CanonicalStage`'s openusd change
-        // sink and reconcile ECS off the live composed stage — no flatten, no
-        // whole-scene reload. This is the read half of "author onto the stage →
-        // project into the world"; it fires for every live scene whose stage is
-        // authored (the sink-driven successor to the deleted `live_projection`).
-        app.add_systems(Update, crate::live_consume::project_stage_changes);
         // E1b: make the default twin scene doc-backed by serving its composed
         // source as a `twin://` byte-overlay (web-ready via the async loader).
         app.init_resource::<crate::twin_projection::PendingTwinDocs>();
         app.init_resource::<crate::twin_projection::DocBackedTwinScenes>();
-        // E2-2/E2-3: deferred structural reconcile for twin scenes — the async
-        // reload refreshes the `twin://`-resolved reader, then these apply the
-        // incremental spawn/despawn (or coarse rebuild) against it.
-        app.init_resource::<crate::twin_projection::PendingTwinReconciles>();
-        app.init_resource::<crate::twin_projection::ReloadedTwinAssets>();
-        // Gated on the asset pipeline: these need `AssetServer` (reload) and the
-        // `Assets<UsdSourceText>` store (UsdBevyPlugin's `init_asset`). Both are
-        // absent in headless `MinimalPlugins` test apps — and a partial setup can
-        // have one without the other — so require both.
+        // Referenced spawns whose asset closure is still loading (fetched once,
+        // then authored onto the live stage — no whole-scene reload).
+        app.init_resource::<crate::twin_projection::PendingRefSpawns>();
+        // Gated on the asset pipeline: these need `AssetServer` (to fetch a
+        // referenced asset's closure) and the `Assets<UsdSourceText>` store
+        // (UsdBevyPlugin's `init_asset`). Both are absent in headless
+        // `MinimalPlugins` test apps — and a partial setup can have one without
+        // the other — so require both. Chained before `project_stage_changes`
+        // (below) so a spawn authored this frame projects the same frame.
         app.add_systems(
             Update,
             (
                 crate::twin_projection::drain_pending_twin_docs,
+                // Author doc deltas (translate / spawn / remove) onto the live
+                // stage; queue referenced spawns needing a closure fetch.
                 crate::twin_projection::sync_twin_overlays,
-                // Buffer reloaded assets, then drain matured reconciles after.
-                crate::twin_projection::collect_reloaded_twin_assets,
-                crate::twin_projection::drain_twin_reconciles,
+                // Complete referenced spawns whose closure has now loaded.
+                crate::twin_projection::drain_ref_spawns,
+                crate::live_consume::project_stage_changes,
             )
                 .chain()
                 .run_if(resource_exists::<AssetServer>)

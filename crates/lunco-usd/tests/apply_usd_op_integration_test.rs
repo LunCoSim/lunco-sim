@@ -19,8 +19,11 @@ use lunco_doc::DocumentOrigin;
 fn test_apply_usd_op_integration() {
     let mut app = App::new();
 
-    // 1. Core Bevy plugins and asset registries
+    // 1. Core Bevy plugins and asset registries. The viewport now mounts through
+    // the `twin://` source, so register the lunco asset sources (which insert
+    // `TwinRoots`) BEFORE `AssetPlugin` snapshots them.
     app.add_plugins(MinimalPlugins);
+    lunco_assets::register_lunco_asset_sources(&mut app);
     app.add_plugins(AssetPlugin::default());
 
     app.init_asset::<UsdStageAsset>();

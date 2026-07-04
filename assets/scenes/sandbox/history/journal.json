@@ -1,0 +1,87 @@
+{
+  "twin": "/home/rod/Documents/luncosim-workspace/networking/assets/scenes/sandbox",
+  "local_author": "peer-0394417ed539ee2f",
+  "clock": 2,
+  "entries": [
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 1
+      },
+      "parents": [],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1783097117997,
+      "twin": "/home/rod/Documents/luncosim-workspace/networking/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Lifecycle": {
+          "Opened": {
+            "source_hash": ""
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 2
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 1
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1783098689561,
+      "twin": "/home/rod/Documents/luncosim-workspace/networking/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Lifecycle": {
+          "Opened": {
+            "source_hash": ""
+          }
+        }
+      },
+      "change_set": null
+    }
+  ],
+  "streams": [
+    {
+      "id": "main",
+      "name": "main",
+      "composition": "Sequential",
+      "head": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 2
+      },
+      "parent_streams": [],
+      "created_at_ms": 1783097117973,
+      "created_by": {
+        "user": "local",
+        "tool": "system"
+      }
+    }
+  ],
+  "branches": [
+    {
+      "name": "main",
+      "stream": "main",
+      "head": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 2
+      }
+    }
+  ],
+  "change_sets": [],
+  "markers": [],
+  "next_change_set": 0,
+  "next_marker": 0
+}

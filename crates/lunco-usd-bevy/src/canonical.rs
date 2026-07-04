@@ -78,6 +78,14 @@ pub struct CanonicalStage {
     /// Precomputed binary (glTF) arc sites for `lunco:resolvedAsset` synthesis
     /// off the live stage (what `flatten_stage` does for the baked path).
     binary_sites: crate::compose::BinarySites,
+    /// The live resolver's shared byte-map handle, when this stage was built
+    /// from a [`StageRecipe`] via [`from_recipe`](Self::from_recipe). `Some`
+    /// lets [`add_layer_bytes`](Self::add_layer_bytes) inject a spawned asset's
+    /// layer closure so a subsequently [`author_reference`](Self::author_reference)d
+    /// arc composes on the live stage (sink-driven referenced spawn). `None` for
+    /// stages built via [`from_stage`](Self::from_stage) over a foreign resolver
+    /// (native `compose_file_to_stage` / tests) — those can't gain layers.
+    resolver_bytes: Option<crate::resolver::SharedLayerBytes>,
     /// Bumped by the drain step on each observed change (debug / asserts).
     pub generation: u64,
 }
@@ -108,15 +116,20 @@ impl CanonicalStage {
             inbox,
             sink_id,
             binary_sites,
+            resolver_bytes: None,
             generation: 0,
         }
     }
 
     /// Build a `CanonicalStage` from a fetched [`StageRecipe`] — the main-thread
-    /// build path for the runtime scene load (async fetch → this).
+    /// build path for the runtime scene load (async fetch → this). Captures the
+    /// resolver's shared byte-map handle so runtime referenced spawns can inject
+    /// their layer closure (see [`add_layer_bytes`](Self::add_layer_bytes)).
     pub fn from_recipe(recipe: &StageRecipe) -> anyhow::Result<Self> {
-        let stage = crate::compose::build_stage_from_closure(recipe)?;
-        Ok(Self::from_stage(stage, recipe.root_id.clone()))
+        let (stage, shared) = crate::compose::build_stage_with_resolver(recipe)?;
+        let mut cs = Self::from_stage(stage, recipe.root_id.clone());
+        cs.resolver_bytes = Some(shared);
+        Ok(cs)
     }
 
     /// A [`StageView`] over the composed stage for typed reads — carrying the
@@ -190,6 +203,94 @@ impl CanonicalStage {
         self.stage
             .remove_prim(path.clone())
             .map_err(|e| anyhow!("remove_prim {path}: {e}"))
+    }
+
+    /// Inject a spawned asset's layer closure (`id → bytes`, keyed by the same
+    /// canonical id [`StageRecipe`] uses) into the live resolver, so a
+    /// subsequently [`author_reference`](Self::author_reference)d arc to any of
+    /// those ids composes on this stage. Returns `false` if this stage has no
+    /// injectable resolver (built via [`from_stage`](Self::from_stage) over a
+    /// foreign resolver). Merges — existing ids keep their bytes.
+    pub fn add_layer_bytes(&self, extra: HashMap<String, Vec<u8>>) -> bool {
+        match &self.resolver_bytes {
+            Some(shared) => {
+                shared.borrow_mut().extend(extra);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Whether the live resolver already holds bytes for layer `id` — so a
+    /// referenced spawn can skip the async fetch when its asset closure is
+    /// already loaded (e.g. spawning a second rover of an already-referenced
+    /// asset).
+    pub fn has_layer_bytes(&self, id: &str) -> bool {
+        self.resolver_bytes
+            .as_ref()
+            .map(|shared| shared.borrow().contains_key(id))
+            .unwrap_or(false)
+    }
+
+    /// The canonical layer id an `asset_path` reference resolves to on *this*
+    /// stage — `asset_path` anchored against the scene (root) layer, exactly as
+    /// PCP will canonicalize the authored `references` arc. This is the key to
+    /// load the asset closure under (`AssetServer::load` / [`add_layer_bytes`])
+    /// so the injected bytes match what PCP demands.
+    pub fn canonical_reference_id(&self, asset_path: &str) -> String {
+        let anchor = openusd::ar::ResolvedPath::new(&self.scene_layer);
+        crate::resolver::canonicalize(asset_path, Some(&anchor))
+    }
+
+    /// Author a `references = @asset_path@` arc onto the prim at `path` (root
+    /// edit target), turning it into a **referenced spawn**: PCP composes the
+    /// referenced asset's default prim under `path`. Fires the change sink so the
+    /// projection bridge instantiates the composed subtree. The referenced
+    /// asset's layer closure must already be resolvable — inject it first via
+    /// [`add_layer_bytes`](Self::add_layer_bytes) (or it was loaded with the
+    /// scene). openusd exposes no typed `add_reference`, so this authors the
+    /// `references` field metadata directly (the live-stage counterpart of
+    /// [`author::author_reference`](crate::author::author_reference), which
+    /// writes the same field into the document's `sdf::Data`).
+    pub fn author_reference(&self, path: &SdfPath, asset_path: &str) -> anyhow::Result<()> {
+        use anyhow::anyhow;
+        let reference = openusd::sdf::Reference {
+            asset_path: asset_path.to_string(),
+            ..Default::default()
+        };
+        self.stage
+            .prim(path.clone())
+            .set_metadata(
+                openusd::sdf::FieldKey::References.as_str(),
+                openusd::sdf::Value::ReferenceListOp(openusd::sdf::ReferenceListOp::prepended(
+                    [reference],
+                )),
+            )
+            .map_err(|e| anyhow!("author reference @{asset_path}@ at {path}: {e}"))?;
+        Ok(())
+    }
+
+    /// Author attribute `name = value` (USD type `type_name`) onto the prim at
+    /// `prim` (root edit target), firing the sink so the projection refreshes the
+    /// prim's visual. Creates the attribute if absent, overwrites it otherwise —
+    /// the live-stage counterpart of the document's `SetAttribute` op, so a
+    /// material / inspector edit reaches the live world without a whole-scene
+    /// reload. `value` is a typed [`openusd::sdf::Value`] (read from the composed
+    /// document, or parsed via [`author::parse_attribute_value`](crate::author::parse_attribute_value)).
+    pub fn author_attribute(
+        &self,
+        prim: &SdfPath,
+        name: &str,
+        type_name: &str,
+        value: openusd::sdf::Value,
+    ) -> anyhow::Result<()> {
+        use anyhow::anyhow;
+        self.stage
+            .create_attribute(format!("{}.{}", prim.as_str(), name), type_name)
+            .map_err(|e| anyhow!("author attribute {prim}.{name} ({type_name}): {e}"))?
+            .set(value)
+            .map_err(|e| anyhow!("set attribute {prim}.{name}: {e}"))?;
+        Ok(())
     }
 
     /// Drain and clear the change inbox, bumping `generation` if anything landed.
@@ -548,5 +649,55 @@ mod authoring_tests {
             "removing a prim fires a resync"
         );
         assert!(!cs.view().has_prim(&r2), "the removed prim is gone from the stage");
+    }
+
+    /// Keystone of #1 — **referenced spawn onto a live stage**: inject an asset's
+    /// layer bytes at runtime, author a prim + a `references` arc to it, and PCP
+    /// composes the referenced subtree on the live stage (its default prim's
+    /// children land under the spawn) with the sink reporting the resync — no
+    /// whole-scene rebuild, no async reload. This is what lets the palette-spawn
+    /// of a rover ride the "author onto the stage → sink → project" loop.
+    #[test]
+    fn injected_reference_spawns_composed_subtree_and_fires_sink() {
+        // The scene knows NOTHING about the rover — it isn't in the recipe.
+        let recipe = StageRecipe::from_source("scene.usda", SCENE);
+        let mut cs = CanonicalStage::from_recipe(&recipe).expect("build scene stage");
+        let _ = cs.drain_changes();
+
+        // The rover asset (with a defaultPrim so a bare reference targets it).
+        const ROVER: &str = "#usda 1.0\n(\n    defaultPrim = \"RoverRoot\"\n)\ndef Xform \"RoverRoot\"\n{\n    def Cube \"Body\"\n    {\n    }\n}\n";
+
+        // The reference id PCP will demand === what we inject the bytes under.
+        let asset_path = "rover.usda";
+        let ref_id = cs.canonical_reference_id(asset_path);
+        assert!(!cs.has_layer_bytes(&ref_id), "rover not loaded yet");
+
+        // Inject the rover's closure into the LIVE resolver, then author the
+        // spawn: a prim + a reference to the rover.
+        assert!(
+            cs.add_layer_bytes(HashMap::from([(ref_id.clone(), ROVER.as_bytes().to_vec())])),
+            "a recipe-built stage must accept injected layer bytes"
+        );
+        assert!(cs.has_layer_bytes(&ref_id), "bytes now present in the live resolver");
+
+        let spawn = SdfPath::new("/World/rover_1").unwrap();
+        cs.author_prim(&spawn, Some("Xform")).expect("define the spawn prim");
+        cs.author_reference(&spawn, asset_path).expect("author the reference arc");
+
+        // The sink reports the spawn path as resynced (the projector reconciles it).
+        assert!(
+            cs.drain_changes()
+                .iter()
+                .any(|c| c.resynced.iter().any(|p| p.to_string() == "/World/rover_1")),
+            "authoring a referenced spawn must resync its prim"
+        );
+
+        // And PCP composed the referenced subtree onto the live stage: the
+        // rover's `Body` child is now present under the spawn.
+        let body = SdfPath::new("/World/rover_1/Body").unwrap();
+        assert!(
+            cs.view().has_prim(&body),
+            "the referenced rover's Body child must compose under the runtime spawn"
+        );
     }
 }

@@ -19,9 +19,14 @@
 //!    [`UsdDocument`](crate::document) for it (origin = the on-disk path, so Save
 //!    and dedup work) and record it in [`DocBackedTwinScenes`].
 //! 3. [`sync_twin_overlays`] — whenever the document generation moves (initial
-//!    mount, open-time `restore_runtime`, or a later spawn/move), serialize the
-//!    composed source into the twin **overlay** and `reload` the scene asset; the
-//!    existing asset-reload → re-instantiate machinery refeeds the live world.
+//!    mount, open-time `restore_runtime`, or a later spawn/move), refresh the
+//!    twin **overlay** (for persistence / re-open) and **author the delta onto
+//!    the live composed stage**: translates and structural spawns/removes are
+//!    authored onto the scene's [`CanonicalStage`](lunco_usd_bevy::CanonicalStage)
+//!    directly, firing its openusd change sink so `project_stage_changes`
+//!    projects the edit in place — no whole-scene asset reload. A referenced
+//!    spawn whose asset isn't loaded yet is fetched once through
+//!    [`drain_ref_spawns`], then authored the same way.
 //!
 //! Scope: the **default twin scene** only. Arbitrary `OpenFile` scenes stay on
 //! E1's path; `mem://` / `bundled://` keep the file-backed import.
@@ -34,6 +39,7 @@ use bevy::asset::AssetId;
 use bevy::prelude::*;
 use lunco_assets::twin_source::TwinRoots;
 use lunco_doc::{Document, DocumentId, DocumentOrigin};
+use lunco_usd_bevy::usd_data::UsdDataExt;
 use lunco_usd_bevy::{UsdPrimPath, UsdSourceText, UsdStageAsset, UsdVisualSynced};
 
 use crate::registry::UsdDocumentRegistry;
@@ -121,45 +127,36 @@ impl DocBackedTwinScenes {
     }
 }
 
-/// A deferred structural reconcile for a twin scene, queued by
-/// [`sync_twin_overlays`] when the document moved structurally and the
-/// flattened reader is being refreshed **asynchronously** through the twin
-/// source. Consumed by [`drain_twin_reconciles`] once that reload lands (so the
-/// reconcile sees the fresh, `twin://`-resolved reader).
-struct TwinReconcile {
-    /// The reloaded scene asset this reconcile is waiting on.
-    handle_id: AssetId<UsdStageAsset>,
-    /// Changed prim paths to reconcile per-subtree (spawn added / despawn
-    /// removed). Empty + `full` means whole-scene rebuild.
-    resync_paths: Vec<String>,
-    /// Whole-scene rebuild rather than per-prim reconcile (FullReload / overflow
-    /// / a structural change with no concrete prim path to reconcile).
-    full: bool,
+/// A **referenced spawn** whose asset closure is being fetched before it can be
+/// authored onto the live scene stage. When a structural edit adds a prim that
+/// references an asset whose layer bytes aren't loaded into the scene's live
+/// resolver yet (a first-of-its-kind rover spawn), [`sync_twin_overlays`] loads
+/// that asset as a `UsdStageAsset` (whose loader fetches the full closure,
+/// web-ready) and queues this. [`drain_ref_spawns`] injects the fetched bytes
+/// into the scene stage's resolver and authors the prim + `references` arc, so
+/// the openusd change sink fires and `project_stage_changes` instantiates the
+/// composed subtree — no whole-scene reload.
+struct RefSpawn {
+    /// The scene whose live [`CanonicalStage`](lunco_usd_bevy::CanonicalStage)
+    /// the spawn is authored onto.
+    scene_id: AssetId<UsdStageAsset>,
+    /// The prim path to spawn (e.g. `/World/rover_1`).
+    prim_path: String,
+    /// The prim's composed `typeName`, authored before the reference.
+    type_name: Option<String>,
+    /// The reference asset path exactly as authored in the document — PCP
+    /// re-derives its canonical id against the scene layer, matching the id the
+    /// closure bytes are injected under.
+    asset_path: String,
+    /// In-flight load of the referenced asset (its loader fetches the closure).
+    ref_handle: Handle<UsdStageAsset>,
 }
 
-/// Structural reconciles waiting on their twin asset's async reload to land.
-/// Populated by [`sync_twin_overlays`], drained by [`drain_twin_reconciles`].
+/// Referenced spawns waiting on their asset closure to finish loading.
+/// Populated by [`sync_twin_overlays`], drained by [`drain_ref_spawns`].
 #[derive(Resource, Default)]
-pub struct PendingTwinReconciles {
-    items: Vec<TwinReconcile>,
-}
-
-impl PendingTwinReconciles {
-    fn push(&mut self, handle_id: AssetId<UsdStageAsset>, resync_paths: Vec<String>, full: bool) {
-        // A structural change with no concrete prim path can't be reconciled
-        // per-prim — force the whole-scene rebuild.
-        let full = full || resync_paths.is_empty();
-        self.items.push(TwinReconcile { handle_id, resync_paths, full });
-    }
-}
-
-/// Twin scene assets whose async reload finished this frame — buffered by
-/// [`collect_reloaded_twin_assets`] (a cheap `MessageReader` system) so the
-/// exclusive [`drain_twin_reconciles`] can match them against
-/// [`PendingTwinReconciles`].
-#[derive(Resource, Default)]
-pub struct ReloadedTwinAssets {
-    ids: Vec<AssetId<UsdStageAsset>>,
+pub struct PendingRefSpawns {
+    items: Vec<RefSpawn>,
 }
 
 /// Give up on a pending twin doc after this many frames without its source
@@ -258,10 +255,9 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             .resource::<TwinRoots>()
             .set_overlay(&name, &rel, Arc::new(composed_source.into_bytes()));
 
-        // E2-1: classify the changes. The twin scene's live stage handle is the
-        // cached `twin://name/rel` UsdStageAsset handle (AssetServer dedups by
-        // path), shared by every child prim entity — so transform-only edits can
-        // be applied in place without re-reading the whole asset.
+        // Classify the changes since the last sync. The scene's live stage is
+        // keyed by the cached `twin://name/rel` UsdStageAsset id (AssetServer
+        // dedups by path), shared by every child prim entity.
         let twin_path = format!("twin://{}/{}", name, rel);
         let batch = crate::live_consume::classify_changes_since(
             world.resource::<UsdDocumentRegistry>(),
@@ -269,15 +265,30 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             synced.unwrap_or(0),
             cur_gen,
         );
-        let handle = world
+        let scene_id = world
             .resource::<AssetServer>()
-            .load::<UsdStageAsset>(twin_path.clone());
+            .load::<UsdStageAsset>(twin_path.clone())
+            .id();
+
+        let needs_translate = batch.as_ref().map(|b| !b.translate_paths.is_empty()).unwrap_or(false);
+        let needs_attr = batch.as_ref().map(|b| !b.attr_paths.is_empty()).unwrap_or(false);
+        let needs_structural = batch.as_ref().map(|b| b.needs_structural).unwrap_or(true);
+
+        // Every projection below authors onto the live stage, so it must exist.
+        // On the very first generations the scene's async `LoadScene` is still in
+        // flight and `sync_canonical_stages` hasn't built the stage yet — DEFER
+        // (leave `synced` unchanged) so we retry once it lands. A clean scene with
+        // nothing to project doesn't wait.
+        let stage_ready = world
+            .get_non_send_resource::<lunco_usd_bevy::CanonicalStages>()
+            .map(|s| s.get(scene_id).is_some())
+            .unwrap_or(false);
+        if (needs_translate || needs_attr || needs_structural) && !stage_ready {
+            continue;
+        }
 
         // Moves: author each translate onto the LIVE canonical stage. Its change
-        // sink fires and `project_stage_changes` moves the entity incrementally —
-        // no whole-scene reload, and no doc-diff entity write here (this is the
-        // "author onto the stage → sink → project" loop). The move also rides the
-        // overlay (set above), so a later structural rebuild preserves it.
+        // sink fires and `project_stage_changes` moves the entity incrementally.
         if let Some(batch) = &batch {
             for path in &batch.translate_paths {
                 let Ok(sp) = openusd::sdf::Path::new(path) else { continue };
@@ -287,7 +298,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                 };
                 if let Some(cs) = world
                     .get_non_send_resource::<lunco_usd_bevy::CanonicalStages>()
-                    .and_then(|s| s.get(handle.id()))
+                    .and_then(|s| s.get(scene_id))
                 {
                     if let Err(e) = cs.author_translate(&sp, v) {
                         warn!("[twin] author translate {path}: {e}");
@@ -296,25 +307,36 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             }
         }
 
-        // Structural changes refresh the flattened reader through the overlay
-        // (async — the twin loader resolves `twin://` / `lunco://` refs that a
-        // synchronous compose can't), then reconcile once that reload lands
-        // (`drain_twin_reconciles`): spawn the added subtrees, despawn the
-        // removed, leaving siblings untouched (E2-2/E2-3/E2-4).
-        //
-        // On the very first mount (`synced == None`) the reload *is* the initial
-        // build via `sync_usd_visuals`, so there's no baseline to diff — just
-        // reload, no reconcile queued.
-        let needs_structural = batch.as_ref().map(|b| b.needs_structural).unwrap_or(true);
-        if needs_structural {
-            if synced.is_some() {
-                let full = batch.as_ref().map(|b| b.full_reload).unwrap_or(true);
-                let resync = batch.as_ref().map(|b| b.resync_paths.clone()).unwrap_or_default();
-                world
-                    .resource_mut::<PendingTwinReconciles>()
-                    .push(handle.id(), resync, full);
+        // Non-translate attribute edits (material colour, roughness, size, …):
+        // author each onto the live stage and refresh the prim's visual so it
+        // re-reads — the sink-driven successor to the reload that used to re-read
+        // these attributes.
+        if let Some(batch) = &batch {
+            let mut authored_attr = false;
+            for (prim, attr) in &batch.attr_paths {
+                authored_attr |= author_attribute_edit(world, scene_id, prim, attr, &composed);
             }
-            world.resource::<AssetServer>().reload(twin_path);
+            if authored_attr {
+                refresh_scene_visuals(world, scene_id);
+            }
+        }
+
+        // Structural changes: author each delta onto the live stage (spawn plain,
+        // spawn referenced, remove), firing the sink so `project_stage_changes`
+        // reconciles ECS in place. A `full_reload` (Save-As / MovePrim / a
+        // restored runtime overlay at first mount / a change-ring overflow) has no
+        // trustworthy per-prim delta, so we reconcile the whole authored spine
+        // against the composed document.
+        if needs_structural {
+            let full = batch.as_ref().map(|b| b.full_reload).unwrap_or(true);
+            let resync = batch.as_ref().map(|b| b.resync_paths.clone()).unwrap_or_default();
+            if full || synced.is_none() {
+                reconcile_full_to_composed(world, scene_id, &composed);
+            } else {
+                for path in &resync {
+                    author_structural_edit(world, scene_id, path, &composed);
+                }
+            }
         }
 
         if let Some(s) = world.resource_mut::<DocBackedTwinScenes>().map.get_mut(&doc) {
@@ -323,90 +345,162 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
     }
 }
 
-/// Buffer the ids of twin scene assets that finished (re)loading this frame, so
-/// the exclusive [`drain_twin_reconciles`] can match them against
-/// [`PendingTwinReconciles`]. Cheap `MessageReader` system — runs only on frames
-/// an asset event actually fires.
-pub(crate) fn collect_reloaded_twin_assets(
-    mut ev: MessageReader<AssetEvent<UsdStageAsset>>,
-    mut out: ResMut<ReloadedTwinAssets>,
-) {
-    for event in ev.read() {
-        if let AssetEvent::LoadedWithDependencies { id } = event {
-            out.ids.push(*id);
+/// The first reference asset path authored on a prim spec (the runtime-spawn
+/// arc), if any — reads the `references` list op the document authored via
+/// [`author::author_reference`](lunco_usd_bevy::author::author_reference).
+fn first_reference(spec: &openusd::sdf::SpecData) -> Option<String> {
+    match spec.get("references") {
+        Some(openusd::sdf::Value::ReferenceListOp(op)) => {
+            op.iter().find(|r| !r.asset_path.is_empty()).map(|r| r.asset_path.clone())
         }
+        _ => None,
     }
 }
 
-/// Run the structural reconciles whose twin asset reload has now landed: for a
-/// per-prim batch,
-/// [`reconcile_structural_live`](crate::live_consume::reconcile_structural_live)
-/// against the freshly-rebuilt live stage; for a `full` batch, an in-place
-/// whole-scene rebuild. Reconciles whose reload hasn't arrived yet are retried
-/// next frame.
+/// Author one structural delta at `path` onto the scene's live `CanonicalStage`,
+/// firing the openusd sink so [`project_stage_changes`](crate::live_consume::project_stage_changes)
+/// reconciles ECS. Classifies against the composed document:
+/// - **absent in `composed`** → the prim was removed → `remove_prim_at`;
+/// - **present, no reference** → a plain prim → `author_prim`;
+/// - **present, references an already-loaded asset** → `author_prim` +
+///   `author_reference` (PCP composes the subtree from the live resolver);
+/// - **present, references a not-yet-loaded asset** → queue a
+///   [`RefSpawn`]: load the asset closure, then [`drain_ref_spawns`] injects it
+///   and authors the arc.
 ///
-/// The reload rebuilds the composed stage from the twin overlay; we rebuild the
-/// scene's [`CanonicalStage`](lunco_usd_bevy::CanonicalStage) inline from the
-/// reloaded asset's fresh recipe so the reconcile reads the *post-edit* composed
-/// stage — self-contained, no flatten, and no ordering race with the separate
-/// `sync_canonical_stages` system that reacts to the same asset event.
-pub(crate) fn drain_twin_reconciles(world: &mut World) {
+/// Reads what it needs from the `!Send` stage under a short borrow, then acts —
+/// the stage can't be held across a resource fetch (`AssetServer`) or the
+/// authoring calls that re-borrow it.
+fn author_structural_edit(
+    world: &mut World,
+    scene_id: AssetId<UsdStageAsset>,
+    path: &str,
+    composed: &openusd::sdf::Data,
+) {
     use lunco_usd_bevy::CanonicalStages;
+    let Ok(sp) = openusd::sdf::Path::new(path) else { return };
+    let spec = composed.spec(&sp);
 
-    let loaded = std::mem::take(&mut world.resource_mut::<ReloadedTwinAssets>().ids);
-    if loaded.is_empty() {
-        return;
-    }
-    if world.resource::<PendingTwinReconciles>().items.is_empty() {
-        return;
-    }
-    let pending = std::mem::take(&mut world.resource_mut::<PendingTwinReconciles>().items);
-    let mut still = Vec::new();
-    for item in pending {
-        if !loaded.contains(&item.handle_id) {
-            still.push(item);
-            continue;
+    // Removal: the prim is gone from the composed document.
+    let Some(spec) = spec.filter(|s| s.ty == openusd::sdf::SpecType::Prim) else {
+        if let Some(cs) = world.get_non_send_resource::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
+            if let Err(e) = cs.remove_prim_at(&sp) {
+                warn!("[twin] remove {path}: {e}");
+            }
         }
-        // Rebuild the live stage from the reloaded asset's fresh recipe so the
-        // reconcile below reads the post-edit composed stage.
-        let recipe = world
-            .resource::<Assets<UsdStageAsset>>()
-            .get(item.handle_id)
-            .and_then(|a| a.recipe.clone());
-        let Some(recipe) = recipe else {
-            continue; // asset gone / no recipe — drop the reconcile
+        return;
+    };
+
+    let type_name = composed.prim_type_name(&sp);
+    let reference = first_reference(spec);
+
+    // Decide under a short immutable borrow of the `!Send` stage, then release it.
+    enum Plan {
+        Plain,
+        RefNow,
+        RefFetch(String), // canonical load id for the asset closure
+    }
+    let plan = {
+        let Some(cs) = world.get_non_send_resource::<CanonicalStages>().and_then(|s| s.get(scene_id))
+        else {
+            return;
         };
-        let rebuilt = world
-            .get_non_send_resource_mut::<CanonicalStages>()
-            .map(|mut stages| stages.rebuild(item.handle_id, &recipe))
-            .unwrap_or(false);
-        if !rebuilt {
-            continue; // canonical build failed — skip rather than reconcile stale
+        match &reference {
+            None => Plan::Plain,
+            Some(asset_path) => {
+                let ref_id = cs.canonical_reference_id(asset_path);
+                if cs.has_layer_bytes(&ref_id) {
+                    Plan::RefNow
+                } else {
+                    Plan::RefFetch(ref_id)
+                }
+            }
         }
-        if item.full {
-            full_rebuild_twin_scene(world, item.handle_id);
-        } else {
-            crate::live_consume::reconcile_structural_live(
-                world,
-                item.handle_id,
-                &item.resync_paths,
-            );
+    };
+
+    match plan {
+        Plan::Plain => {
+            if let Some(cs) = world.get_non_send_resource::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
+                if let Err(e) = cs.author_prim(&sp, type_name.as_deref()) {
+                    warn!("[twin] spawn {path}: {e}");
+                }
+            }
+        }
+        Plan::RefNow => {
+            let asset_path = reference.expect("RefNow implies a reference");
+            if let Some(cs) = world.get_non_send_resource::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
+                if let Err(e) = cs
+                    .author_prim(&sp, type_name.as_deref())
+                    .and_then(|_| cs.author_reference(&sp, &asset_path))
+                {
+                    warn!("[twin] referenced spawn {path}: {e}");
+                }
+            }
+        }
+        Plan::RefFetch(ref_id) => {
+            let asset_path = reference.expect("RefFetch implies a reference");
+            let ref_handle = world.resource::<AssetServer>().load::<UsdStageAsset>(ref_id);
+            world.resource_mut::<PendingRefSpawns>().items.push(RefSpawn {
+                scene_id,
+                prim_path: path.to_string(),
+                type_name,
+                asset_path,
+                ref_handle,
+            });
         }
     }
-    world.resource_mut::<PendingTwinReconciles>().items.extend(still);
 }
 
-/// Whole-scene in-place rebuild for a twin scene (the coarse fallback): for each
-/// scene-root entity of `handle_id`, drop its `UsdVisualSynced` marker +
-/// children and re-insert `UsdPrimPath` so `on_usd_prim_added` re-instantiates
-/// the subtree against the freshly-reloaded reader. A scene root is an entity of
-/// this scene whose parent is *not* itself a prim of the same scene (i.e. it
-/// hangs off the world grid, not another USD prim).
-fn full_rebuild_twin_scene(world: &mut World, handle_id: AssetId<UsdStageAsset>) {
+/// Author a non-translate attribute edit (`prim.attr`) onto the scene's live
+/// `CanonicalStage` from the composed document's value + type. Returns `true` if
+/// it authored (so the caller refreshes the scene visuals once). Skips
+/// samples-only attributes (no `default` opinion) and attributes with no
+/// composable type. Does NOT refresh — a material/shader edit fans out through
+/// `material:binding` to bound meshes, so the caller re-reads the whole scene.
+fn author_attribute_edit(
+    world: &mut World,
+    scene_id: AssetId<UsdStageAsset>,
+    prim_str: &str,
+    attr: &str,
+    composed: &openusd::sdf::Data,
+) -> bool {
+    use lunco_usd_bevy::CanonicalStages;
+    let Ok(prim) = openusd::sdf::Path::new(prim_str) else { return false };
+    let Ok(attr_path) = prim.append_property(attr) else { return false };
+    let Some(spec) = composed.spec(&attr_path) else { return false };
+    let type_name = match spec.get("typeName") {
+        Some(openusd::sdf::Value::Token(t)) => t.to_string(),
+        Some(openusd::sdf::Value::String(s)) => s.clone(),
+        _ => return false, // no authored type to create the attribute with
+    };
+    let Some(value) = spec.get("default").cloned() else {
+        return false; // samples-only edit (keyframes) — not handled on this path
+    };
+    match world.get_non_send_resource::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
+        Some(cs) => match cs.author_attribute(&prim, attr, &type_name, value) {
+            Ok(()) => true,
+            Err(e) => {
+                warn!("[twin] author attribute {prim_str}.{attr}: {e}");
+                false
+            }
+        },
+        None => false,
+    }
+}
+
+/// Re-read the whole scene from the (now-authored) live stage: for each
+/// scene-root entity of `scene_id`, drop its `UsdVisualSynced` marker + children
+/// and re-insert `UsdPrimPath`, re-firing `on_usd_prim_added` to re-instantiate
+/// the subtree — so an attribute edit that fans out through a material binding
+/// reaches every bound mesh. A scene root is an entity of this scene whose parent
+/// is *not* itself a prim of the same scene. The per-edit, synchronous successor
+/// to the old reload-driven whole-scene rebuild (matches the viewport's former
+/// `DocumentChanged` → clear-`UsdVisualSynced`-on-scene-root refresh).
+fn refresh_scene_visuals(world: &mut World, scene_id: AssetId<UsdStageAsset>) {
     let scene: Vec<(Entity, Option<Entity>)> = {
         let mut q = world.query::<(Entity, &UsdPrimPath, Option<&ChildOf>)>();
         q.iter(world)
-            .filter(|(_, upp, _)| upp.stage_handle.id() == handle_id)
+            .filter(|(_, upp, _)| upp.stage_handle.id() == scene_id)
             .map(|(e, _, parent)| (e, parent.map(|p| p.0)))
             .collect()
     };
@@ -425,6 +519,100 @@ fn full_rebuild_twin_scene(world: &mut World, handle_id: AssetId<UsdStageAsset>)
             }
         }
     }
+}
+
+/// Reconcile the whole **authored spine** of the scene's live stage against the
+/// composed document — the `full_reload` fallback and the first-mount path for a
+/// restored runtime overlay. Diffs *authored opinions* (the live stage's root
+/// layer, via [`extract_root_layer_data`](lunco_usd_bevy::author::extract_root_layer_data),
+/// vs the composed `sdf::Data`) rather than the PCP-expanded prim tree, so
+/// reference-expanded children (which exist only on the live stage) are never
+/// mistaken for removals. Removes prims dropped from the document, then authors
+/// prims added to it (parent-first), each through [`author_structural_edit`].
+fn reconcile_full_to_composed(
+    world: &mut World,
+    scene_id: AssetId<UsdStageAsset>,
+    composed: &openusd::sdf::Data,
+) {
+    use lunco_usd_bevy::CanonicalStages;
+    use std::collections::BTreeSet;
+
+    // Snapshot the authored-prim sets under a short borrow of the `!Send` stage.
+    let (live_authored, composed_prims): (BTreeSet<String>, BTreeSet<String>) = {
+        let Some(cs) = world.get_non_send_resource::<CanonicalStages>().and_then(|s| s.get(scene_id))
+        else {
+            return;
+        };
+        let live = match lunco_usd_bevy::author::extract_root_layer_data(cs.stage()) {
+            Ok(data) => data
+                .iter()
+                .filter(|(_, s)| s.ty == openusd::sdf::SpecType::Prim)
+                .map(|(p, _)| p.to_string())
+                .collect(),
+            Err(e) => {
+                warn!("[twin] full reconcile: extract root layer failed: {e}");
+                return;
+            }
+        };
+        let composed_set = composed
+            .iter()
+            .filter(|(_, s)| s.ty == openusd::sdf::SpecType::Prim)
+            .map(|(p, _)| p.to_string())
+            .collect();
+        (live, composed_set)
+    };
+
+    // Removals first (deepest paths first so children go before parents), then
+    // additions (shallowest first so a parent exists before its child spawns).
+    let mut removed: Vec<&String> = live_authored.difference(&composed_prims).collect();
+    removed.sort_by(|a, b| b.len().cmp(&a.len()));
+    for path in removed {
+        author_structural_edit(world, scene_id, path, composed);
+    }
+    let mut added: Vec<&String> = composed_prims.difference(&live_authored).collect();
+    added.sort_by_key(|p| p.len());
+    for path in added {
+        author_structural_edit(world, scene_id, path, composed);
+    }
+}
+
+/// Complete referenced spawns whose asset closure has finished loading: inject
+/// the fetched layer bytes into the scene stage's resolver, then author the prim
+/// + `references` arc so the openusd sink fires and `project_stage_changes`
+/// instantiates the composed subtree. Spawns whose closure hasn't landed yet are
+/// retried next frame. Exclusive: authors onto the `!Send` `CanonicalStage`.
+pub(crate) fn drain_ref_spawns(world: &mut World) {
+    use lunco_usd_bevy::CanonicalStages;
+    if world.resource::<PendingRefSpawns>().items.is_empty() {
+        return;
+    }
+    let pending = std::mem::take(&mut world.resource_mut::<PendingRefSpawns>().items);
+    let mut still = Vec::new();
+    for item in pending {
+        // Wait for the asset closure (its loader fetches the full `.usda` tree).
+        let recipe = world
+            .resource::<Assets<UsdStageAsset>>()
+            .get(item.ref_handle.id())
+            .and_then(|a| a.recipe.clone());
+        let Some(recipe) = recipe else {
+            still.push(item);
+            continue;
+        };
+        let Ok(sp) = openusd::sdf::Path::new(&item.prim_path) else { continue };
+        let Some(cs) = world.get_non_send_resource::<CanonicalStages>().and_then(|s| s.get(item.scene_id))
+        else {
+            continue; // scene stage gone — drop the spawn
+        };
+        // Inject the closure bytes so PCP can resolve the reference, then author.
+        cs.add_layer_bytes(recipe.bytes.clone());
+        if let Err(e) = cs
+            .author_prim(&sp, item.type_name.as_deref())
+            .and_then(|_| cs.author_reference(&sp, &item.asset_path))
+        {
+            warn!("[twin] referenced spawn {} (post-fetch): {e}", item.prim_path);
+        }
+    }
+    world.resource_mut::<PendingRefSpawns>().items.extend(still);
 }
 
 #[cfg(test)]

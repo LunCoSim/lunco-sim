@@ -30,6 +30,11 @@ pub(crate) struct ChangeBatch {
     /// Prim paths that got an incremental transform-only edit (`InfoOnly`
     /// `xformOp:translate`) — applied in place, no reload.
     pub translate_paths: Vec<String>,
+    /// `(prim_path, attr_name)` for a **non-translate** attribute edit (`InfoOnly`
+    /// for some other attribute — material color, roughness, size, …). Authored
+    /// onto the live stage and the prim's visual refreshed in place — the
+    /// sink-driven successor to the reload that used to re-read these.
+    pub attr_paths: Vec<(String, String)>,
     /// Prim paths that got a structural `Resync` (spawn / remove / rename of a
     /// concrete prim) — reconciled one subtree at a time by
     /// [`reconcile_structural_live`] (E2-2/E2-3), never re-instantiating siblings.
@@ -55,6 +60,7 @@ pub(crate) fn classify_changes_since(
 ) -> Option<ChangeBatch> {
     let host = registry.host(doc)?;
     let mut translate_paths = Vec::new();
+    let mut attr_paths = Vec::new();
     let mut resync_paths = Vec::new();
     let mut needs_structural = false;
     let mut full_reload = false;
@@ -78,8 +84,9 @@ pub(crate) fn classify_changes_since(
                 needs_structural = true;
                 full_reload = true;
             }
-            // Any other InfoOnly attribute (non-translate) — structural for now.
-            UsdChange::InfoOnly { .. } => needs_structural = true,
+            // Any other (non-translate) attribute edit: author onto the live
+            // stage + refresh the prim's visual — no reload.
+            UsdChange::InfoOnly { path, attr } => attr_paths.push((path.clone(), attr.clone())),
         }
     }
     // Generations are consecutive (one per commit), so we expect exactly
@@ -89,7 +96,7 @@ pub(crate) fn classify_changes_since(
         needs_structural = true;
         full_reload = true;
     }
-    Some(ChangeBatch { translate_paths, resync_paths, needs_structural, full_reload })
+    Some(ChangeBatch { translate_paths, attr_paths, resync_paths, needs_structural, full_reload })
 }
 
 /// The live entity projecting `path` in the scene scoped to `stage_handle_id`,
