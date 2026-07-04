@@ -36,7 +36,7 @@ use crate::{
     ScriptRegistry,
 };
 #[cfg(feature = "rhai")]
-use lunco_doc::{DocumentHost, DocumentId};
+use lunco_doc::DocumentId;
 // Pause/stop scenario commands are language-agnostic (`any(rhai, python)`) and
 // touch `ScriptedModel`; rhai already imports it above, so a python-only build
 // needs its own import.
@@ -206,9 +206,9 @@ pub(crate) fn attach_rhai_scenario(
     // files (see `crate::timelines` for the same pattern applied to timelines) or
     // are authored directly in the `.usda` source. Ref: project_tools_architecture
     // Phase 2 incr #3.
-    registry
-        .documents
-        .insert(DocumentId::new(doc_id_raw), DocumentHost::new(doc));
+    // The one insert funnel — attaches a journal recorder when the Twin journal
+    // is wired, so this live edit (and every hot-reload SetSource) auto-records.
+    registry.insert_document(DocumentId::new(doc_id_raw), doc);
 
     commands.entity(target).insert((
         ScriptedModel {
@@ -280,6 +280,17 @@ pub fn resolve_embedded_scenario_paths(
             // USD authors may write an `assets/` prefix; the AssetServer root is
             // already `assets/`, so strip it (mirrors lunco-usd-sim).
             let rel = path.0.strip_prefix("assets/").unwrap_or(&path.0).to_string();
+            // TODO(scenario-resolve): a `.rhai` fetched into a peer's scenario cache
+            // (`scenario://<id>/…`) is NOT found here — this loads against the DEFAULT
+            // asset source, not the loaded scene's source. So a twin/imported policy
+            // or scenario script syncs (whole-twin content plane) but fails to load on
+            // the peer. Fix (pick one): (1) author the ref as a USD `asset` attribute
+            // (`@…rhai@`) read through the resolver's `canonicalize`, which anchors it
+            // to the scene's `scenario://<id>/` source (like `lunco:resolvedAsset`); or
+            // (2) prefix `rel` with the active `scenario://<id>/` when a
+            // `RemoteScenarioManifest` is loaded (needs that id threaded to scripting —
+            // a networking→scripting coupling to avoid, so (1) is preferred). Inline
+            // `lunco:script` / `LuncoPolicy` sources are unaffected (they ride the doc).
             asset_server.load(rel)
         });
         if asset_server.load_state(&*handle).is_failed() {

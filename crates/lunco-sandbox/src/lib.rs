@@ -419,6 +419,318 @@ fn replay_scenario_journal_modelica(
     }
 }
 
+/// Per-domain journal consume leg for `DomainKind::Script` — the script twin of
+/// [`replay_scenario_journal_modelica`]. Selects the merged, not-yet-applied
+/// `Script` op entries via [`domain_ops_after`](lunco_networking::journal_plane::domain_ops_after)
+/// (so a scripted merge policy reorders script replay identically to USD/Modelica)
+/// and applies each through `ScriptRegistry::replay_op` (no re-recording), so a
+/// live rover-behaviour edit (`ScriptOp::SetSource`) recorded on one peer projects
+/// onto another's `ScriptDocument`.
+///
+/// Same single-active-doc limitation as the Modelica leg: `ScriptOp` carries no
+/// `DocumentId`, and scenario doc ids are minted locally (not stable cross-peer),
+/// so this routes only when exactly one script doc is live; otherwise it defers
+/// rather than misroute. Full multi-doc cross-peer replay lands with stable
+/// cross-peer document identity. No-ops when the registry / journal is absent.
+#[cfg(feature = "networking")]
+fn replay_scenario_journal_script(
+    role: Res<lunco_core::NetworkRole>,
+    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
+    registry: Option<ResMut<lunco_scripting::ScriptRegistry>>,
+    mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
+) {
+    let (Some(journal), Some(mut registry)) = (journal, registry) else {
+        return;
+    };
+    let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
+        None
+    } else {
+        let Some(manifest) = remote.manifest.as_ref() else {
+            return;
+        };
+        manifest.journal_head.as_ref()
+    };
+    // Single active script doc (see doc note); 0 or >1 → defer.
+    let docs: Vec<_> = registry.documents.keys().copied().collect();
+    let [doc] = docs.as_slice() else {
+        return;
+    };
+    let doc = *doc;
+    let me = journal.local_author();
+    let pending = lunco_networking::journal_plane::domain_ops_after(
+        &journal,
+        base,
+        &me,
+        &applied,
+        lunco_twin_journal::DomainKind::Script,
+    );
+    for (id, op) in pending {
+        registry.replay_op(doc, &op);
+        applied.insert(id);
+    }
+}
+
+/// Per-domain journal consume leg for `DomainKind::Experiment` — projects a
+/// peer's journaled experiment *definitions* (create / rename / bounds / params
+/// / delete) onto the local `ExperimentRegistry`. Unlike the script/modelica
+/// legs there is **no single-doc limitation**: every `ExperimentOp` carries its
+/// own cross-peer-stable id (the authored UUID, replayed via `insert_with_id`),
+/// so any number of experiments route correctly. Run results/status are NOT here
+/// — they ride the content/presence planes. No-ops when registry/journal absent.
+#[cfg(feature = "networking")]
+fn replay_scenario_journal_experiment(
+    role: Res<lunco_core::NetworkRole>,
+    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
+    registry: Option<ResMut<lunco_experiments::ExperimentRegistry>>,
+    mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
+) {
+    let (Some(journal), Some(mut registry)) = (journal, registry) else {
+        return;
+    };
+    let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
+        None
+    } else {
+        let Some(manifest) = remote.manifest.as_ref() else {
+            return;
+        };
+        manifest.journal_head.as_ref()
+    };
+    let me = journal.local_author();
+    let pending = lunco_networking::journal_plane::domain_ops_after(
+        &journal,
+        base,
+        &me,
+        &applied,
+        lunco_twin_journal::DomainKind::Experiment,
+    );
+    for (id, op) in pending {
+        lunco_modelica::experiment_journal::replay_experiment_op(&mut registry, &op);
+        applied.insert(id);
+    }
+}
+
+/// Result-artifact writer: on `RunCompleted`, the host serializes the finished
+/// `RunResult` to `<twin>/results/<experiment-id>.json` so it rides the **content
+/// plane** — the twin file-walk CID's `results/` (a non-dot dir) and the manifest
+/// sync ships it to peers. Host-authoritative: a Client never ran the sim, so it
+/// writes nothing (it *receives* the artifact). The result is recovered from the
+/// registry (core writes it there before `RunCompleted` fires — same pattern as
+/// `project_run_results_to_ui`). JSON today; parquet is a deferred format swap
+/// pending a wasm-reader spike (see `NETWORKING_STATE_SYNC_TAXONOMY_DESIGN.md`).
+/// `RunResult` to `<twin>/results/<experiment-id>.json` through the cross-platform
+/// [`lunco_storage`] layer (native file / wasm WebStorage). This is **core
+/// persistence, not a networking concern** — a single-player run's results
+/// survive a restart, and when networking is on the same file rides the content
+/// plane to peers. Host/standalone only: a networked Client never ran the sim, so
+/// it writes nothing (it *receives* the artifact). Recovered from the registry
+/// (core writes it there before `RunCompleted` fires — same pattern as
+/// `project_run_results_to_ui`). JSON today; parquet is a deferred format swap.
+fn write_run_result_artifact(
+    mut completed: MessageReader<lunco_experiments::RunCompleted>,
+    registry: Res<lunco_experiments::ExperimentRegistry>,
+    workspace: Res<lunco_workspace::WorkspaceResource>,
+    role: Option<Res<lunco_core::NetworkRole>>,
+) {
+    if matches!(role.as_deref(), Some(lunco_core::NetworkRole::Client)) {
+        return;
+    }
+    for msg in completed.read() {
+        let id = msg.experiment_id;
+        let Some(result) = registry.get(id).and_then(|e| e.result.as_ref()) else {
+            continue;
+        };
+        let Some(active) = workspace.active_twin else {
+            continue;
+        };
+        let Some(twin) = workspace.twin(active) else {
+            continue;
+        };
+        // The storage layer creates parent dirs on write (FileStorage tmp+rename;
+        // WebStorage is key-based), so no explicit mkdir — all I/O goes through it.
+        let dest = twin
+            .root
+            .join("results")
+            .join(format!("{}.json", id.as_artifact_stem()));
+        match serde_json::to_vec_pretty(result) {
+            Ok(bytes) => match lunco_storage::write_file_sync(&dest, &bytes) {
+                Ok(()) => info!("[experiment] wrote result artifact {dest:?}"),
+                Err(e) => warn!("[experiment] result artifact write failed: {e}"),
+            },
+            Err(e) => warn!("[experiment] result serialize failed: {e}"),
+        }
+    }
+}
+
+/// Result-artifact loader — the consume half of persistence/ship-artifact. For
+/// each known experiment that lacks a trajectory, reads
+/// `<twin>/results/<id>.json` through [`lunco_storage`] (cross-platform, no
+/// directory listing — bounded by the registry cap) and loads it. This restores a
+/// single-player run's results after a restart AND makes a networked peer *see*
+/// the host's results once their file syncs.
+///
+/// Change-driven on [`ExperimentRegistry`] mutation (a definition synced, a run
+/// completed, a status update) — so a just-synced result file is picked up on the
+/// next registry change (e.g. the presence status flip) rather than by polling.
+fn load_run_result_artifacts(
+    mut registry: ResMut<lunco_experiments::ExperimentRegistry>,
+    workspace: Res<lunco_workspace::WorkspaceResource>,
+) {
+    let Some(active) = workspace.active_twin else {
+        return;
+    };
+    let Some(root) = workspace.twin(active).map(|t| t.root.join("results")) else {
+        return;
+    };
+    // Ids known but resultless — the only candidates worth a storage read.
+    let want: Vec<lunco_experiments::ExperimentId> = registry
+        .iter_all()
+        .filter(|e| e.result.is_none())
+        .map(|e| e.id)
+        .collect();
+    for id in want {
+        let path = root.join(format!("{}.json", id.as_artifact_stem()));
+        let Ok(bytes) = lunco_storage::read_file_sync(&path) else {
+            continue; // not present (yet)
+        };
+        match serde_json::from_slice::<lunco_experiments::RunResult>(&bytes) {
+            Ok(result) => {
+                let wall = result.meta.wall_time_ms;
+                registry.set_result(id, result);
+                registry
+                    .set_status(id, lunco_experiments::RunStatus::Done { wall_time_ms: wall });
+                info!("[experiment] loaded result artifact for {}", id.as_artifact_stem());
+            }
+            Err(e) => warn!("[experiment] result artifact parse failed for {}: {e}", id.as_artifact_stem()),
+        }
+    }
+}
+
+/// Networking distribution trigger: when a run finishes on the host, ask for an
+/// immediate scenario-manifest rebuild so already-connected peers pull the
+/// just-written result artifact now (serviced by `service_manifest_rebuild_request`
+/// in lunco-networking). The write itself is the core persistence system's job;
+/// this only nudges distribution. Host-only.
+#[cfg(feature = "networking")]
+fn request_rebuild_after_result(
+    mut completed: MessageReader<lunco_experiments::RunCompleted>,
+    role: Option<Res<lunco_core::NetworkRole>>,
+    mut rebuild: ResMut<lunco_networking::sync::RequestManifestRebuild>,
+) {
+    if !matches!(role.as_deref(), Some(lunco_core::NetworkRole::Host)) {
+        return;
+    }
+    if completed.read().count() > 0 {
+        rebuild.0 = true;
+    }
+}
+
+/// Presence broadcast: the host relays experiment run-status transitions
+/// (Running progress → Done/Failed/Cancelled) to clients over the wire, so a
+/// peer watches a run advance live. Ephemeral — progress rides the lossy
+/// `ControlStream`, terminal states the reliable `CommandBus` (so the final
+/// flip is never dropped). Host-only; the assembly crate maps `RunStatus` to the
+/// primitive `RunStatusMsg` here (keeping networking free of an experiments dep).
+#[cfg(feature = "networking")]
+fn broadcast_run_status(
+    role: Option<Res<lunco_core::NetworkRole>>,
+    mut outbox: ResMut<lunco_networking::sync::SyncOutbox>,
+    mut progress: MessageReader<lunco_experiments::RunProgress>,
+    mut completed: MessageReader<lunco_experiments::RunCompleted>,
+    mut failed: MessageReader<lunco_experiments::RunFailed>,
+    mut cancelled: MessageReader<lunco_experiments::RunCancelled>,
+    registry: Res<lunco_experiments::ExperimentRegistry>,
+) {
+    if !matches!(role.as_deref(), Some(lunco_core::NetworkRole::Host)) {
+        return;
+    }
+    use lunco_core::SyncChannel;
+    use lunco_networking::sync::{RunStatusMsg, SyncEnvelope};
+    let msg = |id: lunco_experiments::ExperimentId,
+               phase: u8,
+               t_current: f64,
+               wall_time_ms: u64,
+               error: String| {
+        SyncEnvelope::RunStatus(RunStatusMsg {
+            experiment_id: id.uuid_bytes(),
+            phase,
+            t_current,
+            wall_time_ms,
+            error,
+        })
+    };
+    for m in progress.read() {
+        outbox.0.push((
+            SyncChannel::ControlStream,
+            msg(m.experiment_id, 2, m.t_current, 0, String::new()),
+        ));
+    }
+    for m in completed.read() {
+        let wall = registry
+            .get(m.experiment_id)
+            .and_then(|e| e.result.as_ref())
+            .map(|r| r.meta.wall_time_ms)
+            .unwrap_or(0);
+        outbox.0.push((
+            SyncChannel::CommandBus,
+            msg(m.experiment_id, 3, 0.0, wall, String::new()),
+        ));
+    }
+    for m in failed.read() {
+        outbox.0.push((
+            SyncChannel::CommandBus,
+            msg(m.experiment_id, 4, 0.0, 0, m.error.clone()),
+        ));
+    }
+    for m in cancelled.read() {
+        outbox.0.push((
+            SyncChannel::CommandBus,
+            msg(m.experiment_id, 5, 0.0, 0, String::new()),
+        ));
+    }
+}
+
+/// Presence apply (client): drain host-sent run-status updates into the local
+/// `ExperimentRegistry` so a synced experiment's row advances Running → Done.
+/// Won't clobber a `Done` already loaded from the result artifact (the artifact
+/// carries the trajectory; a late progress packet must not downgrade it).
+#[cfg(feature = "networking")]
+fn apply_run_status(
+    mut pending: ResMut<lunco_networking::sync::PendingRunStatus>,
+    mut registry: ResMut<lunco_experiments::ExperimentRegistry>,
+) {
+    if pending.0.is_empty() {
+        return;
+    }
+    for m in std::mem::take(&mut pending.0) {
+        let id = lunco_experiments::ExperimentId::from_uuid_bytes(m.experiment_id);
+        let already_done = matches!(
+            registry.get(id).map(|e| &e.status),
+            Some(lunco_experiments::RunStatus::Done { .. })
+        );
+        if already_done && m.phase != 3 {
+            continue;
+        }
+        let status = match m.phase {
+            1 => lunco_experiments::RunStatus::Queued,
+            2 => lunco_experiments::RunStatus::Running {
+                t_current: m.t_current,
+            },
+            3 => lunco_experiments::RunStatus::Done {
+                wall_time_ms: m.wall_time_ms,
+            },
+            4 => lunco_experiments::RunStatus::Failed {
+                error: m.error,
+                partial: false,
+            },
+            5 => lunco_experiments::RunStatus::Cancelled,
+            _ => lunco_experiments::RunStatus::Pending,
+        };
+        registry.set_status(id, status);
+    }
+}
+
 /// The USD type name of a policy prim, and the attribute names carrying its rhai
 /// hook definition — the projected form of `scripted_policy::PolicyDef`.
 #[cfg(feature = "networking")]
@@ -485,6 +797,114 @@ fn project_usd_policies(
     lunco_networking::scripted_policy::project_policies(desired, &mut registry, journal.as_deref());
 }
 
+/// Convenience command: author (or hot-replace) a rhai policy as a `LuncoPolicy`
+/// USD prim under `/World/Policies/<name>` in ONE call, instead of hand-issuing the
+/// underlying `ApplyUsdOp`s. Because it authors USD doc ops, the policy **journals →
+/// syncs to every peer → the projector activates it** (registers the rhai hook; at
+/// `MERGE_SEAM` flips the merge strategy). Re-issuing with the same `name` (or later
+/// editing `lunco:policy:source`) **hot-replaces the hook live** — dynamic rhai
+/// editing with no file system, converging across the network.
+///
+/// This is the ergonomic surface over the canonical form (a `LuncoPolicy` prim); the
+/// raw `ApplyUsdOp` path still works. Single active scene doc for now (mirrors the
+/// journal drivers).
+#[lunco_core::Command(default)]
+pub struct SetRhaiPolicy {
+    /// Prim name under `/World/Policies` (the identity for hot-replace); defaults to
+    /// a sanitized `seam` when empty.
+    pub name: String,
+    /// The hook seam (id): e.g. `"journal.merge.order"`, `"rbac.authorize"`, or a
+    /// `lunco:driveKernel` id a rover points at.
+    pub seam: String,
+    /// The rhai entry function name.
+    pub entry: String,
+    /// The rhai source defining `entry` (+ helpers).
+    pub source: String,
+    /// Deterministic (fresh rhai scope per invoke). Convergent seams (merge, drive)
+    /// must be `true`; the host-only authorize gate may be `false`.
+    pub deterministic: bool,
+}
+
+#[lunco_core::on_command(SetRhaiPolicy)]
+fn on_set_rhai_policy(
+    trigger: On<SetRhaiPolicy>,
+    registry: Res<lunco_usd::UsdDocumentRegistry>,
+    mut commands: Commands,
+) {
+    use lunco_usd::{ApplyUsdOp, LayerId, UsdOp};
+    let cmd = trigger.event();
+    let docs: Vec<_> = registry.ids().collect();
+    let [doc] = docs.as_slice() else {
+        warn!("[policy] SetRhaiPolicy needs exactly one scene document (found {})", docs.len());
+        return;
+    };
+    let doc = *doc;
+
+    // USD prim names are identifier-like — sanitize the seam/name into one.
+    let base = if cmd.name.is_empty() { &cmd.seam } else { &cmd.name };
+    let mut name: String =
+        base.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
+    if name.is_empty() {
+        name = "policy".to_string();
+    }
+    let prim = format!("/World/Policies/{name}");
+    let root = LayerId::root();
+    // USDA-quoted string literal (escapes quotes / newlines) for `SetAttribute`.
+    let lit = |s: &str| format!("{s:?}");
+
+    // Idempotent: define_prim + attribute overwrite → re-issuing hot-replaces.
+    let ops = vec![
+        UsdOp::AddPrim {
+            edit_target: root.clone(),
+            parent_path: "/World".into(),
+            name: "Policies".into(),
+            type_name: Some("Scope".into()),
+            reference: None,
+        },
+        UsdOp::AddPrim {
+            edit_target: root.clone(),
+            parent_path: "/World/Policies".into(),
+            name: name.clone(),
+            type_name: Some("LuncoPolicy".into()),
+            reference: None,
+        },
+        UsdOp::SetAttribute {
+            edit_target: root.clone(),
+            path: prim.clone(),
+            name: "lunco:policy:seam".into(),
+            type_name: "string".into(),
+            value: lit(&cmd.seam),
+        },
+        UsdOp::SetAttribute {
+            edit_target: root.clone(),
+            path: prim.clone(),
+            name: "lunco:policy:entry".into(),
+            type_name: "string".into(),
+            value: lit(&cmd.entry),
+        },
+        UsdOp::SetAttribute {
+            edit_target: root.clone(),
+            path: prim.clone(),
+            name: "lunco:policy:source".into(),
+            type_name: "string".into(),
+            value: lit(&cmd.source),
+        },
+        UsdOp::SetAttribute {
+            edit_target: root,
+            path: prim.clone(),
+            name: "lunco:policy:deterministic".into(),
+            type_name: "bool".into(),
+            value: cmd.deterministic.to_string(),
+        },
+    ];
+    for op in ops {
+        commands.trigger(ApplyUsdOp { doc, op });
+    }
+    info!("[policy] SetRhaiPolicy authored `{prim}` (seam '{}') — journals + projects", cmd.seam);
+}
+
+lunco_core::register_commands!(on_set_rhai_policy);
+
 #[cfg(all(test, feature = "networking", not(target_arch = "wasm32")))]
 mod policy_projection_tests {
     use super::extract_usd_policies;
@@ -517,6 +937,57 @@ mod policy_projection_tests {
         assert!(p.source.contains("may_take_control"), "source carried verbatim");
         assert!(!p.deterministic, "authored deterministic=false is read");
     }
+
+    /// **Live rhai editing (no file system).** Editing a `LuncoPolicy`'s `source`
+    /// attribute at runtime is a `SetAttribute` on the composed stage; the projector
+    /// re-reads the NEW source (not a cached initial value). Wired end to end this is
+    /// "dynamically edit a rover's rhai behaviour → the projector re-runs (change-
+    /// gated on stage generation) → `project_policies` hot-replaces the hook", and —
+    /// because the edit is a USD doc op — it journals so every peer re-projects the
+    /// same new source. This proves the read half against a live edit.
+    #[test]
+    fn projector_reads_live_edited_source() {
+        const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\n\
+            def Xform \"World\"\n{\n\
+            \x20   def LuncoPolicy \"drive\"\n    {\n\
+            \x20       string lunco:policy:seam = \"rover.drive\"\n\
+            \x20       string lunco:policy:entry = \"drive\"\n\
+            \x20       string lunco:policy:source = \"fn drive(c){1}\"\n\
+            \x20       bool lunco:policy:deterministic = true\n    }\n}\n";
+
+        let id = bevy::asset::AssetId::invalid();
+        let mut stages = CanonicalStages::default();
+        stages.insert(
+            id,
+            CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", SCENE))
+                .expect("build stage"),
+        );
+        assert_eq!(extract_usd_policies(&stages)[0].source, "fn drive(c){1}");
+
+        // Dynamically edit the rhai source on the LIVE stage — a `SetAttribute`, no
+        // file touched. (Prim path taken from the live stage API, so no openusd import.)
+        let prim = stages
+            .get(id)
+            .unwrap()
+            .view()
+            .prim_paths()
+            .into_iter()
+            .find(|p| p.to_string() == "/World/drive")
+            .expect("policy prim present");
+        let new_src = lunco_usd_bevy::author::parse_attribute_value("string", "\"fn drive(c){2}\"")
+            .expect("parse");
+        stages
+            .get(id)
+            .unwrap()
+            .author_attribute(&prim, "lunco:policy:source", "string", new_src)
+            .expect("author live edit");
+
+        assert_eq!(
+            extract_usd_policies(&stages)[0].source,
+            "fn drive(c){2}",
+            "the projector reads the live-edited rhai source, not the initial value"
+        );
+    }
 }
 
 /// The shared, headless-safe core: the persistent world shell, physics, cosim,
@@ -535,6 +1006,11 @@ pub struct SandboxCorePlugin {
 impl Plugin for SandboxCorePlugin {
     fn build(&self, app: &mut App) {
         let args: Vec<String> = std::env::args().collect();
+
+        // Convenience command: `SetRhaiPolicy` authors a `LuncoPolicy` prim as USD
+        // doc ops (journals → syncs → projector activates). Authoring works with or
+        // without networking; the activation projector is networking-gated for now.
+        register_all_commands(app);
 
         // `--scene <path>` overrides the default sandbox_scene.usda load. Path is
         // relative to the asset source root (`assets/`). Used by automated joint/
@@ -664,6 +1140,30 @@ impl Plugin for SandboxCorePlugin {
                 ModelicaSet::SpawnRequests,
             ).chain());
 
+        // Experiment result-artifact persistence — CORE (not networking): a run's
+        // trajectory is written to `<twin>/results/<id>.json` through the
+        // cross-platform storage layer and restored on demand, so single-player run
+        // history survives a restart. Networking additionally distributes the same
+        // files via the content plane. Guarded so a config without experiments /
+        // workspace simply skips.
+        app.add_systems(
+            Update,
+            write_run_result_artifact.run_if(
+                resource_exists::<lunco_experiments::ExperimentRegistry>
+                    .and(resource_exists::<lunco_workspace::WorkspaceResource>),
+            ),
+        );
+        // Load half is change-driven on the registry (a definition synced, a run
+        // completed, a status flip) — so a just-arrived result file is picked up on
+        // the next registry change instead of by polling.
+        app.add_systems(
+            Update,
+            load_run_result_artifacts.run_if(
+                resource_changed::<lunco_experiments::ExperimentRegistry>
+                    .and(resource_exists::<lunco_workspace::WorkspaceResource>),
+            ),
+        );
+
         // Dismiss the HTML loading screen once the first frame paints (wasm-only;
         // no-op on native). Pairs with `web/index.html` → `lunco-boot.js`.
         app.add_plugins(lunco_web::WebReadyPlugin);
@@ -713,6 +1213,36 @@ impl Plugin for SandboxCorePlugin {
             // Same Layer B for Modelica models — the journal plane is domain-generic;
             // this is the parallel per-domain consume leg for `DomainKind::Modelica`.
             app.add_systems(Update, replay_scenario_journal_modelica);
+            // Same Layer B for scripts — a recorded `ScriptOp::SetSource` (live
+            // rover-behaviour edit) projects onto a peer's `ScriptDocument`.
+            app.add_systems(Update, replay_scenario_journal_script);
+            // Same Layer B for experiment *definitions* (`DomainKind::Experiment`):
+            // a peer's sweep setup projects onto the local ExperimentRegistry.
+            app.add_systems(Update, replay_scenario_journal_experiment);
+            // Presence/rebuild resources are consumed by the systems below for any
+            // role; init here (idempotent with the host-side init) so a standalone
+            // or client app never hits a missing resource.
+            app.init_resource::<lunco_networking::sync::PendingRunStatus>();
+            app.init_resource::<lunco_networking::sync::RequestManifestRebuild>();
+            // Result artifacts themselves are written/loaded by the CORE persistence
+            // systems (registered unconditionally below — storage-backed, all
+            // platforms). Networking only adds the *distribution* trigger: when a
+            // run finishes on the host, ask for an immediate manifest rebuild so
+            // already-connected peers pull the just-written result now.
+            app.add_systems(
+                Update,
+                request_rebuild_after_result
+                    .run_if(resource_exists::<lunco_experiments::ExperimentRegistry>),
+            );
+            // Presence plane: host broadcasts run-status transitions; client
+            // applies them so a synced experiment's row advances live. Guarded on
+            // the registry existing so a config without experiments just skips
+            // (the MessageReaders would otherwise have no registered messages).
+            app.add_systems(
+                Update,
+                (broadcast_run_status, apply_run_status)
+                    .run_if(resource_exists::<lunco_experiments::ExperimentRegistry>),
+            );
             // Policy projection: activate `LuncoPolicy` prims from the composed
             // stage into the hook registry. Because policies are USD prims they
             // sync via the journal above — no bespoke policy broadcast.

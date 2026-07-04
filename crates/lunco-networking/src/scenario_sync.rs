@@ -127,6 +127,37 @@ pub struct IncomingAssetChunks(pub Vec<AssetChunkMsg>);
 #[derive(Resource, Default)]
 pub struct PendingAssetRequests(pub Vec<(SessionId, Vec<Vec<u8>>)>);
 
+/// Host-side queue: assets a client **offered** (imported into the shared twin),
+/// pushed by the `AssetOffer` arm of `drain_sync_inbox`, drained by the host's
+/// `ingest_asset_offers` (`server.rs`) — verify-write-to-twin then rebuild the
+/// manifest so the import redistributes.
+#[derive(Resource, Default)]
+pub struct PendingAssetOffers(pub Vec<crate::scenario::AssetOfferMsg>);
+
+/// Client → host: offer an asset the local peer just imported so the host writes it
+/// into the shared twin and redistributes it (the bidirectional counterpart of the
+/// host serve). Computes the CID locally; the host re-verifies. Pushes onto the
+/// [`SyncOutbox`] over the reliable `BulkData` lane. No-op if the payload is empty.
+///
+/// TODO(bidirectional-content): wire the call site — fire this from the actual
+/// import surface (file-open / drag-drop / palette add) when a NEW asset enters the
+/// twin. Today it's the mechanism, not yet the trigger. Also cap `bytes` and chunk
+/// large offers (see [`AssetOfferMsg`](crate::scenario::AssetOfferMsg)).
+pub fn offer_asset_to_host(outbox: &mut crate::sync::SyncOutbox, path: impl Into<String>, bytes: Vec<u8>) {
+    if bytes.is_empty() {
+        return;
+    }
+    let cid = crate::scenario::cid_for_content(&bytes).to_bytes();
+    outbox.0.push((
+        lunco_core::SyncChannel::BulkData,
+        crate::sync::SyncEnvelope::AssetOffer(crate::scenario::AssetOfferMsg {
+            path: path.into(),
+            cid,
+            data: bytes,
+        }),
+    ));
+}
+
 /// Host-side: CID → absolute on-disk path for every asset in the current
 /// scenario, filled when the off-thread manifest build completes
 /// (`drive_scenario_manifest`). The request server reads bytes through this map
@@ -150,7 +181,7 @@ pub fn scenario_cache_root(scenario_id: &[u8; 16]) -> PathBuf {
 /// **rejecting traversal** (empty / `.` / `..` / backslash segments) — the path
 /// comes from a remote host and must never escape a target root. `None` if unsafe
 /// or empty.
-fn safe_rel_path(rel: &str) -> Option<PathBuf> {
+pub(crate) fn safe_rel_path(rel: &str) -> Option<PathBuf> {
     let mut p = PathBuf::new();
     for seg in rel.split('/') {
         if seg.is_empty() || seg == "." || seg == ".." || seg.contains('\\') {

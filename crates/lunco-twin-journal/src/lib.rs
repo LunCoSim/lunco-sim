@@ -128,6 +128,15 @@ pub enum DomainKind {
     Usd,
     Sysml,
     Python,
+    /// Rhai / scenario scripts (`ScriptDocument` edits — `SetSource`, input/output
+    /// pin metadata). Recorded so live script edits (rover behaviour changes) enter
+    /// the journal and persist / replay like every other domain.
+    Script,
+    /// Experiment / batch-run *definitions* (`ExperimentRegistry` edits — the sweep
+    /// setup: model ref, param points, run bounds, solver). Only the definition is
+    /// journaled; the run *results* ride the content plane as CID'd artifacts, and
+    /// run *progress* rides the ephemeral presence plane.
+    Experiment,
     Other(String),
 }
 

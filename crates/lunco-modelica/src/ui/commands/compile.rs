@@ -1560,6 +1560,18 @@ fn dispatch_experiment(
                 None => Vec::new(),
             };
 
+        // Host-authoritative runs: a networked Client never launches sims
+        // locally. The RunExperiment / FastRun command replicates to the host,
+        // which creates + runs + journals the experiment; the client receives
+        // the *definition* via the experiment journal and the *results* via the
+        // content plane. Mirrors `scripts_run_here` in lunco-scripting.
+        if matches!(
+            world.get_resource::<lunco_core::NetworkRole>(),
+            Some(lunco_core::NetworkRole::Client)
+        ) {
+            return None;
+        }
+
         let model_ref = lunco_experiments::ModelRef(model_name.clone());
 
         // Snapshot source into the runner so the worker thread / web
@@ -1667,6 +1679,16 @@ fn dispatch_experiment(
             bevy::log::error!("[dispatch_experiment] experiment vanished after insert");
             return None;
         };
+
+        // Journal the experiment *definition* (create) so the setup syncs across
+        // peers + persists. Run status/results are NOT journaled — they ride the
+        // presence / content planes respectively.
+        if let Some(journal) = world
+            .get_resource::<lunco_doc_bevy::JournalResource>()
+            .cloned()
+        {
+            crate::experiment_journal::record_create(&journal, &exp);
+        }
 
         let handle = runner_res.0.run_fast(&exp);
         // Remember which document started this run so failures can be
@@ -1952,6 +1974,9 @@ pub fn on_delete_experiment(trigger: On<DeleteExperiment>, mut commands: Command
     let doc = trigger.event().doc;
     let all = trigger.event().all;
     commands.queue(move |world: &mut World| {
+        let journal = world
+            .get_resource::<lunco_doc_bevy::JournalResource>()
+            .cloned();
         let mut reg = world.resource_mut::<lunco_experiments::ExperimentRegistry>();
         // Snapshot ids before deletion so we can compute exactly which runs
         // were removed and purge their side-state (doc mapping + per-plot
@@ -1983,6 +2008,14 @@ pub fn on_delete_experiment(trigger: On<DeleteExperiment>, mut commands: Command
         drop(reg);
         let purged: Vec<lunco_experiments::ExperimentId> =
             before.difference(&live).copied().collect();
+        // Journal each removal (Delete) so the deletion syncs + persists. Done
+        // after the registry mutation (which keeps its counter cleanup); replay
+        // is idempotent.
+        if let Some(journal) = &journal {
+            for id in &purged {
+                crate::experiment_journal::record_delete(journal, *id);
+            }
+        }
         crate::ui::commands::compile::purge_experiment_side_state(world, &purged);
         bevy::log::info!(
             "[DeleteExperiment] removed {removed} run(s) (all={all}, id={target:?}, doc={doc:?})"
@@ -2006,14 +2039,22 @@ pub fn on_rename_experiment(trigger: On<RenameExperiment>, mut commands: Command
     let target = trigger.event().experiment_id.clone();
     let name = trigger.event().name.clone();
     commands.queue(move |world: &mut World| {
+        let journal = world
+            .get_resource::<lunco_doc_bevy::JournalResource>()
+            .cloned();
         let mut reg = world.resource_mut::<lunco_experiments::ExperimentRegistry>();
         let id = reg
             .iter_all()
             .find(|e| e.id.0.to_string() == target)
             .map(|e| e.id);
-        match id.and_then(|id| reg.get_mut(id)) {
-            Some(exp) => {
-                exp.name = name;
+        match id {
+            Some(id) => {
+                // Journal the rename (SetName) so the edit syncs + persists.
+                crate::experiment_journal::apply_and_record(
+                    &mut reg,
+                    journal.as_ref(),
+                    crate::experiment_journal::ExperimentOp::SetName { id, name },
+                );
                 bevy::log::info!("[RenameExperiment] {target} → renamed");
             }
             None => bevy::log::warn!("[RenameExperiment] no run with id {target}"),

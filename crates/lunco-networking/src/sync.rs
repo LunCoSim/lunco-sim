@@ -237,6 +237,12 @@ pub struct InboundClientCtx<'w> {
     // `pending_asset_requests` (client arm is a no-op).
     incoming_chunks: ResMut<'w, crate::scenario_sync::IncomingAssetChunks>,
     pending_asset_requests: ResMut<'w, crate::scenario_sync::PendingAssetRequests>,
+    // Host fills this from clients' `AssetOffer`s (imported assets to redistribute);
+    // client arm is a no-op.
+    pending_asset_offers: ResMut<'w, crate::scenario_sync::PendingAssetOffers>,
+    // Client fills this from the host's `RunStatus` presence updates; host arm is
+    // a no-op (it's the authoritative source).
+    pending_run_status: ResMut<'w, PendingRunStatus>,
     // Canonical Twin journal — a client applies host-sent entries here via
     // `append_remote` (merge). `Option` so the drain still runs in a build with
     // no journal (e.g. a minimal networking-only test); host arm is a no-op.
@@ -400,6 +406,41 @@ pub struct SharePerspectiveMsg {
     pub avatar_state: Option<([f32; 3], [f32; 4], [i64; 3], Option<i32>)>,
 }
 
+/// Host → clients presence: an experiment run's status advanced (Queued →
+/// Running → Done/Failed). **Ephemeral** — rides the presence plane (LWW), NOT
+/// the journal (that carries the experiment *definition*) nor the content plane
+/// (that carries the *result* trajectory). Primitive-encoded so `lunco-networking`
+/// needs no `lunco-experiments` dep; the assembly crate maps it to/from
+/// `RunStatus`. `experiment_id` is the 16 UUID bytes.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RunStatusMsg {
+    pub experiment_id: [u8; 16],
+    /// 0=Pending 1=Queued 2=Running 3=Done 4=Failed 5=Cancelled.
+    pub phase: u8,
+    /// Current sim time (valid for `Running`).
+    pub t_current: f64,
+    /// Wall-clock ms (valid for `Done`).
+    pub wall_time_ms: u64,
+    /// Error message (for `Failed`; empty otherwise).
+    pub error: String,
+}
+
+/// Client-side queue of host-sent run-status updates, drained by the assembly
+/// crate into the local `ExperimentRegistry`. Host arm is a no-op (it's the
+/// authoritative source). Mirrors the other `Pending*` inbox resources.
+#[derive(Resource, Default)]
+pub struct PendingRunStatus(pub Vec<RunStatusMsg>);
+
+/// Set by any subsystem that just wrote new content into the shared twin (e.g. a
+/// finished experiment result) to ask the host to rebuild + re-advertise the
+/// scenario manifest **now**, so already-connected peers pull the new bytes this
+/// tick instead of waiting for the next connect / twin event. Host-only consumer
+/// (`service_manifest_rebuild_request`); a one-shot flag (reset on service).
+/// The public seam that lets the assembly crate trigger a rebuild without
+/// reaching into the private `server` module (`spawn_manifest_build` is internal).
+#[derive(Resource, Default)]
+pub struct RequestManifestRebuild(pub bool);
+
 /// Persisted user tutorial preferences.
 /// Live tutor/student session state. Although registered as a `SettingsSection`
 /// for resource wiring, ALL fields are transient session state — they must NOT
@@ -513,6 +554,12 @@ pub enum SyncEnvelope {
     // never sends/handles it; prior discriminants stay put. Type owned by the
     // `journal_plane` module (the plane owns its wire shape).
     JournalEntry(crate::journal_plane::JournalEntryMsg),
+    // Peer → host: an imported asset offered for redistribution (bidirectional
+    // content ingest). Appended LAST (positional-codec rule).
+    AssetOffer(crate::scenario::AssetOfferMsg),
+    // Host → client: ephemeral experiment run-status (presence plane). Appended
+    // LAST (positional-codec rule) — a stale peer never sends/handles it.
+    RunStatus(RunStatusMsg),
 }
 
 // ── Resources (the contract `lunco-networking` touches) ───────────────────────
@@ -1339,6 +1386,14 @@ pub fn drain_sync_inbox(
             SyncEnvelope::AssetHave(_) => {
                 // Phase 3+: host skips streaming an asset the peer already has.
             }
+            SyncEnvelope::AssetOffer(offer) => {
+                // Bidirectional ingest: a client imported an asset into the shared
+                // twin. Only the host ingests — it writes the (CID-verified) bytes
+                // and rebuilds/re-advertises the manifest so every peer fetches it.
+                if role.is_host() && !offer.data.is_empty() {
+                    ctx.pending_asset_offers.0.push(offer);
+                }
+            }
             SyncEnvelope::JournalEntry(msg) => {
                 // Route to the journal plane (bidirectional). BOTH roles merge
                 // the inbound entry via `append_remote`: a client mirrors the
@@ -1364,6 +1419,14 @@ pub fn drain_sync_inbox(
                     warn!("[journal-plane] rejected journal edit from unauthorized session {sender}");
                 } else if let Some(journal) = ctx.journal.as_ref() {
                     crate::journal_plane::apply_inbound_entry(journal, &msg);
+                }
+            }
+            SyncEnvelope::RunStatus(msg) => {
+                // Presence: the host's experiment run advanced. Only a client
+                // consumes (the host is the authoritative source); the assembly
+                // crate drains `PendingRunStatus` into its ExperimentRegistry.
+                if !role.is_host() {
+                    ctx.pending_run_status.0.push(msg);
                 }
             }
         }

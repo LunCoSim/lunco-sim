@@ -41,7 +41,6 @@ use lunco_scripting::{
     doc::{ScriptDocument, ScriptLanguage, ScriptedModel},
     ScriptRegistry,
 };
-use lunco_doc::DocumentHost;
 use lunco_usd_bevy::{
     CanonicalStages, LoadIntoGrid, UsdInstanceMember, UsdInstanceRoot, UsdPrimPath,
     UsdRead, UsdStageAsset,
@@ -376,9 +375,11 @@ pub fn dispatch_loaded_python_sources(
         // Offset doc id away from any Modelica-allocated ids on the same
         // entity (legacy catalog Python balloon does the same).
         let doc_id = DocumentId::new(entity.index().index() as u64 + 10_000);
-        registry.documents.insert(
+        // Route through the registry funnel so a journal recorder attaches (edits
+        // to this cosim script record like any other domain).
+        registry.insert_document(
             doc_id,
-            DocumentHost::new(ScriptDocument {
+            ScriptDocument {
                 id: doc_id.raw(),
                 generation: 0,
                 language: ScriptLanguage::Python,
@@ -387,7 +388,7 @@ pub fn dispatch_loaded_python_sources(
                 inputs: vec!["height".to_string(), "velocity".to_string()],
                 outputs: vec!["netForce".to_string()],
                 params: String::new(),
-            }),
+            },
         );
         commands.entity(entity).insert(ScriptedModel {
             document_id: Some(doc_id.raw()),

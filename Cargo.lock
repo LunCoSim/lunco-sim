@@ -7244,6 +7244,7 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-environment",
+ "lunco-experiments",
  "lunco-fsw",
  "lunco-hardware",
  "lunco-materials",
@@ -7270,6 +7271,7 @@ dependencies = [
  "lunco-workspace",
  "mimalloc",
  "openusd",
+ "serde_json",
  "wasm-bindgen",
  "web-sys",
 ]
@@ -7334,6 +7336,7 @@ dependencies = [
  "lunco-time",
  "lunco-tools",
  "lunco-tools-rhai",
+ "lunco-twin-journal",
  "lunco-workspace",
  "pyo3",
  "rhai",
