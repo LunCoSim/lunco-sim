@@ -177,10 +177,13 @@ def Xform "World"
     assert!((mat2.base_color.to_linear().to_vec4()[2] - 1.0).abs() < 1e-4);
     assert!((mat2.perceptual_roughness - 0.1).abs() < 1e-4);
 
-    // 7b. Undo shape: a `SetAttribute` inverts to a `ReplaceSource` of the prior
-    // source — a post-mount **full reload**. This must rebuild the live stage from
-    // the (reverted) composed source and re-instantiate, so the material reverts in
-    // the live world too — the regression guard for the full-reload attribute path.
+    // 7b. Exercise the coarse full-reload path explicitly: a whole-source
+    // `ReplaceSource` (the genuine whole-layer revert, and still the inverse for a
+    // newly-authored attribute). This must rebuild the live stage from the
+    // (reverted) composed source and re-instantiate, so the material reverts in the
+    // live world too — the regression guard for the full-reload attribute path.
+    // (Overwrites of an *existing* attribute now invert to a typed `SetAttribute`
+    // instead — see `document::set_attribute_overwrite_inverts_to_typed_op`.)
     app.world_mut().trigger(ApplyUsdOp {
         doc: doc_id,
         op: UsdOp::ReplaceSource {

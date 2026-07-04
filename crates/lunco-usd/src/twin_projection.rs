@@ -391,10 +391,21 @@ fn apply_incremental_op_to_stage(
                 },
                 None => false,
             };
-            // A material/shader edit fans out through `material:binding` to bound
-            // meshes, so re-read the whole scene rather than just this prim.
+            // Refresh only what the edit can actually change: a material/shader
+            // edit fans out through `material:binding` to meshes anywhere (whole
+            // scene), but a geometry/xform attribute edit is local to its own prim
+            // — so re-instantiate just that subtree and leave unrelated roots
+            // (including live physics bodies) alone.
             if authored {
-                refresh_scene_visuals(world, scene_id);
+                let prim_ty = world
+                    .get_non_send_resource::<CanonicalStages>()
+                    .and_then(|s| s.get(scene_id))
+                    .and_then(|cs| cs.view().prim_type_name(&sp));
+                if attribute_edit_needs_full_refresh(prim_ty.as_deref()) {
+                    refresh_scene_visuals(world, scene_id);
+                } else {
+                    refresh_prim_subtree(world, scene_id, path);
+                }
             }
         }
         UsdOp::AddPrim { parent_path, name, type_name, reference, .. } => {
@@ -538,13 +549,54 @@ fn refresh_scene_visuals(world: &mut World, scene_id: AssetId<UsdStageAsset>) {
         .map(|(e, _)| *e)
         .collect();
     for root in roots {
-        if let Ok(mut em) = world.get_entity_mut(root) {
-            em.remove::<UsdVisualSynced>();
-            em.despawn_related::<Children>();
-            if let Some(pp) = em.take::<UsdPrimPath>() {
-                em.insert(pp);
-            }
+        reinstantiate_entity(world, root);
+    }
+}
+
+/// Drop `entity`'s [`UsdVisualSynced`] marker + children and re-insert its
+/// [`UsdPrimPath`], re-firing `on_usd_prim_added` so its subtree rebuilds from
+/// the (now-authored) live stage. The shared primitive under both the whole-scene
+/// [`refresh_scene_visuals`] and the single-prim [`refresh_prim_subtree`].
+fn reinstantiate_entity(world: &mut World, entity: Entity) {
+    if let Ok(mut em) = world.get_entity_mut(entity) {
+        em.remove::<UsdVisualSynced>();
+        em.despawn_related::<Children>();
+        if let Some(pp) = em.take::<UsdPrimPath>() {
+            em.insert(pp);
         }
+    }
+}
+
+/// Re-instantiate only the subtree of the single prim at `path` in `scene_id`
+/// (the entity whose [`UsdPrimPath`] matches), leaving every other scene root
+/// untouched. Used for a geometry/xform attribute edit, whose visual effect is
+/// local to its own prim — unlike a material/shader edit, which fans out through
+/// `material:binding` to arbitrary meshes and needs the whole-scene refresh. This
+/// avoids re-instantiating unrelated roots (including live physics bodies) on
+/// every attribute edit.
+fn refresh_prim_subtree(world: &mut World, scene_id: AssetId<UsdStageAsset>, path: &str) {
+    let entity = {
+        let mut q = world.query::<(Entity, &UsdPrimPath)>();
+        q.iter(world)
+            .find(|(_, upp)| upp.stage_handle.id() == scene_id && upp.path == *path)
+            .map(|(e, _)| e)
+    };
+    if let Some(e) = entity {
+        reinstantiate_entity(world, e);
+    }
+}
+
+/// Whether a `SetAttribute` on a prim of this type must refresh the **whole**
+/// scene rather than just the edited prim's subtree. A material / shader /
+/// node-graph opinion propagates through `material:binding` to meshes anywhere in
+/// the scene, so the edited prim's own subtree is not where the visual change
+/// lands; an unknown type is treated conservatively as needing the full refresh.
+/// Every other (geometry/xform) attribute edit is local to its prim, so it takes
+/// the cheap [`refresh_prim_subtree`] path.
+fn attribute_edit_needs_full_refresh(prim_type: Option<&str>) -> bool {
+    match prim_type {
+        Some(t) => matches!(t, "Material" | "Shader" | "NodeGraph"),
+        None => true,
     }
 }
 
@@ -685,6 +737,30 @@ mod tests {
     use crate::document::{LayerId, UsdOp};
 
     const TINY: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
+
+    /// A material/shader/node-graph attribute edit fans out through
+    /// `material:binding` and needs the whole-scene refresh; an unknown type is
+    /// treated conservatively the same way; every other (geometry/xform) edit is
+    /// local and takes the cheap single-prim path.
+    #[test]
+    fn attribute_refresh_scope_is_full_only_for_shading_prims() {
+        for shading in ["Material", "Shader", "NodeGraph"] {
+            assert!(
+                attribute_edit_needs_full_refresh(Some(shading)),
+                "{shading} binding fan-out needs a whole-scene refresh"
+            );
+        }
+        assert!(
+            attribute_edit_needs_full_refresh(None),
+            "unknown prim type is refreshed conservatively (whole scene)"
+        );
+        for local in ["Mesh", "Xform", "Sphere", "Cube", "Camera"] {
+            assert!(
+                !attribute_edit_needs_full_refresh(Some(local)),
+                "{local} attribute edit is local to its own prim subtree"
+            );
+        }
+    }
 
     #[test]
     fn find_doc_for_abs_matches_file_origin_only() {
