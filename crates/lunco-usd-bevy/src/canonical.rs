@@ -143,6 +143,13 @@ impl CanonicalStage {
         &self.stage
     }
 
+    /// Monotonic change counter — bumped whenever [`drain_changes`](Self::drain_changes)
+    /// commits sink notices. A stage-reading projector (e.g. the policy projector)
+    /// gates on this so it re-runs only when the composed stage actually changed.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
     /// Author `xformOp:translate = value` onto the composed prim at `path` (root
     /// edit target) — this fires the change sink, so the projection bridge
     /// ([`project_stage_changes`](crate::project_stage_changes) via
@@ -372,6 +379,15 @@ impl CanonicalStages {
 
     pub fn len(&self) -> usize {
         self.by_asset.len()
+    }
+
+    /// Iterate every live stage keyed by its asset id — the door a whole-stage
+    /// projector (e.g. the policy projector, which reads composed `LuncoPolicy`
+    /// prims across all live scenes) uses to walk the composed stages.
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = (bevy::asset::AssetId<crate::UsdStageAsset>, &CanonicalStage)> {
+        self.by_asset.iter().map(|(id, cs)| (*id, cs))
     }
 
     /// Insert (or replace) the live stage for `asset` — the door the live-doc

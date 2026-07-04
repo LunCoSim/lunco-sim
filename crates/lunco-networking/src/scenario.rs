@@ -263,7 +263,7 @@ mod tests {
         assert_ne!(a.to_bytes(), c.to_bytes());
         // CIDv1 + raw codec + sha2-256 ⇒ 36 canonical bytes
         // (1B version + 1B codec + 2B multihash code/len + 32B digest).
-        assert_eq!(a.version(), cid::Version::V1);
+        assert_eq!(a.version(), lunco_hash::content::Version::V1);
         assert_eq!(a.codec(), RAW_CODEC);
         assert_eq!(a.to_bytes().len(), 36);
     }

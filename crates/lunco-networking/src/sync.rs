@@ -241,10 +241,6 @@ pub struct InboundClientCtx<'w> {
     // `append_remote` (merge). `Option` so the drain still runs in a build with
     // no journal (e.g. a minimal networking-only test); host arm is a no-op.
     journal: Option<Res<'w, JournalResource>>,
-    // Scripted-policy plane: a client registers+activates host-sent policies here
-    // and mirrors them into the registry. Bundled for the same 16-arg-limit reason;
-    // host arm is a no-op (host is the source of truth).
-    scripted_policies: ResMut<'w, crate::scripted_policy::ScriptedPolicyRegistry>,
 }
 
 /// Host → clients: the authoritative who-owns-what map (`gid → session`).
@@ -517,10 +513,6 @@ pub enum SyncEnvelope {
     // never sends/handles it; prior discriminants stay put. Type owned by the
     // `journal_plane` module (the plane owns its wire shape).
     JournalEntry(crate::journal_plane::JournalEntryMsg),
-    // Host → client: the active scripted-policy set (scripted-policy plane).
-    // Appended LAST (positional-codec rule): a stale peer that predates it never
-    // sends/handles it; prior discriminants stay put.
-    ScriptedPolicy(crate::scripted_policy::ScriptedPolicyMsg),
 }
 
 // ── Resources (the contract `lunco-networking` touches) ───────────────────────
@@ -1372,19 +1364,6 @@ pub fn drain_sync_inbox(
                     warn!("[journal-plane] rejected journal edit from unauthorized session {sender}");
                 } else if let Some(journal) = ctx.journal.as_ref() {
                     crate::journal_plane::apply_inbound_entry(journal, &msg);
-                }
-            }
-            SyncEnvelope::ScriptedPolicy(msg) => {
-                // Scripted-policy plane: only a CLIENT applies the host's
-                // authoritative policy set (compile+register each hook, mirror the
-                // set locally). The host is the source — it never applies its own
-                // broadcast (and would only ever receive one from itself).
-                if !role.is_host() {
-                    crate::scripted_policy::apply_inbound_policies(
-                        &msg,
-                        &mut ctx.scripted_policies,
-                        ctx.journal.as_deref(),
-                    );
                 }
             }
         }
@@ -2749,10 +2728,9 @@ impl Plugin for SyncPlugin {
                 crate::scenario_sync::drain_persist_results,
                 // Journal plane: both roles stream new journal entries — the
                 // host relays all (fan-out hub), clients send their own edits.
+                // Policies ride this too — a `LuncoPolicy` prim is a USD doc op —
+                // so there is no separate policy broadcast.
                 crate::journal_plane::broadcast_journal_entries,
-                // Scripted-policy plane: host broadcasts the active policy set when
-                // it changes so every client converges on the identical policies.
-                crate::scripted_policy::broadcast_scripted_policies,
             ))
             // `gather_snapshot` runs on the sim clock (`FixedPostUpdate`): it only
             // writes our `SyncOutbox` (never calls lightyear), so it's safe off the
@@ -2782,8 +2760,9 @@ impl Plugin for SyncPlugin {
         // Scenario-distribution commands (PromoteScenario) — its own
         // `register_commands!` set in the `scenario_sync` module.
         crate::scenario_sync::register_all_commands(app);
-        // Scripted-policy activation command (SetScriptedPolicy).
-        crate::scripted_policy::register_all_commands(app);
+        // Policies are authored as `LuncoPolicy` USD prims (ordinary `ApplyUsdOp`
+        // doc ops) and activated by the projector in the assembly crate — no
+        // imperative policy command to register here.
     }
 }
 

@@ -419,6 +419,106 @@ fn replay_scenario_journal_modelica(
     }
 }
 
+/// The USD type name of a policy prim, and the attribute names carrying its rhai
+/// hook definition — the projected form of `scripted_policy::PolicyDef`.
+#[cfg(feature = "networking")]
+const LUNCO_POLICY_TYPE: &str = "LuncoPolicy";
+
+/// Read every composed `LuncoPolicy` prim across all live stages into the desired
+/// policy set — the "policy is a projected USD prim" extractor. Reads the
+/// **composed** stage, so an opinion authored at any layer (global/twin/scene)
+/// resolves to one effective policy per seam. A prim missing `seam` or `source` is
+/// skipped (incompletely authored). Pure over the stages, so it's unit-testable
+/// without a running app.
+#[cfg(feature = "networking")]
+fn extract_usd_policies(
+    canonical: &lunco_usd_bevy::CanonicalStages,
+) -> Vec<lunco_networking::scripted_policy::PolicyDef> {
+    let mut out = Vec::new();
+    for (_, cs) in canonical.iter() {
+        let view = cs.view();
+        for prim in view.prim_paths() {
+            if view.prim_type_name(&prim).as_deref() != Some(LUNCO_POLICY_TYPE) {
+                continue;
+            }
+            let seam = view.value::<String>(&prim, "lunco:policy:seam").unwrap_or_default();
+            let source = view.value::<String>(&prim, "lunco:policy:source").unwrap_or_default();
+            if seam.is_empty() || source.is_empty() {
+                continue;
+            }
+            out.push(lunco_networking::scripted_policy::PolicyDef {
+                seam,
+                entry: view.value::<String>(&prim, "lunco:policy:entry").unwrap_or_default(),
+                source,
+                deterministic: view
+                    .value::<bool>(&prim, "lunco:policy:deterministic")
+                    .unwrap_or(true),
+            });
+        }
+    }
+    out
+}
+
+/// **Policy projection** — activation half of "policy is a USD prim". On any
+/// composed-stage change, read the `LuncoPolicy` prims and project them into the
+/// live hook registry via
+/// [`project_policies`](lunco_networking::scripted_policy::project_policies): a new
+/// prim registers its rhai hook (and, at [`MERGE_SEAM`](lunco_networking::scripted_policy::MERGE_SEAM),
+/// flips the journal merge strategy); a removed prim retracts it. Because a policy
+/// prim rides the USD doc-op journal, cross-peer propagation is (journal sync →
+/// each peer recomposes → each peer's projector re-registers) — no bespoke policy
+/// broadcast. Change-gated on total stage generation + stage count so it runs only
+/// when the composed stage actually moved.
+#[cfg(feature = "networking")]
+fn project_usd_policies(
+    canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
+    mut registry: ResMut<lunco_networking::scripted_policy::ScriptedPolicyRegistry>,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
+    mut last: Local<Option<(usize, u64)>>,
+) {
+    let signal = (canonical.len(), canonical.iter().map(|(_, cs)| cs.generation()).sum());
+    if *last == Some(signal) {
+        return;
+    }
+    *last = Some(signal);
+    let desired = extract_usd_policies(&canonical);
+    lunco_networking::scripted_policy::project_policies(desired, &mut registry, journal.as_deref());
+}
+
+#[cfg(all(test, feature = "networking", not(target_arch = "wasm32")))]
+mod policy_projection_tests {
+    use super::extract_usd_policies;
+    use lunco_usd_bevy::{CanonicalStage, CanonicalStages, StageRecipe};
+
+    /// A `LuncoPolicy` prim authored in the scene USD is read into a `PolicyDef` —
+    /// the "settable in USD" half of proper policies. The projector then hands this
+    /// to `project_policies`, so a scene-authored (or journal-synced) policy
+    /// activates its rhai hook with no bespoke broadcast.
+    #[test]
+    fn extracts_lunco_policy_prims_from_composed_stage() {
+        const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\n\
+            def Xform \"World\"\n{\n\
+            \x20   def LuncoPolicy \"takeover\"\n    {\n\
+            \x20       string lunco:policy:seam = \"control.authority.take\"\n\
+            \x20       string lunco:policy:entry = \"may_take_control\"\n\
+            \x20       string lunco:policy:source = \"fn may_take_control(ctx){true}\"\n\
+            \x20       bool lunco:policy:deterministic = false\n    }\n}\n";
+
+        let mut stages = CanonicalStages::default();
+        let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", SCENE))
+            .expect("build stage");
+        stages.insert(bevy::asset::AssetId::invalid(), cs);
+
+        let policies = extract_usd_policies(&stages);
+        assert_eq!(policies.len(), 1, "one LuncoPolicy prim → one PolicyDef");
+        let p = &policies[0];
+        assert_eq!(p.seam, "control.authority.take");
+        assert_eq!(p.entry, "may_take_control");
+        assert!(p.source.contains("may_take_control"), "source carried verbatim");
+        assert!(!p.deterministic, "authored deterministic=false is read");
+    }
+}
+
 /// The shared, headless-safe core: the persistent world shell, physics, cosim,
 /// USD scene load, mobility/hardware/controller/avatar, environment, the HTTP
 /// API, and networking. Added unconditionally by both the GUI and the server, so
@@ -613,6 +713,10 @@ impl Plugin for SandboxCorePlugin {
             // Same Layer B for Modelica models — the journal plane is domain-generic;
             // this is the parallel per-domain consume leg for `DomainKind::Modelica`.
             app.add_systems(Update, replay_scenario_journal_modelica);
+            // Policy projection: activate `LuncoPolicy` prims from the composed
+            // stage into the hook registry. Because policies are USD prims they
+            // sync via the journal above — no bespoke policy broadcast.
+            app.add_systems(Update, project_usd_policies);
             // Connect-menu bridge adapter + egui presence/tutorial overlays. Pulls
             // bevy_egui, so it's GUI-only and gated on `ui` (CQ-601) — the headless
             // server omits it. The host still answers runtime JoinServer/LeaveServer

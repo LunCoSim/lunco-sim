@@ -1,31 +1,27 @@
-//! **Scripted-policy plane** — distribute + activate rhai policies host→client.
+//! **Scripted-policy activation** — compile rhai policies into the hook registry.
 //!
 //! The hook substrate ([`lunco_hooks`]) lets internal decisions be authored in
-//! rhai: the convergent **merge** order ([`lunco_twin_journal::MergePolicy`]), the
-//! **authorization** gate ([`lunco_core::session::AUTHORIZE_HOOK`]), and per-vehicle
-//! **drive kernels** (a `lunco:driveKernel` hook id in [`lunco_core::kernels::DriveMix`];
-//! `apply_drive_mix` falls back to the hook when the name isn't a built-in kernel).
-//! But a scripted
-//! policy is only correct if **every peer runs the identical one** — most sharply
-//! for the merge policy, whose determinism contract is that all peers linearize
-//! history the same way or their scenes diverge.
+//! rhai: the convergent **merge** order ([`lunco_twin_journal::MergePolicy`]) at
+//! [`MERGE_SEAM`], the **authorization** gate ([`lunco_core::session::AUTHORIZE_HOOK`]),
+//! and per-vehicle **drive kernels** (a `lunco:driveKernel` hook id in
+//! [`lunco_core::kernels::DriveMix`]). A scripted policy is only correct if **every
+//! peer runs the identical one** — most sharply for the merge policy, whose
+//! determinism contract is that all peers linearize history the same way.
 //!
-//! This plane makes that true. Policies are host-authoritative declarative state
-//! ([`ScriptedPolicyRegistry`]): set on the host via the [`SetScriptedPolicy`]
-//! command (the activation surface — HTTP API / MCP / scripting), then **broadcast
-//! to every client on connect and on change** (the same shape as the ownership /
-//! profile / journal broadcasts). A client applies each policy — compiling the
-//! rhai source and registering the hook — so the whole session converges on one
-//! policy set, late joiners included.
+//! Distribution is **not** a bespoke plane. A policy is a `LuncoPolicy` **USD prim**
+//! (`lunco:policy:{seam,entry,source,deterministic}`); authoring one is an ordinary
+//! USD doc op, so it rides the journal — persisted, per-author, RBAC-gated, and
+//! convergent — and every peer recomposes the identical stage. This module is only
+//! the **activation** half: [`project_policies`] takes the desired set (read from the
+//! composed stage by the projector in the assembly crate) and (de)registers the
+//! rhai hooks to match. [`ScriptedPolicyRegistry`] is the derived "currently active"
+//! cache, not an authoritative broadcast source.
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use lunco_core::{NetworkRole, SyncChannel};
 use lunco_doc_bevy::JournalResource;
 use lunco_twin_journal::MergeStrategy;
-
-use crate::sync::{SyncEnvelope, SyncOutbox};
 
 /// The reserved policy **seam** (hook id) that drives the journal's convergent
 /// merge order: a policy authored under this seam flips the journal's
@@ -56,17 +52,13 @@ pub struct PolicyDef {
     pub deterministic: bool,
 }
 
-/// The active scripted policies on THIS peer. Host-authoritative: set via
-/// [`SetScriptedPolicy`], broadcast to clients on connect + on change, so every
-/// peer converges on the identical set.
+/// The **derived** set of currently-active scripted policies on this peer — the
+/// projection cache, NOT an authoritative broadcast source. Rebuilt from the
+/// composed `LuncoPolicy` prims by [`project_policies`]; a policy converges across
+/// peers because its prim rides the USD journal, so every peer projects the same
+/// set. Read it for a "what's active" report.
 #[derive(Resource, Default, Clone)]
 pub struct ScriptedPolicyRegistry {
-    pub policies: Vec<PolicyDef>,
-}
-
-/// Host → client: the full active policy set (small; sent on connect + on change).
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ScriptedPolicyMsg {
     pub policies: Vec<PolicyDef>,
 }
 
@@ -100,19 +92,6 @@ pub fn retract_policy(seam: &str, journal: Option<&JournalResource>) {
     }
 }
 
-/// Host entry point: upsert `def` into `registry` (replacing any prior policy at
-/// the same seam) and apply it. Seams are singletons — one active hook per id.
-pub fn set_policy(
-    registry: &mut ScriptedPolicyRegistry,
-    def: PolicyDef,
-    journal: Option<&JournalResource>,
-) -> Result<(), String> {
-    apply_policy(&def, journal)?;
-    registry.policies.retain(|p| p.seam != def.seam);
-    registry.policies.push(def);
-    Ok(())
-}
-
 /// **Reactive projection** of the full desired policy set (e.g. the composed
 /// `LuncoPolicy` prims of a stage) into the live hook registry: register every
 /// `desired` policy, **retract any previously-active seam no longer present**, and
@@ -143,81 +122,6 @@ pub fn project_policies(
     }
     registry.policies = desired;
 }
-
-/// Client: apply an inbound policy set — register+activate each, and mirror the set
-/// into the local registry (so a report / later reconnect is accurate). A single
-/// failing policy is logged and skipped, not fatal.
-pub fn apply_inbound_policies(
-    msg: &ScriptedPolicyMsg,
-    registry: &mut ScriptedPolicyRegistry,
-    journal: Option<&JournalResource>,
-) {
-    project_policies(msg.policies.clone(), registry, journal);
-}
-
-/// Host: when the policy registry changes, broadcast the full set to all peers
-/// (reliable `BulkData` lane). Clients converge on the identical policies; late
-/// joiners get the set on connect (`on_server_connected`). No-op off-host.
-pub fn broadcast_scripted_policies(
-    role: Res<NetworkRole>,
-    registry: Res<ScriptedPolicyRegistry>,
-    mut outbox: ResMut<SyncOutbox>,
-) {
-    if !role.is_host() || !registry.is_changed() {
-        return;
-    }
-    outbox.0.push((
-        SyncChannel::BulkData,
-        SyncEnvelope::ScriptedPolicy(ScriptedPolicyMsg { policies: registry.policies.clone() }),
-    ));
-}
-
-/// Activate a scripted policy (merge / authorization / drive-kernel) authored in
-/// rhai — the canonical activation surface (HTTP API / MCP / scripting).
-///
-/// `kind` ∈ `{"merge", "authorize", "drive_kernel"}`. On the host it compiles +
-/// registers the hook, activates it, and records it in [`ScriptedPolicyRegistry`],
-/// which then broadcasts to every peer (connected + late joiners) so all run the
-/// identical policy — the determinism contract for the merge policy. Distribute
-/// the SAME `source` you author here to peers via this command (the plane does it
-/// for you); do not hand-register divergent scripts per peer.
-#[lunco_core::Command(default)]
-pub struct SetScriptedPolicy {
-    /// The seam (hook id) to register under — an open id, e.g.
-    /// `"journal.merge.order"` ([`MERGE_SEAM`]), `"rbac.authorize"`, or a
-    /// `lunco:driveKernel` id.
-    pub seam: String,
-    /// The rhai entry function name (e.g. `"cmp"`).
-    pub entry: String,
-    /// The rhai source defining `entry` (+ any helpers / consts).
-    pub source: String,
-    /// Whether the hook is deterministic (fresh rhai scope per invoke). Convergent
-    /// seams (merge, drive) must be `true`; the host-only authorize gate may be
-    /// `false`.
-    pub deterministic: bool,
-}
-
-#[lunco_core::on_command(SetScriptedPolicy)]
-fn on_set_scripted_policy(
-    trigger: On<SetScriptedPolicy>,
-    mut registry: ResMut<ScriptedPolicyRegistry>,
-    journal: Option<Res<JournalResource>>,
-) {
-    let cmd = trigger.event();
-    let def = PolicyDef {
-        seam: cmd.seam.clone(),
-        entry: cmd.entry.clone(),
-        source: cmd.source.clone(),
-        deterministic: cmd.deterministic,
-    };
-    let seam = def.seam.clone();
-    match set_policy(&mut registry, def, journal.as_deref()) {
-        Ok(()) => info!("[policy] activated policy at seam '{seam}' (broadcasting to peers)"),
-        Err(e) => warn!("[policy] failed to activate policy at seam '{seam}': {e}"),
-    }
-}
-
-lunco_core::register_commands!(on_set_scripted_policy);
 
 #[cfg(test)]
 mod tests {
@@ -254,25 +158,6 @@ mod tests {
         lunco_hooks::unregister(lunco_core::session::AUTHORIZE_HOOK);
     }
 
-    #[test]
-    fn set_policy_upserts_by_seam() {
-        let mut reg = ScriptedPolicyRegistry::default();
-        set_policy(&mut reg, policy("m", "fn cmp(a,b){0}", true), None).unwrap();
-        set_policy(&mut reg, policy("m", "fn cmp(a,b){1}", true), None).unwrap();
-        // A seam is a singleton — the second replaces the first.
-        assert_eq!(reg.policies.iter().filter(|p| p.seam == "m").count(), 1);
-        assert_eq!(reg.policies[0].source, "fn cmp(a,b){1}");
-
-        // Distinct seams coexist.
-        set_policy(&mut reg, policy("left", "fn cmp(c){#{}}", true), None).unwrap();
-        set_policy(&mut reg, policy("right", "fn cmp(c){#{}}", true), None).unwrap();
-        assert_eq!(reg.policies.len(), 3);
-
-        lunco_hooks::unregister("m");
-        lunco_hooks::unregister("left");
-        lunco_hooks::unregister("right");
-    }
-
     /// The reactive projector activates every desired policy and **retracts** a
     /// seam that disappeared — the diff that makes activation track the composed
     /// USD stage (a deleted `LuncoPolicy` prim unregisters its hook).
@@ -295,18 +180,5 @@ mod tests {
         assert_eq!(reg.policies.len(), 1, "registry is the derived active-set cache");
 
         lunco_hooks::unregister("a.seam");
-    }
-
-    #[test]
-    fn policy_envelope_roundtrips_through_the_wire_codec() {
-        // The plane rides the same positional codec as every other envelope, so
-        // PolicyDef must be codec-clean (all Strings + a bool).
-        let policies = vec![policy("k", "fn cmp(c){#{}}", true)];
-        let env = SyncEnvelope::ScriptedPolicy(ScriptedPolicyMsg { policies: policies.clone() });
-        let bytes = crate::shared::serialize_env(&env).expect("serialize");
-        let Some(SyncEnvelope::ScriptedPolicy(back)) = crate::shared::deserialize_env(&bytes) else {
-            panic!("did not round-trip to a ScriptedPolicy envelope");
-        };
-        assert_eq!(back.policies, policies);
     }
 }

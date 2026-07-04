@@ -126,8 +126,8 @@ impl Plugin for LunCoScriptingPlugin {
             // Built-in `policy→rhai` hooks: register each `assets/scripting/policy/
             // *.rhai` under its hook id so the possession / authorization paths
             // consult AUTHORED rhai rules, not hardcoded Rust (spec 034 control-
-            // authority takeover). Hot-replaced by any later `SetScriptedPolicy` of
-            // the same id.
+            // authority takeover). These are the weakest-scope defaults; a
+            // `LuncoPolicy` USD prim projected at the same seam hot-replaces them.
             register_builtin_policies();
             // Shared per-document diagnostics store (also init'd by Modelica;
             // init_resource is idempotent). Scenario compile/runtime errors land
