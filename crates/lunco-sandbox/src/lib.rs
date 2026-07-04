@@ -977,6 +977,71 @@ fn project_usd_policies(
     lunco_networking::scripted_policy::project_policies(desired, &mut registry, journal.as_deref());
 }
 
+/// **Environment-settings projection** — the read half of persisting
+/// `SetEnvironmentLight` render knobs (exposure / bloom / ambient / earthshine)
+/// onto the `LuncoEnvironment` settings prim (see
+/// [`lunco_environment::LUNCO_ENVIRONMENT_PRIM_TYPE`]). On any composed-stage
+/// change, read that prim's `lunco:env:*` attrs and apply them **directly** to
+/// the live render state — never by re-triggering `SetEnvironmentLight`, which
+/// would re-persist and loop. So a persisted render tweak round-trips on reload
+/// and syncs to peers (the prim rides the USD journal → each peer recomposes →
+/// each peer's projector applies) with no bespoke broadcast. Change-gated on
+/// total stage generation + count, like [`project_usd_policies`]. UI-gated: the
+/// knobs are render/camera state (`Bloom` lives in `bevy_post_process`, under
+/// `ui`); the headless server has no cameras to apply to.
+#[cfg(feature = "ui")]
+fn project_env_settings(
+    canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
+    mut q_exposure: Query<&mut bevy::camera::Exposure>,
+    mut q_bloom: Query<&mut bevy::post_process::bloom::Bloom>,
+    ambient: Option<ResMut<bevy::light::GlobalAmbientLight>>,
+    mut q_earthshine: Query<&mut DirectionalLight, With<lunco_environment::Earthshine>>,
+    mut last: Local<Option<(usize, u64)>>,
+) {
+    let signal = (canonical.len(), canonical.iter().map(|(_, cs)| cs.generation()).sum());
+    if *last == Some(signal) {
+        return;
+    }
+    *last = Some(signal);
+
+    let mut ambient = ambient;
+    for (_, cs) in canonical.iter() {
+        let view = cs.view();
+        for prim in view.prim_paths() {
+            if view.prim_type_name(&prim).as_deref()
+                != Some(lunco_environment::LUNCO_ENVIRONMENT_PRIM_TYPE)
+            {
+                continue;
+            }
+            if let Some(ev) = view.value::<f32>(&prim, "lunco:env:exposureEv100") {
+                for mut e in &mut q_exposure {
+                    e.ev100 = ev;
+                }
+            }
+            if let Some(bi) = view.value::<f32>(&prim, "lunco:env:bloomIntensity") {
+                for mut b in &mut q_bloom {
+                    b.intensity = bi;
+                }
+            }
+            if let Some(br) = view.value::<f32>(&prim, "lunco:env:ambientBrightness") {
+                if let Some(a) = ambient.as_mut() {
+                    a.brightness = br;
+                }
+            }
+            if let Some(lux) = view.value::<f32>(&prim, "lunco:env:earthshineIntensity") {
+                for mut l in &mut q_earthshine {
+                    l.illuminance = lux;
+                }
+            }
+            if let Some([r, g, b]) = view.value_vec3(&prim, "lunco:env:earthshineColor") {
+                for mut l in &mut q_earthshine {
+                    l.color = Color::linear_rgb(r as f32, g as f32, b as f32);
+                }
+            }
+        }
+    }
+}
+
 /// Convenience command: author (or hot-replace) a rhai policy as a `LuncoPolicy`
 /// USD prim under `/World/Policies/<name>` in ONE call, instead of hand-issuing the
 /// underlying `ApplyUsdOp`s. Because it authors USD doc ops, the policy **journals →
@@ -1461,6 +1526,13 @@ impl Plugin for SandboxCorePlugin {
         // collider).
         #[cfg(feature = "ui")]
         app.add_systems(Update, bind_terrain_layers);
+
+        // Environment-settings projection: apply a persisted `LuncoEnvironment`
+        // prim's render knobs (exposure/bloom/ambient/earthshine) to the live
+        // render state on stage change. UI-gated (render/camera state); core
+        // persistence (authoring the prim) happens in `lunco-sandbox-edit`.
+        #[cfg(feature = "ui")]
+        app.add_systems(Update, project_env_settings);
 
         // LogDiagnosticsPlugin is loud (a multi-line summary every second) — gate
         // it on `--log-diag`.

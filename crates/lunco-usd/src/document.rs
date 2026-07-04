@@ -250,6 +250,20 @@ pub enum UsdOp {
         /// `[x, y, z]` in stage units.
         value: [f64; 3],
     },
+    /// Set the `xformOp:rotateXYZ` attribute (Euler XYZ, **degrees**) on the
+    /// prim at `path` — the rotation counterpart of [`UsdOp::SetTranslate`].
+    /// Authors `xformOpOrder` too if the prim has none yet (like `SetTranslate`,
+    /// it only synthesizes a fresh order — it never rewrites an existing xform
+    /// stack). This is what lets a `SetEnvironmentLight` sun-direction tweak
+    /// persist + journal (the sun's orientation is `xformOp:rotateXYZ`).
+    SetRotate {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim whose rotation to set.
+        path: String,
+        /// `[x, y, z]` Euler angles in **degrees** (USD `xformOp:rotateXYZ`).
+        value: [f64; 3],
+    },
     /// Set an arbitrary attribute on the prim at `path`. Creates the
     /// attribute if absent, replaces its value otherwise.
     SetAttribute {
@@ -741,6 +755,7 @@ impl Document for UsdDocument {
             | UsdOp::AddPrim { edit_target, .. }
             | UsdOp::RemovePrim { edit_target, .. }
             | UsdOp::SetTranslate { edit_target, .. }
+            | UsdOp::SetRotate { edit_target, .. }
             | UsdOp::SetAttribute { edit_target, .. }
             | UsdOp::SetTimeSample { edit_target, .. }
             | UsdOp::RemoveTimeSample { edit_target, .. }
@@ -893,6 +908,63 @@ impl Document for UsdDocument {
                     UsdChange::InfoOnly {
                         path,
                         attr: "xformOp:translate".into(),
+                    },
+                );
+                Ok(inverse)
+            }
+
+            UsdOp::SetRotate { path, value, .. } => {
+                // Direct mirror of `SetTranslate` for `xformOp:rotateXYZ`
+                // (Euler XYZ degrees). Same target-layer pre-state read, same
+                // "synthesize op order only when the prim has none yet" rule.
+                let prim_sdf = self.require_prim_anywhere(&path)?;
+                let layer = self.layer(target);
+                let rotate_existed = prim_sdf
+                    .append_property("xformOp:rotateXYZ")
+                    .ok()
+                    .and_then(|p| layer.spec(&p).map(|_| ()))
+                    .is_some();
+                let order_existed = prim_sdf
+                    .append_property("xformOpOrder")
+                    .ok()
+                    .and_then(|p| layer.spec(&p).map(|_| ()))
+                    .is_some();
+                let old_rotate = layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:rotateXYZ");
+
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                stage
+                    .create_attribute(format!("{path}.xformOp:rotateXYZ"), "double3")
+                    .map_err(author_err)?
+                    .set(value)
+                    .map_err(author_err)?;
+                if !order_existed {
+                    let order = parse_attribute_value("token[]", "[\"xformOp:rotateXYZ\"]")
+                        .map_err(author_err)?;
+                    stage
+                        .create_attribute(format!("{path}.xformOpOrder"), "token[]")
+                        .map_err(author_err)?
+                        .set(order)
+                        .map_err(author_err)?;
+                }
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+
+                let inverse = if rotate_existed && order_existed {
+                    old_rotate
+                        .map(|old| UsdOp::SetRotate {
+                            edit_target: id.clone(),
+                            path: path.clone(),
+                            value: old,
+                        })
+                        .unwrap_or_else(|| self.coarse_inverse(target, &id))
+                } else {
+                    self.coarse_inverse(target, &id)
+                };
+                self.commit(
+                    target,
+                    new_data,
+                    UsdChange::InfoOnly {
+                        path,
+                        attr: "xformOp:rotateXYZ".into(),
                     },
                 );
                 Ok(inverse)

@@ -370,6 +370,14 @@ fn apply_incremental_op_to_stage(
                 }
             }
         }
+        UsdOp::SetRotate { path, value, .. } => {
+            let Ok(sp) = openusd::sdf::Path::new(path) else { return };
+            if let Some(cs) = world.get_non_send_resource::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
+                if let Err(e) = cs.author_rotate(&sp, *value) {
+                    warn!("[twin] author rotate {path}: {e}");
+                }
+            }
+        }
         UsdOp::SetAttribute { path, name, type_name, value, .. } => {
             let Ok(sp) = openusd::sdf::Path::new(path) else { return };
             let v = match lunco_usd_bevy::author::parse_attribute_value(type_name, value) {

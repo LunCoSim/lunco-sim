@@ -188,6 +188,38 @@ impl CanonicalStage {
         Ok(())
     }
 
+    /// Author `xformOp:rotateXYZ = value` (Euler XYZ, **degrees**) onto the
+    /// composed prim at `path` — the rotation counterpart of
+    /// [`author_translate`](Self::author_translate). Fires the change sink so the
+    /// projection bridge reconciles the new orientation in place, and synthesizes
+    /// `xformOpOrder` only when the prim composes none (never clobbers a stack).
+    pub fn author_rotate(&self, path: &SdfPath, value: [f64; 3]) -> anyhow::Result<()> {
+        use anyhow::anyhow;
+        self.stage
+            .create_attribute(format!("{}.xformOp:rotateXYZ", path.as_str()), "double3")
+            .map_err(|e| anyhow!("author rotate at {path}: {e}"))?
+            .set(value)
+            .map_err(|e| anyhow!("set rotate at {path}: {e}"))?;
+        let has_order = self
+            .stage
+            .prim(path.clone())
+            .attribute("xformOpOrder")
+            .get::<openusd::sdf::Value>()
+            .ok()
+            .flatten()
+            .is_some();
+        if !has_order {
+            let order = crate::author::parse_attribute_value("token[]", "[\"xformOp:rotateXYZ\"]")
+                .map_err(|e| anyhow!("xformOpOrder value: {e}"))?;
+            self.stage
+                .create_attribute(format!("{}.xformOpOrder", path.as_str()), "token[]")
+                .map_err(|e| anyhow!("author xformOpOrder at {path}: {e}"))?
+                .set(order)
+                .map_err(|e| anyhow!("set xformOpOrder at {path}: {e}"))?;
+        }
+        Ok(())
+    }
+
     /// Define a prim of `type_name` at `path` (root edit target) — fires the sink
     /// so the projection bridge spawns it. For a referenced spawn, follow with
     /// [`author_reference`](Self::author_reference).
