@@ -18,9 +18,9 @@ LunCoSim decouples human interaction from physical execution using five distinct
 | Layer | Name | Responsibility | Logical Flow |
 | :--- | :--- | :--- | :--- |
 | **5** | **UserIntent** | **Semantic Mapping**: Raw inputs (WASD, Mouse) -> Abstract Goals (`MoveForward`, `LookAtTarget`). | Keyboard -> `Leafwing` -> `UserIntent` |
-| **4** | **Controller** | **Translation**: Translates `UserIntent` into specific `CommandMessages` or `Actions` for a target entity. | `UserIntent` -> `Avatar` -> `CommandMessage` |
-| **3** | **FSW / Subsystem**| **The Brain**: Decentralized observers that execute commands and emit `CommandResponse` ACKs. | `CommandMessage` -> `Subsystem Observer` -> `ACK` |
-| **2** | **Logic / Device** | **Hardware Logic**: The individual components (e.g., `CameraDevice`, `ViewPoint`, `Motor`) responding to state changes. | `Subsystem` -> `Component Field` |
+| **4** | **Controller** | **Translation**: Translates `UserIntent` into specific typed commands (e.g., `SetPorts`) or `Actions` for a target entity. | `UserIntent` -> `Avatar` -> `Typed Command` |
+| **3** | **FSW / Subsystem**| **The Brain**: Decentralized observers that execute commands and emit ACK/NACK responses. | `Typed Command` -> `Subsystem Observer` -> `ACK` |
+| **2** | **Logic / Device** | **Hardware Logic**: The individual components responding to state changes. | `Subsystem` -> `Component Field` |
 | **1** | **Plant / Physics**| **Mechanical Truth**: The `f64` spatial state and physical physics interaction. | `Component Field` -> `DVec3` / `Physics Impulse` |
 
 ---
@@ -56,18 +56,17 @@ The rendering bridge.
 
 ## 3. The Lifecycle: Command -> Action
 
-### **CommandMessage** (The Pulse)
-A discrete instruction packet.
-- **Dumb Transport**: The envelope is lean (`id`, `target`, `source`, `name`, `args`). It does NOT handle spatial context; the receiving FSW handles internal coordinate mapping.
-- **Performance**: Arguments use **`SmallVec<[f64; 4]>`** to stay on the stack for high-frequency ticks (WASD).
-- **Feedback**: Every command triggers a **`CommandResponse`** (ACK/NACK) pulse for Mission Control confirmation.
+### **Typed Command** (The Pulse)
+A discrete instruction event.
+- **Self-Describing**: Commands are typed structs (derived with `#[Command]`) and carry their own parameters and documentation, discovered via reflection.
+- **Feedback**: Every command execution triggers an acknowledgment result (`Result<Ack, String>`) for verification.
 
 ### **ActiveAction** (The Process)
 A long-running, stateful task with a lifecycle:
-1. **Started**: A `CommandMessage` triggers an `ActiveAction`.
+1. **Started**: A typed command triggers an `ActiveAction`.
 2. **Running**: A dedicated system updates `progress` and modifies the target component.
 3. **Preemption**: Manual USER input (via `UserIntent`) immediately cancels active actions to ensure tactile control responsiveness.
-4. **Result**: Upon completion, a final `CommandResponse` is emitted.
+4. **Result**: Upon completion, a final result status (ACK/NACK) is emitted.
 
 ---
 

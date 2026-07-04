@@ -1,6 +1,6 @@
 //! UI context — unified params passed to panel render functions.
 //!
-//! Provides ergonomic access to resources and CommandMessage triggering.
+//! Provides ergonomic access to resources and typed command triggering.
 //! For panels with many query fields, prefer defining a custom
 //! `#[derive(SystemParam)]` struct + `WidgetSystem` impl directly.
 

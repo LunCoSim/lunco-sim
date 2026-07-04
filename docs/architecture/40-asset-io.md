@@ -124,8 +124,8 @@ no manual hunt.
 | `lunco-usd-bevy/UsdLoader` | ✅ Bevy AssetLoader |
 | `lunco-usd-bevy/compose.rs` compose (`flatten_stage`, injected fetcher) | ✅ injected fetcher, wasm path pre-fetches via `LoadContext::read_asset_bytes` |
 | `lunco-usd-sim/cosim.rs` modelica/python source reads | ✅ migrated to AssetServer (see `ModelicaSource` / `PythonSource`) |
-| `lunco-usd/src/ui/browser_dispatch.rs:114` | ⏳ TODO |
-| `lunco-usd/src/commands.rs:128` | ⏳ TODO |
+| `lunco-usd/src/ui/browser_dispatch.rs` twin browser open | ✅ routed to spawn_usd_load domain command |
+| `lunco-usd/src/commands.rs` usd document load | ✅ reads through the storage abstraction |
 | `lunco-modelica/msl_remote.rs` bundled MSL fetch | ⚠️ uses bespoke `web_sys::fetch`; folding into `EmbeddedAssetSource` / `HttpAssetSource` is a follow-up |
 | `lunco-modelica::models::bundled_models()` `include_str!` | ⚠️ candidate for `EmbeddedAssetSource` registration so it looks like every other asset path |
 

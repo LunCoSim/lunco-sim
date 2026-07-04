@@ -19,7 +19,7 @@ Other domains own other concerns: **Modelica** owns behavior (equations, dynamic
 All complex physical and system dynamics (power, thermal, life support) are modeled using Modelica. Bevy acts as the "glue" that executes these models, while Modelica ensures the mathematical integrity of the simulation.
 
 ### V. Multi-Engine Physics Integration
-We leverage multiple physics engines (e.g., Rapier for local interaction, custom orbital mechanics for spaceflight) and orchestrate them through Bevy. The architecture must allow seamless handoffs between local and global physics contexts.
+We leverage multiple physics engines (e.g., Avian3D for local interaction, custom orbital mechanics for spaceflight) and orchestrate them through Bevy. The architecture must allow seamless handoffs between local and global physics contexts.
 
 ### VI. Human-Centric UI/UX
 Despite the technical depth, the user experience is paramount. Our UI must be intuitive, high-performance, and designed for clarity in managing vast amounts of telemetry and system data.

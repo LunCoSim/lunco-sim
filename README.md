@@ -64,7 +64,7 @@ cargo run --bin lunica
 
 - **[Documentation Hub](docs/README.md)** — Usage guides and architectural deep-dives.
 - **[Scripting Guide](docs/scripting-guide.md)** — Write hot-reloadable rhai scenarios & mission timelines.
-- **[Crates Index](docs/crates-index.md)** — A map of our 30+ specialized crates.
+- **[Crates Index](docs/crates-index.md)** — A map of our 50+ specialized crates.
 - **[Principles](docs/principles.md)** — Our non-negotiable mandates: TDD-First, Headless-First, and Tunability.
 
 ---
