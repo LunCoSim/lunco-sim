@@ -911,13 +911,22 @@ pub struct RegenerateTerrainLayers;
 
 /// Live terrain tuning from the Inspector's "Craters & Rocks" panel: when the
 /// shared [`ObstacleFieldSpec`] is edited (the panel fires
-/// [`UpdateObstacleFieldSpec`]), rebuild every DEM terrain's crater/rock layers
-/// from the new spec. Mutating the stack trips `Changed<TerrainLayerStack>`, so
-/// [`start_dem_restamp`] re-bakes OFF-THREAD off the retained base grid and refreshes
-/// the tiles progressively — no GeoTIFF re-read, no scene reload, no frame freeze.
+/// [`UpdateObstacleFieldSpec`]), rebuild every **document-free** DEM terrain's
+/// crater/rock layers from the new spec. Mutating the stack trips
+/// `Changed<TerrainLayerStack>`, so [`start_dem_restamp`] re-bakes OFF-THREAD off the
+/// retained base grid and refreshes the tiles progressively — no GeoTIFF re-read.
+///
+/// **Doc-backed terrains are excluded** (`Without<DocBackedTerrain>`): their crater/
+/// rock layers are USD-authored (`lunco:layer` prims) and owned by the projection, so
+/// mutating the stack directly would (a) fight the next USD re-projection and (b) run
+/// a full re-stamp of a possibly huge terrain (e.g. the ±4 km moonbase — 10 M verts)
+/// on every slider tick. Tuning a doc-backed terrain's craters must author to its USD
+/// crater prim instead (SetAttribute → project → bounded re-stamp), the same
+/// authoring tier the edit commands use — TODO, and it needs bounded re-bake to be
+/// cheap on large terrains.
 fn on_obstacle_spec_rebuild_layers(
     trigger: On<lunco_obstacle_field::plugin::UpdateObstacleFieldSpec>,
-    mut terrains: Query<&mut crate::terrain_layers::TerrainLayerStack>,
+    mut terrains: Query<&mut crate::terrain_layers::TerrainLayerStack, Without<DocBackedTerrain>>,
 ) {
     let spec = trigger.event().spec.clone();
     for mut stack in &mut terrains {

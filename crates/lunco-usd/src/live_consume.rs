@@ -43,6 +43,14 @@ pub(crate) struct ChangeBatch {
     /// whole-stage `Resync { path: "/" }`, or a change-ring overflow (we can't
     /// prove [`resync_paths`](Self::resync_paths) is the complete delta set).
     pub full_reload: bool,
+    /// Prim paths that got a non-translate `InfoOnly` attribute edit (a plain
+    /// `SetAttribute`). These are the paths that set [`needs_structural`] via the
+    /// catch-all arm — exposed so a caller can tell whether a generation's
+    /// attribute edits are confined to a subtree that refreshes itself in place
+    /// (e.g. a `LiveRebuildExempt` DEM terrain, re-baked from the registry doc)
+    /// and can therefore skip the whole-scene reload. Empty when the structural
+    /// need comes from a `Resync`/`FullReload`/overflow instead.
+    pub info_paths: Vec<String>,
 }
 
 /// Classify `doc`'s changes in `(since, cur_gen]`. Conservative: if the change
@@ -57,6 +65,7 @@ pub(crate) fn classify_changes_since(
     let host = registry.host(doc)?;
     let mut translate_paths = Vec::new();
     let mut resync_paths = Vec::new();
+    let mut info_paths = Vec::new();
     let mut needs_structural = false;
     let mut full_reload = false;
     let mut count = 0u64;
@@ -79,8 +88,13 @@ pub(crate) fn classify_changes_since(
                 needs_structural = true;
                 full_reload = true;
             }
-            // Any other InfoOnly attribute (non-translate) — structural for now.
-            UsdChange::InfoOnly { .. } => needs_structural = true,
+            // Any other InfoOnly attribute (non-translate) — structural for now,
+            // but record the path so a caller can recognize edits confined to a
+            // self-refreshing subtree and skip the reload.
+            UsdChange::InfoOnly { path, .. } => {
+                needs_structural = true;
+                info_paths.push(path.clone());
+            }
         }
     }
     // Generations are consecutive (one per commit), so we expect exactly
@@ -90,7 +104,7 @@ pub(crate) fn classify_changes_since(
         needs_structural = true;
         full_reload = true;
     }
-    Some(ChangeBatch { translate_paths, resync_paths, needs_structural, full_reload })
+    Some(ChangeBatch { translate_paths, resync_paths, needs_structural, full_reload, info_paths })
 }
 
 /// Apply the composed `xformOp:translate` for each `path` to its live entity

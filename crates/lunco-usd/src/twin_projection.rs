@@ -39,6 +39,17 @@ use lunco_usd_bevy::{UsdPrimPath, UsdSourceText, UsdStageAsset, UsdVisualSynced}
 
 use crate::registry::UsdDocumentRegistry;
 
+/// Marks a live prim entity that refreshes its own content **in place**, so the
+/// twin projection must NOT structurally despawn/reload it on an attribute-only
+/// document change. The DEM terrain sets this: its heavy base grid is retained
+/// and re-stamped from the registry document on edits (the sandbox's
+/// `refresh_docbacked_terrain_from_doc`), so a whole-scene reload would force a
+/// full GeoTIFF re-read per edit. Consumed by [`sync_twin_overlays`], which
+/// suppresses the reload when a generation's only structural trigger is
+/// attribute edits confined to such a subtree.
+#[derive(Component)]
+pub struct LiveRebuildExempt;
+
 /// A default-twin-scene document waiting for its base source text to finish
 /// loading through the twin source.
 struct PendingTwinDoc {
@@ -101,6 +112,19 @@ struct TwinSceneRef {
 #[derive(Resource, Default)]
 pub struct DocBackedTwinScenes {
     map: HashMap<DocumentId, TwinSceneRef>,
+}
+
+impl DocBackedTwinScenes {
+    /// The registry document backing the twin scene at `twin://<name>/<rel>`, if
+    /// any. Lets a twin-projected consumer (e.g. a DEM terrain, which carries no
+    /// `LiveDocScene`) recover its authoring document from its `twin://` stage
+    /// asset path.
+    pub fn doc_for(&self, name: &str, rel: &str) -> Option<DocumentId> {
+        self.map
+            .iter()
+            .find(|(_, s)| s.name == name && s.rel == rel)
+            .map(|(doc, _)| *doc)
+    }
 }
 
 /// A deferred structural reconcile for a twin scene, queued by
@@ -285,7 +309,33 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         // On the very first mount (`synced == None`) the reload *is* the initial
         // build via `sync_usd_visuals`, so there's no baseline to diff — just
         // reload, no reconcile queued.
-        let needs_structural = batch.as_ref().map(|b| b.needs_structural).unwrap_or(true);
+        let mut needs_structural = batch.as_ref().map(|b| b.needs_structural).unwrap_or(true);
+        // Suppress the reload/reconcile when a generation's structural changes are
+        // ALL confined to a self-refreshing subtree (`LiveRebuildExempt` — a DEM
+        // terrain re-baked from the registry doc by
+        // `refresh_docbacked_terrain_from_doc`). Reloading/reconciling would
+        // despawn + re-instantiate that subtree, i.e. a full GeoTIFF re-read per
+        // edit; and a terrain's USD children are data layer/edit prims that are
+        // never instantiated as geometry anyway. Covers both attribute tuning
+        // (`InfoOnly` — craters/rocks) and edit-prim authoring (`Resync` — brush /
+        // flatten). A `FullReload`/overflow, or any change OUTSIDE an exempt
+        // subtree, keeps the normal reload. The overlay was already refreshed above,
+        // so persistence/save/next-load stay correct.
+        if let Some(b) = &batch {
+            let has_changes = !b.info_paths.is_empty() || !b.resync_paths.is_empty();
+            if needs_structural && !b.full_reload && has_changes {
+                let exempt = exempt_subtree_paths(world, handle.id());
+                if !exempt.is_empty()
+                    && b
+                        .info_paths
+                        .iter()
+                        .chain(b.resync_paths.iter())
+                        .all(|p| path_under_any(p, &exempt))
+                {
+                    needs_structural = false;
+                }
+            }
+        }
         if needs_structural {
             if synced.is_some() {
                 let full = batch.as_ref().map(|b| b.full_reload).unwrap_or(true);
@@ -301,6 +351,25 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             s.synced_generation = Some(cur_gen);
         }
     }
+}
+
+/// Prim paths of the [`LiveRebuildExempt`] entities projecting `stage` — the
+/// subtrees that refresh themselves in place and must not be reloaded/rebuilt.
+fn exempt_subtree_paths(world: &mut World, stage: AssetId<UsdStageAsset>) -> Vec<String> {
+    let mut q = world.query_filtered::<&UsdPrimPath, With<LiveRebuildExempt>>();
+    q.iter(world)
+        .filter(|p| p.stage_handle.id() == stage)
+        .map(|p| p.path.clone())
+        .collect()
+}
+
+/// True if `path` equals, or is a strict descendant of, any prefix in
+/// `prefixes` (so `/World/dem` covers `/World/dem/craters` but not
+/// `/World/dem_other`).
+fn path_under_any(path: &str, prefixes: &[String]) -> bool {
+    prefixes.iter().any(|pre| {
+        path == pre || path.strip_prefix(pre.as_str()).is_some_and(|rest| rest.starts_with('/'))
+    })
 }
 
 /// Buffer the ids of twin scene assets that finished (re)loading this frame, so
