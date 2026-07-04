@@ -250,10 +250,11 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         }
 
         // Always refresh the overlay so persistence / next load reflect the doc,
-        // regardless of whether we reload the live asset.
+        // regardless of whether we reload the live asset. Keep `composed_source`
+        // (clone into the overlay) — a full-reload rebuild below recomposes from it.
         world
             .resource::<TwinRoots>()
-            .set_overlay(&name, &rel, Arc::new(composed_source.into_bytes()));
+            .set_overlay(&name, &rel, Arc::new(composed_source.clone().into_bytes()));
 
         // Classify the changes since the last sync. The scene's live stage is
         // keyed by the cached `twin://name/rel` UsdStageAsset id (AssetServer
@@ -330,7 +331,16 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         if needs_structural {
             let full = batch.as_ref().map(|b| b.full_reload).unwrap_or(true);
             let resync = batch.as_ref().map(|b| b.resync_paths.clone()).unwrap_or_default();
-            if full || synced.is_none() {
+            if full && synced.is_some() {
+                // Post-mount full reload (Save-As / MovePrim / whole-source undo —
+                // e.g. undoing a `SetAttribute`): no trustworthy per-prim delta, and
+                // surviving prims' attribute *values* may have changed too. Rebuild
+                // the live stage from the composed source + the already-loaded layer
+                // closure so structure AND attributes update, then re-instantiate.
+                rebuild_scene_from_composed(world, scene_id, &composed_source);
+            } else if synced.is_none() {
+                // First mount: the async load already built the stage from the
+                // overlay; reconcile any restored runtime spawns against it.
                 reconcile_full_to_composed(world, scene_id, &composed);
             } else {
                 for path in &resync {
@@ -518,6 +528,43 @@ fn refresh_scene_visuals(world: &mut World, scene_id: AssetId<UsdStageAsset>) {
                 em.insert(pp);
             }
         }
+    }
+}
+
+/// Rebuild the scene's live `CanonicalStage` from the composed document source
+/// (`base ⊕ runtime`) plus the resolver's already-loaded layer closure, then
+/// re-instantiate the scene — the coarse `full_reload` path (Save-As / MovePrim /
+/// whole-source undo). Unlike [`reconcile_full_to_composed`] (a structural-only
+/// authored-spine diff), a rebuild picks up attribute-value changes on surviving
+/// prims too, so undoing a `SetAttribute` (which inverts to a `ReplaceSource`)
+/// actually reverts the material/param in the live world. References that were
+/// already loaded recompose from the byte snapshot with no re-fetch; a brand-new
+/// reference introduced by the edit (rare) would fail to resolve — logged by
+/// `CanonicalStages::rebuild`.
+fn rebuild_scene_from_composed(
+    world: &mut World,
+    scene_id: AssetId<UsdStageAsset>,
+    composed_source: &str,
+) {
+    use lunco_usd_bevy::{CanonicalStages, StageRecipe};
+    // Recipe = the edited composed source as the root layer + every referenced
+    // `.usda` the current stage already loaded (keyed by the same canonical ids).
+    let (scene_layer, mut bytes) = {
+        let Some(cs) = world.get_non_send_resource::<CanonicalStages>().and_then(|s| s.get(scene_id))
+        else {
+            return;
+        };
+        (cs.scene_layer.clone(), cs.layer_bytes_snapshot())
+    };
+    bytes.insert(scene_layer.clone(), composed_source.as_bytes().to_vec());
+    let recipe = StageRecipe { root_id: scene_layer, bytes };
+    let rebuilt = world
+        .get_non_send_resource_mut::<CanonicalStages>()
+        .map(|mut stages| stages.rebuild(scene_id, &recipe))
+        .unwrap_or(false);
+    if rebuilt {
+        // Fresh stage (new, empty sink) — re-instantiate every scene root off it.
+        refresh_scene_visuals(world, scene_id);
     }
 }
 

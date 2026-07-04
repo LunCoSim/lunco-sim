@@ -1,19 +1,19 @@
 //! Focused validation of the openusd 0.2 → 0.5 migration.
 //!
-//! Composes the REAL sandbox scene + rover assets through the new
-//! `compose_file` path and asserts the migration-critical properties at
-//! their correct composed paths:
+//! Composes the REAL sandbox scene + rover assets through the live
+//! `compose_file_to_stage` path (read via a `StageView` over a `CanonicalStage`)
+//! and asserts the migration-critical properties at their correct composed paths:
 //!   * reference composition (referenced rover geometry appears),
 //!   * `over` opinion composition (per-instance colour override),
-//!   * relationship targets survive the flatten,
+//!   * relationship targets survive composition,
 //!   * `apiSchemas` compose across the reference,
 //!   * binary-asset (glTF) `lunco:resolvedAsset` synthesis.
 //!
 //! Pure-reader (no Bevy `App`), so it is immune to the `init_asset::<Scene>()`
 //! harness gap that the older entity-spawning tests hit.
 
-use lunco_usd_bevy::usd_data::UsdDataExt;
-use openusd::sdf::{AbstractData, Data as SdfData, Path as SdfPath, Value};
+use lunco_usd_bevy::{CanonicalStage, StageView, UsdRead};
+use openusd::sdf::Path as SdfPath;
 use std::path::PathBuf;
 
 fn assets_root() -> PathBuf {
@@ -25,39 +25,35 @@ fn assets_root() -> PathBuf {
         .join("assets")
 }
 
-fn compose(rel: &str) -> SdfData {
+/// Compose an asset into a live [`CanonicalStage`] — carries the precomputed
+/// binary-arc sites so `resolved_asset` synthesizes glTF URIs off the live stage.
+fn compose(rel: &str) -> CanonicalStage {
     let path = assets_root().join(rel);
-    lunco_usd_bevy::compose_file(&path).unwrap_or_else(|e| panic!("compose failed for {path:?}: {e}"))
+    let stage = lunco_usd_bevy::compose_file_to_stage(&path)
+        .unwrap_or_else(|e| panic!("compose failed for {path:?}: {e}"));
+    CanonicalStage::from_stage(stage, path.to_string_lossy().to_string())
 }
 
-fn field(reader: &SdfData, path_str: &str, field: &str) -> Option<Value> {
-    let p = SdfPath::new(path_str).ok()?;
-    reader.spec(&p)?.get(field).cloned()
-}
-
-fn first_rel_target(reader: &SdfData, prop_path: &str) -> Option<String> {
-    match field(reader, prop_path, "targetPaths")? {
-        Value::PathListOp(op) => op
-            .explicit_items
-            .first()
-            .or_else(|| op.prepended_items.first())
-            .or_else(|| op.added_items.first())
-            .map(|p| p.as_str().to_string()),
-        _ => None,
-    }
+/// First composed, path-translated target of the relationship at `prop_path`
+/// (e.g. `/…/Wheel_FL_Hinge.physics:body1`), as a path string.
+fn first_rel_target(view: &StageView<'_>, prop_path: &str) -> Option<String> {
+    let (prim_s, name) = prop_path.rsplit_once('.')?;
+    let prim = SdfPath::new(prim_s).ok()?;
+    view.rel_target(&prim, name).map(|p| p.as_str().to_string())
 }
 
 /// Reference composition: a referenced rover surfaces its Chassis + wheels.
 #[test]
 fn reference_geometry_composes() {
-    let r = compose("scenes/sandbox/sandbox_scene.usda");
+    let cs = compose("scenes/sandbox/sandbox_scene.usda");
+    let view = cs.view();
     for p in [
         "/SandboxScene/Skid_Raycast_1",
         "/SandboxScene/Skid_Raycast_1/Chassis",
         "/SandboxScene/Skid_Raycast_1/Wheel_FL",
         "/SandboxScene/Skid_Raycast_1/Wheel_RR",
     ] {
-        assert!(r.has_spec(&SdfPath::new(p).unwrap()), "missing composed prim {p}");
+        assert!(view.has_prim(&SdfPath::new(p).unwrap()), "missing composed prim {p}");
     }
 }
 
@@ -65,9 +61,10 @@ fn reference_geometry_composes() {
 /// must win over the referenced base colour. Authored on the CHILD Chassis.
 #[test]
 fn over_color_override_composes() {
-    let r = compose("scenes/sandbox/sandbox_scene.usda");
-    let c = r
-        .prim_attribute_value::<[f32; 3]>(
+    let cs = compose("scenes/sandbox/sandbox_scene.usda");
+    let view = cs.view();
+    let c = view
+        .value::<[f32; 3]>(
             &SdfPath::new("/SandboxScene/Skid_Raycast_1/Chassis").unwrap(),
             "primvars:displayColor",
         )
@@ -80,21 +77,22 @@ fn over_color_override_composes() {
 /// vehicle + articulation schemas.
 #[test]
 fn api_schemas_compose() {
-    let r = compose("scenes/sandbox/sandbox_scene.usda");
-    let ok = lunco_usd_bevy::has_api_schema(
-        &r,
+    let cs = compose("scenes/sandbox/sandbox_scene.usda");
+    let view = cs.view();
+    let ok = view.has_api_schema(
         &SdfPath::new("/SandboxScene/Skid_Physical_1").unwrap(),
         "PhysxVehicleTankDifferentialAPI",
     );
     assert!(ok, "Skid_Physical_1 must compose PhysxVehicleTankDifferentialAPI");
 }
 
-/// Relationship targets survive the flatten (the physical rover's wheel hinge
+/// Relationship targets survive composition (the physical rover's wheel hinge
 /// points at its wheel body).
 #[test]
 fn joint_relationship_targets_survive() {
-    let r = compose("scenes/sandbox/sandbox_scene.usda");
-    let target = first_rel_target(&r, "/SandboxScene/Skid_Physical_1/Wheel_FL_Hinge.physics:body1")
+    let cs = compose("scenes/sandbox/sandbox_scene.usda");
+    let view = cs.view();
+    let target = first_rel_target(&view, "/SandboxScene/Skid_Physical_1/Wheel_FL_Hinge.physics:body1")
         .expect("Wheel_FL_Hinge must have a physics:body1 target");
     assert_eq!(target, "/SandboxScene/Skid_Physical_1/Wheel_FL", "joint body1 target");
 }
@@ -105,10 +103,11 @@ fn joint_relationship_targets_survive() {
 /// chassis physics attributes the avian/sim consumers read must be present.
 #[test]
 fn standalone_rover_reader_is_complete() {
-    let r = compose("vessels/rovers/skid_rover.usda");
+    let cs = compose("vessels/rovers/skid_rover.usda");
+    let view = cs.view();
 
     // Root children — the exact list `prim_children` returns.
-    let kids = r.prim_children(&SdfPath::new("/SkidRover").unwrap());
+    let kids = view.prim_children(&SdfPath::new("/SkidRover").unwrap());
     let names: Vec<String> = kids.iter().filter_map(|p| p.name().map(str::to_string)).collect();
     for w in ["Chassis", "Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"] {
         assert!(names.iter().any(|n| n == w), "SkidRover children missing {w}; got {names:?}");
@@ -116,7 +115,7 @@ fn standalone_rover_reader_is_complete() {
 
     // Vehicle-type detection.
     assert!(
-        lunco_usd_bevy::has_api_schema(&r, &SdfPath::new("/SkidRover").unwrap(), "PhysxVehicleTankDifferentialAPI"),
+        view.has_api_schema(&SdfPath::new("/SkidRover").unwrap(), "PhysxVehicleTankDifferentialAPI"),
         "SkidRover must compose PhysxVehicleTankDifferentialAPI"
     );
 
@@ -125,12 +124,12 @@ fn standalone_rover_reader_is_complete() {
     // at its authored type — see lunco_usd_sim::setup_*_wheel).
     let fl = SdfPath::new("/SkidRover/Wheel_FL").unwrap();
     assert_eq!(
-        r.prim_attribute_value::<f64>(&fl, "radius"),
+        view.value::<f64>(&fl, "radius"),
         Some(0.4),
         "Wheel_FL `double radius` must compose"
     );
     assert_eq!(
-        r.prim_attribute_value::<f32>(&fl, "physxVehicleSuspension:springStiffness"),
+        view.value::<f32>(&fl, "physxVehicleSuspension:springStiffness"),
         Some(15000.0),
         "Wheel_FL `float springStiffness` must compose"
     );
@@ -143,7 +142,8 @@ fn standalone_rover_reader_is_complete() {
 /// path-translated into the instance namespace.
 #[test]
 fn drivetrain_physical_variant_brings_joints() {
-    let r = compose("scenes/sandbox/sandbox_scene.usda");
+    let cs = compose("scenes/sandbox/sandbox_scene.usda");
+    let view = cs.view();
     for (rover, _drive) in [
         ("Skid_Physical_1", "PhysxVehicleTankDifferentialAPI"),
         ("Ackermann_Physical_1", "PhysxVehicleAckermannSteeringAPI"),
@@ -151,10 +151,10 @@ fn drivetrain_physical_variant_brings_joints() {
         for w in ["Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"] {
             let hinge = format!("/SandboxScene/{rover}/{w}_Hinge");
             assert!(
-                r.has_spec(&SdfPath::new(&hinge).unwrap()),
+                view.has_prim(&SdfPath::new(&hinge).unwrap()),
                 "{hinge} must compose from the physical variant"
             );
-            let target = first_rel_target(&r, &format!("{hinge}.physics:body1"))
+            let target = first_rel_target(&view, &format!("{hinge}.physics:body1"))
                 .unwrap_or_else(|| panic!("{hinge} missing physics:body1 target"));
             assert_eq!(
                 target,
@@ -170,9 +170,10 @@ fn drivetrain_physical_variant_brings_joints() {
 /// `over` opinions compose (or don't) per selection.
 #[test]
 fn drivetrain_variant_sets_wheel_height() {
-    let r = compose("scenes/sandbox/sandbox_scene.usda");
+    let cs = compose("scenes/sandbox/sandbox_scene.usda");
+    let view = cs.view();
     let y = |path: &str| -> f64 {
-        r.prim_attribute_value::<[f64; 3]>(&SdfPath::new(path).unwrap(), "xformOp:translate")
+        view.value::<[f64; 3]>(&SdfPath::new(path).unwrap(), "xformOp:translate")
             .unwrap_or_else(|| panic!("{path} missing xformOp:translate"))[1]
     };
     assert!(
@@ -190,14 +191,15 @@ fn drivetrain_variant_sets_wheel_height() {
 /// — neither is re-listed on the scene instance anymore.
 #[test]
 fn drivetrain_physical_composes_articulation_and_drive() {
-    let r = compose("scenes/sandbox/sandbox_scene.usda");
+    let cs = compose("scenes/sandbox/sandbox_scene.usda");
+    let view = cs.view();
     let skid = SdfPath::new("/SandboxScene/Skid_Physical_1").unwrap();
     assert!(
-        lunco_usd_bevy::has_api_schema(&r, &skid, "PhysicsArticulationRootAPI"),
+        view.has_api_schema(&skid, "PhysicsArticulationRootAPI"),
         "ArticulationRootAPI must compose from the physical variant"
     );
     assert!(
-        lunco_usd_bevy::has_api_schema(&r, &skid, "PhysxVehicleTankDifferentialAPI"),
+        view.has_api_schema(&skid, "PhysxVehicleTankDifferentialAPI"),
         "DriveSkidAPI must compose from the base rover across the reference"
     );
 }
@@ -206,9 +208,10 @@ fn drivetrain_physical_composes_articulation_and_drive() {
 /// so the joint prims authored only under `physical` are absent.
 #[test]
 fn drivetrain_raycast_has_no_joints() {
-    let r = compose("scenes/sandbox/sandbox_scene.usda");
+    let cs = compose("scenes/sandbox/sandbox_scene.usda");
+    let view = cs.view();
     assert!(
-        !r.has_spec(&SdfPath::new("/SandboxScene/Skid_Raycast_1/Wheel_FL_Hinge").unwrap()),
+        !view.has_prim(&SdfPath::new("/SandboxScene/Skid_Raycast_1/Wheel_FL_Hinge").unwrap()),
         "raycast instance must not have joint prims"
     );
 }
@@ -217,14 +220,11 @@ fn drivetrain_raycast_has_no_joints() {
 /// `lunco:resolvedAsset` URI on its Visual prim.
 #[test]
 fn gltf_resolved_asset_synthesized() {
-    let r = compose("scenes/sandbox/sandbox_scene.usda");
+    let cs = compose("scenes/sandbox/sandbox_scene.usda");
+    let view = cs.view();
     let visual = SdfPath::new("/SandboxScene/Perseverance/Visual").unwrap();
-    let attr = visual.append_property("lunco:resolvedAsset").unwrap();
-    let uri = match r.spec(&attr).and_then(|s| s.get("default").cloned()) {
-        Some(Value::AssetPath(a)) => a.as_str().to_string(),
-        Some(Value::String(s)) => s,
-        Some(Value::Token(t)) => t.to_string(),
-        other => panic!("Perseverance/Visual missing lunco:resolvedAsset, got {other:?}"),
-    };
+    let uri = view
+        .resolved_asset(&visual)
+        .expect("Perseverance/Visual missing lunco:resolvedAsset");
     assert!(uri.contains("perseverance.glb"), "resolved URI should be the glb, got {uri}");
 }

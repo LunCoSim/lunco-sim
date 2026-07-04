@@ -1195,43 +1195,13 @@ pub struct ShouldBeDynamic;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod collider_parity_tests {
-    //! Ph0′ S2c: the collider read path is generic over `UsdRead`, so a collider
-    //! built from the live `StageView` must equal one built from the flattened
-    //! `sdf::Data` — proof that re-pointing the physics extractor at the canonical
-    //! stage is behaviour-preserving for geometry (the highest-risk physics read).
+    //! Ph0′ S2c: the collider read path is generic over `UsdRead`, driven off the
+    //! live `StageView` over the canonical stage. Exercises the geometry read
+    //! (the highest-risk physics read), including the mesh-approximation selector.
 
     use super::build_collider_from_usd;
-    use lunco_usd_bevy::{compose_file, compose_file_to_stage, StageView};
+    use lunco_usd_bevy::{compose_file_to_stage, StageView};
     use openusd::sdf::Path as SdfPath;
-
-    // A Cube with a non-uniform scale exercises `read_shape_dims` (size) AND the
-    // `apply_collider_scale` → `read_vec3_f64` path (the double-scaling-sensitive one).
-    const FIXTURE: &str = "#usda 1.0\n\ndef Cube \"Box\"\n{\n    double size = 2\n    float3 xformOp:scale = (2, 3, 4)\n    uniform token[] xformOpOrder = [\"xformOp:scale\"]\n}\n";
-
-    #[test]
-    fn collider_from_stageview_matches_flatten() {
-        let dir = std::env::temp_dir().join("lunco_collider_parity");
-        std::fs::create_dir_all(&dir).unwrap();
-        let f = dir.join("box.usda");
-        std::fs::write(&f, FIXTURE).unwrap();
-
-        let stage = compose_file_to_stage(&f).expect("compose stage");
-        let flat = compose_file(&f).expect("flatten");
-        let view = StageView::new(&stage);
-        let path = SdfPath::new("/Box").unwrap();
-
-        let c_view = build_collider_from_usd(&view, &path);
-        let c_flat = build_collider_from_usd(&flat, &path);
-        assert!(
-            c_view.is_some() && c_flat.is_some(),
-            "both sources must build a collider"
-        );
-        assert_eq!(
-            format!("{:?}", c_view.unwrap()),
-            format!("{:?}", c_flat.unwrap()),
-            "StageView-built collider must equal flatten-built collider (incl. scale)"
-        );
-    }
 
     // A UsdGeomMesh pyramid: default → exact trimesh; `physics:approximation =
     // "convexHull"` (standard UsdPhysicsMeshCollisionAPI) → a convex hull. The
@@ -1284,7 +1254,7 @@ mod extract_parity_tests {
     use avian3d::prelude::*;
     use bevy::ecs::world::CommandQueue;
     use bevy::prelude::*;
-    use lunco_usd_bevy::{compose_file, compose_file_to_stage, StageView, UsdRead};
+    use lunco_usd_bevy::{compose_file_to_stage, StageView, UsdRead};
     use openusd::sdf::Path as SdfPath;
 
     // A rover chassis (RigidBodyAPI, mass 500) with a child Cube collider
@@ -1314,28 +1284,19 @@ mod extract_parity_tests {
     }
 
     #[test]
-    fn extract_avian_from_stageview_matches_flatten() {
+    fn extract_avian_from_stageview_builds_full_dynamic_body() {
         let dir = std::env::temp_dir().join("lunco_extract_parity");
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("rover.usda");
         std::fs::write(&f, FIXTURE).unwrap();
 
         let stage = compose_file_to_stage(&f).expect("compose stage");
-        let flat = compose_file(&f).expect("flatten");
         let view = StageView::new(&stage);
         let rover = SdfPath::new("/Rover").unwrap();
 
         let live = run_extract(&view, &rover);
-        let baked = run_extract(&flat, &rover);
 
-        // Live canonical-stage extraction == flattened extraction, exactly.
-        assert_eq!(
-            format!("{live:?}"),
-            format!("{baked:?}"),
-            "physics from the LIVE stage must equal physics from the flatten"
-        );
-
-        // And the LIVE path actually produced a full dynamic body: Kinematic
+        // The LIVE path actually produced a full dynamic body: Kinematic
         // (settling to Dynamic via ShouldBeDynamic) + compound collider + mass.
         assert_eq!(live.0, Some(RigidBody::Kinematic), "live: rigid body");
         assert!(live.1.is_some(), "live: compound collider built off the stage");

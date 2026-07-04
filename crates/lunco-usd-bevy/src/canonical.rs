@@ -232,6 +232,19 @@ impl CanonicalStage {
             .unwrap_or(false)
     }
 
+    /// A snapshot clone of the live resolver's full layer-byte closure (every
+    /// referenced `.usda` loaded so far). Lets the coarse `full_reload` path
+    /// (Save-As / whole-source undo) rebuild a fresh stage from an edited root
+    /// source that still references those layers, reusing the already-loaded
+    /// closure so it recomposes without re-fetching. Empty if this stage has no
+    /// injectable resolver.
+    pub fn layer_bytes_snapshot(&self) -> HashMap<String, Vec<u8>> {
+        self.resolver_bytes
+            .as_ref()
+            .map(|shared| shared.borrow().clone())
+            .unwrap_or_default()
+    }
+
     /// The canonical layer id an `asset_path` reference resolves to on *this*
     /// stage — `asset_path` anchored against the scene (root) layer, exactly as
     /// PCP will canonicalize the authored `references` arc. This is the key to
@@ -560,41 +573,6 @@ mod sync_system_tests {
         assert!(
             cs.view().prim_paths().iter().any(|p| p.to_string() == "/Root/Box"),
             "the runtime canonical stage exposes the composed scene"
-        );
-    }
-}
-
-#[cfg(all(test, not(target_arch = "wasm32")))]
-mod resolved_asset_tests {
-    //! Ph0′ visual-cutover prerequisite: `resolved_asset` synthesized off the
-    //! LIVE stage must equal the `lunco:resolvedAsset` `flatten_stage` bakes —
-    //! the glTF/DEM URI the visual extractor needs. A scene → wrapper → glb
-    //! payload (the Perseverance "usda→glb" shape).
-
-    use super::*;
-    use crate::compose::{build_stage_from_closure, flatten_stage};
-    use crate::UsdRead;
-    use openusd::sdf::Path as SdfPath;
-
-    #[test]
-    fn resolved_asset_synth_matches_flatten_on_live_stage() {
-        // A prim carrying a glb payload — the binary arc `resolved_asset`
-        // synthesizes its URI from. Built through the SAME storage-based recipe
-        // resolver the async loader uses (which stubs binary assets), so this is
-        // the production compose path, not the deleted native-fs shim.
-        let scene = "#usda 1.0\ndef Xform \"Scene\"\n{\n    def Xform \"Visual\" (\n        prepend payload = @model.glb@\n    )\n    {\n        string lunco:assetMode = \"scene\"\n    }\n}\n";
-        let recipe = StageRecipe::from_source("scene.usda", scene);
-        let stage = build_stage_from_closure(&recipe).expect("live stage from recipe");
-        let cs = CanonicalStage::from_stage(stage, "scene.usda");
-        let flat = flatten_stage(cs.stage()).expect("flatten");
-
-        let visual = SdfPath::new("/Scene/Visual").unwrap();
-        let live = cs.view().resolved_asset(&visual);
-        let baked = UsdRead::resolved_asset(&flat, &visual);
-        assert_eq!(live, baked, "live resolved_asset synth must equal the flatten's");
-        assert!(
-            live.as_deref().is_some_and(|u| u.ends_with("model.glb")),
-            "live stage must synthesize the glb URI on the composed prim, got {live:?}"
         );
     }
 }

@@ -3,33 +3,35 @@
 //! Verifies that all visual, physics, and electrical parameters
 //! are correctly extracted from rover USD files after composition.
 
-use lunco_usd_bevy::usd_data::UsdDataExt;
-use openusd::sdf::{AbstractData, Data as SdfData, Path as SdfPath};
+use lunco_usd_bevy::{StageView, UsdRead};
+use openusd::sdf::Path as SdfPath;
+use openusd::usd::Stage;
 use std::path::PathBuf;
 
 /// Load the rover USD file with all references resolved, composed through the
-/// real openusd PCP engine (`Stage::open` + `ar::DefaultResolver`) and flattened
-/// to `sdf::Data` — the same composed representation the asset loader produces.
-fn load_rover() -> SdfData {
+/// real openusd PCP engine (`Stage::open` + `ar::DefaultResolver`) into a live
+/// `Stage` — the canonical composed representation a `StageView` reads.
+fn load_rover() -> Stage {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let asset_root = manifest_dir.parent().unwrap().parent().unwrap();
     let usd_path = asset_root.join("assets/vessels/rovers/rucheyok/rucheyok.usda");
 
-    lunco_usd_bevy::compose_file(&usd_path)
+    lunco_usd_bevy::compose_file_to_stage(&usd_path)
         .unwrap_or_else(|e| panic!("Failed to compose {usd_path:?}: {e}"))
 }
 
 #[test]
 fn test_chassis_dimensions() {
-    let reader = load_rover();
+    let stage = load_rover();
+    let view = StageView::new(&stage);
     let path = SdfPath::new("/Rucheyok/Chassis").unwrap();
 
-    assert!(reader.has_spec(&path), "Chassis prim should exist");
+    assert!(view.has_prim(&path), "Chassis prim should exist");
 
     // Dimensions are authored spec-compliantly as `size` (unit) + `xformOp:scale`;
     // the scale components carry the full extents (width, height, depth).
-    let scale: [f64; 3] = reader
-        .prim_attribute_value(&path, "xformOp:scale")
+    let scale: [f64; 3] = view
+        .value(&path, "xformOp:scale")
         .expect("Chassis should have 'xformOp:scale'");
     assert!((scale[0] - 15.0).abs() < 0.01, "Chassis width (scale.x) should be 15.0, got {}", scale[0]);
     assert!((scale[1] - 4.0).abs() < 0.01, "Chassis height (scale.y) should be 4.0, got {}", scale[1]);
@@ -38,34 +40,36 @@ fn test_chassis_dimensions() {
 
 #[test]
 fn test_chassis_physics() {
-    let reader = load_rover();
+    let stage = load_rover();
+    let view = StageView::new(&stage);
 
     // Mass lives on the rigid-body root (Rucheyok), not the Chassis collider
     // child. Authored as `float`, so read f32 and widen.
     let root = SdfPath::new("/Rucheyok").unwrap();
-    let mass: f64 = reader
-        .prim_attribute_value::<f64>(&root, "physics:mass")
-        .or_else(|| reader.prim_attribute_value::<f32>(&root, "physics:mass").map(|m| m as f64))
+    let mass: f64 = view
+        .value::<f64>(&root, "physics:mass")
+        .or_else(|| view.value::<f32>(&root, "physics:mass").map(|m| m as f64))
         .expect("Rucheyok root should have physics:mass");
     assert!((mass - 800.0).abs() < 1.0, "Rover mass should be 800.0, got {mass}");
 
     // Chassis is the collider child.
     assert!(
-        reader.has_spec(&SdfPath::new("/Rucheyok/Chassis").unwrap()),
+        view.has_prim(&SdfPath::new("/Rucheyok/Chassis").unwrap()),
         "Chassis collider prim should exist"
     );
 }
 
 #[test]
 fn test_solar_panel_dimensions() {
-    let reader = load_rover();
+    let stage = load_rover();
+    let view = StageView::new(&stage);
     let path = SdfPath::new("/Rucheyok/SolarPanel").unwrap();
 
-    assert!(reader.has_spec(&path), "SolarPanel prim should exist");
+    assert!(view.has_prim(&path), "SolarPanel prim should exist");
 
     // Dimensions via `xformOp:scale` (see test_chassis_dimensions).
-    let scale: [f64; 3] = reader
-        .prim_attribute_value(&path, "xformOp:scale")
+    let scale: [f64; 3] = view
+        .value(&path, "xformOp:scale")
         .expect("SolarPanel should have 'xformOp:scale'");
     assert!((scale[0] - 12.0).abs() < 0.01, "SolarPanel width should be 12.0, got {}", scale[0]);
     assert!((scale[1] - 0.2).abs() < 0.01, "SolarPanel height should be 0.2, got {}", scale[1]);
@@ -74,14 +78,15 @@ fn test_solar_panel_dimensions() {
 
 #[test]
 fn test_solar_panel_position() {
-    let reader = load_rover();
+    let stage = load_rover();
+    let view = StageView::new(&stage);
     let path = SdfPath::new("/Rucheyok/SolarPanel").unwrap();
 
     // `double3` composes to `Value::Vec3d` — read as a fixed `[f64; 3]`, the
     // variant the strict `TryFrom<Value>` decode matches (a `Vec<f64>` would
     // only match a `double[]` array).
-    let translate: [f64; 3] = reader
-        .prim_attribute_value(&path, "xformOp:translate")
+    let translate: [f64; 3] = view
+        .value(&path, "xformOp:translate")
         .expect("SolarPanel should have translate");
     assert!((translate[0] - 0.0).abs() < 0.01, "SolarPanel X should be 0");
     assert!((translate[1] - 4.5).abs() < 0.01, "SolarPanel Y should be 4.5");
@@ -90,14 +95,15 @@ fn test_solar_panel_position() {
 
 #[test]
 fn test_battery_dimensions() {
-    let reader = load_rover();
+    let stage = load_rover();
+    let view = StageView::new(&stage);
     let path = SdfPath::new("/Rucheyok/Battery").unwrap();
 
-    assert!(reader.has_spec(&path), "Battery prim should exist");
+    assert!(view.has_prim(&path), "Battery prim should exist");
 
     // Dimensions via `xformOp:scale` (see test_chassis_dimensions).
-    let scale: [f64; 3] = reader
-        .prim_attribute_value(&path, "xformOp:scale")
+    let scale: [f64; 3] = view
+        .value(&path, "xformOp:scale")
         .expect("Battery should have 'xformOp:scale'");
     assert!((scale[0] - 4.0).abs() < 0.01, "Battery width should be 4.0, got {}", scale[0]);
     assert!((scale[1] - 0.8).abs() < 0.01, "Battery height should be 0.8, got {}", scale[1]);
@@ -106,7 +112,8 @@ fn test_battery_dimensions() {
 
 #[test]
 fn test_wheel_positions() {
-    let reader = load_rover();
+    let stage = load_rover();
+    let view = StageView::new(&stage);
 
     struct WheelExpect {
         path: &'static str,
@@ -124,10 +131,10 @@ fn test_wheel_positions() {
 
     for wheel in wheels {
         let path = SdfPath::new(wheel.path).unwrap();
-        assert!(reader.has_spec(&path), "Wheel {path} should exist");
+        assert!(view.has_prim(&path), "Wheel {path} should exist");
 
-        let translate: [f64; 3] = reader
-            .prim_attribute_value(&path, "xformOp:translate")
+        let translate: [f64; 3] = view
+            .value(&path, "xformOp:translate")
             .unwrap_or_else(|| panic!("Wheel {path} should have translate"));
         assert!(
             (translate[0] - wheel.x).abs() < 0.01,
@@ -146,10 +153,10 @@ fn test_wheel_positions() {
             translate[2]
         );
 
-        let idx: i64 = reader
-            .prim_attribute_value(&path, "physxVehicleWheel:index")
+        let idx: i64 = view
+            .value(&path, "physxVehicleWheel:index")
             .unwrap_or_else(|| {
-                let i: i32 = reader.prim_attribute_value(&path, "physxVehicleWheel:index")
+                let i: i32 = view.value(&path, "physxVehicleWheel:index")
                     .unwrap_or_else(|| panic!("Wheel {path} should have index"));
                 i as i64
             });
@@ -159,36 +166,37 @@ fn test_wheel_positions() {
 
 #[test]
 fn test_wheel_physics() {
-    let reader = load_rover();
+    let stage = load_rover();
+    let view = StageView::new(&stage);
     let path = SdfPath::new("/Rucheyok/Wheel_FL").unwrap();
 
-    let rigid_body: bool = reader
-        .prim_attribute_value(&path, "physics:rigidBodyEnabled")
+    let rigid_body: bool = view
+        .value(&path, "physics:rigidBodyEnabled")
         .expect("Wheel should have rigidBodyEnabled");
     assert!(rigid_body, "Wheel should be rigid body enabled");
 
-    let mass: f64 = reader
-        .prim_attribute_value(&path, "physics:mass")
+    let mass: f64 = view
+        .value(&path, "physics:mass")
         .unwrap_or_else(|| {
-            let m: f32 = reader.prim_attribute_value(&path, "physics:mass")
+            let m: f32 = view.value(&path, "physics:mass")
                 .expect("Wheel should have mass");
             m as f64
         });
     assert!((mass - 25.0).abs() < 1.0, "Wheel mass should be 25.0, got {mass}");
 
-    let radius: f64 = reader
-        .prim_attribute_value(&path, "physxVehicleWheel:radius")
+    let radius: f64 = view
+        .value(&path, "physxVehicleWheel:radius")
         .unwrap_or_else(|| {
-            let r: f32 = reader.prim_attribute_value(&path, "physxVehicleWheel:radius")
+            let r: f32 = view.value(&path, "physxVehicleWheel:radius")
                 .expect("Wheel should have radius");
             r as f64
         });
     assert!((radius - 2.0).abs() < 0.01, "Wheel radius should be 2.0, got {radius}");
 
-    let spring_k: f64 = reader
-        .prim_attribute_value(&path, "physxVehicleSuspension:springStiffness")
+    let spring_k: f64 = view
+        .value(&path, "physxVehicleSuspension:springStiffness")
         .unwrap_or_else(|| {
-            let k: f32 = reader.prim_attribute_value(&path, "physxVehicleSuspension:springStiffness")
+            let k: f32 = view.value(&path, "physxVehicleSuspension:springStiffness")
                 .expect("Wheel should have springStiffness");
             k as f64
         });
@@ -197,10 +205,10 @@ fn test_wheel_physics() {
         "Wheel spring stiffness should be 15000.0, got {spring_k}"
     );
 
-    let damping: f64 = reader
-        .prim_attribute_value(&path, "physxVehicleSuspension:springDamping")
+    let damping: f64 = view
+        .value(&path, "physxVehicleSuspension:springDamping")
         .unwrap_or_else(|| {
-            let d: f32 = reader.prim_attribute_value(&path, "physxVehicleSuspension:springDamping")
+            let d: f32 = view.value(&path, "physxVehicleSuspension:springDamping")
                 .expect("Wheel should have springDamping");
             d as f64
         });
@@ -212,10 +220,11 @@ fn test_wheel_physics() {
 
 #[test]
 fn test_prim_children() {
-    let reader = load_rover();
+    let stage = load_rover();
+    let view = StageView::new(&stage);
     let path = SdfPath::new("/Rucheyok").unwrap();
 
-    let children = reader.prim_children(&path);
+    let children = view.prim_children(&path);
     // 8 children: Chassis, SolarPanel, Battery, 4 Wheels + the `Controls` scope
     // composed in from the inherited `_RoverControl` profile (control_profiles.usda).
     assert_eq!(children.len(), 8,
@@ -234,7 +243,8 @@ fn test_prim_children() {
 
 #[test]
 fn test_all_prims_have_color() {
-    let reader = load_rover();
+    let stage = load_rover();
+    let view = StageView::new(&stage);
 
     let prims_with_color = [
         "/Rucheyok/Chassis",
@@ -249,27 +259,26 @@ fn test_all_prims_have_color() {
     for prim_path in prims_with_color {
         let path = SdfPath::new(prim_path).unwrap();
         // `color3f` composes to a scalar `Value::Vec3f` → read as `[f32; 3]`.
-        let _color: [f32; 3] = reader
-            .prim_attribute_value(&path, "primvars:displayColor")
+        let _color: [f32; 3] = view
+            .value(&path, "primvars:displayColor")
             .unwrap_or_else(|| panic!("Prim {prim_path} should have displayColor"));
     }
 }
 
 #[test]
 fn test_eps_relationships() {
-    let reader = load_rover();
+    let stage = load_rover();
+    let view = StageView::new(&stage);
 
     // Solar panel connects to EPS bus
-    let solar_rel = SdfPath::new("/Rucheyok/SolarPanel.lunco:epsBus").unwrap();
     assert!(
-        reader.has_spec(&solar_rel),
+        !view.rel_targets(&SdfPath::new("/Rucheyok/SolarPanel").unwrap(), "lunco:epsBus").is_empty(),
         "SolarPanel should have epsBus relationship"
     );
 
     // Battery connects to EPS bus
-    let battery_rel = SdfPath::new("/Rucheyok/Battery.lunco:epsBus").unwrap();
     assert!(
-        reader.has_spec(&battery_rel),
+        !view.rel_targets(&SdfPath::new("/Rucheyok/Battery").unwrap(), "lunco:epsBus").is_empty(),
         "Battery should have epsBus relationship"
     );
 }
@@ -279,16 +288,16 @@ fn test_component_eps_fields() {
     // The rover instance wires its power components onto the EPS bus via
     // `rel lunco:epsBus` (authored on the rover, not the reusable components),
     // so the relationships must survive composition onto the instance prims.
-    let reader = load_rover();
+    let stage = load_rover();
+    let view = StageView::new(&stage);
     for p in [
-        "/Rucheyok/SolarPanel.lunco:epsBus",
-        "/Rucheyok/Battery.lunco:epsBus",
-        "/Rucheyok/Wheel_FL.lunco:epsBus",
+        "/Rucheyok/SolarPanel",
+        "/Rucheyok/Battery",
+        "/Rucheyok/Wheel_FL",
     ] {
         assert!(
-            reader.has_spec(&SdfPath::new(p).unwrap()),
-            "{p} relationship should exist after composition"
+            !view.rel_targets(&SdfPath::new(p).unwrap(), "lunco:epsBus").is_empty(),
+            "{p} epsBus relationship should exist after composition"
         );
     }
 }
-

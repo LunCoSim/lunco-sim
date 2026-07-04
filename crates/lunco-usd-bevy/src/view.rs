@@ -147,17 +147,14 @@ impl<'a> StageView<'a> {
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
-mod parity_tests {
-    //! S1 parity: `StageView` (live composed stage) must return the SAME reads as
-    //! `UsdDataExt` (the flattened `sdf::Data`). This is the invariant that lets
-    //! the domain extractors be re-pointed off the flatten with no behaviour
-    //! change (Ph0′ / impl-spec S1).
+mod compose_tests {
+    //! Live-stage composition reads through `StageView` (the openusd composed
+    //! Stage): the cross-file inherit/subLayer opinion the entity translator
+    //! consumes must land on the vessel after full PCP composition.
 
     use super::StageView;
-    use crate::compose::{compose_file_to_stage, flatten_stage};
-    use crate::usd_data::UsdDataExt;
-    use openusd::sdf::{Path as SdfPath, SpecType, Value};
-    use std::collections::BTreeSet;
+    use crate::compose::compose_file_to_stage;
+    use openusd::sdf::Path as SdfPath;
 
     fn asset(rel: &str) -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -165,96 +162,7 @@ mod parity_tests {
             .join(rel)
     }
 
-    /// `lunco:resolvedAsset` is SYNTHESIZED at flatten time from binary (glTF)
-    /// arcs — it is not an authored stage attribute, so a live-stage read returns
-    /// nothing. Excluded here; the projector re-synthesizes it in a later slice.
-    const FLATTEN_ONLY_ATTRS: &[&str] = &["lunco:resolvedAsset"];
-
-    fn assert_parity(path: &std::path::Path) {
-        let stage = compose_file_to_stage(path).expect("compose stage");
-        let flat = flatten_stage(&stage).expect("flatten");
-        let view = StageView::new(&stage);
-
-        // 1. Same live prim set.
-        let view_prims: BTreeSet<String> =
-            view.prim_paths().iter().map(|p| p.to_string()).collect();
-        let flat_prims: BTreeSet<String> = flat
-            .iter()
-            .filter(|(_, s)| s.ty == SpecType::Prim)
-            .map(|(p, _)| p.to_string())
-            .collect();
-        assert_eq!(view_prims, flat_prims, "prim set must match for {path:?}");
-
-        // 2. Same typeName per prim.
-        for p in view.prim_paths() {
-            assert_eq!(
-                view.prim_type_name(&p),
-                flat.prim_type_name(&p),
-                "typeName mismatch at {p} in {path:?}"
-            );
-        }
-
-        // 2b. Same apiSchemas per prim (the physics-extractor detection read).
-        for p in view.prim_paths() {
-            let flat_schemas: Vec<String> = match flat.field(&p, "apiSchemas") {
-                Some(Value::TokenVec(v)) => v.iter().map(|t| t.to_string()).collect(),
-                Some(Value::Token(t)) => vec![t.to_string()],
-                Some(Value::String(s)) => vec![s.clone()],
-                _ => Vec::new(),
-            };
-            for schema in &flat_schemas {
-                assert!(
-                    view.has_api_schema(&p, schema),
-                    "StageView missing apiSchema `{schema}` at {p} in {path:?}"
-                );
-            }
-            assert!(
-                !view.has_api_schema(&p, "__NoSuchSchema__"),
-                "false-positive apiSchema at {p}"
-            );
-        }
-
-        // 3. Same default value for every flattened attribute (Debug-string
-        //    compare, independent of Value: PartialEq).
-        for (attr_path, spec) in flat.iter() {
-            if spec.ty != SpecType::Attribute {
-                continue;
-            }
-            let s = attr_path.to_string();
-            let Some((prim_s, name)) = s.rsplit_once('.') else {
-                continue;
-            };
-            if FLATTEN_ONLY_ATTRS.contains(&name) {
-                continue;
-            }
-            let Ok(prim) = SdfPath::new(prim_s) else {
-                continue;
-            };
-            let flat_v = flat.prim_attribute_value::<Value>(&prim, name);
-            let view_v = view.value::<Value>(&prim, name);
-            assert_eq!(
-                format!("{view_v:?}"),
-                format!("{flat_v:?}"),
-                "attr `{s}` default mismatch (view vs flat) in {path:?}"
-            );
-        }
-    }
-
-    /// Real shipped rover: `subLayers` + `inherits` pulling a control profile
-    /// from another file — exercises cross-file sublayer + inherit composition.
-    #[test]
-    fn stageview_matches_flatten_skid_rover() {
-        assert_parity(&asset("vessels/rovers/skid_rover.usda"));
-    }
-
-    /// Sandbox scene: inline `inherits` through its own subLayer + a `references`
-    /// arc whose own subLayer+inherits composes through the reference.
-    #[test]
-    fn stageview_matches_flatten_lander_scene() {
-        assert_parity(&asset("scenes/sandbox/lander_test.usda"));
-    }
-
-    /// Spot-check the composed opinion both readers must agree on (the
+    /// Spot-check the composed opinion the live reader must resolve (the
     /// cross-file inherit landing `lunco:port = throttle` on the vessel).
     #[test]
     fn stageview_reads_composed_inherit_opinion() {

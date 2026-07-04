@@ -72,6 +72,12 @@ fn compose_and_load(file_path: &Path, prim_path: &str) -> App {
     app.init_asset::<Image>();
     app.init_asset::<ShaderMaterial>();
     app.init_asset::<bevy::shader::Shader>();
+    // No GPU in this harness, so a wheel's render-only `ShaderMaterial` never
+    // arrives — mark the app headless so sim builds wheel PHYSICS without waiting
+    // (the faithful `--no-ui` server stand-in; the visual mesh child still builds
+    // via the visual extractor). Without this the wheels deadlock and never gain
+    // `WheelRaycast` within the test's few no-time-advance frames.
+    app.insert_resource(NoRenderVisuals);
     app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
 
     let handle = add_canonical_from_file(&mut app, file_path);

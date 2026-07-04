@@ -1,34 +1,34 @@
-//! Compose a USD stage with openusd, then bake the composed result back into a
-//! flat [`sdf::Data`] for the downstream visual / physics / cosim readers.
+//! Compose a USD stage with openusd from an in-memory layer closure, for the
+//! runtime's live [`CanonicalStage`](crate::canonical::CanonicalStage) — read
+//! through [`StageView`](crate::view::StageView), never flattened.
 //!
 //! Pipeline:
-//!  1. **Pre-fetch BFS** — discover every transitively-referenced `.usda` and
-//!     fetch its bytes via `LoadContext::read_asset_bytes` (native + wasm, routed
-//!     through Bevy's `AssetServer` + our registered sources). openusd's
-//!     resolver is synchronous, so all async fetching happens here, up front.
-//!     The BFS also records binary-asset arcs (glTF/…) for synthesis below.
-//!  2. **Compose** — `Stage::builder().resolver(LuncoUsdResolver).open(root)`
-//!     runs the real PCP engine: references, payloads, variant selection, and
-//!     relationship-target translation — all filesystem-free.
-//!  3. **Flatten** — traverse the composed stage and write each prim's composed
-//!     metadata, attribute defaults, and *translated* relationship targets into
-//!     a `HashMap<Path, Spec>` → [`TextReader::from_data`]. Downstream keeps
-//!     reading the same flat interface it always has.
+//!  1. **Pre-fetch BFS** ([`fetch_layer_closure`]) — discover every
+//!     transitively-referenced `.usda` and fetch its bytes via
+//!     `LoadContext::read_asset_bytes` (native + wasm, routed through Bevy's
+//!     `AssetServer` + our registered sources). openusd's resolver is
+//!     synchronous, so all async fetching happens here, up front.
+//!  2. **Compose** ([`build_stage_with_resolver`]) —
+//!     `Stage::builder().resolver(LuncoUsdResolver).open(root)` runs the real PCP
+//!     engine: references, payloads, variant selection, relationship-target
+//!     translation — all filesystem-free. The composed `Stage` is the runtime
+//!     source of truth; downstream reads it via `StageView`.
 //!
 //! Binary assets (`.glb`/`.gltf`/…) are not USD layers: the resolver routes them
-//! to an empty stub during composition, and the BFS records their URI so we can
-//! surface a synthesized `lunco:resolvedAsset` attribute here (openusd has no
-//! `SdfFileFormat` plugin system). Binary arcs authored in the root layer (our
-//! only case — the Perseverance glTF) keep their composed prim path; binary arcs
-//! authored *inside* a referenced sub-asset are not remapped and would be
-//! skipped (none exist today).
+//! to an empty stub during composition, and [`discover_binary_sites`] records
+//! their URI so `StageView::resolved_asset` can surface a synthesized
+//! `lunco:resolvedAsset` on the composed prim (openusd has no `SdfFileFormat`
+//! plugin system). Binary arcs authored in the root layer (our only case — the
+//! Perseverance glTF) keep their composed prim path; binary arcs authored
+//! *inside* a referenced sub-asset are not remapped and would be skipped (none
+//! exist today).
 
 use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
 use bevy::asset::{AssetPath, LoadContext};
 use openusd::ar::ResolvedPath;
-use openusd::sdf::{self, Path as SdfPath, PathListOp, SpecData, SpecType, Value};
+use openusd::sdf::{self, Path as SdfPath, Value};
 use openusd::usd::{PrimPredicate, Stage};
 use openusd::usda;
 
@@ -151,145 +151,15 @@ fn discover_arcs(data: &sdf::Data) -> Vec<String> {
     fetch
 }
 
-/// Bake the composed stage into a flat `HashMap<Path, Spec>` → `TextReader`.
-/// Binary-asset arcs (glTF/OBJ/STL) authored anywhere in the composed layer
-/// stack surface as `lunco:resolvedAsset` attributes, anchored on their COMPOSED
-/// prim (see [`discover_binary_sites`]).
-pub(crate) fn flatten_stage(stage: &Stage) -> Result<sdf::Data> {
-    let mut data: HashMap<SdfPath, SpecData> = HashMap::new();
-
-    // Pseudo-root: carries `defaultPrim` (deferred root-prim resolution) and the
-    // top-level prim list.
-    let mut root_spec = SpecData::new(SpecType::PseudoRoot);
-    if let Some(dp) = stage.default_prim() {
-        root_spec.add("defaultPrim", Value::Token(dp));
-    }
-    if let Ok(tops) = stage.root_prims() {
-        root_spec.add("primChildren", Value::TokenVec(tops));
-    }
-    // Stage `timeCodesPerSecond`: the animation sampler maps sim-seconds onto
-    // time codes (`code = seconds * tcps`). openusd's accessor falls back to
-    // `framesPerSecond`, then 24 (USD spec), so this is always populated and
-    // the runtime reader (`stage_time_codes_per_second`) never has to guess.
-    root_spec.add(
-        "timeCodesPerSecond",
-        Value::Double(stage.time_codes_per_second()),
-    );
-    data.insert(SdfPath::abs_root(), root_spec);
-
-    // Collect every composed prim path first (traverse takes an FnMut, so we
-    // can't `?` inside it). `DEFAULT` already filters inactive/abstract prims,
-    // so the flattened reader contains only live geometry.
-    let mut paths: Vec<SdfPath> = Vec::new();
-    stage
-        .traverse(PrimPredicate::DEFAULT, |p| paths.push(p.clone()))
-        .map_err(|e| anyhow!("stage traversal failed: {e}"))?;
-
-    // Binary-asset arcs keyed by authoring site `(layer id, spec path)` — the
-    // coordinates `Prim::prim_stack` reports. The traversal above forced every
-    // reachable reference/payload layer to load, so the whole stack is visible.
-    let binary_sites = discover_binary_sites(stage);
-
-    for path in &paths {
-        let prim = stage.prim(path.clone());
-
-        let mut spec = SpecData::new(SpecType::Prim);
-        if let Some(tn) = prim.type_name().map_err(|e| anyhow!("{path} typeName: {e}"))? {
-            spec.add("typeName", Value::Token(tn));
-        }
-        let apis = prim.api_schemas().unwrap_or_default();
-        if !apis.is_empty() {
-            spec.add("apiSchemas", Value::TokenVec(apis));
-        }
-        let children = prim.child_names().unwrap_or_default();
-        spec.add("primChildren", Value::TokenVec(children));
-        data.insert(path.clone(), spec);
-
-        // Attribute composed values: the default-time opinion (under `default`,
-        // where `prim_attribute_value` reads) AND the composed `timeSamples`
-        // (under `timeSamples`, where the animation sampler reads).
-        for attr in prim.attributes().unwrap_or_default() {
-            let mut a = SpecData::new(SpecType::Attribute);
-            let mut authored = false;
-            if let Some(v) = attr.get::<Value>().map_err(|e| anyhow!("{} default: {e}", attr.path()))? {
-                a.add("default", v);
-                authored = true;
-            }
-            // Composed `timeSamples` — the animation read path. PCP has already
-            // retimed them through any sublayer / reference `LayerOffset`, so the
-            // sampler sees stage-time codes. Without this, animated attributes on
-            // *composed* stages (the asset-loader path) silently lost their
-            // samples — only single-layer `usda::parse` stages kept them. An
-            // attribute may carry samples but no `default`, so this is also what
-            // keeps a samples-only attribute from being dropped entirely.
-            if let Ok(Some(samples)) = attr.time_samples() {
-                if !samples.is_empty() {
-                    a.add("timeSamples", Value::TimeSamples(samples));
-                    authored = true;
-                }
-            }
-            // Attribute connections (`.connect`), PCP-composed & path-translated.
-            // The material shader network rides these: a `Material.outputs:surface`
-            // connects to its `Shader.outputs:surface`, so without preserving them
-            // `resolve_bound_shader` can't walk bind→shader on the flattened reader
-            // and every shader-networked material silently falls back to its
-            // displayColor baseline. Stored under `connectionPaths` where
-            // `read_rel_target` already looks (alongside relationship `targetPaths`).
-            if let Ok(conns) = attr.connections() {
-                if !conns.is_empty() {
-                    a.add("connectionPaths", Value::PathListOp(PathListOp::explicit(conns)));
-                    authored = true;
-                }
-            }
-            if authored {
-                data.insert(attr.path().clone(), a);
-            }
-        }
-
-        // Relationship targets — already path-translated through reference +
-        // variant by the PCP engine. THIS is the whole point of the migration.
-        for rel in prim.relationships().unwrap_or_default() {
-            let targets = rel.targets().unwrap_or_default();
-            if !targets.is_empty() {
-                let mut r = SpecData::new(SpecType::Relationship);
-                r.add("targetPaths", Value::PathListOp(PathListOp::explicit(targets)));
-                data.insert(rel.path().clone(), r);
-            }
-        }
-
-        // glTF / binary-asset shim: if any site in THIS prim's composition stack
-        // authored a binary arc, surface its URI as `lunco:resolvedAsset` on this
-        // composed prim (unless already authored). `prim_stack` reports each
-        // contributing `(layer id, spec path)`, so an arc authored in a
-        // referenced `.usda` wrapper lands here — at the composed path — not at
-        // the wrapper-local path it was written to. The Bevy loader keys the
-        // glTF `SceneRoot` + failure placeholder off this attribute.
-        if !binary_sites.is_empty() {
-            if let Ok(stack) = prim.prim_stack() {
-                if let Some(uri) = stack.iter().find_map(|site| binary_sites.get(site)) {
-                    if let Ok(attr_path) = path.append_property("lunco:resolvedAsset") {
-                        data.entry(attr_path).or_insert_with(|| {
-                            let mut a = SpecData::new(SpecType::Attribute);
-                            a.add("default", Value::AssetPath(uri.clone().into()));
-                            a
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(sdf::Data::from_specs(data))
-}
-
 /// Discover every binary-asset arc (glTF/OBJ/STL, per [`is_binary_asset`])
 /// authored across the composed stage's loaded layers, keyed by its authoring
 /// site `(layer identifier, spec path)` — the coordinates
-/// [`openusd::usd::Prim::prim_stack`] reports. [`flatten_stage`] matches these
-/// against each composed prim's stack to anchor `lunco:resolvedAsset` on the
-/// COMPOSED prim, so a glTF `payload`/`reference` authored inside a referenced
-/// `.usda` wrapper surfaces on the composed prim — not only arcs authored
-/// directly in the root layer, as the previous layer-local match required.
+/// [`openusd::usd::Prim::prim_stack`] reports.
+/// [`StageView::resolved_asset`](crate::view::StageView::resolved_asset) matches
+/// these against a composed prim's stack to synthesize `lunco:resolvedAsset` on
+/// the COMPOSED prim, so a glTF `payload`/`reference` authored inside a
+/// referenced `.usda` wrapper surfaces on the composed prim — not only arcs
+/// authored directly in the root layer.
 pub(crate) type BinarySites = HashMap<(String, SdfPath), String>;
 
 pub(crate) fn discover_binary_sites(stage: &Stage) -> BinarySites {
@@ -329,25 +199,13 @@ pub(crate) fn discover_binary_sites(stage: &Stage) -> BinarySites {
     sites
 }
 
-/// Compose a USD layer **from disk** through the real openusd PCP engine
-/// ([`Stage::open`], backed by [`openusd::ar::DefaultResolver`]) and flatten the
-/// composed result to [`sdf::Data`]. Native + synchronous: for tests and tools
-/// that load a real on-disk `.usda` with every reference resolved — distinct
-/// from the async `AssetServer`-driven loader (the storage-based
-/// [`build_stage_from_closure`] path). `DefaultResolver` anchors each relative
-/// reference to its own layer's directory, so the on-disk reference tree
-/// resolves exactly as authored.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn compose_file(path: &std::path::Path) -> Result<sdf::Data> {
-    // `flatten_stage` surfaces binary-asset arcs (glTF/…) as `lunco:resolvedAsset`
-    // across the whole composed layer stack, anchored on each composed prim.
-    flatten_stage(&compose_file_to_stage(path)?)
-}
-
-/// Compose a USD layer from disk into a **live** [`Stage`] without flattening —
-/// the stage-returning sibling of [`compose_file`], for the canonical-document
-/// path and for parity tests that compare live-stage reads against the flattened
-/// result. Native + synchronous (`DefaultResolver`).
+/// Compose a USD layer from disk into a **live** [`Stage`] (read through
+/// [`StageView`](crate::view::StageView), the production read path). Native +
+/// synchronous, backed by [`openusd::ar::DefaultResolver`] — for tests and tools
+/// that load a real on-disk `.usda` with every reference resolved, distinct from
+/// the async `AssetServer`-driven loader (the storage-based recipe path).
+/// `DefaultResolver` anchors each relative reference to its own layer's
+/// directory, so the on-disk reference tree resolves exactly as authored.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn compose_file_to_stage(path: &std::path::Path) -> Result<Stage> {
     let id = path
@@ -360,7 +218,7 @@ pub fn compose_file_to_stage(path: &std::path::Path) -> Result<Stage> {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod inherits_compose_tests {
     use super::*;
-    use crate::usd_data::UsdDataExt;
+    use crate::{CanonicalStage, StageView, UsdRead};
 
     /// De-risk the control-profile design: a `class` carrying a `Controls` child
     /// scope, `inherits`-ed by a vessel prim, must land those child prims (with
@@ -373,14 +231,14 @@ class \"_RoverControl\"\n{\n    def \"Controls\"\n    {\n        def \"forward\"
 def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
         let stage = build_stage_from_closure(&crate::StageRecipe::from_source("inherits.usda", usda))
             .expect("compose");
-        let data = flatten_stage(&stage).expect("flatten");
+        let view = StageView::new(&stage);
         let fwd = SdfPath::new("/Rover/Controls/forward").unwrap();
         assert_eq!(
-            data.prim_attribute_value::<String>(&fwd, "lunco:port").as_deref(),
+            view.value::<String>(&fwd, "lunco:port").as_deref(),
             Some("throttle"),
             "inherited Controls child must appear under /Rover with its attrs"
         );
-        assert_eq!(data.prim_attribute_value::<f64>(&fwd, "lunco:scale"), Some(1.0));
+        assert_eq!(view.value::<f64>(&fwd, "lunco:scale"), Some(1.0));
     }
 
     /// The real delivery mechanism: a vessel in one file pulls a control-profile
@@ -402,10 +260,11 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
             "#usda 1.0\n(\n    subLayers = [@./control_profiles.usda@]\n)\ndef Xform \"SkidRover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n",
         )
         .unwrap();
-        let data = compose_file(&rover).expect("compose_file");
+        let stage = compose_file_to_stage(&rover).expect("compose stage");
+        let view = StageView::new(&stage);
         let fwd = SdfPath::new("/SkidRover/Controls/forward").unwrap();
         assert_eq!(
-            data.prim_attribute_value::<String>(&fwd, "lunco:port").as_deref(),
+            view.value::<String>(&fwd, "lunco:port").as_deref(),
             Some("throttle"),
             "cross-file subLayers+inherits must land the Controls scope on the vessel"
         );
@@ -418,14 +277,15 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
     fn skid_rover_asset_inherits_control_profile() {
         let asset = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../assets/vessels/rovers/skid_rover.usda");
-        let data = compose_file(&asset).expect("compose skid_rover.usda");
+        let stage = compose_file_to_stage(&asset).expect("compose skid_rover.usda");
+        let view = StageView::new(&stage);
         let fwd = SdfPath::new("/SkidRover/Controls/forward").unwrap();
         assert_eq!(
-            data.prim_attribute_value::<String>(&fwd, "lunco:port").as_deref(),
+            view.value::<String>(&fwd, "lunco:port").as_deref(),
             Some("throttle"),
             "skid_rover must inherit the rover control profile's Controls scope"
         );
-        assert_eq!(data.prim_attribute_value::<f64>(&fwd, "lunco:scale"), Some(1.0));
+        assert_eq!(view.value::<f64>(&fwd, "lunco:scale"), Some(1.0));
     }
 
     /// The two harder composition paths, on the real `lander_test.usda`:
@@ -436,19 +296,20 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
     fn lander_scene_composes_inline_and_referenced_control_profiles() {
         let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../assets/scenes/sandbox/lander_test.usda");
-        let data = compose_file(&scene).expect("compose lander_test.usda");
+        let stage = compose_file_to_stage(&scene).expect("compose lander_test.usda");
+        let view = StageView::new(&stage);
 
         // (a) inline lander inherits _LanderControl through the scene subLayer.
         let lander_fwd = SdfPath::new("/LanderTest/Lander/Controls/forward").unwrap();
         assert_eq!(
-            data.prim_attribute_value::<String>(&lander_fwd, "lunco:port").as_deref(),
+            view.value::<String>(&lander_fwd, "lunco:port").as_deref(),
             Some("pitch"),
             "inline lander must inherit the lander control profile"
         );
         // (b) referenced rover's subLayer+inherits composes through the ref arc.
         let rover_fwd = SdfPath::new("/LanderTest/SkidRover/Controls/forward").unwrap();
         assert_eq!(
-            data.prim_attribute_value::<String>(&rover_fwd, "lunco:port").as_deref(),
+            view.value::<String>(&rover_fwd, "lunco:port").as_deref(),
             Some("throttle"),
             "referenced rover must carry its inherited Controls through the reference"
         );
@@ -480,20 +341,18 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
         ]);
         let stage = build_stage_from_closure(&crate::StageRecipe { root_id, bytes })
             .expect("compose scene→wrapper→glb");
-        let data = flatten_stage(&stage).expect("flatten");
+        // A `CanonicalStage` precomputes the binary-arc sites the live
+        // `resolved_asset` synth reads (a bare `StageView::new` carries none).
+        let cs = CanonicalStage::from_stage(stage, "scene.usda");
 
         let visual = SdfPath::new("/Scene/Bldg/Visual").unwrap();
-        let attr = visual.append_property("lunco:resolvedAsset").unwrap();
-        let spec = data
-            .spec(&attr)
+        let resolved = cs
+            .view()
+            .resolved_asset(&visual)
             .expect("resolvedAsset must be synthesized on the composed Visual prim");
-        match spec.get("default") {
-            Some(Value::AssetPath(a)) => assert!(
-                a.as_str().ends_with("model.glb"),
-                "resolvedAsset should point at the wrapper-co-located glb, got {}",
-                a.as_str()
-            ),
-            other => panic!("resolvedAsset should be an AssetPath, got {other:?}"),
-        }
+        assert!(
+            resolved.ends_with("model.glb"),
+            "resolvedAsset should point at the wrapper-co-located glb, got {resolved}"
+        );
     }
 }
