@@ -42,6 +42,16 @@ const HEAVY_TILE_RES: usize = 2048;
 #[derive(Component)]
 pub struct DemTerrainSurface;
 
+/// Marker: this terrain's authoritative state lives in a **document** — edits are
+/// authored there (journaled, undoable, synced) and *project* into the runtime layer,
+/// so live-edit commands must NOT mutate the `TerrainLayerStack` directly for it. A
+/// terrain WITHOUT this marker is document-free (quick-spawned, headless, tests) and
+/// edits apply directly to the runtime layer. The assembly crate that owns the USD
+/// document attaches this once it resolves the backing doc; terrain-surface stays
+/// USD-agnostic (it only reads the marker, never the document).
+#[derive(Component)]
+pub struct DocBackedTerrain;
+
 /// Stamp the shared [`CraterLayer`] (from the global [`ObstacleFieldSpec`]) into a
 /// DEM working grid as REAL geometry — so the large basins appear in BOTH the
 /// streamed visual mesh AND the heightfield collider (you can drive into them).
@@ -199,7 +209,7 @@ fn on_spawn_dem_terrain(
     // composes richer stacks from child layer prims.)
     let mut stack = crate::terrain_layers::TerrainLayerStack::default();
     if ev.crater_density > 0.0 {
-        stack.0.push(crate::terrain_layers::make_crater_layer(ev.crater_density, 22.0, 0.3, 0xC0FFEE));
+        stack.push_layer("craters", crate::terrain_layers::make_crater_layer(ev.crater_density, 22.0, 0.3, 0xC0FFEE));
     }
     let half_window = match ev.window_m {
         w if w == 0.0 => f64::INFINITY,          // whole map
@@ -234,7 +244,135 @@ fn on_spawn_dem_terrain(
     );
 }
 
-register_commands!(on_spawn_dem_terrain);
+/// Dig or raise the terrain with a smooth radial brush: `amplitude` metres at the
+/// centre — **negative digs, positive raises** — falling to zero at `radius`. `(x, z)`
+/// are terrain-local metres. Appends an edit layer to every DEM terrain; the
+/// `Changed<TerrainLayerStack>` re-bake lands it in the tiles AND the collider, so the
+/// rover drives exactly the hole/berm you see. Reachable from rhai / API / MCP as a
+/// command: `cmd("BrushTerrain", #{x, z, radius, amplitude})`.
+/// Monotonic per-session counter minting an **explicit** stable id for each runtime
+/// edit (`edit/brush#7`) — never reused, so removing one edit can't collide with a
+/// later one. This is the runtime stand-in for a USD prim path: once edits are
+/// authored as prims, the id becomes the path and this counter goes away.
+#[derive(Resource, Default)]
+pub struct TerrainEditSeq(pub u64);
+
+impl TerrainEditSeq {
+    fn next(&mut self, kind: &str) -> crate::terrain_layers::LayerId {
+        let id = crate::terrain_layers::LayerId::new(format!("edit/{kind}#{}", self.0));
+        self.0 += 1;
+        id
+    }
+}
+
+/// Resolve the layer id for an edit: caller-supplied when non-empty, else the next
+/// monotonic handle. Explicit either way — no synthesised heuristic.
+fn edit_id(explicit: &str, kind: &str, seq: &mut TerrainEditSeq) -> crate::terrain_layers::LayerId {
+    if explicit.is_empty() {
+        seq.next(kind)
+    } else {
+        crate::terrain_layers::LayerId::new(explicit.to_string())
+    }
+}
+
+#[Command(default)]
+pub struct BrushTerrain {
+    pub x: f32,
+    pub z: f32,
+    pub radius: f32,
+    pub amplitude: f32,
+    /// Optional stable id for the edit (so it can be removed later). Empty = auto.
+    pub id: String,
+}
+
+#[on_command(BrushTerrain)]
+fn on_brush_terrain(
+    trigger: On<BrushTerrain>,
+    // Document-free terrains only — a doc-backed terrain's edits are authored to its
+    // USD document (the authoring tier) and project in, so we must not mutate it here.
+    mut terrains: Query<&mut crate::terrain_layers::TerrainLayerStack, Without<DocBackedTerrain>>,
+    mut seq: ResMut<TerrainEditSeq>,
+) {
+    let ev = trigger.event();
+    if ev.radius <= 0.0 {
+        return;
+    }
+    let id = edit_id(&ev.id, "brush", &mut seq);
+    let kind = crate::terrain_layers::EditKind::Brush {
+        center: [ev.x as f64, ev.z as f64],
+        radius: ev.radius as f64,
+        amplitude: ev.amplitude as f64,
+    };
+    // TODO(terrain-as-USD-doc): author this as a USD doc op on the terrain's edits
+    // prim (record→journal→project), not a direct ECS mutation. Applies to every
+    // terrain for now; scope by the terrain's document/prim path.
+    for mut stack in &mut terrains {
+        stack.add_edit(id.clone(), kind);
+    }
+}
+
+/// Flatten the terrain toward `target_y` within `radius`, blending back to the
+/// existing surface at the edge — the "level a landing pad" tool. `(x, z)` are
+/// terrain-local metres. Reachable as `cmd("FlattenTerrain", #{x, z, radius, target_y})`.
+#[Command(default)]
+pub struct FlattenTerrain {
+    pub x: f32,
+    pub z: f32,
+    pub radius: f32,
+    pub target_y: f32,
+    /// Optional stable id for the edit (so it can be removed later). Empty = auto.
+    pub id: String,
+}
+
+#[on_command(FlattenTerrain)]
+fn on_flatten_terrain(
+    trigger: On<FlattenTerrain>,
+    mut terrains: Query<&mut crate::terrain_layers::TerrainLayerStack, Without<DocBackedTerrain>>,
+    mut seq: ResMut<TerrainEditSeq>,
+) {
+    let ev = trigger.event();
+    if ev.radius <= 0.0 {
+        return;
+    }
+    let id = edit_id(&ev.id, "flatten", &mut seq);
+    let kind = crate::terrain_layers::EditKind::Flatten {
+        center: [ev.x as f64, ev.z as f64],
+        radius: ev.radius as f64,
+        target_y: ev.target_y as f64,
+    };
+    for mut stack in &mut terrains {
+        stack.add_edit(id.clone(), kind);
+    }
+}
+
+/// Remove a terrain layer by its [`LayerId`] — undo a specific dig/flatten (or any
+/// addressable layer). Re-bakes via `Changed<TerrainLayerStack>`. Reachable as
+/// `cmd("RemoveTerrainLayer", #{id})`.
+#[Command(default)]
+pub struct RemoveTerrainLayer {
+    pub id: String,
+}
+
+#[on_command(RemoveTerrainLayer)]
+fn on_remove_terrain_layer(
+    trigger: On<RemoveTerrainLayer>,
+    mut terrains: Query<&mut crate::terrain_layers::TerrainLayerStack, Without<DocBackedTerrain>>,
+) {
+    let id = crate::terrain_layers::LayerId::new(trigger.event().id.clone());
+    for mut stack in &mut terrains {
+        // An edit inside the consolidated layer, or a whole authored layer.
+        if !stack.remove_edit(&id) {
+            stack.remove_layer(&id);
+        }
+    }
+}
+
+register_commands!(
+    on_spawn_dem_terrain,
+    on_brush_terrain,
+    on_flatten_terrain,
+    on_remove_terrain_layer
+);
 
 /// What the off-thread build produces, ready to assemble into entities.
 struct DemBuild {
@@ -307,7 +445,8 @@ fn start_dem_builds(
         // The terrain's composed layer stack (from its USD child layer prims). Stamp
         // layers (craters, …) run OFF-THREAD in the build task below; scatter layers
         // (rocks) are no-ops here and run on the main thread post-build.
-        let layers = stack.map(|s| s.0.clone()).unwrap_or_default();
+        let layers: Vec<_> =
+            stack.map(|s| s.0.iter().map(|e| e.layer.clone()).collect()).unwrap_or_default();
 
         let task = AsyncComputeTaskPool::get().spawn(async move {
             let meta_bytes = read_bytes(meta_path).await?;
@@ -543,7 +682,7 @@ fn spawn_restamp_task(
     stack: &crate::terrain_layers::TerrainLayerStack,
 ) {
     let base_grid = base.0.clone();
-    let layers = stack.0.clone();
+    let layers: Vec<_> = stack.0.iter().map(|e| e.layer.clone()).collect();
     let task = AsyncComputeTaskPool::get().spawn(async move {
         let mut grid = (*base_grid).clone();
         for layer in &layers {
@@ -772,13 +911,22 @@ pub struct RegenerateTerrainLayers;
 
 /// Live terrain tuning from the Inspector's "Craters & Rocks" panel: when the
 /// shared [`ObstacleFieldSpec`] is edited (the panel fires
-/// [`UpdateObstacleFieldSpec`]), rebuild every DEM terrain's crater/rock layers
-/// from the new spec. Mutating the stack trips `Changed<TerrainLayerStack>`, so
-/// [`start_dem_restamp`] re-bakes OFF-THREAD off the retained base grid and refreshes
-/// the tiles progressively — no GeoTIFF re-read, no scene reload, no frame freeze.
+/// [`UpdateObstacleFieldSpec`]), rebuild every **document-free** DEM terrain's
+/// crater/rock layers from the new spec. Mutating the stack trips
+/// `Changed<TerrainLayerStack>`, so [`start_dem_restamp`] re-bakes OFF-THREAD off the
+/// retained base grid and refreshes the tiles progressively — no GeoTIFF re-read.
+///
+/// **Doc-backed terrains are excluded** (`Without<DocBackedTerrain>`): their crater/
+/// rock layers are USD-authored (`lunco:layer` prims) and owned by the projection, so
+/// mutating the stack directly would (a) fight the next USD re-projection and (b) run
+/// a full re-stamp of a possibly huge terrain (e.g. the ±4 km moonbase — 10 M verts)
+/// on every slider tick. Tuning a doc-backed terrain's craters must author to its USD
+/// crater prim instead (SetAttribute → project → bounded re-stamp), the same
+/// authoring tier the edit commands use — TODO, and it needs bounded re-bake to be
+/// cheap on large terrains.
 fn on_obstacle_spec_rebuild_layers(
     trigger: On<lunco_obstacle_field::plugin::UpdateObstacleFieldSpec>,
-    mut terrains: Query<&mut crate::terrain_layers::TerrainLayerStack>,
+    mut terrains: Query<&mut crate::terrain_layers::TerrainLayerStack, Without<DocBackedTerrain>>,
 ) {
     let spec = trigger.event().spec.clone();
     for mut stack in &mut terrains {
@@ -790,6 +938,7 @@ fn on_obstacle_spec_rebuild_layers(
 /// [`crate::plugin::TerrainSurfacePlugin`].
 pub(crate) fn register(app: &mut App) {
     app.register_type::<SpawnDemTerrain>()
+        .init_resource::<TerrainEditSeq>()
         .add_message::<RegenerateTerrainLayers>()
         .add_observer(on_obstacle_spec_rebuild_layers)
         .add_systems(

@@ -208,10 +208,15 @@ fn finish_derived_bakes(
         };
         let surface = images.add(data_texture(maps.res, maps.surface_rgba));
         let normal = images.add(data_texture(maps.res, maps.normal_rgba));
+        // `try_*`: a terrain re-bake / doc-backed scene reload can despawn +
+        // re-instantiate this terrain while its derived-layer bake is still in flight,
+        // so the entity may be gone by the time these deferred commands apply. No-op
+        // silently rather than panicking the whole app (as the sibling terrain systems
+        // already do — `scatter_terrain_layers`, `finish_dem_restamp`).
         commands
             .entity(entity)
-            .remove::<DerivedBakeTask>()
-            .insert(DerivedLayerHandles { surface, normal });
+            .try_remove::<DerivedBakeTask>()
+            .try_insert(DerivedLayerHandles { surface, normal });
     }
 }
 
@@ -243,8 +248,8 @@ fn apply_derived_layers(
         }
         commands
             .entity(entity)
-            .remove::<DerivedLayerHandles>()
-            .insert(DerivedLayersBuilt);
+            .try_remove::<DerivedLayerHandles>()
+            .try_insert(DerivedLayersBuilt);
         info!("[terrain-layers] bound DEM-derived surface+normal layers ({}²)", LAYER_RES);
     }
 }

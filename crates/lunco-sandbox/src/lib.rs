@@ -568,7 +568,25 @@ impl Plugin for SandboxCorePlugin {
         // gets a DEM heightfield built onto it; its `materialType` authors the
         // material via the universal ShaderMaterial path. Core (not GUI-gated):
         // the headless server needs the collider for deterministic physics.
-        app.add_systems(Update, (bridge_usd_dem_terrain, refresh_layered_terrain_layers));
+        app.add_systems(
+            Update,
+            (
+                bridge_usd_dem_terrain,
+                refresh_layered_terrain_layers,
+                cache_terrain_document,
+                refresh_docbacked_terrain_from_doc,
+            ),
+        );
+        // Authoring tier: doc-backed terrains route live edits to their USD document's
+        // runtime layer (journaled, non-destructive) instead of mutating the runtime
+        // layer stack directly. Document-free terrains are handled in lunco-terrain-surface.
+        app.init_resource::<TerrainEditPrimSeq>()
+            .add_observer(on_brush_terrain_authored)
+            .add_observer(on_flatten_terrain_authored)
+            .add_observer(on_remove_terrain_edit_authored)
+            // Doc-backed crater/rock tuning authors to USD (→ project → regen), instead
+            // of the direct stack-mutation path (which handles document-free terrains).
+            .add_observer(on_obstacle_spec_authored);
         // Bind authored terrain layer maps (albedo/mineral/surface/normal) onto
         // the terrain's `ShaderMaterial`. GUI-only (materials are an `ui`-feature
         // concern; the headless server has no render materials and needs only the
@@ -741,7 +759,20 @@ fn parse_terrain_layer_stack<R: lunco_usd::UsdDataExt>(
     registry: &lunco_terrain_surface::TerrainLayerParserRegistry,
 ) -> lunco_terrain_surface::TerrainLayerStack {
     let mut stack = lunco_terrain_surface::TerrainLayerStack::default();
+    // Runtime edit prims (`lunco:layer = "edit"`) — one prim per edit — aggregate into
+    // the single `EditsLayer` (the runtime projection tier), folded on top at the end.
+    let mut edits: Vec<(lunco_terrain_surface::LayerId, lunco_terrain_surface::EditKind)> = Vec::new();
     for child in reader.prim_children(terrain) {
+        let attrs = UsdLayerAttrs { reader, sdf: child.clone() };
+        // An edit prim (carries the packed `lunco:edit`)? Aggregate into the single
+        // edits layer, keyed by its prim path (its stable identity).
+        if let Some(edit) =
+            lunco_terrain_surface::parse_edit(lunco_terrain_surface::LayerId::new(child.as_str()), &attrs)
+        {
+            edits.push(edit);
+            continue;
+        }
+        // Otherwise a normal composable layer prim (`lunco:layer = …`).
         let Some(layer_type) = reader.prim_attribute_value::<String>(&child, "lunco:layer") else {
             continue;
         };
@@ -752,10 +783,17 @@ fn parse_terrain_layer_stack<R: lunco_usd::UsdDataExt>(
             warn!("[usd-dem] child layer '{layer_type}' has no registered terrain layer parser");
             continue;
         }
-        let attrs = UsdLayerAttrs { reader, sdf: child.clone() };
         if let Some(layer) = registry.parse(&layer_type, &attrs) {
-            stack.0.push(layer);
+            // Identity = the layer prim's path: unique, stable, already in hand. Lets
+            // several same-kind layers coexist and be addressed individually.
+            stack.push_layer(child.as_str(), layer);
         }
+    }
+    if !edits.is_empty() {
+        stack.push_layer(
+            lunco_terrain_surface::EDITS_LAYER_ID,
+            std::sync::Arc::new(lunco_terrain_surface::EditsLayer::from_edits(edits)),
+        );
     }
     stack
 }
@@ -806,11 +844,24 @@ fn sync_obstacle_spec_from_usd<R: lunco_usd::UsdDataExt>(
 /// layered terrain on that stage and re-insert it. The change is picked up by
 /// `regenerate_dem_layers` (it re-stamps off the retained base grid + re-scatters —
 /// no GeoTIFF re-read), so crater/rock/shader tuning applies live.
+///
+/// **Document-free terrains only** (`Without<DocBackedTerrain>`). A doc-backed
+/// terrain re-bakes from its registry document instead
+/// ([`refresh_docbacked_terrain_from_doc`]) — the source of truth — so it doesn't
+/// depend on the twin stage asset being reloaded (its `LiveRebuildExempt` marker
+/// deliberately suppresses that reload). Routing exactly one path per terrain
+/// avoids a double re-parse.
 fn refresh_layered_terrain_layers(
     mut ev: MessageReader<AssetEvent<lunco_usd::UsdStageAsset>>,
     stages: Res<Assets<lunco_usd::UsdStageAsset>>,
     registry: Res<lunco_terrain_surface::TerrainLayerParserRegistry>,
-    q: Query<(Entity, &lunco_usd::UsdPrimPath), With<lunco_terrain_surface::DemTerrainSurface>>,
+    q: Query<
+        (Entity, &lunco_usd::UsdPrimPath),
+        (
+            With<lunco_terrain_surface::DemTerrainSurface>,
+            Without<lunco_terrain_surface::DocBackedTerrain>,
+        ),
+    >,
     mut commands: Commands,
 ) {
     let mut modified = std::collections::HashSet::new();
@@ -830,6 +881,339 @@ fn refresh_layered_terrain_layers(
         let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else { continue };
         let stack = parse_terrain_layer_stack(&*stage.reader, &sdf, &registry);
         commands.entity(entity).insert(stack);
+    }
+}
+
+/// Caches the backing USD **document** on a doc-projected DEM terrain: the raw
+/// `DocumentId` handle of the live scene the terrain belongs to, plus the
+/// [`DocBackedTerrain`](lunco_terrain_surface::DocBackedTerrain) marker. Its presence
+/// is the switch that routes live edits to the **authoring tier** (author a USD op →
+/// journal → project). Its *absence* means a document-free terrain (quick
+/// `SpawnDemTerrain`, headless, tests — those carry no `UsdPrimPath`, so they never
+/// match here), whose edits apply **directly** to the runtime layer.
+///
+/// Resolution covers both projection paths: a live-imported scene (`OpenFile`) carries
+/// the `DocumentId` on its [`LiveDocScene`](lunco_usd::live_projection::LiveDocScene)
+/// root sharing the terrain's stage; a twin default scene (`--scene` / workspace Twin)
+/// has no `LiveDocScene`, so the doc is recovered from
+/// [`DocBackedTwinScenes`](lunco_usd::twin_projection::DocBackedTwinScenes) via the
+/// stage's `twin://<name>/<rel>` asset path. Retries each frame (guarded by
+/// `Without<TerrainDocument>`) until the doc mounts; once resolved, it stops.
+#[derive(Component)]
+struct TerrainDocument {
+    /// Raw `DocumentId` of the backing doc (rebuilt as `DocumentId` at the authoring
+    /// boundary). The document is the edit authority; edits author there and project in.
+    doc: u64,
+}
+
+/// Monotonic suffix for authored edit prim names (`edit_<n>`), unique per session so a
+/// removed edit's name is never reused.
+#[derive(Resource, Default)]
+struct TerrainEditPrimSeq(u64);
+
+/// Author one edit onto every **doc-backed** terrain as USD ops on its document's
+/// **runtime** layer — non-destructive, ephemeral over the base DEM (Omniverse
+/// session-layer pattern): an `AddPrim` for the edit prim + a `SetAttribute` with the
+/// packed edit. `registry.apply` records both to the journal (undo / sync), then
+/// `live_projection` re-projects the composed `base ⊕ runtime` → `parse_edit` → the one
+/// `EditsLayer`. The direct-path observer in lunco-terrain-surface handles document-FREE
+/// terrains (`Without<DocBackedTerrain>`), so exactly one path fires per terrain.
+fn author_terrain_edit(
+    kind: lunco_terrain_surface::EditKind,
+    terrains: &Query<(&lunco_usd::UsdPrimPath, &TerrainDocument), With<lunco_terrain_surface::DemTerrainSurface>>,
+    registry: &mut lunco_usd::UsdDocumentRegistry,
+    seq: &mut TerrainEditPrimSeq,
+) {
+    for (prim_path, td) in terrains {
+        let doc = lunco_doc::DocumentId::new(td.doc);
+        let name = format!("edit_{}", seq.0);
+        seq.0 += 1;
+        let edit_prim = format!("{}/{name}", prim_path.path.trim_end_matches('/'));
+        // 1. The edit prim, on the ephemeral runtime layer (non-destructive).
+        let added = registry.apply(
+            doc,
+            lunco_usd::UsdOp::AddPrim {
+                edit_target: lunco_usd::LayerId::runtime(),
+                parent_path: prim_path.path.clone(),
+                name,
+                type_name: None,
+                reference: None,
+            },
+        );
+        if added.is_err() {
+            continue;
+        }
+        // 2. The packed edit parameters (shared schema with `parse_edit`).
+        let (attr, ty, value) = lunco_terrain_surface::edit_attr_write(&kind);
+        let _ = registry.apply(
+            doc,
+            lunco_usd::UsdOp::SetAttribute {
+                edit_target: lunco_usd::LayerId::runtime(),
+                path: edit_prim,
+                name: attr.to_string(),
+                type_name: ty.to_string(),
+                value,
+            },
+        );
+    }
+}
+
+fn on_brush_terrain_authored(
+    trigger: On<lunco_terrain_surface::BrushTerrain>,
+    terrains: Query<(&lunco_usd::UsdPrimPath, &TerrainDocument), With<lunco_terrain_surface::DemTerrainSurface>>,
+    registry: Option<ResMut<lunco_usd::UsdDocumentRegistry>>,
+    mut seq: ResMut<TerrainEditPrimSeq>,
+) {
+    let ev = trigger.event();
+    if ev.radius <= 0.0 {
+        return;
+    }
+    let Some(mut registry) = registry else { return };
+    author_terrain_edit(
+        lunco_terrain_surface::EditKind::Brush {
+            center: [ev.x as f64, ev.z as f64],
+            radius: ev.radius as f64,
+            amplitude: ev.amplitude as f64,
+        },
+        &terrains,
+        &mut registry,
+        &mut seq,
+    );
+}
+
+fn on_flatten_terrain_authored(
+    trigger: On<lunco_terrain_surface::FlattenTerrain>,
+    terrains: Query<(&lunco_usd::UsdPrimPath, &TerrainDocument), With<lunco_terrain_surface::DemTerrainSurface>>,
+    registry: Option<ResMut<lunco_usd::UsdDocumentRegistry>>,
+    mut seq: ResMut<TerrainEditPrimSeq>,
+) {
+    let ev = trigger.event();
+    if ev.radius <= 0.0 {
+        return;
+    }
+    let Some(mut registry) = registry else { return };
+    author_terrain_edit(
+        lunco_terrain_surface::EditKind::Flatten {
+            center: [ev.x as f64, ev.z as f64],
+            radius: ev.radius as f64,
+            target_y: ev.target_y as f64,
+        },
+        &terrains,
+        &mut registry,
+        &mut seq,
+    );
+}
+
+/// Remove a doc-backed terrain edit by authoring a `RemovePrim` of its edit prim — the
+/// removal `id` IS the prim path. Document-free removal is handled directly in
+/// lunco-terrain-surface. Applies to the doc that owns the prim; others reject harmlessly.
+fn on_remove_terrain_edit_authored(
+    trigger: On<lunco_terrain_surface::RemoveTerrainLayer>,
+    terrains: Query<&TerrainDocument, With<lunco_terrain_surface::DemTerrainSurface>>,
+    registry: Option<ResMut<lunco_usd::UsdDocumentRegistry>>,
+) {
+    let Some(mut registry) = registry else { return };
+    let path = trigger.event().id.clone();
+    for td in &terrains {
+        let _ = registry.apply(
+            lunco_doc::DocumentId::new(td.doc),
+            lunco_usd::UsdOp::RemovePrim { edit_target: lunco_usd::LayerId::runtime(), path: path.clone() },
+        );
+    }
+}
+
+fn cache_terrain_document(
+    terrains: Query<
+        (Entity, &lunco_usd::UsdPrimPath),
+        (With<lunco_terrain_surface::DemTerrainSurface>, Without<TerrainDocument>),
+    >,
+    scenes: Query<(&lunco_usd::live_projection::LiveDocScene, &lunco_usd::UsdPrimPath)>,
+    twin_scenes: Res<lunco_usd::twin_projection::DocBackedTwinScenes>,
+    asset_server: Res<AssetServer>,
+    mut commands: Commands,
+) {
+    for (entity, terrain_path) in &terrains {
+        // Path 1 — live-imported scene (`OpenFile`): the `LiveDocScene` root of the
+        // terrain's stage carries the `DocumentId`.
+        let doc = scenes
+            .iter()
+            .find(|(_, scene_path)| scene_path.stage_handle == terrain_path.stage_handle)
+            .map(|(scene, _)| scene.doc)
+            // Path 2 — twin default scene (`--scene` / workspace Twin): no
+            // `LiveDocScene` is created; recover the doc from `DocBackedTwinScenes`
+            // via the stage's `twin://<name>/<rel>` asset path.
+            .or_else(|| {
+                let asset_path = asset_server.get_path(terrain_path.stage_handle.id())?;
+                let rel_path = asset_path.path().to_string_lossy();
+                let (name, rel) = rel_path.split_once('/')?;
+                twin_scenes.doc_for(name, rel)
+            });
+        let Some(doc) = doc else {
+            continue; // neither mounted yet (retry next frame), or document-free.
+        };
+        info!("[terrain-doc] terrain {entity} → doc {} (DocBackedTerrain attached)", doc.0);
+        // `LiveRebuildExempt`: an authored crater/rock/edit is an attribute-only doc
+        // change; without this the twin projection would despawn + re-instantiate the
+        // terrain (a full DEM re-read) per edit. The exempt marker suppresses that
+        // reload; `refresh_docbacked_terrain_from_doc` re-bakes off the registry doc.
+        commands.entity(entity).insert((
+            TerrainDocument { doc: doc.0 },
+            lunco_terrain_surface::DocBackedTerrain,
+            lunco_usd::twin_projection::LiveRebuildExempt,
+        ));
+    }
+}
+
+/// Last registry-document generation a doc-backed terrain re-baked at, so
+/// [`refresh_docbacked_terrain_from_doc`] re-parses only when the document moved.
+#[derive(Component)]
+struct TerrainDocGeneration(u64);
+
+/// Re-bake a doc-backed DEM terrain from its backing registry document whenever
+/// that document's generation advances (an authored crater/rock/edit op). Reads
+/// the composed (`base ⊕ runtime`) layer straight from the registry — the source
+/// of truth — and re-parses the composable `TerrainLayerStack` in place;
+/// `regenerate_dem_layers` then re-stamps off the retained base grid (no GeoTIFF
+/// re-read, no entity despawn).
+///
+/// This is the twin-scene counterpart to the asset-event
+/// [`refresh_layered_terrain_layers`] (now document-free only): a twin terrain
+/// carries no `LiveDocScene`, and its `LiveRebuildExempt` marker suppresses the
+/// twin stage reload, so the registry generation is the re-bake trigger. It also
+/// covers live-imported (`LiveDocScene`) doc-backed terrains uniformly — one
+/// re-bake path keyed on the document, not the projected asset.
+fn refresh_docbacked_terrain_from_doc(
+    registry: Option<Res<lunco_usd::UsdDocumentRegistry>>,
+    parser: Res<lunco_terrain_surface::TerrainLayerParserRegistry>,
+    mut terrains: Query<
+        (
+            Entity,
+            &lunco_usd::UsdPrimPath,
+            &TerrainDocument,
+            Option<&mut TerrainDocGeneration>,
+            Has<lunco_terrain_surface::DemBaseGrid>,
+        ),
+        With<lunco_terrain_surface::DemTerrainSurface>,
+    >,
+    mut commands: Commands,
+) {
+    // Brings the `Document::generation` trait method into scope (method
+    // resolution only — the name isn't bound, so it can't clash).
+    use lunco_doc::Document as _;
+    let Some(registry) = registry else { return };
+    for (entity, prim_path, td, tracker, has_base_grid) in &mut terrains {
+        let doc = lunco_doc::DocumentId::new(td.doc);
+        let Some(host) = registry.host(doc) else { continue };
+        let cur_gen = host.document().generation();
+        match tracker {
+            Some(mut g) => {
+                if g.0 == cur_gen {
+                    continue; // document unchanged since our last re-bake
+                }
+                g.0 = cur_gen; // live edit — re-bake from composed below
+            }
+            None => {
+                // First sight. The initial bridge parse (`bridge_usd_dem_terrain`) read
+                // the BASE stage only, so a runtime overlay restored from
+                // `.lunco/runtime/…` on `DocumentOpened` (e.g. a crater/rock layer the
+                // user disabled last session) is NOT reflected in the just-built terrain.
+                // If such an overlay exists we MUST re-bake from the composed (base ⊕
+                // runtime) doc — otherwise the persisted disable is silently ignored and
+                // the terrain shows the base values on every launch. `start_dem_restamp`
+                // needs the retained `DemBaseGrid`, so wait for the async DEM build to
+                // deposit it before triggering. With no runtime overlay the bridge parse
+                // is authoritative → seed + skip (no wasted startup re-stamp).
+                let has_runtime_override = host
+                    .document()
+                    .runtime_data()
+                    .iter()
+                    .any(|(_, spec)| spec.ty == openusd::sdf::SpecType::Prim);
+                if has_runtime_override && !has_base_grid {
+                    continue; // retry next frame, once the base grid is built
+                }
+                commands.entity(entity).insert(TerrainDocGeneration(cur_gen));
+                if !has_runtime_override {
+                    continue; // nothing persisted to re-apply
+                }
+                // fall through: re-parse composed + insert stack → one startup re-bake
+            }
+        }
+        let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else { continue };
+        let composed = host.document().composed();
+        let stack = parse_terrain_layer_stack(&composed, &sdf, &parser);
+        commands.entity(entity).insert(stack);
+    }
+}
+
+/// Author one attribute onto a prim's **runtime** layer (non-destructive override).
+fn author_layer_attr(
+    registry: &mut lunco_usd::UsdDocumentRegistry,
+    doc: lunco_doc::DocumentId,
+    path: &str,
+    name: &str,
+    type_name: &str,
+    value: String,
+) {
+    let _ = registry.apply(
+        doc,
+        lunco_usd::UsdOp::SetAttribute {
+            edit_target: lunco_usd::LayerId::runtime(),
+            path: path.to_string(),
+            name: name.to_string(),
+            type_name: type_name.to_string(),
+            value,
+        },
+    );
+}
+
+/// Inspector crater/rock tuning on a **doc-backed** terrain: author the changed params
+/// onto its USD `craters`/`rocks` layer prims (runtime layer) rather than mutating the
+/// `TerrainLayerStack` directly. The USD mutation then drives everything automatically
+/// — the registry document's generation advances → `refresh_docbacked_terrain_from_doc`
+/// re-parses the stack from the composed (`base ⊕ runtime`) doc → `start_dem_restamp`
+/// re-bakes off the retained base grid (off-thread, debounced; no GeoTIFF re-read). The
+/// terrain's `LiveRebuildExempt` marker suppresses the twin whole-scene reload this edit
+/// would otherwise trigger. This is the USD-source-of-truth path; the direct
+/// `on_obstacle_spec_rebuild_layers` handles only document-free terrains
+/// (`Without<DocBackedTerrain>`), so exactly one path fires.
+fn on_obstacle_spec_authored(
+    trigger: On<lunco_obstacle_field::plugin::UpdateObstacleFieldSpec>,
+    terrains: Query<(&lunco_usd::UsdPrimPath, &TerrainDocument), With<lunco_terrain_surface::DemTerrainSurface>>,
+    stages: Res<Assets<lunco_usd::UsdStageAsset>>,
+    registry: Option<ResMut<lunco_usd::UsdDocumentRegistry>>,
+) {
+    let Some(mut registry) = registry else { return };
+    let spec = &trigger.event().spec;
+    // The USD crater/rock layer parsers use `density > 0` as the on/off signal
+    // (`parse_crater_layer`/`parse_rock_layer` drop the layer at density ≤ 0), so the
+    // Inspector's `enabled` checkbox must fold into the authored density here — else an
+    // unchecked-but-nonzero layer re-parses as still-on and stays visible. Author the
+    // EFFECTIVE density (0 when disabled); the live in-memory spec keeps the real value,
+    // so re-checking restores it within the session.
+    let crater_density = if spec.craters.enabled { spec.craters.density } else { 0.0 };
+    let rock_density = if spec.rocks.enabled { spec.rocks.density } else { 0.0 };
+    for (prim_path, td) in &terrains {
+        let Some(stage) = stages.get(&prim_path.stage_handle) else { continue };
+        let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else { continue };
+        let doc = lunco_doc::DocumentId::new(td.doc);
+        let reader = &*stage.reader;
+        for child in reader.prim_children(&sdf) {
+            let path = child.as_str().to_string();
+            match reader.prim_attribute_value::<String>(&child, "lunco:layer").as_deref() {
+                Some("craters") => {
+                    info!("[obstacle-usd] authoring craters density={crater_density} (enabled={}) sizeMode={} → {path} (doc {})", spec.craters.enabled, spec.craters.size.mode, td.doc);
+                    author_layer_attr(&mut registry, doc, &path, "density", "float", crater_density.to_string());
+                    author_layer_attr(&mut registry, doc, &path, "sizeMode", "float", spec.craters.size.mode.to_string());
+                    author_layer_attr(&mut registry, doc, &path, "depthRatio", "float", spec.craters.depth_ratio.to_string());
+                    author_layer_attr(&mut registry, doc, &path, "rimRatio", "float", spec.craters.rim_height_ratio.to_string());
+                }
+                Some("rocks") => {
+                    author_layer_attr(&mut registry, doc, &path, "density", "float", rock_density.to_string());
+                    author_layer_attr(&mut registry, doc, &path, "sizeMode", "float", spec.rocks.size.mode.to_string());
+                }
+                _ => {}
+            }
+        }
     }
 }
 

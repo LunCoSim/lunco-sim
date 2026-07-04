@@ -67,12 +67,13 @@ pub use query::{register_terrain_queries, TerrainHeightProvider};
 pub use collider_ring::{ColliderTiles, TerrainColliderRing};
 pub use stream_viz::{DemHeightField, LodTiles, TerrainLodConfig, TerrainLodViz, TerrainShaderMode};
 pub use terrain_layers::{
-    make_crater_layer, LayerAttrSource, LayerScatterCx, TerrainLayer, TerrainLayerAppExt,
-    TerrainLayerParser, TerrainLayerParserRegistry, TerrainLayerStack, TerrainLayersApplied,
-    TerrainRock, TerrainScatterEntity,
+    edit_attr_write, make_crater_layer, parse_edit, EditKind, EditsLayer, LayerAttrSource, LayerEntry,
+    LayerId, LayerScatterCx, TerrainLayer, TerrainLayerAppExt, TerrainLayerParser,
+    TerrainLayerParserRegistry, TerrainLayerStack, TerrainLayersApplied, TerrainRock, TerrainScatterEntity,
+    EDITS_LAYER_ID,
 };
 pub use terrain::{
-    DemBaseGrid, DemTerrainRequest, DemTerrainSource, DemTerrainSurface, RegenerateTerrainLayers,
-    SpawnDemTerrain,
+    BrushTerrain, DemBaseGrid, DemTerrainRequest, DemTerrainSource, DemTerrainSurface, DocBackedTerrain,
+    FlattenTerrain, RegenerateTerrainLayers, RemoveTerrainLayer, SpawnDemTerrain,
 };
 pub use tile_mesh::{bake_tile_mesh, TileMesh};

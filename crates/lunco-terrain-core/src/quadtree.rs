@@ -165,6 +165,57 @@ impl Quadtree {
         out
     }
 
+    /// Select using a **measured per-node geometric error** instead of the uniform
+    /// `root / 2^depth` schedule. `node_error(coord, region)` returns the vertical
+    /// error (metres) of drawing that node at its own mesh resolution — see
+    /// [`crate::error::measure_node_error`]. A node refines when the focus is within
+    /// `range_factor · node_error(coord)`, so flat ground stays coarse and rims /
+    /// peaks earn deeper subdivision automatically.
+    ///
+    /// `node_error` must be a **pure function of the surface** (same inputs → same
+    /// output on every platform) to keep selection peer-deterministic like
+    /// [`select`](Self::select). It is called only for nodes the walk visits (lazy,
+    /// O(visited) — no eager error map). To bound the coarsest tile size over a truly
+    /// flat region, have the caller clamp `node_error` to a floor.
+    pub fn select_with_error(
+        &self,
+        focus_xz: [f64; 2],
+        eye_height: f64,
+        node_error: impl Fn(QuadCoord, Square) -> f64,
+    ) -> Vec<Selected> {
+        let mut out = Vec::new();
+        self.select_node_with_error(QuadCoord::ROOT, f64::INFINITY, focus_xz, eye_height, &node_error, &mut out);
+        out
+    }
+
+    fn select_node_with_error(
+        &self,
+        coord: QuadCoord,
+        parent_refine_range: f64,
+        focus: [f64; 2],
+        eye_height: f64,
+        node_error: &impl Fn(QuadCoord, Square) -> f64,
+        out: &mut Vec<Selected>,
+    ) {
+        let region = self.region(coord);
+        let horizontal = region.distance_to(focus);
+        let dist = (horizontal * horizontal + eye_height * eye_height).sqrt();
+        let refine_range = self.range_factor * node_error(coord, region).max(0.0);
+        let refine = coord.depth < self.max_depth && dist < refine_range;
+        if refine {
+            for child in coord.children() {
+                self.select_node_with_error(child, refine_range, focus, eye_height, node_error, out);
+            }
+            return;
+        }
+        // Morph toward the parent: `parent_refine_range` is the distance at which the
+        // parent stopped refining (∞ for the root), i.e. where this node's geometry
+        // would instead be the coarser parent — the CDLOD geomorph window end.
+        let morph_end = parent_refine_range;
+        let morph_start = if morph_end.is_finite() { self.morph_ratio * morph_end } else { f64::INFINITY };
+        out.push(Selected { coord, region, morph_start, morph_end });
+    }
+
     fn select_node(&self, coord: QuadCoord, focus: [f64; 2], eye_height: f64, out: &mut Vec<Selected>) {
         let region = self.region(coord);
         let horizontal = region.distance_to(focus);
@@ -306,5 +357,82 @@ mod tests {
         // Tighter pixel error → larger range_factor (refine sooner / from farther).
         let tight = Quadtree::from_screen_metric(8000.0, 6, 8000.0, 1080.0, 0.7854, 1.0);
         assert!(tight.range_factor > q.range_factor);
+    }
+
+    #[test]
+    fn error_driven_zero_error_stays_root() {
+        // A dead-flat surface (error 0 everywhere) never earns refinement → the whole
+        // region is a single root tile, however close the focus.
+        let q = qt();
+        let sel = q.select_with_error([0.0, 0.0], 0.0, |_, _| 0.0);
+        assert_eq!(sel.len(), 1);
+        assert_eq!(sel[0].coord, QuadCoord::ROOT);
+    }
+
+    #[test]
+    fn error_driven_matches_uniform_when_error_is_uniform() {
+        // Feeding the uniform `root/2^depth` error back in must reproduce `select`
+        // exactly — error-driven selection is a strict generalisation.
+        let q = qt();
+        let focus = [1234.0, -567.0];
+        let uniform = q.select(focus);
+        let via_error = q.select_with_error(focus, 0.0, |c, _| q.geometric_error(c.depth));
+        assert_eq!(uniform, via_error);
+    }
+
+    #[test]
+    fn error_driven_refines_locally_around_a_feature() {
+        // A "feature" at a fixed point: only nodes whose region contains it carry big
+        // error. Those refine to max depth; nodes far away stay coarse.
+        let q = qt();
+        let feature = [3000.0, -2000.0];
+        let node_error = |_c: QuadCoord, region: Square| -> f64 {
+            if region.distance_to(feature) <= 1e-6 {
+                q.root_geometric_error // huge → always refine while it contains the feature
+            } else {
+                0.0 // flat elsewhere → never refine
+            }
+        };
+        // Focus far away so distance never drives refinement — only the feature error does.
+        let sel = q.select_with_error([7000.0, 7000.0], 0.0, node_error);
+        let leaf = sel.iter().find(|s| s.region.distance_to(feature) <= 1e-6).unwrap();
+        assert_eq!(leaf.coord.depth, q.max_depth, "feature cell should reach max depth");
+        // A point far from the feature stays coarse: its node stops as soon as its
+        // branch no longer contains the feature (here, depth 1 — a root quadrant).
+        let corner = [7999.0, 7999.0];
+        let far = sel.iter().find(|s| s.region.distance_to(corner) <= 1e-6).unwrap();
+        assert!(far.coord.depth <= 1, "flat far field should stay coarse, got depth {}", far.coord.depth);
+    }
+
+    #[test]
+    fn error_driven_covers_root_exactly_and_disjoint() {
+        // Coverage invariant must hold for the error-driven path too (REPLACE refinement).
+        let q = qt();
+        let feature = [1500.0, 2500.0];
+        let sel = q.select_with_error([0.0, 0.0], 0.0, |_c, region| {
+            if region.distance_to(feature) <= 1e-6 { q.root_geometric_error } else { 0.0 }
+        });
+        let area: f64 = sel.iter().map(|s| s.region.side() * s.region.side()).sum();
+        let root_area = (2.0 * q.root_half_extent).powi(2);
+        assert!((area - root_area).abs() < 1e-3, "area {area} vs {root_area}");
+        for gx in 0..40 {
+            for gz in 0..40 {
+                let p = [
+                    -8000.0 + (gx as f64 + 0.5) * (16000.0 / 40.0) + 0.137,
+                    -8000.0 + (gz as f64 + 0.5) * (16000.0 / 40.0) + 0.137,
+                ];
+                let hits = sel.iter().filter(|s| s.region.distance_to(p) <= 1e-6).count();
+                assert_eq!(hits, 1, "point {p:?} covered {hits} times");
+            }
+        }
+    }
+
+    #[test]
+    fn error_driven_deterministic() {
+        let q = qt();
+        let f = |_c: QuadCoord, r: Square| r.distance_to([100.0, 100.0]);
+        let a = q.select_with_error([50.0, 50.0], 3.0, f);
+        let b = q.select_with_error([50.0, 50.0], 3.0, f);
+        assert_eq!(a, b);
     }
 }

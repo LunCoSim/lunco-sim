@@ -53,6 +53,49 @@ exactly one. `crater_delta`
 ([`lunco-obstacle-field/field.rs`](../../crates/lunco-obstacle-field/src/field.rs))
 is reused verbatim — as *math you call*, not pixels you stamp.
 
+### Won't killing the overlay lose crater detail?
+
+No — it *gains* detail. The overlay's original rationale was real: a crater should
+be crisper than the coarse (~5 m) DEM mesh. But that rationale conflated two ideas:
+
+- **"craters are a distinct composable layer"** — keep this, it was right;
+- **"craters render as a separate floating mesh"** — drop this. A layer ≠ a second
+  surface.
+
+What let the overlay out-detail the DEM was **never that it was a separate mesh** —
+it was that it sampled craters **analytically** (`crater_delta` as a function),
+decoupled from the DEM's 5 m grid. The oracle keeps exactly that. In the composed
+sample `height_at = dem.height_at(x,z) + crater_delta(…)`, the two terms have
+different resolution limits: `dem.height_at` is bilinear off the coarse DEM (smooth,
+low-frequency — correct, since there *is* no sub-5 m ground data to invent), while
+`crater_delta` is **analytic → infinite resolution, no grid.** And a CDLOD tile's
+vertex density is *not* the DEM's density: a near tile is 33² verts over a small,
+deeply-subdivided patch, so the crater rim resolves as sharply as the tile
+tessellates — well below 5 m via error-driven refinement + over-zoom — while the
+ground under it stays smooth. The crater is crisper than the DEM mesh *because* its
+contribution is a function, not baked pixels.
+
+The overlay's one genuine win — **dense-rim tessellation** (many polys on the rim,
+few on the floor, more poly-efficient than a uniform tile) — is preserved as the
+**feature-declared radial remesh** (lever 2 under *Detail on demand*): the same
+dense-rim/sparse-floor patch, but sampling the *same* composed oracle (coincident,
+no `lift`) and stitched into the tile instead of floating over a different surface.
+
+Net comparison:
+
+| | Overlay (today) | Crater layer as `HeightSource` modifier |
+|---|---|---|
+| Detail source | analytic `crater_delta` | **same** analytic `crater_delta` |
+| Sub-DEM resolution | yes (floated) | **yes (coincident)** |
+| Dense-rim tessellation | yes | **yes** (feature remesh, honest) |
+| Follows ground relief | no (smooth base + `lift`) | **yes** (sampled on the real surface) |
+| Collider matches visual | **no** (visual-only) | **yes** (ring samples same source) |
+
+The only casualties are `lift` and the smooth-base sampling — precisely the two
+things that caused *elevated / doesn't-follow-ground / colliders-suck*. The
+better-than-DEM detail is preserved and strengthened; it never actually required a
+second surface.
+
 ## USD describes the stack (two senses of "layer")
 
 USD has no native heightfield prim, so terrain follows the
@@ -154,8 +197,8 @@ rounds off. The oracle makes the fix cheap. Four levers, in priority order:
 bakeable**, never GPU tessellation or mesh shaders. It must be wasm-safe (locked
 no-VTF/no-compute rule), it must feed **avian colliders** (which cannot consume a
 GPU-tessellated surface), and each detailed tile — however tessellated — must be
-**content-addressable** as a `cache://` `TerrainTile` keyed by `(stack-hash, quad,
-lod)`. GPU displacement would give visuals the physics and cache can't see.
+**content-addressable** (via `lunco-precompute`, keyed on `(stack-hash, quad,
+lod)`). GPU displacement would give visuals the physics and cache can't see.
 
 *Worked example — a crater central peak:* a height term in the crater modifier
 for large craters (`+peak_h · gauss(d / peak_r)`) → single-valued, so the oracle
@@ -208,6 +251,133 @@ works* — height-as-function, composition, error-driven detail, content-address
   Geology is time-invariant, so the oracle is independent of ephemeris churn —
   bodies move, terrain functions don't.
 
+## Alignment with the canonical USD Stage
+
+The networking branch made the openusd **live composed `Stage` the runtime source
+of truth** (server + client): one write path (`UsdOp → EditTarget → Stage`), one
+read path (extractors read a `StageView` over the live stage via the `UsdRead`
+trait), and `flatten → sdf::Data → ECS` demoted to a derived cache slated for
+deletion (*"remove flatten entirely, canonical only"*). ECS is a **projection
+membrane** — render / physics / cosim / **terrain** read Send ECS components, never
+the `!Send` Stage. (Full design: `USD_CANONICAL_LAYERED_DOCUMENT_DESIGN.md` on the
+networking branch.)
+
+Terrain is **one more projection consumer** on that membrane, exactly like the
+policy-as-projection pattern networking shipped. This is not a parallel pipeline;
+it is three planes over the *one* Stage:
+
+| Plane | Terrain content | Mechanism |
+|---|---|---|
+| **Authoring** (USD Stage) | terrain root + `lunco:layer` child prims (dem / craters / carve / rocks / shader) + georef / anchor | edits = `UsdOp` on an EditTarget; composition, reference-arc cascade, RBAC, journal, cross-peer sync all **free** from the canonical machinery |
+| **Projection membrane** (StageSink → ECS) | `TerrainLayerStack`, `TerrainGeoref`, `DemTerrainRequest` components | a terrain `UsdAttrProjection`; change-driven — only the prims that resynced re-project |
+| **Derived runtime** (oracle → geometry) | `HeightSource` stack → CDLOD tiles + collider ring | sampled on demand; content-addressed via `lunco-precompute`; regen = an atomic activation unit |
+
+**Why this matches USD's dynamic nature:** terrain geometry is never authored or
+stored — it is a **pure deterministic projection** of the composed Stage. So every
+dynamic event — a layer edit, a session-layer override, a cross-peer journaled op,
+**adding a landing-site DEM via a `references` arc** (*"spawn = add reference arc →
+composes + instances + cascades free"*), a hot-reload — simply changes the
+projected spec; the oracle swaps and tiles / colliders re-bake lazily and
+atomically. There is nothing to invalidate by hand. The *composition* is USD layer
+composition; the *rendering* is its downstream shadow — describe-don't-store
+carried to its conclusion.
+
+**Two hard couplings this forces (do them when terrain rebases onto networking):**
+
+- **Migrate terrain's USD read off flatten.** `bridge_usd_dem_terrain` and
+  `refresh_layered_terrain_layers` (`lunco-sandbox/lib.rs`) still read
+  `Res<Assets<UsdStageAsset>>` via `UsdDataExt` — the flatten path being deleted.
+  The read swap is mechanical (`reader.prim_attribute_value → view.value`, over the
+  `UsdRead` surface the other extractors already use), but it also **retires
+  terrain's private `AssetEvent<UsdStageAsset>::Modified` reload observer**: live
+  edits become a StageSink re-projection of `TerrainLayerStack` → `Changed<…>` →
+  rebake. Net *less* wiring.
+
+- **Regen must be a physics-atomic activation unit, not despawn+rebuild.** The
+  canonical spec names the *terrain double-bake* as the thing incremental
+  projection exists to fix: **keep the old collider until the new one is ready,
+  swap in one flush**, gated by a sim-time barrier so the swap is deterministic
+  across peers. The height-oracle makes staging clean — swap the pure `HeightSource`
+  first (cheap), stage the tile / collider bakes, activate the collider atomically.
+
+## Dynamic modification: editing terrain with tools
+
+*(By design, not yet built — this section records how live tool-driven terrain
+edits fit the oracle so nothing here has to be retrofitted later.)*
+
+A tool edit — dig a pit, raise a berm, flatten a pad, bore a skylight, drop a
+boulder — is **not a mutation of a mesh or a heightfield**. It is one more
+**modifier pushed onto the `HeightSource` stack**. Because features already compose
+(`Craters ∘ Dem ∘ Globe`), an edit is just the newest wrap: `Edit_n ∘ … ∘ Edit_1 ∘
+Dem ∘ Globe`. The oracle is *always* the current truth; there is no baked artefact
+to keep in sync, so "modify the terrain" and "describe the terrain" are the same
+operation. This is the single strongest payoff of the function-not-grid model.
+
+**An edit is a USD layer op — nothing bespoke.** A tool authors the edit as a
+`lunco:layer` prim (or attribute) on the terrain, written through the canonical path
+(`UsdOp → EditTarget → Stage`) into the runtime/session layer. Everything the
+editing story normally needs then comes **free** from machinery that already exists:
+
+| Editing need | Provided by |
+|---|---|
+| Undo / redo, edit history | the USD journal (`lunco-twin-journal`) — revert the op, the oracle recomposes |
+| Multiplayer sync | the edit is a small **spec** (brush centre/radius/profile/Δ), journaled + replicated like any op; peers re-derive identical geometry — no terrain transfer |
+| Permissions (who may edit what) | layer-scoped RBAC on the terrain prim |
+| Non-destructive layers | composition: edits ride the session/runtime layer over an untouched base DEM; drop the layer → base returns |
+| Determinism | the [quantize](../../crates/lunco-terrain-core/src/quantize.rs) firewall keeps edited colliders byte-identical across peers |
+
+**Reactivity is the same projection membrane.** The authored edit changes the
+projected `TerrainLayerStack` → the composed `HeightSource` swaps → only the quads
+overlapping the brush AABB are dirtied and re-baked (bounded footprint), then the
+collider is swapped atomically (the same keep-old-until-new activation the regen path
+uses). No manual invalidation; an edit is indistinguishable from any other USD edit
+flowing through the membrane.
+
+**Authoring tier vs runtime tier — USD + Fabric, the Omniverse pattern.** USD is the
+source of truth, so edits author to it *by default*, but — like Omniverse, which never
+runs physics/render off authored USD but off a runtime cache (**Fabric**) — the terrain
+is **two tiers**: the **USD terrain doc** (committed edits as tiny param prims, the
+truth) and the **ECS `EditsLayer` + bake** (the projection physics/render read, our
+Fabric). Three disciplines follow, and the [command journal](command-journal.md) design
+carries the full rationale:
+
+- **Edit target is a runtime/session layer** (over the untouched base DEM), promotable
+  to persistent on save — `UsdOp` carries `edit_target`. A scratch dig never bakes into
+  the asset unless committed.
+- **Commit-granularity, never per-frame.** A continuous sculpt drag edits the *runtime*
+  projection live and authors **one** USD op on release (as Omniverse edits Fabric on
+  drag, writes USD on mouse-up); a click-dig authors at once. Authoring per frame would
+  thrash composition — the one hard rule.
+- **One prim per edit** — affordable *because* USD holds only tiny parameter records
+  (the oracle stores no geometry), so each edit is a prim addressable by path (its
+  identity) and individually undoable, while the runtime folds them all into the single
+  `EditsLayer`. So "one layer vs. per-edit" was a false tension: **prim-per-edit is the
+  authoring tier; the one `EditsLayer` is the projection tier** — both at once.
+
+**The three channels absorb the full toolset.** Height edits (dig / raise / flatten)
+are height modifiers; carve edits (tunnel, skylight, pit shaft) are carve/mask;
+place-object edits (rock, prefab, structure) are geometry gprims. One editing model,
+the same three contributions a static layer makes.
+
+**What this asks of the design (hooks, deliberately deferred):**
+
+- **A generic `BrushField` modifier** in `lunco-terrain-core` — `CraterField` is
+  already exactly this shape (a parametric radial profile over placements), so a
+  brush generalises it to arbitrary profiles; the deterministic bucket index it uses
+  gives the **bounded dirty-region lookup** an edit needs for free.
+- **Freeform sculpt** (arbitrary per-vertex Δ, not parametric) is the one edit that
+  *does* store samples: a `SparseEditField` — a hashmap/edit-raster of touched cells,
+  itself a `HeightSource`. It stays bounded, composable, and content-addressable; it
+  is a *layer over* the base, never a replacement of it.
+- **An edit → dirty-quads signal** into the bake queue (the optimization branch's
+  `BakeQueue`): an edit enqueues its affected quads, and error-driven detail
+  ([measured error](../../crates/lunco-terrain-core/src/error.rs)) auto-refines a
+  sharp edit locally while slope-limiting keeps its collider contact-stable.
+
+In short: the height oracle handles dynamic modification natively. The zero-conflict
+core landing now (`CraterField`, the bucket index, measured error, quantize, the
+slope limiter) is already the substrate an editing toolset would stand on.
+
 ## Current state & roadmap
 
 **As-built (works today):** DEM ingest + crop/resample; static heightfield
@@ -215,7 +385,12 @@ collider; streamed CDLOD visual tiles (`stream_viz`) with vertex-morph geomorph
 via `ShaderMaterial`; opt-in per-tile collider ring (`collider_ring`); big_space
 per-tile anchoring; `TerrainLayerStack` composed from USD `lunco:layer` child
 prims; `CompositeHeightSource` (core, pure); `TerrainGeoref` parsed from
-`lunco:anchor:*`; derived surface/normal layers; `TerrainHeight` scripting query.
+`lunco:anchor:*`; derived surface/normal layers content-addressed through
+`lunco-precompute` (`derived_layers.rs`); `TerrainHeight` scripting query.
+
+> **Note on the USD read path:** as-built terrain still reads USD via the *flatten*
+> reader (`UsdStageAsset` / `UsdDataExt`). The canonical-Stage cutover (above) is a
+> forced migration once this worktree merges networking — see the two couplings.
 
 **Known gaps (in the order they should land):**
 
@@ -227,19 +402,27 @@ prims; `CompositeHeightSource` (core, pure); `TerrainGeoref` parsed from
    (peaks/rims refine automatically); collider ring res driven by the same metric.
 3. **Carve/mask channel** — the seam for caves/pits/skylights (baker clip +
    heightfield→trimesh fallback on mouth tiles).
-4. **Orbit→surface bridge app-wiring** — build the `CompositeHeightSource` *live*
+4. **Canonical-Stage read migration** (forced when this worktree merges
+   networking) — move `bridge_usd_dem_terrain` + the layer parsers onto
+   `UsdRead`/`StageView`; replace the `AssetEvent<UsdStageAsset>` reload observer
+   with a terrain `UsdAttrProjection` off StageSink; make regen a physics-atomic
+   activation unit (see *Alignment* above).
+5. **Orbit→surface bridge app-wiring** — build the `CompositeHeightSource` *live*
    from `lunco:anchor:lat/lon`, relate the globe and surface grids, swap by
    altitude. (`CompositeHeightSource` is done in core; the wiring + lat/lon↔XZ
    reprojection are deferred.)
-5. **`cache://` `TerrainTile`** — content-addressed tile bake cache (one bake
-   feeds visuals + physics), the L1/L2 LRU described in the caching strategy.
+6. **Tile bake cache** — extend the existing `lunco_precompute::Bake` pattern
+   (already used by `derived_layers`) to tile + collider bakes, so one bake feeds
+   visuals + physics and ships as a spec+hash across peers. (Not a bespoke
+   `cache://` asset — the content-address substrate already landed.)
 
 [Cesium-for-Omniverse]: https://github.com/CesiumGS/cesium-omniverse
 
 ## See also
 
 - [`caching-and-precompute-strategy.md`](caching-and-precompute-strategy.md) — the
-  `cache://` asset stack that terrain tiles ride on.
-- [`21-domain-usd.md`](21-domain-usd.md) — USD as the description plane.
+  `lunco-precompute` content-address substrate terrain tiles ride on.
+- [`21-domain-usd.md`](21-domain-usd.md) — USD as the description plane; the
+  canonical live-Stage source-of-truth model terrain projects from.
 - [`mobility-substrate.md`](mobility-substrate.md) — the rovers that drive the
   collider ring.

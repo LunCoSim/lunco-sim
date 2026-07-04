@@ -111,7 +111,11 @@ lunco-twin-journal = { path = "../lunco-twin-journal", optional = true }
 # the doc/theme/general-UI crates. sandbox.rs cfg-gates every use behind
 # `feature = "ui"`.
 lunco-materials = { path = "../lunco-materials", optional = true }
-lunco-doc = { path = "../lunco-doc", optional = true }
+# Not optional/ui-gated: the doc subsystem (DocumentId, edit authoring) is a core,
+# headless-safe concern — not a UI feature. Already compiled transitively via
+# lunco-doc-bevy, so naming it directly adds no build cost. Was under `ui` only because
+# one UI panel imported DocumentId (CQ: de-UI-gate the doc subsystem).
+lunco-doc = { path = "../lunco-doc" }
 lunco-theme = { path = "../lunco-theme", optional = true }
 lunco-ui = { path = "../lunco-ui", optional = true }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
@@ -169,7 +173,6 @@ ui = [
     "dep:lunco-workbench",
     "dep:lunco-tutorial",
     "dep:lunco-materials",
-    "dep:lunco-doc",
     "dep:lunco-theme",
     "dep:lunco-ui",
     "dep:lunco-settings",
