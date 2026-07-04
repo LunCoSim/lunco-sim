@@ -78,7 +78,7 @@ Layer 1: SimCore (always)         — MinimalPlugins, ScheduleRunner, big_space,
 **Rules for agents**:
 1. **Never mix layers in a single plugin**. A plugin is either domain logic (Layer 2) OR UI (Layer 4), never both.
 2. **UI lives in `ui/` subdirectory**. Domain crates have `src/ui/mod.rs` that exports a `*UiPlugin`. UI code stays in `ui/`.
-3. **UI never mutates state directly**. UI interactions dispatch typed `#[Command]` events (`ctx.trigger(...)` / `commands.trigger(...)`); observers in domain code do the work — see §4.2. (`CommandMessage` is a *networking* relay type, **not** the UI command path — don't reach for it in panels.)
+3. **UI never mutates state directly**. UI interactions dispatch typed `#[Command]` events (`ctx.trigger(...)` / `commands.trigger(...)`); observers in domain code do the work — see §4.2. (The obsolete `CommandMessage` has been removed — always use typed commands.)
 4. **Headless must work**. Removing Layer 3 and Layer 4 plugins must leave a functioning simulation. Tests use `MinimalPlugins` only.
 5. **Domain plugins are self-contained**. `SandboxEditPlugin` provides logic (spawn, selection, undo). `SandboxEditUiPlugin` provides panels. They are independent.
 

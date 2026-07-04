@@ -1,11 +1,6 @@
 # Rhai Integration Design — scripting & scenarios
 
-Status: **IMPLEMENTED** + design rationale. 2026-06-28, `luau-integration`
-worktree. Builds green native (default), `--no-default-features` (script-free),
-`python`, and `wasm32-unknown-unknown`. Verified by
-`crates/lunco-scripting/tests/rhai_rover_live_test.rs` (21 live end-to-end tests)
-+ lib tests. Sections 0–8 below are the original design rationale; this header is
-the as-built reference.
+Status: **IMPLEMENTED** + design rationale. Builds green native (default), `--no-default-features` (script-free), `python`, and `wasm32-unknown-unknown`. Verified by `crates/lunco-scripting/tests/rhai_rover_live_test.rs` (21 live end-to-end tests) + lib tests. Sections 0–8 below are the original design rationale; this header is the as-built reference.
 
 > **Authoring a scenario?** Read the **[Scripting Guide](./scripting-guide.md)** —
 > a task-oriented how-to. This document is the design rationale + as-built notes.
@@ -14,7 +9,7 @@ Goal (met): drive scenarios from rhai — *"rover moves along a path via
 checkpoints, loads next goals"* — and, more broadly, **manipulate every object in
 the sim (Twin, USD, Modelica, cosim, scene, vehicles) from script.**
 
-### Shipped since the original P1–P4 (2026-06-29)
+### Shipped Features
 
 - **Scenario parameters** — `RunScenario { …, params }` (JSON object string) →
   read in-script as the `params` constant; one source serves many entities.
@@ -435,7 +430,7 @@ the *engine* (it's shipped rhai, hot-reloadable).
 
 ## 7d. Core/script boundary (mechanism vs policy) + ROS2
 
-**Directive (2026-06-28):** objectives are authored in rhai; behavior trees and
+**Directive:** objectives are authored in rhai; behavior trees and
 all higher-level constructs are REMOVED from the Rust core; ROS2 integration is
 planned. Resulting split:
 
@@ -483,7 +478,7 @@ the seam is the message bus, not the scenario logic.
 
 ## 7e. Simulation events — REUSE TelemetryEvent (do not invent SimEvent)
 
-Directive (2026-06-28): introduce a first-class sim event that "fires" and that
+Directive: introduce a first-class sim event that "fires" and that
 scripts react to — but **reuse existing infrastructure, don't reinvent.** It
 already exists in `crates/lunco-core/src/telemetry.rs` (XTCE/YAMCS-aligned — bonus
 ground-station/ROS interop):
@@ -589,7 +584,7 @@ behavior) vs *centralized* (one scenario `cmd()`s many entities).
 
 ## 8. Open decisions for the user
 
-RESOLVED 2026-06-28:
+### Resolved Decisions
 - Sequencing model → **callbacks first** (persistent rhai, `on_tick`/`on_event`),
   declarative plans added later.
 - Bridge scope → **all commands, behind RBAC** (generic `cmd()`).

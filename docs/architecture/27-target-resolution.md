@@ -2,16 +2,13 @@
 
 > Status: Design · Audience: contributors planning target/run-config resolution (proposal, not implemented)
 
-**Date:** 2026-06-04
 **Scope:** how LunCoSim decides *which* thing to simulate and *with what bounds*, why the current logic breeds drift bugs, how to make that bug class unrepresentable, and how the same machinery generalizes from Modelica to USD (framed against the FMI / SSP standards).
-
-> Standards specifics (FMI 3.0 `DefaultExperiment`, SSP `.ssd` element names, GMAT stop conditions, Simulink configuration sets) are being fact-checked by a `/deep-research` run. Anything that comes back refuted will be corrected in a follow-up revision; claims are flagged **[verify]** where confidence is from knowledge rather than a cited spec.
 
 ---
 
 ## 1. The problem (the bug class)
 
-Every resolution bug hit during the 2026-06-03 session is the same shape: **one question is answered by N inlined implementations that drift apart.** Three questions, each answered in ≥3 places, each with an independent copy that can (and did) diverge:
+The typical resolution bug has the same shape: **one question is answered by N inlined implementations that drift apart.** Three questions, each answered in ≥3 places, each with an independent copy that can (and did) diverge:
 
 | Question | Implementations | Observed drift |
 |---|---|---|
@@ -19,13 +16,13 @@ Every resolution bug hit during the 2026-06-03 session is the same shape: **one 
 | Which name matches the query? | exact-or-leaf `rsplit('.').next()` idiom copy-pasted in ≥4 sites | one copy did exact-only → short-name `FastRunActiveModel{class:"RoverThermalSystem"}` missed the `experiment(...)` annotation, silently fell back |
 | Which bounds / what fallback? | `resolve_setup_bounds` (fallback `t_end = 10.0`) **vs** `dispatch_experiment` (fallback `t_end = 1.0`) | **live divergence**: panel & API show 10 s, FastRun actually runs 1 s |
 
-The fixes applied in that session were **point fixes** (swap `first_non_pkg` → `simulation_candidates()` at two call sites). They removed three divergences but left the structure that breeds them: resolution is computed *inline at each call site*. While that is true, every new call site reinvents the logic and re-introduces drift.
+Initial fixes were **point fixes** (swap `first_non_pkg` → `simulation_candidates()` at two call sites). They removed three divergences but left the structure that breeds them: resolution is computed *inline at each call site*. While that is true, every new call site reinvents the logic and re-introduces drift.
 
 ---
 
 ## 2. Current system inventory
 
-File references as of 2026-06-04 (`crates/lunco-modelica`, `crates/lunco-experiments`).
+File references in `crates/lunco-modelica` and `crates/lunco-experiments`:
 
 ### 2.1 Class candidates & ranking — `index.rs`
 - `ClassKind::is_simulatable()` (`index.rs:281`) → `true` only for `Model | Block | Class`.
@@ -152,7 +149,7 @@ Internally: `pick` the class over one borrowed `ResolveCtx` (index, drafts, cach
 
 ## 5. Generalization to USD — framed against FMI & SSP
 
-### 5.1 What the standards say (verified — `/deep-research`, 2026-06-04, 25 claims unanimous 3-0, zero refuted)
+### 5.1 What the standards say (verified)
 - **FMI 3.0** (Functional Mock-up Interface, Modelica Association) standardizes a *single component* — an FMU: a black box with declared inputs/outputs/parameters and a step function (`fmi3DoStep`). Its `modelDescription.xml` carries an optional **`DefaultExperiment`** element with `startTime / stopTime / tolerance / stepSize` — a 1:1 match for `RunBounds` (`h0` ≈ `stepSize`). ([fmi-standard.org/docs/3.0](https://fmi-standard.org/docs/3.0/))
   - **Correction worth internalizing:** the **co-simulation *master algorithm* is explicitly NOT part of the FMI standard** — FMI standardizes only the component interface and leaves the master to the tool. So the LunCoSim cosim master loop is *not* a fork-gone-wrong; owning the master is exactly what FMI expects. **Only the component boundary should align to FMI — the loop is ours to own.**
 - **SSP 2.0** (System Structure & Parameterization, same body; released Dec 2024 / Jan 2025) standardizes the *system around the components* — which components exist, how their connectors are wired, and parameter values, in a `.ssp` container (`SystemStructure.ssd` + `.ssv` parameter sets + `.ssm` mappings). It is FMI's companion: "FMI exchanges individual models, SSP exchanges composite systems." ([ssp-standard.org/docs/2.0](https://ssp-standard.org/docs/2.0/))
@@ -199,8 +196,8 @@ Prioritized by value.
 
 1. **No declared, typed, causal ports.** SSP requires each connector to declare causality (input/output/parameter) and data type. LunCoSim ports are untyped `String` keys in HashMaps, discovered at runtime — which is why a typo in `lunco:simWires` fails silently instead of at author time, and why a wire can't be validated before stepping. **Biggest actionable gap.** USD can carry this as a connector schema on the prim.
 2. **Connection transform is half of SSP's.** `SimConnection.scale` = SSP `factor`; there is no `offset` and no unit conversion at the boundary — directly relevant to [41-axes-and-units](41-axes-and-units.md), which is exactly the unit/transform concern SSP folds into the connection.
-3. **Run-config is not a first-class object.** Mature tools (Simulink configuration sets **[verify]**) keep solver/time/tolerance settings as named, switchable objects *separate from the model*. LunCoSim conflates target and settings; `ExperimentDrafts` is a half-step. A named `Scenario`/`RunConfig` dissolves the §4.4 precedence mess: bounds live in a Scenario; the annotation is merely the *seed* for a new Scenario, not one of four competing layers. SSP confirms the two-level split (system-level settings + per-FMU `DefaultExperiment`), which matches `twin.toml`/`.mission.ron` vs `experiment(...)`.
-4. **Time-only bounds — no stopping conditions.** GMAT and orbital sims terminate on *events* (elapsed time, apoapsis, altitude, contact, fuel depletion) **[verify]**. LunCoSim's domain is lunar/orbital (rover thermal over a lunar day; Abdulezer antipodal hops) — `RunBounds` cannot express "run until sunrise" / "until landing." Leave a `stop_condition` slot in the type.
+3. **Run-config is not a first-class object.** Mature tools (such as Simulink configuration sets) keep solver/time/tolerance settings as named, switchable objects *separate from the model*. LunCoSim conflates target and settings; `ExperimentDrafts` is a half-step. A named `Scenario`/`RunConfig` dissolves the §4.4 precedence mess: bounds live in a Scenario; the annotation is merely the *seed* for a new Scenario, not one of four competing layers. SSP confirms the two-level split (system-level settings + per-FMU `DefaultExperiment`), which matches `twin.toml`/`.mission.ron` vs `experiment(...)`.
+4. **Time-only bounds — no stopping conditions.** GMAT and orbital sims terminate on *events* (elapsed time, apoapsis, altitude, contact, fuel depletion). LunCoSim's domain is lunar/orbital (rover thermal over a lunar day; Abdulezer antipodal hops) — `RunBounds` cannot express "run until sunrise" / "until landing." Leave a `stop_condition` slot in the type.
 5. **No solver capability negotiation.** The session's ESDIRK34-fails / BDF-works / tol-must-be-1e-4 trial-and-error happened because stiffness is a *property of the model* that should travel with the target and be negotiated, not guessed. FMI puts suggested tolerance in `DefaultExperiment`; a `TargetSource::solver_hints()` would carry "this thermal model is stiff → BDF + loose tol" and prevent the detour.
 6. **No reproducibility provenance on results.** `Provenance` (§4.1) covers resolution-time "which class / which bounds source," but the fully-resolved `SimTarget + RunConfig` should be stored *with each `RunResult`* so any registry entry is re-runnable identically. Currently discarded after a run starts.
 
@@ -245,9 +242,9 @@ Three layers (consistent with the S2005 plan, with one correction).
 - [26-parallel-experiments](26-parallel-experiments.md) — bounded scheduler, `ExperimentRegistry`.
 - [41-axes-and-units](41-axes-and-units.md) — unit/transform boundary (relates to gap #2).
 
-## 11. References (external — verified 2026-06-04)
+## 11. References (external)
 
-`/deep-research` run, 25 claims, unanimous 3-0 high-confidence, zero refuted.
+Verified standards references:
 
 - FMI 3.0 spec — `DefaultExperiment`, `fmi3DoStep`, black-box FMU, master-not-standardized: <https://fmi-standard.org/docs/3.0/>, <https://github.com/modelica/fmi-standard/blob/main/docs/4_2_co-simulation_api.adoc>
 - SSP 2.0 — companion to FMI, Modelica + acausal components: <https://ssp-standard.org/docs/2.0/>, <https://ssp-standard.org/news/2024-12-20-ssp-2-0-release/>

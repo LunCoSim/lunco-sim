@@ -6,7 +6,7 @@ How the browser build keeps the UI responsive while rumoca compiles a model.
 
 ## Why
 
-`wasm32-unknown-unknown` is single-threaded. Until 2026-05, the wasm build
+`wasm32-unknown-unknown` is single-threaded. Originally, the wasm build
 ran the Modelica worker logic *on the Bevy main thread* via
 `worker::inline_worker_process`, so any compile that took seconds froze
 the page. Native already had the right shape — `worker::modelica_worker`
@@ -228,7 +228,7 @@ If `install_worker` fails (worker bundle missing, browser sandbox
 refuses, etc.) the inline path stays alive. `pump_commands_to_worker`
 early-returns on `WORKER.get().is_none()`, so commands stay in
 `rx_cmd`; `inline_worker_process` then drains them on the main thread
-just like the pre-2026-05 build. UI blocks on compile in that mode, but
+just like the inline fallback. UI blocks on compile in that mode, but
 the page still works.
 
 ## What's NOT solved

@@ -329,12 +329,9 @@ available. Fuzzy-search across:
 - Entities (navigate to Space System by name)
 - Modelica models (open a `.mo` file)
 - Parameters (jump to a named parameter in the Inspector)
-- Commands on the `CommandRegistry` of the selected entity
+- Commands applicable to the selected entity (discovered via the global command schema)
 
-Integrates with the ontology's [`CommandRegistry`](01-ontology.md)
-pattern — every Space System registers its available commands with
-metadata (name, args, validation ranges, documentation), which the
-palette makes discoverable for humans and AI agents.
+Integrates with the ontology's command schema pattern — the reflected metadata (name, fields, validation ranges, documentation) makes commands dynamically discoverable for humans and AI agents.
 
 ## 8. Detachable windows
 
@@ -367,15 +364,7 @@ restart:
   `~/.lunco/workspace-state/<fnv1a-hex>.json`. This is VS Code's
   `workspaceStorage/<hash>/` model — repos stay clean, no `.gitignore`
   churn, and personal layout never leaks into a shared project.
-
-> **Implemented (2026-05-30).** `lunco-workbench::window_persistence`
-> (global `WindowGeometry` settings section, restored before the
-> `Window` is built via `restored_window()`; ship-default size is the
-> named `DEFAULT_WINDOW_{WIDTH,HEIGHT}` constants, not magic numbers in
-> the binaries) and `lunco-workbench::workspace_state` (per-Twin
-> `WorkspaceState`, loaded on Twin activation, saved snapshot-gated like
-> recents). This **supersedes the earlier `layouts.toml` /
-> in-`project.toml` sketch** below.
+The `lunco-workbench::window_persistence` module restores the global `WindowGeometry` settings section before the main `Window` is created (default size is configured via `DEFAULT_WINDOW_{WIDTH,HEIGHT}` constants). Volatile UI state is managed via `lunco-workbench::workspace_state`, which loads a per-Twin `WorkspaceState` upon Twin activation and saves it when changes occur.
 
 **Reconciliation.** Restore maps stored string ids back to the panels /
 perspectives registered in *this* binary (sandbox and lunica ship

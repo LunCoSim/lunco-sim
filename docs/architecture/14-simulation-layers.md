@@ -8,7 +8,7 @@
 > `trait Participant`, `ParticipantSpec`, and `IslandPartitioner` — **do not
 > exist in the codebase**. Today the Twin is a plain filesystem container
 > (`lunco-twin` / `lunco-workspace`); control flows through the existing
-> `CommandMessage` / HTTP `/api/commands` fabric and the cosim systems in
+> Typed Commands / HTTP `/api/commands` fabric and the cosim systems in
 > `lunco-cosim` (`SimConnection`, `PendingForces`, `apply_pending_forces`), not
 > through a Twin-owned command queue. What *is* implemented today:
 > `RunStatus` / `RunBounds` / experiment runs in `lunco-experiments`, cosim

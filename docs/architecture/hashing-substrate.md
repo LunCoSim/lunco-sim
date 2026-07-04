@@ -1,7 +1,7 @@
 # Hashing substrate (`lunco-hash`) — Substrate E
 
 *Part of the efficiency/maintainability architecture. See
-`caching-and-precompute-strategy.md` and `caching-implementation-plan.md`.*
+`caching-and-precompute-strategy.md`.*
 
 ## The problem
 

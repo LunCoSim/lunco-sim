@@ -283,7 +283,7 @@ used). Everything else has sensible defaults.
 > `lunco-workspace`). The live-`Resource` control plane and the `TwinCommand`
 > queue described below **do not exist in code** — there is no `TwinCommand`
 > type. Control actions currently flow through the existing command/API fabric
-> (`CommandMessage`, the HTTP `/api/commands` endpoint, cosim/run systems), not
+> (Typed Commands, the HTTP `/api/commands` endpoint, cosim/run systems), not
 > through a Twin-owned queue. This section is the target design.
 
 Twin is not only an on-disk manifest — at runtime it would be a **live Bevy

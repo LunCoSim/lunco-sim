@@ -35,7 +35,7 @@ Status legend: **Implemented** (built, in tree) · **Partial** (core built, gaps
 - **015 ↔ 031** — sandbox spawn/gizmo tooling (031, implemented) overlaps realtime-assembly (015); assembly auto-wiring still pending.
 - **013 ↔ 017** — SysML model mapping (013) and robotics/interop standards (017) share the model-to-ECS / export surface.
 
-## Removed specs (2026-06-29 doc audit)
+## Removed specs
 
 Deleted as obsolete/superseded or never-started wishlist (recoverable via git history):
 

@@ -9,7 +9,7 @@
 //! real aerospace hardware:
 //! 1. **Autonomous Entities**: Subsystems (e.g., GNC, Power, Mobility) are 
 //!    independent ECS entities. 
-//! 2. **Asynchronous Messages**: Communication occurs via [CommandMessage]s 
+//! 2. **Asynchronous Messages**: Communication occurs via typed commands (e.g., `#[Command]` events)
 //!    broadcast over the ECS event bus, allowing modules to be 
 //!    hotswapped or re-tasked in real-time.
 //! 3. **Hardware Abstraction**: The [FlightSoftware] component uses a 
@@ -37,7 +37,7 @@ impl Plugin for LunCoFswPlugin {
 /// Marker component for an autonomous functional unit.
 ///
 /// **Theory**: Represents a distinct piece of flight hardware (or emulated 
-/// process) that registers its own listeners for [CommandMessage].
+/// process) that registers its own listeners for typed commands.
 #[derive(Component, Debug, Clone, Reflect, Default)]
 #[reflect(Component, Default)]
 pub struct VesselSubsystem;

@@ -138,8 +138,7 @@ customizable. Command palette (Ctrl+P) for search + action.
 - **Activity bar** — primary navigation (Scene / Subsystems / Assets /
   Console / Search). VS Code pattern maps well to multi-domain tools.
 - **Command palette** (Cmd+P) — universal keyboard-first action search.
-  Killer feature for power users; will integrate with the
-  `CommandRegistry` of each Space System.
+  Killer feature for power users; will integrate with the global `AppTypeRegistry` command schema.
 - Detachable windows (VS Code supports drag-tab-out-to-new-window).
 - Minimal default UI; progressive disclosure.
 

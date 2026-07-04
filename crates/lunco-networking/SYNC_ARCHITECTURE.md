@@ -103,7 +103,7 @@ The render-step rebasing is where gap A lives: M2 carries `(CellCoord, Transform
 each client maps it into its *own* origin. Identity (M1) and coordinates (M2) are
 orthogonal, so a content entity keeps its derived id while its cell+offset stream.
 
-### 4.1 M2-Predicted — as-built client prediction (SHIPPED 2026-06-11)
+### 4.1 M2-Predicted — Client Prediction Status
 
 The abstract "reconcile predicted (smooth error-correct, not rollback)" above is
 realised on the client as **physics-space error reduction** (Fiedler / Rocket

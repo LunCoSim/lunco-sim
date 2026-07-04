@@ -3,7 +3,7 @@
 > Status: Active · Audience: all contributors — canonical terminology
 >
 > **TL;DR.** The shared vocabulary for the whole codebase — Space System,
-> Verifier, Attribute, CommandMessage, Parameter (TM), and friends. Every
+> Verifier, Attribute, Typed Command, Parameter (TM), and friends. Every
 > spec and implementation MUST use these terms as defined here.
 
 This document serves as the definitive source of truth for the architectural terminology and concepts used in the LunCoSim ecosystem. All specifications and code implementations MUST adhere to these definitions.
@@ -13,21 +13,19 @@ This document serves as the definitive source of truth for the architectural ter
 - **Space System**: The universal container for an independent, controllable entity in the simulation (e.g., Rover, Satellite, Ground Station, Base). Following CCSDS and XTCE standards, a Space System is a recursive hierarchy of Subsystems and structural Links.
 - **Verifier**: A persistent, independent monitoring system that validates simulation state against analytical truth. Verifiers are the "Judges" of the digital twin, ensuring that physics and logic remain within verified engineering bounds. Following SysML v2, Verifiers execute **Verification Cases** against mission requirements.
 - **Attribute**: A measurable, persistent property of a physical model or structural link (e.g., `SuspensionStiffness`, `Mass`, `WheelRadius`). In our ECS, these are internal component fields exposed via **Bevy Reflection**. They are used for 1:1 alignment with SysML v2 and provide an "Engineering Backdoor" for real-time simulation calibration (Digital Twin tuning) without affecting FSW logic.
-- **CommandMessage**: The universal "Instruction" packet used for transport and communication. Inspired by **XTCE Telecommands (TC)**, it is a discrete, serializable data structure containing a unique `u64` ID, a target `Entity`, a source `Entity`, a command `name`, and high-precision **`f64`** arguments stored in a **`SmallVec<[f64; 4]>`** for stack-optimized performance. It serves as a "Dumb Transport" layer where spatial context is handled locally by the executor. The abstract instruction itself is referred to as a "Command".
-- **CommandResponse**: The **Feedback Loop** for the command fabric. Every `CommandMessage` triggers a response event containing an `ACK` (Accepted), `NACK` (Rejected), `InProgress`, or `Completed` status. This matches real-world Mission Control handshaking, ensuring that the USER or an AI Agent has definitive confirmation of execution truth.
+- **Typed Command (Command)**: The universal "Instruction" event used for transport and communication. Inspired by **XTCE Telecommands (TC)**, commands are defined as typed structs using Bevy ECS events (derived with `#[Command]` and registered via `register_commands!`). This provides a self-describing, serializable, and reflectable command system where spatial and domain context is resolved by observers in the domain code.
+- **Command Result (ACK)**: The **Feedback Loop** for the command fabric. Result-returning commands return `Result<Ack, String>` (`Ok` for success/ACK, `Err` for failure/NACK), pollable by ID via `QueryCommandResult`. This matches real-world Mission Control handshaking, ensuring that the USER, scripts, or AI Agents have definitive confirmation of execution truth.
 - **Parameter (TM)**: A dynamic, observable value representing the "Live State" of a system (e.g., `BatteryVoltage`, `CurrentSpeed`). Following **XTCE and YAMCS** standards, Parameters are sampled telemetry channels that form the continuous data stream monitored by ground stations.
 - **Action**: A stateful, long-running execution of a **Command**. While a Command is a discrete event (a "pulse"), an Action has a lifecycle (`Started`, `Running`, `Completed`, `Cancelled`) and can be **Preempted** by manual USER input. Inspired by **ROS Actions**, they are used for tasks like orbital transitions or automated docking.
-- **ControlStream**: A continuous, lossy, latest-sample-wins data channel for high-rate inputs that do not fit the discrete `CommandMessage` / long-running `Action` contract — e.g. joystick axes driving a vessel, live parameter scrubs, presence cursors. Modeled after **ROS 2 Topics** (`cmd_vel`-style, best-effort QoS) and NASA F Prime's setpoint + rate-group pattern: producers publish at any rate up to a per-stream cap, consumers see only the most recent sample, no acks, no replay. A Level 4 **Controller** / Level 3 **FSW** system on the Twin reads the latest sample at its own fixed rate and closes the control loop locally — clients publish *what they want*, never actuator outputs. Each stream declares a safe-fallback policy (`hold_last(timeout)`, `decay_to_zero(timeout)`, `fail_safe(default)`) so a network blip or producer pause degrades gracefully — same watchdog pattern as ROS 2 cmd_vel listeners. Distinct from `CommandMessage` (discrete, ordered, reliable, ack'd) and `Action` (long-running, lifecycle, preemptable); together these three form the Twin's complete write surface.
+- **ControlStream**: A continuous, lossy, latest-sample-wins data channel for high-rate inputs that do not fit the discrete **Typed Command** / long-running `Action` contract — e.g. joystick axes driving a vessel, live parameter scrubs, presence cursors. Modeled after **ROS 2 Topics** (`cmd_vel`-style, best-effort QoS) and NASA F Prime's setpoint + rate-group pattern: producers publish at any rate up to a per-stream cap, consumers see only the most recent sample, no acks, no replay. A Level 4 **Controller** / Level 3 **FSW** system on the Twin reads the latest sample at its own fixed rate and closes the control loop locally — clients publish *what they want*, never actuator outputs. Each stream declares a safe-fallback policy (`hold_last(timeout)`, `decay_to_zero(timeout)`, `fail_safe(default)`) so a network blip or producer pause degrades gracefully — same watchdog pattern as ROS 2 cmd_vel listeners. Distinct from **Typed Commands** (discrete, ordered, reliable, ack'd) and `Action` (long-running, lifecycle, preemptable); together these three form the Twin's complete write surface.
 - **ViewPoint**: The logical "Eye" of an entity. It defines a position (`DVec3`), orientation (`Quat`), and field-of-view (`f32`) in the simulation's triple-precision space. It is decoupled from rendering; both humans and headless bots use ViewPoints to interact with the world spatially.
 - **CameraDevice**: A physicalised component representing a sensing hardware unit. A CameraDevice carries a **ViewPoint** and may optionally possess a physical **Collider** to prevent terrain clipping and inherit vibrations from its parent vessel.
 - **UserIntent**: The semantic mapping of raw inputs (Keyboard, Mouse, Gamepad) into abstract simulation goals (e.g., `MoveForward`, `LookAtTarget`). It serves as Level 5 of the control model, ensuring that the same physical key can trigger different actions depending on the context (e.g., free-fly vs. rover possession).
-- **CommandRegistry**: A self-describing component attached to a **Space System** or **Link** that defines its available abstract **Commands** and how they are represented as `CommandMessage`s. Inspired by **XTCE MetaCommands** and **NASA FPrime Command definitions**, it contains documentation, parameter types, and validation ranges for AI discovery.
+- **Command Registry (AppTypeRegistry)**: A self-describing catalog of all registered **Typed Commands**. Built on Bevy's `AppTypeRegistry` reflection, it exposes command metadata, field types, validation ranges, and documentation dynamically (e.g., via `/api/commands/schema` or MCP tools) to enable automated AI discovery and UI generation without hardcoded lists.
 - **TelemetryEvent**: A discrete, timestamped occurrence in the simulation (e.g., "Airlock Opened", "Engine Cutoff"). Following the **YAMCS** standard, Events provide semantic context to the raw telemetry stream, carrying a severity level (Info, Warning, Critical) and a message.
 
-### Terminology Rationale
-...
 - **AttributeRegistry**: A centralized, thread-safe Reflection server. While `Attributes` define the individual data properties of components, the `AttributeRegistry` maps semantic external strings (e.g. `sim.rover.motor_l.torque_limit`) directly to live ECS Component memory pointers. This allows UI tools, CLI interfaces, and MCP LLMs to dynamically read or write internal engineering state in real-time without needing compiled generic logic.
-- **CommandMessage (vs. Direct Function Call / Abstract Command)**: We use "CommandMessage" to signify a structured, transportable packet of instructions, distinct from a direct function call or a high-level abstract "Command." This adheres to standards like **XTCE/CCSDS Telecommands**, enabling better decoupling, serialization, and AI discoverability via the **CommandRegistry**. It separates the *instruction concept* from its *data representation and transport*.
+- **Typed Command (vs. Direct Function Call / Abstract Command)**: We use "Typed Command" to signify a structured, transportable, and reflectable event representing a user or agent intent, distinct from direct function calls. This adheres to standards like **XTCE/CCSDS Telecommands**, enabling decoupling, serialization, and AI discoverability via Bevy's `AppTypeRegistry` reflection. It separates the *instruction concept* from its *data representation and transport*.
 
 ### Terminology Rationale
 
@@ -38,7 +36,7 @@ To build a high-fidelity digital twin of a lunar city, we use terms that are glo
 - **Attribute (vs. Property)**: We use "Attribute" for 1:1 alignment with **SysML v2** and **Pixar's USD**. Prims have attributes; parts have attributes. This avoids the programming ambiguity of "Properties" (getter/setter functions).
 - **Port (vs. Pin/Connector)**: "Port" is the universal term used by **SysML v2**, **NASA FPrime**, and **ROS**. It defines a semantic interface point. While Modelica uses "Connector," we use **Port** for the interface point and **Connection** for the link — consistent with SysML v2, FPrime, and FMI/SSP.
 - **Link & Joint (vs. Part/Bone)**: Adopting the **URDF** and **USD Physics** terminology ensures that any roboticist or CAD engineer can immediately map their kinematic chains into our coordinate frame tree.
-- **CommandRegistry**: The "Brain-Interface" of a Space System. Instead of a fixed, hardcoded list of actions, each entity describes its own capabilities. This is the "secret sauce" for AI-native simulation: it allows an LLM or an MCP agent to look at a new, unknown rover and immediately "know" how to drive it by reading its live documentation. It creates a single, unified channel where human inputs (WASD), automated scripts, and AI agents all speak the same language to the simulation.
+- **Command Registry (AppTypeRegistry)**: The "Brain-Interface" of the simulation. Instead of a fixed, hardcoded list of actions, the simulation exposes all registered typed commands and their parameter schemas via Bevy reflection. This allows an LLM or an MCP agent to introspect the simulation's command capabilities (via `/api/commands/schema`), immediately "knowing" how to drive or interact with any entity. It creates a single, unified channel where human inputs (WASD), automated scripts, and AI agents all speak the same language to the simulation.
 
 ---
 
@@ -85,8 +83,8 @@ LunCoSim uses a layered approach to separate human intent from computer logic an
 | Layer | Name | Responsibility | Input | Output |
 | :--- | :--- | :--- | :--- | :--- |
 | **5** | **Intent** | **Human/AI Intent**: High-level goal (e.g., `MoveForward`). Functionally equivalent to Godot's "Input Actions". | Raw Input (WASD, Mouse) | `IntentState` |
-| **4** | **Controller**| **Pilot Mapping**: Translates `IntentState` into specific `CommandMessages`. | `IntentState` | `CommandMessages` |
-| **3** | **FSW** | **The Brain**: Stateless/Stateful logic that executes commands. | `CommandMessages` | `Port` Writes |
+| **4** | **Controller**| **Pilot Mapping**: Translates `IntentState` into specific commands (e.g., `SetPorts`). | `IntentState` | Typed Commands |
+| **3** | **FSW** | **The Brain**: Stateless/Stateful logic that executes commands. | Typed Commands | `Port` Writes |
 | **2** | **OBC** | **The Interface**: Holds `DigitalPorts` (i16) and registers. | `Port` Writes | `Connection` Signal |
 | **1** | **Plant** | **The Mechanism**: Physical actuators, sensors, and rigidbodies. | `Connection` Signal | Force/Torque/State |
 
@@ -126,17 +124,17 @@ The stream of high-level intents generated by the Avatar (Level 5).
 
 ### Command Bus
 The universal instruction stream (Level 5/4/3/2) sent to any **Space System** or **Link**.
-- **Dynamic Registry**: Every controllable entity carries a **`CommandRegistry`** (XTCE-compliant) that describes its capabilities.
+- **Dynamic Schema**: The available commands and parameters are discovered dynamically via reflection metadata (inspired by XTCE telecommands), exposing the capabilities of each subsystem.
 - **Self-Describing**: Commands include built-in documentation and parameter metadata for **AI/MCP Discovery**.
 - **Hierarchy**: High-level commands (e.g., `MOVE_TO`) are "decomposed" by the FSW into low-level commands (e.g., `SET_TORQUE`) sent to child links.
 
 ### ControlStream
-A continuous, best-effort data channel orthogonal to the **Command Bus** and **Action Bus**. Used for high-frequency setpoints and presence data where discrete, ordered, reliable delivery is the wrong contract. Together, `CommandMessage` (discrete) + `Action` (long-running) + `ControlStream` (continuous) are the three sibling write channels of every Twin — directly mirroring the ROS 2 Service / Action / Topic trichotomy.
+A continuous, best-effort data channel orthogonal to the **Command Bus** and **Action Bus**. Used for high-frequency setpoints and presence data where discrete, ordered, reliable delivery is the wrong contract. Together, Typed Commands (discrete) + Action (long-running) + ControlStream (continuous) are the three sibling write channels of every Twin — directly mirroring the ROS 2 Service / Action / Topic trichotomy.
 - **Semantics**: latest-sample-wins, no ack, no replay, per-stream max rate (debounce at the producer), bounded buffer (typically a 1-slot `last_sample` or small ring) at the consumer.
 - **Typed channels**: each stream is keyed by `(twin_id, stream_id)` and carries a typed payload — e.g. `JoystickAxes`, `JointTarget`, `SimInputScrub`, `CursorPresence`.
 - **Local controller closes the loop**: the Twin's Level 4 **Controller** / Level 3 **FSW** reads the latest sample at its own fixed rate (game/robotics/lockstep tick) and produces the actuator/parameter update. UI and remote clients only publish setpoints; they never drive actuators directly. This is what lets a Mars-rover-style ground console use the same Twin as a local-loop joystick session.
 - **Safe-fallback policy per stream**: `hold_last(timeout)`, `decay_to_zero(timeout)`, `fail_safe(default)`. If the stream goes silent (network blip, producer stop, browser tab backgrounded), the on-board controller falls back to its declared safe behaviour without operator action.
-- **Authority arbitration is a Command, not a stream concern**: `CommandMessage::AcquireStream { stream_id, role }` grants exclusive write to a stream; multiplayer "only one driver at a time, others read-only" resolves on the discrete Command Bus where ordering and ack matter.
+- **Authority arbitration is a Command, not a stream concern**: A typed command like `AcquireStream { stream_id, role }` grants exclusive write to a stream; multiplayer "only one driver at a time, others read-only" resolves on the discrete Command Bus where ordering and ack matter.
 - **Transport**: unreliable/unordered (UDP / WebRTC datachannel) for the network case; in-process channel for local. Distinct from the Command Bus transport (reliable/ordered, TCP/HTTP/gRPC).
 - **Read-side dual**: `Parameter (TM)` and `TelemetryEvent` already cover the read direction — ControlStream is the symmetric continuous *write* channel that was previously missing from the ontology.
 
@@ -147,7 +145,7 @@ When a Twin runs distributed (server + clients), each typed `#[Command]` declare
 
 | `WireChannel` variant | Ontology channel | Contract | Transport |
 |---|---|---|---|
-| `CommandBus` | **Command Bus** (`CommandMessage`) | discrete, ordered, reliable, ack'd (`CommandResponse`) | reliable/ordered — TCP / WebTransport-reliable |
+| `CommandBus` | **Command Bus** (Typed Commands) | discrete, ordered, reliable, ack'd (Command Result) | reliable/ordered — TCP / WebTransport-reliable |
 | `ControlStream` | **ControlStream** | continuous, best-effort, latest-sample-wins, no ack | unreliable/unordered — UDP / WebRTC datachannel |
 | `Local` | *(no bus)* | in-process only; never serialized — camera, selection, view toggles | none |
 
@@ -261,7 +259,7 @@ A primary navigation category displayed in a vertical strip at the far left (VS 
 The 3D world view — NOT a panel, NOT a tile. Structurally persistent as the central area of the workbench window. Docks are arranged around the Viewport, never on top of it. This is a first-class architectural primitive, distinct from panels.
 
 ### Command Palette
-Keyboard-invoked (Ctrl+P / Cmd+P) universal search for actions, entities, parameters, and commands. Integrates with the `CommandRegistry` of each Space System for AI-discoverable actions.
+Keyboard-invoked (Ctrl+P / Cmd+P) universal search for actions, entities, parameters, and commands. Integrates with the reflected command registry for discoverable actions.
 
 ---
 

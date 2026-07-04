@@ -38,7 +38,7 @@ prims with `physics:body0` (chassis) and `physics:body1` (wheel) rel targets —
 `lunco-usd-sim`'s `process_usd_sim_prims` (Pass 1 joint scan + Pass-2 stamping). There is
 **no runtime physics-graph heuristic** and no build-order side-effect.
 
-### Runtime-spawn identity (B.1, resolved 2026-06-21)
+### Runtime-spawn Identity
 
 A runtime spawn (palette/API) of the same asset more than once needs every spawned
 entity — not just the root — to get a **distinct, peer-agreed** id. The root is handled by

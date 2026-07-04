@@ -1,13 +1,12 @@
 # USD as source of truth → ECS projection
 
-**Status:** **implemented** (2026-07-04, `networking` branch). Edits now flow *into*
+**Status:** **implemented**. Edits now flow *into*
 USD (`ApplyUsdOp` → `UsdDocument` base⊕runtime layers) and *project out* to ECS via
 the op-driven live-stage pipeline: `twin_projection::sync_twin_overlays` replays the
 typed op onto the `CanonicalStage` (`lunco-usd-bevy/src/canonical.rs`), openusd's
 change sink fires, and `live_consume::project_stage_changes` reconciles the ECS. See
 [`architecture/21-domain-usd.md`](architecture/21-domain-usd.md) § "Op-driven
 projection". The narrative below is retained as the design rationale.
-**Author:** drafted 2026-06-30
 **Scope:** make editing flow *into* USD and *project out* to ECS, instead of the
 current ECS-first model where `SetObjectProperty` mutates components directly and
 only a partial, lossy shadow-write reaches USD.

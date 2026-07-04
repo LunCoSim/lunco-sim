@@ -24,7 +24,7 @@ As a mechanical engineer, I want to import a URDF file of a new rover design, so
 **Acceptance Criteria:**
 - The engine can parse a `.urdf` file and its associated mesh files.
 - Visual and Collision geometries are spawned with correct offsets.
-- Rapier/Avian joints (Revolute, Prismatic) are created based on the URDF joint definitions.
+- Avian joints (Revolute, Prismatic) are created based on the URDF joint definitions.
 
 ### User Story 3 - USD / Omniverse Export (Priority: P3)
 As a visualization specialist, I want to export the simulation state to Universal Scene Description (USD), so I can perform high-fidelity rendering or collaborative design in NVIDIA Omniverse.

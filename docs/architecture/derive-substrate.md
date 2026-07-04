@@ -1,26 +1,8 @@
 # Derive — the unified derived-artifact substrate
 
-> **HANDOVER — optimization effort (`caching-phase0` worktree).** Design output of the
-> 2026-07-03 low-end-FPS pass: idle-spike + camera-motion-stall investigation →
-> generalization. Lives here with the substrate code (A–E, Phase 0/0′) it extends.
->
-> - **Where the effort stands:** substrates A–E + Phase 0/0′ **landed** on this branch;
->   this doc is the *next* phase (async/GPU tier + `BakeQueue`) — **DESIGN ONLY, not built.**
-> - **First task → §11 Phase 1:** build `BakeQueue<CpuExec>` + async `bake_or_load`, then
->   migrate the terrain collider ring (`crates/lunco-terrain-surface/src/collider_ring.rs:160-176`,
->   the unbudgeted sync heightfield cook) onto it **with a coarse always-sync base floor**
->   (invariant §6.2). That one change fixes the camera-motion stall *and* the fall-through
->   risk together, and proves the abstraction on a real physics-coupled artifact.
-> - **Context/data:** the Tracy profiling that surfaced the stall and the WASM
->   `AsyncComputeTaskPool`-on-main-thread constraint are the load-bearing findings behind §7.
-> - **Sibling design docs** it unifies — `precompute-substrate.md`, `ports-system-design.md`,
->   `hashing-substrate.md`, `mobility-substrate.md`, `caching-and-precompute-strategy.md`,
->   `efficiency-and-maintainability.md` — are currently untracked in `main` (see §10).
+Provides a design for the unified derived-artifact substrate, covering CPU/GPU queuing and asynchronous bakes.
 
-> Status: design. Unifies substrates **A** (`RebuildOnChange`), **B** (`lunco-precompute`),
-> **C** (Mobility), **D** (ports resolve→handle), **E** (`lunco-hash`) under one primitive.
-> Motivating consumer: terrain tile colliders (camera-motion stall). See
-> `caching-and-precompute-strategy.md`, `precompute-substrate.md`, `ports-system-design.md`.
+This architecture unifies substrates: `RebuildOnChange` (change-detection), `lunco-precompute` (caching), mobility intent, port resolution, and `lunco-hash` (hashing). It is designed to address expensive CPU calculations (such as terrain tile collider generation) by offloading them from the main thread.
 
 ## 1. The one primitive
 

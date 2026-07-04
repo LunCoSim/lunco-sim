@@ -7,7 +7,7 @@ sync protocols. **Domain crates never import this crate.** They declare what cro
 the network (replicated components, `#[Command]`s) and the networking layer handles
 sync format, authority, and protocol translation silently.
 
-> **Status (2026-06).** Multiplayer is **SHIPPED**: one **lightyear 0.26.4** backend
+> **Multiplayer Status:** Multiplayer is fully implemented using a **lightyear 0.26.4** backend
 > over **WebTransport** (native host + dedicated server + wasm client), provenance-derived
 > entity identity, server-authoritative state replication, client prediction +
 > input-replay reconciliation + physics-space smoothing, RBAC command/relay gating, and
@@ -73,14 +73,14 @@ Layer 2b: NetworkingPlugin    — lunco-networking (transport, replication, auth
 Layer 1: SimCore              — MinimalPlugins, ScheduleRunner, big_space, Avian3D
 ```
 
-Domain code speaks only the semantic API (replicated components, `CommandMessage`,
+Domain code speaks only the semantic API (replicated components, typed commands,
 `DigitalPort`/`PhysicalPort`, `DVec3`) — **no networking types anywhere**. Below the
 `Peer { SessionId }` boundary, the networking layer translates to/from the internal game
 protocol and (planned) external bridges:
 
 ```
 ┌─── Domain Code (lunco-mobility, lunco-celestial, lunco-obc) ──────┐
-│  DigitalPort(i16), PhysicalPort(f32), DVec3, CommandMessage       │
+│  DigitalPort(i16), PhysicalPort(f32), DVec3, Typed Commands       │
 └──────────────────────┬────────────────────────────────────────────┘
                        │  lunco-networking (transparent shim)
     ┌──────────────────┼──────────────────┐
@@ -94,15 +94,12 @@ protocol and (planned) external bridges:
 ### Layered auth principle
 
 ```
-Domain systems react to:  CommandMessage (local)  |  AuthorizedCommand (remote, verified)
+Domain systems react to:  Command (local)  |  Command (remote, verified via policy)
                                        ▲
-        Provenance injection ── Auth layer ── Transport layer
+        Provenance verification ── Auth layer ── Transport layer
 ```
 
-**Key principle:** `CommandMessage` stays pure — it never carries origin. Local systems
-trigger it directly. Remote commands arrive as raw bytes, get auth-verified, then get
-wrapped in `AuthorizedCommand` at the ECS boundary. See
-[Authentication & Authorization](#authentication--authorization).
+**Key principle:** Commands stay pure — they never carry origin. Local systems trigger them directly. Remote commands arrive as serialized payloads (`SyncCommand`), get auth-verified via `CommandPolicyRegistry` at the boundary, then execute locally. See [Authentication & Authorization](#authentication--authorization).
 
 ---
 
@@ -134,19 +131,11 @@ As-built transport is **WebTransport only** (QUIC/TLS, browsers *and* native):
 | Dedicated server | `networking`, no `ui` (`sandbox --no-ui --host`) | server WebTransport, headless |
 | Browser (wasm) | `networking`, client-only | client WebTransport — `wt_client` dials a **hostname URL** so a real CA cert validates with no digest (lightyear's built-in IO is IP-only) |
 
-> **PLANNED** (`TRANSPORT_ABSTRACTION.md`, design only — git history): the multi-transport
-> listener model (`ServerListeners([Memory, Udp, WebTransport, WebSocket])`) so a UDP
-> desktop and a WebTransport browser share one world, with semantic `Delivery` channels
-> degrading `Unreliable`→reliable for TCP/WebSocket peers. Today a single WebTransport
-> listener serves every client.
-
 ---
 
 ## Authentication & Authorization
 
-The transport layer knows **which connection** sent a message (an opaque handle). Domain
-systems need to know **who** sent it and **what they're allowed to do**, cryptographically
-verifiable — not a forgeable client-provided field. Three stages bridge the gap:
+The transport layer knows **which connection** sent a message (an opaque handle). Domain systems need to know **who** sent it and **what they're allowed to do**, cryptographically verifiable — not a forgeable client-provided field. Three stages bridge the gap:
 
 ```
 Transport      "message came from connection #47"  → opaque handle, no identity
@@ -154,30 +143,18 @@ Transport      "message came from connection #47"  → opaque handle, no identit
 Auth layer     "#47 = session abc123, role Operator" → maps handle → verified Session;
                validates can-this-session-send-this-command; rejects unauthorized/expired
    ▼
-Provenance     wraps the command with verified authorship →
- injection     AuthorizedCommand { session_id, command } (a DIFFERENT type from CommandMessage)
+Provenance     attaches verified authorship to command execution context (UserId metadata)
    ▼
-Domain systems listen to AuthorizedCommand (attributed) and/or CommandMessage (local-only)
+Domain systems listen to target commands, and the CommandPolicyRegistry checks authorization.
 ```
 
-**Two event types — `CommandMessage` stays clean, never carries origin:**
+**Single Command Path — commands stay clean, never carry origin:**
 
-- `CommandMessage { id, target, name, args, source }` — local command. Generated by local
-  UI input, simulation systems, timers. No origin field, no client_id, pure data.
-- `AuthorizedCommand { session_id, timestamp, command: CommandMessage }` — networked command.
-  Created **only** by the networking plugin when injecting remote messages, with authorship
-  verified by the auth layer. Provenance is attached *at the boundary* between network and
-  ECS world, so domain observers can attribute edits to a verified, unforgeable session.
+- Commands are triggered locally via `commands.trigger(MyCommand { ... })`.
+- Networked commands arrive as serialized payloads (`SyncCommand`), where the server resolves the connection to a `Session` (establishing the `UserId` author metadata) and performs an RBAC check against the command policy registry.
+- Provenance is verified *at the boundary* between the network and the ECS world, so domain observers can attribute edits to a verified, unforgeable session.
 
-A local spawn triggers `CommandMessage` directly. A remote spawn arrives as bytes → auth
-resolves the connection to a `Session` → an ACL/RBAC check gates the command name → the
-target global id resolves to a local `Entity` → the plugin triggers `AuthorizedCommand`.
-Existing domain observers run unchanged; an edit log can record verified attribution.
-
-**As-built RBAC:** command/relay gating ships via a `CommandPolicyRegistry`
-(open-by-default, command + relay gates unified, RBAC-ready). The richer aspirational
-design — `Session`/`Identity`/`Role` enums, per-role command ACLs, `AuthRegistry` with HMAC
-session secrets, `Certificate`/`PublicKey` identities — is in git history and not all built.
+**As-built RBAC:** Command and relay gating is implemented via the `CommandPolicyRegistry` (open-by-default, command + relay gates unified, RBAC-ready). The richer aspirational design — `Session`/`Identity`/`Role` enums, per-role command ACLs, `AuthRegistry` with HMAC session secrets, `Certificate`/`PublicKey` identities — is in git history and not all built.
 
 ---
 
@@ -220,8 +197,7 @@ Possession negotiation runs through the server so only one session controls a ve
 time. A `NetworkAuthority { owner_session, pending_request }` component tracks control;
 `RequestAuthority` → server grants/denies → `AuthorityGranted` → local control begins, and
 the authority change replicates to all clients. The command itself flows as any other:
-client raycast → `CommandMessage("POSSESS")` → serialize → server auth+ACL check → trigger
-`AuthorizedCommand` → existing `on_possess_command` observer runs unchanged.
+client raycast → possess command (`PossessVessel`) → serialize (`SyncCommand`) → server auth+ACL check → execute on server → update `NetworkAuthority` status.
 
 Ownership/authority is mechanism **M3** (totally-ordered-from-authority) in
 [SYNC_ARCHITECTURE.md](./SYNC_ARCHITECTURE.md). Note: *ownership ≠ predictability* — owning
@@ -231,7 +207,7 @@ a cosim-driven entity still makes it interpolated (opaque), not predicted.
 
 ## Client-Side Prediction (as-built)
 
-**SHIPPED 2026-06-11.** The detailed design lives in git history
+**Client-Side Prediction Status:** Client-side prediction is implemented. The detailed design lives in git history
 (`PREDICTION_RECONCILIATION.md`, `PREDICT_AND_SMOOTH_PLAN.md`, `PREDICTION_MEMBERSHIP.md`);
 the mechanism context is [SYNC_ARCHITECTURE.md §4.1](./SYNC_ARCHITECTURE.md) (which points
 back here for the canonical summary). The as-built shape:
@@ -382,7 +358,7 @@ Summaries:
   | `DigitalPort` (i16) | `IntegerParameter` | 16-bit raw value |
   | `PhysicalPort` (f32) | `FloatParameter` | 32-bit engineering value |
   | `Wire` (scale + source) | `PolynomialCalibrator` | calibration coefficients |
-  | `CommandMessage` / `.name` / `.args` | `MetaCommand` / name / `ArgumentList` | TC packet / APID / data field |
+  | Typed Command / type / fields | `MetaCommand` / name / `ArgumentList` | TC packet / APID / data field |
   | `Session` / `AuthRegistry` | PUS User Management | service type 1 |
 
   `DigitalPort` being `i16` is deliberate — it is exactly a typical spacecraft telemetry
@@ -396,7 +372,7 @@ Summaries:
 (deterministic system order, single `cargo run` binary, headless `MinimalPlugins`,
 WASM/browser support, `f64`/`big_space`, `App::new()`-testable) and communicates with ROS2
 nodes / DDS publishers over a transparent bridge. This mirrors NASA VIPER's **cFS (flight) +
-ROS2 (autonomy)** hybrid: `lunco-obc` + `CommandMessage` ≈ cFS Software Bus,
+ROS2 (autonomy)** hybrid: `lunco-obc` + typed commands ≈ cFS Software Bus,
 `lunco-mobility`/`lunco-robotics` ≈ ROS2 nodes, networking layer ≈ the bridge. Bridge design
 is in **[ROS2_BRIDGE.md](./ROS2_BRIDGE.md)**; the backend choice (lightyear over
 renet2/replicon) and its rationale are in **[DECISIONS.md D1](./DECISIONS.md)**.
