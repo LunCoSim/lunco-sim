@@ -1423,12 +1423,33 @@ fn material_pbr_section(
 
             // Propagate changes to USD.
             if let Some(prim) = world.get::<UsdPrimPath>(part).cloned() {
-                let shader_path = world
+                let mesh_sdf = SdfPath::new(&prim.path).ok();
+                let id = prim.stage_handle.id();
+                // Ph0′ canonical-only: resolve the bound shader off the LIVE
+                // canonical stage (source of truth), built on demand from the
+                // asset's recipe. Fetch the recipe first (immutable `Assets`
+                // borrow), drop it, then reach for the separate `CanonicalStages`
+                // non-send resource.
+                let recipe = world
                     .get_resource::<Assets<UsdStageAsset>>()
                     .and_then(|stages| stages.get(&prim.stage_handle))
-                    .and_then(|stage| {
-                        let mesh_sdf = SdfPath::new(&prim.path).ok()?;
-                        resolve_bound_shader(&stage.reader, &mesh_sdf)
+                    .and_then(|a| a.recipe.clone());
+                if let Some(mut canonical) =
+                    world.get_non_send_resource_mut::<lunco_usd_bevy::CanonicalStages>()
+                {
+                    if canonical.get(id).is_none() {
+                        if let Some(r) = recipe.as_ref() {
+                            canonical.get_or_build(id, r);
+                        }
+                    }
+                }
+                let shader_path = mesh_sdf
+                    .as_ref()
+                    .and_then(|mesh_sdf| {
+                        let canonical =
+                            world.get_non_send_resource::<lunco_usd_bevy::CanonicalStages>()?;
+                        let view = canonical.get(id)?.view();
+                        resolve_bound_shader(&view, mesh_sdf)
                     })
                     .map(|p| p.to_string());
 

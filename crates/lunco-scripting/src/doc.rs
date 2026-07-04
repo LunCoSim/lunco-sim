@@ -103,6 +103,22 @@ pub enum ScriptOp {
 
 impl DocumentOp for ScriptOp {}
 
+/// `ScriptOp` participates in the canonical Twin journal. `ScriptOp` derives
+/// `Serialize`/`Deserialize`, so a [`JournalOpRecorder`](lunco_doc_bevy::JournalOpRecorder)
+/// attached to a `ScriptDocument` host records the **real op** (lossless,
+/// replayable) — a live source edit (rover behaviour change) or an input/output
+/// pin change enters the journal exactly like a Modelica or USD edit. This is
+/// the "scripts sync by default" bridge; the domain tag routes replay.
+impl lunco_twin_journal::OpPayload for ScriptOp {
+    fn domain(&self) -> lunco_twin_journal::DomainKind {
+        lunco_twin_journal::DomainKind::Script
+    }
+    // `referenced_entities` stays the default empty set — an `EntityRef` also
+    // needs the owning `DocumentId`, which the op alone doesn't carry. Same
+    // stance as the USD / Modelica `OpPayload` impls; conflict-detection
+    // enrichment lands on the multi-user replication path.
+}
+
 impl Document for ScriptDocument {
     type Op = ScriptOp;
 
@@ -213,6 +229,13 @@ mod tests {
         // Source unchanged, generation not bumped.
         assert_eq!(doc.source, "x");
         assert_eq!(doc.generation, 0);
+    }
+
+    #[test]
+    fn script_op_declares_script_domain() {
+        use lunco_twin_journal::{DomainKind, OpPayload};
+        assert_eq!(ScriptOp::SetSource("x".into()).domain(), DomainKind::Script);
+        assert_eq!(ScriptOp::AddInput("p".into()).domain(), DomainKind::Script);
     }
 
     #[test]

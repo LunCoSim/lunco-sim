@@ -27,6 +27,10 @@ pub mod tool_libs;
 /// (`<twin>/timelines/*.json`; `ListTimelines`/`GetTimeline`/`RunStoredTimeline`).
 #[cfg(feature = "rhai")]
 pub mod timelines;
+/// Journaling for named registrations (tool libraries + timelines) — so a
+/// `RegisterToolLibrary`/`RegisterTimeline` syncs + persists via the journal plane.
+#[cfg(feature = "rhai")]
+pub mod registration_journal;
 /// Scripting adapter onto the unified diagnostics store (`ScriptStatus` query).
 #[cfg(feature = "rhai")]
 pub mod diagnostics;
@@ -36,7 +40,7 @@ pub mod diagnostics;
 pub mod catalog;
 
 use std::collections::HashMap;
-use lunco_doc::{DocumentId, DocumentHost};
+use lunco_doc::{Document, DocumentId, DocumentHost};
 use doc::{ScriptDocument, ScriptedModel};
 // Brings the pyo3 method traits (`PyDictMethods::{set_item,get_item}`,
 // `PyAnyMethods::{downcast,extract}`) into scope for `run_scripted_models`.
@@ -46,6 +50,94 @@ use pyo3::prelude::*;
 #[derive(Resource, Default)]
 pub struct ScriptRegistry {
     pub documents: HashMap<DocumentId, DocumentHost<ScriptDocument>>,
+    /// Twin-journal handle, wired once the [`JournalResource`](lunco_doc_bevy::JournalResource)
+    /// appears (see [`wire_scripting_journal_handle`]). When set, every host gets
+    /// a [`JournalOpRecorder`](lunco_doc_bevy::JournalOpRecorder) so edits —
+    /// including hot-reload `SetSource` and undo/redo — auto-record. `None` → no
+    /// recording (the pre-journal / test path). Mirrors `ModelicaDocumentRegistry`.
+    journal: Option<lunco_doc_bevy::JournalResource>,
+}
+
+impl ScriptRegistry {
+    /// Insert (or replace) a `ScriptDocument` host under `id`, attaching a journal
+    /// recorder when a journal is wired. **The one insert funnel** — every attach
+    /// path (rhai scenario, Python cosim) routes through here so recording is
+    /// automatic ("sync by default by design"), never dependent on remembering to
+    /// wire it at each call site.
+    pub fn insert_document(&mut self, id: DocumentId, doc: ScriptDocument) {
+        self.documents.insert(id, DocumentHost::new(doc));
+        self.attach_recorder(id);
+    }
+
+    /// Wire the Twin-journal handle and retro-fit a recorder onto every existing
+    /// host. Called once, reactively, the frame the
+    /// [`JournalResource`](lunco_doc_bevy::JournalResource) first appears; hosts
+    /// created afterwards get their recorder at insert time.
+    pub fn set_journal(&mut self, journal: lunco_doc_bevy::JournalResource) {
+        self.journal = Some(journal);
+        let ids: Vec<_> = self.documents.keys().copied().collect();
+        for id in ids {
+            self.attach_recorder(id);
+        }
+    }
+
+    /// Attach a recorder to `id`'s host when a journal is wired and the host lacks
+    /// one. Idempotent (`has_recorder` guard) — the auto-bridge seam that makes
+    /// every apply/undo/redo record losslessly with no per-op code.
+    fn attach_recorder(&mut self, id: DocumentId) {
+        if let Some(journal) = &self.journal {
+            if let Some(host) = self.documents.get_mut(&id) {
+                if !host.has_recorder() {
+                    lunco_doc_bevy::attach_journal_recorder(host, journal);
+                }
+            }
+        }
+    }
+
+}
+
+// `replay_op` deserializes the journal payload with serde_json, which is only
+// pulled in under a backend feature. A script-free build (`--no-default-features`)
+// has no scripts to replay, so this simply isn't compiled there.
+#[cfg(any(feature = "rhai", feature = "python"))]
+impl ScriptRegistry {
+    /// Apply a **journal op** to `doc` for replay (journal→document projection —
+    /// the networked-edit consume path) **without recording it**. Mirror of
+    /// [`ModelicaDocumentRegistry::replay_op`](lunco_modelica::state::ModelicaDocumentRegistry::replay_op).
+    /// The op is already in the journal (arrived via `append_remote`), so applying
+    /// straight to the document bypasses the recorder to avoid a duplicate entry.
+    /// `op` is the entry's serialized [`doc::ScriptOp`]. Returns `false` (logged,
+    /// non-fatal) if the doc is unknown, the payload isn't a `ScriptOp`, or the
+    /// apply is rejected (e.g. a read-only origin).
+    pub fn replay_op(&mut self, doc: DocumentId, op: &serde_json::Value) -> bool {
+        let parsed = match serde_json::from_value::<doc::ScriptOp>(op.clone()) {
+            Ok(op) => op,
+            Err(e) => {
+                warn!("[script-replay] op payload is not a ScriptOp: {e}");
+                return false;
+            }
+        };
+        let Some(host) = self.documents.get_mut(&doc) else {
+            return false;
+        };
+        match host.document_mut().apply(parsed) {
+            Ok(_) => true,
+            Err(e) => {
+                warn!("[script-replay] apply rejected on doc {doc}: {e:?}");
+                false
+            }
+        }
+    }
+}
+
+/// A3 auto-bridge: hand the [`JournalResource`](lunco_doc_bevy::JournalResource)
+/// to the `ScriptRegistry` the moment it appears, so it fits a recorder onto
+/// existing and future script hosts. Reactive (`resource_added`), runs once.
+pub fn wire_scripting_journal_handle(
+    mut registry: ResMut<ScriptRegistry>,
+    journal: Res<lunco_doc_bevy::JournalResource>,
+) {
+    registry.set_journal(journal.clone());
 }
 
 pub struct LunCoScriptingPlugin;
@@ -105,7 +197,15 @@ impl Plugin for LunCoScriptingPlugin {
         }
 
         app.init_resource::<ScriptRegistry>();
-        
+        // A3 auto-bridge: when the Twin journal appears, fit a recorder onto every
+        // ScriptDocument host so live script edits (rover behaviour changes) record
+        // into the canonical journal like Modelica/USD — "scripts sync by design".
+        app.add_systems(
+            Update,
+            wire_scripting_journal_handle
+                .run_if(resource_added::<lunco_doc_bevy::JournalResource>),
+        );
+
         #[cfg(not(target_arch = "wasm32"))]
         {
             let repl = repl::spawn_repl_thread();
@@ -118,7 +218,11 @@ impl Plugin for LunCoScriptingPlugin {
         let python_status = python::get_python_status();
         app.insert_resource(python_status);
 
-        #[cfg(not(target_arch = "wasm32"))]
+        // REPL drain: rhai (world-connected) is the default; python-only builds
+        // fall back to the interpreter path. Wasm has no stdin, so neither runs.
+        #[cfg(all(not(target_arch = "wasm32"), feature = "rhai"))]
+        app.add_systems(Update, repl::drain_repl_rhai);
+        #[cfg(all(not(target_arch = "wasm32"), feature = "python", not(feature = "rhai")))]
         app.add_systems(Update, repl::process_repl_commands);
 
         // Per-tick Python `ScriptedModel` executor (the inputs/outputs dict
@@ -142,8 +246,8 @@ impl Plugin for LunCoScriptingPlugin {
             // Built-in `policy→rhai` hooks: register each `assets/scripting/policy/
             // *.rhai` under its hook id so the possession / authorization paths
             // consult AUTHORED rhai rules, not hardcoded Rust (spec 034 control-
-            // authority takeover). Hot-replaced by any later `SetScriptedPolicy` of
-            // the same id.
+            // authority takeover). These are the weakest-scope defaults; a
+            // `LuncoPolicy` USD prim projected at the same seam hot-replaces them.
             register_builtin_policies();
             // Shared per-document diagnostics store (also init'd by Modelica;
             // init_resource is idempotent). Scenario compile/runtime errors land
@@ -316,3 +420,26 @@ fn scripts_run_here(role: Option<Res<lunco_core::NetworkRole>>) -> bool {
     !matches!(role.as_deref(), Some(lunco_core::NetworkRole::Client))
 }
 
+
+#[cfg(all(test, any(feature = "rhai", feature = "python")))]
+mod journal_tests {
+    use super::*;
+    use doc::{ScriptDocument, ScriptLanguage, ScriptOp};
+
+    // `replay_op` applies a journal-sourced `ScriptOp` straight to the document
+    // (bypassing the recorder), so a peer's live source edit projects locally.
+    #[test]
+    fn replay_op_applies_setsource_to_the_document() {
+        let mut reg = ScriptRegistry::default();
+        let id = DocumentId::new(1);
+        reg.insert_document(id, ScriptDocument::new(1, ScriptLanguage::Rhai, "v1"));
+
+        let op = serde_json::to_value(ScriptOp::SetSource("v2".into())).unwrap();
+        assert!(reg.replay_op(id, &op), "valid ScriptOp replays");
+        assert_eq!(reg.documents.get(&id).unwrap().document().source, "v2");
+
+        // Unknown doc and non-ScriptOp payloads fail softly (logged, false).
+        assert!(!reg.replay_op(DocumentId::new(999), &op));
+        assert!(!reg.replay_op(id, &serde_json::json!({ "nope": 1 })));
+    }
+}

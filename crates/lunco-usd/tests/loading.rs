@@ -4,7 +4,6 @@ use lunco_usd_avian::*;
 use lunco_usd_sim::*;
 use avian3d::prelude::*;
 use lunco_mobility::WheelRaycast;
-use std::sync::Arc;
 
 #[test]
 fn test_rover_loading_physics() {
@@ -19,11 +18,15 @@ fn test_rover_loading_physics() {
     app.init_asset::<Mesh>();
     app.init_asset::<StandardMaterial>();
     app.init_asset::<Image>();
-    
+    // The avian/sim extractors read the LIVE canonical stage; without
+    // `UsdBevyPlugin` (which normally inits it) this minimal harness must
+    // provide the resource itself so `get_or_build` can compose off the recipe.
+    app.init_non_send_resource::<CanonicalStages>();
+
     // Add our mapping plugins
     // Note: UsdBevyPlugin might still try to use Hierarchy, so we add it if needed
     // but UsdAvianPlugin/UsdSimPlugin only need Observers and Queries.
-    
+
     app.add_plugins((
         UsdAvianPlugin,
         UsdSimPlugin,
@@ -43,11 +46,12 @@ def Xform "Rover" {
 }
 "#;
 
-    // Synthetic single-layer stage (no external references) → parse directly.
-    let reader = Arc::new(openusd::usda::parse(usda_content).expect("parse test USDA"));
-
+    // Synthetic single-layer stage (no external references) → the live canonical
+    // stage builds on demand from this in-memory recipe.
     let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-    let stage_handle = stages.add(UsdStageAsset { reader });
+    let stage_handle = stages.add(UsdStageAsset {
+        recipe: Some(StageRecipe::from_source("scene.usda", usda_content)),
+    });
 
     // 2. Spawn the root entity
     app.world_mut().spawn((

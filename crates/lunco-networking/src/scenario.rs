@@ -215,6 +215,28 @@ pub struct AssetHaveMsg {
     pub cid: Vec<u8>,
 }
 
+/// Peer → host: an asset a client **imported** into the shared twin. The host
+/// verifies `data` against `cid` (fail-closed), writes it into its twin at `path`,
+/// and rebuilds + re-advertises the manifest — so a client's import distributes to
+/// every peer through the existing host→client fetch (`AssetChunkMsg`). This is the
+/// bidirectional-ingest counterpart of the host-authoritative serve: "connect to a
+/// server → import something → it distributes."
+///
+/// TODO(bidirectional-content): (1) chunk large offers like [`AssetChunkMsg`] — this
+/// carries whole bytes, fine for scripts / small assets (the caller caps size);
+/// (2) Option B — make the manifest a **journaled document** + drop the host-only
+/// serve gate so any CID holder serves, and an import needs no host round-trip
+/// (the content plane becomes as symmetric as the journal plane).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AssetOfferMsg {
+    /// Twin-relative path the asset should live at (e.g. `"imports/foo.glb"`).
+    pub path: String,
+    /// Canonical CID bytes — the host verifies `data` against this before writing.
+    pub cid: Vec<u8>,
+    /// The asset bytes.
+    pub data: Vec<u8>,
+}
+
 // ── Resources ─────────────────────────────────────────────────────────────────
 
 /// Host-side: the scenario this server is currently running. Built by the app
@@ -263,7 +285,7 @@ mod tests {
         assert_ne!(a.to_bytes(), c.to_bytes());
         // CIDv1 + raw codec + sha2-256 ⇒ 36 canonical bytes
         // (1B version + 1B codec + 2B multihash code/len + 32B digest).
-        assert_eq!(a.version(), cid::Version::V1);
+        assert_eq!(a.version(), lunco_hash::content::Version::V1);
         assert_eq!(a.codec(), RAW_CODEC);
         assert_eq!(a.to_bytes().len(), 36);
     }

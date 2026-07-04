@@ -23,6 +23,16 @@ use bevy::post_process::bloom::Bloom;
 #[cfg(feature = "render")]
 use lunco_core::{Command, on_command, register_commands};
 
+/// USD prim type for the scene-level **environment settings** prim (a singleton
+/// under the default prim, e.g. `/World/Environment`). It carries the render
+/// knobs that have no natural light-prim home — `lunco:env:exposureEv100`,
+/// `bloomIntensity`, `ambientBrightness`, `earthshineIntensity`, `earthshineColor`.
+/// The sandbox persists a `SetEnvironmentLight` render tweak onto this prim and a
+/// projector reads it back on stage change — so those knobs journal + round-trip
+/// like every other USD edit, WITHOUT coupling the light loader to global/camera
+/// render state (they live on their own prim, read by their own system).
+pub const LUNCO_ENVIRONMENT_PRIM_TYPE: &str = "LuncoEnvironment";
+
 /// Gravity configuration types (`Gravity`, `GravityBody`, `GravityProvider`,
 /// `GravityModel`) — environmental-state vocabulary owned here. The gravity
 /// *systems* in `lunco_celestial` import these.

@@ -195,6 +195,30 @@ pub fn parse_attribute_value(type_name: &str, literal: &str) -> Result<Value> {
         .ok_or_else(|| anyhow!("could not parse `{type_name} = {literal}` into a USD value"))
 }
 
+/// Best-effort inverse of [`parse_attribute_value`]: format `value` (of USD type
+/// `type_name`) back into the USDA literal that `parse_attribute_value(type_name,
+/// <literal>)` would re-read to the same value. Round-trips through the USDA
+/// writer ([`data_to_usda`]) so every value type formats exactly as the parser
+/// expects — no hand-maintained per-type formatter to drift.
+///
+/// Returns `None` when the literal can't be cleanly recovered — most notably a
+/// value the writer emits across multiple lines (large arrays, matrices). Callers
+/// use this for *typed* op inverses (so undo replays incrementally) and fall back
+/// to a whole-layer snapshot inverse on `None`, which is always correct; so a
+/// miss here only costs a coarser undo, never correctness.
+pub fn value_to_literal(type_name: &str, value: Value) -> Option<String> {
+    let empty = usda_to_data("#usda 1.0\n").ok()?;
+    let stage = open_doc_stage(&empty).ok()?;
+    stage.define_prim("/_v").ok()?;
+    stage.create_attribute("/_v._a", type_name).ok()?.set(value).ok()?;
+    let data = extract_root_layer_data(&stage).ok()?;
+    let text = data_to_usda(&data).ok()?;
+    // Extract the right-hand side of the single `<type> _a = <literal>` line. A
+    // value the writer wraps across lines has no ` = <rhs>` on one line → `None`.
+    let rhs = text.lines().find_map(|l| l.split_once(" _a = "))?.1.trim();
+    (!rhs.is_empty()).then(|| rhs.to_string())
+}
+
 /// Overlay the `runtime` layer's opinions onto `base` as an **sdf layer-stack
 /// merge** and return the composed [`sdf::Data`]: runtime fields win per spec,
 /// runtime-only specs are added, and `primChildren` lists are unioned so the
@@ -206,9 +230,8 @@ pub fn parse_attribute_value(type_name: &str, literal: &str) -> Result<Value> {
 /// composed view: a base `references = @asset.usda@` opinion must survive as an
 /// opinion, not be pulled in. References/payloads ride along untouched here
 /// because they are just fields on the base spec. This is NOT a substitute for
-/// render-time PCP composition (that is [`compose_native_fs`] /
-/// `compose::compose_to_data`); it is the document's own two-layer (base +
-/// runtime) merge.
+/// render-time PCP composition (the storage-based `build_stage_from_closure`
+/// loader path); it is the document's own two-layer (base + runtime) merge.
 pub fn compose_layers(base: &sdf::Data, runtime: &sdf::Data) -> sdf::Data {
     let mut out = base.clone();
     for (path, rspec) in runtime.iter() {
@@ -335,6 +358,33 @@ mod tests {
                 assert_eq!(op.explicit_items[0].asset_path, "vessels/rover.usda");
             }
             other => panic!("expected a ReferenceListOp at {prim}, got {other:?}"),
+        }
+    }
+
+    /// [`value_to_literal`] is the exact inverse of [`parse_attribute_value`] for
+    /// the single-line value types op inverses use (colors, scalars, tokens,
+    /// small vectors): formatting a parsed value and re-parsing it yields the same
+    /// value. This is what lets a `SetAttribute` undo carry a typed value instead
+    /// of a whole-source snapshot.
+    #[test]
+    fn value_to_literal_round_trips_parse_attribute_value() {
+        let cases = [
+            ("color3f", "(1, 0.5, 0.25)"),
+            ("float", "0.1"),
+            ("double", "3.5"),
+            ("int", "7"),
+            ("bool", "true"),
+            ("token", "\"srgb\""),
+            ("float3", "(1, 2, 3)"),
+        ];
+        for (ty, literal) in cases {
+            let parsed = parse_attribute_value(ty, literal)
+                .unwrap_or_else(|e| panic!("parse {ty} = {literal}: {e}"));
+            let round = value_to_literal(ty, parsed.clone())
+                .unwrap_or_else(|| panic!("value_to_literal returned None for {ty} = {literal}"));
+            let reparsed = parse_attribute_value(ty, &round)
+                .unwrap_or_else(|e| panic!("re-parse {ty} = {round}: {e}"));
+            assert_eq!(parsed, reparsed, "{ty}: {literal} → {round} must round-trip");
         }
     }
 

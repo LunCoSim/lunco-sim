@@ -42,7 +42,6 @@ pub use openusd::sdf::Path as SdfPath;
 pub use openusd::sdf::Data as UsdData;
 use openusd::sdf::Value;
 use big_space::prelude::CellCoord;
-use std::sync::Arc;
 
 mod resolver;
 mod compose;
@@ -54,10 +53,15 @@ pub mod camera_track;
 pub use camera_switch::SetActiveCamera;
 pub mod author;
 pub mod usd_data;
+pub mod view;
+pub mod canonical;
+pub mod read;
 use usd_data::UsdDataExt;
-pub use compose::compose_native_fs;
+pub use view::StageView;
+pub use canonical::{CanonicalStage, CanonicalStages, RawStageChange, StageRecipe};
+pub use read::UsdRead;
 #[cfg(not(target_arch = "wasm32"))]
-pub use compose::compose_file;
+pub use compose::compose_file_to_stage;
 pub use light::{FallbackSceneLight, UsdAuthoredLight};
 
 /// Bevy plugin for USD visual synchronization.
@@ -135,6 +139,10 @@ impl Plugin for UsdBevyPlugin {
             // lunco-core's `register_core_resources` (e.g. a focused test app)
             // still has it. Idempotent — a no-op if core already registered it.
             .init_resource::<lunco_core::SceneViewport>()
+            // Ph0′: the live canonical stages, built main-thread from each
+            // loaded `UsdStageAsset`'s `StageRecipe` (`sync_canonical_stages`).
+            // `NonSend` — holds `!Send` openusd `Stage`s.
+            .init_non_send_resource::<canonical::CanonicalStages>()
             .add_systems(Startup, load_diagnostic_label_font)
             .add_observer(on_usd_prim_added)
             .add_observer(light::on_usd_light_added)
@@ -173,7 +181,15 @@ impl Plugin for UsdBevyPlugin {
             .add_systems(
                 Update,
                 (
-                    sync_usd_visuals.run_if(bevy::ecs::schedule::common_conditions::on_message::<AssetEvent<UsdStageAsset>>),
+                    // Ph0′: build the live canonical stage from each loaded asset's
+                    // recipe FIRST, so the same-frame `sync_usd_visuals` (and the
+                    // physics observer it triggers via `UsdVisualSynced`) sees the
+                    // `CanonicalStage` and instantiates off the LIVE stage rather
+                    // than racing it and falling back to the flattened snapshot.
+                    canonical::sync_canonical_stages.run_if(bevy::ecs::schedule::common_conditions::on_message::<AssetEvent<UsdStageAsset>>),
+                    sync_usd_visuals
+                        .run_if(bevy::ecs::schedule::common_conditions::on_message::<AssetEvent<UsdStageAsset>>)
+                        .after(canonical::sync_canonical_stages),
                     // Upgrades parked runtime-instance descendants to a
                     // hierarchical `Derived` id (gap G2/B.1) once their root id
                     // is allocated. Cheap: the query is empty unless a runtime
@@ -236,13 +252,20 @@ lunco_core::register_commands!(camera_switch::on_set_active_camera);
 
 /// A Bevy Asset representing a loaded USD Stage.
 ///
-/// Contains a flattened USD reader with all external references resolved.
-/// Created by the `UsdLoader` asset loader when a `.usda` file is loaded.
+/// Carries the `Send` layer-closure [`StageRecipe`] from which the live,
+/// composed canonical [`Stage`](openusd::usd::Stage) is (re)built on the main
+/// thread — the single source of truth every USD reader consumes. Created by the
+/// `UsdLoader` asset loader when a `.usda` file is loaded.
 #[derive(Asset, TypePath, Clone)]
 pub struct UsdStageAsset {
-    /// Flattened, composed scene data (all references resolved). Send-safe
-    /// `sdf::Data`; query it with the [`usd_data`] helpers.
-    pub reader: Arc<UsdData>,
+    /// The `Send` layer-closure recipe for building the live canonical
+    /// [`Stage`](openusd::usd::Stage) on the main thread. `Some` for assets
+    /// produced by the async [`UsdLoader`]; `None` for in-memory / preview
+    /// constructions that never fetched a closure (those instantiate nothing). A
+    /// main-thread system ([`canonical::sync_canonical_stages`]) — or the
+    /// on-demand [`CanonicalStages::get_or_build`] — turns this into a
+    /// `CanonicalStage`.
+    pub recipe: Option<StageRecipe>,
 }
 
 #[derive(Default, TypePath)]
@@ -280,16 +303,16 @@ impl AssetLoader for UsdLoader {
             }
         };
 
-        // Compose with openusd's PCP engine — references, payloads, variant
-        // selection, and relationship-target translation — through our in-memory
-        // `LuncoUsdResolver` (filesystem-free, native + wasm), then flatten the
-        // composed stage into a Send-safe `sdf::Data` for the downstream visual /
-        // physics / cosim readers (`Stage` is `!Send`, so it can't cross here).
-        let data = compose::compose_to_data(load_context, &root_asset_path, bytes).await?;
+        // Fetch the transitive layer closure into a `Send` [`StageRecipe`]. That
+        // is the whole asset: the `!Send` composed `Stage` can't cross the
+        // async→main boundary, so a main-thread system
+        // ([`canonical::sync_canonical_stages`]) — or the on-demand
+        // `get_or_build` at first read — builds the live `CanonicalStage` from
+        // this recipe through the in-memory `LuncoUsdResolver` (filesystem-free,
+        // native + wasm). No flattening: the composed stage IS the source.
+        let recipe = compose::fetch_layer_closure(load_context, &root_asset_path, bytes).await?;
 
-        Ok(UsdStageAsset {
-            reader: Arc::new(data),
-        })
+        Ok(UsdStageAsset { recipe: Some(recipe) })
     }
 
     fn extensions(&self) -> &[&str] {
@@ -523,6 +546,7 @@ fn instance_role(root_path: &str, prim_path: &str) -> String {
 /// by independent material plugins in `lunco-materials` that observe
 /// the `UsdVisualSynced` insertion.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn instantiate_usd_prim(
     entity: Entity,
     prim_path: &UsdPrimPath,
@@ -533,16 +557,55 @@ fn instantiate_usd_prim(
     inherited_member: Option<&UsdInstanceMember>,
     commands: &mut Commands,
     stages: &Assets<UsdStageAsset>,
+    canonical: &mut CanonicalStages,
+    asset_server: &AssetServer,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+) {
+    // The LIVE canonical stage is the single source of truth: meshes, materials,
+    // lights, cameras, and transforms come off the composed `Stage` directly, and
+    // `lunco:resolvedAsset` is *synthesized* on it (read via
+    // `UsdRead::resolved_asset`). Built on demand from the asset's recipe if not
+    // already present (so it is available regardless of system ordering vs. the
+    // synchronous `on_usd_prim_added` observer cascade). A scene whose asset
+    // carries no recipe (or fails to build) is skipped — every runtime scene
+    // loads through the recipe-building async loader.
+    let id = prim_path.stage_handle.id();
+    if canonical.get(id).is_none() {
+        if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
+            canonical.get_or_build(id, &recipe);
+        }
+    }
+    let Some(cs) = canonical.get(id) else {
+        warn!("[canonical] no live stage for {} — skipping visual instantiate", prim_path.path);
+        return;
+    };
+    instantiate_usd_prim_read(
+        &cs.view(), entity, prim_path, existing_vis, existing_tf, load_into_grid,
+        is_instance_root, inherited_member, commands, asset_server, meshes, materials,
+    );
+}
+
+/// The visual extractor body, generic over the read source ([`UsdRead`]) — it
+/// maps one composed USD prim to its Bevy visual components (mesh, material,
+/// light, camera, transform, and the authored `lunco:*` markers) off either the
+/// live canonical [`StageView`](crate::StageView) or the flattened `sdf::Data`.
+#[allow(clippy::too_many_arguments)]
+fn instantiate_usd_prim_read<R: UsdRead>(
+    reader: &R,
+    entity: Entity,
+    prim_path: &UsdPrimPath,
+    existing_vis: Option<&Visibility>,
+    existing_tf: Option<&Transform>,
+    load_into_grid: Option<&LoadIntoGrid>,
+    is_instance_root: bool,
+    inherited_member: Option<&UsdInstanceMember>,
+    commands: &mut Commands,
     asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) {
     {
-        let Some(stage) = stages.get(&prim_path.stage_handle) else { return; };
-
-        // Borrow — `stage.reader` is `Arc<sdf::Data>`; deep-cloning it copies
-        // the whole stage `HashMap`. Every read below is `&self`.
-        let reader = &*stage.reader;
 
         // Deferred `defaultPrim` resolution. A scene-root spawned with an
         // empty path is the "use the stage's defaultPrim" sentinel
@@ -619,13 +682,13 @@ fn instantiate_usd_prim(
         });
 
         // Skip inactive prims
-        if !reader.prim_is_active(&sdf_path) {
+        if !reader.is_active(&sdf_path) {
             commands.entity(entity).insert(UsdVisualSynced);
             return;
         }
 
         // Get prim type (Cube, Cylinder, Sphere, etc.)
-        let prim_type = reader.prim_type_name(&sdf_path);
+        let prim_type = reader.type_name(&sdf_path);
 
         // UsdLux light prims (`DistantLight` sun / `DomeLight` ambient —
         // see `light.rs`). A light produces no mesh; the shared transform
@@ -681,7 +744,7 @@ fn instantiate_usd_prim(
         // is still built — visibility is the toggle. (Future: reveal
         // on `AssetServer::load_state(...).is_failed()`.)
         let is_placeholder = reader
-            .prim_attribute_value::<bool>(&sdf_path, "lunco:placeholder")
+            .scalar::<bool>(&sdf_path, "lunco:placeholder")
             .unwrap_or(false);
 
         // **Placeholder + payload pattern**: when `lunco:resolvedAsset`
@@ -821,17 +884,17 @@ fn instantiate_usd_prim(
         // controller stamps a topology default at possess. Fully data-driven: a
         // vessel declares what its inputs actuate with no Rust change.
         if let Some(controls) = reader
-            .prim_children(&sdf_path)
+            .children(&sdf_path)
             .into_iter()
             .find(|c| c.name() == Some("Controls"))
         {
             let entries: Vec<(String, String, f64)> = reader
-                .prim_children(&controls)
+                .children(&controls)
                 .into_iter()
                 .filter_map(|bind| {
                     let intent = bind.name()?.to_string();
-                    let port = reader.prim_attribute_value::<String>(&bind, "lunco:port")?;
-                    let scale = reader.prim_attribute_value::<f64>(&bind, "lunco:scale")?;
+                    let port = reader.scalar::<String>(&bind, "lunco:port")?;
+                    let scale = reader.scalar::<f64>(&bind, "lunco:scale")?;
                     Some((intent, port, scale))
                 })
                 .collect();
@@ -885,7 +948,7 @@ fn instantiate_usd_prim(
         //   attach as a `SceneRoot` child. Preserves hierarchy,
         //   materials, and lights at the cost of being opaque to the
         //   USD prim-path tree.
-        if let Some(asset_uri) = get_attribute_as_string(reader, &sdf_path, "lunco:resolvedAsset") {
+        if let Some(asset_uri) = reader.resolved_asset(&sdf_path) {
             let mode = get_attribute_as_string(reader, &sdf_path, "lunco:assetMode")
                 .unwrap_or_else(|| "scene".to_string());
             let label = get_attribute_as_string(reader, &sdf_path, "lunco:assetLabel");
@@ -1037,8 +1100,8 @@ fn instantiate_usd_prim(
         // Spawn children with their transforms pre-populated so physics sees them correctly.
         // This is critical for wheel positions — they must be at the correct offsets from
         // the chassis center before the suspension system runs.
-        for child_path in reader.prim_children(&sdf_path) {
-            if !reader.prim_is_active(&child_path) {
+        for child_path in reader.children(&sdf_path) {
+            if !reader.is_active(&child_path) {
                 continue;
             }
 
@@ -1142,6 +1205,7 @@ fn on_usd_prim_added(
     >,
     mut commands: Commands,
     stages: Res<Assets<UsdStageAsset>>,
+    mut canonical: NonSendMut<CanonicalStages>,
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -1164,6 +1228,7 @@ fn on_usd_prim_added(
         member,
         &mut commands,
         &stages,
+        &mut canonical,
         &asset_server,
         &mut meshes,
         &mut materials,
@@ -1201,6 +1266,7 @@ pub fn sync_usd_visuals(
     >,
     mut commands: Commands,
     stages: Res<Assets<UsdStageAsset>>,
+    mut canonical: NonSendMut<CanonicalStages>,
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -1227,6 +1293,7 @@ pub fn sync_usd_visuals(
                 member,
                 &mut commands,
                 &stages,
+                &mut canonical,
                 &asset_server,
                 &mut meshes,
                 &mut materials,
@@ -1313,10 +1380,10 @@ pub fn parent_prim_path(target: &str) -> Option<SdfPath> {
 ///
 /// Single source of truth for the bind→shader walk shared by the renderer
 /// ([`apply_standard_material`]) and the inspector's material editor.
-pub fn resolve_bound_shader(reader: &UsdData, mesh_path: &SdfPath) -> Option<SdfPath> {
-    let mat_path_str = read_rel_target(reader, mesh_path, "material:binding")?;
+pub fn resolve_bound_shader<R: UsdRead>(reader: &R, mesh_path: &SdfPath) -> Option<SdfPath> {
+    let mat_path_str = reader.rel_target(mesh_path, "material:binding")?;
     let mat_path = SdfPath::new(&mat_path_str).ok()?;
-    let surf_conn = read_rel_target(reader, &mat_path, "outputs:surface")?;
+    let surf_conn = reader.rel_target(&mat_path, "outputs:surface")?;
     parent_prim_path(&surf_conn)
 }
 
@@ -1336,8 +1403,8 @@ fn usd_wrap_to_address(wrap: Option<&str>) -> bevy::image::ImageAddressMode {
 
 /// Applies a standard PBR material to an entity, resolving material bindings
 /// and shader networks if present, or falling back to direct prim attributes.
-fn apply_standard_material(
-    reader: &UsdData,
+fn apply_standard_material<R: UsdRead>(
+    reader: &R,
     sdf_path: &SdfPath,
     mesh_handle: &Handle<Mesh>,
     materials: &mut Assets<StandardMaterial>,
@@ -1412,7 +1479,7 @@ fn apply_standard_material(
         // a `UsdUVTexture inputs:sourceColorSpace` of `raw`/`sRGB` overrides it.
         // `inputs:wrapS`/`wrapT` drive the sampler address modes at load time.
         let load_tex = |input: &str, is_color: bool| -> Option<Handle<Image>> {
-            let conn = read_rel_target(reader, &shader_path, input)?;
+            let conn = reader.rel_target(&shader_path, input)?;
             let texture_path = parent_prim_path(&conn)?;
             let asset_path = get_attribute_as_string(reader, &texture_path, "inputs:file")?;
             let resolved = resolve_texture_path(asset_server, stage_id, &asset_path)?;
@@ -1505,7 +1572,7 @@ fn apply_standard_material(
         }
         opacity_threshold =
             get_attribute_as_f32(reader, &shader_path, "inputs:opacityThreshold").unwrap_or(0.0);
-        opacity_connected = read_rel_target(reader, &shader_path, "inputs:opacity").is_some();
+        opacity_connected = reader.rel_target(&shader_path, "inputs:opacity").is_some();
 
         if let Some(i) = get_attribute_as_f32(reader, &shader_path, "inputs:ior") {
             ior = i;
@@ -1579,14 +1646,11 @@ fn apply_standard_material(
 /// prim name (no leading slash), or `None` when the stage declares no
 /// `defaultPrim`. The metadata lives on the pseudo-root spec at the
 /// absolute root path.
-pub fn stage_default_prim(reader: &UsdData) -> Option<String> {
-    // `defaultPrim` is authored as `Value::Token` (see compose.rs), and on
-    // openusd `main` `String::try_from(Value::Token)` is an error — only the
-    // `String` variant converts. `as_str` coerces `Token`/`String`/`AssetPath`
-    // uniformly, so it is the correct reader here.
-    let val = reader.field(&SdfPath::abs_root(), "defaultPrim")?;
-    let name = val.as_str()?;
-    (!name.is_empty()).then(|| name.to_string())
+pub fn stage_default_prim<R: UsdRead>(reader: &R) -> Option<String> {
+    // `defaultPrim` is authored as `Value::Token` (see compose.rs). The two
+    // `UsdRead` impls read it uniformly: the flatten off the pseudo-root spec,
+    // the live stage via `Stage::default_prim`.
+    reader.default_prim()
 }
 
 /// Parse a single USD layer's source text with openusd's USDA parser (no PCP
@@ -1688,20 +1752,20 @@ pub fn read_rel_target(reader: &UsdData, prim_path: &SdfPath, rel_name: &str) ->
 /// documented silent-`None` "bodies launched into orbit" bug, where a
 /// `point3f` anchor (parsed as `[f32;3]`) read through a single-type
 /// path returned `None` and defaulted the joint anchor to zero.
-pub fn read_vec3_f64(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<[f64; 3]> {
+pub fn read_vec3_f64<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<[f64; 3]> {
     // Fixed-size array forms first (`point3f`/`float3` → `[f32;3]`,
     // `point3d`/`double3` → `[f64;3]`).
-    if let Some(v) = reader.prim_attribute_value::<[f32; 3]>(path, attr) {
+    if let Some(v) = reader.scalar::<[f32; 3]>(path, attr) {
         return Some([v[0] as f64, v[1] as f64, v[2] as f64]);
     }
-    if let Some(v) = reader.prim_attribute_value::<[f64; 3]>(path, attr) {
+    if let Some(v) = reader.scalar::<[f64; 3]>(path, attr) {
         return Some([v[0], v[1], v[2]]);
     }
     // `Vec<f32>`/`Vec<f64>` array forms (rare in authored USD).
-    if let Some(v) = reader.prim_attribute_value::<Vec<f32>>(path, attr) {
+    if let Some(v) = reader.scalar::<Vec<f32>>(path, attr) {
         if v.len() >= 3 { return Some([v[0] as f64, v[1] as f64, v[2] as f64]); }
     }
-    if let Some(v) = reader.prim_attribute_value::<Vec<f64>>(path, attr) {
+    if let Some(v) = reader.scalar::<Vec<f64>>(path, attr) {
         if v.len() >= 3 { return Some([v[0], v[1], v[2]]); }
     }
     None
@@ -1711,17 +1775,17 @@ pub fn read_vec3_f64(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<[f6
 /// `timeSamples` at `time` (held/linear via `openusd::usd::evaluate`), falling
 /// back to `default` when there are no samples. Same value-type coverage
 /// (`[f32;3]`/`[f64;3]` and the `Vec<f32>`/`Vec<f64>` forms).
-pub fn read_vec3_f64_at(reader: &UsdData, path: &SdfPath, attr: &str, time: f64) -> Option<[f64; 3]> {
-    if let Some(v) = reader.prim_attribute_value_at::<[f32; 3]>(path, attr, time) {
+pub fn read_vec3_f64_at<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str, time: f64) -> Option<[f64; 3]> {
+    if let Some(v) = reader.scalar_at::<[f32; 3]>(path, attr, time) {
         return Some([v[0] as f64, v[1] as f64, v[2] as f64]);
     }
-    if let Some(v) = reader.prim_attribute_value_at::<[f64; 3]>(path, attr, time) {
+    if let Some(v) = reader.scalar_at::<[f64; 3]>(path, attr, time) {
         return Some([v[0], v[1], v[2]]);
     }
-    if let Some(v) = reader.prim_attribute_value_at::<Vec<f32>>(path, attr, time) {
+    if let Some(v) = reader.scalar_at::<Vec<f32>>(path, attr, time) {
         if v.len() >= 3 { return Some([v[0] as f64, v[1] as f64, v[2] as f64]); }
     }
-    if let Some(v) = reader.prim_attribute_value_at::<Vec<f64>>(path, attr, time) {
+    if let Some(v) = reader.scalar_at::<Vec<f64>>(path, attr, time) {
         if v.len() >= 3 { return Some([v[0], v[1], v[2]]); }
     }
     None
@@ -1730,11 +1794,8 @@ pub fn read_vec3_f64_at(reader: &UsdData, path: &SdfPath, attr: &str, time: f64)
 /// True iff `attr` on `path` actually carries `timeSamples` (not just a
 /// `default`). The sampler uses this per-channel so it writes **only** animated
 /// channels — a static `xformOp:rotateXYZ` is left exactly as instantiated.
-pub fn attr_has_time_samples(reader: &UsdData, path: &SdfPath, attr: &str) -> bool {
-    path.append_property(attr)
-        .ok()
-        .and_then(|ap| reader.field(&ap, "timeSamples"))
-        .is_some_and(|v| matches!(v, Value::TimeSamples(_)))
+pub fn attr_has_time_samples<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> bool {
+    reader.has_time_samples(path, attr)
 }
 
 /// The xform ops the animation sampler drives, in compose order (T, R, S).
@@ -1749,7 +1810,7 @@ pub const ANIMATED_SHADER_INPUTS: [&str; 2] = ["inputs:diffuseColor", "inputs:op
 /// is animated and the entity should get the [`UsdAnimated`] marker. Covers
 /// translate / scale, the full matrix `xformOp:transform`, and every rotation
 /// channel ([`ROTATION_OPS`]: Euler orders, `orient`, single-axis).
-pub fn prim_has_xform_time_samples(reader: &UsdData, path: &SdfPath) -> bool {
+pub fn prim_has_xform_time_samples<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
     attr_has_time_samples(reader, path, "xformOp:translate")
         || attr_has_time_samples(reader, path, "xformOp:scale")
         || attr_has_time_samples(reader, path, "xformOp:transform")
@@ -1760,7 +1821,7 @@ pub fn prim_has_xform_time_samples(reader: &UsdData, path: &SdfPath) -> bool {
 /// xform op, `visibility`, geom `primvars:displayColor`, or a bound surface
 /// shader's [`ANIMATED_SHADER_INPUTS`]. Drives the [`UsdAnimated`] tag, so a
 /// material-only or visibility-only animation is funnelled the same as xform.
-pub fn prim_is_animated(reader: &UsdData, path: &SdfPath) -> bool {
+pub fn prim_is_animated<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
     if prim_has_xform_time_samples(reader, path)
         || attr_has_time_samples(reader, path, "visibility")
         || attr_has_time_samples(reader, path, "primvars:displayColor")
@@ -1779,11 +1840,16 @@ pub fn prim_is_animated(reader: &UsdData, path: &SdfPath) -> bool {
 /// so the samplers multiply their resolved time (seconds) by this to get the
 /// time code to evaluate. Defaults to 24.0 (USD spec) when unauthored or
 /// non-positive — the latter guards a malformed stage from freezing animation.
-pub fn stage_time_codes_per_second(reader: &UsdData) -> f64 {
-    reader
-        .field_as::<f64>(&SdfPath::abs_root(), "timeCodesPerSecond")
-        .filter(|t| *t > 0.0)
-        .unwrap_or(24.0)
+pub fn stage_time_codes_per_second<R: UsdRead>(reader: &R) -> f64 {
+    // `UsdRead::time_codes_per_second` already defaults to 24 when unauthored;
+    // guard a malformed non-positive opinion (either source) so it can't freeze
+    // animation (division by a zero/negative rate).
+    let tcps = reader.time_codes_per_second();
+    if tcps > 0.0 {
+        tcps
+    } else {
+        24.0
+    }
 }
 
 /// Held-sampled token/string attribute at time code `time` (USD tokens hold,
@@ -1791,12 +1857,16 @@ pub fn stage_time_codes_per_second(reader: &UsdData) -> f64 {
 /// held sample isn't a token/string/asset value. The animated twin of
 /// [`read_token`] — note tokens can't go through `prim_attribute_value_at::<String>`
 /// because `String::try_from(Value::Token)` fails on openusd `main`.
-pub(crate) fn read_token_at(reader: &UsdData, path: &SdfPath, attr: &str, time: f64) -> Option<String> {
-    let attr_path = path.append_property(attr).ok()?;
-    let Some(Value::TimeSamples(samples)) = reader.field(&attr_path, "timeSamples") else {
+pub(crate) fn read_token_at<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str, time: f64) -> Option<String> {
+    // Gate on authored `timeSamples` (never fall back to `default`): a token
+    // channel with no samples isn't animated. `attr_value_at` evaluates the
+    // samples — for a non-lerpable token type openusd's Linear interpolation
+    // falls back to Held (the nearest previous sample), matching the prior
+    // explicit Held read.
+    if !reader.has_time_samples(path, attr) {
         return None;
-    };
-    match openusd::usd::evaluate(samples, time, openusd::usd::InterpolationType::Held)? {
+    }
+    match reader.attr_value_at(path, attr, time)? {
         Value::String(s) => Some(s),
         Value::Token(s) => Some(s.to_string()),
         Value::AssetPath(a) => Some(a.as_str().to_string()),
@@ -1809,32 +1879,23 @@ pub(crate) fn read_token_at(reader: &UsdData, path: &SdfPath, attr: &str, time: 
 /// held value through [`read_token_at`] — so it doesn't depend on the inner
 /// sample value type. `None`/empty when the attribute carries no token samples.
 /// Used to build the [`camera_track::CameraTrackPlan`] key list once.
-pub(crate) fn read_token_timesamples(
-    reader: &UsdData,
+pub(crate) fn read_token_timesamples<R: UsdRead>(
+    reader: &R,
     path: &SdfPath,
     attr: &str,
 ) -> Vec<(f64, String)> {
-    let Ok(attr_path) = path.append_property(attr) else {
-        return Vec::new();
-    };
-    let Some(Value::TimeSamples(samples)) = reader.field(&attr_path, "timeSamples") else {
-        return Vec::new();
-    };
-    samples
-        .iter()
-        .filter_map(|s| read_token_at(reader, path, attr, s.0).map(|name| (s.0, name)))
+    reader
+        .time_sample_times(path, attr)
+        .into_iter()
+        .filter_map(|t| read_token_at(reader, path, attr, t).map(|name| (t, name)))
         .collect()
 }
 
 /// The authored time-code span `(first, last)` of one attribute's `timeSamples`
 /// (samples are stored ascending, so the ends are the first/last keys). `None`
 /// when the attribute has no samples.
-fn attr_sample_span(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<(f64, f64)> {
-    let attr_path = path.append_property(attr).ok()?;
-    match reader.field(&attr_path, "timeSamples")? {
-        Value::TimeSamples(s) if !s.is_empty() => Some((s.first()?.0, s.last()?.0)),
-        _ => None,
-    }
+fn attr_sample_span<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<(f64, f64)> {
+    reader.time_sample_span(path, attr)
 }
 
 /// The authored time span `(start, end)` in **seconds** across all of `path`'s
@@ -1843,7 +1904,7 @@ fn attr_sample_span(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<(f64
 /// stage `timeCodesPerSecond`. `None` when nothing is sampled. The transport
 /// uses this to bound the preview playhead to the real clip length instead of a
 /// guessed range.
-pub fn animated_time_range(reader: &UsdData, path: &SdfPath) -> Option<(f64, f64)> {
+pub fn animated_time_range<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<(f64, f64)> {
     let mut spans: Vec<(f64, f64)> = Vec::new();
     for op in ["xformOp:translate", "xformOp:scale", "xformOp:transform"] {
         spans.extend(attr_sample_span(reader, path, op));
@@ -1870,19 +1931,19 @@ pub fn animated_time_range(reader: &UsdData, path: &SdfPath) -> Option<(f64, f64
 /// Time-sampled scalar float at time code `time`, accepting both `float` and
 /// `double` authored types (`inputs:opacity` is commonly either). `None` for a
 /// static channel so the caller leaves the material untouched.
-fn read_f32_at(reader: &UsdData, path: &SdfPath, attr: &str, time: f64) -> Option<f32> {
+fn read_f32_at<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str, time: f64) -> Option<f32> {
     if !attr_has_time_samples(reader, path, attr) {
         return None;
     }
     reader
-        .prim_attribute_value_at::<f32>(path, attr, time)
-        .or_else(|| reader.prim_attribute_value_at::<f64>(path, attr, time).map(|v| v as f32))
+        .scalar_at::<f32>(path, attr, time)
+        .or_else(|| reader.scalar_at::<f64>(path, attr, time).map(|v| v as f32))
 }
 
 /// Sample one xform-op channel **only if it is animated** (has `timeSamples`),
 /// evaluated at `time`. Returns `None` for static channels so the caller leaves
 /// the instantiated value untouched.
-fn sample_animated_vec3(reader: &UsdData, path: &SdfPath, attr: &str, time: f64) -> Option<[f64; 3]> {
+fn sample_animated_vec3<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str, time: f64) -> Option<[f64; 3]> {
     if !attr_has_time_samples(reader, path, attr) {
         return None;
     }
@@ -1917,13 +1978,14 @@ fn sample_animated_vec3(reader: &UsdData, path: &SdfPath, attr: &str, time: f64)
 /// read values at `t`. Re-derived after a stage hot-reload via
 /// [`clear_animation_plans_on_stage_reload`].
 pub fn plan_usd_animation(
-    stages: Res<Assets<UsdStageAsset>>,
+    canonical: NonSend<CanonicalStages>,
     mut commands: Commands,
     q: Query<(Entity, &UsdPrimPath), (With<UsdAnimated>, Without<AnimationPlan>)>,
 ) {
     for (entity, prim) in &q {
-        let Some(stage) = stages.get(&prim.stage_handle) else { continue };
-        let reader = &*stage.reader;
+        let Some(cs) = canonical.get(prim.stage_handle.id()) else { continue };
+        let view = cs.view();
+        let reader = &view;
         let Ok(sdf_path) = SdfPath::new(prim.path.as_str()) else { continue };
 
         // Transform: an authored `xformOpOrder` drives the whole stack; else a
@@ -1998,7 +2060,7 @@ pub fn clear_animation_plans_on_stage_reload(
 pub fn sample_usd_animation(
     world: Res<lunco_time::WorldTime>,
     resolved: Res<lunco_time::ResolvedDomains>,
-    stages: Res<Assets<UsdStageAsset>>,
+    canonical: NonSend<CanonicalStages>,
     mut q: Query<
         (
             &UsdPrimPath,
@@ -2011,8 +2073,9 @@ pub fn sample_usd_animation(
     >,
 ) {
     for (prim, plan, mut tf, mut vis, binding) in &mut q {
-        let Some(stage) = stages.get(&prim.stage_handle) else { continue };
-        let reader = &*stage.reader;
+        let Some(cs) = canonical.get(prim.stage_handle.id()) else { continue };
+        let view = cs.view();
+        let reader = &view;
         let sdf_path = &plan.path;
 
         // Resolve this entity's clock — its bound `TimeDomain` (per-object /
@@ -2087,7 +2150,7 @@ pub fn sample_usd_animation(
 pub fn sample_usd_material_animation(
     world: Res<lunco_time::WorldTime>,
     resolved: Res<lunco_time::ResolvedDomains>,
-    stages: Res<Assets<UsdStageAsset>>,
+    canonical: NonSend<CanonicalStages>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     q: Query<
         (
@@ -2102,8 +2165,9 @@ pub fn sample_usd_material_animation(
     for (prim, plan, mat_handle, binding) in &q {
         // Cheap gate: the plan already resolved the shader + which channels move.
         let Some(mat) = &plan.material else { continue };
-        let Some(stage) = stages.get(&prim.stage_handle) else { continue };
-        let reader = &*stage.reader;
+        let Some(cs) = canonical.get(prim.stage_handle.id()) else { continue };
+        let view = cs.view();
+        let reader = &view;
         let sdf_path = &plan.path;
 
         let secs = lunco_time::domain_time(&resolved, binding, &world);
@@ -2156,7 +2220,7 @@ pub fn sample_usd_material_animation(
 /// transport scrub bar and clamp/loop track the real clip length.
 pub fn bind_animated_to_preview(
     preview: Option<Res<lunco_time::AnimationPreview>>,
-    stages: Res<Assets<UsdStageAsset>>,
+    canonical: NonSend<CanonicalStages>,
     mut commands: Commands,
     q: Query<(Entity, &UsdPrimPath), (Added<UsdAnimated>, Without<lunco_time::TimeBinding>)>,
     mut playback: Query<&mut lunco_time::Playback>,
@@ -2168,9 +2232,10 @@ pub fn bind_animated_to_preview(
             .entity(entity)
             .insert(lunco_time::TimeBinding { domain: preview.domain });
         // Union this clip's authored span into the range we'll grow the domain to.
-        if let Some(stage) = stages.get(&prim.stage_handle) {
+        if let Some(cs) = canonical.get(prim.stage_handle.id()) {
+            let view = cs.view();
             if let Ok(sp) = SdfPath::new(prim.path.as_str()) {
-                if let Some((a, b)) = animated_time_range(&stage.reader, &sp) {
+                if let Some((a, b)) = animated_time_range(&view, &sp) {
                     span = Some(match span {
                         Some((lo, hi)) => (lo.min(a), hi.max(b)),
                         None => (a, b),
@@ -2192,7 +2257,7 @@ pub fn bind_animated_to_preview(
 /// `Vec3` (f32). Thin wrapper over [`read_vec3_f64`] — reused by
 /// downstream crates (e.g. `lunco-usd-sim`'s shader authoring) so there
 /// is one canonical vec3 reader. `None` if absent or unconvertible.
-pub fn get_attribute_as_vec3(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<Vec3> {
+pub fn get_attribute_as_vec3<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<Vec3> {
     read_vec3_f64(reader, path, attr).map(|v| Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32))
 }
 
@@ -2200,11 +2265,9 @@ pub fn get_attribute_as_vec3(reader: &UsdData, path: &SdfPath, attr: &str) -> Op
 /// `default` value at `prim.attr` and returns it as a `String` for
 /// `token`, `string`, and `asset` value types. `None` if absent or a
 /// different type.
-pub fn read_token(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<String> {
-    let attr_path = path.append_property(attr).ok()?;
-    let val = reader.field(&attr_path, "default")?;
-    match val {
-        Value::String(s) => Some(s.clone()),
+pub fn read_token<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<String> {
+    match reader.attr_value(path, attr)? {
+        Value::String(s) => Some(s),
         Value::Token(s) => Some(s.to_string()),
         Value::AssetPath(a) => Some(a.as_str().to_string()),
         _ => None,
@@ -2213,7 +2276,7 @@ pub fn read_token(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<String
 
 /// Back-compat alias for the string/asset call sites (visibility,
 /// `lunco:resolvedAsset`, …). Same impl as [`read_token`].
-fn get_attribute_as_string(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<String> {
+fn get_attribute_as_string<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<String> {
     read_token(reader, path, attr)
 }
 
@@ -2287,11 +2350,11 @@ fn value_at(reader: &UsdData, path: &SdfPath, attr: &str, time: f64) -> Option<V
 /// time `time` (timeSamples-or-default). The int fallback avoids the silent-`None`
 /// trap when an angle is authored as a bare integer (`rotateZ = 90`). `None` when
 /// absent or non-numeric.
-fn read_scalar_f32_at(reader: &UsdData, path: &SdfPath, attr: &str, time: f64) -> Option<f32> {
+fn read_scalar_f32_at<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str, time: f64) -> Option<f32> {
     reader
-        .prim_attribute_value_at::<f32>(path, attr, time)
-        .or_else(|| reader.prim_attribute_value_at::<f64>(path, attr, time).map(|v| v as f32))
-        .or_else(|| match value_at(reader, path, attr, time)? {
+        .scalar_at::<f32>(path, attr, time)
+        .or_else(|| reader.scalar_at::<f64>(path, attr, time).map(|v| v as f32))
+        .or_else(|| match reader.attr_value_at(path, attr, time)? {
             Value::Int(v) => Some(v as f32),
             Value::Int64(v) => Some(v as f32),
             _ => None,
@@ -2304,9 +2367,9 @@ fn read_scalar_f32_at(reader: &UsdData, path: &SdfPath, attr: &str, time: f64) -
 /// composed about X then Y then Z. Each channel reads its `default` when static,
 /// so this serves both load-time decode (any `time`) and the animation sampler.
 /// `None` when the prim authors no rotation op.
-pub fn local_rotation_at(reader: &UsdData, path: &SdfPath, time: f64) -> Option<Quat> {
+pub fn local_rotation_at<R: UsdRead>(reader: &R, path: &SdfPath, time: f64) -> Option<Quat> {
     // 1. Quaternion orient wins.
-    if let Some(q) = value_at(reader, path, "xformOp:orient", time).and_then(|v| quat_from_value(&v)) {
+    if let Some(q) = reader.attr_value_at(path, "xformOp:orient", time).and_then(|v| quat_from_value(&v)) {
         return Some(q);
     }
     // 2. An Euler-order triple (degrees).
@@ -2336,8 +2399,8 @@ pub fn local_rotation_at(reader: &UsdData, path: &SdfPath, time: f64) -> Option<
 /// last row — exactly glam's column-major / column-vector layout transposed, and
 /// the two transposes cancel, so the raw 16 elements feed `Mat4::from_cols_array`
 /// directly. `None` when no `xformOp:transform` is authored.
-pub fn read_matrix_transform_at(reader: &UsdData, path: &SdfPath, time: f64) -> Option<Transform> {
-    match value_at(reader, path, "xformOp:transform", time)? {
+pub fn read_matrix_transform_at<R: UsdRead>(reader: &R, path: &SdfPath, time: f64) -> Option<Transform> {
+    match reader.attr_value_at(path, "xformOp:transform", time)? {
         Value::Matrix4d(m) => {
             let cols: [f32; 16] = std::array::from_fn(|i| m.0[i] as f32);
             Some(Transform::from_matrix(Mat4::from_cols_array(&cols)))
@@ -2348,7 +2411,7 @@ pub fn read_matrix_transform_at(reader: &UsdData, path: &SdfPath, time: f64) -> 
 
 /// True iff any rotation xform-op carries `timeSamples` (so the sampler must
 /// recompose the prim's rotation this frame).
-fn prim_rotation_animated(reader: &UsdData, path: &SdfPath) -> bool {
+fn prim_rotation_animated<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
     ROTATION_OPS.iter().any(|op| attr_has_time_samples(reader, path, op))
 }
 
@@ -2356,11 +2419,10 @@ fn prim_rotation_animated(reader: &UsdData, path: &SdfPath) -> bool {
 /// when unauthored or empty. When authored it is the **authoritative** op
 /// sequence — [`compose_xform_order_at`] honors it exactly, including non-TRS
 /// orders the piecewise decode can't express.
-fn read_xform_op_order(reader: &UsdData, path: &SdfPath) -> Option<Vec<String>> {
-    let ap = path.append_property("xformOpOrder").ok()?;
-    let order: Vec<String> = match reader.field(&ap, "default")? {
+fn read_xform_op_order<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Vec<String>> {
+    let order: Vec<String> = match reader.attr_value(path, "xformOpOrder")? {
         Value::TokenVec(v) => v.iter().map(|t| t.to_string()).collect(),
-        Value::StringVec(v) => v.clone(),
+        Value::StringVec(v) => v,
         _ => return None,
     };
     (!order.is_empty()).then_some(order)
@@ -2368,7 +2430,7 @@ fn read_xform_op_order(reader: &UsdData, path: &SdfPath) -> Option<Vec<String>> 
 
 /// True iff the prim authors a non-empty `xformOpOrder` (so its local transform
 /// is defined by the ordered op stack, not the implicit TRS fallback).
-fn has_xform_op_order(reader: &UsdData, path: &SdfPath) -> bool {
+fn has_xform_op_order<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
     read_xform_op_order(reader, path).is_some()
 }
 
@@ -2377,14 +2439,14 @@ fn has_xform_op_order(reader: &UsdData, path: &SdfPath) -> bool {
 /// Euler orders / single-axis / `orient` / the full `transform` matrix — keyed
 /// by the type segment after `xformOp:` (so a named op like
 /// `xformOp:translate:pivot` still resolves). `None` for an unknown or absent op.
-fn op_matrix_at(reader: &UsdData, path: &SdfPath, token: &str, time: f64) -> Option<Mat4> {
+fn op_matrix_at<R: UsdRead>(reader: &R, path: &SdfPath, token: &str, time: f64) -> Option<Mat4> {
     let kind = token.strip_prefix("xformOp:")?.split(':').next()?;
     let vec3 = |v: [f64; 3]| Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32);
     let m = match kind {
         "translate" => Mat4::from_translation(vec3(read_vec3_f64_at(reader, path, token, time)?)),
         "scale" => Mat4::from_scale(vec3(read_vec3_f64_at(reader, path, token, time)?)),
-        "orient" => Mat4::from_quat(quat_from_value(&value_at(reader, path, token, time)?)?),
-        "transform" => match value_at(reader, path, token, time)? {
+        "orient" => Mat4::from_quat(quat_from_value(&reader.attr_value_at(path, token, time)?)?),
+        "transform" => match reader.attr_value_at(path, token, time)? {
             Value::Matrix4d(m) => Mat4::from_cols_array(&std::array::from_fn(|i| m.0[i] as f32)),
             _ => return None,
         },
@@ -2408,7 +2470,7 @@ fn op_matrix_at(reader: &UsdData, path: &SdfPath, token: &str, time: f64) -> Opt
 /// column-vector form that is `m₀·m₁·…·mₙ`, so each op **right**-multiplies the
 /// accumulator. `None` when no `xformOpOrder` is authored. A listed op that fails
 /// to read is skipped (treated as identity), matching USD's lenient stack.
-pub fn compose_xform_order_at(reader: &UsdData, path: &SdfPath, time: f64) -> Option<Transform> {
+pub fn compose_xform_order_at<R: UsdRead>(reader: &R, path: &SdfPath, time: f64) -> Option<Transform> {
     let order = read_xform_op_order(reader, path)?;
     let mut m = Mat4::IDENTITY;
     for token in &order {
@@ -2428,7 +2490,7 @@ pub fn compose_xform_order_at(reader: &UsdData, path: &SdfPath, time: f64) -> Op
 /// scale). `None` when the prim authors no xform op at all — the caller then
 /// keeps the entity's existing transform. Shared by the static decoder and the
 /// animation sampler so both agree.
-pub fn local_transform_at(reader: &UsdData, path: &SdfPath, time: f64) -> Option<Transform> {
+pub fn local_transform_at<R: UsdRead>(reader: &R, path: &SdfPath, time: f64) -> Option<Transform> {
     if let Some(tf) = compose_xform_order_at(reader, path, time) {
         return Some(tf);
     }
@@ -2455,7 +2517,7 @@ pub fn local_transform_at(reader: &UsdData, path: &SdfPath, time: f64) -> Option
 /// `ONE` (callers that need `xformOp:scale` compose it themselves; avian
 /// pre-applies scale onto the collider instead). Avian downcasts the resulting
 /// `Transform` to `DVec3`/`DQuat` at its call site.
-pub fn read_transform_from_usd(reader: &UsdData, path: &SdfPath) -> Transform {
+pub fn read_transform_from_usd<R: UsdRead>(reader: &R, path: &SdfPath) -> Transform {
     match local_transform_at(reader, path, 0.0) {
         Some(tf) => Transform { scale: Vec3::ONE, ..tf },
         None => Transform::IDENTITY,
@@ -2493,7 +2555,7 @@ pub struct WheelFootprint {
 ///
 /// Returns `None` when no wheel prims are found (non-vehicle assets use the
 /// caller's default footprint).
-pub fn wheel_footprint(reader: &UsdData, root_prim: &str) -> Option<WheelFootprint> {
+pub fn wheel_footprint<R: UsdRead>(reader: &R, root_prim: &str) -> Option<WheelFootprint> {
     let Ok(root) = SdfPath::new(root_prim) else { return None };
     let mut contacts: Vec<bevy::math::DVec3> = Vec::new();
     let root_tf = local_transform_at(reader, &root, 0.0).unwrap_or_default();
@@ -2522,14 +2584,14 @@ pub fn wheel_footprint(reader: &UsdData, root_prim: &str) -> Option<WheelFootpri
 
 /// Recursive helper for [`wheel_footprint`]: DFS the prim tree composing
 /// transforms, and record each wheel's ground contact in the root's level frame.
-fn collect_wheel_contacts(
-    reader: &UsdData,
+fn collect_wheel_contacts<R: UsdRead>(
+    reader: &R,
     path: &SdfPath,
     parent_tf: Transform,
     contacts: &mut Vec<bevy::math::DVec3>,
 ) {
-    for child in reader.prim_children(path) {
-        if !reader.prim_is_active(&child) {
+    for child in reader.children(path) {
+        if !reader.is_active(&child) {
             continue;
         }
         // `parent_tf * local` composes the child's transform in the root frame
@@ -2539,11 +2601,11 @@ fn collect_wheel_contacts(
         let local = local_transform_at(reader, &child, 0.0).unwrap_or_default();
         let world = parent_tf * local;
         if reader
-            .prim_attribute_value::<i32>(&child, "physxVehicleWheel:index")
+            .scalar::<i32>(&child, "physxVehicleWheel:index")
             .is_some()
         {
             let radius = reader
-                .prim_attribute_value::<f64>(&child, "radius")
+                .scalar::<f64>(&child, "radius")
                 .unwrap_or(0.25);
             let center = world.translation.as_dvec3();
             contacts.push(bevy::math::DVec3::new(
@@ -2589,14 +2651,14 @@ pub enum ShapeDims {
 /// an unsupported type. **The defaults here are the single source of
 /// truth** for both `lunco-usd-avian` (→ `Collider`) and this crate
 /// (→ `Mesh`); changing one here changes both, so they can't drift.
-pub fn read_shape_dims(reader: &UsdData, path: &SdfPath, type_name: &str) -> Option<ShapeDims> {
+pub fn read_shape_dims<R: UsdRead>(reader: &R, path: &SdfPath, type_name: &str) -> Option<ShapeDims> {
     let dims = match type_name {
         "Cube" => {
-            let size = reader.prim_attribute_value::<f64>(path, "size").unwrap_or(2.0);
+            let size = reader.scalar::<f64>(path, "size").unwrap_or(2.0);
             let legacy_extents = match (
-                reader.prim_attribute_value::<f64>(path, "width"),
-                reader.prim_attribute_value::<f64>(path, "height"),
-                reader.prim_attribute_value::<f64>(path, "depth"),
+                reader.scalar::<f64>(path, "width"),
+                reader.scalar::<f64>(path, "height"),
+                reader.scalar::<f64>(path, "depth"),
             ) {
                 (Some(w), Some(h), Some(d)) => Some([w, h, d]),
                 _ => None,
@@ -2604,23 +2666,23 @@ pub fn read_shape_dims(reader: &UsdData, path: &SdfPath, type_name: &str) -> Opt
             ShapeDims::Cube { size, legacy_extents }
         }
         "Sphere" => ShapeDims::Sphere {
-            radius: reader.prim_attribute_value::<f64>(path, "radius").unwrap_or(1.0),
+            radius: reader.scalar::<f64>(path, "radius").unwrap_or(1.0),
         },
         "Cylinder" => ShapeDims::Cylinder {
-            radius: reader.prim_attribute_value::<f64>(path, "radius").unwrap_or(1.0),
-            height: reader.prim_attribute_value::<f64>(path, "height").unwrap_or(2.0),
+            radius: reader.scalar::<f64>(path, "radius").unwrap_or(1.0),
+            height: reader.scalar::<f64>(path, "height").unwrap_or(2.0),
         },
         "Cone" => ShapeDims::Cone {
-            radius: reader.prim_attribute_value::<f64>(path, "radius").unwrap_or(1.0),
-            height: reader.prim_attribute_value::<f64>(path, "height").unwrap_or(2.0),
+            radius: reader.scalar::<f64>(path, "radius").unwrap_or(1.0),
+            height: reader.scalar::<f64>(path, "height").unwrap_or(2.0),
         },
         "Capsule" => ShapeDims::Capsule {
-            radius: reader.prim_attribute_value::<f64>(path, "radius").unwrap_or(0.5),
-            height: reader.prim_attribute_value::<f64>(path, "height").unwrap_or(1.0),
+            radius: reader.scalar::<f64>(path, "radius").unwrap_or(0.5),
+            height: reader.scalar::<f64>(path, "height").unwrap_or(1.0),
         },
         "Plane" => ShapeDims::Plane {
-            width: reader.prim_attribute_value::<f64>(path, "width").unwrap_or(2.0),
-            length: reader.prim_attribute_value::<f64>(path, "length").unwrap_or(2.0),
+            width: reader.scalar::<f64>(path, "width").unwrap_or(2.0),
+            length: reader.scalar::<f64>(path, "length").unwrap_or(2.0),
         },
         _ => return None,
     };
@@ -2632,10 +2694,9 @@ pub fn read_shape_dims(reader: &UsdData, path: &SdfPath, type_name: &str) -> Opt
 /// cover integer arrays, so mesh topology (`faceVertexCounts` /
 /// `faceVertexIndices`) is matched directly. `None` if absent or not an int
 /// array.
-fn read_int_array(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<Vec<i32>> {
-    let attr_path = path.append_property(attr).ok()?;
-    match reader.field(&attr_path, "default")? {
-        Value::IntVec(v) => Some(v.clone()),
+fn read_int_array<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<Vec<i32>> {
+    match reader.attr_value(path, attr)? {
+        Value::IntVec(v) => Some(v),
         Value::Int64Vec(v) => Some(v.iter().map(|&x| x as i32).collect()),
         _ => None,
     }
@@ -2651,11 +2712,11 @@ fn read_int_array(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<Vec<i3
 /// shape `Collider::trimesh` consumes. Triangle winding is irrelevant for
 /// collision, so `orientation` is ignored. `None` if the topology attributes
 /// are absent/empty or an index is out of range (malformed mesh).
-pub fn read_usd_mesh_indexed(
-    reader: &UsdData,
+pub fn read_usd_mesh_indexed<R: UsdRead>(
+    reader: &R,
     path: &SdfPath,
 ) -> Option<(Vec<[f32; 3]>, Vec<[u32; 3]>)> {
-    let points = reader.prim_attribute_value::<Vec<[f32; 3]>>(path, "points")?;
+    let points = reader.scalar::<Vec<[f32; 3]>>(path, "points")?;
     let counts = read_int_array(reader, path, "faceVertexCounts")?;
     let indices = read_int_array(reader, path, "faceVertexIndices")?;
     if points.is_empty() || counts.is_empty() || indices.is_empty() {
@@ -2707,11 +2768,11 @@ pub fn read_usd_mesh_indexed(
 /// indices reference out-of-range points (malformed mesh). Rendering only —
 /// native-mesh **colliders** are still the glTF side-channel's job
 /// (see `resolver.rs` `TODO(glb-composability)`).
-pub fn build_usd_mesh(reader: &UsdData, path: &SdfPath) -> Option<Mesh> {
+pub fn build_usd_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> {
     use bevy::asset::RenderAssetUsages;
     use bevy::render::render_resource::PrimitiveTopology;
 
-    let points = reader.prim_attribute_value::<Vec<[f32; 3]>>(path, "points")?;
+    let points = reader.scalar::<Vec<[f32; 3]>>(path, "points")?;
     let counts = read_int_array(reader, path, "faceVertexCounts")?;
     let indices = read_int_array(reader, path, "faceVertexIndices")?;
     if points.is_empty() || counts.is_empty() || indices.is_empty() {
@@ -2720,11 +2781,11 @@ pub fn build_usd_mesh(reader: &UsdData, path: &SdfPath) -> Option<Mesh> {
 
     // Optional vertex attributes. `primvars:st` is the de-facto UV channel;
     // accept the bare `st`/`st0` spellings some exporters emit.
-    let normals = reader.prim_attribute_value::<Vec<[f32; 3]>>(path, "normals");
+    let normals = reader.scalar::<Vec<[f32; 3]>>(path, "normals");
     let uvs = reader
-        .prim_attribute_value::<Vec<[f32; 2]>>(path, "primvars:st")
-        .or_else(|| reader.prim_attribute_value::<Vec<[f32; 2]>>(path, "primvars:st0"))
-        .or_else(|| reader.prim_attribute_value::<Vec<[f32; 2]>>(path, "st"));
+        .scalar::<Vec<[f32; 2]>>(path, "primvars:st")
+        .or_else(|| reader.scalar::<Vec<[f32; 2]>>(path, "primvars:st0"))
+        .or_else(|| reader.scalar::<Vec<[f32; 2]>>(path, "st"));
 
     let n_corners = indices.len();
     let normals_per_vertex = normals.as_ref().is_some_and(|n| n.len() == points.len());
@@ -2801,14 +2862,14 @@ pub fn build_usd_mesh(reader: &UsdData, path: &SdfPath) -> Option<Mesh> {
 
 /// Reads a float-like attribute (`float` / `double` / `int`) from a USD prim.
 /// Falls back to the metadata-based "default" key if not found (needed for dome/light attributes).
-pub fn get_attribute_as_f32(reader: &UsdData, path: &SdfPath, attr: &str) -> Option<f32> {
-    if let Some(v) = reader.prim_attribute_value::<f32>(path, attr) {
+pub fn get_attribute_as_f32<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<f32> {
+    if let Some(v) = reader.scalar::<f32>(path, attr) {
         return Some(v);
     }
-    if let Some(v) = reader.prim_attribute_value::<f64>(path, attr) {
+    if let Some(v) = reader.scalar::<f64>(path, attr) {
         return Some(v as f32);
     }
-    if let Some(v) = reader.prim_attribute_value::<i32>(path, attr) {
+    if let Some(v) = reader.scalar::<i32>(path, attr) {
         return Some(v as f32);
     }
     light::get_attribute_as_f32(reader, path, attr)
@@ -3145,7 +3206,7 @@ pub fn reveal_placeholder_on_failure(
     mut commands: Commands,
     time: Res<Time>,
     asset_server: Res<AssetServer>,
-    stages: Res<Assets<UsdStageAsset>>,
+    canonical: NonSend<CanonicalStages>,
     cfg: Res<DiagnosticLabelConfig>,
     scene_roots: Query<(Entity, &SceneRoot, &GlobalTransform, &PlaceholderAssetUri, &UsdPrimPath), (With<GlbPlaceholder>, Without<DiagnosticStub>)>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -3181,8 +3242,9 @@ pub fn reveal_placeholder_on_failure(
             let mut scale = Vec3::ONE;
 
             // Attempt to resolve dimensions from USD prim attributes
-            if let Some(stage) = stages.get(&prim_path.stage_handle) {
-                let reader = &*stage.reader;
+            if let Some(cs) = canonical.get(prim_path.stage_handle.id()) {
+                let view = cs.view();
+                let reader = &view;
 
                 // Navigate up from the current prim to its parent to find the sibling "Placeholder"
                 let parent_path = prim_path.path.rsplitn(2, '/').nth(1).unwrap_or("");
@@ -3193,7 +3255,7 @@ pub fn reveal_placeholder_on_failure(
                     if let Ok(sdf_path) = SdfPath::new(path) {
                         if let Some(s) = get_attribute_as_vec3(reader, &sdf_path, "xformOp:scale") {
                             Some(s)
-                        } else if let Some(size) = reader.prim_attribute_value::<f64>(&sdf_path, "size") {
+                        } else if let Some(size) = reader.scalar::<f64>(&sdf_path, "size") {
                             Some(Vec3::splat(size as f32))
                         } else {
                             None

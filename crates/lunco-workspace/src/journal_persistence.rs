@@ -1,11 +1,13 @@
 //! Twin edit-journal persistence (B1).
 //!
-//! Saves the canonical [`Journal`](lunco_twin_journal::Journal) to
-//! `<twin-root>/.lunco/journal/journal.json` and reloads it when a Twin
-//! opens, so edit history (and, later, versions / branches) survives across
-//! sessions. UI-free and headless: the disk I/O goes through [`lunco_storage`],
-//! the same byte-level layer the rest of the app uses — no business logic in
-//! the storage crate.
+//! Saves the canonical [`Journal`](lunco_twin_journal::Journal) to a visible,
+//! project-local `<twin-root>/history/journal.json` and reloads it when a Twin
+//! opens, so a twin's **current state** (its scene `.usda`, written on Save)
+//! and its **history** (this replayable op log) are persisted side by side.
+//! Edit history (and, later, versions / branches) survives across sessions.
+//! UI-free and headless: the disk I/O goes through [`lunco_storage`], the same
+//! byte-level layer the rest of the app uses — no business logic in the storage
+//! crate.
 //!
 //! - **Load** on [`TwinAdded`](crate::session::TwinAdded): read the file and
 //!   swap it into the live [`JournalResource`] *in place*, preserving the
@@ -14,8 +16,9 @@
 //! - **Save** on [`DocumentSaved`](lunco_doc_bevy::DocumentSaved): serialize
 //!   the journal and write it to the active Twin's folder.
 //!
-//! `.lunco/` is excluded from the Twin file index (it's session state), so the
-//! journal file never appears as a document.
+//! `history/journal.json` is a JSON file, so the extension-keyed document
+//! classifier (`.usda` → USD, etc.) never mounts it as a scene/document — it's
+//! visible in the project folder but is not an openable twin document.
 //!
 //! Both observers no-op when no [`JournalResource`] is present, so they're safe
 //! to register unconditionally (headless `--no-ui` servers without journaling
@@ -31,8 +34,10 @@ use lunco_twin_journal::{AuthorId, Journal as CanonicalJournal, TwinId as Journa
 use crate::session::TwinAdded;
 use crate::{TwinId, WorkspaceResource};
 
-/// Location of the journal file within a Twin folder.
-const JOURNAL_REL_PATH: &str = ".lunco/journal/journal.json";
+/// Location of the journal file within a Twin folder — a **visible**
+/// project-local `history/` folder (the durable, replayable edit log) so a
+/// twin's history lives alongside its scene, not hidden under `.lunco/`.
+const JOURNAL_REL_PATH: &str = "history/journal.json";
 
 /// Absolute path to a Twin's journal file.
 fn journal_path(twin_root: &Path) -> PathBuf {
@@ -190,6 +195,64 @@ pub(crate) fn on_document_saved_persist_journal(
             "[journal] save to {} failed: {err}",
             journal_path(&root).display(),
         );
+    }
+}
+
+/// Debounced periodic-save cadence — the journal is rewritten at most this often.
+const SAVE_INTERVAL_SECS: f32 = 5.0;
+
+/// Debounced periodic save: rewrite the journal to **its own twin's**
+/// `<root>/history/journal.json` at most every [`SAVE_INTERVAL_SECS`], and only
+/// when it grew. Gives a continuously-running host (the headless server)
+/// crash-durable history without an explicit `DocumentSaved`. Routes by the
+/// journal's own stable id (never the active twin), exactly like
+/// [`on_document_saved_persist_journal`]; a no-op until a twin has bound the
+/// journal (before that there's no twin folder to route to).
+pub(crate) fn persist_journal_periodic(
+    time: Res<Time>,
+    workspace: Res<WorkspaceResource>,
+    journal: Option<Res<JournalResource>>,
+    mut acc: Local<f32>,
+    mut last_saved_len: Local<usize>,
+) {
+    let Some(journal) = journal else { return };
+    *acc += time.delta_secs();
+    if *acc < SAVE_INTERVAL_SECS {
+        return;
+    }
+    *acc = 0.0;
+    let (id, len) = journal.with_read(|j| (j.twin().clone(), j.len()));
+    if len == *last_saved_len {
+        return; // nothing new since the last save
+    }
+    let Some(root) = root_for_journal_id(&workspace, &id) else {
+        return; // journal not yet bound to an open twin — nothing to route to
+    };
+    let bytes = match journal.with_read(|j| j.to_bytes()) {
+        Ok(b) => b,
+        Err(err) => {
+            warn!("[journal] serialize failed: {err}");
+            return;
+        }
+    };
+    if write_journal_bytes(&root, &bytes).is_ok() {
+        *last_saved_len = len;
+    }
+}
+
+/// The **single** journal-persistence mechanism, twin-folder-scoped: load
+/// `<twin>/history/journal.json` when a twin opens, and save it back on every
+/// explicit [`DocumentSaved`] **and** on a debounced periodic tick. Registered
+/// by both the GUI workspace and the headless server — the former per-crate
+/// global `lunco-doc-bevy` copy (which wrote to `~/.lunco/journal/`) is retired,
+/// so there is now one history location and one code path (DRY).
+pub struct WorkspaceJournalPlugin;
+
+impl Plugin for WorkspaceJournalPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_observer(on_twin_added_load_journal)
+            .add_observer(on_document_saved_persist_journal)
+            .add_systems(Update, persist_journal_periodic);
     }
 }
 

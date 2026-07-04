@@ -41,12 +41,11 @@ use lunco_scripting::{
     doc::{ScriptDocument, ScriptLanguage, ScriptedModel},
     ScriptRegistry,
 };
-use lunco_doc::DocumentHost;
-use lunco_usd_bevy::usd_data::UsdDataExt;
 use lunco_usd_bevy::{
-    LoadIntoGrid, UsdData, UsdInstanceMember, UsdInstanceRoot, UsdPrimPath, UsdStageAsset,
+    CanonicalStages, LoadIntoGrid, UsdInstanceMember, UsdInstanceRoot, UsdPrimPath,
+    UsdRead, UsdStageAsset,
 };
-use openusd::sdf::{Path as SdfPath, Value};
+use openusd::sdf::Path as SdfPath;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -114,11 +113,24 @@ pub fn process_usd_cosim_prims(
     mut commands: Commands,
     query: Query<(Entity, &UsdPrimPath), Without<UsdSourcedCosim>>,
     stages: Res<Assets<UsdStageAsset>>,
+    // Read the LIVE canonical stage (source of truth), built on demand from
+    // the asset's recipe.
+    mut canonical: NonSendMut<CanonicalStages>,
     asset_server: Res<AssetServer>,
 ) {
     for (entity, prim_path) in query.iter() {
-        let Some(stage) = stages.get(&prim_path.stage_handle) else { continue; };
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { continue; };
+
+        // Acquire a read source: the live canonical stage, built on demand from
+        // the asset recipe. If it is not available yet the asset is still
+        // loading — retry next frame WITHOUT marking, so the prim stays in the
+        // `Without<UsdSourcedCosim>` query.
+        let id = prim_path.stage_handle.id();
+        if canonical.get(id).is_none() {
+            if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
+                canonical.get_or_build(id, &recipe);
+            }
+        }
 
         // Mark examined up front so each prim is inspected exactly once.
         // Without this, every *non-cosim* prim (wheels, ground, ramps — the
@@ -130,14 +142,27 @@ pub fn process_usd_cosim_prims(
         // Safe: every other `UsdSourcedCosim` consumer also requires a
         // `ModelicaModel` / `SimComponent` / `ScriptedModel` that a non-cosim
         // prim never gains, so marking it here matches nothing downstream.
+        // No live stage (asset carries no recipe / build failed) yet — skip,
+        // leaving the prim in the `Without<UsdSourcedCosim>` query to retry.
+        let Some(cs) = canonical.get(id) else { continue };
         commands.entity(entity).insert(UsdSourcedCosim);
+        process_usd_cosim_prim_read(
+            &cs.view(), entity, prim_path, &sdf_path, &mut commands, &asset_server,
+        );
+    }
+}
 
-        // Borrow the stage reader — `stage.reader` is `Arc<TextReader>`, and
-        // `(*stage.reader).clone()` deep-copied the entire stage's
-        // `HashMap<String, sdf::Value>`. The attribute reads below only need
-        // `&self`.
-        let reader = &*stage.reader;
-
+/// Reads one cosim prim's attributes and dispatches its model + wires + events,
+/// generic over the read source ([`UsdRead`]) — drives off either the live
+/// canonical `StageView` or the flattened `sdf::Data`, identically.
+fn process_usd_cosim_prim_read<R: UsdRead>(
+    reader: &R,
+    entity: Entity,
+    prim_path: &UsdPrimPath,
+    sdf_path: &SdfPath,
+    commands: &mut Commands,
+    asset_server: &AssetServer,
+) {
         // Gate on `lunco:simWires` presence — the attribute that distinguishes
         // an *active* cosim entity (a balloon fanning ports into Avian; a solar
         // tracker whose model output drives a joint via a wire) from prims that
@@ -146,20 +171,20 @@ pub fn process_usd_cosim_prims(
         // no translator behaviour). Sun-tracking and every other joint drive now
         // flow through the unified wiring fabric (`yaw -> </…/Joint>.angle`), so
         // there is no separate actuator attribute.
-        let wires_csv = reader.prim_attribute_value::<String>(&sdf_path, "lunco:simWires");
+        let wires_csv = reader.scalar::<String>(sdf_path, "lunco:simWires");
         if wires_csv.is_none() {
-            continue;
+            return;
         }
 
-        let modelica_path = reader.prim_attribute_value::<String>(&sdf_path, "lunco:modelicaModel");
-        let python_path = reader.prim_attribute_value::<String>(&sdf_path, "lunco:pythonModel");
+        let modelica_path = reader.scalar::<String>(sdf_path, "lunco:modelicaModel");
+        let python_path = reader.scalar::<String>(sdf_path, "lunco:pythonModel");
 
         if modelica_path.is_none() && python_path.is_none() {
             warn!(
                 "[usd-cosim] {} declares lunco:simWires but neither lunco:modelicaModel nor lunco:pythonModel — skipping",
                 prim_path.path
             );
-            continue;
+            return;
         }
 
         // `UsdSourcedCosim` already inserted above; add the cosim-only markers.
@@ -237,7 +262,7 @@ pub fn process_usd_cosim_prims(
         // Port-edge event rules: `lunco:portEvents = "m_prop<200:lander_low_fuel, ..."`.
         // Each turns a model OUTPUT-signal threshold crossing into a discrete
         // TelemetryEvent (the rumoca-safe Modelica `when` — see fire_model_port_events).
-        if let Some(spec) = reader.prim_attribute_value::<String>(&sdf_path, "lunco:portEvents") {
+        if let Some(spec) = reader.scalar::<String>(sdf_path, "lunco:portEvents") {
             let rules = parse_port_events(&spec);
             if !rules.is_empty() {
                 commands.entity(entity).insert(ModelEventRules(rules));
@@ -246,7 +271,6 @@ pub fn process_usd_cosim_prims(
 
         let kind = if modelica_path.is_some() { "modelica" } else { "python" };
         info!("[usd-cosim] wired {} ({}) from USD attrs", prim_path.path, kind);
-    }
 }
 
 /// USD attributes sometimes carry an `assets/` prefix
@@ -351,9 +375,11 @@ pub fn dispatch_loaded_python_sources(
         // Offset doc id away from any Modelica-allocated ids on the same
         // entity (legacy catalog Python balloon does the same).
         let doc_id = DocumentId::new(entity.index().index() as u64 + 10_000);
-        registry.documents.insert(
+        // Route through the registry funnel so a journal recorder attaches (edits
+        // to this cosim script record like any other domain).
+        registry.insert_document(
             doc_id,
-            DocumentHost::new(ScriptDocument {
+            ScriptDocument {
                 id: doc_id.raw(),
                 generation: 0,
                 language: ScriptLanguage::Python,
@@ -362,7 +388,7 @@ pub fn dispatch_loaded_python_sources(
                 inputs: vec!["height".to_string(), "velocity".to_string()],
                 outputs: vec!["netForce".to_string()],
                 params: String::new(),
-            }),
+            },
         );
         commands.entity(entity).insert(ScriptedModel {
             document_id: Some(doc_id.raw()),
@@ -593,6 +619,8 @@ pub fn process_usd_cosim_wires(
     q_unprocessed: Query<(Entity, &UsdPrimPath), Without<UsdSourcedWire>>,
     q_all: Query<(Entity, &UsdPrimPath)>,
     stages: Res<Assets<UsdStageAsset>>,
+    // Read the LIVE canonical stage, built on demand from the recipe.
+    mut canonical: NonSendMut<CanonicalStages>,
 ) {
     // Bail before building the path index in the common steady-state
     // case where every wire is already processed. The earlier version
@@ -613,26 +641,44 @@ pub fn process_usd_cosim_wires(
     }
 
     for (entity, prim_path) in q_unprocessed.iter() {
-        let Some(stage) = stages.get(&prim_path.stage_handle) else { continue; };
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { continue; };
-        // Borrow, don't deep-clone the `Arc<TextReader>` (whole-stage copy).
-        let reader = &*stage.reader;
+        let id = prim_path.stage_handle.id();
+        if canonical.get(id).is_none() {
+            if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
+                canonical.get_or_build(id, &recipe);
+            }
+        }
+        let Some(cs) = canonical.get(id) else { continue };
+        process_usd_cosim_wire_read(&cs.view(), entity, prim_path, &sdf_path, &by_path, &mut commands);
+    }
+}
 
+/// Resolves one wire prim's endpoints + params and spawns its `SimConnection`,
+/// generic over the read source ([`UsdRead`]) — drives off either the live
+/// canonical `StageView` or the flattened `sdf::Data`, identically.
+fn process_usd_cosim_wire_read<R: UsdRead>(
+    reader: &R,
+    entity: Entity,
+    prim_path: &UsdPrimPath,
+    sdf_path: &SdfPath,
+    by_path: &HashMap<String, Entity>,
+    commands: &mut Commands,
+) {
         // A prim with no wire rels is not a wire — mark it examined so it
         // leaves the `Without<UsdSourcedWire>` query. Without this the query
         // never empties, the `is_empty()` bail above never fires, and this
         // system rebuilt the `by_path` index (a String clone per prim) and
         // re-cloned the stage every frame for the whole scene.
-        let Some(from_path) = read_rel_target(reader, &sdf_path, "lunco:wireFrom") else {
+        let Some(from_path) = reader.rel_target(sdf_path, "lunco:wireFrom") else {
             commands.entity(entity).insert(UsdSourcedWire);
-            continue;
+            return;
         };
-        let Some(to_path) = read_rel_target(reader, &sdf_path, "lunco:wireTo") else {
+        let Some(to_path) = reader.rel_target(sdf_path, "lunco:wireTo") else {
             commands.entity(entity).insert(UsdSourcedWire);
-            continue;
+            return;
         };
-        let from_port = reader.prim_attribute_value::<String>(&sdf_path, "lunco:fromPort");
-        let to_port = reader.prim_attribute_value::<String>(&sdf_path, "lunco:toPort");
+        let from_port = reader.scalar::<String>(sdf_path, "lunco:fromPort");
+        let to_port = reader.scalar::<String>(sdf_path, "lunco:toPort");
 
         let (Some(from_port), Some(to_port)) = (from_port, to_port) else {
             warn!(
@@ -640,16 +686,16 @@ pub fn process_usd_cosim_wires(
                 prim_path.path
             );
             commands.entity(entity).insert(UsdSourcedWire);
-            continue;
+            return;
         };
         let scale = reader
-            .prim_attribute_value::<f64>(&sdf_path, "lunco:scale")
+            .scalar::<f64>(sdf_path, "lunco:scale")
             .unwrap_or(1.0);
         // SSP affine offset: `value = src*scale + offset`. Defaults to 0 so
         // pure-gain wires are unaffected; used for unit biases and DAC/ADC
         // zero-points (e.g. a DigitalPort register → physical units).
         let offset = reader
-            .prim_attribute_value::<f64>(&sdf_path, "lunco:offset")
+            .scalar::<f64>(sdf_path, "lunco:offset")
             .unwrap_or(0.0);
 
         let from_str = from_path.to_string();
@@ -658,7 +704,7 @@ pub fn process_usd_cosim_wires(
             (by_path.get(&from_str), by_path.get(&to_str))
         else {
             // Endpoint(s) not spawned yet — try again next frame.
-            continue;
+            return;
         };
 
         commands.spawn(SimConnection {
@@ -674,23 +720,6 @@ pub fn process_usd_cosim_wires(
             "[usd-cosim] wire {}.{} → {}.{} (scale={}, offset={})",
             from_str, from_port, to_str, to_port, scale, offset,
         );
-    }
-}
-
-/// Reads a single-target `rel <name> = </path>` from a USD prim. USD
-/// stores rels under the `targetPaths` field (not `default`) as a
-/// `PathListOp`. Returns the first contributing target.
-fn read_rel_target(
-    reader: &UsdData,
-    prim: &SdfPath,
-    name: &str,
-) -> Option<SdfPath> {
-    let prop_path = prim.append_property(name).ok()?;
-    let val = reader.field(&prop_path, "targetPaths")?;
-    match val {
-        Value::PathListOp(list_op) => list_op.iter().next().cloned(),
-        _ => None,
-    }
 }
 
 /// Parses a `"from:to"` or `"from:to:scale"` wire entry. Empty ports are rejected.
@@ -1242,11 +1271,37 @@ pub fn despawn_usd_subtree(world: &mut World, root: Entity) {
 /// uses, so the observer instantiates its geometry + subtree in place without
 /// disturbing siblings. Returns `None` (no-op) if the parent isn't live yet or
 /// the prim is already spawned.
-pub fn spawn_usd_child(
+pub fn spawn_usd_child<R: lunco_usd_bevy::UsdRead>(
     world: &mut World,
     stage_handle_id: bevy::asset::AssetId<UsdStageAsset>,
-    reader: &UsdData,
+    reader: &R,
     path: &str,
+) -> Option<Entity> {
+    // Pre-populate the translate so physics sees the spawn offset before the
+    // observer refines the full transform (matches the loader's child branch).
+    let sdf_path = SdfPath::new(path).ok()?;
+    let tf = lunco_usd_bevy::get_attribute_as_vec3(reader, &sdf_path, "xformOp:translate")
+        .map(Transform::from_translation)
+        .unwrap_or_default();
+    spawn_usd_child_with_translate(world, stage_handle_id, path, tf)
+}
+
+/// Reader-free core of [`spawn_usd_child`]: spawn the stub child entity for
+/// `path` under its already-live parent, with a pre-read transform `tf`,
+/// inheriting grid-anchoring + instance membership from the parent. The
+/// `on_usd_prim_added` observer then builds the subtree from the canonical
+/// stage.
+///
+/// Split out so the live-stage projection bridge can pre-read the translate
+/// under a *short* immutable borrow of the `!Send` `CanonicalStage` and then
+/// spawn here with `&mut World` — the stage itself can't be held across the
+/// spawn (it aliases the world), but the observer that fires on insert reads it
+/// fresh from `CanonicalStages`.
+pub fn spawn_usd_child_with_translate(
+    world: &mut World,
+    stage_handle_id: bevy::asset::AssetId<UsdStageAsset>,
+    path: &str,
+    tf: Transform,
 ) -> Option<Entity> {
     // Parent path = `path` minus its final `/segment`.
     let (parent_prefix, _name) = path.rsplit_once('/')?;
@@ -1271,13 +1326,6 @@ pub fn spawn_usd_child(
     }
 
     let stage_handle = world.get::<UsdPrimPath>(parent_entity)?.stage_handle.clone();
-
-    // Pre-populate the translate so physics sees the spawn offset before the
-    // observer refines the full transform (matches the loader's child branch).
-    let sdf_path = SdfPath::new(path).ok()?;
-    let tf = lunco_usd_bevy::get_attribute_as_vec3(reader, &sdf_path, "xformOp:translate")
-        .map(Transform::from_translation)
-        .unwrap_or_default();
 
     // Inherit grid-anchoring + instance membership from the parent exactly as
     // `instantiate_usd_prim` derives them for its children.

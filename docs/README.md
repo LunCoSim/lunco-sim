@@ -38,6 +38,7 @@ We are evolving from a high-fidelity sandbox into a complete autonomous mission 
 | [`scripting-guide.md`](scripting-guide.md) | How to write rhai scenarios — lifecycle, verbs, sequencing, tools, persistence |
 | [`rhai-integration-design.md`](rhai-integration-design.md) | Rhai scripting design rationale + as-built reference |
 | [`architecture/`](architecture/) | Design narrative — how LunCoSim is structured |
+| [`architecture/31-networking-and-state-sync.md`](architecture/31-networking-and-state-sync.md) | Multiplayer sync — the five replication planes (command/state/content/journal/presence), the wire, area-of-interest routing, policy-as-journal |
 | [`architecture/terrain-substrate.md`](architecture/terrain-substrate.md) | Terrain height oracle — one `HeightSource` model from orbit to rover; USD layers, three channels, error-driven detail, solar-system scale |
 | [`architecture/01-ontology.md`](architecture/01-ontology.md) | Terminology reference — Space System, Port, Connection, Attribute |
 | `../specs/` | Detailed feature specifications (contracts for implementation) |
@@ -66,7 +67,7 @@ Architecture docs follow a numeric prefix:
 | `00`–`09` | Foundation (overview, ontology) |
 | `10`–`19` | Framework (document system, workbench, API, viewport, control) |
 | `20`–`29` | Per-domain design (Modelica, USD, cosim, environment, SysML) |
-| `30`–`39` | Infrastructure & Deployment (Wasm, web workers, CI/CD) |
+| `30`–`39` | Infrastructure & Deployment (Wasm, web workers, networking & state sync, CI/CD) |
 | `40`–`49` | Low-level subsystems (Asset IO, axes & units, logging) |
 | `90`–`99` | Forward-looking / roadmap (collaboration, advanced features) |
 | `research/` | Un-numbered historical / inspiration material |

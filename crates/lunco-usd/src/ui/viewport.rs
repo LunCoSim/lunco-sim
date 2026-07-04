@@ -74,7 +74,8 @@ use bevy::render::render_resource::{Extent3d, TextureFormat};
 use bevy::camera::visibility::RenderLayers;
 use bevy_egui::egui;
 use bevy_egui::{EguiTextureHandle, EguiUserTextures};
-use lunco_doc::{Document, DocumentId};
+use lunco_assets::twin_source::TwinRoots;
+use lunco_doc::{Document, DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{DocumentChanged, DocumentClosed, DocumentOpened};
 use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdVisualSynced};
 use lunco_core::{Command, on_command, register_commands};
@@ -528,17 +529,10 @@ fn on_doc_opened_for_viewport(
     });
 }
 
-fn on_doc_changed_for_viewport(
-    trigger: On<DocumentChanged>,
-    mut commands: Commands,
-) {
-    let doc = trigger.event().doc;
-    commands.queue(move |world: &mut World| {
-        if world.resource::<UsdViewportState>().active_doc != Some(doc) {
-            return;
-        }
-        rebuild_active_asset(world);
-    });
+fn on_doc_changed_for_viewport(_trigger: On<DocumentChanged>) {
+    // Doc-backed viewport rebuilds are owned by `sync_twin_overlays`: when the
+    // document generation moves it refreshes the twin overlay and reloads the
+    // asset, re-projecting the preview. Nothing to do here per edit.
 }
 
 fn on_doc_closed_for_viewport(
@@ -569,8 +563,12 @@ fn on_doc_closed_for_viewport(
 // Asset install / rebuild
 // ─────────────────────────────────────────────────────────────────────
 
-/// Install `doc` as the active stage on the shared scene_root. Parses
-/// + flattens the source, adds the asset, attaches `UsdPrimPath`. No-op
+/// Install `doc` as the active stage on the shared scene_root. Composes the
+/// document through the **storage-based async twin loader** (no filesystem
+/// compose): the doc is served as a `twin://` byte-overlay and loaded via the
+/// async [`UsdLoader`], which resolves references relative to the doc's base dir
+/// through the twin source (web-ready). Later edits are re-projected by
+/// [`sync_twin_overlays`](crate::twin_projection::sync_twin_overlays). No-op
 /// when scaffolding hasn't been bootstrapped (headless).
 fn install_active_doc(world: &mut World, doc: DocumentId) {
     let Some(scene_root) = world.resource::<UsdViewportState>().scene_root else {
@@ -580,24 +578,18 @@ fn install_active_doc(world: &mut World, doc: DocumentId) {
         .resource::<UsdDocumentRegistry>()
         .host(doc)
         .map(|h| h.document().generation());
-    let Some(source) = world
-        .resource::<UsdDocumentRegistry>()
-        .host(doc)
-        .map(|h| h.document().source().to_string())
-    else {
+    let Some((name, rel)) = viewport_twin_coords(world, doc) else {
+        bevy::log::warn!("[UsdViewport] no composed source for {} — not mounting", doc);
         return;
-    };
-    let base = base_dir_for(world, doc);
-    let Some(reader) = parse_reader(&source, base.as_deref()) else {
-        bevy::log::warn!("[UsdViewport] could not parse {} for viewport", doc);
-        return;
-    };
-    let asset = UsdStageAsset {
-        reader: std::sync::Arc::new(reader),
     };
     let handle = world
-        .resource_mut::<Assets<UsdStageAsset>>()
-        .add(asset);
+        .resource::<AssetServer>()
+        .load::<UsdStageAsset>(format!("twin://{name}/{rel}"));
+    // Track so `sync_twin_overlays` keeps the overlay + preview in step with the
+    // document generation (it owns rebuilds — the viewport no longer re-parses).
+    world
+        .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+        .track(doc, name, rel);
     if let Ok(mut entity) = world.get_entity_mut(scene_root) {
         entity.remove::<UsdVisualSynced>();
         entity.despawn_related::<Children>();
@@ -612,89 +604,43 @@ fn install_active_doc(world: &mut World, doc: DocumentId) {
     state.last_rebuilt_generation = doc_generation;
 }
 
-/// Rebuild the active stage from its document's current source,
-/// mutating the existing asset in place so the `Handle` stays valid.
-fn rebuild_active_asset(world: &mut World) {
-    let (handle, doc) = {
-        let state = world.resource::<UsdViewportState>();
-        match (state.current_handle.clone(), state.active_doc) {
-            (Some(h), Some(d)) => (h, d),
-            _ => return,
-        }
-    };
-    let doc_generation = world
-        .resource::<UsdDocumentRegistry>()
-        .host(doc)
-        .map(|h| h.document().generation());
-    
-    // Check if the viewport is already displaying this generation to avoid redundant rebuilds
-    // and command-queue conflicts on initial ticks.
-    if world.resource::<UsdViewportState>().last_rebuilt_generation == doc_generation {
-        return;
-    }
-
-    let Some(source) = world
-        .resource::<UsdDocumentRegistry>()
-        .host(doc)
-        .map(|h| h.document().source().to_string())
-    else {
-        return;
-    };
-    let base = base_dir_for(world, doc);
-    let Some(reader) = parse_reader(&source, base.as_deref()) else {
-        bevy::log::warn!("[UsdViewport] re-parse failed for {}", doc);
-        return;
-    };
-    if let Some(asset) = world
-        .resource_mut::<Assets<UsdStageAsset>>()
-        .get_mut(&handle)
+/// The `twin://` coordinates (`name`, `rel`) to load `doc` through the async
+/// twin source. Reuses the coordinates the document is already doc-backed under
+/// (a default twin scene → shared overlay + asset), else registers a synthetic
+/// per-document twin root and serves the doc's **composed** (`base ⊕ runtime`)
+/// source as a byte-overlay so the async loader composes from the editable
+/// document via storage — references resolve relative to the doc's base dir
+/// through the twin source. `None` when the document is gone.
+fn viewport_twin_coords(world: &World, doc: DocumentId) -> Option<(String, String)> {
+    // Already doc-backed (e.g. the default twin scene)? Reuse its overlay + asset.
+    if let Some(coords) = world
+        .resource::<crate::twin_projection::DocBackedTwinScenes>()
+        .coords_of(doc)
     {
-        asset.reader = std::sync::Arc::new(reader);
+        return Some(coords);
     }
-    if let Some(scene_root) = world.resource::<UsdViewportState>().scene_root {
-        if let Ok(mut entity) = world.get_entity_mut(scene_root) {
-            entity.remove::<UsdVisualSynced>();
-            entity.despawn_related::<Children>();
-            // Re-insert UsdPrimPath to trigger the observer on_usd_prim_added
-            if let Some(prim_path) = entity.take::<UsdPrimPath>() {
-                entity.insert(prim_path);
-            }
-        }
-    }
-    let mut state = world.resource_mut::<UsdViewportState>();
-    state.last_rebuilt_generation = doc_generation;
-}
-
-/// Parse a `.usda` source string into composed [`sdf::Data`]. When
-/// `base_dir` is provided, composition arcs (sublayers, references,
-/// payloads) are flattened via [`lunco_usd_bevy::compose_native_fs`]
-/// so referenced stages (`artemis_2.usda → orion.usda`) actually
-/// surface their geometry in the preview. Without a base dir
-/// (Untitled drafts, in-memory mem://) — or on wasm — flatten can't
-/// resolve paths so we fall back to the raw root layer.
-fn parse_reader(source: &str, base_dir: Option<&std::path::Path>) -> Option<openusd::sdf::Data> {
-    if let Some(dir) = base_dir {
-        if let Some(flat) = lunco_usd_bevy::compose_native_fs(source, dir) {
-            return Some(flat);
-        }
-        bevy::log::warn!(
-            "[UsdViewport] compose failed for {:?} — falling back to raw layer",
-            dir
-        );
-    }
-    openusd::usda::parse(source).ok()
-}
-
-/// Resolve the directory that composition arcs resolve relative to —
-/// the parent of the doc's on-disk path, or `None` for Untitled /
-/// in-memory docs.
-fn base_dir_for(world: &World, doc: DocumentId) -> Option<std::path::PathBuf> {
-    use lunco_doc::DocumentOrigin;
     let host = world.resource::<UsdDocumentRegistry>().host(doc)?;
-    match host.document().origin() {
-        DocumentOrigin::File { path, .. } => path.parent().map(|p| p.to_path_buf()),
-        _ => None,
-    }
+    let composed = host.document().composed_source();
+    let (base, rel) = match host.document().origin() {
+        DocumentOrigin::File { path, .. } => (
+            path.parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| std::path::PathBuf::from(".")),
+            path.file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "scene.usda".to_string()),
+        ),
+        // Untitled / in-memory: no external refs to resolve; a placeholder root
+        // is enough for the overlay to serve the composed source.
+        _ => (std::path::PathBuf::from("."), "scene.usda".to_string()),
+    };
+    // A stable, URI-safe synthetic twin name for this document.
+    let name = format!("__viewport_{doc}")
+        .replace(|c: char| !c.is_ascii_alphanumeric() && c != '_', "_");
+    let roots = world.resource::<TwinRoots>();
+    roots.register(&name, base);
+    roots.set_overlay(&name, &rel, std::sync::Arc::new(composed.into_bytes()));
+    Some((name, rel))
 }
 
 // ─────────────────────────────────────────────────────────────────────

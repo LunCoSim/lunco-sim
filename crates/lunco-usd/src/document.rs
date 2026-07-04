@@ -30,6 +30,53 @@
 //! edit non-destructively over the base and promote to persistent on save.
 //! `apply` routes to the target layer via [`TargetLayer::from_id`]; unknown
 //! identifiers are rejected (no silent misrouting to root).
+//!
+//! ## Two representations, and why both are permanent
+//!
+//! A running scene is held in **two** forms, and neither can absorb the other:
+//!
+//! - **This document** — the authored [`sdf::Data`] layers (`base` ⊕ `runtime`,
+//!   read via [`UsdDocument::data`] / [`UsdDocument::runtime_data`]). Plain,
+//!   `Send`, serializable. This is what Save writes, what the journal records, and
+//!   what the networking layer ships. Reads are cheap and run off the main thread.
+//! - **The `CanonicalStage`** (in `lunco_usd_bevy`) — the live, *composed*
+//!   openusd `Stage` with references / sublayers / variants resolved. It is
+//!   `Rc`-backed and therefore `!Send`: a main-thread `NonSend` resource. It is
+//!   the projection engine — authoring onto it fires the openusd change sink that
+//!   reconciles the ECS (see [`twin_projection`](crate::twin_projection) and
+//!   [`live_consume`](crate::live_consume)).
+//!
+//! This split is **not** a Rust/`Send` workaround — it is USD's own data model.
+//! Pixar's USD draws the same line between `SdfLayer` (flat authored opinions you
+//! save) and `UsdStage` (the composed view). You always have both: a layer is
+//! *source*, a stage is the *composition* of layers. Collapsing them would mean
+//! serializing a fully reference-expanded graph on every Save — which defeats the
+//! entire purpose of references. The `Send` / `!Send` boundary merely happens to
+//! fall on that same seam, so the two representations stay **even if openusd ever
+//! makes `Stage` `Send`**. The right operations land on the cheap side: Save,
+//! journal, and net-sync touch the small serializable layer; composition (the
+//! expensive, stateful, resolver-driven work) is isolated to the one stage owner.
+//!
+//! ## Author-once coherence invariant
+//!
+//! Two representations of the same edit can drift, so the **op itself** — not a
+//! diff re-derived by reading the stage back — is the single description of each
+//! delta, applied to *both* sides: [`apply`](Document::apply) mutates these layers
+//! and records the typed op in the private `op_log`; the live-stage projector
+//! replays that same op onto the stage. The invariant that keeps them honest:
+//!
+//! > **every generation bump records exactly one op-log entry.**
+//!
+//! The private `commit` is the only mutator, and both its callers maintain it:
+//! `apply` records the real op on success; [`UsdDocument::restore_runtime`]
+//! (a non-op state load) pushes a synthetic `ReplaceSource` marker. Crucially the
+//! invariant is **fail-safe, not merely by-convention**: [`UsdDocument::ops_since`]
+//! returns `None` whenever the op ring is shorter than the generation delta, so a
+//! future `commit` caller that forgets to record degrades to a full rebuild
+//! (correct, just slower) — never a silent projection lie. That fail-safe is the
+//! reason `restore_runtime` needs the synthetic marker at all: without it, a
+//! restore would bump the generation with no op, and every subsequent
+//! `ops_since` would under-count and force needless rebuilds.
 
 use std::collections::VecDeque;
 
@@ -203,6 +250,20 @@ pub enum UsdOp {
         /// Absolute USD path of the prim whose translate to set.
         path: String,
         /// `[x, y, z]` in stage units.
+        value: [f64; 3],
+    },
+    /// Set the `xformOp:rotateXYZ` attribute (Euler XYZ, **degrees**) on the
+    /// prim at `path` — the rotation counterpart of [`UsdOp::SetTranslate`].
+    /// Authors `xformOpOrder` too if the prim has none yet (like `SetTranslate`,
+    /// it only synthesizes a fresh order — it never rewrites an existing xform
+    /// stack). This is what lets a `SetEnvironmentLight` sun-direction tweak
+    /// persist + journal (the sun's orientation is `xformOp:rotateXYZ`).
+    SetRotate {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim whose rotation to set.
+        path: String,
+        /// `[x, y, z]` Euler angles in **degrees** (USD `xformOp:rotateXYZ`).
         value: [f64; 3],
     },
     /// Set an arbitrary attribute on the prim at `path`. Creates the
@@ -384,6 +445,15 @@ pub struct UsdDocument {
     /// Ring buffer of `(generation_after_change, change)` for catch-up
     /// reads. See [`changes_since`](Self::changes_since).
     changes: VecDeque<(u64, UsdChange)>,
+    /// Ring buffer of `(generation_after_change, op)` — the **typed op** that
+    /// produced each generation. The live-stage projection replays these ops
+    /// directly (author-once: the op is the single delta description, applied to
+    /// both this save layer and the `!Send` projection stage), so it never has to
+    /// re-derive an edit's value by reading it back out of [`composed`](Self::composed).
+    /// Non-op state changes (e.g. [`restore_runtime`](Self::restore_runtime)) push
+    /// a synthetic [`UsdOp::ReplaceSource`] marker so the projector still rebuilds.
+    /// See [`ops_since`](Self::ops_since).
+    op_log: VecDeque<(u64, UsdOp)>,
 }
 
 impl UsdDocument {
@@ -430,6 +500,7 @@ impl UsdDocument {
             origin,
             last_saved_generation,
             changes: VecDeque::with_capacity(CHANGE_HISTORY_CAPACITY),
+            op_log: VecDeque::with_capacity(CHANGE_HISTORY_CAPACITY),
         }
     }
 
@@ -504,6 +575,13 @@ impl UsdDocument {
     pub fn restore_runtime(&mut self, data: sdf::Data) {
         let was_dirty = self.is_dirty();
         self.commit(TargetLayer::Runtime, data, UsdChange::FullReload);
+        // Not a typed op, but it did bump the generation — push a synthetic
+        // whole-source marker so the op-replay projector accounts for this
+        // generation (a full rebuild) instead of treating the op ring as short.
+        self.record_op(UsdOp::ReplaceSource {
+            edit_target: LayerId::runtime(),
+            text: String::new(),
+        });
         if !was_dirty {
             self.last_saved_generation = Some(self.generation);
         }
@@ -543,6 +621,32 @@ impl UsdDocument {
             .iter()
             .filter(move |(g, _)| *g > since_generation)
             .map(|(g, c)| (*g, c))
+    }
+
+    /// The typed ops applied strictly after `since_generation`, in order — the
+    /// live-stage projection replays these directly onto the `!Send` stage
+    /// (author-once). If the op ring dropped entries (more edits than its capacity
+    /// since `since_generation`), returns `None` so the caller falls back to a
+    /// full rebuild rather than silently missing deltas.
+    pub fn ops_since(&self, since_generation: u64) -> Option<Vec<UsdOp>> {
+        let expected = self.generation.saturating_sub(since_generation);
+        let ops: Vec<UsdOp> = self
+            .op_log
+            .iter()
+            .filter(|(g, _)| *g > since_generation)
+            .map(|(_, op)| op.clone())
+            .collect();
+        (ops.len() as u64 >= expected).then_some(ops)
+    }
+
+    /// Record the typed op that produced the current generation, for
+    /// [`ops_since`](Self::ops_since). Called right after a successful
+    /// [`commit`](Self::commit). Non-op state changes push a synthetic marker.
+    fn record_op(&mut self, op: UsdOp) {
+        if self.op_log.len() == CHANGE_HISTORY_CAPACITY {
+            self.op_log.pop_front();
+        }
+        self.op_log.push_back((self.generation, op));
     }
 
     // ─── internal ──────────────────────────────────────────────────────
@@ -680,6 +784,7 @@ impl Document for UsdDocument {
             | UsdOp::AddPrim { edit_target, .. }
             | UsdOp::RemovePrim { edit_target, .. }
             | UsdOp::SetTranslate { edit_target, .. }
+            | UsdOp::SetRotate { edit_target, .. }
             | UsdOp::SetAttribute { edit_target, .. }
             | UsdOp::SetTimeSample { edit_target, .. }
             | UsdOp::RemoveTimeSample { edit_target, .. }
@@ -700,7 +805,11 @@ impl Document for UsdDocument {
             ));
         }
 
-        match op {
+        // Author-once: remember the exact typed op so the live-stage projector
+        // replays it verbatim (no re-deriving the delta from `composed`). Recorded
+        // only on success — a rejected op never bumps the generation.
+        let logged_op = op.clone();
+        let result = match op {
             UsdOp::ReplaceSource { text, .. } => {
                 let new_data = usda_to_data(&text).map_err(|e| {
                     DocumentError::ValidationFailed(format!("ReplaceSource: {e}"))
@@ -834,6 +943,63 @@ impl Document for UsdDocument {
                 Ok(inverse)
             }
 
+            UsdOp::SetRotate { path, value, .. } => {
+                // Direct mirror of `SetTranslate` for `xformOp:rotateXYZ`
+                // (Euler XYZ degrees). Same target-layer pre-state read, same
+                // "synthesize op order only when the prim has none yet" rule.
+                let prim_sdf = self.require_prim_anywhere(&path)?;
+                let layer = self.layer(target);
+                let rotate_existed = prim_sdf
+                    .append_property("xformOp:rotateXYZ")
+                    .ok()
+                    .and_then(|p| layer.spec(&p).map(|_| ()))
+                    .is_some();
+                let order_existed = prim_sdf
+                    .append_property("xformOpOrder")
+                    .ok()
+                    .and_then(|p| layer.spec(&p).map(|_| ()))
+                    .is_some();
+                let old_rotate = layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:rotateXYZ");
+
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                stage
+                    .create_attribute(format!("{path}.xformOp:rotateXYZ"), "double3")
+                    .map_err(author_err)?
+                    .set(value)
+                    .map_err(author_err)?;
+                if !order_existed {
+                    let order = parse_attribute_value("token[]", "[\"xformOp:rotateXYZ\"]")
+                        .map_err(author_err)?;
+                    stage
+                        .create_attribute(format!("{path}.xformOpOrder"), "token[]")
+                        .map_err(author_err)?
+                        .set(order)
+                        .map_err(author_err)?;
+                }
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+
+                let inverse = if rotate_existed && order_existed {
+                    old_rotate
+                        .map(|old| UsdOp::SetRotate {
+                            edit_target: id.clone(),
+                            path: path.clone(),
+                            value: old,
+                        })
+                        .unwrap_or_else(|| self.coarse_inverse(target, &id))
+                } else {
+                    self.coarse_inverse(target, &id)
+                };
+                self.commit(
+                    target,
+                    new_data,
+                    UsdChange::InfoOnly {
+                        path,
+                        attr: "xformOp:rotateXYZ".into(),
+                    },
+                );
+                Ok(inverse)
+            }
+
             UsdOp::SetAttribute {
                 path,
                 name,
@@ -841,13 +1007,35 @@ impl Document for UsdDocument {
                 value,
                 ..
             } => {
-                self.require_prim_anywhere(&path)?;
+                let prim_sdf = self.require_prim_anywhere(&path)?;
                 let val = parse_attribute_value(&type_name, &value).map_err(|e| {
                     DocumentError::ValidationFailed(format!(
                         "SetAttribute `{name}` ({type_name}): {e}"
                     ))
                 })?;
-                let inverse = self.coarse_inverse(target, &id);
+                // Typed inverse: restore the attribute's prior value in THIS layer,
+                // so undo replays incrementally (the projector's `apply_incremental_
+                // op_to_stage` path) instead of a `ReplaceSource` that forces a
+                // whole-layer rebuild. Only when the attribute already had a value
+                // here whose literal round-trips cleanly; a newly-authored attribute
+                // (or an un-recoverable literal) falls back to the always-correct
+                // whole-source snapshot — which also correctly *removes* the new
+                // opinion on undo, something a typed `SetAttribute` cannot express.
+                let old_literal = prim_sdf
+                    .append_property(name.as_str())
+                    .ok()
+                    .and_then(|attr| self.layer(target).field(&attr, "default").cloned())
+                    .and_then(|old| author::value_to_literal(&type_name, old));
+                let inverse = match old_literal {
+                    Some(lit) => UsdOp::SetAttribute {
+                        edit_target: id.clone(),
+                        path: path.clone(),
+                        name: name.clone(),
+                        type_name: type_name.clone(),
+                        value: lit,
+                    },
+                    None => self.coarse_inverse(target, &id),
+                };
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 stage
                     .create_attribute(format!("{path}.{name}"), type_name.as_str())
@@ -1019,7 +1207,11 @@ impl Document for UsdDocument {
                 self.commit(target, new_data, UsdChange::FullReload);
                 Ok(inverse)
             }
+        };
+        if result.is_ok() {
+            self.record_op(logged_op);
         }
+        result
     }
 }
 
@@ -1138,6 +1330,159 @@ mod tests {
         let tail: Vec<_> = doc.changes_since(after_first).collect();
         assert_eq!(tail.len(), 1);
         assert!(matches!(tail[0].1, UsdChange::Resync { .. }));
+    }
+
+    /// Author-once: `ops_since` returns the exact typed ops the live-stage
+    /// projector replays — the suffix strictly after a generation, in order, with
+    /// each op verbatim (so the projector never re-derives the delta from state).
+    #[test]
+    fn ops_since_returns_typed_op_suffix() {
+        let mut doc = UsdDocument::new(DocumentId::new(30), TINY_USDA);
+        doc.apply(UsdOp::AddPrim {
+            edit_target: LayerId::root(),
+            parent_path: "/World".into(),
+            name: "Box".into(),
+            type_name: Some("Cube".into()),
+            reference: None,
+        })
+        .unwrap();
+        let after_spawn = doc.generation();
+        doc.apply(UsdOp::SetTranslate {
+            edit_target: LayerId::root(),
+            path: "/World/Box".into(),
+            value: [1.0, 2.0, 3.0],
+        })
+        .unwrap();
+
+        // From the start: both ops, in order.
+        let all = doc.ops_since(0).expect("ring not overflowed");
+        assert_eq!(all.len(), 2);
+        assert!(matches!(all[0], UsdOp::AddPrim { ref name, .. } if name == "Box"));
+        assert!(matches!(all[1], UsdOp::SetTranslate { value, .. } if value == [1.0, 2.0, 3.0]));
+
+        // Strictly after the spawn: just the translate (verbatim value).
+        let tail = doc.ops_since(after_spawn).expect("ring not overflowed");
+        assert_eq!(tail.len(), 1);
+        assert!(matches!(tail[0], UsdOp::SetTranslate { value, .. } if value == [1.0, 2.0, 3.0]));
+
+        // A `since` far below current with entries dropped can't be trusted → None.
+        assert!(doc.ops_since(0).is_some(), "no overflow for a short history");
+    }
+
+    /// A rejected op neither bumps the generation nor records into the op log, so
+    /// the projector never replays a no-op.
+    #[test]
+    fn rejected_op_is_not_logged() {
+        let mut doc = UsdDocument::new(DocumentId::new(31), TINY_USDA);
+        // Unknown parent → validation failure, no commit.
+        let _ = doc.apply(UsdOp::AddPrim {
+            edit_target: LayerId::root(),
+            parent_path: "/Nope".into(),
+            name: "X".into(),
+            type_name: Some("Xform".into()),
+            reference: None,
+        });
+        assert_eq!(doc.generation(), 0);
+        assert_eq!(doc.ops_since(0).unwrap().len(), 0, "rejected op is not in the op log");
+    }
+
+    /// Author-once's load-bearing invariant: **every generation bump records
+    /// exactly one op-log entry**, so `ops_since(0).len() == generation`. This
+    /// must hold across the *non-op* path too — [`restore_runtime`] bumps the
+    /// generation without a typed op, and relies on the synthetic marker to stay
+    /// in lockstep. If a future `commit` caller breaks this, `ops_since` under-
+    /// counts and the projector falls back to a full rebuild (fail-safe) rather
+    /// than under-applying — this test pins the lockstep so that stays a
+    /// deliberate choice, not an accident.
+    #[test]
+    fn op_log_stays_in_lockstep_with_generation() {
+        let mut doc = UsdDocument::new(DocumentId::new(32), TINY_USDA);
+        doc.apply(UsdOp::AddPrim {
+            edit_target: LayerId::root(),
+            parent_path: "/World".into(),
+            name: "a".into(),
+            type_name: Some("Xform".into()),
+            reference: None,
+        })
+        .unwrap();
+        doc.apply(UsdOp::SetTranslate {
+            edit_target: LayerId::root(),
+            path: "/World/a".into(),
+            value: [1.0, 2.0, 3.0],
+        })
+        .unwrap();
+        // A non-op runtime restore also bumps the generation — the synthetic
+        // marker must keep the op log one-per-generation.
+        doc.restore_runtime(usda_to_data(TINY_USDA).unwrap());
+
+        let ops = doc.ops_since(0).expect("op ring holds an entry for every generation");
+        assert_eq!(
+            ops.len() as u64,
+            doc.generation(),
+            "one op-log entry per generation bump (incl. the restore_runtime marker)"
+        );
+    }
+
+    /// Overwriting an **existing** attribute inverts to a *typed* `SetAttribute`
+    /// carrying the prior value — so undo replays incrementally rather than
+    /// forcing a whole-layer `ReplaceSource` rebuild. Applying that inverse
+    /// restores the original value.
+    #[test]
+    fn set_attribute_overwrite_inverts_to_typed_op() {
+        const SCENE: &str = "#usda 1.0\ndef Sphere \"Ball\"\n{\n    double radius = 1\n}\n";
+        let mut doc = UsdDocument::new(DocumentId::new(40), SCENE);
+        let ball = SdfPath::new("/Ball").unwrap();
+
+        let inverse = doc
+            .apply(UsdOp::SetAttribute {
+                edit_target: LayerId::root(),
+                path: "/Ball".into(),
+                name: "radius".into(),
+                type_name: "double".into(),
+                value: "5".into(),
+            })
+            .unwrap();
+        assert_eq!(doc.data().prim_attribute_value::<f64>(&ball, "radius"), Some(5.0));
+        assert!(
+            matches!(&inverse, UsdOp::SetAttribute { name, .. } if name == "radius"),
+            "overwrite of an existing attribute must invert to a typed SetAttribute, got {inverse:?}"
+        );
+
+        // Replaying the inverse restores the prior value incrementally.
+        doc.apply(inverse).unwrap();
+        assert_eq!(doc.data().prim_attribute_value::<f64>(&ball, "radius"), Some(1.0));
+    }
+
+    /// Authoring a **brand-new** attribute has no prior value to restore, so it
+    /// inverts to the always-correct whole-source snapshot — which also *removes*
+    /// the new opinion on undo (something a typed `SetAttribute` cannot express).
+    #[test]
+    fn set_attribute_create_inverts_to_coarse_snapshot() {
+        const SCENE: &str = "#usda 1.0\ndef Sphere \"Ball\"\n{\n}\n";
+        let mut doc = UsdDocument::new(DocumentId::new(41), SCENE);
+        let ball = SdfPath::new("/Ball").unwrap();
+
+        let inverse = doc
+            .apply(UsdOp::SetAttribute {
+                edit_target: LayerId::root(),
+                path: "/Ball".into(),
+                name: "radius".into(),
+                type_name: "double".into(),
+                value: "5".into(),
+            })
+            .unwrap();
+        assert!(
+            matches!(inverse, UsdOp::ReplaceSource { .. }),
+            "a newly-authored attribute inverts to a whole-source snapshot, got {inverse:?}"
+        );
+
+        // Undo removes the attribute entirely.
+        doc.apply(inverse).unwrap();
+        assert_eq!(
+            doc.data().prim_attribute_value::<f64>(&ball, "radius"),
+            None,
+            "undo of a newly-authored attribute removes it"
+        );
     }
 
     #[test]

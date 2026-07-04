@@ -166,6 +166,11 @@ pub mod engine_resource;
 /// summary entry alongside its inverse. See module docs for the
 /// "summary, not full Serialize" rationale.
 pub mod journal;
+/// Experiment-*definition* journaling (`DomainKind::Experiment`) — records
+/// create/rename/bounds/params/delete into the canonical twin journal so
+/// experiment setups sync + persist. Run results ride the content plane; run
+/// status rides presence.
+pub mod experiment_journal;
 
 /// Minimal byte-range diff helper. Used by the code-editor commit path
 /// to convert a debounced full-buffer snapshot into a single

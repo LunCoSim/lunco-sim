@@ -3,8 +3,8 @@
 //! This test verifies the electrical power system structure
 //! and simulates basic power flow using only USD data - no composition needed.
 
-use lunco_usd_bevy::usd_data::UsdDataExt;
-use openusd::sdf::{AbstractData, Data as SdfData, Path as SdfPath, SpecType};
+use lunco_usd_bevy::StageView;
+use openusd::sdf::Path as SdfPath;
 use std::path::PathBuf;
 
 /// Represents a component on the EPS bus
@@ -51,22 +51,17 @@ fn load_rover_eps() -> Vec<EPSComponent> {
     let asset_root = manifest_dir.parent().unwrap().parent().unwrap();
     let usd_path = asset_root.join("assets/vessels/rovers/rucheyok/rucheyok.usda");
 
-    let reader = lunco_usd_bevy::compose_file(&usd_path).expect("Failed to compose rover USD");
+    let stage = lunco_usd_bevy::compose_file_to_stage(&usd_path).expect("Failed to compose rover USD");
+    let view = StageView::new(&stage);
 
     let mut components = Vec::new();
-    for (path, spec) in reader.iter() {
-        if spec.ty != SpecType::Prim {
-            continue;
-        }
+    for path in view.prim_paths() {
         // Only components wired onto the EPS bus.
-        let eps_rel_str = format!("{}.lunco:epsBus", path.as_str());
-        if let Ok(eps_rel) = SdfPath::new(&eps_rel_str) {
-            if reader.has_spec(&eps_rel) {
-                components.push(EPSComponent {
-                    path: path.as_str().to_string(),
-                    power_watts: get_component_power(&reader, path),
-                });
-            }
+        if !view.rel_targets(&path, "lunco:epsBus").is_empty() {
+            components.push(EPSComponent {
+                path: path.as_str().to_string(),
+                power_watts: get_component_power(&view, &path),
+            });
         }
     }
 
@@ -76,11 +71,11 @@ fn load_rover_eps() -> Vec<EPSComponent> {
 /// Power generation (+) / consumption (-) for a composed component prim.
 /// Generators author `lunco:nominalPower`; motorized loads author
 /// `lunco:motorPower` (composed in from their referenced component).
-fn get_component_power(reader: &SdfData, path: &SdfPath) -> f64 {
-    if let Some(power) = reader.prim_attribute_value::<f64>(path, "lunco:nominalPower") {
+fn get_component_power(view: &StageView<'_>, path: &SdfPath) -> f64 {
+    if let Some(power) = view.value::<f64>(path, "lunco:nominalPower") {
         return power; // Positive = generation
     }
-    if let Some(power) = reader.prim_attribute_value::<f64>(path, "lunco:motorPower") {
+    if let Some(power) = view.value::<f64>(path, "lunco:motorPower") {
         return -power; // Negative = consumption
     }
     0.0

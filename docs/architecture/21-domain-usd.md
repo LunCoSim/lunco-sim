@@ -32,20 +32,35 @@ surface… owns documents + scenarios + runs"*) and the Document System in
 ## Relationship to the Document System
 
 A USD stage is a `UsdDocument` in the Document System model. Editing in any
-view produces a `UsdOp` that applies to the document; every other view updates.
-Current `UsdOp` set (`lunco-usd/src/document.rs`) and the planned additions:
+view produces a **typed `UsdOp`** that applies to the document; every other view
+updates. The op is the single description of the delta — never a diff re-derived
+by reading state back (the *author-once coherence* invariant, below).
+
+Current `UsdOp` set (`lunco-usd/src/document.rs`), each carrying an
+`edit_target: LayerId` naming which layer receives the opinion:
 
 ```rust
 enum UsdOp {
-    AddPrim     { edit_target, parent_path, name, type_name },
-    RemovePrim  { path },
-    SetTranslate{ path, value },
-    ReplaceSource { .. },           // whole-document text replace
-    // planned — authoring an external asset *into* the current stage:
-    AddReference{ edit_target, parent_path, name, asset_uri },   // def "X" (references = @uri@)
-    AddPayload  { edit_target, parent_path, name, asset_uri },   // deferred-load variant
+    ReplaceSource   { edit_target, source },           // whole-layer text replace
+    AddPrim         { edit_target, parent_path, name, type_name, reference },
+    RemovePrim      { edit_target, path },
+    MovePrim        { edit_target, from_path, to_path }, // rename / reparent (NamespaceEditor)
+    SetTranslate    { edit_target, path, value },
+    SetRotate       { edit_target, path, value },
+    SetAttribute    { edit_target, path, name, type_name, value },
+    SetRelationship { edit_target, path, name, targets },
+    SetConnection   { edit_target, path, name, type_name, sources }, // dataflow edges (W1)
+    SetTimeSample   { edit_target, path, name, time, value },
+    RemoveTimeSample{ edit_target, path, name, time },
 }
 ```
+
+`AddReference`/`AddPayload` are folded into `AddPrim { reference }` +
+`author_reference`. Programmatic and UI edits go through the
+**`ApplyUsdOp { doc, op }`** command (`commands.rs`, observer `on_apply_usd_op`),
+which returns a generation-ack; direct source mutation is out. `UsdOp` implements
+both `DocumentOp` and `lunco_twin_journal::OpPayload` — so **authoring an edit *is*
+journaling it *is* syncing it** (see [`31-networking-and-state-sync.md`](31-networking-and-state-sync.md) § Journal plane).
 
 Views observing a `UsdDocument`:
 
@@ -54,6 +69,54 @@ Views observing a `UsdDocument`:
 - **Scene tree panel** — the prim hierarchy
 - **USDA text editor** — text view of the stage
 - **Property inspector** — attributes of the selected prim
+
+### Two representations: authored layers ⊕ the composed stage
+
+A running scene is held in **two** forms, and neither absorbs the other — this is
+USD's own `SdfLayer` (authored opinions you save) vs `UsdStage` (the composition) split:
+
+- **`UsdDocument`** (`lunco-usd/src/document.rs`) — the authored `sdf::Data` **layers**:
+  `base` (persisted root layer, written on Save) **⊕** `runtime` (ephemeral overlay —
+  spawns, moves, obstacle fields — *not* saved). `LayerId::root()` vs `LayerId::runtime()`
+  route each op. Plain, `Send`, serializable: this is what Save writes, the journal
+  records, and the network ships. Reads are cheap and off-main-thread.
+- **`CanonicalStage`** (`lunco-usd-bevy/src/canonical.rs`) — the live, *composed* openusd
+  `Stage` with references / sublayers / variants resolved. `Rc`-backed, therefore `!Send`:
+  a main-thread `NonSend` resource (`CanonicalStages`). It is the projection engine —
+  authoring onto it fires openusd's change sink, which reconciles the ECS.
+
+The `Send`/`!Send` boundary falls on this same seam by nature, so the two stay even if
+openusd ever makes `Stage` `Send`. Save / journal / net-sync touch the cheap serializable
+layers; composition (the expensive resolver work) is isolated to the one stage owner.
+
+### Op-driven projection (author-once coherence)
+
+Edits reach the live world by **replaying the typed op onto the `CanonicalStage`**, not
+by re-flattening the scene per edit:
+
+```
+UsdOp ─apply→ UsdDocument (base⊕runtime, op_log, generation++)
+        │
+        ├─ journal records op + inverse (undo / sync)
+        └─ sync_twin_overlays replays op → CanonicalStage.author_*  (twin_projection.rs)
+                    │  fires openusd change sink
+                    └─ project_stage_changes drains sink → reconcile ECS  (live_consume.rs)
+                         · InfoOnly xformOp:translate → cheap pose update
+                         · Resync → spawn added / despawn removed subtree
+```
+
+Invariant: **every generation bump records exactly one op-log entry**. `ops_since`
+returns `None` when the op ring is shorter than the generation delta, degrading safely
+to a full rebuild (`rebuild_scene_from_composed`) rather than a silent projection lie.
+Coarse ops (`ReplaceSource`, `MovePrim`, `RemoveTimeSample`, `SetRelationship`) rebuild;
+the common interactive ops replay incrementally (`apply_incremental_op_to_stage`).
+
+The **read** surface is the `UsdRead` trait (`lunco-usd-bevy/src/read.rs`): `children`,
+`scalar::<T>`, `attr_value`, `rel_target`, `scalar_at` (time-sampled), etc. It is
+implemented for both `StageView` (the live composed stage, `view.rs`) and `sdf::Data`
+(the flattened layer), so one generic reader works against live and flattened alike.
+The `UsdStageAsset` now carries only a `Send` `StageRecipe` (`recipe`) — the live stage
+is built on the main thread from it; there is no stored `reader` object.
 
 ## Scene ownership — Twin → active stage → Grid
 

@@ -91,6 +91,7 @@ fn ensure_footprint(
     catalog: &SpawnCatalog,
     asset_server: &AssetServer,
     stages: &Assets<UsdStageAsset>,
+    canonical: &mut lunco_usd_bevy::CanonicalStages,
     entry_id: &str,
 ) -> ResolvedFootprint {
     let Some(entry) = catalog.get(entry_id) else {
@@ -108,14 +109,23 @@ fn ensure_footprint(
                 spawn_lift: entry.spawn_lift,
             });
         if cached.footprint.is_none() {
-            if let Some(stage) = stages.get(&cached.handle) {
-                cached.footprint = lunco_usd_bevy::wheel_footprint(&stage.reader, &cached.root_prim);
-                if let Some(fp) = cached.footprint {
-                    info!(
-                        "[spawn] derived footprint for {}: half_w={:.3} half_l={:.3} depth={:.3}",
-                        entry_id, fp.half_w, fp.half_l, fp.contact_depth
-                    );
+            // Ph0′ canonical-only: derive the footprint off the LIVE canonical
+            // stage (the source of truth), built on demand from the asset's
+            // recipe.
+            let id = cached.handle.id();
+            if canonical.get(id).is_none() {
+                if let Some(recipe) = stages.get(&cached.handle).and_then(|a| a.recipe.clone()) {
+                    canonical.get_or_build(id, &recipe);
                 }
+            }
+            cached.footprint = canonical
+                .get(id)
+                .and_then(|cs| lunco_usd_bevy::wheel_footprint(&cs.view(), &cached.root_prim));
+            if let Some(fp) = cached.footprint {
+                info!(
+                    "[spawn] derived footprint for {}: half_w={:.3} half_l={:.3} depth={:.3}",
+                    entry_id, fp.half_w, fp.half_l, fp.contact_depth
+                );
             }
         }
     }
@@ -141,6 +151,7 @@ pub fn update_spawn_ghost(
     catalog: Res<SpawnCatalog>,
     asset_server: Res<AssetServer>,
     stages: Res<Assets<UsdStageAsset>>,
+    mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
     mut footprint_cache: ResMut<FootprintCache>,
     cameras: Query<(&Camera, &GlobalTransform, &bevy::camera::RenderTarget), With<Camera3d>>,
     windows: Query<&Window>,
@@ -157,7 +168,7 @@ pub fn update_spawn_ghost(
     // Derive the wheel footprint from the live USD geometry (cached). Until the
     // stage finishes loading the fallback default is used, then the ghost
     // snaps to the real slope-fit once available.
-    let fp = ensure_footprint(&mut *footprint_cache, &catalog, &asset_server, &stages, entry_id);
+    let fp = ensure_footprint(&mut *footprint_cache, &catalog, &asset_server, &stages, &mut canonical, entry_id);
 
     // Ray through the ACTIVE window camera (the one you're looking through) —
     // not merely the first Camera3d, which may now be an inactive scene camera.

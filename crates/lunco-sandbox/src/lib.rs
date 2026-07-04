@@ -43,7 +43,10 @@ use lunco_mobility::LunCoMobilityPlugin;
 use lunco_hardware::LunCoHardwarePlugin;
 // USD core (scene load + collider build) is always needed; the Twin browser /
 // RTT viewport UI plugins are `ui`-only (added by `SandboxUiPlugin`).
-use lunco_usd::{LoadScene, UsdDataExt, UsdPlugins, UsdPrimPath, UsdStageAsset};
+use lunco_usd::{LoadScene, UsdPlugins, UsdPrimPath, UsdStageAsset};
+// The USD-reading terrain systems read the LIVE canonical stage via `StageView`
+// (which implements `UsdRead`).
+use lunco_usd_bevy::UsdRead;
 use bevy::asset::AssetLoadFailedEvent;
 
 /// Re-exported so the (bevy-free) bin crates can return it from `main` to
@@ -366,6 +369,877 @@ fn replay_scenario_journal(
     }
 }
 
+/// Scenario distribution Layer B for **Modelica** — the parallel of
+/// [`replay_scenario_journal`] for the model domain. The journal plane, its merge,
+/// and the strategy-honoring op selector are all domain-generic; only this consume
+/// leg is per-domain. Selects the merged, not-yet-applied `Modelica` op entries via
+/// [`domain_ops_after`](lunco_networking::journal_plane::domain_ops_after)
+/// (`DomainKind::Modelica`) — so a scripted merge policy reorders Modelica replay
+/// identically to USD — and applies each through `ModelicaDocumentRegistry::replay_op`
+/// (no re-recording).
+///
+/// Resources are `Option`: the Modelica registry / journal aren't present in every
+/// app configuration (a pure-USD headless build), so this no-ops when either is
+/// absent. Single active model for now — the same cross-peer `DocumentId` limitation
+/// the USD leg documents (selection is by author, which one open model makes
+/// sufficient); with more than one open model it defers rather than misroute.
+#[cfg(feature = "networking")]
+fn replay_scenario_journal_modelica(
+    role: Res<lunco_core::NetworkRole>,
+    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
+    registry: Option<ResMut<lunco_modelica::state::ModelicaDocumentRegistry>>,
+    // Modelica-domain entry ids already projected (its own once-per-entry guard,
+    // independent of the USD driver's applied-set).
+    mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
+) {
+    let (Some(journal), Some(mut registry)) = (journal, registry) else {
+        return;
+    };
+    let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
+        None
+    } else {
+        let Some(manifest) = remote.manifest.as_ref() else {
+            return;
+        };
+        manifest.journal_head.as_ref()
+    };
+    // Single active Modelica model (see doc note); >1 open model → defer.
+    let docs: Vec<_> = registry.iter().map(|(id, _)| id).collect();
+    let [doc] = docs.as_slice() else {
+        return;
+    };
+    let doc = *doc;
+    let me = journal.local_author();
+    let pending = lunco_networking::journal_plane::domain_ops_after(
+        &journal,
+        base,
+        &me,
+        &applied,
+        lunco_twin_journal::DomainKind::Modelica,
+    );
+    for (id, op) in pending {
+        registry.replay_op(doc, &op);
+        applied.insert(id);
+    }
+}
+
+/// Per-domain journal consume leg for `DomainKind::Script` — the script twin of
+/// [`replay_scenario_journal_modelica`]. Selects the merged, not-yet-applied
+/// `Script` op entries via [`domain_ops_after`](lunco_networking::journal_plane::domain_ops_after)
+/// (so a scripted merge policy reorders script replay identically to USD/Modelica)
+/// and applies each through `ScriptRegistry::replay_op` (no re-recording), so a
+/// live rover-behaviour edit (`ScriptOp::SetSource`) recorded on one peer projects
+/// onto another's `ScriptDocument`.
+///
+/// Same single-active-doc limitation as the Modelica leg: `ScriptOp` carries no
+/// `DocumentId`, and scenario doc ids are minted locally (not stable cross-peer),
+/// so this routes only when exactly one script doc is live; otherwise it defers
+/// rather than misroute. Full multi-doc cross-peer replay lands with stable
+/// cross-peer document identity. No-ops when the registry / journal is absent.
+#[cfg(feature = "networking")]
+fn replay_scenario_journal_script(
+    role: Res<lunco_core::NetworkRole>,
+    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
+    registry: Option<ResMut<lunco_scripting::ScriptRegistry>>,
+    mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
+) {
+    let (Some(journal), Some(mut registry)) = (journal, registry) else {
+        return;
+    };
+    let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
+        None
+    } else {
+        let Some(manifest) = remote.manifest.as_ref() else {
+            return;
+        };
+        manifest.journal_head.as_ref()
+    };
+    // Single active script doc (see doc note); 0 or >1 → defer.
+    let docs: Vec<_> = registry.documents.keys().copied().collect();
+    let [doc] = docs.as_slice() else {
+        return;
+    };
+    let doc = *doc;
+    let me = journal.local_author();
+    let pending = lunco_networking::journal_plane::domain_ops_after(
+        &journal,
+        base,
+        &me,
+        &applied,
+        lunco_twin_journal::DomainKind::Script,
+    );
+    for (id, op) in pending {
+        registry.replay_op(doc, &op);
+        applied.insert(id);
+    }
+}
+
+/// Per-domain journal consume leg for `DomainKind::Experiment` — projects a
+/// peer's journaled experiment *definitions* (create / rename / bounds / params
+/// / delete) onto the local `ExperimentRegistry`. Unlike the script/modelica
+/// legs there is **no single-doc limitation**: every `ExperimentOp` carries its
+/// own cross-peer-stable id (the authored UUID, replayed via `insert_with_id`),
+/// so any number of experiments route correctly. Run results/status are NOT here
+/// — they ride the content/presence planes. No-ops when registry/journal absent.
+#[cfg(feature = "networking")]
+fn replay_scenario_journal_experiment(
+    role: Res<lunco_core::NetworkRole>,
+    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
+    registry: Option<ResMut<lunco_experiments::ExperimentRegistry>>,
+    mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
+) {
+    let (Some(journal), Some(mut registry)) = (journal, registry) else {
+        return;
+    };
+    let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
+        None
+    } else {
+        let Some(manifest) = remote.manifest.as_ref() else {
+            return;
+        };
+        manifest.journal_head.as_ref()
+    };
+    let me = journal.local_author();
+    let pending = lunco_networking::journal_plane::domain_ops_after(
+        &journal,
+        base,
+        &me,
+        &applied,
+        lunco_twin_journal::DomainKind::Experiment,
+    );
+    for (id, op) in pending {
+        lunco_modelica::experiment_journal::replay_experiment_op(&mut registry, &op);
+        applied.insert(id);
+    }
+}
+
+/// Per-domain journal consume leg for `DomainKind::Shader` — projects a peer's
+/// journaled WGSL edits (`ShaderOp::SetSource`) onto the local `ShaderRegistry`
+/// and **hot-reloads** the live `Assets<Shader>`, so a shader tweak on one machine
+/// recompiles on every peer. No single-doc limitation: the op carries the shader
+/// `path` (cross-peer-stable), so `apply_replayed` routes by path. `Assets<Shader>`
+/// / `ShaderRegistry` are `Option` — a headless (no-render) relay host has neither
+/// and simply no-ops (it still forwards the journal entry to GUI peers).
+#[cfg(feature = "networking")]
+fn replay_scenario_journal_shader(
+    role: Res<lunco_core::NetworkRole>,
+    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
+    registry: Option<ResMut<lunco_sandbox_edit::shader_doc::ShaderRegistry>>,
+    asset_server: Option<Res<AssetServer>>,
+    shaders: Option<ResMut<Assets<bevy::shader::Shader>>>,
+    mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
+) {
+    let (Some(journal), Some(mut registry), Some(asset_server), Some(mut shaders)) =
+        (journal, registry, asset_server, shaders)
+    else {
+        return;
+    };
+    let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
+        None
+    } else {
+        let Some(manifest) = remote.manifest.as_ref() else {
+            return;
+        };
+        manifest.journal_head.as_ref()
+    };
+    let me = journal.local_author();
+    let pending = lunco_networking::journal_plane::domain_ops_after(
+        &journal,
+        base,
+        &me,
+        &applied,
+        lunco_twin_journal::DomainKind::Shader,
+    );
+    for (id, op) in pending {
+        if let Ok(shader_op) =
+            serde_json::from_value::<lunco_sandbox_edit::shader_doc::ShaderOp>(op)
+        {
+            if let Some((path, source)) = registry.apply_replayed(&shader_op) {
+                // Same hot-reload hook as the local edit: overwrite the asset id
+                // every material holds so the recompile propagates.
+                let handle = asset_server.load::<bevy::shader::Shader>(path.clone());
+                shaders.insert(handle.id(), bevy::shader::Shader::from_wgsl(source, path));
+            }
+        }
+        applied.insert(id);
+    }
+}
+
+/// Per-domain journal consume leg for `DomainKind::ObstacleField` — installs a
+/// peer's journaled obstacle-field spec onto the local `ObstacleFieldSpec` and
+/// fires `RegenerateField`. This is what replaced the former bespoke host→client
+/// broadcast (`sync_obstacle_field_spec`): the spec now rides the journal plane,
+/// so a tweak syncs BOTH directions and persists. No single-doc limitation (the
+/// spec is a singleton). No-ops when the spec resource / journal are absent.
+#[cfg(feature = "networking")]
+fn replay_scenario_journal_obstacle(
+    role: Res<lunco_core::NetworkRole>,
+    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
+    spec: Option<ResMut<lunco_obstacle_field::ObstacleFieldSpec>>,
+    mut regen: MessageWriter<lunco_obstacle_field::RegenerateField>,
+    mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
+) {
+    let (Some(journal), Some(mut spec)) = (journal, spec) else {
+        return;
+    };
+    let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
+        None
+    } else {
+        let Some(manifest) = remote.manifest.as_ref() else {
+            return;
+        };
+        manifest.journal_head.as_ref()
+    };
+    let me = journal.local_author();
+    let pending = lunco_networking::journal_plane::domain_ops_after(
+        &journal,
+        base,
+        &me,
+        &applied,
+        lunco_twin_journal::DomainKind::ObstacleField,
+    );
+    for (id, op) in pending {
+        if let Some(new_spec) = lunco_obstacle_field::journal::replay_spec(&op) {
+            // Install the peer's spec + regenerate. Sets the resource directly
+            // (NOT the `UpdateObstacleFieldSpec` command), so no re-record.
+            *spec = new_spec;
+            regen.write(lunco_obstacle_field::RegenerateField);
+        }
+        applied.insert(id);
+    }
+}
+
+/// Per-domain journal consume leg for `DomainKind::ToolLibrary` — re-registers a
+/// peer's journaled rhai tool library into the process-global tool registry
+/// (hot-replacing any prior one; the runtime picks it up on its next refresh).
+/// Tool libraries are process-global (reachable from the rhai engine outside the
+/// ECS), so this needs no ECS resource beyond the journal. No-ops when absent.
+#[cfg(feature = "networking")]
+fn replay_scenario_journal_tools(
+    role: Res<lunco_core::NetworkRole>,
+    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
+    mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
+) {
+    let Some(journal) = journal else {
+        return;
+    };
+    let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
+        None
+    } else {
+        let Some(manifest) = remote.manifest.as_ref() else {
+            return;
+        };
+        manifest.journal_head.as_ref()
+    };
+    let me = journal.local_author();
+    let pending = lunco_networking::journal_plane::domain_ops_after(
+        &journal,
+        base,
+        &me,
+        &applied,
+        lunco_twin_journal::DomainKind::ToolLibrary,
+    );
+    for (id, op) in pending {
+        if let Some((name, source)) =
+            lunco_scripting::registration_journal::replay_tool_library(&op)
+        {
+            lunco_scripting::tool_libs::register_tool_library(&name, &source);
+        }
+        applied.insert(id);
+    }
+}
+
+/// Per-domain journal consume leg for `DomainKind::Timeline` — stores a peer's
+/// journaled mission timeline in the local `TimelineStore` (hot-replacing any
+/// prior one), so `RunStoredTimeline`/`ListTimelines` see it. No-ops when the
+/// store / journal are absent.
+#[cfg(feature = "networking")]
+fn replay_scenario_journal_timeline(
+    role: Res<lunco_core::NetworkRole>,
+    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
+    store: Option<ResMut<lunco_scripting::timelines::TimelineStore>>,
+    mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
+) {
+    let (Some(journal), Some(mut store)) = (journal, store) else {
+        return;
+    };
+    let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
+        None
+    } else {
+        let Some(manifest) = remote.manifest.as_ref() else {
+            return;
+        };
+        manifest.journal_head.as_ref()
+    };
+    let me = journal.local_author();
+    let pending = lunco_networking::journal_plane::domain_ops_after(
+        &journal,
+        base,
+        &me,
+        &applied,
+        lunco_twin_journal::DomainKind::Timeline,
+    );
+    for (id, op) in pending {
+        if let Some((name, timeline)) =
+            lunco_scripting::registration_journal::replay_timeline(&op)
+        {
+            store.insert(name, timeline);
+        }
+        applied.insert(id);
+    }
+}
+
+/// Result-artifact writer: on `RunCompleted`, the host serializes the finished
+/// `RunResult` to `<twin>/results/<experiment-id>.json` so it rides the **content
+/// plane** — the twin file-walk CID's `results/` (a non-dot dir) and the manifest
+/// sync ships it to peers. Host-authoritative: a Client never ran the sim, so it
+/// writes nothing (it *receives* the artifact). The result is recovered from the
+/// registry (core writes it there before `RunCompleted` fires — same pattern as
+/// `project_run_results_to_ui`). JSON today; parquet is a deferred format swap
+/// pending a wasm-reader spike (see `NETWORKING_STATE_SYNC_TAXONOMY_DESIGN.md`).
+/// `RunResult` to `<twin>/results/<experiment-id>.json` through the cross-platform
+/// [`lunco_storage`] layer (native file / wasm WebStorage). This is **core
+/// persistence, not a networking concern** — a single-player run's results
+/// survive a restart, and when networking is on the same file rides the content
+/// plane to peers. Host/standalone only: a networked Client never ran the sim, so
+/// it writes nothing (it *receives* the artifact). Recovered from the registry
+/// (core writes it there before `RunCompleted` fires — same pattern as
+/// `project_run_results_to_ui`). JSON today; parquet is a deferred format swap.
+fn write_run_result_artifact(
+    mut completed: MessageReader<lunco_experiments::RunCompleted>,
+    registry: Res<lunco_experiments::ExperimentRegistry>,
+    workspace: Res<lunco_workspace::WorkspaceResource>,
+    role: Option<Res<lunco_core::NetworkRole>>,
+) {
+    if matches!(role.as_deref(), Some(lunco_core::NetworkRole::Client)) {
+        return;
+    }
+    for msg in completed.read() {
+        let id = msg.experiment_id;
+        let Some(result) = registry.get(id).and_then(|e| e.result.as_ref()) else {
+            continue;
+        };
+        let Some(active) = workspace.active_twin else {
+            continue;
+        };
+        let Some(twin) = workspace.twin(active) else {
+            continue;
+        };
+        // The storage layer creates parent dirs on write (FileStorage tmp+rename;
+        // WebStorage is key-based), so no explicit mkdir — all I/O goes through it.
+        let dest = twin
+            .root
+            .join("results")
+            .join(format!("{}.json", id.as_artifact_stem()));
+        match serde_json::to_vec_pretty(result) {
+            Ok(bytes) => match lunco_storage::write_file_sync(&dest, &bytes) {
+                Ok(()) => info!("[experiment] wrote result artifact {dest:?}"),
+                Err(e) => warn!("[experiment] result artifact write failed: {e}"),
+            },
+            Err(e) => warn!("[experiment] result serialize failed: {e}"),
+        }
+    }
+}
+
+/// Result-artifact loader — the consume half of persistence/ship-artifact. For
+/// each known experiment that lacks a trajectory, reads
+/// `<twin>/results/<id>.json` through [`lunco_storage`] (cross-platform, no
+/// directory listing — bounded by the registry cap) and loads it. This restores a
+/// single-player run's results after a restart AND makes a networked peer *see*
+/// the host's results once their file syncs.
+///
+/// Change-driven on [`ExperimentRegistry`] mutation (a definition synced, a run
+/// completed, a status update) — so a just-synced result file is picked up on the
+/// next registry change (e.g. the presence status flip) rather than by polling.
+fn load_run_result_artifacts(
+    mut registry: ResMut<lunco_experiments::ExperimentRegistry>,
+    workspace: Res<lunco_workspace::WorkspaceResource>,
+) {
+    let Some(active) = workspace.active_twin else {
+        return;
+    };
+    let Some(root) = workspace.twin(active).map(|t| t.root.join("results")) else {
+        return;
+    };
+    // Ids known but resultless — the only candidates worth a storage read.
+    let want: Vec<lunco_experiments::ExperimentId> = registry
+        .iter_all()
+        .filter(|e| e.result.is_none())
+        .map(|e| e.id)
+        .collect();
+    for id in want {
+        let path = root.join(format!("{}.json", id.as_artifact_stem()));
+        let Ok(bytes) = lunco_storage::read_file_sync(&path) else {
+            continue; // not present (yet)
+        };
+        match serde_json::from_slice::<lunco_experiments::RunResult>(&bytes) {
+            Ok(result) => {
+                let wall = result.meta.wall_time_ms;
+                registry.set_result(id, result);
+                registry
+                    .set_status(id, lunco_experiments::RunStatus::Done { wall_time_ms: wall });
+                info!("[experiment] loaded result artifact for {}", id.as_artifact_stem());
+            }
+            Err(e) => warn!("[experiment] result artifact parse failed for {}: {e}", id.as_artifact_stem()),
+        }
+    }
+}
+
+/// Networking distribution trigger: when a run finishes on the host, ask for an
+/// immediate scenario-manifest rebuild so already-connected peers pull the
+/// just-written result artifact now (serviced by `service_manifest_rebuild_request`
+/// in lunco-networking). The write itself is the core persistence system's job;
+/// this only nudges distribution. Host-only.
+#[cfg(feature = "networking")]
+fn request_rebuild_after_result(
+    mut completed: MessageReader<lunco_experiments::RunCompleted>,
+    role: Option<Res<lunco_core::NetworkRole>>,
+    mut rebuild: ResMut<lunco_networking::sync::RequestManifestRebuild>,
+) {
+    if !matches!(role.as_deref(), Some(lunco_core::NetworkRole::Host)) {
+        return;
+    }
+    if completed.read().count() > 0 {
+        rebuild.0 = true;
+    }
+}
+
+/// Presence broadcast: the host relays experiment run-status transitions
+/// (Running progress → Done/Failed/Cancelled) to clients over the wire, so a
+/// peer watches a run advance live. Ephemeral — progress rides the lossy
+/// `ControlStream`, terminal states the reliable `CommandBus` (so the final
+/// flip is never dropped). Host-only; the assembly crate maps `RunStatus` to the
+/// primitive `RunStatusMsg` here (keeping networking free of an experiments dep).
+#[cfg(feature = "networking")]
+fn broadcast_run_status(
+    role: Option<Res<lunco_core::NetworkRole>>,
+    mut outbox: ResMut<lunco_networking::sync::SyncOutbox>,
+    mut progress: MessageReader<lunco_experiments::RunProgress>,
+    mut completed: MessageReader<lunco_experiments::RunCompleted>,
+    mut failed: MessageReader<lunco_experiments::RunFailed>,
+    mut cancelled: MessageReader<lunco_experiments::RunCancelled>,
+    registry: Res<lunco_experiments::ExperimentRegistry>,
+) {
+    if !matches!(role.as_deref(), Some(lunco_core::NetworkRole::Host)) {
+        return;
+    }
+    use lunco_core::SyncChannel;
+    use lunco_networking::sync::{RunStatusMsg, SyncEnvelope};
+    let msg = |id: lunco_experiments::ExperimentId,
+               phase: u8,
+               t_current: f64,
+               wall_time_ms: u64,
+               error: String| {
+        SyncEnvelope::RunStatus(RunStatusMsg {
+            experiment_id: id.uuid_bytes(),
+            phase,
+            t_current,
+            wall_time_ms,
+            error,
+        })
+    };
+    for m in progress.read() {
+        outbox.0.push((
+            SyncChannel::ControlStream,
+            msg(m.experiment_id, 2, m.t_current, 0, String::new()),
+        ));
+    }
+    for m in completed.read() {
+        let wall = registry
+            .get(m.experiment_id)
+            .and_then(|e| e.result.as_ref())
+            .map(|r| r.meta.wall_time_ms)
+            .unwrap_or(0);
+        outbox.0.push((
+            SyncChannel::CommandBus,
+            msg(m.experiment_id, 3, 0.0, wall, String::new()),
+        ));
+    }
+    for m in failed.read() {
+        outbox.0.push((
+            SyncChannel::CommandBus,
+            msg(m.experiment_id, 4, 0.0, 0, m.error.clone()),
+        ));
+    }
+    for m in cancelled.read() {
+        outbox.0.push((
+            SyncChannel::CommandBus,
+            msg(m.experiment_id, 5, 0.0, 0, String::new()),
+        ));
+    }
+}
+
+/// Presence apply (client): drain host-sent run-status updates into the local
+/// `ExperimentRegistry` so a synced experiment's row advances Running → Done.
+/// Won't clobber a `Done` already loaded from the result artifact (the artifact
+/// carries the trajectory; a late progress packet must not downgrade it).
+#[cfg(feature = "networking")]
+fn apply_run_status(
+    mut pending: ResMut<lunco_networking::sync::PendingRunStatus>,
+    mut registry: ResMut<lunco_experiments::ExperimentRegistry>,
+) {
+    if pending.0.is_empty() {
+        return;
+    }
+    for m in std::mem::take(&mut pending.0) {
+        let id = lunco_experiments::ExperimentId::from_uuid_bytes(m.experiment_id);
+        let already_done = matches!(
+            registry.get(id).map(|e| &e.status),
+            Some(lunco_experiments::RunStatus::Done { .. })
+        );
+        if already_done && m.phase != 3 {
+            continue;
+        }
+        let status = match m.phase {
+            1 => lunco_experiments::RunStatus::Queued,
+            2 => lunco_experiments::RunStatus::Running {
+                t_current: m.t_current,
+            },
+            3 => lunco_experiments::RunStatus::Done {
+                wall_time_ms: m.wall_time_ms,
+            },
+            4 => lunco_experiments::RunStatus::Failed {
+                error: m.error,
+                partial: false,
+            },
+            5 => lunco_experiments::RunStatus::Cancelled,
+            _ => lunco_experiments::RunStatus::Pending,
+        };
+        registry.set_status(id, status);
+    }
+}
+
+/// The USD type name of a policy prim, and the attribute names carrying its rhai
+/// hook definition — the projected form of `scripted_policy::PolicyDef`.
+#[cfg(feature = "networking")]
+const LUNCO_POLICY_TYPE: &str = "LuncoPolicy";
+
+/// Read every composed `LuncoPolicy` prim across all live stages into the desired
+/// policy set — the "policy is a projected USD prim" extractor. Reads the
+/// **composed** stage, so an opinion authored at any layer (global/twin/scene)
+/// resolves to one effective policy per seam. A prim missing `seam` or `source` is
+/// skipped (incompletely authored). Pure over the stages, so it's unit-testable
+/// without a running app.
+#[cfg(feature = "networking")]
+fn extract_usd_policies(
+    canonical: &lunco_usd_bevy::CanonicalStages,
+) -> Vec<lunco_networking::scripted_policy::PolicyDef> {
+    let mut out = Vec::new();
+    for (_, cs) in canonical.iter() {
+        let view = cs.view();
+        for prim in view.prim_paths() {
+            if view.prim_type_name(&prim).as_deref() != Some(LUNCO_POLICY_TYPE) {
+                continue;
+            }
+            let seam = view.value::<String>(&prim, "lunco:policy:seam").unwrap_or_default();
+            let source = view.value::<String>(&prim, "lunco:policy:source").unwrap_or_default();
+            if seam.is_empty() || source.is_empty() {
+                continue;
+            }
+            out.push(lunco_networking::scripted_policy::PolicyDef {
+                seam,
+                entry: view.value::<String>(&prim, "lunco:policy:entry").unwrap_or_default(),
+                source,
+                deterministic: view
+                    .value::<bool>(&prim, "lunco:policy:deterministic")
+                    .unwrap_or(true),
+            });
+        }
+    }
+    out
+}
+
+/// **Policy projection** — activation half of "policy is a USD prim". On any
+/// composed-stage change, read the `LuncoPolicy` prims and project them into the
+/// live hook registry via
+/// [`project_policies`](lunco_networking::scripted_policy::project_policies): a new
+/// prim registers its rhai hook (and, at [`MERGE_SEAM`](lunco_networking::scripted_policy::MERGE_SEAM),
+/// flips the journal merge strategy); a removed prim retracts it. Because a policy
+/// prim rides the USD doc-op journal, cross-peer propagation is (journal sync →
+/// each peer recomposes → each peer's projector re-registers) — no bespoke policy
+/// broadcast. Change-gated on total stage generation + stage count so it runs only
+/// when the composed stage actually moved.
+#[cfg(feature = "networking")]
+fn project_usd_policies(
+    canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
+    mut registry: ResMut<lunco_networking::scripted_policy::ScriptedPolicyRegistry>,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
+    mut last: Local<Option<(usize, u64)>>,
+) {
+    let signal = (canonical.len(), canonical.iter().map(|(_, cs)| cs.generation()).sum());
+    if *last == Some(signal) {
+        return;
+    }
+    *last = Some(signal);
+    let desired = extract_usd_policies(&canonical);
+    lunco_networking::scripted_policy::project_policies(desired, &mut registry, journal.as_deref());
+}
+
+/// **Environment-settings projection** — the read half of persisting
+/// `SetEnvironmentLight` render knobs (exposure / bloom / ambient / earthshine)
+/// onto the `LuncoEnvironment` settings prim (see
+/// [`lunco_environment::LUNCO_ENVIRONMENT_PRIM_TYPE`]). On any composed-stage
+/// change, read that prim's `lunco:env:*` attrs and apply them **directly** to
+/// the live render state — never by re-triggering `SetEnvironmentLight`, which
+/// would re-persist and loop. So a persisted render tweak round-trips on reload
+/// and syncs to peers (the prim rides the USD journal → each peer recomposes →
+/// each peer's projector applies) with no bespoke broadcast. Change-gated on
+/// total stage generation + count, like [`project_usd_policies`]. UI-gated: the
+/// knobs are render/camera state (`Bloom` lives in `bevy_post_process`, under
+/// `ui`); the headless server has no cameras to apply to.
+#[cfg(feature = "ui")]
+fn project_env_settings(
+    canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
+    mut q_exposure: Query<&mut bevy::camera::Exposure>,
+    mut q_bloom: Query<&mut bevy::post_process::bloom::Bloom>,
+    ambient: Option<ResMut<bevy::light::GlobalAmbientLight>>,
+    mut q_earthshine: Query<&mut DirectionalLight, With<lunco_environment::Earthshine>>,
+    mut last: Local<Option<(usize, u64)>>,
+) {
+    let signal = (canonical.len(), canonical.iter().map(|(_, cs)| cs.generation()).sum());
+    if *last == Some(signal) {
+        return;
+    }
+    *last = Some(signal);
+
+    let mut ambient = ambient;
+    for (_, cs) in canonical.iter() {
+        let view = cs.view();
+        for prim in view.prim_paths() {
+            if view.prim_type_name(&prim).as_deref()
+                != Some(lunco_environment::LUNCO_ENVIRONMENT_PRIM_TYPE)
+            {
+                continue;
+            }
+            if let Some(ev) = view.value::<f32>(&prim, "lunco:env:exposureEv100") {
+                for mut e in &mut q_exposure {
+                    e.ev100 = ev;
+                }
+            }
+            if let Some(bi) = view.value::<f32>(&prim, "lunco:env:bloomIntensity") {
+                for mut b in &mut q_bloom {
+                    b.intensity = bi;
+                }
+            }
+            if let Some(br) = view.value::<f32>(&prim, "lunco:env:ambientBrightness") {
+                if let Some(a) = ambient.as_mut() {
+                    a.brightness = br;
+                }
+            }
+            if let Some(lux) = view.value::<f32>(&prim, "lunco:env:earthshineIntensity") {
+                for mut l in &mut q_earthshine {
+                    l.illuminance = lux;
+                }
+            }
+            if let Some([r, g, b]) = view.value_vec3(&prim, "lunco:env:earthshineColor") {
+                for mut l in &mut q_earthshine {
+                    l.color = Color::linear_rgb(r as f32, g as f32, b as f32);
+                }
+            }
+        }
+    }
+}
+
+/// Convenience command: author (or hot-replace) a rhai policy as a `LuncoPolicy`
+/// USD prim under `/World/Policies/<name>` in ONE call, instead of hand-issuing the
+/// underlying `ApplyUsdOp`s. Because it authors USD doc ops, the policy **journals →
+/// syncs to every peer → the projector activates it** (registers the rhai hook; at
+/// `MERGE_SEAM` flips the merge strategy). Re-issuing with the same `name` (or later
+/// editing `lunco:policy:source`) **hot-replaces the hook live** — dynamic rhai
+/// editing with no file system, converging across the network.
+///
+/// This is the ergonomic surface over the canonical form (a `LuncoPolicy` prim); the
+/// raw `ApplyUsdOp` path still works. Single active scene doc for now (mirrors the
+/// journal drivers).
+#[lunco_core::Command(default)]
+pub struct SetRhaiPolicy {
+    /// Prim name under `/World/Policies` (the identity for hot-replace); defaults to
+    /// a sanitized `seam` when empty.
+    pub name: String,
+    /// The hook seam (id): e.g. `"journal.merge.order"`, `"rbac.authorize"`, or a
+    /// `lunco:driveKernel` id a rover points at.
+    pub seam: String,
+    /// The rhai entry function name.
+    pub entry: String,
+    /// The rhai source defining `entry` (+ helpers).
+    pub source: String,
+    /// Deterministic (fresh rhai scope per invoke). Convergent seams (merge, drive)
+    /// must be `true`; the host-only authorize gate may be `false`.
+    pub deterministic: bool,
+}
+
+#[lunco_core::on_command(SetRhaiPolicy)]
+fn on_set_rhai_policy(
+    trigger: On<SetRhaiPolicy>,
+    registry: Res<lunco_usd::UsdDocumentRegistry>,
+    mut commands: Commands,
+) {
+    use lunco_usd::{ApplyUsdOp, LayerId, UsdOp};
+    let cmd = trigger.event();
+    let docs: Vec<_> = registry.ids().collect();
+    let [doc] = docs.as_slice() else {
+        warn!("[policy] SetRhaiPolicy needs exactly one scene document (found {})", docs.len());
+        return;
+    };
+    let doc = *doc;
+
+    // USD prim names are identifier-like — sanitize the seam/name into one.
+    let base = if cmd.name.is_empty() { &cmd.seam } else { &cmd.name };
+    let mut name: String =
+        base.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
+    if name.is_empty() {
+        name = "policy".to_string();
+    }
+    let prim = format!("/World/Policies/{name}");
+    let root = LayerId::root();
+    // USDA-quoted string literal (escapes quotes / newlines) for `SetAttribute`.
+    let lit = |s: &str| format!("{s:?}");
+
+    // Idempotent: define_prim + attribute overwrite → re-issuing hot-replaces.
+    let ops = vec![
+        UsdOp::AddPrim {
+            edit_target: root.clone(),
+            parent_path: "/World".into(),
+            name: "Policies".into(),
+            type_name: Some("Scope".into()),
+            reference: None,
+        },
+        UsdOp::AddPrim {
+            edit_target: root.clone(),
+            parent_path: "/World/Policies".into(),
+            name: name.clone(),
+            type_name: Some("LuncoPolicy".into()),
+            reference: None,
+        },
+        UsdOp::SetAttribute {
+            edit_target: root.clone(),
+            path: prim.clone(),
+            name: "lunco:policy:seam".into(),
+            type_name: "string".into(),
+            value: lit(&cmd.seam),
+        },
+        UsdOp::SetAttribute {
+            edit_target: root.clone(),
+            path: prim.clone(),
+            name: "lunco:policy:entry".into(),
+            type_name: "string".into(),
+            value: lit(&cmd.entry),
+        },
+        UsdOp::SetAttribute {
+            edit_target: root.clone(),
+            path: prim.clone(),
+            name: "lunco:policy:source".into(),
+            type_name: "string".into(),
+            value: lit(&cmd.source),
+        },
+        UsdOp::SetAttribute {
+            edit_target: root,
+            path: prim.clone(),
+            name: "lunco:policy:deterministic".into(),
+            type_name: "bool".into(),
+            value: cmd.deterministic.to_string(),
+        },
+    ];
+    for op in ops {
+        commands.trigger(ApplyUsdOp { doc, op });
+    }
+    info!("[policy] SetRhaiPolicy authored `{prim}` (seam '{}') — journals + projects", cmd.seam);
+}
+
+lunco_core::register_commands!(on_set_rhai_policy);
+
+#[cfg(all(test, feature = "networking", not(target_arch = "wasm32")))]
+mod policy_projection_tests {
+    use super::extract_usd_policies;
+    use lunco_usd_bevy::{CanonicalStage, CanonicalStages, StageRecipe};
+
+    /// A `LuncoPolicy` prim authored in the scene USD is read into a `PolicyDef` —
+    /// the "settable in USD" half of proper policies. The projector then hands this
+    /// to `project_policies`, so a scene-authored (or journal-synced) policy
+    /// activates its rhai hook with no bespoke broadcast.
+    #[test]
+    fn extracts_lunco_policy_prims_from_composed_stage() {
+        const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\n\
+            def Xform \"World\"\n{\n\
+            \x20   def LuncoPolicy \"takeover\"\n    {\n\
+            \x20       string lunco:policy:seam = \"control.authority.take\"\n\
+            \x20       string lunco:policy:entry = \"may_take_control\"\n\
+            \x20       string lunco:policy:source = \"fn may_take_control(ctx){true}\"\n\
+            \x20       bool lunco:policy:deterministic = false\n    }\n}\n";
+
+        let mut stages = CanonicalStages::default();
+        let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", SCENE))
+            .expect("build stage");
+        stages.insert(bevy::asset::AssetId::invalid(), cs);
+
+        let policies = extract_usd_policies(&stages);
+        assert_eq!(policies.len(), 1, "one LuncoPolicy prim → one PolicyDef");
+        let p = &policies[0];
+        assert_eq!(p.seam, "control.authority.take");
+        assert_eq!(p.entry, "may_take_control");
+        assert!(p.source.contains("may_take_control"), "source carried verbatim");
+        assert!(!p.deterministic, "authored deterministic=false is read");
+    }
+
+    /// **Live rhai editing (no file system).** Editing a `LuncoPolicy`'s `source`
+    /// attribute at runtime is a `SetAttribute` on the composed stage; the projector
+    /// re-reads the NEW source (not a cached initial value). Wired end to end this is
+    /// "dynamically edit a rover's rhai behaviour → the projector re-runs (change-
+    /// gated on stage generation) → `project_policies` hot-replaces the hook", and —
+    /// because the edit is a USD doc op — it journals so every peer re-projects the
+    /// same new source. This proves the read half against a live edit.
+    #[test]
+    fn projector_reads_live_edited_source() {
+        const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\n\
+            def Xform \"World\"\n{\n\
+            \x20   def LuncoPolicy \"drive\"\n    {\n\
+            \x20       string lunco:policy:seam = \"rover.drive\"\n\
+            \x20       string lunco:policy:entry = \"drive\"\n\
+            \x20       string lunco:policy:source = \"fn drive(c){1}\"\n\
+            \x20       bool lunco:policy:deterministic = true\n    }\n}\n";
+
+        let id = bevy::asset::AssetId::invalid();
+        let mut stages = CanonicalStages::default();
+        stages.insert(
+            id,
+            CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", SCENE))
+                .expect("build stage"),
+        );
+        assert_eq!(extract_usd_policies(&stages)[0].source, "fn drive(c){1}");
+
+        // Dynamically edit the rhai source on the LIVE stage — a `SetAttribute`, no
+        // file touched. (Prim path taken from the live stage API, so no openusd import.)
+        let prim = stages
+            .get(id)
+            .unwrap()
+            .view()
+            .prim_paths()
+            .into_iter()
+            .find(|p| p.to_string() == "/World/drive")
+            .expect("policy prim present");
+        let new_src = lunco_usd_bevy::author::parse_attribute_value("string", "\"fn drive(c){2}\"")
+            .expect("parse");
+        stages
+            .get(id)
+            .unwrap()
+            .author_attribute(&prim, "lunco:policy:source", "string", new_src)
+            .expect("author live edit");
+
+        assert_eq!(
+            extract_usd_policies(&stages)[0].source,
+            "fn drive(c){2}",
+            "the projector reads the live-edited rhai source, not the initial value"
+        );
+    }
+}
+
 /// The shared, headless-safe core: the persistent world shell, physics, cosim,
 /// USD scene load, mobility/hardware/controller/avatar, environment, the HTTP
 /// API, and networking. Added unconditionally by both the GUI and the server, so
@@ -382,6 +1256,11 @@ pub struct SandboxCorePlugin {
 impl Plugin for SandboxCorePlugin {
     fn build(&self, app: &mut App) {
         let args: Vec<String> = std::env::args().collect();
+
+        // Convenience command: `SetRhaiPolicy` authors a `LuncoPolicy` prim as USD
+        // doc ops (journals → syncs → projector activates). Authoring works with or
+        // without networking; the activation projector is networking-gated for now.
+        register_all_commands(app);
 
         // `--scene <path>` overrides the default sandbox_scene.usda load. Path is
         // relative to the asset source root (`assets/`). Used by automated joint/
@@ -511,6 +1390,30 @@ impl Plugin for SandboxCorePlugin {
                 ModelicaSet::SpawnRequests,
             ).chain());
 
+        // Experiment result-artifact persistence — CORE (not networking): a run's
+        // trajectory is written to `<twin>/results/<id>.json` through the
+        // cross-platform storage layer and restored on demand, so single-player run
+        // history survives a restart. Networking additionally distributes the same
+        // files via the content plane. Guarded so a config without experiments /
+        // workspace simply skips.
+        app.add_systems(
+            Update,
+            write_run_result_artifact.run_if(
+                resource_exists::<lunco_experiments::ExperimentRegistry>
+                    .and(resource_exists::<lunco_workspace::WorkspaceResource>),
+            ),
+        );
+        // Load half is change-driven on the registry (a definition synced, a run
+        // completed, a status flip) — so a just-arrived result file is picked up on
+        // the next registry change instead of by polling.
+        app.add_systems(
+            Update,
+            load_run_result_artifacts.run_if(
+                resource_changed::<lunco_experiments::ExperimentRegistry>
+                    .and(resource_exists::<lunco_workspace::WorkspaceResource>),
+            ),
+        );
+
         // Dismiss the HTML loading screen once the first frame paints (wasm-only;
         // no-op on native). Pairs with `web/index.html` → `lunco-boot.js`.
         app.add_plugins(lunco_web::WebReadyPlugin);
@@ -520,20 +1423,21 @@ impl Plugin for SandboxCorePlugin {
         #[cfg(feature = "lunco-api")]
         app.add_plugins(lunco_api::LunCoApiPlugin::default());
 
-        // Durable journal history for headless (`lunco-sandbox-server` / any
-        // `--no-ui` host): load-on-startup + debounced-save of the canonical
-        // journal, so collaborative edit history survives restarts. The GUI keeps
-        // its own Twin-scoped `lunco-workspace` persistence, so this is
-        // headless-only to avoid two mechanisms writing the same history.
+        // Durable twin history for headless (`lunco-sandbox-server` / any
+        // `--no-ui` host): the SAME twin-folder-scoped persistence the GUI uses
+        // (`<twin>/history/journal.json`) — load on twin open, save on
+        // `DocumentSaved` + debounced periodic — so a running server's
+        // collaborative edit history survives restarts, in the project folder.
+        // One code path for GUI + headless (DRY); the old global
+        // `~/.lunco/journal/` `lunco-doc-bevy` copy is retired.
         if self.headless {
-            app.add_plugins(lunco_doc_bevy::JournalPersistencePlugin);
-            // `setup_sandbox`'s twin-load path needs `WorkspaceResource`, which the
-            // GUI gets from `lunco-workbench`'s `WorkspacePlugin` — a crate the
-            // headless server doesn't link. Without this, a headless boot panics in
-            // `setup_sandbox`. Bare `init_resource` (not the full `WorkspacePlugin`)
-            // so we don't also pull in that plugin's Twin-scoped journal observers,
-            // which would double up on the `JournalPersistencePlugin` above.
+            // `setup_sandbox`'s twin-load path (and the journal persistence) needs
+            // `WorkspaceResource`, which the GUI gets from `lunco-workbench`'s
+            // `WorkspacePlugin` — a crate the headless server doesn't link. Bare
+            // `init_resource` + just the journal plugin (not the full
+            // `WorkspacePlugin`) keeps the headless surface minimal.
             app.init_resource::<lunco_workspace::WorkspaceResource>();
+            app.add_plugins(lunco_workspace::journal_persistence::WorkspaceJournalPlugin);
         }
 
         // Multiplayer. Native: `--host [port]` / `--connect <addr>`; browser:
@@ -556,6 +1460,58 @@ impl Plugin for SandboxCorePlugin {
             // (bidirectional — clients see the host's edits, the host sees
             // clients'; no-op when no scenario/journal is present).
             app.add_systems(Update, replay_scenario_journal);
+            // Same Layer B for Modelica models — the journal plane is domain-generic;
+            // this is the parallel per-domain consume leg for `DomainKind::Modelica`.
+            app.add_systems(Update, replay_scenario_journal_modelica);
+            // Same Layer B for scripts — a recorded `ScriptOp::SetSource` (live
+            // rover-behaviour edit) projects onto a peer's `ScriptDocument`.
+            app.add_systems(Update, replay_scenario_journal_script);
+            // Same Layer B for experiment *definitions* (`DomainKind::Experiment`):
+            // a peer's sweep setup projects onto the local ExperimentRegistry.
+            app.add_systems(Update, replay_scenario_journal_experiment);
+            // Same Layer B for shaders (`DomainKind::Shader`): a peer's WGSL edit
+            // projects onto the local ShaderRegistry + hot-reloads Assets<Shader>.
+            app.add_systems(Update, replay_scenario_journal_shader);
+            // Same Layer B for config/registration domains: obstacle-field spec
+            // (replaces the old bespoke broadcast — now bidirectional), rhai tool
+            // libraries, and mission timelines. Each installs a peer's journaled
+            // op onto the local resource/registry/store.
+            app.add_systems(
+                Update,
+                (
+                    replay_scenario_journal_obstacle,
+                    replay_scenario_journal_tools,
+                    replay_scenario_journal_timeline,
+                ),
+            );
+            // Presence/rebuild resources are consumed by the systems below for any
+            // role; init here (idempotent with the host-side init) so a standalone
+            // or client app never hits a missing resource.
+            app.init_resource::<lunco_networking::sync::PendingRunStatus>();
+            app.init_resource::<lunco_networking::sync::RequestManifestRebuild>();
+            // Result artifacts themselves are written/loaded by the CORE persistence
+            // systems (registered unconditionally below — storage-backed, all
+            // platforms). Networking only adds the *distribution* trigger: when a
+            // run finishes on the host, ask for an immediate manifest rebuild so
+            // already-connected peers pull the just-written result now.
+            app.add_systems(
+                Update,
+                request_rebuild_after_result
+                    .run_if(resource_exists::<lunco_experiments::ExperimentRegistry>),
+            );
+            // Presence plane: host broadcasts run-status transitions; client
+            // applies them so a synced experiment's row advances live. Guarded on
+            // the registry existing so a config without experiments just skips
+            // (the MessageReaders would otherwise have no registered messages).
+            app.add_systems(
+                Update,
+                (broadcast_run_status, apply_run_status)
+                    .run_if(resource_exists::<lunco_experiments::ExperimentRegistry>),
+            );
+            // Policy projection: activate `LuncoPolicy` prims from the composed
+            // stage into the hook registry. Because policies are USD prims they
+            // sync via the journal above — no bespoke policy broadcast.
+            app.add_systems(Update, project_usd_policies);
             // Connect-menu bridge adapter + egui presence/tutorial overlays. Pulls
             // bevy_egui, so it's GUI-only and gated on `ui` (CQ-601) — the headless
             // server omits it. The host still answers runtime JoinServer/LeaveServer
@@ -599,6 +1555,12 @@ impl Plugin for SandboxCorePlugin {
         // events — see `light_policy`). Render concern → `ui`-gated.
         #[cfg(feature = "ui")]
         app.add_plugins(light_policy::LightPolicyPlugin);
+        // Environment-settings projection: apply a persisted `LuncoEnvironment`
+        // prim's render knobs (exposure/bloom/ambient/earthshine) to the live
+        // render state on stage change. UI-gated (render/camera state); core
+        // persistence (authoring the prim) happens in `lunco-sandbox-edit`.
+        #[cfg(feature = "ui")]
+        app.add_systems(Update, project_env_settings);
 
         // LogDiagnosticsPlugin is loud (a multi-line summary every second) — gate
         // it on `--log-diag`.
@@ -644,6 +1606,28 @@ struct LayerRole {
 /// (meso normal — overrides the derived bake). Maps only render when the prim's
 /// `shaderPath` is `terrain_layered.wgsl` (which declares the bindings); with
 /// `regolith.wgsl` the slots are simply ignored. One-shot per terrain.
+/// Read the authored `(role, rel-path, weight)` triples off `sdf` via any
+/// [`UsdRead`] source — the live `StageView` or the flattened reader — so the
+/// binding is identical whichever plane supplied the stage.
+#[cfg(feature = "ui")]
+fn read_authored_layer_maps<R: UsdRead>(
+    reader: &R,
+    sdf: &openusd::sdf::Path,
+    roles: &'static [LayerRole],
+) -> Vec<(&'static LayerRole, String, f32)> {
+    roles
+        .iter()
+        .filter_map(|role| {
+            let map_attr = format!("lunco:terrain:layer:{}:map", role.name);
+            let rel = reader.scalar::<String>(sdf, &map_attr)?;
+            let weight = reader
+                .scalar::<f32>(sdf, &format!("lunco:terrain:layer:{}:weight", role.name))
+                .unwrap_or(1.0);
+            Some((role, rel, weight))
+        })
+        .collect()
+}
+
 #[cfg(feature = "ui")]
 fn bind_terrain_layers(
     q: Query<
@@ -654,6 +1638,7 @@ fn bind_terrain_layers(
     twins: Res<lunco_assets::twin_source::TwinRoots>,
     asset_server: Res<AssetServer>,
     mut mats: ResMut<Assets<lunco_materials::ShaderMaterial>>,
+    mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
     mut commands: Commands,
 ) {
     use lunco_materials::ParamValue;
@@ -666,26 +1651,28 @@ fn bind_terrain_layers(
     ];
 
     for (entity, prim_path, mat3d) in &q {
-        let Some(stage) = stages.get(&prim_path.stage_handle) else { continue };
         let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else {
             commands.entity(entity).insert(TerrainLayersBound);
             continue;
         };
-        let reader = &*stage.reader;
 
+        // Read the LIVE canonical stage (built on demand from the asset's recipe)
+        // — the source of truth — through the `UsdRead` read body
+        // (`read_authored_layer_maps`).
+        let id = prim_path.stage_handle.id();
+        if canonical.get(id).is_none() {
+            if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
+                canonical.get_or_build(id, &recipe);
+            }
+        }
+        let Some(cs) = canonical.get(id) else {
+            // No live stage (asset carries no recipe / build failed) — retry next frame.
+            continue;
+        };
         // Collect the authored (role, rel-path, weight) before touching the
         // material, so we can wait for the Twin + material without half-binding.
-        let authored: Vec<(&LayerRole, String, f32)> = ROLES
-            .iter()
-            .filter_map(|role| {
-                let map_attr = format!("lunco:terrain:layer:{}:map", role.name);
-                let rel = reader.prim_attribute_value::<String>(&sdf, &map_attr)?;
-                let weight = reader
-                    .prim_attribute_value::<f32>(&sdf, &format!("lunco:terrain:layer:{}:weight", role.name))
-                    .unwrap_or(1.0);
-                Some((role, rel, weight))
-            })
-            .collect();
+        let authored: Vec<(&LayerRole, String, f32)> =
+            read_authored_layer_maps(&cs.view(), &sdf, ROLES);
 
         if authored.is_empty() {
             // No layer authored — stop re-scanning this terrain.
@@ -719,41 +1706,41 @@ fn bind_terrain_layers(
 /// USD-backed [`LayerAttrSource`](lunco_terrain_surface::LayerAttrSource): reads a
 /// child layer prim's attributes through the stage reader, so terrain-surface's layer
 /// parsers stay USD-free. Generic over the reader so we needn't name its concrete type.
-struct UsdLayerAttrs<'a, R: lunco_usd::UsdDataExt> {
+struct UsdLayerAttrs<'a, R: UsdRead> {
     reader: &'a R,
     sdf: openusd::sdf::Path,
 }
 
-impl<R: lunco_usd::UsdDataExt> lunco_terrain_surface::LayerAttrSource for UsdLayerAttrs<'_, R> {
+impl<R: UsdRead> lunco_terrain_surface::LayerAttrSource for UsdLayerAttrs<'_, R> {
     fn get_f32(&self, name: &str) -> Option<f32> {
-        self.reader.prim_attribute_value::<f32>(&self.sdf, name)
+        self.reader.scalar::<f32>(&self.sdf, name)
     }
     fn get_i64(&self, name: &str) -> Option<i64> {
-        self.reader.prim_attribute_value::<i32>(&self.sdf, name).map(|v| v as i64)
+        self.reader.scalar::<i32>(&self.sdf, name).map(|v| v as i64)
     }
     fn get_string(&self, name: &str) -> Option<String> {
-        self.reader.prim_attribute_value::<String>(&self.sdf, name)
+        self.reader.scalar::<String>(&self.sdf, name)
     }
     fn get_bool(&self, name: &str) -> Option<bool> {
-        self.reader.prim_attribute_value::<bool>(&self.sdf, name)
+        self.reader.scalar::<bool>(&self.sdf, name)
     }
 }
 
 /// The `dem` (ground) child layer prim of a layered terrain, if authored.
-fn find_dem_layer<R: lunco_usd::UsdDataExt>(
+fn find_dem_layer<R: UsdRead>(
     reader: &R,
     terrain: &openusd::sdf::Path,
 ) -> Option<openusd::sdf::Path> {
     reader
-        .prim_children(terrain)
+        .children(terrain)
         .into_iter()
-        .find(|c| reader.prim_attribute_value::<String>(c, "lunco:layer").as_deref() == Some("dem"))
+        .find(|c| reader.scalar::<String>(c, "lunco:layer").as_deref() == Some("dem"))
 }
 
 /// Parse the non-ground child layer prims (`craters`/`rocks`/`shader`/…) into the
 /// composable [`TerrainLayerStack`](lunco_terrain_surface::TerrainLayerStack) via the
 /// registry. Shared by the bridge (initial build) and the live-edit refresh.
-fn parse_terrain_layer_stack<R: lunco_usd::UsdDataExt>(
+fn parse_terrain_layer_stack<R: UsdRead>(
     reader: &R,
     terrain: &openusd::sdf::Path,
     registry: &lunco_terrain_surface::TerrainLayerParserRegistry,
@@ -762,7 +1749,7 @@ fn parse_terrain_layer_stack<R: lunco_usd::UsdDataExt>(
     // Runtime edit prims (`lunco:layer = "edit"`) — one prim per edit — aggregate into
     // the single `EditsLayer` (the runtime projection tier), folded on top at the end.
     let mut edits: Vec<(lunco_terrain_surface::LayerId, lunco_terrain_surface::EditKind)> = Vec::new();
-    for child in reader.prim_children(terrain) {
+    for child in reader.children(terrain) {
         let attrs = UsdLayerAttrs { reader, sdf: child.clone() };
         // An edit prim (carries the packed `lunco:edit`)? Aggregate into the single
         // edits layer, keyed by its prim path (its stable identity).
@@ -773,7 +1760,7 @@ fn parse_terrain_layer_stack<R: lunco_usd::UsdDataExt>(
             continue;
         }
         // Otherwise a normal composable layer prim (`lunco:layer = …`).
-        let Some(layer_type) = reader.prim_attribute_value::<String>(&child, "lunco:layer") else {
+        let Some(layer_type) = reader.scalar::<String>(&child, "lunco:layer") else {
             continue;
         };
         if layer_type == "dem" {
@@ -805,31 +1792,31 @@ fn parse_terrain_layer_stack<R: lunco_usd::UsdDataExt>(
 /// `new(0.2, mode, mode*4, 0.6)`) so a subsequent panel edit starts from the authored
 /// look rather than jumping. Writes the resource only (no `UpdateObstacleFieldSpec`,
 /// no re-stamp — the terrain already built from the same USD stack).
-fn sync_obstacle_spec_from_usd<R: lunco_usd::UsdDataExt>(
+fn sync_obstacle_spec_from_usd<R: UsdRead>(
     reader: &R,
     terrain: &openusd::sdf::Path,
     spec: &mut lunco_obstacle_field::spec::ObstacleFieldSpec,
 ) {
     use lunco_obstacle_field::spec::SizeDist;
-    for child in reader.prim_children(terrain) {
-        match reader.prim_attribute_value::<String>(&child, "lunco:layer").as_deref() {
+    for child in reader.children(terrain) {
+        match reader.scalar::<String>(&child, "lunco:layer").as_deref() {
             Some("craters") => {
-                let density = reader.prim_attribute_value::<f32>(&child, "density").unwrap_or(0.0);
-                let mode = reader.prim_attribute_value::<f32>(&child, "sizeMode").unwrap_or(22.0);
+                let density = reader.scalar::<f32>(&child, "density").unwrap_or(0.0);
+                let mode = reader.scalar::<f32>(&child, "sizeMode").unwrap_or(22.0);
                 spec.craters.enabled = density > 0.0;
                 spec.craters.density = density;
                 spec.craters.depth_ratio =
-                    reader.prim_attribute_value::<f32>(&child, "depthRatio").unwrap_or(0.3);
+                    reader.scalar::<f32>(&child, "depthRatio").unwrap_or(0.3);
                 spec.craters.rim_height_ratio =
-                    reader.prim_attribute_value::<f32>(&child, "rimRatio").unwrap_or(0.5);
+                    reader.scalar::<f32>(&child, "rimRatio").unwrap_or(0.5);
                 spec.craters.size = SizeDist::new(8.0, mode, 40.0, 0.7);
-                if let Some(seed) = reader.prim_attribute_value::<i32>(&child, "seed") {
+                if let Some(seed) = reader.scalar::<i32>(&child, "seed") {
                     spec.seed = seed as u64;
                 }
             }
             Some("rocks") => {
-                let density = reader.prim_attribute_value::<f32>(&child, "density").unwrap_or(0.0);
-                let mode = reader.prim_attribute_value::<f32>(&child, "sizeMode").unwrap_or(0.6);
+                let density = reader.scalar::<f32>(&child, "density").unwrap_or(0.0);
+                let mode = reader.scalar::<f32>(&child, "sizeMode").unwrap_or(0.6);
                 spec.rocks.enabled = density > 0.0;
                 spec.rocks.density = density;
                 spec.rocks.size = SizeDist::new(0.2, mode, (mode * 4.0).max(2.5), 0.6);
@@ -862,6 +1849,7 @@ fn refresh_layered_terrain_layers(
             Without<lunco_terrain_surface::DocBackedTerrain>,
         ),
     >,
+    mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
     mut commands: Commands,
 ) {
     let mut modified = std::collections::HashSet::new();
@@ -877,9 +1865,20 @@ fn refresh_layered_terrain_layers(
         if !modified.contains(&prim_path.stage_handle.id()) {
             continue;
         }
-        let Some(stage) = stages.get(&prim_path.stage_handle) else { continue };
         let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else { continue };
-        let stack = parse_terrain_layer_stack(&*stage.reader, &sdf, &registry);
+        // Read the LIVE canonical stage (reflects the in-place edit that raised
+        // this Modified event).
+        let id = prim_path.stage_handle.id();
+        if canonical.get(id).is_none() {
+            if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
+                canonical.get_or_build(id, &recipe);
+            }
+        }
+        let Some(cs) = canonical.get(id) else {
+            // No live stage (asset carries no recipe / build failed) — skip.
+            continue;
+        };
+        let stack = parse_terrain_layer_stack(&cs.view(), &sdf, &registry);
         commands.entity(entity).insert(stack);
     }
 }
@@ -892,10 +1891,9 @@ fn refresh_layered_terrain_layers(
 /// `SpawnDemTerrain`, headless, tests — those carry no `UsdPrimPath`, so they never
 /// match here), whose edits apply **directly** to the runtime layer.
 ///
-/// Resolution covers both projection paths: a live-imported scene (`OpenFile`) carries
-/// the `DocumentId` on its [`LiveDocScene`](lunco_usd::live_projection::LiveDocScene)
-/// root sharing the terrain's stage; a twin default scene (`--scene` / workspace Twin)
-/// has no `LiveDocScene`, so the doc is recovered from
+/// Resolution is uniform: every doc-backed scene — twin default (`--scene` / workspace
+/// Twin) and live-imported (`OpenFile`) alike — is a doc-backed twin scene, so the doc
+/// is recovered from
 /// [`DocBackedTwinScenes`](lunco_usd::twin_projection::DocBackedTwinScenes) via the
 /// stage's `twin://<name>/<rel>` asset path. Retries each frame (guarded by
 /// `Without<TerrainDocument>`) until the doc mounts; once resolved, it stops.
@@ -915,7 +1913,7 @@ struct TerrainEditPrimSeq(u64);
 /// **runtime** layer — non-destructive, ephemeral over the base DEM (Omniverse
 /// session-layer pattern): an `AddPrim` for the edit prim + a `SetAttribute` with the
 /// packed edit. `registry.apply` records both to the journal (undo / sync), then
-/// `live_projection` re-projects the composed `base ⊕ runtime` → `parse_edit` → the one
+/// the twin projection re-projects the composed `base ⊕ runtime` → `parse_edit` → the one
 /// `EditsLayer`. The direct-path observer in lunco-terrain-surface handles document-FREE
 /// terrains (`Without<DocBackedTerrain>`), so exactly one path fires per terrain.
 fn author_terrain_edit(
@@ -1027,29 +2025,22 @@ fn cache_terrain_document(
         (Entity, &lunco_usd::UsdPrimPath),
         (With<lunco_terrain_surface::DemTerrainSurface>, Without<TerrainDocument>),
     >,
-    scenes: Query<(&lunco_usd::live_projection::LiveDocScene, &lunco_usd::UsdPrimPath)>,
     twin_scenes: Res<lunco_usd::twin_projection::DocBackedTwinScenes>,
     asset_server: Res<AssetServer>,
     mut commands: Commands,
 ) {
     for (entity, terrain_path) in &terrains {
-        // Path 1 — live-imported scene (`OpenFile`): the `LiveDocScene` root of the
-        // terrain's stage carries the `DocumentId`.
-        let doc = scenes
-            .iter()
-            .find(|(_, scene_path)| scene_path.stage_handle == terrain_path.stage_handle)
-            .map(|(scene, _)| scene.doc)
-            // Path 2 — twin default scene (`--scene` / workspace Twin): no
-            // `LiveDocScene` is created; recover the doc from `DocBackedTwinScenes`
-            // via the stage's `twin://<name>/<rel>` asset path.
-            .or_else(|| {
-                let asset_path = asset_server.get_path(terrain_path.stage_handle.id())?;
-                let rel_path = asset_path.path().to_string_lossy();
-                let (name, rel) = rel_path.split_once('/')?;
-                twin_scenes.doc_for(name, rel)
-            });
+        // Recover the backing document from `DocBackedTwinScenes` via the stage's
+        // `twin://<name>/<rel>` asset path. Both twin default scenes (`--scene` /
+        // workspace Twin) and live-imported (`OpenFile`) scenes are doc-backed twin
+        // scenes now, so this one path covers both.
+        let doc = asset_server.get_path(terrain_path.stage_handle.id()).and_then(|asset_path| {
+            let rel_path = asset_path.path().to_string_lossy();
+            let (name, rel) = rel_path.split_once('/')?;
+            twin_scenes.doc_for(name, rel)
+        });
         let Some(doc) = doc else {
-            continue; // neither mounted yet (retry next frame), or document-free.
+            continue; // not mounted yet (retry next frame), or document-free.
         };
         info!("[terrain-doc] terrain {entity} → doc {} (DocBackedTerrain attached)", doc.0);
         // `LiveRebuildExempt`: an authored crater/rock/edit is an attribute-only doc
@@ -1077,11 +2068,10 @@ struct TerrainDocGeneration(u64);
 /// re-read, no entity despawn).
 ///
 /// This is the twin-scene counterpart to the asset-event
-/// [`refresh_layered_terrain_layers`] (now document-free only): a twin terrain
-/// carries no `LiveDocScene`, and its `LiveRebuildExempt` marker suppresses the
-/// twin stage reload, so the registry generation is the re-bake trigger. It also
-/// covers live-imported (`LiveDocScene`) doc-backed terrains uniformly — one
-/// re-bake path keyed on the document, not the projected asset.
+/// [`refresh_layered_terrain_layers`] (now document-free only): a doc-backed terrain's
+/// `LiveRebuildExempt` marker suppresses the twin stage reload, so the registry
+/// generation is the re-bake trigger. One re-bake path keyed on the document, not the
+/// projected asset — covering twin default and live-imported (`OpenFile`) scenes alike.
 fn refresh_docbacked_terrain_from_doc(
     registry: Option<Res<lunco_usd::UsdDocumentRegistry>>,
     parser: Res<lunco_terrain_surface::TerrainLayerParserRegistry>,
@@ -1179,9 +2169,9 @@ fn author_layer_attr(
 fn on_obstacle_spec_authored(
     trigger: On<lunco_obstacle_field::plugin::UpdateObstacleFieldSpec>,
     terrains: Query<(&lunco_usd::UsdPrimPath, &TerrainDocument), With<lunco_terrain_surface::DemTerrainSurface>>,
-    stages: Res<Assets<lunco_usd::UsdStageAsset>>,
     registry: Option<ResMut<lunco_usd::UsdDocumentRegistry>>,
 ) {
+    use lunco_usd_bevy::usd_data::UsdDataExt as _;
     let Some(mut registry) = registry else { return };
     let spec = &trigger.event().spec;
     // The USD crater/rock layer parsers use `density > 0` as the on/off signal
@@ -1193,21 +2183,32 @@ fn on_obstacle_spec_authored(
     let crater_density = if spec.craters.enabled { spec.craters.density } else { 0.0 };
     let rock_density = if spec.rocks.enabled { spec.rocks.density } else { 0.0 };
     for (prim_path, td) in &terrains {
-        let Some(stage) = stages.get(&prim_path.stage_handle) else { continue };
         let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else { continue };
         let doc = lunco_doc::DocumentId::new(td.doc);
-        let reader = &*stage.reader;
-        for child in reader.prim_children(&sdf) {
-            let path = child.as_str().to_string();
-            match reader.prim_attribute_value::<String>(&child, "lunco:layer").as_deref() {
-                Some("craters") => {
+        // Enumerate the terrain's child layer prims from the composed (base ⊕ runtime)
+        // document — the stage asset no longer carries a flattened reader. `composed()`
+        // is owned, so the registry borrow ends here and `author_layer_attr` below can
+        // take it mutably.
+        let Some(composed) = registry.host(doc).map(|h| h.document().composed()) else { continue };
+        let layers: Vec<(String, String)> = composed
+            .prim_children(&sdf)
+            .into_iter()
+            .filter_map(|child| {
+                composed
+                    .prim_attribute_value::<String>(&child, "lunco:layer")
+                    .map(|ty| (child.as_str().to_string(), ty))
+            })
+            .collect();
+        for (path, layer_type) in layers {
+            match layer_type.as_str() {
+                "craters" => {
                     info!("[obstacle-usd] authoring craters density={crater_density} (enabled={}) sizeMode={} → {path} (doc {})", spec.craters.enabled, spec.craters.size.mode, td.doc);
                     author_layer_attr(&mut registry, doc, &path, "density", "float", crater_density.to_string());
                     author_layer_attr(&mut registry, doc, &path, "sizeMode", "float", spec.craters.size.mode.to_string());
                     author_layer_attr(&mut registry, doc, &path, "depthRatio", "float", spec.craters.depth_ratio.to_string());
                     author_layer_attr(&mut registry, doc, &path, "rimRatio", "float", spec.craters.rim_height_ratio.to_string());
                 }
-                Some("rocks") => {
+                "rocks" => {
                     author_layer_attr(&mut registry, doc, &path, "density", "float", rock_density.to_string());
                     author_layer_attr(&mut registry, doc, &path, "sizeMode", "float", spec.rocks.size.mode.to_string());
                 }
@@ -1223,143 +2224,175 @@ fn bridge_usd_dem_terrain(
     twins: Res<lunco_assets::twin_source::TwinRoots>,
     registry: Res<lunco_terrain_surface::TerrainLayerParserRegistry>,
     mut obstacle_spec: ResMut<lunco_obstacle_field::ObstacleFieldSpec>,
+    mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
     mut commands: Commands,
 ) {
     for (entity, prim_path) in &q {
-        // Wait until the prim's stage asset is loaded (read attrs from it).
-        let Some(stage) = stages.get(&prim_path.stage_handle) else { continue };
+        // Read the LIVE canonical stage (built on demand from the asset's recipe)
+        // — the source of truth. Wait until it is available before reading attrs.
+        let id = prim_path.stage_handle.id();
+        if canonical.get(id).is_none() {
+            if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
+                canonical.get_or_build(id, &recipe);
+            }
+        }
+        if canonical.get(id).is_none() {
+            // No live stage (asset carries no recipe / build failed) — retry next frame.
+            continue;
+        }
         let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else {
             commands.entity(entity).insert(DemBridged);
             continue;
         };
-        let reader = &*stage.reader;
         commands.entity(entity).insert(DemBridged); // examined — don't re-scan
-
-        // A DEM-backed terrain: `lunco:assetMode = "dem"` (or "layered"). Its surface
-        // is COMPOSED from child LAYER prims (`lunco:layer = "dem" | "craters" |
-        // "rocks" | "shader" | …`) — add a layer by adding a prim. The `dem` (ground)
-        // layer supplies the heightmap source + window; the rest stamp/scatter/shade.
-        let asset_mode = reader.prim_attribute_value::<String>(&sdf, "lunco:assetMode");
-        if !matches!(asset_mode.as_deref(), Some("dem") | Some("layered")) {
-            continue;
-        }
-
-        // The ground (`dem`) layer + the composable stack (craters/rocks/shader/…),
-        // parsed from the child layer prims (helpers shared with the live-edit refresh).
-        let dem_layer_sdf = find_dem_layer(reader, &sdf);
-        let stack = parse_terrain_layer_stack(reader, &sdf, &registry);
-        // Seed the Inspector's shared spec from the authored values so the panel opens
-        // showing THIS scene's craters/rocks, not the resource defaults. `bypass_change_
-        // detection` so it doesn't look like a runtime edit (no networked re-broadcast).
-        sync_obstacle_spec_from_usd(reader, &sdf, obstacle_spec.bypass_change_detection());
-
-        // DEM/ground parameters: prefer a `dem` child layer prim (plain attr names);
-        // fall back to the Terrain prim's own `lunco:terrain:*` attrs (back-compat).
-        let dem = dem_layer_sdf.clone();
-        let attr_f32 = |name: &str, legacy: &str| -> Option<f32> {
-            dem.as_ref()
-                .and_then(|d| reader.prim_attribute_value::<f32>(d, name))
-                .or_else(|| reader.prim_attribute_value::<f32>(&sdf, legacy))
-        };
-        let attr_i32 = |name: &str, legacy: &str| -> Option<i32> {
-            dem.as_ref()
-                .and_then(|d| reader.prim_attribute_value::<i32>(d, name))
-                .or_else(|| reader.prim_attribute_value::<i32>(&sdf, legacy))
-        };
-        let attr_bool = |name: &str, legacy: &str| -> Option<bool> {
-            dem.as_ref()
-                .and_then(|d| reader.prim_attribute_value::<bool>(d, name))
-                .or_else(|| reader.prim_attribute_value::<bool>(&sdf, legacy))
-        };
-
-        let rel = dem
-            .as_ref()
-            .and_then(|d| reader.prim_attribute_value::<String>(d, "demSource"))
-            .or_else(|| reader.prim_attribute_value::<String>(&sdf, "lunco:terrain:demSource"));
-        let Some(rel) = rel else {
-            warn!("[usd-dem] prim {} is a DEM terrain but has no dem-layer demSource", prim_path.path);
-            continue;
-        };
-        let Some((_, root)) = twins.primary() else {
-            warn!("[usd-dem] no open Twin to resolve DEM source '{rel}'");
-            continue;
-        };
-        let uri = root.join(&rel).to_string_lossy().to_string();
-        // `windowM` = side length (m) realized at native res. 0 = whole map; >0 = side;
-        // absent/negative = a safe 4 km window (avoid an accidental full-map build).
-        let half_window = match attr_f32("windowM", "lunco:terrain:windowM") {
-            Some(w) if w == 0.0 => f64::INFINITY,
-            Some(w) if w > 0.0 => (w * 0.5) as f64,
-            _ => 2048.0,
-        };
-        // `targetRes` = visual-quality downsample target (samples/side). ≤ 0 = native.
-        let target_res = attr_i32("targetRes", "lunco:terrain:targetRes")
-            .filter(|&r| r > 0)
-            .map(|r| r as usize)
-            .unwrap_or(0);
-        // `lodViz` = stream CDLOD tiles (default ON) vs one static mesh.
-        let lod_viz = attr_bool("lodViz", "lunco:terrain:lodViz").unwrap_or(true);
-        // `colliderRing` = stream a per-rover collider ring vs one static collider.
-        let collider_ring = attr_bool("colliderRing", "lunco:terrain:colliderRing").unwrap_or(false);
-        // `detailUpsample` = INTELLIGENT UPSCALING factor: bilinearly upscale the coarse
-        // DEM ground before stamping craters, so generated craters get high fidelity
-        // (sub-DEM-res rims) decoupled from the ~5 m source. ≤ 1 = native.
-        let detail_upsample = attr_i32("detailUpsample", "lunco:terrain:detailUpsample")
-            .filter(|&u| u > 1)
-            .map(|u| u as usize)
-            .unwrap_or(1);
-
-        let layer_count = stack.0.len();
-        commands.entity(entity).insert((
-            lunco_terrain_surface::DemTerrainRequest {
-                uri,
-                half_window,
-                target_res,
-                lod_viz,
-                collider_ring,
-                with_default_material: false,
-                detail_upsample,
-            },
-            stack,
-            lunco_terrain_surface::DemTerrainSurface,
-        ));
-        // Georeference (#5): the `lunco:anchor:*` lat/lon/height anchor + the stage
-        // `metersPerUnit`. The terrain math is metres, so a non-1 `metersPerUnit`
-        // is recorded but flagged loudly (we don't rescale the DEM). Attach a
-        // `TerrainGeoref` whenever any of these are authored.
-        let anchor_lat = reader.prim_attribute_value::<f64>(&sdf, "lunco:anchor:lat");
-        let anchor_lon = reader.prim_attribute_value::<f64>(&sdf, "lunco:anchor:lon");
-        let anchor_height = reader.prim_attribute_value::<f64>(&sdf, "lunco:anchor:height");
-        let meters_per_unit = reader.prim_attribute_value::<f64>(&sdf, "metersPerUnit");
-        if let Some(mpu) = meters_per_unit {
-            if (mpu - 1.0).abs() >= 1e-6 {
-                warn!(
-                    "[usd-dem] prim {} authors metersPerUnit={mpu}; terrain assumes 1 m/unit — \
-                     heights/colliders are NOT rescaled",
-                    prim_path.path
-                );
-            }
-        }
-        if anchor_lat.is_some() || anchor_lon.is_some() || anchor_height.is_some() {
-            let georef = lunco_terrain_surface::TerrainGeoref {
-                center_lat_deg: anchor_lat.unwrap_or(0.0),
-                center_lon_deg: anchor_lon.unwrap_or(0.0),
-                anchor_height_m: anchor_height.unwrap_or(0.0),
-                meters_per_unit: meters_per_unit.unwrap_or(1.0),
-            };
-            commands.entity(entity).insert(georef);
-            info!(
-                "[usd-dem] georef: lat {:.4} lon {:.4} height {:.1} m (mpu {})",
-                georef.center_lat_deg, georef.center_lon_deg, georef.anchor_height_m, georef.meters_per_unit
-            );
-        }
-        info!(
-            "[usd-dem] bridged layered terrain prim {} → DEM '{rel}' (target_res {target_res}, \
-             lod_viz {lod_viz}, collider_ring {collider_ring}, detail_upsample {detail_upsample}, \
-             {layer_count} composed layer(s))",
-            prim_path.path
+        let cs = canonical.get(id).expect("checked above");
+        bridge_dem_prim_read(
+            &cs.view(), entity, prim_path, &sdf, &twins, &registry,
+            obstacle_spec.bypass_change_detection(), &mut commands,
         );
     }
+}
+
+/// The DEM-bridge read body, generic over the read source ([`UsdRead`]) — reads
+/// the authored `lunco:assetMode` / child-layer / anchor attributes off either the
+/// live [`StageView`](lunco_usd_bevy::StageView) or the flattened `sdf::Data`,
+/// identically, and attaches the terrain request + composed stack + georef.
+/// Extracted from `bridge_usd_dem_terrain` for the dual-source cutover.
+#[allow(clippy::too_many_arguments)]
+fn bridge_dem_prim_read<R: UsdRead>(
+    reader: &R,
+    entity: Entity,
+    prim_path: &lunco_usd::UsdPrimPath,
+    sdf: &openusd::sdf::Path,
+    twins: &lunco_assets::twin_source::TwinRoots,
+    registry: &lunco_terrain_surface::TerrainLayerParserRegistry,
+    obstacle_spec: &mut lunco_obstacle_field::spec::ObstacleFieldSpec,
+    commands: &mut Commands,
+) {
+    // A DEM-backed terrain: `lunco:assetMode = "dem"` (or "layered"). Its surface
+    // is COMPOSED from child LAYER prims (`lunco:layer = "dem" | "craters" |
+    // "rocks" | "shader" | …`) — add a layer by adding a prim. The `dem` (ground)
+    // layer supplies the heightmap source + window; the rest stamp/scatter/shade.
+    let asset_mode = reader.scalar::<String>(sdf, "lunco:assetMode");
+    if !matches!(asset_mode.as_deref(), Some("dem") | Some("layered")) {
+        return;
+    }
+
+    // The ground (`dem`) layer + the composable stack (craters/rocks/shader/…),
+    // parsed from the child layer prims (helpers shared with the live-edit refresh).
+    let dem_layer_sdf = find_dem_layer(reader, sdf);
+    let stack = parse_terrain_layer_stack(reader, sdf, registry);
+    // Seed the Inspector's shared spec from the authored values so the panel opens
+    // showing THIS scene's craters/rocks, not the resource defaults (caller passes
+    // `bypass_change_detection` so it doesn't look like a runtime edit).
+    sync_obstacle_spec_from_usd(reader, sdf, obstacle_spec);
+
+    // DEM/ground parameters: prefer a `dem` child layer prim (plain attr names);
+    // fall back to the Terrain prim's own `lunco:terrain:*` attrs (back-compat).
+    let dem = dem_layer_sdf.clone();
+    let attr_f32 = |name: &str, legacy: &str| -> Option<f32> {
+        dem.as_ref()
+            .and_then(|d| reader.scalar::<f32>(d, name))
+            .or_else(|| reader.scalar::<f32>(sdf, legacy))
+    };
+    let attr_i32 = |name: &str, legacy: &str| -> Option<i32> {
+        dem.as_ref()
+            .and_then(|d| reader.scalar::<i32>(d, name))
+            .or_else(|| reader.scalar::<i32>(sdf, legacy))
+    };
+    let attr_bool = |name: &str, legacy: &str| -> Option<bool> {
+        dem.as_ref()
+            .and_then(|d| reader.scalar::<bool>(d, name))
+            .or_else(|| reader.scalar::<bool>(sdf, legacy))
+    };
+
+    let rel = dem
+        .as_ref()
+        .and_then(|d| reader.scalar::<String>(d, "demSource"))
+        .or_else(|| reader.scalar::<String>(sdf, "lunco:terrain:demSource"));
+    let Some(rel) = rel else {
+        warn!("[usd-dem] prim {} is a DEM terrain but has no dem-layer demSource", prim_path.path);
+        return;
+    };
+    let Some((_, root)) = twins.primary() else {
+        warn!("[usd-dem] no open Twin to resolve DEM source '{rel}'");
+        return;
+    };
+    let uri = root.join(&rel).to_string_lossy().to_string();
+    // `windowM` = side length (m) realized at native res. 0 = whole map; >0 = side;
+    // absent/negative = a safe 4 km window (avoid an accidental full-map build).
+    let half_window = match attr_f32("windowM", "lunco:terrain:windowM") {
+        Some(w) if w == 0.0 => f64::INFINITY,
+        Some(w) if w > 0.0 => (w * 0.5) as f64,
+        _ => 2048.0,
+    };
+    // `targetRes` = visual-quality downsample target (samples/side). ≤ 0 = native.
+    let target_res = attr_i32("targetRes", "lunco:terrain:targetRes")
+        .filter(|&r| r > 0)
+        .map(|r| r as usize)
+        .unwrap_or(0);
+    // `lodViz` = stream CDLOD tiles (default ON) vs one static mesh.
+    let lod_viz = attr_bool("lodViz", "lunco:terrain:lodViz").unwrap_or(true);
+    // `colliderRing` = stream a per-rover collider ring vs one static collider.
+    let collider_ring = attr_bool("colliderRing", "lunco:terrain:colliderRing").unwrap_or(false);
+    // `detailUpsample` = INTELLIGENT UPSCALING factor: bilinearly upscale the coarse
+    // DEM ground before stamping craters, so generated craters get high fidelity
+    // (sub-DEM-res rims) decoupled from the ~5 m source. ≤ 1 = native.
+    let detail_upsample = attr_i32("detailUpsample", "lunco:terrain:detailUpsample")
+        .filter(|&u| u > 1)
+        .map(|u| u as usize)
+        .unwrap_or(1);
+
+    let layer_count = stack.0.len();
+    commands.entity(entity).insert((
+        lunco_terrain_surface::DemTerrainRequest {
+            uri,
+            half_window,
+            target_res,
+            lod_viz,
+            collider_ring,
+            with_default_material: false,
+            detail_upsample,
+        },
+        stack,
+        lunco_terrain_surface::DemTerrainSurface,
+    ));
+    // Georeference (#5): the `lunco:anchor:*` lat/lon/height anchor + the stage
+    // `metersPerUnit`. The terrain math is metres, so a non-1 `metersPerUnit`
+    // is recorded but flagged loudly (we don't rescale the DEM). Attach a
+    // `TerrainGeoref` whenever any of these are authored.
+    let anchor_lat = reader.scalar::<f64>(sdf, "lunco:anchor:lat");
+    let anchor_lon = reader.scalar::<f64>(sdf, "lunco:anchor:lon");
+    let anchor_height = reader.scalar::<f64>(sdf, "lunco:anchor:height");
+    let meters_per_unit = reader.scalar::<f64>(sdf, "metersPerUnit");
+    if let Some(mpu) = meters_per_unit {
+        if (mpu - 1.0).abs() >= 1e-6 {
+            warn!(
+                "[usd-dem] prim {} authors metersPerUnit={mpu}; terrain assumes 1 m/unit — \
+                 heights/colliders are NOT rescaled",
+                prim_path.path
+            );
+        }
+    }
+    if anchor_lat.is_some() || anchor_lon.is_some() || anchor_height.is_some() {
+        let georef = lunco_terrain_surface::TerrainGeoref {
+            center_lat_deg: anchor_lat.unwrap_or(0.0),
+            center_lon_deg: anchor_lon.unwrap_or(0.0),
+            anchor_height_m: anchor_height.unwrap_or(0.0),
+            meters_per_unit: meters_per_unit.unwrap_or(1.0),
+        };
+        commands.entity(entity).insert(georef);
+        info!(
+            "[usd-dem] georef: lat {:.4} lon {:.4} height {:.1} m (mpu {})",
+            georef.center_lat_deg, georef.center_lon_deg, georef.anchor_height_m, georef.meters_per_unit
+        );
+    }
+    info!(
+        "[usd-dem] bridged layered terrain prim {} → DEM '{rel}' (target_res {target_res}, \
+         lod_viz {lod_viz}, collider_ring {collider_ring}, detail_upsample {detail_upsample}, \
+         {layer_count} composed layer(s))",
+        prim_path.path
+    );
 }
 
 /// The headless runner: the Modelica/spawn cores a windowed build gets

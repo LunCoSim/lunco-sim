@@ -183,7 +183,7 @@ smallvec = "1.13"
 # openusd 0.5.0: real PCP composition engine (variantSets + relationship target
 # translation) + typed usd::Stage API. Replaces our hand-rolled lunco-usd-composer.
 # Pinned exact — pre-1.0, API moves fast. See crates/lunco-usd-bevy/OPENUSD_0_5_MIGRATION.md.
-openusd = "=0.5.0"
+openusd = { version = "=0.5.0", features = ["physics"] }
 instant = "0.1"
 # Drop-in replacement for `std::time::Instant` / `SystemTime` that works on
 # wasm32-unknown-unknown (where the std types panic at runtime). Backed by

@@ -174,5 +174,7 @@ fn add_protocol(app: &mut App) {
     app.declare_channel::<lunco_avatar::ReleaseVessel>(SyncChannel::CommandBus);
     app.declare_channel::<lunco_avatar::UpdateProfile>(SyncChannel::CommandBus);
     app.declare_channel::<lunco_sandbox_edit::commands::SpawnEntity>(SyncChannel::CommandBus);
-    app.declare_channel::<lunco_obstacle_field::plugin::UpdateObstacleFieldSpec>(SyncChannel::CommandBus);
+    // `UpdateObstacleFieldSpec` no longer rides the command bus — it is journaled
+    // (`DomainKind::ObstacleField`) and syncs via the journal plane instead. See
+    // the note where `sync_obstacle_field_spec` used to live.
 }

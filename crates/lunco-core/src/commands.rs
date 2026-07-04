@@ -28,7 +28,7 @@
 //!   retry, or surface to the user.
 
 use crate::ids::make_id_53;
-use bevy::prelude::Resource;
+use bevy::prelude::{Reflect, Resource};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -145,6 +145,40 @@ pub enum SyncChannel {
     /// head-of-line-block join-critical traffic (Handshake, Ownership,
     /// possession, spawn). File-transfer analogue to the interactive command bus.
     BulkData,
+}
+
+/// Whether a mutation command is a **persistent authored edit** (journaled →
+/// synced → persisted) or a **transient interactive one** (live change only, not
+/// journaled).
+///
+/// The default is [`Persistent`](Self::Persistent), so API / MCP / scripted
+/// callers durably record by default ("journaled by default"). An interactive UI
+/// opts into [`Interactive`](Self::Interactive) for a throwaway edit (a test /
+/// preview) and sends `Persistent` only on commit.
+///
+/// This is the explicit form of the interactive/persistent split for **discrete**
+/// dual-meaning actions (e.g. `DetachJoint`: interactively pop a joint to test vs.
+/// author the scene to have it removed). *Continuous* manipulation (gizmo drag,
+/// slider scrub) doesn't need this flag — it uses the `persist_*_to_runtime_layer`
+/// observer pattern: the live edit is the interactive form, and a deferred
+/// observer journals the committed result.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect,
+)]
+pub enum EditIntent {
+    /// Live change only — NOT journaled / synced / persisted. Real-time
+    /// manipulation and previews.
+    Interactive,
+    /// The committed authored edit — journaled, synced, persisted. **Default.**
+    #[default]
+    Persistent,
+}
+
+impl EditIntent {
+    /// Does this edit get recorded to the Twin journal (and thus synced/persisted)?
+    pub fn is_persistent(self) -> bool {
+        matches!(self, EditIntent::Persistent)
+    }
 }
 
 /// Wire-shape carrier for a mutation. The payload is whatever the

@@ -20,6 +20,7 @@
 
 pub mod assets;
 pub mod field;
+pub mod journal;
 pub mod plugin;
 pub mod rock;
 pub mod sampler;

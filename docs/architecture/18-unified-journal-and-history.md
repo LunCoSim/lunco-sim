@@ -1,7 +1,11 @@
 # 18 — Unified Edit Journal & Twin History
 
-Status: **design / roadmap** (2026-06-28). Supersedes nothing; extends
+Status: **as-built** (2026-07-04, `networking` branch). Extends
 [10-document-system](10-document-system.md) and [13-twin-and-workflow](13-twin-and-workflow.md).
+Realized in [`lunco-twin-journal`](../../crates/lunco-twin-journal) (`JournalEntry`,
+`EntryId {author, lamport}`, DAG `parents`, `EntryKind::{Op, TextEdit, Snapshot,
+Lifecycle}`, `LamportClock`) with the Bevy bridge in `lunco-doc-bevy` and network
+replication via the journal plane ([`31-networking-and-state-sync.md`](31-networking-and-state-sync.md)).
 
 ## Goal
 

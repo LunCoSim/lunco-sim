@@ -26,9 +26,9 @@
 use bevy::camera::Exposure;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::prelude::*;
-use openusd::sdf::{Data, Path as SdfPath};
+use openusd::sdf::Path as SdfPath;
 
-use crate::usd_data::UsdDataExt;
+use crate::read::UsdRead;
 
 /// `UsdGeomCamera` spec defaults (Pixar), so an unauthored attribute matches a
 /// standard ~50 mm full-frame camera rather than Bevy's 45° default FOV.
@@ -42,8 +42,8 @@ const DEFAULT_FAR: f32 = 1.0e6;
 /// If `prim_type` is `Camera`, attach an **inactive** Bevy camera to `entity`
 /// and return `true`. Called from `instantiate_usd_prim`; the prim's transform
 /// and visibility are applied by the shared path there.
-pub(crate) fn instantiate_camera_prim(
-    reader: &Data,
+pub(crate) fn instantiate_camera_prim<R: UsdRead>(
+    reader: &R,
     sdf_path: &SdfPath,
     prim_type: Option<&str>,
     commands: &mut Commands,
@@ -92,13 +92,13 @@ pub(crate) fn instantiate_camera_prim(
 }
 
 /// Build a Bevy `Projection` from a `UsdGeomCamera`'s film-back + clip attrs.
-fn read_projection(reader: &Data, path: &SdfPath) -> Projection {
+fn read_projection<R: UsdRead>(reader: &R, path: &SdfPath) -> Projection {
     // `clippingRange` is a `float2` (accept `double2` authoring too).
     let [near, far] = reader
-        .prim_attribute_value::<[f32; 2]>(path, "clippingRange")
+        .scalar::<[f32; 2]>(path, "clippingRange")
         .or_else(|| {
             reader
-                .prim_attribute_value::<[f64; 2]>(path, "clippingRange")
+                .scalar::<[f64; 2]>(path, "clippingRange")
                 .map(|[n, f]| [n as f32, f as f32])
         })
         .unwrap_or([DEFAULT_NEAR, DEFAULT_FAR]);
@@ -118,10 +118,10 @@ fn read_projection(reader: &Data, path: &SdfPath) -> Projection {
         })
     } else {
         let focal = reader
-            .prim_attribute_value::<f32>(path, "focalLength")
+            .scalar::<f32>(path, "focalLength")
             .unwrap_or(DEFAULT_FOCAL_LENGTH_MM);
         let v_aperture = reader
-            .prim_attribute_value::<f32>(path, "verticalAperture")
+            .scalar::<f32>(path, "verticalAperture")
             .unwrap_or(DEFAULT_VERTICAL_APERTURE_MM);
         // Bevy's `PerspectiveProjection::fov` is the **vertical** field of view.
         let fov = if focal > 1e-3 {

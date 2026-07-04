@@ -34,9 +34,9 @@
 use bevy::light::GlobalAmbientLight;
 use bevy::prelude::*;
 use lunco_render::LunarSunShadow;
-use openusd::sdf::{Data, Path as SdfPath, Value};
+use openusd::sdf::{Path as SdfPath, Value};
 
-use crate::usd_data::UsdDataExt;
+use crate::read::UsdRead;
 
 /// Tag for a binary's built-in default sun — defined in `lunco-core` (so
 /// non-USD crates can tag their lights too), re-exported here where the
@@ -58,13 +58,11 @@ pub struct UsdAuthoredLight;
 pub(crate) struct UsdDomeAmbient(pub(crate) f32);
 
 /// Scalar attribute reader tolerant of `float`/`double`/`int` authoring.
-pub(crate) fn get_attribute_as_f32(reader: &Data, path: &SdfPath, attr: &str) -> Option<f32> {
-    let attr_path = path.append_property(attr).ok()?;
-    let val = reader.field(&attr_path, "default")?;
-    match val {
-        Value::Float(f) => Some(*f),
-        Value::Double(d) => Some(*d as f32),
-        Value::Int(i) => Some(*i as f32),
+pub(crate) fn get_attribute_as_f32<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<f32> {
+    match reader.attr_value(path, attr)? {
+        Value::Float(f) => Some(f),
+        Value::Double(d) => Some(d as f32),
+        Value::Int(i) => Some(i as f32),
         _ => None,
     }
 }
@@ -74,8 +72,8 @@ pub(crate) fn get_attribute_as_f32(reader: &Data, path: &SdfPath, attr: &str) ->
 /// turned into a Bevy light — the *unit* of the result depends on the target
 /// component (lux for `DirectionalLight`, candela for `Point`/`SpotLight`),
 /// but the photometric conversion is identical, so it lives here once.
-pub(crate) fn read_intensity_with_exposure(
-    reader: &Data,
+pub(crate) fn read_intensity_with_exposure<R: UsdRead>(
+    reader: &R,
     path: &SdfPath,
     default_intensity: f32,
 ) -> f32 {
@@ -85,16 +83,14 @@ pub(crate) fn read_intensity_with_exposure(
 }
 
 /// Bool attribute reader (also accepts `int` 0/1 authoring).
-pub(crate) fn get_attribute_as_bool(
-    reader: &Data,
+pub(crate) fn get_attribute_as_bool<R: UsdRead>(
+    reader: &R,
     path: &SdfPath,
     attr: &str,
 ) -> Option<bool> {
-    let attr_path = path.append_property(attr).ok()?;
-    let val = reader.field(&attr_path, "default")?;
-    match val {
-        Value::Bool(b) => Some(*b),
-        Value::Int(i) => Some(*i != 0),
+    match reader.attr_value(path, attr)? {
+        Value::Bool(b) => Some(b),
+        Value::Int(i) => Some(i != 0),
         _ => None,
     }
 }
@@ -103,8 +99,8 @@ pub(crate) fn get_attribute_as_bool(
 /// Bevy light components to `entity` and return `true`. Called from
 /// `instantiate_usd_prim`; the prim's transform/visibility are applied by
 /// the shared path there.
-pub(crate) fn instantiate_light_prim(
-    reader: &Data,
+pub(crate) fn instantiate_light_prim<R: UsdRead>(
+    reader: &R,
     sdf_path: &SdfPath,
     prim_type: Option<&str>,
     commands: &mut Commands,

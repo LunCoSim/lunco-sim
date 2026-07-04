@@ -43,6 +43,29 @@ impl ExperimentId {
     pub fn is_live(&self) -> bool {
         *self == Self::live()
     }
+
+    /// Filename stem for this experiment's result artifact (`<stem>.json` under
+    /// `<twin>/results/`). Single source of truth shared by the writer + loader
+    /// so the round-trip agrees on the name.
+    pub fn as_artifact_stem(&self) -> String {
+        self.0.to_string()
+    }
+
+    /// Parse an [`as_artifact_stem`](Self::as_artifact_stem) back into an id.
+    pub fn from_artifact_stem(stem: &str) -> Option<Self> {
+        Uuid::parse_str(stem).ok().map(Self)
+    }
+
+    /// The 16 raw UUID bytes — the wire encoding for the run-status presence
+    /// message (lets `lunco-networking` carry the id without a uuid dep).
+    pub fn uuid_bytes(&self) -> [u8; 16] {
+        *self.0.as_bytes()
+    }
+
+    /// Rebuild an id from [`uuid_bytes`](Self::uuid_bytes).
+    pub fn from_uuid_bytes(b: [u8; 16]) -> Self {
+        Self(Uuid::from_bytes(b))
+    }
 }
 
 impl Default for ExperimentId {
@@ -584,6 +607,72 @@ impl ExperimentRegistry {
             true
         } else {
             false
+        }
+    }
+
+    // ── Definition mutators ─────────────────────────────────────────────────
+    //
+    // Explicit setters for the parts of an experiment that make up its
+    // *definition* (name, bounds, params). These exist so a definition edit is a
+    // single funnelled call — the journaling layer (`lunco-modelica`'s
+    // `experiment_journal`) records an `ExperimentOp` and then applies it through
+    // exactly these methods, and cross-peer replay applies the same op the same
+    // way. Direct `get_mut(...).field = ...` poking bypasses journaling, so
+    // definition edits should go through here. (Run *outputs* — `set_status` /
+    // `set_result` — are intentionally NOT definition edits: they ride the
+    // content/presence planes, not the journal.)
+
+    /// Rename an experiment. Returns `false` if the id is unknown.
+    pub fn set_name(&mut self, id: ExperimentId, name: String) -> bool {
+        match self.get_mut(id) {
+            Some(e) => {
+                e.name = name;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Replace an experiment's run bounds (t_end, dt, solver, …).
+    pub fn set_bounds(&mut self, id: ExperimentId, bounds: RunBounds) -> bool {
+        match self.get_mut(id) {
+            Some(e) => {
+                e.bounds = bounds;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Replace an experiment's parameter overrides + inputs (the sweep point).
+    pub fn set_params(
+        &mut self,
+        id: ExperimentId,
+        overrides: BTreeMap<ParamPath, ParamValue>,
+        inputs: BTreeMap<ParamPath, ParamValue>,
+    ) -> bool {
+        match self.get_mut(id) {
+            Some(e) => {
+                e.overrides = overrides;
+                e.inputs = inputs;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Insert a fully-formed experiment under an explicit id — the **replay**
+    /// entry point (a peer's journaled `Create` op reconstructs the row here,
+    /// preserving the originating id rather than minting a new one, so later
+    /// `SetName`/`SetBounds` ops in the same journal resolve). Overwrites any
+    /// existing row with the same id in the twin bucket. Bypasses the auto-name /
+    /// color counters (the op already carries the authored name/values).
+    pub fn insert_with_id(&mut self, exp: Experiment) {
+        let bucket = self.by_twin.entry(exp.twin_id.clone()).or_default();
+        if let Some(pos) = bucket.iter().position(|e| e.id == exp.id) {
+            bucket[pos] = exp;
+        } else {
+            bucket.push(exp);
         }
     }
 }

@@ -37,10 +37,25 @@ pub struct SpawnEntity {
 }
 
 /// Detach a joint by despawning it.
-#[Command]
+#[Command(reflect_default)]
 pub struct DetachJoint {
     /// The joint entity to despawn.
     pub target: Entity,
+    /// Persistent (default) authors the joint's removal into the scene's runtime
+    /// layer — so it journals, syncs, and survives reload — before despawning.
+    /// Interactive just pops the live joint (a throwaway test), no journal. See
+    /// [`lunco_core::EditIntent`]. Omitted by API callers → `Persistent`.
+    #[serde(default)]
+    pub intent: lunco_core::EditIntent,
+}
+
+impl Default for DetachJoint {
+    fn default() -> Self {
+        Self {
+            target: Entity::PLACEHOLDER,
+            intent: lunco_core::EditIntent::Persistent,
+        }
+    }
 }
 
 
@@ -62,7 +77,8 @@ pub fn on_rescan_spawn_catalog(
     }
 }
 
-/// Observer that handles DetachJoint commands.
+/// Observer that handles DetachJoint commands — despawns the live joint entity in
+/// BOTH modes (the visible effect). Persistence is a decoupled observer below.
 pub fn on_detach_joint(
     trigger: On<DetachJoint>,
     mut commands: Commands,
@@ -70,7 +86,7 @@ pub fn on_detach_joint(
     let cmd = trigger.event();
     if let Ok(mut entity) = commands.get_entity(cmd.target) {
         entity.despawn();
-        info!("DETACH_JOINT: despawned joint entity {:?}", cmd.target);
+        info!("DETACH_JOINT: despawned joint entity {:?} ({:?})", cmd.target, cmd.intent);
     }
 }
 
@@ -167,7 +183,12 @@ fn joint_release_system(
                     });
                     if hit {
                         info!("RELEASE: vessel {} detaching joint {je:?}", vpath.path);
-                        commands.trigger(DetachJoint { target: je });
+                        // Runtime undock (a live physics action, not an authored scene
+                        // edit) → Interactive so it doesn't journal.
+                        commands.trigger(DetachJoint {
+                            target: je,
+                            intent: lunco_core::EditIntent::Interactive,
+                        });
                     }
                 }
             }
@@ -175,6 +196,46 @@ fn joint_release_system(
             act.latched = false;
         }
     }
+}
+
+/// Persist a **`Persistent`** `DetachJoint` into the active USD document's runtime
+/// overlay by authoring a `RemovePrim` — so the detachment journals, syncs, and
+/// survives reload. Decoupled from [`on_detach_joint`] (which does the live
+/// despawn), mirroring [`persist_move_to_runtime_layer`]: same active-doc +
+/// ownership guard, same `LayerId::runtime()` target. `Interactive` detaches are
+/// throwaway (no journal), so this early-returns for them.
+pub fn persist_detach_to_runtime_layer(
+    trigger: On<DetachJoint>,
+    usd_registry: Res<UsdDocumentRegistry>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    q_prim: Query<&UsdPrimPath>,
+    mut commands: Commands,
+) {
+    let cmd = trigger.event();
+    if !cmd.intent.is_persistent() {
+        return;
+    }
+    let Some(workspace) = workspace else { return };
+    let Some(doc) = workspace.0.active_document else { return };
+    let Some(host) = usd_registry.host(doc) else { return };
+
+    // Resolve the joint entity's USD prim path; skip if it isn't USD-backed.
+    let Ok(prim) = q_prim.get(cmd.target) else { return };
+    // Ownership guard: only persist removal of prims the active document holds.
+    let Ok(prim_sdf) = lunco_usd_bevy::SdfPath::new(&prim.path) else { return };
+    let owned = host.document().data().spec(&prim_sdf).is_some()
+        || host.document().runtime_data().spec(&prim_sdf).is_some();
+    if !owned {
+        return;
+    }
+
+    commands.trigger(ApplyUsdOp {
+        doc,
+        op: UsdOp::RemovePrim {
+            edit_target: LayerId::runtime(),
+            path: prim.path.clone(),
+        },
+    });
 }
 
 /// Observer that handles SpawnEntity commands.
@@ -1830,9 +1891,23 @@ pub fn persist_property_to_runtime_layer(
     if matches!(cmd.property.as_str(), "shader" | "visible") {
         return;
     }
-    // Only scalar tunes persist (layer weights etc.); non-scalar values are live-only.
-    let Ok(scalar) = cmd.value.trim().parse::<f32>() else {
+    // Parse the value into a typed USD attribute. A single float persists as
+    // `float`; three comma-separated floats persist as a `color3f` vector — the
+    // shape shader colours/vectors (`cell_a`, `tint`, …) take. `read_authored_params`
+    // reads BOTH back on reload (vec3 first, then scalar), so both round-trip with
+    // no loader change. Any other arity (or a non-numeric value) stays live-only.
+    let parts: Vec<&str> = cmd.value.split(',').collect();
+    let floats: Vec<f32> = parts.iter().filter_map(|s| s.trim().parse::<f32>().ok()).collect();
+    if floats.len() != parts.len() {
         return;
+    }
+    let (type_name, value) = match floats.len() {
+        1 => ("float".to_string(), floats[0].to_string()),
+        3 => (
+            "color3f".to_string(),
+            format!("({}, {}, {})", floats[0], floats[1], floats[2]),
+        ),
+        _ => return,
     };
     let Some(workspace) = workspace else { return };
     let Some(doc) = workspace.0.active_document else { return };
@@ -1864,10 +1939,298 @@ pub fn persist_property_to_runtime_layer(
             edit_target: LayerId::runtime(),
             path: prim.path.clone(),
             name,
-            type_name: "float".to_string(),
-            value: scalar.to_string(),
+            type_name,
+            value,
         },
     });
+}
+
+/// Maps a `SetObjectProperty` **wheel-dynamics** property name to the USD
+/// attribute the loader (`lunco_usd_sim`) reads back onto `WheelRaycast`, so a
+/// per-wheel tune round-trips on reload. Only the names with an existing reader
+/// are mapped; `slip_stiffness` / `friction_mu` have none, so they stay live-only.
+/// All are `float`.
+fn wheel_property_usd_attr(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "drive_torque" | "drive_torque_max" => "physxVehicleEngine:peakTorque",
+        "brake_torque" | "brake_torque_max" => "physxVehicleWheel:maxBrakeTorque",
+        "bearing_damping" | "damping_rate" => "physxVehicleWheel:dampingRate",
+        "moi" | "moment_of_inertia" => "physxVehicleWheel:moi",
+        "wheel_radius" | "radius" => "physxVehicleWheel:radius",
+        "rest_length" => "physxVehicleSuspension:restLength",
+        "spring_k" | "spring_stiffness" => "physxVehicleSuspension:springStiffness",
+        "damping_c" | "spring_damping" => "physxVehicleSuspension:springDamping",
+        _ => return None,
+    })
+}
+
+/// Persist a `SetObjectProperty` **wheel-dynamics** or **PBR base-colour** tune
+/// into the active USD document's runtime overlay — the counterpart of
+/// [`persist_property_to_runtime_layer`] for the two property classes it skips
+/// (it guards to shader-material prims). Fully decoupled + disjoint: it only
+/// authors for wheel-param names (via [`wheel_property_usd_attr`]) or `base_color`
+/// on a `StandardMaterial` prim, both of which the loader already reads back — so
+/// they round-trip on reload and ride the Twin journal. Ownership-guarded and
+/// no-op without an active USD doc, like every other persister.
+pub fn persist_wheel_and_pbr_to_runtime_layer(
+    trigger: On<SetObjectProperty>,
+    api_registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    usd_registry: Res<UsdDocumentRegistry>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    q_prim: Query<&UsdPrimPath>,
+    q_std_mat: Query<(), With<MeshMaterial3d<StandardMaterial>>>,
+    mut commands: Commands,
+) {
+    let cmd = trigger.event();
+
+    // Route the property to a USD attribute the loader reads back.
+    let authored: Option<(String, &str, String)> =
+        if let Some(attr) = wheel_property_usd_attr(&cmd.property) {
+            // Wheel dynamics → physxVehicle* scalar.
+            cmd.value
+                .trim()
+                .parse::<f32>()
+                .ok()
+                .map(|v| (attr.to_string(), "float", v.to_string()))
+        } else if cmd.property == "base_color" {
+            // PBR base colour → `primvars:displayColor` (loader reads it into
+            // `StandardMaterial.base_color`). Linear r,g,b (drop any alpha).
+            let f: Vec<f32> = cmd
+                .value
+                .split(',')
+                .filter_map(|s| s.trim().parse::<f32>().ok())
+                .collect();
+            (f.len() >= 3).then(|| {
+                (
+                    "primvars:displayColor".to_string(),
+                    "color3f",
+                    format!("({}, {}, {})", f[0], f[1], f[2]),
+                )
+            })
+        } else {
+            None
+        };
+    let Some((name, type_name, value)) = authored else { return };
+
+    // `base_color` only applies to StandardMaterial prims; wheel params resolve
+    // regardless (the guard is cheap and disjoint from the shader persister).
+    let Some(workspace) = workspace else { return };
+    let Some(doc) = workspace.0.active_document else { return };
+    let Some(host) = usd_registry.host(doc) else { return };
+    let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
+    let Some(target) = api_registry.resolve(&global_id) else { return };
+    if cmd.property == "base_color" && q_std_mat.get(target).is_err() {
+        return;
+    }
+    let Ok(prim) = q_prim.get(target) else { return };
+
+    let Ok(prim_sdf) = lunco_usd_bevy::SdfPath::new(&prim.path) else { return };
+    let owned = host.document().data().spec(&prim_sdf).is_some()
+        || host.document().runtime_data().spec(&prim_sdf).is_some();
+    if !owned {
+        return;
+    }
+
+    commands.trigger(ApplyUsdOp {
+        doc,
+        op: UsdOp::SetAttribute {
+            edit_target: LayerId::runtime(),
+            path: prim.path.clone(),
+            name,
+            type_name: type_name.to_string(),
+            value,
+        },
+    });
+}
+
+/// Persist a `SetEnvironmentLight` sun tweak into the active USD document's
+/// runtime overlay — the environment twin of [`persist_property_to_runtime_layer`].
+///
+/// [`lunco_environment::on_set_environment_light`] mutates the live
+/// `DirectionalLight` for immediate feedback but writes nothing back to USD, so a
+/// sun tweak is lost on reload. This decoupled observer authors the changed
+/// fields as `SetAttribute`s onto the sun's `DistantLight` prim in
+/// `LayerId::runtime()`, using the SAME attribute names the loader
+/// (`lunco_usd_bevy::light`) already reads back — so illuminance / colour /
+/// shadow-range knobs round-trip on reload and ride the Twin journal like every
+/// other USD edit. (Live peer-sync then follows the USD projection, exactly as
+/// the move / property persisters do — no bespoke light broadcast.)
+///
+/// Scope: the fields with an existing loader reader. Sun **direction** (needs a
+/// rotation-authoring op — there is no `SetRotate` yet) and the render-only knobs
+/// (exposure / bloom / earthshine / ambient — no `DistantLight` attribute reads
+/// them back yet) stay live-only for now.
+///
+/// Targets every non-earthshine `DistantLight` the active document owns
+/// (`SetEnvironmentLight` itself is global). Ownership-guarded like the other
+/// persisters; no-op when no USD doc is active (headless).
+pub fn persist_environment_light_to_runtime_layer(
+    trigger: On<lunco_environment::SetEnvironmentLight>,
+    usd_registry: Res<UsdDocumentRegistry>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    q_sun: Query<
+        (&UsdPrimPath, &Transform),
+        (
+            With<lunco_usd_bevy::UsdAuthoredLight>,
+            With<DirectionalLight>,
+            Without<lunco_environment::Earthshine>,
+        ),
+    >,
+    mut commands: Commands,
+) {
+    let cmd = trigger.event();
+    let Some(workspace) = workspace else { return };
+    let Some(doc) = workspace.0.active_document else { return };
+    let Some(host) = usd_registry.host(doc) else { return };
+
+    // Collect only the fields that HAVE a matching loader reader, so every attr
+    // authored here round-trips on reload (name, USD type, USD-literal value).
+    let mut attrs: Vec<(&str, &str, String)> = Vec::new();
+    if let Some(lux) = cmd.illuminance {
+        attrs.push(("inputs:intensity", "float", lux.to_string()));
+    }
+    if let Some([r, g, b]) = cmd.sun_color {
+        attrs.push(("inputs:color", "color3f", format!("({r}, {g}, {b})")));
+    }
+    if let Some(v) = cmd.shadow_max_distance {
+        attrs.push(("lunco:shadow:maxDistance", "float", v.to_string()));
+    }
+    if let Some(v) = cmd.shadow_first_cascade_bound {
+        attrs.push(("lunco:shadow:firstCascadeFarBound", "float", v.to_string()));
+    }
+    if let Some(v) = cmd.shadow_depth_bias {
+        attrs.push(("lunco:shadow:depthBias", "float", v.to_string()));
+    }
+    if let Some(v) = cmd.shadow_normal_bias {
+        attrs.push(("lunco:shadow:normalBias", "float", v.to_string()));
+    }
+    // Direction changes when yaw or pitch is specified.
+    let direction_changed = cmd.sun_yaw.is_some() || cmd.sun_pitch.is_some();
+    if attrs.is_empty() && !direction_changed {
+        return;
+    }
+
+    for (prim, tf) in &q_sun {
+        // Ownership guard: only author for suns the active document actually
+        // holds (base or runtime), so an engine-fallback sun never gets opinions.
+        let Ok(prim_sdf) = lunco_usd_bevy::SdfPath::new(&prim.path) else {
+            continue;
+        };
+        let owned = host.document().data().spec(&prim_sdf).is_some()
+            || host.document().runtime_data().spec(&prim_sdf).is_some();
+        if !owned {
+            continue;
+        }
+        for (name, type_name, value) in &attrs {
+            commands.trigger(ApplyUsdOp {
+                doc,
+                op: UsdOp::SetAttribute {
+                    edit_target: LayerId::runtime(),
+                    path: prim.path.clone(),
+                    name: (*name).to_string(),
+                    type_name: (*type_name).to_string(),
+                    value: value.clone(),
+                },
+            });
+        }
+        // Sun direction → `xformOp:rotateXYZ` via the new `SetRotate` op. Compute
+        // the SAME final orientation the live handler does — YXZ yaw/pitch, the
+        // unspecified axis kept from the current transform — then express it as
+        // Euler XYZ **degrees** for USD. (Reading `cur` from the transform is
+        // order-independent w.r.t. the live handler: a specified axis overrides
+        // `cur`; an unspecified one the live handler leaves unchanged, so `cur`
+        // is the same value either way.) Uses the runtime-overlay layer, exactly
+        // like `persist_move_to_runtime_layer` does for translate.
+        if direction_changed {
+            let (cur_yaw, cur_pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
+            let yaw = cmd.sun_yaw.unwrap_or(cur_yaw);
+            let pitch = cmd.sun_pitch.unwrap_or(cur_pitch);
+            let quat = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
+            let (rx, ry, rz) = quat.to_euler(EulerRot::XYZ);
+            commands.trigger(ApplyUsdOp {
+                doc,
+                op: UsdOp::SetRotate {
+                    edit_target: LayerId::runtime(),
+                    path: prim.path.clone(),
+                    value: [
+                        rx.to_degrees() as f64,
+                        ry.to_degrees() as f64,
+                        rz.to_degrees() as f64,
+                    ],
+                },
+            });
+        }
+    }
+
+    // Render knobs (exposure / bloom / ambient / earthshine) have no natural
+    // light-prim home — they apply to global/camera state — so per the schema
+    // decision they persist onto a dedicated `LuncoEnvironment` settings prim
+    // (a singleton under the default prim). A projector in `lunco-sandbox` reads
+    // them back on stage change and applies them, so the light loader stays pure.
+    let mut env_attrs: Vec<(&str, &str, String)> = Vec::new();
+    if let Some(v) = cmd.exposure_ev100 {
+        env_attrs.push(("lunco:env:exposureEv100", "float", v.to_string()));
+    }
+    if let Some(v) = cmd.bloom_intensity {
+        env_attrs.push(("lunco:env:bloomIntensity", "float", v.to_string()));
+    }
+    if let Some(v) = cmd.ambient_brightness {
+        env_attrs.push(("lunco:env:ambientBrightness", "float", v.to_string()));
+    }
+    if let Some(v) = cmd.earthshine_illuminance {
+        env_attrs.push(("lunco:env:earthshineIntensity", "float", v.to_string()));
+    }
+    if let Some([r, g, b]) = cmd.earthshine_color {
+        env_attrs.push((
+            "lunco:env:earthshineColor",
+            "color3f",
+            format!("({r}, {g}, {b})"),
+        ));
+    }
+    if !env_attrs.is_empty() {
+        let parent_path = lunco_usd_bevy::stage_default_prim(host.document().data())
+            .map(|p| format!("/{p}"))
+            .unwrap_or_else(|| "/".to_string());
+        let env_path = if parent_path == "/" {
+            "/Environment".to_string()
+        } else {
+            format!("{parent_path}/Environment")
+        };
+        // Ensure the settings prim exists, but only author `AddPrim` when it's
+        // actually absent (else every render tweak would journal a redundant
+        // AddPrim). Idempotent thereafter — SetAttribute overwrites in place.
+        let exists = lunco_usd_bevy::SdfPath::new(&env_path)
+            .ok()
+            .map(|sdf| {
+                host.document().data().spec(&sdf).is_some()
+                    || host.document().runtime_data().spec(&sdf).is_some()
+            })
+            .unwrap_or(false);
+        if !exists {
+            commands.trigger(ApplyUsdOp {
+                doc,
+                op: UsdOp::AddPrim {
+                    edit_target: LayerId::runtime(),
+                    parent_path,
+                    name: "Environment".to_string(),
+                    type_name: Some(lunco_environment::LUNCO_ENVIRONMENT_PRIM_TYPE.to_string()),
+                    reference: None,
+                },
+            });
+        }
+        for (name, type_name, value) in &env_attrs {
+            commands.trigger(ApplyUsdOp {
+                doc,
+                op: UsdOp::SetAttribute {
+                    edit_target: LayerId::runtime(),
+                    path: env_path.clone(),
+                    name: (*name).to_string(),
+                    type_name: (*type_name).to_string(),
+                    value: value.clone(),
+                },
+            });
+        }
+    }
 }
 
 /// Persist a runtime **spawn** into the active USD document's runtime layer
@@ -2351,14 +2714,25 @@ pub fn on_set_shader_source(
     trigger: On<SetShaderSource>,
     asset_server: Res<AssetServer>,
     mut shaders: ResMut<Assets<bevy::shader::Shader>>,
+    mut registry: ResMut<crate::shader_doc::ShaderRegistry>,
+    guard: Option<Res<lunco_core::session::SyncApplyGuard>>,
 ) {
     let ev = trigger.event();
     if ev.path.is_empty() || ev.source.is_empty() {
         warn!("SET_SHADER_SOURCE: empty path or source");
         return;
     }
-    // `load` returns the handle the materials are already using (the asset is
-    // loaded), so overwriting that asset id propagates to them.
+    // Record the edit into the Twin journal (`DomainKind::Shader`) via the shader
+    // document registry — so it SYNCS + PERSISTS like a rhai/Modelica edit, not
+    // just a local `Assets<Shader>` poke. Skip recording when this arrived from the
+    // wire (`SyncApplyGuard` set): the originating peer already journaled it, and
+    // the journal replay leg applies + hot-reloads it here — re-recording would
+    // duplicate the entry.
+    if guard.map_or(true, |g| g.0.is_none()) {
+        registry.apply_source(&ev.path, ev.source.clone());
+    }
+    // Hot-reload: `load` returns the handle every material already holds, so
+    // overwriting that asset id propagates the recompile to them.
     let handle = asset_server.load::<bevy::shader::Shader>(ev.path.clone());
     let shader = bevy::shader::Shader::from_wgsl(ev.source.clone(), ev.path.clone());
     shaders.insert(handle.id(), shader);
@@ -2834,6 +3208,8 @@ impl Plugin for SpawnCommandPlugin {
         app.register_type::<ReleaseActuator>();
         app.add_systems(Startup, register_release_backend);
         app.add_systems(Update, (attach_release_actuator, joint_release_system));
+        // Persist a Persistent DetachJoint into the active doc's runtime layer.
+        app.add_observer(persist_detach_to_runtime_layer);
         app.add_systems(
             Update,
             remove_legacy_ground_prim.run_if(obstacle_field_scene_changed),
@@ -2849,6 +3225,14 @@ impl Plugin for SpawnCommandPlugin {
         // overlay (non-destructive; Save stays base-only). Decoupled from the
         // live-mutation handler above, like the move/spawn persisters.
         app.add_observer(persist_property_to_runtime_layer);
+        // #15: persist wheel-dynamics tunes (suspension/drive → physxVehicle*) and
+        // PBR base_color (→ primvars:displayColor) — the classes the shader-param
+        // persister skips. Disjoint property sets, so both observers coexist.
+        app.add_observer(persist_wheel_and_pbr_to_runtime_layer);
+        // #14: persist a `SetEnvironmentLight` sun tweak (illuminance / colour /
+        // shadow range) as `SetAttribute`s on the sun's DistantLight prim, using
+        // the names the loader already reads back — so it round-trips + journals.
+        app.add_observer(persist_environment_light_to_runtime_layer);
         app.add_observer(on_focus_entity_by_id);
         // NOTE: `SelectEntity`/`on_select_entity` are editor-only (they drive the
         // Inspector highlight + gizmo) and live in the `ui`-gated `selection`

@@ -300,6 +300,13 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
     // `drive_scenario_manifest`) + in-flight off-thread read jobs.
     app.init_resource::<crate::scenario_sync::HostAssetPaths>();
     app.init_resource::<crate::scenario_sync::AssetServeTasks>();
+    // Bidirectional ingest: queue of client-offered imported assets.
+    app.init_resource::<crate::scenario_sync::PendingAssetOffers>();
+    // Presence: client-side queue of host-sent experiment run-status updates
+    // (required by `InboundClientCtx`, so init'd for both roles here).
+    app.init_resource::<crate::sync::PendingRunStatus>();
+    // Public rebuild seam (mid-session content → manifest rebuild).
+    app.init_resource::<crate::sync::RequestManifestRebuild>();
     app.add_systems(Startup, spawn_initial_scenario_manifest);
 
     app.add_observer(on_server_connected);
@@ -329,6 +336,14 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
             // jobs. Doesn't touch the lightyear sender, so it runs parallel; must
             // follow the drain that fills `PendingAssetRequests`.
             crate::scenario_sync::serve_asset_requests.after(crate::sync::drain_sync_inbox),
+            // Bidirectional ingest: write client-offered imported assets into the
+            // twin + rebuild the manifest. Follows the drain that fills the queue.
+            ingest_asset_offers.after(crate::sync::drain_sync_inbox),
+            // Public rebuild seam: any subsystem that wrote new twin content (e.g.
+            // a finished experiment result) sets `RequestManifestRebuild`; this
+            // services it so already-connected peers pull the bytes now. Ordered
+            // before the drive/broadcast pair so the build kicks off same frame.
+            service_manifest_rebuild_request.before(drive_scenario_manifest),
             // `assemble_and_send_snapshots` shares `ServerMultiMessageSender` with
             // `host_send_outbox`, so chain (not parallel) to avoid the param conflict;
             // it edge-detects `ReplicationState.generation` to fire once per gather.
@@ -456,7 +471,6 @@ fn on_server_connected(
     profiles: Res<SessionProfiles>,
     scenario: Option<Res<ScenarioManifestResource>>,
     journal: Option<Res<JournalResource>>,
-    scripted_policies: Res<crate::scripted_policy::ScriptedPolicyRegistry>,
     server: Single<&Server>,
     tick: Res<SimTick>,
     mut sender: ServerMultiMessageSender,
@@ -554,21 +568,9 @@ fn on_server_connected(
             );
         }
     }
-    // Scripted-policy plane: send the active policy set so the late joiner runs the
-    // identical merge / authorization / drive-kernel policies (determinism). The
-    // periodic `broadcast_scripted_policies` only fires on change, so a joiner that
-    // connects after the last change needs this connect-time push.
-    if !scripted_policies.policies.is_empty() {
-        server_send(
-            &mut sender,
-            server,
-            &target,
-            SyncChannel::BulkData,
-            &SyncEnvelope::ScriptedPolicy(crate::scripted_policy::ScriptedPolicyMsg {
-                policies: scripted_policies.policies.clone(),
-            }),
-        );
-    }
+    // Policies need no connect-time push: a `LuncoPolicy` prim is a USD doc op, so
+    // it arrives in the full journal replay above and each peer's projector
+    // activates it — determinism by identical composition, not by broadcast.
     info!("[net] client connected: peer={peer:?} session={}", session.0);
 }
 
@@ -1008,6 +1010,86 @@ fn on_twin_added_host(
         info!("[net] Twin added; building scenario manifest for {:?}", twin.root);
         spawn_manifest_build(twin, journal_head(&journal), &mut pending);
     }
+}
+
+/// Host (bidirectional ingest): write each client-**offered** imported asset into
+/// the shared twin (CID-verified, traversal-safe path), then rebuild the manifest —
+/// which re-advertises so every peer fetches the new bytes. This is what makes "a
+/// client imports something → it distributes": the host stays the content hub, but
+/// any peer may now contribute. No-op off-host / when idle.
+///
+/// TODO(bidirectional-content): a host-side fs-watcher (or an explicit "asset
+/// imported locally" trigger) so the host's OWN imports re-advertise too — today a
+/// rebuild only fires on `TwinAdded`, startup, or (now) a client offer.
+fn ingest_asset_offers(
+    role: Res<lunco_core::NetworkRole>,
+    mut offers: ResMut<crate::scenario_sync::PendingAssetOffers>,
+    workspace: Option<Res<WorkspaceResource>>,
+    journal: Option<Res<JournalResource>>,
+    mut pending: ResMut<PendingScenarioManifest>,
+) {
+    if !role.is_host() || offers.0.is_empty() {
+        return;
+    }
+    let batch = std::mem::take(&mut offers.0);
+    let Some(twin) = workspace
+        .as_ref()
+        .and_then(|w| w.active_twin.and_then(|a| w.twin(a)))
+    else {
+        return; // no active twin to ingest into; drop the batch
+    };
+    let mut wrote = false;
+    for offer in batch {
+        // Fail-closed: the bytes must hash to the advertised CID (never trust a
+        // wire-supplied path/bytes pairing).
+        if crate::scenario::cid_for_content(&offer.data).to_bytes() != offer.cid {
+            warn!("[net] rejected asset offer: bytes don't match CID ({})", offer.path);
+            continue;
+        }
+        let Some(rel) = crate::scenario_sync::safe_rel_path(&offer.path) else {
+            continue; // traversal-guarded; safe_rel_path logs the rejection
+        };
+        let dest = twin.root.join(rel);
+        // No explicit mkdir — the storage layer (`write_file_sync` → FileStorage)
+        // creates parent dirs itself, so all I/O stays behind the storage seam.
+        match lunco_storage::write_file_sync(&dest, &offer.data) {
+            Ok(()) => {
+                info!("[net] ingested imported asset {dest:?} ({} bytes)", offer.data.len());
+                wrote = true;
+            }
+            Err(e) => warn!("[net] asset offer write {dest:?} failed: {e}"),
+        }
+    }
+    // Rebuild + re-advertise once for the batch — the manifest revision bump drives
+    // the existing broadcast, so the import reaches every peer.
+    if wrote {
+        spawn_manifest_build(twin, journal_head(&journal), &mut pending);
+    }
+}
+
+/// Service the public [`RequestManifestRebuild`](crate::sync::RequestManifestRebuild)
+/// seam: when a subsystem wrote new twin content mid-session (e.g. the assembly
+/// crate's finished-experiment-result writer) and flipped the flag, kick off an
+/// off-thread manifest rebuild so already-connected peers pull the new bytes now.
+/// One-shot (resets the flag). Host-only; no-op when idle.
+fn service_manifest_rebuild_request(
+    role: Res<lunco_core::NetworkRole>,
+    mut req: ResMut<crate::sync::RequestManifestRebuild>,
+    workspace: Option<Res<WorkspaceResource>>,
+    journal: Option<Res<JournalResource>>,
+    mut pending: ResMut<PendingScenarioManifest>,
+) {
+    if !role.is_host() || !req.0 {
+        return;
+    }
+    req.0 = false;
+    let Some(twin) = workspace
+        .as_ref()
+        .and_then(|w| w.active_twin.and_then(|a| w.twin(a)))
+    else {
+        return;
+    };
+    spawn_manifest_build(twin, journal_head(&journal), &mut pending);
 }
 
 /// Host (Phase 3): poll finished off-thread read jobs and stream their chunks to

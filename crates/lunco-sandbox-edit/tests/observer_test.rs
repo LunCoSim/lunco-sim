@@ -47,6 +47,7 @@ fn test_detach_joint_command() {
 
     app.world_mut().trigger(lunco_sandbox_edit::commands::DetachJoint {
         target: joint_entity,
+        intent: lunco_core::EditIntent::Interactive,
     });
 
     // Flush commands to execute the observer

@@ -19,8 +19,11 @@ use lunco_doc::DocumentOrigin;
 fn test_apply_usd_op_integration() {
     let mut app = App::new();
 
-    // 1. Core Bevy plugins and asset registries
+    // 1. Core Bevy plugins and asset registries. The viewport now mounts through
+    // the `twin://` source, so register the lunco asset sources (which insert
+    // `TwinRoots`) BEFORE `AssetPlugin` snapshots them.
     app.add_plugins(MinimalPlugins);
+    lunco_assets::register_lunco_asset_sources(&mut app);
     app.add_plugins(AssetPlugin::default());
 
     app.init_asset::<UsdStageAsset>();
@@ -173,6 +176,46 @@ def Xform "World"
     assert!((mat2.base_color.to_linear().to_vec4()[1] - 0.0).abs() < 1e-4);
     assert!((mat2.base_color.to_linear().to_vec4()[2] - 1.0).abs() < 1e-4);
     assert!((mat2.perceptual_roughness - 0.1).abs() < 1e-4);
+
+    // 7b. Exercise the coarse full-reload path explicitly: a whole-source
+    // `ReplaceSource` (the genuine whole-layer revert, and still the inverse for a
+    // newly-authored attribute). This must rebuild the live stage from the
+    // (reverted) composed source and re-instantiate, so the material reverts in the
+    // live world too — the regression guard for the full-reload attribute path.
+    // (Overwrites of an *existing* attribute now invert to a typed `SetAttribute`
+    // instead — see `document::set_attribute_overwrite_inverts_to_typed_op`.)
+    app.world_mut().trigger(ApplyUsdOp {
+        doc: doc_id,
+        op: UsdOp::ReplaceSource {
+            edit_target: LayerId::root(),
+            text: usda_content.to_string(),
+        },
+    });
+    // Rebuild + re-instantiate takes a couple of frames (doc mutation → stage
+    // rebuild → refresh_scene_visuals → observer re-instantiates the subtree).
+    for _ in 0..6 {
+        app.update();
+    }
+
+    let mut reverted_entity = None;
+    let mut q3 = app.world_mut().query::<(Entity, &Name, &UsdPrimPath)>();
+    for (ent, name, _) in q3.iter(app.world()) {
+        if name.as_str().contains("MeshWithMaterial") {
+            reverted_entity = Some(ent);
+        }
+    }
+    let reverted_entity = reverted_entity.expect("MeshWithMaterial must survive the ReplaceSource rebuild");
+    let material_h3 = app.world().get::<MeshMaterial3d<StandardMaterial>>(reverted_entity)
+        .expect("Entity should have a StandardMaterial after the full-reload rebuild");
+    let materials3 = app.world().resource::<Assets<StandardMaterial>>();
+    let mat3 = materials3.get(&material_h3.0).expect("Material should be in assets");
+    // Back to the original diffuse (1.0, 0.5, 0.25) + roughness 0.75.
+    assert!((mat3.base_color.to_linear().to_vec4()[0] - 1.0).abs() < 1e-4,
+        "material red must revert after full-reload, got {:?}", mat3.base_color.to_linear().to_vec4());
+    assert!((mat3.base_color.to_linear().to_vec4()[1] - 0.5).abs() < 1e-4);
+    assert!((mat3.base_color.to_linear().to_vec4()[2] - 0.25).abs() < 1e-4);
+    assert!((mat3.perceptual_roughness - 0.75).abs() < 1e-4,
+        "roughness must revert to 0.75 after full-reload, got {}", mat3.perceptual_roughness);
 
     // 8. Confirm viewport state has been updated
     let state = app.world().resource::<UsdViewportState>();

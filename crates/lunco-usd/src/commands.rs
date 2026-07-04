@@ -110,38 +110,29 @@ impl Plugin for UsdCommandsPlugin {
         // `<twin>/.lunco/runtime/<scene>.usda`, parallel to the journal.
         app.add_observer(crate::runtime_persistence::on_doc_opened_load_runtime);
         app.add_observer(crate::runtime_persistence::on_doc_changed_save_runtime);
-        // E1: project doc-backed scenes into the live world from their composed
-        // (base ⊕ runtime) stage, and keep them synced to later runtime edits.
-        app.init_resource::<crate::live_projection::PendingLiveImports>();
-        app.add_systems(
-            Update,
-            (
-                crate::live_projection::project_pending_live_imports,
-                crate::live_projection::refresh_live_doc_scenes,
-            )
-                .chain(),
-        );
         // E1b: make the default twin scene doc-backed by serving its composed
         // source as a `twin://` byte-overlay (web-ready via the async loader).
         app.init_resource::<crate::twin_projection::PendingTwinDocs>();
         app.init_resource::<crate::twin_projection::DocBackedTwinScenes>();
-        // E2-2/E2-3: deferred structural reconcile for twin scenes — the async
-        // reload refreshes the `twin://`-resolved reader, then these apply the
-        // incremental spawn/despawn (or coarse rebuild) against it.
-        app.init_resource::<crate::twin_projection::PendingTwinReconciles>();
-        app.init_resource::<crate::twin_projection::ReloadedTwinAssets>();
-        // Gated on the asset pipeline: these need `AssetServer` (reload) and the
-        // `Assets<UsdSourceText>` store (UsdBevyPlugin's `init_asset`). Both are
-        // absent in headless `MinimalPlugins` test apps — and a partial setup can
-        // have one without the other — so require both.
+        // Referenced spawns whose asset closure is still loading (fetched once,
+        // then authored onto the live stage — no whole-scene reload).
+        app.init_resource::<crate::twin_projection::PendingRefSpawns>();
+        // Gated on the asset pipeline: these need `AssetServer` (to fetch a
+        // referenced asset's closure) and the `Assets<UsdSourceText>` store
+        // (UsdBevyPlugin's `init_asset`). Both are absent in headless
+        // `MinimalPlugins` test apps — and a partial setup can have one without
+        // the other — so require both. Chained before `project_stage_changes`
+        // (below) so a spawn authored this frame projects the same frame.
         app.add_systems(
             Update,
             (
                 crate::twin_projection::drain_pending_twin_docs,
+                // Author doc deltas (translate / spawn / remove) onto the live
+                // stage; queue referenced spawns needing a closure fetch.
                 crate::twin_projection::sync_twin_overlays,
-                // Buffer reloaded assets, then drain matured reconciles after.
-                crate::twin_projection::collect_reloaded_twin_assets,
-                crate::twin_projection::drain_twin_reconciles,
+                // Complete referenced spawns whose closure has now loaded.
+                crate::twin_projection::drain_ref_spawns,
+                crate::live_consume::project_stage_changes,
             )
                 .chain()
                 .run_if(resource_exists::<AssetServer>)
@@ -309,16 +300,21 @@ fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
         });
         return;
     }
-    // E1: real file paths DO get a document (allocated asynchronously by
-    // `on_open_file_for_usd` → `drain_pending_usd_file_loads`). Defer the
-    // live-world mount to `live_projection`, which sources the scene root from
-    // that document's *composed* (base ⊕ runtime) stage once it exists — so
-    // persisted runtime spawns/moves show in the world, not just the file.
+    // Real file paths DO get a document (allocated asynchronously by
+    // `on_open_file_for_usd` → `drain_pending_usd_file_loads`) for editing.
+    // Mount the scene into the live world through the storage-based async loader
+    // (`spawn_scene_root_world` → `UsdLoader` → `StageRecipe` → `CanonicalStage`)
+    // — the same web-ready path `mem://` / `bundled://` take, so every scene
+    // reads the live composed stage. Doc-overlay projection of runtime edits to
+    // an opened file (the deleted `live_projection`'s job) is folded into the
+    // `twin://` overlay path.
+    //
+    // Only mount when the asset pipeline is present: a headless doc-only context
+    // (API / MCP open, or the open-file unit test) has no `AssetServer`, and the
+    // document still opens through the async read path above.
     commands.queue(move |world: &mut World| {
-        if let Some(mut pending) =
-            world.get_resource_mut::<crate::live_projection::PendingLiveImports>()
-        {
-            pending.push(path);
+        if world.contains_resource::<bevy::asset::AssetServer>() {
+            lunco_usd_sim::cosim::spawn_scene_root_world(world, &path, "");
         }
     });
 }

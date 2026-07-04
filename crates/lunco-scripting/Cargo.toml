@@ -10,6 +10,10 @@ lunco-doc = { path = "../lunco-doc" }
 # used by Modelica + scripting). `default-features = false` drops its egui `ui`
 # feature so headless / wasm scripting builds don't pull bevy_egui→winit.
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+# `ScriptOp` implements `OpPayload` (DomainKind::Script) so live script edits
+# auto-record into the canonical Twin journal — same "sync by default" bridge
+# Modelica/USD use. `attach_journal_recorder` (in lunco-doc-bevy) needs the trait.
+lunco-twin-journal = { path = "../lunco-twin-journal" }
 # Script execution is exposed as typed `#[Command]`s (RunPython/RunLua) via
 # the macros + `Ack`/`OpId`/`CommandResults` substrate in lunco-core. The API
 # discovers them by reflection (AppTypeRegistry) — no direct lunco-api dep.

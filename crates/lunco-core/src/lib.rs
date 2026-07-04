@@ -56,8 +56,8 @@ pub use mocks::*;
 pub use telemetry::*;
 pub use log::*;
 pub use commands::{
-    Ack, ActiveCommandId, CommandOutcome, CommandResults, Mutation, OpId, Reject, SessionId,
-    SyncChannel,
+    Ack, ActiveCommandId, CommandOutcome, CommandResults, EditIntent, Mutation, OpId, Reject,
+    SessionId, SyncChannel,
 };
 pub use markers::{
     ActuatorDrivenJoint, EmbeddedScenarioPath, EmbeddedScenarioSource, FallbackSceneLight,

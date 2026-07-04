@@ -115,7 +115,7 @@ pub mod content {
 
     /// Re-exported so consumers address content without depending on the `cid`
     /// crate directly.
-    pub use cid::Cid;
+    pub use cid::{Cid, Version};
 
     /// IPLD codec for a raw byte block (`--raw-leaves` single-block identity).
     pub const RAW_CODEC: u64 = 0x55;

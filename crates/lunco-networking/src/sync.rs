@@ -237,14 +237,16 @@ pub struct InboundClientCtx<'w> {
     // `pending_asset_requests` (client arm is a no-op).
     incoming_chunks: ResMut<'w, crate::scenario_sync::IncomingAssetChunks>,
     pending_asset_requests: ResMut<'w, crate::scenario_sync::PendingAssetRequests>,
+    // Host fills this from clients' `AssetOffer`s (imported assets to redistribute);
+    // client arm is a no-op.
+    pending_asset_offers: ResMut<'w, crate::scenario_sync::PendingAssetOffers>,
+    // Client fills this from the host's `RunStatus` presence updates; host arm is
+    // a no-op (it's the authoritative source).
+    pending_run_status: ResMut<'w, PendingRunStatus>,
     // Canonical Twin journal — a client applies host-sent entries here via
     // `append_remote` (merge). `Option` so the drain still runs in a build with
     // no journal (e.g. a minimal networking-only test); host arm is a no-op.
     journal: Option<Res<'w, JournalResource>>,
-    // Scripted-policy plane: a client registers+activates host-sent policies here
-    // and mirrors them into the registry. Bundled for the same 16-arg-limit reason;
-    // host arm is a no-op (host is the source of truth).
-    scripted_policies: ResMut<'w, crate::scripted_policy::ScriptedPolicyRegistry>,
 }
 
 /// Host → clients: the authoritative who-owns-what map (`gid → session`).
@@ -404,6 +406,41 @@ pub struct SharePerspectiveMsg {
     pub avatar_state: Option<([f32; 3], [f32; 4], [i64; 3], Option<i32>)>,
 }
 
+/// Host → clients presence: an experiment run's status advanced (Queued →
+/// Running → Done/Failed). **Ephemeral** — rides the presence plane (LWW), NOT
+/// the journal (that carries the experiment *definition*) nor the content plane
+/// (that carries the *result* trajectory). Primitive-encoded so `lunco-networking`
+/// needs no `lunco-experiments` dep; the assembly crate maps it to/from
+/// `RunStatus`. `experiment_id` is the 16 UUID bytes.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RunStatusMsg {
+    pub experiment_id: [u8; 16],
+    /// 0=Pending 1=Queued 2=Running 3=Done 4=Failed 5=Cancelled.
+    pub phase: u8,
+    /// Current sim time (valid for `Running`).
+    pub t_current: f64,
+    /// Wall-clock ms (valid for `Done`).
+    pub wall_time_ms: u64,
+    /// Error message (for `Failed`; empty otherwise).
+    pub error: String,
+}
+
+/// Client-side queue of host-sent run-status updates, drained by the assembly
+/// crate into the local `ExperimentRegistry`. Host arm is a no-op (it's the
+/// authoritative source). Mirrors the other `Pending*` inbox resources.
+#[derive(Resource, Default)]
+pub struct PendingRunStatus(pub Vec<RunStatusMsg>);
+
+/// Set by any subsystem that just wrote new content into the shared twin (e.g. a
+/// finished experiment result) to ask the host to rebuild + re-advertise the
+/// scenario manifest **now**, so already-connected peers pull the new bytes this
+/// tick instead of waiting for the next connect / twin event. Host-only consumer
+/// (`service_manifest_rebuild_request`); a one-shot flag (reset on service).
+/// The public seam that lets the assembly crate trigger a rebuild without
+/// reaching into the private `server` module (`spawn_manifest_build` is internal).
+#[derive(Resource, Default)]
+pub struct RequestManifestRebuild(pub bool);
+
 /// Persisted user tutorial preferences.
 /// Live tutor/student session state. Although registered as a `SettingsSection`
 /// for resource wiring, ALL fields are transient session state — they must NOT
@@ -517,10 +554,12 @@ pub enum SyncEnvelope {
     // never sends/handles it; prior discriminants stay put. Type owned by the
     // `journal_plane` module (the plane owns its wire shape).
     JournalEntry(crate::journal_plane::JournalEntryMsg),
-    // Host → client: the active scripted-policy set (scripted-policy plane).
-    // Appended LAST (positional-codec rule): a stale peer that predates it never
-    // sends/handles it; prior discriminants stay put.
-    ScriptedPolicy(crate::scripted_policy::ScriptedPolicyMsg),
+    // Peer → host: an imported asset offered for redistribution (bidirectional
+    // content ingest). Appended LAST (positional-codec rule).
+    AssetOffer(crate::scenario::AssetOfferMsg),
+    // Host → client: ephemeral experiment run-status (presence plane). Appended
+    // LAST (positional-codec rule) — a stale peer never sends/handles it.
+    RunStatus(RunStatusMsg),
 }
 
 // ── Resources (the contract `lunco-networking` touches) ───────────────────────
@@ -1347,6 +1386,14 @@ pub fn drain_sync_inbox(
             SyncEnvelope::AssetHave(_) => {
                 // Phase 3+: host skips streaming an asset the peer already has.
             }
+            SyncEnvelope::AssetOffer(offer) => {
+                // Bidirectional ingest: a client imported an asset into the shared
+                // twin. Only the host ingests — it writes the (CID-verified) bytes
+                // and rebuilds/re-advertises the manifest so every peer fetches it.
+                if role.is_host() && !offer.data.is_empty() {
+                    ctx.pending_asset_offers.0.push(offer);
+                }
+            }
             SyncEnvelope::JournalEntry(msg) => {
                 // Route to the journal plane (bidirectional). BOTH roles merge
                 // the inbound entry via `append_remote`: a client mirrors the
@@ -1374,17 +1421,12 @@ pub fn drain_sync_inbox(
                     crate::journal_plane::apply_inbound_entry(journal, &msg);
                 }
             }
-            SyncEnvelope::ScriptedPolicy(msg) => {
-                // Scripted-policy plane: only a CLIENT applies the host's
-                // authoritative policy set (compile+register each hook, mirror the
-                // set locally). The host is the source — it never applies its own
-                // broadcast (and would only ever receive one from itself).
+            SyncEnvelope::RunStatus(msg) => {
+                // Presence: the host's experiment run advanced. Only a client
+                // consumes (the host is the authoritative source); the assembly
+                // crate drains `PendingRunStatus` into its ExperimentRegistry.
                 if !role.is_host() {
-                    crate::scripted_policy::apply_inbound_policies(
-                        &msg,
-                        &mut ctx.scripted_policies,
-                        ctx.journal.as_deref(),
-                    );
+                    ctx.pending_run_status.0.push(msg);
                 }
             }
         }
@@ -2628,39 +2670,14 @@ lunco_core::register_commands!(
     on_set_follow_opt_in,
 );
 
-/// Host: when ObstacleFieldSpec is updated, broadcast UpdateObstacleFieldSpec command to all clients.
-pub fn sync_obstacle_field_spec(
-    role: Res<NetworkRole>,
-    spec: Option<Res<lunco_obstacle_field::ObstacleFieldSpec>>,
-    mut outbox: ResMut<SyncOutbox>,
-    type_registry: Res<AppTypeRegistry>,
-    local: Res<LocalSession>,
-) {
-    if !role.is_host() {
-        return;
-    }
-    let Some(spec) = spec else {
-        return;
-    };
-    if spec.is_changed() {
-        let cmd = lunco_obstacle_field::plugin::UpdateObstacleFieldSpec {
-            spec: spec.clone(),
-        };
-        let type_name = "UpdateObstacleFieldSpec".to_string();
-        let type_reg = type_registry.read();
-        if type_reg.get_with_short_type_path(&type_name).is_some() {
-            let serializer = TypedReflectSerializer::new(&cmd, &type_reg);
-            if let Ok(data_val) = serde_json::to_value(&serializer) {
-                if let Ok(data) = serde_json::to_string(&data_val) {
-                    let mut mutation = Mutation::local(SyncCommand { type_name, data });
-                    mutation.origin = local.0;
-                    outbox.0.push((SyncChannel::CommandBus, SyncEnvelope::Command(mutation)));
-                    info!("[net] Broadcast ObstacleFieldSpec update to clients.");
-                }
-            }
-        }
-    }
-}
+// NOTE: the obstacle-field spec no longer rides a bespoke host→client command
+// broadcast. It is journaled as a `DomainKind::ObstacleField` op at its command
+// chokepoint (`lunco_obstacle_field::journal`) and rides the domain-generic
+// journal plane like every other domain — so a tweak now syncs BOTH directions
+// (any peer can tune), persists across a restart, and joins the canonical twin
+// history. The sandbox `replay_scenario_journal_obstacle` leg installs a peer's
+// spec + regenerates. (Was `sync_obstacle_field_spec`; removed per the
+// "each datum one plane / kill bespoke broadcast" taxonomy.)
 
 impl Plugin for SyncPlugin {
     fn build(&self, app: &mut App) {
@@ -2735,7 +2752,6 @@ impl Plugin for SyncPlugin {
                 apply_tutorial_mirroring,
                 update_tutor_lifecycle,
                 block_action_states,
-                sync_obstacle_field_spec,
                 // B4 Phase 1: compute per-peer AOI interest sets (host-only, throttled
                 // to `interest_hz`). The server-side `assemble_and_send_snapshots`
                 // routes pose updates by these sets.
@@ -2749,10 +2765,9 @@ impl Plugin for SyncPlugin {
                 crate::scenario_sync::drain_persist_results,
                 // Journal plane: both roles stream new journal entries — the
                 // host relays all (fan-out hub), clients send their own edits.
+                // Policies ride this too — a `LuncoPolicy` prim is a USD doc op —
+                // so there is no separate policy broadcast.
                 crate::journal_plane::broadcast_journal_entries,
-                // Scripted-policy plane: host broadcasts the active policy set when
-                // it changes so every client converges on the identical policies.
-                crate::scripted_policy::broadcast_scripted_policies,
             ))
             // `gather_snapshot` runs on the sim clock (`FixedPostUpdate`): it only
             // writes our `SyncOutbox` (never calls lightyear), so it's safe off the
@@ -2782,8 +2797,9 @@ impl Plugin for SyncPlugin {
         // Scenario-distribution commands (PromoteScenario) — its own
         // `register_commands!` set in the `scenario_sync` module.
         crate::scenario_sync::register_all_commands(app);
-        // Scripted-policy activation command (SetScriptedPolicy).
-        crate::scripted_policy::register_all_commands(app);
+        // Policies are authored as `LuncoPolicy` USD prims (ordinary `ApplyUsdOp`
+        // doc ops) and activated by the projector in the assembly crate — no
+        // imperative policy command to register here.
     }
 }
 

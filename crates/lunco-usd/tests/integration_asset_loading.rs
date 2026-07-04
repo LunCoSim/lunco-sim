@@ -41,18 +41,39 @@ use lunco_usd_bevy::usd_data::UsdDataExt;
 use openusd::sdf::{AbstractData, Path as SdfPath};
 use avian3d::prelude::*;
 use big_space::prelude::CellCoord;
-use std::sync::Arc;
 use std::path::Path;
 
 // ============================================================
 // Helper: compose asset using EXACT same logic as runtime loader
 // ============================================================
 
-fn compose_asset_from_file(file_path: &Path) -> UsdData {
+fn compose_stage_from_file(file_path: &Path) -> openusd::usd::Stage {
     // Real openusd PCP composition from disk (`Stage::open` + `DefaultResolver`),
-    // resolving relative references anchored at the file's own directory.
-    compose_file(file_path)
+    // resolving relative references anchored at the file's own directory. Read it
+    // through the live `StageView` (the production read path) — not a flatten.
+    compose_file_to_stage(file_path)
         .unwrap_or_else(|e| panic!("Composition failed for {}: {e}", file_path.display()))
+}
+
+/// Compose a `.usda` (with its external references) into a live canonical stage
+/// and publish it into `CanonicalStages` keyed by a fresh `UsdStageAsset` handle
+/// — the recipe path for file-with-refs scenes. `StageRecipe::from_source` only
+/// resolves a single in-memory layer, so these ref-carrying scene/rover files
+/// compose the full closure via `compose_file_to_stage` and insert the wrapped
+/// stage directly (the door the live-doc projection uses).
+fn add_canonical_from_file(app: &mut App, file_path: &Path) -> Handle<UsdStageAsset> {
+    let handle = {
+        let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
+        stages.add(UsdStageAsset { recipe: None })
+    };
+    let stage = compose_file_to_stage(file_path)
+        .unwrap_or_else(|e| panic!("Composition failed for {}: {e}", file_path.display()));
+    let cstage = CanonicalStage::from_stage(stage, file_path.display().to_string());
+    app.world_mut()
+        .get_non_send_resource_mut::<CanonicalStages>()
+        .expect("CanonicalStages resource (UsdBevyPlugin)")
+        .insert(handle.id(), cstage);
+    handle
 }
 
 // ============================================================
@@ -67,14 +88,15 @@ fn test_sandbox_rover_files_compose() {
     ];
     for f in &files {
         let p = Path::new("../../assets/").join(f);
-        let reader = compose_asset_from_file(&p);
+        let stage = compose_stage_from_file(&p);
+        let view = StageView::new(&stage);
         // Verify the composed reader has rover + 4 wheels
         let rover_name = if f.contains("ackermann") { "AckermannRover" } else { "SkidRover" };
-        assert!(reader.has_spec(&SdfPath::new(&format!("/{}", rover_name)).unwrap()),
+        assert!(view.has_prim(&SdfPath::new(&format!("/{}", rover_name)).unwrap()),
             "{f}: /{} must exist after composition", rover_name);
         for w in &["Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"] {
             let wp = SdfPath::new(&format!("/{}/{}", rover_name, w)).unwrap();
-            assert!(reader.has_spec(&wp),
+            assert!(view.has_prim(&wp),
                 "{f}: /{}/{} must exist after composition (wheel reference broken?)", rover_name, w);
         }
     }
@@ -87,21 +109,22 @@ fn test_sandbox_rover_files_compose() {
 #[test]
 fn test_sandbox_scene_composes() {
     let p = Path::new("../../assets/scenes/sandbox/sandbox_scene.usda");
-    let reader = compose_asset_from_file(p);
+    let stage = compose_stage_from_file(p);
+    let view = StageView::new(&stage);
 
     // Ground
     let ground = SdfPath::new("/SandboxScene/Ground").unwrap();
-    assert!(reader.has_spec(&ground), "Ground must exist");
+    assert!(view.has_prim(&ground), "Ground must exist");
     // Ground/Ramp dimensions are authored as unit `size` + `xformOp:scale`.
-    let g: [f64; 3] = reader.prim_attribute_value(&ground, "xformOp:scale").expect("Ground scale");
+    let g: [f64; 3] = view.value_vec3(&ground, "xformOp:scale").expect("Ground scale");
     assert!((g[0] - 4000.0).abs() < 1.0, "Ground width ~4000, got {}", g[0]);
     assert!((g[1] - 0.2).abs() < 0.05, "Ground height ~0.2, got {}", g[1]);
     assert!((g[2] - 4000.0).abs() < 1.0, "Ground depth ~4000, got {}", g[2]);
 
     // Ramp
     let ramp = SdfPath::new("/SandboxScene/Ramp").unwrap();
-    assert!(reader.has_spec(&ramp), "Ramp must exist");
-    let r: [f64; 3] = reader.prim_attribute_value(&ramp, "xformOp:scale").expect("Ramp scale");
+    assert!(view.has_prim(&ramp), "Ramp must exist");
+    let r: [f64; 3] = view.value_vec3(&ramp, "xformOp:scale").expect("Ramp scale");
     assert!((r[0] - 60.0).abs() < 1.0, "Ramp width ~60, got {}", r[0]);
     assert!((r[1] - 2.0).abs() < 0.05, "Ramp height ~2, got {}", r[1]);
     assert!((r[2] - 80.0).abs() < 1.0, "Ramp depth ~80, got {}", r[2]);
@@ -112,7 +135,6 @@ fn test_sandbox_scene_composes() {
 // ============================================================
 
 fn load_rover_through_bevy(file_path: &Path, prim_path: &str) -> App {
-    let composed = compose_asset_from_file(file_path);
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(AssetPlugin::default());
@@ -122,10 +144,13 @@ fn load_rover_through_bevy(file_path: &Path, prim_path: &str) -> App {
     app.init_asset::<Image>();
     app.init_asset::<ShaderMaterial>();
         app.init_asset::<bevy::shader::Shader>();
+    // No GPU here, so a wheel's render-only `ShaderMaterial` never arrives —
+    // mark headless so sim builds wheel physics without waiting (the `--no-ui`
+    // server stand-in). Without it wheels deadlock within the few no-time frames.
+    app.insert_resource(NoRenderVisuals);
     app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
 
-    let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-    let handle = stages.add(UsdStageAsset { reader: Arc::new(composed) });
+    let handle = add_canonical_from_file(&mut app, file_path);
 
     app.world_mut().spawn((
         Name::new("TestRover"),
@@ -301,15 +326,16 @@ fn test_wheel_mesh_dimensions_after_composition() {
         let p = Path::new("../../assets/").join(f);
         let label = f;
 
-        let composed = compose_file(&p).unwrap_or_else(|e| panic!("{label} composition failed: {e}"));
+        let stage = compose_stage_from_file(&p);
+        let view = StageView::new(&stage);
 
         for w_name in &["Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"] {
             let wp = SdfPath::new(&format!("/{}/{}", rover_name, w_name)).unwrap();
-            assert!(composed.has_spec(&wp), "{label}: {w_name} must exist after composition");
+            assert!(view.has_prim(&wp), "{label}: {w_name} must exist after composition");
 
-            let radius: f64 = composed.prim_attribute_value(&wp, "radius")
+            let radius: f64 = view.value(&wp, "radius")
                 .unwrap_or_else(|| panic!("{label}: {w_name} missing 'radius' after composition"));
-            let height: f64 = composed.prim_attribute_value(&wp, "height")
+            let height: f64 = view.value(&wp, "height")
                 .unwrap_or_else(|| panic!("{label}: {w_name} missing 'height' after composition"));
 
             // Rover override: radius=0.4, height=0.3
@@ -339,8 +365,6 @@ fn test_rover_sim_processing_after_async_load() {
         let p = Path::new("../../assets/").join(f);
         let label = f;
 
-        let composed = compose_file(&p).unwrap_or_else(|e| panic!("{label} composition failed: {e}"));
-
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(AssetPlugin::default());
@@ -350,11 +374,14 @@ fn test_rover_sim_processing_after_async_load() {
         app.init_asset::<Image>();
         app.init_asset::<ShaderMaterial>();
         app.init_asset::<bevy::shader::Shader>();
-        app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
+        // No GPU here, so a wheel's render-only `ShaderMaterial` never arrives —
+    // mark headless so sim builds wheel physics without waiting (the `--no-ui`
+    // server stand-in). Without it wheels deadlock within the few no-time frames.
+    app.insert_resource(NoRenderVisuals);
+    app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
 
-        // Add stage asset directly (synchronously, like tests do)
-        let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-        let handle = stages.add(UsdStageAsset { reader: Arc::new(composed) });
+        // Publish the live canonical stage (composed off the ref-carrying file).
+        let handle = add_canonical_from_file(&mut app, &p);
 
         app.world_mut().spawn((
             Name::new("TestRover"),
@@ -417,14 +444,15 @@ fn test_rover_schema_detection_after_composition() {
         let p = Path::new("../../assets/").join(f);
         let label = f;
 
-        let composed = compose_file(&p).unwrap_or_else(|e| panic!("{label} composition failed: {e}"));
+        let stage = compose_stage_from_file(&p);
+        let view = StageView::new(&stage);
 
         let rover_path = SdfPath::new(&format!("/{}", rover_name)).unwrap();
-        assert!(composed.has_spec(&rover_path), "{label}: /{} must exist", rover_name);
+        assert!(view.has_prim(&rover_path), "{label}: /{} must exist", rover_name);
 
-        // Verify apiSchemas exist in composed spec
-        let rover_spec = composed.iter().find(|(p, _)| p.to_string() == format!("/{}", rover_name));
-        assert!(rover_spec.is_some(), "{label}: /{} spec must exist", rover_name);
+        // The composed rover prim is present in the live stage's prim set.
+        let found = view.prim_paths().iter().any(|p| p.to_string() == format!("/{}", rover_name));
+        assert!(found, "{label}: /{} spec must exist", rover_name);
     }
 }
 
@@ -473,7 +501,6 @@ fn test_full_scene_loads_with_rovers() {
     // Load scene — Ground + Ramp + 5 rover instances (2 base files)
     // Matrix: 2 steering × 2 wheel types = 4 variants, plus 1 extra Ackermann
     let scene_path = Path::new("../../assets/scenes/sandbox/sandbox_scene.usda");
-    let scene_composed = compose_asset_from_file(scene_path);
 
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
@@ -492,6 +519,10 @@ fn test_full_scene_loads_with_rovers() {
     // hook reads avian's `JointGraph` resource — without the physics plugins
     // it panics. (The single-rover tests use raycast wheels, so they don't.)
     app.add_plugins(avian3d::prelude::PhysicsPlugins::default());
+    // No GPU here, so a wheel's render-only `ShaderMaterial` never arrives —
+    // mark headless so sim builds wheel physics without waiting (the `--no-ui`
+    // server stand-in). Without it wheels deadlock within the few no-time frames.
+    app.insert_resource(NoRenderVisuals);
     app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
     // PhysicsPlugins is here only so the joint-spawn hooks find avian's resources
     // (JointGraph) — this is a composition/structure test, not a physics-step test.
@@ -504,8 +535,7 @@ fn test_full_scene_loads_with_rovers() {
     app.insert_resource(Time::<Fixed>::from_hz(0.0001));
 
     // Spawn scene — rovers come from scene references
-    let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();
-    let scene_handle = stages.add(UsdStageAsset { reader: Arc::new(scene_composed) });
+    let scene_handle = add_canonical_from_file(&mut app, scene_path);
     app.world_mut().spawn((
         Name::new("TestScene"),
         UsdPrimPath { stage_handle: scene_handle.clone(), path: "/SandboxScene".to_string() },
@@ -581,19 +611,20 @@ fn test_full_scene_loads_with_rovers() {
 
 #[test]
 fn test_valentine_color_override() {
-    use openusd::sdf::{Path as SdfPath, AbstractData};
+    use openusd::sdf::Path as SdfPath;
 
     // Load scene
     let scene_path = Path::new("../../assets/scenes/sandbox/sandbox_scene.usda");
-    let composed = compose_asset_from_file(scene_path);
+    let stage = compose_stage_from_file(scene_path);
+    let view = StageView::new(&stage);
 
     // The per-instance colour override is authored as `over "Chassis" {
     // displayColor }` — i.e. on the Chassis CHILD, not the rover root.
     let chassis = SdfPath::new("/SandboxScene/Skid_Raycast_1/Chassis").unwrap();
-    assert!(composed.has_spec(&chassis), "Skid_Raycast_1/Chassis prim must exist");
+    assert!(view.has_prim(&chassis), "Skid_Raycast_1/Chassis prim must exist");
 
-    let display_color = composed
-        .prim_attribute_value::<[f32; 3]>(&chassis, "primvars:displayColor")
+    let display_color = view
+        .value::<[f32; 3]>(&chassis, "primvars:displayColor")
         .expect("Skid_Raycast_1/Chassis must have the composed displayColor override");
     assert!((display_color[0] - 0.8).abs() < 0.01, "Red should be 0.8, got {}", display_color[0]);
     assert!((display_color[1] - 0.2).abs() < 0.01, "Green should be 0.2, got {}", display_color[1]);

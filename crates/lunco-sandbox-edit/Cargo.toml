@@ -26,6 +26,11 @@ lunco-core = { path = "../lunco-core" }
 lunco-fsw = { path = "../lunco-fsw" }
 lunco-time = { path = "../lunco-time" }
 lunco-doc = { path = "../lunco-doc" }
+# Shader source is a journaled DOMAIN (ShaderDocument): edits record to the Twin
+# journal (DomainKind::Shader) and hot-reload — like a rhai script / Modelica model.
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-twin-journal = { path = "../lunco-twin-journal" }
+serde = { workspace = true }
 lunco-api = { path = "../lunco-api", default-features = false }
 lunco-controller = { path = "../lunco-controller" }
 lunco-mobility = { path = "../lunco-mobility" }
