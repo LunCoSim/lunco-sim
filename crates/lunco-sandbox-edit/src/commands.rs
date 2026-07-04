@@ -3485,6 +3485,8 @@ mod tests {
         let docu = reg.host(doc).expect("doc alive").document();
         let world = lunco_usd_bevy::SdfPath::new("/World").unwrap();
         // The move landed in the RUNTIME layer...
+        // TODO(usd-read-migration): switch to the generic UsdRead surface (`scalar`)
+        // instead of the legacy `prim_attribute_value`, matching production (doc 21).
         assert_eq!(
             docu.runtime_data()
                 .prim_attribute_value::<[f64; 3]>(&world, "xformOp:translate"),
@@ -3580,6 +3582,8 @@ mod tests {
         // The referenced spawn prim landed under the default prim, in RUNTIME...
         assert!(docu.runtime_data().spec(&prim).is_some(), "spawn prim authored in runtime layer");
         assert!(docu.data().spec(&prim).is_none(), "base layer untouched by spawn");
+        // TODO(usd-read-migration): switch to the generic UsdRead surface (`scalar`)
+        // instead of the legacy `prim_attribute_value`, matching production (doc 21).
         assert_eq!(
             docu.runtime_data().prim_attribute_value::<[f64; 3]>(&prim, "xformOp:translate"),
             Some([2.0, 0.0, 7.0]),

@@ -87,6 +87,7 @@ use lunco_usd_bevy::author::{
     self, extract_root_layer_data, open_doc_stage, parse_attribute_value, usda_to_data,
 };
 use lunco_usd_bevy::usd_data::UsdDataExt;
+use lunco_usd_bevy::UsdRead;
 use openusd::sdf::{self, Path as SdfPath, SpecType};
 
 /// How many recent changes to keep in the per-document ring buffer.
@@ -898,7 +899,7 @@ impl Document for UsdDocument {
                     .ok()
                     .and_then(|p| layer.spec(&p).map(|_| ()))
                     .is_some();
-                let old_translate = layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:translate");
+                let old_translate = layer.scalar::<[f64; 3]>(&prim_sdf, "xformOp:translate");
 
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 stage
@@ -959,7 +960,7 @@ impl Document for UsdDocument {
                     .ok()
                     .and_then(|p| layer.spec(&p).map(|_| ()))
                     .is_some();
-                let old_rotate = layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:rotateXYZ");
+                let old_rotate = layer.scalar::<[f64; 3]>(&prim_sdf, "xformOp:rotateXYZ");
 
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 stage
@@ -1225,6 +1226,11 @@ fn author_err<E: std::fmt::Display>(e: E) -> DocumentError {
 mod tests {
     use super::*;
     use lunco_doc::{DocumentHost, Mutation};
+
+    // TODO(usd-read-migration): these assertions read the flattened `sdf::Data`
+    // via the legacy `UsdDataExt` (`prim_attribute_value`/`prim_type_name`). Switch
+    // to the generic `UsdRead` surface (`scalar`/`type_name`) to match production
+    // (doc 21). Time-sampled reads (`prim_attribute_value_at`) → `scalar_at`.
 
     const TINY_USDA: &str =
         "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\n\ndef Xform \"World\"\n{\n}\n";

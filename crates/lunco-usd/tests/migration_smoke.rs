@@ -107,6 +107,8 @@ fn standalone_rover_reader_is_complete() {
     let view = cs.view();
 
     // Root children — the exact list `prim_children` returns.
+    // TODO(usd-read-migration): switch to the generic UsdRead surface (`children`)
+    // instead of the legacy `prim_children`, matching production (doc 21).
     let kids = view.prim_children(&SdfPath::new("/SkidRover").unwrap());
     let names: Vec<String> = kids.iter().filter_map(|p| p.name().map(str::to_string)).collect();
     for w in ["Chassis", "Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"] {

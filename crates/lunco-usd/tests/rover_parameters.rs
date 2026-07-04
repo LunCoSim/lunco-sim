@@ -224,6 +224,8 @@ fn test_prim_children() {
     let view = StageView::new(&stage);
     let path = SdfPath::new("/Rucheyok").unwrap();
 
+    // TODO(usd-read-migration): switch to the generic UsdRead surface (`children`)
+    // instead of the legacy `prim_children`, matching production (doc 21).
     let children = view.prim_children(&path);
     // 8 children: Chassis, SolarPanel, Battery, 4 Wheels + the `Controls` scope
     // composed in from the inherited `_RoverControl` profile (control_profiles.usda).

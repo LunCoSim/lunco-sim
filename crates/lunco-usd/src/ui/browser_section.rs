@@ -13,7 +13,7 @@ use lunco_doc::DocumentId;
 use lunco_workbench::twin_browser::BrowserScope;
 use lunco_workbench::{BrowserCtx, BrowserSection};
 use openusd::sdf;
-use lunco_usd_bevy::{UsdData, usd_data::UsdDataExt};
+use lunco_usd_bevy::{UsdData, UsdRead};
 
 use crate::ui::loaded_stages::{UsdBrowserView, UsdStageRow};
 use crate::ui::viewport::{SetActiveUsdViewport, USD_VIEWPORT_PANEL_ID};
@@ -170,9 +170,9 @@ fn render_stage_body(
     // `def Xform "Artemis2"` is surfaced as `artemis_2 → Orion` instead
     // of `artemis_2 → Artemis2 (Xform) → Orion`. Single-root prims with
     // no children are kept (they ARE the content).
-    let mut top_paths: Vec<sdf::Path> = reader.prim_children(&root);
+    let mut top_paths: Vec<sdf::Path> = reader.children(&root);
     if top_paths.len() == 1 {
-        let grand = reader.prim_children(&top_paths[0]);
+        let grand = reader.children(&top_paths[0]);
         if !grand.is_empty() {
             top_paths = grand;
         }
@@ -190,7 +190,7 @@ fn render_stage_body(
 }
 
 /// Recursive prim-tree walker. One `CollapsingHeader` per prim;
-/// children fetched via [`TextReader::prim_children`].
+/// children fetched via [`UsdRead::children`].
 ///
 /// Composition arcs (sublayers, references, payloads) are **not**
 /// flattened — referenced prims show up only after a future
@@ -204,12 +204,12 @@ fn render_prim(
     clicked: &mut bool,
 ) {
     let name = path.name().unwrap_or("(root)").to_string();
-    let type_name = reader.prim_type_name(path);
+    let type_name = reader.type_name(path);
     let label = match &type_name {
         Some(ty) => format!("{} ({})", name, ty),
         None => name,
     };
-    let children = reader.prim_children(path);
+    let children = reader.children(path);
     let header_id = ui.make_persistent_id((salt, path.to_string()));
 
     if children.is_empty() {

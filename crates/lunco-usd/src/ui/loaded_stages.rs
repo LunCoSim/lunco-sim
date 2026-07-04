@@ -363,6 +363,8 @@ mod tests {
         stage.ensure_parsed(TINY_USDA, 0);
         let reader = stage.parsed.as_ref().unwrap().reader.clone();
         let root = sdf::path("/").unwrap();
+        // TODO(usd-read-migration): switch to the generic UsdRead surface (`children`)
+        // instead of the legacy `prim_children`, matching production (doc 21).
         let top = reader.prim_children(&root);
         assert_eq!(top.len(), 1);
         assert_eq!(top[0].name(), Some("World"));

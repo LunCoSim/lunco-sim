@@ -483,6 +483,8 @@ fn test_rover_files_have_no_baked_position() {
         // Rover root must NOT have xformOp:translate (position set by Rust at runtime).
         // `double3` decodes to `[f64; 3]` — a `Vec<f64>` would never match, so a
         // baked translate would slip past the guard.
+        // TODO(usd-read-migration): switch to the generic UsdRead surface (`scalar`)
+        // instead of the legacy `prim_attribute_value`, matching production (doc 21).
         let root_pos: Option<[f64; 3]> = reader.prim_attribute_value(&rover_path, "xformOp:translate");
         assert!(root_pos.is_none(),
             "{label}: /{} must NOT have xformOp:translate (position set by Rust), got: {:?}", rover_name, root_pos);

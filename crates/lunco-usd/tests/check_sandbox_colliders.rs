@@ -51,6 +51,8 @@ fn dump_prim(view: &StageView<'_>, path: &SdfPath) {
     let active = view.is_active(path);
     let scale: Option<[f64; 3]> = view.value(path, "xformOp:scale");
     let size: Option<f64> = view.value(path, "size");
+    // TODO(usd-read-migration): switch to the generic UsdRead surface (`children`)
+    // instead of the legacy `prim_children`, matching production (doc 21).
     let children = view.prim_children(path);
 
     // Check has_api_schema the same way the avian code does

@@ -2171,7 +2171,7 @@ fn on_obstacle_spec_authored(
     terrains: Query<(&lunco_usd::UsdPrimPath, &TerrainDocument), With<lunco_terrain_surface::DemTerrainSurface>>,
     registry: Option<ResMut<lunco_usd::UsdDocumentRegistry>>,
 ) {
-    use lunco_usd_bevy::usd_data::UsdDataExt as _;
+    use lunco_usd_bevy::UsdRead as _;
     let Some(mut registry) = registry else { return };
     let spec = &trigger.event().spec;
     // The USD crater/rock layer parsers use `density > 0` as the on/off signal
@@ -2191,11 +2191,11 @@ fn on_obstacle_spec_authored(
         // take it mutably.
         let Some(composed) = registry.host(doc).map(|h| h.document().composed()) else { continue };
         let layers: Vec<(String, String)> = composed
-            .prim_children(&sdf)
+            .children(&sdf)
             .into_iter()
             .filter_map(|child| {
                 composed
-                    .prim_attribute_value::<String>(&child, "lunco:layer")
+                    .scalar::<String>(&child, "lunco:layer")
                     .map(|ty| (child.as_str().to_string(), ty))
             })
             .collect();
