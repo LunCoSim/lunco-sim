@@ -37,10 +37,25 @@ pub struct SpawnEntity {
 }
 
 /// Detach a joint by despawning it.
-#[Command]
+#[Command(reflect_default)]
 pub struct DetachJoint {
     /// The joint entity to despawn.
     pub target: Entity,
+    /// Persistent (default) authors the joint's removal into the scene's runtime
+    /// layer — so it journals, syncs, and survives reload — before despawning.
+    /// Interactive just pops the live joint (a throwaway test), no journal. See
+    /// [`lunco_core::EditIntent`]. Omitted by API callers → `Persistent`.
+    #[serde(default)]
+    pub intent: lunco_core::EditIntent,
+}
+
+impl Default for DetachJoint {
+    fn default() -> Self {
+        Self {
+            target: Entity::PLACEHOLDER,
+            intent: lunco_core::EditIntent::Persistent,
+        }
+    }
 }
 
 
@@ -62,7 +77,8 @@ pub fn on_rescan_spawn_catalog(
     }
 }
 
-/// Observer that handles DetachJoint commands.
+/// Observer that handles DetachJoint commands — despawns the live joint entity in
+/// BOTH modes (the visible effect). Persistence is a decoupled observer below.
 pub fn on_detach_joint(
     trigger: On<DetachJoint>,
     mut commands: Commands,
@@ -70,8 +86,48 @@ pub fn on_detach_joint(
     let cmd = trigger.event();
     if let Ok(mut entity) = commands.get_entity(cmd.target) {
         entity.despawn();
-        info!("DETACH_JOINT: despawned joint entity {:?}", cmd.target);
+        info!("DETACH_JOINT: despawned joint entity {:?} ({:?})", cmd.target, cmd.intent);
     }
+}
+
+/// Persist a **`Persistent`** `DetachJoint` into the active USD document's runtime
+/// overlay by authoring a `RemovePrim` — so the detachment journals, syncs, and
+/// survives reload. Decoupled from [`on_detach_joint`] (which does the live
+/// despawn), mirroring [`persist_move_to_runtime_layer`]: same active-doc +
+/// ownership guard, same `LayerId::runtime()` target. `Interactive` detaches are
+/// throwaway (no journal), so this early-returns for them.
+pub fn persist_detach_to_runtime_layer(
+    trigger: On<DetachJoint>,
+    usd_registry: Res<UsdDocumentRegistry>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    q_prim: Query<&UsdPrimPath>,
+    mut commands: Commands,
+) {
+    let cmd = trigger.event();
+    if !cmd.intent.is_persistent() {
+        return;
+    }
+    let Some(workspace) = workspace else { return };
+    let Some(doc) = workspace.0.active_document else { return };
+    let Some(host) = usd_registry.host(doc) else { return };
+
+    // Resolve the joint entity's USD prim path; skip if it isn't USD-backed.
+    let Ok(prim) = q_prim.get(cmd.target) else { return };
+    // Ownership guard: only persist removal of prims the active document holds.
+    let Ok(prim_sdf) = lunco_usd_bevy::SdfPath::new(&prim.path) else { return };
+    let owned = host.document().data().spec(&prim_sdf).is_some()
+        || host.document().runtime_data().spec(&prim_sdf).is_some();
+    if !owned {
+        return;
+    }
+
+    commands.trigger(ApplyUsdOp {
+        doc,
+        op: UsdOp::RemovePrim {
+            edit_target: LayerId::runtime(),
+            path: prim.path.clone(),
+        },
+    });
 }
 
 /// Observer that handles SpawnEntity commands.
@@ -2248,14 +2304,25 @@ pub fn on_set_shader_source(
     trigger: On<SetShaderSource>,
     asset_server: Res<AssetServer>,
     mut shaders: ResMut<Assets<bevy::shader::Shader>>,
+    mut registry: ResMut<crate::shader_doc::ShaderRegistry>,
+    guard: Option<Res<lunco_core::session::SyncApplyGuard>>,
 ) {
     let ev = trigger.event();
     if ev.path.is_empty() || ev.source.is_empty() {
         warn!("SET_SHADER_SOURCE: empty path or source");
         return;
     }
-    // `load` returns the handle the materials are already using (the asset is
-    // loaded), so overwriting that asset id propagates to them.
+    // Record the edit into the Twin journal (`DomainKind::Shader`) via the shader
+    // document registry — so it SYNCS + PERSISTS like a rhai/Modelica edit, not
+    // just a local `Assets<Shader>` poke. Skip recording when this arrived from the
+    // wire (`SyncApplyGuard` set): the originating peer already journaled it, and
+    // the journal replay leg applies + hot-reloads it here — re-recording would
+    // duplicate the entry.
+    if guard.map_or(true, |g| g.0.is_none()) {
+        registry.apply_source(&ev.path, ev.source.clone());
+    }
+    // Hot-reload: `load` returns the handle every material already holds, so
+    // overwriting that asset id propagates the recompile to them.
     let handle = asset_server.load::<bevy::shader::Shader>(ev.path.clone());
     let shader = bevy::shader::Shader::from_wgsl(ev.source.clone(), ev.path.clone());
     shaders.insert(handle.id(), shader);
@@ -2725,6 +2792,7 @@ impl Plugin for SpawnCommandPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_spawn_entity_command);
         app.add_observer(on_detach_joint);
+        app.add_observer(persist_detach_to_runtime_layer);
         app.add_systems(
             Update,
             remove_legacy_ground_prim.run_if(obstacle_field_scene_changed),

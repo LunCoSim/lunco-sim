@@ -7292,6 +7292,7 @@ dependencies = [
  "lunco-core",
  "lunco-cosim",
  "lunco-doc",
+ "lunco-doc-bevy",
  "lunco-environment",
  "lunco-fsw",
  "lunco-materials",
@@ -7301,11 +7302,13 @@ dependencies = [
  "lunco-terrain-surface",
  "lunco-theme",
  "lunco-time",
+ "lunco-twin-journal",
  "lunco-usd",
  "lunco-usd-bevy",
  "lunco-usd-sim",
  "lunco-workbench",
  "lunco-workspace",
+ "serde",
  "transform-gizmo-bevy",
 ]
 

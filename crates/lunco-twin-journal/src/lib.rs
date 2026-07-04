@@ -137,6 +137,9 @@ pub enum DomainKind {
     /// journaled; the run *results* ride the content plane as CID'd artifacts, and
     /// run *progress* rides the ephemeral presence plane.
     Experiment,
+    /// Shader source edits (`ShaderDocument` — WGSL `SetSource`). Recorded so a live
+    /// shader edit hot-reloads AND syncs/persists like a rhai script or Modelica model.
+    Shader,
     Other(String),
 }
 

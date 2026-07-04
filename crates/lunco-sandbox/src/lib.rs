@@ -511,6 +511,59 @@ fn replay_scenario_journal_experiment(
     }
 }
 
+/// Per-domain journal consume leg for `DomainKind::Shader` — projects a peer's
+/// journaled WGSL edits (`ShaderOp::SetSource`) onto the local `ShaderRegistry`
+/// and **hot-reloads** the live `Assets<Shader>`, so a shader tweak on one machine
+/// recompiles on every peer. No single-doc limitation: the op carries the shader
+/// `path` (cross-peer-stable), so `apply_replayed` routes by path. `Assets<Shader>`
+/// / `ShaderRegistry` are `Option` — a headless (no-render) relay host has neither
+/// and simply no-ops (it still forwards the journal entry to GUI peers).
+#[cfg(feature = "networking")]
+fn replay_scenario_journal_shader(
+    role: Res<lunco_core::NetworkRole>,
+    remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
+    registry: Option<ResMut<lunco_sandbox_edit::shader_doc::ShaderRegistry>>,
+    asset_server: Option<Res<AssetServer>>,
+    shaders: Option<ResMut<Assets<bevy::shader::Shader>>>,
+    mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
+) {
+    let (Some(journal), Some(mut registry), Some(asset_server), Some(mut shaders)) =
+        (journal, registry, asset_server, shaders)
+    else {
+        return;
+    };
+    let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
+        None
+    } else {
+        let Some(manifest) = remote.manifest.as_ref() else {
+            return;
+        };
+        manifest.journal_head.as_ref()
+    };
+    let me = journal.local_author();
+    let pending = lunco_networking::journal_plane::domain_ops_after(
+        &journal,
+        base,
+        &me,
+        &applied,
+        lunco_twin_journal::DomainKind::Shader,
+    );
+    for (id, op) in pending {
+        if let Ok(shader_op) =
+            serde_json::from_value::<lunco_sandbox_edit::shader_doc::ShaderOp>(op)
+        {
+            if let Some((path, source)) = registry.apply_replayed(&shader_op) {
+                // Same hot-reload hook as the local edit: overwrite the asset id
+                // every material holds so the recompile propagates.
+                let handle = asset_server.load::<bevy::shader::Shader>(path.clone());
+                shaders.insert(handle.id(), bevy::shader::Shader::from_wgsl(source, path));
+            }
+        }
+        applied.insert(id);
+    }
+}
+
 /// Result-artifact writer: on `RunCompleted`, the host serializes the finished
 /// `RunResult` to `<twin>/results/<experiment-id>.json` so it rides the **content
 /// plane** — the twin file-walk CID's `results/` (a non-dot dir) and the manifest
@@ -1219,6 +1272,9 @@ impl Plugin for SandboxCorePlugin {
             // Same Layer B for experiment *definitions* (`DomainKind::Experiment`):
             // a peer's sweep setup projects onto the local ExperimentRegistry.
             app.add_systems(Update, replay_scenario_journal_experiment);
+            // Same Layer B for shaders (`DomainKind::Shader`): a peer's WGSL edit
+            // projects onto the local ShaderRegistry + hot-reloads Assets<Shader>.
+            app.add_systems(Update, replay_scenario_journal_shader);
             // Presence/rebuild resources are consumed by the systems below for any
             // role; init here (idempotent with the host-side init) so a standalone
             // or client app never hits a missing resource.
@@ -2016,7 +2072,13 @@ fn lander_rover_joint_detach_key(
     for (entity, name) in &q_names {
         if name.as_str() == "/LanderTest/LanderRoverJoint" {
             info!("Manual input: Detaching LanderRoverJoint!");
-            commands.trigger(lunco_sandbox_edit::commands::DetachJoint { target: entity });
+            // Runtime gameplay detach (undock from the lander) — Interactive: a
+            // live physics action, not an authored scene edit, so it doesn't
+            // journal. Edit-mode detach (UI) uses the default Persistent.
+            commands.trigger(lunco_sandbox_edit::commands::DetachJoint {
+                target: entity,
+                intent: lunco_core::EditIntent::Interactive,
+            });
             break;
         }
     }

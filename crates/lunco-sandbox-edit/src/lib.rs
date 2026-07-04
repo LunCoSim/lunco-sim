@@ -34,6 +34,9 @@
 // gated on `ui`.
 pub mod catalog;
 pub mod commands;
+/// Shaders as a journaled, synced, live-editable domain (WGSL twin of rhai's
+/// `ScriptDocument`) — edits record to the Twin journal (`DomainKind::Shader`).
+pub mod shader_doc;
 #[cfg(feature = "ui")]
 pub mod gizmo;
 #[cfg(feature = "ui")]
@@ -72,7 +75,15 @@ impl Plugin for SandboxEditPlugin {
             .init_resource::<catalog::SpawnCatalog>()
             .init_resource::<spawn::FootprintCache>()
             .insert_resource(lunco_core::DragModeActive { active: false })
-            .init_resource::<lunco_core::SpawnToolActive>();
+            .init_resource::<lunco_core::SpawnToolActive>()
+            // Shader source is a journaled domain: edits record to the Twin
+            // journal + hot-reload. The recorder attaches when the journal appears.
+            .init_resource::<shader_doc::ShaderRegistry>();
+        app.add_systems(
+            Update,
+            shader_doc::wire_shader_journal_handle
+                .run_if(resource_added::<lunco_doc_bevy::JournalResource>),
+        );
 
         app.add_plugins(transform_gizmo_bevy::TransformGizmoPlugin);
         app.add_plugins(commands::SpawnCommandPlugin);
