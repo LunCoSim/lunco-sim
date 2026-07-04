@@ -355,6 +355,15 @@ pub struct UsdDocument {
     /// Ring buffer of `(generation_after_change, change)` for catch-up
     /// reads. See [`changes_since`](Self::changes_since).
     changes: VecDeque<(u64, UsdChange)>,
+    /// Ring buffer of `(generation_after_change, op)` — the **typed op** that
+    /// produced each generation. The live-stage projection replays these ops
+    /// directly (author-once: the op is the single delta description, applied to
+    /// both this save layer and the `!Send` projection stage), so it never has to
+    /// re-derive an edit's value by reading it back out of [`composed`](Self::composed).
+    /// Non-op state changes (e.g. [`restore_runtime`](Self::restore_runtime)) push
+    /// a synthetic [`UsdOp::ReplaceSource`] marker so the projector still rebuilds.
+    /// See [`ops_since`](Self::ops_since).
+    op_log: VecDeque<(u64, UsdOp)>,
 }
 
 impl UsdDocument {
@@ -401,6 +410,7 @@ impl UsdDocument {
             origin,
             last_saved_generation,
             changes: VecDeque::with_capacity(CHANGE_HISTORY_CAPACITY),
+            op_log: VecDeque::with_capacity(CHANGE_HISTORY_CAPACITY),
         }
     }
 
@@ -475,6 +485,13 @@ impl UsdDocument {
     pub fn restore_runtime(&mut self, data: sdf::Data) {
         let was_dirty = self.is_dirty();
         self.commit(TargetLayer::Runtime, data, UsdChange::FullReload);
+        // Not a typed op, but it did bump the generation — push a synthetic
+        // whole-source marker so the op-replay projector accounts for this
+        // generation (a full rebuild) instead of treating the op ring as short.
+        self.record_op(UsdOp::ReplaceSource {
+            edit_target: LayerId::runtime(),
+            text: String::new(),
+        });
         if !was_dirty {
             self.last_saved_generation = Some(self.generation);
         }
@@ -514,6 +531,32 @@ impl UsdDocument {
             .iter()
             .filter(move |(g, _)| *g > since_generation)
             .map(|(g, c)| (*g, c))
+    }
+
+    /// The typed ops applied strictly after `since_generation`, in order — the
+    /// live-stage projection replays these directly onto the `!Send` stage
+    /// (author-once). If the op ring dropped entries (more edits than its capacity
+    /// since `since_generation`), returns `None` so the caller falls back to a
+    /// full rebuild rather than silently missing deltas.
+    pub fn ops_since(&self, since_generation: u64) -> Option<Vec<UsdOp>> {
+        let expected = self.generation.saturating_sub(since_generation);
+        let ops: Vec<UsdOp> = self
+            .op_log
+            .iter()
+            .filter(|(g, _)| *g > since_generation)
+            .map(|(_, op)| op.clone())
+            .collect();
+        (ops.len() as u64 >= expected).then_some(ops)
+    }
+
+    /// Record the typed op that produced the current generation, for
+    /// [`ops_since`](Self::ops_since). Called right after a successful
+    /// [`commit`](Self::commit). Non-op state changes push a synthetic marker.
+    fn record_op(&mut self, op: UsdOp) {
+        if self.op_log.len() == CHANGE_HISTORY_CAPACITY {
+            self.op_log.pop_front();
+        }
+        self.op_log.push_back((self.generation, op));
     }
 
     // ─── internal ──────────────────────────────────────────────────────
@@ -670,7 +713,11 @@ impl Document for UsdDocument {
             ));
         }
 
-        match op {
+        // Author-once: remember the exact typed op so the live-stage projector
+        // replays it verbatim (no re-deriving the delta from `composed`). Recorded
+        // only on success — a rejected op never bumps the generation.
+        let logged_op = op.clone();
+        let result = match op {
             UsdOp::ReplaceSource { text, .. } => {
                 let new_data = usda_to_data(&text).map_err(|e| {
                     DocumentError::ValidationFailed(format!("ReplaceSource: {e}"))
@@ -956,7 +1003,11 @@ impl Document for UsdDocument {
                 self.commit(target, new_data, UsdChange::FullReload);
                 Ok(inverse)
             }
+        };
+        if result.is_ok() {
+            self.record_op(logged_op);
         }
+        result
     }
 }
 
@@ -1075,6 +1126,60 @@ mod tests {
         let tail: Vec<_> = doc.changes_since(after_first).collect();
         assert_eq!(tail.len(), 1);
         assert!(matches!(tail[0].1, UsdChange::Resync { .. }));
+    }
+
+    /// Author-once: `ops_since` returns the exact typed ops the live-stage
+    /// projector replays — the suffix strictly after a generation, in order, with
+    /// each op verbatim (so the projector never re-derives the delta from state).
+    #[test]
+    fn ops_since_returns_typed_op_suffix() {
+        let mut doc = UsdDocument::new(DocumentId::new(30), TINY_USDA);
+        doc.apply(UsdOp::AddPrim {
+            edit_target: LayerId::root(),
+            parent_path: "/World".into(),
+            name: "Box".into(),
+            type_name: Some("Cube".into()),
+            reference: None,
+        })
+        .unwrap();
+        let after_spawn = doc.generation();
+        doc.apply(UsdOp::SetTranslate {
+            edit_target: LayerId::root(),
+            path: "/World/Box".into(),
+            value: [1.0, 2.0, 3.0],
+        })
+        .unwrap();
+
+        // From the start: both ops, in order.
+        let all = doc.ops_since(0).expect("ring not overflowed");
+        assert_eq!(all.len(), 2);
+        assert!(matches!(all[0], UsdOp::AddPrim { ref name, .. } if name == "Box"));
+        assert!(matches!(all[1], UsdOp::SetTranslate { value, .. } if value == [1.0, 2.0, 3.0]));
+
+        // Strictly after the spawn: just the translate (verbatim value).
+        let tail = doc.ops_since(after_spawn).expect("ring not overflowed");
+        assert_eq!(tail.len(), 1);
+        assert!(matches!(tail[0], UsdOp::SetTranslate { value, .. } if value == [1.0, 2.0, 3.0]));
+
+        // A `since` far below current with entries dropped can't be trusted → None.
+        assert!(doc.ops_since(0).is_some(), "no overflow for a short history");
+    }
+
+    /// A rejected op neither bumps the generation nor records into the op log, so
+    /// the projector never replays a no-op.
+    #[test]
+    fn rejected_op_is_not_logged() {
+        let mut doc = UsdDocument::new(DocumentId::new(31), TINY_USDA);
+        // Unknown parent → validation failure, no commit.
+        let _ = doc.apply(UsdOp::AddPrim {
+            edit_target: LayerId::root(),
+            parent_path: "/Nope".into(),
+            name: "X".into(),
+            type_name: Some("Xform".into()),
+            reference: None,
+        });
+        assert_eq!(doc.generation(), 0);
+        assert_eq!(doc.ops_since(0).unwrap().len(), 0, "rejected op is not in the op log");
     }
 
     #[test]

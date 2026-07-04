@@ -130,6 +130,19 @@ pub(crate) fn on_doc_opened_load_runtime(
     }
 }
 
+// TODO(#7 journal replay-on-open): today a reopened document's *current state* is
+// reconstructed from the saved `.usda` base + this `.lunco/runtime` overlay, and
+// the persisted twin journal (`<twin>/history/journal.json`) is a passive log —
+// nothing local replays it. To make the journal an active reconstruct/undo
+// source: on open, replay `merged_order(journal)` for this document via
+// `UsdDocumentRegistry::replay_op` to rebuild runtime state (and the undo stack
+// for cross-session undo), then demote `.lunco/runtime/*.usda` from a parallel
+// truth to a snapshot cache-of-replay. Blocker: journal entries don't currently
+// carry the owning `DocumentId` (EntityRef enrichment is deferred), so there's no
+// entry→doc mapping to select which entries replay onto which document; and the
+// primary-source switch risks replay-vs-saved divergence. Left as follow-up — the
+// author-once op-replay projection (twin_projection) is the write-side prerequisite.
+
 /// Persist a USD document's runtime overlay to `.lunco/runtime/…` whenever it
 /// changes. The runtime layer holds generated state (spawns / moves) excluded
 /// from the authored scene Save, so it has its own file. Skips docs with an

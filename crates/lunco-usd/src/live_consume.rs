@@ -15,89 +15,18 @@
 //! spawn/despawn (E2-2/E2-3) will later replace that structural fallback too.
 
 use bevy::prelude::*;
-use lunco_doc::DocumentId;
 use lunco_usd_bevy::{UsdPrimPath, UsdRead, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
-
-use crate::document::UsdChange;
-use crate::registry::UsdDocumentRegistry;
 
 /// The attribute a move edit (`UsdOp::SetTranslate`) records as `InfoOnly`.
 const TRANSLATE_ATTR: &str = "xformOp:translate";
 
-/// Classification of a document's changes since a generation.
-pub(crate) struct ChangeBatch {
-    /// Prim paths that got an incremental transform-only edit (`InfoOnly`
-    /// `xformOp:translate`) — applied in place, no reload.
-    pub translate_paths: Vec<String>,
-    /// `(prim_path, attr_name)` for a **non-translate** attribute edit (`InfoOnly`
-    /// for some other attribute — material color, roughness, size, …). Authored
-    /// onto the live stage and the prim's visual refreshed in place — the
-    /// sink-driven successor to the reload that used to re-read these.
-    pub attr_paths: Vec<(String, String)>,
-    /// Prim paths that got a structural `Resync` (spawn / remove / rename of a
-    /// concrete prim) — reconciled one subtree at a time by
-    /// [`reconcile_structural_live`] (E2-2/E2-3), never re-instantiating siblings.
-    pub resync_paths: Vec<String>,
-    /// Whether any change needs structural work: a `Resync`, a `FullReload`, an
-    /// `InfoOnly` for some other attribute, or a change-ring overflow.
-    pub needs_structural: bool,
-    /// Whether the structural work must be a *whole-scene* rebuild rather than a
-    /// per-prim reconcile: a `FullReload` (source replaced / Save-As), a
-    /// whole-stage `Resync { path: "/" }`, or a change-ring overflow (we can't
-    /// prove [`resync_paths`](Self::resync_paths) is the complete delta set).
-    pub full_reload: bool,
-}
-
-/// Classify `doc`'s changes in `(since, cur_gen]`. Conservative: if the change
-/// ring dropped entries (more commits than its capacity since `since`), force a
-/// structural reload rather than silently miss deltas. `None` if `doc` is gone.
-pub(crate) fn classify_changes_since(
-    registry: &UsdDocumentRegistry,
-    doc: DocumentId,
-    since: u64,
-    cur_gen: u64,
-) -> Option<ChangeBatch> {
-    let host = registry.host(doc)?;
-    let mut translate_paths = Vec::new();
-    let mut attr_paths = Vec::new();
-    let mut resync_paths = Vec::new();
-    let mut needs_structural = false;
-    let mut full_reload = false;
-    let mut count = 0u64;
-    for (_g, change) in host.document().changes_since(since) {
-        count += 1;
-        match change {
-            UsdChange::InfoOnly { path, attr } if attr == TRANSLATE_ATTR => {
-                translate_paths.push(path.clone());
-            }
-            // A whole-stage resync can't be reconciled per-prim.
-            UsdChange::Resync { path } if path == "/" => {
-                needs_structural = true;
-                full_reload = true;
-            }
-            UsdChange::Resync { path } => {
-                resync_paths.push(path.clone());
-                needs_structural = true;
-            }
-            UsdChange::FullReload => {
-                needs_structural = true;
-                full_reload = true;
-            }
-            // Any other (non-translate) attribute edit: author onto the live
-            // stage + refresh the prim's visual — no reload.
-            UsdChange::InfoOnly { path, attr } => attr_paths.push((path.clone(), attr.clone())),
-        }
-    }
-    // Generations are consecutive (one per commit), so we expect exactly
-    // `cur_gen - since` deltas; fewer means the ring overflowed → we can't trust
-    // `resync_paths` to be complete, so fall back to a whole-scene rebuild.
-    if count < cur_gen.saturating_sub(since) {
-        needs_structural = true;
-        full_reload = true;
-    }
-    Some(ChangeBatch { translate_paths, attr_paths, resync_paths, needs_structural, full_reload })
-}
+// Edit → live-stage projection is now **op-driven** (author-once): the twin
+// projection (`twin_projection::sync_twin_overlays`) replays the document's typed
+// ops directly onto the `CanonicalStage`, so the old change-ring *classification*
+// (`ChangeBatch` / `classify_changes_since`) that re-derived deltas from the
+// composed state was removed. This module keeps the read-side of the bridge
+// (`project_stage_changes` and its helpers), which drains the openusd sink.
 
 /// The live entity projecting `path` in the scene scoped to `stage_handle_id`,
 /// if one exists.
@@ -257,69 +186,8 @@ pub(crate) fn reconcile_structural_live(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document::{LayerId, UsdOp};
-    use lunco_doc::{Document, DocumentOrigin};
 
     const TINY: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
-
-    /// A move (`SetTranslate`) classifies as a transform-only change — no
-    /// structural reload — while a spawn (`AddPrim`) forces structural.
-    #[test]
-    fn move_is_transform_only_spawn_is_structural() {
-        let mut registry = UsdDocumentRegistry::default();
-        let doc = registry.allocate(TINY.to_string(), DocumentOrigin::writable_file("/s.usda"));
-        // Seed a prim to move, then record its generation.
-        registry
-            .host_mut(doc)
-            .unwrap()
-            .document_mut()
-            .apply(UsdOp::AddPrim {
-                edit_target: LayerId::runtime(),
-                parent_path: "/World".into(),
-                name: "rover_1".into(),
-                type_name: Some("Xform".into()),
-                reference: None,
-            })
-            .unwrap();
-        let after_spawn = registry.host(doc).unwrap().document().generation();
-
-        // The spawn itself is structural — but a per-prim reconcile, not a
-        // whole-scene rebuild: its path is in `resync_paths` and `full_reload`
-        // stays clear.
-        let b = classify_changes_since(&registry, doc, 0, after_spawn).unwrap();
-        assert!(b.needs_structural, "AddPrim is a Resync → structural");
-        assert!(!b.full_reload, "a concrete-prim Resync reconciles per-prim");
-        assert_eq!(b.resync_paths, vec!["/World/rover_1".to_string()]);
-
-        // A subsequent move is transform-only.
-        registry
-            .host_mut(doc)
-            .unwrap()
-            .document_mut()
-            .apply(UsdOp::SetTranslate {
-                edit_target: LayerId::runtime(),
-                path: "/World/rover_1".into(),
-                value: [1.0, 2.0, 3.0],
-            })
-            .unwrap();
-        let after_move = registry.host(doc).unwrap().document().generation();
-
-        let b = classify_changes_since(&registry, doc, after_spawn, after_move).unwrap();
-        assert!(!b.needs_structural, "SetTranslate is InfoOnly → no reload");
-        assert_eq!(b.translate_paths, vec!["/World/rover_1".to_string()]);
-    }
-
-    /// A gap larger than the change ring can hold forces a structural reload
-    /// (we can't prove we saw every delta).
-    #[test]
-    fn change_ring_overflow_forces_structural() {
-        let mut registry = UsdDocumentRegistry::default();
-        let doc = registry.allocate(TINY.to_string(), DocumentOrigin::writable_file("/s.usda"));
-        // `since` far below current with no retained changes → count < expected.
-        let b = classify_changes_since(&registry, doc, 0, 999).unwrap();
-        assert!(b.needs_structural, "missing deltas ⇒ fall back to reload");
-        assert!(b.full_reload, "an overflowed ring can't be reconciled per-prim");
-    }
 
     /// Step-1 projection bridge, end to end: authoring a prim **onto the live
     /// `CanonicalStage`** fires its openusd change sink, and
@@ -401,40 +269,5 @@ mod tests {
             !live(app.world_mut()),
             "removing the prim from the live stage must despawn its entity"
         );
-    }
-
-    /// `RemovePrim` records a `Resync` for the removed path — classified as an
-    /// incremental (per-prim) structural change, not a whole-scene rebuild.
-    #[test]
-    fn remove_is_per_prim_resync() {
-        let mut registry = UsdDocumentRegistry::default();
-        let doc = registry.allocate(TINY.to_string(), DocumentOrigin::writable_file("/s.usda"));
-        registry
-            .host_mut(doc)
-            .unwrap()
-            .document_mut()
-            .apply(UsdOp::AddPrim {
-                edit_target: LayerId::runtime(),
-                parent_path: "/World".into(),
-                name: "rover_1".into(),
-                type_name: Some("Xform".into()),
-                reference: None,
-            })
-            .unwrap();
-        let after_spawn = registry.host(doc).unwrap().document().generation();
-        registry
-            .host_mut(doc)
-            .unwrap()
-            .document_mut()
-            .apply(UsdOp::RemovePrim {
-                edit_target: LayerId::runtime(),
-                path: "/World/rover_1".into(),
-            })
-            .unwrap();
-        let after_remove = registry.host(doc).unwrap().document().generation();
-
-        let b = classify_changes_since(&registry, doc, after_spawn, after_remove).unwrap();
-        assert!(b.needs_structural && !b.full_reload);
-        assert_eq!(b.resync_paths, vec!["/World/rover_1".to_string()]);
     }
 }
