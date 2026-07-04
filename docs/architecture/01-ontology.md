@@ -24,8 +24,6 @@ This document serves as the definitive source of truth for the architectural ter
 - **Command Registry (AppTypeRegistry)**: A self-describing catalog of all registered **Typed Commands**. Built on Bevy's `AppTypeRegistry` reflection, it exposes command metadata, field types, validation ranges, and documentation dynamically (e.g., via `/api/commands/schema` or MCP tools) to enable automated AI discovery and UI generation without hardcoded lists.
 - **TelemetryEvent**: A discrete, timestamped occurrence in the simulation (e.g., "Airlock Opened", "Engine Cutoff"). Following the **YAMCS** standard, Events provide semantic context to the raw telemetry stream, carrying a severity level (Info, Warning, Critical) and a message.
 
-### Terminology Rationale
-...
 - **AttributeRegistry**: A centralized, thread-safe Reflection server. While `Attributes` define the individual data properties of components, the `AttributeRegistry` maps semantic external strings (e.g. `sim.rover.motor_l.torque_limit`) directly to live ECS Component memory pointers. This allows UI tools, CLI interfaces, and MCP LLMs to dynamically read or write internal engineering state in real-time without needing compiled generic logic.
 - **Typed Command (vs. Direct Function Call / Abstract Command)**: We use "Typed Command" to signify a structured, transportable, and reflectable event representing a user or agent intent, distinct from direct function calls. This adheres to standards like **XTCE/CCSDS Telecommands**, enabling decoupling, serialization, and AI discoverability via Bevy's `AppTypeRegistry` reflection. It separates the *instruction concept* from its *data representation and transport*.
 

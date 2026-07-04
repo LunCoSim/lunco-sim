@@ -173,6 +173,33 @@ model (`piloted:piloted`) and gating `cmd = piloted ? stick : gnc`. No in-model 
 no rhai toggle, no per-tick check — possession is the single source of truth. Ride the
 camera along without taking control via `follow(entity)`.
 
+## 7c. Autopilot & Behavior Tree Integration
+
+While Layer-1 Sequences and Layer-2 Timelines are useful for linear scripts, complex, reactive, and resilient AI behaviors (like obstacle avoidance and path interception) are best authored using the **Autopilot Behavior Tree System**. 
+
+The autopilot accepts a JSON tree specification (`BehaviorSpec`) containing composite nodes, decorators, and actions/conditions, compiling them into a high-performance native behavior tree (see [behaviour-trees.md](./behaviour-trees.md)).
+
+You can trigger a behavior tree on a vessel from Rhai by issuing the `SetAutopilotBehavior` command:
+
+```rhai
+fn on_start(me) {
+    // Drive to a goal point, but halt if an obstacle is detected in a forward 50-degree cone
+    let bt_spec = "{\"kind\":\"reactive_selector\",\"children\":[" +
+        "{\"kind\":\"sequence\",\"children\":[" +
+            "{\"kind\":\"obstacle_ahead\",\"distance\":8.0,\"cone\":50.0}," +
+            "{\"kind\":\"hold\"}]}," +
+        "{\"kind\":\"drive_to\",\"target\":[120.0, 0.0, 50.0],\"speed\":0.7,\"radius\":3.0}]}";
+
+    cmd("SetAutopilotBehavior", #{ vessel: me, spec_json: bt_spec });
+}
+```
+
+Available nodes include:
+- **Composites:** `sequence`, `selector`, `parallel`, `reactive_sequence`, `reactive_selector`.
+- **Decorators:** `invert`, `force_success`, `force_failure`, `timeout`, `cooldown`.
+- **Actions:** `drive_to`, `follow`, `intercept`, `patrol`, `face`, `cruise`, `brake`, `hold`, `steer_clear`, `wait`.
+- **Conditions:** `arrived`, `facing`, `obstacle_ahead`, `path_blocked`.
+
 ## 8. Persistence
 
 - **Per-entity scenarios → USD (load):** author `custom string lunco:script = '''<rhai>'''` on a prim; on spawn it auto-attaches and runs. *(Writing a live-edited scenario back onto its prim is not yet supported — it needs a USD asset↔document bridge.)*
@@ -186,6 +213,49 @@ camera along without taking control via `follow(entity)`.
 | `ScriptStatus { target }` | *Is it healthy?* — compile/runtime diagnostics (state, ok, located errors) |
 | `ScriptInspect { target }` | *What is it doing?* — live `this` state, defined hooks, generation, paused/running, plus the status block |
 | `ScriptingCatalog` | the full callable surface in one doc: `verbs`, `hooks`, `prelude`, `tools`, `commands`, `queries` — the authoring/discovery source of truth |
+
+## 9a. Debugging, Diagnostics & Error Handling
+
+Developing scenarios requires quick feedback on compilation and runtime health. The scripting runtime provides several built-in mechanisms for debugging:
+
+### Standard Output & Logging
+You can print variables and state information directly to standard output/console using the standard print statement:
+```rhai
+fn on_tick(me) {
+    print("Rover " + name(me) + " position: " + world_pos(me));
+}
+```
+
+### Inspecting Script Status
+When a script fails to compile or crashes at runtime, the engine exposes detailed error logs (including file origin, line, and column numbers). You can retrieve this diagnostic information via the `ScriptStatus` API query:
+```json
+// Query
+{"command": "ScriptStatus", "params": {"target": 1234}}
+
+// Response
+{
+  "ok": false,
+  "state": "CompileError",
+  "error": "Syntax error: expected ';' (line 12, position 45)"
+}
+```
+
+### Live Variable Monitoring
+You can inspect the live keys and values of the `this` state map attached to any running scenario using `ScriptInspect`:
+```json
+// Query
+{"command": "ScriptInspect", "params": {"target": 1234}}
+
+// Response
+{
+  "generation": 3,
+  "paused": false,
+  "state": {
+    "count": 142,
+    "current_waypoint": [10.0, 0.0, 50.0]
+  }
+}
+```
 
 ## 10. Networking & determinism
 
@@ -204,6 +274,71 @@ script (which would double-fire `cmd()`/`emit()` and diverge the per-entity
 | MCP | the `run_scenario` tool (`mcp/src/index.js`) |
 | One-shot eval | `RunRhai { code }` — runs once with full world access; stdout via `QueryCommandResult` |
 | Control | `SetScenarioPaused { target, paused }`, `StopScenario { target }` |
+
+## 11a. Step-by-Step Scenario Authoring Walkthrough
+
+Here is a step-by-step example showing how to author, deploy, debug, and persist a custom rover navigation script.
+
+### Step 1: Create the Script
+Create a new file under `assets/scenarios/my_rover_mission.rhai`:
+```rhai
+fn on_start(me) {
+    notify("Rover mission initiated!");
+    this.wp_index = 0;
+    this.waypoints = [
+        [10.0, 0.0, 0.0],
+        [20.0, 0.0, 10.0],
+        [0.0, 0.0, 20.0]
+    ];
+}
+
+fn on_tick(me) {
+    if this.wp_index >= this.waypoints.len() {
+        notify("Mission complete! Parking.");
+        brake(me);
+        return;
+    }
+    
+    let target = this.waypoints[this.wp_index];
+    if nav_to(me, target, 0.8, 2.0) {
+        notify("Reached waypoint " + this.wp_index);
+        this.wp_index += 1;
+    }
+}
+```
+
+### Step 2: Deploy and Execute
+To launch the script on a spawned rover entity (e.g., GID `4869542932533563`), trigger the `RunScenario` command via the HTTP API:
+```json
+{
+  "command": "RunScenario",
+  "params": {
+    "target": 4869542932533563,
+    "source": "assets/scenarios/my_rover_mission.rhai"
+  }
+}
+```
+
+### Step 3: Monitor & Debug
+To verify the scenario is running and inspect the current waypoint index:
+```json
+{
+  "command": "ScriptInspect",
+  "params": {
+    "target": 4869542932533563
+  }
+}
+```
+
+### Step 4: Persist in the Scene (USD)
+To ensure the script automatically runs when the scene is loaded, embed it into the USD prim definition as a `lunco:script` attribute in your `.usda` file:
+```usd
+def Xform "Rover_01" (
+    custom string lunco:script = "assets/scenarios/my_rover_mission.rhai"
+) {
+    # ... prim details
+}
+```
 
 ## 12. Examples index
 
