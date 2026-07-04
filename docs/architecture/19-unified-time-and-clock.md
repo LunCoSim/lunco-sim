@@ -1,26 +1,10 @@
 # 19 — Unified Time, Clocks & Animation
 
-Status: **partially implemented** (rewritten 2026-06-29 after a grounded code audit).
-**T1 (spine) + T5 (TimeDomain tree + USD animation sampler) + T2 (sun-from-ephemeris) + T3 (time
-scales + sidereal) landed 2026-06-29** — the new `lunco-time` crate
-(`MissionClock`/`TimeTransport`/`WorldTime` + derivation swap + `scales` projection layer over
-`celestial-time`), `lunco-usd-bevy` (`UsdAnimated` + `sample_usd_animation`), and `lunco-celestial`
-(`update_sun_light_system` ephemeris-driven; TDB seed fix). **All time-scale/JD nuance now lives in
-`lunco-time`; consumers delegate.** **USD animation completed 2026-06-30** — T5 in full (all xform /
-rotation / matrix / `xformOpOrder` channels + visibility + material, composed `timeSamples` reach
-the runtime, `RigidBody::Kinematic` enforcement) and the T7 **preview transport** (singleton
-`AnimationPreview` domain + `ControlAnimation` command + Inspector). T4, T6, and the rest of T7
-(UTC/MET readout widget, per-domain UI) remain roadmap.
-Extends [14-simulation-layers](14-simulation-layers.md), [23-domain-environment](23-domain-environment.md),
-[25-experiments](25-experiments.md), [28-modelica-realtime-physics](28-modelica-realtime-physics.md).
-Prerequisite for and now subsumes the playback/animation half of a future
-`20-timeline-and-animation` (ConOps UI).
+Provides a unified time spine, time-domain hierarchy, and animation transport system for LunCoSim.
 
-> This revision replaces the first-pass "one fat `TimeAuthority` resource" design.
-> A code audit (three subsystem sweeps, 2026-06-29) showed `SimTick` is already the
-> real master and that the original plan would have re-introduced the very drift bug
-> it set out to fix. The corrected model is **one stored master (the tick), a tree of
-> derived clocks, and a single animation funnel** — detailed below.
+All time-scale and Julian Date nuance lives in the `lunco-time` crate (which handles `MissionClock`, `TimeTransport`, and `WorldTime`). USD animation channels (transformation, rotation, matrices, visibility, materials) compose via `lunco-usd-bevy` (`UsdAnimated` and `sample_usd_animation`) and drive the runtime under a preview transport.
+
+This architecture uses **one stored master (the tick), a tree of derived clocks, and a single animation funnel** to prevent synchronization drift.
 
 ---
 
@@ -44,7 +28,7 @@ Prerequisite for and now subsumes the playback/animation half of a future
 
 ---
 
-## 1. What exists today (audit, 2026-06-29 — file:line verified)
+## 1. Time, Clock & Animation Substrates
 
 ### 1a. The five floating substrates
 
@@ -240,8 +224,16 @@ run, and a reactive door share one sampler.
 
 ### 4a. The sampler (one code path)
 
-A per-frame system over entities carrying `UsdAnimated` (tracks extracted from `timeSamples`
-at translate/asset-change time, so per-frame is pure evaluation — no stage lookup, no `!Send`):
+A per-frame system evaluates entities carrying `UsdAnimated` (tracks extracted from `timeSamples` at translate/asset-change time). 
+
+To ensure O(1) frame evaluation and avoid expensive stage traversal or path parsing in the frame loop, a per-entity **`AnimationPlan`** component is derived (built on `Added<UsdAnimated>` or stage reload). The `AnimationPlan` caches:
+*   Parsed `SdfPath` structures.
+*   The `timeCodesPerSecond` scale factor.
+*   An `XformDrive` enum (specifying whether the transformation uses an `xformOpOrder` array, a raw 4x4 matrix, translation/rotation/scale channels, or none).
+*   A `visibility` flag.
+*   An optional `MaterialPlan` (resolving the target shader's `SdfPath` and key channel attributes).
+
+During the frame step, `sample_usd_animation` and `sample_usd_material_animation` consume the pre-calculated `AnimationPlan` to evaluate animation values directly at time `t`, eliminating per-frame `SdfPath` parsing, topology scans, and two-hop shader resolution.
 
 ```
 for each animated entity:
@@ -371,7 +363,7 @@ don't seek the live solver — you run it, bake, and scrub the bake.
 
 ## 8. Roadmap (smallest-blast-radius first; each independently shippable + headless-testable)
 
-### T1 — Master spine + derivation swap (no new visible behavior) — ✅ DONE 2026-06-29
+### T1 — Master spine + derivation swap (no new visible behavior) — ✅ DONE
 - **New crate `lunco-time`** (not `lunco-core/src/time.rs` — a dedicated crate, `lunco-time →
   lunco-core`): `MissionClock` (fixed mission origin + re-anchorable calendar anchor + warp),
   `TimeTransport` (mode/rate), the derived `WorldTime` view, and the pure `advance_clock` step.
@@ -384,14 +376,14 @@ don't seek the live solver — you run it, bake, and scrub the bake.
   `rate`, so one knob drives epoch+physics together. The `luncosim` slow-mo toggle writes
   `TimeTransport.rate` directly. The `paused → physics_enabled=true` inconsistency is gone (folded
   into the regime: paused ⇒ not running ⇒ tick+physics frozen).
-- **`CelestialClock` removed (2026-06-29).** The T1 compat shim was retired once the migration was
+- **`CelestialClock` removed.** The T1 compat shim was retired once the migration was
   complete: the struct (`lunco-core`) and the three bridge systems
   (`sync_transport_from_celestial`/`sync_celestial_from_world`/`get_default_celestial_clock`) are
   deleted. Every `.epoch` reader now takes `Res<WorldTime>` (`.epoch_jd`); every
   `.speed_multiplier`/`.paused` writer now takes `ResMut<TimeTransport>` (`.rate`/`.mode`). The
   mission origin is seeded directly from the wall clock by `seed_mission_clock_from_wall` (Startup).
   `WorldTime`/`TimeTransport` are the only time authorities — no driven middleman.
-- **Single pause authority (2026-06-30).** Pause was split: the workbench toolbar button and the
+- **Single pause authority.** Pause was split: the workbench toolbar button and the
   obstacle-field physics-hold toggled `Time<Virtual>.pause()` directly, parallel to
   `TimeTransport.mode`, so the ⏸/▶ glyph couldn't see a pause issued by the avatar hotkey /
   mission-control / celestial panel. Unified on `TimeTransport` as the sole authority (the *opposite*
@@ -403,7 +395,7 @@ don't seek the live solver — you run it, bake, and scrub the bake.
   avian), and `relative_speed > 0` *is* the "is running" gate that every physics consumer reads
   directly. The spine deliberately does **not** also toggle `Time<Virtual>::pause()`: that boolean
   would be a second encoding of "paused ⇔ speed 0" that nothing reads and can only drift.
-- **`TimeWarpState` removed + `ClockSample` dropped (2026-06-30).** "Is physics advancing" had three
+- **`TimeWarpState` removed + `ClockSample` dropped.** "Is physics advancing" had three
   redundant encodings — `TimeWarpState.physics_enabled` ≡ `TimeWarpState.is_running()` ≡
   `relative_speed > 0`. Two were forced by boundaries (`relative_speed` by avian/`Time<Virtual>`;
   `TimeWarpState` by the `lunco-core` ↔ `lunco-time` layering, since `advance_sim_tick` can't import
@@ -421,7 +413,7 @@ don't seek the live solver — you run it, bake, and scrub the bake.
 - *Residual:* single-`f64` JD ⇒ MET via `(epoch−epoch0)·86400` cancels to ~4e-5 s precision; sub-ms
   MET needs the two-part `JulianDate` (T3).
 
-### T2 — Sun from ephemeris (first visible payoff) — ✅ DONE 2026-06-29
+### T2 — Sun from ephemeris (first visible payoff) — ✅ DONE
 - `update_sun_light_system` (`lunco-celestial/src/systems.rs`) now points the `DirectionalLight` along
   the **ephemeris** Moon→Sun direction at `clock.epoch` (`-ecliptic_to_bevy(global_position(Moon))`,
   the Sun being the heliocentre), replacing the hardcoded `Vec3::NEG_Z`. Direction math is the pure,
@@ -441,7 +433,7 @@ don't seek the live solver — you run it, bake, and scrub the bake.
   directional light); a per-camera-body choice is a later refinement. The light is assumed to live in
   an inertial (non-rotating) frame, so local rotation ≈ world (true for the solar/big_space root).
 
-### T3 — Time scales + sidereal — ✅ DONE 2026-06-29
+### T3 — Time scales + sidereal — ✅ DONE
 - **New `lunco-time/src/scales.rs`** wraps `celestial-time` (zero-dep pure-math crate) behind plain
   `f64`/radian projection fns — the rest of the workspace never imports `celestial-time` and never
   re-derives JD↔UTC. The master epoch is **TDB**; `TimeScales::from_tdb_jd(tdb)` derives
@@ -472,7 +464,7 @@ don't seek the live solver — you run it, bake, and scrub the bake.
 - Host-authoritative pause/rate/warp + anchor re-anchor events on the wire (commands + a replicated
   `TimeTransport`/anchor). Required before any networked time control. Small but a correctness gate.
 
-### T5 — TimeDomain tree + animation system — ✅ DONE (2026-06-29 core; 2026-06-30 full channels)
+### T5 — TimeDomain tree + animation system — ✅ DONE
 - **DONE — the sampler** (`lunco-usd-bevy`): `UsdAnimated` marker stamped at instantiation when any
   channel is animated (`prim_is_animated`: xform op, `visibility`, geom `primvars:displayColor`, or a
   bound shader's `inputs:diffuseColor`/`inputs:opacity`); `sample_usd_animation` (in `Update`,
@@ -528,7 +520,7 @@ don't seek the live solver — you run it, bake, and scrub the bake.
   pausing the domain pauses the tween.
 
 ### T7 — Transport UI + preview-scrub (feeds ConOps)
-- **DONE (2026-06-30) — animation preview transport:** the `ControlAnimation` command (headless,
+- **DONE — animation preview transport:** the `ControlAnimation` command (headless,
   API + MCP — `{"command":"ControlAnimation","params":{"playing"|"seek_secs"|"rate"}}`) and the
   Inspector **Animation** section drive the singleton `AnimationPreview` `Playback`
   (play/pause/scrub/rate), scrubbing authored USD animation independently of the physics clock. Scrub
@@ -555,7 +547,7 @@ don't seek the live solver — you run it, bake, and scrub the bake.
 
 ---
 
-## 10. Reuse & Bevy mapping (audit-verified, 2026-06-29)
+## 10. Reuse & Bevy Mapping
 
 ### 10a. Reuse — most of the substrate already exists
 
@@ -565,7 +557,7 @@ don't seek the live solver — you run it, bake, and scrub the bake.
 | Calendar + **all time scales** + GMST + leap table | **`celestial-time`** (dep): `TAI`/`TDB`/`UT1`/`UTC`, `to_utc`/`to_tai`, `TAI_UTC_OFFSETS`, `sidereal` | reuse; **no `hifitime`** |
 | Two-part precision | `celestial-time::julian::JulianDate(day, frac)` | reuse |
 | Sun/body from epoch | `celestial-ephemeris` + `ephemeris_update_system` (change-gated) | reuse; the pure-consumer template |
-| Curve eval + keyframe ops | `openusd::usd::evaluate`, `SetTimeSample`/`RemoveTimeSample`, `attribute_value_at` | reuse (built 2026-06-29) |
+| Curve eval + keyframe ops | `openusd::usd::evaluate`, `SetTimeSample`/`RemoveTimeSample`, `attribute_value_at` | reuse |
 | Per-clock affine retime | `openusd LayerOffset` (applied to `timeSamples`, verified) + `start/endTimeCode` + `timeCodesPerSecond` | reuse; the clock-tree edges |
 | Bake substrate | `lunco-modelica` `run_stepping_loop` + dense-output decimation; `RunBounds` | reuse; T4 routes output → `SetTimeSample` |
 | Recording / replay | `lunco-twin-journal` | reuse |

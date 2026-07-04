@@ -1,7 +1,7 @@
 # Ports system: resolve→handle — Substrate D
 
 *Part of the efficiency/maintainability architecture. See
-`caching-implementation-plan.md`. The port substrate itself is documented in
+`caching-and-precompute-strategy.md`. The port substrate itself is documented in
 `lunco_core::ports`.*
 
 ## The cost

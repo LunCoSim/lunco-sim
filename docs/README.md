@@ -50,7 +50,7 @@ We are evolving from a high-fidelity sandbox into a complete autonomous mission 
 
 1. **[`architecture/00-overview.md`](architecture/00-overview.md)** — what LunCoSim is, the three-tier model, crate layers
 2. **[`principles.md`](principles.md)** — how we work (TDD, plugin-first, interop, documentation mandate)
-3. **[`architecture/01-ontology.md`](architecture/01-ontology.md)** — vocabulary (Space System, Port, Connection, CommandMessage, etc.)
+3. **[`architecture/01-ontology.md`](architecture/01-ontology.md)** — vocabulary (Space System, Port, Connection, Typed Commands, etc.)
 4. **[`architecture/10-document-system.md`](architecture/10-document-system.md)** — the foundational data model: Documents, DocumentOps, DocumentViews
 5. **[`architecture/11-workbench.md`](architecture/11-workbench.md)** — UI/UX architecture: workspaces, panels, command palette
 6. **[`architecture/12-api.md`](architecture/12-api.md)** — transport-agnostic API layer, typed commands, and queries

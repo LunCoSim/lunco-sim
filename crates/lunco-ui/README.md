@@ -29,7 +29,7 @@ See [`docs/architecture/research/ui-ux-inspiration.md`](../../docs/architecture/
 | Mechanism | Purpose |
 |-----------|---------|
 | **WidgetSystem** | O(1) cached ECS widgets for large-scale panels |
-| **CommandBuilder** | AI-native UI — all interactions via `CommandMessage` |
+| **Typed Commands** | AI-native UI — all interactions via Bevy ECS command events |
 | **WorldPanel** | 3D in-scene UI panels attached to entities |
 | **Label3D** | Floating labels over 3D objects with LOD fade |
 | **Time-series plots** | Zero-copy chart rendering via `egui_plot` |
@@ -93,5 +93,5 @@ app.register_panel(MyPanel);
 
 ## See Also
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) — detailed mechanisms (WidgetSystem, CommandBuilder, 3D UI)
+- [ARCHITECTURE.md](ARCHITECTURE.md) — detailed mechanisms (WidgetSystem, typed commands, 3D UI)
 - [Workspace UI/UX Research](../../docs/architecture/research/ui-ux-inspiration.md) — professional tool analysis and architecture decisions

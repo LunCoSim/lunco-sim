@@ -6,7 +6,7 @@ description: >
   solar system simulation — adding panels, building dashboards, creating
   inspectors, spawning UI, telemetry displays, docking layouts, themes,
   or anything involving egui, lunco-workbench, or Panel.
-  Also use when the user mentions CommandMessage, WidgetSystem, or 3D
+  Also use when the user mentions typed commands, WidgetSystem, or 3D
   world-space UI. Even if the request seems simple (like "add a button"),
   use this skill because the panel registration and command patterns
   are project-specific and not obvious from Bevy alone.
@@ -107,6 +107,6 @@ observer in the relevant domain crate (see the `test-via-api` skill's
 ## File Structure
 
 ```
-crates/lunco-ui/           ← mechanisms (WidgetSystem, CommandBuilder, 3D UI)
+crates/lunco-ui/           ← mechanisms (WidgetSystem, typed commands, 3D UI)
 crates/lunco-*/src/ui/     ← domain-specific panels
 ```

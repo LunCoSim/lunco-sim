@@ -29,13 +29,13 @@
          │             │            │
          └─────────────┼────────────┘
                        │ uses mechanisms from lunco-ui
-              ┌────────▼────────┐
-              │    lunco-ui     │
-              │  WidgetSystem   │  ← O(1) cached ECS widgets
-              │  CommandBuilder │  ← AI-native CommandMessage
-              │  WorldPanel     │  ← 3D in-scene UI
-              │  Label3D        │
-              └─────────────────┘
+               ┌────────▼────────┐
+               │    lunco-ui     │
+               │  WidgetSystem   │  ← O(1) cached ECS widgets
+               │  Typed Commands │  ← AI-native command bus
+               │  WorldPanel     │  ← 3D in-scene UI
+               │  Label3D        │
+               └─────────────────┘
 ```
 
 ### WidgetSystem — O(1) Cached ECS Widgets
@@ -65,17 +65,17 @@ widget::<TimeSeriesWidget>(world, ui, WidgetId::new("graph").with(entity).with("
 
 **Performance**: First frame O(n) init, then O(1). 2,000 widgets ≈ 12ms/sec vs 6 sec/sec naive.
 
-### CommandBuilder — AI-Native UI
+### Typed Commands — AI-Native UI
 
-All UI interactions flow through `CommandMessage`. Never mutate state directly from UI.
+All UI interactions dispatch typed commands (which are Bevy ECS events). Never mutate state directly from the UI.
 
 ```rust
 if ui.button("Focus").clicked() {
-    ctx.trigger(CommandBuilder::new("FOCUS").target(body_entity).build());
+    ctx.trigger(FocusTarget { target: body_entity });
 }
 ```
 
-This makes the UI AI-native: AI observes the same CommandMessage stream as humans, and can emit identical commands.
+This makes the UI AI-native: AI observes the same command events as humans, and can trigger identical commands.
 
 ### 3D World-Space UI
 
@@ -115,23 +115,23 @@ time_series_plot(ui, "modelica_plot", &series);
 | Docking (`lunco-workbench`) | Drag/drop panels, tabs, resize, undo — works out of the box |
 | Themes (`lunco-workbench`) | Rerun Dark / Catppuccin — scientific dashboards look good immediately |
 | Widget caching (`WidgetSystem`) | O(1) ECS queries for 1,000s of graph/diagram widgets |
-| UI→State (`CommandMessage`) | All UI actions are observable, replayable, and AI-compatible |
+| UI→State (Typed Commands) | All UI actions are observable, replayable, and AI-compatible |
 
 ## UI Decoupling Principle
 
-**Panels never mutate state directly.** All UI interactions emit `CommandMessage`:
+**Panels never mutate state directly.** All UI interactions dispatch typed commands:
 
 ```
-UI Panel (read-only query) ──CommandMessage──▶ Observer (domain crate)
+UI Panel (read-only query) ──Typed Command──▶ Observer (domain crate)
   "Focus Earth" button                         Focuses camera on entity
-                                                ──CommandResponse──▶ UI
+                                                ──Command Result (ACK)──▶ UI
 ```
 
 | UI does | UI does NOT |
 |---------|------------|
 | Query state (read-only) | Mutate state directly |
-| Emit CommandMessage | Call functions on resources |
-| Display CommandResponse | Know about implementation details |
+| Emit typed commands | Call functions on resources |
+| Display command results | Know about implementation details |
 
 ## How to Add UI to a Domain Crate
 
@@ -175,11 +175,9 @@ impl WorkbenchPanel for Inspector {
 
         // EMIT commands — never mutate
         if ui.button("Delete").clicked() {
-            world.commands().trigger(
-                CommandBuilder::new("DELETE_ENTITY")
-                    .target(selected.entity?)
-                    .build()
-            );
+            if let Some(target) = selected.entity {
+                world.commands().trigger(DeleteEntity { target });
+            }
         }
     }
 }
@@ -223,13 +221,14 @@ app.add_plugins(SandboxEditPlugin)
 ### 6. Ensure observers handle commands
 
 ```rust
-app.add_observer(on_delete_entity);
-
-fn on_delete_entity(trigger: On<CommandMessage>, mut commands: Commands) {
-    if trigger.event().name == "DELETE_ENTITY" {
-        // handle it
-    }
+#[on_command(DeleteEntity)]
+fn on_delete_entity(trigger: On<DeleteEntity>, mut commands: Commands) {
+    let cmd = trigger.event();
+    // handle it
 }
+
+// In Plugin::build, register the command observer via register_commands!:
+register_commands!(on_delete_entity);
 ```
 
 ## When to Use WidgetSystem
@@ -287,14 +286,9 @@ The LOD system runs in `PostUpdate`, after transforms propagate. It hides widget
 
 ## Command Tracking
 
-`CommandBuilder::build()` assigns monotonically increasing unique IDs:
+Result-returning commands return `Result<Ack, String>` (`Ok` for success/ACK, `Err` for failure/NACK), pollable by ID via `QueryCommandResult` for transport-dispatched calls (such as over the HTTP API or networked sessions).
 
-```rust
-let cmd1 = CommandBuilder::new("FOCUS").build();  // id = 1
-let cmd2 = CommandBuilder::new("FOCUS").build();  // id = 2
-```
-
-This enables command-response correlation: observers can emit `CommandResponse { command_id }` and UI/AI can track which commands succeeded or failed.
+In-process local UI triggers (`ctx.trigger` or `commands.trigger`) execute synchronously or trigger local state changes directly. The UI/AI can monitor outcome states by observing the respective domain state or listening to lifecycle events.
 
 ## File Structure
 
@@ -306,7 +300,7 @@ crates/lunco-ui/
     ├── lib.rs               # LuncoUiPlugin + theme
     ├── widget.rs            # WidgetSystem + WidgetId + caching
     ├── context.rs           # UiContext + UiSelection
-    ├── helpers.rs           # CommandBuilder
+    ├── helpers.rs           # collapsing tree row helpers
     ├── components.rs        # WorldPanel + Label3D
     ├── mission_control.rs   # mission-control panel widget
     ├── telemetry.rs         # telemetry panel widget

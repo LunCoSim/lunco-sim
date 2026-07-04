@@ -1,6 +1,6 @@
 # 31 — Networking & State Sync
 
-**Status:** As-built (2026-07-04, merged from the `networking` branch).
+**Status:** As-built.
 **Crate:** [`lunco-networking`](../../crates/lunco-networking) · **Feature-gated** on `networking`.
 
 LunCoSim multiplayer is **not** one replication stream. State that differs in

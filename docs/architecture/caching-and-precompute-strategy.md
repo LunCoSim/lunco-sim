@@ -1,9 +1,6 @@
 # Caching & Precompute Strategy
 
-> Status: design / analysis. Grounded in a whole-repo audit of the simulation,
-> asset, and storage layers (2026-07-02). Goal: make LunCoSim run well on
-> low-end machines by **computing each deterministic thing at most once** and
-> reusing it — in RAM within a session, on disk across sessions.
+A strategy to make LunCoSim run well on low-end machines by **computing each deterministic thing at most once** and reusing it — in RAM within a session, on disk across sessions.
 
 ## 0. The one principle
 
@@ -63,11 +60,11 @@ schedule ordering encodes a data dependency. Those look cacheable and are not
 | SHA-256 asset pinning | `lunco-assets/src/download.rs:63` | Integrity + skip-redownload on hash match. |
 | rumoca parse cache | `.cache/rumoca/parsed-files/` (content-hash keyed) + `parsed-msl.bin` bincode bundle | Cold-parse avoidance for Modelica. |
 | Structural change-detection | `Added<SimConnection>` (`lunco-cosim/src/lib.rs:252`), USD `Without<Marker>` gates | Recompute-only-on-change is already idiomatic here. |
-| **Real CIDv1 content-address** *(landed 2026-07-02)* | `lunco-networking/src/scenario.rs:54-66` `cid_for_content`/`cid_from_bytes` | IPLD CIDv1 (raw `0x55` + sha2-256), `ipfs add`-compatible; incremental fail-closed verify (`scenario_sync.rs:88-94`). **First real content-addressing in the repo** — but scoped to networking. |
-| **OPFS web blob backend** *(landed 2026-07-02)* | `lunco-storage/src/opfs_storage.rs` | Working async `read`/`write`/`exists` on wasm via `createWritable` (main-thread-legal). Path-keyed on `StorageHandle::File`. |
-| **`inventory` asset-scheme registry** *(landed 2026-07-02)* | `lunco-assets/src/asset_sources.rs:41-96` `AssetSchemeProvider` | Per-crate `inventory::submit!`'d URI schemes drained before `AssetPlugin`; `scenario://` uses it. Clean extension point for a `precompute://`/`cache://` reader. |
+| **Real CIDv1 content-address** | `lunco-networking/src/scenario.rs:54-66` `cid_for_content`/`cid_from_bytes` | IPLD CIDv1 (raw `0x55` + sha2-256), `ipfs add`-compatible; incremental fail-closed verify (`scenario_sync.rs:88-94`). **First real content-addressing in the repo** — but scoped to networking. |
+| **OPFS web blob backend** | `lunco-storage/src/opfs_storage.rs` | Working async `read`/`write`/`exists` on wasm via `createWritable` (main-thread-legal). Path-keyed on `StorageHandle::File`. |
+| **`inventory` asset-scheme registry** | `lunco-assets/src/asset_sources.rs:41-96` `AssetSchemeProvider` | Per-crate `inventory::submit!`'d URI schemes drained before `AssetPlugin`; `scenario://` uses it. Clean extension point for a `precompute://`/`cache://` reader. |
 
-**Gaps in the foundation (revised after 2026-07-02 landings):**
+**Gaps in the foundation:**
 - **No shared hashing util, but now two families in play.** Change-detection
   still uses ad-hoc `std::DefaultHasher` folds (~7 files); durable content-address
   is now sha2-256 (the new CID). Resolve by *role*, not by picking one algorithm —
@@ -311,26 +308,12 @@ Deterministic-given-inputs, currently recomputed **every load**. Rank by payoff:
 Physics *can* be cached, but only the **structure-stable, pure** parts — never
 the integrator state.
 
-**High-value, low-risk:**
+**High-value, low-risk (Shipped/Implemented):**
 
-1. **Compiled connection table** — `lunco-cosim/src/systems/propagate.rs:56-60`.
-   Today: every tick clones every wire (string clones of connector names),
-   clones the `PortRegistry`, accumulates into a string-keyed `HashMap`, writes
-   back. The author's own inline TODO(perf): compile to a **flat index table**
-   rebuilt only on `Added/Removed<SimConnection>` (detection already present).
-   Deterministic, same values, same order — pure win. This is memoization of
-   *topology*, which changes rarely, out of the *per-tick* path.
-2. **Avian port resolution index** — `lunco-core/src/ports.rs:109` `find_avian_port`
-   linearly scans a const table by name on every read/write. Precompute a
-   `name → slot` index once. Folds into (1).
-3. **`sync_collider` volume-dirty gate** — `lunco-cosim/src/systems/collider.rs:20`
-   rebuilds `Collider::sphere` **every Update frame** whenever volume>0, with no
-   dirty check. Rebuild only when `volume` actually changes (`Changed<>` or
-   last-value compare). Eliminates a per-frame allocation.
-4. **On-disk DAE artifact cache** — `lunco-modelica/src/worker.rs:303` keeps a
-   per-entity in-memory `CachedModel` (enables instant Reset, no recompile). The
-   compiled DAE/state-space form is deterministic per source but **not persisted
-   across runs** — cold-compile is minutes, warm-init ~10s. Extend `CachedModel`
+1. **Compiled connection table (Implemented)** — compiles connection topology into a flat index table rebuilt only on connection change (in `lunco-cosim/src/systems/propagate.rs`). Replaces per-tick string cloning and map accumulation with direct index offsets.
+2. **Avian port resolution index (Implemented)** — resolves name-based ports once during compile (`lunco-core/src/ports.rs:180` `ResolvedPort`) instead of scanning const tables on every tick read/write.
+3. **`sync_collider` volume-dirty gate (Implemented)** — gates `Collider::sphere` rebuilds on volume change (`Changed<>`), eliminating per-frame allocations during steady-state.
+4. **On-disk DAE artifact cache (Planned)** — `lunco-modelica/src/worker.rs:303` keeps a per-entity in-memory `CachedModel` (enables instant Reset, no recompile). The compiled DAE/state-space form is deterministic per source but **not persisted across runs** — cold-compile is minutes, warm-init ~10s. Extend `CachedModel` to write compiled blocks to the CAS disk cache.
    to a content-addressed disk artifact (key = source hash) via the §2 substrate.
    This is the single largest *startup* win for model-heavy scenarios.
 

@@ -1,6 +1,6 @@
 # Design: Rhai-Driven Dynamic Tutorial System
 
-**Status**: Proposal (2026-07-02)
+**Status**: Proposal
 **Supersedes the "Partial" status of** [spec.md](./spec.md) — this design fills the missing *objective/goal-evaluation framework* and generalizes tutorials beyond the lunica workbench to the sandbox.
 
 ---
@@ -143,9 +143,9 @@ The engine already drives `mission(me)`, tracks dwell/fail/complete, and emits t
 5. **P2.6** `SetSubsystemEnabled` allow-list for fidelity ramps.
 6. **Migration**: convert lunica tour + learning paths to data tutorials; delete hardcoded arrays.
 
-## Implemented (2026-07-02)
+## Reference Implementation & Outcomes
 
-All six tasks landed. Deviations from the plan noted inline.
+All six tasks are implemented. Deviations from the plan are noted inline.
 
 - **P0.1 Objectives/Hint HUD** — `crates/lunco-workbench/src/tutorial_overlay.rs`.
   `TutorialHud` resource + commands `SetHint` / `SetObjectives` (single-string

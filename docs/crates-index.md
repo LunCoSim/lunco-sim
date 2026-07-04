@@ -221,7 +221,7 @@ Human-interaction layer. Provides composable camera **rigs** (SpringArm, Orbit, 
 On-Board Computer emulation. Acts as the signal-processing bridge (DAC/ADC) between digital Flight Software registers (`i16`) and physical hardware units (`f32`), emulating hardware quantization and scaling.
 
 **`lunco-fsw`**
-Decentralized Flight Software architecture. Manages vessel subsystems as independent ECS entities communicating via an asynchronous `CommandMessage` fabric, mapping semantic SysML names to hardware entities.
+Decentralized Flight Software architecture. Manages vessel subsystems as independent ECS entities communicating via asynchronous typed commands, mapping semantic SysML names to hardware entities.
 
 **`lunco-hardware`**
 Physical actuator and sensor implementations. Bridges `PhysicalPort` values to the `avian3d` physics engine, providing concrete motor, brake, and sensor components that interact with the simulation world.
@@ -272,7 +272,7 @@ Distributed tuning registry. Allows external processes to mutate simulation stat
 The engineering-IDE shell. Handles the docking engine (tabs, splits), perspective presets (Build, Simulate), and the Twin Browser, acting as the primary host for all other domain-specific UI panels.
 
 **`lunco-ui`**
-Reusable UI infrastructure. Provides the `WidgetSystem` for cached ECS widgets, the `CommandBuilder` for action-driven interaction, and `WorldPanel` for 3D in-scene UI elements attached to entities.
+Reusable UI infrastructure. Provides the `WidgetSystem` for cached ECS widgets, support for typed commands, and `WorldPanel` for 3D in-scene UI elements attached to entities.
 
 **`lunco-viz`**
 Domain-agnostic visualization framework. Collects simulation data into a `SignalRegistry` and renders it via `Visualization` kinds (LinePlots, Gauges) into various view targets like 2D panels or the 3D viewport.

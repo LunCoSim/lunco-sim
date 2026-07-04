@@ -18,7 +18,7 @@
 ```mermaid
 graph TD
     A[Level 5: Intent / Avatar] -->|ActionState| B[Level 4: Controller]
-    B -->|CommandMessage Event| C[Level 3: Flight Software]
+    B -->|Typed Command Event| C[Level 3: Flight Software]
     C -->|Writing Value| D[Level 2: Digital Port / OBC]
     D -->|Signal Scaled via Wire| E[Level 1: Physical Port / Actuator]
     E -->|Physical Torque| F[Avian3D RigidBody Physics]
@@ -28,7 +28,7 @@ graph TD
 
 #### Crate 1: `lunco-core`
 - **Responsibility**: Provides universal definitions (Ontology implementation).
-- **Interfaces**: Defines `CommandMessage`, `DigitalPort` (i16), `PhysicalPort` (f32), and the `Wire` scale mapping.
+- **Interfaces**: Defines typed command execution events, `DigitalPort` (i16), `PhysicalPort` (f32), and the `Wire` scale mapping.
 - **Dependencies**: Bevy raw components.
 
 #### Crate 2: `lunco-physics`
@@ -43,11 +43,11 @@ graph TD
 
 #### Crate 4: `lunco-fsw`
 - **Responsibility**: Robotic logic and command translation (Level 3).
-- **Interfaces**: Reads global `CommandMessage` events and translates them to `DigitalPort` assignments base on internal hardware maps.
+- **Interfaces**: Reads global typed command events and translates them to `DigitalPort` assignments based on internal hardware maps.
 - **Dependencies**: `lunco-core`.
 
 #### Crate 5: `lunco-controller`
-- **Responsibility**: Bridging Avatar input via `Leafwing Input Manager` into `CommandMessage` streams holding vehicle-agnostic instructions.
+- **Responsibility**: Bridging Avatar input via `Leafwing Input Manager` into typed command events holding vehicle-agnostic instructions.
 - **Dependencies**: `lunco-core`, `leafwing-input-manager`.
 
 #### Core Embedded Testing

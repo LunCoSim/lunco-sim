@@ -1,6 +1,6 @@
 # 18 — Unified Edit Journal & Twin History
 
-Status: **as-built** (2026-07-04, `networking` branch). Extends
+Status: **as-built**. Extends
 [10-document-system](10-document-system.md) and [13-twin-and-workflow](13-twin-and-workflow.md).
 Realized in [`lunco-twin-journal`](../../crates/lunco-twin-journal) (`JournalEntry`,
 `EntryId {author, lamport}`, DAG `parents`, `EntryKind::{Op, TextEdit, Snapshot,
@@ -20,7 +20,7 @@ work is *adoption + persistence + wiring*, not a greenfield design.
 
 ---
 
-## 1. What exists today (audit, 2026-06-28)
+## 1. Document & Journal Architecture
 
 ### 1a. Generic document core — `lunco-doc` (shared by USD + Modelica)
 - `Document` trait (`lib.rs:433`): `type Op: DocumentOp`, `apply(op) -> Result<inverse_op>`.
@@ -132,7 +132,7 @@ Ordering: make the journal real and shared **first** (pure-logic, testable,
 no dep bumps), then do the USD authoring migration that feeds it.
 
 ### Phase A — Lossless, shared journal (no openusd change)
-- A1. ✅ **DONE** (2026-06-28). `impl OpPayload for UsdOp`
+- A1. ✅ **DONE**. `impl OpPayload for UsdOp`
   (`lunco-usd/src/document.rs`, `domain() = DomainKind::Usd`) + recording on the
   apply funnel `on_apply_usd_op` (`lunco-usd/src/commands.rs`): after a successful
   `registry.apply`, the inverse is read from `host.last_applied_inverse()` and the
@@ -140,7 +140,7 @@ no dep bumps), then do the USD authoring migration that feeds it.
   summary). Test `apply_usd_op_records_lossless_journal_entries` asserts the
   recorded op round-trips to the exact `UsdOp`. No-op when `JournalResource` is
   absent (headless without `TwinJournalPlugin`).
-- A2. ✅ **DONE** (2026-06-28). Modelica entries are now lossless. Derived
+- A2. ✅ **DONE**. Modelica entries are now lossless. Derived
   `Serialize`/`Deserialize` on `ModelicaOp` + all 14 `pretty` payload types
   (none embed rumoca AST — all pure value types, so no rumoca edit needed).
   `apply_one_op_kernel` now captures the real `(forward, inverse)` `ModelicaOp`
@@ -157,7 +157,7 @@ no dep bumps), then do the USD authoring migration that feeds it.
   `summarize_op_value_reads_modelica_and_usd_shapes`,
   `journal_entry_summary_covers_lifecycle` (twin-journal). Removes the
   "not replayable" caveat.
-- A3. ✅ **DONE** (2026-06-28). **Auto-bridge** via a recorder hook on
+- A3. ✅ **DONE**. **Auto-bridge** via a recorder hook on
   `DocumentHost`, not per-domain hand-wiring.
   - `lunco-doc`: new journal-free trait `OpRecorder<O> { fn record(&self, forward:&O, inverse:&O) }`
     + `DocumentHost.recorder: Option<Arc<dyn OpRecorder<D::Op>>>` (`set_recorder`/
@@ -185,7 +185,7 @@ no dep bumps), then do the USD authoring migration that feeds it.
   journal entries are correctly attributed to a Twin.
 
 ### Phase B — Persist the journal inside the Twin
-- B1. ✅ **DONE** (2026-06-28). Serialize + load the journal, routed through
+- B1. ✅ **DONE**. Serialize + load the journal, routed through
   `lunco-storage` (wasm-safe), loaded on Twin-open and saved on `DocumentSaved`.
   - **Serde (pure logic, in `lunco-twin-journal`)**: `Journal::to_bytes()` /
     `from_bytes()` over a private `JournalDto`. `Journal` can't derive `Serialize`
@@ -218,7 +218,7 @@ no dep bumps), then do the USD authoring migration that feeds it.
   log + periodic `Snapshot` baselines for compaction). Add the path/field to
   `lunco-twin` (and optionally surface in `twin.toml`). *(B1 lands the
   `journal.json` location; append-log + Snapshot compaction still open.)*
-- B3. ✅ Folded into B1: load-on-open is an observer on `TwinAdded` (cleaner than
+- B3. ✅ FOLDED: load-on-open is an observer on `TwinAdded` (cleaner than
   `TwinMode::open`, which is storage-layer + native-only), save-on-`DocumentSaved`
   is an observer; the crate link lives in `lunco-workspace`, not `lunco-twin`.
   Explicit-version save remains for B5.
@@ -229,7 +229,7 @@ no dep bumps), then do the USD authoring migration that feeds it.
   restore/branch. (Onshape-style versions; git-tag analogue.)
 
 ### Phase C — USD non-destructive editing on openusd (feeds the journal)
-- C1. ✅ **DONE** (2026-06-28). **Decision: NO openusd bump for C1/C2 — track the
+- C1. ✅ **DONE**. **Decision: NO openusd bump for C1/C2 — track the
   pinned `=0.5.0`.** The audit was wrong that `EditTarget` is post-0.5.0: 0.5.0
   already ships `Stage`, `EditTarget::for_layer`, `Stage::edit_context`,
   `EditContext`, `override_prim`, `create_attribute().set()`. Only the **`Diff`
@@ -253,7 +253,7 @@ no dep bumps), then do the USD authoring migration that feeds it.
     - Strength order strongest→weakest: session > root's own opinions > root's
       sublayers. So "base in a weak anon sublayer, override in the strong root
       layer" is the working arrangement for a 2-layer test.
-- **C-arch (LOCKED 2026-06-28, user: "do properly, NO legacy, use openusd don't
+- **C-arch (LOCKED, user: "do properly, NO legacy, use openusd don't
   reinvent, composition via openusd too"). openusd bumped to `main`** via root
   `[patch.crates-io] openusd = { path = "../openusd" }` (local checkout
   fast-forwarded to rev `06d619d4`, has the Diff API; still version 0.5.0 so it
@@ -293,7 +293,7 @@ no dep bumps), then do the USD authoring migration that feeds it.
   replication would need serde added to openusd `Diff` upstream.
 - C4. Persist runtime state (obstacle field, spawn transforms) into the **runtime
   layer** instead of ECS-only, so it round-trips and is journaled.
-  - **C4a infra ✅ DONE (2026-06-28).** `UsdDocument` is now two-layer:
+  - **C4a infra ✅ DONE.** `UsdDocument` is now two-layer:
     `base: sdf::Data` (authored, serialized by `source()`/Save) + `runtime:
     sdf::Data` (generated overlay, **never** saved). `LayerId::runtime()` is a
     real identity; `apply` routes ops by `edit_target` (root→base,
@@ -309,8 +309,7 @@ no dep bumps), then do the USD authoring migration that feeds it.
     path — already kills CQ-503), and the genuine base/runtime split + non-root
     routing landed here in C4a. The C1 spike's base-weak/override-strong layer
     *stacking* remains unused (author is single-layer-per-op + extract).
-  - **C4b keystone ✅ DONE (2026-06-28): composed read + render refeed.**
-    `lunco_usd_bevy::author::compose_layers(base, runtime)` is the **sdf
+  - **C4b keystone ✅ DONE:** `lunco_usd_bevy::author::compose_layers(base, runtime)` is the **sdf
     layer-stack merge** openusd doesn't expose: runtime fields win per spec via
     `SpecData::add` (upsert), runtime-only specs copied wholesale, `primChildren`
     unioned. References survive as opinions (NOT a Stage/PCP flatten — that
@@ -321,7 +320,7 @@ no dep bumps), then do the USD authoring migration that feeds it.
     stays base. Safe no-op while runtime is empty (composed == base). Tests:
     `compose_layers_overlays_runtime_onto_base`, `…_empty_runtime_is_base`,
     `composed_view_includes_runtime_but_source_excludes_it`.
-  - **C4b move producer ✅ DONE (2026-06-28).** `persist_move_to_runtime_layer`
+  - **C4b move producer ✅ DONE.** `persist_move_to_runtime_layer`
     (a second observer on `MoveEntity` in `lunco-sandbox-edit::commands`,
     decoupled from the physics handler) persists an authored-scene entity's move
     as `SetTranslate{edit_target: runtime}` into the **active** USD doc (resolved
@@ -333,7 +332,7 @@ no dep bumps), then do the USD authoring migration that feeds it.
     composed view; Save stays base-only. 2 integration tests
     (`move_of_authored_prim_persists_to_runtime_layer`,
     `move_of_unowned_entity_is_skipped`).
-  - **C4b active-doc unification ✅ FIX (2026-06-28).** The move producer reads
+  - **C4b active-doc unification ✅ FIX.** The move producer reads
     `workspace.active_document` (the unified, cross-workbench focused-doc
     pointer Modelica already publishes to), but the **USD viewport never
     published into it** — it tracked its mounted doc only in the USD-private
@@ -350,7 +349,7 @@ no dep bumps), then do the USD authoring migration that feeds it.
     `workspace.close_document` (repoints active before `DocumentClosed`), and a
     dangling pointer is a safe no-op via the producer's `host(doc)` guard.
     Regression test: `install_publishes_active_doc_to_workspace`.
-  - **C4b spawn producer ✅ DONE (2026-06-29).** Persisting a *spawn* needs a
+  - **C4b spawn producer ✅ DONE.** Persisting a *spawn* needs a
     reference arc on the runtime prim — the new op capability. `UsdOp::AddPrim`
     gained `reference: Option<String>`; `Some` authors a `references = @asset@`
     opinion via `lunco_usd_bevy::author::author_reference` (openusd's Stage has
@@ -379,7 +378,7 @@ viewport; the live sandbox world is a **parallel** stage loaded from the base
 and the journal is a passive log that is **never replayed**. So without C5 the
 runtime overlay is lost on reload and never reaches the live world.
 
-  - **C5-A runtime-overlay persistence ✅ DONE (2026-06-29).** The runtime layer
+  - **C5-A runtime-overlay persistence ✅ DONE.** The runtime layer
     is serialized to its **own** file, `<twin>/.lunco/runtime/<scene-rel>.usda`
     (parallel to the journal — *not* journal replay, which doesn't exist).
     `UsdDocument::restore_runtime(data)` = a session-restore load (bumps
@@ -441,7 +440,7 @@ as today).
 | Connectors (Maya/Blender/Houdini) | external SW reads/writes the same USD | `.usda` layers over that resolver — USD *is* the interchange format |
 
 **Decomposition (incremental — builds on C2–C5, no big-bang rewrite):**
-- **E1. Unify the source (highest leverage). — IMPLEMENTED 2026-06-29
+- **E1. Unify the source (highest leverage). — IMPLEMENTED
   (doc-backed scope).** The live scene root for a USD *file* document is mounted
   from the document's `composed_source()` (`base ⊕ runtime`) instead of the raw
   file; `instantiate_usd_prim` already consumes a `UsdStageAsset`, so it is fed
@@ -475,7 +474,7 @@ as today).
   Making the default twin scene auto-open a document (so the fallback disappears)
   is the **E1b** follow-up — IMPLEMENTED below.
 
-  **E1b. Default twin scene = doc-backed, web-ready (IMPLEMENTED 2026-06-29).**
+  **E1b. Default twin scene = doc-backed, web-ready (IMPLEMENTED).**
   The default twin scene loads through the `twin://` asset source + the async
   `UsdLoader`, which already re-attaches the `scheme://` so co-located refs
   (terrain `.glb`) resolve on every platform the source supports. So rather than
@@ -516,7 +515,7 @@ as today).
   (the substrate is `UsdDocument::changes_since(gen)` yielding granular
   `UsdChange`: a move = `InfoOnly{xformOp:translate}`, spawn/remove/rename =
   `Resync`, wholesale = `FullReload`):
-  - **E2-1. Incremental transforms — IMPLEMENTED 2026-06-29.** New
+  - **E2-1. Incremental transforms — IMPLEMENTED.** New
     `lunco-usd/src/live_consume.rs`: `classify_changes_since(reg, doc, since,
     cur_gen)` splits the deltas into transform-only paths vs `needs_structural`
     (anything else, OR a change-ring overflow → conservative reload).
@@ -534,7 +533,7 @@ as today).
     fine; full avian-aware writeback is a follow-up. Tests: classify (move=transform,
     spawn=structural), ring-overflow→structural. lunco-usd 54 green.
   - **E2-2 / E2-3 / E2-4. Incremental spawn + despawn, structural reload retired
-    — IMPLEMENTED 2026-06-29.** `classify_changes_since` now also returns
+    — IMPLEMENTED.** `classify_changes_since` now also returns
     `resync_paths` (every concrete-prim `Resync`) and a `full_reload` flag (set by
     a whole-source `FullReload`, a whole-stage `Resync { "/" }`, or a change-ring
     overflow). `live_consume::reconcile_structural(world, stage_handle_id, reader,

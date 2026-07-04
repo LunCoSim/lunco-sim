@@ -1,9 +1,9 @@
 # Efficiency & Maintainability — the North Star
 
 > Umbrella for the caching/perf work. Frames the detailed docs
-> (`caching-and-precompute-strategy.md`, `caching-implementation-plan.md`,
-> ports design) under one principle, so the whole workspace moves the same
-> direction instead of accreting one-off optimizations.
+> (`caching-and-precompute-strategy.md`, ports design) under one principle,
+> so the whole workspace moves the same direction instead of accreting
+> one-off optimizations.
 
 ## The one principle
 

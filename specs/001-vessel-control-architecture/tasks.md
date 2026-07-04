@@ -12,7 +12,7 @@
 - [x] 1.2 [P] Implement Level 1 & Level 2 primitives (`lunco-core`)
   - Create `DigitalPort` (i16) and `PhysicalPort` (f32) components.
   - Create `Wire` component with value signal scaling logic.
-  - Create `CommandMessage` struct and `CommandRegistry`.
+  - Create typed command events and Command Registry (AppTypeRegistry).
   - **Depends on**: 1.1
   - **Requirement**: FR-003, FR-006
 
@@ -31,7 +31,7 @@
   - **Requirement**: FR-005, FR-007
 
 - [x] 2.3 Implement the General FSW System Pipeline (`lunco-fsw`)
-  - Create listener queues for generic `CommandMessage` structs.
+  - Create listener observers for typed command events.
   - Create a trait system or core plugin mapping Commands to targeted `DigitalPort` entities.
   - **Depends on**: 1.2
   - **Requirement**: FR-002, FR-008
@@ -51,7 +51,7 @@
 
 - [x] 3.1 Implement Avatar Controller logic (`lunco-controller`)
   - Incorporate `leafwing-input-manager` configuration logic for WASD to logical Intent states.
-  - Map specific intents (Forward, Steer Left, Stop) to broad `CommandMessage` events.
+  - Map specific intents (Forward, Steer Left, Stop) to typed command events.
   - **Depends on**: 1.1
   - **Requirement**: FR-001
 

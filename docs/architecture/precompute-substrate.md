@@ -1,7 +1,7 @@
 # Precompute substrate (`lunco-precompute`) — Substrate B
 
 *Part of the efficiency/maintainability architecture. Builds on
-`hashing-substrate.md` (Substrate E). See `caching-implementation-plan.md`.*
+`hashing-substrate.md` (Substrate E) and `caching-and-precompute-strategy.md`.*
 
 ## What it is
 
@@ -59,9 +59,10 @@ I/O-only; the CAS *policy* lives here.
   migrated onto `Bake` (`DerivedBake`, `NAMESPACE="terrain/derived"`, two blobs
   `surface.bin`/`normal.bin`). Key is byte-identical to the former inline fold,
   so pre-existing cache entries stay valid.
-- **Next candidates:** horizon-occlusion bake (`horizon_march`), USD flatten
-  artifacts, avian collider/trimesh bakes, obstacle-field grids. Each becomes a
-  small `Bake` impl instead of re-implementing load/store/rebake.
+- **Landed:** `lunco-celestial/horizon_bake.rs` — horizon profiling/shadow bakes
+  (`HorizonBake`, `NAMESPACE="celestial/horizon"`, 64KB lookup texture).
+- **Planned:** USD stage flat bakes, avian collider/trimesh bakes, obstacle-field grids,
+  `lunco-modelica` worker DAE cache.
 
 ## Designed, not yet built
 

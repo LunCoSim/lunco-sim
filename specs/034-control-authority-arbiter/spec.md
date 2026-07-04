@@ -1,6 +1,6 @@
 # Spec 034 — Control Authority: Autopilot as a User
 
-**Status**: Proposal (rev 2, 2026-07-02)
+**Status**: Proposal (rev 2)
 **Owner**: —
 **Relates to**: [`001-vessel-control-architecture`](../001-vessel-control-architecture/spec.md) (the port-write control path), [`010-authority-rbac`](../010-authority-rbac/spec.md) (possession + the `authorize` gate this reuses)
 

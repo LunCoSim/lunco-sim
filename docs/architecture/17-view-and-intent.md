@@ -85,7 +85,7 @@ The simulation core (`lunco-celestial`, `lunco-core`) has NO dependency on the c
 
 ---
 
-## 6. Implemented: Scene Viewport & Active Camera (2026-07)
+## 6. Reference Implementation: Scene Viewport & Active Camera
 
 The camera-*selection* and viewport machinery below is **implemented** (distinct
 from the aspirational `ViewPoint`/`CameraDevice` ontology in §2). It reuses Bevy

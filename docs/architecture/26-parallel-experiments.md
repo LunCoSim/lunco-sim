@@ -104,4 +104,4 @@ Queued-cancel is checked at `start_job`.
   compiles, so it self-bounds. Keep `max_parallel` modest anyway (default
   clamps `1..=4`) since each native run also carries orchestration + result
   buffers. If profiling ever shows compile contention, pre-init rayon's global
-  pool from the app (no rumoca edit). Resolved 2026-06-02.
+  pool from the app (no rumoca edit).
