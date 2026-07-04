@@ -26,6 +26,20 @@ def Xform "DiffRig" (
     float physics:mass = 3000.0
     float3 physics:diagonalInertia = (4000.0, 4000.0, 4000.0)
 
+    # The base is a FIXED pillar (see header) — kinematic, not free-falling dynamic.
+    # This also WORKS AROUND an avian 0.6.1 solver-island crash: a *dynamic* body that
+    # both rests on the ground AND is the root of a joint tree with freely-swinging
+    # children (the rockers) makes avian build a contact+joint island whose
+    # `head_contact` goes stale → panic in `update_narrow_phase` (islands/mod.rs:547),
+    # reproduced deterministically on load. Kinematic removes the dynamic ground-contact
+    # island; the rockers still swing on their revolute joints, so the differential test
+    # is unaffected (and cleaner — no base wobble).
+    # TODO(avian-island-crash): the real fix is upstream in avian's island bookkeeping
+    # on dynamic-body ground contact; can't bump avian without bumping Bevy. Revisit if
+    # avian is updated, or if another scene needs a dynamic body grounded under a joint
+    # tree. See lunco-usd-avian collider construction + the G5 differential rig tests.
+    bool physics:kinematicEnabled = true
+
     rel lunco:differential:rockerA = </DiffRig/RockerL>
     rel lunco:differential:rockerB = </DiffRig/RockerR>
     uniform token lunco:differential:axis = "X"

@@ -990,7 +990,7 @@ fn on_load_scene(
     q_usd: Query<(Entity, &UsdPrimPath)>,
     q_wires: Query<Entity, With<SimConnection>>,
     q_modelica: Query<Entity, With<ModelicaModel>>,
-    q_scripted: Query<&ScriptedModel>,
+    q_scripted: Query<(Entity, &ScriptedModel)>,
     channels: Res<ModelicaChannels>,
     mut script_registry: ResMut<lunco_scripting::ScriptRegistry>,
 ) {
@@ -1060,7 +1060,7 @@ fn on_restart_scene(
     q_usd: Query<(Entity, &UsdPrimPath)>,
     q_wires: Query<Entity, With<SimConnection>>,
     q_modelica: Query<Entity, With<ModelicaModel>>,
-    q_scripted: Query<&ScriptedModel>,
+    q_scripted: Query<(Entity, &ScriptedModel)>,
     channels: Res<ModelicaChannels>,
     mut script_registry: ResMut<lunco_scripting::ScriptRegistry>,
 ) {
@@ -1134,7 +1134,7 @@ fn on_clear_scene(
     q_usd: Query<(Entity, &UsdPrimPath)>,
     q_wires: Query<Entity, With<SimConnection>>,
     q_modelica: Query<Entity, With<ModelicaModel>>,
-    q_scripted: Query<&ScriptedModel>,
+    q_scripted: Query<(Entity, &ScriptedModel)>,
     channels: Res<ModelicaChannels>,
     mut script_registry: ResMut<lunco_scripting::ScriptRegistry>,
 ) {
@@ -1159,7 +1159,7 @@ fn clear_scene_entities(
     q_usd: &Query<(Entity, &UsdPrimPath)>,
     q_wires: &Query<Entity, With<SimConnection>>,
     q_modelica: &Query<Entity, With<ModelicaModel>>,
-    q_scripted: &Query<&ScriptedModel>,
+    q_scripted: &Query<(Entity, &ScriptedModel)>,
     channels: &ModelicaChannels,
     script_registry: &mut lunco_scripting::ScriptRegistry,
 ) {
@@ -1171,9 +1171,19 @@ fn clear_scene_entities(
         let _ = channels.tx.send(ModelicaCommand::Despawn { entity: e });
         modelica_freed += 1;
     }
-    // Drop registered Python script documents for every ScriptedModel.
+    // Drop registered script documents for SCENE scripts only (USD-prim-backed —
+    // those entities are despawned below). A standalone scenario host — a tutorial
+    // coach-tour, or an API `RunScenario` on a bare entity — is session-level, NOT
+    // scene content: evicting its document here would drop it from the scenario
+    // driver's `work` set (which skips entities whose document is gone), so it
+    // silently stops receiving `on_event`/`on_tick`. That is exactly how a
+    // tutorial's Next/Skip go dead the moment its `on_start` calls `load_scene`.
+    // Keep those alive across a scene clear.
     let mut scripts_freed = 0usize;
-    for sm in q_scripted.iter() {
+    for (e, sm) in q_scripted.iter() {
+        if !q_usd.contains(e) {
+            continue;
+        }
         if let Some(raw_id) = sm.document_id {
             if script_registry.documents.remove(&DocumentId::new(raw_id)).is_some() {
                 scripts_freed += 1;
