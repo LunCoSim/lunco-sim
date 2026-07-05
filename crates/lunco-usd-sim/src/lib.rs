@@ -140,6 +140,7 @@ impl Plugin for UsdSimPlugin {
            // `OnAdd<UsdVisualSynced>` observer. Gating with `run_if`
            // skips the system entirely on frames with no unprocessed
            // USD prim (archetype-level check, near-zero cost).
+           .init_resource::<GroundColliderPending>()
            .add_systems(Update, (
                 process_usd_sim_prims
                     .run_if(any_unprocessed_usd_sim)
@@ -1952,18 +1953,37 @@ fn resolve_differential_coupling(
     }
 }
 
+/// Set while a ground provider's static collider is still building (the DEM
+/// terrain build — tracked by the assembly crate that sees both worlds, e.g.
+/// `lunco-sandbox`). While `true`, [`activate_dynamic_bodies`] holds bodies
+/// kinematic so a rover spawned over not-yet-collidable terrain doesn't
+/// free-fall through the surface during the multi-second collider bake.
+#[derive(Resource, Default)]
+pub struct GroundColliderPending(pub bool);
+
 fn activate_dynamic_bodies(
     mut commands: Commands,
+    ground_pending: Res<GroundColliderPending>,
     q_kinematic: Query<(Entity, &UsdPrimPath), With<ShouldBeDynamic>>,
     q_pending_joints: Query<&UsdPrimPath, With<lunco_usd_avian::PendingUsdJoint>>,
     q_pending_diffs: Query<&UsdPrimPath, With<PendingDifferential>>,
 ) {
+    // Ground still building → gravity would win the race; keep everything
+    // kinematic until the terrain collider lands.
+    if ground_pending.0 {
+        return;
+    }
     for (entity, path) in q_kinematic.iter() {
         let has_pending_joint = q_pending_joints.iter().any(|j_path| j_path.stage_handle == path.stage_handle);
         let has_pending_diff = q_pending_diffs.iter().any(|d_path| d_path.stage_handle == path.stage_handle);
         if !has_pending_joint && !has_pending_diff {
-            commands.entity(entity).insert(RigidBody::Dynamic);
-            commands.entity(entity).remove::<ShouldBeDynamic>();
+            // Despawn-safe: scene-load churn / doc-backed reload can despawn a
+            // ShouldBeDynamic entity between this queue and `apply_deferred`; a plain
+            // `insert` then panics on the invalid entity. `try_insert`/`try_remove`
+            // no-op at apply time if the entity is gone (a `get_entity` guard here
+            // would not help — it only proves validity at queue time, not apply).
+            commands.entity(entity).try_insert(RigidBody::Dynamic);
+            commands.entity(entity).try_remove::<ShouldBeDynamic>();
             debug!("Activated RigidBody::Dynamic for stage: {:?}", path.stage_handle);
         }
     }

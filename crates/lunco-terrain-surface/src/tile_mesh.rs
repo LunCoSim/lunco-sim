@@ -13,7 +13,7 @@
 //! Pure + Bevy-free → unit-tested and wasm-safe; the plugin runs it off-thread
 //! and assembles the attributes into a Bevy `Mesh`.
 
-use lunco_obstacle_field::field::{grid_indices, HeightGrid};
+use lunco_obstacle_field::field::grid_indices;
 use lunco_terrain_core::HeightSource;
 
 use crate::quadtree::Square;
@@ -31,18 +31,20 @@ pub struct TileMesh {
 }
 
 /// Bake a `res × res`-vertex CDLOD mesh covering `region`, sampling heights from
-/// `dem`. `res` is clamped ≥ 2. `MORPH_TARGET` snaps each vertex index down to the
-/// parent's even lattice (`idx & !1`) and re-samples the DEM there — so even
-/// vertices don't move and odd vertices collapse onto their even neighbour, the
-/// standard CDLOD vertex morph. UVs are DEM-global (`(world + H)/(2H)`) so layer
-/// maps align across tiles. `dem_half_extent` is the DEM's `half_extent`.
+/// the composed height `src` (the terrain's `SurfaceOracle`: DEM base + analytic
+/// crater/edit modifiers — so rims resolve at *this tile's* vertex density, not the
+/// DEM grid's). `res` is clamped ≥ 2. `MORPH_TARGET` snaps each vertex index down
+/// to the parent's even lattice (`idx & !1`) and re-samples the source there — so
+/// even vertices don't move and odd vertices collapse onto their even neighbour,
+/// the standard CDLOD vertex morph. UVs are DEM-global (`(world + H)/(2H)`) so
+/// layer maps align across tiles. `dem_half_extent` is the DEM's `half_extent`.
 ///
 /// `origin_xz` is subtracted from vertex X/Z so positions are **relative to that
 /// anchor** (UVs stay DEM-global). Pass the tile's own world centre to keep
 /// vertices small and f32-precise when the tile is anchored to its own big_space
 /// `CellCoord`; pass `[0.0, 0.0]` for DEM-absolute positions.
 pub fn bake_tile_mesh(
-    dem: &HeightGrid,
+    src: &dyn HeightSource,
     region: Square,
     res: usize,
     dem_half_extent: f64,
@@ -59,16 +61,18 @@ pub fn bake_tile_mesh(
     let world = |ix: usize, iz: usize| -> (f64, f64) {
         (x0 + ix as f64 * step, z0 + iz as f64 * step)
     };
-    let height = |wx: f64, wz: f64| -> f32 { dem.height_at(wx as f32, wz as f32) };
+    let height = |wx: f64, wz: f64| -> f32 { src.height_at(wx, wz) as f32 };
 
-    // Normals are sampled ANALYTICALLY from the DEM at a fixed `eps` (the DEM
-    // spacing), NOT from each tile's own grid — so any world position yields the
-    // same normal in every tile and at every LOD. Per-tile finite-difference
-    // normals don't agree at shared edges → the visible shading "stitching"; the
-    // analytic field removes that (and smooths the over-zoom facets).
-    let eps = (dem.spacing() as f64).max(1e-3);
+    // Normals are sampled ANALYTICALLY from the composed source, NOT from each
+    // tile's own grid — per-tile finite-difference normals don't agree at shared
+    // edges (visible shading "stitching"); the analytic field removes that. The
+    // central-difference `eps` scales with THIS tile's vertex spacing: near tiles
+    // resolve crisp analytic crater-rim shading (sub-metre), far tiles average
+    // the same surface over their own coarser footprint (proper normal LOD, no
+    // sub-vertex shimmer). Same depth → same eps, so neighbours still agree.
+    let eps = (0.5 * step).max(0.35);
     let normal_at = |wx: f64, wz: f64| -> [f32; 3] {
-        let n = dem.normal_at(wx, wz, eps);
+        let n = src.normal_at(wx, wz, eps);
         [n[0] as f32, n[1] as f32, n[2] as f32]
     };
 
@@ -165,6 +169,7 @@ fn append_skirts(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lunco_obstacle_field::field::HeightGrid;
 
     fn flat_dem() -> HeightGrid {
         HeightGrid { res: 8, half_extent: 100.0, heights: vec![0.0; 64] }

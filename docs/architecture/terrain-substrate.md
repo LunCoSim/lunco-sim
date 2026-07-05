@@ -380,13 +380,28 @@ slope limiter) is already the substrate an editing toolset would stand on.
 
 ## Current state & roadmap
 
-**As-built (works today):** DEM ingest + crop/resample; static heightfield
-collider; streamed CDLOD visual tiles (`stream_viz`) with vertex-morph geomorph
-via `ShaderMaterial`; opt-in per-tile collider ring (`collider_ring`); big_space
+**As-built (works today):** DEM ingest + crop/resample; **the live-analytic
+oracle** — `SurfaceOracle` (`oracle.rs`: raster base + ordered analytic
+`HeightModifier`s, per-modifier content keys) retained as `DemHeightField` and
+sampled by the tile baker, the collider ring (through the
+`prepare_collider_heights` slope-limit + quantize firewall), the derived-layer
+texture bakes, the rock scatter, and the `TerrainHeight` query — craters and
+runtime edits are analytic modifiers (`Craters`, `EditsLayer`), no longer raster
+stamps, so rim crispness is bounded by tile tessellation, not grid resolution
+(`detailUpsample` is retired); **error-driven CDLOD** — `select_with_error` over
+memoized `measure_node_error` per node (`TerrainNodeErrors`), range factor from
+the canonical screen metric (`pixel_error` knob), morph bands snapped to
+log-lattice buckets so batching survives per-parent bands; **procedural
+over-zoom** — `Overzoom` in core (hashed craterlet bands on the lunar
+size-frequency shape + FBM micro-relief, Nyquist-gated per consumer via
+`SurfaceOracle::detail_limited`), authored as a `lunco:layer = "overzoom"` prim;
+streamed CDLOD visual tiles (`stream_viz`) with vertex-morph geomorph via
+`ShaderMaterial`; opt-in per-tile collider ring (`collider_ring`); big_space
 per-tile anchoring; `TerrainLayerStack` composed from USD `lunco:layer` child
 prims; `CompositeHeightSource` (core, pure); `TerrainGeoref` parsed from
 `lunco:anchor:*`; derived surface/normal layers content-addressed through
-`lunco-precompute` (`derived_layers.rs`); `TerrainHeight` scripting query.
+`lunco-precompute` (`derived_layers.rs`, keyed on base heights + the oracle's
+modifier content key); `TerrainHeight` scripting query.
 
 > **Note on the USD read path:** as-built terrain still reads USD via the *flatten*
 > reader (`UsdStageAsset` / `UsdDataExt`). The canonical-Stage cutover (above) is a
@@ -394,12 +409,14 @@ prims; `CompositeHeightSource` (core, pure); `TerrainGeoref` parsed from
 
 **Known gaps (in the order they should land):**
 
-1. **Kill the two-surface crater path** — delete the floating overlay + `lift`;
-   make craters a `HeightSource` *modifier* sampled by both the tile baker and the
-   collider ring. This is the fix for "craters elevated / colliders suck," and
-   step 1 of everything above.
-2. **Per-tile geometric error** measured from the oracle → error-driven CDLOD
-   (peaks/rims refine automatically); collider ring res driven by the same metric.
+1. ~~Kill the two-surface crater path~~ — **done**: craters are an analytic
+   `Craters` modifier on the `SurfaceOracle`, sampled by the tile baker and the
+   collider ring at their own resolutions.
+2. ~~Per-tile geometric error → error-driven CDLOD~~ — **done** for the visual
+   tiles (`select_with_error` + memoized `measure_node_error`). Still open:
+   collider-ring resolution driven by the same error metric (the ring is fixed
+   canonical-depth/res today), and moving the ring's heightfield build off the
+   main thread.
 3. **Carve/mask channel** — the seam for caves/pits/skylights (baker clip +
    heightfield→trimesh fallback on mouth tiles).
 4. **Canonical-Stage read migration** (forced when this worktree merges
@@ -414,7 +431,8 @@ prims; `CompositeHeightSource` (core, pure); `TerrainGeoref` parsed from
 6. **Tile bake cache** — extend the existing `lunco_precompute::Bake` pattern
    (already used by `derived_layers`) to tile + collider bakes, so one bake feeds
    visuals + physics and ships as a spec+hash across peers. (Not a bespoke
-   `cache://` asset — the content-address substrate already landed.)
+   `cache://` asset — the content-address substrate already landed. The
+   `SurfaceOracle::content_key` is the modifier half of that cache key.)
 
 [Cesium-for-Omniverse]: https://github.com/CesiumGS/cesium-omniverse
 

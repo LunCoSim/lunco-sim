@@ -1,5 +1,6 @@
 //! Built-in **rocks** layer: scatters faceted boulders ON the DEM surface (static
-//! drivable obstacles, LOD-culled), ground height resolved from the stamped grid.
+//! drivable obstacles, LOD-culled), ground height resolved from the composed
+//! surface oracle (so rocks sit correctly in/around analytic craters and edits).
 
 use std::sync::Arc;
 
@@ -55,8 +56,8 @@ impl TerrainLayer for RockScatterLayer {
         "rocks"
     }
     fn scatter(&self, cx: &mut LayerScatterCx) {
-        let grid = cx.grid;
-        let half = self.region_half_extent.min(grid.half_extent);
+        let oracle = cx.oracle;
+        let half = self.region_half_extent.min(oracle.half_extent());
         if half <= 0.0 {
             return;
         }
@@ -113,7 +114,11 @@ impl TerrainLayer for RockScatterLayer {
         let mut spawned = 0usize;
         cx.commands.entity(cx.terrain).with_children(|parent| {
             for p in &placements {
-                let y = grid.height_at(p.pos.x, p.pos.y);
+                let y = lunco_terrain_core::HeightSource::height_at(
+                    oracle,
+                    p.pos.x as f64,
+                    p.pos.y as f64,
+                ) as f32;
                 let mut rock = parent.spawn((
                     TerrainRock,
                     TerrainScatterEntity,

@@ -103,11 +103,18 @@ fn fbm(p: vec3<f32>, octaves: i32, gain: f32) -> f32 {
     var amp = 1.0;
     var total = 0.0;
     var q = p;
+    // Rotate the domain about +Y by the golden angle (≈2.4 rad) each octave.
+    // Value noise is axis-aligned, so un-rotated octaves stack into diagonal
+    // grid streaks that read as static under grazing lunar light; a per-octave
+    // rotation decorrelates them into isotropic grain.
+    let rc = cos(2.399963);
+    let rs = sin(2.399963);
     for (var o = 0; o < octaves; o++) {
         sum += amp * vnoise(q);
         total += amp;
         amp *= gain;
         q *= 2.0;
+        q = vec3(rc * q.x - rs * q.z, q.y, rs * q.x + rc * q.z);
     }
     return sum / total;
 }
@@ -124,119 +131,22 @@ fn aa_fade(scale: f32, pw: f32) -> f32 {
     return saturate((px_per_period - 3.0) / 22.0);
 }
 
-// --- procedural lunar relief: a Voronoi crater + rock field ----------------
-// Real macro/meso relief on the Moon is IMPACT CRATERS (circular bowl + raised
-// ejecta rim) and scattered rocks — NOT the isotropic FBM that reads as blobby
-// cottage cheese. We stamp a jittered-grid crater field as a world-space HEIGHT
-// field and perturb the shading normal by its analytic gradient: circular
-// features that read as craters. Pure math, no textures → wasm-safe.
+// NOTE (Phase 1, 2026-07-05): the fragment previously faked crater + rock relief
+// here as a Voronoi HEIGHT field perturbing only the shading normal. That read as
+// a painted-on "mess" up close — normal-only features have no silhouette/parallax,
+// and the hard Voronoi cell/rim boundaries creased the normal under grazing sun.
+// All macro/meso SHAPE now belongs to real geometry: the DEM + the crater HeightSource
+// (sampled by the CDLOD baker + collider) and scattered rock meshes. The fragment
+// does ONLY believable sub-decimetre regolith micro-tooth + lunar photometry + broad
+// albedo variation. (crater_octave/rock_octave/relief_height/hash21 removed.)
 //
-// Why this is the "proper" lunar look (research, 2026-06-29):
-//   * Real macro relief = crater/rock geometry or procedural crater HEIGHT maps,
-//     not FBM (FBM noise reads as cottage-cheese; regolith is smooth BETWEEN
-//     impacts). — SIGGRAPH Asia 2025, "Materials for the Moon":
-//     https://dl.acm.org/doi/10.1145/3757374.3771428
+// The "proper" lunar look (research, 2026-06-29):
+//   * Real macro relief = crater/rock GEOMETRY, not FBM (isotropic FBM reads as
+//     cottage-cheese; regolith is smooth BETWEEN impacts). — SIGGRAPH Asia 2025,
+//     "Materials for the Moon": https://dl.acm.org/doi/10.1145/3757374.3771428
 //   * Photometry: dark albedo (~0.08-0.13) + Hapke / Lommel-Seeliger + opposition
-//     surge (see lunar_brdf.wgsl). — JPL/arXiv physics-based lunar ground sim:
-//     https://arxiv.org/html/2410.04371v1
-//     and JPL AAS 23-122 image rendering / terrain generation.
-//   * Airless body → NO atmospheric haze: stays high-contrast, crisp to the
-//     horizon (the opposition/heiligenschein surge):
-//     https://the-moon.us/wiki/Retro-Reflection_phenomena
-
-fn hash21(p: vec2<f32>) -> f32 {
-    var p3 = fract(vec3(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
-}
-
-// One octave of craters at average spacing `cell` (m), max depth `depth` (m).
-// `density` ∈ (0,1]: fraction of grid cells that actually hold a crater.
-fn crater_octave(xz: vec2<f32>, cell: f32, depth: f32, density: f32) -> f32 {
-    let g  = xz / cell;
-    let gi = floor(g);
-    let gf = g - gi;
-    var h = 0.0;
-    for (var j = -1; j <= 1; j = j + 1) {
-        for (var i = -1; i <= 1; i = i + 1) {
-            let off = vec2<f32>(f32(i), f32(j));
-            let id  = gi + off;
-            if (hash21(id + 11.5) > density) { continue; }
-            let jit    = vec2(hash21(id), hash21(id + 4.2));
-            let center = off + jit;                       // crater centre, cell units
-            let d      = distance(gf, center);
-            let radius = mix(0.16, 0.42, hash21(id + 7.7));
-            let r      = d / radius;
-            let dep    = depth * mix(0.45, 1.0, hash21(id + 2.3));
-            if (r < 1.0) {
-                // parabolic bowl: deepest at centre, 0 at the rim
-                h = h - dep * (1.0 - r * r);
-            } else if (r < 1.45) {
-                // raised ejecta rim: a soft bump just outside the bowl
-                let rr = (r - 1.0) / 0.45;
-                h = h + dep * 0.30 * (rr * (1.0 - rr) * 4.0);
-            }
-        }
-    }
-    return h;
-}
-
-// Scattered rocks/clods as sharp positive bumps (Voronoi, tighter than craters).
-fn rock_octave(xz: vec2<f32>, cell: f32, height: f32, density: f32) -> f32 {
-    let g  = xz / cell;
-    let gi = floor(g);
-    let gf = g - gi;
-    var h = 0.0;
-    for (var j = -1; j <= 1; j = j + 1) {
-        for (var i = -1; i <= 1; i = i + 1) {
-            let off = vec2<f32>(f32(i), f32(j));
-            let id  = gi + off;
-            if (hash21(id + 19.1) > density) { continue; }
-            let jit    = vec2(hash21(id + 5.0), hash21(id + 8.0));
-            let center = off + jit;
-            let d      = distance(gf, center);
-            let radius = mix(0.08, 0.22, hash21(id + 3.1));
-            let r      = d / radius;
-            if (r < 1.0) {
-                let bump = 1.0 - r * r;
-                h = h + height * mix(0.4, 1.0, hash21(id + 6.6)) * bump * bump;
-            }
-        }
-    }
-    return h;
-}
-
-// Combined impact relief height (m) at world xz. Per-octave footprint fades keep
-// each scale from aliasing once it shrinks under a pixel: big craters survive to
-// the far distance, small craters + rocks only close up. `amp`/`rock_amp` scale
-// the whole field for live tuning.
-fn relief_height(xz: vec2<f32>, pw: f32, amp: f32, rock_amp: f32) -> f32 {
-    // "Maturity" mask: a smooth low-frequency field that thins the crater field
-    // in patches → flatter mare-like basins between saturated-cratered highlands,
-    // so the surface stops reading as uniform bubble-wrap.
-    // PERF: footprint fades decide whether each octave is even visible. Compute them
-    // FIRST and early-out — once a feature shrinks under the pixel footprint its
-    // contribution is ~0, so far pixels must SKIP the Voronoi loops, not run them and
-    // multiply by ~0. The @fragment gradient calls this 3×/pixel and looking at the
-    // horizon fills the screen with far tiles; this early-out is the difference
-    // between a ~1 s frame and a fast one.
-    let f_crater = aa_fade(1.0 / 3.0, pw);
-    let f_rock   = aa_fade(1.0 / 1.2, pw);
-    if (f_crater <= 0.0 && f_rock <= 0.0) {
-        return 0.0;
-    }
-    let mare = mix(0.45, 1.0, smoothstep(0.35, 0.7, fbm(vec3(xz.x, 0.0, xz.y) * 0.0025, 3, 0.5)));
-    var h = 0.0;
-    // The big + medium impact craters are now REAL GEOMETRY — the DEM-stamped crater
-    // layer (lunco-terrain-surface, driven by ObstacleFieldSpec), which shows in the
-    // mesh AND the collider. So the shader no longer fakes large craters as
-    // normal-only "bubbles" (that competed with — and muddied — the real ones). It
-    // only adds FINE sub-metre texture the geometry can't carry: a sparse scatter of
-    // small ≈3 m pits + rock clods, as micro-relief grain.
-    if (f_crater > 0.0) { h = h + crater_octave(xz, 3.0, 0.06, 0.18) * amp * mare * f_crater; } // ≈3 m pits
-    if (f_rock   > 0.0) { h = h + rock_octave(xz,  1.2, 0.10, 0.28) * rock_amp * f_rock; }      // rock clods
-    return h;
-}
+//     surge (see lunar_brdf.wgsl). — JPL/arXiv: https://arxiv.org/html/2410.04371v1
+//   * Airless → NO haze: high-contrast, crisp to the horizon.
 
 // World-space to-sun, read straight from the scene lights (no per-material uniform
 // wiring needed for streamed tiles). Picks the brightest directional light so the
@@ -344,33 +254,25 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // control flow). Drives the footprint-based detail fades.
     let pw = length(fwidth(p));
 
-    // IMPORTANT: macro/meso relief is REAL GEOMETRY (the DEM, plus the crater &
-    // rock layers), NOT fragment FBM. The old metre-scale FBM "bump" read as
-    // blobby cottage-cheese noise because the real Moon is *smooth* between
-    // impact features — there is no metre-scale isotropic roughness to fake.
-    // So the fragment now only adds a single CRISP micro-grain normal (sub-cm
-    // regolith tooth) that catches the grazing sun close-up, and a gentle large-
-    // scale albedo variation. Everything that reads as "shape" comes from the
-    // mesh; the fragment only does micro-texture + lunar photometry.
+    // All macro/meso SHAPE comes from the mesh (DEM + crater geometry) and from
+    // scattered rock meshes — the fragment no longer fakes relief. It adds only
+    // believable normal-only micro-texture (features small enough that the absence
+    // of parallax is imperceptible) + lunar photometry + broad albedo variation.
     var n = normalize(in.world_normal);
 
-    //   • IMPACT RELIEF (craters + rocks) — the macro/meso shape the smooth DEM
-    //     lacks. Perturb the normal by the analytic gradient of the procedural
-    //     height field; eps tracks the pixel footprint so the derivative never
-    //     aliases into shimmer. (Reuses mid_bump/macro_bump uniforms as relief
-    //     amplitudes so this hot-reloads without a Rust rebuild.)
-    let amp      = mat.mid_bump * 1.6;
-    let rock_amp = max(mat.macro_bump, 0.0) * 8.0;
-    let eps = max(pw * 1.5, 0.04);
-    let h0  = relief_height(p.xz,                    pw, amp, rock_amp);
-    let hx  = relief_height(p.xz + vec2(eps, 0.0),   pw, amp, rock_amp);
-    let hz  = relief_height(p.xz + vec2(0.0, eps),   pw, amp, rock_amp);
-    let dhdx = (hx - h0) / eps;
-    let dhdz = (hz - h0) / eps;
-    // gentle terrain: surface up ≈ world +Y, so tilt n by the planar gradient.
-    n = normalize(n - vec3(dhdx, 0.0, dhdz));
+    //   • regolith tooth — smooth decimetre dimples that give the close-up ground
+    //     life without pretending to be geometry. Both octaves footprint-faded so
+    //     they never alias into shimmer. Amplitude/scale reuse mid_bump/macro_clump_scale
+    //     (freed by dropping the fake relief) so they stay live-tunable via hot-reload.
+    let tooth_scale = clamp(mat.macro_clump_scale, 4.0, 40.0); // default 8 → ≈12 cm
+    let tooth_fade  = aa_fade(tooth_scale, pw);
+    var tooth_h = 0.5;
+    if (tooth_fade > 0.0) {
+        n = bump_layer(n, p, tooth_scale, 3, 0.5, 0.40, 0.62, mat.mid_bump * 0.12 * tooth_fade, &tooth_h);
+    }
 
-    //   • fine regolith grain — foreground only (tight fade → no detail bubble).
+    //   • fine regolith grain — millimetre tooth that catches the grazing sun in
+    //     the immediate foreground (tight fade → no detail bubble).
     let fine_fade = aa_fade(fine_scale, pw);
     var fine_h = 0.5;
     if (fine_fade > 0.0) {
@@ -393,9 +295,16 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let L = normalize(sun_to_light());
     let V = normalize(view.world_position - p);
     let lunar_k = regolith_factor(n, L, V);
+    let base_albedo = albedo;
     albedo = albedo * lunar_k;
+
+    // Shadow fill: a whisper of hemispheric bounce (earthshine + regolith
+    // inter-reflection) rides the emissive slot so CSM shadows don't crush to
+    // pure black — shadowed crater floors stay readable without washing out the
+    // raking-light contrast that sells the surface.
+    let fill = base_albedo * (1.2 + 1.0 * max(n.y, 0.0));
 
     // Regolith is rough and non-metallic; rough_mix nudges it.
     let roughness = clamp(0.6 + rough_mix * 0.4, 0.05, 1.0);
-    return lit_n(in, is_front, n, albedo, roughness, 0.0, vec3(0.0));
+    return lit_n(in, is_front, n, albedo, roughness, 0.0, fill);
 }

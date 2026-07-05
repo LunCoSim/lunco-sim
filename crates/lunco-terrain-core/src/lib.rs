@@ -28,6 +28,7 @@ pub mod crater;
 pub mod derive;
 pub mod error;
 pub mod modifier;
+pub mod overzoom;
 pub mod quadtree;
 pub mod quantize;
 pub mod source;
@@ -38,6 +39,7 @@ pub use collider::{prepare_collider_heights, slope_limit_grid};
 pub use crater::{crater_profile, Crater, CraterField, Craters, CRATER_REACH};
 pub use error::measure_node_error;
 pub use modifier::{BrushModifier, FlattenModifier, HeightModifier, LayeredHeightSource};
+pub use overzoom::Overzoom;
 pub use derive::{
     ao_map, hazard_from_slope, normal_map, pack_normal_rgba8, pack_surface_rgba8,
     roughness_from_slope, slope_map,

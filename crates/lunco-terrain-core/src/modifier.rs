@@ -31,6 +31,15 @@ use crate::source::HeightSource;
 pub trait HeightModifier: Send + Sync {
     /// Modified height (metres) at world `(x, z)` given the accumulated `h_in`.
     fn apply(&self, x: f64, z: f64, h_in: f64) -> f64;
+
+    /// For **detail-synthesising** modifiers (procedural over-zoom): a variant of
+    /// this modifier Nyquist-gated for a consumer sampling at `min_wavelength`
+    /// metres — features below that scale fade out instead of aliasing, and the
+    /// synthesis cost drops with them. Default `None`: the modifier is
+    /// resolution-independent (craters, brushes, flattens) and is used as-is.
+    fn with_min_wavelength(&self, _min_wavelength: f64) -> Option<Arc<dyn HeightModifier>> {
+        None
+    }
 }
 
 /// A base [`HeightSource`] plus an ordered stack of [`HeightModifier`]s folded over

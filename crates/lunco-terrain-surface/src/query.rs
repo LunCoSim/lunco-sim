@@ -22,9 +22,9 @@ use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
-use lunco_obstacle_field::field::HeightGrid;
 use lunco_terrain_core::HeightSource;
 
+use crate::oracle::SurfaceOracle;
 use crate::stream_viz::DemHeightField;
 
 /// `TerrainHeight` — analytic elevation / normal / slope at a world `(x, z)`,
@@ -57,9 +57,9 @@ impl ApiQueryProvider for TerrainHeightProvider {
         let eps_override = params.get("eps").and_then(serde_json::Value::as_f64);
 
         // Snapshot the DEM terrains, releasing the world borrow before the registry
-        // read. `GlobalTransform` is Copy; the grid is shared via `Arc`.
+        // read. `GlobalTransform` is Copy; the oracle is shared via `Arc`.
         let mut q = world.query::<(Entity, &GlobalTransform, &DemHeightField)>();
-        let terrains: Vec<(Entity, GlobalTransform, Arc<HeightGrid>)> = q
+        let terrains: Vec<(Entity, GlobalTransform, Arc<SurfaceOracle>)> = q
             .iter(world)
             .map(|(e, gt, hf)| (e, *gt, hf.0.clone()))
             .collect();
@@ -68,21 +68,19 @@ impl ApiQueryProvider for TerrainHeightProvider {
         // the sibling providers' convention: the query `(x, z)` is in the same
         // frame as `GlobalTransform` (DEM terrain anchors at the origin cell, so
         // local ≈ world near the working area).
-        for (entity, gt, grid) in terrains {
+        for (entity, gt, oracle) in terrains {
             let inv = gt.affine().inverse();
             let local = inv.transform_point3(Vec3::new(x as f32, 0.0, z as f32));
-            let half = grid.half_extent;
+            let half = oracle.half_extent();
             if local.x.abs() > half || local.z.abs() > half {
                 continue;
             }
 
             let (lx, lz) = (local.x as f64, local.z as f64);
-            let eps = eps_override.unwrap_or_else(|| grid.spacing() as f64).max(1e-6);
-            // Trait calls are fully-qualified: `HeightGrid` also has an inherent
-            // f32 `height_at`, so the f64 `HeightSource` method needs UFCS.
-            let h = HeightSource::height_at(grid.as_ref(), lx, lz);
-            let n = HeightSource::normal_at(grid.as_ref(), lx, lz, eps);
-            let slope = HeightSource::slope_at(grid.as_ref(), lx, lz, eps);
+            let eps = eps_override.unwrap_or_else(|| oracle.spacing() as f64).max(1e-6);
+            let h = HeightSource::height_at(oracle.as_ref(), lx, lz);
+            let n = HeightSource::normal_at(oracle.as_ref(), lx, lz, eps);
+            let slope = HeightSource::slope_at(oracle.as_ref(), lx, lz, eps);
 
             // Local height → world Y, and local normal → world frame, through the
             // terrain transform (identity for an origin-anchored DEM, but correct
@@ -129,9 +127,12 @@ mod tests {
     fn tilted_terrain(world: &mut World) -> Entity {
         // sample x at ix 0,1,2 = -10, 0, 10 → height -1, 0, 1, every row.
         let heights = vec![-1.0, 0.0, 1.0, -1.0, 0.0, 1.0, -1.0, 0.0, 1.0];
-        let grid = HeightGrid { res: 3, half_extent: 10.0, heights };
+        let grid = lunco_obstacle_field::field::HeightGrid { res: 3, half_extent: 10.0, heights };
         world
-            .spawn((GlobalTransform::IDENTITY, DemHeightField(Arc::new(grid))))
+            .spawn((
+                GlobalTransform::IDENTITY,
+                DemHeightField(Arc::new(SurfaceOracle::bare(Arc::new(grid)))),
+            ))
             .id()
     }
 

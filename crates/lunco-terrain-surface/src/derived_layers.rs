@@ -32,12 +32,12 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
 
 use lunco_materials::{ParamValue, ShaderMaterial};
-use lunco_obstacle_field::field::HeightGrid;
 use lunco_terrain_core::{
     ao_map, hazard_from_slope, normal_map, pack_normal_rgba8, pack_surface_rgba8,
     roughness_from_slope, slope_map, Square,
 };
 
+use crate::oracle::SurfaceOracle;
 use crate::stream_viz::DemHeightField;
 
 /// Texels per side of each baked data layer. 512² keeps the one-shot bake
@@ -96,36 +96,39 @@ fn start_derived_bakes(
         return; // headless: no render assets → no point baking visual layers.
     }
     for (entity, hf) in &q {
-        let grid: Arc<HeightGrid> = hf.0.clone();
-        let task = AsyncComputeTaskPool::get().spawn(async move { bake_or_load(&grid) });
+        let oracle: Arc<SurfaceOracle> = hf.0.clone();
+        let task = AsyncComputeTaskPool::get().spawn(async move { bake_or_load(&oracle) });
         commands.entity(entity).insert(DerivedBakeTask(task));
     }
 }
 
 /// Bump when the bake math or packed layout changes, so stale cache entries are
 /// simply never matched (content-addressed → no explicit invalidation).
-const CACHE_FORMAT_VERSION: u64 = 1;
+/// v2: maps sample the composed `SurfaceOracle` (analytic craters/edits included)
+/// and the key folds the oracle's modifier `content_key`.
+const CACHE_FORMAT_VERSION: u64 = 2;
 
 /// The derived-layer bake as a [`lunco_precompute::Bake`] — the content-addressed
 /// disk cache (Substrate B) owns the load/store/rebake orchestration; this only
 /// declares *what* is baked, *how it keys*, and *how it serializes*.
 struct DerivedBake<'a> {
-    grid: &'a HeightGrid,
+    oracle: &'a SurfaceOracle,
 }
 
 impl lunco_precompute::Bake for DerivedBake<'_> {
     type Output = DerivedMaps;
     const NAMESPACE: &'static str = "terrain/derived";
 
-    /// Content hash of the DEM heights + every bake parameter. Word-wise FNV-1a
-    /// fold (no JSON / no allocation), version-first so a bake/layout change
-    /// invalidates old entries. Byte-identical to the former inline key, so
-    /// pre-existing cache entries stay valid.
+    /// Content hash of the base DEM heights + the oracle's analytic-modifier key +
+    /// every bake parameter. Word-wise FNV-1a fold (no JSON / no allocation),
+    /// version-first so a bake/layout change invalidates old entries.
     fn key(&self) -> u64 {
+        let grid = self.oracle.grid();
         let mut h = lunco_precompute::Fnv1a::new();
         h.write_u64(CACHE_FORMAT_VERSION);
-        h.write_u64(self.grid.res as u64);
-        h.write_u64(self.grid.half_extent.to_bits() as u64);
+        h.write_u64(self.oracle.content_key());
+        h.write_u64(grid.res as u64);
+        h.write_u64(grid.half_extent.to_bits() as u64);
         h.write_u64(LAYER_RES as u64);
         h.write_u64(AO_DIRS as u64);
         h.write_u64(AO_STEPS as u64);
@@ -134,14 +137,14 @@ impl lunco_precompute::Bake for DerivedBake<'_> {
         h.write_u64(ROUGH_STEEP_RAD.to_bits() as u64);
         h.write_u64(SAFE_RAD.to_bits() as u64);
         h.write_u64(CLIFF_RAD.to_bits() as u64);
-        for &v in &self.grid.heights {
+        for &v in &grid.heights {
             h.write_u64(v.to_bits());
         }
         h.finish()
     }
 
     fn bake(&self) -> DerivedMaps {
-        bake_derived(self.grid)
+        bake_derived(self.oracle)
     }
 
     fn store(dir: &std::path::Path, maps: &DerivedMaps) -> lunco_precompute::StorageResult<()> {
@@ -164,23 +167,28 @@ impl lunco_precompute::Bake for DerivedBake<'_> {
 }
 
 /// P4: content-addressed cache. Load the derived maps from disk if a bake with
-/// the same DEM + parameters was already persisted; otherwise bake and write them
-/// through. Pure-function bake → byte-identical key across runs and peers, so a
-/// second load (or a second peer) skips the expensive AO march. The `cache://`
+/// the same surface + parameters was already persisted; otherwise bake and write
+/// them through. Pure-function bake → byte-identical key across runs and peers, so
+/// a second load (or a second peer) skips the expensive AO march. The `cache://`
 /// dir is shared with the rest of the asset stack.
-fn bake_or_load(grid: &HeightGrid) -> DerivedMaps {
-    lunco_precompute::bake_or_load(&DerivedBake { grid }, &lunco_assets::cache_dir())
+fn bake_or_load(oracle: &SurfaceOracle) -> DerivedMaps {
+    lunco_precompute::bake_or_load(&DerivedBake { oracle }, &lunco_assets::cache_dir())
 }
 
-/// Pure bake (runs on the task pool): sample the derived layers and pack them.
-fn bake_derived(grid: &HeightGrid) -> DerivedMaps {
-    let half = grid.half_extent as f64;
+/// Pure bake (runs on the task pool): sample the derived layers off the composed
+/// surface (analytic craters included → their slopes/AO land in the maps) and
+/// pack them.
+fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
+    let half = oracle.half_extent() as f64;
     let region = Square { center: [0.0, 0.0], half };
     let res = LAYER_RES;
+    // Gate over-zoom synthesis at the map's texel size (512² over the full
+    // extent is far coarser than the synthetic detail — skip it, don't alias it).
+    let oracle = &oracle.detail_limited(2.0 * half / res as f64);
 
-    let normals = normal_map(grid, &region, res);
-    let slope = slope_map(grid, &region, res);
-    let ao = ao_map(grid, &region, res, half * AO_RADIUS_FRAC, AO_DIRS, AO_STEPS);
+    let normals = normal_map(oracle, &region, res);
+    let slope = slope_map(oracle, &region, res);
+    let ao = ao_map(oracle, &region, res, half * AO_RADIUS_FRAC, AO_DIRS, AO_STEPS);
 
     let roughness: Vec<f32> =
         slope.iter().map(|&s| roughness_from_slope(s, ROUGH_BASE, ROUGH_STEEP_RAD)).collect();

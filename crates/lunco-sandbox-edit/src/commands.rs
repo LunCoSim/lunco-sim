@@ -158,7 +158,11 @@ fn attach_release_actuator(
     q: Query<Entity, (Added<lunco_core::ControlBinding>, Without<ReleaseActuator>)>,
 ) {
     for e in &q {
-        commands.entity(e).insert(ReleaseActuator::default());
+        // `try_insert`: scene-load churn (or a doc-backed reload) can despawn a
+        // just-added ControlBinding entity before this deferred insert applies —
+        // a plain `insert` then panics on the invalid entity. Same despawn-safe
+        // idiom as gizmo/hardware/terrain-surface.
+        commands.entity(e).try_insert(ReleaseActuator::default());
     }
 }
 

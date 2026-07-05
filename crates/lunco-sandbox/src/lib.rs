@@ -1531,6 +1531,7 @@ impl Plugin for SandboxCorePlugin {
                 refresh_layered_terrain_layers,
                 cache_terrain_document,
                 refresh_docbacked_terrain_from_doc,
+                track_ground_collider_pending,
             ),
         );
         // Authoring tier: doc-backed terrains route live edits to their USD document's
@@ -1573,6 +1574,46 @@ impl Plugin for SandboxCorePlugin {
 /// Marks a USD prim already examined by the DEM bridge (one-shot per prim).
 #[derive(Component)]
 struct DemBridged;
+
+/// Hold dynamic-body activation while ground might still be on its way:
+/// - a DEM terrain build is in flight (`DemTerrainRequest` — removed in the same
+///   command batch that inserts the finished collider / oracle), OR
+/// - the DEM bridge hasn't examined every USD prim yet (`Without<DemBridged>`) —
+///   a terrain prim may be about to request a build, and rovers activate within
+///   frames of spawn, so gating only on the request loses the startup race.
+///
+/// Without this gate a rover spawned over not-yet-collidable terrain free-falls
+/// through the surface during the multi-second off-thread collider bake and is
+/// lost below the map. Bounded by a timeout so a permanently-unbridgeable prim
+/// (stage asset without a recipe) degrades to a loud warning instead of freezing
+/// every dynamic body forever. This crate is the assembly point that sees both
+/// `lunco-terrain-surface` (the request) and `lunco-usd-sim` (the activation
+/// gate resource, via the `lunco-usd` facade).
+fn track_ground_collider_pending(
+    time: Res<Time>,
+    building: Query<(), With<lunco_terrain_surface::DemTerrainRequest>>,
+    unexamined: Query<(), (With<lunco_usd::UsdPrimPath>, Without<DemBridged>)>,
+    mut held_secs: Local<f32>,
+    mut pending: ResMut<lunco_usd::GroundColliderPending>,
+) {
+    const MAX_HOLD_SECS: f32 = 30.0;
+    let want = !building.is_empty() || !unexamined.is_empty();
+    if want {
+        *held_secs += time.delta_secs();
+    } else {
+        *held_secs = 0.0;
+    }
+    let now = want && *held_secs < MAX_HOLD_SECS;
+    if want && !now && pending.0 {
+        warn!(
+            "[terrain] ground-collider gate held {MAX_HOLD_SECS}s — releasing dynamic bodies \
+             (unbridgeable USD prim or stuck terrain build?)"
+        );
+    }
+    if pending.0 != now {
+        pending.0 = now;
+    }
+}
 
 /// One-shot marker: the terrain's layer maps have been bound (or the prim authors
 /// none), so [`bind_terrain_layers`] stops re-scanning it.
@@ -1652,7 +1693,7 @@ fn bind_terrain_layers(
 
     for (entity, prim_path, mat3d) in &q {
         let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else {
-            commands.entity(entity).insert(TerrainLayersBound);
+            commands.entity(entity).try_insert(TerrainLayersBound);
             continue;
         };
 
@@ -1676,7 +1717,7 @@ fn bind_terrain_layers(
 
         if authored.is_empty() {
             // No layer authored — stop re-scanning this terrain.
-            commands.entity(entity).insert(TerrainLayersBound);
+            commands.entity(entity).try_insert(TerrainLayersBound);
             continue;
         }
         // Resolve relative to the open Twin via the `twin://<name>/<rel>` source.
@@ -1693,7 +1734,7 @@ fn bind_terrain_layers(
             }
             info!("[usd-dem] bound terrain {} layer '{rel}' (weight {weight}) → {uri}", role.name);
         }
-        commands.entity(entity).insert(TerrainLayersBound);
+        commands.entity(entity).try_insert(TerrainLayersBound);
     }
 }
 
@@ -1879,7 +1920,9 @@ fn refresh_layered_terrain_layers(
             continue;
         };
         let stack = parse_terrain_layer_stack(&cs.view(), &sdf, &registry);
-        commands.entity(entity).insert(stack);
+        // Despawn-safe: a scene reload can despawn this terrain between queue
+        // time and apply_deferred — no-op instead of panicking.
+        commands.entity(entity).try_insert(stack);
     }
 }
 
@@ -2047,7 +2090,7 @@ fn cache_terrain_document(
         // change; without this the twin projection would despawn + re-instantiate the
         // terrain (a full DEM re-read) per edit. The exempt marker suppresses that
         // reload; `refresh_docbacked_terrain_from_doc` re-bakes off the registry doc.
-        commands.entity(entity).insert((
+        commands.entity(entity).try_insert((
             TerrainDocument { doc: doc.0 },
             lunco_terrain_surface::DocBackedTerrain,
             lunco_usd::twin_projection::LiveRebuildExempt,
@@ -2121,7 +2164,7 @@ fn refresh_docbacked_terrain_from_doc(
                 if has_runtime_override && !has_base_grid {
                     continue; // retry next frame, once the base grid is built
                 }
-                commands.entity(entity).insert(TerrainDocGeneration(cur_gen));
+                commands.entity(entity).try_insert(TerrainDocGeneration(cur_gen));
                 if !has_runtime_override {
                     continue; // nothing persisted to re-apply
                 }
@@ -2131,7 +2174,9 @@ fn refresh_docbacked_terrain_from_doc(
         let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else { continue };
         let composed = host.document().composed();
         let stack = parse_terrain_layer_stack(&composed, &sdf, &parser);
-        commands.entity(entity).insert(stack);
+        // Despawn-safe: a scene reload can despawn this terrain between queue
+        // time and apply_deferred — no-op instead of panicking.
+        commands.entity(entity).try_insert(stack);
     }
 }
 
@@ -2241,10 +2286,10 @@ fn bridge_usd_dem_terrain(
             continue;
         }
         let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else {
-            commands.entity(entity).insert(DemBridged);
+            commands.entity(entity).try_insert(DemBridged);
             continue;
         };
-        commands.entity(entity).insert(DemBridged); // examined — don't re-scan
+        commands.entity(entity).try_insert(DemBridged); // examined — don't re-scan
         let cs = canonical.get(id).expect("checked above");
         bridge_dem_prim_read(
             &cs.view(), entity, prim_path, &sdf, &twins, &registry,
@@ -2335,16 +2380,12 @@ fn bridge_dem_prim_read<R: UsdRead>(
     let lod_viz = attr_bool("lodViz", "lunco:terrain:lodViz").unwrap_or(true);
     // `colliderRing` = stream a per-rover collider ring vs one static collider.
     let collider_ring = attr_bool("colliderRing", "lunco:terrain:colliderRing").unwrap_or(false);
-    // `detailUpsample` = INTELLIGENT UPSCALING factor: bilinearly upscale the coarse
-    // DEM ground before stamping craters, so generated craters get high fidelity
-    // (sub-DEM-res rims) decoupled from the ~5 m source. ≤ 1 = native.
-    let detail_upsample = attr_i32("detailUpsample", "lunco:terrain:detailUpsample")
-        .filter(|&u| u > 1)
-        .map(|u| u as usize)
-        .unwrap_or(1);
+    // (`detailUpsample` is retired: craters/edits are ANALYTIC modifiers on the
+    // surface oracle now, sampled at each consumer's own resolution — grid
+    // upscaling has nothing left to buy.)
 
     let layer_count = stack.0.len();
-    commands.entity(entity).insert((
+    commands.entity(entity).try_insert((
         lunco_terrain_surface::DemTerrainRequest {
             uri,
             half_window,
@@ -2352,7 +2393,6 @@ fn bridge_dem_prim_read<R: UsdRead>(
             lod_viz,
             collider_ring,
             with_default_material: false,
-            detail_upsample,
         },
         stack,
         lunco_terrain_surface::DemTerrainSurface,
@@ -2381,7 +2421,7 @@ fn bridge_dem_prim_read<R: UsdRead>(
             anchor_height_m: anchor_height.unwrap_or(0.0),
             meters_per_unit: meters_per_unit.unwrap_or(1.0),
         };
-        commands.entity(entity).insert(georef);
+        commands.entity(entity).try_insert(georef);
         info!(
             "[usd-dem] georef: lat {:.4} lon {:.4} height {:.1} m (mpu {})",
             georef.center_lat_deg, georef.center_lon_deg, georef.anchor_height_m, georef.meters_per_unit
@@ -2389,8 +2429,7 @@ fn bridge_dem_prim_read<R: UsdRead>(
     }
     info!(
         "[usd-dem] bridged layered terrain prim {} → DEM '{rel}' (target_res {target_res}, \
-         lod_viz {lod_viz}, collider_ring {collider_ring}, detail_upsample {detail_upsample}, \
-         {layer_count} composed layer(s))",
+         lod_viz {lod_viz}, collider_ring {collider_ring}, {layer_count} composed layer(s))",
         prim_path.path
     );
 }
