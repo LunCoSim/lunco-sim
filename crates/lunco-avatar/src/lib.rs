@@ -1803,6 +1803,13 @@ fn on_possess_command(
 
     if end_vert_off == 0.0 {
         commands.entity(avatar_ent)
+            // Strip the OPPOSITE behavior component: exactly one camera solver
+            // may own the avatar Transform. A leftover SpringArmCamera (prior
+            // rover possession) would fight this OrbitCamera every frame —
+            // last-writer-wins churn that reads as "camera frozen / possession
+            // didn't take".
+            .remove::<SpringArmCamera>()
+            .remove::<SurfaceRelativeMode>()
             .insert(OrbitCamera {
                 target: cmd.target,
                 distance: end_distance,
@@ -1813,6 +1820,10 @@ fn on_possess_command(
             });
     } else {
         let mut cmd_ent = commands.entity(avatar_ent);
+        // Same exclusivity the other way: a leftover OrbitCamera (prior focus
+        // on a body / spacecraft possession) would overwrite the spring-arm
+        // pose every frame.
+        cmd_ent.remove::<OrbitCamera>();
         cmd_ent.insert((
             SpringArmCamera {
                 target: cmd.target,

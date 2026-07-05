@@ -36,12 +36,13 @@ use crate::stream_viz::DemHeightField;
 /// Canonical quadtree depth the collider tiles are realized at. Fixed → the ring
 /// is identical across peers. At a ±4 km DEM, depth 7 → 62.5 m tiles.
 const COLLIDER_DEPTH: u8 = 7;
-/// Heightfield samples per tile side (independent of visual LOD). 65 over a
-/// 62.5 m tile ≈ 0.97 m spacing — fine enough that the crater bowls and synthetic
-/// craterlets the rover SEES also exist in what it TOUCHES. At the old 3.9 m
-/// spacing the Nyquist gate faded out everything below ~12 m, so rovers drove
-/// flat across visually deep bowls.
-const COLLIDER_RES: usize = 65;
+/// Heightfield samples per tile side (independent of visual LOD). 129 over a
+/// 62.5 m tile ≈ 0.49 m spacing — fine enough that the crater bowls and synthetic
+/// craterlets the rover SEES also exist in what it TOUCHES: the Nyquist gate
+/// passes features ≥ ~1.5 m at this spacing (anything smaller is ankle-deep).
+/// At the original 3.9 m spacing the gate faded out everything below ~12 m, so
+/// rovers drove flat across visually deep bowls.
+const COLLIDER_RES: usize = 129;
 /// Max height-delta/spacing ratio a collider tile may present (≈ 68° slope).
 /// Analytic crater rims sampled onto a coarse heightfield can rasterise to
 /// near-vertical steps that flip rover contacts; the monotone min-sweep shaves
@@ -70,7 +71,16 @@ impl Default for TerrainColliderRing {
 
 /// The collider tiles currently resident for a terrain, keyed by quadtree node.
 #[derive(Component, Default)]
-pub struct ColliderTiles(pub HashMap<QuadCoord, Entity>);
+pub struct ColliderTiles {
+    pub map: HashMap<QuadCoord, Entity>,
+    /// `surface_key()` of the oracle the resident tiles were baked from. The
+    /// terrain's [`DemHeightField`] is **swapped** on layer recompose (craters
+    /// added, live edits) — the boot sequence alone swaps it at least once — and
+    /// a resident tile is never re-baked by the wanted-set diff, so without this
+    /// tether the rover keeps driving the PRE-swap surface (visibly floating
+    /// above every crater the recompose added).
+    oracle_key: u64,
+}
 
 /// In-flight off-thread collider-tile bakes for a terrain. Sampling the oracle
 /// (65² points × craters/over-zoom) AND constructing the parry heightfield are
@@ -151,6 +161,17 @@ pub fn update_collider_ring(
 
     for (terrain, t_gt, hf, ring, mut tiles, mut pending) in &mut terrains {
         let oracle = &hf.0;
+        // Oracle swapped (layer recompose / live edit) → every resident tile is
+        // stale geometry. Despawn them all and drop in-flight bakes; the wanted
+        // set below re-bakes the ring against the CURRENT surface.
+        let oracle_key = oracle.surface_key();
+        if tiles.oracle_key != oracle_key {
+            for (_, ent) in tiles.map.drain() {
+                commands.entity(ent).try_despawn();
+            }
+            pending.0.clear();
+            tiles.oracle_key = oracle_key;
+        }
         let h = oracle.half_extent() as f64;
         let nodes = 1u32 << ring.depth;
         let side = (2.0 * h) / nodes as f64;
@@ -182,10 +203,10 @@ pub fn update_collider_ring(
         }
 
         // Despawn tiles no longer wanted; drop in-flight bakes for them too.
-        tiles.0.retain(|coord, ent| {
+        tiles.map.retain(|coord, ent| {
             let keep = wanted.contains(coord);
             if !keep {
-                commands.entity(*ent).despawn();
+                commands.entity(*ent).try_despawn();
             }
             keep
         });
@@ -203,7 +224,7 @@ pub fn update_collider_ring(
             None => true,
         });
         for (coord, collider) in done {
-            if tiles.0.contains_key(&coord) {
+            if tiles.map.contains_key(&coord) {
                 continue;
             }
             let region = qt.region(coord);
@@ -220,13 +241,13 @@ pub fn update_collider_ring(
                     ChildOf(grid_entity),
                 ))
                 .id();
-            tiles.0.insert(coord, ent);
+            tiles.map.insert(coord, ent);
         }
 
         // Queue bakes for newly-wanted tiles OFF-THREAD (oracle sampling + parry
         // heightfield build used to stall the frame at every tile-boundary cross).
         for coord in &wanted {
-            if tiles.0.contains_key(coord) || pending.0.contains_key(coord) {
+            if tiles.map.contains_key(coord) || pending.0.contains_key(coord) {
                 continue;
             }
             let region = qt.region(*coord);
@@ -253,6 +274,114 @@ pub fn despawn_orphaned_collider_tiles(
     for (ent, owner) in &tiles {
         if ringing.get(owner.0).is_err() {
             commands.entity(ent).despawn();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use avian3d::parry::query::{Ray, RayCast};
+    use lunco_obstacle_field::field::HeightGrid;
+    use lunco_terrain_core::{Crater, Craters};
+    use crate::quadtree::QuadCoord;
+
+    /// Absolute DEM-like altitude of the flat base — deliberately far from 0 so
+    /// any hidden Y-recentering in the heightfield build would show up.
+    const BASE_H: f64 = 1945.0;
+
+    /// Downward parry ray in TILE-LOCAL coordinates → surface height at (lx, lz).
+    fn surface_y(collider: &Collider, lx: f64, lz: f64) -> f64 {
+        let top = BASE_H + 500.0;
+        let ray = Ray::new(DVec3::new(lx, top, lz), DVec3::new(0.0, -1.0, 0.0));
+        let toi = collider
+            .shape()
+            .cast_local_ray(&ray, 10_000.0, true)
+            .unwrap_or_else(|| panic!("ray at local ({lx},{lz}) missed the tile"));
+        top - toi
+    }
+
+    /// End-to-end geometry proof for one collider-ring tile: sample an oracle with
+    /// a single off-centre analytic crater over a canonical-depth region exactly
+    /// the way `update_collider_ring` does, build the same `Collider::heightfield`,
+    /// and ray-cast it in tile-local space. Proves (a) [x][z] layout is not
+    /// transposed, (b) scale = full side length, (c) heights stay ABSOLUTE
+    /// (no Y recentering), (d) the bowl depth survives the collider conditioning.
+    #[test]
+    fn collider_tile_reproduces_offcenter_crater_in_local_frame() {
+        // Root region matching a ±4 km DEM; depth-7 tiles are 62.5 m.
+        let h = 4000.0_f64;
+        let depth = COLLIDER_DEPTH;
+        let mut grid = HeightGrid::new_flat(129, h as f32);
+        for v in grid.heights.iter_mut() {
+            *v = BASE_H;
+        }
+        let qt = Quadtree::new(h, depth, 1.0, h);
+        // An arbitrary interior tile.
+        let coord = QuadCoord { depth, x: 70, z: 45 };
+        let region = qt.region(coord);
+        let side = region.side();
+
+        // One crater, off-centre in the tile at an AXIS-ASYMMETRIC local offset
+        // (+10 in x, −18 in z) so a transposed [z][x] layout puts the bowl at a
+        // measurably different spot.
+        let (dx, dz) = (10.0, -18.0);
+        let crater = Crater {
+            center: [region.center[0] + dx, region.center[1] + dz],
+            radius: 8.0,
+            depth: 2.0,
+            rim_height: 0.4,
+        };
+        let oracle = SurfaceOracle::new(
+            std::sync::Arc::new(grid),
+            vec![crate::oracle::HeightContribution {
+                modifier: std::sync::Arc::new(Craters::new(vec![crater])),
+                content_key: 1,
+            }],
+        );
+
+        // EXACTLY the runtime bake: sample + condition, then the same collider
+        // constructor call as `update_collider_ring`.
+        let heights = sample_heights_xz(&oracle, region, COLLIDER_RES);
+        let collider = Collider::heightfield(heights, DVec3::new(side, 1.0, side));
+
+        // (c) Far corner: flat base at ABSOLUTE altitude — no recentering.
+        let far = surface_y(&collider, 25.0, 25.0);
+        assert!(
+            (far - BASE_H).abs() < 0.05,
+            "flat field should sit at absolute {BASE_H}, got {far} (Y recentered or scaled?)"
+        );
+
+        // (a)+(d) Bowl at the crater's true local position.
+        let bowl = surface_y(&collider, dx, dz);
+        assert!(
+            bowl < BASE_H - 1.0,
+            "crater bowl missing at local ({dx},{dz}): surface {bowl} vs base {BASE_H}"
+        );
+
+        // (a) NOT at the transposed position: a [z][x] mixup would dig here instead.
+        let transposed = surface_y(&collider, dz, dx);
+        assert!(
+            (transposed - BASE_H).abs() < 0.5,
+            "surface dips at TRANSPOSED local ({dz},{dx}): {transposed} — heightfield layout is flipped"
+        );
+
+        // (b) Sweep: collider surface tracks the oracle within conditioning slack
+        // everywhere on a coarse probe lattice (rim shaving allowed near the lip,
+        // so tolerate slope-limit slack of one cell's max step there).
+        let step = side / (COLLIDER_RES as f64 - 1.0);
+        let slack = COLLIDER_MAX_SLOPE * step + 2.0 * COLLIDER_QUANT_STEP;
+        for iz in (0..COLLIDER_RES).step_by(8) {
+            for ix in (0..COLLIDER_RES).step_by(8) {
+                let lx = -region.half + ix as f64 * step;
+                let lz = -region.half + iz as f64 * step;
+                let expect = HeightSource::height_at(&oracle, region.center[0] + lx, region.center[1] + lz);
+                let got = surface_y(&collider, lx, lz);
+                assert!(
+                    got <= expect + 1e-6 + 2.0 * COLLIDER_QUANT_STEP && got >= expect - slack - 1e-6,
+                    "collider/oracle mismatch at local ({lx:.2},{lz:.2}): collider {got}, oracle {expect}"
+                );
+            }
         }
     }
 }

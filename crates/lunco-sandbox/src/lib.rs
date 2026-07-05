@@ -2265,6 +2265,20 @@ fn on_obstacle_spec_authored(
 
 fn bridge_usd_dem_terrain(
     q: Query<(Entity, &lunco_usd::UsdPrimPath), Without<DemBridged>>,
+    // Live terrains already realized from a PRIOR instantiation pass. A stage
+    // recompose (runtime-overlay restore, doc-backing) hands every prim a fresh
+    // ECS entity; the previous pass's terrain survives long enough to double
+    // the DEM build. Two live terrains for one authored prim stream two
+    // collider rings from two oracles — the rover rides whichever surface is
+    // higher (a stale smooth ring over the cratered fresh one reads as
+    // "floating over every crater").
+    q_prior_terrains: Query<
+        (Entity, &lunco_usd::UsdPrimPath),
+        Or<(
+            With<lunco_terrain_surface::DemTerrainRequest>,
+            With<lunco_terrain_surface::DemHeightField>,
+        )>,
+    >,
     stages: Res<Assets<lunco_usd::UsdStageAsset>>,
     twins: Res<lunco_assets::twin_source::TwinRoots>,
     registry: Res<lunco_terrain_surface::TerrainLayerParserRegistry>,
@@ -2290,6 +2304,22 @@ fn bridge_usd_dem_terrain(
             continue;
         };
         commands.entity(entity).try_insert(DemBridged); // examined — don't re-scan
+        // Newest pass wins: retire any prior terrain realized for this same
+        // authored prim (same path + same stage asset). Its LOD tiles, ring
+        // tiles, and scatter are reaped by their respective orphan reapers.
+        for (prior, prior_path) in &q_prior_terrains {
+            if prior != entity
+                && prior_path.path == prim_path.path
+                && prior_path.stage_handle.id() == prim_path.stage_handle.id()
+            {
+                warn!(
+                    "[usd-dem] retiring duplicate terrain entity {prior} for {} \
+                     (superseded by a re-composed instantiation pass)",
+                    prim_path.path
+                );
+                commands.entity(prior).try_despawn();
+            }
+        }
         let cs = canonical.get(id).expect("checked above");
         bridge_dem_prim_read(
             &cs.view(), entity, prim_path, &sdf, &twins, &registry,

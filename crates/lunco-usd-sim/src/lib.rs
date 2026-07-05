@@ -374,6 +374,7 @@ fn process_usd_sim_prims(
     q_grids: Query<Entity, With<Grid>>,
     q_existing_floating_origins: Query<Entity, With<FloatingOrigin>>,
     q_provisional_cameras: Query<Entity, With<ProvisionalAvatarCamera>>,
+    q_prior_avatars: Query<Entity, With<Avatar>>,
     q_child_of: Query<&ChildOf>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
     stages: Res<Assets<UsdStageAsset>>,
@@ -477,7 +478,7 @@ fn process_usd_sim_prims(
             &cs.view(), entity, prim_path, sdf_path.clone(), maybe_tf, maybe_mesh, maybe_mat,
             maybe_shader_mat, maybe_child_of, wait_for_visuals, &joint_targets,
             &articulation_roots, &q_existing_floating_origins, &q_provisional_cameras,
-            &q_grids, active_sun.as_deref(), &mut commands,
+            &q_prior_avatars, &q_grids, active_sun.as_deref(), &mut commands,
         );
     }
 }
@@ -528,6 +529,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
     articulation_roots: &std::collections::HashSet<(Handle<UsdStageAsset>, String)>,
     q_existing_floating_origins: &Query<Entity, With<FloatingOrigin>>,
     q_provisional_cameras: &Query<Entity, With<ProvisionalAvatarCamera>>,
+    q_prior_avatars: &Query<Entity, With<Avatar>>,
     q_grids: &Query<Entity, With<Grid>>,
     active_sun: Option<&lunco_environment::LunarSun>,
     mut commands: &mut Commands,
@@ -637,6 +639,37 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             for prov in q_provisional_cameras.iter() {
                 if prov != entity {
                     commands.entity(prov).despawn();
+                }
+            }
+            // Same takeover for PRIOR AVATAR entities. A stage recompose can
+            // hand this prim a FRESH ECS entity while an earlier pass's avatar
+            // entity lives on (this system's `Without<UsdSimProcessed>` marker
+            // proves each pass processes a new entity). Two live
+            // `Avatar`+`Camera3d` entities render ambiguously and SPLIT the
+            // input/possession path: a click binds the chase camera on one
+            // avatar while the window renders the other ("possessed but the
+            // camera is frozen"), keyboard drives every avatar's linked vessel
+            // at once, and Backspace releases twice. Strip the avatar role off
+            // every prior holder — the newest authored pass wins.
+            for prior in q_prior_avatars.iter() {
+                if prior != entity {
+                    warn!(
+                        "[avatar] stripping avatar role from prior entity {prior} \
+                         (superseded by re-composed prim {})",
+                        prim_path.path
+                    );
+                    commands.entity(prior).try_remove::<(
+                        Camera3d,
+                        Avatar,
+                        LocalAvatar,
+                        FreeFlightCamera,
+                        OrbitCamera,
+                        SpringArmCamera,
+                        lunco_avatar::SurfaceRelativeMode,
+                        lunco_controller::ControllerLink,
+                        IntentAnalogState,
+                        ActionState<lunco_core::UserIntent>,
+                    )>();
                 }
             }
             let camera_mode = reader.scalar::<String>(&sdf_path, "lunco:cameraMode")
