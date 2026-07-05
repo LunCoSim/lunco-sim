@@ -47,23 +47,7 @@ pub enum PortDirection {
     InOut,
 }
 
-/// Physical domain of a port. Used for UI grouping and connection validation;
-/// a wrong guess is cosmetic, never load-bearing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
-pub enum PortType {
-    /// Mechanical force/torque.
-    Force,
-    /// Position, velocity, acceleration, attitude.
-    Kinematic,
-    /// Voltage, current.
-    Electrical,
-    /// Temperature, heat flow.
-    Thermal,
-    /// Dimensionless or mixed-domain signal.
-    Signal,
-}
-
-/// A discovered port: identity, causality, physical domain, current value.
+/// A discovered port: identity, causality, current value.
 ///
 /// Returned by [`PortRegistry::entity_ports`] for listing/introspection. The
 /// `value` is a snapshot read at call time; live consumers read through the
@@ -75,35 +59,8 @@ pub struct PortRef {
     pub name: String,
     /// Causality.
     pub direction: PortDirection,
-    /// Physical domain (best-effort classification — see [`classify`]).
-    pub port_type: PortType,
     /// Snapshot of the current value.
     pub value: f64,
-}
-
-/// Best-effort physical-domain classification from a port name.
-///
-/// A heuristic for UI grouping / connection validation only. Backends that know
-/// their type better should set [`PortRef::port_type`] directly.
-pub fn classify(name: &str) -> PortType {
-    if name.starts_with("force") || name.starts_with("torque") {
-        PortType::Force
-    } else if name.starts_with("position")
-        || name.starts_with("velocity")
-        || name.starts_with("angvel")
-        || name.starts_with("quat")
-        || name == "height"
-        || name == "angle"
-        || name == "yaw"
-        || name == "pitch"
-        || name == "roll"
-    {
-        PortType::Kinematic
-    } else if name.contains("temp") || name.contains("heat") {
-        PortType::Thermal
-    } else {
-        PortType::Signal
-    }
 }
 
 /// Append every `(name, value)` in `map` as a [`PortRef`] of direction `dir`.
@@ -111,12 +68,7 @@ pub fn classify(name: &str) -> PortType {
 #[inline]
 pub fn push_map(out: &mut Vec<PortRef>, map: &HashMap<String, f64>, dir: PortDirection) {
     for (name, value) in map {
-        out.push(PortRef {
-            name: name.clone(),
-            direction: dir,
-            port_type: classify(name),
-            value: *value,
-        });
+        out.push(PortRef { name: name.clone(), direction: dir, value: *value });
     }
 }
 

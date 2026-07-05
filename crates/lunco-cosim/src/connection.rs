@@ -11,7 +11,7 @@ use bevy::prelude::*;
 // Port causality/domain enums live in the neutral substrate so every participant
 // (engine, API, scripting) shares one definition; re-exported here because this
 // crate's `SimPort` and the avian backends address them as `connection::Port*`.
-pub use lunco_core::ports::{PortDirection, PortType};
+pub use lunco_core::ports::PortDirection;
 
 /// A named interface point on a simulation entity.
 ///
@@ -28,8 +28,6 @@ pub struct SimPort {
     pub name: String,
     /// Whether this port receives or provides values.
     pub direction: PortDirection,
-    /// Physical domain for connection validation.
-    pub port_type: PortType,
 }
 
 /// Collection of ports on a simulation entity.

@@ -193,10 +193,8 @@ fn read_authored_params<R: UsdRead>(reader: &R, sdf_path: &SdfPath, m: &mut Shad
         }
         if let Some(c) = get_attribute_as_vec3(reader, sdf_path, &attr) {
             apply_param(m, name, &format!("{},{},{}", c.x, c.y, c.z));
-        } else if let Some(v) = reader.scalar::<f32>(sdf_path, &attr) {
+        } else if let Some(v) = reader.real_f32(sdf_path, &attr) {
             apply_param(m, name, &v.to_string());
-        } else if let Some(v) = reader.scalar::<f64>(sdf_path, &attr) {
-            apply_param(m, name, &(v as f32).to_string());
         }
     }
 }

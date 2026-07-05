@@ -118,10 +118,10 @@ fn read_projection<R: UsdRead>(reader: &R, path: &SdfPath) -> Projection {
         })
     } else {
         let focal = reader
-            .scalar::<f32>(path, "focalLength")
+            .real_f32(path, "focalLength")
             .unwrap_or(DEFAULT_FOCAL_LENGTH_MM);
         let v_aperture = reader
-            .scalar::<f32>(path, "verticalAperture")
+            .real_f32(path, "verticalAperture")
             .unwrap_or(DEFAULT_VERTICAL_APERTURE_MM);
         // Bevy's `PerspectiveProjection::fov` is the **vertical** field of view.
         let fov = if focal > 1e-3 {

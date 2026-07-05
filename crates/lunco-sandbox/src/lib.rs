@@ -1621,7 +1621,7 @@ fn read_authored_layer_maps<R: UsdRead>(
             let map_attr = format!("lunco:terrain:layer:{}:map", role.name);
             let rel = reader.scalar::<String>(sdf, &map_attr)?;
             let weight = reader
-                .scalar::<f32>(sdf, &format!("lunco:terrain:layer:{}:weight", role.name))
+                .real_f32(sdf, &format!("lunco:terrain:layer:{}:weight", role.name))
                 .unwrap_or(1.0);
             Some((role, rel, weight))
         })
@@ -1713,7 +1713,7 @@ struct UsdLayerAttrs<'a, R: UsdRead> {
 
 impl<R: UsdRead> lunco_terrain_surface::LayerAttrSource for UsdLayerAttrs<'_, R> {
     fn get_f32(&self, name: &str) -> Option<f32> {
-        self.reader.scalar::<f32>(&self.sdf, name)
+        self.reader.real_f32(&self.sdf, name)
     }
     fn get_i64(&self, name: &str) -> Option<i64> {
         self.reader.scalar::<i32>(&self.sdf, name).map(|v| v as i64)
@@ -1801,22 +1801,20 @@ fn sync_obstacle_spec_from_usd<R: UsdRead>(
     for child in reader.children(terrain) {
         match reader.scalar::<String>(&child, "lunco:layer").as_deref() {
             Some("craters") => {
-                let density = reader.scalar::<f32>(&child, "density").unwrap_or(0.0);
-                let mode = reader.scalar::<f32>(&child, "sizeMode").unwrap_or(22.0);
+                let density = reader.real_f32(&child, "density").unwrap_or(0.0);
+                let mode = reader.real_f32(&child, "sizeMode").unwrap_or(22.0);
                 spec.craters.enabled = density > 0.0;
                 spec.craters.density = density;
-                spec.craters.depth_ratio =
-                    reader.scalar::<f32>(&child, "depthRatio").unwrap_or(0.3);
-                spec.craters.rim_height_ratio =
-                    reader.scalar::<f32>(&child, "rimRatio").unwrap_or(0.5);
+                spec.craters.depth_ratio = reader.real_f32(&child, "depthRatio").unwrap_or(0.3);
+                spec.craters.rim_height_ratio = reader.real_f32(&child, "rimRatio").unwrap_or(0.5);
                 spec.craters.size = SizeDist::new(8.0, mode, 40.0, 0.7);
                 if let Some(seed) = reader.scalar::<i32>(&child, "seed") {
                     spec.seed = seed as u64;
                 }
             }
             Some("rocks") => {
-                let density = reader.scalar::<f32>(&child, "density").unwrap_or(0.0);
-                let mode = reader.scalar::<f32>(&child, "sizeMode").unwrap_or(0.6);
+                let density = reader.real_f32(&child, "density").unwrap_or(0.0);
+                let mode = reader.real_f32(&child, "sizeMode").unwrap_or(0.6);
                 spec.rocks.enabled = density > 0.0;
                 spec.rocks.density = density;
                 spec.rocks.size = SizeDist::new(0.2, mode, (mode * 4.0).max(2.5), 0.6);
@@ -2291,9 +2289,7 @@ fn bridge_dem_prim_read<R: UsdRead>(
     // fall back to the Terrain prim's own `lunco:terrain:*` attrs (back-compat).
     let dem = dem_layer_sdf.clone();
     let attr_f32 = |name: &str, legacy: &str| -> Option<f32> {
-        dem.as_ref()
-            .and_then(|d| reader.scalar::<f32>(d, name))
-            .or_else(|| reader.scalar::<f32>(sdf, legacy))
+        dem.as_ref().and_then(|d| reader.real_f32(d, name)).or_else(|| reader.real_f32(sdf, legacy))
     };
     let attr_i32 = |name: &str, legacy: &str| -> Option<i32> {
         dem.as_ref()
@@ -2361,10 +2357,10 @@ fn bridge_dem_prim_read<R: UsdRead>(
     // `metersPerUnit`. The terrain math is metres, so a non-1 `metersPerUnit`
     // is recorded but flagged loudly (we don't rescale the DEM). Attach a
     // `TerrainGeoref` whenever any of these are authored.
-    let anchor_lat = reader.scalar::<f64>(sdf, "lunco:anchor:lat");
-    let anchor_lon = reader.scalar::<f64>(sdf, "lunco:anchor:lon");
-    let anchor_height = reader.scalar::<f64>(sdf, "lunco:anchor:height");
-    let meters_per_unit = reader.scalar::<f64>(sdf, "metersPerUnit");
+    let anchor_lat = reader.real(sdf, "lunco:anchor:lat");
+    let anchor_lon = reader.real(sdf, "lunco:anchor:lon");
+    let anchor_height = reader.real(sdf, "lunco:anchor:height");
+    let meters_per_unit = reader.real(sdf, "metersPerUnit");
     if let Some(mpu) = meters_per_unit {
         if (mpu - 1.0).abs() >= 1e-6 {
             warn!(

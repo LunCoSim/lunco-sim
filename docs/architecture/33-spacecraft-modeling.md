@@ -232,11 +232,13 @@ to `[RIGID_BODY_GROUP, REVOLUTE_JOINT_GROUP]` (`lunco-cosim/src/ports.rs`).
   (D) `-5.0` clamps at `-3.0000` (authored `limitLower`). Projection math
   unit-tested (`lunco-cosim` `joint::tests`).
 - **Gotcha (cost a debug loop):** UsdPhysics/Omniverse authors physics scalars as
-  `float`, so `prim_attribute_value::<f64>` silently returns `None` — the drive and
-  joint limits must be read **f32-first** (`read_scalar_attribute`). The first run
-  fell straight through the (also-`f64`-read) limit before this was fixed. Same
-  class as the `localPos` "bodies launched into orbit" trap — *all* USD physics
-  scalar reads are f32-first.
+  `float`, so a strict `scalar::<f64>` read silently returns `None` — the drive and
+  joint limits fell straight through before this was fixed. This is now handled
+  systemically: every real-valued read goes through the precision-tolerant
+  `UsdRead::real` / `real_f32` family (`lunco-usd-bevy/read.rs`), which reads a
+  value whatever precision it was authored in. Same class as the `localPos`
+  "bodies launched into orbit" trap — never read a real scalar with a strict
+  single-precision `scalar::<T>`.
 
 ### G7 — Extra joint types (spherical / distance)  **[DONE; D6 reduces or warns]**
 `lunco-usd-avian::build_usd_physics_joints` now builds two more avian joint kinds

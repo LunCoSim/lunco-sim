@@ -266,7 +266,7 @@ fn collect_child_colliders_from_usd<R: UsdRead>(
         // body), NOT collider pieces of the chassis compound. The
         // `physxVehicleWheel:radius` attribute is the canonical marker
         // (matches the same skip in `process_usd_avian_prims`).
-        if reader.scalar::<f32>(&child_path, "physxVehicleWheel:radius").is_some() {
+        if reader.real_f32(&child_path, "physxVehicleWheel:radius").is_some() {
             continue;
         }
 
@@ -617,7 +617,7 @@ fn extract_avian_prim<R: UsdRead>(
     commands: &mut Commands,
 ) {
     // Skip wheel prims — the sim plugin handles those.
-    if reader.scalar::<f32>(sdf_path, "physxVehicleWheel:radius").is_some() {
+    if reader.real_f32(sdf_path, "physxVehicleWheel:radius").is_some() {
         commands.entity(entity).insert(UsdAvianProcessed);
         return;
     }
@@ -1141,14 +1141,7 @@ fn apply_rigid_body_mass_props<R: UsdRead>(
     reader: &R,
     sdf_path: &SdfPath,
 ) {
-    let mass = reader
-        .scalar::<f32>(sdf_path, "physics:mass")
-        .or_else(|| {
-            reader
-                .scalar::<f64>(sdf_path, "physics:mass")
-                .map(|v| v as f32)
-        })
-        .unwrap_or(1000.0);
+    let mass = reader.real_f32(sdf_path, "physics:mass").unwrap_or(1000.0);
     commands.entity(entity).insert(Mass(mass));
 
     // G2 — authored principal inertia. `physics:diagonalInertia` is the diagonal
@@ -1169,13 +1162,13 @@ fn apply_rigid_body_mass_props<R: UsdRead>(
         commands.entity(entity).insert(CenterOfMass(com.as_vec3()));
     }
 
-    if let Some(d) = reader.scalar::<f32>(sdf_path, "physics:linearDamping") {
+    if let Some(d) = reader.real_f32(sdf_path, "physics:linearDamping") {
         commands.entity(entity).insert(LinearDamping(d as f64));
     }
-    if let Some(d) = reader.scalar::<f32>(sdf_path, "physics:angularDamping") {
+    if let Some(d) = reader.real_f32(sdf_path, "physics:angularDamping") {
         commands.entity(entity).insert(AngularDamping(d as f64));
     }
-    if let Some(f) = reader.scalar::<f32>(sdf_path, "physics:friction") {
+    if let Some(f) = reader.real_f32(sdf_path, "physics:friction") {
         commands.entity(entity).insert(Friction::new(f.into()));
     }
     if let Some(vel) = read_vec3_attribute(reader, sdf_path, "physics:linearVelocity") {

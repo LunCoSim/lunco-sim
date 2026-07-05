@@ -25,7 +25,7 @@
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
 use lunco_assets::assets_dir;
-use lunco_core::{Command, on_command, register_commands};
+use lunco_core::{on_command, register_commands, Command};
 use lunco_cosim::{SimComponent, SimConnection, SimStatus};
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_modelica::source_asset::ModelicaSource;
@@ -39,8 +39,8 @@ use lunco_scripting::{
     ScriptRegistry,
 };
 use lunco_usd_bevy::{
-    CanonicalStages, LoadIntoGrid, UsdInstanceMember, UsdInstanceRoot, UsdPrimPath,
-    UsdRead, UsdStageAsset,
+    CanonicalStages, LoadIntoGrid, UsdInstanceMember, UsdInstanceRoot, UsdPrimPath, UsdRead,
+    UsdStageAsset,
 };
 use openusd::sdf::Path as SdfPath;
 use std::collections::HashMap;
@@ -77,16 +77,21 @@ pub struct PendingPythonSource {
 /// compilation + wires. Runs in `Update` after `sync_usd_visuals` so
 /// `Transform` / `Mesh3d` / `Material` are already present.
 /// Run condition: any `UsdPrimPath` entity still lacks `UsdSourcedCosim`.
-fn any_unprocessed_usd_cosim(
-    q: Query<(), (With<UsdPrimPath>, Without<UsdSourcedCosim>)>,
-) -> bool {
+fn any_unprocessed_usd_cosim(q: Query<(), (With<UsdPrimPath>, Without<UsdSourcedCosim>)>) -> bool {
     !q.is_empty()
 }
 
 /// Run condition: any `UsdSourcedCosim` modelica model still needs wrapping
 /// into a `SimComponent`.
 fn any_unwrapped_modelica(
-    q: Query<(), (With<UsdSourcedCosim>, With<ModelicaModel>, Without<SimComponent>)>,
+    q: Query<
+        (),
+        (
+            With<UsdSourcedCosim>,
+            With<ModelicaModel>,
+            Without<SimComponent>,
+        ),
+    >,
 ) -> bool {
     !q.is_empty()
 }
@@ -101,7 +106,9 @@ pub fn process_usd_cosim_prims(
     asset_server: Res<AssetServer>,
 ) {
     for (entity, prim_path) in query.iter() {
-        let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { continue; };
+        let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
+            continue;
+        };
 
         // Acquire a read source: the live canonical stage, built on demand from
         // the asset recipe. If it is not available yet the asset is still
@@ -109,14 +116,17 @@ pub fn process_usd_cosim_prims(
         // `Without<UsdSourcedCosim>` query.
         let id = prim_path.stage_handle.id();
         if canonical.get(id).is_none() {
-            if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
+            if let Some(recipe) = stages
+                .get(&prim_path.stage_handle)
+                .and_then(|a| a.recipe.clone())
+            {
                 canonical.get_or_build(id, &recipe);
             }
         }
 
         // Mark examined up front so each prim is inspected exactly once.
         // Without this, every *non-cosim* prim (wheels, ground, ramps — the
-        // bulk of the scene) failed the `lunco:simWires` check below via the
+        // bulk of the scene) failed the active-cosim gate below via the
         // early `continue` WITHOUT ever gaining `UsdSourcedCosim`, so it stayed
         // in the `Without<UsdSourcedCosim>` query forever — and this system
         // re-ran every frame, deep-cloning the whole stage per prim. That was
@@ -126,10 +136,17 @@ pub fn process_usd_cosim_prims(
         // prim never gains, so marking it here matches nothing downstream.
         // No live stage (asset carries no recipe / build failed) yet — skip,
         // leaving the prim in the `Without<UsdSourcedCosim>` query to retry.
-        let Some(cs) = canonical.get(id) else { continue };
+        let Some(cs) = canonical.get(id) else {
+            continue;
+        };
         commands.entity(entity).insert(UsdSourcedCosim);
         process_usd_cosim_prim_read(
-            &cs.view(), entity, prim_path, &sdf_path, &mut commands, &asset_server,
+            &cs.view(),
+            entity,
+            prim_path,
+            &sdf_path,
+            &mut commands,
+            &asset_server,
         );
     }
 }
@@ -145,93 +162,99 @@ fn process_usd_cosim_prim_read<R: UsdRead>(
     commands: &mut Commands,
     asset_server: &AssetServer,
 ) {
-        // Active-cosim gate: a prim is stepped iff it BOTH binds a behavior model
-        // AND declares connectable ports (`inputs:`/`outputs:` attributes). The two
-        // non-active cases skip silently: a model with no ports is a
-        // documentation-only reference (wheels/motors/batteries carry
-        // `lunco:modelicaModel` for provenance); ports with no model are a pure
-        // physics sink driven through its backend (a joint receiving
-        // `inputs:angle`, a rigid body receiving `inputs:force_y`). Wiring itself
-        // is native `connectionPaths`, derived by `reconcile_usd_connections`
-        // (the journaled, distributed path), never parsed here.
-        let modelica_path = reader.scalar::<String>(sdf_path, "lunco:modelicaModel");
-        let python_path = reader.scalar::<String>(sdf_path, "lunco:pythonModel");
-        if modelica_path.is_none() && python_path.is_none() {
-            return;
+    // Active-cosim gate: a prim is stepped iff it BOTH binds a behavior model
+    // AND declares connectable ports (`inputs:`/`outputs:` attributes). The two
+    // non-active cases skip silently: a model with no ports is a
+    // documentation-only reference (wheels/motors/batteries carry
+    // `lunco:modelicaModel` for provenance); ports with no model are a pure
+    // physics sink driven through its backend (a joint receiving
+    // `inputs:angle`, a rigid body receiving `inputs:force_y`). Wiring itself
+    // is native `connectionPaths`, derived by `rewire_usd_connections`
+    // (the journaled, distributed path), never parsed here.
+    let modelica_path = reader.scalar::<String>(sdf_path, "lunco:modelicaModel");
+    let python_path = reader.scalar::<String>(sdf_path, "lunco:pythonModel");
+    if modelica_path.is_none() && python_path.is_none() {
+        return;
+    }
+    let has_ports = reader
+        .attr_names(sdf_path)
+        .iter()
+        .any(|n| n.starts_with("inputs:") || n.starts_with("outputs:"));
+    if !has_ports {
+        return;
+    }
+
+    // `UsdSourcedCosim` already inserted above; add the cosim-only markers.
+    commands
+        .entity(entity)
+        .insert((UsdSimProcessed, lunco_core::SelectableRoot));
+
+    // NOTE: the possessable control-surface tag (`FlightSoftware`) for a
+    // `lunco:vessel="true"` prim is stamped in the general USD translator
+    // (`lunco-usd-bevy`), which runs for every prim — not here, which only
+    // sees model-bound cosim prims. A lander's actuation backend is its
+    // `SimComponent` manual-override ports (written by `SetPorts`), read
+    // by topology at possess/route time; no vessel-kind marker.
+
+    // Opaque-body guard, applied HERE (cosim intent is known the instant we
+    // read `lunco:modelicaModel`/`lunco:pythonModel`) rather than only later
+    // in `tag_cosim_opaque`, which waits for the asynchronously-wrapped
+    // `SimComponent`. That async gap was a prediction-takeover race: on a
+    // client, `maintain_predicted_dynamic` (sandbox-edit) could stamp a balloon
+    // `PredictedDynamic` during the multi-frame window before `NotPredictable`
+    // landed — once b99991dd dropped the `SkipContentStamp` structural guard,
+    // `NotPredictable` became the SOLE membership guard, so a late stamp meant
+    // the body got predicted (local physics + cosim forces) and diverged.
+    // Stamping at prim-read time closes the window. No vessel-kind exception:
+    // a body reaching here has connectable ports + a model, so its motion is
+    // cosim-driven by definition (a locally-driven rover chassis never gains
+    // a `SimComponent` — under the sub-prim-per-model convention its Modelica
+    // subsystems live on child prims, not the moving body). Harmless on
+    // non-`RigidBody` cosim prims (e.g. a joint-driven solar tracker): the
+    // marker is inert where prediction never runs.
+    commands.entity(entity).insert(lunco_core::NotPredictable);
+
+    // Source files are loaded through Bevy's `AssetServer` rather
+    // than `std::fs::read_to_string`. On native this reads from the
+    // workspace `assets/` source; on wasm it issues an HTTP fetch
+    // against the same path. Either way the actual Compile dispatch
+    // happens later, in `dispatch_loaded_modelica_sources` /
+    // `dispatch_loaded_python_sources`, once the asset is ready.
+    // See `docs/architecture/40-asset-io.md`.
+    if let Some(rel) = modelica_path.as_ref() {
+        let asset_path = strip_assets_prefix(rel);
+        commands.entity(entity).insert(PendingModelicaSource {
+            handle: asset_server.load(asset_path.clone()),
+            asset_path,
+        });
+    }
+    if let Some(rel) = python_path.as_ref() {
+        let asset_path = strip_assets_prefix(rel);
+        commands.entity(entity).insert(PendingPythonSource {
+            handle: asset_server.load(asset_path.clone()),
+            asset_path,
+        });
+    }
+
+    // Port-edge event rules: `lunco:portEvents = "m_prop<200:lander_low_fuel, ..."`.
+    // Each turns a model OUTPUT-signal threshold crossing into a discrete
+    // TelemetryEvent (the rumoca-safe Modelica `when` — see fire_model_port_events).
+    if let Some(spec) = reader.scalar::<String>(sdf_path, "lunco:portEvents") {
+        let rules = parse_port_events(&spec);
+        if !rules.is_empty() {
+            commands.entity(entity).insert(ModelEventRules(rules));
         }
-        let has_ports = reader
-            .attr_names(sdf_path)
-            .iter()
-            .any(|n| n.starts_with("inputs:") || n.starts_with("outputs:"));
-        if !has_ports {
-            return;
-        }
+    }
 
-        // `UsdSourcedCosim` already inserted above; add the cosim-only markers.
-        commands.entity(entity).insert((
-            UsdSimProcessed,
-            lunco_core::SelectableRoot,
-        ));
-
-        // NOTE: the possessable control-surface tag (`FlightSoftware`) for a
-        // `lunco:vessel="true"` prim is stamped in the general USD translator
-        // (`lunco-usd-bevy`), which runs for every prim — not here, which only
-        // sees `lunco:simWires` cosim prims. A lander's actuation backend is its
-        // `SimComponent` manual-override ports (written by `SetPorts`), read
-        // by topology at possess/route time; no vessel-kind marker.
-
-        // Opaque-body guard, applied HERE (cosim intent is known the instant we
-        // read `lunco:modelicaModel`/`lunco:pythonModel`) rather than only later
-        // in `tag_cosim_opaque`, which waits for the asynchronously-wrapped
-        // `SimComponent`. That async gap was a prediction-takeover race: on a
-        // client, `maintain_predicted_dynamic` (sandbox-edit) could stamp a balloon
-        // `PredictedDynamic` during the multi-frame window before `NotPredictable`
-        // landed — once b99991dd dropped the `SkipContentStamp` structural guard,
-        // `NotPredictable` became the SOLE membership guard, so a late stamp meant
-        // the body got predicted (local physics + cosim forces) and diverged.
-        // Stamping at prim-read time closes the window. No vessel-kind exception:
-        // a body reaching here has `lunco:simWires` + a model, so its motion is
-        // cosim-driven by definition (a locally-driven rover chassis never gains
-        // a `SimComponent` — under the sub-prim-per-model convention its Modelica
-        // subsystems live on child prims, not the moving body). Harmless on
-        // non-`RigidBody` cosim prims (e.g. a joint-driven solar tracker): the
-        // marker is inert where prediction never runs.
-        commands.entity(entity).insert(lunco_core::NotPredictable);
-
-        // Source files are loaded through Bevy's `AssetServer` rather
-        // than `std::fs::read_to_string`. On native this reads from the
-        // workspace `assets/` source; on wasm it issues an HTTP fetch
-        // against the same path. Either way the actual Compile dispatch
-        // happens later, in `dispatch_loaded_modelica_sources` /
-        // `dispatch_loaded_python_sources`, once the asset is ready.
-        // See `docs/architecture/40-asset-io.md`.
-        if let Some(rel) = modelica_path.as_ref() {
-            let asset_path = strip_assets_prefix(rel);
-            commands.entity(entity).insert(PendingModelicaSource {
-                handle: asset_server.load(asset_path.clone()),
-                asset_path,
-            });
-        }
-        if let Some(rel) = python_path.as_ref() {
-            let asset_path = strip_assets_prefix(rel);
-            commands.entity(entity).insert(PendingPythonSource {
-                handle: asset_server.load(asset_path.clone()),
-                asset_path,
-            });
-        }
-
-        // Port-edge event rules: `lunco:portEvents = "m_prop<200:lander_low_fuel, ..."`.
-        // Each turns a model OUTPUT-signal threshold crossing into a discrete
-        // TelemetryEvent (the rumoca-safe Modelica `when` — see fire_model_port_events).
-        if let Some(spec) = reader.scalar::<String>(sdf_path, "lunco:portEvents") {
-            let rules = parse_port_events(&spec);
-            if !rules.is_empty() {
-                commands.entity(entity).insert(ModelEventRules(rules));
-            }
-        }
-
-        let kind = if modelica_path.is_some() { "modelica" } else { "python" };
-        info!("[usd-cosim] wired {} ({}) from USD attrs", prim_path.path, kind);
+    let kind = if modelica_path.is_some() {
+        "modelica"
+    } else {
+        "python"
+    };
+    info!(
+        "[usd-cosim] wired {} ({}) from USD attrs",
+        prim_path.path, kind
+    );
 }
 
 /// USD attributes sometimes carry an `assets/` prefix
@@ -268,7 +291,9 @@ pub fn dispatch_loaded_modelica_sources(
             commands.entity(entity).remove::<PendingModelicaSource>();
             continue;
         }
-        let Some(src) = sources.get(&pending.handle) else { continue };
+        let Some(src) = sources.get(&pending.handle) else {
+            continue;
+        };
 
         // Single best-effort parse, three AST-driven extracts. Lenient
         // parsing means a model with a semantic error still produces
@@ -280,7 +305,9 @@ pub fn dispatch_loaded_modelica_sources(
             .clone();
         let model_name = extract_model_name_from_ast(&ast).unwrap_or_else(|| "Model".into());
         let parameters = extract_parameters_from_ast(&ast);
-        let inputs = extract_inputs_with_defaults_from_ast(&ast).into_iter().collect();
+        let inputs = extract_inputs_with_defaults_from_ast(&ast)
+            .into_iter()
+            .collect();
 
         commands.entity(entity).insert(ModelicaModel {
             model_path: PathBuf::from(&pending.asset_path),
@@ -331,7 +358,9 @@ pub fn dispatch_loaded_python_sources(
             commands.entity(entity).remove::<PendingPythonSource>();
             continue;
         }
-        let Some(src) = sources.get(&pending.handle) else { continue };
+        let Some(src) = sources.get(&pending.handle) else {
+            continue;
+        };
 
         // Offset doc id away from any Modelica-allocated ids on the same
         // entity (legacy catalog Python balloon does the same).
@@ -381,10 +410,7 @@ pub fn dispatch_loaded_python_sources(
 /// have a `SimComponent` and whose Modelica variables have populated.
 pub fn wrap_modelica_into_simcomponent(
     mut commands: Commands,
-    q_new: Query<
-        (Entity, &ModelicaModel),
-        (With<UsdSourcedCosim>, Without<SimComponent>),
-    >,
+    q_new: Query<(Entity, &ModelicaModel), (With<UsdSourcedCosim>, Without<SimComponent>)>,
 ) {
     for (entity, model) in q_new.iter() {
         if model.variables.is_empty() {
@@ -395,7 +421,11 @@ pub fn wrap_modelica_into_simcomponent(
             parameters: model.parameters.clone(),
             inputs: model.inputs.clone(),
             outputs: model.variables.clone(),
-            status: if model.paused { SimStatus::Paused } else { SimStatus::Running },
+            status: if model.paused {
+                SimStatus::Paused
+            } else {
+                SimStatus::Running
+            },
             is_stepping: model.is_stepping,
         });
     }
@@ -408,7 +438,10 @@ pub fn wrap_modelica_into_simcomponent(
 /// this updates in place with zero allocation. The old
 /// `dst.insert(name.clone(), v)` re-allocated every key every tick.
 #[inline]
-fn upsert_ports<'a>(dst: &mut HashMap<String, f64>, src: impl Iterator<Item = (&'a String, &'a f64)>) {
+fn upsert_ports<'a>(
+    dst: &mut HashMap<String, f64>,
+    src: impl Iterator<Item = (&'a String, &'a f64)>,
+) {
     for (name, val) in src {
         match dst.get_mut(name) {
             Some(slot) => *slot = *val,
@@ -426,7 +459,11 @@ pub fn sync_modelica_outputs(
 ) {
     for (model, mut comp) in &mut q {
         upsert_ports(&mut comp.outputs, model.variables.iter());
-        comp.status = if model.paused { SimStatus::Paused } else { SimStatus::Running };
+        comp.status = if model.paused {
+            SimStatus::Paused
+        } else {
+            SimStatus::Running
+        };
     }
 }
 
@@ -513,7 +550,9 @@ fn parse_port_events(spec: &str) -> Vec<PortEventRule> {
         if entry.is_empty() {
             continue;
         }
-        let Some((cond, event)) = entry.split_once(':') else { continue };
+        let Some((cond, event)) = entry.split_once(':') else {
+            continue;
+        };
         let event = event.trim().to_string();
         let cond = cond.trim();
         // Longest operator first so "<=" isn't misread as "<".
@@ -529,11 +568,19 @@ fn parse_port_events(spec: &str) -> Vec<PortEventRule> {
             continue;
         };
         let port = cond[..idx].trim().to_string();
-        let Ok(threshold) = cond[idx + oplen..].trim().parse::<f64>() else { continue };
+        let Ok(threshold) = cond[idx + oplen..].trim().parse::<f64>() else {
+            continue;
+        };
         if port.is_empty() || event.is_empty() {
             continue;
         }
-        out.push(PortEventRule { port, op, threshold, event, armed: true });
+        out.push(PortEventRule {
+            port,
+            op,
+            threshold,
+            event,
+            armed: true,
+        });
     }
     out
 }
@@ -543,13 +590,19 @@ fn parse_port_events(spec: &str) -> Vec<PortEventRule> {
 /// entity) on each rising edge. This is the "Modelica events" bridge — a
 /// continuous model signal in, a discrete event out.
 pub fn fire_model_port_events(
-    mut q: Query<(&mut ModelEventRules, &SimComponent, Option<&lunco_core::GlobalEntityId>)>,
+    mut q: Query<(
+        &mut ModelEventRules,
+        &SimComponent,
+        Option<&lunco_core::GlobalEntityId>,
+    )>,
     mut commands: Commands,
 ) {
     for (mut rules, comp, gid) in &mut q {
         let src = gid.map(|g| g.get()).unwrap_or(0);
         for rule in rules.0.iter_mut() {
-            let Some(&v) = comp.outputs.get(&rule.port) else { continue };
+            let Some(&v) = comp.outputs.get(&rule.port) else {
+                continue;
+            };
             let cond = rule.op.holds(v, rule.threshold);
             if cond && rule.armed {
                 rule.armed = false;
@@ -633,19 +686,41 @@ pub fn rewire_usd_connections(
     for (entity, prim_path) in q_all.iter() {
         let id = prim_path.stage_handle.id();
         if canonical.get(id).is_none() {
-            if let Some(recipe) =
-                stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone())
+            if let Some(recipe) = stages
+                .get(&prim_path.stage_handle)
+                .and_then(|a| a.recipe.clone())
             {
                 canonical.get_or_build(id, &recipe);
             }
         }
-        let Some(cs) = canonical.get(id) else { continue };
+        let Some(cs) = canonical.get(id) else {
+            continue;
+        };
         let view = cs.view();
-        let Ok(sink_sdf) = SdfPath::new(&prim_path.path) else { continue };
+        let Ok(sink_sdf) = SdfPath::new(&prim_path.path) else {
+            continue;
+        };
 
         for attr in view.attr_names(&sink_sdf) {
             // Only `inputs:` attributes are connection sinks; connector = the leaf.
-            let Some(sink_conn) = attr.strip_prefix("inputs:") else { continue };
+            let Some(sink_conn) = attr.strip_prefix("inputs:") else {
+                continue;
+            };
+            // SSP `LinearTransformation`: the propagated value is `src * factor +
+            // offset`. Authored on the sink prim, keyed by the consuming port
+            // (`lunco:factor:<port>` / `:offset:<port>`), so each input carries its
+            // own scaling. Absent ⇒ identity (1, 0), matching the pre-migration
+            // `lunco:scale` default. The transform is invariant across the fan-in
+            // sources, so it is read once per sink port, above the source loop.
+            // Tolerant of `float` or `double` authoring — a wire naturally matches
+            // the `float`-typed port it scales, so a strict `double` read would
+            // silently drop the transform.
+            let scale = view
+                .real(&sink_sdf, &format!("lunco:factor:{sink_conn}"))
+                .unwrap_or(1.0);
+            let offset = view
+                .real(&sink_sdf, &format!("lunco:offset:{sink_conn}"))
+                .unwrap_or(0.0);
             for src in view.connections(&sink_sdf, &attr) {
                 // Split `/A.outputs:netForce` → prim `/A`, leaf `outputs:netForce`.
                 let Some((src_prim, src_leaf)) = src.rsplit_once('.') else {
@@ -670,10 +745,8 @@ pub fn rewire_usd_connections(
                         start_connector: src_conn.to_string(),
                         end_element: entity,
                         end_connector: sink_conn.to_string(),
-                        // SSP LinearTransformation lands in P1.2b (per-attr
-                        // `lunco:factor`/`lunco:offset`); identity for now.
-                        scale: 1.0,
-                        offset: 0.0,
+                        scale,
+                        offset,
                     },
                     UsdWiredConnection,
                 ));
@@ -699,22 +772,10 @@ fn port_dir_str(d: lunco_cosim::PortDirection) -> &'static str {
     }
 }
 
-/// Map a [`lunco_cosim::PortType`] to a stable wire string.
-fn port_kind_str(t: lunco_cosim::PortType) -> &'static str {
-    match t {
-        lunco_cosim::PortType::Force => "force",
-        lunco_cosim::PortType::Kinematic => "kinematic",
-        lunco_cosim::PortType::Electrical => "electrical",
-        lunco_cosim::PortType::Thermal => "thermal",
-        lunco_cosim::PortType::Signal => "signal",
-    }
-}
-
 fn port_to_json(p: &lunco_core::ports::PortRef) -> serde_json::Value {
     serde_json::json!({
         "name": p.name,
         "direction": port_dir_str(p.direction),
-        "kind": port_kind_str(p.port_type),
         "value": p.value,
     })
 }
@@ -738,7 +799,9 @@ fn resolve_param_entity(world: &mut World, params: &serde_json::Value) -> Option
 pub struct ListPortsProvider;
 
 impl lunco_api::ApiQueryProvider for ListPortsProvider {
-    fn name(&self) -> &'static str { "ListPorts" }
+    fn name(&self) -> &'static str {
+        "ListPorts"
+    }
     fn execute(&self, world: &mut World, params: &serde_json::Value) -> lunco_api::ApiResponse {
         let ports_reg = world.resource::<lunco_core::ports::PortRegistry>().clone();
         // Single-entity form.
@@ -778,7 +841,9 @@ impl lunco_api::ApiQueryProvider for ListPortsProvider {
 pub struct GetPortProvider;
 
 impl lunco_api::ApiQueryProvider for GetPortProvider {
-    fn name(&self) -> &'static str { "GetPort" }
+    fn name(&self) -> &'static str {
+        "GetPort"
+    }
     fn execute(&self, world: &mut World, params: &serde_json::Value) -> lunco_api::ApiResponse {
         let Some(e) = resolve_param_entity(world, params) else {
             return lunco_api::ApiResponse::error(
@@ -794,7 +859,9 @@ impl lunco_api::ApiQueryProvider for GetPortProvider {
         };
         let ports_reg = world.resource::<lunco_core::ports::PortRegistry>().clone();
         match ports_reg.read_port(world, e, name) {
-            Some(value) => lunco_api::ApiResponse::ok(serde_json::json!({ "name": name, "value": value })),
+            Some(value) => {
+                lunco_api::ApiResponse::ok(serde_json::json!({ "name": name, "value": value }))
+            }
             None => lunco_api::ApiResponse::error(
                 lunco_api::ApiErrorCode::DeserializationError,
                 format!("no port `{}` on entity", name),
@@ -813,7 +880,9 @@ impl lunco_api::ApiQueryProvider for GetPortProvider {
 pub struct SetPortProvider;
 
 impl lunco_api::ApiQueryProvider for SetPortProvider {
-    fn name(&self) -> &'static str { "SetPort" }
+    fn name(&self) -> &'static str {
+        "SetPort"
+    }
     fn execute(&self, world: &mut World, params: &serde_json::Value) -> lunco_api::ApiResponse {
         let Some(e) = resolve_param_entity(world, params) else {
             return lunco_api::ApiResponse::error(
@@ -852,12 +921,10 @@ impl lunco_api::ApiQueryProvider for SetPortProvider {
 pub struct CosimStatusProvider;
 
 impl lunco_api::ApiQueryProvider for CosimStatusProvider {
-    fn name(&self) -> &'static str { "CosimStatus" }
-    fn execute(
-        &self,
-        world: &mut World,
-        _params: &serde_json::Value,
-    ) -> lunco_api::ApiResponse {
+    fn name(&self) -> &'static str {
+        "CosimStatus"
+    }
+    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> lunco_api::ApiResponse {
         let mut q = world.query_filtered::<(
             &Name,
             &Transform,
@@ -866,31 +933,44 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
             Option<&avian3d::prelude::LinearVelocity>,
         ), With<UsdSourcedCosim>>();
 
-        let entities: Vec<serde_json::Value> = q.iter(world).map(|(name, tf, comp, model, lv)| {
-            // Full input/output maps so any cosim signal is readable
-            // (the solar tracker's `yaw`/`tracking_error`, the balloon's
-            // `buoyancy`, …) — not just a hardcoded set. This is the
-            // general "read cosim world state" surface.
-            let outputs = comp.map(|c| {
-                c.outputs.iter().map(|(k, v)| (k.clone(), serde_json::json!(v))).collect::<serde_json::Map<_, _>>()
-            }).unwrap_or_default();
-            let inputs = comp.map(|c| {
-                c.inputs.iter().map(|(k, v)| (k.clone(), serde_json::json!(v))).collect::<serde_json::Map<_, _>>()
-            }).unwrap_or_default();
-            serde_json::json!({
-                "name": name.as_str(),
-                "y": tf.translation.y,
-                "yaw": tf.rotation.to_euler(EulerRot::YXZ).0,
-                "vy": lv.map(|v| v.0.y).unwrap_or(0.0),
-                "has_simcomponent": comp.is_some(),
-                "model": comp.map(|c| c.model_name.clone()).unwrap_or_default(),
-                "modelica_var_count": model.map(|m| m.variables.len()).unwrap_or(0),
-                "modelica_paused": model.map(|m| m.paused).unwrap_or(false),
-                "modelica_current_time": model.map(|m| m.current_time).unwrap_or(0.0),
-                "outputs": outputs,
-                "inputs": inputs,
+        let entities: Vec<serde_json::Value> = q
+            .iter(world)
+            .map(|(name, tf, comp, model, lv)| {
+                // Full input/output maps so any cosim signal is readable
+                // (the solar tracker's `yaw`/`tracking_error`, the balloon's
+                // `buoyancy`, …) — not just a hardcoded set. This is the
+                // general "read cosim world state" surface.
+                let outputs = comp
+                    .map(|c| {
+                        c.outputs
+                            .iter()
+                            .map(|(k, v)| (k.clone(), serde_json::json!(v)))
+                            .collect::<serde_json::Map<_, _>>()
+                    })
+                    .unwrap_or_default();
+                let inputs = comp
+                    .map(|c| {
+                        c.inputs
+                            .iter()
+                            .map(|(k, v)| (k.clone(), serde_json::json!(v)))
+                            .collect::<serde_json::Map<_, _>>()
+                    })
+                    .unwrap_or_default();
+                serde_json::json!({
+                    "name": name.as_str(),
+                    "y": tf.translation.y,
+                    "yaw": tf.rotation.to_euler(EulerRot::YXZ).0,
+                    "vy": lv.map(|v| v.0.y).unwrap_or(0.0),
+                    "has_simcomponent": comp.is_some(),
+                    "model": comp.map(|c| c.model_name.clone()).unwrap_or_default(),
+                    "modelica_var_count": model.map(|m| m.variables.len()).unwrap_or(0),
+                    "modelica_paused": model.map(|m| m.paused).unwrap_or(false),
+                    "modelica_current_time": model.map(|m| m.current_time).unwrap_or(0.0),
+                    "outputs": outputs,
+                    "inputs": inputs,
+                })
             })
-        }).collect();
+            .collect();
         lunco_api::ApiResponse::ok(serde_json::json!({ "entities": entities }))
     }
 }
@@ -951,8 +1031,14 @@ fn on_load_scene(
 
     // Blender-style no-op: same path + root prim already loaded.
     let new_id = asset_server.load::<UsdStageAsset>(&path).id();
-    if q_usd.iter().any(|(_, upp)| upp.stage_handle.id() == new_id && upp.path == root_prim) {
-        info!("[load-scene] `{}` @ `{}` already loaded — no-op", path, root_prim);
+    if q_usd
+        .iter()
+        .any(|(_, upp)| upp.stage_handle.id() == new_id && upp.path == root_prim)
+    {
+        info!(
+            "[load-scene] `{}` @ `{}` already loaded — no-op",
+            path, root_prim
+        );
         return;
     }
 
@@ -1132,15 +1218,25 @@ fn clear_scene_entities(
             continue;
         }
         if let Some(raw_id) = sm.document_id {
-            if script_registry.documents.remove(&DocumentId::new(raw_id)).is_some() {
+            if script_registry
+                .documents
+                .remove(&DocumentId::new(raw_id))
+                .is_some()
+            {
                 scripts_freed += 1;
             }
         }
     }
 
     let mut despawned = 0usize;
-    for (e, _) in q_usd.iter() { commands.entity(e).try_despawn(); despawned += 1; }
-    for e in q_wires.iter() { commands.entity(e).try_despawn(); despawned += 1; }
+    for (e, _) in q_usd.iter() {
+        commands.entity(e).try_despawn();
+        despawned += 1;
+    }
+    for e in q_wires.iter() {
+        commands.entity(e).try_despawn();
+        despawned += 1;
+    }
     info!(
         "[scene] cleanup: {} entities despawned, {} Modelica steppers freed, {} Python docs freed",
         despawned, modelica_freed, scripts_freed,
@@ -1262,7 +1358,11 @@ pub fn spawn_usd_child_with_translate(
 ) -> Option<Entity> {
     // Parent path = `path` minus its final `/segment`.
     let (parent_prefix, _name) = path.rsplit_once('/')?;
-    let parent_path = if parent_prefix.is_empty() { "/" } else { parent_prefix };
+    let parent_path = if parent_prefix.is_empty() {
+        "/"
+    } else {
+        parent_prefix
+    };
 
     // Resolve the live parent entity (same scene) and bail if it isn't
     // instantiated yet — a following full load / reconcile will cover it.
@@ -1282,7 +1382,10 @@ pub fn spawn_usd_child_with_translate(
         return None;
     }
 
-    let stage_handle = world.get::<UsdPrimPath>(parent_entity)?.stage_handle.clone();
+    let stage_handle = world
+        .get::<UsdPrimPath>(parent_entity)?
+        .stage_handle
+        .clone();
 
     // Inherit grid-anchoring + instance membership from the parent exactly as
     // `instantiate_usd_prim` derives them for its children.
@@ -1298,7 +1401,10 @@ pub fn spawn_usd_child_with_translate(
 
     let base = (
         Name::new(path.to_string()),
-        UsdPrimPath { stage_handle, path: path.to_string() },
+        UsdPrimPath {
+            stage_handle,
+            path: path.to_string(),
+        },
         tf,
         GlobalTransform::default(),
         Visibility::Visible,
@@ -1307,10 +1413,21 @@ pub fn spawn_usd_child_with_translate(
     );
     let entity = match (load_into, member) {
         (Some(LoadIntoGrid(grid)), Some(m)) => world
-            .spawn((base, CellCoord::default(), lunco_core::GridAnchor, ChildOf(grid), m))
+            .spawn((
+                base,
+                CellCoord::default(),
+                lunco_core::GridAnchor,
+                ChildOf(grid),
+                m,
+            ))
             .id(),
         (Some(LoadIntoGrid(grid)), None) => world
-            .spawn((base, CellCoord::default(), lunco_core::GridAnchor, ChildOf(grid)))
+            .spawn((
+                base,
+                CellCoord::default(),
+                lunco_core::GridAnchor,
+                ChildOf(grid),
+            ))
             .id(),
         (None, Some(m)) => world.spawn((base, ChildOf(parent_entity), m)).id(),
         (None, None) => world.spawn((base, ChildOf(parent_entity))).id(),
@@ -1333,14 +1450,19 @@ fn normalize_scene_asset_path(path_in: &str) -> Option<String> {
     let pb = std::path::PathBuf::from(path_in);
     if pb.is_absolute() {
         // Under the project `assets/` dir → asset-relative (default source).
-        let assets_abs = std::env::current_dir().unwrap_or_default().join(assets_dir());
+        let assets_abs = std::env::current_dir()
+            .unwrap_or_default()
+            .join(assets_dir());
         match pb.strip_prefix(&assets_abs) {
             Ok(rel) => Some(rel.to_string_lossy().into_owned()),
             Err(_) => {
                 // Bare absolute paths outside `assets/` aren't loadable: an
                 // external Twin scene must arrive through a source scheme
                 // (`twin://…`, set by the Twin-open flow), handled above.
-                warn!("[scene] `{}` is outside assets dir — load it via the Twin (`twin://`) source", path_in);
+                warn!(
+                    "[scene] `{}` is outside assets dir — load it via the Twin (`twin://`) source",
+                    path_in
+                );
                 None
             }
         }
@@ -1402,8 +1524,13 @@ pub fn spawn_scene_root_with_stage(
 
     {
         let mut q = world.query::<&UsdPrimPath>();
-        if q.iter(world).any(|upp| upp.stage_handle.id() == new_id && upp.path == root_prim) {
-            info!("[scene] `{}` @ `{}` already loaded — no-op", asset_path, root_prim);
+        if q.iter(world)
+            .any(|upp| upp.stage_handle.id() == new_id && upp.path == root_prim)
+        {
+            info!(
+                "[scene] `{}` @ `{}` already loaded — no-op",
+                asset_path, root_prim
+            );
             return None;
         }
     }
@@ -1426,19 +1553,27 @@ pub fn spawn_scene_root_with_stage(
     // Atomic spawn: `ChildOf(grid)` in the bundle so parent + CellCoord +
     // Transform land together — same contract as `migrate_to_grid`. Avoids
     // the observer race that mis-tagged rover chassis as `RigidBody::Static`.
-    let root = world.spawn((
-        Name::new(format!("Scene:{}", asset_path)),
-        UsdPrimPath { stage_handle: handle, path: root_prim.clone() },
-        Transform::default(),
-        GlobalTransform::default(),
-        Visibility::Visible,
-        InheritedVisibility::default(),
-        ViewVisibility::default(),
-        CellCoord::default(),
-        lunco_core::GridAnchor,
-        ChildOf(grid),
-    )).id();
-    info!("[scene] spawned `{}` @ `{}` (entity {})", asset_path, root_prim, root);
+    let root = world
+        .spawn((
+            Name::new(format!("Scene:{}", asset_path)),
+            UsdPrimPath {
+                stage_handle: handle,
+                path: root_prim.clone(),
+            },
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::Visible,
+            InheritedVisibility::default(),
+            ViewVisibility::default(),
+            CellCoord::default(),
+            lunco_core::GridAnchor,
+            ChildOf(grid),
+        ))
+        .id();
+    info!(
+        "[scene] spawned `{}` @ `{}` (entity {})",
+        asset_path, root_prim, root
+    );
     Some(root)
 }
 
@@ -1510,7 +1645,9 @@ fn tag_cosim_opaque(
 ///    PropagateCosimSet::Propagate → ApplyForcesCosimSet::ApplyForces →
 ///    sync_*_inputs → ModelicaSet::SpawnRequests`.
 pub(crate) fn install(app: &mut App) {
-    use lunco_cosim::systems::{apply_forces::CosimSet as ApplyForcesCosimSet, propagate::CosimSet as PropagateCosimSet};
+    use lunco_cosim::systems::{
+        apply_forces::CosimSet as ApplyForcesCosimSet, propagate::CosimSet as PropagateCosimSet,
+    };
     use lunco_modelica::ModelicaSet;
 
     // Ensure the source asset types this module's systems read/allocate are
@@ -1545,16 +1682,26 @@ pub(crate) fn install(app: &mut App) {
             // §6 opaque guard: once a body is cosim-driven, mark it unpredictable
             // (after the SimComponent wrap above, so it sees freshly-wrapped bodies).
             tag_cosim_opaque,
-        ).chain().after(lunco_usd_bevy::sync_usd_visuals),
+        )
+            .chain()
+            .after(lunco_usd_bevy::sync_usd_visuals),
     );
 
     app.add_systems(
         FixedUpdate,
         (
-            sync_modelica_outputs.after(ModelicaSet::HandleResponses).before(PropagateCosimSet::Propagate),
-            sync_script_outputs.after(ModelicaSet::HandleResponses).before(PropagateCosimSet::Propagate),
-            sync_modelica_inputs.after(ApplyForcesCosimSet::ApplyForces).before(ModelicaSet::SpawnRequests),
-            sync_script_inputs.after(ApplyForcesCosimSet::ApplyForces).before(ModelicaSet::SpawnRequests),
+            sync_modelica_outputs
+                .after(ModelicaSet::HandleResponses)
+                .before(PropagateCosimSet::Propagate),
+            sync_script_outputs
+                .after(ModelicaSet::HandleResponses)
+                .before(PropagateCosimSet::Propagate),
+            sync_modelica_inputs
+                .after(ApplyForcesCosimSet::ApplyForces)
+                .before(ModelicaSet::SpawnRequests),
+            sync_script_inputs
+                .after(ApplyForcesCosimSet::ApplyForces)
+                .before(ModelicaSet::SpawnRequests),
             // Modelica `when` bridge: edge-detect on fresh outputs, after they sync.
             fire_model_port_events
                 .after(sync_modelica_outputs)
@@ -1562,16 +1709,19 @@ pub(crate) fn install(app: &mut App) {
         ),
     );
 
-    app.add_systems(Startup, |reg: Option<ResMut<lunco_api::ApiQueryRegistry>>| {
-        if let Some(mut reg) = reg {
-            // Canonical uniform port verbs (over `lunco_cosim::ports`).
-            reg.register(ListPortsProvider);
-            reg.register(GetPortProvider);
-            reg.register(SetPortProvider);
-            // Richer per-entity cosim introspection (not an alias of the above).
-            reg.register(CosimStatusProvider);
-        }
-    });
+    app.add_systems(
+        Startup,
+        |reg: Option<ResMut<lunco_api::ApiQueryRegistry>>| {
+            if let Some(mut reg) = reg {
+                // Canonical uniform port verbs (over `lunco_cosim::ports`).
+                reg.register(ListPortsProvider);
+                reg.register(GetPortProvider);
+                reg.register(SetPortProvider);
+                // Richer per-entity cosim introspection (not an alias of the above).
+                reg.register(CosimStatusProvider);
+            }
+        },
+    );
 
     // Registers the LoadScene type + observer (see register_commands! below).
     register_all_commands(app);
@@ -1582,7 +1732,6 @@ register_commands!(on_load_scene, on_clear_scene, on_restart_scene,);
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     // ── resolve_root_prim ────────────────────────────────────────────
     //

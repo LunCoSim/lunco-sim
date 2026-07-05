@@ -1,18 +1,16 @@
-//! `UsdRead` — the minimal composed-read surface shared by the flattened
-//! `sdf::Data` (legacy) and the live [`StageView`](crate::view::StageView)
-//! (Ph0′ canonical stage).
+//! `UsdRead` — the minimal composed-read surface shared by two USD sources: the
+//! live [`StageView`](crate::view::StageView) over the canonical stage, and the
+//! flattened [`sdf::Data`](openusd::sdf::Data) storage layer.
 //!
-//! This is the **decoupling seam** for the Ph0′ migration: a USD extractor
-//! written generically over `UsdRead` reads the flattened `sdf::Data` today and
-//! the live composed stage after cutover — with no change to its body. Because
-//! `sdf::Data`'s impl routes through the exact same `field("default") +
-//! TryFrom<Value>` path the extractors used before, migrating a function to
-//! `UsdRead` is behaviour-preserving for the current (flattened) path — every
-//! existing `&UsdData` call site keeps compiling, since `sdf::Data: UsdRead`.
+//! It is the **decoupling seam**: an extractor written generically over
+//! `UsdRead` reads either source with no change to its body. Both impls route a
+//! typed read through the same `TryFrom<Value>` conversion, so the two sources
+//! are interchangeable for every extractor.
 //!
-//! S2b scope: the trait + both impls + the pure-scalar/topology reads
-//! (`read_shape_dims`, `read_int_array`). Schema/relationship/mesh/scale reads
-//! migrate onto this same seam in later slices.
+//! **Real-valued reads use the [`real`](UsdRead::real) family, never
+//! `scalar::<f64>`/`scalar::<f32>` directly** — a bare typed scalar matches only
+//! one authored precision and silently drops a value authored in the other (see
+//! [`real`](UsdRead::real)).
 
 use openusd::sdf::{Path as SdfPath, SpecType, Value};
 
@@ -39,6 +37,42 @@ pub trait UsdRead {
         T: TryFrom<Value>,
     {
         self.attr_value(prim, name).and_then(|v| v.get::<T>())
+    }
+
+    /// A real scalar tolerant of `float` **or** `double` authoring, as `f64`.
+    ///
+    /// `scalar::<f64>` matches only a `Double` opinion, so a value authored in the
+    /// other precision — a gain authored `float` to match the `float` port it
+    /// scales, a georeference metre offset, a hand-authored `float radius` — reads
+    /// as `None` and is silently dropped. A real value is a real value regardless
+    /// of authored precision: this tries `f64`, then `f32`, so the opinion is never
+    /// lost on a type mismatch. Every real-valued read should use this, not
+    /// `scalar::<f64>`. Provided.
+    fn real(&self, prim: &SdfPath, name: &str) -> Option<f64> {
+        self.scalar::<f64>(prim, name)
+            .or_else(|| self.scalar::<f32>(prim, name).map(f64::from))
+    }
+
+    /// The [`real`](Self::real) counterpart for `f32` consumers (mesh sizes, shader
+    /// params, physics gains). Tolerant of `double` **or** `float` authoring, so a
+    /// `double`-authored value is not dropped by a strict `scalar::<f32>`. Provided.
+    fn real_f32(&self, prim: &SdfPath, name: &str) -> Option<f32> {
+        self.scalar::<f32>(prim, name)
+            .or_else(|| self.scalar::<f64>(prim, name).map(|v| v as f32))
+    }
+
+    /// The timeSamples-or-default [`real`](Self::real) — precision-tolerant sibling
+    /// of [`scalar_at`](Self::scalar_at) for animated real channels. Provided.
+    fn real_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<f64> {
+        self.scalar_at::<f64>(prim, name, time)
+            .or_else(|| self.scalar_at::<f32>(prim, name, time).map(f64::from))
+    }
+
+    /// The `f32` timeSamples-or-default tolerant read — [`real_f32`](Self::real_f32)
+    /// at a time code. Provided.
+    fn real_f32_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<f32> {
+        self.scalar_at::<f32>(prim, name, time)
+            .or_else(|| self.scalar_at::<f64>(prim, name, time).map(|v| v as f32))
     }
 
     /// Whether `prim` applies the named API schema (its composed `apiSchemas`) —
@@ -388,5 +422,79 @@ impl UsdRead for openusd::sdf::Data {
                 _ => None,
             })
             .unwrap_or_default()
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod real_reader_tests {
+    //! The precision-tolerant [`real`](UsdRead::real) family reads a real value
+    //! regardless of whether it was authored `float` or `double`. This is the
+    //! guard against the silent-fallback bug: `scalar::<f64>` matches only a
+    //! `Double` opinion and `scalar::<f32>` only a `Float` one, so a value
+    //! authored in the other precision reads `None` and is silently dropped.
+
+    use super::UsdRead;
+    use crate::canonical::{CanonicalStage, StageRecipe};
+    use openusd::sdf::{Path as SdfPath, Value};
+
+    const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
+
+    /// Build a live stage carrying a `float`-authored and a `double`-authored
+    /// attribute on `/World`.
+    fn stage_with_mixed_precision() -> CanonicalStage {
+        let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", SCENE))
+            .expect("stage builds");
+        let stage = cs.stage();
+        stage
+            .create_attribute("/World.f_val", "float")
+            .unwrap()
+            .set(Value::Float(2.5))
+            .unwrap();
+        stage
+            .create_attribute("/World.d_val", "double")
+            .unwrap()
+            .set(Value::Double(3.5))
+            .unwrap();
+        cs
+    }
+
+    #[test]
+    fn real_family_reads_either_authored_precision() {
+        let cs = stage_with_mixed_precision();
+        let view = cs.view();
+        let world = SdfPath::new("/World").unwrap();
+
+        // The bug this family exists to prevent: a strict typed read of the
+        // *other* precision silently yields `None`.
+        assert_eq!(
+            view.scalar::<f64>(&world, "f_val"),
+            None,
+            "strict f64 read drops a float-authored value — the silent fallback bug"
+        );
+        assert_eq!(
+            view.scalar::<f32>(&world, "d_val"),
+            None,
+            "strict f32 read drops a double-authored value"
+        );
+
+        // `real` (→ f64) reads BOTH a float- and a double-authored opinion.
+        assert_eq!(view.real(&world, "f_val"), Some(2.5), "real reads float");
+        assert_eq!(view.real(&world, "d_val"), Some(3.5), "real reads double");
+
+        // `real_f32` (→ f32) likewise reads either precision.
+        assert_eq!(view.real_f32(&world, "d_val"), Some(3.5), "real_f32 reads double");
+        assert_eq!(view.real_f32(&world, "f_val"), Some(2.5), "real_f32 reads float");
+
+        // The time-sampled variants fall back to the `default` opinion when a
+        // channel has no `timeSamples`, and are precision-tolerant there too.
+        assert_eq!(view.real_at(&world, "f_val", 0.0), Some(2.5), "real_at reads float default");
+        assert_eq!(
+            view.real_f32_at(&world, "d_val", 0.0),
+            Some(3.5),
+            "real_f32_at reads double default"
+        );
+
+        // A genuinely absent attribute is still `None` (tolerance ≠ fabrication).
+        assert_eq!(view.real(&world, "missing"), None, "absent attr stays None");
     }
 }

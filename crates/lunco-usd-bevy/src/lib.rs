@@ -894,7 +894,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
                 .filter_map(|bind| {
                     let intent = bind.name()?.to_string();
                     let port = reader.scalar::<String>(&bind, "lunco:port")?;
-                    let scale = reader.scalar::<f64>(&bind, "lunco:scale")?;
+                    let scale = reader.real(&bind, "lunco:scale")?;
                     Some((intent, port, scale))
                 })
                 .collect();
@@ -1935,9 +1935,7 @@ fn read_f32_at<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str, time: f64) ->
     if !attr_has_time_samples(reader, path, attr) {
         return None;
     }
-    reader
-        .scalar_at::<f32>(path, attr, time)
-        .or_else(|| reader.scalar_at::<f64>(path, attr, time).map(|v| v as f32))
+    reader.real_f32_at(path, attr, time)
 }
 
 /// Sample one xform-op channel **only if it is animated** (has `timeSamples`),
@@ -2352,8 +2350,7 @@ fn value_at(reader: &UsdData, path: &SdfPath, attr: &str, time: f64) -> Option<V
 /// absent or non-numeric.
 fn read_scalar_f32_at<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str, time: f64) -> Option<f32> {
     reader
-        .scalar_at::<f32>(path, attr, time)
-        .or_else(|| reader.scalar_at::<f64>(path, attr, time).map(|v| v as f32))
+        .real_f32_at(path, attr, time)
         .or_else(|| match reader.attr_value_at(path, attr, time)? {
             Value::Int(v) => Some(v as f32),
             Value::Int64(v) => Some(v as f32),
@@ -2604,9 +2601,7 @@ fn collect_wheel_contacts<R: UsdRead>(
             .scalar::<i32>(&child, "physxVehicleWheel:index")
             .is_some()
         {
-            let radius = reader
-                .scalar::<f64>(&child, "radius")
-                .unwrap_or(0.25);
+            let radius = reader.real(&child, "radius").unwrap_or(0.25);
             let center = world.translation.as_dvec3();
             contacts.push(bevy::math::DVec3::new(
                 center.x,
@@ -2654,11 +2649,11 @@ pub enum ShapeDims {
 pub fn read_shape_dims<R: UsdRead>(reader: &R, path: &SdfPath, type_name: &str) -> Option<ShapeDims> {
     let dims = match type_name {
         "Cube" => {
-            let size = reader.scalar::<f64>(path, "size").unwrap_or(2.0);
+            let size = reader.real(path, "size").unwrap_or(2.0);
             let legacy_extents = match (
-                reader.scalar::<f64>(path, "width"),
-                reader.scalar::<f64>(path, "height"),
-                reader.scalar::<f64>(path, "depth"),
+                reader.real(path, "width"),
+                reader.real(path, "height"),
+                reader.real(path, "depth"),
             ) {
                 (Some(w), Some(h), Some(d)) => Some([w, h, d]),
                 _ => None,
@@ -2666,23 +2661,23 @@ pub fn read_shape_dims<R: UsdRead>(reader: &R, path: &SdfPath, type_name: &str) 
             ShapeDims::Cube { size, legacy_extents }
         }
         "Sphere" => ShapeDims::Sphere {
-            radius: reader.scalar::<f64>(path, "radius").unwrap_or(1.0),
+            radius: reader.real(path, "radius").unwrap_or(1.0),
         },
         "Cylinder" => ShapeDims::Cylinder {
-            radius: reader.scalar::<f64>(path, "radius").unwrap_or(1.0),
-            height: reader.scalar::<f64>(path, "height").unwrap_or(2.0),
+            radius: reader.real(path, "radius").unwrap_or(1.0),
+            height: reader.real(path, "height").unwrap_or(2.0),
         },
         "Cone" => ShapeDims::Cone {
-            radius: reader.scalar::<f64>(path, "radius").unwrap_or(1.0),
-            height: reader.scalar::<f64>(path, "height").unwrap_or(2.0),
+            radius: reader.real(path, "radius").unwrap_or(1.0),
+            height: reader.real(path, "height").unwrap_or(2.0),
         },
         "Capsule" => ShapeDims::Capsule {
-            radius: reader.scalar::<f64>(path, "radius").unwrap_or(0.5),
-            height: reader.scalar::<f64>(path, "height").unwrap_or(1.0),
+            radius: reader.real(path, "radius").unwrap_or(0.5),
+            height: reader.real(path, "height").unwrap_or(1.0),
         },
         "Plane" => ShapeDims::Plane {
-            width: reader.scalar::<f64>(path, "width").unwrap_or(2.0),
-            length: reader.scalar::<f64>(path, "length").unwrap_or(2.0),
+            width: reader.real(path, "width").unwrap_or(2.0),
+            length: reader.real(path, "length").unwrap_or(2.0),
         },
         _ => return None,
     };
@@ -2863,11 +2858,8 @@ pub fn build_usd_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> {
 /// Reads a float-like attribute (`float` / `double` / `int`) from a USD prim.
 /// Falls back to the metadata-based "default" key if not found (needed for dome/light attributes).
 pub fn get_attribute_as_f32<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<f32> {
-    if let Some(v) = reader.scalar::<f32>(path, attr) {
+    if let Some(v) = reader.real_f32(path, attr) {
         return Some(v);
-    }
-    if let Some(v) = reader.scalar::<f64>(path, attr) {
-        return Some(v as f32);
     }
     if let Some(v) = reader.scalar::<i32>(path, attr) {
         return Some(v as f32);
@@ -3255,7 +3247,7 @@ pub fn reveal_placeholder_on_failure(
                     if let Ok(sdf_path) = SdfPath::new(path) {
                         if let Some(s) = get_attribute_as_vec3(reader, &sdf_path, "xformOp:scale") {
                             Some(s)
-                        } else if let Some(size) = reader.scalar::<f64>(&sdf_path, "size") {
+                        } else if let Some(size) = reader.real(&sdf_path, "size") {
                             Some(Vec3::splat(size as f32))
                         } else {
                             None

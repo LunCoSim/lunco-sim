@@ -1,8 +1,9 @@
 # 39 — Migration Plan: USD-Native Core
 
-Status: **plan** (2026-07-03). Consolidates the actionable work from docs **36** (comms), **37** (model
-synthesis), **38** (domains-as-packages / standards / naming). Constraint: **no legacy to preserve** —
-every step is a clean cutover-with-verify, one canonical form, no back-compat shims.
+Status: **active plan** · Audience: engineers working the USD-native migration. Consolidates the actionable
+work from docs **36** (comms), **37** (model synthesis), **38** (domains-as-packages / standards / naming).
+Constraint: **no legacy to preserve** — every step is a clean cutover-with-verify, one canonical form, no
+back-compat shims.
 
 > **Thesis (doc 38 §12):** `core = openusd (structure, mostly already there) + projection (USD→ECS) +
 > runtime (solvers + PortRegistry value plane)`. This plan deletes the bespoke *middle* (parallel
@@ -11,66 +12,18 @@ every step is a clean cutover-with-verify, one canonical form, no back-compat sh
 
 ## How to read this
 
-Phases are **dependency-ordered**; within a phase, PRs are independent unless noted. Each PR lists
-**goal · change · files · risk · verify · unblocks**. Source-of-truth sections in docs 36/37/38 are cited.
-Legend: 🟢 low risk / no behavior change · 🟡 behavior change, verifiable · 🔴 needs an `openusd`
-contribution.
+Phases are **dependency-ordered**; within a phase, PRs are independent unless noted. Source-of-truth
+sections in docs 36/37/38 are cited. Legend: 🟢 low risk / no behavior change · 🟡 behavior change,
+verifiable · 🔴 needs an `openusd` contribution. Items already in place are marked **[in place]** with a
+one-line statement of what exists; everything else is remaining work.
 
----
-
-## Networking-branch interlock (read before scheduling)
-
-A separate **`networking` worktree** (branch `networking`, 9 commits ahead of `usd`) is doing a **USD
-scene-representation move that partly *is* this migration's end-state** — plan around it, don't collide.
-
-- **The journal/sync/hooks/RBAC/ports substrate this plan builds on is already in the `usd` base**, not
-  incoming networking work: `journal_plane::domain_ops_after` (domain-scoped replay), scripted merge-policy
-  hook, machine-unique `AuthorTag` authors, `ApplyUsdOp`→journal `EntryKind::Op{domain:Usd, op:UsdOp}`,
-  `SetPorts`, `lunco-hash`. Phases 2/5 rely on it; it exists today.
-- **P1.1 is already delivered on the networking branch — and over-delivered.** `flatten_stage`
-  (`compose.rs`) now emits attribute **`connectionPaths`** via `attr.connections()`; *and* networking adds
-  **`CanonicalStage` + a live `UsdRead`** (`canonical.rs`/`read.rs`/`view.rs`) that reads the live
-  `openusd::Stage` directly and **removes the flattened-document representation**. Its `UsdRead` already
-  folds `connectionPaths` + `targetPaths` into `read_rel_target`. → **When networking merges, the
-  flattened path is deprecated in favor of the live Stage.** This plan should target the **live-Stage
-  reader**, converging with networking, rather than the soon-to-be-deleted flatten path.
-- **No conflict on the wiring code:** `SimConnection`, `PortRegistry`, `PortType`, and the
-  `lunco:simWires`/wire-prim/`epsBus` parsing are **untouched** by networking's delta — P1's deletions and
-  rework don't collide. Networking also **deletes** large autopilot/behavior/sandbox policy code (moving it
-  to USD-authored projection), which *shrinks* the non-USD surface Phase 2 must reconcile — a tailwind.
-- **The one real new gap: there is no typed `UsdOp::SetConnection`.** `UsdOp` has `SetRelationship` +
-  `SetAttribute` but nothing that authors `connectionPaths`, so a connection edit replicates only via the
-  coarse `ReplaceSource` fallback. **Op-selection (`domain_ops_after`, keyed by `DomainKind::Usd`, not by
-  attribute name) needs no change** — but the plan must **add `UsdOp::SetConnection`** (see P1.0) for
-  fine-grained wiring replication.
-
-**Scheduling consequence:** ideally **land the networking merge first**, then build P1 on top of
-`CanonicalStage`/`UsdRead`. If P1 must proceed first, keep connection-reading working on *both* readers
-(both already surface `connectionPaths`) and expect the flatten path to retire on merge.
-
-### Conflict-safe start set (do now, in files the networking delta does NOT touch)
-
-Verified via `git diff 48f20e4d..04c924f4 --stat`. Networking is rewriting the USD **reader/compose** path
-(`lunco-usd-bevy/{lib.rs,compose.rs,camera.rs,light.rs}` + new `canonical.rs`/`read.rs`/`view.rs`),
-`lunco-usd-avian`, the **rhai bridge** (`lunco-scripting/{bridge_core,world_bridge}.rs`), `avian.rs`, and
-deletes autopilot/behavior/sandbox-policy. **Avoid all of those.** These items are in untouched files and
-additive:
-
-| do now | where (untouched) | why safe / valuable |
-|---|---|---|
-| **P1.0 — `UsdOp::SetConnection`** | `lunco-usd/{document.rs,commands.rs}` (confirmed untouched) | additive enum variant + handler; **required regardless**; on the critical path |
-| **P5.1 — electrical `connect()` spike** | `lunco-modelica` / rumoca (untouched) | standalone `.mo` + `compile_str` test; de-risks the biggest unknown (doc 37 §6) with zero USD-scene overlap |
-| **P6.1 — `lunco-connectivity` crate** | **new crate** on `lunco-celestial` (untouched) | brand-new files = zero merge surface; builds the comms geometry substrate independently of wiring |
-| **P0.3 — author `kind`** | `assets/**/*.usda` (additive) | asset-only; `openusd` already reads `kind`; no reader change |
-
-**Defer until after networking merges** (files it is actively reworking): the P1.1–P1.5 connection cutover
-(compose/read rework), **`PortType` deletion** (touches `avian.rs`), lights/camera/physics-sensor schemas
-(`light.rs`/`camera.rs`/`lunco-usd-avian`), the USD-graph editor and any new rhai verbs (`read.rs` +
-`world_bridge.rs`), and any attribute-read change (the `lib.rs` +465 reader restructure).
-
-**Principle:** *safe = new crates/files + additive `UsdOp` variants + asset authoring + the Modelica
-compile path. Risky = the USD scene-representation reader/compose/policy code and the rhai bridge —
-exactly what networking is rewriting.*
+**Foundation already in place.** The canonical-stage substrate this plan targets has landed: a live
+`CanonicalStage` reads the composed `openusd::Stage` directly through a generic `UsdRead` seam
+(`lunco-usd-bevy/{canonical,read,view}.rs`), and both readers surface `connectionPaths`. The journal /
+sync / hooks / RBAC / ports substrate Phases 2/5 build on also exists in the base: domain-scoped op replay
+(`journal_plane::domain_ops_after`), the scripted merge-policy hook, machine-unique `AuthorTag` authors,
+`ApplyUsdOp`→journal `EntryKind::Op{domain:Usd}`, `SetPorts`, `lunco-hash`. So the migration is now the
+encoding switch + moving derivation onto the reconcile, not a reader rewrite.
 
 ---
 
@@ -94,12 +47,11 @@ Prove the "adopt USD-standard spelling" muscle on the safest items. All tier-1 p
 
 ## Phase 1 — The connections cutover (the crux; doc 38 §13) 🔴🟡
 
-**POST-MERGE REDESIGN (2026-07-05): networking merged; USD is the main representation.** Three hard
-requirements now shape P1: **(1) full migration, no legacy** — `connectionPaths` becomes the *only* wiring
-encoding; **(2) the migrated code must be fast** — the hot loop stays by-slot and the projection must be
-change-driven, never a rescan; **(3) every sim change is journaled + distributed** — the *only* way a
-connection changes is a `UsdOp` that rides the journal to all peers. These three collapse into one pipeline
-rather than a bolt-on projector.
+USD is the main representation, so three hard requirements shape P1: **(1) full migration, no legacy** —
+`connectionPaths` becomes the *only* wiring encoding; **(2) the migrated code must be fast** — the hot loop
+stays by-slot and the projection must be change-driven, never a rescan; **(3) every sim change is journaled
++ distributed** — the *only* way a connection changes is a `UsdOp` that rides the journal to all peers.
+These three collapse into one pipeline rather than a bolt-on projector.
 
 **The one pipeline (nothing else may mutate wiring):**
 
@@ -122,54 +74,60 @@ same reconcile → same `SimConnection` → same `CompiledWiring`. The current d
 spawns `SimConnection` directly from parsed attrs at load) **bypasses the journal — that is exactly the
 legacy to delete**, not merely the string encodings.
 
-**What the merge already gave us (behind us):** read-source migration is done — both producers are
-`UsdRead`-generic over the live `StageView`; `read.rs` already folds relationship targets and `.connect`
-connections into `rel_target()`. So P1 is now *only* the encoding switch + moving derivation onto the
-reconcile.
+Read-source migration is already in place: both producers are `UsdRead`-generic over the live `StageView`,
+and `read.rs` folds relationship targets and `.connect` connections into `rel_target()`. So P1 is *only* the
+encoding switch + moving derivation onto the reconcile.
 
-- **P1.0 ✅ DONE (committed `b0666d66`) — `UsdOp::SetConnection`, the sole authoring op.** Variant
+- **P1.0 [in place] — `UsdOp::SetConnection`, the sole authoring op.** Variant
   `SetConnection { edit_target, path, name, type_name, sources: Vec<String> }` in `lunco-usd/document.rs`;
   apply = `require_prim_anywhere` → parse `sources`→`SdfPath` → `stage.create_attribute(path.name, type_name)`
   → `set_connections(...)` (explicit `connectionPaths` list-op; **empty `sources` = clear**).
   `ApplyUsdOp{op:UsdOp}` is generic → auto-dispatches via API/MCP/rhai, records as `EntryKind::Op{domain:Usd}`
-  → **journaled and distributed for free**. This is requirement (3) already satisfied at the authoring end.
-- **P1.1 ✅ DONE (merged) — Connections survive composition + read off the live stage.** `StageView::rel_target`
-  folds relationship targets and `.connect` uniformly (`read.rs:160`); both `UsdRead` impls surface connections.
-- **P1.1b 🟡 NEW — `UsdRead::connections(prim, name) -> Vec<String>` (all sources).** `rel_target()` returns
-  only the first target; the derivation needs **every** source on a fan-in `inputs:` attr. One trait method +
-  both impls (`StageView`: `prim.attribute(name).connections()`; `sdf::Data`: the `connectionPaths` `PathListOp`
-  items). Small, additive, in `read.rs`. *Unblocks:* P1.3.
+  → journaled and distributed. Satisfies requirement (3) at the authoring end.
+- **P1.1 [in place] — Connections survive composition + read off the live stage.** `StageView::rel_target`
+  folds relationship targets and `.connect` uniformly; both `UsdRead` impls surface connections.
+- **P1.1b [in place] — `UsdRead::connections(prim, name) -> Vec<String>` (all sources).** `rel_target()`
+  returns only the first target; the derivation needs **every** source on a fan-in `inputs:` attr, so
+  `connections()` returns the full list on both impls (`StageView`: `prim.attribute(name).connections()`;
+  `sdf::Data`: the `connectionPaths` `PathListOp` items).
 - **P1.2 🟡 — Ports become `inputs:`/`outputs:` attributes** on component prims. Attr base name = the
   `PortRegistry`/Modelica-output/avian-input name (one name, two planes) — already true for `netForce`,
   `force_y`. *Verify:* `PortRegistry` resolves the same names.
-- **P1.2b 🟡 — Transform metadata (SSP `LinearTransformation`).** `connectionPaths` carries the edge, not its
-  factor/offset. Author `lunco:factor` (default 1.0) + `lunco:offset` (default 0.0) on the **consuming**
-  `inputs:` attribute (sink owns its scaling); carry over from today's wire-prim `lunco:scale`/`lunco:offset`,
-  completing the `lunco:scale`→`lunco:factor` rename. *Verify:* a scaled edge propagates `src*factor+offset`.
-- **P1.3 🔴 REDESIGNED KEYSTONE — connection derivation *on the reconcile*, not a load-time scan.** Delete the
-  `Without<UsdSourcedWire>` marker-scan model entirely; it can't see edits (re-authoring `connectionPaths` on
-  an already-examined prim never re-fires) and it rescans at load. Instead, hook derivation into the **single
-  change-driven reconcile** (`project_stage_changes` → `reconcile_structural_live`, `lunco-usd/live_consume.rs`)
-  that already drains `RawStageChange { resynced, info_changed }` and owns the prim↔entity map (`find_live_entity`):
-  - For each changed prim (`info_changed` for a `connectionPaths` edit; `resynced` for prim add/remove), **re-derive
-    its edges**: despawn the `SimConnection`s whose sink is this prim, then enumerate its `inputs:*` attrs and for
-    each call `reader.connections(prim, "inputs:<port>")`, spawning one fresh `SimConnection { start_element:
-    by_path[src_prim], start_connector: <src leaf minus `outputs:`>, end_element: by_path[this], end_connector:
-    <sink leaf minus `inputs:`>, scale: factor, offset }` per source (fan-in → multiple rows; `propagate` sums).
-  - **Self-loop (`A==B`) and cross-entity (`A≠B`) fall out of the same rule** — the two old flavors unify.
-  - Cost: **empty drain = zero work**; a real edit touches only the changed prim's edges — no rescan, no staleness.
-  This is requirement (2) at the projection end; the hot loop (`RebuildOnChange` → `CompiledWiring` →
-  `propagate_connections` by-slot) and `SimConnection`'s shape are **untouched** — they are now *derived caches*.
-  *Verify (key gate):* author a connection via `SetConnection` on a host → (a) it cosims identically to the old
-  `sun_tracker`/rover wiring, and (b) a late-joining networked client converges to the same `SimConnection` set
-  purely from journal replay (requirements 1+2+3 in one test).
+- **P1.2b [in place] — Transform metadata (SSP `LinearTransformation`).** `connectionPaths` carries the edge,
+  not its factor/offset, so `rewire_usd_connections` reads `lunco:factor:<port>` (default 1.0) +
+  `lunco:offset:<port>` (default 0.0) on the **sink** prim, keyed by the consuming port — each input owns its
+  own scaling. The derived `SimConnection` takes `scale`/`offset` from these; the hot loop propagates
+  `src*factor+offset` unchanged. Sibling-attr encoding (not attribute metadata) so it reads through the
+  precision-tolerant `UsdRead::real`; this also completes the `lunco:scale`→`lunco:factor` rename. Covered by
+  `rewire_applies_factor_and_offset` (double-authored) and `rewire_reads_float_authored_transform` (the
+  float-authored case a strict `double` read would silently drop). *Fan-in note:* factor is per-input, so a
+  multi-source input shares one transform — per-source factors would need per-list-element metadata (deferred;
+  no current asset needs it, all migrated wires are identity).
+- **P1.3 [in place] — connection derivation *on the reconcile*, not a load-time scan.** `rewire_usd_connections`
+  rebuilds the derived `SimConnection` set from `connectionPaths` when prim entities spawn/despawn (structural)
+  or a connection edit is drained (`WiringDirty`) — never a marker-scan that can't see edits. For each changed
+  sink prim it despawns that prim's `SimConnection`s, then enumerates its `inputs:*` attrs and for each source
+  from `reader.connections(prim, "inputs:<port>")` spawns one `SimConnection { start_element: by_path[src_prim],
+  start_connector: <src leaf minus `outputs:`>, end_element: by_path[this], end_connector: <sink leaf minus
+  `inputs:`>, scale, offset }` (fan-in → multiple rows; `propagate` sums). Self-loop (`A==B`) and cross-entity
+  (`A≠B`) fall out of the same rule. Empty drain = zero work; the hot loop (`RebuildOnChange` → `CompiledWiring`
+  → `propagate_connections` by-slot) and `SimConnection`'s shape are untouched — they are derived caches.
+  Covered by `usd_connection_derivation.rs`: derivation-at-load + clear, plus every migrated asset reads back
+  the exact edges the old `lunco:simWires` / wire-prims encoded.
 - **P1.4 🟡 — Migrate all assets to `connectionPaths` (via `SetConnection`, so the migration itself is journaled),
   then delete ALL legacy.** Remove: the `lunco:simWires` parse in `process_usd_cosim_prim_read` + `parse_wire`;
   `process_usd_cosim_wire_read` (whole system) + `lunco:wireFrom`/`wireTo`/`fromPort`/`toPort`; the
   `any_unprocessed_usd_cosim_wires` gate + the `UsdSourcedWire` marker; `rel lunco:epsBus`; **and any code path
   that spawns `SimConnection` outside the reconcile** (the bypass of requirement 3). One canonical form, no shim.
-- **P1.5 🟢 — Delete `PortType` + `classify`** (dead; doc 38 §A3). Residual typing → attr `typeName` (later
-  `ConnectableAPIBehavior`, P4.3).
+- **P1.5 [in place] — `PortType` / `port_type` / `classify` deleted entirely.** The tag was cosmetic: it fed
+  only the port API's `"kind"` field, which had **zero** programmatic consumers (no UI, rhai, MCP, or
+  connection-validation branch read it), and it was not even reliable — `classify(name)`, a lossy name
+  heuristic, disagreed with the explicit const-table tags in 5 groups. So the whole taxonomy is gone: the
+  `port_type` field is removed from `PortRef`/`SimPort`/`AvianPort` (and its const-table literals), `classify()`
+  is deleted, and `port_to_json` no longer emits `"kind"`. Adding a new domain needs no core edit. If a real
+  consumer ever needs a port's domain, it should be an authored USD attribute/token, not a name heuristic or a
+  closed enum. (Kept: the unrelated Modelica connector-type `ComponentPort.port_type`, which carries
+  "Pin"/"Flange" for diagram rendering.)
 
 **Phase 1 done when:** `connectionPaths` is the *only* wiring encoding; a connection changes **only** via
 `UsdOp::SetConnection` → journal → networking → reconcile (no ECS-side authoring survives); `SimConnection` and
@@ -278,9 +236,8 @@ Depends on Phases 1–2 (ports/connections/identity) + optionally 5 (electrical 
 ## Cross-cutting: `openusd` contributions (the only work that leaves our repo) 🔴
 
 The right home for standard-shaped library gaps (doc 38 §12.4). In dependency order:
-1. **`connectionPaths` through flatten** — **already done on the networking branch** (lands on merge); no
-   longer a required contribution, just a merge dependency.
-2. **`UsdOp::SetConnection`** (P1.0) — **required, and in our repo** (`lunco-usd`), not `openusd`: a typed
+1. **`connectionPaths` through flatten** — **in place**; no longer a required contribution.
+2. **`UsdOp::SetConnection`** (P1.0) — **in place, in our repo** (`lunco-usd`), not `openusd`: a typed
    journal op so connection edits replicate finely instead of via `ReplaceSource`.
 3. **Codeless applied-schema registry** (P2.1) — nice-to-have; typed views suffice interim.
 4. **`ConnectableAPIBehavior` mechanism** (P4.3) — optional; rhai rules suffice interim.
@@ -305,19 +262,16 @@ in `openusd` v0.5** (doc 38 §12.2) — adoption is deletion on our side, not im
 ## Sequencing summary & critical path
 
 ```
-networking merge (CanonicalStage + connectionPaths) ─┐   ← land first if possible
-P0 (warm-ups, parallel) ─────────────────────────────┤
-P1.0 UsdOp::SetConnection ───────────────────────────┴─► P1 (connections cutover) ─┬─► P4 (graph editor)
-                          P2 (identity) ───────────────────────────────────────────┼─► P5 ─► P6 (comms)
-                          P3 (params/schemas, parallel) ───────────────────────────┘
+CanonicalStage + connectionPaths + P1.0 SetConnection  [in place]
+P0 (warm-ups, parallel) ───────────────────────────────────────► P1 (connections cutover) ─┬─► P4 (graph editor)
+                          P2 (identity) ─────────────────────────────────────────────────────┼─► P5 ─► P6 (comms)
+                          P3 (params/schemas, parallel) ─────────────────────────────────────┘
 ```
 
-- **Critical path:** networking merge (or cherry-pick `connectionPaths`) → **P1.0 `UsdOp::SetConnection`**
-  → P1.3 (projector) → P1.4/1.5 (deletes). The old "flatten keystone" is retired — the keystone is now
-  **the merge + the `SetConnection` op**; target the live-Stage reader, not flatten.
-- **Coordinate with networking:** prefer landing its merge first and building P1 on `CanonicalStage`/
-  `UsdRead`; otherwise keep both readers surfacing connections.
-- **Parallelizable now:** all of P0, P1.0, and P3.
+- **Critical path:** the remaining P1 work is **P1.2 (ports as `inputs:`/`outputs:` attrs)** → **P1.4 (asset
+  migration + legacy deletes)**; the reader, `SetConnection` op, and derivation-on-reconcile (P1.0/P1.1/P1.3)
+  are already in place and read off the live stage.
+- **Parallelizable now:** P0 and P3 run independently of the P1 tail.
 - **Guardrail:** the co-sim `propagate.rs` hot loop must not appear in any Phase-1 diff (doc 38 §13.2) —
   if it does, the PR is wrong.
 

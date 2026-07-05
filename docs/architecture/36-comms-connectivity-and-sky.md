@@ -137,10 +137,11 @@ its SSP *connectors* — so an assembly can wire to `CommsSystem.rf_out` / `.p_d
 internals**. Today ports are discovered per-backend but a component does not *declare its public
 surface*. Recommended addition: a `lunco:ports` manifest on the component root (above) that registers
 those names as the component's boundary; internal prim ports stay private. This is the one genuinely new
-substrate piece the component model needs, and it is small (a manifest attr + a registry entry). The
-`PortType {Force,Kinematic,Electrical,Thermal,Signal}` enum already exists (`lunco-core/ports.rs`) — use
-it to *tag* interface ports (cosmetic today, but it makes a comms `rf_out` vs a power `p_draw`
-self-describing for tooling and connection validation).
+substrate piece the component model needs, and it is small (a manifest attr + a registry entry). If an
+interface port ever needs a domain tag (to make a comms `rf_out` vs a power `p_draw` self-describing for
+tooling or connection validation), author it as a USD attribute/token on the port, not a closed core enum —
+the old `PortType`/`classify` name-heuristic was deleted (doc 38 §A3) precisely because a closed taxonomy
+had no reliable consumer.
 
 ### 2.4 Electrical: causal ports now, acausal networks later (decision point)
 
@@ -391,9 +392,10 @@ def Xform "HGA" {
 Projection branch (new, in `process_usd_sim_prims`, modeled on the RangeSensor branch):
 
 ```rust
-if reader.prim_attribute_value::<bool>(&sdf_path, "lunco:comms:antenna").is_some() {
+if reader.scalar::<bool>(&sdf_path, "lunco:comms:antenna").is_some() {
     let target   = reader.read_token(&sdf_path, "lunco:comms:target");
-    let mask     = reader.prim_attribute_value::<f64>(&sdf_path, "lunco:comms:maskAngle").unwrap_or(5.0);
+    // Real-valued read → the precision-tolerant `real`, never a strict `scalar::<f64>`.
+    let mask     = reader.real(&sdf_path, "lunco:comms:maskAngle").unwrap_or(5.0);
     // … read the rest, resolve rel target prim → ephemeris_id …
     commands.entity(entity).insert(CommsLink { target, mask_deg: mask, /* … */ });
 }

@@ -19,11 +19,11 @@ Status: **design / analysis** (2026-07-03). The *reframe* behind docs 36 (comms)
 
 The only place a *physical* domain is hardcoded in Rust:
 
-- **`PortType { Force, Kinematic, Electrical, Thermal, Signal }`** (`lunco-core/src/ports.rs:52`) +
-  **`classify(name)`** heuristic (`:88`). Both are **self-described cosmetic** ("a wrong guess is
-  cosmetic, never load-bearing") and **verified dead**: `propagate_connections` never reads
-  `port_type`; no backend ever emits `Electrical`/`Thermal`; the only consumer is a JSON label
-  serializer. → **Dissolve** into an open free-form kind string (the shape already used elsewhere).
+- **`PortType { Force, Kinematic, Electrical, Thermal, Signal }`** + a **`classify(name)`** heuristic
+  used to be the one place a *physical* domain was hardcoded in Rust. Both were **cosmetic and dead**:
+  `propagate_connections` never read `port_type`, no backend ever emitted `Electrical`/`Thermal`, and the
+  only consumer was a JSON label serializer no code read. → **Deleted outright** (§A3); a port's domain, if
+  ever needed, is an authored USD attribute/token, not a core enum.
 
 Everything else physics-domain-specific already lives in **data read through generic string-keyed
 APIs** — the core never enumerates domains:
@@ -223,8 +223,10 @@ Add thermal, data-bus, hydraulics the same way: author a descriptor + rules. No 
 ## 7. What to dissolve / add (build order)
 
 **Dissolve (small, mechanical):**
-1. `PortType` enum + `classify` → an open free-form kind string (reuse the canvas `Port.kind` shape).
-   Nothing load-bearing depends on the enum.
+1. `PortType` enum + `classify` → **deleted outright** (§A3). Nothing load-bearing depended on the enum:
+   the only consumer was a JSON `"kind"` label no code read, and `classify(name)` disagreed with the
+   authored tags anyway. A port's domain, if ever needed, becomes an authored USD attribute/token, not a
+   core enum.
 2. The four Modelica-locked canvas free functions → slots on a `DomainDescriptor` (keep the Modelica
    adapter as the first descriptor).
 

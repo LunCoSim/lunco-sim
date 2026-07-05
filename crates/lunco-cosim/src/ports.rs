@@ -2,7 +2,7 @@
 //! [`PortRegistry`].
 //!
 //! The registry itself, the four query operations, and the value types
-//! ([`PortRef`], [`PortBackend`], [`PortDirection`], [`PortType`]) live in
+//! ([`PortRef`], [`PortBackend`], [`PortDirection`]) live in
 //! [`lunco_core::ports`] — the neutral substrate *below* every participant — so
 //! that wires, the API, the inspector, and every scripting runtime read/write
 //! through one surface without depending "up" into this engine. This module only
@@ -24,7 +24,7 @@
 use bevy::prelude::*;
 
 use lunco_core::architecture::{DigitalPort, PhysicalPort};
-use lunco_core::ports::{push_map, PortBackend, PortDirection, PortRef, PortRegistry, PortType};
+use lunco_core::ports::{push_map, PortBackend, PortDirection, PortRef, PortRegistry};
 
 use crate::SimComponent;
 
@@ -45,8 +45,6 @@ pub struct AvianPort {
     /// Causality. `read_output` consults `Out`/`InOut`; `read_input`/`write`
     /// consult `In`/`InOut`.
     pub dir: PortDirection,
-    /// Physical domain (UI grouping / future connection validation).
-    pub port_type: PortType,
     /// Read the current value. `None` for a port with no readable backing.
     pub read: Option<fn(&World, Entity) -> Option<f64>>,
     /// Write the value. `None` for a read-only state output. `true` if applied.
@@ -91,12 +89,7 @@ fn avian_list(world: &World, entity: Entity, out: &mut Vec<PortRef>) {
                 },
                 None => 0.0,
             };
-            out.push(PortRef {
-                name: p.name.to_string(),
-                direction: p.dir,
-                port_type: p.port_type,
-                value,
-            });
+            out.push(PortRef { name: p.name.to_string(), direction: p.dir, value });
         }
     }
 }
@@ -233,7 +226,6 @@ const PHYSICAL_PORT_BACKEND: PortBackend = PortBackend {
             out.push(PortRef {
                 name: PHYSICAL_PORT_NAME.to_string(),
                 direction: PortDirection::InOut,
-                port_type: PortType::Signal,
                 value: p.value as f64,
             });
         }
@@ -275,7 +267,6 @@ const DIGITAL_PORT_BACKEND: PortBackend = PortBackend {
             out.push(PortRef {
                 name: DIGITAL_PORT_NAME.to_string(),
                 direction: PortDirection::InOut,
-                port_type: PortType::Signal,
                 value: d.raw_value as f64,
             });
         }
@@ -329,7 +320,6 @@ const PILOTED_BACKEND: PortBackend = PortBackend {
             out.push(PortRef {
                 name: "piloted".to_string(),
                 direction: PortDirection::Out,
-                port_type: PortType::Signal,
                 value: piloted_value(w, e),
             });
         }

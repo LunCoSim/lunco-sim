@@ -23,7 +23,7 @@ use avian3d::prelude::{
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
-use crate::connection::{PortDirection, PortType};
+use crate::connection::PortDirection;
 use crate::ports::{AvianGroup, AvianPort};
 
 /// Per-entity force accumulator written by `force_*` input ports and drained
@@ -79,21 +79,18 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         AvianPort {
             name: "position_x",
             dir: PortDirection::Out,
-            port_type: PortType::Kinematic,
             read: Some(|w, e| w.get::<Position>(e).map(|p| p.0.x)),
             write: None,
         },
         AvianPort {
             name: "position_y",
             dir: PortDirection::Out,
-            port_type: PortType::Kinematic,
             read: Some(|w, e| w.get::<Position>(e).map(|p| p.0.y)),
             write: None,
         },
         AvianPort {
             name: "position_z",
             dir: PortDirection::Out,
-            port_type: PortType::Kinematic,
             read: Some(|w, e| w.get::<Position>(e).map(|p| p.0.z)),
             write: None,
         },
@@ -101,28 +98,24 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         AvianPort {
             name: "height",
             dir: PortDirection::Out,
-            port_type: PortType::Kinematic,
             read: Some(|w, e| w.get::<Position>(e).map(|p| p.0.y)),
             write: None,
         },
         AvianPort {
             name: "velocity_x",
             dir: PortDirection::Out,
-            port_type: PortType::Kinematic,
             read: Some(|w, e| w.get::<LinearVelocity>(e).map(|v| v.0.x)),
             write: None,
         },
         AvianPort {
             name: "velocity_y",
             dir: PortDirection::Out,
-            port_type: PortType::Kinematic,
             read: Some(|w, e| w.get::<LinearVelocity>(e).map(|v| v.0.y)),
             write: None,
         },
         AvianPort {
             name: "velocity_z",
             dir: PortDirection::Out,
-            port_type: PortType::Kinematic,
             read: Some(|w, e| w.get::<LinearVelocity>(e).map(|v| v.0.z)),
             write: None,
         },
@@ -131,28 +124,24 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         AvianPort {
             name: "quat_w",
             dir: PortDirection::Out,
-            port_type: PortType::Kinematic,
             read: Some(|w, e| w.get::<Rotation>(e).map(|r| r.0.w)),
             write: None,
         },
         AvianPort {
             name: "quat_x",
             dir: PortDirection::Out,
-            port_type: PortType::Kinematic,
             read: Some(|w, e| w.get::<Rotation>(e).map(|r| r.0.x)),
             write: None,
         },
         AvianPort {
             name: "quat_y",
             dir: PortDirection::Out,
-            port_type: PortType::Kinematic,
             read: Some(|w, e| w.get::<Rotation>(e).map(|r| r.0.y)),
             write: None,
         },
         AvianPort {
             name: "quat_z",
             dir: PortDirection::Out,
-            port_type: PortType::Kinematic,
             read: Some(|w, e| w.get::<Rotation>(e).map(|r| r.0.z)),
             write: None,
         },
@@ -162,7 +151,6 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         AvianPort {
             name: "yaw",
             dir: PortDirection::Out,
-            port_type: PortType::Kinematic,
             read: Some(|w, e| {
                 w.get::<Rotation>(e).map(|r| r.0.to_euler(bevy::math::EulerRot::YXZ).0)
             }),
@@ -171,7 +159,6 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         AvianPort {
             name: "pitch",
             dir: PortDirection::Out,
-            port_type: PortType::Kinematic,
             read: Some(|w, e| {
                 w.get::<Rotation>(e).map(|r| r.0.to_euler(bevy::math::EulerRot::YXZ).1)
             }),
@@ -180,7 +167,6 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         AvianPort {
             name: "roll",
             dir: PortDirection::Out,
-            port_type: PortType::Kinematic,
             read: Some(|w, e| {
                 w.get::<Rotation>(e).map(|r| r.0.to_euler(bevy::math::EulerRot::YXZ).2)
             }),
@@ -191,21 +177,18 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         AvianPort {
             name: "angvel_x",
             dir: PortDirection::Out,
-            port_type: PortType::Kinematic,
             read: Some(|w, e| w.get::<AngularVelocity>(e).map(|v| v.0.x)),
             write: None,
         },
         AvianPort {
             name: "angvel_y",
             dir: PortDirection::Out,
-            port_type: PortType::Kinematic,
             read: Some(|w, e| w.get::<AngularVelocity>(e).map(|v| v.0.y)),
             write: None,
         },
         AvianPort {
             name: "angvel_z",
             dir: PortDirection::Out,
-            port_type: PortType::Kinematic,
             read: Some(|w, e| w.get::<AngularVelocity>(e).map(|v| v.0.z)),
             write: None,
         },
@@ -214,21 +197,18 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         AvianPort {
             name: "force_x",
             dir: PortDirection::In,
-            port_type: PortType::Force,
             read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.f.x))),
             write: Some(|w, e, v| with_pending(w, e, |pf| pf.f.x = v)),
         },
         AvianPort {
             name: "force_y",
             dir: PortDirection::In,
-            port_type: PortType::Force,
             read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.f.y))),
             write: Some(|w, e, v| with_pending(w, e, |pf| pf.f.y = v)),
         },
         AvianPort {
             name: "force_z",
             dir: PortDirection::In,
-            port_type: PortType::Force,
             read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.f.z))),
             write: Some(|w, e, v| with_pending(w, e, |pf| pf.f.z = v)),
         },
@@ -237,21 +217,18 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         AvianPort {
             name: "force_local_x",
             dir: PortDirection::In,
-            port_type: PortType::Force,
             read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.f_local.x))),
             write: Some(|w, e, v| with_pending(w, e, |pf| pf.f_local.x = v)),
         },
         AvianPort {
             name: "force_local_y",
             dir: PortDirection::In,
-            port_type: PortType::Force,
             read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.f_local.y))),
             write: Some(|w, e, v| with_pending(w, e, |pf| pf.f_local.y = v)),
         },
         AvianPort {
             name: "force_local_z",
             dir: PortDirection::In,
-            port_type: PortType::Force,
             read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.f_local.z))),
             write: Some(|w, e, v| with_pending(w, e, |pf| pf.f_local.z = v)),
         },
@@ -259,21 +236,18 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         AvianPort {
             name: "torque_x",
             dir: PortDirection::In,
-            port_type: PortType::Force,
             read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.torque.x))),
             write: Some(|w, e, v| with_pending(w, e, |pf| pf.torque.x = v)),
         },
         AvianPort {
             name: "torque_y",
             dir: PortDirection::In,
-            port_type: PortType::Force,
             read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.torque.y))),
             write: Some(|w, e, v| with_pending(w, e, |pf| pf.torque.y = v)),
         },
         AvianPort {
             name: "torque_z",
             dir: PortDirection::In,
-            port_type: PortType::Force,
             read: Some(|w, e| Some(w.get::<PendingForces>(e).map_or(0.0, |p| p.torque.z))),
             write: Some(|w, e, v| with_pending(w, e, |pf| pf.torque.z = v)),
         },
@@ -285,49 +259,42 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
         AvianPort {
             name: "mass",
             dir: PortDirection::InOut,
-            port_type: PortType::Signal,
             read: Some(read_mass),
             write: Some(write_mass),
         },
         AvianPort {
             name: "inertia_xx",
             dir: PortDirection::InOut,
-            port_type: PortType::Signal,
             read: Some(|w, e| inertia_diagonal(w, e).map(|d| d.x)),
             write: Some(|w, e, v| write_inertia_axis(w, e, 0, v)),
         },
         AvianPort {
             name: "inertia_yy",
             dir: PortDirection::InOut,
-            port_type: PortType::Signal,
             read: Some(|w, e| inertia_diagonal(w, e).map(|d| d.y)),
             write: Some(|w, e, v| write_inertia_axis(w, e, 1, v)),
         },
         AvianPort {
             name: "inertia_zz",
             dir: PortDirection::InOut,
-            port_type: PortType::Signal,
             read: Some(|w, e| inertia_diagonal(w, e).map(|d| d.z)),
             write: Some(|w, e, v| write_inertia_axis(w, e, 2, v)),
         },
         AvianPort {
             name: "com_x",
             dir: PortDirection::InOut,
-            port_type: PortType::Signal,
             read: Some(|w, e| center_of_mass(w, e).map(|c| c.x)),
             write: Some(|w, e, v| write_com_axis(w, e, 0, v)),
         },
         AvianPort {
             name: "com_y",
             dir: PortDirection::InOut,
-            port_type: PortType::Signal,
             read: Some(|w, e| center_of_mass(w, e).map(|c| c.y)),
             write: Some(|w, e, v| write_com_axis(w, e, 1, v)),
         },
         AvianPort {
             name: "com_z",
             dir: PortDirection::InOut,
-            port_type: PortType::Signal,
             read: Some(|w, e| center_of_mass(w, e).map(|c| c.z)),
             write: Some(|w, e, v| write_com_axis(w, e, 2, v)),
         },

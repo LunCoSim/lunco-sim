@@ -1,11 +1,12 @@
-//! P1.1b + reconcile hook — USD-native co-sim wiring.
+//! USD-native co-sim wiring — `connectionPaths` → `SimConnection`.
 //!
-//! Authoring a native `connectionPaths` edge onto the live canonical stage
-//! derives the matching [`SimConnection`] off the stage, and clearing it
-//! despawns the edge. This is the op-driven, journaled-then-distributed
-//! replacement for the `lunco:simWires` / wire-prim producers: the wiring is a
-//! **pure derived cache** of USD `connectionPaths`, re-derived per changed prim
-//! (`reconcile_usd_connections`) rather than parsed once by a marker scan.
+//! `rewire_usd_connections` rebuilds the derived `SimConnection` set from native
+//! `connectionPaths` whenever prim entities spawn/despawn (structural) or a
+//! connection edit is drained (`WiringDirty`). These tests cover: the reader
+//! (`UsdRead::connections`, all-sources), derivation-at-load through the real
+//! system, the SSP factor/offset transform, and that every migrated asset's
+//! `.connect` authoring reads back the exact edges the old `lunco:simWires` /
+//! wire-prims encoded. The wiring is a **pure derived cache** of USD.
 
 use bevy::asset::AssetApp;
 use bevy::prelude::*;
@@ -29,7 +30,9 @@ fn setup() -> (App, AssetId<UsdStageAsset>, Handle<UsdStageAsset>) {
     let handle = app
         .world_mut()
         .resource_mut::<Assets<UsdStageAsset>>()
-        .add(UsdStageAsset { recipe: Some(recipe.clone()) });
+        .add(UsdStageAsset {
+            recipe: Some(recipe.clone()),
+        });
     let id = handle.id();
 
     app.world_mut()
@@ -67,11 +70,17 @@ fn rewire_derives_at_load_and_clears() {
     // that triggers the rewire, just like the load-time reconcile spawning them.
     let src = app
         .world_mut()
-        .spawn(UsdPrimPath { stage_handle: handle.clone(), path: "/World/Src".into() })
+        .spawn(UsdPrimPath {
+            stage_handle: handle.clone(),
+            path: "/World/Src".into(),
+        })
         .id();
     let sink = app
         .world_mut()
-        .spawn(UsdPrimPath { stage_handle: handle.clone(), path: "/World/Sink".into() })
+        .spawn(UsdPrimPath {
+            stage_handle: handle.clone(),
+            path: "/World/Sink".into(),
+        })
         .id();
 
     app.update(); // rewire runs: Added is non-empty → full rebuild derives the edge
@@ -80,12 +89,25 @@ fn rewire_derives_at_load_and_clears() {
         let mut q = app.world_mut().query::<&SimConnection>();
         q.iter(app.world()).cloned().collect()
     };
-    assert_eq!(edges.len(), 1, "one SimConnection derived at load, got {edges:?}");
+    assert_eq!(
+        edges.len(),
+        1,
+        "one SimConnection derived at load, got {edges:?}"
+    );
     let e = &edges[0];
-    assert_eq!(e.start_element, src, "source entity resolved from /World/Src");
-    assert_eq!(e.start_connector, "netForce", "connector = attr leaf minus `outputs:`");
+    assert_eq!(
+        e.start_element, src,
+        "source entity resolved from /World/Src"
+    );
+    assert_eq!(
+        e.start_connector, "netForce",
+        "connector = attr leaf minus `outputs:`"
+    );
     assert_eq!(e.end_element, sink, "sink entity resolved from /World/Sink");
-    assert_eq!(e.end_connector, "force_y", "connector = attr leaf minus `inputs:`");
+    assert_eq!(
+        e.end_connector, "force_y",
+        "connector = attr leaf minus `inputs:`"
+    );
 
     // Clear the connection → mark dirty (a live edit is not a structural change)
     // → rebuild drops the edge.
@@ -105,7 +127,10 @@ fn rewire_derives_at_load_and_clears() {
         let mut q = app.world_mut().query::<&SimConnection>();
         q.iter(app.world()).count()
     };
-    assert_eq!(remaining, 0, "clearing connectionPaths rebuilds to zero edges");
+    assert_eq!(
+        remaining, 0,
+        "clearing connectionPaths rebuilds to zero edges"
+    );
 }
 
 // ── Migrated-asset wiring — the `.connect` authoring parses and reads back the
@@ -126,7 +151,9 @@ fn build_from_source(src: &str) -> (App, AssetId<UsdStageAsset>) {
     let handle = app
         .world_mut()
         .resource_mut::<Assets<UsdStageAsset>>()
-        .add(UsdStageAsset { recipe: Some(recipe.clone()) });
+        .add(UsdStageAsset {
+            recipe: Some(recipe.clone()),
+        });
     let id = handle.id();
     app.world_mut()
         .non_send_resource_mut::<CanonicalStages>()
@@ -145,18 +172,39 @@ fn conns(app: &App, id: AssetId<UsdStageAsset>, prim: &str, attr: &str) -> Vec<S
 #[test]
 fn python_balloon_asset_wiring_migrated() {
     let (app, id) = build_from_source(&asset_src("vessels/balloons/python_balloon.usda"));
-    assert_eq!(conns(&app, id, "/PythonBalloon", "inputs:force_y"), ["/PythonBalloon.outputs:netForce"]);
-    assert_eq!(conns(&app, id, "/PythonBalloon", "inputs:height"), ["/PythonBalloon.outputs:height"]);
-    assert_eq!(conns(&app, id, "/PythonBalloon", "inputs:velocity"), ["/PythonBalloon.outputs:velocity_y"]);
+    assert_eq!(
+        conns(&app, id, "/PythonBalloon", "inputs:force_y"),
+        ["/PythonBalloon.outputs:netForce"]
+    );
+    assert_eq!(
+        conns(&app, id, "/PythonBalloon", "inputs:height"),
+        ["/PythonBalloon.outputs:height"]
+    );
+    assert_eq!(
+        conns(&app, id, "/PythonBalloon", "inputs:velocity"),
+        ["/PythonBalloon.outputs:velocity_y"]
+    );
 }
 
 #[test]
 fn modelica_balloon_asset_wiring_migrated() {
     let (app, id) = build_from_source(&asset_src("vessels/balloons/modelica_balloon.usda"));
-    assert_eq!(conns(&app, id, "/ModelicaBalloon", "inputs:force_y"), ["/ModelicaBalloon.outputs:netForce"]);
-    assert_eq!(conns(&app, id, "/ModelicaBalloon", "inputs:collider"), ["/ModelicaBalloon.outputs:volume"]);
-    assert_eq!(conns(&app, id, "/ModelicaBalloon", "inputs:height"), ["/ModelicaBalloon.outputs:height"]);
-    assert_eq!(conns(&app, id, "/ModelicaBalloon", "inputs:velocity"), ["/ModelicaBalloon.outputs:velocity_y"]);
+    assert_eq!(
+        conns(&app, id, "/ModelicaBalloon", "inputs:force_y"),
+        ["/ModelicaBalloon.outputs:netForce"]
+    );
+    assert_eq!(
+        conns(&app, id, "/ModelicaBalloon", "inputs:collider"),
+        ["/ModelicaBalloon.outputs:volume"]
+    );
+    assert_eq!(
+        conns(&app, id, "/ModelicaBalloon", "inputs:height"),
+        ["/ModelicaBalloon.outputs:height"]
+    );
+    assert_eq!(
+        conns(&app, id, "/ModelicaBalloon", "inputs:velocity"),
+        ["/ModelicaBalloon.outputs:velocity_y"]
+    );
 }
 
 #[test]
@@ -164,7 +212,12 @@ fn sun_tracker_asset_wiring_migrated() {
     let (app, id) = build_from_source(&asset_src("scenes/sandbox/sun_tracker_test.usda"));
     // Self-loop on the controller + cross-prim edge onto the hinge.
     assert_eq!(
-        conns(&app, id, "/SunTrackerTest/SolarTower/Controller", "inputs:sun_azimuth"),
+        conns(
+            &app,
+            id,
+            "/SunTrackerTest/SolarTower/Controller",
+            "inputs:sun_azimuth"
+        ),
         ["/SunTrackerTest/SolarTower/Controller.outputs:sun_azimuth"]
     );
     assert_eq!(
@@ -190,8 +243,124 @@ fn sandbox_scene_asset_wiring_migrated() {
 fn lander_asset_wiring_migrated() {
     let (app, id) = build_from_source(&asset_src("scenes/sandbox/lander_test.usda"));
     // A representative sample of the 17 self-loops + the cross-prim altimeter edge.
-    assert_eq!(conns(&app, id, "/LanderTest/Lander", "inputs:force_y"), ["/LanderTest/Lander.outputs:force_y"]);
-    assert_eq!(conns(&app, id, "/LanderTest/Lander", "inputs:q_w"), ["/LanderTest/Lander.outputs:quat_w"]);
-    assert_eq!(conns(&app, id, "/LanderTest/Lander", "inputs:descent_rate"), ["/LanderTest/Lander.outputs:velocity_y"]);
-    assert_eq!(conns(&app, id, "/LanderTest/Lander", "inputs:altitude"), ["/LanderTest/Lander/Altimeter.outputs:range"]);
+    assert_eq!(
+        conns(&app, id, "/LanderTest/Lander", "inputs:force_y"),
+        ["/LanderTest/Lander.outputs:force_y"]
+    );
+    assert_eq!(
+        conns(&app, id, "/LanderTest/Lander", "inputs:q_w"),
+        ["/LanderTest/Lander.outputs:quat_w"]
+    );
+    assert_eq!(
+        conns(&app, id, "/LanderTest/Lander", "inputs:descent_rate"),
+        ["/LanderTest/Lander.outputs:velocity_y"]
+    );
+    assert_eq!(
+        conns(&app, id, "/LanderTest/Lander", "inputs:altitude"),
+        ["/LanderTest/Lander/Altimeter.outputs:range"]
+    );
+}
+
+// ── P1.2b: SSP LinearTransformation (factor/offset) on the sink port. ─────────
+
+/// `double lunco:factor:<port>` / `lunco:offset:<port>` on the sink prim are read
+/// into the derived `SimConnection` (propagated value = `src * factor + offset`).
+#[test]
+fn rewire_applies_factor_and_offset() {
+    let (mut app, id, handle) = setup();
+    app.add_systems(Update, rewire_usd_connections);
+
+    {
+        let stages = app.world().non_send_resource::<CanonicalStages>();
+        let stage = stages.get(id).unwrap().stage();
+        stage
+            .create_attribute("/World/Sink.inputs:force_y", "float")
+            .unwrap()
+            .set_connections([SdfPath::new("/World/Src.outputs:netForce").unwrap()])
+            .unwrap();
+        stage
+            .create_attribute("/World/Sink.lunco:factor:force_y", "double")
+            .unwrap()
+            .set(openusd::sdf::Value::Double(2.5))
+            .unwrap();
+        stage
+            .create_attribute("/World/Sink.lunco:offset:force_y", "double")
+            .unwrap()
+            .set(openusd::sdf::Value::Double(0.5))
+            .unwrap();
+    }
+
+    app.world_mut().spawn(UsdPrimPath {
+        stage_handle: handle.clone(),
+        path: "/World/Src".into(),
+    });
+    app.world_mut().spawn(UsdPrimPath {
+        stage_handle: handle.clone(),
+        path: "/World/Sink".into(),
+    });
+    app.update();
+
+    let edges: Vec<SimConnection> = {
+        let mut q = app.world_mut().query::<&SimConnection>();
+        q.iter(app.world()).cloned().collect()
+    };
+    assert_eq!(edges.len(), 1, "one edge derived, got {edges:?}");
+    assert_eq!(edges[0].scale, 2.5, "factor read from lunco:factor:force_y");
+    assert_eq!(
+        edges[0].offset, 0.5,
+        "offset read from lunco:offset:force_y"
+    );
+}
+
+/// A transform authored as `float` (matching the `float`-typed port it scales, as
+/// a real asset naturally would) must still be read — a strict `double` read would
+/// silently drop it and apply identity (1, 0), a wrong-magnitude physics bug.
+#[test]
+fn rewire_reads_float_authored_transform() {
+    let (mut app, id, handle) = setup();
+    app.add_systems(Update, rewire_usd_connections);
+
+    {
+        let stages = app.world().non_send_resource::<CanonicalStages>();
+        let stage = stages.get(id).unwrap().stage();
+        stage
+            .create_attribute("/World/Sink.inputs:force_y", "float")
+            .unwrap()
+            .set_connections([SdfPath::new("/World/Src.outputs:netForce").unwrap()])
+            .unwrap();
+        stage
+            .create_attribute("/World/Sink.lunco:factor:force_y", "float")
+            .unwrap()
+            .set(openusd::sdf::Value::Float(2.5))
+            .unwrap();
+        stage
+            .create_attribute("/World/Sink.lunco:offset:force_y", "float")
+            .unwrap()
+            .set(openusd::sdf::Value::Float(0.5))
+            .unwrap();
+    }
+
+    app.world_mut().spawn(UsdPrimPath {
+        stage_handle: handle.clone(),
+        path: "/World/Src".into(),
+    });
+    app.world_mut().spawn(UsdPrimPath {
+        stage_handle: handle.clone(),
+        path: "/World/Sink".into(),
+    });
+    app.update();
+
+    let edges: Vec<SimConnection> = {
+        let mut q = app.world_mut().query::<&SimConnection>();
+        q.iter(app.world()).cloned().collect()
+    };
+    assert_eq!(edges.len(), 1, "one edge derived, got {edges:?}");
+    assert_eq!(
+        edges[0].scale, 2.5,
+        "float-authored factor must not fall back to identity"
+    );
+    assert_eq!(
+        edges[0].offset, 0.5,
+        "float-authored offset must not fall back to identity"
+    );
 }
