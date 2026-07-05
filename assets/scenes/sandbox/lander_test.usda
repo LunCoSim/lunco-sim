@@ -120,7 +120,30 @@ def Xform "LanderTest"
         # (PILOTED_BACKEND), so it needs no in-model flag and no scripting. See
         # models/Lander.mo.
         string lunco:modelicaModel = "models/Lander.mo"
-        string lunco:simWires = "force_x:force_x,force_y:force_y,force_z:force_z,torque_x:torque_x,torque_y:torque_y,torque_z:torque_z,quat_w:q_w,quat_x:q_x,quat_y:q_y,quat_z:q_z,velocity_y:descent_rate,mass:vehicle_mass,inertia_xx:inertia_xx,inertia_yy:inertia_yy,inertia_zz:inertia_zz,piloted:piloted,throttle:throttle"
+
+        # Co-sim wiring — native USD `connectionPaths` (derived to `SimConnection`
+        # by `reconcile_usd_connections`). Self-loop on this prim: model outputs →
+        # physics inputs (force/torque/throttle) and physics/body outputs → model
+        # inputs (quat/velocity/mass/inertia/piloted). Plus one cross-prim edge:
+        # the child Altimeter sensor's `range` → the model's `altitude` input.
+        float inputs:force_x.connect = </LanderTest/Lander.outputs:force_x>
+        float inputs:force_y.connect = </LanderTest/Lander.outputs:force_y>
+        float inputs:force_z.connect = </LanderTest/Lander.outputs:force_z>
+        float inputs:torque_x.connect = </LanderTest/Lander.outputs:torque_x>
+        float inputs:torque_y.connect = </LanderTest/Lander.outputs:torque_y>
+        float inputs:torque_z.connect = </LanderTest/Lander.outputs:torque_z>
+        float inputs:q_w.connect = </LanderTest/Lander.outputs:quat_w>
+        float inputs:q_x.connect = </LanderTest/Lander.outputs:quat_x>
+        float inputs:q_y.connect = </LanderTest/Lander.outputs:quat_y>
+        float inputs:q_z.connect = </LanderTest/Lander.outputs:quat_z>
+        float inputs:descent_rate.connect = </LanderTest/Lander.outputs:velocity_y>
+        float inputs:vehicle_mass.connect = </LanderTest/Lander.outputs:mass>
+        float inputs:inertia_xx.connect = </LanderTest/Lander.outputs:inertia_xx>
+        float inputs:inertia_yy.connect = </LanderTest/Lander.outputs:inertia_yy>
+        float inputs:inertia_zz.connect = </LanderTest/Lander.outputs:inertia_zz>
+        float inputs:piloted.connect = </LanderTest/Lander.outputs:piloted>
+        float inputs:throttle.connect = </LanderTest/Lander.outputs:throttle>
+        float inputs:altitude.connect = </LanderTest/Lander/Altimeter.outputs:range>
 
         # Modelica `when` events: threshold crossings of the model's continuous
         # OUTPUT signals become discrete events on the bus (edge detection in Rust,
@@ -528,15 +551,6 @@ def Xform "LanderTest"
     # (The former TargetToLander* wires that fed the lander's `target_*` GNC inputs
     #  were removed with the GNC — the rhai autopilot reads the pad pose directly
     #  via find("/LanderTest/LandingLocation").)
-
-    def "AltimeterToLander"
-    {
-        rel lunco:wireFrom = </LanderTest/Lander/Altimeter>
-        string lunco:fromPort = "range"
-        rel lunco:wireTo = </LanderTest/Lander>
-        string lunco:toPort = "altitude"
-        double lunco:scale = 1.0
-    }
 
     # ── Mission scenario (doc 34, Decision 3) ───────────────────────────────
     # A first-class *scenario*: a non-physical prim that owns the MISSION state

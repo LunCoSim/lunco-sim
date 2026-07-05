@@ -50,6 +50,14 @@ pub trait UsdRead {
     /// (e.g. a joint's `physics:body0`). Composed = PCP-translated.
     fn rel_target(&self, prim: &SdfPath, name: &str) -> Option<String>;
 
+    /// **All** composed connection sources of attribute `name` on `prim` — the
+    /// full `connectionPaths` list (fan-in), as path strings, in list order.
+    /// [`rel_target`](Self::rel_target) returns only the *first* target; the
+    /// co-sim wiring derivation needs *every* source on an `inputs:` attr (a
+    /// fan-in sink sums multiple producers). Empty when the attribute carries no
+    /// authored connections.
+    fn connections(&self, prim: &SdfPath, name: &str) -> Vec<String>;
+
     /// Immediate composed prim children of `prim`.
     fn children(&self, prim: &SdfPath) -> Vec<SdfPath>;
 
@@ -174,6 +182,17 @@ impl UsdRead for StageView<'_> {
             .map(|t| t.to_string())
     }
 
+    fn connections(&self, prim: &SdfPath, name: &str) -> Vec<String> {
+        // `Attribute::connections()` returns the composed list-op resolved to a
+        // flat `Vec<Path>` — exactly the fan-in set the derivation needs.
+        self.stage()
+            .prim(prim.clone())
+            .attribute(name)
+            .connections()
+            .map(|cs| cs.into_iter().map(|p| p.to_string()).collect())
+            .unwrap_or_default()
+    }
+
     fn children(&self, prim: &SdfPath) -> Vec<SdfPath> {
         self.stage()
             .prim(prim.clone())
@@ -274,6 +293,26 @@ impl UsdRead for openusd::sdf::Data {
 
     fn rel_target(&self, prim: &SdfPath, name: &str) -> Option<String> {
         crate::read_rel_target(self, prim, name)
+    }
+
+    fn connections(&self, prim: &SdfPath, name: &str) -> Vec<String> {
+        // The flattened reader stores the authored `connectionPaths` list-op;
+        // collect every item (explicit + the composed list-op edit fields) so a
+        // fan-in sink surfaces all its producers.
+        let Ok(attr) = prim.append_property(name) else {
+            return Vec::new();
+        };
+        match self.field(&attr, "connectionPaths") {
+            Some(Value::PathListOp(op)) => op
+                .explicit_items
+                .iter()
+                .chain(op.prepended_items.iter())
+                .chain(op.appended_items.iter())
+                .chain(op.added_items.iter())
+                .map(|p| p.to_string())
+                .collect(),
+            _ => Vec::new(),
+        }
     }
 
     fn children(&self, prim: &SdfPath) -> Vec<SdfPath> {

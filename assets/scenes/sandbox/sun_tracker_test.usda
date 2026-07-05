@@ -148,24 +148,21 @@ def Xform "SunTrackerTest"
             uniform token physics:axis = "Y"
             point3f physics:localPos0 = (0, 2.6, 0)
             point3f physics:localPos1 = (0, 0, 0)
+
+            # Cross-prim wiring — the controller model's `yaw` output drives this
+            # joint's `angle` input (JointSim backend). The joint is a physics
+            # sink: it has a port but no model, so it is not stepped as a model,
+            # only wired.
+            float inputs:angle.connect = </SunTrackerTest/SolarTower/Controller.outputs:yaw>
         }
 
-        # Controller — the SunTracker.mo co-sim model. The self-wire feeds the
-        # solar bridge's `sun_azimuth` output into the model's `sun_azimuth`
+        # Controller — the SunTracker.mo co-sim model. Self-loop connection feeds
+        # the solar bridge's `sun_azimuth` output into the model's `sun_azimuth`
         # input (same name on both sides — one signal).
         def Xform "Controller"
         {
             string lunco:modelicaModel = "models/SunTracker.mo"
-            string lunco:simWires = "sun_azimuth:sun_azimuth"
-        }
-
-        # Cross-prim wire: the model's `yaw` output → the hinge's `angle` input.
-        def Scope "YawWire"
-        {
-            prepend rel lunco:wireFrom = </SunTrackerTest/SolarTower/Controller>
-            prepend rel lunco:wireTo = </SunTrackerTest/SolarTower/Hinge>
-            string lunco:fromPort = "yaw"
-            string lunco:toPort = "angle"
+            float inputs:sun_azimuth.connect = </SunTrackerTest/SolarTower/Controller.outputs:sun_azimuth>
         }
     }
 }

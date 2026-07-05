@@ -1,8 +1,8 @@
 //! USD → cosim translator.
 //!
-//! Reads `lunco:modelicaModel` / `lunco:pythonModel` and `lunco:simWires`
-//! attributes from USD prims after `sync_usd_visuals` has spawned the
-//! entity, and drives the full cosim lifecycle end-to-end:
+//! Reads `lunco:modelicaModel` / `lunco:pythonModel` and native
+//! `connectionPaths` from USD prims after `sync_usd_visuals` has spawned
+//! the entity, and drives the full cosim lifecycle end-to-end:
 //!
 //! - **Modelica**: opens the source file, inserts a `ModelicaModel`
 //!   stub, dispatches `ModelicaCommand::Compile` directly to the
@@ -11,14 +11,11 @@
 //!   pipeline can read it.
 //! - **Python**: opens the script, registers a `ScriptDocument`,
 //!   attaches `ScriptedModel`, and creates the matching `SimComponent`.
-//! - **Wires**: each `lunco:simWires` entry spawns one
-//!   `SimConnection` self-loop on the same entity (Modelica/Python
-//!   ports ↔ AvianSim ports).
-//!
-//! Wire entry format inside `lunco:simWires`:
-//! `"fromPort:toPort,fromPort:toPort:scale,..."` — comma-separated
-//! because `string[]` arrays don't compose across `references` in the
-//! current openusd parser.
+//! - **Wiring**: [`rewire_usd_connections`] derives one `SimConnection`
+//!   per authored `connectionPaths` source on a prim's `inputs:*`
+//!   attributes — a consuming input `/B.inputs:force_y` connected to a
+//!   producing output `/A.outputs:netForce` (self-loop when `A == B`).
+//!   The derived set is a pure cache of USD, rebuilt on stage change.
 //!
 //! No domain-specific markers (`BalloonModelMarker`, …) are inserted
 //! here. The legacy catalog/imperative spawn path in
@@ -57,14 +54,6 @@ use crate::UsdSimProcessed;
 #[derive(Component, Default)]
 pub struct UsdSourcedCosim;
 
-/// Marker for cross-entity wire prims that have been resolved into a
-/// `SimConnection`. Wire prims are typeless USD nodes carrying the
-/// `lunco:wireFrom` / `lunco:wireTo` rels — the translator rescans
-/// each frame until both endpoints exist as ECS entities, then spawns
-/// the wire and tags itself with this marker.
-#[derive(Component, Default)]
-pub struct UsdSourcedWire;
-
 /// Queued Modelica source load. Inserted by `process_usd_cosim_prims`;
 /// drained by `dispatch_loaded_modelica_sources` once the
 /// `Handle<ModelicaSource>` has resolved to bytes.
@@ -90,13 +79,6 @@ pub struct PendingPythonSource {
 /// Run condition: any `UsdPrimPath` entity still lacks `UsdSourcedCosim`.
 fn any_unprocessed_usd_cosim(
     q: Query<(), (With<UsdPrimPath>, Without<UsdSourcedCosim>)>,
-) -> bool {
-    !q.is_empty()
-}
-
-/// Run condition: any `UsdPrimPath` entity still lacks `UsdSourcedWire`.
-fn any_unprocessed_usd_cosim_wires(
-    q: Query<(), (With<UsdPrimPath>, Without<UsdSourcedWire>)>,
 ) -> bool {
     !q.is_empty()
 }
@@ -163,27 +145,25 @@ fn process_usd_cosim_prim_read<R: UsdRead>(
     commands: &mut Commands,
     asset_server: &AssetServer,
 ) {
-        // Gate on `lunco:simWires` presence — the attribute that distinguishes
-        // an *active* cosim entity (a balloon fanning ports into Avian; a solar
-        // tracker whose model output drives a joint via a wire) from prims that
-        // merely declare a Modelica reference for documentation (wheels, motors,
-        // batteries — `lunco:modelicaModel` alone is a forward-looking schema,
-        // no translator behaviour). Sun-tracking and every other joint drive now
-        // flow through the unified wiring fabric (`yaw -> </…/Joint>.angle`), so
-        // there is no separate actuator attribute.
-        let wires_csv = reader.scalar::<String>(sdf_path, "lunco:simWires");
-        if wires_csv.is_none() {
-            return;
-        }
-
+        // Active-cosim gate: a prim is stepped iff it BOTH binds a behavior model
+        // AND declares connectable ports (`inputs:`/`outputs:` attributes). The two
+        // non-active cases skip silently: a model with no ports is a
+        // documentation-only reference (wheels/motors/batteries carry
+        // `lunco:modelicaModel` for provenance); ports with no model are a pure
+        // physics sink driven through its backend (a joint receiving
+        // `inputs:angle`, a rigid body receiving `inputs:force_y`). Wiring itself
+        // is native `connectionPaths`, derived by `reconcile_usd_connections`
+        // (the journaled, distributed path), never parsed here.
         let modelica_path = reader.scalar::<String>(sdf_path, "lunco:modelicaModel");
         let python_path = reader.scalar::<String>(sdf_path, "lunco:pythonModel");
-
         if modelica_path.is_none() && python_path.is_none() {
-            warn!(
-                "[usd-cosim] {} declares lunco:simWires but neither lunco:modelicaModel nor lunco:pythonModel — skipping",
-                prim_path.path
-            );
+            return;
+        }
+        let has_ports = reader
+            .attr_names(sdf_path)
+            .iter()
+            .any(|n| n.starts_with("inputs:") || n.starts_with("outputs:"));
+        if !has_ports {
             return;
         }
 
@@ -238,25 +218,6 @@ fn process_usd_cosim_prim_read<R: UsdRead>(
                 handle: asset_server.load(asset_path.clone()),
                 asset_path,
             });
-        }
-
-        if let Some(wires_csv) = &wires_csv {
-            for raw in wires_csv.split(',') {
-                let trimmed = raw.trim();
-                if trimmed.is_empty() { continue; }
-                if let Some((from_port, to_port, scale)) = parse_wire(trimmed) {
-                    commands.spawn(SimConnection {
-                        start_element: entity,
-                        start_connector: from_port,
-                        end_element: entity,
-                        end_connector: to_port,
-                        scale,
-                        offset: 0.0,
-                    });
-                } else {
-                    warn!("[usd-cosim] {} — could not parse wire entry '{}'", prim_path.path, trimmed);
-                }
-            }
         }
 
         // Port-edge event rules: `lunco:portEvents = "m_prop<200:lander_low_fuel, ..."`.
@@ -606,133 +567,119 @@ pub fn fire_model_port_events(
     }
 }
 
-/// Cross-entity wire translator. Reads typeless USD prims that carry
-/// `rel lunco:wireFrom = </path>` + `rel lunco:wireTo = </path>` plus
-/// `lunco:fromPort` / `lunco:toPort` / optional `lunco:scale`, resolves
-/// the rel targets to ECS entities, and spawns one `SimConnection`.
+/// Marker on a [`SimConnection`] that was **derived** from USD `connectionPaths`
+/// (as opposed to authored some other way). [`rewire_usd_connections`] despawns
+/// every tagged edge and rebuilds the set from the composed stage, which is what
+/// makes `SimConnection` a **pure derived cache** of USD wiring.
+#[derive(Component, Default)]
+pub struct UsdWiredConnection;
+
+/// Set when a drained live edit — a journaled (hence distributed)
+/// `connectionPaths` change on an **already-spawned** prim — requires the wiring
+/// to be re-derived. Structural changes (prim spawn/despawn) need no flag; they
+/// are detected directly via change-detection in [`rewire_usd_connections`].
+#[derive(Resource, Default)]
+pub struct WiringDirty(pub bool);
+
+/// Derive the co-sim wiring from native USD `connectionPaths` — the USD-native,
+/// journaled, distributed replacement for the deleted `lunco:simWires` / wire-prim
+/// producers. `SimConnection`s are a **pure derived cache**: whenever the wiring
+/// topology may have changed, the whole derived set is rebuilt from the composed
+/// stage. A full rebuild (not a per-prim patch) is what makes the lifecycle
+/// correct — an edge exists exactly when *both* its endpoints do, regardless of
+/// the order they spawn or which end is removed.
 ///
-/// Defers when an endpoint hasn't been spawned yet (asset loading is
-/// async); reruns each frame until both sides exist or the wire is
-/// dropped from the scene.
-pub fn process_usd_cosim_wires(
+/// Trigger (dormant otherwise — steady state is zero work):
+/// - **structural** — any `UsdPrimPath` entity added or removed. Covers initial
+///   scene load (the reconcile spawns prims → this fires), async payload/vessel
+///   spawn, source-after-sink ordering (the late source's spawn re-runs this and
+///   completes the deferred edge), and prim removal (the rebuild omits any edge
+///   whose endpoint is gone — no dangling `SimConnection`).
+/// - **live edit** — [`WiringDirty`], set by the op-driven projection
+///   ([`lunco_usd::live_consume`]) when a `connectionPaths` change is drained
+///   from the live stage (an edit that is not itself a prim spawn/despawn).
+///
+/// A connection whose source prim is not yet spawned is skipped (its later spawn
+/// re-runs this); a malformed source path is logged and skipped — restoring the
+/// diagnostic the deleted `process_usd_cosim_wire_read` emitted.
+pub fn rewire_usd_connections(
     mut commands: Commands,
-    q_unprocessed: Query<(Entity, &UsdPrimPath), Without<UsdSourcedWire>>,
+    added: Query<(), Added<UsdPrimPath>>,
+    mut removed: RemovedComponents<UsdPrimPath>,
+    mut dirty: ResMut<WiringDirty>,
     q_all: Query<(Entity, &UsdPrimPath)>,
+    q_edges: Query<Entity, With<UsdWiredConnection>>,
     stages: Res<Assets<UsdStageAsset>>,
-    // Read the LIVE canonical stage, built on demand from the recipe.
     mut canonical: NonSendMut<CanonicalStages>,
 ) {
-    // Bail before building the path index in the common steady-state
-    // case where every wire is already processed. The earlier version
-    // walked `q_all` (every USD prim in the world) and allocated a
-    // String per entity *every frame*, even when there was no work to
-    // do — that turned a one-shot setup into a per-frame full-scene
-    // scan.
-    if q_unprocessed.is_empty() {
+    let structural = !added.is_empty() || removed.read().next().is_some();
+    if !structural && !dirty.0 {
         return;
     }
+    dirty.0 = false;
 
-    // Index every UsdPrimPath entity by its sdf path string. Wire prims
-    // and their endpoints are typically all in the same stage, so this
-    // is cheap relative to the work it saves.
+    // Index every prim entity by path — both endpoints of every edge resolve
+    // through it (same shape as the old wire producer's `by_path`).
     let mut by_path: HashMap<String, Entity> = HashMap::new();
     for (e, p) in q_all.iter() {
         by_path.insert(p.path.clone(), e);
     }
 
-    for (entity, prim_path) in q_unprocessed.iter() {
-        let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { continue; };
+    // Rebuild: drop every derived edge, then re-derive from the composed stage.
+    for e in q_edges.iter() {
+        commands.entity(e).despawn();
+    }
+
+    for (entity, prim_path) in q_all.iter() {
         let id = prim_path.stage_handle.id();
         if canonical.get(id).is_none() {
-            if let Some(recipe) = stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone()) {
+            if let Some(recipe) =
+                stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone())
+            {
                 canonical.get_or_build(id, &recipe);
             }
         }
         let Some(cs) = canonical.get(id) else { continue };
-        process_usd_cosim_wire_read(&cs.view(), entity, prim_path, &sdf_path, &by_path, &mut commands);
+        let view = cs.view();
+        let Ok(sink_sdf) = SdfPath::new(&prim_path.path) else { continue };
+
+        for attr in view.attr_names(&sink_sdf) {
+            // Only `inputs:` attributes are connection sinks; connector = the leaf.
+            let Some(sink_conn) = attr.strip_prefix("inputs:") else { continue };
+            for src in view.connections(&sink_sdf, &attr) {
+                // Split `/A.outputs:netForce` → prim `/A`, leaf `outputs:netForce`.
+                let Some((src_prim, src_leaf)) = src.rsplit_once('.') else {
+                    warn!(
+                        "[usd-cosim] {}.{}: malformed connection source '{}' (no `.<connector>`)",
+                        prim_path.path, attr, src
+                    );
+                    continue;
+                };
+                let Some(&start_element) = by_path.get(src_prim) else {
+                    // Source prim not spawned yet — its later spawn is a structural
+                    // change that re-runs this and completes the edge.
+                    continue;
+                };
+                let src_conn = src_leaf
+                    .strip_prefix("outputs:")
+                    .or_else(|| src_leaf.strip_prefix("inputs:"))
+                    .unwrap_or(src_leaf);
+                commands.spawn((
+                    SimConnection {
+                        start_element,
+                        start_connector: src_conn.to_string(),
+                        end_element: entity,
+                        end_connector: sink_conn.to_string(),
+                        // SSP LinearTransformation lands in P1.2b (per-attr
+                        // `lunco:factor`/`lunco:offset`); identity for now.
+                        scale: 1.0,
+                        offset: 0.0,
+                    },
+                    UsdWiredConnection,
+                ));
+            }
+        }
     }
-}
-
-/// Resolves one wire prim's endpoints + params and spawns its `SimConnection`,
-/// generic over the read source ([`UsdRead`]) — drives off either the live
-/// canonical `StageView` or the flattened `sdf::Data`, identically.
-fn process_usd_cosim_wire_read<R: UsdRead>(
-    reader: &R,
-    entity: Entity,
-    prim_path: &UsdPrimPath,
-    sdf_path: &SdfPath,
-    by_path: &HashMap<String, Entity>,
-    commands: &mut Commands,
-) {
-        // A prim with no wire rels is not a wire — mark it examined so it
-        // leaves the `Without<UsdSourcedWire>` query. Without this the query
-        // never empties, the `is_empty()` bail above never fires, and this
-        // system rebuilt the `by_path` index (a String clone per prim) and
-        // re-cloned the stage every frame for the whole scene.
-        let Some(from_path) = reader.rel_target(sdf_path, "lunco:wireFrom") else {
-            commands.entity(entity).insert(UsdSourcedWire);
-            return;
-        };
-        let Some(to_path) = reader.rel_target(sdf_path, "lunco:wireTo") else {
-            commands.entity(entity).insert(UsdSourcedWire);
-            return;
-        };
-        let from_port = reader.scalar::<String>(sdf_path, "lunco:fromPort");
-        let to_port = reader.scalar::<String>(sdf_path, "lunco:toPort");
-
-        let (Some(from_port), Some(to_port)) = (from_port, to_port) else {
-            warn!(
-                "[usd-cosim] {} declares wire rels but missing lunco:fromPort or lunco:toPort",
-                prim_path.path
-            );
-            commands.entity(entity).insert(UsdSourcedWire);
-            return;
-        };
-        let scale = reader
-            .scalar::<f64>(sdf_path, "lunco:scale")
-            .unwrap_or(1.0);
-        // SSP affine offset: `value = src*scale + offset`. Defaults to 0 so
-        // pure-gain wires are unaffected; used for unit biases and DAC/ADC
-        // zero-points (e.g. a DigitalPort register → physical units).
-        let offset = reader
-            .scalar::<f64>(sdf_path, "lunco:offset")
-            .unwrap_or(0.0);
-
-        let from_str = from_path.to_string();
-        let to_str = to_path.to_string();
-        let (Some(&start_element), Some(&end_element)) =
-            (by_path.get(&from_str), by_path.get(&to_str))
-        else {
-            // Endpoint(s) not spawned yet — try again next frame.
-            return;
-        };
-
-        commands.spawn(SimConnection {
-            start_element,
-            start_connector: from_port.clone(),
-            end_element,
-            end_connector: to_port.clone(),
-            scale,
-            offset,
-        });
-        commands.entity(entity).insert(UsdSourcedWire);
-        info!(
-            "[usd-cosim] wire {}.{} → {}.{} (scale={}, offset={})",
-            from_str, from_port, to_str, to_port, scale, offset,
-        );
-}
-
-/// Parses a `"from:to"` or `"from:to:scale"` wire entry. Empty ports are rejected.
-fn parse_wire(raw: &str) -> Option<(String, String, f64)> {
-    let mut parts = raw.split(':');
-    let from = parts.next()?.trim();
-    let to = parts.next()?.trim();
-    if from.is_empty() || to.is_empty() { return None; }
-    let scale = match parts.next() {
-        Some(s) => s.trim().parse::<f64>().ok()?,
-        None => 1.0,
-    };
-    Some((from.to_string(), to.to_string(), scale))
 }
 
 // ── Uniform port commands (ListPorts / GetPort / SetPort) ───────────────────
@@ -1573,7 +1520,8 @@ pub(crate) fn install(app: &mut App) {
     // panicking on a missing `Assets<…>` resource.
     app.init_asset::<ModelicaSource>()
         .init_asset::<PythonSource>()
-        .init_resource::<lunco_scripting::ScriptRegistry>();
+        .init_resource::<lunco_scripting::ScriptRegistry>()
+        .init_resource::<WiringDirty>();
 
     app.add_systems(
         Update,
@@ -1589,10 +1537,10 @@ pub(crate) fn install(app: &mut App) {
             // to load (network on wasm, async I/O on native).
             dispatch_loaded_modelica_sources,
             dispatch_loaded_python_sources,
-            // Cross-entity wires must run after participant prims are
-            // processed (so their entities are addressable in the
-            // path → entity index built each call).
-            process_usd_cosim_wires.run_if(any_unprocessed_usd_cosim_wires),
+            // Wiring is derived from native `connectionPaths`: rebuilds the
+            // `SimConnection` set whenever prims spawn/despawn (structural) or a
+            // `connectionPaths` edit is drained (`WiringDirty`); dormant otherwise.
+            rewire_usd_connections,
             wrap_modelica_into_simcomponent.run_if(any_unwrapped_modelica),
             // §6 opaque guard: once a body is cosim-driven, mark it unpredictable
             // (after the SimComponent wrap above, so it sees freshly-wrapped bodies).
@@ -1635,22 +1583,6 @@ register_commands!(on_load_scene, on_clear_scene, on_restart_scene,);
 mod tests {
     use super::*;
 
-    #[test]
-    fn parse_wire_default_scale() {
-        assert_eq!(parse_wire("netForce:force_y"), Some(("netForce".into(), "force_y".into(), 1.0)));
-    }
-
-    #[test]
-    fn parse_wire_with_scale() {
-        assert_eq!(parse_wire("a:b:2.5"), Some(("a".into(), "b".into(), 2.5)));
-    }
-
-    #[test]
-    fn parse_wire_rejects_empty() {
-        assert_eq!(parse_wire(":b"), None);
-        assert_eq!(parse_wire("a:"), None);
-        assert_eq!(parse_wire(""), None);
-    }
 
     // ── resolve_root_prim ────────────────────────────────────────────
     //
