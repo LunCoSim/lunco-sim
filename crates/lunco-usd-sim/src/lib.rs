@@ -581,10 +581,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                 // Default and explicit "-Y": a downward altimeter.
                 _ => DVec3::NEG_Y,
             };
-            let max_distance = reader
-                .scalar::<f32>(&sdf_path, "lunco:sensor:rangeMax")
-                .map(|v| v as f64)
-                .unwrap_or(100.0);
+            let max_distance = reader.real(&sdf_path, "lunco:sensor:rangeMax").unwrap_or(100.0);
             let out_of_range_mode = match lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:sensor:rangeOutOfRangeMode").as_deref() {
                 Some("NegativeOne") => lunco_cosim::sensors::OutOfRangeMode::NegativeOne,
                 Some("NaN") => lunco_cosim::sensors::OutOfRangeMode::NaN,
@@ -640,10 +637,10 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             }
             let camera_mode = reader.scalar::<String>(&sdf_path, "lunco:cameraMode")
                 .unwrap_or_else(|| "freeflight".to_string());
-            let mut yaw = reader.scalar::<f32>(&sdf_path, "lunco:cameraYaw")
+            let mut yaw = reader
+                .real_f32(&sdf_path, "lunco:cameraYaw")
                 .unwrap_or(std::f32::consts::PI * 0.8);
-            let mut pitch = reader.scalar::<f32>(&sdf_path, "lunco:cameraPitch")
-                .unwrap_or(-0.3);
+            let mut pitch = reader.real_f32(&sdf_path, "lunco:cameraPitch").unwrap_or(-0.3);
 
             // `lunco:cameraLookAt` (double3, scene-local): when authored,
             // derive yaw/pitch so the camera aims from its USD
@@ -896,13 +893,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             reader.rel_target(&sdf_path, "lunco:differential:rockerA"),
             reader.rel_target(&sdf_path, "lunco:differential:rockerB"),
         ) {
-            let read_f = |name: &str, dflt: f64| {
-                reader
-                    .scalar::<f32>(&sdf_path, name)
-                    .map(|v| v as f64)
-                    .or_else(|| reader.scalar::<f64>(&sdf_path, name))
-                    .unwrap_or(dflt)
-            };
+            let read_f = |name: &str, dflt: f64| reader.real(&sdf_path, name).unwrap_or(dflt);
             let axis = match lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:differential:axis").as_deref() {
                 Some("Y") => DVec3::Y,
                 Some("Z") => DVec3::Z,
@@ -923,7 +914,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
         }
 
         // 3. Detect PhysxVehicleWheelAPI (The Wheel Intercept)
-        if let Some(radius) = reader.scalar::<f32>(&sdf_path, "physxVehicleWheel:radius") {
+        if let Some(radius) = reader.real_f32(&sdf_path, "physxVehicleWheel:radius") {
             // Skip if mesh doesn't exist yet — sync_usd_visuals may not have processed
             // this prim. We'll retry next frame (not marking UsdSimProcessed).
             // Headless (no renderer) or recovered (watchdog): the mesh never
@@ -992,22 +983,21 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             // wheel realises it as a real prismatic spring-damper. Same
             // authored data, two constructions.
             let suspension = SuspensionParams {
-                rest_length: reader.scalar::<f32>(&sdf_path, "physxVehicleSuspension:restLength")
-                    .unwrap_or(0.7) as f64,
-                spring_k: reader.scalar::<f32>(&sdf_path, "physxVehicleSuspension:springStiffness")
-                    .unwrap_or(15000.0) as f64,
-                damping_c: reader.scalar::<f32>(&sdf_path, "physxVehicleSuspension:springDamping")
-                    .unwrap_or(3000.0) as f64,
+                rest_length: reader
+                    .real(&sdf_path, "physxVehicleSuspension:restLength")
+                    .unwrap_or(0.7),
+                spring_k: reader
+                    .real(&sdf_path, "physxVehicleSuspension:springStiffness")
+                    .unwrap_or(15000.0),
+                damping_c: reader
+                    .real(&sdf_path, "physxVehicleSuspension:springDamping")
+                    .unwrap_or(3000.0),
             };
 
             // Tire spin dynamics — read from the standard Omniverse PhysX
             // vehicle schema (`PhysxVehicleWheelAPI` / `PhysxVehicleEngineAPI` /
             // `PhysxVehicleTireAPI`) plus standard UsdPhysics `physics:mass`.
-            let read_f = |name: &str| -> Option<f64> {
-                reader.scalar::<f32>(&sdf_path, name)
-                    .map(|v| v as f64)
-                    .or_else(|| reader.scalar::<f64>(&sdf_path, name))
-            };
+            let read_f = |name: &str| -> Option<f64> { reader.real(&sdf_path, name) };
             // Mass (UsdPhysicsMassAPI) → rotational inertia. `physxVehicleWheel:moi`
             // overrides the derived ½·m·r² if explicitly authored.
             let wheel_mass = read_f("physics:mass").unwrap_or(25.0);

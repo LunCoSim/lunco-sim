@@ -55,5 +55,13 @@ def Sphere "ModelicaBalloon" (
     # `string[]` arrays don't compose across `references` in the current
     # openusd parser, so we encode them in a single string.
     string lunco:modelicaModel = "models/Balloon.mo"
-    string lunco:simWires = "netForce:force_y,volume:collider,height:height,velocity_y:velocity"
+
+    # Co-sim wiring — native USD `connectionPaths` (derived to `SimConnection` by
+    # `reconcile_usd_connections`). Self-loop on this one prim, carrying both the
+    # Modelica model ports (out: netForce, volume; in: height, velocity) and the
+    # Avian physics ports (out: height, velocity_y; in: force_y, collider).
+    float inputs:force_y.connect = </ModelicaBalloon.outputs:netForce>
+    float inputs:collider.connect = </ModelicaBalloon.outputs:volume>
+    float inputs:height.connect = </ModelicaBalloon.outputs:height>
+    float inputs:velocity.connect = </ModelicaBalloon.outputs:velocity_y>
 }

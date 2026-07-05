@@ -86,6 +86,16 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         apply_translates_live(world, id, &info_only);
         reconcile_structural_live(world, id, &resynced);
     }
+
+    // Connections are derived from native `connectionPaths` by
+    // `lunco_usd_sim::cosim::rewire_usd_connections`. Prim spawn/despawn triggers
+    // that system directly (change-detection); a `connectionPaths` **edit** on an
+    // already-spawned prim is neither — so mark the wiring dirty whenever a drain
+    // occurred, letting the rewire re-derive off the live stage. This is the
+    // op-driven, journaled, distributed path for live connection edits.
+    if let Some(mut dirty) = world.get_resource_mut::<lunco_usd_sim::cosim::WiringDirty>() {
+        dirty.0 = true;
+    }
 }
 
 /// Apply the composed `xformOp:translate` of each `path` to its live entity,

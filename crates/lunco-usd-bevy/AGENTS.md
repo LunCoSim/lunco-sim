@@ -5,16 +5,32 @@ turns USD prims into Bevy entities with meshes, materials, and transforms.
 Everything physics- or sim-related lives in `lunco-usd-avian` and
 `lunco-usd-sim` and runs `.after(sync_usd_visuals)`.
 
-Read alongside `crates/lunco-usd-bevy/src/lib.rs` (the only source file) and
-`docs/architecture/21-domain-usd.md` (the system-level overview).
+Read alongside `crates/lunco-usd-bevy/src/lib.rs` (the visual sync systems),
+`src/read.rs` (the `UsdRead` read seam), `src/view.rs` / `src/canonical.rs` (the
+live canonical stage), and `docs/architecture/21-domain-usd.md` (the
+system-level overview).
+
+## Reading USD attributes
+
+All composed reads go through the `UsdRead` trait (`src/read.rs`), which both the
+live `StageView` and the flattened `sdf::Data` implement — extractors are written
+once against `UsdRead` and read either source.
+
+**Real-valued reads use the `real` family, never `scalar::<f64>`/`scalar::<f32>`
+directly.** A bare typed scalar matches only one authored precision, so a value
+authored `float` where you read `double` (or vice versa) reads as `None` and is
+silently dropped — a wrong-magnitude bug. Use:
+
+- `reader.real(prim, name) -> Option<f64>` / `reader.real_f32(prim, name) -> Option<f32>`
+- `reader.real_at(prim, name, time)` / `reader.real_f32_at(prim, name, time)` for animated channels
 
 ## Adding a new prim type
 
 `sync_usd_visuals` matches on `typeName` (`"Cube"`, `"Sphere"`, `"Cylinder"`).
 Adding a new primitive shape:
 
-1. Add a match arm that reads explicit dimensions via
-   `reader.prim_attribute_value::<f64>(&sdf_path, "<attr>")`.
+1. Add a match arm that reads explicit dimensions via `reader.real(&sdf_path, "<attr>")`
+   (or `real_f32` for a mesh-builder `f32`).
 2. Build the mesh via Bevy's mesh builders (`Cuboid::new`, etc.). USD stores
    **full dimensions**, not half-extents — pass them straight to Bevy.
 3. The existing material/transform/child code runs unchanged.
@@ -24,7 +40,7 @@ Adding a new primitive shape:
 USD has standard `payload`/`references` syntax for pointing at external
 layers. Pixar's distribution handles `.gltf`/`.glb` via the `UsdGltf`
 SdfFileFormat plugin — `prepend payload = @./body.glb@` *just works*. Our
-`openusd-rs 0.2` fork has no plugin system, so we approximate:
+`openusd` fork (v0.5) has no plugin system, so we approximate:
 
 1. **The compose path (folded into `lunco-usd-bevy`)** detects non-USD extensions
    (`glb`, `gltf`, `obj`,

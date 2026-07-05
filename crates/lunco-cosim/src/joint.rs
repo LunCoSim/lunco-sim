@@ -39,7 +39,7 @@ use avian3d::prelude::{MotorModel, Position, PrismaticJoint, RevoluteJoint, Rota
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 
-use crate::connection::{PortDirection, PortType};
+use crate::connection::PortDirection;
 use crate::ports::{AvianGroup, AvianPort};
 
 /// The port name a revolute joint exposes in both directions.
@@ -82,14 +82,12 @@ pub const REVOLUTE_JOINT_GROUP: AvianGroup = AvianGroup {
         AvianPort {
             name: JOINT_ANGLE_PORT,
             dir: PortDirection::Out,
-            port_type: PortType::Kinematic,
             read: Some(read_measured_angle),
             write: None,
         },
         AvianPort {
             name: JOINT_ANGLE_PORT,
             dir: PortDirection::In,
-            port_type: PortType::Kinematic,
             read: Some(|w, e| w.get::<RevoluteJoint>(e).map(|j| j.motor.target_position)),
             write: Some(write_motor_angle),
         },
@@ -139,14 +137,12 @@ pub const PRISMATIC_JOINT_GROUP: AvianGroup = AvianGroup {
         AvianPort {
             name: JOINT_DISPLACEMENT_PORT,
             dir: PortDirection::Out,
-            port_type: PortType::Kinematic,
             read: Some(read_measured_displacement),
             write: None,
         },
         AvianPort {
             name: JOINT_DISPLACEMENT_PORT,
             dir: PortDirection::In,
-            port_type: PortType::Kinematic,
             read: Some(|w, e| w.get::<PrismaticJoint>(e).map(|j| j.motor.target_position)),
             write: Some(write_motor_displacement),
         },

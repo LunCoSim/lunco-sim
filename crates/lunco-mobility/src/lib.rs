@@ -28,7 +28,7 @@ use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::math::{DQuat, DVec3};
 use avian3d::prelude::*;
 use lunco_core::architecture::DigitalPort;
-use lunco_core::ports::{PortBackend, PortDirection, PortRef, PortType};
+use lunco_core::ports::{PortBackend, PortDirection, PortRef};
 use lunco_core::kernels::{ControlKernelRegistry, DriveMix};
 use lunco_fsw::FlightSoftware;
 
@@ -858,7 +858,6 @@ const FSW_COMMAND_BACKEND: PortBackend = PortBackend {
                 out.push(PortRef {
                     name: name.clone(),
                     direction: PortDirection::In,
-                    port_type: PortType::Signal,
                     value: *value,
                 });
             }

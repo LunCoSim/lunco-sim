@@ -113,7 +113,6 @@ const RELEASE_BACKEND: lunco_core::ports::PortBackend = lunco_core::ports::PortB
             out.push(lunco_core::ports::PortRef {
                 name: "release".to_string(),
                 direction: lunco_core::ports::PortDirection::InOut,
-                port_type: lunco_core::ports::PortType::Signal,
                 value: a.cmd as f64,
             });
         }

@@ -332,13 +332,16 @@ def Xform "SandboxScene" (
     def "Oscillator"
     {
         string lunco:modelicaModel = "models/Oscillator.mo"
-        string lunco:simWires = ""
+        # Pure source: declares its output port (the active-cosim marker).
+        float outputs:signal
     }
 
     def "Amplifier"
     {
         string lunco:pythonModel = "models/Amplifier.py"
-        string lunco:simWires = ""
+        # `signal` in ← Oscillator; `scaled` out → CosimTarget.
+        float inputs:signal.connect = </SandboxScene/Oscillator.outputs:signal>
+        float outputs:scaled
     }
 
     def Sphere "CosimTarget" (
@@ -360,10 +363,10 @@ def Xform "SandboxScene" (
         bool physics:rigidBodyEnabled = true
         bool physics:collisionEnabled = true
         float physics:mass = 1.0
-        # No `lunco:modelicaModel` / `lunco:pythonModel` — the cosim
-        # translator skips this prim. Its AvianSim component is auto-
-        # added by `on_add_rigid_body`; the AmpToTarget wire below
-        # writes amplified signal into AvianSim.inputs["force_y"].
+        # Physics sink: no model, so it is not stepped — only wired. The
+        # amplifier's `scaled` output drives this body's `force_y` input
+        # (AvianSim, auto-added by `on_add_rigid_body`).
+        float inputs:force_y.connect = </SandboxScene/Amplifier.outputs:scaled>
     }
 
     # --- Joint test: two cubes rigidly linked by a fixed joint ---
@@ -428,23 +431,6 @@ def Xform "SandboxScene" (
         point3f physics:localPos1 = (-1.5, 0, 0)
     }
 
-    def "OscToAmp"
-    {
-        rel lunco:wireFrom = </SandboxScene/Oscillator>
-        string lunco:fromPort = "signal"
-        rel lunco:wireTo = </SandboxScene/Amplifier>
-        string lunco:toPort = "signal"
-        double lunco:scale = 1.0
-    }
-
-    def "AmpToTarget"
-    {
-        rel lunco:wireFrom = </SandboxScene/Amplifier>
-        string lunco:fromPort = "scaled"
-        rel lunco:wireTo = </SandboxScene/CosimTarget>
-        string lunco:toPort = "force_y"
-        double lunco:scale = 1.0
-    }
 
     # --- Primitive Showcase (Testing our visual & physics primitive mapping) ---
 

@@ -33,5 +33,13 @@ def Sphere "PythonBalloon" (
     float lunco:spawnLift = 2.0
 
     string lunco:pythonModel = "models/GreenBalloon.py"
-    string lunco:simWires = "netForce:force_y,height:height,velocity_y:velocity"
+
+    # Co-sim wiring — native USD `connectionPaths` (derived to `SimConnection` by
+    # `reconcile_usd_connections`). Self-loop on this one prim, which carries both
+    # the Python model ports (out: netForce; in: height, velocity) and the Avian
+    # physics ports (out: height, velocity_y; in: force_y). `inputs:`/`outputs:`
+    # attrs are the active-cosim marker; the connector name is the leaf.
+    float inputs:force_y.connect = </PythonBalloon.outputs:netForce>
+    float inputs:height.connect = </PythonBalloon.outputs:height>
+    float inputs:velocity.connect = </PythonBalloon.outputs:velocity_y>
 }

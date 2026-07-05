@@ -25,7 +25,7 @@ use avian3d::prelude::{
 use bevy::math::{DVec3, Dir3};
 use bevy::prelude::*;
 
-use crate::connection::{PortDirection, PortType};
+use crate::connection::PortDirection;
 use crate::ports::{AvianGroup, AvianPort};
 
 /// Inertial measurement unit. Reports both world-frame linear acceleration
@@ -138,42 +138,36 @@ pub const IMU_SENSOR_GROUP: AvianGroup = AvianGroup {
         AvianPort {
             name: "accel_x",
             dir: PortDirection::Out,
-            port_type: PortType::Kinematic,
             read: Some(|w, e| w.get::<ImuSensor>(e).map(|s| s.accel.x)),
             write: None,
         },
         AvianPort {
             name: "accel_y",
             dir: PortDirection::Out,
-            port_type: PortType::Kinematic,
             read: Some(|w, e| w.get::<ImuSensor>(e).map(|s| s.accel.y)),
             write: None,
         },
         AvianPort {
             name: "accel_z",
             dir: PortDirection::Out,
-            port_type: PortType::Kinematic,
             read: Some(|w, e| w.get::<ImuSensor>(e).map(|s| s.accel.z)),
             write: None,
         },
         AvianPort {
             name: "spec_force_x",
             dir: PortDirection::Out,
-            port_type: PortType::Kinematic,
             read: Some(|w, e| w.get::<ImuSensor>(e).map(|s| s.spec_force.x)),
             write: None,
         },
         AvianPort {
             name: "spec_force_y",
             dir: PortDirection::Out,
-            port_type: PortType::Kinematic,
             read: Some(|w, e| w.get::<ImuSensor>(e).map(|s| s.spec_force.y)),
             write: None,
         },
         AvianPort {
             name: "spec_force_z",
             dir: PortDirection::Out,
-            port_type: PortType::Kinematic,
             read: Some(|w, e| w.get::<ImuSensor>(e).map(|s| s.spec_force.z)),
             write: None,
         },
@@ -186,7 +180,6 @@ pub const RANGE_SENSOR_GROUP: AvianGroup = AvianGroup {
     ports: &[AvianPort {
         name: "range",
         dir: PortDirection::Out,
-        port_type: PortType::Kinematic,
         read: Some(|w, e| w.get::<RangeSensor>(e).map(|s| s.distance)),
         write: None,
     }],
@@ -200,7 +193,6 @@ pub const CONTACT_SENSOR_GROUP: AvianGroup = AvianGroup {
         AvianPort {
             name: "contact",
             dir: PortDirection::Out,
-            port_type: PortType::Signal,
             read: Some(|w, e| {
                 w.get::<ContactSensor>(e)
                     .map(|s| if s.in_contact { 1.0 } else { 0.0 })
@@ -210,7 +202,6 @@ pub const CONTACT_SENSOR_GROUP: AvianGroup = AvianGroup {
         AvianPort {
             name: "contact_force",
             dir: PortDirection::Out,
-            port_type: PortType::Force,
             read: Some(|w, e| w.get::<ContactSensor>(e).map(|s| s.normal_force)),
             write: None,
         },
