@@ -31,22 +31,23 @@ in with `load_scene(...)`. A lesson that needs a model just `cmd("OpenClass", �
      on real actions (`requires_event`, `done` predicates); emits `MISSION_COMPLETE`.
    - Setup: `load_scene("scenes/…")`, `cmd("OpenClass", #{ qualified })`,
      `set_subsystem(name, on)`.
-2. Register a row where your app wires `TutorialPlugin`
-   (sandbox: `lunco-sandbox/src/ui/mod.rs`; lunica: `lunco-modelica/src/ui/mod.rs`):
-   ```rust
-   app.register_tutorial(TutorialMeta {
-       id: "sandbox-my-lesson",           // app-prefixed (shared progress settings)
-       title: "My Lesson", blurb: "…",
-       app: "sandbox", difficulty: "beginner",
-       script: "sandbox/my_lesson.rhai",  // path under assets/tutorials/
-       first_start: false,                // true = the once-only onboarding entry
-       next: None,                        // Some("next-id") to chain on completion
-   });
+2. Add an entry to that app's manifest `tutorials/<app>/tutorials.json` — **data,
+   not Rust**. The app already loads it via `TutorialPlugin { app: "<app>" }`.
+   ```json
+   {
+     "id": "sandbox-my-lesson",           // app-prefixed (shared progress settings)
+     "title": "My Lesson", "blurb": "…",
+     "app": "sandbox", "difficulty": "beginner",
+     "script": "sandbox/my_lesson.rhai",  // path under assets/tutorials/
+     "first_start": false,                // true = the once-only onboarding entry
+     "next": null                         // "next-id" to chain on completion
+   }
    ```
 
-That's it — no engine change. `StartTutorial{id}` loads the script via
-`lunco_assets::tutorials::tutorial_source(script)` (**disk on native** — edit and
-replay with no rebuild; **embedded on wasm**) and runs it on the host.
+That's it — **no rebuild, no Rust**. On native the manifest *and* the script are
+read fresh from disk (`lunco_assets::tutorials::tutorial_source`) — edit and
+relaunch; on wasm both are embedded at build time. `StartTutorial{id}` loads the
+script and runs it on the host.
 
 ## Anchors (for `spotlight` / `coach_step` focus)
 

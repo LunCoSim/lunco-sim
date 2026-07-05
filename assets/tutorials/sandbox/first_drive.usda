@@ -22,6 +22,18 @@ def Xform "FirstDrive"
     custom bool lunco:spawnable = false
     custom string lunco:description = "Take control of a rover and drive it to the glowing flag. Click the rover (or press F) to possess it, then drive with W/A/S/D."
 
+    # ── Catalog entry (hybrid: metadata rides the scene, not tutorials.json) ──
+    # This scene-backed lesson declares its own catalog row here on the default
+    # prim; the launcher (`lunco_usd_bevy::tutorial_scene_metas`) scans it and
+    # merges it with the JSON manifest. Scene-less coach tours stay in JSON.
+    # Present ⇒ this .usda IS a tutorial (not just an environment).
+    custom string lunco:tutorialId = "first-drive"
+    custom string lunco:tutorialTitle = "First Drive"
+    custom string lunco:tutorialBlurb = "Take control of a rover and drive it to a flag on the lunar surface. Teaches possession and driving."
+    custom string lunco:tutorialDifficulty = "beginner"
+    custom string lunco:tutorialScript = "sandbox/first_drive.rhai"
+    custom string lunco:tutorialNext = "lander-mission"
+
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
     )

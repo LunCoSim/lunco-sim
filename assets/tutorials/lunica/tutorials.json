@@ -1,0 +1,9 @@
+[
+  { "id": "lunica-overview",    "title": "Lunica Overview",         "blurb": "A 90-second guided tour of the whole workbench — start here.",     "app": "lunica", "difficulty": "beginner",     "script": "lunica/overview.rhai",    "first_start": true,  "next": "lunica-workspace" },
+  { "id": "lunica-workspace",   "title": "1 · Your Workspace",      "blurb": "Twins, the browser, read-only libraries, and learning paths.",     "app": "lunica", "difficulty": "beginner",     "script": "lunica/workspace.rhai",   "first_start": false, "next": "lunica-model" },
+  { "id": "lunica-model",       "title": "2 · Open & View a Model", "blurb": "The four views (Text/Diagram/Icon/Docs) + graphical composition.",  "app": "lunica", "difficulty": "beginner",     "script": "lunica/model.rhai",       "first_start": false, "next": "lunica-run" },
+  { "id": "lunica-run",         "title": "3 · Compile & Run",       "blurb": "Interactive vs Fast Run, and driving inputs live.",                 "app": "lunica", "difficulty": "beginner",     "script": "lunica/run.rhai",         "first_start": false, "next": "lunica-experiments" },
+  { "id": "lunica-experiments", "title": "4 · Experiments & Sweeps","blurb": "Override parameters and sweep them without editing source.",        "app": "lunica", "difficulty": "intermediate", "script": "lunica/experiments.rhai", "first_start": false, "next": "lunica-plots" },
+  { "id": "lunica-plots",       "title": "5 · Plots & Results",     "blurb": "Reading a run: graphs, diagnostics, and the console.",              "app": "lunica", "difficulty": "beginner",     "script": "lunica/plots.rhai",       "first_start": false, "next": "lunica-scripting" },
+  { "id": "lunica-scripting",   "title": "6 · Automate (API + MCP)","blurb": "Drive the workbench from scripts, the HTTP API, and MCP.",          "app": "lunica", "difficulty": "intermediate", "script": "lunica/scripting.rhai",   "first_start": false, "next": null }
+]

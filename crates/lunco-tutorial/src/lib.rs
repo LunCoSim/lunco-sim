@@ -36,32 +36,41 @@ use serde::{Deserialize, Serialize};
 
 /// One tutorial's catalog entry. The lesson itself is the `.rhai` at `script`;
 /// this is what the menu/panel needs to list + launch it.
-#[derive(Clone, Copy, Debug)]
+///
+/// **Data, not code.** Entries live in a per-app JSON manifest
+/// (`assets/tutorials/<app>/tutorials.json`) and are scanned by [`TutorialPlugin`]
+/// at startup — adding a lesson never touches Rust.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TutorialMeta {
     /// Stable id (kebab-case). Progress, chaining, and [`StartTutorial`] key off this.
-    pub id: &'static str,
+    pub id: String,
     /// Display title.
-    pub title: &'static str,
+    pub title: String,
     /// One-line description shown under the title / on hover.
-    pub blurb: &'static str,
+    #[serde(default)]
+    pub blurb: String,
     /// Which app it targets — `"sandbox"`, `"lunica"`, or `"any"` (informational;
-    /// each app registers only its own tutorials).
-    pub app: &'static str,
+    /// the manifest it lives in already scopes it to one app).
+    #[serde(default)]
+    pub app: String,
     /// Difficulty tag (`"beginner"` / `"intermediate"` / …) shown as a chip.
-    pub difficulty: &'static str,
+    #[serde(default)]
+    pub difficulty: String,
     /// The orchestrator's path **relative to `assets/tutorials/`** (e.g.
-    /// `"lunica/overview.rhai"`, `"first_drive/first_drive.rhai"`). Loaded at
+    /// `"lunica/overview.rhai"`, `"sandbox/first_drive.rhai"`). Loaded at
     /// launch by [`lunco_assets::tutorials::tutorial_source`] — disk on native
     /// (live-editable), embedded on wasm.
-    pub script: &'static str,
+    pub script: String,
     /// Auto-launch this tutorial once on the user's first run (persisted via
-    /// [`TutorialProgress::onboarded`]). At most one registered tutorial should
-    /// set it — the onboarding entry point.
+    /// [`TutorialProgress::onboarded`]). At most one entry per app should set it —
+    /// the onboarding entry point.
+    #[serde(default)]
     pub first_start: bool,
     /// The id of the tutorial to chain to when this one completes
     /// (`MISSION_COMPLETE`). Data, not code — replaces the old USD `nextScene`.
     /// `None` = the chain ends here.
-    pub next: Option<&'static str>,
+    #[serde(default)]
+    pub next: Option<String>,
 }
 
 /// The catalog of registered tutorials. Empty until an app registers its own via
@@ -81,7 +90,40 @@ impl TutorialRegistry {
     }
 
     fn get(&self, id: &str) -> Option<TutorialMeta> {
-        self.tutorials.iter().find(|t| t.id == id).copied()
+        self.tutorials.iter().find(|t| t.id == id).cloned()
+    }
+
+    /// The catalog in **curriculum order**: seed at the onboarding entry
+    /// (`first_start`) and follow the `next` chain, then pick up any lesson not
+    /// yet reached (a second chain / orphan) in registration order and follow
+    /// its chain too. Display code iterates this so a lesson's position is its
+    /// place in the chain — independent of *where* it was registered from
+    /// (`tutorials.json` vs. a scene's `lunco:tutorial*` metadata, which merges
+    /// in later and would otherwise append out of sequence).
+    pub fn ordered(&self) -> Vec<&TutorialMeta> {
+        let mut out: Vec<&TutorialMeta> = Vec::with_capacity(self.tutorials.len());
+        let mut seen = std::collections::HashSet::new();
+        // Seeds: the onboarding entry first, then every lesson in registration
+        // order — so each not-yet-reached chain head starts its own run.
+        let seeds = self
+            .tutorials
+            .iter()
+            .filter(|t| t.first_start)
+            .chain(self.tutorials.iter());
+        for seed in seeds {
+            let mut cur = Some(seed.id.as_str());
+            while let Some(id) = cur {
+                if !seen.insert(id.to_string()) {
+                    break; // already placed (chain re-entry, or seed already run)
+                }
+                let Some(meta) = self.tutorials.iter().find(|t| t.id == id) else {
+                    break; // `next` points at an id that isn't registered
+                };
+                out.push(meta);
+                cur = meta.next.as_deref();
+            }
+        }
+        out
     }
 }
 
@@ -200,7 +242,7 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
         };
         // Native reads the `.rhai` fresh from disk each launch (edit-and-replay);
         // wasm serves the embedded copy — the asset crate owns that policy.
-        let Some(source) = lunco_assets::tutorials::tutorial_source(meta.script) else {
+        let Some(source) = lunco_assets::tutorials::tutorial_source(&meta.script) else {
             warn!("[tutorial] no source for '{id}' ({})", meta.script);
             return;
         };
@@ -376,7 +418,7 @@ fn resolve_show_tutorial_intent(
         .iter()
         .find(|t| t.first_start)
         .or_else(|| registry.tutorials.first())
-        .map(|t| t.id);
+        .map(|t| t.id.clone());
     if let Some(id) = id {
         commands.trigger(StartTutorial { id: id.to_string() });
     }
@@ -398,7 +440,7 @@ fn consume_tour_request(
         .iter()
         .find(|t| t.first_start)
         .or_else(|| registry.tutorials.first())
-        .map(|t| t.id);
+        .map(|t| t.id.clone());
     if let Some(id) = id {
         req.0 = None;
         commands.trigger(StartTutorial { id: id.to_string() });
@@ -507,12 +549,12 @@ fn register_tutorials_menu(world: &mut World) {
         }
         ui.label(egui::RichText::new("Interactive, scripted lessons").weak().small());
         ui.separator();
-        for meta in &registry.tutorials {
-            let done = progress.is_completed(meta.id);
+        for meta in registry.ordered() {
+            let done = progress.is_completed(&meta.id);
             let glyph = if done { "✓" } else { "🎓" };
             if ui
                 .button(format!("{glyph}  {}", meta.title))
-                .on_hover_text(meta.blurb)
+                .on_hover_text(meta.blurb.as_str())
                 .clicked()
             {
                 world.trigger(StartTutorial { id: meta.id.to_string() });
@@ -582,17 +624,17 @@ impl Panel for TutorialsPanel {
         }
 
         egui::ScrollArea::vertical().show(ui, |ui| {
-            for meta in &registry.tutorials {
-                let done = progress.is_completed(meta.id);
+            for meta in registry.ordered() {
+                let done = progress.is_completed(&meta.id);
                 egui::Frame::group(ui.style()).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         if done {
                             ui.label(egui::RichText::new("✓").color(egui::Color32::from_rgb(120, 210, 140)).strong());
                         }
-                        ui.label(egui::RichText::new(meta.title).strong());
-                        ui.label(egui::RichText::new(meta.difficulty).weak().small());
+                        ui.label(egui::RichText::new(meta.title.as_str()).strong());
+                        ui.label(egui::RichText::new(meta.difficulty.as_str()).weak().small());
                     });
-                    ui.label(egui::RichText::new(meta.blurb).small());
+                    ui.label(egui::RichText::new(meta.blurb.as_str()).small());
                     ui.horizontal(|ui| {
                         let label = if done { "Replay" } else { "Start" };
                         if ui.button(label).clicked() {
@@ -609,13 +651,36 @@ impl Panel for TutorialsPanel {
 
 /// Adds the registry, persisted progress, the commands, the mission-complete +
 /// F1 observers, onboarding, the confirm popup, the 🎓 menu, and the launcher
-/// panel. Apps register their tutorials with [`TutorialAppExt::register_tutorial`]
-/// after adding this. UI-gated: harmless headless (the panel/menu just aren't drawn).
-pub struct TutorialPlugin;
+/// panel. Tutorials are loaded from the per-app JSON manifest
+/// `assets/tutorials/<app>/tutorials.json` (data, not code — see [`TutorialMeta`]).
+/// UI-gated: harmless headless (the panel/menu just aren't drawn).
+///
+/// ```ignore
+/// app.add_plugins(lunco_tutorial::TutorialPlugin { app: "sandbox".into() });
+/// ```
+pub struct TutorialPlugin {
+    /// App name — selects `assets/tutorials/<app>/tutorials.json`.
+    pub app: String,
+}
 
 impl Plugin for TutorialPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TutorialRegistry>();
+        // Load this app's tutorial catalog from its JSON manifest. Disk on native
+        // (live-editable — add a lesson with no rebuild), embedded on wasm.
+        let manifest_path = format!("{}/tutorials.json", self.app);
+        match lunco_assets::tutorials::tutorial_source(&manifest_path) {
+            Some(src) => match serde_json::from_str::<Vec<TutorialMeta>>(&src) {
+                Ok(metas) => {
+                    let mut reg = app.world_mut().resource_mut::<TutorialRegistry>();
+                    for meta in metas {
+                        reg.register_tutorial(meta);
+                    }
+                }
+                Err(e) => warn!("tutorials manifest '{manifest_path}' failed to parse: {e}"),
+            },
+            None => warn!("no tutorials manifest found at 'assets/tutorials/{manifest_path}'"),
+        }
         app.init_resource::<TutorialHost>();
         app.init_resource::<PendingAdvance>();
         app.register_settings_section::<TutorialProgress>();

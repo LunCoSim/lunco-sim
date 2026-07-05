@@ -57,6 +57,53 @@ pub fn tutorial_source(rel: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Every `<app>/*.usda` under `assets/tutorials/`, as `(relative-path, text)`.
+///
+/// A **scene-backed** lesson can declare its catalog metadata on the scene
+/// itself (`lunco:tutorial*` on the default prim) instead of a `tutorials.json`
+/// row — the `.usda` that IS the lesson environment doubles as the catalog
+/// entry. This lists those scenes so a USD-aware consumer (`lunco-usd-bevy`)
+/// can parse the metadata off them; this crate only enumerates + reads the text
+/// (no USD reader here — that stays a USD-crate concern).
+///
+/// **Native** lists the on-disk app dir (falling back to the embed when it's
+/// absent — a packaged binary run outside the repo); **wasm** walks the
+/// embedded dir. Returns an empty vec when the app has no tutorials dir.
+pub fn tutorial_scene_sources(app: &str) -> Vec<(String, String)> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let dir = crate::assets_dir().join("tutorials").join(app);
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            let mut out = Vec::new();
+            for e in entries.flatten() {
+                let path = e.path();
+                if path.extension().and_then(|x| x.to_str()) == Some("usda") {
+                    if let (Some(name), Ok(text)) =
+                        (path.file_name().and_then(|n| n.to_str()), std::fs::read_to_string(&path))
+                    {
+                        out.push((format!("{app}/{name}"), text));
+                    }
+                }
+            }
+            if !out.is_empty() {
+                return out;
+            }
+            // fall through to the embed (dir exists but shipped no .usda, or the
+            // packaged app runs outside the repo)
+        }
+    }
+    let Some(dir) = TUTORIALS.get_dir(app) else {
+        return Vec::new();
+    };
+    dir.files()
+        .filter(|f| f.path().extension().and_then(|x| x.to_str()) == Some("usda"))
+        .filter_map(|f| {
+            let rel = f.path().to_string_lossy().to_string();
+            f.contents_utf8().map(|t| (rel, t.to_string()))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

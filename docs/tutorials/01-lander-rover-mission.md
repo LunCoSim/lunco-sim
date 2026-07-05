@@ -629,3 +629,13 @@ For the complete list of script verbs — sensing, math, vehicle control, tools,
 networking — see [`../scripting-guide.md`](../scripting-guide.md). For the
 reasoning behind how scenarios are put together, see
 [`../architecture/34-scenario-and-multidomain.md`](../architecture/34-scenario-and-multidomain.md).
+
+## Related
+
+- **Play the interactive version**: the in-app *Lander & Rover Mission* lesson
+  (🎓 Tutorials menu in the sandbox) walks the same mission with on-screen coaching.
+- **Next walkthrough**: [02 — Author your own controller](02-authoring-a-controller.md) — build the lander's GNC yourself.
+- **Reference skills**: [build-usd-scene](../../skills/build-usd-scene/SKILL.md) (the world),
+  [author-scenario](../../skills/author-scenario/SKILL.md) (the mission logic),
+  [compose-multidomain-twin](../../skills/compose-multidomain-twin/SKILL.md) (wiring it all together),
+  [inspect-simulation](../../skills/inspect-simulation/SKILL.md) (watching it run). Full index: [skills/](../../skills/README.md).

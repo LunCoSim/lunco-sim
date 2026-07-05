@@ -40,24 +40,72 @@ assets/tutorials/<app>/<name>.usda        # optional env-only scene, load_scene'
 ```
 
 **1. Drop the `.rhai`** (author with the prelude verbs below).
-**2. Register a row** where the app wires `TutorialPlugin` (sandbox:
-`lunco-sandbox/src/ui/mod.rs`; lunica: `lunco-modelica/src/ui/mod.rs`):
+**2. Declare the catalog entry** — **data, not Rust**. Two homes, pick by whether
+the lesson has a scene:
 
-```rust
-register_tutorial(#{
-    id: "first-drive", title: "First Drive",
-    app: "sandbox", difficulty: "beginner",
-    script: "sandbox/first_drive.rhai",   // path under assets/tutorials/
-    first_start: false,                    // true = the once-only onboarding entry
-    next: None,                            // Some("next-id") to chain on completion
-});
+**(a) JSON manifest** `assets/tutorials/<app>/tutorials.json` — the default,
+required for **scene-less** lessons (coach tours, model lessons).
+`TutorialPlugin { app }` scans it at startup. Note: strict JSON, **no comments**.
+
+```json
+{
+  "id": "first-drive", "title": "First Drive",
+  "blurb": "Take control of a rover and drive it to a flag.",
+  "app": "sandbox", "difficulty": "beginner",
+  "script": "sandbox/first_drive.rhai",
+  "first_start": false,
+  "next": "lander-mission"
+}
 ```
+
+**(b) On the scene (hybrid)** — a **scene-backed** 3D lesson may instead declare
+its catalog entry on its own `.usda`, as `lunco:tutorial*` on the default prim,
+so the file that IS the environment doubles as the catalog row (single source of
+truth). `lunco_usd_bevy::tutorial_scene_metas(app)` scans `<app>/*.usda`, and the
+launcher merges these with the JSON manifest (idempotent on `id`, ordered by the
+`next` chain). **Presence of `lunco:tutorialId` = this scene is a tutorial**; omit
+it and the `.usda` is just an environment. Don't also add a JSON row for the same
+`id`. (Wiring is per-app + USD-only, so lunica/luncosim — which have no scene
+lessons — never pull in `openusd`; sandbox does the scan.)
+
+```usda
+def Xform "FirstDrive"
+{
+    custom string lunco:tutorialId = "first-drive"
+    custom string lunco:tutorialTitle = "First Drive"
+    custom string lunco:tutorialBlurb = "Take control of a rover and drive it to a flag."
+    custom string lunco:tutorialDifficulty = "beginner"
+    custom string lunco:tutorialScript = "sandbox/first_drive.rhai"
+    custom string lunco:tutorialNext = "lander-mission"   # omit for end-of-chain
+    # … the lesson environment (ground, rover, flag, lights) …
+}
+```
+
+**Prerequisite (once per app):** the host app includes the scripting runtime
+(`LunCoScriptingPlugin`) + `lunco_tutorial::TutorialPlugin { app: "<app>".into() }`,
+and calls `lunco_tutorial::consult_boot(world, has_scene_arg, automated)` at startup
+for first-run onboarding. `sandbox` and `lunica` have this; a bare app does not.
+Adding *lessons* after that never touches Rust — just the manifest + a `.rhai`.
 
 That's it. `StartTutorial{id}` loads the source via `tutorial_source(script)` —
 **disk on native** (edit + replay, no rebuild) / **embedded on wasm** — and runs
 it. F1 (`EditorIntent::ShowTutorial`) and the 🎓 Tutorials panel also launch it.
 
-## The shape of a lesson
+## Two kinds of lesson
+
+- **Coach-mark tour** (narrated slideshow) — `coach(i, len, anchor, title, body)`
+  in `on_start`, advanced by an `on_event` cursor on `cmd:TutorialNext` /
+  `cmd:TutorialBack` / `cmd:TutorialSkip` (the card's own buttons). **Guaranteed
+  completable** — it depends on nothing in the scene, so it's the safe default for
+  teaching *concepts* and UI. End by `emit("MISSION_COMPLETE", 0)`. Reference:
+  `assets/tutorials/sandbox/sandbox_intro.rhai`.
+- **Objective mission** — `mission(me)` with objectives that advance on **real
+  user actions** (a `cmd:*` event or a `done` predicate). Best for *doing*
+  (drive, land). Only gate on events you've confirmed fire — `cmd:PossessVessel`
+  and trigger-zone `enter:` events + `done` distance predicates are proven;
+  don't assume an arbitrary UI click emits a `cmd:*`. Reference: `first_drive.rhai`.
+
+## The shape of an objective lesson
 
 ```rhai
 fn on_start(me) {
