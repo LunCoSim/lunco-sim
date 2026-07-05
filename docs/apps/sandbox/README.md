@@ -1,5 +1,7 @@
 # Sandbox
 
+> **Try it live:** [**sandbox.lunco.space**](https://sandbox.lunco.space) — runs in the browser. Early preview build; expect rough edges.
+
 The **Sandbox** is a standalone LunCoSim application designed for rapid testing of ground mobility, physics interactions, and scene composition. It is the primary tool for validating rover chassis, suspension behavior, and environment collision.
 
 ## What it does

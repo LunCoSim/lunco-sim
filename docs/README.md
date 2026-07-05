@@ -16,6 +16,25 @@ utility, and dev) with launch commands and the shared CLI/API surface.
 | [**Lunica**](apps/lunica/README.md) | Modelica engineering workbench |
 | [**Assets Manager**](apps/assets-manager/README.md) | Download and process workspace assets |
 
+## Skills (AI agents & contributors)
+
+Task-oriented runbooks in [`../skills/`](../skills/) — each triggers on a kind of
+request and distills the docs below into a recipe plus the project-specific
+gotchas. Point an agent (or yourself) at these before a hands-on task.
+
+| Skill | Use it when you want to… |
+|---|---|
+| [**repo-map**](../skills/repo-map/SKILL.md) | Get oriented — repo layout, which binary to run, where a feature lives |
+| [**build-usd-scene**](../skills/build-usd-scene/SKILL.md) | Author/edit the 3D world — load scenes, spawn, place, tune objects |
+| [**author-scenario**](../skills/author-scenario/SKILL.md) | Write rhai behaviour — missions, waypoints, reactions, coordination |
+| [**authoring-vessel-controllers**](../skills/authoring-vessel-controllers/SKILL.md) | Give a vessel a self-driving GNC / autopilot + manual handoff |
+| [**compose-multidomain-twin**](../skills/compose-multidomain-twin/SKILL.md) | Assemble a full mission — USD + Modelica + cosim + rhai — into a Twin |
+| [**author-tutorial**](../skills/author-tutorial/SKILL.md) | Build a guided interactive lesson / onboarding flow (rhai + HUD) |
+| [**inspect-simulation**](../skills/inspect-simulation/SKILL.md) | Observe a running sim — read ports/variables, screenshot the viewport |
+| [**run-modelica**](../skills/run-modelica/SKILL.md) | Run/compile/sweep Modelica models over the API |
+| [**test-via-api**](../skills/test-via-api/SKILL.md) | Verify a change end-to-end via the API instead of asking the user to click |
+| [**lunco-ui**](../skills/lunco-ui/SKILL.md) · [**lunco-theme**](../skills/lunco-theme/SKILL.md) | Build workbench UI panels / use the design tokens |
+
 ## Strategic Roadmap
 
 We are evolving from a high-fidelity sandbox into a complete autonomous mission design stack.

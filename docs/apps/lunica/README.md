@@ -1,5 +1,7 @@
 # Lunica
 
+> **Try it live:** [**lunica.lunco.space**](https://lunica.lunco.space) — runs in the browser. Early preview build; expect rough edges.
+
 **Lunica** is the Modelica-focused subset of LunCoSim. It is a specialized workbench for engineering modeling, simulation, and analysis, focused entirely on the Modelica domain.
 
 ## What it is
