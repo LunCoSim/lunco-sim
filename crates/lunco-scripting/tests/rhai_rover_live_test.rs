@@ -16,10 +16,9 @@
 //! is registered, so recording its arguments proves the whole path end-to-end.
 
 use bevy::prelude::*;
-use lunco_api::executor::api_command_dispatcher;
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_core::{
-    on_command, register_commands, Ack, ActiveCommandId, Command, GlobalEntityId, OpId,
+    on_command, register_commands, Ack, Command, GlobalEntityId, OpId,
     TelemetryEvent,
 };
 use lunco_doc::{DocumentHost, DocumentId};
@@ -136,12 +135,11 @@ fn build_app() -> App {
         LunCoScriptingPlugin,
     ));
 
-    // Command-dispatch path that rhai `cmd()` rides (ApiCommandEvent → reflect).
-    app.init_resource::<ApiEntityRegistry>()
-        .init_resource::<ActiveCommandId>()
-        // RunScenario returns Result<Ack,_>; the #[on_command] macro records it here.
-        .init_resource::<lunco_core::CommandResults>()
-        .add_observer(api_command_dispatcher);
+    // The command-dispatch path rhai `cmd()` rides (ApiCommandEvent → reflect →
+    // ApiEntityRegistry + CommandResults) is self-supplied by `LunCoScriptingPlugin`
+    // via `lunco_api::ensure_command_core` (added above). Do NOT register
+    // `api_command_dispatcher` again here — a second observer double-dispatches every
+    // command, running each `cmd()` twice (doubled Reports / generation bumps / writes).
 
     // Spies + the test commands (register_all_commands registers types+observers).
     app.init_resource::<DriveLog>()

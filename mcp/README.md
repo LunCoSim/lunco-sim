@@ -38,7 +38,7 @@ Environment variables:
 Example:
 
 ```bash
-LUNCO_API_HOST=192.168.1.100 LUNCO_API_PORT=8080 npx @lunco/mcp-server
+LUNCO_API_HOST=192.168.1.100 LUNCO_API_PORT=4101 npx @lunco/mcp-server
 ```
 
 ## Static Tools

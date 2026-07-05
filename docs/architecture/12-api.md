@@ -184,7 +184,7 @@ pub struct Foo { pub doc: u64 }   // use DocumentId
 ### When NOT to use `#[Command]`
 
 - **Notifications** (system tells the world "X happened"): `DocumentChanged`, `DocumentSaved`, lifecycle events. These are observed *by* domain crates, not invoked by users — hand-rolled `#[derive(Event, Clone, Debug)]` is fine.
-- **High-frequency continuous signals** (joystick, drag deltas, telemetry): use the `ControlStream` channel in [`docs/architecture/01-ontology.md`](01-ontology.md#controlstream), not the Command Bus.
+- **High-frequency continuous signals** (joystick, drag deltas, telemetry): use the `ControlStream` channel in [`01-ontology.md`](01-ontology.md#controlstream), not the Command Bus.
 
 ---
 
@@ -571,7 +571,7 @@ form.
 ### External API visibility (optional)
 
 Domain crates can hide Reflect events from the external API surface
-without un-registering them, via the [`ApiVisibility`] resource (see
+without un-registering them, via the `ApiVisibility` resource (see
 `crates/lunco-api/src/queries.rs`). Names pushed into
 `hidden_commands` are filtered out of `discover_schema` and rejected
 by `execute_command` with `CommandNotFound`. The events remain in the

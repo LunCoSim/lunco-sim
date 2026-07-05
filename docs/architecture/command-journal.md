@@ -1,5 +1,7 @@
 # Command Journal — one op log for identity, undo, sync, and replay
 
+> Audience: contributors adding new domain mutations.
+
 The command journal substrate is [`lunco-twin-journal`](../../crates/lunco-twin-journal) + the Bevy bridge (`lunco-doc-bevy`: `JournalResource`, `BevyJournalSink`, and the auto-recorder `JournalOpRecorder` — `impl<O: OpPayload> OpRecorder<O>` records forward + inverse, undo/redo included). Domains plug in via `impl OpPayload` + a `DomainKind` variant (`Usd`, `Modelica`, `Script`, `Shader`, `Experiment`, `ObstacleField`, `ToolLibrary`, `Timeline`, …). Sync rides the **journal plane** (see [`31-networking-and-state-sync.md`](31-networking-and-state-sync.md)).
 
 This records how *every* mutating interaction — terrain edit, spawn, possess, model edit, USD prim edit — becomes a single kind of thing: an **op in one journal**. Identity, ordering, undo/redo, multi-peer sync, and deterministic replay then all come from one substrate instead of each feature reinventing a sliver of it. It realizes the **Input Log** of [`specs/020-world-state-and-replay`](../../specs/020-world-state-and-replay) (User Story 3).

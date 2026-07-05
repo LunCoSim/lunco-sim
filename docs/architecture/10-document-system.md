@@ -228,7 +228,7 @@ pub trait DocumentView<D: Document> {
 }
 ```
 
-**Also in `lunco-doc`** (host — already implemented):
+**Also in `lunco-doc`** (host):
 
 ```rust
 /// Holds a Document plus its undo/redo stacks. Headless-capable:
@@ -494,30 +494,13 @@ Once the Document System is in place:
 - **Network collaboration.** Eventually. The op stream is already a wire
   protocol.
 
-## 12. Roadmap
+## 12. Future Work
 
-| Phase | Scope | Status |
-|-------|-------|--------|
-| 1 | Design complete (this doc). | ✅ |
-| 2 | Implement `Document` / `DocumentOp` / `DocumentHost` / `DocumentError` / `DocumentId` in `lunco-doc`. Zero runtime deps. Unit tests. | ✅ |
-| 3 | `lunco-twin` crate (TwinManifest, document-kind registry, file I/O), plus `lunco-workspace` (editor session: open Twins + active doc/perspective) and `lunco-storage` (I/O-only backend). | ✅ |
-| 4 | Modelica domain: `ModelicaDocument` + ops, CodeEditor migrated to the DocumentView pattern. | ✅ |
-| 5 | Modelica: full op set, Diagram ↔ Code sync. | ✅ |
-| 6 | USD domain: ops (prim add/remove, attribute set, transform). Scene tree + 3D viewport + USDA text all view the same document. | ✅ |
-| 7 | Mission document (first entirely-new domain). | |
-| 8 | SysML document (structure + requirements only — see principles.md Article III). | |
-| 9 | Live-sync layer (Nucleus / CRDT / Yjs integration). | |
+- **Mission document:** Create a first-class mission scenario document domain.
+- **SysML document:** Support SysML v2 documents (structure + requirements only — see principles.md Article III).
+- **Live-sync layer:** Add a live-sync layer (Nucleus / CRDT / Yjs integration) for multi-peer collaboration.
+- **Unified diagnostics:** Extend the neutral diagnostics substrate (`Diagnostic` / `DiagnosticSeverity` / `CompileState`) to all remaining domains.
 
-> **Unified diagnostics substrate (shipped).** `lunco-doc/src/diagnostics.rs`
-> defines the neutral `Diagnostic` / `DiagnosticSeverity` / `CompileState` types
-> and the per-document `DocDiagnostics`; `lunco-doc-bevy` exposes the
-> `DocumentDiagnostics` resource (every domain's compile state in one place) plus
-> a `status_json` shape consumed by the UI/API. Modelica's `ScriptStatus` and
-> rhai both report through it; the remaining Modelica-specific diagnostics paths
-> are being migrated onto it.
-
-Phase 4 was the go-no-go and it passed: the pattern now spans Modelica and USD,
-and the `lunco-twin` / `lunco-workspace` / `lunco-storage` split shipped.
 
 ## 13. Open questions (to resolve as we migrate the first domain)
 
@@ -571,7 +554,7 @@ this decision: [`research/undo-redo-libraries.md`](research/undo-redo-libraries.
 - [`00-overview.md`](00-overview.md) — three-tier architecture, where Documents fit
 - [`01-ontology.md`](01-ontology.md) § 4c — Document/DocumentOp/DocumentView in the ontology
 - [`11-workbench.md`](11-workbench.md) — how panels (DocumentViews) are hosted by the workbench
-- [`20-domain-modelica.md`](20-domain-modelica.md) — first (shipped) domain implementation (ModelicaDocument)
+- [`20-domain-modelica.md`](20-domain-modelica.md) — first domain implementation (ModelicaDocument)
 - [`21-domain-usd.md`](21-domain-usd.md) — USD as a second Document domain
 - [`research/undo-redo-libraries.md`](research/undo-redo-libraries.md) — library survey & decision rationale
 

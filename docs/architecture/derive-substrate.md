@@ -1,5 +1,7 @@
 # Derive — the unified derived-artifact substrate
 
+> Audience: contributors unifying async compute/bake patterns.
+
 Provides a design for the unified derived-artifact substrate, covering CPU/GPU queuing and asynchronous bakes.
 
 This architecture unifies substrates: `RebuildOnChange` (change-detection), `lunco-precompute` (caching), mobility intent, port resolution, and `lunco-hash` (hashing). It is designed to address expensive CPU calculations (such as terrain tile collider generation) by offloading them from the main thread.
@@ -164,6 +166,7 @@ uniform write; it never re-bakes.
 |---|---|---|---|
 | **Ports** (Substrate D) | `SyncInline` | `CompiledWiring` — names → slot handles | propagation reads/writes slots |
 | **USD → ECS** projection | `SyncInline` | composed prim → ECS components | live sim / predicted values |
+| **Scenario programs** ([doc](scenario-program-cache.md)) | `SyncInline` | compiled AST + hook mask (key: `fnv1a64(source)`) | per-entity `scope`/`this` + event filter |
 | **Terrain colliders** | `CpuAsync` | cook heightfield → `Collider` (key: DEM hash, node, res) | transform placement at spawn |
 | **DEM surface/normal textures** (`derived_layers.rs`, already precompute) | `CpuAsync` | bake 512² maps (key: DEM hash) | — |
 | **LOD tile meshes** | `CpuAsync` | bake geometry (key: DEM hash, node) | — |
@@ -171,7 +174,7 @@ uniform write; it never re-bakes.
 | **Horizon occlusion** | `CpuAsync` | bake visibility (key: DEM hash, **quantized sun**) | — |
 
 Ports and projection are the proof the primitive isn't terrain-specific: they are the same
-`RebuildOnChange` shape, already shipped, at the `SyncInline` tier.
+`RebuildOnChange` shape at the `SyncInline` tier.
 
 ## 6. Invariants (must hold, or it breaks *this* sim)
 

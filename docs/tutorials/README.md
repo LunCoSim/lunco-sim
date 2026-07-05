@@ -28,8 +28,15 @@ shared HUD (`lunco-workbench::tutorial_overlay`) + the `hud.rhai` prelude.
   (`assets/scripting/policy/boot.rhai`, id `boot.entry`) decides to show the
   onboarding tutorial instead of loading the default — one load, no race. Rewrite
   it (or hot-replace by id) to change startup behavior with no rebuild.
-- **Add one**: drop `assets/tutorials/<app>/<name>.rhai` + a `register_tutorial(…)`
-  row — full recipe in [`../../assets/tutorials/README.md`](../../assets/tutorials/README.md).
+- **Shipped lessons**: *sandbox* — Sandbox Intro → First Drive → Lander & Rover
+  Mission, plus an authoring track (Build a Scene → Script a Rover → Inspect the
+  Simulation); *lunica* — a 7-lesson workbench course + the Welcome-panel
+  [learning paths](../../assets/tutorials/learning_paths.json).
+- **Add one — data, not Rust**: drop `assets/tutorials/<app>/<name>.rhai` + an entry
+  in `assets/tutorials/<app>/tutorials.json` (the app's `TutorialPlugin { app }`
+  scans it). No rebuild. Full recipe in
+  [`../../assets/tutorials/README.md`](../../assets/tutorials/README.md) and the
+  [`author-tutorial`](../../skills/author-tutorial/SKILL.md) skill.
 
 ## Authoring walkthroughs
 
@@ -38,7 +45,14 @@ shared HUD (`lunco-workbench::tutorial_overlay`) + the `hud.rhai` prelude.
 | [01 — Lander → Rover mission](01-lander-rover-mission.md) | A lander that flies itself down on a glowing engine plume, releases a rover, and an autopilot that drives the rover through a waypoint course until you take over — with model-driven warnings and on-screen narration throughout. |
 | [02 — Author your own controller](02-authoring-a-controller.md) | Build a self-flying vessel from scratch: the control law in Modelica, logic in rhai, sensors + wiring + the `piloted` authority signal in USD — and a pilot who can take over. The layering behind every LunCoSim GNC. |
 
+Each walkthrough pairs with an in-app lesson and the reference **[skills](../../skills/README.md)**:
+
+| Walkthrough | In-app lesson | Reference skills |
+|---|---|---|
+| 01 — Lander → Rover mission | *Lander & Rover Mission* (sandbox) | [build-usd-scene](../../skills/build-usd-scene/SKILL.md) · [author-scenario](../../skills/author-scenario/SKILL.md) · [compose-multidomain-twin](../../skills/compose-multidomain-twin/SKILL.md) |
+| 02 — Author your own controller | *Script a Rover* (sandbox) | [authoring-vessel-controllers](../../skills/authoring-vessel-controllers/SKILL.md) |
+
 Looking for a reference rather than a walkthrough? The full script verb list is
-in [`../scripting-guide.md`](../scripting-guide.md), and the design behind
-scenarios is in
-[`../architecture/34-scenario-and-multidomain.md`](../architecture/34-scenario-and-multidomain.md).
+in [`../scripting-guide.md`](../scripting-guide.md), the design behind scenarios is
+in [`../architecture/34-scenario-and-multidomain.md`](../architecture/34-scenario-and-multidomain.md),
+and every task skill is indexed in [`../../skills/README.md`](../../skills/README.md).

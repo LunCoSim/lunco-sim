@@ -140,15 +140,7 @@ feature X at line N" error.
 
 ## 6. Status
 
-- ✅ Design (this doc, plus ties to `10-document-system.md` and `13-twin-and-workflow.md`)
-- ❌ Parser implementation
-- ❌ `SysmlDocument` in Bevy
-- ❌ BDD / IBD panels
-- ❌ Requirements panel
-
-All Phase 2+ of the overall roadmap. Modelica domain gets Document
-System treatment first; SysML follows once the pattern is proven on
-a simpler domain.
+The SysML v2 integration design is complete, with foundational ties established to `10-document-system.md` and `13-twin-and-workflow.md`. Parser implementation, `SysmlDocument` Bevy bindings, and visual diagram/requirements panels are planned as follow-up work after the Modelica domain patterns are fully validated.
 
 ## 7. What this does NOT do
 

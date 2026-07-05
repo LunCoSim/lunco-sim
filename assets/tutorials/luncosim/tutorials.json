@@ -1,0 +1,4 @@
+[
+  { "id": "luncosim-welcome",  "title": "Welcome to LunCoSim", "blurb": "A guided tour of the flagship — the live solar system, the camera, and time-warp.",              "app": "luncosim", "difficulty": "beginner", "script": "luncosim/welcome.rhai",  "first_start": true,  "next": "luncosim-controls" },
+  { "id": "luncosim-controls", "title": "Controls & Command",  "blurb": "Focus a body, fly the camera, and possess a vessel — then hand back to the autopilot.",           "app": "luncosim", "difficulty": "beginner", "script": "luncosim/controls.rhai", "first_start": false, "next": null }
+]

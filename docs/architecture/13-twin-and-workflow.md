@@ -49,9 +49,9 @@ different file formats. Each format does what it's best at:
 | File kind | Format | Owns | Interop |
 |-----------|--------|------|---------|
 | Tool manifest | TOML (`twin.toml`) | Paths, UI preferences, reference strategy, environment selection | None expected — tool-specific |
-| System structure | SysML v2 (`.sysml`) | Parts, ports, connections, requirements, verifications | ✅ Full, via any SysML v2 tool (Cameo, OpenMBEE, etc.) |
-| Behavior | Modelica (`.mo`) | Equations, dynamics, parameters | ✅ Full, via Dymola, OMEdit, OpenModelica |
-| Geometry | USD (`.usda` / `.usdc`) | Scenes, meshes, materials, transforms | ✅ Full, via Omniverse, Blender, USDView |
+| System structure | SysML v2 (`.sysml`) | Parts, ports, connections, requirements, verifications | Full — any SysML v2 tool (Cameo, OpenMBEE, etc.) |
+| Behavior | Modelica (`.mo`) | Equations, dynamics, parameters | Full — Dymola, OMEdit, OpenModelica |
+| Geometry | USD (`.usda` / `.usdc`) | Scenes, meshes, materials, transforms | Full — Omniverse, Blender, USDView |
 | Missions | RON/YAML (`.mission.ron`) | Timeline, events, maneuvers | Custom for now |
 
 **Interop principle:** Each domain-standard file MUST contain only that
@@ -1038,17 +1038,6 @@ Each app exposes relevant `File → New →` items based on what it can edit:
 Across all three, the Command Palette can find any action — even if a
 menu item isn't exposed. Power users get uniform access.
 
-### No legacy coexistence
-
-The migration from `bevy_workbench` to `lunco-workbench` is a **clean
-cutover**, not a feature-flagged coexistence. Each domain migrates its
-panels when ready; the final commit removes the `bevy_workbench`
-dependency and the now-unused `setup_sandbox` functions in one pass.
-
-We accept short periods during migration where a particular domain's
-panels might look rough as they move to the new Panel trait, rather than
-maintain two parallel UI stacks with flags to switch between them. The
-reward is code that doesn't carry transitional scar tissue.
 
 ## 13. Future: live-collab Twins
 

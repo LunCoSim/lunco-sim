@@ -143,7 +143,7 @@ pub enum ConnectionKind {
 
 Acausal connections cannot cross cosim boundaries without losing
 accuracy (fake algebraic loops delay one signal by a step). At Run
-start, the **IslandPartitioner** groups participants:
+start, the **IslandPartitioner** (planned for Phase 2/3, not yet implemented) groups participants:
 
 1. Union-find over participants connected by acausal edges.
 2. Each island must share a backend that advertises

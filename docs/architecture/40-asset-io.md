@@ -108,7 +108,7 @@ trail.
 | Layer | Catches | Where |
 |---|---|---|
 | `clippy.toml` `disallowed-methods` | New direct `std::fs::*` / `std::thread::spawn` / `std::time::Instant` in workspace source | `clippy.toml` at repo root |
-| `cargo clippy --workspace -- -D warnings` (CI) | Above, fails PR | (planned CI step) |
+| `cargo clippy --workspace -- -D warnings` (CI) | Above, fails PR | `.github/workflows/` |
 | `scripts/check_wasm.sh` (CI) | **Anything** that breaks the wasm link — including transitive deps that pull `mio`/`tokio-fs`/`std::thread`. Strongest gate. | `scripts/check_wasm.sh` |
 | `docs/architecture/40-asset-io.md` (this file) | Human awareness | here |
 

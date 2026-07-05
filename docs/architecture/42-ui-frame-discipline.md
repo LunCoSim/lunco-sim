@@ -113,9 +113,8 @@ scripts/perf/profile.sh --release            # build → samply → symbolicated
 scripts/perf/profile.sh --release --diag-only # frame time + GPU adapter only (no sudo)
 ```
 
-Full reference: [`scripts/perf/README.md`](../../scripts/perf/README.md)
-(toolkit, setup, how to read results, mechanics gotchas). Workflow:
-**profile → A/B-disable to confirm → fix → re-measure**, in that order.
+Workflow: **profile → A/B-disable to confirm → fix → re-measure**, in that order.
+See `scripts/perf/profile.sh --help` for the full toolkit (setup, reading results, gotchas).
 
 Three regressions/assumptions keep recurring; prefer the by-design fix:
 

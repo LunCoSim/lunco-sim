@@ -1,5 +1,7 @@
 # Efficiency & Maintainability — the North Star
 
+> Audience: all contributors — umbrella for the substrate docs.
+
 > Umbrella for the caching/perf work. Frames the detailed docs
 > (`caching-and-precompute-strategy.md`, ports design) under one principle,
 > so the whole workspace moves the same direction instead of accreting
@@ -12,13 +14,13 @@
 
 Almost every perf and maintainability problem we've found is a violation of this:
 
-| Symptom (this session) | The violation |
+| Symptom | The violation |
 |---|---|
-| `propagate` rebuilt a string-keyed wire snapshot every tick (0.3) | recomputing **structure** at **state** cadence |
-| `sync_collider` rebuilt a collider every frame (0.2) | derived value not memoized against its input |
+| `propagate` rebuilt a string-keyed wire snapshot every tick | recomputing **structure** at **state** cadence |
+| `sync_collider` rebuilt a collider every frame | derived value not memoized against its input |
 | ports re-resolve name→backend every read | **resolution** (structure) fused with **transfer** (state) |
 | horizon shadows re-baked every load; USD stages re-flattened every load | deterministic **artifact** recomputed instead of cached |
-| USD animation samplers re-derive topology every frame (0.5) | per-entity **structure** recomputed per frame |
+| USD animation samplers re-derive topology every frame | per-entity **structure** recomputed per frame |
 | regolith FBM / 96-step march recomputed per pixel per frame | pure-of-position **artifact** not baked to a texture |
 
 The mature subsystems already obey it — **networking and terrain swept clean**
@@ -42,12 +44,11 @@ one substrate per tier — stop reinventing):
 ```
 
 - **Tier 1 — RAM memo.** Per-entity derived data cached on a component / `Local`,
-  refreshed on change. Idioms: dirty-flag component (`LastColliderVolume`, 0.2),
-  plan component built on `Added<>` (USD `AnimationPlan`, 0.5).
+  refreshed on change. Idioms: dirty-flag component (`LastColliderVolume`),
+  plan component built on `Added<>` (USD `AnimationPlan`).
 - **Tier 2 — change-compiled resource.** A structure-stable global fabric
   compiled once and rebuilt only on `Changed`/`Added`/`RemovedComponents` of its
-  source. Idiom: `CompiledWiring` (0.3). **This tier has no shared helper yet —
-  it should** (see Substrate A).
+  source. Idiom: `CompiledWiring`. **This tier has a shared helper** — Substrate A.
 - **Tier 3 — content-addressed cache.** Expensive deterministic artifacts baked
   to disk/RAM, keyed by content hash + LOD + variant. Substrate:
   `lunco-precompute` (bake-or-load). Reference impl exists (`derived_layers.rs`).
@@ -69,7 +70,7 @@ Generalizes `CompiledWiring` into a reusable type in `lunco-core`
 rebuild)`. A private `ChangeDetector<S>` caches a `SystemState` so
 `Changed<S>`/`RemovedComponents<S>` detection works **inside exclusive systems**
 (where normal change-detection params don't exist), with a forced first-run.
-`propagate_connections` now uses it (0.3 refactored onto it, tests green). Kills
+`propagate_connections` uses it. Kills
 the per-tick-recompute class and gives one review-checklist item: *"does this
 system recompute structure at state cadence? → `RebuildOnChange` it."*
 
@@ -113,17 +114,14 @@ Two tiers by *purpose*, replacing ~7 ad-hoc `DefaultHasher` folds:
   crates depend inward on substrate crates** (the CID-lift is the first
   correction of an accidental outward coupling).
 
-## Rollout — incremental, builds on what's green, no big-bang
+## Rollout order — incremental, no big-bang
 
-1. **Done + green:** 0.2 (`LastColliderVolume`), 0.3 (`CompiledWiring`).
-2. **Extract Substrate A** from `CompiledWiring`; apply to the sweep's stragglers
-   (0.4 scenario clone, 0.5 USD animation plan).
-3. **Substrate E** (`lunco-hash`) — tiny, unblocks B.
-4. **Substrate B** (`lunco-precompute`) + first consumer horizon-bake (Phase A/B).
-5. **Substrate D** (ports resolve/handle) — the clean 0.3b + a better API.
-6. **Substrate C** (`Mobility`) — USD detector first; unlocks render/net/physics
-   skipping.
-7. Consumers: LOD tile/USD-flatten disk cache, DAE artifact cache, eviction + UI.
+1. **Substrates A + E** — the foundation: `RebuildOnChange` extracted from `CompiledWiring`; `lunco-hash`.
+2. **Apply Substrate A** to the sweep's remaining sites (USD animation plan, scenario clone, etc.).
+3. **Substrate B** (`lunco-precompute`) + first consumer horizon-bake (Phase A/B).
+4. **Substrate D** (ports resolve/handle) — clean up the ports API with a proper resolve→handle split.
+5. **Substrate C** (`Mobility`) — USD detector first; unlocks render/net/physics skipping.
+6. Consumers: LOD tile/USD-flatten disk cache, DAE artifact cache, eviction + UI.
 
 ## Non-goals (protect these)
 

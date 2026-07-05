@@ -159,24 +159,24 @@ lunco-ui = { path = "../lunco-ui" }
 ### 3. Implement a panel
 
 ```rust
-use bevy_workbench::dock::WorkbenchPanel;
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_ui::prelude::*;
 
 pub struct Inspector;
 
-impl WorkbenchPanel for Inspector {
-    fn id(&self) -> &str { "sandbox_inspector" }
+impl Panel for Inspector {
+    fn id(&self) -> PanelId { PanelId("sandbox_inspector") }
     fn title(&self) -> String { "Inspector".into() }
-    fn needs_world(&self) -> bool { true }
+    fn default_slot(&self) -> PanelSlot { PanelSlot::RightInspector }
 
-    fn ui_world(&mut self, ui: &mut egui::Ui, world: &mut World) {
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         // READ state — query only
-        let selected = world.resource::<UiSelection>();
+        let selected = ctx.resource::<UiSelection>();
 
         // EMIT commands — never mutate
         if ui.button("Delete").clicked() {
             if let Some(target) = selected.entity {
-                world.commands().trigger(DeleteEntity { target });
+                ctx.trigger(DeleteEntity { target });
             }
         }
     }
@@ -188,7 +188,7 @@ impl WorkbenchPanel for Inspector {
 ```rust
 // ui/mod.rs
 use bevy::prelude::*;
-use bevy_workbench::WorkbenchApp;
+use lunco_workbench::WorkbenchAppExt;
 
 pub mod spawn_palette;
 pub mod inspector;

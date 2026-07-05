@@ -1,6 +1,6 @@
 # Networking — resolved decisions (canonical log)
 
-Decisions locked 2026-05-29. This is the source of truth; the "open questions"
+Decisions locked. This is the source of truth; the "open questions"
 sections in the other docs point here. Phase-local implementation/tuning choices
 are intentionally **not** here — they're decided in-phase with real code (listed
 at the bottom).
@@ -15,13 +15,13 @@ payload regardless of backend, so fallback cost is bounded.
 - The Ph0 spike is **not** an open A/B — it's narrowed to verifying lightyear's one
   real risk: **host-client robustness under latency**. If that fails → fall back to
   replicon+renet2 (envelope work carries over). Otherwise lightyear stands.
-- **Ph0 RESULT (2026-05-29): host-client risk RETIRED on the native path.** Built
+- **Ph0 RESULT: host-client risk RETIRED on the native path.** Built
   clean on Bevy 0.18; host-client boots, remote client completes the
   netcode/WebTransport handshake, replication + prediction engage, tick-sync stable
   30 s under the default latency conditioner, zero panics across 3 runs. The only
   anomaly (a single capped 252-tick rollback) was a late-join transient that did not
   recur on a normal-timing join. (Full Ph0 spike log was in `SPIKE_PH0.md` — git history.)
-- **Browser/wasm leg also PASSED (2026-05-29):** the wasm client builds, boots
+- **Browser/wasm leg also PASSED:** the wasm client builds, boots
   (WebGL/ANGLE), and **connects over WebTransport + receives replicated server state**
   (verified twice, plus clean reconnect). The only remaining item is the subjective
   in-browser input-feel (non-gating; CDP-driving backgrounds the tab and Chrome's
@@ -72,10 +72,8 @@ only if a future lightyear targets avian 0.6 **and** ships a `parry-f64` path.
 ## D3 — Identity: **deterministic from provenance** (confirmed)
 Network id = pure function of provenance. Content/Derived → deterministic hash
 (local spawn, not replicated); Authoritative → server-allocated + spawn replicated;
-Local → never networked. Unreal net-stable-names / content-GUID model. Logic is
-already implemented + green in `proto-tests/` (23 tests) and shipped in `lunco-core`
-(original spec `PH1_CORE_CHANGES.md` is in git history; see README → *Entity Identity
-Mapping*).
+Local → never networked. Unreal net-stable-names / content-GUID model. The logic
+lives in `lunco-core` (see README → *Entity Identity Mapping*).
 
 ### D3a — Collision policy: **53-bit on the sync layer + debug-time collision check**
 Keep ids in the JS-safe 53-bit space (hard browser constraint). Add a debug-time
@@ -95,8 +93,7 @@ only for asset fetch/dedupe.
 ## D4 — Spawn authority: **content = local spawn + deterministic id; runtime = server spawns + replicates**
 The Unreal level-actor vs dynamic-actor split. Content-instanced entities are
 spawned locally on each peer (only their *state* replicates); runtime-born entities
-are spawned by the server, which allocates the id and replicates the spawn. (Shipped;
-original `PH1_CORE_CHANGES.md` Patch 3 is in git history.)
+are spawned by the server, which allocates the id and replicates the spawn.
 - Supersedes DESIGN_GAPS Q3.
 
 ## D5 — Time-warp in multiplayer: **host-only, applied to all; forbidden when ROS owns a vessel**

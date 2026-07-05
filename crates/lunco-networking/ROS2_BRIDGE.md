@@ -3,7 +3,7 @@
 > **⚠️ FUTURE — NOT YET IMPLEMENTED.** There is **no ros2/DDS code in `src/`**. This
 > document is a forward-looking design only (Phase 10 of the README roadmap). It
 > describes how a ROS2 bridge *would* slot onto the existing sync layer without
-> adding a new mechanism. Nothing here is shipped.
+> adding a new mechanism.
 
 How rover sync works when ROS2 is in the loop. Short version:
 
@@ -188,7 +188,7 @@ controller and sim share time, and let Copper's deterministic replay cover the
 Copper's clock is internal to *its* deterministic system; M6 remains the
 cross-peer/cross-runtime clock.
 
-## 7. Open questions — **staged 2026-05-29 (see `DECISIONS.md` › ROS2)**
+## 7. Open questions — (see `DECISIONS.md` › ROS2)
 1. **Coupling** → free-run + realtime cap first; controller-paced lockstep only if a real controller needs it.
 2. **rclrs in-process vs. separate process** → in-process default, unless ROS distro lifecycle coupling becomes painful.
 3. **Authority arbitration** (human + ROS both want a vessel) → deferred; possession model handles single-owner. Co-control is post-MVP.

@@ -280,4 +280,5 @@ Same end-state as the full hub-and-spoke design, built when it pays.
   delivers both.
 - [`21-domain-usd.md`](21-domain-usd.md) — scene/stage ownership (Twin → active
   stage → Grid); the USD spoke runs at that document↔world boundary.
-- [`40-asset-io.md`](40-asset-io.md), `021-asset-pipeline` — asset I/O context.
+- [`40-asset-io.md`](40-asset-io.md) — asset I/O constraints and the wasm-safe I/O layer.
+

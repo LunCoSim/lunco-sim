@@ -21,8 +21,8 @@
 
 ## The target use case (driving example)
 
-The lunar-descent cinematic ([`scenes/sandbox/lander_cinematic.usda`] +
-[`scenarios/lander_cinematic.rhai`]) authors camera cuts and beat timing in
+The lunar-descent cinematic (`scenes/sandbox/lander_cinematic.usda` +
+`scenarios/lander_cinematic.rhai`) authors camera cuts and beat timing in
 imperative rhai (`set_camera("TrackCam"); wait(6.0)`). You cannot **see** the
 cut sequence, **scrub** back to review a beat, or **drag** a cut to retime it.
 The Animate perspective turns that same cinematic into an editable timeline:
@@ -39,33 +39,33 @@ The rhai scenario keeps the *conditional / gated* logic (`wait_for`, arrival
 predicates); the *timed, declarative* parts (cuts, keyframes, markers) move into
 the timeline as data.
 
-## What already exists (reuse, not core work)
+## Substrate this builds on (reuse, not core work)
 
-| Capability | Mechanism | Status |
+| Capability | Mechanism | Notes |
 |---|---|---|
-| Seekable playhead w/ range + loop | `Playback { head, mode, rate, start, end, looping }` + `step_playhead` (`lunco-time/src/domain.rs:79,156`) | ✅ scrubs backward |
-| Transport command surface | `ControlAnimation { playing, seek_secs, rate }` (`domain.rs:318`); world clock `SetTimeTransport` (`domain.rs:360`) | ✅ API+MCP+UI+rhai |
-| Per-object independent clocks | `TimeDomain` / `TimeBinding` / `ResolvedDomains` (`domain.rs:50,118,126`) | ✅ |
-| Preview domain auto-bind + range | `AnimationPreview` (`domain.rs:294`); `bind_animated_to_preview` grows `Playback.start/end` from clip spans (`usd-bevy/src/lib.rs:1938`) | ✅ |
-| USD animation sampling | `sample_usd_animation` (`usd-bevy/src/lib.rs:1796`) reads domain time → evaluates `xformOp:*` / visibility / displayColor `timeSamples` → `Transform` | ✅ |
-| Clip span per prim | `animated_time_range(reader, path) -> (f64,f64)` (`usd-bevy/src/lib.rs:1733`) | ✅ |
-| Seconds ↔ timecode | `stage_time_codes_per_second` (`usd-bevy/src/lib.rs:1691`) | ✅ |
-| **Typed reversible keyframe write** | `UsdOp::SetTimeSample` / `RemoveTimeSample` (`lunco-usd/src/document.rs:229,251`) — each the other's inverse, test-covered (`:1244`) | ✅ **works, zero UI callers** |
-| Journaled/undoable apply | `ApplyUsdOp { doc, op }` → `wire_usd_journal_recorders` records lossless (fwd,inv) pair (`lunco-usd/src/commands.rs:539,553`) | ✅ shared undo (UI+CLI+agent) |
-| Attribute literal → typed value | `parse_attribute_value` (`usd-bevy/src/author.rs:186`) | ✅ UI only supplies a string |
-| Camera switch (single target) | `SetActiveCamera{name}` → `ActivateCamera(Entity)` → `SceneViewport::active_camera`, reconciled each frame (`usd-bevy/src/camera_switch.rs`) | ✅ imperative only |
-| Mounted follower cameras | `def Camera` under a body → `MountedCamera`, re-aimed each frame via `lunco:cameraLookAt` (`camera_mount.rs`) | ✅ |
-| Event bus (jump-target source) | `TelemetryEvent { name, source, … }` (XTCE/YAMCS-aligned); `emit()`/`wait_for()`; `TriggerZone`/`portEvents` authored markers | ✅ |
-| Declarative timeline data | JSON steps (`{wait}`,`{emit}`,`{cmd,params}`,`{move_to}`) persisted `<twin>/timelines/*.json`; `RunTimeline`/`Register`/`List`/`Get` (`lunco-scripting/commands.rs`) | ✅ |
-| 1-D transport widget (the seed) | `animation_transport_section` — play/pause/rewind + scrub slider + rate (`sandbox-edit/src/ui/inspector.rs:588`) | ✅ |
-| Reactive multi-instance panel host | `VizPanel` / `Panel2DCtx` read-only ctx + `defer` write (`lunco-viz/src/panel.rs,view.rs`) | ✅ pattern to copy |
-| Pannable/zoomable 2D paint plane | `lunco-canvas` — Scene/Viewport/Selection/Tool/Layer/Overlay, `click_and_drag`, layered painters | ✅ **track-canvas base** |
-| Value-curve lane | `egui_plot` via `LinePlot` (`lunco-viz/src/kinds/line_plot.rs`), time-on-X default | ✅ |
-| Per-edit-category colours | `lunco_theme::JournalTokens` (`lunco-theme/src/lib.rs:313`) + `ColorAlpha` | ✅ colour keys/markers |
+| Seekable playhead w/ range + loop | `Playback { head, mode, rate, start, end, looping }` + `step_playhead` (`lunco-time/src/domain.rs:79,156`) | scrubs backward |
+| Transport command surface | `ControlAnimation { playing, seek_secs, rate }` (`domain.rs:318`); world clock `SetTimeTransport` (`domain.rs:360`) | API+MCP+UI+rhai |
+| Per-object independent clocks | `TimeDomain` / `TimeBinding` / `ResolvedDomains` (`domain.rs:50,118,126`) | |
+| Preview domain auto-bind + range | `AnimationPreview` (`domain.rs:294`); `bind_animated_to_preview` grows `Playback.start/end` from clip spans (`usd-bevy/src/lib.rs:1938`) | |
+| USD animation sampling | `sample_usd_animation` (`usd-bevy/src/lib.rs:1796`) reads domain time → evaluates `xformOp:*` / visibility / displayColor `timeSamples` → `Transform` | |
+| Clip span per prim | `animated_time_range(reader, path) -> (f64,f64)` (`usd-bevy/src/lib.rs:1733`) | |
+| Seconds ↔ timecode | `stage_time_codes_per_second` (`usd-bevy/src/lib.rs:1691`) | |
+| **Typed reversible keyframe write** | `UsdOp::SetTimeSample` / `RemoveTimeSample` (`lunco-usd/src/document.rs:229,251`) — each the other's inverse, test-covered (`:1244`) | no UI callers yet |
+| Journaled/undoable apply | `ApplyUsdOp { doc, op }` → `wire_usd_journal_recorders` records lossless (fwd,inv) pair (`lunco-usd/src/commands.rs:539,553`) | shared undo (UI+CLI+agent) |
+| Attribute literal → typed value | `parse_attribute_value` (`usd-bevy/src/author.rs:186`) | UI only supplies a string |
+| Camera switch (single target) | `SetActiveCamera{name}` → `ActivateCamera(Entity)` → `SceneViewport::active_camera`, reconciled each frame (`usd-bevy/src/camera_switch.rs`) | imperative only |
+| Mounted follower cameras | `def Camera` under a body → `MountedCamera`, re-aimed each frame via `lunco:cameraLookAt` (`camera_mount.rs`) | |
+| Event bus (jump-target source) | `TelemetryEvent { name, source, … }` (XTCE/YAMCS-aligned); `emit()`/`wait_for()`; `TriggerZone`/`portEvents` authored markers | |
+| Declarative timeline data | JSON steps (`{wait}`,`{emit}`,`{cmd,params}`,`{move_to}`) persisted `<twin>/timelines/*.json`; `RunTimeline`/`Register`/`List`/`Get` (`lunco-scripting/commands.rs`) | |
+| 1-D transport widget (the seed) | `animation_transport_section` — play/pause/rewind + scrub slider + rate (`sandbox-edit/src/ui/inspector.rs:588`) | |
+| Reactive multi-instance panel host | `VizPanel` / `Panel2DCtx` read-only ctx + `defer` write (`lunco-viz/src/panel.rs,view.rs`) | pattern to copy |
+| Pannable/zoomable 2D paint plane | `lunco-canvas` — Scene/Viewport/Selection/Tool/Layer/Overlay, `click_and_drag`, layered painters | track-canvas base |
+| Value-curve lane | `egui_plot` via `LinePlot` (`lunco-viz/src/kinds/line_plot.rs`), time-on-X default | |
+| Per-edit-category colours | `lunco_theme::JournalTokens` (`lunco-theme/src/lib.rs:313`) + `ColorAlpha` | colour keys/markers |
 
-**Conclusion:** the **data + write-back + journaling + playhead** substrate is
-essentially complete. The gap is the **timeline VIEW/interaction layer** plus a
-small **camera-track sampler**. This is a panel, not a system.
+The **data + write-back + journaling + playhead** substrate is in place. What
+remains is the **timeline VIEW/interaction layer** plus a small **camera-track
+sampler** — a panel, not a system.
 
 ## What's missing (the actual work)
 
@@ -219,17 +219,17 @@ workbench panels (`VizPanel`-style multi-instance host, reactive `PanelCtx` read
 - **Marker jump list** — click an event marker to `seek` to its time.
 
 Frame discipline: read-only world access during the egui pass, all edits queued
-via `defer`/`ApplyUsdOp` and applied after (per [42-ui-frame-discipline]).
+via `defer`/`ApplyUsdOp` and applied after (per [42-ui-frame-discipline](42-ui-frame-discipline.md)).
 
 ## Standards alignment
 
-| Concern | Standard | Status / plan |
+| Concern | Standard | Mapping |
 |---|---|---|
-| Animation curves / keyframes | **OpenUSD** `timeSamples`, `timeCodesPerSecond` | ✅ already the data model |
+| Animation curves / keyframes | **OpenUSD** `timeSamples`, `timeCodesPerSecond` | the data model |
 | Editorial: tracks / clips / cuts / markers | **OpenTimelineIO (OTIO)** — `Timeline`/`Track`/`Clip`/`Gap`/`Marker`, `RationalTime`/`TimeRange` | adopt vocabulary now (Decision 1–2); `.otio` interchange later (Decision 4) |
-| Frame / time base | **SMPTE timecode** via `timeCodesPerSecond` | ✅ mapped |
-| Telemetry / event dictionary | **XTCE / YAMCS** | ✅ `TelemetryEvent` aligned; event lane reads it |
-| Mission structure | **SysML v2** | ⚠️ structure only, stub — not sequencing |
+| Frame / time base | **SMPTE timecode** via `timeCodesPerSecond` | mapped |
+| Telemetry / event dictionary | **XTCE / YAMCS** | `TelemetryEvent` aligned; event lane reads it |
+| Mission structure | **SysML v2** | structure only — not sequencing |
 | Interpolation for cuts | step ("held") vs USD linear/held/bezier | camera track = held; xform lanes = USD-native |
 
 ## Build order
@@ -257,11 +257,11 @@ interaction lift; 7 is optional pipeline interchange.
   writing the key (records reality, zero new schema), add marker anchors when
   pre-authoring gated cuts is needed.
 - **Camera blends** — OTIO transitions (`Transition` between clips) could drive a
-  camera *dolly/blend* between cuts instead of hard cuts; out of scope for v1
-  (held cuts only), but the schema leaves room (`lunco:interp`).
+  camera *dolly/blend* between cuts instead of hard cuts; held cuts only for now,
+  but the schema leaves room (`lunco:interp`).
 - **Multi-domain timelines** — per-vehicle preview domains already exist
   (`TimeBinding`); whether the perspective shows one global ruler or per-selection
-  rulers is a UI choice, deferred.
+  rulers is an open UI choice.
 
 ## Related
 

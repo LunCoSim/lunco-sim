@@ -1,6 +1,6 @@
 # Design: Rhai-Driven Dynamic Tutorial System
 
-**Status**: Proposal
+**Status**: Implemented (all six tutorial tasks — see Reference Implementation section below)
 **Supersedes the "Partial" status of** [spec.md](./spec.md) — this design fills the missing *objective/goal-evaluation framework* and generalizes tutorials beyond the lunica workbench to the sandbox.
 
 ---
@@ -194,4 +194,3 @@ existing `HelpAnchors` keys) is a clean, isolated follow-up.
 ### Why this is cheap
 - Step logic, event waiting, goal evaluation, command dispatch, world reads, scene loading, USD script attachment — **all already exist**.
 - New Rust ≈ 2 HUD commands + 2 spotlight commands + 1 event registrar + 1 small UI-gated crate. Everything else is Rhai + USD + TOML data.
-```

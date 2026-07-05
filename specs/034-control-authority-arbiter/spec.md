@@ -1,6 +1,6 @@
 # Spec 034 — Control Authority: Autopilot as a User
 
-**Status**: Proposal (rev 2)
+**Status**: Implemented
 **Owner**: —
 **Relates to**: [`001-vessel-control-architecture`](../001-vessel-control-architecture/spec.md) (the port-write control path), [`010-authority-rbac`](../010-authority-rbac/spec.md) (possession + the `authorize` gate this reuses)
 
@@ -149,23 +149,23 @@ One owner ⇒ one writer per tick ⇒ no competing port writes ⇒ no jitter. Di
 - **`source` tag on `SetPorts` + guard in `on_set_ports`** — makes the sink source-aware. Rejected for now: `SetPorts` is the networked control command with prediction fields; adding an origin tag is invasive, and possession already answers "who may write this vessel." Revisit only if a rogue non-possessor emitter appears.
 - **Priority ladder baked in Rust (Owner > Operator > AiAgent > Observer)** — the `AuthorityRole` lattice already encodes the floor; the *stealing* policy on top is deliberately rhai (FR-4) so a deployment tunes it without a rebuild.
 
-## 7. Task breakdown
+## 7. What was built
 
-1. **Prelude fix (prerequisite — DONE):** `control.rhai` `drive()`/`brake()` → `SetPorts`; `nav.rhai` doc. Unblocks scripted driving. (`drive()` writes throttle/steer/brake=0; `brake()` writes brake only, since the mix zeroes throttle/steer under brake.)
-2. **Headless `lunco-autopilot` crate (DONE):** `Autopilot` component; `setup_autopilot_session` registers a reserved `AiAgent` `UserSession` + `claim`s the vessel; `drive_autopilots` emits `SetPorts` while `engaged && owns`. Deps `lunco-core` + `lunco-cosim` only. `AutopilotPlugin` added on the control path in `luncosim` + `lunco-sandbox` (so `--no-ui` runs it).
-3. **General ownership yield (DONE):** `drive_from_bindings` skips any vessel owned by a session `≠ LocalSession`. The single `lunco-controller` change; `Option`-guarded.
-4. **Takeover rule authored in rhai (DONE):** `assets/scripting/policy/control_authority.rhai` (`may_take_control`), registered at startup by `lunco-scripting::register_builtin_policies` under `CONTROL_AUTHORITY_HOOK`; consulted by `record_possession_authority` via `lunco_core::session::may_take_control` (fail-closed). No hardcoded steal rule in Rust; hot-replaceable via `SetScriptedPolicy`.
-5. **Behaviour = data-authored `lunco-behavior` tree (DONE):** `BehaviorSpec` (serde, rhai/JSON) → `build_tree` → `AutopilotBehavior` component ticked in `drive_autopilots`; Rust leaves (`nav_setpoint` math); hot-swap via the `SetAutopilotBehavior` command. Made the `lunco-behavior` kernel `Send + Sync` (`BoxNode`) for per-entity ECS storage.
+1. **Prelude:** `control.rhai` `drive()`/`brake()` → `SetPorts`; `nav.rhai` doc. (`drive()` writes throttle/steer/brake=0; `brake()` writes brake only, since the mix zeroes throttle/steer under brake.)
+2. **`lunco-autopilot` crate:** `Autopilot` component; `setup_autopilot_session` registers a reserved `AiAgent` `UserSession` + `claim`s the vessel; `drive_autopilots` emits `SetPorts` while `engaged && owns`. Deps `lunco-core` + `lunco-cosim` only. `AutopilotPlugin` added on the control path in `luncosim` + `lunco-sandbox` (so `--no-ui` runs it).
+3. **Ownership yield:** `drive_from_bindings` skips any vessel owned by a session `≠ LocalSession`. The single `lunco-controller` change; `Option`-guarded.
+4. **Takeover rule in rhai:** `assets/scripting/policy/control_authority.rhai` (`may_take_control`), registered at startup by `lunco-scripting::register_builtin_policies` under `CONTROL_AUTHORITY_HOOK`; consulted by `record_possession_authority` via `lunco_core::session::may_take_control` (fail-closed). No hardcoded steal rule in Rust; hot-replaceable via `SetScriptedPolicy`.
+5. **Behaviour = data-authored `lunco-behavior` tree:** `BehaviorSpec` (serde, rhai/JSON) → `build_tree` → `AutopilotBehavior` component ticked in `drive_autopilots`; Rust leaves (`nav_setpoint` math); hot-swap via the `SetAutopilotBehavior` command. The `lunco-behavior` kernel is `Send + Sync` (`BoxNode`) for per-entity ECS storage.
 
 ## 8. Testing
 
-- **Headless mechanism (DONE — `crates/lunco-autopilot/tests/authority.rs`):** autopilot engages → registers an `AiAgent` session + owns its vessel + drives it; **stops the instant it loses ownership** (simulated takeover) — the single-writer / no-jitter invariant; two autopilots own distinct vessels and drive only their own (multi-actor non-interference). Runs on `Standalone` with no avatar/UI.
-- **Behaviour tree (DONE — `crates/lunco-autopilot/tests/behavior.rs`):** a JSON-authored `BehaviorSpec` (the exact shape rhai emits) compiles to a tree that drives toward a waypoint and **advances the sequence** on arrival; `nav_setpoint` brakes within radius / drives when far; malformed specs error cleanly. Plus `lunco-behavior`'s own 11 kernel tests (now `Send + Sync`).
-- **Integration (future):** full `PossessVessel` takeover through `record_possession_authority` + the `lunco-controller` yield, asserting the human emits no `SetPorts` for an autopilot-owned vessel and takes over on possess.
-- **Regression (future):** the `first_drive` tutorial (autopilot + possess) drives to the flag without wheel oscillation.
+- **Headless mechanism** (`crates/lunco-autopilot/tests/authority.rs`): autopilot engages → registers an `AiAgent` session + owns its vessel + drives it; stops the instant it loses ownership (simulated takeover) — the single-writer / no-jitter invariant; two autopilots own distinct vessels and drive only their own (multi-actor non-interference). Runs on `Standalone` with no avatar/UI.
+- **Behaviour tree** (`crates/lunco-autopilot/tests/behavior.rs`): a JSON-authored `BehaviorSpec` (the exact shape rhai emits) compiles to a tree that drives toward a waypoint and advances the sequence on arrival; `nav_setpoint` brakes within radius / drives when far; malformed specs error cleanly. Plus `lunco-behavior`'s own 11 kernel tests (now `Send + Sync`).
+- **Integration:** full `PossessVessel` takeover through `record_possession_authority` + the `lunco-controller` yield, asserting the human emits no `SetPorts` for an autopilot-owned vessel and takes over on possess.
+- **Regression:** the `first_drive` tutorial (autopilot + possess) drives to the flag without wheel oscillation.
 
-## 9. Open questions
+## 9. Resolved design decisions
 
-- **Reserved `SessionId` band for autopilots** — pick a range that can't collide with `SessionId::LOCAL` or host-minted client ids. (One local autopilot per vessel to start.)
-- **Default `PossessionPolicy` for autopilot vessels** — `Exclusive` (deliberate takeover) vs `LastWins` (grab-to-steal). The stealing `allow` policy composes with either; default likely `LastWins` for the "grab the stick" feel, gated by the rhai policy.
-- **Should the human yield be automatic on input, or only on explicit `PossessVessel`?** Rev 2 chooses explicit possess (event-driven, no input-edge detection). Auto-steal-on-first-input is a later nicety layered on the same possess call.
+- **Reserved `SessionId` band:** one local `AiAgent` session per vessel (`SessionId::LOCAL` band offset by vessel entity id).
+- **Default `PossessionPolicy`:** `LastWins` (grab-to-steal), gated by the rhai `may_take_control` policy for the "grab the stick" feel.
+- **Human yield mechanism:** explicit `PossessVessel` only (event-driven, no input-edge detection). Auto-steal-on-first-input is a later nicety layered on the same possess call.

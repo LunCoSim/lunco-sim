@@ -1,13 +1,13 @@
 # 15 — Adaptive Fidelity (Multi-Clock & LoD)
 
-> Status: Design · Audience: contributors planning multi-clock / level-of-detail (post-MVP, task #96)
+> Status: Design · Audience: contributors planning multi-clock / level-of-detail
 >
 > Multiple clocks, multiple fidelities per participant, policy-driven
 > switching. Handles the mission-scope vs physics-scope time-scale split,
 > time-warp, and CPU-budget-driven level-of-detail.
 
 This extends [`14-simulation-layers.md`](14-simulation-layers.md). Read
-that first. Implementation is tracked by task #96 (post-MVP).
+that first.
 
 ## Problem
 
@@ -166,9 +166,7 @@ same commands.
 
 - **`14-simulation-layers.md`** — the Run/Scenario/Twin shape.
 - **`22-domain-cosim.md`** — pipeline + Backend traits.
-- **Task #94** — four-layer architecture formalisation.
-- **Task #95** — BackendRegistry + Twin scenarios.
-- **Task #96** — this spec's implementation task.
+- **`10-document-system.md`** — the Document/DocumentOp/undo/redo system.
 
 ## Out of scope
 

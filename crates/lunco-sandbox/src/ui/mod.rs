@@ -81,20 +81,14 @@ impl Plugin for SandboxUiPlugin {
             .add_plugins(lunco_materials::ShaderMaterialPlugin)
             // The shared tutorial launcher: registry + 🎓 menu + panel +
             // Start/Skip/SetSubsystemEnabled + progress + onboarding + F1.
-            .add_plugins(lunco_tutorial::TutorialPlugin)
-            // Rover panels + register the sandbox's tutorials. ONE closure: Bevy
-            // keys plugin uniqueness by type-name, and every `|app| {…}` in this
-            // `build` shares the name `{{closure}}` — a second one panics
-            // ("plugin already added"). So all app-level registration goes here.
+            // Tutorials load from assets/tutorials/sandbox/tutorials.json (data, not code).
+            .add_plugins(lunco_tutorial::TutorialPlugin { app: "sandbox".into() })
+            // Rover panels. ONE closure: Bevy keys plugin uniqueness by type-name,
+            // and every `|app| {…}` in this `build` shares the name `{{closure}}` — a
+            // second one panics ("plugin already added"). So all app-level panel
+            // registration goes here.
             .add_plugins(|app: &mut App| {
-                use lunco_tutorial::{TutorialAppExt, TutorialMeta as T};
                 use lunco_workbench::WorkbenchAppExt;
-                // Tutorials: each is ONE source — a standalone `.rhai` that
-                // `load_scene`s its own environment; the chain (sandbox-intro →
-                // first-drive → lander) is data (`next`), not a USD `nextScene`.
-                app.register_tutorial(T { id: "sandbox-intro", title: "Sandbox Intro", blurb: "A guided coach-mark tour of the workspace — viewport, browser, inspector, console. Chains into First Drive.", app: "sandbox", difficulty: "beginner", script: "sandbox/sandbox_intro.rhai", first_start: true, next: Some("first-drive") });
-                app.register_tutorial(T { id: "first-drive", title: "First Drive", blurb: "Take control of a rover and drive it to a flag on the lunar surface. Teaches possession and driving.", app: "sandbox", difficulty: "beginner", script: "sandbox/first_drive.rhai", first_start: false, next: Some("lander-mission") });
-                app.register_tutorial(T { id: "lander-mission", title: "Lander & Rover Mission", blurb: "Watch a powered descent land a rover, then drive the deployed rover through a course.", app: "sandbox", difficulty: "intermediate", script: "sandbox/lander_mission.rhai", first_start: false, next: None });
                 // Rover-specific panels and the attach-a-model click flow.
                 app.register_panel(code_panel::CodePanel);
                 app.register_panel(models_palette::ModelsPalette);
@@ -137,6 +131,30 @@ impl Plugin for SandboxUiPlugin {
             // only; a headless server has no user to control.
             .add_systems(PostUpdate,
                 spawn_fallback_avatar.after(avian3d::prelude::PhysicsSystems::Writeback));
+
+        // Scene-backed tutorials declare their catalog entry on their OWN scene
+        // (`lunco:tutorial*` on the default prim), the hybrid alternative to a
+        // `tutorials.json` row — the `.usda` that IS the lesson environment
+        // doubles as the catalog entry. Scan + register them alongside the JSON
+        // manifest (loaded by `TutorialPlugin`, above; idempotent on `id`).
+        // Data-driven: a new scene lesson is a `.usda` with the block — no code
+        // here. Sandbox-only (lunica/luncosim have no scene tutorials), so
+        // `openusd` stays out of the shared launcher shell.
+        {
+            use lunco_tutorial::TutorialAppExt;
+            for m in lunco_usd_bevy::tutorial_scene_metas("sandbox") {
+                app.register_tutorial(lunco_tutorial::TutorialMeta {
+                    id: m.id,
+                    title: m.title,
+                    blurb: m.blurb,
+                    app: "sandbox".into(),
+                    difficulty: m.difficulty,
+                    script: m.script,
+                    first_start: false,
+                    next: m.next,
+                });
+            }
+        }
 
         // Embed the FULL lunica workbench as the "Design" workspace via the
         // shared bundle — same clipboard bridge, autosave, worker, and panels
@@ -493,13 +511,13 @@ fn render_tutorials_submenu(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
             return;
         }
 
-        for meta in &registry.tutorials {
-            let done = progress.completed.iter().any(|c| c == meta.id);
+        for meta in registry.ordered() {
+            let done = progress.completed.iter().any(|c| c == &meta.id);
             // ✓ completed · 🎓 fresh, then the title and a dim difficulty chip.
             let label = format!("{} {}  ·  {}", if done { "✓" } else { "🎓" }, meta.title, meta.difficulty);
             let resp = ui.button(label);
             // Hover tip: the plain-language "what this teaches" blurb.
-            let resp = resp.on_hover_text(meta.blurb);
+            let resp = resp.on_hover_text(meta.blurb.as_str());
             if resp.clicked() {
                 world.trigger(lunco_tutorial::StartTutorial { id: meta.id.to_string() });
                 ui.close();

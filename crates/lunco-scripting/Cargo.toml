@@ -18,6 +18,9 @@ lunco-twin-journal = { path = "../lunco-twin-journal" }
 # the macros + `Ack`/`OpId`/`CommandResults` substrate in lunco-core. The API
 # discovers them by reflection (AppTypeRegistry) — no direct lunco-api dep.
 lunco-core = { path = "../lunco-core" }
+# `fnv1a64` — content-address a scenario's source to a cache key for the
+# compiled-AST memo (Substrate E fast tier; local/ephemeral, never on wire).
+lunco-hash = { path = "../lunco-hash" }
 lunco-fsw = { path = "../lunco-fsw" }
 lunco-time = { path = "../lunco-time" }
 pyo3 = { version = "0.23", optional = true }

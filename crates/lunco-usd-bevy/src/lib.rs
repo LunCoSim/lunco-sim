@@ -1673,6 +1673,51 @@ pub fn read_default_prim_attr(text: &str, attr: &str) -> Option<String> {
     read_token(&data, &path, attr)
 }
 
+/// Catalog metadata a **scene-backed** tutorial declares on its own scene, as an
+/// alternative to a `tutorials.json` row: the `.usda` that IS the lesson
+/// environment also carries its catalog entry on the default prim
+/// (`lunco:tutorialId`, `…Title`, `…Blurb`, `…Difficulty`, `…Script`, `…Next`).
+/// The launcher merges these with the JSON manifest (idempotent on `id`). A
+/// scene without `lunco:tutorialId` is just an environment and is ignored.
+pub struct UsdTutorialMeta {
+    pub id: String,
+    pub title: String,
+    pub blurb: String,
+    pub difficulty: String,
+    /// The orchestrator `.rhai`, relative to `assets/tutorials/` (as in the JSON
+    /// manifest) — the scene names its own lesson script explicitly.
+    pub script: String,
+    pub next: Option<String>,
+}
+
+/// Scan `assets/tutorials/<app>/*.usda` for lesson scenes that declare their own
+/// catalog metadata (`lunco:tutorial*` on the default prim) and return them.
+///
+/// A composition-free single-layer read ([`read_default_prim_attr`]) per scene —
+/// native reads disk (live-editable), wasm the embed, via
+/// [`lunco_assets::tutorials::tutorial_scene_sources`]. Scenes missing
+/// `lunco:tutorialId` or `lunco:tutorialScript` are skipped (they're plain
+/// environments, not self-describing tutorials). The caller registers the
+/// results into the shared `TutorialRegistry` alongside the JSON manifest.
+pub fn tutorial_scene_metas(app: &str) -> Vec<UsdTutorialMeta> {
+    lunco_assets::tutorials::tutorial_scene_sources(app)
+        .into_iter()
+        .filter_map(|(_rel, text)| {
+            let id = read_default_prim_attr(&text, "lunco:tutorialId")?;
+            let script = read_default_prim_attr(&text, "lunco:tutorialScript")?;
+            Some(UsdTutorialMeta {
+                id,
+                title: read_default_prim_attr(&text, "lunco:tutorialTitle").unwrap_or_default(),
+                blurb: read_default_prim_attr(&text, "lunco:tutorialBlurb").unwrap_or_default(),
+                difficulty: read_default_prim_attr(&text, "lunco:tutorialDifficulty")
+                    .unwrap_or_default(),
+                script,
+                next: read_default_prim_attr(&text, "lunco:tutorialNext"),
+            })
+        })
+        .collect()
+}
+
 /// True if the prim at `path` applies the named API schema, by exact
 /// token match against its `apiSchemas` list (or list-op). Canonical
 /// shared helper — `lunco-usd-avian` and `lunco-usd-sim` both call

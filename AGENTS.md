@@ -177,6 +177,14 @@ Modelica simulator, and a heavyweight egui UI. Core rules:
   never `(*arc).clone()` a heavy shared read-only container (borrow
   `&*arc`); do once-per-entity setup in an `OnAdd<T>` observer, not a
   `run_if(Without<Marker>)` poll.
+- **~1 FPS when the window is backgrounded is NORMAL.** When the app is not
+  the foreground / focused window, it throttles to roughly 1 frame per second
+  (winit/OS power-save — the render loop backs off for an unfocused window).
+  This is expected energy-saving, **not a hang, freeze, or regression** — do
+  not "fix" it. It also means a screenshot or an FPS reading taken while the
+  window is backgrounded reflects the throttled rate, not real performance;
+  bring the window to the foreground (or measure the headless `--no-ui` loop)
+  before judging frame rate.
 
 **Full guide** (the four reactive patterns, off-thread/cache recipes,
 decision checklist, profiling workflow):

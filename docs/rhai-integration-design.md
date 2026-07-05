@@ -1,23 +1,23 @@
 # Rhai Integration Design — scripting & scenarios
 
-Status: **IMPLEMENTED** + design rationale. Builds green native (default), `--no-default-features` (script-free), `python`, and `wasm32-unknown-unknown`. Verified by `crates/lunco-scripting/tests/rhai_rover_live_test.rs` (21 live end-to-end tests) + lib tests. Sections 0–8 below are the original design rationale; this header is the as-built reference.
+Rhai drives scenarios — *"rover moves along a path via checkpoints, loads next
+goals"* — and, more broadly, **manipulates every object in the sim (Twin, USD,
+Modelica, cosim, scene, vehicles) from script.** The engine builds on native
+(default), `--no-default-features` (script-free), `python`, and
+`wasm32-unknown-unknown`.
 
 > **Authoring a scenario?** Read the **[Scripting Guide](./scripting-guide.md)** —
-> a task-oriented how-to. This document is the design rationale + as-built notes.
+> a task-oriented how-to. This document is the architecture + design rationale.
 
-Goal (met): drive scenarios from rhai — *"rover moves along a path via
-checkpoints, loads next goals"* — and, more broadly, **manipulate every object in
-the sim (Twin, USD, Modelica, cosim, scene, vehicles) from script.**
-
-### Shipped Features
+### Capabilities
 
 - **Scenario parameters** — `RunScenario { …, params }` (JSON object string) →
   read in-script as the `params` constant; one source serves many entities.
-- **Lifecycle completeness** — `on_stop` teardown hook (hot-reload / detach /
-  despawn) + `SetScenarioPaused` / `StopScenario`. The whole lifecycle now lives
-  in a **language-neutral driver** (`scenario.rs`, `ScenarioRuntime` trait) over a
-  **native world bridge** (`bridge_core.rs`, `ValueBuilder` — no JSON on the read
-  path); rhai is one backend, Python can implement the same traits.
+- **Lifecycle** — `on_stop` teardown hook (hot-reload / detach / despawn) +
+  `SetScenarioPaused` / `StopScenario`. The lifecycle lives in a **language-neutral
+  driver** (`scenario.rs`, `ScenarioRuntime` trait) over a **native world bridge**
+  (`bridge_core.rs`, `ValueBuilder` — no JSON on the read path); rhai is one
+  backend, Python can implement the same traits.
 - **Introspection** — `ScriptStatus` (compile/runtime health) + `ScriptInspect`
   (live `this` state, defined hooks, generation, running/paused).
 - **Authoring catalog** — `ScriptingCatalog` aggregates the full callable surface
@@ -28,15 +28,15 @@ the sim (Twin, USD, Modelica, cosim, scene, vehicles) from script.**
   auto-attaches + runs on spawn (writeback to the prim is not yet supported).
 - **Host-authoritative gate** — script systems run on Host / Standalone, never on
   a networked Client (which receives behaviour via replication).
-- **Legacy removed** — the old Python `inputs`/`outputs` dict execution model
-  (`run_scripted_models`) and the `ScriptOp` I/O-pin variants are gone; Python
-  scenarios will come back via `PythonScenarioRuntime` (not the dict path).
+
+Python scenarios run via `PythonScenarioRuntime` implementing the same
+`ScenarioRuntime` trait — not the legacy `inputs`/`outputs` dict path.
 
 ---
 
-## STATUS — what's shipped (as-built reference)
+## Running scenarios
 
-**Principle held:** core = mechanism, rhai = ALL policy (objectives, navigation,
+**Principle:** core = mechanism, rhai = ALL policy (objectives, navigation,
 behavior trees, sequencing live in hot-reloadable `.rhai`, never compiled in).
 
 ### How to load & run a scenario
@@ -88,10 +88,10 @@ NB: `goto` is a reserved word in rhai — the nav helper is `nav_to`.
 
 ### Events / pub-sub
 
-`emit()` reuses the existing **`TelemetryEvent`** bus (observer-dispatched; YAMCS
+`emit()` reuses the **`TelemetryEvent`** bus (observer-dispatched; YAMCS
 mnemonic in `name`) — no new event type. External clients receive script events
-via `SubscribeTelemetry` (now functional — `lunco-api` `executor.rs` +
-`subscription.rs`). Scripts receive events via `on_event` (frame-delayed: emit on
+via `SubscribeTelemetry` (`lunco-api` `executor.rs` + `subscription.rs`). Scripts
+receive events via `on_event` (frame-delayed: emit on
 tick N → deliver tick N+1 → deterministic actor model). Inter-script interaction
 is bus-only (isolated VMs); see §7f.
 
@@ -148,26 +148,25 @@ Representative commands already covering the user's surface:
 
 ---
 
-## 1. What exists vs. what must be built (grounded)
+## 1. The capability surface (grounded)
 
-| Capability | State | Evidence |
-|---|---|---|
-| Universal command bus | ✅ | ~90 `#[Command]`, `lunco-command-macro` |
-| Dispatch-by-name (reflect) | ✅ | `executor.rs:90-162` (`ReflectEvent::trigger`) |
-| RBAC/authz on commands | ✅ | `#[authz_target]`, `SessionRegistry::may_possess`, sender-identity binding |
-| Stable entity ids | ✅ | `GlobalEntityId(u64)` (`lunco-core/src/lib.rs:121`), `ApiEntityRegistry::resolve` |
-| Scene/Twin/Modelica/cosim verbs | ✅ | LoadScene/Spawn/SetObjectProperty/Compile/... |
-| Sandboxed rhai engine | ✅ | `RhaiBackend` op/depth/size caps (`backend.rs:40-77`) |
-| **rhai → World access** | ❌ | `ScriptBackend::eval(&self, &str)` is pure; no World, no host fns |
-| **Persistent script state across ticks** | ❌ | `eval` builds a fresh `Engine` per call; `run_scripted_models` recompiles every tick |
-| **Temporal sequencing (wait/over-time)** | ❌ | no coroutine/yield/await/scheduler anywhere |
-| **Navigation: waypoints/goals/arrival/path-follow** | ❌ | zero hits; only camera follow exists. `SetPorts` writes raw `throttle`/`steer`, re-commanded every tick (no setpoint) |
-| **By-name entity lookup** | ❌ | must `ListEntities` + match `Name` string |
-| **Timer "after N seconds"** | ❌ | derive from `SimTick`×`SECS_PER_TICK` or `WorldTime` |
-| Telemetry subscribe (events to script) | ⚠️ stub | `executor.rs:584` returns "Subscription created" |
+The pieces that make "manipulate everything from rhai" work, and where each lives:
 
-Net: the *manipulation* surface is done; what's missing is (a) the World bridge,
-(b) persistent/over-time execution, (c) navigation primitives.
+| Capability | Evidence |
+|---|---|
+| Universal command bus | ~90 `#[Command]`, `lunco-command-macro` |
+| Dispatch-by-name (reflect) | `executor.rs:90-162` (`ReflectEvent::trigger`) |
+| RBAC/authz on commands | `#[authz_target]`, `SessionRegistry::may_possess`, sender-identity binding |
+| Stable entity ids | `GlobalEntityId(u64)` (`lunco-core/src/lib.rs:121`), `ApiEntityRegistry::resolve` |
+| Scene/Twin/Modelica/cosim verbs | LoadScene/Spawn/SetObjectProperty/Compile/... |
+| Sandboxed rhai engine | `RhaiBackend` op/depth/size caps (`backend.rs:40-77`) |
+| rhai → World access | `ScenarioRuntime` exposes host functions to rhai engine |
+| Persistent script state across ticks | `this` map persisted on scenario entity across ticks |
+| Temporal sequencing (wait/over-time) | Task sequencer in `prelude/tasks.rhai`; coroutine-style via `__run_task` |
+| Navigation: waypoints/goals/arrival/path-follow | `nav_to`, `drive`, `run_plan` in `prelude/nav.rhai` |
+| By-name entity lookup | `find(name)` verb |
+| Timer "after N seconds" | `wait(secs)` / `wait_until(cond)` in sequencer |
+| Telemetry subscribe (events to script) | `on_event` hook, `seq_note_event` delivery |
 
 ---
 
@@ -280,10 +279,10 @@ Both current paths are one-shot/recompile-every-tick. Layer B needs
 
 ---
 
-## 5. Navigation primitives (must build — none exist)
+## 5. Navigation primitives
 
 `SetPorts` is the only actuator (writes `throttle`/`steer` inputs → `DriveMix` →
-DAC → wheel physics). Everything goal-shaped must be built. Minimal native set
+DAC → wheel physics); everything goal-shaped builds on it. The native set
 (registered as rhai verbs), all deterministic, emitting `SetPorts` each tick:
 
 ```rust
@@ -307,24 +306,25 @@ authors the waypoint list.
 Run scenarios **host-authoritative** (server/owner): the scenario emits
 `SetPorts`/etc., which already replicate via the `CommandBus` `SyncChannel` and
 client prediction (`AppliedInputSeq`, `OwnedInputLog`). This avoids divergence —
-clients don't run scenario logic, they receive its command stream. Seed any
-randomness explicitly (rhai `rand` left OFF) so a re-run reproduces. This matches
-the existing determinism discipline (DAC, steering, cosim).
+clients don't run scenario logic, they receive its command stream. `rand()` uses
+deterministic per-hook seeding (`(entity, tick, hook)` triple) — a re-run at the
+same tick produces the same sequence. This matches the existing determinism
+discipline (DAC, steering, cosim).
 
 ---
 
-## 7. Phased plan
+## 7. Implementation structure
 
-1. **P1 — World bridge + `cmd()`/`query()`/`find()`** (exclusive-system context,
-   reflect-dispatch, RBAC gate). Delivers *"manipulate everything"* immediately,
-   one-shot. Ship the `prelude.rhai`.
-2. **P2 — persistent scenario runtime** (`ScenarioRuntime` AST+Scope,
-   `on_start`/`on_tick`/`on_event`, hot-reload via `ScriptDocument`).
-3. **P3 — navigation primitives** (`distance`/`arrived`/`steer_toward` +
-   `PathFollower`) → the checkpoint/goal scenario works end to end.
-4. **P4 — polish**: declarative-plan executor, scenario examples, editor/Inspector
-   params (reuse self-describing-shader pattern), telemetry→`on_event` wiring
-   (finish the subscribe stub).
+The system is organized into four layers, each building on the one below:
+
+1. **World bridge + `cmd()`/`query()`/`find()`** — exclusive-system context,
+   reflect-dispatch, RBAC gate; `prelude.rhai` provides the core verb table.
+2. **Persistent scenario runtime** — `ScenarioRuntime` AST+Scope,
+   `on_start`/`on_tick`/`on_event`, hot-reload via `ScriptDocument`.
+3. **Navigation primitives** — `distance`/`arrived`/`steer_toward` +
+   `PathFollower`; the checkpoint/goal scenario runs end to end.
+4. **Authoring polish** — declarative-plan executor, scenario examples,
+   editor/Inspector params, telemetry→`on_event` wiring.
 
 ---
 
@@ -582,9 +582,9 @@ behavior) vs *centralized* (one scenario `cmd()`s many entities).
    deterministically) → "A emits, B reacts" is order-independent. One-tick latency.
    Same-tick delivery only for explicitly local/non-replicated events.
 
-## 8. Open decisions for the user
+## 8. Design decisions
 
-### Resolved Decisions
+### Resolved
 - Sequencing model → **callbacks first** (persistent rhai, `on_tick`/`on_event`),
   declarative plans added later.
 - Bridge scope → **all commands, behind RBAC** (generic `cmd()`).

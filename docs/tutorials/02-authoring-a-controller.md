@@ -101,3 +101,10 @@ it a der-fed live input if you want it editable at sim-rate — see the skill).
 
 Next: read the [lander GNC](../../assets/models/Lander.mo) — it's this same pattern with
 a velocity-scheduled descent, IMU attitude, and τ=I·α torque wired from inertia.
+
+## Related
+
+- **Previous walkthrough**: [01 — Lander → Rover mission](01-lander-rover-mission.md) — the full mission this controller flies in.
+- **Reference skills**: [authoring-vessel-controllers](../../skills/authoring-vessel-controllers/SKILL.md) (dense reference for this stack),
+  [author-scenario](../../skills/author-scenario/SKILL.md) (the rhai supervisor layer),
+  [compose-multidomain-twin](../../skills/compose-multidomain-twin/SKILL.md) (dropping the vessel into a mission). Full index: [skills/](../../skills/README.md).

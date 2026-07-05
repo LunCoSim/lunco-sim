@@ -37,7 +37,8 @@ The host exposes a minimal generic bridge — `cmd` / `query` / `get` /
 `world_pos` / `world_forward` / `find` / `name` / `parent` / `children` /
 `list_entities` / `emit` / `sim_tick` / `dt` / `elapsed_seconds`. Everything
 ergonomic (navigation, sensing, sequencing, selection) is **policy** authored in
-the hot-reloadable [`rhai/prelude.rhai`](rhai/prelude.rhai) — no Rust rebuild to
+Everything ergonomic (navigation, sequencing, selection) is **policy** authored in
+the hot-reloadable [`prelude/`](../../assets/scripting/prelude) — no Rust rebuild to
 extend it.
 
 Scenarios are **host-authoritative**: they run on the host and in single-player,
@@ -60,7 +61,7 @@ never on a networked client (which receives behaviour via replication).
 | [`src/commands.rs`](src/commands.rs) | the `#[Command]` entry points |
 | [`src/catalog.rs`](src/catalog.rs) · [`src/diagnostics.rs`](src/diagnostics.rs) | discovery + introspection queries |
 | [`src/tool_libs.rs`](src/tool_libs.rs) · [`src/timelines.rs`](src/timelines.rs) | tool / timeline registries + Twin persistence |
-| [`rhai/prelude.rhai`](rhai/prelude.rhai) · [`rhai/examples/`](rhai/examples) · [`rhai/tools/`](rhai/tools) | the helper library, example scenarios, example tool libraries |
+| [`prelude/`](../../assets/scripting/prelude) · [`examples/`](../../assets/scripting/examples) · [`tools/`](../../assets/scripting/tools) | the helper library, example scenarios, example tool libraries |
 
 ## Cargo features
 

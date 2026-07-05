@@ -18,13 +18,13 @@ description: >
 # Test the workbench via API
 
 The lunica exposes a reflect-registered Event API on
-`--api PORT` (default 3000). UI verification — diagrams rendering,
+`--api PORT` (default 4101). UI verification — diagrams rendering,
 drill-ins, simulations, file ops — should be driven from this API
 rather than asking the user to click.
 
 ## ⚠️ NEVER kill the user's running workbench
 
-**Default rule: if a workbench is already running on port 3000,
+**Default rule: if a workbench is already running on port 4101,
 DO NOT send `Exit` and DO NOT start a new one.** Take the screenshot
 / run the API command against the existing instance.
 
@@ -52,17 +52,17 @@ restart to "start clean."
 ```bash
 # 1. Start. MUST use run_in_background:true of the Bash tool, otherwise
 #    the bash wrapper exits and the workbench dies with it.
-cargo run --bin lunica -- --api 3000   # run_in_background:true
+cargo run --bin lunica -- --api 4101   # run_in_background:true
 
 # 2. Wait for API. Use a Monitor with an until-loop, NOT chained sleeps:
-until curl -s -o /dev/null -X POST http://127.0.0.1:3000/api/commands \
+until curl -s -o /dev/null -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" \
   -d '{"command":"Ping","params":{}}' 2>/dev/null; do sleep 1; done
 
 # 3. Send commands (see catalog below).
 
 # 4. Stop with Exit, NEVER pkill / kill (user has to confirm those):
-curl -s -X POST http://127.0.0.1:3000/api/commands \
+curl -s -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" \
   -d '{"command":"Exit","params":{}}'
 ```
@@ -74,7 +74,7 @@ it the API logs `Deserialization error: invalid type: null, expected
 reflected struct value` and the command silently no-ops.
 
 ```bash
-curl -s -X POST http://127.0.0.1:3000/api/commands \
+curl -s -X POST http://127.0.0.1:4101/api/commands \
   -H "Content-Type: application/json" \
   -d '{"command":"OpenClass","params":{"qualified":"Modelica.Blocks.Continuous.PID"}}'
 ```
@@ -120,8 +120,7 @@ needs them.
 7. FitCanvas + sleep 1.
 8. CaptureScreenshot → /tmp/foo.png.
 9. Read the PNG to inspect.
-10. Tail /tmp/claude-1000/.../tasks/<task-id>.output for log lines
-    (`[Projection] import done in Xms: N nodes M edges`, etc.).
+10. Check the process log for lines like `[Projection] import done in Xms: N nodes M edges`.
 11. Exit when done.
 ```
 
@@ -149,7 +148,7 @@ needs them.
   separate `std::thread::spawn` and use the cache-only resolver in the
   projection (`peek_msl_class_cached`).
 - **Workbench seems stale after rebuild**: it didn't restart. Send
-  Exit, verify port 3000 freed, then start.
+  Exit, verify port 4101 freed, then start.
 
 ## Add a command
 

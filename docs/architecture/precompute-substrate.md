@@ -1,5 +1,7 @@
 # Precompute substrate (`lunco-precompute`) — Substrate B
 
+> Substrate B of the [efficiency architecture](efficiency-and-maintainability.md).
+
 *Part of the efficiency/maintainability architecture. Builds on
 `hashing-substrate.md` (Substrate E) and `caching-and-precompute-strategy.md`.*
 

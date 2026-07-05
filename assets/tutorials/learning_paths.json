@@ -35,6 +35,18 @@
         { "qualified": "Modelica.Mechanics.Translational.Examples.Damper", "label": "Translational.Damper", "goal": "Mass-spring-damper in 1D. Change c, see the overshoot shift." },
         { "qualified": "Modelica.Mechanics.MultiBody.Examples.Elementary.DoublePendulum", "label": "DoublePendulum", "goal": "Chaotic 3D two-link pendulum. Tweak initial angle." }
       ]
+    },
+    {
+      "icon": "🤖",
+      "title": "Robots & space mechanics",
+      "subtitle": "Orbits, linkages, and a full robot arm — the LunCoSim domain.",
+      "steps": [
+        { "qualified": "Modelica.Mechanics.MultiBody.Examples.Elementary.PointGravity", "label": "PointGravity", "goal": "Two bodies orbiting under inverse-square gravity. The two-body problem, live." },
+        { "qualified": "Modelica.Mechanics.MultiBody.Examples.Loops.Fourbar1", "label": "Fourbar1", "goal": "A closed four-bar linkage — the kinematics behind a deploying panel or arm." },
+        { "qualified": "Modelica.Mechanics.MultiBody.Examples.Systems.RobotR3.oneAxis", "label": "RobotR3.oneAxis", "goal": "One joint of a 6-axis arm with its drive controller. Follow the reference." },
+        { "qualified": "Modelica.Mechanics.MultiBody.Examples.Systems.RobotR3.fullRobot", "label": "RobotR3.fullRobot", "goal": "The full r3 industrial robot tracing a path — MSL's showpiece multibody model." },
+        { "qualified": "Modelica.Thermal.HeatTransfer.Examples.TwoMasses", "label": "TwoMasses", "goal": "Two thermal masses reaching equilibrium — spacecraft thermal control in miniature." }
+      ]
     }
   ]
 }

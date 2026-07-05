@@ -26,7 +26,7 @@ Two of the asks pull in opposite directions:
   same model on two peers takes different steps. The trajectory is *correct* but
   **not bit-reproducible across machines**.
 - **"Multiplayer."** The client-prediction architecture (the one the steering-jitter
-  work hardened — see [[project_steering_jitter_dac_determinism]]) needs **fixed-step
+  work hardened — see the steering jitter and determinism designs) needs **fixed-step
   deterministic** integration: identical inputs ⇒ identical outputs on every peer,
   replayable for rollback. An adaptive solver in the prediction loop produces a
   *different* answer on the client than the server every tick ⇒ permanent
@@ -55,10 +55,7 @@ solver class.
 ## 3. Realtime budget
 
 Adaptive implicit solvers can blow a frame budget on stiff systems — we have
-already hit `BDF step too small` and worker OOM on `RoverThermalSystem` /
-`AbdulezerPair` (see [[project_rumoca_main_bump_solver_regressions]],
-[[feedback_app_must_never_stall]]). Realtime therefore needs a **bounded-compute
-contract**, independent of tier:
+already hit `BDF step too small` and worker OOM on `RoverThermalSystem` / `AbdulezerPair` (see solver regressions and the responsive UI mandate). Realtime therefore needs a **bounded-compute contract**, independent of tier:
 
 1. **Off the render thread.** Heavy steppers run on the worker / server tick
    (already true — rumoca runs on a worker thread per [`22-domain-cosim.md`](22-domain-cosim.md)),
@@ -101,7 +98,7 @@ already replicates).
 The tier is not just a solver choice — it **decides how a model is duplicated
 across peers**. There is one axis: *what do we duplicate — the computation, the
 result, or nothing?* The tier answers it, and that answer picks one of the
-networking sync mechanisms (M1–M7 in [[project_networking_plan]]).
+networking sync mechanisms (M1–M7 in replicated state sync architecture).
 
 | Tier | What is duplicated | What crosses the wire | Sync mechanism |
 |------|--------------------|------------------------|----------------|
@@ -135,7 +132,7 @@ translator (`lunco-usd-sim`) reads it at spawn and sets the **always-on
 consults (PH2 `declare_replication::<C>(Replication)`). This is the same move that
 already removed field-name heuristics from the id/authz codec: schema-driven
 `WireLocal` / `AuthzTarget` reflect markers instead of guessing by field name
-([[project_typed_id_codec]]). The wire layer reads a **declared** tier; it never
+(see typed command and serialization codec). The wire layer reads a **declared** tier; it never
 infers one.
 
 Practicalities:
@@ -154,12 +151,12 @@ Practicalities:
   clients as wires over the existing networking channel (D7: gated behind the
   `networking` feature; in solo the wire is local and there is no replication —
   the architecture degrades to single-player *by construction*, matching
-  [[project_predict_own_reconciliation]]'s "solo reconcile is a structural no-op").
+  prediction and reconciliation strategy's "solo reconcile is a structural no-op").
   Clients render received state; they never integrate it. No determinism needed.
 - **Tier A** — both peers run the **same** stepper, so it requires (1) a
   fixed-step **deterministic** solver and (2) a determinism contract (same
   fold/step order on every peer, integer `SimTick` clock, no `Date::now`/`Math::random`
-  — mirrors the [[project_networking_plan]] identity rules). Until both exist,
+  — mirrors the replicated state sync architecture identity rules). Until both exist,
   Tier-A physics stays in deterministic Rust (avian + the mobility force laws),
   with Modelica used only as an **offline oracle** (§8, Step 2).
 
@@ -189,7 +186,7 @@ Making this first-class:
 - **External / HIL solvers** (a ROS 2 node, a Copper rate-group, real hardware in
   the loop) plug in as a **Backend** whose `step()` advances an external loop and
   whose ports bridge ROS topics ↔ `SimConnection` wires. This is the
-  ROS2/Copper-as-bridge path already in [[project_networking_plan]] — a robot
+  ROS2/Copper-as-bridge path already in replicated state sync architecture — a robot
   controller running its own solver is just another participant on the wire.
 - **Custom solvers stay inside the tier contract**: a Tier-A custom solver must be
   fixed-step + deterministic (or it isn't predictable); a Tier-B custom solver may
@@ -201,7 +198,7 @@ Making this first-class:
 Two distinct flavours, different cost:
 
 - **Parameter change** (coefficients, setpoints): cheap. Compile-once + runtime
-  parameters (the roadmap item in [[project_parallel_experiments]] §2b) → feed as
+  parameters (the roadmap item in parallel experiment execution §2b) → feed as
   input wires / `ControlStream` live inputs ([`22-domain-cosim.md`](22-domain-cosim.md)
   control-vs-data plane). No recompile.
 - **Structural change** (swap equations / whole model): needs recompile, then
@@ -255,7 +252,7 @@ from: fixed step count, fixed iteration count, fixed evaluation order, integer
 - **Fixed structure** — no variable-structure systems, constant state count.
 - **Fixed-step-stable dynamics** — reject systems whose stiffness needs adaptive
   steps to stay stable at the chosen `dt` (or require the linearly-implicit solver).
-- **Bounded state** — guards against runaway (the [[feedback_app_must_never_stall]]
+- **Bounded state** — guards against runaway (the responsive UI mandate
   invariant); a model that can diverge in finite ticks is rejected.
 - **Tick-quantized events** — zero-crossings/events resolve **at tick boundaries**,
   not via intra-step root-finding (root-finding makes step timing data-dependent →
@@ -336,7 +333,7 @@ end RoverBattery;
 - Pause freezes `soc`; resume continues; reset restores `soc = 1.0` via checkpoint.
 - Changing `capacity_wh` live changes the drain rate mid-run.
 - Worker stepping never stalls the main loop (kill the worker → run fails, app
-  survives — the [[feedback_app_must_never_stall]] invariant).
+  survives — the responsive UI mandate invariant).
 
 **Explicitly out of scope for Step 1:** any Tier-A model, rumoca fixed-step
 codegen, the offline oracle (Step 2), structural hot-swap, the full Twin /
