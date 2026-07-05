@@ -240,34 +240,33 @@ prim→entity.
 
 ---
 
-## 6. Suggested implementation order
+## 6. Implementation sequence (as executed)
 
-`0 → 4 → 2 → 1 → 3`, with **material params as the first end-to-end vertical slice**
-(they already have the `primvars:<snake>` convention and the `persist_*` precedent to
+Built in order `0 → 4 → 2 → 1 → 3`, with **material params as the first end-to-end vertical slice**
+(they already had the `primvars:<snake>` convention and the `persist_*` precedent to
 fold in):
 
 1. **Step 0** — scene-as-document for `--scene` (foundational; gates everything).
 2. **Step 4** — `UsdPrimIndex` resource + maintenance observers (small, independent).
 3. **Step 2** — `UsdAttrProjection` registry with the material-param projector only.
-4. **Step 1** — `SetObjectProperty` (material props) authors `SetAttribute`; delete the
-   material branch's direct mutation + fold in `persist_property_to_runtime_layer`.
-5. **Step 3** — `project_usd_attrs_to_components` fast path; verify a material slider
+4. **Step 1** — `SetObjectProperty` (material props) authors `SetAttribute`; deleted the
+   material branch's direct mutation + folded in `persist_property_to_runtime_layer`.
+5. **Step 3** — `project_usd_attrs_to_components` fast path; verified a material slider
    round-trips USD→ECS with no respawn and survives reload.
-6. Then extend the registry to PBR, visibility, wheels.
+6. Registry extended to PBR, visibility, wheels.
 
 ---
 
 ## 7. Key references
 
-- `lunco-sandbox-edit/src/commands.rs:1851` — `SetObjectProperty` struct
-- `lunco-sandbox-edit/src/commands.rs:1933` — `on_set_object_property`
-- `lunco-sandbox-edit/src/commands.rs:1656` — `persist_property_to_runtime_layer`
-- `lunco-usd/src/document.rs:735` — `UsdOp::SetAttribute` apply (commit + inverse)
-- `lunco-usd/src/live_projection.rs:217` — `refresh_live_doc_scenes` (E1/E2 template)
-- `lunco-usd/src/commands.rs:115` — `PendingLiveImports` / projection registration
-- `lunco-usd-bevy/src/lib.rs:137` — `UsdStageAsset`; `:244` — `UsdPrimPath`
+- `lunco-sandbox-edit/src/commands.rs` — `SetObjectProperty` struct
+- `lunco-sandbox-edit/src/commands.rs` — `on_set_object_property`
+- `lunco-sandbox-edit/src/commands.rs` — `persist_property_to_runtime_layer`
+- `lunco-usd/src/document.rs` — `UsdOp::SetAttribute` apply (commit + inverse)
+- `lunco-usd/src/live_projection.rs` — `refresh_live_doc_scenes` (E1/E2 template)
+- `lunco-usd/src/commands.rs` — `PendingLiveImports` / projection registration
+- `lunco-usd-bevy/src/lib.rs` — `UsdStageAsset`, `UsdPrimPath`
 - `lunco-usd-bevy/src/usd_data.rs` — `UsdDataExt` (read composed attrs)
-- `lunco-usd-sim/src/cosim.rs` — `LoadScene` / `spawn_scene_root_with_stage`; `:483`
-  ad-hoc prim→entity index
+- `lunco-usd-sim/src/cosim.rs` — `LoadScene` / `spawn_scene_root_with_stage`; ad-hoc prim→entity index
 - `lunco-sandbox/src/lib.rs:621` — `refresh_layered_terrain_layers` (per-domain
   projection-on-`Modified` precedent)

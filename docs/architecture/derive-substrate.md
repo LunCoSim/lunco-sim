@@ -1,5 +1,7 @@
 # Derive — the unified derived-artifact substrate
 
+> Audience: contributors unifying async compute/bake patterns.
+
 Provides a design for the unified derived-artifact substrate, covering CPU/GPU queuing and asynchronous bakes.
 
 This architecture unifies substrates: `RebuildOnChange` (change-detection), `lunco-precompute` (caching), mobility intent, port resolution, and `lunco-hash` (hashing). It is designed to address expensive CPU calculations (such as terrain tile collider generation) by offloading them from the main thread.
@@ -171,7 +173,7 @@ uniform write; it never re-bakes.
 | **Horizon occlusion** | `CpuAsync` | bake visibility (key: DEM hash, **quantized sun**) | — |
 
 Ports and projection are the proof the primitive isn't terrain-specific: they are the same
-`RebuildOnChange` shape, already shipped, at the `SyncInline` tier.
+`RebuildOnChange` shape at the `SyncInline` tier.
 
 ## 6. Invariants (must hold, or it breaks *this* sim)
 

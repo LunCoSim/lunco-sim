@@ -14,7 +14,7 @@ Status legend: **Implemented** (built, in tree) · **Partial** (core built, gaps
 | 008 | Developer Experience | Partial | scripting is rhai, not Lua/Python |
 | 009 | Coordinate Frame Tree | Partial | `big_space` floating-origin built; named TF-tree types absent |
 | 010 | Authority / RBAC | Implemented | |
-| 011 | Interactive Tutorials | Partial | tutor mode built; no objective/goal-eval framework |
+| 011 | Interactive Tutorials | Implemented | all six tutorial tasks built (see design.md for as-built reference) |
 | 012 | Sensor-to-Dashboard | Partial | telemetry bridge + scalar sensing; no camera/RGB sensors, no OpenMCT/Grafana |
 | 013 | SysML Integration | Not built | overlaps 017 (interop/model mapping) |
 | 014 | Modelica Simulation | Implemented | rumoca runtime |
@@ -28,7 +28,7 @@ Status legend: **Implemented** (built, in tree) · **Partial** (core built, gaps
 | 031 | Sandbox Editing Tools | Implemented | overlaps 015 (spawn/assembly) |
 | 032 | Model Source Listing & Unified Open | Implemented (historical) | |
 | 033 | Agent-Driven Simulation Loop | Implemented (historical) | |
-| 034 | Control Authority: Autopilot as a User | Not built | proposal (rev 2); autopilot = an `AiAgent` session; possession is the arbiter, `rbac.authorize` (rhai) decides stealing — reuses 010, no per-frame arbiter |
+| 034 | Control Authority: Autopilot as a User | Implemented | autopilot = `AiAgent` session; possession is the arbiter; `rbac.authorize` (rhai) decides stealing — reuses 010, no per-frame arbiter |
 
 ## Overlap notes
 

@@ -56,8 +56,7 @@ Because `derive_id` is a pure function of `(parent, role)` and the root id is th
 both peers (allocated on the server, pinned on the client), descendants reconstruct
 **locally** with matching ids — only the root replicates. Authored scene prims are
 unaffected: they keep `Content`, whose composed prim paths are already unique per reference.
-See README → *Entity Identity Mapping*, `DECISIONS.md` D3/D4, and
-[[project_usd_instance_identity_derived]].
+See README → *Entity Identity Mapping*, and `DECISIONS.md` sections D3 and D4.
 
 ## Overrides — author only for exceptions
 

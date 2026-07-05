@@ -42,12 +42,17 @@ As a developer, I want to add new simulation-specific mapping logic (e.g., for a
 - **FR-006**: **Bevy Integration Plugin**: The Bevy `AssetLoader` and entity spawning logic MUST be a modular plugin (`lunco-usd-bevy`).
 - **FR-007**: **Headless-First Design**: The core parser and adapters MUST be runnable in a headless environment.
 
-### Refined Crate Architecture
-- **`lunco-usd-core`**: Parser, DOM, and `UsdAdapter` trait.
-- **`lunco-usd-physx`**: Consolidated Physics mapping (Standard + Isaac Sim/PhysX).
-- **`lunco-usd-avian`**: Avian3D specific physics implementation.
-- **`lunco-usd-mapping`**: Engineering Ontology (`lunco:` namespace) mapping.
-- **`lunco-usd-bevy`**: Bevy AssetLoader and client integration.
+### Implemented Crate Architecture
+
+| Planned (spec) | Implemented | Notes |
+|---|---|---|
+| `lunco-usd-core` | `lunco-usd` | Core parser, DOM, stage, and `UsdAdapter` trait |
+| `lunco-usd-physx` | (folded into `lunco-usd`) | PhysX-specific USD attrs handled inline |
+| `lunco-usd-avian` | `lunco-usd-avian` | Avian3D physics implementation — as planned |
+| `lunco-usd-mapping` | (folded into `lunco-usd`) | `lunco:` namespace mapping lives in `lunco-usd` core |
+| `lunco-usd-bevy` | `lunco-usd-bevy` | Bevy `AssetLoader` and entity spawning — as planned |
+| — | `lunco-usd-sim` | Simulation-specific USD integration (cosim wiring) |
+| — | `lunco-materials` | PBR material parameter projection |
 
 ### Key Entities
 - **UsdAdapter**: Trait for custom schema translation.

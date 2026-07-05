@@ -15,7 +15,7 @@ Related: `13-twin-and-workflow.md`, `14-simulation-layers.md`, `22-domain-cosim.
 
 ## Goal
 
-Make lunica capable of:
+The experiments framework supports:
 
 1. Running a model from `t_start` to `t_end` as fast as possible (batch / "Fast Run"), in addition to the existing realtime-stepped Interactive run.
 2. Treating each run as a first-class artifact with its own parameters, bounds, and trajectory.
@@ -32,8 +32,8 @@ Dymola and OMEdit treat results as `.mat` files keyed by model name; comparison 
 ### Why backend-agnostic
 Today the only execution backend is rumoca + diffsol. The crate boundary should not assume that. FMU import, codegen, hardware-in-the-loop, and remote workers are all plausible v2+ extensions. Putting `Experiment` and `RunResult` in a backend-agnostic crate keeps the door open without committing to any of those.
 
-### Why string-injection overrides in v1
-Rumoca has `ClassModification` IR but no public override entry point. Adding one is the right long-term answer; doing it in this iteration drags the workspace cross-cut into a UI feature. String injection covers the realistic v1 surface (top-level literal `parameter` declarations) and is replaceable behind the runner trait.
+### Why string-injection overrides
+String injection covers the parameter override surface (top-level literal `parameter` declarations) without requiring upstream modifications to rumoca. This is encapsulated behind the runner trait and can be updated as the API evolves.
 
 ### Why the Web Worker uses postMessage, not SAB
 The wasm host has no COOP/COEP headers and the worker is intentionally a separate wasm instance (see `30-wasm-web-worker.md`). Adding SAB requires header changes and nightly atomics. Cancellation latency of <100 ms via message polling is acceptable for human-driven Fast Runs.
@@ -150,10 +150,7 @@ pub enum RunUpdate {
 }
 ```
 
-Concurrency: one in-flight Fast Run per runner instance. Subsequent requests queue (FIFO).
-
-### Why one in-flight at a time
-On wasm the worker serializes naturally. Matching that on native keeps semantics identical, simplifies UI state, and avoids surprise contention. Sweep work (later) sits above the runner and orchestrates a queue.
+The runner limits execution to one in-flight Fast Run per runner instance. Subsequent requests queue (FIFO) to keep native and WASM semantics identical, simplify UI state, and avoid resource contention.
 
 ## Web Worker protocol
 
@@ -176,13 +173,7 @@ ModelicaResult::RunFailed   { run_id, error, partial: Option<RunResult> }
 Encoding: bincode, same as existing messages. Progress throttled to ~10 Hz wall clock. Cancellation polled between solver steps.
 
 ### Why reuse the worker instead of spawning a sim worker
-Compiler and DAE state already live in this worker. A second worker would duplicate compile cache, double the wasm bundle, and require routing logic. The cost is that other worker commands queue behind a long Fast Run. Trade is acceptable for v1; a UI busy indicator covers the visible part.
-
-## MSL boot-race fix (prerequisite)
-
-Today the worker accepts `Compile` before `InstallMsl` completes, producing silent "unresolved Modelica.*" failures. Fix: extend the existing `PENDING_PARSES` gate in `worker_transport.rs` to cover `Compile` and `RunFast`. Drain on `InstallMsl` completion.
-
-This is a prerequisite, not a feature in itself. It also fixes the "Loading resource…" overlay never clearing on drill-in, which has the same root cause.
+Compiler and DAE state already live in this worker. A second worker would duplicate compile cache, double the WASM bundle, and require routing logic. The trade-off is that other worker commands queue behind a long Fast Run, which is managed via UI busy indicators.
 
 ## UI
 
@@ -215,39 +206,19 @@ Table of detected top-level literal parameters with current values + override fi
 
 Existing variable picker is shared across experiments. Each picked variable plots once per checked experiment. Legend: `<exp name> · <var path>`.
 
-## Out of scope (v1)
+## Future enhancements
 
 - Disk persistence of experiments or definitions
 - Parameter sweep grid UI
 - Diff metrics (RMS, max-error)
-- Solver picker UI (struct field reserved)
+- Solver picker UI
 - Variable include/exclude UI
 - Multiple concurrent runs
 - Interactive runs archiving into Experiments
 - Override of inherited / expression-bound / array / record parameters
 
-Each has a TODO marker in the code where it would land.
+## Future design considerations
 
-## Open questions deferred to v2
-
-- Does interactive run produce an experiment when stopped? (Currently no.)
-- Should experiment definitions be journal entries in `lunco-twin-journal` for undo? (Plausible, not v1.)
-- Trajectory transferable buffers (Float64Array `transfer`) instead of bincode roundtrip for large results.
-
-## Risks and mitigations
-
-| Risk | Mitigation |
-|---|---|
-| Override string-injection brittle on inherited params | UI greys unsupported params; clear tooltip; TODO upstream |
-| Long Fast Run blocks worker for other commands | UI busy indicator; ≤100ms cancel; worker pool deferred |
-| Bincode of 80+ MB results sluggish | Acceptable v1; TODO transferable buffers |
-| Reflatten per override change is slow | Measure on representative model; cache by `(source_hash, override_set)` if needed; TODO upstream rebinding API |
-| Worker MSL race | Fixed as prerequisite (extends existing gate) |
-
-## Dependencies on upstream rumoca
-
-None blocking for v1. The string-injection path uses existing public APIs only. v2 work that would benefit from upstream change:
-
-- `compile_with_modifications(source, model, ClassModification)` — replaces string injection.
-- `SimStepper::set_parameter(name, value)` — eliminates reflatten on override change.
-- Variable `protected` flag exposed in `SimResult` — enables include/exclude filtering.
+- Determining if interactive runs should produce an experiment entry upon stopping.
+- Journaling experiment definitions as undoable operations in `lunco-twin-journal`.
+- Utilizing JavaScript transferable buffers (`Float64Array`) for WASM execution to optimize large results transfer.

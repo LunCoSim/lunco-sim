@@ -1,8 +1,6 @@
 # Feature Specification: 011-interactive-tutorials
 
-**Feature Branch**: `011-interactive-tutorials`
-**Created**: 2026-03-29
-**Status**: Partial — tutor mode built; no objective/goal-evaluation framework.
+**Status**: Implemented — see [design.md](./design.md) for the as-built reference.
 
 ## Problem Statement
 While LunCoSim is rigorous enough for high-fidelity engineering simulations, it must also serve as a training platform. We need an interactive tutorial system that teaches users how to assemble rovers, configure the lunar environment, and orchestrate missions. 
@@ -36,5 +34,6 @@ As a mission instructor, I want the tutorial system to evaluate whether the user
 - Real-time performance metrics and hints are displayed on the UI.
 
 ## Implementation Notes
-- Tutorials will likely rely heavily on the Scenario Orchestration system (Spec 005) to load specific tutorial environments via `.scn.ron` or `.bsn` files.
-- The UI layer should be decoupled so it can be enabled exclusively in tutorial mode without adding overhead to headless CI/CD engineering runs.
+- Tutorials use the rhai-based `ScenarioRuntime` to load and drive tutorial environments via `.usda` scene files and `.rhai` scenario scripts (see [`docs/scripting-guide.md`](../../docs/scripting-guide.md)). The older `.scn.ron`/`.bsn` format was superseded.
+- The UI layer is decoupled — tutorial HUD elements (`hint`, `spotlight`, `objectives_hud`) are scenario-authored and don't add overhead to headless runs.
+- Goal evaluation is authored as rhai mission tasks (`task(me)` hook + sequencer) rather than a separate framework. See `prelude/tasks.rhai` and the design.md for details.

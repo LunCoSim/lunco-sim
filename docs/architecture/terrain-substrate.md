@@ -1,5 +1,7 @@
 # Terrain Substrate — the Height Oracle
 
+> Audience: contributors working on terrain, LOD, or surface physics.
+
 How LunCoSim represents planetary surfaces from orbit down to a rover wheel,
 with one abstraction that keeps **visuals and physics in lockstep**, composes
 under **USD layering**, and **scales to a whole solar system**.
@@ -259,11 +261,11 @@ read path (extractors read a `StageView` over the live stage via the `UsdRead`
 trait), and `flatten → sdf::Data → ECS` demoted to a derived cache slated for
 deletion (*"remove flatten entirely, canonical only"*). ECS is a **projection
 membrane** — render / physics / cosim / **terrain** read Send ECS components, never
-the `!Send` Stage. (Full design: `USD_CANONICAL_LAYERED_DOCUMENT_DESIGN.md` on the
-networking branch.)
+the `!Send` Stage. (Full design: see `21-domain-usd.md` §USD layers and the
+canonical USD architecture notes in `docs/usd-source-of-truth-ecs-projection-design.md`.)
 
 Terrain is **one more projection consumer** on that membrane, exactly like the
-policy-as-projection pattern networking shipped. This is not a parallel pipeline;
+policy-as-projection pattern in networking. This is not a parallel pipeline;
 it is three planes over the *one* Stage:
 
 | Plane | Terrain content | Mechanism |
@@ -390,7 +392,7 @@ prims; `CompositeHeightSource` (core, pure); `TerrainGeoref` parsed from
 
 > **Note on the USD read path:** as-built terrain still reads USD via the *flatten*
 > reader (`UsdStageAsset` / `UsdDataExt`). The canonical-Stage cutover (above) is a
-> forced migration once this worktree merges networking — see the two couplings.
+> forced migration once the networking USD canonical-stage merge lands — see the two couplings.
 
 **Known gaps (in the order they should land):**
 
@@ -402,19 +404,18 @@ prims; `CompositeHeightSource` (core, pure); `TerrainGeoref` parsed from
    (peaks/rims refine automatically); collider ring res driven by the same metric.
 3. **Carve/mask channel** — the seam for caves/pits/skylights (baker clip +
    heightfield→trimesh fallback on mouth tiles).
-4. **Canonical-Stage read migration** (forced when this worktree merges
-   networking) — move `bridge_usd_dem_terrain` + the layer parsers onto
+4. **Canonical-Stage read migration** — move `bridge_usd_dem_terrain` + the layer parsers onto
    `UsdRead`/`StageView`; replace the `AssetEvent<UsdStageAsset>` reload observer
    with a terrain `UsdAttrProjection` off StageSink; make regen a physics-atomic
    activation unit (see *Alignment* above).
 5. **Orbit→surface bridge app-wiring** — build the `CompositeHeightSource` *live*
    from `lunco:anchor:lat/lon`, relate the globe and surface grids, swap by
-   altitude. (`CompositeHeightSource` is done in core; the wiring + lat/lon↔XZ
-   reprojection are deferred.)
+   altitude. (`CompositeHeightSource` exists in core; the wiring + lat/lon↔XZ
+   reprojection are follow-ups.)
 6. **Tile bake cache** — extend the existing `lunco_precompute::Bake` pattern
    (already used by `derived_layers`) to tile + collider bakes, so one bake feeds
    visuals + physics and ships as a spec+hash across peers. (Not a bespoke
-   `cache://` asset — the content-address substrate already landed.)
+   `cache://` asset — it reuses the content-address substrate.)
 
 [Cesium-for-Omniverse]: https://github.com/CesiumGS/cesium-omniverse
 

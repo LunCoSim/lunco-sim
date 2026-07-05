@@ -1,6 +1,6 @@
 # 27 — Simulation Target & Run-Configuration Resolution
 
-> Status: Design · Audience: contributors planning target/run-config resolution (proposal, not implemented)
+> Status: Design · Audience: contributors working on target/run-config resolution.
 
 **Scope:** how LunCoSim decides *which* thing to simulate and *with what bounds*, why the current logic breeds drift bugs, how to make that bug class unrepresentable, and how the same machinery generalizes from Modelica to USD (framed against the FMI / SSP standards).
 
@@ -25,30 +25,30 @@ Initial fixes were **point fixes** (swap `first_non_pkg` → `simulation_candida
 File references in `crates/lunco-modelica` and `crates/lunco-experiments`:
 
 ### 2.1 Class candidates & ranking — `index.rs`
-- `ClassKind::is_simulatable()` (`index.rs:281`) → `true` only for `Model | Block | Class`.
-- `simulation_candidates() -> Vec<String>` (`index.rs:699`): filters `is_simulatable() && !partial`, ranks by `sim_tier`, then alphabetical. Returns fully-qualified names.
-- `simulation_preferred_count() -> usize` (`index.rs:715`): count of classes in the best (lowest) tier. `== 1` → auto-pick; `!= 1` → ambiguous → picker.
-- `sim_tier(c, used) -> u8` (`index.rs:758`): **0** = has `experiment(...)` annotation; **1** = top-level (not used as a subcomponent); **2** = used as a subcomponent/helper.
+- `ClassKind::is_simulatable()` (`index.rs`) → `true` only for `Model | Block | Class`.
+- `simulation_candidates() -> Vec<String>` (`index.rs`): filters `is_simulatable() && !partial`, ranks by `sim_tier`, then alphabetical. Returns fully-qualified names.
+- `simulation_preferred_count() -> usize` (`index.rs`): count of classes in the best (lowest) tier. `== 1` → auto-pick; `!= 1` → ambiguous → picker.
+- `sim_tier(c, used) -> u8` (`index.rs`): **0** = has `experiment(...)` annotation; **1** = top-level (not used as a subcomponent); **2** = used as a subcomponent/helper.
 
 ### 2.2 The four resolution paths
-1. **`on_compile_model`** (`compile.rs:529`) — class precedence: `explicit > drilled > picker(if ambiguous) > detected[0]`. Does not resolve bounds (compile only).
-2. **`dispatch_experiment`** (`compile.rs:1252`) — class precedence: `explicit > drilled > picker > sole`; **builds its own candidate list by raw `index.classes` iteration** (does not call `simulation_candidates()`). Bounds composed as a 4-layer overwrite: `fallback(t_end=1.0) → annotation → draft → cmd_override` (`compile.rs:1386`+, fallback literal at `compile.rs:1401`).
-3. **`render_setup_section`** (`experiments.rs:804`) — class: `drilled > simulation_candidates()[0]`; bounds via `resolve_setup_bounds`.
-4. **`QueryExperimentBounds`** (`api_queries.rs:410`) — lists all non-package classes; per class reports `resolved_bounds` (via `resolve_setup_bounds`) + recomputes a `source` label (`"draft_override" | "runner_cache" | "annotation" | "fallback_10s"`).
+1. **`on_compile_model`** (`compile.rs`) — class precedence: `explicit > drilled > picker(if ambiguous) > detected[0]`. Does not resolve bounds (compile only).
+2. **`dispatch_experiment`** (`compile.rs`) — class precedence: `explicit > drilled > picker > sole`; **builds its own candidate list by raw `index.classes` iteration** (does not call `simulation_candidates()`). Bounds composed as a 4-layer overwrite: `fallback(t_end=1.0) → annotation → draft → cmd_override` (`compile.rs`).
+3. **`render_setup_section`** (`experiments.rs`) — class: `drilled > simulation_candidates()[0]`; bounds via `resolve_setup_bounds`.
+4. **`QueryExperimentBounds`** (`api_queries.rs`) — lists all non-package classes; per class reports `resolved_bounds` (via `resolve_setup_bounds`) + recomputes a `source` label (`"draft_override" | "runner_cache" | "annotation" | "fallback_10s"`).
 
 ### 2.3 Bounds resolution — `compile.rs`
-- `resolve_setup_bounds() -> RunBounds` (`compile.rs:1221`): precedence `draft override → runner cache → annotation → fallback(t_end=10.0)` (fallback literal at `compile.rs:1244`).
-- `bounds_from_annotation() -> Option<RunBounds>` (`compile.rs:1191`): looks up class by qualified **or** leaf name; requires `experiment.stop_time = Some(_)`; maps `start_time → t_start` (default 0.0), `stop_time → t_end`, `interval(>0) → dt`, `tolerance → tolerance`; `solver`/`h0` always `None`.
+- `resolve_setup_bounds() -> RunBounds` (`compile.rs`): precedence `draft override → runner cache → annotation → fallback(t_end=10.0)` (`compile.rs`).
+- `bounds_from_annotation() -> Option<RunBounds>` (`compile.rs`): looks up class by qualified **or** leaf name; requires `experiment.stop_time = Some(_)`; maps `start_time → t_start` (default 0.0), `stop_time → t_end`, `interval(>0) → dt`, `tolerance → tolerance`; `solver`/`h0` always `None`.
 
 ### 2.4 Types — `lunco-experiments/src/lib.rs`
-- `ModelRef(String)` (`:65`) — opaque qualified class name; the crate does **not** depend on `lunco-modelica`.
-- `RunBounds { t_start, t_end, dt: Option, tolerance: Option, solver: Option<String>, h0: Option }` (`:97`).
-- `ExperimentRunner { run_fast(&Experiment) -> RunHandle; default_bounds(&ModelRef) -> Option<RunBounds> }` (`:491`) — already backend-agnostic; one impl (`ModelicaRunner`, `experiments_runner.rs:289`).
+- `ModelRef(String)` (`lib.rs`) — opaque qualified class name; the crate does **not** depend on `lunco-modelica`.
+- `RunBounds { t_start, t_end, dt: Option, tolerance: Option, solver: Option<String>, h0: Option }` (`lib.rs`).
+- `ExperimentRunner { run_fast(&Experiment) -> RunHandle; default_bounds(&ModelRef) -> Option<RunBounds> }` (`lib.rs`) — already backend-agnostic; one impl (`ModelicaRunner`, `experiments_runner.rs`).
 - `ExperimentRegistry` — keyed `(TwinId, ModelRef)`; Modelica-specific in usage.
 - `ExperimentDrafts` — `(DocumentId, ModelRef) → ExperimentDraft { bounds_override: Option<RunBounds>, .. }`.
 
 ### 2.5 "Drilled / focused class"
-- `ModelTabs::drilled_class_for_doc(doc) -> Option<String>` (`model_view/tabs.rs:205`): the class the user navigated into on a tab. Preferred over auto-ranking everywhere. This is the *one legitimate UI signal* that all paths agree on.
+- `ModelTabs::drilled_class_for_doc(doc) -> Option<String>` (`model_view/tabs.rs`): the class the user navigated into on a tab. Preferred over auto-ranking everywhere. This is the *one legitimate UI signal* that all paths agree on.
 
 ---
 
@@ -97,7 +97,7 @@ No call site does its own `rsplit`. The exact-only bug is uncompilable because t
 ```rust
 impl Default for RunBounds { fn default() -> Self { Self { t_end: 10.0, /* … */ } } }
 ```
-Delete the `1.0` literal at `compile.rs:1401`. Both paths call `RunBounds::default()`. The two-constant divergence cannot recur because there is one constant.
+Delete the `1.0` literal in `compile.rs`. Both paths call `RunBounds::default()`. The two-constant divergence cannot recur because there is one constant.
 
 ### 4.4 Bounds precedence as one fold that returns its source
 ```rust
@@ -218,11 +218,11 @@ Three layers (consistent with the S2005 plan, with one correction).
 
 ## 8. Phased plan
 
-- **P0 — kill the live bug (one-liner-ish).** Collapse both fallbacks onto `RunBounds::default()`; delete `compile.rs:1401` `1.0`. Ships immediately; removes the panel-shows-10s / FastRun-does-1s divergence.
-- **P1 — pure core (Modelica only).** Land `SimTarget`/`Resolution`/`QualifiedClass`/matcher/`resolve_bounds` in `lunco-experiments` with unit tests. Port the four call sites to `resolve()`. Privatize `first_non_pkg` + inline matchers. This is the consolidation proper.
-- **P2 — `TargetSource` trait + `ModelicaSource`.** Parameterize `resolve()`; no behavior change, but the seam for USD exists.
-- **P3 — `UsdSource` + registry keyed by `SimTarget`.** USD scenes appear in the experiments panel / `ListRuns` alongside Modelica runs.
-- **P4 — gaps:** declared/typed ports (gap #1), connection `offset`+units (#2), `Scenario`/`RunConfig` object (#3), `stop_condition` (#4), solver hints (#5), resolved-config-on-result (#6). Each independently shippable.
+- **P0 — Consolidation of defaults:** Collapse both fallbacks onto `RunBounds::default()`; delete the `1.0` fallback literal.
+- **P1 — Core target resolution:** Implement target resolution traits and structs in `lunco-experiments` and port the modelica compilation and execution paths.
+- **P2 — Unified source abstraction:** Define `TargetSource` trait to prepare for multi-domain (e.g. USD) execution targets.
+- **P3 — USD targets integration:** Add USD scene support to the experiments panel and execution queries.
+- **P4 — Configuration extensions:** Expose typed ports, connection offsets, and solver configuration options as incremental enhancements.
 
 ---
 

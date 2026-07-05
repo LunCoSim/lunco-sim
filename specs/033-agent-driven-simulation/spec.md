@@ -176,7 +176,7 @@ So that I can write the workflow as a script and run it under CI without the UI 
 **Acceptance Scenarios**:
 
 1. **Given** a fresh workbench, **When** I run the script above, **Then** every call returns success and the final transcript matches the expected reference (within a tolerance for the simulation values).
-2. **Given** the workbench was started with `--api 3000 --headless`, **When** I run the script, **Then** behaviour is identical to the windowed run — no API call requires a render frame.
+2. **Given** the workbench was started with `--api 4101 --no-ui`, **When** I run the script, **Then** behaviour is identical to the windowed run — no API call requires a render frame.
 
 ---
 
@@ -240,5 +240,5 @@ This spec depends on spec 032's `ApiQueryProvider` infrastructure (P1 of 032). O
     compile_model(class) → compile_status poll → describe_model →
     set_input (happy path + error path) → ResumeActiveModel →
     snapshot_variables → PauseActiveModel. Run after starting the
-    workbench with `--api 3000`. Does not pkill or send Exit; safe to
+    workbench with `--api 4101`. Does not pkill or send Exit; safe to
     run against a live user session.

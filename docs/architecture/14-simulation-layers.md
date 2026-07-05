@@ -13,14 +13,13 @@
 > through a Twin-owned command queue. What *is* implemented today:
 > `RunStatus` / `RunBounds` / experiment runs in `lunco-experiments`, cosim
 > wiring (`SimConnection`) in `lunco-cosim`, and the time/transport control in
-> `lunco-time` (`WorldTime` / `TimeTransport` are the sole time authority — the
-> former `CelestialClock` has been removed). Read the sections below — and the
+> `lunco-time` (`WorldTime` / `TimeTransport` are the sole time authority). Read the sections below — and the
 > Rust blocks especially — as the intended end-state, not a description of
 > current code.
 
 > Four layers — **Model, Run, Scenario, Twin** — plus a dynamic **BackendRegistry**
 > that lets simulation crates self-register. Aligns with FMI/SSP patterns,
-> scales from single-model MVP to cosim + remote + HIL without refactor.
+> scales from a single model to cosim + remote + HIL without refactor.
 >
 > **Twin is intended to be the control surface.** Not just a filesystem
 > container — the design has it as the live Bevy resource that owns scenarios,
@@ -215,9 +214,9 @@ by side). Each Twin is its own resource; its entities carry a
 `TwinAffiliation(TwinId)` marker; queries filter by it so participants of
 Twin A don't leak into Twin B's cosim.
 
-For MVP, a single Twin is enough — the one backing the currently open
-workspace folder. Multi-Twin is an unblocked follow-up when the UI surfaces
-multiple workspaces.
+A single Twin — the one backing the currently open workspace folder — is the
+common case. Multi-Twin is an unblocked follow-up when the UI surfaces multiple
+workspaces.
 
 ### Headless + remote
 
@@ -338,8 +337,8 @@ bundle — multiple implementations sharing a `StatePortrait`. A
 `FidelityPolicy` picks between them based on user focus, time-warp, CPU
 budget.
 
-**MVP uses exactly one clock, one fidelity per participant.** The scenario
-schema reserves `clock_id: "main"` and `fidelities: [default]` from v1 so
+**The base setup uses exactly one clock, one fidelity per participant.** The
+scenario schema reserves `clock_id: "main"` and `fidelities: [default]` so
 adopting either isn't a migration. Full design in
 [`15-adaptive-fidelity.md`](15-adaptive-fidelity.md).
 
@@ -349,8 +348,8 @@ adopting either isn't a migration. Full design in
 pub struct Run {
     pub id: RunId,
     pub scenario_id: ScenarioId,
-    pub status: RunStatus,     // implemented enum (lunco-experiments): Pending | Queued | Running | Done | Failed | Cancelled
-    pub mode: RunMode,         // design: Live | Batch | Stepped | Replay
+    pub status: RunStatus,     // lunco-experiments: Pending | Queued | Running | Done | Failed | Cancelled
+    pub mode: RunMode,         // Live | Batch | Stepped | Replay
     pub rate_factor: f64,      // time-warp; 1.0 = real-time
     pub t_start: f64,
     pub t_end: Option<f64>,    // None = open-ended live session
@@ -427,8 +426,8 @@ Realtime Runs can last hours. Three-tier scheme:
 3. **Streaming MCAP** — optional continuous log for full recordings
    (training, flight tests). Spec 020 describes the format.
 
-MVP uses only (1), in memory, as `Vec<Sample>`. (2)+(3) come with spec 020
-implementation.
+The base setup uses only (1), in memory, as `Vec<Sample>`. (2)+(3) come with
+spec 020.
 
 ### Input log = deterministic replay
 
@@ -438,9 +437,9 @@ fault injection, admin commands) land as timestamped events in
 `input_log`. Replay mode feeds the stored log back into an empty Run with
 the same seed → bit-identical trace (spec 006 FR-002).
 
-## MVP default: one implicit Twin + one implicit Run
+## Base default: one implicit Twin + one implicit Run
 
-Minimum viable scope for the Modelica MVP:
+The default single-model configuration:
 
 - **One implicit Twin** materialised on workspace open (the workspace folder
   becomes the Twin root). Holds no explicit scenarios yet.
@@ -464,11 +463,11 @@ Minimum viable scope for the Modelica MVP:
 All forward-compatible: every command the UI fires is already a TwinCommand
 conceptually; BackendRegistry, persisted scenarios, partitioner, FMU, DCP,
 multi-Twin each land as additive extensions without changing the command
-surface or the MVP Run shape.
+surface or the base Run shape.
 
 ## Networking — server-authoritative, per spec 022
 
-Multi-user networking has **landed** (`lunco-networking`: WebTransport, state
+Multi-user networking is in place (`lunco-networking`: WebTransport, state
 replication, RBAC policy substrate, headless `--no-ui` server). The
 server-authoritative shape below is the target; the Twin-resource framing
 (replica *backends*) remains aspirational per the banner at the top of this doc:
@@ -483,24 +482,6 @@ server-authoritative shape below is the target; the Twin-resource framing
   `current_t`; client's replicas catch up.
 - Per-participant input RBAC lives in spec 010.
 
-## Implementation status
-
-- **Done today**: single implicit Run (unnamed), `FixedUpdate` stepping,
-  `ModelicaModel.paused` = Pause, `SimConnection` = causal-only wires,
-  Avian + Modelica share a schedule, worker thread for rumoca.
-- **Task #75**: Run-control toolbar — surfaces the implicit Run as
-  ▶ / ⏸ / ⟲ + time pill.
-- **Task #74**: read `experiment(StopTime=…)` → feeds `Run.t_end`.
-- **Task #70 / #59**: named runs + comparison — introduces persistent
-  `<twin>/runs/<id>/`.
-- **Task #94**: four-layer formalisation (this doc).
-- **Task #95**: BackendRegistry + Twin-owned scenarios.
-- **Task #96**: multi-clock + fidelity (LoD) — design in
-  [`15-adaptive-fidelity.md`](15-adaptive-fidelity.md).
-
-Each of these is additive. The MVP Run struct lives in `lunco-modelica`
-for now; extracting to `lunco-cosim` happens when FMU / other backends
-arrive.
 
 ## Decision log
 
@@ -530,6 +511,6 @@ future contributors don't relitigate:
     `customData.luncosim:participant_id` (or a future USD schema).
 11. **Server is authoritative**. Clients register replica backends; remote
     control is just another TwinCommand producer.
-12. **MVP has one implicit Twin + one implicit Run per document**. The
-    command surface is real from day one; persisted scenarios, partitioner,
+12. **The base setup has one implicit Twin + one implicit Run per document**.
+    The command surface is real from day one; persisted scenarios, partitioner,
     FMU, multi-Twin arrive as additive extensions.

@@ -72,6 +72,9 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 | `emit(name, value?)` | bool | fire a `TelemetryEvent` (delivered to `on_event` next tick) |
 | `sim_tick()` / `dt()` / `elapsed_seconds()` | i64 / f64 / f64 | the fixed simulation clock |
 | `rand()` / `rand_range(lo,hi)` / `rand_int(lo,hi)` | f64 / f64 / i64 | **deterministic** RNG — seeded per hook from `(entity, tick, hook)`, identical on every peer and replay |
+| `param(id, key, default)` | any | read a `lunco:params` attribute key from a prim by name; returns `default` if the key is absent |
+| `detach_joint(id)` | bool | despawn a joint entity (releases the rigid link between two bodies, e.g. lander→rover) |
+| `notify(msg)` / `notify_kind(msg, kind)` | () | send a HUD notification; `kind` is `"info"` / `"warn"` / `"error"` |
 
 JSON appears **only** at the `cmd`/`query` params seam (that's the API's own
 contract). Both directions are native: `get`/`get_setting` build rhai values
@@ -97,7 +100,7 @@ authoritative list. Highlights:
 - **Navigation:** `drive(rover, fwd, steer)`, `brake(rover)`, `steer_to`, `nav_to(entity, target, speed, radius)`, `run_plan`.
 - **Sensing:** `velocity`/`speed`, `raycast`, `obstacle_ahead`, `ground_height`, `nearest`, `entities_in_radius`.
 - **Collision events:** `collision_pair`/`collision_other`/`entered`/`exited` (parse `COLLISION_START`/`COLLISION_END`).
-- **Sequencer (Layer 1):** `seq_init`, `run_steps`, `seq_note_event`, step ctors `step`/`once`/`wait`/`wait_until`/`wait_for`.
+- **Sequencer (Layer 1):** `seq_init`, `run_steps`, `seq_note_event`, step ctors `step`/`once`/`wait`/`wait_until`/`wait_for`/`wait_for_from(event, source_id)`; `seq([steps])` shorthand to build and run immediately.
 - **Timeline (Layer 2):** `compile_timeline`, `timeline_step`.
 - **Selection toolkit:** `all_of_type`, `min_by`/`max_by`, `count_where`, `nearest_where`/`farthest_where`, `has_component`, `kind`.
 - **View / cutscenes:** `set_camera(name)` — cut the scene viewport to a `def Camera` by name (leaf or full USD path); pairs with a timeline for cutscene camera changes. `possess(vessel)`, `notify(msg)`.
@@ -202,9 +205,13 @@ Available nodes include:
 
 ## 8. Persistence
 
-- **Per-entity scenarios → USD (load):** author `custom string lunco:script = '''<rhai>'''` on a prim; on spawn it auto-attaches and runs. *(Writing a live-edited scenario back onto its prim is not yet supported — it needs a USD asset↔document bridge.)*
+- **Per-entity scenarios → USD (load):** Two attributes attach a script to a prim at spawn:
+  - `custom string lunco:scriptPath = "scenarios/foo.rhai"` — path relative to the asset root; the engine loads the file.
+  - `custom string lunco:script = '''<rhai>'''` — inline source embedded directly in the USD layer.
+  Both auto-attach and run when the prim is spawned. *(Writing a live-edited scenario back onto its prim is not yet supported — it needs a USD asset↔document bridge.)*
 - **Tool libraries → files:** `<twin>/tools/*.rhai` (see [§7](#7-tools-shared-libraries)).
 - **Timelines → files:** `RegisterTimeline { name, timeline }` stores to `<twin>/timelines/<name>.json`; reloaded on Twin open. Discover with `ListTimelines`/`GetTimeline`; run a stored one with `RunStoredTimeline { target, name }`.
+- **Port-threshold events → USD:** author `custom string lunco:portEvents = "port<threshold:event_name, ..."` on a prim to fire telemetry events automatically when a cosim port crosses a threshold. Format: `portname<value:event` or `portname<=value:event` (supports `<`, `<=`, `>`, `>=`). Example: `"m_prop<200:lander_low_fuel, m_prop<=0.5:lander_depleted"` fires `lander_low_fuel` when the `m_prop` port drops below 200 and `lander_depleted` when it is ≤ 0.5. Scripts receive these via `on_event`.
 
 ## 9. Introspection & discovery
 
@@ -264,7 +271,9 @@ Scenarios are **host-authoritative**: they run on the `Host` and in single-playe
 behaviour via replication of the resulting entity state — it does not re-run the
 script (which would double-fire `cmd()`/`emit()` and diverge the per-entity
 `this`). For deterministic behaviour scripts read the fixed clock (`dt`,
-`sim_tick`, `elapsed_seconds`) and `rand()` is deliberately not exposed.
+`sim_tick`, `elapsed_seconds`); `rand()` is available but uses **deterministic
+per-hook seeding** (`(entity, tick, hook)` triple) so a re-run at the same tick
+produces the same sequence — no explicit seeding needed.
 
 ## 11. Running a scenario
 

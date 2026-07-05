@@ -201,7 +201,7 @@ The trade-off is that we need **span-aware AST ops** — see § 5.3.
 ### 5.2 Op set
 
 `ModelicaOp` is `#[non_exhaustive]` — all variants are implemented and
-cover the full Phase α editing surface:
+cover the editing surface:
 
 | Op | Effect | Used by |
 |----|--------|---------|
@@ -306,7 +306,7 @@ API edits backdate the AST debounce timer (`waive_ast_debounce`), so
 the canvas + text editor refresh inside the same frame instead of
 waiting out the keystroke debounce window — see § 5.7.
 
-**Gaps as of Phase α** — typed wrappers we don't expose yet, available
+**Current gaps** — typed wrappers we don't expose yet, available
 via `ApplyModelicaOps` or planned as standalones:
 
 - `SetPlacement` / `SetParameter` — only via `ApplyModelicaOps`
@@ -536,7 +536,7 @@ Today (pre-Document-System) the workflow is rougher:
 
 ## 9. The Modelica diagram editor
 
-The diagram panel (`lunco-modelica/src/ui/panels/canvas_diagram.rs`)
+The diagram panel (`crates/lunco-modelica/src/ui/panels/canvas_diagram/`)
 renders on top of `lunco-canvas` — the workbench's own canvas
 substrate. The panel is a thin *view* over a `ModelicaDocument`: the
 document is the authoritative state, the canvas scene is a rendered
@@ -859,14 +859,11 @@ twin-journal doc; not in scope here.
    channel.
 5. **Layer 4 — CRDT.** `yrs`-backed structural CRDT, journal merge.
 
-Layers 0–2 are days; 3 is days; 4 is weeks and warrants its own
-sprint with the journal subsystem.
-
 ## 10. Panels (current + planned)
 
 | Panel | Current | Notes |
 |-------|---------|-------|
-| **Diagram** | ✅ Working, generic rectangles, Dymola-style shapes in progress | `canvas_diagram.rs`, on `lunco-canvas` |
+| **Diagram** | ✅ Working, generic rectangles, Dymola-style shapes in progress | `canvas_diagram/`, on `lunco-canvas` |
 | **Code Editor** | ✅ Working | 423 LOC, plain egui TextEdit |
 | **MSL Palette** | ✅ Working | ~20 MSL components |
 | **Library Browser** | ✅ Working | File tree of `.mo` files |
@@ -888,11 +885,7 @@ a parameter value → the UI updates the hashmap but doesn't send
 the old value. Fixed in new `ModelicaInspectorPanel`; legacy panel to be
 retired.
 
-~~**Diagram ↔ Code disconnect**~~ — **resolved in Phase α**. The
-Diagram and Code editor now share a single `ModelicaDocument`. Edits
-in either panel flow through the document and update the other on
-the next frame. Opening a file from the Library Browser populates
-both views from the same source. See § 5 and § 9 above.
+**Diagram ↔ Code synchronization**: The Diagram and Code editor share a single `ModelicaDocument`. Edits in either panel flow through the document and update the other on the next frame. Opening a file from the Library Browser populates both views from the same source. See § 5 and § 9 above.
 
 **Acausal connector visual** (in progress on `lunco-canvas`):
 Modelica electrical / fluid connectors are acausal — wires shouldn't
@@ -908,7 +901,7 @@ is tracked separately on the canvas crate.
 - **No initial conditions in VisualDiagram** — `ParamDef` only stores a
   single value, not `start`, `fixed`, `min`, `max`.
 - **No Modelica class hierarchy** in the visual editor — only flat models.
-  OK for Phase 1; subsystems/packages are Phase 3+.
+  Subsystems/packages are planned.
 - **No simulation configuration UI** — hardcoded solver + tolerances.
 - **Orthogonal wire routing** — current bezier wires work, Dymola-style
   orthogonal paths are "nice to have."

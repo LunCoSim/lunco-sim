@@ -1,5 +1,7 @@
 # Mobility classifier — Substrate C
 
+> Substrate C of the [efficiency architecture](efficiency-and-maintainability.md).
+
 *Part of the efficiency/maintainability architecture. See
 `caching-and-precompute-strategy.md`.*
 

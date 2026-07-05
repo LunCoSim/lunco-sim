@@ -42,7 +42,7 @@ for that.
 
 | Type | Role |
 |------|------|
-| [`Panel`] | Trait every dockable UI implements: `id`, `title`, `default_slot`, `render(&mut Ui, &mut World)` |
+| [`Panel`] | Trait every dockable UI implements: `id`, `title`, `default_slot`, `render(&mut egui::Ui, &mut PanelCtx)` |
 | [`PanelId`] | Stable identifier newtype |
 | [`PanelSlot`] | Dock region: `SideBrowser` / `Center` / `RightInspector` / `Bottom` / `Floating` |
 | [`WorkbenchLayout`] | Bevy resource tracking what's docked where |
@@ -63,7 +63,7 @@ for that.
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiPlugin};
 use lunco_workbench::{
-    Panel, PanelId, PanelSlot, Perspective, PerspectiveId,
+    Panel, PanelCtx, PanelId, PanelSlot, Perspective, PerspectiveId,
     WorkbenchAppExt, WorkbenchLayout, WorkbenchPlugin,
 };
 
@@ -72,7 +72,7 @@ impl Panel for SceneTreePanel {
     fn id(&self) -> PanelId { PanelId("scene_tree") }
     fn title(&self) -> String { "Scene Tree".into() }
     fn default_slot(&self) -> PanelSlot { PanelSlot::SideBrowser }
-    fn render(&mut self, ui: &mut egui::Ui, _world: &mut World) {
+    fn render(&mut self, ui: &mut egui::Ui, _ctx: &mut PanelCtx) {
         ui.label("• Colony");
     }
 }
@@ -128,7 +128,7 @@ cargo run --bin lunica      # Modelica workbench
   impls contributed by domain plugins, reading the active Twin from
   `WorkspaceResource`.
 
-## What's explicitly NOT shipped yet
+## Not yet built
 
 - **Standard perspective presets** (Build / Simulate / Analyze / Plan /
   Observe) — host apps define them as they migrate panels.

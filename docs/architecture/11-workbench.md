@@ -14,10 +14,9 @@
 > sense). Read those sections with the translation in mind; the
 > terminology table in §1 is canonical.
 >
-> **Shipped & canonical.** `lunco-workbench` is the workbench crate; it
-> has replaced `bevy_workbench` and is now depended on by ~10 crates (luncosim,
-> lunco-sandbox, lunco-sandbox-edit, lunco-usd, lunco-modelica, lunco-celestial,
-> lunco-avatar, lunco-networking, …). The migration described in §13 is done.
+> `lunco-workbench` is the canonical workbench crate, depended on by ~10 crates
+> (luncosim, lunco-sandbox, lunco-sandbox-edit, lunco-usd, lunco-modelica,
+> lunco-celestial, lunco-avatar, lunco-networking, …).
 
 ## Contents
 
@@ -33,7 +32,6 @@
 - [10. Theming and keybinds](#10-theming-and-keybinds)
 - [11. Relationship to `lunco-ui` and domain crates](#11-relationship-to-lunco-ui-and-domain-crates)
 - [12. Three LunCoSim apps, different compositions](#12-three-luncosim-apps-different-compositions)
-- [13. Migration strategy (from bevy_workbench) — DONE](#13-migration-strategy-from-bevy_workbench--done)
 - [14. Open questions](#14-open-questions)
 - [Cross-domain URI handling](#cross-domain-uri-handling)
 - [See also](#see-also)
@@ -506,7 +504,7 @@ control kind), and a single panel walks all registered sections via
 
 ## 10. Theming and keybinds
 
-- Theming via egui's visuals system. Shipped themes: Dark, Light, High
+- Theming via egui's visuals system. Built-in themes: Dark, Light, High
   Contrast. Per-user customization via `theme.toml`.
 - Keybinds via a dedicated registry, each action declaring its default
   binding. User overrides in `keybinds.toml`. Modeled loosely on VS Code's
@@ -573,48 +571,6 @@ Same workbench shell, different panel sets, different default workspaces.
 `lunica` opens in the Analyze workspace; `lunco-sandbox`
 in Build; `luncosim` in Observe with quick access to all others.
 
-## 13. Migration strategy (from bevy_workbench) — DONE
-
-> This migration is complete. `bevy_workbench` has been retired and
-> `lunco-workbench` is the only workbench in `main`. The phase table below is
-> kept for historical reference.
-
-**Clean cutover, not parallel coexistence.** Each domain migrates its
-panels when `lunco-workbench` can host them; the final commit removes
-`bevy_workbench` entirely in one step.
-
-Phases (each one a discrete commit or small commit series):
-
-| Phase | Scope |
-|-------|-------|
-| 1 | Design complete (this doc). |
-| 2 | Build `lunco-doc` crate (Document, DocumentOp, DocumentHost, undo/redo). |
-| 3 | Build `lunco-twin` crate (Twin, TwinManifest, DocumentRegistry, CacheRegistry). |
-| 4 | Build `lunco-workbench` crate skeleton (root layout, Panel trait, Workspace enum, Welcome Screen). |
-| 5 | First panel migration: `SpawnPalette` moves to `lunco-workbench::Panel`. Proves the API. |
-| 6 | Migrate remaining `lunco-sandbox-edit` panels. |
-| 7 | Migrate `lunco-modelica` panels (Diagram, CodeEditor, Inspector, Telemetry, Graphs, PackageBrowser). |
-| 8 | Migrate `lunco-ui` panels (MissionControl). |
-| 9 | Add activity bar, status bar, transport controls, command palette, detachable windows. |
-| 10 | Retire `bevy_workbench` dep — single commit removing it and all `setup_sandbox` hardcoded-scene code from the three binaries. |
-
-Between phases, short-lived rough edges are acceptable — some panels
-may look sparse while migrating, some default layouts may need tuning.
-The reward is no transitional scar tissue in the final codebase.
-
-### Migration discipline
-
-- **Panels migrate whole, not partially.** When we start migrating a
-  panel, we finish it before moving on. No half-migrated panel sits in
-  the codebase.
-- **No feature flags for old vs. new UI.** The workbench in `main` is
-  the only workbench.
-- **Commit per panel or per closely-coupled panel group.** Git history
-  reads as "Migrated SpawnPalette to lunco-workbench Panel trait,"
-  easy to revert if needed.
-- **Examples ship with the apps.** The `setup_sandbox` code in each
-  binary becomes an example Twin under `examples/` before being deleted
-  from the binary.
 
 ## 14. Open questions
 

@@ -137,7 +137,7 @@ Below, selected crates whose responsibilities benefit from extra detail. (Crates
 ### Core Foundation
 
 **`lunco-core`**
-The bedrock of the simulation. Defines `DigitalPort`/`PhysicalPort` primitives for software/hardware interaction, the typed `Mutation<P>` command substrate (replacing the old string-based `CommandMessage`), `SimTick`, and the `ComponentGraph` canonical data structure for all 2D diagram visualizations (Modelica, FSW, SysML).
+The bedrock of the simulation. Defines `DigitalPort`/`PhysicalPort` primitives for software/hardware interaction, the typed `Mutation<P>` command substrate, `SimTick`, and the `ComponentGraph` canonical data structure for all 2D diagram visualizations (Modelica, FSW, SysML).
 
 **`lunco-time`**
 The unified mission-time spine (architecture doc 19). Owns `MissionClock`/`TimeTransport`/`WorldTime` (the world animation clock that also gates physics via `Time<Virtual>`), the `TimeDomain` clock tree (`Playback`, `TimeBinding`, `ResolvedDomains`) with the `AnimationPreview` domain + `ControlAnimation` transport, and the `scales` projection layer (UTC↔TAI↔TT↔TDB, sidereal) over `celestial-time`. **All time-scale/JD nuance lives here; consumers delegate.**

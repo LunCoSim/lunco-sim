@@ -1,6 +1,7 @@
 # 31 — Networking & State Sync
 
-**Status:** As-built.
+> Status: Active · Audience: contributors working on networking, replication, and sync
+
 **Crate:** [`lunco-networking`](../../crates/lunco-networking) · **Feature-gated** on `networking`.
 
 LunCoSim multiplayer is **not** one replication stream. State that differs in
