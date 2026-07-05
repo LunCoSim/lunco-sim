@@ -34,7 +34,10 @@
 
 use bevy::prelude::*;
 
+use std::sync::Arc;
+
 use lunco_core::{Ack, CommandResults, OpId, TelemetryEvent, TelemetryValue};
+use lunco_hash::fnv1a64;
 
 use rhai::{Dynamic, Engine, ImmutableString, Map, AST};
 
@@ -532,6 +535,27 @@ pub fn build_world_engine() -> Engine {
         bridge_core::emit(name.as_str(), TelemetryValue::Bool(true))
     });
 
+    // subscribe(name) — call in on_start to receive ONLY the named events in
+    // on_event (default with no subscribe = all events). An optimisation: skips
+    // the per-event VM entry for events you don't name. Footgun — a name you
+    // forget won't reach on_event; when unsure, don't subscribe (you get all).
+    engine.register_fn("subscribe", |name: ImmutableString| {
+        SUBS_ACCUM.with(|s| {
+            if let Some(a) = s.borrow_mut().as_mut() {
+                a.exact.push(name.into());
+            }
+        });
+    });
+    // subscribe_prefix(pfx) — receive every event whose name starts with `pfx`
+    // (e.g. "enter:" for all zone-enters). Same on_start-only semantics.
+    engine.register_fn("subscribe_prefix", |pfx: ImmutableString| {
+        SUBS_ACCUM.with(|s| {
+            if let Some(a) = s.borrow_mut().as_mut() {
+                a.prefixes.push(pfx.into());
+            }
+        });
+    });
+
     // sim_tick() -> i64 — current FixedUpdate tick.
     engine.register_fn("sim_tick", || -> i64 { bridge_core::sim_tick() });
 
@@ -614,13 +638,162 @@ pub fn build_world_engine() -> Engine {
 // object-map (rhai functions are pure — they can't see top-level `let`s). One
 // shared `Engine` carries the world-bridge verbs, so a hook can `cmd()`/`get()`.
 
-/// Per-entity compiled rhai program + live state.
-struct RhaiScenarioState {
+/// Which lifecycle hooks a program defines — **structure**, derived from the AST
+/// once at compile and cached with it. Replaces the per-call
+/// `ast.iter_functions().any(...)` scan: the driver consults these bits before
+/// entering the VM, so an absent hook (esp. `on_event`, checked per *event*) is a
+/// cheap bool test, not an AST walk + a wasted `call_fn`.
+#[derive(Clone, Copy, Debug, Default)]
+struct ProgramMask {
+    start: bool,
+    tick: bool,
+    stop: bool,
+    event: bool,
+}
+
+impl ProgramMask {
+    fn from_ast(ast: &AST) -> Self {
+        let mut m = ProgramMask::default();
+        for f in ast.iter_functions() {
+            match (f.name, f.params.len()) {
+                ("on_start", 1) => m.start = true,
+                ("on_tick", 1) => m.tick = true,
+                ("on_stop", 1) => m.stop = true,
+                ("on_event", 2) => m.event = true,
+                _ => {}
+            }
+        }
+        m
+    }
+
+    /// Whether the one-arg lifecycle hook for `hook` is defined.
+    fn has(&self, hook: crate::scenario::ScenarioHook) -> bool {
+        match hook {
+            crate::scenario::ScenarioHook::Start => self.start,
+            crate::scenario::ScenarioHook::Tick => self.tick,
+            crate::scenario::ScenarioHook::Stop => self.stop,
+        }
+    }
+
+    /// The hook names present, in the driver's dispatch order — for `ScriptInspect`.
+    fn hook_names(&self) -> Vec<String> {
+        let mut v = Vec::new();
+        if self.start {
+            v.push("on_start".into());
+        }
+        if self.tick {
+            v.push("on_tick".into());
+        }
+        if self.stop {
+            v.push("on_stop".into());
+        }
+        if self.event {
+            v.push("on_event".into());
+        }
+        v
+    }
+}
+
+/// A compiled scenario program: the prelude-merged `AST` + its derived hook mask.
+/// **Pure structure** — a function of `source` alone, so identical sources share
+/// one `Arc` across every entity and every relaunch (content-addressed by
+/// `fnv1a64(source)` in [`RhaiScenarioRuntime::compiled`]). Carries **no**
+/// per-instance state: the `scope` (const globals, seeded by a world-touching
+/// top-level run) and `this` map live in [`RhaiScenarioState`] and are never
+/// shared or cached — that firewall is what keeps the memo determinism-safe.
+struct CompiledProgram {
     ast: AST,
+    mask: ProgramMask,
+}
+
+/// A memoized compile outcome: a shared program, or the diagnostic a bad source
+/// produced (cached so a fleet sharing one broken source parses + logs once).
+enum CacheEntry {
+    Ok(Arc<CompiledProgram>),
+    Err(Diagnostic),
+}
+
+/// Soft cap on the compile memo (see [`RhaiScenarioRuntime::compiled`]). At the
+/// limit the map is cleared; the working set of distinct scenario sources is far
+/// below this, so a clear is rare and only costs a cold re-parse next compile.
+const COMPILED_CACHE_CAP: usize = 512;
+
+/// Which events a scenario wants delivered to its `on_event` — **per-entity
+/// state** (set at runtime in `on_start` via `subscribe`/`subscribe_prefix`), so
+/// it is NOT part of the shared [`CompiledProgram`]. Default [`All`] = every
+/// event (behaviour-identical to no filter). A scenario that subscribes trades a
+/// tiny footgun (forget a name ⇒ that event skips its `on_event`) for skipping
+/// the VM entry on every event it doesn't care about — the P2 optimisation, opt-in.
+#[derive(Clone, Debug)]
+enum EventFilter {
+    /// No filter — deliver every event (the default; forgetting to subscribe is
+    /// safe, it just means "all", never a silent drop).
+    All,
+    /// Only events whose name is in `exact` or starts with a `prefixes` entry
+    /// (e.g. `subscribe_prefix("enter:")` for every zone-enter).
+    Named {
+        exact: std::collections::HashSet<String>,
+        prefixes: Vec<String>,
+    },
+}
+
+impl Default for EventFilter {
+    fn default() -> Self {
+        EventFilter::All
+    }
+}
+
+impl EventFilter {
+    fn matches(&self, name: &str) -> bool {
+        match self {
+            EventFilter::All => true,
+            EventFilter::Named { exact, prefixes } => {
+                exact.contains(name) || prefixes.iter().any(|p| name.starts_with(p.as_str()))
+            }
+        }
+    }
+}
+
+/// Accumulates `subscribe()` calls made during the CURRENT `on_start` (see
+/// [`SUBS_ACCUM`]); harvested into the entity's [`EventFilter`] right after.
+#[derive(Default)]
+struct SubsAccum {
+    exact: Vec<String>,
+    prefixes: Vec<String>,
+}
+
+impl SubsAccum {
+    fn into_filter(self) -> EventFilter {
+        if self.exact.is_empty() && self.prefixes.is_empty() {
+            EventFilter::All
+        } else {
+            EventFilter::Named { exact: self.exact.into_iter().collect(), prefixes: self.prefixes }
+        }
+    }
+}
+
+thread_local! {
+    /// Subscription accumulator for the `on_start` currently executing. The
+    /// driver arms it (`Some(default)`) before `on_start` and harvests it after;
+    /// `subscribe`/`subscribe_prefix` verbs push into it. `None` outside an
+    /// `on_start` window, so a stray `subscribe()` in `on_tick` is a harmless
+    /// no-op (documented: subscribe in `on_start`). Single-threaded — the
+    /// scenario driver is an exclusive system.
+    static SUBS_ACCUM: std::cell::RefCell<Option<SubsAccum>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Per-entity live state + a handle to the shared compiled program.
+struct RhaiScenarioState {
+    /// Shared, content-addressed compiled program (AST + hook mask).
+    program: Arc<CompiledProgram>,
     /// Top-level `const` globals, populated by running the body once at compile.
     scope: rhai::Scope<'static>,
     /// Per-entity mutable state bound as `this` in every hook.
     this: Dynamic,
+    /// Which events reach this entity's `on_event` (default: all). Set from
+    /// `subscribe()` calls harvested after `on_start`.
+    filter: EventFilter,
 }
 
 /// The rhai [`ScenarioRuntime`](crate::scenario::ScenarioRuntime): one
@@ -629,6 +802,21 @@ struct RhaiScenarioState {
 pub struct RhaiScenarioRuntime {
     engine: Engine,
     states: std::collections::HashMap<Entity, RhaiScenarioState>,
+    /// Content-addressed memo of compile *outcomes*, keyed by `fnv1a64(source)`.
+    /// The compile step (parse + prelude-merge + mask derive) is pure structure,
+    /// so identical sources — every rover with the same controller, every replay
+    /// of a tutorial — reuse one `Arc` instead of re-parsing. Failures are cached
+    /// too, so a fleet sharing a broken source parses + logs once, not per entity.
+    /// A source edit bumps the doc generation → new source → new key → a fresh
+    /// entry. Not keyed on tool-lib/prelude generation: those affect the engine's
+    /// *runtime* module resolution, not the AST parse, so a cached AST stays valid.
+    ///
+    /// Bounded, not GC'd: entries are retained for cross-entity/replay reuse (even
+    /// after an entity despawns), so an authoring session that edits a script many
+    /// times would grow this unboundedly. [`COMPILED_CACHE_CAP`] caps it — at the
+    /// limit the whole map is cleared (a cold rebuild on the next compile, cheap
+    /// since the working set is small). A finer LRU is deferred until measured.
+    compiled: std::collections::HashMap<u64, CacheEntry>,
     /// The prelude compiled to an `AST`, merged into every scenario's AST so its
     /// helpers — including the engine-driven `__run_task` / `__note_task_event`
     /// drivers — are resolvable by `call_fn` (which searches the AST, NOT the
@@ -650,6 +838,7 @@ impl Default for RhaiScenarioRuntime {
         Self {
             engine,
             states: std::collections::HashMap::new(),
+            compiled: std::collections::HashMap::new(),
             prelude_ast,
             // build_world_engine already refreshed at the current generation.
             tool_gen: crate::tool_libs::generation(),
@@ -665,48 +854,79 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         params: &str,
     ) -> crate::scenario::CompileOutcome {
         use crate::scenario::CompileOutcome;
-        match self.engine.compile(source) {
-            Ok(ast) => {
-                // Merge the prelude's functions into the scenario AST so the
-                // engine-driven `__run_task`/`__note_task_event` (and every other
-                // prelude helper) are resolvable by `call_fn`. Merging prelude←user
-                // lets a user function win on any name/arity clash; the prelude has
-                // no top-level body, so the seed-run below still executes only the
-                // user's top level.
-                let ast = self.prelude_ast.merge(&ast);
-                let mut scope = rhai::Scope::new();
-                // Expose scenario parameters as a read-only `params` constant
-                // (native JSON→Dynamic, one hop). Empty / bad JSON → empty map,
-                // so `params` is always a readable object.
-                let params_value = match (params.is_empty(), serde_json::from_str::<serde_json::Value>(params)) {
-                    (true, _) => RhaiBuilder.map(Vec::new()),
-                    (false, Ok(v)) => bridge_core::build_from_json(&RhaiBuilder, &v),
-                    (false, Err(e)) => {
-                        warn!("[rhai] entity {entity:?} ignoring bad params JSON: {e}");
-                        RhaiBuilder.map(Vec::new())
+        // ── Structure: the compiled program (parse + prelude-merge + hook mask)
+        // is a pure function of `source`. Content-address it by `fnv1a64(source)`
+        // and reuse the `Arc` across every entity/replay; parse only on a miss.
+        let key = fnv1a64(source.as_bytes());
+        let program = match self.compiled.get(&key) {
+            Some(CacheEntry::Ok(p)) => p.clone(),
+            // Cached failure: return the same diagnostic without re-parsing or
+            // re-logging (each entity still surfaces its own DocumentDiagnostics).
+            Some(CacheEntry::Err(d)) => return CompileOutcome::Failed(d.clone()),
+            None => {
+                // Bound the memo before inserting (see COMPILED_CACHE_CAP).
+                if self.compiled.len() >= COMPILED_CACHE_CAP {
+                    self.compiled.clear();
+                }
+                match self.engine.compile(source) {
+                    Ok(ast) => {
+                        // Merge the prelude's functions into the scenario AST so
+                        // the engine-driven `__run_task`/`__note_task_event` (and
+                        // every other prelude helper) are resolvable by `call_fn`.
+                        // Merging prelude←user lets a user function win on any
+                        // name/arity clash; the prelude has no top-level body, so
+                        // the seed-run below still executes only the user's top level.
+                        let ast = self.prelude_ast.merge(&ast);
+                        let mask = ProgramMask::from_ast(&ast);
+                        let p = Arc::new(CompiledProgram { ast, mask });
+                        self.compiled.insert(key, CacheEntry::Ok(p.clone()));
+                        p
                     }
-                };
-                scope.push_constant_dynamic("params", params_value);
-                // Run the top-level body once to seed `const` globals; a runtime
-                // error there is non-fatal (hooks still run) — surface it.
-                let top_level = match self.engine.run_ast_with_scope(&mut scope, &ast) {
-                    Ok(()) => None,
                     Err(e) => {
-                        error!("[rhai] entity {entity:?} top-level failed: {e}");
-                        Some(rhai_diagnostic(e.to_string(), e.position()))
+                        error!("[rhai] entity {entity:?} compile error: {e}");
+                        let d = rhai_diagnostic(e.to_string(), e.position());
+                        self.compiled.insert(key, CacheEntry::Err(d.clone()));
+                        return CompileOutcome::Failed(d);
                     }
-                };
-                self.states.insert(
-                    entity,
-                    RhaiScenarioState { ast, scope, this: Dynamic::from_map(Map::new()) },
-                );
-                CompileOutcome::Ready { top_level }
+                }
+            },
+        };
+
+        // ── State: seed a FRESH scope + `this` for THIS entity — never shared.
+        // The top-level seed-run touches the world and depends on `params`, so it
+        // is per-instance; this is the firewall that lets the AST above be shared.
+        let mut scope = rhai::Scope::new();
+        // Expose scenario parameters as a read-only `params` constant (native
+        // JSON→Dynamic, one hop). Empty / bad JSON → empty map, so `params` is
+        // always a readable object.
+        let params_value = match (params.is_empty(), serde_json::from_str::<serde_json::Value>(params)) {
+            (true, _) => RhaiBuilder.map(Vec::new()),
+            (false, Ok(v)) => bridge_core::build_from_json(&RhaiBuilder, &v),
+            (false, Err(e)) => {
+                warn!("[rhai] entity {entity:?} ignoring bad params JSON: {e}");
+                RhaiBuilder.map(Vec::new())
             }
+        };
+        scope.push_constant_dynamic("params", params_value);
+        // Run the top-level body once to seed `const` globals; a runtime error
+        // there is non-fatal (hooks still run) — surface it.
+        let top_level = match self.engine.run_ast_with_scope(&mut scope, &program.ast) {
+            Ok(()) => None,
             Err(e) => {
-                error!("[rhai] entity {entity:?} compile error: {e}");
-                CompileOutcome::Failed(rhai_diagnostic(e.to_string(), e.position()))
+                error!("[rhai] entity {entity:?} top-level failed: {e}");
+                Some(rhai_diagnostic(e.to_string(), e.position()))
             }
-        }
+        };
+        self.states.insert(
+            entity,
+            RhaiScenarioState {
+                program,
+                scope,
+                this: Dynamic::from_map(Map::new()),
+                filter: EventFilter::default(),
+            },
+        );
+        CompileOutcome::Ready { top_level }
     }
 
     fn call_hook(
@@ -722,9 +942,22 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
             ScenarioHook::Tick => ("on_tick", 2),
             ScenarioHook::Stop => ("on_stop", 3),
         };
+        // Arm the subscription accumulator for `on_start`, so `subscribe()` calls
+        // made during it are captured (harvested into `st.filter` below). Left
+        // `None` for other hooks → a stray `subscribe()` outside `on_start` is a
+        // harmless no-op.
+        if matches!(hook, ScenarioHook::Start) {
+            SUBS_ACCUM.with(|s| *s.borrow_mut() = Some(SubsAccum::default()));
+        }
         // Seed the deterministic RNG for this hook: (entity, tick, hook).
         bridge_core::rng_begin(self_gid as u64, bridge_core::sim_tick() as u64, salt);
-        let user = call_hook(&self.engine, &mut st.scope, &st.ast, name, self_gid, &mut st.this);
+        // Only enter the VM if the program defines this lifecycle hook (cached
+        // mask bit — no AST scan). The built-in drivers below run regardless.
+        let user = if st.program.mask.has(hook) {
+            call_hook(&self.engine, &mut st.scope, &st.program.ast, name, self_gid, &mut st.this)
+        } else {
+            None
+        };
         // Built-in drivers (prelude fns, called regardless of what the user AST
         // defines): after on_start, seed `this.task`/`this.mission` from `task(me)`
         // / `mission(me)` fns if present; after on_tick, advance the declared task
@@ -740,12 +973,26 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
             let e = call_prelude_driver(
                 &self.engine,
                 &mut st.scope,
-                &st.ast,
+                &st.program.ast,
                 name,
                 &mut st.this,
                 vec![Dynamic::from_int(self_gid)],
             );
             driver_err = driver_err.or(e);
+        }
+        // Harvest subscriptions declared during `on_start` into the entity's
+        // event filter (no calls → stays `EventFilter::All`). Always take() to
+        // clear the accumulator, but only APPLY it when `on_start` ran clean:
+        // a hook that errored partway may have registered only some of its
+        // `subscribe()` calls, and a partial `Named` filter would silently drop
+        // every unnamed event for the entity's life. On error, leave filter = All.
+        if matches!(hook, ScenarioHook::Start) {
+            let accum = SUBS_ACCUM.with(|s| s.borrow_mut().take());
+            if user.is_none() {
+                if let Some(accum) = accum {
+                    st.filter = accum.into_filter();
+                }
+            }
         }
         user.or(driver_err).map(|(msg, pos)| rhai_diagnostic(msg, pos))
     }
@@ -766,14 +1013,21 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
             bridge_core::hash_str(&event.name),
         );
         let st = self.states.get_mut(&entity)?;
-        let user =
-            call_event_hook(&self.engine, &mut st.scope, &st.ast, self_gid, &mut st.this, evt.clone());
+        // Per-EVENT hot path: only enter the VM for the user hook if the program
+        // defines `on_event` (cached mask bit — no AST scan) AND this event passes
+        // the entity's subscription filter (default: all). Either fails → skip the
+        // call entirely; the built-in task driver below still sees every event.
+        let user = if st.program.mask.event && st.filter.matches(&event.name) {
+            call_event_hook(&self.engine, &mut st.scope, &st.program.ast, self_gid, &mut st.this, evt.clone())
+        } else {
+            None
+        };
         // Feed the event into the BUILT-IN task too, so `wait_for(name)` steps in a
         // `this.task` complete without a hand-written on_event. No-op if no task.
         let task = call_prelude_driver(
             &self.engine,
             &mut st.scope,
-            &st.ast,
+            &st.program.ast,
             "__note_task_event",
             &mut st.this,
             vec![Dynamic::from_int(self_gid), evt],
@@ -796,19 +1050,9 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         // passed a JsonBuilder (the API path); a script-facing inspect verb could
         // pass RhaiBuilder and get a Dynamic back with zero conversion.
         let state = dynamic_to_value(b, &st.this);
-        // Report only the lifecycle hooks the program actually defines (matched on
-        // name + arity, exactly as the driver dispatches them).
-        let hooks = st
-            .ast
-            .iter_functions()
-            .filter(|f| {
-                matches!(
-                    (f.name, f.params.len()),
-                    ("on_start", 1) | ("on_tick", 1) | ("on_stop", 1) | ("on_event", 2)
-                )
-            })
-            .map(|f| f.name.to_string())
-            .collect();
+        // Report only the lifecycle hooks the program defines — straight from the
+        // cached mask (derived at compile), no AST re-scan.
+        let hooks = st.program.mask.hook_names();
         Some(crate::scenario::ScenarioSnapshot { state, hooks })
     }
 
@@ -828,10 +1072,11 @@ pub fn tick_rhai_scenarios(world: &mut World) {
     crate::scenario::ScenarioDriver::<RhaiScenarioRuntime>::run(world, ScriptLanguage::Rhai);
 }
 
-/// Call a one-arg hook (`fn name(self)`) if the AST defines it, binding `this`
-/// to the entity's persistent state map. `eval_ast=false` so only the function
-/// runs (top-level already ran at compile); `rewind_scope=false` keeps the
-/// `const` globals available across calls. Logs any error.
+/// Call a one-arg hook (`fn name(self)`), binding `this` to the entity's
+/// persistent state map. The caller guarantees the hook exists (via the cached
+/// `ProgramMask`), so this does no presence check. `eval_ast=false` so only the
+/// function runs (top-level already ran at compile); `rewind_scope=false` keeps
+/// the `const` globals available across calls. Logs any error.
 fn call_hook(
     engine: &Engine,
     scope: &mut rhai::Scope,
@@ -840,12 +1085,8 @@ fn call_hook(
     self_id: i64,
     this: &mut Dynamic,
 ) -> Option<(String, rhai::Position)> {
-    let present = ast
-        .iter_functions()
-        .any(|f| f.name == name && f.params.len() == 1);
-    if !present {
-        return None;
-    }
+    // Presence is the caller's responsibility — the driver gates on the cached
+    // `ProgramMask`, so there's no per-call AST scan here.
     let args = [Dynamic::from_int(self_id)];
     let options = rhai::CallFnOptions::new()
         .eval_ast(false)
@@ -871,12 +1112,8 @@ fn call_event_hook(
     this: &mut Dynamic,
     evt: Dynamic,
 ) -> Option<(String, rhai::Position)> {
-    let present = ast
-        .iter_functions()
-        .any(|f| f.name == "on_event" && f.params.len() == 2);
-    if !present {
-        return None;
-    }
+    // Presence is the caller's responsibility now — `deliver_event` gates this on
+    // the cached `ProgramMask::event` bit, so no per-event AST scan here.
     let args = [Dynamic::from_int(self_id), evt];
     let options = rhai::CallFnOptions::new()
         .eval_ast(false)

@@ -7343,6 +7343,7 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-fsw",
+ "lunco-hash",
  "lunco-hooks-rhai",
  "lunco-time",
  "lunco-tools",

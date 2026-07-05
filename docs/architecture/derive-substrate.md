@@ -166,6 +166,7 @@ uniform write; it never re-bakes.
 |---|---|---|---|
 | **Ports** (Substrate D) | `SyncInline` | `CompiledWiring` — names → slot handles | propagation reads/writes slots |
 | **USD → ECS** projection | `SyncInline` | composed prim → ECS components | live sim / predicted values |
+| **Scenario programs** ([doc](scenario-program-cache.md)) | `SyncInline` | compiled AST + hook mask (key: `fnv1a64(source)`) | per-entity `scope`/`this` + event filter |
 | **Terrain colliders** | `CpuAsync` | cook heightfield → `Collider` (key: DEM hash, node, res) | transform placement at spawn |
 | **DEM surface/normal textures** (`derived_layers.rs`, already precompute) | `CpuAsync` | bake 512² maps (key: DEM hash) | — |
 | **LOD tile meshes** | `CpuAsync` | bake geometry (key: DEM hash, node) | — |
