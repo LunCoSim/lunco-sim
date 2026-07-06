@@ -184,6 +184,13 @@ fn manage_physics_hold(
 ///
 /// So the moonbase sandbox sets `DemDelegated` and the *one* Inspector panel tunes
 /// the DEM craters/rocks live; a slab-only scene leaves it `Standalone`.
+// TODO: remove `Standalone` (and with it the slab build + the
+// `stamp_crater`/`stamp_craters`/`build_height_grid`/`crater_delta` stamp chain
+// in `field.rs`). No production path reaches it: the only `ObstacleFieldPlugin`
+// consumer (the sandbox) hardcodes `DemDelegated`, and nothing — scene attr,
+// API, rhai — can select Standalone at runtime. It survives as the enum default
+// + unit-test scaffolding only. Removing it leaves
+// `lunco_terrain_core::crater_profile` as the single crater cross-section.
 #[derive(Resource, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ObstacleFieldMode {
     Standalone,

@@ -466,13 +466,10 @@ as today).
     `restore_runtime`), so this rebuilds the projected stage in place whenever the
     doc moves past the mounted generation — order-independent w.r.t. restore.
 
-  **Scope deviation from the original sketch:** the live *default* twin scene
-  loads via `LoadScene` with **no** `UsdDocument` (`open_usd_docs_on_twin_added`
-  fires `LoadScene`, it does not `allocate`), so "every live scene is doc-backed"
-  is false today. E1 is therefore **doc-backed only** — it covers exactly the
-  spawn/move-persistence case (which already requires an open `active_document`).
-  Making the default twin scene auto-open a document (so the fallback disappears)
-  is the **E1b** follow-up — IMPLEMENTED below.
+  **Scope:** E1 covers editor-opened (`OpenFile`) scenes. The live *default*
+  twin scene is doc-backed through **E1b** below — its document opens FIRST and
+  the one scene mount composes from it, so "every live scene is doc-backed"
+  holds for both paths.
 
   **E1b. Default twin scene = doc-backed, web-ready (IMPLEMENTED).**
   The default twin scene loads through the `twin://` asset source + the async
@@ -488,14 +485,19 @@ as today).
     document's base layer is read *through the twin source* (web-ready), not
     `FileStorage`/`std::fs`. Shares the `.usda` extension with `UsdLoader`; the
     requested asset type selects the loader.
-  - **lunco-usd** (`twin_projection.rs`): `open_usd_docs_on_twin_added` keeps
-    firing `LoadScene` (immediate file-backed mount) AND kicks a `UsdSourceText`
-    load of `twin://<name>/<scene>`; `drain_pending_twin_docs` allocates the
-    document once the base text arrives (origin = on-disk path, so Save + dedup
-    work); `sync_twin_overlays` serializes the composed source into the twin
-    overlay and `reload`s the scene asset whenever the document generation moves
-    (initial, open-time `restore_runtime`, later spawns/moves). The existing
-    asset-reload → re-instantiate machinery refeeds the live world.
+  - **lunco-usd** (`twin_projection.rs`): the mount is **doc-first** — on
+    `TwinAdded`, `open_usd_docs_on_twin_added` only kicks a `UsdSourceText` load
+    of `twin://<name>/<scene>` (no eager `LoadScene`); once the base text
+    arrives, `drain_pending_twin_docs` allocates the document (origin = on-disk
+    path, so Save + dedup work), restores the persisted `.lunco/runtime`
+    overlay, publishes the composed (`base ⊕ runtime`) source as the twin
+    overlay, and only then fires `LoadScene` — the **single** projection already
+    carries all restored runtime state. (Mounting eagerly and doc-backing
+    afterwards projected the whole scene twice: raw base first, then the
+    open-time `restore_runtime`'s coarse `ReplaceSource` marker forced a
+    whole-scene rebuild ~70 ms later.) After open, `sync_twin_overlays` projects
+    each edit's typed op onto the live stage in place and re-serializes the
+    overlay debounced, once the document settles.
   - **Why this is the web-ready path:** the live world re-composes from the
     document through the *same* `twin://`-anchored async loader, so the `twin://`
     identity (and thus all co-located/library refs) is preserved — native and web
@@ -560,22 +562,21 @@ as today).
       `resync_paths`. The whole-scene in-place rebuild now runs **only** on
       `full_reload` / unknown-batch — so a single spawn/delete no longer
       re-instantiates terrain + every other rover (E2-4 for E1).
-    - **E1b** (`sync_twin_overlays`) reconciles **deferred**: the flattened reader
-      refreshes *asynchronously* through the `twin://` loader (only it resolves
-      `twin://` / `lunco://` refs — a sync compose can't), so the reconcile is
-      queued in `PendingTwinReconciles` and run by `drain_twin_reconciles` once
-      the reload's `LoadedWithDependencies` lands (buffered by
-      `collect_reloaded_twin_assets`). This also **fixes a latent E1b bug**: the
-      previous "just `reload`" structural path was a no-op for an already-built
-      scene (a reload doesn't re-instantiate `UsdVisualSynced` entities), so twin
-      structural edits never showed; the deferred reconcile (or `full_rebuild_twin_scene`
-      for the coarse case) now actually refeeds them. First mount (`synced == None`)
-      stays the plain initial load via `sync_usd_visuals` — no baseline to diff.
-    Tests: `resync_paths` populated + `full_reload` clear for add/remove,
-    `full_reload` set on ring overflow. lunco-usd 55 green; lunco-usd-sim builds.
-    **Verification still pending:** none of E1/E1b/E2 has been exercised in the
-    running sandbox — the async twin reconcile timing in particular wants an
-    end-to-end check (spawn a rover → drag → delete → reopen).
+    - **E1b** (`sync_twin_overlays`) projects **author-once**: each recorded op
+      is the single delta description, replayed as a typed author directly onto
+      the scene's live `CanonicalStage` (`apply_incremental_op_to_stage`) so the
+      openusd change sink fires and `project_stage_changes` realizes it in place
+      — no asset reload, no re-derived diff. Coarse ops (`ReplaceSource`,
+      `MovePrim`, keyframes, relationships) and op-ring overflow fall back to
+      `rebuild_scene_from_composed`; edits confined to a `LiveRebuildExempt`
+      subtree (the DEM terrain, which re-bakes itself from the document) skip
+      the whole-scene refresh entirely. A referenced spawn whose asset closure
+      isn't resident fetches it once (`PendingRefSpawns` → `drain_ref_spawns`),
+      then authors the same way. The initial mount needs no reconcile at all —
+      it composes from the doc's overlay by construction (doc-first, above).
+    Verified live in the sandbox: twin open projects once (a single
+    `[load-scene]`), restored runtime rovers spawn wired and drivable, and
+    spawn/move/dig edits project in place without scene reloads.
 - **E3. Journal → network = collaboration (= Phase D).** Local edits append to
   the journal; remote edits replay from it. This is Nucleus live-sync; openusd
   `Diff` is the process-portable delta.

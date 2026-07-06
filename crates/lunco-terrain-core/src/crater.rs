@@ -143,8 +143,8 @@ fn gauss(d: f64, center: f64, sigma: f64) -> f64 {
 }
 
 /// Crater cross-section (metres) at normalised radial distance `d` (0 = centre,
-/// 1 = rim radius). The `f64` canonical of `lunco-obstacle-field`'s `crater_delta`
-/// — same profile, sampled instead of rasterised: a bowl `−depth·(1−dᵖ)`
+/// 1 = rim radius). The canonical profile — `lunco-obstacle-field`'s
+/// `crater_delta` is an f32 wrapper delegating here: a bowl `−depth·(1−dᵖ)`
 /// (`bowl_power` p = 2 paraboloid fresh → larger = flat degraded floor) turning
 /// UP into the inner wall, a SHARP raised rim lip at `d≈1` (the key cue under
 /// raking light), then a low outward ejecta apron peaking near `d≈1.15`.

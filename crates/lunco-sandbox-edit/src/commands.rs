@@ -2739,7 +2739,7 @@ pub fn on_set_shader_source(
     // overwriting that asset id propagates the recompile to them.
     let handle = asset_server.load::<bevy::shader::Shader>(ev.path.clone());
     let shader = bevy::shader::Shader::from_wgsl(ev.source.clone(), ev.path.clone());
-    shaders.insert(handle.id(), shader);
+    let _ = shaders.insert(handle.id(), shader);
     info!(
         "SET_SHADER_SOURCE: recompiled {} from {} bytes of WGSL",
         ev.path,

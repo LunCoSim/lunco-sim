@@ -97,7 +97,7 @@ fn tile_mesh_to_bytes(m: &TileMesh) -> Vec<u8> {
     let mut out = Vec::with_capacity(16 + verts * (3 + 3 + 3 + 2) * 4 + m.indices.len() * 4);
     out.extend_from_slice(&(verts as u64).to_le_bytes());
     out.extend_from_slice(&(m.indices.len() as u64).to_le_bytes());
-    let mut push3 = |v: &[[f32; 3]], out: &mut Vec<u8>| {
+    let push3 = |v: &[[f32; 3]], out: &mut Vec<u8>| {
         for p in v {
             for c in p {
                 out.extend_from_slice(&c.to_le_bytes());
@@ -132,7 +132,7 @@ fn tile_mesh_from_bytes(b: &[u8]) -> Option<TileMesh> {
     if b.len() != expect {
         return None;
     }
-    let mut read3 = |off: &mut usize| -> Option<Vec<[f32; 3]>> {
+    let read3 = |off: &mut usize| -> Option<Vec<[f32; 3]>> {
         let mut v = Vec::with_capacity(verts);
         for _ in 0..verts {
             let s = take(off, 12)?;

@@ -10,6 +10,8 @@
 # cache; it should keep the StandardMaterial (displayColor) and warn once.
 def Xform "ShaderFallbackTest"
 {
+    custom string lunco:description = "A cube whose material points at a shader library with no fragment entry — on purpose. Checks that the app falls back to the plain material with one warning instead of stalling the renderer."
+
     def DistantLight "Sun"
     {
         float inputs:intensity = 8000

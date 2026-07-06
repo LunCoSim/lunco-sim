@@ -78,8 +78,10 @@ impl HeightGrid {
         }
     }
 
-    // (crater cross-section moved to the free fn `crater_delta` so the streamed-tile
-    // stamp AND a dedicated high-fidelity crater mesh share one profile.)
+    // (crater cross-section: `crater_delta` below — an f32 wrapper over the
+    // canonical `lunco_terrain_core::crater_profile`. Streamed tiles sample
+    // terrain-core's crater layer directly; this stamp path serves only
+    // Standalone-mode obstacle fields.)
 
     /// Stamp every crater placement using the layer's depth/rim ratios.
     pub fn stamp_craters(&mut self, placements: &[Placement], layer: &CraterLayer) {

@@ -294,16 +294,23 @@ carried to its conclusion.
   rebake. Net *less* wiring.
 
 - **Regen must be a physics-atomic activation unit, not despawn+rebuild.** The
-  canonical spec names the *terrain double-bake* as the thing incremental
-  projection exists to fix: **keep the old collider until the new one is ready,
-  swap in one flush**, gated by a sim-time barrier so the swap is deterministic
-  across peers. The height-oracle makes staging clean — swap the pure `HeightSource`
-  first (cheap), stage the tile / collider bakes, activate the collider atomically.
+  collider ring already does the local half of this: on an oracle swap it marks
+  tiles **stale instead of despawning them**, keeps the old collider live while
+  the replacement bakes off-thread, and swaps the new `Collider` onto the same
+  entity — regen never opens a physics hole. Still open: the sim-time barrier
+  that makes the swap frame deterministic across networked peers.
 
 ## Dynamic modification: editing terrain with tools
 
-*(By design, not yet built — this section records how live tool-driven terrain
-edits fit the oracle so nothing here has to be retrofitted later.)*
+Live tool edits are built: brush raise/dig (`BrushTerrain`) and flatten
+(`FlattenTerrain`) — armed from the Tools palette, applied by scene click, or
+driven over rhai/HTTP/MCP — author edit records through the document, project
+into the composed `EditsLayer` modifier, and re-bake **only the tiles whose
+region the edit touches** (`TerrainDirty`). Doc-backed terrains carry
+`LiveRebuildExempt`: a USD edit confined to the terrain subtree
+(`edit_confined_to_exempt_subtree`) refreshes the terrain in place and never
+reloads the scene. The rest of this section records how the editing model maps
+onto the oracle.
 
 A tool edit — dig a pit, raise a berm, flatten a pad, bore a skylight, drop a
 boulder — is **not a mutation of a mesh or a heightfield**. It is one more
@@ -359,24 +366,18 @@ are height modifiers; carve edits (tunnel, skylight, pit shaft) are carve/mask;
 place-object edits (rock, prefab, structure) are geometry gprims. One editing model,
 the same three contributions a static layer makes.
 
-**What this asks of the design (hooks, deliberately deferred):**
+**Hook status:**
 
-- **A generic `BrushField` modifier** in `lunco-terrain-core` — `CraterField` is
-  already exactly this shape (a parametric radial profile over placements), so a
-  brush generalises it to arbitrary profiles; the deterministic bucket index it uses
-  gives the **bounded dirty-region lookup** an edit needs for free.
-- **Freeform sculpt** (arbitrary per-vertex Δ, not parametric) is the one edit that
-  *does* store samples: a `SparseEditField` — a hashmap/edit-raster of touched cells,
-  itself a `HeightSource`. It stays bounded, composable, and content-addressable; it
-  is a *layer over* the base, never a replacement of it.
-- **An edit → dirty-quads signal** into the bake queue (the optimization branch's
-  `BakeQueue`): an edit enqueues its affected quads, and error-driven detail
-  ([measured error](../../crates/lunco-terrain-core/src/error.rs)) auto-refines a
-  sharp edit locally while slope-limiting keeps its collider contact-stable.
-
-In short: the height oracle handles dynamic modification natively. The zero-conflict
-core landing now (`CraterField`, the bucket index, measured error, quantize, the
-slope limiter) is already the substrate an editing toolset would stand on.
+- **Parametric brush edits** — built: `EditsLayer` is the generic
+  radial-profile-over-placements modifier (`CraterField`'s shape generalised),
+  and its bucket index gives the bounded dirty-region lookup.
+- **Edit → dirty-tiles signal** — built: an edit records its footprint as a
+  `TerrainDirty` region; only overlapping tiles/collider tiles re-bake, and
+  error-driven detail auto-refines a sharp edit locally.
+- **Freeform sculpt** (arbitrary per-vertex Δ, not parametric) — still deferred:
+  a `SparseEditField` — a hashmap/edit-raster of touched cells, itself a
+  `HeightSource`. It stays bounded, composable, and content-addressable; a
+  *layer over* the base, never a replacement of it.
 
 ## Current state & roadmap
 
@@ -385,23 +386,49 @@ oracle** — `SurfaceOracle` (`oracle.rs`: raster base + ordered analytic
 `HeightModifier`s, per-modifier content keys) retained as `DemHeightField` and
 sampled by the tile baker, the collider ring (through the
 `prepare_collider_heights` slope-limit + quantize firewall), the derived-layer
-texture bakes, the rock scatter, and the `TerrainHeight` query — craters and
-runtime edits are analytic modifiers (`Craters`, `EditsLayer`), no longer raster
-stamps, so rim crispness is bounded by tile tessellation, not grid resolution
-(`detailUpsample` is retired); **error-driven CDLOD** — `select_with_error` over
-memoized `measure_node_error` per node (`TerrainNodeErrors`), range factor from
-the canonical screen metric (`pixel_error` knob), morph bands snapped to
-log-lattice buckets so batching survives per-parent bands; **procedural
-over-zoom** — `Overzoom` in core (hashed craterlet bands on the lunar
+texture bakes, the rock scatter, the `TerrainHeight` query, and **UI picking**
+(`raycast_surface`: the spawn ghost, footprint corner probes, and terrain brush
+march the oracle instead of physics colliders, so placement hugs the drawn
+ground even where no collider exists) — craters and runtime edits are analytic
+modifiers (`Craters`, `EditsLayer`), no longer raster stamps, so rim crispness
+is bounded by tile tessellation, not grid resolution (`detailUpsample` is
+retired); **the crater model** — octave-stratified overprint (same-scale
+craters overprint via min/max, scale-separated ones superpose, so small bowls
+survive inside large ones), power-law size-frequency population (2–60 m,
+exponent −1.8) with azimuth-lobed secondaries around large parents, and a
+degradation morph (fresh paraboloid → soft flat dish via `bowl_power` 2–6, rim
+decay), all band-limited per consumer; **error-driven CDLOD** —
+`select_with_error` over memoized `measure_node_error` per node
+(`TerrainNodeErrors`), range factor from the canonical screen metric
+(`pixel_error` knob) with **budget fitting by metric coarsening** (tile budget
+exceeded → raise `pixel_error`, so morph bands move with the detail radius),
+morph bands snapped to log-lattice buckets so batching survives per-parent
+bands, and **dynamic bodies as forced refinement foci** (the ground under a
+rover always draws at max depth, matching the collider ring's fixed
+resolution); **streaming** — off-thread tile bakes (budgeted per frame,
+bounded in flight) ordered coarse-carpet-first (whole view covered in a few
+frames, never a black screen) then by screen-space benefit weighted toward the
+camera heading, a reveal morph settling each child onto its parent's lattice,
+a content-addressed on-disk tile cache (`tile_cache`, keyed on the oracle's
+`surface_key`) so warm reloads stream instead of baking, and
+`TerrainStreamStatus` driving a status-bar progress indicator; **procedural
+over-zoom** — `Overzoom` in core (hashed craterlet bands ≤ 2 m on the lunar
 size-frequency shape + FBM micro-relief, Nyquist-gated per consumer via
-`SurfaceOracle::detail_limited`), authored as a `lunco:layer = "overzoom"` prim;
-streamed CDLOD visual tiles (`stream_viz`) with vertex-morph geomorph via
-`ShaderMaterial`; opt-in per-tile collider ring (`collider_ring`); big_space
-per-tile anchoring; `TerrainLayerStack` composed from USD `lunco:layer` child
-prims; `CompositeHeightSource` (core, pure); `TerrainGeoref` parsed from
-`lunco:anchor:*`; derived surface/normal layers content-addressed through
-`lunco-precompute` (`derived_layers.rs`, keyed on base heights + the oracle's
-modifier content key); `TerrainHeight` scripting query.
+`SurfaceOracle::detail_limited`), **on by default** — an authored
+`lunco:layer = "overzoom"` prim overrides or zeroes it; streamed CDLOD visual
+tiles (`stream_viz`) with vertex-morph geomorph via `ShaderMaterial`, tiles
+`NotShadowCaster` (rim self-shadow rides the horizon ray-march, not the
+cascades); **the collider ring** (`collider_ring`) — 3×3 depth-7 tiles of 129²
+heightfields around each focus, `FIX_INTERNAL_EDGES`, baked off-thread with
+stale-swap on regen (old collider lives until the replacement lands on the
+same entity), following the visual LOD by default; rock colliders are spheres
+at 0.6× the bucket-visual radius so physical contact matches the drawn rock;
+big_space per-tile anchoring; `TerrainLayerStack` composed from USD
+`lunco:layer` child prims; `CompositeHeightSource` (core, pure);
+`TerrainGeoref` parsed from `lunco:anchor:*`; derived surface/normal layers
+content-addressed through `lunco-precompute` (`derived_layers.rs`, keyed on
+base heights + the oracle's modifier content key); `TerrainHeight` scripting
+query.
 
 > **Note on the USD read path:** as-built terrain still reads USD via the *flatten*
 > reader (`UsdStageAsset` / `UsdDataExt`). The canonical-Stage cutover (above) is a
@@ -413,10 +440,10 @@ modifier content key); `TerrainHeight` scripting query.
    `Craters` modifier on the `SurfaceOracle`, sampled by the tile baker and the
    collider ring at their own resolutions.
 2. ~~Per-tile geometric error → error-driven CDLOD~~ — **done** for the visual
-   tiles (`select_with_error` + memoized `measure_node_error`). Still open:
-   collider-ring resolution driven by the same error metric (the ring is fixed
-   canonical-depth/res today), and moving the ring's heightfield build off the
-   main thread.
+   tiles (`select_with_error` + memoized `measure_node_error`), and the ring's
+   heightfield builds are off the main thread (async bake + stale-swap). Still
+   open: collider-ring resolution driven by the same error metric (the ring is
+   fixed canonical-depth/res today).
 3. **Carve/mask channel** — the seam for caves/pits/skylights (baker clip +
    heightfield→trimesh fallback on mouth tiles).
 4. **Canonical-Stage read migration** (forced when this worktree merges
@@ -428,11 +455,12 @@ modifier content key); `TerrainHeight` scripting query.
    from `lunco:anchor:lat/lon`, relate the globe and surface grids, swap by
    altitude. (`CompositeHeightSource` is done in core; the wiring + lat/lon↔XZ
    reprojection are deferred.)
-6. **Tile bake cache** — extend the existing `lunco_precompute::Bake` pattern
-   (already used by `derived_layers`) to tile + collider bakes, so one bake feeds
-   visuals + physics and ships as a spec+hash across peers. (Not a bespoke
-   `cache://` asset — the content-address substrate already landed. The
-   `SurfaceOracle::content_key` is the modifier half of that cache key.)
+6. **Tile bake cache** — **partly done**: visual tile meshes are
+   content-addressed on disk (`tile_cache`, keyed on `SurfaceOracle::surface_key`
+   + tile coord), so a warm reload of the same composed surface streams instead
+   of baking. Still open: sharing the bake with the collider ring (one sample
+   pass feeding visuals + physics) and shipping bakes as spec+hash across peers
+   via the `lunco_precompute::Bake` pattern.
 
 [Cesium-for-Omniverse]: https://github.com/CesiumGS/cesium-omniverse
 

@@ -91,28 +91,6 @@ impl PendingTwinDocs {
     }
 }
 
-/// Make a twin scene **doc-backed** (E1b) outside the `TwinAdded` observer — for
-/// binaries that mount a twin scene via a direct [`LoadScene`](crate::LoadScene)
-/// (e.g. the sandbox `--scene`) rather than opening a workspace Twin. Reads the
-/// scene's base layer through the twin source (`twin://<name>/<rel>`, web-ready)
-/// and queues a document for it; once allocated, [`sync_twin_overlays`] serves the
-/// composed (`base ⊕ runtime`) source so runtime USD edits project to the live
-/// world. The mount itself comes from [`drain_pending_twin_docs`] once the doc
-/// exists (a caller-side `LoadScene` for the same path is a no-op by then) —
-/// the same doc-first path `open_usd_docs_on_twin_added` runs in production.
-/// `abs_path` is the scene's on-disk path (the document origin → Save target +
-/// dedup key).
-pub fn doc_back_twin_scene(
-    asset_server: &AssetServer,
-    pending: &mut PendingTwinDocs,
-    twin_name: &str,
-    rel: &str,
-    abs_path: PathBuf,
-) {
-    let handle = asset_server.load::<UsdSourceText>(format!("twin://{twin_name}/{rel}"));
-    pending.push(handle, twin_name.to_string(), rel.to_string(), abs_path);
-}
-
 /// The twin-source coordinates + last-synced generation for a doc-backed twin
 /// scene, so [`sync_twin_overlays`] re-serializes only when the document moved.
 struct TwinSceneRef {

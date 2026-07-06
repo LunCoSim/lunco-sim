@@ -562,7 +562,7 @@ fn replay_scenario_journal_shader(
                 // Same hot-reload hook as the local edit: overwrite the asset id
                 // every material holds so the recompile propagates.
                 let handle = asset_server.load::<bevy::shader::Shader>(path.clone());
-                shaders.insert(handle.id(), bevy::shader::Shader::from_wgsl(source, path));
+                let _ = shaders.insert(handle.id(), bevy::shader::Shader::from_wgsl(source, path));
             }
         }
         applied.insert(id);
@@ -2729,15 +2729,11 @@ fn setup_sandbox(world: &mut World) {
             root_prim: String::new(),
         });
     }
-    // NOTE: full USD doc-backing of the `--scene` (Step 0 / E1b `sync_twin_overlays`)
-    // is deliberately NOT enabled here. It works, but its edit path RELOADS +
-    // re-instantiates the WHOLE scene on every USD edit, which fights the terrain's
-    // own lightweight incremental re-bake (`regenerate_dem_layers` on
-    // `Changed<TerrainLayerStack>`) → two re-bake paths → a duplicated scene.
-    // Live terrain tuning instead goes through the terrain's incremental path (the
-    // Inspector → `TerrainLayerStack` edit → `regenerate_dem_layers`). A
-    // lightweight doc-reparse (USD edit → re-parse just the layer stack, no scene
-    // reload) is the future unification — see the design doc.
+    // `--scene` is doc-backed through the same path as any workspace Twin: the
+    // `TwinAdded` above runs the doc-first mount (`open_usd_docs_on_twin_added` →
+    // `drain_pending_twin_docs`), and terrain edits stay on the incremental
+    // re-bake — `LiveRebuildExempt` + `edit_confined_to_exempt_subtree` keep a
+    // terrain-confined USD edit from ever reloading the scene.
 }
 
 /// Tracks the requested startup scene so [`startup_scene_failguard`] can turn a

@@ -32,6 +32,8 @@
 
 over "LanderTest"
 {
+    custom string lunco:description = "The powered-descent scene replayed as a cut-scene: a keyframed camera cranes down from orbit while the lander lands itself, then the view chases the rover through its survey course. Sit back and watch."
+
     # ── OrbitView: keyframed establishing dolly ("coming down from orbit") ──
     # A top-level `def Camera` whose `xformOp:translate` is animated with
     # `timeSamples`. Because the prim carries xform timeSamples it is tagged

@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize};
 /// to the scene-dominant sun (`DistantLight` → `DirectionalLight`, owned by the
 /// environment).
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum LocalLightShadows {
+pub(crate) enum LocalLightShadows {
     /// No local light casts a shadow. Cheapest; lights still illuminate.
     Off,
     /// Only the locally-possessed vessel's lights cast shadows — the rover you
@@ -55,7 +55,7 @@ pub enum LocalLightShadows {
 /// [`lunco_settings`] — mutate `ResMut<ShadowCastingSettings>` and it saves; the
 /// change re-projects reactively via [`reapply_on_settings_change`].
 #[derive(Resource, Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
-pub struct ShadowCastingSettings {
+pub(crate) struct ShadowCastingSettings {
     /// Policy for rover headlights / local fill lights. See [`LocalLightShadows`].
     pub local_lights: LocalLightShadows,
 }
@@ -194,7 +194,7 @@ fn reapply_on_settings_change(
 
 /// Registers the [`ShadowCastingSettings`] simulation setting and the reactive
 /// observers/system that project it onto local lights.
-pub struct LightPolicyPlugin;
+pub(crate) struct LightPolicyPlugin;
 
 impl Plugin for LightPolicyPlugin {
     fn build(&self, app: &mut App) {

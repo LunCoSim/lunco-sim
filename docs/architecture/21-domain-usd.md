@@ -192,20 +192,18 @@ scene loads as a **single root** (the `LoadScene` / `SetActiveStage` path —
 clear-and-replace, one `UsdPrimPath` root under the Grid). Loading another
 scene re-points that single active stage; it never stacks.
 
-> **This supersedes today's "import every scene" behavior.** On `TwinAdded`,
-> the current code (`open_usd_docs_on_twin_added`, `lunco-usd/src/commands.rs`)
-> loops *every* `.usda` in the Twin and fires `OpenFile` on each — and for a
-> USD path `OpenFile` not only registers the document, it **additively mounts**
-> it into the Grid (`spawn_scene_root_world`, Blender-style append). So opening
-> a Twin with three scenes stacks all three into one viewport. That fights
-> composition and is **not** the intended model.
->
-> Intended behavior: on Twin open, resolve **one** active stage per the table
-> above and mount only that. The other `.usda` files are still *indexed* and
-> shown in the browser (so the user can see and open them), but are **not**
-> mounted — they are a referenceable asset library, composed into the active
-> stage on demand via `AddReference` (see Verbs). Switching scenes re-points
-> the single active stage; it never stacks.
+On `TwinAdded` (`open_usd_docs_on_twin_added`, `lunco-usd/src/commands.rs`),
+exactly **one** stage resolves per the table above, and the mount is
+**doc-first**: the scene's document opens first (its base read through the
+`twin://` source, web-ready), the persisted `.lunco/runtime` overlay is
+restored into it, its composed (`base ⊕ runtime`) source is published as the
+twin byte-overlay — and only then does `LoadScene` fire, so the **single**
+projection already carries restored runtime spawns/moves (see the E1b flow in
+[18-unified-journal-and-history](18-unified-journal-and-history.md)). The
+Twin's other `.usda` files are *indexed* and shown in the browser but **not**
+mounted — a referenceable asset library, composed into the active stage on
+demand via `AddReference` (see Verbs). Switching scenes re-points the single
+active stage; it never stacks.
 
 ### `default_scene` is a path, the scene owns composition
 
