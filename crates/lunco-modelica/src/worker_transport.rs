@@ -94,6 +94,19 @@ pub enum WireMessage {
     /// so the other workers decode for their own compiles but skip the ~173 MB
     /// transfer the main thread would just dedupe away.
     InstallParsedMslCompressed { bytes: Vec<u8>, provide_to_main: bool },
+    /// Untar + parse the **source** `sources-*.tar.zst` bundle off the main
+    /// thread and install the resulting parsed AST bundle. This is the
+    /// tag-mismatch fallback: when the shipped pre-parsed bundle was built by a
+    /// different rumoca (its bincode can't deserialize), the source `.mo` files
+    /// are still good, so the worker reparses them into a fresh, matching bundle
+    /// instead of the main thread doing a synchronous untar (the freeze). Keys
+    /// each doc by its root-relative tar path (`Modelica/…`) — identical to the
+    /// build-time bundle (`build_msl_assets::rel_key`) — so resolution matches.
+    /// `provide_to_main` behaves exactly as in [`InstallParsedMslCompressed`]:
+    /// the primary worker bincode-encodes the parsed bundle and transfers it
+    /// back for the main thread's deserialize-only ingest, then both report
+    /// readiness with [`WireResult::MslReady`].
+    ParseSourceMslCompressed { bytes: Vec<u8>, provide_to_main: bool },
     /// Diagnostic round-trip — worker echoes back as a `WireResult::Log`.
     /// Used by the test bridge (`window.__lc_test_worker_ping`) to confirm
     /// the worker is alive and responding without sending an actual
@@ -1450,6 +1463,58 @@ pub fn install_msl_compressed_in_worker(compressed: &[u8]) -> usize {
          transfer); secondaries seed after worker 0 is ready — awaiting off-thread decode \
          (gate opens on MslReady)",
         bytes.len()
+    );
+    1
+}
+
+/// Ship the compressed **source** `sources-*.tar.zst` bundle to worker 0 for
+/// off-thread untar + reparse — the tag-mismatch fallback (see
+/// [`WireMessage::ParseSourceMslCompressed`]). Worker 0 parses, installs its own
+/// copy, and transfers the freshly-encoded parsed bundle back to main
+/// (`provide_to_main = true`) for deserialize-only ingest. Returns `1` if posted
+/// to worker 0, `0` if no worker pool is installed (the caller then untars on
+/// the main thread instead).
+pub fn parse_msl_source_in_worker(compressed: &[u8]) -> usize {
+    let bytes = match bincode::serialize(&WireMessage::ParseSourceMslCompressed {
+        bytes: compressed.to_vec(),
+        provide_to_main: true,
+    }) {
+        Ok(b) => b,
+        Err(e) => {
+            bevy::log::error!("[worker_transport] encode source-parse MSL envelope failed: {e}");
+            return 0;
+        }
+    };
+    let posted = {
+        let mut p = pool().lock_or_recover();
+        if p.workers.is_empty() {
+            return 0;
+        }
+        let WorkerHandle(worker) = &p.workers[0];
+        let array = Uint8Array::new_with_length(bytes.len() as u32);
+        array.copy_from(&bytes);
+        let transfer = js_sys::Array::new();
+        transfer.push(&array.buffer());
+        match worker.post_message_with_transfer(&array, &transfer) {
+            Ok(()) => {
+                p.msl[0] = MslState::Decoding;
+                true
+            }
+            Err(e) => {
+                bevy::log::error!(
+                    "[worker_transport] source-parse MSL post to worker 0 failed: {e:?}"
+                );
+                false
+            }
+        }
+    };
+    if !posted {
+        return 0;
+    }
+    bevy::log::info!(
+        "[worker_transport] shipped compressed MSL SOURCE to worker 0 for off-thread \
+         untar+reparse (~{} bytes) — tag-mismatch fallback (no main-thread freeze)",
+        compressed.len()
     );
     1
 }

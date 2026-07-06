@@ -231,6 +231,57 @@ pub fn deserialize_parsed_bundle(
     bincode::deserialize(decoded).map_err(|e| format!("bincode deserialize: {e}"))
 }
 
+/// Untar + parse the compressed **source** bundle (`sources-*.tar.zst`) into the
+/// parsed AST bundle. Each doc is keyed by its root-relative tar path
+/// (`Modelica/…`) — identical to the build-time bundle keys
+/// (`build_msl_assets::rel_key`) — so runtime class resolution matches. This is
+/// the worker's tag-mismatch fallback (see
+/// `worker_transport::WireMessage::ParseSourceMslCompressed`): a rumoca-version
+/// skew makes the shipped pre-parsed bundle undeserializable, but the `.mo`
+/// sources are still valid and reparse into a fresh, matching bundle.
+#[cfg(target_arch = "wasm32")]
+pub fn parse_source_bundle_to_docs(
+    compressed: &[u8],
+) -> Result<Vec<(String, rumoca_compile::parsing::StoredDefinition)>, String> {
+    let files = lunco_assets::web_fetch::unpack_tar_zst(compressed, 2700)?;
+    let mut out = Vec::with_capacity(files.len());
+    let mut failed = 0usize;
+    for (path, content) in files {
+        let uri = path.to_string_lossy().replace('\\', "/");
+        if !uri.ends_with(".mo") {
+            continue;
+        }
+        let Ok(src) = std::str::from_utf8(&content) else {
+            failed += 1;
+            continue;
+        };
+        match rumoca_phase_parse::parse_to_ast(src, &uri) {
+            Ok(def) => out.push((uri, def)),
+            Err(_) => failed += 1,
+        }
+    }
+    if out.is_empty() {
+        return Err(format!("source bundle produced 0 parsed docs ({failed} failed)"));
+    }
+    if failed > 0 {
+        bevy::log::warn!(
+            "[MSL] source reparse: {failed} file(s) failed to parse (kept {})",
+            out.len()
+        );
+    }
+    Ok(out)
+}
+
+/// bincode-encode a parsed bundle in the same wire format
+/// [`deserialize_parsed_bundle`] reads — used by the worker to transfer a
+/// freshly-reparsed bundle back to the main thread.
+#[cfg(target_arch = "wasm32")]
+pub fn encode_parsed_bundle(
+    docs: &[(String, rumoca_compile::parsing::StoredDefinition)],
+) -> Result<Vec<u8>, String> {
+    bincode::serialize(docs).map_err(|e| format!("bincode serialize: {e}"))
+}
+
 // ─── Chunked main-thread MSL decode ────────────────────────────────
 //
 // On wasm the main-thread rumoca session needs the MSL ASTs in *its own*
@@ -975,6 +1026,17 @@ fn count_mo_files(root: &std::path::Path) -> usize {
 #[cfg(target_arch = "wasm32")]
 type SharedSlot = Arc<Mutex<SlotInner>>;
 
+/// Frames `drain_msl_load_slot` waits for a worker to come up before untarring
+/// the tag-mismatch source bundle on the main thread instead. ~3 s at 60 fps —
+/// the worker normally installs within the first few boot frames.
+#[cfg(target_arch = "wasm32")]
+const MSL_SOURCE_PARSE_MAX_WAIT: u32 = 180;
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static MSL_SOURCE_PARSE_WAIT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 #[cfg(target_arch = "wasm32")]
 #[derive(Default)]
 struct SlotInner {
@@ -990,6 +1052,12 @@ struct SlotInner {
     /// Raw **compressed** `sources-*.tar.zst` bytes + their manifest entry,
     /// stashed for lazy unpack on first editor drill-in.
     pending_source_compressed: Option<(Vec<u8>, lunco_assets::msl::MslBundleEntry)>,
+    /// Raw **compressed** `sources-*.tar.zst` bytes to untar + reparse **in the
+    /// worker** (the tag-mismatch fallback), instead of a synchronous
+    /// main-thread untar that would freeze the page. Drained by
+    /// [`drain_msl_load_slot`], which ships it to the worker and only untars on
+    /// the main thread if no worker is available.
+    pending_source_parse_compressed: Option<Vec<u8>>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1036,6 +1104,53 @@ fn drain_msl_load_slot(
             // Worker will deliver the decoded bytes; keep the compressed blob as
             // a deadline fallback in case it never does (crash before delivery).
             stash_main_decode_fallback(pbytes);
+        }
+        if let Some((sbytes, smeta)) = inner.pending_source_compressed.take() {
+            stash_compressed_source(sbytes, smeta);
+        }
+        return;
+    }
+    // Tag-mismatch fallback: a compressed SOURCE bundle is waiting to be
+    // reparsed. Prefer the worker (off-thread untar + parse → the main thread
+    // ingests deserialize-only via `ingest_worker_decoded_msl`). If no worker is
+    // ready yet, wait a bounded number of frames (it comes up during boot); only
+    // then untar on the main thread so inline / no-worker builds still load.
+    if inner.pending_source_parse_compressed.is_some() {
+        let shipped = crate::worker_transport::parse_msl_source_in_worker(
+            inner.pending_source_parse_compressed.as_ref().unwrap(),
+        );
+        if shipped > 0 {
+            inner.pending_source_parse_compressed = None;
+            // Keep the compressed source for lazy drill-in / msl_index unpack.
+            if let Some((sbytes, smeta)) = inner.pending_source_compressed.take() {
+                stash_compressed_source(sbytes, smeta);
+            }
+            return;
+        }
+        let waited = MSL_SOURCE_PARSE_WAIT.with(|c| {
+            let n = c.get() + 1;
+            c.set(n);
+            n
+        });
+        if waited < MSL_SOURCE_PARSE_MAX_WAIT {
+            return; // worker not up yet — keep pending, retry next frame
+        }
+        // Give up waiting: untar on the main thread and route to the existing
+        // chunked parser via the `pending_source` path (installed next frame).
+        let sbytes = inner.pending_source_parse_compressed.take().unwrap();
+        match lunco_assets::web_fetch::unpack_tar_zst(&sbytes, 2700) {
+            Ok(files) => {
+                inner.pending_source = Some(MslAssetSource::InMemory(Arc::new(
+                    lunco_assets::msl::MslInMemory { files },
+                )));
+                bevy::log::warn!(
+                    "[MSL] no worker after waiting — untarred + parsing source on the main \
+                     thread (chunked)"
+                );
+            }
+            Err(e) => {
+                inner.pending_state = Some(MslLoadState::Failed(e));
+            }
         }
         if let Some((sbytes, smeta)) = inner.pending_source_compressed.take() {
             stash_compressed_source(sbytes, smeta);
@@ -1185,7 +1300,7 @@ mod web {
     use super::*;
     use std::collections::HashSet;
 
-    use lunco_assets::msl::{MslInMemory, MslManifest};
+    use lunco_assets::msl::MslManifest;
     use lunco_assets::web_fetch;
     use wasm_bindgen::prelude::*;
 
@@ -1365,8 +1480,13 @@ mod web {
             return Ok(());
         }
 
-        // ── Fallback: decompress the source bundle and let the chunked
-        // ── per-file parser build the AST over many frames.
+        // ── Fallback (tag mismatch / no pre-parsed bundle): do NOT untar on this
+        // ── async task — a synchronous untar on the single wasm thread blocks the
+        // ── event loop (the "stall then finish" freeze). Stash the compressed
+        // ── source; `drain_msl_load_slot` ships it to the worker for off-thread
+        // ── untar + reparse (keys match the build-time bundle), and only untars
+        // ── on the main thread if no worker ever comes up. Also stash it for lazy
+        // ── drill-in unpack.
         set_state(
             slot,
             MslLoadState::Loading {
@@ -1375,23 +1495,9 @@ mod web {
                 bytes_total: manifest.sources.uncompressed_bytes,
             },
         );
-        let files = web_fetch::unpack_tar_zst(&sources_bytes, manifest.sources.file_count)?;
-        if !files.contains_key(std::path::Path::new(&manifest.msl_root_marker)) {
-            return Err(format!(
-                "bundle missing root marker `{}`",
-                manifest.msl_root_marker
-            ));
-        }
-        let in_memory = MslInMemory { files };
-        let source_file_count = in_memory.file_count();
-        let source_uncompressed = in_memory.total_bytes();
         if let Ok(mut s) = slot.lock() {
-            s.pending_source = Some(MslAssetSource::InMemory(Arc::new(in_memory)));
-            s.pending_state = Some(MslLoadState::Ready {
-                file_count: source_file_count,
-                compressed_bytes: manifest.sources.compressed_bytes,
-                uncompressed_bytes: source_uncompressed,
-            });
+            s.pending_source_parse_compressed = Some(sources_bytes.clone());
+            s.pending_source_compressed = Some((sources_bytes, manifest.sources.clone()));
         }
 
         Ok(())
