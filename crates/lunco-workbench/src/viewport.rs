@@ -599,7 +599,24 @@ pub fn egui_viewport_aware_picking(
 pub fn track_egui_focus(
     mut focus: ResMut<lunco_core::EguiFocus>,
     mut q: Query<&mut bevy_egui::EguiContext, With<PrimaryEguiContext>>,
+    panel_rects: Res<PanelRects>,
+    windows: Query<&bevy::window::Window>,
 ) {
+    // Is the cursor over the live 3D viewport rect? In the docked "Build"
+    // perspective the transparent `ViewportPanel` leaf makes egui
+    // `wants_pointer_input()` TRUE over the 3D region — the exact reason the click
+    // path needs `egui_viewport_aware_picking`. Without excluding it here, scroll-
+    // zoom and mouse-look over the scene would be wrongly attributed to egui and
+    // suppressed (symptom: wheel-zoom only worked while a mouse button was held,
+    // because pressing flips egui's internal `any_pressed` and momentarily drops
+    // `wants_pointer_input()`). Uses physical cursor px to match `PanelRects`. In
+    // View mode `PanelRects` is empty, so this is a no-op.
+    let over_viewport = windows
+        .iter()
+        .find_map(|w| w.physical_cursor_position())
+        .map(|p| !panel_rects.is_empty() && panel_rects.any_contains(p))
+        .unwrap_or(false);
+
     let (mut kb, mut ptr) = (false, false);
     // Fold over every primary context (normally exactly one). If any wants the
     // input, the scene shouldn't get it.
@@ -608,6 +625,10 @@ pub fn track_egui_focus(
         kb |= c.wants_keyboard_input();
         ptr |= c.wants_pointer_input();
     }
+    // Over the viewport rect the pointer "want" is just the transparent
+    // ViewportPanel leaf — the scene owns the pointer there.
+    ptr = ptr && !over_viewport;
+
     // Change-guarded so the resource isn't dirtied every frame.
     if focus.wants_keyboard != kb || focus.wants_pointer != ptr {
         focus.wants_keyboard = kb;

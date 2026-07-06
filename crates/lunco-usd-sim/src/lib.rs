@@ -830,12 +830,19 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             }
 
             commands.entity(entity).insert((
-                // The rover's command surface (throttle/steer/brake input ports, mixed
-                // to the wheels by `apply_drive_mix`) is NOT hardcoded here — it is
-                // derived from the vessel's USD `Controls` binding by
-                // `sync_fsw_command_surface`. Start empty; the `_RoverControl` profile
-                // declares the vocabulary.
-                FlightSoftware::new(port_map, &[]),
+                // Seed the CANONICAL rover command surface (throttle/steer/brake) that
+                // `apply_drive_mix` reads and the skid/Ackermann/driveMix kernels all
+                // consume — universal to every `PhysxVehicleContextAPI` rover here.
+                // Any *extra* authored intents are still added on top by
+                // `sync_fsw_command_surface` from the vessel's USD `Controls` binding
+                // (additive/idempotent). We seed directly rather than relying solely
+                // on that binding because it is delivered via the asset's ROOT-LAYER
+                // `subLayers` (`_RoverControl` in `control_profiles.usda`), which does
+                // NOT compose through a runtime `references=` spawn — so a
+                // palette/API-spawned rover otherwise got an EMPTY surface (no
+                // throttle port) and could be possessed but never driven, while
+                // scene-authored rovers worked. Seeding here fixes both paths.
+                FlightSoftware::new(port_map, &["throttle", "steer", "brake"]),
                 lunco_core::SelectableRoot,
                 RoverWheels::default(),
             ));

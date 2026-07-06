@@ -9,5 +9,6 @@
   "Action":       ["KeyF", "Space"],
   "Release":      ["KeyG"],
   "SwitchMode":   ["KeyV"],
-  "Pause":        ["KeyP"]
+  "Pause":        ["KeyP"],
+  "Cancel":       ["Backspace"]
 }

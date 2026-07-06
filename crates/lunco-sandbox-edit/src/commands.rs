@@ -24,16 +24,35 @@ use std::collections::{HashMap, VecDeque};
 use crate::catalog::{SpawnCatalog, SpawnSource, spawn_usd_entry};
 
 /// Spawn an entity from the catalog at a given world position.
-#[Command]
+///
+/// `reflect_default` so API/rhai callers can omit optional fields: a missing
+/// `rotation` defaults to `None` (→ identity) and a missing/unresolved `target`
+/// falls back to the first grid in `on_spawn_entity_command`. Without this, the
+/// reflect deserializer rejects any partial params ("not constructible") and the
+/// command is silently dropped — the GUI path always supplies every field, so the
+/// gap only bit API/HTTP callers that sent just `{entry_id, position}`.
+#[Command(reflect_default)]
 pub struct SpawnEntity {
-    /// The grid entity to spawn under.
+    /// The grid entity to spawn under. `Entity::PLACEHOLDER` (or an id that
+    /// doesn't resolve) → first grid.
     pub target: Entity,
     /// The catalog entry ID (e.g. "ball_dynamic", "skid_rover").
     pub entry_id: String,
     /// World-space position (x, y, z).
     pub position: Vec3,
-    /// World-space rotation (optional).
+    /// World-space rotation (optional; omitted → identity).
     pub rotation: Option<Quat>,
+}
+
+impl Default for SpawnEntity {
+    fn default() -> Self {
+        Self {
+            target: Entity::PLACEHOLDER,
+            entry_id: String::new(),
+            position: Vec3::ZERO,
+            rotation: None,
+        }
+    }
 }
 
 /// Detach a joint by despawning it.
@@ -292,6 +311,16 @@ pub fn on_spawn_entity_command(
             position: cmd.position,
         },
     ));
+
+    // TEMPORARY: follow this spawn for a few seconds to root-cause the
+    // "spawn rover on rugged terrain → it disappears" bug (probes ground-collider
+    // readiness under the spawn point + tracks fall-through/explosion/despawn).
+    crate::spawn_watch::tag_spawn_watch(
+        &mut commands,
+        result.root_entity,
+        cmd.entry_id.clone(),
+        cmd.position,
+    );
 }
 
 /// Client: instantiate rovers the host has replicated to us (M1 content
@@ -3200,6 +3229,9 @@ fn doc_for_stage(
 impl Plugin for SpawnCommandPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_spawn_entity_command);
+        // TEMPORARY spawn diagnostics (`[spawnwatch]` logs) — remove after the
+        // rugged-terrain vanish is root-caused.
+        app.add_systems(Update, crate::spawn_watch::watch_spawned);
         app.add_observer(on_detach_joint);
         // Dock release as an actuator on the intent→port machinery (replaces the
         // hardcoded G-to-detach): register the `release` port backend, attach a

@@ -357,6 +357,7 @@ pub fn on_scene_click_spawn(
     q_grids: Query<Entity, With<Grid>>,
     q_ghost: Query<Entity, With<SpawnGhost>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    egui_focus: Res<lunco_core::EguiFocus>,
     raycaster: avian3d::prelude::SpatialQuery,
 ) {
     use bevy::picking::pointer::PointerButton;
@@ -369,9 +370,25 @@ pub fn on_scene_click_spawn(
         return;
     };
     let entry_id = entry_id.clone();
-    // Chrome guard + world point: egui's pick has no position; a mesh hit does.
-    let Some(point) = click.hit.position else {
+    // Shared egui-vs-scene guard + camera ray (same path as possession/selection),
+    // then resolve the world point: use bevy_picking's mesh hit when present, else
+    // cast the ray against colliders so placement works on streamed terrain even
+    // when no pickable tile is under the cursor (the old `hit.position` guard
+    // silently rejected those clicks — the "can't place on the ground" bug).
+    let Some((camera, cam_gtf)) = cameras.iter().find(|(c, _)| c.is_active) else {
         return;
+    };
+    let Some(ray) = lunco_core::scene_click_ray(&egui_focus, camera, cam_gtf, click.pointer_location.position) else {
+        return;
+    };
+    let point = if let Some(p) = click.hit.position {
+        p
+    } else {
+        let filter = avian3d::prelude::SpatialQueryFilter::default();
+        let Some(hit) = raycaster.cast_ray(ray.origin.as_dvec3(), ray.direction, 1.0e6, true, &filter) else {
+            return;
+        };
+        (ray.origin.as_dvec3() + ray.direction.as_dvec3() * hit.distance).as_vec3()
     };
 
     let Some(grid) = q_grids.iter().next() else {
@@ -407,32 +424,38 @@ pub fn on_scene_click_spawn(
         point_d - forward_xz * half_l + right_xz * half_w, // RR
     ];
 
-    // 4. Raycast at corners to find terrain heights
-    let mut hit_points = Vec::new();
-    for corner in corners {
-        let ray_origin = corner + DVec3::Y * 50.0;
-        let ray_dir = Dir3::NEG_Y;
-        let hit = raycaster.cast_ray(
+    // 4. Raycast down at the footprint corners AND the centre. The corners give
+    //    the slope-fit normal; the full set gives the rest height.
+    let sample_ground = |p: DVec3| -> DVec3 {
+        let ray_origin = p + DVec3::Y * 50.0;
+        match raycaster.cast_ray(
             ray_origin,
-            ray_dir,
+            Dir3::NEG_Y,
             100.0,
             false,
             &avian3d::prelude::SpatialQueryFilter::default(),
-        );
-        if let Some(hit_data) = hit {
-            let hit_point = ray_origin + ray_dir.as_dvec3() * hit_data.distance;
-            hit_points.push(hit_point);
-        } else {
-            hit_points.push(DVec3::new(corner.x, point_d.y, corner.z));
+        ) {
+            Some(hit) => ray_origin + Dir3::NEG_Y.as_dvec3() * hit.distance,
+            // No hit under this corner → assume the click-plane height.
+            None => DVec3::new(p.x, point_d.y, p.z),
         }
-    }
+    };
+    let hit_points: Vec<DVec3> = corners.iter().map(|&c| sample_ground(c)).collect();
 
-    // 5. Compute average height and fit normal
+    // 5. Fit the slope normal from the corner plane, and take the rest height as
+    //    the HIGHEST ground under the footprint (corners + centre), NOT their
+    //    average. An obstacle-field rock/crater rim can poke up UNDER the chassis
+    //    between the corners; averaging misses it, so the deliberate 1 cm embed
+    //    below turns into a deep penetration and the solver ejects the rover
+    //    violently (fly-to-sky) or tunnels it through the world (vanish),
+    //    nondeterministically. Resting on the max keeps the body clear of every
+    //    sampled collider — a central bump lifts the spawn instead of impaling it.
     let fl = hit_points[0];
     let fr = hit_points[1];
     let rl = hit_points[2];
     let rr = hit_points[3];
-    let avg_y = (fl.y + fr.y + rl.y + rr.y) / 4.0;
+    let center_y = sample_ground(point_d).y;
+    let base_y = hit_points.iter().map(|h| h.y).fold(center_y, f64::max);
 
     let v_forward = ((fl - rl) + (fr - rr)) / 2.0;
     let v_right = ((fr - fl) + (rr - rl)) / 2.0;
@@ -481,7 +504,7 @@ pub fn on_scene_click_spawn(
     // free-fall→slam→joint-echo and explode the constraint graph on activation;
     // a slight embed is the stable init (solver gently resolves it). Raycast
     // drivetrains absorb this via suspension, so it's safe for both.
-    let spawn_pos = DVec3::new(point_d.x, avg_y, point_d.z) + normal * (fp.lift - 0.01);
+    let spawn_pos = DVec3::new(point_d.x, base_y, point_d.z) + normal * (fp.lift - 0.01);
     let point3 = spawn_pos.as_vec3();
 
     commands.trigger(crate::commands::SpawnEntity {

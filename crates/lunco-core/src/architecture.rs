@@ -78,6 +78,11 @@ pub enum UserIntent {
     SwitchMode,
     /// Pauses or unpauses the simulation state.
     Pause,
+    /// Cancel / back out: release possession or plain follow, back to free flight.
+    /// A discrete key intent (default `Backspace`) — see `avatar_escape_possession`.
+    /// While an egui field is focused egui consumes the key, so the guard suppresses
+    /// this intent that frame and it acts only once the field is defocused.
+    Cancel,
 }
 
 /// Alias for the leafwing ActionState using our [UserIntent] enum.
@@ -134,6 +139,7 @@ pub fn parse_user_intent(name: &str) -> Option<UserIntent> {
         "release" | "detach" | "eject" | "decouple" => Some(UserIntent::Release),
         "switchmode" | "switch_mode" => Some(UserIntent::SwitchMode),
         "pause" => Some(UserIntent::Pause),
+        "cancel" | "back" | "unpossess" => Some(UserIntent::Cancel),
         _ => None,
     }
 }

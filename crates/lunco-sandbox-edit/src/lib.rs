@@ -34,6 +34,10 @@
 // gated on `ui`.
 pub mod catalog;
 pub mod commands;
+/// TEMPORARY spawn diagnostics (`[spawnwatch]` logs) — see [`spawn_watch`].
+/// Ungated so it also covers the headless server. Remove once the
+/// "spawn rover on rugged terrain → vanishes" bug is root-caused.
+pub mod spawn_watch;
 /// Shaders as a journaled, synced, live-editable domain (WGSL twin of rhai's
 /// `ScriptDocument`) — edits record to the Twin journal (`DomainKind::Shader`).
 pub mod shader_doc;
