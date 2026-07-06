@@ -70,9 +70,11 @@ pub use query::{register_terrain_queries, TerrainHeightProvider};
 pub use collider_ring::{ColliderTiles, TerrainColliderRing};
 pub use stream_viz::{
     DemHeightField, LodTiles, TerrainLodConfig, TerrainLodViz, TerrainNodeErrors, TerrainShaderMode,
+    TerrainStreamStatus,
 };
 pub use terrain_layers::{
-    edit_attr_write, make_crater_layer, parse_edit, EditKind, EditsLayer, LayerAttrSource, LayerEntry,
+    default_overzoom_layer, edit_attr_write, make_crater_layer, parse_edit, EditKind, EditsLayer,
+    LayerAttrSource, LayerEntry,
     LayerId, LayerScatterCx, TerrainLayer, TerrainLayerAppExt, TerrainLayerParser,
     TerrainLayerParserRegistry, TerrainLayerStack, TerrainLayersApplied, TerrainRock, TerrainScatterEntity,
     EDITS_LAYER_ID,

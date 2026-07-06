@@ -73,6 +73,13 @@ impl Default for TerrainColliderRing {
 #[derive(Component, Default)]
 pub struct ColliderTiles {
     pub map: HashMap<QuadCoord, Entity>,
+    /// Resident tiles invalidated by an oracle swap but **kept covering the
+    /// ground** until their replacement bake lands — the fresh `Collider` is
+    /// then swapped onto the SAME entity. Despawn-then-async-respawn left
+    /// nothing under a driving rover for the bake's frames: it sank into the
+    /// surface and the late tile depenetrated it out with an abrupt kick that
+    /// read as "hit an invisible wall" on every recompose.
+    stale: HashSet<QuadCoord>,
     /// `surface_key()` of the oracle the resident tiles were baked from. The
     /// terrain's [`DemHeightField`] is **swapped** on layer recompose (craters
     /// added, live edits) — the boot sequence alone swaps it at least once — and
@@ -152,6 +159,29 @@ fn sample_heights_xz(oracle: &SurfaceOracle, region: Square, res: usize) -> Vec<
     cols
 }
 
+/// Build one tile's heightfield collider — `Collider::heightfield` layout
+/// (`[x][z]` columns, parry centres the field at the entity origin) but through
+/// parry directly so `FIX_INTERNAL_EDGES` is set: without it every interior
+/// triangle edge is a raw convex edge, and a loaded wheel pressing into a steep
+/// bowl wall (solver slop penetrates a few mm) catches horizontal contact
+/// normals off those edges — the classic tiled-heightfield "invisible bump/wall",
+/// load-dependent and worst on crater walls.
+fn heightfield_collider(heights: Vec<Vec<f64>>, side: f64) -> Collider {
+    use avian3d::parry::shape::{HeightFieldFlags, SharedShape};
+    use avian3d::parry::utils::Array2;
+    let rows = heights.len();
+    let cols = heights.first().map_or(0, Vec::len);
+    let data: Vec<f64> = heights.into_iter().flatten().collect();
+    debug_assert_eq!(data.len(), rows * cols);
+    let grid = Array2::new(rows, cols, data);
+    SharedShape::heightfield_with_flags(
+        grid,
+        DVec3::new(side, 1.0, side),
+        HeightFieldFlags::FIX_INTERNAL_EDGES,
+    )
+    .into()
+}
+
 /// Per-frame: maintain the collider ring around dynamic bodies for each terrain.
 /// The edited region + the oracle version it belongs to, handed from
 /// `finish_dem_restamp` so [`update_collider_ring`] re-bakes ONLY the ring tiles the
@@ -213,21 +243,24 @@ pub fn update_collider_ring(
         let oracle_key = oracle.surface_key();
         if tiles.oracle_key != oracle_key {
             let dirty = dirty_region.filter(|d| d.oracle_key == oracle_key).and_then(|d| d.bounds);
-            tiles.map.retain(|coord, ent| {
-                let stale = match dirty {
+            let t = &mut *tiles;
+            // Mark — don't despawn. A stale tile keeps supporting the rover until
+            // its replacement collider is baked and swapped in place (below).
+            for coord in t.map.keys() {
+                let hit = match dirty {
                     Some(aabb) => square_overlaps_aabb(qt.region(*coord), aabb),
                     None => true,
                 };
-                if stale {
-                    commands.entity(*ent).try_despawn();
+                if hit {
+                    t.stale.insert(*coord);
                 }
-                !stale
-            });
+            }
+            // In-flight bakes for touched tiles sampled the OLD oracle — drop them.
             pending.0.retain(|coord, _| match dirty {
                 Some(aabb) => !square_overlaps_aabb(qt.region(*coord), aabb),
                 None => false,
             });
-            tiles.oracle_key = oracle_key;
+            t.oracle_key = oracle_key;
             commands.entity(terrain).try_remove::<ColliderDirtyRegion>();
         }
 
@@ -256,10 +289,12 @@ pub fn update_collider_ring(
         }
 
         // Despawn tiles no longer wanted; drop in-flight bakes for them too.
-        tiles.map.retain(|coord, ent| {
+        let t = &mut *tiles;
+        t.map.retain(|coord, ent| {
             let keep = wanted.contains(coord);
             if !keep {
                 commands.entity(*ent).try_despawn();
+                t.stale.remove(coord);
             }
             keep
         });
@@ -277,7 +312,12 @@ pub fn update_collider_ring(
             None => true,
         });
         for (coord, collider) in done {
-            if tiles.map.contains_key(&coord) {
+            if let Some(&ent) = tiles.map.get(&coord) {
+                // Replacement for a stale tile: swap the collider onto the
+                // existing entity — the ground never vanishes under the rover.
+                if tiles.stale.remove(&coord) {
+                    commands.entity(ent).try_insert(collider);
+                }
                 continue;
             }
             let region = qt.region(coord);
@@ -297,10 +337,13 @@ pub fn update_collider_ring(
             tiles.map.insert(coord, ent);
         }
 
-        // Queue bakes for newly-wanted tiles OFF-THREAD (oracle sampling + parry
-        // heightfield build used to stall the frame at every tile-boundary cross).
+        // Queue bakes for newly-wanted (or stale-resident) tiles OFF-THREAD
+        // (oracle sampling + parry heightfield build used to stall the frame at
+        // every tile-boundary cross).
         for coord in &wanted {
-            if tiles.map.contains_key(coord) || pending.0.contains_key(coord) {
+            if pending.0.contains_key(coord)
+                || (tiles.map.contains_key(coord) && !tiles.stale.contains(coord))
+            {
                 continue;
             }
             let region = qt.region(*coord);
@@ -308,7 +351,7 @@ pub fn update_collider_ring(
             let oracle_arc: Arc<SurfaceOracle> = hf.0.clone();
             let task = pool.spawn(async move {
                 let heights = sample_heights_xz(&oracle_arc, region, res);
-                Collider::heightfield(heights, DVec3::new(side, 1.0, side))
+                heightfield_collider(heights, side)
             });
             pending.0.insert(*coord, task);
         }
@@ -334,7 +377,7 @@ pub fn despawn_orphaned_collider_tiles(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use avian3d::parry::query::{Ray, RayCast};
+    use avian3d::parry::query::Ray;
     use lunco_obstacle_field::field::HeightGrid;
     use lunco_terrain_core::{Crater, Craters};
     use crate::quadtree::QuadCoord;
@@ -385,6 +428,7 @@ mod tests {
             depth: 2.0,
             rim_height: 0.4,
             softness: 0.0,
+            bowl_power: 4.0,
         };
         let oracle = SurfaceOracle::new(
             std::sync::Arc::new(grid),
@@ -397,7 +441,7 @@ mod tests {
         // EXACTLY the runtime bake: sample + condition, then the same collider
         // constructor call as `update_collider_ring`.
         let heights = sample_heights_xz(&oracle, region, COLLIDER_RES);
-        let collider = Collider::heightfield(heights, DVec3::new(side, 1.0, side));
+        let collider = heightfield_collider(heights, side);
 
         // (c) Far corner: flat base at ABSOLUTE altitude — no recentering.
         let far = surface_y(&collider, 25.0, 25.0);
@@ -473,6 +517,7 @@ mod tests {
             depth: 8.0,
             rim_height: 4.0,
             softness: 0.0,
+            bowl_power: 4.0,
         };
         let oracle = SurfaceOracle::new(
             std::sync::Arc::new(grid),

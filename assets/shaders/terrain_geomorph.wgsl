@@ -37,10 +37,10 @@
 //!@default albedo            0.13,0.13,0.13
 //!@ui      macro_clump_scale 1 20   "Macro clump scale (/m)"
 //!@default macro_clump_scale 8
-//!@ui      macro_bump        0 0.3  "Macro bump strength"
-//!@default macro_bump        0.06
-//!@ui      mid_scale         0.02 1 "Mid hummock scale (/m)"
-//!@default mid_scale         0.15
+//!@ui      macro_bump        0 0.3  "Meso hummock strength"
+//!@default macro_bump        0.1
+//!@ui      mid_scale         0.02 1 "Meso hummock scale (/m)"
+//!@default mid_scale         0.45
 //!@ui      mid_bump          0 1.5  "Mid hummock strength"
 //!@default mid_bump          0.6
 //!@ui      fine_scale        50 400 "Fine grain scale (/m)"
@@ -260,6 +260,25 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // of parallax is imperceptible) + lunar photometry + broad albedo variation.
     var n = normalize(in.world_normal);
 
+    //   • meso hummocks — the ~0.7–2 m relief band. The geometry stack carries
+    //     craters ≥ 0.4 m as real relief, but between discrete craterlets real
+    //     regolith still undulates (buried, saturated, gardened relief) at this
+    //     scale; its absence was the "one step forward and the ground is a flat
+    //     sheet" read. Normal-only is fine here: sub-2 m features at standing
+    //     height don't need parallax. Two octave-spaced layers, footprint-faded.
+    let meso_scale = max(mat.mid_scale, 0.02);           // default 0.45 → λ ≈ 2.2 m
+    let meso_fade  = aa_fade(meso_scale, pw);
+    var meso_h = 0.5;
+    if (meso_fade > 0.0) {
+        n = bump_layer(n, p, meso_scale, 3, 0.55, 0.35, 0.65, mat.macro_bump * meso_fade, &meso_h);
+    }
+    let subm_scale = meso_scale * 3.0;                   // λ ≈ 0.74 m
+    let subm_fade  = aa_fade(subm_scale, pw);
+    var subm_h = 0.5;
+    if (subm_fade > 0.0) {
+        n = bump_layer(n, p, subm_scale, 2, 0.5, 0.40, 0.60, mat.macro_bump * 0.6 * subm_fade, &subm_h);
+    }
+
     //   • regolith tooth — smooth decimetre dimples that give the close-up ground
     //     life without pretending to be geometry. Both octaves footprint-faded so
     //     they never alias into shimmer. Amplitude/scale reuse mid_bump/macro_clump_scale
@@ -285,6 +304,18 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let dust = fbm(p * 0.004, 3, 0.5);
     albedo *= 1.0 + (dust - 0.5) * mottle;
 
+    // Metre-scale tonal grain: between the 250 m dust wash above and the
+    // normal-only micro layers there was NO albedo variation at human scale, so
+    // genuinely smooth ground read as untextured plastic. Disturbed (cresting)
+    // regolith is subtly brighter than compacted lows — tie a touch of the meso
+    // height in, plus an independent ~3 m fbm. Footprint-faded like the bumps.
+    let grain_fade = aa_fade(0.35, pw);
+    if (grain_fade > 0.0) {
+        let grain = fbm(p * 0.35, 2, 0.5);
+        albedo *= 1.0 + (grain - 0.5) * 0.16 * grain_fade;
+        albedo *= 1.0 + (meso_h - 0.5) * 0.10 * meso_fade;
+    }
+
     // --- Lunar photometry: the actual realism lever -----------------------
     // Lommel-Seeliger + opposition surge (retroreflective backscatter) from the
     // scene sun — read from the light bindings, so streamed tiles get it WITHOUT
@@ -301,8 +332,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Shadow fill: a whisper of hemispheric bounce (earthshine + regolith
     // inter-reflection) rides the emissive slot so CSM shadows don't crush to
     // pure black — shadowed crater floors stay readable without washing out the
-    // raking-light contrast that sells the surface.
-    let fill = base_albedo * (1.2 + 1.0 * max(n.y, 0.0));
+    // raking-light contrast that sells the surface. Hemispheric fill is a
+    // half-sky integral — insensitive to micro-relief — so it reads the
+    // GEOMETRIC normal, not the bump-perturbed one: driving it with `n` turned
+    // every shadowed slope into high-contrast micro-speckle static.
+    let n_geo = normalize(in.world_normal);
+    let fill = base_albedo * (1.2 + 1.0 * max(n_geo.y, 0.0));
 
     // Regolith is rough and non-metallic; rough_mix nudges it.
     let roughness = clamp(0.6 + rough_mix * 0.4, 0.05, 1.0);

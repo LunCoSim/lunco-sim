@@ -1551,6 +1551,13 @@ impl Plugin for SandboxCorePlugin {
         #[cfg(feature = "ui")]
         app.add_systems(Update, bind_terrain_layers);
 
+        // Terrain-streaming progress → status bar: while the wanted tile set is
+        // still baking in, show "streaming terrain N/M" (with the bus's progress
+        // bar) instead of leaving the viewport an unexplained black void on
+        // scene open. Pure derived read of `TerrainStreamStatus`.
+        #[cfg(feature = "ui")]
+        app.add_systems(Update, report_terrain_stream_status);
+
         // Engine light-handling policy: the locally-possessed vessel's headlights
         // cast shadows, the parked rovers stay cheap (reactive on possession
         // events — see `light_policy`). Render concern → `ui`-gated.
@@ -1667,6 +1674,29 @@ fn read_authored_layer_maps<R: UsdRead>(
             Some((role, rel, weight))
         })
         .collect()
+}
+
+/// Mirror [`lunco_terrain_surface::TerrainStreamStatus`] into the workbench
+/// [`StatusBus`](lunco_workbench::status_bus::StatusBus) so scene-open tile
+/// baking is visible ("streaming terrain N/M" + progress bar) instead of an
+/// unexplained black viewport. Progress entries auto-clear once the wanted set
+/// is fully resident.
+#[cfg(feature = "ui")]
+fn report_terrain_stream_status(
+    status: Res<lunco_terrain_surface::TerrainStreamStatus>,
+    mut bus: ResMut<lunco_workbench::status_bus::StatusBus>,
+) {
+    const SOURCE: &str = "terrain";
+    if status.wanted > 0 && status.resident < status.wanted {
+        bus.push_progress(
+            SOURCE,
+            format!("streaming terrain tiles {}/{}", status.resident, status.wanted),
+            status.resident as u64,
+            status.wanted as u64,
+        );
+    } else {
+        bus.clear_progress(SOURCE);
+    }
 }
 
 #[cfg(feature = "ui")]
@@ -1790,6 +1820,9 @@ fn parse_terrain_layer_stack<R: UsdRead>(
     // Runtime edit prims (`lunco:layer = "edit"`) — one prim per edit — aggregate into
     // the single `EditsLayer` (the runtime projection tier), folded on top at the end.
     let mut edits: Vec<(lunco_terrain_surface::LayerId, lunco_terrain_surface::EditKind)> = Vec::new();
+    // Whether the scene authors its OWN overzoom prim (even a zeroed/disabled one
+    // counts — that's an explicit opt-out of the default sub-DEM detail).
+    let mut authored_overzoom = false;
     for child in reader.children(terrain) {
         let attrs = UsdLayerAttrs { reader, sdf: child.clone() };
         // An edit prim (carries the packed `lunco:edit`)? Aggregate into the single
@@ -1807,6 +1840,9 @@ fn parse_terrain_layer_stack<R: UsdRead>(
         if layer_type == "dem" {
             continue;
         }
+        if layer_type == "overzoom" {
+            authored_overzoom = true;
+        }
         if !registry.knows(&layer_type) {
             warn!("[usd-dem] child layer '{layer_type}' has no registered terrain layer parser");
             continue;
@@ -1816,6 +1852,13 @@ fn parse_terrain_layer_stack<R: UsdRead>(
             // several same-kind layers coexist and be addressed individually.
             stack.push_layer(child.as_str(), layer);
         }
+    }
+    // Sub-DEM detail defaults ON: without it the ground between the finest shader
+    // grain (~12 cm) and the DEM data resolution (~5 m) is empty in every channel
+    // and reads as flat plastic one step from the camera. Authoring an `overzoom`
+    // prim — including a zeroed one — takes over from the default.
+    if !authored_overzoom {
+        stack.push_layer("overzoom/default", lunco_terrain_surface::default_overzoom_layer());
     }
     if !edits.is_empty() {
         stack.push_layer(
@@ -1829,7 +1872,7 @@ fn parse_terrain_layer_stack<R: UsdRead>(
 /// Seed the shared [`ObstacleFieldSpec`] from the USD-authored `craters`/`rocks` child
 /// layer prims so the Inspector's "Craters & Rocks" panel opens showing the scene's
 /// ACTUAL values (density, size, ratios) instead of the resource defaults. Mirrors the
-/// `SizeDist` the layer parsers build (`craters` → `new(8, mode, 40, 0.7)`, `rocks` →
+/// `SizeDist` the layer parsers build (`craters` → `new(2, mode, 60, 0.7)`, `rocks` →
 /// `new(0.2, mode, mode*4, 0.6)`) so a subsequent panel edit starts from the authored
 /// look rather than jumping. Writes the resource only (no `UpdateObstacleFieldSpec`,
 /// no re-stamp — the terrain already built from the same USD stack).
@@ -1847,10 +1890,10 @@ fn sync_obstacle_spec_from_usd<R: UsdRead>(
                 spec.craters.enabled = density > 0.0;
                 spec.craters.density = density;
                 spec.craters.depth_ratio =
-                    reader.scalar::<f32>(&child, "depthRatio").unwrap_or(0.3);
+                    reader.scalar::<f32>(&child, "depthRatio").unwrap_or(0.4);
                 spec.craters.rim_height_ratio =
-                    reader.scalar::<f32>(&child, "rimRatio").unwrap_or(0.5);
-                spec.craters.size = SizeDist::new(8.0, mode, 40.0, 0.7);
+                    reader.scalar::<f32>(&child, "rimRatio").unwrap_or(0.18);
+                spec.craters.size = SizeDist::new(2.0, mode, 60.0, 0.7);
                 if let Some(seed) = reader.scalar::<i32>(&child, "seed") {
                     spec.seed = seed as u64;
                 }

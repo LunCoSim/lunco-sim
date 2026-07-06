@@ -58,7 +58,9 @@ impl Default for Overzoom {
     fn default() -> Self {
         Self {
             seed: 0x5EED_0F_DE7A11,
-            max_radius: 6.0,
+            // Hand off at 2 m to the analytic crater layer, whose power-law size
+            // floor is 2 m — together they cover 0.4 m…60 m without doubling up.
+            max_radius: 2.0,
             min_radius: 0.4,
             crater_mean: 0.9,
             depth_ratio: (0.06, 0.22),
@@ -219,7 +221,10 @@ impl Overzoom {
                     // bowls next to fresh sharp-lipped ones, instead of one
                     // identical profile everywhere.
                     let rim = depth * (0.15 + 0.5 * ue);
-                    sum += crater_profile(dist, depth, rim) * fade;
+                    // Deep (fresh) craterlets are paraboloid, shallow (degraded)
+                    // ones flat dishes — same morphology tie as the crater layer.
+                    let bowl_power = 6.0 - 4.0 * ud;
+                    sum += crater_profile(dist, depth, rim, bowl_power) * fade;
                 }
             }
         }

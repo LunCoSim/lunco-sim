@@ -116,9 +116,10 @@ impl Default for ObstacleFieldSpec {
                 enabled: true,
                 density: 5.0,
                 size: SizeDist::new(2.0, 4.0, 12.0, 0.5),
-                // Steeper bowls + tall raised rim walls (rim = 0.6 × depth).
-                depth_ratio: 0.35,
-                rim_height_ratio: 0.6,
+                // Fresh simple-crater proportions: d/D ≈ 0.2 (depth = 0.4·r) and
+                // rim/D ≈ 0.036 (rim = 0.18 × depth) — measured lunar values.
+                depth_ratio: 0.4,
+                rim_height_ratio: 0.18,
             },
             rocks: RockLayer {
                 enabled: true,

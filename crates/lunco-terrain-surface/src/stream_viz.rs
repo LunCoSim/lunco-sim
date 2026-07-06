@@ -483,10 +483,33 @@ pub(crate) fn animate_tile_reveal(
     }
 }
 
+/// Cross-terrain tile-streaming progress, derived fresh each frame by
+/// [`update_lod_tiles`]: how much of the WANTED tile set is actually on
+/// screen. UI layers read this to show a "terrain streaming…" indicator —
+/// without one, a freshly opened scene is a black void until the first bakes
+/// land, which reads as a hang. Kept here (engine-side, UI-free) so the UI is
+/// a pure derived read.
+#[derive(Resource, Default, Clone, Copy)]
+pub struct TerrainStreamStatus {
+    /// Tiles the current selection wants on screen (all streaming terrains).
+    pub wanted: usize,
+    /// Wanted tiles with a resident mesh entity (stale-but-covering counts —
+    /// the ground is visible, just not current).
+    pub resident: usize,
+    /// Off-thread bakes in flight.
+    pub pending: usize,
+}
+
 /// Per-frame: stream the LOD tile set for each streaming terrain against the camera.
 pub fn update_lod_tiles(
     mut commands: Commands,
     cameras: Query<&GlobalTransform, With<Camera3d>>,
+    // Dynamic bodies (rovers, payloads) are FORCED refinement foci: the
+    // physics collider ring under them is fixed-resolution, so the ground they
+    // stand on must be drawn at matching detail even when the camera-driven
+    // selection would keep it coarse (far chase cam, budget-coarsened metric)
+    // — otherwise wheels visibly hover on collider bumps the mesh doesn't show.
+    bodies: Query<(&avian3d::prelude::RigidBody, &GlobalTransform)>,
     // The big_space world grid each tile anchors into (its own `CellCoord`).
     grids: Query<(Entity, &Grid), With<WorldGrid>>,
     mut terrains: Query<(
@@ -505,7 +528,9 @@ pub fn update_lod_tiles(
     mut mesh_cache: ResMut<LodMeshCache>,
     cfg: Res<TerrainLodConfig>,
     asset_server: Res<AssetServer>,
+    mut stream_status: ResMut<TerrainStreamStatus>,
 ) {
+    *stream_status = TerrainStreamStatus::default();
     // Use the first 3D camera as the focus. (Multiple cameras → the viz follows
     // whichever; fine for a debug view.)
     let Some(cam) = cameras.iter().next() else { return };
@@ -616,14 +641,41 @@ pub fn update_lod_tiles(
             qt = quadtree_for(pixel_error);
             sel = qt.select_with_error(focus, eye_height, &node_error);
         }
+        // Ground under dynamic bodies is ALWAYS drawn at max depth — the
+        // fixed-resolution collider ring under a rover carries small-crater
+        // relief a coarse camera-driven tile doesn't, and the rover visibly
+        // hovers on the undrawn bumps. A handful of forced splits per body,
+        // outside the budget (the budget bounds the broad view, not this).
+        let inv_t = t_gt.affine().inverse();
+        for (rb, gt) in &bodies {
+            if !matches!(rb, avian3d::prelude::RigidBody::Dynamic) {
+                continue;
+            }
+            let local_b = inv_t.transform_point3(gt.translation());
+            let (bx, bz) = (local_b.x as f64, local_b.z as f64);
+            if bx.abs() > h || bz.abs() > h {
+                continue; // off this DEM
+            }
+            qt.refine_selection_at(&mut sel, [bx, bz], &node_error);
+        }
         let wanted: HashSet<QuadCoord> = sel.iter().map(|s| s.coord).collect();
 
-        // Intelligent baking: nearest tiles first, so the per-frame budget fills the
-        // surface in from under the camera outward ("start closer, then extend").
+        // Intelligent baking: COARSE tiles first (a depth-N tile costs the same
+        // 49² samples as a leaf but covers 4^(maxdepth−N)× the area), so the whole
+        // view is covered by a low-res carpet within the first few frames instead
+        // of staying BLACK while the fine near-field bakes; then nearest-first
+        // within each depth refines in from under the camera outward. The reveal
+        // morph settles children onto the parent lattice, so the coarse→fine
+        // handoff never pops.
         let dist2 = |s: &Selected| -> f64 {
             (s.region.center[0] - focus[0]).powi(2) + (s.region.center[1] - focus[1]).powi(2)
         };
-        sel.sort_by(|a, b| dist2(a).partial_cmp(&dist2(b)).unwrap_or(std::cmp::Ordering::Equal));
+        sel.sort_by(|a, b| {
+            a.coord
+                .depth
+                .cmp(&b.coord.depth)
+                .then(dist2(a).partial_cmp(&dist2(b)).unwrap_or(std::cmp::Ordering::Equal))
+        });
 
         // A coord is *fresh* (no work needed) when it has a resident tile OR an
         // in-flight bake tagged with the current generation. A stale entry (older
@@ -764,6 +816,11 @@ pub fn update_lod_tiles(
             }
             covers_hole
         });
+
+        // Streaming progress for the UI indicator (accumulated across terrains).
+        stream_status.wanted += wanted.len();
+        stream_status.resident += wanted.iter().filter(|c| tiles.tiles.contains_key(c)).count();
+        stream_status.pending += pending.0.len();
 
         // Bound the mesh cache: when it grows past the cap, keep only meshes for
         // currently-resident tiles (deterministic geometry → dropped ones re-bake on

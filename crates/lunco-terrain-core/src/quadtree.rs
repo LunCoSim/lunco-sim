@@ -188,6 +188,92 @@ impl Quadtree {
         out
     }
 
+    /// Force `sel` (a valid REPLACE-refinement cover, as produced by the
+    /// `select*` walks) to include the **max-depth** node containing
+    /// `focus_xz` plus its 8 neighbours, splitting whatever coarser ancestors
+    /// currently cover them. The cover stays exact and disjoint.
+    ///
+    /// Why: the visual selection is CAMERA-driven while the physics collider
+    /// ring is fixed-resolution — a rover far from the camera (or under a
+    /// budget-coarsened selection) stands on collider features its coarse
+    /// visual tile doesn't draw, visibly hovering above the rendered ground.
+    /// Feeding each dynamic body through this after selection guarantees the
+    /// ground UNDER bodies is drawn at the same finest detail the collider
+    /// samples. Split-off siblings inherit geomorph windows from the same
+    /// `node_error` metric the walk used, so bands stay consistent.
+    pub fn refine_selection_at(
+        &self,
+        sel: &mut Vec<Selected>,
+        focus_xz: [f64; 2],
+        node_error: impl Fn(QuadCoord, Square) -> f64,
+    ) {
+        let nodes = 1i64 << self.max_depth;
+        let side = (2.0 * self.root_half_extent) / nodes as f64;
+        let cx = (((focus_xz[0] + self.root_half_extent) / side).floor() as i64).clamp(0, nodes - 1);
+        let cz = (((focus_xz[1] + self.root_half_extent) / side).floor() as i64).clamp(0, nodes - 1);
+        for dz in -1..=1i64 {
+            for dx in -1..=1i64 {
+                let (nx, nz) = (cx + dx, cz + dz);
+                if nx < 0 || nz < 0 || nx >= nodes || nz >= nodes {
+                    continue;
+                }
+                let target =
+                    QuadCoord { depth: self.max_depth, x: nx as u32, z: nz as u32 };
+                self.force_refine(sel, target, &node_error);
+            }
+        }
+    }
+
+    /// Split the selected ancestor of `target` (if coarser) down to
+    /// `target.depth`, pushing the split-off siblings at each level.
+    fn force_refine(
+        &self,
+        sel: &mut Vec<Selected>,
+        target: QuadCoord,
+        node_error: &impl Fn(QuadCoord, Square) -> f64,
+    ) {
+        fn covers(anc: QuadCoord, target: QuadCoord) -> bool {
+            anc.depth <= target.depth
+                && (target.x >> (target.depth - anc.depth)) == anc.x
+                && (target.z >> (target.depth - anc.depth)) == anc.z
+        }
+        let Some(i) = sel.iter().position(|s| covers(s.coord, target)) else {
+            return; // not covered (shouldn't happen for an exact cover)
+        };
+        if sel[i].coord.depth >= target.depth {
+            return; // already fine enough
+        }
+        let mut cur = sel.swap_remove(i);
+        while cur.coord.depth < target.depth {
+            // Children's geomorph window ends where THIS node would refine —
+            // the same band the error-driven walk would have assigned them.
+            let refine_range = self.range_factor * node_error(cur.coord, cur.region).max(0.0);
+            let morph_start = if refine_range.is_finite() {
+                self.morph_ratio * refine_range
+            } else {
+                f64::INFINITY
+            };
+            let d = cur.coord.depth + 1;
+            let mut next: Option<Selected> = None;
+            for (ox, oz) in [(0u32, 0u32), (1, 0), (0, 1), (1, 1)] {
+                let cc = QuadCoord { depth: d, x: cur.coord.x * 2 + ox, z: cur.coord.z * 2 + oz };
+                let s = Selected {
+                    coord: cc,
+                    region: self.region(cc),
+                    morph_start,
+                    morph_end: refine_range,
+                };
+                if covers(cc, target) {
+                    next = Some(s);
+                } else {
+                    sel.push(s);
+                }
+            }
+            cur = next.expect("exactly one child covers the target");
+        }
+        sel.push(cur);
+    }
+
     /// [`select_with_error`](Self::select_with_error) under a **hard tile budget**:
     /// nodes are refined in *priority* order (highest `refine_range / distance`,
     /// i.e. worst on-screen error, first) until either nothing wants refinement or
@@ -579,6 +665,46 @@ mod tests {
                 assert_eq!(hits, 1, "point {p:?} covered {hits} times");
             }
         }
+    }
+
+    #[test]
+    fn forced_refinement_reaches_max_depth_and_keeps_cover_exact() {
+        // A far/coarse selection forced to refine around a "rover" position
+        // must contain max-depth nodes there while staying an exact disjoint
+        // cover of the root (REPLACE refinement invariant).
+        let q = qt();
+        let flat = |_c: QuadCoord, _r: Square| 0.05; // near-flat → coarse everywhere
+        let mut sel = q.select_with_error([0.0, 0.0], 4000.0, flat);
+        assert!(
+            sel.iter().all(|s| s.coord.depth < q.max_depth),
+            "precondition: coarse selection"
+        );
+        let rover = [1234.5, -2345.6];
+        q.refine_selection_at(&mut sel, rover, flat);
+        // The node under the rover is now max depth.
+        let under = sel
+            .iter()
+            .find(|s| s.region.distance_to(rover) <= 1e-6)
+            .expect("cover contains the rover");
+        assert_eq!(under.coord.depth, q.max_depth, "ground under the body must be finest");
+        // Cover stays exact + disjoint.
+        let area: f64 = sel.iter().map(|s| s.region.side() * s.region.side()).sum();
+        let root_area = (2.0 * q.root_half_extent).powi(2);
+        assert!((area - root_area).abs() < 1e-3, "area {area} vs {root_area}");
+        for gx in 0..40 {
+            for gz in 0..40 {
+                let p = [
+                    -8000.0 + (gx as f64 + 0.5) * (16000.0 / 40.0) + 0.137,
+                    -8000.0 + (gz as f64 + 0.5) * (16000.0 / 40.0) + 0.137,
+                ];
+                let hits = sel.iter().filter(|s| s.region.distance_to(p) <= 1e-6).count();
+                assert_eq!(hits, 1, "point {p:?} covered {hits} times");
+            }
+        }
+        // Idempotent: forcing again changes nothing.
+        let n = sel.len();
+        q.refine_selection_at(&mut sel, rover, flat);
+        assert_eq!(sel.len(), n);
     }
 
     #[test]

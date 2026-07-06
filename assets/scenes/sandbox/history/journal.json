@@ -1,7 +1,7 @@
 {
   "twin": "/home/rod/Documents/luncosim-workspace/terrain/assets/scenes/sandbox",
   "local_author": "peer-0394417ed539ee2f",
-  "clock": 42,
+  "clock": 53,
   "entries": [
     {
       "id": {
@@ -1131,6 +1131,375 @@
         }
       },
       "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 43
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 42
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1783333914363,
+      "twin": "/home/rod/Documents/luncosim-workspace/terrain/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Lifecycle": {
+          "Opened": {
+            "source_hash": ""
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 44
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 43
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1783333914736,
+      "twin": "/home/rod/Documents/luncosim-workspace/terrain/assets/scenes/sandbox",
+      "doc": 2,
+      "kind": {
+        "Lifecycle": {
+          "Opened": {
+            "source_hash": ""
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 45
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 44
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1783334129669,
+      "twin": "/home/rod/Documents/luncosim-workspace/terrain/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Lifecycle": {
+          "Opened": {
+            "source_hash": ""
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 46
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 45
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1783334130085,
+      "twin": "/home/rod/Documents/luncosim-workspace/terrain/assets/scenes/sandbox",
+      "doc": 2,
+      "kind": {
+        "Lifecycle": {
+          "Opened": {
+            "source_hash": ""
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 47
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 46
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1783336982675,
+      "twin": "/home/rod/Documents/luncosim-workspace/terrain/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Lifecycle": {
+          "Opened": {
+            "source_hash": ""
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 48
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 47
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1783336984039,
+      "twin": "/home/rod/Documents/luncosim-workspace/terrain/assets/scenes/sandbox",
+      "doc": 2,
+      "kind": {
+        "Lifecycle": {
+          "Opened": {
+            "source_hash": ""
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 49
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 48
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1783337212566,
+      "twin": "/home/rod/Documents/luncosim-workspace/terrain/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Lifecycle": {
+          "Opened": {
+            "source_hash": ""
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 50
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 49
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1783337214726,
+      "twin": "/home/rod/Documents/luncosim-workspace/terrain/assets/scenes/sandbox",
+      "doc": 2,
+      "kind": {
+        "Lifecycle": {
+          "Opened": {
+            "source_hash": ""
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 51
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 50
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1783337256628,
+      "twin": "/home/rod/Documents/luncosim-workspace/terrain/assets/scenes/sandbox",
+      "doc": 817311106298138624,
+      "kind": {
+        "Op": {
+          "domain": "ObstacleField",
+          "op": {
+            "SetSpec": {
+              "spec": {
+                "seed": 12648430,
+                "region_half_extent": 200.0,
+                "grid_resolution": 401,
+                "pattern": {
+                  "PoissonDisk": {
+                    "min_spacing": 3.0
+                  }
+                },
+                "craters": {
+                  "enabled": true,
+                  "density": 5.0,
+                  "size": {
+                    "min": 2.0,
+                    "max": 12.0,
+                    "mode": 4.0,
+                    "sigma": 0.5
+                  },
+                  "depth_ratio": 0.4000000059604645,
+                  "rim_height_ratio": 0.18000000715255737
+                },
+                "rocks": {
+                  "enabled": true,
+                  "density": 30.0,
+                  "size": {
+                    "min": 0.20000000298023224,
+                    "max": 2.5,
+                    "mode": 2.200000047683716,
+                    "sigma": 0.6000000238418579
+                  },
+                  "dynamic_fraction": 0.05000000074505806
+                }
+              }
+            }
+          },
+          "inverse": {
+            "SetSpec": {
+              "spec": {
+                "seed": 12648430,
+                "region_half_extent": 200.0,
+                "grid_resolution": 401,
+                "pattern": {
+                  "PoissonDisk": {
+                    "min_spacing": 3.0
+                  }
+                },
+                "craters": {
+                  "enabled": true,
+                  "density": 5.0,
+                  "size": {
+                    "min": 2.0,
+                    "max": 12.0,
+                    "mode": 4.0,
+                    "sigma": 0.5
+                  },
+                  "depth_ratio": 0.4000000059604645,
+                  "rim_height_ratio": 0.18000000715255737
+                },
+                "rocks": {
+                  "enabled": true,
+                  "density": 30.0,
+                  "size": {
+                    "min": 0.20000000298023224,
+                    "max": 2.5,
+                    "mode": 2.200000047683716,
+                    "sigma": 0.6000000238418579
+                  },
+                  "dynamic_fraction": 0.05000000074505806
+                }
+              }
+            }
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 52
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 51
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1783338733736,
+      "twin": "/home/rod/Documents/luncosim-workspace/terrain/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Lifecycle": {
+          "Opened": {
+            "source_hash": ""
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 53
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 52
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1783338734223,
+      "twin": "/home/rod/Documents/luncosim-workspace/terrain/assets/scenes/sandbox",
+      "doc": 2,
+      "kind": {
+        "Lifecycle": {
+          "Opened": {
+            "source_hash": ""
+          }
+        }
+      },
+      "change_set": null
     }
   ],
   "streams": [
@@ -1140,7 +1509,7 @@
       "composition": "Sequential",
       "head": {
         "author": "peer-0394417ed539ee2f",
-        "lamport": 42
+        "lamport": 53
       },
       "parent_streams": [],
       "created_at_ms": 1783097117973,
@@ -1156,7 +1525,7 @@
       "stream": "main",
       "head": {
         "author": "peer-0394417ed539ee2f",
-        "lamport": 42
+        "lamport": 53
       }
     }
   ],

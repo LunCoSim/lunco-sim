@@ -154,6 +154,10 @@ impl Plugin for UsdSimPlugin {
         // headless). This turns that invisible deadlock into a loud `error!` AND
         // recovers by building the physics without the missing visual.
         app.add_systems(Update, recover_stuck_usd_prims);
+        // Wheel-joint lifecycle tether: joints are spawned DETACHED (they link two
+        // bodies, they're nobody's child), so a doc-backed scene reload despawns
+        // the rover subtree but leaves its joints behind. See the system docs.
+        app.add_systems(Update, reap_orphaned_wheel_joints);
         // USD → cosim wiring (`lunco:modelicaModel`, `lunco:scriptModel`,
         // `lunco:simWires`) — see `cosim.rs`.
         cosim::install(app);
@@ -1622,6 +1626,28 @@ fn setup_physical_wheel(
             rw.0.push(entity);
         }
     });
+}
+
+/// Reap wheel joints whose bodies are gone. The revolute joint entity is
+/// spawned DETACHED (it links two bodies — it is nobody's child), so a
+/// doc-backed scene reload (E1b re-instantiation) despawns the rover subtree
+/// but leaves the OLD joints behind: dead joints with dangling `body1`/`body2`
+/// that still carry `MotorActuator`/`SteeringActuator` port bindings under the
+/// same `PhysicalWheelJoint_<path>` name as the fresh rover's joints. The FSW
+/// port wiring then has two candidates per wheel and can bind the throttle to
+/// the dead one — the freshly reloaded rover drives nothing ("the physical
+/// rover doesn't work" after a twin open, which reloads once as the doc
+/// composes). Mirrors the collider-tile reaper in `lunco-terrain-surface`.
+fn reap_orphaned_wheel_joints(
+    mut commands: Commands,
+    joints: Query<(Entity, &RevoluteJoint), With<MotorActuator>>,
+    entities: &bevy::ecs::entity::Entities,
+) {
+    for (ent, joint) in &joints {
+        if !entities.contains(joint.body1) || !entities.contains(joint.body2) {
+            commands.entity(ent).try_despawn();
+        }
+    }
 }
 
 /// Client-only: place a remote rover's wheels by **reconstructing** them from the

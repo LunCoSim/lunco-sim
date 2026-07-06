@@ -28,10 +28,10 @@ impl TerrainLayer for OverzoomLayer {
         let s = &self.spec;
         let mut key = lunco_precompute::Fnv1a::new();
         // Synthesis-algorithm version: bump when the Overzoom math changes with
-        // identical params (Poisson counts / domain warp / rim variety = v2), so
-        // content-addressed tiles + derived maps re-bake instead of serving the
-        // old field.
-        key.write_u64(2);
+        // identical params (Poisson counts / domain warp / rim variety = v2;
+        // degradation-tied craterlet bowl shape = v3), so content-addressed
+        // tiles + derived maps re-bake instead of serving the old field.
+        key.write_u64(3);
         key.write_u64(s.seed);
         key.write_u64(s.max_radius.to_bits());
         key.write_u64(s.min_radius.to_bits());
@@ -52,6 +52,18 @@ impl TerrainLayer for OverzoomLayer {
 /// - `seed` — determinism seed.
 ///
 /// Returns `None` (layer disabled) when both channels are zeroed.
+/// The default sub-DEM detail layer (all [`Overzoom::default`] parameters:
+/// 0.4–2 m craterlets handing off to the crater layer's 2 m SFD floor + FBM
+/// micro-relief). The USD bridge folds this in when a terrain authors no
+/// `overzoom` prim of its own — without SOME sub-DEM signal the ground between
+/// the finest shader grain (~12 cm) and the DEM resolution (~5 m) is empty in
+/// every channel and reads as flat plastic one step from the camera. A scene
+/// that wants scientifically-honest bare interpolation authors an `overzoom`
+/// prim with `amplitude = 0` and `density = 0`.
+pub fn default_overzoom_layer() -> Arc<dyn TerrainLayer> {
+    Arc::new(OverzoomLayer { spec: Overzoom::default() })
+}
+
 pub(super) fn parse_overzoom_layer(a: &dyn LayerAttrSource) -> Option<Arc<dyn TerrainLayer>> {
     let defaults = Overzoom::default();
     let relief_amp = a.get_f32("amplitude").map(f64::from).unwrap_or(defaults.relief_amp);

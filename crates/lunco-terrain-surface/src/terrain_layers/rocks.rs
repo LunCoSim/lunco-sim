@@ -100,7 +100,11 @@ impl TerrainLayer for RockScatterLayer {
         });
         let rock_material = cx.materials.as_deref_mut().map(|materials| {
             materials.add(StandardMaterial {
-                base_color: Color::srgb(0.10, 0.10, 0.11),
+                // Exposed boulders are BRIGHTER than mature regolith (~0.2 vs
+                // ~0.12 albedo — fresh rock faces vs gardened dust). Near-black
+                // rocks with no cast shadow were literally invisible inside
+                // shadowed crater bowls — solid but unseeable = "invisible wall".
+                base_color: Color::srgb(0.19, 0.19, 0.20),
                 perceptual_roughness: 1.0,
                 ..default()
             })
@@ -110,6 +114,15 @@ impl TerrainLayer for RockScatterLayer {
             let t = ((sz - size.min) / span).clamp(0.0, 1.0);
             ((t * (ROCK_BUCKETS - 1) as f32).round() as usize).min(ROCK_BUCKETS - 1)
         };
+        // The VISUAL a rock gets is its bucket's shared mesh — extent ~0.5–0.7 of
+        // the bucket radius (`faceted_rock_mesh` boxes: half-extents ≤ 0.48·r,
+        // offsets ≤ 0.4·r) — NOT `p.size`. Size collider + sink from the same
+        // bucket radius (derivable headless → identical colliders on the server)
+        // or the wheel stops on an invisible shell up to a metre before the
+        // visible rock: THE "rover hits an invisible wall" report. 0.6·r sunk
+        // 0.25·r keeps the collider inside the visual mass.
+        let bucket_radius =
+            |b: usize| -> f32 { size.min + span * (b as f32 / (ROCK_BUCKETS - 1) as f32) };
 
         let mut spawned = 0usize;
         cx.commands.entity(cx.terrain).with_children(|parent| {
@@ -119,15 +132,16 @@ impl TerrainLayer for RockScatterLayer {
                     p.pos.x as f64,
                     p.pos.y as f64,
                 ) as f32;
+                let r_vis = bucket_radius(bucket_of(p.size)).max(0.05);
                 let mut rock = parent.spawn((
                     TerrainRock,
                     TerrainScatterEntity,
                     Name::new("TerrainRock"),
-                    Transform::from_xyz(p.pos.x, y - p.size * 0.25, p.pos.y)
+                    Transform::from_xyz(p.pos.x, y - r_vis * 0.25, p.pos.y)
                         .with_rotation(Quat::from_rotation_y(p.yaw)),
                     Visibility::Inherited,
                     RigidBody::Static,
-                    Collider::sphere((p.size * 0.8) as f64),
+                    Collider::sphere((r_vis * 0.6) as f64),
                 ));
                 if let (Some(handles), Some(mat)) = (&bucket_handles, &rock_material) {
                     rock.insert((

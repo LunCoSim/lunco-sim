@@ -196,6 +196,7 @@ mod tests {
             depth: 2.0,
             rim_height: 0.4,
             softness: 0.0,
+            bowl_power: 4.0,
         }]);
         HeightContribution { modifier: Arc::new(craters), content_key: 0xC0FFEE }
     }

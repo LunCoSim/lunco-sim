@@ -53,6 +53,12 @@ pub struct Crater {
     /// with varied softness is what reads as a real surface; identical fresh
     /// profiles everywhere read as procedural stamping.
     pub softness: f64,
+    /// Bowl cross-section exponent `p` in `−depth·(1−dᵖ)`. `2` = paraboloid
+    /// (fresh simple craters — continuously curving walls), larger = wider flat
+    /// floor with a steep wall band (infilled/degraded morphology; the legacy
+    /// profile was a fixed `4`). Tie it to the degradation state: a fresh sharp
+    /// rim over a degraded flat floor is a strong "stamped" cue.
+    pub bowl_power: f64,
 }
 
 impl Crater {
@@ -88,23 +94,36 @@ impl Crater {
         if r <= 0.0 {
             return 0.0;
         }
+        // Spatial reject FIRST — the bucket index hands every sample ~a dozen
+        // candidates but only a couple are within reach, so the common case must
+        // cost a few compares, not a divide + sqrt. (At 100k+ craters this loop
+        // is the tile/collider bake inner loop.)
+        let reach = r * CRATER_REACH;
+        let dx = x - self.center[0];
+        if dx >= reach || dx <= -reach {
+            return 0.0;
+        }
+        let dz = z - self.center[1];
+        if dz >= reach || dz <= -reach {
+            return 0.0;
+        }
+        let d2 = dx * dx + dz * dz;
+        if d2 >= reach * reach {
+            return 0.0;
+        }
         let fade = nyquist_fade(2.0 * r, min_wavelength);
         if fade <= 0.0 {
             return 0.0;
         }
-        let dx = x - self.center[0];
-        let dz = z - self.center[1];
-        let d = (dx * dx + dz * dz).sqrt() / r; // normalised radial distance
-        if d >= CRATER_REACH {
-            return 0.0;
-        }
+        let d = d2.sqrt() / r; // normalised radial distance
         // Sampling kernel width, normalised by the rim radius (σ ≈ half the
         // sample spacing — the classic anti-alias kernel), combined in
         // quadrature with the crater's own degradation blur.
         let sample_sigma = 0.5 * min_wavelength / r;
         let sigma_n = (sample_sigma * sample_sigma + self.softness * self.softness).sqrt();
-        let tail = crater_profile_limited(CRATER_REACH, self.depth, self.rim_height, sigma_n);
-        fade * (crater_profile_limited(d, self.depth, self.rim_height, sigma_n) - tail)
+        let tail =
+            crater_profile_limited(CRATER_REACH, self.depth, self.rim_height, self.bowl_power, sigma_n);
+        fade * (crater_profile_limited(d, self.depth, self.rim_height, self.bowl_power, sigma_n) - tail)
     }
 }
 
@@ -125,13 +144,13 @@ fn gauss(d: f64, center: f64, sigma: f64) -> f64 {
 
 /// Crater cross-section (metres) at normalised radial distance `d` (0 = centre,
 /// 1 = rim radius). The `f64` canonical of `lunco-obstacle-field`'s `crater_delta`
-/// — same profile, sampled instead of rasterised: a fairly flat floor (`1 − d⁴`
-/// holds near max depth across the floor) turning UP into a steep inner wall, a
-/// SHARP raised rim lip at `d≈1` (the key cue under raking light), then a low
-/// outward ejecta apron peaking near `d≈1.15`.
+/// — same profile, sampled instead of rasterised: a bowl `−depth·(1−dᵖ)`
+/// (`bowl_power` p = 2 paraboloid fresh → larger = flat degraded floor) turning
+/// UP into the inner wall, a SHARP raised rim lip at `d≈1` (the key cue under
+/// raking light), then a low outward ejecta apron peaking near `d≈1.15`.
 #[inline]
-pub fn crater_profile(d: f64, depth: f64, rim_height: f64) -> f64 {
-    crater_profile_limited(d, depth, rim_height, 0.0)
+pub fn crater_profile(d: f64, depth: f64, rim_height: f64, bowl_power: f64) -> f64 {
+    crater_profile_limited(d, depth, rim_height, bowl_power, 0.0)
 }
 
 /// Band-limited crater cross-section: the profile convolved — in closed form,
@@ -149,8 +168,8 @@ pub fn crater_profile(d: f64, depth: f64, rim_height: f64) -> f64 {
 /// here — [`Crater::delta_at_limited`] subtracts the residual at
 /// [`CRATER_REACH`] so the summed field cuts off continuously.
 #[inline]
-pub fn crater_profile_limited(d: f64, depth: f64, rim_height: f64, sigma_n: f64) -> f64 {
-    let bowl = if d < 1.0 { -depth * (1.0 - d * d * d * d) } else { 0.0 };
+pub fn crater_profile_limited(d: f64, depth: f64, rim_height: f64, bowl_power: f64, sigma_n: f64) -> f64 {
+    let bowl = if d < 1.0 { -depth * (1.0 - d.powf(bowl_power)) } else { 0.0 };
     let rim_sigma = (RIM_SIGMA * RIM_SIGMA + sigma_n * sigma_n).sqrt();
     let apron_sigma = (APRON_SIGMA * APRON_SIGMA + sigma_n * sigma_n).sqrt();
     let rim_amp = (RIM_SIGMA / rim_sigma) * (RIM_SIGMA / rim_sigma);
@@ -179,12 +198,28 @@ pub struct Craters {
     min_wavelength: f64,
 }
 
+/// Number of radius-octave strata the overprint combine distinguishes, and the
+/// octave (log₂ radius) mapped to stratum 0. Radii from 0.25 m up to 8 km land in
+/// distinct strata; anything outside clamps to the nearest end.
+const OCTAVE_BASE: i32 = -2;
+const OCTAVE_COUNT: usize = 16;
+
+/// Radius-octave stratum of a crater: same-scale craters overprint, craters an
+/// octave apart superpose (see [`Craters::delta_at`]).
+#[inline]
+fn octave_of(radius: f64) -> usize {
+    (radius.max(1e-9).log2().floor() as i32 - OCTAVE_BASE).clamp(0, OCTAVE_COUNT as i32 - 1) as usize
+}
+
 /// The immutable placement set + spatial bucket index behind [`Craters`].
 #[derive(Debug)]
 struct CraterIndex {
     /// The crater set (order only matters for bucket construction determinism —
     /// the per-point min/max combine is order-independent).
     craters: Vec<Crater>,
+    /// Radius-octave stratum per crater (parallel to `craters`), precomputed so
+    /// the per-sample combine doesn't pay a `log2` per candidate.
+    octaves: Vec<u8>,
     /// Metres per bucket cell.
     cell_size: f64,
     /// Bucket → indices into `craters` whose reach bbox overlaps that cell. A crater
@@ -215,8 +250,9 @@ impl Craters {
                 }
             }
         }
+        let octaves = craters.iter().map(|c| octave_of(c.radius) as u8).collect();
         Self {
-            index: Arc::new(CraterIndex { craters, cell_size, buckets }),
+            index: Arc::new(CraterIndex { craters, octaves, cell_size, buckets }),
             min_wavelength: 0.0,
         }
     }
@@ -227,30 +263,44 @@ impl Craters {
     }
 
     /// Combined crater delta (metres) at `(x, z)`, band-limited to this
-    /// instance's Nyquist gate. Overlapping craters **overprint** rather than
-    /// add — the deepest bowl and the tallest rim at the point win:
+    /// instance's Nyquist gate. **Same-scale** overlapping craters overprint —
+    /// within each radius octave the deepest bowl and the tallest rim at the
+    /// point win — while **octaves superpose**:
     ///
     /// ```text
-    /// delta = min(0, min_i d_i) + max(0, max_i d_i)
+    /// delta = Σ_octave [ min(0, min_i d_i) + max(0, max_i d_i) ]
     /// ```
     ///
-    /// A young impact cuts *through* older relief; summing deltas instead
-    /// doubled bowl depth where bowls crossed and minted double-rim mounds
-    /// inside craters ("two craters in one") at any realistic density. Min/max
-    /// is also order-independent, so determinism needs no fixed walk order.
+    /// A young impact cuts *through* comparable older relief; summing same-scale
+    /// deltas doubled bowl depth where bowls crossed and minted double-rim
+    /// mounds inside craters ("two craters in one"). But a global min/max erased
+    /// every SMALL crater inside a big bowl (the big negative won the `min`, so
+    /// only the small rim survived — floating rings on crater floors), when a
+    /// real saturated surface is exactly big floors pockmarked by small bowls:
+    /// scale-separated impacts are physically additive. Per-octave min/max +
+    /// cross-octave sum gives both, stays order-independent, and needs no fixed
+    /// walk order for determinism.
     pub fn delta_at(&self, x: f64, z: f64) -> f64 {
         let key = cell_of(x, z, self.index.cell_size);
         let Some(indices) = self.index.buckets.get(&key) else {
             return 0.0;
         };
-        let mut deepest = 0.0_f64;
-        let mut tallest = 0.0_f64;
+        let mut deepest = [0.0_f64; OCTAVE_COUNT];
+        let mut tallest = [0.0_f64; OCTAVE_COUNT];
         for &i in indices {
             let d = self.index.craters[i as usize].delta_at_limited(x, z, self.min_wavelength);
-            deepest = deepest.min(d);
-            tallest = tallest.max(d);
+            if d == 0.0 {
+                continue;
+            }
+            let o = self.index.octaves[i as usize] as usize;
+            deepest[o] = deepest[o].min(d);
+            tallest[o] = tallest[o].max(d);
         }
-        deepest + tallest
+        let mut sum = 0.0;
+        for o in 0..OCTAVE_COUNT {
+            sum += deepest[o] + tallest[o];
+        }
+        sum
     }
 }
 
@@ -332,7 +382,27 @@ mod tests {
     }
 
     fn crater(cx: f64, cz: f64, r: f64) -> Crater {
-        Crater { center: [cx, cz], radius: r, depth: 2.0, rim_height: 0.4, softness: 0.0 }
+        Crater {
+            center: [cx, cz],
+            radius: r,
+            depth: 2.0,
+            rim_height: 0.4,
+            softness: 0.0,
+            bowl_power: 4.0,
+        }
+    }
+
+    /// Brute-force reference of the octave-stratified overprint combine.
+    fn brute_combine(craters: &[Crater], x: f64, z: f64) -> f64 {
+        let mut deepest = [0.0_f64; OCTAVE_COUNT];
+        let mut tallest = [0.0_f64; OCTAVE_COUNT];
+        for c in craters {
+            let d = c.delta_at(x, z);
+            let o = octave_of(c.radius);
+            deepest[o] = deepest[o].min(d);
+            tallest[o] = tallest[o].max(d);
+        }
+        deepest.iter().sum::<f64>() + tallest.iter().sum::<f64>()
     }
 
     #[test]
@@ -371,9 +441,7 @@ mod tests {
         for gx in -60..60 {
             for gz in -60..60 {
                 let (x, z) = (gx as f64 * 2.3, gz as f64 * 2.3);
-                let deepest = craters.iter().map(|c| c.delta_at(x, z)).fold(0.0_f64, f64::min);
-                let tallest = craters.iter().map(|c| c.delta_at(x, z)).fold(0.0_f64, f64::max);
-                let brute = 2.0 + deepest + tallest;
+                let brute = 2.0 + brute_combine(&craters, x, z);
                 assert!(
                     (f.height_at(x, z) - brute).abs() < 1e-12,
                     "mismatch at ({x},{z}): {} vs {brute}",
@@ -385,8 +453,9 @@ mod tests {
 
     #[test]
     fn overlapping_craters_overprint_not_add() {
-        // A young impact cuts through old relief: coincident craters must yield
-        // the SAME bowl as one crater, not a doubled one ("two craters in one").
+        // A young impact cuts through comparable old relief: coincident
+        // SAME-SCALE craters must yield the SAME bowl as one crater, not a
+        // doubled one ("two craters in one").
         let one = CraterField::new(Flat(0.0), vec![crater(0.0, 0.0, 10.0)]);
         let two = CraterField::new(Flat(0.0), vec![crater(0.0, 0.0, 10.0), crater(0.0, 0.0, 10.0)]);
         assert!((two.height_at(0.0, 0.0) - one.height_at(0.0, 0.0)).abs() < 1e-12);
@@ -401,6 +470,25 @@ mod tests {
     }
 
     #[test]
+    fn small_crater_survives_inside_large_bowl() {
+        // Scale-separated impacts superpose: a 2 m crater on a 30 m crater's
+        // floor must still dig its own bowl (a global min/max erased it — the
+        // big bowl won the `min`, leaving only the small rim as a floating ring).
+        let big = crater(0.0, 0.0, 30.0);
+        let small = crater(6.0, 0.0, 2.0);
+        let with = CraterField::new(Flat(0.0), vec![big, small]);
+        let without = CraterField::new(Flat(0.0), vec![big]);
+        let dug = without.height_at(6.0, 0.0) - with.height_at(6.0, 0.0);
+        assert!(
+            dug > small.depth * 0.5,
+            "small bowl should deepen the big floor by ~its own depth, dug {dug}"
+        );
+        // …and its rim rises RELATIVE to the local big-bowl floor.
+        let rim = with.height_at(8.0, 0.0) - without.height_at(8.0, 0.0);
+        assert!(rim > 0.0, "small rim should ride on the big floor, got {rim}");
+    }
+
+    #[test]
     fn delta_continuous_at_reach_hard_zero_beyond() {
         // The contribution must land on exactly zero at the reach with no step —
         // a hard cut of the apron tail leaves a circular ledge that reads as a
@@ -410,8 +498,8 @@ mod tests {
         assert_eq!(c.delta_at(16.0, 0.0), 0.0); // d = 1.6 exactly
         assert_eq!(c.delta_at(20.0, 0.0), 0.0); // d = 2.0
         // Floor is a deep depression, rim is positive.
-        assert!(crater_profile(0.0, 3.0, 0.5) < -2.0);
-        assert!(crater_profile(0.98, 0.0, 0.5) > 0.0);
+        assert!(crater_profile(0.0, 3.0, 0.5, 4.0) < -2.0);
+        assert!(crater_profile(0.98, 0.0, 0.5, 4.0) > 0.0);
     }
 
     #[test]

@@ -77,7 +77,19 @@ pub(crate) fn crater_placements(
         return Vec::new();
     }
     let side = (2.0 * half_extent) as f64;
-    let count = ((craters.density as f64 * side * side) / 10_000.0).round().max(0.0) as usize;
+    // Authored `density` (per ha) is calibrated to the legacy 8 m-radius size
+    // floor. The power-law SFD `N(>r) ∝ r^-1.8` says lowering the floor to
+    // `size.min` multiplies the population by `(8/min)^1.8` — that growth is the
+    // saturation-equilibrium small-crater carpet, not a density change, so scale
+    // the count here instead of asking every scene to re-author density. Capped:
+    // the analytic index stays cheap per-sample, but a pathological min would
+    // otherwise mint millions of placements.
+    let rmin = craters.size.min.max(0.5) as f64;
+    let sfd_scale = (8.0 / rmin).powf(1.8).max(1.0);
+    let count = ((craters.density as f64 * side * side) / 10_000.0 * sfd_scale)
+        .round()
+        .max(0.0)
+        .min(250_000.0) as usize;
     if count == 0 {
         return Vec::new();
     }
@@ -615,7 +627,7 @@ fn finish_dem_builds(
 /// split off into a separate debounced task ([`DemColliderDirty`]/[`DemColliderTask`])
 /// so the visible terrain updates ~immediately and physics catches up after.
 #[derive(Component)]
-struct DemRestampTask(Task<std::sync::Arc<crate::oracle::SurfaceOracle>>);
+pub(crate) struct DemRestampTask(Task<std::sync::Arc<crate::oracle::SurfaceOracle>>);
 
 /// Armed after a visual re-stamp swaps new heights in (non-collider-ring terrains):
 /// once it settles, the static heightfield collider is rebuilt off-thread from the
@@ -639,7 +651,7 @@ const COLLIDER_DEBOUNCE_SECS: f32 = 0.6;
 /// slider streams responsively (first edit starts immediately) and settles on a final
 /// re-bake, instead of queueing a full re-stamp every frame of the drag.
 #[derive(Component)]
-struct DemRestampPending;
+pub(crate) struct DemRestampPending;
 
 /// Debounce armed on each layer-stack change; the re-stamp only kicks off once it
 /// elapses with no further change. Re-stamping the *whole* DEM is heavy (clone +
@@ -745,7 +757,7 @@ fn start_dem_restamp(
 /// tiles go stale and re-bake near-camera-first (covering the surface meanwhile)
 /// rather than all being despawned at once. Rocks/overlays re-scatter next frame.
 #[allow(clippy::type_complexity)]
-fn finish_dem_restamp(
+pub(crate) fn finish_dem_restamp(
     mut commands: Commands,
     mut tasks: Query<(
         Entity,
