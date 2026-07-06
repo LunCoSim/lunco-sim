@@ -2172,8 +2172,11 @@ fn refresh_docbacked_terrain_from_doc(
             }
         }
         let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else { continue };
-        let composed = host.document().composed();
-        let stack = parse_terrain_layer_stack(&composed, &sdf, &parser);
+        // `composed_arc` is memoized by generation, so this shares the SAME recompose
+        // the twin overlay serialize already paid for this edit (was a second full
+        // O(stage) layer merge on the main thread per brush stroke).
+        let composed = host.document().composed_arc();
+        let stack = parse_terrain_layer_stack(composed.as_ref(), &sdf, &parser);
         // Despawn-safe: a scene reload can despawn this terrain between queue
         // time and apply_deferred — no-op instead of panicking.
         commands.entity(entity).try_insert(stack);
@@ -2408,8 +2411,15 @@ fn bridge_dem_prim_read<R: UsdRead>(
         .unwrap_or(0);
     // `lodViz` = stream CDLOD tiles (default ON) vs one static mesh.
     let lod_viz = attr_bool("lodViz", "lunco:terrain:lodViz").unwrap_or(true);
-    // `colliderRing` = stream a per-rover collider ring vs one static collider.
-    let collider_ring = attr_bool("colliderRing", "lunco:terrain:colliderRing").unwrap_or(false);
+    // `colliderRing` = stream a per-body collider ring vs one static collider.
+    // Default FOLLOWS `lodViz`: streamed visuals and the streamed collider are the
+    // two halves of the same milestone — the static full-DEM collider is
+    // Nyquist-gated at the DEM base spacing (~3.9 m), which fades every crater
+    // below ~12 m radius FLAT in physics while the 0.65 m near tiles render deep
+    // bowls (rovers visibly float above / sink into what they see). Author
+    // `lunco:terrain:colliderRing = false` to keep the single static collider.
+    let collider_ring =
+        attr_bool("colliderRing", "lunco:terrain:colliderRing").unwrap_or(lod_viz);
     // (`detailUpsample` is retired: craters/edits are ANALYTIC modifiers on the
     // surface oracle now, sampled at each consumer's own resolution — grid
     // upscaling has nothing left to buy.)

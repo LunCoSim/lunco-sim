@@ -162,6 +162,13 @@ impl TerrainLayerStack {
         self.set_edits_layer(updated);
     }
 
+    /// World footprint `[min_x, min_z, max_x, max_z]` of the edit identified by `id`,
+    /// or `None` if it isn't an edit in this stack (e.g. it's a whole layer). Lets an
+    /// undo/remove scope its re-bake to only the tiles the edit touched.
+    pub fn edit_bounds(&self, id: &LayerId) -> Option<[f64; 4]> {
+        self.edits_layer().edit_bounds(id)
+    }
+
     /// Remove an edit (by its id) from the edits layer; returns whether one was removed.
     pub fn remove_edit(&mut self, id: &LayerId) -> bool {
         match self.edits_layer().without(id) {

@@ -660,6 +660,23 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                     );
                     commands.entity(prior).try_remove::<(
                         Camera3d,
+                        // `Camera3d` REQUIRES `Camera`/`RenderTarget`/`Projection`,
+                        // and required components are NOT removed with their
+                        // requirer — so stripping `Camera3d` alone left a bare
+                        // `Camera` (still `is_active: true`, still window-targeted)
+                        // that `bevy_render::extract_cameras` renders but the
+                        // arbiter (`reconcile_scene_viewport`, filtered
+                        // `With<Camera3d>`) can never deactivate: a GHOST second
+                        // active order-0 window camera — the whole scene rendered
+                        // twice + a per-frame camera-order-ambiguity warning.
+                        (
+                            bevy::camera::Camera,
+                            bevy::camera::RenderTarget,
+                            bevy::camera::Projection,
+                            bevy::camera::Exposure,
+                            bevy::core_pipeline::tonemapping::Tonemapping,
+                            AdaptiveNearPlane,
+                        ),
                         Avatar,
                         LocalAvatar,
                         FreeFlightCamera,
@@ -734,6 +751,16 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             // high-contrast lunar exposure (ev100 stays lunar-calibrated).
             let camera_look = move || {
                 (
+                    // Spawn INACTIVE. `reconcile_scene_viewport` is the ONE
+                    // writer of `Camera::is_active` and turns the bound camera
+                    // on within a frame — but a `Camera3d` left to its required
+                    // `Camera` default is active the moment it spawns, so a
+                    // stage recompose that re-instantiates this prim renders as
+                    // a SECOND active order-0 window camera (Bevy's per-frame
+                    // "camera order ambiguities" warning + the whole scene
+                    // rendered twice) until the arbiter and the prior avatar's
+                    // deferred despawn catch up.
+                    bevy::camera::Camera { is_active: false, ..Default::default() },
                     bevy::camera::Exposure { ev100 },
                     bevy::core_pipeline::tonemapping::Tonemapping::AgX,
                 )

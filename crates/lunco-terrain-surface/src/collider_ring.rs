@@ -98,36 +98,54 @@ pub struct PendingColliderBakes(HashMap<QuadCoord, Task<Collider>>);
 #[derive(Component)]
 pub struct ColliderTileOf(pub Entity);
 
+/// Halo cells sampled PAST each tile edge before slope-limiting, cropped after.
+/// `slope_limit_grid` is a min-sweep distance transform: run on a bare tile it
+/// converges toward that tile's own interior only, so the SAME shared-edge world
+/// column came out lowered by different amounts in two abutting tiles — a
+/// vertical step (≥ `max_step` ≈ 1.2 m, metres across a sharp rim) at every
+/// 62.5 m seam crossing an over-limit crater wall. The rover chassis snagged
+/// these as "invisible walls". A feature of height Δ influences the sweep over
+/// `Δ / (max_slope·spacing)` cells; 16 cells (≈7.8 m) covers a 12 m-deep fresh
+/// crater wall twice over, so cropped edge columns agree across seams.
+const COLLIDER_HALO_CELLS: usize = 16;
+
 /// Sample the composed surface oracle over a tile `region` into Avian's
 /// heightfield layout (`Vec<Vec<f64>>` indexed `[x][z]`, paired with a
 /// `(side, 1, side)` scale — Parry centres it at the entity origin). The SAME
 /// source the visual tile baker samples, so the bowl the rover hits is the bowl
 /// it sees. Heights are conditioned through the core collider firewall
-/// (slope-limit + quantize) for contact stability + peer determinism.
+/// (slope-limit + quantize) on a halo-padded grid (see [`COLLIDER_HALO_CELLS`])
+/// for contact stability, peer determinism, and seam-exact neighbours.
 fn sample_heights_xz(oracle: &SurfaceOracle, region: Square, res: usize) -> Vec<Vec<f64>> {
     let res = res.max(2);
     let step = region.side() / (res as f64 - 1.0);
-    let x0 = region.center[0] - region.half;
-    let z0 = region.center[1] - region.half;
-    // Row-major [z*res + x] flat grid for the conditioning pass…
-    // Gate synthetic over-zoom detail at the collider's own sample spacing —
-    // sub-sample features would rasterise as contact-flipping noise.
-    let limited = oracle.detail_limited(step);
-    let mut flat = vec![0.0f64; res * res];
-    for iz in 0..res {
+    let halo = COLLIDER_HALO_CELLS;
+    let padded = res + 2 * halo;
+    let x0 = region.center[0] - region.half - halo as f64 * step;
+    let z0 = region.center[1] - region.half - halo as f64 * step;
+    // Row-major [z*padded + x] flat grid for the conditioning pass…
+    // Gate detail at TWICE the collider's sample spacing: sub-sample features
+    // would rasterise as contact-flipping noise, and the extra octave rounds
+    // the sharp crater rim LIP (the σ≈0.14·r Gaussian) into a rollable bump —
+    // a chassis nosing over an un-rounded lip stopped dead on a ~60° face
+    // ("stuck on a wall inside the crater"). The visual/physics gap this opens
+    // is bounded by the lip sharpening between 1× and 2× step: centimetres.
+    let limited = oracle.detail_limited(2.0 * step);
+    let mut flat = vec![0.0f64; padded * padded];
+    for iz in 0..padded {
         let wz = z0 + iz as f64 * step;
-        for ix in 0..res {
+        for ix in 0..padded {
             let wx = x0 + ix as f64 * step;
-            flat[iz * res + ix] = limited.height_at(wx, wz);
+            flat[iz * padded + ix] = limited.height_at(wx, wz);
         }
     }
-    prepare_collider_heights(&mut flat, res, step, COLLIDER_MAX_SLOPE, COLLIDER_QUANT_STEP);
-    // …then Avian's [x][z] column layout.
+    prepare_collider_heights(&mut flat, padded, step, COLLIDER_MAX_SLOPE, COLLIDER_QUANT_STEP);
+    // …then crop the halo and transpose into Avian's [x][z] column layout.
     let mut cols = Vec::with_capacity(res);
     for ix in 0..res {
         let mut col = Vec::with_capacity(res);
         for iz in 0..res {
-            col.push(flat[iz * res + ix]);
+            col.push(flat[(iz + halo) * padded + (ix + halo)]);
         }
         cols.push(col);
     }
@@ -135,6 +153,25 @@ fn sample_heights_xz(oracle: &SurfaceOracle, region: Square, res: usize) -> Vec<
 }
 
 /// Per-frame: maintain the collider ring around dynamic bodies for each terrain.
+/// The edited region + the oracle version it belongs to, handed from
+/// `finish_dem_restamp` so [`update_collider_ring`] re-bakes ONLY the ring tiles the
+/// edit touched. `bounds` = `[min_x, min_z, max_x, max_z]` terrain-local metres;
+/// `None` = whole terrain. `oracle_key` matches the swap it describes (so a stale
+/// region can't scope the wrong oracle). Consumed once applied.
+#[derive(Component)]
+pub struct ColliderDirtyRegion {
+    pub bounds: Option<[f64; 4]>,
+    pub oracle_key: u64,
+}
+
+/// Whether a node's world [`Square`] overlaps an `[min_x, min_z, max_x, max_z]` box.
+fn square_overlaps_aabb(s: Square, a: [f64; 4]) -> bool {
+    s.center[0] - s.half <= a[2]
+        && s.center[0] + s.half >= a[0]
+        && s.center[1] - s.half <= a[3]
+        && s.center[1] + s.half >= a[1]
+}
+
 pub fn update_collider_ring(
     mut commands: Commands,
     grids: Query<(Entity, &Grid), With<WorldGrid>>,
@@ -147,6 +184,7 @@ pub fn update_collider_ring(
         &TerrainColliderRing,
         &mut ColliderTiles,
         &mut PendingColliderBakes,
+        Option<&ColliderDirtyRegion>,
     )>,
 ) {
     let Ok((grid_entity, grid)) = grids.single() else { return };
@@ -159,24 +197,39 @@ pub fn update_collider_ring(
         .map(|(_, gt)| gt.translation())
         .collect();
 
-    for (terrain, t_gt, hf, ring, mut tiles, mut pending) in &mut terrains {
+    for (terrain, t_gt, hf, ring, mut tiles, mut pending, dirty_region) in &mut terrains {
         let oracle = &hf.0;
-        // Oracle swapped (layer recompose / live edit) → every resident tile is
-        // stale geometry. Despawn them all and drop in-flight bakes; the wanted
-        // set below re-bakes the ring against the CURRENT surface.
-        let oracle_key = oracle.surface_key();
-        if tiles.oracle_key != oracle_key {
-            for (_, ent) in tiles.map.drain() {
-                commands.entity(ent).try_despawn();
-            }
-            pending.0.clear();
-            tiles.oracle_key = oracle_key;
-        }
         let h = oracle.half_extent() as f64;
         let nodes = 1u32 << ring.depth;
         let side = (2.0 * h) / nodes as f64;
         // Quadtree only for `region(coord)` (depth/range_factor irrelevant here).
         let qt = Quadtree::new(h, ring.depth, 1.0, h);
+        // Oracle swapped (layer recompose / live edit) → resident tiles baked from the
+        // OLD surface are stale. A BOUNDED edit (matching this oracle version) changed
+        // heights only inside its AABB, so re-bake ONLY the tiles overlapping it — tiles
+        // outside still sample identical heights and KEEP their collider, so we don't
+        // despawn+respawn the whole ring (the broadphase-churn physics spike on a burst).
+        // A whole-terrain change (`None`) invalidates the whole ring, as before.
+        let oracle_key = oracle.surface_key();
+        if tiles.oracle_key != oracle_key {
+            let dirty = dirty_region.filter(|d| d.oracle_key == oracle_key).and_then(|d| d.bounds);
+            tiles.map.retain(|coord, ent| {
+                let stale = match dirty {
+                    Some(aabb) => square_overlaps_aabb(qt.region(*coord), aabb),
+                    None => true,
+                };
+                if stale {
+                    commands.entity(*ent).try_despawn();
+                }
+                !stale
+            });
+            pending.0.retain(|coord, _| match dirty {
+                Some(aabb) => !square_overlaps_aabb(qt.region(*coord), aabb),
+                None => false,
+            });
+            tiles.oracle_key = oracle_key;
+            commands.entity(terrain).try_remove::<ColliderDirtyRegion>();
+        }
 
         // The canonical-depth node set wanted this frame: each focus's node + its
         // 8 neighbours (3×3 build-ahead), deduped across all bodies.
@@ -331,6 +384,7 @@ mod tests {
             radius: 8.0,
             depth: 2.0,
             rim_height: 0.4,
+            softness: 0.0,
         };
         let oracle = SurfaceOracle::new(
             std::sync::Arc::new(grid),
@@ -371,17 +425,73 @@ mod tests {
         // so tolerate slope-limit slack of one cell's max step there).
         let step = side / (COLLIDER_RES as f64 - 1.0);
         let slack = COLLIDER_MAX_SLOPE * step + 2.0 * COLLIDER_QUANT_STEP;
+        // The collider samples the oracle GATED at twice its step (rim-lip
+        // rounding — see `sample_heights_xz`) — compare against that same
+        // band-limited surface.
+        let gated = oracle.detail_limited(2.0 * step);
         for iz in (0..COLLIDER_RES).step_by(8) {
             for ix in (0..COLLIDER_RES).step_by(8) {
                 let lx = -region.half + ix as f64 * step;
                 let lz = -region.half + iz as f64 * step;
-                let expect = HeightSource::height_at(&oracle, region.center[0] + lx, region.center[1] + lz);
+                let expect = HeightSource::height_at(&gated, region.center[0] + lx, region.center[1] + lz);
                 let got = surface_y(&collider, lx, lz);
                 assert!(
                     got <= expect + 1e-6 + 2.0 * COLLIDER_QUANT_STEP && got >= expect - slack - 1e-6,
                     "collider/oracle mismatch at local ({lx:.2},{lz:.2}): collider {got}, oracle {expect}"
                 );
             }
+        }
+    }
+
+    /// Two abutting collider tiles must agree EXACTLY on their shared world
+    /// column. `slope_limit_grid` is a min-sweep whose result depends on every
+    /// cell it can reach — run per bare tile it converged toward each tile's own
+    /// interior, so a steep crater wall crossing a seam got lowered differently
+    /// on either side: a metre-scale vertical step between abutting Static
+    /// heightfields that the rover chassis snagged as an "invisible wall". The
+    /// halo pad (see [`COLLIDER_HALO_CELLS`]) makes both tiles condition the
+    /// seam with the same cross-seam content.
+    #[test]
+    fn adjacent_collider_tiles_agree_on_shared_edge() {
+        let h = 4000.0_f64;
+        let depth = COLLIDER_DEPTH;
+        let mut grid = HeightGrid::new_flat(129, h as f32);
+        for v in grid.heights.iter_mut() {
+            *v = BASE_H;
+        }
+        let qt = Quadtree::new(h, depth, 1.0, h);
+        let a = QuadCoord { depth, x: 70, z: 45 };
+        let b = QuadCoord { depth, x: 71, z: 45 };
+        let (ra, rb) = (qt.region(a), qt.region(b));
+        // A fresh, OVER-LIMIT-steep crater straddling the seam (bowl wall slope
+        // 4·depth/r = 3.2 > COLLIDER_MAX_SLOPE) so the min-sweep actively
+        // rewrites heights on both sides of the shared column.
+        let seam_x = ra.center[0] + ra.half;
+        let crater = Crater {
+            center: [seam_x + 4.0, ra.center[1] - 7.0],
+            radius: 10.0,
+            depth: 8.0,
+            rim_height: 4.0,
+            softness: 0.0,
+        };
+        let oracle = SurfaceOracle::new(
+            std::sync::Arc::new(grid),
+            vec![crate::oracle::HeightContribution {
+                modifier: std::sync::Arc::new(Craters::new(vec![crater])),
+                content_key: 1,
+            }],
+        );
+        let ha = sample_heights_xz(&oracle, ra, COLLIDER_RES);
+        let hb = sample_heights_xz(&oracle, rb, COLLIDER_RES);
+        // Tile A's last x-column and tile B's first x-column sample the same
+        // world positions — they must be byte-identical after conditioning.
+        for iz in 0..COLLIDER_RES {
+            let (ya, yb) = (ha[COLLIDER_RES - 1][iz], hb[0][iz]);
+            assert!(
+                (ya - yb).abs() < 1e-9,
+                "seam step {:.3} m at iz={iz}: {ya} vs {yb} — invisible wall",
+                (ya - yb).abs()
+            );
         }
     }
 }

@@ -134,6 +134,11 @@ impl TerrainLayer for RockScatterLayer {
                         Mesh3d(handles[bucket_of(p.size)].clone()),
                         MeshMaterial3d(mat.clone()),
                         rock_visibility_range(),
+                        // Hundreds-to-thousands of scattered rocks: casting each into all
+                        // 4 sun cascades every frame is a big chunk of the shadow pass.
+                        // They still RECEIVE shadows; skip casting (their own tiny
+                        // contact shadow isn't worth 4× re-submission of the whole field).
+                        bevy::light::NotShadowCaster,
                     ));
                 }
                 spawned += 1;

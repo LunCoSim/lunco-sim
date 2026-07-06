@@ -22,7 +22,12 @@ use crate::tile_mesh::{bake_tile_mesh, TileMesh};
 
 /// Bump when `bake_tile_mesh` math (heights, normals eps, morph snap, skirts,
 /// detail gating) or the blob layout changes.
-const CACHE_FORMAT_VERSION: u64 = 1;
+/// v2: crater profile is band-limited per tile step and continuous at its reach
+/// (the layer's parameter `content_key` is unchanged, so only a version bump
+/// retires tiles baked with the old aliasing profile).
+/// v3: shading-normal `eps` is a fixed world scale across LOD depths (was
+/// per-depth → per-depth brightness steps under the normal-driven lunar BRDF).
+const CACHE_FORMAT_VERSION: u64 = 3;
 
 /// One tile bake as a [`lunco_precompute::Bake`] entry.
 struct TileBake<'a> {

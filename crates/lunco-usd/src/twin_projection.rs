@@ -111,6 +111,11 @@ struct TwinSceneRef {
     name: String,
     rel: String,
     synced_generation: Option<u64>,
+    /// Generation the **persistence overlay** was last serialized at. Tracked apart
+    /// from `synced_generation` so the (expensive, whole-stage) overlay serialize can
+    /// be DEBOUNCED — done once the document settles after an edit burst, not on every
+    /// brush stroke — while the live projection still applies each op immediately.
+    overlay_synced_generation: Option<u64>,
 }
 
 /// Map of document → the twin scene it backs. Populated by
@@ -144,9 +149,12 @@ impl DocBackedTwinScenes {
     /// document generation. Idempotent — a document already tracked (e.g. a
     /// default twin scene) keeps its existing coordinates.
     pub fn track(&mut self, doc: DocumentId, name: String, rel: String) {
-        self.map
-            .entry(doc)
-            .or_insert(TwinSceneRef { name, rel, synced_generation: None });
+        self.map.entry(doc).or_insert(TwinSceneRef {
+            name,
+            rel,
+            synced_generation: None,
+            overlay_synced_generation: None,
+        });
     }
 }
 
@@ -233,6 +241,7 @@ pub(crate) fn drain_pending_twin_docs(
             name: item.name.clone(),
             rel: item.rel.clone(),
             synced_generation: None,
+            overlay_synced_generation: None,
         });
         info!("[usd-e1b] default scene `twin://{}/{}` is now doc-backed ({doc})", item.name, item.rel);
     }
@@ -244,17 +253,34 @@ pub(crate) fn drain_pending_twin_docs(
 /// source into the overlay and `reload` the scene asset so the live world
 /// re-composes from the document (web-ready — the async loader anchors at the
 /// `twin://` identity). Drops entries whose document has closed.
+/// Serialize a doc-backed scene's composed source into its twin overlay (the
+/// persistence / next-load source) and mark it overlay-synced at `gen`. O(stage) — a
+/// whole-stage recompose + serialize — so call it only once the document has SETTLED
+/// (see the debounce in [`sync_twin_overlays`]), never on every edit.
+fn write_twin_overlay(world: &mut World, doc: DocumentId, name: &str, rel: &str, gen: u64) {
+    let composed_source =
+        world.resource::<UsdDocumentRegistry>().host(doc).map(|h| h.document().composed_source());
+    if let Some(src) = composed_source {
+        world.resource::<TwinRoots>().set_overlay(name, rel, Arc::new(src.into_bytes()));
+        if let Some(s) = world.resource_mut::<DocBackedTwinScenes>().map.get_mut(&doc) {
+            s.overlay_synced_generation = Some(gen);
+        }
+    }
+}
+
 pub(crate) fn sync_twin_overlays(world: &mut World) {
     // Snapshot tracked scenes (owned) so no resource borrow is held across the
     // world mutations below.
-    let entries: Vec<(DocumentId, String, String, Option<u64>)> = world
+    let entries: Vec<(DocumentId, String, String, Option<u64>, Option<u64>)> = world
         .resource::<DocBackedTwinScenes>()
         .map
         .iter()
-        .map(|(doc, s)| (*doc, s.name.clone(), s.rel.clone(), s.synced_generation))
+        .map(|(doc, s)| {
+            (*doc, s.name.clone(), s.rel.clone(), s.synced_generation, s.overlay_synced_generation)
+        })
         .collect();
 
-    for (doc, name, rel, synced) in entries {
+    for (doc, name, rel, synced, overlay_synced) in entries {
         // Cheap generation probe FIRST — then early-out. The expensive payloads
         // below (`composed_source()` re-serializes the whole composed stage to a
         // String; `composed()` recomposes it) must NOT be computed every frame:
@@ -271,23 +297,16 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             }
         };
         if Some(cur_gen) == synced {
+            // Projection is already up to date. DEBOUNCED persistence overlay: once the
+            // document has settled at this generation, serialize the overlay ONCE (not
+            // per edit — a rapid brush burst advances the generation every frame, and
+            // re-serializing a thousand-prim stage each time was the last per-edit
+            // main-thread hitch). The live edits were already projected incrementally.
+            if Some(cur_gen) != overlay_synced {
+                write_twin_overlay(world, doc, &name, &rel, cur_gen);
+            }
             continue;
         }
-        // Generation moved — now (and only now) pay for the composed payloads.
-        let (composed_source, composed) = {
-            let reg = world.resource::<UsdDocumentRegistry>();
-            let h = reg
-                .host(doc)
-                .expect("doc host present: its generation was just read above (single-threaded exclusive system, no despawn between)");
-            (h.document().composed_source(), h.document().composed())
-        };
-
-        // Always refresh the overlay so persistence / next load reflect the doc,
-        // regardless of whether we reload the live asset. Keep `composed_source`
-        // (clone into the overlay) — a full-reload rebuild below recomposes from it.
-        world
-            .resource::<TwinRoots>()
-            .set_overlay(&name, &rel, Arc::new(composed_source.clone().into_bytes()));
 
         // Author-once: the scene's live stage is keyed by the cached
         // `twin://name/rel` UsdStageAsset id (AssetServer dedups by path). We
@@ -320,22 +339,46 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         }
 
         if synced.is_none() {
-            // First mount: the async load already built the stage from the overlay
-            // (base ⊕ runtime), so every recorded op is already reflected. Just
-            // reconcile any restored runtime spawns idempotently — never replay the
-            // ops (that would double-author).
+            // First mount MUST publish the overlay so the async (re)load composes
+            // base ⊕ runtime from it (this is NOT deferrable, unlike a live edit).
+            write_twin_overlay(world, doc, &name, &rel, cur_gen);
+            // The async load already built the stage from the overlay, so every
+            // recorded op is already reflected — just reconcile restored runtime
+            // spawns idempotently (never replay ops → double-author). This is the
+            // only consumer of the whole-stage recompose.
+            let composed = {
+                let reg = world.resource::<UsdDocumentRegistry>();
+                reg.host(doc)
+                    .expect("doc host present: generation read above, exclusive system")
+                    .document()
+                    .composed_arc()
+            };
             reconcile_full_to_composed(world, scene_id, &composed);
         } else {
             match ops {
                 // Overflow, or a coarse op (ReplaceSource / MovePrim / keyframe /
                 // relationship — no incremental stage-author yet, and whole-source
                 // undo may change surviving prims' attribute values): rebuild the
-                // stage from composed_source + the already-loaded closure.
-                None => rebuild_scene_from_composed(world, scene_id, &composed_source),
-                Some(ops) if ops.iter().any(op_needs_rebuild) => {
-                    rebuild_scene_from_composed(world, scene_id, &composed_source)
+                // stage from composed_source + the already-loaded closure. (The
+                // overlay is refreshed on the next settled frame.)
+                None => {
+                    let cs = world
+                        .resource::<UsdDocumentRegistry>()
+                        .host(doc)
+                        .map(|h| h.document().composed_source())
+                        .unwrap_or_default();
+                    rebuild_scene_from_composed(world, scene_id, &cs);
                 }
-                // Incremental: replay each op's typed delta onto the live stage.
+                Some(ops) if ops.iter().any(op_needs_rebuild) => {
+                    let cs = world
+                        .resource::<UsdDocumentRegistry>()
+                        .host(doc)
+                        .map(|h| h.document().composed_source())
+                        .unwrap_or_default();
+                    rebuild_scene_from_composed(world, scene_id, &cs);
+                }
+                // Incremental: replay each op's typed delta onto the live stage. NO
+                // whole-stage serialize here — the overlay catches up when settled.
                 Some(ops) => {
                     for op in &ops {
                         apply_incremental_op_to_stage(world, scene_id, op);
@@ -443,7 +486,19 @@ fn apply_incremental_op_to_stage(
                     .and_then(|s| s.get(scene_id))
                     .and_then(|cs| cs.view().prim_type_name(&sp));
                 if attribute_edit_needs_full_refresh(prim_ty.as_deref()) {
-                    refresh_scene_visuals(world, scene_id);
+                    // …unless the edit is confined to a `LiveRebuildExempt` subtree (a
+                    // DEM terrain's crater/rock/edit layer prims are untyped `def`s →
+                    // `prim_ty == None` → would otherwise take this full-refresh path).
+                    // Reinstantiating the whole scene there re-bridges the terrain and
+                    // re-spawns the avatar camera on EVERY edit — a self-sustaining
+                    // recomposition loop (persistent 1 FPS + camera-order ambiguity, as
+                    // the old cameras are never despawned). The terrain re-bakes itself
+                    // in place off the registry document (`refresh_docbacked_terrain_from_doc`),
+                    // so suppress the structural reload. This is the long-dead consumer
+                    // the `LiveRebuildExempt` doc-comment describes.
+                    if !edit_confined_to_exempt_subtree(world, scene_id, path) {
+                        refresh_scene_visuals(world, scene_id);
+                    }
                 } else {
                     refresh_prim_subtree(world, scene_id, path);
                 }
@@ -681,6 +736,24 @@ fn attribute_edit_needs_full_refresh(prim_type: Option<&str>) -> bool {
         Some(t) => matches!(t, "Material" | "Shader" | "NodeGraph"),
         None => true,
     }
+}
+
+/// Whether an edit at `path` lands inside a [`LiveRebuildExempt`] prim's subtree of
+/// `scene_id` — a live prim that refreshes its own content in place (the DEM
+/// terrain: it re-bakes off the registry document, so a whole-scene reload would
+/// re-bridge the terrain + re-spawn the avatar camera per edit). Matches the
+/// exempt prim itself or any descendant. The missing consumer of `LiveRebuildExempt`.
+fn edit_confined_to_exempt_subtree(
+    world: &mut World,
+    scene_id: AssetId<UsdStageAsset>,
+    path: &str,
+) -> bool {
+    let mut q = world.query_filtered::<&UsdPrimPath, With<LiveRebuildExempt>>();
+    q.iter(world).any(|upp| {
+        upp.stage_handle.id() == scene_id
+            && (upp.path == path
+                || path.starts_with(&format!("{}/", upp.path.trim_end_matches('/'))))
+    })
 }
 
 /// Rebuild the scene's live `CanonicalStage` from the composed document source

@@ -73,7 +73,7 @@ impl Default for Overzoom {
 /// wavelength `w`: 1 when comfortably resolvable (`r ≥ 3w`), 0 when below the
 /// sampling scale (`r ≤ w`), smoothstep between.
 #[inline]
-fn nyquist_fade(r: f64, w: f64) -> f64 {
+pub(crate) fn nyquist_fade(r: f64, w: f64) -> f64 {
     if w <= 0.0 {
         return 1.0;
     }

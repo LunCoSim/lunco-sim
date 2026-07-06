@@ -35,6 +35,17 @@ pub enum EditKind {
 }
 
 impl EditKind {
+    /// The edit's world footprint as `[min_x, min_z, max_x, max_z]` (terrain-local
+    /// metres) — every edit is radial, so its influence is exactly `center ± radius`.
+    /// Drives the incremental region re-bake (only tiles overlapping this re-bake).
+    pub fn aabb(&self) -> [f64; 4] {
+        let (center, radius) = match *self {
+            EditKind::Brush { center, radius, .. } => (center, radius),
+            EditKind::Flatten { center, radius, .. } => (center, radius),
+        };
+        [center[0] - radius, center[1] - radius, center[0] + radius, center[1] + radius]
+    }
+
     /// Apply this edit to the accumulated height at `(x, z)`.
     #[inline]
     fn apply(&self, x: f64, z: f64, h_in: f64) -> f64 {
@@ -88,6 +99,12 @@ impl EditsLayer {
     /// the terrain document's edit prims (the parser feeds this).
     pub fn from_edits(edits: Vec<(LayerId, EditKind)>) -> Self {
         EditsLayer { edits }
+    }
+
+    /// The world footprint of the edit identified by `id`, or `None` if it isn't in
+    /// this layer. Used to scope an undo/remove to only the tiles it touched.
+    pub fn edit_bounds(&self, id: &LayerId) -> Option<[f64; 4]> {
+        self.edits.iter().find(|(eid, _)| eid == id).map(|(_, kind)| kind.aabb())
     }
 }
 

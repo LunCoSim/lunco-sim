@@ -98,7 +98,10 @@ fn start_derived_bakes(
     for (entity, hf) in &q {
         let oracle: Arc<SurfaceOracle> = hf.0.clone();
         let task = AsyncComputeTaskPool::get().spawn(async move { bake_or_load(&oracle) });
-        commands.entity(entity).insert(DerivedBakeTask(task));
+        // Despawn-safe: a load-time / edit re-instantiation can despawn this
+        // terrain between queue time and apply — `try_insert` no-ops on a stale
+        // entity instead of panicking the command buffer.
+        commands.entity(entity).try_insert(DerivedBakeTask(task));
     }
 }
 
@@ -106,7 +109,9 @@ fn start_derived_bakes(
 /// simply never matched (content-addressed → no explicit invalidation).
 /// v2: maps sample the composed `SurfaceOracle` (analytic craters/edits included)
 /// and the key folds the oracle's modifier `content_key`.
-const CACHE_FORMAT_VERSION: u64 = 2;
+/// v3: crater profile band-limited + continuous at reach (same crater
+/// `content_key`, different sampled surface).
+const CACHE_FORMAT_VERSION: u64 = 3;
 
 /// The derived-layer bake as a [`lunco_precompute::Bake`] — the content-addressed
 /// disk cache (Substrate B) owns the load/store/rebake orchestration; this only

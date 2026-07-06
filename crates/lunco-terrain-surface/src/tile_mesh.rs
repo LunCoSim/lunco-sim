@@ -65,12 +65,19 @@ pub fn bake_tile_mesh(
 
     // Normals are sampled ANALYTICALLY from the composed source, NOT from each
     // tile's own grid — per-tile finite-difference normals don't agree at shared
-    // edges (visible shading "stitching"); the analytic field removes that. The
-    // central-difference `eps` scales with THIS tile's vertex spacing: near tiles
-    // resolve crisp analytic crater-rim shading (sub-metre), far tiles average
-    // the same surface over their own coarser footprint (proper normal LOD, no
-    // sub-vertex shimmer). Same depth → same eps, so neighbours still agree.
-    let eps = (0.5 * step).max(0.35);
+    // edges (visible shading "stitching"); the analytic field removes that.
+    //
+    // The central-difference `eps` is a FIXED world scale, identical at every
+    // LOD depth. It used to scale with the tile's vertex spacing ("proper
+    // normal LOD") — but the lunar BRDF (`regolith_factor`) is normal-driven,
+    // so per-depth eps meant per-depth *brightness*: crater tiles (refined to
+    // max depth by the error metric) shaded visibly differently from the
+    // surrounding coarse flat tiles, and every LOD boundary stepped in tone
+    // (the tile-sized "checkerboard" patches). The surface an eps probes is
+    // already band-limited per tile (`detail_limited(step)` in the bake), so
+    // far tiles keep their smoothing through the SURFACE, not the probe — a
+    // fixed feature-scale probe keeps tone continuous across depths.
+    let eps = 0.5;
     let normal_at = |wx: f64, wz: f64| -> [f32; 3] {
         let n = src.normal_at(wx, wz, eps);
         [n[0] as f32, n[1] as f32, n[2] as f32]

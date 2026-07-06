@@ -756,18 +756,30 @@ fn finish_dem_restamp(
         Option<&mut crate::stream_viz::PendingTileBakes>,
         Has<Mesh3d>,
         Has<DemRestampPending>,
+        Option<&TerrainDirty>,
     )>,
     scattered: Query<Entity, With<crate::terrain_layers::TerrainScatterEntity>>,
     mut meshes: Option<ResMut<Assets<Mesh>>>,
+    mut mesh_cache: ResMut<crate::stream_viz::LodMeshCache>,
 ) {
     use bevy::tasks::futures_lite::future;
-    let mut any = false;
-    for (entity, mut task, src, mut hf, tiles, pending, has_static_mesh, was_pending) in &mut tasks {
+    // Whether ANY terrain did a WHOLE-terrain re-bake this pass (spec change / load) —
+    // only then do the (global) scatter entities need dropping + rebuilding.
+    let mut any_full = false;
+    for (entity, mut task, src, mut hf, tiles, pending, has_static_mesh, was_pending, dirty) in
+        &mut tasks
+    {
         let Some(oracle) = future::block_on(future::poll_once(&mut task.0)) else {
             continue;
         };
         commands.entity(entity).try_remove::<DemRestampTask>();
-        any = true;
+
+        // The region this re-bake must refresh: `Some` = a bounded edit (only those
+        // tiles + no rock re-scatter); `None`/absent = whole terrain.
+        let dirty_bounds = dirty.and_then(|d| d.bounds);
+        let scoped = dirty_bounds.is_some();
+        // Consume the mark so the NEXT change starts clean.
+        commands.entity(entity).try_remove::<TerrainDirty>();
 
         let half = oracle.half_extent() as f64;
 
@@ -790,6 +802,16 @@ fn finish_dem_restamp(
                 )));
             }
         }
+        // Hand the edited region to the collider ring so it re-bakes ONLY the tiles the
+        // edit touched (and skips rings the edit doesn't reach), instead of despawning +
+        // rebuilding every ring tile on any oracle swap (the burst physics spike). Keyed
+        // by the new oracle's `surface_key` so `update_collider_ring` matches this exact
+        // swap; captured BEFORE the oracle moves into `hf`. `None` bounds = whole terrain.
+        let new_oracle_key = oracle.surface_key();
+        commands.entity(entity).try_insert(crate::collider_ring::ColliderDirtyRegion {
+            bounds: dirty_bounds,
+            oracle_key: new_oracle_key,
+        });
         // Swap in the new surface (streaming tiles, collider ring, TerrainHeight query).
         *hf = crate::stream_viz::DemHeightField(oracle);
 
@@ -802,14 +824,25 @@ fn finish_dem_restamp(
             for e in tiles.reap_stale() {
                 commands.entity(e).try_despawn();
             }
-            tiles.invalidate();
+            // Only tiles overlapping the edited patch go stale + re-bake; a whole-
+            // terrain change (`None`) invalidates all, as before.
+            tiles.invalidate_region(dirty_bounds, half);
         }
         if let Some(mut pending) = pending {
             *pending = crate::stream_viz::PendingTileBakes::default();
         }
+        // The per-node mesh cache assumes geometry is a pure function of the coord,
+        // which a live edit breaks — drop the entries the edit touched (or all, on a
+        // whole-terrain change) so re-baked tiles pick up the new heights.
+        mesh_cache.drop_region(dirty_bounds, half);
 
-        // Scatter layers re-run once the applied-marker is gone (next frame).
-        commands.entity(entity).try_remove::<crate::terrain_layers::TerrainLayersApplied>();
+        // A bounded edit leaves the crater/rock fields untouched, so DON'T re-scatter
+        // (that despawn+respawn of every rock is a big part of the per-edit cost). A
+        // whole-terrain change re-scatters: clear the applied-marker so scatter re-runs.
+        if !scoped {
+            commands.entity(entity).try_remove::<crate::terrain_layers::TerrainLayersApplied>();
+            any_full = true;
+        }
 
         // Coalesced trailing re-bake (a change arrived mid-task): re-arm the debounce
         // rather than spawning immediately, so a still-active drag keeps coalescing.
@@ -823,11 +856,10 @@ fn finish_dem_restamp(
         info!("[dem-terrain] regenerated terrain layers (±{:.0} m)", half);
     }
 
-    if any {
-        // Cached tile meshes are stale now → drop so re-baked tiles pick up the new
-        // heights (the cache is keyed by quadtree node, not terrain).
-        commands.insert_resource(crate::stream_viz::LodMeshCache::default());
-        // Despawn old scatter entities (rocks, crater overlays); scatter rebuilds.
+    if any_full {
+        // A whole-terrain re-bake happened (spec change / load): every scatter entity
+        // (rocks, crater overlays) may have moved, so drop them and let the scatter
+        // layers rebuild. Bounded edits skip this entirely (rocks are unchanged).
         for e in &scattered {
             commands.entity(e).try_despawn();
         }
@@ -927,13 +959,134 @@ fn on_obstacle_spec_rebuild_layers(
     }
 }
 
+// ── Incremental region re-bake ────────────────────────────────────────────────
+
+/// The region a pending re-bake must refresh, accumulated from the edits since the
+/// last bake. `Some([min_x, min_z, max_x, max_z])` (terrain-local metres) = a bounded
+/// patch (a brush/flatten touches only `center ± radius`): [`finish_dem_restamp`]
+/// re-bakes only the tiles overlapping it and leaves the rock scatter alone. `None`
+/// — or the component absent — = whole terrain (a spec change / first load).
+/// Consumed (removed) by the re-bake. This is what turns an edit into an O(patch)
+/// re-bake instead of O(whole map). New layer types get incremental re-bake for free
+/// by declaring their footprint here; undo/redo scopes via the removed edit's bounds.
+#[derive(Component, Default)]
+pub struct TerrainDirty {
+    /// Union of dirtied AABBs, or `None` = whole terrain (sticky once whole).
+    pub bounds: Option<[f64; 4]>,
+}
+
+impl TerrainDirty {
+    /// Grow the dirty region by a bounded edit's AABB. A whole-terrain (`None`) mark
+    /// is a superset, so a later bounded patch can never shrink it back.
+    fn grow(&mut self, aabb: [f64; 4]) {
+        if let Some(b) = &mut self.bounds {
+            b[0] = b[0].min(aabb[0]);
+            b[1] = b[1].min(aabb[1]);
+            b[2] = b[2].max(aabb[2]);
+            b[3] = b[3].max(aabb[3]);
+        }
+    }
+}
+
+/// Accumulate `mark` onto every re-stampable DEM terrain (doc-free AND doc-backed —
+/// this keys off the edit *command*, not which apply-path ran). `Some(aabb)` grows the
+/// patch; `None` marks the whole terrain.
+fn accumulate_terrain_dirty(
+    commands: &mut Commands,
+    q: &mut Query<(Entity, Option<&mut TerrainDirty>), With<DemBaseGrid>>,
+    mark: Option<[f64; 4]>,
+) {
+    for (e, dirty) in q.iter_mut() {
+        match (dirty, mark) {
+            (Some(mut d), Some(aabb)) => d.grow(aabb),
+            (Some(mut d), None) => d.bounds = None, // whole terrain wins (sticky)
+            (None, m) => {
+                commands.entity(e).try_insert(TerrainDirty { bounds: m });
+            }
+        }
+    }
+}
+
+fn edit_command_aabb(x: f32, z: f32, radius: f32) -> [f64; 4] {
+    [(x - radius) as f64, (z - radius) as f64, (x + radius) as f64, (z + radius) as f64]
+}
+
+/// Mark a brush edit's footprint dirty (see [`TerrainDirty`]). Registered alongside
+/// [`on_brush_terrain`] / the doc-backed authoring observer — it only records the
+/// region; the apply-path does the height change.
+fn on_brush_terrain_dirty(
+    trigger: On<BrushTerrain>,
+    mut commands: Commands,
+    mut q: Query<(Entity, Option<&mut TerrainDirty>), With<DemBaseGrid>>,
+) {
+    let ev = trigger.event();
+    if ev.radius <= 0.0 {
+        return;
+    }
+    accumulate_terrain_dirty(&mut commands, &mut q, Some(edit_command_aabb(ev.x, ev.z, ev.radius)));
+}
+
+/// Mark a flatten edit's footprint dirty (see [`TerrainDirty`]).
+fn on_flatten_terrain_dirty(
+    trigger: On<FlattenTerrain>,
+    mut commands: Commands,
+    mut q: Query<(Entity, Option<&mut TerrainDirty>), With<DemBaseGrid>>,
+) {
+    let ev = trigger.event();
+    if ev.radius <= 0.0 {
+        return;
+    }
+    accumulate_terrain_dirty(&mut commands, &mut q, Some(edit_command_aabb(ev.x, ev.z, ev.radius)));
+}
+
+/// Scope an undo/remove to the removed edit's footprint (see [`TerrainDirty`]). A
+/// removed brush/flatten dirties only its own AABB; removing a whole layer (crater/
+/// rock) or an unknown id falls back to a whole-terrain re-bake. Reads the stack
+/// BEFORE the removal observer runs (registered first), so the edit is still present.
+fn on_remove_terrain_layer_dirty(
+    trigger: On<RemoveTerrainLayer>,
+    mut commands: Commands,
+    mut q: Query<
+        (Entity, &crate::terrain_layers::TerrainLayerStack, Option<&mut TerrainDirty>),
+        With<DemBaseGrid>,
+    >,
+) {
+    let id = crate::terrain_layers::LayerId::new(trigger.event().id.clone());
+    for (e, stack, dirty) in q.iter_mut() {
+        let mark = stack.edit_bounds(&id); // Some = a bounded edit; None = whole layer / absent
+        match (dirty, mark) {
+            (Some(mut d), Some(aabb)) => d.grow(aabb),
+            (Some(mut d), None) => d.bounds = None,
+            (None, m) => {
+                commands.entity(e).try_insert(TerrainDirty { bounds: m });
+            }
+        }
+    }
+}
+
+/// A live crater/rock spec change re-bakes the WHOLE terrain, so mark it as such.
+fn on_obstacle_spec_dirty(
+    _trigger: On<lunco_obstacle_field::plugin::UpdateObstacleFieldSpec>,
+    mut commands: Commands,
+    mut q: Query<(Entity, Option<&mut TerrainDirty>), With<DemBaseGrid>>,
+) {
+    accumulate_terrain_dirty(&mut commands, &mut q, None);
+}
+
 /// Register the DEM-terrain command + spawn systems. Called from
 /// [`crate::plugin::TerrainSurfacePlugin`].
 pub(crate) fn register(app: &mut App) {
     app.register_type::<SpawnDemTerrain>()
         .init_resource::<TerrainEditSeq>()
+        .init_resource::<crate::stream_viz::LodMeshCache>()
         .add_message::<RegenerateTerrainLayers>()
         .add_observer(on_obstacle_spec_rebuild_layers)
+        // Dirty-region markers — registered BEFORE the command observers (below) so a
+        // remove reads the edit's bounds before the removal applies.
+        .add_observer(on_brush_terrain_dirty)
+        .add_observer(on_flatten_terrain_dirty)
+        .add_observer(on_remove_terrain_layer_dirty)
+        .add_observer(on_obstacle_spec_dirty)
         .add_systems(
             Update,
             (

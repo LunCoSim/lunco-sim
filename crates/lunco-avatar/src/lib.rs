@@ -1482,6 +1482,7 @@ pub fn avatar_raycast_possession(
     camera_q: Query<(&Camera, &GlobalTransform, Entity), With<Avatar>>,
     drag_mode_active: Res<lunco_core::DragModeActive>,
     spawn_tool_active: Res<lunco_core::SpawnToolActive>,
+    terrain_tool_active: Res<lunco_core::TerrainToolActive>,
     mut commands: Commands,
     q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     q_spacecraft: Query<(Entity, &GlobalTransform, &Spacecraft)>,
@@ -1507,6 +1508,8 @@ pub fn avatar_raycast_possession(
     if drag_mode_active.active { return; }
     // Spawn placement tool armed: clicks place objects, don't possess.
     if spawn_tool_active.0 { return; }
+    // Terrain brush armed: clicks sculpt the terrain, don't possess.
+    if terrain_tool_active.0 { return; }
 
     // This observer handles the plain click now (it passed every guard above), so
     // stop the auto-propagation to ancestor entities — otherwise a global

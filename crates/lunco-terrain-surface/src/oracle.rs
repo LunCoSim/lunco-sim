@@ -25,6 +25,7 @@ use lunco_terrain_core::{HeightModifier, HeightSource};
 /// One layer's analytic contribution to the composed surface: the modifier to
 /// fold, plus a content hash of the parameters that produced it (folds into
 /// downstream cache keys, since the modifier itself is opaque).
+#[derive(Clone)]
 pub struct HeightContribution {
     pub modifier: Arc<dyn HeightModifier>,
     /// Deterministic hash of the layer's generating parameters (spec + seed).
@@ -120,11 +121,11 @@ impl SurfaceOracle {
     }
 
     /// A variant of this oracle **Nyquist-gated** for a consumer sampling at
-    /// `min_wavelength` metres: detail-synthesising modifiers (procedural
-    /// over-zoom) swap in a gated copy so sub-sample features fade out instead of
-    /// aliasing — and their synthesis cost drops with them. Resolution-independent
-    /// modifiers (craters, edits) pass through untouched. Cheap (clones a Vec of
-    /// `Arc`s); call it per bake with that bake's sample spacing.
+    /// `min_wavelength` metres: band-limitable modifiers (procedural over-zoom,
+    /// craters) swap in a gated copy so sub-sample features widen or fade out
+    /// instead of aliasing — and synthesis cost drops with them. Modifiers with
+    /// no gated form (brushes, flattens) pass through untouched. Cheap (clones a
+    /// Vec of `Arc`s); call it per bake with that bake's sample spacing.
     pub fn detail_limited(&self, min_wavelength: f64) -> SurfaceOracle {
         let modifiers = self
             .modifiers
@@ -194,6 +195,7 @@ mod tests {
             radius: 10.0,
             depth: 2.0,
             rim_height: 0.4,
+            softness: 0.0,
         }]);
         HeightContribution { modifier: Arc::new(craters), content_key: 0xC0FFEE }
     }
@@ -217,15 +219,19 @@ mod tests {
     }
 
     #[test]
-    fn materialize_matches_sampling_at_grid_points() {
+    fn materialize_matches_gated_sampling_at_grid_points() {
         let o = SurfaceOracle::new(flat(33, 50.0), vec![crater_contribution()]);
         let m = o.materialize();
         let s = m.spacing();
+        // `materialize` Nyquist-gates at the grid's own spacing (craters included,
+        // since they band-limit too) — so it must equal sampling the GATED oracle,
+        // not the full-detail one.
+        let limited = o.detail_limited(s as f64);
         for iz in 0..m.res {
             for ix in 0..m.res {
                 let x = (-m.half_extent + ix as f32 * s) as f64;
                 let z = (-m.half_extent + iz as f32 * s) as f64;
-                let sampled = HeightSource::height_at(&o, x, z);
+                let sampled = HeightSource::height_at(&limited, x, z);
                 assert!(
                     (m.heights[iz * m.res + ix] - sampled).abs() < 1e-9,
                     "mismatch at ({x},{z})"

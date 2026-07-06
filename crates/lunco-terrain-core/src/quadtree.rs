@@ -188,6 +188,115 @@ impl Quadtree {
         out
     }
 
+    /// [`select_with_error`](Self::select_with_error) under a **hard tile budget**:
+    /// nodes are refined in *priority* order (highest `refine_range / distance`,
+    /// i.e. worst on-screen error, first) until either nothing wants refinement or
+    /// splitting would exceed `max_tiles`. With a non-binding budget the result is
+    /// identical to the unbudgeted walk; when the budget binds, near/feature nodes
+    /// keep their detail and far ground coarsens under its geomorph band.
+    ///
+    /// Why: the recursive walk's cost is unbounded in the terrain, not the budget —
+    /// at realistic crater densities EVERY mid-distance node carries metres of
+    /// measured error, so a 3 px target refined a ~1 km disc to max depth
+    /// (thousands of tiles, tens of millions of triangles). A budget makes the
+    /// cost knob explicit while keeping the same error-driven priorities.
+    /// Deterministic: the heap orders by `(priority, coord)` with total float
+    /// ordering, and `node_error` is a pure function of the surface.
+    pub fn select_with_error_budgeted(
+        &self,
+        focus_xz: [f64; 2],
+        eye_height: f64,
+        node_error: impl Fn(QuadCoord, Square) -> f64,
+        max_tiles: usize,
+    ) -> Vec<Selected> {
+        use std::collections::BinaryHeap;
+
+        /// A leaf of the in-progress selection that still WANTS refinement.
+        struct Refinable {
+            coord: QuadCoord,
+            region: Square,
+            /// Distance at which this node's PARENT refined (∞ for the root) —
+            /// this node's geomorph window end if it stays a leaf.
+            parent_refine_range: f64,
+            /// `range_factor · node_error(self)` — the distance under which this
+            /// node refines, and the morph window end of its children.
+            refine_range: f64,
+            /// `refine_range / distance` (> 1 ⇔ wants refinement). Max-heap key.
+            priority: f64,
+        }
+        impl PartialEq for Refinable {
+            fn eq(&self, other: &Self) -> bool {
+                self.cmp(other) == std::cmp::Ordering::Equal
+            }
+        }
+        impl Eq for Refinable {}
+        impl PartialOrd for Refinable {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+        impl Ord for Refinable {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                // Total order for peer determinism: priority, then coord.
+                self.priority
+                    .total_cmp(&other.priority)
+                    .then_with(|| self.coord.depth.cmp(&other.coord.depth))
+                    .then_with(|| self.coord.x.cmp(&other.coord.x))
+                    .then_with(|| self.coord.z.cmp(&other.coord.z))
+            }
+        }
+
+        let mut out: Vec<Selected> = Vec::new();
+        let mut heap: BinaryHeap<Refinable> = BinaryHeap::new();
+
+        let finalize = |n: &Refinable, out: &mut Vec<Selected>| {
+            let morph_end = n.parent_refine_range;
+            let morph_start =
+                if morph_end.is_finite() { self.morph_ratio * morph_end } else { f64::INFINITY };
+            out.push(Selected { coord: n.coord, region: n.region, morph_start, morph_end });
+        };
+        // Classify a node: heap if it wants refinement, else final.
+        let classify = |coord: QuadCoord,
+                        parent_refine_range: f64,
+                        heap: &mut BinaryHeap<Refinable>,
+                        out: &mut Vec<Selected>| {
+            let region = self.region(coord);
+            let horizontal = region.distance_to(focus_xz);
+            let dist = (horizontal * horizontal + eye_height * eye_height).sqrt();
+            let refine_range = self.range_factor * node_error(coord, region).max(0.0);
+            let n = Refinable {
+                coord,
+                region,
+                parent_refine_range,
+                refine_range,
+                priority: refine_range / dist.max(1e-9),
+            };
+            if coord.depth < self.max_depth && dist < refine_range {
+                heap.push(n);
+            } else {
+                finalize(&n, out);
+            }
+        };
+
+        classify(QuadCoord::ROOT, f64::INFINITY, &mut heap, &mut out);
+        // Each split replaces one leaf with four (net +3 leaves).
+        while let Some(top) = heap.pop() {
+            if out.len() + heap.len() + 1 + 3 > max_tiles.max(1) {
+                // Budget bound: the popped node (and everything below it in the
+                // heap) stays a leaf.
+                finalize(&top, &mut out);
+                break;
+            }
+            for child in top.coord.children() {
+                classify(child, top.refine_range, &mut heap, &mut out);
+            }
+        }
+        for n in heap {
+            finalize(&n, &mut out);
+        }
+        out
+    }
+
     fn select_node_with_error(
         &self,
         coord: QuadCoord,
@@ -300,6 +409,51 @@ mod tests {
                 assert_eq!(hits, 1, "point {p:?} covered {hits} times");
             }
         }
+    }
+
+    #[test]
+    fn budgeted_matches_unbudgeted_when_budget_is_ample() {
+        let q = qt();
+        // Uniform measured error = the per-depth schedule → same walk as select().
+        let err = |c: QuadCoord, _r: Square| q.geometric_error(c.depth);
+        let free = q.select_with_error([100.0, 200.0], 0.0, err);
+        let bud = q.select_with_error_budgeted([100.0, 200.0], 0.0, err, usize::MAX);
+        let key = |s: &Selected| (s.coord.depth, s.coord.x, s.coord.z);
+        let mut a: Vec<_> = free.iter().map(key).collect();
+        let mut b: Vec<_> = bud.iter().map(key).collect();
+        a.sort();
+        b.sort();
+        assert_eq!(a, b);
+        // Morph windows survive the reordering too.
+        for s in &bud {
+            let twin = free.iter().find(|f| f.coord == s.coord).unwrap();
+            assert_eq!((s.morph_start, s.morph_end), (twin.morph_start, twin.morph_end));
+        }
+    }
+
+    #[test]
+    fn budgeted_respects_cap_covers_root_and_keeps_near_detail() {
+        let q = qt();
+        let focus = [100.0, 200.0];
+        let err = |c: QuadCoord, _r: Square| q.geometric_error(c.depth);
+        let unb = q.select_with_error(focus, 0.0, err);
+        let cap = unb.len() / 2; // force the budget to bind
+        let sel = q.select_with_error_budgeted(focus, 0.0, err, cap);
+        assert!(sel.len() <= cap, "{} tiles > cap {cap}", sel.len());
+        // Coverage stays exact under the cap.
+        let area: f64 = sel.iter().map(|s| s.region.side() * s.region.side()).sum();
+        let root_area = (2.0 * q.root_half_extent).powi(2);
+        assert!((area - root_area).abs() < 1e-3, "area {area} vs {root_area}");
+        // Priority order spends the budget near the focus: the focus leaf must be
+        // at least as deep as every far-corner leaf.
+        let depth_at = |p: [f64; 2]| {
+            sel.iter().find(|s| s.region.distance_to(p) <= 1e-6).map(|s| s.coord.depth).unwrap()
+        };
+        assert!(depth_at(focus) >= depth_at([7900.0, 7900.0]));
+        // Deterministic under identical inputs.
+        let again = q.select_with_error_budgeted(focus, 0.0, err, cap);
+        assert_eq!(sel.len(), again.len());
+        assert!(sel.iter().zip(&again).all(|(a, b)| a.coord == b.coord));
     }
 
     #[test]

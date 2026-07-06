@@ -148,6 +148,28 @@ impl LodTiles {
         self.gen = self.gen.wrapping_add(1);
     }
 
+    /// Invalidate only the tiles whose world footprint overlaps `bounds`
+    /// (`[min_x, min_z, max_x, max_z]`, terrain-local metres) — the incremental
+    /// re-bake for a **bounded** edit (a brush/flatten touches a small patch, not
+    /// the whole terrain). Tiles outside the region are re-stamped to the new
+    /// generation so they read as fresh and are never re-selected or re-baked; only
+    /// overlapping tiles fall through to a re-bake. `None` bounds = whole terrain →
+    /// same as [`invalidate`]. `root_half_extent` is the DEM half-extent (the
+    /// quadtree root region), so each tile's square derives from its `QuadCoord`.
+    pub fn invalidate_region(&mut self, bounds: Option<[f64; 4]>, root_half_extent: f64) {
+        let new_gen = self.gen.wrapping_add(1);
+        if let Some(aabb) = bounds {
+            for (coord, slot) in self.tiles.iter_mut() {
+                // Non-overlapping tiles keep the NEW gen → stay fresh (skipped).
+                // Overlapping tiles keep their OLD gen → stale → re-baked.
+                if !node_overlaps_aabb(*coord, root_half_extent, aabb) {
+                    slot.gen = new_gen;
+                }
+            }
+        }
+        self.gen = new_gen;
+    }
+
     /// Remove (and return for despawn) every tile already stale from a PRIOR
     /// invalidation — i.e. older than the current generation. Called right before a
     /// new `invalidate()` so that rapid successive re-bakes keep at most ONE
@@ -166,6 +188,20 @@ impl LodTiles {
         });
         dead
     }
+}
+
+/// Whether the world square of quadtree node `coord` (derived from the DEM
+/// `root_half_extent`, origin-centred — matching [`lunco_terrain_core::Quadtree::region`])
+/// overlaps the axis-aligned `[min_x, min_z, max_x, max_z]` box. The shared
+/// spatial test behind the incremental region re-bake.
+fn node_overlaps_aabb(coord: QuadCoord, root_half_extent: f64, aabb: [f64; 4]) -> bool {
+    let [min_x, min_z, max_x, max_z] = aabb;
+    let nodes_per_side = (1u64 << coord.depth) as f64;
+    let side = (2.0 * root_half_extent) / nodes_per_side;
+    let half = 0.5 * side;
+    let cx = -root_half_extent + (coord.x as f64 + 0.5) * side;
+    let cz = -root_half_extent + (coord.z as f64 + 0.5) * side;
+    cx - half <= max_x && cx + half >= min_x && cz - half <= max_z && cz + half >= min_z
 }
 
 /// Back-pointer from a spawned LOD tile to its owning terrain. Tiles are parented
@@ -222,6 +258,14 @@ pub struct TerrainLodConfig {
     /// Tiles BAKED per frame across all terrains. 1 = smoothest frame-time but
     /// slowest fill; raise for a faster initial load at the cost of bigger spikes.
     pub bakes_per_frame: usize,
+    /// Cap on SELECTED tiles per terrain. The error-driven walk's tile count is
+    /// otherwise unbounded in the terrain: at realistic crater densities every
+    /// mid-distance node measures metres of error, and a 3 px target refined a
+    /// ~1 km disc to max depth (~6.8k live tiles ≈ 33M triangles on moonbase —
+    /// the 49 FPS). Enforced by COARSENING `pixel_error` until the selection
+    /// fits (so geomorph bands stay consistent with the actual transition
+    /// distances), not by capping the walk. ~500 tiles ≈ 2.3M terrain triangles.
+    pub tile_budget: usize,
 }
 
 impl Default for TerrainLodConfig {
@@ -232,6 +276,7 @@ impl Default for TerrainLodConfig {
             pixel_error: TARGET_PIXEL_ERROR,
             max_depth: MAX_DEPTH,
             bakes_per_frame: 4,
+            tile_budget: 512,
         }
     }
 }
@@ -255,6 +300,22 @@ pub struct TerrainNodeErrors {
 /// Bounded: trimmed to currently-resident tiles when it grows past `CACHE_CAP`.
 #[derive(Resource, Default)]
 pub struct LodMeshCache(HashMap<QuadCoord, Handle<Mesh>>);
+
+impl LodMeshCache {
+    /// Drop cached meshes a live height edit invalidated. This cache keys purely by
+    /// `QuadCoord` (geometry = pure function of the node), which holds ONLY while the
+    /// oracle is fixed; a brush/flatten changes the surface, so a re-selected tile in
+    /// the edited area would otherwise reuse its pre-edit mesh. `Some(bounds)` drops
+    /// just the overlapping nodes (the incremental patch); `None` (a whole-terrain
+    /// spec change) clears all. Non-overlapping entries survive so revisiting
+    /// unedited ground still hits the cache.
+    pub fn drop_region(&mut self, bounds: Option<[f64; 4]>, root_half_extent: f64) {
+        match bounds {
+            None => self.0.clear(),
+            Some(aabb) => self.0.retain(|coord, _| !node_overlaps_aabb(*coord, root_half_extent, aabb)),
+        }
+    }
+}
 
 /// Soft cap on cached tile meshes before non-resident entries are trimmed.
 const CACHE_CAP: usize = 1024;
@@ -361,6 +422,12 @@ fn spawn_tile(
             LodTileOf(terrain),
             Name::new(format!("LodTile d{} {},{}", coord.depth, coord.x, coord.z)),
             ChildOf(grid_entity),
+            // Terrain tiles RECEIVE shadows (rovers/objects cast onto them) but must
+            // NOT be shadow casters: the ~150-400 live tiles would otherwise be
+            // re-rendered into all 4 sun cascades every frame (the dominant terrain
+            // frame cost — ~16ms; the flat scene has no such geometry). Crater-rim
+            // self-shadowing rides the sun horizon ray-march, not the cascade pass.
+            bevy::light::NotShadowCaster,
         ))
         .id();
     (ent, mat)
@@ -403,10 +470,14 @@ pub(crate) fn animate_tile_reveal(
         }
         if t >= 1.0 {
             let anim = rev.anim.clone();
+            // A live re-bake (e.g. a brush/flatten edit or an obstacle-field
+            // regen) can despawn this tile in the same frame, before these
+            // deferred commands apply — `try_*` no-ops on a stale entity
+            // instead of panicking the command buffer.
             commands
                 .entity(ent)
-                .insert(MeshMaterial3d(rev.shared.clone()))
-                .remove::<TileReveal>();
+                .try_insert(MeshMaterial3d(rev.shared.clone()))
+                .try_remove::<TileReveal>();
             materials.remove(&anim);
         }
     }
@@ -473,7 +544,7 @@ pub fn update_lod_tiles(
                     lod_mats.0.insert((mode, depth, bucket), h.clone());
                     h
                 };
-                commands.entity(ent).insert(MeshMaterial3d(handle));
+                commands.entity(ent).try_insert(MeshMaterial3d(handle));
             }
             tiles.mode = mode;
         }
@@ -493,14 +564,18 @@ pub fn update_lod_tiles(
         // per-terrain (changing it would invalidate the mesh cache). The range
         // factor derives from the CANONICAL screen metric (fixed viewport + the
         // pixel_error knob) so selection stays view-independent + peer-identical.
-        let qt = Quadtree::from_screen_metric(
-            h,
-            cfg.max_depth.max(1),
-            h,
-            CANON_SCREEN_H_PX,
-            CANON_FOV_Y_RAD,
-            cfg.pixel_error.clamp(0.5, 32.0),
-        );
+        let quadtree_for = |px: f64| {
+            Quadtree::from_screen_metric(
+                h,
+                cfg.max_depth.max(1),
+                h,
+                CANON_SCREEN_H_PX,
+                CANON_FOV_Y_RAD,
+                px,
+            )
+        };
+        let mut pixel_error = cfg.pixel_error.clamp(0.5, 32.0);
+        let mut qt = quadtree_for(pixel_error);
         // ERROR-DRIVEN selection: refine where the MEASURED surface error says
         // there is detail worth refining toward (crater rims, peaks), not on the
         // uniform per-depth schedule. Errors are memoized per node against the
@@ -526,7 +601,21 @@ pub fn update_lod_tiles(
             err_map.borrow_mut().insert(c, e);
             e
         };
-        let mut sel = qt.select_with_error(focus, eye_height, node_error);
+        // Fit the tile budget by COARSENING THE METRIC, not by capping the walk.
+        // A hard cap (`select_with_error_budgeted`) stops refinement at a
+        // budget-determined radius while every tile's geomorph band still assumes
+        // the UNBUDGETED refine distances — so detail ended in a hard line (the
+        // morph blend never ran) instead of fading. Raising pixel_error re-derives
+        // the range factor, so the transition distance and the morph band move
+        // TOGETHER and the LOD edge stays a blend. Node errors are memoized, so
+        // the re-walks are cheap; the loop is bounded by the 32 px clamp.
+        let budget = cfg.tile_budget.max(16);
+        let mut sel = qt.select_with_error(focus, eye_height, &node_error);
+        while sel.len() > budget && pixel_error < 32.0 {
+            pixel_error = (pixel_error * 1.6).min(32.0);
+            qt = quadtree_for(pixel_error);
+            sel = qt.select_with_error(focus, eye_height, &node_error);
+        }
         let wanted: HashSet<QuadCoord> = sel.iter().map(|s| s.coord).collect();
 
         // Intelligent baking: nearest tiles first, so the per-frame budget fills the
