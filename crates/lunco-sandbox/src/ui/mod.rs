@@ -24,6 +24,9 @@ use lunco_modelica::{ModelicaWorkbenchPlugin, ModelicaUiConfig};
 
 mod code_panel;
 mod models_palette;
+/// In-app rhai REPL panel (web + native). Empty unless the API bridge is
+/// available — the file carries its own `#![cfg(…)]`.
+mod rhai_repl_panel;
 
 /// The sandbox's interactive layer: egui workbench, bevy_picking, the USD Twin
 /// browser + RTT viewport, the in-scene editor, materials, rover panels, and
@@ -92,6 +95,10 @@ impl Plugin for SandboxUiPlugin {
                 // Rover-specific panels and the attach-a-model click flow.
                 app.register_panel(code_panel::CodePanel);
                 app.register_panel(models_palette::ModelsPalette);
+                // In-app rhai REPL — runs snippets against the live app through the
+                // API bridge, on web + native. Gated on bridge availability.
+                #[cfg(any(target_arch = "wasm32", feature = "transport-http"))]
+                app.register_panel(rhai_repl_panel::RhaiReplPanel::default());
                 app.init_resource::<models_palette::AttachState>();
                 // Attach is bevy_picking-driven (observes the same `Pointer<Click>`
                 // as selection; egui occlusion handled by the framework).

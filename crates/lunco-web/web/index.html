@@ -31,7 +31,9 @@
         //   lunco_api    — the in-browser API bridge (lunco-api compiled for
         //                  wasm). Same JSON envelope as the native HTTP API:
         //                  `await window.lunco_api('{"command":"Ping"}')`.
-        for (const k of ['__lc_test_worker_ping', '__lc_test_dispatch_compile', 'lunco_api']) {
+        //   lunco_rhai   — rhai one-shot convenience over lunco_api:
+        //                  `await window.lunco_rhai('restart_scene(); pause()')`.
+        for (const k of ['__lc_test_worker_ping', '__lc_test_dispatch_compile', 'lunco_api', 'lunco_rhai']) {
             if (wasm[k]) window[k] = wasm[k];
         }
 

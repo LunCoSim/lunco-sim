@@ -523,6 +523,36 @@ the browser. Run: cargo run -p lunco-assets -- download && cargo run -p lunco-as
         done
     fi
 
+    # sandbox references glTF models via `lunco-lib://models/<name>.glb`, which
+    # resolves to `<origin>/.cache/models/<name>.glb` on wasm (cache_dir() = ".cache").
+    # Stage the PROCESSED models (e.g. NASA Perseverance) next to the wasm — same
+    # idea as the luncosim textures above. Populate the cache first with:
+    #   cargo run -p lunco-assets --bin lunco-assets -- download -a perseverance \
+    #     && cargo run -p lunco-assets --bin lunco-assets -- process -p lunco-usd
+    if [ "$binary" = "sandbox" ]; then
+        local models_src=""
+        for candidate in \
+            "$PROJECT_DIR/../.cache/models" \
+            "$PROJECT_DIR/.cache/models"; do
+            if [ -d "$candidate" ]; then models_src="$candidate"; break; fi
+        done
+        if [ -n "$models_src" ]; then
+            mkdir -p "$dist_dir/.cache/models"
+            # Only the PROCESSED glbs the scene references (skip the raw *_source.glb).
+            for glb in "$models_src"/*.glb; do
+                [ -f "$glb" ] || continue
+                case "$(basename "$glb")" in
+                    *_source.glb) continue ;;
+                esac
+                cp "$glb" "$dist_dir/.cache/models/"
+                info "Copied $(basename "$glb") → $dist_dir/.cache/models/"
+            done
+        else
+            warn "no .cache/models — glTF models (Perseverance rover) will 404 in the browser. \
+Run: cargo run -p lunco-assets --bin lunco-assets -- download -a perseverance && … -- process -p lunco-usd"
+        fi
+    fi
+
     # Show output size
     WASM_SIZE=$(du -h "$dist_dir/${binary}_bg.wasm" | cut -f1)
     JS_SIZE=$(du -h "$dist_dir/${binary}.js" | cut -f1)
