@@ -16,6 +16,10 @@ use lunco_environment::{Gravity, GravityBody};
 
 pub mod ephemeris;
 pub mod registry;
+pub mod geo;
+pub mod kepler;
+pub mod comms;
+pub mod placement;
 mod big_space_setup;
 mod globe_lod;
 mod systems;
@@ -40,6 +44,10 @@ pub use commands::*;
 
 pub use ephemeris::*;
 pub use registry::*;
+pub use geo::*;
+pub use kepler::*;
+pub use comms::*;
+pub use placement::*;
 pub use big_space_setup::*;
 pub use systems::*;
 pub use gravity::*;
@@ -60,6 +68,28 @@ pub struct RoverClickEvent {
     pub rover: Entity,
 }
 
+/// Host-app policy for the celestial stack (doc 43). Defaults preserve the
+/// full-client (`luncosim`) behavior: hierarchy + Observer Camera at startup.
+/// The sandbox starts with both off and flips `spawn_hierarchy` when a loaded
+/// scene authors a site anchor (`lunco:anchor:*` on its root prim) — the
+/// solar system then appears around the georeferenced scene; the avatar
+/// camera keeps the `FloatingOrigin`.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct CelestialConfig {
+    /// Spawn the Sun/Earth/Moon big_space hierarchy (idempotent; may be
+    /// enabled at runtime).
+    pub spawn_hierarchy: bool,
+    /// Spawn the celestial Observer Camera and let it claim the single
+    /// `FloatingOrigin`. Leave off in apps that own their camera (sandbox).
+    pub spawn_observer_camera: bool,
+}
+
+impl Default for CelestialConfig {
+    fn default() -> Self {
+        Self { spawn_hierarchy: true, spawn_observer_camera: true }
+    }
+}
+
 pub struct CelestialPlugin;
 
 impl Plugin for CelestialPlugin {
@@ -71,8 +101,11 @@ impl Plugin for CelestialPlugin {
         #[cfg(not(target_arch = "wasm32"))]
         app.add_plugins(trajectories::TrajectoryShaderPlugin);
 
-        // Terrain is now in lunco-terrain crate — register it here
-        app.add_plugins(lunco_terrain_globe::TerrainPlugin);
+        // Terrain is now in lunco-terrain crate — register it here (guarded:
+        // the sandbox adds it directly as well).
+        if !app.is_plugin_added::<lunco_terrain_globe::TerrainPlugin>() {
+            app.add_plugins(lunco_terrain_globe::TerrainPlugin);
+        }
 
         // The unified mission-time spine (doc 19 — T1): MissionClock + transport +
         // the derived `WorldTime` view. Guarded so a context that also adds it via
@@ -84,7 +117,12 @@ impl Plugin for CelestialPlugin {
             app.add_plugins(lunco_time::TimePlugin);
         }
         app.init_resource::<TerrainMapRegistry>();
-        app.insert_resource(Gravity::surface());
+        app.init_resource::<CelestialConfig>();
+        // Keep a host-app gravity choice (e.g. the sandbox's flat gravity);
+        // default to surface gravity for the full client.
+        if app.world().get_resource::<Gravity>().is_none() {
+            app.insert_resource(Gravity::surface());
+        }
         app.register_type::<TrajectoryView>();
         app.register_type::<TrajectoryFrame>();
         app.register_type::<TrajectoryPath>();
@@ -105,16 +143,22 @@ impl Plugin for CelestialPlugin {
         app.add_plugins(trajectories::TrajectoryPlugin);
         app.add_plugins(missions::MissionPlugin);
 
-        app.add_plugins(GravityPlugin);
+        if !app.is_plugin_added::<GravityPlugin>() {
+            app.add_plugins(GravityPlugin);
+        }
 
-        // After the world shell so the solar grids nest under its single root
-        // (and the Observer Camera claims the shell's seeded FloatingOrigin).
-        // `.after` a possibly-absent set is a no-op, so standalone celestial (no
-        // WorldShellPlugin) still works — it then spawns its own root via the
-        // fallback in `setup_big_space_hierarchy`.
+        // Hierarchy spawn is gated by `CelestialConfig.spawn_hierarchy` and
+        // idempotent (skipped while a `SolarSystemRoot` exists), so a host can
+        // enable it at runtime (sandbox: when a site-anchored scene loads). In
+        // `Update` rather than `Startup` so the world shell root exists and
+        // runtime enablement needs no second registration.
         app.add_systems(
-            Startup,
-            big_space_setup::setup_big_space_hierarchy.after(lunco_core::WorldShellSet),
+            Update,
+            big_space_setup::setup_big_space_hierarchy.run_if(
+                |config: Res<CelestialConfig>, q: Query<(), With<SolarSystemRoot>>| {
+                    config.spawn_hierarchy && q.is_empty()
+                },
+            ),
         );
 
         // --- LEAD-PHASE SYNCHRONIZATION ---
@@ -132,6 +176,11 @@ impl Plugin for CelestialPlugin {
         app.add_systems(PreUpdate, (
             ephemeris_update_system,
             body_rotation_system,
+            // Doc 43: site-anchored solar frame + geodetic/orbit placement —
+            // AFTER the ephemeris projection (which re-zeroes the solar grid)
+            // so the site pin wins whenever a scene authors a SiteAnchor.
+            placement::anchor_solar_frame_to_site,
+            placement::place_celestial_bound_entities,
             tile_rotation_sync_system
                 .after(bevy::transform::TransformSystems::Propagate)
                 .after(big_space::prelude::BigSpaceSystems::PropagateHighPrecision),

@@ -74,6 +74,11 @@ serde = { workspace = true, optional = true }
 # `default-features = false` drops celestial's egui inspector (`CelestialUiPlugin`,
 # not used by the sandbox bin). The `celestial` feature still pulls embed-assets.
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
+# Real VSOP2013/ELP ephemeris on EVERY platform (wasm included — the
+# JPL-Horizons network fetch is cfg-gated inside the plugin; the analytic
+# series are pure Rust). Comms link geometry + the orbital view need real
+# body positions in the browser build too.
+lunco-celestial-ephemeris = { path = "../lunco-celestial-ephemeris" }
 lunco-terrain-globe = { path = "../lunco-terrain-globe" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
@@ -153,7 +158,6 @@ lunco-storage = { path = "../lunco-storage" }
 # only.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 mimalloc = "0.1"
-lunco-celestial-ephemeris = { path = "../lunco-celestial-ephemeris" }
 
 [features]
 # `ui` + `lunco-api` + `networking` are on by default so native

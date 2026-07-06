@@ -1,5 +1,4 @@
 use bevy::prelude::*;
-use bevy::math::DQuat;
 use big_space::prelude::*;
 
 use crate::big_space_setup::{SolarSystemRoot, EarthRoot, MoonRoot};
@@ -98,12 +97,12 @@ pub fn body_rotation_system(
     registry: Res<CelestialBodyRegistry>,
     mut q_grids: Query<(&mut Transform, &CelestialReferenceFrame)>,
 ) {
-    let days_since_j2000 = world.epoch_jd - lunco_time::J2000_JD;
     for (mut tf, frame) in q_grids.iter_mut() {
         if let Some(desc) = registry.bodies.iter().find(|d| d.ephemeris_id == frame.ephemeris_id) {
             if desc.rotation_rate_rad_per_day != 0.0 {
-                let angle = days_since_j2000 * desc.rotation_rate_rad_per_day;
-                tf.rotation = DQuat::from_axis_angle(desc.polar_axis, angle).as_quat();
+                // Shared with the geodesy math (`geo::body_rotation`) so
+                // rendered grids and comms/anchor positions cannot diverge.
+                tf.rotation = crate::geo::body_rotation(desc, world.epoch_jd).as_quat();
             }
         }
     }

@@ -135,6 +135,15 @@ pub fn update_globe_lod(
             let mesh = create_quadsphere_tile_mesh(
                 body_ent, coord.face, coord.level, coord.i, coord.j, lod.radius_m, lod.res, tile_body_local,
             );
+            // Atomic (ChildOf, CellCoord, Transform) — the authored grid-local
+            // pose IS the placement. `set_parent_in_place` here was the globe
+            // corruption: it OVERWRITES the child Transform from its current
+            // GlobalTransform, which at spawn is `default()` (never propagated),
+            // so every tile's placement was replaced with
+            // `identity.reparented_to(surface_grid_global)` — zero at startup
+            // (all tiles collapsed to the body centre = the long-standing
+            // "globe invisible" TODO above) and camera-distance garbage once
+            // the view moves (exploded tile shards from orbit).
             let ent = commands
                 .spawn((
                     Mesh3d(meshes.add(mesh)),
@@ -148,8 +157,8 @@ pub fn update_globe_lod(
                     InheritedVisibility::default(),
                     NoFrustumCulling,
                     Name::new(format!("Globe tile f{} L{} {},{}", coord.face, coord.level, coord.i, coord.j)),
+                    ChildOf(lod.surface_grid),
                 ))
-                .set_parent_in_place(lod.surface_grid)
                 .id();
             tiles.0.insert(*coord, ent);
         }

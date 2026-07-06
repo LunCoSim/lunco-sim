@@ -1,0 +1,61 @@
+#usda 1.0
+(
+    defaultPrim = "GroundStation"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Deep-space ground station (doc 43) — big dish on a pedestal, pinned to a
+# geodetic point on a body via `lunco:anchor:*` (override per instance):
+#
+#   over "Station" { double lunco:anchor:lat = 40.4314   # DSN Madrid
+#                    double lunco:anchor:lon = -4.2481
+#                    double lunco:anchor:height = 837
+#                    int    lunco:anchor:body = 399 }
+#
+# The comms layer places it on the (rotating) body from the ephemeris — its
+# scene transform is ignored. Elevation mask defaults to a realistic 5°.
+def Xform "GroundStation" (
+    kind = "component"
+)
+{
+    bool lunco:comms:antenna = true
+    double lunco:comms:maxRangeM = 1000000000000
+    double lunco:comms:minElevationDeg = 5
+    double lunco:anchor:lat = 0
+    double lunco:anchor:lon = 0
+    double lunco:anchor:height = 0
+    int lunco:anchor:body = 399
+
+    def Cylinder "Pedestal"
+    {
+        uniform token axis = "Y"
+        double radius = 3.0
+        double height = 8.0
+        double3 xformOp:translate = (0, 4.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.8, 0.8, 0.82)
+    }
+
+    # Dish — flattened sphere paraboloid, tipped toward the sky.
+    def Sphere "Dish"
+    {
+        double radius = 17.0
+        double3 xformOp:translate = (0, 12.0, 0)
+        double3 xformOp:rotateXYZ = (45, 0, 0)
+        double3 xformOp:scale = (1.0, 0.3, 1.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        color3f primvars:displayColor = (0.92, 0.92, 0.95)
+    }
+
+    def Cylinder "Feed"
+    {
+        uniform token axis = "Y"
+        double radius = 0.5
+        double height = 9.0
+        double3 xformOp:translate = (0, 15.0, 3.5)
+        double3 xformOp:rotateXYZ = (45, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        color3f primvars:displayColor = (0.6, 0.6, 0.65)
+    }
+}

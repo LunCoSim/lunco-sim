@@ -75,7 +75,22 @@ pub struct MissionPlugin;
 impl Plugin for MissionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MissionRegistry>();
-        app.add_systems(Startup, load_missions_system);
+        // Missions belong to the solar-system context: gated on the celestial
+        // hierarchy being wanted (doc 43 — the sandbox runs this plugin with
+        // the hierarchy off by default), and re-armed if it enables later.
+        app.add_systems(
+            Update,
+            load_missions_system.run_if(
+                |config: Res<crate::CelestialConfig>,
+                 mut loaded: bevy::prelude::Local<bool>| {
+                    if !config.spawn_hierarchy || *loaded {
+                        return false;
+                    }
+                    *loaded = true;
+                    true
+                },
+            ),
+        );
         app.add_systems(Update, (
             update_spacecraft_position_system,
             spacecraft_alignment_system,

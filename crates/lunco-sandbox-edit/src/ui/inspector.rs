@@ -326,6 +326,10 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
 
         ui.separator();
 
+        // ── Comms & Orbit (doc 43): geodetic anchor / Kepler orbit /
+        //    antenna params + live link state ─────────────────────────
+        comms_orbit_section(ui, ctx, entity);
+
         // ── Transform component ──────────────────────────────────────
         if ctx.get::<Transform>(entity).is_some() {
             egui::CollapsingHeader::new("Transform")
@@ -1738,6 +1742,156 @@ fn modelica_parameters_section(
 
 /// Dispatch a `UsdOp::SetAttribute` for a specific prim path. Runs inside a
 /// deferred `&mut World` closure.
+/// Comms & Orbit (doc 43): position ground stations (geodetic anchor) and
+/// satellites (Kepler elements) realistically, tune antenna range/mask, and
+/// watch live link state. Edits update the live component (the USD bridge
+/// runs once per prim) AND persist as journaled `SetAttribute` ops.
+fn comms_orbit_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
+    use lunco_celestial::{CommsAntenna, CommsLinkState, GeodeticAnchor, KeplerOrbit};
+
+    let anchor = ctx.get::<GeodeticAnchor>(entity).copied();
+    let orbit = ctx.get::<KeplerOrbit>(entity).copied();
+    let antenna = ctx.get::<CommsAntenna>(entity).cloned();
+    if anchor.is_none() && orbit.is_none() && antenna.is_none() {
+        return;
+    }
+
+    egui::CollapsingHeader::new("Comms & Orbit")
+        .default_open(true)
+        .show(ui, |ui| {
+            if let Some(a) = anchor {
+                ui.label("Ground anchor (lat/lon °, height m):");
+                let mut lat = a.geodetic.lat_deg;
+                let mut lon = a.geodetic.lon_deg;
+                let mut height = a.geodetic.height_m;
+                let mut body = a.body;
+                let changed = ui
+                    .horizontal(|ui| {
+                        ui.add(egui::DragValue::new(&mut lat).speed(0.01).range(-90.0..=90.0).prefix("lat "))
+                            .changed()
+                            | ui.add(egui::DragValue::new(&mut lon).speed(0.01).range(-180.0..=180.0).prefix("lon "))
+                                .changed()
+                            | ui.add(egui::DragValue::new(&mut height).speed(1.0).prefix("h "))
+                                .changed()
+                    })
+                    .inner
+                    | ui.add(egui::DragValue::new(&mut body).prefix("body NAIF ")).changed();
+                if changed {
+                    ctx.defer(move |world| {
+                        if let Some(mut c) = world.get_mut::<GeodeticAnchor>(entity) {
+                            c.body = body;
+                            c.geodetic.lat_deg = lat;
+                            c.geodetic.lon_deg = lon;
+                            c.geodetic.height_m = height;
+                        }
+                        apply_usd_attribute_change(world, entity, "lunco:anchor:lat", "double", format!("{lat}"));
+                        apply_usd_attribute_change(world, entity, "lunco:anchor:lon", "double", format!("{lon}"));
+                        apply_usd_attribute_change(world, entity, "lunco:anchor:height", "double", format!("{height}"));
+                        apply_usd_attribute_change(world, entity, "lunco:anchor:body", "int", format!("{body}"));
+                    });
+                }
+            }
+
+            if let Some(o) = orbit {
+                ui.label("Kepler orbit (a m, e, angles °):");
+                let mut a_m = o.elements.semi_major_axis_m;
+                let mut e = o.elements.eccentricity;
+                let mut inc = o.elements.inclination_deg;
+                let mut raan = o.elements.raan_deg;
+                let mut argp = o.elements.arg_periapsis_deg;
+                let mut m0 = o.elements.mean_anomaly_deg;
+                let changed = ui
+                    .horizontal(|ui| {
+                        ui.add(egui::DragValue::new(&mut a_m).speed(10_000.0).prefix("a ")).changed()
+                            | ui.add(egui::DragValue::new(&mut e).speed(0.005).range(0.0..=0.95).prefix("e "))
+                                .changed()
+                            | ui.add(egui::DragValue::new(&mut inc).speed(0.1).range(-180.0..=180.0).prefix("i "))
+                                .changed()
+                    })
+                    .inner
+                    | ui.horizontal(|ui| {
+                        ui.add(egui::DragValue::new(&mut raan).speed(0.1).prefix("Ω ")).changed()
+                            | ui.add(egui::DragValue::new(&mut argp).speed(0.1).prefix("ω ")).changed()
+                            | ui.add(egui::DragValue::new(&mut m0).speed(0.1).prefix("M₀ ")).changed()
+                    })
+                    .inner;
+                if changed {
+                    ctx.defer(move |world| {
+                        if let Some(mut c) = world.get_mut::<KeplerOrbit>(entity) {
+                            c.elements.semi_major_axis_m = a_m;
+                            c.elements.eccentricity = e;
+                            c.elements.inclination_deg = inc;
+                            c.elements.raan_deg = raan;
+                            c.elements.arg_periapsis_deg = argp;
+                            c.elements.mean_anomaly_deg = m0;
+                        }
+                        apply_usd_attribute_change(world, entity, "lunco:orbit:semiMajorAxisM", "double", format!("{a_m}"));
+                        apply_usd_attribute_change(world, entity, "lunco:orbit:eccentricity", "double", format!("{e}"));
+                        apply_usd_attribute_change(world, entity, "lunco:orbit:inclinationDeg", "double", format!("{inc}"));
+                        apply_usd_attribute_change(world, entity, "lunco:orbit:raanDeg", "double", format!("{raan}"));
+                        apply_usd_attribute_change(world, entity, "lunco:orbit:argPeriapsisDeg", "double", format!("{argp}"));
+                        apply_usd_attribute_change(world, entity, "lunco:orbit:meanAnomalyDeg", "double", format!("{m0}"));
+                    });
+                }
+            }
+
+            if let Some(ant) = antenna {
+                ui.label("Antenna:");
+                let mut max_range = ant.max_range_m;
+                let mut min_elev = ant.min_elevation_deg;
+                let changed = ui
+                    .horizontal(|ui| {
+                        ui.add(egui::DragValue::new(&mut max_range).speed(1_000.0).prefix("range≤ "))
+                            .changed()
+                            | ui.add(
+                                egui::DragValue::new(&mut min_elev)
+                                    .speed(0.1)
+                                    .range(-10.0..=89.0)
+                                    .prefix("elev≥ "),
+                            )
+                            .changed()
+                    })
+                    .inner;
+                if changed {
+                    ctx.defer(move |world| {
+                        if let Some(mut c) = world.get_mut::<CommsAntenna>(entity) {
+                            c.max_range_m = max_range;
+                            c.min_elevation_deg = min_elev;
+                        }
+                        apply_usd_attribute_change(world, entity, "lunco:comms:maxRangeM", "double", format!("{max_range}"));
+                        apply_usd_attribute_change(world, entity, "lunco:comms:minElevationDeg", "double", format!("{min_elev}"));
+                    });
+                }
+            }
+
+            if let Some(state) = ctx.get::<CommsLinkState>(entity) {
+                ui.separator();
+                ui.label("Links:");
+                for peer in &state.peers {
+                    let (icon, color) = if peer.connected {
+                        ("●", egui::Color32::from_rgb(0x4c, 0xaf, 0x50))
+                    } else {
+                        ("○", egui::Color32::from_rgb(0xe5, 0x73, 0x73))
+                    };
+                    let mut text = format!("{icon} {} — {:.0} km", peer.peer, peer.range_m / 1000.0);
+                    if let Some(e) = peer.elevation_deg {
+                        text.push_str(&format!(", elev {e:.1}°"));
+                    }
+                    if let Some(b) = &peer.occluded_by {
+                        text.push_str(&format!(" (behind {b})"));
+                    }
+                    ui.colored_label(color, text);
+                }
+                match state.earth_hops {
+                    Some(0) => ui.label("Earth route: this IS an Earth station"),
+                    Some(h) => ui.label(format!("Earth route: connected ({h} hop{})", if h == 1 { "" } else { "s" })),
+                    None => ui.label("Earth route: no path"),
+                };
+            }
+        });
+    ui.separator();
+}
+
 fn apply_usd_path_attribute_change(
     world: &mut World,
     entity: Entity,

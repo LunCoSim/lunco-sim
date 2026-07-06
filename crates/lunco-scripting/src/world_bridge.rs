@@ -336,6 +336,35 @@ pub fn build_world_engine() -> Engine {
         }
     });
 
+    // register_hook(id, entry, src) -> bool — plug a rhai rule into ANY Rust
+    // policy seam (lunco-hooks) from a scenario: merge policies, RBAC,
+    // control-authority takeover, comms link availability
+    // ("comms.link.connected"), … Replaces the previously-registered hook for
+    // that id (the built-in `assets/scripting/policy/*` rules are just earlier
+    // registrations), so a scenario re-shapes policy live, no rebuild — the
+    // doc-37 §8 "policy = rhai" surface. `src` must define `fn <entry>(...)`;
+    // returns false (and logs why) on a compile error.
+    engine.register_fn(
+        "register_hook",
+        |id: ImmutableString, entry: ImmutableString, src: ImmutableString| -> bool {
+            match lunco_hooks_rhai::register_rhai_hook(
+                id.as_str(),
+                entry.as_str(),
+                src.as_str(),
+                false,
+            ) {
+                Ok(_) => {
+                    bevy::log::info!("[rhai] register_hook: '{id}' → {entry}()");
+                    true
+                }
+                Err(e) => {
+                    bevy::log::warn!("[rhai] register_hook '{id}' failed to compile: {e}");
+                    false
+                }
+            }
+        },
+    );
+
     // get(id, "Component.field") -> Dynamic (f64/i64/bool/string/array/map) or ().
     // The generic reflection read — built native (reflect → Dynamic, one hop).
     engine.register_fn("get", |id: i64, path: ImmutableString| -> Dynamic {

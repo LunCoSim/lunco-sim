@@ -242,6 +242,19 @@ def Xform "SkidRover" (
         float physxVehicleSuspension:springDamping = 3000.0
     }
 
+    # --- Comms ---------------------------------------------------------
+    # Rover-mounted antenna (doc 43): makes this rover a connectivity
+    # endpoint — the comms layer publishes `comms:<peer>:*` +
+    # `comms:route_earth:*` ports on it (relay via satellite/base mast).
+    def Xform "Comms" (
+        kind = "subcomponent"
+        prepend references = @../../components/comms/antenna.usda@</CommsAntenna>
+    )
+    {
+        double3 xformOp:translate = (0, 0.85, -0.5)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
     # --- Drivetrain variant set ---------------------------------------
     # Both drivetrains are authored ONCE in shared mobility components and
     # pulled into the variant by reference; the arc path-translates their

@@ -134,6 +134,7 @@ pub struct MoonSurfaceRoot;
 pub fn setup_big_space_hierarchy(
     mut commands: Commands,
     registry: Res<CelestialBodyRegistry>,
+    config: Res<crate::CelestialConfig>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut shader_materials: ResMut<Assets<ShaderMaterial>>,
@@ -141,6 +142,7 @@ pub fn setup_big_space_hierarchy(
     // The single world-shell root (WorldShellPlugin) to nest under, and any prior
     // FloatingOrigin holder (the shell's OriginAnchor) the Observer Camera claims.
     q_world_root: Query<Entity, With<lunco_core::WorldRoot>>,
+    q_world_grid: Query<Entity, With<lunco_core::WorldGrid>>,
     q_prior_origins: Query<Entity, With<FloatingOrigin>>,
 ) {
     // Earth/Moon textures load from the `cached_textures://` source on EVERY
@@ -155,13 +157,20 @@ pub fn setup_big_space_hierarchy(
     // hot-reloads on native and HTTP-fetches on web like every other shader.
     let blueprint_shader = asset_server.load("shaders/blueprint.wgsl");
 
-    // 1. Reuse the single world-shell BigSpace root if present; otherwise
-    //    (standalone celestial, no WorldShellPlugin) spawn our own. This is the
-    //    "collapse to one root" fix — in the full client the solar grids nest
-    //    under the shell root instead of creating a second, origin-less BigSpace.
-    let big_space_root = q_world_root
+    // 1. Reuse the single world-shell hierarchy if present; otherwise
+    //    (standalone celestial, no WorldShellPlugin) spawn our own root. This is
+    //    the "collapse to one root" fix — in the full client the solar grids nest
+    //    under the shell instead of creating a second, origin-less BigSpace.
+    //    Prefer the shell's `WorldGrid` (a real `Grid`) over the bare `WorldRoot`
+    //    (`BigSpace` only, NO `Grid`): the Solar Grid's `(CellCoord, Transform)`
+    //    is interpreted in its PARENT grid, and the site-anchoring pin (doc 43)
+    //    needs a parent grid for a high-precision heliocentric pose — under a
+    //    grid-less parent the pin would fall back to raw f32, which quantizes in
+    //    ~16 km steps at 1 AU (visible as the whole sky jumping/jittering).
+    let big_space_root = q_world_grid
         .iter()
         .next()
+        .or_else(|| q_world_root.iter().next())
         .unwrap_or_else(|| commands.spawn(BigSpace::default()).id());
 
     // ── Solar System Grid (inertial anchor) ────────────────────────────────
@@ -398,6 +407,9 @@ pub fn setup_big_space_hierarchy(
     let earth_orbit_distance = earth_radius_m * 3.0;
     let cam_pos = Vec3::new(0.0, earth_orbit_distance * 0.4, earth_orbit_distance);
 
+    // Hosts that own their camera (sandbox avatar) keep their FloatingOrigin;
+    // only the full-client Observer Camera claims it (doc 43).
+    if config.spawn_observer_camera {
     // The Observer Camera is the intended view, so it holds the single
     // FloatingOrigin. Claim it from any prior holder (the shell's OriginAnchor)
     // so big_space never sees two origins (the "multiple floating origins →
@@ -444,6 +456,7 @@ pub fn setup_big_space_hierarchy(
         lunco_core::IntentAnalogState::default(),
         Name::new("Observer Camera"),
     )).set_parent_in_place(earth_grid); // On Earth Grid (inertial) for orbit view.
+    } // config.spawn_observer_camera
 
     // ── Other Planets (simple entities on Solar Grid) ──────────────────────
     for body_desc in registry.bodies.iter() {

@@ -57,7 +57,7 @@ use lunco_obstacle_field::ObstacleFieldPlugin;
 use lunco_terrain_surface::TerrainSurfacePlugin;
 use lunco_controller::LunCoControllerPlugin;
 use lunco_avatar::LunCoAvatarPlugin;
-use lunco_celestial::GravityPlugin;
+use lunco_celestial::{CelestialConfig, SiteAnchor};
 use lunco_environment::EnvironmentPlugin;
 use lunco_cosim::CoSimPlugin;
 use lunco_cosim::systems::propagate::CosimSet as PropagateCosimSet;
@@ -1335,7 +1335,7 @@ impl Plugin for SandboxCorePlugin {
             // observers + resources; no GPU/egui. The workbench add is now
             // guarded to avoid a double-add (double observers).
             .add_plugins(lunco_doc_bevy::TwinJournalPlugin)
-            .add_plugins(GravityPlugin)
+            // GravityPlugin now rides in via CelestialPlugin below (guarded).
             .add_plugins(EnvironmentPlugin)
             .add_plugins(TerrainPlugin)
             // Procedural crater + rock field generator (replaces the flat Cube
@@ -1352,6 +1352,22 @@ impl Plugin for SandboxCorePlugin {
             // colliders). Inert at M0 (config only); see lunco-terrain-surface
             // and docs/terrain-streaming-PLAN.md.
             .add_plugins(TerrainSurfacePlugin)
+            // Celestial stack (doc 43): dormant by default — the solar
+            // hierarchy spawns only when a loaded scene authors a site anchor
+            // (`lunco:anchor:*` on its root prim, e.g. the moonbase Twin);
+            // the sandbox avatar keeps the FloatingOrigin either way. Comms
+            // connectivity (antenna sight-lines → `comms:*` ports) is always
+            // on; it needs no hierarchy.
+            .insert_resource(lunco_celestial::CelestialConfig {
+                spawn_hierarchy: false,
+                spawn_observer_camera: false,
+            })
+            .add_plugins(lunco_celestial::CelestialPlugin)
+            // Real VSOP2013/ELP body positions on ALL platforms (wasm too) —
+            // replaces the NoOp provider CelestialPlugin seeds.
+            .add_plugins(lunco_celestial_ephemeris::EphemerisPlugin)
+            .add_plugins(lunco_celestial::CommsPlugin)
+            .add_systems(Update, enable_celestial_on_site_anchor)
             .add_plugins(LunCoHardwarePlugin)
             .add_plugins(LunCoMobilityPlugin)
             // USD scene load + avian collider build + cosim wiring —
@@ -2443,6 +2459,23 @@ pub struct ScenePath(pub String);
 // and a `DirectionalLight` → Grid — neither is a rigid body / GridAnchor, so
 // that hazard doesn't apply. Locally allowed.
 #[allow(clippy::disallowed_methods)]
+/// Doc 43: a loaded scene that authors a site anchor (`lunco:anchor:*` on its
+/// root prim — e.g. the moonbase Twin) turns the solar-system view on. The
+/// hierarchy spawn is idempotent and the avatar keeps the FloatingOrigin
+/// (`spawn_observer_camera` stays false), so this is purely additive: the Moon
+/// globe appears under the georeferenced terrain, Earth/Sun in the sky, and
+/// scrolling out of the scene reaches the solar system.
+fn enable_celestial_on_site_anchor(
+    q_added: Query<(), Added<SiteAnchor>>,
+    config: Option<ResMut<CelestialConfig>>,
+) {
+    let Some(mut config) = config else { return };
+    if !q_added.is_empty() && !config.spawn_hierarchy {
+        info!("[celestial] site-anchored scene loaded → enabling the solar hierarchy");
+        config.spawn_hierarchy = true;
+    }
+}
+
 fn setup_sandbox(world: &mut World) {
     let scene_path: String = world.resource::<ScenePath>().0.clone();
 

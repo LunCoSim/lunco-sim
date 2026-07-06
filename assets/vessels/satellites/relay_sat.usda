@@ -1,0 +1,61 @@
+#usda 1.0
+(
+    defaultPrim = "RelaySat"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Lunar comms relay satellite (doc 43) — bus + solar wings + dish, flying a
+# Keplerian orbit authored via `lunco:orbit:*` (override per instance).
+# Defaults: an ELFO (elliptical lunar frozen orbit), Lunar-Pathfinder-like —
+# a 6540 km, e 0.6, i 57.7°, ω 90° so apolune dwells over the lunar SOUTH pole
+# (long visibility windows from a Shackleton-area base).
+def Xform "RelaySat" (
+    kind = "component"
+)
+{
+    bool lunco:comms:antenna = true
+    double lunco:comms:maxRangeM = 1000000000000
+    int lunco:orbit:body = 301
+    double lunco:orbit:semiMajorAxisM = 6540000
+    double lunco:orbit:eccentricity = 0.6
+    double lunco:orbit:inclinationDeg = 57.7
+    double lunco:orbit:raanDeg = 0
+    double lunco:orbit:argPeriapsisDeg = 90
+    double lunco:orbit:meanAnomalyDeg = 180
+
+    def Cube "Bus"
+    {
+        double size = 1.0
+        double3 xformOp:scale = (1.2, 1.0, 1.0)
+        uniform token[] xformOpOrder = ["xformOp:scale"]
+        color3f primvars:displayColor = (0.75, 0.7, 0.55)
+    }
+
+    def Cube "WingPlus"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (2.2, 0, 0)
+        double3 xformOp:scale = (3.0, 0.02, 1.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.05, 0.05, 0.55)
+    }
+
+    def Cube "WingMinus"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (-2.2, 0, 0)
+        double3 xformOp:scale = (3.0, 0.02, 1.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.05, 0.05, 0.55)
+    }
+
+    def Sphere "Dish"
+    {
+        double radius = 0.7
+        double3 xformOp:translate = (0, -0.9, 0)
+        double3 xformOp:scale = (1.0, 0.35, 1.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.9, 0.9, 0.95)
+    }
+}

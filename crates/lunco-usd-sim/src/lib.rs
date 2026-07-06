@@ -159,6 +159,7 @@ impl Plugin for UsdSimPlugin {
     }
 }
 
+pub mod celestial;
 pub mod cosim;
 pub use cosim::{CosimStatusProvider, UsdSourcedCosim};
 
@@ -604,6 +605,16 @@ fn process_usd_sim_prim_read<R: UsdRead>(
         if reader.scalar::<bool>(&sdf_path, "lunco:sensor:contact").is_some() {
             commands.entity(entity).insert(lunco_cosim::sensors::ContactSensor::default());
         }
+
+        // USD-authored celestial/comms vocabulary → lunco-celestial components
+        // (geodetic anchors, Kepler orbits, comms antennas — doc 43).
+        celestial::insert_celestial_comms_components(
+            reader,
+            entity,
+            &prim_path.path,
+            &sdf_path,
+            commands,
+        );
 
         // 0. Detect Avatar prim
         if reader.scalar::<String>(&sdf_path, "lunco:avatar").is_some() {

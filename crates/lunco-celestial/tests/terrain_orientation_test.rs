@@ -157,8 +157,14 @@ fn test_tile_vertices_on_sphere() {
 
 #[test]
 fn test_tile_positions_match_grid_decomposition() {
-    // big_space Grid::translation_to_grid(cell_size=10000, ...) should decompose
-    // tile center positions correctly, and reassembly should give back the original.
+    // big_space Grid::translation_to_grid should decompose tile center
+    // positions so reassembly gives back the original. Mirror the REAL
+    // implementation (grid/mod.rs): the split is computed in **f64** with a
+    // *rounded* cell index, and only the small (≤ half-cell) remainder is
+    // narrowed to f32 — that's what keeps sub-centimetre placement at body
+    // radius. (An earlier version of this test simulated the split in f32
+    // with a floored index, which injects ~0.1 m of f32 rounding at 1.7e6 m
+    // magnitude and fails — an artifact of the simulation, not the engine.)
     let cell_size = 10_000.0_f64;
 
     for face in 0..6u8 {
@@ -170,15 +176,14 @@ fn test_tile_positions_match_grid_decomposition() {
                 let v_mid = -1.0 + (tile_j as f64 + 0.5) * step;
                 let tile_center = cube_to_sphere(face, u_mid, v_mid) * MOON_R;
 
-                // Simulate Grid::translation_to_grid
-                let cs = cell_size as f32;
-                let body_pos = tile_center.as_vec3();
-                let cell_x = (body_pos.x / cs).floor() as i64;
-                let cell_y = (body_pos.y / cs).floor() as i64;
-                let cell_z = (body_pos.z / cs).floor() as i64;
-                let local_x = body_pos.x - cell_x as f32 * cs;
-                let local_y = body_pos.y - cell_y as f32 * cs;
-                let local_z = body_pos.z - cell_z as f32 * cs;
+                // Mirror Grid::translation_to_grid: f64 rounded cell + f64
+                // remainder, narrowed to f32 (the Transform's precision).
+                let cell_x = (tile_center.x / cell_size).round() as i64;
+                let cell_y = (tile_center.y / cell_size).round() as i64;
+                let cell_z = (tile_center.z / cell_size).round() as i64;
+                let local_x = (tile_center.x - cell_x as f64 * cell_size) as f32;
+                let local_y = (tile_center.y - cell_y as f64 * cell_size) as f32;
+                let local_z = (tile_center.z - cell_z as f64 * cell_size) as f32;
 
                 // Reassemble
                 let reassembled = tile_body_local_position(cell_x, cell_y, cell_z, local_x, local_y, local_z, cell_size);

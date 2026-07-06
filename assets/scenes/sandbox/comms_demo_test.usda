@@ -1,0 +1,110 @@
+#usda 1.0
+(
+    defaultPrim = "CommsDemoScene"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Comms connectivity demo (doc 43): a Shackleton-ridge site with a rover
+# (antenna aboard), a base mast, a lunar relay satellite (ELFO) and an Earth
+# DSN station. The root anchor georeferences the scene on the Moon — the site
+# frame that grounds every scene-local antenna. Link state is published as
+# ports: e.g. `read_port <rover>/comms:route_earth:connected`.
+def Xform "CommsDemoScene" (
+    kind = "assembly"
+)
+{
+    bool lunco:spawnable = false
+
+    # Site frame: Shackleton–de Gerlache connecting ridge (Artemis site).
+    double lunco:anchor:lat = -89.45
+    double lunco:anchor:lon = -136.7
+    double lunco:anchor:height = 1200
+    int lunco:anchor:body = 301
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysxTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.1, 0)
+        double3 xformOp:scale = (400, 0.2, 400)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.42, 0.4, 0.38)
+        bool physics:collisionEnabled = true
+    }
+
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 120000
+        double3 xformOp:rotateXYZ = (-25, 40, 0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    def Xform "Avatar"
+    {
+        string lunco:avatar = "true"
+        string lunco:cameraMode = "freeflight"
+        double3 xformOp:translate = (14, 6, 14)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Xform "Rover" (
+        prepend references = @../../vessels/rovers/skid_rover.usda@</SkidRover>
+    )
+    {
+        double3 xformOp:translate = (6, 1.4, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # Base comms mast — a scene-local antenna, like the moonbase one.
+    def Xform "BaseMast" (
+        prepend references = @../../components/comms/antenna.usda@</CommsAntenna>
+    )
+    {
+        double3 xformOp:translate = (-8, 0, -4)
+        double3 xformOp:scale = (4, 4, 4)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+
+    # Lunar relay on its default ELFO (elements on the asset; override here to
+    # reposition). Placed on the Moon's grid by the celestial systems when the
+    # solar hierarchy is enabled; hidden otherwise — comms math is unaffected.
+    def Xform "RelaySat" (
+        prepend references = @../../vessels/satellites/relay_sat.usda@</RelaySat>
+    )
+    {
+    }
+
+    # Earth ground stations — the three DSN complexes, ~120° apart so at
+    # least one always sees the Moon (that's WHY there are three).
+    def Xform "DSS_Madrid" (
+        prepend references = @../../components/comms/ground_station.usda@</GroundStation>
+    )
+    {
+        double lunco:anchor:lat = 40.4314
+        double lunco:anchor:lon = -4.2481
+        double lunco:anchor:height = 837
+        int lunco:anchor:body = 399
+    }
+
+    def Xform "DSS_Goldstone" (
+        prepend references = @../../components/comms/ground_station.usda@</GroundStation>
+    )
+    {
+        double lunco:anchor:lat = 35.4267
+        double lunco:anchor:lon = -116.89
+        double lunco:anchor:height = 1001
+        int lunco:anchor:body = 399
+    }
+
+    def Xform "DSS_Canberra" (
+        prepend references = @../../components/comms/ground_station.usda@</GroundStation>
+    )
+    {
+        double lunco:anchor:lat = -35.4014
+        double lunco:anchor:lon = 148.9817
+        double lunco:anchor:height = 688
+        int lunco:anchor:body = 399
+    }
+}

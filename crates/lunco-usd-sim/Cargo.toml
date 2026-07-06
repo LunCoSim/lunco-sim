@@ -11,6 +11,8 @@ lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-materials = { path = "../lunco-materials" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-core = { path = "../lunco-core" }
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-time = { path = "../lunco-time" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-fsw = { path = "../lunco-fsw" }
 lunco-hardware = { path = "../lunco-hardware" }
