@@ -3,10 +3,6 @@
     defaultPrim = "AckermannRover"
     upAxis = "Y"
     metersPerUnit = 1
-    # Shared control-profile library (see skid_rover.usda) — brings `_RoverControl`.
-    subLayers = [
-        @../control_profiles.usda@
-    ]
 )
 
 # Base Ackermann-Steer Rover — same Xform-root + child-Chassis form
@@ -23,7 +19,6 @@
 
 def Xform "AckermannRover" (
     kind = "component"
-    inherits = </_RoverControl>
     prepend apiSchemas = [
         "PhysicsRigidBodyAPI",
         "PhysicsMassAPI",
@@ -40,6 +35,14 @@ def Xform "AckermannRover" (
     float lunco:spawnLift = 1.0
     float physics:linearDamping = 0.5
     float physics:angularDamping = 2.0
+
+    # Control profile (intent -> port). Child `references` arc so it composes
+    # through a spawn/reference exactly like the wheels below.
+    def "Controls" (
+        prepend references = @../control_profiles.usda@</RoverControls>
+    )
+    {
+    }
 
     def Cube "Chassis" (
         kind = "subcomponent"

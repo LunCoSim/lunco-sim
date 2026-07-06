@@ -1855,10 +1855,11 @@ fn on_possess_command(
     // The controller link goes on the **avatar** (it carries the shared
     // `ActionState<UserIntent>` that `drive_from_bindings` reads); the intent→port
     // `ControlBinding` lives on the **vessel** as its own property, authored purely
-    // from USD (a `Controls` scope / an inherited `_RoverControl`/`_LanderControl`
-    // profile). There is NO Rust topology default: a vessel is drivable iff its USD
-    // carries that scope. `drive_from_bindings` reads the binding off the vessel and
-    // skips any vessel that has none, so possession is a pure camera+link bind here.
+    // from USD (a `Controls` child scope referencing a shared profile in
+    // `control_profiles.usda`). There is NO Rust topology default: a vessel is
+    // drivable iff its USD carries that scope. `drive_from_bindings` reads the
+    // binding off the vessel and skips any vessel that has none, so possession is a
+    // pure camera+link bind here.
     commands
         .entity(avatar_ent)
         .insert(ControllerLink { vessel_entity: cmd.target });

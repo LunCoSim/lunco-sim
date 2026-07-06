@@ -157,9 +157,12 @@ pub fn parse_user_intent(name: &str) -> Option<UserIntent> {
 /// `lunco:port`+`lunco:scale`, built via
 /// [`from_intent_entries`](ControlBinding::from_intent_entries)) — there is NO
 /// hardcoded Rust default: a vessel is controllable iff it carries a `Controls`
-/// scope (author one, or `inherits` a shared profile class). The consuming system
-/// (`lunco_controller::drive_from_bindings`) reads it off the vessel via the
-/// controller link; a vessel without one is simply not driven.
+/// scope. It is delivered as a child `references` arc to a shared profile in
+/// `control_profiles.usda` (the same arc kind wheels use), so it composes through
+/// a spawn/reference; a runtime-built entity becomes drivable by authoring that
+/// one child prim. The consuming system (`lunco_controller::drive_from_bindings`)
+/// reads it off the vessel via the controller link; a vessel without one is
+/// simply not driven.
 #[derive(Component, Debug, Clone)]
 pub struct ControlBinding {
     /// `(intent, port_name, scale)` — each active intent adds its scale to the

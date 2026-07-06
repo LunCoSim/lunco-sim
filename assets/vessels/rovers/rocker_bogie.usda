@@ -3,10 +3,6 @@
     defaultPrim = "RockerBogie"
     upAxis = "Y"
     metersPerUnit = 1
-    # Shared control-profile library (see skid_rover.usda) — brings `_RoverControl`.
-    subLayers = [
-        @../control_profiles.usda@
-    ]
 )
 
 # G5 — rocker-bogie chassis with a differential coupling.
@@ -22,7 +18,6 @@
 
 def Xform "RockerBogie" (
     kind = "component"
-    inherits = </_RoverControl>
     prepend apiSchemas = [
         "PhysicsRigidBodyAPI",
         "PhysicsMassAPI",
@@ -38,6 +33,14 @@ def Xform "RockerBogie" (
     float lunco:spawnLift = 1.5
     float physics:linearDamping = 0.4
     float physics:angularDamping = 2.0
+
+    # Intent->port control (stage 2): shared rover profile as a child `references`
+    # arc so it composes through a spawn/reference like the wheels.
+    def "Controls" (
+        prepend references = @../control_profiles.usda@</RoverControls>
+    )
+    {
+    }
 
     # --- DIFFERENTIAL COUPLING (HOLONOMIC CONSTRAINT) ---
     # stiffness: Controls how strongly the rockers are forced to mirror each other (default 15000.0)

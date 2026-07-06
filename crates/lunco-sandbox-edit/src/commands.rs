@@ -311,16 +311,6 @@ pub fn on_spawn_entity_command(
             position: cmd.position,
         },
     ));
-
-    // TEMPORARY: follow this spawn for a few seconds to root-cause the
-    // "spawn rover on rugged terrain → it disappears" bug (probes ground-collider
-    // readiness under the spawn point + tracks fall-through/explosion/despawn).
-    crate::spawn_watch::tag_spawn_watch(
-        &mut commands,
-        result.root_entity,
-        cmd.entry_id.clone(),
-        cmd.position,
-    );
 }
 
 /// Client: instantiate rovers the host has replicated to us (M1 content
@@ -3229,9 +3219,6 @@ fn doc_for_stage(
 impl Plugin for SpawnCommandPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_spawn_entity_command);
-        // TEMPORARY spawn diagnostics (`[spawnwatch]` logs) — remove after the
-        // rugged-terrain vanish is root-caused.
-        app.add_systems(Update, crate::spawn_watch::watch_spawned);
         app.add_observer(on_detach_joint);
         // Dock release as an actuator on the intent→port machinery (replaces the
         // hardcoded G-to-detach): register the `release` port backend, attach a

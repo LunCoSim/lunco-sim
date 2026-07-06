@@ -832,16 +832,16 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             commands.entity(entity).insert((
                 // Seed the CANONICAL rover command surface (throttle/steer/brake) that
                 // `apply_drive_mix` reads and the skid/Ackermann/driveMix kernels all
-                // consume — universal to every `PhysxVehicleContextAPI` rover here.
-                // Any *extra* authored intents are still added on top by
-                // `sync_fsw_command_surface` from the vessel's USD `Controls` binding
-                // (additive/idempotent). We seed directly rather than relying solely
-                // on that binding because it is delivered via the asset's ROOT-LAYER
-                // `subLayers` (`_RoverControl` in `control_profiles.usda`), which does
-                // NOT compose through a runtime `references=` spawn — so a
-                // palette/API-spawned rover otherwise got an EMPTY surface (no
-                // throttle port) and could be possessed but never driven, while
-                // scene-authored rovers worked. Seeding here fixes both paths.
+                // consume — universal to every `PhysxVehicleContextAPI` rover here, and
+                // topology-derived (this IS the vehicle reader), not a per-arch branch.
+                // The vessel's USD `Controls` binding adds any *extra* authored intents
+                // on top via `sync_fsw_command_surface` (additive/idempotent). Seeding
+                // the surface here — rather than only from the binding — means an
+                // API/rhai caller can `set_input` throttle even on an entity that has
+                // not (yet) authored a `Controls` scope. The binding itself now composes
+                // through a runtime `references=` spawn because `Controls` is delivered
+                // as a child `references` arc (like the wheels), not root `subLayers` +
+                // `inherits` — so keyboard drive works on spawned rovers too.
                 FlightSoftware::new(port_map, &["throttle", "steer", "brake"]),
                 lunco_core::SelectableRoot,
                 RoverWheels::default(),

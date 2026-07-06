@@ -120,8 +120,8 @@ fn drive_from_bindings(
     for (link, intents) in q_ctrl.iter() {
         // Stage 1 (key→intent) is the shared leafwing `InputMap<UserIntent>`;
         // stage 2 maps this vessel's active intents → summed, clamped port writes.
-        // The binding is authored ON THE VESSEL (USD `lunco:controlBindings`, or a
-        // topology default stamped at possess) — skip a vessel that carries none.
+        // The binding is authored ON THE VESSEL as a USD `Controls` child scope
+        // (referencing a shared profile) — skip a vessel that carries none.
         let Ok(binding) = q_binding.get(link.vessel_entity) else { continue };
 
         // The vessel's id (gid + is-it-locally-owned) — used both by the ownership

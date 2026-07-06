@@ -81,8 +81,17 @@ Feed `altitude` from the altimeter with a cross-prim wire (like `AltimeterToLand
 You wired `piloted:piloted` in Step 3 — that's the whole authority mechanism. The
 `piloted` port is `1.0` whenever a session (a user **or** an autopilot) possesses the
 vessel, derived from the possession registry (`PILOTED_BACKEND`). Add a pilot
-intent→port binding (inherit `_LanderControl` or author your own) so the stick reaches
-`external_throttle` when possessed.
+intent→port binding — a `Controls` child that `references` a profile — so the stick
+reaches `external_throttle` when possessed:
+
+```usda
+# on the vessel prim:
+def "Controls" (prepend references = @../../vessels/control_profiles.usda@</LanderControls>) {}
+```
+
+(Deliver it as this child `references` arc, not root `subLayers` + `inherits` — only the
+child arc composes when the vessel is spawned/referenced. See the
+[skill](../../skills/authoring-vessel-controllers/SKILL.md) for the full `Controls` scope.)
 
 Nothing else to write: **unpossessed → the GNC hovers; possess → the pilot flies;
 release → the GNC resumes.**
