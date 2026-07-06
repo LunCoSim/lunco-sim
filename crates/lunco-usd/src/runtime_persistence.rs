@@ -98,21 +98,33 @@ fn runtime_has_content(runtime: &openusd::sdf::Data) -> bool {
     runtime.iter().any(|(_, spec)| spec.ty == SpecType::Prim)
 }
 
-/// Load a freshly-opened USD document's persisted runtime overlay (C4b spawns +
-/// moved transforms) from `.lunco/runtime/…` and
-/// [`restore_runtime`](crate::document::UsdDocument::restore_runtime) it, so
-/// session state survives reload. No-op for untitled / non-twin docs, when no
-/// overlay exists yet, or for non-USD documents (which have no host here).
-pub(crate) fn on_doc_opened_load_runtime(
-    trigger: On<DocumentOpened>,
-    workspace: Option<Res<WorkspaceResource>>,
-    mut registry: ResMut<UsdDocumentRegistry>,
+/// Restore a document's persisted runtime overlay (C4b spawns + moved
+/// transforms) from `.lunco/runtime/…`, if one exists and the runtime layer is
+/// still empty. No-op for untitled / non-twin docs or when no overlay exists.
+///
+/// Two callers share this: the twin drain ([`drain_pending_twin_docs`]
+/// (crate::twin_projection::drain_pending_twin_docs)), which restores BEFORE the
+/// scene's first mount so the single stage build composes `base ⊕ runtime`, and
+/// the [`DocumentOpened`] observer (every other doc-open path — the observer
+/// fires on a later command flush, too late for the twin mount). The
+/// empty-runtime guard makes whichever runs second a no-op instead of a second
+/// generation bump — whose synthetic `ReplaceSource` marker would force a
+/// whole-scene rebuild (every prim despawned + respawned).
+pub(crate) fn restore_doc_runtime(
+    workspace: &WorkspaceResource,
+    registry: &mut UsdDocumentRegistry,
+    doc: DocumentId,
 ) {
-    let doc = trigger.event().doc;
-    let Some(workspace) = workspace else { return };
-    let Some(path) = doc_runtime_path(&workspace, &registry, doc) else {
+    let Some(path) = doc_runtime_path(workspace, registry, doc) else {
         return;
     };
+    let restored = registry
+        .host(doc)
+        .map(|h| runtime_has_content(h.document().runtime_data()))
+        .unwrap_or(true);
+    if restored {
+        return;
+    }
     let Some(bytes) = read_bytes(&path) else { return };
     let data = match String::from_utf8(bytes)
         .ok()
@@ -128,6 +140,18 @@ pub(crate) fn on_doc_opened_load_runtime(
         host.document_mut().restore_runtime(data);
         info!("[usd-runtime] restored runtime overlay from {}", path.display());
     }
+}
+
+/// Load a freshly-opened USD document's persisted runtime overlay on
+/// [`DocumentOpened`], so session state survives reload — see
+/// [`restore_doc_runtime`] (a no-op when the twin drain already restored it).
+pub(crate) fn on_doc_opened_load_runtime(
+    trigger: On<DocumentOpened>,
+    workspace: Option<Res<WorkspaceResource>>,
+    mut registry: ResMut<UsdDocumentRegistry>,
+) {
+    let Some(workspace) = workspace else { return };
+    restore_doc_runtime(&workspace, &mut registry, trigger.event().doc);
 }
 
 // TODO(#7 journal replay-on-open): today a reopened document's *current state* is
@@ -254,6 +278,56 @@ mod tests {
         assert!(
             reopened.composed_source().contains("@vessels/rovers/skid_rover.usda@"),
             "restored spawn rides the composed view"
+        );
+    }
+
+    #[test]
+    fn restore_doc_runtime_is_idempotent_across_drain_and_observer() {
+        // The twin drain restores BEFORE the scene mounts; the `DocumentOpened`
+        // observer fires a flush later and must NOT restore again — a second
+        // restore bumps the generation with a coarse `ReplaceSource` marker,
+        // which forces a whole-scene rebuild (the old "everything spawns twice
+        // on twin open").
+        let dir = tempfile::tempdir().unwrap();
+        let mut ws = WorkspaceResource::new();
+        ws.add_twin(open_twin(dir.path()));
+
+        let scene_abs = dir.path().join("scene.usda");
+        std::fs::write(&scene_abs, TINY).unwrap();
+
+        // Persist a runtime overlay with one spawn (same shape the app writes).
+        let mut src = UsdDocument::with_origin(
+            DocumentId::new(10),
+            TINY,
+            DocumentOrigin::writable_file(scene_abs.clone()),
+        );
+        src.apply(UsdOp::AddPrim {
+            edit_target: LayerId::runtime(),
+            parent_path: "/World".into(),
+            name: "rover_1".into(),
+            type_name: None,
+            reference: Some("vessels/rovers/skid_rover.usda".into()),
+        })
+        .unwrap();
+        let text = lunco_usd_bevy::author::data_to_usda(src.runtime_data()).unwrap();
+        write_bytes(&dir.path().join(".lunco/runtime/scene.usda"), text.as_bytes()).unwrap();
+
+        let mut registry = UsdDocumentRegistry::default();
+        let doc = registry.allocate(TINY.to_string(), DocumentOrigin::writable_file(scene_abs));
+
+        restore_doc_runtime(&ws, &mut registry, doc);
+        let host = registry.host(doc).unwrap();
+        assert!(
+            runtime_has_content(host.document().runtime_data()),
+            "first call restores the persisted spawn"
+        );
+        let gen_after_first = host.document().generation();
+
+        restore_doc_runtime(&ws, &mut registry, doc);
+        assert_eq!(
+            registry.host(doc).unwrap().document().generation(),
+            gen_after_first,
+            "second call is a no-op — no generation bump, no forced rebuild"
         );
     }
 

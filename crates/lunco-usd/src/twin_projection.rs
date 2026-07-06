@@ -10,14 +10,20 @@
 //! filesystem-composing `live_projection` path for `OpenFile` scenes has been
 //! removed; opened files mount through the same storage-based async loader.)
 //!
-//! Flow (`open_usd_docs_on_twin_added` keeps firing `LoadScene` for the immediate
-//! live mount; E1b runs alongside):
+//! Flow (doc-first: the document exists and its composed source is the overlay
+//! BEFORE the scene mounts, so the world is projected exactly once):
 //! 1. On `TwinAdded` with a `[usd] default_scene`, kick an async
 //!    [`UsdSourceText`] load of `twin://<name>/<scene>` (raw base layer, read
 //!    through the twin source — web-ready) and record it in [`PendingTwinDocs`].
+//!    No mount yet — mounting first built the stage from the raw base, and the
+//!    open-time `restore_runtime` then forced a whole-scene rebuild (every prim
+//!    spawned twice ~70 ms apart).
 //! 2. [`drain_pending_twin_docs`] — once the source text is in hand, allocate a
 //!    [`UsdDocument`](crate::document) for it (origin = the on-disk path, so Save
-//!    and dedup work) and record it in [`DocBackedTwinScenes`].
+//!    and dedup work), restore its persisted `.lunco/runtime` overlay, publish
+//!    the composed source as the twin overlay, record it in
+//!    [`DocBackedTwinScenes`] (synced at the current generation), and only then
+//!    fire `LoadScene` — the single mount composes `base ⊕ runtime`.
 //! 3. [`sync_twin_overlays`] — whenever the document generation moves (initial
 //!    mount, open-time `restore_runtime`, or a later spawn/move), refresh the
 //!    twin **overlay** (for persistence / re-open) and **author the delta onto
@@ -41,6 +47,7 @@ use lunco_assets::twin_source::TwinRoots;
 use lunco_doc::{Document, DocumentId, DocumentOrigin};
 use lunco_usd_bevy::usd_data::UsdDataExt;
 use lunco_usd_bevy::{UsdPrimPath, UsdSourceText, UsdStageAsset, UsdVisualSynced};
+use lunco_usd_sim::cosim::LoadScene;
 
 use crate::document::UsdOp;
 use crate::registry::UsdDocumentRegistry;
@@ -90,10 +97,11 @@ impl PendingTwinDocs {
 /// scene's base layer through the twin source (`twin://<name>/<rel>`, web-ready)
 /// and queues a document for it; once allocated, [`sync_twin_overlays`] serves the
 /// composed (`base ⊕ runtime`) source so runtime USD edits project to the live
-/// world. The immediate file-backed mount still comes from the caller's
-/// `LoadScene` — exactly the dual path `open_usd_docs_on_twin_added` runs in
-/// production. `abs_path` is the scene's on-disk path (the document origin → Save
-/// target + dedup key).
+/// world. The mount itself comes from [`drain_pending_twin_docs`] once the doc
+/// exists (a caller-side `LoadScene` for the same path is a no-op by then) —
+/// the same doc-first path `open_usd_docs_on_twin_added` runs in production.
+/// `abs_path` is the scene's on-disk path (the document origin → Save target +
+/// dedup key).
 pub fn doc_back_twin_scene(
     asset_server: &AssetServer,
     pending: &mut PendingTwinDocs,
@@ -208,13 +216,26 @@ fn find_doc_for_abs(registry: &UsdDocumentRegistry, abs: &std::path::Path) -> Op
 }
 
 /// Allocate the document for each pending twin scene once its base source text
-/// has loaded through the twin source. Idempotent: reuses an existing document
-/// for the same on-disk path (twin re-add) rather than double-allocating.
+/// has loaded through the twin source, restore its persisted runtime overlay,
+/// publish the composed (`base ⊕ runtime`) source as the twin overlay — and only
+/// THEN mount the scene ([`LoadScene`]). Ordering is the whole point: the async
+/// stage load reads the overlay bytes, so the one and only projection already
+/// composes the runtime state. Mounting eagerly on `TwinAdded` and doc-backing
+/// afterwards built the stage from the raw base, then the open-time
+/// `restore_runtime` (a coarse `ReplaceSource` marker) forced a whole-scene
+/// rebuild ~70 ms in — every prim spawned, despawned, and respawned once.
+/// Idempotent: reuses an existing document for the same on-disk path (twin
+/// re-add) rather than double-allocating; if that scene is already mounted,
+/// `LoadScene` no-ops (same path + root) or force-reloads a resident stale
+/// stage, so the composed overlay still wins.
 pub(crate) fn drain_pending_twin_docs(
     mut pending: ResMut<PendingTwinDocs>,
     mut registry: ResMut<UsdDocumentRegistry>,
     mut backed: ResMut<DocBackedTwinScenes>,
     sources: Res<Assets<UsdSourceText>>,
+    twin_roots: Res<TwinRoots>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    mut commands: Commands,
 ) {
     if pending.items.is_empty() {
         return;
@@ -222,28 +243,48 @@ pub(crate) fn drain_pending_twin_docs(
     let taken = std::mem::take(&mut pending.items);
     let mut still = Vec::new();
     for mut item in taken {
+        let twin_path = format!("twin://{}/{}", item.name, item.rel);
         let Some(UsdSourceText(source)) = sources.get(&item.handle) else {
             item.attempts += 1;
             if item.attempts < MAX_TWIN_DOC_ATTEMPTS {
                 still.push(item);
             } else {
+                // Doc-backing failed (missing / unreadable scene) — mount
+                // file-backed anyway so the viewport isn't left empty.
                 warn!(
-                    "[usd-e1b] base source for `twin://{}/{}` never loaded — no doc-backed projection",
-                    item.name, item.rel
+                    "[usd-e1b] base source for `{twin_path}` never loaded — mounting without doc projection"
                 );
+                commands.trigger(LoadScene { path: twin_path, root_prim: String::new() });
             }
             continue;
         };
         let doc = find_doc_for_abs(&registry, &item.abs_path).unwrap_or_else(|| {
             registry.allocate(source.clone(), DocumentOrigin::writable_file(item.abs_path.clone()))
         });
+        // Restore the persisted `.lunco/runtime` overlay NOW, before the mount
+        // below. The `DocumentOpened` observer restore fires a flush later —
+        // after the stage load has already read its bytes. Guarded: whichever
+        // runs second is a no-op.
+        if let Some(ws) = workspace.as_deref() {
+            crate::runtime_persistence::restore_doc_runtime(ws, &mut registry, doc);
+        }
+        // Publish the composed source as the twin overlay so the stage build
+        // reads `base ⊕ runtime`, and mark the scene synced at this generation —
+        // every op through it is reflected by the mount itself, so
+        // `sync_twin_overlays` only has to project edits made AFTER open.
+        let (cur_gen, composed) = match registry.host(doc) {
+            Some(h) => (h.document().generation(), h.document().composed_source()),
+            None => continue,
+        };
+        twin_roots.set_overlay(&item.name, &item.rel, Arc::new(composed.into_bytes()));
         backed.map.entry(doc).or_insert(TwinSceneRef {
             name: item.name.clone(),
             rel: item.rel.clone(),
-            synced_generation: None,
-            overlay_synced_generation: None,
+            synced_generation: Some(cur_gen),
+            overlay_synced_generation: Some(cur_gen),
         });
-        info!("[usd-e1b] default scene `twin://{}/{}` is now doc-backed ({doc})", item.name, item.rel);
+        info!("[usd-e1b] default scene `{twin_path}` is doc-backed ({doc}) — mounting composed");
+        commands.trigger(LoadScene { path: twin_path, root_prim: String::new() });
     }
     pending.items.extend(still);
 }
@@ -341,7 +382,12 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         if synced.is_none() {
             // First mount MUST publish the overlay so the async (re)load composes
             // base ⊕ runtime from it (this is NOT deferrable, unlike a live edit).
-            write_twin_overlay(world, doc, &name, &rel, cur_gen);
+            // Already done at this generation for a twin default scene
+            // (`drain_pending_twin_docs` publishes before mounting); still needed
+            // here for editor-viewport docs tracked via `track()`.
+            if overlay_synced != Some(cur_gen) {
+                write_twin_overlay(world, doc, &name, &rel, cur_gen);
+            }
             // The async load already built the stage from the overlay, so every
             // recorded op is already reflected — just reconcile restored runtime
             // spawns idempotently (never replay ops → double-author). This is the
