@@ -6776,6 +6776,7 @@ dependencies = [
  "resvg",
  "rumoca-ir-ast",
  "rumoca-phase-parse",
+ "ruzstd 0.7.3",
  "serde",
  "serde_json",
  "sha2 0.10.9",

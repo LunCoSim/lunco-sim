@@ -72,11 +72,27 @@ usvg = { workspace = true }
 # Wasm-only: fetch bundled TTF fonts over HTTP at runtime (served at
 # `/fonts/…` by the page bundle — see the copy step in
 # `scripts/build_web.sh`). Native reads the same file from the cache dir.
+# Also backs `web_fetch` — the generic browser fetch + Cache-Storage +
+# tar.zst-unpack primitives shared by every bundle distributor (MSL,
+# twin bundles), extracted here from lunco-modelica's MSL fetcher.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 js-sys = { workspace = true }
-web-sys = { workspace = true, features = ["Window", "Response"] }
+web-sys = { workspace = true, features = [
+    "Window",
+    "Response",
+    "Request",
+    "RequestInit",
+    "RequestMode",
+    "Cache",
+    "CacheStorage",
+] }
+# Pure-Rust zstd decoder + tar reader for `web_fetch::unpack_tar_zst`
+# (the web runtime has no `zstd`/filesystem). Native bundle packing uses
+# the C `zstd` crate above; the browser decodes with these.
+ruzstd = "0.7"
+tar = { workspace = true }
 
 [lints]
 workspace = true
