@@ -455,6 +455,11 @@ impl Plugin for LunCoAvatarPlugin {
         // a host that inserts its own (sandbox) keeps that value.
         app.init_resource::<lunco_core::DragModeActive>();
         app.init_resource::<lunco_core::SpawnToolActive>();
+        // Populated by `lunco-workbench` when egui is present; guaranteed here so
+        // the keyboard gate (`scene_keyboard_active`) has a resource to read on
+        // binaries that use the avatar without the workbench (headless server) —
+        // there it stays default `false` and the gate is always open.
+        app.init_resource::<lunco_core::EguiFocus>();
         app.add_observer(avatar_raycast_possession);
         // The local avatar is a controllable like any vessel: stamp its FSW command
         // surface + control binding so the shared `drive_from_bindings` path moves it.
@@ -529,15 +534,24 @@ impl Plugin for LunCoAvatarPlugin {
 
         app.add_systems(Update, (
             avatar_init_system,
-            capture_avatar_intent,
-            avatar_behavior_input_system,
-            avatar_escape_possession,
-            avatar_global_hotkeys,
             surface_mode_transition_system,
             enforce_ownership,
             sync_profile,
             tick_notifications,
         ));
+        // Raw-keyboard systems: WASD driving (`capture_avatar_intent`), behavior
+        // toggles, Escape-release, and global hotkeys. Gated so a keypress typed
+        // into a focused egui text field (Inspector, REPL, …) doesn't also drive
+        // the vessel or fire a hotkey. Escape is included on purpose — while a
+        // field is focused egui consumes Escape to defocus it (so `wants_keyboard`
+        // is set that frame); the next Escape, with no field focused, releases
+        // possession as before.
+        app.add_systems(Update, (
+            capture_avatar_intent,
+            avatar_behavior_input_system,
+            avatar_escape_possession,
+            avatar_global_hotkeys,
+        ).run_if(scene_keyboard_active));
 
         // Possessed-rover name tags: an egui screen-space overlay (the scene has
         // only a `Camera3d`, so world-anchored `Text2d` never renders). Registered
@@ -583,6 +597,18 @@ impl Plugin for LunCoAvatarPlugin {
 
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub struct AvatarCameraSet;
+
+/// Run-condition: `true` when the 3D scene may consume raw keyboard input —
+/// i.e. egui is NOT holding the keyboard (no focused text field / drag-value).
+///
+/// [`lunco_core::EguiFocus`] is published each frame by `lunco-workbench` from
+/// the primary egui context's `wants_keyboard_input()`. On a headless binary
+/// nothing writes it, so it stays default (`false`) and the gate is always open.
+/// One-frame latency (the flag reflects the previous egui pass) is imperceptible
+/// for held input.
+fn scene_keyboard_active(focus: Res<lunco_core::EguiFocus>) -> bool {
+    !focus.wants_keyboard
+}
 
 // ─── Avatar Camera Factory ───────────────────────────────────────────────────
 

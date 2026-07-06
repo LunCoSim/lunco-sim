@@ -584,6 +584,37 @@ pub fn egui_viewport_aware_picking(
     }
 }
 
+/// Relay egui's input-capture flags into the ECS as [`lunco_core::EguiFocus`].
+///
+/// egui reads its own copy of the winit events and never removes anything from
+/// Bevy's `ButtonInput`, so raw scene-input systems (keyboard driving, camera
+/// orbit, scroll-zoom) would otherwise fire even while an egui text field is
+/// focused or the pointer is over a panel. This publishes
+/// `wants_keyboard_input()` / `wants_pointer_input()` from the primary context
+/// so those systems can gate on `EguiFocus` without depending on `bevy_egui`.
+///
+/// Runs in `PostUpdate` after `EguiPostUpdateSet::ProcessOutput` (same slot as
+/// the picking backend) so the flags are this-frame-fresh; consumers in `Update`
+/// read them one frame later, which is imperceptible for held input.
+pub fn track_egui_focus(
+    mut focus: ResMut<lunco_core::EguiFocus>,
+    mut q: Query<&mut bevy_egui::EguiContext, With<PrimaryEguiContext>>,
+) {
+    let (mut kb, mut ptr) = (false, false);
+    // Fold over every primary context (normally exactly one). If any wants the
+    // input, the scene shouldn't get it.
+    for mut ctx in q.iter_mut() {
+        let c = ctx.get_mut();
+        kb |= c.wants_keyboard_input();
+        ptr |= c.wants_pointer_input();
+    }
+    // Change-guarded so the resource isn't dirtied every frame.
+    if focus.wants_keyboard != kb || focus.wants_pointer != ptr {
+        focus.wants_keyboard = kb;
+        focus.wants_pointer = ptr;
+    }
+}
+
 /// Sub-plugin auto-added by `WorkbenchPlugin`. Wires the egui host,
 /// the panel-rect tracking, the `Camera::viewport` sync, and the
 /// invariant sentinels.
@@ -593,6 +624,7 @@ impl Plugin for WorkbenchViewportPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PanelRects>()
             .init_resource::<ViewportPlaceholder>()
+            .init_resource::<lunco_core::EguiFocus>()
             .add_systems(Startup, ensure_egui_host)
             // (Intentionally no per-frame clear of PanelRects: with the
             // current Camera::viewport architecture, keeping the last
@@ -615,6 +647,13 @@ impl Plugin for WorkbenchViewportPlugin {
                 PostUpdate,
                 egui_viewport_aware_picking
                     .after(bevy_egui::EguiPostUpdateSet::ProcessOutput),
+            )
+            // Publish egui's keyboard/pointer capture into `EguiFocus` (same
+            // post-egui slot as the picking backend) so raw scene-input systems
+            // can gate on it. See `track_egui_focus`.
+            .add_systems(
+                PostUpdate,
+                track_egui_focus.after(bevy_egui::EguiPostUpdateSet::ProcessOutput),
             )
             .add_systems(
                 PostUpdate,

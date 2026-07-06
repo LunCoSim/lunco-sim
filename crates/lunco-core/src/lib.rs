@@ -338,6 +338,35 @@ impl Default for DragModeActive {
 #[derive(Resource, Default)]
 pub struct SpawnToolActive(pub bool);
 
+/// Whether egui is currently consuming pointer / keyboard input.
+///
+/// egui is a second, immediate-mode input world layered on top of Bevy: it
+/// reads its own copy of the winit events and never removes anything from
+/// Bevy's `ButtonInput`. So a key pressed while an egui text field is focused
+/// reaches BOTH egui and Bevy's `ButtonInput<KeyCode>` — and without this gate
+/// it would also drive the avatar (typing `w`/`a`/`s`/`d` in the Inspector or a
+/// REPL would move the vessel). Likewise a scroll/orbit over a panel would move
+/// the camera.
+///
+/// This resource relays egui's `wants_keyboard_input()` / `wants_pointer_input()`
+/// (from the primary egui context) into the ECS so scene-input systems can gate
+/// on it without depending on `bevy_egui`. Populated once per frame by
+/// `lunco-workbench` (the crate that owns the `PrimaryEguiContext`); on a
+/// headless server nothing writes it, so both flags stay `false` and every gate
+/// is a no-op.
+///
+/// Discrete scene *picks* (click-to-select / click-to-spawn) do NOT need this —
+/// they flow through `bevy_picking`, where egui occlusion is already handled by
+/// the workbench's egui picking backend. This gate is for the *continuous / raw*
+/// input systems: keyboard driving, camera orbit, scroll-zoom.
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct EguiFocus {
+    /// A focused egui widget (text field, drag-value, …) wants the keyboard.
+    pub wants_keyboard: bool,
+    /// The pointer is over an egui widget that wants pointer input.
+    pub wants_pointer: bool,
+}
+
 /// Per-entity marker: this entity is currently being dragged by the editor
 /// transform gizmo.
 ///
