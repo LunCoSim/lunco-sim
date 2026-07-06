@@ -142,6 +142,58 @@ fn cursor_ray(
     Some((ray.origin.as_dvec3(), ray.direction))
 }
 
+/// Query alias: every streamed DEM terrain's height oracle + its frame.
+pub(crate) type TerrainOracles<'w, 's> =
+    Query<'w, 's, (&'static lunco_terrain_surface::DemHeightField, &'static GlobalTransform)>;
+
+/// Nearest ANALYTIC-terrain hit along a world ray, across all DEM terrains —
+/// `(distance, world point)`. This, not a physics raycast, is the ground truth
+/// for placement UI: the terrain's colliders exist only in a small ring around
+/// dynamic bodies and are band-limited below the drawn micro-relief, so a
+/// collider cast over open ground either misses (stale ghost) or reports a
+/// surface above the drawn one — the ghost visibly flew over the ground.
+pub(crate) fn terrain_ray_hit(
+    terrains: &TerrainOracles,
+    origin: DVec3,
+    dir: DVec3,
+    max_t: f64,
+) -> Option<(f64, DVec3)> {
+    let mut best: Option<(f64, DVec3)> = None;
+    for (hf, t_gt) in terrains.iter() {
+        let inv = t_gt.affine().inverse();
+        let lo = inv.transform_point3(origin.as_vec3()).as_dvec3();
+        let ld = inv.transform_vector3(dir.as_vec3()).as_dvec3().normalize();
+        let Some(hit_local) = lunco_terrain_surface::raycast_surface(&hf.0, lo, ld, max_t) else {
+            continue;
+        };
+        let hit_world = t_gt.affine().transform_point3(hit_local.as_vec3()).as_dvec3();
+        let t = (hit_world - origin).length();
+        if best.map(|(bt, _)| t < bt).unwrap_or(true) {
+            best = Some((t, hit_world));
+        }
+    }
+    best
+}
+
+/// Terrain-surface height (world Y) under a world `(x, z)`, from the oracle of
+/// whichever DEM terrain contains the point. Used for footprint corner probes —
+/// exact where the collider ring is band-limited or absent.
+pub(crate) fn terrain_height_at(terrains: &TerrainOracles, world: DVec3) -> Option<f64> {
+    use lunco_terrain_surface::HeightSource;
+    for (hf, t_gt) in terrains.iter() {
+        let inv = t_gt.affine().inverse();
+        let l = inv.transform_point3(world.as_vec3()).as_dvec3();
+        let half = hf.0.half_extent() as f64;
+        if l.x.abs() > half || l.z.abs() > half {
+            continue;
+        }
+        let h = hf.0.height_at(l.x, l.z);
+        let w = t_gt.affine().transform_point3(bevy::math::Vec3::new(l.x as f32, h as f32, l.z as f32));
+        return Some(w.y as f64);
+    }
+    None
+}
+
 /// Updates the spawn ghost position to follow the mouse raycast hit.
 pub fn update_spawn_ghost(
     mut commands: Commands,
@@ -158,6 +210,7 @@ pub fn update_spawn_ghost(
     q_ghost: Query<(Entity, &Transform), With<SpawnGhost>>,
     grids: Query<Entity, With<Grid>>,
     raycaster: avian3d::prelude::SpatialQuery,
+    terrains: TerrainOracles,
 ) {
     let SpawnState::Selecting { entry_id } = spawn_state.as_ref() else {
         for (ghost, _) in q_ghost.iter() {
@@ -189,10 +242,27 @@ pub fn update_spawn_ghost(
     let Some(cursor) = window.cursor_position() else { return };
     let Some((origin, direction)) = cursor_ray(camera, cam_tf, cursor) else { return };
 
-    let hit = raycaster.cast_ray(origin, direction, 1000.0, false, &avian3d::prelude::SpatialQueryFilter::default());
+    // Physics colliders (props, structures, rocks) AND the analytic terrain
+    // surface, nearest wins. The terrain must come from the oracle, not the
+    // collider ring — see `terrain_ray_hit`.
+    let phys = raycaster
+        .cast_ray(origin, direction, 1000.0, false, &avian3d::prelude::SpatialQueryFilter::default())
+        .map(|h| h.distance);
+    let terr = terrain_ray_hit(&terrains, origin, direction.as_dvec3(), 1000.0);
+    let (hit, terrain_primary) = match (phys, terr) {
+        (Some(pt), Some((tt, tp))) => {
+            if tt <= pt {
+                (Some(tp), true)
+            } else {
+                (Some(origin + direction.as_dvec3() * pt), false)
+            }
+        }
+        (Some(pt), None) => (Some(origin + direction.as_dvec3() * pt), false),
+        (None, Some((_, tp))) => (Some(tp), true),
+        (None, None) => (None, false),
+    };
 
-    if let Some(hit_data) = hit {
-        let point = origin + direction.as_dvec3() * hit_data.distance;
+    if let Some(point) = hit {
 
         // --- Terrain-conforming placement (footprint derived in real time) ---
         let half_w = fp.half_w;
@@ -215,23 +285,32 @@ pub fn update_spawn_ghost(
             point_d - forward_xz * half_l + right_xz * half_w,
         ];
 
+        // Corner heights: over open terrain the oracle is exact where the
+        // collider ring is band-limited or absent; over a structure the physics
+        // down-ray is what the footprint should rest on. Order by what the
+        // primary hit was, falling through to the other, then to the hit plane.
         let mut hit_points = Vec::new();
         for corner in corners {
-            let ray_origin = corner + DVec3::Y * 50.0;
-            let ray_dir = Dir3::NEG_Y;
-            let hit = raycaster.cast_ray(
-                ray_origin,
-                ray_dir,
-                100.0,
-                false,
-                &avian3d::prelude::SpatialQueryFilter::default(),
-            );
-            if let Some(hit_data) = hit {
-                let hit_point = ray_origin + ray_dir.as_dvec3() * hit_data.distance;
-                hit_points.push(hit_point);
+            let phys_y = || {
+                let ray_origin = corner + DVec3::Y * 50.0;
+                raycaster
+                    .cast_ray(
+                        ray_origin,
+                        Dir3::NEG_Y,
+                        100.0,
+                        false,
+                        &avian3d::prelude::SpatialQueryFilter::default(),
+                    )
+                    .map(|h| (ray_origin + DVec3::NEG_Y * h.distance).y)
+            };
+            let terr_y = || terrain_height_at(&terrains, corner);
+            let y = if terrain_primary {
+                terr_y().or_else(phys_y)
             } else {
-                hit_points.push(DVec3::new(corner.x, point_d.y, corner.z));
+                phys_y().or_else(terr_y)
             }
+            .unwrap_or(point_d.y);
+            hit_points.push(DVec3::new(corner.x, y, corner.z));
         }
 
         let fl = hit_points[0];
@@ -358,6 +437,7 @@ pub fn on_scene_click_spawn(
     q_ghost: Query<Entity, With<SpawnGhost>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     raycaster: avian3d::prelude::SpatialQuery,
+    terrains: TerrainOracles,
 ) {
     use bevy::picking::pointer::PointerButton;
     // Stop the click bubbling to ancestors (global observer re-fires up the tree).
@@ -407,24 +487,25 @@ pub fn on_scene_click_spawn(
         point_d - forward_xz * half_l + right_xz * half_w, // RR
     ];
 
-    // 4. Raycast at corners to find terrain heights
+    // 4. Corner heights for the slope fit: physics down-ray (structures, and
+    // ring-covered ground), falling back to the terrain oracle — the collider
+    // ring only exists near dynamic bodies, so over open terrain the down-ray
+    // used to miss and flatten the fit to the click height.
     let mut hit_points = Vec::new();
     for corner in corners {
         let ray_origin = corner + DVec3::Y * 50.0;
-        let ray_dir = Dir3::NEG_Y;
-        let hit = raycaster.cast_ray(
-            ray_origin,
-            ray_dir,
-            100.0,
-            false,
-            &avian3d::prelude::SpatialQueryFilter::default(),
-        );
-        if let Some(hit_data) = hit {
-            let hit_point = ray_origin + ray_dir.as_dvec3() * hit_data.distance;
-            hit_points.push(hit_point);
-        } else {
-            hit_points.push(DVec3::new(corner.x, point_d.y, corner.z));
-        }
+        let y = raycaster
+            .cast_ray(
+                ray_origin,
+                Dir3::NEG_Y,
+                100.0,
+                false,
+                &avian3d::prelude::SpatialQueryFilter::default(),
+            )
+            .map(|h| (ray_origin + DVec3::NEG_Y * h.distance).y)
+            .or_else(|| terrain_height_at(&terrains, corner))
+            .unwrap_or(point_d.y);
+        hit_points.push(DVec3::new(corner.x, y, corner.z));
     }
 
     // 5. Compute average height and fit normal

@@ -142,8 +142,11 @@ fn action_color(tool: TerrainTool, alt: bool, ctrl: bool) -> Color {
 }
 
 /// Follow the cursor with a translucent brush-footprint disc while armed. Casts
-/// a ray through the active window camera onto the terrain collider (same
-/// approach as the spawn ghost) and scales the unit disc to `radius`.
+/// a ray through the active window camera onto the terrain **height oracle**
+/// (same approach as the spawn ghost — the collider ring only exists near
+/// dynamic bodies, so a collider cast floats or misses over open ground),
+/// falling back to physics for non-DEM scenes, and scales the unit disc to
+/// `radius`.
 pub fn update_terrain_brush_ghost(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -155,6 +158,7 @@ pub fn update_terrain_brush_ghost(
     q_ghost: Query<(Entity, &MeshMaterial3d<StandardMaterial>), With<TerrainBrushGhost>>,
     grids: Query<Entity, With<Grid>>,
     raycaster: avian3d::prelude::SpatialQuery,
+    terrains: crate::spawn::TerrainOracles,
 ) {
     if !state.armed() {
         for (ghost, _) in q_ghost.iter() {
@@ -179,16 +183,25 @@ pub fn update_terrain_brush_ghost(
     let origin = ray.origin.as_dvec3();
     let dir = ray.direction;
 
-    let Some(hit) = raycaster.cast_ray(
-        origin,
-        dir,
-        10_000.0,
-        false,
-        &avian3d::prelude::SpatialQueryFilter::default(),
-    ) else {
+    // The brush edits the terrain, so the oracle hit IS the target surface;
+    // physics is only the fallback for scenes without a DEM terrain.
+    let Some(point) = crate::spawn::terrain_ray_hit(&terrains, origin, dir.as_dvec3(), 10_000.0)
+        .map(|(_, p)| p)
+        .or_else(|| {
+            raycaster
+                .cast_ray(
+                    origin,
+                    dir,
+                    10_000.0,
+                    false,
+                    &avian3d::prelude::SpatialQueryFilter::default(),
+                )
+                .map(|h| origin + dir.as_dvec3() * h.distance)
+        })
+        .map(|p| p.as_vec3())
+    else {
         return;
     };
-    let point = (origin + dir.as_dvec3() * hit.distance).as_vec3();
 
     let alt = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
     let ctrl = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);

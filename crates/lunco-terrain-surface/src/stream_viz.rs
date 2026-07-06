@@ -660,21 +660,64 @@ pub fn update_lod_tiles(
         }
         let wanted: HashSet<QuadCoord> = sel.iter().map(|s| s.coord).collect();
 
-        // Intelligent baking: COARSE tiles first (a depth-N tile costs the same
-        // 49² samples as a leaf but covers 4^(maxdepth−N)× the area), so the whole
-        // view is covered by a low-res carpet within the first few frames instead
-        // of staying BLACK while the fine near-field bakes; then nearest-first
-        // within each depth refines in from under the camera outward. The reveal
-        // morph settles children onto the parent lattice, so the coarse→fine
-        // handoff never pops.
+        // Intelligent baking, two phases:
+        //
+        // 1. CARPET — the selection's coarsest tiles first (a depth-N tile costs
+        //    the same 49² samples as a leaf but covers 4^(maxdepth−N)× the
+        //    area), so the whole view is covered by a low-res carpet within the
+        //    first few frames instead of staying BLACK.
+        // 2. BENEFIT — everything finer ordered by distance measured in units
+        //    of the tile's own size (≈ inverse screen-space error): the leaf at
+        //    the camera's feet outranks a mid-depth ring 800 m out. Strict
+        //    depth-major order here was wrong on open: every mid-depth tile
+        //    across the whole 1.5 km view baked before the leaves under the
+        //    camera — the user watched FAR detail land while the near ground
+        //    lagged coarse.
+        //
+        // The reveal morph settles children onto the parent lattice, so the
+        // out-of-depth-order coarse→fine handoff never pops.
+        const CARPET_DEPTH: u8 = 2;
         let dist2 = |s: &Selected| -> f64 {
             (s.region.center[0] - focus[0]).powi(2) + (s.region.center[1] - focus[1]).powi(2)
         };
+        // Camera heading in the terrain's local XZ, for view-direction weighting:
+        // of two tiles with equal screen-space benefit, the one AHEAD of the
+        // camera bakes first — the one behind isn't on screen. `None` when
+        // looking straight down (no meaningful heading; weight disabled).
+        let heading = {
+            let f = t_gt.affine().inverse().transform_vector3(cam.forward().as_vec3());
+            let v = bevy::math::DVec2::new(f.x as f64, f.z as f64);
+            (v.length() > 1e-3).then(|| v.normalize())
+        };
+        let benefit = |s: &Selected| -> f64 {
+            let size = s.region.half * 2.0;
+            let base = dist2(s) / (size * size).max(1e-9);
+            let Some(hd) = heading else { return base };
+            let to = bevy::math::DVec2::new(
+                s.region.center[0] - focus[0],
+                s.region.center[1] - focus[1],
+            );
+            let d = to.length();
+            if d < 1e-6 {
+                return base;
+            }
+            // cos 1 (dead ahead) → ×1 … cos −1 (behind) → ×4.
+            base * (2.5 - 1.5 * (to / d).dot(hd))
+        };
         sel.sort_by(|a, b| {
-            a.coord
-                .depth
-                .cmp(&b.coord.depth)
-                .then(dist2(a).partial_cmp(&dist2(b)).unwrap_or(std::cmp::Ordering::Equal))
+            let (ca, cb) = (a.coord.depth <= CARPET_DEPTH, b.coord.depth <= CARPET_DEPTH);
+            match (ca, cb) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                (true, true) => a
+                    .coord
+                    .depth
+                    .cmp(&b.coord.depth)
+                    .then(dist2(a).partial_cmp(&dist2(b)).unwrap_or(std::cmp::Ordering::Equal)),
+                (false, false) => {
+                    benefit(a).partial_cmp(&benefit(b)).unwrap_or(std::cmp::Ordering::Equal)
+                }
+            }
         });
 
         // A coord is *fresh* (no work needed) when it has a resident tile OR an

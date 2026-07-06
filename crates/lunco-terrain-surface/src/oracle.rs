@@ -180,6 +180,69 @@ impl HeightSource for SurfaceOracle {
     }
 }
 
+/// First intersection of a ray with the composed surface, in TERRAIN-LOCAL
+/// space (heights along +Y over local `(x, z)`); `None` when the ray never
+/// crosses the surface inside the DEM footprint within `max_t` metres.
+///
+/// Adaptive march (step grows with distance, capped) with a bisection refine on
+/// the bracketing interval, so cursor-scale queries cost a few hundred oracle
+/// samples worst case. This is the ground-truth pick for UI ghosts: physics
+/// colliders only exist in the ring near dynamic bodies and are band-limited
+/// below the drawn micro-relief, so a collider raycast either misses open
+/// terrain entirely or reports a surface ABOVE the drawn one — the "cursor
+/// flying over the ground" artifact.
+pub fn raycast_surface(
+    oracle: &SurfaceOracle,
+    origin: bevy::math::DVec3,
+    dir: bevy::math::DVec3,
+    max_t: f64,
+) -> Option<bevy::math::DVec3> {
+    let half = oracle.half_extent() as f64;
+    let inside = |p: bevy::math::DVec3| p.x.abs() <= half && p.z.abs() <= half;
+    let above = |p: bevy::math::DVec3| p.y >= oracle.height_at(p.x, p.z);
+
+    let mut t = 0.0_f64;
+    // `Some(t)` = the last sample inside the footprint AND above the surface —
+    // the near end of a potential bracket. Reset when the ray leaves the
+    // footprint so a re-entry can't bracket across the gap.
+    let mut last_above: Option<f64> = None;
+    while t <= max_t {
+        let p = origin + dir * t;
+        if inside(p) {
+            if above(p) {
+                last_above = Some(t);
+            } else if let Some(t0) = last_above {
+                // Crossing bracketed in [t0, t] — bisect to centimetre scale.
+                let (mut lo, mut hi) = (t0, t);
+                for _ in 0..24 {
+                    let mid = 0.5 * (lo + hi);
+                    if above(origin + dir * mid) {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                let th = 0.5 * (lo + hi);
+                let hit = origin + dir * th;
+                return Some(bevy::math::DVec3::new(
+                    hit.x,
+                    oracle.height_at(hit.x, hit.z),
+                    hit.z,
+                ));
+            } else {
+                // Started (or re-entered) below the surface — no bracket.
+                return None;
+            }
+        } else {
+            last_above = None;
+        }
+        // Fine near the camera (sub-metre relief matters at cursor range),
+        // coarsening with distance; capped so distant rims aren't skipped.
+        t += (0.25 + t * 0.02).min(6.0);
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

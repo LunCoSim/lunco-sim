@@ -62,7 +62,7 @@ pub use dem::{decode_geotiff_f64, height_grid_from_geotiff, DemError, DemMetadat
 pub use lunco_terrain_core::{
     AnalyticHeightSource, HeightSource, QuadCoord, Quadtree, Selected, Square, TileCoord, TileGrid,
 };
-pub use oracle::{HeightContribution, SurfaceOracle};
+pub use oracle::{raycast_surface, HeightContribution, SurfaceOracle};
 pub use plugin::{TerrainSurfaceConfig, TerrainSurfacePlugin};
 pub use derived_layers::DerivedLayersBuilt;
 pub use georef::TerrainGeoref;
