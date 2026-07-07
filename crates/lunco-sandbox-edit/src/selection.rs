@@ -207,6 +207,7 @@ pub fn on_scene_click_select(
     mut click: On<Pointer<Click>>,
     spawn_state: Res<SpawnState>,
     keys: Res<ButtonInput<KeyCode>>,
+    egui_focus: Res<lunco_core::EguiFocus>,
     q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
     q_parents: Query<&ChildOf>,
     q_selected_old: Query<Entity, With<Selected>>,
@@ -223,8 +224,10 @@ pub fn on_scene_click_select(
     if click.button != PointerButton::Primary {
         return;
     }
-    // Chrome guard — see the doc comment: egui's pick has no world position.
-    if click.hit.position.is_none() {
+    // Shared egui-vs-scene guard (viewport-rect aware) — the same robust check
+    // possession and placement use. Empty/chrome clicks resolve to no
+    // `SelectableRoot` below, so they select nothing regardless.
+    if egui_focus.wants_pointer {
         return;
     }
     // Spawn tool armed: clicks place objects, not select.

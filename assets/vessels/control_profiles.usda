@@ -2,96 +2,93 @@
 (
     doc = """Shared vessel control profiles (stage 2 of control: intent -> port).
 
-    A vessel `subLayers` this file and `inherits` a class to receive its
-    `Controls` scope. The entity translator walks `<Vessel>/Controls/<intent>`
-    (child prim NAME = intent, `string lunco:port` + `double lunco:scale`) and
-    builds a `lunco_core::ControlBinding`. Authoring the profile ONCE here keeps
-    every rover/lander DRY; a vessel overrides a single intent by redefining that
-    one child prim locally. The key->intent half is the shared leafwing
-    `UserIntent` map, not authored per vessel."""
+    A vessel adds a child `def "Controls" (references = @control_profiles.usda@</RoverControls>)`
+    to receive this intent->port scope. The entity translator walks
+    `<Vessel>/Controls/<intent>` (child prim NAME = intent, `string lunco:port` +
+    `double lunco:scale`) and builds a `lunco_core::ControlBinding`. Delivered as a
+    child `references` arc (NOT root subLayers + inherits) so it composes through a
+    spawn/reference exactly like a wheel component does — the arc that empirically
+    survives runtime instantiation. Authoring the profile ONCE here keeps every
+    rover/lander DRY; a vessel overrides a single intent by redefining that one
+    child prim locally. The key->intent half is the shared leafwing `UserIntent`
+    map, not authored per vessel."""
 )
 
 # ── Wheeled rover: forward/back -> throttle, left/right -> steer, action -> brake.
-class "_RoverControl"
+def "RoverControls"
 {
-    def "Controls"
+    def "forward"
     {
-        def "forward"
-        {
-            uniform string lunco:port = "throttle"
-            uniform double lunco:scale = 1
-        }
-        def "backward"
-        {
-            uniform string lunco:port = "throttle"
-            uniform double lunco:scale = -1
-        }
-        def "left"
-        {
-            uniform string lunco:port = "steer"
-            uniform double lunco:scale = -1
-        }
-        def "right"
-        {
-            uniform string lunco:port = "steer"
-            uniform double lunco:scale = 1
-        }
-        def "action"
-        {
-            uniform string lunco:port = "brake"
-            uniform double lunco:scale = 1
-        }
+        uniform string lunco:port = "throttle"
+        uniform double lunco:scale = 1
+    }
+    def "backward"
+    {
+        uniform string lunco:port = "throttle"
+        uniform double lunco:scale = -1
+    }
+    def "left"
+    {
+        uniform string lunco:port = "steer"
+        uniform double lunco:scale = -1
+    }
+    def "right"
+    {
+        uniform string lunco:port = "steer"
+        uniform double lunco:scale = 1
+    }
+    def "action"
+    {
+        uniform string lunco:port = "brake"
+        uniform double lunco:scale = 1
     }
 }
 
 # ── Cosim-flown lander: forward/back -> pitch, left/right -> roll, yaw_left/right
 #    (Q/E) -> yaw, action -> throttle. Ports match Modelica `SimComponent.inputs`.
 #    No `manual` arming port — manual/automatic is a separate flight-mode layer.
-class "_LanderControl"
+def "LanderControls"
 {
-    def "Controls"
+    def "forward"
     {
-        def "forward"
-        {
-            uniform string lunco:port = "pitch"
-            uniform double lunco:scale = -1
-        }
-        def "backward"
-        {
-            uniform string lunco:port = "pitch"
-            uniform double lunco:scale = 1
-        }
-        def "left"
-        {
-            uniform string lunco:port = "roll"
-            uniform double lunco:scale = 1
-        }
-        def "right"
-        {
-            uniform string lunco:port = "roll"
-            uniform double lunco:scale = -1
-        }
-        def "yaw_left"
-        {
-            uniform string lunco:port = "yaw"
-            uniform double lunco:scale = 1
-        }
-        def "yaw_right"
-        {
-            uniform string lunco:port = "yaw"
-            uniform double lunco:scale = -1
-        }
-        def "action"
-        {
-            uniform string lunco:port = "external_throttle"
-            uniform double lunco:scale = 1
-        }
-        # release/detach (G) → the dock-release actuator port; on the rising edge it
-        # detaches the fixed joint attaching this vessel to another body.
-        def "release"
-        {
-            uniform string lunco:port = "release"
-            uniform double lunco:scale = 1
-        }
+        uniform string lunco:port = "pitch"
+        uniform double lunco:scale = -1
+    }
+    def "backward"
+    {
+        uniform string lunco:port = "pitch"
+        uniform double lunco:scale = 1
+    }
+    def "left"
+    {
+        uniform string lunco:port = "roll"
+        uniform double lunco:scale = 1
+    }
+    def "right"
+    {
+        uniform string lunco:port = "roll"
+        uniform double lunco:scale = -1
+    }
+    def "yaw_left"
+    {
+        uniform string lunco:port = "yaw"
+        uniform double lunco:scale = 1
+    }
+    def "yaw_right"
+    {
+        uniform string lunco:port = "yaw"
+        uniform double lunco:scale = -1
+    }
+    def "action"
+    {
+        uniform string lunco:port = "external_throttle"
+        uniform double lunco:scale = 1
+    }
+    # release/detach (G) → the dock-release actuator port; on the rising edge it
+    # detaches the fixed joint attaching this vessel to another body.
+    def "release"
+    {
+        uniform string lunco:port = "release"
+        uniform double lunco:scale = 1
     }
 }

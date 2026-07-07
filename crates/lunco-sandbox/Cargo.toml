@@ -170,7 +170,7 @@ mimalloc = "0.1"
 # player with no wire: `--no-default-features --features ui,celestial,lunco-api`.
 # The wasm build sets its own feature set (`--no-default-features`), so this
 # default does not affect it.
-default = ["ui", "celestial", "lunco-api", "lunco-api/transport-http", "lunco-api/render", "networking"]
+default = ["ui", "celestial", "lunco-api", "transport-http", "lunco-api/render", "networking"]
 # Windowed GUI: the winit windowing backend + render-effect features + every
 # UI crate (egui workbench, material editors, doc/theme/ui). Off for a headless
 # server. The render ASSET-STORE features (bevy_pbr/mesh/light/window) stay in
@@ -213,7 +213,7 @@ ui = [
 # `--no-default-features --features server`. Skips `celestial` (bundled Earth
 # texture + ephemeris, ~10s of MB) — the server only needs `GravityPlugin`,
 # always compiled.
-server = ["lunco-api", "lunco-api/transport-http", "networking"]
+server = ["lunco-api", "transport-http", "networking"]
 # `celestial` pulls in lunco-celestial's bundled Earth texture + Artemis-II
 # ephemeris (10s of MB). Off for the wasm sandbox build — it only needs
 # `GravityPlugin`, which is always compiled.
@@ -224,6 +224,11 @@ sandbox = []
 # the wasm build (`build_web.sh --features lunco-api`) gets the
 # `window.lunco_api` JS bridge automatically via `cfg(target_arch="wasm32")`.
 lunco-api = ["dep:lunco-api", "lunco-modelica/lunco-api"]
+# Native HTTP API transport (axum/TcpListener) — also the gate for the in-app
+# rhai REPL panel, which needs `lunco_api::ApiBridge` (present under this feature
+# on native, and always on wasm). In `default` + `server`; the wasm build gets
+# the bridge automatically via `cfg(target_arch="wasm32")`.
+transport-http = ["lunco-api/transport-http"]
 # Multiplayer over WebTransport (lightyear). Pulls in the real networking
 # adapter; the wire substrate (lunco-api) is required.
 networking = ["dep:lunco-networking", "lunco-networking/networking", "lunco-api", "dep:lunco-twin-journal"]
@@ -250,6 +255,8 @@ tracy = ["bevy/trace_tracy"]
 # panic hooks, and RNG (std::time is unavailable on wasm32).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { workspace = true }
+# Drive the rhai REPL panel's async bridge call on wasm (no threads → `spawn_local`).
+wasm-bindgen-futures = { workspace = true }
 console_error_panic_hook = { workspace = true }
 # URL-parameter boot path (`?workspace=…&open=…`) reads `window.location.search`.
 web-sys = { workspace = true, features = ["Window", "Location"] }

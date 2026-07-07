@@ -57,6 +57,8 @@ members = [
     "crates/lunco-experiments",
     "crates/lunco-render",
     "crates/lunco-obstacle-field",
+    "crates/lunco-worker-transport",
+    "crates/lunco-terrain-bake",
     "crates/lunco-terrain-surface",
     "crates/lunco-tutorial"
 ]

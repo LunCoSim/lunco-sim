@@ -5,7 +5,10 @@
 fn main() -> lunco_sandbox::AppExit {
     // `sandbox rhai [...]` is a client mode: talk to an already-running instance
     // over its `--api` port instead of opening a window. Falls through to the GUI
-    // for a normal launch.
+    // for a normal launch. Native-only — `rhai_repl` uses raw `std::net`, so the
+    // module is `#[cfg(not(target_family = "wasm"))]`; gate the call to match, or
+    // the wasm sandbox bin fails to compile (E0433).
+    #[cfg(not(target_family = "wasm"))]
     if lunco_sandbox::rhai_repl::run_if_requested() {
         return lunco_sandbox::AppExit::Success;
     }

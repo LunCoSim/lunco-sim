@@ -3,10 +3,6 @@
     defaultPrim = "SixWheelIndependent"
     upAxis = "Y"
     metersPerUnit = 1
-    # Shared control-profile library (see skid_rover.usda) — brings `_RoverControl`.
-    subLayers = [
-        @../control_profiles.usda@
-    ]
 )
 
 # Six-wheel rover with INDEPENDENT per-wheel drive — the full G4 + G4b stack:
@@ -23,7 +19,6 @@
 
 def Xform "SixWheelIndependent" (
     kind = "component"
-    inherits = </_RoverControl>
     prepend apiSchemas = [
         "PhysicsRigidBodyAPI",
         "PhysicsMassAPI",
@@ -37,6 +32,14 @@ def Xform "SixWheelIndependent" (
     float physics:angularDamping = 2.0
     float3 physics:diagonalInertia = (2400.0, 3000.0, 1200.0)
     float3 physics:centerOfMass = (0.0, -0.1, 0.0)
+
+    # Intent->port control (stage 2): shared rover profile as a child `references`
+    # arc so it composes through a spawn/reference like the wheels.
+    def "Controls" (
+        prepend references = @../control_profiles.usda@</RoverControls>
+    )
+    {
+    }
 
     # G4 — six custom actuator ports (one per wheel).
     string lunco:drivePorts = "drive_w0 drive_w1 drive_w2 drive_w3 drive_w4 drive_w5"

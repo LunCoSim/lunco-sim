@@ -78,24 +78,27 @@ impl Default for MouseSensitivity {
 
 /// Tracks cumulative mouse scroll delta for zoom control.
 ///
-/// This is the input bridge between egui UI systems and camera zoom logic.
-/// The egui system in `lunco-sandbox` adds to `delta`; camera systems consume it.
-#[derive(Resource, Default)]
-pub struct CameraScroll {
+/// Per-avatar mouse-wheel zoom accumulator. Fed each frame by
+/// [`collect_camera_zoom`] from the `UserIntent::Zoom` axis (gated on
+/// `EguiFocus.wants_pointer` so scrolling over a panel doesn't zoom the scene);
+/// consumed + reset by whichever camera behavior is active. Lives on the avatar
+/// entity — zoom is per-camera state, not a global — replacing the old global
+/// `CameraScroll` resource and its two bespoke egui→resource bridges.
+#[derive(Component, Default)]
+pub struct CameraZoomInput {
+    /// Accumulated scroll delta since the last camera system consumed it.
     pub delta: f32,
 }
 
-/// Camera scroll sensitivity in meters per scroll unit.
-#[derive(Resource)]
-pub struct CameraScrollSensitivity {
-    pub value: f32,
-}
-
-impl Default for CameraScrollSensitivity {
-    fn default() -> Self {
-        Self { value: 0.1 }
-    }
-}
+/// Scroll→zoom sensitivity (unitless; feeds the exponential in
+/// [`apply_scroll_zoom`]).
+///
+/// ~50× the old `CameraScrollSensitivity` default (0.1): that value was tuned for
+/// the egui bridge's **pixel** scroll deltas (~50 px/notch), but the `Zoom` intent
+/// now comes from leafwing `MouseScrollAxis::Y` in **line** units (~1.0/notch), so
+/// the same feel needs a proportionally larger constant. `5.0` ≈ the old ~5%
+/// zoom-per-notch.
+const ZOOM_SENSITIVITY: f32 = 5.0;
 
 /// Global default values for camera behavior parameters.
 ///
@@ -142,6 +145,7 @@ impl Default for CameraDefaults {
 /// the natural "swing-around" feel of a proper spring arm camera.
 #[derive(Component, Reflect, Clone, Debug)]
 #[reflect(Component)]
+#[require(CameraZoomInput)]
 pub struct SpringArmCamera {
     pub target: Entity,
     pub distance: f64,
@@ -166,6 +170,7 @@ pub struct SpringArmCamera {
 /// This keeps stars stationary while the planet rotates beneath you.
 #[derive(Component, Reflect, Clone, Debug)]
 #[reflect(Component)]
+#[require(CameraZoomInput)]
 pub struct OrbitCamera {
     pub target: Entity,
     pub distance: f64,
@@ -427,9 +432,7 @@ fn enforce_ownership(
 
 impl Plugin for LunCoAvatarPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<CameraScroll>()
-           .init_resource::<CameraScrollSensitivity>()
-           .init_resource::<MouseSensitivity>()
+        app.init_resource::<MouseSensitivity>()
            .init_resource::<CameraDefaults>()
            .init_resource::<SurfaceModeThreshold>();
         app.add_plugins(InputManagerPlugin::<UserIntent>::default());
@@ -455,6 +458,11 @@ impl Plugin for LunCoAvatarPlugin {
         // a host that inserts its own (sandbox) keeps that value.
         app.init_resource::<lunco_core::DragModeActive>();
         app.init_resource::<lunco_core::SpawnToolActive>();
+        // Populated by `lunco-workbench` when egui is present; guaranteed here so
+        // the keyboard gate (`scene_keyboard_active`) has a resource to read on
+        // binaries that use the avatar without the workbench (headless server) —
+        // there it stays default `false` and the gate is always open.
+        app.init_resource::<lunco_core::EguiFocus>();
         app.add_observer(avatar_raycast_possession);
         // The local avatar is a controllable like any vessel: stamp its FSW command
         // surface + control binding so the shared `drive_from_bindings` path moves it.
@@ -529,15 +537,31 @@ impl Plugin for LunCoAvatarPlugin {
 
         app.add_systems(Update, (
             avatar_init_system,
-            capture_avatar_intent,
-            avatar_behavior_input_system,
-            avatar_escape_possession,
-            avatar_global_hotkeys,
             surface_mode_transition_system,
             enforce_ownership,
             sync_profile,
             tick_notifications,
+            // Mouse-wheel → per-avatar zoom accumulator, sourced from the `Zoom`
+            // intent and gated on egui pointer capture (replaces the old egui
+            // `CameraScroll` bridges). Runs before the camera systems consume it.
+            collect_camera_zoom,
         ));
+        // Mouse-look capture + apply. Pointer intents — gated internally on
+        // `EguiFocus.wants_pointer` (look_delta is zeroed while a panel holds the
+        // pointer), NOT on keyboard focus, so typing never freezes the camera.
+        app.add_systems(Update, (
+            capture_avatar_intent,
+            avatar_behavior_input_system,
+        ));
+        // Discrete KEYBOARD intents: `Cancel` (release possession/follow) and the
+        // `Pause` hotkey. Gated so a key typed into a focused egui field doesn't
+        // fire them. `Cancel`/Backspace is the two-step Esc pattern: while a field
+        // is focused egui consumes the key (guard suppresses the intent); once
+        // defocused, the next press acts.
+        app.add_systems(Update, (
+            avatar_escape_possession,
+            avatar_global_hotkeys,
+        ).run_if(scene_keyboard_active));
 
         // Possessed-rover name tags: an egui screen-space overlay (the scene has
         // only a `Camera3d`, so world-anchored `Text2d` never renders). Registered
@@ -585,6 +609,18 @@ impl Plugin for LunCoAvatarPlugin {
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub struct AvatarCameraSet;
 
+/// Run-condition: `true` when the 3D scene may consume raw keyboard input —
+/// i.e. egui is NOT holding the keyboard (no focused text field / drag-value).
+///
+/// [`lunco_core::EguiFocus`] is published each frame by `lunco-workbench` from
+/// the primary egui context's `wants_keyboard_input()`. On a headless binary
+/// nothing writes it, so it stays default (`false`) and the gate is always open.
+/// One-frame latency (the flag reflects the previous egui pass) is imperceptible
+/// for held input.
+fn scene_keyboard_active(focus: Res<lunco_core::EguiFocus>) -> bool {
+    !focus.wants_keyboard
+}
+
 // ─── Avatar Camera Factory ───────────────────────────────────────────────────
 
 /// Spawns a fully-configured avatar camera entity.
@@ -620,6 +656,7 @@ pub fn spawn_avatar_camera(
         IntentAnalogState::default(),
         ActionState::<lunco_core::UserIntent>::default(),
         lunco_controller::get_avatar_input_map(),
+        CameraZoomInput::default(),
         Name::new("Avatar Camera"),
         ChildOf(grid_entity),
     )).id()
@@ -753,6 +790,7 @@ fn migrate_avatar_to_target_grid(
 /// full orientation, offset behind and above it.
 #[derive(Component, Reflect, Clone, Debug)]
 #[reflect(Component)]
+#[require(CameraZoomInput)]
 pub struct ChaseCamera {
     pub target: Entity,
     pub distance: f64,
@@ -776,19 +814,18 @@ fn update_spring_arm_impl(
         &mut SpringArmCamera,
         &ChildOf,
         Option<&SurfaceRelativeMode>,
+        &mut CameraZoomInput,
     ), (With<Avatar>, Without<FrameBlend>)>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
     defaults: &CameraDefaults,
-    scroll_res: &mut CameraScroll,
-    sens: &CameraScrollSensitivity,
     keys: &ButtonInput<KeyCode>,
     spatial_query: &Option<avian3d::prelude::SpatialQuery>,
 ) {
     if keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight) { return; }
 
-    for (_avatar_ent, mut tf, mut cell, mut arm, child_of, surface_mode) in q_avatar.iter_mut() {
+    for (_avatar_ent, mut tf, mut cell, mut arm, child_of, surface_mode, mut zoom) in q_avatar.iter_mut() {
         // Skip follow while the target is being dragged by the editor gizmo
         // (marker set by sandbox-edit; never present on a headless server).
         if q_dragging.get(arm.target).is_ok() { continue; }
@@ -803,7 +840,7 @@ fn update_spring_arm_impl(
         // Multiplicative zoom using exponential scaling — same formula as
         // ChaseCamera/OrbitCamera so raw pixel scroll deltas stay well-scaled.
         // Scroll up (delta > 0) -> zoom in. Scroll down (delta < 0) -> zoom out.
-        apply_scroll_zoom(&mut arm.distance, &mut scroll_res.delta, sens.value, 5.0, 200.0);
+        apply_scroll_zoom(&mut arm.distance, &mut zoom.delta, ZOOM_SENSITIVITY, 5.0, 200.0);
 
         // Resolve rover heading in double-precision to eliminate quantization
         // jitter. The rover Transform is already render-frame-interpolated by
@@ -923,13 +960,12 @@ fn spring_arm_system(
         &mut SpringArmCamera,
         &ChildOf,
         Option<&SurfaceRelativeMode>,
+        &mut CameraZoomInput,
     ), (With<Avatar>, Without<FrameBlend>)>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
     defaults: Res<CameraDefaults>,
-    mut scroll_res: ResMut<CameraScroll>,
-    sens: Res<CameraScrollSensitivity>,
     keys: Res<ButtonInput<KeyCode>>,
     spatial_query: Option<avian3d::prelude::SpatialQuery>,
 ) {
@@ -941,8 +977,6 @@ fn spring_arm_system(
         q_grids,
         q_dragging,
         &defaults,
-        &mut scroll_res,
-        &sens,
         &keys,
         &spatial_query,
     );
@@ -957,13 +991,12 @@ fn spring_arm_paused_system(
         &mut SpringArmCamera,
         &ChildOf,
         Option<&SurfaceRelativeMode>,
+        &mut CameraZoomInput,
     ), (With<Avatar>, Without<FrameBlend>)>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
     defaults: Res<CameraDefaults>,
-    mut scroll_res: ResMut<CameraScroll>,
-    sens: Res<CameraScrollSensitivity>,
     keys: Res<ButtonInput<KeyCode>>,
     spatial_query: Option<avian3d::prelude::SpatialQuery>,
 ) {
@@ -975,8 +1008,6 @@ fn spring_arm_paused_system(
         q_grids,
         q_dragging,
         &defaults,
-        &mut scroll_res,
-        &sens,
         &keys,
         &spatial_query,
     );
@@ -988,20 +1019,18 @@ fn spring_arm_paused_system(
 /// and heading — the camera rotates with the vehicle in all axes.
 fn chase_camera_system(
     time: Res<Time>,
-    mut q_avatar: Query<(Entity, &mut Transform, &mut CellCoord, &mut ChaseCamera, &ChildOf), (With<Avatar>, Without<FrameBlend>)>,
+    mut q_avatar: Query<(Entity, &mut Transform, &mut CellCoord, &mut ChaseCamera, &ChildOf, &mut CameraZoomInput), (With<Avatar>, Without<FrameBlend>)>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
     defaults: Res<CameraDefaults>,
-    mut scroll_res: ResMut<CameraScroll>,
-    sens: Res<CameraScrollSensitivity>,
     keys: Res<ButtonInput<KeyCode>>,
 ) {
     if keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight) { return; }
 
     let dt = time.delta_secs();
 
-    for (_avatar_ent, mut tf, mut cell, mut chase, child_of) in q_avatar.iter_mut() {
+    for (_avatar_ent, mut tf, mut cell, mut chase, child_of, mut zoom) in q_avatar.iter_mut() {
         // Skip follow while the target is being dragged by the editor gizmo
         // (marker set by sandbox-edit; never present on a headless server).
         if q_dragging.get(chase.target).is_ok() { continue; }
@@ -1015,7 +1044,7 @@ fn chase_camera_system(
 
         // Multiplicative zoom using exponential scaling.
         // Scroll up (delta > 0) -> zoom in. Scroll down (delta < 0) -> zoom out.
-        apply_scroll_zoom(&mut chase.distance, &mut scroll_res.delta, sens.value, 5.0, 1.0e6);
+        apply_scroll_zoom(&mut chase.distance, &mut zoom.delta, ZOOM_SENSITIVITY, 5.0, 1.0e6);
 
         // Follow target's full 3D orientation (heading + pitch + roll).
         // Same formula as SpringArmCamera: target rotation * user offset.
@@ -1044,7 +1073,7 @@ fn chase_camera_system(
 /// The camera does NOT rotate with the target — stars stay still.
 fn orbit_system(
     time: Res<Time>,
-    mut q_avatar: Query<(Entity, &mut Transform, &mut CellCoord, &mut OrbitCamera, &ChildOf), (With<Avatar>, Without<FrameBlend>)>,
+    mut q_avatar: Query<(Entity, &mut Transform, &mut CellCoord, &mut OrbitCamera, &ChildOf, &mut CameraZoomInput), (With<Avatar>, Without<FrameBlend>)>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
@@ -1052,8 +1081,6 @@ fn orbit_system(
     q_sc: Query<&Spacecraft>,
     q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
     defaults: Res<CameraDefaults>,
-    mut scroll_res: ResMut<CameraScroll>,
-    sens: Res<CameraScrollSensitivity>,
     keys: Res<ButtonInput<KeyCode>>,
     q_children: Query<&Children>,
     mut commands: Commands,
@@ -1062,7 +1089,7 @@ fn orbit_system(
 
     let dt = time.delta_secs();
 
-    for (avatar_ent, mut tf, mut cell, mut orbit, child_of) in q_avatar.iter_mut() {
+    for (avatar_ent, mut tf, mut cell, mut orbit, child_of, mut zoom) in q_avatar.iter_mut() {
         // Skip follow while the target is being dragged by the editor gizmo
         // (marker set by sandbox-edit; never present on a headless server).
         if q_dragging.get(orbit.target).is_ok() { continue; }
@@ -1131,7 +1158,7 @@ fn orbit_system(
 
         // Multiplicative zoom: proportional to current distance using exponential scaling.
         // Scroll up (delta > 0) -> zoom in. Scroll down (delta < 0) -> zoom out.
-        apply_scroll_zoom(&mut orbit.distance, &mut scroll_res.delta, sens.value, min_dist, 1.0e11);
+        apply_scroll_zoom(&mut orbit.distance, &mut zoom.delta, ZOOM_SENSITIVITY, min_dist, 1.0e11);
 
         // Camera rotation from user yaw/pitch (ecliptic-locked).
         let rotation = Quat::from_euler(EulerRot::YXZ, orbit.yaw, orbit.pitch, 0.0);
@@ -1330,15 +1357,21 @@ fn apply_fly(
 fn capture_avatar_intent(
     mut q_avatar: Query<(Entity, &IntentState, &mut IntentAnalogState), With<Avatar>>,
     world: Option<Res<WorldTime>>,
+    egui_focus: Res<lunco_core::EguiFocus>,
     mut commands: Commands,
-    scroll_res: ResMut<CameraScroll>,
 ) {
-    let mut delta = Vec2::ZERO;
-    let mut mouse_moved = false;
+    // Mouse look is a POINTER intent: suppress it while egui holds the pointer so
+    // right-dragging over a panel doesn't orbit the scene. (Keyboard focus is
+    // irrelevant to look — that gate guards movement/Cancel elsewhere.)
+    let pointer_captured = egui_focus.wants_pointer;
 
     for (entity, intent_state, mut analog) in q_avatar.iter_mut() {
-        let d = intent_state.axis_pair(&UserIntent::Look);
-        if d.length_squared() > 0.00001 { delta = d * 10.0; mouse_moved = true; }
+        let mut delta = Vec2::ZERO;
+        let mut mouse_moved = false;
+        if !pointer_captured {
+            let d = intent_state.axis_pair(&UserIntent::Look);
+            if d.length_squared() > 0.00001 { delta = d * 10.0; mouse_moved = true; }
+        }
 
         analog.look_delta = delta;
         analog.timestamp = world.as_ref().map(|w| w.epoch_jd).unwrap_or_default();
@@ -1349,9 +1382,36 @@ fn capture_avatar_intent(
             a
         });
 
-        // Look/zoom activity also cancels an idle auto-action (movement does so in
-        // `apply_fly`).
-        if mouse_moved || scroll_res.delta.abs() > 0.001 {
+        // Look activity cancels an idle auto-action (movement does so in `apply_fly`,
+        // zoom in `collect_camera_zoom`).
+        if mouse_moved {
+            commands.entity(entity).remove::<lunco_core::ActiveAction>();
+        }
+    }
+}
+
+/// Mouse-wheel → per-avatar [`CameraZoomInput`], sourced from the `UserIntent::Zoom`
+/// axis and gated on egui pointer capture.
+///
+/// This is the single, unified zoom path: it replaces the two bespoke egui
+/// `CameraScroll` bridges (which read `raw_scroll_delta` gated on
+/// `wants_pointer_input()`). The `Zoom` axis is already in the shared
+/// `InputMap<UserIntent>` (`MouseScrollAxis::Y`), so wheel input flows through the
+/// same intent vocabulary as everything else; we accumulate it per-avatar for the
+/// active camera behavior to consume + reset. Zeroed while egui holds the pointer
+/// so scrolling a panel/scrollarea doesn't zoom the scene.
+fn collect_camera_zoom(
+    egui_focus: Res<lunco_core::EguiFocus>,
+    mut q_avatar: Query<(Entity, &IntentState, &mut CameraZoomInput), With<Avatar>>,
+    mut commands: Commands,
+) {
+    if egui_focus.wants_pointer {
+        return;
+    }
+    for (entity, intent_state, mut zoom) in q_avatar.iter_mut() {
+        let d = intent_state.value(&UserIntent::Zoom);
+        if d.abs() > f32::EPSILON {
+            zoom.delta += d;
             commands.entity(entity).remove::<lunco_core::ActiveAction>();
         }
     }
@@ -1490,6 +1550,7 @@ pub fn avatar_raycast_possession(
     mut click: On<bevy::picking::events::Pointer<bevy::picking::events::Click>>,
     keys: Res<ButtonInput<KeyCode>>,
     camera_q: Query<(&Camera, &GlobalTransform, Entity), With<Avatar>>,
+    egui_focus: Res<lunco_core::EguiFocus>,
     drag_mode_active: Res<lunco_core::DragModeActive>,
     spawn_tool_active: Res<lunco_core::SpawnToolActive>,
     mut commands: Commands,
@@ -1503,8 +1564,6 @@ pub fn avatar_raycast_possession(
     use bevy::picking::pointer::PointerButton;
     // Left button only.
     if click.button != PointerButton::Primary { return; }
-    // Chrome guard — egui's pick has no world position.
-    if click.hit.position.is_none() { return; }
     // Shift+click is reserved for entity selection / gizmo multi-select in
     // lunco-sandbox-edit (`on_scene_click_select`, the other global
     // `Pointer<Click>` observer). A plain left-click possesses/follows/focuses;
@@ -1526,11 +1585,12 @@ pub fn avatar_raycast_possession(
     // (we must not gate this on a *mesh* hit being found, the earlier bug).
     click.propagate(false);
 
-    // Build the world ray from the avatar camera through the click position, so
-    // the analytic hit-sphere tests (celestial bodies / spacecraft, which have
-    // no pickable mesh) still work alongside the mesh pick.
+    // Shared egui-vs-scene guard + camera ray (replaces the old
+    // `hit.position.is_none()` chrome check). Returns `None` on an egui-chrome
+    // click; the ray drives the analytic hit-sphere tests (celestial bodies /
+    // spacecraft, which have no pickable mesh) alongside the mesh pick.
     let Some((camera, cam_gtf, avatar_entity)) = camera_q.iter().next() else { return; };
-    let Ok(ray) = camera.viewport_to_world(cam_gtf, click.pointer_location.position) else { return; };
+    let Some(ray) = lunco_core::scene_click_ray(&egui_focus, camera, cam_gtf, click.pointer_location.position) else { return; };
 
     // The mesh the pick resolved to (rover, prop, ground, …); resolve to its
     // clickable root. `hit.depth` is the along-ray distance to compare against
@@ -1591,17 +1651,22 @@ pub fn avatar_raycast_possession(
     }
 }
 
-/// Backspace releases possession **and** plain follow — both unwind through
-/// the same `ReleaseVessel` path (which strips ControllerLink, SpringArm,
-/// interpolation, and reinstates a free-flight camera).
+/// The `Cancel` intent (default `Backspace`) releases possession **and** plain
+/// follow — both unwind through the same `ReleaseVessel` path (which strips
+/// ControllerLink, SpringArm, interpolation, and reinstates a free-flight camera).
+///
+/// Reads the intent (not the raw key) so it flows through the shared
+/// `UserIntent` vocabulary; the system is `run_if(scene_keyboard_active)` gated so
+/// a `Backspace` typed into a focused egui field edits text instead (the two-step
+/// Esc/defocus pattern).
 fn avatar_escape_possession(
-    keys: Res<ButtonInput<KeyCode>>,
-    q_avatar: Query<Entity, (With<Avatar>, Or<(With<ControllerLink>, With<SpringArmCamera>)>)>,
+    q_avatar: Query<(Entity, &IntentState), (With<Avatar>, Or<(With<ControllerLink>, With<SpringArmCamera>)>)>,
     mut commands: Commands,
 ) {
-    if !keys.just_pressed(KeyCode::Backspace) { return; }
-    for entity in q_avatar.iter() {
-        commands.trigger(ReleaseVessel { target: entity });
+    for (entity, intent) in q_avatar.iter() {
+        if intent.just_pressed(&UserIntent::Cancel) {
+            commands.trigger(ReleaseVessel { target: entity });
+        }
     }
 }
 
@@ -1800,10 +1865,11 @@ fn on_possess_command(
     // The controller link goes on the **avatar** (it carries the shared
     // `ActionState<UserIntent>` that `drive_from_bindings` reads); the intent→port
     // `ControlBinding` lives on the **vessel** as its own property, authored purely
-    // from USD (a `Controls` scope / an inherited `_RoverControl`/`_LanderControl`
-    // profile). There is NO Rust topology default: a vessel is drivable iff its USD
-    // carries that scope. `drive_from_bindings` reads the binding off the vessel and
-    // skips any vessel that has none, so possession is a pure camera+link bind here.
+    // from USD (a `Controls` child scope referencing a shared profile in
+    // `control_profiles.usda`). There is NO Rust topology default: a vessel is
+    // drivable iff its USD carries that scope. `drive_from_bindings` reads the
+    // binding off the vessel and skips any vessel that has none, so possession is a
+    // pure camera+link bind here.
     commands
         .entity(avatar_ent)
         .insert(ControllerLink { vessel_entity: cmd.target });

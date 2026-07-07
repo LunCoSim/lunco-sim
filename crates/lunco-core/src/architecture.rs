@@ -78,6 +78,11 @@ pub enum UserIntent {
     SwitchMode,
     /// Pauses or unpauses the simulation state.
     Pause,
+    /// Cancel / back out: release possession or plain follow, back to free flight.
+    /// A discrete key intent (default `Backspace`) — see `avatar_escape_possession`.
+    /// While an egui field is focused egui consumes the key, so the guard suppresses
+    /// this intent that frame and it acts only once the field is defocused.
+    Cancel,
 }
 
 /// Alias for the leafwing ActionState using our [UserIntent] enum.
@@ -134,6 +139,7 @@ pub fn parse_user_intent(name: &str) -> Option<UserIntent> {
         "release" | "detach" | "eject" | "decouple" => Some(UserIntent::Release),
         "switchmode" | "switch_mode" => Some(UserIntent::SwitchMode),
         "pause" => Some(UserIntent::Pause),
+        "cancel" | "back" | "unpossess" => Some(UserIntent::Cancel),
         _ => None,
     }
 }
@@ -151,9 +157,12 @@ pub fn parse_user_intent(name: &str) -> Option<UserIntent> {
 /// `lunco:port`+`lunco:scale`, built via
 /// [`from_intent_entries`](ControlBinding::from_intent_entries)) — there is NO
 /// hardcoded Rust default: a vessel is controllable iff it carries a `Controls`
-/// scope (author one, or `inherits` a shared profile class). The consuming system
-/// (`lunco_controller::drive_from_bindings`) reads it off the vessel via the
-/// controller link; a vessel without one is simply not driven.
+/// scope. It is delivered as a child `references` arc to a shared profile in
+/// `control_profiles.usda` (the same arc kind wheels use), so it composes through
+/// a spawn/reference; a runtime-built entity becomes drivable by authoring that
+/// one child prim. The consuming system (`lunco_controller::drive_from_bindings`)
+/// reads it off the vessel via the controller link; a vessel without one is
+/// simply not driven.
 #[derive(Component, Debug, Clone)]
 pub struct ControlBinding {
     /// `(intent, port_name, scale)` — each active intent adds its scale to the

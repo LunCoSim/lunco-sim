@@ -227,6 +227,8 @@ impl Plugin for LunCoApiPlugin {
             }
 
             app.insert_resource(ApiHttpBridgeReceiver(rx))
+                // In-process handle for in-app callers (REPL panel, menu actions).
+                .insert_resource(ApiBridge(bridge.clone()))
                 .init_resource::<ApiHttpResponsePending>()
                 .add_observer(http_response_observer)
                 .add_systems(Update, http_bridge_request_router);
@@ -252,6 +254,29 @@ impl Plugin for LunCoApiPlugin {
 }
 
 // ── HTTP bridge (feature-gated) ───────────────────────────────────────────────
+
+/// In-process handle to the API bridge, stored as a resource so **in-app**
+/// callers (an egui REPL panel, a menu action) can dispatch the same
+/// `/api/commands` envelope the HTTP/JS transports use — without a socket. The
+/// handle is a cheap clonable mpsc sender; `execute()` awaits the ECS response
+/// on a `oneshot`, so callers run it from a spawned task and poll the result.
+/// Present on every build that has a bridge (native `transport-http` + wasm).
+#[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
+#[derive(Resource, Clone)]
+pub struct ApiBridge(pub transports::HttpBridge);
+
+/// Build the `RunRhai` API request that carries `code`. Shared by the web
+/// `lunco_rhai` export and the in-app REPL panel so both submit the byte-identical
+/// envelope the HTTP API / native `sandbox rhai` client use. Generic over the
+/// command registry (no dependency on the `RunRhai` type) — the dispatch resolves
+/// `"RunRhai"` by name. Errors only on an internal JSON encode fault.
+#[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
+pub fn rhai_request(code: &str) -> Result<schema::ApiRequest, String> {
+    let json = serde_json::json!({ "command": "RunRhai", "params": { "code": code } }).to_string();
+    serde_json::from_str::<transports::ApiRequestUnified>(&json)
+        .map(Into::into)
+        .map_err(|e| format!("rhai_request: {e}"))
+}
 
 /// Receives bridge requests (HTTP or wasm) and injects them as ApiRequestEvent.
 #[cfg(any(feature = "transport-http", target_arch = "wasm32"))]

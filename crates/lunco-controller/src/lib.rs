@@ -101,15 +101,27 @@ fn drive_from_bindings(
     // external controller (the free avatar). Disjoint from `q_ctrl` (which requires
     // a `ControllerLink`), so no query conflict.
     q_self: Query<(Entity, &ActionState<UserIntent>, &ControlBinding), Without<ControllerLink>>,
+    // egui keyboard capture (published by `lunco-workbench`). While a text field
+    // is focused we treat every intent as released so a keypress typed into the UI
+    // doesn't also drive the vessel — see the `held` closure below. `Option` so a
+    // controller-only test app without the workbench still runs (no gate).
+    egui_focus: Option<Res<lunco_core::EguiFocus>>,
     mut commands: Commands,
 ) {
     let client = matches!(*role, lunco_core::NetworkRole::Client);
 
+    // When egui holds the keyboard, no local key counts as pressed. `drive_from_
+    // bindings` still runs and `resolve` still writes EVERY bound port — now all
+    // 0 — so the vessel decelerates to a clean stop rather than latching its last
+    // command (as it would if we simply skipped the system).
+    let egui_keyboard = egui_focus.map_or(false, |f| f.wants_keyboard);
+    let held = |intent, intents: &ActionState<UserIntent>| !egui_keyboard && intents.pressed(&intent);
+
     for (link, intents) in q_ctrl.iter() {
         // Stage 1 (key→intent) is the shared leafwing `InputMap<UserIntent>`;
         // stage 2 maps this vessel's active intents → summed, clamped port writes.
-        // The binding is authored ON THE VESSEL (USD `lunco:controlBindings`, or a
-        // topology default stamped at possess) — skip a vessel that carries none.
+        // The binding is authored ON THE VESSEL as a USD `Controls` child scope
+        // (referencing a shared profile) — skip a vessel that carries none.
         let Ok(binding) = q_binding.get(link.vessel_entity) else { continue };
 
         // The vessel's id (gid + is-it-locally-owned) — used both by the ownership
@@ -129,7 +141,7 @@ fn drive_from_bindings(
             }
         }
 
-        let writes = binding.resolve(|intent| intents.pressed(&intent));
+        let writes = binding.resolve(|intent| held(intent, intents));
 
         // Owned + predicted on a client → assign a real seq (buffered for replay
         // by `record_control_input`). seq MUST be stamped HERE (the origin)
@@ -163,7 +175,7 @@ fn drive_from_bindings(
     // prediction bookkeeping. `resolve` writes every bound port (0 when idle), so a
     // released key zeroes the port and motion stops.
     for (entity, intents, binding) in q_self.iter() {
-        let writes = binding.resolve(|intent| intents.pressed(&intent));
+        let writes = binding.resolve(|intent| held(intent, intents));
         commands.trigger(lunco_cosim::SetPorts { target: entity, writes, seq: 0, tick: 0 });
     }
 }

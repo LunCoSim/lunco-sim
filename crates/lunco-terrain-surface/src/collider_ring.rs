@@ -193,3 +193,41 @@ pub fn despawn_orphaned_collider_tiles(
         }
     }
 }
+
+/// Freeze state for [`hold_physics_until_dem_ready`].
+#[derive(Resource, Default)]
+pub struct DemBuildPhysicsHold {
+    /// True only while THIS system holds the freeze — so a user/manual pause is
+    /// never unpaused out from under the user (mirrors the obstacle-field hold).
+    paused_by_us: bool,
+}
+
+/// Freeze the sim while a DEM terrain is still building, so physics-driven bodies
+/// (rovers) don't fall through the not-yet-ready terrain collider.
+///
+/// The DEM byte-fetch + decode + crater-stamp is ~instant natively but takes
+/// **seconds on web** (HTTP-fetching a ~40 MB heightmap and decoding it on the
+/// wasm main thread). During that window a `Dynamic` rover has gravity but no
+/// ground collider — the ring in [`update_collider_ring`] only streams tiles once
+/// [`DemHeightField`] exists — so it free-falls and is gone by the time the
+/// collider appears (rovers "missing" on the web moonbase). We hold the transport
+/// `Paused` while any [`DemTerrainRequest`](crate::terrain::DemTerrainRequest) is
+/// outstanding (it's present from the USD bridge until `finish_dem_builds` removes
+/// it — even on a build error, so this can never dead-lock), then release to
+/// `Playing` so the rovers settle onto the freshly-built collider.
+pub fn hold_physics_until_dem_ready(
+    mut hold: ResMut<DemBuildPhysicsHold>,
+    building: Query<(), With<crate::terrain::DemTerrainRequest>>,
+    transport: Option<ResMut<lunco_time::TimeTransport>>,
+) {
+    let Some(mut transport) = transport else { return };
+    if !building.is_empty() {
+        if matches!(transport.mode, lunco_time::TransportMode::Playing) {
+            transport.mode = lunco_time::TransportMode::Paused;
+            hold.paused_by_us = true;
+        }
+    } else if hold.paused_by_us {
+        transport.mode = lunco_time::TransportMode::Playing;
+        hold.paused_by_us = false;
+    }
+}

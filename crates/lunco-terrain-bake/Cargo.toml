@@ -1,0 +1,45 @@
+[package]
+name = "lunco-terrain-bake"
+version = "0.1.0-dev"
+edition = "2021"
+description = "Pure (bevy/avian-free) DEM bake pipeline shared by the native async task and the wasm Web Worker: decode GeoTIFF → crop/resample → stamp craters → HeightGrid."
+
+# A second wasm-bindgen bin: the off-thread DEM bake worker. wasm32 has no OS
+# threads, so the multi-second GeoTIFF decode + crater stamp would freeze the
+# page; this runs it in a Web Worker (separate wasm instance / linear memory),
+# mirroring `lunica_worker`. Native `cargo build` gets an inert stub main.
+[[bin]]
+name = "dem_worker"
+path = "src/bin/dem_worker.rs"
+
+[dependencies]
+# The pure `HeightSource` trait (std + serde only) the resampler samples through.
+lunco-terrain-core = { workspace = true }
+# `HeightGrid`, `CraterLayer`/`SizeDist`, `sample_layer`/`Placement`, `MeshData`.
+# It drags a bevy/avian dep tree, but the bake path calls only its glam-level
+# pure geometry, so dead-code elimination keeps the worker wasm lean (the worker
+# never instantiates a Bevy App).
+lunco-obstacle-field = { path = "../lunco-obstacle-field" }
+# Pure-Rust GeoTIFF decoder (weezl/flate2) — wasm-safe, same as terrain-surface.
+tiff = "0.11"
+serde = { workspace = true }
+bincode = { workspace = true }
+
+# Web Worker transport (main-thread client + the worker bin). Gated to wasm so
+# native builds don't pull the browser bindings.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The generic Web Worker pool (spawn / handshake / transfer / respawn), shared
+# with the Modelica Fast-Run workers.
+lunco-worker-transport = { path = "../lunco-worker-transport" }
+wasm-bindgen = { workspace = true }
+js-sys = { workspace = true }
+console_error_panic_hook = { workspace = true }
+web-sys = { workspace = true, features = [
+    "console",
+    "Window",
+    "DedicatedWorkerGlobalScope",
+    "MessageEvent",
+] }
+
+[lints]
+workspace = true

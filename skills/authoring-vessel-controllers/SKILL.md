@@ -118,9 +118,52 @@ constants a model needs (mass, inertia) come from the body's own ports
   `cmd = piloted ? pilot_stick : gnc`. Because it's wired it's a live input — **no
   in-model flag, no rhai toggle, no per-tick check.** Possession is the single source
   of truth; Rust never reasons about "autopilot" vs "user".
-- The pilot's stick reaches `external_throttle`/`pitch`/… through the normal control
-  binding (`_LanderControl` profile: intent→port) when they possess. Camera-follow
+- The pilot's stick reaches `external_throttle`/`pitch`/… through the vessel's
+  intent→port `Controls` scope (next section) when they possess. Camera-follow
   without taking control: `follow(entity)` (inserts a chase camera, no `ControllerLink`).
+
+## What makes an entity *active* — the intent→port `Controls` scope
+
+An entity is **possessable + drivable** when it carries two things:
+
+1. **An actuation surface** — the command ports a pilot or AI writes. A rover gets
+   `throttle/steer/brake` from `PhysxVehicleContextAPI` (+ a `DriveMix` chosen by the
+   drivetrain schema, e.g. `PhysxVehicleTankDifferentialAPI`); a cosim vessel gets its
+   `.mo` inputs (`external_throttle`, `pitch`, …). This surface is topology-derived; you
+   don't hand-write it.
+2. **A `Controls` scope** — the intent→port map (stage 2 of control), read into a
+   `lunco_core::ControlBinding`. Without it a vessel can be possessed but **keyboard
+   input does nothing** — `drive_from_bindings` skips a bindingless vessel. (API /
+   `set_input` / rhai can still drive it by port name — that path needs only the surface.)
+
+Author the scope as a **child `references` arc** to the shared profile — the SAME arc
+kind the wheels use, so it composes through a spawn/reference. (Root `subLayers` +
+`inherits` do **NOT** survive a runtime `references=` spawn — that was the old form and
+it silently left spawned rovers undrivable.)
+
+```usda
+# on the vessel prim — a rover:
+def "Controls" (
+    prepend references = @../control_profiles.usda@</RoverControls>   # lander: </LanderControls>
+)
+{
+}
+```
+
+- Profiles live in `assets/vessels/control_profiles.usda`: `RoverControls`
+  (forward/back→throttle, left/right→steer, action→brake) and `LanderControls`
+  (forward/back→pitch, left/right→roll, Q/E→yaw, action→external_throttle, G→release).
+  The path is relative to the vessel file (`@../../control_profiles.usda@` one dir deeper,
+  `@../../vessels/control_profiles.usda@` from a scene).
+- **Override one intent** by redefining that child locally over the reference:
+  `def "Controls" (references=…) { def "action" { uniform string lunco:port = "handbrake" } }`.
+- **A new control scheme** = new intents in the referenced profile (or authored inline) —
+  data, not Rust. The key→intent half is the shared leafwing `UserIntent` map, so a saved
+  keymap rebinds every vessel; you only choose what each intent *actuates* here.
+- **Make an entity drivable at RUNTIME**: author the `Controls` child (and give it an
+  actuation surface) via the USD-op API on the new prim — it composes immediately and the
+  possessing avatar can drive it. No Rust, no restart. This is how you "build a new entity
+  and teach the avatar to control it."
 
 ## The recipe (checklist)
 
@@ -130,7 +173,8 @@ constants a model needs (mass, inertia) come from the body's own ports
 2. Reference the sensors it needs from `assets/vessels/sensors/` and mount them.
 3. In the vessel prim: `lunco:modelicaModel`, `lunco:simWires` (sensor+body ports →
    model inputs, incl. `piloted:piloted`, and model force/torque → body), and a
-   `_LanderControl`-style intent→port binding for the pilot.
+   `Controls` child that `references` a profile (`</LanderControls>`) so the pilot's
+   intents reach the stick ports.
 4. Add a `lunco:scriptPath` rhai supervisor for events/sequencing (no control loop).
 5. Verify: unpossessed → the GNC flies it; possess → the pilot drives (gate flips via
    `piloted`); release → GNC resumes. Tune live via the Inspector or `set()`.

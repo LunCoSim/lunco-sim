@@ -230,6 +230,14 @@ pub trait TerrainLayer: Send + Sync + 'static {
     /// Stamp height deltas into the working grid (off-thread in the DEM build, and on
     /// the main thread on regenerate). Default: contributes no height.
     fn stamp(&self, _grid: &mut HeightGrid) {}
+    /// The **serializable** form of this layer's stamp, when it has one — so the SAME
+    /// stamp drives the wasm DEM Web Worker (which can't hold a `dyn TerrainLayer`) AND
+    /// the native bake, deterministic from the seed. A stamp layer overrides this to
+    /// return its spec; non-stamp (scatter/shader) layers keep the `None` default and
+    /// simply aren't applied in the off-thread bake. Keep in sync with [`Self::stamp`].
+    fn stamp_spec(&self) -> Option<lunco_terrain_bake::StampSpec> {
+        None
+    }
     /// Scatter entities onto the built surface. Default: scatters nothing.
     fn scatter(&self, _cx: &mut LayerScatterCx) {}
     /// Configure the terrain entity itself — its render material / shader. Runs on the

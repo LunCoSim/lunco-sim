@@ -6776,6 +6776,7 @@ dependencies = [
  "resvg",
  "rumoca-ir-ast",
  "rumoca-phase-parse",
+ "ruzstd 0.7.3",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -7106,6 +7107,7 @@ dependencies = [
  "lunco-viz",
  "lunco-web",
  "lunco-workbench",
+ "lunco-worker-transport",
  "lunco-workspace",
  "lyon_geom",
  "lyon_path",
@@ -7282,6 +7284,7 @@ dependencies = [
  "serde",
  "serde_json",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 
@@ -7393,6 +7396,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-terrain-bake"
+version = "0.1.0-dev"
+dependencies = [
+ "bincode 1.3.3",
+ "console_error_panic_hook",
+ "js-sys",
+ "lunco-obstacle-field",
+ "lunco-terrain-core",
+ "lunco-worker-transport",
+ "serde",
+ "tiff",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "lunco-terrain-core"
 version = "0.1.0-dev"
 dependencies = [
@@ -7422,10 +7441,11 @@ dependencies = [
  "lunco-obstacle-field",
  "lunco-precompute",
  "lunco-storage",
+ "lunco-terrain-bake",
  "lunco-terrain-core",
+ "lunco-time",
  "serde",
  "serde_json",
- "tiff",
 ]
 
 [[package]]
@@ -7668,6 +7688,15 @@ dependencies = [
  "web-sys",
  "web-time",
  "wgpu",
+]
+
+[[package]]
+name = "lunco-worker-transport"
+version = "0.1.0-dev"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

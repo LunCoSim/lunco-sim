@@ -841,12 +841,19 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             }
 
             commands.entity(entity).insert((
-                // The rover's command surface (throttle/steer/brake input ports, mixed
-                // to the wheels by `apply_drive_mix`) is NOT hardcoded here — it is
-                // derived from the vessel's USD `Controls` binding by
-                // `sync_fsw_command_surface`. Start empty; the `_RoverControl` profile
-                // declares the vocabulary.
-                FlightSoftware::new(port_map, &[]),
+                // Seed the CANONICAL rover command surface (throttle/steer/brake) that
+                // `apply_drive_mix` reads and the skid/Ackermann/driveMix kernels all
+                // consume — universal to every `PhysxVehicleContextAPI` rover here, and
+                // topology-derived (this IS the vehicle reader), not a per-arch branch.
+                // The vessel's USD `Controls` binding adds any *extra* authored intents
+                // on top via `sync_fsw_command_surface` (additive/idempotent). Seeding
+                // the surface here — rather than only from the binding — means an
+                // API/rhai caller can `set_input` throttle even on an entity that has
+                // not (yet) authored a `Controls` scope. The binding itself now composes
+                // through a runtime `references=` spawn because `Controls` is delivered
+                // as a child `references` arc (like the wheels), not root `subLayers` +
+                // `inherits` — so keyboard drive works on spawned rovers too.
+                FlightSoftware::new(port_map, &["throttle", "steer", "brake"]),
                 lunco_core::SelectableRoot,
                 RoverWheels::default(),
             ));

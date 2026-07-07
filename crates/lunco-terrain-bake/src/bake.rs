@@ -19,7 +19,7 @@
 
 use lunco_obstacle_field::field::HeightGrid;
 
-use crate::source::HeightSource;
+use lunco_terrain_core::source::HeightSource;
 
 /// Extract the centred `[-half_window, half_window]` sub-region of `grid` at its
 /// **native resolution** — no decimation, every sample kept. A `half_window` ≥
@@ -67,7 +67,7 @@ pub fn resample(src: &dyn HeightSource, half_extent: f64, res: usize) -> HeightG
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::source::AnalyticHeightSource;
+    use lunco_terrain_core::source::AnalyticHeightSource;
 
     #[test]
     fn crop_keeps_native_samples() {

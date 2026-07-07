@@ -48,6 +48,37 @@ const RANGE_FACTOR: f64 = 4.5;
 #[derive(Component)]
 pub struct DemHeightField(pub Arc<HeightGrid>);
 
+/// Analytic DEM ground height at world `(x, z)` — reads the retained height grid
+/// directly (no avian collider), so it answers **before** a collider tile streams
+/// in. Returns the world-space `Y` of the terrain surface, or `None` when no DEM
+/// terrain covers the point.
+///
+/// This is the *placement* twin of [`crate::query::TerrainHeightProvider`] (the
+/// `query("TerrainHeight")` API): spawn placement uses it so a rover dropped over
+/// un-streamed terrain lands on the surface instead of free-falling through the
+/// not-yet-baked collider. Mirror its coordinate convention (query `(x,z)` in the
+/// terrain's `GlobalTransform` frame; DEM anchors at the origin cell).
+pub fn dem_ground_height<'a>(
+    terrains: impl IntoIterator<Item = (&'a GlobalTransform, &'a DemHeightField)>,
+    x: f64,
+    z: f64,
+) -> Option<f64> {
+    use lunco_terrain_core::HeightSource;
+    for (gt, hf) in terrains {
+        let grid = hf.0.as_ref();
+        let local = gt
+            .affine()
+            .inverse()
+            .transform_point3(Vec3::new(x as f32, 0.0, z as f32));
+        if local.x.abs() > grid.half_extent || local.z.abs() > grid.half_extent {
+            continue;
+        }
+        let h = HeightSource::height_at(grid, local.x as f64, local.z as f64);
+        return Some(gt.transform_point(Vec3::new(local.x, h as f32, local.z)).y as f64);
+    }
+    None
+}
+
 /// Which shader the streamed LOD tiles draw with — switchable live in the
 /// Inspector (per terrain). Default [`Lit`](TerrainShaderMode::Lit).
 #[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]

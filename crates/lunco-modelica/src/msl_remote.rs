@@ -231,6 +231,57 @@ pub fn deserialize_parsed_bundle(
     bincode::deserialize(decoded).map_err(|e| format!("bincode deserialize: {e}"))
 }
 
+/// Untar + parse the compressed **source** bundle (`sources-*.tar.zst`) into the
+/// parsed AST bundle. Each doc is keyed by its root-relative tar path
+/// (`Modelica/…`) — identical to the build-time bundle keys
+/// (`build_msl_assets::rel_key`) — so runtime class resolution matches. This is
+/// the worker's tag-mismatch fallback (see
+/// `worker_transport::WireMessage::ParseSourceMslCompressed`): a rumoca-version
+/// skew makes the shipped pre-parsed bundle undeserializable, but the `.mo`
+/// sources are still valid and reparse into a fresh, matching bundle.
+#[cfg(target_arch = "wasm32")]
+pub fn parse_source_bundle_to_docs(
+    compressed: &[u8],
+) -> Result<Vec<(String, rumoca_compile::parsing::StoredDefinition)>, String> {
+    let files = lunco_assets::web_fetch::unpack_tar_zst(compressed, 2700)?;
+    let mut out = Vec::with_capacity(files.len());
+    let mut failed = 0usize;
+    for (path, content) in files {
+        let uri = path.to_string_lossy().replace('\\', "/");
+        if !uri.ends_with(".mo") {
+            continue;
+        }
+        let Ok(src) = std::str::from_utf8(&content) else {
+            failed += 1;
+            continue;
+        };
+        match rumoca_phase_parse::parse_to_ast(src, &uri) {
+            Ok(def) => out.push((uri, def)),
+            Err(_) => failed += 1,
+        }
+    }
+    if out.is_empty() {
+        return Err(format!("source bundle produced 0 parsed docs ({failed} failed)"));
+    }
+    if failed > 0 {
+        bevy::log::warn!(
+            "[MSL] source reparse: {failed} file(s) failed to parse (kept {})",
+            out.len()
+        );
+    }
+    Ok(out)
+}
+
+/// bincode-encode a parsed bundle in the same wire format
+/// [`deserialize_parsed_bundle`] reads — used by the worker to transfer a
+/// freshly-reparsed bundle back to the main thread.
+#[cfg(target_arch = "wasm32")]
+pub fn encode_parsed_bundle(
+    docs: &[(String, rumoca_compile::parsing::StoredDefinition)],
+) -> Result<Vec<u8>, String> {
+    bincode::serialize(docs).map_err(|e| format!("bincode serialize: {e}"))
+}
+
 // ─── Chunked main-thread MSL decode ────────────────────────────────
 //
 // On wasm the main-thread rumoca session needs the MSL ASTs in *its own*
@@ -544,7 +595,7 @@ pub fn ensure_msl_source_unpacked() {
     let Some((bytes, meta)) = MSL_SOURCE_COMPRESSED.get() else {
         return;
     };
-    match web::unpack(bytes, meta) {
+    match lunco_assets::web_fetch::unpack_tar_zst(bytes, meta.file_count) {
         Ok(files) => {
             let n = files.len();
             lunco_assets::msl::install_global_msl_sources(sources_with_extras(
@@ -975,6 +1026,17 @@ fn count_mo_files(root: &std::path::Path) -> usize {
 #[cfg(target_arch = "wasm32")]
 type SharedSlot = Arc<Mutex<SlotInner>>;
 
+/// Frames `drain_msl_load_slot` waits for a worker to come up before untarring
+/// the tag-mismatch source bundle on the main thread instead. ~3 s at 60 fps —
+/// the worker normally installs within the first few boot frames.
+#[cfg(target_arch = "wasm32")]
+const MSL_SOURCE_PARSE_MAX_WAIT: u32 = 180;
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static MSL_SOURCE_PARSE_WAIT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 #[cfg(target_arch = "wasm32")]
 #[derive(Default)]
 struct SlotInner {
@@ -990,6 +1052,12 @@ struct SlotInner {
     /// Raw **compressed** `sources-*.tar.zst` bytes + their manifest entry,
     /// stashed for lazy unpack on first editor drill-in.
     pending_source_compressed: Option<(Vec<u8>, lunco_assets::msl::MslBundleEntry)>,
+    /// Raw **compressed** `sources-*.tar.zst` bytes to untar + reparse **in the
+    /// worker** (the tag-mismatch fallback), instead of a synchronous
+    /// main-thread untar that would freeze the page. Drained by
+    /// [`drain_msl_load_slot`], which ships it to the worker and only untars on
+    /// the main thread if no worker is available.
+    pending_source_parse_compressed: Option<Vec<u8>>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1036,6 +1104,53 @@ fn drain_msl_load_slot(
             // Worker will deliver the decoded bytes; keep the compressed blob as
             // a deadline fallback in case it never does (crash before delivery).
             stash_main_decode_fallback(pbytes);
+        }
+        if let Some((sbytes, smeta)) = inner.pending_source_compressed.take() {
+            stash_compressed_source(sbytes, smeta);
+        }
+        return;
+    }
+    // Tag-mismatch fallback: a compressed SOURCE bundle is waiting to be
+    // reparsed. Prefer the worker (off-thread untar + parse → the main thread
+    // ingests deserialize-only via `ingest_worker_decoded_msl`). If no worker is
+    // ready yet, wait a bounded number of frames (it comes up during boot); only
+    // then untar on the main thread so inline / no-worker builds still load.
+    if inner.pending_source_parse_compressed.is_some() {
+        let shipped = crate::worker_transport::parse_msl_source_in_worker(
+            inner.pending_source_parse_compressed.as_ref().unwrap(),
+        );
+        if shipped > 0 {
+            inner.pending_source_parse_compressed = None;
+            // Keep the compressed source for lazy drill-in / msl_index unpack.
+            if let Some((sbytes, smeta)) = inner.pending_source_compressed.take() {
+                stash_compressed_source(sbytes, smeta);
+            }
+            return;
+        }
+        let waited = MSL_SOURCE_PARSE_WAIT.with(|c| {
+            let n = c.get() + 1;
+            c.set(n);
+            n
+        });
+        if waited < MSL_SOURCE_PARSE_MAX_WAIT {
+            return; // worker not up yet — keep pending, retry next frame
+        }
+        // Give up waiting: untar on the main thread and route to the existing
+        // chunked parser via the `pending_source` path (installed next frame).
+        let sbytes = inner.pending_source_parse_compressed.take().unwrap();
+        match lunco_assets::web_fetch::unpack_tar_zst(&sbytes, 2700) {
+            Ok(files) => {
+                inner.pending_source = Some(MslAssetSource::InMemory(Arc::new(
+                    lunco_assets::msl::MslInMemory { files },
+                )));
+                bevy::log::warn!(
+                    "[MSL] no worker after waiting — untarred + parsing source on the main \
+                     thread (chunked)"
+                );
+            }
+            Err(e) => {
+                inner.pending_state = Some(MslLoadState::Failed(e));
+            }
         }
         if let Some((sbytes, smeta)) = inner.pending_source_compressed.take() {
             stash_compressed_source(sbytes, smeta);
@@ -1183,86 +1298,11 @@ fn log_state_transition(s: &MslLoadState) {
 #[cfg(target_arch = "wasm32")]
 mod web {
     use super::*;
-    use std::collections::HashMap;
-    use std::io::Read;
-    use std::path::PathBuf;
+    use std::collections::HashSet;
 
-    use lunco_assets::msl::{MslBundleEntry, MslInMemory, MslManifest};
+    use lunco_assets::msl::MslManifest;
+    use lunco_assets::web_fetch;
     use wasm_bindgen::prelude::*;
-    use wasm_bindgen_futures::JsFuture;
-    use web_sys::{Request, RequestInit, RequestMode, Response};
-
-    #[wasm_bindgen(inline_js = "
-        export async function fetch_bytes_cached_with_progress(cacheName, path, on_progress) {
-            const cache = await caches.open(cacheName);
-            const matchResponse = await cache.match(path);
-            
-            let response;
-            let fromCache = false;
-            if (matchResponse) {
-                response = matchResponse;
-                fromCache = true;
-            } else {
-                response = await fetch(path);
-                if (!response.ok) {
-                    throw new Error('fetch ' + path + ': HTTP ' + response.status + ' ' + response.statusText);
-                }
-            }
-            
-            const contentLength = response.headers.get('content-length');
-            const total = contentLength ? parseInt(contentLength, 10) : 0;
-            
-            const reader = response.body.getReader();
-            const chunks = [];
-            let receivedLength = 0;
-            
-            while (true) {
-                const {done, value} = await reader.read();
-                if (done) {
-                    break;
-                }
-                chunks.push(value);
-                receivedLength += value.length;
-                if (on_progress) {
-                    try {
-                        on_progress(receivedLength, total);
-                    } catch (e) {
-                        console.warn('on_progress error:', e);
-                    }
-                }
-            }
-            
-            const allChunks = new Uint8Array(receivedLength);
-            let position = 0;
-            for (let chunk of chunks) {
-                allChunks.set(chunk, position);
-                position += chunk.length;
-            }
-            
-            if (!fromCache) {
-                try {
-                    const cachedResponse = new Response(allChunks, {
-                        status: response.status,
-                        statusText: response.statusText,
-                        headers: response.headers
-                    });
-                    await cache.put(path, cachedResponse);
-                } catch (e) {
-                    console.warn('Failed to write to cache:', e);
-                }
-            }
-            
-            return allChunks;
-        }
-    ")]
-    extern "C" {
-        #[wasm_bindgen(catch)]
-        async fn fetch_bytes_cached_with_progress(
-            cache_name: &str,
-            path: &str,
-            on_progress: &js_sys::Function,
-        ) -> Result<JsValue, JsValue>;
-    }
 
     pub(super) async fn run_fetcher(slot: SharedSlot) {
         match try_fetch(&slot).await {
@@ -1291,7 +1331,7 @@ mod web {
             },
         );
 
-        let manifest_bytes = fetch_bytes_revalidated("msl/manifest.json").await?;
+        let manifest_bytes = web_fetch::fetch_bytes_revalidated(CACHE_NAME, "msl/manifest.json").await?;
         let manifest: MslManifest = serde_json::from_slice(&manifest_bytes)
             .map_err(|e| format!("manifest.json parse: {e}"))?;
         if manifest.schema_version != 1 {
@@ -1306,33 +1346,31 @@ mod web {
         // ── bundle is unavailable.
         let bundle_path = format!("msl/{}", manifest.sources.filename);
         let phase1 = bundle_fetch_phase(&bundle_path).await;
-        let total_expected1 = manifest.sources.compressed_bytes
-            + manifest
-                .parsed
-                .as_ref()
-                .map(|p| p.compressed_bytes)
-                .unwrap_or(0);
-        
+        // Per-blob progress: this download sweeps 0..its own size, so the bar
+        // can't stall at a summed fraction (the old bug: phase 1 only reached
+        // the sources/total slice, then relied on phase 2 ticking to move).
+        // `total` comes from the fetcher — Content-Length, else the expected
+        // size passed below (a Cache-Storage hit often omits Content-Length).
+        let sources_total = manifest.sources.compressed_bytes;
         let progress_slot1 = slot.clone();
-        let progress_cb1 = Closure::<dyn FnMut(f64, f64)>::new(move |done: f64, _total: f64| {
+        let progress_cb1 = Closure::<dyn FnMut(f64, f64)>::new(move |done: f64, total: f64| {
             if let Ok(mut s) = progress_slot1.lock() {
                 s.pending_state = Some(MslLoadState::Loading {
                     phase: phase1,
                     bytes_done: done as u64,
-                    bytes_total: total_expected1,
+                    bytes_total: total as u64,
                 });
             }
         });
-        
-        let sources_bytes_js = fetch_bytes_cached_with_progress(
+
+        let sources_bytes = web_fetch::fetch_cached_with_progress(
             CACHE_NAME,
             &bundle_path,
+            sources_total,
             progress_cb1.as_ref().unchecked_ref(),
         )
         .await
-        .map_err(|e| format!("sources bundle fetch: {e:?}"))?;
-        
-        let sources_bytes = js_sys::Uint8Array::new(&sources_bytes_js).to_vec();
+        .map_err(|e| format!("sources bundle fetch: {e}"))?;
 
         if sources_bytes.len() as u64 != manifest.sources.compressed_bytes {
             return Err(format!(
@@ -1363,30 +1401,27 @@ mod web {
         {
             let parsed_path = format!("msl/{}", parsed_meta.filename);
             let phase2 = bundle_fetch_phase(&parsed_path).await;
-            let total_expected2 = manifest.sources.compressed_bytes
-                + parsed_meta.compressed_bytes;
-            let offset = manifest.sources.compressed_bytes;
-            
+            // Per-blob again: the (larger) parsed bundle sweeps 0..its own size.
+            let parsed_total = parsed_meta.compressed_bytes;
             let progress_slot2 = slot.clone();
-            let progress_cb2 = Closure::<dyn FnMut(f64, f64)>::new(move |done: f64, _total: f64| {
+            let progress_cb2 = Closure::<dyn FnMut(f64, f64)>::new(move |done: f64, total: f64| {
                 if let Ok(mut s) = progress_slot2.lock() {
                     s.pending_state = Some(MslLoadState::Loading {
                         phase: phase2,
-                        bytes_done: offset + done as u64,
-                        bytes_total: total_expected2,
+                        bytes_done: done as u64,
+                        bytes_total: total as u64,
                     });
                 }
             });
-            
-            let bytes_js = fetch_bytes_cached_with_progress(
+
+            let bytes = web_fetch::fetch_cached_with_progress(
                 CACHE_NAME,
                 &parsed_path,
+                parsed_total,
                 progress_cb2.as_ref().unchecked_ref(),
             )
             .await
-            .map_err(|e| format!("parsed bundle fetch: {e:?}"))?;
-            
-            let bytes = js_sys::Uint8Array::new(&bytes_js).to_vec();
+            .map_err(|e| format!("parsed bundle fetch: {e}"))?;
             if bytes.len() as u64 != parsed_meta.compressed_bytes {
                 return Err(format!(
                     "parsed bundle size {} != manifest {}",
@@ -1403,7 +1438,17 @@ mod web {
         // content-hashed bundles a previous MSL release left behind so the
         // browser cache doesn't grow without bound. Best-effort — never fails
         // the load.
-        prune_stale_cache(&manifest).await;
+        {
+            // Filenames the current manifest references; everything else in the
+            // MSL bucket is a superseded release and gets evicted.
+            let mut keep = HashSet::new();
+            keep.insert("manifest.json".to_string());
+            keep.insert(manifest.sources.filename.clone());
+            if let Some(p) = manifest.parsed.as_ref() {
+                keep.insert(p.filename.clone());
+            }
+            web_fetch::prune_cache(CACHE_NAME, &keep).await;
+        }
 
         // Hand the COMPRESSED blobs off WITHOUT decoding them here — this runs
         // on the main-thread event loop, so decompress/untar/decode would
@@ -1435,8 +1480,13 @@ mod web {
             return Ok(());
         }
 
-        // ── Fallback: decompress the source bundle and let the chunked
-        // ── per-file parser build the AST over many frames.
+        // ── Fallback (tag mismatch / no pre-parsed bundle): do NOT untar on this
+        // ── async task — a synchronous untar on the single wasm thread blocks the
+        // ── event loop (the "stall then finish" freeze). Stash the compressed
+        // ── source; `drain_msl_load_slot` ships it to the worker for off-thread
+        // ── untar + reparse (keys match the build-time bundle), and only untars
+        // ── on the main thread if no worker ever comes up. Also stash it for lazy
+        // ── drill-in unpack.
         set_state(
             slot,
             MslLoadState::Loading {
@@ -1445,256 +1495,24 @@ mod web {
                 bytes_total: manifest.sources.uncompressed_bytes,
             },
         );
-        let files = unpack(&sources_bytes, &manifest.sources)?;
-        if !files.contains_key(std::path::Path::new(&manifest.msl_root_marker)) {
-            return Err(format!(
-                "bundle missing root marker `{}`",
-                manifest.msl_root_marker
-            ));
-        }
-        let in_memory = MslInMemory { files };
-        let source_file_count = in_memory.file_count();
-        let source_uncompressed = in_memory.total_bytes();
         if let Ok(mut s) = slot.lock() {
-            s.pending_source = Some(MslAssetSource::InMemory(Arc::new(in_memory)));
-            s.pending_state = Some(MslLoadState::Ready {
-                file_count: source_file_count,
-                compressed_bytes: manifest.sources.compressed_bytes,
-                uncompressed_bytes: source_uncompressed,
-            });
+            s.pending_source_parse_compressed = Some(sources_bytes.clone());
+            s.pending_source_compressed = Some((sources_bytes, manifest.sources.clone()));
         }
 
         Ok(())
     }
 
-    /// Unpack a `tar.zst` byte slice into `(rel_path → contents)`.
-    pub(super) fn unpack(
-        bundle: &[u8],
-        entry_meta: &MslBundleEntry,
-    ) -> Result<HashMap<PathBuf, Vec<u8>>, String> {
-        let decoder = ruzstd::StreamingDecoder::new(bundle)
-            .map_err(|e| format!("zstd decoder: {e}"))?;
-        let mut archive = tar::Archive::new(decoder);
-        let mut out: HashMap<PathBuf, Vec<u8>> = HashMap::with_capacity(entry_meta.file_count);
-        for entry in archive
-            .entries()
-            .map_err(|e| format!("tar entries: {e}"))?
-        {
-            let mut entry = entry.map_err(|e| format!("tar entry: {e}"))?;
-            let path = entry
-                .path()
-                .map_err(|e| format!("tar path: {e}"))?
-                .into_owned();
-            let mut buf = Vec::with_capacity(entry.header().size().unwrap_or(0) as usize);
-            entry
-                .read_to_end(&mut buf)
-                .map_err(|e| format!("tar read: {e}"))?;
-            out.insert(path, buf);
-        }
-        Ok(out)
-    }
-
     const CACHE_NAME: &str = "lunco-msl-v1";
-
-    /// Open the process's MSL bucket in the browser's Cache Storage.
-    async fn open_cache() -> Result<web_sys::Cache, String> {
-        let window = web_sys::window().ok_or_else(|| "no window".to_string())?;
-        let caches = window.caches().map_err(|e| format!("window.caches: {e:?}"))?;
-        JsFuture::from(caches.open(CACHE_NAME))
-            .await
-            .map_err(|e| format!("caches.open: {e:?}"))?
-            .dyn_into()
-            .map_err(|_| "caches.open result not a Cache".to_string())
-    }
-
-    /// Cheap existence check — does `path` live in Cache Storage? Unlike
-    /// [`cache_lookup`] it does NOT read the (up to ~18 MB) body, so it's safe
-    /// to call just to pick the right progress label (download vs cache).
-    async fn cache_has(path: &str) -> bool {
-        let Ok(cache) = open_cache().await else {
-            return false;
-        };
-        match JsFuture::from(cache.match_with_str(path)).await {
-            Ok(v) => !v.is_null() && !v.is_undefined(),
-            Err(_) => false,
-        }
-    }
 
     /// The progress phase to show while fetching `path`: a cache hit loads
     /// locally (no network), so report [`LoadingCache`](MslLoadPhase::LoadingCache)
     /// instead of [`FetchingBundle`](MslLoadPhase::FetchingBundle) ("downloading").
     async fn bundle_fetch_phase(path: &str) -> MslLoadPhase {
-        if cache_has(path).await {
+        if web_fetch::cache_has(CACHE_NAME, path).await {
             MslLoadPhase::LoadingCache
         } else {
             MslLoadPhase::FetchingBundle
-        }
-    }
-
-    /// Read `path` from `cache`, returning `None` on a miss.
-    async fn cache_lookup(cache: &web_sys::Cache, path: &str) -> Result<Option<Vec<u8>>, String> {
-        let match_value = JsFuture::from(cache.match_with_str(path))
-            .await
-            .map_err(|e| format!("cache.match {path}: {e:?}"))?;
-        if match_value.is_null() || match_value.is_undefined() {
-            return Ok(None);
-        }
-        let response: Response = match_value
-            .dyn_into()
-            .map_err(|_| "cache match not a Response".to_string())?;
-        let array_buffer = JsFuture::from(
-            response
-                .array_buffer()
-                .map_err(|e| format!("array_buffer cached {path}: {e:?}"))?,
-        )
-        .await
-        .map_err(|e| format!("array_buffer await cached {path}: {e:?}"))?;
-        Ok(Some(js_sys::Uint8Array::new(&array_buffer).to_vec()))
-    }
-
-    /// Fetch `path` from the network and write the response into `cache`.
-    async fn network_fetch_and_cache(cache: &web_sys::Cache, path: &str) -> Result<Vec<u8>, String> {
-        let window = web_sys::window().ok_or_else(|| "no window".to_string())?;
-        let opts = RequestInit::new();
-        opts.set_method("GET");
-        opts.set_mode(RequestMode::SameOrigin);
-        let request = Request::new_with_str_and_init(path, &opts)
-            .map_err(|e| format!("Request::new {path}: {e:?}"))?;
-
-        let resp_value = JsFuture::from(window.fetch_with_request(&request))
-            .await
-            .map_err(|e| format!("fetch {path}: {e:?}"))?;
-        let response: Response = resp_value
-            .dyn_into()
-            .map_err(|_| "fetch result not a Response".to_string())?;
-        if !response.ok() {
-            return Err(format!(
-                "fetch {path}: HTTP {} {}",
-                response.status(),
-                response.status_text()
-            ));
-        }
-
-        // Clone the response to put it in the cache while we read the body.
-        let response_to_cache = response
-            .clone()
-            .map_err(|e| format!("response.clone: {e:?}"))?;
-        let _ = JsFuture::from(cache.put_with_str(path, &response_to_cache)).await;
-
-        let array_buffer = JsFuture::from(
-            response
-                .array_buffer()
-                .map_err(|e| format!("array_buffer {path}: {e:?}"))?,
-        )
-        .await
-        .map_err(|e| format!("array_buffer await {path}: {e:?}"))?;
-        Ok(js_sys::Uint8Array::new(&array_buffer).to_vec())
-    }
-
-
-
-    /// **Stale-while-revalidate** fetch — for `manifest.json`, the one
-    /// *mutable* artifact. It names the current content-hashed bundles, so the
-    /// old cache-first-forever strategy pinned a client to whatever MSL version
-    /// it first loaded; a network-first strategy fixed updates but paid a
-    /// network round-trip on every boot.
-    ///
-    /// SWR gets both: if a cached manifest exists, return it **immediately**
-    /// (instant boot from the warm cache) and revalidate in the background so
-    /// the *next* load picks up any new release. The referenced bundles are
-    /// content-hashed + cached-first-forever, so serving last session's
-    /// manifest just serves last session's (already-cached) bundles — exactly
-    /// the SWR trade. Cold (no cached copy): fall back to the network, then to
-    /// cache on a race.
-    async fn fetch_bytes_revalidated(path: &str) -> Result<Vec<u8>, String> {
-        let cache = open_cache().await?;
-        if let Ok(Some(bytes)) = cache_lookup(&cache, path).await {
-            // Serve stale now; refresh for next time off the critical path.
-            let p = path.to_string();
-            wasm_bindgen_futures::spawn_local(async move {
-                if let Ok(c) = open_cache().await {
-                    if let Err(e) = network_fetch_and_cache(&c, &p).await {
-                        bevy::log::debug!("[MSL] {p}: background revalidate failed: {e}");
-                    }
-                }
-            });
-            return Ok(bytes);
-        }
-        // Cold cache — must hit the network. Fall back to a cached copy only if
-        // a concurrent fetch landed one in the meantime.
-        match network_fetch_and_cache(&cache, path).await {
-            Ok(bytes) => Ok(bytes),
-            Err(net_err) => match cache_lookup(&cache, path).await {
-                Ok(Some(bytes)) => {
-                    bevy::log::warn!(
-                        "[MSL] {path}: network fetch failed ({net_err}); using cached copy"
-                    );
-                    Ok(bytes)
-                }
-                _ => Err(net_err),
-            },
-        }
-    }
-
-    /// Evict superseded MSL blobs from the `lunco-msl-v1` cache. The
-    /// content-hashed `*-<sha>.{bin,tar}.zst` bundles are immutable and cached
-    /// cache-first forever; when a new MSL release ships, the manifest points at
-    /// fresh hashes and the old blobs would otherwise linger in browser storage
-    /// indefinitely (unbounded growth across releases). After a successful
-    /// manifest load — once the *current* blobs are (re)cached — we delete every
-    /// cached entry the manifest no longer references. The cache is a dedicated
-    /// MSL bucket, so anything not in the keep-set is stale. Best-effort: logs
-    /// and returns on any error, never fails the load.
-    async fn prune_stale_cache(manifest: &MslManifest) {
-        let cache = match open_cache().await {
-            Ok(c) => c,
-            Err(e) => {
-                bevy::log::warn!("[MSL] cache prune skipped (open failed): {e}");
-                return;
-            }
-        };
-
-        // Filenames the current manifest references; everything else is stale.
-        let mut keep = std::collections::HashSet::new();
-        keep.insert("manifest.json".to_string());
-        keep.insert(manifest.sources.filename.clone());
-        if let Some(p) = manifest.parsed.as_ref() {
-            keep.insert(p.filename.clone());
-        }
-
-        let keys_val = match JsFuture::from(cache.keys()).await {
-            Ok(v) => v,
-            Err(e) => {
-                bevy::log::warn!("[MSL] cache prune skipped (keys() failed): {e:?}");
-                return;
-            }
-        };
-
-        let mut removed = 0u32;
-        for entry in js_sys::Array::from(&keys_val).iter() {
-            let req: Request = match entry.dyn_into() {
-                Ok(r) => r,
-                Err(_) => continue,
-            };
-            let url = req.url();
-            // Last path segment (sans any query) is the blob filename.
-            let filename = url
-                .rsplit('/')
-                .next()
-                .unwrap_or("")
-                .split('?')
-                .next()
-                .unwrap_or("");
-            if filename.is_empty() || keep.contains(filename) {
-                continue;
-            }
-            if JsFuture::from(cache.delete_with_str(&url)).await.is_ok() {
-                removed += 1;
-                bevy::log::info!("[MSL] cache prune: evicted superseded blob `{filename}`");
-            }
-        }
-        if removed > 0 {
-            bevy::log::info!("[MSL] cache prune: evicted {removed} superseded blob(s)");
         }
     }
 }

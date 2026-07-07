@@ -23,6 +23,20 @@
         import init, * as wasm from './__LC_BUNDLE__.js';
         import { boot } from './lunco-boot.js';
 
+        // NB: capping the web render resolution by overriding `devicePixelRatio`
+        // does NOT work — winit's `fit_canvas_to_parent` sizes the drawing buffer
+        // from the real device-pixel content box regardless, so it only shrinks the
+        // egui UI (which reads the DPR) with no fill-rate win. A proper 3D
+        // render-scale needs a reduced-resolution render target, not a DPR hack.
+
+        // ── Modelica worker preload (memory) ─────────────────────────────────
+        // The Modelica engine can preload the full parsed MSL (~140 MB) into every
+        // Fast-Run worker at boot for parallel experiment runs. That costs hundreds
+        // of MB and OOMs a memory-constrained tab, so it is OFF by default (single
+        // compiles/runs still work; Fast Runs serialize on one worker). Turn it back
+        // on for full parallelism by setting this BEFORE boot:
+        //     window.__lc_worker_preload = true;
+
         const __LC_WASM_SIZE__ = 0;
 
         // Bridges exposed on `window` only if this bundle actually exports
@@ -31,8 +45,47 @@
         //   lunco_api    — the in-browser API bridge (lunco-api compiled for
         //                  wasm). Same JSON envelope as the native HTTP API:
         //                  `await window.lunco_api('{"command":"Ping"}')`.
-        for (const k of ['__lc_test_worker_ping', '__lc_test_dispatch_compile', 'lunco_api']) {
+        //   lunco_rhai   — rhai one-shot convenience over lunco_api:
+        //                  `await window.lunco_rhai('restart_scene(); pause()')`.
+        for (const k of ['__lc_test_worker_ping', '__lc_test_dispatch_compile', 'lunco_api', 'lunco_rhai']) {
             if (wasm[k]) window[k] = wasm[k];
+        }
+
+        // Autoload the deploy's default scene once the app is live.
+        //
+        // Fully dynamic — NOT compiled in. `scenes.json` is a plain file next
+        // to the wasm, written by scripts/build_web.sh and editable after
+        // deploy: add/remove scenes or repoint `default` with no rebuild.
+        // Absent (e.g. lunica, or a sandbox deploy that wants the built-in
+        // scene) → 404 → this is a no-op. Shape:
+        //   { "default": "twins/moonbase/moonbase_scene.usda",
+        //     "scenes": [ { "name": "Moonbase",
+        //                   "path": "twins/moonbase/moonbase_scene.usda" } ] }
+        async function autoloadDefaultScene() {
+            if (typeof window.lunco_api !== 'function') return;   // app w/o API bridge
+            // A ?scene=<path> deep-link (or ?scene=none to opt out) wins over
+            // the deploy default, so shared links keep pointing where they aim.
+            const q = new URL(location.href).searchParams.get('scene');
+            if (q === 'none') return;
+            let path = q;
+            if (!path) {
+                let cfg;
+                try {
+                    const r = await fetch('./scenes.json', { cache: 'no-cache' });
+                    if (!r.ok) return;                            // no config for this deploy
+                    cfg = await r.json();
+                } catch { return; }
+                path = cfg && cfg.default;
+            }
+            if (!path) return;
+            try {
+                const res = await window.lunco_api(JSON.stringify({
+                    command: 'LoadScene', params: { path },
+                }));
+                console.log('[autoload] default scene', path, res);
+            } catch (e) {
+                console.error('[autoload] LoadScene failed', path, e);
+            }
         }
 
         boot({
@@ -40,6 +93,7 @@
             wasmUrl: './__LC_BUNDLE___bg.wasm',
             wasmSize: __LC_WASM_SIZE__,
             title: '__LC_NAME__',
+            onReady: autoloadDefaultScene,
         });
     </script>
 </body>

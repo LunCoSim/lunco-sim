@@ -3,11 +3,6 @@
     defaultPrim = "SkidRover"
     upAxis = "Y"
     metersPerUnit = 1
-    # Shared control-profile library: brings the `_RoverControl` class (its
-    # `Controls` intent->port scope) into scope so `SkidRover` can `inherits` it.
-    subLayers = [
-        @../control_profiles.usda@
-    ]
 )
 
 # Base Skid-Steer Rover — reusable component definition.
@@ -43,11 +38,6 @@
 
 def Xform "SkidRover" (
     kind = "component"
-    # Intent->port control (stage 2): inherit the shared rover profile's `Controls`
-    # scope (forward/back->throttle, left/right->steer, action->brake). Override a
-    # single intent by redefining `Controls/<intent>` locally; the key->intent half
-    # is the shared leafwing UserIntent map.
-    inherits = </_RoverControl>
     prepend apiSchemas = [
         "PhysicsRigidBodyAPI",
         "PhysicsMassAPI",
@@ -67,6 +57,17 @@ def Xform "SkidRover" (
     float lunco:spawnLift = 1.0
     float physics:linearDamping = 0.5
     float physics:angularDamping = 2.0
+
+    # Intent->port control (stage 2): the shared rover profile's `Controls` scope
+    # (forward/back->throttle, left/right->steer, action->brake). Delivered as a
+    # child `references` arc so it composes through a spawn/reference like a wheel.
+    # Override a single intent by redefining `Controls/<intent>` locally; the
+    # key->intent half is the shared leafwing UserIntent map.
+    def "Controls" (
+        prepend references = @../control_profiles.usda@</RoverControls>
+    )
+    {
+    }
 
     # Chassis collider + visual — 2.0 m × 0.3 m × 3.5 m.
     def Cube "Chassis" (

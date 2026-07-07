@@ -21,29 +21,6 @@ use avian3d::prelude::PhysicsPlugins;
 
 use lunco_ui::LuncoUiPlugin;
 use lunco_workbench::WorkbenchAppExt;
-use bevy_egui::{EguiPrimaryContextPass, EguiContexts};
-
-/// Bridge egui scroll input into `lunco_avatar::CameraScroll` so the
-/// avatar zoom systems (`SpringArm`, `Orbit`, `Chase`) react to mouse
-/// wheel events.
-///
-/// Gated on `!ctx.wants_pointer_input()` — egui sets that to `true`
-/// when the cursor is over an interactive widget that consumes scroll
-/// (scrollarea, slider, combo box, …). When `false`, the cursor is
-/// over a passive region (the viewport, empty dock area, menu
-/// background) and the scroll naturally belongs to the 3D scene.
-/// Mirrors `sandbox.rs::collect_scroll_input_gated`.
-fn collect_scroll_input(
-    mut egui_contexts: EguiContexts,
-    mut scroll_res: ResMut<lunco_avatar::CameraScroll>,
-) {
-    let Ok(ctx) = egui_contexts.ctx_mut() else { return };
-    if ctx.wants_pointer_input() {
-        return;
-    }
-    scroll_res.delta += ctx.input(|i: &bevy_egui::egui::InputState| i.raw_scroll_delta.y);
-}
-
 /// Main entry point for the simulation. Single source for desktop AND web —
 /// `#[cfg(target_arch = "wasm32")]` blocks handle platform differences, so
 /// `build_web.sh build luncosim` compiles this same `fn main` for `wasm32`.
@@ -100,8 +77,7 @@ fn main() {
         .add_plugins(lunco_workbench::WorkbenchPlugin)
         // Dismiss the HTML loading screen once the first frame paints (wasm-only;
         // no-op native). Pairs with `crates/lunco-web/web/index.html`.
-        .add_plugins(lunco_web::WebReadyPlugin)
-        .add_systems(EguiPrimaryContextPass, collect_scroll_input);
+        .add_plugins(lunco_web::WebReadyPlugin);
 
     // Register UI panels. The workbench's `ViewportPanel` holds the centre —
     // it paints nothing (transparent) but records its screen rect so the 3D

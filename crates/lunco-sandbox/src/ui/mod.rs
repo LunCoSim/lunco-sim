@@ -13,7 +13,6 @@
 //! is now structurally identical to them.
 
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 use leafwing_input_manager::prelude::*;
 use big_space::prelude::*;
 
@@ -24,6 +23,9 @@ use lunco_modelica::{ModelicaWorkbenchPlugin, ModelicaUiConfig};
 
 mod code_panel;
 mod models_palette;
+/// In-app rhai REPL panel (web + native). Empty unless the API bridge is
+/// available — the file carries its own `#![cfg(…)]`.
+mod rhai_repl_panel;
 
 /// The sandbox's interactive layer: egui workbench, bevy_picking, the USD Twin
 /// browser + RTT viewport, the in-scene editor, materials, rover panels, and
@@ -92,6 +94,10 @@ impl Plugin for SandboxUiPlugin {
                 // Rover-specific panels and the attach-a-model click flow.
                 app.register_panel(code_panel::CodePanel);
                 app.register_panel(models_palette::ModelsPalette);
+                // In-app rhai REPL — runs snippets against the live app through the
+                // API bridge, on web + native. Gated on bridge availability.
+                #[cfg(any(target_arch = "wasm32", feature = "transport-http"))]
+                app.register_panel(rhai_repl_panel::RhaiReplPanel::default());
                 app.init_resource::<models_palette::AttachState>();
                 // Attach is bevy_picking-driven (observes the same `Pointer<Click>`
                 // as selection; egui occlusion handled by the framework).
@@ -125,8 +131,6 @@ impl Plugin for SandboxUiPlugin {
             .add_systems(Update, auto_tag_workbench_3d_cameras)
             // Sharpest shadow filter (hard airless-Moon terminator) on each camera.
             .add_systems(Update, force_hard_shadow_filtering)
-            // egui scroll → avatar `CameraScroll` bridge (gated on the viewport rect).
-            .add_systems(EguiPrimaryContextPass, collect_scroll_input_gated)
             // Fallback free-flight camera when the scene authors none — interactive
             // only; a headless server has no user to control.
             .add_systems(PostUpdate,
@@ -182,27 +186,6 @@ impl Plugin for SandboxUiPlugin {
         #[cfg(target_arch = "wasm32")]
         app.add_systems(bevy::prelude::Update, sandbox_boot_from_url);
     }
-}
-
-/// Bridge egui scroll input into `lunco_avatar::CameraScroll` so the
-/// avatar zoom systems (`SpringArm`, `Orbit`, `Chase`) react to mouse
-/// wheel events.
-///
-/// Gate scroll-zoom on egui's own `wants_pointer_input()` — true over any
-/// interactive widget, false over the bare 3D — read here in the egui pass so
-/// it's same-frame. Note: NOT `is_pointer_over_area`/`is_using_pointer`; the
-/// former is true over the full-window transparent egui area (would block the
-/// scene), the latter is true for the whole duration of a scroll (would block
-/// the scroll itself after the first notch).
-fn collect_scroll_input_gated(
-    mut egui_contexts: EguiContexts,
-    mut scroll_res: ResMut<lunco_avatar::CameraScroll>,
-) {
-    let Ok(ctx) = egui_contexts.ctx_mut() else { return };
-    if ctx.wants_pointer_input() {
-        return;
-    }
-    scroll_res.delta += ctx.input(|i: &bevy_egui::egui::InputState| i.raw_scroll_delta.y);
 }
 
 /// Inserts the sharpest shadow filter (`Hardware2x2`) on every 3D camera as it

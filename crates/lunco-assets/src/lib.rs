@@ -52,6 +52,11 @@ pub mod scenario_source;
 pub mod scripting;
 pub mod tutorials;
 pub mod twin_source;
+/// Generic browser fetch + Cache-Storage + tar.zst-unpack primitives shared by
+/// every bundle distributor (MSL, twin bundles). Web-only — native downloads go
+/// through [`download`].
+#[cfg(target_arch = "wasm32")]
+pub mod web_fetch;
 
 pub use asset_sources::register_lunco_asset_sources;
 
