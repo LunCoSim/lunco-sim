@@ -70,3 +70,32 @@ pub async fn lunco_api(json: String) -> Result<String, JsValue> {
     serde_json::to_string(&envelope)
         .map_err(|e| JsValue::from_str(&format!("lunco_api: encode failed: {e}")))
 }
+
+/// JS-callable rhai one-shot for the browser console and in-app tools:
+///
+/// ```js
+/// await window.lunco_rhai('restart_scene(); pause()');
+/// ```
+///
+/// Thin convenience over [`lunco_api`] that wraps `code` in the `RunRhai`
+/// envelope, so the web build runs rhai through the **exact same** ECS dispatch
+/// as the native `sandbox rhai` client and MCP — no sockets. Returns the JSON
+/// response envelope string; its `data` carries the script's captured stdout.
+#[wasm_bindgen]
+pub async fn lunco_rhai(code: String) -> Result<String, JsValue> {
+    let bridge = WASM_BRIDGE
+        .with(|b| b.borrow().clone())
+        .ok_or_else(|| JsValue::from_str("lunco_rhai: app not ready (bridge unset)"))?;
+
+    let req = crate::rhai_request(&code)
+        .map_err(|e| JsValue::from_str(&format!("lunco_rhai: {e}")))?;
+
+    let resp = bridge
+        .execute(req)
+        .await
+        .map_err(|_| JsValue::from_str("lunco_rhai: request dropped (app shutting down?)"))?;
+
+    let envelope = ApiResponseEnvelope::from(resp);
+    serde_json::to_string(&envelope)
+        .map_err(|e| JsValue::from_str(&format!("lunco_rhai: encode failed: {e}")))
+}

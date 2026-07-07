@@ -258,6 +258,10 @@ fn default_plugins(headless: bool) -> bevy::app::PluginGroupBuilder {
                 canvas: Some("#bevy".to_string()),
                 #[cfg(target_arch = "wasm32")]
                 fit_canvas_to_parent: true,
+                // NB: the web render-scale cap lives in index.html (capping
+                // `devicePixelRatio` before winit init). Bevy's
+                // `WindowResolution::with_scale_factor_override` is IGNORED under
+                // `fit_canvas_to_parent`, so it can't be done here.
                 present_mode,
                 // Centralized merged-titlebar chrome + persisted geometry.
                 ..lunco_workbench::restored_window(window_title)
@@ -2220,6 +2224,7 @@ fn bridge_usd_dem_terrain(
     q: Query<(Entity, &lunco_usd::UsdPrimPath), Without<DemBridged>>,
     stages: Res<Assets<lunco_usd::UsdStageAsset>>,
     twins: Res<lunco_assets::twin_source::TwinRoots>,
+    asset_server: Res<AssetServer>,
     registry: Res<lunco_terrain_surface::TerrainLayerParserRegistry>,
     mut obstacle_spec: ResMut<lunco_obstacle_field::ObstacleFieldSpec>,
     mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
@@ -2243,9 +2248,17 @@ fn bridge_usd_dem_terrain(
             continue;
         };
         commands.entity(entity).insert(DemBridged); // examined — don't re-scan
+        // Directory of the scene asset this prim came from (e.g.
+        // `twins/moonbase`), used to resolve a relative `demSource` when NO
+        // Twin is open — the web autoload path (LoadScene from the staged asset
+        // tree) has no `twin://` root, so the DEM is resolved against the
+        // scene's own folder instead. `None` for in-memory stages.
+        let scene_dir = asset_server
+            .get_path(id)
+            .and_then(|p| p.path().parent().map(|d| d.to_path_buf()));
         let cs = canonical.get(id).expect("checked above");
         bridge_dem_prim_read(
-            &cs.view(), entity, prim_path, &sdf, &twins, &registry,
+            &cs.view(), entity, prim_path, &sdf, &twins, scene_dir.as_deref(), &registry,
             obstacle_spec.bypass_change_detection(), &mut commands,
         );
     }
@@ -2263,6 +2276,7 @@ fn bridge_dem_prim_read<R: UsdRead>(
     prim_path: &lunco_usd::UsdPrimPath,
     sdf: &openusd::sdf::Path,
     twins: &lunco_assets::twin_source::TwinRoots,
+    scene_dir: Option<&std::path::Path>,
     registry: &lunco_terrain_surface::TerrainLayerParserRegistry,
     obstacle_spec: &mut lunco_obstacle_field::spec::ObstacleFieldSpec,
     commands: &mut Commands,
@@ -2310,11 +2324,20 @@ fn bridge_dem_prim_read<R: UsdRead>(
         warn!("[usd-dem] prim {} is a DEM terrain but has no dem-layer demSource", prim_path.path);
         return;
     };
-    let Some((_, root)) = twins.primary() else {
-        warn!("[usd-dem] no open Twin to resolve DEM source '{rel}'");
+    // Resolve the DEM source to a byte-readable URI. Prefer an open Twin's root
+    // (native Open-Twin flow, absolute fs path). Otherwise fall back to the
+    // scene's own asset directory — the web autoload path loads the scene from
+    // the staged `assets/` tree with no `twin://` root, so `terrain/…` resolves
+    // to `twins/<name>/terrain/…` (asset-relative; the wasm DEM reader fetches
+    // it same-origin under `assets/`).
+    let uri = if let Some((_, root)) = twins.primary() {
+        root.join(&rel).to_string_lossy().to_string()
+    } else if let Some(dir) = scene_dir {
+        dir.join(&rel).to_string_lossy().replace('\\', "/")
+    } else {
+        warn!("[usd-dem] cannot resolve DEM source '{rel}': no open Twin and no scene directory");
         return;
     };
-    let uri = root.join(&rel).to_string_lossy().to_string();
     // `windowM` = side length (m) realized at native res. 0 = whole map; >0 = side;
     // absent/negative = a safe 4 km window (avoid an accidental full-map build).
     let half_window = match attr_f32("windowM", "lunco:terrain:windowM") {

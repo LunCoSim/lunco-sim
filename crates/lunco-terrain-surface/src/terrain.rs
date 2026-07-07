@@ -19,11 +19,12 @@ use bevy::tasks::{AsyncComputeTaskPool, Task};
 use big_space::prelude::CellCoord;
 use lunco_core::{on_command, register_commands, Command, GridAnchor, WorldGrid};
 use lunco_obstacle_field::field::{HeightGrid, MeshData};
-use lunco_obstacle_field::sampler::{salt, sample_layer};
-use lunco_obstacle_field::spec::{CraterLayer, Pattern};
 
-use crate::bake::{crop_centered, resample};
-use crate::dem::{height_grid_from_geotiff, DemMetadata};
+// The pure decode → crop/resample → crater-stamp pipeline lives in the
+// bevy/avian-free `lunco-terrain-bake` crate, so the wasm Web Worker (`dem_worker`)
+// runs the SAME `bake_grid` this native task calls. Only the avian collider + Bevy
+// mesh derive (below) stay here, where those types live.
+use lunco_terrain_bake::{bake_grid, BakedGrid, DemBakeJob};
 
 /// Default realized region side length (metres) when `window_m` is 0… no — see
 /// below: 0 means the whole map. This is the fallback when a caller passes a
@@ -52,60 +53,8 @@ pub struct DemTerrainSurface;
 #[derive(Component)]
 pub struct DocBackedTerrain;
 
-/// Stamp the shared [`CraterLayer`] (from the global [`ObstacleFieldSpec`]) into a
-/// DEM working grid as REAL geometry — so the large basins appear in BOTH the
-/// streamed visual mesh AND the heightfield collider (you can drive into them).
-///
-/// **Non-destructive** (the source DEM bytes are never touched — only the in-memory
-/// working copy) and **deterministic** (the seed drives placement, so every
-/// networked peer regenerates identical basins with nothing to transfer; the spec
-/// itself already replicates). Distinct from the `terrain_geomorph` shader's fine
-/// normal-only crater texture — this layer owns the big, drivable basins.
-///
-/// Craters fill the WHOLE DEM window (`grid.half_extent`), not the spec's
-/// `region_half_extent` (which bounds the near-field rock scatter). Placement is
-/// **blue-noise** with a `min_spacing` derived from crater size + density — NOT the
-/// spec's `pattern` (which tunes rocks): `stamp_crater` is *additive*, so uniform
-/// overlap stacks rims into spike artifacts and sums bowls into bottomless holes,
-/// and a 3 m Poisson spacing over an 8 km window would blow up. Returns the count
-/// stamped. Pure → safe to call off-thread.
-pub(crate) fn stamp_spec_craters(grid: &mut HeightGrid, craters: &CraterLayer, seed: u64) -> usize {
-    let placements = crater_placements(craters, seed, grid.half_extent);
-    grid.stamp_craters(&placements, craters);
-    placements.len()
-}
-
-/// The deterministic crater placements for a terrain of the given `half_extent` —
-/// the SAME set [`stamp_spec_craters`] rasterises into the grid, so the dedicated
-/// high-fidelity crater mesh (the craters layer's overlay) lands exactly on the
-/// stamped basins. Blue-noise `min_spacing` derived from crater size + density (NOT
-/// the spec pattern): `stamp_crater` is additive, so uniform overlap stacks rims into
-/// spikes, and a 3 m Poisson over an 8 km window would blow up.
-pub(crate) fn crater_placements(
-    craters: &CraterLayer,
-    seed: u64,
-    half_extent: f32,
-) -> Vec<lunco_obstacle_field::sampler::Placement> {
-    if !craters.enabled || craters.density <= 0.0 {
-        return Vec::new();
-    }
-    let side = (2.0 * half_extent) as f64;
-    let count = ((craters.density as f64 * side * side) / 10_000.0).round().max(0.0) as usize;
-    if count == 0 {
-        return Vec::new();
-    }
-    let pitch = (side / count.max(1) as f64).sqrt() as f32 * 0.7;
-    let min_spacing = (craters.size.mode * 2.0).max(pitch).max(6.0);
-    sample_layer(
-        seed,
-        salt::CRATERS,
-        Pattern::PoissonDisk { min_spacing },
-        half_extent,
-        count,
-        craters.size,
-        0.0,
-    )
-}
+// `stamp_spec_craters` / `crater_placements` moved to `lunco_terrain_bake::stamp`
+// (shared with the wasm worker); the craters layer calls them from there.
 
 /// A request to build a DEM tile **onto the entity carrying this component**.
 /// [`start_dem_builds`] kicks the off-thread bake; [`finish_dem_builds`] inserts
@@ -400,13 +349,54 @@ struct DemBuild {
 #[derive(Component)]
 struct DemBuildTask(Task<Result<DemBuild, String>>);
 
-/// Read a file's bytes through the cross-platform storage abstraction.
+/// WEB: marks a terrain whose bake was dispatched to the off-thread DEM worker
+/// (in place of a `DemBuildTask`). Carries the assembly settings the worker's
+/// replies need — the request marker is dropped on the coarse reply (to release
+/// the physics hold), so these can't be read from it later. `id` (the entity
+/// index) correlates a reply back to this entity.
+#[derive(Component, Clone)]
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub struct DemWorkerJob {
+    id: u32,
+    collider_ring: bool,
+    lod_viz: bool,
+    with_default_material: bool,
+}
+
+/// Derive the avian collider + Bevy `MeshData` a pure [`BakedGrid`] needs into a
+/// [`DemBuild`], ready for [`assemble_dem_build`]. On native this runs inside the
+/// async task (collider off-thread); on web the worker returns the grid and this
+/// runs on the main thread — cheap for the streaming (`collider_ring` + `lod_viz`)
+/// path, which builds neither a static collider nor a static mesh.
+fn dem_build_from_baked(baked: BakedGrid, collider_ring: bool, lod_viz: bool) -> DemBuild {
+    let half_extent = baked.grid.half_extent;
+    let collider = if collider_ring {
+        None
+    } else {
+        let h = half_extent as f64;
+        Some(Collider::heightfield(baked.grid.to_avian_heights(), DVec3::new(2.0 * h, 1.0, 2.0 * h)))
+    };
+    let mesh = if lod_viz { None } else { Some(baked.grid.to_mesh_data()) };
+    DemBuild {
+        collider,
+        mesh,
+        grid: Some(std::sync::Arc::new(baked.grid)),
+        base_grid: std::sync::Arc::new(baked.base_grid),
+        half_extent,
+        res: baked.res,
+        native_res: baked.native_res,
+        site: baked.site,
+    }
+}
+
+/// Read a DEM file's bytes through the platform's I/O.
 ///
-/// Native uses `FileStorage`; the wasm arm is an explicit "not yet" at the I/O
-/// boundary only — the decode/resample/spawn above are platform-agnostic, and
-/// the web strategy is pre-baked streamed tiles (M7), not fetching a 40 MB
-/// monolithic DEM. So this is **not** a native-gated feature: it compiles and
-/// runs on wasm and fails with a clear message rather than silently vanishing.
+/// Native reads through `lunco-storage::FileStorage`; wasm fetches same-origin
+/// over HTTP (the Twin's terrain folder is staged next to the wasm under
+/// `assets/`), cache-first-forever in a Cache-Storage bucket so the large
+/// immutable heightmap re-hydrates instantly next load. Pure I/O (an `await`, not
+/// CPU) → safe to run on the main-thread event loop; the heavy decode/stamp is
+/// what moves to the worker.
 async fn read_bytes(path: std::path::PathBuf) -> Result<Vec<u8>, String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -418,123 +408,111 @@ async fn read_bytes(path: std::path::PathBuf) -> Result<Vec<u8>, String> {
     }
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = path;
-        Err("web DEM byte source not yet wired (planned with tiled streaming, M7); \
-             the decode/resample path is platform-agnostic"
-            .to_string())
+        // Fetch the DEM bytes same-origin over HTTP (the Twin's terrain folder is
+        // staged next to the wasm under `assets/`), cache-first-forever in a
+        // Cache-Storage bucket so the (large, immutable) heightmap re-hydrates
+        // instantly on the next load. The DEM request URI is asset-relative on
+        // web (resolved against the scene's own directory — no `twin://`), so
+        // prepend the bevy web asset root unless it's already absolute/prefixed.
+        let rel = path.to_string_lossy().replace('\\', "/");
+        let url = if rel.starts_with("assets/") || rel.starts_with("http") || rel.starts_with('/') {
+            rel
+        } else {
+            format!("assets/{rel}")
+        };
+        lunco_assets::web_fetch::fetch_bytes_cached("lunco-twin-v1", &url).await
     }
 }
 
-/// Kick an off-thread build for each pending request.
+/// Kick a build for each pending request. On native (and the web fallback if no
+/// worker was staged) the shared `bake_grid` runs in an `AsyncComputeTaskPool`
+/// task; on web it is dispatched to the off-thread [`dem_worker`] so the decode +
+/// crater stamp never freezes the page. Both paths run the SAME bake code.
 fn start_dem_builds(
     mut commands: Commands,
     q: Query<
         (Entity, &DemTerrainRequest, Option<&crate::terrain_layers::TerrainLayerStack>),
-        Without<DemBuildTask>,
+        (Without<DemBuildTask>, Without<DemWorkerJob>),
     >,
 ) {
     for (entity, req, stack) in &q {
         let dir = std::path::PathBuf::from(&req.uri);
         let meta_path = dir.join("metadata.yaml");
         let tif_path = dir.join("materials/textures/heightmap.tif");
-        let half_window = req.half_window;
-        let target_res = req.target_res;
-        let lod_viz = req.lod_viz;
         let collider_ring = req.collider_ring;
-        let detail_upsample = req.detail_upsample.max(1);
-        // The terrain's composed layer stack (from its USD child layer prims). Stamp
-        // layers (craters, …) run OFF-THREAD in the build task below; scatter layers
-        // (rocks) are no-ops here and run on the main thread post-build.
-        let layers: Vec<_> =
-            stack.map(|s| s.0.iter().map(|e| e.layer.clone()).collect()).unwrap_or_default();
+        let lod_viz = req.lod_viz;
+        // The composed stamp specs (craters, …) — serializable, so the SAME set
+        // drives the native bake AND the worker (deterministic from the seed, so
+        // nothing but the spec crosses the worker boundary). Scatter layers (rocks)
+        // are no-ops here; they run on the main thread post-build.
+        let job = DemBakeJob {
+            half_window: req.half_window,
+            target_res: req.target_res,
+            detail_upsample: req.detail_upsample.max(1),
+            stamps: stack
+                .map(|s| s.0.iter().filter_map(|e| e.layer.stamp_spec()).collect())
+                .unwrap_or_default(),
+        };
 
+        // WEB: offload decode + stamp to the DEM Web Worker. A detached I/O task
+        // fetches the bytes (an `await`, not a freeze) then hands them to the worker,
+        // which streams a coarse preview and then the full grid back to
+        // `finish_dem_worker`. The heavy CPU never touches the page's main thread.
+        #[cfg(target_arch = "wasm32")]
+        if lunco_terrain_bake::worker_client::is_available() {
+            let id = entity.index_u32();
+            commands.entity(entity).insert(DemWorkerJob {
+                id,
+                collider_ring,
+                lod_viz,
+                with_default_material: req.with_default_material,
+            });
+            let job = job.clone();
+            AsyncComputeTaskPool::get()
+                .spawn(async move {
+                    let meta = match read_bytes(meta_path).await {
+                        Ok(b) => String::from_utf8_lossy(&b).into_owned(),
+                        Err(e) => return bevy::log::error!("[dem-terrain] meta fetch failed: {e}"),
+                    };
+                    let tif = match read_bytes(tif_path).await {
+                        Ok(b) => b,
+                        Err(e) => return bevy::log::error!("[dem-terrain] tif fetch failed: {e}"),
+                    };
+                    if let Err(e) =
+                        lunco_terrain_bake::worker_client::dispatch(id, &job, &meta, &tif)
+                    {
+                        bevy::log::error!("[dem-terrain] worker dispatch failed: {e:?}");
+                    }
+                })
+                .detach();
+            continue;
+        }
+
+        // NATIVE (and web without a staged worker): full bake in an async task — a
+        // real thread on native. `bake_grid` is the SAME code the worker runs; only
+        // the avian collider + Bevy mesh derive is added here (it needs those types).
         let task = AsyncComputeTaskPool::get().spawn(async move {
             let meta_bytes = read_bytes(meta_path).await?;
-            let meta_str = String::from_utf8(meta_bytes)
-                .map_err(|e| format!("metadata.yaml not utf-8: {e}"))?;
-            let meta = DemMetadata::from_yaml_str(&meta_str).map_err(|e| e.to_string())?;
-
+            let meta_str =
+                String::from_utf8(meta_bytes).map_err(|e| format!("metadata.yaml not utf-8: {e}"))?;
             let tif = read_bytes(tif_path).await?;
-            let grid = height_grid_from_geotiff(&tif, &meta).map_err(|e| e.to_string())?;
-
-            // Crop the playable region at native resolution. The mesh and collider
-            // share this grid so visuals and contact agree.
-            let tile = crop_centered(&grid, half_window);
-            let native_res = tile.res;
-            // Optional visual-quality downsample (lossy). 0 / ≥ native keeps native.
-            let mut tile = if target_res > 0 && target_res < native_res {
-                resample(&tile, tile.half_extent as f64, target_res)
-            } else {
-                tile
-            };
-            // INTELLIGENT UPSCALING: the DEM ground is coarse (~5 m) but generated
-            // craters are procedural and deserve higher fidelity. Bilinearly upscale
-            // the coarse ground to a finer working grid (no fake ground detail — just
-            // smoother interpolation), THEN stamp craters into it so their rims resolve
-            // well below the DEM sampling. Decouples crater fidelity from DEM res.
-            if detail_upsample > 1 {
-                let target = (tile.res - 1) * detail_upsample + 1;
-                tile = resample(&tile, tile.half_extent as f64, target);
-            }
-            let half_extent = tile.half_extent;
-            let res = tile.res;
-            // Retain the upscaled-but-crater-FREE grid so a live Inspector regenerate
-            // re-stamps craters off it at full detail without re-reading the GeoTIFF.
-            let base_grid = std::sync::Arc::new(tile.clone());
-            // Apply the geometry STAMP layers (craters, …) into the working grid BEFORE
-            // the collider/mesh derive, so both the streamed tiles and the heightfield
-            // collider show (and collide with) the same features. Deterministic from
-            // the spec seed; the source DEM bytes are never touched. Each layer logs
-            // its own contribution.
-            for layer in &layers {
-                layer.stamp(&mut tile);
-            }
-            // Build the static heightfield collider HERE (off-thread) when this isn't
-            // a streamed collider ring — the parry heightfield build over a
-            // multi-million-point DEM is the load-time cost that used to stall the
-            // main thread in `finish_dem_builds`.
-            let collider = if collider_ring {
-                None
-            } else {
-                let h = tile.half_extent as f64;
-                Some(Collider::heightfield(tile.to_avian_heights(), DVec3::new(2.0 * h, 1.0, 2.0 * h)))
-            };
-            // Static visual mesh unless lod_viz streams visual tiles instead.
-            let mesh = if lod_viz { None } else { Some(tile.to_mesh_data()) };
-            // Always retain the grid as a shared `HeightSource`. The streaming
-            // consumers (visual `lod_viz`, physics `collider_ring`) sample it, and
-            // so does the `TerrainHeight` API/scripting query — which must work on
-            // the plain static terrain too (see `crate::query`). Retaining is free:
-            // `to_avian_heights`/`to_mesh_data` only borrow, and the `Arc` is shared.
-            let grid = Some(std::sync::Arc::new(tile));
-            Ok(DemBuild {
-                collider,
-                mesh,
-                grid,
-                base_grid,
-                half_extent,
-                res,
-                native_res,
-                site: meta.site_id,
-            })
+            let baked = bake_grid(&meta_str, &tif, &job)?;
+            Ok(dem_build_from_baked(baked, collider_ring, lod_viz))
         });
         commands.entity(entity).insert(DemBuildTask(task));
     }
 }
 
-/// Collect finished builds and fill the requesting entity with the heightfield
-/// collider (+ visual mesh when rendering).
+/// Collect finished native builds and fill the requesting entity (shared assembly
+/// with the web worker path via [`assemble_dem_build`]).
 fn finish_dem_builds(
     mut commands: Commands,
     mut tasks: Query<(Entity, &mut DemBuildTask, &DemTerrainRequest)>,
     // Optional so the headless server (no render assets) still builds colliders.
-    meshes: Option<ResMut<Assets<Mesh>>>,
-    materials: Option<ResMut<Assets<StandardMaterial>>>,
+    mut meshes: Option<ResMut<Assets<Mesh>>>,
+    mut materials: Option<ResMut<Assets<StandardMaterial>>>,
 ) {
     use bevy::tasks::futures_lite::future;
-
-    let mut meshes = meshes;
-    let mut materials = materials;
 
     for (entity, mut task, req) in &mut tasks {
         let Some(result) = future::block_on(future::poll_once(&mut task.0)) else {
@@ -550,81 +528,265 @@ fn finish_dem_builds(
                 continue;
             }
         };
+        assemble_dem_build(
+            &mut commands,
+            entity,
+            req.collider_ring,
+            req.lod_viz,
+            req.with_default_material,
+            built,
+            meshes.as_deref_mut(),
+            materials.as_deref_mut(),
+        );
+    }
+}
 
-        if built.res > HEAVY_TILE_RES {
-            warn!(
-                "[dem-terrain] '{}' tile is {}² verts — heavy for a single mesh; \
-                 tiled streaming + LOD (M7) is the path for full-map detail",
-                built.site, built.res,
-            );
-        }
-
-        let h = built.half_extent as f64;
+/// Fill the terrain entity from a finished [`DemBuild`] — the shared assembly used
+/// by BOTH `finish_dem_builds` (native task) and `finish_dem_worker` (web worker
+/// coarse reply). Colliders spawn always (headless physics parity); the static
+/// visual mesh only when render assets exist and `lod_viz` isn't streaming tiles.
+#[allow(clippy::too_many_arguments)]
+fn assemble_dem_build(
+    commands: &mut Commands,
+    entity: Entity,
+    collider_ring: bool,
+    lod_viz: bool,
+    with_default_material: bool,
+    built: DemBuild,
+    meshes: Option<&mut Assets<Mesh>>,
+    materials: Option<&mut Assets<StandardMaterial>>,
+) {
+    if built.res > HEAVY_TILE_RES {
+        warn!(
+            "[dem-terrain] '{}' tile is {}² verts — heavy for a single mesh; \
+             tiled streaming + LOD (M7) is the path for full-map detail",
+            built.site, built.res,
+        );
+    }
+    let h = built.half_extent as f64;
+    {
         let mut e = commands.entity(entity);
-        // Static full-DEM collider — already built off-thread (`None` when a collider
-        // ring streams per-tile colliders instead). Just insert the finished component.
+        // Static full-DEM collider (`None` when a collider ring streams per-tile
+        // colliders instead) — already built (off-thread on native).
         if let Some(collider) = built.collider {
             e.insert((RigidBody::Static, collider));
         }
         // Retain the pristine base grid + source settings so the crater layer can be
         // re-baked live from the Inspector (`RegenerateField`) without disk I/O.
-        e.insert((
-            DemBaseGrid(built.base_grid),
-            DemTerrainSource { collider_ring: req.collider_ring },
-        ));
-        // Retain the grid + mark the streaming mode(s). `lod_viz` streams visual LOD
-        // tiles (static mesh suppressed); `collider_ring` streams physics tiles
-        // (static collider suppressed above). Both sample the retained `DemHeightField`.
+        e.insert((DemBaseGrid(built.base_grid), DemTerrainSource { collider_ring }));
+        // Retain the grid + mark the streaming mode(s). Both sample `DemHeightField`.
         if let Some(grid) = built.grid {
             e.insert(crate::stream_viz::DemHeightField(grid));
-            if req.lod_viz {
+            if lod_viz {
                 e.insert((
                     crate::stream_viz::TerrainLodViz::default(),
                     crate::stream_viz::LodTiles::default(),
                     crate::stream_viz::PendingTileBakes::default(),
-                    // Default Lit; switchable live in the Inspector (Terrain Shader).
                     crate::stream_viz::TerrainShaderMode::default(),
                 ));
             }
-            if req.collider_ring {
+            if collider_ring {
                 e.insert((
                     crate::collider_ring::TerrainColliderRing::default(),
                     crate::collider_ring::ColliderTiles::default(),
                 ));
             }
         }
-        if let (Some(meshes), Some(mesh)) = (meshes.as_mut(), built.mesh) {
-            let MeshData { positions, normals, uvs, indices } = mesh;
-            e.insert(Mesh3d(meshes.add(lunco_obstacle_field::grid_mesh(
-                positions, normals, uvs, indices,
-            ))));
-            // Default material only for the standalone command path; the USD path
-            // authors its own via `materialType` (don't clobber it).
-            if req.with_default_material {
-                if let Some(materials) = materials.as_mut() {
-                    e.insert(MeshMaterial3d(materials.add(StandardMaterial {
-                        base_color: Color::srgb(0.30, 0.29, 0.27),
-                        perceptual_roughness: 1.0,
-                        ..default()
-                    })));
+    }
+    if let (Some(meshes), Some(mesh)) = (meshes, built.mesh) {
+        let MeshData { positions, normals, uvs, indices } = mesh;
+        let handle = meshes.add(lunco_obstacle_field::grid_mesh(positions, normals, uvs, indices));
+        commands.entity(entity).insert(Mesh3d(handle));
+        // Default material only for the standalone command path; the USD path authors
+        // its own via `materialType` (don't clobber it).
+        if with_default_material {
+            if let Some(materials) = materials {
+                let mat = materials.add(StandardMaterial {
+                    base_color: Color::srgb(0.30, 0.29, 0.27),
+                    perceptual_roughness: 1.0,
+                    ..default()
+                });
+                commands.entity(entity).insert(MeshMaterial3d(mat));
+            }
+        }
+    }
+    let mode = match (lod_viz, collider_ring) {
+        (true, true) => " [lod-viz + collider-ring]",
+        (true, false) => " [lod-viz: streaming tiles]",
+        (false, true) => " [collider-ring: streaming colliders]",
+        (false, false) => "",
+    };
+    if built.res == built.native_res {
+        info!("[dem-terrain] built '{}' ({}² native, ±{:.0} m){}", built.site, built.res, h, mode);
+    } else {
+        info!(
+            "[dem-terrain] built '{}' ({}² resampled from {}² native, ±{:.0} m){}",
+            built.site, built.res, built.native_res, h, mode
+        );
+    }
+}
+
+/// WEB: apply the DEM worker's replies. The **coarse** preview assembles the
+/// terrain like a native build (terrain + collider ring appear, the physics hold
+/// releases, rovers settle); the **full** grid then swaps in via the SAME live
+/// re-stamp machinery [`finish_dem_restamp`] uses, so the tiles refine
+/// near-camera-first with no despawn flash. Progressive, and no code duplicated.
+#[cfg(target_arch = "wasm32")]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn finish_dem_worker(
+    mut commands: Commands,
+    jobs: Query<(Entity, &DemWorkerJob)>,
+    mut swap_q: Query<(
+        &mut crate::stream_viz::DemHeightField,
+        Option<&mut crate::stream_viz::LodTiles>,
+        Option<&mut crate::stream_viz::PendingTileBakes>,
+        Has<Mesh3d>,
+    )>,
+    scattered: Query<Entity, With<crate::terrain_layers::TerrainScatterEntity>>,
+    mut meshes: Option<ResMut<Assets<Mesh>>>,
+    mut materials: Option<ResMut<Assets<StandardMaterial>>>,
+) {
+    let replies = lunco_terrain_bake::worker_client::drain_replies();
+    if replies.is_empty() {
+        return;
+    }
+    let mut any_full = false;
+    for reply in replies {
+        let Some((entity, job)) = jobs.iter().find(|(_, j)| j.id == reply.id) else {
+            continue;
+        };
+        match (reply.stage, reply.grid) {
+            (lunco_terrain_bake::BakeStage::Coarse, Ok(grid)) => {
+                let baked = BakedGrid {
+                    base_grid: grid.clone(),
+                    grid,
+                    site: reply.site,
+                    native_res: reply.native_res,
+                    res: reply.res,
+                    stage: lunco_terrain_bake::BakeStage::Coarse,
+                };
+                let built = dem_build_from_baked(baked, job.collider_ring, job.lod_viz);
+                // Drop the request so the physics hold releases (rovers settle on the
+                // coarse collider). Keep DemWorkerJob to receive the full grid.
+                commands.entity(entity).remove::<DemTerrainRequest>();
+                assemble_dem_build(
+                    &mut commands,
+                    entity,
+                    job.collider_ring,
+                    job.lod_viz,
+                    job.with_default_material,
+                    built,
+                    meshes.as_deref_mut(),
+                    materials.as_deref_mut(),
+                );
+            }
+            (lunco_terrain_bake::BakeStage::Full, Ok(grid)) => {
+                if let Ok((mut hf, tiles, pending, has_static_mesh)) = swap_q.get_mut(entity) {
+                    swap_terrain_grid(
+                        &mut commands,
+                        entity,
+                        grid,
+                        job.collider_ring,
+                        &mut hf,
+                        tiles,
+                        pending,
+                        has_static_mesh,
+                        meshes.as_deref_mut(),
+                    );
+                    any_full = true;
+                } else {
+                    // The coarse reply landed THIS frame too, so its `DemHeightField`
+                    // insert hasn't flushed yet and there's nothing to swap — assemble
+                    // directly from the full grid instead (never drop the refined result).
+                    let baked = BakedGrid {
+                        base_grid: grid.clone(),
+                        grid,
+                        site: reply.site,
+                        native_res: reply.native_res,
+                        res: reply.res,
+                        stage: lunco_terrain_bake::BakeStage::Full,
+                    };
+                    let built = dem_build_from_baked(baked, job.collider_ring, job.lod_viz);
+                    commands.entity(entity).remove::<DemTerrainRequest>();
+                    assemble_dem_build(
+                        &mut commands,
+                        entity,
+                        job.collider_ring,
+                        job.lod_viz,
+                        job.with_default_material,
+                        built,
+                        meshes.as_deref_mut(),
+                        materials.as_deref_mut(),
+                    );
+                }
+                commands.entity(entity).remove::<DemWorkerJob>();
+            }
+            (stage, Err(e)) => {
+                warn!("[dem-terrain] worker bake {stage:?} failed: {e}");
+                if matches!(stage, lunco_terrain_bake::BakeStage::Full) {
+                    commands.entity(entity).remove::<DemWorkerJob>();
+                } else {
+                    commands.entity(entity).remove::<(DemTerrainRequest, DemWorkerJob)>();
                 }
             }
         }
-        let mode = match (req.lod_viz, req.collider_ring) {
-            (true, true) => " [lod-viz + collider-ring]",
-            (true, false) => " [lod-viz: streaming tiles]",
-            (false, true) => " [collider-ring: streaming colliders]",
-            (false, false) => "",
-        };
-        if built.res == built.native_res {
-            info!("[dem-terrain] built '{}' ({}² native, ±{:.0} m){}", built.site, built.res, h, mode);
-        } else {
-            info!(
-                "[dem-terrain] built '{}' ({}² resampled from {}² native, ±{:.0} m){}",
-                built.site, built.res, built.native_res, h, mode
-            );
+    }
+    if any_full {
+        // Cached tile meshes are stale now → drop so re-baked tiles pick up the new
+        // heights; despawn old scatter (rocks/overlays) so they re-scatter.
+        commands.insert_resource(crate::stream_viz::LodMeshCache::default());
+        for e in &scattered {
+            commands.entity(e).try_despawn();
         }
     }
+}
+
+/// Swap a freshly (re)baked grid into a live terrain: replace `DemHeightField`,
+/// rebuild the static mesh if it uses one, arm the debounced static-collider
+/// rebuild (unless a collider ring streams physics), and invalidate the LOD tiles
+/// so they refresh near-camera-first with no despawn flash. Shared by the live
+/// re-stamp ([`finish_dem_restamp`]) and the web worker's full-grid reply.
+#[allow(clippy::too_many_arguments)]
+fn swap_terrain_grid(
+    commands: &mut Commands,
+    entity: Entity,
+    grid: HeightGrid,
+    collider_ring: bool,
+    hf: &mut crate::stream_viz::DemHeightField,
+    tiles: Option<Mut<crate::stream_viz::LodTiles>>,
+    pending: Option<Mut<crate::stream_viz::PendingTileBakes>>,
+    has_static_mesh: bool,
+    meshes: Option<&mut Assets<Mesh>>,
+) {
+    // Defer the (heavy) static-collider rebuild so the VISUAL swap lands immediately
+    // and physics reconverges shortly after. Collider-ring terrains stream physics.
+    if !collider_ring {
+        commands
+            .entity(entity)
+            .insert(DemColliderDirty(Timer::from_seconds(COLLIDER_DEBOUNCE_SECS, TimerMode::Once)));
+    }
+    if has_static_mesh {
+        if let Some(meshes) = meshes {
+            let MeshData { positions, normals, uvs, indices } = grid.to_mesh_data();
+            let handle = meshes.add(lunco_obstacle_field::grid_mesh(positions, normals, uvs, indices));
+            commands.entity(entity).insert(Mesh3d(handle));
+        }
+    }
+    *hf = crate::stream_viz::DemHeightField(std::sync::Arc::new(grid));
+    // Progressive refresh: reap any already-stale tiles (keep ≤1 generation of
+    // cover), bump the generation so live tiles re-bake near-first, drop in-flight
+    // bakes from the OLD heights.
+    if let Some(mut tiles) = tiles {
+        for e in tiles.reap_stale() {
+            commands.entity(e).try_despawn();
+        }
+        tiles.invalidate();
+    }
+    if let Some(mut pending) = pending {
+        *pending = crate::stream_viz::PendingTileBakes::default();
+    }
+    // Scatter layers re-run once the applied-marker is gone (next frame).
+    commands.entity(entity).remove::<crate::terrain_layers::TerrainLayersApplied>();
 }
 
 /// In-flight off-thread **visual** re-stamp for a terrain: clones the pristine base
@@ -780,46 +942,20 @@ fn finish_dem_restamp(
         any = true;
 
         let half = grid.half_extent as f64;
-
-        // Defer the (heavy) static-collider rebuild: arm its debounce instead of
-        // building it here, so the VISUAL swap below lands immediately and physics
-        // reconverges shortly after. Collider-ring terrains stream physics → no
-        // static collider to rebuild.
-        if !src.collider_ring {
-            commands.entity(entity).insert(DemColliderDirty(Timer::from_seconds(
-                COLLIDER_DEBOUNCE_SECS,
-                TimerMode::Once,
-            )));
-        }
-        // Rebuild the static visual mesh, if this terrain uses one (not streaming).
-        if has_static_mesh {
-            if let Some(meshes) = meshes.as_mut() {
-                let MeshData { positions, normals, uvs, indices } = grid.to_mesh_data();
-                commands.entity(entity).insert(Mesh3d(meshes.add(
-                    lunco_obstacle_field::grid_mesh(positions, normals, uvs, indices),
-                )));
-            }
-        }
-        // Swap in the new heights (streaming tiles, collider ring, TerrainHeight query).
-        *hf = crate::stream_viz::DemHeightField(std::sync::Arc::new(grid));
-
-        // Progressive refresh: bump the generation so live tiles go stale + re-bake
-        // near-first (still covering the surface), and drop in-flight bakes from the
-        // OLD heights. No despawn-everything flash. First REAP any tiles already stale
-        // from a prior re-bake so rapid edits keep at most one generation of cover —
-        // otherwise dead tiles pile up and the per-frame bookkeeping goes O(n²).
-        if let Some(mut tiles) = tiles {
-            for e in tiles.reap_stale() {
-                commands.entity(e).try_despawn();
-            }
-            tiles.invalidate();
-        }
-        if let Some(mut pending) = pending {
-            *pending = crate::stream_viz::PendingTileBakes::default();
-        }
-
-        // Scatter layers re-run once the applied-marker is gone (next frame).
-        commands.entity(entity).remove::<crate::terrain_layers::TerrainLayersApplied>();
+        // Swap the re-stamped grid in via the SAME machinery the web worker's full
+        // grid uses: arm the debounced collider rebuild, rebuild the static mesh if
+        // any, replace `DemHeightField`, and invalidate the LOD tiles progressively.
+        swap_terrain_grid(
+            &mut commands,
+            entity,
+            grid,
+            src.collider_ring,
+            &mut hf,
+            tiles,
+            pending,
+            has_static_mesh,
+            meshes.as_deref_mut(),
+        );
 
         // Coalesced trailing re-bake (a change arrived mid-task): re-arm the debounce
         // rather than spawning immediately, so a still-active drag keeps coalescing.
@@ -952,5 +1088,13 @@ pub(crate) fn register(app: &mut App) {
                 finish_dem_collider,
             ),
         );
+    // WEB: register the off-thread DEM bake worker URL (staged by build_web.sh next
+    // to the wasm) and the reply-draining system that applies the coarse-then-full
+    // grids. The worker is spawned lazily on the first bake dispatch.
+    #[cfg(target_arch = "wasm32")]
+    {
+        lunco_terrain_bake::worker_client::set_worker_url("./dem-worker/dem_worker_bootstrap.js");
+        app.add_systems(Update, finish_dem_worker);
+    }
     register_all_commands(app);
 }

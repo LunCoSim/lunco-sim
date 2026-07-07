@@ -397,6 +397,16 @@ prims; `CompositeHeightSource` (core, pure); `TerrainGeoref` parsed from
 `lunco:anchor:*`; derived surface/normal layers content-addressed through
 `lunco-precompute` (`derived_layers.rs`); `TerrainHeight` scripting query.
 
+The bake itself (GeoTIFF decode → crop/resample → intelligent upscale → crater
+stamp → `HeightGrid`) is the pure, bevy/avian-free `lunco-terrain-bake` crate, so
+the SAME code runs off-thread on both platforms: native inside an
+`AsyncComputeTaskPool` task; on wasm — where that pool degrades to the page's main
+thread and the ~40 MB decode + stamp froze the tab — dispatched to the `dem_worker`
+Web Worker over `lunco-worker-transport`, which decodes once then streams a coarse
+preview then the full grid (coarse-then-full progressive, applied via the live
+re-stamp swap). Only the avian collider + Bevy mesh derive stays in
+`lunco-terrain-surface`, where those types live.
+
 > **Note on the USD read path:** as-built terrain still reads USD via the *flatten*
 > reader (`UsdStageAsset` / `UsdDataExt`). The canonical-Stage cutover (above) is a
 > forced migration once the networking USD canonical-stage merge lands — see the two couplings.

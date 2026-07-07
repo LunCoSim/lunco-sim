@@ -1,0 +1,23 @@
+[package]
+name = "lunco-worker-transport"
+version = "0.1.0-dev"
+edition = "2021"
+description = "Generic Web Worker pool transport (spawn / boot handshake / byte + Transferable-ArrayBuffer post / crash respawn) shared by the Modelica Fast-Run workers and the DEM bake worker. wasm-only."
+
+# Browser-only: wasm32 has no OS threads, so companion work runs in Web Workers
+# (separate wasm instances). The whole crate is `#![cfg(target_arch = "wasm32")]`;
+# on native it compiles to nothing (callers use real `std::thread` instead).
+[dependencies]
+js-sys = { workspace = true }
+wasm-bindgen = { workspace = true }
+web-sys = { workspace = true, features = [
+    "console",
+    "Worker",
+    "WorkerType",
+    "WorkerOptions",
+    "MessageEvent",
+    "ErrorEvent",
+] }
+
+[lints]
+workspace = true

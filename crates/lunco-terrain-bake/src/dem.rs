@@ -31,7 +31,7 @@ use lunco_obstacle_field::field::HeightGrid;
 // `HeightGrid: HeightSource` is now implemented in `lunco-obstacle-field` (with
 // the type, per the orphan rule); only the tests below name the trait directly.
 #[cfg(test)]
-use crate::source::HeightSource;
+use lunco_terrain_core::source::HeightSource;
 
 /// Sidecar metadata emitted alongside the heightmap (`metadata.yaml`). Only the
 /// fields the loader needs are kept; the file is a tiny flat YAML map (plus a

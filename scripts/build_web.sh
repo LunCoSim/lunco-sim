@@ -83,6 +83,90 @@ get_cargo_bin_name() {
     echo "$1"
 }
 
+# Pack one Twin folder next to the wasm and echo its scenes.json entry.
+#
+#   $1 src   — path to the Twin folder (contains the scene .usda + assets)
+#   $2 name  — dist folder name under assets/twins/  (URL-safe)
+#   $3 scene — scene .usda filename within the twin
+#   $4 dist  — dist root (…/dist/sandbox)
+#
+# Copies src → dist/assets/twins/<name>/ and prints a JSON object
+# {"name":…,"path":"twins/<name>/<scene>"} on stdout (empty on failure) so
+# stage_twins can assemble the scene list. LoadScene resolves `twins/…`
+# against the same-origin `assets/` tree, so the path is asset-relative.
+stage_one_twin() {
+    local src="$1" name="$2" scene="$3" dist="$4"
+    if [ ! -d "$src" ]; then
+        warn "twin source '$src' not found — skipping (scene '$name' will be absent)" >&2
+        return 0
+    fi
+    if [ ! -f "$src/$scene" ]; then
+        warn "twin '$src' has no scene '$scene' — skipping" >&2
+        return 0
+    fi
+    local dest="$dist/assets/twins/$name"
+    mkdir -p "$dest"
+    # --delete keeps re-runs clean; exclude the twin's local runtime/history
+    # scratch (not needed by clients, history/ holds transient .tmp files) and
+    # the terrain `.cache/` raw source DTM (the baked heightmap.tif is what the
+    # client fetches — the raw NAC DTM is ~2× larger and build-only).
+    rsync -a --delete \
+        --exclude '.lunco/' --exclude 'history/' --exclude '*.tmp' --exclude '.cache/' \
+        "$src/" "$dest/" >&2
+    info "Packed twin '$name' ($(du -sh "$dest" | cut -f1)) → $dest" >&2
+    printf '{"name":"%s","path":"twins/%s/%s"}' "$name" "$name" "$scene"
+}
+
+# Pack the sandbox's Twin(s) and write dist/scenes.json (read by the
+# index.html autoloader). See the LC_TWIN_* env docs at the call site.
+stage_twins() {
+    local dist="$1"
+    local default_src="${LC_TWIN_SRC-$HOME/Documents/lunco/moonbase/twin}"
+    local default_scene="${LC_TWIN_SCENE:-moonbase_scene.usda}"
+
+    local entries="" default_path=""
+    if [ -n "$default_src" ]; then
+        local name="${LC_TWIN_NAME:-}"
+        if [ -z "$name" ]; then
+            name="$(basename "$default_src")"
+            [ "$name" = "twin" ] && name="$(basename "$(dirname "$default_src")")"
+        fi
+        local entry
+        entry="$(stage_one_twin "$default_src" "$name" "$default_scene" "$dist")"
+        if [ -n "$entry" ]; then
+            entries="$entry"
+            default_path="twins/$name/$default_scene"
+        fi
+    fi
+
+    # Extra (non-default) twins: LC_TWIN_EXTRA="name=scene=path;name2=scene2=path2"
+    if [ -n "${LC_TWIN_EXTRA:-}" ]; then
+        local IFS=';'
+        for spec in $LC_TWIN_EXTRA; do
+            [ -n "$spec" ] || continue
+            local ename="${spec%%=*}" rest="${spec#*=}"
+            local escene="${rest%%=*}" esrc="${rest#*=}"
+            local entry
+            entry="$(stage_one_twin "$esrc" "$ename" "$escene" "$dist")"
+            [ -n "$entry" ] && entries="${entries:+$entries,}$entry"
+        done
+    fi
+
+    if [ -z "$entries" ]; then
+        info "No twin packed — sandbox will boot its built-in scene."
+        rm -f "$dist/scenes.json"
+        return 0
+    fi
+    # Default is the first staged twin unless it failed (then no autoload key).
+    if [ -n "$default_path" ]; then
+        printf '{"default":"%s","scenes":[%s]}\n' "$default_path" "$entries" > "$dist/scenes.json"
+        info "Wrote scenes.json (default: $default_path)"
+    else
+        printf '{"scenes":[%s]}\n' "$entries" > "$dist/scenes.json"
+        info "Wrote scenes.json (no default — first twin failed to pack)"
+    fi
+}
+
 # Check prerequisites
 check_prerequisites() {
     info "Checking prerequisites..."
@@ -307,6 +391,19 @@ build_wasm() {
                 # sibling script.
                 info "Worker bundle up-to-date; skipping cargo build (set WORKER_REBUILD=force to override)"
             fi
+            # Off-thread DEM bake worker (`dem_worker` in `lunco-terrain-bake`).
+            # Same rationale as the Modelica worker: wasm32 has no threads, so the
+            # ~40 MB GeoTIFF decode + crater stamp would freeze the page. Runs the
+            # SAME `bake_grid` the native async task uses; streamed twin terrains
+            # (moonbase) need it. Built for lunica+sandbox alongside lunica_worker.
+            local dem_worker_wasm="$base_target_dir/wasm32-unknown-unknown/$profile/dem_worker.wasm"
+            if should_rebuild_worker "$dem_worker_wasm"; then
+                info "Building companion worker bundle: dem_worker"
+                RUSTFLAGS="${RUSTFLAGS:-} --cfg=web_sys_unstable_apis --cfg=getrandom_backend=\"wasm_js\"" \
+                    cargo build --profile "$profile" --target wasm32-unknown-unknown --bin dem_worker -p lunco-terrain-bake
+            else
+                info "DEM worker bundle up-to-date; skipping cargo build"
+            fi
             ;;
     esac
 
@@ -523,6 +620,49 @@ the browser. Run: cargo run -p lunco-assets -- download && cargo run -p lunco-as
         done
     fi
 
+    # sandbox references glTF models via `lunco-lib://models/<name>.glb`, which
+    # resolves to `<origin>/.cache/models/<name>.glb` on wasm (cache_dir() = ".cache").
+    # Stage the PROCESSED models (e.g. NASA Perseverance) next to the wasm — same
+    # idea as the luncosim textures above. Populate the cache first with:
+    #   cargo run -p lunco-assets --bin lunco-assets -- download -a perseverance \
+    #     && cargo run -p lunco-assets --bin lunco-assets -- process -p lunco-usd
+    if [ "$binary" = "sandbox" ]; then
+        local models_src=""
+        for candidate in \
+            "$PROJECT_DIR/../.cache/models" \
+            "$PROJECT_DIR/.cache/models"; do
+            if [ -d "$candidate" ]; then models_src="$candidate"; break; fi
+        done
+        if [ -n "$models_src" ]; then
+            mkdir -p "$dist_dir/.cache/models"
+            # Only the PROCESSED glbs the scene references (skip the raw *_source.glb).
+            for glb in "$models_src"/*.glb; do
+                [ -f "$glb" ] || continue
+                case "$(basename "$glb")" in
+                    *_source.glb) continue ;;
+                esac
+                cp "$glb" "$dist_dir/.cache/models/"
+                info "Copied $(basename "$glb") → $dist_dir/.cache/models/"
+            done
+        else
+            warn "no .cache/models — glTF models (Perseverance rover) will 404 in the browser. \
+Run: cargo run -p lunco-assets --bin lunco-assets -- download -a perseverance && … -- process -p lunco-usd"
+        fi
+    fi
+
+    # Pack the Twin(s) the sandbox should offer, and write scenes.json so the
+    # index.html autoloader opens the default one on boot. Dynamic, not
+    # compiled in — override the source or add scenes without rebuilding:
+    #   LC_TWIN_SRC=/path/to/twin        default twin folder to pack
+    #                                    ("" to skip; default = bundled moonbase)
+    #   LC_TWIN_NAME=moonbase            dist name under assets/twins/
+    #   LC_TWIN_SCENE=moonbase_scene.usda   scene file within the twin
+    #   LC_TWIN_EXTRA="lab=lab.usda=/path/lab;…"  extra non-default scenes
+    # Or edit dist/sandbox/scenes.json after the build.
+    if [ "$binary" = "sandbox" ]; then
+        stage_twins "$dist_dir"
+    fi
+
     # Show output size
     WASM_SIZE=$(du -h "$dist_dir/${binary}_bg.wasm" | cut -f1)
     JS_SIZE=$(du -h "$dist_dir/${binary}.js" | cut -f1)
@@ -667,6 +807,53 @@ the browser. Run: cargo run -p lunco-assets -- download && cargo run -p lunco-as
             "$dist_dir/${binary}_bg.wasm" \
             "$(ls "$worker_dist_dir/${worker_bin}_bg"*.wasm 2>/dev/null | head -1)" \
             "$binary"
+    fi
+
+    # ── DEM bake worker bundle (lunica + sandbox) ─────────────
+    # A SECOND companion worker (independent of the Modelica one): the off-thread
+    # DEM bake. Staged under `dist/<bin>/dem-worker/` so the page can
+    # `new Worker('./dem-worker/dem_worker_bootstrap.js', { type: 'module' })`.
+    # Its protocol is self-contained (bytes in → heightfield out) and built from
+    # the same tree, so it needs no wire-id lockstep guard. Absent → the terrain
+    # code falls back to the inline (main-thread) bake automatically.
+    if [ "$staged_worker" = "1" ]; then
+        local dw_bin="dem_worker"
+        local dw_bindgen_dir="$base_target_dir/web/$dw_bin"
+        local dw_dist_dir="$dist_dir/dem-worker"
+        local dw_wasm_src="$cargo_out_dir/${dw_bin}.wasm"
+        if [ -f "$dw_wasm_src" ]; then
+            info "Generating bindings for worker bundle: $dw_bin"
+            mkdir -p "$dw_bindgen_dir"
+            $wasm_bindgen_cmd "$dw_wasm_src" --out-dir "$dw_bindgen_dir" --target web
+            if [ $? -ne 0 ]; then
+                error "DEM worker binding generation failed"
+                exit 1
+            fi
+            local dw_wasm_in="$dw_bindgen_dir/${dw_bin}_bg.wasm"
+            if [ "${BUILD_PROFILE:-web-dev}" != "web-dev" ] && [ -f "$dw_wasm_in" ] \
+                && command -v wasm-opt &> /dev/null; then
+                local tmp="$dw_wasm_in.opt.tmp"
+                if wasm-opt -Oz --converge --strip-debug -o "$tmp" "$dw_wasm_in"; then
+                    mv "$tmp" "$dw_wasm_in"
+                else
+                    rm -f "$tmp"
+                fi
+            fi
+            rm -rf "$dw_dist_dir"
+            mkdir -p "$dw_dist_dir"
+            cp -r "$dw_bindgen_dir"/. "$dw_dist_dir/"
+            local dw_bootstrap="$PROJECT_DIR/crates/lunco-terrain-bake/web/dem_worker_bootstrap.js"
+            if [ -f "$dw_bootstrap" ]; then
+                cp "$dw_bootstrap" "$dw_dist_dir/dem_worker_bootstrap.js"
+            else
+                warn "No dem_worker_bootstrap.js at $dw_bootstrap — DEM worker won't init"
+            fi
+            local dw_size
+            dw_size=$(du -h "$dw_dist_dir/${dw_bin}_bg.wasm" 2>/dev/null | cut -f1)
+            info "DEM worker bundle: $dw_size at $dw_dist_dir"
+        else
+            warn "dem_worker wasm not found at $dw_wasm_src — DEM offload disabled (inline fallback)"
+        fi
     fi
 }
 

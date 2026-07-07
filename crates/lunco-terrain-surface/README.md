@@ -12,8 +12,7 @@ layers the core deliberately omits. The complement to `lunco-terrain-globe`
 
 | Module | Role |
 |--------|------|
-| `dem` | DEM ingest — GeoTIFF decode (`decode_geotiff_f64`, `height_grid_from_geotiff`, `DemMetadata`, `DemError`) → a `HeightSource` |
-| `bake` | resampling (`resample`) |
+| `dem`, `bake` | **re-exported from [`lunco-terrain-bake`](../lunco-terrain-bake/README.md)** — the pure bevy/avian-free bake pipeline (GeoTIFF decode, crop/resample, crater stamp) lives there so the wasm DEM Web Worker runs the same code. `crate::dem` / `crate::bake` paths and the public API surface are unchanged. |
 | `tile_mesh` | per-tile mesh baking (`bake_tile_mesh`, `TileMesh`) |
 | `collider_ring` | resident avian heightfield collider ring around the focus (`TerrainColliderRing`, `ColliderTiles`) |
 | `stream_viz` | streamed LOD visuals (`DemHeightField`, `LodTiles`, `TerrainLodViz`, `TerrainShaderMode`) |

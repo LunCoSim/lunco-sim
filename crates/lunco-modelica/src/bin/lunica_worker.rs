@@ -550,6 +550,51 @@ pub fn run() -> Result<(), JsValue> {
                     }
                 }
             }
+            WireMessage::ParseSourceMslCompressed { bytes, provide_to_main } => {
+                // Tag-mismatch fallback: untar + reparse the `.mo` sources here
+                // in the worker (off the main thread) into a fresh parsed bundle
+                // whose keys match the build-time bundle. If we're the primary
+                // (`provide_to_main`), bincode-encode it and transfer it back so
+                // the main thread's resolution heap fills by deserialize-only.
+                let started = web_time::Instant::now();
+                match lunco_modelica::msl_remote::parse_source_bundle_to_docs(&bytes) {
+                    Ok(parsed) => {
+                        let count = parsed.len();
+                        // Encode for the transfer BEFORE moving `parsed` into
+                        // the worker's own global install.
+                        let encoded = if provide_to_main {
+                            match lunco_modelica::msl_remote::encode_parsed_bundle(&parsed) {
+                                Ok(b) => Some(b),
+                                Err(e) => {
+                                    post_log(
+                                        &scope_for_cb,
+                                        format!("MSL source-parse encode failed: {e}"),
+                                    );
+                                    None
+                                }
+                            }
+                        } else {
+                            None
+                        };
+                        lunco_modelica::msl_remote::install_global_parsed_msl_pub(parsed);
+                        if let Some(enc) = encoded {
+                            post_decoded_msl_transfer(&scope_for_cb, enc);
+                        }
+                        post_wire(&scope_for_cb, &WireResult::MslReady { docs: count });
+                        post_log(
+                            &scope_for_cb,
+                            format!(
+                                "reparsed MSL source: {count} docs in {:.2}s{}",
+                                started.elapsed().as_secs_f64(),
+                                if provide_to_main { " (provided to main)" } else { "" }
+                            ),
+                        );
+                    }
+                    Err(e) => {
+                        post_log(&scope_for_cb, format!("MSL source reparse failed: {e}"));
+                    }
+                }
+            }
             WireMessage::Ping(tag) => {
                 post_log(
                     &scope_for_cb,

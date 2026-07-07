@@ -1126,21 +1126,28 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, world: &mut World) {
             bytes_done,
             bytes_total,
         }) => {
-            let phase = match phase {
+            let phase_label = match phase {
                 MslLoadPhase::FetchingManifest => "fetching manifest",
                 MslLoadPhase::FetchingBundle => "downloading",
                 MslLoadPhase::LoadingCache => "loading from cache",
                 MslLoadPhase::Decompressing => "extracting",
                 MslLoadPhase::Parsing => "loading",
             };
-            if *bytes_total > 0 {
+            // The `Parsing` phase carries file counts in `bytes_done`/`bytes_total`;
+            // every other phase carries bytes. Rendering the count as MB showed a
+            // frozen "0.0 / 0.0 MB", so branch on the phase.
+            if *bytes_total == 0 {
+                ui.label(format!("Status: {phase_label}"));
+            } else if matches!(phase, MslLoadPhase::Parsing) {
                 ui.label(format!(
-                    "Status: {phase} · {:.1} / {:.1} MB",
+                    "Status: {phase_label} · {bytes_done} / {bytes_total} files",
+                ));
+            } else {
+                ui.label(format!(
+                    "Status: {phase_label} · {:.1} / {:.1} MB",
                     *bytes_done as f64 / 1_048_576.0,
                     *bytes_total as f64 / 1_048_576.0,
                 ));
-            } else {
-                ui.label(format!("Status: {phase}"));
             }
         }
         Some(MslLoadState::Failed(msg)) => {

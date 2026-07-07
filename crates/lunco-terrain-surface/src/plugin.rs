@@ -95,5 +95,10 @@ impl Plugin for TerrainSurfacePlugin {
                 crate::collider_ring::despawn_orphaned_collider_tiles,
             ),
         );
+        // Freeze the sim while a DEM terrain is still building so rovers don't fall
+        // through the not-yet-ready collider (esp. web, where the DEM load is slow).
+        // See `collider_ring::hold_physics_until_dem_ready`.
+        app.init_resource::<crate::collider_ring::DemBuildPhysicsHold>();
+        app.add_systems(Update, crate::collider_ring::hold_physics_until_dem_ready);
     }
 }

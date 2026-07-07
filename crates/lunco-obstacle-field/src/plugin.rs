@@ -8,6 +8,7 @@
 
 use avian3d::prelude::{AngularVelocity, Collider, LinearVelocity, Position, RigidBody};
 use bevy::asset::RenderAssetUsages;
+#[cfg(not(target_arch = "wasm32"))]
 use bevy::camera::visibility::VisibilityRange;
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -29,7 +30,9 @@ const ROCK_VARIANTS: usize = 4;
 
 /// Distance LOD margins (metres). Rocks fade out beyond `LOD_FAR`; the terrain
 /// surface is always visible.
+#[cfg(not(target_arch = "wasm32"))]
 const LOD_FAR: f32 = 250.0;
+#[cfg(not(target_arch = "wasm32"))]
 const LOD_FADE: f32 = 50.0;
 
 /// Render frames to keep physics frozen around a field rebuild. The heightfield
@@ -227,6 +230,12 @@ pub fn grid_mesh(
 }
 
 /// Cull range: full visibility up to `LOD_FAR`, cross-fade to hidden over `LOD_FADE`.
+///
+/// NATIVE ONLY — `VisibilityRange` drives bevy's `visibility_ranges` view binding
+/// (group 0, binding 14), whose WebGL2 uniform fallback has a `min_binding_size`
+/// mismatch in bevy 0.18 that invalidates every `pbr_opaque_mesh_pipeline` (black
+/// viewport). On web the bounded, shared-mesh rocks stay always-visible instead.
+#[cfg(not(target_arch = "wasm32"))]
 fn rock_visibility_range() -> VisibilityRange {
     VisibilityRange {
         start_margin: 0.0..0.0,
@@ -416,13 +425,17 @@ fn regenerate_obstacle_field(
                 let variant =
                     (p.pos.x.to_bits() ^ p.pos.y.to_bits().rotate_left(16)) as usize % ROCK_VARIANTS;
                 let scale = p.size / buckets[bi];
-                commands.spawn((
+                let rock_child = commands.spawn((
                     Mesh3d(rock_meshes[bi * ROCK_VARIANTS + variant].clone()),
                     MeshMaterial3d(rock_material.clone()),
                     Transform::from_scale(Vec3::splat(scale)),
                     ChildOf(rock),
-                    rock_visibility_range(),
-                ));
+                )).id();
+                // Distance LOD cull — native only (see `rock_visibility_range`).
+                #[cfg(not(target_arch = "wasm32"))]
+                commands.entity(rock_child).insert(rock_visibility_range());
+                #[cfg(target_arch = "wasm32")]
+                let _ = rock_child;
             }
         }
     }
