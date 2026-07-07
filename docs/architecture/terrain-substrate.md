@@ -28,11 +28,18 @@ The composed source is the **single source of truth**. Both consumers sample it:
   each tile's mesh by sampling the oracle at that tile's resolution — fine near
   the camera, coarse far away;
 - the **avian collider ring** (`collider_ring`) samples the *same* oracle at the
-  collider resolution around each dynamic body.
+  collider resolution around each dynamic body;
+- **spawn placement** (`lunco-sandbox-edit`) samples the oracle (`dem_ground_height`)
+  to drop a rover onto the surface. Because the oracle is analytic — not a collider
+  raycast — it answers **before** the collider tile under the drop point has
+  streamed/baked, so a spawn over un-baked terrain rests on the ground instead of
+  free-falling. The GUI path takes `max(oracle, raycast)` so an obstacle rock poking
+  up under the chassis still lifts the spawn; the API path snaps `y` to the surface
+  (+ the asset's `lunco:spawnLift`) when DEM terrain covers the point.
 
-Because both call one function, they **converge** — near a rover both are fine,
-so there is no visual/physics mismatch. Crater crispness is no longer bounded by
-a DEM mip; it's bounded by how deep you sample.
+Because they all call one function, they **converge** — near a rover the mesh,
+collider, and spawn height agree, so there is no visual/physics mismatch. Crater
+crispness is no longer bounded by a DEM mip; it's bounded by how deep you sample.
 
 ### Why (the bug this replaces)
 
