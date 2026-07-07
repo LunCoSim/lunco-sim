@@ -1091,7 +1091,7 @@ clean() {
 show_help() {
     echo "LunCoSim - Web Build Script"
     echo ""
-    echo "Usage: $0 [COMMAND] [BINARY] [PORT]"
+    echo "Usage: $0 [COMMAND] [BINARY] [PORT] [OPTIONS]"
     echo ""
     echo "Commands:"
     echo "  build <binary>    Build WASM and generate bindings"
@@ -1101,18 +1101,27 @@ show_help() {
     echo "  help              Show this help message"
     echo ""
     echo "Profile (default: fast dev build, no wasm-opt):"
-    echo "  --release         Shippable build (fat LTO + wasm-opt size pass)"
+    echo "  --release              Shippable build (fat LTO + wasm-opt size pass)"
+    echo ""
+    echo "Twin packing (sandbox only — CLI flags override LC_TWIN_* env vars):"
+    echo "  --twin-src <path>      Twin folder to pack (default: ~/Documents/lunco/moonbase/twin)"
+    echo "                         Pass empty string ('') to skip twin packing entirely"
+    echo "  --twin-name <name>     Dist name under assets/twins/ (default: derived from folder)"
+    echo "  --twin-scene <file>    Scene .usda file inside the twin (default: moonbase_scene.usda)"
+    echo "  --twin-extra <specs>   Extra non-default twins: 'name=scene=/path;name2=scene2=/path2'"
     echo ""
     echo "Available binaries:"
     echo "  lunica       - Modelica Workbench IDE (default port: 8080)"
-    echo "  sandbox  - Rover Physics Sandbox (default port: 8081)"
+    echo "  sandbox      - Rover Physics Sandbox (default port: 8081)"
     echo ""
     echo "Examples:"
-    echo "  $0 build lunica            # Fast dev build"
-    echo "  $0 build lunica --release  # Shippable optimized build"
-    echo "  $0 all lunica              # Build (dev) and serve"
-    echo "  $0 all sandbox 8082    # Build and serve on custom port"
-    echo "  $0 clean                   # Clean all artifacts"
+    echo "  $0 build lunica                              # Fast dev build"
+    echo "  $0 build lunica --release                   # Shippable optimized build"
+    echo "  $0 all lunica                               # Build (dev) and serve"
+    echo "  $0 all sandbox 8082                         # Build and serve on custom port"
+    echo "  $0 build sandbox --twin-src ~/twins/mb      # Custom moonbase twin path"
+    echo "  $0 build sandbox --twin-src '' # No twin"
+    echo "  $0 clean                                    # Clean all artifacts"
     echo ""
     echo "Prerequisites:"
     echo "  - Rust with wasm32-unknown-unknown target"
@@ -1122,31 +1131,72 @@ show_help() {
 
 # Main execution
 main() {
-    local command="${1:-help}"
-    local binary="${2:-}"
-    local port="${3:-}"
-
-    # Profile selection. The DEFAULT is the fast-iteration `web-dev`
-    # profile (no LTO, parallel codegen, and the slow `wasm-opt -Oz`
-    # size pass is skipped) — what you want 95% of the time. `--release`
-    # opts into the shippable `web-release` profile (fat LTO + `wasm-opt`
-    # shrink pass) for deploys. The flag may appear in any slot
-    # (`build lunica --release`, `--release build lunica`, …).
+    # ── Argument parsing ─────────────────────────────────────────────────────
+    # Supported flags (may appear in any position):
+    #   --release               use the web-release Cargo profile
+    #   --twin-src  <path>      override LC_TWIN_SRC  ('' = skip packing)
+    #   --twin-name <name>      override LC_TWIN_NAME
+    #   --twin-scene <file>     override LC_TWIN_SCENE
+    #   --twin-extra <specs>    override LC_TWIN_EXTRA
+    # CLI flags win over pre-exported env vars; env vars win over defaults.
+    # The three positional slots are: COMMAND  BINARY  PORT.
     export BUILD_PROFILE="web-dev"
     local positional=()
-    for arg in "$@"; do
+    local twin_src_flag="__unset__"
+    local twin_name_flag="__unset__"
+    local twin_scene_flag="__unset__"
+    local twin_extra_flag="__unset__"
+
+    local i=0 args=("$@")
+    while [ $i -lt ${#args[@]} ]; do
+        local arg="${args[$i]}"
         case "$arg" in
             --release)
                 export BUILD_PROFILE="web-release"
+                ;;
+            --twin-src)
+                i=$(( i + 1 )); twin_src_flag="${args[$i]:-}"
+                ;;
+            --twin-src=*)
+                twin_src_flag="${arg#--twin-src=}"
+                ;;
+            --twin-name)
+                i=$(( i + 1 )); twin_name_flag="${args[$i]:-}"
+                ;;
+            --twin-name=*)
+                twin_name_flag="${arg#--twin-name=}"
+                ;;
+            --twin-scene)
+                i=$(( i + 1 )); twin_scene_flag="${args[$i]:-}"
+                ;;
+            --twin-scene=*)
+                twin_scene_flag="${arg#--twin-scene=}"
+                ;;
+            --twin-extra)
+                i=$(( i + 1 )); twin_extra_flag="${args[$i]:-}"
+                ;;
+            --twin-extra=*)
+                twin_extra_flag="${arg#--twin-extra=}"
                 ;;
             *)
                 positional+=("$arg")
                 ;;
         esac
+        i=$(( i + 1 ))
     done
-    command="${positional[0]:-help}"
-    binary="${positional[1]:-}"
-    port="${positional[2]:-}"
+
+    # Apply CLI twin overrides → env vars consumed by stage_twins().
+    # Only override when the flag was actually supplied (distinguished from
+    # the sentinel "__unset__" so that passing --twin-src '' correctly
+    # sets LC_TWIN_SRC to the empty string, disabling twin packing).
+    [ "$twin_src_flag"   != "__unset__" ] && export LC_TWIN_SRC="$twin_src_flag"
+    [ "$twin_name_flag"  != "__unset__" ] && export LC_TWIN_NAME="$twin_name_flag"
+    [ "$twin_scene_flag" != "__unset__" ] && export LC_TWIN_SCENE="$twin_scene_flag"
+    [ "$twin_extra_flag" != "__unset__" ] && export LC_TWIN_EXTRA="$twin_extra_flag"
+
+    local command="${positional[0]:-help}"
+    local binary="${positional[1]:-}"
+    local port="${positional[2]:-}"
 
     case "$command" in
         build)
