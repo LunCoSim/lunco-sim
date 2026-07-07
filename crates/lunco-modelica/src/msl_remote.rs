@@ -625,6 +625,38 @@ pub fn install_global_parsed_msl_pub(parsed: Vec<(String, rumoca_compile::parsin
 #[derive(Resource, Default, Clone, Copy)]
 pub struct SkipMslAutoLoad;
 
+/// Gate resource: while present, the **web** MSL bootstrap (network fetch AND the
+/// main-thread decode/parse) is held off. Unlike [`SkipMslAutoLoad`] (which
+/// suppresses MSL entirely), this only *defers* it — remove the resource and the
+/// fetch kicks off, then the decode/parse chain runs.
+///
+/// The sandbox uses this on wasm to load **sequentially**: the single browser
+/// thread bakes the moonbase terrain first, THEN the ~2 MB MSL bundle downloads
+/// and its chunked decompress/deserialize runs — instead of the two contending
+/// for the main thread and stalling terrain generation. Insert before the app
+/// runs; remove once the terrain is baked (the sandbox watches its
+/// `TerrainGenStatus`). No-op on native (real threads; never inserted there).
+#[derive(Resource, Default, Clone, Copy)]
+pub struct DeferMslLoad;
+
+/// Run condition: the web MSL bootstrap may proceed (not gated by [`DeferMslLoad`]).
+#[cfg(target_arch = "wasm32")]
+fn msl_not_deferred(defer: Option<Res<DeferMslLoad>>) -> bool {
+    defer.is_none()
+}
+
+/// Web: kick the async MSL fetcher exactly once, the first frame the deferral
+/// gate is clear. Paired with [`msl_not_deferred`] as a `run_if`, so while
+/// [`DeferMslLoad`] is present this never runs and no download starts.
+#[cfg(target_arch = "wasm32")]
+fn kick_web_msl_fetcher(slot: Res<MslLoadSlot>, mut kicked: Local<bool>) {
+    if *kicked {
+        return;
+    }
+    *kicked = true;
+    wasm_bindgen_futures::spawn_local(web::run_fetcher(slot.0.clone()));
+}
+
 /// Plugin that owns MSL asset loading. Add once during app build.
 pub struct MslRemotePlugin;
 
@@ -727,11 +759,24 @@ impl Plugin for MslRemotePlugin {
                     bytes_total: 0,
                 });
                 app.insert_resource(MslLoadSlot(slot.clone()));
+                // The fetch AND the main-thread decode/parse are all gated on the
+                // deferral: an app can insert `DeferMslLoad` to load MSL only after
+                // higher-priority startup work (the sandbox: after the terrain
+                // bakes). `kick_web_msl_fetcher` starts the download the first
+                // ungated frame; the decode/parse chain drains it. With no
+                // `DeferMslLoad` present (the default), the gate is open from frame
+                // one — identical timing to the previous unconditional fetch.
                 app.add_systems(
                     Update,
-                    (drain_msl_load_slot, drive_msl_parse, drive_msl_main_decode).chain(),
+                    (
+                        kick_web_msl_fetcher,
+                        drain_msl_load_slot,
+                        drive_msl_parse,
+                        drive_msl_main_decode,
+                    )
+                        .chain()
+                        .run_if(msl_not_deferred),
                 );
-                wasm_bindgen_futures::spawn_local(web::run_fetcher(slot));
             }
         }
     }

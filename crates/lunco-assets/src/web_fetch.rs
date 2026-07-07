@@ -32,8 +32,13 @@ use web_sys::{Request, RequestInit, RequestMode, Response};
 
 #[wasm_bindgen(inline_js = "
     export async function lunco_fetch_bytes_cached_with_progress(cacheName, path, expectedTotal, on_progress) {
-        const cache = await caches.open(cacheName);
-        const matchResponse = await cache.match(path);
+        // Cache Storage only exists in secure contexts (HTTPS / localhost). On a
+        // LAN IP or file:// `caches` is undefined — degrade to an uncached fetch
+        // instead of throwing 'Cannot read properties of undefined (open)'.
+        const cache = (typeof caches !== 'undefined' && caches)
+            ? await caches.open(cacheName)
+            : null;
+        const matchResponse = cache ? await cache.match(path) : null;
 
         let response;
         let fromCache = false;
@@ -86,7 +91,7 @@ use web_sys::{Request, RequestInit, RequestMode, Response};
             position += chunk.length;
         }
 
-        if (!fromCache) {
+        if (!fromCache && cache) {
             try {
                 const cachedResponse = new Response(allChunks, {
                     status: response.status,
@@ -138,14 +143,58 @@ pub async fn fetch_cached_with_progress(
 }
 
 /// Open the named bucket in the browser's Cache Storage.
+///
+/// The Cache Storage API only exists in **secure contexts** (HTTPS, or
+/// `http://localhost`). Served over plain HTTP from a LAN IP or `file://`,
+/// `window.caches` is `undefined` — and `web_sys`'s getter casts that undefined
+/// to a `CacheStorage` without validating, so a later `.open()` would throw
+/// "Cannot read properties of undefined". We detect that here and return an
+/// `Err` so callers can degrade to an uncached network fetch.
 pub async fn open_cache(bucket: &str) -> Result<web_sys::Cache, String> {
     let window = web_sys::window().ok_or_else(|| "no window".to_string())?;
     let caches = window.caches().map_err(|e| format!("window.caches: {e:?}"))?;
+    // Guard the insecure-context case where `caches` is really `undefined`.
+    if caches.is_undefined() || caches.is_null() {
+        return Err("Cache Storage unavailable (insecure context)".to_string());
+    }
     JsFuture::from(caches.open(bucket))
         .await
         .map_err(|e| format!("caches.open: {e:?}"))?
         .dyn_into()
         .map_err(|_| "caches.open result not a Cache".to_string())
+}
+
+/// Fetch `path` over the network **without** touching Cache Storage. The
+/// uncached fallback for insecure contexts (LAN IP / `file://`) where
+/// [`open_cache`] fails because `window.caches` is undefined.
+pub async fn network_fetch_uncached(path: &str) -> Result<Vec<u8>, String> {
+    let window = web_sys::window().ok_or_else(|| "no window".to_string())?;
+    let opts = RequestInit::new();
+    opts.set_method("GET");
+    opts.set_mode(RequestMode::SameOrigin);
+    let request = Request::new_with_str_and_init(path, &opts)
+        .map_err(|e| format!("Request::new {path}: {e:?}"))?;
+    let resp_value = JsFuture::from(window.fetch_with_request(&request))
+        .await
+        .map_err(|e| format!("fetch {path}: {e:?}"))?;
+    let response: Response = resp_value
+        .dyn_into()
+        .map_err(|_| "fetch result not a Response".to_string())?;
+    if !response.ok() {
+        return Err(format!(
+            "fetch {path}: HTTP {} {}",
+            response.status(),
+            response.status_text()
+        ));
+    }
+    let array_buffer = JsFuture::from(
+        response
+            .array_buffer()
+            .map_err(|e| format!("array_buffer {path}: {e:?}"))?,
+    )
+    .await
+    .map_err(|e| format!("array_buffer await {path}: {e:?}"))?;
+    Ok(js_sys::Uint8Array::new(&array_buffer).to_vec())
 }
 
 /// Cheap existence check — is `path` in `bucket`? Does **not** read the (up to
@@ -232,7 +281,12 @@ pub async fn network_fetch_and_cache(
 /// verbatim (same-origin), so the caller passes the full origin-relative URL
 /// (e.g. `assets/twins/moonbase/terrain/…/heightmap.tif`).
 pub async fn fetch_bytes_cached(bucket: &str, path: &str) -> Result<Vec<u8>, String> {
-    let cache = open_cache(bucket).await?;
+    // Insecure contexts (LAN IP / `file://`) have no Cache Storage — degrade to a
+    // plain (uncached) fetch so the asset still loads instead of throwing.
+    let cache = match open_cache(bucket).await {
+        Ok(c) => c,
+        Err(_) => return network_fetch_uncached(path).await,
+    };
     if let Ok(Some(bytes)) = cache_lookup(&cache, path).await {
         return Ok(bytes);
     }
@@ -246,7 +300,11 @@ pub async fn fetch_bytes_cached(bucket: &str, path: &str) -> Result<Vec<u8>, Str
 /// manifest just serves last session's (already-cached) blobs. Cold (no cached
 /// copy): fall back to the network, then to cache on a race.
 pub async fn fetch_bytes_revalidated(bucket: &str, path: &str) -> Result<Vec<u8>, String> {
-    let cache = open_cache(bucket).await?;
+    // No Cache Storage in insecure contexts — just fetch fresh each time.
+    let cache = match open_cache(bucket).await {
+        Ok(c) => c,
+        Err(_) => return network_fetch_uncached(path).await,
+    };
     if let Ok(Some(bytes)) = cache_lookup(&cache, path).await {
         // Serve stale now; refresh for next time off the critical path.
         let bucket = bucket.to_string();

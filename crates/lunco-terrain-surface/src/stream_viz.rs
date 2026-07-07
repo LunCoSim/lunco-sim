@@ -105,6 +105,23 @@ pub enum TerrainShaderMode {
 }
 
 impl TerrainShaderMode {
+    /// Platform default when a terrain authors no explicit mode. WEB uses the
+    /// cheap flat shader ([`Plain`](Self::Plain)): the production [`Lit`](Self::Lit)
+    /// regolith shader evaluates ~5+ `fbm` calls per fragment (bump normals via
+    /// finite differences + dust + grain), which is the dominant ~100 ms render
+    /// cost on a WebGL iGPU. Native keeps the full look. Switchable live in the
+    /// Inspector either way.
+    pub fn platform_default() -> Self {
+        #[cfg(target_arch = "wasm32")]
+        {
+            TerrainShaderMode::Plain
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            TerrainShaderMode::Lit
+        }
+    }
+
     /// The `.wgsl` this mode draws with (all carry the CDLOD vertex morph).
     fn shader_path(self) -> &'static str {
         match self {
@@ -169,6 +186,12 @@ pub struct LodTiles {
     tiles: HashMap<QuadCoord, TileSlot>,
     mode: TerrainShaderMode,
     gen: u32,
+    /// Signature of the inputs the tile SELECTION is a pure function of (camera
+    /// focus + eye height, dynamic-body footprints, generation, oracle identity,
+    /// LOD knobs). When it matches last frame's and no bake is in flight, the
+    /// resident tile set is already correct and the whole reselection is skipped —
+    /// the idle-camera fast path (see [`update_lod_tiles`]). `None` = never selected.
+    last_sig: Option<u64>,
 }
 
 impl LodTiles {
@@ -303,11 +326,23 @@ impl Default for TerrainLodConfig {
     fn default() -> Self {
         // Off-thread baking → safe to start several tasks/frame for a fast,
         // non-blocking fill. Raise/lower live in the Inspector.
+        //
+        // `tile_budget` caps SELECTED tiles per terrain — the dominant terrain GPU
+        // cost (~512 tiles ≈ 2.3M tris re-rendered every frame). On the wasm/WebGL
+        // target (single render thread, no CPU-side preprocessing) that throughput
+        // is the biggest steady-state cost, so the browser starts at a lighter
+        // budget — the terrain EXTENT is unchanged (coarsening `pixel_error` keeps
+        // the same footprint with fewer, larger far-field tiles); only distant
+        // detail softens. Native keeps the full budget. Tune live in the Inspector.
+        #[cfg(target_arch = "wasm32")]
+        let tile_budget = 128;
+        #[cfg(not(target_arch = "wasm32"))]
+        let tile_budget = 512;
         TerrainLodConfig {
             pixel_error: TARGET_PIXEL_ERROR,
             max_depth: MAX_DEPTH,
             bakes_per_frame: 4,
-            tile_budget: 512,
+            tile_budget,
         }
     }
 }
@@ -573,7 +608,7 @@ pub fn update_lod_tiles(
     let mut bake_budget = cfg.bakes_per_frame.max(1);
 
     for (terrain, t_gt, hf, viz, mut tiles, mut pending, mut errs, mode_opt) in &mut terrains {
-        let mode = mode_opt.copied().unwrap_or_default();
+        let mode = mode_opt.copied().unwrap_or_else(TerrainShaderMode::platform_default);
         // The terrain's current height generation: a tile/bake tagged with an older
         // gen is stale (a live re-bake changed the heights) and is replaced near-first.
         let cur_gen = tiles.gen;
@@ -606,7 +641,8 @@ pub fn update_lod_tiles(
         }
 
         // Camera in the terrain's local frame (the DEM frame, origin-centred).
-        let local = t_gt.affine().inverse().transform_point3(cam_pos);
+        let inv_t = t_gt.affine().inverse();
+        let local = inv_t.transform_point3(cam_pos);
         let focus = [local.x as f64, local.z as f64];
 
         let oracle = &hf.0;
@@ -616,6 +652,57 @@ pub fn update_lod_tiles(
         // the ground below (true distance), instead of refining it as XZ-only would.
         let ground = oracle.height_at(local.x as f64, local.z as f64);
         let eye_height = (local.y as f64 - ground).max(0.0);
+
+        // ── Idle-camera fast path ────────────────────────────────────────────
+        // The selection below (quadtree walks + budget-coarsen loop + sort + queue
+        // + retain) is a pure function of (focus, eye height, dynamic-body
+        // footprints, generation, oracle identity, LOD knobs). Re-deriving it EVERY
+        // frame with a still camera was the dominant idle terrain CPU cost
+        // (obs 23593). Fold those inputs into a signature; when it matches last
+        // frame's AND no bake is mid-flight (nothing to finalize/spawn), last
+        // frame's resident tiles are already correct — skip the whole body.
+        // Quantise focus/eye so sub-tile jitter doesn't defeat the gate; a slow
+        // creep re-runs the frame it crosses a quantum (a 1-frame-late reselection
+        // is invisible — tiles morph). Rovers moving continuously keep their tiles
+        // refining because their footprint enters the signature.
+        {
+            const IDLE_QUANT_M: f64 = 0.5;
+            let q = |v: f64| (v / IDLE_QUANT_M).round() as i64 as u64;
+            let mut sig = lunco_precompute::Fnv1a::new();
+            sig.write_u64(q(focus[0]));
+            sig.write_u64(q(focus[1]));
+            sig.write_u64(q(eye_height));
+            sig.write_u64(cur_gen as u64);
+            // Oracle identity — a live re-compose swaps the Arc without always
+            // bumping gen, and would otherwise be missed by the gate.
+            sig.write_u64(Arc::as_ptr(&hf.0) as *const () as usize as u64);
+            // LOD knobs (Inspector) — a live tweak must re-select.
+            sig.write_u64(cfg.pixel_error.to_bits());
+            sig.write_u64(cfg.tile_budget as u64);
+            sig.write_u64(cfg.max_depth as u64);
+            // Dynamic-body footprints (rovers): their forced max-depth refinement
+            // follows them, so a moving body must re-select.
+            for (rb, gt) in &bodies {
+                if !matches!(rb, avian3d::prelude::RigidBody::Dynamic) {
+                    continue;
+                }
+                let lb = inv_t.transform_point3(gt.translation());
+                if (lb.x as f64).abs() > h || (lb.z as f64).abs() > h {
+                    continue; // off this DEM — doesn't affect its selection
+                }
+                sig.write_u64(q(lb.x as f64));
+                sig.write_u64(q(lb.z as f64));
+            }
+            let sig = sig.finish();
+            if pending.0.is_empty() && tiles.last_sig == Some(sig) {
+                // Idle: resident tiles already match. Contribute this terrain's
+                // resident count so the status bar still reads "done", not "0/0".
+                stream_status.wanted += tiles.tiles.len();
+                stream_status.resident += tiles.tiles.len();
+                continue;
+            }
+            tiles.last_sig = Some(sig);
+        }
         // Runtime LOD knobs (Inspector) drive detail-vs-cost live; tile_res stays
         // per-terrain (changing it would invalidate the mesh cache). The range
         // factor derives from the CANONICAL screen metric (fixed viewport + the
@@ -677,7 +764,6 @@ pub fn update_lod_tiles(
         // relief a coarse camera-driven tile doesn't, and the rover visibly
         // hovers on the undrawn bumps. A handful of forced splits per body,
         // outside the budget (the budget bounds the broad view, not this).
-        let inv_t = t_gt.affine().inverse();
         for (rb, gt) in &bodies {
             if !matches!(rb, avian3d::prelude::RigidBody::Dynamic) {
                 continue;

@@ -220,6 +220,19 @@ pub fn update_collider_ring(
     let Ok((grid_entity, grid)) = grids.single() else { return };
     let pool = AsyncComputeTaskPool::get();
 
+    // Per-frame heightfield-bake budget, shared across all terrains. On WEB the
+    // `AsyncComputeTaskPool` has no threads: a spawned bake is a synchronous
+    // future that runs to completion on the MAIN thread the instant it is polled.
+    // The initial 3×3 ring per rover is ~a dozen tiles × 161² oracle samples; baking
+    // them all in one frame froze the page (the "stuck at 33%" stall). Cap new bakes
+    // per frame so the ring fills over a handful of frames instead — the physics-hold
+    // keeps rovers pinned until their tile lands, so a few frames' delay is invisible.
+    // Native keeps real threads → no cap.
+    #[cfg(target_arch = "wasm32")]
+    let mut bake_budget: usize = 2;
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut bake_budget: usize = usize::MAX;
+
     // World positions of the dynamic bodies the ring should cover.
     let foci: Vec<Vec3> = bodies
         .iter()
@@ -346,6 +359,13 @@ pub fn update_collider_ring(
             {
                 continue;
             }
+            // Web: bounded new bakes per frame (see `bake_budget`). Break, don't
+            // continue — the remaining wanted tiles are picked up next frame (they
+            // stay wanted while the rover sits on them).
+            if bake_budget == 0 {
+                break;
+            }
+            bake_budget -= 1;
             let region = qt.region(*coord);
             let res = ring.res;
             let oracle_arc: Arc<SurfaceOracle> = hf.0.clone();

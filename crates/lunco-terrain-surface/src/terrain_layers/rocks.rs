@@ -68,6 +68,20 @@ impl TerrainLayer for RockScatterLayer {
         "rocks"
     }
     fn scatter(&self, cx: &mut LayerScatterCx) {
+        // WEB: scatter no rocks at all. Each rock is a distinct ECS entity with a
+        // Static sphere Collider, and on WebGL the `VisibilityRange` distance cull
+        // is unavailable (it breaks the PBR pipeline binding — see
+        // `rock_visibility_range`), so all of them render + sit in the avian
+        // broadphase every frame on the single wasm thread. Dropping the whole
+        // field is the biggest steady-state win for the browser; native keeps rocks
+        // (it has the distance cull + worker threads).
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = cx;
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
         let oracle = cx.oracle;
         let half = self.region_half_extent.min(oracle.half_extent());
         if half <= 0.0 {
@@ -177,6 +191,7 @@ impl TerrainLayer for RockScatterLayer {
             "[terrain-layer/rocks] scattered {spawned} rock(s) (±{:.0} m region, density {}/ha)",
             half, self.rocks.density
         );
+        }
     }
 }
 

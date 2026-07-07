@@ -161,6 +161,114 @@ pub struct DemTerrainSource {
     pub collider_ring: bool,
 }
 
+/// Live, human-readable progress of DEM terrain generation — the data source for
+/// a "Generating terrain…" loading overlay. Kept in this crate (not the UI) so
+/// every host app shares one source of truth with no egui dependency here; the
+/// sandbox reads it each frame and paints a centered card while `active`.
+///
+/// Progress is derived from build-component presence each frame ([`update_terrain_gen_status`]),
+/// so it needs no plumbing through the async bake tasks. The heavy crater stamp
+/// exposes no incremental callback, so `fraction` stays `None` (the UI shows an
+/// animated spinner) — `phase` carries the meaningful signal.
+#[derive(Resource, Default, Clone)]
+pub struct TerrainGenStatus {
+    /// A build is in flight — any tile queued, baking (native), or streaming (web).
+    pub active: bool,
+    /// Site label (last path segment of the DEM uri, e.g. `connecting_ridge`).
+    pub site: String,
+    /// Current phase, e.g. "Preparing", "Baking terrain", "Building terrain".
+    pub phase: String,
+    /// `0.0..=1.0` when a real fraction is known; `None` = indeterminate (spinner).
+    pub fraction: Option<f32>,
+}
+
+/// Safety valve: if a build's components linger this long (a lost worker reply,
+/// a wedged bake) clear the overlay so the UI isn't blocked forever. Matches the
+/// spirit of the 30 s ground-collider gate — degrade to "done" loudly rather than
+/// freeze the screen behind a spinner.
+const GEN_STATUS_MAX_SECS: f32 = 60.0;
+
+/// Derive [`TerrainGenStatus`] from the terrain build components each frame. A
+/// tile is "generating" while it carries a [`DemTerrainRequest`] (queued or
+/// mid-native-bake) or a [`DemWorkerJob`] (web worker decode/stream, after the
+/// request is consumed). Runs every frame so the overlay clears the instant the
+/// last tile finishes.
+///
+/// On web the bake is a coarse-preview → full-refine pair, so we map component
+/// state to a real fraction: `Preparing` → `Building` (coarse) → `Refining`
+/// (full). Native is one async task with no incremental signal → indeterminate.
+fn update_terrain_gen_status(
+    time: Res<Time>,
+    // `has_request` distinguishes web's two worker phases: the request is dropped
+    // once the coarse grid lands, so `job && !request` = refining the full grid.
+    requests: Query<(&DemTerrainRequest, Has<DemBuildTask>)>,
+    worker_jobs: Query<(Option<&DemTerrainRequest>, &DemWorkerJob)>,
+    mut status: ResMut<TerrainGenStatus>,
+    mut elapsed: Local<f32>,
+) {
+    let mut baking = false; // native async bake task in flight
+    let mut queued = false; // a request exists (queued or mid-bake)
+    let mut site: Option<&str> = None;
+    for (req, has_task) in &requests {
+        queued = true;
+        baking |= has_task;
+        if site.is_none() {
+            site = req.uri.rsplit(['/', '\\']).next().filter(|s| !s.is_empty());
+        }
+    }
+    // Web worker phase: coarse still pending (request present) vs full refine.
+    let mut streaming_coarse = false;
+    let mut refining_full = false;
+    for (req, _job) in &worker_jobs {
+        if req.is_some() {
+            streaming_coarse = true;
+        } else {
+            refining_full = true;
+        }
+    }
+    let streaming = streaming_coarse || refining_full;
+    let active = queued || streaming;
+
+    if !active {
+        if status.active {
+            *status = TerrainGenStatus::default();
+        }
+        *elapsed = 0.0;
+        return;
+    }
+
+    *elapsed += time.delta_secs();
+    if *elapsed > GEN_STATUS_MAX_SECS {
+        if status.active {
+            warn!(
+                "[terrain] generation overlay held {GEN_STATUS_MAX_SECS}s — clearing \
+                 (lost worker reply or stuck bake?)"
+            );
+            *status = TerrainGenStatus::default();
+        }
+        return;
+    }
+
+    status.active = true;
+    if let Some(s) = site {
+        status.site = s.to_string();
+    }
+    // Phase + a coarse→full fraction where the pipeline exposes one. Web streams a
+    // coarse preview (physics-ready) then refines to the full grid; native is a
+    // single opaque task (indeterminate spinner).
+    let (phase, fraction) = if refining_full {
+        ("Refining terrain", Some(0.66))
+    } else if streaming_coarse {
+        ("Building terrain", Some(0.33))
+    } else if baking {
+        ("Baking terrain", None)
+    } else {
+        ("Preparing", Some(0.1))
+    };
+    status.phase = phase.to_string();
+    status.fraction = fraction;
+}
+
 /// Build a DEM terrain from a site directory at **native resolution**. `uri`
 /// points at a `lunar_terrain_exporter` output dir (containing `metadata.yaml`
 /// and `materials/textures/heightmap.tif`).
@@ -1433,6 +1541,7 @@ fn on_obstacle_spec_dirty(
 pub(crate) fn register(app: &mut App) {
     app.register_type::<SpawnDemTerrain>()
         .init_resource::<TerrainEditSeq>()
+        .init_resource::<TerrainGenStatus>()
         .init_resource::<crate::stream_viz::LodMeshCache>()
         .add_message::<RegenerateTerrainLayers>()
         .add_observer(on_obstacle_spec_rebuild_layers)
@@ -1451,6 +1560,7 @@ pub(crate) fn register(app: &mut App) {
                 finish_dem_restamp,
                 start_dem_collider,
                 finish_dem_collider,
+                update_terrain_gen_status,
             ),
         );
     // WEB: register the off-thread DEM bake worker URL (staged by build_web.sh next

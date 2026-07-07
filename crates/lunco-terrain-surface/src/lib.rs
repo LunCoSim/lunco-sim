@@ -83,6 +83,6 @@ pub use terrain_layers::{
 };
 pub use terrain::{
     BrushTerrain, DemBaseGrid, DemTerrainRequest, DemTerrainSource, DemTerrainSurface, DocBackedTerrain,
-    FlattenTerrain, RegenerateTerrainLayers, RemoveTerrainLayer, SpawnDemTerrain,
+    FlattenTerrain, RegenerateTerrainLayers, RemoveTerrainLayer, SpawnDemTerrain, TerrainGenStatus,
 };
 pub use tile_mesh::{bake_tile_mesh, TileMesh};

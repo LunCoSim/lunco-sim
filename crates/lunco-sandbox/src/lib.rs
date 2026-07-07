@@ -1326,7 +1326,17 @@ impl Plugin for SandboxCorePlugin {
             // 12 solver substeps (avian default 6): joint-based rovers buzz the
             // chassis under drive torque at 6 substeps. Quantified in the headless
             // `rover_jitter` probe. See `project_physical_rover_suspension`.
-            .insert_resource(avian3d::prelude::SubstepCount(12))
+            //
+            // WEB: 8 substeps — the single wasm thread runs the whole solver inline,
+            // so 12 substeps is a third of the physics budget per frame. 8 keeps the
+            // physical (joint) rover acceptably calm while giving the browser back
+            // frame time; native/server stay at 12 for full fidelity + peer
+            // determinism (networked play is native/server-authoritative).
+            .insert_resource(avian3d::prelude::SubstepCount(if cfg!(target_arch = "wasm32") {
+                8
+            } else {
+                12
+            }))
             .add_plugins(CoSimPlugin)
             .add_plugins(lunco_core::LunCoCorePlugin)
             .add_plugins(lunco_core::WorldShellPlugin)
@@ -2698,6 +2708,28 @@ fn setup_sandbox(world: &mut World) {
         }
     }
 
+    // WEB: do NOT load a startup scene here. The generated page's autoload hook
+    // (index.html → a `LoadScene` command) loads the deployment's default twin
+    // (moonbase) directly. A second built-in `sandbox_scene` load here raced that
+    // autoload: the twin reload's cleanup despawned the sandbox_scene entity while
+    // `sync_usd_visuals` still had a deferred `insert::<UsdPrimPath>` queued for it
+    // → "Entity despawned" panic → aborted wasm → dark viewport. The filesystem
+    // twin-resolve below is meaningless in the browser anyway (no `twin.toml` FS).
+    #[cfg(not(target_arch = "wasm32"))]
+    load_startup_scene(world, scene_path);
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (world, scene_path);
+        info!("[sandbox] web startup: no built-in scene load — the page autoload hook loads the default twin directly");
+    }
+}
+
+/// Native/headless startup-scene load: resolve the enclosing Twin folder for
+/// `scene_path` (walk up to a `twin.toml`), register it as a workspace Twin so it
+/// mounts doc-first, or fall back to a direct [`LoadScene`]. Web skips this — its
+/// autoload hook loads the deployment twin directly (see [`setup_sandbox`]).
+#[cfg(not(target_arch = "wasm32"))]
+fn load_startup_scene(world: &mut World, scene_path: String) {
     // --- Load scene from USD ---
     // Resolve the absolute path to find the enclosing Twin folder.
     let pb = std::path::PathBuf::from(&scene_path);

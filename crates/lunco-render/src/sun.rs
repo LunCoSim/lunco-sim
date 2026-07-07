@@ -74,6 +74,13 @@ impl Default for LunarSunShadow {
             // artifact. Live-tunable via `SetEnvironmentLight`.
             depth_bias: 0.06,
             normal_bias: 2.5,
+            // WEB: 2048² shadow atlas — a quarter of the shadow-pass fill +
+            // sampling cost on a WebGL iGPU, for a slightly softer terminator.
+            // Native keeps the crisp 4096² ceiling. One place → every web app
+            // (sandbox/lunica/luncosim) gets the cheaper atlas.
+            #[cfg(target_arch = "wasm32")]
+            shadow_map_size: 2048,
+            #[cfg(not(target_arch = "wasm32"))]
             shadow_map_size: 4096,
         }
     }

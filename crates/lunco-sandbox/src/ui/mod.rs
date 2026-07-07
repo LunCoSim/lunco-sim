@@ -26,6 +26,8 @@ mod models_palette;
 /// In-app rhai REPL panel (web + native). Empty unless the API bridge is
 /// available — the file carries its own `#![cfg(…)]`.
 mod rhai_repl_panel;
+/// Centered "Generating terrain…" overlay during the initial DEM bake.
+mod terrain_progress;
 
 /// The sandbox's interactive layer: egui workbench, bevy_picking, the USD Twin
 /// browser + RTT viewport, the in-scene editor, materials, rover panels, and
@@ -134,7 +136,14 @@ impl Plugin for SandboxUiPlugin {
             // Fallback free-flight camera when the scene authors none — interactive
             // only; a headless server has no user to control.
             .add_systems(PostUpdate,
-                spawn_fallback_avatar.after(avian3d::prelude::PhysicsSystems::Writeback));
+                spawn_fallback_avatar.after(avian3d::prelude::PhysicsSystems::Writeback))
+            // Centered "Generating terrain…" card during the initial DEM bake
+            // (heightmap decode + crater stamp), so the black startup viewport
+            // reads as progress. Clears itself once the bake finishes.
+            .add_systems(
+                bevy_egui::EguiPrimaryContextPass,
+                terrain_progress::draw_terrain_progress,
+            );
 
         // Scene-backed tutorials declare their catalog entry on their OWN scene
         // (`lunco:tutorial*` on the default prim), the hybrid alternative to a
@@ -173,6 +182,19 @@ impl Plugin for SandboxUiPlugin {
                 include_welcome_panel: true,
             },
         });
+
+        // WEB: load sequentially — bake the terrain FIRST, then fetch + parse the
+        // ~2 MB MSL bundle. The browser has ONE thread; letting the MSL download +
+        // chunked decompress/deserialize run concurrently with terrain generation
+        // stole the thread and stalled the "Generating terrain" phase. `DeferMslLoad`
+        // holds the whole MSL bootstrap (network fetch included) until
+        // `release_msl_after_terrain` clears it once the DEM has baked. Native has
+        // real threads → no deferral (the gate is never inserted there).
+        #[cfg(target_arch = "wasm32")]
+        {
+            app.init_resource::<lunco_modelica::msl_remote::DeferMslLoad>();
+            app.add_systems(bevy::prelude::Update, release_msl_after_terrain);
+        }
 
         // Forced window placement (`--window-pos`). Parses the flag and (when
         // present) inserts the resource, suppresses geometry persistence, and
@@ -520,4 +542,38 @@ fn clean_scene_name(stem: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// WEB: release the [`DeferMslLoad`](lunco_modelica::msl_remote::DeferMslLoad)
+/// gate once the terrain has finished its first bake, so MSL loads *after* the
+/// terrain instead of contending for the single browser thread during
+/// generation. "Baked" = the terrain's [`TerrainGenStatus`] went active (a build
+/// started) and then idle (it finished). A timeout is the fallback for a scene
+/// that authors no DEM terrain, so MSL still eventually loads.
+#[cfg(target_arch = "wasm32")]
+fn release_msl_after_terrain(
+    time: Res<Time>,
+    status: Res<lunco_terrain_surface::TerrainGenStatus>,
+    defer: Option<Res<lunco_modelica::msl_remote::DeferMslLoad>>,
+    mut seen_active: Local<bool>,
+    mut elapsed: Local<f32>,
+    mut commands: Commands,
+) {
+    if defer.is_none() {
+        return; // already released
+    }
+    *elapsed += time.delta_secs();
+    if status.active {
+        *seen_active = true;
+    }
+    let terrain_done = *seen_active && !status.active;
+    // 45 s fallback: a scene with no DEM terrain never flips `active`, but MSL
+    // must still load eventually (the Design tab needs it).
+    if terrain_done || *elapsed > 45.0 {
+        commands.remove_resource::<lunco_modelica::msl_remote::DeferMslLoad>();
+        info!(
+            "[sandbox] releasing deferred MSL load ({})",
+            if terrain_done { "terrain baked" } else { "timeout" }
+        );
+    }
 }
