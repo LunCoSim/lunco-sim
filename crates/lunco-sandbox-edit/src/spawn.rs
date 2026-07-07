@@ -359,6 +359,7 @@ pub fn on_scene_click_spawn(
     cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     egui_focus: Res<lunco_core::EguiFocus>,
     raycaster: avian3d::prelude::SpatialQuery,
+    dem: Query<(&GlobalTransform, &lunco_terrain_surface::stream_viz::DemHeightField)>,
 ) {
     use bevy::picking::pointer::PointerButton;
     // Stop the click bubbling to ancestors (global observer re-fires up the tree).
@@ -427,18 +428,33 @@ pub fn on_scene_click_spawn(
     // 4. Raycast down at the footprint corners AND the centre. The corners give
     //    the slope-fit normal; the full set gives the rest height.
     let sample_ground = |p: DVec3| -> DVec3 {
+        // Two independent ground sources, combined by MAX so the highest real
+        // surface under the footprint wins:
+        //  - the DEM HEIGHT ORACLE (analytic, avian-free): answers even before the
+        //    collider tile bakes, so a spawn over un-streamed terrain rests on the
+        //    surface instead of free-falling through the not-yet-baked collider;
+        //  - a collider RAYCAST: catches what the DEM doesn't model — obstacle-field
+        //    rocks poking up under the chassis, a flat scene's ground plane, and
+        //    already-baked terrain tiles.
+        let oracle = lunco_terrain_surface::stream_viz::dem_ground_height(dem.iter(), p.x, p.z);
         let ray_origin = p + DVec3::Y * 50.0;
-        match raycaster.cast_ray(
-            ray_origin,
-            Dir3::NEG_Y,
-            100.0,
-            false,
-            &avian3d::prelude::SpatialQueryFilter::default(),
-        ) {
-            Some(hit) => ray_origin + Dir3::NEG_Y.as_dvec3() * hit.distance,
-            // No hit under this corner → assume the click-plane height.
-            None => DVec3::new(p.x, point_d.y, p.z),
-        }
+        let ray = raycaster
+            .cast_ray(
+                ray_origin,
+                Dir3::NEG_Y,
+                100.0,
+                false,
+                &avian3d::prelude::SpatialQueryFilter::default(),
+            )
+            .map(|hit| ray_origin.y - hit.distance);
+        let y = match (oracle, ray) {
+            (Some(o), Some(r)) => o.max(r),
+            (Some(o), None) => o,
+            (None, Some(r)) => r,
+            // Neither the DEM nor a collider answered → assume the click-plane height.
+            (None, None) => point_d.y,
+        };
+        DVec3::new(p.x, y, p.z)
     };
     let hit_points: Vec<DVec3> = corners.iter().map(|&c| sample_ground(c)).collect();
 

@@ -264,6 +264,7 @@ pub fn on_spawn_entity_command(
     asset_server: Res<AssetServer>,
     q_grids: Query<Entity, With<Grid>>,
     role: Res<lunco_core::NetworkRole>,
+    dem: Query<(&GlobalTransform, &lunco_terrain_surface::stream_viz::DemHeightField)>,
 ) {
     let cmd = trigger.event();
 
@@ -293,10 +294,25 @@ pub fn on_spawn_entity_command(
         }
     };
 
-    info!("SPAWN_ENTITY: {} at {:?}", cmd.entry_id, cmd.position);
+    // Terrain-fit the drop height: snap to the DEM surface (+ the asset's spawn
+    // lift) when streamed terrain covers this (x,z), so an API / headless / rhai
+    // spawn lands ON the surface instead of free-falling when the collider under
+    // the drop point hasn't baked yet. No DEM here (a flat scene, or an intentional
+    // altitude) → the position is used exactly as given. The GUI palette path does
+    // its own richer footprint fit before triggering, so its position arrives fitted.
+    let mut position = cmd.position;
+    if let Some(y) = lunco_terrain_surface::stream_viz::dem_ground_height(
+        dem.iter(),
+        position.x as f64,
+        position.z as f64,
+    ) {
+        position.y = y as f32 + entry.spawn_lift;
+    }
+
+    info!("SPAWN_ENTITY: {} at {:?}", cmd.entry_id, position);
 
     let rotation = cmd.rotation.unwrap_or(Quat::IDENTITY);
-    let result = spawn_usd_entry(&mut commands, &asset_server, entry, cmd.position, rotation, grid);
+    let result = spawn_usd_entry(&mut commands, &asset_server, entry, position, rotation, grid);
 
     // Networked identity (gap G2): a runtime instance gets a server-allocated
     // unique id (SkipContentStamp → assign_global_entity_ids mints
@@ -308,7 +324,7 @@ pub fn on_spawn_entity_command(
         lunco_core::NetReplicate,
         lunco_core::NetSpawn {
             entry_id: cmd.entry_id.clone(),
-            position: cmd.position,
+            position,
         },
     ));
 }
@@ -2269,12 +2285,26 @@ pub fn persist_spawn_to_runtime_layer(
     catalog: Res<SpawnCatalog>,
     usd_registry: Res<UsdDocumentRegistry>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    role: Res<lunco_core::NetworkRole>,
     // Monotonic per-session disambiguator for spawn prim names (the runtime
     // layer isn't persisted, so session scope is enough).
     mut spawn_seq: Local<u32>,
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
+    // Single-instantiation: `on_spawn_entity_command` ALWAYS directly instantiates
+    // the spawn as an ECS entity (non-client). If we ALSO author it into the doc's
+    // runtime layer here, the twin projection re-instantiates it as a SECOND entity
+    // — the "double-instantiation" (two overlapping rovers; id-reuse then clobbers
+    // one on doc reload). In a `Standalone` session there is no networked/web client
+    // that needs the journal-authored copy, so the direct ECS spawn is the sole,
+    // authoritative instance — skip persistence and let it be the only rover. (In a
+    // `Host` session the runtime-layer op is still the channel a web client learns
+    // the spawn from, so persistence stays; de-duplicating THAT double needs the
+    // networking-aware fix and is handled separately.)
+    if matches!(*role, lunco_core::NetworkRole::Standalone) {
+        return;
+    }
     let Some(workspace) = workspace else { return };
     let Some(doc) = workspace.0.active_document else { return };
     let Some(host) = usd_registry.host(doc) else { return };
