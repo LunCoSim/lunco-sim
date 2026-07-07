@@ -143,6 +143,7 @@ fn run_with_mode(headless: bool) -> AppExit {
     app.add_plugins(default_plugins(headless));
     app.add_plugins(SandboxCorePlugin { headless });
 
+
     #[cfg(feature = "ui")]
     if !headless {
         app.add_plugins(ui::SandboxUiPlugin);

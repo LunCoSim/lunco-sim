@@ -1,24 +1,22 @@
-/// Converts J2000 Ecliptic coordinates (AU) to Bevy Meters (approx 1.5e11 scale),
-/// applying the obliquity rotation (23.44°) to reach J2000 Equatorial J-up frame.
+/// Converts J2000 **Ecliptic** coordinates (AU) to Bevy meters (~1.5e11 scale).
+///
+/// Pure axis swap — NO obliquity rotation. The solar/world frame is ecliptic
+/// J2000 with Bevy Y = ecliptic north:
+///   Bevy X = Ecl X (vernal equinox) · Bevy Y = Ecl Z (ecliptic north) ·
+///   Bevy Z = −Ecl Y  (right-handed, Y-up)
+///
+/// History: this function used to ALSO rotate by the obliquity (making the
+/// world frame equatorial), which compensated the ephemeris provider's
+/// mislabeled equatorial output. The provider now returns true ecliptic
+/// vectors (see `lunco-celestial-ephemeris::equatorial_to_ecliptic`), and the
+/// ecliptic frame keeps the Moon's polar axis within 1.5° of +Y — which is
+/// what the geodesy (`geo.rs`) and the registry's default `polar_axis = +Y`
+/// assume. Earth's real tilted axis is carried per-body in the registry and
+/// honored by `geo::body_rotation`.
 pub(crate) fn ecliptic_to_bevy(pos: bevy::math::DVec3) -> bevy::math::DVec3 {
     let au_to_m = 1.495_978_707e11;
     let pos_m = pos * au_to_m;
-    
-    // Obliquity of the Ecliptic (J2000)
-    let epsilon = (23.439281f64).to_radians();
-    let (sin_e, cos_e) = epsilon.sin_cos();
-    
-    // Rotate around X axis: Ecliptic (x, y, z) -> Equatorial (x', y', z')
-    let x = pos_m.x;
-    let y = pos_m.y * cos_e - pos_m.z * sin_e;
-    let z = pos_m.y * sin_e + pos_m.z * cos_e;
-    
-    // Map to Bevy Y-up axes: 
-    // Bevy X = Eq X
-    // Bevy Y = Eq Z (North Pole)
-    // Bevy Z = -Eq Y 
-    // (This is a standard right-handed mapping where Y is Up)
-    bevy::math::DVec3::new(x, z, -y)
+    bevy::math::DVec3::new(pos_m.x, pos_m.z, -pos_m.y)
 }
 
 pub(crate) use lunco_core::coords::world_position_seeded;

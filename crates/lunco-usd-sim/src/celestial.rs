@@ -62,6 +62,14 @@ pub fn insert_celestial_comms_components<R: UsdRead>(
                 prim_path_str, body, anchor.geodetic.lat_deg, anchor.geodetic.lon_deg,
                 anchor.geodetic.height_m
             );
+            // Scene-authored date: `double lunco:time:epochJd` picks the world
+            // epoch (e.g. one where a polar site is sunlit — at Shackleton the
+            // real sun crosses the horizon on a ~monthly cycle, so an unlucky
+            // "now" default renders the whole demo pitch-black).
+            if let Some(epoch_jd) = reader.real(sdf_path, "lunco:time:epochJd") {
+                info!("[usd-celestial] scene epoch: JD {epoch_jd:.4}");
+                commands.trigger(lunco_time::SetMissionEpoch { epoch_jd });
+            }
         }
     }
 

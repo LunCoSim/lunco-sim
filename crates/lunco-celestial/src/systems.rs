@@ -34,7 +34,23 @@ pub fn ephemeris_update_system(
 
     for (entity, mut cell, mut tf, body, frame) in q_entities.iter_mut() {
         let ephemeris_id = if let Some(b) = body { b.ephemeris_id } else if let Some(f) = frame { f.ephemeris_id } else { continue; };
-        
+
+        // NEVER write the Solar Grid (id 10) here. Its parent-relative
+        // position is zero by definition (`position(10) == 0`), so in an
+        // un-anchored scene this write was a no-op — but in a site-anchored
+        // scene it ZEROED the pin that `anchor_solar_frame_to_site` re-applies
+        // later in the chain. Within that window the whole solar hierarchy sat
+        // at its raw heliocentric pose (~1.5e11 m off), and any UNORDERED
+        // reader that interleaved there (gravity field, focus commands, GT
+        // propagation for freshly spawned tiles) captured garbage: alternating
+        // gravity (surface jitter), Earth tiles frozen 1e11 m away (blinking
+        // Earth), camera teleports into empty space (click-to-focus black
+        // screen). Skipping the write means no frame — mid-chain or otherwise
+        // — ever holds the un-anchored pose.
+        if ephemeris_id == 10 {
+            continue;
+        }
+
         // EphemerisProvider::position returns position relative to its parent defined in registry/hierarchy
         let rel_pos_au = ephemeris.provider.position(ephemeris_id, world.epoch_jd);
         let pos_bevy_m = ecliptic_to_bevy(rel_pos_au);
@@ -159,7 +175,24 @@ pub fn update_sun_light_system(
     ephemeris: Option<Res<EphemerisResource>>,
     world: Res<WorldTime>,
     mut q_light: Query<(&mut Transform, &DirectionalLight)>,
+    q_solar: Query<
+        &Transform,
+        (
+            With<crate::big_space_setup::SolarSystemRoot>,
+            With<big_space::prelude::Grid>,
+            Without<DirectionalLight>,
+        ),
+    >,
+    q_site: Query<(), With<crate::geo::SiteAnchor>>,
 ) {
+    // ONLY steer in site-anchored scenes: there the world frame is the site
+    // ENU and the ephemeris direction is physically meaningful. In a plain
+    // scene (default sandbox) the world frame is arbitrary — steering would
+    // clobber the authored fallback-sun direction with a near-horizontal
+    // ecliptic vector and plunge the whole scene into grazing darkness.
+    if q_site.is_empty() {
+        return;
+    }
     let Some(ephemeris) = ephemeris else { return; };
 
     let p_sun = ephemeris.provider.global_position(10, world.epoch_jd);
@@ -168,6 +201,17 @@ pub fn update_sun_light_system(
         // NoOp / degenerate ephemeris — leave the light to manual control.
         return;
     };
+    // `dir` is in ECLIPTIC (solar-frame) axes. The rendered world frame is
+    // the Solar Grid's parent frame: identity in luncosim, but the site-ENU
+    // frame in a site-anchored scene (`anchor_solar_frame_to_site` rotates
+    // the Solar Grid by `align`). Re-express the direction, or a Shackleton
+    // scene gets its sun at an arbitrary elevation instead of the real
+    // grazing ~1° — terrain lit from nowhere.
+    let dir = q_solar
+        .iter()
+        .next()
+        .map(|solar_tf| (solar_tf.rotation * dir).normalize())
+        .unwrap_or(dir);
     let up = if dir.dot(Vec3::Y).abs() > 0.99 { Vec3::X } else { Vec3::Y };
 
     // The sun is the brightest `DirectionalLight` (Earthshine fill is far dimmer).
@@ -196,6 +240,43 @@ pub fn celestial_telemetry_system(
     *timer += 1;
 }
 
+/// Force per-frame `GlobalTransform` recomputation for the celestial subtree.
+///
+/// big_space's `propagate_high_precision` is change-gated: an entity keeps its
+/// cached `GlobalTransform` unless its own `Transform`/`CellCoord`/parent
+/// changed or its grid's local floating origin moved. In a site-anchored scene
+/// the Solar Grid is re-pinned every epoch tick, and globe tiles / body
+/// entities spawned on an unlucky frame were observed FROZEN at the raw
+/// heliocentric pose (~1.47e11 m) while their siblings sat at the correct
+/// anchored pose (~3.8e8 m) — "some Earth tiles missing", and `FocusEntityById`
+/// reading the stale body GT teleported the avatar 1e11 m into empty space
+/// (the "click on Earth → everything vanishes" bug). Touching `Transform`
+/// change-detection on the handful of celestial entities (bodies, frame grids,
+/// tiles — tens, not thousands) makes every propagation pass recompute them,
+/// so no stale pose can survive. Runs in `PreUpdate` after the celestial chain
+/// so the same frame's propagation sees the flags.
+#[allow(clippy::type_complexity)]
+pub fn touch_celestial_transforms(
+    q_site: Query<(), With<crate::geo::SiteAnchor>>,
+    mut q: Query<
+        &mut Transform,
+        Or<(
+            With<CelestialBody>,
+            With<CelestialReferenceFrame>,
+            With<lunco_terrain_globe::TerrainTile>,
+        )>,
+    >,
+) {
+    // Only needed while a site anchor re-pins the solar frame; a plain scene
+    // has no moving grid chain to go stale against.
+    if q_site.is_empty() {
+        return;
+    }
+    for mut tf in q.iter_mut() {
+        tf.set_changed();
+    }
+}
+
 pub fn celestial_visuals_system(
     mut materials: ResMut<Assets<ShaderMaterial>>,
     q_camera: Query<(Entity, &CellCoord, &Transform), (With<Camera>, With<lunco_core::Avatar>)>,
@@ -208,34 +289,33 @@ pub fn celestial_visuals_system(
     let Some((cam_ent, cam_cell, cam_tf)) = q_camera.iter().next() else { return; };
     let cam_abs = world_position_seeded(cam_ent, cam_cell, cam_tf, &q_parents, &q_grids, &q_spatial);
 
-    // Find nearest body and compute altitude using body-local distance.
-    // Using body-local coords (camera relative to body center) prevents
-    // thrashing at high time warp — only depends on camera's position
-    // relative to the body, not where the body happens to be in orbit.
-    let mut nearest_altitude = f64::MAX;
-    let mut nearest_body_entity = None;
-    for (body_ent, body_cell, body_tf, body) in q_bodies.iter() {
-        let body_abs = world_position_seeded(body_ent, body_cell, body_tf, &q_parents, &q_grids, &q_spatial);
-        // Body-local distance: camera position relative to body center
-        let camera_body_local = cam_abs - body_abs;
-        let altitude = (camera_body_local.length() - body.radius_m).max(0.0);
-        if altitude < nearest_altitude {
-            nearest_altitude = altitude;
-            nearest_body_entity = Some(body_ent);
-        }
-    }
-
-    let Some(nearest_body) = nearest_body_entity else { return };
-
-    // High (0.0 transition) at 100km, Blueprint (1.0 transition) at 10km
+    // Per-body camera altitude → per-body texture↔blueprint transition.
+    // Body-local coords (camera relative to body center) prevent thrashing
+    // at high time warp — only depends on camera's position relative to the
+    // body, not where the body happens to be in orbit.
+    //
+    // EVERY body gets its transition — not just the nearest. The old
+    // nearest-only version left distant bodies' tiles on the material default
+    // forever: Earth seen from a lunar site rendered as the blueprint
+    // wireframe (invisible thin lines against black sky) — the long-standing
+    // "no Earth in the sky" bug. With per-body altitudes a distant body
+    // computes transition 0.0 = fully textured globe.
+    //
+    // High (0.0 transition) at 100 km, Blueprint (1.0 transition) at 10 km.
     let start_transition_alt = 100_000.0;
     let end_transition_alt = 10_000.0;
-    let transition = (((start_transition_alt - nearest_altitude) / (start_transition_alt - end_transition_alt)) as f64)
-        .clamp(0.0, 1.0) as f32;
+    let mut per_body: std::collections::HashMap<Entity, f32> = std::collections::HashMap::new();
+    for (body_ent, body_cell, body_tf, body) in q_bodies.iter() {
+        let body_abs = world_position_seeded(body_ent, body_cell, body_tf, &q_parents, &q_grids, &q_spatial);
+        let altitude = ((cam_abs - body_abs).length() - body.radius_m).max(0.0);
+        let transition = ((start_transition_alt - altitude)
+            / (start_transition_alt - end_transition_alt))
+            .clamp(0.0, 1.0) as f32;
+        per_body.insert(body_ent, transition);
+    }
 
-    // Update all tiles belonging to the nearest body
     for (mat_handle, coord) in q_tiles.iter() {
-        if coord.body == nearest_body {
+        if let Some(&transition) = per_body.get(&coord.body) {
             if let Some(mat) = materials.get_mut(mat_handle) {
                 mat.set("transition", ParamValue::F32(transition));
             }

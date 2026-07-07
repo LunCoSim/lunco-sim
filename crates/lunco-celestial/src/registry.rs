@@ -108,7 +108,11 @@ impl CelestialBodyRegistry {
                     parent_id: Some(3), // EMB
                     texture_path: Some("textures/earth.png".to_string()),
                     rotation_rate_rad_per_day: 6.300_388_098_9, // 2π / 0.99726968 rad/day
-                    polar_axis: DVec3::Y, 
+                    // Equatorial north pole in the ECLIPTIC-Y-up world frame
+                    // (ecliptic lat 66.56°, lon 90°): tilted by the J2000
+                    // obliquity ε=23.439° toward −Z. `geo::body_rotation`
+                    // honors the tilt (arc from +Y, then spin).
+                    polar_axis: DVec3::new(0.0, 0.917_482_1, -0.397_776_9),
                 },
                 BodyDescriptor {
                     name: "Moon".to_string(),
@@ -119,7 +123,15 @@ impl CelestialBodyRegistry {
                     parent_id: Some(3), // EMB
                     texture_path: Some("textures/moon.png".to_string()),
                     rotation_rate_rad_per_day: 0.229_970_835_5, // 2π / 27.321661 rad/day
-                    polar_axis: DVec3::Y, 
+                    // Lunar spin pole in the ecliptic-Y-up world frame:
+                    // tilted 1.543° from the ecliptic pole (Cassini's laws)
+                    // toward ecliptic longitude Ω+90° with Ω(2026-07) ≈ 332°.
+                    // The node regresses (18.6 yr period, ~0.05°/day), so this
+                    // is a mean-of-2026 snapshot — good to ~0.1°/yr. The tilt
+                    // is what gives polar sites their ~±2° solar elevation
+                    // seasons (with `polar_axis = +Y` the Shackleton sun never
+                    // climbed past the site colatitude, ~0.6°).
+                    polar_axis: DVec3::new(0.012_54, 0.999_64, -0.023_83),
                 },
             ],
         }

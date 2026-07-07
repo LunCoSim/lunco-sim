@@ -217,6 +217,82 @@ for exactly this class of bug). The
 the real f64 round-based `Grid::translation_to_grid` (its old f32/floor
 simulation manufactured ~0.1 m of artifact error).
 
+### Focus camera vs surface state (fixed here)
+
+Clicking a planet (or `focus()` from rhai) while in a surface view produced a
+jittering, half-black orbital view. Two independent defects in `lunco-avatar`:
+
+- **Rotation fight**: `on_focus_command` stripped
+  `OrbitCamera/FreeFlightCamera/SpringArmCamera` but left `SurfaceCamera` (and
+  `SurfaceRelativeMode`/`GravityBody`) on the avatar. `surface_camera_system`
+  runs *after* `orbit_system` in the PostUpdate chain and rebuilds the
+  rotation as a ground-level tangent frame each frame — the camera orbits the
+  body but looks at the horizon, and its radial "up" swings as the orbit arm
+  eases, so the planet sweeps in and out of frame. Fix: focus now strips the
+  surface components too (same set `on_leave_surface` already removed).
+- **Far plane clipped Earth**: `update_avatar_clip_planes_system` required
+  `&CellCoord` on `CelestialBody` entities — but bodies deliberately carry
+  none (they sit at their grid origin), so zero bodies matched and the
+  body-less fallback pinned `far = 1e7 m`. Earth focus sits at 1.9e7 m →
+  the entire planet was beyond the far plane (black screen). The Moon
+  (5.2e6 m at 3 radii) stayed inside it, which is why Moon focus mostly
+  rendered. It also compared the camera's grid-local position against each
+  body's *own-grid-local* position — meaningless across grids. Fix: both
+  sides use `GlobalTransform` translations — big_space rebases them around
+  the floating origin, so they are in ONE consistent frame every frame.
+
+  ⚠ An intermediate fix used `world_position_seeded` — do not repeat it.
+  That helper sums nested grid translations WITHOUT applying grid
+  rotations, so across the site-anchored Solar Grid (rotation `align`,
+  translation ~1.5e11 m) the ecliptic-axis and site-axis terms don't
+  cancel: body "absolute" positions came out as ~1e11 m mixed-frame
+  garbage, the near/far planes flapped every epoch tick, and the whole
+  viewport strobed white (terrain visible) ↔ black (near-clipped). The
+  helper is only valid when every grid on the path has identity rotation.
+  The near plane also subtracts 20 km of terrain headroom — `min_dist`
+  measures to the reference sphere, and a raised site (Shackleton ridge
+  ≈ 1.2 km) would otherwise clip the ground underfoot.
+- **Orbital depth-precision flicker** (separate from the strobe above; it
+  survived the `GlobalTransform` fix): the surface loaded fine but orbital
+  Earth/Moon still flickered. `near` was pinned to ≤ 100 m
+  (`(min_dist − 20 km)·0.01`, clamped `[0.1, 100]`) while `far` tracks the
+  farthest body — the Sun at ~1.5e11 m. In orbital view the focused body
+  sits ~2e7 m out, ~0.01 % into the depth range; under reverse-Z (1/z) all
+  precision bunches at the near plane, so the globe lands in the starved
+  tail and adjacent LOD tile seams z-fight, strobing frame-to-frame as the
+  camera micro-jitters. The surface is unaffected because you look at near
+  terrain, which hogs the 1/z precision. Fix: anchor the near plane to the
+  nearest surface — `near = (min_dist − 20 km).max(0.1)`, no upper clamp —
+  so the viewed body sits *at* the near plane where reverse-Z precision
+  peaks; on the surface `min_dist` collapses to ~0 and `near` floors at
+  0.1 m (unchanged). The rule: an adaptive near plane must scale with
+  viewing distance, never sit at a fixed ceiling.
+- **Globe LOD flapping**: `subdivide_face` split on a sharp
+  `dist < arc·factor` threshold and focus parks the camera at exactly
+  3.0 radii — on-threshold noise re-decided the leaf set every frame,
+  despawning/respawning tiles with fresh mesh assets (the planet flickered
+  in and out). Now a ±5% dead band keyed on the resident leaf set
+  (resident leaf splits below 0.95·T, split node re-merges above 1.05·T).
+  The LOD also followed `cameras.iter().next()` — an arbitrary `Camera3d`,
+  including offscreen USD-preview cameras, and archetype moves can flip
+  iteration order per frame — it now follows only the active
+  window-targeting camera.
+- **Sunlit arrival**: focusing a body now derives yaw/pitch so the camera
+  arrives on the sunlit side (sun direction from `GlobalTransform`s,
+  re-expressed in the target grid's frame, +0.4 rad off the sun line so
+  the terminator stays visible). Preserving the incoming yaw/pitch dropped
+  the camera on an arbitrary — usually night — side, where an unlit planet
+  disk is invisible.
+
+Frame realignment terrain ⇄ orbital falls out of these: the orbit camera
+always looks at its target, so focusing a body gives a planet-centred view
+(gimbal up = the body grid's axis) and focusing the rover restores the
+site-ENU frame (gimbal up = scene +Y = local vertical — ground beneath). The
+site anchor's position/tilt on the Moon is already what pins those two frames
+together. A smooth up-vector *blend* while scroll-zooming a body orbit
+(Google-Earth style) is deferred — at a polar site scene-up and pole-up are
+antiparallel, so a naive slerp degenerates; needs a great-circle path choice.
+
 Deferred (tracked, not in this slice): `CommsLink.mo` Friis/data-rate/buffer
 model (doc 36 layer B — ride the `comms-degradation` subsystem toggle),
 DomeLight starfield sky, terrain raycast occlusion near-field, per-station

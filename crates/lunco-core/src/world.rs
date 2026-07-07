@@ -97,10 +97,19 @@ pub fn ensure_world_root(world: &mut World) -> Entity {
         .copied()
         .unwrap_or_default();
 
-    // BigSpace root + the `WorldRoot` marker (so subsystems attach under it). It
-    // carries the full spatial/visibility bundle so its `WorldGrid` child doesn't
-    // trip Bevy's B0004 "parent without GlobalTransform/InheritedVisibility" warning
-    // — the root is the identity base of big_space propagation.
+    // BigSpace root + the `WorldRoot` marker (so subsystems attach under it).
+    // It carries the full spatial bundle INCLUDING `Transform`: Avian's physics
+    // transform handling follows the standard bevy convention (parentless root
+    // with a `Transform`), and removing it silently breaks every collider under
+    // the tree (rovers free-fall through the ground). The `Transform` also
+    // makes big_space's bevy-compat pass treat this tree as a plain
+    // low-precision root and re-propagate it with f32 math (dropping
+    // `CellCoord`s) — racing `propagate_high_precision` for every
+    // `GlobalTransform`, which strobed site-anchored scenes (cells ~5e7 on the
+    // Solar Grid → losing frames rendered the Moon 1e11 m away). That race is
+    // resolved by ORDERING, not by removing the `Transform`: `WorldShellPlugin`
+    // constrains `BigSpaceSystems::PropagateHighPrecision` to run AFTER the
+    // compat pass, so the high-precision writer deterministically wins.
     let root = world
         .spawn((
             BigSpace::default(),
@@ -171,6 +180,30 @@ impl Plugin for WorldShellPlugin {
                 anchor_owns_origin_by_default
                     .before(BigSpaceSystems::RecenterLargeTransforms),
             );
+
+        // Kill the dual-propagation race deterministically. big_space registers
+        // BOTH its high-precision propagation AND a plain bevy-compat
+        // `propagate_parent_transforms` in `TransformSystems::Propagate` with
+        // no mutual ordering. Our `WorldRoot` is a parentless entity WITH a
+        // `Transform` (Avian's physics transform handling requires the standard
+        // convention — see `ensure_world_root`), so the compat pass re-walks
+        // the WHOLE big_space tree with plain f32 math, dropping `CellCoord`s.
+        // Unordered, the per-frame winner is nondeterministic: invisible while
+        // all cells ≈ 0, a whole-frame white/black strobe in site-anchored
+        // scenes (Solar Grid at ~5e7 cells → losing frames put the Moon 1e11 m
+        // away). Constraining the high-precision set AFTER the compat system
+        // makes big_space overwrite the plain values every frame, in both
+        // schedules big_space registers them in.
+        app.configure_sets(
+            PostStartup,
+            BigSpaceSystems::PropagateHighPrecision
+                .after(big_space::bevy_compat::propagate_parent_transforms),
+        );
+        app.configure_sets(
+            PostUpdate,
+            BigSpaceSystems::PropagateHighPrecision
+                .after(big_space::bevy_compat::propagate_parent_transforms),
+        );
     }
 }
 

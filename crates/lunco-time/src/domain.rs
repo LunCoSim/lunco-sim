@@ -382,7 +382,31 @@ fn on_set_time_transport(
     }
 }
 
-register_commands!(on_control_animation, on_set_time_transport);
+/// Re-anchor the world clock at an absolute epoch (Julian Date, TDB) —
+/// `{"command":"SetMissionEpoch","params":{"epoch_jd":2461253.0}}`. Sets both
+/// the mission origin and the calendar anchor at the CURRENT tick, so the sim
+/// jumps to that date without a tick discontinuity. This is how a scene picks
+/// its date: a site-anchored USD stage authors `double lunco:time:epochJd` on
+/// its root prim (e.g. an epoch where the Shackleton site is sunlit) and the
+/// USD bridge fires this command on load.
+#[Command(default)]
+pub struct SetMissionEpoch {
+    /// Absolute epoch, Julian Date (TDB).
+    pub epoch_jd: f64,
+}
+
+#[on_command(SetMissionEpoch)]
+fn on_set_mission_epoch(
+    trigger: On<SetMissionEpoch>,
+    tick: Res<crate::SimTick>,
+    mut clock: ResMut<crate::MissionClock>,
+) {
+    let jd = trigger.event().epoch_jd;
+    *clock = crate::MissionClock::anchored(jd, tick.0);
+    bevy::log::info!("[time] mission epoch re-anchored to JD {jd:.4}");
+}
+
+register_commands!(on_control_animation, on_set_time_transport, on_set_mission_epoch);
 
 /// Plugin wiring for the clock tree: components, [`ResolvedDomains`], the resolve
 /// system in [`DomainResolveSet`] (`Update`), the [`AnimationPreview`] domain, and

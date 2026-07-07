@@ -219,6 +219,27 @@ impl Default for CelestialEphemerisProvider {
     }
 }
 
+/// Rotate an **equatorial / ICRS** rectangular vector into **ecliptic J2000**
+/// (rotation about +X by the J2000 mean obliquity).
+///
+/// The `celestial-ephemeris` VSOP2013 wrappers (`heliocentric_position`) and
+/// the ELP/MPP02 moon (`geocentric_position_icrs`) all return ICRS/equatorial
+/// axes, while the `EphemerisProvider` contract — and everything downstream
+/// (`ecliptic_to_bevy`, the geodesy in `lunco_celestial::geo`, the registry's
+/// `polar_axis = +Y`) — is ecliptic J2000. Feeding equatorial vectors through
+/// unconverted tilts every "up"/"north" by 23.4°: measured at the Shackleton
+/// site anchor this rendered the sun ~45° below the horizon (pitch-black
+/// ground) instead of the real grazing ~1°.
+fn equatorial_to_ecliptic(p: DVec3) -> DVec3 {
+    let epsilon = (23.439281f64).to_radians();
+    let (sin_e, cos_e) = epsilon.sin_cos();
+    DVec3::new(
+        p.x,
+        p.y * cos_e + p.z * sin_e,
+        -p.y * sin_e + p.z * cos_e,
+    )
+}
+
 impl EphemerisProvider for CelestialEphemerisProvider {
     fn position(&self, body_id: i32, epoch_jd: f64) -> DVec3 {
         let julian = JulianDate::new(epoch_jd, 0.0);
@@ -228,28 +249,33 @@ impl EphemerisProvider for CelestialEphemerisProvider {
             10 => DVec3::ZERO,
             3 => {
                 let p = self.emb.heliocentric_position(&tdb).unwrap_or_else(|_| Vector3::zeros());
-                DVec3::new(p.x, p.y, p.z)
+                equatorial_to_ecliptic(DVec3::new(p.x, p.y, p.z))
             }
             399 => {
                 let p_emb = self.emb.heliocentric_position(&tdb).unwrap_or_else(|_| Vector3::zeros());
                 let p_earth = self.earth.heliocentric_position(&tdb).unwrap_or_else(|_| Vector3::zeros());
-                DVec3::new(p_earth.x - p_emb.x, p_earth.y - p_emb.y, p_earth.z - p_emb.z)
+                equatorial_to_ecliptic(DVec3::new(
+                    p_earth.x - p_emb.x,
+                    p_earth.y - p_emb.y,
+                    p_earth.z - p_emb.z,
+                ))
             }
             301 => {
                 let p_m_geo_arr = self.moon.geocentric_position_icrs(&tdb).unwrap_or_else(|_| [0.0, 0.0, 0.0]);
                 const AU_KM: f64 = 149_597_870.7;
-                let mut p_m_geo_au = DVec3::new(p_m_geo_arr[0] / AU_KM, p_m_geo_arr[1] / AU_KM, p_m_geo_arr[2] / AU_KM);
-
-                let epsilon = (23.439281f64).to_radians();
-                let (sin_e, cos_e) = epsilon.sin_cos();
-                let y = p_m_geo_au.y * cos_e + p_m_geo_au.z * sin_e;
-                let z = -p_m_geo_au.y * sin_e + p_m_geo_au.z * cos_e;
-                p_m_geo_au.y = y;
-                p_m_geo_au.z = z;
+                let p_m_geo_au = equatorial_to_ecliptic(DVec3::new(
+                    p_m_geo_arr[0] / AU_KM,
+                    p_m_geo_arr[1] / AU_KM,
+                    p_m_geo_arr[2] / AU_KM,
+                ));
 
                 let p_emb = self.emb.heliocentric_position(&tdb).unwrap_or_else(|_| Vector3::zeros());
                 let p_earth = self.earth.heliocentric_position(&tdb).unwrap_or_else(|_| Vector3::zeros());
-                let p_earth_rel_emb = DVec3::new(p_earth.x - p_emb.x, p_earth.y - p_emb.y, p_earth.z - p_emb.z);
+                let p_earth_rel_emb = equatorial_to_ecliptic(DVec3::new(
+                    p_earth.x - p_emb.x,
+                    p_earth.y - p_emb.y,
+                    p_earth.z - p_emb.z,
+                ));
 
                 p_m_geo_au + p_earth_rel_emb
             }
@@ -273,6 +299,56 @@ impl EphemerisProvider for CelestialEphemerisProvider {
                 DVec3::ZERO
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+    use lunco_celestial::{solar_tangent_frame, CelestialBodyRegistry, Geodetic};
+
+    /// Ecliptic (AU) → Bevy axes, direction-only (mirrors
+    /// `lunco_celestial::coords::ecliptic_to_bevy` sans the meter scale).
+    fn ecl_to_bevy(p: DVec3) -> DVec3 {
+        DVec3::new(p.x, p.z, -p.y)
+    }
+
+    /// End-to-end frame check: with the provider's equatorial→ecliptic
+    /// conversion and the tilt-aware geodesy, the sun's elevation at the
+    /// Shackleton site must stay GRAZING (bounded by the moon axis tilt +
+    /// site colatitude, ~±2.5°) and must actually rise above +1° at some
+    /// epoch within a year. Both fail loudly under the historical frame
+    /// bugs (equatorial vectors fed to ecliptic geodesy put the sun ±23-45°
+    /// off the horizon).
+    #[test]
+    fn shackleton_sun_stays_grazing_and_gets_lit_epochs() {
+        let provider = CelestialEphemerisProvider::new();
+        let registry = CelestialBodyRegistry::default_system();
+        let moon = registry.bodies.iter().find(|b| b.ephemeris_id == 301).unwrap();
+        let site = Geodetic::new(-89.45, -136.7, 1200.0);
+
+        let mut best = (0.0_f64, f64::MIN);
+        for step in 0..=(366 * 4) {
+            let jd = 2461228.5 + step as f64 * 0.25; // 6 h steps from 2026-07-07
+            let p_moon = provider.global_position(301, jd); // ecliptic, AU
+            let center_m = ecl_to_bevy(p_moon) * 1.495_978_707e11;
+            let frame = solar_tangent_frame(moon, &site, center_m, jd);
+            let to_sun = ecl_to_bevy(-p_moon).normalize();
+            let elev_deg = to_sun.dot(frame.up).clamp(-1.0, 1.0).asin().to_degrees();
+            assert!(
+                elev_deg.abs() < 2.5,
+                "polar sun must graze (|elev| < 2.5°), got {elev_deg:.2}° at JD {jd:.2}"
+            );
+            if elev_deg > best.1 {
+                best = (jd, elev_deg);
+            }
+        }
+        println!("best lit epoch: JD {:.2} (elevation {:.3}°)", best.0, best.1);
+        assert!(
+            best.1 > 1.0,
+            "Shackleton should reach >1° sun elevation within a year; best {:.3}°",
+            best.1
+        );
     }
 }
 

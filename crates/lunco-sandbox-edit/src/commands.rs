@@ -2567,15 +2567,29 @@ pub struct FocusEntityById {
     pub distance: f32,
 }
 
-/// Observer that aims the avatar at the requested entity.
+/// A focus request recorded by [`on_focus_entity_by_id`] and applied by
+/// [`apply_pending_focus`] at the start of the NEXT frame (`First` schedule).
+///
+/// The command observer fires wherever the API dispatcher happens to sit in
+/// the frame — including BETWEEN transform-propagation passes, where the
+/// target's and the avatar's `GlobalTransform`s are momentarily in different
+/// conventions (a site-anchored scene re-bases the solar hierarchy every
+/// tick). Doing the math there teleported the avatar ~1e11 m into empty space
+/// ("click on Earth → everything vanishes"). In `First`, nothing has written a
+/// transform yet this frame, so last frame's fully-propagated GTs are
+/// mutually consistent by construction.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct PendingFocus {
+    pub target: Entity,
+    pub distance: f32,
+}
+
+/// Observer: validate + record the focus; all spatial math happens in
+/// [`apply_pending_focus`].
 pub fn on_focus_entity_by_id(
     trigger: On<FocusEntityById>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    q_target: Query<&GlobalTransform>,
-    mut q_avatar: Query<
-        (&mut Transform, Option<&mut lunco_avatar::FreeFlightCamera>),
-        With<lunco_core::Avatar>,
-    >,
+    mut commands: Commands,
 ) {
     let cmd = trigger.event();
     let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
@@ -2583,6 +2597,27 @@ pub fn on_focus_entity_by_id(
         warn!("FOCUS_ENTITY: no api_id={} in registry", cmd.entity_id);
         return;
     };
+    commands.insert_resource(PendingFocus { target, distance: cmd.distance });
+    info!("FOCUS_ENTITY: queued focus on {target:?} at {} m", cmd.distance);
+}
+
+/// Applies a [`PendingFocus`] with frame-consistent transforms (`First`
+/// schedule — see the type doc).
+pub fn apply_pending_focus(
+    pending: Option<Res<PendingFocus>>,
+    q_target: Query<&GlobalTransform>,
+    mut q_avatar: Query<
+        (&mut Transform, &GlobalTransform, Option<&mut lunco_avatar::FreeFlightCamera>),
+        With<lunco_core::Avatar>,
+    >,
+    q_celestial: Query<(), With<lunco_celestial::CelestialBody>>,
+    q_lights: Query<(&GlobalTransform, &bevy::light::DirectionalLight)>,
+    mut commands: Commands,
+) {
+    let Some(pending) = pending else { return };
+    let (target, distance) = (pending.target, pending.distance);
+    commands.remove_resource::<PendingFocus>();
+    let cmd = FocusEntityById { entity_id: 0, distance };
     let Ok(target_gt) = q_target.get(target) else {
         warn!("FOCUS_ENTITY: target {:?} has no GlobalTransform", target);
         return;
@@ -2593,20 +2628,41 @@ pub fn on_focus_entity_by_id(
     // fallback) — both surfaced as "no Avatar" and killed double-click focus.
     // Take the first avatar; the FreeFlightCamera is now optional.
     let avatar_count = q_avatar.iter().count();
-    let Some((mut tf, ff_opt)) = q_avatar.iter_mut().next() else {
+    let Some((mut tf, avatar_gt, ff_opt)) = q_avatar.iter_mut().next() else {
         warn!("FOCUS_ENTITY: no Avatar entity in the scene (count={avatar_count})");
         return;
     };
-    // In big_space, `GlobalTransform` is expressed relative to the floating
-    // origin — which is the avatar — so this IS the avatar→target vector in
-    // render space (grid-aligned, unit scale).
-    // `GlobalTransform.translation()` is the target's absolute world position in
-    // this sandbox (the avatar's CellCoord is 0, so local == world).
-    let target_pos = target_gt.translation();
+    // Work in the avatar→target DELTA, not the target's absolute
+    // `GlobalTransform`. Both GTs are read in the same instant so whatever
+    // convention/origin big_space happens to be mid-way through this frame
+    // (site-anchored scenes re-base every tick) cancels in the difference —
+    // reading the target GT alone teleported the avatar 1e11 m into empty
+    // space when the observer fired between propagation passes. The delta is
+    // applied to the avatar's LOCAL translation, which is valid because the
+    // avatar's parent grid (WorldGrid) is unrotated wrt render space.
+    let delta = target_gt.translation() - avatar_gt.translation();
+    let target_pos = tf.translation + delta;
     let dist = if cmd.distance > 0.1 { cmd.distance } else { 6.0 };
     // Camera sits mostly to the SIDE (+X, the wheel axle direction → we see the
-    // spoke face) plus a little up and forward.
-    let offset = Vec3::new(1.0, 0.4, 0.25).normalize() * dist;
+    // spoke face) plus a little up and forward — EXCEPT for celestial bodies:
+    // a planet focused from a random side is usually its NIGHT hemisphere (a
+    // black disc on black space — "clicked Earth and everything went dark").
+    // For those, approach from the SUN side, slightly off-axis so the
+    // terminator gives depth: to_sun = -(brightest directional light forward).
+    let side_offset = Vec3::new(1.0, 0.4, 0.25).normalize();
+    let dir = if q_celestial.get(target).is_ok() {
+        q_lights
+            .iter()
+            .max_by(|a, b| a.1.illuminance.total_cmp(&b.1.illuminance))
+            .map(|(light_gt, _)| {
+                let to_sun: Vec3 = light_gt.back().into();
+                (to_sun * 0.9 + side_offset * 0.25).normalize()
+            })
+            .unwrap_or(side_offset)
+    } else {
+        side_offset
+    };
+    let offset = dir * dist;
     // Set the avatar to target + offset (absolute, like MoveEntity).
     tf.translation = target_pos + offset;
     let d = (-offset).normalize();
@@ -3233,6 +3289,9 @@ impl Plugin for SpawnCommandPlugin {
         // the names the loader already reads back — so it round-trips + journals.
         app.add_observer(persist_environment_light_to_runtime_layer);
         app.add_observer(on_focus_entity_by_id);
+        // Applies the recorded focus at frame start, when last frame's fully
+        // propagated GlobalTransforms are mutually consistent (see PendingFocus).
+        app.add_systems(bevy::app::First, apply_pending_focus);
         // NOTE: `SelectEntity`/`on_select_entity` are editor-only (they drive the
         // Inspector highlight + gizmo) and live in the `ui`-gated `selection`
         // module; `SandboxEditPlugin` registers them. The headless server has no

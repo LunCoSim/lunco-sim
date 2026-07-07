@@ -144,6 +144,7 @@ pub fn setup_big_space_hierarchy(
     q_world_root: Query<Entity, With<lunco_core::WorldRoot>>,
     q_world_grid: Query<Entity, With<lunco_core::WorldGrid>>,
     q_prior_origins: Query<Entity, With<FloatingOrigin>>,
+    q_prior_fallback_lights: Query<Entity, With<lunco_core::FallbackSceneLight>>,
 ) {
     // Earth/Moon textures load from the `cached_textures://` source on EVERY
     // platform — NOT baked into the binary. Desktop reads the cache dir; wasm
@@ -200,6 +201,13 @@ pub fn setup_big_space_hierarchy(
         GlobalTransform::default(),
         Visibility::Visible,
         InheritedVisibility::default(),
+        // The sun's own visual sphere must NEVER cast shadows: it sits exactly
+        // along the `DirectionalLight` direction, so as a caster it pancakes
+        // into every cascade map and "eclipses" the whole scene — with the
+        // celestial hierarchy enabled, every fragment within
+        // `shadow_max_distance` rendered fully shadowed (the pitch-black
+        // site-anchored surface), while terrain beyond cascade range lit fine.
+        bevy::light::NotShadowCaster,
         Mesh3d(meshes.add(Sphere::new(696_340.0e3).mesh().ico(4).unwrap())),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::BLACK,
@@ -221,20 +229,33 @@ pub fn setup_big_space_hierarchy(
     // spawn used to omit the cascade config entirely, so it rendered with
     // Bevy's single-cascade default (wrong terrain self-shadow, clipped
     // low-sun streaks). Now it matches the sandbox + USD paths by construction.
+    // REPLACE any pre-existing fallback sun (the sandbox binary spawns one at
+    // startup, before the celestial hierarchy enables on site-anchor
+    // detection). Two simultaneous shadow-casting suns double-light the scene
+    // from conflicting directions.
+    for e in q_prior_fallback_lights.iter() {
+        commands.entity(e).despawn();
+    }
     let sun = lunco_render::LunarSunShadow::default();
     // Physical sun identity (illuminance / angular size) is environmental state.
     let ls = lunco_environment::LunarSun::default();
     commands.insert_resource(sun.shadow_map());
+    // Top-level entity, NOT a child of the Solar Grid: a `DirectionalLight`
+    // only needs orientation (`update_sun_light_system` steers it in WORLD
+    // axes), and parenting it into the solar hierarchy gives it a
+    // heliocentric-magnitude (~1e11 m) GlobalTransform translation. Bevy
+    // builds the cascade-shadow matrices from that transform in f32 — at that
+    // magnitude they collapse into garbage that swallows the whole ground on
+    // random frames (the site-anchored-scene lit/black strobe).
     commands.spawn((
         sun.directional_light(Color::WHITE, ls.illuminance_lux),
         sun.cascade_config(),
         lunco_core::SunAngularDiameter(ls.angular_diameter_deg),
-        CellCoord::default(),
         Transform::default(),
         GlobalTransform::default(),
         Name::new("Sun Light"),
         lunco_core::FallbackSceneLight,
-    )).set_parent_in_place(solar_grid);
+    ));
 
     // ── EMB Grid (inertial anchor for Earth-Moon system) ───────────────────
     let emb_grid = commands.spawn((

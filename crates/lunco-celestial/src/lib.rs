@@ -9,7 +9,6 @@
 
 use bevy::prelude::*;
 use bevy::math::DVec3;
-use big_space::prelude::CellCoord;
 // Gravity *types* now live in lunco-environment; celestial owns only the
 // gravity systems + `PointMassGravity` model (see `gravity.rs`).
 use lunco_environment::{Gravity, GravityBody};
@@ -89,6 +88,14 @@ impl Default for CelestialConfig {
         Self { spawn_hierarchy: true, spawn_observer_camera: true }
     }
 }
+
+/// `PreUpdate` set containing the celestial epoch chain (ephemeris → body
+/// rotation → site anchor → bound placement). Systems that READ celestial
+/// `Transform`/`CellCoord` state in `PreUpdate` (e.g. the gravity field)
+/// must order `.after(CelestialEpochSet)` or they can interleave mid-chain
+/// and observe half-updated grids.
+#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
+pub struct CelestialEpochSet;
 
 pub struct CelestialPlugin;
 
@@ -176,16 +183,21 @@ impl Plugin for CelestialPlugin {
         app.add_systems(PreUpdate, (
             ephemeris_update_system,
             body_rotation_system,
-            // Doc 43: site-anchored solar frame + geodetic/orbit placement —
-            // AFTER the ephemeris projection (which re-zeroes the solar grid)
-            // so the site pin wins whenever a scene authors a SiteAnchor.
+            // Doc 43: site-anchored solar frame + geodetic/orbit placement.
+            // `ephemeris_update_system` never touches the Solar Grid (id 10),
+            // so the pin persists between anchor runs — no mid-chain window
+            // where the hierarchy sits un-anchored.
             placement::anchor_solar_frame_to_site,
             placement::place_celestial_bound_entities,
+            // Defeat stale-GT caching for the celestial subtree (see the
+            // system doc: frozen heliocentric tile/body poses = blinking
+            // Earth + focus teleporting into empty space).
+            touch_celestial_transforms,
             tile_rotation_sync_system
                 .after(bevy::transform::TransformSystems::Propagate)
                 .after(big_space::prelude::BigSpaceSystems::PropagateHighPrecision),
             soi_transition_system,
-        ).chain().after(lunco_time::TimeSpineSet));
+        ).chain().in_set(CelestialEpochSet).after(lunco_time::TimeSpineSet));
 
         app.add_systems(Update, (
             celestial_telemetry_system,
@@ -199,16 +211,17 @@ impl Plugin for CelestialPlugin {
         // Terrain spawning is now handled by lunco-terrain plugin
         // Systems like terrain_spawn_system run in that crate
 
-        // NOTE: the sun's *direction* is owned by its spawn transform
-        // (`big_space_setup`) and edited at runtime via
-        // `lunco_environment::SetEnvironmentLight` (the Inspector / web sun
-        // control). There is intentionally no per-frame system forcing it: the
-        // old `update_sun_light_system` hardcoded `look_to(NEG_Z)` every frame,
-        // which clobbered `SetEnvironmentLight` on web builds (where the lone
-        // `DirectionalLight` made its `single_mut()` succeed, unlike native
-        // where the earthshine fill made it a silent no-op). A future
-        // ephemeris-driven sun would write the transform from the sim clock,
-        // not pin it to a constant.
+        // Ephemeris-driven sun direction (doc 19 — T2). The system returns
+        // early when the ephemeris is degenerate (`NoOpEphemerisProvider`
+        // returns ZERO), so manual `SetEnvironmentLight` (yaw/pitch) control
+        // stays authoritative in sandbox/web contexts without a real
+        // ephemeris — the single-writer rule that resolved the old web-build
+        // clobbering. With a real ephemeris the sun tracks the sim clock:
+        // required since the celestial sun light is a TOP-LEVEL entity (it
+        // must not ride the Solar Grid — heliocentric-magnitude translations
+        // corrupt the f32 cascade-shadow matrices) and therefore inherits no
+        // orientation from the site-anchored hierarchy.
+        app.add_systems(Update, update_sun_light_system);
         app.add_observer(on_restore_fallback_lights);
     }
 }
@@ -234,7 +247,12 @@ impl Plugin for GravityPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LocalGravityField>();
         app.register_type::<GravityBody>();
-        app.add_systems(PreUpdate, update_local_gravity_field);
+        // AFTER the celestial epoch chain: this system reads celestial
+        // Transform/CellCoords via `world_position_seeded`; unordered it could
+        // interleave mid-chain and compute gravity from half-updated grids
+        // (measured: alternating ~1e11 m body offsets → randomly flipping
+        // gravity vector → the "surface jitter" in site-anchored scenes).
+        app.add_systems(PreUpdate, update_local_gravity_field.after(CelestialEpochSet));
         // NOTE: `gravity_system` (force application to RigidBodies) lives in
         // `lunco-environment`'s `EnvironmentPlugin` and consumes `LocalGravity`.
         // Add EnvironmentPlugin alongside GravityPlugin for full gravity behavior.
@@ -250,7 +268,7 @@ fn on_restore_fallback_lights(
     if !fallbacks.is_empty() {
         return;
     }
-    let Some(solar_grid) = solar_grid_q.iter().next() else {
+    let Some(_solar_grid) = solar_grid_q.iter().next() else {
         // No SolarSystemRoot found, so we're not running in a celestial/heliocentric context
         return;
     };
@@ -258,16 +276,17 @@ fn on_restore_fallback_lights(
     let sun = lunco_render::LunarSunShadow::default();
     let ls = lunco_environment::LunarSun::default();
     commands.insert_resource(sun.shadow_map());
+    // Top-level, NOT under the Solar Grid — see the matching spawn in
+    // `big_space_setup`: a heliocentric-magnitude translation corrupts the
+    // f32 cascade-shadow matrices (whole-ground lit/black strobe).
     commands.spawn((
         sun.directional_light(Color::WHITE, ls.illuminance_lux),
         sun.cascade_config(),
         lunco_core::SunAngularDiameter(ls.angular_diameter_deg),
-        CellCoord::default(),
         Transform::default(),
         GlobalTransform::default(),
         Name::new("Sun Light"),
         lunco_core::FallbackSceneLight,
-        ChildOf(solar_grid),
     ));
     info!("[restore-fallback-lights] restored celestial fallback light");
 }

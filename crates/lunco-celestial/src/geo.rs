@@ -56,12 +56,21 @@ pub struct SiteAnchor;
 
 /// Rotation of `desc`'s body-fixed frame at `epoch_jd` — the exact formula
 /// `body_rotation_system` applies to the render grids.
+///
+/// Composite: first orient the body-fixed +Y pole onto the body's actual
+/// `polar_axis` (obliquity tilt — identity when the axis IS +Y, e.g. the
+/// Moon's ecliptic-frame approximation), then spin about that axis. Body-fixed
+/// coordinates ([`geodetic_to_body_fixed`]) always use +Y as the pole, so a
+/// tilted axis MUST include this arc or surface points would spin about an
+/// axis their latitude wasn't measured against (Earth ground stations 23°
+/// off in the ecliptic world frame).
 pub fn body_rotation(desc: &BodyDescriptor, epoch_jd: f64) -> DQuat {
     if desc.rotation_rate_rad_per_day == 0.0 {
         return DQuat::IDENTITY;
     }
     let days = epoch_jd - lunco_time::J2000_JD;
-    DQuat::from_axis_angle(desc.polar_axis, days * desc.rotation_rate_rad_per_day)
+    let tilt = DQuat::from_rotation_arc(DVec3::Y, desc.polar_axis.normalize_or_zero());
+    tilt * DQuat::from_axis_angle(DVec3::Y, days * desc.rotation_rate_rad_per_day)
 }
 
 /// Body-fixed cartesian position of a geodetic point (meters).
@@ -207,8 +216,12 @@ mod tests {
     fn east_longitude_advances_with_body_rotation() {
         // A surface point carried by body rotation must advance in east
         // longitude: rotating the body by +θ about the pole moves the point
-        // that WAS at lon λ to inertial direction λ+θ.
-        let desc = moon();
+        // that WAS at lon λ to inertial direction λ+θ. Uses an untilted
+        // (+Y) pole so `body_fixed_to_geodetic` (which measures about +Y)
+        // reads the spin angle exactly — the real Moon's 1.5° Cassini tilt
+        // would leak ~0.02° into the measured longitude.
+        let mut desc = moon();
+        desc.polar_axis = DVec3::Y;
         let geo = Geodetic::new(0.0, 10.0, 0.0);
         let jd0 = lunco_time::J2000_JD;
         let quarter_day = 0.25 * std::f64::consts::TAU / desc.rotation_rate_rad_per_day;

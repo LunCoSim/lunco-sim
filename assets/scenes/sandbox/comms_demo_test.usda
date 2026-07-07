@@ -17,10 +17,22 @@ def Xform "CommsDemoScene" (
     bool lunco:spawnable = false
 
     # Site frame: Shackleton–de Gerlache connecting ridge (Artemis site).
-    double lunco:anchor:lat = -89.45
-    double lunco:anchor:lon = -136.7
-    double lunco:anchor:height = 1200
+    # Malapert Massif summit region — the classic lunar comms-relay site:
+    # near-continuous sunlight and Earth permanently a few degrees above the
+    # northern horizon (direct DSN line of sight). The previous Shackleton-rim
+    # point (-89.45, -136.7) sits in topographic shadow at every azimuth.
+    double lunco:anchor:lat = -85.99
+    double lunco:anchor:lon = 2.9
+    double lunco:anchor:height = 6000
     int lunco:anchor:body = 301
+    # Local MORNING at Malapert: real ephemeris sun at +2.6° elevation and ~72°
+    # in azimuth away from Earth's sky position (measured by sweeping
+    # SetMissionEpoch over a lunar day). Morning beats local noon (+5.2°) for
+    # the demo: at noon the sun stands next to Earth in the sky, so Earth shows
+    # its NIGHT side (a black disc — "click on Earth" saw nothing); in the
+    # morning Earth is a lit gibbous. Without an authored epoch the clock
+    # defaults to "now", which can land in lunar polar night (pitch-black).
+    double lunco:time:epochJd = 2461395.5
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysxTerrainAPI"]
@@ -34,11 +46,14 @@ def Xform "CommsDemoScene" (
         bool physics:collisionEnabled = true
     }
 
-    def DistantLight "Sun"
+    def LuncoEnvironment "Environment"
     {
-        float inputs:intensity = 120000
-        double3 xformOp:rotateXYZ = (-25, 40, 0)
-        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+        # Exposure matched to grazing polar light: at the authored epoch the sun
+        # sits ~2.6° above the Malapert horizon, so flat ground receives
+        # 128k·sin(2.6°) ≈ 5.8k lux (luminance ≈ 740 cd/m² at regolith
+        # albedo) → EV100 ≈ 12.5. The full-daylight default (~15) renders the
+        # scene nearly black.
+        float lunco:env:exposureEv100 = 12.5
     }
 
     def Xform "Avatar"

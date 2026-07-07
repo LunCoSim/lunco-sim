@@ -70,12 +70,25 @@ pub struct GlobeTiles(pub HashMap<TileCoord, Entity>);
 pub fn update_globe_lod(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    cameras: Query<&GlobalTransform, With<Camera3d>>,
+    cameras: Query<(&Camera, &GlobalTransform, &bevy::camera::RenderTarget), With<Camera3d>>,
     transforms: Query<&GlobalTransform>,
     grids: Query<&Grid>,
     mut bodies: Query<(Entity, &GlobeLod, &mut GlobeTiles)>,
 ) {
-    let Some(cam) = cameras.iter().next() else { return };
+    // ONLY the active window camera may steer the LOD. `iter().next()` picked
+    // an arbitrary Camera3d — including offscreen preview cameras — and
+    // archetype moves can flip iteration order between frames, alternating
+    // the LOD focus point and thrashing the whole tile set every frame.
+    let Some(cam) = cameras
+        .iter()
+        .filter(|(c, _, target)| {
+            c.is_active && matches!(target, bevy::camera::RenderTarget::Window(_))
+        })
+        .map(|(_, gt, _)| gt)
+        .next()
+    else {
+        return;
+    };
     let cam_pos = cam.translation().as_dvec3();
 
     for (body_ent, lod, mut tiles) in &mut bodies {
@@ -86,11 +99,15 @@ pub fn update_globe_lod(
         let Ok(sg_grid) = grids.get(lod.surface_grid) else { continue };
         let camera_body_local = cam_pos - sg_gt.translation().as_dvec3();
 
-        // Desired leaf set: recurse all six faces from the root.
+        // Desired leaf set: recurse all six faces from the root. The resident
+        // set feeds the split/merge dead band (no per-frame flapping when the
+        // camera parks exactly on a threshold — e.g. the 3.0-radii focus snap).
+        let resident: HashSet<TileCoord> = tiles.0.keys().copied().collect();
         let mut desired: HashSet<TileCoord> = HashSet::new();
         for face in 0..6u8 {
             subdivide_face(
                 &mut desired,
+                &resident,
                 body_ent,
                 face,
                 0,

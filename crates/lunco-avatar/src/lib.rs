@@ -578,6 +578,7 @@ impl Plugin for LunCoAvatarPlugin {
                 .after(avian3d::schedule::PhysicsSystems::Writeback)
                 .before(bevy::transform::TransformSystems::Propagate)
         );
+
     }
 }
 
@@ -1066,17 +1067,35 @@ fn orbit_system(
         // (marker set by sandbox-edit; never present on a headless server).
         if q_dragging.get(orbit.target).is_ok() { continue; }
 
-        let Ok((_t_cell, _t_tf)) = q_spatial.get(orbit.target) else { continue; };
+        let Ok((t_cell0, t_tf0)) = q_spatial.get(orbit.target) else { continue; };
+        let t_cell0 = t_cell0.copied().unwrap_or_default();
+        let t_tf0 = *t_tf0;
 
-        // Find the target's grid.
-        let mut target_grid = orbit.target;
-        for _ in 0..MAX_HIERARCHY_WALK_DEPTH {
-            if q_grids.contains(target_grid) { break; }
-            if let Ok(parent) = q_parents.get(target_grid) {
-                target_grid = parent.parent();
-            } else { break; }
-        }
-        if !q_grids.contains(target_grid) { continue; }
+        // The orbit camera ALWAYS lives on the ROOT grid (WorldGrid), NOT the
+        // target body's grid. big_space rebases every entity relative to the
+        // floating origin's cell in its IMMEDIATE grid only — it does NOT
+        // subtract ancestor-grid cells. A site-anchored scene pushes the Solar
+        // Grid ~1 AU (1.06e11 m) out via a CellCoord; a body's grid inherits
+        // that as an ANCESTOR offset. Parenting the floating-origin camera
+        // under such a body grid leaves the ancestor 1.06e11 m in the camera's
+        // own GlobalTransform → f32 quantises in ~16 km steps → the whole view
+        // strobes every frame. Anchored to the ROOT grid, the heliocentric
+        // offset lives in the camera's OWN cell, which big_space cancels, so
+        // camGT stays small and stable. (Ground view already worked precisely
+        // because the avatar is a direct WorldGrid child there.)
+        let root_grid = {
+            let mut g = orbit.target;
+            let mut found = None;
+            for _ in 0..MAX_HIERARCHY_WALK_DEPTH {
+                if q_grids.contains(g) { found = Some(g); }
+                match q_parents.get(g) {
+                    Ok(parent) => g = parent.parent(),
+                    Err(_) => break,
+                }
+            }
+            match found { Some(g) => g, None => continue }
+        };
+        let Ok(root_ref) = q_grids.get(root_grid) else { continue };
 
         // Compute minimum distance to prevent zooming inside the target body.
         let physical_target = get_physical_body(orbit.target, &q_children, &q_bodies);
@@ -1089,35 +1108,26 @@ fn orbit_system(
         };
         let current_grid = child_of.parent();
 
-        // If the target is on a different grid, migrate the camera to it.
-        // Preserve the camera's CURRENT absolute position during migration
-        // — don't snap to the target body.
-        if current_grid != target_grid {
+        // Anchor the camera to the root grid, preserving its CURRENT absolute
+        // position (don't snap to the target body).
+        if current_grid != root_grid {
             let cam_abs = lunco_core::coords::world_position_seeded(
                 avatar_ent, &cell, &tf, &q_parents, &q_grids, &q_spatial,
             );
-            if let Ok(target_grid_ref) = q_grids.get(target_grid) {
-                let target_grid_abs = lunco_core::coords::world_position_seeded(
-                    target_grid, &CellCoord::default(), &Transform::default(), &q_parents, &q_grids, &q_spatial,
-                );
-                let (new_cell, new_translation) =
-                    target_grid_ref.translation_to_grid(cam_abs - target_grid_abs);
-                let local_tf = Transform::from_translation(new_translation).with_rotation(tf.rotation);
-                migrate_to_grid(&mut commands, avatar_ent, target_grid, new_cell, local_tf);
-            }
-            // Migration is deferred; next frame `child_of` resolves to the new grid.
+            let (new_cell, new_translation) = root_ref.translation_to_grid(cam_abs);
+            let local_tf = Transform::from_translation(new_translation).with_rotation(tf.rotation);
+            migrate_to_grid(&mut commands, avatar_ent, root_grid, new_cell, local_tf);
+            // Migration is deferred; next frame `child_of` resolves to the root grid.
             continue;
         }
 
-        // Now both camera and target are on the same grid — simple position lookup.
-        let (t_cell_now, t_tf_now) = if let Ok((c, t)) = q_spatial.get(orbit.target) {
-            (c.copied().unwrap_or_default(), t)
-        } else { continue; };
-        let grid_ref = if let Ok(g) = q_grids.get(child_of.parent()) {
-            g
-        } else { continue; };
-
-        let target_pos = grid_ref.grid_position_double(&t_cell_now, t_tf_now);
+        // Camera is on the root grid. Work in ROOT-frame absolute coordinates:
+        // the target lives on a different (body) grid, so resolve its absolute
+        // position rather than a same-grid lookup.
+        let target_pos = lunco_core::coords::world_position_seeded(
+            orbit.target, &t_cell0, &t_tf0, &q_parents, &q_grids, &q_spatial,
+        );
+        let grid_ref = root_ref;
 
         // Multiplicative zoom: proportional to current distance using exponential scaling.
         // Scroll up (delta > 0) -> zoom in. Scroll down (delta < 0) -> zoom out.
@@ -1944,6 +1954,8 @@ fn on_focus_command(
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_spatial_abs: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_bodies: Query<&CelestialBody>,
+    q_body_ents: Query<(Entity, &CelestialBody)>,
+    q_globals: Query<&GlobalTransform>,
     q_sc: Query<&Spacecraft>,
     q_children: Query<&Children>,
     _q_orbit: Query<&OrbitCamera>,
@@ -1982,11 +1994,44 @@ fn on_focus_command(
         distance = (sc.hit_radius_m as f64 * 5.0).max(100.0);
     }
 
-    let target_grid = get_grid_for_entity(cmd.target, &q_parents, &q_grids);
-
     // Snap to target immediately.
     let (current_yaw, current_pitch, _) = cam_tf.rotation.to_euler(EulerRot::YXZ);
-    let final_rot = Quat::from_euler(EulerRot::YXZ, current_yaw, current_pitch, 0.0);
+
+    // Bodies: arrive on the SUNLIT side. Preserving the incoming yaw/pitch
+    // drops the camera on an arbitrary side — usually the night side, where
+    // an unlit planet disk is invisible (no atmosphere rim light) and the
+    // focus reads as broken. Directions come from `GlobalTransform`s (true
+    // world-frame rotations; camera-relative translations are fine for a
+    // unit direction) and are re-expressed in the target grid's frame — the
+    // space `orbit_system` interprets yaw/pitch in (`world_position_seeded`
+    // composes nested grid translations without grid rotations).
+    let mut yaw = current_yaw;
+    let mut pitch = current_pitch;
+    let target_grid = get_grid_for_entity(cmd.target, &q_parents, &q_grids);
+    if q_bodies.contains(physical_target) {
+        let sun = q_body_ents
+            .iter()
+            .find(|(e, b)| b.ephemeris_id == 10 && *e != physical_target);
+        if let Some((sun_ent, _)) = sun {
+            if let (Ok(sun_gt), Ok(tgt_gt)) = (q_globals.get(sun_ent), q_globals.get(physical_target)) {
+                let to_sun_world = sun_gt.translation() - tgt_gt.translation();
+                if to_sun_world.length_squared() > 1.0 {
+                    let grid_rot = target_grid
+                        .and_then(|g| q_globals.get(g).ok())
+                        .map(|g| g.rotation())
+                        .unwrap_or(Quat::IDENTITY);
+                    let to_sun = (grid_rot.inverse() * to_sun_world.normalize()).normalize();
+                    let fwd = -to_sun;
+                    pitch = fwd.y.clamp(-1.0, 1.0).asin();
+                    // Small yaw offset off the exact sun line keeps the
+                    // terminator visible — a gibbous disk has depth, a
+                    // dead-on full disk is flat.
+                    yaw = (-fwd.x).atan2(-fwd.z) + 0.4;
+                }
+            }
+        }
+    }
+    let final_rot = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
     let final_offset = final_rot.mul_vec3(Vec3::Z).as_dvec3() * distance;
     let final_abs_pos = target_abs + final_offset;
 
@@ -2001,6 +2046,13 @@ fn on_focus_command(
         .remove::<OrbitCamera>()
         .remove::<FreeFlightCamera>()
         .remove::<FrameBlend>()
+        // Surface state must go too: `surface_camera_system` runs after
+        // `orbit_system` and would rebuild the rotation as a ground-level
+        // tangent frame every frame — the camera orbits the target but looks
+        // at the horizon (planet off-screen, view jitters as the arm eases).
+        .remove::<SurfaceCamera>()
+        .remove::<SurfaceRelativeMode>()
+        .remove::<GravityBody>()
         .insert(OrbitCamera {
             target: cmd.target,
             distance,
@@ -2036,13 +2088,22 @@ fn avatar_init_system(
 // ─── Clip Planes ─────────────────────────────────────────────────────────────
 
 fn update_avatar_clip_planes_system(
-    mut q_camera: Query<(&mut Projection, &Transform, &CellCoord, &ChildOf), (With<Camera>, With<AdaptiveNearPlane>)>,
-    q_bodies: Query<(&CelestialBody, &Transform, &CellCoord, &ChildOf)>,
-    q_grids: Query<&Grid>,
+    mut q_camera: Query<(&mut Projection, &GlobalTransform), (With<Camera>, With<AdaptiveNearPlane>)>,
+    q_bodies: Query<(&CelestialBody, &GlobalTransform)>,
 ) {
-    for (mut projection, cam_tf, cam_cell, cam_child_of) in q_camera.iter_mut() {
-        let Ok(grid) = q_grids.get(cam_child_of.0) else { continue; };
-        let cam_pos = grid.grid_position_double(cam_cell, cam_tf);
+    for (mut projection, cam_gt) in q_camera.iter_mut() {
+        // Camera↔body distances come from `GlobalTransform`s: big_space
+        // rebases them around the floating origin, so both sides are in ONE
+        // consistent frame every frame. (The previous `Transform`-based
+        // query required `CellCoord` on bodies — which carry none by design —
+        // so zero bodies matched and the fallback `far = 1e7 m` clipped
+        // Earth, 1.9e7 m out at focus distance, to a black screen. And
+        // `world_position_seeded` is NOT a fix: it sums nested grid
+        // translations without grid rotations, so with the site-anchored
+        // solar grid — rotation `align`, translation ~1.5e11 m — the mixed-
+        // frame "distances" swing by kilometres per epoch tick and the clip
+        // planes flap, strobing the whole viewport.)
+        let cam_pos = cam_gt.translation().as_dvec3();
         if let Projection::Perspective(ref mut perspective) = *projection {
             // Adaptive near AND far, both derived from the bodies in frame.
             // `near` tracks the nearest body surface (no near-clipping on
@@ -2055,14 +2116,12 @@ fn update_avatar_clip_planes_system(
             // (e.g. the offscreen USD preview camera).
             let mut min_dist = 1.0e15_f64;
             let mut max_far = 0.0_f64;
-            for (body, b_tf, b_cell, b_child_of) in q_bodies.iter() {
-                if let Ok(b_grid) = q_grids.get(b_child_of.0) {
-                    let center_d = cam_pos.distance(b_grid.grid_position_double(b_cell, b_tf));
-                    let near_edge = center_d - body.radius_m;
-                    let far_edge = center_d + body.radius_m;
-                    if near_edge < min_dist { min_dist = near_edge; }
-                    if far_edge > max_far { max_far = far_edge; }
-                }
+            for (body, b_gt) in q_bodies.iter() {
+                let center_d = cam_pos.distance(b_gt.translation().as_dvec3());
+                let near_edge = center_d - body.radius_m;
+                let far_edge = center_d + body.radius_m;
+                if near_edge < min_dist { min_dist = near_edge; }
+                if far_edge > max_far { max_far = far_edge; }
             }
             if max_far <= 0.0 {
                 // No `CelestialBody` contributed (flat sandbox scene, or the
@@ -2074,7 +2133,24 @@ fn update_avatar_clip_planes_system(
                 perspective.near = 0.1;
                 perspective.far = 1.0e7;
             } else {
-                perspective.near = (min_dist as f32 * 0.01).clamp(0.1, 100.0);
+                // Near plane rides just in front of the NEAREST body surface, so
+                // it scales with viewing distance. The old `* 0.01` + clamp to
+                // [0.1, 100] pinned `near` ≤ 100 m: fine on the surface — near
+                // terrain hogs the 1/z (reverse-Z) depth precision even with a
+                // distant `far` — but in ORBITAL view the focused body sits ~2e7 m
+                // out while `far` reaches the Sun at ~1.5e11 m, so the globe lands
+                // ~0.01% into the depth range, in the starved tail where adjacent
+                // LOD tile seams z-fight and strobe frame-to-frame. Anchoring
+                // `near` to `min_dist` keeps the viewed surface AT the near plane,
+                // where reverse-Z precision peaks — killing the orbital flicker
+                // without touching the (already-fine) surface case, where
+                // `min_dist` collapses to ~0 and `near` floors at 0.1 m.
+                //
+                // 20 km headroom: `min_dist` measures to the body's REFERENCE
+                // sphere, but terrain (and the camera standing on it) can sit
+                // kilometres above it — Shackleton ridge is ~1.2 km up, which
+                // would otherwise clip the ground on close approach.
+                perspective.near = ((min_dist - 20_000.0).max(0.1)) as f32;
                 perspective.far = ((max_far * 1.05).max(1.0e7)) as f32;
             }
         }
