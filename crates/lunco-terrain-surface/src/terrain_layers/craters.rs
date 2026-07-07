@@ -40,10 +40,14 @@ impl TerrainLayer for CraterStampLayer {
     }
 
     fn stamp(&self, grid: &mut HeightGrid) {
-        let n = crate::terrain::stamp_spec_craters(grid, &self.craters, self.seed);
+        let n = lunco_terrain_bake::stamp::stamp_spec_craters(grid, &self.craters, self.seed);
         if n > 0 {
             info!("[terrain-layer/craters] stamped {n} crater(s) (±{:.0} m)", grid.half_extent);
         }
+    }
+
+    fn stamp_spec(&self) -> Option<lunco_terrain_bake::StampSpec> {
+        Some(lunco_terrain_bake::StampSpec::Craters { layer: self.craters, seed: self.seed })
     }
 }
 

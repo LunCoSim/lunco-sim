@@ -255,6 +255,10 @@ zstd = { workspace = true }
 # Web-specific: wasm32-unknown-unknown needs JS interop for console output,
 # panic hooks, and RNG (std::time is unavailable).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+# The generic Web Worker pool (spawn / boot handshake / byte + Transferable post
+# / crash respawn), shared with the DEM bake worker. `worker_transport` composes
+# it and keeps the Modelica-specific MSL/run state on top.
+lunco-worker-transport = { path = "../lunco-worker-transport" }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 # bevy_math → rand pulls getrandom 0.3, which on wasm needs an explicit backend.

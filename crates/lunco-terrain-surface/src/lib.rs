@@ -39,9 +39,7 @@
 //! - [`plugin`] — the Bevy [`TerrainSurfacePlugin`]. Wires the M3 spawn path;
 //!   tile streaming + LOD + per-rover collider ring land in M7.
 
-pub mod bake;
 pub mod collider_ring;
-pub mod dem;
 pub mod derived_layers;
 pub mod georef;
 pub mod plugin;
@@ -55,6 +53,10 @@ pub mod tile_mesh;
 // `crate::tile` paths (and the external API) keep working after the extraction.
 pub use lunco_terrain_core::{quadtree, source, tile};
 
+// The pure DEM decode/crop/resample pipeline moved to `lunco-terrain-bake` (so
+// the wasm Web Worker can run it without linking Bevy). Re-export its modules so
+// `crate::bake` / `crate::dem` paths — and the external API surface — are unchanged.
+pub use lunco_terrain_bake::{bake, dem};
 pub use bake::resample;
 pub use dem::{decode_geotiff_f64, height_grid_from_geotiff, DemError, DemMetadata};
 pub use lunco_terrain_core::{

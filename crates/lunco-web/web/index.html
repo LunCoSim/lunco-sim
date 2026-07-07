@@ -23,22 +23,11 @@
         import init, * as wasm from './__LC_BUNDLE__.js';
         import { boot } from './lunco-boot.js';
 
-        // ── Web render-scale cap (fill-rate) ─────────────────────────────────
-        // The 3D sandbox renders a heavy lunar-terrain shader; on a HiDPI display
-        // the browser would render at `devicePixelRatio` (commonly 1.5–2×), i.e.
-        // 2.25–4× the fragments — brutal on the weak GPUs typical of web clients.
-        // Cap the effective DPR (default 1.0 = CSS pixels) BEFORE winit reads it at
-        // init — bevy's own `scale_factor_override` is ignored under
-        // `fit_canvas_to_parent`, so this JS shim is the working lever. Only the
-        // 3D-heavy sandbox caps by default; UI apps (lunica) keep full DPI so text
-        // stays crisp. Override per-deploy with `window.__lc_render_scale` (e.g. set
-        // it to 1.5 to restore native sharpness, or a value below 1 for more speed).
-        if ('__LC_BUNDLE__' === 'sandbox') {
-            const cap = (typeof window.__lc_render_scale === 'number') ? window.__lc_render_scale : 1.0;
-            if ((window.devicePixelRatio || 1) > cap) {
-                Object.defineProperty(window, 'devicePixelRatio', { get: () => cap, configurable: true });
-            }
-        }
+        // NB: capping the web render resolution by overriding `devicePixelRatio`
+        // does NOT work — winit's `fit_canvas_to_parent` sizes the drawing buffer
+        // from the real device-pixel content box regardless, so it only shrinks the
+        // egui UI (which reads the DPR) with no fill-rate win. A proper 3D
+        // render-scale needs a reduced-resolution render target, not a DPR hack.
 
         // ── Modelica worker preload (memory) ─────────────────────────────────
         // The Modelica engine can preload the full parsed MSL (~140 MB) into every

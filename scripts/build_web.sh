@@ -391,6 +391,19 @@ build_wasm() {
                 # sibling script.
                 info "Worker bundle up-to-date; skipping cargo build (set WORKER_REBUILD=force to override)"
             fi
+            # Off-thread DEM bake worker (`dem_worker` in `lunco-terrain-bake`).
+            # Same rationale as the Modelica worker: wasm32 has no threads, so the
+            # ~40 MB GeoTIFF decode + crater stamp would freeze the page. Runs the
+            # SAME `bake_grid` the native async task uses; streamed twin terrains
+            # (moonbase) need it. Built for lunica+sandbox alongside lunica_worker.
+            local dem_worker_wasm="$base_target_dir/wasm32-unknown-unknown/$profile/dem_worker.wasm"
+            if should_rebuild_worker "$dem_worker_wasm"; then
+                info "Building companion worker bundle: dem_worker"
+                RUSTFLAGS="${RUSTFLAGS:-} --cfg=web_sys_unstable_apis --cfg=getrandom_backend=\"wasm_js\"" \
+                    cargo build --profile "$profile" --target wasm32-unknown-unknown --bin dem_worker -p lunco-terrain-bake
+            else
+                info "DEM worker bundle up-to-date; skipping cargo build"
+            fi
             ;;
     esac
 
@@ -794,6 +807,53 @@ Run: cargo run -p lunco-assets --bin lunco-assets -- download -a perseverance &&
             "$dist_dir/${binary}_bg.wasm" \
             "$(ls "$worker_dist_dir/${worker_bin}_bg"*.wasm 2>/dev/null | head -1)" \
             "$binary"
+    fi
+
+    # ── DEM bake worker bundle (lunica + sandbox) ─────────────
+    # A SECOND companion worker (independent of the Modelica one): the off-thread
+    # DEM bake. Staged under `dist/<bin>/dem-worker/` so the page can
+    # `new Worker('./dem-worker/dem_worker_bootstrap.js', { type: 'module' })`.
+    # Its protocol is self-contained (bytes in → heightfield out) and built from
+    # the same tree, so it needs no wire-id lockstep guard. Absent → the terrain
+    # code falls back to the inline (main-thread) bake automatically.
+    if [ "$staged_worker" = "1" ]; then
+        local dw_bin="dem_worker"
+        local dw_bindgen_dir="$base_target_dir/web/$dw_bin"
+        local dw_dist_dir="$dist_dir/dem-worker"
+        local dw_wasm_src="$cargo_out_dir/${dw_bin}.wasm"
+        if [ -f "$dw_wasm_src" ]; then
+            info "Generating bindings for worker bundle: $dw_bin"
+            mkdir -p "$dw_bindgen_dir"
+            $wasm_bindgen_cmd "$dw_wasm_src" --out-dir "$dw_bindgen_dir" --target web
+            if [ $? -ne 0 ]; then
+                error "DEM worker binding generation failed"
+                exit 1
+            fi
+            local dw_wasm_in="$dw_bindgen_dir/${dw_bin}_bg.wasm"
+            if [ "${BUILD_PROFILE:-web-dev}" != "web-dev" ] && [ -f "$dw_wasm_in" ] \
+                && command -v wasm-opt &> /dev/null; then
+                local tmp="$dw_wasm_in.opt.tmp"
+                if wasm-opt -Oz --converge --strip-debug -o "$tmp" "$dw_wasm_in"; then
+                    mv "$tmp" "$dw_wasm_in"
+                else
+                    rm -f "$tmp"
+                fi
+            fi
+            rm -rf "$dw_dist_dir"
+            mkdir -p "$dw_dist_dir"
+            cp -r "$dw_bindgen_dir"/. "$dw_dist_dir/"
+            local dw_bootstrap="$PROJECT_DIR/crates/lunco-terrain-bake/web/dem_worker_bootstrap.js"
+            if [ -f "$dw_bootstrap" ]; then
+                cp "$dw_bootstrap" "$dw_dist_dir/dem_worker_bootstrap.js"
+            else
+                warn "No dem_worker_bootstrap.js at $dw_bootstrap — DEM worker won't init"
+            fi
+            local dw_size
+            dw_size=$(du -h "$dw_dist_dir/${dw_bin}_bg.wasm" 2>/dev/null | cut -f1)
+            info "DEM worker bundle: $dw_size at $dw_dist_dir"
+        else
+            warn "dem_worker wasm not found at $dw_wasm_src — DEM offload disabled (inline fallback)"
+        fi
     fi
 }
 
