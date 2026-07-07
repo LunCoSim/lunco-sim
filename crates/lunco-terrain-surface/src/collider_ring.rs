@@ -435,6 +435,57 @@ mod tests {
         top - toi
     }
 
+    /// DIAGNOSTIC: how faithfully does the baked collider reproduce the BOWL DEPTH
+    /// of craters of various radii, at the ±4 km / depth-7 production config? A large
+    /// gap for small radii = the collider band-limit / slope firewall flattens small
+    /// craters, so a rover rides the shallower collider and "floats" over the deeper
+    /// visual crater. Run with: `cargo test -p lunco-terrain-surface small_crater -- --nocapture`.
+    #[test]
+    fn collider_small_crater_depth_fidelity() {
+        use lunco_terrain_core::HeightSource;
+        let h = 4000.0_f64;
+        let depth = COLLIDER_DEPTH;
+        let qt = Quadtree::new(h, depth, 1.0, h);
+        let coord = QuadCoord { depth, x: 70, z: 45 };
+        let region = qt.region(coord);
+        let side = region.side();
+        let step = side / (COLLIDER_RES as f64 - 1.0);
+        println!("\n[collider fidelity] tile side={side:.2} m, step={step:.3} m, detail_limit={:.3} m", 2.0 * step);
+        for radius in [2.0_f64, 3.0, 5.0, 8.0, 15.0] {
+            let crater_depth = 0.4 * radius; // depth_ratio 0.4 (fresh)
+            let mut grid = HeightGrid::new_flat(129, h as f32);
+            for v in grid.heights.iter_mut() {
+                *v = BASE_H;
+            }
+            let crater = Crater {
+                center: [region.center[0], region.center[1]],
+                radius,
+                depth: crater_depth,
+                rim_height: 0.18 * crater_depth,
+                softness: 0.0,
+                bowl_power: 4.0,
+            };
+            let oracle = SurfaceOracle::new(
+                std::sync::Arc::new(grid),
+                vec![crate::oracle::HeightContribution {
+                    modifier: std::sync::Arc::new(Craters::new(vec![crater])),
+                    content_key: 1,
+                }],
+            );
+            let oracle_center = HeightSource::height_at(&oracle, region.center[0], region.center[1]);
+            let oracle_bowl = BASE_H - oracle_center;
+            let heights = sample_heights_xz(&oracle, region, COLLIDER_RES);
+            let collider = heightfield_collider(heights, side);
+            let collider_center = surface_y(&collider, 0.0, 0.0);
+            let collider_bowl = BASE_H - collider_center;
+            let gap = collider_center - oracle_center; // >0 => collider ABOVE oracle (rover floats)
+            println!(
+                "  r={radius:>4.1} m depth={crater_depth:>4.2} m | oracle bowl={oracle_bowl:>5.2} m  collider bowl={collider_bowl:>5.2} m  GAP(collider-oracle)={gap:>5.2} m"
+            );
+        }
+        println!();
+    }
+
     /// End-to-end geometry proof for one collider-ring tile: sample an oracle with
     /// a single off-centre analytic crater over a canonical-depth region exactly
     /// the way `update_collider_ring` does, build the same `Collider::heightfield`,

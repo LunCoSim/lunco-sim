@@ -461,14 +461,26 @@ pub fn on_scene_click_spawn(
     let Some(ray) = lunco_core::scene_click_ray(&egui_focus, camera, cam_gtf, click.pointer_location.position) else {
         return;
     };
-    let point = if let Some(p) = click.hit.position {
-        p
-    } else {
-        let filter = avian3d::prelude::SpatialQueryFilter::default();
-        let Some(hit) = raycaster.cast_ray(ray.origin.as_dvec3(), ray.direction, 1.0e6, true, &filter) else {
-            return;
-        };
-        (ray.origin.as_dvec3() + ray.direction.as_dvec3() * hit.distance).as_vec3()
+    // Terrain-as-source-of-truth placement: ray-march the terrain ORACLE and the
+    // physics colliders (props / structures / rocks); the NEARER hit wins. Over
+    // open ground the oracle is the truth — the band-limited collider ring rounds
+    // crater bowls shallower, so preferring the collider perched the rover above
+    // the crater ("floating over craters"). Mirrors `update_spawn_ghost` so the
+    // placed rover lands exactly where the ghost previewed it. `terrain_primary`
+    // then orders the per-corner slope-fit probes below.
+    let origin = ray.origin.as_dvec3();
+    let dir = ray.direction.as_dvec3();
+    let phys = raycaster
+        .cast_ray(origin, ray.direction, 1.0e6, false, &avian3d::prelude::SpatialQueryFilter::default())
+        .map(|h| h.distance);
+    let terr = terrain_ray_hit(&terrains, origin, dir, 1.0e6);
+    let (point_d, terrain_primary) = match (phys, terr) {
+        (Some(pd), Some((td, tp))) => {
+            if td <= pd { (tp, true) } else { (origin + dir * pd, false) }
+        }
+        (Some(pd), None) => (origin + dir * pd, false),
+        (None, Some((_, tp))) => (tp, true),
+        (None, None) => return,
     };
 
     let Some(grid) = q_grids.iter().next() else {
@@ -496,7 +508,6 @@ pub fn on_scene_click_spawn(
     let right_xz = forward_xz.cross(DVec3::Y).normalize();
 
     // 3. Define 4 corners of the footprint
-    let point_d = point.as_dvec3();
     let corners = [
         point_d + forward_xz * half_l - right_xz * half_w, // FL
         point_d + forward_xz * half_l + right_xz * half_w, // FR
@@ -504,54 +515,41 @@ pub fn on_scene_click_spawn(
         point_d - forward_xz * half_l + right_xz * half_w, // RR
     ];
 
-    // 4. Corner heights for the slope fit: physics down-ray (structures, and
-    // ring-covered ground), falling back to the terrain oracle — the collider
-    // ring only exists near dynamic bodies, so over open terrain the down-ray
-    // used to miss and flatten the fit to the click height.
+    // 4. Corner heights for the slope fit. Terrain is the source of truth: over
+    // open ground the oracle is exact where the band-limited collider ring rounds
+    // the crater bowl; over a structure the physics down-ray is what the footprint
+    // rests on. Order by whichever the primary pick hit (`terrain_primary`) — same
+    // as `update_spawn_ghost`, so placement matches the preview.
     let mut hit_points = Vec::new();
     for corner in corners {
-        let ray_origin = corner + DVec3::Y * 50.0;
-        let y = raycaster
-            .cast_ray(
-                ray_origin,
-                Dir3::NEG_Y,
-                100.0,
-                false,
-                &avian3d::prelude::SpatialQueryFilter::default(),
-            )
-            .map(|h| (ray_origin + DVec3::NEG_Y * h.distance).y)
-            .or_else(|| terrain_height_at(&terrains, corner))
+        let phys_y = || {
+            let ray_origin = corner + DVec3::Y * 50.0;
+            raycaster
+                .cast_ray(
+                    ray_origin,
+                    Dir3::NEG_Y,
+                    100.0,
+                    false,
+                    &avian3d::prelude::SpatialQueryFilter::default(),
+                )
+                .map(|h| (ray_origin + DVec3::NEG_Y * h.distance).y)
+        };
+        let terr_y = || terrain_height_at(&terrains, corner);
+        let y = if terrain_primary { terr_y().or_else(phys_y) } else { phys_y().or_else(terr_y) }
             .unwrap_or(point_d.y);
         hit_points.push(DVec3::new(corner.x, y, corner.z));
     }
 
-    // 5. Fit the slope normal from the corner plane, and take the rest height as
-    //    the HIGHEST ground under the footprint (corners + centre), NOT their
-    //    average. An obstacle-field rock/crater rim can poke up UNDER the chassis
-    //    between the corners; averaging misses it, so the deliberate 1 cm embed
-    //    below turns into a deep penetration and the solver ejects the rover
-    //    violently (fly-to-sky) or tunnels it through the world (vanish),
-    //    nondeterministically. Resting on the max keeps the body clear of every
-    //    sampled collider — a central bump lifts the spawn instead of impaling it.
+    // 5. Compute average height and fit normal. The rest height is the MEAN of the
+    //    four footprint corners (matching the ghost preview) so the chassis sits
+    //    flush on the high-quality collider ring — which tracks the visual crater
+    //    bowl — instead of perching on the single highest corner (a crater rim),
+    //    which reads as the rover floating above the crater.
     let fl = hit_points[0];
     let fr = hit_points[1];
     let rl = hit_points[2];
     let rr = hit_points[3];
-    // Centre height, sampled the same way as the corners (physics down-ray, falling
-    // back to the terrain oracle) so a bump directly under the chassis is caught.
-    let center_ray_origin = point_d + DVec3::Y * 50.0;
-    let center_y = raycaster
-        .cast_ray(
-            center_ray_origin,
-            Dir3::NEG_Y,
-            100.0,
-            false,
-            &avian3d::prelude::SpatialQueryFilter::default(),
-        )
-        .map(|h| (center_ray_origin + DVec3::NEG_Y * h.distance).y)
-        .or_else(|| terrain_height_at(&terrains, point_d))
-        .unwrap_or(point_d.y);
-    let base_y = hit_points.iter().map(|h| h.y).fold(center_y, f64::max);
+    let avg_y = (fl.y + fr.y + rl.y + rr.y) / 4.0;
 
     let v_forward = ((fl - rl) + (fr - rr)) / 2.0;
     let v_right = ((fr - fl) + (rr - rl)) / 2.0;
@@ -600,7 +598,7 @@ pub fn on_scene_click_spawn(
     // free-fall→slam→joint-echo and explode the constraint graph on activation;
     // a slight embed is the stable init (solver gently resolves it). Raycast
     // drivetrains absorb this via suspension, so it's safe for both.
-    let spawn_pos = DVec3::new(point_d.x, base_y, point_d.z) + normal * (fp.lift - 0.01);
+    let spawn_pos = DVec3::new(point_d.x, avg_y, point_d.z) + normal * (fp.lift - 0.01);
     let point3 = spawn_pos.as_vec3();
 
     commands.trigger(crate::commands::SpawnEntity {

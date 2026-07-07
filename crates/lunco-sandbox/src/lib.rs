@@ -2492,14 +2492,25 @@ fn bridge_dem_prim_read<R: UsdRead>(
     // `lodViz` = stream CDLOD tiles (default ON) vs one static mesh.
     let lod_viz = attr_bool("lodViz", "lunco:terrain:lodViz").unwrap_or(true);
     // `colliderRing` = stream a per-body collider ring vs one static collider.
-    // Default FOLLOWS `lodViz`: streamed visuals and the streamed collider are the
-    // two halves of the same milestone — the static full-DEM collider is
-    // Nyquist-gated at the DEM base spacing (~3.9 m), which fades every crater
-    // below ~12 m radius FLAT in physics while the 0.65 m near tiles render deep
-    // bowls (rovers visibly float above / sink into what they see). Author
-    // `lunco:terrain:colliderRing = false` to keep the single static collider.
-    let collider_ring =
-        attr_bool("colliderRing", "lunco:terrain:colliderRing").unwrap_or(lod_viz);
+    // The static full-DEM collider is Nyquist-gated at the DEM base spacing
+    // (~3.9 m), so it fades every crater below ~12 m radius FLAT in physics while
+    // the 0.65 m near tiles render deep bowls (rovers visibly float above / sink
+    // into what they see). Analytic height-modifier layers (craters / edits /
+    // overzoom) live ENTIRELY below that limit — a static collider therefore CANNOT
+    // represent them, so whenever the terrain both streams fine visuals (`lodViz`)
+    // AND carries such layers, force the ring (it samples the oracle at each tile's
+    // own resolution, matching the surface exactly). Only when there are no height
+    // layers does the authored attr decide (default = `lodViz`); an explicit
+    // `colliderRing = false` still keeps the static collider for a plain DEM.
+    let has_height_layers = stack
+        .0
+        .iter()
+        .any(|e| matches!(e.layer.id(), "craters" | "edits" | "overzoom"));
+    let collider_ring = if lod_viz && has_height_layers {
+        true
+    } else {
+        attr_bool("colliderRing", "lunco:terrain:colliderRing").unwrap_or(lod_viz)
+    };
     // (`detailUpsample` is retired: craters/edits are ANALYTIC modifiers on the
     // surface oracle now, sampled at each consumer's own resolution — grid
     // upscaling has nothing left to buy.)
