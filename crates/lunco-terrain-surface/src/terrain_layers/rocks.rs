@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use avian3d::prelude::{Collider, RigidBody};
+#[cfg(not(target_arch = "wasm32"))]
 use bevy::camera::visibility::VisibilityRange;
 use bevy::prelude::*;
 use lunco_obstacle_field::rock::faceted_rock_mesh;
@@ -31,9 +32,20 @@ const MAX_ROCKS: usize = 6000;
 /// backing away from origin drops every rock). The scatter is bounded + the meshes
 /// are size-bucketed/shared, so keeping all of them visible is cheap. Camera-following
 /// rock streaming (rocks around wherever you are) is the real fix for full-map coverage.
+#[cfg(not(target_arch = "wasm32"))]
 const LOD_FAR: f32 = 2500.0;
+#[cfg(not(target_arch = "wasm32"))]
 const LOD_FADE: f32 = 500.0;
 
+// Distance-LOD cross-fade for rocks, via bevy's `VisibilityRange`. NATIVE ONLY:
+// `VisibilityRange` drives the `visibility_ranges` view binding (group 0,
+// binding 14). Its WebGL2 uniform-buffer fallback in bevy 0.18 declares a
+// `min_binding_size` (16) smaller than the shader's `array<vec4, N>` (1024),
+// so `create_render_pipeline` rejects EVERY `pbr_opaque_mesh_pipeline` → all
+// meshes drop each frame → black viewport. The rock count is hard-capped
+// (`MAX_ROCKS`) and meshes are size-bucketed/shared, so on web we skip the
+// distance cull and keep all rocks visible — cheap, and avoids the bad binding.
+#[cfg(not(target_arch = "wasm32"))]
 fn rock_visibility_range() -> VisibilityRange {
     VisibilityRange {
         start_margin: 0.0..0.0,
@@ -128,8 +140,10 @@ impl TerrainLayer for RockScatterLayer {
                     rock.insert((
                         Mesh3d(handles[bucket_of(p.size)].clone()),
                         MeshMaterial3d(mat.clone()),
-                        rock_visibility_range(),
                     ));
+                    // Distance LOD cull — native only (see `rock_visibility_range`).
+                    #[cfg(not(target_arch = "wasm32"))]
+                    rock.insert(rock_visibility_range());
                 }
                 spawned += 1;
             }

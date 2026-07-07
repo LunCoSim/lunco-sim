@@ -34,6 +34,11 @@ lunco-materials = { path = "../lunco-materials" }
 avian3d = { workspace = true }
 big_space = { workspace = true }
 lunco-storage = { path = "../lunco-storage" }
+# Transport pause lever: freeze the sim (via `TimeTransport`) while a DEM terrain
+# is still building so physics bodies don't fall through the not-yet-ready collider
+# (critical on web, where the DEM byte-fetch + decode takes seconds). Same freeze
+# mechanism the obstacle-field regen uses. See `collider_ring::hold_physics_until_dem_ready`.
+lunco-time = { path = "../lunco-time" }
 # Shared content-addressed cache dir (`cache://`) for the derived-layer bake
 # (P4): persist surface/normal maps keyed by DEM+param hash so the AO march
 # isn't redone every load and peers converge. `cache_dir()` is cross-platform.

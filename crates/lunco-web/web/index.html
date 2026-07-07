@@ -23,6 +23,31 @@
         import init, * as wasm from './__LC_BUNDLE__.js';
         import { boot } from './lunco-boot.js';
 
+        // ── Web render-scale cap (fill-rate) ─────────────────────────────────
+        // The 3D sandbox renders a heavy lunar-terrain shader; on a HiDPI display
+        // the browser would render at `devicePixelRatio` (commonly 1.5–2×), i.e.
+        // 2.25–4× the fragments — brutal on the weak GPUs typical of web clients.
+        // Cap the effective DPR (default 1.0 = CSS pixels) BEFORE winit reads it at
+        // init — bevy's own `scale_factor_override` is ignored under
+        // `fit_canvas_to_parent`, so this JS shim is the working lever. Only the
+        // 3D-heavy sandbox caps by default; UI apps (lunica) keep full DPI so text
+        // stays crisp. Override per-deploy with `window.__lc_render_scale` (e.g. set
+        // it to 1.5 to restore native sharpness, or a value below 1 for more speed).
+        if ('__LC_BUNDLE__' === 'sandbox') {
+            const cap = (typeof window.__lc_render_scale === 'number') ? window.__lc_render_scale : 1.0;
+            if ((window.devicePixelRatio || 1) > cap) {
+                Object.defineProperty(window, 'devicePixelRatio', { get: () => cap, configurable: true });
+            }
+        }
+
+        // ── Modelica worker preload (memory) ─────────────────────────────────
+        // The Modelica engine can preload the full parsed MSL (~140 MB) into every
+        // Fast-Run worker at boot for parallel experiment runs. That costs hundreds
+        // of MB and OOMs a memory-constrained tab, so it is OFF by default (single
+        // compiles/runs still work; Fast Runs serialize on one worker). Turn it back
+        // on for full parallelism by setting this BEFORE boot:
+        //     window.__lc_worker_preload = true;
+
         const __LC_WASM_SIZE__ = 0;
 
         // Bridges exposed on `window` only if this bundle actually exports
@@ -37,11 +62,49 @@
             if (wasm[k]) window[k] = wasm[k];
         }
 
+        // Autoload the deploy's default scene once the app is live.
+        //
+        // Fully dynamic — NOT compiled in. `scenes.json` is a plain file next
+        // to the wasm, written by scripts/build_web.sh and editable after
+        // deploy: add/remove scenes or repoint `default` with no rebuild.
+        // Absent (e.g. lunica, or a sandbox deploy that wants the built-in
+        // scene) → 404 → this is a no-op. Shape:
+        //   { "default": "twins/moonbase/moonbase_scene.usda",
+        //     "scenes": [ { "name": "Moonbase",
+        //                   "path": "twins/moonbase/moonbase_scene.usda" } ] }
+        async function autoloadDefaultScene() {
+            if (typeof window.lunco_api !== 'function') return;   // app w/o API bridge
+            // A ?scene=<path> deep-link (or ?scene=none to opt out) wins over
+            // the deploy default, so shared links keep pointing where they aim.
+            const q = new URL(location.href).searchParams.get('scene');
+            if (q === 'none') return;
+            let path = q;
+            if (!path) {
+                let cfg;
+                try {
+                    const r = await fetch('./scenes.json', { cache: 'no-cache' });
+                    if (!r.ok) return;                            // no config for this deploy
+                    cfg = await r.json();
+                } catch { return; }
+                path = cfg && cfg.default;
+            }
+            if (!path) return;
+            try {
+                const res = await window.lunco_api(JSON.stringify({
+                    command: 'LoadScene', params: { path },
+                }));
+                console.log('[autoload] default scene', path, res);
+            } catch (e) {
+                console.error('[autoload] LoadScene failed', path, e);
+            }
+        }
+
         boot({
             init,
             wasmUrl: './__LC_BUNDLE___bg.wasm',
             wasmSize: __LC_WASM_SIZE__,
             title: '__LC_NAME__',
+            onReady: autoloadDefaultScene,
         });
     </script>
 </body>

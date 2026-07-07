@@ -1519,6 +1519,17 @@ pub fn parse_msl_source_in_worker(compressed: &[u8]) -> usize {
     1
 }
 
+/// Whether to eagerly preload (MSL-seed) the secondary Fast-Run workers at boot.
+/// Off unless the page sets `window.__lc_worker_preload = true` — see the rationale
+/// in [`seed_secondary_workers`]. Reads the flag live (cheap) so a deploy can flip
+/// it without a rebuild.
+fn worker_preload_enabled() -> bool {
+    web_sys::window()
+        .and_then(|w| js_sys::Reflect::get(&w, &wasm_bindgen::JsValue::from_str("__lc_worker_preload")).ok())
+        .map(|v| v.is_truthy())
+        .unwrap_or(false)
+}
+
 /// Seed the secondary workers (`1..n`) with the retained `MSL_WIRE` envelope
 /// (`provide_to_main = false` — worker 0 already gave the decoded bytes to
 /// main). Called from worker 0's `MslReady` so the pool ramps up to full
@@ -1527,6 +1538,19 @@ pub fn parse_msl_source_in_worker(compressed: &[u8]) -> usize {
 /// in `Absent` state. Copies the pre-serialized envelope directly (no
 /// clone+serialize on this callback).
 fn seed_secondary_workers() {
+    // OPT-IN preload. Seeding the full parsed MSL (~140 MB) into every secondary
+    // worker at boot is what gives Fast-Run its parallelism — but cloning it N×
+    // via `postMessage` costs hundreds of MB and OOMs a memory-constrained tab
+    // (e.g. the web sandbox showing a heavy 3D twin: "secondary MSL seed to
+    // worker 3 failed: out of memory"). So it is OFF by default: only worker 0 is
+    // seeded (single compiles/runs work; `dispatch_run_fast` just serializes Fast
+    // Runs on worker 0 instead of fanning out). Turn it back on for full parallel
+    // Fast-Run by setting `window.__lc_worker_preload = true` before the app boots
+    // (see index.html). Crash-respawn re-seed of an already-Ready worker is a
+    // separate path (`pump_worker_respawns`) and is unaffected.
+    if !worker_preload_enabled() {
+        return;
+    }
     let Some(env) = MSL_WIRE.get() else {
         return;
     };

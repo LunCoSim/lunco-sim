@@ -225,6 +225,20 @@ pub async fn network_fetch_and_cache(
     Ok(js_sys::Uint8Array::new(&array_buffer).to_vec())
 }
 
+/// **Cache-first-forever** fetch of a same-origin asset: return the cached copy
+/// if present, else fetch once over the network and cache it. No revalidation —
+/// for content that is static per deploy (a Twin's DEM heightmap/metadata, big
+/// and immutable), so once cached it never re-downloads. `path` is fetched
+/// verbatim (same-origin), so the caller passes the full origin-relative URL
+/// (e.g. `assets/twins/moonbase/terrain/…/heightmap.tif`).
+pub async fn fetch_bytes_cached(bucket: &str, path: &str) -> Result<Vec<u8>, String> {
+    let cache = open_cache(bucket).await?;
+    if let Ok(Some(bytes)) = cache_lookup(&cache, path).await {
+        return Ok(bytes);
+    }
+    network_fetch_and_cache(&cache, path).await
+}
+
 /// **Stale-while-revalidate** fetch for the one *mutable* artifact per bucket
 /// (`manifest.json`). A cached copy is returned **immediately** and refreshed in
 /// the background so the *next* load sees any new release; the content-hashed

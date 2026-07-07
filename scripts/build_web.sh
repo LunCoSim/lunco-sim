@@ -83,6 +83,90 @@ get_cargo_bin_name() {
     echo "$1"
 }
 
+# Pack one Twin folder next to the wasm and echo its scenes.json entry.
+#
+#   $1 src   — path to the Twin folder (contains the scene .usda + assets)
+#   $2 name  — dist folder name under assets/twins/  (URL-safe)
+#   $3 scene — scene .usda filename within the twin
+#   $4 dist  — dist root (…/dist/sandbox)
+#
+# Copies src → dist/assets/twins/<name>/ and prints a JSON object
+# {"name":…,"path":"twins/<name>/<scene>"} on stdout (empty on failure) so
+# stage_twins can assemble the scene list. LoadScene resolves `twins/…`
+# against the same-origin `assets/` tree, so the path is asset-relative.
+stage_one_twin() {
+    local src="$1" name="$2" scene="$3" dist="$4"
+    if [ ! -d "$src" ]; then
+        warn "twin source '$src' not found — skipping (scene '$name' will be absent)" >&2
+        return 0
+    fi
+    if [ ! -f "$src/$scene" ]; then
+        warn "twin '$src' has no scene '$scene' — skipping" >&2
+        return 0
+    fi
+    local dest="$dist/assets/twins/$name"
+    mkdir -p "$dest"
+    # --delete keeps re-runs clean; exclude the twin's local runtime/history
+    # scratch (not needed by clients, history/ holds transient .tmp files) and
+    # the terrain `.cache/` raw source DTM (the baked heightmap.tif is what the
+    # client fetches — the raw NAC DTM is ~2× larger and build-only).
+    rsync -a --delete \
+        --exclude '.lunco/' --exclude 'history/' --exclude '*.tmp' --exclude '.cache/' \
+        "$src/" "$dest/" >&2
+    info "Packed twin '$name' ($(du -sh "$dest" | cut -f1)) → $dest" >&2
+    printf '{"name":"%s","path":"twins/%s/%s"}' "$name" "$name" "$scene"
+}
+
+# Pack the sandbox's Twin(s) and write dist/scenes.json (read by the
+# index.html autoloader). See the LC_TWIN_* env docs at the call site.
+stage_twins() {
+    local dist="$1"
+    local default_src="${LC_TWIN_SRC-$HOME/Documents/lunco/moonbase/twin}"
+    local default_scene="${LC_TWIN_SCENE:-moonbase_scene.usda}"
+
+    local entries="" default_path=""
+    if [ -n "$default_src" ]; then
+        local name="${LC_TWIN_NAME:-}"
+        if [ -z "$name" ]; then
+            name="$(basename "$default_src")"
+            [ "$name" = "twin" ] && name="$(basename "$(dirname "$default_src")")"
+        fi
+        local entry
+        entry="$(stage_one_twin "$default_src" "$name" "$default_scene" "$dist")"
+        if [ -n "$entry" ]; then
+            entries="$entry"
+            default_path="twins/$name/$default_scene"
+        fi
+    fi
+
+    # Extra (non-default) twins: LC_TWIN_EXTRA="name=scene=path;name2=scene2=path2"
+    if [ -n "${LC_TWIN_EXTRA:-}" ]; then
+        local IFS=';'
+        for spec in $LC_TWIN_EXTRA; do
+            [ -n "$spec" ] || continue
+            local ename="${spec%%=*}" rest="${spec#*=}"
+            local escene="${rest%%=*}" esrc="${rest#*=}"
+            local entry
+            entry="$(stage_one_twin "$esrc" "$ename" "$escene" "$dist")"
+            [ -n "$entry" ] && entries="${entries:+$entries,}$entry"
+        done
+    fi
+
+    if [ -z "$entries" ]; then
+        info "No twin packed — sandbox will boot its built-in scene."
+        rm -f "$dist/scenes.json"
+        return 0
+    fi
+    # Default is the first staged twin unless it failed (then no autoload key).
+    if [ -n "$default_path" ]; then
+        printf '{"default":"%s","scenes":[%s]}\n' "$default_path" "$entries" > "$dist/scenes.json"
+        info "Wrote scenes.json (default: $default_path)"
+    else
+        printf '{"scenes":[%s]}\n' "$entries" > "$dist/scenes.json"
+        info "Wrote scenes.json (no default — first twin failed to pack)"
+    fi
+}
+
 # Check prerequisites
 check_prerequisites() {
     info "Checking prerequisites..."
@@ -551,6 +635,19 @@ the browser. Run: cargo run -p lunco-assets -- download && cargo run -p lunco-as
             warn "no .cache/models — glTF models (Perseverance rover) will 404 in the browser. \
 Run: cargo run -p lunco-assets --bin lunco-assets -- download -a perseverance && … -- process -p lunco-usd"
         fi
+    fi
+
+    # Pack the Twin(s) the sandbox should offer, and write scenes.json so the
+    # index.html autoloader opens the default one on boot. Dynamic, not
+    # compiled in — override the source or add scenes without rebuilding:
+    #   LC_TWIN_SRC=/path/to/twin        default twin folder to pack
+    #                                    ("" to skip; default = bundled moonbase)
+    #   LC_TWIN_NAME=moonbase            dist name under assets/twins/
+    #   LC_TWIN_SCENE=moonbase_scene.usda   scene file within the twin
+    #   LC_TWIN_EXTRA="lab=lab.usda=/path/lab;…"  extra non-default scenes
+    # Or edit dist/sandbox/scenes.json after the build.
+    if [ "$binary" = "sandbox" ]; then
+        stage_twins "$dist_dir"
     fi
 
     # Show output size

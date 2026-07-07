@@ -19,7 +19,7 @@
  * @param {string} [cfg.title]     loader card title
  * @param {string} [cfg.accent]    CSS colour override for --lc-accent
  */
-export async function boot({ init, wasmUrl, wasmSize = 0, title = 'LunCoSim', accent } = {}) {
+export async function boot({ init, wasmUrl, wasmSize = 0, title = 'LunCoSim', accent, onReady } = {}) {
     if (accent) document.documentElement.style.setProperty('--lc-accent', accent);
 
     // Build the loader card once — its markup lives here, not in each
@@ -71,6 +71,17 @@ export async function boot({ init, wasmUrl, wasmSize = 0, title = 'LunCoSim', ac
     // Called by WebReadyPlugin (Rust) after the first egui frame paints.
     window.__lc_app_ready = function () {
         root.classList.add('hidden');
+        // Post-boot hook: the app is live and `window.lunco_api` is attached,
+        // so this is where a deploy autoloads its default scene (see the
+        // `onReady` autoloader in index.html). Isolated in try/catch — a
+        // failing autoload must never wedge the (already-painted) app.
+        if (typeof onReady === 'function') {
+            try {
+                Promise.resolve(onReady()).catch((e) => console.error('[boot] onReady failed', e));
+            } catch (e) {
+                console.error('[boot] onReady threw', e);
+            }
+        }
     };
 
     const fmtBytes = (n) => (n / 1048576).toFixed(1) + ' MB';

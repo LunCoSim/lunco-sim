@@ -418,10 +418,19 @@ async fn read_bytes(path: std::path::PathBuf) -> Result<Vec<u8>, String> {
     }
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = path;
-        Err("web DEM byte source not yet wired (planned with tiled streaming, M7); \
-             the decode/resample path is platform-agnostic"
-            .to_string())
+        // Fetch the DEM bytes same-origin over HTTP (the Twin's terrain folder is
+        // staged next to the wasm under `assets/`), cache-first-forever in a
+        // Cache-Storage bucket so the (large, immutable) heightmap re-hydrates
+        // instantly on the next load. The DEM request URI is asset-relative on
+        // web (resolved against the scene's own directory — no `twin://`), so
+        // prepend the bevy web asset root unless it's already absolute/prefixed.
+        let rel = path.to_string_lossy().replace('\\', "/");
+        let url = if rel.starts_with("assets/") || rel.starts_with("http") || rel.starts_with('/') {
+            rel
+        } else {
+            format!("assets/{rel}")
+        };
+        lunco_assets::web_fetch::fetch_bytes_cached("lunco-twin-v1", &url).await
     }
 }
 
