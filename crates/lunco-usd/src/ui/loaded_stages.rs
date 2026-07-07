@@ -33,7 +33,7 @@ use std::sync::Arc;
 
 use bevy::prelude::*;
 use lunco_doc::{Document, DocumentId};
-use lunco_usd_bevy::{UsdData, usd_data::UsdDataExt};
+use lunco_usd_bevy::UsdData;
 
 use crate::registry::UsdDocumentRegistry;
 

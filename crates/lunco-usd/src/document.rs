@@ -455,6 +455,15 @@ pub struct UsdDocument {
     /// a synthetic [`UsdOp::ReplaceSource`] marker so the projector still rebuilds.
     /// See [`ops_since`](Self::ops_since).
     op_log: VecDeque<(u64, UsdOp)>,
+    /// Memoized `base ⊕ runtime` composition, keyed by the `generation` it was
+    /// composed at. [`composed`](Self::composed) is O(stage) (a full layer-stack
+    /// merge) and is called several times per edit (the twin overlay serialize AND
+    /// the doc-backed terrain re-parse), so without this a single brush stroke
+    /// recomposed a thousand-prim stage 2–3× on the main thread. `Arc<Mutex<…>>` so
+    /// the field stays `Clone`; the inner `Arc<sdf::Data>` makes a cache hit a
+    /// refcount bump, not a stage copy. Shared across `Clone`s is safe — it's keyed
+    /// by generation, and equal generations mean equal content.
+    composed_cache: std::sync::Arc<std::sync::Mutex<Option<(u64, std::sync::Arc<sdf::Data>)>>>,
 }
 
 impl UsdDocument {
@@ -502,6 +511,7 @@ impl UsdDocument {
             last_saved_generation,
             changes: VecDeque::with_capacity(CHANGE_HISTORY_CAPACITY),
             op_log: VecDeque::with_capacity(CHANGE_HISTORY_CAPACITY),
+            composed_cache: Default::default(),
         }
     }
 
@@ -547,7 +557,26 @@ impl UsdDocument {
     /// survive as opinions; this is an sdf layer-stack merge, not render-time
     /// PCP composition.
     pub fn composed(&self) -> sdf::Data {
-        author::compose_layers(&self.base, &self.runtime)
+        (*self.composed_arc()).clone()
+    }
+
+    /// The composed view as a shared [`Arc`], memoized by [`generation`](Document::generation).
+    /// Prefer this over [`composed`](Self::composed) on hot paths (the twin projection,
+    /// the doc-backed terrain re-bake) — repeated calls within one edit share the same
+    /// recompose instead of each paying a full O(stage) layer merge.
+    pub fn composed_arc(&self) -> std::sync::Arc<sdf::Data> {
+        let gen = self.generation;
+        {
+            let cache = self.composed_cache.lock().unwrap();
+            if let Some((cached_gen, data)) = &*cache {
+                if *cached_gen == gen {
+                    return data.clone();
+                }
+            }
+        }
+        let data = std::sync::Arc::new(author::compose_layers(&self.base, &self.runtime));
+        *self.composed_cache.lock().unwrap() = Some((gen, data.clone()));
+        data
     }
 
     /// The composed view serialized to USDA text — the source the viewport
@@ -557,7 +586,7 @@ impl UsdDocument {
         if let Some(raw) = &self.parse_error {
             return raw.clone();
         }
-        author::data_to_usda(&self.composed()).unwrap_or_else(|e| {
+        author::data_to_usda(&self.composed_arc()).unwrap_or_else(|e| {
             warn!(
                 "[usd] failed to serialize composed document {}: {e}",
                 self.id.raw()

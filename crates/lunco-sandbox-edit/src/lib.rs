@@ -50,6 +50,8 @@ pub mod selection;
 #[cfg(feature = "ui")]
 pub mod spawn;
 #[cfg(feature = "ui")]
+pub mod terrain_tools;
+#[cfg(feature = "ui")]
 pub mod undo;
 
 /// UI panels — WorkbenchPanel implementations (for editor mode).
@@ -76,6 +78,8 @@ impl Plugin for SandboxEditPlugin {
             .init_resource::<spawn::FootprintCache>()
             .insert_resource(lunco_core::DragModeActive { active: false })
             .init_resource::<lunco_core::SpawnToolActive>()
+            .init_resource::<lunco_core::TerrainToolActive>()
+            .init_resource::<terrain_tools::TerrainToolState>()
             // Shader source is a journaled domain: edits record to the Twin
             // journal + hot-reload. The recorder attaches when the journal appears.
             .init_resource::<shader_doc::ShaderRegistry>();
@@ -94,11 +98,20 @@ impl Plugin for SandboxEditPlugin {
         app.add_systems(Update, spawn::spawn_tool_state_system);
         app.add_systems(Update, selection::handle_deselect_keys);
 
+        // Terrain-sculpt tools — arm/disarm gate, brush sizing, cursor ghost.
+        app.add_systems(Update, (
+            terrain_tools::terrain_tool_state_system,
+            terrain_tools::terrain_brush_size_input,
+            terrain_tools::update_terrain_brush_ghost,
+        ));
+
         // Scene picking is bevy_picking-driven (egui occlusion handled by the
         // framework's egui picking backend) — no hand-rolled gate, no manual
-        // ray-casts. Selection and placement observe the same `Pointer<Click>`.
+        // ray-casts. Selection, placement and terrain-sculpt observe the same
+        // `Pointer<Click>`; each stands down when another tool owns the click.
         app.add_observer(selection::on_scene_click_select);
         app.add_observer(spawn::on_scene_click_spawn);
+        app.add_observer(terrain_tools::on_scene_click_terrain);
 
         // Editor-only `SelectEntity` API command (Inspector highlight + gizmo) —
         // registered here, not in the headless `SpawnCommandPlugin`.

@@ -25,28 +25,39 @@ use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use big_space::prelude::Grid;
 use lunco_core::WorldGrid;
-use lunco_obstacle_field::field::HeightGrid;
 use lunco_obstacle_field::grid_mesh;
 use lunco_materials::{ParamValue, ShaderMaterial, ATTRIBUTE_MORPH_TARGET};
+use lunco_terrain_core::{measure_node_error, HeightSource};
 
+use crate::oracle::SurfaceOracle;
 use crate::quadtree::{QuadCoord, Quadtree, Selected, Square};
-use crate::tile_mesh::bake_tile_mesh;
 
 /// Vertices per tile side (so each tile is `TILE_RES²` verts). 49 → 48² quads.
 /// Higher = finer geometry per tile (smoother crater rims / slopes, fewer visible
 /// triangle "lines") at the same tile count — cheap on a modern GPU.
 const TILE_RES: usize = 49;
-/// Deepest LOD the viz refines to. Bounds the tile count near the camera. 7 gives
-/// finer near-field geometry (drivable crater detail) than 6.
-const MAX_DEPTH: u8 = 7;
-/// `refine_range(d) = RANGE_FACTOR · geometric_error(d)`. Larger → refine from
-/// farther (more fine tiles on screen), so mid-distance crater rims stop faceting.
-const RANGE_FACTOR: f64 = 4.5;
+/// Deepest LOD the viz refines to. Bounds the tile count near the camera. With
+/// error-driven selection only feature tiles (rims, peaks) actually reach it, so
+/// 8 (≈0.65 m vertex pitch on a ±4 km DEM) stays cheap while crater rims resolve.
+const MAX_DEPTH: u8 = 8;
+/// On-screen error (px, at the canonical viewport) at which a node refines —
+/// the ONE detail-vs-cost knob of the error-driven metric. Smaller = finer.
+const TARGET_PIXEL_ERROR: f64 = 3.0;
+/// Canonical viewport for the screen metric (fixed → selection is independent of
+/// any client's real resolution/FOV; peers select identically).
+const CANON_SCREEN_H_PX: f64 = 1080.0;
+const CANON_FOV_Y_RAD: f64 = 0.7854; // 45°
+/// Probe mesh resolution for [`measure_node_error`] — coarse on purpose: the
+/// measurement senses "is there detail here worth refining toward," it does not
+/// need the tile's full 49² fidelity. ~657 oracle samples per (memoized) node.
+const NODE_ERROR_PROBE_RES: usize = 9;
 
-/// The DEM grid retained on a terrain entity so LOD tiles can sample heights.
-/// `Arc` so a future off-thread bake can share it without a copy.
+/// The composed surface oracle retained on a terrain entity — the ONE height
+/// truth every consumer samples (LOD tile baker, collider ring, derived-layer
+/// texture bakes, rock scatter, `TerrainHeight` query). `Arc` so off-thread bakes
+/// share it without a copy.
 #[derive(Component)]
-pub struct DemHeightField(pub Arc<HeightGrid>);
+pub struct DemHeightField(pub Arc<SurfaceOracle>);
 
 /// Analytic DEM ground height at world `(x, z)` — reads the retained height grid
 /// directly (no avian collider), so it answers **before** a collider tile streams
@@ -70,7 +81,7 @@ pub fn dem_ground_height<'a>(
             .affine()
             .inverse()
             .transform_point3(Vec3::new(x as f32, 0.0, z as f32));
-        if local.x.abs() > grid.half_extent || local.z.abs() > grid.half_extent {
+        if local.x.abs() > grid.half_extent() || local.z.abs() > grid.half_extent() {
             continue;
         }
         let h = HeightSource::height_at(grid, local.x as f64, local.z as f64);
@@ -144,6 +155,9 @@ impl Default for TerrainLodViz {
 struct TileSlot {
     entity: Entity,
     gen: u32,
+    /// The tile's selected morph-band end (parent refine range) — kept so a live
+    /// shader-mode swap can rebuild the right band material without re-selecting.
+    morph_end: f32,
 }
 
 /// The LOD tile entities currently spawned for a terrain, keyed by quadtree node.
@@ -163,6 +177,28 @@ impl LodTiles {
     /// Called by the live re-bake instead of despawning the whole tile set.
     pub fn invalidate(&mut self) {
         self.gen = self.gen.wrapping_add(1);
+    }
+
+    /// Invalidate only the tiles whose world footprint overlaps `bounds`
+    /// (`[min_x, min_z, max_x, max_z]`, terrain-local metres) — the incremental
+    /// re-bake for a **bounded** edit (a brush/flatten touches a small patch, not
+    /// the whole terrain). Tiles outside the region are re-stamped to the new
+    /// generation so they read as fresh and are never re-selected or re-baked; only
+    /// overlapping tiles fall through to a re-bake. `None` bounds = whole terrain →
+    /// same as [`invalidate`]. `root_half_extent` is the DEM half-extent (the
+    /// quadtree root region), so each tile's square derives from its `QuadCoord`.
+    pub fn invalidate_region(&mut self, bounds: Option<[f64; 4]>, root_half_extent: f64) {
+        let new_gen = self.gen.wrapping_add(1);
+        if let Some(aabb) = bounds {
+            for (coord, slot) in self.tiles.iter_mut() {
+                // Non-overlapping tiles keep the NEW gen → stay fresh (skipped).
+                // Overlapping tiles keep their OLD gen → stale → re-baked.
+                if !node_overlaps_aabb(*coord, root_half_extent, aabb) {
+                    slot.gen = new_gen;
+                }
+            }
+        }
+        self.gen = new_gen;
     }
 
     /// Remove (and return for despawn) every tile already stale from a PRIOR
@@ -185,6 +221,20 @@ impl LodTiles {
     }
 }
 
+/// Whether the world square of quadtree node `coord` (derived from the DEM
+/// `root_half_extent`, origin-centred — matching [`lunco_terrain_core::Quadtree::region`])
+/// overlaps the axis-aligned `[min_x, min_z, max_x, max_z]` box. The shared
+/// spatial test behind the incremental region re-bake.
+fn node_overlaps_aabb(coord: QuadCoord, root_half_extent: f64, aabb: [f64; 4]) -> bool {
+    let [min_x, min_z, max_x, max_z] = aabb;
+    let nodes_per_side = (1u64 << coord.depth) as f64;
+    let side = (2.0 * root_half_extent) / nodes_per_side;
+    let half = 0.5 * side;
+    let cx = -root_half_extent + (coord.x as f64 + 0.5) * side;
+    let cz = -root_half_extent + (coord.z as f64 + 0.5) * side;
+    cx - half <= max_x && cx + half >= min_x && cz - half <= max_z && cz + half >= min_z
+}
+
 /// Back-pointer from a spawned LOD tile to its owning terrain. Tiles are parented
 /// to the big_space **grid** (so each can carry its own `CellCoord`), not to the
 /// terrain entity — so this tag lets [`despawn_orphaned_lod_tiles`] reap them when
@@ -192,11 +242,36 @@ impl LodTiles {
 #[derive(Component)]
 pub struct LodTileOf(pub Entity);
 
-/// Cached one geomorph material per LOD depth so tile churn at LOD boundaries
-/// doesn't allocate a new `ShaderMaterial` every spawn. Each carries that depth's
-/// morph band + colour; the `terrain_geomorph` shader morphs vertices on the GPU.
+/// Cached one geomorph material per (mode, depth, morph-band bucket) so tile
+/// churn at LOD boundaries doesn't allocate a new `ShaderMaterial` every spawn.
+/// With error-driven selection a depth's morph band varies per parent node, so
+/// bands snap to a coarse log-lattice bucket — near-identical bands share one
+/// batched material, genuinely different parent ranges get their own.
 #[derive(Resource, Default)]
-pub struct LodMaterials(HashMap<(TerrainShaderMode, u32), Handle<ShaderMaterial>>);
+pub struct LodMaterials(HashMap<(TerrainShaderMode, u32, u32), Handle<ShaderMaterial>>);
+
+/// Quantise a morph-band end onto the shared bucket lattice. `u32::MAX` = the
+/// "never morphs" root sentinel.
+fn band_bucket(morph_end: f32) -> u32 {
+    if !morph_end.is_finite() || morph_end >= 1.0e19 {
+        return u32::MAX;
+    }
+    // Quarter-log steps (~±12% band granularity).
+    (morph_end.max(1.0).ln() * 4.0).floor() as u32
+}
+
+/// Snap a selected morph band to its bucket's representative values, so the tile
+/// and its cached material agree exactly. Snapping DOWN (floor bucket) means a
+/// tile always finishes morphing *before* the selection swaps in its parent — a
+/// slightly early morph, never a pop.
+fn snap_band(morph_end: f32) -> (f32, f32, u32) {
+    let bucket = band_bucket(morph_end);
+    if bucket == u32::MAX {
+        return (1.0e20, 1.0e21, bucket);
+    }
+    let end = (bucket as f32 * 0.25).exp();
+    (0.7 * end, end, bucket)
+}
 
 /// Runtime-tunable LOD knobs (Inspector → "Terrain LOD"). Global across terrains.
 /// Changing these re-selects tiles live so you can dial detail-vs-distance and the
@@ -204,22 +279,49 @@ pub struct LodMaterials(HashMap<(TerrainShaderMode, u32), Handle<ShaderMaterial>
 #[derive(Resource, Clone, Copy, Reflect)]
 #[reflect(Resource)]
 pub struct TerrainLodConfig {
-    /// `refine_range(d) = range_factor · geometric_error(d)`. Larger → finer tiles
-    /// persist farther from the camera (more detail at distance, more tiles).
-    pub range_factor: f64,
+    /// Screen-metric refinement threshold (px at the canonical viewport): a node
+    /// refines while its MEASURED surface error subtends more than this. Smaller
+    /// = finer everywhere; detail lands where the surface earns it (rims, peaks),
+    /// not uniformly by distance.
+    pub pixel_error: f64,
     /// Deepest quadtree level the streamer refines to (caps closest-up detail).
     pub max_depth: u8,
     /// Tiles BAKED per frame across all terrains. 1 = smoothest frame-time but
     /// slowest fill; raise for a faster initial load at the cost of bigger spikes.
     pub bakes_per_frame: usize,
+    /// Cap on SELECTED tiles per terrain. The error-driven walk's tile count is
+    /// otherwise unbounded in the terrain: at realistic crater densities every
+    /// mid-distance node measures metres of error, and a 3 px target refined a
+    /// ~1 km disc to max depth (~6.8k live tiles ≈ 33M triangles on moonbase —
+    /// the 49 FPS). Enforced by COARSENING `pixel_error` until the selection
+    /// fits (so geomorph bands stay consistent with the actual transition
+    /// distances), not by capping the walk. ~500 tiles ≈ 2.3M terrain triangles.
+    pub tile_budget: usize,
 }
 
 impl Default for TerrainLodConfig {
     fn default() -> Self {
         // Off-thread baking → safe to start several tasks/frame for a fast,
         // non-blocking fill. Raise/lower live in the Inspector.
-        TerrainLodConfig { range_factor: RANGE_FACTOR, max_depth: MAX_DEPTH, bakes_per_frame: 4 }
+        TerrainLodConfig {
+            pixel_error: TARGET_PIXEL_ERROR,
+            max_depth: MAX_DEPTH,
+            bakes_per_frame: 4,
+            tile_budget: 512,
+        }
     }
+}
+
+/// Memoized per-node measured geometric error for a terrain's current oracle —
+/// the cache behind error-driven CDLOD selection. Keyed by quadtree node; wiped
+/// whenever the oracle Arc is swapped (live re-compose). Errors are measured
+/// lazily for nodes the selection walk actually visits (O(visited), a few tens of
+/// µs each, then cached for the oracle's lifetime).
+#[derive(Component, Default)]
+pub struct TerrainNodeErrors {
+    map: HashMap<QuadCoord, f64>,
+    /// Identity of the oracle the cached errors were measured against.
+    oracle_ptr: usize,
 }
 
 /// Cache of baked tile meshes keyed by quadtree node. A tile's geometry is a pure
@@ -229,6 +331,22 @@ impl Default for TerrainLodConfig {
 /// Bounded: trimmed to currently-resident tiles when it grows past `CACHE_CAP`.
 #[derive(Resource, Default)]
 pub struct LodMeshCache(HashMap<QuadCoord, Handle<Mesh>>);
+
+impl LodMeshCache {
+    /// Drop cached meshes a live height edit invalidated. This cache keys purely by
+    /// `QuadCoord` (geometry = pure function of the node), which holds ONLY while the
+    /// oracle is fixed; a brush/flatten changes the surface, so a re-selected tile in
+    /// the edited area would otherwise reuse its pre-edit mesh. `Some(bounds)` drops
+    /// just the overlapping nodes (the incremental patch); `None` (a whole-terrain
+    /// spec change) clears all. Non-overlapping entries survive so revisiting
+    /// unedited ground still hits the cache.
+    pub fn drop_region(&mut self, bounds: Option<[f64; 4]>, root_half_extent: f64) {
+        match bounds {
+            None => self.0.clear(),
+            Some(aabb) => self.0.retain(|coord, _| !node_overlaps_aabb(*coord, root_half_extent, aabb)),
+        }
+    }
+}
 
 /// Soft cap on cached tile meshes before non-resident entries are trimmed.
 const CACHE_CAP: usize = 1024;
@@ -259,7 +377,6 @@ struct BakedTile {
     mesh: Mesh,
     center: [f64; 2],
     depth: u32,
-    morph_start: f32,
     morph_end: f32,
 }
 
@@ -308,7 +425,6 @@ fn spawn_tile(
     mesh: Handle<Mesh>,
     center: [f64; 2],
     depth: u32,
-    morph_start: f32,
     morph_end: f32,
     mode: TerrainShaderMode,
     shader: &Handle<Shader>,
@@ -316,11 +432,15 @@ fn spawn_tile(
     lod_mats: &mut LodMaterials,
 ) -> (Entity, Handle<ShaderMaterial>) {
     let (cell, local) = grid.translation_to_grid(DVec3::new(center[0], 0.0, center[1]));
-    let mat = if let Some(h) = lod_mats.0.get(&(mode, depth)) {
+    // Snap the selected band onto the bucket lattice so tiles with near-identical
+    // parent ranges share one batched material (`morph_start` is derived from the
+    // snapped end at the fixed 0.7 ratio).
+    let (ms, me, bucket) = snap_band(morph_end);
+    let mat = if let Some(h) = lod_mats.0.get(&(mode, depth, bucket)) {
         h.clone()
     } else {
-        let h = build_tile_material(mode, morph_start, morph_end, depth, shader, materials);
-        lod_mats.0.insert((mode, depth), h.clone());
+        let h = build_tile_material(mode, ms, me, depth, shader, materials);
+        lod_mats.0.insert((mode, depth, bucket), h.clone());
         h
     };
     let ent = commands
@@ -333,6 +453,12 @@ fn spawn_tile(
             LodTileOf(terrain),
             Name::new(format!("LodTile d{} {},{}", coord.depth, coord.x, coord.z)),
             ChildOf(grid_entity),
+            // Terrain tiles RECEIVE shadows (rovers/objects cast onto them) but must
+            // NOT be shadow casters: the ~150-400 live tiles would otherwise be
+            // re-rendered into all 4 sun cascades every frame (the dominant terrain
+            // frame cost — ~16ms; the flat scene has no such geometry). Crater-rim
+            // self-shadowing rides the sun horizon ray-march, not the cascade pass.
+            bevy::light::NotShadowCaster,
         ))
         .id();
     (ent, mat)
@@ -375,28 +501,46 @@ pub(crate) fn animate_tile_reveal(
         }
         if t >= 1.0 {
             let anim = rev.anim.clone();
+            // A live re-bake (e.g. a brush/flatten edit or an obstacle-field
+            // regen) can despawn this tile in the same frame, before these
+            // deferred commands apply — `try_*` no-ops on a stale entity
+            // instead of panicking the command buffer.
             commands
                 .entity(ent)
-                .insert(MeshMaterial3d(rev.shared.clone()))
-                .remove::<TileReveal>();
+                .try_insert(MeshMaterial3d(rev.shared.clone()))
+                .try_remove::<TileReveal>();
             materials.remove(&anim);
         }
     }
 }
 
-/// Read a scalar param off a material (for carrying a tile's morph band across a
-/// shader-mode swap).
-fn mat_f32(m: &ShaderMaterial, name: &str) -> Option<f32> {
-    match m.get(name)? {
-        ParamValue::F32(v) => Some(v),
-        _ => None,
-    }
+/// Cross-terrain tile-streaming progress, derived fresh each frame by
+/// [`update_lod_tiles`]: how much of the WANTED tile set is actually on
+/// screen. UI layers read this to show a "terrain streaming…" indicator —
+/// without one, a freshly opened scene is a black void until the first bakes
+/// land, which reads as a hang. Kept here (engine-side, UI-free) so the UI is
+/// a pure derived read.
+#[derive(Resource, Default, Clone, Copy)]
+pub struct TerrainStreamStatus {
+    /// Tiles the current selection wants on screen (all streaming terrains).
+    pub wanted: usize,
+    /// Wanted tiles with a resident mesh entity (stale-but-covering counts —
+    /// the ground is visible, just not current).
+    pub resident: usize,
+    /// Off-thread bakes in flight.
+    pub pending: usize,
 }
 
 /// Per-frame: stream the LOD tile set for each streaming terrain against the camera.
 pub fn update_lod_tiles(
     mut commands: Commands,
     cameras: Query<&GlobalTransform, With<Camera3d>>,
+    // Dynamic bodies (rovers, payloads) are FORCED refinement foci: the
+    // physics collider ring under them is fixed-resolution, so the ground they
+    // stand on must be drawn at matching detail even when the camera-driven
+    // selection would keep it coarse (far chase cam, budget-coarsened metric)
+    // — otherwise wheels visibly hover on collider bumps the mesh doesn't show.
+    bodies: Query<(&avian3d::prelude::RigidBody, &GlobalTransform)>,
     // The big_space world grid each tile anchors into (its own `CellCoord`).
     grids: Query<(Entity, &Grid), With<WorldGrid>>,
     mut terrains: Query<(
@@ -406,6 +550,7 @@ pub fn update_lod_tiles(
         &TerrainLodViz,
         &mut LodTiles,
         &mut PendingTileBakes,
+        &mut TerrainNodeErrors,
         Option<&TerrainShaderMode>,
     )>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -414,7 +559,9 @@ pub fn update_lod_tiles(
     mut mesh_cache: ResMut<LodMeshCache>,
     cfg: Res<TerrainLodConfig>,
     asset_server: Res<AssetServer>,
+    mut stream_status: ResMut<TerrainStreamStatus>,
 ) {
+    *stream_status = TerrainStreamStatus::default();
     // Use the first 3D camera as the focus. (Multiple cameras → the viz follows
     // whichever; fine for a debug view.)
     let Some(cam) = cameras.iter().next() else { return };
@@ -425,7 +572,7 @@ pub fn update_lod_tiles(
     // Per-frame bake budget shared across all terrains (amortise scale changes).
     let mut bake_budget = cfg.bakes_per_frame.max(1);
 
-    for (terrain, t_gt, hf, viz, mut tiles, mut pending, mode_opt) in &mut terrains {
+    for (terrain, t_gt, hf, viz, mut tiles, mut pending, mut errs, mode_opt) in &mut terrains {
         let mode = mode_opt.copied().unwrap_or_default();
         // The terrain's current height generation: a tile/bake tagged with an older
         // gen is stale (a live re-bake changed the heights) and is replaced near-first.
@@ -437,30 +584,23 @@ pub fn update_lod_tiles(
         // tile in place (same geometry, new shader/colour) instead of despawning +
         // rebuilding, which left a one-frame black hole until the tiles re-baked.
         if tiles.mode != mode {
-            let old_mode = tiles.mode;
-            let swaps: Vec<(Entity, u32)> =
-                tiles.tiles.iter().map(|(c, s)| (s.entity, c.depth as u32)).collect();
-            for (ent, depth) in swaps {
-                let handle = if let Some(h) = lod_mats.0.get(&(mode, depth)) {
+            let swaps: Vec<(Entity, u32, f32)> = tiles
+                .tiles
+                .iter()
+                .map(|(c, s)| (s.entity, c.depth as u32, s.morph_end))
+                .collect();
+            for (ent, depth, morph_end) in swaps {
+                // Each tile carries its own morph band; rebuild/fetch the matching
+                // band-bucket material under the new mode.
+                let (ms, me, bucket) = snap_band(morph_end);
+                let handle = if let Some(h) = lod_mats.0.get(&(mode, depth, bucket)) {
                     h.clone()
                 } else {
-                    // Carry this depth's morph band over from the old material.
-                    let (ms, me) = lod_mats
-                        .0
-                        .get(&(old_mode, depth))
-                        .and_then(|oh| materials.get(oh))
-                        .map(|m| {
-                            (
-                                mat_f32(m, "morph_start").unwrap_or(1.0e20),
-                                mat_f32(m, "morph_end").unwrap_or(1.0e21),
-                            )
-                        })
-                        .unwrap_or((1.0e20, 1.0e21));
                     let h = build_tile_material(mode, ms, me, depth, &shader, &mut materials);
-                    lod_mats.0.insert((mode, depth), h.clone());
+                    lod_mats.0.insert((mode, depth, bucket), h.clone());
                     h
                 };
-                commands.entity(ent).insert(MeshMaterial3d(handle));
+                commands.entity(ent).try_insert(MeshMaterial3d(handle));
             }
             tiles.mode = mode;
         }
@@ -469,25 +609,147 @@ pub fn update_lod_tiles(
         let local = t_gt.affine().inverse().transform_point3(cam_pos);
         let focus = [local.x as f64, local.z as f64];
 
-        let dem = &hf.0;
-        let h = dem.half_extent as f64;
+        let oracle = &hf.0;
+        let h = oracle.half_extent() as f64;
         // Eye height = camera height ABOVE the terrain surface directly below it.
         // Feeding this to the 3D metric means looking down from altitude coarsens
         // the ground below (true distance), instead of refining it as XZ-only would.
-        let ground = dem.height_at(local.x, local.z) as f64;
+        let ground = oracle.height_at(local.x as f64, local.z as f64);
         let eye_height = (local.y as f64 - ground).max(0.0);
-        // Runtime LOD knobs (Inspector) drive detail-vs-distance live; tile_res stays
-        // per-terrain (changing it would invalidate the mesh cache).
-        let qt = Quadtree::new(h, cfg.max_depth.max(1), cfg.range_factor.max(0.1), h);
-        let mut sel = qt.select_3d(focus, eye_height);
+        // Runtime LOD knobs (Inspector) drive detail-vs-cost live; tile_res stays
+        // per-terrain (changing it would invalidate the mesh cache). The range
+        // factor derives from the CANONICAL screen metric (fixed viewport + the
+        // pixel_error knob) so selection stays view-independent + peer-identical.
+        let quadtree_for = |px: f64| {
+            Quadtree::from_screen_metric(
+                h,
+                cfg.max_depth.max(1),
+                h,
+                CANON_SCREEN_H_PX,
+                CANON_FOV_Y_RAD,
+                px,
+            )
+        };
+        let mut pixel_error = cfg.pixel_error.clamp(0.5, 32.0);
+        let mut qt = quadtree_for(pixel_error);
+        // ERROR-DRIVEN selection: refine where the MEASURED surface error says
+        // there is detail worth refining toward (crater rims, peaks), not on the
+        // uniform per-depth schedule. Errors are memoized per node against the
+        // current oracle; the cache wipes when the oracle is swapped (live edit).
+        let oracle_ptr = Arc::as_ptr(&hf.0) as usize;
+        if errs.oracle_ptr != oracle_ptr {
+            errs.map.clear();
+            errs.oracle_ptr = oracle_ptr;
+        }
+        let err_map = std::cell::RefCell::new(&mut errs.map);
+        let src: &SurfaceOracle = hf.0.as_ref();
+        let node_error = |c: QuadCoord, region: Square| -> f64 {
+            if let Some(&e) = err_map.borrow().get(&c) {
+                return e;
+            }
+            // Gate over-zoom synthesis at the probe's own spacing: sub-probe
+            // detail can't inform THIS node's refinement (it surfaces at deeper
+            // nodes, whose finer probes see it) — and it keeps coarse-node
+            // probes cheap.
+            let probe_step = region.side() / (NODE_ERROR_PROBE_RES - 1) as f64;
+            let limited = src.detail_limited(probe_step);
+            let e = measure_node_error(&limited, region, NODE_ERROR_PROBE_RES);
+            err_map.borrow_mut().insert(c, e);
+            e
+        };
+        // Fit the tile budget by COARSENING THE METRIC, not by capping the walk.
+        // A hard cap (`select_with_error_budgeted`) stops refinement at a
+        // budget-determined radius while every tile's geomorph band still assumes
+        // the UNBUDGETED refine distances — so detail ended in a hard line (the
+        // morph blend never ran) instead of fading. Raising pixel_error re-derives
+        // the range factor, so the transition distance and the morph band move
+        // TOGETHER and the LOD edge stays a blend. Node errors are memoized, so
+        // the re-walks are cheap; the loop is bounded by the 32 px clamp.
+        let budget = cfg.tile_budget.max(16);
+        let mut sel = qt.select_with_error(focus, eye_height, &node_error);
+        while sel.len() > budget && pixel_error < 32.0 {
+            pixel_error = (pixel_error * 1.6).min(32.0);
+            qt = quadtree_for(pixel_error);
+            sel = qt.select_with_error(focus, eye_height, &node_error);
+        }
+        // Ground under dynamic bodies is ALWAYS drawn at max depth — the
+        // fixed-resolution collider ring under a rover carries small-crater
+        // relief a coarse camera-driven tile doesn't, and the rover visibly
+        // hovers on the undrawn bumps. A handful of forced splits per body,
+        // outside the budget (the budget bounds the broad view, not this).
+        let inv_t = t_gt.affine().inverse();
+        for (rb, gt) in &bodies {
+            if !matches!(rb, avian3d::prelude::RigidBody::Dynamic) {
+                continue;
+            }
+            let local_b = inv_t.transform_point3(gt.translation());
+            let (bx, bz) = (local_b.x as f64, local_b.z as f64);
+            if bx.abs() > h || bz.abs() > h {
+                continue; // off this DEM
+            }
+            qt.refine_selection_at(&mut sel, [bx, bz], &node_error);
+        }
         let wanted: HashSet<QuadCoord> = sel.iter().map(|s| s.coord).collect();
 
-        // Intelligent baking: nearest tiles first, so the per-frame budget fills the
-        // surface in from under the camera outward ("start closer, then extend").
+        // Intelligent baking, two phases:
+        //
+        // 1. CARPET — the selection's coarsest tiles first (a depth-N tile costs
+        //    the same 49² samples as a leaf but covers 4^(maxdepth−N)× the
+        //    area), so the whole view is covered by a low-res carpet within the
+        //    first few frames instead of staying BLACK.
+        // 2. BENEFIT — everything finer ordered by distance measured in units
+        //    of the tile's own size (≈ inverse screen-space error): the leaf at
+        //    the camera's feet outranks a mid-depth ring 800 m out. Strict
+        //    depth-major order here was wrong on open: every mid-depth tile
+        //    across the whole 1.5 km view baked before the leaves under the
+        //    camera — the user watched FAR detail land while the near ground
+        //    lagged coarse.
+        //
+        // The reveal morph settles children onto the parent lattice, so the
+        // out-of-depth-order coarse→fine handoff never pops.
+        const CARPET_DEPTH: u8 = 2;
         let dist2 = |s: &Selected| -> f64 {
             (s.region.center[0] - focus[0]).powi(2) + (s.region.center[1] - focus[1]).powi(2)
         };
-        sel.sort_by(|a, b| dist2(a).partial_cmp(&dist2(b)).unwrap_or(std::cmp::Ordering::Equal));
+        // Camera heading in the terrain's local XZ, for view-direction weighting:
+        // of two tiles with equal screen-space benefit, the one AHEAD of the
+        // camera bakes first — the one behind isn't on screen. `None` when
+        // looking straight down (no meaningful heading; weight disabled).
+        let heading = {
+            let f = t_gt.affine().inverse().transform_vector3(cam.forward().as_vec3());
+            let v = bevy::math::DVec2::new(f.x as f64, f.z as f64);
+            (v.length() > 1e-3).then(|| v.normalize())
+        };
+        let benefit = |s: &Selected| -> f64 {
+            let size = s.region.half * 2.0;
+            let base = dist2(s) / (size * size).max(1e-9);
+            let Some(hd) = heading else { return base };
+            let to = bevy::math::DVec2::new(
+                s.region.center[0] - focus[0],
+                s.region.center[1] - focus[1],
+            );
+            let d = to.length();
+            if d < 1e-6 {
+                return base;
+            }
+            // cos 1 (dead ahead) → ×1 … cos −1 (behind) → ×4.
+            base * (2.5 - 1.5 * (to / d).dot(hd))
+        };
+        sel.sort_by(|a, b| {
+            let (ca, cb) = (a.coord.depth <= CARPET_DEPTH, b.coord.depth <= CARPET_DEPTH);
+            match (ca, cb) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                (true, true) => a
+                    .coord
+                    .depth
+                    .cmp(&b.coord.depth)
+                    .then(dist2(a).partial_cmp(&dist2(b)).unwrap_or(std::cmp::Ordering::Equal)),
+                (false, false) => {
+                    benefit(a).partial_cmp(&benefit(b)).unwrap_or(std::cmp::Ordering::Equal)
+                }
+            }
+        });
 
         // A coord is *fresh* (no work needed) when it has a resident tile OR an
         // in-flight bake tagged with the current generation. A stale entry (older
@@ -524,15 +786,17 @@ pub fn update_lod_tiles(
             let depth = baked.depth;
             let (ent, shared) = spawn_tile(
                 &mut commands, grid, grid_entity, terrain, coord, handle, baked.center,
-                depth, baked.morph_start, baked.morph_end, mode, &shader, &mut materials,
-                &mut lod_mats,
+                depth, baked.morph_end, mode, &shader, &mut materials, &mut lod_mats,
             );
             // Sub-root tiles settle in from their parent's coarse lattice (no pop).
             if depth > 0 {
                 begin_reveal(&mut commands, ent, shared, &mut materials);
             }
             // Replace any stale slot at this coord, despawning the tile it held.
-            if let Some(old) = tiles.tiles.insert(coord, TileSlot { entity: ent, gen: cur_gen }) {
+            if let Some(old) = tiles.tiles.insert(
+                coord,
+                TileSlot { entity: ent, gen: cur_gen, morph_end: baked.morph_end },
+            ) {
                 commands.entity(old.entity).try_despawn();
             }
         }
@@ -551,23 +815,21 @@ pub fn update_lod_tiles(
                 continue;
             }
             let depth = s.coord.depth as u32;
-            // Per-depth morph band: finite for sub-root nodes, "never" for the root.
-            let (morph_start, morph_end) = if s.morph_end.is_finite() {
-                (s.morph_start as f32, s.morph_end as f32)
-            } else {
-                (1.0e20, 1.0e21)
-            };
+            // Per-node morph band: finite for sub-root nodes, "never" for the root
+            // (the sentinel `snap_band` maps to the no-morph bucket).
+            let morph_end = if s.morph_end.is_finite() { s.morph_end as f32 } else { 1.0e21 };
             if let Some(cached) = mesh_cache.0.get(&s.coord) {
                 let (ent, shared) = spawn_tile(
                     &mut commands, grid, grid_entity, terrain, s.coord, cached.clone(),
-                    s.region.center, depth, morph_start, morph_end, mode, &shader,
+                    s.region.center, depth, morph_end, mode, &shader,
                     &mut materials, &mut lod_mats,
                 );
                 if depth > 0 {
                     begin_reveal(&mut commands, ent, shared, &mut materials);
                 }
-                if let Some(old) =
-                    tiles.tiles.insert(s.coord, TileSlot { entity: ent, gen: cur_gen })
+                if let Some(old) = tiles
+                    .tiles
+                    .insert(s.coord, TileSlot { entity: ent, gen: cur_gen, morph_end })
                 {
                     commands.entity(old.entity).try_despawn();
                 }
@@ -579,16 +841,23 @@ pub fn update_lod_tiles(
                 continue;
             }
             bake_budget -= 1;
-            let dem_arc = hf.0.clone();
+            let oracle_arc = hf.0.clone();
+            let coord = s.coord;
             let region = s.region;
             let tile_res = viz.tile_res;
             let half = h;
             let center = s.region.center;
             let task = pool.spawn(async move {
-                let tm = bake_tile_mesh(&dem_arc, region, tile_res, half, center);
+                // Content-addressed bake: a warm reload of the same composed
+                // surface streams this tile from the `cache://` dir; a miss
+                // samples the oracle (over-zoom Nyquist-gated at this tile's
+                // vertex spacing inside the bake) and persists for next time.
+                let tm = crate::tile_cache::bake_tile_mesh_cached(
+                    oracle_arc.as_ref(), coord, region, tile_res, half, center,
+                );
                 let mut mesh = grid_mesh(tm.positions, tm.normals, tm.uvs, tm.indices);
                 mesh.insert_attribute(ATTRIBUTE_MORPH_TARGET, tm.morph_targets);
-                BakedTile { mesh, center, depth, morph_start, morph_end }
+                BakedTile { mesh, center, depth, morph_end }
             });
             pending.0.insert(s.coord, (cur_gen, task));
         }
@@ -621,6 +890,11 @@ pub fn update_lod_tiles(
             }
             covers_hole
         });
+
+        // Streaming progress for the UI indicator (accumulated across terrains).
+        stream_status.wanted += wanted.len();
+        stream_status.resident += wanted.iter().filter(|c| tiles.tiles.contains_key(c)).count();
+        stream_status.pending += pending.0.len();
 
         // Bound the mesh cache: when it grows past the cap, keep only meshes for
         // currently-resident tiles (deterministic geometry → dropped ones re-bake on

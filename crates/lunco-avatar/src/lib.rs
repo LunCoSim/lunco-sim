@@ -1553,6 +1553,7 @@ pub fn avatar_raycast_possession(
     egui_focus: Res<lunco_core::EguiFocus>,
     drag_mode_active: Res<lunco_core::DragModeActive>,
     spawn_tool_active: Res<lunco_core::SpawnToolActive>,
+    terrain_tool_active: Res<lunco_core::TerrainToolActive>,
     mut commands: Commands,
     q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     q_spacecraft: Query<(Entity, &GlobalTransform, &Spacecraft)>,
@@ -1576,6 +1577,8 @@ pub fn avatar_raycast_possession(
     if drag_mode_active.active { return; }
     // Spawn placement tool armed: clicks place objects, don't possess.
     if spawn_tool_active.0 { return; }
+    // Terrain brush armed: clicks sculpt the terrain, don't possess.
+    if terrain_tool_active.0 { return; }
 
     // This observer handles the plain click now (it passed every guard above), so
     // stop the auto-propagation to ancestor entities — otherwise a global
@@ -1879,6 +1882,13 @@ fn on_possess_command(
 
     if end_vert_off == 0.0 {
         commands.entity(avatar_ent)
+            // Strip the OPPOSITE behavior component: exactly one camera solver
+            // may own the avatar Transform. A leftover SpringArmCamera (prior
+            // rover possession) would fight this OrbitCamera every frame —
+            // last-writer-wins churn that reads as "camera frozen / possession
+            // didn't take".
+            .remove::<SpringArmCamera>()
+            .remove::<SurfaceRelativeMode>()
             .insert(OrbitCamera {
                 target: cmd.target,
                 distance: end_distance,
@@ -1889,6 +1899,10 @@ fn on_possess_command(
             });
     } else {
         let mut cmd_ent = commands.entity(avatar_ent);
+        // Same exclusivity the other way: a leftover OrbitCamera (prior focus
+        // on a body / spacecraft possession) would overwrite the spring-arm
+        // pose every frame.
+        cmd_ent.remove::<OrbitCamera>();
         cmd_ent.insert((
             SpringArmCamera {
                 target: cmd.target,

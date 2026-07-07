@@ -50,6 +50,7 @@ impl Plugin for TerrainSurfacePlugin {
         app.init_resource::<crate::stream_viz::TerrainLodConfig>();
         app.register_type::<crate::stream_viz::TerrainLodConfig>();
         app.init_resource::<crate::stream_viz::LodMeshCache>();
+        app.init_resource::<crate::stream_viz::TerrainStreamStatus>();
         // M3: spawn a static DEM terrain (mesh + heightfield collider) on the
         // `SpawnDemTerrain` command. See `crate::terrain`.
         crate::terrain::register(app);
@@ -91,7 +92,15 @@ impl Plugin for TerrainSurfacePlugin {
         app.add_systems(
             Update,
             (
-                crate::collider_ring::update_collider_ring,
+                // AFTER the restamp swap: `finish_dem_restamp` writes the new
+                // `DemHeightField` immediately (Mut) but hands the bounded
+                // `ColliderDirtyRegion` over via deferred commands. Unordered,
+                // the ring could observe the new oracle key with no region in
+                // sight and fall back to invalidating the WHOLE ring on every
+                // edit; the `.after` also inserts the sync point that makes the
+                // region visible the same frame.
+                crate::collider_ring::update_collider_ring
+                    .after(crate::terrain::finish_dem_restamp),
                 crate::collider_ring::despawn_orphaned_collider_tiles,
             ),
         );

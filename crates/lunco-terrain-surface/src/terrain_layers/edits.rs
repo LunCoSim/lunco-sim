@@ -4,11 +4,12 @@
 //! that would grow the stack unboundedly. Instead every edit folds into **one**
 //! [`EditsLayer`] on the [`TerrainLayerStack`](super::TerrainLayerStack): the layer
 //! holds an ordered list of [`EditKind`]s, each tagged with a stable
-//! [`LayerId`](super::LayerId), and stamps them all in one pass over the grid. The
-//! visual tiles and the heightfield collider both read the one stamped surface, so
-//! the edit the rover drives is the edit you see. Edits are addressable — remove one
-//! by its id (undo a specific stroke); the layer re-bakes via
-//! `Changed<TerrainLayerStack>`.
+//! [`LayerId`](super::LayerId), and contributes them as ONE **analytic** height
+//! modifier on the terrain's [`SurfaceOracle`](crate::oracle::SurfaceOracle). The
+//! visual tiles and the heightfield collider both sample the one composed surface,
+//! so the edit the rover drives is exactly the edit you see — at whatever
+//! resolution each consumer samples. Edits are addressable — remove one by its id
+//! (undo a specific stroke); the layer re-composes via `Changed<TerrainLayerStack>`.
 //!
 //! The granular history (which edit, in what order, how to invert) is designed to
 //! live in the twin journal — this layer is the *projection* of that op stream. See
@@ -16,12 +17,12 @@
 //! appended directly with an explicit id.
 
 use std::any::Any;
+use std::sync::Arc;
 
-use bevy::log::info;
-use lunco_obstacle_field::field::HeightGrid;
 use lunco_terrain_core::{BrushModifier, FlattenModifier, HeightModifier};
 
 use super::{LayerAttrSource, LayerId, TerrainLayer};
+use crate::oracle::HeightContribution;
 
 /// One concrete terrain edit. A serializable, `Copy` value (not an `Arc<dyn …>`) so
 /// the edits layer can be cloned + rebuilt cheaply and — later — journaled.
@@ -34,6 +35,17 @@ pub enum EditKind {
 }
 
 impl EditKind {
+    /// The edit's world footprint as `[min_x, min_z, max_x, max_z]` (terrain-local
+    /// metres) — every edit is radial, so its influence is exactly `center ± radius`.
+    /// Drives the incremental region re-bake (only tiles overlapping this re-bake).
+    pub fn aabb(&self) -> [f64; 4] {
+        let (center, radius) = match *self {
+            EditKind::Brush { center, radius, .. } => (center, radius),
+            EditKind::Flatten { center, radius, .. } => (center, radius),
+        };
+        [center[0] - radius, center[1] - radius, center[0] + radius, center[1] + radius]
+    }
+
     /// Apply this edit to the accumulated height at `(x, z)`.
     #[inline]
     fn apply(&self, x: f64, z: f64, h_in: f64) -> f64 {
@@ -88,6 +100,12 @@ impl EditsLayer {
     pub fn from_edits(edits: Vec<(LayerId, EditKind)>) -> Self {
         EditsLayer { edits }
     }
+
+    /// The world footprint of the edit identified by `id`, or `None` if it isn't in
+    /// this layer. Used to scope an undo/remove to only the tiles it touched.
+    pub fn edit_bounds(&self, id: &LayerId) -> Option<[f64; 4]> {
+        self.edits.iter().find(|(eid, _)| eid == id).map(|(_, kind)| kind.aabb())
+    }
 }
 
 /// The single **packed** attribute that carries an edit on its prim:
@@ -128,33 +146,52 @@ pub fn edit_attr_write(kind: &EditKind) -> (&'static str, &'static str, String) 
     (EDIT_ATTR, "string", format!("\"{k} {} {} {r} {p}\"", c[0], c[1]))
 }
 
+/// The edits list as one analytic [`HeightModifier`]: folds every edit in append
+/// order at each sampled point (additive brush adds, flatten blends from the
+/// accumulated height).
+impl HeightModifier for EditsLayer {
+    fn apply(&self, x: f64, z: f64, h_in: f64) -> f64 {
+        let mut h = h_in;
+        for (_, kind) in &self.edits {
+            h = kind.apply(x, z, h);
+        }
+        h
+    }
+}
+
 impl TerrainLayer for EditsLayer {
     fn id(&self) -> &'static str {
         super::EDITS_LAYER_ID
     }
 
-    fn stamp(&self, grid: &mut HeightGrid) {
+    fn height_modifier(&self, _half_extent: f32) -> Option<HeightContribution> {
         if self.edits.is_empty() {
-            return;
+            return None;
         }
-        // One pass: fold every edit into each sample (additive brush adds, flatten
-        // blends from the current height).
-        let res = grid.res;
-        let s = grid.spacing();
-        let origin = -grid.half_extent;
-        for iz in 0..res {
-            let z = (origin + iz as f32 * s) as f64;
-            for ix in 0..res {
-                let x = (origin + ix as f32 * s) as f64;
-                let i = iz * res + ix;
-                let mut h = grid.heights[i];
-                for (_, kind) in &self.edits {
-                    h = kind.apply(x, z, h);
+        // Content key: every edit's identity + parameters, in fold order.
+        let mut key = lunco_precompute::Fnv1a::new();
+        for (id, kind) in &self.edits {
+            for b in id.as_str().as_bytes() {
+                key.write_u64(*b as u64);
+            }
+            match *kind {
+                EditKind::Brush { center, radius, amplitude } => {
+                    key.write_u64(1);
+                    key.write_u64(center[0].to_bits());
+                    key.write_u64(center[1].to_bits());
+                    key.write_u64(radius.to_bits());
+                    key.write_u64(amplitude.to_bits());
                 }
-                grid.heights[i] = h;
+                EditKind::Flatten { center, radius, target_y } => {
+                    key.write_u64(2);
+                    key.write_u64(center[0].to_bits());
+                    key.write_u64(center[1].to_bits());
+                    key.write_u64(radius.to_bits());
+                    key.write_u64(target_y.to_bits());
+                }
             }
         }
-        info!("[terrain-layer/edits] stamped {} edit(s) (±{:.0} m)", self.edits.len(), grid.half_extent);
+        Some(HeightContribution { modifier: Arc::new(self.clone()), content_key: key.finish() })
     }
 
     fn as_any(&self) -> Option<&dyn Any> {

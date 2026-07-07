@@ -13,6 +13,7 @@ use lunco_workbench::{
 pub mod spawn_palette;
 pub mod inspector;
 pub mod entity_list;
+pub mod terrain_tools;
 
 /// Schedule slot (in `Update`) for the UI *view-model* producers — the
 /// change-driven systems that derive render-ready state into resources for the
@@ -41,6 +42,7 @@ impl Plugin for SandboxEditUiPlugin {
         app.register_panel(spawn_palette::SpawnPalette)
             .register_panel(inspector::Inspector)
             .register_panel(entity_list::EntityList)
+            .register_panel(terrain_tools::ToolsPanel)
             .register_panel(ViewportPanel)
             // Order matters for auto-activation — View first so it's
             // the default when the rover binary boots.
@@ -91,6 +93,29 @@ impl Plugin for SandboxEditUiPlugin {
                         HelpMouse { interaction: "Alt+Left-Click", description: "Select + transform gizmo (drag to move)" },
                         HelpMouse { interaction: "Right-Drag", description: "Orbit / rotate the camera" },
                         HelpMouse { interaction: "Scroll", description: "Zoom in / out" },
+                    ],
+                    has_tour: false,
+                },
+            )
+            .register_perspective(TerrainPerspective)
+            .register_perspective_help(
+                PerspectiveId("terrain_sculpt"),
+                lunco_workbench::PerspectiveHelp {
+                    title: "🏔 Terrain",
+                    description: "Sculpt the surface. Arm a brush in the Tools palette, \
+                                  then click the terrain to raise, dig, or flatten it. \
+                                  Edits re-bake the visuals and the collider live.",
+                    shortcuts: vec![
+                        HelpShortcut { keys: "Shift + ↑/↓", description: "Grow / shrink brush radius" },
+                        HelpShortcut { keys: "Alt + ↑/↓", description: "Grow / shrink brush strength" },
+                        HelpShortcut { keys: "Esc", description: "Disarm the brush" },
+                    ],
+                    mouse: vec![
+                        HelpMouse { interaction: "Left-Click", description: "Sculpt (raise) · flatten to clicked height" },
+                        HelpMouse { interaction: "Alt+Left-Click", description: "Dig (invert the sculpt)" },
+                        HelpMouse { interaction: "Ctrl+Left-Click", description: "Flatten to the clicked height" },
+                        HelpMouse { interaction: "Shift / Alt + Scroll", description: "Brush radius / strength" },
+                        HelpMouse { interaction: "Right-Drag", description: "Orbit / rotate the camera" },
                     ],
                     has_tour: false,
                 },
@@ -177,6 +202,7 @@ impl Perspective for BuildPerspective {
         layout.set_activity_bar(false);
         layout.set_side_browser_tabs(vec![
             PanelId("spawn_palette"),
+            PanelId("tools_palette"),
             // Optional — registered by the rover binary; filtered out
             // in other apps.
             PanelId("rover_models"),
@@ -189,6 +215,26 @@ impl Perspective for BuildPerspective {
             // panel with this id (the rover binary does, modelica
             // workbench doesn't). The workbench filters unknown ids.
             PanelId("rover_code"),
+        ]);
+        layout.set_bottom(None);
+    }
+}
+
+/// Terrain sculpt mode — Tools palette left, 3D centre, Inspector + Entities
+/// tabbed right. The Tools palette arms a brush; clicking the terrain sculpts
+/// it (possession + selection stand down while a brush is armed).
+pub struct TerrainPerspective;
+
+impl Perspective for TerrainPerspective {
+    fn id(&self) -> PerspectiveId { PerspectiveId("terrain_sculpt") }
+    fn title(&self) -> String { "🏔 Terrain".into() }
+    fn apply(&self, layout: &mut WorkbenchLayout) {
+        layout.set_activity_bar(false);
+        layout.set_side_browser_tabs(vec![PanelId("tools_palette")]);
+        layout.set_center(vec![VIEWPORT_PANEL_ID]);
+        layout.set_right_inspector_tabs(vec![
+            PanelId("sandbox_inspector"),
+            PanelId("entity_list"),
         ]);
         layout.set_bottom(None);
     }

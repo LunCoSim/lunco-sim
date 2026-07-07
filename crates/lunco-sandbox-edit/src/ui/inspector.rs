@@ -813,8 +813,11 @@ fn terrain_lod_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         return;
     }
     ctx.resource_scope(|_ctx, cfg: &mut TerrainLodConfig| {
-        ui.add(egui::Slider::new(&mut cfg.range_factor, 0.5..=12.0).text("Detail range ×"))
-            .on_hover_text("Higher = finer tiles persist farther out (more detail at distance, more tiles).");
+        ui.add(egui::Slider::new(&mut cfg.pixel_error, 0.5..=16.0).text("Pixel error (px)"))
+            .on_hover_text(
+                "Screen-space error at which a tile refines (canonical viewport). \
+                 Lower = finer tiles wherever the surface earns it (rims, peaks).",
+            );
         ui.add(egui::Slider::new(&mut cfg.max_depth, 1u8..=9).text("Max LOD depth"))
             .on_hover_text("Deepest refinement = closest-up detail.");
         ui.add(egui::Slider::new(&mut cfg.bakes_per_frame, 1usize..=32).text("Bakes / frame"))

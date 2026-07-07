@@ -13,13 +13,28 @@ pub struct ApiEntityRegistry {
 
 impl ApiEntityRegistry {
     pub fn assign(&mut self, entity: Entity, id: GlobalEntityId) {
-        self.api_to_bevy.insert(id, entity);
+        // An id is DETERMINISTIC (prim path / provenance), so a scene reload
+        // moves it from the despawned entity to its replacement. Drop the old
+        // reverse entry or it dangles and later poisons a `remove`.
+        if let Some(old) = self.api_to_bevy.insert(id, entity) {
+            if old != entity {
+                self.bevy_to_api.remove(&old);
+            }
+        }
         self.bevy_to_api.insert(entity, id);
     }
 
     pub fn remove(&mut self, entity: Entity) {
         if let Some(id) = self.bevy_to_api.remove(&entity) {
-            self.api_to_bevy.remove(&id);
+            // Only drop the forward mapping if it still points at THIS entity.
+            // On a reload the id has already been re-assigned to the
+            // replacement entity — removing it here made every re-projected
+            // prim (the doc-backed twin's rovers!) vanish from the API: not
+            // listable, not resolvable, not possessable ("the physical rover
+            // doesn't work"), while the entity itself lived on in the scene.
+            if self.api_to_bevy.get(&id) == Some(&entity) {
+                self.api_to_bevy.remove(&id);
+            }
         }
     }
 
@@ -42,11 +57,15 @@ pub fn sync_api_registry(
     q_added: Query<(Entity, &GlobalEntityId), Added<GlobalEntityId>>,
     mut q_removed: RemovedComponents<GlobalEntityId>,
 ) {
-    for (entity, id) in q_added.iter() {
-        registry.assign(entity, *id);
-    }
+    // Removes FIRST: a scene reload despawns a prim's entity and spawns its
+    // replacement with the SAME deterministic id in the same frame. Processing
+    // the add first and the remove second handed `remove` a stale reverse
+    // entry for the reused id (guarded in `remove` too, belt and braces).
     for entity in q_removed.read() {
         registry.remove(entity);
+    }
+    for (entity, id) in q_added.iter() {
+        registry.assign(entity, *id);
     }
 }
 
@@ -81,5 +100,24 @@ mod tests {
         registry.assign(entity, id);
         registry.remove(entity);
         assert_eq!(registry.resolve(&id), None);
+    }
+
+    #[test]
+    fn reload_reassigns_id_and_late_remove_of_old_entity_keeps_new_mapping() {
+        // Scene reload: the deterministic id moves from despawned entity A to
+        // replacement B; A's removal event may be processed AFTER the assign.
+        // The late remove must not clobber B's mapping (the bug that made
+        // every re-projected rover vanish from the API).
+        let mut registry = ApiEntityRegistry::default();
+        let a = Entity::from_raw_u32(1).unwrap();
+        let b = Entity::from_raw_u32(2).unwrap();
+        let id = GlobalEntityId::from_raw(44);
+        registry.assign(a, id);
+        registry.assign(b, id);
+        registry.remove(a);
+        assert_eq!(registry.resolve(&id), Some(b));
+        assert_eq!(registry.api_id_for(b), Some(id));
+        assert_eq!(registry.api_id_for(a), None);
+        assert_eq!(registry.entities(), vec![(id, b)]);
     }
 }

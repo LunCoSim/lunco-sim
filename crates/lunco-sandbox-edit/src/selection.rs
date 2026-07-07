@@ -206,6 +206,7 @@ fn find_selectable(
 pub fn on_scene_click_select(
     mut click: On<Pointer<Click>>,
     spawn_state: Res<SpawnState>,
+    terrain_tool_active: Res<lunco_core::TerrainToolActive>,
     keys: Res<ButtonInput<KeyCode>>,
     egui_focus: Res<lunco_core::EguiFocus>,
     q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
@@ -232,6 +233,10 @@ pub fn on_scene_click_select(
     }
     // Spawn tool armed: clicks place objects, not select.
     if !matches!(spawn_state.as_ref(), SpawnState::Idle) {
+        return;
+    }
+    // Terrain brush armed: clicks sculpt the terrain, not select.
+    if terrain_tool_active.0 {
         return;
     }
 

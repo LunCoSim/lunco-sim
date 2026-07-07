@@ -31,6 +31,15 @@ use crate::source::HeightSource;
 pub trait HeightModifier: Send + Sync {
     /// Modified height (metres) at world `(x, z)` given the accumulated `h_in`.
     fn apply(&self, x: f64, z: f64, h_in: f64) -> f64;
+
+    /// For **detail-synthesising** modifiers (procedural over-zoom): a variant of
+    /// this modifier Nyquist-gated for a consumer sampling at `min_wavelength`
+    /// metres — features below that scale fade out instead of aliasing, and the
+    /// synthesis cost drops with them. Default `None`: the modifier is
+    /// resolution-independent (craters, brushes, flattens) and is used as-is.
+    fn with_min_wavelength(&self, _min_wavelength: f64) -> Option<Arc<dyn HeightModifier>> {
+        None
+    }
 }
 
 /// A base [`HeightSource`] plus an ordered stack of [`HeightModifier`]s folded over
@@ -227,7 +236,7 @@ mod tests {
     #[test]
     fn fold_order_matters() {
         // Crater (adds −depth) then flatten (pull to 0) ≠ flatten then crater.
-        let crater = Craters::new(vec![Crater { center: [0.0, 0.0], radius: 10.0, depth: 4.0, rim_height: 0.0 }]);
+        let crater = Craters::new(vec![Crater { center: [0.0, 0.0], radius: 10.0, depth: 4.0, rim_height: 0.0, softness: 0.0, bowl_power: 4.0 }]);
         let flat = FlattenModifier::new([0.0, 0.0], 30.0, 0.0);
         let crater_then_flat = LayeredHeightSource::new(Arc::new(Flat(0.0)))
             .with(Arc::new(crater.clone()))
@@ -244,8 +253,8 @@ mod tests {
     fn craters_modifier_matches_crater_field() {
         // The extracted `Craters` modifier over a base equals the `CraterField` wrapper.
         let list = vec![
-            Crater { center: [0.0, 0.0], radius: 10.0, depth: 2.0, rim_height: 0.4 },
-            Crater { center: [15.0, -8.0], radius: 6.0, depth: 1.5, rim_height: 0.3 },
+            Crater { center: [0.0, 0.0], radius: 10.0, depth: 2.0, rim_height: 0.4, softness: 0.0, bowl_power: 4.0 },
+            Crater { center: [15.0, -8.0], radius: 6.0, depth: 1.5, rim_height: 0.3, softness: 0.0, bowl_power: 4.0 },
         ];
         let field = CraterField::new(Flat(5.0), list.clone());
         let stack = LayeredHeightSource::new(Arc::new(Flat(5.0))).with(Arc::new(Craters::new(list)));
@@ -260,8 +269,8 @@ mod tests {
     #[test]
     fn several_crater_layers_accumulate() {
         // Two crater modifiers (two layers) stack — deltas add.
-        let a = Craters::new(vec![Crater { center: [0.0, 0.0], radius: 10.0, depth: 2.0, rim_height: 0.0 }]);
-        let b = Craters::new(vec![Crater { center: [0.0, 0.0], radius: 10.0, depth: 2.0, rim_height: 0.0 }]);
+        let a = Craters::new(vec![Crater { center: [0.0, 0.0], radius: 10.0, depth: 2.0, rim_height: 0.0, softness: 0.0, bowl_power: 4.0 }]);
+        let b = Craters::new(vec![Crater { center: [0.0, 0.0], radius: 10.0, depth: 2.0, rim_height: 0.0, softness: 0.0, bowl_power: 4.0 }]);
         let one = LayeredHeightSource::new(Arc::new(Flat(0.0))).with(Arc::new(a.clone()));
         let two = LayeredHeightSource::new(Arc::new(Flat(0.0))).with(Arc::new(a)).with(Arc::new(b));
         assert!((two.height_at(0.0, 0.0) - 2.0 * one.height_at(0.0, 0.0)).abs() < 1e-9);

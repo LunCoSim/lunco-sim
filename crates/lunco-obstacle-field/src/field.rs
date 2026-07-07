@@ -78,8 +78,10 @@ impl HeightGrid {
         }
     }
 
-    // (crater cross-section moved to the free fn `crater_delta` so the streamed-tile
-    // stamp AND a dedicated high-fidelity crater mesh share one profile.)
+    // (crater cross-section: `crater_delta` below — an f32 wrapper over the
+    // canonical `lunco_terrain_core::crater_profile`. Streamed tiles sample
+    // terrain-core's crater layer directly; this stamp path serves only
+    // Standalone-mode obstacle fields.)
 
     /// Stamp every crater placement using the layer's depth/rim ratios.
     pub fn stamp_craters(&mut self, placements: &[Placement], layer: &CraterLayer) {
@@ -157,8 +159,10 @@ impl HeightGrid {
 pub fn crater_delta(d: f32, depth: f32, rim_height: f32) -> f32 {
     // Delegate to the canonical `f64` profile in `lunco-terrain-core` so the
     // rasterised stamp here and the analytic `CraterField` sampled by the tile
-    // baker + collider share ONE cross-section — no second copy to drift.
-    lunco_terrain_core::crater_profile(d as f64, depth as f64, rim_height as f64) as f32
+    // baker + collider share ONE cross-section — no second copy to drift. The
+    // legacy quartic bowl (flat floor, steep wall band) is this stamp path's
+    // fixed shape; the analytic layer varies `bowl_power` per crater instead.
+    lunco_terrain_core::crater_profile(d as f64, depth as f64, rim_height as f64, 4.0) as f32
 }
 
 /// Smooth normals for a row-major `res×res` vertex grid via central differences

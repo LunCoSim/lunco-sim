@@ -394,6 +394,18 @@ pub fn scene_click_ray(
     camera.viewport_to_world(cam_gtf, cursor).ok()
 }
 
+/// Marker resource indicating a terrain-sculpt tool is armed.
+///
+/// Set by sandbox-edit's terrain-tools system whenever a [`TerrainTool`] is
+/// selected in the Tools palette. Read by avatar possession and entity
+/// selection to suppress their click handling — while a sculpt brush is armed
+/// every scene click applies terrain, not possess/select. Mirrors
+/// [`SpawnToolActive`].
+///
+/// [`TerrainTool`]: (sandbox-edit) crate::terrain_tools::TerrainTool
+#[derive(Resource, Default)]
+pub struct TerrainToolActive(pub bool);
+
 /// Per-entity marker: this entity is currently being dragged by the editor
 /// transform gizmo.
 ///

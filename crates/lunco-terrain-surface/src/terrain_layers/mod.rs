@@ -2,9 +2,13 @@
 //!
 //! A DEM terrain is built from a *stack of layers*, authored as composable USD child
 //! prims (`lunco:layer = "dem" | "craters" | "rocks" | "shader" | …`). Each non-ground
-//! layer contributes in one of three ways:
-//! - **stamp** height deltas into the working `HeightGrid` (craters, ridges, …) —
-//!   runs OFF-THREAD in the DEM build, before the collider/tiles derive;
+//! layer contributes in one of these ways:
+//! - **height_modifier** — an ANALYTIC [`HeightModifier`](lunco_terrain_core::HeightModifier)
+//!   folded into the terrain's [`SurfaceOracle`](crate::oracle::SurfaceOracle)
+//!   (craters, runtime edits). Sampled by the tile baker AND the collider at their
+//!   own resolution, so feature crispness is unbounded by any grid;
+//! - **stamp** height deltas into the working raster `HeightGrid` — only for layers
+//!   that genuinely rasterise; prefer `height_modifier`;
 //! - **scatter** entities onto the built surface (rocks, props, …) — main thread;
 //! - **configure** the terrain's render material (the surface shader IS a layer).
 //!
@@ -21,6 +25,7 @@
 
 mod craters;
 mod edits;
+mod overzoom;
 mod rocks;
 mod shader;
 
@@ -34,6 +39,7 @@ use crate::stream_viz::DemHeightField;
 
 pub use craters::{crater_layer, make_crater_layer};
 pub use edits::{edit_attr_write, parse_edit, EditKind, EditsLayer, EDIT_ATTR};
+pub use overzoom::default_overzoom_layer;
 pub use rocks::{rock_layer, TerrainRock};
 
 /// Rebuild the `craters`/`rocks` layers of `stack` from a typed [`ObstacleFieldSpec`]
@@ -157,6 +163,13 @@ impl TerrainLayerStack {
         self.set_edits_layer(updated);
     }
 
+    /// World footprint `[min_x, min_z, max_x, max_z]` of the edit identified by `id`,
+    /// or `None` if it isn't an edit in this stack (e.g. it's a whole layer). Lets an
+    /// undo/remove scope its re-bake to only the tiles the edit touched.
+    pub fn edit_bounds(&self, id: &LayerId) -> Option<[f64; 4]> {
+        self.edits_layer().edit_bounds(id)
+    }
+
     /// Remove an edit (by its id) from the edits layer; returns whether one was removed.
     pub fn remove_edit(&mut self, id: &LayerId) -> bool {
         match self.edits_layer().without(id) {
@@ -188,18 +201,14 @@ pub trait LayerAttrSource {
     fn get_bool(&self, name: &str) -> Option<bool>;
 }
 
-/// Context handed to [`TerrainLayer::scatter`]: the terrain entity, its height grid
-/// (already stamped, so scatter sits correctly in/around craters), and the command +
-/// asset handles to spawn children. Assets are `None` headless (server builds
-/// colliders only; visuals are client-side).
+/// Context handed to [`TerrainLayer::scatter`]: the terrain entity, its composed
+/// surface oracle (base + analytic craters/edits, so scatter sits correctly
+/// in/around craters), and the command + asset handles to spawn children. Assets
+/// are `None` headless (server builds colliders only; visuals are client-side).
 pub struct LayerScatterCx<'a, 'w, 's> {
     pub terrain: Entity,
-    /// The crater-stamped working grid (rocks resolve ground height off this).
-    pub grid: &'a HeightGrid,
-    /// The pristine pre-crater grid, when retained — a layer that adds its OWN
-    /// high-fidelity geometry (the craters overlay mesh) builds on this smooth base
-    /// so it doesn't double the already-stamped crater in `grid`.
-    pub base_grid: Option<&'a HeightGrid>,
+    /// The composed surface (rocks resolve ground height off this).
+    pub oracle: &'a crate::oracle::SurfaceOracle,
     pub commands: &'a mut Commands<'w, 's>,
     pub meshes: Option<&'a mut Assets<Mesh>>,
     pub materials: Option<&'a mut Assets<StandardMaterial>>,
@@ -227,8 +236,18 @@ pub trait TerrainLayer: Send + Sync + 'static {
     // StageSink projects per-prim by path, so this folds in for free.
     // See docs/architecture/terrain-substrate.md → "Dynamic modification".
     fn id(&self) -> &'static str;
-    /// Stamp height deltas into the working grid (off-thread in the DEM build, and on
-    /// the main thread on regenerate). Default: contributes no height.
+    /// The layer's **analytic** height contribution: a
+    /// [`HeightModifier`](lunco_terrain_core::HeightModifier) folded into the
+    /// terrain's [`SurfaceOracle`](crate::oracle::SurfaceOracle), sampled by the
+    /// tile baker + collider at their own resolution (crispness unbounded by any
+    /// grid). `half_extent` is the terrain's half side (metres) — deterministic
+    /// placement generators derive their footprint from it. Default: none.
+    fn height_modifier(&self, _half_extent: f32) -> Option<crate::oracle::HeightContribution> {
+        None
+    }
+    /// Stamp height deltas into the working raster grid (off-thread in the DEM
+    /// build). Only for layers that genuinely rasterise — prefer
+    /// [`height_modifier`](Self::height_modifier). Default: contributes no height.
     fn stamp(&self, _grid: &mut HeightGrid) {}
     /// The **serializable** form of this layer's stamp, when it has one — so the SAME
     /// stamp drives the wasm DEM Web Worker (which can't hold a `dyn TerrainLayer`) AND
@@ -267,6 +286,7 @@ impl Default for TerrainLayerParserRegistry {
     fn default() -> Self {
         let mut parsers = HashMap::new();
         parsers.insert("craters".to_string(), craters::parse_crater_layer as TerrainLayerParser);
+        parsers.insert("overzoom".to_string(), overzoom::parse_overzoom_layer as TerrainLayerParser);
         parsers.insert("rocks".to_string(), rocks::parse_rock_layer as TerrainLayerParser);
         parsers.insert("shader".to_string(), shader::parse_shader_layer as TerrainLayerParser);
         Self { parsers }
@@ -313,7 +333,7 @@ pub fn scatter_terrain_layers(
     shader_materials: Option<ResMut<Assets<lunco_materials::ShaderMaterial>>>,
     asset_server: Res<AssetServer>,
     q: Query<
-        (Entity, &DemHeightField, Option<&crate::terrain::DemBaseGrid>, &TerrainLayerStack),
+        (Entity, &DemHeightField, &TerrainLayerStack),
         Without<TerrainLayersApplied>,
     >,
 ) {
@@ -323,7 +343,7 @@ pub fn scatter_terrain_layers(
     let mut meshes = meshes;
     let mut materials = materials;
     let mut shader_materials = shader_materials;
-    for (entity, dem, base, stack) in &q {
+    for (entity, dem, stack) in &q {
         // `try_insert`: a doc-backed scene reload (E1b) can despawn + re-instantiate
         // this terrain in the same frame, so the entity may be gone by the time
         // these deferred commands apply — skip silently rather than panic.
@@ -335,8 +355,7 @@ pub fn scatter_terrain_layers(
         // …then scatter layers spawn their entities.
         let mut cx = LayerScatterCx {
             terrain: entity,
-            grid: &dem.0,
-            base_grid: base.map(|b| &*b.0),
+            oracle: &dem.0,
             commands: &mut commands,
             meshes: meshes.as_deref_mut(),
             materials: materials.as_deref_mut(),

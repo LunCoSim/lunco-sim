@@ -166,9 +166,12 @@ fn open_usd_docs_on_twin_added(
     trigger: On<TwinAdded>,
     workspace: Res<WorkspaceResource>,
     twin_roots: Res<lunco_assets::twin_source::TwinRoots>,
-    // Optional: headless/test apps (MinimalPlugins) have no `AssetServer`. When
-    // absent, E1b's doc-open is skipped — `LoadScene` still mounts the scene.
+    // Optional: headless/test apps (MinimalPlugins) have no `AssetServer` /
+    // `Assets<UsdSourceText>`. The doc-backed mount path (`drain_pending_twin_docs`)
+    // is gated on BOTH, so defer to it only when both exist — otherwise E1b is
+    // skipped and `LoadScene` mounts the scene directly.
     asset_server: Option<Res<AssetServer>>,
+    usd_sources: Option<Res<Assets<lunco_usd_bevy::UsdSourceText>>>,
     mut pending_twin: ResMut<crate::twin_projection::PendingTwinDocs>,
     mut commands: Commands,
 ) {
@@ -205,27 +208,39 @@ fn open_usd_docs_on_twin_added(
             // never a bare absolute path. Works identically on native (fs) and
             // web (http), and keeps the scene's co-located relative refs
             // (terrain glb) resolving under `twin://`.
-            info!(
-                "[twin] loading starting scene `twin://{}/{}` (twin `{}`)",
-                twin_name,
-                scene,
-                twin.root.display()
-            );
-            commands.trigger(LoadScene {
-                path: format!("twin://{}/{}", twin_name, scene),
-                root_prim: String::new(),
-            });
-            // E1b: also open the scene as a document and make it doc-backed. The
-            // `LoadScene` above mounts the file-backed stage immediately; once the
-            // document exists, `sync_twin_overlays` shadows the twin source with
-            // the composed (base ⊕ runtime) source and reloads, so persisted
-            // runtime spawns/moves appear live. Read the base text THROUGH the
-            // twin source (web-ready) rather than `std::fs`. Skipped in
-            // headless/test apps with no `AssetServer`.
-            if let Some(asset_server) = &asset_server {
+            //
+            // E1b: open the scene as a document FIRST — the mount comes from
+            // `drain_pending_twin_docs` once the document exists and its composed
+            // (base ⊕ runtime) source is published as the twin overlay, so the
+            // one and only stage build already carries persisted runtime
+            // spawns/moves. Mounting eagerly here and doc-backing afterwards
+            // built the stage from the raw base, then the open-time
+            // `restore_runtime` forced a whole-scene rebuild ~70 ms later —
+            // every prim (rovers included) spawned twice. Read the base text
+            // THROUGH the twin source (web-ready) rather than `std::fs`.
+            // Headless/test apps without the asset pipeline mount directly —
+            // they have no doc projection to wait for.
+            if let (Some(asset_server), Some(_)) = (&asset_server, &usd_sources) {
+                info!(
+                    "[twin] doc-backing starting scene `twin://{}/{}` (twin `{}`) — mount follows",
+                    twin_name,
+                    scene,
+                    twin.root.display()
+                );
                 let handle = asset_server
                     .load::<lunco_usd_bevy::UsdSourceText>(format!("twin://{}/{}", twin_name, scene));
                 pending_twin.push(handle, twin_name.clone(), scene.to_string(), twin.root.join(scene));
+            } else {
+                info!(
+                    "[twin] loading starting scene `twin://{}/{}` (twin `{}`)",
+                    twin_name,
+                    scene,
+                    twin.root.display()
+                );
+                commands.trigger(LoadScene {
+                    path: format!("twin://{}/{}", twin_name, scene),
+                    root_prim: String::new(),
+                });
             }
         }
         None => {

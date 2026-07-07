@@ -42,11 +42,13 @@
 pub mod collider_ring;
 pub mod derived_layers;
 pub mod georef;
+pub mod oracle;
 pub mod plugin;
 pub mod query;
 pub mod stream_viz;
 pub mod terrain;
 pub mod terrain_layers;
+pub mod tile_cache;
 pub mod tile_mesh;
 
 // Re-export the shared LOD spine modules so `crate::quadtree` / `crate::source` /
@@ -62,14 +64,19 @@ pub use dem::{decode_geotiff_f64, height_grid_from_geotiff, DemError, DemMetadat
 pub use lunco_terrain_core::{
     AnalyticHeightSource, HeightSource, QuadCoord, Quadtree, Selected, Square, TileCoord, TileGrid,
 };
+pub use oracle::{raycast_surface, HeightContribution, SurfaceOracle};
 pub use plugin::{TerrainSurfaceConfig, TerrainSurfacePlugin};
 pub use derived_layers::DerivedLayersBuilt;
 pub use georef::TerrainGeoref;
 pub use query::{register_terrain_queries, TerrainHeightProvider};
 pub use collider_ring::{ColliderTiles, TerrainColliderRing};
-pub use stream_viz::{DemHeightField, LodTiles, TerrainLodConfig, TerrainLodViz, TerrainShaderMode};
+pub use stream_viz::{
+    DemHeightField, LodTiles, TerrainLodConfig, TerrainLodViz, TerrainNodeErrors, TerrainShaderMode,
+    TerrainStreamStatus,
+};
 pub use terrain_layers::{
-    edit_attr_write, make_crater_layer, parse_edit, EditKind, EditsLayer, LayerAttrSource, LayerEntry,
+    default_overzoom_layer, edit_attr_write, make_crater_layer, parse_edit, EditKind, EditsLayer,
+    LayerAttrSource, LayerEntry,
     LayerId, LayerScatterCx, TerrainLayer, TerrainLayerAppExt, TerrainLayerParser,
     TerrainLayerParserRegistry, TerrainLayerStack, TerrainLayersApplied, TerrainRock, TerrainScatterEntity,
     EDITS_LAYER_ID,

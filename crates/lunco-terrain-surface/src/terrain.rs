@@ -19,12 +19,17 @@ use bevy::tasks::{AsyncComputeTaskPool, Task};
 use big_space::prelude::CellCoord;
 use lunco_core::{on_command, register_commands, Command, GridAnchor, WorldGrid};
 use lunco_obstacle_field::field::{HeightGrid, MeshData};
+use lunco_obstacle_field::sampler::{salt, sample_layer};
+use lunco_obstacle_field::spec::{CraterLayer, Pattern};
 
-// The pure decode → crop/resample → crater-stamp pipeline lives in the
-// bevy/avian-free `lunco-terrain-bake` crate, so the wasm Web Worker (`dem_worker`)
-// runs the SAME `bake_grid` this native task calls. Only the avian collider + Bevy
-// mesh derive (below) stay here, where those types live.
-use lunco_terrain_bake::{bake_grid, BakedGrid, DemBakeJob};
+// The pure decode → crop/resample pipeline lives in the bevy/avian-free
+// `lunco-terrain-bake` crate, so the wasm Web Worker (`dem_worker`) offloads the
+// heavy GeoTIFF decode; the analytic oracle composition + avian collider + Bevy
+// mesh derive stay here (on the main thread on web — they're cheap).
+use lunco_terrain_bake::bake::{crop_centered, resample};
+use lunco_terrain_bake::dem::{height_grid_from_geotiff, DemMetadata};
+#[cfg(target_arch = "wasm32")]
+use lunco_terrain_bake::{BakedGrid, DemBakeJob};
 
 /// Default realized region side length (metres) when `window_m` is 0… no — see
 /// below: 0 means the whole map. This is the fallback when a caller passes a
@@ -53,8 +58,57 @@ pub struct DemTerrainSurface;
 #[derive(Component)]
 pub struct DocBackedTerrain;
 
-// `stamp_spec_craters` / `crater_placements` moved to `lunco_terrain_bake::stamp`
-// (shared with the wasm worker); the craters layer calls them from there.
+/// The deterministic crater placements for a terrain of the given `half_extent` —
+/// the set the craters layer turns into its analytic [`lunco_terrain_core::Craters`]
+/// modifier on the surface oracle. **Non-destructive** (the source DEM is never
+/// touched) and **deterministic** (the seed drives placement, so every networked
+/// peer regenerates identical basins with nothing to transfer).
+///
+/// Craters fill the WHOLE DEM window (`half_extent`), not the spec's
+/// `region_half_extent` (which bounds the near-field rock scatter). Placement is
+/// **complete spatial randomness** (unconstrained uniform) — NOT the spec's
+/// `pattern` (which tunes rocks) and NOT blue noise: real crater populations are
+/// Poisson-distributed, with overlapping pairs, chains, and bare stretches. An
+/// enforced min-spacing near the mean spacing packs the field into a near-lattice
+/// that reads as a repeating carpet. Overlaps are wanted — additive deltas on a
+/// rare coincident pair read as a merged doublet or an extra-deep fresh crater
+/// (saturation equilibrium IS overlapping craters), and the collider firewall
+/// slope-limits anything extreme. Pure → safe to call off-thread.
+pub(crate) fn crater_placements(
+    craters: &CraterLayer,
+    seed: u64,
+    half_extent: f32,
+) -> Vec<lunco_obstacle_field::sampler::Placement> {
+    if !craters.enabled || craters.density <= 0.0 {
+        return Vec::new();
+    }
+    let side = (2.0 * half_extent) as f64;
+    // Authored `density` (per ha) is calibrated to the legacy 8 m-radius size
+    // floor. The power-law SFD `N(>r) ∝ r^-1.8` says lowering the floor to
+    // `size.min` multiplies the population by `(8/min)^1.8` — that growth is the
+    // saturation-equilibrium small-crater carpet, not a density change, so scale
+    // the count here instead of asking every scene to re-author density. Capped:
+    // the analytic index stays cheap per-sample, but a pathological min would
+    // otherwise mint millions of placements.
+    let rmin = craters.size.min.max(0.5) as f64;
+    let sfd_scale = (8.0 / rmin).powf(1.8).max(1.0);
+    let count = ((craters.density as f64 * side * side) / 10_000.0 * sfd_scale)
+        .round()
+        .max(0.0)
+        .min(250_000.0) as usize;
+    if count == 0 {
+        return Vec::new();
+    }
+    sample_layer(
+        seed,
+        salt::CRATERS,
+        Pattern::Uniform,
+        half_extent,
+        count,
+        craters.size,
+        0.0,
+    )
+}
 
 /// A request to build a DEM tile **onto the entity carrying this component**.
 /// [`start_dem_builds`] kicks the off-thread bake; [`finish_dem_builds`] inserts
@@ -90,14 +144,6 @@ pub struct DemTerrainRequest {
     /// standalone command path; `false` for the USD path, where the prim's
     /// `materialType` authors the material (don't clobber it).
     pub with_default_material: bool,
-    /// **Intelligent upscaling** factor for the working grid. The DEM is coarse
-    /// (~5 m); generated craters are *procedural* and can be far crisper than that.
-    /// `> 1` bilinearly **upscales the coarse ground** to a finer working grid
-    /// (no fake ground detail — just smoother interpolation) BEFORE the crater layer
-    /// stamps into it, so craters get high fidelity (sub-5 m rims) decoupled from the
-    /// DEM resolution. `1` = native. Cost: the static collider + height grid grow
-    /// ~factor² (a load-time structural choice; crater *shape* stays live-tunable).
-    pub detail_upsample: usize,
 }
 
 /// Retained on a built DEM terrain so its crater layer can be **re-baked live**
@@ -178,7 +224,6 @@ fn on_spawn_dem_terrain(
             lod_viz: ev.lod_viz,
             collider_ring: ev.collider_ring,
             with_default_material: true,
-            detail_upsample: 1,
         },
         stack,
         Transform::IDENTITY,
@@ -332,11 +377,12 @@ struct DemBuild {
     /// parry heightfield for a multi-million-point DEM is expensive, so it happens in
     /// the build task; the main thread only inserts the finished component.
     collider: Option<Collider>,
-    /// The realized tile grid (with craters stamped), always retained as the shared
-    /// `HeightSource` the streaming consumers and the `TerrainHeight` query sample.
-    grid: Option<std::sync::Arc<HeightGrid>>,
-    /// The same tile grid BEFORE craters were stamped — retained so a live
-    /// `RegenerateField` re-bakes craters off it without re-reading the GeoTIFF.
+    /// The composed surface oracle (raster base + analytic crater/edit modifiers),
+    /// always retained as the ONE `HeightSource` the streaming consumers, the
+    /// derived-layer bakes, and the `TerrainHeight` query sample.
+    oracle: Option<std::sync::Arc<crate::oracle::SurfaceOracle>>,
+    /// The raster base grid BEFORE any layer folded in — retained so a live
+    /// layer edit re-composes off it without re-reading the GeoTIFF.
     base_grid: std::sync::Arc<HeightGrid>,
     half_extent: f32,
     /// Tile resolution actually meshed (= native crop res, or the resample target).
@@ -363,30 +409,62 @@ pub struct DemWorkerJob {
     with_default_material: bool,
 }
 
-/// Derive the avian collider + Bevy `MeshData` a pure [`BakedGrid`] needs into a
-/// [`DemBuild`], ready for [`assemble_dem_build`]. On native this runs inside the
-/// async task (collider off-thread); on web the worker returns the grid and this
-/// runs on the main thread — cheap for the streaming (`collider_ring` + `lod_viz`)
-/// path, which builds neither a static collider nor a static mesh.
-fn dem_build_from_baked(baked: BakedGrid, collider_ring: bool, lod_viz: bool) -> DemBuild {
+/// Compose the surface oracle (raster base + the layers' ANALYTIC height modifiers)
+/// and derive the avian collider + Bevy `MeshData` a pure [`BakedGrid`] needs into a
+/// [`DemBuild`], ready for [`assemble_dem_build`]. Used by the web worker path: the
+/// worker offloads the heavy GeoTIFF decode and returns the BARE grid, then this
+/// runs on the main thread — the analytic composition is cheap, so web keeps the
+/// SAME unbounded crater/edit realism as native. Streaming (`collider_ring` +
+/// `lod_viz`) builds neither a static collider nor a static mesh (the ring / tiles
+/// sample the oracle directly), so it doesn't even materialize.
+#[cfg(target_arch = "wasm32")]
+fn dem_build_from_baked(
+    baked: BakedGrid,
+    collider_ring: bool,
+    lod_viz: bool,
+    contributions: Vec<crate::oracle::HeightContribution>,
+) -> DemBuild {
     let half_extent = baked.grid.half_extent;
+    let base_grid = std::sync::Arc::new(baked.base_grid);
+    let oracle = std::sync::Arc::new(crate::oracle::SurfaceOracle::new(
+        std::sync::Arc::new(baked.grid),
+        contributions,
+    ));
+    // Static consumers rasterise the composed surface once; streaming consumers
+    // sample the oracle directly (so no materialize for the ring/tile path).
+    let needs_static_grid = !collider_ring || !lod_viz;
+    let materialized = needs_static_grid.then(|| oracle.materialize());
     let collider = if collider_ring {
         None
     } else {
-        let h = half_extent as f64;
-        Some(Collider::heightfield(baked.grid.to_avian_heights(), DVec3::new(2.0 * h, 1.0, 2.0 * h)))
+        let g = materialized.as_ref().expect("materialized for static collider");
+        let h = g.half_extent as f64;
+        Some(Collider::heightfield(g.to_avian_heights(), DVec3::new(2.0 * h, 1.0, 2.0 * h)))
     };
-    let mesh = if lod_viz { None } else { Some(baked.grid.to_mesh_data()) };
+    let mesh = if lod_viz { None } else { materialized.as_ref().map(|g| g.to_mesh_data()) };
     DemBuild {
         collider,
         mesh,
-        grid: Some(std::sync::Arc::new(baked.grid)),
-        base_grid: std::sync::Arc::new(baked.base_grid),
+        oracle: Some(oracle),
+        base_grid,
         half_extent,
         res: baked.res,
         native_res: baked.native_res,
         site: baked.site,
     }
+}
+
+/// The analytic height contributions for a terrain's layer stack — the SAME
+/// composition the native build task does inline, factored out so the web worker's
+/// replies ([`finish_dem_worker`]) can rebuild the oracle from the entity's stack.
+#[cfg(target_arch = "wasm32")]
+fn layer_contributions(
+    stack: Option<&crate::terrain_layers::TerrainLayerStack>,
+    half_extent: f32,
+) -> Vec<crate::oracle::HeightContribution> {
+    stack
+        .map(|s| s.0.iter().filter_map(|e| e.layer.height_modifier(half_extent)).collect())
+        .unwrap_or_default()
 }
 
 /// Read a DEM file's bytes through the platform's I/O.
@@ -441,17 +519,28 @@ fn start_dem_builds(
         let tif_path = dir.join("materials/textures/heightmap.tif");
         let collider_ring = req.collider_ring;
         let lod_viz = req.lod_viz;
-        // The composed stamp specs (craters, …) — serializable, so the SAME set
-        // drives the native bake AND the worker (deterministic from the seed, so
-        // nothing but the spec crosses the worker boundary). Scatter layers (rocks)
-        // are no-ops here; they run on the main thread post-build.
+        // Captured by-value into the 'static async build task (the query item `req`
+        // can't cross the task boundary).
+        let half_window = req.half_window;
+        let target_res = req.target_res;
+        // The terrain's composed layer stack (from its USD child layer prims).
+        // Height layers (craters, edits) contribute ANALYTIC modifiers to the
+        // surface oracle: composed OFF-THREAD in the native build task below, and
+        // on the main thread from the SAME stack after the wasm worker returns its
+        // bare grid — so web keeps full analytic realism (see `finish_dem_worker`).
+        // Scatter layers (rocks) are no-ops here; they run post-build.
+        let layers: Vec<_> =
+            stack.map(|s| s.0.iter().map(|e| e.layer.clone()).collect()).unwrap_or_default();
+        // WASM: the DEM worker only offloads the genuinely-heavy, non-analytic step
+        // — GeoTIFF decode + crop + resample — and returns the BARE base grid (no
+        // stamps; the crater/edit modifiers compose analytically on the main thread,
+        // which is cheap). This keeps the page's main thread free during the fetch.
+        #[cfg(target_arch = "wasm32")]
         let job = DemBakeJob {
             half_window: req.half_window,
             target_res: req.target_res,
-            detail_upsample: req.detail_upsample.max(1),
-            stamps: stack
-                .map(|s| s.0.iter().filter_map(|e| e.layer.stamp_spec()).collect())
-                .unwrap_or_default(),
+            detail_upsample: 1,
+            stamps: Vec::new(),
         };
 
         // WEB: offload decode + stamp to the DEM Web Worker. A detached I/O task
@@ -489,17 +578,82 @@ fn start_dem_builds(
         }
 
         // NATIVE (and web without a staged worker): full bake in an async task — a
-        // real thread on native. `bake_grid` is the SAME code the worker runs; only
-        // the avian collider + Bevy mesh derive is added here (it needs those types).
+        // real thread on native. Decode the DEM and compose the analytic surface
+        // oracle here (crater/edit modifiers unbounded by grid res); the avian
+        // collider + Bevy mesh derive is added off-thread too.
         let task = AsyncComputeTaskPool::get().spawn(async move {
             let meta_bytes = read_bytes(meta_path).await?;
             let meta_str =
                 String::from_utf8(meta_bytes).map_err(|e| format!("metadata.yaml not utf-8: {e}"))?;
+            let meta = DemMetadata::from_yaml_str(&meta_str).map_err(|e| e.to_string())?;
             let tif = read_bytes(tif_path).await?;
-            let baked = bake_grid(&meta_str, &tif, &job)?;
-            Ok(dem_build_from_baked(baked, collider_ring, lod_viz))
+            let grid = height_grid_from_geotiff(&tif, &meta).map_err(|e| e.to_string())?;
+
+            // Crop the playable region at native resolution. The mesh and collider
+            // share this surface so visuals and contact agree.
+            let tile = crop_centered(&grid, half_window);
+            let native_res = tile.res;
+            // Optional visual-quality downsample (lossy). 0 / ≥ native keeps native.
+            let mut tile = if target_res > 0 && target_res < native_res {
+                resample(&tile, tile.half_extent as f64, target_res)
+            } else {
+                tile
+            };
+            let half_extent = tile.half_extent;
+            let res = tile.res;
+            // Retain the pristine raster base so a live layer edit re-composes off
+            // it without re-reading the GeoTIFF.
+            let base_grid = std::sync::Arc::new(tile.clone());
+            // Fold any genuinely-rasterising layers into the working grid (most
+            // height layers contribute analytically below instead).
+            for layer in &layers {
+                layer.stamp(&mut tile);
+            }
+            // Compose the surface oracle: raster base + each layer's ANALYTIC
+            // height modifier, in stack (USD prim) order. The tile baker, the
+            // collider ring, the derived-layer bakes, and the TerrainHeight query
+            // all sample this ONE source — crater rims resolve at each consumer's
+            // own sampling density, unbounded by the DEM grid. Deterministic from
+            // the spec seeds; the source DEM bytes are never touched.
+            let contributions: Vec<_> =
+                layers.iter().filter_map(|l| l.height_modifier(half_extent)).collect();
+            let oracle = std::sync::Arc::new(crate::oracle::SurfaceOracle::new(
+                std::sync::Arc::new(tile),
+                contributions,
+            ));
+            // Static consumers rasterise the composed surface once at base
+            // resolution; streaming consumers sample the oracle directly.
+            let needs_static_grid = !collider_ring || !lod_viz;
+            let materialized = needs_static_grid.then(|| oracle.materialize());
+            // Build the static heightfield collider HERE (off-thread) when this isn't
+            // a streamed collider ring — the parry heightfield build over a
+            // multi-million-point DEM is the load-time cost that used to stall the
+            // main thread in `finish_dem_builds`.
+            let collider = if collider_ring {
+                None
+            } else {
+                let g = materialized.as_ref().expect("materialized for static collider");
+                let h = g.half_extent as f64;
+                Some(Collider::heightfield(g.to_avian_heights(), DVec3::new(2.0 * h, 1.0, 2.0 * h)))
+            };
+            // Static visual mesh unless lod_viz streams visual tiles instead.
+            let mesh = if lod_viz {
+                None
+            } else {
+                materialized.as_ref().map(|g| g.to_mesh_data())
+            };
+            Ok(DemBuild {
+                collider,
+                mesh,
+                oracle: Some(oracle),
+                base_grid,
+                half_extent,
+                res,
+                native_res,
+                site: meta.site_id,
+            })
         });
-        commands.entity(entity).insert(DemBuildTask(task));
+        commands.entity(entity).try_insert(DemBuildTask(task));
     }
 }
 
@@ -519,7 +673,7 @@ fn finish_dem_builds(
             continue;
         };
         // Request consumed — drop the task + request marker either way.
-        commands.entity(entity).remove::<(DemBuildTask, DemTerrainRequest)>();
+        commands.entity(entity).try_remove::<(DemBuildTask, DemTerrainRequest)>();
 
         let built = match result {
             Ok(b) => b,
@@ -569,26 +723,34 @@ fn assemble_dem_build(
         // Static full-DEM collider (`None` when a collider ring streams per-tile
         // colliders instead) — already built (off-thread on native).
         if let Some(collider) = built.collider {
-            e.insert((RigidBody::Static, collider));
+            e.try_insert((RigidBody::Static, collider));
         }
         // Retain the pristine base grid + source settings so the crater layer can be
         // re-baked live from the Inspector (`RegenerateField`) without disk I/O.
-        e.insert((DemBaseGrid(built.base_grid), DemTerrainSource { collider_ring }));
-        // Retain the grid + mark the streaming mode(s). Both sample `DemHeightField`.
-        if let Some(grid) = built.grid {
-            e.insert(crate::stream_viz::DemHeightField(grid));
+        e.try_insert((
+            DemBaseGrid(built.base_grid),
+            DemTerrainSource { collider_ring },
+        ));
+        // Retain the oracle + mark the streaming mode(s). `lod_viz` streams visual LOD
+        // tiles (static mesh suppressed); `collider_ring` streams physics tiles
+        // (static collider suppressed above). Both sample the retained `DemHeightField`.
+        if let Some(oracle) = built.oracle {
+            e.try_insert(crate::stream_viz::DemHeightField(oracle));
             if lod_viz {
-                e.insert((
+                e.try_insert((
                     crate::stream_viz::TerrainLodViz::default(),
                     crate::stream_viz::LodTiles::default(),
                     crate::stream_viz::PendingTileBakes::default(),
+                    crate::stream_viz::TerrainNodeErrors::default(),
+                    // Default Lit; switchable live in the Inspector (Terrain Shader).
                     crate::stream_viz::TerrainShaderMode::default(),
                 ));
             }
             if collider_ring {
-                e.insert((
+                e.try_insert((
                     crate::collider_ring::TerrainColliderRing::default(),
                     crate::collider_ring::ColliderTiles::default(),
+                    crate::collider_ring::PendingColliderBakes::default(),
                 ));
             }
         }
@@ -643,6 +805,9 @@ fn finish_dem_worker(
         Has<Mesh3d>,
     )>,
     scattered: Query<Entity, With<crate::terrain_layers::TerrainScatterEntity>>,
+    // The authored layer stack per terrain — its analytic crater/edit modifiers are
+    // re-composed onto the worker's bare grid so web keeps full analytic realism.
+    stacks: Query<&crate::terrain_layers::TerrainLayerStack>,
     mut meshes: Option<ResMut<Assets<Mesh>>>,
     mut materials: Option<ResMut<Assets<StandardMaterial>>>,
 ) {
@@ -657,6 +822,7 @@ fn finish_dem_worker(
         };
         match (reply.stage, reply.grid) {
             (lunco_terrain_bake::BakeStage::Coarse, Ok(grid)) => {
+                let contributions = layer_contributions(stacks.get(entity).ok(), grid.half_extent);
                 let baked = BakedGrid {
                     base_grid: grid.clone(),
                     grid,
@@ -665,7 +831,8 @@ fn finish_dem_worker(
                     res: reply.res,
                     stage: lunco_terrain_bake::BakeStage::Coarse,
                 };
-                let built = dem_build_from_baked(baked, job.collider_ring, job.lod_viz);
+                let built =
+                    dem_build_from_baked(baked, job.collider_ring, job.lod_viz, contributions);
                 // Drop the request so the physics hold releases (rovers settle on the
                 // coarse collider). Keep DemWorkerJob to receive the full grid.
                 commands.entity(entity).remove::<DemTerrainRequest>();
@@ -681,11 +848,17 @@ fn finish_dem_worker(
                 );
             }
             (lunco_terrain_bake::BakeStage::Full, Ok(grid)) => {
+                // Re-compose the analytic oracle on the worker's full bare grid.
+                let contributions = layer_contributions(stacks.get(entity).ok(), grid.half_extent);
                 if let Ok((mut hf, tiles, pending, has_static_mesh)) = swap_q.get_mut(entity) {
+                    let oracle = std::sync::Arc::new(crate::oracle::SurfaceOracle::new(
+                        std::sync::Arc::new(grid),
+                        contributions,
+                    ));
                     swap_terrain_grid(
                         &mut commands,
                         entity,
-                        grid,
+                        oracle,
                         job.collider_ring,
                         &mut hf,
                         tiles,
@@ -706,7 +879,8 @@ fn finish_dem_worker(
                         res: reply.res,
                         stage: lunco_terrain_bake::BakeStage::Full,
                     };
-                    let built = dem_build_from_baked(baked, job.collider_ring, job.lod_viz);
+                    let built =
+                        dem_build_from_baked(baked, job.collider_ring, job.lod_viz, contributions);
                     commands.entity(entity).remove::<DemTerrainRequest>();
                     assemble_dem_build(
                         &mut commands,
@@ -741,16 +915,17 @@ fn finish_dem_worker(
     }
 }
 
-/// Swap a freshly (re)baked grid into a live terrain: replace `DemHeightField`,
-/// rebuild the static mesh if it uses one, arm the debounced static-collider
-/// rebuild (unless a collider ring streams physics), and invalidate the LOD tiles
-/// so they refresh near-camera-first with no despawn flash. Shared by the live
-/// re-stamp ([`finish_dem_restamp`]) and the web worker's full-grid reply.
+/// Swap a freshly (re)baked surface oracle into a live terrain: replace
+/// `DemHeightField`, rebuild the static mesh if it uses one, arm the debounced
+/// static-collider rebuild (unless a collider ring streams physics), and invalidate
+/// the LOD tiles so they refresh near-camera-first with no despawn flash. The web
+/// worker's full-grid reply composes the oracle then calls this.
+#[cfg(target_arch = "wasm32")]
 #[allow(clippy::too_many_arguments)]
 fn swap_terrain_grid(
     commands: &mut Commands,
     entity: Entity,
-    grid: HeightGrid,
+    oracle: std::sync::Arc<crate::oracle::SurfaceOracle>,
     collider_ring: bool,
     hf: &mut crate::stream_viz::DemHeightField,
     tiles: Option<Mut<crate::stream_viz::LodTiles>>,
@@ -767,12 +942,12 @@ fn swap_terrain_grid(
     }
     if has_static_mesh {
         if let Some(meshes) = meshes {
-            let MeshData { positions, normals, uvs, indices } = grid.to_mesh_data();
+            let MeshData { positions, normals, uvs, indices } = oracle.materialize().to_mesh_data();
             let handle = meshes.add(lunco_obstacle_field::grid_mesh(positions, normals, uvs, indices));
             commands.entity(entity).insert(Mesh3d(handle));
         }
     }
-    *hf = crate::stream_viz::DemHeightField(std::sync::Arc::new(grid));
+    *hf = crate::stream_viz::DemHeightField(oracle);
     // Progressive refresh: reap any already-stale tiles (keep ≤1 generation of
     // cover), bump the generation so live tiles re-bake near-first, drop in-flight
     // bakes from the OLD heights.
@@ -795,7 +970,7 @@ fn swap_terrain_grid(
 /// split off into a separate debounced task ([`DemColliderDirty`]/[`DemColliderTask`])
 /// so the visible terrain updates ~immediately and physics catches up after.
 #[derive(Component)]
-struct DemRestampTask(Task<HeightGrid>);
+pub(crate) struct DemRestampTask(Task<std::sync::Arc<crate::oracle::SurfaceOracle>>);
 
 /// Armed after a visual re-stamp swaps new heights in (non-collider-ring terrains):
 /// once it settles, the static heightfield collider is rebuilt off-thread from the
@@ -819,7 +994,7 @@ const COLLIDER_DEBOUNCE_SECS: f32 = 0.6;
 /// slider streams responsively (first edit starts immediately) and settles on a final
 /// re-bake, instead of queueing a full re-stamp every frame of the drag.
 #[derive(Component)]
-struct DemRestampPending;
+pub(crate) struct DemRestampPending;
 
 /// Debounce armed on each layer-stack change; the re-stamp only kicks off once it
 /// elapses with no further change. Re-stamping the *whole* DEM is heavy (clone +
@@ -833,9 +1008,11 @@ struct DemRestampDebounce(Timer);
 /// swallow a continuous slider drag, short enough to feel responsive on release.
 const RESTAMP_DEBOUNCE_SECS: f32 = 0.3;
 
-/// Spawn the off-thread **visual** re-stamp task: clone the pristine (upscaled,
-/// crater-free) [`DemBaseGrid`] and stamp the stack's geometry layers into it. Just
-/// the grid — the collider rebuild is deferred ([`DemColliderDirty`]) so the visuals
+/// Spawn the off-thread **re-compose** task: rebuild the surface oracle from the
+/// pristine [`DemBaseGrid`] + the stack's current layers. With analytic height
+/// layers this is CHEAP (placement generation, no grid-wide rasterisation) — a
+/// raster `stamp` layer still folds into a cloned base first. Just the oracle —
+/// the static-collider rebuild is deferred ([`DemColliderDirty`]) so the visuals
 /// don't wait on it.
 fn spawn_restamp_task(
     commands: &mut Commands,
@@ -846,13 +1023,19 @@ fn spawn_restamp_task(
     let base_grid = base.0.clone();
     let layers: Vec<_> = stack.0.iter().map(|e| e.layer.clone()).collect();
     let task = AsyncComputeTaskPool::get().spawn(async move {
+        let half_extent = base_grid.half_extent;
         let mut grid = (*base_grid).clone();
         for layer in &layers {
             layer.stamp(&mut grid);
         }
-        grid
+        let contributions: Vec<_> =
+            layers.iter().filter_map(|l| l.height_modifier(half_extent)).collect();
+        std::sync::Arc::new(crate::oracle::SurfaceOracle::new(
+            std::sync::Arc::new(grid),
+            contributions,
+        ))
     });
-    commands.entity(entity).insert(DemRestampTask(task));
+    commands.entity(entity).try_insert(DemRestampTask(task));
 }
 
 /// Live **re-bake** of the DEM crater + rock layers when the shared
@@ -889,7 +1072,7 @@ fn start_dem_restamp(
                     d.0.reset();
                 }
                 None => {
-                    commands.entity(entity).insert(DemRestampDebounce(Timer::from_seconds(
+                    commands.entity(entity).try_insert(DemRestampDebounce(Timer::from_seconds(
                         RESTAMP_DEBOUNCE_SECS,
                         TimerMode::Once,
                     )));
@@ -902,10 +1085,10 @@ fn start_dem_restamp(
         if !d.0.tick(time.delta()).just_finished() {
             continue;
         }
-        commands.entity(entity).remove::<DemRestampDebounce>();
+        commands.entity(entity).try_remove::<DemRestampDebounce>();
         if busy {
             // A re-stamp is still running → mark for one coalesced trailing run.
-            commands.entity(entity).insert(DemRestampPending);
+            commands.entity(entity).try_insert(DemRestampPending);
             continue;
         }
         spawn_restamp_task(&mut commands, entity, base, &stack);
@@ -917,7 +1100,7 @@ fn start_dem_restamp(
 /// tiles go stale and re-bake near-camera-first (covering the surface meanwhile)
 /// rather than all being despawned at once. Rocks/overlays re-scatter next frame.
 #[allow(clippy::type_complexity)]
-fn finish_dem_restamp(
+pub(crate) fn finish_dem_restamp(
     mut commands: Commands,
     mut tasks: Query<(
         Entity,
@@ -928,40 +1111,99 @@ fn finish_dem_restamp(
         Option<&mut crate::stream_viz::PendingTileBakes>,
         Has<Mesh3d>,
         Has<DemRestampPending>,
+        Option<&TerrainDirty>,
     )>,
     scattered: Query<Entity, With<crate::terrain_layers::TerrainScatterEntity>>,
     mut meshes: Option<ResMut<Assets<Mesh>>>,
+    mut mesh_cache: ResMut<crate::stream_viz::LodMeshCache>,
 ) {
     use bevy::tasks::futures_lite::future;
-    let mut any = false;
-    for (entity, mut task, src, mut hf, tiles, pending, has_static_mesh, was_pending) in &mut tasks {
-        let Some(grid) = future::block_on(future::poll_once(&mut task.0)) else {
+    // Whether ANY terrain did a WHOLE-terrain re-bake this pass (spec change / load) —
+    // only then do the (global) scatter entities need dropping + rebuilding.
+    let mut any_full = false;
+    for (entity, mut task, src, mut hf, tiles, pending, has_static_mesh, was_pending, dirty) in
+        &mut tasks
+    {
+        let Some(oracle) = future::block_on(future::poll_once(&mut task.0)) else {
             continue;
         };
-        commands.entity(entity).remove::<DemRestampTask>();
-        any = true;
+        commands.entity(entity).try_remove::<DemRestampTask>();
 
-        let half = grid.half_extent as f64;
-        // Swap the re-stamped grid in via the SAME machinery the web worker's full
-        // grid uses: arm the debounced collider rebuild, rebuild the static mesh if
-        // any, replace `DemHeightField`, and invalidate the LOD tiles progressively.
-        swap_terrain_grid(
-            &mut commands,
-            entity,
-            grid,
-            src.collider_ring,
-            &mut hf,
-            tiles,
-            pending,
-            has_static_mesh,
-            meshes.as_deref_mut(),
-        );
+        // The region this re-bake must refresh: `Some` = a bounded edit (only those
+        // tiles + no rock re-scatter); `None`/absent = whole terrain.
+        let dirty_bounds = dirty.and_then(|d| d.bounds);
+        let scoped = dirty_bounds.is_some();
+        // Consume the mark so the NEXT change starts clean.
+        commands.entity(entity).try_remove::<TerrainDirty>();
+
+        let half = oracle.half_extent() as f64;
+
+        // Defer the (heavy) static-collider rebuild: arm its debounce instead of
+        // building it here, so the VISUAL swap below lands immediately and physics
+        // reconverges shortly after. Collider-ring terrains stream physics → no
+        // static collider to rebuild.
+        if !src.collider_ring {
+            commands.entity(entity).try_insert(DemColliderDirty(Timer::from_seconds(
+                COLLIDER_DEBOUNCE_SECS,
+                TimerMode::Once,
+            )));
+        }
+        // Rebuild the static visual mesh, if this terrain uses one (not streaming).
+        if has_static_mesh {
+            if let Some(meshes) = meshes.as_mut() {
+                let MeshData { positions, normals, uvs, indices } = oracle.materialize().to_mesh_data();
+                commands.entity(entity).try_insert(Mesh3d(meshes.add(
+                    lunco_obstacle_field::grid_mesh(positions, normals, uvs, indices),
+                )));
+            }
+        }
+        // Hand the edited region to the collider ring so it re-bakes ONLY the tiles the
+        // edit touched (and skips rings the edit doesn't reach), instead of despawning +
+        // rebuilding every ring tile on any oracle swap (the burst physics spike). Keyed
+        // by the new oracle's `surface_key` so `update_collider_ring` matches this exact
+        // swap; captured BEFORE the oracle moves into `hf`. `None` bounds = whole terrain.
+        let new_oracle_key = oracle.surface_key();
+        commands.entity(entity).try_insert(crate::collider_ring::ColliderDirtyRegion {
+            bounds: dirty_bounds,
+            oracle_key: new_oracle_key,
+        });
+        // Swap in the new surface (streaming tiles, collider ring, TerrainHeight query).
+        *hf = crate::stream_viz::DemHeightField(oracle);
+
+        // Progressive refresh: bump the generation so live tiles go stale + re-bake
+        // near-first (still covering the surface), and drop in-flight bakes from the
+        // OLD heights. No despawn-everything flash. First REAP any tiles already stale
+        // from a prior re-bake so rapid edits keep at most one generation of cover —
+        // otherwise dead tiles pile up and the per-frame bookkeeping goes O(n²).
+        if let Some(mut tiles) = tiles {
+            for e in tiles.reap_stale() {
+                commands.entity(e).try_despawn();
+            }
+            // Only tiles overlapping the edited patch go stale + re-bake; a whole-
+            // terrain change (`None`) invalidates all, as before.
+            tiles.invalidate_region(dirty_bounds, half);
+        }
+        if let Some(mut pending) = pending {
+            *pending = crate::stream_viz::PendingTileBakes::default();
+        }
+        // The per-node mesh cache assumes geometry is a pure function of the coord,
+        // which a live edit breaks — drop the entries the edit touched (or all, on a
+        // whole-terrain change) so re-baked tiles pick up the new heights.
+        mesh_cache.drop_region(dirty_bounds, half);
+
+        // A bounded edit leaves the crater/rock fields untouched, so DON'T re-scatter
+        // (that despawn+respawn of every rock is a big part of the per-edit cost). A
+        // whole-terrain change re-scatters: clear the applied-marker so scatter re-runs.
+        if !scoped {
+            commands.entity(entity).try_remove::<crate::terrain_layers::TerrainLayersApplied>();
+            any_full = true;
+        }
 
         // Coalesced trailing re-bake (a change arrived mid-task): re-arm the debounce
         // rather than spawning immediately, so a still-active drag keeps coalescing.
         if was_pending {
-            commands.entity(entity).remove::<DemRestampPending>();
-            commands.entity(entity).insert(DemRestampDebounce(Timer::from_seconds(
+            commands.entity(entity).try_remove::<DemRestampPending>();
+            commands.entity(entity).try_insert(DemRestampDebounce(Timer::from_seconds(
                 RESTAMP_DEBOUNCE_SECS,
                 TimerMode::Once,
             )));
@@ -969,11 +1211,10 @@ fn finish_dem_restamp(
         info!("[dem-terrain] regenerated terrain layers (±{:.0} m)", half);
     }
 
-    if any {
-        // Cached tile meshes are stale now → drop so re-baked tiles pick up the new
-        // heights (the cache is keyed by quadtree node, not terrain).
-        commands.insert_resource(crate::stream_viz::LodMeshCache::default());
-        // Despawn old scatter entities (rocks, crater overlays); scatter rebuilds.
+    if any_full {
+        // A whole-terrain re-bake happened (spec change / load): every scatter entity
+        // (rocks, crater overlays) may have moved, so drop them and let the scatter
+        // layers rebuild. Bounded edits skip this entirely (rocks are unchanged).
         for e in &scattered {
             commands.entity(e).try_despawn();
         }
@@ -1000,22 +1241,25 @@ fn start_dem_collider(
         if !dirty.0.tick(time.delta()).just_finished() {
             continue;
         }
-        commands.entity(entity).remove::<DemColliderDirty>();
+        commands.entity(entity).try_remove::<DemColliderDirty>();
         if busy {
             // A build is still running with older heights → re-arm so we rebuild once
             // more from the latest grid when it frees up.
-            commands.entity(entity).insert(DemColliderDirty(Timer::from_seconds(
+            commands.entity(entity).try_insert(DemColliderDirty(Timer::from_seconds(
                 COLLIDER_DEBOUNCE_SECS,
                 TimerMode::Once,
             )));
             continue;
         }
-        let grid = hf.0.clone();
+        let oracle = hf.0.clone();
         let task = AsyncComputeTaskPool::get().spawn(async move {
+            // Rasterise the composed surface at base resolution for the one static
+            // heightfield (streamed rings sample the oracle per-tile instead).
+            let grid = oracle.materialize();
             let h = grid.half_extent as f64;
             Collider::heightfield(grid.to_avian_heights(), DVec3::new(2.0 * h, 1.0, 2.0 * h))
         });
-        commands.entity(entity).insert(DemColliderTask(task));
+        commands.entity(entity).try_insert(DemColliderTask(task));
     }
 }
 
@@ -1031,7 +1275,7 @@ fn finish_dem_collider(
         };
         commands
             .entity(entity)
-            .remove::<DemColliderTask>()
+            .try_remove::<DemColliderTask>()
             .insert((RigidBody::Static, collider));
     }
 }
@@ -1070,13 +1314,134 @@ fn on_obstacle_spec_rebuild_layers(
     }
 }
 
+// ── Incremental region re-bake ────────────────────────────────────────────────
+
+/// The region a pending re-bake must refresh, accumulated from the edits since the
+/// last bake. `Some([min_x, min_z, max_x, max_z])` (terrain-local metres) = a bounded
+/// patch (a brush/flatten touches only `center ± radius`): [`finish_dem_restamp`]
+/// re-bakes only the tiles overlapping it and leaves the rock scatter alone. `None`
+/// — or the component absent — = whole terrain (a spec change / first load).
+/// Consumed (removed) by the re-bake. This is what turns an edit into an O(patch)
+/// re-bake instead of O(whole map). New layer types get incremental re-bake for free
+/// by declaring their footprint here; undo/redo scopes via the removed edit's bounds.
+#[derive(Component, Default)]
+pub struct TerrainDirty {
+    /// Union of dirtied AABBs, or `None` = whole terrain (sticky once whole).
+    pub bounds: Option<[f64; 4]>,
+}
+
+impl TerrainDirty {
+    /// Grow the dirty region by a bounded edit's AABB. A whole-terrain (`None`) mark
+    /// is a superset, so a later bounded patch can never shrink it back.
+    fn grow(&mut self, aabb: [f64; 4]) {
+        if let Some(b) = &mut self.bounds {
+            b[0] = b[0].min(aabb[0]);
+            b[1] = b[1].min(aabb[1]);
+            b[2] = b[2].max(aabb[2]);
+            b[3] = b[3].max(aabb[3]);
+        }
+    }
+}
+
+/// Accumulate `mark` onto every re-stampable DEM terrain (doc-free AND doc-backed —
+/// this keys off the edit *command*, not which apply-path ran). `Some(aabb)` grows the
+/// patch; `None` marks the whole terrain.
+fn accumulate_terrain_dirty(
+    commands: &mut Commands,
+    q: &mut Query<(Entity, Option<&mut TerrainDirty>), With<DemBaseGrid>>,
+    mark: Option<[f64; 4]>,
+) {
+    for (e, dirty) in q.iter_mut() {
+        match (dirty, mark) {
+            (Some(mut d), Some(aabb)) => d.grow(aabb),
+            (Some(mut d), None) => d.bounds = None, // whole terrain wins (sticky)
+            (None, m) => {
+                commands.entity(e).try_insert(TerrainDirty { bounds: m });
+            }
+        }
+    }
+}
+
+fn edit_command_aabb(x: f32, z: f32, radius: f32) -> [f64; 4] {
+    [(x - radius) as f64, (z - radius) as f64, (x + radius) as f64, (z + radius) as f64]
+}
+
+/// Mark a brush edit's footprint dirty (see [`TerrainDirty`]). Registered alongside
+/// [`on_brush_terrain`] / the doc-backed authoring observer — it only records the
+/// region; the apply-path does the height change.
+fn on_brush_terrain_dirty(
+    trigger: On<BrushTerrain>,
+    mut commands: Commands,
+    mut q: Query<(Entity, Option<&mut TerrainDirty>), With<DemBaseGrid>>,
+) {
+    let ev = trigger.event();
+    if ev.radius <= 0.0 {
+        return;
+    }
+    accumulate_terrain_dirty(&mut commands, &mut q, Some(edit_command_aabb(ev.x, ev.z, ev.radius)));
+}
+
+/// Mark a flatten edit's footprint dirty (see [`TerrainDirty`]).
+fn on_flatten_terrain_dirty(
+    trigger: On<FlattenTerrain>,
+    mut commands: Commands,
+    mut q: Query<(Entity, Option<&mut TerrainDirty>), With<DemBaseGrid>>,
+) {
+    let ev = trigger.event();
+    if ev.radius <= 0.0 {
+        return;
+    }
+    accumulate_terrain_dirty(&mut commands, &mut q, Some(edit_command_aabb(ev.x, ev.z, ev.radius)));
+}
+
+/// Scope an undo/remove to the removed edit's footprint (see [`TerrainDirty`]). A
+/// removed brush/flatten dirties only its own AABB; removing a whole layer (crater/
+/// rock) or an unknown id falls back to a whole-terrain re-bake. Reads the stack
+/// BEFORE the removal observer runs (registered first), so the edit is still present.
+fn on_remove_terrain_layer_dirty(
+    trigger: On<RemoveTerrainLayer>,
+    mut commands: Commands,
+    mut q: Query<
+        (Entity, &crate::terrain_layers::TerrainLayerStack, Option<&mut TerrainDirty>),
+        With<DemBaseGrid>,
+    >,
+) {
+    let id = crate::terrain_layers::LayerId::new(trigger.event().id.clone());
+    for (e, stack, dirty) in q.iter_mut() {
+        let mark = stack.edit_bounds(&id); // Some = a bounded edit; None = whole layer / absent
+        match (dirty, mark) {
+            (Some(mut d), Some(aabb)) => d.grow(aabb),
+            (Some(mut d), None) => d.bounds = None,
+            (None, m) => {
+                commands.entity(e).try_insert(TerrainDirty { bounds: m });
+            }
+        }
+    }
+}
+
+/// A live crater/rock spec change re-bakes the WHOLE terrain, so mark it as such.
+fn on_obstacle_spec_dirty(
+    _trigger: On<lunco_obstacle_field::plugin::UpdateObstacleFieldSpec>,
+    mut commands: Commands,
+    mut q: Query<(Entity, Option<&mut TerrainDirty>), With<DemBaseGrid>>,
+) {
+    accumulate_terrain_dirty(&mut commands, &mut q, None);
+}
+
 /// Register the DEM-terrain command + spawn systems. Called from
 /// [`crate::plugin::TerrainSurfacePlugin`].
 pub(crate) fn register(app: &mut App) {
     app.register_type::<SpawnDemTerrain>()
         .init_resource::<TerrainEditSeq>()
+        .init_resource::<crate::stream_viz::LodMeshCache>()
         .add_message::<RegenerateTerrainLayers>()
         .add_observer(on_obstacle_spec_rebuild_layers)
+        // Dirty-region markers — registered BEFORE the command observers (below) so a
+        // remove reads the edit's bounds before the removal applies.
+        .add_observer(on_brush_terrain_dirty)
+        .add_observer(on_flatten_terrain_dirty)
+        .add_observer(on_remove_terrain_layer_dirty)
+        .add_observer(on_obstacle_spec_dirty)
         .add_systems(
             Update,
             (

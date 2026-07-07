@@ -1,5 +1,6 @@
 //! Built-in **rocks** layer: scatters faceted boulders ON the DEM surface (static
-//! drivable obstacles, LOD-culled), ground height resolved from the stamped grid.
+//! drivable obstacles, LOD-culled), ground height resolved from the composed
+//! surface oracle (so rocks sit correctly in/around analytic craters and edits).
 
 use std::sync::Arc;
 
@@ -67,8 +68,8 @@ impl TerrainLayer for RockScatterLayer {
         "rocks"
     }
     fn scatter(&self, cx: &mut LayerScatterCx) {
-        let grid = cx.grid;
-        let half = self.region_half_extent.min(grid.half_extent);
+        let oracle = cx.oracle;
+        let half = self.region_half_extent.min(oracle.half_extent());
         if half <= 0.0 {
             return;
         }
@@ -111,7 +112,11 @@ impl TerrainLayer for RockScatterLayer {
         });
         let rock_material = cx.materials.as_deref_mut().map(|materials| {
             materials.add(StandardMaterial {
-                base_color: Color::srgb(0.10, 0.10, 0.11),
+                // Exposed boulders are BRIGHTER than mature regolith (~0.2 vs
+                // ~0.12 albedo — fresh rock faces vs gardened dust). Near-black
+                // rocks with no cast shadow were literally invisible inside
+                // shadowed crater bowls — solid but unseeable = "invisible wall".
+                base_color: Color::srgb(0.19, 0.19, 0.20),
                 perceptual_roughness: 1.0,
                 ..default()
             })
@@ -121,25 +126,44 @@ impl TerrainLayer for RockScatterLayer {
             let t = ((sz - size.min) / span).clamp(0.0, 1.0);
             ((t * (ROCK_BUCKETS - 1) as f32).round() as usize).min(ROCK_BUCKETS - 1)
         };
+        // The VISUAL a rock gets is its bucket's shared mesh — extent ~0.5–0.7 of
+        // the bucket radius (`faceted_rock_mesh` boxes: half-extents ≤ 0.48·r,
+        // offsets ≤ 0.4·r) — NOT `p.size`. Size collider + sink from the same
+        // bucket radius (derivable headless → identical colliders on the server)
+        // or the wheel stops on an invisible shell up to a metre before the
+        // visible rock: THE "rover hits an invisible wall" report. 0.6·r sunk
+        // 0.25·r keeps the collider inside the visual mass.
+        let bucket_radius =
+            |b: usize| -> f32 { size.min + span * (b as f32 / (ROCK_BUCKETS - 1) as f32) };
 
         let mut spawned = 0usize;
         cx.commands.entity(cx.terrain).with_children(|parent| {
             for p in &placements {
-                let y = grid.height_at(p.pos.x, p.pos.y);
+                let y = lunco_terrain_core::HeightSource::height_at(
+                    oracle,
+                    p.pos.x as f64,
+                    p.pos.y as f64,
+                ) as f32;
+                let r_vis = bucket_radius(bucket_of(p.size)).max(0.05);
                 let mut rock = parent.spawn((
                     TerrainRock,
                     TerrainScatterEntity,
                     Name::new("TerrainRock"),
-                    Transform::from_xyz(p.pos.x, y - p.size * 0.25, p.pos.y)
+                    Transform::from_xyz(p.pos.x, y - r_vis * 0.25, p.pos.y)
                         .with_rotation(Quat::from_rotation_y(p.yaw)),
                     Visibility::Inherited,
                     RigidBody::Static,
-                    Collider::sphere((p.size * 0.8) as f64),
+                    Collider::sphere((r_vis * 0.6) as f64),
                 ));
                 if let (Some(handles), Some(mat)) = (&bucket_handles, &rock_material) {
                     rock.insert((
                         Mesh3d(handles[bucket_of(p.size)].clone()),
                         MeshMaterial3d(mat.clone()),
+                        // Hundreds-to-thousands of scattered rocks: casting each into all
+                        // 4 sun cascades every frame is a big chunk of the shadow pass.
+                        // They still RECEIVE shadows; skip casting (their own tiny
+                        // contact shadow isn't worth 4× re-submission of the whole field).
+                        bevy::light::NotShadowCaster,
                     ));
                     // Distance LOD cull — native only (see `rock_visibility_range`).
                     #[cfg(not(target_arch = "wasm32"))]

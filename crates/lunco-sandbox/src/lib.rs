@@ -567,7 +567,7 @@ fn replay_scenario_journal_shader(
                 // Same hot-reload hook as the local edit: overwrite the asset id
                 // every material holds so the recompile propagates.
                 let handle = asset_server.load::<bevy::shader::Shader>(path.clone());
-                shaders.insert(handle.id(), bevy::shader::Shader::from_wgsl(source, path));
+                let _ = shaders.insert(handle.id(), bevy::shader::Shader::from_wgsl(source, path));
             }
         }
         applied.insert(id);
@@ -1552,6 +1552,7 @@ impl Plugin for SandboxCorePlugin {
                 refresh_layered_terrain_layers,
                 cache_terrain_document,
                 refresh_docbacked_terrain_from_doc,
+                track_ground_collider_pending,
             ),
         );
         // Authoring tier: doc-backed terrains route live edits to their USD document's
@@ -1570,6 +1571,13 @@ impl Plugin for SandboxCorePlugin {
         // collider).
         #[cfg(feature = "ui")]
         app.add_systems(Update, bind_terrain_layers);
+
+        // Terrain-streaming progress → status bar: while the wanted tile set is
+        // still baking in, show "streaming terrain N/M" (with the bus's progress
+        // bar) instead of leaving the viewport an unexplained black void on
+        // scene open. Pure derived read of `TerrainStreamStatus`.
+        #[cfg(feature = "ui")]
+        app.add_systems(Update, report_terrain_stream_status);
 
         // Engine light-handling policy: the locally-possessed vessel's headlights
         // cast shadows, the parked rovers stay cheap (reactive on possession
@@ -1594,6 +1602,46 @@ impl Plugin for SandboxCorePlugin {
 /// Marks a USD prim already examined by the DEM bridge (one-shot per prim).
 #[derive(Component)]
 struct DemBridged;
+
+/// Hold dynamic-body activation while ground might still be on its way:
+/// - a DEM terrain build is in flight (`DemTerrainRequest` — removed in the same
+///   command batch that inserts the finished collider / oracle), OR
+/// - the DEM bridge hasn't examined every USD prim yet (`Without<DemBridged>`) —
+///   a terrain prim may be about to request a build, and rovers activate within
+///   frames of spawn, so gating only on the request loses the startup race.
+///
+/// Without this gate a rover spawned over not-yet-collidable terrain free-falls
+/// through the surface during the multi-second off-thread collider bake and is
+/// lost below the map. Bounded by a timeout so a permanently-unbridgeable prim
+/// (stage asset without a recipe) degrades to a loud warning instead of freezing
+/// every dynamic body forever. This crate is the assembly point that sees both
+/// `lunco-terrain-surface` (the request) and `lunco-usd-sim` (the activation
+/// gate resource, via the `lunco-usd` facade).
+fn track_ground_collider_pending(
+    time: Res<Time>,
+    building: Query<(), With<lunco_terrain_surface::DemTerrainRequest>>,
+    unexamined: Query<(), (With<lunco_usd::UsdPrimPath>, Without<DemBridged>)>,
+    mut held_secs: Local<f32>,
+    mut pending: ResMut<lunco_usd::GroundColliderPending>,
+) {
+    const MAX_HOLD_SECS: f32 = 30.0;
+    let want = !building.is_empty() || !unexamined.is_empty();
+    if want {
+        *held_secs += time.delta_secs();
+    } else {
+        *held_secs = 0.0;
+    }
+    let now = want && *held_secs < MAX_HOLD_SECS;
+    if want && !now && pending.0 {
+        warn!(
+            "[terrain] ground-collider gate held {MAX_HOLD_SECS}s — releasing dynamic bodies \
+             (unbridgeable USD prim or stuck terrain build?)"
+        );
+    }
+    if pending.0 != now {
+        pending.0 = now;
+    }
+}
 
 /// One-shot marker: the terrain's layer maps have been bound (or the prim authors
 /// none), so [`bind_terrain_layers`] stops re-scanning it.
@@ -1649,6 +1697,29 @@ fn read_authored_layer_maps<R: UsdRead>(
         .collect()
 }
 
+/// Mirror [`lunco_terrain_surface::TerrainStreamStatus`] into the workbench
+/// [`StatusBus`](lunco_workbench::status_bus::StatusBus) so scene-open tile
+/// baking is visible ("streaming terrain N/M" + progress bar) instead of an
+/// unexplained black viewport. Progress entries auto-clear once the wanted set
+/// is fully resident.
+#[cfg(feature = "ui")]
+fn report_terrain_stream_status(
+    status: Res<lunco_terrain_surface::TerrainStreamStatus>,
+    mut bus: ResMut<lunco_workbench::status_bus::StatusBus>,
+) {
+    const SOURCE: &str = "terrain";
+    if status.wanted > 0 && status.resident < status.wanted {
+        bus.push_progress(
+            SOURCE,
+            format!("streaming terrain tiles {}/{}", status.resident, status.wanted),
+            status.resident as u64,
+            status.wanted as u64,
+        );
+    } else {
+        bus.clear_progress(SOURCE);
+    }
+}
+
 #[cfg(feature = "ui")]
 fn bind_terrain_layers(
     q: Query<
@@ -1673,7 +1744,7 @@ fn bind_terrain_layers(
 
     for (entity, prim_path, mat3d) in &q {
         let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else {
-            commands.entity(entity).insert(TerrainLayersBound);
+            commands.entity(entity).try_insert(TerrainLayersBound);
             continue;
         };
 
@@ -1697,7 +1768,7 @@ fn bind_terrain_layers(
 
         if authored.is_empty() {
             // No layer authored — stop re-scanning this terrain.
-            commands.entity(entity).insert(TerrainLayersBound);
+            commands.entity(entity).try_insert(TerrainLayersBound);
             continue;
         }
         // Resolve relative to the open Twin via the `twin://<name>/<rel>` source.
@@ -1714,7 +1785,7 @@ fn bind_terrain_layers(
             }
             info!("[usd-dem] bound terrain {} layer '{rel}' (weight {weight}) → {uri}", role.name);
         }
-        commands.entity(entity).insert(TerrainLayersBound);
+        commands.entity(entity).try_insert(TerrainLayersBound);
     }
 }
 
@@ -1770,6 +1841,9 @@ fn parse_terrain_layer_stack<R: UsdRead>(
     // Runtime edit prims (`lunco:layer = "edit"`) — one prim per edit — aggregate into
     // the single `EditsLayer` (the runtime projection tier), folded on top at the end.
     let mut edits: Vec<(lunco_terrain_surface::LayerId, lunco_terrain_surface::EditKind)> = Vec::new();
+    // Whether the scene authors its OWN overzoom prim (even a zeroed/disabled one
+    // counts — that's an explicit opt-out of the default sub-DEM detail).
+    let mut authored_overzoom = false;
     for child in reader.children(terrain) {
         let attrs = UsdLayerAttrs { reader, sdf: child.clone() };
         // An edit prim (carries the packed `lunco:edit`)? Aggregate into the single
@@ -1787,6 +1861,9 @@ fn parse_terrain_layer_stack<R: UsdRead>(
         if layer_type == "dem" {
             continue;
         }
+        if layer_type == "overzoom" {
+            authored_overzoom = true;
+        }
         if !registry.knows(&layer_type) {
             warn!("[usd-dem] child layer '{layer_type}' has no registered terrain layer parser");
             continue;
@@ -1796,6 +1873,13 @@ fn parse_terrain_layer_stack<R: UsdRead>(
             // several same-kind layers coexist and be addressed individually.
             stack.push_layer(child.as_str(), layer);
         }
+    }
+    // Sub-DEM detail defaults ON: without it the ground between the finest shader
+    // grain (~12 cm) and the DEM data resolution (~5 m) is empty in every channel
+    // and reads as flat plastic one step from the camera. Authoring an `overzoom`
+    // prim — including a zeroed one — takes over from the default.
+    if !authored_overzoom {
+        stack.push_layer("overzoom/default", lunco_terrain_surface::default_overzoom_layer());
     }
     if !edits.is_empty() {
         stack.push_layer(
@@ -1809,7 +1893,7 @@ fn parse_terrain_layer_stack<R: UsdRead>(
 /// Seed the shared [`ObstacleFieldSpec`] from the USD-authored `craters`/`rocks` child
 /// layer prims so the Inspector's "Craters & Rocks" panel opens showing the scene's
 /// ACTUAL values (density, size, ratios) instead of the resource defaults. Mirrors the
-/// `SizeDist` the layer parsers build (`craters` → `new(8, mode, 40, 0.7)`, `rocks` →
+/// `SizeDist` the layer parsers build (`craters` → `new(2, mode, 60, 0.7)`, `rocks` →
 /// `new(0.2, mode, mode*4, 0.6)`) so a subsequent panel edit starts from the authored
 /// look rather than jumping. Writes the resource only (no `UpdateObstacleFieldSpec`,
 /// no re-stamp — the terrain already built from the same USD stack).
@@ -1826,9 +1910,10 @@ fn sync_obstacle_spec_from_usd<R: UsdRead>(
                 let mode = reader.real_f32(&child, "sizeMode").unwrap_or(22.0);
                 spec.craters.enabled = density > 0.0;
                 spec.craters.density = density;
-                spec.craters.depth_ratio = reader.real_f32(&child, "depthRatio").unwrap_or(0.3);
-                spec.craters.rim_height_ratio = reader.real_f32(&child, "rimRatio").unwrap_or(0.5);
-                spec.craters.size = SizeDist::new(8.0, mode, 40.0, 0.7);
+                spec.craters.depth_ratio = reader.real_f32(&child, "depthRatio").unwrap_or(0.4);
+                spec.craters.rim_height_ratio =
+                    reader.real_f32(&child, "rimRatio").unwrap_or(0.18);
+                spec.craters.size = SizeDist::new(2.0, mode, 60.0, 0.7);
                 if let Some(seed) = reader.scalar::<i32>(&child, "seed") {
                     spec.seed = seed as u64;
                 }
@@ -1898,7 +1983,9 @@ fn refresh_layered_terrain_layers(
             continue;
         };
         let stack = parse_terrain_layer_stack(&cs.view(), &sdf, &registry);
-        commands.entity(entity).insert(stack);
+        // Despawn-safe: a scene reload can despawn this terrain between queue
+        // time and apply_deferred — no-op instead of panicking.
+        commands.entity(entity).try_insert(stack);
     }
 }
 
@@ -2066,7 +2153,7 @@ fn cache_terrain_document(
         // change; without this the twin projection would despawn + re-instantiate the
         // terrain (a full DEM re-read) per edit. The exempt marker suppresses that
         // reload; `refresh_docbacked_terrain_from_doc` re-bakes off the registry doc.
-        commands.entity(entity).insert((
+        commands.entity(entity).try_insert((
             TerrainDocument { doc: doc.0 },
             lunco_terrain_surface::DocBackedTerrain,
             lunco_usd::twin_projection::LiveRebuildExempt,
@@ -2140,7 +2227,7 @@ fn refresh_docbacked_terrain_from_doc(
                 if has_runtime_override && !has_base_grid {
                     continue; // retry next frame, once the base grid is built
                 }
-                commands.entity(entity).insert(TerrainDocGeneration(cur_gen));
+                commands.entity(entity).try_insert(TerrainDocGeneration(cur_gen));
                 if !has_runtime_override {
                     continue; // nothing persisted to re-apply
                 }
@@ -2148,9 +2235,14 @@ fn refresh_docbacked_terrain_from_doc(
             }
         }
         let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else { continue };
-        let composed = host.document().composed();
-        let stack = parse_terrain_layer_stack(&composed, &sdf, &parser);
-        commands.entity(entity).insert(stack);
+        // `composed_arc` is memoized by generation, so this shares the SAME recompose
+        // the twin overlay serialize already paid for this edit (was a second full
+        // O(stage) layer merge on the main thread per brush stroke).
+        let composed = host.document().composed_arc();
+        let stack = parse_terrain_layer_stack(composed.as_ref(), &sdf, &parser);
+        // Despawn-safe: a scene reload can despawn this terrain between queue
+        // time and apply_deferred — no-op instead of panicking.
+        commands.entity(entity).try_insert(stack);
     }
 }
 
@@ -2239,6 +2331,20 @@ fn on_obstacle_spec_authored(
 
 fn bridge_usd_dem_terrain(
     q: Query<(Entity, &lunco_usd::UsdPrimPath), Without<DemBridged>>,
+    // Live terrains already realized from a PRIOR instantiation pass. A stage
+    // recompose (runtime-overlay restore, doc-backing) hands every prim a fresh
+    // ECS entity; the previous pass's terrain survives long enough to double
+    // the DEM build. Two live terrains for one authored prim stream two
+    // collider rings from two oracles — the rover rides whichever surface is
+    // higher (a stale smooth ring over the cratered fresh one reads as
+    // "floating over every crater").
+    q_prior_terrains: Query<
+        (Entity, &lunco_usd::UsdPrimPath),
+        Or<(
+            With<lunco_terrain_surface::DemTerrainRequest>,
+            With<lunco_terrain_surface::DemHeightField>,
+        )>,
+    >,
     stages: Res<Assets<lunco_usd::UsdStageAsset>>,
     twins: Res<lunco_assets::twin_source::TwinRoots>,
     asset_server: Res<AssetServer>,
@@ -2261,10 +2367,26 @@ fn bridge_usd_dem_terrain(
             continue;
         }
         let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else {
-            commands.entity(entity).insert(DemBridged);
+            commands.entity(entity).try_insert(DemBridged);
             continue;
         };
-        commands.entity(entity).insert(DemBridged); // examined — don't re-scan
+        commands.entity(entity).try_insert(DemBridged); // examined — don't re-scan
+        // Newest pass wins: retire any prior terrain realized for this same
+        // authored prim (same path + same stage asset). Its LOD tiles, ring
+        // tiles, and scatter are reaped by their respective orphan reapers.
+        for (prior, prior_path) in &q_prior_terrains {
+            if prior != entity
+                && prior_path.path == prim_path.path
+                && prior_path.stage_handle.id() == prim_path.stage_handle.id()
+            {
+                warn!(
+                    "[usd-dem] retiring duplicate terrain entity {prior} for {} \
+                     (superseded by a re-composed instantiation pass)",
+                    prim_path.path
+                );
+                commands.entity(prior).try_despawn();
+            }
+        }
         // Directory of the scene asset this prim came from (e.g.
         // `twins/moonbase`), used to resolve a relative `demSource` when NO
         // Twin is open — the web autoload path (LoadScene from the staged asset
@@ -2369,18 +2491,21 @@ fn bridge_dem_prim_read<R: UsdRead>(
         .unwrap_or(0);
     // `lodViz` = stream CDLOD tiles (default ON) vs one static mesh.
     let lod_viz = attr_bool("lodViz", "lunco:terrain:lodViz").unwrap_or(true);
-    // `colliderRing` = stream a per-rover collider ring vs one static collider.
-    let collider_ring = attr_bool("colliderRing", "lunco:terrain:colliderRing").unwrap_or(false);
-    // `detailUpsample` = INTELLIGENT UPSCALING factor: bilinearly upscale the coarse
-    // DEM ground before stamping craters, so generated craters get high fidelity
-    // (sub-DEM-res rims) decoupled from the ~5 m source. ≤ 1 = native.
-    let detail_upsample = attr_i32("detailUpsample", "lunco:terrain:detailUpsample")
-        .filter(|&u| u > 1)
-        .map(|u| u as usize)
-        .unwrap_or(1);
+    // `colliderRing` = stream a per-body collider ring vs one static collider.
+    // Default FOLLOWS `lodViz`: streamed visuals and the streamed collider are the
+    // two halves of the same milestone — the static full-DEM collider is
+    // Nyquist-gated at the DEM base spacing (~3.9 m), which fades every crater
+    // below ~12 m radius FLAT in physics while the 0.65 m near tiles render deep
+    // bowls (rovers visibly float above / sink into what they see). Author
+    // `lunco:terrain:colliderRing = false` to keep the single static collider.
+    let collider_ring =
+        attr_bool("colliderRing", "lunco:terrain:colliderRing").unwrap_or(lod_viz);
+    // (`detailUpsample` is retired: craters/edits are ANALYTIC modifiers on the
+    // surface oracle now, sampled at each consumer's own resolution — grid
+    // upscaling has nothing left to buy.)
 
     let layer_count = stack.0.len();
-    commands.entity(entity).insert((
+    commands.entity(entity).try_insert((
         lunco_terrain_surface::DemTerrainRequest {
             uri,
             half_window,
@@ -2388,7 +2513,6 @@ fn bridge_dem_prim_read<R: UsdRead>(
             lod_viz,
             collider_ring,
             with_default_material: false,
-            detail_upsample,
         },
         stack,
         lunco_terrain_surface::DemTerrainSurface,
@@ -2417,7 +2541,7 @@ fn bridge_dem_prim_read<R: UsdRead>(
             anchor_height_m: anchor_height.unwrap_or(0.0),
             meters_per_unit: meters_per_unit.unwrap_or(1.0),
         };
-        commands.entity(entity).insert(georef);
+        commands.entity(entity).try_insert(georef);
         info!(
             "[usd-dem] georef: lat {:.4} lon {:.4} height {:.1} m (mpu {})",
             georef.center_lat_deg, georef.center_lon_deg, georef.anchor_height_m, georef.meters_per_unit
@@ -2425,8 +2549,7 @@ fn bridge_dem_prim_read<R: UsdRead>(
     }
     info!(
         "[usd-dem] bridged layered terrain prim {} → DEM '{rel}' (target_res {target_res}, \
-         lod_viz {lod_viz}, collider_ring {collider_ring}, detail_upsample {detail_upsample}, \
-         {layer_count} composed layer(s))",
+         lod_viz {lod_viz}, collider_ring {collider_ring}, {layer_count} composed layer(s))",
         prim_path.path
     );
 }
@@ -2660,15 +2783,11 @@ fn setup_sandbox(world: &mut World) {
             root_prim: String::new(),
         });
     }
-    // NOTE: full USD doc-backing of the `--scene` (Step 0 / E1b `sync_twin_overlays`)
-    // is deliberately NOT enabled here. It works, but its edit path RELOADS +
-    // re-instantiates the WHOLE scene on every USD edit, which fights the terrain's
-    // own lightweight incremental re-bake (`regenerate_dem_layers` on
-    // `Changed<TerrainLayerStack>`) → two re-bake paths → a duplicated scene.
-    // Live terrain tuning instead goes through the terrain's incremental path (the
-    // Inspector → `TerrainLayerStack` edit → `regenerate_dem_layers`). A
-    // lightweight doc-reparse (USD edit → re-parse just the layer stack, no scene
-    // reload) is the future unification — see the design doc.
+    // `--scene` is doc-backed through the same path as any workspace Twin: the
+    // `TwinAdded` above runs the doc-first mount (`open_usd_docs_on_twin_added` →
+    // `drain_pending_twin_docs`), and terrain edits stay on the incremental
+    // re-bake — `LiveRebuildExempt` + `edit_confined_to_exempt_subtree` keep a
+    // terrain-confined USD edit from ever reloading the scene.
 }
 
 /// Tracks the requested startup scene so [`startup_scene_failguard`] can turn a

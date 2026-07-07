@@ -176,7 +176,11 @@ fn attach_release_actuator(
     q: Query<Entity, (Added<lunco_core::ControlBinding>, Without<ReleaseActuator>)>,
 ) {
     for e in &q {
-        commands.entity(e).insert(ReleaseActuator::default());
+        // `try_insert`: scene-load churn (or a doc-backed reload) can despawn a
+        // just-added ControlBinding entity before this deferred insert applies —
+        // a plain `insert` then panics on the invalid entity. Same despawn-safe
+        // idiom as gizmo/hardware/terrain-surface.
+        commands.entity(e).try_insert(ReleaseActuator::default());
     }
 }
 
@@ -2839,7 +2843,7 @@ pub fn on_set_shader_source(
     // overwriting that asset id propagates the recompile to them.
     let handle = asset_server.load::<bevy::shader::Shader>(ev.path.clone());
     let shader = bevy::shader::Shader::from_wgsl(ev.source.clone(), ev.path.clone());
-    shaders.insert(handle.id(), shader);
+    let _ = shaders.insert(handle.id(), shader);
     info!(
         "SET_SHADER_SOURCE: recompiled {} from {} bytes of WGSL",
         ev.path,

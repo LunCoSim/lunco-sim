@@ -136,8 +136,9 @@ impl<S: HeightSource, G: HeightSource> HeightSource for CompositeHeightSource<S,
 }
 
 /// 2D value noise in `[-1, 1]`, bilinearly interpolated over an integer lattice
-/// with a smoothstep fade. Pure function of `(x, z, seed)`.
-fn vnoise(x: f64, z: f64, seed: u64) -> f64 {
+/// with a smoothstep fade. Pure function of `(x, z, seed)`. Shared with the
+/// over-zoom micro-relief synthesiser.
+pub(crate) fn vnoise(x: f64, z: f64, seed: u64) -> f64 {
     let xi = x.floor();
     let zi = z.floor();
     let xf = x - xi;
@@ -158,7 +159,8 @@ fn vnoise(x: f64, z: f64, seed: u64) -> f64 {
 
 /// Deterministic lattice hash → `[0, 1)`. SplitMix64-style avalanche on the
 /// mixed cell coordinates; no platform-dependent float ops in the hash itself.
-fn hash01(x: i64, z: i64, seed: u64) -> f64 {
+/// Shared with the over-zoom craterlet generator.
+pub(crate) fn hash01(x: i64, z: i64, seed: u64) -> f64 {
     let mut h = seed
         ^ (x as u64).wrapping_mul(0xA0761D_6478BD642F)
         ^ (z as u64).wrapping_mul(0xE7037E_D1A0B428DB);

@@ -140,6 +140,7 @@ impl Plugin for UsdSimPlugin {
            // `OnAdd<UsdVisualSynced>` observer. Gating with `run_if`
            // skips the system entirely on frames with no unprocessed
            // USD prim (archetype-level check, near-zero cost).
+           .init_resource::<GroundColliderPending>()
            .add_systems(Update, (
                 process_usd_sim_prims
                     .run_if(any_unprocessed_usd_sim)
@@ -153,6 +154,10 @@ impl Plugin for UsdSimPlugin {
         // headless). This turns that invisible deadlock into a loud `error!` AND
         // recovers by building the physics without the missing visual.
         app.add_systems(Update, recover_stuck_usd_prims);
+        // Wheel-joint lifecycle tether: joints are spawned DETACHED (they link two
+        // bodies, they're nobody's child), so a doc-backed scene reload despawns
+        // the rover subtree but leaves its joints behind. See the system docs.
+        app.add_systems(Update, reap_orphaned_wheel_joints);
         // USD → cosim wiring (`lunco:modelicaModel`, `lunco:scriptModel`,
         // `lunco:simWires`) — see `cosim.rs`.
         cosim::install(app);
@@ -374,6 +379,7 @@ fn process_usd_sim_prims(
     q_grids: Query<Entity, With<Grid>>,
     q_existing_floating_origins: Query<Entity, With<FloatingOrigin>>,
     q_provisional_cameras: Query<Entity, With<ProvisionalAvatarCamera>>,
+    q_prior_avatars: Query<Entity, With<Avatar>>,
     q_child_of: Query<&ChildOf>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
     stages: Res<Assets<UsdStageAsset>>,
@@ -477,7 +483,7 @@ fn process_usd_sim_prims(
             &cs.view(), entity, prim_path, sdf_path.clone(), maybe_tf, maybe_mesh, maybe_mat,
             maybe_shader_mat, maybe_child_of, wait_for_visuals, &joint_targets,
             &articulation_roots, &q_existing_floating_origins, &q_provisional_cameras,
-            &q_grids, active_sun.as_deref(), &mut commands,
+            &q_prior_avatars, &q_grids, active_sun.as_deref(), &mut commands,
         );
     }
 }
@@ -528,6 +534,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
     articulation_roots: &std::collections::HashSet<(Handle<UsdStageAsset>, String)>,
     q_existing_floating_origins: &Query<Entity, With<FloatingOrigin>>,
     q_provisional_cameras: &Query<Entity, With<ProvisionalAvatarCamera>>,
+    q_prior_avatars: &Query<Entity, With<Avatar>>,
     q_grids: &Query<Entity, With<Grid>>,
     active_sun: Option<&lunco_environment::LunarSun>,
     mut commands: &mut Commands,
@@ -646,6 +653,54 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                     commands.entity(prov).despawn();
                 }
             }
+            // Same takeover for PRIOR AVATAR entities. A stage recompose can
+            // hand this prim a FRESH ECS entity while an earlier pass's avatar
+            // entity lives on (this system's `Without<UsdSimProcessed>` marker
+            // proves each pass processes a new entity). Two live
+            // `Avatar`+`Camera3d` entities render ambiguously and SPLIT the
+            // input/possession path: a click binds the chase camera on one
+            // avatar while the window renders the other ("possessed but the
+            // camera is frozen"), keyboard drives every avatar's linked vessel
+            // at once, and Backspace releases twice. Strip the avatar role off
+            // every prior holder — the newest authored pass wins.
+            for prior in q_prior_avatars.iter() {
+                if prior != entity {
+                    warn!(
+                        "[avatar] stripping avatar role from prior entity {prior} \
+                         (superseded by re-composed prim {})",
+                        prim_path.path
+                    );
+                    commands.entity(prior).try_remove::<(
+                        Camera3d,
+                        // `Camera3d` REQUIRES `Camera`/`RenderTarget`/`Projection`,
+                        // and required components are NOT removed with their
+                        // requirer — so stripping `Camera3d` alone left a bare
+                        // `Camera` (still `is_active: true`, still window-targeted)
+                        // that `bevy_render::extract_cameras` renders but the
+                        // arbiter (`reconcile_scene_viewport`, filtered
+                        // `With<Camera3d>`) can never deactivate: a GHOST second
+                        // active order-0 window camera — the whole scene rendered
+                        // twice + a per-frame camera-order-ambiguity warning.
+                        (
+                            bevy::camera::Camera,
+                            bevy::camera::RenderTarget,
+                            bevy::camera::Projection,
+                            bevy::camera::Exposure,
+                            bevy::core_pipeline::tonemapping::Tonemapping,
+                            AdaptiveNearPlane,
+                        ),
+                        Avatar,
+                        LocalAvatar,
+                        FreeFlightCamera,
+                        OrbitCamera,
+                        SpringArmCamera,
+                        lunco_avatar::SurfaceRelativeMode,
+                        lunco_controller::ControllerLink,
+                        IntentAnalogState,
+                        ActionState<lunco_core::UserIntent>,
+                    )>();
+                }
+            }
             let camera_mode = reader.scalar::<String>(&sdf_path, "lunco:cameraMode")
                 .unwrap_or_else(|| "freeflight".to_string());
             let mut yaw = reader
@@ -708,6 +763,16 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             // high-contrast lunar exposure (ev100 stays lunar-calibrated).
             let camera_look = move || {
                 (
+                    // Spawn INACTIVE. `reconcile_scene_viewport` is the ONE
+                    // writer of `Camera::is_active` and turns the bound camera
+                    // on within a frame — but a `Camera3d` left to its required
+                    // `Camera` default is active the moment it spawns, so a
+                    // stage recompose that re-instantiates this prim renders as
+                    // a SECOND active order-0 window camera (Bevy's per-frame
+                    // "camera order ambiguities" warning + the whole scene
+                    // rendered twice) until the arbiter and the prior avatar's
+                    // deferred despawn catch up.
+                    bevy::camera::Camera { is_active: false, ..Default::default() },
                     bevy::camera::Exposure { ev100 },
                     bevy::core_pipeline::tonemapping::Tonemapping::AgX,
                 )
@@ -1571,6 +1636,28 @@ fn setup_physical_wheel(
     });
 }
 
+/// Reap wheel joints whose bodies are gone. The revolute joint entity is
+/// spawned DETACHED (it links two bodies — it is nobody's child), so a
+/// doc-backed scene reload (E1b re-instantiation) despawns the rover subtree
+/// but leaves the OLD joints behind: dead joints with dangling `body1`/`body2`
+/// that still carry `MotorActuator`/`SteeringActuator` port bindings under the
+/// same `PhysicalWheelJoint_<path>` name as the fresh rover's joints. The FSW
+/// port wiring then has two candidates per wheel and can bind the throttle to
+/// the dead one — the freshly reloaded rover drives nothing ("the physical
+/// rover doesn't work" after a twin open, which reloads once as the doc
+/// composes). Mirrors the collider-tile reaper in `lunco-terrain-surface`.
+fn reap_orphaned_wheel_joints(
+    mut commands: Commands,
+    joints: Query<(Entity, &RevoluteJoint), With<MotorActuator>>,
+    entities: &bevy::ecs::entity::Entities,
+) {
+    for (ent, joint) in &joints {
+        if !entities.contains(joint.body1) || !entities.contains(joint.body2) {
+            commands.entity(ent).try_despawn();
+        }
+    }
+}
+
 /// Client-only: place a remote rover's wheels by **reconstructing** them from the
 /// chassis instead of replicating their poses over the wire.
 ///
@@ -1960,18 +2047,37 @@ fn resolve_differential_coupling(
     }
 }
 
+/// Set while a ground provider's static collider is still building (the DEM
+/// terrain build — tracked by the assembly crate that sees both worlds, e.g.
+/// `lunco-sandbox`). While `true`, [`activate_dynamic_bodies`] holds bodies
+/// kinematic so a rover spawned over not-yet-collidable terrain doesn't
+/// free-fall through the surface during the multi-second collider bake.
+#[derive(Resource, Default)]
+pub struct GroundColliderPending(pub bool);
+
 fn activate_dynamic_bodies(
     mut commands: Commands,
+    ground_pending: Res<GroundColliderPending>,
     q_kinematic: Query<(Entity, &UsdPrimPath), With<ShouldBeDynamic>>,
     q_pending_joints: Query<&UsdPrimPath, With<lunco_usd_avian::PendingUsdJoint>>,
     q_pending_diffs: Query<&UsdPrimPath, With<PendingDifferential>>,
 ) {
+    // Ground still building → gravity would win the race; keep everything
+    // kinematic until the terrain collider lands.
+    if ground_pending.0 {
+        return;
+    }
     for (entity, path) in q_kinematic.iter() {
         let has_pending_joint = q_pending_joints.iter().any(|j_path| j_path.stage_handle == path.stage_handle);
         let has_pending_diff = q_pending_diffs.iter().any(|d_path| d_path.stage_handle == path.stage_handle);
         if !has_pending_joint && !has_pending_diff {
-            commands.entity(entity).insert(RigidBody::Dynamic);
-            commands.entity(entity).remove::<ShouldBeDynamic>();
+            // Despawn-safe: scene-load churn / doc-backed reload can despawn a
+            // ShouldBeDynamic entity between this queue and `apply_deferred`; a plain
+            // `insert` then panics on the invalid entity. `try_insert`/`try_remove`
+            // no-op at apply time if the entity is gone (a `get_entity` guard here
+            // would not help — it only proves validity at queue time, not apply).
+            commands.entity(entity).try_insert(RigidBody::Dynamic);
+            commands.entity(entity).try_remove::<ShouldBeDynamic>();
             debug!("Activated RigidBody::Dynamic for stage: {:?}", path.stage_handle);
         }
     }
