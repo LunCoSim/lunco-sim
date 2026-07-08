@@ -39,8 +39,8 @@ use lunco_scripting::{
     ScriptRegistry,
 };
 use lunco_usd_bevy::{
-    CanonicalStages, LoadIntoGrid, UsdInstanceMember, UsdInstanceRoot, UsdPrimPath, UsdRead,
-    UsdStageAsset,
+    CanonicalStages, LoadIntoGrid, UsdAwaitingStage, UsdInstanceMember, UsdInstanceRoot,
+    UsdPrimPath, UsdRead, UsdStageAsset,
 };
 use openusd::sdf::Path as SdfPath;
 use std::collections::HashMap;
@@ -50,9 +50,49 @@ use crate::UsdSimProcessed;
 
 /// Marker indicating a USD-driven cosim entity has been wired up by
 /// `process_usd_cosim_prims`. Prevents the system from re-processing
-/// the same entity on subsequent ticks.
+/// the same entity on the same tick.
 #[derive(Component, Default)]
 pub struct UsdSourcedCosim;
+
+/// Single-flight guard for [`LoadScene`]: set the instant a scene load is
+/// dispatched, cleared once `sync_usd_visuals` has drained every
+/// `UsdAwaitingStage` prim for that scene's stage asset.
+///
+/// **Why.** Two independent triggers fire `LoadScene` on web startup —
+/// the boot policy's `StartTutorial` (which `load_scene`s its own
+/// environment) and the page's `autoloadDefaultScene` hook (which
+/// `LoadScene`s the deploy default, e.g. moonbase). On a first run
+/// both land in the same event-loop window. Without a guard, the
+/// second `LoadScene`'s cleanup despawns the first scene's prims while
+/// `sync_usd_visuals` still has deferred writes queued for them → the
+/// "Entity despawned" panic that aborts wasm (the `try_insert` patch
+/// above makes that a quiet no-op, but the deeper fix is to prevent the
+/// second load from firing at all while the first is still spawning).
+///
+/// **Policy: first in-flight load wins.** A `LoadScene` arriving while
+/// this guard holds a *different* path is suppressed (log + no-op). The
+/// tutorial's `load_scene` runs during `Startup`, the page autoload
+/// runs after the first frame paints — so the tutorial load is queued
+/// first and the page autoload is the one suppressed. On a returning
+/// run the boot policy stands down (no `StartTutorial`), no load is
+/// in-flight by autoload time, and the moonbase autoload proceeds
+/// normally. A later user-driven `LoadScene` (picking a different scene
+/// in the browser) finds the guard cleared (the prior scene finished
+/// spawning) and proceeds via the normal clear+respawn path.
+///
+/// The guard is keyed by stage `AssetId` (not path string) so the
+/// clearing system can match it against `UsdPrimPath::stage_handle.id()`
+/// on draining `UsdAwaitingStage` entities.
+#[derive(Resource)]
+pub struct SceneLoadInFlight {
+    /// Asset-relative path of the in-flight scene (informational; logged
+    /// on suppression so the console names the losing load).
+    pub path: String,
+    /// Stage asset id of the in-flight load. The clearing system watches
+    /// for the last `UsdAwaitingStage` entity carrying this id to gain
+    /// `UsdVisualSynced` (i.e. leave the awaiting pool).
+    pub stage_id: bevy::asset::AssetId<UsdStageAsset>,
+}
 
 /// Queued Modelica source load. Inserted by `process_usd_cosim_prims`;
 /// drained by `dispatch_loaded_modelica_sources` once the
@@ -94,6 +134,30 @@ fn any_unwrapped_modelica(
     >,
 ) -> bool {
     !q.is_empty()
+}
+
+/// Clears [`SceneLoadInFlight`] once `sync_usd_visuals` has drained every
+/// `UsdAwaitingStage` prim for the in-flight scene's stage — i.e. once the
+/// scene's prims have all spawned (or failed to load). After this runs, a
+/// later `LoadScene` (e.g. the user picking a different scene in the
+/// browser) proceeds via the normal clear+respawn path instead of being
+/// suppressed. Runs every `Update` but is a single `is_empty` query when no
+/// guard is set.
+fn clear_scene_load_in_flight(
+    in_flight: Option<Res<SceneLoadInFlight>>,
+    q_awaiting: Query<&UsdPrimPath, With<UsdAwaitingStage>>,
+    mut commands: Commands,
+) {
+    let Some(g) = in_flight else { return };
+    // Still spawning if any prim tagged for this stage hasn't been
+    // processed by `sync_usd_visuals` (i.e. still carries
+    // `UsdAwaitingStage`).
+    let still_awaiting = q_awaiting
+        .iter()
+        .any(|upp| upp.stage_handle.id() == g.stage_id);
+    if !still_awaiting {
+        commands.remove_resource::<SceneLoadInFlight>();
+    }
 }
 
 pub fn process_usd_cosim_prims(
@@ -139,7 +203,14 @@ pub fn process_usd_cosim_prims(
         let Some(cs) = canonical.get(id) else {
             continue;
         };
-        commands.entity(entity).insert(UsdSourcedCosim);
+        // `try_insert` (not `.insert`): a `LoadScene` cleanup may despawn this
+        // prim between this system's iterate and ApplyDeferred — the canonical
+        // race is the moonbase autoload vs a first-run tutorial on web. `.insert`
+        // routes through Bevy's panic error handler, which aborts wasm; `try_insert`
+        // silently drops the write on a despawned entity. Every entity-tied insert
+        // queued by this pipeline uses the same despawn-safe form for the same
+        // reason. See `lunco_usd_bevy::sync_usd_visuals` for the policy.
+        commands.entity(entity).try_insert(UsdSourcedCosim);
         process_usd_cosim_prim_read(
             &cs.view(),
             entity,
@@ -212,7 +283,7 @@ fn process_usd_cosim_prim_read<R: UsdRead>(
     // subsystems live on child prims, not the moving body). Harmless on
     // non-`RigidBody` cosim prims (e.g. a joint-driven solar tracker): the
     // marker is inert where prediction never runs.
-    commands.entity(entity).insert(lunco_core::NotPredictable);
+    commands.entity(entity).try_insert(lunco_core::NotPredictable);
 
     // Source files are loaded through Bevy's `AssetServer` rather
     // than `std::fs::read_to_string`. On native this reads from the
@@ -223,14 +294,14 @@ fn process_usd_cosim_prim_read<R: UsdRead>(
     // See `docs/architecture/40-asset-io.md`.
     if let Some(rel) = modelica_path.as_ref() {
         let asset_path = strip_assets_prefix(rel);
-        commands.entity(entity).insert(PendingModelicaSource {
+        commands.entity(entity).try_insert(PendingModelicaSource {
             handle: asset_server.load(asset_path.clone()),
             asset_path,
         });
     }
     if let Some(rel) = python_path.as_ref() {
         let asset_path = strip_assets_prefix(rel);
-        commands.entity(entity).insert(PendingPythonSource {
+        commands.entity(entity).try_insert(PendingPythonSource {
             handle: asset_server.load(asset_path.clone()),
             asset_path,
         });
@@ -242,7 +313,7 @@ fn process_usd_cosim_prim_read<R: UsdRead>(
     if let Some(spec) = reader.scalar::<String>(sdf_path, "lunco:portEvents") {
         let rules = parse_port_events(&spec);
         if !rules.is_empty() {
-            commands.entity(entity).insert(ModelEventRules(rules));
+            commands.entity(entity).try_insert(ModelEventRules(rules));
         }
     }
 
@@ -309,7 +380,7 @@ pub fn dispatch_loaded_modelica_sources(
             .into_iter()
             .collect();
 
-        commands.entity(entity).insert(ModelicaModel {
+        commands.entity(entity).try_insert(ModelicaModel {
             model_path: PathBuf::from(&pending.asset_path),
             model_name: model_name.clone(),
             parameters,
@@ -380,7 +451,7 @@ pub fn dispatch_loaded_python_sources(
                 params: String::new(),
             },
         );
-        commands.entity(entity).insert(ScriptedModel {
+        commands.entity(entity).try_insert(ScriptedModel {
             document_id: Some(doc_id.raw()),
             language: Some(ScriptLanguage::Python),
             paused: false,
@@ -391,7 +462,7 @@ pub fn dispatch_loaded_python_sources(
         // Python execution doesn't compile on a separate worker; the
         // SimComponent can be created right away (no need to wait for
         // variables to populate the way Modelica does).
-        commands.entity(entity).insert(SimComponent {
+        commands.entity(entity).try_insert(SimComponent {
             model_name: format!("Python:{}", pending.asset_path),
             parameters: Default::default(),
             inputs: Default::default(),
@@ -416,7 +487,7 @@ pub fn wrap_modelica_into_simcomponent(
         if model.variables.is_empty() {
             continue;
         }
-        commands.entity(entity).insert(SimComponent {
+        commands.entity(entity).try_insert(SimComponent {
             model_name: model.model_name.clone(),
             parameters: model.parameters.clone(),
             inputs: model.inputs.clone(),
@@ -1020,6 +1091,7 @@ fn on_load_scene(
     q_scripted: Query<(Entity, &ScriptedModel)>,
     channels: Res<ModelicaChannels>,
     mut script_registry: ResMut<lunco_scripting::ScriptRegistry>,
+    in_flight: Option<Res<SceneLoadInFlight>>,
 ) {
     // Accept an absolute path (Twin manifests join `default_scene` to
     // the Twin root) or an already-relative asset path; bail if an
@@ -1042,7 +1114,33 @@ fn on_load_scene(
         return;
     }
 
+    // Single-flight guard: if a DIFFERENT scene is still spawning (its
+    // prims haven't all drained through `sync_usd_visuals` yet), this
+    // load is suppressed — the in-flight load wins. Prevents the
+    // startup race where the boot policy's tutorial `load_scene` and
+    // the page's moonbase autoload both fire before either scene's
+    // prims have spawned. See `SceneLoadInFlight` for the policy + the
+    // ordering argument for why the tutorial (the higher-priority
+    // onboarding intent on a first run) is the one that wins.
+    if let Some(g) = &in_flight {
+        if g.path != path {
+            info!(
+                "[load-scene] suppressing `{}` — another scene load is in-flight (`{}`); \
+                 the in-flight load wins",
+                path, g.path
+            );
+            return;
+        }
+    }
+
     info!("[load-scene] reload path=`{}` root=`{}`", path, root_prim);
+
+    // Record the in-flight load so a concurrent `LoadScene` (different
+    // path) is suppressed until this scene's prims have all spawned.
+    commands.insert_resource(SceneLoadInFlight {
+        path: path.clone(),
+        stage_id: new_id,
+    });
 
     // Despawn the old scene + free worker-side state (shared with
     // `ClearScene`).
@@ -1635,7 +1733,7 @@ fn tag_cosim_opaque(
     >,
 ) {
     for e in q.iter() {
-        commands.entity(e).insert(lunco_core::NotPredictable);
+        commands.entity(e).try_insert(lunco_core::NotPredictable);
     }
 }
 
@@ -1659,6 +1757,15 @@ pub(crate) fn install(app: &mut App) {
         .init_asset::<PythonSource>()
         .init_resource::<lunco_scripting::ScriptRegistry>()
         .init_resource::<WiringDirty>();
+
+    app.add_systems(
+        Update,
+        // Drain the single-flight guard the frame after the last prim of
+        // the in-flight scene leaves the awaiting pool. Cheap (one
+        // `Option<Res>` + a bounded `Query::iter` only when a guard is
+        // set); no per-frame cost in steady state.
+        clear_scene_load_in_flight.after(lunco_usd_bevy::sync_usd_visuals),
+    );
 
     app.add_systems(
         Update,

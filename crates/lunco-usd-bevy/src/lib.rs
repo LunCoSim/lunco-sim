@@ -628,7 +628,11 @@ fn instantiate_usd_prim_read<R: UsdRead>(
                     "/".to_string()
                 }
             };
-            commands.entity(entity).insert(UsdPrimPath {
+            // `try_insert` (not `.insert`): one of these prims may have been
+            // despawned between sync's iterate (above) and ApplyDeferred — the
+            // moonbase autoload vs first-run tutorial race is the canonical case.
+            // See `sync_usd_visuals`'s panic-safe note below.
+            commands.entity(entity).try_insert(UsdPrimPath {
                 stage_handle: prim_path.stage_handle.clone(),
                 path: p.clone(),
             });
@@ -662,9 +666,9 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         if inherited_member.is_some() {
             commands
                 .entity(entity)
-                .insert(lunco_core::Provenance::Local);
+                .try_insert(lunco_core::Provenance::Local);
         } else if let Some(source) = asset_server.get_path(prim_path.stage_handle.id()) {
-            commands.entity(entity).insert(lunco_core::Provenance::Content {
+            commands.entity(entity).try_insert(lunco_core::Provenance::Content {
                 namespace: "usd".into(),
                 source: source.path().to_string_lossy().into_owned(),
                 path: resolved_path.clone(),
@@ -683,7 +687,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
 
         // Skip inactive prims
         if !reader.is_active(&sdf_path) {
-            commands.entity(entity).insert(UsdVisualSynced);
+            commands.entity(entity).try_insert(UsdVisualSynced);
             return;
         }
 
@@ -722,7 +726,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
             {
                 cfg.azimuths = (a as u32).clamp(4, 64);
             }
-            commands.entity(entity).insert(cfg);
+            commands.entity(entity).try_insert(cfg);
         }
 
         // Visibility — honour standard USD `token visibility`.
@@ -848,7 +852,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         {
             commands
                 .entity(entity)
-                .insert(lunco_core::EmbeddedScenarioSource(src));
+                .try_insert(lunco_core::EmbeddedScenarioSource(src));
         } else if let Some(path) = get_attribute_as_string(reader, &sdf_path, "lunco:scriptPath")
             .filter(|s| !s.trim().is_empty())
         {
@@ -858,7 +862,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
             // `lunco:script` wins if both are present.
             commands
                 .entity(entity)
-                .insert(lunco_core::EmbeddedScenarioPath(path));
+                .try_insert(lunco_core::EmbeddedScenarioPath(path));
         }
 
         // Custom `lunco:vessel = "true"` marks this prim as possessable by
@@ -872,7 +876,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // ports of its own" (a lander's actuation is its Modelica inputs).
         if let Some(val) = get_attribute_as_string(reader, &sdf_path, "lunco:vessel") {
             if val.eq_ignore_ascii_case("true") {
-                commands.entity(entity).insert(lunco_fsw::FlightSoftware::default());
+                commands.entity(entity).try_insert(lunco_fsw::FlightSoftware::default());
             }
         }
 
@@ -899,7 +903,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
                 })
                 .collect();
             if let Some(binding) = lunco_core::ControlBinding::from_intent_entries(&entries) {
-                commands.entity(entity).insert(binding);
+                commands.entity(entity).try_insert(binding);
             }
         }
 
@@ -916,7 +920,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
                 }
             }
             if !map.is_empty() {
-                commands.entity(entity).insert(lunco_core::ScriptParams(map));
+                commands.entity(entity).try_insert(lunco_core::ScriptParams(map));
             }
         }
 
@@ -926,7 +930,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         if let Some(next) = get_attribute_as_string(reader, &sdf_path, "lunco:nextScene")
             .filter(|s| !s.trim().is_empty())
         {
-            commands.entity(entity).insert(lunco_core::NextScene(next));
+            commands.entity(entity).try_insert(lunco_core::NextScene(next));
         }
 
 
@@ -981,9 +985,9 @@ fn instantiate_usd_prim_read<R: UsdRead>(
                     // entity has no Mesh3d (e.g. `def Xform` without a
                     // primitive fallback).
                     commands.entity(entity)
-                        .insert(SceneRoot(scene_h))
-                        .insert(GlbPlaceholder)
-                        .insert(PlaceholderAssetUri(path.clone()));
+                        .try_insert(SceneRoot(scene_h))
+                        .try_insert(GlbPlaceholder)
+                        .try_insert(PlaceholderAssetUri(path.clone()));
                 }
             }
         }
@@ -1072,7 +1076,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
             existing_vis.cloned().unwrap_or(Visibility::Inherited)
         };
 
-        commands.entity(entity).insert((
+        commands.entity(entity).try_insert((
             transform,
             UsdVisualSynced,
             final_vis,
@@ -1086,7 +1090,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // `bind_animated_to_preview` then binds the tagged entity to the
         // animation-preview domain so the transport (play/pause/scrub/rate) reaches it.
         if prim_is_animated(reader, &sdf_path) {
-            commands.entity(entity).insert(UsdAnimated);
+            commands.entity(entity).try_insert(UsdAnimated);
         }
 
         // Tag a prim authoring `lunco:activeCamera` timeSamples as an editorial
@@ -1094,7 +1098,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // `bind_camera_tracks_to_preview` then binds it to the animation-preview
         // domain so the transport scrubs the cuts.
         if camera_track::prim_is_camera_track(reader, &sdf_path) {
-            commands.entity(entity).insert(camera_track::CameraTrack);
+            commands.entity(entity).try_insert(camera_track::CameraTrack);
         }
 
         // Spawn children with their transforms pre-populated so physics sees them correctly.
@@ -1174,7 +1178,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
             // Scenes author `spawnable = false` (never a target); terrain/props
             // without the flag fall through to the leaf as before.
             if light::get_attribute_as_bool(reader, &child_path, "lunco:spawnable").unwrap_or(false) {
-                commands.entity(child_entity).insert(lunco_core::SelectableRoot);
+                commands.entity(child_entity).try_insert(lunco_core::SelectableRoot);
             }
         }
     }
@@ -1214,7 +1218,7 @@ fn on_usd_prim_added(
     let Ok((prim_path, vis, tf, load_into, is_instance_root, member)) = q.get(entity) else { return; };
 
     if stages.get(&prim_path.stage_handle).is_none() {
-        commands.entity(entity).insert(UsdAwaitingStage);
+        commands.entity(entity).try_insert(UsdAwaitingStage);
         return;
     }
 
@@ -1250,6 +1254,26 @@ fn on_usd_prim_added(
 /// this system; the eager path goes through the `on_usd_prim_added`
 /// observer (which fires synchronously during command application, so
 /// downstream `.after()` ordering covers it too).
+///
+/// **Panic-safe against the despawn race**: this system iterates
+/// entities still carrying `UsdAwaitingStage`, then queues deferred
+/// writes against them. Between the iterate phase and `ApplyDeferred`,
+/// an in-flight `LoadScene` / `ClearScene` may despawn those same
+/// prims (their `try_despawn` was queued earlier in the frame by the
+/// command observer). When the queued insert runs against a now-gone
+/// entity, Bevy's default ECS error handler panics — on wasm that is
+/// `__rust_abort`, taking the whole app down. All entity-tied inserts
+/// queued here therefore go through [`EntityCommands::try_insert`]
+/// (which silently drops the write when the entity is gone) rather
+/// than `.insert` (which routes through the panic handler). `.remove`
+/// is already a `warn`-handler call, so it was safe; only `.insert`
+/// needed swapping. The canonical trigger this guards: a web deploy
+/// whose `index.html` autoloads `twins/moonbase/moonbase_scene.usda`
+/// over a boot policy that has already dispatched a tutorial scene
+/// — the moonbase `LoadScene`'s recursive despawn lands between the
+/// tutorial-prim iterate and the deferred write. The fix is broader
+/// than that one race: any pair of (sync iterate → next LoadScene) is
+/// covered. `EfficientSpawn` is not in scope here (see §4.1).
 pub fn sync_usd_visuals(
     mut ev: MessageReader<AssetEvent<UsdStageAsset>>,
     q: Query<
@@ -1333,7 +1357,7 @@ fn resolve_usd_instance_identities(
         let role = instance_role(&member.root_path, &prim_path.path);
         commands
             .entity(entity)
-            .insert(lunco_core::Provenance::Derived {
+            .try_insert(lunco_core::Provenance::Derived {
                 parent: root_gid.get(),
                 role,
             })
@@ -1591,7 +1615,10 @@ fn apply_standard_material<R: UsdRead>(
         AlphaMode::Opaque
     };
 
-    entity_cmd.insert((
+    // `try_insert`: the prim may have been despawned between sync's iterate
+    // and ApplyDeferred (see `sync_usd_visuals`'s panic-safe note) — a
+    // missing entity here is a quiet no-op, not a wasm panic.
+    entity_cmd.try_insert((
         Mesh3d(mesh_handle.clone()),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: base_color.with_alpha(alpha),
@@ -2065,7 +2092,7 @@ pub fn plan_usd_animation(
         let material = (diffuse || geom_color || opacity)
             .then(|| MaterialPlan { shader, diffuse, geom_color, opacity });
 
-        commands.entity(entity).insert(AnimationPlan {
+        commands.entity(entity).try_insert(AnimationPlan {
             time_codes_per_second: stage_time_codes_per_second(reader),
             xform,
             visibility: attr_has_time_samples(reader, &sdf_path, "visibility"),
@@ -2273,7 +2300,7 @@ pub fn bind_animated_to_preview(
     for (entity, prim) in &q {
         commands
             .entity(entity)
-            .insert(lunco_time::TimeBinding { domain: preview.domain });
+            .try_insert(lunco_time::TimeBinding { domain: preview.domain });
         // Union this clip's authored span into the range we'll grow the domain to.
         if let Some(cs) = canonical.get(prim.stage_handle.id()) {
             let view = cs.view();
@@ -3348,7 +3375,7 @@ pub fn reveal_placeholder_on_failure(
             ));
 
             // Mark the original prim as having a diagnostic stub
-            commands.entity(e).insert(DiagnosticStub);
+            commands.entity(e).try_insert(DiagnosticStub);
         }
     }
 }

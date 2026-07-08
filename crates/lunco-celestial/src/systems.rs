@@ -228,14 +228,12 @@ pub fn celestial_telemetry_system(
     q_earth: Query<(&Transform, &big_space::prelude::CellCoord), With<EarthRoot>>,
     q_moon: Query<(&Transform, &big_space::prelude::CellCoord), With<MoonRoot>>,
     q_sun: Query<&Transform, With<SolarSystemRoot>>,
-    q_cam: Query<&Transform, (With<Camera>, With<lunco_core::Avatar>)>,
     mut timer: Local<u32>,
 ) {
     if *timer % 60 == 0 {
         if let Some((tf, cell)) = q_earth.iter().next() { info!("TELEMETRY: Epoch: {:.4}, Earth Cell: {:?}, Earth Pos: {:?}", world.epoch_jd, cell, tf.translation); }
         if let Some((tf, cell)) = q_moon.iter().next() { info!("TELEMETRY: Moon Cell: {:?}, Moon Pos: {:?}", cell, tf.translation); }
         if let Some(tf) = q_sun.iter().next() { info!("TELEMETRY: Sun Pos: {:?}", tf.translation); }
-        if let Some(tf) = q_cam.iter().next() { info!("TELEMETRY: Camera Local Pos: {:?}", tf.translation); }
     }
     *timer += 1;
 }

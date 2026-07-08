@@ -113,7 +113,7 @@ fn project_mobility_to_rigid_body(
             lunco_core::Mobility::Kinematic => RigidBody::Kinematic,
             lunco_core::Mobility::Dynamic => RigidBody::Dynamic,
         };
-        commands.entity(entity).insert(body);
+        commands.entity(entity).try_insert(body);
     }
 }
 
@@ -435,7 +435,7 @@ fn add_collider_from_usd<R: UsdRead>(
     sdf_path: &SdfPath,
 ) {
     if let Some(collider) = build_collider_from_usd(reader, sdf_path) {
-        commands.entity(entity).insert(collider);
+        commands.entity(entity).try_insert(collider);
     }
 }
 
@@ -469,7 +469,7 @@ fn build_terrain_mesh_colliders(
         match collider {
             Some(c) => {
                 info!("[usd-avian] terrain collider built ({} verts)", mesh.count_vertices());
-                commands.entity(entity).insert(c).remove::<PendingTerrainCollider>();
+                commands.entity(entity).try_insert(c).remove::<PendingTerrainCollider>();
             }
             None => {
                 warn!("[usd-avian] terrain mesh has no usable geometry — no collider built");
@@ -618,7 +618,7 @@ fn extract_avian_prim<R: UsdRead>(
 ) {
     // Skip wheel prims — the sim plugin handles those.
     if reader.real_f32(sdf_path, "physxVehicleWheel:radius").is_some() {
-        commands.entity(entity).insert(UsdAvianProcessed);
+        commands.entity(entity).try_insert(UsdAvianProcessed);
         return;
     }
 
@@ -628,17 +628,17 @@ fn extract_avian_prim<R: UsdRead>(
 
     // ── TERRAIN ── static collider + TerrainTile; mesh DEMs defer their collider.
     if has_terrain_api {
-        commands.entity(entity).insert((
+        commands.entity(entity).try_insert((
             RigidBody::Static,
             lunco_core::Mobility::Static,
             lunco_terrain_globe::TerrainTile,
         ));
         if let Some(collider) = build_collider_from_usd(reader, sdf_path) {
-            commands.entity(entity).insert(collider);
+            commands.entity(entity).try_insert(collider);
         } else {
-            commands.entity(entity).insert(PendingTerrainCollider);
+            commands.entity(entity).try_insert(PendingTerrainCollider);
         }
-        commands.entity(entity).insert(UsdAvianProcessed);
+        commands.entity(entity).try_insert(UsdAvianProcessed);
         return;
     }
 
@@ -647,9 +647,9 @@ fn extract_avian_prim<R: UsdRead>(
         .scalar::<String>(sdf_path, "lunco:triggerZone")
         .filter(|z| !z.trim().is_empty())
     {
-        commands.entity(entity).insert((RigidBody::Static, lunco_core::Mobility::Static));
+        commands.entity(entity).try_insert((RigidBody::Static, lunco_core::Mobility::Static));
         add_collider_from_usd(commands, entity, reader, sdf_path);
-        commands.entity(entity).insert((
+        commands.entity(entity).try_insert((
             Sensor,
             lunco_core::TriggerZone(zone),
             CollisionLayers::new(LayerMask(lunco_core::TRIGGER_COLLISION_LAYER), LayerMask::ALL),
@@ -662,7 +662,7 @@ fn extract_avian_prim<R: UsdRead>(
         // ── COMPOUND BODY ROOT ── children colliders → compound, else self.
         let compound_shapes = collect_child_colliders_from_usd(reader, sdf_path);
         if !compound_shapes.is_empty() {
-            commands.entity(entity).insert(Collider::compound(compound_shapes));
+            commands.entity(entity).try_insert(Collider::compound(compound_shapes));
         } else {
             add_collider_from_usd(commands, entity, reader, sdf_path);
         }
@@ -673,25 +673,25 @@ fn extract_avian_prim<R: UsdRead>(
         let (body, mobility) = if kinematic {
             (RigidBody::Kinematic, lunco_core::Mobility::Kinematic)
         } else {
-            commands.entity(entity).insert(ShouldBeDynamic);
+            commands.entity(entity).try_insert(ShouldBeDynamic);
             (RigidBody::Kinematic, lunco_core::Mobility::Dynamic)
         };
-        commands.entity(entity).insert((body, mobility, lunco_core::SelectableRoot));
+        commands.entity(entity).try_insert((body, mobility, lunco_core::SelectableRoot));
 
         // Always insert a Mass (default 1000 kg) — gravity filters on `With<Mass>`.
         apply_rigid_body_mass_props(commands, entity, reader, sdf_path);
-        commands.entity(entity).insert(UsdAvianProcessed);
+        commands.entity(entity).try_insert(UsdAvianProcessed);
     } else if has_collision_api {
         // ── COLLIDER CHILD ── part of parent's compound; root-level → static.
         if is_root {
-            commands.entity(entity).insert((RigidBody::Static, lunco_core::Mobility::Static));
+            commands.entity(entity).try_insert((RigidBody::Static, lunco_core::Mobility::Static));
             add_collider_from_usd(commands, entity, reader, sdf_path);
         }
-        commands.entity(entity).insert(UsdAvianProcessed);
+        commands.entity(entity).try_insert(UsdAvianProcessed);
     } else {
         // ── FALLBACK: legacy `physics:rigidBodyEnabled` ──
         if let Some(true) = reader.scalar::<bool>(sdf_path, "physics:rigidBodyEnabled") {
-            commands.entity(entity).insert((
+            commands.entity(entity).try_insert((
                 RigidBody::Kinematic,
                 lunco_core::Mobility::Dynamic,
                 ShouldBeDynamic,
@@ -700,10 +700,10 @@ fn extract_avian_prim<R: UsdRead>(
             apply_rigid_body_mass_props(commands, entity, reader, sdf_path);
             add_collider_from_usd(commands, entity, reader, sdf_path);
         } else if let Some(false) = reader.scalar::<bool>(sdf_path, "physics:rigidBodyEnabled") {
-            commands.entity(entity).insert((RigidBody::Static, lunco_core::Mobility::Static));
+            commands.entity(entity).try_insert((RigidBody::Static, lunco_core::Mobility::Static));
             add_collider_from_usd(commands, entity, reader, sdf_path);
         }
-        commands.entity(entity).insert(UsdAvianProcessed);
+        commands.entity(entity).try_insert(UsdAvianProcessed);
     }
 }
 
@@ -893,7 +893,7 @@ fn on_add_usd_prim(
         return;
     }
     if let Some(joint) = read_joint_spec_typed(cs.stage(), &sdf_path) {
-        commands.entity(entity).insert(joint);
+        commands.entity(entity).try_insert(joint);
     }
 
     // Note: Physics mapping (RigidBody, Mass, Collider, Damping) is handled by
@@ -991,7 +991,7 @@ fn build_usd_physics_joints(
                         motor_model: JOINT_DRIVE_MOTOR_MODEL,
                     };
                 }
-                commands.entity(joint_entity).insert((joint, JointCollisionDisabled));
+                commands.entity(joint_entity).try_insert((joint, JointCollisionDisabled));
             }
             "PhysicsRevoluteJoint" => {
                 let mut joint = RevoluteJoint::new(b0, b1)
@@ -1008,10 +1008,10 @@ fn build_usd_physics_joints(
                         motor_model: JOINT_DRIVE_MOTOR_MODEL,
                     };
                 }
-                commands.entity(joint_entity).insert((joint, JointCollisionDisabled));
+                commands.entity(joint_entity).try_insert((joint, JointCollisionDisabled));
             }
             "PhysicsFixedJoint" => {
-                commands.entity(joint_entity).insert((
+                commands.entity(joint_entity).try_insert((
                     FixedJoint::new(b0, b1)
                         .with_local_anchor1(pending.local_pos0)
                         .with_local_anchor2(pending.local_pos1),
@@ -1036,7 +1036,7 @@ fn build_usd_physics_joints(
                 if pending.limit_lower.is_finite() && pending.limit_upper.is_finite() {
                     joint = joint.with_twist_limits(pending.limit_lower, pending.limit_upper);
                 }
-                commands.entity(joint_entity).insert((joint, JointCollisionDisabled));
+                commands.entity(joint_entity).try_insert((joint, JointCollisionDisabled));
             }
             "PhysicsDistanceJoint" => {
                 // Tether/strut: keeps the two anchors within [min, max] distance.
@@ -1050,7 +1050,7 @@ fn build_usd_physics_joints(
                         pending.body1_path
                     );
                 }
-                commands.entity(joint_entity).insert((
+                commands.entity(joint_entity).try_insert((
                     DistanceJoint::new(b0, b1)
                         .with_local_anchor1(pending.local_pos0)
                         .with_local_anchor2(pending.local_pos1)
@@ -1142,7 +1142,7 @@ fn apply_rigid_body_mass_props<R: UsdRead>(
     sdf_path: &SdfPath,
 ) {
     let mass = reader.real_f32(sdf_path, "physics:mass").unwrap_or(1000.0);
-    commands.entity(entity).insert(Mass(mass));
+    commands.entity(entity).try_insert(Mass(mass));
 
     // G2 — authored principal inertia. `physics:diagonalInertia` is the diagonal
     // of the inertia tensor in the principal frame. `physics:principalAxes` (a
@@ -1151,7 +1151,7 @@ fn apply_rigid_body_mass_props<R: UsdRead>(
     // representable here (Avian stores principal + frame), matching the
     // UsdPhysics schema.
     if let Some(diag) = read_vec3_attribute(reader, sdf_path, "physics:diagonalInertia") {
-        commands.entity(entity).insert(AngularInertia {
+        commands.entity(entity).try_insert(AngularInertia {
             principal: diag.as_vec3(),
             local_frame: Quat::IDENTITY,
         });
@@ -1159,23 +1159,23 @@ fn apply_rigid_body_mass_props<R: UsdRead>(
 
     // G2 — authored centre of mass (body-frame offset).
     if let Some(com) = read_vec3_attribute(reader, sdf_path, "physics:centerOfMass") {
-        commands.entity(entity).insert(CenterOfMass(com.as_vec3()));
+        commands.entity(entity).try_insert(CenterOfMass(com.as_vec3()));
     }
 
     if let Some(d) = reader.real_f32(sdf_path, "physics:linearDamping") {
-        commands.entity(entity).insert(LinearDamping(d as f64));
+        commands.entity(entity).try_insert(LinearDamping(d as f64));
     }
     if let Some(d) = reader.real_f32(sdf_path, "physics:angularDamping") {
-        commands.entity(entity).insert(AngularDamping(d as f64));
+        commands.entity(entity).try_insert(AngularDamping(d as f64));
     }
     if let Some(f) = reader.real_f32(sdf_path, "physics:friction") {
-        commands.entity(entity).insert(Friction::new(f.into()));
+        commands.entity(entity).try_insert(Friction::new(f.into()));
     }
     if let Some(vel) = read_vec3_attribute(reader, sdf_path, "physics:linearVelocity") {
-        commands.entity(entity).insert(LinearVelocity(vel));
+        commands.entity(entity).try_insert(LinearVelocity(vel));
     }
     if let Some(ang) = read_vec3_attribute(reader, sdf_path, "physics:angularVelocity") {
-        commands.entity(entity).insert(AngularVelocity(ang));
+        commands.entity(entity).try_insert(AngularVelocity(ang));
     }
 }
 
