@@ -2,17 +2,17 @@
 # LunCoSim — nightly desktop builds (manual trigger)
 # ============================================================================
 # Builds lunica and sandbox as native desktop binaries for
-# Linux (x86_64), macOS (arm64 + x86_64), and Windows (x86_64), packages
-# each with assets + docs + cache, and uploads the archives as GitHub
-# Actions artifacts. A GitHub Release is created when `make_release` is
-# true (default).
+# Linux (x86_64), macOS (arm64 + x86_64 cross-compiled on Apple Silicon),
+# and Windows (x86_64), packages each with assets + docs + cache, and
+# uploads the archives as GitHub Actions artifacts. A GitHub Release is
+# created when `make_release` is true (default).
 #
 # Trigger: workflow_dispatch ONLY (manual, from the Actions tab).
 #   https://github.com/LunCoSim/luncosim-workspace/actions/workflows/nightly.yml
 #
-# Each OS job downloads the cache assets its binaries need, builds all
-# three, and packages them via scripts/build_native.sh. Compilation is
-# shared across the three binaries (same cargo workspace, shared deps).
+# Each OS job downloads the cache assets its binaries need, builds both
+# binaries, and packages them via scripts/build_native.sh. Compilation is
+# shared across the two binaries (same cargo workspace, shared deps).
 # ============================================================================
 
 name: Nightly Builds
@@ -57,7 +57,7 @@ jobs:
             echo "tag=nightly" >> "$GITHUB_OUTPUT"
           fi
 
-  # ── Build all three binaries per OS ──────────────────────────────────────
+  # ── Build both binaries per OS ───────────────────────────────────────────
   build:
     needs: meta
     name: ${{ matrix.label }}
@@ -77,24 +77,26 @@ jobs:
               libasound2-dev libudev-dev
               libwayland-dev libxkbcommon-dev
               libx11-dev xorg-dev
+            cross_target: ''    # no cross-compile on Linux
 
           - label: macOS ARM64
-            os: macos-14
+            os: macos-15
             platform: macos
             arch: aarch64
             apt_pkgs: ''
-
-          - label: macOS x86_64
-            os: macos-13
-            platform: macos
-            arch: x86_64
-            apt_pkgs: ''
+            # Cross-compile x86_64 on the SAME Apple Silicon runner (avoids
+            # the chronically-unavailable macos-13 Intel runner). Adds the
+            # x86_64-apple-darwin rustup target, then runs build_native.sh
+            # twice more with --target. The cross builds use a separate
+            # target/<triple>/ subdir so they don't overwrite the native ones.
+            cross_target: x86_64-apple-darwin
 
           - label: Windows x86_64
             os: windows-latest
             platform: windows
             arch: x86_64
             apt_pkgs: ''
+            cross_target: ''    # no cross-compile on Windows
 
     runs-on: ${{ matrix.os }}
     # Force bash on all platforms — our build scripts are bash. On Windows
@@ -157,7 +159,7 @@ jobs:
         with:
           key: ${{ matrix.platform }}-${{ matrix.arch }}
 
-      # ── Build + package each binary ──────────────────────────────────────
+      # ── Build + package each binary (native arch) ───────────────────────
       # The two builds share compiled deps (incremental cargo), so the
       # 2nd is much faster than the 1st. --package creates a
       # .tar.gz (unix) or .zip (windows) archive in dist/.
@@ -170,10 +172,26 @@ jobs:
       - name: Build sandbox (desktop)
         run: ./scripts/build_native.sh sandbox --release --package
 
-      # ── Upload artifacts ─────────────────────────────────────────────────
-      # Each archive is uploaded individually so users can download just
-      # the binary they need. The release job (below) collects them into
-      # a GitHub Release.
+      # ── Cross-compile (macOS x86_64 on Apple Silicon) ───────────────────
+      # Only runs when the matrix entry sets `cross_target`. Adds the
+      # rustup target, then runs build_native.sh again with --target so the
+      # x86_64 binary lands in dist/<binary>-macos-x86_64/. The cross
+      # build recompiles all deps for the new target (separate
+      # target/<triple>/ dir), so it's ~as long as the native build —
+      # but avoids the unavailable macos-13 runner entirely.
+      - name: Add cross-compile target
+        if: matrix.cross_target != ''
+        run: rustup target add ${{ matrix.cross_target }}
+
+      - name: Build lunica (cross ${{ matrix.cross_target }})
+        if: matrix.cross_target != ''
+        run: ./scripts/build_native.sh lunica --release --package --target ${{ matrix.cross_target }} --skip-download
+
+      - name: Build sandbox (cross ${{ matrix.cross_target }})
+        if: matrix.cross_target != ''
+        run: ./scripts/build_native.sh sandbox --release --package --target ${{ matrix.cross_target }} --skip-download
+
+      # ── Upload artifacts (native arch) ──────────────────────────────────
       - name: Upload lunica artifact
         uses: actions/upload-artifact@v4
         with:
@@ -187,6 +205,28 @@ jobs:
         with:
           name: sandbox-${{ matrix.platform }}-${{ matrix.arch }}
           path: dist/sandbox-${{ matrix.platform }}-${{ matrix.arch }}.*
+          if-no-files-found: warn
+          retention-days: 30
+
+      # ── Upload artifacts (cross-compile arch, macOS x86_64) ────────────
+      # `platform_short` in build_native.sh maps *darwin* → "macos", so the
+      # cross-compiled dist dir is dist/<bin>-macos-x86_64/ regardless of
+      # which arch ran the build.
+      - name: Upload lunica (cross) artifact
+        if: matrix.cross_target != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: lunica-macos-x86_64
+          path: dist/lunica-macos-x86_64.*
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload sandbox (cross) artifact
+        if: matrix.cross_target != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-macos-x86_64
+          path: dist/sandbox-macos-x86_64.*
           if-no-files-found: warn
           retention-days: 30
 
