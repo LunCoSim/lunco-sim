@@ -418,7 +418,7 @@ fi
 info "Building $BINARY ($CRATE) — $PROFILE_LABEL, target: $TRIPLE"
 cd "$PROJECT_DIR"
 
-cargo build "${PROFILE_ARGS[@]}" "${TARGET_ARGS[@]}" \
+cargo build "${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"}" "${TARGET_ARGS[@]+"${TARGET_ARGS[@]}"}" \
     --bin "$BINARY" -p "$CRATE" \
     "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
 
