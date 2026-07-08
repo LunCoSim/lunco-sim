@@ -136,19 +136,12 @@ jobs:
         with:
           node-version: '20'
 
-      # sccache caches compiled object files across runs, cutting rebuild
-      # time dramatically on the Bevy/avian dep closure (~500 crates).
-      - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.7
-
-      - name: Configure sccache
-        run: |
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-
       # Cache the cargo registry + git checkouts. The target/ dir is
       # cached separately by swatinem/rust-cache which keys on
-      # Cargo.lock + OS + rust-toolchain.
+      # Cargo.lock + OS + rust-toolchain. sccache was removed — its
+      # GitHub Actions cache backend (SCCACHE_GHA_ENABLED) is flaky
+      # (Azure 400 outages kill the build at the first rustc invocation).
+      # swatinem/rust-cache on target/ is the bigger, reliable win.
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
