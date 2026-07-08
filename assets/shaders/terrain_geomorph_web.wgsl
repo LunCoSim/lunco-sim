@@ -1,0 +1,249 @@
+//! CDLOD geomorph terrain tile — **Web-optimized procedural regolith look**
+//! Uses 2D value noise and fewer octaves for high-performance rendering in the browser.
+
+#import bevy_pbr::{
+    mesh_functions,
+    view_transformations::position_world_to_clip,
+    forward_io::VertexOutput,
+    mesh_view_bindings::view,
+    mesh_view_bindings::lights,
+}
+#import lunco::pbr_lit::lit_n
+#import lunco::lunar::regolith_factor
+
+//!@ui      albedo            color  "Albedo"
+//!@default albedo            0.13,0.13,0.13
+//!@ui      macro_clump_scale 1 20   "Macro clump scale (/m)"
+//!@default macro_clump_scale 8
+//!@ui      macro_bump        0 0.3  "Meso hummock strength"
+//!@default macro_bump        0.1
+//!@ui      mid_scale         0.02 1 "Meso hummock scale (/m)"
+//!@default mid_scale         0.45
+//!@ui      mid_bump          0 1.5  "Mid hummock strength"
+//!@default mid_bump          0.6
+//!@ui      fine_scale        50 400 "Fine grain scale (/m)"
+//!@default fine_scale        180
+//!@ui      fine_bump         0 0.1  "Fine grain strength"
+//!@default fine_bump         0.025
+//!@ui      rough_mix         0 1    "Roughness mix"
+//!@default rough_mix         0.35
+//!@ui      mottle            0 0.6  "Albedo mottle"
+//!@default mottle            0.22
+//!@default morph_start  1.0e20
+//!@default morph_end    1.0e21
+//!@default reveal       1.0
+struct Material {
+    albedo:            vec3<f32>,
+    macro_clump_scale: f32,
+    macro_bump:        f32,
+    mid_scale:         f32,
+    mid_bump:          f32,
+    fine_scale:        f32,
+    fine_bump:         f32,
+    rough_mix:         f32,
+    mottle:            f32,
+    morph_start:       f32,  // distance where geomorph toward the parent begins
+    morph_end:         f32,  // distance where the parent fully takes over
+    reveal:            f32,  // 1 = own geometry; <1 = settling in from the parent lattice
+}
+@group(#{MATERIAL_BIND_GROUP}) @binding(0)
+var<uniform> mat: Material;
+
+// --- 2D value noise + FBM (optimized for WebGL) -------------------------
+
+fn hash12(p: vec2<f32>) -> f32 {
+    var p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 31.32);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+fn vnoise2d(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let n00 = hash12(i);
+    let n10 = hash12(i + vec2(1.0, 0.0));
+    let n01 = hash12(i + vec2(0.0, 1.0));
+    let n11 = hash12(i + vec2(1.0, 1.0));
+    return mix(mix(n00, n10, u.x), mix(n01, n11, u.x), u.y);
+}
+
+fn fbm2d(p: vec2<f32>, octaves: i32, gain: f32) -> f32 {
+    var sum = 0.0;
+    var amp = 1.0;
+    var total = 0.0;
+    var q = p;
+    let rc = cos(2.399963);
+    let rs = sin(2.399963);
+    for (var o = 0; o < octaves; o++) {
+        sum += amp * vnoise2d(q);
+        total += amp;
+        amp *= gain;
+        q *= 2.0;
+        q = vec2(rc * q.x - rs * q.y, rs * q.x + rc * q.y);
+    }
+    return sum / total;
+}
+
+fn ramp(x: f32, lo: f32, hi: f32) -> f32 {
+    return saturate((x - lo) / (hi - lo));
+}
+
+fn aa_fade(scale: f32, pw: f32) -> f32 {
+    let px_per_period = 1.0 / max(scale * pw, 1e-6);
+    return saturate((px_per_period - 3.0) / 22.0);
+}
+
+// --- height-field bump ---------------------------------------------------
+
+fn layer_height(p: vec2<f32>, scale: f32, octaves: i32, gain: f32, lo: f32, hi: f32) -> f32 {
+    return ramp(fbm2d(p * scale, octaves, gain), lo, hi);
+}
+
+fn bump_layer(
+    n: vec3<f32>, p: vec3<f32>,
+    scale: f32, octaves: i32, gain: f32, lo: f32, hi: f32,
+    strength: f32, out_h: ptr<function, f32>,
+) -> vec3<f32> {
+    var up = vec3(0.0, 1.0, 0.0);
+    if (abs(n.y) > 0.99) { up = vec3(1.0, 0.0, 0.0); }
+    let t = normalize(cross(up, n));
+    let b = cross(n, t);
+    let eps = 0.5 / scale;
+    
+    let p2 = p.xz;
+    let pt2 = (p + t * eps).xz;
+    let pb2 = (p + b * eps).xz;
+    
+    let h0 = layer_height(p2, scale, octaves, gain, lo, hi);
+    let ht = layer_height(pt2, scale, octaves, gain, lo, hi);
+    let hb = layer_height(pb2, scale, octaves, gain, lo, hi);
+    *out_h = h0;
+    let grad = (ht - h0) * t + (hb - h0) * b;
+    let perturbed = n - strength * grad / eps;
+    if (length(perturbed) < 1e-3 || dot(perturbed, n) <= 0.0) {
+        return n;
+    }
+    return normalize(perturbed);
+}
+
+// --- vertex: CDLOD geomorph ---------------------------------------------
+
+struct GeoVertex {
+    @builtin(instance_index) instance_index: u32,
+    @location(0) position: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(8) morph_target: vec3<f32>,
+};
+
+@vertex
+fn vertex(vertex: GeoVertex) -> VertexOutput {
+    var out: VertexOutput;
+    let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
+    let base_world = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(vertex.position, 1.0));
+    let dist = distance(base_world.xyz, view.world_position);
+
+    var morph = 0.0;
+    if (mat.morph_end > mat.morph_start) {
+        morph = smoothstep(mat.morph_start, mat.morph_end, dist);
+    }
+    let m = max(morph, 1.0 - mat.reveal);
+    let local_pos = mix(vertex.position, vertex.morph_target, m);
+
+    out.world_position = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(local_pos, 1.0));
+    out.position = position_world_to_clip(out.world_position.xyz);
+    out.world_normal = mesh_functions::mesh_normal_local_to_world(vertex.normal, vertex.instance_index);
+#ifdef VERTEX_UVS_A
+    out.uv = vertex.uv;
+#endif
+#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
+    out.instance_index = vertex.instance_index;
+#endif
+    return out;
+}
+
+// --- fragment: procedural regolith (optimized) ---------------------------
+
+fn sun_to_light() -> vec3<f32> {
+    var best = vec3(0.0, 1.0, 0.0);
+    var best_lum = -1.0;
+    let n = lights.n_directional_lights;
+    for (var i = 0u; i < n; i = i + 1u) {
+        let dl = lights.directional_lights[i];
+        let lum = dot(dl.color.rgb, vec3(0.2126, 0.7152, 0.0722));
+        if (lum > best_lum) {
+            best_lum = lum;
+            best = dl.direction_to_light;
+        }
+    }
+    return best;
+}
+
+@fragment
+fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+    let fine_scale  = mat.fine_scale;
+    let fine_bump   = mat.fine_bump;
+    let rough_mix   = mat.rough_mix;
+    let mottle      = mat.mottle;
+    var albedo = mat.albedo;
+
+    let p = in.world_position.xyz;
+    let pw = length(fwidth(p));
+
+    var n = normalize(in.world_normal);
+
+    let meso_scale = max(mat.mid_scale, 0.02);
+    let meso_fade  = aa_fade(meso_scale, pw);
+    var meso_h = 0.5;
+    if (meso_fade > 0.0) {
+        // Web optimized: 1 octave instead of 3
+        n = bump_layer(n, p, meso_scale, 1, 0.55, 0.35, 0.65, mat.macro_bump * meso_fade, &meso_h);
+    }
+    let subm_scale = meso_scale * 3.0;
+    let subm_fade  = aa_fade(subm_scale, pw);
+    var subm_h = 0.5;
+    if (subm_fade > 0.0) {
+        // Web optimized: 1 octave instead of 2
+        n = bump_layer(n, p, subm_scale, 1, 0.5, 0.40, 0.60, mat.macro_bump * 0.6 * subm_fade, &subm_h);
+    }
+
+    let tooth_scale = clamp(mat.macro_clump_scale, 4.0, 40.0);
+    let tooth_fade  = aa_fade(tooth_scale, pw);
+    var tooth_h = 0.5;
+    if (tooth_fade > 0.0) {
+        // Web optimized: 1 octave instead of 3
+        n = bump_layer(n, p, tooth_scale, 1, 0.5, 0.40, 0.62, mat.mid_bump * 0.12 * tooth_fade, &tooth_h);
+    }
+
+    let fine_fade = aa_fade(fine_scale, pw);
+    var fine_h = 0.5;
+    if (fine_fade > 0.0) {
+        // Web optimized: 1 octave instead of 2
+        n = bump_layer(n, p, fine_scale, 1, 0.5, 0.42, 0.58, fine_bump * fine_fade, &fine_h);
+    }
+
+    // Web optimized: 1 octave instead of 3
+    let dust = fbm2d(p.xz * 0.004, 1, 0.5);
+    albedo *= 1.0 + (dust - 0.5) * mottle;
+
+    let grain_fade = aa_fade(0.35, pw);
+    if (grain_fade > 0.0) {
+        // Web optimized: 1 octave instead of 2
+        let grain = fbm2d(p.xz * 0.35, 1, 0.5);
+        albedo *= 1.0 + (grain - 0.5) * 0.16 * grain_fade;
+        albedo *= 1.0 + (meso_h - 0.5) * 0.10 * meso_fade;
+    }
+
+    let L = normalize(sun_to_light());
+    let V = normalize(view.world_position - p);
+    let lunar_k = regolith_factor(n, L, V);
+    let base_albedo = albedo;
+    albedo = albedo * lunar_k;
+
+    let n_geo = normalize(in.world_normal);
+    let fill = base_albedo * (1.2 + 1.0 * max(n_geo.y, 0.0));
+
+    let roughness = clamp(0.6 + rough_mix * 0.4, 0.05, 1.0);
+    return lit_n(in, is_front, n, albedo, roughness, 0.0, fill);
+}

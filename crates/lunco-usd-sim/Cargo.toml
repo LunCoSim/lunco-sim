@@ -9,6 +9,7 @@ openusd = { workspace = true }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-materials = { path = "../lunco-materials" }
+lunco-settings = { path = "../lunco-settings" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-core = { path = "../lunco-core" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }

@@ -53,8 +53,10 @@ pub fn apply_usd_shader_materials(
     // the asset's recipe.
     mut canonical: NonSendMut<CanonicalStages>,
     mut commands: Commands,
+    settings: Option<Res<lunco_settings::TerrainSettings>>,
 ) {
     let Some(mut materials) = materials else { return };
+    let enable_shaders = settings.as_ref().map(|s| s.enable_shaders).unwrap_or(true);
     for (entity, prim_path) in q.iter() {
         let id = prim_path.stage_handle.id();
         if canonical.get(id).is_none() {
@@ -70,7 +72,7 @@ pub fn apply_usd_shader_materials(
             continue;
         };
         apply_usd_shader_material_read(
-            &cs.view(), entity, prim_path, &sdf_path, &mut materials, &asset_server, &mut commands,
+            &cs.view(), entity, prim_path, &sdf_path, &mut materials, &asset_server, &mut commands, enable_shaders,
         );
     }
 }
@@ -88,6 +90,7 @@ fn apply_usd_shader_material_read<R: UsdRead>(
     materials: &mut Assets<ShaderMaterial>,
     asset_server: &AssetServer,
     commands: &mut Commands,
+    enable_shaders: bool,
 ) {
     // From here on the prim is evaluated regardless of outcome.
     commands.entity(entity).insert(UsdShaderResolved);
@@ -104,6 +107,10 @@ fn apply_usd_shader_material_read<R: UsdRead>(
         );
         return;
     };
+
+    if !enable_shaders && (shader_path == "shaders/regolith.wgsl" || shader_path == "shaders/terrain_layered.wgsl") {
+        return;
+    }
 
     // ROBUSTNESS: refuse a shader that isn't a usable material shader. A pure
     // library (`#define_import_path`, meant to be `#import`ed — e.g.
@@ -127,9 +134,20 @@ fn apply_usd_shader_material_read<R: UsdRead>(
     // generic colors/params come from primvars.
     let mut material = ShaderMaterial::default();
     read_authored_params(reader, sdf_path, &mut material);
-    material.shader = asset_server.load(&shader_path);
+    #[cfg(target_arch = "wasm32")]
+    let resolved_shader_path = if shader_path == "shaders/regolith.wgsl" {
+        "shaders/regolith_web.wgsl".to_string()
+    } else if shader_path == "shaders/terrain_layered.wgsl" {
+        "shaders/terrain_layered_web.wgsl".to_string()
+    } else {
+        shader_path
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let resolved_shader_path = shader_path;
 
-    debug!("[shader] applied {} to {}", shader_path, prim_path.path);
+    material.shader = asset_server.load(&resolved_shader_path);
+
+    debug!("[shader] applied {} to {}", resolved_shader_path, prim_path.path);
     let handle = materials.add(material);
     commands
         .entity(entity)

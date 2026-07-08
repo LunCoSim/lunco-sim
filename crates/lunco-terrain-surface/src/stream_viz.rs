@@ -125,7 +125,16 @@ impl TerrainShaderMode {
     /// The `.wgsl` this mode draws with (all carry the CDLOD vertex morph).
     fn shader_path(self) -> &'static str {
         match self {
-            TerrainShaderMode::Lit => "shaders/terrain_geomorph.wgsl",
+            TerrainShaderMode::Lit => {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    "shaders/terrain_geomorph_web.wgsl"
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    "shaders/terrain_geomorph.wgsl"
+                }
+            }
             TerrainShaderMode::DebugLod | TerrainShaderMode::Plain => {
                 "shaders/terrain_geomorph_flat.wgsl"
             }
@@ -595,8 +604,10 @@ pub fn update_lod_tiles(
     cfg: Res<TerrainLodConfig>,
     asset_server: Res<AssetServer>,
     mut stream_status: ResMut<TerrainStreamStatus>,
+    settings: Option<Res<lunco_settings::TerrainSettings>>,
 ) {
     *stream_status = TerrainStreamStatus::default();
+    let enable_shaders = settings.as_ref().map(|s| s.enable_shaders).unwrap_or(true);
     // Use the first 3D camera as the focus. (Multiple cameras → the viz follows
     // whichever; fine for a debug view.)
     let Some(cam) = cameras.iter().next() else { return };
@@ -608,7 +619,10 @@ pub fn update_lod_tiles(
     let mut bake_budget = cfg.bakes_per_frame.max(1);
 
     for (terrain, t_gt, hf, viz, mut tiles, mut pending, mut errs, mode_opt) in &mut terrains {
-        let mode = mode_opt.copied().unwrap_or_else(TerrainShaderMode::platform_default);
+        let mut mode = mode_opt.copied().unwrap_or_else(TerrainShaderMode::platform_default);
+        if !enable_shaders {
+            mode = TerrainShaderMode::Plain;
+        }
         // The terrain's current height generation: a tile/bake tagged with an older
         // gen is stale (a live re-bake changed the heights) and is replaced near-first.
         let cur_gen = tiles.gen;

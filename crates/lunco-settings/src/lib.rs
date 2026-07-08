@@ -276,3 +276,23 @@ impl SettingsSection for ProfileSettings {
     const KEY: &'static str = "profile";
 }
 
+/// Persisted terrain/ground settings.
+#[derive(Resource, serde::Serialize, serde::Deserialize, Clone, PartialEq, Debug)]
+pub struct TerrainSettings {
+    /// If false, custom terrain shaders (such as procedural regolith FBM)
+    /// are disabled and fall back to the simple flat-lit/unlit geomorph shader.
+    pub enable_shaders: bool,
+}
+
+impl Default for TerrainSettings {
+    fn default() -> Self {
+        Self {
+            enable_shaders: true,
+        }
+    }
+}
+
+impl SettingsSection for TerrainSettings {
+    const KEY: &'static str = "terrain";
+}
+

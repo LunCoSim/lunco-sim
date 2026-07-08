@@ -43,6 +43,8 @@ pub struct TerrainSurfacePlugin;
 
 impl Plugin for TerrainSurfacePlugin {
     fn build(&self, app: &mut App) {
+        use lunco_settings::AppSettingsExt;
+        app.register_settings_section::<lunco_settings::TerrainSettings>();
         app.init_resource::<TerrainSurfaceConfig>();
         app.register_type::<crate::georef::TerrainGeoref>();
         app.register_type::<crate::stream_viz::TerrainShaderMode>();

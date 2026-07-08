@@ -463,7 +463,8 @@ impl Plugin for WorkbenchPlugin {
             )
             // Scene picking is handled by bevy_picking (egui occlusion via
             // bevy_egui's picking backend) — no scene-pointer resource, no gate.
-            .add_systems(bevy::prelude::Update, maintain_dock_widths);
+            .add_systems(bevy::prelude::Update, maintain_dock_widths)
+            .add_systems(Startup, register_terrain_settings_menu);
 
         // Built-in Files section ships with the workbench so apps get
         // a usable browser even before any domain plugin registers.
@@ -3413,6 +3414,24 @@ fn render_panel_solo(
             format!("Panel `{}` not registered", id.as_str()),
         );
     }
+}
+
+fn register_terrain_settings_menu(world: &mut World) {
+    use bevy_egui::egui;
+    let Some(mut layout) = world.get_resource_mut::<crate::WorkbenchLayout>() else {
+        return;
+    };
+    layout.register_settings(|ui, world| {
+        ui.label(egui::RichText::new("Terrain").weak().small());
+        if let Some(mut settings) = world.get_resource_mut::<lunco_settings::TerrainSettings>() {
+            ui.checkbox(&mut settings.enable_shaders, "Enable high-quality procedural shaders")
+                .on_hover_text(
+                    "Enable dynamic micro-relief normal mapping and albedo mottle. \
+                     Turning this off improves WebAssembly/browser frame rate. \
+                     Persisted to ~/.lunco/settings.json.",
+                );
+        }
+    });
 }
 
 #[cfg(test)]

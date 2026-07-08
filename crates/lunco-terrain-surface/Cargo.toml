@@ -34,6 +34,7 @@ lunco-terrain-bake = { path = "../lunco-terrain-bake" }
 # The one general self-describing material — LOD tiles use the `terrain_geomorph`
 # shader (CDLOD vertex morph) through `ShaderMaterial`, not a bespoke material type.
 lunco-materials = { path = "../lunco-materials" }
+lunco-settings = { path = "../lunco-settings" }
 # M3 spawn: avian heightfield collider + big_space anchoring + cross-platform
 # byte I/O for the DEM asset (FileStorage native / WebStorage web).
 avian3d = { workspace = true }
