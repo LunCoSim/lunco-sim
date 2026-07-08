@@ -154,6 +154,40 @@ resolve_cache_dir() {
     echo ""
 }
 
+# ── Portable directory sync ───────────────────────────────────────────────
+# rsync isn't on Windows runners (Git Bash has no rsync). This wrapper
+# uses rsync when available (fast, incremental, --delete) and falls back
+# to cp -r + rm -rf for the same semantics. `--delete` is emulated by
+# wiping the dest before copying.
+#
+#   sync_dir <src-with-trailing-slash> <dest-with-trailing-slash>
+#   sync_dir <src-with-trailing-slash> <dest-with-trailing-slash> no-delete
+#
+# The trailing-slash convention matches rsync: "src/" = contents-of-src.
+sync_dir() {
+    local src="$1" dest="$2" no_delete="${3:-}"
+    if command -v rsync &>/dev/null; then
+        if [ "$no_delete" = "no-delete" ]; then
+            rsync -a "$src" "$dest"
+        else
+            rsync -a --delete "$src" "$dest"
+        fi
+    else
+        # cp -r fallback (Windows Git Bash). No trailing slash semantics —
+        # cp copies the dir itself, so we mirror "contents-of" by wiping
+        # dest and copying the src's children.
+        mkdir -p "$dest"
+        if [ "$no_delete" != "no-delete" ]; then
+            rm -rf "${dest:?}"/* 2>/dev/null || true
+        fi
+        # cp -r "$src"* "$dest" — the glob handles visible files; dotfiles
+        # need a separate pass (shopt -s dotglob would be cleaner but bash
+        # 3.2 on macOS handles it; Git Bash on Windows also supports it).
+        ( shopt -s dotglob nullglob 2>/dev/null; cp -r "$src"* "$dest" 2>/dev/null ) || \
+            cp -r "$src". "$dest"
+    fi
+}
+
 # ── Download cache assets for a binary ────────────────────────────────────
 # Runs `cargo run -p lunco-assets -- download` for each crate whose assets
 # the binary needs, then `process` for crates with a process step (e.g.
@@ -468,7 +502,7 @@ info "Binary staged: $BIN_NAME ($(du -h "$OUT_DIR/$BIN_NAME" | cut -f1))"
 # Copy assets/
 if [ "$NO_ASSETS" -eq 0 ] && [ -d "$PROJECT_DIR/assets" ]; then
     info "Copying assets/ → $OUT_DIR/assets/"
-    rsync -a --delete "$PROJECT_DIR/assets/" "$OUT_DIR/assets/"
+    sync_dir "$PROJECT_DIR/assets/" "$OUT_DIR/assets/"
 else
     [ "$NO_ASSETS" -eq 0 ] && warn "No assets/ directory found at $PROJECT_DIR/assets"
 fi
@@ -478,9 +512,7 @@ fi
 if [ "$NO_ASSETS" -eq 0 ]; then
     if [ -d "$PROJECT_DIR/docs" ]; then
         info "Copying docs/ → $OUT_DIR/docs/"
-        rsync -a --delete \
-            --exclude 'numeric-experiments' \
-            "$PROJECT_DIR/docs/" "$OUT_DIR/docs/"
+        sync_dir "$PROJECT_DIR/docs/" "$OUT_DIR/docs/"
     else
         warn "No docs/ directory found at $PROJECT_DIR/docs"
     fi
@@ -496,14 +528,14 @@ if [ "$NO_CACHE" -eq 0 ]; then
     if [ -n "$CACHE_SRC" ] && [ -d "$CACHE_SRC" ]; then
         if [ "$FULL_CACHE" -eq 1 ]; then
             info "Bundling full .cache/ → $OUT_DIR/.cache/"
-            rsync -a --delete "$CACHE_SRC/" "$OUT_DIR/.cache/"
+            sync_dir "$CACHE_SRC/" "$OUT_DIR/.cache/"
         else
             SUBDIRS="$(cache_subdirs_for "$BINARY")"
             for subdir in $SUBDIRS; do
                 if [ -d "$CACHE_SRC/$subdir" ]; then
                     mkdir -p "$OUT_DIR/.cache"
                     info "Bundling .cache/$subdir → $OUT_DIR/.cache/$subdir/ ($(du -sh "$CACHE_SRC/$subdir" | cut -f1))"
-                    rsync -a "$CACHE_SRC/$subdir/" "$OUT_DIR/.cache/$subdir/"
+                    sync_dir "$CACHE_SRC/$subdir/" "$OUT_DIR/.cache/$subdir/" no-delete
                 else
                     warn ".cache/$subdir not found at $CACHE_SRC — $BINARY may need it at runtime"
                     warn "  Populate with: cargo run -p lunco-assets -- download -p <crate>"
