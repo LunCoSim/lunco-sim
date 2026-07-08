@@ -32,13 +32,23 @@ use web_sys::{Request, RequestInit, RequestMode, Response};
 
 #[wasm_bindgen(inline_js = "
     export async function lunco_fetch_bytes_cached_with_progress(cacheName, path, expectedTotal, on_progress) {
-        // Cache Storage only exists in secure contexts (HTTPS / localhost). On a
-        // LAN IP or file:// `caches` is undefined — degrade to an uncached fetch
-        // instead of throwing 'Cannot read properties of undefined (open)'.
-        const cache = (typeof caches !== 'undefined' && caches)
-            ? await caches.open(cacheName)
-            : null;
-        const matchResponse = cache ? await cache.match(path) : null;
+        let cache = null;
+        try {
+            if (typeof caches !== 'undefined' && caches) {
+                cache = await caches.open(cacheName);
+            }
+        } catch (e) {
+            console.warn('Cache Storage open failed, degrading to network fetch:', e);
+        }
+
+        let matchResponse = null;
+        if (cache) {
+            try {
+                matchResponse = await cache.match(path);
+            } catch (e) {
+                console.warn('Cache lookup failed:', e);
+            }
+        }
 
         let response;
         let fromCache = false;
@@ -57,6 +67,27 @@ use web_sys::{Request, RequestInit, RequestMode, Response};
         // served from Cache Storage often reports no Content-Length.
         const contentLength = response.headers.get('content-length');
         const total = (contentLength ? parseInt(contentLength, 10) : 0) || expectedTotal || 0;
+
+        if (!response.body) {
+            const arrayBuffer = await response.array_buffer();
+            if (on_progress) {
+                try { on_progress(arrayBuffer.byteLength, arrayBuffer.byteLength); } catch (e) {}
+            }
+            const allChunks = new Uint8Array(arrayBuffer);
+            if (!fromCache && cache) {
+                try {
+                    const cachedResponse = new Response(allChunks, {
+                        status: response.status,
+                        statusText: response.statusText,
+                        headers: response.headers
+                    });
+                    await cache.put(path, cachedResponse);
+                } catch (e) {
+                    console.warn('Failed to write to cache:', e);
+                }
+            }
+            return allChunks;
+        }
 
         const reader = response.body.getReader();
         const chunks = [];

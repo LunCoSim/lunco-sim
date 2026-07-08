@@ -236,7 +236,7 @@ impl Craters {
         // Cell just big enough that the biggest crater spans a bounded 3×3 of cells.
         let max_reach = craters.iter().map(|c| c.reach()).fold(0.0_f64, f64::max);
         let cell_size = max_reach.max(1.0);
-        let mut buckets: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
+        let mut buckets: HashMap<(i64, i64), Vec<u32>> = HashMap::with_capacity((craters.len() / 500).max(64));
         for (i, c) in craters.iter().enumerate() {
             let reach = c.reach();
             if reach <= 0.0 {

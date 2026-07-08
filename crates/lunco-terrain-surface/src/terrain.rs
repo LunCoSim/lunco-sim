@@ -30,6 +30,8 @@ use lunco_terrain_bake::bake::{crop_centered, resample};
 use lunco_terrain_bake::dem::{height_grid_from_geotiff, DemMetadata};
 #[cfg(target_arch = "wasm32")]
 use lunco_terrain_bake::{BakedGrid, DemBakeJob};
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsCast;
 
 /// Default realized region side length (metres) when `window_m` is 0… no — see
 /// below: 0 means the whole map. This is the fallback when a caller passes a
@@ -90,7 +92,11 @@ pub(crate) fn crater_placements(
     // the count here instead of asking every scene to re-author density. Capped:
     // the analytic index stays cheap per-sample, but a pathological min would
     // otherwise mint millions of placements.
-    let rmin = craters.size.min.max(0.5) as f64;
+    #[cfg(target_arch = "wasm32")]
+    let rmin = (craters.size.min as f64).max(1.5);
+    #[cfg(not(target_arch = "wasm32"))]
+    let rmin = (craters.size.min as f64).max(0.5);
+
     let sfd_scale = (8.0 / rmin).powf(1.8).max(1.0);
     let count = ((craters.density as f64 * side * side) / 10_000.0 * sfd_scale)
         .round()
@@ -180,6 +186,8 @@ pub struct TerrainGenStatus {
     pub phase: String,
     /// `0.0..=1.0` when a real fraction is known; `None` = indeterminate (spinner).
     pub fraction: Option<f32>,
+    /// Set to true if the user dismissed the loading overlay manually.
+    pub user_dismissed: bool,
 }
 
 /// Safety valve: if a build's components linger this long (a lost worker reply,
@@ -217,23 +225,43 @@ fn update_terrain_gen_status(
         }
     }
     // Web worker phase: coarse still pending (request present) vs full refine.
+    #[allow(unused_mut)]
+    let mut download_fraction: Option<f32> = None;
     let mut streaming_coarse = false;
     let mut refining_full = false;
-    for (req, _job) in &worker_jobs {
+    for (req, job) in &worker_jobs {
+        let _ = job;
         if req.is_some() {
             streaming_coarse = true;
+            #[cfg(target_arch = "wasm32")]
+            {
+                if let Ok(guard) = job.download_progress.lock() {
+                    if let Some((done, total)) = *guard {
+                        if total > 0 {
+                            download_fraction = Some(done as f32 / total as f32);
+                        }
+                    }
+                }
+            }
         } else {
             refining_full = true;
         }
     }
-    let streaming = streaming_coarse || refining_full;
-    let active = queued || streaming;
+    // Only show the giant centered loader overlay during preparation, download,
+    // and coarse build (before the first mesh/collider lands). Background
+    // refinement runs silently in the background, updating tiles dynamically.
+    let active = queued || streaming_coarse;
 
     if !active {
-        if status.active {
+        if status.active || status.user_dismissed {
             *status = TerrainGenStatus::default();
         }
         *elapsed = 0.0;
+        return;
+    }
+
+    if status.user_dismissed {
+        status.active = false;
         return;
     }
 
@@ -259,7 +287,15 @@ fn update_terrain_gen_status(
     let (phase, fraction) = if refining_full {
         ("Refining terrain", Some(0.66))
     } else if streaming_coarse {
-        ("Building terrain", Some(0.33))
+        if let Some(df) = download_fraction {
+            if df < 1.0 {
+                ("Downloading terrain", Some(0.1 + df * 0.23))
+            } else {
+                ("Building terrain", Some(0.33))
+            }
+        } else {
+            ("Building terrain", Some(0.33))
+        }
     } else if baking {
         ("Baking terrain", None)
     } else {
@@ -515,6 +551,8 @@ pub struct DemWorkerJob {
     collider_ring: bool,
     lod_viz: bool,
     with_default_material: bool,
+    #[cfg(target_arch = "wasm32")]
+    pub download_progress: std::sync::Arc<std::sync::Mutex<Option<(u64, u64)>>>,
 }
 
 /// Compose the surface oracle (raster base + the layers' ANALYTIC height modifiers)
@@ -571,7 +609,12 @@ fn layer_contributions(
     half_extent: f32,
 ) -> Vec<crate::oracle::HeightContribution> {
     stack
-        .map(|s| s.0.iter().filter_map(|e| e.layer.height_modifier(half_extent)).collect())
+        .map(|s| {
+            s.0.iter()
+                .filter(|e| e.layer.stamp_spec().is_none())
+                .filter_map(|e| e.layer.height_modifier(half_extent))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -610,6 +653,26 @@ async fn read_bytes(path: std::path::PathBuf) -> Result<Vec<u8>, String> {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+static WASM_BAKE_FAILURES_TX: std::sync::OnceLock<std::sync::mpsc::Sender<u32>> = std::sync::OnceLock::new();
+#[cfg(target_arch = "wasm32")]
+static WASM_BAKE_FAILURES_RX: std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Receiver<u32>>> = std::sync::OnceLock::new();
+
+#[cfg(target_arch = "wasm32")]
+fn get_wasm_bake_failures_tx() -> &'static std::sync::mpsc::Sender<u32> {
+    WASM_BAKE_FAILURES_TX.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = WASM_BAKE_FAILURES_RX.set(std::sync::Mutex::new(rx));
+        tx
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn get_wasm_bake_failures_rx() -> &'static std::sync::Mutex<std::sync::mpsc::Receiver<u32>> {
+    let _ = get_wasm_bake_failures_tx(); // ensures initialized
+    WASM_BAKE_FAILURES_RX.get().unwrap()
+}
+
 /// Kick a build for each pending request. On native (and the web fallback if no
 /// worker was staged) the shared `bake_grid` runs in an `AsyncComputeTaskPool`
 /// task; on web it is dispatched to the off-thread [`dem_worker`] so the decode +
@@ -639,16 +702,18 @@ fn start_dem_builds(
         // Scatter layers (rocks) are no-ops here; they run post-build.
         let layers: Vec<_> =
             stack.map(|s| s.0.iter().map(|e| e.layer.clone()).collect()).unwrap_or_default();
-        // WASM: the DEM worker only offloads the genuinely-heavy, non-analytic step
-        // — GeoTIFF decode + crop + resample — and returns the BARE base grid (no
-        // stamps; the crater/edit modifiers compose analytically on the main thread,
-        // which is cheap). This keeps the page's main thread free during the fetch.
+        // WASM: the DEM worker offloads GeoTIFF decode + crop + resample + static
+        // stamps (craters). Only non-stamped layers (like live drawing) compose
+        // analytically on the main thread.
+        #[cfg(target_arch = "wasm32")]
+        let stamps: Vec<_> =
+            layers.iter().filter_map(|l| l.stamp_spec()).collect();
         #[cfg(target_arch = "wasm32")]
         let job = DemBakeJob {
             half_window: req.half_window,
             target_res: req.target_res,
             detail_upsample: 1,
-            stamps: Vec::new(),
+            stamps,
         };
 
         // WEB: offload decode + stamp to the DEM Web Worker. A detached I/O task
@@ -658,27 +723,62 @@ fn start_dem_builds(
         #[cfg(target_arch = "wasm32")]
         if lunco_terrain_bake::worker_client::is_available() {
             let id = entity.index_u32();
+            let download_progress = std::sync::Arc::new(std::sync::Mutex::new(None));
             commands.entity(entity).insert(DemWorkerJob {
                 id,
                 collider_ring,
                 lod_viz,
                 with_default_material: req.with_default_material,
+                download_progress: download_progress.clone(),
             });
             let job = job.clone();
             AsyncComputeTaskPool::get()
                 .spawn(async move {
+                    let tx = get_wasm_bake_failures_tx().clone();
                     let meta = match read_bytes(meta_path).await {
                         Ok(b) => String::from_utf8_lossy(&b).into_owned(),
-                        Err(e) => return bevy::log::error!("[dem-terrain] meta fetch failed: {e}"),
+                        Err(e) => {
+                            bevy::log::error!("[dem-terrain] meta fetch failed: {e}");
+                            let _ = tx.send(id);
+                            return;
+                        }
                     };
-                    let tif = match read_bytes(tif_path).await {
+                    
+                    let rel = tif_path.to_string_lossy().replace('\\', "/");
+                    let url = if rel.starts_with("assets/") || rel.starts_with("http") || rel.starts_with('/') {
+                        rel
+                    } else {
+                        format!("assets/{rel}")
+                    };
+
+                    let progress_slot = download_progress.clone();
+                    let progress_cb = wasm_bindgen::closure::Closure::<dyn FnMut(f64, f64)>::new(move |done: f64, total: f64| {
+                        if let Ok(mut s) = progress_slot.lock() {
+                            *s = Some((done as u64, total as u64));
+                        }
+                    });
+
+                    let tif = match lunco_assets::web_fetch::fetch_cached_with_progress(
+                        "lunco-twin-v1",
+                        &url,
+                        0,
+                        progress_cb.as_ref().unchecked_ref(),
+                    )
+                    .await {
                         Ok(b) => b,
-                        Err(e) => return bevy::log::error!("[dem-terrain] tif fetch failed: {e}"),
+                        Err(e) => {
+                            bevy::log::error!("[dem-terrain] tif fetch failed: {e}");
+                            let _ = tx.send(id);
+                            return;
+                        }
                     };
+                    drop(progress_cb);
+
                     if let Err(e) =
                         lunco_terrain_bake::worker_client::dispatch(id, &job, &meta, &tif)
                     {
                         bevy::log::error!("[dem-terrain] worker dispatch failed: {e:?}");
+                        let _ = tx.send(id);
                     }
                 })
                 .detach();
@@ -919,6 +1019,15 @@ fn finish_dem_worker(
     mut meshes: Option<ResMut<Assets<Mesh>>>,
     mut materials: Option<ResMut<Assets<StandardMaterial>>>,
 ) {
+    // Drain failed wasm bakes:
+    if let Ok(rx) = get_wasm_bake_failures_rx().try_lock() {
+        while let Ok(failed_id) = rx.try_recv() {
+            if let Some((entity, _)) = jobs.iter().find(|(_, j)| j.id == failed_id) {
+                commands.entity(entity).remove::<(DemTerrainRequest, DemWorkerJob)>();
+            }
+        }
+    }
+
     let replies = lunco_terrain_bake::worker_client::drain_replies();
     if replies.is_empty() {
         return;

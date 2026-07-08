@@ -46,15 +46,7 @@ struct CraterFieldLayer {
     seed: u64,
 }
 
-/// Deterministic uniform draw in `[0, 1)` from `(seed, salt, index)` — one
-/// independent stream per salt, identical on every peer.
-fn hash01(seed: u64, salt: u64, i: usize) -> f64 {
-    let mut h = lunco_precompute::Fnv1a::new();
-    h.write_u64(seed);
-    h.write_u64(salt);
-    h.write_u64(i as u64);
-    (h.finish() >> 11) as f64 / (1u64 << 53) as f64
-}
+
 
 impl TerrainLayer for CraterFieldLayer {
     fn id(&self) -> &'static str {
@@ -115,6 +107,32 @@ impl TerrainLayer for CraterFieldLayer {
                 bowl_power: 2.0 + 4.0 * u,
             }
         };
+        struct PrehashedFnv1a {
+            hasher: lunco_precompute::Fnv1a,
+        }
+
+        impl PrehashedFnv1a {
+            #[inline]
+            fn new(seed: u64, salt: u64) -> Self {
+                let mut h = lunco_precompute::Fnv1a::new();
+                h.write_u64(seed);
+                h.write_u64(salt);
+                Self { hasher: h }
+            }
+
+            #[inline]
+            fn hash(&self, i: usize) -> f64 {
+                let mut h = self.hasher;
+                h.write_u64(i as u64);
+                (h.finish() >> 11) as f64 / (1u64 << 53) as f64
+            }
+        }
+
+        let hash_size_mix = PrehashedFnv1a::new(self.seed, 0x517E_0001);
+        let hash_size_draw = PrehashedFnv1a::new(self.seed, 0x517E_0002);
+        let hash_degradation = PrehashedFnv1a::new(self.seed, 0x0DE6_4ADE);
+        let hash_depth_scatter = PrehashedFnv1a::new(self.seed, 0x0DE6_5CA7);
+
         let mut craters: Vec<Crater> = placements
             .iter()
             .enumerate()
@@ -125,20 +143,20 @@ impl TerrainLayer for CraterFieldLayer {
                 // — power-law N(>r) ∝ r^-1.8 across the FULL authored range
                 // [min, max] for 85% of the population; 15% keep the authored
                 // log-normal size (the authored-scale minority).
-                let su = hash01(self.seed, 0x517E_0001, i); // size-mix stream
+                let su = hash_size_mix.hash(i);
                 let radius = if su < 0.85 {
                     let a = 1.8_f64;
                     let rmin = self.craters.size.min.max(0.5) as f64;
                     let rmax = (self.craters.size.max as f64).max(rmin + 0.1);
                     let q = (rmin / rmax).powf(a);
-                    let uu = hash01(self.seed, 0x517E_0002, i); // size-draw stream
+                    let uu = hash_size_draw.hash(i);
                     rmin * (1.0 - uu * (1.0 - q)).powf(-1.0 / a)
                 } else {
                     p.size as f64
                 };
-                let u = hash01(self.seed, 0x0DE6_4ADE, i);
+                let u = hash_degradation.hash(i);
                 // ±15% depth scatter breaks exact self-similarity across the field.
-                let depth_scatter = 0.85 + 0.30 * hash01(self.seed, 0x0DE6_5CA7, i);
+                let depth_scatter = 0.85 + 0.30 * hash_depth_scatter.hash(i);
                 let mut c = morph(radius, u, depth_scatter);
                 c.center = [p.pos.x as f64, p.pos.y as f64];
                 c
@@ -152,21 +170,29 @@ impl TerrainLayer for CraterFieldLayer {
         let parents: Vec<usize> =
             (0..craters.len()).filter(|&i| craters[i].radius >= 12.0).collect();
         if !parents.is_empty() {
+            let hash_sec1 = PrehashedFnv1a::new(self.seed, 0x5EC0_0001);
+            let hash_sec2 = PrehashedFnv1a::new(self.seed, 0x5EC0_0002);
+            let hash_sec3 = PrehashedFnv1a::new(self.seed, 0x5EC0_0003);
+            let hash_sec4 = PrehashedFnv1a::new(self.seed, 0x5EC0_0004);
+            let hash_sec5 = PrehashedFnv1a::new(self.seed, 0x5EC0_0005);
+            let hash_sec6 = PrehashedFnv1a::new(self.seed, 0x5EC0_0006);
+            let hash_sec7 = PrehashedFnv1a::new(self.seed, 0x5EC0_0007);
+
             for i in 0..craters.len() {
-                if craters[i].radius >= 12.0 || hash01(self.seed, 0x5EC0_0001, i) >= 0.15 {
+                if craters[i].radius >= 12.0 || hash_sec1.hash(i) >= 0.15 {
                     continue;
                 }
-                let pj = parents[(hash01(self.seed, 0x5EC0_0002, i) * parents.len() as f64)
+                let pj = parents[(hash_sec2.hash(i) * parents.len() as f64)
                     as usize
                     % parents.len()];
                 let parent = craters[pj];
-                let lobe = hash01(self.seed, 0x5EC0_0003, pj) * std::f64::consts::TAU;
-                let az = lobe + (hash01(self.seed, 0x5EC0_0004, i) - 0.5) * 0.9;
-                let range = parent.radius * (2.0 + 3.0 * hash01(self.seed, 0x5EC0_0005, i));
+                let lobe = hash_sec3.hash(pj) * std::f64::consts::TAU;
+                let az = lobe + (hash_sec4.hash(i) - 0.5) * 0.9;
+                let range = parent.radius * (2.0 + 3.0 * hash_sec5.hash(i));
                 let radius = (parent.radius
-                    * (0.04 + 0.08 * hash01(self.seed, 0x5EC0_0006, i)))
+                    * (0.04 + 0.08 * hash_sec6.hash(i)))
                 .max(self.craters.size.min.max(0.5) as f64);
-                let u = 0.45 + 0.5 * hash01(self.seed, 0x5EC0_0007, i);
+                let u = 0.45 + 0.5 * hash_sec7.hash(i);
                 let mut c = morph(radius, u, 0.8);
                 c.center = [
                     parent.center[0] + az.cos() * range,

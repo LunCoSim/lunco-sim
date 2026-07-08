@@ -17,7 +17,7 @@ use lunco_terrain_surface::TerrainGenStatus;
 
 /// Paint the centered generation card when a terrain build is active. Runs in
 /// `EguiPrimaryContextPass`; a no-op (early return) whenever nothing is baking.
-pub(crate) fn draw_terrain_progress(mut egui_ctx: EguiContexts, status: Res<TerrainGenStatus>) {
+pub(crate) fn draw_terrain_progress(mut egui_ctx: EguiContexts, mut status: ResMut<TerrainGenStatus>) {
     if !status.active {
         return;
     }
@@ -37,8 +37,7 @@ pub(crate) fn draw_terrain_progress(mut egui_ctx: EguiContexts, status: Res<Terr
     egui::Area::new(egui::Id::new("terrain_gen_overlay"))
         .order(egui::Order::Foreground)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-        // Informational only — let pointer events fall through to the viewport.
-        .interactable(false)
+        .interactable(true)
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style())
                 .inner_margin(egui::Margin::symmetric(24, 20))
@@ -69,11 +68,25 @@ pub(crate) fn draw_terrain_progress(mut egui_ctx: EguiContexts, status: Res<Terr
                             }
                         }
                         ui.add_space(4.0);
+                        let subtext = if status.phase.contains("Download") {
+                            "Fetching heightmap file from server…"
+                        } else if status.phase.contains("Build") {
+                            "Decoding heightmap, stamping craters, building colliders…"
+                        } else if status.phase.contains("Refin") {
+                            "Refining high-detail meshes and colliders near camera…"
+                        } else {
+                            "Preparing terrain generation…"
+                        };
                         ui.label(
-                            egui::RichText::new("Decoding heightmap, stamping craters, building colliders…")
+                            egui::RichText::new(subtext)
                                 .weak()
                                 .size(11.0),
                         );
+                        ui.add_space(12.0);
+                        if ui.button("Dismiss Overlay").clicked() {
+                            status.user_dismissed = true;
+                            status.active = false;
+                        }
                     });
                 });
         });

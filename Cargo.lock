@@ -7408,6 +7408,7 @@ dependencies = [
  "serde",
  "tiff",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 
@@ -7446,6 +7447,7 @@ dependencies = [
  "lunco-time",
  "serde",
  "serde_json",
+ "wasm-bindgen",
 ]
 
 [[package]]

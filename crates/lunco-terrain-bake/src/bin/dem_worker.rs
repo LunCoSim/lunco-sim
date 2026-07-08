@@ -87,6 +87,18 @@ mod wasm {
         let _ = scope().post_message(&obj);
     }
 
+    #[wasm_bindgen]
+    extern "C" {
+        fn setTimeout(handler: &js_sys::Function, timeout: i32);
+    }
+
+    async fn yield_to_event_loop() {
+        let promise = js_sys::Promise::new(&mut |resolve, _reject| {
+            setTimeout(&resolve, 0);
+        });
+        let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+    }
+
     fn handle(ev: MessageEvent) {
         let data = ev.data();
         let id = Reflect::get(&data, &JsValue::from_str("id"))
@@ -113,11 +125,18 @@ mod wasm {
         };
         drop(tif);
 
-        // Coarse preview first (fast → terrain + collider appear), then full-res.
-        for stage in [BakeStage::Coarse, BakeStage::Full] {
-            let baked = finish_bake(&raw, &meta.site_id, &job, stage);
-            post_baked(id, &baked);
-        }
+        // Coarse preview first (fast → terrain + collider appear)
+        let baked_coarse = finish_bake(&raw, &meta.site_id, &job, BakeStage::Coarse);
+        post_baked(id, &baked_coarse);
+
+        // Yield to the event loop so the coarse preview message is dispatched immediately,
+        // then refine the full grid in the background.
+        let site_id = meta.site_id.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            yield_to_event_loop().await;
+            let baked_full = finish_bake(&raw, &site_id, &job, BakeStage::Full);
+            post_baked(id, &baked_full);
+        });
     }
 
     #[wasm_bindgen(start)]
