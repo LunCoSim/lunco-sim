@@ -37,6 +37,10 @@ permissions:
 
 jobs:
   # ── Determine the date tag once ──────────────────────────────────────────
+  # Uses a fixed `nightly` tag so each run OVERWRITES the previous release
+  # (rolling). The date is kept for the release title + body so users can
+  # see when the build was made. Override the tag with the `release_tag`
+  # input to pin a specific build (e.g. `nightly-2026-07-08-test`).
   meta:
     runs-on: ubuntu-latest
     outputs:
@@ -44,13 +48,13 @@ jobs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
       - id: date
-        run: echo "date=$(date -u +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
+        run: echo "date=$(date -u +'%Y-%m-%d %H:%M UTC')" >> "$GITHUB_OUTPUT"
       - id: tag
         run: |
           if [ -n "${{ inputs.release_tag }}" ]; then
             echo "tag=${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=nightly-$(date -u +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
+            echo "tag=nightly" >> "$GITHUB_OUTPUT"
           fi
 
   # ── Build all three binaries per OS ──────────────────────────────────────
@@ -230,6 +234,11 @@ jobs:
             Linux, macOS, and Windows. Triggered manually from the
             [Actions tab](${{ github.server_url }}/${{ github.repository }}/actions/workflows/nightly.yml).
 
+            > 🔄 **Rolling release** — this tag (`nightly`) is overwritten
+            > on every run. Only the latest build is available for
+            > download. To pin a specific build, pass a custom
+            > `release_tag` input when triggering the workflow.
+
             > ⚠️ **Nightly builds are untested development snapshots.**
             > They may be unstable, crash, or fail to run. Use at your own risk.
 
@@ -310,6 +319,9 @@ jobs:
             Found a bug? Report it on
             [GitHub Issues](${{ github.server_url }}/${{ github.repository }}/issues).
           files: artifacts/*
-          prerelease: true
-          make_latest: false
+          # Mark as the latest release so it shows on the repo main page
+          # (right sidebar "Releases" widget). When a stable release is
+          # published later, that one should be marked latest instead.
+          prerelease: false
+          make_latest: true
           generate_release_notes: false
