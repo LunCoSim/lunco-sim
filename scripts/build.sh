@@ -12,6 +12,9 @@
 #     lunica           WASM client bundle  -> dist/lunica/    (browser IDE)
 #     sandbox-server   NATIVE headless server binary -> target/<profile>/sandbox
 #                      (run with `--no-ui --host`; see crates/lunco-networking/DEPLOY.md)
+#     lunica-desktop   NATIVE desktop GUI  -> dist/lunica-<platform>-<arch>/
+#     sandbox-desktop  NATIVE desktop GUI  -> dist/sandbox-<platform>-<arch>/
+#                      (Linux, macOS, Windows; see scripts/build_native.sh)
 #
 # Profile:
 #     default          fast dev build
@@ -21,9 +24,12 @@
 #     ./scripts/build.sh sandbox --release          # optimized web client
 #     ./scripts/build.sh sandbox-server --release   # optimized native server
 #     ./scripts/build.sh sandbox-server             # quick dev server build
+#     ./scripts/build.sh lunica-desktop --release --package  # native desktop
+#     ./scripts/build.sh sandbox-desktop --release --package
 #
 # The web targets delegate to build_web.sh (the wasm pipeline); the server
-# target is a plain native cargo build with the headless feature set.
+# target is a plain native cargo build with the headless feature set; the
+# desktop targets delegate to build_native.sh (native GUI + asset packaging).
 # ============================================================================
 set -euo pipefail
 
@@ -37,7 +43,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 usage() {
-    sed -n '2,28p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
@@ -111,8 +117,20 @@ case "$TARGET" in
 
     -h|--help)
         usage 0 ;;
+    lunica-desktop|sandbox-desktop)
+        # NATIVE desktop GUI — hand off to the native build pipeline (it
+        # owns platform detection, asset/cache bundling, launcher scripts,
+        # and optional archive creation). Pass --release and any extra
+        # args through.
+        bin="${TARGET%-desktop}"
+        args=("$bin")
+        [ "$RELEASE" -eq 1 ] && args+=(--release)
+        args+=("${PASS[@]+"${PASS[@]}"}")
+        info "native desktop build: ./scripts/build_native.sh ${args[*]}"
+        exec "$SCRIPT_DIR/build_native.sh" "${args[@]}"
+        ;;
     *)
         error "Unknown target: $TARGET"
-        error "Targets: sandbox, lunica (web)  |  sandbox-server (native)"
+        error "Targets: sandbox, lunica (web)  |  sandbox-server (native server)  |  lunica-desktop, sandbox-desktop (native desktop)"
         exit 2 ;;
 esac

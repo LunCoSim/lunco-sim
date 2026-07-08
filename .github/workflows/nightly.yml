@@ -1,0 +1,315 @@
+# ============================================================================
+# LunCoSim — nightly desktop builds (manual trigger)
+# ============================================================================
+# Builds lunica and sandbox as native desktop binaries for
+# Linux (x86_64), macOS (arm64 + x86_64), and Windows (x86_64), packages
+# each with assets + docs + cache, and uploads the archives as GitHub
+# Actions artifacts. A GitHub Release is created when `make_release` is
+# true (default).
+#
+# Trigger: workflow_dispatch ONLY (manual, from the Actions tab).
+#   https://github.com/LunCoSim/luncosim-workspace/actions/workflows/nightly.yml
+#
+# Each OS job downloads the cache assets its binaries need, builds all
+# three, and packages them via scripts/build_native.sh. Compilation is
+# shared across the three binaries (same cargo workspace, shared deps).
+# ============================================================================
+
+name: Nightly Builds
+
+on:
+  workflow_dispatch:
+    inputs:
+      make_release:
+        description: 'Create a GitHub release with the artifacts'
+        type: boolean
+        default: true
+      release_tag:
+        description: 'Release tag (default: nightly-YYYY-MM-DD). Use a custom tag like "nightly-2026-07-08-test" to avoid overwriting.'
+        type: string
+        required: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write   # needed for gh-release upload
+
+jobs:
+  # ── Determine the date tag once ──────────────────────────────────────────
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      date: ${{ steps.date.outputs.date }}
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - id: date
+        run: echo "date=$(date -u +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
+      - id: tag
+        run: |
+          if [ -n "${{ inputs.release_tag }}" ]; then
+            echo "tag=${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=nightly-$(date -u +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ── Build all three binaries per OS ──────────────────────────────────────
+  build:
+    needs: meta
+    name: ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux x86_64
+            os: ubuntu-22.04
+            platform: linux
+            arch: x86_64
+            # Bevy's Linux windowing stack (winit/wayland/x11) needs these
+            # dev headers at build time. alsa = libasound2 (bevy_audio is
+            # off, but alsa-sys may still be a transitive); udev = libudev
+            # (winit); wayland + xkbcommon + x11 = the display backends.
+            apt_pkgs: >-
+              libasound2-dev libudev-dev
+              libwayland-dev libxkbcommon-dev
+              libx11-dev xorg-dev
+
+          - label: macOS ARM64
+            os: macos-14
+            platform: macos
+            arch: aarch64
+            apt_pkgs: ''
+
+          - label: macOS x86_64
+            os: macos-13
+            platform: macos
+            arch: x86_64
+            apt_pkgs: ''
+
+          - label: Windows x86_64
+            os: windows-latest
+            platform: windows
+            arch: x86_64
+            apt_pkgs: ''
+
+    runs-on: ${{ matrix.os }}
+    # Force bash on all platforms — our build scripts are bash. On Windows
+    # GitHub runners, `shell: bash` uses Git Bash (pre-installed).
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Point the asset pipeline at a project-local .cache/ so the build
+      # script can find the downloaded fonts / MSL / models. Without this,
+      # cache_dir() falls back to an OS-specific path that varies per
+      # runner. Using $PWD/.cache keeps everything in the workspace.
+      LUNCOSIM_CACHE: ${{ github.workspace }}/.cache
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins nightly-2026-02-27; the dtolnay action
+      # honours it but we set the toolchain explicitly to be safe on
+      # fresh runners where the file hasn't been read yet.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-02-27
+          components: rust-src
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'linux' && matrix.apt_pkgs != ''
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ${{ matrix.apt_pkgs }}
+
+      # Node.js is needed by `cargo run -p lunco-assets -- process -p
+      # lunco-usd` (calls `npx @gltf-transform/cli` to strip Draco/WebP
+      # extensions from the rover glTF). Pre-installed on GitHub runners,
+      # but we set it up explicitly to guarantee a known version.
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # sccache caches compiled object files across runs, cutting rebuild
+      # time dramatically on the Bevy/avian dep closure (~500 crates).
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
+
+      - name: Configure sccache
+        run: |
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+
+      # Cache the cargo registry + git checkouts. The target/ dir is
+      # cached separately by swatinem/rust-cache which keys on
+      # Cargo.lock + OS + rust-toolchain.
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ matrix.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ matrix.os }}-cargo-registry-
+
+      - name: Cache target directory
+        uses: swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.platform }}-${{ matrix.arch }}
+
+      # ── Build + package each binary ──────────────────────────────────────
+      # The two builds share compiled deps (incremental cargo), so the
+      # 2nd is much faster than the 1st. --package creates a
+      # .tar.gz (unix) or .zip (windows) archive in dist/.
+      # docs/ + AGENTS.md are bundled by build_native.sh (not --no-assets).
+      # Cache download runs automatically before staging (unless
+      # --skip-download), so the .cache/ subdirs are populated in-place.
+      - name: Build lunica (desktop)
+        run: ./scripts/build_native.sh lunica --release --package
+
+      - name: Build sandbox (desktop)
+        run: ./scripts/build_native.sh sandbox --release --package
+
+      # ── Upload artifacts ─────────────────────────────────────────────────
+      # Each archive is uploaded individually so users can download just
+      # the binary they need. The release job (below) collects them into
+      # a GitHub Release.
+      - name: Upload lunica artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lunica-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/lunica-${{ matrix.platform }}-${{ matrix.arch }}.*
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload sandbox artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/sandbox-${{ matrix.platform }}-${{ matrix.arch }}.*
+          if-no-files-found: warn
+          retention-days: 30
+
+  # ── Optional: create a GitHub Release with all artifacts ────────────────
+  release:
+    needs: [meta, build]
+    runs-on: ubuntu-latest
+    # Only create a release if the user opted in (default true for
+    # workflow_dispatch). Always runs on whichever branch was dispatched.
+    if: github.event_name == 'workflow_dispatch' && inputs.make_release
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      # Flatten the artifact directory structure: artifacts/<name>/<file>
+      # → artifacts/<file> so the release can list them simply.
+      - name: Flatten artifacts
+        run: |
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec mv {} artifacts/ \;
+          # Remove the now-empty subdirectories
+          find artifacts -mindepth 1 -type d -empty -delete || true
+          echo "## Artifact listing" >> "$GITHUB_STEP_SUMMARY"
+          ls -lh artifacts/ | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Create nightly release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.meta.outputs.tag }}
+          name: Nightly ${{ needs.meta.outputs.date }}
+          body: |
+            ## Nightly build — ${{ needs.meta.outputs.date }}
+
+            Automated build of `lunica` and `sandbox` for
+            Linux, macOS, and Windows. Triggered manually from the
+            [Actions tab](${{ github.server_url }}/${{ github.repository }}/actions/workflows/nightly.yml).
+
+            > ⚠️ **Nightly builds are untested development snapshots.**
+            > They may be unstable, crash, or fail to run. Use at your own risk.
+
+            ---
+
+            ### Downloads
+
+            | Binary    | Linux x86_64 | macOS ARM64 | macOS x86_64 | Windows x86_64 |
+            |-----------|:-----------:|:-----------:|:------------:|:--------------:|
+            | `lunica`   | ✅ | ✅ | ✅ | ✅ |
+            | `sandbox`  | ✅ | ✅ | ✅ | ✅ |
+
+            Pick the archive matching your platform. Each archive is
+            self-contained — no external dependencies required.
+
+            ### What's in each archive
+
+            ```
+            <binary>-<platform>-<arch>/
+            ├── <binary>[.exe]    # the application
+            ├── assets/           # scene files, config, models, shaders
+            ├── .cache/           # fonts, MSL, models (per binary)
+            ├── docs/             # architecture docs, tutorials, app guides
+            ├── AGENTS.md         # AI agent guidelines for the codebase
+            ├── run.sh / run.bat  # launcher (sets LUNCOSIM_CACHE)
+            └── README.md         # quick-start for this package
+            ```
+
+            ### Quick start
+
+            **Linux / macOS:**
+            ```bash
+            tar xzf <binary>-<platform>-<arch>.tar.gz
+            cd <binary>-<platform>-<arch>/
+            ./run.sh
+            ```
+
+            **Windows:**
+            1. Extract the `.zip` (right-click → Extract All).
+            2. Double-click `run.bat`, or run it from Command Prompt.
+
+            ### Binaries
+
+            - **`lunica`** — Modelica Workbench IDE. Edit and simulate
+              Modelica models with the egui-based diagram editor. Needs
+              the MSL bundle (included in `.cache/msl/`).
+            - **`sandbox`** — Rover Physics Sandbox. Test ground physics
+              with the Perseverance rover model (included in
+              `.cache/models/`). Supports multiplayer over WebTransport.
+
+            ### Documentation
+
+            Each archive bundles `docs/` and `AGENTS.md` for offline
+            reference. Key entry points:
+
+            - `docs/README.md` — reading order for newcomers
+            - `docs/crates-index.md` — map of the ~50-crate workspace
+            - `docs/principles.md` — non-negotiable design principles
+            - `docs/architecture/` — numbered design docs (00s overview,
+              10s systems, 20s domains, 30s platform, 40s cross-cutting)
+            - `docs/tutorials/` — user-facing tutorials
+            - `AGENTS.md` — AI agent guidelines (Bevy 0.18, plugin
+              layering, tunability mandate, TDD-first, frame discipline)
+
+            Online docs are at the
+            [repo](${{ github.server_url }}/${{ github.repository }}/tree/${{ github.sha }}/docs).
+
+            ### Build details
+
+            - **Commit:** [\`${{ github.sha }}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
+            - **Branch:** ${{ github.ref_name }}
+            - **Built by:** [Nightly Builds #${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            - **Toolchain:** Rust nightly-2026-02-27 (see `rust-toolchain.toml`)
+            - **Engine:** Bevy 0.18, Avian3D 0.6.1, big_space 0.12.0
+
+            ### Feedback
+
+            Found a bug? Report it on
+            [GitHub Issues](${{ github.server_url }}/${{ github.repository }}/issues).
+          files: artifacts/*
+          prerelease: true
+          make_latest: false
+          generate_release_notes: false
