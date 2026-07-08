@@ -3,8 +3,8 @@
 # ============================================================================
 # Builds lunica and sandbox as native desktop binaries for
 # Linux (x86_64), macOS (arm64 + x86_64 cross-compiled on Apple Silicon),
-# and Windows (x86_64), packages each with assets + docs + cache, and
-# uploads the archives as GitHub Actions artifacts. A GitHub Release is
+# and Windows (x86_64), packages each with assets + docs + skills + cache,
+# and uploads the archives as GitHub Actions artifacts. A GitHub Release is
 # created when `make_release` is true (default).
 #
 # Trigger: workflow_dispatch ONLY (manual, from the Actions tab).
@@ -295,6 +295,7 @@ jobs:
             ├── assets/           # scene files, config, models, shaders
             ├── .cache/           # fonts, MSL, models (per binary)
             ├── docs/             # architecture docs, tutorials, app guides
+            ├── skills/           # project-level agent skills (runbooks)
             ├── AGENTS.md         # AI agent guidelines for the codebase
             ├── run.sh / run.bat  # launcher (sets LUNCOSIM_CACHE)
             └── README.md         # quick-start for this package
@@ -324,8 +325,8 @@ jobs:
 
             ### Documentation
 
-            Each archive bundles `docs/` and `AGENTS.md` for offline
-            reference. Key entry points:
+            Each archive bundles `docs/`, `skills/`, and `AGENTS.md` for
+            offline reference. Key entry points:
 
             - `docs/README.md` — reading order for newcomers
             - `docs/crates-index.md` — map of the ~50-crate workspace
@@ -333,6 +334,8 @@ jobs:
             - `docs/architecture/` — numbered design docs (00s overview,
               10s systems, 20s domains, 30s platform, 40s cross-cutting)
             - `docs/tutorials/` — user-facing tutorials
+            - `skills/README.md` — index of project-level agent skills
+              (runbooks for theming, UI patterns, API testing, etc.)
             - `AGENTS.md` — AI agent guidelines (Bevy 0.18, plugin
               layering, tunability mandate, TDD-first, frame discipline)
 

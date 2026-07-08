@@ -297,6 +297,7 @@ Or run the binary directly (from this directory):
 - \`assets/\` — scene files, config, models, shaders
 - \`.cache/\` — fonts and runtime data (MSL, models, ephemeris as needed)
 - \`docs/\` — architecture docs, tutorials, app guides
+- \`skills/\` — project-level agent skills (runbook workflows)
 - \`AGENTS.md\` — AI agent guidelines for working on the codebase
 - \`run.sh\` / \`run.bat\` — launcher that sets the cache path
 
@@ -308,6 +309,9 @@ See \`docs/\` for:
 - \`principles.md\` — non-negotiable design principles
 - \`architecture/\` — numbered design docs (00s overview, 10s systems, etc.)
 - \`tutorials/\` — user-facing tutorials
+
+\`skills/\` contains project-level agent skills (runbooks for theming, UI,
+API testing, etc.). See \`skills/README.md\` for the index.
 
 \`AGENTS.md\` documents the project conventions for AI agents (Bevy 0.18,
 plugin layering, tunability mandate, TDD-first).
@@ -507,14 +511,21 @@ else
     [ "$NO_ASSETS" -eq 0 ] && warn "No assets/ directory found at $PROJECT_DIR/assets"
 fi
 
-# Copy docs/ + AGENTS.md so end users have the architecture docs, tutorials,
-# and agent guidelines alongside the binary. ~1.2 MB — trivial copy.
+# Copy docs/, skills/, + AGENTS.md so end users have the architecture docs,
+# tutorials, skills (project-level agent skills), and agent guidelines
+# alongside the binary. ~1.4 MB total — trivial copy.
 if [ "$NO_ASSETS" -eq 0 ]; then
     if [ -d "$PROJECT_DIR/docs" ]; then
         info "Copying docs/ → $OUT_DIR/docs/"
         sync_dir "$PROJECT_DIR/docs/" "$OUT_DIR/docs/"
     else
         warn "No docs/ directory found at $PROJECT_DIR/docs"
+    fi
+    if [ -d "$PROJECT_DIR/skills" ]; then
+        info "Copying skills/ → $OUT_DIR/skills/"
+        sync_dir "$PROJECT_DIR/skills/" "$OUT_DIR/skills/"
+    else
+        warn "No skills/ directory found at $PROJECT_DIR/skills"
     fi
     if [ -f "$PROJECT_DIR/AGENTS.md" ]; then
         cp -f "$PROJECT_DIR/AGENTS.md" "$OUT_DIR/AGENTS.md"
