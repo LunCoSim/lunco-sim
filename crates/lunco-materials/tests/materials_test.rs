@@ -1,6 +1,7 @@
 //! Unit tests for lunco-materials crate.
 
 use lunco_materials::{ParamSchema, ParamType, ParamValue, ShaderMaterial};
+use std::path::Path;
 use std::sync::Arc;
 
 /// A fresh `ShaderMaterial` carries an empty schema and packs all-zero; once
@@ -63,4 +64,43 @@ fn test_solar_panel_shader_reflects_seamless_u_and_v_scale() {
     assert_eq!(schema.field("seamless_u").map(|f| f.ty), Some(ParamType::F32));
     assert_eq!(schema.field("v_scale").map(|f| f.ty), Some(ParamType::F32));
     assert!(schema.size <= 256, "solar_panel params overflow uniform block: {}", schema.size);
+}
+
+/// Every terrain shader that ray-marches the heightfield now declares the
+/// `shadow_cache_on` engine field (the uniform flag that selects the pre-baked
+/// shadow cache lookup vs. the live march) and must still reflect within the
+/// 256-byte uniform budget after the cache wiring landed. This guards both the
+/// schema reflection and the uniform-block overflow check for all five
+/// terrain shaders that import `lunco::horizon`.
+#[test]
+fn test_terrain_shaders_reflect_shadow_cache_on() {
+    let shaders = [
+        "regolith.wgsl",
+        "regolith_web.wgsl",
+        "terrain_shadow.wgsl",
+        "terrain_layered.wgsl",
+        "terrain_layered_web.wgsl",
+    ];
+    for name in shaders {
+        let wgsl = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/shaders").join(name),
+        )
+        .unwrap_or_else(|_| panic!("{name} present"));
+        let schema =
+            ParamSchema::parse(&wgsl).unwrap_or_else(|| panic!("{name} Material struct reflects"));
+        assert_eq!(
+            schema.field("shadow_cache_on").map(|f| f.ty),
+            Some(ParamType::F32),
+            "{name} reflects shadow_cache_on as f32"
+        );
+        assert!(
+            schema.is_engine("shadow_cache_on"),
+            "{name} marks shadow_cache_on as an engine field"
+        );
+        assert!(
+            schema.size <= 256,
+            "{name} params overflow uniform block: {}",
+            schema.size
+        );
+    }
 }

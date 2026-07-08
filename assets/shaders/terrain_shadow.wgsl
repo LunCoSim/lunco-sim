@@ -21,7 +21,7 @@
     mesh_view_bindings::view,
     mesh_view_bindings::lights,
 }
-#import lunco::horizon::sun_visibility
+#import lunco::horizon::sun_visibility_resolved
 #import lunco::lunar::regolith_factor
 
 // Dynamic, self-describing parameters (reflected from this file). Only the
@@ -34,6 +34,7 @@
 //!@engine  hf_size
 //!@engine  hf_res
 //!@engine  csm_far
+//!@engine  shadow_cache_on
 struct Material {
     albedo:         vec3<f32>,
     sun_tan_radius: f32,
@@ -42,6 +43,7 @@ struct Material {
     hf_size:        vec2<f32>,
     hf_res:         f32,
     csm_far:        f32,
+    shadow_cache_on: f32,  // engine: 1 = sample pre-baked shadow cache, 0 = ray-march
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
@@ -49,6 +51,14 @@ var<uniform> mat: Material;
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(1)
 var height_map: texture_2d<f32>;
+
+// Pre-baked horizon shadow cache (R8Unorm, 0..1 sun visibility) — sampled
+// with a single `textureSampleLevel` when `mat.shadow_cache_on > 0.5` instead
+// of the 48-step heightfield ray-march. Filterable (GPU bilinear interp).
+@group(#{MATERIAL_BIND_GROUP}) @binding(10)
+var shadow_cache: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(11)
+var shadow_cache_sampler: sampler;
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
@@ -88,7 +98,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         march_blend = smoothstep(csm_far * 0.5, csm_far * 0.9, cam_d);
     }
     if (march_blend > 0.0) {
-        let vis = sun_visibility(
+        let vis = sun_visibility_resolved(
+            shadow_cache, shadow_cache_sampler, mat.shadow_cache_on,
             height_map, in.uv, mat.sun_dir, mat.sun_tan_radius, mat.hf_size, mat.hf_res);
         color = vec4(color.rgb * mix(1.0, vis, march_blend), color.a);
     }

@@ -344,7 +344,7 @@ impl Default for TerrainLodConfig {
         // the same footprint with fewer, larger far-field tiles); only distant
         // detail softens. Native keeps the full budget. Tune live in the Inspector.
         #[cfg(target_arch = "wasm32")]
-        let tile_budget = 128;
+        let tile_budget = 64;
         #[cfg(not(target_arch = "wasm32"))]
         let tile_budget = 512;
         TerrainLodConfig {
@@ -503,6 +503,8 @@ fn spawn_tile(
             // frame cost — ~16ms; the flat scene has no such geometry). Crater-rim
             // self-shadowing rides the sun horizon ray-march, not the cascade pass.
             bevy::light::NotShadowCaster,
+            #[cfg(target_arch = "wasm32")]
+            bevy::light::NotShadowReceiver,
         ))
         .id();
     (ent, mat)

@@ -151,6 +151,9 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
                 // intentional alignment with the canonical 4-cascade default,
                 // `warn!` when a scene authors >4 instead of silently clamping;
                 // if unintentional, restore 1..=8.
+                #[cfg(target_arch = "wasm32")]
+                num_cascades: 2,
+                #[cfg(not(target_arch = "wasm32"))]
                 num_cascades: get_attribute_as_f32(reader, sdf_path, "lunco:shadow:numCascades")
                     .map(|n| (n as usize).clamp(1, 4))
                     .unwrap_or(d.num_cascades),

@@ -45,7 +45,7 @@
     mesh_view_bindings::view,
     mesh_view_bindings::lights,
 }
-#import lunco::horizon::sun_visibility
+#import lunco::horizon::sun_visibility_resolved
 #import lunco::lunar::regolith_factor
 
 // Dynamic, self-describing parameters — the engine reflects this `Material`
@@ -76,6 +76,7 @@
 //!@engine  hf_size
 //!@engine  hf_res
 //!@engine  csm_far
+//!@engine  shadow_cache_on
 struct Material {
     albedo:            vec3<f32>,
     macro_clump_scale: f32,
@@ -92,6 +93,7 @@ struct Material {
     hf_size:           vec2<f32>,  // engine-filled: heightfield extent (m)
     hf_res:            f32,  // engine-filled: heightfield resolution
     csm_far:           f32,  // engine-filled: CSM far bound (m); march fades in beyond
+    shadow_cache_on:   f32,  // engine-filled: 1 = sample pre-baked shadow cache, 0 = ray-march
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
@@ -103,6 +105,15 @@ var<uniform> mat: Material;
 // march no-ops to fully lit.
 @group(#{MATERIAL_BIND_GROUP}) @binding(1)
 var height_map: texture_2d<f32>;
+
+// Pre-baked horizon shadow cache (R8Unorm, 0..1 sun visibility) — sampled
+// with a single `textureSampleLevel` when `mat.shadow_cache_on > 0.5` instead
+// of the 48-step heightfield ray-march (see `horizon_march.wgsl`). Filterable,
+// so the GPU bilinearly interpolates the cache for free.
+@group(#{MATERIAL_BIND_GROUP}) @binding(10)
+var shadow_cache: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(11)
+var shadow_cache_sampler: sampler;
 
 // --- 3D value noise + FBM ------------------------------------------------
 
@@ -296,7 +307,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         march_blend = smoothstep(csm_far * 0.5, csm_far * 0.9, dist);
     }
     if (march_blend > 0.0) {
-        let sun_vis = sun_visibility(
+        let sun_vis = sun_visibility_resolved(
+            shadow_cache, shadow_cache_sampler, mat.shadow_cache_on,
             height_map, in.uv, mat.sun_dir, mat.sun_tan_radius, mat.hf_size, mat.hf_res);
         color = vec4(color.rgb * mix(1.0, sun_vis, march_blend), color.a);
     }

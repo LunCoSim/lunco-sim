@@ -54,7 +54,7 @@ fn sun_visibility(
     let max_t = length(size) * 1.42;
     var vis = 1.0;
     var t = texel;
-    for (var i = 0; i < 96; i++) {
+    for (var i = 0; i < 48; i++) {
         let p = p0 + dir * t;
         if (p.x < 0.0 || p.y < 0.0 || p.x > size.x || p.y > size.y) { break; }
         let h = hf_height(tex, p * to_grid, ri);
@@ -66,4 +66,35 @@ fn sun_visibility(
     }
     let v = clamp(vis, 0.0, 1.0);
     return v * v * (3.0 - 2.0 * v);
+}
+
+// Sun visibility resolved from the **pre-baked shadow cache** (a single
+// `textureSampleLevel` lookup) when `use_cache > 0.5`, otherwise the live
+// per-pixel ray-march above. The cache (`shadow_cache`, an `R8Unorm` texture)
+// is baked on the CPU by `lunco-environment`'s horizon system using the SAME
+// `HeightField::sun_visibility` algorithm, refreshed only when the sun's
+// terrain-local direction moves past a small threshold — so the expensive
+// 48-step march loop runs ~once per minutes-long sun increment instead of
+// every pixel every frame.
+//
+// `textureSampleLevel` with an explicit LOD of 0 (the cache is single-mip) is
+// permitted in non-uniform control flow, so this can be called from inside the
+// distance-gated `march_blend` branch — unlike `textureSample`, which WebGPU
+// restricts to uniform control flow. The `use_cache` guard is itself a uniform
+// (`mat.shadow_cache_on`), so the whole branch is uniform-stable.
+fn sun_visibility_resolved(
+    cache: texture_2d<f32>,
+    cache_samp: sampler,
+    use_cache: f32,
+    height_tex: texture_2d<f32>,
+    uv: vec2<f32>,
+    sun_local: vec3<f32>,
+    tan_sun_r: f32,
+    size: vec2<f32>,
+    res: f32,
+) -> f32 {
+    if (use_cache > 0.5) {
+        return textureSampleLevel(cache, cache_samp, uv, 0.0).r;
+    }
+    return sun_visibility(height_tex, uv, sun_local, tan_sun_r, size, res);
 }

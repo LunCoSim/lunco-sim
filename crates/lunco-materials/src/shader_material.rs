@@ -37,6 +37,12 @@
 //! ```wgsl
 //! @group(#{MATERIAL_BIND_GROUP}) @binding(1) var height_map: texture_2d<f32>;
 //! ```
+//! and optionally the pre-baked horizon shadow cache (filterable `R8Unorm`,
+//! sampled with `textureSampleLevel`):
+//! ```wgsl
+//! @group(#{MATERIAL_BIND_GROUP}) @binding(10) var shadow_cache: texture_2d<f32>;
+//! @group(#{MATERIAL_BIND_GROUP}) @binding(11) var shadow_cache_sampler: sampler;
+//! ```
 //! A plain `Material` is unlit by default; the `.wgsl` returns its own colour
 //! (it may shade using `VertexOutput.world_normal` if it wants form).
 
@@ -112,6 +118,18 @@ pub struct ShaderMaterial {
     #[texture(8)]
     #[sampler(9)]
     pub normal_map: Option<Handle<Image>>,
+    /// **Horizon shadow cache** (terrain shaders, `lunco-environment`'s horizon
+    /// system). A filterable `R8Unorm` texture whose texels carry the pre-baked
+    /// sun-visibility (0..1) from the SAME ray-march as
+    /// `horizon_march.wgsl::sun_visibility`, computed once per sun-direction
+    /// change instead of per pixel. The terrain fragment shader does a single
+    /// `textureSampleLevel` of this (guarded by the `shadow_cache_on` uniform)
+    /// instead of the 48-step march loop. `None` binds Bevy's fallback image;
+    /// shaders that don't declare the binding are unaffected (same contract as
+    /// `height_map` / the layer maps). Sampled by planar UV (`in.uv`).
+    #[texture(10)]
+    #[sampler(11)]
+    pub shadow_cache: Option<Handle<Image>>,
     /// Per-instance fragment shader. **Not** a bind-group resource — it drives
     /// pipeline specialization (see [`ShaderMaterial::specialize`]) and is kept
     /// as a strong handle so the asset stays loaded.
@@ -153,6 +171,7 @@ impl Default for ShaderMaterial {
             mineral_map: None,
             surface_map: None,
             normal_map: None,
+            shadow_cache: None,
             shader: Handle::default(),
             vertex_shader: None,
             schema: empty_schema_arc(),

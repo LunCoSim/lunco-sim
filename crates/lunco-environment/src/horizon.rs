@@ -40,6 +40,19 @@
 //!    range (`engine2.w` carries the CSM far bound), so its heightfield-
 //!    texel-quantized edges never show up close and near pixels skip the
 //!    march entirely.
+//! 2b. **Shadow cache** (sun-driven, off-thread on native): the per-pixel
+//!     march is expensive — up to 48 steps × 4 heightfield fetches per
+//!     fragment. Because the sun moves slowly (a lunar day ≈ 29.5 Earth
+//!     days), the march result is cached into an `R8Unorm` visibility
+//!     texture ([`HorizonShadowCache`]) baked from the SAME
+//!     [`HeightField::sun_visibility`] algorithm, refreshed only when the
+//!     sun's terrain-local direction rotates past
+//!     [`HorizonShadowCacheConfig::sun_threshold_deg`]. The fragment shader
+//!     then does a single `textureSampleLevel` (guarded by the
+//!     `shadow_cache_on` uniform) instead of the loop — dropping fragment
+//!     cost to near zero. Defaults off on wasm (the streamed-tile path
+//!     bypasses the march there, and an inline bake would hitch under a fast
+//!     day cycle). See [`start_shadow_cache_bake`] / [`wire_terrain_materials`].
 //! 3. **Dynamic shading**: every mesh entity's position is run through the
 //!    SAME march on the CPU ([`HeightField::sun_visibility`]) — object and
 //!    ground can never disagree. The visibility darkens the entity's
@@ -61,6 +74,7 @@ use std::sync::Arc;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
+use bevy::image::ImageSampler;
 use bevy::light::{CascadeShadowConfig, NotShadowCaster};
 use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::prelude::*;
@@ -125,7 +139,7 @@ impl HeightField {
         let max_t = self.size.length() * 1.42;
         let mut vis: f32 = 1.0;
         let mut t = texel;
-        for _ in 0..96 {
+        for _ in 0..48 {
             let p = p0 + dir * t;
             if p.x < 0.0 || p.y < 0.0 || p.x > self.size.x || p.y > self.size.y {
                 break;
@@ -144,6 +158,49 @@ impl HeightField {
         let v = vis.clamp(0.0, 1.0);
         Some(v * v * (3.0 - 2.0 * v))
     }
+
+    /// Side length of the heightfield grid (texels per edge).
+    pub fn resolution(&self) -> u32 {
+        self.resolution
+    }
+
+    /// Bakes the sun-visibility cache — a `target_res²` grid of `u8` values
+    /// (0..255 ← 0..1 visibility) sampled from [`sun_visibility`] over the
+    /// heightfield footprint, for the given terrain-local sun direction.
+    ///
+    /// This is the CPU side of the **horizon shadow cache**: the result is
+    /// uploaded to an `R8Unorm` texture the terrain fragment shader samples
+    /// with a single `textureSampleLevel` instead of running the 48-step
+    /// ray-march per pixel. `target_res` may differ from the heightfield's
+    /// own resolution (a coarser cache on memory-constrained targets); each
+    /// cache texel maps to `min + (frac) * size` and marches against the
+    /// full-resolution heightfield, so the cache is always geometrically
+    /// correct regardless of its own sampling rate.
+    ///
+    /// Reuses [`sun_visibility`] — the SAME algorithm the shader runs — so the
+    /// cache and any live fallback march can never disagree. Off-thread on
+    /// native (`AsyncComputeTaskPool`); inline on wasm (see
+    /// [`start_shadow_cache_bake`]).
+    pub fn bake_visibility_cache(
+        &self,
+        sun_local: Vec3,
+        tan_sun_r: f32,
+        target_res: u32,
+    ) -> Vec<u8> {
+        let res = target_res.max(2);
+        let mut bytes = vec![0u8; (res as usize) * (res as usize)];
+        let inv = 1.0 / (res - 1) as f32;
+        for y in 0..res {
+            for x in 0..res {
+                let local_xz = self.min + Vec2::new(x as f32, y as f32) * inv * self.size;
+                // Outside the heightfield → fully lit (no obstruction possible).
+                let vis = self.sun_visibility(local_xz, sun_local, tan_sun_r).unwrap_or(1.0);
+                bytes[(y as usize) * (res as usize) + (x as usize)] =
+                    (vis * 255.0).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+        bytes
+    }
 }
 
 /// Baked heightfield living on the terrain entity: CPU copy for entity
@@ -157,6 +214,87 @@ pub struct HorizonMap {
 /// In-flight async bake for a terrain entity.
 #[derive(Component)]
 pub struct HorizonBakeTask(Task<BakeResult>);
+
+// ─────────────────────────────────────────────────────────────────────────
+// 1b. Horizon shadow cache — pre-bake the ray-march into an R8Unorm texture
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Runtime-tunable knobs for the **horizon shadow cache** (see module docs §2b).
+/// The cache replaces the per-pixel 48-step heightfield ray-march in the
+/// terrain fragment shader with a single `textureSampleLevel` of a pre-baked
+/// `R8Unorm` visibility texture, refreshed only when the sun's terrain-local
+/// direction moves past [`sun_threshold_deg`](Self::sun_threshold_deg). Tune
+/// live in the Inspector.
+///
+/// Defaults **off on wasm**: the streamed LOD tiles (the common web path) bypass
+/// the march entirely (`Plain` mode + `NotShadowReceiver`), and the static
+/// terrain defaults to the flat shader there too — so the march rarely runs on
+/// web, while the inline (main-thread) cache bake would hitch during a
+/// day-cycle animation. Native keeps the cache on: the static `regolith`
+/// terrain marches per pixel, and the bake runs off-thread.
+#[derive(Resource, Clone, Copy, Reflect)]
+#[reflect(Resource)]
+pub struct HorizonShadowCacheConfig {
+    /// Master switch. `false` → the fragment shader keeps ray-marching per
+    /// pixel (the engine writes `shadow_cache_on = 0` and drops the cache
+    /// binding). `true` → the cache is baked and sampled instead.
+    pub enabled: bool,
+    /// Re-bake the cache when the sun's terrain-local direction has rotated
+    /// more than this many degrees from the direction it was last baked at.
+    /// Small → crisper shadows during a moving sun, more frequent bakes;
+    /// large → cheaper, shadows lag slightly behind the sun. A lunar day is
+    /// ~29.5 Earth days (~0.5°/h), so 0.05° re-bakes roughly every 6 minutes
+    /// of real time at 1× — and far less often when the sun is static.
+    pub sun_threshold_deg: f32,
+}
+
+impl Default for HorizonShadowCacheConfig {
+    fn default() -> Self {
+        // Web: the march is bypassed by the streamed-tile path, and an inline
+        // bake would hitch under a fast day cycle → cache off. Native: the
+        // static regolith terrain marches per pixel → cache on (off-thread).
+        #[cfg(target_arch = "wasm32")]
+        let enabled = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        let enabled = true;
+        Self { enabled, sun_threshold_deg: 0.05 }
+    }
+}
+
+/// Cap on the cache texture resolution for the inline wasm bake. The native
+/// off-thread bake uses the full heightfield resolution (1:1); wasm bakes on
+/// the main thread, so a coarser cache keeps the one-time cost a load hitch,
+/// not a stall. Bilinear filtering upsamples it smoothly.
+#[cfg(target_arch = "wasm32")]
+const WASM_SHADOW_CACHE_MAX_RES: u32 = 256;
+
+/// The baked sun-visibility cache on a terrain entity: an `R8Unorm` texture
+/// (0..1 visibility over the heightfield footprint) + the terrain-local sun
+/// direction it was baked at. The fragment shader samples this with a single
+/// `textureSampleLevel` (guarded by the `shadow_cache_on` uniform) instead of
+/// the 48-step ray-march. Refreshed by [`start_shadow_cache_bake`] when the
+/// sun moves past the configured threshold.
+#[derive(Component)]
+pub struct HorizonShadowCache {
+    /// The GPU visibility texture (binding 10). Swapped atomically when a
+    /// re-bake finishes — the old handle is dropped, the new one takes over.
+    pub image: Handle<Image>,
+    /// Terrain-local to-sun direction the cache was baked for. The cache is
+    /// valid (visually lossless) while the sun stays within `sun_threshold_deg`
+    /// of this; beyond it a re-bake is queued.
+    last_sun_local: Vec3,
+}
+
+/// In-flight async visibility-cache bake for a terrain entity (native only).
+#[derive(Component)]
+pub struct ShadowCacheBakeTask(Task<ShadowCacheResult>);
+
+struct ShadowCacheResult {
+    bytes: Vec<u8>,
+    resolution: u32,
+    sun_local: Vec3,
+    millis: u128,
+}
 
 /// Marker: the horizon system inserted [`NotShadowCaster`] on this entity
 /// (it sits in terrain shadow, so it cannot block sunlight). Only what we
@@ -401,6 +539,173 @@ fn install_horizon_map(
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// 2b. Shadow cache bake — pre-bake the ray-march into an R8Unorm texture
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Builds (or replaces) the `R8Unorm` visibility texture from baked bytes.
+/// Linear filtering so the fragment shader's `textureSampleLevel` bilinearly
+/// interpolates the cache (the visibility is smooth across penumbra, so this
+/// is visually lossless and avoids per-texel march edges).
+fn make_shadow_cache_image(images: &mut Assets<Image>, bytes: Vec<u8>, res: u32) -> Handle<Image> {
+    let mut image = Image::new(
+        Extent3d { width: res, height: res, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        bytes,
+        TextureFormat::R8Unorm,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    );
+    image.sampler = ImageSampler::linear();
+    images.add(image)
+}
+
+/// Kicks off a visibility-cache (re)bake for every horizon terrain whose sun
+/// has rotated past the configured threshold since its last bake — the
+/// low-frequency update that makes the cache worthwhile (a lunar day is
+/// ~29.5 Earth days, so at 0.05° the cache re-bakes roughly every 6 minutes
+/// at 1×, and far less when the sun is static).
+///
+/// Debounced by `Without<ShadowCacheBakeTask>`: while a bake is in flight the
+/// sun may keep moving, but no second bake starts — the stale cache stays
+/// bound (visually lossless within the threshold) and the next bake fires
+/// once the in-flight one lands and the sun is still past threshold. This
+/// naturally limits the re-bake rate to the bake duration, so a fast
+/// day-cycle animation doesn't queue an unbounded backlog.
+///
+/// Below-horizon sun is skipped: the march short-circuits to 0 there (its
+/// first branch), and `wire_terrain_materials` drops `shadow_cache_on` to 0
+/// so the shader falls back to that cheap march instead of sampling a stale
+/// above-horizon cache. A fresh bake fires when the sun rises past the
+/// threshold again.
+#[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut, unused_variables))]
+#[allow(clippy::type_complexity)]
+pub fn start_shadow_cache_bake(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    cfg: Res<HorizonShadowCacheConfig>,
+    sun: Query<
+        (
+            &GlobalTransform,
+            &DirectionalLight,
+            Option<&SunAngularDiameter>,
+            Option<&CascadeShadowConfig>,
+        ),
+        Without<RenderLayers>,
+    >,
+    terrains: Query<
+        (Entity, &GlobalTransform, &HorizonMap, Option<&HorizonShadowCache>),
+        (Without<RenderLayers>, Without<ShadowCacheBakeTask>),
+    >,
+) {
+    if !cfg.enabled {
+        return;
+    }
+    let Some((sun_gt, tan_r, _csm_far)) = pick_sun(&sun) else { return };
+    let to_sun_world: Vec3 = sun_gt.back().into();
+    let cos_thresh = cfg.sun_threshold_deg.to_radians().cos();
+
+    for (entity, terrain_gt, map, cache) in &terrains {
+        let sun_local = terrain_gt
+            .affine()
+            .inverse()
+            .transform_vector3(to_sun_world)
+            .normalize_or_zero();
+        // No sun / sun below horizon → the march handles it cheaply; no bake.
+        if sun_local.y <= 1e-4 {
+            continue;
+        }
+        // Within the threshold of the last bake → cache still valid.
+        if let Some(c) = cache {
+            if c.last_sun_local.dot(sun_local) >= cos_thresh {
+                continue;
+            }
+        }
+
+        let target_res = {
+            #[cfg(target_arch = "wasm32")]
+            {
+                map.field.resolution().min(WASM_SHADOW_CACHE_MAX_RES).max(2)
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                map.field.resolution().max(2)
+            }
+        };
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // Off-thread: clone the HeightField (cheap — `Arc<Vec<f32>>`)
+            // and march every cache texel on a worker. The frame never blocks.
+            let field = map.field.clone();
+            let task = AsyncComputeTaskPool::get().spawn(async move {
+                let start = std::time::Instant::now();
+                let bytes = field.bake_visibility_cache(sun_local, tan_r, target_res);
+                ShadowCacheResult { bytes, resolution: target_res, sun_local, millis: start.elapsed().as_millis() }
+            });
+            commands.entity(entity).insert(ShadowCacheBakeTask(task));
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            // Inline (no worker threads on wasm): a one-time cost per sun
+            // threshold crossing, at a capped resolution. The threshold makes
+            // it rare; the cap keeps it a hitch, not a stall.
+            let start = std::time::Instant::now();
+            let bytes = map.field.bake_visibility_cache(sun_local, tan_r, target_res);
+            let millis = start.elapsed().as_millis();
+            install_shadow_cache(&mut commands, &mut images, entity, bytes, target_res, sun_local, millis);
+        }
+    }
+}
+
+/// Collects finished off-thread visibility-cache bakes and installs them
+/// (native). The cache handle swaps atomically: the old `HorizonShadowCache`
+/// image is dropped, the fresh one takes over, and `wire_terrain_materials`
+/// rebinds it next frame. While the bake ran the stale cache stayed bound
+/// (within the sun threshold → visually lossless).
+pub fn finish_shadow_cache_bake(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    mut q: Query<(Entity, &mut ShadowCacheBakeTask)>,
+) {
+    use bevy::tasks::futures_lite::future;
+    for (entity, mut task) in &mut q {
+        let Some(result) = future::block_on(future::poll_once(&mut task.0)) else { continue };
+        install_shadow_cache(
+            &mut commands,
+            &mut images,
+            entity,
+            result.bytes,
+            result.resolution,
+            result.sun_local,
+            result.millis,
+        );
+    }
+}
+
+/// Installs a finished visibility-cache bake on the terrain entity: uploads
+/// the `R8Unorm` texture and inserts/replaces [`HorizonShadowCache`]. The
+/// previous cache image handle (if any) is dropped here — the material
+/// rebinding happens in [`wire_terrain_materials`] next frame. Shared by the
+/// native async finish and the wasm inline bake so the two paths can't drift.
+fn install_shadow_cache(
+    commands: &mut Commands,
+    images: &mut Assets<Image>,
+    entity: Entity,
+    bytes: Vec<u8>,
+    resolution: u32,
+    sun_local: Vec3,
+    millis: u128,
+) {
+    let image = make_shadow_cache_image(images, bytes, resolution);
+    debug!(
+        "[horizon] shadow cache baked for {entity:?}: {resolution}² in {millis} ms"
+    );
+    commands
+        .entity(entity)
+        .remove::<ShadowCacheBakeTask>()
+        .insert(HorizonShadowCache { image, last_sun_local: sun_local });
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // 2. Material wiring — heightfield + sun uniforms into the terrain shader
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -439,15 +744,17 @@ fn pick_sun<'a>(
 }
 
 /// Keeps every horizon terrain's `ShaderMaterial` wired: heightfield
-/// texture, static `engine2` (size/resolution), and the per-frame sun
-/// direction in `engine`. A terrain with no authored shader gets the
-/// default `terrain_shadow.wgsl` (albedo from its `displayColor`).
-/// Idempotent and self-healing against later material swaps; steady-state
-/// cost is a uniform compare per terrain (writes only when the sun moves).
+/// texture, static `engine2` (size/resolution), the per-frame sun direction
+/// in `engine`, and the **shadow cache** binding + `shadow_cache_on` flag.
+/// A terrain with no authored shader gets the default `terrain_shadow.wgsl`
+/// (albedo from its `displayColor`). Idempotent and self-healing against
+/// later material swaps; steady-state cost is a uniform compare per terrain
+/// (writes only when the sun moves or the cache swaps).
 #[allow(clippy::type_complexity)]
 pub fn wire_terrain_materials(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
+    cfg: Res<HorizonShadowCacheConfig>,
     sun: Query<
         (
             &GlobalTransform,
@@ -464,6 +771,7 @@ pub fn wire_terrain_materials(
             Entity,
             &GlobalTransform,
             &HorizonMap,
+            Option<&HorizonShadowCache>,
             Option<&MeshMaterial3d<ShaderMaterial>>,
             Option<&MeshMaterial3d<StandardMaterial>>,
         ),
@@ -475,7 +783,7 @@ pub fn wire_terrain_materials(
     let Some((sun_gt, tan_r, csm_far)) = pick_sun(&sun) else { return };
     let to_sun_world: Vec3 = sun_gt.back().into();
 
-    for (entity, terrain_gt, map, shader_mat, std_mat) in &terrains {
+    for (entity, terrain_gt, map, shadow_cache, shader_mat, std_mat) in &terrains {
         let sun_local = terrain_gt
             .affine()
             .inverse()
@@ -488,6 +796,17 @@ pub fn wire_terrain_materials(
             map.field.resolution as f32,
             csm_far,
         );
+
+        // Shadow cache binding + the uniform flag that tells the fragment
+        // shader to sample it (`1.0`) instead of ray-marching (`0.0`). The
+        // handle is bound whenever a cache exists (it stays allocated on the
+        // `HorizonShadowCache` component regardless); only the flag toggles —
+        // cheap uniform write, no bind-group churn — when the sun dips below
+        // the horizon or the cache is disabled. Below-horizon sun falls back
+        // to the march, which short-circuits to 0 in its first branch.
+        let cache_image: Option<Handle<Image>> = shadow_cache.map(|c| c.image.clone());
+        let shadow_cache_on: f32 =
+            if cfg.enabled && sun_local.y > 1e-4 && cache_image.is_some() { 1.0 } else { 0.0 };
 
         // Named engine uniforms consumed by the terrain shaders (regolith /
         // terrain_shadow declare these in their `Material` struct; the engine
@@ -505,6 +824,11 @@ pub fn wire_terrain_materials(
             if m.height_map.as_ref() != Some(&map.image) {
                 m.height_map = Some(map.image.clone());
             }
+            // Shadow cache handle: swap only when the baked image changes
+            // (first bind / re-bake finished). Stays bound otherwise.
+            if m.shadow_cache != cache_image {
+                m.shadow_cache = cache_image.clone();
+            }
             // One repack for all engine fields instead of one-per-field (MAT-1).
             m.set_many([
                 ("sun_dir", sun_dir),
@@ -513,18 +837,21 @@ pub fn wire_terrain_materials(
                 ("hf_size", hf_size),
                 ("hf_res", ParamValue::F32(engine2.z)),
                 ("csm_far", ParamValue::F32(csm_far)),
+                ("shadow_cache_on", ParamValue::F32(shadow_cache_on)),
             ]);
         };
 
         if let Some(handle) = shader_mat {
             // Compare before `get_mut` — a blind `get_mut` re-uploads the
             // asset every frame. Sun direction + heightfield identity + csm
-            // bound cover everything that changes.
+            // bound + cache handle/flag cover everything that changes.
             let needs = shader_mats.get(&handle.0).is_some_and(|m| {
                 m.height_map.as_ref() != Some(&map.image)
+                    || m.shadow_cache != cache_image
+                    || m.get_scalar("shadow_cache_on").is_none_or(|s| (s - shadow_cache_on).abs() > 1e-3)
                     || m.get_vec4("sun_dir")
-                        .map_or(true, |v| (v.truncate() - Vec3::new(engine.x, engine.y, engine.z)).length() > 1e-4)
-                    || m.get_scalar("csm_far").map_or(true, |c| (c - csm_far).abs() > 1e-3)
+                        .is_none_or(|v| (v.truncate() - Vec3::new(engine.x, engine.y, engine.z)).length() > 1e-4)
+                    || m.get_scalar("csm_far").is_none_or(|c| (c - csm_far).abs() > 1e-3)
             });
             if needs {
                 if let Some(m) = shader_mats.get_mut(&handle.0) {
@@ -542,6 +869,7 @@ pub fn wire_terrain_materials(
             let mut material = ShaderMaterial {
                 shader: asset_server.load("shaders/terrain_shadow.wgsl"),
                 height_map: Some(map.image.clone()),
+                shadow_cache: cache_image.clone(),
                 ..Default::default()
             };
             material.set("albedo", ParamValue::Vec3([a.red, a.green, a.blue]));
@@ -613,7 +941,7 @@ pub fn shade_dynamic_entities(
     let Some((sun_gt, tan_r, _csm_far)) = pick_sun(&sun) else { return };
     let to_sun_world: Vec3 = sun_gt.back().into();
 
-    // Throttle the expensive full sweep — O(entities × terrains × ≤96-step
+    // Throttle the expensive full sweep — O(entities × terrains × ≤48-step
     // CPU ray-march) — to ~30 Hz so it no longer fires at uncapped render FPS
     // (120–175) every frame the sun animates (day cycle, `SetEnvironmentLight`
     // slider drag). Moving entities still update every frame via the
@@ -751,6 +1079,8 @@ pub struct HorizonShadowPlugin;
 impl Plugin for HorizonShadowPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<HorizonShadowTerrain>();
+        app.register_type::<HorizonShadowCacheConfig>();
+        app.init_resource::<HorizonShadowCacheConfig>();
         // Horizon baking/shading is a render-only feature: every system here
         // needs render-asset stores (`Assets<Mesh>`/`Assets<Image>`/materials).
         // Gate the whole chain on those existing so a headless app (cosim
@@ -762,11 +1092,97 @@ impl Plugin for HorizonShadowPlugin {
             (
                 start_horizon_bakes,
                 finish_horizon_bakes,
+                start_shadow_cache_bake,
+                finish_shadow_cache_bake,
                 wire_terrain_materials,
                 shade_dynamic_entities,
             )
                 .chain()
                 .run_if(resource_exists::<Assets<Image>>.and(resource_exists::<Assets<Mesh>>)),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_field(res: u32, min: Vec2, size: Vec2, heights: Vec<f32>) -> HeightField {
+        assert_eq!(heights.len(), (res * res) as usize);
+        HeightField { resolution: res, min, size, heights: Arc::new(heights) }
+    }
+
+    /// Zenith sun (straight up): every texel is fully lit — the march
+    /// short-circuits to 1.0 in its `hl < 1e-4` branch, so the whole cache
+    /// bakes to 255.
+    #[test]
+    fn bake_cache_zenith_all_lit() {
+        let field = make_field(4, Vec2::ZERO, Vec2::splat(3.0), vec![0.0; 16]);
+        let bytes = field.bake_visibility_cache(Vec3::new(0.0, 1.0, 0.0), 0.0046, 4);
+        assert!(bytes.iter().all(|&b| b == 255), "zenith sun → all 255");
+    }
+
+    /// Sun below the horizon: every texel is fully shadowed — the march
+    /// short-circuits to 0.0 in its `sun_local.y <= 0.0` branch, so the whole
+    /// cache bakes to 0.
+    #[test]
+    fn bake_cache_below_horizon_all_shadow() {
+        let field = make_field(4, Vec2::ZERO, Vec2::splat(3.0), vec![0.0; 16]);
+        let bytes = field.bake_visibility_cache(Vec3::new(0.0, -1.0, 0.0), 0.0046, 4);
+        assert!(bytes.iter().all(|&b| b == 0), "below-horizon sun → all 0");
+    }
+
+    /// A flat heightfield never occludes — the march finds no higher terrain
+    /// in any direction, so visibility stays 1.0 for any above-horizon sun.
+    #[test]
+    fn bake_cache_flat_terrain_all_lit() {
+        let field = make_field(8, Vec2::ZERO, Vec2::splat(7.0), vec![1.5; 64]);
+        let sun = Vec3::new(1.0, 0.3, 0.2).normalize();
+        let bytes = field.bake_visibility_cache(sun, 0.0046, 8);
+        assert!(bytes.iter().all(|&b| b == 255), "flat terrain → all lit");
+    }
+
+    /// A ridge casts a shadow on the side away from the sun: texels beyond the
+    /// ridge (between the ridge and the anti-sun direction) bake to 0, while
+    /// texels on the sun-facing side stay lit. This is the core guarantee the
+    /// cache reproduces the per-pixel march.
+    #[test]
+    fn bake_cache_ridge_casts_shadow() {
+        // 8×8 grid, 7 m extent (1 m texels). A ridge runs along z at x=1.
+        let mut heights = vec![0.0f32; 64];
+        for y in 0..8 {
+            heights[y * 8 + 1] = 5.0;
+        }
+        let field = make_field(8, Vec2::ZERO, Vec2::splat(7.0), heights);
+        // Sun toward -x (low): the march steps toward -x, so texels with x>1
+        // see the ridge as an occluder → shadowed; texels with x<=1 face the
+        // sun and stay lit.
+        let sun = Vec3::new(-1.0, 0.5, 0.0).normalize();
+        let bytes = field.bake_visibility_cache(sun, 0.0046, 8);
+        // Texel (3, 0) → world (3, 0): beyond the ridge → shadowed.
+        assert_eq!(bytes[0 * 8 + 3], 0, "texel beyond the ridge is shadowed");
+        // Texel (0, 0) → world (0, 0): sun-facing side → lit.
+        assert_eq!(bytes[0 * 8 + 0], 255, "sun-facing texel is lit");
+    }
+
+    /// The cache may be baked at a coarser resolution than the heightfield
+    /// (the wasm cap): each cache texel still maps to the right world position
+    /// and marches against the full-resolution field, so a ridge shadow shows
+    /// up at the downscaled rate too.
+    #[test]
+    fn bake_cache_coarser_resolution_still_shadows() {
+        let mut heights = vec![0.0f32; 64];
+        for y in 0..8 {
+            heights[y * 8 + 1] = 5.0;
+        }
+        let field = make_field(8, Vec2::ZERO, Vec2::splat(7.0), heights);
+        let sun = Vec3::new(-1.0, 0.5, 0.0).normalize();
+        // Bake at 4² (half the heightfield resolution).
+        let bytes = field.bake_visibility_cache(sun, 0.0046, 4);
+        assert_eq!(bytes.len(), 16);
+        // Cache texel (3, 0) → world (7, 0): beyond the ridge → shadowed.
+        assert_eq!(bytes[0 * 4 + 3], 0, "coarse-cache texel beyond the ridge is shadowed");
+        // Cache texel (0, 0) → world (0, 0): sun-facing → lit.
+        assert_eq!(bytes[0 * 4 + 0], 255, "coarse-cache sun-facing texel is lit");
     }
 }
