@@ -554,6 +554,30 @@ pub struct WorkbenchLayout {
     /// [`TabId`]s so both singleton panels and multi-instance tabs
     /// coexist in the same tree.
     pub(crate) dock: DockState<TabId>,
+
+    /// Per-perspective snapshots of the live dock + slot intent, so
+    /// switching back to a perspective restores *its own* open tabs and
+    /// split layout instead of a fresh preset (or the tabs another
+    /// perspective left open). Keyed by [`PerspectiveId`]. A perspective
+    /// is snapshotted on the way out (see [`Self::activate_perspective`])
+    /// and restored on the way back; a first visit has no entry, so the
+    /// perspective's preset is built fresh. This is what keeps Build's
+    /// tabs and Design's tabs separate: each lives in its own dock tree.
+    pub(crate) dock_cache: HashMap<PerspectiveId, PerspectiveDockSlot>,
+}
+
+/// Cached snapshot of one perspective's dock tree + slot intent — the
+/// unit [`WorkbenchLayout::dock_cache`] stores per perspective so a
+/// return visit restores the exact layout (tabs + splits + which centre
+/// tab was active) the user left, rather than the preset.
+#[derive(Clone)]
+pub(crate) struct PerspectiveDockSlot {
+    pub(crate) dock: DockState<TabId>,
+    pub(crate) side_browser: Vec<PanelId>,
+    pub(crate) center: Vec<PanelId>,
+    pub(crate) active_center_tab: usize,
+    pub(crate) right_inspector: Vec<PanelId>,
+    pub(crate) bottom: Vec<PanelId>,
 }
 
 /// Queue of tabs whose close-X was clicked but whose close the
@@ -613,6 +637,7 @@ impl Default for WorkbenchLayout {
             file_menu: Vec::new(),
             custom_menus: Vec::new(),
             dock: DockState::new(Vec::new()),
+            dock_cache: HashMap::new(),
         }
     }
 }
@@ -1039,15 +1064,90 @@ impl WorkbenchLayout {
         }
     }
 
-    /// Switch to the named perspective, re-applying its slot preset.
-    /// No-op if the id isn't registered.
+    /// Switch to the named perspective. No-op if the id isn't registered.
+    ///
+    /// Each perspective keeps its **own** open tabs and split layout: on
+    /// the way out the live dock (+ slot intent) is snapshotted into
+    /// [`Self::dock_cache`], and on the way back a previously-snapshotted
+    /// perspective is restored verbatim instead of being rebuilt from its
+    /// preset. A first visit has no snapshot, so the preset is built fresh
+    /// — and the live dock is cleared first so the new perspective doesn't
+    /// inherit the outgoing one's tabs (the old "VSCode never closes
+    /// editors" merge is what made Build show Design's tabs).
     pub fn activate_perspective(&mut self, id: PerspectiveId) {
+        // Validate the target before mutating — an unknown id is a no-op
+        // and must not snapshot/restore anything.
+        if !self.perspectives.iter().any(|w| w.id() == id) {
+            return;
+        }
+        let prev = self.active_perspective;
+        let switching = prev != Some(id);
+
+        // Snapshot the outgoing perspective's live layout on a real switch.
+        if switching {
+            if let Some(prev_id) = prev {
+                self.snapshot_perspective(prev_id);
+            }
+            // Restore a visited perspective's cached layout verbatim — its
+            // tabs and splits come back exactly as left, no preset rebuild.
+            if let Some(slot) = self.dock_cache.remove(&id) {
+                self.restore_perspective(slot);
+                self.active_perspective = Some(id);
+                return;
+            }
+            // First visit: drop the live dock so the incoming preset's
+            // rebuild seeds an empty skeleton instead of merging the
+            // outgoing perspective's instance tabs into it.
+            self.dock = DockState::new(Vec::new());
+        }
+
+        // `ws.apply(self)` borrows `self` mutably while we hold a borrowed
+        // `ws`, so take the registry out for the call (same dance the
+        // original did).
         let perspectives = std::mem::take(&mut self.perspectives);
         if let Some(ws) = perspectives.iter().find(|w| w.id() == id) {
             ws.apply(self);
             self.active_perspective = Some(id);
         }
         self.perspectives = perspectives;
+    }
+
+    /// Snapshot the current live dock + slot intent under `id` so a later
+    /// return to that perspective restores it. No-op as a storage detail —
+    /// the caller has already decided to switch away.
+    fn snapshot_perspective(&mut self, id: PerspectiveId) {
+        self.dock_cache.insert(
+            id,
+            PerspectiveDockSlot {
+                dock: self.dock.clone(),
+                side_browser: self.side_browser.clone(),
+                center: self.center.clone(),
+                active_center_tab: self.active_center_tab,
+                right_inspector: self.right_inspector.clone(),
+                bottom: self.bottom.clone(),
+            },
+        );
+    }
+
+    /// Restore a previously-snapshotted perspective's dock + slot intent
+    /// into the live fields. The cached tree already carries its own
+    /// chrome and tabs, so no rebuild is needed (and none must run, or it
+    /// would wipe the restored tabs).
+    fn restore_perspective(&mut self, slot: PerspectiveDockSlot) {
+        let PerspectiveDockSlot {
+            dock,
+            side_browser,
+            center,
+            active_center_tab,
+            right_inspector,
+            bottom,
+        } = slot;
+        self.dock = dock;
+        self.side_browser = side_browser;
+        self.center = center;
+        self.active_center_tab = active_center_tab;
+        self.right_inspector = right_inspector;
+        self.bottom = bottom;
     }
 
     /// Which perspective is currently active, if any.
@@ -1066,6 +1166,12 @@ impl WorkbenchLayout {
             .active_perspective
             .or_else(|| self.perspectives.first().map(|p| p.id()));
         if let Some(id) = id {
+            // Drop any cached layout for this perspective and clear the live
+            // dock so the re-activation rebuilds a *fresh* preset — without
+            // this, `activate_perspective` would either restore the cached
+            // (still-dirty) layout or preserve the current tabs.
+            self.dock_cache.remove(&id);
+            self.dock = DockState::new(Vec::new());
             self.activate_perspective(id);
         }
     }
@@ -1142,25 +1248,30 @@ impl WorkbenchLayout {
         h.finish()
     }
 
-    /// Replace the dock tree from a previously [`dock_json`](Self::dock_json)
-    /// snapshot, reconciling it against *this* app's live state:
+    /// Reconcile a serialized dock tree against *this* app's live state,
+    /// returning a fresh [`DockState<TabId>`] without touching the live
+    /// dock:
     ///
     /// - **Singleton** tabs whose `PanelId` isn't registered here are
     ///   dropped (e.g. a `sandbox`-only panel loaded into `lunica`).
     /// - **Instance** tabs are remapped: each carries the *old* session's
-    ///   `DocumentId.raw()`; `id_map` translates it to the freshly-restored
-    ///   id. A tab whose kind isn't registered, or whose document didn't
-    ///   restore (absent from `id_map`), is dropped.
+    ///   instance id; `id_map` translates it to the freshly-restored id.
+    ///   A tab whose kind isn't registered is dropped; one whose document
+    ///   didn't restore (absent from `id_map`) is kept as-is (stable-id
+    ///   tabs like the default plot, or a stale doc tab the codec re-opens).
     ///
-    /// Empty leaves collapse via egui_dock's `retain_tabs`. Returns `false`
-    /// (leaving the current dock untouched) when the JSON won't parse or the
-    /// reconciled tree would be empty — the caller then keeps whatever the
-    /// codec-driven open path produced.
-    pub(crate) fn set_dock_from_json(
-        &mut self,
+    /// Empty leaves collapse via egui_dock's `retain_tabs`; non-finite
+    /// split fractions are healed ([`sanitize_dock_fractions`]). Returns
+    /// `None` when the JSON won't parse or nothing survived — the caller
+    /// then keeps its current dock. Shared by the live restore path
+    /// ([`set_dock_from_json`]) and the per-perspective cache seeding
+    /// ([`seed_perspective_docks`]) so cached trees go through the same
+    /// cross-app reconciliation as the active one.
+    pub(crate) fn reconcile_dock(
+        &self,
         value: serde_json::Value,
         id_map: &HashMap<(&'static str, u64), u64>,
-    ) -> bool {
+    ) -> Option<DockState<TabId>> {
         use std::collections::HashSet;
         let valid_singletons: HashSet<&'static str> =
             self.panels.keys().map(|p| p.0).collect();
@@ -1171,7 +1282,7 @@ impl WorkbenchLayout {
             Ok(d) => d,
             Err(e) => {
                 warn!("[WorkspaceState] dock JSON parse failed: {e}; keeping default layout");
-                return false;
+                return None;
             }
         };
 
@@ -1199,15 +1310,167 @@ impl WorkbenchLayout {
         });
 
         if new_dock.iter_all_tabs().next().is_none() {
-            return false; // nothing survived reconciliation — keep current
+            return None; // nothing survived reconciliation — keep current
         }
         // Heal any non-finite split fraction persisted to disk. egui_dock can
         // serialize a NaN fraction (see `sanitize_dock_fractions`), and a NaN
         // reloaded here would panic the dock layout on the very next frame —
         // a permanent boot-crash loop until the workspace cache is wiped.
         sanitize_dock_fractions(&mut new_dock);
-        self.dock = new_dock;
-        true
+        Some(new_dock)
+    }
+
+    /// Replace the live dock from a previously [`dock_json`](Self::dock_json)
+    /// snapshot (reconciled via [`reconcile_dock`]). Returns `false`
+    /// (leaving the current dock untouched) when the JSON won't parse or the
+    /// reconciled tree would be empty — the caller then keeps whatever the
+    /// codec-driven open path produced.
+    pub(crate) fn set_dock_from_json(
+        &mut self,
+        value: serde_json::Value,
+        id_map: &HashMap<(&'static str, u64), u64>,
+    ) -> bool {
+        match self.reconcile_dock(value, id_map) {
+            Some(d) => {
+                self.dock = d;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Capture every perspective's dock tree (+ slot intent) for hot-exit:
+    /// each cached perspective's dock ([`dock_cache`]) plus the active
+    /// perspective's **live** dock. Chrome-incomplete trees (a transient
+    /// state mid-switch) are skipped so they don't round-trip as a layout
+    /// with missing panels. Keyed by [`PerspectiveId`] string — the inverse
+    /// of [`seed_perspective_docks`]. The active perspective is captured
+    /// last so an id that's somehow both live and cached resolves to the
+    /// live tree.
+    pub(crate) fn capture_perspective_docks(
+        &self,
+    ) -> std::collections::HashMap<String, crate::workspace_state::PerspectiveDockSnapshot> {
+        use crate::workspace_state::PerspectiveDockSnapshot;
+        let mut out: std::collections::HashMap<String, PerspectiveDockSnapshot> =
+            std::collections::HashMap::new();
+        for (id, slot) in &self.dock_cache {
+            if !self.chrome_complete(
+                &slot.dock,
+                &slot.side_browser,
+                &slot.center,
+                &slot.right_inspector,
+                &slot.bottom,
+            ) {
+                continue;
+            }
+            let Some(dock) = serde_json::to_value(&slot.dock).ok() else {
+                continue;
+            };
+            out.insert(
+                id.as_str().to_string(),
+                PerspectiveDockSnapshot {
+                    dock,
+                    side_browser: slot.side_browser.clone(),
+                    center: slot.center.clone(),
+                    active_center_tab: slot.active_center_tab,
+                    right_inspector: slot.right_inspector.clone(),
+                    bottom: slot.bottom.clone(),
+                },
+            );
+        }
+        if let Some(id) = self.active_perspective() {
+            if self.perspective_chrome_complete() {
+                if let Some(dock) = self.dock_json() {
+                    out.insert(
+                        id.as_str().to_string(),
+                        PerspectiveDockSnapshot {
+                            dock,
+                            side_browser: self.side_browser.clone(),
+                            center: self.center.clone(),
+                            active_center_tab: self.active_center_tab,
+                            right_inspector: self.right_inspector.clone(),
+                            bottom: self.bottom.clone(),
+                        },
+                    );
+                }
+            }
+        }
+        out
+    }
+
+    /// Restore every saved perspective's dock tree after a launch / Twin
+    /// switch — the inverse of [`capture_perspective_docks`]. The **active**
+    /// perspective's tree is reconciled into the live dock
+    /// ([`set_dock_from_json`] + [`ensure_chrome_present`]); every other
+    /// saved perspective is reconciled into a [`PerspectiveDockSlot`] and
+    /// stashed in [`dock_cache`], so switching to it later restores its own
+    /// tabs instead of a fresh preset. `id_map` remaps saved instance ids
+    /// onto live tabs across ALL trees (instance ids are global — the doc
+    /// set is opened once). Perspectives not registered in this app are
+    /// skipped (a `sandbox`-only perspective loaded into `lunica`).
+    pub(crate) fn seed_perspective_docks(
+        &mut self,
+        docks: &std::collections::HashMap<
+            String,
+            crate::workspace_state::PerspectiveDockSnapshot,
+        >,
+        id_map: &HashMap<(&'static str, u64), u64>,
+    ) {
+        let active_str = self.active_perspective().map(|p| p.as_str().to_string());
+
+        // Active perspective: reconcile into the LIVE dock + heal chrome.
+        if let Some(active) = active_str.as_deref() {
+            if let Some(snap) = docks.get(active) {
+                if self.set_dock_from_json(snap.dock.clone(), id_map) {
+                    self.ensure_chrome_present();
+                }
+            }
+        }
+
+        // Non-active perspectives: reconcile each into a cached slot. Collect
+        // first (reconcile borrows &self), insert after (borrows &mut self).
+        let mut seeded: Vec<(PerspectiveId, PerspectiveDockSlot)> = Vec::new();
+        for (id_str, snap) in docks {
+            if Some(id_str.as_str()) == active_str.as_deref() {
+                continue;
+            }
+            let Some(pid) = self
+                .perspectives
+                .iter()
+                .find(|p| p.id().as_str() == id_str.as_str())
+                .map(|p| p.id())
+            else {
+                continue; // not registered in this app — skip
+            };
+            let Some(slot) = self.reconcile_dock_slot(snap, id_map) else {
+                continue;
+            };
+            seeded.push((pid, slot));
+        }
+        for (pid, slot) in seeded {
+            self.dock_cache.insert(pid, slot);
+        }
+    }
+
+    /// Reconcile a [`PerspectiveDockSnapshot`] into a live
+    /// [`PerspectiveDockSlot`] for the cache (reconciled tree + the slot
+    /// intent carried alongside it). `None` when the dock won't reconcile —
+    /// the caller skips caching that perspective (it builds from preset on
+    /// first visit instead).
+    fn reconcile_dock_slot(
+        &self,
+        snap: &crate::workspace_state::PerspectiveDockSnapshot,
+        id_map: &HashMap<(&'static str, u64), u64>,
+    ) -> Option<PerspectiveDockSlot> {
+        let dock = self.reconcile_dock(snap.dock.clone(), id_map)?;
+        Some(PerspectiveDockSlot {
+            dock,
+            side_browser: snap.side_browser.clone(),
+            center: snap.center.clone(),
+            active_center_tab: snap.active_center_tab,
+            right_inspector: snap.right_inspector.clone(),
+            bottom: snap.bottom.clone(),
+        })
     }
 
     /// Activate a perspective by its raw string id, matching against the
@@ -1397,16 +1660,23 @@ impl WorkbenchLayout {
             .collect();
 
         // Preserve dynamically-opened instance (document/model/viz) tabs
-        // across the rebuild. The skeleton below is built purely from the
+        // across a *same-perspective* slot rebuild (e.g. `add_to_center`,
+        // a panel re-registering, or `ResetWorkspaceLayout` after it
+        // cleared the dock). The skeleton below is built purely from the
         // *singleton* slot intent, so without this every instance tab —
-        // open model docs, plot instances — would silently vanish on any
-        // slot change or perspective switch (and the doc would be left
-        // live in its registry with no visible tab). VSCode never closes
+        // open model docs, plot instances — would silently vanish when a
+        // slot intent changes within one perspective. VSCode never closes
         // open editors when you change the layout; neither do we. We walk
         // the current dock, remember each instance tab (in order) and
         // which one was focused, then re-attach them via `open_instance`
         // after the skeleton is rebuilt. Tabs whose kind is no longer
         // registered are dropped.
+        //
+        // Cross-perspective switches do NOT reach here with the outgoing
+        // tabs still live: `activate_perspective` clears `self.dock`
+        // before rebuilding the incoming perspective's preset (or restores
+        // a cached dock without rebuilding at all), so each perspective's
+        // tabs stay isolated in its own dock cache entry.
         let preserved_instances: Vec<(PanelId, u64)> = {
             let main = self.dock.main_surface();
             let mut acc = Vec::new();
@@ -1570,20 +1840,46 @@ impl WorkbenchLayout {
     /// [`Self::rebuild_dock`] branch — never round-trips as a layout with
     /// missing side panels).
     pub(crate) fn perspective_chrome_complete(&self) -> bool {
-        let is_centre_driven = self.center.iter().any(|id| self.panels.contains_key(id));
+        self.chrome_complete(
+            &self.dock,
+            &self.side_browser,
+            &self.center,
+            &self.right_inspector,
+            &self.bottom,
+        )
+    }
+
+    /// True when `dock` is consistent with the given slot intent's declared
+    /// chrome. Either the intent is viewport-only (declares no *registered*
+    /// centre singleton — its chrome renders outside the dock, so a
+    /// chrome-less dock is correct), or every declared+registered chrome
+    /// panel (side/right/bottom/centre singleton) is present in `dock`.
+    ///
+    /// Parameterised over the dock + intent so it can judge a CACHED
+    /// perspective's dock by its OWN intent (in
+    /// [`capture_perspective_docks`]), not the active perspective's. The
+    /// live variant is [`perspective_chrome_complete`].
+    fn chrome_complete(
+        &self,
+        dock: &DockState<TabId>,
+        side_browser: &[PanelId],
+        center: &[PanelId],
+        right_inspector: &[PanelId],
+        bottom: &[PanelId],
+    ) -> bool {
+        let is_centre_driven = center.iter().any(|id| self.panels.contains_key(id));
         if !is_centre_driven {
             return true; // viewport-only — chrome renders outside the dock
         }
-        let in_dock: std::collections::HashSet<PanelId> = self
-            .dock
+        let in_dock: std::collections::HashSet<PanelId> = dock
             .iter_all_tabs()
             .filter_map(|(_, t)| if let TabId::Singleton(id) = t { Some(*id) } else { None })
             .collect();
-        self.side_browser
+        side_browser
             .iter()
-            .chain(self.right_inspector.iter())
-            .chain(self.bottom.iter())
-            .chain(self.center.iter())
+            .chain(right_inspector.iter())
+            .chain(bottom.iter())
+            .chain(center.iter())
             .filter(|id| self.panels.contains_key(id))
             .all(|id| in_dock.contains(id))
     }
@@ -3518,6 +3814,69 @@ mod tests {
 
         layout.activate_perspective(PerspectiveId("ghost"));
         assert_eq!(layout.active_perspective(), Some(PerspectiveId("a")));
+        assert_eq!(layout.side_browser, vec![PanelId("panel_a")]);
+    }
+
+    #[test]
+    fn perspectives_keep_separate_docks() {
+        let mut layout = WorkbenchLayout::default();
+        layout.register_perspective(TestPerspective {
+            id: PerspectiveId("a"),
+            title: "A",
+            marker: PanelId("panel_a"),
+        });
+        layout.register_perspective(TestPerspective {
+            id: PerspectiveId("b"),
+            title: "B",
+            marker: PanelId("panel_b"),
+        });
+        // A is active (first-registered). Simulate a tab open only in A.
+        let only_a = TabId::Singleton(PanelId("only_in_a"));
+        layout.dock = DockState::new(vec![only_a]);
+
+        // A → B: B must NOT inherit A's tab.
+        layout.activate_perspective(PerspectiveId("b"));
+        assert_eq!(layout.active_perspective(), Some(PerspectiveId("b")));
+        assert!(
+            !layout.dock.iter_all_tabs().any(|(_, t)| *t == only_a),
+            "B inherited A's tab — each perspective must keep its own dock"
+        );
+
+        // B → A: A's tab must come back from the per-perspective cache.
+        layout.activate_perspective(PerspectiveId("a"));
+        assert_eq!(layout.active_perspective(), Some(PerspectiveId("a")));
+        assert!(
+            layout.dock.iter_all_tabs().any(|(_, t)| *t == only_a),
+            "A's tab was not restored on return"
+        );
+    }
+
+    #[test]
+    fn reset_to_default_layout_drops_cached_tabs() {
+        let mut layout = WorkbenchLayout::default();
+        layout.register_perspective(TestPerspective {
+            id: PerspectiveId("a"),
+            title: "A",
+            marker: PanelId("panel_a"),
+        });
+        let only_a = TabId::Singleton(PanelId("only_in_a"));
+        layout.dock = DockState::new(vec![only_a]);
+        // Round-trip through another perspective so A's tab is cached, then
+        // a reset of A must produce a clean preset, not the cached tab.
+        layout.register_perspective(TestPerspective {
+            id: PerspectiveId("b"),
+            title: "B",
+            marker: PanelId("panel_b"),
+        });
+        layout.activate_perspective(PerspectiveId("b"));
+        layout.activate_perspective(PerspectiveId("a"));
+        assert!(layout.dock.iter_all_tabs().any(|(_, t)| *t == only_a));
+
+        layout.reset_to_default_layout();
+        assert!(
+            !layout.dock.iter_all_tabs().any(|(_, t)| *t == only_a),
+            "reset restored the cached tab instead of a clean preset"
+        );
         assert_eq!(layout.side_browser, vec![PanelId("panel_a")]);
     }
 
