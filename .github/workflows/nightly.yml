@@ -239,13 +239,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Update git tag
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -f ${{ needs.meta.outputs.tag }}
-          git push -f origin ${{ needs.meta.outputs.tag }}
-
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -261,12 +254,10 @@ jobs:
           echo "## Artifact listing" >> "$GITHUB_STEP_SUMMARY"
           ls -lh artifacts/ | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Create nightly release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.meta.outputs.tag }}
-          name: Nightly ${{ needs.meta.outputs.date }}
-          body: |
+      - name: Recreate nightly release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_BODY: |
             ## LunCo Nightly Build — ${{ needs.meta.outputs.date }}
 
             Welcome to the nightly development snapshot of **LunCo** — the open-source, high-fidelity co-simulation platform for space mission design and system engineering.
@@ -338,10 +329,31 @@ jobs:
             ### 💬 Feedback & Community
             *   **Join our Discord:** Chat with space engineers and creators on [Discord](https://discord.gg/A6U3GdvQum).
             *   **Report Issues:** Found a bug? Open a ticket on [GitHub Issues](${{ github.server_url }}/${{ github.repository }}/issues).
-          files: artifacts/*
-          # Mark as the latest release so it shows on the repo main page
-          # (right sidebar "Releases" widget). When a stable release is
-          # published later, that one should be marked latest instead.
-          prerelease: false
-          make_latest: true
-          generate_release_notes: false
+        run: |
+          # 1. Update the git tag remotely to point to the current commit
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -f "${{ needs.meta.outputs.tag }}" "${{ github.sha }}"
+          git push -f origin "${{ needs.meta.outputs.tag }}"
+          
+          # 2. Write the release notes from environment variable
+          printf '%s\n' "$RELEASE_BODY" > release_notes.md
+          
+          # 3. Check if release exists; update (clobber assets) if yes, create new if no
+          if gh release view "${{ needs.meta.outputs.tag }}" &>/dev/null; then
+            echo "Release exists. Updating release notes..."
+            gh release edit "${{ needs.meta.outputs.tag }}" \
+              --title "Nightly ${{ needs.meta.outputs.date }}" \
+              --notes-file release_notes.md \
+              --latest
+            
+            echo "Uploading assets and overwriting existing ones..."
+            gh release upload "${{ needs.meta.outputs.tag }}" artifacts/* --clobber
+          else
+            echo "Release does not exist. Creating release..."
+            gh release create "${{ needs.meta.outputs.tag }}" \
+              --title "Nightly ${{ needs.meta.outputs.date }}" \
+              --notes-file release_notes.md \
+              --latest \
+              artifacts/*
+          fi
