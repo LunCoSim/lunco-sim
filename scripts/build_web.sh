@@ -571,13 +571,22 @@ generate_bindings() {
         "$PROJECT_DIR/.cache/fonts/DejaVuSans.ttf"; do
         if [ -f "$candidate" ]; then dejavu_src="$candidate"; break; fi
     done
+    if [ -z "$dejavu_src" ]; then
+        info "DejaVu Sans font not found. Attempting to download automatically..."
+        if LUNCOSIM_CACHE="$PROJECT_DIR/.cache" cargo run -p lunco-assets -- download -p lunco-theme; then
+            for candidate in \
+                "$PROJECT_DIR/../.cache/fonts/DejaVuSans.ttf" \
+                "$PROJECT_DIR/.cache/fonts/DejaVuSans.ttf"; do
+                if [ -f "$candidate" ]; then dejavu_src="$candidate"; break; fi
+            done
+        fi
+    fi
     if [ -n "$dejavu_src" ]; then
         mkdir -p "$dist_dir/fonts"
         cp "$dejavu_src" "$dist_dir/fonts/DejaVuSans.ttf"
         info "Copied DejaVu Sans → $dist_dir/fonts/"
     else
-        warn "DejaVu Sans not found — math/arrow glyphs will tofu in browser. \
-Run: cargo run -p lunco-assets -- download"
+        warn "DejaVu Sans not found — math/arrow glyphs will tofu in browser."
     fi
 
     # sandbox loads scene files via the bevy AssetServer over HTTP

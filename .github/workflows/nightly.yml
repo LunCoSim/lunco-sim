@@ -261,99 +261,77 @@ jobs:
           tag_name: ${{ needs.meta.outputs.tag }}
           name: Nightly ${{ needs.meta.outputs.date }}
           body: |
-            ## Nightly build — ${{ needs.meta.outputs.date }}
+            ## LunCo Nightly Build — ${{ needs.meta.outputs.date }}
 
-            Automated build of `lunica` and `sandbox` for
-            Linux, macOS, and Windows. Triggered manually from the
-            [Actions tab](${{ github.server_url }}/${{ github.repository }}/actions/workflows/nightly.yml).
+            Welcome to the nightly development snapshot of **LunCo** — the open-source, high-fidelity co-simulation platform for space mission design and system engineering.
 
-            > 🔄 **Rolling release** — this tag (`nightly`) is overwritten
-            > on every run. Only the latest build is available for
-            > download. To pin a specific build, pass a custom
-            > `release_tag` input when triggering the workflow.
-
-            > ⚠️ **Nightly builds are untested development snapshots.**
-            > They may be unstable, crash, or fail to run. Use at your own risk.
+            > 🛠️ **Status: Active Development**
+            > LunCoSim is in active pre-alpha development. These nightly builds represent our latest progress and are automatically updated. Expect frequent changes, experimental features, and occasional bugs as we work toward stable releases.
 
             ---
 
-            ### Downloads
+            ### 🚀 Featured Applications
 
-            | Binary    | Linux x86_64 | macOS ARM64 | macOS x86_64 | Windows x86_64 |
-            |-----------|:-----------:|:-----------:|:------------:|:--------------:|
-            | `lunica`   | ✅ | ✅ | ✅ | ✅ |
-            | `sandbox`  | ✅ | ✅ | ✅ | ✅ |
+            #### 1. **Sandbox: Physics & Environment Sandbox**
+            The **Sandbox** is an interactive, real-time 3D simulation environment built to validate planetary rover dynamics, suspension behavior, and physical interactions.
+            *   **Drive the Perseverance Rover:** Take control of the built-in rover model and test ground mobility across customized planetary terrains.
+            *   **High-Precision Space Physics:** Powered by Avian3D and double-precision (`f64`) spatial math to ensure robust physics simulations from millimeter-scale joints to solar-system scales.
+            *   **OpenUSD Scene Integration:** Load, compose, and inspect 3D scenes dynamically using the industry-standard Universal Scene Description format.
+            *   **Collaborative Design:** Networked multiplayer support (via WebTransport) allows multiple users to join, edit, and run simulations in the same environment.
 
-            Pick the archive matching your platform. Each archive is
-            self-contained — no external dependencies required.
+            #### 2. **Lunica: Modelica Engineering Workbench**
+            **Lunica** is a stripped-down version of the sandbox focusing exclusively on Modelica features (multi-domain behavioral simulation like thermal control, power grids, life support, mechanics). It removes the 3D physics engine and rover viewport to provide a lightweight, dedicated system design workspace.
+            *   **Visual Schematic Editor:** Drag, drop, and connect component blocks to design complex subsystems.
+            *   **Integrated Solver:** Compile models into differential-algebraic equations (DAEs) using the `rumoca` compiler and run advanced solvers to generate telemetry.
+            *   **Real-time Plotting:** View telemetry graphs and analyze system states instantly.
+            *   **Pre-packaged Libraries:** Includes a copy of the Modelica Standard Library (MSL) in the cache for offline modeling.
 
-            ### What's in each archive
+            ---
 
-            ```
-            <binary>-<platform>-<arch>/
-            ├── <binary>[.exe]    # the application
-            ├── assets/           # scene files, config, models, shaders
-            ├── .cache/           # fonts, MSL, models (per binary)
-            ├── docs/             # architecture docs, tutorials, app guides
-            ├── skills/           # project-level agent skills (runbooks)
-            ├── AGENTS.md         # AI agent guidelines for the codebase
-            ├── run.sh / run.bat  # launcher (sets LUNCOSIM_CACHE)
-            └── README.md         # quick-start for this package
-            ```
+            ### 📦 Downloads & Platform Support
 
-            ### Quick start
+            Select the archive matching your operating system. Each bundle contains the pre-compiled native application and all necessary assets.
+
+            | Application | Linux (x86_64) | macOS (Apple Silicon) | macOS (Intel) | Windows (x86_64) |
+            | :--- | :---: | :---: | :---: | :---: |
+            | **Sandbox** | ✅ `.tar.gz` | ✅ `.tar.gz` | ✅ `.tar.gz` | ✅ `.zip` |
+            | **Lunica** | ✅ `.tar.gz` | ✅ `.tar.gz` | ✅ `.tar.gz` | ✅ `.zip` |
+
+            ---
+
+            ### 🛠️ How to Run & Security Instructions
+
+            #### 🔒 Bypassing Unsigned Binary Warnings
+            Because these are automated development builds, the binaries are not code-signed. Follow these steps to bypass the operating system warning:
+
+            *   **Windows (SmartScreen):**
+                1. Double-click `run.bat` or the executable.
+                2. On the blue *"Windows protected your PC"* popup, click **"More info"**.
+                3. Click **"Run anyway"**.
+            *   **macOS (Gatekeeper):**
+                *   *Method A (Recommended):* Open Terminal in the extracted folder, run `xattr -cr .` to clear quarantine flags, and run `./run.sh`.
+                *   *Method B:* Control-click (or right-click) `run.sh` or the application, select **Open**, and click **Open** in the confirmation dialog.
+
+            #### 🏎️ Quick Start Commands
 
             **Linux / macOS:**
             ```bash
-            tar xzf <binary>-<platform>-<arch>.tar.gz
-            cd <binary>-<platform>-<arch>/
+            # Extract the archive
+            tar -xzf <archive-name>.tar.gz
+            cd <folder-name>
+            # Launch the application
             ./run.sh
             ```
 
             **Windows:**
-            1. Extract the `.zip` (right-click → Extract All).
-            2. Double-click `run.bat`, or run it from Command Prompt.
+            1. Extract the `.zip` archive (Right-click → *Extract All*).
+            2. Double-click `run.bat` to launch.
 
-            ### Binaries
+            ---
 
-            - **`lunica`** — Modelica Workbench IDE. Edit and simulate
-              Modelica models with the egui-based diagram editor. Needs
-              the MSL bundle (included in `.cache/msl/`).
-            - **`sandbox`** — Rover Physics Sandbox. Test ground physics
-              with the Perseverance rover model (included in
-              `.cache/models/`). Supports multiplayer over WebTransport.
-
-            ### Documentation
-
-            Each archive bundles `docs/`, `skills/`, and `AGENTS.md` for
-            offline reference. Key entry points:
-
-            - `docs/README.md` — reading order for newcomers
-            - `docs/crates-index.md` — map of the ~50-crate workspace
-            - `docs/principles.md` — non-negotiable design principles
-            - `docs/architecture/` — numbered design docs (00s overview,
-              10s systems, 20s domains, 30s platform, 40s cross-cutting)
-            - `docs/tutorials/` — user-facing tutorials
-            - `skills/README.md` — index of project-level agent skills
-              (runbooks for theming, UI patterns, API testing, etc.)
-            - `AGENTS.md` — AI agent guidelines (Bevy 0.18, plugin
-              layering, tunability mandate, TDD-first, frame discipline)
-
-            Online docs are at the
-            [repo](${{ github.server_url }}/${{ github.repository }}/tree/${{ github.sha }}/docs).
-
-            ### Build details
-
-            - **Commit:** [\`${{ github.sha }}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
-            - **Branch:** ${{ github.ref_name }}
-            - **Built by:** [Nightly Builds #${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-            - **Toolchain:** Rust nightly-2026-02-27 (see `rust-toolchain.toml`)
-            - **Engine:** Bevy 0.18, Avian3D 0.6.1, big_space 0.12.0
-
-            ### Feedback
-
-            Found a bug? Report it on
-            [GitHub Issues](${{ github.server_url }}/${{ github.repository }}/issues).
+            ### 💬 Feedback & Community
+            *   **Join our Discord:** Chat with space engineers and creators on [Discord](https://discord.gg/A6U3GdvQum).
+            *   **Report Issues:** Found a bug? Open a ticket on [GitHub Issues](${{ github.server_url }}/${{ github.repository }}/issues).
           files: artifacts/*
           # Mark as the latest release so it shows on the repo main page
           # (right sidebar "Releases" widget). When a stable release is

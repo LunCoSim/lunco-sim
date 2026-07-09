@@ -141,7 +141,8 @@ cache_subdirs_for() {
 # one level up (shared workspace cache) → OS cache dir. Returns "" if none
 # found.
 resolve_cache_dir() {
-    if [ -n "${LUNCOSIM_CACHE:-}" ] && [ -d "$LUNCOSIM_CACHE" ]; then
+    if [ -n "${LUNCOSIM_CACHE:-}" ]; then
+        mkdir -p "$LUNCOSIM_CACHE"
         echo "$LUNCOSIM_CACHE"
         return
     fi
@@ -151,7 +152,8 @@ resolve_cache_dir() {
             return
         fi
     done
-    echo ""
+    mkdir -p "$PROJECT_DIR/.cache"
+    echo "$PROJECT_DIR/.cache"
 }
 
 # ── Portable directory sync ───────────────────────────────────────────────
@@ -216,8 +218,7 @@ download_cache_for() {
             crates_to_download="lunco-theme lunco-modelica"
             ;;
         sandbox)
-            crates_to_download="lunco-theme lunco-usd"
-            crates_to_process="lunco-usd"
+            crates_to_download="lunco-theme"
             ;;
     esac
 
