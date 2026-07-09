@@ -136,7 +136,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: 'latest'
 
       # Cache the cargo registry + git checkouts. The target/ dir is
       # cached separately by swatinem/rust-cache which keys on
@@ -235,10 +235,16 @@ jobs:
     needs: [meta, build]
     runs-on: ubuntu-latest
     # Only create a release if the user opted in (default true for
-    # workflow_dispatch). Always runs on whichever branch was dispatched.
     if: github.event_name == 'workflow_dispatch' && inputs.make_release
     steps:
       - uses: actions/checkout@v4
+
+      - name: Update git tag
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -f ${{ needs.meta.outputs.tag }}
+          git push -f origin ${{ needs.meta.outputs.tag }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
