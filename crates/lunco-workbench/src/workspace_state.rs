@@ -30,6 +30,7 @@
 //! corrupt / missing file degrades to "open with defaults" — never a
 //! panic.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
@@ -37,7 +38,7 @@ use lunco_doc::DocumentOrigin;
 use serde::{Deserialize, Serialize};
 
 use lunco_workspace::WorkspaceResource;
-use crate::WorkbenchLayout;
+use crate::{PanelId, WorkbenchLayout};
 
 /// Hot-exit snapshot of one open document — VSCode-style. Carries the
 /// **live editor buffer** (`source`), not just a path, so unsaved edits
@@ -199,6 +200,36 @@ impl AppDocumentSessionExt for App {
     }
 }
 
+/// Serialized snapshot of one perspective's dock tree + slot intent — the
+/// unit [`WorkspaceState::docks`] stores per perspective so a return visit
+/// after a restart restores the exact tabs + splits + active centre tab the
+/// user left in THAT mode, not its preset. The runtime analogue is
+/// `WorkbenchLayout`'s `PerspectiveDockSlot` (a *live* `DockState<TabId>`);
+/// this DTO keeps the dock as opaque JSON so restore can route it through
+/// the same reconciliation ([`WorkbenchLayout::reconcile_dock`]) as the
+/// active tree, and carries the slot intent so a later rebuild/reset
+/// reproduces the saved layout.
+#[derive(Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
+pub struct PerspectiveDockSnapshot {
+    /// Serialized `egui_dock::DockState<TabId>` — split sizes, tab
+    /// arrangement, active leaf. Parsed + reconciled on restore.
+    #[serde(default)]
+    pub dock: serde_json::Value,
+    /// Slot intent at save time (the perspective's declared side/centre/
+    /// right/bottom panel ids + which centre tab was active). Restored into
+    /// the cache slot verbatim.
+    #[serde(default)]
+    pub side_browser: Vec<PanelId>,
+    #[serde(default)]
+    pub center: Vec<PanelId>,
+    #[serde(default)]
+    pub active_center_tab: usize,
+    #[serde(default)]
+    pub right_inspector: Vec<PanelId>,
+    #[serde(default)]
+    pub bottom: Vec<PanelId>,
+}
+
 /// Per-Twin volatile UI state. One of these per project, stored at
 /// [`workspace_state_path`].
 #[derive(Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
@@ -211,16 +242,28 @@ pub struct WorkspaceState {
     /// `PerspectiveId` string of the perspective active at save time.
     /// `None` ⇒ leave the app's startup default.
     pub perspective: Option<String>,
-    /// Hot-exit snapshots of every open document, in open order.
+    /// Hot-exit snapshots of every open document, in open order. **Global**
+    /// across perspectives: the open-doc set is the shared compile/cosim
+    /// state (one `ModelTabs`), so it's captured once, not per mode. Only
+    /// the *visible tab arrangement* differs per perspective — see
+    /// [`docks`](Self::docks).
     pub documents: Vec<DocumentSnapshot>,
-    /// Index into [`documents`](Self::documents) of the active tab.
+    /// Index into [`documents`](Self::documents) of the active tab in the
+    /// [`perspective`](Self::perspective) active at save time.
     pub active_document: Option<usize>,
-    /// Serialized `egui_dock::DockState<TabId>` — the full center/side
-    /// arrangement plus split sizes and the active leaf (lunica's whole
-    /// layout lives here). `None` ⇒ no dock captured (older file, or an
-    /// app that doesn't use the dock); restore falls back to the
-    /// perspective preset + codec-opened tabs.
+    /// Per-perspective dock trees + slot intent, keyed by `PerspectiveId`
+    /// string. The active perspective's tree is `docks[perspective]`. Each
+    /// perspective keeps its own tabs/splits across restarts while the
+    /// underlying documents stay shared. Empty for apps that don't persist
+    /// a dock. The inverse of `WorkbenchLayout::capture_perspective_docks`.
     #[serde(default)]
+    pub docks: HashMap<String, PerspectiveDockSnapshot>,
+    /// **Legacy** single dock (pre-per-perspective files). Write-side is
+    /// skipped — the on-disk form is always [`docks`](Self::docks) (one
+    /// form, no parallel surface). Read-side migrates: if `docks` is empty
+    /// and this is set, [`load`](Self::load) seeds it under the saved
+    /// [`perspective`](Self::perspective). Never serialized.
+    #[serde(default, skip_serializing)]
     pub dock: Option<serde_json::Value>,
 }
 
@@ -235,7 +278,7 @@ impl WorkspaceState {
             .read_sync(&lunco_storage::StorageHandle::File(path.clone()))
             .ok()?;
         let text = String::from_utf8(bytes).ok()?;
-        let state: WorkspaceState = serde_json::from_str(&text).ok()?;
+        let mut state: WorkspaceState = serde_json::from_str(&text).ok()?;
         if state.twin_root != twin_root {
             warn!(
                 "[WorkspaceState] {} stores a different twin_root ({}); ignoring (hash collision?)",
@@ -244,7 +287,35 @@ impl WorkspaceState {
             );
             return None;
         }
+        state.migrate_legacy_dock();
         Some(state)
+    }
+
+    /// One-time migration from the pre-per-perspective single [`dock`](Self::dock)
+    /// field: if no per-perspective [`docks`](Self::docks) were deserialized
+    /// but a legacy `dock` is present, seed it under the saved
+    /// [`perspective`](Self::perspective) (fallback `"default"`, which won't
+    /// match any registered perspective and so is dropped on restore —
+    /// acceptable for files older than perspective support). Idempotent and
+    /// a no-op for files already in the new per-perspective form.
+    fn migrate_legacy_dock(&mut self) {
+        if !self.docks.is_empty() {
+            return;
+        }
+        let Some(legacy) = self.dock.take() else {
+            return;
+        };
+        let key = self
+            .perspective
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
+        self.docks.insert(
+            key,
+            PerspectiveDockSnapshot {
+                dock: legacy,
+                ..Default::default()
+            },
+        );
     }
 
     /// Atomically write this state for its `twin_root` (tmp + rename so a
@@ -480,27 +551,24 @@ fn build_state(world: &mut World) -> WorkspaceState {
             s
         })
         .collect();
-    let dock = if RESTORE_DOCK_ARRANGEMENT {
-        let layout = world.resource::<WorkbenchLayout>();
-        if layout.perspective_chrome_complete() {
-            layout.dock_json()
-        } else {
-            // Don't persist a transient chrome-less dock (a centre-driven
-            // perspective whose dock momentarily lost its side/right/bottom
-            // panels — e.g. mid-switch through the viewport-only rebuild
-            // branch). Writing it would round-trip as a layout with missing
-            // panels; dropping it lets restore rebuild chrome from intent.
-            None
-        }
+    // Capture every perspective's dock tree (active live + each cached) —
+    // each perspective's chrome is checked individually inside the capture,
+    // so a transient chrome-less dock (a centre-driven perspective whose dock
+    // momentarily lost its side/right/bottom panels — e.g. mid-switch through
+    // the viewport-only rebuild branch) is skipped rather than round-tripping
+    // as a layout with missing panels.
+    let docks = if RESTORE_DOCK_ARRANGEMENT {
+        world.resource::<WorkbenchLayout>().capture_perspective_docks()
     } else {
-        None // see RESTORE_DOCK_ARRANGEMENT
+        HashMap::new() // see RESTORE_DOCK_ARRANGEMENT
     };
     WorkspaceState {
         twin_root,
         perspective,
         documents,
         active_document,
-        dock,
+        docks,
+        dock: None,
     }
 }
 
@@ -555,25 +623,12 @@ fn restore_workspace_state(world: &mut World) {
             .activate_perspective_by_str(persp);
     }
 
-    // Restore the sandbox panel sizes regardless of whether any docs are
-    // saved (a no-doc 3D session still has resized panels to restore).
-    if state.documents.is_empty() {
-        // No docs, but a saved dock layout (e.g. side-panel arrangement /
-        // split sizes) can still apply with an empty remap (no instance
-        // tabs to remap).
-        if RESTORE_DOCK_ARRANGEMENT {
-            if let Some(dock) = state.dock.clone() {
-                let mut layout = world.resource_mut::<WorkbenchLayout>();
-                layout.set_dock_from_json(dock, &std::collections::HashMap::new());
-                // A persisted tree can omit the active perspective's
-                // chrome (saved during a viewport-only state / older
-                // layout); re-attach it so side/right panels don't
-                // silently vanish in dock-mode.
-                layout.ensure_chrome_present();
-            }
-        }
-        return;
-    }
+    // Open every saved document once — the doc set is GLOBAL (shared
+    // compile/cosim state across perspectives), so each doc is restored a
+    // single time and its tab instance id is remapped identically in every
+    // perspective's dock tree below. With no saved docs the open loop is a
+    // no-op and the per-perspective dock seed still restores panel layouts /
+    // split sizes (a no-doc 3D session still has resized panels).
 
     // Dedup against docs the app already opened on its own (auto-open,
     // cosim): skip any saved snapshot whose origin is already present.
@@ -649,22 +704,17 @@ fn restore_workspace_state(world: &mut World) {
         );
     }
 
-    // Apply the persisted dock tree last (5a), overwriting the
+    // Re-install every perspective's saved dock tree (5a). The active
+    // perspective's tree is reconciled into the live dock (overwriting the
     // default-position tabs the codecs just opened with the saved
-    // arrangement + split sizes. `id_map` remaps doc tab instances (old
-    // tab id → live tab id) so the re-installed dock's `TabId::Instance`
-    // entries point at the live tabs; the codecs' deferred `OpenTab` then
-    // focuses them. See RESTORE_DOCK_ARRANGEMENT.
+    // arrangement + split sizes); every other saved perspective is
+    // reconciled into the per-perspective cache so switching to it restores
+    // its own tabs. `id_map` remaps doc tab instances (old tab id → live
+    // tab id) across all trees; the codecs' deferred `OpenTab` then focuses
+    // them. See RESTORE_DOCK_ARRANGEMENT.
     if RESTORE_DOCK_ARRANGEMENT {
-        if let Some(dock) = state.dock.clone() {
-            let mut layout = world.resource_mut::<WorkbenchLayout>();
-            layout.set_dock_from_json(dock, &id_map);
-            // Guarantee the perspective's chrome (side browser /
-            // inspectors / bottom) survives a partial or viewport-only
-            // persisted tree. Open documents are preserved by the
-            // rebuild; only split sizes reset.
-            layout.ensure_chrome_present();
-        }
+        let mut layout = world.resource_mut::<WorkbenchLayout>();
+        layout.seed_perspective_docks(&state.docks, &id_map);
     }
 }
 
@@ -790,6 +840,7 @@ mod tests {
                 },
             ],
             active_document: Some(0),
+            docks: HashMap::new(),
             dock: None,
         };
         state.save().unwrap();
@@ -806,6 +857,80 @@ mod tests {
 
         std::env::remove_var("LUNCOSIM_CONFIG");
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Per-perspective docks round-trip through serde, and the written form
+    /// carries NO legacy single-`dock` field (one form). In-memory — avoids
+    /// the process-global `LUNCOSIM_CONFIG` env var the disk test above
+    /// uses, so it can run in parallel with it.
+    #[test]
+    fn per_perspective_docks_serde_roundtrip() {
+        let state = WorkspaceState {
+            twin_root: PathBuf::from("/proj"),
+            perspective: Some("build".into()),
+            documents: Vec::new(),
+            active_document: None,
+            docks: HashMap::from([
+                (
+                    "design".to_string(),
+                    PerspectiveDockSnapshot {
+                        dock: serde_json::json!({"surfaces": []}),
+                        side_browser: vec![PanelId("browser")],
+                        center: vec![PanelId("canvas")],
+                        active_center_tab: 2,
+                        right_inspector: vec![],
+                        bottom: vec![PanelId("plots")],
+                    },
+                ),
+                (
+                    "build".to_string(),
+                    PerspectiveDockSnapshot {
+                        dock: serde_json::json!({"surfaces": [{"main": []}]}),
+                        ..Default::default()
+                    },
+                ),
+            ]),
+            dock: None,
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        let back: WorkspaceState = serde_json::from_str(&json).unwrap();
+        // Written form is the ONE new form: the top-level legacy `dock`
+        // field is `skip_serializing`, so it must NOT come back (each
+        // snapshot's nested `dock` tree key is unrelated and expected).
+        assert!(
+            back.dock.is_none(),
+            "top-level legacy dock field leaked into the new form: {json}"
+        );
+        assert_eq!(back, state, "per-perspective docks must round-trip");
+        // Each perspective's slot intent survives verbatim.
+        let design = &back.docks["design"];
+        assert_eq!(design.side_browser, vec![PanelId("browser")]);
+        assert_eq!(design.bottom, vec![PanelId("plots")]);
+        assert_eq!(design.active_center_tab, 2);
+    }
+
+    /// A pre-per-perspective file (single `dock`, no `docks`) migrates on
+    /// load into `docks` keyed by the saved `perspective`. In-memory.
+    #[test]
+    fn legacy_single_dock_migrates() {
+        let legacy = serde_json::json!({
+            "twin_root": "/proj",
+            "perspective": "design",
+            "documents": [],
+            "active_document": null,
+            "dock": {"surfaces": []}
+        });
+        let mut state: WorkspaceState = serde_json::from_value(legacy).unwrap();
+        assert!(state.docks.is_empty(), "legacy file has no docks yet");
+        assert_eq!(state.dock, Some(serde_json::json!({"surfaces": []})));
+        state.migrate_legacy_dock();
+        assert_eq!(state.dock, None, "legacy field cleared after migration");
+        assert_eq!(state.docks.len(), 1);
+        assert_eq!(
+            state.docks["design"].dock,
+            serde_json::json!({"surfaces": []}),
+            "legacy dock seeded under the saved perspective"
+        );
     }
 }
 
