@@ -979,7 +979,7 @@ mod learning_path_tests {
     #[test]
     fn builtins_parse_from_embedded_json() {
         let reg = LearningPathRegistry::with_builtins();
-        assert_eq!(reg.paths.len(), 3, "expected 3 built-in learning paths");
+        assert_eq!(reg.paths.len(), 4, "expected 4 built-in learning paths");
         assert!(
             reg.paths.iter().all(|p| p.steps.len() >= 4),
             "each path should carry 4..=6 steps",

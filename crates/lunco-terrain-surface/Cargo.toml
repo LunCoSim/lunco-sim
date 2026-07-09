@@ -11,7 +11,6 @@ description = "Local high-detail DEM ground terrain (surface scale): heightfield
 # the PLANAR DEM adapter: it adds render/physics/big_space/DEM layers on top.
 lunco-terrain-core = { path = "../lunco-terrain-core" }
 bevy = { workspace = true, features = ["bevy_pbr", "bevy_mesh", "bevy_render", "bevy_light"] }
-bevy_mesh = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 # Read-side query seam: register a `TerrainHeight` provider into the shared
 # `ApiQueryRegistry` so scripts/HTTP/MCP can sample the DEM height field via
@@ -53,7 +52,6 @@ lunco-assets = { path = "../lunco-assets" }
 # bake (`DerivedBake`) is a `lunco_precompute::Bake`; the crate owns the
 # load/store/rebake orchestration + the FNV-1a key fold (re-exported `Fnv1a`).
 lunco-precompute = { path = "../lunco-precompute" }
-serde = { workspace = true }
 # `ApiQueryProvider` speaks `serde_json::Value` for params/response.
 serde_json = { workspace = true }
 

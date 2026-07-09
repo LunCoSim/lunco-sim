@@ -12,7 +12,7 @@ ui = ["dep:bevy_egui", "dep:lunco-workbench", "dep:lunco-theme"]
 # binary via `include_bytes!`. Only needed by binaries that actually render
 # celestial bodies on wasm32 (e.g. sandbox). Off by default so the
 # Modelica IDE doesn't drag in ~5 MB of textures it never uses.
-embed-assets = ["dep:image"]
+embed-assets = []
 
 [dependencies]
 # `smaa_luts` is mandatory: `big_space_setup` spawns the observer camera with
@@ -37,7 +37,6 @@ lunco-environment = { path = "../lunco-environment" }
 lunco-assets = { workspace = true }
 lunco-storage = { path = "../lunco-storage" }
 avian3d = { workspace = true }
-chrono = { workspace = true }
 lunco-controller = { path = "../lunco-controller" }
 bevy_asset = { workspace = true }
 futures-lite = { workspace = true }
@@ -46,7 +45,7 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 lunco-materials = { path = "../lunco-materials" }
 lunco-terrain-globe = { path = "../lunco-terrain-globe" }
-image = { workspace = true, optional = true }
+
 
 # ureq is desktop-only: HTTP client with TLS for downloading ephemeris data
 # On wasm32, use browser fetch() via web-sys instead

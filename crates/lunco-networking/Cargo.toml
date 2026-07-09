@@ -73,7 +73,6 @@ lunco-twin-journal = { path = "../lunco-twin-journal", optional = true, features
 # journal to `MergeStrategy::Scripted`. Optional — networking build only.
 lunco-hooks = { path = "../lunco-hooks", optional = true }
 lunco-hooks-rhai = { path = "../lunco-hooks-rhai", optional = true }
-lunco-controller = { path = "../lunco-controller" }
 # Scenario asset cache root (`cache_dir()`), for the Phase-3 client-side
 # `scenarios/<id>/` download target. Native + wasm-safe path helper.
 lunco-assets = { path = "../lunco-assets" }

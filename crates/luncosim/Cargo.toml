@@ -20,7 +20,6 @@ bevy = { workspace = true, features = [
     # `color.png`) load through the asset server's ImageLoader.
     "png",
 ] }
-bevy_egui = { workspace = true }
 avian3d = { workspace = true }
 big_space = { workspace = true }
 

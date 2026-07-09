@@ -17,8 +17,6 @@ lunco-doc = { path = "../lunco-doc" }
 lunco-twin-journal = { path = "../lunco-twin-journal" }
 # Durable journal persistence (headless-safe): byte-level I/O + the user config
 # dir. Both are egui-free, so they don't pull UI into the headless server.
-lunco-storage = { path = "../lunco-storage" }
-lunco-assets = { path = "../lunco-assets" }
 
 [features]
 default = ["ui"]

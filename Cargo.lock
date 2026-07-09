@@ -6873,9 +6873,7 @@ dependencies = [
  "bevy_egui",
  "bevy_shader",
  "big_space",
- "chrono",
  "futures-lite",
- "image",
  "lunco-assets",
  "lunco-controller",
  "lunco-core",
@@ -6976,10 +6974,8 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_egui",
- "lunco-assets",
  "lunco-core",
  "lunco-doc",
- "lunco-storage",
  "lunco-twin-journal",
 ]
 
@@ -7046,9 +7042,6 @@ name = "lunco-materials"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "lunco-usd-bevy",
- "openusd",
- "uuid",
 ]
 
 [[package]]
@@ -7152,7 +7145,6 @@ dependencies = [
  "lunco-assets",
  "lunco-avatar",
  "lunco-celestial",
- "lunco-controller",
  "lunco-core",
  "lunco-cosim",
  "lunco-doc",
@@ -7254,7 +7246,6 @@ dependencies = [
  "lunco-doc-bevy",
  "lunco-environment",
  "lunco-experiments",
- "lunco-fsw",
  "lunco-hardware",
  "lunco-materials",
  "lunco-mobility",
@@ -7262,7 +7253,6 @@ dependencies = [
  "lunco-networking",
  "lunco-obstacle-field",
  "lunco-render",
- "lunco-robotics",
  "lunco-sandbox-edit",
  "lunco-scripting",
  "lunco-settings",
@@ -7273,7 +7263,6 @@ dependencies = [
  "lunco-tutorial",
  "lunco-twin",
  "lunco-twin-journal",
- "lunco-ui",
  "lunco-usd",
  "lunco-usd-bevy",
  "lunco-web",
@@ -7295,7 +7284,6 @@ dependencies = [
  "avian3d",
  "bevy",
  "bevy_egui",
- "bevy_picking",
  "big_space",
  "lunco-api",
  "lunco-assets",
@@ -7433,7 +7421,6 @@ version = "0.1.0-dev"
 dependencies = [
  "avian3d",
  "bevy",
- "bevy_mesh",
  "big_space",
  "lunco-api",
  "lunco-assets",
@@ -7446,7 +7433,6 @@ dependencies = [
  "lunco-terrain-bake",
  "lunco-terrain-core",
  "lunco-time",
- "serde",
  "serde_json",
  "wasm-bindgen",
 ]
@@ -7539,7 +7525,6 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_egui",
- "chrono",
  "egui_plot",
  "lunco-avatar",
  "lunco-celestial",
@@ -7724,7 +7709,6 @@ version = "0.6.0-dev"
 dependencies = [
  "avian3d",
  "bevy",
- "bevy_egui",
  "big_space",
  "console_error_panic_hook",
  "getrandom 0.3.4",

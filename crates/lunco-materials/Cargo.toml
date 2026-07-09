@@ -5,9 +5,6 @@ edition = "2021"
 
 [dependencies]
 bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "mesh_picking", "tonemapping_luts"] }
-openusd = { workspace = true }
-lunco-usd-bevy = { path = "../lunco-usd-bevy" }
-uuid = { workspace = true }
 
 [lints]
 workspace = true

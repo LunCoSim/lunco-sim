@@ -15,7 +15,6 @@ lunco-celestial = { path = "../lunco-celestial" }
 lunco-avatar = { path = "../lunco-avatar" }
 # Time formatting/scales — reuse the spine, never re-derive JD↔UTC locally.
 lunco-time = { path = "../lunco-time" }
-chrono = { workspace = true }
 egui_plot = { workspace = true }
 web-time = { workspace = true }
 

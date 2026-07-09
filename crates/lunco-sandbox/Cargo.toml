@@ -55,10 +55,8 @@ leafwing-input-manager = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-hardware = { path = "../lunco-hardware" }
 lunco-mobility = { path = "../lunco-mobility" }
-lunco-robotics = { path = "../lunco-robotics" }
 lunco-controller = { path = "../lunco-controller" }
 lunco-autopilot = { path = "../lunco-autopilot" }
-lunco-fsw = { path = "../lunco-fsw" }
 # `default-features = false` drops avatar's egui/workbench/gizmo UI layer for the
 # lean server; the `ui` feature below re-enables it (`lunco-avatar/ui`) for the
 # GUI build. (Template for the celestial/usd/sandbox-edit pass — until those are
@@ -132,7 +130,6 @@ lunco-materials = { path = "../lunco-materials", optional = true }
 # one UI panel imported DocumentId (CQ: de-UI-gate the doc subsystem).
 lunco-doc = { path = "../lunco-doc" }
 lunco-theme = { path = "../lunco-theme", optional = true }
-lunco-ui = { path = "../lunco-ui", optional = true }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
 lunco-tutorial = { path = "../lunco-tutorial", optional = true }
 bevy_egui = { workspace = true, optional = true }
@@ -188,7 +185,6 @@ ui = [
     "dep:lunco-tutorial",
     "dep:lunco-materials",
     "dep:lunco-theme",
-    "dep:lunco-ui",
     "dep:lunco-settings",
     "dep:serde",
     "dep:bevy_egui",
