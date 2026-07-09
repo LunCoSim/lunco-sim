@@ -252,7 +252,7 @@ def Xform "SkidRover" (
         prepend references = @../../components/comms/antenna.usda@</CommsAntenna>
     )
     {
-        double3 xformOp:translate = (0, 0.85, -0.5)
+        double3 xformOp:translate = (0, 0.15, -0.5)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
