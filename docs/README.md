@@ -54,7 +54,8 @@ We are evolving from a high-fidelity sandbox into a complete autonomous mission 
 | [`principles.md`](principles.md) | Non-negotiable project principles (TDD, plugin-first, etc.) |
 | [`crates-index.md`](crates-index.md) | Navigation guide for the workspace structure |
 | [`tutorials/`](tutorials/README.md) | Step-by-step build guides — start here to author a scene/mission (USD + rhai + Modelica) |
-| [`scripting-guide.md`](scripting-guide.md) | How to write rhai scenarios — lifecycle, verbs, sequencing, tools, persistence |
+| [`scripting-guide.md`](scripting-guide.md) | How to write rhai scenarios — beginner tutorial + full reference (verbs, sequencing, tools, persistence) |
+| [`commands-reference.md`](commands-reference.md) | Every `#[Command]` — the full callable surface (HTTP / MCP / rhai `cmd()`), auto-generated from source |
 | [`rhai-integration-design.md`](rhai-integration-design.md) | Rhai scripting design rationale + as-built reference |
 | [`architecture/`](architecture/) | Design narrative — how LunCoSim is structured |
 | [`architecture/31-networking-and-state-sync.md`](architecture/31-networking-and-state-sync.md) | Multiplayer sync — the five replication planes (command/state/content/journal/presence), the wire, area-of-interest routing, policy-as-journal |

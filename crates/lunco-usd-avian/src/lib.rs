@@ -439,6 +439,33 @@ fn add_collider_from_usd<R: UsdRead>(
     }
 }
 
+/// True when some ancestor prim of `sdf_path` is a rigid body — i.e. this prim's
+/// collider is a piece of that body's compound shape rather than a body (or
+/// standalone static collider) in its own right.
+///
+/// Recognises both spellings of "this is a body": the standard `PhysicsRigidBodyAPI`
+/// schema and the legacy `physics:rigidBodyEnabled` attribute that
+/// [`extract_avian_prim`]'s fallback arm honours. Missing the legacy one would tear
+/// the colliders off an old-style body and strand them as static geometry.
+///
+/// Walks the composed prim hierarchy, so it answers the same way off the live stage
+/// or the flatten, and independently of where the prim happens to sit in the ECS.
+fn has_rigid_body_ancestor<R: UsdRead>(reader: &R, sdf_path: &SdfPath) -> bool {
+    let mut cur = sdf_path.parent();
+    while let Some(p) = cur {
+        if p.is_abs_root() {
+            return false;
+        }
+        if reader.has_api_schema(&p, "PhysicsRigidBodyAPI")
+            || reader.scalar::<bool>(&p, "physics:rigidBodyEnabled") == Some(true)
+        {
+            return true;
+        }
+        cur = p.parent();
+    }
+    false
+}
+
 /// Terrain prims whose collider is built from a loaded `Mesh3d` — a glTF DEM
 /// brought in via `lunco:assetMode = "mesh"` (e.g. the Shackleton ridge).
 ///
@@ -578,7 +605,6 @@ fn heightfield_from_mesh(mesh: &Mesh) -> Option<Collider> {
 fn process_usd_avian_prims(
     trigger: On<Add, UsdVisualSynced>,
     query: Query<&UsdPrimPath, Without<UsdAvianProcessed>>,
-    q_child_of: Query<&ChildOf>,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
     mut commands: Commands,
@@ -586,7 +612,6 @@ fn process_usd_avian_prims(
     let entity = trigger.entity;
     let Ok(prim_path) = query.get(entity) else { return; };
     let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { return; };
-    let is_root = q_child_of.get(entity).is_err();
 
     // Ph0′ CUTOVER: read the LIVE canonical stage — the source of truth — built
     // on demand from the asset's recipe so it is available regardless of system
@@ -602,7 +627,7 @@ fn process_usd_avian_prims(
         return;
     };
     bevy::log::debug!("[canonical] avian extract off LIVE stage: {}", prim_path.path);
-    extract_avian_prim(&cs.view(), entity, &sdf_path, is_root, &mut commands);
+    extract_avian_prim(&cs.view(), entity, &sdf_path, &mut commands);
 }
 
 /// Map a single composed USD prim to its avian physics components, generic over
@@ -613,7 +638,6 @@ fn extract_avian_prim<R: UsdRead>(
     reader: &R,
     entity: Entity,
     sdf_path: &SdfPath,
-    is_root: bool,
     commands: &mut Commands,
 ) {
     // Skip wheel prims — the sim plugin handles those.
@@ -682,8 +706,18 @@ fn extract_avian_prim<R: UsdRead>(
         apply_rigid_body_mass_props(commands, entity, reader, sdf_path);
         commands.entity(entity).try_insert(UsdAvianProcessed);
     } else if has_collision_api {
-        // ── COLLIDER CHILD ── part of parent's compound; root-level → static.
-        if is_root {
+        // ── COLLIDER PRIM, no body of its own ──
+        // Per the USD physics spec, a collider belongs to the nearest ancestor
+        // carrying `PhysicsRigidBodyAPI`, which folds it into that body's compound
+        // shape (see the COMPOUND BODY ROOT arm above). Only when NO ancestor is a
+        // rigid body does the collider stand alone — and then it is static geometry.
+        //
+        // Ancestry, not `is_root`, is the question: a ground plane authored one
+        // level down (`/Scene/Ground` under a plain `Xform`) is every bit as
+        // standalone as one at `/Ground`. Keying on root-ness silently gave such a
+        // prim NO collider at all — things fell straight through the floor with no
+        // error, and scenes worked around it by tacking on `PhysxTerrainAPI`.
+        if !has_rigid_body_ancestor(reader, sdf_path) {
             commands.entity(entity).try_insert((RigidBody::Static, lunco_core::Mobility::Static));
             add_collider_from_usd(commands, entity, reader, sdf_path);
         }
@@ -1265,7 +1299,7 @@ mod extract_parity_tests {
         let mut queue = CommandQueue::default();
         {
             let mut commands = Commands::new(&mut queue, &world);
-            extract_avian_prim(reader, e, path, true, &mut commands);
+            extract_avian_prim(reader, e, path, &mut commands);
         }
         queue.apply(&mut world);
         (
@@ -1365,5 +1399,138 @@ def PhysicsRevoluteJoint "Hinge" (
         std::fs::write(&f, "#usda 1.0\ndef Xform \"Plain\" {}\n").unwrap();
         let stage = compose_file_to_stage(&f).expect("compose stage");
         assert!(read_joint_spec_typed(&stage, &SdfPath::new("/Plain").unwrap()).is_none());
+    }
+}
+
+#[cfg(test)]
+mod collider_ownership_tests {
+    use super::*;
+    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+
+    /// A ground plane one level under a plain `Xform` (the shape every scene and
+    /// tutorial authors), plus a rigid-body lander whose only collider is its own
+    /// root geometry, plus a lander with a collider CHILD.
+    const SCENE: &str = r#"#usda 1.0
+(
+    defaultPrim = "Mission"
+)
+def Xform "Mission"
+{
+    def Cube "Ground" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
+    {
+        double size = 1.0
+        bool physics:collisionEnabled = true
+    }
+
+    def Cylinder "BareLander" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"] )
+    {
+        uniform token axis = "Y"
+        double radius = 2.5
+        double height = 3.0
+        bool physics:rigidBodyEnabled = true
+        bool physics:collisionEnabled = true
+    }
+
+    def Xform "LegacyBody"
+    {
+        bool physics:rigidBodyEnabled = true
+
+        def Cube "Shell" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
+        {
+            double size = 1.0
+            bool physics:collisionEnabled = true
+        }
+    }
+
+    def Cylinder "CompoundLander" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"] )
+    {
+        uniform token axis = "Y"
+        double radius = 2.5
+        double height = 3.0
+        bool physics:rigidBodyEnabled = true
+
+        def Cylinder "Hull" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
+        {
+            uniform token axis = "Y"
+            double radius = 2.5
+            double height = 3.0
+            bool physics:collisionEnabled = true
+        }
+    }
+}
+"#;
+
+    /// Run the extractor on one prim and return its resulting components.
+    fn extract(view: &lunco_usd_bevy::StageView, path: &str) -> (bool, Option<RigidBody>) {
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        let sdf = SdfPath::new(path).unwrap();
+        {
+            let mut commands = world.commands();
+            extract_avian_prim(view, entity, &sdf, &mut commands);
+        }
+        world.flush();
+        (world.get::<Collider>(entity).is_some(), world.get::<RigidBody>(entity).copied())
+    }
+
+    /// The regression this exists for: a collider prim with no rigid-body ancestor
+    /// is standalone STATIC geometry — even when it is not an ECS root. Keying this
+    /// off root-ness gave `/Mission/Ground` no collider at all, silently, and
+    /// everything that landed on it fell through the world.
+    #[test]
+    fn nested_collider_without_rigid_body_ancestor_is_static_geometry() {
+        let recipe = StageRecipe::from_source("t.usda", SCENE);
+        let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
+        let (has_collider, body) = extract(&cs.view(), "/Mission/Ground");
+        assert!(has_collider, "a ground plane under an Xform must get a collider");
+        assert_eq!(body, Some(RigidBody::Static), "and it must be static");
+    }
+
+    /// The other half of the rule: a collider UNDER a rigid body is a piece of that
+    /// body's compound shape, so it gets no collider and no body of its own.
+    #[test]
+    fn collider_under_rigid_body_ancestor_stays_a_compound_piece() {
+        let recipe = StageRecipe::from_source("t.usda", SCENE);
+        let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
+        let (has_collider, body) = extract(&cs.view(), "/Mission/CompoundLander/Hull");
+        assert!(!has_collider, "a collider child must not carry its own collider");
+        assert_eq!(body, None, "nor its own rigid body");
+    }
+
+    /// A rigid-body root with NO collider children falls back to its own geometry.
+    /// (It always did; asserted here so the compound arm can never quietly eat it.)
+    #[test]
+    fn rigid_body_root_without_collider_children_uses_its_own_shape() {
+        let recipe = StageRecipe::from_source("t.usda", SCENE);
+        let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
+        let lander = SdfPath::new("/Mission/BareLander").unwrap();
+        let view = cs.view();
+        assert!(collect_child_colliders_from_usd(&view, &lander).is_empty());
+        assert!(build_collider_from_usd(&view, &lander).is_some());
+        let (has_collider, _) = extract(&view, "/Mission/BareLander");
+        assert!(has_collider, "a bare rigid-body root must collide via its own shape");
+    }
+
+    /// A body declared the legacy way (`physics:rigidBodyEnabled`, no API schema)
+    /// still owns its collider children — they must not become static geometry.
+    #[test]
+    fn legacy_rigid_body_ancestor_still_owns_its_colliders() {
+        let recipe = StageRecipe::from_source("t.usda", SCENE);
+        let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
+        let view = cs.view();
+        assert!(has_rigid_body_ancestor(&view, &SdfPath::new("/Mission/LegacyBody/Shell").unwrap()));
+        let (has_collider, body) = extract(&view, "/Mission/LegacyBody/Shell");
+        assert!(!has_collider, "legacy body's collider child must stay a compound piece");
+        assert_eq!(body, None);
+    }
+
+    #[test]
+    fn rigid_body_ancestry_is_walked_transitively() {
+        let recipe = StageRecipe::from_source("t.usda", SCENE);
+        let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
+        let view = cs.view();
+        assert!(!has_rigid_body_ancestor(&view, &SdfPath::new("/Mission/Ground").unwrap()));
+        assert!(has_rigid_body_ancestor(&view, &SdfPath::new("/Mission/CompoundLander/Hull").unwrap()));
+        assert!(!has_rigid_body_ancestor(&view, &SdfPath::new("/Mission/CompoundLander").unwrap()));
     }
 }

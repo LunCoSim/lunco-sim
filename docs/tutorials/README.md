@@ -30,8 +30,11 @@ shared HUD (`lunco-workbench::tutorial_overlay`) + the `hud.rhai` prelude.
   it (or hot-replace by id) to change startup behavior with no rebuild.
 - **Shipped lessons**: *sandbox* — Sandbox Intro → First Drive → Lander & Rover
   Mission, plus an authoring track (Build a Scene → Script a Rover → Inspect the
-  Simulation); *lunica* — a 7-lesson workbench course + the Welcome-panel
-  [learning paths](../../assets/tutorials/learning_paths.json).
+  Simulation → Cosim); *lunica* — a 7-lesson workbench course + the Welcome-panel
+  [learning paths](../../assets/tutorials/learning_paths.json). The sandbox also
+  embeds the full lunica modeling IDE as its **Design workspace** (open `.mo`,
+  compile, run, plot) — the lunica lessons run there too, though they are
+  currently registered under *lunica*; see the [sandbox app doc](../apps/sandbox/README.md).
 - **Add one — data, not Rust**: drop `assets/tutorials/<app>/<name>.rhai` + an entry
   in `assets/tutorials/<app>/tutorials.json` (the app's `TutorialPlugin { app }`
   scans it). No rebuild. Full recipe in
@@ -42,8 +45,9 @@ shared HUD (`lunco-workbench::tutorial_overlay`) + the `hud.rhai` prelude.
 
 | Tutorial | What you build |
 |---|---|
-| [01 — Lander → Rover mission](01-lander-rover-mission.md) | A lander that flies itself down on a glowing engine plume, releases a rover, and an autopilot that drives the rover through a waypoint course until you take over — with model-driven warnings and on-screen narration throughout. |
+| [01 — Lander → Rover mission](01-lander-rover-mission.md) | A reusable lander *vehicle* that flies itself down on a glowing engine plume, a scene that drops it into a mission, and an autopilot that drives the released rover through a waypoint course until you take over — with model-driven warnings, on-screen narration, and possession as the one source of control authority. |
 | [02 — Author your own controller](02-authoring-a-controller.md) | Build a self-flying vessel from scratch: the control law in Modelica, logic in rhai, sensors + wiring + the `piloted` authority signal in USD — and a pilot who can take over. The layering behind every LunCoSim GNC. |
+| [03 — Cosim: when a Model flies physics](03-cosim.md) | How a Modelica model and the physics engine share a timestep: the lander's `modelicaModel` + `SimConnection` wiring, Modelica `when` events on the bus, and verifying the live chain over the API. |
 
 Each walkthrough pairs with an in-app lesson and the reference **[skills](../../skills/README.md)**:
 
@@ -51,6 +55,7 @@ Each walkthrough pairs with an in-app lesson and the reference **[skills](../../
 |---|---|---|
 | 01 — Lander → Rover mission | *Lander & Rover Mission* (sandbox) | [build-usd-scene](../../skills/build-usd-scene/SKILL.md) · [author-scenario](../../skills/author-scenario/SKILL.md) · [compose-multidomain-twin](../../skills/compose-multidomain-twin/SKILL.md) |
 | 02 — Author your own controller | *Script a Rover* (sandbox) | [authoring-vessel-controllers](../../skills/authoring-vessel-controllers/SKILL.md) |
+| 03 — Cosim: when a Model flies physics | *Cosim — Model meets Physics* (sandbox) | [compose-multidomain-twin](../../skills/compose-multidomain-twin/SKILL.md) · [inspect-simulation](../../skills/inspect-simulation/SKILL.md) |
 
 Looking for a reference rather than a walkthrough? The full script verb list is
 in [`../scripting-guide.md`](../scripting-guide.md), the design behind scenarios is

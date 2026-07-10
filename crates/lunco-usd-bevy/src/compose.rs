@@ -288,23 +288,26 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
         assert_eq!(view.value::<f64>(&fwd, "lunco:scale"), Some(1.0));
     }
 
-    /// The two harder composition paths, on the real `lander_test.usda`:
-    /// (a) an INLINE lander prim inheriting `_LanderControl` via the scene's own
-    ///     `subLayers`; (b) a rover pulled in by `references` whose OWN
-    ///     `subLayers`+`inherits` must still compose THROUGH the reference arc.
+    /// The two harder composition paths, on the real `lander_test.usda`, where both
+    /// vehicles now arrive by `references`: (a) a lander whose asset references the
+    /// shared control profile — a reference nested INSIDE a reference, which must
+    /// still land on the composed `/LanderTest/Lander/Controls`; (b) a rover pulled
+    /// in by `references` whose OWN `subLayers`+`inherits` must compose THROUGH the
+    /// reference arc.
     #[test]
-    fn lander_scene_composes_inline_and_referenced_control_profiles() {
+    fn lander_scene_composes_nested_and_referenced_control_profiles() {
         let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../assets/scenes/sandbox/lander_test.usda");
         let stage = compose_file_to_stage(&scene).expect("compose lander_test.usda");
         let view = StageView::new(&stage);
 
-        // (a) inline lander inherits _LanderControl through the scene subLayer.
+        // (a) the lander asset's own Controls reference resolves through the arc
+        //     that pulled the lander into the scene.
         let lander_fwd = SdfPath::new("/LanderTest/Lander/Controls/forward").unwrap();
         assert_eq!(
             view.value::<String>(&lander_fwd, "lunco:port").as_deref(),
             Some("pitch"),
-            "inline lander must inherit the lander control profile"
+            "referenced lander must carry the lander control profile through the reference"
         );
         // (b) referenced rover's subLayer+inherits composes through the ref arc.
         let rover_fwd = SdfPath::new("/LanderTest/SkidRover/Controls/forward").unwrap();
@@ -356,3 +359,4 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
         );
     }
 }
+

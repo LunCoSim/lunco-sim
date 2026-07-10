@@ -1,5 +1,7 @@
-// Lander onboard SUPERVISOR — referenced from USD by `lunco:scriptPath` on
-// `/LanderTest/Lander`. EVENT-DRIVEN only: no control loop, no per-tick routing.
+// Lander onboard SUPERVISOR — attached by `lunco:scriptPath` on the lander asset
+// (`vessels/landers/descent_lander.usda`), so it rides along into any scene that
+// references one. Everything below resolves relative to `me`; nothing here names a
+// scene path. EVENT-DRIVEN only: no control loop, no per-tick routing.
 //
 // Control is entirely WIRING-LEVEL now (no rhai stepping):
 //   • The internal GNC law lives in `Lander.mo` and actuates the vessel directly.
@@ -43,9 +45,12 @@ fn on_event(me, evt) {
 // True once the lander has settled: low altitude (altimeter range) + near-zero
 // vertical rate. Hoisted out of `on_tick` (fresh body = shallow nesting).
 fn __lander_settled(me) {
-    let alt_ent = find("/LanderTest/Lander/Altimeter");
+    // Resolve OUR OWN altimeter: entity names are full prim paths, so `name(me)`
+    // gives whatever the scene called this lander. `find` yields -1 when absent —
+    // fall back to a bare height read then (e.g. a lander authored without sensors).
+    let alt_ent = find(name(me) + "/Altimeter");
     let alt = ();
-    if alt_ent != () { alt = get(alt_ent, "range"); }
+    if alt_ent >= 0 { alt = get(alt_ent, "range"); }
     let is_low = false;
     if alt != () {
         is_low = alt < 2.0;

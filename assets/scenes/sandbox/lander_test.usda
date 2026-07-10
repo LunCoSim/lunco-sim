@@ -5,26 +5,29 @@
     metersPerUnit = 1
 )
 
-# Self-contained powered-descent lander cosim scene.
+# Powered-descent lander → rover surface-ops scene.
 #
-# The chain is entirely the unified cosim wiring fabric — no bespoke Rust:
+# The scene is a CAST list, not a vehicle definition. Every vehicle here arrives by
+# `references` from `assets/vessels/`, and the scene only says where each one starts
+# and how they are bolted together:
 #
-#   Altimeter.range ────────► Lander.mo  altitude
-#   Avian body  ──(velocity_y)─► Lander.mo  descent_rate   (+ mass, inertia_*, quat)
-#   possession  ──(piloted)───► Lander.mo  piloted         (yield-to-pilot gate)
-#                                    │  velocity-scheduled descent law + gate
-#                                    ▼  force_x/y/z, torque_x/y/z (world frame)
-#   Lander.mo  force/torque ─► Avian body
+#   Lander      → vessels/landers/descent_lander.usda   (GNC model + sensors + flame)
+#   SkidRover   → vessels/rovers/skid_rover.usda        (+ an autopilot script)
+#   RoverTarget → vessels/markers/waypoint.usda         (×3, the course)
 #
-# Gravity is applied by lunco-environment (sandbox default 9.81 NEG_Y); the
-# model must NOT re-apply it. Body-frame thrust means the engine fires along
-# the lander's own +Y, so it follows attitude (validates the new force_local_*
-# ports without needing a separate gimbal demo yet).
+# What's left in this file is the MISSION: the joint that holds the two together,
+# where the gates are, and the `Scenario` prim that sequences the whole thing.
+#
+# The lander's own cosim chain (altimeter → GNC → force/torque, `piloted` authority
+# gate) travels with its asset — see `descent_lander.usda` for the wiring diagram.
+#
+# Gravity is applied by lunco-environment (sandbox default 9.81 NEG_Y); the model
+# must NOT re-apply it.
 #
 # Controls:
-#   Space       — full thrust
-#   W/S/A/D     — pitch/roll torque
-#   Q/E         — yaw torque
+#   Space       — full thrust        (lander, once possessed)
+#   W/S/A/D     — pitch/roll torque  (lander) · drive/steer (rover)
+#   Q/E         — yaw torque         (lander)
 #   G           — detach rover joint
 #   P           — pause/unpause simulation
 #   Backspace   — release possession
@@ -66,427 +69,17 @@ def Xform "LanderTest"
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }
 
-    # ── The powered-descent lander ──────────────────────────────────────────
-    # Main body: cylindrical tank with structural details. Starts at 30 m,
-    # auto-descends via the rhai script, then hands control to the user.
+    # ── The powered-descent lander ────────────────────────────────────────────
+    # The whole vehicle — GNC model, altimeter/IMU, flame, legs, cosim wiring —
+    # arrives through this one reference. The scene overrides only its initial
+    # CONDITIONS: where it starts and the cross-range velocity it carries in.
     def Cylinder "Lander" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+        prepend references = @../../vessels/landers/descent_lander.usda@</DescentLander>
     )
     {
-        uniform token axis = "Y"
-        double radius = 2.5
-        double height = 3.0
         double3 xformOp:translate = (0, 60.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-
-        # Intent->port control (stage 2): shared lander profile as a child
-        # `references` arc (forward/back->pitch, left/right->roll, yaw_left/right->yaw,
-        # action->throttle). Composes through a spawn/reference like a component.
-        def "Controls" (
-            prepend references = @../../vessels/control_profiles.usda@</LanderControls>
-        )
-        {
-        }
-        # Gold multi-layer-insulation (MLI) foil hull — a warm metallic
-        # `displayColor` (StandardMaterial), NOT wrapped in solar cells. The solar
-        # array now lives on the deployed side wings below, so the body reads as a
-        # spacecraft hull instead of a battery barrel.
-        #
-        # NB: pbr_lit.wgsl is an IMPORTABLE shader LIBRARY (`#define_import_path`,
-        # no `@fragment` entry) — pointing `shaderPath` at it builds an INVALID
-        # render pipeline (`opaque_mesh_pipeline` validation spam → dropped frames /
-        # viewport blink). Only whole shaders with a `@fragment fn fragment` (e.g.
-        # solar_panel.wgsl) are valid material shaders; the hull uses displayColor.
-        color3f primvars:displayColor = (0.78, 0.62, 0.27)
-
-        bool physics:rigidBodyEnabled = true
-        bool physics:collisionEnabled = true
-        float physics:mass = 2000.0
-        float physics:linearDamping = 0.02
         double3 physics:linearVelocity = (-5.0, 0.0, -5.0)
-
-        string lunco:vessel = "true"
-
-        # Cosim: bind the lander GNC (Lander.mo) and wire it to SENSORS, not the
-        # god-view body. The low-level control LAW lives in the Modelica model; it
-        # reads what a real lander senses:
-        #   Altimeter.range  --> altitude      (see AltimeterToLander below)
-        #   velocity_y       --> descent_rate  (vertical-velocity estimate)
-        #   IMU / body quat  --> q_w..q_z      (attitude, to rotate thrust to world)
-        #   g                =  1.62 (model param; lunar gravity is constant)
-        # and drives force/torque OUT to Avian. Control authority is the WIRED
-        # `piloted:piloted` signal (below): the internal GNC yields to whatever
-        # session (a user or an autopilot) possesses the vessel, and drives itself
-        # when none do. `piloted` is derived from the possession registry in Rust
-        # (PILOTED_BACKEND), so it needs no in-model flag and no scripting. See
-        # models/Lander.mo.
-        string lunco:modelicaModel = "models/Lander.mo"
-
-        # Co-sim wiring — native USD `connectionPaths` (derived to `SimConnection`
-        # by `reconcile_usd_connections`). Self-loop on this prim: model outputs →
-        # physics inputs (force/torque/throttle) and physics/body outputs → model
-        # inputs (quat/velocity/mass/inertia/piloted). Plus one cross-prim edge:
-        # the child Altimeter sensor's `range` → the model's `altitude` input.
-        float inputs:force_x.connect = </LanderTest/Lander.outputs:force_x>
-        float inputs:force_y.connect = </LanderTest/Lander.outputs:force_y>
-        float inputs:force_z.connect = </LanderTest/Lander.outputs:force_z>
-        float inputs:torque_x.connect = </LanderTest/Lander.outputs:torque_x>
-        float inputs:torque_y.connect = </LanderTest/Lander.outputs:torque_y>
-        float inputs:torque_z.connect = </LanderTest/Lander.outputs:torque_z>
-        float inputs:q_w.connect = </LanderTest/Lander.outputs:quat_w>
-        float inputs:q_x.connect = </LanderTest/Lander.outputs:quat_x>
-        float inputs:q_y.connect = </LanderTest/Lander.outputs:quat_y>
-        float inputs:q_z.connect = </LanderTest/Lander.outputs:quat_z>
-        float inputs:descent_rate.connect = </LanderTest/Lander.outputs:velocity_y>
-        float inputs:vehicle_mass.connect = </LanderTest/Lander.outputs:mass>
-        float inputs:inertia_xx.connect = </LanderTest/Lander.outputs:inertia_xx>
-        float inputs:inertia_yy.connect = </LanderTest/Lander.outputs:inertia_yy>
-        float inputs:inertia_zz.connect = </LanderTest/Lander.outputs:inertia_zz>
-        float inputs:piloted.connect = </LanderTest/Lander.outputs:piloted>
-        float inputs:throttle.connect = </LanderTest/Lander.outputs:throttle>
-        float inputs:altitude.connect = </LanderTest/Lander/Altimeter.outputs:range>
-
-        # Modelica `when` events: threshold crossings of the model's continuous
-        # OUTPUT signals become discrete events on the bus (edge detection in Rust,
-        # rumoca-safe). The lander script (and any other) reacts via on_event.
-        custom string lunco:portEvents = "m_prop<200:lander_low_fuel, m_prop<=0.5:lander_depleted"
-
-        # The MISSION orchestration lives on the `/LanderTest/Scenario` prim below.
-        # This entity carries the lander's GNC Modelica model (above) AND a local
-        # supervisory script (below) at the same time — one entity, a model + a
-        # script (doc 34, Decision 1). The script monitors the GNC's propellant
-        # port and disarms a dry engine; it does NOT fly the descent.
-        custom string lunco:scriptPath = "scenarios/lander_subsystems.rhai"
-        # GNC descent tuning (overrides Lander.mo defaults): rest_altitude = altimeter
-        # range (m) at leg contact, kv = descent-rate tracking gain.
-        custom string lunco:params = "rest_altitude=1.5, kv=1.2"
-
-        # ── Physics hull ──
-        # Enabling colliders on the footpads switches this rigid body into
-        # CHILDREN-ONLY compound mode (lunco-usd-avian: a parent with any
-        # collider-child drops its own shape). This invisible child re-adds the
-        # body bulk so the compound = hull + 4 pads. Lowest point is the pads
-        # (y=-5.0), so the lander rests on its legs instead of sinking the
-        # cylinder (whose bottom is only y=-1.5) into the ground.
-        def Cylinder "Hull" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
-        {
-            uniform token axis = "Y"
-            double radius = 2.5
-            double height = 3.0
-            token visibility = "invisible"
-            bool physics:collisionEnabled = true
-        }
-
-        # ── Onboard sensors (reusable library primitives, referenced) ──
-        # Altimeter: downward range-finder → `range` port (the GNC's altitude).
-        # Mounted at the nozzle bottom, casting -Y.
-        def "Altimeter" (
-            prepend references = @../../vessels/sensors/altimeter.usda@</Altimeter>
-        )
-        {
-            double3 xformOp:translate = (0.0, -3.3, 0.0) # nozzle bottom
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-        }
-
-        # IMU: 9-DOF attitude + accel source. Its orientation (with the body's
-        # `quat_*`/`angvel_*`) is what the GNC reads for thrust-vector orientation.
-        # Mounted at the body centre of mass.
-        def "IMU" (
-            prepend references = @../../vessels/sensors/imu.usda@</Imu>
-        )
-        {
-            double3 xformOp:translate = (0.0, 0.0, 0.0) # at CoM
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-        }
-
-        # ── Visual-only structure ──
-
-        # Upper deck (flat top with instruments)
-        def Cylinder "UpperDeck"
-        {
-            uniform token axis = "Y"
-            double radius = 2.6
-            double height = 0.15
-            double3 xformOp:translate = (0, 1.55, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.6, 0.58, 0.55)
-            bool physics:collisionEnabled = false
-        }
-
-        # ── Comms mast + spike, centred ON TOP ──
-        # Antenna mast, centred (was offset to +X). A short white boom.
-        def Cylinder "Antenna"
-        {
-            uniform token axis = "Y"
-            double radius = 0.06
-            double height = 1.4
-            double3 xformOp:translate = (0.0, 2.35, 0.0)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.7, 0.7, 0.72)
-            bool physics:collisionEnabled = false
-        }
-
-        # The SPIKE — a slender pointed antenna standing straight up on the mast,
-        # dead-centre on top. (Bevy renders an axis-Y cone apex-down, so a 180°
-        # flip makes it point UP.)
-        def Cone "CommSpike"
-        {
-            uniform token axis = "Y"
-            double radius = 0.13
-            double height = 1.5
-            double3 xformOp:translate = (0.0, 3.6, 0.0)
-            double3 xformOp:rotateXYZ = (180.0, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            color3f primvars:displayColor = (0.82, 0.82, 0.86)
-            bool physics:collisionEnabled = false
-        }
-
-        # High-gain dish, angled off the deck to the side (secondary detail).
-        def Sphere "AntennaDish"
-        {
-            double radius = 0.3
-            double3 xformOp:translate = (1.3, 1.9, 0.0)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.9, 0.9, 0.92)
-            bool physics:collisionEnabled = false
-        }
-
-        # Engine bell — flares WIDE at the exit (bottom), narrowing to the throat
-        # (top): a proper nozzle, not a downward spike. Bevy renders an axis-Y
-        # cone apex-down, so the 180° flip puts the wide mouth at the bottom. Dark
-        # metallic with a hot emissive throat.
-        def Cone "Nozzle"
-        {
-            uniform token axis = "Y"
-            double radius = 1.35
-            double height = 1.9
-            double3 xformOp:translate = (0, -2.6, 0)
-            double3 xformOp:rotateXYZ = (180.0, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            color3f primvars:displayColor = (0.14, 0.14, 0.16)
-            color3f primvars:emissiveColor = (0.5, 0.18, 0.03)
-            bool physics:collisionEnabled = false
-        }
-
-        # Engine exhaust plume — TWO translucent emissive cones (apex DOWN, below
-        # the nozzle), both DESCRIBED IN rhai (scenarios/flame.rhai), not built-in
-        # Rust: the script reads the GNC `throttle` SIGNAL each tick, scales each
-        # cone to match (collapsing to ~zero at idle), and adds a smoothed flicker.
-        # The outer cone is a soft orange halo; the inner "...Core" is a slimmer,
-        # hotter yellow-white tongue. base_color is kept DARK and the emissive is
-        # HDR (>1) so the colour is the GLOW — the Sun can't wash it to tan.
-        def Cone "Flame"
-        {
-            uniform token axis = "Y"
-            double radius = 1.0
-            double height = 1.0
-            double3 xformOp:translate = (0, -3.5, 0)
-            double3 xformOp:rotateXYZ = (180.0, 0, 0)
-            double3 xformOp:scale = (0.02, 0.02, 0.02)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-            color3f primvars:displayColor = (0.5, 0.16, 0.02)
-            color3f primvars:emissiveColor = (3.0, 1.0, 0.12)
-            float primvars:displayOpacity = 0.4
-            bool physics:collisionEnabled = false
-            custom string lunco:params = "wmax=1.05, lmax=3.6, flick=1.0"
-            custom string lunco:scriptPath = "scenarios/flame.rhai"
-        }
-        def Cone "FlameCore"
-        {
-            uniform token axis = "Y"
-            double radius = 1.0
-            double height = 1.0
-            double3 xformOp:translate = (0, -3.4, 0)
-            double3 xformOp:rotateXYZ = (180.0, 0, 0)
-            double3 xformOp:scale = (0.02, 0.02, 0.02)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-            color3f primvars:displayColor = (0.95, 0.7, 0.2)
-            color3f primvars:emissiveColor = (6.0, 3.5, 0.9)
-            float primvars:displayOpacity = 0.85
-            bool physics:collisionEnabled = false
-            custom string lunco:params = "wmax=0.5, lmax=2.5, flick=0.5"
-            custom string lunco:scriptPath = "scenarios/flame.rhai"
-        }
-
-        # Side tanks (fuel/oxidizer — 4 tanks at 90° intervals)
-        def Capsule "TankPX"
-        {
-            uniform token axis = "Y"
-            double radius = 0.4
-            double height = 2.4
-            double3 xformOp:translate = (2.2, 0.0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.75, 0.72, 0.65)
-            bool physics:collisionEnabled = false
-        }
-        def Capsule "TankNX"
-        {
-            uniform token axis = "Y"
-            double radius = 0.4
-            double height = 2.4
-            double3 xformOp:translate = (-2.2, 0.0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.75, 0.72, 0.65)
-            bool physics:collisionEnabled = false
-        }
-        def Capsule "TankPZ"
-        {
-            uniform token axis = "Y"
-            double radius = 0.4
-            double height = 2.4
-            double3 xformOp:translate = (0, 0.0, 2.2)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.75, 0.72, 0.65)
-            bool physics:collisionEnabled = false
-        }
-        def Capsule "TankNZ"
-        {
-            uniform token axis = "Y"
-            double radius = 0.4
-            double height = 2.4
-            double3 xformOp:translate = (0, 0.0, -2.2)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.75, 0.72, 0.65)
-            bool physics:collisionEnabled = false
-        }
-
-        # ── Deployed solar arrays — the "panels on the sides" ──────────────────
-        # Flat cells-up wings on ±X, tilted toward the sun. The solar_panel shader
-        # lives HERE now (a recognisable array) instead of wrapping the hull. Thin
-        # slabs, no collider — visual only.
-        def Cube "SolarWingPX"
-        {
-            double size = 1.0
-            double3 xformOp:translate = (5.4, 1.4, 0)
-            double3 xformOp:rotateXYZ = (0, 0, -12.0)
-            double3 xformOp:scale = (5.6, 0.06, 3.4)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-            color3f primvars:displayColor = (0.06, 0.06, 0.22)
-            string primvars:materialType = "shader"
-            string primvars:shaderPath = "shaders/solar_panel.wgsl"
-            float primvars:v_scale = 1.7
-            float primvars:cell_rows = 8.0
-            float primvars:cell_cols = 14.0
-            float primvars:cell_gap = 0.01
-            float primvars:bus_width = 0.004
-            float primvars:border = 0.05
-            color3f primvars:cell_color = (0.04, 0.05, 0.28)
-            color3f primvars:bus_color = (0.9, 0.9, 0.95)
-            color3f primvars:frame_color = (0.15, 0.15, 0.18)
-            bool physics:collisionEnabled = false
-        }
-        def Cube "SolarWingNX"
-        {
-            double size = 1.0
-            double3 xformOp:translate = (-5.4, 1.4, 0)
-            double3 xformOp:rotateXYZ = (0, 0, 12.0)
-            double3 xformOp:scale = (5.6, 0.06, 3.4)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-            color3f primvars:displayColor = (0.06, 0.06, 0.22)
-            string primvars:materialType = "shader"
-            string primvars:shaderPath = "shaders/solar_panel.wgsl"
-            float primvars:v_scale = 1.7
-            float primvars:cell_rows = 8.0
-            float primvars:cell_cols = 14.0
-            float primvars:cell_gap = 0.01
-            float primvars:bus_width = 0.004
-            float primvars:border = 0.05
-            color3f primvars:cell_color = (0.04, 0.05, 0.28)
-            color3f primvars:bus_color = (0.9, 0.9, 0.95)
-            color3f primvars:frame_color = (0.15, 0.15, 0.18)
-            bool physics:collisionEnabled = false
-        }
-
-        # ── Landing legs with footpads ──
-        # Leg +X
-        def Cube "LegPX"
-        {
-            double size = 1.0
-            double3 xformOp:translate = (3.95, -1.68, 0)
-            double3 xformOp:rotateXYZ = (0, 0, 25.0)
-            double3 xformOp:scale = (0.15, 7.33, 0.15)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-            color3f primvars:displayColor = (0.55, 0.55, 0.57)
-            bool physics:collisionEnabled = false
-        }
-        def Cylinder "PadPX"
-        {
-            uniform token axis = "Y"
-            double radius = 0.4
-            double height = 0.08
-            double3 xformOp:translate = (5.5, -5.0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.45, 0.45, 0.48)
-            bool physics:collisionEnabled = true
-        }
-
-        # Leg -X
-        def Cube "LegNX"
-        {
-            double size = 1.0
-            double3 xformOp:translate = (-3.95, -1.68, 0)
-            double3 xformOp:rotateXYZ = (0, 0, -25.0)
-            double3 xformOp:scale = (0.15, 7.33, 0.15)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-            color3f primvars:displayColor = (0.55, 0.55, 0.57)
-            bool physics:collisionEnabled = false
-        }
-        def Cylinder "PadNX"
-        {
-            uniform token axis = "Y"
-            double radius = 0.4
-            double height = 0.08
-            double3 xformOp:translate = (-5.5, -5.0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.45, 0.45, 0.48)
-            bool physics:collisionEnabled = true
-        }
-
-        # Leg +Z
-        def Cube "LegPZ"
-        {
-            double size = 1.0
-            double3 xformOp:translate = (0, -1.68, 3.95)
-            double3 xformOp:rotateXYZ = (-25.0, 0, 0)
-            double3 xformOp:scale = (0.15, 7.33, 0.15)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-            color3f primvars:displayColor = (0.55, 0.55, 0.57)
-            bool physics:collisionEnabled = false
-        }
-        def Cylinder "PadPZ"
-        {
-            uniform token axis = "Y"
-            double radius = 0.4
-            double height = 0.08
-            double3 xformOp:translate = (0, -5.0, 5.5)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.45, 0.45, 0.48)
-            bool physics:collisionEnabled = true
-        }
-
-        # Leg -Z
-        def Cube "LegNZ"
-        {
-            double size = 1.0
-            double3 xformOp:translate = (0, -1.68, -3.95)
-            double3 xformOp:rotateXYZ = (25.0, 0, 0)
-            double3 xformOp:scale = (0.15, 7.33, 0.15)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-            color3f primvars:displayColor = (0.55, 0.55, 0.57)
-            bool physics:collisionEnabled = false
-        }
-        def Cylinder "PadNZ"
-        {
-            uniform token axis = "Y"
-            double radius = 0.4
-            double height = 0.08
-            double3 xformOp:translate = (0, -5.0, -5.5)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.45, 0.45, 0.48)
-            bool physics:collisionEnabled = true
-        }
     }
 
     # ── The rover attached to the lander ──
@@ -515,10 +108,10 @@ def Xform "LanderTest"
 
     # ── Rover drive-to waypoints ────────────────────────────────────────────
     # Three translucent glowing domes (the same reusable marker asset) forming a
-    # course. Each carries an overlap-only Sensor named "waypoint" (so they SHARE
-    # an event name); the scenario distinguishes them by the emitting sensor's
-    # SOURCE (via `wait_for_from`) and reveals them one at a time. Arrival is an
-    # EVENT (`enter:waypoint`), never a per-tick distance poll.
+    # course, revealed one at a time. Each carries an overlap-only Sensor, but the
+    # rover's raycast-wheel compound collider doesn't reliably trip it, so
+    # `rover_surface_ops.rhai` judges arrival with a distance read and emits its own
+    # `waypoint_reached` event for anything downstream (the tutorial) to wait on.
     def Xform "RoverTarget1" (
         prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker>
     )
@@ -541,6 +134,8 @@ def Xform "LanderTest"
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
+    # Visual touchdown target. The lander's GNC descends on its altimeter, not on a
+    # commanded pad pose, so this marker is a landmark for the player, not a wire.
     def Xform "LandingLocation" (
         prepend references = @../../vessels/markers/landing_location.usda@</LandingLocationMarker>
     )
@@ -549,20 +144,17 @@ def Xform "LanderTest"
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    # (The former TargetToLander* wires that fed the lander's `target_*` GNC inputs
-    #  were removed with the GNC — the rhai autopilot reads the pad pose directly
-    #  via find("/LanderTest/LandingLocation").)
-
     # ── Mission scenario (doc 34, Decision 3) ───────────────────────────────
     # A first-class *scenario*: a non-physical prim that owns the MISSION state
     # machine. It references the vehicles by path with `find(...)` (never `me`),
     # so the orchestration is decoupled from any one entity and a scene can host
     # several scenarios / several vehicle scripts independently. The phases:
-    #   descending → touchdown (PID lands, engine disarmed) → deployed
-    #   (joint detached, rover falls) → finished (control handed to the player).
+    #   descending → touchdown (the GNC lands it) → deployed (joint detached, rover
+    #   falls clear) → the 3-gate course, driven by the rover's autopilot until the
+    #   player takes over.
     # Player-task objectives (drive-to-rock, photo, thermal/energy budgets) plug
     # in as a `fn mission(me)` returning prelude `objective(...)`s — see the
-    # objectives/mission engine in `crates/lunco-scripting/rhai/prelude.rhai`.
+    # objectives/mission engine in `assets/scripting/prelude/mission.rhai`.
     def Scope "Scenario"
     {
         custom string lunco:scenario = "rover-surface-ops"

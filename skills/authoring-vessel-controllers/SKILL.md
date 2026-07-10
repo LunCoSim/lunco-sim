@@ -21,7 +21,7 @@ description: >
   (math→Modelica, logic/events→rhai, structure/authority→USD) and the
   wired `piloted` authority signal are not obvious from Modelica/Bevy
   alone. Reference impl: the lander (models/Lander.mo,
-  scenarios/lander_subsystems.rhai, scenes/sandbox/lander_test.usda).
+  scenarios/lander_subsystems.rhai, vessels/landers/descent_lander.usda).
 ---
 
 # Authoring vessel controllers
@@ -36,7 +36,8 @@ each in the language that fits it**. Never blur them.
 | **Structure / wiring / authority** | **USD** (`.usda`) | sensors, wires, possession, identity | Declarative. Sensors are referenced library prims; control is `simWires`. |
 
 The reference is the lander: `assets/models/Lander.mo`,
-`assets/scenarios/lander_subsystems.rhai`, `assets/scenes/sandbox/lander_test.usda`.
+`assets/scenarios/lander_subsystems.rhai`, `assets/vessels/landers/descent_lander.usda`
+(referenced by `assets/scenes/sandbox/lander_test.usda`).
 
 ## 1. The control law → a Modelica model
 

@@ -4,5 +4,7 @@
 
   { "id": "build-scene",    "title": "Build a Scene",            "blurb": "Compose the 3D world — the spawn palette, the gizmo, the inspector, and the USD underneath.",                  "app": "sandbox", "difficulty": "beginner",     "script": "sandbox/build_scene.rhai",    "first_start": false, "next": "script-a-rover" },
   { "id": "script-a-rover", "title": "Script a Rover",           "blurb": "What a rhai scenario is and how to attach one — lifecycle hooks, prelude verbs, hot-reload.",                  "app": "sandbox", "difficulty": "intermediate", "script": "sandbox/script_a_rover.rhai", "first_start": false, "next": "inspect-sim" },
-  { "id": "inspect-sim",    "title": "Inspect the Simulation",   "blurb": "Read live state — selection, telemetry ports and plots, and reading it all back over the API.",                "app": "sandbox", "difficulty": "beginner",     "script": "sandbox/inspect_sim.rhai",    "first_start": false, "next": null }
+  { "id": "inspect-sim",    "title": "Inspect the Simulation",   "blurb": "Read live state — selection, telemetry ports and plots, and reading it all back over the API.",                "app": "sandbox", "difficulty": "beginner",     "script": "sandbox/inspect_sim.rhai",    "first_start": false, "next": "cosim" },
+
+  { "id": "cosim",          "title": "Cosim — Model meets Physics", "blurb": "How a Modelica model flies a physics body: the model, the SimConnection wire, Modelica events, and verifying the live chain over the API.", "app": "sandbox", "difficulty": "intermediate", "script": "sandbox/cosim.rhai",          "first_start": false, "next": null }
 ]
