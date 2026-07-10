@@ -608,14 +608,21 @@ fn replay_scenario_journal_obstacle(
         &applied,
         lunco_twin_journal::DomainKind::ObstacleField,
     );
+    // Coalesce: a batch may carry several SetSpec ops (rapid slider drags); only
+    // the LAST one matters, and each `RegenerateField` is a full terrain re-stamp
+    // + rock re-scatter — so install once and fire one regen.
+    let mut last_spec = None;
     for (id, op) in pending {
         if let Some(new_spec) = lunco_obstacle_field::journal::replay_spec(&op) {
-            // Install the peer's spec + regenerate. Sets the resource directly
-            // (NOT the `UpdateObstacleFieldSpec` command), so no re-record.
-            *spec = new_spec;
-            regen.write(lunco_obstacle_field::RegenerateField);
+            last_spec = Some(new_spec);
         }
         applied.insert(id);
+    }
+    if let Some(new_spec) = last_spec {
+        // Install the peer's spec + regenerate. Sets the resource directly
+        // (NOT the `UpdateObstacleFieldSpec` command), so no re-record.
+        *spec = new_spec;
+        regen.write(lunco_obstacle_field::RegenerateField);
     }
 }
 
@@ -1907,8 +1914,9 @@ fn parse_terrain_layer_stack<R: UsdRead>(
 /// Seed the shared [`ObstacleFieldSpec`] from the USD-authored `craters`/`rocks` child
 /// layer prims so the Inspector's "Craters & Rocks" panel opens showing the scene's
 /// ACTUAL values (density, size, ratios) instead of the resource defaults. Mirrors the
-/// `SizeDist` the layer parsers build (`craters` → `new(2, mode, 60, 0.7)`, `rocks` →
-/// `new(0.2, mode, mode*4, 0.6)`) so a subsequent panel edit starts from the authored
+/// `SizeDist` the layer parsers build — `sizeMin`/`sizeMax` attrs with the parsers'
+/// defaults (`craters` → 2/60, `rocks` → 0.2/(mode*4).max(2.5)) and the same
+/// min ≤ mode ≤ max clamp — so a subsequent panel edit starts from the authored
 /// look rather than jumping. Writes the resource only (no `UpdateObstacleFieldSpec`,
 /// no re-stamp — the terrain already built from the same USD stack).
 fn sync_obstacle_spec_from_usd<R: UsdRead>(
@@ -1927,7 +1935,10 @@ fn sync_obstacle_spec_from_usd<R: UsdRead>(
                 spec.craters.depth_ratio = reader.real_f32(&child, "depthRatio").unwrap_or(0.4);
                 spec.craters.rim_height_ratio =
                     reader.real_f32(&child, "rimRatio").unwrap_or(0.18);
-                spec.craters.size = SizeDist::new(2.0, mode, 60.0, 0.7);
+                let size_min = reader.real_f32(&child, "sizeMin").unwrap_or(2.0);
+                let size_max = reader.real_f32(&child, "sizeMax").unwrap_or(60.0);
+                spec.craters.size =
+                    SizeDist::new(size_min.min(mode), mode, size_max.max(mode), 0.7);
                 if let Some(seed) = reader
                     .scalar::<i64>(&child, "seed")
                     .or_else(|| reader.scalar::<i32>(&child, "seed").map(|v| v as i64))
@@ -1940,7 +1951,14 @@ fn sync_obstacle_spec_from_usd<R: UsdRead>(
                 let mode = reader.real_f32(&child, "sizeMode").unwrap_or(0.6);
                 spec.rocks.enabled = density > 0.0;
                 spec.rocks.density = density;
-                spec.rocks.size = SizeDist::new(0.2, mode, (mode * 4.0).max(2.5), 0.6);
+                let size_min = reader.real_f32(&child, "sizeMin").unwrap_or(0.2);
+                let size_max = reader
+                    .real_f32(&child, "sizeMax")
+                    .unwrap_or((mode * 4.0).max(2.5));
+                spec.rocks.size =
+                    SizeDist::new(size_min.min(mode), mode, size_max.max(mode), 0.6);
+                spec.rocks.dynamic_fraction =
+                    reader.real_f32(&child, "dynamicFrac").unwrap_or(0.0);
             }
             _ => {}
         }
@@ -2333,6 +2351,8 @@ fn on_obstacle_spec_authored(
                     info!("[obstacle-usd] authoring craters density={crater_density} (enabled={}) sizeMode={} seed={:#x} → {path} (doc {})", spec.craters.enabled, spec.craters.size.mode, spec.seed, td.doc);
                     author_layer_attr(&mut registry, doc, &path, "density", "float", crater_density.to_string());
                     author_layer_attr(&mut registry, doc, &path, "sizeMode", "float", spec.craters.size.mode.to_string());
+                    author_layer_attr(&mut registry, doc, &path, "sizeMin", "float", spec.craters.size.min.to_string());
+                    author_layer_attr(&mut registry, doc, &path, "sizeMax", "float", spec.craters.size.max.to_string());
                     author_layer_attr(&mut registry, doc, &path, "depthRatio", "float", spec.craters.depth_ratio.to_string());
                     author_layer_attr(&mut registry, doc, &path, "rimRatio", "float", spec.craters.rim_height_ratio.to_string());
                     // The u64 seed bit-casts through int64; `parse_crater_layer` casts back
@@ -2344,6 +2364,9 @@ fn on_obstacle_spec_authored(
                 "rocks" => {
                     author_layer_attr(&mut registry, doc, &path, "density", "float", rock_density.to_string());
                     author_layer_attr(&mut registry, doc, &path, "sizeMode", "float", spec.rocks.size.mode.to_string());
+                    author_layer_attr(&mut registry, doc, &path, "sizeMin", "float", spec.rocks.size.min.to_string());
+                    author_layer_attr(&mut registry, doc, &path, "sizeMax", "float", spec.rocks.size.max.to_string());
+                    author_layer_attr(&mut registry, doc, &path, "dynamicFrac", "float", spec.rocks.dynamic_fraction.to_string());
                     author_layer_attr(&mut registry, doc, &path, "seed", "int64", (spec.seed as i64).to_string());
                 }
                 _ => {}

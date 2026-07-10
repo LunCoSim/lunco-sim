@@ -12,15 +12,17 @@
 //!   wraps a [`Mutation`], and pushes onto [`SyncOutbox`]. Suppressed for
 //!   wire-applied commands (echo guard) and in single-player.
 //! - **apply** ([`apply_sync_command`]): an `On<SyncCommandEvent>` observer that
-//!   dedupes by `OpId`, authorizes (host only), resolves ids, then triggers the
+//!   authorizes (host only), dedupes by `OpId`, resolves ids, then triggers the
 //!   typed command via reflection with [`SyncApplyGuard`] set so the capture
 //!   observer doesn't echo it.
 //! - **ferry**: `lunco-networking` drains [`SyncOutbox`] → lightyear messages and
 //!   fills [`SyncInbox`] ← lightyear messages. [`drain_sync_inbox`] turns inbox
 //!   entries into command triggers / snapshot applies / handshakes.
 //! - **state**: [`gather_snapshot`] (host) emits changed transforms at a tunable
-//!   HZ; clients apply them in `drain_sync_inbox`. [`broadcast_new_spawns`]
-//!   replicates runtime spawns with the host-allocated id.
+//!   HZ; clients apply them in `drain_sync_inbox`. Runtime spawns replicate with
+//!   the host-allocated id via [`track_spawn_info`]'s catalog, from which the
+//!   per-peer assembler (`assemble_and_send_snapshots`, `server.rs`) emits
+//!   interest-scoped `Spawn`s.
 
 use avian3d::prelude::{AngularVelocity, LinearVelocity, PhysicsSystems, Position, RigidBody, Rotation};
 use big_space::prelude::CellCoord;
@@ -854,10 +856,11 @@ pub fn apply_sync_command(
     mut dedup: ResMut<SyncDedup>,
 ) {
     let ev = trigger.event();
-    if !dedup.check_and_insert(ev.origin, ev.op_id) {
-        return; // duplicate (Reject::Duplicate, silently absorbed)
-    }
-    // Host authorizes against ownership; a client trusts the host.
+    // Host authorizes against ownership; a client trusts the host. The dedupe
+    // slot is claimed AFTER this gate (below): a rejected command must not burn
+    // its `(origin, op_id)`, or a later legitimately-authorized retry of the
+    // same op (e.g. after the sender gains ownership) would be dropped as a
+    // duplicate forever.
     if role.is_host() {
         // The gid to authorize against is the command's `#[authz_target]`
         // field (schema-driven), read from the raw global-gid wire params —
@@ -881,6 +884,9 @@ pub fn apply_sync_command(
             );
             return;
         }
+    }
+    if !dedup.check_and_insert(ev.origin, ev.op_id) {
+        return; // duplicate (Reject::Duplicate, silently absorbed)
     }
 
     let mut params = ev.params.clone();
@@ -1390,8 +1396,32 @@ pub fn drain_sync_inbox(
                 // Bidirectional ingest: a client imported an asset into the shared
                 // twin. Only the host ingests — it writes the (CID-verified) bytes
                 // and rebuilds/re-advertises the manifest so every peer fetches it.
+                //
+                // RBAC: gated on the `AssetOffer` capability exactly like the
+                // journal plane gates `JournalEdit` — this is the content-plane
+                // write path into the shared twin, so a read-only viewer (or any
+                // role below the deployment's threshold) must not be able to
+                // plant bytes. Open-sandbox by default; tighten via
+                // `set_override("AssetOffer", …)`. Size-capped so one unchunked
+                // offer can't balloon host memory (see MAX_ASSET_OFFER_BYTES).
                 if role.is_host() && !offer.data.is_empty() {
-                    ctx.pending_asset_offers.0.push(offer);
+                    if !authed_for_capability(
+                        &role,
+                        &rbac,
+                        &ctx.command_policies,
+                        sender,
+                        lunco_core::session::capability::ASSET_OFFER,
+                    ) {
+                        warn!("[net] rejected asset offer from unauthorized session {sender}");
+                    } else if offer.data.len() > crate::scenario_sync::MAX_ASSET_OFFER_BYTES {
+                        warn!(
+                            "[net] rejected oversized asset offer from {sender}: {} bytes (cap {})",
+                            offer.data.len(),
+                            crate::scenario_sync::MAX_ASSET_OFFER_BYTES
+                        );
+                    } else {
+                        ctx.pending_asset_offers.0.push((sender, offer));
+                    }
                 }
             }
             SyncEnvelope::JournalEntry(msg) => {
@@ -1798,7 +1828,7 @@ pub fn broadcast_despawns(
     // Maintain the Entity→gid cache INCREMENTALLY (insert on spawn) rather than
     // clearing + rebuilding it from a full query every frame: a removed entity can
     // no longer be queried for its gid, so it must be cached from when it was alive.
-    // Driven by `Added<GlobalEntityId>` — the same trigger `broadcast_new_spawns`
+    // Driven by `Added<GlobalEntityId>` — the same trigger `track_spawn_info`
     // uses — so a Spawn and its later Despawn are emitted symmetrically. Kept
     // self-contained (vs reusing ApiEntityRegistry) to avoid coupling to that
     // registry's removal-cleanup ordering.

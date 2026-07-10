@@ -226,24 +226,28 @@ impl TerrainLayer for CraterFieldLayer {
 }
 
 /// Parse a `lunco:layer = "craters"` prim: `density` (per ha, required > 0),
-/// `sizeMode` (modal rim radius m), `depthRatio`, `rimRatio`, `seed`. DEM-scale size
-/// range brackets the modal radius.
+/// `sizeMode` (modal rim radius m), `sizeMin`/`sizeMax` (radius band m),
+/// `depthRatio`, `rimRatio`, `seed`.
 pub(super) fn parse_crater_layer(a: &dyn LayerAttrSource) -> Option<Arc<dyn TerrainLayer>> {
     let density = a.get_f32("density").unwrap_or(0.0);
     if density <= 0.0 {
         return None;
     }
     let mode = a.get_f32("sizeMode").unwrap_or(22.0);
+    // Default 2–60 m radii: the SFD floor sits at the smallest crater the finest
+    // visual LOD (~0.65 m vertex pitch) fully resolves; the tail past the
+    // mode is the rare large-crater "punctuation". Sub-2 m is the overzoom
+    // synthesiser's band. The old 8–40 m band with a hump at the mode was
+    // the single biggest procedural tell — every crater the same order of
+    // magnitude.
+    let size_min = a.get_f32("sizeMin").unwrap_or(2.0);
+    let size_max = a.get_f32("sizeMax").unwrap_or(60.0);
     let craters = CraterLayer {
         enabled: true,
         density,
-        // 2–60 m radii: the SFD floor sits at the smallest crater the finest
-        // visual LOD (~0.65 m vertex pitch) fully resolves; the tail past the
-        // mode is the rare large-crater "punctuation". Sub-2 m is the overzoom
-        // synthesiser's band. The old 8–40 m band with a hump at the mode was
-        // the single biggest procedural tell — every crater the same order of
-        // magnitude.
-        size: SizeDist::new(2.0, mode, 60.0, 0.7),
+        // min ≤ mode ≤ max — an inverted band makes the log-normal sampler clamp
+        // every crater to one end (same guard as the Inspector sliders).
+        size: SizeDist::new(size_min.min(mode), mode, size_max.max(mode), 0.7),
         // Fresh simple craters measure d/D ≈ 0.2 → depth = 0.4·r.
         depth_ratio: a.get_f32("depthRatio").unwrap_or(0.4),
         // Fresh rim/depth: 0.18 × depth 0.4·r gives rim/D ≈ 0.036 — the measured

@@ -78,6 +78,9 @@ impl Plugin for TerrainSurfacePlugin {
             (
                 crate::stream_viz::update_lod_tiles,
                 crate::stream_viz::animate_tile_reveal,
+                // Change-driven: early-outs unless a `TerrainLodViz` removal
+                // event fired this frame (stays in `Update` so its
+                // `RemovedComponents` reader drains every frame).
                 crate::stream_viz::despawn_orphaned_lod_tiles,
             ),
         );
@@ -103,6 +106,8 @@ impl Plugin for TerrainSurfacePlugin {
                 // region visible the same frame.
                 crate::collider_ring::update_collider_ring
                     .after(crate::terrain::finish_dem_restamp),
+                // Change-driven: early-outs unless a `TerrainColliderRing`
+                // removal event fired this frame.
                 crate::collider_ring::despawn_orphaned_collider_tiles,
             ),
         );

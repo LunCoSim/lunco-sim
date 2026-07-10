@@ -209,18 +209,22 @@ pub fn rock_layer(
 }
 
 /// Parse a `lunco:layer = "rocks"` prim: `density` (per ha, required > 0), `sizeMode`
-/// (modal radius m), `regionM` (near-field scatter half-extent), `seed`.
+/// (modal radius m), `sizeMin`/`sizeMax` (radius band m), `dynamicFrac`,
+/// `regionM` (near-field scatter half-extent), `seed`.
 pub(super) fn parse_rock_layer(a: &dyn LayerAttrSource) -> Option<Arc<dyn TerrainLayer>> {
     let density = a.get_f32("density").unwrap_or(0.0);
     if density <= 0.0 {
         return None;
     }
     let mode = a.get_f32("sizeMode").unwrap_or(0.6);
+    let size_min = a.get_f32("sizeMin").unwrap_or(0.2);
+    let size_max = a.get_f32("sizeMax").unwrap_or((mode * 4.0).max(2.5));
     let rocks = RockLayer {
         enabled: true,
         density,
-        size: SizeDist::new(0.2, mode, (mode * 4.0).max(2.5), 0.6),
-        dynamic_fraction: 0.0,
+        // min ≤ mode ≤ max — same validity guard as the Inspector sliders.
+        size: SizeDist::new(size_min.min(mode), mode, size_max.max(mode), 0.6),
+        dynamic_fraction: a.get_f32("dynamicFrac").unwrap_or(0.0),
     };
     Some(Arc::new(RockScatterLayer {
         rocks,

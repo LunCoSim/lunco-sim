@@ -201,6 +201,14 @@ pub struct LodTiles {
     /// resident tile set is already correct and the whole reselection is skipped —
     /// the idle-camera fast path (see [`update_lod_tiles`]). `None` = never selected.
     last_sig: Option<u64>,
+    /// `pixel_error` that satisfied the tile budget on the last selection — the
+    /// budget-fit warm start. The coarsening loop re-runs a full
+    /// `select_with_error` walk per ×1.6 step, and always starting from the
+    /// configured base re-paid every failing rung (~9 walks/frame on a loaded
+    /// scene). The next selection starts ONE step below this (clamped to the
+    /// base) so steady state costs ~1-2 walks and quality still recovers, a
+    /// rung per selection, when the load drops. `None` = never fitted.
+    last_fit_px: Option<f64>,
 }
 
 impl LodTiles {
@@ -733,7 +741,14 @@ pub fn update_lod_tiles(
                 px,
             )
         };
-        let mut pixel_error = cfg.pixel_error.clamp(0.5, 32.0);
+        let base_px = cfg.pixel_error.clamp(0.5, 32.0);
+        // Warm-start the budget fit (see [`LodTiles::last_fit_px`]): resume one
+        // coarsen step below the value that satisfied the budget last time,
+        // clamped to the configured base so quality can climb back when load drops.
+        let mut pixel_error = match tiles.last_fit_px {
+            Some(px) => (px / 1.6).max(base_px),
+            None => base_px,
+        };
         let mut qt = quadtree_for(pixel_error);
         // ERROR-DRIVEN selection: refine where the MEASURED surface error says
         // there is detail worth refining toward (crater rims, peaks), not on the
@@ -775,6 +790,7 @@ pub fn update_lod_tiles(
             qt = quadtree_for(pixel_error);
             sel = qt.select_with_error(focus, eye_height, &node_error);
         }
+        tiles.last_fit_px = Some(pixel_error);
         // Ground under dynamic bodies is ALWAYS drawn at max depth — the
         // fixed-resolution collider ring under a rover carries small-crater
         // relief a coarse camera-driven tile doesn't, and the rover visibly
@@ -837,21 +853,27 @@ pub fn update_lod_tiles(
             // cos 1 (dead ahead) → ×1 … cos −1 (behind) → ×4.
             base * (2.5 - 1.5 * (to / d).dot(hd))
         };
-        sel.sort_by(|a, b| {
-            let (ca, cb) = (a.coord.depth <= CARPET_DEPTH, b.coord.depth <= CARPET_DEPTH);
-            match (ca, cb) {
-                (true, false) => std::cmp::Ordering::Less,
-                (false, true) => std::cmp::Ordering::Greater,
-                (true, true) => a
-                    .coord
-                    .depth
-                    .cmp(&b.coord.depth)
-                    .then(dist2(a).partial_cmp(&dist2(b)).unwrap_or(std::cmp::Ordering::Equal)),
-                (false, false) => {
-                    benefit(a).partial_cmp(&benefit(b)).unwrap_or(std::cmp::Ordering::Equal)
+        // Decorate-sort-undecorate: `dist2`/`benefit` pay a sqrt/dot per call and
+        // the comparator re-ran them on BOTH sides of every comparison
+        // (O(n log n) evaluations) — compute each tile's key once, sort on the
+        // cached key. Carpet keys order by (0, depth, dist²); benefit keys by
+        // (1, 0, benefit) — the same total order the comparator produced.
+        let mut keyed: Vec<(u8, u8, f64, Selected)> = sel
+            .drain(..)
+            .map(|s| {
+                if s.coord.depth <= CARPET_DEPTH {
+                    (0, s.coord.depth, dist2(&s), s)
+                } else {
+                    (1, 0, benefit(&s), s)
                 }
-            }
+            })
+            .collect();
+        keyed.sort_by(|a, b| {
+            (a.0, a.1)
+                .cmp(&(b.0, b.1))
+                .then(a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
         });
+        sel.extend(keyed.into_iter().map(|(_, _, _, s)| s));
 
         // A coord is *fresh* (no work needed) when it has a resident tile OR an
         // in-flight bake tagged with the current generation. A stale entry (older
@@ -1019,13 +1041,23 @@ fn squares_overlap(a: Square, b: Square) -> bool {
 /// e.g. after a twin reload. Tiles are children of the big_space grid (so each can
 /// carry its own `CellCoord`), so they don't die with the terrain entity; this is
 /// their lifecycle tether.
+///
+/// Change-driven: a tile only orphans when its owner loses [`TerrainLodViz`]
+/// (component removal or terrain despawn — both emit the removal event), so the
+/// per-frame every-tile ownership poll is skipped until one fires. The liveness
+/// re-check keeps the exact old semantics for a remove-and-re-add in one frame.
 pub fn despawn_orphaned_lod_tiles(
     mut commands: Commands,
+    mut removed: RemovedComponents<TerrainLodViz>,
     tiles: Query<(Entity, &LodTileOf)>,
     streaming: Query<(), With<TerrainLodViz>>,
 ) {
+    let orphaned: HashSet<Entity> = removed.read().collect();
+    if orphaned.is_empty() {
+        return;
+    }
     for (ent, owner) in &tiles {
-        if streaming.get(owner.0).is_err() {
+        if orphaned.contains(&owner.0) && streaming.get(owner.0).is_err() {
             commands.entity(ent).despawn();
         }
     }

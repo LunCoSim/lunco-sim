@@ -21,7 +21,6 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use lunco_doc_bevy::JournalResource;
-use lunco_twin_journal::MergeStrategy;
 
 /// The reserved policy **seam** (hook id) that drives the journal's convergent
 /// merge order: a policy authored under this seam flips the journal's
@@ -69,13 +68,20 @@ pub struct ScriptedPolicyRegistry {
 /// the hook by id (e.g. a `lunco:driveKernel` id `apply_drive_mix` invokes).
 /// Re-registering hot-replaces (idempotent for a stable source).
 pub fn apply_policy(def: &PolicyDef, journal: Option<&JournalResource>) -> Result<(), String> {
-    lunco_hooks_rhai::register_rhai_hook(&def.seam, &def.entry, &def.source, def.deterministic)?;
+    // A merge-seam policy with a live journal goes through the journal plane's
+    // canonical activation (register hook + flip strategy in one primitive —
+    // the single place the `MergeStrategy::Scripted` switch lives). It forces
+    // `deterministic` (the merge plane's convergence contract). Any other seam
+    // (or no journal yet) just registers the hook by id.
     if def.seam == MERGE_SEAM {
         if let Some(j) = journal {
-            j.with_write(|jj| jj.set_merge_strategy(MergeStrategy::Scripted(def.seam.clone())));
+            return crate::journal_plane::activate_scripted_merge_policy(
+                j, &def.seam, &def.entry, &def.source,
+            );
         }
     }
-    Ok(())
+    lunco_hooks_rhai::register_rhai_hook(&def.seam, &def.entry, &def.source, def.deterministic)
+        .map(|_| ())
 }
 
 /// Deactivate a policy whose prim/definition vanished: unregister its hook, and if
@@ -87,7 +93,7 @@ pub fn retract_policy(seam: &str, journal: Option<&JournalResource>) {
     lunco_hooks::unregister(seam);
     if seam == MERGE_SEAM {
         if let Some(j) = journal {
-            j.with_write(|jj| jj.set_merge_strategy(MergeStrategy::Default));
+            crate::journal_plane::use_default_merge_policy(j);
         }
     }
 }
@@ -126,6 +132,7 @@ pub fn project_policies(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lunco_twin_journal::MergeStrategy;
 
     fn policy(seam: &str, src: &str, deterministic: bool) -> PolicyDef {
         PolicyDef { seam: seam.into(), entry: "cmp".into(), source: src.into(), deterministic }

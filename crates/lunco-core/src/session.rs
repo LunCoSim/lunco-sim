@@ -659,6 +659,16 @@ pub mod capability {
     /// [`CommandPolicyRegistry::set_override`](super::CommandPolicyRegistry::set_override)
     /// (`"JournalEdit"`) — read-only viewers then can't mutate shared content.
     pub const JOURNAL_EDIT: &str = "JournalEdit";
+    /// Ingest an inbound **asset offer** (a client-imported asset written into
+    /// the host's shared twin, then redistributed to every peer). The content-
+    /// plane sibling of [`JOURNAL_EDIT`]: gates *who may contribute bytes to
+    /// the shared scenario*, resolved through [`CommandPolicyRegistry`] like
+    /// any command. Absent from the default registry →
+    /// [`super::CommandPolicy::OPEN`] (open-sandbox: any authenticated peer may
+    /// import); tighten via
+    /// [`CommandPolicyRegistry::set_override`](super::CommandPolicyRegistry::set_override)
+    /// (`"AssetOffer"`).
+    pub const ASSET_OFFER: &str = "AssetOffer";
 }
 
 /// The [`lunco_hooks`] id of the optional **scripted authorization** hook.

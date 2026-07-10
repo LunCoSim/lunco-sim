@@ -24,6 +24,9 @@ lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 tiff = "0.11"
 serde = { workspace = true }
 bincode = { workspace = true }
+# FNV-1a fold for the web OPFS grid-cache key (version + meta + tif + job) —
+# the same fast-key tier the other derived-data caches use.
+lunco-hash = { path = "../lunco-hash" }
 
 # Web Worker transport (main-thread client + the worker bin). Gated to wasm so
 # native builds don't pull the browser bindings.

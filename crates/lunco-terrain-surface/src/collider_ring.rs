@@ -382,13 +382,23 @@ pub fn update_collider_ring(
 /// — e.g. after a twin reload. Tiles are children of the grid, so they don't die
 /// with the terrain entity; this is their lifecycle tether (mirrors the LOD-tile
 /// reaper in [`crate::stream_viz`]).
+///
+/// Change-driven: a tile only orphans when its owner loses [`TerrainColliderRing`]
+/// (component removal or terrain despawn — both emit the removal event), so the
+/// per-frame every-tile ownership poll is skipped until one fires. The liveness
+/// re-check keeps the exact old semantics for a remove-and-re-add in one frame.
 pub fn despawn_orphaned_collider_tiles(
     mut commands: Commands,
+    mut removed: RemovedComponents<TerrainColliderRing>,
     tiles: Query<(Entity, &ColliderTileOf)>,
     ringing: Query<(), With<TerrainColliderRing>>,
 ) {
+    let orphaned: HashSet<Entity> = removed.read().collect();
+    if orphaned.is_empty() {
+        return;
+    }
     for (ent, owner) in &tiles {
-        if ringing.get(owner.0).is_err() {
+        if orphaned.contains(&owner.0) && ringing.get(owner.0).is_err() {
             commands.entity(ent).despawn();
         }
     }

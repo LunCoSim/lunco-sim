@@ -55,6 +55,15 @@ pub const ASSET_CHUNK_SIZE: usize = 60 * 1024;
 /// send buffer in a single `Update`). Consumed by `server.rs`'s send system.
 pub const MAX_CHUNKS_PER_FRAME: usize = 256;
 
+/// Hard cap on a single asset offer's byte size, enforced at all three points of
+/// the offer path (client send, host inbox drain, host ingest) so no single
+/// unchunked `AssetOffer` can balloon a peer's memory. 96 MiB: the legitimate
+/// large case is a client-side DEM import (~40 MB GeoTIFF) with headroom; the
+/// long-term path for anything bigger is chunking offers like `AssetChunkMsg`
+/// (the `TODO(bidirectional-content)` in `scenario.rs`). Oversized offers are
+/// rejected with a `warn!`, never a panic.
+pub const MAX_ASSET_OFFER_BYTES: usize = 96 * 1024 * 1024;
+
 // ── Resources ───────────────────────────────────────────────────────────────
 
 /// Client-side: in-flight + completed download bookkeeping.
@@ -130,9 +139,11 @@ pub struct PendingAssetRequests(pub Vec<(SessionId, Vec<Vec<u8>>)>);
 /// Host-side queue: assets a client **offered** (imported into the shared twin),
 /// pushed by the `AssetOffer` arm of `drain_sync_inbox`, drained by the host's
 /// `ingest_asset_offers` (`server.rs`) — verify-write-to-twin then rebuild the
-/// manifest so the import redistributes.
+/// manifest so the import redistributes. Keyed on the TRUSTED connection-bound
+/// sender (like [`PendingAssetRequests`]) so a disconnect can sweep its queued
+/// offers before they're ingested.
 #[derive(Resource, Default)]
-pub struct PendingAssetOffers(pub Vec<crate::scenario::AssetOfferMsg>);
+pub struct PendingAssetOffers(pub Vec<(SessionId, crate::scenario::AssetOfferMsg)>);
 
 /// Client → host: offer an asset the local peer just imported so the host writes it
 /// into the shared twin and redistributes it (the bidirectional counterpart of the
@@ -145,6 +156,14 @@ pub struct PendingAssetOffers(pub Vec<crate::scenario::AssetOfferMsg>);
 /// large offers (see [`AssetOfferMsg`](crate::scenario::AssetOfferMsg)).
 pub fn offer_asset_to_host(outbox: &mut crate::sync::SyncOutbox, path: impl Into<String>, bytes: Vec<u8>) {
     if bytes.is_empty() {
+        return;
+    }
+    if bytes.len() > MAX_ASSET_OFFER_BYTES {
+        warn!(
+            "[net] asset offer of {} bytes exceeds the {} byte cap; not sending (chunked offers are the TODO path)",
+            bytes.len(),
+            MAX_ASSET_OFFER_BYTES
+        );
         return;
     }
     let cid = crate::scenario::cid_for_content(&bytes).to_bytes();
@@ -254,17 +273,49 @@ pub fn reassemble_asset_chunks(
     mut downloads: ResMut<AssetDownloads>,
     remote: Res<RemoteScenarioManifest>,
     persist: Res<AssetPersist>,
+    mut rejected: Local<u32>,
 ) {
     if role.is_host() || incoming.0.is_empty() {
         return;
     }
     for ch in std::mem::take(&mut incoming.0) {
+        // Admission gate at the FIRST chunk of a CID, BEFORE any buffer opens:
+        // the CID must be in the current manifest and the sender-controlled
+        // `total` must not exceed the manifest's advertised size — otherwise
+        // arbitrary CIDs/totals could open unbounded reassembly buffers.
+        if !downloads.inflight.contains_key(&ch.cid) {
+            let advertised = remote.manifest.as_ref().and_then(|m| {
+                m.assets
+                    .iter()
+                    .find(|a| a.cid.as_slice() == ch.cid.as_slice())
+                    .map(|a| a.size)
+            });
+            let admissible = advertised.is_some_and(|size| ch.total <= size);
+            if !admissible {
+                // Throttled warn — a hostile/broken sender floods in bursts.
+                *rejected = rejected.wrapping_add(1);
+                if *rejected % 32 == 1 {
+                    warn!(
+                        "[net] dropping inadmissible asset chunk (CID not in manifest, or \
+                         total {} > advertised {:?}); {} dropped so far",
+                        ch.total, advertised, *rejected
+                    );
+                }
+                continue;
+            }
+            downloads
+                .inflight
+                .insert(ch.cid.clone(), Inflight { total: ch.total, ..Default::default() });
+        }
         // Append into the per-CID buffer + feed the running hash (scoped borrow so
         // we can touch `downloads.requested` afterwards without overlapping it).
         let (complete, out_of_order) = {
-            let entry = downloads.inflight.entry(ch.cid.clone()).or_default();
-            entry.total = ch.total;
-            if ch.offset != entry.buf.len() as u64 {
+            let Some(entry) = downloads.inflight.get_mut(&ch.cid) else {
+                continue; // unreachable: admitted above
+            };
+            // `total` was validated + fixed at admission; a later chunk restating
+            // a different total (mid-stream inflation) is treated as a bad stream.
+            if ch.total != entry.total || ch.offset != entry.buf.len() as u64 {
                 (false, true)
             } else {
                 entry.buf.extend_from_slice(&ch.data);

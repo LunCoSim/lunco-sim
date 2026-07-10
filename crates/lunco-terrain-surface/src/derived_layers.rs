@@ -97,7 +97,16 @@ fn start_derived_bakes(
     }
     for (entity, hf) in &q {
         let oracle: Arc<SurfaceOracle> = hf.0.clone();
-        let task = AsyncComputeTaskPool::get().spawn(async move { bake_or_load(&oracle) });
+        let task = AsyncComputeTaskPool::get().spawn(async move {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                bake_or_load(&oracle)
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                bake_or_load_web(&oracle).await
+            }
+        });
         // Despawn-safe: a load-time / edit re-instantiation can despawn this
         // terrain between queue time and apply — `try_insert` no-ops on a stale
         // entity instead of panicking the command buffer.
@@ -176,8 +185,62 @@ impl lunco_precompute::Bake for DerivedBake<'_> {
 /// them through. Pure-function bake → byte-identical key across runs and peers, so
 /// a second load (or a second peer) skips the expensive AO march. The `cache://`
 /// dir is shared with the rest of the asset stack.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn bake_or_load(oracle: &SurfaceOracle) -> DerivedMaps {
     lunco_precompute::bake_or_load(&DerivedBake { oracle }, &lunco_assets::cache_dir())
+}
+
+/// Wasm counterpart of [`bake_or_load`]: `lunco_precompute`'s sync fs tier is
+/// native-only (no-op on wasm), so the derived-maps cache reads/writes the async
+/// OPFS blob store at this — already-async — bake seam instead. Same namespace
+/// and key as native; the two maps pack into ONE blob ([`encode_derived_blob`]).
+#[cfg(target_arch = "wasm32")]
+async fn bake_or_load_web(oracle: &SurfaceOracle) -> DerivedMaps {
+    use lunco_precompute::Bake;
+    let bake = DerivedBake { oracle };
+    let key_hex = lunco_precompute::key_hex(bake.key());
+    if let Some(blob) = lunco_storage::opfs_blob::read(DerivedBake::NAMESPACE, &key_hex).await {
+        if let Some(maps) = decode_derived_blob(&blob) {
+            return maps;
+        }
+    }
+    let maps = bake.bake();
+    // Best-effort write-through; a failure only costs a rebake next load.
+    let blob = encode_derived_blob(&maps);
+    wasm_bindgen_futures::spawn_local(async move {
+        lunco_storage::opfs_blob::write(DerivedBake::NAMESPACE, &key_hex, &blob).await;
+    });
+    maps
+}
+
+/// Single-blob OPFS layout for [`DerivedMaps`]: `[res: u32 LE][surface][normal]`
+/// — both maps are `res²·4` RGBA8 bytes, so the lengths derive from `res` and
+/// need no framing.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn encode_derived_blob(maps: &DerivedMaps) -> Vec<u8> {
+    let mut out =
+        Vec::with_capacity(4 + maps.surface_rgba.len() + maps.normal_rgba.len());
+    out.extend_from_slice(&(maps.res as u32).to_le_bytes());
+    out.extend_from_slice(&maps.surface_rgba);
+    out.extend_from_slice(&maps.normal_rgba);
+    out
+}
+
+/// Decode [`encode_derived_blob`]'s layout, validating sizes — `None` (a cache
+/// miss → rebake) on a truncated or foreign blob.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn decode_derived_blob(bytes: &[u8]) -> Option<DerivedMaps> {
+    let res = u32::from_le_bytes(bytes.get(0..4)?.try_into().ok()?) as usize;
+    let len = res.checked_mul(res)?.checked_mul(4)?;
+    let body = bytes.get(4..)?;
+    if body.len() != len.checked_mul(2)? {
+        return None;
+    }
+    Some(DerivedMaps {
+        res,
+        surface_rgba: body[..len].to_vec(),
+        normal_rgba: body[len..].to_vec(),
+    })
 }
 
 /// Pure bake (runs on the task pool): sample the derived layers off the composed
@@ -288,4 +351,35 @@ pub(crate) fn register(app: &mut App) {
         Update,
         (start_derived_bakes, finish_derived_bakes, apply_derived_layers),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derived_blob_round_trips() {
+        let maps = DerivedMaps {
+            res: 2,
+            surface_rgba: (0u8..16).collect(),
+            normal_rgba: (100u8..116).collect(),
+        };
+        let blob = encode_derived_blob(&maps);
+        let back = decode_derived_blob(&blob).expect("decodes");
+        assert_eq!(back.res, maps.res);
+        assert_eq!(back.surface_rgba, maps.surface_rgba);
+        assert_eq!(back.normal_rgba, maps.normal_rgba);
+    }
+
+    #[test]
+    fn derived_blob_rejects_truncation() {
+        let maps = DerivedMaps {
+            res: 2,
+            surface_rgba: vec![0; 16],
+            normal_rgba: vec![0; 16],
+        };
+        let blob = encode_derived_blob(&maps);
+        assert!(decode_derived_blob(&blob[..blob.len() - 1]).is_none());
+        assert!(decode_derived_blob(&blob[..3]).is_none());
+    }
 }

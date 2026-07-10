@@ -96,9 +96,14 @@ pub fn bake_tile_mesh(
             max_y = max_y.max(y);
             positions.push([(wx - ox) as f32, y, (wz - oz) as f32]);
 
-            // Snap to the parent's even lattice and re-sample.
+            // Snap to the parent's even lattice. The snap target `(ix & !1, iz & !1)`
+            // is always an already-baked grid vertex (row-major walk, indices only
+            // snap DOWN), so its height is reused from `positions` instead of
+            // re-sampling the oracle — the same `height(world(..))` value, halving
+            // the bake's oracle samples. Even/even vertices reuse their own `y`.
             let (sx, sz) = world(ix & !1, iz & !1);
-            morph_targets.push([(sx - ox) as f32, height(sx, sz), (sz - oz) as f32]);
+            let sy = positions[(iz & !1) * res + (ix & !1)][1];
+            morph_targets.push([(sx - ox) as f32, sy, (sz - oz) as f32]);
 
             normals.push(normal_at(wx, wz));
             uvs.push([((wx + dem_half_extent) * inv_uv) as f32, ((wz + dem_half_extent) * inv_uv) as f32]);

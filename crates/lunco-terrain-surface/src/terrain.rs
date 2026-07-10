@@ -553,7 +553,17 @@ pub struct DemWorkerJob {
     with_default_material: bool,
     #[cfg(target_arch = "wasm32")]
     pub download_progress: std::sync::Arc<std::sync::Mutex<Option<(u64, u64)>>>,
+    /// OPFS grid-cache key (hex), filled by the fetch task on a cache MISS so the
+    /// Full worker reply writes the baked grid through; stays `None` on a hit
+    /// (nothing to rewrite). Slot-shared like `download_progress` because the key
+    /// derives from the fetched bytes, which only the detached task sees.
+    #[cfg(target_arch = "wasm32")]
+    cache_key: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
+
+/// OPFS namespace for the Full-stage baked DEM grid (web cold-start cache).
+#[cfg(target_arch = "wasm32")]
+const DEM_GRID_CACHE_NS: &str = "terrain/dem-grid";
 
 /// Compose the surface oracle (raster base + the layers' ANALYTIC height modifiers)
 /// and derive the avian collider + Bevy `MeshData` a pure [`BakedGrid`] needs into a
@@ -622,10 +632,11 @@ fn layer_contributions(
 ///
 /// Native reads through `lunco-storage::FileStorage`; wasm fetches same-origin
 /// over HTTP (the Twin's terrain folder is staged next to the wasm under
-/// `assets/`), cache-first-forever in a Cache-Storage bucket so the large
-/// immutable heightmap re-hydrates instantly next load. Pure I/O (an `await`, not
-/// CPU) → safe to run on the main-thread event loop; the heavy decode/stamp is
-/// what moves to the worker.
+/// `assets/`), cached in a Cache-Storage bucket so the large heightmap
+/// re-hydrates instantly next load, with a background *conditional*
+/// revalidation so a host-side DEM replacement is picked up on the following
+/// reload. Pure I/O (an `await`, not CPU) → safe to run on the main-thread
+/// event loop; the heavy decode/stamp is what moves to the worker.
 async fn read_bytes(path: std::path::PathBuf) -> Result<Vec<u8>, String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -638,18 +649,21 @@ async fn read_bytes(path: std::path::PathBuf) -> Result<Vec<u8>, String> {
     #[cfg(target_arch = "wasm32")]
     {
         // Fetch the DEM bytes same-origin over HTTP (the Twin's terrain folder is
-        // staged next to the wasm under `assets/`), cache-first-forever in a
-        // Cache-Storage bucket so the (large, immutable) heightmap re-hydrates
-        // instantly on the next load. The DEM request URI is asset-relative on
-        // web (resolved against the scene's own directory — no `twin://`), so
-        // prepend the bevy web asset root unless it's already absolute/prefixed.
+        // staged next to the wasm under `assets/`), cached in a Cache-Storage
+        // bucket so the (large) heightmap re-hydrates instantly on the next load.
+        // These URLs are MUTABLE — a host-side twin update can replace the file
+        // in place — so the cached copy is served now and a background
+        // `If-None-Match`/`If-Modified-Since` probe refreshes the cache for the
+        // next reload. The DEM request URI is asset-relative on web (resolved
+        // against the scene's own directory — no `twin://`), so prepend the bevy
+        // web asset root unless it's already absolute/prefixed.
         let rel = path.to_string_lossy().replace('\\', "/");
         let url = if rel.starts_with("assets/") || rel.starts_with("http") || rel.starts_with('/') {
             rel
         } else {
             format!("assets/{rel}")
         };
-        lunco_assets::web_fetch::fetch_bytes_cached("lunco-twin-v1", &url).await
+        lunco_assets::web_fetch::fetch_bytes_cached_conditional("lunco-twin-v1", &url).await
     }
 }
 
@@ -724,12 +738,14 @@ fn start_dem_builds(
         if lunco_terrain_bake::worker_client::is_available() {
             let id = entity.index_u32();
             let download_progress = std::sync::Arc::new(std::sync::Mutex::new(None));
+            let cache_key = std::sync::Arc::new(std::sync::Mutex::new(None));
             commands.entity(entity).insert(DemWorkerJob {
                 id,
                 collider_ring,
                 lod_viz,
                 with_default_material: req.with_default_material,
                 download_progress: download_progress.clone(),
+                cache_key: cache_key.clone(),
             });
             let job = job.clone();
             AsyncComputeTaskPool::get()
@@ -758,7 +774,12 @@ fn start_dem_builds(
                         }
                     });
 
-                    let tif = match lunco_assets::web_fetch::fetch_cached_with_progress(
+                    // Cached-first with a download bar, plus a background
+                    // conditional revalidate: the heightmap URL is mutable (a
+                    // host-side twin update replaces it in place), so a changed
+                    // DEM is re-cached for the next reload instead of being
+                    // served stale forever.
+                    let tif = match lunco_assets::web_fetch::fetch_cached_with_progress_conditional(
                         "lunco-twin-v1",
                         &url,
                         0,
@@ -773,6 +794,46 @@ fn start_dem_builds(
                         }
                     };
                     drop(progress_cb);
+
+                    // OPFS grid cache: key = format version + the RAW fetched
+                    // bytes + the job params (content-exact — composes with the
+                    // conditional-revalidation fetch above: a replaced DEM is new
+                    // tif bytes, hence a new key, hence a rebake). On a hit the
+                    // worker is never spawned; the grid is injected through the
+                    // SAME reply queue a Full worker reply uses.
+                    let key =
+                        lunco_terrain_bake::grid_cache_key(meta.as_bytes(), &tif, &job);
+                    let key_hex = lunco_precompute::key_hex(key);
+                    if let Some(blob) =
+                        lunco_storage::opfs_blob::read(DEM_GRID_CACHE_NS, &key_hex).await
+                    {
+                        if let Some((grid, native_res)) =
+                            lunco_terrain_bake::decode_grid_blob(&blob)
+                        {
+                            let site = DemMetadata::from_yaml_str(&meta)
+                                .map(|m| m.site_id)
+                                .unwrap_or_default();
+                            bevy::log::info!(
+                                "[dem-terrain] OPFS grid-cache hit ({}², key {key_hex}) — skipping worker bake",
+                                grid.res
+                            );
+                            lunco_terrain_bake::worker_client::push_local_reply(
+                                lunco_terrain_bake::worker_client::WorkerReply {
+                                    id,
+                                    stage: lunco_terrain_bake::BakeStage::Full,
+                                    site,
+                                    native_res,
+                                    res: grid.res,
+                                    grid: Ok(grid),
+                                },
+                            );
+                            return;
+                        }
+                    }
+                    // Miss: remember the key so the Full reply persists the grid.
+                    if let Ok(mut slot) = cache_key.lock() {
+                        *slot = Some(key_hex);
+                    }
 
                     if let Err(e) =
                         lunco_terrain_bake::worker_client::dispatch(id, &job, &meta, &tif)
@@ -1065,6 +1126,17 @@ fn finish_dem_worker(
                 );
             }
             (lunco_terrain_bake::BakeStage::Full, Ok(grid)) => {
+                // Best-effort OPFS write-through so the NEXT page load skips the
+                // worker (GeoTIFF decode + crater stamp) entirely. The key was
+                // derived from the fetched bytes on the miss path; it's `None` on
+                // a cache hit (nothing to rewrite).
+                if let Some(key_hex) = job.cache_key.lock().ok().and_then(|k| k.clone()) {
+                    let blob = lunco_terrain_bake::encode_grid_blob(&grid, reply.native_res);
+                    wasm_bindgen_futures::spawn_local(async move {
+                        lunco_storage::opfs_blob::write(DEM_GRID_CACHE_NS, &key_hex, &blob)
+                            .await;
+                    });
+                }
                 // Re-compose the analytic oracle on the worker's full bare grid.
                 let contributions = layer_contributions(stacks.get(entity).ok(), grid.half_extent);
                 if let Ok((mut hf, tiles, pending, has_static_mesh)) = swap_q.get_mut(entity) {
