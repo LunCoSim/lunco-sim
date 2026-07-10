@@ -1818,7 +1818,11 @@ impl<R: UsdRead> lunco_terrain_surface::LayerAttrSource for UsdLayerAttrs<'_, R>
         self.reader.real_f32(&self.sdf, name)
     }
     fn get_i64(&self, name: &str) -> Option<i64> {
-        self.reader.scalar::<i32>(&self.sdf, name).map(|v| v as i64)
+        // `TryFrom<Value>` is strict per variant, so probe both authored widths:
+        // `int64` (the Inspector authors seeds full-range) and hand-authored `int`.
+        self.reader
+            .scalar::<i64>(&self.sdf, name)
+            .or_else(|| self.reader.scalar::<i32>(&self.sdf, name).map(|v| v as i64))
     }
     fn get_string(&self, name: &str) -> Option<String> {
         self.reader.scalar::<String>(&self.sdf, name)
@@ -1924,7 +1928,10 @@ fn sync_obstacle_spec_from_usd<R: UsdRead>(
                 spec.craters.rim_height_ratio =
                     reader.real_f32(&child, "rimRatio").unwrap_or(0.18);
                 spec.craters.size = SizeDist::new(2.0, mode, 60.0, 0.7);
-                if let Some(seed) = reader.scalar::<i32>(&child, "seed") {
+                if let Some(seed) = reader
+                    .scalar::<i64>(&child, "seed")
+                    .or_else(|| reader.scalar::<i32>(&child, "seed").map(|v| v as i64))
+                {
                     spec.seed = seed as u64;
                 }
             }
@@ -2323,15 +2330,21 @@ fn on_obstacle_spec_authored(
         for (path, layer_type) in layers {
             match layer_type.as_str() {
                 "craters" => {
-                    info!("[obstacle-usd] authoring craters density={crater_density} (enabled={}) sizeMode={} → {path} (doc {})", spec.craters.enabled, spec.craters.size.mode, td.doc);
+                    info!("[obstacle-usd] authoring craters density={crater_density} (enabled={}) sizeMode={} seed={:#x} → {path} (doc {})", spec.craters.enabled, spec.craters.size.mode, spec.seed, td.doc);
                     author_layer_attr(&mut registry, doc, &path, "density", "float", crater_density.to_string());
                     author_layer_attr(&mut registry, doc, &path, "sizeMode", "float", spec.craters.size.mode.to_string());
                     author_layer_attr(&mut registry, doc, &path, "depthRatio", "float", spec.craters.depth_ratio.to_string());
                     author_layer_attr(&mut registry, doc, &path, "rimRatio", "float", spec.craters.rim_height_ratio.to_string());
+                    // The u64 seed bit-casts through int64; `parse_crater_layer` casts back
+                    // (`s as u64`), so the full Reseed range round-trips. Without this attr
+                    // every doc-driven re-parse falls back to the parser default and the
+                    // crater layout silently flips between the resource seed and 0xC0FFEE.
+                    author_layer_attr(&mut registry, doc, &path, "seed", "int64", (spec.seed as i64).to_string());
                 }
                 "rocks" => {
                     author_layer_attr(&mut registry, doc, &path, "density", "float", rock_density.to_string());
                     author_layer_attr(&mut registry, doc, &path, "sizeMode", "float", spec.rocks.size.mode.to_string());
+                    author_layer_attr(&mut registry, doc, &path, "seed", "int64", (spec.seed as i64).to_string());
                 }
                 _ => {}
             }
