@@ -41,6 +41,12 @@ pub mod scenario;
 /// CID-addressed assets a manifest advertises, into `<cache_dir>/scenarios/<id>/`.
 #[cfg(feature = "networking")]
 pub mod scenario_sync;
+/// The **bytes plane**: fetch a scenario's CID-addressed assets over HTTP rather
+/// than streaming them through the reliable QUIC channel (which queues without
+/// bound and stalls on multi-MB twins). Used whenever the host advertises an
+/// `asset_base_url`; `scenario_sync`'s chunk path is the fallback.
+#[cfg(feature = "networking")]
+pub mod http_fetch;
 /// The journal replication plane: authored Twin-journal entries host→client,
 /// merged via `append_remote`. Separated from the command/state/content planes
 /// (see module docs); the transport ferry only routes to it.

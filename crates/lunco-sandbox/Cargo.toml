@@ -228,7 +228,7 @@ lunco-api = ["dep:lunco-api", "lunco-modelica/lunco-api"]
 # rhai REPL panel, which needs `lunco_api::ApiBridge` (present under this feature
 # on native, and always on wasm). In `default` + `server`; the wasm build gets
 # the bridge automatically via `cfg(target_arch="wasm32")`.
-transport-http = ["lunco-api/transport-http"]
+transport-http = ["lunco-api/transport-http", "lunco-networking?/transport-http"]
 # Multiplayer over WebTransport (lightyear). Pulls in the real networking
 # adapter; the wire substrate (lunco-api) is required.
 networking = ["dep:lunco-networking", "lunco-networking/networking", "lunco-api", "dep:lunco-twin-journal"]

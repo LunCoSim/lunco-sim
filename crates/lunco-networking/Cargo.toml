@@ -31,6 +31,12 @@ ui = ["networking", "dep:bevy_egui", "workbench"]
 # Perspective/layout sync against the workbench (`sync.rs` ActivatePerspective +
 # WorkbenchLayout reads). UI-adjacent but no egui itself; pulled in by `ui`.
 workbench = ["dep:lunco-workbench"]
+# Host-side HTTP **bytes plane**: serve scenario assets by CID over HTTP instead of
+# streaming them through the reliable QUIC channel (which queues without bound and
+# stalls on multi-MB twins). Native-only in effect — the `lunco-api` asset server is
+# cfg'd off on wasm, and a browser peer is never the host. Without this the host
+# advertises no `asset_base_url` and clients use the in-session chunk fallback.
+transport-http = ["networking", "lunco-api/transport-http"]
 
 [dependencies]
 bevy = { workspace = true }
@@ -125,6 +131,10 @@ lightyear_aeronet = { version = "0.27.0", default-features = false }
 
 # Native (desktop / dedicated server): full client+server WebTransport.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
+# Native byte-GET for the HTTP asset plane (`http_fetch`). Already in the workspace
+# tree (lunco-assets/celestial use it), so this pulls no new transitive deps. Web
+# uses `lunco_assets::web_fetch` (browser `fetch`) instead.
+ureq = { workspace = true }
 lightyear = { version = "0.27.0", default-features = false, optional = true, features = [
   "client",
   "server",

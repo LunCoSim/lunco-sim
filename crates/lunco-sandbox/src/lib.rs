@@ -1586,8 +1586,15 @@ impl Plugin for SandboxCorePlugin {
         // still baking in, show "streaming terrain N/M" (with the bus's progress
         // bar) instead of leaving the viewport an unexplained black void on
         // scene open. Pure derived read of `TerrainStreamStatus`.
+        // `StatusBus` is initialized by the UI plugin stack, which `--no-ui` skips
+        // at RUNTIME while the `ui` cargo feature stays compiled in — so gate on the
+        // resource, not the feature, or a headless host panics on param validation.
         #[cfg(feature = "ui")]
-        app.add_systems(Update, report_terrain_stream_status);
+        app.add_systems(
+            Update,
+            report_terrain_stream_status
+                .run_if(resource_exists::<lunco_workbench::status_bus::StatusBus>),
+        );
 
         // Engine light-handling policy: the locally-possessed vessel's headlights
         // cast shadows, the parked rovers stay cheap (reactive on possession

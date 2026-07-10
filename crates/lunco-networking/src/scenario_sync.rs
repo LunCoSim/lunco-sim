@@ -44,16 +44,37 @@ use lunco_storage::StorageHandle;
 use crate::scenario::{cid_from_bytes, AssetChunkMsg, AssetRequestMsg, RemoteScenarioManifest, ScenarioManifestMsg};
 use crate::sync::{SyncEnvelope, SyncOutbox};
 
-/// Asset chunk payload size (bytes). Kept well under the lightyear reliable
-/// fragment limit so a chunk never needs the transport's own fragmentation on
-/// top of ours. 60 KiB leaves headroom for the envelope/frame overhead under a
-/// typical 64 KiB message cap.
-pub const ASSET_CHUNK_SIZE: usize = 60 * 1024;
+// ── In-session chunk transfer: the FALLBACK bytes path ───────────────────────
+//
+// Used only when the host advertises no `asset_base_url` (no `transport-http`, or
+// `LUNCO_ASSET_PORT=0`). The primary path is `crate::http_fetch`. Keep this one for
+// small scenarios and for hosts with no HTTP surface; do NOT push a large twin
+// through it (see `MAX_CHUNKS_PER_FRAME`).
 
-/// Max asset chunks the host flushes to the wire per frame (crude backpressure so
-/// a large multi-asset request can't dump thousands of fragments into lightyear's
-/// send buffer in a single `Update`). Consumed by `server.rs`'s send system.
-pub const MAX_CHUNKS_PER_FRAME: usize = 256;
+/// Asset chunk payload size (bytes). Sized so an `AssetChunk` envelope fits in ONE
+/// lightyear packet (`MAX_PACKET_SIZE` = 1200 B, minus packet header + fragment
+/// metadata + our bincode envelope), so a chunk never multiplies the per-message
+/// reliable-ack bookkeeping by fragmenting.
+///
+/// A bigger chunk does NOT fail on size — lightyear fragments it — but it lets one
+/// frame queue tens of MB into the unbounded `unacked_messages` buffer, which
+/// saturates the link and stalls delivery outright (that is what motivated the HTTP
+/// bytes plane).
+pub const ASSET_CHUNK_SIZE: usize = 1024;
+
+/// Max asset chunks the host flushes to the wire per frame.
+///
+/// NOT real backpressure — it rate-limits *queueing*, not *delivery*. lightyear's
+/// reliable `buffer_send` never rejects: every chunk lands in `unacked_messages` and
+/// is resent until acked. So a transfer larger than the link can drain still grows
+/// the backlog without bound and eventually wedges (measured: a 40 MB twin stalls
+/// the client at ~12 MB while the host's queue climbs past 27 k chunks). That is a
+/// property of this path, not a tuning problem — which is why the bytes plane moved
+/// to HTTP (`crate::http_fetch`), where the OS provides flow control.
+///
+/// TODO(flow-control): if this path ever needs to carry large scenarios, gate it on
+/// chunks actually *received* — the reserved `AssetHave` envelope is the ack.
+pub const MAX_CHUNKS_PER_FRAME: usize = 32;
 
 // ── Resources ───────────────────────────────────────────────────────────────
 
@@ -69,6 +90,10 @@ pub struct AssetDownloads {
     /// CIDs downloaded, verified, and persisted to the cache this session. Drives
     /// [`Self::all_cached`] — the Phase-4 "scene is ready to load" signal.
     completed: HashSet<Vec<u8>>,
+    /// Outstanding write count per verified CID. A CID that appears at N manifest
+    /// paths (byte-identical files share one content id) spawns N writes; it only
+    /// counts as `completed` once all N report success.
+    pending_writes: HashMap<Vec<u8>, usize>,
 }
 
 impl AssetDownloads {
@@ -79,6 +104,50 @@ impl AssetDownloads {
     pub fn all_cached(&self, manifest: &ScenarioManifestMsg) -> bool {
         !manifest.assets.is_empty()
             && manifest.assets.iter().all(|a| self.completed.contains(&a.cid))
+    }
+
+    /// Has this CID already been requested (or found cached) this session?
+    pub(crate) fn is_requested(&self, cid: &[u8]) -> bool {
+        self.requested.contains(cid)
+    }
+
+    /// Claim a CID so a second transport (or a later frame) won't re-fetch it.
+    pub(crate) fn mark_requested(&mut self, cid: Vec<u8>) {
+        self.requested.insert(cid);
+    }
+
+    /// Release a CID after a failed fetch/verify/write so a fresh manifest retries it.
+    pub(crate) fn forget_requested(&mut self, cid: &[u8]) {
+        self.pending_writes.remove(cid);
+        self.requested.remove(cid);
+    }
+
+    /// Record that a verified CID owes `n` cache writes (one per manifest path that
+    /// carries it); it only counts as `completed` once all of them report success.
+    pub(crate) fn expect_writes(&mut self, cid: Vec<u8>, n: usize) {
+        self.pending_writes.insert(cid, n);
+    }
+}
+
+/// UI-facing download progress for the in-flight scenario sync (G2). Updated by
+/// [`update_scenario_download_status`] from [`AssetDownloads`] + the remote
+/// manifest; rendered by the sandbox's progress overlay (mirrors
+/// `terrain_progress`). `active` goes false once [`AssetDownloads::all_cached`].
+#[derive(Resource, Default, Clone)]
+pub struct ScenarioDownloadStatus {
+    pub active: bool,
+    pub name: String,
+    pub assets_done: usize,
+    pub assets_total: usize,
+    pub bytes_done: u64,
+    pub bytes_total: u64,
+}
+
+impl ScenarioDownloadStatus {
+    /// `0.0..=1.0` while the total is known; `None` when there is nothing to fetch.
+    pub fn fraction(&self) -> Option<f32> {
+        (self.bytes_total > 0)
+            .then(|| (self.bytes_done as f32 / self.bytes_total as f32).clamp(0.0, 1.0))
     }
 }
 
@@ -96,7 +165,7 @@ struct Inflight {
 /// Async persist outcome, sent from the spawned write future back to
 /// [`drain_persist_results`]. Uniform across platforms — native pushes from an
 /// `AsyncComputeTaskPool` task, web from a `spawn_local` future.
-struct PersistOutcome {
+pub(crate) struct PersistOutcome {
     cid: Vec<u8>,
     ok: bool,
 }
@@ -105,7 +174,7 @@ struct PersistOutcome {
 /// spawned write future (which outlives the submitting system) can report back.
 #[derive(Resource)]
 pub struct AssetPersist {
-    tx: Sender<PersistOutcome>,
+    pub(crate) tx: Sender<PersistOutcome>,
     rx: Receiver<PersistOutcome>,
 }
 
@@ -114,6 +183,120 @@ impl Default for AssetPersist {
         let (tx, rx) = unbounded();
         Self { tx, rx }
     }
+}
+
+/// Async cache-probe outcome: the manifest CIDs already present **and
+/// CID-verified** in the local scenario cache. Sent from the spawned probe future
+/// back to [`drive_cache_probe`], which marks them `completed`+`requested` so
+/// [`request_missing_assets`] skips them instead of re-fetching.
+struct ProbeOutcome {
+    revision: [u8; 32],
+    cached: HashSet<Vec<u8>>,
+}
+
+/// Client-side channel carrying async cache-probe outcomes (sibling of
+/// [`AssetPersist`]). A resource so the spawned probe future — which outlives the
+/// kicking system — can report back, uniform native (`AsyncComputeTaskPool`) /
+/// web (`spawn_local`).
+#[derive(Resource)]
+pub struct AssetCacheProbe {
+    tx: Sender<ProbeOutcome>,
+    rx: Receiver<ProbeOutcome>,
+}
+
+impl Default for AssetCacheProbe {
+    fn default() -> Self {
+        let (tx, rx) = unbounded();
+        Self { tx, rx }
+    }
+}
+
+/// Cache-probe coordination: `kicked` = manifest revision a probe was launched for;
+/// `settled` = revision whose results have been applied to [`AssetDownloads`].
+/// [`request_missing_assets`] waits for `settled` to match the current manifest
+/// revision before emitting any request — closing the race between the sync system
+/// and the async probe (which otherwise lands a frame or two after the manifest
+/// change).
+#[derive(Resource, Default)]
+pub struct CacheProbeState {
+    kicked: Option<[u8; 32]>,
+    settled: Option<[u8; 32]>,
+}
+
+impl CacheProbeState {
+    /// True once the cross-session cache probe has reported for `revision` — the
+    /// point at which "not in `completed`" reliably means "we really must fetch it".
+    pub(crate) fn settled_for(&self, revision: [u8; 32]) -> bool {
+        self.settled == Some(revision)
+    }
+}
+
+// ── Cross-session cache index (G1 integrity + G3 menu metadata) ───────────────
+
+/// One per-asset record persisted in `<cache_root>/.scenario.json`. The probe keys
+/// cache-hits on `cid` — not file presence — so a twin whose content changed at a
+/// path is re-fetched, never served stale; the cached-twin menu reads the same
+/// file for name/size/scene.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ScenarioIndexAsset {
+    path: String,
+    cid: Vec<u8>,
+    size: u64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct ScenarioIndex {
+    name: String,
+    default_scene: Option<String>,
+    revision: [u8; 32],
+    total_bytes: u64,
+    assets: Vec<ScenarioIndexAsset>,
+}
+
+/// `<cache_root>/.scenario.json` — the per-scenario "what's cached" marker.
+fn scenario_index_path(scenario_id: &[u8; 16]) -> PathBuf {
+    scenario_cache_root(scenario_id).join(".scenario.json")
+}
+
+/// One cached scenario, listed in the top-level `<cache>/scenarios/index.json`
+/// and surfaced in the cached-twins menu (G3). Persisted across sessions so the
+/// menu can list + load downloaded twins with no server connected.
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct CachedTwinSummary {
+    pub scenario_id: [u8; 16],
+    pub name: String,
+    pub default_scene: Option<String>,
+    pub total_bytes: u64,
+    pub revision: [u8; 32],
+}
+
+/// The cached-twins menu's data: every scenario fully downloaded to this peer's
+/// cache. Rebuilt from `index.json` at boot ([`refresh_cached_twins_registry`])
+/// and kept current by [`write_scenario_index`] as new downloads complete.
+#[derive(Resource, Default)]
+pub struct CachedTwinsRegistry {
+    pub entries: Vec<CachedTwinSummary>,
+}
+
+/// Channel for the async `index.json` read at boot to report back to
+/// [`refresh_cached_twins_registry`] (sibling of [`AssetPersist`] /
+/// [`AssetCacheProbe`]).
+#[derive(Resource)]
+pub struct CachedTwinsIndex {
+    tx: Sender<Vec<CachedTwinSummary>>,
+    rx: Receiver<Vec<CachedTwinSummary>>,
+}
+
+impl Default for CachedTwinsIndex {
+    fn default() -> Self {
+        let (tx, rx) = unbounded();
+        Self { tx, rx }
+    }
+}
+
+/// `<cache>/scenarios/index.json` — the top-level list of cached scenarios.
+fn scenarios_index_path() -> PathBuf {
+    lunco_assets::cache_dir().join("scenarios").join("index.json")
 }
 
 /// Client-side queue: raw chunks pushed by the `AssetChunk` arm of
@@ -215,23 +398,35 @@ fn hex16(b: &[u8; 16]) -> String {
 pub fn request_missing_assets(
     role: Res<NetworkRole>,
     remote: Res<RemoteScenarioManifest>,
+    probe_state: Res<CacheProbeState>,
     mut downloads: ResMut<AssetDownloads>,
     mut outbox: ResMut<SyncOutbox>,
 ) {
-    if role.is_host() || !remote.is_changed() {
+    if role.is_host() {
         return;
     }
     let Some(manifest) = remote.manifest.as_ref() else {
         return;
     };
+    // The HTTP bytes plane owns the transfer when the host advertises one — see
+    // `http_fetch`. Requesting here too would fetch every asset twice.
+    if manifest.asset_base_url.is_some() {
+        return;
+    }
+    // Wait for the cache probe to settle for THIS manifest revision before
+    // requesting, so assets already in the local cache (marked completed+
+    // requested by `drive_cache_probe`) are skipped instead of re-fetched. The
+    // `requested` set dedups across frames, so once the probe has settled this
+    // loop is a cheap no-op until a new revision lands.
+    if probe_state.settled != Some(manifest.revision) {
+        return;
+    }
     let mut missing = Vec::new();
     for asset in &manifest.assets {
         if downloads.requested.contains(&asset.cid) {
             continue;
         }
-        // First sight of this CID this session → request it. (Cross-session
-        // on-disk cache reuse is a documented follow-up; today a fresh client
-        // re-fetches rather than probing the cache for a hit.)
+        // Not yet requested this session and not a cache-hit → fetch it.
         downloads.requested.insert(asset.cid.clone());
         missing.push(asset.cid.clone());
     }
@@ -293,23 +488,32 @@ pub fn reassemble_asset_chunks(
             downloads.requested.remove(&ch.cid); // retriable on next manifest
             continue;
         }
-        // Resolve the cache target from the manifest (cid → rel path + scenario id)
-        // and hand the write off to the async backend (never blocks this system).
-        let target = remote
+        // Resolve the cache targets from the manifest and hand the writes off to the
+        // async backend (never blocks this system). A CID can appear at SEVERAL paths
+        // (two byte-identical files share one content id — the transfer is
+        // content-addressed, so the host sends those bytes once). Every path must be
+        // materialized, or a `scenario://` load misses the duplicate's second path.
+        let targets: Vec<StorageHandle> = remote
             .manifest
             .as_ref()
-            .and_then(|m| {
+            .map(|m| {
                 m.assets
                     .iter()
-                    .find(|a| a.cid.as_slice() == ch.cid.as_slice())
-                    .and_then(|a| asset_storage_handle(&m.scenario_id, &a.path))
-            });
-        match target {
-            Some(handle) => submit_persist(persist.tx.clone(), ch.cid.clone(), handle, done.buf),
-            None => {
-                warn!("[net] verified asset has no manifest entry / safe path; discarding");
-                downloads.requested.remove(&ch.cid);
-            }
+                    .filter(|a| a.cid.as_slice() == ch.cid.as_slice())
+                    .filter_map(|a| asset_storage_handle(&m.scenario_id, &a.path))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if targets.is_empty() {
+            warn!("[net] verified asset has no manifest entry / safe path; discarding");
+            downloads.requested.remove(&ch.cid);
+            continue;
+        }
+        // The CID is complete only once EVERY one of its paths is written, so the
+        // outcome drain must see one report per write (see `AssetPersist.pending`).
+        downloads.pending_writes.insert(ch.cid.clone(), targets.len());
+        for handle in targets {
+            submit_persist(persist.tx.clone(), ch.cid.clone(), handle, done.buf.clone());
         }
     }
 }
@@ -326,12 +530,273 @@ pub fn drain_persist_results(
         return;
     }
     while let Ok(outcome) = persist.rx.try_recv() {
-        if outcome.ok {
-            downloads.completed.insert(outcome.cid);
-        } else {
+        if !outcome.ok {
+            // Any failed write for this CID fails the whole asset: forget the
+            // remaining tally so a straggler success can't mark it complete.
+            downloads.pending_writes.remove(&outcome.cid);
             downloads.requested.remove(&outcome.cid); // retriable on next manifest
+            continue;
+        }
+        // Complete only when the last of this CID's writes reports in (a CID may
+        // occupy several manifest paths).
+        match downloads.pending_writes.get_mut(&outcome.cid) {
+            Some(remaining) => {
+                *remaining -= 1;
+                if *remaining == 0 {
+                    downloads.pending_writes.remove(&outcome.cid);
+                    downloads.completed.insert(outcome.cid);
+                }
+            }
+            // No tally (e.g. a failure already cleared it) → ignore the straggler.
+            None => {}
         }
     }
+}
+
+// ── Client: cross-session cache-hit probe (G1) ─────────────────────────────────
+
+/// Read the scenario index, if present and well-formed. `None` if missing or
+/// unreadable — treated as "nothing recognized", so assets are fetched afresh.
+async fn read_scenario_index(scenario_id: &[u8; 16]) -> Option<ScenarioIndex> {
+    let handle = StorageHandle::File(scenario_index_path(scenario_id));
+    let bytes = storage_read(&handle).await?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// True iff the cache file for an asset is present on disk/OPFS.
+async fn cached_asset_exists(path: &std::path::Path) -> bool {
+    storage_exists(&StorageHandle::File(path.to_path_buf())).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn storage_read(handle: &StorageHandle) -> Option<Vec<u8>> {
+    use lunco_storage::Storage;
+    lunco_storage::FileStorage::new().read(handle).await.ok()
+}
+#[cfg(target_arch = "wasm32")]
+async fn storage_read(handle: &StorageHandle) -> Option<Vec<u8>> {
+    lunco_storage::OpfsStorage::new().read(handle).await.ok()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn storage_exists(handle: &StorageHandle) -> bool {
+    // `FileStorage` exposes no `exists` on the trait; a direct stat is cheapest.
+    matches!(handle, StorageHandle::File(p) if p.exists())
+}
+#[cfg(target_arch = "wasm32")]
+async fn storage_exists(handle: &StorageHandle) -> bool {
+    lunco_storage::OpfsStorage::new().exists(handle).await
+}
+
+/// Async probe body: for each manifest asset, mark it cached iff the index records
+/// the same CID at that path AND the file is present. Returns the cached CID set
+/// (possibly empty) for `revision` — always sent, so [`CacheProbeState::settled`]
+/// always advances and [`request_missing_assets`] never stalls waiting on a probe.
+async fn run_cache_probe(
+    scenario_id: [u8; 16],
+    revision: [u8; 32],
+    assets: Vec<(Vec<u8>, String)>,
+) -> ProbeOutcome {
+    let by_path: HashMap<String, Vec<u8>> = read_scenario_index(&scenario_id)
+        .await
+        .map(|idx| idx.assets.into_iter().map(|a| (a.path, a.cid)).collect())
+        .unwrap_or_default();
+    let mut cached = HashSet::new();
+    for (cid, rel) in &assets {
+        if by_path.get(rel).is_some_and(|c| c == cid) {
+            if let Some(p) = scenario_asset_path(&scenario_id, rel) {
+                if cached_asset_exists(&p).await {
+                    cached.insert(cid.clone());
+                }
+            }
+        }
+    }
+    ProbeOutcome { revision, cached }
+}
+
+/// Client: kick a cache probe when a new manifest revision lands, then apply its
+/// results — already-cached CIDs go straight into `completed`+`requested` so they
+/// are neither re-requested nor block [`AssetDownloads::all_cached`]. Registered
+/// **before** [`request_missing_assets`] so `settled` is current when it runs.
+pub fn drive_cache_probe(
+    role: Res<NetworkRole>,
+    remote: Res<RemoteScenarioManifest>,
+    probe: Res<AssetCacheProbe>,
+    mut state: ResMut<CacheProbeState>,
+    mut downloads: ResMut<AssetDownloads>,
+) {
+    if role.is_host() {
+        return;
+    }
+    if let Some(m) = remote.manifest.as_ref() {
+        if state.kicked != Some(m.revision) {
+            state.kicked = Some(m.revision);
+            let scenario_id = m.scenario_id;
+            let revision = m.revision;
+            let assets: Vec<(Vec<u8>, String)> =
+                m.assets.iter().map(|a| (a.cid.clone(), a.path.clone())).collect();
+            let tx = probe.tx.clone();
+            let fut = async move {
+                let outcome = run_cache_probe(scenario_id, revision, assets).await;
+                let _ = tx.send(outcome);
+            };
+            #[cfg(not(target_arch = "wasm32"))]
+            AsyncComputeTaskPool::get().spawn(fut).detach();
+            #[cfg(target_arch = "wasm32")]
+            wasm_bindgen_futures::spawn_local(fut);
+        }
+    }
+    while let Ok(outcome) = probe.rx.try_recv() {
+        for cid in &outcome.cached {
+            downloads.completed.insert(cid.clone());
+            downloads.requested.insert(cid.clone());
+        }
+        state.settled = Some(outcome.revision);
+    }
+}
+
+/// Client: once a scenario is fully cached, persist its `.scenario.json` index so
+/// a later session's probe recognizes it and the cached-twin menu can list it.
+/// Fires once per revision. Client-only.
+pub fn write_scenario_index(
+    role: Res<NetworkRole>,
+    remote: Res<RemoteScenarioManifest>,
+    downloads: Res<AssetDownloads>,
+    mut registry: ResMut<CachedTwinsRegistry>,
+    mut written: Local<Option<[u8; 32]>>,
+) {
+    if role.is_host() {
+        return;
+    }
+    let Some(m) = remote.manifest.as_ref() else {
+        return;
+    };
+    if *written == Some(m.revision) || !downloads.all_cached(m) {
+        return;
+    }
+    *written = Some(m.revision);
+    let summary = CachedTwinSummary {
+        scenario_id: m.scenario_id,
+        name: m.name.clone(),
+        default_scene: m.default_scene.clone(),
+        total_bytes: m.assets.iter().map(|a| a.size).sum(),
+        revision: m.revision,
+    };
+    // Keep the in-memory registry current so the menu updates live as a download
+    // completes; the async block below persists both the per-scenario index and
+    // the top-level index.json so a later boot can rebuild the registry.
+    registry.entries.retain(|e| e.scenario_id != summary.scenario_id);
+    registry.entries.push(summary.clone());
+    let index = ScenarioIndex {
+        name: m.name.clone(),
+        default_scene: m.default_scene.clone(),
+        revision: m.revision,
+        total_bytes: summary.total_bytes,
+        assets: m
+            .assets
+            .iter()
+            .map(|a| ScenarioIndexAsset { path: a.path.clone(), cid: a.cid.clone(), size: a.size })
+            .collect(),
+    };
+    let Ok(bytes) = serde_json::to_vec(&index) else {
+        return;
+    };
+    let per_scenario = StorageHandle::File(scenario_index_path(&m.scenario_id));
+    let top_index = StorageHandle::File(scenarios_index_path());
+    let fut = async move {
+        let _ = do_write(per_scenario, bytes).await;
+        // Merge into the top-level index.json (read → replace this id → write).
+        let mut entries: Vec<CachedTwinSummary> = match storage_read(&top_index).await {
+            Some(b) => serde_json::from_slice(&b).unwrap_or_default(),
+            None => Vec::new(),
+        };
+        entries.retain(|e| e.scenario_id != summary.scenario_id);
+        entries.push(summary);
+        if let Ok(json) = serde_json::to_vec(&entries) {
+            let _ = do_write(top_index, json).await;
+        }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    AsyncComputeTaskPool::get().spawn(fut).detach();
+    #[cfg(target_arch = "wasm32")]
+    wasm_bindgen_futures::spawn_local(fut);
+}
+
+/// G3 boot: read the top-level `index.json` once and rebuild
+/// [`CachedTwinsRegistry`] so the cached-twins menu lists twins downloaded in a
+/// prior session. Runs on every peer (host included — a host may have promoted
+/// a scenario earlier); no-op after the first successful read.
+pub fn refresh_cached_twins_registry(
+    index: Res<CachedTwinsIndex>,
+    mut registry: ResMut<CachedTwinsRegistry>,
+    mut kicked: Local<bool>,
+) {
+    if !*kicked {
+        *kicked = true;
+        let tx = index.tx.clone();
+        let fut = async move {
+            let entries = match storage_read(&StorageHandle::File(scenarios_index_path())).await {
+                Some(bytes) => serde_json::from_slice::<Vec<CachedTwinSummary>>(&bytes)
+                    .unwrap_or_default(),
+                None => Vec::new(),
+            };
+            let _ = tx.send(entries);
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        AsyncComputeTaskPool::get().spawn(fut).detach();
+        #[cfg(target_arch = "wasm32")]
+        wasm_bindgen_futures::spawn_local(fut);
+    }
+    if let Ok(entries) = index.rx.try_recv() {
+        // Only adopt the on-disk list if we haven't already accumulated entries
+        // this session (a download completed before the boot read landed).
+        if registry.entries.is_empty() {
+            registry.entries = entries;
+        }
+    }
+}
+
+/// G2: project [`AssetDownloads`] + the remote manifest into
+/// [`ScenarioDownloadStatus`] for the download-progress overlay. Completed assets
+/// count their full size; an in-flight asset counts its buffered bytes so far.
+/// Client-only.
+pub fn update_scenario_download_status(
+    role: Res<NetworkRole>,
+    remote: Res<RemoteScenarioManifest>,
+    downloads: Res<AssetDownloads>,
+    mut status: ResMut<ScenarioDownloadStatus>,
+) {
+    if role.is_host() {
+        return;
+    }
+    let Some(m) = remote.manifest.as_ref() else {
+        *status = ScenarioDownloadStatus::default();
+        return;
+    };
+    if m.assets.is_empty() {
+        *status = ScenarioDownloadStatus::default();
+        return;
+    }
+    let total: u64 = m.assets.iter().map(|a| a.size).sum();
+    let mut bytes_done: u64 = 0;
+    let mut assets_done = 0usize;
+    for a in &m.assets {
+        if downloads.completed.contains(&a.cid) {
+            bytes_done += a.size;
+            assets_done += 1;
+        } else if let Some(inf) = downloads.inflight.get(&a.cid) {
+            bytes_done += inf.buf.len() as u64;
+        }
+    }
+    let all_cached = downloads.all_cached(m);
+    *status = ScenarioDownloadStatus {
+        active: !all_cached,
+        name: m.name.clone(),
+        assets_done,
+        assets_total: m.assets.len(),
+        bytes_done: bytes_done.min(total),
+        bytes_total: total,
+    };
 }
 
 /// The `scenario://` asset URI for a downloaded scenario asset (e.g. the entry
@@ -346,7 +811,7 @@ pub fn scenario_asset_uri(scenario_id: &[u8; 16], rel: &str) -> String {
 /// [`StorageHandle::File`] on **both** platforms (native: absolute, under
 /// `cache_dir()`; web: the same path fed to `OpfsStorage`, which maps its
 /// components onto the OPFS tree) — so only the backend, not the handle, differs.
-fn asset_storage_handle(scenario_id: &[u8; 16], rel: &str) -> Option<StorageHandle> {
+pub(crate) fn asset_storage_handle(scenario_id: &[u8; 16], rel: &str) -> Option<StorageHandle> {
     Some(StorageHandle::File(scenario_asset_path(scenario_id, rel)?))
 }
 
@@ -355,7 +820,7 @@ fn asset_storage_handle(scenario_id: &[u8; 16], rel: &str) -> Option<StorageHand
 /// system: native → `AsyncComputeTaskPool` (real thread); web → `spawn_local`
 /// (async OPFS on the main thread, non-blocking). The awaited body is the only
 /// native/web divergence — see [`do_write`].
-fn submit_persist(tx: Sender<PersistOutcome>, cid: Vec<u8>, handle: StorageHandle, bytes: Vec<u8>) {
+pub(crate) fn submit_persist(tx: Sender<PersistOutcome>, cid: Vec<u8>, handle: StorageHandle, bytes: Vec<u8>) {
     let fut = async move {
         let ok = do_write(handle, bytes).await;
         let _ = tx.send(PersistOutcome { cid, ok });
@@ -426,6 +891,7 @@ pub fn serve_asset_requests(
         if jobs.is_empty() {
             continue;
         }
+        info!("[net] serving {} scenario asset(s) to session {:?}", jobs.len(), session);
         tasks.0.push((session, pool.spawn(async move { read_and_chunk(jobs) })));
     }
 }
@@ -579,6 +1045,34 @@ lunco_core::register_commands!(on_promote_scenario);
 mod tests {
     use super::*;
     use crate::scenario::cid_for_content;
+
+    /// Two byte-identical files share ONE CID (the transfer is content-addressed,
+    /// so the host streams those bytes once). The client must materialize the blob
+    /// at EVERY manifest path that carries the CID — resolving with `.find()` wrote
+    /// only the first, and a `scenario://` load then 404'd on the duplicate's path.
+    #[test]
+    fn duplicate_cid_resolves_to_every_manifest_path() {
+        let id = [3u8; 16];
+        let shared = cid_for_content(b"same bytes").to_bytes();
+        let other = cid_for_content(b"different").to_bytes();
+        let assets = [
+            ("rover.glb", shared.clone()),
+            ("structures/rover.glb", shared.clone()),
+            ("scene.usda", other),
+        ];
+
+        // Mirrors `reassemble_asset_chunks`'s target resolution for a completed CID.
+        let targets: Vec<_> = assets
+            .iter()
+            .filter(|(_, cid)| cid.as_slice() == shared.as_slice())
+            .filter_map(|(path, _)| asset_storage_handle(&id, path))
+            .collect();
+
+        assert_eq!(targets.len(), 2, "both paths sharing the CID must be written");
+        let expect = |rel: &str| StorageHandle::File(scenario_asset_path(&id, rel).unwrap());
+        assert!(targets.contains(&expect("rover.glb")));
+        assert!(targets.contains(&expect("structures/rover.glb")));
+    }
 
     #[test]
     fn asset_path_rejects_traversal() {

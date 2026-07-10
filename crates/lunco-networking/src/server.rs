@@ -209,6 +209,71 @@ fn primary_lan_ip() -> Option<std::net::IpAddr> {
     sock.local_addr().ok().map(|a| a.ip())
 }
 
+/// Host-side handle to the HTTP **bytes plane** (`GET <base_url><cid>`).
+///
+/// The manifest — which CIDs a scenario needs — stays on the authenticated QUIC
+/// session; only the opaque blobs move over HTTP. That split exists because
+/// lightyear's reliable sender queues without bound (`buffer_send` never rejects),
+/// so pushing a multi-MB twin through `AssetChunkMsg` saturates the link and
+/// delivery stalls. HTTP inherits the OS's flow control instead.
+///
+/// Absent (resource missing) when the host was built without `transport-http`, or
+/// the operator disabled it: `asset_base_url` then stays `None` and clients fall
+/// back to the in-session chunk path.
+#[cfg(feature = "transport-http")]
+#[derive(Resource)]
+pub struct AssetHttpServer {
+    /// What clients prepend to a CID. Ends with `/`.
+    pub base_url: String,
+    /// Shared CID-string → path index, read by the HTTP handler.
+    index: lunco_api::transports::assets::AssetIndex,
+}
+
+#[cfg(feature = "transport-http")]
+impl AssetHttpServer {
+    /// Start the listener and derive the advertised base URL.
+    ///
+    /// Two env knobs, because the listener's address and the URL clients are told
+    /// to use are not the same thing behind a proxy:
+    /// - `LUNCO_ASSET_BIND` (default `0.0.0.0`) — where to listen. Set `127.0.0.1`
+    ///   when nginx fronts this, so the proxy is the only public door.
+    /// - `LUNCO_ASSET_BASE_URL` (default `http://<lan-ip>:<port>/scenario-assets/`)
+    ///   — what to advertise. The web deployment sets `/scenario-assets/`: an https
+    ///   page cannot fetch `http://host:5889` (mixed content) and `web_fetch` is
+    ///   same-origin by construction, so nginx reverse-proxies that path here. It
+    ///   must NOT be `/assets/` — that's bevy's web asset root (shaders, scenes).
+    pub fn start(port: u16) -> Self {
+        let index: lunco_api::transports::assets::AssetIndex = Default::default();
+        let bind_host = std::env::var("LUNCO_ASSET_BIND").unwrap_or_else(|_| "0.0.0.0".to_string());
+        lunco_api::transports::assets::spawn_asset_server(format!("{bind_host}:{port}"), index.clone());
+        let base_url = std::env::var("LUNCO_ASSET_BASE_URL").unwrap_or_else(|_| {
+            let host = primary_lan_ip()
+                .map(|ip| ip.to_string())
+                .unwrap_or_else(|| "127.0.0.1".to_string());
+            format!("http://{host}:{port}/scenario-assets/")
+        });
+        info!("[net] serving scenario assets over HTTP at {base_url}");
+        Self { base_url, index }
+    }
+
+    /// Republish the CID→path index for a freshly built manifest. Replaces the map
+    /// wholesale: a stale CID from a previous scenario must never serve bytes.
+    pub fn publish(&self, cid_paths: &[(Vec<u8>, PathBuf)]) {
+        let Ok(mut map) = self.index.write() else {
+            warn!("[net] asset index poisoned; HTTP asset serving is stale");
+            return;
+        };
+        map.clear();
+        for (cid, path) in cid_paths {
+            // Key on the canonical base32 string — exactly what a client puts in
+            // the URL — so the handler never parses or trusts caller-shaped input.
+            if let Some(cid) = crate::scenario::cid_from_bytes(cid) {
+                map.insert(cid.to_string(), path.clone());
+            }
+        }
+    }
+}
+
 /// Build an [`Identity`] from PEM cert-chain + private-key files. Reads route
 /// through [`lunco_storage`] (raw `std::fs` is clippy-banned); parsing is sync
 /// (`rustls_pemfile` → DER → wtransport's sync constructors).
@@ -297,9 +362,25 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
     app.init_resource::<ScenarioManifestResource>();
     app.init_resource::<PendingScenarioManifest>();
     // Phase-3 host-only serving state: CID→path index (filled by
-    // `drive_scenario_manifest`) + in-flight off-thread read jobs.
+    // `drive_scenario_manifest`) + in-flight off-thread read jobs. These back the
+    // in-session (QUIC) chunk path, which remains as the fallback when no HTTP
+    // asset endpoint is advertised.
     app.init_resource::<crate::scenario_sync::HostAssetPaths>();
     app.init_resource::<crate::scenario_sync::AssetServeTasks>();
+    // The HTTP bytes plane. Opt out with `LUNCO_ASSET_PORT=0` (clients then fall
+    // back to in-session streaming, viable only for small scenarios).
+    #[cfg(feature = "transport-http")]
+    {
+        let asset_port = std::env::var("LUNCO_ASSET_PORT")
+            .ok()
+            .and_then(|v| v.parse::<u16>().ok())
+            .unwrap_or(lunco_api::transports::assets::DEFAULT_ASSET_PORT);
+        if asset_port != 0 {
+            app.insert_resource(AssetHttpServer::start(asset_port));
+        } else {
+            info!("[net] LUNCO_ASSET_PORT=0 — HTTP asset serving disabled");
+        }
+    }
     // Bidirectional ingest: queue of client-offered imported assets.
     app.init_resource::<crate::scenario_sync::PendingAssetOffers>();
     // Presence: client-side queue of host-sent experiment run-status updates
@@ -447,11 +528,18 @@ fn server_send(
         return;
     };
     let frame = Frame(bytes);
-    let _ = match channel {
+    let nbytes = frame.0.len();
+    let res = match channel {
         SyncChannel::ControlStream => sender.send::<Frame, SnapChannel>(&frame, server, target),
         SyncChannel::BulkData => sender.send::<Frame, BulkChannel>(&frame, server, target),
         _ => sender.send::<Frame, CmdChannel>(&frame, server, target),
     };
+    // Never swallow a send error: lightyear's reliable sender queues without bound,
+    // so a genuine failure here is the only signal that a peer's traffic is going
+    // nowhere. (Was `let _ = …`, which hid exactly that during the Phase-3 bring-up.)
+    if let Err(e) = res {
+        warn!("[net] send failed ({nbytes} bytes on {channel:?}): {e:?}");
+    }
 }
 
 /// New client confirmed: hand it its session id + current tick, its session/ownership
@@ -797,6 +885,25 @@ struct ScenarioBuildInput {
     journal_head: Option<lunco_twin_journal::EntryId>,
 }
 
+/// Live-mutating host state that must NOT ride the content plane.
+///
+/// The content plane is content-addressed: a path's CID is computed at manifest
+/// build time and the bytes are assumed immutable until the next build. Files the
+/// running host keeps appending to break that contract — the client fetches them,
+/// hashes them, gets a different digest than the manifest promised, and (correctly)
+/// rejects them, forever.
+///
+/// `history/journal.json` is the concrete case: it grows on every authored edit, and
+/// it is **already replicated on the journal plane** (`full_journal_msgs` on connect
+/// + `broadcast_journal_entries` thereafter). Shipping it as a file too was both a
+/// duplicate distribution and an unwinnable hash race. `.lunco/` is the same class
+/// of thing (runtime overlay / scratch), never scenario content.
+fn is_runtime_state(rel_path: &str) -> bool {
+    rel_path.starts_with(".lunco/")
+        || rel_path == "history/journal.json"
+        || rel_path.starts_with("history/")
+}
+
 /// Main-thread step: walk the Twin tree and resolve the file list — path joins,
 /// extension→media-type, and **path dedup** only, no file I/O. A parent Twin's
 /// `files()` already recurses into child-Twin subdirs, so the same asset can
@@ -820,6 +927,9 @@ fn collect_scenario_input(
             if !seen.insert(path.clone()) {
                 // Already enumerated via a different Twin in the walk (parent's
                 // recursive `files()` overlapping a child Twin's own `files()`).
+                continue;
+            }
+            if is_runtime_state(&path) {
                 continue;
             }
             let media_type = match entry.relative_path.extension().and_then(|s| s.to_str()) {
@@ -917,7 +1027,17 @@ fn build_manifest_from_input(input: ScenarioBuildInput) -> Option<ScenarioBuildO
     }
     let revision = scenario_revision(&assets);
     Some((
-        ScenarioManifestMsg { scenario_id, revision, name, default_scene, assets, journal_head },
+        // `asset_base_url` is stamped at publish time (`drive_scenario_manifest`) —
+        // this build is pure and knows nothing about how the host is reachable.
+        ScenarioManifestMsg {
+            scenario_id,
+            revision,
+            name,
+            default_scene,
+            assets,
+            journal_head,
+            asset_base_url: None,
+        },
         cid_paths,
     ))
 }
@@ -977,6 +1097,7 @@ fn drive_scenario_manifest(
     mut pending: ResMut<PendingScenarioManifest>,
     mut scenario: ResMut<ScenarioManifestResource>,
     mut asset_paths: ResMut<crate::scenario_sync::HostAssetPaths>,
+    #[cfg(feature = "transport-http")] http_assets: Option<Res<AssetHttpServer>>,
 ) {
     let Some(task) = pending.task.as_mut() else {
         return;
@@ -986,12 +1107,21 @@ fn drive_scenario_manifest(
     };
     pending.task = None;
     match result {
-        Some((manifest, cid_paths)) => {
+        Some((mut manifest, cid_paths)) => {
             info!("[net] scenario manifest built: {} assets", manifest.assets.len());
             // Rebuild the CID→path serving index for the new scenario (a reload
             // replaces the whole map — stale CIDs from the previous scenario must
             // not linger and serve wrong bytes).
-            asset_paths.0 = cid_paths.into_iter().collect();
+            asset_paths.0 = cid_paths.iter().cloned().collect();
+            // Publish the same mapping to the HTTP bytes plane, keyed by the CID's
+            // canonical base32 string (what a client puts in the URL), and advertise
+            // the endpoint. Stamped here, not in the off-thread build: the build is
+            // pure (path → CID) and knows nothing about how this host is reachable.
+            #[cfg(feature = "transport-http")]
+            if let Some(http) = http_assets.as_ref() {
+                http.publish(&cid_paths);
+                manifest.asset_base_url = Some(http.base_url.clone());
+            }
             scenario.manifest = Some(manifest);
         }
         None => warn!("[net] scenario manifest build failed; keeping previous manifest"),
@@ -1157,4 +1287,28 @@ fn drain_and_send_asset_chunks(
         }
     }
     *ready = requeue;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The content plane assumes a path's bytes are immutable between manifest
+    /// builds. `history/journal.json` grows on every authored edit, so a client
+    /// that fetched it always hashed something other than the advertised CID and
+    /// rejected it forever — while the journal plane was already replicating the
+    /// same data. Runtime state must never enter the asset manifest.
+    #[test]
+    fn runtime_state_is_excluded_from_the_content_plane() {
+        assert!(is_runtime_state("history/journal.json"));
+        assert!(is_runtime_state("history/anything.tmp"));
+        assert!(is_runtime_state(".lunco/run/overlay.usda"));
+
+        // Real scenario content still ships.
+        assert!(!is_runtime_state("moonbase_scene.usda"));
+        assert!(!is_runtime_state("structures/lander.glb"));
+        assert!(!is_runtime_state("terrain/dem/metadata.yaml"));
+        // Not a prefix match on a similarly-named directory.
+        assert!(!is_runtime_state("historical_data/site.usda"));
+    }
 }
