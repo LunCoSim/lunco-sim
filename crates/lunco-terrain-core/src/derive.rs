@@ -124,6 +124,97 @@ pub fn ao_map<S: HeightSource>(
     out
 }
 
+/// Ray–terrain intersection over a [`HeightSource`] — the single-ray sibling of
+/// [`ao_map`]'s horizon march. Marches `origin + t·dir` for `t ∈ (0, max]` in the
+/// source's own frame (up = +Y) and returns the distance `t` where the ray first
+/// dips `margin` below the surface, or `None` if it stays clear. Only the
+/// `±half_extent` square around the local origin is treated as terrain; segments
+/// outside it are open sky. `step` is the march spacing (source units, e.g. the
+/// DEM sample pitch); a final bisection refines the crossing. Pure /
+/// deterministic / wasm-safe — like every kernel here it takes only a
+/// `HeightSource`, so line-of-sight is content-addressable and identical on
+/// every peer.
+pub fn los_hit<S: HeightSource>(
+    src: &S,
+    origin: [f64; 3],
+    dir: [f64; 3],
+    max: f64,
+    half_extent: f64,
+    step: f64,
+    margin: f64,
+) -> Option<f64> {
+    let step = step.max(1e-3);
+    let n = ((max / step).ceil() as i64).clamp(1, 8192);
+    // (ray height, terrain height) at param `t`, or None outside the footprint.
+    let sample = |t: f64| -> Option<(f64, f64)> {
+        let x = origin[0] + dir[0] * t;
+        let z = origin[2] + dir[2] * t;
+        if x.abs() > half_extent || z.abs() > half_extent {
+            return None;
+        }
+        Some((origin[1] + dir[1] * t, src.height_at(x, z)))
+    };
+    let mut prev_t = 0.0;
+    for i in 1..=n {
+        let t = ((i as f64) * step).min(max);
+        if let Some((y, h)) = sample(t) {
+            if y < h - margin {
+                // Crossed below the surface in (prev_t, t]; bisect to refine.
+                let (mut lo, mut hi) = (prev_t, t);
+                for _ in 0..24 {
+                    let mid = 0.5 * (lo + hi);
+                    match sample(mid) {
+                        Some((my, mh)) if my < mh => hi = mid,
+                        _ => lo = mid,
+                    }
+                }
+                return Some(hi);
+            }
+            prev_t = t;
+        }
+        if (t - max).abs() < f64::EPSILON {
+            break;
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod los_tests {
+    use super::*;
+
+    /// height = 0.1·x, flat in z (a constant slope) — the pure-kernel twin of
+    /// `query.rs`'s `tilted_terrain`.
+    struct Ramp;
+    impl HeightSource for Ramp {
+        fn height_at(&self, x: f64, _z: f64) -> f64 {
+            0.1 * x
+        }
+    }
+
+    #[test]
+    fn ray_into_slope_hits_near_the_crossing() {
+        let s = Ramp;
+        // From (0,2,0) heading +x and down: y(x)=2−0.15x vs terrain 0.1x → the
+        // ray sinks below the surface past x≈8.
+        let (dx, dy) = (1.0_f64, -0.15_f64);
+        let len = (dx * dx + dy * dy).sqrt();
+        let t = los_hit(&s, [0.0, 2.0, 0.0], [dx / len, dy / len, 0.0], 100.0, 10.0, 0.5, 0.05)
+            .expect("ray should hit the slope");
+        let hit_x = (dx / len) * t;
+        assert!((hit_x - 8.0).abs() < 0.6, "hit x = {hit_x}");
+    }
+
+    #[test]
+    fn ray_above_relief_and_outside_footprint_miss() {
+        let s = Ramp;
+        // Horizontal ray well above the highest terrain (0.1·10 = 1.0 at the edge).
+        assert!(los_hit(&s, [-10.0, 100.0, 0.0], [1.0, 0.0, 0.0], 20.0, 10.0, 0.5, 0.05).is_none());
+        // Entirely outside the ±10 footprint → open sky, no hit.
+        assert!(los_hit(&s, [200.0, 5.0, 0.0], [1.0, 0.0, 0.0], 10.0, 10.0, 0.5, 0.05).is_none());
+    }
+}
+
 /// Relief-correlated albedo scalar in `[0, 1]` (0.5 = neutral) over `region`,
 /// row-major. Convex ground (crater rims, ejecta crests) reads slightly
 /// brighter, concave ground (bowls, hollows) slightly darker, and steep faces

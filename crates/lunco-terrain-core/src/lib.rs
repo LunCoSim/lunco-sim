@@ -41,8 +41,8 @@ pub use error::measure_node_error;
 pub use modifier::{BrushModifier, FlattenModifier, HeightModifier, LayeredHeightSource};
 pub use overzoom::Overzoom;
 pub use derive::{
-    albedo_map, ao_map, hazard_from_slope, normal_map, pack_normal_rgba8, pack_surface_rgba8, upsample_bilinear,
-    roughness_from_slope, slope_map,
+    albedo_map, ao_map, hazard_from_slope, los_hit, normal_map, pack_normal_rgba8,
+    pack_surface_rgba8, upsample_bilinear, roughness_from_slope, slope_map,
 };
 pub use quadtree::{QuadCoord, Quadtree, Selected, Square};
 pub use quantize::{quantize, QuantizedHeightSource};

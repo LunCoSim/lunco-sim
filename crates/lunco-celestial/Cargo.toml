@@ -33,6 +33,7 @@ big_space = { workspace = true }
 # `EphemerisProvider` trait and a no-op default; apps that need real
 # planetary positions add the ephemeris crate's plugin.
 lunco-core = { path = "../lunco-core" }
+lunco-api = { path = "../lunco-api" }
 lunco-hooks = { path = "../lunco-hooks" }
 lunco-time = { path = "../lunco-time" }
 lunco-render = { path = "../lunco-render" }

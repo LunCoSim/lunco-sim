@@ -7001,6 +7001,7 @@ dependencies = [
  "bevy_shader",
  "big_space",
  "futures-lite",
+ "lunco-api",
  "lunco-assets",
  "lunco-controller",
  "lunco-core",

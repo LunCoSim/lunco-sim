@@ -161,6 +161,32 @@ pub fn segment_hits_sphere(p1: DVec3, p2: DVec3, center: DVec3, radius_m: f64) -
     (closest - center).length() < radius_m - 0.5
 }
 
+/// An antenna's position in the site's local scene frame (East=+X, Up=+Y,
+/// North=−Z — the frame the terrain height oracle / `TerrainRaycast` use), or
+/// `Unit` when the scene has no site anchor. Far endpoints (Earth/orbit) still
+/// map to a valid, large local point, so a segment march from a surface
+/// endpoint toward it carries the correct local direction.
+fn local_hook(site: &Option<SiteFrameSnapshot>, solar: DVec3) -> lunco_hooks::HookValue {
+    match site {
+        Some(s) => {
+            let l = s.frame.from_frame(solar);
+            lunco_hooks::HookValue::Array(vec![
+                lunco_hooks::HookValue::Float(l.x),
+                lunco_hooks::HookValue::Float(l.y),
+                lunco_hooks::HookValue::Float(l.z),
+            ])
+        }
+        None => lunco_hooks::HookValue::Unit,
+    }
+}
+
+/// Whether a pose sits on the site body (a surface antenna within the DEM's
+/// world) — lets a terrain constraint skip pure space-to-space links that the
+/// local relief can never occlude.
+fn pose_on_site(pose: &AntennaPose, site: &Option<SiteFrameSnapshot>) -> bool {
+    matches!((pose, site), (AntennaPose::Surface { body, .. }, Some(s)) if *body == s.body)
+}
+
 fn sanitize_port_token(name: &str) -> String {
     let mut s: String = name
         .chars()
@@ -337,6 +363,14 @@ pub fn update_comms_links(
                     "max_range_m",
                     lunco_hooks::HookValue::Float(aa.max_range_m.min(ab.max_range_m)),
                 ),
+                // Terrain-frame handles: local scene positions + on-site gate, so
+                // a constraint can call `query("TerrainRaycast", …)` itself. This
+                // is what makes the constraint set extensible over the GEOMETRY
+                // engine (STK-plugin style), not just the flattened scalars.
+                ("a_on_site", lunco_hooks::HookValue::Bool(pose_on_site(pa, &site))),
+                ("b_on_site", lunco_hooks::HookValue::Bool(pose_on_site(pb, &site))),
+                ("a_local", local_hook(&site, p1)),
+                ("b_local", local_hook(&site, p2)),
             ]);
             let connected = match lunco_hooks::invoke(COMMS_LINK_HOOK, &[ctx]) {
                 Some(Ok(v)) => match v.as_bool() {

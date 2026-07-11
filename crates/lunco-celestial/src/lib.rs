@@ -19,6 +19,7 @@ pub mod geo;
 pub mod kepler;
 pub mod comms;
 pub mod placement;
+pub mod queries;
 mod big_space_setup;
 mod globe_lod;
 mod systems;
@@ -125,6 +126,9 @@ impl Plugin for CelestialPlugin {
         }
         app.init_resource::<TerrainMapRegistry>();
         app.init_resource::<CelestialConfig>();
+        // Generic celestial geometry queries (Occultation / BodyPosition) — the
+        // domain-free substrate authored subsystems compose over (docs 10/12).
+        queries::register_celestial_queries(app);
         // Keep a host-app gravity choice (e.g. the sandbox's flat gravity);
         // default to surface gravity for the full client.
         if app.world().get_resource::<Gravity>().is_none() {
