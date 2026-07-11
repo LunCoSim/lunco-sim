@@ -246,6 +246,13 @@ thread_local! {
     /// the scenario driver and per-eval by the `RunRhai` drain; reset to `None`
     /// whenever a [`WorldScope`] enters or drops, so it never leaks across evals.
     static SCRIPT_AUTHORITY: Cell<Option<SessionId>> = const { Cell::new(None) };
+
+    /// True while a **client-scoped** scenario runs on a predicting client. Its
+    /// [`cmd`] calls are then restricted to the client-local surface
+    /// ([`lunco_core::ClientCommandPolicy`]) so a presentation/HUD script can't
+    /// mutate authoritative sim state. Set per-pass by the scenario driver; reset
+    /// with the [`WorldScope`] so it never leaks across evals.
+    static SCRIPT_CLIENT_LOCAL: Cell<bool> = const { Cell::new(false) };
 }
 
 /// RAII guard that publishes a `&mut World` to the thread-local for the lifetime
@@ -265,6 +272,7 @@ impl Drop for WorldScope {
     fn drop(&mut self) {
         WORLD_PTR.with(|p| p.set(std::ptr::null_mut()));
         SCRIPT_AUTHORITY.with(|a| a.set(None));
+        SCRIPT_CLIENT_LOCAL.with(|c| c.set(false));
     }
 }
 
@@ -278,6 +286,19 @@ pub fn set_script_authority(session: Option<SessionId>) {
 /// The session the current [`cmd`] is authorized against, if any.
 pub fn script_authority() -> Option<SessionId> {
     SCRIPT_AUTHORITY.with(|a| a.get())
+}
+
+/// Mark the current script pass as a client-scoped scenario on a predicting
+/// client, so [`cmd`] restricts it to the client-local command surface. Set by
+/// the scenario driver; reset with the [`WorldScope`].
+pub fn set_script_client_local(on: bool) {
+    SCRIPT_CLIENT_LOCAL.with(|c| c.set(on));
+}
+
+/// Whether the current script is a client-scoped scenario (its `cmd()`s are
+/// restricted to the client-local surface).
+pub fn script_is_client_local() -> bool {
+    SCRIPT_CLIENT_LOCAL.with(|c| c.get())
 }
 
 /// Well-known capability keys for script operations that are NOT a reflected
@@ -390,6 +411,27 @@ pub fn controller_role(gid: u64) -> Option<String> {
 pub fn cmd_raw(name: &str, params: serde_json::Value) -> serde_json::Value {
     let id = OpId::new().0;
     with_world(|world| {
+        // Client-scoped scenario on a predicting client: allow ONLY the
+        // client-local surface (HUD / notifications / camera). Anything else is
+        // an authoritative mutation the host owns — running it here would
+        // double-apply or fight replication, so drop it (the host stays the sole
+        // author of shared sim state). Deny-all by default: a command opts in via
+        // `App::mark_client_local` in its own crate.
+        if script_is_client_local() {
+            let allowed = world
+                .get_resource::<lunco_core::ClientCommandPolicy>()
+                .is_some_and(|p| p.allows(name));
+            if !allowed {
+                warn!(
+                    "[script] client-scoped scenario blocked from issuing `{name}` \
+                     (not in the client-local command surface)"
+                );
+                return serde_json::json!({
+                    "id": id, "ok": false,
+                    "error": format!("`{name}` is not permitted from a client-scoped script"),
+                });
+            }
+        }
         // §3.4: a script launched by a remote session must not exceed that
         // session's authority. When an authority is set (remote launch),
         // re-authorize through the SAME gate the networked command path uses; an

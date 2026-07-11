@@ -715,6 +715,15 @@ impl Plugin for TutorialOverlayPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TutorialHud>();
         register_all_commands(app);
+        // HUD / tour / spotlight are per-client presentation — client-local, so a
+        // client-scoped tutorial scenario may drive them (see `ClientCommandPolicy`).
+        use lunco_core::MarkClientLocalExt;
+        app.mark_client_local::<SetHint>()
+            .mark_client_local::<SetObjectives>()
+            .mark_client_local::<Spotlight>()
+            .mark_client_local::<ClearSpotlight>()
+            .mark_client_local::<SetTourStep>()
+            .mark_client_local::<ClearTour>();
         app.add_systems(
             EguiPrimaryContextPass,
             (draw_tutorial_hud, draw_spotlight, draw_tour).after(crate::WorkbenchRenderSet),

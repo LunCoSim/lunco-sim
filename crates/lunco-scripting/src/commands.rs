@@ -183,6 +183,10 @@ pub(crate) fn attach_rhai_scenario(
         None => (alloc.next(), 0),
     };
 
+    // Execution scope from a `// @scope client|both` directive in the source, so
+    // it works identically for API-attached (`RunScenario`) and USD-embedded
+    // scenarios (both funnel through here) with no wire/schema change.
+    let scope = crate::scenario::ScriptScope::from_source(&source);
     let mut doc = ScriptDocument::new(doc_id_raw, ScriptLanguage::Rhai, source);
     // Hot-reload reuses the doc id and bumps generation; `new` resets it to 0,
     // so carry the computed generation through.
@@ -219,6 +223,9 @@ pub(crate) fn attach_rhai_scenario(
         // §3.4: the session this scenario's cmd()s are gated against. Always
         // (re)inserted so a hot-reload relaunch refreshes it; `None` = ungated.
         crate::scenario::ScriptAuthority(authority),
+        // Where this scenario ticks (host / client / both) — the scenario driver
+        // gates each entity on it per peer.
+        scope,
     ));
 
     (doc_id_raw, generation)

@@ -398,3 +398,53 @@ impl ActiveCommandId {
         self.0 = id;
     }
 }
+
+/// Commands a **client-scoped script** is allowed to issue — the presentation /
+/// client-local surface (HUD, notifications, camera framing), which only ever
+/// mutate *this peer's* view and never authoritative sim state.
+///
+/// A predicting client must not run scripts that mutate shared state (they'd
+/// double-apply / fight replication), so scripting blocks a client-scoped
+/// scenario's `cmd()` calls by default (deny-all). A command opts INTO the
+/// client-local surface by name via [`MarkClientLocalExt::mark_client_local`],
+/// contributed by the command's OWN crate at plugin build — so the classification
+/// stays a dynamic registry, not a hardcoded list, and no low crate has to depend
+/// on a UI crate to know a HUD command is client-local.
+///
+/// Keyed by `short_type_path` (the same string `cmd("Name", …)` dispatches on and
+/// [`declare_channel`] keys the wire router on).
+#[derive(Resource, Default)]
+pub struct ClientCommandPolicy {
+    client_local: std::collections::HashSet<String>,
+}
+
+impl ClientCommandPolicy {
+    /// Register a command name as safe for a client-scoped script to issue.
+    pub fn allow(&mut self, name: impl Into<String>) {
+        self.client_local.insert(name.into());
+    }
+    /// True if a client-scoped script may issue the command named `name`.
+    pub fn allows(&self, name: &str) -> bool {
+        self.client_local.contains(name)
+    }
+}
+
+/// App extension: mark a command type as **client-local** — safe for a
+/// client-scoped script to issue (see [`ClientCommandPolicy`]). Call it from the
+/// plugin of the crate that DEFINES the command, next to its `register_command`,
+/// so the client-local surface is assembled from each crate's own declarations.
+pub trait MarkClientLocalExt {
+    fn mark_client_local<C: bevy::reflect::TypePath>(&mut self) -> &mut Self;
+}
+
+impl MarkClientLocalExt for bevy::app::App {
+    fn mark_client_local<C: bevy::reflect::TypePath>(&mut self) -> &mut Self {
+        if !self.world().contains_resource::<ClientCommandPolicy>() {
+            self.init_resource::<ClientCommandPolicy>();
+        }
+        self.world_mut()
+            .resource_mut::<ClientCommandPolicy>()
+            .allow(C::short_type_path().to_string());
+        self
+    }
+}

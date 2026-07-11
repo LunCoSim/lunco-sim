@@ -48,6 +48,56 @@ use crate::ScriptRegistry;
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct ScriptAuthority(pub Option<SessionId>);
 
+/// Where a scenario's lifecycle hooks execute. Default [`Host`](ScriptScope::Host):
+/// a predicting client must not run sim-mutating scripts (they would double-apply
+/// or fight replication — the same reason cosim/physics only step on the host).
+///
+/// - `Host` — host / standalone only (the safe default; all existing scenarios).
+/// - `Client` — **client only**: presentation / HUD / camera / tutorial coaching.
+///   Its `cmd()`s are restricted to the client-local surface
+///   ([`lunco_core::ClientCommandPolicy`]); an authoritative command is dropped.
+/// - `Both` — every peer (each peer still filtered by the same client-local rule
+///   when it is the client).
+///
+/// Authored via a `// @scope client` (or `both`) directive on one of the first
+/// lines of the script source, so it rides the same channel for API-attached
+/// (`RunScenario`) and USD-embedded scenarios with no wire or schema change.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ScriptScope {
+    #[default]
+    Host,
+    Client,
+    Both,
+}
+
+impl ScriptScope {
+    /// Parse a `// @scope <host|client|both>` directive from the script source
+    /// (scanned in the first lines). Absent / unrecognized ⇒ [`Host`](Self::Host).
+    pub fn from_source(src: &str) -> Self {
+        for line in src.lines().take(24) {
+            let t = line.trim_start();
+            let Some(rest) = t.strip_prefix("//") else { continue };
+            let rest = rest.trim_start().trim_start_matches('!').trim_start();
+            let Some(val) = rest.strip_prefix("@scope") else { continue };
+            return match val.trim().to_ascii_lowercase().as_str() {
+                "client" => ScriptScope::Client,
+                "both" => ScriptScope::Both,
+                _ => ScriptScope::Host,
+            };
+        }
+        ScriptScope::Host
+    }
+
+    /// Whether a scenario with this scope should tick on the current peer.
+    pub fn runs_on(self, is_client: bool) -> bool {
+        match self {
+            ScriptScope::Host => !is_client,
+            ScriptScope::Client => is_client,
+            ScriptScope::Both => true,
+        }
+    }
+}
+
 /// The lifecycle hook points a scenario may define.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScenarioHook {
@@ -222,23 +272,51 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         // every tick — since they're consumed solely by `runtime.compile`.
         let mut work: Vec<(Entity, u64, i64, u64, Option<(String, String)>, Option<SessionId>)> =
             Vec::new();
+        // A predicting client only ticks scenarios scoped to run there
+        // (`Client`/`Both`); the host ticks `Host`/`Both`. Read once — constant
+        // for the whole pass.
+        let is_client = matches!(
+            world.get_resource::<lunco_core::NetworkRole>(),
+            Some(lunco_core::NetworkRole::Client)
+        );
         let live: HashSet<Entity>;
         {
-            let mut q = world.query::<(Entity, &ScriptedModel, Option<&ScriptAuthority>)>();
-            let models: Vec<(Entity, bool, Option<ScriptLanguage>, Option<u64>, Option<SessionId>)> =
-                q.iter(world)
-                    .map(|(e, m, auth)| {
-                        (e, m.paused, m.language, m.document_id, auth.and_then(|a| a.0))
-                    })
-                    .collect();
+            let mut q =
+                world.query::<(Entity, &ScriptedModel, Option<&ScriptAuthority>, Option<&ScriptScope>)>();
+            let models: Vec<(
+                Entity,
+                bool,
+                Option<ScriptLanguage>,
+                Option<u64>,
+                Option<SessionId>,
+                ScriptScope,
+            )> = q
+                .iter(world)
+                .map(|(e, m, auth, scope)| {
+                    (
+                        e,
+                        m.paused,
+                        m.language,
+                        m.document_id,
+                        auth.and_then(|a| a.0),
+                        scope.copied().unwrap_or_default(),
+                    )
+                })
+                .collect();
             live = models
                 .iter()
-                .filter(|(_, _, l, _, _)| *l == Some(language))
+                .filter(|(_, _, l, _, _, _)| *l == Some(language))
                 .map(|(e, ..)| *e)
                 .collect();
 
-            for (entity, paused, lang, doc_id, authority) in models {
+            for (entity, paused, lang, doc_id, authority, scope) in models {
                 if paused || lang != Some(language) {
+                    continue;
+                }
+                // Scope gate: skip (don't execute) a scenario not meant for this
+                // peer. It stays in `live` above, so it is NOT torn down — just
+                // idle here (it ticks on the peer it belongs to).
+                if !scope.runs_on(is_client) {
                     continue;
                 }
                 let Some(raw) = doc_id else { continue };
@@ -300,6 +378,12 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             let _scope = bridge_core::WorldScope::enter(world);
             driver.runtime.maintain();
             let ScenarioDriver { runtime, fsm } = &mut *driver;
+
+            // Everything that reaches `work` on a client passed the scope gate, so
+            // it is a client-scoped scenario: restrict its `cmd()`s to the
+            // client-local surface (see `bridge_core::cmd_raw`). Host/standalone
+            // leaves the filter off.
+            bridge_core::set_script_client_local(is_client);
 
             for (entity, raw, gid, generation, maybe_src, authority) in work {
                 // Gate this entity's hook `cmd()`s against the launching session
@@ -369,6 +453,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             // ScriptAuthority) is gone, so its `cmd()`s run host-trusted — teardown
             // cleanup only, never ongoing behaviour.
             bridge_core::set_script_authority(None);
+            bridge_core::set_script_client_local(false);
             let dead: Vec<Entity> = fsm.keys().copied().filter(|e| !live.contains(e)).collect();
             for entity in dead {
                 if let Some(st) = fsm.remove(&entity) {

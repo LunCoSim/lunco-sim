@@ -293,7 +293,10 @@ impl Plugin for LunCoScriptingPlugin {
             app.add_systems(
                 FixedUpdate,
                 (
-                    world_bridge::drain_world_scripts,
+                    // One-shot `RunRhai` evals stay host-authoritative — they carry
+                    // no `ScriptScope`, so a client can't run arbitrary sim-mutating
+                    // snippets through the REPL/world-script queue.
+                    world_bridge::drain_world_scripts.run_if(scripts_run_here),
                     // File-referenced scenarios (lunco:scriptPath): load the .rhai
                     // asset and swap the path marker for EmbeddedScenarioSource.
                     // Runs before attach so the loaded source attaches same frame.
@@ -303,12 +306,13 @@ impl Plugin for LunCoScriptingPlugin {
                     // authored scenarios run on spawn.
                     commands::attach_embedded_scenarios,
                     // Persistent per-entity scenario lifecycle (neutral driver,
-                    // rhai backend).
+                    // rhai backend). Runs on EVERY peer now: the driver gates each
+                    // entity by its `ScriptScope` (host-only by default), and a
+                    // client-scoped scenario's `cmd()`s are restricted to the
+                    // client-local surface — so a predicting client runs only
+                    // presentation/HUD scripts, never authoritative sim mutation.
                     world_bridge::tick_rhai_scenarios,
-                )
-                    // Same host-authoritative gate as the python path above — a
-                    // predicting client must not run scripts (see `scripts_run_here`).
-                    .run_if(scripts_run_here),
+                ),
             );
         }
 
