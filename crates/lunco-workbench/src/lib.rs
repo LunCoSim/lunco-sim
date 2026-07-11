@@ -1115,7 +1115,8 @@ impl WorkbenchLayout {
     pub(crate) fn dock_layout_hash(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        for node in self.dock.iter_nodes() {
+        for (surface, node) in self.dock.iter_all_nodes() {
+            surface.0.hash(&mut h);
             match node {
                 egui_dock::Node::Empty => 0u8.hash(&mut h),
                 egui_dock::Node::Leaf(leaf) => {

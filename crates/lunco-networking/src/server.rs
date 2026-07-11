@@ -222,9 +222,9 @@ fn primary_lan_ip() -> Option<std::net::IpAddr> {
 /// back to the in-session chunk path.
 #[cfg(feature = "transport-http")]
 #[derive(Resource)]
-pub struct AssetHttpServer {
+pub(crate) struct AssetHttpServer {
     /// What clients prepend to a CID. Ends with `/`.
-    pub base_url: String,
+    pub(crate) base_url: String,
     /// Shared CID-string → path index, read by the HTTP handler.
     index: lunco_api::transports::assets::AssetIndex,
 }
@@ -242,7 +242,7 @@ impl AssetHttpServer {
     ///   page cannot fetch `http://host:5889` (mixed content) and `web_fetch` is
     ///   same-origin by construction, so nginx reverse-proxies that path here. It
     ///   must NOT be `/assets/` — that's bevy's web asset root (shaders, scenes).
-    pub fn start(port: u16) -> Self {
+    pub(crate) fn start(port: u16) -> Self {
         let index: lunco_api::transports::assets::AssetIndex = Default::default();
         let bind_host = std::env::var("LUNCO_ASSET_BIND").unwrap_or_else(|_| "0.0.0.0".to_string());
         lunco_api::transports::assets::spawn_asset_server(format!("{bind_host}:{port}"), index.clone());
@@ -258,7 +258,7 @@ impl AssetHttpServer {
 
     /// Republish the CID→path index for a freshly built manifest. Replaces the map
     /// wholesale: a stale CID from a previous scenario must never serve bytes.
-    pub fn publish(&self, cid_paths: &[(Vec<u8>, PathBuf)]) {
+    pub(crate) fn publish(&self, cid_paths: &[(Vec<u8>, PathBuf)]) {
         let Ok(mut map) = self.index.write() else {
             warn!("[net] asset index poisoned; HTTP asset serving is stale");
             return;

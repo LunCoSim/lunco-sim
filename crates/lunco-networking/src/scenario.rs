@@ -173,9 +173,13 @@ pub struct ScenarioManifestMsg {
     /// `None` if the host has no journal / an empty history. (bincode-safe:
     /// `EntryId` is `{author: String, lamport: u64}`, no `serde_json::Value`.)
     pub journal_head: Option<lunco_twin_journal::EntryId>,
-    /// Where to fetch asset bytes over **HTTP**, e.g. `http://10.0.0.5:5889/assets/`
-    /// or (behind an nginx proxy, same-origin for a wasm client) `/assets/`. A CID
-    /// is appended verbatim: `<base><cid-base32>`.
+    /// Where to fetch asset bytes over **HTTP**, e.g.
+    /// `http://10.0.0.5:5889/scenario-assets/` or (behind an nginx proxy,
+    /// same-origin for a wasm client) `/scenario-assets/`. A CID is appended
+    /// verbatim: `<base><cid-base32>`.
+    ///
+    /// Never route this at `/assets/`: that is bevy's web asset root, and a proxy
+    /// there swallows every shader/scene/model the wasm bundle loads.
     ///
     /// The bytes plane rides HTTP, not the QUIC game port: lightyear's reliable
     /// sender queues without bound (`buffer_send` never rejects), so streaming a

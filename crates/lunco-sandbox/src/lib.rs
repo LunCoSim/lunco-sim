@@ -327,9 +327,26 @@ fn load_ready_scenario(
 /// - **Client** — projects entries AFTER the manifest's `journal_head` (the
 ///   downloaded snapshot's base — so history baked into the files isn't
 ///   double-applied), authored by another peer.
-/// - **Host** — projects over its full native history (base `None`); the
-///   `author != me` filter selects only client-authored edits (its own are
-///   already applied at author time), so the host *sees* clients' edits.
+/// - **Host** — projects entries AFTER the head its own scenario manifest
+///   advertises (see below); the `author != me` filter then selects only
+///   client-authored edits (its own are already applied at author time), so the
+///   host *sees* clients' edits.
+///
+/// Both roles therefore share ONE invariant: *the files on disk already reflect
+/// history up to `journal_head`; replay only what came after.* The host used to
+/// pass `base = None` (replay the whole log, trusting `author != me` to drop its
+/// own edits). That holds only while the host's local author id equals the id
+/// that wrote the journal. A twin authored anywhere else — another machine, an
+/// earlier session, a downloaded twin, or merely a different `LUNCO_PEER_ID`
+/// (which `scripts/run_host_client.sh` sets) — looks entirely foreign, so the
+/// host re-applied its whole saved history on top of files that already contained
+/// it: prims re-added, rovers churned, and `reap_orphaned_wheel_joints` despawned
+/// a wheel joint whose bodies were already gone, tripping avian's
+/// `assert!(island.joint_count > 0)` about a second after boot.
+///
+/// The head is sampled ONCE, not read every frame: a mid-session manifest rebuild
+/// advances `journal_head`, which would move the base past client entries this
+/// frame has not projected yet.
 ///
 /// Each entry applies once, without re-recording (`replay_op`). The
 /// assembly-crate bridge: the only place that sees the wire state
@@ -342,18 +359,32 @@ fn load_ready_scenario(
 fn replay_scenario_journal(
     role: Res<lunco_core::NetworkRole>,
     remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
+    // Host-side only (inserted by `setup_host`) — the manifest this host serves.
+    local_scenario: Option<Res<lunco_networking::scenario::ScenarioManifestResource>>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     mut registry: ResMut<lunco_usd::UsdDocumentRegistry>,
     // Entry ids already projected onto the scene (once-per-entry guard).
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
+    // The host's replay base, latched the first frame its manifest exists.
+    mut host_base: Local<Option<Option<lunco_twin_journal::EntryId>>>,
 ) {
     let Some(journal) = journal else {
         return;
     };
-    // Base head: the host holds full history natively (None); a client bases on
-    // the downloaded snapshot's head, or waits if no scenario is loaded yet.
+    // Base head: the state the on-disk files already reflect. The host reads it
+    // off the manifest it built (deferring until that build lands); a client
+    // bases on the downloaded snapshot's head, or waits if no scenario is loaded.
     let base: Option<&lunco_twin_journal::EntryId> = if role.is_host() {
-        None
+        if host_base.is_none() {
+            let Some(scenario) = local_scenario.as_ref() else {
+                return; // no host manifest resource → nothing to base on yet
+            };
+            let Some(manifest) = scenario.manifest.as_ref() else {
+                return; // manifest build still in flight → defer, don't replay history
+            };
+            *host_base = Some(manifest.journal_head.clone());
+        }
+        host_base.as_ref().and_then(|h| h.as_ref())
     } else {
         let Some(manifest) = remote.manifest.as_ref() else {
             return;
@@ -1788,14 +1819,35 @@ fn bind_terrain_layers(
             commands.entity(entity).try_insert(TerrainLayersBound);
             continue;
         }
-        // Resolve relative to the open Twin via the `twin://<name>/<rel>` source.
-        let Some((twin_name, _)) = twins.primary() else { continue };
+        // Resolve against whatever the SCENE came from. A `scenario://` scene (a
+        // twin downloaded from a host) carries layer paths relative to itself, and
+        // the client normally has the local demo twin open — binding those layers
+        // under `twin://sandbox/…` silently loads the wrong (missing) textures.
+        // `AssetPath::path()` strips the source, so the parent dir is the bare
+        // `<scenario-id>`. Otherwise resolve relative to the open Twin.
+        let asset_path = asset_server.get_path(id);
+        let scenario_root = asset_path.as_ref().and_then(|p| {
+            if !matches!(
+                p.source(),
+                bevy::asset::io::AssetSourceId::Name(n)
+                    if &**n == lunco_assets::scenario_source::SCENARIO_SCHEME
+            ) {
+                return None;
+            }
+            p.path().parent().and_then(|d| d.to_str()).map(str::to_owned)
+        });
+        let base_uri = if let Some(root) = &scenario_root {
+            format!("scenario://{root}")
+        } else {
+            let Some((twin_name, _)) = twins.primary() else { continue };
+            format!("twin://{twin_name}")
+        };
         // Wait for the material to exist before binding (created async by the USD
         // shader system); retry next frame until it does.
         let Some(material) = mats.get_mut(&mat3d.0) else { continue };
 
         for (role, rel, weight) in authored {
-            let uri = format!("twin://{twin_name}/{rel}");
+            let uri = format!("{base_uri}/{rel}");
             (role.set_slot)(material, asset_server.load(&uri));
             for w in role.weights {
                 material.set(w, ParamValue::F32(weight));
@@ -2409,13 +2461,22 @@ fn bridge_usd_dem_terrain(
         // Twin is open — the web autoload path (LoadScene from the staged asset
         // tree) has no `twin://` root, so the DEM is resolved against the
         // scene's own folder instead. `None` for in-memory stages.
-        let scene_dir = asset_server
-            .get_path(id)
-            .and_then(|p| p.path().parent().map(|d| d.to_path_buf()));
+        let asset_path = asset_server.get_path(id);
+        // Did this scene arrive over the wire as a `scenario://` twin? Then its
+        // `demSource` is relative to the SCENARIO, and any locally-open twin is
+        // an unrelated scene that must not capture the lookup.
+        let from_scenario = asset_path.as_ref().is_some_and(|p| {
+            matches!(
+                p.source(),
+                bevy::asset::io::AssetSourceId::Name(n)
+                    if &**n == lunco_assets::scenario_source::SCENARIO_SCHEME
+            )
+        });
+        let scene_dir = asset_path.and_then(|p| p.path().parent().map(|d| d.to_path_buf()));
         let cs = canonical.get(id).expect("checked above");
         bridge_dem_prim_read(
-            &cs.view(), entity, prim_path, &sdf, &twins, scene_dir.as_deref(), &registry,
-            obstacle_spec.bypass_change_detection(), &mut commands,
+            &cs.view(), entity, prim_path, &sdf, &twins, scene_dir.as_deref(), from_scenario,
+            &registry, obstacle_spec.bypass_change_detection(), &mut commands,
         );
     }
 }
@@ -2433,6 +2494,7 @@ fn bridge_dem_prim_read<R: UsdRead>(
     sdf: &openusd::sdf::Path,
     twins: &lunco_assets::twin_source::TwinRoots,
     scene_dir: Option<&std::path::Path>,
+    from_scenario: bool,
     registry: &lunco_terrain_surface::TerrainLayerParserRegistry,
     obstacle_spec: &mut lunco_obstacle_field::spec::ObstacleFieldSpec,
     commands: &mut Commands,
@@ -2480,13 +2542,41 @@ fn bridge_dem_prim_read<R: UsdRead>(
         warn!("[usd-dem] prim {} is a DEM terrain but has no dem-layer demSource", prim_path.path);
         return;
     };
-    // Resolve the DEM source to a byte-readable URI. Prefer an open Twin's root
-    // (native Open-Twin flow, absolute fs path). Otherwise fall back to the
-    // scene's own asset directory — the web autoload path loads the scene from
-    // the staged `assets/` tree with no `twin://` root, so `terrain/…` resolves
-    // to `twins/<name>/terrain/…` (asset-relative; the wasm DEM reader fetches
-    // it same-origin under `assets/`).
-    let uri = if let Some((_, root)) = twins.primary() {
+    // Resolve the DEM source to a byte-readable URI.
+    //
+    // A `scenario://` scene wins outright: its `demSource` is relative to the
+    // DOWNLOADED twin, and the client almost always has an unrelated twin open
+    // (it boots the local demo before joining), which would otherwise capture the
+    // lookup and resolve the DEM under `assets/scenes/sandbox/` — the terrain then
+    // fails to build and the twin arrives with no ground.
+    //
+    // `AssetPath::path()` strips the source, so `scene_dir` is the bare
+    // `<scenario-id>`. Native reads an absolute path out of the scenario cache;
+    // web keeps it cache-relative, which is what the wasm DEM reader probes
+    // against OPFS (`<cache>/scenarios/<id>/…`).
+    //
+    // Otherwise prefer an open Twin's root (native Open-Twin flow, absolute fs
+    // path), then fall back to the scene's own asset directory — the web autoload
+    // path loads the scene from the staged `assets/` tree with no `twin://` root,
+    // so `terrain/…` resolves to `twins/<name>/terrain/…` (asset-relative; the
+    // wasm DEM reader fetches it same-origin under `assets/`).
+    let uri = if from_scenario {
+        let Some(dir) = scene_dir else {
+            warn!("[usd-dem] scenario DEM source '{rel}' has no scene directory");
+            return;
+        };
+        let base = {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                lunco_assets::cache_dir().join("scenarios").join(dir)
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                dir.to_path_buf()
+            }
+        };
+        base.join(&rel).to_string_lossy().replace('\\', "/")
+    } else if let Some((_, root)) = twins.primary() {
         root.join(&rel).to_string_lossy().to_string()
     } else if let Some(dir) = scene_dir {
         dir.join(&rel).to_string_lossy().replace('\\', "/")

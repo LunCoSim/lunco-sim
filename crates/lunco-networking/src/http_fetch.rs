@@ -216,9 +216,60 @@ fn fetch_bytes_native(url: &str) -> Result<Vec<u8>, String> {
 ///
 /// The URL must be **same-origin** — `web_fetch` sets `RequestMode::SameOrigin`, and
 /// an https page cannot fetch `http://host:5889` anyway (mixed content). Deployments
-/// therefore reverse-proxy `/assets/` to the host's asset port and set
-/// `LUNCO_ASSET_BASE_URL=/assets/`.
+/// therefore reverse-proxy `/scenario-assets/` to the host's asset port and set
+/// `LUNCO_ASSET_BASE_URL=/scenario-assets/`. Not `/assets/` — that is bevy's web
+/// asset root, and proxying it away 404s the whole app.
 #[cfg(target_arch = "wasm32")]
 async fn fetch_bytes_web(url: &str) -> Result<Vec<u8>, String> {
     lunco_assets::web_fetch::fetch_bytes_cached("lunco-scenario-assets-v1", url).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The trust boundary of the whole hybrid transport: the HTTP endpoint is
+    /// untrusted, so [`verified`] accepts fetched bytes ONLY when they re-hash to
+    /// the CID we asked for. A server can therefore withhold bytes (or serve the
+    /// wrong ones) but can never make the client accept a substitution.
+    #[test]
+    fn verified_accepts_only_bytes_matching_the_requested_cid() {
+        let content = b"the real asset bytes".to_vec();
+        let cid = cid_for_content(&content).to_bytes();
+
+        // Correct bytes → accepted.
+        let ok = verified(cid.clone(), "http://h/a".into(), Ok(content.clone()));
+        assert_eq!(ok.cid, cid);
+        assert_eq!(ok.bytes.as_deref(), Some(content.as_slice()));
+
+        // Substituted bytes (a hostile/misconfigured server) → rejected, CID kept
+        // so the caller can retry/fall back rather than cache a lie.
+        let substituted = verified(cid.clone(), "http://h/a".into(), Ok(b"evil".to_vec()));
+        assert_eq!(substituted.cid, cid);
+        assert!(substituted.bytes.is_none(), "mismatched content must be discarded");
+
+        // Even empty bytes must not pass for a non-empty CID.
+        let empty = verified(cid.clone(), "http://h/a".into(), Ok(Vec::new()));
+        assert!(empty.bytes.is_none());
+
+        // A transport error → no bytes, CID preserved for retry.
+        let errored = verified(cid.clone(), "http://h/a".into(), Err("404".into()));
+        assert_eq!(errored.cid, cid);
+        assert!(errored.bytes.is_none());
+    }
+
+    /// Two different contents produce different CIDs, so a blob fetched for one
+    /// CID cannot satisfy another (no cross-asset confusion).
+    #[test]
+    fn verified_rejects_valid_bytes_offered_under_the_wrong_cid() {
+        let a = b"asset A".to_vec();
+        let b = b"asset B".to_vec();
+        let cid_a = cid_for_content(&a).to_bytes();
+        let cid_b = cid_for_content(&b).to_bytes();
+        assert_ne!(cid_a, cid_b);
+
+        // B's real bytes offered where A was requested → rejected.
+        let wrong = verified(cid_a.clone(), "http://h/a".into(), Ok(b));
+        assert!(wrong.bytes.is_none());
+    }
 }

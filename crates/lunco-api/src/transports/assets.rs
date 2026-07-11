@@ -125,3 +125,60 @@ async fn serve_asset(State(index): State<AssetIndex>, Path(cid): Path<String>) -
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn index_with(entries: &[(&str, PathBuf)]) -> AssetIndex {
+        let map: HashMap<String, PathBuf> =
+            entries.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
+        Arc::new(RwLock::new(map))
+    }
+
+    /// The security property: `cid` is only ever a MAP KEY, never joined onto a
+    /// filesystem path. A crafted value (`../…`, an absolute path, a real file on
+    /// disk) that isn't an advertised key can therefore only miss the map → 404.
+    /// It can never escape to read arbitrary files.
+    #[tokio::test]
+    async fn crafted_cids_can_only_miss_the_map_never_traverse() {
+        // The map advertises exactly one blob, under its CID key.
+        let dir = std::env::temp_dir().join("lunco-asset-serve-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let blob = dir.join("blob.bin");
+        std::fs::write(&blob, b"real blob").unwrap();
+        let index = index_with(&[("bafkreirealcid", blob.clone())]);
+
+        // A traversal string and an absolute path to a genuinely existing file are
+        // NOT keys → 404, even though the file exists and is readable.
+        for hostile in ["../../../../etc/passwd", "/etc/passwd", "bafk-not-advertised"] {
+            let resp = serve_asset(State(index.clone()), Path(hostile.to_string()))
+                .await
+                .into_response();
+            assert_eq!(
+                resp.status(),
+                StatusCode::NOT_FOUND,
+                "crafted cid {hostile:?} must miss the map, not resolve a path"
+            );
+        }
+
+        // The advertised key resolves to its blob.
+        let ok = serve_asset(State(index), Path("bafkreirealcid".to_string()))
+            .await
+            .into_response();
+        assert_eq!(ok.status(), StatusCode::OK);
+
+        let _ = std::fs::remove_file(&blob);
+    }
+
+    /// A key present in the map but whose backing file has gone missing degrades
+    /// to 404, not a panic or a 500.
+    #[tokio::test]
+    async fn advertised_key_with_missing_file_is_404() {
+        let index = index_with(&[("bafkreighost", PathBuf::from("/no/such/blob/on/disk"))]);
+        let resp = serve_asset(State(index), Path("bafkreighost".to_string()))
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+}

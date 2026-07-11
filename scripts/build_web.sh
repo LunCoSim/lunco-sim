@@ -121,6 +121,13 @@ stage_one_twin() {
 # index.html autoloader). See the LC_TWIN_* env docs at the call site.
 stage_twins() {
     local dist="$1"
+    # Prune the whole twins root first, so a twin baked by a PREVIOUS build (e.g.
+    # an earlier `LC_TWIN_SRC=…/moonbase` run) does not survive into a build that
+    # no longer stages it: `scenes.json` would omit it, but its ~90 MB of files
+    # would still ship in the bundle. `rsync --delete` in `stage_one_twin` only
+    # keeps an individually-staged twin clean; it can't remove one that isn't
+    # staged this run at all. Everything under here is re-created below.
+    rm -rf "$dist/assets/twins"
     # Default: do NOT bake the moonbase — on web it ships from the server on
     # connect (see SERVER_TWIN_DELIVERY_DESIGN.md), so the deploy boots a small
     # demo scene. Set LC_TWIN_SRC=/path/to/twin to bake one in (server-host

@@ -572,11 +572,14 @@ pub(crate) fn register_core_resources(app: &mut App) {
 /// Advance the discrete [`SimTick`] once per fixed step, *only while time is
 /// actually flowing* (so a paused/zero-speed/warping world freezes the tick and
 /// peers stay comparable). The gate is the direct clock state
-/// `Time<Virtual>.relative_speed > 0` — the same predicate the physics-stepping
-/// systems use. `Time<Virtual>` is read optionally: a bare world without Bevy's
+/// `Time<Virtual>.effective_speed > 0` — the same predicate the physics-stepping
+/// systems use. `effective_speed`, not `relative_speed`: the spine expresses
+/// "frozen" with Bevy's paused flag (which zeroes the former but not the latter),
+/// because `relative_speed` is a rate that consumers divide by.
+/// `Time<Virtual>` is read optionally: a bare world without Bevy's
 /// `TimePlugin` (e.g. a headless unit test) is treated as running.
 fn advance_sim_tick(mut tick: ResMut<SimTick>, vtime: Option<Res<Time<Virtual>>>) {
-    let running = vtime.map_or(true, |t| t.relative_speed_f64() > 0.0);
+    let running = vtime.map_or(true, |t| !t.is_paused() && t.relative_speed_f64() > 0.0);
     if running {
         tick.0 = tick.0.wrapping_add(1);
     }
@@ -786,11 +789,15 @@ mod ph1_identity_tests {
         app.world_mut().run_schedule(FixedUpdate);
         assert_eq!(app.world().resource::<SimTick>().0, 2);
 
-        // Paused (`relative_speed == 0`): tick frozen.
-        app.world_mut()
-            .resource_mut::<Time<Virtual>>()
-            .set_relative_speed_f64(0.0);
+        // Paused (Bevy's paused flag — `effective_speed == 0` while
+        // `relative_speed` stays a positive rate): tick frozen.
+        app.world_mut().resource_mut::<Time<Virtual>>().pause();
         app.world_mut().run_schedule(FixedUpdate);
         assert_eq!(app.world().resource::<SimTick>().0, 2);
+
+        // Resumed: the tick advances again.
+        app.world_mut().resource_mut::<Time<Virtual>>().unpause();
+        app.world_mut().run_schedule(FixedUpdate);
+        assert_eq!(app.world().resource::<SimTick>().0, 3);
     }
 }
