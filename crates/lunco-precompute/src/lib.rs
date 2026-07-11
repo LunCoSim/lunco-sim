@@ -119,14 +119,37 @@ pub fn entry_dir(root: &Path, namespace: &str, key: u64) -> PathBuf {
 
 /// Write one named blob into an entry directory (through the Storage API, which
 /// creates parent dirs). Use from a [`Bake::store`] impl.
+///
+/// **Native-only tier**: on wasm this is a no-op — `write_file_sync` would
+/// route multi-MB blobs into `localStorage`-as-hex (2× size, quota-bound).
+/// The wasm cache tier is `lunco_storage::opfs_blob` (async), which consumers
+/// integrate at their own async seams; the sync bake APIs can't await OPFS.
 pub fn store_blob(dir: &Path, name: &str, bytes: &[u8]) -> StorageResult<()> {
-    lunco_storage::write_file_sync(&dir.join(name), bytes)
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        lunco_storage::write_file_sync(&dir.join(name), bytes)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (dir, name, bytes);
+        Ok(())
+    }
 }
 
 /// Read one named blob from an entry directory. `None` on any miss/error → the
 /// caller treats it as a cache miss. Use from a [`Bake::load`] impl.
+///
+/// **Native-only tier** — always `None` (a miss) on wasm; see [`store_blob`].
 pub fn load_blob(dir: &Path, name: &str) -> Option<Vec<u8>> {
-    lunco_storage::read_file_sync(&dir.join(name)).ok()
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        lunco_storage::read_file_sync(&dir.join(name)).ok()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (dir, name);
+        None
+    }
 }
 
 #[cfg(test)]

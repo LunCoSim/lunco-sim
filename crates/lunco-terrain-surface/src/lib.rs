@@ -66,23 +66,24 @@ pub use lunco_terrain_core::{
 };
 pub use oracle::{raycast_surface, HeightContribution, SurfaceOracle};
 pub use plugin::{TerrainSurfaceConfig, TerrainSurfacePlugin};
-pub use derived_layers::DerivedLayersBuilt;
+pub use derived_layers::{DerivedLayersBuilt, TerrainDerivedMaps};
 pub use georef::TerrainGeoref;
 pub use query::{register_terrain_queries, TerrainHeightProvider};
 pub use collider_ring::{ColliderTiles, TerrainColliderRing};
 pub use stream_viz::{
     DemHeightField, LodTiles, TerrainLodConfig, TerrainLodViz, TerrainNodeErrors, TerrainShaderMode,
-    TerrainStreamStatus,
+    TerrainStreamStatus, TileShadowCache,
 };
 pub use terrain_layers::{
-    default_overzoom_layer, edit_attr_write, make_crater_layer, parse_edit, EditKind, EditsLayer,
-    LayerAttrSource, LayerEntry,
+    default_overzoom_layer, edit_attr_write, make_crater_layer, parse_edit, rock_instance_layer,
+    EditKind, EditsLayer, LayerAttrSource, LayerEntry,
     LayerId, LayerScatterCx, TerrainLayer, TerrainLayerAppExt, TerrainLayerParser,
     TerrainLayerParserRegistry, TerrainLayerStack, TerrainLayersApplied, TerrainRock, TerrainScatterEntity,
     EDITS_LAYER_ID,
 };
 pub use terrain::{
     BrushTerrain, DemBaseGrid, DemTerrainRequest, DemTerrainSource, DemTerrainSurface, DocBackedTerrain,
-    FlattenTerrain, RegenerateTerrainLayers, RemoveTerrainLayer, SpawnDemTerrain, TerrainGenStatus,
+    FlattenTerrain, PlaceCrater, PlaceRock, RegenerateTerrainLayers, RemoveTerrainLayer,
+    SpawnDemTerrain, TerrainGenStatus,
 };
 pub use tile_mesh::{bake_tile_mesh, TileMesh};

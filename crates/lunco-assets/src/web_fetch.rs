@@ -5,22 +5,31 @@
 //! it in the browser's Cache Storage, and unpack it". Two consumers today:
 //!
 //! - **MSL** (`lunco-modelica`) — the Modelica Standard Library bundle.
-//! - **Twin bundles** (`lunco-networking::http_bundle`) — the "drop a `.tar.zst`
-//!   into the server's `twins/` folder and the browser picks it up" path, the
-//!   static sibling of the live `scenario_sync` transport.
+//! - **Twin terrain assets** (`lunco-terrain-surface`) — the server serves its
+//!   `twins/` directory over HTTP (staged under `assets/twins/…` next to the
+//!   wasm) and the browser client fetches the DEM heightmap/metadata from it —
+//!   the static sibling of the live `scenario_sync` transport.
 //!
 //! Everything here is **content-agnostic**: the caller passes the Cache-Storage
-//! *bucket name* (e.g. `"lunco-msl-v1"`, `"lunco-twins-v1"`) so each distributor
+//! *bucket name* (e.g. `"lunco-msl-v1"`, `"lunco-twin-v1"`) so each distributor
 //! keeps its own namespace, and the keep-set for pruning. No MSL/twin schema
 //! leaks in.
 //!
-//! ## Caching strategy (why two fetch entry points)
+//! ## Caching strategy (why three fetch entry points)
 //! - Content-hashed blobs (`*-<sha>.tar.zst`) are **immutable** → cache-first
 //!   forever via [`fetch_cached_with_progress`]. A new build changes the hash →
 //!   the filename → a cache miss, so updates are picked up without busting.
 //! - The **mutable** manifest (`manifest.json`) uses **stale-while-revalidate**
 //!   ([`fetch_bytes_revalidated`]): serve the cached copy instantly, refresh in
-//!   the background for next boot.
+//!   the background for next boot. Fine for a small file; it re-downloads the
+//!   whole body every load.
+//! - **Mutable large assets** (a Twin's DEM `heightmap.tif` — same URL, but a
+//!   host-side twin update can replace the content in place) use **conditional
+//!   revalidation** ([`fetch_bytes_cached_conditional`] /
+//!   [`fetch_cached_with_progress_conditional`]): serve the cached copy
+//!   instantly, then issue a background `If-None-Match`/`If-Modified-Since`
+//!   request — a 304 costs headers only; a 200 refreshes the cache so the
+//!   *next* load sees the new content.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
@@ -307,9 +316,10 @@ pub async fn network_fetch_and_cache(
 
 /// **Cache-first-forever** fetch of a same-origin asset: return the cached copy
 /// if present, else fetch once over the network and cache it. No revalidation —
-/// for content that is static per deploy (a Twin's DEM heightmap/metadata, big
-/// and immutable), so once cached it never re-downloads. `path` is fetched
-/// verbatim (same-origin), so the caller passes the full origin-relative URL
+/// for content that never changes under its URL, so once cached it never
+/// re-downloads. Mutable-URL assets (the Twin's DEM files) use
+/// [`fetch_bytes_cached_conditional`] instead. `path` is fetched verbatim
+/// (same-origin), so the caller passes the full origin-relative URL
 /// (e.g. `assets/twins/moonbase/terrain/…/heightmap.tif`).
 pub async fn fetch_bytes_cached(bucket: &str, path: &str) -> Result<Vec<u8>, String> {
     // Insecure contexts (LAN IP / `file://`) have no Cache Storage — degrade to a
@@ -361,6 +371,146 @@ pub async fn fetch_bytes_revalidated(bucket: &str, path: &str) -> Result<Vec<u8>
             _ => Err(net_err),
         },
     }
+}
+
+/// **Conditional stale-while-revalidate** fetch for a *mutable* asset at a
+/// stable URL (a Twin's DEM `metadata.yaml` / `heightmap.tif` — a host-side
+/// twin update can replace the file in place). The cached copy is returned
+/// **immediately**; a background *conditional* request
+/// (`If-None-Match`/`If-Modified-Since`, see [`conditional_revalidate`]) then
+/// checks the server — a 304 costs headers only, a 200 refreshes the cache so
+/// the *next* load sees the new content. Unlike [`fetch_bytes_revalidated`]
+/// this never re-downloads an unchanged multi-MB body. Cold cache (or insecure
+/// context): same behavior as [`fetch_bytes_cached`].
+pub async fn fetch_bytes_cached_conditional(bucket: &str, path: &str) -> Result<Vec<u8>, String> {
+    // No Cache Storage in insecure contexts — degrade to a plain (uncached)
+    // fetch so the asset still loads instead of throwing.
+    let cache = match open_cache(bucket).await {
+        Ok(c) => c,
+        Err(_) => return network_fetch_uncached(path).await,
+    };
+    if let Ok(Some(bytes)) = cache_lookup(&cache, path).await {
+        // Serve stale now; validate against the server off the critical path.
+        spawn_conditional_revalidate(bucket, path);
+        return Ok(bytes);
+    }
+    network_fetch_and_cache(&cache, path).await
+}
+
+/// [`fetch_cached_with_progress`] + the background *conditional* revalidation
+/// of [`fetch_bytes_cached_conditional`] — for mutable **large** assets that
+/// need a download bar (the DEM heightmap). The serve path is exactly
+/// [`fetch_cached_with_progress`] (including its insecure-context degradation
+/// to a plain network fetch); when the bytes came from the cache, a background
+/// `If-None-Match`/`If-Modified-Since` probe refreshes the entry for the next
+/// load. A fresh download needs no revalidation — it *is* the current content.
+pub async fn fetch_cached_with_progress_conditional(
+    bucket: &str,
+    path: &str,
+    expected_total: u64,
+    on_progress: &js_sys::Function,
+) -> Result<Vec<u8>, String> {
+    // Probe before the fetch: revalidation only applies to a pre-existing
+    // cache entry. In insecure contexts this is `false` (no Cache Storage)
+    // and the inline-JS fetch below degrades to a plain network fetch.
+    let was_cached = cache_has(bucket, path).await;
+    let bytes = fetch_cached_with_progress(bucket, path, expected_total, on_progress).await?;
+    if was_cached {
+        spawn_conditional_revalidate(bucket, path);
+    }
+    Ok(bytes)
+}
+
+/// Detach [`conditional_revalidate`] onto the browser event loop (best-effort;
+/// failures are logged at debug — the cached copy already served the caller).
+fn spawn_conditional_revalidate(bucket: &str, path: &str) {
+    let bucket = bucket.to_string();
+    let path = path.to_string();
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Err(e) = conditional_revalidate(&bucket, &path).await {
+            bevy::log::debug!("[web_fetch] {path}: background conditional revalidate failed: {e}");
+        }
+    });
+}
+
+/// Ask the server whether the cached copy of `path` is still current, using
+/// the validators the cached response carried (`ETag` → `If-None-Match`,
+/// falling back to `Last-Modified` → `If-Modified-Since`). On 304 the cache is
+/// untouched; on 200 the fresh response replaces the entry so the next load
+/// picks it up — the running session keeps the bytes it already served (no
+/// hot-swap).
+async fn conditional_revalidate(bucket: &str, path: &str) -> Result<(), String> {
+    let cache = open_cache(bucket).await?;
+    let match_value = JsFuture::from(cache.match_with_str(path))
+        .await
+        .map_err(|e| format!("cache.match {path}: {e:?}"))?;
+    if match_value.is_null() || match_value.is_undefined() {
+        // Entry evicted between serve and revalidate — nothing to validate.
+        return Ok(());
+    }
+    let cached: Response = match_value
+        .dyn_into()
+        .map_err(|_| "cache match not a Response".to_string())?;
+
+    let headers = cached.headers();
+    let etag = headers.get("etag").ok().flatten();
+    let last_modified = headers.get("last-modified").ok().flatten();
+    // ETag is the stronger validator; Last-Modified is the fallback.
+    let (cond_header, validator) = match (etag, last_modified) {
+        (Some(v), _) => ("If-None-Match", v),
+        (None, Some(v)) => ("If-Modified-Since", v),
+        (None, None) => {
+            // The cached response carries no validator, so a conditional
+            // request is impossible — and an unconditional refetch would
+            // re-download the full (tens-of-MB) body on every load. Keep the
+            // cache-first behavior instead and accept staleness until the
+            // user clears the cache.
+            bevy::log::debug!(
+                "[web_fetch] {path}: cached response has no ETag/Last-Modified; \
+                 skipping revalidation (cache-first)"
+            );
+            return Ok(());
+        }
+    };
+
+    let opts = RequestInit::new();
+    opts.set_method("GET");
+    opts.set_mode(RequestMode::SameOrigin);
+    let req_headers =
+        web_sys::Headers::new().map_err(|e| format!("Headers::new: {e:?}"))?;
+    req_headers
+        .set(cond_header, &validator)
+        .map_err(|e| format!("Headers::set {cond_header}: {e:?}"))?;
+    opts.set_headers(req_headers.as_ref());
+    let request = Request::new_with_str_and_init(path, &opts)
+        .map_err(|e| format!("Request::new {path}: {e:?}"))?;
+    let window = web_sys::window().ok_or_else(|| "no window".to_string())?;
+    let resp_value = JsFuture::from(window.fetch_with_request(&request))
+        .await
+        .map_err(|e| format!("fetch {path}: {e:?}"))?;
+    let response: Response = resp_value
+        .dyn_into()
+        .map_err(|_| "fetch result not a Response".to_string())?;
+    match response.status() {
+        304 => {
+            bevy::log::debug!("[web_fetch] {path}: 304 Not Modified — cached copy is current");
+        }
+        200 => {
+            // `cache.put` consumes the response body; we never read it here —
+            // the fresh bytes are for the *next* load, not this session.
+            JsFuture::from(cache.put_with_str(path, &response))
+                .await
+                .map_err(|e| format!("cache.put {path}: {e:?}"))?;
+            bevy::log::info!(
+                "[web_fetch] {path}: changed on the server — cache updated; \
+                 a reload will pick up the new version"
+            );
+        }
+        s => {
+            return Err(format!("HTTP {s} {}", response.status_text()));
+        }
+    }
+    Ok(())
 }
 
 /// Evict every cached entry in `bucket` whose filename is not in `keep`. The

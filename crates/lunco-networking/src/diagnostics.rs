@@ -94,6 +94,9 @@ fn report_render_jitter(
     mut prev: Local<HashMap<Entity, (Vec3, Vec3)>>, // entity → (last pos, smoothed delta)
     mut n: Local<u32>,
 ) {
+    // Prune despawned bodies so the map tracks the live query instead of growing
+    // monotonically across spawn/despawn cycles.
+    prev.retain(|e, _| q.contains(*e));
     for (e, gt, gid, owned, pred) in q.iter() {
         let pos = gt.translation();
         let entry = prev.entry(e).or_insert((pos, Vec3::ZERO));

@@ -78,6 +78,14 @@ impl Plugin for TerrainSurfacePlugin {
             (
                 crate::stream_viz::update_lod_tiles,
                 crate::stream_viz::animate_tile_reveal,
+                // Late-bind: derived maps / shadow cache finish baking seconds
+                // after the first tiles exist — patch the cached tile materials
+                // in place.
+                crate::stream_viz::bind_derived_maps_to_tiles,
+                crate::stream_viz::bind_shadow_cache_to_tiles,
+                // Change-driven: early-outs unless a `TerrainLodViz` removal
+                // event fired this frame (stays in `Update` so its
+                // `RemovedComponents` reader drains every frame).
                 crate::stream_viz::despawn_orphaned_lod_tiles,
             ),
         );
@@ -103,13 +111,20 @@ impl Plugin for TerrainSurfacePlugin {
                 // region visible the same frame.
                 crate::collider_ring::update_collider_ring
                     .after(crate::terrain::finish_dem_restamp),
+                // Change-driven: early-outs unless a `TerrainColliderRing`
+                // removal event fired this frame.
                 crate::collider_ring::despawn_orphaned_collider_tiles,
             ),
         );
-        // Freeze the sim while a DEM terrain is still building so rovers don't fall
-        // through the not-yet-ready collider (esp. web, where the DEM load is slow).
-        // See `collider_ring::hold_physics_until_dem_ready`.
+        // Freeze the sim while a DEM terrain is still building — and, on ring
+        // terrains, until the ring tiles under every dynamic body are resident —
+        // so rovers don't fall through the not-yet-ready collider (esp. web,
+        // where the DEM load is slow). See `collider_ring::hold_physics_until_dem_ready`.
         app.init_resource::<crate::collider_ring::DemBuildPhysicsHold>();
         app.add_systems(Update, crate::collider_ring::hold_physics_until_dem_ready);
+        // Tunnel rescue: once a body slips under a heightfield no collider will
+        // ever stop it again (one-sided, infinitely thin) — reseat it on the
+        // surface, loudly. Physics cadence: only matters while the sim steps.
+        app.add_systems(FixedUpdate, crate::collider_ring::rescue_tunneled_bodies);
     }
 }

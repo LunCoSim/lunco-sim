@@ -147,6 +147,14 @@ pub fn dispatch(id: u32, job: &DemBakeJob, meta_yaml: &str, tif: &[u8]) -> Resul
     POOL.with(|p| p.borrow().as_ref().unwrap().post_transfer(0, &obj, &transfer))
 }
 
+/// Inject a locally-produced reply (e.g. an OPFS grid-cache hit) into the SAME
+/// queue the worker's replies land in, so cache hits drive the identical
+/// reply-consumption path as a [`BakeStage::Full`] worker reply — no worker
+/// spawned, no duplicated oracle-composition logic downstream.
+pub fn push_local_reply(reply: WorkerReply) {
+    REPLIES.with(|r| r.borrow_mut().push_back(reply));
+}
+
 /// Take all worker replies received since the last call (drains the queue).
 pub fn drain_replies() -> Vec<WorkerReply> {
     REPLIES.with(|r| r.borrow_mut().drain(..).collect())

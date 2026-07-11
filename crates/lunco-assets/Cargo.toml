@@ -87,6 +87,7 @@ web-sys = { workspace = true, features = [
     "RequestMode",
     "Cache",
     "CacheStorage",
+    "Headers",
 ] }
 # Pure-Rust zstd decoder + tar reader for `web_fetch::unpack_tar_zst`
 # (the web runtime has no `zstd`/filesystem). Native bundle packing uses

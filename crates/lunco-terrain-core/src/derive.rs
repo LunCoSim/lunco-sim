@@ -124,6 +124,37 @@ pub fn ao_map<S: HeightSource>(
     out
 }
 
+/// Relief-correlated albedo scalar in `[0, 1]` (0.5 = neutral) over `region`,
+/// row-major. Convex ground (crater rims, ejecta crests) reads slightly
+/// brighter, concave ground (bowls, hollows) slightly darker, and steep faces
+/// get a touch of mass-wasting brightness — the tonal variation that makes
+/// distant relief legible even where geometry/shading detail has LOD'd away.
+/// Curvature is the central-difference Laplacian normalised by the texel step,
+/// squashed through `tanh` so extreme relief saturates instead of clipping.
+pub fn albedo_map<S: HeightSource>(src: &S, region: &Square, res: usize) -> Vec<f32> {
+    let res = res.max(1);
+    let eps = texel_eps(region, res);
+    let mut out = Vec::with_capacity(res * res);
+    for iz in 0..res {
+        for ix in 0..res {
+            let (x, z) = texel_world(region, res, ix, iz);
+            let h = src.height_at(x, z);
+            let lap = (src.height_at(x + eps, z)
+                + src.height_at(x - eps, z)
+                + src.height_at(x, z + eps)
+                + src.height_at(x, z - eps)
+                - 4.0 * h)
+                / eps;
+            // Concave (positive Laplacian) → darker; convex → brighter.
+            let curve = (-lap * 2.0).tanh() as f32;
+            let slope = src.slope_at(x, z, eps) as f32;
+            let a = 0.5 + 0.30 * curve + 0.10 * (slope / 0.6).min(1.0);
+            out.push(a.clamp(0.0, 1.0));
+        }
+    }
+    out
+}
+
 /// Roughness in `[0, 1]` from slope: flat ground keeps a high regolith base
 /// roughness, steeper faces read rougher. `base` at 0° rising to `1` near the
 /// `steep_rad` slope.
@@ -165,15 +196,18 @@ pub fn pack_surface_rgba8(roughness: &[f32], ao: &[f32], rock: &[f32], hazard: &
 }
 
 /// Encode world-space normals into the standard `[0,1]`-biased RGBA8 normal-map
-/// layout (`rgb = n*0.5 + 0.5`, `a = 1`) the `normal_map` slot decodes.
-pub fn pack_normal_rgba8(normals: &[[f32; 3]]) -> Vec<u8> {
+/// layout (`rgb = n*0.5 + 0.5`) the `normal_map` slot decodes, with the
+/// relief-correlated **albedo scalar riding the alpha channel** (0.5 = neutral;
+/// see [`albedo_map`]). `albedo` may be empty (→ 255, the legacy opaque alpha).
+pub fn pack_normal_rgba8(normals: &[[f32; 3]], albedo: &[f32]) -> Vec<u8> {
     let mut out = Vec::with_capacity(normals.len() * 4);
     let enc = |v: f32| ((v * 0.5 + 0.5).clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-    for n in normals {
+    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    for (i, n) in normals.iter().enumerate() {
         out.push(enc(n[0]));
         out.push(enc(n[1]));
         out.push(enc(n[2]));
-        out.push(255);
+        out.push(albedo.get(i).map_or(255, |&a| q(a)));
     }
     out
 }
@@ -272,8 +306,25 @@ mod tests {
         // surface: R=rough G=ao B=rock A=hazard
         let surf = pack_surface_rgba8(&[1.0], &[0.5], &[], &[0.0]);
         assert_eq!(surf, vec![255, 128, 0, 0]);
-        // normal: up vector → (0.5,1.0,0.5)*255 biased
-        let nrm = pack_normal_rgba8(&[[0.0, 1.0, 0.0]]);
+        // normal: up vector → (0.5,1.0,0.5)*255 biased; empty albedo → opaque
+        let nrm = pack_normal_rgba8(&[[0.0, 1.0, 0.0]], &[]);
         assert_eq!(nrm, vec![128, 255, 128, 255]);
+        // albedo scalar rides the alpha channel
+        let nrm = pack_normal_rgba8(&[[0.0, 1.0, 0.0]], &[0.5]);
+        assert_eq!(nrm, vec![128, 255, 128, 128]);
+    }
+
+    #[test]
+    fn albedo_map_rim_brighter_than_bowl() {
+        let r = region();
+        let a = albedo_map(&Pit, &r, 16);
+        let res = 16;
+        let at = |ix: usize, iz: usize| a[iz * res + ix];
+        // The conical pit's floor is concave (positive Laplacian) → darker than
+        // neutral; flat ground far from the pit stays near neutral.
+        let center = at(res / 2, res / 2);
+        let corner = at(0, 0);
+        assert!(center < corner, "bowl {center} not darker than open ground {corner}");
+        assert!(a.iter().all(|&v| (0.0..=1.0).contains(&v)));
     }
 }

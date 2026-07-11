@@ -458,6 +458,7 @@ impl Plugin for LunCoAvatarPlugin {
         // a host that inserts its own (sandbox) keeps that value.
         app.init_resource::<lunco_core::DragModeActive>();
         app.init_resource::<lunco_core::SpawnToolActive>();
+        app.init_resource::<lunco_core::TerrainToolActive>();
         // Populated by `lunco-workbench` when egui is present; guaranteed here so
         // the keyboard gate (`scene_keyboard_active`) has a resource to read on
         // binaries that use the avatar without the workbench (headless server) —

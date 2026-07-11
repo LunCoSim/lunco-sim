@@ -1,27 +1,37 @@
-//! P3b-runtime: bake the DEM-derived data layers into GPU textures and bind them
-//! onto the terrain's `ShaderMaterial` (`terrain_layered.wgsl` slots).
+//! P3b-runtime: bake the DEM-derived data layers into GPU textures and publish
+//! them for every terrain render path.
 //!
 //! The pure math is [`lunco_terrain_core::derive`]; this is its Bevy half. For
-//! each terrain that carries a retained height field ([`DemHeightField`]) and a
-//! `ShaderMaterial`, we bake — **off the main thread** — two RGBA8 textures:
+//! each terrain that carries a retained height field ([`DemHeightField`]) we
+//! bake — **off the main thread** — two mipped RGBA8 textures:
 //!
 //! - `surface_map` (binding 6/7): R=roughness G=AO B=rockDensity A=hazard, and
-//! - `normal_map`  (binding 8/9): the DEM-derived meso normal,
+//! - `normal_map`  (binding 8/9): the DEM-derived meso normal, with the
+//!   relief-correlated **albedo scalar in alpha**,
 //!
-//! then bind them and raise `weight_rough`/`weight_ao`/`weight_normal` so the
-//! layered shader composites them over the procedural regolith floor. Weights are
-//! reflected params, so they stay live-tunable in the Inspector / via
-//! `SetObjectProperty`.
+//! and publish them as a [`TerrainDerivedMaps`] component. Consumers:
+//!
+//! - the **static-mesh path** ([`apply_derived_layers`]) binds them onto the
+//!   terrain's own `ShaderMaterial` (`terrain_layered.wgsl` slots) and raises
+//!   `weight_rough`/`weight_ao`/`weight_normal`;
+//! - the **streamed-tile path** (`stream_viz`) binds them onto every LOD-tile
+//!   geomorph material — this is what carries crater rims / AO / tonal variation
+//!   at distances where tile geometry and the procedural FBM have LOD'd away.
 //!
 //! Render-gated by data, not `cfg`: the bake only starts when `Assets<Image>`
 //! exists, so the headless server (no render assets) never bakes — it needs only
 //! the collider. The maps are pure functions of the height field, so two peers
 //! that *do* render derive byte-identical textures with nothing to transfer.
 //!
-//! Flow: [`start_derived_bakes`] kicks one async task per terrain →
-//! [`finish_derived_bakes`] turns the finished buffers into `Image`s →
-//! [`apply_derived_layers`] binds them once the material asset is ready (it is
-//! created asynchronously by the USD shader path, so binding retries).
+//! Live edits: a brush/reseed swaps the `DemHeightField` Arc →
+//! [`mark_derived_stale`] drops the published maps and, after a short quiescence
+//! debounce (so a stroke burst coalesces into one bake), the whole chain re-runs.
+//!
+//! Flow: [`mark_derived_stale`] → [`start_derived_bakes`] (one async task per
+//! terrain) → [`finish_derived_bakes`] (upload as `Image`s + publish
+//! [`TerrainDerivedMaps`]) → [`apply_derived_layers`] (static-mesh bind; the
+//! material asset is created asynchronously by the USD shader path, so binding
+//! retries).
 
 use std::sync::Arc;
 
@@ -33,17 +43,19 @@ use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
 
 use lunco_materials::{ParamValue, ShaderMaterial};
 use lunco_terrain_core::{
-    ao_map, hazard_from_slope, normal_map, pack_normal_rgba8, pack_surface_rgba8,
+    albedo_map, ao_map, hazard_from_slope, normal_map, pack_normal_rgba8, pack_surface_rgba8,
     roughness_from_slope, slope_map, Square,
 };
 
 use crate::oracle::SurfaceOracle;
 use crate::stream_viz::DemHeightField;
 
-/// Texels per side of each baked data layer. 512² keeps the one-shot bake
-/// (`res² · ao_dirs · ao_steps` height samples) well under a second off-thread,
-/// while still carrying meso-scale slope/AO/normal the procedural FBM fills under.
-const LAYER_RES: usize = 512;
+/// Texels per side of each baked data layer. 1024² over the moonbase ±4 km
+/// window ≈ 8 m/texel — enough for the ≥15 m crater population that defines the
+/// far-field look; the streamed tiles' geometry + procedural FBM own everything
+/// finer. The bake (`res² · ao_dirs · ao_steps` height samples) stays a few
+/// seconds off-thread and is content-address cached, so it runs once per surface.
+const LAYER_RES: usize = 1024;
 /// AO ray budget per texel (directions × march steps).
 const AO_DIRS: usize = 8;
 const AO_STEPS: usize = 8;
@@ -55,13 +67,39 @@ const ROUGH_STEEP_RAD: f32 = 0.6; // ~34°
 const SAFE_RAD: f32 = 0.2618; // 15°
 const CLIFF_RAD: f32 = 0.5236; // 30°
 
-/// One-shot marker: this terrain's derived layers are bound. Stops re-scanning.
+/// One-shot marker: this terrain's derived layers are bound onto its own
+/// static-mesh `ShaderMaterial`. Stops re-scanning. Streamed tiles don't use
+/// this — they read [`TerrainDerivedMaps`] directly.
 #[derive(Component)]
 pub struct DerivedLayersBuilt;
 
-/// The in-flight off-thread bake for a terrain's derived layers.
+/// The published derived maps for a terrain — GPU handles every terrain render
+/// path binds from. `surface` packs R=roughness G=AO B=rockDensity A=hazard;
+/// `normal` packs the meso normal in RGB and the albedo scalar in A. Removed
+/// (and re-baked) when the surface changes.
+#[derive(Component, Clone)]
+pub struct TerrainDerivedMaps {
+    pub surface: Handle<Image>,
+    pub normal: Handle<Image>,
+    /// Texels per side — lets consumers reason about map vs geometry frequency.
+    pub res: usize,
+}
+
+/// The in-flight off-thread bake for a terrain's derived layers, plus the
+/// identity (Arc pointer) of the oracle it was started against — a re-compose
+/// mid-bake makes the result stale, and [`finish_derived_bakes`] discards it.
 #[derive(Component)]
-struct DerivedBakeTask(Task<DerivedMaps>);
+struct DerivedBakeTask(Task<DerivedMaps>, usize);
+
+/// Debounce marker: the surface changed at `since`; wait for a short quiescent
+/// window before re-baking so a burst of brush strokes coalesces into one bake.
+#[derive(Component)]
+struct DerivedMapsStale {
+    since: f64,
+}
+
+/// Seconds of surface quiescence before a re-bake starts.
+const REBAKE_DEBOUNCE_SECS: f64 = 0.75;
 
 /// Baked RGBA8 buffers + their square resolution, ready to upload as `Image`s.
 struct DerivedMaps {
@@ -70,38 +108,65 @@ struct DerivedMaps {
     normal_rgba: Vec<u8>,
 }
 
-/// GPU handles produced by [`finish_derived_bakes`], awaiting a ready material.
-#[derive(Component)]
-struct DerivedLayerHandles {
-    surface: Handle<Image>,
-    normal: Handle<Image>,
+/// A surface re-compose (brush stroke, crater reseed, spec change) swapped the
+/// `DemHeightField` Arc: drop the published maps (consumers fall back to their
+/// procedural look) and arm the re-bake debounce.
+fn mark_derived_stale(
+    mut commands: Commands,
+    time: Res<Time>,
+    changed: Query<Entity, (Changed<DemHeightField>, With<TerrainDerivedMaps>)>,
+) {
+    for entity in &changed {
+        commands
+            .entity(entity)
+            .try_remove::<(TerrainDerivedMaps, DerivedLayersBuilt)>()
+            .try_insert(DerivedMapsStale { since: time.elapsed_secs_f64() });
+    }
 }
 
-/// Kick one off-thread bake per terrain that has a height field + a
-/// `ShaderMaterial` and hasn't been baked yet. Gated on `Assets<Image>` existing
-/// so the headless server never bakes.
+/// Kick one off-thread bake per terrain that has a height field and no
+/// published maps yet (respecting the edit debounce). Gated on `Assets<Image>`
+/// existing so the headless server never bakes.
 fn start_derived_bakes(
     mut commands: Commands,
     images: Option<Res<Assets<Image>>>,
+    time: Res<Time>,
     q: Query<
-        (Entity, &DemHeightField),
-        (
-            With<MeshMaterial3d<ShaderMaterial>>,
-            Without<DerivedBakeTask>,
-            Without<DerivedLayersBuilt>,
-        ),
+        (Entity, &DemHeightField, Option<&DerivedMapsStale>),
+        (Without<DerivedBakeTask>, Without<TerrainDerivedMaps>),
     >,
 ) {
     if images.is_none() {
         return; // headless: no render assets → no point baking visual layers.
     }
-    for (entity, hf) in &q {
+    let now = time.elapsed_secs_f64();
+    for (entity, hf, stale) in &q {
+        if let Some(stale) = stale {
+            if now - stale.since < REBAKE_DEBOUNCE_SECS {
+                continue; // edits still landing — wait for quiescence.
+            }
+        }
         let oracle: Arc<SurfaceOracle> = hf.0.clone();
-        let task = AsyncComputeTaskPool::get().spawn(async move { bake_or_load(&oracle) });
+        let oracle_ptr = Arc::as_ptr(&hf.0) as usize;
+        let task = AsyncComputeTaskPool::get().spawn(async move {
+            // Off-thread body → own Tracy zone (per-system spans don't reach here).
+            let _span = bevy::log::info_span!("terrain_derived_maps_bake").entered();
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                bake_or_load(&oracle)
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                bake_or_load_web(&oracle).await
+            }
+        });
         // Despawn-safe: a load-time / edit re-instantiation can despawn this
         // terrain between queue time and apply — `try_insert` no-ops on a stale
         // entity instead of panicking the command buffer.
-        commands.entity(entity).try_insert(DerivedBakeTask(task));
+        commands
+            .entity(entity)
+            .try_remove::<DerivedMapsStale>()
+            .try_insert(DerivedBakeTask(task, oracle_ptr));
     }
 }
 
@@ -111,7 +176,8 @@ fn start_derived_bakes(
 /// and the key folds the oracle's modifier `content_key`.
 /// v3: crater profile band-limited + continuous at reach (same crater
 /// `content_key`, different sampled surface).
-const CACHE_FORMAT_VERSION: u64 = 3;
+/// v4: albedo scalar packed into normal-map alpha; LAYER_RES 512 → 1024.
+const CACHE_FORMAT_VERSION: u64 = 4;
 
 /// The derived-layer bake as a [`lunco_precompute::Bake`] — the content-addressed
 /// disk cache (Substrate B) owns the load/store/rebake orchestration; this only
@@ -176,8 +242,62 @@ impl lunco_precompute::Bake for DerivedBake<'_> {
 /// them through. Pure-function bake → byte-identical key across runs and peers, so
 /// a second load (or a second peer) skips the expensive AO march. The `cache://`
 /// dir is shared with the rest of the asset stack.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn bake_or_load(oracle: &SurfaceOracle) -> DerivedMaps {
     lunco_precompute::bake_or_load(&DerivedBake { oracle }, &lunco_assets::cache_dir())
+}
+
+/// Wasm counterpart of [`bake_or_load`]: `lunco_precompute`'s sync fs tier is
+/// native-only (no-op on wasm), so the derived-maps cache reads/writes the async
+/// OPFS blob store at this — already-async — bake seam instead. Same namespace
+/// and key as native; the two maps pack into ONE blob ([`encode_derived_blob`]).
+#[cfg(target_arch = "wasm32")]
+async fn bake_or_load_web(oracle: &SurfaceOracle) -> DerivedMaps {
+    use lunco_precompute::Bake;
+    let bake = DerivedBake { oracle };
+    let key_hex = lunco_precompute::key_hex(bake.key());
+    if let Some(blob) = lunco_storage::opfs_blob::read(DerivedBake::NAMESPACE, &key_hex).await {
+        if let Some(maps) = decode_derived_blob(&blob) {
+            return maps;
+        }
+    }
+    let maps = bake.bake();
+    // Best-effort write-through; a failure only costs a rebake next load.
+    let blob = encode_derived_blob(&maps);
+    wasm_bindgen_futures::spawn_local(async move {
+        lunco_storage::opfs_blob::write(DerivedBake::NAMESPACE, &key_hex, &blob).await;
+    });
+    maps
+}
+
+/// Single-blob OPFS layout for [`DerivedMaps`]: `[res: u32 LE][surface][normal]`
+/// — both maps are `res²·4` RGBA8 bytes, so the lengths derive from `res` and
+/// need no framing.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn encode_derived_blob(maps: &DerivedMaps) -> Vec<u8> {
+    let mut out =
+        Vec::with_capacity(4 + maps.surface_rgba.len() + maps.normal_rgba.len());
+    out.extend_from_slice(&(maps.res as u32).to_le_bytes());
+    out.extend_from_slice(&maps.surface_rgba);
+    out.extend_from_slice(&maps.normal_rgba);
+    out
+}
+
+/// Decode [`encode_derived_blob`]'s layout, validating sizes — `None` (a cache
+/// miss → rebake) on a truncated or foreign blob.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn decode_derived_blob(bytes: &[u8]) -> Option<DerivedMaps> {
+    let res = u32::from_le_bytes(bytes.get(0..4)?.try_into().ok()?) as usize;
+    let len = res.checked_mul(res)?.checked_mul(4)?;
+    let body = bytes.get(4..)?;
+    if body.len() != len.checked_mul(2)? {
+        return None;
+    }
+    Some(DerivedMaps {
+        res,
+        surface_rgba: body[..len].to_vec(),
+        normal_rgba: body[len..].to_vec(),
+    })
 }
 
 /// Pure bake (runs on the task pool): sample the derived layers off the composed
@@ -194,6 +314,7 @@ fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
     let normals = normal_map(oracle, &region, res);
     let slope = slope_map(oracle, &region, res);
     let ao = ao_map(oracle, &region, res, half * AO_RADIUS_FRAC, AO_DIRS, AO_STEPS);
+    let albedo = albedo_map(oracle, &region, res);
 
     let roughness: Vec<f32> =
         slope.iter().map(|&s| roughness_from_slope(s, ROUGH_BASE, ROUGH_STEEP_RAD)).collect();
@@ -203,22 +324,31 @@ fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
     DerivedMaps {
         res,
         surface_rgba: pack_surface_rgba8(&roughness, &ao, &[], &hazard),
-        normal_rgba: pack_normal_rgba8(&normals),
+        normal_rgba: pack_normal_rgba8(&normals, &albedo),
     }
 }
 
-/// Upload finished bakes as linear RGBA8 textures and stash the handles for
-/// binding. Needs `Assets<Image>` (present whenever a bake was started).
+/// Upload finished bakes as linear RGBA8 textures and publish the handles as
+/// [`TerrainDerivedMaps`]. Needs `Assets<Image>` (present whenever a bake was
+/// started). A result baked against a superseded oracle is discarded — the
+/// stale marker chain re-kicks a fresh bake against the current surface.
 fn finish_derived_bakes(
     mut commands: Commands,
-    mut tasks: Query<(Entity, &mut DerivedBakeTask)>,
+    mut tasks: Query<(Entity, &mut DerivedBakeTask, &DemHeightField)>,
     images: Option<ResMut<Assets<Image>>>,
 ) {
     let Some(mut images) = images else { return };
-    for (entity, mut task) in &mut tasks {
+    for (entity, mut task, hf) in &mut tasks {
         let Some(maps) = future::block_on(future::poll_once(&mut task.0)) else {
             continue;
         };
+        if task.1 != Arc::as_ptr(&hf.0) as usize {
+            // Baked against a surface that no longer exists → drop; the absent
+            // TerrainDerivedMaps makes start_derived_bakes re-kick next frame.
+            commands.entity(entity).try_remove::<DerivedBakeTask>();
+            continue;
+        }
+        let res = maps.res;
         let surface = images.add(data_texture(maps.res, maps.surface_rgba));
         let normal = images.add(data_texture(maps.res, maps.normal_rgba));
         // `try_*`: a terrain re-bake / doc-backed scene reload can despawn +
@@ -229,15 +359,16 @@ fn finish_derived_bakes(
         commands
             .entity(entity)
             .try_remove::<DerivedBakeTask>()
-            .try_insert(DerivedLayerHandles { surface, normal });
+            .try_insert(TerrainDerivedMaps { surface, normal, res });
     }
 }
 
-/// Bind the baked layers onto the material once it exists (created async by the
-/// USD shader path → retry until ready), then mark the terrain done.
+/// Bind the baked layers onto the terrain's own static-mesh material once it
+/// exists (created async by the USD shader path → retry until ready), then mark
+/// the terrain done. Streamed tiles bind separately in `stream_viz`.
 fn apply_derived_layers(
     mut commands: Commands,
-    q: Query<(Entity, &DerivedLayerHandles, &MeshMaterial3d<ShaderMaterial>), Without<DerivedLayersBuilt>>,
+    q: Query<(Entity, &TerrainDerivedMaps, &MeshMaterial3d<ShaderMaterial>), Without<DerivedLayersBuilt>>,
     materials: Option<ResMut<Assets<ShaderMaterial>>>,
 ) {
     let Some(mut materials) = materials else { return };
@@ -259,25 +390,74 @@ fn apply_derived_layers(
         if !weights.is_empty() {
             material.set_many(weights);
         }
-        commands
-            .entity(entity)
-            .try_remove::<DerivedLayerHandles>()
-            .try_insert(DerivedLayersBuilt);
-        info!("[terrain-layers] bound DEM-derived surface+normal layers ({}²)", LAYER_RES);
+        commands.entity(entity).try_insert(DerivedLayersBuilt);
+        info!("[terrain-layers] bound DEM-derived surface+normal layers ({}²)", handles.res);
     }
 }
 
-/// A linear (non-sRGB) RGBA8 data texture with linear filtering — these carry
-/// roughness/AO/hazard scalars and an encoded normal, not colour.
+/// Build the full RGBA8 box-filtered mip chain for a square `res²` texture.
+/// Returns the concatenated level data (level 0 first) and the level count.
+/// Mips matter here: these maps are sampled out to the horizon, and without
+/// them distant texels shimmer and alias under the raking lunar sun.
+fn mip_chain_rgba8(base: Vec<u8>, res: usize) -> (Vec<u8>, u32) {
+    let mut all = base;
+    let mut levels = 1u32;
+    let mut prev_res = res;
+    let mut prev_start = 0usize;
+    while prev_res > 1 {
+        let next_res = prev_res / 2;
+        let prev = all[prev_start..prev_start + prev_res * prev_res * 4].to_vec();
+        let mut next = Vec::with_capacity(next_res * next_res * 4);
+        for y in 0..next_res {
+            for x in 0..next_res {
+                for c in 0..4 {
+                    let i = |px: usize, py: usize| prev[(py * prev_res + px) * 4 + c] as u32;
+                    let sum = i(2 * x, 2 * y)
+                        + i(2 * x + 1, 2 * y)
+                        + i(2 * x, 2 * y + 1)
+                        + i(2 * x + 1, 2 * y + 1);
+                    next.push(((sum + 2) / 4) as u8);
+                }
+            }
+        }
+        prev_start = all.len();
+        prev_res = next_res;
+        all.extend_from_slice(&next);
+        levels += 1;
+    }
+    (all, levels)
+}
+
+/// A linear (non-sRGB) RGBA8 data texture with a full mip chain and
+/// trilinear/anisotropic filtering — these carry roughness/AO/hazard scalars,
+/// an encoded normal, and the albedo scalar, and are sampled out to the horizon.
 fn data_texture(res: usize, rgba: Vec<u8>) -> Image {
-    let mut image = Image::new(
+    use bevy::image::ImageSamplerDescriptor;
+    let (data, mip_levels) = mip_chain_rgba8(rgba, res);
+    // `new_uninit` + manual data: `Image::new` debug-asserts data == base level,
+    // but ours carries the whole mip chain.
+    let mut image = Image::new_uninit(
         Extent3d { width: res as u32, height: res as u32, depth_or_array_layers: 1 },
         TextureDimension::D2,
-        rgba,
         TextureFormat::Rgba8Unorm,
         RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
     );
-    image.sampler = ImageSampler::linear();
+    image.data = Some(data);
+    image.texture_descriptor.mip_level_count = mip_levels;
+    // Anisotropy keeps grazing-angle terrain (most of the screen) sharp instead
+    // of mip-smeared. wgpu requires all-linear filters with anisotropy > 1.
+    // WebGL2's anisotropy support is extension-dependent → stay isotropic there.
+    #[cfg(not(target_arch = "wasm32"))]
+    let anisotropy_clamp = 8;
+    #[cfg(target_arch = "wasm32")]
+    let anisotropy_clamp = 1;
+    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        min_filter: bevy::image::ImageFilterMode::Linear,
+        mag_filter: bevy::image::ImageFilterMode::Linear,
+        mipmap_filter: bevy::image::ImageFilterMode::Linear,
+        anisotropy_clamp,
+        ..ImageSamplerDescriptor::linear()
+    });
     image
 }
 
@@ -286,6 +466,38 @@ fn data_texture(res: usize, rgba: Vec<u8>) -> Image {
 pub(crate) fn register(app: &mut App) {
     app.add_systems(
         Update,
-        (start_derived_bakes, finish_derived_bakes, apply_derived_layers),
+        (mark_derived_stale, start_derived_bakes, finish_derived_bakes, apply_derived_layers)
+            .chain(),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derived_blob_round_trips() {
+        let maps = DerivedMaps {
+            res: 2,
+            surface_rgba: (0u8..16).collect(),
+            normal_rgba: (100u8..116).collect(),
+        };
+        let blob = encode_derived_blob(&maps);
+        let back = decode_derived_blob(&blob).expect("decodes");
+        assert_eq!(back.res, maps.res);
+        assert_eq!(back.surface_rgba, maps.surface_rgba);
+        assert_eq!(back.normal_rgba, maps.normal_rgba);
+    }
+
+    #[test]
+    fn derived_blob_rejects_truncation() {
+        let maps = DerivedMaps {
+            res: 2,
+            surface_rgba: vec![0; 16],
+            normal_rgba: vec![0; 16],
+        };
+        let blob = encode_derived_blob(&maps);
+        assert!(decode_derived_blob(&blob[..blob.len() - 1]).is_none());
+        assert!(decode_derived_blob(&blob[..3]).is_none());
+    }
 }

@@ -63,7 +63,8 @@ pub fn web_url(base: &str, address: &str, digest: &str) -> String {
 }
 
 /// Parse a native `luncosim://connect?address=…&digest=…` link. Returns `None`
-/// for a non-`luncosim` scheme, the wrong action, or a missing address. Tolerant
+/// for a non-`luncosim` scheme, the wrong action, a missing address, or a
+/// digest that isn't bare/colon hex (see [`is_hex_digest`]). Tolerant
 /// of an absent digest and of `luncosim:connect?…` (no `//`, as some launchers
 /// hand it over).
 pub fn parse_native(url: &str) -> Option<ConnectLink> {
@@ -90,7 +91,19 @@ pub fn parse_native(url: &str) -> Option<ConnectLink> {
     if link.address.trim().is_empty() {
         return None;
     }
+    // The digest is only ever a SHA-256 cert fingerprint (bare or colon-separated
+    // hex) or absent — reject anything else so a hostile link can't smuggle an
+    // arbitrary string into the cert-pinning path.
+    if !is_hex_digest(&link.digest) {
+        return None;
+    }
     Some(link)
+}
+
+/// True for the digest forms a connect link may carry: empty (CA cert) or
+/// bare/colon-separated hex (a SHA-256 cert fingerprint).
+fn is_hex_digest(s: &str) -> bool {
+    !s.contains("::") && s.chars().all(|c| c.is_ascii_hexdigit() || c == ':')
 }
 
 /// Minimal percent-encoder for the handful of characters that actually need it
@@ -157,6 +170,15 @@ mod tests {
     fn parse_tolerates_no_slashes_and_trailing_slash() {
         let link = parse_native("luncosim:connect/?address=10.0.0.5:5888").unwrap();
         assert_eq!(link.address, "10.0.0.5:5888");
+    }
+
+    #[test]
+    fn parse_rejects_non_hex_digest() {
+        assert!(parse_native("luncosim://connect?address=h:1&digest=nothexz").is_none());
+        assert!(parse_native("luncosim://connect?address=h:1&digest=ab%20cd").is_none());
+        // Colon-separated fingerprint form stays accepted.
+        let link = parse_native("luncosim://connect?address=h:1&digest=AB:CD:12").unwrap();
+        assert_eq!(link.digest, "AB:CD:12");
     }
 
     #[test]

@@ -273,8 +273,18 @@ impl Plugin for LunCoNetworkingPlugin {
         shared::build_networking(app, &self.mode);
         #[cfg(not(feature = "networking"))]
         {
-            let _ = (app, &self.mode);
-            warn!("lunco-networking built without the `networking` feature — no-op");
+            let _ = app;
+            // A requested Host/Connect mode being silently swallowed is a broken
+            // build/launch, not a benign default — say so at error severity.
+            if self.mode.is_some() {
+                error!(
+                    "lunco-networking built without the `networking` feature — requested \
+                     network mode {:?} is IGNORED (rebuild with `--features networking`)",
+                    self.mode
+                );
+            } else {
+                warn!("lunco-networking built without the `networking` feature — no-op");
+            }
         }
     }
 }

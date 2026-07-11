@@ -56,6 +56,12 @@ pub mod opfs_storage;
 #[cfg(target_arch = "wasm32")]
 pub use opfs_storage::OpfsStorage;
 
+/// Async OPFS blob store mirroring `lunco-precompute`'s `<namespace>/<key-hex>`
+/// cache layout — the wasm counterpart of that crate's native-only sync fs
+/// tier. Driven with `spawn_local` (non-`Send` futures; see [`opfs_storage`]).
+#[cfg(target_arch = "wasm32")]
+pub mod opfs_blob;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Errors
 // ─────────────────────────────────────────────────────────────────────────────

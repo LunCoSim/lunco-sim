@@ -154,3 +154,109 @@ pub struct BakeReplyHeader {
     pub half_extent: f32,
     pub native_res: usize,
 }
+
+// ── OPFS grid-cache blob (web) ────────────────────────────────────────────────
+// The web build persists the Full-stage baked grid in OPFS so the next page load
+// skips the GeoTIFF decode + crater stamp entirely. Content-addressed like the
+// other derived-data caches (lunco-precompute): key = version + RAW inputs, so a
+// host-side DEM replacement or a job-param change is simply a miss → rebake.
+
+/// Bump when [`encode_grid_blob`]'s layout or the bake semantics change, so
+/// stale cache entries are never matched (content-addressed → no explicit purge).
+pub const GRID_CACHE_VERSION: u64 = 1;
+
+/// Cache key for a Full-stage DEM bake: FNV-1a over the format version, the raw
+/// `metadata.yaml` bytes, the raw GeoTIFF bytes, and the bincoded [`DemBakeJob`]
+/// (crop/res/stamp params). Content-exact — hashing the ~40 MB tif costs ~tens
+/// of ms, and composes with the conditional-revalidation fetch: a changed DEM →
+/// different tif bytes → different key → miss.
+pub fn grid_cache_key(meta_yaml: &[u8], tif: &[u8], job: &DemBakeJob) -> u64 {
+    let mut h = lunco_hash::Fnv1a::new();
+    h.write_u64(GRID_CACHE_VERSION);
+    h.write_bytes(meta_yaml);
+    h.write_bytes(tif);
+    // Serialization of this plain struct can't fail; fold empty on the
+    // impossible error rather than panicking a cache path.
+    h.write_bytes(&bincode::serialize(job).unwrap_or_default());
+    h.finish()
+}
+
+/// Encode a stamped grid as the OPFS cache blob — a raw little-endian layout
+/// (no serde, like the tile-mesh cache): `[res: u32][half_extent: f64]
+/// [native_res: u32]` then `res²` **f32** heights (halves the blob; metre
+/// heights fit f32 comfortably — the same precision the tile meshes render at).
+pub fn encode_grid_blob(grid: &HeightGrid, native_res: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(16 + grid.heights.len() * 4);
+    out.extend_from_slice(&(grid.res as u32).to_le_bytes());
+    out.extend_from_slice(&(grid.half_extent as f64).to_le_bytes());
+    out.extend_from_slice(&(native_res as u32).to_le_bytes());
+    for &h in &grid.heights {
+        out.extend_from_slice(&(h as f32).to_le_bytes());
+    }
+    out
+}
+
+/// Decode [`encode_grid_blob`]'s layout back into `(grid, native_res)`,
+/// widening heights to f64. `None` on any size mismatch (truncated / foreign
+/// blob) → the caller treats it as a cache miss and rebakes.
+pub fn decode_grid_blob(bytes: &[u8]) -> Option<(HeightGrid, usize)> {
+    let res = u32::from_le_bytes(bytes.get(0..4)?.try_into().ok()?) as usize;
+    let half_extent = f64::from_le_bytes(bytes.get(4..12)?.try_into().ok()?) as f32;
+    let native_res = u32::from_le_bytes(bytes.get(12..16)?.try_into().ok()?) as usize;
+    let body = bytes.get(16..)?;
+    if body.len() != res.checked_mul(res)?.checked_mul(4)? {
+        return None;
+    }
+    let heights = body
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes(c.try_into().expect("chunks_exact(4)")) as f64)
+        .collect();
+    Some((HeightGrid { res, half_extent, heights }, native_res))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grid_blob_round_trips() {
+        let grid = HeightGrid {
+            res: 3,
+            half_extent: 1500.0,
+            heights: vec![0.0, -1.25, 2.5, 3.75, -4.0, 5.5, 6.0, 7.125, -8.25],
+        };
+        let blob = encode_grid_blob(&grid, 4097);
+        let (back, native_res) = decode_grid_blob(&blob).expect("decodes");
+        assert_eq!(back.res, grid.res);
+        assert_eq!(back.half_extent, grid.half_extent);
+        assert_eq!(native_res, 4097);
+        // f32-exact inputs survive the f64→f32→f64 round trip bit-for-bit.
+        assert_eq!(back.heights, grid.heights);
+    }
+
+    #[test]
+    fn grid_blob_rejects_truncation() {
+        let grid =
+            HeightGrid { res: 2, half_extent: 10.0, heights: vec![1.0, 2.0, 3.0, 4.0] };
+        let blob = encode_grid_blob(&grid, 2);
+        assert!(decode_grid_blob(&blob[..blob.len() - 1]).is_none());
+        assert!(decode_grid_blob(&blob[..8]).is_none());
+    }
+
+    #[test]
+    fn grid_cache_key_tracks_every_input() {
+        let job = DemBakeJob {
+            half_window: 2000.0,
+            target_res: 1024,
+            detail_upsample: 2,
+            stamps: Vec::new(),
+        };
+        let base = grid_cache_key(b"meta", b"tif", &job);
+        assert_eq!(base, grid_cache_key(b"meta", b"tif", &job), "deterministic");
+        assert_ne!(base, grid_cache_key(b"meta2", b"tif", &job));
+        assert_ne!(base, grid_cache_key(b"meta", b"tif2", &job));
+        let mut job2 = job.clone();
+        job2.target_res = 2048;
+        assert_ne!(base, grid_cache_key(b"meta", b"tif", &job2));
+    }
+}

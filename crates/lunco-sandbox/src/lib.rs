@@ -73,6 +73,8 @@ mod ui;
 /// `ui`-gated. See [`light_policy`].
 #[cfg(feature = "ui")]
 mod light_policy;
+#[cfg(feature = "ui")]
+mod terrain_horizon;
 /// OS `luncosim://` scheme registration (desktop integration). Native + the
 /// networking feature only — there's nothing to dial without the wire.
 #[cfg(all(feature = "networking", not(target_family = "wasm")))]
@@ -608,14 +610,21 @@ fn replay_scenario_journal_obstacle(
         &applied,
         lunco_twin_journal::DomainKind::ObstacleField,
     );
+    // Coalesce: a batch may carry several SetSpec ops (rapid slider drags); only
+    // the LAST one matters, and each `RegenerateField` is a full terrain re-stamp
+    // + rock re-scatter — so install once and fire one regen.
+    let mut last_spec = None;
     for (id, op) in pending {
         if let Some(new_spec) = lunco_obstacle_field::journal::replay_spec(&op) {
-            // Install the peer's spec + regenerate. Sets the resource directly
-            // (NOT the `UpdateObstacleFieldSpec` command), so no re-record.
-            *spec = new_spec;
-            regen.write(lunco_obstacle_field::RegenerateField);
+            last_spec = Some(new_spec);
         }
         applied.insert(id);
+    }
+    if let Some(new_spec) = last_spec {
+        // Install the peer's spec + regenerate. Sets the resource directly
+        // (NOT the `UpdateObstacleFieldSpec` command), so no re-record.
+        *spec = new_spec;
+        regen.write(lunco_obstacle_field::RegenerateField);
     }
 }
 
@@ -1571,6 +1580,8 @@ impl Plugin for SandboxCorePlugin {
         app.init_resource::<TerrainEditPrimSeq>()
             .add_observer(on_brush_terrain_authored)
             .add_observer(on_flatten_terrain_authored)
+            .add_observer(on_place_crater_authored)
+            .add_observer(on_place_rock_authored)
             .add_observer(on_remove_terrain_edit_authored)
             // Doc-backed crater/rock tuning authors to USD (→ project → regen), instead
             // of the direct stack-mutation path (which handles document-free terrains).
@@ -1588,6 +1599,13 @@ impl Plugin for SandboxCorePlugin {
         // scene open. Pure derived read of `TerrainStreamStatus`.
         #[cfg(feature = "ui")]
         app.add_systems(Update, report_terrain_stream_status);
+
+        // Far-field self-shadow for STREAMED terrains: bake the horizon
+        // heightfield from the surface oracle (no static mesh to rasterize) and
+        // mirror the environment's R8 sun-visibility cache onto the LOD tile
+        // materials. See `terrain_horizon`.
+        #[cfg(feature = "ui")]
+        terrain_horizon::register(app);
 
         // Engine light-handling policy: the locally-possessed vessel's headlights
         // cast shadows, the parked rovers stay cheap (reactive on possession
@@ -1818,7 +1836,11 @@ impl<R: UsdRead> lunco_terrain_surface::LayerAttrSource for UsdLayerAttrs<'_, R>
         self.reader.real_f32(&self.sdf, name)
     }
     fn get_i64(&self, name: &str) -> Option<i64> {
-        self.reader.scalar::<i32>(&self.sdf, name).map(|v| v as i64)
+        // `TryFrom<Value>` is strict per variant, so probe both authored widths:
+        // `int64` (the Inspector authors seeds full-range) and hand-authored `int`.
+        self.reader
+            .scalar::<i64>(&self.sdf, name)
+            .or_else(|| self.reader.scalar::<i32>(&self.sdf, name).map(|v| v as i64))
     }
     fn get_string(&self, name: &str) -> Option<String> {
         self.reader.scalar::<String>(&self.sdf, name)
@@ -1903,8 +1925,9 @@ fn parse_terrain_layer_stack<R: UsdRead>(
 /// Seed the shared [`ObstacleFieldSpec`] from the USD-authored `craters`/`rocks` child
 /// layer prims so the Inspector's "Craters & Rocks" panel opens showing the scene's
 /// ACTUAL values (density, size, ratios) instead of the resource defaults. Mirrors the
-/// `SizeDist` the layer parsers build (`craters` → `new(2, mode, 60, 0.7)`, `rocks` →
-/// `new(0.2, mode, mode*4, 0.6)`) so a subsequent panel edit starts from the authored
+/// `SizeDist` the layer parsers build — `sizeMin`/`sizeMax` attrs with the parsers'
+/// defaults (`craters` → 2/60, `rocks` → 0.2/(mode*4).max(2.5)) and the same
+/// min ≤ mode ≤ max clamp — so a subsequent panel edit starts from the authored
 /// look rather than jumping. Writes the resource only (no `UpdateObstacleFieldSpec`,
 /// no re-stamp — the terrain already built from the same USD stack).
 fn sync_obstacle_spec_from_usd<R: UsdRead>(
@@ -1923,8 +1946,14 @@ fn sync_obstacle_spec_from_usd<R: UsdRead>(
                 spec.craters.depth_ratio = reader.real_f32(&child, "depthRatio").unwrap_or(0.4);
                 spec.craters.rim_height_ratio =
                     reader.real_f32(&child, "rimRatio").unwrap_or(0.18);
-                spec.craters.size = SizeDist::new(2.0, mode, 60.0, 0.7);
-                if let Some(seed) = reader.scalar::<i32>(&child, "seed") {
+                let size_min = reader.real_f32(&child, "sizeMin").unwrap_or(2.0);
+                let size_max = reader.real_f32(&child, "sizeMax").unwrap_or(60.0);
+                spec.craters.size =
+                    SizeDist::new(size_min.min(mode), mode, size_max.max(mode), 0.7);
+                if let Some(seed) = reader
+                    .scalar::<i64>(&child, "seed")
+                    .or_else(|| reader.scalar::<i32>(&child, "seed").map(|v| v as i64))
+                {
                     spec.seed = seed as u64;
                 }
             }
@@ -1933,7 +1962,14 @@ fn sync_obstacle_spec_from_usd<R: UsdRead>(
                 let mode = reader.real_f32(&child, "sizeMode").unwrap_or(0.6);
                 spec.rocks.enabled = density > 0.0;
                 spec.rocks.density = density;
-                spec.rocks.size = SizeDist::new(0.2, mode, (mode * 4.0).max(2.5), 0.6);
+                let size_min = reader.real_f32(&child, "sizeMin").unwrap_or(0.2);
+                let size_max = reader
+                    .real_f32(&child, "sizeMax")
+                    .unwrap_or((mode * 4.0).max(2.5));
+                spec.rocks.size =
+                    SizeDist::new(size_min.min(mode), mode, size_max.max(mode), 0.6);
+                spec.rocks.dynamic_fraction =
+                    reader.real_f32(&child, "dynamicFrac").unwrap_or(0.0);
             }
             _ => {}
         }
@@ -2116,6 +2152,82 @@ fn on_flatten_terrain_authored(
         &mut registry,
         &mut seq,
     );
+}
+
+fn on_place_crater_authored(
+    trigger: On<lunco_terrain_surface::PlaceCrater>,
+    terrains: Query<(&lunco_usd::UsdPrimPath, &TerrainDocument), With<lunco_terrain_surface::DemTerrainSurface>>,
+    registry: Option<ResMut<lunco_usd::UsdDocumentRegistry>>,
+    mut seq: ResMut<TerrainEditPrimSeq>,
+) {
+    let ev = trigger.event();
+    if ev.radius <= 0.0 {
+        return;
+    }
+    let Some(mut registry) = registry else { return };
+    author_terrain_edit(
+        lunco_terrain_surface::EditKind::Crater {
+            center: [ev.x as f64, ev.z as f64],
+            radius: ev.radius as f64,
+            depth: ev.depth_or_default(),
+        },
+        &terrains,
+        &mut registry,
+        &mut seq,
+    );
+}
+
+/// Doc-backed manual rock placement: author ONE `lunco:layer = "rock"` child prim
+/// (x/z/size/seed attrs) on the runtime layer. The stack re-parse picks it up via
+/// the `rock` parser — a single addressable boulder, removable by its prim path.
+fn on_place_rock_authored(
+    trigger: On<lunco_terrain_surface::PlaceRock>,
+    terrains: Query<(&lunco_usd::UsdPrimPath, &TerrainDocument), With<lunco_terrain_surface::DemTerrainSurface>>,
+    registry: Option<ResMut<lunco_usd::UsdDocumentRegistry>>,
+    mut seq: ResMut<TerrainEditPrimSeq>,
+) {
+    let ev = trigger.event();
+    let Some(mut registry) = registry else { return };
+    for (prim_path, td) in &terrains {
+        let doc = lunco_doc::DocumentId::new(td.doc);
+        let name = format!("rock_{}", seq.0);
+        seq.0 += 1;
+        let rock_prim = format!("{}/{name}", prim_path.path.trim_end_matches('/'));
+        if registry
+            .apply(
+                doc,
+                lunco_usd::UsdOp::AddPrim {
+                    edit_target: lunco_usd::LayerId::runtime(),
+                    parent_path: prim_path.path.clone(),
+                    name,
+                    type_name: None,
+                    reference: None,
+                },
+            )
+            .is_err()
+        {
+            continue;
+        }
+        let attrs: [(&str, &str, String); 5] = [
+            ("lunco:layer", "string", "\"rock\"".to_string()),
+            ("x", "float", format!("{}", ev.x)),
+            ("z", "float", format!("{}", ev.z)),
+            ("size", "float", format!("{}", ev.size_or_default())),
+            ("seed", "int64", format!("{}", ev.seed_or_default() as i64)),
+        ];
+        for (attr, ty, value) in attrs {
+            let _ = registry.apply(
+                doc,
+                lunco_usd::UsdOp::SetAttribute {
+                    edit_target: lunco_usd::LayerId::runtime(),
+                    path: rock_prim.clone(),
+                    name: attr.to_string(),
+                    type_name: ty.to_string(),
+                    value,
+                },
+            );
+        }
+    }
 }
 
 /// Remove a doc-backed terrain edit by authoring a `RemovePrim` of its edit prim — the
@@ -2323,15 +2435,26 @@ fn on_obstacle_spec_authored(
         for (path, layer_type) in layers {
             match layer_type.as_str() {
                 "craters" => {
-                    info!("[obstacle-usd] authoring craters density={crater_density} (enabled={}) sizeMode={} → {path} (doc {})", spec.craters.enabled, spec.craters.size.mode, td.doc);
+                    info!("[obstacle-usd] authoring craters density={crater_density} (enabled={}) sizeMode={} seed={:#x} → {path} (doc {})", spec.craters.enabled, spec.craters.size.mode, spec.seed, td.doc);
                     author_layer_attr(&mut registry, doc, &path, "density", "float", crater_density.to_string());
                     author_layer_attr(&mut registry, doc, &path, "sizeMode", "float", spec.craters.size.mode.to_string());
+                    author_layer_attr(&mut registry, doc, &path, "sizeMin", "float", spec.craters.size.min.to_string());
+                    author_layer_attr(&mut registry, doc, &path, "sizeMax", "float", spec.craters.size.max.to_string());
                     author_layer_attr(&mut registry, doc, &path, "depthRatio", "float", spec.craters.depth_ratio.to_string());
                     author_layer_attr(&mut registry, doc, &path, "rimRatio", "float", spec.craters.rim_height_ratio.to_string());
+                    // The u64 seed bit-casts through int64; `parse_crater_layer` casts back
+                    // (`s as u64`), so the full Reseed range round-trips. Without this attr
+                    // every doc-driven re-parse falls back to the parser default and the
+                    // crater layout silently flips between the resource seed and 0xC0FFEE.
+                    author_layer_attr(&mut registry, doc, &path, "seed", "int64", (spec.seed as i64).to_string());
                 }
                 "rocks" => {
                     author_layer_attr(&mut registry, doc, &path, "density", "float", rock_density.to_string());
                     author_layer_attr(&mut registry, doc, &path, "sizeMode", "float", spec.rocks.size.mode.to_string());
+                    author_layer_attr(&mut registry, doc, &path, "sizeMin", "float", spec.rocks.size.min.to_string());
+                    author_layer_attr(&mut registry, doc, &path, "sizeMax", "float", spec.rocks.size.max.to_string());
+                    author_layer_attr(&mut registry, doc, &path, "dynamicFrac", "float", spec.rocks.dynamic_fraction.to_string());
+                    author_layer_attr(&mut registry, doc, &path, "seed", "int64", (spec.seed as i64).to_string());
                 }
                 _ => {}
             }

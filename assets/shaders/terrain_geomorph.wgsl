@@ -51,6 +51,14 @@
 //!@default rough_mix         0.35
 //!@ui      mottle            0 0.6  "Albedo mottle"
 //!@default mottle            0.22
+//!@ui      weight_normal     0 1    "Baked normal-map weight"
+//!@default weight_normal     0
+//!@ui      weight_ao         0 1    "Baked AO weight"
+//!@default weight_ao         0
+//!@ui      weight_tone       0 1    "Baked tonal (albedo) weight"
+//!@default weight_tone       0
+//!@engine  shadow_cache_on
+//!@engine  csm_far
 //!@default morph_start  1.0e20
 //!@default morph_end    1.0e21
 //!@default reveal       1.0
@@ -64,12 +72,39 @@ struct Material {
     fine_bump:         f32,
     rough_mix:         f32,
     mottle:            f32,
+    weight_normal:     f32,  // baked meso normal (fades IN where geometry is coarser than the map)
+    weight_ao:         f32,  // baked ambient occlusion (crater bowls/valleys darken)
+    weight_tone:       f32,  // baked relief-correlated albedo scalar (normal_tex alpha)
+    shadow_cache_on:   f32,  // engine-filled: 1 = far-shadow cache bound and valid
+    csm_far:           f32,  // engine-filled: CSM far bound (m); cache fades in beyond ~half
     morph_start:       f32,  // distance where geomorph toward the parent begins
     morph_end:         f32,  // distance where the parent fully takes over
     reveal:            f32,  // 1 = own geometry; <1 = settling in from the parent lattice
 }
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
 var<uniform> mat: Material;
+
+// Baked derived maps (lunco-terrain-surface derived_layers; whole-DEM planar
+// UV). `None` binds Bevy's fallback white — every read is weight-gated so an
+// unbound map contributes nothing. surface: R=roughness G=AO B=rockDens
+// A=hazard; normal: RGB = world normal biased, A = albedo scalar (0.5 neutral).
+@group(#{MATERIAL_BIND_GROUP}) @binding(6)
+var surface_tex: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(7)
+var surface_smp: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(8)
+var normal_tex: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(9)
+var normal_smp: sampler;
+
+// Pre-baked horizon shadow cache (R8Unorm 0..1 sun visibility, whole-DEM
+// planar UV — same texture the static regolith/layered shaders sample). One
+// fetch replaces the 48-step ray-march; gated by `shadow_cache_on` and blended
+// in only beyond the CSM range, so near tiles keep mesh-accurate cascades.
+@group(#{MATERIAL_BIND_GROUP}) @binding(10)
+var shadow_cache: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(11)
+var shadow_cache_sampler: sampler;
 
 // --- 3D value noise + FBM (ported from regolith.wgsl) --------------------
 
@@ -125,10 +160,11 @@ fn ramp(x: f32, lo: f32, hi: f32) -> f32 {
 
 fn aa_fade(scale: f32, pw: f32) -> f32 {
     let px_per_period = 1.0 / max(scale * pw, 1e-6);
-    // Gentler, wider ramp than the original (6→24): start fading only once a period
-    // shrinks under ~3 px and fade out slowly, so detail reaches much farther and
-    // the near/far transition stops reading as a hard "detail bubble".
-    return saturate((px_per_period - 3.0) / 22.0);
+    // Fade a layer out once its period shrinks under ~3 px. The ramp used to be
+    // very wide (/22 — FBM carried to ~1 km because nothing else textured the
+    // far field, at real fragment cost); now the baked derived maps take over
+    // beyond the near field, so the procedural layers can hand off much sooner.
+    return saturate((px_per_period - 3.0) / 9.0);
 }
 
 // NOTE (Phase 1, 2026-07-05): the fragment previously faked crater + rock relief
@@ -254,11 +290,29 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // control flow). Drives the footprint-based detail fades.
     let pw = length(fwidth(p));
 
+    // Baked derived maps (sampled unconditionally — uniform control flow; the
+    // weight gates make an unbound/fallback map a no-op). UVs are DEM-global.
+    var map_n = vec4(0.5, 1.0, 0.5, 0.5);
+    var map_s = vec4(0.6, 1.0, 0.0, 0.0);
+#ifdef VERTEX_UVS_A
+    map_n = textureSample(normal_tex, normal_smp, in.uv);
+    map_s = textureSample(surface_tex, surface_smp, in.uv);
+#endif
+
     // All macro/meso SHAPE comes from the mesh (DEM + crater geometry) and from
     // scattered rock meshes — the fragment no longer fakes relief. It adds only
     // believable normal-only micro-texture (features small enough that the absence
     // of parallax is imperceptible) + lunar photometry + broad albedo variation.
     var n = normalize(in.world_normal);
+
+    // Baked meso normal: where tile geometry has LOD'd coarser than the map's
+    // texel pitch (far tiles), the map carries the crater rims/slopes the mesh
+    // no longer has. weight_normal is set per LOD depth by the streamer (0 on
+    // fine near tiles whose geometry out-resolves the map).
+    if (mat.weight_normal > 0.0) {
+        let n_baked = normalize(map_n.xyz * 2.0 - 1.0);
+        n = normalize(mix(n, n_baked, mat.weight_normal));
+    }
 
     //   • meso hummocks — the ~0.7–2 m relief band. The geometry stack carries
     //     craters ≥ 0.4 m as real relief, but between discrete craterlets real
@@ -316,6 +370,18 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         albedo *= 1.0 + (meso_h - 0.5) * 0.10 * meso_fade;
     }
 
+    // Baked relief tone: rims/ejecta brighter, bowls darker (normal_tex alpha,
+    // 0.5 = neutral). This is what keeps distant relief legible after the
+    // procedural layers and even the mesh detail have faded out.
+    albedo *= 1.0 + (map_n.a - 0.5) * (0.6 * mat.weight_tone);
+
+    // Baked ambient occlusion: crater interiors and valley floors receive less
+    // sky/bounce light. Darkens the diffuse base rather than the direct sun
+    // term (lit_n owns that), which visually matches at the distances where
+    // this weight is raised.
+    let map_ao = mix(1.0, 0.4 + 0.6 * map_s.g, mat.weight_ao);
+    albedo *= map_ao;
+
     // --- Lunar photometry: the actual realism lever -----------------------
     // Lommel-Seeliger + opposition surge (retroreflective backscatter) from the
     // scene sun — read from the light bindings, so streamed tiles get it WITHOUT
@@ -339,7 +405,28 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let n_geo = normalize(in.world_normal);
     let fill = base_albedo * (1.2 + 1.0 * max(n_geo.y, 0.0));
 
-    // Regolith is rough and non-metallic; rough_mix nudges it.
-    let roughness = clamp(0.6 + rough_mix * 0.4, 0.05, 1.0);
-    return lit_n(in, is_front, n, albedo, roughness, 0.0, fill);
+    // Regolith is rough and non-metallic; rough_mix nudges it, and the baked
+    // slope-derived roughness (surface_tex R) leans in where the maps are live.
+    let roughness =
+        clamp(mix(0.6 + rough_mix * 0.4, map_s.r, 0.35 * mat.weight_ao), 0.05, 1.0);
+    var color = lit_n(in, is_front, n, albedo, roughness, 0.0, fill);
+
+    // Far-field terrain self-shadow: beyond the sun cascades (tiles are
+    // NotShadowCaster — CSM only carries object shadows onto them) sample the
+    // pre-baked sun-visibility cache. This is what stops distant crater relief
+    // reading as flat unshaded mounds.
+#ifdef VERTEX_UVS_A
+    if (mat.shadow_cache_on > 0.5) {
+        let dist = distance(view.world_position, p);
+        var blend = 1.0;
+        if (mat.csm_far > 0.0) {
+            blend = smoothstep(mat.csm_far * 0.5, mat.csm_far * 0.9, dist);
+        }
+        if (blend > 0.0) {
+            let vis = textureSampleLevel(shadow_cache, shadow_cache_sampler, in.uv, 0.0).r;
+            color = vec4(color.rgb * mix(1.0, vis, blend), color.a);
+        }
+    }
+#endif
+    return color;
 }

@@ -29,6 +29,14 @@
 //!@default rough_mix         0.35
 //!@ui      mottle            0 0.6  "Albedo mottle"
 //!@default mottle            0.22
+//!@ui      weight_normal     0 1    "Baked normal-map weight"
+//!@default weight_normal     0
+//!@ui      weight_ao         0 1    "Baked AO weight"
+//!@default weight_ao         0
+//!@ui      weight_tone       0 1    "Baked tonal (albedo) weight"
+//!@default weight_tone       0
+//!@engine  shadow_cache_on
+//!@engine  csm_far
 //!@default morph_start  1.0e20
 //!@default morph_end    1.0e21
 //!@default reveal       1.0
@@ -42,12 +50,35 @@ struct Material {
     fine_bump:         f32,
     rough_mix:         f32,
     mottle:            f32,
+    weight_normal:     f32,  // baked meso normal (fades IN where geometry is coarser than the map)
+    weight_ao:         f32,  // baked ambient occlusion (crater bowls/valleys darken)
+    weight_tone:       f32,  // baked relief-correlated albedo scalar (normal_tex alpha)
+    shadow_cache_on:   f32,  // engine-filled: 1 = far-shadow cache bound and valid
+    csm_far:           f32,  // engine-filled: CSM far bound (m); cache fades in beyond ~half
     morph_start:       f32,  // distance where geomorph toward the parent begins
     morph_end:         f32,  // distance where the parent fully takes over
     reveal:            f32,  // 1 = own geometry; <1 = settling in from the parent lattice
 }
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
 var<uniform> mat: Material;
+
+// Baked derived maps (see terrain_geomorph.wgsl) — on web these matter even
+// more: they are the ONLY texture detail once the cheap 1-octave FBM fades.
+@group(#{MATERIAL_BIND_GROUP}) @binding(6)
+var surface_tex: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(7)
+var surface_smp: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(8)
+var normal_tex: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(9)
+var normal_smp: sampler;
+
+// Pre-baked horizon shadow cache (see terrain_geomorph.wgsl). Off by default
+// on web (config gates the bake) — the branch is dead until enabled.
+@group(#{MATERIAL_BIND_GROUP}) @binding(10)
+var shadow_cache: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(11)
+var shadow_cache_sampler: sampler;
 
 // --- 2D value noise + FBM (optimized for WebGL) -------------------------
 
@@ -91,7 +122,8 @@ fn ramp(x: f32, lo: f32, hi: f32) -> f32 {
 
 fn aa_fade(scale: f32, pw: f32) -> f32 {
     let px_per_period = 1.0 / max(scale * pw, 1e-6);
-    return saturate((px_per_period - 3.0) / 22.0);
+    // Tight ramp — the baked derived maps take over beyond the near field.
+    return saturate((px_per_period - 3.0) / 9.0);
 }
 
 // --- height-field bump ---------------------------------------------------
@@ -191,7 +223,19 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let p = in.world_position.xyz;
     let pw = length(fwidth(p));
 
+    // Baked derived maps (weight-gated; see terrain_geomorph.wgsl).
+    var map_n = vec4(0.5, 1.0, 0.5, 0.5);
+    var map_s = vec4(0.6, 1.0, 0.0, 0.0);
+#ifdef VERTEX_UVS_A
+    map_n = textureSample(normal_tex, normal_smp, in.uv);
+    map_s = textureSample(surface_tex, surface_smp, in.uv);
+#endif
+
     var n = normalize(in.world_normal);
+    if (mat.weight_normal > 0.0) {
+        let n_baked = normalize(map_n.xyz * 2.0 - 1.0);
+        n = normalize(mix(n, n_baked, mat.weight_normal));
+    }
 
     let meso_scale = max(mat.mid_scale, 0.02);
     let meso_fade  = aa_fade(meso_scale, pw);
@@ -235,6 +279,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         albedo *= 1.0 + (meso_h - 0.5) * 0.10 * meso_fade;
     }
 
+    // Baked relief tone + ambient occlusion (see terrain_geomorph.wgsl).
+    albedo *= 1.0 + (map_n.a - 0.5) * (0.6 * mat.weight_tone);
+    let map_ao = mix(1.0, 0.4 + 0.6 * map_s.g, mat.weight_ao);
+    albedo *= map_ao;
+
     let L = normalize(sun_to_light());
     let V = normalize(view.world_position - p);
     let lunar_k = regolith_factor(n, L, V);
@@ -244,6 +293,24 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let n_geo = normalize(in.world_normal);
     let fill = base_albedo * (1.2 + 1.0 * max(n_geo.y, 0.0));
 
-    let roughness = clamp(0.6 + rough_mix * 0.4, 0.05, 1.0);
-    return lit_n(in, is_front, n, albedo, roughness, 0.0, fill);
+    let roughness =
+        clamp(mix(0.6 + rough_mix * 0.4, map_s.r, 0.35 * mat.weight_ao), 0.05, 1.0);
+    var color = lit_n(in, is_front, n, albedo, roughness, 0.0, fill);
+
+    // Far-field terrain self-shadow via the pre-baked visibility cache (see
+    // terrain_geomorph.wgsl). Dead branch while shadow_cache_on == 0.
+#ifdef VERTEX_UVS_A
+    if (mat.shadow_cache_on > 0.5) {
+        let dist = distance(view.world_position, p);
+        var blend = 1.0;
+        if (mat.csm_far > 0.0) {
+            blend = smoothstep(mat.csm_far * 0.5, mat.csm_far * 0.9, dist);
+        }
+        if (blend > 0.0) {
+            let vis = textureSampleLevel(shadow_cache, shadow_cache_sampler, in.uv, 0.0).r;
+            color = vec4(color.rgb * mix(1.0, vis, blend), color.a);
+        }
+    }
+#endif
+    return color;
 }

@@ -101,6 +101,16 @@ pub struct HeightField {
 }
 
 impl HeightField {
+    /// Build a heightfield directly from a sampled grid — the mesh-less path
+    /// for STREAMED terrains, whose ground truth is an analytic height oracle
+    /// rather than a single `Mesh3d` (the caller samples the oracle row-major
+    /// over (x, z)). `min`/`size` are the terrain-local XZ bounds the grid
+    /// covers, exactly like the mesh-bake path derives from vertex bounds.
+    pub fn from_grid(resolution: u32, min: Vec2, size: Vec2, heights: Arc<Vec<f32>>) -> Self {
+        debug_assert_eq!(heights.len(), (resolution * resolution) as usize);
+        Self { resolution, min, size: size.max(Vec2::splat(f32::EPSILON)), heights }
+    }
+
     /// Bilinear height at grid coords `g` (clamped to the grid).
     fn height_at(&self, g: Vec2) -> f32 {
         let r = self.resolution as usize;
@@ -520,7 +530,21 @@ fn install_horizon_map(
             mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
         }
     }
+    install_horizon_map_from_field(commands, images, entity, field, millis);
+}
 
+/// Mesh-less install: uploads the R32Float heightfield texture and inserts the
+/// `HorizonMap`, WITHOUT touching any mesh UVs. Public for the streamed-terrain
+/// path (LOD tiles already carry DEM-global planar UVs matching the field's
+/// `min`/`size` addressing) — the shadow-cache bake and entity shading then run
+/// off this map exactly as they do for a static-mesh terrain.
+pub fn install_horizon_map_from_field(
+    commands: &mut Commands,
+    images: &mut Assets<Image>,
+    entity: Entity,
+    field: HeightField,
+    millis: u128,
+) {
     let bytes: Vec<u8> = field.heights.iter().flat_map(|h| h.to_le_bytes()).collect();
     let image = images.add(Image::new(
         Extent3d { width: field.resolution, height: field.resolution, depth_or_array_layers: 1 },

@@ -10,7 +10,11 @@ description = "Local high-detail DEM ground terrain (surface scale): heightfield
 # (std + serde only), shared with the cube-sphere planetary tiler. This crate is
 # the PLANAR DEM adapter: it adds render/physics/big_space/DEM layers on top.
 lunco-terrain-core = { path = "../lunco-terrain-core" }
-bevy = { workspace = true, features = ["bevy_pbr", "bevy_mesh", "bevy_render", "bevy_light"] }
+# `zstd_rust`: lunco-materials (a dep) turns on `tonemapping_luts` →
+# `bevy_image/zstd`, which demands a backend choice; the workspace build gets
+# `zstd_rust` unified in from lunco-usd-bevy, but a per-crate `cargo check/test
+# -p lunco-terrain-surface` doesn't — same per-crate self-heal as lunco-usd-bevy.
+bevy = { workspace = true, features = ["bevy_pbr", "bevy_mesh", "bevy_render", "bevy_light", "zstd_rust"] }
 lunco-core = { path = "../lunco-core" }
 # Read-side query seam: register a `TerrainHeight` provider into the shared
 # `ApiQueryRegistry` so scripts/HTTP/MCP can sample the DEM height field via
@@ -57,6 +61,8 @@ serde_json = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { workspace = true }
+# `spawn_local` drives the non-`Send` OPFS futures (grid/derived-map caches).
+wasm-bindgen-futures = { workspace = true }
 
 [lints]
 workspace = true

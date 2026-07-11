@@ -33,11 +33,16 @@ use crate::scenario::{cid_for_content, scenario_revision, ScenarioAsset, Scenari
 #[derive(Resource, Default)]
 struct AssignedSessions {
     by_peer: std::collections::HashMap<u64, SessionId>,
+    /// Client entity → its connection peer key, so a disconnect can still
+    /// resolve (and free) the session when the despawning client entity no
+    /// longer exposes `RemoteId` by the time the observer runs.
+    by_entity: std::collections::HashMap<Entity, u64>,
 }
 
 impl AssignedSessions {
     /// Allocate (or return the existing) server session for a connection key.
-    fn assign(&mut self, peer_key: u64) -> SessionId {
+    fn assign(&mut self, peer_key: u64, entity: Entity) -> SessionId {
+        self.by_entity.insert(entity, peer_key);
         *self
             .by_peer
             .entry(peer_key)
@@ -46,7 +51,11 @@ impl AssignedSessions {
     fn get(&self, peer_key: u64) -> Option<SessionId> {
         self.by_peer.get(&peer_key).copied()
     }
+    fn peer_key_of(&self, entity: Entity) -> Option<u64> {
+        self.by_entity.get(&entity).copied()
+    }
     fn remove(&mut self, peer_key: u64) -> Option<SessionId> {
+        self.by_entity.retain(|_, k| *k != peer_key);
         self.by_peer.remove(&peer_key)
     }
 }
@@ -486,7 +495,7 @@ fn on_server_connected(
     // is used only as the deterministic per-connection *lookup key*, never as the
     // authority id (review H4/H5).
     let peer_key = peer_to_session(peer).0;
-    let session = assigned.assign(peer_key);
+    let session = assigned.assign(peer_key, trigger.entity);
     let token = lunco_core::ids::random_token();
 
     // Initialize client session in RBAC registry as an *authenticated* Observer with
@@ -575,6 +584,7 @@ fn on_server_connected(
 }
 
 /// Client dropped: free everything its session owned (G5) and remove its profile.
+#[allow(clippy::too_many_arguments)]
 fn on_server_disconnected(
     trigger: On<Add, Disconnected>,
     q_client: Query<&RemoteId, With<ClientOf>>,
@@ -585,28 +595,45 @@ fn on_server_disconnected(
     mut assigned: ResMut<AssignedSessions>,
     mut view_centers: ResMut<ViewCenters>,
     mut interest: ResMut<PeerInterest>,
+    mut pending_offers: ResMut<crate::scenario_sync::PendingAssetOffers>,
+    mut pending_requests: ResMut<crate::scenario_sync::PendingAssetRequests>,
+    mut serve_tasks: ResMut<crate::scenario_sync::AssetServeTasks>,
 ) {
-    if let Ok(remote) = q_client.get(trigger.entity) {
-        let peer_key = peer_to_session(remote.0).0;
-        // Resolve via the server-assigned map (same id authority used everywhere),
-        // then drop the mapping so a reconnecting peer key gets a fresh session.
-        let Some(session) = assigned.remove(peer_key) else {
-            return;
-        };
-        let freed = registry.release_session(session);
-        profiles.profiles.remove(&session.0);
-        rbac.sessions.remove(&session.0);
-        dedup.forget(session);
-        // Drop AOI bookkeeping so neither map leaks across reconnects (a fresh
-        // session id is minted on rejoin anyway).
-        view_centers.0.remove(&session);
-        interest.0.remove(&session);
-        info!(
-            "[net] client disconnected: session={} freed {} entities, profiles updated",
-            session.0,
-            freed.len()
-        );
-    }
+    // Resolve the connection key via `RemoteId` when it's still present, else via
+    // the entity itself — a despawning client entity may have lost `RemoteId`
+    // before this observer runs, and its session must be freed regardless.
+    let peer_key = q_client
+        .get(trigger.entity)
+        .map(|remote| peer_to_session(remote.0).0)
+        .ok()
+        .or_else(|| assigned.peer_key_of(trigger.entity));
+    let Some(peer_key) = peer_key else {
+        return;
+    };
+    // Resolve via the server-assigned map (same id authority used everywhere),
+    // then drop the mapping so a reconnecting peer key gets a fresh session.
+    let Some(session) = assigned.remove(peer_key) else {
+        return;
+    };
+    let freed = registry.release_session(session);
+    profiles.profiles.remove(&session.0);
+    rbac.sessions.remove(&session.0);
+    dedup.forget(session);
+    // Drop AOI bookkeeping so neither map leaks across reconnects (a fresh
+    // session id is minted on rejoin anyway).
+    view_centers.0.remove(&session);
+    interest.0.remove(&session);
+    // Sweep queued asset-transfer work from/for the vanished session so a stale
+    // offer isn't ingested and a stale request isn't served (or, once its serve
+    // task completes, sent to whichever peer inherits the connection slot).
+    pending_offers.0.retain(|(s, _)| *s != session);
+    pending_requests.0.retain(|(s, _)| *s != session);
+    serve_tasks.0.retain(|(s, _)| *s != session);
+    info!(
+        "[net] client disconnected: session={} freed {} entities, profiles updated",
+        session.0,
+        freed.len()
+    );
 }
 
 /// Drain the broadcast outbox (ownership, profiles, spawns, despawns, cursors,
@@ -1039,7 +1066,17 @@ fn ingest_asset_offers(
         return; // no active twin to ingest into; drop the batch
     };
     let mut wrote = false;
-    for offer in batch {
+    for (session, offer) in batch {
+        // Defense in depth: the inbox drain already caps offer size, but this is
+        // the last gate before bytes hit the shared twin's disk.
+        if offer.data.len() > crate::scenario_sync::MAX_ASSET_OFFER_BYTES {
+            warn!(
+                "[net] rejected oversized asset offer from {session}: {} bytes (cap {})",
+                offer.data.len(),
+                crate::scenario_sync::MAX_ASSET_OFFER_BYTES
+            );
+            continue;
+        }
         // Fail-closed: the bytes must hash to the advertised CID (never trust a
         // wire-supplied path/bytes pairing).
         if crate::scenario::cid_for_content(&offer.data).to_bytes() != offer.cid {

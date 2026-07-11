@@ -29,6 +29,7 @@ use lunco_obstacle_field::grid_mesh;
 use lunco_materials::{ParamValue, ShaderMaterial, ATTRIBUTE_MORPH_TARGET};
 use lunco_terrain_core::{measure_node_error, HeightSource};
 
+use crate::derived_layers::TerrainDerivedMaps;
 use crate::oracle::SurfaceOracle;
 use crate::quadtree::{QuadCoord, Quadtree, Selected, Square};
 
@@ -201,6 +202,14 @@ pub struct LodTiles {
     /// resident tile set is already correct and the whole reselection is skipped —
     /// the idle-camera fast path (see [`update_lod_tiles`]). `None` = never selected.
     last_sig: Option<u64>,
+    /// `pixel_error` that satisfied the tile budget on the last selection — the
+    /// budget-fit warm start. The coarsening loop re-runs a full
+    /// `select_with_error` walk per ×1.6 step, and always starting from the
+    /// configured base re-paid every failing rung (~9 walks/frame on a loaded
+    /// scene). The next selection starts ONE step below this (clamped to the
+    /// base) so steady state costs ~1-2 walks and quality still recovers, a
+    /// rung per selection, when the load drops. `None` = never fitted.
+    last_fit_px: Option<f64>,
 }
 
 impl LodTiles {
@@ -274,13 +283,15 @@ fn node_overlaps_aabb(coord: QuadCoord, root_half_extent: f64, aabb: [f64; 4]) -
 #[derive(Component)]
 pub struct LodTileOf(pub Entity);
 
-/// Cached one geomorph material per (mode, depth, morph-band bucket) so tile
-/// churn at LOD boundaries doesn't allocate a new `ShaderMaterial` every spawn.
-/// With error-driven selection a depth's morph band varies per parent node, so
-/// bands snap to a coarse log-lattice bucket — near-identical bands share one
-/// batched material, genuinely different parent ranges get their own.
+/// Cached one geomorph material per (terrain, mode, depth, morph-band bucket)
+/// so tile churn at LOD boundaries doesn't allocate a new `ShaderMaterial`
+/// every spawn. With error-driven selection a depth's morph band varies per
+/// parent node, so bands snap to a coarse log-lattice bucket — near-identical
+/// bands share one batched material, genuinely different parent ranges get
+/// their own. Keyed by terrain because each terrain's materials carry its own
+/// baked derived-map handles.
 #[derive(Resource, Default)]
-pub struct LodMaterials(HashMap<(TerrainShaderMode, u32, u32), Handle<ShaderMaterial>>);
+pub struct LodMaterials(HashMap<(Entity, TerrainShaderMode, u32, u32), Handle<ShaderMaterial>>);
 
 /// Quantise a morph-band end onto the shared bucket lattice. `u32::MAX` = the
 /// "never morphs" root sentinel.
@@ -432,6 +443,59 @@ struct BakedTile {
 #[derive(Component, Default)]
 pub struct PendingTileBakes(HashMap<QuadCoord, (u32, Task<BakedTile>)>);
 
+/// Far-field sun-shadow wiring for a STREAMED terrain's tiles: the pre-baked
+/// R8 sun-visibility texture (lunco-environment's horizon shadow cache) plus
+/// the CSM far bound the shader blends in beyond. Written by the app glue
+/// (which can see both the environment's `HorizonShadowCache` and this crate);
+/// consumed by the tile materials. `on == 0` disables sampling (params written
+/// so a cache that goes stale can be switched off without touching handles).
+#[derive(Component, Clone)]
+pub struct TileShadowCache {
+    pub image: Handle<Image>,
+    pub on: f32,
+    pub csm_far: f32,
+}
+
+/// Bind a terrain's far-shadow cache onto one tile material (Lit only).
+fn apply_shadow_cache_to_material(m: &mut ShaderMaterial, cache: &TileShadowCache) {
+    m.shadow_cache = Some(cache.image.clone());
+    m.set_many([
+        ("shadow_cache_on", ParamValue::F32(cache.on)),
+        ("csm_far", ParamValue::F32(cache.csm_far)),
+    ]);
+}
+
+/// Per-depth weights for the baked derived maps, from the ratio of the tile's
+/// vertex pitch to the map's texel pitch (`r = map_res / (2^depth · quads)`,
+/// window-size independent):
+///
+/// - `weight_normal` fades IN where the tile geometry is COARSER than the map
+///   (far tiles — the map carries the crater rims the mesh LOD'd away) and OFF
+///   where fine near geometry out-resolves the map (blending the coarser map
+///   there would only blur real relief).
+/// - `weight_ao` / `weight_tone` stay partially on everywhere (bowls genuinely
+///   receive less sky light at any range) and saturate on coarse tiles.
+fn tile_map_weights(depth: u32, map_res: usize) -> (f32, f32, f32) {
+    let r = map_res as f32 / (((1u32 << depth.min(24)) * (TILE_RES as u32 - 1)) as f32);
+    let w_normal = ((r - 0.75) / 1.5).clamp(0.0, 1.0);
+    let w_ao = (0.35 + (r - 0.5) * 0.4).clamp(0.35, 1.0);
+    let w_tone = (0.5 + (r - 0.5) * 0.35).clamp(0.5, 1.0);
+    (w_normal, w_ao, w_tone)
+}
+
+/// Bind a terrain's baked derived maps + per-depth weights onto one tile
+/// material (Lit mode only — the flat/debug shader declares no map bindings).
+fn apply_maps_to_material(m: &mut ShaderMaterial, maps: &TerrainDerivedMaps, depth: u32) {
+    m.surface_map = Some(maps.surface.clone());
+    m.normal_map = Some(maps.normal.clone());
+    let (w_normal, w_ao, w_tone) = tile_map_weights(depth, maps.res);
+    m.set_many([
+        ("weight_normal", ParamValue::F32(w_normal)),
+        ("weight_ao", ParamValue::F32(w_ao)),
+        ("weight_tone", ParamValue::F32(w_tone)),
+    ]);
+}
+
 /// Build a tile `ShaderMaterial` for a `(mode, depth)` with its morph band. The
 /// geomorph vertex stage is shared; the fragment + colour come from the mode.
 fn build_tile_material(
@@ -440,6 +504,8 @@ fn build_tile_material(
     morph_end: f32,
     depth: u32,
     shader: &Handle<Shader>,
+    maps: Option<&TerrainDerivedMaps>,
+    shadow: Option<&TileShadowCache>,
     materials: &mut Assets<ShaderMaterial>,
 ) -> Handle<ShaderMaterial> {
     let mut m = ShaderMaterial::default();
@@ -452,7 +518,14 @@ fn build_tile_material(
     match mode {
         TerrainShaderMode::DebugLod => m.set("base_color", ParamValue::Vec3(lod_rgb(depth))),
         TerrainShaderMode::Plain => m.set("base_color", ParamValue::Vec3([0.35, 0.34, 0.32])),
-        TerrainShaderMode::Lit => {}
+        TerrainShaderMode::Lit => {
+            if let Some(maps) = maps {
+                apply_maps_to_material(&mut m, maps, depth);
+            }
+            if let Some(shadow) = shadow {
+                apply_shadow_cache_to_material(&mut m, shadow);
+            }
+        }
     }
     materials.add(m)
 }
@@ -472,6 +545,8 @@ fn spawn_tile(
     morph_end: f32,
     mode: TerrainShaderMode,
     shader: &Handle<Shader>,
+    maps: Option<&TerrainDerivedMaps>,
+    shadow: Option<&TileShadowCache>,
     materials: &mut Assets<ShaderMaterial>,
     lod_mats: &mut LodMaterials,
 ) -> (Entity, Handle<ShaderMaterial>) {
@@ -480,11 +555,11 @@ fn spawn_tile(
     // parent ranges share one batched material (`morph_start` is derived from the
     // snapped end at the fixed 0.7 ratio).
     let (ms, me, bucket) = snap_band(morph_end);
-    let mat = if let Some(h) = lod_mats.0.get(&(mode, depth, bucket)) {
+    let mat = if let Some(h) = lod_mats.0.get(&(terrain, mode, depth, bucket)) {
         h.clone()
     } else {
-        let h = build_tile_material(mode, ms, me, depth, shader, materials);
-        lod_mats.0.insert((mode, depth, bucket), h.clone());
+        let h = build_tile_material(mode, ms, me, depth, shader, maps, shadow, materials);
+        lod_mats.0.insert((terrain, mode, depth, bucket), h.clone());
         h
     };
     let ent = commands
@@ -598,6 +673,8 @@ pub fn update_lod_tiles(
         &mut PendingTileBakes,
         &mut TerrainNodeErrors,
         Option<&TerrainShaderMode>,
+        Option<&TerrainDerivedMaps>,
+        Option<&TileShadowCache>,
     )>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ShaderMaterial>>,
@@ -620,7 +697,9 @@ pub fn update_lod_tiles(
     // Per-frame bake budget shared across all terrains (amortise scale changes).
     let mut bake_budget = cfg.bakes_per_frame.max(1);
 
-    for (terrain, t_gt, hf, viz, mut tiles, mut pending, mut errs, mode_opt) in &mut terrains {
+    for (terrain, t_gt, hf, viz, mut tiles, mut pending, mut errs, mode_opt, maps, shadow) in
+        &mut terrains
+    {
         let mut mode = mode_opt.copied().unwrap_or_else(TerrainShaderMode::platform_default);
         if !enable_shaders {
             mode = TerrainShaderMode::Plain;
@@ -644,11 +723,13 @@ pub fn update_lod_tiles(
                 // Each tile carries its own morph band; rebuild/fetch the matching
                 // band-bucket material under the new mode.
                 let (ms, me, bucket) = snap_band(morph_end);
-                let handle = if let Some(h) = lod_mats.0.get(&(mode, depth, bucket)) {
+                let handle = if let Some(h) = lod_mats.0.get(&(terrain, mode, depth, bucket)) {
                     h.clone()
                 } else {
-                    let h = build_tile_material(mode, ms, me, depth, &shader, &mut materials);
-                    lod_mats.0.insert((mode, depth, bucket), h.clone());
+                    let h = build_tile_material(
+                        mode, ms, me, depth, &shader, maps, shadow, &mut materials,
+                    );
+                    lod_mats.0.insert((terrain, mode, depth, bucket), h.clone());
                     h
                 };
                 commands.entity(ent).try_insert(MeshMaterial3d(handle));
@@ -733,7 +814,14 @@ pub fn update_lod_tiles(
                 px,
             )
         };
-        let mut pixel_error = cfg.pixel_error.clamp(0.5, 32.0);
+        let base_px = cfg.pixel_error.clamp(0.5, 32.0);
+        // Warm-start the budget fit (see [`LodTiles::last_fit_px`]): resume one
+        // coarsen step below the value that satisfied the budget last time,
+        // clamped to the configured base so quality can climb back when load drops.
+        let mut pixel_error = match tiles.last_fit_px {
+            Some(px) => (px / 1.6).max(base_px),
+            None => base_px,
+        };
         let mut qt = quadtree_for(pixel_error);
         // ERROR-DRIVEN selection: refine where the MEASURED surface error says
         // there is detail worth refining toward (crater rims, peaks), not on the
@@ -775,6 +863,7 @@ pub fn update_lod_tiles(
             qt = quadtree_for(pixel_error);
             sel = qt.select_with_error(focus, eye_height, &node_error);
         }
+        tiles.last_fit_px = Some(pixel_error);
         // Ground under dynamic bodies is ALWAYS drawn at max depth — the
         // fixed-resolution collider ring under a rover carries small-crater
         // relief a coarse camera-driven tile doesn't, and the rover visibly
@@ -837,21 +926,27 @@ pub fn update_lod_tiles(
             // cos 1 (dead ahead) → ×1 … cos −1 (behind) → ×4.
             base * (2.5 - 1.5 * (to / d).dot(hd))
         };
-        sel.sort_by(|a, b| {
-            let (ca, cb) = (a.coord.depth <= CARPET_DEPTH, b.coord.depth <= CARPET_DEPTH);
-            match (ca, cb) {
-                (true, false) => std::cmp::Ordering::Less,
-                (false, true) => std::cmp::Ordering::Greater,
-                (true, true) => a
-                    .coord
-                    .depth
-                    .cmp(&b.coord.depth)
-                    .then(dist2(a).partial_cmp(&dist2(b)).unwrap_or(std::cmp::Ordering::Equal)),
-                (false, false) => {
-                    benefit(a).partial_cmp(&benefit(b)).unwrap_or(std::cmp::Ordering::Equal)
+        // Decorate-sort-undecorate: `dist2`/`benefit` pay a sqrt/dot per call and
+        // the comparator re-ran them on BOTH sides of every comparison
+        // (O(n log n) evaluations) — compute each tile's key once, sort on the
+        // cached key. Carpet keys order by (0, depth, dist²); benefit keys by
+        // (1, 0, benefit) — the same total order the comparator produced.
+        let mut keyed: Vec<(u8, u8, f64, Selected)> = sel
+            .drain(..)
+            .map(|s| {
+                if s.coord.depth <= CARPET_DEPTH {
+                    (0, s.coord.depth, dist2(&s), s)
+                } else {
+                    (1, 0, benefit(&s), s)
                 }
-            }
+            })
+            .collect();
+        keyed.sort_by(|a, b| {
+            (a.0, a.1)
+                .cmp(&(b.0, b.1))
+                .then(a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
         });
+        sel.extend(keyed.into_iter().map(|(_, _, _, s)| s));
 
         // A coord is *fresh* (no work needed) when it has a resident tile OR an
         // in-flight bake tagged with the current generation. A stale entry (older
@@ -887,8 +982,8 @@ pub fn update_lod_tiles(
             }
             let depth = baked.depth;
             let (ent, shared) = spawn_tile(
-                &mut commands, grid, grid_entity, terrain, coord, handle, baked.center,
-                depth, baked.morph_end, mode, &shader, &mut materials, &mut lod_mats,
+                &mut commands, grid, grid_entity, terrain, coord, handle, baked.center, depth,
+                baked.morph_end, mode, &shader, maps, shadow, &mut materials, &mut lod_mats,
             );
             // Sub-root tiles settle in from their parent's coarse lattice (no pop).
             if depth > 0 {
@@ -923,7 +1018,7 @@ pub fn update_lod_tiles(
             if let Some(cached) = mesh_cache.0.get(&s.coord) {
                 let (ent, shared) = spawn_tile(
                     &mut commands, grid, grid_entity, terrain, s.coord, cached.clone(),
-                    s.region.center, depth, morph_end, mode, &shader,
+                    s.region.center, depth, morph_end, mode, &shader, maps, shadow,
                     &mut materials, &mut lod_mats,
                 );
                 if depth > 0 {
@@ -950,6 +1045,9 @@ pub fn update_lod_tiles(
             let half = h;
             let center = s.region.center;
             let task = pool.spawn(async move {
+                // Off-thread body → invisible to Bevy's per-system spans; give
+                // Tracy (`--features tracy`) its own zone.
+                let _span = bevy::log::info_span!("terrain_tile_bake").entered();
                 // Content-addressed bake: a warm reload of the same composed
                 // surface streams this tile from the `cache://` dir; a miss
                 // samples the oracle (over-zoom Nyquist-gated at this tile's
@@ -1019,14 +1117,76 @@ fn squares_overlap(a: Square, b: Square) -> bool {
 /// e.g. after a twin reload. Tiles are children of the big_space grid (so each can
 /// carry its own `CellCoord`), so they don't die with the terrain entity; this is
 /// their lifecycle tether.
+///
+/// Change-driven: a tile only orphans when its owner loses [`TerrainLodViz`]
+/// (component removal or terrain despawn — both emit the removal event), so the
+/// per-frame every-tile ownership poll is skipped until one fires. The liveness
+/// re-check keeps the exact old semantics for a remove-and-re-add in one frame.
 pub fn despawn_orphaned_lod_tiles(
     mut commands: Commands,
+    mut removed: RemovedComponents<TerrainLodViz>,
     tiles: Query<(Entity, &LodTileOf)>,
     streaming: Query<(), With<TerrainLodViz>>,
+    mut lod_mats: ResMut<LodMaterials>,
 ) {
+    let orphaned: HashSet<Entity> = removed.read().collect();
+    if orphaned.is_empty() {
+        return;
+    }
     for (ent, owner) in &tiles {
-        if streaming.get(owner.0).is_err() {
+        if orphaned.contains(&owner.0) && streaming.get(owner.0).is_err() {
             commands.entity(ent).despawn();
+        }
+    }
+    // Drop the dead terrain's cached materials too — they hold strong handles to
+    // its derived-map images (megabytes of GPU texture) that would otherwise
+    // outlive every reload.
+    lod_mats
+        .0
+        .retain(|(t, _, _, _), _| !orphaned.contains(t) || streaming.get(*t).is_ok());
+}
+
+/// When a terrain's derived maps finish baking AFTER its tiles exist (the
+/// common case — the AO march takes seconds while the first tiles stream in),
+/// bind the maps + per-depth weights onto every cached Lit tile material in
+/// place — no tile churn, no re-bake. `Changed` also covers the re-bake that
+/// follows a live edit.
+pub(crate) fn bind_derived_maps_to_tiles(
+    changed: Query<
+        (Entity, &TerrainDerivedMaps),
+        (Changed<TerrainDerivedMaps>, With<TerrainLodViz>),
+    >,
+    lod_mats: Res<LodMaterials>,
+    mut materials: ResMut<Assets<ShaderMaterial>>,
+) {
+    for (terrain, maps) in &changed {
+        for ((t, mode, depth, _), handle) in lod_mats.0.iter() {
+            if *t != terrain || *mode != TerrainShaderMode::Lit {
+                continue;
+            }
+            if let Some(m) = materials.get_mut(handle) {
+                apply_maps_to_material(m, maps, *depth);
+            }
+        }
+    }
+}
+
+/// Same late-bind for the far-shadow cache: the horizon/shadow-cache bake (and
+/// every sun-driven re-bake) lands long after tiles exist — patch the cached
+/// Lit materials in place.
+pub(crate) fn bind_shadow_cache_to_tiles(
+    changed: Query<(Entity, &TileShadowCache), (Changed<TileShadowCache>, With<TerrainLodViz>)>,
+    lod_mats: Res<LodMaterials>,
+    mut materials: ResMut<Assets<ShaderMaterial>>,
+) {
+    for (terrain, cache) in &changed {
+        for ((t, mode, _, _), handle) in lod_mats.0.iter() {
+            if *t != terrain || *mode != TerrainShaderMode::Lit {
+                continue;
+            }
+            if let Some(m) = materials.get_mut(handle) {
+                apply_shadow_cache_to_material(m, cache);
+            }
         }
     }
 }

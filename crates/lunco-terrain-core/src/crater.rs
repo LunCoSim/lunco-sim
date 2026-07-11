@@ -23,7 +23,6 @@
 //! results on every platform (fixed integer bucketing; the min/max overprint
 //! combine is order-independent by construction).
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::overzoom::nyquist_fade;
@@ -211,6 +210,13 @@ fn octave_of(radius: f64) -> usize {
     (radius.max(1e-9).log2().floor() as i32 - OCTAVE_BASE).clamp(0, OCTAVE_COUNT as i32 - 1) as usize
 }
 
+/// Soft cap on dense bucket-grid cells. The cell size is derived from the largest
+/// crater reach, so a field of ONLY tiny craters spread over kilometres would
+/// otherwise mint millions of cells; doubling the cell size until the grid fits is
+/// output-neutral (bucketing only decides which candidates a sample *considers* —
+/// out-of-reach candidates contribute exactly zero either way).
+const MAX_BUCKET_CELLS: u128 = 1 << 21;
+
 /// The immutable placement set + spatial bucket index behind [`Craters`].
 #[derive(Debug)]
 struct CraterIndex {
@@ -222,11 +228,37 @@ struct CraterIndex {
     octaves: Vec<u8>,
     /// Metres per bucket cell.
     cell_size: f64,
-    /// Bucket → indices into `craters` whose reach bbox overlaps that cell. A crater
-    /// is inserted into every cell its `[center ± reach]` box touches, so the single
-    /// cell containing a query point holds every crater that can affect it — one cell
-    /// lookup, no neighbour scan.
-    buckets: HashMap<(i64, i64), Vec<u32>>,
+    /// Bucket-grid AABB origin: the cell coordinate of grid slot `(0, 0)`.
+    bucket_min: (i64, i64),
+    /// Bucket-grid dimensions (cells).
+    bucket_nx: usize,
+    bucket_nz: usize,
+    /// Dense row-major CSR bucket grid over the field's cell AABB: cell
+    /// `(cx, cz)` holds `entries[starts[k]..starts[k + 1]]`
+    /// (`k = (cz − min_z)·nx + (cx − min_x)`) — indices into `craters` whose
+    /// reach bbox overlaps that cell. A crater is inserted into every cell its
+    /// `[center ± reach]` box touches, so the single cell containing a query
+    /// point holds every crater that can affect it — one lookup, no neighbour
+    /// scan. Replaces a `HashMap<(i64, i64), Vec<u32>>`: the per-sample lookup
+    /// is the tile/collider bake inner loop, and the tuple hash per sample cost
+    /// more than the two subtracts + multiply the dense grid pays. Queries
+    /// outside the AABB fall back to empty.
+    bucket_starts: Vec<u32>,
+    bucket_entries: Vec<u32>,
+}
+
+impl CraterIndex {
+    /// Candidate craters for bucket cell `(cx, cz)` — empty outside the grid AABB.
+    #[inline]
+    fn bucket(&self, cx: i64, cz: i64) -> &[u32] {
+        let ux = cx.wrapping_sub(self.bucket_min.0);
+        let uz = cz.wrapping_sub(self.bucket_min.1);
+        if ux < 0 || uz < 0 || ux >= self.bucket_nx as i64 || uz >= self.bucket_nz as i64 {
+            return &[];
+        }
+        let k = uz as usize * self.bucket_nx + ux as usize;
+        &self.bucket_entries[self.bucket_starts[k] as usize..self.bucket_starts[k + 1] as usize]
+    }
 }
 
 impl Craters {
@@ -235,24 +267,82 @@ impl Craters {
     pub fn new(craters: Vec<Crater>) -> Self {
         // Cell just big enough that the biggest crater spans a bounded 3×3 of cells.
         let max_reach = craters.iter().map(|c| c.reach()).fold(0.0_f64, f64::max);
-        let cell_size = max_reach.max(1.0);
-        let mut buckets: HashMap<(i64, i64), Vec<u32>> = HashMap::with_capacity((craters.len() / 500).max(64));
-        for (i, c) in craters.iter().enumerate() {
+        let mut cell_size = max_reach.max(1.0);
+        // Cell box a crater's reach bbox covers (`None` for zero-reach craters).
+        let cell_box = |c: &Crater, cell_size: f64| -> Option<(i64, i64, i64, i64)> {
             let reach = c.reach();
             if reach <= 0.0 {
-                continue;
+                return None;
             }
             let (min_cx, min_cz) = cell_of(c.center[0] - reach, c.center[1] - reach, cell_size);
             let (max_cx, max_cz) = cell_of(c.center[0] + reach, c.center[1] + reach, cell_size);
-            for cz in min_cz..=max_cz {
-                for cx in min_cx..=max_cx {
-                    buckets.entry((cx, cz)).or_default().push(i as u32);
+            Some((min_cx, min_cz, max_cx, max_cz))
+        };
+        // Grid AABB over every crater's cell box; grow the cell until the dense
+        // grid stays bounded (see [`MAX_BUCKET_CELLS`] — output-neutral).
+        let (bucket_min, bucket_nx, bucket_nz) = loop {
+            let (mut min_cx, mut min_cz) = (i64::MAX, i64::MAX);
+            let (mut max_cx, mut max_cz) = (i64::MIN, i64::MIN);
+            for c in &craters {
+                let Some((x0, z0, x1, z1)) = cell_box(c, cell_size) else { continue };
+                min_cx = min_cx.min(x0);
+                min_cz = min_cz.min(z0);
+                max_cx = max_cx.max(x1);
+                max_cz = max_cz.max(z1);
+            }
+            if min_cx > max_cx {
+                break ((0, 0), 0, 0); // no craters with reach
+            }
+            let nx = (max_cx - min_cx + 1) as u128;
+            let nz = (max_cz - min_cz + 1) as u128;
+            if nx * nz <= MAX_BUCKET_CELLS {
+                break ((min_cx, min_cz), nx as usize, nz as usize);
+            }
+            cell_size *= 2.0;
+        };
+        // CSR fill: count per cell, prefix-sum into starts, then place indices
+        // (ascending crater order per cell — same order the HashMap push gave).
+        let cells = bucket_nx * bucket_nz;
+        let slot = |cx: i64, cz: i64| -> usize {
+            (cz - bucket_min.1) as usize * bucket_nx + (cx - bucket_min.0) as usize
+        };
+        let mut counts = vec![0u32; cells];
+        for c in &craters {
+            let Some((x0, z0, x1, z1)) = cell_box(c, cell_size) else { continue };
+            for cz in z0..=z1 {
+                for cx in x0..=x1 {
+                    counts[slot(cx, cz)] += 1;
+                }
+            }
+        }
+        let mut bucket_starts = vec![0u32; cells + 1];
+        for k in 0..cells {
+            bucket_starts[k + 1] = bucket_starts[k] + counts[k];
+        }
+        let mut cursor: Vec<u32> = bucket_starts[..cells].to_vec();
+        let mut bucket_entries = vec![0u32; bucket_starts[cells] as usize];
+        for (i, c) in craters.iter().enumerate() {
+            let Some((x0, z0, x1, z1)) = cell_box(c, cell_size) else { continue };
+            for cz in z0..=z1 {
+                for cx in x0..=x1 {
+                    let k = slot(cx, cz);
+                    bucket_entries[cursor[k] as usize] = i as u32;
+                    cursor[k] += 1;
                 }
             }
         }
         let octaves = craters.iter().map(|c| octave_of(c.radius) as u8).collect();
         Self {
-            index: Arc::new(CraterIndex { craters, octaves, cell_size, buckets }),
+            index: Arc::new(CraterIndex {
+                craters,
+                octaves,
+                cell_size,
+                bucket_min,
+                bucket_nx,
+                bucket_nz,
+                bucket_starts,
+                bucket_entries,
+            }),
             min_wavelength: 0.0,
         }
     }
@@ -281,12 +371,18 @@ impl Craters {
     /// cross-octave sum gives both, stays order-independent, and needs no fixed
     /// walk order for determinism.
     pub fn delta_at(&self, x: f64, z: f64) -> f64 {
-        let key = cell_of(x, z, self.index.cell_size);
-        let Some(indices) = self.index.buckets.get(&key) else {
+        let (cx, cz) = cell_of(x, z, self.index.cell_size);
+        let indices = self.index.bucket(cx, cz);
+        if indices.is_empty() {
             return 0.0;
-        };
+        }
         let mut deepest = [0.0_f64; OCTAVE_COUNT];
         let mut tallest = [0.0_f64; OCTAVE_COUNT];
+        // Track the touched octave band so the combine below only walks occupied
+        // strata — an untouched stratum adds an exact `0.0 + 0.0`, so skipping it
+        // (and only leading/trailing ones — interior gaps still add their zeros in
+        // order) leaves the summation order, and thus every bit, unchanged.
+        let (mut lo, mut hi) = (OCTAVE_COUNT, 0);
         for &i in indices {
             let d = self.index.craters[i as usize].delta_at_limited(x, z, self.min_wavelength);
             if d == 0.0 {
@@ -295,9 +391,11 @@ impl Craters {
             let o = self.index.octaves[i as usize] as usize;
             deepest[o] = deepest[o].min(d);
             tallest[o] = tallest[o].max(d);
+            lo = lo.min(o);
+            hi = hi.max(o);
         }
         let mut sum = 0.0;
-        for o in 0..OCTAVE_COUNT {
+        for o in lo..=hi {
             sum += deepest[o] + tallest[o];
         }
         sum
@@ -532,6 +630,93 @@ mod tests {
             let (x, z) = (k as f64 * 0.7 - 14.0, k as f64 * 0.4 - 8.0);
             assert_eq!(gated.apply(x, z, 1.0), cs.apply(x, z, 1.0));
         }
+    }
+
+    /// The dense CSR bucket grid + touched-octave-range combine must reproduce
+    /// the original `HashMap`-bucketed implementation BIT-FOR-BIT — the crater
+    /// field feeds content-addressed caches (CRATER_CACHE, tile disk cache)
+    /// whose version constant must not need bumping. Includes a far-flung pair
+    /// that trips the `MAX_BUCKET_CELLS` cell-size doubling (a coarser cell
+    /// changes only the candidate supersets, never the sampled value).
+    #[test]
+    fn dense_bucket_grid_matches_hashmap_reference_bitwise() {
+        use std::collections::HashMap;
+        // Deterministic LCG population: several radius octaves, overlapping bowls.
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        let mut rng = move || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut craters: Vec<Crater> = (0..400)
+            .map(|_| Crater {
+                center: [rng() * 800.0 - 400.0, rng() * 800.0 - 400.0],
+                radius: 0.3 + rng() * rng() * 60.0,
+                depth: 0.5 + rng() * 4.0,
+                rim_height: rng(),
+                softness: rng() * 0.3,
+                bowl_power: 2.0 + rng() * 3.0,
+            })
+            .collect();
+        // Far corners: ~160 km span at ~96 m cells > MAX_BUCKET_CELLS → doubling.
+        craters.push(crater(-80_000.0, -80_000.0, 0.3));
+        craters.push(crater(80_000.0, 80_000.0, 0.3));
+        let cs = Craters::new(craters.clone());
+
+        // Reference: the pre-dense-grid implementation, verbatim (HashMap
+        // buckets at the UNDOUBLED cell size + full 0..OCTAVE_COUNT sum).
+        let max_reach = craters.iter().map(|c| c.reach()).fold(0.0_f64, f64::max);
+        let cell_size = max_reach.max(1.0);
+        let mut buckets: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
+        for (i, c) in craters.iter().enumerate() {
+            let reach = c.reach();
+            if reach <= 0.0 {
+                continue;
+            }
+            let (min_cx, min_cz) = cell_of(c.center[0] - reach, c.center[1] - reach, cell_size);
+            let (max_cx, max_cz) = cell_of(c.center[0] + reach, c.center[1] + reach, cell_size);
+            for cz in min_cz..=max_cz {
+                for cx in min_cx..=max_cx {
+                    buckets.entry((cx, cz)).or_default().push(i as u32);
+                }
+            }
+        }
+        let reference = |x: f64, z: f64| -> f64 {
+            let Some(indices) = buckets.get(&cell_of(x, z, cell_size)) else { return 0.0 };
+            let mut deepest = [0.0_f64; OCTAVE_COUNT];
+            let mut tallest = [0.0_f64; OCTAVE_COUNT];
+            for &i in indices {
+                let d = craters[i as usize].delta_at(x, z);
+                if d == 0.0 {
+                    continue;
+                }
+                let o = octave_of(craters[i as usize].radius);
+                deepest[o] = deepest[o].min(d);
+                tallest[o] = tallest[o].max(d);
+            }
+            let mut sum = 0.0;
+            for o in 0..OCTAVE_COUNT {
+                sum += deepest[o] + tallest[o];
+            }
+            sum
+        };
+        for gz in -80..=80 {
+            for gx in -80..=80 {
+                let (x, z) = (gx as f64 * 5.37, gz as f64 * 5.37);
+                assert_eq!(
+                    cs.delta_at(x, z).to_bits(),
+                    reference(x, z).to_bits(),
+                    "bit mismatch at ({x},{z})"
+                );
+            }
+        }
+        // The doubled-cell far crater still resolves exactly…
+        for k in 0..20 {
+            let (x, z) = (-80_000.0 + k as f64 * 0.05, -80_000.0 + k as f64 * 0.03);
+            assert_eq!(cs.delta_at(x, z).to_bits(), reference(x, z).to_bits());
+        }
+        // …and far outside every reach AND the grid AABB the field is exact zero.
+        assert_eq!(cs.delta_at(1.0e6, -1.0e6), 0.0);
+        assert_eq!(cs.delta_at(-1.0e6, 1.0e6), 0.0);
     }
 
     #[test]

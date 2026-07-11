@@ -483,6 +483,112 @@ fn on_flatten_terrain(
     }
 }
 
+/// Place ONE hand-authored impact crater: rim radius `radius` m centred at
+/// terrain-local `(x, z)`, bowl `depth` m (0 = realistic default `0.4·radius`,
+/// the fresh d/D ≈ 0.2 morphology). Same analytic profile as the procedural
+/// field, so it lands in mesh + collider + derived maps alike, and it is an
+/// addressable edit — remove it later via `RemoveTerrainLayer{id}`. Reachable
+/// as `cmd("PlaceCrater", #{x, z, radius})`.
+#[Command(default)]
+pub struct PlaceCrater {
+    pub x: f32,
+    pub z: f32,
+    pub radius: f32,
+    /// Bowl depth in metres; 0/absent = realistic default (0.4·radius).
+    pub depth: f32,
+    /// Optional stable id for the edit (so it can be removed later). Empty = auto.
+    pub id: String,
+}
+
+impl PlaceCrater {
+    /// The effective bowl depth: authored, or the fresh-crater default.
+    pub fn depth_or_default(&self) -> f64 {
+        if self.depth > 0.0 {
+            self.depth as f64
+        } else {
+            0.4 * self.radius as f64
+        }
+    }
+}
+
+#[on_command(PlaceCrater)]
+fn on_place_crater(
+    trigger: On<PlaceCrater>,
+    mut terrains: Query<&mut crate::terrain_layers::TerrainLayerStack, Without<DocBackedTerrain>>,
+    mut seq: ResMut<TerrainEditSeq>,
+) {
+    let ev = trigger.event();
+    if ev.radius <= 0.0 {
+        return;
+    }
+    let id = edit_id(&ev.id, "crater", &mut seq);
+    let kind = crate::terrain_layers::EditKind::Crater {
+        center: [ev.x as f64, ev.z as f64],
+        radius: ev.radius as f64,
+        depth: ev.depth_or_default(),
+    };
+    for mut stack in &mut terrains {
+        stack.add_edit(id.clone(), kind);
+    }
+}
+
+/// Place ONE hand-authored boulder at terrain-local `(x, z)`, radius `size` m —
+/// its own addressable layer (removable via `RemoveTerrainLayer{id}`). Same
+/// mesh/collider derivation as the procedural rock field, so it looks and
+/// drives identically. Reachable as `cmd("PlaceRock", #{x, z, size})`.
+#[Command(default)]
+pub struct PlaceRock {
+    pub x: f32,
+    pub z: f32,
+    /// Boulder radius in metres; 0/absent = 0.6 m.
+    pub size: f32,
+    /// Shape/orientation seed; 0 = derived from position (stable, varied).
+    pub seed: u64,
+    /// Optional stable id for the layer (so it can be removed later). Empty = auto.
+    pub id: String,
+}
+
+impl PlaceRock {
+    /// Effective boulder radius (default 0.6 m, clamped to sane bounds).
+    pub fn size_or_default(&self) -> f32 {
+        if self.size > 0.0 {
+            self.size.clamp(0.05, 10.0)
+        } else {
+            0.6
+        }
+    }
+
+    /// Effective shape seed: authored, or a stable hash of the position so two
+    /// placed rocks never share facets/yaw by default.
+    pub fn seed_or_default(&self) -> u64 {
+        if self.seed != 0 {
+            return self.seed;
+        }
+        let mut h = lunco_precompute::Fnv1a::new();
+        h.write_u64((self.x as f64).to_bits());
+        h.write_u64((self.z as f64).to_bits());
+        h.finish() | 1
+    }
+}
+
+#[on_command(PlaceRock)]
+fn on_place_rock(
+    trigger: On<PlaceRock>,
+    mut terrains: Query<&mut crate::terrain_layers::TerrainLayerStack, Without<DocBackedTerrain>>,
+    mut seq: ResMut<TerrainEditSeq>,
+) {
+    let ev = trigger.event();
+    let id = edit_id(&ev.id, "rock", &mut seq);
+    let layer = crate::terrain_layers::rock_instance_layer(
+        [ev.x as f64, ev.z as f64],
+        ev.size_or_default(),
+        ev.seed_or_default(),
+    );
+    for mut stack in &mut terrains {
+        stack.push_layer(id.clone(), layer.clone());
+    }
+}
+
 /// Remove a terrain layer by its [`LayerId`] — undo a specific dig/flatten (or any
 /// addressable layer). Re-bakes via `Changed<TerrainLayerStack>`. Reachable as
 /// `cmd("RemoveTerrainLayer", #{id})`.
@@ -509,6 +615,8 @@ register_commands!(
     on_spawn_dem_terrain,
     on_brush_terrain,
     on_flatten_terrain,
+    on_place_crater,
+    on_place_rock,
     on_remove_terrain_layer
 );
 
@@ -553,7 +661,17 @@ pub struct DemWorkerJob {
     with_default_material: bool,
     #[cfg(target_arch = "wasm32")]
     pub download_progress: std::sync::Arc<std::sync::Mutex<Option<(u64, u64)>>>,
+    /// OPFS grid-cache key (hex), filled by the fetch task on a cache MISS so the
+    /// Full worker reply writes the baked grid through; stays `None` on a hit
+    /// (nothing to rewrite). Slot-shared like `download_progress` because the key
+    /// derives from the fetched bytes, which only the detached task sees.
+    #[cfg(target_arch = "wasm32")]
+    cache_key: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
+
+/// OPFS namespace for the Full-stage baked DEM grid (web cold-start cache).
+#[cfg(target_arch = "wasm32")]
+const DEM_GRID_CACHE_NS: &str = "terrain/dem-grid";
 
 /// Compose the surface oracle (raster base + the layers' ANALYTIC height modifiers)
 /// and derive the avian collider + Bevy `MeshData` a pure [`BakedGrid`] needs into a
@@ -622,10 +740,11 @@ fn layer_contributions(
 ///
 /// Native reads through `lunco-storage::FileStorage`; wasm fetches same-origin
 /// over HTTP (the Twin's terrain folder is staged next to the wasm under
-/// `assets/`), cache-first-forever in a Cache-Storage bucket so the large
-/// immutable heightmap re-hydrates instantly next load. Pure I/O (an `await`, not
-/// CPU) → safe to run on the main-thread event loop; the heavy decode/stamp is
-/// what moves to the worker.
+/// `assets/`), cached in a Cache-Storage bucket so the large heightmap
+/// re-hydrates instantly next load, with a background *conditional*
+/// revalidation so a host-side DEM replacement is picked up on the following
+/// reload. Pure I/O (an `await`, not CPU) → safe to run on the main-thread
+/// event loop; the heavy decode/stamp is what moves to the worker.
 async fn read_bytes(path: std::path::PathBuf) -> Result<Vec<u8>, String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -638,18 +757,21 @@ async fn read_bytes(path: std::path::PathBuf) -> Result<Vec<u8>, String> {
     #[cfg(target_arch = "wasm32")]
     {
         // Fetch the DEM bytes same-origin over HTTP (the Twin's terrain folder is
-        // staged next to the wasm under `assets/`), cache-first-forever in a
-        // Cache-Storage bucket so the (large, immutable) heightmap re-hydrates
-        // instantly on the next load. The DEM request URI is asset-relative on
-        // web (resolved against the scene's own directory — no `twin://`), so
-        // prepend the bevy web asset root unless it's already absolute/prefixed.
+        // staged next to the wasm under `assets/`), cached in a Cache-Storage
+        // bucket so the (large) heightmap re-hydrates instantly on the next load.
+        // These URLs are MUTABLE — a host-side twin update can replace the file
+        // in place — so the cached copy is served now and a background
+        // `If-None-Match`/`If-Modified-Since` probe refreshes the cache for the
+        // next reload. The DEM request URI is asset-relative on web (resolved
+        // against the scene's own directory — no `twin://`), so prepend the bevy
+        // web asset root unless it's already absolute/prefixed.
         let rel = path.to_string_lossy().replace('\\', "/");
         let url = if rel.starts_with("assets/") || rel.starts_with("http") || rel.starts_with('/') {
             rel
         } else {
             format!("assets/{rel}")
         };
-        lunco_assets::web_fetch::fetch_bytes_cached("lunco-twin-v1", &url).await
+        lunco_assets::web_fetch::fetch_bytes_cached_conditional("lunco-twin-v1", &url).await
     }
 }
 
@@ -724,12 +846,14 @@ fn start_dem_builds(
         if lunco_terrain_bake::worker_client::is_available() {
             let id = entity.index_u32();
             let download_progress = std::sync::Arc::new(std::sync::Mutex::new(None));
+            let cache_key = std::sync::Arc::new(std::sync::Mutex::new(None));
             commands.entity(entity).insert(DemWorkerJob {
                 id,
                 collider_ring,
                 lod_viz,
                 with_default_material: req.with_default_material,
                 download_progress: download_progress.clone(),
+                cache_key: cache_key.clone(),
             });
             let job = job.clone();
             AsyncComputeTaskPool::get()
@@ -758,7 +882,12 @@ fn start_dem_builds(
                         }
                     });
 
-                    let tif = match lunco_assets::web_fetch::fetch_cached_with_progress(
+                    // Cached-first with a download bar, plus a background
+                    // conditional revalidate: the heightmap URL is mutable (a
+                    // host-side twin update replaces it in place), so a changed
+                    // DEM is re-cached for the next reload instead of being
+                    // served stale forever.
+                    let tif = match lunco_assets::web_fetch::fetch_cached_with_progress_conditional(
                         "lunco-twin-v1",
                         &url,
                         0,
@@ -773,6 +902,46 @@ fn start_dem_builds(
                         }
                     };
                     drop(progress_cb);
+
+                    // OPFS grid cache: key = format version + the RAW fetched
+                    // bytes + the job params (content-exact — composes with the
+                    // conditional-revalidation fetch above: a replaced DEM is new
+                    // tif bytes, hence a new key, hence a rebake). On a hit the
+                    // worker is never spawned; the grid is injected through the
+                    // SAME reply queue a Full worker reply uses.
+                    let key =
+                        lunco_terrain_bake::grid_cache_key(meta.as_bytes(), &tif, &job);
+                    let key_hex = lunco_precompute::key_hex(key);
+                    if let Some(blob) =
+                        lunco_storage::opfs_blob::read(DEM_GRID_CACHE_NS, &key_hex).await
+                    {
+                        if let Some((grid, native_res)) =
+                            lunco_terrain_bake::decode_grid_blob(&blob)
+                        {
+                            let site = DemMetadata::from_yaml_str(&meta)
+                                .map(|m| m.site_id)
+                                .unwrap_or_default();
+                            bevy::log::info!(
+                                "[dem-terrain] OPFS grid-cache hit ({}², key {key_hex}) — skipping worker bake",
+                                grid.res
+                            );
+                            lunco_terrain_bake::worker_client::push_local_reply(
+                                lunco_terrain_bake::worker_client::WorkerReply {
+                                    id,
+                                    stage: lunco_terrain_bake::BakeStage::Full,
+                                    site,
+                                    native_res,
+                                    res: grid.res,
+                                    grid: Ok(grid),
+                                },
+                            );
+                            return;
+                        }
+                    }
+                    // Miss: remember the key so the Full reply persists the grid.
+                    if let Ok(mut slot) = cache_key.lock() {
+                        *slot = Some(key_hex);
+                    }
 
                     if let Err(e) =
                         lunco_terrain_bake::worker_client::dispatch(id, &job, &meta, &tif)
@@ -1065,6 +1234,17 @@ fn finish_dem_worker(
                 );
             }
             (lunco_terrain_bake::BakeStage::Full, Ok(grid)) => {
+                // Best-effort OPFS write-through so the NEXT page load skips the
+                // worker (GeoTIFF decode + crater stamp) entirely. The key was
+                // derived from the fetched bytes on the miss path; it's `None` on
+                // a cache hit (nothing to rewrite).
+                if let Some(key_hex) = job.cache_key.lock().ok().and_then(|k| k.clone()) {
+                    let blob = lunco_terrain_bake::encode_grid_blob(&grid, reply.native_res);
+                    wasm_bindgen_futures::spawn_local(async move {
+                        lunco_storage::opfs_blob::write(DEM_GRID_CACHE_NS, &key_hex, &blob)
+                            .await;
+                    });
+                }
                 // Re-compose the analytic oracle on the worker's full bare grid.
                 let contributions = layer_contributions(stacks.get(entity).ok(), grid.half_extent);
                 if let Ok((mut hf, tiles, pending, has_static_mesh)) = swap_q.get_mut(entity) {
@@ -1223,7 +1403,9 @@ struct DemRestampDebounce(Timer);
 
 /// Settle delay before a layer edit triggers the off-thread re-stamp. Long enough to
 /// swallow a continuous slider drag, short enough to feel responsive on release.
-const RESTAMP_DEBOUNCE_SECS: f32 = 0.3;
+/// (Halved from 0.3 once the all-analytic restamp stopped cloning the base grid —
+/// the re-compose itself is now microseconds, so the debounce IS the edit latency.)
+const RESTAMP_DEBOUNCE_SECS: f32 = 0.15;
 
 /// Spawn the off-thread **re-compose** task: rebuild the surface oracle from the
 /// pristine [`DemBaseGrid`] + the stack's current layers. With analytic height
@@ -1240,17 +1422,25 @@ fn spawn_restamp_task(
     let base_grid = base.0.clone();
     let layers: Vec<_> = stack.0.iter().map(|e| e.layer.clone()).collect();
     let task = AsyncComputeTaskPool::get().spawn(async move {
+        // Off-thread body → own Tracy zone (per-system spans don't reach here).
+        let _span = bevy::log::info_span!("terrain_restamp").entered();
         let half_extent = base_grid.half_extent;
-        let mut grid = (*base_grid).clone();
-        for layer in &layers {
-            layer.stamp(&mut grid);
-        }
+        // All-analytic stacks (the norm: craters/edits/over-zoom are oracle
+        // modifiers) reuse the base grid Arc directly — cloning + re-stamping
+        // the whole raster was a multi-MB memcpy on EVERY brush stroke, for a
+        // grid that came out identical.
+        let grid = if layers.iter().any(|l| l.stamps()) {
+            let mut grid = (*base_grid).clone();
+            for layer in &layers {
+                layer.stamp(&mut grid);
+            }
+            std::sync::Arc::new(grid)
+        } else {
+            base_grid.clone()
+        };
         let contributions: Vec<_> =
             layers.iter().filter_map(|l| l.height_modifier(half_extent)).collect();
-        std::sync::Arc::new(crate::oracle::SurfaceOracle::new(
-            std::sync::Arc::new(grid),
-            contributions,
-        ))
+        std::sync::Arc::new(crate::oracle::SurfaceOracle::new(grid, contributions))
     });
     commands.entity(entity).try_insert(DemRestampTask(task));
 }
@@ -1329,6 +1519,7 @@ pub(crate) fn finish_dem_restamp(
         Has<Mesh3d>,
         Has<DemRestampPending>,
         Option<&TerrainDirty>,
+        Has<TerrainRescatter>,
     )>,
     scattered: Query<Entity, With<crate::terrain_layers::TerrainScatterEntity>>,
     mut meshes: Option<ResMut<Assets<Mesh>>>,
@@ -1338,8 +1529,18 @@ pub(crate) fn finish_dem_restamp(
     // Whether ANY terrain did a WHOLE-terrain re-bake this pass (spec change / load) —
     // only then do the (global) scatter entities need dropping + rebuilding.
     let mut any_full = false;
-    for (entity, mut task, src, mut hf, tiles, pending, has_static_mesh, was_pending, dirty) in
-        &mut tasks
+    for (
+        entity,
+        mut task,
+        src,
+        mut hf,
+        tiles,
+        pending,
+        has_static_mesh,
+        was_pending,
+        dirty,
+        rescatter,
+    ) in &mut tasks
     {
         let Some(oracle) = future::block_on(future::poll_once(&mut task.0)) else {
             continue;
@@ -1411,8 +1612,11 @@ pub(crate) fn finish_dem_restamp(
         // A bounded edit leaves the crater/rock fields untouched, so DON'T re-scatter
         // (that despawn+respawn of every rock is a big part of the per-edit cost). A
         // whole-terrain change re-scatters: clear the applied-marker so scatter re-runs.
-        if !scoped {
+        // The scatter-only tier (`TerrainRescatter` — e.g. a placed rock) re-scatters
+        // too, while keeping the tile re-bake scoped to the marked bounds.
+        if !scoped || rescatter {
             commands.entity(entity).try_remove::<crate::terrain_layers::TerrainLayersApplied>();
+            commands.entity(entity).try_remove::<TerrainRescatter>();
             any_full = true;
         }
 
@@ -1470,6 +1674,8 @@ fn start_dem_collider(
         }
         let oracle = hf.0.clone();
         let task = AsyncComputeTaskPool::get().spawn(async move {
+            // Off-thread body → own Tracy zone.
+            let _span = bevy::log::info_span!("terrain_static_collider_bake").entered();
             // Rasterise the composed surface at base resolution for the one static
             // heightfield (streamed rings sample the oracle per-tile instead).
             let grid = oracle.materialize();
@@ -1547,6 +1753,13 @@ pub struct TerrainDirty {
     pub bounds: Option<[f64; 4]>,
 }
 
+/// Scatter-only dirty tier: the stack gained/lost a SCATTER layer (e.g. a placed
+/// rock) but heights are untouched — the re-bake stays scoped (no tile/mesh-cache
+/// invalidation beyond the marked bounds) yet the scatter layers still re-run.
+/// Consumed by [`finish_dem_restamp`] alongside [`TerrainDirty`].
+#[derive(Component)]
+pub struct TerrainRescatter;
+
 impl TerrainDirty {
     /// Grow the dirty region by a bounded edit's AABB. A whole-terrain (`None`) mark
     /// is a superset, so a later bounded patch can never shrink it back.
@@ -1611,6 +1824,37 @@ fn on_flatten_terrain_dirty(
     accumulate_terrain_dirty(&mut commands, &mut q, Some(edit_command_aabb(ev.x, ev.z, ev.radius)));
 }
 
+/// Mark a placed crater's footprint dirty (see [`TerrainDirty`]) — the ejecta
+/// apron reaches past the rim radius, so the footprint uses the crater reach.
+fn on_place_crater_dirty(
+    trigger: On<PlaceCrater>,
+    mut commands: Commands,
+    mut q: Query<(Entity, Option<&mut TerrainDirty>), With<DemBaseGrid>>,
+) {
+    let ev = trigger.event();
+    if ev.radius <= 0.0 {
+        return;
+    }
+    let reach = ev.radius * lunco_terrain_core::CRATER_REACH as f32;
+    accumulate_terrain_dirty(&mut commands, &mut q, Some(edit_command_aabb(ev.x, ev.z, reach)));
+}
+
+/// A placed rock changes no heights: mark its tiny footprint dirty (keeps the
+/// tile re-bake scoped ≈ no-op) and arm the scatter-only tier so the rock
+/// actually spawns (see [`TerrainRescatter`]).
+fn on_place_rock_dirty(
+    trigger: On<PlaceRock>,
+    mut commands: Commands,
+    mut q: Query<(Entity, Option<&mut TerrainDirty>), With<DemBaseGrid>>,
+) {
+    let ev = trigger.event();
+    let size = ev.size_or_default();
+    accumulate_terrain_dirty(&mut commands, &mut q, Some(edit_command_aabb(ev.x, ev.z, size)));
+    for (e, _) in q.iter() {
+        commands.entity(e).try_insert(TerrainRescatter);
+    }
+}
+
 /// Scope an undo/remove to the removed edit's footprint (see [`TerrainDirty`]). A
 /// removed brush/flatten dirties only its own AABB; removing a whole layer (crater/
 /// rock) or an unknown id falls back to a whole-terrain re-bake. Reads the stack
@@ -1658,6 +1902,8 @@ pub(crate) fn register(app: &mut App) {
         // remove reads the edit's bounds before the removal applies.
         .add_observer(on_brush_terrain_dirty)
         .add_observer(on_flatten_terrain_dirty)
+        .add_observer(on_place_crater_dirty)
+        .add_observer(on_place_rock_dirty)
         .add_observer(on_remove_terrain_layer_dirty)
         .add_observer(on_obstacle_spec_dirty)
         .add_systems(
