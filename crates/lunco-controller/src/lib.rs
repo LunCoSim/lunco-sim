@@ -162,8 +162,25 @@ fn drive_from_bindings(
         // active→idle edge — ports latch, so a single zero write still gives
         // the clean stop the every-tick stream provided. A pressed key resumes
         // writing immediately: the human always preempts a script mid-drive.
-        // Predicted clients keep the every-tick stream (reconcile's input log
-        // assumes a contiguous seq stream; scripts don't co-drive on a client).
+        //
+        // TODO(spec-034): predicted CLIENTS (`owned_gid.is_some()`) are exempt
+        // and keep the OLD behaviour — an unconditional per-tick `SetPorts`
+        // batch (all zeros while idle), each stamped with an incrementing
+        // `seq`. That stream exists for the prediction machinery, not for
+        // control: `record_control_input` buffers one `InputFrame` per seq and
+        // reconcile's input-replay assumes the seq stream is CONTIGUOUS — a
+        // silent gap would read as lost inputs during rollback, and the host
+        // ack watermark (`AppliedInputSeq`) would stall on the last idle frame.
+        // Consequence: on a client, an idle possessing human still stomps
+        // scripted drive of the possessed vessel (acceptable today — scripts
+        // don't co-drive client-predicted vessels). To extend idle-yield to
+        // clients, change this TOGETHER with the replay side, e.g.: (a) make
+        // reconcile treat a seq gap as "hold last input" instead of loss, or
+        // (b) keep per-tick frames in `OwnedInputLog` without emitting port
+        // writes (split bookkeeping from actuation), or (c) send explicit
+        // keep-alive frames flagged `idle` that the port path ignores. Until
+        // then, single-player/host gets the arbiter; the wire keeps its
+        // contiguous stream.
         let active = writes.iter().any(|(_, v)| v.abs() > f64::EPSILON);
         let prev = was_active.insert(link.vessel_entity, active).unwrap_or(false);
         if !active && !prev && owned_gid.is_none() {
