@@ -88,6 +88,10 @@ pub struct UsdCanvasState {
     /// so interaction (pan/zoom/drag/select) isn't stomped every frame.
     topo_hash: u64,
     built: bool,
+    /// Frame-to-fit request. Set by the producer on a stage swap; consumed by
+    /// the panel's first render, which alone knows the real widget size (the
+    /// producer only has a nominal guess).
+    needs_fit: bool,
 }
 
 impl Default for UsdCanvasState {
@@ -98,6 +102,7 @@ impl Default for UsdCanvasState {
             doc: None,
             topo_hash: 0,
             built: false,
+            needs_fit: false,
         }
     }
 }
@@ -209,17 +214,11 @@ pub fn produce_usd_canvas(
         viewport_state.as_deref(),
     );
 
-    // Frame the graph the first time a stage is shown (nominal rect — the real
-    // widget size only exists at render, and `F` re-fits precisely anytime).
-    if first_for_stage {
-        if let Some(b) = bounds {
-            let nominal = lunco_canvas::Rect::from_min_max(
-                lunco_canvas::Pos::new(0.0, 0.0),
-                lunco_canvas::Pos::new(1000.0, 680.0),
-            );
-            let (c, z) = state.canvas.viewport.fit_values(b, nominal, 40.0);
-            state.canvas.viewport.snap_to(c, z);
-        }
+    // Request a frame-to-fit the first time a stage is shown. The actual fit
+    // runs in the panel's next render, which alone knows the real widget size
+    // (`F` re-fits precisely anytime thereafter).
+    if first_for_stage && bounds.is_some() {
+        state.needs_fit = true;
     }
 }
 
@@ -402,6 +401,21 @@ impl Panel for UsdCanvasPanel {
                 .filter_map(|(id, _)| edge_sink(&state.canvas.scene, *id).map(|s| (*id, s)))
                 .collect();
             let doc = state.doc;
+
+            // Consume a pending frame-to-fit now that the real widget size is
+            // known (the producer can only guess it).
+            if state.needs_fit {
+                if let Some(b) = state.canvas.scene.bounds() {
+                    let size = ui.available_size();
+                    let rect = lunco_canvas::Rect::from_min_max(
+                        lunco_canvas::Pos::new(0.0, 0.0),
+                        lunco_canvas::Pos::new(size.x.max(1.0), size.y.max(1.0)),
+                    );
+                    let (c, z) = state.canvas.viewport.fit_values(b, rect, 48.0);
+                    state.canvas.viewport.snap_to(c, z);
+                }
+                state.needs_fit = false;
+            }
 
             let (_resp, events) = state.canvas.ui(ui);
             if events.is_empty() {

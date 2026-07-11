@@ -1,5 +1,8 @@
 # 48 — Object Builder
 
+> Renumbered 45 → 48 (2026-07-11): the big_space series (44–47) already owned 45
+> (`45-big-space-correct-usage.md`). No content change.
+
 Design analysis for an in-app tool that builds and edits simulation objects: a canvas
 for wiring connections, an editor for the Rhai behaviour attached to a prim, a USD prim
 tree with derived parameter editors, and assembly-from-components — reconfiguring a
@@ -345,32 +348,133 @@ Ordered by what unblocks what, not by visibility. Status as of the current pass.
 
 **Phase 0 — make the loop safe.** ✅ mostly done. `SetVariantSelection` added; `SetRelationship`
 given an incremental live-stage author so the attach path doesn't rebuild the world (§3.3);
-`scene_document_for` provides the doc-back check a builder needs (§3.7). **Open:** wire
-`UndoManager` — this is *not* a wire-up, it's an architectural decision (see below). Refuse-to-open
-a non-doc-backed scene lands with the builder's open path.
+`scene_document_for` provides the doc-back check a builder needs (§3.7). The `UndoManager` architectural
+question is now **decided** (2026-07-11 — see below): `DocumentHost` stays authoritative for per-document
+`Ctrl+Z`, `UndoManager` is reserved for future twin-wide undo, no double-wiring. No code change; blocker
+cleared. Refuse-to-open a non-doc-backed scene lands with the builder's open path.
 
-**Phase 1 — see and tune.** ⏳ started. The **Object Builder perspective** exists
-(`lunco-sandbox-edit/src/ui/mod.rs`, `ObjectBuilderPerspective`) — it composes the entity tree +
-palette + viewport + Inspector into a build workspace, reachable as a title-bar tab. **Open:** a
-USD-*prim* tree (vs the entity tree) needs a `PrimTreeView` view-model + producer (panels can't
-query or read the non-send `CanonicalStages` — the producer is the only bridge); and the Inspector
-reading `customData {min,max,unit}` for bounded parameter sliders.
+**Phase 1 — see and tune.** ⏳ mostly done. The **Object Builder perspective**
+(`lunco-sandbox-edit/src/ui/mod.rs`, `ObjectBuilderPerspective`) composes tree + palette + viewport +
+Inspector + the two new projectors. The **USD prim tree** landed ✅ (2026-07-11):
+`lunco-sandbox-edit/src/ui/usd_prim_tree.rs` (`UsdPrimTreePanel` + `UsdPrimTreeView` +
+`produce_usd_prim_tree`). It reconstructs the full USD hierarchy from every spawned prim's
+`UsdPrimPath` (synthesizing intermediate xforms that carry no entity), reading each prim's type + body
+flag off the composed stage via the same main-thread `CanonicalStages` producer the connection canvas
+uses (panels can't touch the `!Send` stage). Docked as the first `🌲 Prims` side-browser tab; clicking
+an entity-backed node selects it through the shared `apply_selection`; top two levels open by default.
+**Bounded parameter sliders — landed + renderer-verified (2026-07-11):** the Inspector reads per-attribute
+`customData {min,max,unit}` for data-driven sliders. Reader (`lunco-usd-bevy`: `AttrUiHint` +
+`StageView::attr_ui_hint`, parsing the `customData` `Dictionary` behind a plain-Rust struct so consumers
+need no `openusd`), view-model (`usd_params::produce_usd_param_view`), section
+(`inspector::usd_parameters_section`), authored ranges on `CosimTarget`
+(`primvars:wedge_count`/`band_count`). Write-back verified live: a `SetAttribute` on the primvar (the exact
+op the slider defers) re-runs the checker shader in the renderer (24×16 fine ↔ 2×3 coarse). Preserves the
+Inspector-*derives*-never-hardcodes rule (§3.5).
 
-**Phase 2 — wire.** ⏳ open. Connection canvas as a second `lunco-canvas` projector. The substrate
-(`lunco-canvas` is generic) and the op (`SetConnection`, now with a working live author — §3.3) both
-exist. The projector (StageView → Scene of prim-nodes + connection-edges) is a pure, unit-testable
-transform; the egui interaction and wire-drag → `SetConnection` need the running app.
+**Phase 2 — wire.** ✅ **DONE** (2026-07-11). Connection canvas landed as a second `lunco-canvas`
+projector: `crates/lunco-sandbox-edit/src/ui/connection_canvas/` (`projection.rs` pure `collect_graph`
++ `build_scene`, unit-tested; `visuals.rs`; `mod.rs` panel + main-thread producer + write-back).
+Registered in `SandboxEditUiPlugin`, docked as a `🔗 Connections` centre tab in the Object Builder
+perspective. Reads every wiring-relevant prim (connectors or `PhysicsRigidBodyAPI` body) as a node,
+`inputs:*.connect` as dataflow edges and `physics:body0/1` as joint edges; wire-drag →
+`SetConnection`, delete → clear / `RemovePrim`, all via the journaled `ApplyUsdOp`. Boot-verified in
+the sandbox (`142 prim entities → 25 nodes, 10 edges`). **Note:** enumerate prims from the ECS
+`UsdPrimPath` entities, *not* `StageView::prim_paths()` — the live traversal misses composed children
+(fixed in `93a2bfed`). **Open (polish):** initial fit uses a nominal rect (press `F` to fit precisely);
+node positions are session-only (persisting `lunco:canvasPos` is a follow-up).
 
-**Phase 3 — assemble.** ⏳ math done, UI open. `AttachComponent` and its op-lowering are landed and
-tested (§3.1); `resolve_mount_placement` / `AttachSpec::from_mount` (`attach.rs`) compute a part's
-placement + rotation so a plug frame aligns to a socket frame, unit-tested against hand-computed
-matrices. **Open:** the `lunco:mount:*` schema on assets, the UI that reads two mount frames off the
-composed stage and calls `from_mount` (the frame *reading* is the app-validated part), and the
-`rocker_bogie.usda` retrofit that drops its hand-written joint anchors.
+**Phase 3 — assemble.** ⏳ primitive done + API-drivable; mount ergonomics open. `AttachComponent` and
+its op-lowering are landed and tested (§3.1); `resolve_mount_placement` / `AttachSpec::from_mount`
+(`attach.rs`) compute a part's placement + rotation so a plug frame aligns to a socket frame,
+unit-tested against hand-computed matrices. **Verified 2026-07-11:** `AttachComponent` is reachable over
+the HTTP/MCP API as-is — its nested `AttachSpec` (incl. the `AttachJoint` enum) deserializes through the
+executor's `TypedReflectDeserializer`. **JSON contract** (single-field tuple structs unwrap to their
+inner value): `{ "doc": 1, "spec": { "edit_target": "@root@", "host_path": "/…", "name": "…", "asset":
+"<raw path>", "placement": [x,y,z], "rotate_deg": [x,y,z], "joint": "Fixed" | {"Revolute": {"axis":
+"X"}} } }`. So placement-based attach works today with one `execute_command`.
 
-**Phase 4 — behaviour.** ⏳ half done. Save-back-to-prim is **closed** (§3.7). **Open:** the rhai
-editor panel (Modelica layouter pattern) with a diagnostics gutter fed by the line/col `ScriptStatus`
-already returns.
+**Retrofit snap — landed + renderer-verified (2026-07-11).** The mount-frame *reading* the design held
+back (a wrong frame conversion is a physics bug only the renderer shows) is now built for the **retrofit**
+case, where both frames are on the live composed stage — no asset-stage open needed:
+
+- **`lunco:mount:*` schema** authored on a demo assembly (`sandbox_scene.usda` → `Base`): a host advertises
+  sockets under a `Mounts` group (`lunco:mount:socket` / `:joint` / `:axis`, `rel :part`), an attached
+  child part advertises its plug (`lunco:mount:plug`, `rel :frame`).
+- **Reader** (`lunco-usd-bevy/src/mount.rs`): `read_sockets` / `read_plug_frame` compose each mount prim's
+  frame **body-local** through the `Mounts` group via `local_transform_at` (`frame_in_body`). Tested against
+  a real composed stage (`mount_reader_tests`, 3 tests): socket reads body-local `(0,2.5,0)` not world
+  `(5,8.5,5)`; plug reads part-local; metadata + `part` rel compose.
+- **Op-lowering** `realign_component_ops` (`attach.rs`): re-authors an existing part's `xformOp:translate`/
+  `rotateXYZ` + the joint's `localPos0` from the resolved placement — *no* `AddPrim`/`SetRelationship`, so
+  it touches no topology and never rebuilds the world. Tested (2 tests): derives-anchor-from-placement,
+  authors-rotation-unconditionally (so a retrofit can clear a stale rotation to zero).
+- **UI**: Inspector `🔩 Mount` section (`inspector::mount_section`) over a NonSend view-model
+  (`usd_mount::produce_usd_mount_view`) — one row per socket, a `⟳ Snap` button that defers the realign ops
+  through `apply_usd_ops` (resolves the doc once, dispatches each journaled `ApplyUsdOp`), disabled when the
+  part is already aligned.
+- **Renderer-verified (2026-07-11):** dispatching the exact realign ops the button emits (`ApplyUsdOp` on
+  the twin doc) snapped the demo `Arm` from beside `Base` to directly on the socket (`(2,0,0)→(0,2.5,0)`),
+  **held stably** because `localPos0` moved with it — the joint didn't yank it back. This is the in-renderer
+  validation the frame math was held for. (The literal egui click isn't MCP-automatable, but the button's op
+  output is verified live; the section + view-model compile clean.)
+
+**New-attach snap — landed + tested (2026-07-11).** The other half: reference a component in and snap its
+plug to a socket, where the plug lives inside the *not-yet-loaded asset*, not the composed scene.
+
+- **`read_asset_plug_frame(fs_path)`** (`mount.rs`) composes the asset's full closure off disk
+  (`compose_file_to_stage`, resolving its references) and reads the plug frame off its `defaultPrim` — the
+  part every `AttachSpec` references in. Tested against the shipped demo component (`mount_probe.usda`,
+  plug 0.4 m above the part origin). Native-only (composition does file I/O).
+- **Socket schema** gained `lunco:mount:asset` (the raw component path a socket is designed to hold), read
+  into `MountSocket.asset`. An **empty** socket (no `rel :part`) that names an asset offers `⊕ Attach` in
+  the Inspector; the handler resolves the asset path against the asset root (`<cwd>/assets`),
+  `read_asset_plug_frame`s it, `AttachSpec::from_mount`s it onto the socket frame, and dispatches the
+  journaled `AttachComponent` (references + places + joints the part). Socket joint token → typed
+  `AttachJoint` via `attach_joint_from`.
+- **Demo:** `components/mount_probe.usda` (a magenta part with a `probe` plug) + an empty `probe` socket on
+  `Base` (`sandbox_scene.usda`) naming it. Select `Base` → `🔩 Mount` → `⊕ Attach mount_probe.usda`.
+- **Verified:** the reader/compose piece by the disk-compose test above; `from_mount` by its matrix tests;
+  `AttachComponent` was already API-verified (JSON contract above) with 5 op tests. Not run: the literal
+  egui click-through (no egui MCP automation; a live GUI instance was unavailable — the user's own
+  host+client session held the ports, and a competing GPU instance would risk it).
+
+**Still open — the shipped-rover retrofit (`physical_drivetrain.usda` / `rocker_bogie.usda`).** These author
+the duplication the schema removes literally — `over Wheel_FL.translate == Wheel_FL_Hinge.localPos0 ==
+(-0.9,-0.65,-1.225)`, one number typed twice per wheel. The retrofit *mechanism* is complete and proven
+(the verified `Base`/`Arm` snap is mechanically identical). What a literal "drop the hand-written anchors"
+needs beyond authoring mount frames is a **load-time mount-resolution pass** that derives `localPos0` from
+the frames at load — otherwise removing the anchors leaves the joints un-anchored. That is a separate
+feature, and authoring mounts onto a shipped, path-translated, cross-file drivetrain wants per-rover
+in-renderer physics verification (all wheels articulate) before it ships — so it is deliberately deferred
+rather than edited blind. The substrate (reader + `realign`/`from_mount` + snap UI) is what it rests on.
+
+> **Merge check (2026-07-11), physics bridge `cc87d39f`:** the plan survives intact. The bridge
+> (`lunco-usd-avian/src/big_space_bridge.rs`) only replaces avian's f32↔f64 *body world-pose* sync;
+> it does **not** change joint-anchor interpretation — `localPos0/1` are still read body-local
+> (`lunco-usd-avian/src/lib.rs`, `with_local_anchor1/2`), so `attach.rs`'s `localPos0=placement,
+> localPos1=0` convention and `resolve_mount_placement` (pure local-frame `Affine3A`, `EulerRot::XYZ`)
+> are correct as-is — the bridge makes jointed bodies *more* precise for free. `coords.rs::world_pose`
+> is a hierarchy/world-space, ECS-bound helper solving a different problem; do **not** switch the mount
+> math to it. **One guardrail** from `45-big-space-correct-usage.md` §3.3: when the UI reads socket/plug
+> frames off the stage, read each prim's **local** `xformOp:*`; do **not** adopt `world_position_seeded`
+> (it's flagged for retirement). Author assembled physics in the grid's local/site frame, never in
+> celestial space.
+
+**Phase 4 — behaviour.** ✅ **DONE** (2026-07-11). Save-back-to-prim was already closed (§3.7); the
+rhai **editor panel** now landed: `crates/lunco-sandbox/src/ui/rhai_editor_panel.rs` (`RhaiEditorPanel`
++ `RhaiEditorVm` view-model + `produce_rhai_editor_vm` producer). It lives in **lunco-sandbox** (not
+sandbox-edit — it needs `ScriptRegistry`/`RunScenario` from lunco-scripting and `SaveScenario` from
+lunco-sandbox), registered in `crates/lunco-sandbox/src/ui/mod.rs`, docked as a `📜 Behaviour` centre
+tab in the Object Builder perspective (referenced by string id, filtered in apps that don't register
+it). Follows `SelectedEntities`, resolves `ScriptedModel → ScriptRegistry` source into an editable
+buffer (re-synced only on a doc/generation change with no unsaved edits, so typing is never clobbered),
+and surfaces `DocumentDiagnostics` (the line/col the rhai compile path emits) as a click-to-jump list
+plus a compile-status chip. **Save & Run** = `RunScenario{source}` (sets live source + hot-reloads the
+scenario) → `SaveScenario` (persists onto `lunco:script`), both journaled; **Revert** reloads the saved
+source. Boot-verified: attaching a rhai script with a deliberate `let boost = ;` showed the source and
+the diagnostic `✗ 9:17 Unexpected ';' (line 9, position 17)`. **Follow-up:** a painted line-number
+gutter (the codebase has none; the Modelica editor deliberately deferred it — the diagnostics list is
+the interim surface).
 
 ### The `UndoManager` decision (Phase 0's open item)
 
@@ -382,8 +486,21 @@ recorder fires identically for a fresh edit, an undo, and a redo, so it cannot f
 `record_local` / `record_redo` split correctly without new plumbing. The networked-author isolation is
 *safe* (local edits are the only ones a recorder-fed manager ever sees — peer edits bypass the recorder),
 so the block is purely: **make the journal authoritative and retire the `DocumentHost` stack, or demote
-`UndoManager` to a separate twin-wide/cross-document undo the per-document command doesn't touch.** That
-is a call to make deliberately, not to guess.
+`UndoManager` to a separate twin-wide/cross-document undo the per-document command doesn't touch.**
+
+**Decision (2026-07-11): keep the `DocumentHost` per-document inverse stack authoritative for `Ctrl+Z`;
+reserve `UndoManager` for a future twin-wide / cross-author undo, and do NOT feed it from the
+per-document recorder.** Rationale: the two costs of the alternatives are asymmetric. Wiring both onto
+one `Undo` command is a *correctness* regression (double-undo, plus the recorder can't split
+fresh-edit/undo/redo) — a live bug in the hot editing path. Keeping `DocumentHost` authoritative is the
+*status quo that already works*: `Ctrl+Z` is correct today, per-document scope is what a builder wants
+(undo my last edit to *this* prim, not some other author's), and it composes cleanly with the journal
+(every `ApplyUsdOp` still records to the journal for replay/history — that path is untouched). The only
+capability we defer is *cross-document / twin-wide* undo, which has no user demand yet and, when it does,
+belongs on its own command (`UndoTwin`?) reading `UndoManager` — never on the per-document `Undo`. So the
+"unused `UndoManager`" is not dead-by-mistake; it is **reserved infrastructure** for that later scope.
+This needs no code change now — it removes the blocker by making the call, and prevents the tempting-but-
+wrong double-wiring. Revisit only when a concrete cross-author-undo requirement lands.
 
 ---
 

@@ -286,6 +286,58 @@ pub fn attach_component_ops(spec: &AttachSpec) -> Vec<UsdOp> {
     ops
 }
 
+/// Re-derive an **already-attached** part's placement + joint anchor from mount
+/// frames, without re-referencing it — the *retrofit* half of the mount story
+/// (`docs/architecture/48-object-builder.md` §3.1). Where [`attach_component_ops`]
+/// adds a new part, this touches only the two things that duplicate today: the
+/// part's `xformOp:translate`/`rotateXYZ`, and its joint's `localPos0`. The part
+/// prim and its joint already exist on the stage (a wheel under a bogie); "move the
+/// socket" then moves both, because the anchor is derived from the same placement,
+/// never a second hand-typed number.
+///
+/// `localPos1` stays the part's origin, the convention every shipped joint uses
+/// (`localPos1 = (0,0,0)` throughout `rocker_bogie.usda`). Rotation is authored
+/// **unconditionally** — a retrofit must be able to *clear* a stale rotation back
+/// to zero, so unlike the attach path it always emits `SetRotate` (even for
+/// `[0,0,0]`). Emits no `AddPrim`/`SetRelationship`: the topology is untouched, so
+/// this never rebuilds the world (all four ops replay incrementally, §3.3).
+pub fn realign_component_ops(
+    edit_target: LayerId,
+    part_path: impl Into<String>,
+    joint_path: impl Into<String>,
+    placement: [f64; 3],
+    rotate_deg: [f64; 3],
+) -> Vec<UsdOp> {
+    let part = part_path.into();
+    let joint = joint_path.into();
+    vec![
+        UsdOp::SetTranslate {
+            edit_target: edit_target.clone(),
+            path: part.clone(),
+            value: placement,
+        },
+        UsdOp::SetRotate {
+            edit_target: edit_target.clone(),
+            path: part,
+            value: rotate_deg,
+        },
+        UsdOp::SetAttribute {
+            edit_target: edit_target.clone(),
+            path: joint.clone(),
+            name: "physics:localPos0".into(),
+            type_name: "point3f".into(),
+            value: vec3_literal(placement),
+        },
+        UsdOp::SetAttribute {
+            edit_target,
+            path: joint,
+            name: "physics:localPos1".into(),
+            type_name: "point3f".into(),
+            value: vec3_literal([0.0, 0.0, 0.0]),
+        },
+    ]
+}
+
 /// Compute a part's host-local placement (translation + `rotateXYZ` Euler degrees)
 /// so its **plug frame** coincides with the host's **socket frame** — the geometry
 /// behind [`AttachSpec::from_mount`].
@@ -434,6 +486,55 @@ mod tests {
         assert!(add_child < place, "child exists before it is placed");
         assert!(add_joint < relate, "joint exists before it relates bodies");
         assert!(add_child < relate, "part exists before the joint targets it");
+    }
+
+    #[test]
+    fn realign_re_authors_placement_and_anchor_without_touching_topology() {
+        // The retrofit path: the part and joint already exist, so realign emits ONLY
+        // the two duplicated frames — no AddPrim, no SetRelationship (which would
+        // rebuild the world). It re-authors translate + rotate on the part and
+        // derives localPos0 from the same placement.
+        let ops = realign_component_ops(
+            LayerId::root(),
+            "/RockerBogie/RockerL/Wheel_FL",
+            "/RockerBogie/RockerL/Wheel_FL_Joint",
+            [0.1, -0.2, 0.3],
+            [0.0, 90.0, 0.0],
+        );
+        assert!(
+            !ops.iter().any(|op| matches!(op,
+                UsdOp::AddPrim { .. } | UsdOp::SetRelationship { .. })),
+            "retrofit touches no topology"
+        );
+        // Translate authored on the part…
+        assert!(ops.iter().any(|op| matches!(op,
+            UsdOp::SetTranslate { path, value, .. }
+                if path == "/RockerBogie/RockerL/Wheel_FL" && *value == [0.1, -0.2, 0.3])));
+        // …and the SAME number as the joint's localPos0 (derived, not retyped).
+        assert!(ops.iter().any(|op| matches!(op,
+            UsdOp::SetAttribute { name, value, .. }
+                if name == "physics:localPos0" && value == "(0.1, -0.2, 0.3)")));
+        assert!(ops.iter().any(|op| matches!(op,
+            UsdOp::SetAttribute { name, value, .. }
+                if name == "physics:localPos1" && value == "(0, 0, 0)")));
+    }
+
+    #[test]
+    fn realign_always_authors_rotation_so_it_can_clear_a_stale_one() {
+        // Unlike attach (which skips SetRotate for [0,0,0]), realign must be able to
+        // reset a part that WAS rotated back to axis-aligned — so it always emits it.
+        let ops = realign_component_ops(
+            LayerId::root(),
+            "/A/Part",
+            "/A/Part_Joint",
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+        );
+        assert!(
+            ops.iter().any(|op| matches!(op,
+                UsdOp::SetRotate { value, .. } if *value == [0.0, 0.0, 0.0])),
+            "realign authors rotation unconditionally, even zero"
+        );
     }
 
     // ── Mount-frame math (doc 48 §3.1) ──

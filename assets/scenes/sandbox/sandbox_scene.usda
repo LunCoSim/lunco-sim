@@ -356,8 +356,22 @@ def Xform "SandboxScene" (
         string primvars:shaderPath = "shaders/balloon.wgsl"
         color3f primvars:cell_a = (0.9, 0.7, 0.2)    # cell A (yellow identity)
         color3f primvars:cell_b = (0.12, 0.12, 0.14) # cell B (dark)
-        float primvars:wedge_count = 8.0             # longitude cells
-        float primvars:band_count = 6.0              # latitude cells
+        # `customData {min,max,unit}` = the UI hint the Inspector's data-driven
+        # "🎚 Parameters" section reads to render a bounded slider (doc 48 §3.5).
+        float primvars:wedge_count = 8.0 (           # longitude cells
+            customData = {
+                double min = 2
+                double max = 24
+                string unit = "cells"
+            }
+        )
+        float primvars:band_count = 6.0 (            # latitude cells
+            customData = {
+                double min = 2
+                double max = 16
+                string unit = "cells"
+            }
+        )
         double3 xformOp:translate = (-30.0, 5.0, 10.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         bool physics:rigidBodyEnabled = true
@@ -429,6 +443,107 @@ def Xform "SandboxScene" (
         # left of B's centre.
         point3f physics:localPos0 = (1.5, 0, 0)
         point3f physics:localPos1 = (-1.5, 0, 0)
+    }
+
+    # --- Mount-frame demo: snap a child part onto the socket it declares ---
+    #
+    # The Object Builder retrofit (doc 48 §3.1). `Base` (blue, kinematic) is a
+    # host body advertising ONE socket under its `Mounts` group; `Arm` (yellow) is
+    # a CHILD body carrying a plug frame, deliberately authored off to the side so
+    # its transform DISAGREES with the socket. Select `Base` → Inspector "🔩 Mount"
+    # → "⟳ Snap Arm" re-derives Arm's `xformOp:translate` + the `Arm_Joint` anchor
+    # from the two mount frames, so the part and its constraint both jump onto the
+    # socket. "Move the socket, the part follows" — the joint anchor is derived,
+    # never a second hand-typed number.
+    #
+    # Arm must be a CHILD of Base (not a sibling like JointTestA/B): the mount math
+    # authors a host-LOCAL placement, so the part's transform has to be in the host
+    # body's frame.
+    def Cube "Base" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (5.0, 6.0, 5.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.2, 0.5, 1.0)   # blue host
+        float physics:mass = 5.0
+        # Kinematic host: stays put so the snap is easy to read (the Arm moves,
+        # the Base doesn't). Same opaque-authority rule as the JointTest bodies —
+        # the joint isn't replicated, so don't let the client flip it Dynamic.
+        bool physics:kinematicEnabled = true
+        string lunco:net:authority = "opaque"
+
+        # The socket group. A socket is a `kind = "mount"` Xform whose
+        # `xformOp:*` IS the socket frame (here 2.5 m above the Base origin).
+        def Xform "Mounts"
+        {
+            def Xform "arm" (
+                kind = "mount"
+            )
+            {
+                uniform token lunco:mount:socket = "arm"     # what may attach
+                uniform token lunco:mount:joint  = "fixed"   # the constraint implied
+                rel lunco:mount:part = </SandboxScene/Base/Arm>   # the part it holds
+                double3 xformOp:translate = (0, 2.5, 0)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+            }
+
+            # An EMPTY socket for the new-attach flow: it names a default component
+            # (`lunco:mount:asset`) but holds no part yet. Selecting Base → 🔩 Mount →
+            # "⊕ Attach mount_probe.usda" composes that asset, reads its plug frame,
+            # and references + joints it here with the plug landed on this socket.
+            def Xform "probe" (
+                kind = "mount"
+            )
+            {
+                uniform token lunco:mount:socket = "probe"
+                uniform token lunco:mount:joint  = "fixed"
+                uniform token lunco:mount:asset  = "components/mount_probe.usda"
+                double3 xformOp:translate = (0, -2.5, 0)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+            }
+        }
+
+        def Cube "Arm" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            double size = 1.0
+            # Deliberately WRONG: off to the +X side, not on the socket. Snap fixes
+            # it (→ (0, 2.5, 0), directly above Base).
+            double3 xformOp:translate = (2.0, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f primvars:displayColor = (1.0, 0.8, 0.1)   # yellow part
+            float physics:mass = 2.0
+            string lunco:net:authority = "opaque"
+            uniform token lunco:mount:plug = "arm"
+            rel lunco:mount:frame = </SandboxScene/Base/Arm/Mounts/hub>
+
+            def Xform "Mounts"
+            {
+                # Plug at the part origin (identity) → the snap lands Arm's origin
+                # exactly on the socket.
+                def Xform "hub" (
+                    kind = "mount"
+                )
+                {
+                    double3 xformOp:translate = (0, 0, 0)
+                    uniform token[] xformOpOrder = ["xformOp:translate"]
+                }
+            }
+        }
+
+        # The existing joint — the ONE piece the retrofit re-anchors. Named
+        # `<part>_Joint` (the attach convention the snap targets). `localPos0`
+        # currently matches Arm's wrong position; snapping re-derives it.
+        def PhysicsFixedJoint "Arm_Joint"
+        {
+            rel physics:body0 = </SandboxScene/Base>
+            rel physics:body1 = </SandboxScene/Base/Arm>
+            point3f physics:localPos0 = (2.0, 0.0, 0.0)
+            point3f physics:localPos1 = (0, 0, 0)
+        }
     }
 
 
