@@ -172,13 +172,53 @@ pub fn setup_big_space_hierarchy(
         .iter()
         .next()
         .or_else(|| q_world_root.iter().next())
-        .unwrap_or_else(|| commands.spawn(BigSpace::default()).id());
+        .unwrap_or_else(|| {
+            // Standalone fallback (no WorldShellPlugin): a CANONICAL big_space
+            // root — `BigSpace` + `Grid` on the same entity, NO `Transform`.
+            // The high-precision pass only writes a root's GlobalTransform
+            // when Grid and BigSpace share the entity; a bare `BigSpace`
+            // leaves every child grid's pose to the f32 compat pass.
+            commands
+                .spawn((
+                    BigSpace::default(),
+                    Grid::new(2_000.0, 100.0),
+                    GlobalTransform::default(),
+                    Visibility::default(),
+                    InheritedVisibility::default(),
+                    Name::new("Celestial BigSpace Root (standalone)"),
+                ))
+                .id()
+        });
 
     // ── Solar System Grid (inertial anchor) ────────────────────────────────
+    //
+    // CELL EDGE SETS RENDER PRECISION — NOT EXTENT. A grid's cell edge may look
+    // like a free "scale" knob (bigger cells for bigger distances); it is not.
+    // `LocalFloatingOrigin::translation` is an **f32** holding the floating
+    // origin's offset within one cell of THIS grid, so it is bounded by
+    // `maximum_distance_from_origin = edge/2 + switching_threshold`. When
+    // big_space pushes the origin down the tree
+    // (`local_origin::propagate_origin_to_child`) it rebuilds the origin's
+    // position as `cells×edge` (exact f64) PLUS that f32. Re-splitting at the
+    // child cannot recover bits the parent already dropped, so the COARSEST
+    // grid in the chain sets the precision floor for its whole subtree.
+    //
+    // At the old `Grid::new(1e9, 1e8)` that f32 ranged to 6e8 m, where its ULP
+    // is ~64 m — and the EMB grid below added ~4 m more. Everything under the
+    // Moon (the surface underfoot, Earth, the orbit lines) therefore re-rounded
+    // by tens of metres every frame the pin slid the tree: the "lunar surface
+    // jitters / Earth jitters / orbits jump" report. Paused, the pin
+    // early-returns, the origin's sub-cell offset never changes, and the frame
+    // is pixel-identical — which is why a paused-clock test showed 0 px and hid
+    // this for so long.
+    //
+    // Cells are `i64`, so small edges are free: 1 AU / 2 km ≈ 7.5e7 cells. Keep
+    // every celestial grid at the same 2 km / 100 m as the root `WorldGrid` —
+    // `max_distance` 1100 m, f32 ULP there ≈ 0.12 mm.
     let solar_grid = commands.spawn((
         SolarSystemRoot,
         CelestialReferenceFrame { ephemeris_id: 10 },
-        Grid::new(1.0e9, 1.0e30),
+        Grid::new(2_000.0, 100.0),
         CellCoord::default(),
         Transform::default(),
         GlobalTransform::default(),
@@ -261,7 +301,8 @@ pub fn setup_big_space_hierarchy(
     let emb_grid = commands.spawn((
         EMBRoot,
         CelestialReferenceFrame { ephemeris_id: 3 },
-        Grid::new(1.0e8, 1.0e30),
+        // 2 km cells — see the Solar Grid note: cell edge is a PRECISION knob.
+        Grid::new(2_000.0, 100.0),
         CellCoord::default(),
         Transform::default(),
         GlobalTransform::default(),
@@ -274,7 +315,8 @@ pub fn setup_big_space_hierarchy(
     let earth_grid = commands.spawn((
         EarthRoot,
         CelestialReferenceFrame { ephemeris_id: 399 },
-        Grid::new(10_000.0, 1.0e30),
+        // 2 km cells — see the Solar Grid note: cell edge is a PRECISION knob.
+        Grid::new(2_000.0, 100.0),
         CellCoord::default(),
         Transform::default(),
         GlobalTransform::default(),
@@ -320,7 +362,7 @@ pub fn setup_big_space_hierarchy(
     // ── Earth Surface Grid (edge=1e3 m, inside the rotating Earth Grid) ────
     let earth_surface_grid = commands.spawn((
         EarthSurfaceRoot,
-        Grid::new(1_000.0, 1.0e30),
+        Grid::new(1_000.0, 100.0),
         CellCoord::default(),
         Transform::default(),
         GlobalTransform::default(),
@@ -352,7 +394,8 @@ pub fn setup_big_space_hierarchy(
     let moon_grid = commands.spawn((
         MoonRoot,
         CelestialReferenceFrame { ephemeris_id: 301 },
-        Grid::new(10_000.0, 1.0e30),
+        // 2 km cells — see the Solar Grid note: cell edge is a PRECISION knob.
+        Grid::new(2_000.0, 100.0),
         CellCoord::default(),
         Transform::default(),
         GlobalTransform::default(),
@@ -394,7 +437,7 @@ pub fn setup_big_space_hierarchy(
     // ── Moon Surface Grid (edge=1e3 m, inside the rotating Moon Grid) ──────
     let moon_surface_grid = commands.spawn((
         MoonSurfaceRoot,
-        Grid::new(1_000.0, 1.0e30),
+        Grid::new(1_000.0, 100.0),
         CellCoord::default(),
         Transform::default(),
         GlobalTransform::default(),

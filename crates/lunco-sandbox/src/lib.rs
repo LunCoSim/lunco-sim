@@ -1323,6 +1323,14 @@ impl Plugin for SandboxCorePlugin {
             // EntityCount is cheap and useful any time we look at perf.
             .add_plugins(bevy::diagnostic::EntityCountDiagnosticsPlugin::default())
             .add_plugins(PhysicsPlugins::default().set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all()))
+            // NOTE: Phase 5 (BigSpacePhysicsBridgePlugin — decouple avian from the
+            // f32 render Transform) is intentionally NOT registered here. Replacing
+            // avian's transform sync surfaced deep coupling with its solver/island/
+            // contact bookkeeping (schedule-ambiguity panic fixed by PhysicsStepSystems
+            // ordering; then a runtime island panic in narrow_phase). Reverted to keep
+            // physics on avian's default sync, which is working. The bridge module +
+            // headless test remain in lunco-usd-avian for future work (the avian-native
+            // integration needs more than a sync-swap). See docs/architecture/47 + memory.
             // 12 solver substeps (avian default 6): joint-based rovers buzz the
             // chassis under drive torque at 6 substeps. Quantified in the headless
             // `rover_jitter` probe. See `project_physical_rover_suspension`.
@@ -1715,8 +1723,12 @@ fn read_authored_layer_maps<R: UsdRead>(
 #[cfg(feature = "ui")]
 fn report_terrain_stream_status(
     status: Res<lunco_terrain_surface::TerrainStreamStatus>,
-    mut bus: ResMut<lunco_workbench::status_bus::StatusBus>,
+    // `Option`: the `ui` FEATURE is compile-time, but `--no-ui` headless is a
+    // RUNTIME choice on the same binary — the workbench (and its `StatusBus`)
+    // is simply not added there, and a bare `ResMut` panics the whole app.
+    bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
 ) {
+    let Some(mut bus) = bus else { return };
     const SOURCE: &str = "terrain";
     if status.wanted > 0 && status.resident < status.wanted {
         bus.push_progress(

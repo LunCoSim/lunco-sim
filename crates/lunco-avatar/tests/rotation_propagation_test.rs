@@ -16,7 +16,7 @@ use big_space::prelude::*;
 use lunco_celestial::{CelestialBody, CelestialReferenceFrame};
 
 const MOON_RADIUS: f64 = 1737.0e3;
-const MOON_GRID_CELL_SIZE: f64 = 10_000.0;
+const MOON_GRID_CELL_SIZE: f64 = 2_000.0;
 
 /// Verify that when a Body entity rotates, its tile children (which have
 /// CellCoord) inherit that rotation via big_space's propagate_high_precision.
@@ -29,7 +29,7 @@ fn test_body_rotation_propagates_to_tile_with_cellcoord() {
     ));
 
     let moon_radius = MOON_RADIUS;
-    let _moon_grid = Grid::new(MOON_GRID_CELL_SIZE as f32, 1.0e30_f32);
+    let _moon_grid = Grid::new(MOON_GRID_CELL_SIZE as f32, 100.0_f32);
 
     // Compute tile position at equator on +X axis: (R, 0, 0) in body-local coords.
     // This tile WILL move when the Body rotates around Y axis.
@@ -54,7 +54,7 @@ fn test_body_rotation_propagates_to_tile_with_cellcoord() {
 
         let solar_grid = commands.spawn((
             CelestialReferenceFrame { ephemeris_id: 10 },
-            Grid::new(1.0e9, 1.0e30),
+            Grid::new(2_000.0, 100.0),
             CellCoord::default(),
             Transform::default(),
             GlobalTransform::default(),
@@ -63,7 +63,7 @@ fn test_body_rotation_propagates_to_tile_with_cellcoord() {
 
         let moon_grid = commands.spawn((
             CelestialReferenceFrame { ephemeris_id: 301 },
-            Grid::new(MOON_GRID_CELL_SIZE as f32, 1.0e30_f32),
+            Grid::new(MOON_GRID_CELL_SIZE as f32, 100.0_f32),
             CellCoord::default(),
             Transform::default(),
             GlobalTransform::default(),

@@ -3,6 +3,10 @@
 //! ## Usage
 //!
 //! ```rust
+//! # use bevy::prelude::*;
+//! # use bevy::math::DVec3;
+//! # use lunco_environment::Gravity;
+//! # let mut app = App::new();
 //! // Sandbox / flat ground:
 //! app.insert_resource(Gravity::flat(9.81, DVec3::NEG_Y));
 //!
@@ -108,7 +112,15 @@ pub fn update_local_gravity_field(
     q_bodies: Query<&GravityProvider>,
     gravity: Res<Gravity>,
     mut field: ResMut<LocalGravityField>,
+    orbital_pin: Res<crate::placement::OrbitalViewPin>,
 ) {
+    // Orbital VIEW active: the camera has flown to the focused body, but the
+    // scene/physics stayed at the site. A field computed at the camera's
+    // position would be garbage for the site content (Earth gravity at the
+    // Moon site), so HOLD the last surface field until the view returns.
+    if orbital_pin.active {
+        return;
+    }
     let Some((avatar_ent, tf, cell, _, gravity_body)) = q_avatar.iter().next() else { return };
 
     // Avatar absolute position in root frame.

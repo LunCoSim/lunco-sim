@@ -262,16 +262,25 @@ pub fn load_missions_system(
 pub fn update_spacecraft_position_system(
     world: Res<lunco_time::WorldTime>,
     ephemeris: Res<crate::ephemeris::EphemerisResource>,
-    mut q_spacecraft: Query<(&Spacecraft, &mut Transform, &mut CellCoord)>,
+    q_grids: Query<&big_space::prelude::Grid>,
+    mut q_spacecraft: Query<(&Spacecraft, &mut Transform, &mut CellCoord, Option<&ChildOf>)>,
 ) {
     let jd = world.epoch_jd;
-    for (sc, mut tf, mut cell) in q_spacecraft.iter_mut() {
+    for (sc, mut tf, mut cell, child_of) in q_spacecraft.iter_mut() {
         let p_target = ephemeris.provider.global_position(sc.ephemeris_id, jd);
         let p_ref = ephemeris.provider.global_position(sc.reference_id, jd);
         let rel_pos = crate::coords::ecliptic_to_bevy(p_target - p_ref);
-        
-        tf.translation = rel_pos.as_vec3(); 
-        *cell = CellCoord::default(); 
+
+        // Split through the parent (reference) grid so the spacecraft stays
+        // within one cell — precise placement instead of a raw f32 at up to
+        // ~4e8 m (32 m ULP) for cislunar trajectories. `look_to` below only
+        // sets rotation from a direction, so it is unaffected by the split.
+        let (new_cell, new_translation) = child_of
+            .and_then(|c| q_grids.get(c.parent()).ok())
+            .map(|grid| grid.translation_to_grid(rel_pos))
+            .unwrap_or_else(|| (CellCoord::default(), rel_pos.as_vec3()));
+        tf.translation = new_translation;
+        *cell = new_cell;
 
         // Point solar panels towards the Sun
         // Sun ID is 10

@@ -667,11 +667,12 @@ fn assemble_and_send_snapshots(
     server: Single<&Server>,
     mut sender: ServerMultiMessageSender,
     mut last_gen: Local<u64>,
-    // Per-session digest of the last `(pos_q, rot_packed, last_input_seq)` SENT to that
-    // peer per gid. Diffed each assemble to decide what to send; out-of-interest gids
-    // are evicted so a re-entry re-baselines.
+    // Per-session digest of the last pose ([`crate::sync::PoseDigest`] —
+    // `(cell, pos_q, rot_packed, last_input_seq)`) SENT to that peer per gid.
+    // Diffed each assemble to decide what to send; out-of-interest gids are
+    // evicted so a re-entry re-baselines.
     mut sent_last: Local<
-        std::collections::HashMap<SessionId, std::collections::HashMap<u64, ([i32; 3], u32, u32)>>,
+        std::collections::HashMap<SessionId, std::collections::HashMap<u64, crate::sync::PoseDigest>>,
     >,
     // Per-session set of gids the peer has been sent a `Spawn` for (scoped-spawn,
     // Phase 2). Persists across AOI exit/re-entry (soft-exit keeps the proxy), so a

@@ -7,7 +7,7 @@
 //! breaks across Grid boundaries; these helpers cover both cases.
 
 use bevy::prelude::*;
-use bevy::math::DVec3;
+use bevy::math::{DQuat, DVec3};
 use big_space::prelude::*;
 use bevy::ecs::query::QueryFilter;
 
@@ -66,43 +66,70 @@ pub fn world_position(
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
 ) -> Option<DVec3> {
-    let (mut cell, mut tf) = {
-        let (c, t) = q_spatial.get(entity).ok()?;
-        (c.copied().unwrap_or_default(), *t)
+    world_pose(entity, q_parents, q_grids, q_spatial).map(|(p, _)| p)
+}
+
+/// Absolute world pose (position + rotation) of `entity` in the BigSpace root
+/// frame, as `(DVec3, DQuat)`. See [`world_position`] for details; this variant
+/// also returns the composed rotation — needed by the avian physics bridge
+/// (Phase 5), which must sync both `Position` and `Rotation` from the cell
+/// chain (rotation-aware, unlike the origin-relative f32 `GlobalTransform`).
+pub fn world_pose(
+    entity: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
+) -> Option<(DVec3, DQuat)> {
+    // Collect the chain entity → root. Each step records the entity's local
+    // offset in its PARENT's frame (cell×edge + translation; edge comes from
+    // the parent grid if any) and its local rotation.
+    let (first_cell, first_tf) = match q_spatial.get(entity) {
+        Ok((c, t)) => (c.copied().unwrap_or_default(), *t),
+        Err(_) => return None,
     };
-    let mut total = DVec3::ZERO;
+    let mut chain: Vec<(DVec3, Quat)> = Vec::with_capacity(8);
     let mut current = entity;
-
+    let mut cur_cell = first_cell;
+    let mut cur_tf = first_tf;
     for _ in 0..32 {
-        let Ok(child_of) = q_parents.get(current) else {
-            total += tf.translation.as_dvec3();
-            return Some(total);
+        let edge = match q_parents.get(current) {
+            Ok(co) => q_grids.get(co.parent()).ok().map(|g| g.cell_edge_length() as f64),
+            Err(_) => None,
         };
-        let parent = child_of.parent();
-
-        if let Ok(grid) = q_grids.get(parent) {
-            // Crossing a Grid boundary: convert our (cell, tf) to the
-            // parent Grid's frame in DVec3.
-            total += grid.grid_position_double(&cell, &tf);
-            let Ok((p_cell, p_tf)) = q_spatial.get(parent) else {
-                return Some(total);
-            };
-            cell = p_cell.copied().unwrap_or_default();
-            tf = *p_tf;
-            current = parent;
-        } else if let Ok((p_cell_opt, p_tf)) = q_spatial.get(parent) {
-            // Mid-hierarchy plain-Transform parent: compose its Transform
-            // onto our running local pose and continue upward.
-            tf.translation = p_tf.translation + p_tf.rotation * tf.translation;
-            tf.rotation = p_tf.rotation * tf.rotation;
-            cell = p_cell_opt.copied().unwrap_or(cell);
-            current = parent;
-        } else {
-            total += tf.translation.as_dvec3();
-            return Some(total);
+        let cell_off = match edge {
+            Some(e) => DVec3::new(
+                cur_cell.x as f64 * e,
+                cur_cell.y as f64 * e,
+                cur_cell.z as f64 * e,
+            ),
+            None => DVec3::ZERO,
+        };
+        chain.push((cell_off + cur_tf.translation.as_dvec3(), cur_tf.rotation));
+        let parent = match q_parents.get(current) {
+            Ok(co) => co.parent(),
+            Err(_) => break,
+        };
+        match q_spatial.get(parent) {
+            Ok((c, t)) => {
+                cur_cell = c.copied().unwrap_or_default();
+                cur_tf = *t;
+            }
+            Err(_) => break,
         }
+        current = parent;
     }
-    Some(total)
+    // Compose top-down (root first): world = parent_world × local at each level,
+    // so each ancestor's rotation IS applied to its descendants' offsets. The
+    // previous implementation added offsets without rotating — wrong for any
+    // ancestor grid that rotates (e.g. the spinning Moon grid; see
+    // `world_position_applies_parent_grid_rotation`).
+    let mut pos = DVec3::ZERO;
+    let mut rot = DQuat::IDENTITY;
+    for (off, local_rot) in chain.iter().rev() {
+        pos += rot * off;
+        rot = rot * local_rot.as_dquat();
+    }
+    Some((pos, rot))
 }
 
 /// Vector from `from` to `to` in DVec3 absolute world space.
@@ -130,12 +157,8 @@ pub fn world_to_grid_local(
 }
 
 /// Absolute world position of `entity`, seeded with an explicit
-/// `(initial_cell, initial_tf)`.
-///
-/// Use this when `entity` is not present in `q_spatial` (typically because
-/// `q_spatial` carries a `Without<...>` disjointness filter against another
-/// `mut` query that holds `entity`). For the no-seed variant — when entity
-/// IS in `q_spatial` — use [`world_position`].
+/// `(initial_cell, initial_tf)`. See [`world_pose_seeded`] (returns the full
+/// pose); this returns the position only.
 pub fn world_position_seeded<F: QueryFilter>(
     entity: Entity,
     initial_cell: &CellCoord,
@@ -144,49 +167,66 @@ pub fn world_position_seeded<F: QueryFilter>(
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
 ) -> bevy::math::DVec3 {
-    let mut total_pos = bevy::math::DVec3::ZERO;
+    world_pose_seeded(entity, initial_cell, initial_tf, q_parents, q_grids, q_spatial).0
+}
 
-    let mut current_tf = *initial_tf;
-    let mut current_cell = *initial_cell;
-    let mut current_entity = entity;
+/// Absolute world pose (position + rotation), seeded — the disjoint-query
+/// variant of [`world_pose`], for entities not present in `q_spatial`.
+pub fn world_pose_seeded<F: QueryFilter>(
+    entity: Entity,
+    initial_cell: &CellCoord,
+    initial_tf: &Transform,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
+) -> (bevy::math::DVec3, DQuat) {
+    // Same rotation-aware chain composition as [`world_position`], but seeded
+    // with an explicit (cell, transform) for entities not present in
+    // `q_spatial` (disjoint-query / `Without<…>` cases).
+    let mut chain: Vec<(DVec3, Quat)> = Vec::with_capacity(8);
+    let edge0 = match q_parents.get(entity) {
+        Ok(co) => q_grids.get(co.parent()).ok().map(|g| g.cell_edge_length() as f64),
+        Err(_) => None,
+    };
+    let cell_off0 = match edge0 {
+        Some(e) => DVec3::new(
+            initial_cell.x as f64 * e,
+            initial_cell.y as f64 * e,
+            initial_cell.z as f64 * e,
+        ),
+        None => DVec3::ZERO,
+    };
+    chain.push((cell_off0 + initial_tf.translation.as_dvec3(), initial_tf.rotation));
 
-    let mut depth = 0;
-    while depth < 20 {
-        depth += 1;
-        if let Ok(child_of) = q_parents.get(current_entity) {
-            let parent = child_of.parent();
-            if let Ok(grid) = q_grids.get(parent) {
-                // Cross a grid boundary: convert current local state to parent coordinate space
-                total_pos += grid.grid_position_double(&current_cell, &current_tf);
-
-                // Now continue recursion from the grid entity itself
-                if let Ok((p_cell, p_tf)) = q_spatial.get(parent) {
-                    current_entity = parent;
-                    current_cell = p_cell.copied().unwrap_or_default();
-                    current_tf = *p_tf;
-                } else {
-                    break;
-                }
-            } else {
-                // Intermediate parent (not a grid): accumulate local transform.
-                // Mid-hierarchy entities should NOT have CellCoord under the new
-                // architecture; fall back to default if missing.
-                if let Ok((p_cell_opt, p_tf)) = q_spatial.get(parent) {
-                    current_tf.translation = p_tf.translation + p_tf.rotation * current_tf.translation;
-                    current_tf.rotation = p_tf.rotation * current_tf.rotation;
-                    current_cell = p_cell_opt.copied().unwrap_or(current_cell);
-                    current_entity = parent;
-                } else {
-                    total_pos += current_tf.translation.as_dvec3();
-                    break;
-                }
-            }
-        } else {
-            total_pos += current_tf.translation.as_dvec3();
-            break;
-        }
+    let mut current = entity;
+    for _ in 0..32 {
+        let parent = match q_parents.get(current) {
+            Ok(co) => co.parent(),
+            Err(_) => break,
+        };
+        let (cell, tf) = match q_spatial.get(parent) {
+            Ok((c, t)) => (c.copied().unwrap_or_default(), *t),
+            Err(_) => break,
+        };
+        let edge = match q_parents.get(parent) {
+            Ok(co) => q_grids.get(co.parent()).ok().map(|g| g.cell_edge_length() as f64),
+            Err(_) => None,
+        };
+        let cell_off = match edge {
+            Some(e) => DVec3::new(cell.x as f64 * e, cell.y as f64 * e, cell.z as f64 * e),
+            None => DVec3::ZERO,
+        };
+        chain.push((cell_off + tf.translation.as_dvec3(), tf.rotation));
+        current = parent;
     }
-    total_pos
+
+    let mut pos = bevy::math::DVec3::ZERO;
+    let mut rot = DQuat::IDENTITY;
+    for (off, local_rot) in chain.iter().rev() {
+        pos += rot * off;
+        rot = rot * local_rot.as_dquat();
+    }
+    (pos, rot)
 }
 
 #[cfg(test)]
@@ -288,5 +328,53 @@ mod tests {
         let (cell, off) = world_to_grid_local(abs, DVec3::ZERO, &g);
         assert_eq!((cell.x, cell.y, cell.z), (1, 0, 0), "cell {cell:?}");
         assert!((off - child_off).length() < 1e-3, "off {off:?} vs {child_off:?}");
+    }
+
+    /// `world_position` must apply a parent GRID's rotation. The Moon grid
+    /// spins (`body_rotation_system`), so a child's absolute position rotates
+    /// with it. This is load-bearing for gravity/SOI today and for the avian
+    /// physics bridge (Phase 5): if the accumulator ignores the grid's
+    /// rotation, a surface entity's world pose is wrong whenever its ancestor
+    /// grid rotates.
+    #[test]
+    fn world_position_applies_parent_grid_rotation() {
+        let mut world = World::new();
+        let g = grid();
+        // Parent grid rotated 90° about +Y, cell 0, no translation.
+        let rot90y = Quat::from_rotation_y(core::f32::consts::FRAC_PI_2);
+        let grid_e = world
+            .spawn((
+                g,
+                CellCoord::ZERO,
+                Transform::from_rotation(rot90y),
+                GlobalTransform::default(),
+            ))
+            .id();
+        // Child at local +X (100,0,0). A 90° +Y rotation maps +X -> -Z, so the
+        // correct world position is (0,0,-100). If `world_position` ignores the
+        // grid rotation it returns (100,0,0) — the assertion fails.
+        let child = world
+            .spawn((
+                CellCoord::ZERO,
+                Transform::from_translation(Vec3::new(100.0, 0.0, 0.0)),
+                GlobalTransform::default(),
+                ChildOf(grid_e),
+            ))
+            .id();
+
+        let mut state: SystemState<(
+            Query<&ChildOf>,
+            Query<&Grid>,
+            Query<(Option<&CellCoord>, &Transform)>,
+        )> = SystemState::new(&mut world);
+        let (q_parents, q_grids, q_spatial) = state.get(&world);
+
+        let pos = world_position(child, &q_parents, &q_grids, &q_spatial).unwrap();
+        let expected = DVec3::new(0.0, 0.0, -100.0);
+        assert!(
+            (pos - expected).length() < 1e-3,
+            "world_position ignored parent grid rotation: got {pos:?}, expected {expected:?} \
+             (90° +Y should map child +X(100) to -Z(100))"
+        );
     }
 }

@@ -45,7 +45,21 @@ pub struct GlobeLod {
 
 /// The cube-sphere tiles currently resident for a body, keyed by quadtree node.
 #[derive(Component, Default)]
-pub struct GlobeTiles(pub HashMap<TileCoord, Entity>);
+pub struct GlobeTiles {
+    /// Live tiles (in the desired LOD set).
+    pub resident: HashMap<TileCoord, Entity>,
+    /// Tiles that left the desired set, kept alive for a few frames while
+    /// their replacements' meshes reach the GPU. Despawning old and spawning
+    /// new in the SAME frame opened a one-frame hole per swap (a fresh
+    /// `Mesh3d` renders only after render-world extraction/prepare) — with a
+    /// moving camera the LOD churns continuously and the whole sphere
+    /// flickered ("still blinking"). The brief overlap of coplanar identical
+    /// surfaces is invisible; a hole is not.
+    pub retiring: Vec<(Entity, u8)>,
+}
+
+/// Frames an outgoing tile stays alive after its replacement spawned.
+const TILE_RETIRE_FRAMES: u8 = 3;
 
 // TODO(globe-invisible): In luncosim's dev `cargo run`, the globe is NOT
 // visible — the viewport renders black even though this system spawns the
@@ -102,7 +116,7 @@ pub fn update_globe_lod(
         // Desired leaf set: recurse all six faces from the root. The resident
         // set feeds the split/merge dead band (no per-frame flapping when the
         // camera parks exactly on a threshold — e.g. the 3.0-radii focus snap).
-        let resident: HashSet<TileCoord> = tiles.0.keys().copied().collect();
+        let resident: HashSet<TileCoord> = tiles.resident.keys().copied().collect();
         let mut desired: HashSet<TileCoord> = HashSet::new();
         for face in 0..6u8 {
             subdivide_face(
@@ -120,20 +134,32 @@ pub fn update_globe_lod(
             );
         }
 
-        // Despawn tiles no longer desired.
-        tiles.0.retain(|coord, ent| {
+        // Move tiles no longer desired to the retirement queue (despawned a
+        // few frames later, once their replacements are renderable).
+        let mut newly_retired: Vec<(Entity, u8)> = Vec::new();
+        tiles.resident.retain(|coord, ent| {
             let keep = desired.contains(coord);
             if !keep {
-                commands.entity(*ent).despawn();
+                newly_retired.push((*ent, TILE_RETIRE_FRAMES));
             }
             keep
+        });
+        tiles.retiring.extend(newly_retired);
+        tiles.retiring.retain_mut(|(ent, frames)| {
+            if *frames == 0 {
+                commands.entity(*ent).despawn();
+                false
+            } else {
+                *frames -= 1;
+                true
+            }
         });
 
         // Spawn newly-desired tiles — placement verbatim from the proven static
         // path: mesh in body-local (tile_center = ZERO), entity anchored at the
         // tile centre via the surface grid, reparented in place.
         for coord in &desired {
-            if tiles.0.contains_key(coord) {
+            if tiles.resident.contains_key(coord) {
                 continue;
             }
             let (u, v) = tile_center_uv(coord.face, coord.level, coord.i, coord.j);
@@ -173,11 +199,19 @@ pub fn update_globe_lod(
                     Visibility::Visible,
                     InheritedVisibility::default(),
                     NoFrustumCulling,
+                    // The globe is a FEATURELESS sphere of planetary size; as a
+                    // shadow caster it contributes nothing (its night side is
+                    // dark by shading) but at grazing sun elevations (+2.6° at
+                    // Malapert) a site merged onto the sphere sits exactly in
+                    // the shadow map's terminator/acne zone — the whole scene
+                    // flipped lit↔dark frame to frame ("still blinking"). Same
+                    // treatment as the Sun body mesh.
+                    bevy::light::NotShadowCaster,
                     Name::new(format!("Globe tile f{} L{} {},{}", coord.face, coord.level, coord.i, coord.j)),
                     ChildOf(lod.surface_grid),
                 ))
                 .id();
-            tiles.0.insert(*coord, ent);
+            tiles.resident.insert(*coord, ent);
         }
     }
 }

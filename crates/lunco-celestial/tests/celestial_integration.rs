@@ -59,14 +59,16 @@ fn test_celestial_startup_and_movement() {
     
     let epoch_before = app.world().resource::<WorldTime>().epoch_jd;
     
-    // 1. Verify Sun and Earth exist
+    // 1. Verify Sun and Earth exist.
+    //
+    // `EarthRoot` is the Earth *grid* (a frame) inside the EMB grid. Its pose is
+    // `CellCoord × cell_edge + Transform`, and BOTH parts move as it orbits —
+    // the cells are real (2 km edges; see `big_space_setup`). Comparing only the
+    // `Transform` residual would pass even if the cell were computed wrong, and
+    // would break outright the moment Earth crossed a cell boundary. Compose.
     let mut query = app.world_mut().query::<(&lunco_celestial::EarthRoot, &CellCoord, &Transform)>();
     let earth = query.iter(app.world()).next().expect("No EarthRoot found");
-    // EarthRoot is the Earth *grid* (a frame). Its orbital motion lands in the
-    // `Transform` residual, NOT `CellCoord`: `emb_grid`'s big_space
-    // `switching_threshold` is 1e30, so the body never crosses a cell boundary
-    // and `CellCoord` stays (0,0,0) — the position lives entirely in `Transform`.
-    let earth_tf_1 = earth.2.translation;
+    let earth_pose_1 = (*earth.1, earth.2.translation);
     
     // 2. Advance the clock by 10 days. The epoch is a *derived* view
     //    (`WorldTime.epoch_jd`, written by the `lunco-time` spine each frame), so
@@ -87,14 +89,44 @@ fn test_celestial_startup_and_movement() {
         "derived epoch should track the MissionClock re-anchor (+10 days)"
     );
     
-    // 3. Verify Earth has moved
+    // 3. Verify Earth has moved.
+    let mut grid_q = app.world_mut().query::<(&lunco_celestial::EMBRoot, &big_space::prelude::Grid)>();
+    let edge = grid_q
+        .iter(app.world())
+        .next()
+        .expect("No EMBRoot grid found")
+        .1
+        .cell_edge_length() as f64;
+
     let mut query = app.world_mut().query::<(&lunco_celestial::EarthRoot, &CellCoord, &Transform)>();
     let earth = query.iter(app.world()).next().expect("No EarthRoot found");
-    let earth_tf_2 = earth.2.translation;
+    let earth_pose_2 = (*earth.1, earth.2.translation);
 
-    assert_ne!(
-        earth_tf_1, earth_tf_2,
-        "Earth's position should have changed after advancing the clock 10 days \
+    let compose = |(cell, tf): (CellCoord, bevy::math::Vec3)| {
+        bevy::math::DVec3::new(
+            cell.x as f64 * edge + tf.x as f64,
+            cell.y as f64 * edge + tf.y as f64,
+            cell.z as f64 * edge + tf.z as f64,
+        )
+    };
+    let moved = (compose(earth_pose_2) - compose(earth_pose_1)).length();
+
+    // Earth about the EMB traces a ~4.7e6 m radius circle once a month, so 10
+    // days must move it by megametres. A bare `assert_ne!` on the residual would
+    // also pass on a one-ULP wobble.
+    assert!(
+        moved > 1.0e6,
+        "Earth should have moved megametres about the EMB after 10 days, moved {moved:.3e} m \
          (the spine re-derived the epoch and the ephemeris repositioned the grid)"
+    );
+
+    // The cells must actually be carrying the magnitude — a regression to
+    // `switching_threshold = 1e30` (cells always zero, position entirely in an
+    // f32 `Transform`) is what destroyed render precision. See
+    // `tests/grid_cell_edge_precision.rs`.
+    assert_ne!(
+        earth_pose_2.0,
+        CellCoord::default(),
+        "Earth's CellCoord must be non-zero: its 4.7e6 m offset cannot live in an f32 Transform"
     );
 }
