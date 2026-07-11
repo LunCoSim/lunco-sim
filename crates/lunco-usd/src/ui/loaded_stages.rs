@@ -312,6 +312,8 @@ impl LoadedStage for WorkspaceStage {
 mod tests {
     use super::*;
     use lunco_doc::DocumentId;
+    // `prim_children` is a `UsdDataExt` method — bring the trait into scope.
+    use lunco_usd_bevy::usd_data::UsdDataExt;
     use openusd::sdf;
 
     /// `unregister` matches by id and reports whether anything was

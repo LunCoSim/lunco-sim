@@ -239,24 +239,30 @@ fn sandbox_scene_asset_wiring_migrated() {
     );
 }
 
+/// The lander is a REFERENCED vessel asset (`vessels/landers/descent_lander.usda`),
+/// so its wiring only exists once the reference arc is composed. `build_from_source`
+/// builds a lone in-memory layer and cannot resolve `@../../vessels/...@`; compose
+/// the file with its real layer closure instead. This is what proves the asset-local
+/// `.connect` targets (`</DescentLander.outputs:force_y>`) rebase onto the scene
+/// prim (`/LanderTest/Lander`) through the arc.
 #[test]
 fn lander_asset_wiring_migrated() {
-    let (app, id) = build_from_source(&asset_src("scenes/sandbox/lander_test.usda"));
+    let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/scenes/sandbox/lander_test.usda");
+    let stage = lunco_usd_bevy::compose_file_to_stage(&scene).expect("compose lander_test.usda");
+    let view = lunco_usd_bevy::StageView::new(&stage);
+    let lander = SdfPath::new("/LanderTest/Lander").unwrap();
+    let conns = |attr: &str| view.connections(&lander, attr);
+
     // A representative sample of the 17 self-loops + the cross-prim altimeter edge.
+    assert_eq!(conns("inputs:force_y"), ["/LanderTest/Lander.outputs:force_y"]);
+    assert_eq!(conns("inputs:q_w"), ["/LanderTest/Lander.outputs:quat_w"]);
     assert_eq!(
-        conns(&app, id, "/LanderTest/Lander", "inputs:force_y"),
-        ["/LanderTest/Lander.outputs:force_y"]
-    );
-    assert_eq!(
-        conns(&app, id, "/LanderTest/Lander", "inputs:q_w"),
-        ["/LanderTest/Lander.outputs:quat_w"]
-    );
-    assert_eq!(
-        conns(&app, id, "/LanderTest/Lander", "inputs:descent_rate"),
+        conns("inputs:descent_rate"),
         ["/LanderTest/Lander.outputs:velocity_y"]
     );
     assert_eq!(
-        conns(&app, id, "/LanderTest/Lander", "inputs:altitude"),
+        conns("inputs:altitude"),
         ["/LanderTest/Lander/Altimeter.outputs:range"]
     );
 }

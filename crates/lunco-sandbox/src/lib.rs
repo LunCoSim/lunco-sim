@@ -1113,10 +1113,12 @@ fn on_set_rhai_policy(
     }
     let prim = format!("/World/Policies/{name}");
     let root = LayerId::root();
-    // USDA-quoted string literal (escapes quotes / newlines) for `SetAttribute`.
-    let lit = |s: &str| format!("{s:?}");
 
     // Idempotent: define_prim + attribute overwrite → re-issuing hot-replaces.
+    // String values are RAW — `SetAttribute` authors them verbatim and the writer
+    // escapes on serialize (see the op's string branch). No hand-escaping here: the
+    // old `format!("{:?}")` produced Rust-debug quoting, not USDA delimiting, and
+    // silently corrupted any multi-line rhai `source`.
     let ops = vec![
         UsdOp::AddPrim {
             edit_target: root.clone(),
@@ -1137,21 +1139,21 @@ fn on_set_rhai_policy(
             path: prim.clone(),
             name: "lunco:policy:seam".into(),
             type_name: "string".into(),
-            value: lit(&cmd.seam),
+            value: cmd.seam.clone(),
         },
         UsdOp::SetAttribute {
             edit_target: root.clone(),
             path: prim.clone(),
             name: "lunco:policy:entry".into(),
             type_name: "string".into(),
-            value: lit(&cmd.entry),
+            value: cmd.entry.clone(),
         },
         UsdOp::SetAttribute {
             edit_target: root.clone(),
             path: prim.clone(),
             name: "lunco:policy:source".into(),
             type_name: "string".into(),
-            value: lit(&cmd.source),
+            value: cmd.source.clone(),
         },
         UsdOp::SetAttribute {
             edit_target: root,
@@ -1167,7 +1169,99 @@ fn on_set_rhai_policy(
     info!("[policy] SetRhaiPolicy authored `{prim}` (seam '{}') — journals + projects", cmd.seam);
 }
 
-lunco_core::register_commands!(on_set_rhai_policy);
+/// Save a live-edited rhai scenario's current source back onto its USD prim's
+/// `lunco:script` attribute — the missing half of scenario authoring.
+///
+/// The LOAD path reads `lunco:script` off a prim into a running scenario; until
+/// now a hot-edited scenario had no way *back* to the document. This resolves the
+/// scripted entity's live source (from [`ScriptRegistry`](lunco_scripting::ScriptRegistry)),
+/// its prim path, and the editable scene document backing it, then authors the
+/// source onto `lunco:script` via [`SetAttribute`](lunco_usd::UsdOp::SetAttribute)
+/// (whose `string` type authors the value RAW — no hand-escaping) — which journals,
+/// and on `SaveDocument` writes through to the `.usda`.
+///
+/// Only doc-backed twin scenes have an editable document; a raw-file scene is
+/// **refused** (logged, not silently dropped) — matching the rule that the builder
+/// must only edit doc-backed scenes or it eats work on the next reload.
+#[lunco_core::Command]
+pub struct SaveScenario {
+    /// The scripted entity whose live scenario source to persist onto its prim.
+    /// Ownership-gated (same as `RunScenario`): saving a scenario is editing it.
+    #[authz_target]
+    pub target: Entity,
+}
+
+impl Default for SaveScenario {
+    // `#[Command]` needs a Default for Reflect; `Entity` has none. The placeholder
+    // is never dispatched — a real save always carries the selected entity.
+    fn default() -> Self {
+        Self { target: Entity::PLACEHOLDER }
+    }
+}
+
+#[lunco_core::on_command(SaveScenario)]
+fn on_save_scenario(
+    trigger: On<SaveScenario>,
+    q_model: Query<&lunco_scripting::doc::ScriptedModel>,
+    q_prim: Query<&lunco_usd::UsdPrimPath>,
+    registry: Res<lunco_scripting::ScriptRegistry>,
+    backed: Res<lunco_usd::twin_projection::DocBackedTwinScenes>,
+    asset_server: Res<AssetServer>,
+    mut commands: Commands,
+) {
+    let target = trigger.event().target;
+
+    // 1. The live source the runtime is currently running for this entity.
+    let Ok(model) = q_model.get(target) else {
+        warn!("[save-scenario] entity {target} has no scenario attached");
+        return;
+    };
+    let Some(doc_id) = model.document_id else {
+        warn!("[save-scenario] entity {target}'s scenario has no document");
+        return;
+    };
+    let Some(host) = registry.documents.get(&lunco_doc::DocumentId::new(doc_id)) else {
+        warn!("[save-scenario] no script document {doc_id} for entity {target}");
+        return;
+    };
+    let source = host.document().source.clone();
+
+    // 2. The prim to author onto + the editable scene document behind it.
+    let Ok(upp) = q_prim.get(target) else {
+        warn!("[save-scenario] entity {target} is not a USD-backed prim — nothing to save onto");
+        return;
+    };
+    let Some(scene_doc) =
+        lunco_usd::twin_projection::scene_document_for(&backed, &asset_server, upp.stage_handle.id())
+    else {
+        warn!(
+            "[save-scenario] the scene backing {target} is a raw-file scene (not doc-backed) — \
+             open it as a Twin to save scenarios in place"
+        );
+        return;
+    };
+
+    // 3. Author the source onto `lunco:script` (root layer → durable in the .usda
+    //    on SaveDocument). A `string` value is authored RAW — `SetAttribute` handles
+    //    the escaping (writer-side), so the whole rhai source round-trips verbatim
+    //    with no hand-escaping here. Through `ApplyUsdOp` so it journals like any edit.
+    commands.trigger(lunco_usd::ApplyUsdOp {
+        doc: scene_doc,
+        op: lunco_usd::UsdOp::SetAttribute {
+            edit_target: lunco_usd::LayerId::root(),
+            path: upp.path.clone(),
+            name: "lunco:script".into(),
+            type_name: "string".into(),
+            value: source,
+        },
+    });
+    info!(
+        "[save-scenario] {target}: scenario source written onto `{}` (doc {}) — journals; SaveDocument persists to disk",
+        upp.path, scene_doc.0
+    );
+}
+
+lunco_core::register_commands!(on_set_rhai_policy, on_save_scenario);
 
 #[cfg(all(test, feature = "networking", not(target_arch = "wasm32")))]
 mod policy_projection_tests {

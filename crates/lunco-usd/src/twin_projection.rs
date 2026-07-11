@@ -144,6 +144,27 @@ impl DocBackedTwinScenes {
     }
 }
 
+/// The editable document backing a running scene's stage asset, if the scene is
+/// **doc-backed** (loaded as `twin://<name>/<rel>`). Returns `None` for a raw-file
+/// scene — which has no savable source document, so a caller (e.g. saving a
+/// live-edited scenario back onto its prim) must refuse rather than silently drop
+/// the edit. This is the asset↔document bridge that unblocks scenario save-back:
+/// a runtime entity carries a `UsdPrimPath { stage_handle, path }`, and this maps
+/// that stage handle to the `UsdDocumentRegistry` document you can `ApplyUsdOp` on.
+pub fn scene_document_for(
+    backed: &DocBackedTwinScenes,
+    asset_server: &AssetServer,
+    scene: AssetId<UsdStageAsset>,
+) -> Option<DocumentId> {
+    // `AssetPath::path()` is the path WITHOUT the `twin://` source scheme, i.e.
+    // `<name>/<rel>`. `rel` may contain slashes (`scenes/sandbox/scene.usda`), so
+    // split only on the FIRST one. (Same idiom as `cache_terrain_document`.)
+    let asset_path = asset_server.get_path(scene)?;
+    let rel_path = asset_path.path().to_string_lossy();
+    let (name, rel) = rel_path.split_once('/')?;
+    backed.doc_for(name, rel)
+}
+
 /// A **referenced spawn** whose asset closure is being fetched before it can be
 /// authored onto the live scene stage. When a structural edit adds a prim that
 /// references an asset whose layer bytes aren't loaded into the scene's live
@@ -434,17 +455,39 @@ fn first_reference(spec: &openusd::sdf::SpecData) -> Option<String> {
 /// whole-source replace, a namespace move (re-keys entities by path; whole-source
 /// undo may also change surviving prims' attribute values), a keyframe *removal*
 /// (openusd exposes no live-stage sample removal — unlike `SetTimeSample`, which
-/// authors incrementally), or a relationship edit (authoring that onto a live
-/// stage isn't wired). The common interactive ops — translate, attribute, spawn,
-/// remove, keyframe *authoring* — return `false` and replay incrementally via
-/// [`apply_incremental_op_to_stage`].
+/// authors incrementally), or a composition-arc edit whose effect is non-local
+/// (a variant selection or payload re-composes a whole subtree). The common
+/// interactive ops — translate, attribute, spawn, remove, keyframe *authoring*,
+/// and now relationship / connection edits — return `false` and replay
+/// incrementally via [`apply_incremental_op_to_stage`].
+///
+/// `SetRelationship` and `SetConnection` used to rebuild here. That put a physics
+/// joint — two `physics:body` relationships — on the whole-scene-respawn path, so
+/// assembling a vehicle from parts rebuilt the world once per joint. They now have
+/// live-stage authors (`CanonicalStage::author_relationship` / `author_connection`)
+/// whose consumers (the Avian joint builder, the cosim wire reconcile) re-read on a
+/// subtree refresh — so the incremental path fully reconciles them.
+///
+/// `SetApiSchemas` and `SetActive` do NOT: their effect is which ECS *components* a
+/// prim carries (rigid body, collider) and whether its entity exists at all — and
+/// the incremental subtree refresh only re-derives an entity's *visual*, not its
+/// physics extraction or its presence. So they rebuild, which re-derives both
+/// correctly. This is not the hot path: `AttachComponent` emits neither, so
+/// building a vehicle from parts stays rebuild-free.
 fn op_needs_rebuild(op: &UsdOp) -> bool {
     matches!(
         op,
         UsdOp::ReplaceSource { .. }
             | UsdOp::MovePrim { .. }
             | UsdOp::RemoveTimeSample { .. }
-            | UsdOp::SetRelationship { .. }
+            // Composition-arc changes: value resolution re-composes the prim's
+            // subtree wholesale, which the incremental sink can't express.
+            | UsdOp::SetVariantSelection { .. }
+            | UsdOp::SetPayload { .. }
+            // ECS-structural changes the visual-only subtree refresh can't reconcile
+            // (physics component set / entity presence). A rebuild re-derives both.
+            | UsdOp::SetApiSchemas { .. }
+            | UsdOp::SetActive { .. }
     )
 }
 
@@ -479,11 +522,18 @@ fn apply_incremental_op_to_stage(
         }
         UsdOp::SetAttribute { path, name, type_name, value, .. } => {
             let Ok(sp) = openusd::sdf::Path::new(path) else { return };
-            let v = match lunco_usd_bevy::author::parse_attribute_value(type_name, value) {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!("[twin] parse attribute {path}.{name} ({type_name}): {e}");
-                    return;
+            // Mirror the document op: a `string` value is RAW (`Value::String`, no
+            // literal parse); every other type is a parsed literal.
+            let is_string = type_name == "string";
+            let v = if is_string {
+                openusd::sdf::Value::String(value.clone())
+            } else {
+                match lunco_usd_bevy::author::parse_attribute_value(type_name, value) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        warn!("[twin] parse attribute {path}.{name} ({type_name}): {e}");
+                        return;
+                    }
                 }
             };
             let authored = match world
@@ -499,6 +549,13 @@ fn apply_incremental_op_to_stage(
                 },
                 None => false,
             };
+            // A `string` attribute is non-visual metadata/behavior (`lunco:script`,
+            // descriptions, `lunco:policy:source`) — no geometry/material
+            // consequence, and a refresh would hot-reload a running scenario
+            // (resetting its `this`) on a mere save. So author, don't refresh.
+            if is_string {
+                return;
+            }
             // Refresh only what the edit can actually change: a material/shader
             // edit fans out through `material:binding` to meshes anywhere (whole
             // scene), but a geometry/xform attribute edit is local to its own prim
@@ -575,8 +632,60 @@ fn apply_incremental_op_to_stage(
                 refresh_prim_subtree(world, scene_id, path);
             }
         }
-        // Coarse ops never reach here (the caller rebuilds for them).
+        UsdOp::SetRelationship { path, name, targets, .. } => {
+            let Ok(sp) = openusd::sdf::Path::new(path) else { return };
+            let authored = match world.get_non_send_resource::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
+                Some(cs) => match cs.author_relationship(&sp, name, targets) {
+                    Ok(()) => true,
+                    Err(e) => { warn!("[twin] author relationship {path}.{name}: {e}"); false }
+                },
+                None => false,
+            };
+            // A relationship is InfoOnly — it never spawns/despawns, so the sink
+            // won't reconcile it. Whoever consumes the target (the Avian joint
+            // builder reads `physics:body0/1`; a material binding fans out to
+            // meshes) is re-run by re-instantiating the owning prim's subtree.
+            if authored {
+                refresh_relationship_dependents(world, scene_id, path, name);
+            }
+        }
+        UsdOp::SetConnection { path, name, type_name, sources, .. } => {
+            let Ok(sp) = openusd::sdf::Path::new(path) else { return };
+            let authored = match world.get_non_send_resource::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
+                Some(cs) => match cs.author_connection(&sp, name, type_name, sources) {
+                    Ok(()) => true,
+                    Err(e) => { warn!("[twin] author connection {path}.{name}: {e}"); false }
+                },
+                None => false,
+            };
+            // Cosim wires (`SimConnection`) are derived from `connectionPaths` by
+            // `reconcile_usd_connections`, which re-scans the composed stage — the
+            // subtree refresh re-triggers it for the owning prim.
+            if authored {
+                refresh_prim_subtree(world, scene_id, path);
+            }
+        }
+        // Coarse ops never reach here (the caller rebuilds for them) — that now
+        // includes SetApiSchemas / SetActive, whose ECS effect (physics component
+        // set / entity presence) the visual-only subtree refresh can't reconcile.
         _ => {}
+    }
+}
+
+/// Re-instantiate the subtree(s) that depend on relationship `name` on `path`.
+/// A `material:binding` fans out to every mesh it reaches, so a whole-scene visual
+/// refresh is honest; any other relationship (physics bodies, collections) is
+/// local to its owning prim's consumer, so refresh just that subtree.
+fn refresh_relationship_dependents(
+    world: &mut World,
+    scene_id: AssetId<UsdStageAsset>,
+    path: &str,
+    name: &str,
+) {
+    if name == "material:binding" {
+        refresh_scene_visuals(world, scene_id);
+    } else {
+        refresh_prim_subtree(world, scene_id, path);
     }
 }
 
@@ -917,6 +1026,45 @@ mod tests {
     use crate::document::{LayerId, UsdOp};
 
     const TINY: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
+
+    /// The rebuild-cliff fix (doc 45 §3.3): `SetRelationship` and `SetConnection`
+    /// gained live-stage authors and must NO LONGER force a whole-scene rebuild;
+    /// only the two composition-arc ops (which recompose a subtree wholesale) still
+    /// do, alongside the pre-existing coarse ops. This is the routing half of the
+    /// "attaching a part no longer respawns the world" claim.
+    #[test]
+    fn op_rebuild_routing_matches_the_incremental_authors() {
+        let et = LayerId::root();
+        // Incremental now — a joint's two `physics:body` rels and a cosim wire.
+        assert!(!op_needs_rebuild(&UsdOp::SetRelationship {
+            edit_target: et.clone(), path: "/J".into(), name: "physics:body0".into(), targets: vec![],
+        }));
+        assert!(!op_needs_rebuild(&UsdOp::SetConnection {
+            edit_target: et.clone(), path: "/B".into(), name: "inputs:v".into(),
+            type_name: "float".into(), sources: vec![],
+        }));
+        // apiSchema / active REBUILD: their effect is a prim's ECS component set /
+        // entity presence, which the visual-only subtree refresh can't reconcile.
+        assert!(op_needs_rebuild(&UsdOp::SetApiSchemas {
+            edit_target: et.clone(), path: "/W".into(), schemas: vec![],
+        }));
+        assert!(op_needs_rebuild(&UsdOp::SetActive {
+            edit_target: et.clone(), path: "/W".into(), active: false,
+        }));
+        // Composition-arc edits also rebuild — value resolution recomposes the
+        // subtree, which the incremental sink can't express.
+        assert!(op_needs_rebuild(&UsdOp::SetVariantSelection {
+            edit_target: et.clone(), path: "/R".into(),
+            variant_set: "drivetrain".into(), variant: "physical".into(),
+        }));
+        assert!(op_needs_rebuild(&UsdOp::SetPayload {
+            edit_target: et.clone(), path: "/H".into(), asset_paths: vec![],
+        }));
+        // Pre-existing coarse ops unchanged.
+        assert!(op_needs_rebuild(&UsdOp::MovePrim {
+            edit_target: et, from_path: "/a".into(), to_path: "/b".into(),
+        }));
+    }
 
     /// A material/shader/node-graph attribute edit fans out through
     /// `material:binding` and needs the whole-scene refresh; an unknown type is

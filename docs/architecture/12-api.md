@@ -190,7 +190,7 @@ pub struct Foo { pub doc: u64 }   // use DocumentId
 
 ## Command Execution (Side Effects)
 
-Commands are typed — each domain crate defines its own command structs. The API discovers them automatically via reflection. Use `GET /api/commands/schema` to see the full list of available commands and their parameters.
+Commands are typed — each domain crate defines its own command structs. The API discovers them automatically via reflection. Use `GET /api/commands/schema` to see the full list of available commands and their parameters. For a static, documented catalog (descriptions + field types, generated from source), see [`../commands-reference.md`](../commands-reference.md).
 
 ### Common Commands
 

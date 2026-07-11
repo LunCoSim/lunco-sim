@@ -34,8 +34,10 @@ use openusd::sdf::SpecType;
 
 use crate::registry::UsdDocumentRegistry;
 
-/// Twin-relative subfolder the runtime overlays live under, alongside the
-/// journal's `.lunco/journal/`.
+/// Twin-relative subfolder the runtime overlays live under. Unlike the journal
+/// (the durable, replayable edit log, kept in the visible `history/` folder), the
+/// runtime overlay is a derived, disposable cache of live spawns/moves — so it
+/// stays hidden under `.lunco/`.
 const RUNTIME_SUBDIR: &str = ".lunco/runtime";
 
 /// `<twin-root>/.lunco/runtime/<scene-rel>` for a document whose file lives

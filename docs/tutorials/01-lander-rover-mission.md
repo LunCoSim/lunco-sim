@@ -1,18 +1,24 @@
 # Tutorial 01 — Build a Lander → Rover Mission
 
 In this tutorial you'll build a small lunar mission from scratch. A lander flies
-itself down to the surface on a glowing engine plume, settles on its legs, and
-safes its engine. It then releases a rover, which drives itself through a course
-of glowing waypoints — until you grab the controls and take over. Along the way
-the screen narrates each phase.
+itself down to the surface on a glowing engine plume and settles on its legs. It
+then releases a rover, which drives itself through a course of glowing waypoints —
+until you grab the controls and take over. Along the way the screen narrates each
+phase.
 
 You'll write three kinds of files, all under `assets/`:
 
-- a **`.usda`** scene — the world: ground, lander, rover, lights, markers;
+- **`.usda`** files — the world and the vehicles in it;
 - a **`.mo`** Modelica model — the lander's flight control law;
 - a few **`.rhai`** scripts — the mission logic and behaviours.
 
 Edit a file, reload the scene, watch it change. That's the whole loop. Let's go.
+
+Everything you create is prefixed `my_` so it sits alongside the shipped assets
+rather than on top of them. The finished article is already in the repo — peek at
+`assets/vessels/landers/descent_lander.usda` and `assets/scenes/sandbox/lander_test.usda`
+whenever you want to see where this is heading, or play it from the 🎓 Tutorials
+menu in the sandbox.
 
 You can run your work at any point with:
 
@@ -24,20 +30,25 @@ cargo run -p lunco-sandbox --bin sandbox -- --api 4101 --scene scenes/sandbox/my
 
 ## A quick mental model
 
-Before the first file, one distinction that makes everything else click.
-Things in the sim are either **signals** or **events**.
+Before the first file, three distinctions that make everything else click.
 
 A **signal** is a value that always has a current reading — altitude, throttle,
 fuel remaining, gravity. You *read* a signal whenever you want it. Models publish
 signals; scripts read them with `get(...)`.
 
-An **event** is a thing that happens once — a touchdown, a rover crossing a
-finish line, a key press, the fuel dropping below a line. You don't poll for
-events; you *react* to them. Scripts fire events with `emit(...)` and listen with
-`on_event` / `wait_for`.
+An **event** is a thing that happens once — a touchdown, a rover crossing a finish
+line, a key press, the fuel dropping below a line. You don't poll for events; you
+*react* to them. Scripts fire events with `emit(...)` and listen with `on_event` /
+`wait_for`.
 
-Whenever you're unsure where some logic belongs, ask: "is this a value I read, or
-a moment I react to?" Signal or event. Keep them straight and the rest is easy.
+**Authority** is the answer to "who is driving this vehicle right now?" A vehicle
+is either flying itself or being flown by somebody — a human at the keyboard, or an
+autopilot script. Taking the controls is called **possessing** the vehicle, and it
+is the one source of truth: nothing in the sim guesses at who's in charge, it asks.
+
+Whenever you're unsure where some logic belongs, ask: is this a value I read, a
+moment I react to, or a question about who's driving? Signal, event, authority.
+Keep them straight and the rest is easy.
 
 ---
 
@@ -85,10 +96,10 @@ def Xform "Mission"
 }
 ```
 
-A USD scene is a tree of *prims*. The ground is a big flat cube with a collider
-but no rigid body, so it stays put and nothing falls through it. `lunco:avatar`
-marks the camera the player looks through. Run it now — you'll see an empty grey
-plain. Not much yet, but it's solid ground.
+A USD scene is a tree of *prims*. The ground is a big flat cube with a collider but
+no rigid body, so it stays put and nothing falls through it. `lunco:avatar` marks the
+camera the player looks through. Run it now — you'll see an empty grey plain. Not much
+yet, but it's solid ground.
 
 A couple of physics rules worth knowing as you go: a prim with a collider and
 **no** rigid body is *static* (the ground). Add a rigid body and a mass and it
@@ -98,170 +109,465 @@ becomes *dynamic* — it falls and reacts to forces. That's what the lander will
 
 ## Step 2 — Teach the lander how to fly
 
-Our lander shouldn't just drop — it should *fly itself down*, easing onto its
-legs like a real one. That flight law is a small PID controller, and the natural
-place for control laws is Modelica.
+Our lander shouldn't just drop — it should *fly itself down*, easing onto its legs
+like a real one. That flight law is a small controller, and the natural place for
+control laws is Modelica.
 
-Create `assets/models/Lander.mo`:
+Create `assets/models/MyLander.mo`:
 
 ```modelica
-model Lander
-  parameter Real vehicle_mass = 2000.0;
+model MyLander
   parameter Real max_thrust = 60000.0;
   parameter Real v_e = 2900.0;            // exhaust velocity (for fuel book-keeping)
 
-  // Inputs — anything you might want to change while it runs (gains, set-point,
-  // engine on/off). Keep these as `input`, not `parameter`, so you can retune
-  // them live.
-  input Real target_altitude = 3.0;
-  input Real kp = 1.2;
-  input Real kd = 2.5;
-  input Real ki = 0.4;
-  input Real engine_enable = 1.0;
-  input Real manual = 0.0;
-  input Real manual_throttle = 0.0;
-
-  // These three come from outside: the body's height and speed, and gravity.
-  input Real altitude = target_altitude;
-  input Real descent_rate = 0.0;
+  // Inputs — anything you might want to change while it runs (gains, set-point).
+  // Keep these as `input`, not `parameter`, so you can retune them live.
+  input Real vehicle_mass = 2000.0;
+  input Real kv = 1.2;                    // descent-rate tracking gain
+  input Real rest_altitude = 1.5;         // altimeter range (m) at leg contact
+  input Real descent_slope = 0.6;         // how much faster to fall, per m of height
+  input Real vy_max = 6.0;                // never fall faster than this
   input Real g = 1.62;
 
-  Real i_err(start = 0);
-  Real m_prop(start = 2000.0);            // propellant remaining (kg)
-  Real a_cmd; Real pid_raw; Real pid_pos; Real pid_thrust;
-  Real thrust;                            // what the engine pushes with
-  Real throttle;                          // 0..1, how hard it's firing
+  // These come from outside: what the vehicle senses about itself.
+  input Real altitude = 60.0;
+  input Real descent_rate = 0.0;
+
+  // Authority. 1 when somebody is driving, 0 when the vehicle flies itself.
+  // You never set this — it is WIRED from the vehicle's possession state (Step 4).
+  input Real piloted = 0.0;
+  input Real external_throttle = 0.0;     // the pilot's stick, when there is a pilot
+  input Real pitch = 0.0;                 // W / S
+  input Real roll = 0.0;                  // A / D
+  input Real yaw = 0.0;                   // Q / E
+
+  output Real thrust;                     // N, along the lander's OWN +Y
+  output Real torque_x;
+  output Real torque_y;
+  output Real torque_z;
+  output Real throttle;                   // 0..1, how hard it's firing
+
+  parameter Real torque_gain = 30000.0;    // N.m per unit of stick deflection
+
+  Real m_prop(start = 2000.0);
+  Real vy_sched, target_vy, a_cmd, gnc_raw, gnc_pos, gnc_thrust, gnc_throttle;
+  Real cmd_throttle;
 equation
-  der(i_err) = if engine_enable > 0.5 and (altitude - target_altitude) < 5.0
-                  and (altitude - target_altitude) > (-5.0)
-               then target_altitude - altitude else 0.0;
+  // Descent schedule: fall faster when high, slow to a crawl near the pads.
+  vy_sched = min(max(descent_slope * (altitude - rest_altitude), 0.0), vy_max);
+  target_vy = -vy_sched;
 
-  a_cmd = g + kp*(target_altitude - altitude) - kd*descent_rate + ki*i_err;
+  // Track that target descent rate, feeding gravity forward.
+  a_cmd = g + kv * (target_vy - descent_rate);
+  gnc_raw = vehicle_mass * a_cmd;
+  gnc_pos = max(gnc_raw, 0.0);
+  gnc_thrust = min(gnc_pos, max_thrust);
+  gnc_throttle = gnc_thrust / max_thrust;
 
-  pid_raw = vehicle_mass * a_cmd;
-  pid_pos = if pid_raw > 0.0 then pid_raw else 0.0;
-  pid_thrust = if pid_pos > max_thrust then max_thrust else pid_pos;
+  // THE AUTHORITY GATE. Blend, don't branch: when `piloted` is 1 the pilot's stick
+  // wins; when it's 0 the internal law wins. No flag, no mode variable, no script.
+  cmd_throttle = piloted * external_throttle + (1.0 - piloted) * gnc_throttle;
 
-  thrust = manual*(manual_throttle*max_thrust) + (1.0 - manual)*engine_enable*pid_thrust;
-  throttle = thrust / max_thrust;
+  thrust = cmd_throttle * max_thrust;
+  throttle = cmd_throttle;
+
+  // Attitude is the pilot's alone. The same `piloted` gate multiplies every stick
+  // axis to zero when nobody is driving, so the autonomous descent issues no torque
+  // and comes down upright. No mode flag, no second code path.
+  torque_x = piloted * pitch * torque_gain;   // pitch about X
+  torque_y = piloted * yaw * torque_gain;     // yaw   about Y
+  torque_z = piloted * roll * torque_gain;    // roll  about Z
+
   der(m_prop) = -thrust / v_e;
-end Lander;
+end MyLander;
 ```
 
-Read it top to bottom and it's just a hover controller: take the altitude error,
-add some damping on the descent rate, feed-forward gravity, and clamp the result
-to a sane thrust. The `throttle` output (0..1) is the engine's "how hard am I
-firing right now" — we'll use it for the flame later.
+Read it top to bottom and it's just a descent controller: work out how fast we
+*should* be falling at this height, track that speed, feed gravity forward, clamp to
+a sane thrust. The `throttle` output (0..1) is the engine's "how hard am I firing
+right now" — we'll use it for the flame later.
 
-Two things will trip you up if nobody warns you, so here they are:
+The lines to dwell on are `cmd_throttle` and the three torques. That is the authority
+gate, and it's the whole reason a human can grab this vehicle mid-descent without
+anything fighting them. `piloted` isn't a variable you toggle; in Step 4 you'll
+**wire** it to the vehicle's possession state, so it becomes 1 the instant someone
+takes the controls. The model doesn't know or care whether that someone is a person
+or an autopilot.
 
-- **Write clamps and mode-switches as flat `if`s or arithmetic, not nested
-  `if/else if`.** The two clamp lines above are single `if … then … else`, and
-  the `thrust` line mixes the manual/auto modes with plain multiplication by the
-  `manual` (0/1) flag. Nested `if/else if` chains don't translate reliably yet.
-- **Don't make decisions inside the model based on the wired-in inputs.** A line
-  like `when altitude < 0.2` won't see the live altitude. When you need a
-  threshold like that, detect it *outside* the model — Step 5 shows how.
+Watch what the gate buys you. Throttle *blends* — the pilot's stick fades in as the
+GNC fades out. Attitude is multiplied outright, so an unpiloted lander commands zero
+torque and rides its descent bolt upright, while a piloted one answers W/A/S/D
+immediately. One `piloted` signal, two different behaviours, no `if`.
+
+Where `pitch`, `roll` and `yaw` come from is worth knowing: nothing in this file, and
+no script. The `Controls` profile you'll reference in Step 3 maps the keyboard's
+intents onto ports *by name* — `action → external_throttle`, `forward → pitch`,
+`left → roll`, `yaw_left → yaw`. Name an input differently and that key quietly does
+nothing, which is a genuinely annoying afternoon.
+
+One simplification worth flagging: these torques act about the **world** axes, not
+the lander's. Upright that's the same thing, and it keeps the model readable. Tip
+past about 45° and "pitch" starts meaning something other than what your hands
+expect. The shipped `Lander.mo` does it properly — it takes the body quaternion as
+an input and rotates body-frame torque into world before emitting it.
+
+Three things will trip you up if nobody warns you, so here they are:
+
+- **Write clamps and mode-switches as flat `if`s, `min`/`max`, or arithmetic —
+  never nested `if/else if`.** The gate above is a multiply-and-add for exactly this
+  reason. Chained `else if` doesn't translate reliably yet.
+- **Don't make decisions inside the model based on a wired-in input.** A line like
+  `when altitude < 0.2` won't see the live altitude. When you need a threshold like
+  that, detect it *outside* the model — Step 6 shows how.
+- **Never hard-code gravity.** `g` is an input for a reason; wire it, or your lander
+  misbehaves the moment it's somewhere else.
 
 ---
 
-## Step 3 — Drop the lander in and connect the controller
+## Step 3 — Make the lander a vehicle of its own
 
-Now make the lander a real falling body and hand it to the controller.
+Here's a decision worth making early: **a vehicle is not part of a scene.** The
+lander has a body, an engine, sensors, a control law and a wiring loom, and none of
+that changes when you fly it somewhere else. Only where it *starts* changes.
 
-Add this inside the `Mission` prim:
+So the lander gets its own file, and the scene will reference it — exactly like the
+rover you'll pull in at Step 7. Create `assets/vessels/landers/my_lander.usda`:
 
 ```usda
-    def Cylinder "Lander" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"] )
+#usda 1.0
+(
+    defaultPrim = "MyLander"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+def Cylinder "MyLander" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"] )
+{
+    uniform token axis = "Y"
+    double radius = 2.5
+    double height = 3.0
+
+    bool physics:rigidBodyEnabled = true
+    bool physics:collisionEnabled = true
+    float physics:mass = 2000.0
+
+    # Gold multi-layer-insulation foil. Just a colour — see the note under the
+    # solar wings below for when a surface earns a real shader instead.
+    color3f primvars:displayColor = (0.78, 0.62, 0.27)
+
+    string lunco:vessel = "true"
+    string lunco:modelicaModel = "models/MyLander.mo"
+
+    # Intent -> port map, so possessing this vessel actually does something.
+    def "Controls" ( prepend references = @../control_profiles.usda@</LanderControls> )
+    {
+    }
+
+    # The altimeter: a downward range-finder that publishes a `range` port.
+    # Slung below the rover it will carry, with a clear line to the ground.
+    def "Altimeter" ( prepend references = @../sensors/altimeter.usda@</Altimeter> )
+    {
+        double3 xformOp:translate = (0.0, -3.3, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # ── Landing legs ── four struts, each ending in a footpad that carries the
+    # collider. The pads are what the lander actually stands on.
+    def Cube "LegPX"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (3.95, -1.68, 0)
+        double3 xformOp:rotateXYZ = (0, 0, 25.0)
+        double3 xformOp:scale = (0.15, 7.33, 0.15)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        color3f primvars:displayColor = (0.55, 0.55, 0.57)
+        bool physics:collisionEnabled = false
+    }
+    def Cylinder "PadPX"
+    {
+        uniform token axis = "Y"
+        double radius = 0.4
+        double height = 0.08
+        double3 xformOp:translate = (5.5, -5.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.45, 0.45, 0.48)
+        bool physics:collisionEnabled = true
+    }
+    # ... and the same three more times, mirrored onto -X, +Z and -Z.
+    # (Copy `LegPX`/`PadPX`, flipping the translate and rotate signs. The full set
+    #  is in `assets/vessels/landers/descent_lander.usda` if you'd rather crib it.)
+
+    # The body's own bulk. Once ANY child carries a collider — the footpads above —
+    # the rigid body switches to CHILDREN-ONLY compound mode and drops its own
+    # shape. This invisible twin puts the tank back into the compound; without it
+    # the lander would balance on four pads and nothing else.
+    def Cylinder "Hull" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
     {
         uniform token axis = "Y"
         double radius = 2.5
         double height = 3.0
-        double3 xformOp:translate = (0, 30.0, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-        bool physics:rigidBodyEnabled = true
+        token visibility = "invisible"
         bool physics:collisionEnabled = true
-        float physics:mass = 2000.0
+    }
+}
+```
 
-        string lunco:vessel = "true"
+Notice what's *not* here: no position. A vehicle asset never says where it is.
 
-        string lunco:modelicaModel = "models/Lander.mo"
-        string lunco:simWires = "thrust:force_local_y,height:altitude,velocity_y:descent_rate,gravity_accel:g"
+`lunco:vessel` marks it as something that can be possessed, and the `Controls`
+reference says what the keys do once you have it: Space thrusts, W/S pitch, A/D roll,
+Q/E yaw. Those land on the model inputs of the same name from Step 2.
+`lunco:modelicaModel` attaches your `.mo` file and runs it. And `references` pulls
+the altimeter and the control profile in from the shared libraries — the same
+mechanism you're about to use for the lander itself, one level up.
+
+The legs are not decoration, and neither is `Hull`. A prim with
+`PhysicsRigidBodyAPI` is a *compound body*: it gathers its collider **children** into
+one shape. Give it none and it falls back to its own geometry — fine for a lone
+crate. But the moment one child carries a collider (here, the footpads) the body
+switches to children-only mode and drops its own shape, so the invisible `Hull` is
+what puts the tank back. Miss it and the lander teeters on four dinner plates.
+
+Now mind the three heights, because they have to agree:
+
+- the **pads** sit 5 m below the body centre, so at rest the lander's centre floats
+  at y ≈ 5 and there is 3.5 m of clear air under its tank;
+- the **rover** (Step 7) hangs from the tank's underside, into exactly that air. A
+  legless lander rests with its tank *on the ground*, and slings the rover through
+  the floor — the physics fights it and eventually explodes;
+- the **altimeter** hangs at −3.3, below the rover but above the pads, so its
+  downward ray sees ground rather than the cargo. At rest it reads ≈1.7, which is
+  what `rest_altitude` (1.5) is aiming for.
+
+Change one and you must change the others. This is the least glamorous paragraph in
+the tutorial and the one that will cost you an evening.
+
+Now dress it. Everything below is **visual only** — `physics:collisionEnabled = false`
+throughout, so none of it touches the compound shape you just balanced. Add these as
+further children of `MyLander`:
+
+```usda
+    # Flat instrument deck on top of the tank.
+    def Cylinder "UpperDeck"
+    {
+        uniform token axis = "Y"
+        double radius = 2.6
+        double height = 0.15
+        double3 xformOp:translate = (0, 1.55, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.6, 0.58, 0.55)
+        bool physics:collisionEnabled = false
+    }
+
+    # Comms: a mast, a slender spike on top of it, and a high-gain dish off to
+    # the side. (Bevy renders an axis-Y cone apex-DOWN, hence the 180 flip.)
+    def Cylinder "Antenna"
+    {
+        uniform token axis = "Y"
+        double radius = 0.06
+        double height = 1.4
+        double3 xformOp:translate = (0.0, 2.35, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.7, 0.7, 0.72)
+        bool physics:collisionEnabled = false
+    }
+    def Cone "CommSpike"
+    {
+        uniform token axis = "Y"
+        double radius = 0.13
+        double height = 1.5
+        double3 xformOp:translate = (0.0, 3.6, 0.0)
+        double3 xformOp:rotateXYZ = (180.0, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        color3f primvars:displayColor = (0.82, 0.82, 0.86)
+        bool physics:collisionEnabled = false
+    }
+    def Sphere "AntennaDish"
+    {
+        double radius = 0.3
+        double3 xformOp:translate = (1.3, 1.9, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.9, 0.9, 0.92)
+        bool physics:collisionEnabled = false
+    }
+
+    # The engine bell: wide at the exit, narrowing to the throat, with a hot
+    # emissive lip. The flame in Step 5 comes out of this.
+    def Cone "Nozzle"
+    {
+        uniform token axis = "Y"
+        double radius = 1.35
+        double height = 1.9
+        double3 xformOp:translate = (0, -2.6, 0)
+        double3 xformOp:rotateXYZ = (180.0, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        color3f primvars:displayColor = (0.14, 0.14, 0.16)
+        color3f primvars:emissiveColor = (0.5, 0.18, 0.03)
+        bool physics:collisionEnabled = false
+    }
+
+    # Solar wings on +/-X, tilted toward the sun. These are the one place we reach
+    # for a real shader: `solar_panel.wgsl` draws the cells, busbars and frame
+    # procedurally, and every `primvars:*` below is one of its parameters.
+    def Cube "SolarWingPX"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (5.4, 1.4, 0)
+        double3 xformOp:rotateXYZ = (0, 0, -12.0)
+        double3 xformOp:scale = (5.6, 0.06, 3.4)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        color3f primvars:displayColor = (0.06, 0.06, 0.22)
+        string primvars:materialType = "shader"
+        string primvars:shaderPath = "shaders/solar_panel.wgsl"
+        float primvars:cell_rows = 8.0
+        float primvars:cell_cols = 14.0
+        color3f primvars:cell_color = (0.04, 0.05, 0.28)
+        color3f primvars:bus_color = (0.9, 0.9, 0.95)
+        color3f primvars:frame_color = (0.15, 0.15, 0.18)
+        bool physics:collisionEnabled = false
+    }
+    # Mirror it onto -X: negate the translate X and the rotate Z.
+```
+
+Two things to notice. The hull's warm gold is just `displayColor` — that's
+multi-layer insulation foil, and a plain `StandardMaterial` renders it fine. The
+wings, by contrast, set `materialType = "shader"` and point at a real WGSL shader,
+whose knobs are ordinary `primvars` you can tune per instance. Reach for a shader
+when the surface has *structure* (cells, busbars); reach for `displayColor` when it
+just has a colour.
+
+Beware one trap: `shaderPath` must name a whole shader with a `@fragment` entry
+point. Point it at a shader *library* like `pbr_lit.wgsl` (which only exports
+functions) and you build an invalid render pipeline — the viewport blinks, the log
+fills with validation spam, and nothing tells you why.
+
+Now drop it into the scene. Inside the `Mission` prim in `my_mission.usda`:
+
+```usda
+    def Cylinder "Lander" (
+        prepend references = @../../vessels/landers/my_lander.usda@</MyLander>
+    )
+    {
+        double3 xformOp:translate = (0, 60.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 ```
 
-`lunco:modelicaModel` attaches your `.mo` file to this body and runs it. The
-interesting line is `lunco:simWires` — it's the wiring loom that connects the
-controller to the world, one `output:input` pair at a time:
-
-- `thrust:force_local_y` — the model's thrust becomes a force pushing along the
-  lander's own "up";
-- `height:altitude` and `velocity_y:descent_rate` — the body tells the controller
-  where it is and how fast it's falling;
-- `gravity_accel:g` — **gravity comes from the environment**, not a number you
-  typed. On the Moon that feeds ≈1.62 into the model. Always wire gravity in this
-  way; never hard-code it, or your lander will behave wrong the moment it's
-  somewhere else.
-
-Reload and watch: the lander appears at 30 m and eases itself down to a 3 m
-hover, then settles. It's flying on its own controller.
-
-`lunco:vessel` makes it something you can take control of — click it and hold
-Space to fly it by hand. That works because Space just sets the `manual` input
-through the very same wiring; manual and automatic control are the same machinery.
-
-Want to retune it without restarting? From any script, `set(lander, "kp", 2.0)`
-changes the gain live, and `set(lander, "engine_enable", 0.0)` cuts the engine.
-Anything you marked `input` in the model is adjustable on the fly.
+That's the whole scene-side cost of a lander: *what* it is, and *where* it starts.
+Reload — a lander appears at 60 m and drops like a rock, because nothing has
+connected the controller to the body yet. That's Step 4.
 
 ---
 
-## Step 4 — Give it a flame
+## Step 4 — Wire the controller to the world
+
+A model that nobody listens to changes nothing. Wiring is native USD: an
+`inputs:<port>.connect` on the prim, pointing at whatever publishes that value.
+
+Add these lines to the `MyLander` prim (in `my_lander.usda`, not the scene):
+
+```usda
+    # The model's thrust becomes a force on the body — along the lander's OWN +Y,
+    # not the world's. `force_local_*` is rotated by the body's attitude at apply
+    # time, so when you tilt the lander the engine tilts with it and you fly it
+    # like a rocket. Wire it to `force_y` instead and the thrust always points at
+    # the sky, however far over you lean.
+    float inputs:force_local_y.connect = </MyLander.outputs:thrust>
+
+    # Attitude, from the pilot's stick. World-frame torques (N.m).
+    float inputs:torque_x.connect = </MyLander.outputs:torque_x>
+    float inputs:torque_y.connect = </MyLander.outputs:torque_y>
+    float inputs:torque_z.connect = </MyLander.outputs:torque_z>
+
+    # The body tells the controller how fast it's falling, and how heavy it is.
+    float inputs:descent_rate.connect = </MyLander.outputs:velocity_y>
+    float inputs:vehicle_mass.connect = </MyLander.outputs:mass>
+
+    # The altimeter tells it how high it is. A CROSS-PRIM edge: a different prim.
+    float inputs:altitude.connect = </MyLander/Altimeter.outputs:range>
+
+    # AUTHORITY. `piloted` reads 1 whenever any session possesses this vessel.
+    # This is the line that makes the gate in Step 2 work.
+    float inputs:piloted.connect = </MyLander.outputs:piloted>
+
+    # Publish the model's throttle back onto the entity, so anything downstream
+    # (the flame in Step 5, telemetry, the Inspector) can read it as a port.
+    float inputs:throttle.connect = </MyLander.outputs:throttle>
+```
+
+Read each one as "this input is fed by that output". The self-referencing ones
+aren't a mistake: a vessel prim publishes its own *physical* state as outputs
+(`velocity_y`, `mass`, `piloted`), and consumes the *model's* outputs as inputs.
+Body → model → body, once per timestep. That round-trip is co-simulation, and
+[tutorial 03](03-cosim.md) takes it apart properly.
+
+Three details that matter:
+
+- **Every path is asset-local** — `</MyLander...>`, not `</Mission/Lander...>`.
+  Authoring them against the asset's own root is what lets the wiring survive the
+  reference arc: USD rebases each target onto `/Mission/Lander` when the scene pulls
+  the vehicle in. Write scene paths here and the vehicle only ever works in one scene.
+- **`piloted` is derived, never authored.** Nothing writes it. Possess the vessel
+  and it reads 1; release it and it reads 0. Authority has exactly one source.
+- **The pilot's stick needs no wire.** `external_throttle` is fed by the `Controls`
+  profile you referenced in Step 3, which maps the `action` intent straight onto a
+  port of that name. Don't be tempted to `.connect` it to anything — wiring it to the
+  model's own `throttle` output would feed the engine its own exhaust, and the moment
+  you possessed the lander the throttle would latch wherever it happened to be.
+
+Reload and watch: the lander eases itself down and settles on the ground. It's
+flying on its own controller.
+
+Want to retune it without restarting? From any script, `set(lander, "kv", 2.0)`
+changes the gain live. Anything you marked `input` in the model is adjustable on the
+fly — and the Inspector will let you drag it.
+
+---
+
+## Step 5 — Give it a flame
 
 A rocket with no flame looks dead. Let's add one that grows and shrinks with the
 throttle and flickers like real fire.
 
-The trick: the flame is just a cone that a tiny script resizes every frame based
-on the `throttle` signal. Because it reads the engine's *actual* output, it
-honestly shows nothing when the engine is off or out of fuel — even if you're
-mashing Space.
+The trick: the flame is just a cone that a tiny script resizes every frame based on
+the `throttle` signal. Because it reads the engine's *actual* output, it honestly
+shows nothing when the engine is off or out of fuel — even if you're mashing Space.
 
-Add two cones as children of the `Lander` — a soft outer plume and a hot inner
-core:
+Add two cones as children of `MyLander` — a soft outer plume and a hot inner core:
 
 ```usda
-        def Cone "Flame"
-        {
-            uniform token axis = "Y"
-            double radius = 1.0
-            double height = 1.0
-            double3 xformOp:translate = (0, -3.5, 0)
-            double3 xformOp:rotateXYZ = (180.0, 0, 0)
-            double3 xformOp:scale = (0.02, 0.02, 0.02)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-            color3f primvars:displayColor = (0.5, 0.16, 0.02)
-            color3f primvars:emissiveColor = (3.0, 1.0, 0.12)
-            float primvars:displayOpacity = 0.4
-            bool physics:collisionEnabled = false
-            custom string lunco:params = "wmax=1.05, lmax=3.6, flick=1.0"
-            custom string lunco:scriptPath = "scenarios/flame.rhai"
-        }
-        def Cone "FlameCore"
-        {
-            uniform token axis = "Y"
-            double radius = 1.0
-            double height = 1.0
-            double3 xformOp:translate = (0, -3.4, 0)
-            double3 xformOp:rotateXYZ = (180.0, 0, 0)
-            double3 xformOp:scale = (0.02, 0.02, 0.02)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-            color3f primvars:displayColor = (0.95, 0.7, 0.2)
-            color3f primvars:emissiveColor = (6.0, 3.5, 0.9)
-            float primvars:displayOpacity = 0.85
-            bool physics:collisionEnabled = false
-            custom string lunco:params = "wmax=0.5, lmax=2.5, flick=0.5"
-            custom string lunco:scriptPath = "scenarios/flame.rhai"
-        }
+    def Cone "Flame"
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (0, -3.5, 0)
+        double3 xformOp:rotateXYZ = (180.0, 0, 0)
+        double3 xformOp:scale = (0.02, 0.02, 0.02)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        color3f primvars:displayColor = (0.5, 0.16, 0.02)
+        color3f primvars:emissiveColor = (3.0, 1.0, 0.12)
+        float primvars:displayOpacity = 0.4
+        bool physics:collisionEnabled = false
+        custom string lunco:params = "wmax=1.05, lmax=3.6, flick=1.0"
+        custom string lunco:scriptPath = "scenarios/flame.rhai"
+    }
+    def Cone "FlameCore"
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        double3 xformOp:translate = (0, -3.4, 0)
+        double3 xformOp:rotateXYZ = (180.0, 0, 0)
+        double3 xformOp:scale = (0.02, 0.02, 0.02)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        color3f primvars:displayColor = (0.95, 0.7, 0.2)
+        color3f primvars:emissiveColor = (6.0, 3.5, 0.9)
+        float primvars:displayOpacity = 0.85
+        bool physics:collisionEnabled = false
+        custom string lunco:params = "wmax=0.5, lmax=2.5, flick=0.5"
+        custom string lunco:scriptPath = "scenarios/flame.rhai"
+    }
 ```
 
 A few choices worth a sentence each. `displayOpacity` makes the cones see-through.
@@ -272,7 +578,8 @@ different `lunco:params` — `wmax`/`lmax` are how wide and long each gets, `fli
 how much it flickers. That's how one script drives two different-looking flames:
 each cone reads its own numbers.
 
-Now the script. Create `assets/scenarios/flame.rhai`:
+`scenarios/flame.rhai` already ships with the engine, and it's short enough to read
+in full:
 
 ```rhai
 // Climb up the parents until we find whoever publishes a `throttle` (the engine).
@@ -311,49 +618,43 @@ fn on_tick(me) {
 }
 ```
 
-`on_tick` runs every frame for any prim that has a script. `me` is the prim
-running it, and `this` is a little scratchpad that survives between frames (we
-keep the smoothed flicker there). `param(me, "wmax", 1.0)` reads a number you
-authored on the prim — that's the clean way to give a reusable script
-per-instance settings.
+`on_tick` runs every frame for any prim that has a script. `me` is the prim running
+it, and `this` is a little scratchpad that survives between frames (we keep the
+smoothed flicker there). `param(me, "wmax", 1.0)` reads a number you authored on the
+prim — that's the clean way to give a reusable script per-instance settings.
 
-Reload and fly the descent: a flickering plume that swells under hard braking and
+Reload and watch the descent: a flickering plume that swells under hard braking and
 dies to nothing the instant the engine cuts.
 
 ---
 
-## Step 5 — Warn about low fuel (an event from the model)
+## Step 6 — Warn about low fuel, and notice the landing
 
-We want a warning when propellant runs low, and an automatic engine cut when it's
-gone. The fuel level (`m_prop`) is a signal the model already publishes — we just
-need to fire an *event* when it crosses a line.
+We want a warning when propellant runs low. The fuel level (`m_prop`) is a signal
+the model already publishes — we just need to fire an *event* when it crosses a line.
 
-Rather than poll the fuel every frame in a script, declare the thresholds right
-on the lander and let the engine watch them. Add to the `Lander` prim:
+Rather than poll the fuel every frame in a script, declare the thresholds right on
+the vehicle and let the engine watch them. Add to the `MyLander` prim:
 
 ```usda
-        custom string lunco:portEvents = "m_prop<200:lander_low_fuel, m_prop<=0.5:lander_depleted"
+    custom string lunco:portEvents = "m_prop<200:lander_low_fuel, m_prop<=0.5:lander_depleted"
+    custom string lunco:scriptPath = "scenarios/my_mission/lander_supervisor.rhai"
 ```
 
-Read it as "when `m_prop` drops below 200, fire `lander_low_fuel`; when it hits
-near-zero, fire `lander_depleted`." Each fires once when it crosses, and re-arms
-if the value climbs back. This is exactly the kind of "watch a signal for a
+Read the first line as "when `m_prop` drops below 200, fire `lander_low_fuel`; when
+it hits near-zero, fire `lander_depleted`." Each fires once when it crosses, and
+re-arms if the value climbs back. This is exactly the kind of "watch a signal for a
 moment" job that belongs outside the model (remember the warning in Step 2).
 
-Now a small script reacts to those events. Create
-`assets/scenarios/lander_subsystems.rhai`:
+Now the supervisor. Create `assets/scenarios/my_mission/lander_supervisor.rhai`:
 
 ```rhai
 fn on_tick(me) {
     // Touchdown is "low AND slow" — two things at once, so it's easiest to spot
-    // here and announce as our own event for the mission to wait on.
-    if this.touchdown != true {
-        let pos = world_pos(me);
-        let v = velocity(me);
-        if pos != () && v != () && pos[1] < 3.4 && v[1] > -0.1 && v[1] < 0.1 {
-            this.touchdown = true;
-            emit("lander_touchdown");
-        }
+    // here and announce as our own event for the mission to wait on. Emits once.
+    if this.touchdown != true && __settled(me) {
+        this.touchdown = true;
+        emit("lander_touchdown");
     }
 }
 
@@ -361,37 +662,47 @@ fn on_event(me, evt) {
     if evt.name == "lander_low_fuel" {
         notify_kind("Lander low on fuel.", "warn");
     } else if evt.name == "lander_depleted" {
-        set(me, "engine_enable", 0.0);
-        notify_kind("Propellant depleted - engine disarmed.", "warn");
+        notify_kind("Propellant depleted.", "warn");
     }
+}
+
+// Low altitude (our own altimeter) plus a near-zero vertical rate. Entity names are
+// full prim paths, so `name(me)` finds our sensor wherever the scene put us.
+fn __settled(me) {
+    let alt_ent = find(name(me) + "/Altimeter");
+    if alt_ent < 0 { return false; }          // find() returns -1 when absent
+    let alt = get(alt_ent, "range");
+    if alt == () || alt >= 2.0 { return false; }
+    let vy = get(me, "velocity_y");
+    vy != () && vy > -0.2 && vy < 0.2
 }
 ```
 
-Attach it to the lander with `custom string lunco:scriptPath =
-"scenarios/lander_subsystems.rhai"`. A prim can happily carry both a model and a
-script — the model does the flying, the script supervises.
+A prim can happily carry both a model and a script — the model does the flying, the
+script supervises. Note that the script never names `/Mission/Lander`: it resolves
+its own altimeter relative to itself, so it rides along into any scene.
 
-`notify(msg)` and `notify_kind(msg, kind)` pop a message onto the screen (`kind`
-is `info`, `success`, `warn`, or `error`). We'll use them all over the mission.
+`notify(msg)` and `notify_kind(msg, kind)` pop a message onto the screen (`kind` is
+`info`, `success`, `warn`, or `error`). We'll use them all over the mission.
 
-Notice the two styles side by side: fuel is a clean single-value threshold, so
-it's declared on the prim; touchdown is a compound "low and slow" condition, so a
-script watches it and `emit`s its own event. Both end up as events the rest of
-the mission can wait for.
+Notice the two styles side by side: fuel is a clean single-value threshold, so it's
+declared on the prim; touchdown is a compound "low and slow" condition, so a script
+watches it and `emit`s its own event. Both end up as events the rest of the mission
+can wait for.
 
 ---
 
-## Step 6 — Bring a rover, bolted on for the ride
+## Step 7 — Bring a rover, bolted on for the ride
 
-The lander carries a rover down and drops it. Reference a rover and clamp it to
-the lander with a fixed joint:
+The lander carries a rover down and drops it. Reference a ready-made rover into the
+scene (`my_mission.usda`) and clamp it to the lander with a fixed joint:
 
 ```usda
     def Xform "SkidRover" ( prepend references = @../../vessels/rovers/skid_rover.usda@</SkidRover> )
     {
-        double3 xformOp:translate = (0, 28.35, 0)
+        double3 xformOp:translate = (0, 58.35, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        custom string lunco:scriptPath = "scenarios/rover_autopilot.rhai"
+        custom string lunco:scriptPath = "scenarios/my_mission/rover_autopilot.rhai"
     }
 
     def PhysicsFixedJoint "LanderRoverJoint"
@@ -403,25 +714,25 @@ the lander with a fixed joint:
     }
 ```
 
-`references` pulls in a ready-made rover so you don't rebuild a vehicle from
-scratch. The joint holds the two together during descent; later the mission
-breaks it with `detach_joint(...)` and the rover drops free. We point the rover at
-an autopilot script now and write it in Step 9.
+Same pattern as the lander: a vehicle arrives by `references`, the scene supplies
+only its starting pose. `localPos0 = (0, -1.5, 0)` bolts the rover to the underside
+of the lander's tank — into the clearance the legs bought you in Step 3.
+
+The joint holds the two together through the descent, and the mission breaks it with
+`detach_joint(...)` **only after touchdown** (Step 9 waits on the `lander_touchdown`
+event before it detaches). That ordering is not cosmetic: cut the rover loose in
+flight and it falls from altitude; leave it bolted on and it never drives. Land
+first, then release — the rover drops the last metre onto the regolith and rolls
+away. We point it at an autopilot script now and write that in Step 10.
 
 ---
 
-## Step 7 — Plant the waypoints
+## Step 8 — Plant the waypoints
 
-The rover's job is to visit three spots. Each spot should announce "the rover got
-here" by itself, so make a reusable glowing marker with an invisible trigger
-bubble around it.
-
-Create `assets/vessels/markers/waypoint.usda`:
+The rover's job is to visit three spots. A glowing marker with an invisible trigger
+bubble already exists at `assets/vessels/markers/waypoint.usda`; it looks like this:
 
 ```usda
-#usda 1.0
-( defaultPrim = "WaypointMarker" upAxis = "Y" metersPerUnit = 1 )
-
 def Xform "WaypointMarker"
 {
     def Sphere "Dome"
@@ -446,125 +757,181 @@ def Xform "WaypointMarker"
 ```
 
 The dome is just for show (no collider). The `Zone` is the clever bit:
-`lunco:triggerZone` turns it into a sensor that doesn't block anything but *fires
-an event* — `enter:waypoint` — the moment the rover drives into it. The event
-carries who entered and which sensor fired.
+`lunco:triggerZone` turns it into a sensor that doesn't block anything but *fires an
+event* — `enter:waypoint` — the moment something drives into it. The event carries
+who entered and which sensor fired, so a script can wait on one specific gate with
+`wait_for_from("enter:waypoint", "/Mission/RoverTarget2/Zone")` and tell it apart
+from its identical siblings.
 
-Now drop three of them into the scene. They all use the same name on purpose —
-we'll tell them apart by *which* sensor fired, not by giving each a different
-name:
+One honest caveat, and it's why the mission below doesn't use those events: this
+rover's wheels are raycasts rather than solid colliders, so its chassis doesn't
+reliably overlap the bubble. Trigger zones are the right tool for a walking
+astronaut or a solid crate; for this rover we read the distance instead. Reach for
+whichever actually fires.
+
+Drop three markers into the scene:
 
 ```usda
     def Xform "RoverTarget1" ( prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker> )
-    { double3 xformOp:translate = (40, 0, 18); uniform token[] xformOpOrder = ["xformOp:translate"] }
+    { double3 xformOp:translate = (14, 0, 9); uniform token[] xformOpOrder = ["xformOp:translate"] }
     def Xform "RoverTarget2" ( prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker> )
-    { double3 xformOp:translate = (8, 0, 46); uniform token[] xformOpOrder = ["xformOp:translate"] }
+    { double3 xformOp:translate = (-11, 0, 16); uniform token[] xformOpOrder = ["xformOp:translate"] }
     def Xform "RoverTarget3" ( prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker> )
-    { double3 xformOp:translate = (-34, 0, 30); uniform token[] xformOpOrder = ["xformOp:translate"] }
+    { double3 xformOp:translate = (5, 0, -15); uniform token[] xformOpOrder = ["xformOp:translate"] }
+
+    # The touchdown target: a landmark for the pilot, not a wire. The GNC descends
+    # on its altimeter and never reads this — it just marks the spot to aim at.
+    def Xform "LandingLocation" ( prepend references = @../../vessels/markers/landing_location.usda@</LandingLocationMarker> )
+    { double3 xformOp:translate = (0, 0, 0); uniform token[] xformOpOrder = ["xformOp:translate"] }
 ```
 
 ---
 
-## Step 8 — Write the mission
+## Step 9 — Write the mission
 
-This is the conductor: land, safe the engine, drop the rover, then run the
-waypoint course. It's a non-physical prim that holds the whole storyline.
+This is the conductor: land, drop the rover, then run the waypoint course. It's a
+non-physical prim that holds the storyline and belongs to the *scene*, not to any
+vehicle — which is why the lander and rover know nothing about it.
 
-Add it to the scene:
+Add it to `my_mission.usda`:
 
 ```usda
     def Scope "Scenario"
     {
-        custom string lunco:scenario = "rover-surface-ops"
-        custom string lunco:scriptPath = "scenarios/rover_surface_ops.rhai"
+        custom string lunco:scenario = "my-surface-ops"
+        custom string lunco:scriptPath = "scenarios/my_mission/mission.rhai"
     }
 ```
 
-Then create `assets/scenarios/rover_surface_ops.rhai`. The mission is written as a
-`task` — a list of steps the engine walks through for you, one after another.
-Each step either *does* something once, *waits* for some time, or *waits* for an
-event.
+Then create `assets/scenarios/my_mission/mission.rhai`. The mission is written as a
+`task` — a list of steps the engine walks through for you, one after another. Each
+step either *does* something once, *waits* for some time, or *waits* for a condition
+or an event.
 
 ```rhai
 fn show_wp(n, on) {
     let s = if on { 1.0 } else { 0.0 };
     set(find("/Mission/RoverTarget" + n + "/Dome"), "Transform.scale", [s, s, s]);
 }
-fn wp_zone(n) { "/Mission/RoverTarget" + n + "/Zone" }
+
+/// True once the rover is within `r` metres of waypoint `n`.
+fn at_wp(n, r) {
+    let t = world_pos(find("/Mission/RoverTarget" + n));
+    if t == () { return false; }
+    arrived(find("/Mission/SkidRover"), t, r)
+}
 
 fn task(me) {
     seq([
         once(|m| {
-            possess(find("/Mission/Lander"));
-            show_wp(2, false); show_wp(3, false);     // only the first dome shows
-            notify_kind("Powered descent - the lander is flying itself down.", "info");
+            follow(find("/Mission/Lander"));           // ride the camera down
+            show_wp(2, false); show_wp(3, false);      // only the first dome shows
+            notify_kind("Powered descent - the GNC is flying the lander down.", "info");
         }),
 
-        // Hold here until the lander tells us it touched down.
+        // Hold here until the lander's supervisor tells us it touched down.
         wait_for("lander_touchdown"),
-        once(|m| {
-            set(find("/Mission/Lander"), "engine_enable", 0.0);
-            notify_kind("Touchdown. Engine safed.", "success");
-        }),
+        once(|m| notify_kind("Touchdown.", "success")),
 
-        wait(1.5),
+        wait(1.5),                                     // brief settle (sim seconds)
         once(|m| { detach_joint(find("/Mission/LanderRoverJoint")); notify("Releasing the rover..."); }),
-        wait(2.0),
+        wait(2.0),                                     // let the rover fall clear
 
         once(|m| {
-            possess(find("/Mission/SkidRover"));
-            emit("rover_deployed");                    // wakes the autopilot (Step 9)
-            notify_kind("Rover deployed - autopilot driving. Press any key to take over.", "success");
+            emit("rover_deployed");                    // wakes the autopilot (Step 10)
+            notify_kind("Rover deployed - autopilot driving. Click the rover (or press F) to take over.", "success");
         }),
 
-        // The course. Every gate fires "enter:waypoint", so we wait on the
-        // SPECIFIC gate's sensor each time, and reveal the next dome on arrival.
-        wait_for_from("enter:waypoint", wp_zone(1)),
-        once(|m| { show_wp(1, false); show_wp(2, true); notify_kind("Waypoint 1 reached (2 of 3).", "success"); }),
-        wait_for_from("enter:waypoint", wp_zone(2)),
-        once(|m| { show_wp(2, false); show_wp(3, true); notify_kind("Waypoint 2 reached (3 of 3).", "success"); }),
-        wait_for_from("enter:waypoint", wp_zone(3)),
-        once(|m| { show_wp(3, false); notify_kind("All waypoints reached - mission complete!", "success"); }),
+        // The course. Reaching a gate hides it, reveals the next, and announces
+        // itself on the bus so anything watching can react.
+        wait_until(|m| at_wp(1, 5.0)),
+        once(|m| { show_wp(1, false); show_wp(2, true); emit("waypoint_1_reached");
+                   notify_kind("Waypoint 1 reached (2 of 3).", "success"); }),
+        wait_until(|m| at_wp(2, 5.0)),
+        once(|m| { show_wp(2, false); show_wp(3, true); emit("waypoint_2_reached");
+                   notify_kind("Waypoint 2 reached (3 of 3).", "success"); }),
+        wait_until(|m| at_wp(3, 5.0)),
+        once(|m| { show_wp(3, false); emit("course_complete");
+                   notify_kind("All waypoints reached - course complete!", "success"); }),
     ])
 }
 ```
 
-A few of the verbs you just used: `possess` puts the camera and controls on a
-vehicle; `find("/path")` looks up a prim by its scene path; `detach_joint` breaks
-the joint from Step 6; `wait(secs)` pauses the story (in sim-seconds);
-`wait_for(name)` parks until an event fires.
+A few of the verbs you just used: `find("/path")` looks up a prim by its scene path;
+`detach_joint` breaks the joint from Step 7; `wait(secs)` pauses the story (in
+sim-seconds); `wait_for(name)` parks until an event fires; `wait_until(pred)` parks
+until a condition reads true.
 
-The one to dwell on is `wait_for_from`. Our three gates all shout the same thing,
-`enter:waypoint`, so a plain `wait_for("enter:waypoint")` couldn't tell gate 1
-from gate 3. `wait_for_from("enter:waypoint", wp_zone(2))` adds "…and only from
-*this* sensor." That's how you handle many identical-looking sources: match on
-*who* fired, not just *what*. (If you ever need it inside an `on_event` handler
-instead, the same information is right there as `evt.source`.)
+**`follow`, not `possess`.** This is the trap the whole tutorial has been building
+toward. `follow(lander)` attaches a chase camera and nothing else — the lander stays
+unpossessed, its `piloted` port reads 0, and the GNC from Step 2 keeps flying it. If
+you'd written `possess(lander)` instead, `piloted` would snap to 1, the gate would
+switch to the pilot's stick, and your beautiful descent controller would go silent
+while the lander dropped like a stone. Possession *means* "a pilot has this", so
+possess a vehicle only when you actually intend to fly it.
 
-Reload and watch the whole arc play out — except the rover just sits there,
-because we haven't taught it to drive yet.
+Notice, too, that this script doesn't drive anything. It watches for real things
+happening and announces them (`rover_deployed`, `waypoint_1_reached`,
+`course_complete`). Who *listens* is not its problem — that's the next step, and it's
+also how the in-app lesson layers a student checklist over this same mission without
+touching a line of it.
+
+Reload and watch the whole arc play out — except the rover just sits there, because
+we haven't taught it to drive yet.
 
 ---
 
-## Step 9 — Let the rover drive itself
+## Step 10 — Let the rover drive itself, and hand over cleanly
 
-Finally, the autopilot. It should drive the rover from gate to gate on its own,
-and the instant the player touches a key, get out of the way.
+Finally, the autopilot. It should drive the rover from gate to gate on its own, and
+the moment the player wants the wheel, get out of the way.
 
-Create `assets/scenarios/rover_autopilot.rhai` (already attached back in Step 6):
+"The moment the player wants the wheel" is where autopilots usually go wrong, so
+let's be precise. The player is asking for the rover if they possess the rover.
+They are *not* asking for the rover when they press W while flying the lander — that
+W belongs to the lander. An autopilot that grabs possession on any keypress will rip
+the camera off the lander mid-descent, which is a genuinely baffling thing to
+experience. Authority is a question you *ask*, never one you assume.
+
+Create `assets/scenarios/my_mission/rover_autopilot.rhai`:
 
 ```rhai
 fn wp_pos(i) { world_pos(find("/Mission/RoverTarget" + i)) }
 
+/// True if a HUMAN drives `id`. `controller(id)` names the driver's role —
+/// "AiAgent" for an autopilot, "Owner"/"Operator" for a person — so this is the
+/// human-vs-AI test, not a bare "is anyone driving". find() gives -1 when absent.
+fn human_drives(id) {
+    if id < 0 { return false; }
+    let role = controller(id);
+    role != () && role != "AiAgent"
+}
+
+/// Is the player at the controls of some OTHER vehicle? Their keys are its keys.
+fn __player_flies_elsewhere(me) {
+    let lander = find("/Mission/Lander");
+    lander != me && human_drives(lander)
+}
+
+/// The side-effects of standing down. `this.manual` is NOT set here — see below.
+fn __stand_down(me) {
+    brake(me);
+    notify_kind("Manual control - autopilot off.", "info");
+}
+
 fn on_tick(me) {
-    if this.active != true { return; }     // not deployed yet
-    if this.manual == true { return; }     // player has the wheel
+    if this.active != true { return; }        // not deployed yet
+    if this.manual == true { return; }        // player has the wheel
+    // They possessed us themselves (clicked, or pressed F). Yield — and possess
+    // nothing on their behalf: they already own it.
+    if human_drives(me) { this.manual = true; __stand_down(me); return; }
+
     if this.i == () { this.i = 1; }
-    if this.i > 3 { brake(me); return; }   // course done
+    if this.i > 3 { brake(me); return; }      // course done
 
     let target = wp_pos(this.i);
     if target == () { return; }
-    if nav_to(me, target, 0.7, 4.0) {      // steer there; true when arrived
+    if nav_to(me, target, 0.7, 4.0) {         // steer there; true once arrived
         this.i += 1;
     }
 }
@@ -572,43 +939,70 @@ fn on_tick(me) {
 fn on_event(me, evt) {
     if evt.name == "rover_deployed" {
         this.active = true; this.i = 1;
-    } else if evt.name.starts_with("key:") {
-        if this.active == true && this.manual != true {
-            this.manual = true; brake(me);
-            notify_kind("Manual control - autopilot off.", "info");
-        }
+        return;
     }
+    if !evt.name.starts_with("key:") { return; }
+    if this.active != true || this.manual == true { return; }
+    if __player_flies_elsewhere(me) { return; }   // that key was for the lander
+    // Nothing else is possessed, so the key IS a takeover request. Give them the
+    // rover so their keys reach it, and stand down.
+    possess(me);
+    this.manual = true;
+    __stand_down(me);
 }
 ```
 
-Driving is a moment-to-moment thing — steer a little this frame, a little the
-next — so it lives in `on_tick`. `nav_to(rover, target, speed, radius)` does the
-steering for you and returns `true` once it's arrived (and brakes); then we move
-on to the next waypoint.
+Driving is a moment-to-moment thing — steer a little this frame, a little the next —
+so it lives in `on_tick`. `nav_to(rover, target, speed, radius)` does the steering
+for you and returns `true` once it's arrived (and brakes); then we move on to the
+next waypoint.
 
-When the autopilot *turns on and off*, though, those are events. It wakes up on
-the `rover_deployed` event the mission fired (so it doesn't fight the descent
-while still bolted to the lander), and it stands down on any key press. Every key
-you hit shows up as an event named `key:<something>`, so "any key" is just
-checking the name starts with `key:`.
+One rhai rule bites here, so learn it now: **`this` is bound only inside the hook
+the engine calls** — `on_tick`, `on_event` — and *not* inside functions those hooks
+call. That's why `__stand_down` brakes and notifies but leaves `this.manual = true`
+to its callers. Move that assignment into the helper and the autopilot will cheerfully
+keep driving forever, having "stood down" into a `this` that nobody reads.
 
-Reload one more time. The lander flies down, the rover drops and drives the
-course on its own, the domes light up one by one — and the moment you press a key,
-the rover is yours.
+When the autopilot *turns on and off*, though, those are events and state reads. It
+wakes on the `rover_deployed` event the mission fired (so it doesn't fight the
+descent while still bolted to the lander), and it stands down the first time a human
+holds the rover. There are two ways for that to happen, and both funnel through
+possession:
+
+- the player possesses the rover directly (clicks it, presses F) — `on_tick` sees a
+  human owner and yields, possessing nothing;
+- the player presses a drive key with nothing else possessed — the autopilot
+  possesses the rover *for* them as a convenience, then yields.
+
+Every key you hit shows up as an event named `key:<something>`, so "any key" is just
+checking the name starts with `key:` — but only after `__player_flies_elsewhere`
+confirms the key wasn't meant for someone else.
+
+Reload one more time. The lander flies down, the rover drops and drives the course
+on its own, the domes light up one by one — and the moment you click it, the rover is
+yours. Click the *lander* instead and you'll fly the lander, with the rover trundling
+along on autopilot behind you, exactly as it should.
 
 ---
 
 ## You built a mission
 
-Step back and look at what's there: a vehicle with a real control law, a flame
-driven by its actual engine output, model-driven warnings, a multi-stage mission
-that waits on physical events, and an autopilot that yields to a human. None of it
-needed engine changes — just a scene, a model, and a handful of scripts.
+Step back and look at what's there: a vehicle asset with a real control law, wired
+to its own sensors, reusable in any scene; a flame driven by its actual engine
+output; model-driven warnings; a multi-stage mission that waits on physical events
+and announces its own; and an autopilot that yields to a human without ever stealing
+from one. None of it needed engine changes — just a scene, a vehicle, a model, and a
+handful of scripts.
 
-From here, good next moves: add a battery or thermal model as a second `.mo` on
-the rover and watch its ports; turn "take a photo at the rock" into another
-trigger zone; or give each waypoint a time limit and fail the mission if it's
-missed.
+The shape to carry away is the layering. **Vehicles** own their physics, control
+law, and wiring, and know nothing of any mission. **Scenes** place vehicles and own
+the storyline. **Missions** announce what happened; they never reach into a vehicle's
+state. **Authority** is possession, asked and never assumed. Follow those four and
+new missions compose out of old vehicles for free.
+
+From here, good next moves: add a battery or thermal model as a second `.mo` on the
+rover and watch its ports; turn "take a photo at the rock" into another trigger zone;
+or give each waypoint a time limit and fail the mission if it's missed.
 
 ---
 
@@ -616,25 +1010,52 @@ missed.
 
 - The whole script silently stops working and the log repeats a compile error?
   Check your strings — rhai doesn't accept `\u{...}` escapes. Plain text only.
-- A flame looks beige instead of fiery? Its emissive colour is probably ≤ 1 —
-  push it above 1 so it glows instead of being lit by the sun.
-- A model line with `if … else if …`? Flatten it into separate single `if`s or
-  arithmetic; chained `else if` doesn't translate cleanly.
+- A vehicle falls through the floor? Check the ground actually has
+  `PhysicsCollisionAPI` and `physics:collisionEnabled`. A collider prim with no
+  rigid-body ancestor becomes static geometry wherever it sits in the tree.
+- A vehicle drops like a rock with the model attached? Its `.connect` wiring is
+  missing, or it names scene paths (`</Mission/Lander...>`) instead of asset-local
+  ones (`</MyLander...>`), so nothing rebased through the reference.
+- Touchdown fires while the lander is still in the air, or never fires at all? Check
+  where the altimeter is mounted against the height the hull rests at. `rest_altitude`
+  must equal the range the sensor reads with the vehicle sitting on the ground — and
+  the sensor must hang below any cargo, or it ranges the cargo instead of the ground.
+- Physics goes berserk at touchdown, or a slung payload sinks into the floor? The
+  carrier has no ground clearance. Its legs must hold the attachment point above the
+  ground by more than the payload is tall.
+- A vehicle stands on its footpads alone, tank clipping through everything? It went
+  children-only compound when the pads got colliders. Add the invisible `Hull` twin.
+- Your self-flying vehicle went inert the moment a script touched it? Something
+  possessed it. `piloted` is 1, so the authority gate handed control to a pilot who
+  isn't pressing anything. Use `follow()` to watch, `possess()` only to fly.
+- A flame looks beige instead of fiery? Its emissive colour is probably ≤ 1 — push
+  it above 1 so it glows instead of being lit by the sun.
+- A model line with `if … else if …`? Flatten it into separate single `if`s,
+  `min`/`max`, or arithmetic; chained `else if` doesn't translate cleanly.
 - Need a model to *decide* something from a wired-in value? Don't — declare a
-  `lunco:portEvents` threshold instead (Step 5).
+  `lunco:portEvents` threshold instead (Step 6).
+- A trigger zone never fires? Check what's entering it. Raycast-wheeled rovers don't
+  reliably overlap sensors; read a distance instead (Step 8).
+- Possessed the vehicle, and only Space does anything? Your model has no `pitch` /
+  `roll` / `yaw` inputs, so the `Controls` profile is writing ports nobody reads.
+  Ports bind by NAME — a typo is silence, not an error.
+- Tilting the vehicle doesn't steer the thrust? You wired `force_y` (world up)
+  instead of `force_local_y` (the vehicle's own up).
 - Reading the engine's *real* state? Read its output signal (`throttle`), not the
   player's input.
 
 For the complete list of script verbs — sensing, math, vehicle control, tools,
-networking — see [`../scripting-guide.md`](../scripting-guide.md). For the
-reasoning behind how scenarios are put together, see
+networking — see [`../scripting-guide.md`](../scripting-guide.md). For the reasoning
+behind how scenarios are put together, see
 [`../architecture/34-scenario-and-multidomain.md`](../architecture/34-scenario-and-multidomain.md).
 
 ## Related
 
 - **Play the interactive version**: the in-app *Lander & Rover Mission* lesson
   (🎓 Tutorials menu in the sandbox) walks the same mission with on-screen coaching.
+  It watches the very events you emitted in Step 9 and turns them into a checklist.
 - **Next walkthrough**: [02 — Author your own controller](02-authoring-a-controller.md) — build the lander's GNC yourself.
+- **Then**: [03 — Cosim: when a model flies physics](03-cosim.md) — the wiring from Step 4, in depth.
 - **Reference skills**: [build-usd-scene](../../skills/build-usd-scene/SKILL.md) (the world),
   [author-scenario](../../skills/author-scenario/SKILL.md) (the mission logic),
   [compose-multidomain-twin](../../skills/compose-multidomain-twin/SKILL.md) (wiring it all together),

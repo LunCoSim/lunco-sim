@@ -269,6 +269,17 @@ pub enum UsdOp {
     },
     /// Set an arbitrary attribute on the prim at `path`. Creates the
     /// attribute if absent, replaces its value otherwise.
+    ///
+    /// The `value` encoding depends on `type_name`, and this is the ONE place it is
+    /// interpreted so no call site hand-escapes:
+    /// - `type_name == "string"` → `value` is the **raw** string content, authored
+    ///   verbatim as `Value::String`. USDA's lexer keeps raw bytes between delimiters
+    ///   (it does not unescape) and the writer picks a delimiter the content can't
+    ///   close, so backslashes/quotes/newlines round-trip — pass arbitrary text (a
+    ///   whole rhai scenario source) directly. The one unserializable value, both
+    ///   `"""` and `'''` present, is rejected at apply.
+    /// - any other type → `value` is a USD **literal** (e.g. `"(0.2, 0.2, 0.8)"`,
+    ///   `"0.5"`), parsed into a typed [`sdf::Value`] by openusd's parser.
     SetAttribute {
         /// Layer to write to.
         edit_target: LayerId,
@@ -276,11 +287,10 @@ pub enum UsdOp {
         path: String,
         /// The name of the attribute (e.g. `primvars:displayColor` or `inputs:roughness`).
         name: String,
-        /// The USD type name of the attribute (e.g. `color3f` or `float`).
+        /// The USD type name of the attribute (e.g. `color3f`, `float`, `string`).
         type_name: String,
-        /// The attribute value formatted as a USD-compliant string literal
-        /// (e.g. `"(0.2, 0.2, 0.8)"`, `"0.5"`). Parsed into a typed
-        /// [`sdf::Value`] by openusd's own parser at apply time.
+        /// The value: **raw content** when `type_name == "string"`, otherwise a
+        /// USD-compliant literal. See the variant doc for the split.
         value: String,
     },
     /// Author one **time sample** of an attribute on the prim at `path` —
@@ -377,6 +387,68 @@ pub enum UsdOp {
         from_path: String,
         /// New absolute USD path for the prim.
         to_path: String,
+    },
+    /// Author the prim's **applied API schemas** (`apiSchemas`) — the list that
+    /// turns a plain prim into a rigid body, a collider, an articulation root.
+    /// Without this op a prim built at runtime can never be made physical, so
+    /// "assemble a vehicle from parts" was authorable in USD text and nowhere else.
+    ///
+    /// `schemas` is the exact desired list (set-semantics, an *explicit* list op —
+    /// not an append), mirroring [`UsdOp::SetRelationship`]. Since an explicit
+    /// opinion on a stronger layer replaces weaker `prepend apiSchemas` opinions
+    /// wholesale, callers must pass the full set they want composed, not just the
+    /// delta. An empty list authors an explicitly-empty schema list.
+    SetApiSchemas {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim.
+        path: String,
+        /// The exact applied-schema names (e.g. `["PhysicsRigidBodyAPI"]`).
+        schemas: Vec<String>,
+    },
+    /// Select `variant` within the prim's `variant_set`.
+    ///
+    /// Variant sets are already authored across the vessel assets (a rover's
+    /// `drivetrain` swaps `raycast` for a fully physical joint rig) and nothing
+    /// could switch one at runtime. This is the op behind "reconfigure the rover".
+    ///
+    /// Read-modify-write: selections for *other* variant sets on the same prim are
+    /// preserved. Changing a selection re-composes the prim's subtree, so the
+    /// projector rebuilds rather than replaying it incrementally.
+    SetVariantSelection {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim carrying the variant set.
+        path: String,
+        /// The variant set name (e.g. `drivetrain`).
+        variant_set: String,
+        /// The variant to select (e.g. `physical`).
+        variant: String,
+    },
+    /// Author the prim's **payloads** — references that lazy composition may
+    /// decline to traverse, i.e. the arc for heavy geometry that should not be
+    /// loaded until needed. Set-semantics (explicit list op); empty clears.
+    ///
+    /// The counterpart of [`UsdOp::AddPrim`]'s `reference`, which composes eagerly.
+    SetPayload {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim.
+        path: String,
+        /// Asset paths to payload (e.g. `["@meshes/hull.usdc@"]`). Empty clears.
+        asset_paths: Vec<String>,
+    },
+    /// Activate or deactivate the prim. A deactivated prim and its whole subtree
+    /// vanish from composition without being deleted — the non-destructive
+    /// "disable this part" every assembly editor needs, and cheaply reversible
+    /// (unlike [`UsdOp::RemovePrim`], which discards the authored opinions).
+    SetActive {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim.
+        path: String,
+        /// `false` prunes the prim and its descendants from the composed stage.
+        active: bool,
     },
 }
 
@@ -820,7 +892,11 @@ impl Document for UsdDocument {
             | UsdOp::RemoveTimeSample { edit_target, .. }
             | UsdOp::SetRelationship { edit_target, .. }
             | UsdOp::SetConnection { edit_target, .. }
-            | UsdOp::MovePrim { edit_target, .. } => edit_target.clone(),
+            | UsdOp::MovePrim { edit_target, .. }
+            | UsdOp::SetApiSchemas { edit_target, .. }
+            | UsdOp::SetVariantSelection { edit_target, .. }
+            | UsdOp::SetPayload { edit_target, .. }
+            | UsdOp::SetActive { edit_target, .. } => edit_target.clone(),
         };
         let target = TargetLayer::from_id(&id).ok_or_else(|| {
             DocumentError::ValidationFailed(format!(
@@ -1038,31 +1114,63 @@ impl Document for UsdDocument {
                 ..
             } => {
                 let prim_sdf = self.require_prim_anywhere(&path)?;
-                let val = parse_attribute_value(&type_name, &value).map_err(|e| {
-                    DocumentError::ValidationFailed(format!(
-                        "SetAttribute `{name}` ({type_name}): {e}"
-                    ))
-                })?;
+
+                // The single place attribute values are turned into USD values, so
+                // NO call site ever hand-escapes. Two rules by type:
+                //   • `string` → the value is RAW content, authored as `Value::String`
+                //     with no literal parsing. USDA's lexer keeps raw bytes between
+                //     delimiters (it does not unescape), and the writer picks a
+                //     delimiter the content can't close — so backslashes, quotes and
+                //     newlines round-trip verbatim. The one thing USDA cannot delimit
+                //     is a value containing BOTH `"""` and `'''`; reject that here, at
+                //     apply, not at save (a stranded unsavable document is worse).
+                //   • everything else → the value is a USD literal we parse.
+                let is_string = type_name == "string";
+                let val = if is_string {
+                    if value.contains("\"\"\"") && value.contains("'''") {
+                        return Err(DocumentError::ValidationFailed(format!(
+                            "SetAttribute `{name}` (string): value contains both `\"\"\"` and \
+                             `'''`, which USDA cannot delimit (its lexer does not unescape)"
+                        )));
+                    }
+                    openusd::sdf::Value::String(value.clone())
+                } else {
+                    parse_attribute_value(&type_name, &value).map_err(|e| {
+                        DocumentError::ValidationFailed(format!(
+                            "SetAttribute `{name}` ({type_name}): {e}"
+                        ))
+                    })?
+                };
+
                 // Typed inverse: restore the attribute's prior value in THIS layer,
                 // so undo replays incrementally (the projector's `apply_incremental_
                 // op_to_stage` path) instead of a `ReplaceSource` that forces a
                 // whole-layer rebuild. Only when the attribute already had a value
-                // here whose literal round-trips cleanly; a newly-authored attribute
-                // (or an un-recoverable literal) falls back to the always-correct
-                // whole-source snapshot — which also correctly *removes* the new
-                // opinion on undo, something a typed `SetAttribute` cannot express.
-                let old_literal = prim_sdf
+                // here that round-trips; a newly-authored attribute (or an
+                // un-recoverable literal) falls back to the always-correct whole-
+                // source snapshot — which also correctly *removes* the new opinion on
+                // undo, something a typed `SetAttribute` cannot express. For a string
+                // the prior value is recovered RAW (matching the raw author above);
+                // for other types via `value_to_literal`.
+                let prior = prim_sdf
                     .append_property(name.as_str())
                     .ok()
-                    .and_then(|attr| self.layer(target).field(&attr, "default").cloned())
-                    .and_then(|old| author::value_to_literal(&type_name, old));
-                let inverse = match old_literal {
-                    Some(lit) => UsdOp::SetAttribute {
+                    .and_then(|attr| self.layer(target).field(&attr, "default").cloned());
+                let recovered = if is_string {
+                    match prior {
+                        Some(openusd::sdf::Value::String(s)) => Some(s),
+                        _ => None,
+                    }
+                } else {
+                    prior.and_then(|old| author::value_to_literal(&type_name, old))
+                };
+                let inverse = match recovered {
+                    Some(v) => UsdOp::SetAttribute {
                         edit_target: id.clone(),
                         path: path.clone(),
                         name: name.clone(),
                         type_name: type_name.clone(),
-                        value: lit,
+                        value: v,
                     },
                     None => self.coarse_inverse(target, &id),
                 };
@@ -1237,6 +1345,103 @@ impl Document for UsdDocument {
                 self.commit(target, new_data, UsdChange::FullReload);
                 Ok(inverse)
             }
+
+            UsdOp::SetApiSchemas { path, schemas, .. } => {
+                self.require_prim_anywhere(&path)?;
+                let inverse = self.coarse_inverse(target, &id);
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let tokens: Vec<openusd::tf::Token> =
+                    schemas.iter().map(openusd::tf::Token::from).collect();
+                stage
+                    .prim(path.as_str())
+                    .set_metadata(
+                        openusd::sdf::FieldKey::ApiSchemas.as_str(),
+                        openusd::sdf::Value::TokenListOp(openusd::sdf::TokenListOp::explicit(
+                            tokens,
+                        )),
+                    )
+                    .map_err(author_err)?;
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                // Applied schemas decide which ECS components the translator
+                // attaches (rigid body, collider) — the prim must be re-projected.
+                self.commit(target, new_data, UsdChange::Resync { path });
+                Ok(inverse)
+            }
+
+            UsdOp::SetVariantSelection {
+                path,
+                variant_set,
+                variant,
+                ..
+            } => {
+                self.require_prim_anywhere(&path)?;
+                let inverse = self.coarse_inverse(target, &id);
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                // Read-modify-write the selection map so selecting `drivetrain`
+                // doesn't silently drop a sibling variant set's selection.
+                stage
+                    .prim(path.as_str())
+                    .update_metadata(
+                        openusd::sdf::FieldKey::VariantSelection.as_str(),
+                        |current| {
+                            let mut map = match current {
+                                Some(openusd::sdf::Value::VariantSelectionMap(m)) => m,
+                                _ => Default::default(),
+                            };
+                            map.insert(variant_set.clone(), variant.clone());
+                            openusd::sdf::Value::VariantSelectionMap(map)
+                        },
+                    )
+                    .map_err(author_err)?;
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                self.commit(target, new_data, UsdChange::Resync { path });
+                Ok(inverse)
+            }
+
+            UsdOp::SetPayload {
+                path, asset_paths, ..
+            } => {
+                self.require_prim_anywhere(&path)?;
+                let inverse = self.coarse_inverse(target, &id);
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let payloads: Vec<openusd::sdf::Payload> = asset_paths
+                    .iter()
+                    .map(|a| openusd::sdf::Payload {
+                        asset_path: a.clone(),
+                        ..Default::default()
+                    })
+                    .collect();
+                stage
+                    .prim(path.as_str())
+                    .set_metadata(
+                        openusd::sdf::FieldKey::Payload.as_str(),
+                        openusd::sdf::Value::PayloadListOp(
+                            openusd::sdf::PayloadListOp::explicit(payloads),
+                        ),
+                    )
+                    .map_err(author_err)?;
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                self.commit(target, new_data, UsdChange::Resync { path });
+                Ok(inverse)
+            }
+
+            UsdOp::SetActive { path, active, .. } => {
+                self.require_prim_anywhere(&path)?;
+                // NOT `SetActive { active: !active }`: that assumes the prim was in
+                // the opposite state. Deactivating an already-inactive prim would
+                // then "undo" into activating it. The snapshot inverse restores the
+                // target layer's real prior opinion, including *unauthored*.
+                let inverse = self.coarse_inverse(target, &id);
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                stage
+                    .prim(path.as_str())
+                    .set_active(active)
+                    .map_err(author_err)?;
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                self.commit(target, new_data, UsdChange::Resync { path });
+                Ok(inverse)
+            }
+
         };
         if result.is_ok() {
             self.record_op(logged_op);
@@ -1269,6 +1474,165 @@ mod tests {
     }
     fn prim_exists(doc: &UsdDocument, path: &str) -> bool {
         doc.data().spec(&SdfPath::new(path).unwrap()).is_some()
+    }
+
+    /// Whether a doc's serialized source **reparses cleanly** — the check that
+    /// catches malformed metadata a substring assertion misses (e.g. a payload
+    /// asset path wrapped `@@…@@` still `contains("hull")` but won't parse). A
+    /// fresh document from un-parseable source blocks every structural op but
+    /// `ReplaceSource`, so a probe `AddPrim` succeeding proves the source parsed.
+    fn reparses_cleanly(doc: &UsdDocument) -> bool {
+        let mut d2 = UsdDocument::with_origin(
+            DocumentId::new(9999),
+            doc.source(),
+            DocumentOrigin::writable_file("/tmp/roundtrip.usda"),
+        );
+        d2.apply(UsdOp::AddPrim {
+            edit_target: LayerId::root(),
+            parent_path: "/".into(),
+            name: "RtProbe".into(),
+            type_name: Some("Xform".into()),
+            reference: None,
+        })
+        .is_ok()
+    }
+
+    #[test]
+    fn attach_component_sequence_applies_end_to_end() {
+        // The attach lowering's op *shape* is unit-tested in `crate::attach`; this
+        // proves the whole sequence actually APPLIES in order onto a real document —
+        // the joint prim is defined before its relationships target it, the point3f
+        // anchors author, and the result composes into a jointed assembly.
+        use crate::attach::{attach_component_ops, AttachJoint, AttachSpec, Axis};
+
+        let scene = "#usda 1.0\ndef Xform \"Rig\"\n{\n    def Xform \"Chassis\"\n    {\n    }\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(50),
+            scene,
+            DocumentOrigin::writable_file("/tmp/attach.usda"),
+        );
+
+        let spec = AttachSpec {
+            edit_target: LayerId::root(),
+            host_path: "/Rig/Chassis".into(),
+            name: "Wheel".into(),
+            asset: "components/mobility/wheel.usda".into(),
+            placement: [0.5, -0.3, 1.2],
+            joint: AttachJoint::Revolute { axis: Axis::X },
+        };
+        for op in attach_component_ops(&spec) {
+            doc.apply(op).expect("each attach op applies in sequence");
+        }
+
+        // The part and the joint are both authored…
+        assert!(prim_exists(&doc, "/Rig/Chassis/Wheel"), "part referenced in");
+        assert_eq!(
+            prim_type(&doc, "/Rig/Chassis/Wheel_Joint").as_deref(),
+            Some("PhysicsRevoluteJoint"),
+            "joint prim defined with the requested type"
+        );
+        // …and the joint relates the two bodies, with the anchor derived from the
+        // placement (localPos0) — the whole point of the lowering.
+        let src = doc.source();
+        assert!(src.contains("physics:body0") && src.contains("/Rig/Chassis"), "body0 → host");
+        assert!(src.contains("physics:body1") && src.contains("/Rig/Chassis/Wheel"), "body1 → part");
+        assert!(src.contains("physics:localPos0"), "anchor authored");
+        assert!(src.contains("physics:axis"), "revolute axis authored");
+    }
+
+    #[test]
+    fn set_attribute_string_round_trips_realistic_rhai_verbatim() {
+        // `SetAttribute` with type `string` authors the value RAW: a rhai scenario's
+        // source must survive serialize→reparse byte-for-byte without the caller
+        // hand-escaping a USD literal. This is what real rhai looks like — embedded
+        // double quotes, backslashes, and newlines. (The openusd USDA lexer keeps raw
+        // bytes between triple-quote delimiters, so `\"` and `\` pass through verbatim
+        // — no escape processing to corrupt them.)
+        let src = "fn on_tick(me) {\n    let s = \"he said \\\"hi\\\"\";\n    let path = \"C:\\\\rover\";\n    notify(s + path, \"info\");\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(60),
+            "#usda 1.0\ndef Xform \"Rover\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/script.usda"),
+        );
+        doc.apply(UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: "/Rover".into(),
+            name: "lunco:script".into(),
+            type_name: "string".into(),
+            value: src.to_string(),
+        })
+        .unwrap();
+
+        // Serialize, then reparse from scratch — the true round-trip a save+reload
+        // does. The recovered value must equal the original verbatim.
+        let reparsed = UsdDocument::with_origin(
+            DocumentId::new(61),
+            doc.source(),
+            DocumentOrigin::writable_file("/tmp/script2.usda"),
+        );
+        let got = reparsed
+            .data()
+            .prim_attribute_value::<String>(&SdfPath::new("/Rover").unwrap(), "lunco:script");
+        assert_eq!(
+            got.as_deref(),
+            Some(src),
+            "real rhai source must round-trip verbatim.\nserialized:\n{}",
+            doc.source()
+        );
+    }
+
+    #[test]
+    fn set_attribute_string_rejects_unserializable_both_triple_delimiters() {
+        // The one thing USDA cannot delimit: a value containing BOTH `"""` and
+        // `'''` (its lexer does not unescape, so neither triple-quote is safe). We
+        // reject at apply, not at save — a stranded unsavable document is worse than
+        // a clear up-front error. Real rhai never produces this.
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(63),
+            "#usda 1.0\ndef Xform \"Rover\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/script3.usda"),
+        );
+        let err = doc.apply(UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: "/Rover".into(),
+            name: "lunco:script".into(),
+            type_name: "string".into(),
+            value: "a \"\"\" b ''' c".into(),
+        });
+        assert!(
+            matches!(err, Err(DocumentError::ValidationFailed(_))),
+            "both-triple-delimiter content must be rejected at apply, got {err:?}"
+        );
+        // And the document is untouched — the rejected op left no partial edit.
+        assert!(
+            !doc.source().contains("lunco:script"),
+            "a rejected op must not partially author"
+        );
+    }
+
+    #[test]
+    fn set_attribute_string_undoes() {
+        let mut host = DocumentHost::new(UsdDocument::with_origin(
+            DocumentId::new(62),
+            "#usda 1.0\ndef Xform \"Rover\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/s.usda"),
+        ));
+        host.apply(Mutation::local(UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: "/Rover".into(),
+            name: "lunco:script".into(),
+            type_name: "string".into(),
+            value: "fn on_tick(me) {}".into(),
+        }))
+        .unwrap();
+        assert!(host.document().source().contains("on_tick"), "authored");
+        assert!(reparses_cleanly(host.document()), "authored string reparses cleanly");
+        host.undo().unwrap();
+        assert!(
+            !host.document().source().contains("on_tick"),
+            "undo removes the newly-authored attribute: {}",
+            host.document().source()
+        );
     }
 
     #[test]
@@ -2140,5 +2504,121 @@ mod tests {
         assert!(!prim_exists(&doc, "/World/Obstacle"));
         assert!(runtime_prim_exists(&doc, "/World/Obstacle"));
         assert!(!runtime_prim_exists(&doc, "/Rover"));
+    }
+
+    #[test]
+    fn set_api_schemas_authors_and_undoes() {
+        let mut host = DocumentHost::new(UsdDocument::with_origin(
+            DocumentId::new(40),
+            "#usda 1.0\ndef Xform \"Body\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/api.usda"),
+        ));
+        host.apply(Mutation::local(UsdOp::SetApiSchemas {
+            edit_target: LayerId::root(),
+            path: "/Body".into(),
+            schemas: vec!["PhysicsRigidBodyAPI".into(), "PhysicsCollisionAPI".into()],
+        }))
+        .unwrap();
+        assert!(
+            host.document().source().contains("PhysicsRigidBodyAPI")
+                && host.document().source().contains("PhysicsCollisionAPI"),
+            "apiSchemas authored: {}",
+            host.document().source()
+        );
+        assert!(reparses_cleanly(host.document()), "authored apiSchemas must reparse cleanly");
+        host.undo().unwrap();
+        assert!(
+            !host.document().source().contains("PhysicsRigidBodyAPI"),
+            "undo removes the schemas: {}",
+            host.document().source()
+        );
+    }
+
+    #[test]
+    fn set_active_false_then_undo_restores_absence() {
+        // The subtle one: undoing a deactivation must NOT author `active = true`
+        // (a `!active` inverse would). It restores the prior *unauthored* opinion.
+        let mut host = DocumentHost::new(UsdDocument::with_origin(
+            DocumentId::new(41),
+            "#usda 1.0\ndef Xform \"Part\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/active.usda"),
+        ));
+        host.apply(Mutation::local(UsdOp::SetActive {
+            edit_target: LayerId::root(),
+            path: "/Part".into(),
+            active: false,
+        }))
+        .unwrap();
+        assert!(
+            host.document().source().contains("active = false"),
+            "deactivation authored: {}",
+            host.document().source()
+        );
+        host.undo().unwrap();
+        assert!(
+            !host.document().source().contains("active"),
+            "undo restores the unauthored (neither true nor false) opinion: {}",
+            host.document().source()
+        );
+    }
+
+    #[test]
+    fn set_variant_selection_preserves_sibling_set() {
+        // A prim carrying two variant sets: selecting one must not drop the other.
+        let src = "#usda 1.0\ndef Xform \"Rover\" (\n    variants = {\n        string color = \"red\"\n    }\n)\n{\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(42),
+            src,
+            DocumentOrigin::writable_file("/tmp/var.usda"),
+        );
+        doc.apply(UsdOp::SetVariantSelection {
+            edit_target: LayerId::root(),
+            path: "/Rover".into(),
+            variant_set: "drivetrain".into(),
+            variant: "physical".into(),
+        })
+        .unwrap();
+        let s = doc.source();
+        assert!(s.contains("drivetrain") && s.contains("physical"), "new selection: {s}");
+        assert!(
+            s.contains("color") && s.contains("red"),
+            "sibling variant selection preserved (read-modify-write): {s}"
+        );
+        assert!(reparses_cleanly(&doc), "authored variant selection must reparse cleanly: {s}");
+    }
+
+    #[test]
+    fn set_payload_authors_and_undoes() {
+        let mut host = DocumentHost::new(UsdDocument::with_origin(
+            DocumentId::new(43),
+            "#usda 1.0\ndef Xform \"Heavy\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/pl.usda"),
+        ));
+        host.apply(Mutation::local(UsdOp::SetPayload {
+            edit_target: LayerId::root(),
+            path: "/Heavy".into(),
+            // RAW path, no `@…@` (those are USDA delimiters the writer adds) — same
+            // contract as AddPrim's reference. The `@…@` form serializes to `@@…@@`.
+            asset_paths: vec!["meshes/hull.usdc".into()],
+        }))
+        .unwrap();
+        assert!(
+            host.document().source().contains("hull.usdc"),
+            "payload authored: {}",
+            host.document().source()
+        );
+        // The substring check above passes even for a malformed `@@…@@` path; THIS
+        // is what proves the payload serialized to parseable USDA.
+        assert!(
+            reparses_cleanly(host.document()),
+            "authored payload must reparse cleanly: {}",
+            host.document().source()
+        );
+        host.undo().unwrap();
+        assert!(
+            !host.document().source().contains("hull.usdc"),
+            "undo clears the payload: {}",
+            host.document().source()
+        );
     }
 }

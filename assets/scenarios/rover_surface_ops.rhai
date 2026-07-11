@@ -6,10 +6,14 @@
 // (`wait_until` reads the live world / model ports). No hand-rolled tick counting
 // or `dt()` integration in rhai — timing and state come from the simulation.
 //
-// Phases: possess lander → wait for the lander's `lander_touchdown` event →
-// disarm the engine → detach the rover → drive a revealed-one-at-a-time course.
-// Arrivals are EVENTS (the lander's touchdown, the gates' sensor enters), not
-// per-tick polls — the scenario only `wait_for`s.
+// Phases: follow the lander down → wait for its `lander_touchdown` event → detach
+// the rover → `rover_deployed` → reveal a 3-gate course one dome at a time.
+//
+// Every phase it reaches, it ANNOUNCES on the bus: `rover_deployed`,
+// `waypoint_1_reached` … `waypoint_3_reached`, `course_complete`. That's the whole
+// contract with anything watching — the rover's autopilot wakes on
+// `rover_deployed`, the tutorial turns the rest into a student checklist. Neither
+// reaches into this script's state, and this script knows about neither.
 
 /// Reveal (`on`) or hide a waypoint dome by scaling its mesh — the same trick
 /// the flame uses. Resolved by path at call time (inside a step closure).
@@ -56,32 +60,36 @@ fn task(me) {
         }),
         wait(2.0),                                       // let the rover fall clear
         once(|m| {
-            // Engage the rover's autopilot (it drives the course until a key is
-            // pressed). The rover's own script listens for this event.
+            // Engage the rover's autopilot (it drives the course until the player
+            // takes the wheel). The rover's own script listens for this event.
             emit("rover_deployed");
-            notify_kind("Rover deployed - autopilot driving the course. Press any key to take over.", "success");
+            notify_kind("Rover deployed - autopilot driving the course. Click the rover (or press F) to take over.", "success");
         }),
 
         // ── 3-gate course ──────────────────────────────────────────────────
         // Arrival = the rover within range of each gate (reliable distance check).
-        // Each arrival hides the reached dome and reveals the next — "show the
-        // next after it's done once".
+        // Each arrival hides the reached dome, reveals the next — "show the next
+        // after it's done once" — and emits its own event for watchers.
         wait_until(|m| at_wp(1, 5.0)),
         once(|m| {
             show_wp(1, false);
             show_wp(2, true);
+            emit("waypoint_1_reached");
             notify_kind("Waypoint 1 reached! Next dome revealed (2 of 3).", "success");
         }),
         wait_until(|m| at_wp(2, 5.0)),
         once(|m| {
             show_wp(2, false);
             show_wp(3, true);
+            emit("waypoint_2_reached");
             notify_kind("Waypoint 2 reached! Final dome revealed (3 of 3).", "success");
         }),
         wait_until(|m| at_wp(3, 5.0)),
         once(|m| {
             show_wp(3, false);
-            notify_kind("All waypoints reached - mission complete!", "success");
+            emit("waypoint_3_reached");
+            emit("course_complete");
+            notify_kind("All waypoints reached - course complete!", "success");
         }),
     ])
 }
