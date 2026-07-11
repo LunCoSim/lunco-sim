@@ -426,7 +426,7 @@ pub fn controller_role(gid: u64) -> Option<String> {
 /// HTTP API / MCP use) and return its `{ id, ok, data?, error? }` result as
 /// JSON. `params` is the JSON the API contract expects. Runs SYNCHRONOUSLY (the
 /// bridge flushes) so `data` carries any values the handler assigned.
-pub fn cmd_raw(name: &str, params: serde_json::Value) -> serde_json::Value {
+pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
     let id = OpId::new().0;
     with_world(|world| {
         // Client-scoped scenario on a predicting client: allow ONLY the
@@ -439,7 +439,29 @@ pub fn cmd_raw(name: &str, params: serde_json::Value) -> serde_json::Value {
             let allowed = world
                 .get_resource::<lunco_core::ClientCommandPolicy>()
                 .is_some_and(|p| p.allows(name));
-            if !allowed {
+            // Case 2 — a client script may drive what it OWNS. Beyond the static
+            // client-local surface (Case 1), a client-scoped script may issue an
+            // **ownership-gated** command (e.g. `SetPorts`) against a target this
+            // client possesses. That is the legitimate predict-own input path: the
+            // command applies LOCALLY this tick (immediate client-side prediction)
+            // AND is forwarded to the host, which re-authorizes under the SAME
+            // ownership gate — so no authority is smuggled. A non-owned target, or
+            // a command that isn't ownership-gated, stays dropped (Case 1). This
+            // reuses the authority substrate (`CommandPolicyRegistry` +
+            // `SessionRegistry`) rather than a second allowlist.
+            let owns_target = !allowed
+                && world
+                    .get_resource::<CommandPolicyRegistry>()
+                    .is_some_and(|reg| reg.policy_for(name).ownership_gated)
+                && match (
+                    command_target_gid(world, name, &params),
+                    world.get_resource::<lunco_core::LocalSession>(),
+                    world.get_resource::<SessionRegistry>(),
+                ) {
+                    (Some(gid), Some(local), Some(reg)) => reg.owns(local.0, gid),
+                    _ => false,
+                };
+            if !allowed && !owns_target {
                 // Record the dropped command name for the driver to surface as a
                 // per-scenario diagnostic (once, located to the script) rather
                 // than logging it every tick. Dedup within the pass.
@@ -453,6 +475,30 @@ pub fn cmd_raw(name: &str, params: serde_json::Value) -> serde_json::Value {
                     "id": id, "ok": false,
                     "error": format!("`{name}` is not permitted from a client-scoped script"),
                 });
+            }
+            // Thread a real `seq`/`tick` for a client-owned control command so it
+            // engages the PREDICT-OWN path the same way keyboard input does
+            // (`drive_from_bindings`). A scenario/API `drive()` sends `seq:0`/
+            // `tick:0`; `record_control_input` only buffers an input frame when
+            // `seq != 0`, and `maintain_owned_locally`'s activity signal needs a
+            // real tick — so without this the owned rover never predicts locally
+            // (it stays a snapshot proxy and only crawls from the host's authority).
+            // Stamping the next per-vessel seq here — at the origin, BEFORE
+            // `capture_command` serializes the command for the wire — means the
+            // client and host agree on the seq the reconcile acks against.
+            if owns_target && name == "SetPorts" {
+                if let Some(gid) = command_target_gid(world, name, &params) {
+                    let tick = world.get_resource::<lunco_core::SimTick>().map_or(0, |t| t.0);
+                    let seq = world.get_resource_mut::<lunco_core::OwnedInputLog>().map(|mut log| {
+                        let entry = log.0.entry(gid).or_default();
+                        entry.next_seq = entry.next_seq.wrapping_add(1); // seq 0 reserved
+                        entry.next_seq
+                    });
+                    if let (Some(seq), Some(obj)) = (seq, params.as_object_mut()) {
+                        obj.insert("seq".into(), serde_json::json!(seq));
+                        obj.insert("tick".into(), serde_json::json!(tick));
+                    }
+                }
             }
         }
         // §3.4: a script launched by a remote session must not exceed that
