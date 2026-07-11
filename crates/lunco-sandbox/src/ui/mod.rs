@@ -22,6 +22,9 @@ use lunco_core::{Avatar, LocalAvatar};
 use lunco_modelica::{ModelicaWorkbenchPlugin, ModelicaUiConfig};
 
 mod code_panel;
+/// Rhai behaviour editor — edit + save + hot-reload the script on the selected
+/// prim, with a diagnostics list. The writable counterpart of `code_panel`.
+mod rhai_editor_panel;
 mod models_palette;
 /// In-app rhai REPL panel (web + native). Empty unless the API bridge is
 /// available — the file carries its own `#![cfg(…)]`.
@@ -99,6 +102,11 @@ impl Plugin for SandboxUiPlugin {
                 use lunco_workbench::WorkbenchAppExt;
                 // Rover-specific panels and the attach-a-model click flow.
                 app.register_panel(code_panel::CodePanel);
+                // Rhai behaviour editor (Object Builder). Its view-model is
+                // produced each frame from the selection + ScriptRegistry.
+                app.register_panel(rhai_editor_panel::RhaiEditorPanel);
+                app.init_resource::<rhai_editor_panel::RhaiEditorVm>();
+                app.add_systems(Update, rhai_editor_panel::produce_rhai_editor_vm);
                 app.register_panel(models_palette::ModelsPalette);
                 // In-app rhai REPL — runs snippets against the live app through the
                 // API bridge, on web + native. Gated on bridge availability.

@@ -356,8 +356,22 @@ def Xform "SandboxScene" (
         string primvars:shaderPath = "shaders/balloon.wgsl"
         color3f primvars:cell_a = (0.9, 0.7, 0.2)    # cell A (yellow identity)
         color3f primvars:cell_b = (0.12, 0.12, 0.14) # cell B (dark)
-        float primvars:wedge_count = 8.0             # longitude cells
-        float primvars:band_count = 6.0              # latitude cells
+        # `customData {min,max,unit}` = the UI hint the Inspector's data-driven
+        # "🎚 Parameters" section reads to render a bounded slider (doc 48 §3.5).
+        float primvars:wedge_count = 8.0 (           # longitude cells
+            customData = {
+                double min = 2
+                double max = 24
+                string unit = "cells"
+            }
+        )
+        float primvars:band_count = 6.0 (            # latitude cells
+            customData = {
+                double min = 2
+                double max = 16
+                string unit = "cells"
+            }
+        )
         double3 xformOp:translate = (-30.0, 5.0, 10.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         bool physics:rigidBodyEnabled = true

@@ -59,7 +59,7 @@ pub mod read;
 use usd_data::UsdDataExt;
 pub use view::StageView;
 pub use canonical::{CanonicalStage, CanonicalStages, RawStageChange, StageRecipe};
-pub use read::UsdRead;
+pub use read::{AttrUiHint, UsdRead};
 #[cfg(not(target_arch = "wasm32"))]
 pub use compose::compose_file_to_stage;
 pub use light::{FallbackSceneLight, UsdAuthoredLight};

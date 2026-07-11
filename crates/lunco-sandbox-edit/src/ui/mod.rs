@@ -15,6 +15,8 @@ pub mod inspector;
 pub mod entity_list;
 pub mod terrain_tools;
 pub mod connection_canvas;
+pub mod usd_prim_tree;
+pub mod usd_params;
 
 /// Schedule slot (in `Update`) for the UI *view-model* producers — the
 /// change-driven systems that derive render-ready state into resources for the
@@ -45,6 +47,7 @@ impl Plugin for SandboxEditUiPlugin {
             .register_panel(entity_list::EntityList)
             .register_panel(terrain_tools::ToolsPanel)
             .register_panel(connection_canvas::UsdCanvasPanel)
+            .register_panel(usd_prim_tree::UsdPrimTreePanel)
             .register_panel(ViewportPanel)
             // Order matters for auto-activation — View first so it's
             // the default when the rover binary boots.
@@ -173,6 +176,20 @@ impl Plugin for SandboxEditUiPlugin {
             connection_canvas::produce_usd_canvas.in_set(ViewModelSet),
         );
 
+        // USD prim tree: same main-thread producer pattern (the stage is
+        // `!Send`), hash-gated on the prim-path set.
+        app.init_resource::<usd_prim_tree::UsdPrimTreeView>().add_systems(
+            Update,
+            usd_prim_tree::produce_usd_prim_tree.in_set(ViewModelSet),
+        );
+
+        // USD parameter sliders: harvest the selected prim's customData-ranged
+        // attributes for the Inspector's data-driven Parameters section.
+        app.init_resource::<usd_params::UsdParamView>().add_systems(
+            Update,
+            usd_params::produce_usd_param_view.in_set(ViewModelSet),
+        );
+
         // Debug-viz settings menu rows (joint + wheel-force gizmos).
         app.add_systems(Startup, register_debug_viz_settings);
     }
@@ -273,19 +290,24 @@ impl Perspective for ObjectBuilderPerspective {
     fn title(&self) -> String { "🧩 Object Builder".into() }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
-        // Structure first: the tree to navigate/select parts, the palette to add
-        // them. (Unknown ids — e.g. `rover_models` in other apps — are filtered.)
+        // Structure first: the USD prim tree (the object's authoring hierarchy)
+        // to navigate/select parts, the entity list as an alternate view, and the
+        // palette to add parts. (Unknown ids are filtered.)
         layout.set_side_browser_tabs(vec![
+            usd_prim_tree::USD_PRIM_TREE_PANEL_ID,
             PanelId("entity_list"),
             PanelId("spawn_palette"),
         ]);
-        // Two central tabs: the 3D build view and the connection canvas. The
-        // canvas is where you see and rewire the scene's co-sim connections and
-        // joints; the 3D view is where you place and transform parts. Viewport
-        // first so it's the default tab (its 3D renders through the empty tab).
+        // Three central tabs: the 3D build view, the connection canvas, and the
+        // Rhai behaviour editor. The canvas rewires co-sim connections and joints;
+        // the editor edits the selected prim's script; the 3D view places and
+        // transforms parts. Viewport first so it's the default tab (its 3D renders
+        // through the empty tab). `rhai_editor` is registered by the sandbox binary
+        // (the workbench filters the id in apps that don't register it).
         layout.set_center(vec![
             VIEWPORT_PANEL_ID,
             connection_canvas::USD_CANVAS_PANEL_ID,
+            PanelId("rhai_editor"),
         ]);
         // The Inspector alone on the right — parameter editing is the point here.
         layout.set_right_inspector_tabs(vec![PanelId("sandbox_inspector")]);

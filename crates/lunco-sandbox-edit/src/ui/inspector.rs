@@ -330,6 +330,10 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
         //    antenna params + live link state ─────────────────────────
         comms_orbit_section(ui, ctx, entity);
 
+        // ── USD parameters: data-driven bounded sliders for attributes that
+        //    author a `customData {min,max,unit}` UI hint. ────────────────
+        usd_parameters_section(ui, ctx, entity);
+
         // ── Transform component ──────────────────────────────────────
         if ctx.get::<Transform>(entity).is_some() {
             egui::CollapsingHeader::new("Transform")
@@ -582,6 +586,43 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
 
 /// Live sun + ambient controls. Reads the change-driven [`InspectorView`]
 /// snapshot and dispatches every edit through a single
+/// Bounded sliders for the selected prim's `customData`-ranged attributes,
+/// from the [`UsdParamView`](crate::ui::usd_params::UsdParamView) view-model. An
+/// asset that authors `customData {min,max,unit}` on a scalar gets a clamped
+/// slider here without any hand-coded range; edits write back through the same
+/// `ApplyUsdOp(SetAttribute)` path as every other Inspector control.
+fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
+    let params: Vec<crate::ui::usd_params::UsdParam> =
+        match ctx.resource::<crate::ui::usd_params::UsdParamView>() {
+            Some(v) if v.entity == Some(entity) && !v.params.is_empty() => v.params.clone(),
+            _ => return,
+        };
+    egui::CollapsingHeader::new("🎚 Parameters")
+        .default_open(true)
+        .show(ui, |ui| {
+            let mut edits: Vec<(String, String, String)> = Vec::new();
+            for p in &params {
+                let mut v = p.value;
+                let text = if p.unit.is_empty() {
+                    p.label.clone()
+                } else {
+                    format!("{} ({})", p.label, p.unit)
+                };
+                if ui
+                    .add(egui::Slider::new(&mut v, p.min..=p.max).text(text))
+                    .changed()
+                {
+                    edits.push((p.name.clone(), p.type_name.clone(), format!("{v}")));
+                }
+            }
+            for (name, type_name, value) in edits {
+                ctx.defer(move |world| {
+                    apply_usd_attribute_change(world, entity, &name, &type_name, value);
+                });
+            }
+        });
+}
+
 /// [`SetEnvironmentLight`](lunco_environment::SetEnvironmentLight) command
 /// — the same mutation path the HTTP/MCP API uses.
 /// Animation transport for the USD animation-preview domain (doc 19 — T7).

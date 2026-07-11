@@ -17,6 +17,34 @@ use openusd::sdf::{Path as SdfPath, SpecType, Value};
 use crate::usd_data::UsdDataExt;
 use crate::view::StageView;
 
+/// Parsed `customData` UI hint for a scalar attribute — the bounds + unit a
+/// data-driven parameter slider derives from an asset. All fields optional; a
+/// caller typically requires `min`+`max` to render a bounded control and falls
+/// back otherwise. Plain-Rust so consumers need no `openusd` dependency.
+#[derive(Debug, Clone, Default)]
+pub struct AttrUiHint {
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub unit: Option<String>,
+    /// Value type for write-back `SetAttribute` (`customData.type`), e.g.
+    /// `"float"` / `"double"` / `"int"`.
+    pub type_name: Option<String>,
+}
+
+/// A numeric `customData` field, tolerant of `double`/`float`/`int` authoring.
+fn dict_f64(dict: &openusd::sdf::Dictionary, key: &str) -> Option<f64> {
+    let v = dict.get(key)?;
+    v.clone()
+        .get::<f64>()
+        .or_else(|| v.clone().get::<f32>().map(f64::from))
+        .or_else(|| v.clone().get::<i32>().map(|i| i as f64))
+}
+
+/// A string `customData` field.
+fn dict_string(dict: &openusd::sdf::Dictionary, key: &str) -> Option<String> {
+    dict.get(key).and_then(|v| v.clone().get::<String>())
+}
+
 /// Composed, default-time reads that both the flattened `sdf::Data` and a live
 /// `StageView` can serve. Generic (`<R: UsdRead>`) so extractors are written
 /// once and read either source.
@@ -142,6 +170,17 @@ pub trait UsdRead {
     /// stage declares none. The empty-path scene-root sentinel resolves through
     /// this to the concrete subtree the reference/scene mounts.
     fn default_prim(&self) -> Option<String>;
+
+    /// The parsed `customData` UI hint on attribute `name` of `prim` — the
+    /// `{ double min; double max; string unit; string type }` bag a bounded
+    /// parameter control reads. Returns `None` when the attribute authors no
+    /// `customData`. Default returns `None`; only the live-stage reader
+    /// ([`StageView`](crate::view::StageView)) overrides it, since the flattened
+    /// backend has no consumer for attribute metadata. The parse stays here (not
+    /// in callers) so consumers never touch `openusd` value types.
+    fn attr_ui_hint(&self, _prim: &SdfPath, _name: &str) -> Option<AttrUiHint> {
+        None
+    }
 
     /// Whether attribute `name` on `prim` actually carries authored
     /// `timeSamples` (not merely a `default`) — the per-channel test the
@@ -283,6 +322,29 @@ impl UsdRead for StageView<'_> {
             .default_prim()
             .map(|t| t.to_string())
             .filter(|s| !s.is_empty())
+    }
+
+    fn attr_ui_hint(&self, prim: &SdfPath, name: &str) -> Option<AttrUiHint> {
+        // `get_metadata` decodes to a type that is `TryFrom<Value>`; a raw
+        // `Dictionary` (a `HashMap`) is not, so read the `Value` and unwrap its
+        // `Dictionary` variant, then parse the hint fields here.
+        let dict = match self
+            .stage()
+            .prim(prim.clone())
+            .attribute(name)
+            .get_metadata::<openusd::sdf::Value>("customData")
+            .ok()
+            .flatten()
+        {
+            Some(openusd::sdf::Value::Dictionary(d)) => d,
+            _ => return None,
+        };
+        Some(AttrUiHint {
+            min: dict_f64(&dict, "min"),
+            max: dict_f64(&dict, "max"),
+            unit: dict_string(&dict, "unit"),
+            type_name: dict_string(&dict, "type"),
+        })
     }
 
     fn has_time_samples(&self, prim: &SdfPath, name: &str) -> bool {

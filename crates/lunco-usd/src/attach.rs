@@ -1,5 +1,5 @@
 //! Attach a component asset to a host body as a jointed child — the op-lowering
-//! behind "build from parts" (`docs/architecture/45-object-builder.md` §3.1).
+//! behind "build from parts" (`docs/architecture/48-object-builder.md` §3.1).
 //!
 //! ## The duplication this removes
 //!
