@@ -55,6 +55,9 @@ pub use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset, UsdInstanceRoot};
 use openusd::sdf::Path as SdfPath;
 use openusd::usd::Stage;
 
+pub mod big_space_bridge;
+pub use big_space_bridge::BigSpacePhysicsBridgePlugin;
+
 /// Bevy plugin for USD physics mapping.
 ///
 /// Adds an observer for USD prim spawning and a deferred processing system that maps

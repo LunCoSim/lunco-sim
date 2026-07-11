@@ -64,24 +64,26 @@ pub struct SyncCommand {
 }
 
 /// One entity's replicated transform (+ velocity), keyed by [`GlobalEntityId`]
-/// raw `u64`. **Compact wire form (Phase 3):** the absolute world position is
-/// fixed-point quantized to **1 mm** in `i32` ([`POS_SCALE`]) and the world
-/// rotation is a 32-bit smallest-three packing — replacing the old f32 `t` +
-/// f32 quat + f64 `pos` + i64 `cell` (≈112 B → ≈52 B). Velocities stay f32 to
-/// protect owned-rover reconcile precision.
+/// raw `u64`. **Compact wire form:** the position is fixed-point quantized to
+/// **1 mm** in `i32` ([`POS_SCALE`]) and the world rotation is a 32-bit
+/// smallest-three packing. Velocities stay f32 to protect owned-rover
+/// reconcile precision.
 ///
-/// `pos_q` spans ±(2³¹−1)/`POS_SCALE` ≈ **±2 147 km** from the world origin —
-/// the whole lunar surface (radius 1 737 km) and the entire sandbox. Bodies
-/// farther than that saturate at the bound (see [`quantize_pos`]); covering a
-/// deep-orbital / cislunar-absolute frame needs big_space recentering, which is
-/// **deferred** (blocked on an avian↔big_space transform-writeback bridge — see
-/// design in git history and `crates/lunco-core/src/coords.rs` rebase tests).
+/// **Cell-aware (doc 47 Phase 3):** `pos_q` is the CELL-RELATIVE remainder
+/// and `cell` carries the big_space `CellCoord`, so the ±2 147 km i32 span
+/// bounds the remainder — never the world position. For every replicated
+/// body today `cell == [0,0,0]` and the remainder IS the absolute position.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SnapshotEntry {
     pub gid: u64,
-    /// Absolute world position (avian f64 `Position`), fixed-point at
-    /// [`POS_SCALE`]. Decode with [`dequantize_pos`].
+    /// Cell-relative position (= absolute while `cell == [0,0,0]`),
+    /// fixed-point at [`POS_SCALE`]. Decode with [`dequantize_pos`] and
+    /// compose with `cell × cell_edge`.
     pub pos_q: [i32; 3],
+    /// big_space `CellCoord` of the body (i64/axis). NOTE: bincode is
+    /// positional — this field is a WIRE-BREAKING addition; peers must run
+    /// the same build (no protocol-version handshake exists).
+    pub cell: [i64; 3],
     /// World-space rotation, smallest-three packed ([`encode_quat`] /
     /// [`decode_quat`]).
     pub rot_packed: u32,
@@ -119,6 +121,22 @@ pub fn dequantize_pos(q: [i32; 3]) -> DVec3 {
         q[0] as f64 / POS_SCALE,
         q[1] as f64 / POS_SCALE,
         q[2] as f64 / POS_SCALE,
+    )
+}
+
+/// The per-body pose fingerprint used for change detection and per-peer send
+/// diffing: `(cell, pos_q, rot_packed, last_input_seq)`. One alias so
+/// `gather_snapshot`'s change key and [`diff_peer_batch`]'s digest cannot
+/// drift apart (a field missing from one of them = silently unsent updates).
+pub type PoseDigest = ([i64; 3], [i32; 3], u32, u32);
+
+/// Compose a wire `(cell, remainder)` pair back into the absolute f64 world
+/// position, given the grid cell edge (metres).
+pub fn compose_cell_pos(cell: [i64; 3], remainder: DVec3, edge: f64) -> DVec3 {
+    DVec3::new(
+        cell[0] as f64 * edge + remainder.x,
+        cell[1] as f64 * edge + remainder.y,
+        cell[2] as f64 * edge + remainder.z,
     )
 }
 
@@ -229,6 +247,10 @@ pub struct InboundClientCtx<'w> {
     // Bundled here (vs a top-level param) to keep `drain_sync_inbox` within Bevy's
     // 16-argument system limit.
     view_centers: ResMut<'w, ViewCenters>,
+    // Cell edge for composing wire `(cell, remainder)` pairs into absolute
+    // positions (doc 47 Phase 3). `Option`: tests/minimal apps may not install
+    // the world shell. Bundled for the same 16-arg-limit reason.
+    grid_cfg: Option<Res<'w, lunco_core::WorldGridConfig>>,
     // Client-side stash of the host's scenario manifest (filled by the
     // `ScenarioManifest` arm). Bundled here for the same 16-arg-limit reason;
     // host-side arms are no-ops.
@@ -322,9 +344,14 @@ pub(crate) fn profile_wire_entries(profiles: &SessionProfiles) -> Vec<(u64, Stri
 /// last center for one recompute; AOI hysteresis tolerates the staleness).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ViewCenterMsg {
-    /// World-space position of the reporting peer's view (single-cell today; Phase 4
-    /// carries the `CellCoord` once big_space goes multi-cell).
+    /// CELL-RELATIVE position of the reporting peer's view (= world-space
+    /// while the avatar sits in cell `[0,0,0]`). Compose with
+    /// `cell × cell_edge`.
     pub pos: [f32; 3],
+    /// big_space `CellCoord` of the reporting avatar (doc 47 Phase 3) — an
+    /// orbital-view camera carries real cells since the traveling origin.
+    /// Wire-breaking addition (positional bincode); peers run the same build.
+    pub cell: [i64; 3],
 }
 
 /// Host/client update for mouse cursor positions.
@@ -1015,6 +1042,11 @@ pub fn drain_sync_inbox(
     if inbox.0.is_empty() {
         return;
     }
+    let cell_edge = ctx
+        .grid_cfg
+        .as_deref()
+        .map(|c| c.cell_edge_length as f64)
+        .unwrap_or_else(|| lunco_core::WorldGridConfig::default().cell_edge_length as f64);
     let mut drained: Vec<(SessionId, SyncEnvelope)> = std::mem::take(&mut inbox.0);
     // Order within a frame: possession/structural commands BEFORE control commands.
     // Only sort when a control command is actually present — otherwise every entry
@@ -1055,25 +1087,26 @@ pub fn drain_sync_inbox(
                     tick.0 = host_tick;
                 }
                 for entry in s.entries {
-                    // Dequantize once; reuse for both the f32 render-space `t`
-                    // and the f64 world-space `pos`. In single-cell space they are
-                    // identical (cell origin is world origin).
+                    // Dequantize the CELL-RELATIVE remainder once: it IS the
+                    // f32 render-space `t`; the f64 world-space `pos` composes
+                    // the cell back in (identical while cell == [0,0,0]).
                     // IMPORTANT: `t` must NOT be zero — `reconcile_owned_prediction`
                     // passes `sample.t` as the authority position to `reconcile_decision`
                     // for the apples-to-apples f32 comparison against the predicted-
                     // Transform history. A zeroed `t` reads authority as (0,0,0) every
                     // snapshot → perpetual Snap reconcile back to world origin.
-                    let world_pos = dequantize_pos(entry.pos_q);
+                    let remainder = dequantize_pos(entry.pos_q);
+                    let world_pos = compose_cell_pos(entry.cell, remainder, cell_edge);
                     snapshots.0.push(SnapshotSample {
                         gid: entry.gid,
                         tick: s.tick,
-                        t: world_pos.as_vec3().to_array(), // f32 cell-relative (= absolute in single-cell)
+                        t: remainder.as_vec3().to_array(), // f32 cell-relative
                         r: decode_quat(entry.rot_packed).to_array(),
                         lv: entry.lv,
                         av: entry.av,
                         last_input_seq: entry.last_input_seq,
                         pos: world_pos.to_array(), // f64 absolute world position
-                        cell: [0; 3], // single-cell space config
+                        cell: entry.cell,
                     });
                 }
             }
@@ -1208,9 +1241,16 @@ pub fn drain_sync_inbox(
                 // Host-only: record the peer's reported free-observer center keyed on
                 // the TRUSTED sender (the connection-bound session), so a peer can't
                 // report a center "as" another session. Clients ignore it (the host is
-                // the sole consumer — it never relays view centers).
+                // the sole consumer — it never relays view centers). Composed to the
+                // absolute position (cell-aware, doc 47 Phase 3): f32 loses metres at
+                // orbital magnitudes, which AOI radii don't care about.
                 if role.is_host() && sender != SessionId::LOCAL {
-                    ctx.view_centers.0.insert(sender, Vec3::from_array(vc.pos));
+                    let abs = compose_cell_pos(
+                        vc.cell,
+                        DVec3::new(vc.pos[0] as f64, vc.pos[1] as f64, vc.pos[2] as f64),
+                        cell_edge,
+                    );
+                    ctx.view_centers.0.insert(sender, abs.as_vec3());
                 }
             }
             SyncEnvelope::TutorStatus(mut msg) => {
@@ -1472,7 +1512,7 @@ pub fn gather_snapshot(
     time: Res<Time>,
     tick: Res<SimTick>,
     mut acc: Local<f32>,
-    mut last_sent: Local<HashMap<u64, ([i32; 3], u32, u32)>>,
+    mut last_sent: Local<HashMap<u64, PoseDigest>>,
     // gids currently emitting a non-finite pose; warn once per gid, clear on recovery.
     mut nonfinite_warned: Local<HashSet<u64>>,
     applied: Res<AppliedInputSeq>,
@@ -1509,21 +1549,36 @@ pub fn gather_snapshot(
     repl.tick = tick.0;
 
     let mut live: HashSet<u64> = HashSet::with_capacity(last_sent.len());
-    for (gid, tf, lin, ang, position, rotation, _cell) in q.iter() {
+    for (gid, tf, lin, ang, position, rotation, cell_coord) in q.iter() {
         let key = gid.get();
         live.insert(key);
         // Rotation on the wire is WORLD-space: prefer avian's world `Rotation`,
         // fall back to `Transform.rotation` for bodies without a physics Rotation.
         let rot = rotation.map(|r| r.0.as_quat()).unwrap_or(tf.rotation);
-        // Absolute world position: prefer the precise avian f64 `Position`; fall
-        // back to the f32 `Transform` (as f64) for bodies without a physics Position.
-        let pos = position.map(|p| p.0).unwrap_or_else(|| {
+        // Cell-aware position (doc 47 Phase 3). The wire carries
+        // `(cell, remainder)`:
+        // * cell [0,0,0] (every physics body today): prefer the precise avian
+        //   f64 `Position` — it IS the remainder when the cell is zero.
+        // * real cells: the f32 `Transform.translation` is the cell-relative
+        //   truth (bounded by the grid, so f64-exact). Avian `Position` is
+        //   NOT consulted here — its frame under real cells is defined by the
+        //   Phase 5 bubble bridge; revisit this branch when that lands.
+        let cell = cell_coord.map(|c| [c.x, c.y, c.z]).unwrap_or([0; 3]);
+        let pos = if cell == [0i64; 3] {
+            position.map(|p| p.0).unwrap_or_else(|| {
+                DVec3::new(
+                    tf.translation.x as f64,
+                    tf.translation.y as f64,
+                    tf.translation.z as f64,
+                )
+            })
+        } else {
             DVec3::new(
                 tf.translation.x as f64,
                 tf.translation.y as f64,
                 tf.translation.z as f64,
             )
-        });
+        };
         // A cosim blow-up emits a NaN/inf `Position` — or velocity, which integrates
         // to inf a frame EARLIER than the pose does. `quantize_pos` maps NaN→0 via
         // `as i32`, decoding to world origin (→ a perpetual snap-to-origin reconcile
@@ -1553,6 +1608,7 @@ pub fn gather_snapshot(
         let entry = SnapshotEntry {
             gid: key,
             pos_q,
+            cell,
             rot_packed,
             lv: lv.to_array(),
             av: av.to_array(),
@@ -1562,11 +1618,11 @@ pub fn gather_snapshot(
         // `only_if_changed` diff). Computed before we move `entry` into the
         // persistent store below.
         let changed = !config.only_if_changed
-            || last_sent
-                .get(&key)
-                .is_none_or(|&(lp, lr, ls)| lp != pos_q || lr != rot_packed || ls != last_input_seq);
+            || last_sent.get(&key).is_none_or(|&(lc, lp, lr, ls)| {
+                lc != cell || lp != pos_q || lr != rot_packed || ls != last_input_seq
+            });
         if changed {
-            last_sent.insert(key, (pos_q, rot_packed, last_input_seq));
+            last_sent.insert(key, (cell, pos_q, rot_packed, last_input_seq));
             repl.changed_this_tick.insert(key);
         }
         // Persist the latest entry for EVERY live gid (not just changed ones), so the
@@ -1671,14 +1727,14 @@ pub(crate) fn compute_interest_sets(
 pub(crate) fn diff_peer_batch(
     set: &HashSet<u64>,
     entries: &HashMap<u64, SnapshotEntry>,
-    digest: &mut HashMap<u64, ([i32; 3], u32, u32)>,
+    digest: &mut HashMap<u64, PoseDigest>,
 ) -> Vec<SnapshotEntry> {
     let mut batch: Vec<SnapshotEntry> = Vec::new();
     for &gid in set {
         let Some(entry) = entries.get(&gid) else {
             continue;
         };
-        let key = (entry.pos_q, entry.rot_packed, entry.last_input_seq);
+        let key = (entry.cell, entry.pos_q, entry.rot_packed, entry.last_input_seq);
         if digest.get(&gid) != Some(&key) {
             batch.push(entry.clone());
             digest.insert(gid, key);
@@ -1716,7 +1772,16 @@ pub fn recompute_interest(
     registry: Res<SessionRegistry>,
     rbac: Res<lunco_core::session::SessionRbac>,
     view_centers: Res<ViewCenters>,
-    q: Query<(&GlobalEntityId, &Transform, Option<&RigidBody>), With<NetReplicate>>,
+    q: Query<
+        (
+            &GlobalEntityId,
+            &Transform,
+            Option<&big_space::prelude::CellCoord>,
+            Option<&RigidBody>,
+        ),
+        With<NetReplicate>,
+    >,
+    grid_cfg: Option<Res<lunco_core::WorldGridConfig>>,
     mut interest: ResMut<PeerInterest>,
 ) {
     if !role.is_host() {
@@ -1730,16 +1795,29 @@ pub fn recompute_interest(
     *acc = 0.0;
 
     // One pass over replicated bodies: world position per gid, the full live set, and
-    // the ownerless-Dynamic set (predict candidates). (Single-cell space today, so
-    // `Transform.translation` is the world position; Phase 4 makes this cell-relative
-    // once big_space goes multi-cell.)
+    // the ownerless-Dynamic set (predict candidates). Cell-aware (doc 47 Phase 3):
+    // compose `cell × edge + translation` — identical to the raw translation while a
+    // body sits in cell [0,0,0]. f32 metres of error at orbital magnitudes are
+    // irrelevant against km-scale AOI radii.
+    let cell_edge = grid_cfg
+        .map(|c| c.cell_edge_length as f64)
+        .unwrap_or_else(|| lunco_core::WorldGridConfig::default().cell_edge_length as f64);
     let mut positions: HashMap<u64, Vec3> = HashMap::new();
     let mut dynamic: HashSet<u64> = HashSet::new();
     let table = registry.snapshot(); // hoist the ownership table once
     let owned_any: HashSet<u64> = table.iter().map(|&(g, _)| g).collect();
-    for (gid, tf, rb) in q.iter() {
+    for (gid, tf, cell, rb) in q.iter() {
         let key = gid.get();
-        positions.insert(key, tf.translation);
+        let abs = compose_cell_pos(
+            cell.map(|c| [c.x, c.y, c.z]).unwrap_or([0; 3]),
+            DVec3::new(
+                tf.translation.x as f64,
+                tf.translation.y as f64,
+                tf.translation.z as f64,
+            ),
+            cell_edge,
+        );
+        positions.insert(key, abs.as_vec3());
         // Predict candidate = Dynamic AND ownerless (owned Dynamic bodies are already
         // force-included for their owner; here we mean the free rocks/balloons every
         // nearby client predicts).
@@ -2047,7 +2125,7 @@ pub fn send_local_cursor_updates(
 pub fn send_view_center_updates(
     role: Res<NetworkRole>,
     config: Res<NetworkConfig>,
-    q_avatar: Query<&Transform, With<LocalAvatar>>,
+    q_avatar: Query<(&Transform, Option<&big_space::prelude::CellCoord>), With<LocalAvatar>>,
     mut timer: Local<f32>,
     mut last_sent: Local<Option<Vec3>>,
     time: Res<Time>,
@@ -2062,7 +2140,11 @@ pub fn send_view_center_updates(
     if *timer < interval {
         return;
     }
-    let Some(pos) = q_avatar.iter().next().map(|tf| tf.translation) else {
+    let Some((pos, cell)) = q_avatar
+        .iter()
+        .next()
+        .map(|(tf, c)| (tf.translation, c.map(|c| [c.x, c.y, c.z]).unwrap_or([0; 3])))
+    else {
         return;
     };
     // Delta gate: skip the send while the avatar is parked. 1 m floor — sub-meter
@@ -2077,6 +2159,7 @@ pub fn send_view_center_updates(
         SyncChannel::ControlStream,
         SyncEnvelope::ViewCenter(ViewCenterMsg {
             pos: pos.to_array(),
+            cell,
         }),
     ));
 }
@@ -2760,6 +2843,13 @@ impl Plugin for SyncPlugin {
             .init_resource::<crate::scenario_sync::ScenarioDownloadStatus>()
             .init_resource::<crate::scenario_sync::CachedTwinsRegistry>()
             .init_resource::<crate::scenario_sync::CachedTwinsIndex>()
+            // Inbound host `RunStatus` presence updates, pushed by the shared
+            // `drain_sync_inbox` (`InboundClientCtx`) — the CLIENT arm is the
+            // writer, so it must exist on every peer. It was host-init-only
+            // (`setup_host` + the GUI sandbox), which panicked any lean client
+            // (`net_smoke --connect`) on its first drained message: the same
+            // missing-resource class as `PendingAssetOffers` above.
+            .init_resource::<PendingRunStatus>()
             // Scripted-policy plane: the active rhai policy set (merge / authz /
             // drive-kernel). Host-authoritative; clients fill it from the host's
             // broadcast (`drain_sync_inbox`). Present on every peer.
@@ -2876,6 +2966,7 @@ mod codec_roundtrip {
             entries: vec![SnapshotEntry {
                 gid: 7,
                 pos_q,
+                cell: [1, -2, 3],
                 rot_packed,
                 lv: [0.1, 0.0, -0.2],
                 av: [0.0, 0.5, 0.0],
@@ -2891,10 +2982,43 @@ mod codec_roundtrip {
                 assert_eq!(s.entries[0].gid, 7);
                 assert_eq!(s.entries[0].last_input_seq, 99);
                 assert_eq!(s.entries[0].pos_q, pos_q);
+                assert_eq!(s.entries[0].cell, [1, -2, 3]);
                 assert_eq!(s.entries[0].rot_packed, rot_packed);
             }
             _ => panic!("wrong variant after round-trip"),
         }
+    }
+
+    /// Doc 47 Phase 3: the wire `(cell, remainder)` pair must compose back to
+    /// the exact world position — including a remainder that would SATURATE
+    /// the i32 span if it carried the whole magnitude (an Earth-vicinity body
+    /// at 3.67e8 m with 2 km cells stays mm-exact through the wire).
+    #[test]
+    fn cell_remainder_composition_is_exact_at_orbital_range() {
+        let edge = 2000.0_f64;
+        let world = DVec3::new(3.667e8, -1.2e7, 2.5e5) + DVec3::new(123.456, -0.789, 987.654);
+        // Split the way big_space stores it: integer cell + small remainder.
+        let cell = [
+            (world.x / edge).round() as i64,
+            (world.y / edge).round() as i64,
+            (world.z / edge).round() as i64,
+        ];
+        let remainder = world - DVec3::new(cell[0] as f64, cell[1] as f64, cell[2] as f64) * edge;
+        assert!(remainder.length() < edge, "remainder must stay sub-cell");
+        let through_wire = dequantize_pos(quantize_pos(remainder));
+        let composed = compose_cell_pos(cell, through_wire, edge);
+        let err = (composed - world).length();
+        assert!(
+            err < 2e-3,
+            "wire composition must be mm-exact at orbital range, got {err} m"
+        );
+        // The OLD format (absolute in pos_q) saturates at ±2 147 km — prove the
+        // failure this change removes.
+        let saturated = dequantize_pos(quantize_pos(world));
+        assert!(
+            (saturated - world).length() > 1e8,
+            "absolute quantization at 3.67e8 m must saturate (sanity)"
+        );
     }
 
     #[test]
@@ -2959,6 +3083,7 @@ mod codec_roundtrip {
         // AssetChunk=15, AssetHave=16.
         let viewcenter = serialize_env(&SyncEnvelope::ViewCenter(ViewCenterMsg {
             pos: [0.0; 3],
+            cell: [0; 3],
         }))
         .expect("serialize");
         assert_eq!(&viewcenter[..4], &[12, 0, 0, 0], "ViewCenter discriminant moved");
@@ -3359,6 +3484,7 @@ mod aoi {
         SnapshotEntry {
             gid,
             pos_q: [x, 0, 0],
+            cell: [0; 3],
             rot_packed: 0,
             lv: [0.0; 3],
             av: [0.0; 3],

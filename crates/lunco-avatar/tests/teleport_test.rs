@@ -8,7 +8,7 @@ use big_space::prelude::*;
 use lunco_celestial::CelestialBody;
 
 const MOON_RADIUS: f64 = 1737.0e3;
-const MOON_GRID_CELL_SIZE: f64 = 10_000.0;
+const MOON_GRID_CELL_SIZE: f64 = 2_000.0;
 
 /// Compute surface position the same way the teleport command does.
 fn surface_pos(lat_deg: f64, lon_deg: f64, radius: f64, altitude: f64) -> DVec3 {
@@ -66,7 +66,7 @@ fn test_surface_normal_south_pole() {
 #[test]
 fn test_grid_decomposition_preserves_altitude() {
     let pos = surface_pos(0.0, 0.0, MOON_RADIUS, 50.0);
-    let grid = Grid::new(MOON_GRID_CELL_SIZE as f32, 1.0e30_f32);
+    let grid = Grid::new(MOON_GRID_CELL_SIZE as f32, 100.0_f32);
     let (cell, local_tf) = grid.translation_to_grid(pos);
 
     // Reconstruct from cell + local

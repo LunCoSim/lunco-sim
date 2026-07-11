@@ -31,9 +31,41 @@ use crate::geo::{
 use crate::kepler::KeplerOrbit;
 use crate::registry::{CelestialBodyRegistry, CelestialReferenceFrame};
 
+/// Orbital view MODE state. Since the traveling-origin change (doc 47 Phase
+/// 6) this resource no longer re-poses the world: the CAMERA — it carries the
+/// `FloatingOrigin` — migrates onto the focused body's inertial parent grid
+/// and orbits there (`lunco-avatar::orbit_system`), so a drag moves only the
+/// floating origin and big_space recomputes every `GlobalTransform` against
+/// it atomically. (The previous design slid the entire solar tree around a
+/// parked camera each drag frame; at Earth range that moved the tree by
+/// ~1e6 m per frame, and ANY writer that lagged one frame — mesh rebuild,
+/// body spin, LOD tiles, markers — displaced its entity by megameters:
+/// "planets jump around when I rotate".)
+///
+/// Remaining consumers of the mode flag:
+/// * [`orbital_pin_scene_visibility`] — hides the local scene while orbital;
+/// * `compute_local_gravity` — holds the last surface field;
+/// * exit paths — `anchor_world`/`anchor_rotation` restore the parked
+///   surface camera pose.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct OrbitalViewPin {
+    pub active: bool,
+    /// Ephemeris id of the focused body.
+    pub body: i32,
+    /// Unit direction from the body centre toward the viewpoint, world axes.
+    pub dir: DVec3,
+    /// Viewpoint distance from the body centre, metres.
+    pub distance: f64,
+    /// The parked camera's root-frame position at mode entry (constant).
+    pub anchor_world: DVec3,
+    /// The parked camera's rotation at mode entry (constant).
+    pub anchor_rotation: Quat,
+}
+
 /// Pin the solar hierarchy so the authored site anchor coincides with the
 /// local scene origin, ENU-aligned. World = R·(solar − p_site) with R mapping
-/// East→+X, Up→+Y, North→−Z.
+/// East→+X, Up→+Y, North→−Z. Runs only on epoch/site changes — the orbital
+/// view never re-poses the world (see [`OrbitalViewPin`]).
 #[allow(clippy::type_complexity)]
 pub fn anchor_solar_frame_to_site(
     world_time: Res<WorldTime>,
@@ -44,12 +76,20 @@ pub fn anchor_solar_frame_to_site(
     // `SolarSystemRoot` also tags the Sun body — the grid filter picks the
     // one Solar Grid entity.
     mut q_solar: Query<(Entity, &mut CellCoord, &mut Transform), (With<SolarSystemRoot>, With<Grid>)>,
+    q_frames_stored: Query<
+        (Entity, &CelestialReferenceFrame, &CellCoord, &Transform, &ChildOf),
+        (With<Grid>, Without<SolarSystemRoot>),
+    >,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     mut last_jd: Local<f64>,
 ) {
     let Some(ephemeris) = ephemeris else { return };
-    let Some(anchor) = q_site.iter().next() else { return };
+    let anchor_opt = q_site.iter().next();
+    // Without a site anchor the solar tree stays heliocentric.
+    if anchor_opt.is_none() {
+        return;
+    }
     let Ok((solar_entity, mut cell, mut tf)) = q_solar.single_mut() else { return };
 
     let jd = world_time.epoch_jd;
@@ -62,28 +102,87 @@ pub fn anchor_solar_frame_to_site(
     }
     *last_jd = jd;
 
-    let Some(desc) = registry
-        .bodies
-        .iter()
-        .find(|b| b.ephemeris_id == anchor.body)
-    else {
-        return;
+    // Site tangent alignment (world axes) — identity when there is no anchor.
+    let (align, site_frame_origin, site_geo_offset) = if let Some(anchor) = anchor_opt {
+        let Some(desc) = registry
+            .bodies
+            .iter()
+            .find(|b| b.ephemeris_id == anchor.body)
+        else {
+            return;
+        };
+        let body_center = ecliptic_to_bevy(ephemeris.provider.global_position(anchor.body, jd));
+        let frame = solar_tangent_frame(desc, &anchor.geodetic, body_center, jd);
+        // Rows East/Up/−North → world axes.
+        let align = DQuat::from_mat3(&bevy::math::DMat3::from_cols(
+            DVec3::new(frame.east.x, frame.up.x, -frame.north.x),
+            DVec3::new(frame.east.y, frame.up.y, -frame.north.y),
+            DVec3::new(frame.east.z, frame.up.z, -frame.north.z),
+        ));
+        (
+            align,
+            frame.origin,
+            Some((anchor.body, geodetic_to_body_fixed(&anchor.geodetic, desc.radius_m))),
+        )
+    } else {
+        (DQuat::IDENTITY, DVec3::ZERO, None)
     };
 
-    let body_center = ecliptic_to_bevy(ephemeris.provider.global_position(anchor.body, jd));
-    let frame = solar_tangent_frame(desc, &anchor.geodetic, body_center, jd);
-    // Rows East/Up/−North → world axes.
-    let align = DQuat::from_mat3(&bevy::math::DMat3::from_cols(
-        DVec3::new(frame.east.x, frame.up.x, -frame.north.x),
-        DVec3::new(frame.east.y, frame.up.y, -frame.north.y),
-        DVec3::new(frame.east.z, frame.up.z, -frame.north.z),
-    ));
-    let translation = -(align * frame.origin);
+    // The pin must cancel what the RENDERER will actually compose — the
+    // STORED (`CellCoord` + f32 `Transform`) grid chain — not the ideal f64
+    // ephemeris. Each stored pose still carries an f32 remainder whose ULP
+    // grows with the grid's cell edge, and as the bodies move those remainders
+    // step in ULP increments. A pin computed from smooth f64 positions does
+    // NOT track the steps, so the whole moon subtree (the visible surface)
+    // stepped against the scene — "lunar surface falling and jumping".
+    // Composing the site from the stored chain (every f32 read back into f64
+    // is exact) makes the rendered site land on the origin EXACTLY; the
+    // rounding moves to the far bodies, where metres are sub-pixel.
+    // Compose a point's solar-frame position from the STORED grid chain:
+    // start at the frame with `ephemeris_id`, offset `p0` in that (possibly
+    // rotating) frame, walk up to the Solar Grid over stored (cell,
+    // Transform) values — every f32 read back into f64 is exact.
+    let stored_in_solar = |ephemeris_id: i32, p0: DVec3| -> Option<DVec3> {
+        let mut current = q_frames_stored
+            .iter()
+            .find(|(_, f, ..)| f.ephemeris_id == ephemeris_id);
+        let mut p = p0;
+        let mut steps = 0;
+        loop {
+            let Some((_, _, c, t, child_of)) = current else { break None };
+            steps += 1;
+            if steps > 8 {
+                break None;
+            }
+            let parent = child_of.parent();
+            let Ok(parent_grid) = q_grids.get(parent) else { break None };
+            let edge = parent_grid.cell_edge_length() as f64;
+            p = t.rotation.as_dquat() * p
+                + DVec3::new(c.x as f64, c.y as f64, c.z as f64) * edge
+                + t.translation.as_dvec3();
+            if parent == solar_entity {
+                break Some(p);
+            }
+            current = q_frames_stored.iter().find(|(e, ..)| *e == parent);
+        }
+    };
+
+    // `align` is stored as an f32 quat; compute the translation from that
+    // ROUNDED rotation so `R_f32·site − R_f32·site = 0` exactly (an f64
+    // rotation here leaves `(R_f32 − R_f64)·1.5e11` ≈ metres of frame-varying
+    // error at the site).
+    let align_f32 = align.as_quat();
+    // Site offset in the (rotating) body frame — rotated by the STORED
+    // frame quat inside the walk, matching what tiles/children inherit.
+    let site_in_solar = site_geo_offset
+        .and_then(|(body_id, geo_local)| stored_in_solar(body_id, geo_local))
+        .unwrap_or(site_frame_origin);
+    let translation = -(align_f32.as_dquat() * site_in_solar);
 
     if let Ok(child_of) = q_parents.get(solar_entity) {
         if let Ok(parent_grid) = q_grids.get(child_of.parent()) {
             let (new_cell, new_translation) = parent_grid.translation_to_grid(translation);
-            tf.rotation = align.as_quat();
+            tf.rotation = align_f32;
             *cell = new_cell;
             tf.translation = new_translation;
             return;
@@ -98,6 +197,77 @@ pub fn anchor_solar_frame_to_site(
         "[celestial] site pin skipped: Solar Grid's parent has no `Grid` — \
          cannot express a heliocentric pose precisely"
     );
+}
+
+/// While the orbital world-pin is active the celestial tree is slid away from
+/// the site so the focused body lands in front of the parked camera. The LOCAL
+/// scene stays glued to the parked camera and fills the foreground — that is
+/// the "focused Earth but it shows ground" report. Hide it; restore on exit.
+///
+/// Two subtleties, both established by experiment (hiding candidates one at a
+/// time through the API and screenshotting):
+///
+/// * The offending geometry is the scene's own prims (`Ground` cube, rover,
+///   ground-station masts) — NOT the site body's globe tiles, which sit below
+///   the horizon at surface altitude.
+/// * Hiding a scene ROOT is not enough: USD prims spawn with an explicit
+///   `Visibility::Visible`, which overrides an ancestor's `Hidden` rather than
+///   inheriting it. Every descendant must be toggled.
+///
+/// The site-anchored root also carries `GeodeticAnchor` (it declares
+/// `lunco:anchor:*`), so it is matched via `SiteAnchor`; ground stations and
+/// satellites bound to OTHER bodies belong to the sky and are left alone.
+#[allow(clippy::type_complexity)]
+pub fn orbital_pin_scene_visibility(
+    orbital_pin: Res<OrbitalViewPin>,
+    q_children: Query<&Children>,
+    // Plain local scene roots (no celestial binding).
+    q_local: Query<
+        Entity,
+        (With<lunco_core::GridAnchor>, Without<GeodeticAnchor>, Without<KeplerOrbit>),
+    >,
+    // The site-anchored scene root (carries GeodeticAnchor + SiteAnchor).
+    q_site_root: Query<Entity, With<SiteAnchor>>,
+    // Single `&mut Visibility` param: several overlapping ones are a B0001
+    // conflict panic.
+    mut q_vis: Query<&mut Visibility>,
+    mut was_active: Local<bool>,
+) {
+    // Re-apply EVERY frame while pinned, not just on the activation edge: the
+    // USD scene may finish spawning (or re-spawn on `LoadScene`) after the pin
+    // activated, and fresh prims come up `Visibility::Visible`. An edge-only
+    // toggle then leaves the ground on screen — an intermittent "focused Earth
+    // but it shows ground", depending on load timing. On release, one edge pass
+    // restores the scene.
+    let edge = orbital_pin.active != *was_active;
+    *was_active = orbital_pin.active;
+    if !orbital_pin.active && !edge {
+        return;
+    }
+    let target = if orbital_pin.active {
+        Visibility::Hidden
+    } else {
+        Visibility::Inherited
+    };
+
+    // Collect each root plus its full subtree — descendants override the root's
+    // visibility, so the root alone would leave the ground on screen.
+    let mut stack: Vec<Entity> = q_local.iter().chain(q_site_root.iter()).collect();
+    let mut targets: Vec<Entity> = Vec::with_capacity(stack.len() * 8);
+    while let Some(e) = stack.pop() {
+        targets.push(e);
+        if let Ok(children) = q_children.get(e) {
+            stack.extend(children.iter());
+        }
+    }
+
+    for e in targets {
+        if let Ok(mut vis) = q_vis.get_mut(e) {
+            if *vis != target {
+                *vis = target;
+            }
+        }
+    }
 }
 
 /// Place `GeodeticAnchor`/`KeplerOrbit` prims on their body's rotating grid;

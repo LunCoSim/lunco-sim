@@ -518,17 +518,23 @@ fn exit_after_timeout(
         // B5: the host despawned G3 mid-run; its proxy must be gone on the client.
         let g3_despawned = !q_proxies.iter().any(|g| g.0 == G3_GID);
 
-        // Journal plane: the host's authored edit (H1, author "host") must have
-        // reached this client over the wire (host→client journal sync). The
-        // client→host leg is checked on the host side (`HOST-JOURNAL peer_entries`).
+        // Journal plane: the host's authored edit (marker `H1`) must have
+        // reached this client over the wire (host→client journal sync); this
+        // client only ever authors `C1`. Checked by CONTENT, not authorship —
+        // journal authors are persistent MACHINE-unique identities
+        // (db316619), so two smoke processes on one box share the author id
+        // and a `foreign author` test can never pass in the standard
+        // single-machine invocation (it failed spuriously from 2026-07-02
+        // until 2026-07-11 while the plane itself worked). The client→host
+        // leg is checked on the host side (`HOST-JOURNAL peer_entries`).
         let journal_from_host = journal
             .as_ref()
             .map(|j| {
                 j.with_read(|jj| {
-                    let me = jj.local_author();
-                    // A foreign-authored Op entry = the host's edit reached us.
-                    jj.entries()
-                        .any(|e| &e.id.author != me && matches!(e.kind, EntryKind::Op { .. }))
+                    jj.entries().any(|e| {
+                        matches!(&e.kind, EntryKind::Op { op, .. }
+                            if op.get("marker").and_then(|m| m.as_str()) == Some("H1"))
+                    })
                 })
             })
             .unwrap_or(false);

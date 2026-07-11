@@ -118,24 +118,26 @@ pub fn body_rotation_system(
             if desc.rotation_rate_rad_per_day != 0.0 {
                 // Shared with the geodesy math (`geo::body_rotation`) so
                 // rendered grids and comms/anchor positions cannot diverge.
-                tf.rotation = crate::geo::body_rotation(desc, world.epoch_jd).as_quat();
+                let next = crate::geo::body_rotation(desc, world.epoch_jd).as_quat();
+                // Guarded write: an unconditional `tf.rotation = …` dirties the
+                // Transform every frame even when the value is unchanged (paused
+                // clock), re-running propagation and re-rounding the f32 compose
+                // chain. At orbital-pin distances that re-rounding is a sub-pixel
+                // per-frame wobble of the focused body — worst at its limb
+                // ("Earth jitters" with the clock paused). Only write on change.
+                if tf.rotation != next {
+                    tf.rotation = next;
+                }
             }
         }
     }
 }
 
-/// Propagate body rotation to terrain tile local transforms.
-/// Currently NO-OP: terrain tiles are fixed in the Grid frame.
-/// The Body rotation affects surface entities (rovers, cameras) that are
-/// children of Body, not terrain tiles on the Grid.
-/// If body rotation needs to affect tiles in the future, tiles should be
-/// re-parented to Body or use a different coordinate scheme.
-pub fn tile_rotation_sync_system(
-    _q_bodies: Query<&Transform, (With<CelestialBody>, Without<lunco_terrain_globe::TileCoord>)>,
-    _q_tiles: Query<(&mut Transform, &lunco_terrain_globe::TileCoord)>,
-) {
-    // Intentionally empty — tiles stay at identity rotation in Grid frame.
-}
+// NOTE: a `tile_rotation_sync_system` used to live here — an intentionally
+// EMPTY body ("tiles stay at identity rotation in the Grid frame") whose
+// `.after(TransformSystems::Propagate)` orderings were silently meaningless in
+// PreUpdate (those sets have no members there). Deleted 2026-07-11; tiles are
+// carried by their (rotating) grid, which is the correct scheme.
 
 /// Pure direction math for [`update_sun_light_system`]: the direction a
 /// `DirectionalLight` should EMIT along (its local `-Z` / forward) so sunlight
@@ -240,29 +242,41 @@ pub fn celestial_telemetry_system(
 
 /// Force per-frame `GlobalTransform` recomputation for the celestial subtree.
 ///
-/// big_space's `propagate_high_precision` is change-gated: an entity keeps its
-/// cached `GlobalTransform` unless its own `Transform`/`CellCoord`/parent
-/// changed or its grid's local floating origin moved. In a site-anchored scene
-/// the Solar Grid is re-pinned every epoch tick, and globe tiles / body
-/// entities spawned on an unlucky frame were observed FROZEN at the raw
-/// heliocentric pose (~1.47e11 m) while their siblings sat at the correct
-/// anchored pose (~3.8e8 m) — "some Earth tiles missing", and `FocusEntityById`
-/// reading the stale body GT teleported the avatar 1e11 m into empty space
-/// (the "click on Earth → everything vanishes" bug). Touching `Transform`
-/// change-detection on the handful of celestial entities (bodies, frame grids,
-/// tiles — tens, not thousands) makes every propagation pass recompute them,
-/// so no stale pose can survive. Runs in `PreUpdate` after the celestial chain
-/// so the same frame's propagation sees the flags.
+/// **Measured to be load-bearing (2026-07-11, `LUNCO_JUMP_PROBE=1`).** An
+/// attempt to delete this after the root-grid fix strobed the ENTIRE
+/// celestial tree to the world origin ~1 frame in 5–9 (whole-chain
+/// plain-f32 compat output surviving to the renderer; 3385 jump events in
+/// 15 s). Ordering `PropagateHighPrecision.after(propagate_parent_transforms)`
+/// is evidently not sufficient on those frames for entities the HP pass
+/// doesn't rewrite — force-dirtying their `Transform` guarantees it rewrites
+/// them all, every frame. The real fix is retiring the root `Transform`
+/// (Avian bubble, doc 47 Phase 5 / doc 45 two-space split); until then this
+/// stays.
+///
+/// The `Or<>` must cover EVERY cell-entity living on a celestial grid.
+/// `GeodeticAnchor`/`KeplerOrbit` prims (ground stations, satellites) were
+/// missing — they kept flickering between their anchor pose and the collapsed
+/// compat pose while the listed entities were protected (the "DSS ping-pong",
+/// task #18). `Without<SiteAnchor>` is REQUIRED with them: the site-anchored
+/// SCENE ROOT also carries `GeodeticAnchor`, and force-dirtying it dirties
+/// the whole local scene every frame ("everything is jumping around",
+/// 2026-07-10 regression).
 #[allow(clippy::type_complexity)]
 pub fn touch_celestial_transforms(
     q_site: Query<(), With<crate::geo::SiteAnchor>>,
     mut q: Query<
         &mut Transform,
-        Or<(
-            With<CelestialBody>,
-            With<CelestialReferenceFrame>,
-            With<lunco_terrain_globe::TerrainTile>,
-        )>,
+        (
+            Or<(
+                With<CelestialBody>,
+                With<CelestialReferenceFrame>,
+                With<lunco_terrain_globe::TerrainTile>,
+                With<crate::geo::GeodeticAnchor>,
+                With<crate::kepler::KeplerOrbit>,
+                With<crate::trajectories::TrajectoryPath>,
+            )>,
+            Without<crate::geo::SiteAnchor>,
+        ),
     >,
 ) {
     // Only needed while a site anchor re-pins the solar frame; a plain scene

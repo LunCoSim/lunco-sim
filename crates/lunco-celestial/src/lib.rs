@@ -180,6 +180,11 @@ impl Plugin for CelestialPlugin {
         // celestial chain consumes the derived `WorldTime.epoch_jd` directly — no
         // `CelestialClock` bridge anymore. Ordered `.after` the spine so the epoch
         // is fresh this frame.
+        // Orbital view MODE state (scene-hide, gravity hold, camera
+        // park/restore) — the camera itself flies to the focused body; the
+        // world is never re-posed for viewing (see `placement::OrbitalViewPin`).
+        app.init_resource::<placement::OrbitalViewPin>();
+
         app.add_systems(PreUpdate, (
             ephemeris_update_system,
             body_rotation_system,
@@ -189,13 +194,10 @@ impl Plugin for CelestialPlugin {
             // where the hierarchy sits un-anchored.
             placement::anchor_solar_frame_to_site,
             placement::place_celestial_bound_entities,
-            // Defeat stale-GT caching for the celestial subtree (see the
-            // system doc: frozen heliocentric tile/body poses = blinking
-            // Earth + focus teleporting into empty space).
+            // Defeat stale-GT / compat-strobe frames for the celestial
+            // subtree — measured load-bearing; see the system doc (a deletion
+            // attempt on 2026-07-11 strobed the whole tree ~1 frame in 5–9).
             touch_celestial_transforms,
-            tile_rotation_sync_system
-                .after(bevy::transform::TransformSystems::Propagate)
-                .after(big_space::prelude::BigSpaceSystems::PropagateHighPrecision),
             soi_transition_system,
         ).chain().in_set(CelestialEpochSet).after(lunco_time::TimeSpineSet));
 
@@ -203,6 +205,10 @@ impl Plugin for CelestialPlugin {
             celestial_telemetry_system,
             celestial_visuals_system,
         ).chain());
+        // Hide the local scene (its whole subtree) while the orbital world-pin
+        // is active — the celestial tree is slid away, so the scene would fill
+        // the foreground of the orbital view.
+        app.add_systems(Update, placement::orbital_pin_scene_visibility);
 
         // Camera-driven cube-sphere LOD: streams each body's tiles (replaces the
         // old fixed 24-tile shell). See `crate::globe_lod`.

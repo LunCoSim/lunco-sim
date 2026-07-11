@@ -98,21 +98,39 @@ pub fn ensure_world_root(world: &mut World) -> Entity {
         .unwrap_or_default();
 
     // BigSpace root + the `WorldRoot` marker (so subsystems attach under it).
-    // It carries the full spatial bundle INCLUDING `Transform`: Avian's physics
-    // transform handling follows the standard bevy convention (parentless root
-    // with a `Transform`), and removing it silently breaks every collider under
-    // the tree (rovers free-fall through the ground). The `Transform` also
-    // makes big_space's bevy-compat pass treat this tree as a plain
-    // low-precision root and re-propagate it with f32 math (dropping
-    // `CellCoord`s) — racing `propagate_high_precision` for every
-    // `GlobalTransform`, which strobed site-anchored scenes (cells ~5e7 on the
-    // Solar Grid → losing frames rendered the Moon 1e11 m away). That race is
-    // resolved by ORDERING, not by removing the `Transform`: `WorldShellPlugin`
-    // constrains `BigSpaceSystems::PropagateHighPrecision` to run AFTER the
-    // compat pass, so the high-precision writer deterministically wins.
+    //
+    // It carries `BigSpace` **and a `Grid`** — big_space's high-precision
+    // propagation only writes a root's `GlobalTransform` when both live on the
+    // SAME entity (`propagation.rs`: the root query is `(&Grid, &mut
+    // GlobalTransform), With<BigSpace>`), and only processes a cell-entity when
+    // its direct parent is a `Grid`. Without the root `Grid`, neither the root
+    // nor the `WorldGrid` child below ever got an origin-relative
+    // `GlobalTransform` from big_space: both were written exclusively by the
+    // plain f32 bevy-compat pass — as IDENTITY, always. That was accidentally
+    // correct while the floating origin's cell stayed (0,0,0), and became "the
+    // world jumps around the camera" the moment the origin travelled (orbital
+    // view, doc 47 Phase 6): every Transform-only entity composing off the
+    // root/WorldGrid rendered in surface convention while the rest of the
+    // world moved in origin-relative convention.
+    //
+    // The root grid's `switching_threshold` is deliberately SMALL (not the
+    // WorldGrid's 1e10): it bounds the f32 remainder of the origin's pose in
+    // this grid (`edge/2 + threshold`), i.e. it is a PRECISION knob — see
+    // `docs/architecture/46` and the cell-edge rule in `big_space_setup.rs`.
+    //
+    // It also carries the full spatial bundle INCLUDING `Transform`: Avian's
+    // physics transform handling follows the standard bevy convention
+    // (parentless root with a `Transform`), and removing it silently breaks
+    // every collider under the tree (rovers free-fall through the ground). The
+    // `Transform` also makes big_space's bevy-compat pass re-walk this tree
+    // with plain f32 math; `WorldShellPlugin` constrains
+    // `BigSpaceSystems::PropagateHighPrecision` to run AFTER the compat pass,
+    // so for every GlobalTransform big_space owns (now including the root and
+    // `WorldGrid`), the high-precision writer deterministically wins.
     let root = world
         .spawn((
             BigSpace::default(),
+            Grid::new(cfg.cell_edge_length, 100.0),
             WorldRoot,
             Transform::default(),
             GlobalTransform::default(),

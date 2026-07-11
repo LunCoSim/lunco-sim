@@ -2781,15 +2781,47 @@ pub fn apply_pending_focus(
     pending: Option<Res<PendingFocus>>,
     q_target: Query<&GlobalTransform>,
     mut q_avatar: Query<
-        (&mut Transform, &GlobalTransform, Option<&mut lunco_avatar::FreeFlightCamera>),
+        (
+            Entity,
+            &mut Transform,
+            &mut big_space::prelude::CellCoord,
+            &ChildOf,
+            &GlobalTransform,
+            Option<&mut lunco_avatar::FreeFlightCamera>,
+        ),
         With<lunco_core::Avatar>,
     >,
+    q_grids: Query<&Grid>,
     q_celestial: Query<(), With<lunco_celestial::CelestialBody>>,
-    q_lights: Query<(&GlobalTransform, &bevy::light::DirectionalLight)>,
     mut commands: Commands,
+    mut orbital_pin: Option<ResMut<lunco_celestial::OrbitalViewPin>>,
 ) {
     let Some(pending) = pending else { return };
     let (target, distance) = (pending.target, pending.distance);
+    // Celestial bodies are ORBIT-scale targets: hand them to the avatar's
+    // `FocusTarget` flow (OrbitCamera flies to the body's grid — doc 47
+    // Phase 6 — with sunlit-side arrival). Local framing stays for
+    // metre-scale subjects (wheels, rovers, props).
+    if q_celestial.get(target).is_ok() {
+        commands.remove_resource::<PendingFocus>();
+        commands.trigger(lunco_avatar::FocusTarget { avatar: None, target });
+        info!("FOCUS_ENTITY: celestial target {target:?} → orbit focus");
+        return;
+    }
+    // Local framing from an orbital view: deactivate the mode and let
+    // `orbital_exit_restore_system` migrate the camera back to the parked
+    // surface pose this frame. `PendingFocus` is deliberately NOT consumed —
+    // the framing re-runs next frame from the restored state, where the GT
+    // delta math below is surface-convention again (running it now would
+    // compute a pose in the CELESTIAL grid the camera is still parented to,
+    // which the restore would then clobber).
+    if let Some(pin) = orbital_pin.as_mut() {
+        if pin.active {
+            pin.active = false;
+            info!("FOCUS_ENTITY: leaving orbital view first; focus retries next frame");
+            return;
+        }
+    }
     commands.remove_resource::<PendingFocus>();
     let cmd = FocusEntityById { entity_id: 0, distance };
     let Ok(target_gt) = q_target.get(target) else {
@@ -2802,7 +2834,7 @@ pub fn apply_pending_focus(
     // fallback) — both surfaced as "no Avatar" and killed double-click focus.
     // Take the first avatar; the FreeFlightCamera is now optional.
     let avatar_count = q_avatar.iter().count();
-    let Some((mut tf, avatar_gt, ff_opt)) = q_avatar.iter_mut().next() else {
+    let Some((avatar_ent, mut tf, mut cell, child_of, avatar_gt, ff_opt)) = q_avatar.iter_mut().next() else {
         warn!("FOCUS_ENTITY: no Avatar entity in the scene (count={avatar_count})");
         return;
     };
@@ -2815,43 +2847,54 @@ pub fn apply_pending_focus(
     // applied to the avatar's LOCAL translation, which is valid because the
     // avatar's parent grid (WorldGrid) is unrotated wrt render space.
     let delta = target_gt.translation() - avatar_gt.translation();
-    let target_pos = tf.translation + delta;
     let dist = if cmd.distance > 0.1 { cmd.distance } else { 6.0 };
-    // Camera sits mostly to the SIDE (+X, the wheel axle direction → we see the
-    // spoke face) plus a little up and forward — EXCEPT for celestial bodies:
-    // a planet focused from a random side is usually its NIGHT hemisphere (a
-    // black disc on black space — "clicked Earth and everything went dark").
-    // For those, approach from the SUN side, slightly off-axis so the
-    // terminator gives depth: to_sun = -(brightest directional light forward).
-    let side_offset = Vec3::new(1.0, 0.4, 0.25).normalize();
-    let dir = if q_celestial.get(target).is_ok() {
-        q_lights
-            .iter()
-            .max_by(|a, b| a.1.illuminance.total_cmp(&b.1.illuminance))
-            .map(|(light_gt, _)| {
-                let to_sun: Vec3 = light_gt.back().into();
-                (to_sun * 0.9 + side_offset * 0.25).normalize()
-            })
-            .unwrap_or(side_offset)
-    } else {
-        side_offset
-    };
+    // Camera sits mostly to the SIDE (+X, the wheel axle direction → we see
+    // the spoke face) plus a little up and forward. (Celestial targets never
+    // reach here — they take the orbit-focus early return above.)
+    let dir = Vec3::new(1.0, 0.4, 0.25).normalize();
     let offset = dir * dist;
-    // Set the avatar to target + offset (absolute, like MoveEntity).
-    tf.translation = target_pos + offset;
+    // Grid-frame absolute target = camera's CELL-AWARE position + GT delta.
+    // A previous orbit focus leaves the avatar cells away from the scene;
+    // `tf.translation` alone is only the cell remainder there. Re-split the
+    // final pose through the grid so a local focus also RESETS the cell (for
+    // scene-scale positions `translation_to_grid` returns cell (0,0,0) + the
+    // plain translation — the historical single-cell convention).
+    if let Ok(grid) = q_grids.get(child_of.parent()) {
+        let target_abs = grid.grid_position_double(&cell, &tf) + delta.as_dvec3();
+        let (new_cell, new_translation) = grid.translation_to_grid(target_abs + offset.as_dvec3());
+        *cell = new_cell;
+        tf.translation = new_translation;
+    } else {
+        tf.translation = tf.translation + delta + offset;
+    }
+    // Aim back along the framing offset (camera → target).
     let d = (-offset).normalize();
+    let (yaw, pitch) = ((-d.x).atan2(-d.z), d.y.clamp(-1.0, 1.0).asin());
     match ff_opt {
         // Free-flight rebuilds rotation from yaw/pitch every frame (YXZ euler), so
         // when it's present we must set those rather than the Transform rotation.
         Some(mut ff) => {
-            ff.yaw = (-d.x).atan2(-d.z);
-            ff.pitch = d.y.clamp(-1.0, 1.0).asin();
+            ff.yaw = yaw;
+            ff.pitch = pitch;
         }
-        // Non-freeflight camera mode (orbit/spring/possessed): set the look
-        // rotation directly. Best-effort — a mode that re-derives rotation from
-        // its own target may override it, but the avatar still flies to the frame.
+        // Non-freeflight camera mode (orbit/spring/surface): the framing is
+        // AUTHORITATIVE — leaving the old mode attached lets its system fly
+        // the camera right back (an OrbitCamera on Earth reclaimed the camera
+        // one frame after "focus rover" and the view never returned). Strip
+        // the mode and reinstate free flight at the computed aim.
         None => {
-            tf.look_at(target_pos, Vec3::Y);
+            tf.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
+            commands
+                .entity(avatar_ent)
+                .remove::<lunco_avatar::OrbitCamera>()
+                .remove::<lunco_avatar::OrbitFrameSample>()
+                .remove::<lunco_avatar::SunlitArrival>()
+                .remove::<lunco_avatar::SpringArmCamera>()
+                .remove::<lunco_avatar::ChaseCamera>()
+                .remove::<lunco_avatar::SurfaceCamera>()
+                .remove::<lunco_avatar::SurfaceRelativeMode>()
+                .remove::<lunco_avatar::FrameBlend>()
+                .insert(lunco_avatar::FreeFlightCamera { yaw, pitch, damping: None });
         }
     }
     info!(
@@ -2862,9 +2905,14 @@ pub fn apply_pending_focus(
 
 /// Aim the free-flight avatar camera: place it at `eye` and look at `target`
 /// (both absolute world-space). The flexible primitive — the client computes the
-/// angle (e.g. approach a wheel from its outboard side) and distance. Sets the
-/// `FreeFlightCamera` yaw/pitch (the camera system rebuilds rotation from those
-/// each frame), so the aim sticks.
+/// angle (e.g. approach a wheel from its outboard side) and distance.
+///
+/// Authoritative: whatever camera mode the avatar is in (orbit focus on a
+/// planet, spring-arm follow, surface mode), this strips it and reinstates a
+/// `FreeFlightCamera` at the requested pose — an API client asking for a
+/// specific view must always get it. `eye` is split into cell + local
+/// translation through the avatar's parent grid, so it lands in the scene
+/// frame even when a previous orbit focus left the camera cells away.
 #[Command(default)]
 pub struct SetCameraLookAt {
     pub eye: Vec3,
@@ -2874,19 +2922,85 @@ pub struct SetCameraLookAt {
 /// Observer for [`SetCameraLookAt`].
 pub fn on_set_camera_look_at(
     trigger: On<SetCameraLookAt>,
-    mut q_avatar: Query<(&mut Transform, &mut lunco_avatar::FreeFlightCamera), With<lunco_core::Avatar>>,
+    mut q_avatar: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut big_space::prelude::CellCoord,
+            &ChildOf,
+            Option<&mut lunco_avatar::FreeFlightCamera>,
+        ),
+        With<lunco_core::Avatar>,
+    >,
+    q_grids: Query<&Grid>,
+    q_world_grid: Query<Entity, With<lunco_core::WorldGrid>>,
+    mut commands: Commands,
+    mut orbital_pin: Option<ResMut<lunco_celestial::OrbitalViewPin>>,
 ) {
     let cmd = trigger.event();
-    let Ok((mut tf, mut ff)) = q_avatar.single_mut() else {
-        warn!("SET_CAMERA: no Avatar with FreeFlightCamera in the scene");
+    let Some((entity, mut tf, mut cell, child_of, ff_opt)) = q_avatar.iter_mut().next() else {
+        warn!("SET_CAMERA: no Avatar entity in the scene");
         return;
     };
-    tf.translation = cmd.eye;
+    // An explicit camera pose is a SURFACE-frame request: leave any orbital
+    // view first so `eye`/`target` mean scene coordinates again.
+    let was_orbital = orbital_pin.as_mut().is_some_and(|pin| {
+        let a = pin.active;
+        if a {
+            pin.active = false;
+        }
+        a
+    });
+    if was_orbital {
+        // The camera flew to the focused body's grid; bring it home in one
+        // atomic migration — raw cell/translation writes below would be
+        // interpreted in the CELESTIAL grid's frame. Removing the marker
+        // keeps `orbital_exit_restore_system` from overriding this pose.
+        commands
+            .entity(entity)
+            .remove::<lunco_avatar::OrbitalViewCamera>();
+        if let Some(root) = q_world_grid.iter().next() {
+            if let Ok(grid) = q_grids.get(root) {
+                let (new_cell, new_translation) = grid.translation_to_grid(cmd.eye.as_dvec3());
+                lunco_core::attach::migrate_to_grid(
+                    &mut commands,
+                    entity,
+                    root,
+                    new_cell,
+                    Transform::from_translation(new_translation).with_rotation(tf.rotation),
+                );
+            }
+        }
+    } else if let Ok(grid) = q_grids.get(child_of.parent()) {
+        let (new_cell, new_translation) = grid.translation_to_grid(cmd.eye.as_dvec3());
+        *cell = new_cell;
+        tf.translation = new_translation;
+    } else {
+        tf.translation = cmd.eye;
+    }
     let look = cmd.target - cmd.eye;
-    if look.length() > 1e-4 {
+    let (yaw, pitch) = if look.length() > 1e-4 {
         let d = look.normalize();
-        ff.yaw = (-d.x).atan2(-d.z);
-        ff.pitch = d.y.clamp(-1.0, 1.0).asin();
+        ((-d.x).atan2(-d.z), d.y.clamp(-1.0, 1.0).asin())
+    } else {
+        let (y, p, _) = tf.rotation.to_euler(EulerRot::YXZ);
+        (y, p)
+    };
+    if let Some(mut ff) = ff_opt {
+        ff.yaw = yaw;
+        ff.pitch = pitch;
+    } else {
+        commands
+            .entity(entity)
+            .remove::<lunco_avatar::OrbitCamera>()
+            .remove::<lunco_avatar::OrbitFrameSample>()
+            .remove::<lunco_avatar::SunlitArrival>()
+            .remove::<lunco_avatar::SpringArmCamera>()
+            .remove::<lunco_avatar::ChaseCamera>()
+            .remove::<lunco_avatar::SurfaceCamera>()
+            .remove::<lunco_avatar::SurfaceRelativeMode>()
+            .remove::<lunco_avatar::FrameBlend>()
+            .insert(lunco_avatar::FreeFlightCamera { yaw, pitch, damping: None });
     }
     info!(
         "SET_CAMERA: eye=({:.2},{:.2},{:.2}) target=({:.2},{:.2},{:.2})",

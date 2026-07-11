@@ -27,7 +27,7 @@ use lunco_avatar::{
 };
 
 const MOON_RADIUS: f64 = 1737.0e3;
-const MOON_GRID_CELL_SIZE: f64 = 10_000.0;
+const MOON_GRID_CELL_SIZE: f64 = 2_000.0;
 
 /// Full teleport workflow integration test.
 #[test]
@@ -55,7 +55,7 @@ fn test_full_teleport_workflow() {
 
         let solar_grid = commands.spawn((
             CelestialReferenceFrame { ephemeris_id: 10 },
-            Grid::new(1.0e9, 1.0e30),
+            Grid::new(2_000.0, 100.0),
             CellCoord::default(),
             Transform::default(),
             GlobalTransform::default(),
@@ -64,7 +64,7 @@ fn test_full_teleport_workflow() {
 
         let emb_grid = commands.spawn((
             CelestialReferenceFrame { ephemeris_id: 3 },
-            Grid::new(1.0e8, 1.0e30),
+            Grid::new(2_000.0, 100.0),
             CellCoord::default(),
             Transform::default(),
             GlobalTransform::default(),
@@ -73,7 +73,7 @@ fn test_full_teleport_workflow() {
 
         let moon_grid = commands.spawn((
             CelestialReferenceFrame { ephemeris_id: 301 },
-            Grid::new(MOON_GRID_CELL_SIZE as f32, 1.0e30_f32),
+            Grid::new(MOON_GRID_CELL_SIZE as f32, 100.0_f32),
             CellCoord::default(),
             Transform::default(),
             GlobalTransform::default(),
@@ -152,7 +152,7 @@ fn test_full_teleport_workflow() {
         let surface_normal = DVec3::new(0.0, 0.0, 1.0); // lat=0,lon=0 → +Z
         let surface_local_pos = surface_normal * (MOON_RADIUS + 50.0);
 
-        let grid = Grid::new(MOON_GRID_CELL_SIZE as f32, 1.0e30_f32);
+        let grid = Grid::new(MOON_GRID_CELL_SIZE as f32, 100.0_f32);
         let (new_cell, new_tf_pos) = grid.translation_to_grid(surface_local_pos);
 
         // Build surface rotation (same as teleport command)

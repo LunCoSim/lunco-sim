@@ -118,6 +118,13 @@ impl Default for TrajectoryView {
 pub struct TrajectoryPath {
     pub points: Vec<bevy::math::DVec3>,
     pub update_epoch: f64,
+    /// Reference-frame offset that was subtracted from every point (the
+    /// tracked body's position at `update_epoch`). Applied back as the view
+    /// entity's cell + translation by `trajectory_alignment_system`, so the
+    /// f32 mesh vertices stay SMALL near the tracked body. `ZERO` for
+    /// un-anchored (mission/spacecraft) paths. See
+    /// `spawn_trajectory_update_task`.
+    pub anchor: bevy::math::DVec3,
 }
 
 #[derive(Component)]
@@ -126,6 +133,7 @@ pub struct TrajectoryTask(pub Task<TrajectoryData>);
 pub struct TrajectoryData {
     pub points: Vec<bevy::math::DVec3>,
     pub epoch: f64,
+    pub anchor: bevy::math::DVec3,
 }
 
 #[derive(Component)]
@@ -139,6 +147,21 @@ impl Plugin for TrajectoryPlugin {
            
         app.add_systems(Startup, trajectory_setup_system);
         
+        // CHAINED: a rebuild must be ATOMIC within one frame.
+        //
+        // `handle_trajectory_tasks` writes `path.points` AND `path.anchor`
+        // together; `trajectory_mesh_update_system` turns the points into f32
+        // vertices; `trajectory_alignment_system` (PostUpdate) places the curve
+        // using the anchor. The vertices are stored RELATIVE to the anchor, so
+        // the two must agree.
+        //
+        // Unordered, the mesh system could run before `handle_trajectory_tasks`
+        // and only pick the change up on the NEXT frame — while alignment
+        // already applied the new anchor in this frame's PostUpdate. For that
+        // one frame the curve was drawn a whole rebuild-step out of place:
+        // ~1.7e6 m for the Moon line, ~1.3e9 m for Earth's. That is the "orbits
+        // jumping around" flash, and rebuilds only fire while the clock runs,
+        // which is why a paused scene never showed it.
         app.add_systems(Update, (
             spawn_trajectory_update_task,
             handle_trajectory_tasks,
@@ -146,9 +169,193 @@ impl Plugin for TrajectoryPlugin {
             trajectory_mesh_update_system,
             trajectory_alpha_update_system,
             trajectory_visibility_system,
-            trajectory_alignment_system,
             mission_visibility_system,
-        ));
+        ).chain());
+
+        // Alignment must run in `PostUpdate`, NOT `Update`.
+        //
+        // A trajectory view is parented to a celestial frame and its local pose
+        // is derived from that frame's CURRENT transform. The orbital view-pin
+        // re-anchors the whole celestial tree in `PostUpdate` (after the camera
+        // publishes `dir`/`distance`; see `lunco-avatar`). Aligning in `Update`
+        // therefore used the PREVIOUS frame's pinned tree: while the user
+        // dragged or zoomed, the orbit lines lagged the bodies by one frame and
+        // swam against them ("the orbital lines still jitter"). Same one-frame
+        // lag that made the whole sky wobble before the pin moved to PostUpdate.
+        //
+        // Ordered AFTER the re-pin (so the frame transforms it reads are this
+        // frame's) and BEFORE `Propagate` (so the fresh local pose reaches this
+        // frame's `GlobalTransform`s).
+        app.add_systems(
+            PostUpdate,
+            trajectory_alignment_system
+                .after(crate::placement::anchor_solar_frame_to_site)
+                .before(bevy::transform::TransformSystems::Propagate),
+        );
+
+        // Drag diagnostic — reads the FINAL `GlobalTransform`s, so it must run
+        // after propagation. Opt-in: `LUNCO_TRAJ_PROBE=1`.
+        if std::env::var("LUNCO_TRAJ_PROBE").is_ok_and(|v| v == "1") {
+            app.add_systems(
+                PostUpdate,
+                trajectory_probe_system.after(bevy::transform::TransformSystems::Propagate),
+            );
+        }
+
+        // Whole-scene jump detector — per-frame, per-landmark discontinuity
+        // attribution. Opt-in: `LUNCO_JUMP_PROBE=1`.
+        if std::env::var("LUNCO_JUMP_PROBE").is_ok_and(|v| v == "1") {
+            app.add_systems(
+                PostUpdate,
+                jump_probe_system.after(bevy::transform::TransformSystems::Propagate),
+            );
+        }
+    }
+}
+
+/// Opt-in whole-scene jump detector: `LUNCO_JUMP_PROBE=1`.
+///
+/// Screenshots and sampled probes cannot catch single-frame glitches — this
+/// runs AFTER propagation every frame and tracks each landmark's rendered
+/// position relative to the floating-origin camera (world axes, so pure
+/// camera rotation is invisible to it). A visible "jump" is a DISCONTINUITY
+/// in that relative motion, i.e. a large second difference: smooth orbiting
+/// (even fast dragging) produces a steady per-frame delta; a one-frame
+/// convention flip / stale GT produces a delta spike. Logs the entity name,
+/// the spike size, and the frame — plus a once-per-second heartbeat of the
+/// largest spike seen so a silent log provably means "no jumps".
+///
+/// Landmarks: celestial bodies, reference-frame grids, trajectory views,
+/// grid-anchored scene roots, and the `WorldGrid` (the root-composition
+/// victim class of the 2026-07-10 regression).
+#[allow(clippy::type_complexity)]
+pub fn jump_probe_system(
+    q_cam: Query<&GlobalTransform, With<big_space::prelude::FloatingOrigin>>,
+    q_marks: Query<
+        (Entity, Option<&Name>, &GlobalTransform),
+        Or<(
+            With<crate::registry::CelestialBody>,
+            With<CelestialReferenceFrame>,
+            With<TrajectoryView>,
+            With<lunco_core::GridAnchor>,
+            With<lunco_core::WorldGrid>,
+        )>,
+    >,
+    q_parents: Query<&ChildOf>,
+    q_names: Query<&Name>,
+    mut last: Local<std::collections::HashMap<Entity, (bevy::math::DVec3, bevy::math::DVec3)>>,
+    mut last_parent: Local<std::collections::HashMap<Entity, Entity>>,
+    mut frame: Local<u64>,
+    mut heartbeat: Local<(f64, String)>,
+) {
+    *frame += 1;
+    let Ok(cam_gt) = q_cam.single() else { return };
+    let cam = cam_gt.translation().as_dvec3();
+    let label = |e: Entity, q: &Query<&Name>| -> String {
+        q.get(e).map(|n| n.as_str().to_string()).unwrap_or_else(|_| format!("{e:?}"))
+    };
+    for (e, name, gt) in q_marks.iter() {
+        // Attribute the tug-of-war directly: log every PARENT flip, jump or not.
+        let parent = q_parents.get(e).map(|p| p.parent()).ok();
+        if let Some(parent) = parent {
+            match last_parent.get(&e) {
+                Some(prev) if *prev != parent => {
+                    bevy::log::warn!(
+                        "[jump-probe] f{} {}: PARENT {} -> {}",
+                        *frame,
+                        name.map(|n| n.as_str()).unwrap_or("<unnamed>"),
+                        label(*prev, &q_names),
+                        label(parent, &q_names),
+                    );
+                    last_parent.insert(e, parent);
+                }
+                None => { last_parent.insert(e, parent); }
+                _ => {}
+            }
+        }
+        let p = gt.translation().as_dvec3() - cam;
+        if let Some((prev_p, prev_d)) = last.get(&e).copied() {
+            let d = p - prev_p;
+            let jerk = (d - prev_d).length();
+            // Tolerate smooth motion (epoch drift, drag) with frame-time
+            // variation; flag genuine discontinuities. Headless uncapped runs
+            // wobble ±30% in dt, so the floor sits above that noise (real
+            // convention flips measured ≥3.5e8 m; rebuild snaps ~1.8e6 m).
+            if jerk > 5.0e4_f64.max(0.75 * prev_d.length()) && jerk > 0.001 * p.length() {
+                bevy::log::warn!(
+                    "[jump-probe] f{} {}: JUMP {:.3e} m (motion {:.3e} -> {:.3e} m/frame, dist {:.3e}, parent {})",
+                    *frame,
+                    name.map(|n| n.as_str()).unwrap_or("<unnamed>"),
+                    jerk,
+                    prev_d.length(),
+                    d.length(),
+                    p.length(),
+                    parent.map(|pe| label(pe, &q_names)).unwrap_or_else(|| "<none>".into()),
+                );
+            }
+            if jerk > heartbeat.0 {
+                *heartbeat = (jerk, name.map(|n| n.as_str().to_string()).unwrap_or_default());
+            }
+            last.insert(e, (p, d));
+        } else {
+            last.insert(e, (p, bevy::math::DVec3::ZERO));
+        }
+    }
+    if *frame % 120 == 0 {
+        bevy::log::info!(
+            "[jump-probe] f{} heartbeat: max jerk since last = {:.3e} m ({})",
+            *frame, heartbeat.0, heartbeat.1
+        );
+        *heartbeat = (0.0, String::new());
+    }
+}
+
+/// Opt-in drag diagnostic: `LUNCO_TRAJ_PROBE=1`.
+///
+/// The orbit lines cannot be jitter-tested headlessly — rotate/zoom are raw mouse
+/// input the API cannot inject, and `FocusEntityById`'s `distance` is ignored once
+/// the pin owns the view. So log the invariant instead and let a human drag.
+///
+/// A view is a CHILD of its tracked body's grid, offset by `desired_local`. So the
+/// RENDERED gap between the view and that grid must equal `|desired_local|` every
+/// frame. Two independent numbers are printed:
+///
+/// * `gt_gap`   — from `GlobalTransform`s (what the renderer actually draws).
+/// * `want`     — `|cell×edge + translation|`, the pose the aligner wrote.
+///
+/// If `gt_gap` tracks `want`, the curve is glued and any jitter is elsewhere.
+/// If `gt_gap` jumps to ~the camera distance while `want` stays put, a
+/// `GlobalTransform` writer is losing the `CellCoord`s (the bevy-compat pass —
+/// see the doc 45 correction block — class 2).
+#[allow(clippy::type_complexity)]
+pub fn trajectory_probe_system(
+    q_views: Query<(&Name, &TrajectoryView, &CellCoord, &Transform, &GlobalTransform, &ChildOf), With<TrajectoryPath>>,
+    q_frames: Query<(&GlobalTransform, &big_space::prelude::Grid)>,
+    mut tick: Local<u32>,
+) {
+    *tick += 1;
+    if *tick % 20 != 0 {
+        return;
+    }
+    for (name, _view, cell, tf, gt, child_of) in q_views.iter() {
+        let Ok((parent_gt, parent_grid)) = q_frames.get(child_of.parent()) else {
+            bevy::log::info!("[traj-probe] {name}: parent has NO Grid (unparented?)");
+            continue;
+        };
+        let edge = parent_grid.cell_edge_length() as f64;
+        let want = bevy::math::DVec3::new(
+            cell.x as f64 * edge + tf.translation.x as f64,
+            cell.y as f64 * edge + tf.translation.y as f64,
+            cell.z as f64 * edge + tf.translation.z as f64,
+        )
+        .length();
+        let gt_gap = (gt.translation() - parent_gt.translation()).length() as f64;
+        bevy::log::info!(
+            "[traj-probe] {name}: gt_gap={gt_gap:.4e} want={want:.4e} ratio={:.4} |gt|={:.4e} |parent_gt|={:.4e}",
+            if want > 1.0 { gt_gap / want } else { f64::NAN },
+            gt.translation().length(),
+            parent_gt.translation().length(),
+        );
     }
 }
 
@@ -205,16 +412,32 @@ pub fn spawn_trajectory_update_task(
     registry: Res<CelestialBodyRegistry>,
     mut commands: Commands,
     q_views: Query<(Entity, &TrajectoryView, &TrajectoryPath), Without<TrajectoryTask>>,
+    q_frames: Query<&CelestialReferenceFrame>,
 ) {
     let current_epoch = world.epoch_jd;
     let pool = bevy::tasks::ComputeTaskPool::get();
-    
+
     for (entity, view, path) in q_views.iter() {
+        // Body orbit views (the tracked id has its own reference frame in
+        // the scene — Earth around the Sun, Moon around the Earth) are
+        // ANCHORED: points are stored relative to the tracked body's
+        // position at the sampling epoch, and that anchor goes back into
+        // the view entity's cell + translation (exact big_space math). The
+        // f32 mesh vertices are then small exactly where the viewer looks —
+        // at the body — instead of reference-frame magnitudes (~4e8 m for
+        // the Moon around Earth, which cancels to ~64 m of per-frame
+        // model-view wobble up close: the "moon offset from its jittering
+        // orbit" report). The curve itself stays static in the reference
+        // frame — the body slides along it. Mission/spacecraft trajectories
+        // (no frame for the tracked id) keep zero anchor.
+        let anchored = view.frame == TrajectoryFrame::Inertial
+            && q_frames.iter().any(|f| f.ephemeris_id == view.tracked_id);
         let is_fixed = view.start_epoch.is_some() && view.end_epoch.is_some();
         let needs_update = if is_fixed {
             path.points.is_empty()
         } else {
-            (path.update_epoch - current_epoch).abs() > view.sampling_step || path.points.is_empty()
+            (path.update_epoch - current_epoch).abs() > view.sampling_step
+                || path.points.is_empty()
         };
 
         if needs_update {
@@ -231,7 +454,18 @@ pub fn spawn_trajectory_update_task(
 
             let task = pool.spawn(async move {
                 let mut points = Vec::new();
-                
+
+                // Anchor: tracked body's reference-relative position at the
+                // aligned epoch — subtracted from every sample so the curve
+                // is expressed relative to the tracked body (see above).
+                let anchor = if anchored {
+                    let p_target = provider.global_position(view_copy.tracked_id, aligned_epoch);
+                    let p_ref = provider.global_position(view_copy.reference_id, aligned_epoch);
+                    crate::coords::ecliptic_to_bevy(p_target - p_ref)
+                } else {
+                    bevy::math::DVec3::ZERO
+                };
+
                 if view_copy.start_epoch.is_some() && view_copy.end_epoch.is_some() {
                     let start = view_copy.start_epoch.unwrap();
                     let end = view_copy.end_epoch.unwrap();
@@ -254,8 +488,8 @@ pub fn spawn_trajectory_update_task(
                                 rel_pos = rot.inverse() * rel_pos;
                             }
                         }
-                        
-                        points.push(rel_pos);
+
+                        points.push(rel_pos - anchor);
                     }
                 } else {
                     let half_count = (view_copy.sampling_days / view_copy.sampling_step / 2.0).ceil() as isize;
@@ -275,14 +509,15 @@ pub fn spawn_trajectory_update_task(
                                 rel_pos = rot.inverse() * rel_pos;
                             }
                         }
-                        
-                        points.push(rel_pos);
+
+                        points.push(rel_pos - anchor);
                     }
                 }
-                
+
                 TrajectoryData {
                     points,
                     epoch: aligned_epoch,
+                    anchor,
                 }
             });
             
@@ -299,9 +534,10 @@ pub fn handle_trajectory_tasks(
         if let Some(data) = future::block_on(future::poll_once(&mut task.0)) {
             path.points = data.points;
             path.update_epoch = data.epoch;
+            path.anchor = data.anchor;
             commands.entity(entity).remove::<TrajectoryTask>();
-            info!("Trajectory updated for entity {:?} with {} points. Tracking {}, Reference {}", 
-                entity, path.points.len(), view.tracked_id, view.reference_id);
+            info!("Trajectory updated for entity {:?} with {} points (anchor |{:.3e}| m). Tracking {}, Reference {}",
+                entity, path.points.len(), path.anchor.length(), view.tracked_id, view.reference_id);
         }
     }
 }
@@ -479,47 +715,179 @@ pub fn trajectory_visibility_system(
 
 pub fn trajectory_alignment_system(
     mut commands: Commands,
-    q_frames: Query<(Entity, &CelestialReferenceFrame)>,
+    world: Res<WorldTime>,
+    ephemeris: Option<Res<EphemerisResource>>,
+    registry: Res<CelestialBodyRegistry>,
+    q_frames: Query<(Entity, &CelestialReferenceFrame, Option<&big_space::prelude::Grid>, &Transform), Without<TrajectoryPath>>,
     q_bodies: Query<(Entity, &crate::registry::CelestialBody)>,
-    mut q_vistas: Query<(Entity, &TrajectoryView, &mut Transform, &mut CellCoord, Option<&ChildOf>), Without<CelestialReferenceFrame>>,
+    mut q_vistas: Query<(Entity, &TrajectoryView, &TrajectoryPath, &mut Transform, &mut CellCoord, Option<&ChildOf>), Without<CelestialReferenceFrame>>,
 ) {
-    for (v_entity, view, mut transform, mut cell, current_parent) in q_vistas.iter_mut() {
+    let jd = world.epoch_jd;
+
+    // Cancel a parent frame's BODY SPIN — and only that.
+    //
+    // `body_rotation_system` writes `Transform.rotation` on frames whose body has
+    // a non-zero rotation rate; sampled trajectory points are inertial, so a view
+    // under such a frame must un-spin. The Solar Grid also carries a rotation, but
+    // it is the site-alignment `align` written by `anchor_solar_frame_to_site`,
+    // which the whole sky (bodies included) is *supposed* to inherit. Cancelling
+    // that would tilt the orbit lines out of the sky. Gate on exactly the same
+    // condition `body_rotation_system` uses.
+    let spin_inverse = |eph_id: i32, tf: &Transform| -> Quat {
+        let spins = registry
+            .bodies
+            .iter()
+            .any(|d| d.ephemeris_id == eph_id && d.rotation_rate_rad_per_day != 0.0);
+        if spins { tf.rotation.inverse() } else { Quat::IDENTITY }
+    };
+    for (v_entity, view, path, mut transform, mut cell, current_parent) in q_vistas.iter_mut() {
         let mut target_parent = None;
-        
+        let mut parent_grid: Option<&big_space::prelude::Grid> = None;
+        // Anchored views sit under a ROTATING body frame; the sampled points
+        // are inertial, so the view cancels the parent's spin.
+        let mut counter_rotation = Quat::IDENTITY;
+        // For anchored views: the tracked body's CURRENT position in the SAME
+        // reference frame `path.anchor` was sampled in, so the curve rides the
+        // body continuously (cancels drift since the anchor epoch) — see the
+        // placement write below.
+        let mut tracked_translation: Option<bevy::math::DVec3> = None;
+
         if view.frame == TrajectoryFrame::BodyFixed {
-            for (b_entity, body) in q_bodies.iter() {
-                if body.ephemeris_id == view.reference_id {
-                    target_parent = Some(b_entity);
+            // Body-fixed points belong on the body's (spinning) reference-frame
+            // GRID: the grid's rotation IS the body-fixed frame (inherit it —
+            // `counter_rotation` stays IDENTITY), and big_space only propagates
+            // a cell-entity whose direct parent is a `Grid` — a cell-entity
+            // under a plain body entity is silently left to the f32 compat
+            // pass (doc 45 correction block, class 2; the "Artemis 2
+            // Moon-Relative: parent has NO Grid" probe warning).
+            for (f_entity, frame, grid, _f_tf) in q_frames.iter() {
+                if frame.ephemeris_id == view.reference_id {
+                    target_parent = Some(f_entity);
+                    parent_grid = grid;
+                    break;
+                }
+            }
+            // No frame grid for this body (simple planets on the Solar Grid):
+            // fall back to the body entity as before.
+            if target_parent.is_none() {
+                for (b_entity, body) in q_bodies.iter() {
+                    if body.ephemeris_id == view.reference_id {
+                        target_parent = Some(b_entity);
+                        break;
+                    }
+                }
+            }
+        } else if path.anchor != bevy::math::DVec3::ZERO {
+            // ANCHORED body-orbit view (points stored relative to the tracked
+            // body at the rebuild epoch). Parent to the TRACKED body's frame;
+            // the placement write below subtracts the body's CURRENT position
+            // so the curve stays fixed in inertial space and the body slides
+            // along it (continuous anchor — kills the "offset from its orbit
+            // unless I scroll away" drift-then-snap; KSA v2025.11.9 fix).
+            for (f_entity, frame, grid, f_tf) in q_frames.iter() {
+                if frame.ephemeris_id == view.tracked_id {
+                    target_parent = Some(f_entity);
+                    parent_grid = grid;
+                    counter_rotation = spin_inverse(frame.ephemeris_id, f_tf);
+                    // The tracked body's position relative to `reference_id`,
+                    // at the CURRENT epoch — the same quantity, in the same
+                    // frame, that `spawn_trajectory_update_task` sampled into
+                    // `path.anchor`. Read from the provider in f64, NOT from
+                    // the frame's `Transform`:
+                    //
+                    // * `Transform.translation` is parent-GRID-relative (Moon
+                    //   frame → EMB, not → Earth), a different reference frame
+                    //   than the anchor's, so the subtraction below was mixing
+                    //   frames and left a body-scale constant offset.
+                    // * It is also cell-BLIND. Since the grids carry real
+                    //   `CellCoord`s the translation is only the sub-cell
+                    //   remainder, and it WRAPS by a full cell edge (1e8 m for
+                    //   the Moon in the EMB grid) whenever the body crosses a
+                    //   boundary — the orbit line teleporting between frames.
+                    //
+                    // Sampling both ends from the provider makes the "now"
+                    // point of the curve cancel to exactly the grid origin (=
+                    // the tracked body), whatever f32 rounding the stored grid
+                    // chain carries: the view is a CHILD of that grid, so it
+                    // inherits the identical rounding.
+                    tracked_translation = ephemeris.as_ref().map(|e| {
+                        crate::coords::ecliptic_to_bevy(
+                            e.provider.global_position(view.tracked_id, jd)
+                                - e.provider.global_position(view.reference_id, jd),
+                        )
+                    });
                     break;
                 }
             }
         } else {
-            for (f_entity, frame) in q_frames.iter() {
+            // UN-ANCHORED inertial view (mission/spacecraft paths — the tracked id
+            // has no frame of its own, so the points were sampled straight in the
+            // reference frame). It parents to the REFERENCE frame, which for
+            // Earth-relative (399) or Moon-relative (301) missions is a grid that
+            // `body_rotation_system` SPINS. The points are inertial, so without
+            // this the curve rode the body's rotation — the Earth-relative Artemis
+            // trajectory swept a full revolution per day.
+            for (f_entity, frame, grid, f_tf) in q_frames.iter() {
                 if frame.ephemeris_id == view.reference_id {
                     target_parent = Some(f_entity);
+                    parent_grid = grid;
+                    counter_rotation = spin_inverse(frame.ephemeris_id, f_tf);
                     break;
                 }
             }
         }
-        
+
         if let Some(parent_ent) = target_parent {
             let is_current_parent = current_parent.map(|p| p.parent() == parent_ent).unwrap_or(false);
             if !is_current_parent {
                 // Trajectory views are NOT `GridAnchor`s — they parent to
-                // `CelestialBody` / `CelestialReferenceFrame` entities. Cell/Transform
-                // are reset to default just below; the deferred-vs-immediate split
-                // is harmless because no observers fire on this archetype.
+                // `CelestialBody` / `CelestialReferenceFrame` entities. The
+                // cell/translation are set just below; the deferred-vs-immediate
+                // split is harmless because no observers fire on this archetype.
                 #[allow(clippy::disallowed_methods)]
                 commands.entity(parent_ent).add_child(v_entity);
             }
-            transform.translation = Vec3::ZERO;
-            transform.rotation = Quat::IDENTITY;
-            *cell = CellCoord::default();
+            // Desired local position in the parent frame. For anchored views,
+            // `path.anchor` (body pos at the rebuild epoch) minus the body's
+            // CURRENT position in that same frame = -drift. That keeps the
+            // curve's "now" point glued to the rendered body as it orbits — no
+            // rebuild-snap. Non-anchored/BodyFixed views want ZERO.
+            //
+            // `counter_rotation` (= parent spin inverse) converts the ecliptic
+            // offset into the parent's LOCAL axes. A child's translation is
+            // expressed in its parent's ROTATED frame, so writing the ecliptic
+            // vector raw placed the curve at `spin * drift` instead of `drift`
+            // — an error that swung around with the body's rotation. The mesh
+            // vertices are ecliptic and un-spun by the view's own
+            // `counter_rotation`, so both compose back to ecliptic exactly.
+            let desired_local = match tracked_translation {
+                Some(ft) => counter_rotation.as_dquat() * (path.anchor - ft),
+                None => bevy::math::DVec3::ZERO,
+            };
+            // Split through the parent grid so the view stays within one cell
+            // (otherwise recenter_large_transforms would fight a large drift
+            // translation). Falls back to a raw f32 translation if the parent
+            // has no Grid (BodyFixed targets a body entity).
+            let (new_cell, new_translation) = match parent_grid {
+                Some(grid) => grid.translation_to_grid(desired_local),
+                None => (CellCoord::default(), desired_local.as_vec3()),
+            };
+            if *cell != new_cell {
+                *cell = new_cell;
+            }
+            if transform.translation != new_translation || transform.rotation != counter_rotation {
+                transform.translation = new_translation;
+                transform.rotation = counter_rotation;
+            }
         } else if view.reference_id == 10 {
             // Sun frame fallback if needed
-            transform.translation = Vec3::ZERO;
-            *cell = CellCoord::default();
-            transform.rotation = Quat::IDENTITY;
+            if transform.translation != Vec3::ZERO || transform.rotation != Quat::IDENTITY {
+                transform.translation = Vec3::ZERO;
+                transform.rotation = Quat::IDENTITY;
+            }
+            if *cell != CellCoord::default() {
+                *cell = CellCoord::default();
+            }
         }
     }
 }
