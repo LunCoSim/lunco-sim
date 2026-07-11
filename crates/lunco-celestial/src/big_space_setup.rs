@@ -57,7 +57,6 @@
 //! and broke Moon positioning. The two-layer design is correct.
 
 use bevy::prelude::*;
-use bevy::math::DVec3;
 use big_space::prelude::*;
 use avian3d::prelude::Collider;
 use bevy::camera::visibility::NoFrustumCulling;

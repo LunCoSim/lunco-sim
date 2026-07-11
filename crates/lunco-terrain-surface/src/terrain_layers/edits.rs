@@ -190,7 +190,10 @@ pub fn edit_attr_write(kind: &EditKind) -> (&'static str, &'static str, String) 
         EditKind::Flatten { center, radius, target_y } => ("flatten", center, radius, target_y),
         EditKind::Crater { center, radius, depth } => ("crater", center, radius, depth),
     };
-    (EDIT_ATTR, "string", format!("\"{k} {} {} {r} {p}\"", c[0], c[1]))
+    // RAW content, not a quoted USD literal: `UsdOp::SetAttribute` authors
+    // `string` values verbatim (no literal parsing) — hand-quoting here embeds
+    // the quotes in the stored value and `parse_edit` then fails on `"crater`.
+    (EDIT_ATTR, "string", format!("{k} {} {} {r} {p}", c[0], c[1]))
 }
 
 /// The edits list as one analytic [`HeightModifier`]: folds every edit in append

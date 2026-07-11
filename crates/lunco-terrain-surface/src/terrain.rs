@@ -1628,6 +1628,12 @@ pub(crate) fn finish_dem_restamp(
             bounds: dirty_bounds,
             oracle_key: new_oracle_key,
         });
+        // Tell the derived-maps re-bake whether this swap was a bounded edit: if
+        // so it keeps the published maps live (correct outside the footprint)
+        // instead of popping the far field to the procedural fallback.
+        commands
+            .entity(entity)
+            .try_insert(crate::derived_layers::DerivedDirtyRegion { bounded: scoped });
         // Swap in the new surface (streaming tiles, collider ring, TerrainHeight query).
         *hf = crate::stream_viz::DemHeightField(oracle);
 

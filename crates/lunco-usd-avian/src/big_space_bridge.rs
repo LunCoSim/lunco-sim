@@ -21,12 +21,12 @@
 //!   avian's required-component hook. No per-step read (would fight the solver).
 
 use bevy::prelude::*;
-use bevy::math::{DQuat, DVec3};
+use bevy::math::DQuat;
 use avian3d::prelude::*;
 use avian3d::schedule::{PhysicsSchedule, PhysicsStepSystems, PhysicsSystems};
 use avian3d::physics_transform::{PhysicsTransformConfig, PhysicsTransformSystems, Position, Rotation};
 use big_space::prelude::{CellCoord, Grid};
-use lunco_core::coords::{ancestor_grid, world_pose, world_pose_seeded};
+use lunco_core::coords::{ancestor_grid, world_pose_seeded};
 
 /// Decouple avian from the f32 render `Transform`; own the f64
 /// `Position` ↔ (cell, `Transform`) bridge.
@@ -151,6 +151,7 @@ mod tests {
     //! the live drive-replay relies on.
     use super::*;
     use bevy::ecs::system::SystemState;
+    use lunco_core::coords::world_pose;
 
     #[test]
     fn world_pose_round_trips_through_translation_to_grid() {
