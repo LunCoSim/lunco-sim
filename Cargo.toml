@@ -103,7 +103,9 @@ openusd = { git = "https://github.com/LunCoSim/openusd", branch = "main" }
 # egui-0.35 PRs (transform-gizmo#109/#110) are still on bevy 0.18. Our
 # LunCoSim/mitchty-transform-gizmo `bevy-0.19-egui-0.35` branch is mitchty's
 # bevy-0.19 base + the egui 0.34→0.35 bump (source unchanged — cf. #109 is
-# Cargo.toml-only). Drop for a crates.io release once upstream combines both.
+# Cargo.toml-only).
+# TODO(deps): drop this git pin for a crates.io release once upstream
+# transform-gizmo ships bevy-0.19 + egui-0.35 together (tracking #109/#110).
 transform-gizmo-bevy = { git = "https://github.com/LunCoSim/mitchty-transform-gizmo", rev = "51abe35ee39655b0b68c6b7727939fde7cabd725" }
 
 # [patch."https://github.com/LunCoSim/openusd"]
@@ -169,7 +171,7 @@ lunco-assets = { path = "crates/lunco-assets" }
 avian3d = { version = "0.7.0", default-features = false, features = ["3d", "f64", "parry-f64", "parallel", "debug-plugin", "default-collider", "collider-from-mesh", "bevy_diagnostic", "xpbd_joints"] }
 # big_space bevy-0.19 support is not released yet; consume PR #73
 # (aevyrie/big_space#73, "update to bevy 0.19") pinned to its head commit.
-# Swap back to a crates.io release once one ships for bevy 0.19.
+# TODO(deps): swap back to a crates.io release once one ships for bevy 0.19.
 big_space = { git = "https://github.com/m-edlund/big_space", rev = "79e04cc01a84f3b8d199a0f97aaeb8245f203b16" }
 leafwing-input-manager = "0.21.0"
 # egui 0.35 row. bevy_egui 0.41 = egui 0.35. The whole egui ecosystem must
