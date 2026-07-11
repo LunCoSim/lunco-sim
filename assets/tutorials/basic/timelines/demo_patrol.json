@@ -1,0 +1,1 @@
+[{"move_to":[0,0,0],"speed":0.6,"radius":2},{"wait":1.5},{"emit":"WAYPOINT_A","value":true},{"move_to":[10,0,0],"speed":0.6,"radius":2},{"cmd":"SetPorts","params":{"writes":[["brake",1]]}}]

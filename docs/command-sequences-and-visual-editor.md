@@ -417,3 +417,43 @@ into the cosim signal graph, or per-node canvas editing with USD undo. Until the
 
 The BT work then shrinks to: **SKIPPED status + `Ref`/SubTree** kernel bits, the **BT.CPP-XML codec**,
 and **leaf→dictionary binding** — no custom USD schema.
+
+---
+
+## 8. Status (2026-07-12): most of this already exists — reuse realized
+
+Verified against the running build and the source; **the "trees as savable/loadable/synced assets" ask
+is already implemented** by the **timeline** subsystem (`lunco-scripting/src/timelines.rs` + commands):
+
+- **Tree-as-data:** the declarative timeline JSON (`move_to`/`wait`/`emit`/`cmd`/`wait_event` steps) IS
+  the serializable `BehaviorSpec`; `RunTimeline` lowers it onto the kernel via `compile_timeline`. (rhai
+  `task()` closure trees remain the *sim-only* dynamic form — not legacy, a complementary layer.)
+- **Save:** `RegisterTimeline{name,timeline}` validates → stores in `TimelineStore` → persists to
+  `<twin>/timelines/<name>.json` → **records a `DomainKind::Timeline` journal op that syncs + persists
+  via the journal plane** (remote peers get it on the replay leg). Journaled + net-synced via existing
+  infra — no new stack.
+- **Load:** `ListTimelines` / `GetTimeline` / `RunStoredTimeline`, plus auto-reload from
+  `<twin>/timelines/` on Twin open (`TwinAdded` observer).
+- **Proven live** (:3005, no rebuild): `RegisterTimeline demo_patrol` → `ListTimelines`
+  `{count:1}` → `GetTimeline` returns the exact tree JSON. Save→load round-trips.
+
+**"Retire legacy":** there is no duplicate sequence engine to retire — closure `task()` (dynamic,
+sim-only) and declarative `timeline` (portable, stored, synced) are two authoring forms over the **one**
+`lunco-behavior` kernel. The reuse guidance is satisfied by *not* building a parallel system.
+
+**Genuinely net-new remaining (a real build, optional/interop):**
+1. **BT.CPP-XML codec** — timelines are JSON; `quick-xml` USD/JSON ⇄ BT.CPP-XML adapter for Groot2 /
+   robotics interop.
+2. **Content migration (optional):** move tutorial closure autopilots that are pure command sequences
+   into declarative timeline files — needs a `move_to_entity:"path"` step variant so `nav_to(find(...))`
+   targets stay symbolic.
+3. **Kernel bits:** `SKIPPED` status + `Ref`/SubTree (for full BT.CPP node parity).
+
+### Tutorial tracks — wired + verified (2026-07-12)
+Basic (`assets/tutorials/basic/`, B1–B5) + Space School (`assets/tutorials/school/`, SS1–SS4) registered
+into the shared registry (one-plugin pattern in `lunco-sandbox/src/ui/mod.rs`; `b1`/`ss1`
+`first_start:false`). Verified live on a dev build: **B1** mission+autopilot → both objectives →
+`MISSION_COMPLETE` → chain prompt (screenshot); **SS1** coach tour + `traverse.usda`; **B3** tip-over +
+the new `world_rotation`/`tilt_deg` path (`[debug] tilt at start: 0.0°`); **B4** variant spawns
+(`/RoverEasy` + `/RoverAwful`). Zero rhai errors. Core add `world_rotation` (bridge_core + world_bridge +
+catalog + prelude `world_up`/`world_right`/`tilt_deg`/`is_tipped`) compiled + exercised green.
