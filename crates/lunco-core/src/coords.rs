@@ -13,24 +13,6 @@ use bevy::ecs::query::QueryFilter;
 
 use crate::markers::GridAnchor;
 
-/// Walks ancestors of `entity` and returns the first one with a `Grid`
-/// component. The `Grid` itself does not count — if `entity` is a Grid,
-/// returns the entity's *parent* Grid (or `None` if it's the BigSpace root).
-pub fn ancestor_grid(
-    entity: Entity,
-    q_parents: &Query<&ChildOf>,
-    q_grids: &Query<(), With<Grid>>,
-) -> Option<Entity> {
-    let mut current = entity;
-    for _ in 0..32 {
-        let Ok(child_of) = q_parents.get(current) else { return None };
-        let parent = child_of.parent();
-        if q_grids.contains(parent) { return Some(parent); }
-        current = parent;
-    }
-    None
-}
-
 /// Walks ancestors of `entity` and returns the nearest one tagged
 /// `GridAnchor`. Returns `entity` itself if it is already a `GridAnchor`.
 ///

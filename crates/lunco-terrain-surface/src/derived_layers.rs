@@ -108,39 +108,61 @@ struct DerivedMaps {
     normal_rgba: Vec<u8>,
 }
 
-/// A surface re-compose (brush stroke, crater reseed, spec change) swapped the
-/// `DemHeightField` Arc: drop the published maps (consumers fall back to their
-/// procedural look) and arm the re-bake debounce.
+/// Set by `finish_dem_restamp` alongside the collider ring's dirty region:
+/// whether the surface change that swapped the `DemHeightField` was a BOUNDED
+/// edit (a brush stroke / placed crater) or whole-terrain (spec change, reseed,
+/// load). Consumed by [`mark_derived_stale`].
+#[derive(Component)]
+pub struct DerivedDirtyRegion {
+    pub bounded: bool,
+}
+
+/// A surface re-compose swapped the `DemHeightField` Arc: arm the re-bake
+/// debounce. For a BOUNDED edit (see [`DerivedDirtyRegion`]) the published maps
+/// stay live while the fresh bake runs — they are correct everywhere except the
+/// edit's footprint, and dropping them popped the whole far field to the
+/// procedural fallback for the entire bake. A whole-terrain change still drops
+/// them (globally wrong maps are worse than the fallback).
 fn mark_derived_stale(
     mut commands: Commands,
     time: Res<Time>,
-    changed: Query<Entity, (Changed<DemHeightField>, With<TerrainDerivedMaps>)>,
+    changed: Query<
+        (Entity, Option<&DerivedDirtyRegion>),
+        (Changed<DemHeightField>, With<TerrainDerivedMaps>),
+    >,
 ) {
-    for entity in &changed {
-        commands
-            .entity(entity)
-            .try_remove::<(TerrainDerivedMaps, DerivedLayersBuilt)>()
+    for (entity, region) in &changed {
+        let bounded = region.is_some_and(|r| r.bounded);
+        let mut e = commands.entity(entity);
+        if !bounded {
+            e.try_remove::<(TerrainDerivedMaps, DerivedLayersBuilt)>();
+        }
+        e.try_remove::<DerivedDirtyRegion>()
             .try_insert(DerivedMapsStale { since: time.elapsed_secs_f64() });
     }
 }
 
-/// Kick one off-thread bake per terrain that has a height field and no
-/// published maps yet (respecting the edit debounce). Gated on `Assets<Image>`
-/// existing so the headless server never bakes.
+/// Kick one off-thread bake per terrain that either has no published maps yet
+/// or has maps marked stale by a bounded edit (kept live while the bake runs —
+/// see [`mark_derived_stale`]), respecting the edit debounce. Gated on
+/// `Assets<Image>` existing so the headless server never bakes.
 fn start_derived_bakes(
     mut commands: Commands,
     images: Option<Res<Assets<Image>>>,
     time: Res<Time>,
     q: Query<
-        (Entity, &DemHeightField, Option<&DerivedMapsStale>),
-        (Without<DerivedBakeTask>, Without<TerrainDerivedMaps>),
+        (Entity, &DemHeightField, Option<&DerivedMapsStale>, Has<TerrainDerivedMaps>),
+        Without<DerivedBakeTask>,
     >,
 ) {
     if images.is_none() {
         return; // headless: no render assets → no point baking visual layers.
     }
     let now = time.elapsed_secs_f64();
-    for (entity, hf, stale) in &q {
+    for (entity, hf, stale, has_maps) in &q {
+        if has_maps && stale.is_none() {
+            continue; // published and current — nothing to do.
+        }
         if let Some(stale) = stale {
             if now - stale.since < REBAKE_DEBOUNCE_SECS {
                 continue; // edits still landing — wait for quiescence.
@@ -350,6 +372,7 @@ fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
 /// stale marker chain re-kicks a fresh bake against the current surface.
 fn finish_derived_bakes(
     mut commands: Commands,
+    time: Res<Time>,
     mut tasks: Query<(Entity, &mut DerivedBakeTask, &DemHeightField)>,
     images: Option<ResMut<Assets<Image>>>,
 ) {
@@ -359,9 +382,16 @@ fn finish_derived_bakes(
             continue;
         };
         if task.1 != Arc::as_ptr(&hf.0) as usize {
-            // Baked against a surface that no longer exists → drop; the absent
-            // TerrainDerivedMaps makes start_derived_bakes re-kick next frame.
-            commands.entity(entity).try_remove::<DerivedBakeTask>();
+            // Baked against a surface that no longer exists → drop, and RE-ARM
+            // the stale marker (already past debounce): with the old maps kept
+            // live through a bounded edit, `TerrainDerivedMaps` is still present,
+            // so its absence can no longer be the re-kick signal.
+            commands
+                .entity(entity)
+                .try_remove::<DerivedBakeTask>()
+                .try_insert(DerivedMapsStale {
+                    since: time.elapsed_secs_f64() - REBAKE_DEBOUNCE_SECS,
+                });
             continue;
         }
         let res = maps.res;
@@ -483,7 +513,13 @@ pub(crate) fn register(app: &mut App) {
     app.add_systems(
         Update,
         (mark_derived_stale, start_derived_bakes, finish_derived_bakes, apply_derived_layers)
-            .chain(),
+            .chain()
+            // The `.after` inserts the sync point that makes `finish_dem_restamp`'s
+            // deferred `DerivedDirtyRegion` insert visible in the same frame as its
+            // (immediate) `DemHeightField` swap — unordered, `mark_derived_stale`
+            // could see the swap without the bounded flag and needlessly drop the
+            // published maps (the far-field pop this flag exists to prevent).
+            .after(crate::terrain::finish_dem_restamp),
     );
 }
 

@@ -556,24 +556,6 @@ fn joint_component(seed: Entity, adj: &HashMap<Entity, Vec<Entity>>) -> Vec<Enti
     members
 }
 
-/// Whether any ANCESTOR of `e` is also in `set` — such an entity inherits a
-/// rigid transform applied to that ancestor through the hierarchy, so applying
-/// it to `e`'s own Transform too would double it.
-fn inherits_from_set(
-    e: Entity,
-    set: &HashSet<Entity>,
-    parents: &Query<&ChildOf>,
-) -> bool {
-    let mut anc = e;
-    while let Ok(p) = parents.get(anc) {
-        anc = p.parent();
-        if set.contains(&anc) {
-            return true;
-        }
-    }
-    false
-}
-
 /// Safety net for tunneled bodies: any `Dynamic` body more than
 /// [`TUNNEL_RESCUE_MARGIN`] below the composed surface (inside a ring terrain's
 /// footprint) is reseated just above the surface with its velocity zeroed.
@@ -586,6 +568,14 @@ fn inherits_from_set(
 /// every member, preserving relative poses. Lifting each body to its own local
 /// surface height tears the assembly (different terrain heights under each wheel),
 /// and the joints then wrench it into a tumble — rovers arrived on their roof.
+///
+/// Writes avian's f64 `Position` (the solver's authoritative pose), NOT the
+/// render `Transform`: under the big_space physics bridge (`lunco-usd-avian`
+/// `BigSpacePhysicsBridgePlugin`) a Dynamic body's `Transform` is a writeback
+/// TARGET — mutating it is silently overwritten from `Position` next step. A
+/// `Position` write is honoured in both configurations (without the bridge,
+/// avian's change-detected `transform_to_position` only overwrites `Position`
+/// when `Transform` itself changed).
 pub fn rescue_tunneled_bodies(
     terrains: Query<
         (&GlobalTransform, &crate::stream_viz::DemHeightField),
@@ -594,13 +584,11 @@ pub fn rescue_tunneled_bodies(
     mut bodies: Query<(
         Entity,
         &RigidBody,
-        &GlobalTransform,
-        &mut Transform,
+        &mut avian3d::prelude::Position,
         Option<&mut avian3d::prelude::LinearVelocity>,
         Option<&mut avian3d::prelude::AngularVelocity>,
     )>,
     joints: JointGraph,
-    parents: Query<&ChildOf>,
 ) {
     for (t_gt, hf) in &terrains {
         let inv = t_gt.affine().inverse();
@@ -608,11 +596,11 @@ pub fn rescue_tunneled_bodies(
         // Pass 1 (read-only): how far below the surface is each dynamic body?
         let mut depth: HashMap<Entity, f64> = HashMap::new();
         let mut tunneled: Vec<Entity> = Vec::new();
-        for (entity, rb, gt, ..) in bodies.iter() {
+        for (entity, rb, pos, ..) in bodies.iter() {
             if !matches!(rb, RigidBody::Dynamic) {
                 continue;
             }
-            let local = inv.transform_point3(gt.translation());
+            let local = inv.transform_point3(pos.0.as_vec3());
             let (x, z) = (local.x as f64, local.z as f64);
             if x.abs() > half || z.abs() > half {
                 continue;
@@ -627,7 +615,9 @@ pub fn rescue_tunneled_bodies(
             continue; // fast path: no joint bookkeeping in the steady state
         }
         let adj = joints.adjacency(|e| depth.contains_key(&e));
-        // Pass 2: rescue each joint-connected component once, rigidly.
+        // Pass 2: rescue each joint-connected component once, rigidly. `Position`
+        // is world-absolute per body (no hierarchy), so the shared lift applies
+        // uniformly to every member.
         let mut done: HashSet<Entity> = HashSet::new();
         for seed in tunneled {
             if !done.insert(seed) {
@@ -641,14 +631,10 @@ pub fn rescue_tunneled_bodies(
                 .filter_map(|e| depth.get(e))
                 .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
             let lift_local = DVec3::new(0.0, need + RESCUE_CLEARANCE, 0.0);
-            let lift_world = t_gt.affine().transform_vector3(lift_local.as_vec3());
-            let member_set: HashSet<Entity> = members.iter().copied().collect();
+            let lift_world = t_gt.affine().transform_vector3(lift_local.as_vec3()).as_dvec3();
             for &m in &members {
-                let inherited = inherits_from_set(m, &member_set, &parents);
-                let Ok((_, _, _, mut tf, lin, ang)) = bodies.get_mut(m) else { continue };
-                if !inherited {
-                    tf.translation += lift_world;
-                }
+                let Ok((_, _, mut pos, lin, ang)) = bodies.get_mut(m) else { continue };
+                pos.0 += lift_world;
                 if let Some(mut v) = lin {
                     v.0 = DVec3::ZERO;
                 }
@@ -670,7 +656,7 @@ pub fn rescue_tunneled_bodies(
 /// out of trouble is never snatched.
 const OVERTURN_SETTLE_SECS: f32 = 3.0;
 /// `up · world_up` below which the body counts as overturned (~78° of roll).
-const OVERTURN_UP_DOT: f32 = 0.2;
+const OVERTURN_UP_DOT: f64 = 0.2;
 /// Resting speed gates (m/s, rad/s) for the settle timer.
 const OVERTURN_REST_SPEED: f64 = 0.5;
 
@@ -687,37 +673,40 @@ pub struct OverturnedTimer(f32);
 /// velocities zeroed. A rover on its roof is a dead end the player can only fix
 /// by editing the scene — while a tipped ROCK staying tipped is correct, which is
 /// why this keys on the explicit marker and not on `RigidBody::Dynamic`.
+///
+/// Operates on avian's f64 `Position`/`Rotation` (see
+/// [`rescue_tunneled_bodies`] for why `Transform` writes are wrong here).
 pub fn rescue_overturned_vessels(
     time: Res<Time>,
     terrains: Query<
         (&GlobalTransform, &crate::stream_viz::DemHeightField),
         With<TerrainColliderRing>,
     >,
-    // Velocities/pose are read through `bodies` (a read borrow of the same query
+    // Pose/velocities are read through `bodies` (a read borrow of the same query
     // that later writes them) — reading them here too would be a B0001 conflict.
     roots: Query<Entity, With<lunco_core::KeepUpright>>,
     mut timers: Query<&mut OverturnedTimer>,
     mut bodies: Query<(
         &RigidBody,
-        &mut Transform,
-        &GlobalTransform,
+        &mut avian3d::prelude::Position,
+        &mut avian3d::prelude::Rotation,
         Option<&mut avian3d::prelude::LinearVelocity>,
         Option<&mut avian3d::prelude::AngularVelocity>,
     )>,
     dynamics: Query<&RigidBody>,
     joints: JointGraph,
-    parents: Query<&ChildOf>,
     mut commands: Commands,
 ) {
+    use bevy::math::DQuat;
     for root in &roots {
-        let Ok((rb, _, gt, lin, ang)) = bodies.get(root) else { continue };
+        let Ok((rb, pos, rot, lin, ang)) = bodies.get(root) else { continue };
         if !matches!(rb, RigidBody::Dynamic) {
             continue;
         }
-        let up = gt.rotation() * Vec3::Y;
+        let up = rot.0 * DVec3::Y;
         let resting = lin.is_none_or(|v| v.0.length() < OVERTURN_REST_SPEED)
             && ang.is_none_or(|w| w.0.length() < OVERTURN_REST_SPEED);
-        let pivot = gt.translation();
+        let pivot = pos.0;
         if up.y > OVERTURN_UP_DOT || !resting {
             if timers.contains(root) {
                 commands.entity(root).try_remove::<OverturnedTimer>();
@@ -737,25 +726,18 @@ pub fn rescue_overturned_vessels(
         // Rigid righting transform about the root's own position: shortest arc
         // from the current up to world up (an exact 180° flip picks an arbitrary
         // axis — any righting is fine there).
-        let q_fix = Quat::from_rotation_arc(up.normalize(), Vec3::Y);
+        let q_fix = DQuat::from_rotation_arc(up.normalize(), DVec3::Y);
         let adj = joints
             .adjacency(|e| dynamics.get(e).is_ok_and(|rb| matches!(rb, RigidBody::Dynamic)));
         let members = joint_component(root, &adj);
-        let member_set: HashSet<Entity> = members.iter().copied().collect();
-        // Apply rotation first (via each member's world pose), then compute the
-        // post-rotation lift that reseats the assembly on the surface.
-        let mut post: Vec<(Entity, Vec3)> = Vec::with_capacity(members.len());
+        // Rotate every member's authoritative pose about the pivot, collecting
+        // the post-rotation positions for the reseat pass.
+        let mut post: Vec<DVec3> = Vec::with_capacity(members.len());
         for &m in &members {
-            let Ok((_, mut tf, m_gt, _, _)) = bodies.get_mut(m) else { continue };
-            let new_world = pivot + q_fix * (m_gt.translation() - pivot);
-            if !inherits_from_set(m, &member_set, &parents) {
-                // World-anchored member (the common case): rotate its Transform
-                // in place. (Terrain-frame == world-frame rotation here; vessel
-                // roots live at the top of the hierarchy.)
-                tf.translation += new_world - m_gt.translation();
-                tf.rotation = q_fix * tf.rotation;
-            }
-            post.push((m, new_world));
+            let Ok((_, mut pos, mut rot, _, _)) = bodies.get_mut(m) else { continue };
+            pos.0 = pivot + q_fix * (pos.0 - pivot);
+            rot.0 = (q_fix * rot.0).normalize();
+            post.push(pos.0);
         }
         // Reseat: the deepest post-rotation member ends RESCUE_CLEARANCE above
         // its local surface (only ever lifting — gravity handles settling down).
@@ -763,8 +745,8 @@ pub fn rescue_overturned_vessels(
         for (t_gt, hf) in &terrains {
             let inv = t_gt.affine().inverse();
             let half = hf.0.half_extent() as f64;
-            for (_, world) in &post {
-                let local = inv.transform_point3(*world);
+            for world in &post {
+                let local = inv.transform_point3(world.as_vec3());
                 let (x, z) = (local.x as f64, local.z as f64);
                 if x.abs() > half || z.abs() > half {
                     continue;
@@ -773,9 +755,9 @@ pub fn rescue_overturned_vessels(
             }
         }
         for &m in &members {
-            let Ok((_, mut tf, _, lin, ang)) = bodies.get_mut(m) else { continue };
-            if lift > 0.0 && !inherits_from_set(m, &member_set, &parents) {
-                tf.translation.y += lift as f32;
+            let Ok((_, mut pos, _, lin, ang)) = bodies.get_mut(m) else { continue };
+            if lift > 0.0 {
+                pos.0.y += lift;
             }
             if let Some(mut v) = lin {
                 v.0 = DVec3::ZERO;

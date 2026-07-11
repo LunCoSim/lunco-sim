@@ -169,3 +169,30 @@ One owner ⇒ one writer per tick ⇒ no competing port writes ⇒ no jitter. Di
 - **Reserved `SessionId` band:** one local `AiAgent` session per vessel (`SessionId::LOCAL` band offset by vessel entity id).
 - **Default `PossessionPolicy`:** `LastWins` (grab-to-steal), gated by the rhai `may_take_control` policy for the "grab the stick" feel.
 - **Human yield mechanism:** explicit `PossessVessel` only (event-driven, no input-edge detection). Auto-steal-on-first-input is a later nicety layered on the same possess call.
+
+## 10. Addendum (2026-07-11): idle-yield for same-session scripted drive
+
+The ownership yield (§7.3) covers an **autopilot actor** (its own `AiAgent`
+session owns the vessel). It does NOT cover the tutorial/scenario pattern where
+a plain rhai script (same session as the human) drives a vessel the human
+possesses: `drive_from_bindings` wrote every bound port as **0 every tick**
+while idle, so the script's `SetPorts` survived at most one tick — scripted
+drive of a possessed vessel was effectively dead (found via `drive-diag`:
+throttle reached `apply_wheel_drive` 1 tick in ~8700).
+
+**Fix (idle-yield, in `drive_from_bindings`):** the keyboard writes only while
+a bound intent is actually held, plus exactly ONE all-zero batch on the
+active→idle edge — ports latch, so the single zero write preserves the clean
+stop the every-tick stream provided. A key-press resumes writing immediately,
+so the human still preempts a script mid-drive (the intended precedence). This
+is emit-suppression on the producer, not the rejected per-frame holder-state
+arbiter of §5: no holder, no grace timers — one `Local<HashMap<Entity, bool>>`
+edge detector.
+
+**Deliberate exemption:** predicted CLIENTS (`owned_gid.is_some()`) keep the
+old unconditional per-tick stream — reconcile's input-replay assumes a
+contiguous `seq` stream and the host ack watermark would stall on gaps. On a
+client, an idle human therefore still stomps same-session scripted drive
+(acceptable: scripts don't co-drive client-predicted vessels). Extending
+idle-yield to clients must change the replay contract too — see the
+`TODO(spec-034)` at the yield site in `lunco-controller/src/lib.rs`.

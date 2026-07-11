@@ -75,10 +75,10 @@ fn seq_note_event(cur, evt) {
 //
 // The sequencer above needs three hooks wired by hand (on_start seeds the cursor,
 // on_tick calls run_steps, on_event calls seq_note_event). A *task* removes all
-// of that: declare it ONCE by assigning `this.task` in on_start, and the engine
-// advances it every tick and feeds it events automatically — the runtime calls
-// the `__run_task` / `__note_task_event` drivers below for you. This is the
-// built-in "do X, wait until Y, then Z" capability available to every script:
+// of that: declare it ONCE by assigning `this.task` in on_start, and the NATIVE
+// kernel driver advances it every tick and feeds it events automatically. This
+// is the built-in "do X, wait until Y, then Z" capability available to every
+// script:
 //
 //   fn on_start(me) {
 //       this.task = seq([
@@ -110,132 +110,48 @@ fn seq_note_event(cur, evt) {
 //       once(|m| drive_to(m, A)), wait_until(|m| arrived(m, A)), wait(2.0),
 //       once(|m| drive_to(m, B)), wait_until(|m| arrived(m, B)), wait(2.0),
 //   ]));
-// The engine ticks the tree each frame (__tick) and feeds events into it.
+//
+// These constructors build PURE DATA — the tree is ticked NATIVELY on the
+// lunco-behavior kernel (the same engine the rover autopilot runs on), which
+// compiles the map once per assignment and feeds it events. There is no rhai
+// tick code: mechanism lives in Rust (`lunco-scripting/src/task_tree.rs`),
+// policy stays here. Emits TASK_COMPLETE once when the root finishes (and
+// TASK_FAILED if a failing node — see below — ends the tree).
+//
+// Failure-aware nodes (kernel vocabulary the old rhai engine didn't have):
+//   check(|m| pred)     Success/Failure immediately — the leaf that can fail
+//   sel([a, b, c])      fallback: first child to SUCCEED wins; fails if all fail
+//   retry(n, node)      re-attempt `node` on Failure, up to n times
+//   invert(node)        swap Success ↔ Failure
+//   force_ok(node)      any terminal → Success        force_fail(node) → Failure
+//   reactive_seq([g,a]) re-tick from the FIRST child every tick (live guards):
+//                       "do a WHILE g holds"; reactive_sel = priority arbiter
 
-/// Composite node constructors (assign the root to `this.task` in on_start).
-fn seq(items)      { #{ k: "seq",  items: items, i: 0 } }
-fn par_all(items)  { #{ k: "all",  items: items, fin: items.map(|x| false) } }
+/// Node constructors (assign the root to `this.task` in on_start).
+fn seq(items)      { #{ k: "seq",  items: items } }
+fn par_all(items)  { #{ k: "all",  items: items } }
 fn par_race(items) { #{ k: "race", items: items } }
-fn repeat(n, body) { #{ k: "repeat", n: n, body: body, cur: body, done_n: 0 } }
-fn forever(body)   { #{ k: "forever", body: body, cur: body } }
+fn repeat(n, body) { #{ k: "repeat", n: n, body: body } }
+fn forever(body)   { #{ k: "forever", body: body } }
+fn sel(items)      { #{ k: "sel",  items: items } }
+fn retry(n, body)  { #{ k: "retry", n: n, body: body } }
+fn invert(body)    { #{ k: "invert", body: body } }
+fn force_ok(body)  { #{ k: "force_ok", body: body } }
+fn force_fail(body){ #{ k: "force_fail", body: body } }
+fn reactive_seq(items) { #{ k: "reactive_seq", items: items } }
+fn reactive_sel(items) { #{ k: "reactive_sel", items: items } }
+/// Predicate leaf that can FAIL (for sel/retry/invert): Success when the
+/// predicate is true, Failure when false — unlike wait_until, which waits.
+fn check(pred)     { #{ check: pred } }
 
-/// Tick ONE leaf step `s` (a once/wait/wait_until/wait_for/step map), tracking its
-/// own dwell start on `s._t0`. `ev` is this tick's event-name buffer. Returns
-/// `#{ n: <updated leaf>, d: <done?> }`. (Mirrors run_steps' step_done precedence.)
-fn __tick_leaf(me, s, now, ev) {
-    if s.act != () { s.act.call(me); }            // closed-loop action (once/step)
-    let d = true;                                  // bare/once → advance immediately
-    if s.done != () { d = s.done.call(me); }       // wait_until / step predicate
-    else if s.secs != () { if s._t0 == () { s._t0 = now; } d = (now - s._t0) >= s.secs; }
-    // wait_for: match event name, and (if wait_for_from gave a `src`) the EMITTER
-    // too — so one name from many sensors is distinguished by source. `src` may be
-    // a gid OR a path string resolved LAZILY here (entities may not exist yet when
-    // the task tree is built at on_start).
-    else if s.event != () {
-        let want = s.src;
-        if want != () && type_of(want) == "string" { want = find(want); }
-        d = ev.some(|e| e.name == s.event && (want == () || e.source == want));
-    }
-    #{ n: s, d: d }
-}
-
-// Tick one task node (recursive). Each composite kind is a separate helper so no
-// single function nests past rhai's default expr-depth cap — the prelude parses
-// on a stock `Engine` (catalog / one-shot backend), not just the scenario engine.
-// Each returns `#{ n: <updated node>, d: <done?> }`.
-
-/// Dispatch by node kind; a node with no `k` is a leaf step.
-fn __tick(me, node, now, ev) {
-    let k = node.k;
-    if k == "seq"     { return __tick_seq(me, node, now, ev); }
-    if k == "all"     { return __tick_all(me, node, now, ev); }
-    if k == "race"    { return __tick_race(me, node, now, ev); }
-    if k == "repeat"  { return __tick_repeat(me, node, now, ev); }
-    if k == "forever" { return __tick_forever(me, node, now, ev); }
-    __tick_leaf(me, node, now, ev)
-}
-
-fn __tick_seq(me, node, now, ev) {
-    let n = node.items.len();
-    if node.i >= n { return #{ n: node, d: true }; }
-    let item = node.items[node.i];
-    let r = __tick(me, item, now, ev);
-    node.items[node.i] = r.n;
-    if r.d { node.i += 1; }
-    #{ n: node, d: node.i >= n }
-}
-
-fn __tick_all(me, node, now, ev) {
-    let all_done = true;
-    let n = node.items.len();
-    for j in 0..n {
-        if !node.fin[j] {
-            let item = node.items[j];
-            let r = __tick(me, item, now, ev);
-            node.items[j] = r.n;
-            node.fin[j] = r.d;
-        }
-        if !node.fin[j] { all_done = false; }
-    }
-    #{ n: node, d: all_done }
-}
-
-fn __tick_race(me, node, now, ev) {
-    let any_done = false;
-    let n = node.items.len();
-    for j in 0..n {
-        let item = node.items[j];
-        let r = __tick(me, item, now, ev);
-        node.items[j] = r.n;
-        if r.d { any_done = true; }
-    }
-    #{ n: node, d: any_done }
-}
-
-fn __tick_repeat(me, node, now, ev) {
-    if node.done_n >= node.n { return #{ n: node, d: true }; }
-    let r = __tick(me, node.cur, now, ev);
-    node.cur = r.n;
-    if r.d { node.done_n += 1; node.cur = node.body; }   // reset to a fresh body
-    #{ n: node, d: node.done_n >= node.n }
-}
-
-fn __tick_forever(me, node, now, ev) {
-    let r = __tick(me, node.cur, now, ev);
-    node.cur = r.n;
-    if r.d { node.cur = node.body; }
-    #{ n: node, d: false }
-}
-
-/// Engine driver — advance `this.task` one tick against this frame's event
-/// buffer, then clear it (events live one tick, the actor-model cadence). Called
-/// by the runtime after on_tick; no-op when no task was declared. Emits
-/// TASK_COMPLETE once when the root finishes.
-fn __run_task(me) {
-    if this.task == () { return; }
-    let ev = if this.__events == () { [] } else { this.__events };
-    let r = __tick(me, this.task, elapsed_seconds(), ev);
-    this.task = r.n;
-    this.__events = [];
-    if r.d && this.__task_done != true { this.__task_done = true; emit("TASK_COMPLETE", 0); }
-}
-
-/// Engine driver — buffer an event name for `this.task`'s `wait_for` leaves to
-/// consume on the next advance. Called by the runtime per delivered event.
+/// Engine driver — buffer an event for a declarative `mission(me)`'s
+/// `requires_event` objectives. (The task tree's `wait_for` leaves are fed
+/// natively by the kernel driver; this rhai buffer only serves the mission.)
 fn __note_task_event(me, evt) {
     if evt.name == () { return; }
-    let e = #{ name: evt.name, source: evt.source };
-    // Buffer name + emitter source so `wait_for` (name) and `wait_for_from`
-    // (name + source) can both match against this tick's events.
-    if this.task != () {
-        if this.__events == () { this.__events = []; }
-        this.__events.push(e);
-    }
-    // Independent buffer for a declarative `mission(me)`'s `requires_event`
-    // objectives — so event-gated steps work whether or not a task is running.
     if this.mission != () {
         if this.__mevents == () { this.__mevents = []; }
-        this.__mevents.push(e);
+        this.__mevents.push(#{ name: evt.name, source: evt.source });
     }
 }
 

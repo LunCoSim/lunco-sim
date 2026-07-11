@@ -7,12 +7,18 @@ JSON/rhai `BehaviorSpec` an autopilot compiles and can hot-swap at runtime).
 - **Kernel crate:** [`lunco-behavior`](../crates/lunco-behavior) — `Status`, the
   `Node` trait, composites, reactive composites, decorators, the `Action` leaf.
   No dependency on bevy, avian, rhai, or python.
-- **Consumer:** [`lunco-autopilot`](../crates/lunco-autopilot) — supplies a
-  `DriveCtx` (vessel pose in, `throttle`/`steer`/`brake` out, mission clock) and a
-  data schema (`BehaviorSpec`) that names Rust nav-math leaves. Trees are authored
-  as data so rhai/JSON can define them and swap them live (`SetAutopilotBehavior`).
-- **Related:** [scripting-guide.md](./scripting-guide.md) (the rhai task sequencer,
-  a sibling cooperative model), spec
+- **Consumers:**
+  - [`lunco-autopilot`](../crates/lunco-autopilot) — supplies a `DriveCtx`
+    (vessel pose in, `throttle`/`steer`/`brake` out, mission clock) and a data
+    schema (`BehaviorSpec`) that names Rust nav-math leaves. Trees are authored
+    as data so rhai/JSON can define them and swap them live (`SetAutopilotBehavior`).
+  - [`lunco-scripting`](../crates/lunco-scripting/src/task_tree.rs) — every
+    scenario's `this.task` tree: the prelude's `seq`/`par_all`/`wait_*`
+    constructors build pure data maps that compile onto this kernel, with rhai
+    closures as `Action`-style leaves (`TaskCtx`). One tick engine serves both;
+    the prelude's former rhai `__tick*` recursion is retired.
+- **Related:** [scripting-guide.md](./scripting-guide.md) (the task-tree verbs +
+  the Layer-1 linear sequencer), spec
   [034-control-authority-arbiter](../specs/034-control-authority-arbiter).
 
 ---

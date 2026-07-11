@@ -7335,6 +7335,7 @@ dependencies = [
  "libloading",
  "lunco-api",
  "lunco-assets",
+ "lunco-behavior",
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",

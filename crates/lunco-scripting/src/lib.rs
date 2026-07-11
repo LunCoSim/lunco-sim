@@ -20,6 +20,11 @@ pub mod source_asset;
 /// World-bound rhai execution (the `cmd`/`world_pos`/`get`/`find` bridge).
 #[cfg(feature = "rhai")]
 pub mod world_bridge;
+/// rhai task maps compiled onto the `lunco-behavior` kernel — the native tick
+/// engine behind the prelude's `seq`/`par_*`/`repeat`/`wait_*` task vocabulary
+/// (replaces the prelude's retired `__tick*` rhai recursion).
+#[cfg(feature = "rhai")]
+pub mod task_tree;
 /// Importable rhai tool libraries (named `libname::fn` modules).
 #[cfg(feature = "rhai")]
 pub mod tool_libs;

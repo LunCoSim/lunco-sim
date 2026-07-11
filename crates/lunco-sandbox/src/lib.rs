@@ -2434,7 +2434,9 @@ fn on_place_rock_authored(
             continue;
         }
         let attrs: [(&str, &str, String); 5] = [
-            ("lunco:layer", "string", "\"rock\"".to_string()),
+            // RAW content — `SetAttribute` authors `string` values verbatim
+            // (no literal parsing); hand-quoting embeds the quotes.
+            ("lunco:layer", "string", "rock".to_string()),
             ("x", "float", format!("{}", ev.x)),
             ("z", "float", format!("{}", ev.z)),
             ("size", "float", format!("{}", ev.size_or_default())),

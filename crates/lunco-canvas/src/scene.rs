@@ -41,7 +41,6 @@
 //! its concrete struct. See [`crate::visual::VisualRegistry`].
 
 use std::any::Any;
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use indexmap::IndexMap;

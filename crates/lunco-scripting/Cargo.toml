@@ -6,6 +6,9 @@ edition = "2021"
 [dependencies]
 bevy = { workspace = true }
 lunco-doc = { path = "../lunco-doc" }
+# The task-tree tick engine (`this.task` in scenarios) — scripts author pure
+# data maps; the dependency-free kernel ticks them (see src/task_tree.rs).
+lunco-behavior = { path = "../lunco-behavior" }
 # Shared per-document diagnostics store (the unified error-reporting substrate
 # used by Modelica + scripting). `default-features = false` drops its egui `ui`
 # feature so headless / wasm scripting builds don't pull bevy_egui→winit.
