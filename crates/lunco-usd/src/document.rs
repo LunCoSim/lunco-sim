@@ -269,6 +269,17 @@ pub enum UsdOp {
     },
     /// Set an arbitrary attribute on the prim at `path`. Creates the
     /// attribute if absent, replaces its value otherwise.
+    ///
+    /// The `value` encoding depends on `type_name`, and this is the ONE place it is
+    /// interpreted so no call site hand-escapes:
+    /// - `type_name == "string"` → `value` is the **raw** string content, authored
+    ///   verbatim as `Value::String`. USDA's lexer keeps raw bytes between delimiters
+    ///   (it does not unescape) and the writer picks a delimiter the content can't
+    ///   close, so backslashes/quotes/newlines round-trip — pass arbitrary text (a
+    ///   whole rhai scenario source) directly. The one unserializable value, both
+    ///   `"""` and `'''` present, is rejected at apply.
+    /// - any other type → `value` is a USD **literal** (e.g. `"(0.2, 0.2, 0.8)"`,
+    ///   `"0.5"`), parsed into a typed [`sdf::Value`] by openusd's parser.
     SetAttribute {
         /// Layer to write to.
         edit_target: LayerId,
@@ -276,11 +287,10 @@ pub enum UsdOp {
         path: String,
         /// The name of the attribute (e.g. `primvars:displayColor` or `inputs:roughness`).
         name: String,
-        /// The USD type name of the attribute (e.g. `color3f` or `float`).
+        /// The USD type name of the attribute (e.g. `color3f`, `float`, `string`).
         type_name: String,
-        /// The attribute value formatted as a USD-compliant string literal
-        /// (e.g. `"(0.2, 0.2, 0.8)"`, `"0.5"`). Parsed into a typed
-        /// [`sdf::Value`] by openusd's own parser at apply time.
+        /// The value: **raw content** when `type_name == "string"`, otherwise a
+        /// USD-compliant literal. See the variant doc for the split.
         value: String,
     },
     /// Author one **time sample** of an attribute on the prim at `path` —
@@ -1104,31 +1114,63 @@ impl Document for UsdDocument {
                 ..
             } => {
                 let prim_sdf = self.require_prim_anywhere(&path)?;
-                let val = parse_attribute_value(&type_name, &value).map_err(|e| {
-                    DocumentError::ValidationFailed(format!(
-                        "SetAttribute `{name}` ({type_name}): {e}"
-                    ))
-                })?;
+
+                // The single place attribute values are turned into USD values, so
+                // NO call site ever hand-escapes. Two rules by type:
+                //   • `string` → the value is RAW content, authored as `Value::String`
+                //     with no literal parsing. USDA's lexer keeps raw bytes between
+                //     delimiters (it does not unescape), and the writer picks a
+                //     delimiter the content can't close — so backslashes, quotes and
+                //     newlines round-trip verbatim. The one thing USDA cannot delimit
+                //     is a value containing BOTH `"""` and `'''`; reject that here, at
+                //     apply, not at save (a stranded unsavable document is worse).
+                //   • everything else → the value is a USD literal we parse.
+                let is_string = type_name == "string";
+                let val = if is_string {
+                    if value.contains("\"\"\"") && value.contains("'''") {
+                        return Err(DocumentError::ValidationFailed(format!(
+                            "SetAttribute `{name}` (string): value contains both `\"\"\"` and \
+                             `'''`, which USDA cannot delimit (its lexer does not unescape)"
+                        )));
+                    }
+                    openusd::sdf::Value::String(value.clone())
+                } else {
+                    parse_attribute_value(&type_name, &value).map_err(|e| {
+                        DocumentError::ValidationFailed(format!(
+                            "SetAttribute `{name}` ({type_name}): {e}"
+                        ))
+                    })?
+                };
+
                 // Typed inverse: restore the attribute's prior value in THIS layer,
                 // so undo replays incrementally (the projector's `apply_incremental_
                 // op_to_stage` path) instead of a `ReplaceSource` that forces a
                 // whole-layer rebuild. Only when the attribute already had a value
-                // here whose literal round-trips cleanly; a newly-authored attribute
-                // (or an un-recoverable literal) falls back to the always-correct
-                // whole-source snapshot — which also correctly *removes* the new
-                // opinion on undo, something a typed `SetAttribute` cannot express.
-                let old_literal = prim_sdf
+                // here that round-trips; a newly-authored attribute (or an
+                // un-recoverable literal) falls back to the always-correct whole-
+                // source snapshot — which also correctly *removes* the new opinion on
+                // undo, something a typed `SetAttribute` cannot express. For a string
+                // the prior value is recovered RAW (matching the raw author above);
+                // for other types via `value_to_literal`.
+                let prior = prim_sdf
                     .append_property(name.as_str())
                     .ok()
-                    .and_then(|attr| self.layer(target).field(&attr, "default").cloned())
-                    .and_then(|old| author::value_to_literal(&type_name, old));
-                let inverse = match old_literal {
-                    Some(lit) => UsdOp::SetAttribute {
+                    .and_then(|attr| self.layer(target).field(&attr, "default").cloned());
+                let recovered = if is_string {
+                    match prior {
+                        Some(openusd::sdf::Value::String(s)) => Some(s),
+                        _ => None,
+                    }
+                } else {
+                    prior.and_then(|old| author::value_to_literal(&type_name, old))
+                };
+                let inverse = match recovered {
+                    Some(v) => UsdOp::SetAttribute {
                         edit_target: id.clone(),
                         path: path.clone(),
                         name: name.clone(),
                         type_name: type_name.clone(),
-                        value: lit,
+                        value: v,
                     },
                     None => self.coarse_inverse(target, &id),
                 };
@@ -1399,6 +1441,7 @@ impl Document for UsdDocument {
                 self.commit(target, new_data, UsdChange::Resync { path });
                 Ok(inverse)
             }
+
         };
         if result.is_ok() {
             self.record_op(logged_op);
@@ -1495,6 +1538,101 @@ mod tests {
         assert!(src.contains("physics:body1") && src.contains("/Rig/Chassis/Wheel"), "body1 → part");
         assert!(src.contains("physics:localPos0"), "anchor authored");
         assert!(src.contains("physics:axis"), "revolute axis authored");
+    }
+
+    #[test]
+    fn set_attribute_string_round_trips_realistic_rhai_verbatim() {
+        // `SetAttribute` with type `string` authors the value RAW: a rhai scenario's
+        // source must survive serialize→reparse byte-for-byte without the caller
+        // hand-escaping a USD literal. This is what real rhai looks like — embedded
+        // double quotes, backslashes, and newlines. (The openusd USDA lexer keeps raw
+        // bytes between triple-quote delimiters, so `\"` and `\` pass through verbatim
+        // — no escape processing to corrupt them.)
+        let src = "fn on_tick(me) {\n    let s = \"he said \\\"hi\\\"\";\n    let path = \"C:\\\\rover\";\n    notify(s + path, \"info\");\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(60),
+            "#usda 1.0\ndef Xform \"Rover\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/script.usda"),
+        );
+        doc.apply(UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: "/Rover".into(),
+            name: "lunco:script".into(),
+            type_name: "string".into(),
+            value: src.to_string(),
+        })
+        .unwrap();
+
+        // Serialize, then reparse from scratch — the true round-trip a save+reload
+        // does. The recovered value must equal the original verbatim.
+        let reparsed = UsdDocument::with_origin(
+            DocumentId::new(61),
+            doc.source(),
+            DocumentOrigin::writable_file("/tmp/script2.usda"),
+        );
+        let got = reparsed
+            .data()
+            .prim_attribute_value::<String>(&SdfPath::new("/Rover").unwrap(), "lunco:script");
+        assert_eq!(
+            got.as_deref(),
+            Some(src),
+            "real rhai source must round-trip verbatim.\nserialized:\n{}",
+            doc.source()
+        );
+    }
+
+    #[test]
+    fn set_attribute_string_rejects_unserializable_both_triple_delimiters() {
+        // The one thing USDA cannot delimit: a value containing BOTH `"""` and
+        // `'''` (its lexer does not unescape, so neither triple-quote is safe). We
+        // reject at apply, not at save — a stranded unsavable document is worse than
+        // a clear up-front error. Real rhai never produces this.
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(63),
+            "#usda 1.0\ndef Xform \"Rover\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/script3.usda"),
+        );
+        let err = doc.apply(UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: "/Rover".into(),
+            name: "lunco:script".into(),
+            type_name: "string".into(),
+            value: "a \"\"\" b ''' c".into(),
+        });
+        assert!(
+            matches!(err, Err(DocumentError::ValidationFailed(_))),
+            "both-triple-delimiter content must be rejected at apply, got {err:?}"
+        );
+        // And the document is untouched — the rejected op left no partial edit.
+        assert!(
+            !doc.source().contains("lunco:script"),
+            "a rejected op must not partially author"
+        );
+    }
+
+    #[test]
+    fn set_attribute_string_undoes() {
+        let mut host = DocumentHost::new(UsdDocument::with_origin(
+            DocumentId::new(62),
+            "#usda 1.0\ndef Xform \"Rover\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/s.usda"),
+        ));
+        host.apply(Mutation::local(UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: "/Rover".into(),
+            name: "lunco:script".into(),
+            type_name: "string".into(),
+            value: "fn on_tick(me) {}".into(),
+        }))
+        .unwrap();
+        assert!(host.document().source().contains("on_tick"), "authored");
+        assert!(reparses_cleanly(host.document()), "authored string reparses cleanly");
+        host.undo().unwrap();
+        assert!(
+            !host.document().source().contains("on_tick"),
+            "undo removes the newly-authored attribute: {}",
+            host.document().source()
+        );
     }
 
     #[test]

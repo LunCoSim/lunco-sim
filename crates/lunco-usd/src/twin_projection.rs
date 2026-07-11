@@ -144,6 +144,27 @@ impl DocBackedTwinScenes {
     }
 }
 
+/// The editable document backing a running scene's stage asset, if the scene is
+/// **doc-backed** (loaded as `twin://<name>/<rel>`). Returns `None` for a raw-file
+/// scene — which has no savable source document, so a caller (e.g. saving a
+/// live-edited scenario back onto its prim) must refuse rather than silently drop
+/// the edit. This is the asset↔document bridge that unblocks scenario save-back:
+/// a runtime entity carries a `UsdPrimPath { stage_handle, path }`, and this maps
+/// that stage handle to the `UsdDocumentRegistry` document you can `ApplyUsdOp` on.
+pub fn scene_document_for(
+    backed: &DocBackedTwinScenes,
+    asset_server: &AssetServer,
+    scene: AssetId<UsdStageAsset>,
+) -> Option<DocumentId> {
+    // `AssetPath::path()` is the path WITHOUT the `twin://` source scheme, i.e.
+    // `<name>/<rel>`. `rel` may contain slashes (`scenes/sandbox/scene.usda`), so
+    // split only on the FIRST one. (Same idiom as `cache_terrain_document`.)
+    let asset_path = asset_server.get_path(scene)?;
+    let rel_path = asset_path.path().to_string_lossy();
+    let (name, rel) = rel_path.split_once('/')?;
+    backed.doc_for(name, rel)
+}
+
 /// A **referenced spawn** whose asset closure is being fetched before it can be
 /// authored onto the live scene stage. When a structural edit adds a prim that
 /// references an asset whose layer bytes aren't loaded into the scene's live
@@ -501,11 +522,18 @@ fn apply_incremental_op_to_stage(
         }
         UsdOp::SetAttribute { path, name, type_name, value, .. } => {
             let Ok(sp) = openusd::sdf::Path::new(path) else { return };
-            let v = match lunco_usd_bevy::author::parse_attribute_value(type_name, value) {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!("[twin] parse attribute {path}.{name} ({type_name}): {e}");
-                    return;
+            // Mirror the document op: a `string` value is RAW (`Value::String`, no
+            // literal parse); every other type is a parsed literal.
+            let is_string = type_name == "string";
+            let v = if is_string {
+                openusd::sdf::Value::String(value.clone())
+            } else {
+                match lunco_usd_bevy::author::parse_attribute_value(type_name, value) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        warn!("[twin] parse attribute {path}.{name} ({type_name}): {e}");
+                        return;
+                    }
                 }
             };
             let authored = match world
@@ -521,6 +549,13 @@ fn apply_incremental_op_to_stage(
                 },
                 None => false,
             };
+            // A `string` attribute is non-visual metadata/behavior (`lunco:script`,
+            // descriptions, `lunco:policy:source`) — no geometry/material
+            // consequence, and a refresh would hot-reload a running scenario
+            // (resetting its `this`) on a mere save. So author, don't refresh.
+            if is_string {
+                return;
+            }
             // Refresh only what the edit can actually change: a material/shader
             // edit fans out through `material:binding` to meshes anywhere (whole
             // scene), but a geometry/xform attribute edit is local to its own prim

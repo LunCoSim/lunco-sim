@@ -269,12 +269,45 @@ That preserves the project's standing rule that the Inspector *derives* and neve
 - Script diagnostics carry line and column (`ScriptStatus` → `{severity, message, line, col}`)
   and **nothing consumes them**. Modelica has a diagnostics panel with click-to-source; scripting
   has no analogue. The data exists; the consumer doesn't.
-- Live-edited scenarios **cannot be saved back to their USD prim** — an acknowledged TODO at
-  `lunco-scripting/src/commands.rs:198`. For "create/edit rhai models" this is a blocker, not a polish item.
+- Live-edited scenarios **can now be saved back to their USD prim** — DONE (was the
+  `lunco-scripting/src/commands.rs:198` TODO; see §3.7). The remaining gap is UI to invoke it.
 
 Also worth stating plainly, because it will otherwise arrive as a bug report: a scenario's
 per-entity `this` state is wiped on hot-reload and on scene restart, by design
 (`scenario.rs:320`, `world_bridge.rs:924-957`). Reboot means behaviour restarts from scratch.
+
+### 3.7 Save a live-edited scenario back to its prim — DONE
+
+The TODO said this was "BLOCKED on a USD bridge that must be built." The bridge was already
+built by the twin-projection work: `DocBackedTwinScenes` maps a running scene's
+`twin://<name>/<rel>` stage to its editable `UsdDocument`. So the save is now three pieces:
+
+- **`lunco_usd::twin_projection::scene_document_for(backed, asset_server, scene_asset)`** — the
+  asset↔document bridge. A runtime entity carries a `UsdPrimPath { stage_handle, path }`; this
+  maps that stage handle to the editable `DocumentId` (or `None` for a raw-file scene, which has
+  no savable document — so it is refused, never silently dropped).
+- **`SaveScenario { target }`** (in `lunco-sandbox`, the only crate that depends on both
+  `lunco-usd` and `lunco-scripting` — `lunco-usd-sim` can't, it would be circular). It resolves
+  the entity's live source (`ScriptRegistry`), its prim path, and the backing document, then
+  authors `lunco:script` onto the root layer via `ApplyUsdOp` — so it journals, and
+  `SaveDocument` writes it through to the `.usda`.
+- **String authoring is one architectural rule, not per-call-site escaping.** `SetAttribute`
+  with `type_name == "string"` authors the value **raw** (`Value::String`): the USDA writer
+  picks a delimiter the content can't close, and the lexer keeps raw bytes between delimiters
+  (it does *not* unescape), so backslashes, quotes and newlines round-trip verbatim. The one
+  thing USDA cannot delimit — a value containing both `"""` and `'''` — is rejected at apply,
+  not at save (a stranded unsavable document is worse). This is the *single* place attribute
+  strings are handled, so no call site ever hand-escapes a literal. It replaced a separate
+  `SetStringAttribute` op (itself a DRY violation) and the fragile `format!("{:?}")` that
+  `SetRhaiPolicy` used, which produced Rust-debug quoting, not USDA delimiting, and silently
+  corrupted any multi-line rhai source. A `string` edit also skips the projector's visual
+  refresh — a string attribute is non-visual metadata/behaviour, and refreshing would hot-reload
+  a running scenario (resetting its `this`) on a mere save.
+
+Not yet verified: the full loop in a live twin (edit → `SaveScenario` → reload → source stuck).
+The entity→document resolution runs through bevy's `AssetServer`, so that last inch wants an
+in-app check rather than a unit test that would mostly exercise bevy. Everything it is built
+from — the raw-string round-trip, the rejection, undo, the bridge idiom — is tested.
 
 ---
 
