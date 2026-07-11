@@ -230,7 +230,7 @@ pub fn update_terrain_brush_ghost(
         // (Alt/Ctrl) toggles, so peek immutably and touch it only on a real change.
         let changed = materials.get(&mat.0).is_some_and(|m| m.base_color != color);
         if changed {
-            if let Some(m) = materials.get_mut(&mat.0) {
+            if let Some(mut m) = materials.get_mut(&mat.0) {
                 m.base_color = color;
             }
         }

@@ -27,6 +27,7 @@ pub mod collider;
 pub mod crater;
 pub mod derive;
 pub mod error;
+pub mod field;
 pub mod modifier;
 pub mod overzoom;
 pub mod quadtree;
@@ -38,6 +39,7 @@ pub use carve::{CarveField, CarvePrimitive};
 pub use collider::{prepare_collider_heights, slope_limit_grid};
 pub use crater::{crater_profile, Crater, CraterField, Craters, CRATER_REACH};
 pub use error::measure_node_error;
+pub use field::{field_map, AspectField, ElevationField, FieldKind, SlopeField, SurfaceField};
 pub use modifier::{BrushModifier, FlattenModifier, HeightModifier, LayeredHeightSource};
 pub use overzoom::Overzoom;
 pub use derive::{
