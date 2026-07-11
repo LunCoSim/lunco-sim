@@ -456,21 +456,28 @@ fn builtin_task_fn_sugar_auto_inits_with_no_on_start() {
 #[test]
 fn builtin_task_par_all_waits_for_every_branch() {
     // par_all is done only when ALL branches finish. Branch A finishes tick 1
-    // (a once); branch B is a 2-step seq that finishes tick 2 → the whole task
-    // completes on tick 2, not tick 1.
+    // (a once); branch B holds on wait_for(GO) until the event is delivered on
+    // tick 2 → the whole task completes on tick 2, not tick 1. (Branch B needs a
+    // real suspension point: the kernel `seq` advances THROUGH instantly-done
+    // children in one tick — standard behaviour-tree run-through, unlike the
+    // retired rhai engine's one-step-per-tick cursor.)
     let source = r#"
         fn on_start(me) {
+            this.sent = false;
             this.task = par_all([
                 once(|m| emit("A", 1)),
-                seq([ once(|m| emit("B1", 1)), once(|m| emit("B2", 1)) ]),
+                seq([ once(|m| emit("B1", 1)), wait_for("GO"), once(|m| emit("B2", 1)) ]),
             ]);
+        }
+        fn on_tick(me) {
+            if !this.sent { emit("GO", 1); this.sent = true; }
         }
     "#;
     let (mut app, _rover) = setup(source);
-    tick(&mut app);
+    tick(&mut app); // A + B1 fire; GO goes into the inbox; B holds on wait_for
     assert!(emitted(&app, "A") && emitted(&app, "B1"), "tick1 runs both branches' first step");
-    assert!(!emitted(&app, "TASK_COMPLETE"), "par_all must wait for branch B's 2nd step");
-    tick(&mut app);
+    assert!(!emitted(&app, "TASK_COMPLETE"), "par_all must wait for branch B to pass wait_for");
+    tick(&mut app); // GO delivered → B runs through to B2 → all branches done
     assert!(emitted(&app, "B2"), "branch B advances on tick2");
     assert!(emitted(&app, "TASK_COMPLETE"), "par_all completes once all branches finish");
 }

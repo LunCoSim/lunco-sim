@@ -39,7 +39,7 @@ use std::sync::Arc;
 use lunco_core::{Ack, CommandResults, OpId, TelemetryEvent, TelemetryValue};
 use lunco_hash::fnv1a64;
 
-use rhai::{Dynamic, Engine, ImmutableString, Map, AST};
+use rhai::{Dynamic, Engine, FnPtr, ImmutableString, Map, AST};
 
 use crate::bridge_core::{self, ValueBuilder};
 use crate::doc::ScriptLanguage;
@@ -263,9 +263,29 @@ fn scenario_debug() -> bool {
 /// to that file (error locality). Both prelude uses — the global module and the
 /// per-scenario `prelude_ast` merge — go through here.
 pub(crate) fn compile_prelude(engine: &Engine) -> Result<AST, rhai::ParseError> {
+    // Disk-first (edit -> restart, no rebuild); a disk prelude that fails to
+    // parse falls back to the EMBEDDED copy so a broken helper edit degrades
+    // to stock behaviour instead of bricking startup. The embedded copy is
+    // parse-tested in CI, so its failure is a real bug worth propagating.
+    match compile_prelude_set(engine, lunco_assets::scripting::prelude_files()) {
+        Ok(ast) => Ok(ast),
+        Err(e) => {
+            error!(
+                "[rhai] prelude failed to parse — falling back to the embedded prelude \
+                 (fix assets/scripting/prelude/ and restart): {e}"
+            );
+            compile_prelude_set(engine, lunco_assets::scripting::embedded_prelude_files())
+        }
+    }
+}
+
+fn compile_prelude_set(
+    engine: &Engine,
+    files: Vec<(String, String)>,
+) -> Result<AST, rhai::ParseError> {
     let mut acc: Option<AST> = None;
-    for (name, src) in lunco_assets::scripting::prelude_files() {
-        match engine.compile(src) {
+    for (name, src) in files {
+        match engine.compile(&src) {
             Ok(part) => acc = Some(match acc {
                 Some(a) => a.merge(&part),
                 None => part,
@@ -276,7 +296,7 @@ pub(crate) fn compile_prelude(engine: &Engine) -> Result<AST, rhai::ParseError> 
             }
         }
     }
-    Ok(acc.expect("prelude dir is non-empty"))
+    Ok(acc.expect("prelude set is non-empty"))
 }
 
 /// Build a rhai [`Engine`] with the World-bridge verbs registered, the embedded
@@ -289,10 +309,10 @@ pub fn build_world_engine() -> Engine {
     engine.set_max_call_levels(64);
     engine.set_max_string_size(64 * 1024);
     engine.set_max_array_size(10_000);
-    // Above rhai's defaults (64 global / 32 in functions): the built-in task tree
-    // nests composites (e.g. par_all → seq → leaf), and the recursive `__tick`
-    // helpers walk that depth. Runtime stays bounded by the operations + call-level
-    // caps above; this only widens the structural nesting allowance.
+    // Above rhai's defaults (64 global / 32 in functions): task-tree literals
+    // nest composites (e.g. par_all → seq → leaf) as one map expression. The
+    // tick recursion itself is native now (task_tree.rs), so this only widens
+    // the structural nesting allowance for authored trees.
     engine.set_max_expr_depths(128, 128);
 
     // cmd(name, #{params}) -> #{ id, ok, data, error }. Routes through
@@ -823,13 +843,26 @@ struct RhaiScenarioState {
     /// Which events reach this entity's `on_event` (default: all). Set from
     /// `subscribe()` calls harvested after `on_start`.
     filter: EventFilter,
+    /// The `this.task` map compiled onto the [`lunco_behavior`] kernel (the
+    /// native replacement for the prelude's retired `__tick*` engine). Runtime
+    /// tick state (cursors, dwell stamps) lives HERE, not in the map — the map
+    /// stays the pristine spec.
+    task: Option<crate::task_tree::CompiledTask>,
+    /// Events buffered for the task's `wait_for` leaves since the last tick
+    /// (`(name, emitter-gid)`), drained by [`tick_native_task`] — the native
+    /// replacement for the retired `this.__events` buffer.
+    task_events: Vec<(ImmutableString, i64)>,
 }
 
 /// The rhai [`ScenarioRuntime`](crate::scenario::ScenarioRuntime): one
 /// bridge-enabled engine + a per-entity program cache. Wrapped by
 /// `ScenarioDriver<RhaiScenarioRuntime>` (which owns the neutral lifecycle FSM).
 pub struct RhaiScenarioRuntime {
-    engine: Engine,
+    /// `Arc` so the native task-tree ctx (which must be `'static` — see
+    /// `task_tree::TaskCtx`) can own a handle for closure calls; the runtime
+    /// is single-threaded per access, so `Arc::get_mut` for tool hot-reload
+    /// always succeeds (no ctx outlives its tick).
+    engine: std::sync::Arc<Engine>,
     states: std::collections::HashMap<Entity, RhaiScenarioState>,
     /// Content-addressed memo of compile *outcomes*, keyed by `fnv1a64(source)`.
     /// The compile step (parse + prelude-merge + mask derive) is pure structure,
@@ -847,7 +880,7 @@ pub struct RhaiScenarioRuntime {
     /// since the working set is small). A finer LRU is deferred until measured.
     compiled: std::collections::HashMap<u64, CacheEntry>,
     /// The prelude compiled to an `AST`, merged into every scenario's AST so its
-    /// helpers — including the engine-driven `__run_task` / `__note_task_event`
+    /// helpers — including the engine-driven `__init_task` / `__note_task_event`
     /// drivers — are resolvable by `call_fn` (which searches the AST, NOT the
     /// engine's registered global modules). The prelude stays registered as a
     /// global module too, for the runtime-resolution path used while a script's
@@ -865,7 +898,7 @@ impl Default for RhaiScenarioRuntime {
         let prelude_ast =
             compile_prelude(&engine).unwrap_or_else(|e| panic!("prelude must compile: {e}"));
         Self {
-            engine,
+            engine: std::sync::Arc::new(engine),
             states: std::collections::HashMap::new(),
             compiled: std::collections::HashMap::new(),
             prelude_ast,
@@ -900,7 +933,7 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                 match self.engine.compile(source) {
                     Ok(ast) => {
                         // Merge the prelude's functions into the scenario AST so
-                        // the engine-driven `__run_task`/`__note_task_event` (and
+                        // the engine-driven `__init_task`/`__note_task_event` (and
                         // every other prelude helper) are resolvable by `call_fn`.
                         // Merging prelude←user lets a user function win on any
                         // name/arity clash; the prelude has no top-level body, so
@@ -953,6 +986,8 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                 scope,
                 this: Dynamic::from_map(Map::new()),
                 filter: EventFilter::default(),
+                task: None,
+                task_events: Vec::new(),
             },
         );
         CompileOutcome::Ready { top_level }
@@ -994,10 +1029,16 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         // so a plain scenario pays only a couple of cheap calls.
         let drivers: &[&str] = match hook {
             ScenarioHook::Start => &["__init_task", "__init_mission"],
-            ScenarioHook::Tick => &["__run_task", "__run_mission"],
+            // `__run_task` is retired: `this.task` ticks natively on the
+            // lunco-behavior kernel (see `tick_native_task`), same slot in the
+            // order (task advances before the mission evaluates).
+            ScenarioHook::Tick => &["__run_mission"],
             ScenarioHook::Stop => &[],
         };
         let mut driver_err = None;
+        if matches!(hook, ScenarioHook::Tick) {
+            driver_err = tick_native_task(&self.engine, st, self_gid);
+        }
         for name in drivers {
             let e = call_prelude_driver(
                 &self.engine,
@@ -1042,6 +1083,14 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
             bridge_core::hash_str(&event.name),
         );
         let st = self.states.get_mut(&entity)?;
+        // Buffer for the native task tree's `wait_for` leaves (drained every
+        // tick by `tick_native_task`). Capped defensively: a scenario that stops
+        // ticking while events keep arriving must not grow this unboundedly.
+        st.task_events.push((event.name.as_str().into(), event.source as i64));
+        if st.task_events.len() > 256 {
+            let excess = st.task_events.len() - 256;
+            st.task_events.drain(..excess);
+        }
         // Per-EVENT hot path: only enter the VM for the user hook if the program
         // defines `on_event` (cached mask bit — no AST scan) AND this event passes
         // the entity's subscription filter (default: all). Either fails → skip the
@@ -1089,7 +1138,10 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         // Hot-reload tool libraries if any were (re)registered since last pass.
         let cur = crate::tool_libs::generation();
         if self.tool_gen != cur {
-            crate::tool_libs::refresh(&mut self.engine);
+            // No task ctx is alive between ticks, so the Arc is unique here.
+            let engine = std::sync::Arc::get_mut(&mut self.engine)
+                .expect("engine Arc must be unique outside a task tick");
+            crate::tool_libs::refresh(engine);
             self.tool_gen = cur;
         }
     }
@@ -1163,6 +1215,173 @@ fn call_event_hook(
 /// user's AST) with `this` bound — for engine-driven hooks like task auto-advance
 /// that live in the prelude, so the AST-presence gate in [`call_hook`] would skip
 /// them. A missing function (a custom prelude without the driver) is benign.
+/// One tick's world access for the native task tree: leaves call script
+/// closures through the entity's own program AST (closures carry their
+/// captures by currying — same visibility the retired rhai engine gave them;
+/// named-fn pointers resolve against the merged prelude+user AST).
+struct RhaiTaskCtx {
+    engine: std::sync::Arc<Engine>,
+    program: Arc<CompiledProgram>,
+    /// Host gid, passed to every leaf closure (the `|m| …` argument).
+    me: i64,
+    now: f64,
+    events: Vec<(ImmutableString, i64)>,
+    /// First closure error this tick (leaves keep `Running`; the error surfaces
+    /// once as the hook's diagnostic — the retired engine aborted-and-retried
+    /// the same way).
+    error: Option<(String, rhai::Position)>,
+}
+
+impl RhaiTaskCtx {
+    fn note(&mut self, e: Box<rhai::EvalAltResult>) {
+        error!("[rhai] task leaf failed: {e}");
+        if self.error.is_none() {
+            self.error = Some((e.to_string(), e.position()));
+        }
+    }
+}
+
+impl crate::task_tree::TaskCtx for RhaiTaskCtx {
+    fn now(&self) -> f64 {
+        self.now
+    }
+    fn events(&self) -> &[(ImmutableString, i64)] {
+        &self.events
+    }
+    fn resolve(&mut self, path: &str) -> i64 {
+        bridge_core::find(path)
+    }
+    fn call_action(&mut self, f: &FnPtr) -> Result<(), ()> {
+        match f.call::<Dynamic>(&self.engine, &self.program.ast, (self.me,)) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                self.note(e);
+                Err(())
+            }
+        }
+    }
+    fn call_pred(&mut self, f: &FnPtr) -> Result<bool, ()> {
+        match f.call::<Dynamic>(&self.engine, &self.program.ast, (self.me,)) {
+            Ok(d) => d.as_bool().map_err(|t| {
+                error!("[rhai] task predicate returned `{t}`, expected bool");
+                if self.error.is_none() {
+                    self.error = Some((
+                        format!("task predicate must return a bool, got `{t}`"),
+                        rhai::Position::NONE,
+                    ));
+                }
+            }),
+            Err(e) => {
+                self.note(e);
+                Err(())
+            }
+        }
+    }
+}
+
+/// What `tick_native_task`'s spec inspection decided under the `this` borrow.
+enum TaskPlan {
+    /// No `this.task` declared (or it was cleared) — drop any compiled tree.
+    None,
+    /// The compiled tree matches the current spec — just tick it.
+    Have,
+    /// A new/re-assigned spec (no `__bt` marker matching): compile this clone
+    /// under the given identity.
+    Compile(Dynamic, i64),
+}
+
+/// Advance `this.task` one tick on the [`lunco_behavior`] kernel — the native
+/// replacement for the prelude's retired `__run_task` rhai driver. The map in
+/// `this.task` is the pristine SPEC (constructors build pure data); runtime
+/// state lives in the compiled tree on [`RhaiScenarioState`]. A fresh
+/// assignment is detected by the `__bt` identity marker this function stamps
+/// into the map after compiling (a rhai re-assignment always produces an
+/// unmarked map). Emits `TASK_COMPLETE` once on root success (parity with the
+/// retired engine) and `TASK_FAILED` on root failure (new — only reachable via
+/// the new `check`/`sel`/`retry` vocabulary).
+fn tick_native_task(
+    engine: &std::sync::Arc<Engine>,
+    st: &mut RhaiScenarioState,
+    self_gid: i64,
+) -> Option<(String, rhai::Position)> {
+    // Drain unconditionally so the buffer can't accumulate while no task runs.
+    let events = std::mem::take(&mut st.task_events);
+
+    static NEXT_TASK_ID: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(1);
+
+    // Inspect the spec (and stamp a new marker) inside one `this` borrow.
+    let plan = {
+        let Some(mut this_map) = st.this.write_lock::<Map>() else {
+            return None;
+        };
+        match this_map.get_mut("task") {
+            None => TaskPlan::None,
+            Some(v) if v.is_unit() => TaskPlan::None,
+            Some(v) => {
+                let marked = v
+                    .read_lock::<Map>()
+                    .and_then(|m| m.get("__bt").and_then(|d| d.as_int().ok()));
+                match (marked, st.task.as_ref()) {
+                    (Some(id), Some(ct)) if ct.id == id => TaskPlan::Have,
+                    _ => {
+                        let id = NEXT_TASK_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let spec = v.clone();
+                        if let Some(mut m) = v.write_lock::<Map>() {
+                            m.insert("__bt".into(), Dynamic::from_int(id));
+                        }
+                        TaskPlan::Compile(spec, id)
+                    }
+                }
+            }
+        }
+    };
+
+    match plan {
+        TaskPlan::None => {
+            st.task = None;
+            return None;
+        }
+        TaskPlan::Have => {}
+        TaskPlan::Compile(spec, id) => match crate::task_tree::compile_node(&spec) {
+            Ok(tree) => st.task = Some(crate::task_tree::CompiledTask::new(id, tree)),
+            Err(msg) => {
+                error!("[rhai] this.task does not compile: {msg}");
+                // Poisoned (latched done) so the error reports once, not every tick.
+                st.task = Some(crate::task_tree::CompiledTask::poisoned(id));
+                return Some((format!("task tree invalid: {msg}"), rhai::Position::NONE));
+            }
+        },
+    }
+
+    let program = st.program.clone();
+    let Some(ct) = st.task.as_mut() else { return None };
+    if ct.done {
+        return None;
+    }
+    let mut ctx = RhaiTaskCtx {
+        engine: engine.clone(),
+        program,
+        me: self_gid,
+        now: bridge_core::elapsed_seconds(),
+        events,
+        error: None,
+    };
+    let status = ct.tree.tick(&mut ctx);
+    match status {
+        lunco_behavior::Status::Running => {}
+        lunco_behavior::Status::Success => {
+            ct.done = true;
+            bridge_core::emit("TASK_COMPLETE", TelemetryValue::I64(0));
+        }
+        lunco_behavior::Status::Failure => {
+            ct.done = true;
+            warn!("[rhai] task tree ended in Failure for gid {self_gid}");
+            bridge_core::emit("TASK_FAILED", TelemetryValue::I64(0));
+        }
+    }
+    ctx.error
+}
+
 fn call_prelude_driver(
     engine: &Engine,
     scope: &mut rhai::Scope,

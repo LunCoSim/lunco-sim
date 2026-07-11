@@ -106,6 +106,8 @@ fn drive_from_bindings(
     // doesn't also drive the vessel — see the `held` closure below. `Option` so a
     // controller-only test app without the workbench still runs (no gate).
     egui_focus: Option<Res<lunco_core::EguiFocus>>,
+    // Per-vessel "keys were active last tick" memory for the idle-yield below.
+    mut was_active: Local<std::collections::HashMap<Entity, bool>>,
     mut commands: Commands,
 ) {
     let client = matches!(*role, lunco_core::NetworkRole::Client);
@@ -152,6 +154,22 @@ fn drive_from_bindings(
                 _ => None,
             })
             .flatten();
+        // Spec-034 scope B (idle-yield): an idle possessing human used to write
+        // every bound port as 0 EVERY tick, stomping any scripted/API `SetPorts`
+        // on the same vessel — the "autopilot and avatar fight" (a tutorial's
+        // debug autopilot could not drive a vessel the player possessed). Go
+        // SILENT in steady idle and emit exactly ONE all-zero batch on the
+        // active→idle edge — ports latch, so a single zero write still gives
+        // the clean stop the every-tick stream provided. A pressed key resumes
+        // writing immediately: the human always preempts a script mid-drive.
+        // Predicted clients keep the every-tick stream (reconcile's input log
+        // assumes a contiguous seq stream; scripts don't co-drive on a client).
+        let active = writes.iter().any(|(_, v)| v.abs() > f64::EPSILON);
+        let prev = was_active.insert(link.vessel_entity, active).unwrap_or(false);
+        if !active && !prev && owned_gid.is_none() {
+            continue;
+        }
+
         let seq = if let Some(g) = owned_gid {
             let entry = log.0.entry(g).or_default();
             let s = entry.next_seq.wrapping_add(1); // seq 0 reserved = "no input yet"

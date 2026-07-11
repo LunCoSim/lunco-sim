@@ -243,6 +243,7 @@ authoritative list. Highlights:
 - **Sensing:** `velocity`/`speed`, `raycast`, `obstacle_ahead`, `ground_height`, `nearest`, `entities_in_radius`.
 - **Collision events:** `collision_pair`/`collision_other`/`entered`/`exited` (parse `COLLISION_START`/`COLLISION_END`).
 - **Sequencer (Layer 1):** `seq_init`, `run_steps`, `seq_note_event`, step ctors `step`/`once`/`wait`/`wait_until`/`wait_for`/`wait_for_from(event, source_id)`; `seq([steps])` shorthand to build and run immediately.
+- **Task trees (`this.task`):** composites `seq`/`par_all`/`par_race`/`repeat`/`forever` plus the failure-aware kernel vocabulary `check(pred)`/`sel`/`retry`/`invert`/`force_ok`/`force_fail`/`reactive_seq`/`reactive_sel`. The constructors build pure data; the tree is compiled once and TICKED NATIVELY on the `lunco-behavior` kernel (the same engine the rover autopilot uses) — a `seq` advances through instantly-done steps within one tick, so use `wait`/`wait_until`/`wait_for` as the suspension points. Emits `TASK_COMPLETE` on root success, `TASK_FAILED` on root failure.
 - **Timeline (Layer 2):** `compile_timeline`, `timeline_step`.
 - **Selection toolkit:** `all_of_type`, `min_by`/`max_by`, `count_where`, `nearest_where`/`farthest_where`, `has_component`, `kind`.
 - **View / cutscenes:** `set_camera(name)` — cut the scene viewport to a `def Camera` by name (leaf or full USD path); pairs with a timeline for cutscene camera changes. `possess(vessel)`, `notify(msg)`.
