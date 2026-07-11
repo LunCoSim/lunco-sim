@@ -47,6 +47,11 @@ fn test_celestial_startup_and_movement() {
     app.init_asset::<bevy_shader::Shader>();
     app.init_resource::<Assets<ShaderMaterial>>();
     app.init_asset::<Image>();
+    // bevy 0.19: `GizmoPlugin` registers `draw_skinned_mesh_bounds`, which
+    // hard-requires `Assets<SkinnedMeshInverseBindposes>` (normally registered
+    // by the render stack's `MeshPlugin`, absent headless) — and 0.19's default
+    // error handler PANICS on failed param validation instead of warning.
+    app.init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
     app.add_plugins(bevy::gizmos::GizmoPlugin);
     app.add_plugins(CelestialPlugin);
     // Override the NoOp provider (installed by CelestialPlugin) with one whose
