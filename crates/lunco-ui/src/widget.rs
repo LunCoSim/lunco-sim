@@ -74,7 +74,7 @@ impl std::fmt::Debug for WidgetId {
 ///
 /// impl WidgetSystem for TimeSeriesWidget<'_, '_> {
 ///     fn run(world: &mut World, state: &mut SystemState<Self>, ui: &mut egui::Ui, id: WidgetId) {
-///         let mut params = state.get_mut(world);
+///         let Ok(mut params) = state.get_mut(world) else { return };
 ///         // Render egui_plot with params.channels, params.plotted
 ///     }
 /// }

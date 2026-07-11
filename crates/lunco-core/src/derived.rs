@@ -28,7 +28,9 @@ struct ChangeDetector<S: Component> {
 impl<S: Component> ChangeDetector<S> {
     fn changed_since_last_check(&mut self, world: &mut World) -> bool {
         let state = self.state.get_or_insert_with(|| SystemState::new(world));
-        let (changed, mut removed) = state.get_mut(world);
+        let (changed, mut removed) = state
+            .get_mut(world)
+            .expect("ChangeDetector params (Query + RemovedComponents) always validate");
         let removed_any = removed.read().count() > 0;
         let changed = self.first_check || !changed.is_empty() || removed_any;
         self.first_check = false;

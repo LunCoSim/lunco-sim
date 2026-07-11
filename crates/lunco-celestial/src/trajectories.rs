@@ -615,7 +615,7 @@ pub fn trajectory_mesh_update_system(
 
         for child in children.iter() {
             if let Ok(mesh_handle) = q_marker.get(child) {
-                if let Some(mesh) = meshes.get_mut(&mesh_handle.0) {
+                if let Some(mut mesh) = meshes.get_mut(&mesh_handle.0) {
                     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, final_pts.clone());
                     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors.clone());
                 }
@@ -640,7 +640,7 @@ pub fn trajectory_alpha_update_system(
         if path.points.len() < 2 { continue; }
         for child in children.iter() {
             if let Ok(mesh_handle) = q_marker.get(child) {
-                if let Some(mesh) = meshes.get_mut(&mesh_handle.0) {
+                if let Some(mut mesh) = meshes.get_mut(&mesh_handle.0) {
                     let color = view.color;
                     let start_epoch = if let Some(s) = view.start_epoch {
                         s

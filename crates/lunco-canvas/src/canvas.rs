@@ -361,7 +361,7 @@ impl Canvas {
         // a focused text field) so F doesn't jump the diagram when
         // the user is typing. `hovered()` is too strict — the panel
         // layout may already steal hover to the tab bar or gutter.
-        let keyboard_free = !ui.ctx().wants_keyboard_input();
+        let keyboard_free = !ui.ctx().egui_wants_keyboard_input();
         if keyboard_free && (response.hovered() || response.contains_pointer()) {
             let key_names: &[(&'static str, egui::Key)] = &[
                 ("Delete", egui::Key::Delete),

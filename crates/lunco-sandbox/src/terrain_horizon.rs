@@ -177,7 +177,7 @@ pub(crate) fn wire_tile_shadow_cache(
         .filter(|(_, _, layers)| layers.is_none())
         .max_by(|a, b| a.0.illuminance.total_cmp(&b.0.illuminance))
         .and_then(|(light, cascades, _)| {
-            if !light.shadows_enabled {
+            if !light.shadow_maps_enabled {
                 return Some(0.0);
             }
             cascades.and_then(|c| c.bounds.last().copied())

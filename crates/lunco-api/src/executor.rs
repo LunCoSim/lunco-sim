@@ -273,7 +273,7 @@ fn convert_node(
     entities: &ApiEntityRegistry,
     sync_local: bool,
 ) {
-    use bevy::reflect::{TypeInfo, VariantInfo};
+    use bevy::reflect::{enums::VariantInfo, TypeInfo};
     use std::any::TypeId;
 
     // Leaf: the declared type IS Entity → convert the scalar.

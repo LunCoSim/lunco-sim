@@ -1,7 +1,7 @@
 # Bevy 0.18 → 0.19 Migration Analysis
 
-Status: **not started**. Bevy 0.19 shipped 2026-06-19. Workspace on 0.18.1.
-Analysis date: 2026-07-03.
+Status: **SHIPPED 2026-07-11** (see § Outcome). Bevy 0.19 shipped 2026-06-19.
+Workspace was on 0.18.1. Analysis date: 2026-07-03.
 
 ## TL;DR
 
@@ -13,6 +13,63 @@ Analysis date: 2026-07-03.
 - **2 hard blockers**: `transform-gizmo-bevy` and `avian_pickup` have **no
   0.19-compatible release** (last publish predates 0.19). Migration is gated on
   those upstreams (or forks/vendoring).
+
+## Outcome — shipped 2026-07-11
+
+Migration landed on the `optimization` branch, and went **further than the
+original plan**: instead of stopping at the egui-0.34 row (bevy_egui 0.40), the
+whole egui ecosystem was taken to **0.35**. `cargo check --workspace
+--all-features` and the wasm-target UI/worker crates both compile with **0
+errors**; the `lunica` (Modelica workbench) and `sandbox` (3D) GUIs were both
+launched and screenshot-verified (panels, dock, plot, 3D scene + avian physics
+all render correctly).
+
+**Versions that shipped:**
+- `bevy` + all `bevy_*` sub-pins → **0.19**; `avian3d` → **0.7**.
+- **egui row → 0.35** (beyond plan): `bevy_egui` **0.41**, `egui` **0.35**,
+  `egui_dock` **0.20**, `egui_plot` **0.36**, `egui_extras` **0.35**,
+  `egui_commonmark` **0.24**. (`catppuccin-egui` keeps its own vendored egui —
+  isolated leaf, no conflict.)
+- Non-bevy majors also bumped: **bincode 1→2** (3.0.0 is a troll crate; the
+  MSL/terrain/journal wire format + artifact tag were migrated), **ureq 2→3**,
+  **rand 0.8→0.10**, **sha2 0.10→0.11**, plus toml/indexmap/smol_str/tempfile/
+  rfd/resvg/tiny-skia/chrono point bumps.
+
+**Blockers, resolved:**
+- **`transform-gizmo-bevy`** — forked to LunCoSim. NO upstream ref has bevy 0.19
+  AND egui 0.35 together (the bevy-0.19 port `mitchty@d95d069` is egui 0.34; the
+  egui-0.35 PRs #109/#110 are bevy 0.18). Fork
+  `LunCoSim/mitchty-transform-gizmo` branch `bevy-0.19-egui-0.35` = mitchty's
+  bevy-0.19 base + a Cargo.toml-only egui 0.34→0.35 bump (source unchanged).
+  Pinned via `[patch.crates-io]` in root `Cargo.toml` — see the `TODO(deps)`
+  there to un-pin once upstream ships both together.
+- **`big_space`** — git-dep on PR #73 (`m-edlund/big_space`) as planned; also has
+  a `TODO(deps)` to return to a crates.io release.
+- **`avian_pickup`** — not present in this checkout (no manifest/lock entry); no
+  action needed.
+
+**Dead deps removed:** `bevy-inspector-egui` and `egui-phosphor` were both
+declared in `[workspace.dependencies]` but referenced by **zero** crates (never
+in the lock) — the project has its own inspector and doesn't use phosphor icons.
+Removed both rather than bumping them.
+
+**egui 0.35 API changes (the non-mechanical part):**
+- Panels unified (egui PR #5659): `TopBottomPanel`/`SidePanel` **removed** → one
+  `egui::Panel::{top,bottom,left,right}`. Size setters unified
+  (`exact_height`/`_width`→`exact_size`; `default/min/max_width`|`height`→`_size`).
+- Panels no longer `.show(ctx, …)` — they render **inside a `Ui`**. Build one
+  root `egui::Ui::new(ctx.clone(), id, UiBuilder::new().layer_id(
+  LayerId::background()).max_rect(ctx.viewport_rect()))` and `panel.show(&mut
+  root_ui, …)` in edge order. `egui::Window::show(ctx, …)` is unchanged. This
+  was a real `render_layout` refactor in `lunco-workbench`.
+- `egui_dock` 0.20: `DockArea::show(ctx, …)` → `show_inside(&mut ui, …)`.
+- `egui_plot` 0.36: `label_formatter` closure `(name, point)→String` →
+  `(&HoverPosition)→Option<String>` (`NearDataPoint{plot_name,position,..}` |
+  `Elsewhere{position}`).
+- egui text cursor: `CCursor.index` is now a `CharIndex(usize)` newtype (use
+  `.0`); `Context::style()` removed (use `ui.style()`);
+  `Context::wants_keyboard_input`/`wants_pointer_input` →
+  `egui_wants_keyboard_input`/`egui_wants_pointer_input`.
 
 ## Dependency bump matrix
 

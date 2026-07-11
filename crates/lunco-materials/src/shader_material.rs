@@ -855,7 +855,7 @@ pub fn reflect_shader_schemas(
         })
         .collect();
     for (id, schema) in todo {
-        if let Some(m) = mats.get_mut(id) {
+        if let Some(mut m) = mats.get_mut(id) {
             m.set_schema(schema);
         }
     }

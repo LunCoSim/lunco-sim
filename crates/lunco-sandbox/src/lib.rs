@@ -1991,11 +1991,11 @@ fn bind_terrain_layers(
         };
         // Wait for the material to exist before binding (created async by the USD
         // shader system); retry next frame until it does.
-        let Some(material) = mats.get_mut(&mat3d.0) else { continue };
+        let Some(mut material) = mats.get_mut(&mat3d.0) else { continue };
 
         for (role, rel, weight) in authored {
             let uri = format!("{base_uri}/{rel}");
-            (role.set_slot)(material, asset_server.load(&uri));
+            (role.set_slot)(&mut material, asset_server.load(&uri));
             for w in role.weights {
                 material.set(w, ParamValue::F32(weight));
             }

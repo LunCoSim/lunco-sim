@@ -299,7 +299,7 @@ mod tests {
             Query<&Grid>,
             Query<(Option<&CellCoord>, &Transform)>,
         )> = SystemState::new(&mut world);
-        let (q_parents, q_grids, q_spatial) = state.get(&world);
+        let (q_parents, q_grids, q_spatial) = state.get(&world).expect("read-only queries always validate");
 
         let abs = world_position(child, &q_parents, &q_grids, &q_spatial).unwrap();
         let g = grid();
@@ -349,7 +349,7 @@ mod tests {
             Query<&Grid>,
             Query<(Option<&CellCoord>, &Transform)>,
         )> = SystemState::new(&mut world);
-        let (q_parents, q_grids, q_spatial) = state.get(&world);
+        let (q_parents, q_grids, q_spatial) = state.get(&world).expect("read-only queries always validate");
 
         let pos = world_position(child, &q_parents, &q_grids, &q_spatial).unwrap();
         let expected = DVec3::new(0.0, 0.0, -100.0);

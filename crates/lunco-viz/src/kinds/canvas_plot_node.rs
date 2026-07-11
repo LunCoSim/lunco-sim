@@ -503,8 +503,13 @@ impl NodeVisual for PlotNodeVisual {
             // Route through `format_axis_value` for a compact form.
             .label_formatter({
                 let var = short_name(&self.data.signal_path).to_owned();
-                move |_name, p| {
-                    format!("t: {} s\n{}: {}", format_axis_value(p.x), var, format_axis_value(p.y))
+                // egui_plot 0.36: single `HoverPosition` arg, returns `Option<String>`.
+                move |pos| {
+                    let p = match pos {
+                        egui_plot::HoverPosition::NearDataPoint { position, .. }
+                        | egui_plot::HoverPosition::Elsewhere { position } => position,
+                    };
+                    Some(format!("t: {} s\n{}: {}", format_axis_value(p.x), var, format_axis_value(p.y)))
                 }
             });
         plot.show(&mut child, |plot_ui| {

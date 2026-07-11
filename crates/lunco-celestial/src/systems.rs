@@ -328,7 +328,7 @@ pub fn celestial_visuals_system(
 
     for (mat_handle, coord) in q_tiles.iter() {
         if let Some(&transition) = per_body.get(&coord.body) {
-            if let Some(mat) = materials.get_mut(mat_handle) {
+            if let Some(mut mat) = materials.get_mut(mat_handle) {
                 mat.set("transition", ParamValue::F32(transition));
             }
         }

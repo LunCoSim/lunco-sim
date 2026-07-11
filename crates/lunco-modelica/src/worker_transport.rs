@@ -366,7 +366,7 @@ pub fn wire_protocol_mismatch() -> bool {
 
 /// Serialize and post a `WireMessage` to worker `idx`.
 fn post_msg_to(idx: usize, msg: &WireMessage, label: &str) {
-    let bytes = match bincode::serialize(msg) {
+    let bytes = match bincode::serde::encode_to_vec(msg, bincode::config::standard()) {
         Ok(b) => b,
         Err(e) => {
             bevy::log::error!("[worker_transport] {label}: serialize failed: {e}");
@@ -607,7 +607,9 @@ fn route_wire_result(idx: usize, data: JsValue) {
         v if !v.is_empty() => v,
         _ => return,
     };
-    match bincode::deserialize::<WireResult>(&bytes) {
+    match bincode::serde::decode_from_slice::<WireResult, _>(&bytes, bincode::config::standard())
+        .map(|(m, _)| m)
+    {
         Ok(WireResult::Result(result)) => {
             if let Some(tx) = RESULT_TX.get() {
                 let _ = tx.send(result);
@@ -933,7 +935,7 @@ pub fn dispatch_run_fast(
 /// when every worker is busy. Records the `run_id → worker` mapping for
 /// cancel routing; the slot is freed in [`forward_run_update`] on terminal.
 fn assign_and_post_run_fast(run_id: lunco_experiments::ExperimentId, msg: WireMessage) {
-    let bytes = match bincode::serialize(&msg) {
+    let bytes = match bincode::serde::encode_to_vec(&msg, bincode::config::standard()) {
         Ok(b) => b,
         Err(e) => {
             bevy::log::error!("[worker_transport] run_fast: serialize failed: {e}");
@@ -1055,7 +1057,7 @@ fn flush_pending_commands() {
     );
     for cmd in drained {
         let envelope = WireMessage::Command(cmd);
-        let bytes = match bincode::serialize(&envelope) {
+        let bytes = match bincode::serde::encode_to_vec(&envelope, bincode::config::standard()) {
             Ok(b) => b,
             Err(e) => {
                 bevy::log::error!("[worker_transport] flushed encode failed: {e}");
@@ -1244,7 +1246,7 @@ pub fn install_msl_in_worker(
     // (variant order must stay in lockstep) and wasm-only / unverifiable
     // without a worker runtime, so deferred. See docs/code-quality-remediation.md.
     let envelope = WireMessage::InstallParsedMsl(parsed.to_vec());
-    let bytes = match bincode::serialize(&envelope) {
+    let bytes = match bincode::serde::encode_to_vec(&envelope, bincode::config::standard()) {
         Ok(b) => b,
         Err(e) => {
             bevy::log::error!("[worker_transport] encode MSL install failed: {e}");
@@ -1326,10 +1328,13 @@ pub fn install_msl_compressed_in_worker(compressed: &[u8]) -> usize {
     // to ship the decoded bytes back to main (`provide_to_main`); the rest decode
     // for their own compiles and skip the transfer the main thread would dedupe.
     let encode = |provide_to_main: bool| -> Option<Vec<u8>> {
-        match bincode::serialize(&WireMessage::InstallParsedMslCompressed {
-            bytes: compressed.to_vec(),
-            provide_to_main,
-        }) {
+        match bincode::serde::encode_to_vec(
+            &WireMessage::InstallParsedMslCompressed {
+                bytes: compressed.to_vec(),
+                provide_to_main,
+            },
+            bincode::config::standard(),
+        ) {
             Ok(b) => Some(b),
             Err(e) => {
                 bevy::log::error!("[worker_transport] encode compressed MSL install failed: {e}");
@@ -1404,10 +1409,13 @@ pub fn install_msl_compressed_in_worker(compressed: &[u8]) -> usize {
 /// to worker 0, `0` if no worker pool is installed (the caller then untars on
 /// the main thread instead).
 pub fn parse_msl_source_in_worker(compressed: &[u8]) -> usize {
-    let bytes = match bincode::serialize(&WireMessage::ParseSourceMslCompressed {
-        bytes: compressed.to_vec(),
-        provide_to_main: true,
-    }) {
+    let bytes = match bincode::serde::encode_to_vec(
+        &WireMessage::ParseSourceMslCompressed {
+            bytes: compressed.to_vec(),
+            provide_to_main: true,
+        },
+        bincode::config::standard(),
+    ) {
         Ok(b) => b,
         Err(e) => {
             bevy::log::error!("[worker_transport] encode source-parse MSL envelope failed: {e}");

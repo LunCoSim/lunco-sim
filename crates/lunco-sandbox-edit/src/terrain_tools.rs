@@ -220,7 +220,7 @@ pub fn update_terrain_brush_ghost(
 
     if let Some((ghost, mat)) = q_ghost.iter().next() {
         commands.entity(ghost).insert(transform);
-        if let Some(m) = materials.get_mut(&mat.0) {
+        if let Some(mut m) = materials.get_mut(&mat.0) {
             m.base_color = color;
         }
     } else {

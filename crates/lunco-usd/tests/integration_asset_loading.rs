@@ -512,9 +512,9 @@ fn test_full_scene_loads_with_rovers() {
     app.init_asset::<StandardMaterial>();
     app.init_asset::<Image>();
     // The scene references the Perseverance glTF, which the loader hands to
-    // `AssetServer::load::<Scene>` — register the Scene asset so handle
+    // `AssetServer::load::<WorldAsset>` — register the asset so handle
     // allocation doesn't panic in this minimal harness.
-    app.init_asset::<Scene>();
+    app.init_asset::<bevy::world_serialization::WorldAsset>();
     app.init_asset::<ShaderMaterial>();
     app.init_asset::<bevy::shader::Shader>();
     // Physical rovers create revolute joints whose `JointCollisionDisabled`

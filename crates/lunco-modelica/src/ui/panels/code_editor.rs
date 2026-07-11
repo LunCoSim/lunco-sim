@@ -583,8 +583,9 @@ impl Panel for CodeEditorPanel {
         // the wasm clipboard bridge + the keyboard handler further
         // down.
         let selection_chars: Option<(usize, usize)> = pre_cursor.and_then(|r| {
-            let a = r.primary.index;
-            let b = r.secondary.index;
+            // egui 0.35 wraps cursor offsets in a `CharIndex(usize)` newtype.
+            let a = r.primary.index.0;
+            let b = r.secondary.index.0;
             let (s, e) = (a.min(b), a.max(b));
             if e > s { Some((s, e)) } else { None }
         });
@@ -917,7 +918,7 @@ impl Panel for CodeEditorPanel {
                 let (start, end) = selection_chars.unwrap_or_else(|| {
                     let cur = egui::TextEdit::load_state(ui.ctx(), text_edit_id)
                         .and_then(|s| s.cursor.char_range())
-                        .map(|r| r.primary.index)
+                        .map(|r| r.primary.index.0)
                         .unwrap_or_else(|| text.chars().count());
                     (cur, cur)
                 });

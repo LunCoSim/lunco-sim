@@ -39,7 +39,7 @@ pub struct SunReadout {
     pub yaw_deg: f32,
     pub pitch_deg: f32,
     pub illuminance: f32,
-    pub shadows_enabled: bool,
+    pub shadow_maps_enabled: bool,
     pub rgb: [f32; 3],
     pub shadow_first: Option<f32>,
     pub shadow_max: Option<f32>,
@@ -108,11 +108,11 @@ pub fn populate_inspector_view(world: &mut World) {
                 (yaw.to_degrees(), pitch.to_degrees())
             })
             .unwrap_or((0.0, 0.0));
-        let (illuminance, shadows_enabled, rgb) = world
+        let (illuminance, shadow_maps_enabled, rgb) = world
             .get::<DirectionalLight>(e)
             .map(|l| {
                 let lin = l.color.to_linear();
-                (l.illuminance, l.shadows_enabled, [lin.red, lin.green, lin.blue])
+                (l.illuminance, l.shadow_maps_enabled, [lin.red, lin.green, lin.blue])
             })
             .unwrap_or((0.0, false, [1.0, 1.0, 1.0]));
         let (shadow_first, shadow_max) = world
@@ -129,7 +129,7 @@ pub fn populate_inspector_view(world: &mut World) {
             yaw_deg,
             pitch_deg,
             illuminance,
-            shadows_enabled,
+            shadow_maps_enabled,
             rgb,
             shadow_first,
             shadow_max,
@@ -886,7 +886,7 @@ fn environment_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
                 any_change |= yaw_changed || pitch_changed;
 
                 let mut lux = s.illuminance;
-                let mut shadows = s.shadows_enabled;
+                let mut shadows = s.shadow_maps_enabled;
                 let mut rgb = s.rgb;
                 if ui
                     .add(
@@ -907,7 +907,7 @@ fn environment_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
                     ui.label("Color");
                 });
                 if ui.checkbox(&mut shadows, "Cast shadows").changed() {
-                    cmd.shadows_enabled = Some(shadows);
+                    cmd.shadow_maps_enabled = Some(shadows);
                     any_change = true;
                 }
 
@@ -1628,7 +1628,7 @@ fn material_pbr_section(
         ctx.defer(move |world| {
             if let Some(mut mats) = world.get_resource_mut::<Assets<StandardMaterial>>() {
                 for handle in &handles {
-                    let Some(m) = mats.get_mut(handle) else { continue };
+                    let Some(mut m) = mats.get_mut(handle) else { continue };
                     m.base_color = Color::LinearRgba(LinearRgba::new(base[0], base[1], base[2], alpha));
                     m.emissive = LinearRgba::new(emissive[0], emissive[1], emissive[2], 1.0);
                     m.metallic = metallic;
@@ -1813,7 +1813,7 @@ fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Enti
         let usd_prim_exists = ctx.get::<UsdPrimPath>(entity).is_some();
         ctx.defer(move |world| {
             if let Some(mut mats) = world.get_resource_mut::<Assets<ShaderMaterial>>() {
-                if let Some(mat) = mats.get_mut(&handle) {
+                if let Some(mut mat) = mats.get_mut(&handle) {
                     for (name, v) in edits.iter() {
                         mat.set(name, *v);
                     }

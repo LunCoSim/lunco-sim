@@ -2365,8 +2365,15 @@ fn render_experiments_plot_inner(
             // the modifier defaults; double-click still resets bounds.
             .allow_drag(false)
             // Hover any curve → run·var name + time + de-logged value.
-            .label_formatter(move |name, point| {
-                lunco_viz::plot_fmt::hover_label(name, point, log_y)
+            // egui_plot 0.36 unified the (name, point) args into `HoverPosition`.
+            .label_formatter(move |pos| {
+                let (name, point) = match pos {
+                    egui_plot::HoverPosition::NearDataPoint { plot_name, position, .. } => {
+                        (*plot_name, position)
+                    }
+                    egui_plot::HoverPosition::Elsewhere { position } => ("", position),
+                };
+                Some(lunco_viz::plot_fmt::hover_label(name, point, log_y))
             });
         if fit_requested {
             plot = plot.reset();

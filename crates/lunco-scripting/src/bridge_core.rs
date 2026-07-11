@@ -630,7 +630,7 @@ pub fn world_pos(gid: u64) -> Option<DVec3> {
             Query<&Grid>,
             Query<(Option<&CellCoord>, &Transform)>,
         )> = SystemState::new(world);
-        let (q_parents, q_grids, q_spatial) = state.get(world);
+        let (q_parents, q_grids, q_spatial) = state.get(world).expect("read-only queries always validate");
         coords::world_position(entity, &q_parents, &q_grids, &q_spatial)
     })
     .flatten()
@@ -705,8 +705,16 @@ pub fn get_resource_field<B: ValueBuilder>(b: &B, path: &str) -> Option<B::Value
         let registry = world.resource::<AppTypeRegistry>().clone();
         let reg = registry.read();
         let registration = reg.get_with_short_type_path(res)?;
-        let reflect_resource = registration.data::<ReflectResource>()?;
-        let reflected = reflect_resource.reflect(world).ok()?;
+        // bevy 0.19: resources live on dedicated entities and `ReflectResource`
+        // is a functionless marker — its presence certifies "is a Resource",
+        // the actual access goes through `ReflectComponent` on that entity.
+        registration.data::<ReflectResource>()?;
+        let reflect_component = registration.data::<ReflectComponent>()?;
+        let component_id = world
+            .components()
+            .get_valid_id(registration.type_info().type_id())?;
+        let entity = world.resource_entities().get(component_id)?;
+        let reflected = reflect_component.reflect(world.get_entity(entity).ok()?)?;
 
         let field: &dyn bevy::reflect::PartialReflect = if sub.is_empty() {
             reflected.as_partial_reflect()
@@ -775,12 +783,28 @@ pub fn set_resource_field(
         let registration = reg
             .get_with_short_type_path(res)
             .ok_or_else(|| format!("unknown type '{res}'"))?;
-        let reflect_resource = registration
+        // bevy 0.19: `ReflectResource` is a marker; mutate via the resource's
+        // dedicated entity + `ReflectComponent` (see `get_resource_field`).
+        registration
             .data::<ReflectResource>()
             .ok_or_else(|| format!("'{res}' is not a Resource"))?;
-        let mut reflected = reflect_resource
-            .reflect_mut(world)
+        let reflect_component = registration
+            .data::<ReflectComponent>()
+            .ok_or_else(|| format!("'{res}' has no reflected Component data"))?;
+        let component_id = world
+            .components()
+            .get_valid_id(registration.type_info().type_id())
+            .ok_or_else(|| format!("resource '{res}' not present"))?;
+        let entity = world
+            .resource_entities()
+            .get(component_id)
+            .ok_or_else(|| format!("resource '{res}' not present"))?;
+        let entity_mut = world
+            .get_entity_mut(entity)
             .map_err(|_| format!("resource '{res}' not present"))?;
+        let mut reflected = reflect_component
+            .reflect_mut(entity_mut)
+            .ok_or_else(|| format!("resource '{res}' not present"))?;
         let field: &mut dyn bevy::reflect::PartialReflect = if sub.is_empty() {
             reflected.as_partial_reflect_mut()
         } else {
@@ -889,7 +913,7 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
             Query<(Option<&CellCoord>, &Transform)>,
             Query<(Option<&Name>, Has<FlightSoftware>, Option<&CelestialBody>)>,
         )> = SystemState::new(world);
-        let (q_parents, q_grids, q_spatial, q_meta) = state.get(world);
+        let (q_parents, q_grids, q_spatial, q_meta) = state.get(world).expect("read-only queries always validate");
         let items = pairs
             .into_iter()
             .map(|(gid, entity)| {

@@ -50,7 +50,7 @@ mod wasm {
             half_extent: baked.grid.half_extent,
             native_res: baked.native_res,
         };
-        let Ok(header_bytes) = bincode::serialize(&header) else { return };
+        let Ok(header_bytes) = bincode::serde::encode_to_vec(&header, bincode::config::standard()) else { return };
         let header_arr = Uint8Array::new_with_length(header_bytes.len() as u32);
         header_arr.copy_from(&header_bytes);
 
@@ -79,7 +79,7 @@ mod wasm {
             half_extent: 0.0,
             native_res: 0,
         };
-        let Ok(bytes) = bincode::serialize(&header) else { return };
+        let Ok(bytes) = bincode::serde::encode_to_vec(&header, bincode::config::standard()) else { return };
         let arr = Uint8Array::new_with_length(bytes.len() as u32);
         arr.copy_from(&bytes);
         let obj = Object::new();
@@ -106,8 +106,11 @@ mod wasm {
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0) as u32;
 
-        let job: DemBakeJob = match bincode::deserialize(&get_u8(&data, "job")) {
-            Ok(j) => j,
+        let job: DemBakeJob = match bincode::serde::decode_from_slice::<DemBakeJob, _>(
+            &get_u8(&data, "job"),
+            bincode::config::standard(),
+        ) {
+            Ok((j, _)) => j,
             Err(e) => return post_error(id, BakeStage::Coarse, format!("job decode: {e}")),
         };
         let meta_bytes = get_u8(&data, "meta");

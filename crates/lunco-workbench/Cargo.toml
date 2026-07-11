@@ -17,16 +17,16 @@ description = "LunCoSim's own workbench shell — activity bar, side browsers, c
 bevy = { workspace = true, features = ["bevy_render"] }
 bevy_egui = { workspace = true }
 # Needed only to name `wgpu::Error` in the uncaptured-error handler
-# (`render_robustness.rs`). No version unification risk: `27` resolves to the
-# exact 27.0.x bevy already locks, so `RenderDevice::wgpu_device()` and our
+# (`render_robustness.rs`). No version unification risk: `29` resolves to the
+# exact 29.0.x bevy already locks, so `RenderDevice::wgpu_device()` and our
 # handler agree on the same `wgpu::Device` type. `default-features = false` —
 # bevy enables every backend/feature we actually use; we only need the type.
-wgpu = { version = "27", default-features = false }
+wgpu = { version = "29", default-features = false }
 lunco-theme = { path = "../lunco-theme" }
 # `serde` feature lets us persist `DockState<TabId>` for per-Twin layout
 # restore (Phase 5). `TabId`/`PanelId` carry their own serde impls
 # (see `panel.rs` — `PanelId` interns on deserialize).
-egui_dock = { version = "0.18", features = ["serde"] }
+egui_dock = { version = "0.20", features = ["serde"] }
 # `Command` / `on_command` / `register_commands!` macros (re-exports
 # from `lunco-command-macro`). Brings file-workflow verbs (`OpenFile`,
 # `OpenFolder`, `OpenTwin`, ...) onto the same typed-command bus that

@@ -244,8 +244,15 @@ impl Visualization for LinePlot {
             .y_axis_label(y_label)
             .auto_bounds(bevy_egui::egui::emath::Vec2b::new(true, true))
             // Hover any line → name + time + de-logged value.
-            .label_formatter(move |name, point| {
-                crate::plot_fmt::hover_label(name, point, log_y)
+            .label_formatter(move |pos| {
+                // egui_plot 0.36 unified the (name, point) args into `HoverPosition`.
+                let (name, point) = match pos {
+                    egui_plot::HoverPosition::NearDataPoint { plot_name, position, .. } => {
+                        (*plot_name, position)
+                    }
+                    egui_plot::HoverPosition::Elsewhere { position } => ("", position),
+                };
+                Some(crate::plot_fmt::hover_label(name, point, log_y))
             })
             .legend(
                 Legend::default()

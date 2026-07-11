@@ -178,11 +178,15 @@ fn read_parsed_bundle_file(
     if file.metadata().map(|m| m.len() == 0).unwrap_or(false) {
         return Ok(None); // empty / truncated
     }
-    let decoder = zstd::stream::read::Decoder::new(std::io::BufReader::new(file))
+    let mut decoder = zstd::stream::read::Decoder::new(std::io::BufReader::new(file))
         .map_err(|e| format!("zstd decoder: {e}"))?;
-    bincode::deserialize_from(decoder)
-        .map(Some)
-        .map_err(|e| format!("bincode: {e}"))
+    bincode::serde::decode_from_std_read::<
+        Vec<(String, rumoca_compile::parsing::StoredDefinition)>,
+        _,
+        _,
+    >(&mut decoder, bincode::config::standard())
+    .map(Some)
+    .map_err(|e| format!("bincode: {e}"))
 }
 
 /// Write `docs` to `path` as zstd-compressed bincode (the native
@@ -198,7 +202,7 @@ pub(crate) fn write_parsed_bundle(
     let file = std::fs::File::create(path)?;
     let mut encoder =
         zstd::stream::write::Encoder::new(std::io::BufWriter::new(file), PARSED_BUNDLE_ZSTD_LEVEL)?;
-    bincode::serialize_into(&mut encoder, docs)
+    bincode::serde::encode_into_std_write(docs, &mut encoder, bincode::config::standard())
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     encoder.finish()?;
     Ok(())
@@ -228,7 +232,12 @@ pub fn decompress_parsed_bundle(compressed: &[u8]) -> Result<Vec<u8>, String> {
 pub fn deserialize_parsed_bundle(
     decoded: &[u8],
 ) -> Result<Vec<(String, rumoca_compile::parsing::StoredDefinition)>, String> {
-    bincode::deserialize(decoded).map_err(|e| format!("bincode deserialize: {e}"))
+    bincode::serde::decode_from_slice::<Vec<(String, rumoca_compile::parsing::StoredDefinition)>, _>(
+        decoded,
+        bincode::config::standard(),
+    )
+    .map(|(v, _)| v)
+    .map_err(|e| format!("bincode deserialize: {e}"))
 }
 
 /// Untar + parse the compressed **source** bundle (`sources-*.tar.zst`) into the
@@ -279,7 +288,8 @@ pub fn parse_source_bundle_to_docs(
 pub fn encode_parsed_bundle(
     docs: &[(String, rumoca_compile::parsing::StoredDefinition)],
 ) -> Result<Vec<u8>, String> {
-    bincode::serialize(docs).map_err(|e| format!("bincode serialize: {e}"))
+    bincode::serde::encode_to_vec(docs, bincode::config::standard())
+        .map_err(|e| format!("bincode serialize: {e}"))
 }
 
 // ─── Chunked main-thread MSL decode ────────────────────────────────
@@ -417,8 +427,6 @@ pub fn ingest_worker_decoded_msl(decoded: Vec<u8>) {
 /// before — so resolution/autocomplete are unaffected, just non-blocking.
 #[cfg(target_arch = "wasm32")]
 fn drive_msl_main_decode(mut state: ResMut<MslLoadState>) {
-    use bincode::Options;
-    use serde::Deserialize;
     // Tuned so each frame's slice stays a few ms. Decompress is cheap per byte;
     // deserialize allocates deep ASTs, so its chunk is in documents.
     const DECOMPRESS_CHUNK: usize = 8 * 1024 * 1024;
@@ -478,48 +486,49 @@ fn drive_msl_main_decode(mut state: ResMut<MslLoadState>) {
             return;
         }
 
-        // ── Phase 2: bincode-deserialize, bounded docs per frame. The blob is
-        // legacy `bincode::serialize` output (fixint, little-endian); match it.
+        // ── Phase 2: bincode-deserialize, bounded docs per frame. The blob is a
+        // bincode `standard()` encoding of `Vec<(uri, StoredDefinition)>`: a
+        // variable-int element count followed by the elements back-to-back.
+        // Decode the count once, then walk elements one at a time, advancing
+        // `pos` by the bytes each consumes so the work splits across frames.
+        let cfg = bincode::config::standard();
         if !d.header_read {
-            if d.out.len() < 8 {
-                warn!("[MSL] main decode: decoded blob too small ({}B)", d.out.len());
-                *guard = None;
-                return;
+            match bincode::serde::decode_from_slice::<u64, _>(&d.out[d.pos as usize..], cfg) {
+                Ok((count, n)) => {
+                    d.total = count;
+                    d.remaining = count;
+                    d.pos += n as u64;
+                    d.header_read = true;
+                    d.acc.reserve(count as usize);
+                }
+                Err(e) => {
+                    warn!("[MSL] main decode: bad bundle header: {e}");
+                    *guard = None;
+                    return;
+                }
             }
-            let mut hdr = [0u8; 8];
-            hdr.copy_from_slice(&d.out[0..8]);
-            d.total = u64::from_le_bytes(hdr);
-            d.remaining = d.total;
-            d.pos = 8;
-            d.header_read = true;
-            d.acc.reserve(d.total as usize);
         }
 
-        let opts = bincode::config::DefaultOptions::new()
-            .with_fixint_encoding()
-            .allow_trailing_bytes();
-        {
-            let mut cur = std::io::Cursor::new(d.out.as_slice());
-            cur.set_position(d.pos);
-            let mut de = bincode::Deserializer::with_reader(&mut cur, opts);
-            for _ in 0..DESER_CHUNK {
-                if d.remaining == 0 {
+        for _ in 0..DESER_CHUNK {
+            if d.remaining == 0 {
+                break;
+            }
+            match bincode::serde::decode_from_slice::<
+                (String, rumoca_compile::parsing::StoredDefinition),
+                _,
+            >(&d.out[d.pos as usize..], cfg)
+            {
+                Ok((item, n)) => {
+                    d.acc.push(item);
+                    d.pos += n as u64;
+                    d.remaining -= 1;
+                }
+                Err(e) => {
+                    warn!("[MSL] main decode deserialize error: {e}");
+                    d.remaining = 0;
                     break;
                 }
-                match <(String, rumoca_compile::parsing::StoredDefinition)>::deserialize(&mut de) {
-                    Ok(item) => {
-                        d.acc.push(item);
-                        d.remaining -= 1;
-                    }
-                    Err(e) => {
-                        warn!("[MSL] main decode deserialize error: {e}");
-                        d.remaining = 0;
-                        break;
-                    }
-                }
             }
-            drop(de);
-            d.pos = cur.position();
         }
 
         if d.remaining == 0 {

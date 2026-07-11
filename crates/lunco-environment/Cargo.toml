@@ -14,7 +14,7 @@ default = ["render"]
 # (`LunarSun`, `EarthshineParams`). A headless server takes
 # `default-features = false` and stays free of bevy_pbr/light/render.
 render = [
-    "bevy/bevy_pbr", "bevy/bevy_gltf", "bevy/bevy_scene", "bevy/bevy_mesh",
+    "bevy/bevy_pbr", "bevy/bevy_gltf", "bevy/bevy_world_serialization", "bevy/bevy_mesh",
     "bevy/bevy_light", "bevy/bevy_post_process", "bevy/bevy_anti_alias",
     "bevy/mesh_picking", "dep:lunco-materials",
 ]

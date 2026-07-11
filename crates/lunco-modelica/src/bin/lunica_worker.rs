@@ -123,7 +123,7 @@ fn worker_global() -> DedicatedWorkerGlobalScope {
 }
 
 fn post_wire(scope: &DedicatedWorkerGlobalScope, msg: &WireResult) {
-    let bytes = match bincode::serialize(msg) {
+    let bytes = match bincode::serde::encode_to_vec(msg, bincode::config::standard()) {
         Ok(b) => b,
         Err(e) => {
             web_sys::console::error_1(
@@ -394,7 +394,7 @@ pub fn run() -> Result<(), JsValue> {
             v if !v.is_empty() => v,
             _ => return,
         };
-        let envelope: WireMessage = match bincode::deserialize(&bytes) {
+        let envelope: WireMessage = match bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).map(|(m, _)| m) {
             Ok(c) => c,
             Err(e) => {
                 web_sys::console::error_1(

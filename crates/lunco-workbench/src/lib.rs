@@ -702,10 +702,9 @@ impl WorkbenchLayout {
         }
         let tab = TabId::Instance { kind, instance };
         // Already open? Focus it.
-        if let Some((surface, node, tab_idx)) = self.dock.find_tab(&tab) {
-            self.dock.set_focused_node_and_surface((surface, node));
-            self.dock
-                .set_active_tab((surface, node, tab_idx));
+        if let Some(path) = self.dock.find_tab(&tab) {
+            self.dock.set_focused_node_and_surface(path.node_path());
+            self.dock.set_active_tab(path);
             return;
         }
 
@@ -773,7 +772,10 @@ impl WorkbenchLayout {
             }
             // Focus the leaf/surface too so egui_dock foregrounds it.
             self.dock
-                .set_focused_node_and_surface((egui_dock::SurfaceIndex::main(), leaf));
+                .set_focused_node_and_surface(egui_dock::NodePath {
+                    surface: egui_dock::SurfaceIndex::main(),
+                    node: leaf,
+                });
         } else {
             // Empty dock (e.g. 3D app with no center tabs). Seed a
             // single leaf with this tab so at least something shows.
@@ -785,17 +787,17 @@ impl WorkbenchLayout {
     /// it renders as the leftmost tab. No-op if the tab isn't open.
     pub fn move_instance_to_front(&mut self, kind: PanelId, instance: u64) {
         let tab = TabId::Instance { kind, instance };
-        let Some((surface, node, tab_idx)) = self.dock.find_tab(&tab) else {
+        let Some(path) = self.dock.find_tab(&tab) else {
             return;
         };
-        if tab_idx.0 == 0 {
+        if path.tab.0 == 0 {
             return;
         }
-        let surface_ref = self.dock.get_surface_mut(surface).and_then(|s| s.node_tree_mut());
+        let surface_ref = self.dock.get_surface_mut(path.surface).and_then(|s| s.node_tree_mut());
         let Some(tree) = surface_ref else { return };
-        if let Some(removed) = tree[node].remove_tab(tab_idx) {
-            tree[node].insert_tab(egui_dock::TabIndex(0), removed);
-            tree.set_active_tab(node, egui_dock::TabIndex(0));
+        if let Some(removed) = tree[path.node].remove_tab(path.tab) {
+            tree[path.node].insert_tab(egui_dock::TabIndex(0), removed);
+            let _ = tree.set_active_tab(path.node, egui_dock::TabIndex(0));
         }
     }
 
@@ -821,24 +823,23 @@ impl WorkbenchLayout {
         sibling_of: TabId,
     ) -> Option<TabLocation> {
         let src_loc = self.dock.find_tab(&src)?;
-        let (t_surface, t_node, _) = self.dock.find_tab(&sibling_of)?;
-        if src_loc.0 == t_surface && src_loc.1 == t_node {
+        let sib = self.dock.find_tab(&sibling_of)?;
+        if src_loc.surface == sib.surface && src_loc.node == sib.node {
             return Some(TabLocation {
-                surface: src_loc.0,
-                node: src_loc.1,
-                index: src_loc.2,
+                surface: src_loc.surface,
+                node: src_loc.node,
+                index: src_loc.tab,
             });
         }
         let saved = TabLocation {
-            surface: src_loc.0,
-            node: src_loc.1,
-            index: src_loc.2,
+            surface: src_loc.surface,
+            node: src_loc.node,
+            index: src_loc.tab,
         };
         self.dock.move_tab(
             src_loc,
             egui_dock::TabDestination::Node(
-                t_surface,
-                t_node,
+                sib.node_path(),
                 egui_dock::TabInsert::Split(egui_dock::Split::Right),
             ),
         );
@@ -852,7 +853,7 @@ impl WorkbenchLayout {
         let Some(src_loc) = self.dock.find_tab(&src) else {
             return;
         };
-        if (src_loc.0, src_loc.1) == (loc.surface, loc.node) {
+        if (src_loc.surface, src_loc.node) == (loc.surface, loc.node) {
             return;
         }
         // Validate the destination still exists and is a leaf.
@@ -878,8 +879,7 @@ impl WorkbenchLayout {
         self.dock.move_tab(
             src_loc,
             egui_dock::TabDestination::Node(
-                loc.surface,
-                loc.node,
+                egui_dock::NodePath { surface: loc.surface, node: loc.node },
                 egui_dock::TabInsert::Insert(idx),
             ),
         );
@@ -1221,8 +1221,9 @@ impl WorkbenchLayout {
     pub(crate) fn dock_layout_hash(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        for (surface, node) in self.dock.iter_all_nodes() {
-            surface.0.hash(&mut h);
+        for (path, node) in self.dock.iter_all_nodes() {
+            path.surface.0.hash(&mut h);
+            path.node.0.hash(&mut h);
             match node {
                 egui_dock::Node::Empty => 0u8.hash(&mut h),
                 egui_dock::Node::Leaf(leaf) => {
@@ -1591,7 +1592,7 @@ impl WorkbenchLayout {
     pub fn focus_singleton(&mut self, id: PanelId) -> bool {
         let tab = TabId::Singleton(id);
         if let Some(pos) = self.dock.find_tab(&tab) {
-            self.dock.set_focused_node_and_surface((pos.0, pos.1));
+            self.dock.set_focused_node_and_surface(pos.node_path());
             self.dock.set_active_tab(pos);
             true
         } else {
@@ -2041,7 +2042,7 @@ fn render_workbench(world: &mut World) {
     let ctx = {
         let mut state: bevy::ecs::system::SystemState<EguiContexts> =
             bevy::ecs::system::SystemState::new(world);
-        let mut contexts = state.get_mut(world);
+        let Ok(mut contexts) = state.get_mut(world) else { return };
         match contexts.ctx_mut() {
             Ok(ctx) => ctx.clone(),
             Err(_) => return,
@@ -2262,8 +2263,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
         &mut self,
         ui: &mut egui::Ui,
         tab: &mut Self::Tab,
-        _surface: egui_dock::SurfaceIndex,
-        _node: egui_dock::NodeIndex,
+        _path: egui_dock::NodePath,
     ) {
         // Domain hook: dispatch to the registered InstancePanel so it
         // can draw its own menu items (Pin, Open in new view, …).
@@ -2427,13 +2427,25 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
     // window control buttons (─ ▢ ✕) sit on the far right on
     // Linux/Windows. macOS keeps native traffic lights — we just inset
     // the menu past them.
-    egui::TopBottomPanel::top("lunco_workbench_menu_bar")
+    // egui 0.35 unified the panel API: panels, the central area, and the dock
+    // now render *inside* a `Ui` rather than directly onto the `Context`. Build
+    // one root Ui spanning the whole viewport; every panel below shows into it,
+    // consuming edges in call order, and the dock/centre takes the remainder.
+    let mut viewport_ui = egui::Ui::new(
+        ctx.clone(),
+        "lunco_workbench_viewport".into(),
+        egui::UiBuilder::new()
+            .layer_id(egui::LayerId::background())
+            .max_rect(ctx.viewport_rect()),
+    );
+
+    egui::Panel::top("lunco_workbench_menu_bar")
         // Match the dock tab-bar height so the merged title-bar
         // doesn't read as a thin sliver above thicker rows below.
         // 30px is roughly egui_dock's default tab strip height with
         // our font scale.
-        .exact_height(30.0)
-        .show(ctx, |ui| {
+        .exact_size(30.0)
+        .show(&mut viewport_ui, |ui| {
         ui.style_mut().visuals = theme.to_visuals();
 
         // Drag region must be registered BEFORE the menu buttons so
@@ -3142,17 +3154,17 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
     // shows in the strip; click opens a popup with recent history.
     // Falls back to the legacy `layout.status` text when the bus is
     // empty so existing callers keep working during the migration.
-    egui::TopBottomPanel::bottom("lunco_workbench_status_bar").show(ctx, |ui| {
+    egui::Panel::bottom("lunco_workbench_status_bar").show(&mut viewport_ui, |ui| {
         ui.style_mut().visuals = theme.to_visuals();
         render_status_bar_inner(ui, world, layout, theme);
     });
 
     // ── Activity bar ────────────────────────────────────────────────
     if layout.activity_bar {
-        egui::SidePanel::left("lunco_workbench_activity_bar")
+        egui::Panel::left("lunco_workbench_activity_bar")
             .resizable(false)
-            .exact_width(40.0)
-            .show(ctx, |ui| {
+            .exact_size(40.0)
+            .show(&mut viewport_ui, |ui| {
                 ui.style_mut().visuals = theme.to_visuals();
                 ui.vertical_centered(|ui| {
                     ui.add_space(4.0);
@@ -3198,7 +3210,7 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
             instance_panels,
             world,
         };
-        let mut style = Style::from_egui(ctx.style().as_ref());
+        let mut style = Style::from_egui(viewport_ui.style().as_ref());
         // Drop the outer dock border — it shows up as a thin line along
         // the inside edge of the side panels and looks like dead pixels
         // when the dock is otherwise transparent.
@@ -3274,7 +3286,7 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
             && screen.width() > 1.0
             && screen.height() > 1.0
         {
-            DockArea::new(dock).style(style).show(ctx, &mut viewer);
+            DockArea::new(dock).style(style).show_inside(&mut viewport_ui, &mut viewer);
             // After the dock has laid itself out, publish the area
             // rect under a generic "panel.center" anchor so the help
             // tour can spotlight the dock content as a whole.
@@ -3300,12 +3312,12 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
         let bottom_default = (screen.height() * 0.20).max(120.0);
 
         if let Some(id) = layout.side_browser.first().copied() {
-            let r = egui::SidePanel::left("lunco_workbench_side_panel_left")
+            let r = egui::Panel::left("lunco_workbench_side_panel_left")
                 .resizable(true)
-                .default_width(side_default)
-                .min_width(120.0)
-                .max_width(screen.width() * 0.3)
-                .show(ctx, |ui| {
+                .default_size(side_default)
+                .min_size(120.0)
+                .max_size(screen.width() * 0.3)
+                .show(&mut viewport_ui, |ui| {
                     ui.style_mut().visuals = theme.to_visuals();
                     render_panel_solo(ui, &id, layout, world);
                 });
@@ -3314,12 +3326,12 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
             }
         }
         if let Some(id) = layout.right_inspector.first().copied() {
-            let r = egui::SidePanel::right("lunco_workbench_side_panel_right")
+            let r = egui::Panel::right("lunco_workbench_side_panel_right")
                 .resizable(true)
-                .default_width(right_default)
-                .min_width(140.0)
-                .max_width(screen.width() * 0.3)
-                .show(ctx, |ui| {
+                .default_size(right_default)
+                .min_size(140.0)
+                .max_size(screen.width() * 0.3)
+                .show(&mut viewport_ui, |ui| {
                     ui.style_mut().visuals = theme.to_visuals();
                     render_panel_solo(ui, &id, layout, world);
                 });
@@ -3328,11 +3340,11 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
             }
         }
         if let Some(id) = layout.bottom.first().copied() {
-            let r = egui::TopBottomPanel::bottom("lunco_workbench_bottom_panel")
+            let r = egui::Panel::bottom("lunco_workbench_bottom_panel")
                 .resizable(true)
-                .default_height(bottom_default)
-                .min_height(60.0)
-                .show(ctx, |ui| {
+                .default_size(bottom_default)
+                .min_size(60.0)
+                .show(&mut viewport_ui, |ui| {
                     ui.style_mut().visuals = theme.to_visuals();
                     render_panel_solo(ui, &id, layout, world);
                 });

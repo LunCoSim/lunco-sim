@@ -2736,8 +2736,8 @@ pub fn on_set_object_property(
                 warn!("SET_PROPERTY: entity {} has no StandardMaterial", cmd.entity_id);
                 return;
             };
-            let Some(mat) = std_materials.get_mut(&m.0) else { return };
-            if apply_pbr_param(mat, cmd.property.as_str(), &cmd.value) {
+            let Some(mut mat) = std_materials.get_mut(&m.0) else { return };
+            if apply_pbr_param(&mut mat, cmd.property.as_str(), &cmd.value) {
                 info!("SET_PROPERTY: {} pbr {} = {}", cmd.entity_id, cmd.property, cmd.value);
             } else {
                 warn!("SET_PROPERTY: bad value '{}' for pbr '{}'", cmd.value, cmd.property);
@@ -2749,8 +2749,8 @@ pub fn on_set_object_property(
                 warn!("SET_PROPERTY: entity {} has no usd_shader material — set 'shader' first", cmd.entity_id);
                 return;
             };
-            let Some(mat) = materials.get_mut(&m.0) else { return };
-            if !lunco_materials::apply_param(mat, key, &cmd.value) {
+            let Some(mut mat) = materials.get_mut(&m.0) else { return };
+            if !lunco_materials::apply_param(&mut mat, key, &cmd.value) {
                 warn!("SET_PROPERTY: unknown property '{}'", key);
             }
         }
