@@ -437,10 +437,31 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     runtime_err.get_or_insert(d);
                 }
 
-                // Publish status: errors → Error; else OK only when (re)compiled.
+                // Authoritative commands a client-scoped scenario tried (and was
+                // denied) this pass — collected in `bridge_core::cmd_raw`. Surface
+                // them as ONE per-scenario warning diagnostic, not a per-tick log:
+                // the author sees, once, that a presentation-scoped script is
+                // reaching for host-owned state. Warning severity → the scenario
+                // still reports Ready (it compiled and ran fine).
+                let dropped = bridge_core::take_script_rejects();
+
+                // Publish status: any Error diagnostic → Error state; a warning-only
+                // set stays Ready. Cleared to OK only when a (re)compile ran clean.
                 let mut diags = Vec::new();
                 diags.extend(compile_diag);
                 diags.extend(runtime_err);
+                if !dropped.is_empty() {
+                    diags.push(Diagnostic::warning(
+                        format!(
+                            "client-scoped scenario dropped authoritative command(s): {} — \
+                             the host owns shared sim state. Move these to a host scenario, \
+                             or drop the `// @scope client` directive.",
+                            dropped.join(", ")
+                        ),
+                        None,
+                        None,
+                    ));
+                }
                 if !diags.is_empty() {
                     diag_updates.push((raw, Some(diags)));
                 } else if recompiled {
@@ -469,7 +490,10 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             let mut store = world.resource_mut::<DocumentDiagnostics>();
             for (raw, status) in diag_updates {
                 match status {
-                    Some(diags) => store.set_error(DocumentId::new(raw), diags),
+                    // Severity-derived: an error-carrying set marks Error, a
+                    // warning-only set (e.g. a dropped client-scoped command)
+                    // stays Ready while still surfacing the notice.
+                    Some(diags) => store.set_diagnostics(DocumentId::new(raw), diags),
                     None => store.set_ok(DocumentId::new(raw)),
                 }
             }
@@ -537,17 +561,19 @@ pub struct ScriptEventInbox {
 /// Observer: mirror every fired `TelemetryEvent` into the scenario inbox. Reuses
 /// the existing telemetry bus — scenarios are just another subscriber.
 ///
-/// Skips collection on a predicting client: the scenario driver (`run`) is gated
-/// by `scripts_run_here` and never executes there, so there is no consumer to
-/// drain the inbox and `pending` would grow without bound (review H1). This
-/// mirrors that same host-authoritative gate.
+/// Runs on EVERY peer. It collected only on the host originally, back when the
+/// driver was gated off on a predicting client (`scripts_run_here`) so nothing
+/// drained the inbox and `pending` would grow without bound (review H1). That
+/// gate is gone: client-scoped scenarios (`// @scope client`) now tick on the
+/// client, and [`ScenarioDriver::run`] drains the inbox UNCONDITIONALLY every
+/// pass (even with no active scenario), so there is no unbounded growth. A client
+/// scenario's `on_event` therefore sees the events that fire *on the client*
+/// (local input, client-side emits); host-authoritative game events reach it only
+/// once they are explicitly replicated — a scoped follow-up, not this collector's
+/// concern.
 pub fn collect_script_events(
     trigger: On<TelemetryEvent>,
     mut inbox: ResMut<ScriptEventInbox>,
-    role: Option<Res<lunco_core::NetworkRole>>,
 ) {
-    if matches!(role.as_deref(), Some(lunco_core::NetworkRole::Client)) {
-        return;
-    }
     inbox.pending.push(trigger.event().clone());
 }
