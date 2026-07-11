@@ -89,7 +89,7 @@ impl Plugin for UsdBevyPlugin {
 
         // Core glTF/USD scene component types. The workspace runs bevy with
         // `default-features = false`, so bevy's `reflect_auto_register` is OFF
-        // and these are NOT auto-registered. Any glTF `SceneRoot` we spawn (USD
+        // and these are NOT auto-registered. Any glTF `WorldAssetRoot` we spawn (USD
         // payload overlay, terrain, rovers) is deserialized via
         // `Scene::write_to_world_with`, which panics on the first unregistered
         // component type. Register the bounded set a glTF scene can contain so
@@ -949,7 +949,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         //   stays compatible with `lunco-usd-avian` mesh-collider
         //   pipelines.
         // - `lunco:assetMode = "scene"`: load the full glTF scene and
-        //   attach as a `SceneRoot` child. Preserves hierarchy,
+        //   attach as a `WorldAssetRoot` child. Preserves hierarchy,
         //   materials, and lights at the cost of being opaque to the
         //   USD prim-path tree.
         if let Some(asset_uri) = reader.resolved_asset(&sdf_path) {
@@ -978,14 +978,14 @@ fn instantiate_usd_prim_read<R: UsdRead>(
                 _ => {
                     let label = label.unwrap_or_else(|| "Scene0".to_string());
                     let path = format!("{asset_uri}#{label}");
-                    let scene_h: Handle<Scene> = asset_server.load(&path);
+                    let scene_h: Handle<WorldAsset> = asset_server.load(&path);
                     // Mark the entity so `hide_glb_placeholder_meshes`
                     // can drop the placeholder Mesh3d once this Scene
                     // finishes loading. The marker is harmless if the
                     // entity has no Mesh3d (e.g. `def Xform` without a
                     // primitive fallback).
                     commands.entity(entity)
-                        .try_insert(SceneRoot(scene_h))
+                        .try_insert(WorldAssetRoot(scene_h))
                         .try_insert(GlbPlaceholder)
                         .try_insert(PlaceholderAssetUri(path.clone()));
                 }
@@ -2242,7 +2242,7 @@ pub fn sample_usd_material_animation(
 
         let secs = lunco_time::domain_time(&resolved, binding, &world);
         let t = secs * plan.time_codes_per_second;
-        let Some(material) = materials.get_mut(&mat_handle.0) else { continue };
+        let Some(mut material) = materials.get_mut(&mat_handle.0) else { continue };
 
         // Base color: a shader `inputs:diffuseColor` wins over geom displayColor.
         // USD `color3f` is linear scene-referred (matches `apply_standard_material`).
@@ -2940,7 +2940,7 @@ pub fn get_attribute_as_f32<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) 
 }
 
 /// Marker inserted on prim entities that own both a primitive Cube
-/// fallback mesh **and** a glTF [`SceneRoot`]. Used by
+/// fallback mesh **and** a glTF [`WorldAssetRoot`]. Used by
 /// [`hide_glb_placeholder_meshes`] to find these entities cheaply.
 #[derive(Component)]
 pub struct GlbPlaceholder;
@@ -3217,15 +3217,15 @@ fn bake_pending_labels(
 }
 
 /// Removes the primitive Cube/Sphere/Cylinder fallback mesh once its
-/// sibling [`SceneRoot`] reports its glTF [`Scene`] asset fully loaded.
+/// sibling [`WorldAssetRoot`] reports its glTF [`WorldAsset`] asset fully loaded.
 fn hide_glb_placeholder_meshes(
     mut commands: Commands,
     // `Option<...>` so the system no-ops (instead of panicking on param
-    // validation) in minimal apps that never `init_asset::<Scene>()` — e.g.
+    // validation) in minimal apps that never `init_asset::<WorldAsset>()` — e.g.
     // headless tests that add `UsdBevyPlugin` without the full scene pipeline.
-    // Production always registers `Scene`, so behaviour there is unchanged.
-    events: Option<MessageReader<AssetEvent<Scene>>>,
-    scene_roots: Query<(Entity, &SceneRoot, Option<&ChildOf>), With<GlbPlaceholder>>,
+    // Production always registers `WorldAsset`, so behaviour there is unchanged.
+    events: Option<MessageReader<AssetEvent<WorldAsset>>>,
+    scene_roots: Query<(Entity, &WorldAssetRoot, Option<&ChildOf>), With<GlbPlaceholder>>,
     children: Query<&Children>,
     has_mesh: Query<(), With<Mesh3d>>,
     mut visibility: Query<&mut Visibility>,
@@ -3272,7 +3272,7 @@ pub fn reveal_placeholder_on_failure(
     asset_server: Res<AssetServer>,
     canonical: NonSend<CanonicalStages>,
     cfg: Res<DiagnosticLabelConfig>,
-    scene_roots: Query<(Entity, &SceneRoot, &GlobalTransform, &PlaceholderAssetUri, &UsdPrimPath), (With<GlbPlaceholder>, Without<DiagnosticStub>)>,
+    scene_roots: Query<(Entity, &WorldAssetRoot, &GlobalTransform, &PlaceholderAssetUri, &UsdPrimPath), (With<GlbPlaceholder>, Without<DiagnosticStub>)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     // Per-placeholder time spent waiting on its glTF scene. Used to trip the

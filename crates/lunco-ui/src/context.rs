@@ -31,7 +31,9 @@ impl<'w, 's> UiContext<'w, 's> {
     }
 
     /// Get mutable access to a resource.
-    pub fn resource_mut<R: Resource>(&mut self) -> Mut<'_, R> {
+    pub fn resource_mut<R: Resource<Mutability = bevy::ecs::component::Mutable>>(
+        &mut self,
+    ) -> Mut<'_, R> {
         self.world.resource_mut::<R>()
     }
 

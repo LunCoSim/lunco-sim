@@ -8,7 +8,7 @@ edition = "2021"
 # spawns USD entities with meshes + materials, and the headless server still
 # runs RenderPlugin in `backends:None`). The editor-only render-effect + picking
 # features (bevy_post_process/bevy_anti_alias/mesh_picking) ride the `ui` feature.
-bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light"] }
+bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light"] }
 # egui inspector, theme, transform gizmo, and the picking backend are all editor
 # concerns — optional, on `ui`. `commands::SpawnCommandPlugin` (the only thing a
 # headless server adds from this crate) uses none of them.

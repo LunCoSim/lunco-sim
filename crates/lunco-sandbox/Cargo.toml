@@ -48,7 +48,7 @@ required-features = ["ui"]
 # command line past its internal limit (link aborted with `std::length_error`).
 # Instead `UsdBevyPlugin` explicitly `register_type`s the bounded set of
 # glTF/USD scene component types — see `crates/lunco-usd-bevy/src/lib.rs`.
-bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light", "bevy_window"] }
+bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "bevy_window"] }
 avian3d = { workspace = true }
 big_space = { workspace = true }
 leafwing-input-manager = { workspace = true }

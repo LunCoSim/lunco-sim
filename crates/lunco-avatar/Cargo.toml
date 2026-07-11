@@ -32,7 +32,7 @@ serde = { workspace = true }
 # Built-in screen recorder (EasyScreenRecordPlugin). Optional + opt-in via the
 # `recording` feature: the `screenrecording` feature links libx264, which is
 # native-only and unsupported on Windows. Pinned to match the workspace bevy.
-bevy_dev_tools = { version = "=0.18.1", default-features = false, features = ["screenrecording"], optional = true }
+bevy_dev_tools = { version = "=0.19.0", default-features = false, features = ["screenrecording"], optional = true }
 
 [features]
 default = ["ui"]

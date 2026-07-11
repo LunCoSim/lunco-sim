@@ -305,7 +305,7 @@ fn bootstrap(world: &mut World) {
         .spawn((
             DirectionalLight {
                 illuminance: 8_000.0,
-                shadows_enabled: false,
+                shadow_maps_enabled: false,
                 ..default()
             },
             Transform::from_xyz(5.0, 10.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
@@ -439,7 +439,7 @@ fn resize_viewport_image(
     if !first_apply && dx < RESIZE_DELTA_PX && dy < RESIZE_DELTA_PX {
         return;
     }
-    let Some(image) = images.get_mut(handle) else {
+    let Some(mut image) = images.get_mut(handle) else {
         return;
     };
     image.resize(Extent3d {

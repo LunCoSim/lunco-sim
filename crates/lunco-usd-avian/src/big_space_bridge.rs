@@ -184,7 +184,7 @@ mod tests {
             Query<(), With<Grid>>,
             Query<(Option<&CellCoord>, &Transform)>,
         )> = SystemState::new(&mut world);
-        let (q_parents, q_grids, q_grids_check, q_spatial) = state.get(&world);
+        let (q_parents, q_grids, q_grids_check, q_spatial) = state.get(&world).expect("read-only queries always validate");
 
         // READ: body world pose.
         let (p, r) = world_pose(body, &q_parents, &q_grids, &q_spatial).unwrap();

@@ -76,6 +76,8 @@ pub struct ApplyReflectedSet {
 }
 
 impl Command for ApplyReflectedSet {
+    type Out = ();
+
     fn apply(self, world: &mut World) {
         let type_registry = world.resource::<AppTypeRegistry>().clone();
         let registry_read = type_registry.read();

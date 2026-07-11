@@ -207,7 +207,7 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
             // wants a hero cast shadow opts in per-light with
             // `inputs:shadow:enable = true`. (Was `unwrap_or(true)` — the
             // TODO(review #2) fix.)
-            let shadows_enabled = get_attribute_as_bool(reader, sdf_path, "inputs:shadow:enable").unwrap_or(false);
+            let shadow_maps_enabled = get_attribute_as_bool(reader, sdf_path, "inputs:shadow:enable").unwrap_or(false);
             let range = get_attribute_as_f32(reader, sdf_path, "lunco:light:range").unwrap_or(30.0);
 
             if let Some(cone_angle_deg) = get_attribute_as_f32(reader, sdf_path, "inputs:shaping:cone:angle") {
@@ -226,7 +226,7 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
                     color,
                     intensity: intensity_cd,
                     range,
-                    shadows_enabled,
+                    shadow_maps_enabled,
                     inner_angle,
                     outer_angle,
                     ..default()
@@ -245,7 +245,7 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
                     color,
                     intensity: intensity_cd,
                     range,
-                    shadows_enabled,
+                    shadow_maps_enabled,
                     ..default()
                 });
                 info!(

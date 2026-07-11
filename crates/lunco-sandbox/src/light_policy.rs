@@ -25,7 +25,7 @@
 //! The policy is applied **on possession events** (observers on [`PossessVessel`] /
 //! [`ReleaseVessel`]) and when the setting itself is toggled (`resource_changed`
 //! run-condition) — never polled per frame. It runs in `Update`, never the fixed
-//! sim tick, and only mutates a render flag (`shadows_enabled`): firewalled from
+//! sim tick, and only mutates a render flag (`shadow_maps_enabled`): firewalled from
 //! the deterministic core.
 
 use bevy::prelude::*;
@@ -72,7 +72,7 @@ impl SettingsSection for ShadowCastingSettings {
     const KEY: &'static str = "shadow_casting";
 }
 
-/// Set every local light's `shadows_enabled` for `mode` and the `possessed`
+/// Set every local light's `shadow_maps_enabled` for `mode` and the `possessed`
 /// vessel set. Called only on a possession/settings *event*, never per frame, so
 /// iterating the (handful of) local lights here is free.
 fn apply_projection(
@@ -84,14 +84,14 @@ fn apply_projection(
 ) {
     for (entity, mut light) in q_spot.iter_mut() {
         let want = shadow_wanted(entity, mode, possessed, parents);
-        if light.shadows_enabled != want {
-            light.shadows_enabled = want;
+        if light.shadow_maps_enabled != want {
+            light.shadow_maps_enabled = want;
         }
     }
     for (entity, mut light) in q_point.iter_mut() {
         let want = shadow_wanted(entity, mode, possessed, parents);
-        if light.shadows_enabled != want {
-            light.shadows_enabled = want;
+        if light.shadow_maps_enabled != want {
+            light.shadow_maps_enabled = want;
         }
     }
 }

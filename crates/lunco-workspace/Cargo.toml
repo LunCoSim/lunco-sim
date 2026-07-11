@@ -18,7 +18,7 @@ serde_json = { workspace = true }
 # than `{ workspace = true }` so it does NOT inherit the workspace's UI feature
 # list (bevy_render/bevy_winit/wayland/x11) — that keeps this crate headless and
 # lets the `WorkspaceResource` binding + session events live with the data.
-bevy = { version = "0.18.1", default-features = false, features = ["bevy_log"] }
+bevy = { version = "0.19.0", default-features = false, features = ["bevy_log"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

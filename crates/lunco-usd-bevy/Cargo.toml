@@ -10,7 +10,7 @@ edition = "2021"
 # Select the pure-Rust `zstd_rust` (ruzstd) backend so per-crate `cargo
 # test -p lunco-usd-bevy` works and to stay wasm-compatible (matches the
 # ruzstd choice already used by lunco-modelica).
-bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "mesh_picking", "tonemapping_luts", "zstd_rust"] }
+bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "mesh_picking", "tonemapping_luts", "zstd_rust"] }
 openusd = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 # `FlightSoftware` = the unified control-surface tag stamped on any

@@ -107,7 +107,7 @@ impl LunarSunShadow {
         DirectionalLight {
             color,
             illuminance: illuminance_lux,
-            shadows_enabled: true,
+            shadow_maps_enabled: true,
             shadow_depth_bias: self.depth_bias,
             shadow_normal_bias: self.normal_bias,
             ..Default::default()

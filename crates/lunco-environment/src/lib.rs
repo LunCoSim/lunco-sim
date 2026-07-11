@@ -270,7 +270,7 @@ pub struct SetEnvironmentLight {
     /// Sun color as linear RGB. `None` keeps current.
     pub sun_color: Option<[f32; 3]>,
     /// Whether the sun casts shadows. `None` keeps current.
-    pub shadows_enabled: Option<bool>,
+    pub shadow_maps_enabled: Option<bool>,
     /// Far bound of the first (sharpest) shadow cascade, metres.
     /// `None` keeps current.
     pub shadow_first_cascade_bound: Option<f32>,
@@ -354,8 +354,8 @@ fn on_set_environment_light(
         if let Some([r, g, b]) = cmd.sun_color {
             light.color = Color::linear_rgb(r, g, b);
         }
-        if let Some(s) = cmd.shadows_enabled {
-            light.shadows_enabled = s;
+        if let Some(s) = cmd.shadow_maps_enabled {
+            light.shadow_maps_enabled = s;
         }
         if let Some(b) = cmd.shadow_depth_bias {
             light.shadow_depth_bias = b;
@@ -451,7 +451,7 @@ fn spawn_earthshine(mut commands: Commands, existing: Query<(), With<Earthshine>
         DirectionalLight {
             illuminance: es.illuminance_lux,
             color: Color::linear_rgb(es.color[0], es.color[1], es.color[2]),
-            shadows_enabled: false,
+            shadow_maps_enabled: false,
             ..default()
         },
         Transform::from_rotation(Quat::from_euler(EulerRot::YXZ, 3.6, -0.25, 0.0)),

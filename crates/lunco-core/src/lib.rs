@@ -54,6 +54,11 @@ pub use derived::RebuildOnChange;
 pub use mobility::Mobility;
 pub use mocks::*;
 pub use telemetry::*;
+// Explicit re-export: bevy 0.19's prelude also names a `Severity`, and the
+// crate-root `use bevy::prelude::*` below shadows the glob above for external
+// path resolution (`lunco_core::Severity` would hit bevy's private import).
+// An explicit item outranks both globs.
+pub use telemetry::Severity;
 pub use log::*;
 pub use commands::{
     Ack, ActiveCommandId, CommandOutcome, CommandResults, EditIntent, Mutation, OpId, Reject,
@@ -495,7 +500,9 @@ impl Plugin for LunCoCorePlugin {
         app.register_type::<GridAnchor>()
            .register_type::<SoiMigrant>()
            .register_type::<ActuatorDrivenJoint>()
-           .register_type::<Severity>()
+           // `telemetry::` — bevy 0.19's prelude exports its own `Severity`
+           // (log-level type), which shadows ours in glob-import scopes.
+           .register_type::<crate::telemetry::Severity>()
            .register_type::<TelemetryValue>()
            .register_type::<TelemetryEvent>()
            .register_type::<Parameter>()

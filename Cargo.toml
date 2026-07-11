@@ -98,6 +98,12 @@ resolver = "2"
 # below and point it at `../openusd`.
 openusd = { git = "https://github.com/LunCoSim/openusd", branch = "main" }
 
+# transform-gizmo has no bevy-0.19 release (crates.io 0.9.0 targets bevy
+# 0.18, upstream main likewise). mitchty/transform-gizmo main is upstream
+# 0.9.0 ported to bevy 0.19 (egui 0.34 — matches bevy_egui 0.40). Pinned
+# to a commit; drop this patch when upstream ships a bevy-0.19 release.
+transform-gizmo-bevy = { git = "https://github.com/mitchty/transform-gizmo", rev = "d95d06997ab05a606c029a41dcf38d481fc03a70" }
+
 # [patch."https://github.com/LunCoSim/openusd"]
 # openusd = { path = "../openusd" }
 
@@ -129,7 +135,7 @@ description = "Initialize multi-crate workspace architecture for vessel control 
 # If a build break surfaces something that was silently relying on a
 # default-on feature, add it here with a `# used by …` comment rather
 # than re-enabling `default` (which un-strips the lot).
-bevy = { version = "0.18.1", default-features = false, features = [
+bevy = { version = "0.19.0", default-features = false, features = [
     # ── 2D / UI-only core. Anything 3D-shaped (PBR, GLTF, scenes,
     # meshes, post-processing, mesh picking) is *not* in this list —
     # crates that need 3D opt in via their own Cargo.toml so the
@@ -158,11 +164,16 @@ bevy = { version = "0.18.1", default-features = false, features = [
                                    # Enables `#[Command]` to always derive serde without per-field worry.
 ] }
 lunco-assets = { path = "crates/lunco-assets" }
-avian3d = { version = "0.6.1", default-features = false, features = ["3d", "f64", "parry-f64", "parallel", "debug-plugin", "default-collider", "collider-from-mesh", "bevy_diagnostic", "xpbd_joints"] }
-big_space = "0.12.0"
-leafwing-input-manager = "0.20.0"
-bevy_egui = { version = "0.39.1", features = ["serde"] }
-bevy-inspector-egui = "0.36.0"
+avian3d = { version = "0.7.0", default-features = false, features = ["3d", "f64", "parry-f64", "parallel", "debug-plugin", "default-collider", "collider-from-mesh", "bevy_diagnostic", "xpbd_joints"] }
+# big_space bevy-0.19 support is not released yet; consume PR #73
+# (aevyrie/big_space#73, "update to bevy 0.19") pinned to its head commit.
+# Swap back to a crates.io release once one ships for bevy 0.19.
+big_space = { git = "https://github.com/m-edlund/big_space", rev = "79e04cc01a84f3b8d199a0f97aaeb8245f203b16" }
+leafwing-input-manager = "0.21.0"
+# 0.40.x (egui 0.34) — NOT 0.41 (egui 0.35): bevy-inspector-egui 0.37
+# requires bevy_egui ^0.40; bumping past it would dual-link egui.
+bevy_egui = { version = "0.40.1", features = ["serde"] }
+bevy-inspector-egui = "0.37.0"
 # `mouse_interaction` (default) fires a gizmo drag on ANY left-press held over
 # the gizmo, with no handle check. Selection here is Shift+left-click and the
 # gizmo renders ON the selected object, so that driver made the selecting click
@@ -170,7 +181,6 @@ bevy-inspector-egui = "0.36.0"
 # plain (non-Shift) presses — see `gizmo::drive_gizmo_drag_no_shift`. Keep
 # `gizmo_picking_backend` (hover/handle hit-testing).
 transform-gizmo-bevy = { version = "0.9.0", default-features = false, features = ["gizmo_picking_backend"] }
-avian_pickup = "0.5.0-rc.1"
 chrono = "0.4.40"
 futures-lite = "2.3.0"
 resvg = "0.45"
@@ -213,9 +223,8 @@ rumoca-sim         = { git = "https://github.com/LunCoSim/rumoca", branch = "mai
 rumoca-tool-fmt    = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
 rumoca-tool-lint   = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
 
-egui_colors = "0.4.0"
 catppuccin-egui = "5.2.0"
-egui-phosphor = "0.7.1"
+egui-phosphor = "0.12.0"
 
 # Centralised here so version drift across crates is visible in one
 # place. Each crate opts in via `dep = { workspace = true }`.
@@ -238,7 +247,7 @@ crossbeam-channel = "0.5"
 # and the pre-AssetPlugin registrar drains them — no central hardcoded scheme
 # list. wasm-safe (collected via wasm-bindgen module init).
 inventory = "0.3"
-egui_plot = "0.34.1"
+egui_plot = "0.35.0"
 rfd = "0.15"
 tempfile = "3.10"
 thiserror = "2.0"
@@ -285,13 +294,13 @@ multihash-codetable = { version = "0.2", default-features = false, features = ["
 
 # ── Bevy sub-crates — pinned to the exact `bevy` version above ────────
 # These ship in lock-step with bevy; a skewed minor (e.g. bevy_reflect
-# "0.18" resolving ahead of bevy "0.18.1") risks subtle ABI/derive
+# "0.19" resolving ahead of bevy "0.19.0") risks subtle ABI/derive
 # breakage. Keep every entry == the `bevy` pin.
-bevy_reflect = "0.18.1"
-bevy_mesh = "0.18.1"
-bevy_shader = "0.18.1"
-bevy_asset = "0.18.1"
-bevy_picking = "0.18.1"
+bevy_reflect = "0.19.0"
+bevy_mesh = "0.19.0"
+bevy_shader = "0.19.0"
+bevy_asset = "0.19.0"
+bevy_picking = "0.19.0"
 
 # ── Lints (inherited via `[lints] workspace = true` per crate) ───────
 # Encodes policy decisions:

@@ -611,7 +611,7 @@ pub(crate) fn animate_tile_reveal(
         let t = (rev.elapsed / REVEAL_SECS).clamp(0.0, 1.0);
         // smoothstep ease so the settle starts/ends gently.
         let s = t * t * (3.0 - 2.0 * t);
-        if let Some(m) = materials.get_mut(&rev.anim) {
+        if let Some(mut m) = materials.get_mut(&rev.anim) {
             m.set("reveal", ParamValue::F32(s));
         }
         if t >= 1.0 {
@@ -1158,8 +1158,8 @@ pub(crate) fn bind_derived_maps_to_tiles(
             if *t != terrain || *mode != TerrainShaderMode::Lit {
                 continue;
             }
-            if let Some(m) = materials.get_mut(handle) {
-                apply_maps_to_material(m, maps, *depth);
+            if let Some(mut m) = materials.get_mut(handle) {
+                apply_maps_to_material(&mut m, maps, *depth);
             }
         }
     }
@@ -1178,8 +1178,8 @@ pub(crate) fn bind_shadow_cache_to_tiles(
             if *t != terrain || *mode != TerrainShaderMode::Lit {
                 continue;
             }
-            if let Some(m) = materials.get_mut(handle) {
-                apply_shadow_cache_to_material(m, cache);
+            if let Some(mut m) = materials.get_mut(handle) {
+                apply_shadow_cache_to_material(&mut m, cache);
             }
         }
     }

@@ -516,7 +516,7 @@ fn install_horizon_map(
     field: HeightField,
     millis: u128,
 ) {
-    if let Some(mesh) = meshes.get_mut(&mesh3d.0) {
+    if let Some(mut mesh) = meshes.get_mut(&mesh3d.0) {
         if let Some(VertexAttributeValues::Float32x3(pos)) =
             mesh.attribute(Mesh::ATTRIBUTE_POSITION)
         {
@@ -754,7 +754,7 @@ fn pick_sun<'a>(
 ) -> Option<(&'a GlobalTransform, f32, f32)> {
     sun.iter().max_by(|a, b| a.1.illuminance.total_cmp(&b.1.illuminance)).map(
         |(gt, light, ang, csm)| {
-            let csm_far = if light.shadows_enabled {
+            let csm_far = if light.shadow_maps_enabled {
                 csm.and_then(|c| c.bounds.last().copied()).unwrap_or(0.0)
             } else {
                 0.0
@@ -878,8 +878,8 @@ pub fn wire_terrain_materials(
                     || m.get_scalar("csm_far").is_none_or(|c| (c - csm_far).abs() > 1e-3)
             });
             if needs {
-                if let Some(m) = shader_mats.get_mut(&handle.0) {
-                    write_engine(m);
+                if let Some(mut m) = shader_mats.get_mut(&handle.0) {
+                    write_engine(&mut m);
                 }
             }
         } else {
@@ -1034,7 +1034,7 @@ pub fn shade_dynamic_entities(
                 .get(&handle.0)
                 .is_some_and(|m| m.get_scalar("sun_vis").map_or(true, |s| (s - q).abs() > 1e-3));
             if needs {
-                if let Some(m) = mats.get_mut(&handle.0) {
+                if let Some(mut m) = mats.get_mut(&handle.0) {
                     m.set_scalar("sun_vis", q);
                 }
             }
@@ -1069,7 +1069,7 @@ pub fn shade_dynamic_entities(
                             .remove::<HorizonShade>();
                         debug!("[horizon-dbg] {entity:?} {name:?} vis={q:.2} SHADE-CLEAR (std)");
                     } else if (state.last_vis - q).abs() > 1e-3 {
-                        if let Some(m) = std_mats.get_mut(&handle.0) {
+                        if let Some(mut m) = std_mats.get_mut(&handle.0) {
                             m.base_color = scale_color(state.original, q);
                         }
                         debug!("[horizon-dbg] {entity:?} {name:?} vis={q:.2} SHADE-UPDATE (std)");

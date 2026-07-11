@@ -214,7 +214,7 @@ pub fn load_missions_system(
                         SpacecraftBillboard,
                         Text2d::new(sc.name.clone()),
                         TextFont {
-                            font_size: 100.0,
+                            font_size: bevy::text::FontSize::Px(100.0),
                             ..default()
                         },
                         TextColor(Color::WHITE),

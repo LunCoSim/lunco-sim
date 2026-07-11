@@ -18,7 +18,10 @@ embed-assets = []
 # `smaa_luts` is mandatory: `big_space_setup` spawns the observer camera with
 # `Smaa`, and without the LUT bevy binds a wrong-dimension placeholder → every
 # frame drops (black viewport). Feature-unification carries it to dependent bins.
-bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_scene", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "smaa_luts", "mesh_picking"] }
+# `bevy_text`/`bevy_sprite_render`/`default_font`: the spacecraft billboard
+# labels (missions.rs) use `Text2d` — bevy 0.19 no longer pulls text in via
+# the render features, so opt in explicitly.
+bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "smaa_luts", "mesh_picking", "bevy_text", "bevy_sprite_render", "default_font"] }
 # egui shell used only by `src/ui/` (CelestialUiPlugin) — optional for headless.
 bevy_egui = { workspace = true, optional = true }
 lunco-workbench = { path = "../lunco-workbench", optional = true }

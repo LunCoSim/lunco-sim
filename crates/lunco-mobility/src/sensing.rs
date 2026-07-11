@@ -106,7 +106,7 @@ impl ApiQueryProvider for GroundHeightProvider {
 /// when the collider has no registered id, e.g. unregistered terrain).
 fn cast_ray_response(world: &mut World, origin: DVec3, dir: Dir3, max: f64) -> ApiResponse {
     let mut state: SystemState<(SpatialQuery, Res<ApiEntityRegistry>)> = SystemState::new(world);
-    let (spatial, registry) = state.get(world);
+    let (spatial, registry) = state.get(world).expect("SpatialQuery + registry always validate");
     match spatial.cast_ray(origin, dir, max, true, &SpatialQueryFilter::default()) {
         Some(hit) => {
             let point = origin + (*dir).as_dvec3() * hit.distance;

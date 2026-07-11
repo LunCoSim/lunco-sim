@@ -105,14 +105,14 @@ egui_plot = { workspace = true, optional = true }
 base64 = { workspace = true }
 # Docs view (ModelViewMode::Docs): HTML → Markdown → egui render.
 # `egui_commonmark` pulls the right `egui` version transitively to
-# match bevy_egui 0.39 (→ egui 0.33). Syntax highlighting is enabled
+# match bevy_egui 0.40 (→ egui 0.34). Syntax highlighting is enabled
 # so `<pre><code>` blocks in Modelica docs render with colour.
-egui_commonmark = { version = "0.22", features = ["better_syntax_highlighting"], optional = true }
+egui_commonmark = { version = "0.23", features = ["better_syntax_highlighting"], optional = true }
 # `all_loaders` wires up every shipped image source (file://, http://,
 # bytes://, raw paths) so images in Documentation HTML render. We add
 # a custom `modelica://` loader on top to resolve MSL-internal URIs
 # against the on-disk MSL tree.
-egui_extras = { version = "0.33", features = ["all_loaders"], optional = true }
+egui_extras = { version = "0.34", features = ["all_loaders"], optional = true }
 # Pure-Rust HTML → Markdown converter. Used once per Documentation
 # annotation to normalise into the shape commonmark expects.
 htmd = { version = "0.5", optional = true }

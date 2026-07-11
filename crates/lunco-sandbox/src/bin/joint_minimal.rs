@@ -60,7 +60,7 @@ fn setup(
     ));
 
     commands.spawn((
-        DirectionalLight { illuminance: 8000.0, shadows_enabled: false, ..default() },
+        DirectionalLight { illuminance: 8000.0, shadow_maps_enabled: false, ..default() },
         Transform::default().looking_at(Vec3::new(-1.0, -2.5, -1.5), Vec3::Y),
     ));
 
