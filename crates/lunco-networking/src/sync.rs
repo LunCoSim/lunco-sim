@@ -3096,6 +3096,7 @@ mod codec_roundtrip {
             assets: Vec::new(),
             journal_head: None,
             asset_base_url: None,
+            twin_scene: None,
         });
         let bytes = serialize_env(&manifest).expect("serialize");
         assert_eq!(&bytes[..4], &[13, 0, 0, 0], "ScenarioManifest must be index 13");
@@ -3200,6 +3201,7 @@ mod codec_roundtrip {
                 lamport: 7,
             }),
             asset_base_url: Some("http://10.0.0.5:5889/assets/".into()),
+            twin_scene: Some("sandbox_scene.usda".into()),
         });
         let back = deserialize_env(&serialize_env(&env).expect("serialize")).expect("deserialize");
         match back {

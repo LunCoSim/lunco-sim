@@ -191,6 +191,23 @@ pub struct ScenarioManifestMsg {
     /// Appended last: bincode is positional, so new fields must not shift the
     /// existing ones (see `media_type`).
     pub asset_base_url: Option<String>,
+    /// The entry scene's path **relative to the host's Twin root** (`[usd]
+    /// default_scene` verbatim, e.g. `sandbox_scene.usda`) — as opposed to
+    /// [`default_scene`](Self::default_scene), which is the *scenario-cache*
+    /// path (re-rooted at the reference closure's common ancestor, e.g.
+    /// `scenes/sandbox/sandbox_scene.usda`).
+    ///
+    /// A client that already has this Twin locally (native same-machine: the
+    /// twin is registered in `TwinRoots`) loads `twin://<name>/<twin_scene>` —
+    /// the **same asset path the host loaded** — so every prim derives the
+    /// **same `GlobalEntityId`** on both peers (identity is
+    /// `hash(namespace:source:path)`; `source` is the asset path). Loading the
+    /// `scenario://` copy instead gives a different `source` → different gids →
+    /// possession/prediction can't bind. A client WITHOUT the twin (web) has no
+    /// `twin://` to load and falls back to the `scenario://` cache path.
+    ///
+    /// Appended last (bincode positional). `None` mirrors `default_scene`.
+    pub twin_scene: Option<String>,
 }
 
 /// Client → host: "I'm missing these assets — send me their bytes." Each entry

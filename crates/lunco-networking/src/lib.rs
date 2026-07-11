@@ -58,6 +58,10 @@ pub mod journal_plane;
 pub mod scripted_policy;
 #[cfg(all(feature = "networking", not(target_family = "wasm")))]
 mod server;
+// Host-side USD reference-closure walk for the scenario manifest (native only —
+// it reads scene files off the host filesystem). See `usd_closure`.
+#[cfg(all(feature = "networking", not(target_family = "wasm")))]
+mod usd_closure;
 #[cfg(feature = "networking")]
 mod client;
 /// Native single-instance deep-link forwarding: route a clicked `luncosim://`
