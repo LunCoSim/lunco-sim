@@ -15,7 +15,7 @@
 # on purpose, so the snap must CANCEL that offset — the visible proof mount frames
 # derive placement rather than trusting a hand-typed transform.
 def Cube "Probe" (
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
 )
 {
     double size = 0.8

@@ -12,6 +12,8 @@ use avian3d::prelude::*;
 use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
 use lunco_usd_avian::BigSpacePhysicsBridgePlugin;
 
+mod support;
+
 fn step_app(app: &mut App, steps: usize) {
     for _ in 0..steps {
         let _ = app.world_mut().run_schedule(FixedUpdate);
@@ -22,12 +24,10 @@ fn step_app(app: &mut App, steps: usize) {
 #[ignore = "Phase 5 bridge not yet registered (avian solver/island coupling unresolved); \
             kept as a reproducer for future avian-native integration work"]
 fn bridge_steps_physics_without_panic() {
-    let mut app = App::new();
-    app.add_plugins((
-        MinimalPlugins,
-        PhysicsPlugins::default(),
-        BigSpacePhysicsBridgePlugin,
-    ));
+    // `headless_physics_app` supplies MinimalPlugins + AssetPlugin + Mesh +
+    // PhysicsPlugins (NO TransformPlugin — big_space drives its own propagation).
+    let mut app = support::headless_physics_app();
+    app.add_plugins(BigSpacePhysicsBridgePlugin);
     // big_space needs a BigSpace root + grid + floating origin for the bridge's
     // world_pose walks.
     let grid = Grid::new(2000.0, 0.0);
