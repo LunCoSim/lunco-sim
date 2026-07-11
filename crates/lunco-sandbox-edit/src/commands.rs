@@ -1910,7 +1910,8 @@ pub fn on_move_entity_command(
         Option<&mut Position>,
         Option<&mut LinearVelocity>,
     )>,
-    q_has_rb: Query<(), With<RigidBody>>,
+    q_rb: Query<&RigidBody>,
+    q_marker: Query<&JustMovedKinematic>,
 ) {
     let cmd = trigger.event();
     let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
@@ -1929,8 +1930,21 @@ pub fn on_move_entity_command(
     // Force the body to Kinematic for the duration of the move so
     // Avian treats the new pose as authoritative. RigidBody is an
     // immutable Avian component (no `&mut` access) — `insert`
-    // replaces it.
-    if q_has_rb.get(target).is_ok() {
+    // replaces it. The original kind is stashed on the marker and
+    // restored by `clear_kinematic_pulse_velocity` one tick later —
+    // a move stream (gizmo drag) must keep the FIRST capture, or the
+    // second move would capture the Kinematic we just inserted and
+    // the body would stay Kinematic forever (the pre-2026-07-11 bug:
+    // a moved rover hovered in mid-air permanently).
+    let restore = match q_marker.get(target) {
+        Ok(marker) => marker.restore,
+        Err(_) => q_rb
+            .get(target)
+            .ok()
+            .copied()
+            .filter(|rb| !matches!(rb, RigidBody::Kinematic)),
+    };
+    if q_rb.get(target).is_ok() {
         commands.entity(target).insert(RigidBody::Kinematic);
     }
 
@@ -1962,7 +1976,7 @@ pub fn on_move_entity_command(
             delta.z as f64 / dt,
         );
     }
-    commands.entity(target).insert(JustMovedKinematic);
+    commands.entity(target).insert(JustMovedKinematic { restore });
 
     info!(
         "MOVE_ENTITY: {:?} → ({:.3}, {:.3}, {:.3})",
@@ -2485,7 +2499,13 @@ pub fn persist_spawn_to_runtime_layer(
 /// pulse. [`clear_kinematic_pulse_velocity`] zeros that velocity
 /// the frame after the pulse so the body doesn't drift.
 #[derive(Component)]
-pub struct JustMovedKinematic;
+pub struct JustMovedKinematic {
+    /// The body kind to put back after the pulse tick — the Kinematic
+    /// forced by `on_move_entity_command` is only "for the duration of
+    /// the move". `None` = the body was already Kinematic (or has no
+    /// RigidBody): restore nothing.
+    pub restore: Option<RigidBody>,
+}
 
 /// Zeros the `LinearVelocity` of bodies marked with
 /// [`JustMovedKinematic`], **after one physics tick has consumed
@@ -2509,10 +2529,16 @@ pub struct JustMovedKinematic;
 ///   settled at its new position, no drift.
 pub fn clear_kinematic_pulse_velocity(
     mut commands: Commands,
-    mut q: Query<(Entity, &mut LinearVelocity), With<JustMovedKinematic>>,
+    mut q: Query<(Entity, &mut LinearVelocity, &JustMovedKinematic)>,
 ) {
-    for (e, mut vel) in q.iter_mut() {
+    for (e, mut vel, marker) in q.iter_mut() {
         vel.0 = DVec3::ZERO;
+        // Put the pre-move body kind back ("for the duration of the move").
+        // Re-inserting RigidBody goes through avian's replace hook, which
+        // wakes the island — a body released in mid-air falls.
+        if let Some(kind) = marker.restore {
+            commands.entity(e).insert(kind);
+        }
         commands.entity(e).remove::<JustMovedKinematic>();
     }
 }

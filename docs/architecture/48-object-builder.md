@@ -1,4 +1,4 @@
-# 45 — Object Builder
+# 48 — Object Builder
 
 Design analysis for an in-app tool that builds and edits simulation objects: a canvas
 for wiring connections, an editor for the Rhai behaviour attached to a prim, a USD prim

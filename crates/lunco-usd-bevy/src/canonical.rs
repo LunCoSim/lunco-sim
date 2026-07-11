@@ -843,7 +843,7 @@ mod authoring_tests {
         );
     }
 
-    // ── Object-builder live authors (doc 45 §3.2/§3.3) ──
+    // ── Object-builder live authors (doc 48 §3.2/§3.3) ──
     // These four are what made the rebuild cliff go away: each edit now composes on
     // the LIVE stage instead of forcing a whole-scene rebuild. The document-level
     // `UsdOp` tests prove the ops author into save-data; THESE prove the live-stage

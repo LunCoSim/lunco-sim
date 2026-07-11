@@ -1027,7 +1027,7 @@ mod tests {
 
     const TINY: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
 
-    /// The rebuild-cliff fix (doc 45 §3.3): `SetRelationship` and `SetConnection`
+    /// The rebuild-cliff fix (doc 48 §3.3): `SetRelationship` and `SetConnection`
     /// gained live-stage authors and must NO LONGER force a whole-scene rebuild;
     /// only the two composition-arc ops (which recompose a subtree wholesale) still
     /// do, alongside the pre-existing coarse ops. This is the routing half of the

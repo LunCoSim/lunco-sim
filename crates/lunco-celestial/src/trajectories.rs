@@ -381,7 +381,9 @@ pub fn trajectory_setup_system(
         Transform::default(),
         GlobalTransform::default(),
         Visibility::default(),
-        CellCoord::default(),
+        // No CellCoord at spawn: `trajectory_alignment_system` inserts one
+        // when (and only when) it parents the view to a Grid — a cell-entity
+        // anywhere else is invalid per big_space's hierarchy rules.
     ));
 
     commands.spawn((
@@ -402,7 +404,9 @@ pub fn trajectory_setup_system(
         Transform::default(),
         GlobalTransform::default(),
         Visibility::default(),
-        CellCoord::default(),
+        // No CellCoord at spawn: `trajectory_alignment_system` inserts one
+        // when (and only when) it parents the view to a Grid — a cell-entity
+        // anywhere else is invalid per big_space's hierarchy rules.
     ));
 }
 
@@ -720,7 +724,7 @@ pub fn trajectory_alignment_system(
     registry: Res<CelestialBodyRegistry>,
     q_frames: Query<(Entity, &CelestialReferenceFrame, Option<&big_space::prelude::Grid>, &Transform), Without<TrajectoryPath>>,
     q_bodies: Query<(Entity, &crate::registry::CelestialBody)>,
-    mut q_vistas: Query<(Entity, &TrajectoryView, &TrajectoryPath, &mut Transform, &mut CellCoord, Option<&ChildOf>), Without<CelestialReferenceFrame>>,
+    mut q_vistas: Query<(Entity, &TrajectoryView, &TrajectoryPath, &mut Transform, Option<&mut CellCoord>, Option<&ChildOf>), Without<CelestialReferenceFrame>>,
 ) {
     let jd = world.epoch_jd;
 
@@ -740,7 +744,7 @@ pub fn trajectory_alignment_system(
             .any(|d| d.ephemeris_id == eph_id && d.rotation_rate_rad_per_day != 0.0);
         if spins { tf.rotation.inverse() } else { Quat::IDENTITY }
     };
-    for (v_entity, view, path, mut transform, mut cell, current_parent) in q_vistas.iter_mut() {
+    for (v_entity, view, path, mut transform, cell, current_parent) in q_vistas.iter_mut() {
         let mut target_parent = None;
         let mut parent_grid: Option<&big_space::prelude::Grid> = None;
         // Anchored views sit under a ROTATING body frame; the sampled points
@@ -866,27 +870,47 @@ pub fn trajectory_alignment_system(
             };
             // Split through the parent grid so the view stays within one cell
             // (otherwise recenter_large_transforms would fight a large drift
-            // translation). Falls back to a raw f32 translation if the parent
-            // has no Grid (BodyFixed targets a body entity).
-            let (new_cell, new_translation) = match parent_grid {
-                Some(grid) => grid.translation_to_grid(desired_local),
-                None => (CellCoord::default(), desired_local.as_vec3()),
+            // translation). A parent WITHOUT a Grid (BodyFixed falling back to
+            // a plain body entity) must not keep a `CellCoord` at all: a
+            // cell-entity under a non-grid parent is invalid per big_space's
+            // hierarchy rules (cell-entities are direct grid children — the
+            // validator flags it, and HP propagation silently skips it), so
+            // the view becomes a plain low-precision Transform child instead.
+            let new_translation = match parent_grid {
+                Some(grid) => {
+                    let (new_cell, t) = grid.translation_to_grid(desired_local);
+                    match cell {
+                        Some(mut cell) => {
+                            if *cell != new_cell {
+                                *cell = new_cell;
+                            }
+                        }
+                        None => {
+                            commands.entity(v_entity).insert(new_cell);
+                        }
+                    }
+                    t
+                }
+                None => {
+                    if cell.is_some() {
+                        commands.entity(v_entity).remove::<CellCoord>();
+                    }
+                    desired_local.as_vec3()
+                }
             };
-            if *cell != new_cell {
-                *cell = new_cell;
-            }
             if transform.translation != new_translation || transform.rotation != counter_rotation {
                 transform.translation = new_translation;
                 transform.rotation = counter_rotation;
             }
         } else if view.reference_id == 10 {
-            // Sun frame fallback if needed
+            // Sun frame fallback: unparented → a plain Transform tree root;
+            // it must not carry a `CellCoord` either.
             if transform.translation != Vec3::ZERO || transform.rotation != Quat::IDENTITY {
                 transform.translation = Vec3::ZERO;
                 transform.rotation = Quat::IDENTITY;
             }
-            if *cell != CellCoord::default() {
-                *cell = CellCoord::default();
+            if cell.is_some() {
+                commands.entity(v_entity).remove::<CellCoord>();
             }
         }
     }

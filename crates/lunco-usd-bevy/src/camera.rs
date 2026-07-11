@@ -68,10 +68,14 @@ pub(crate) fn instantiate_camera_prim<R: UsdRead>(
     // illuminance) so lux and EV move together — without it a lunar scene
     // camera renders at Blender-default ev9.7 and blows out the terrain.
     //
-    // `CellCoord` puts the camera in big_space grid space so it can render
-    // (and, once activated, host the `FloatingOrigin`). It's harmless on a
-    // camera nested under a rover — the child's GlobalTransform still comes
-    // from the parent chain via big_space propagation.
+    // NO `CellCoord` here — deliberately. `resolve_camera_mounts` re-parents
+    // every nested camera to its enclosing grid and inserts the cell + `ChildOf`
+    // ATOMICALLY. Stamping a cell now, while the camera still sits under its
+    // USD parent, creates the one class big_space cannot propagate (a
+    // cell-entity under a non-grid parent, doc 45 class 2) — it was the sole
+    // source of the validator's spawn-frame reports. Until the resolver runs
+    // (next Update at the latest), the camera is a plain Transform child of a
+    // cell-entity: valid, propagated, and inactive anyway.
     commands.entity(entity).insert((
         Camera3d::default(),
         Camera {
@@ -81,7 +85,6 @@ pub(crate) fn instantiate_camera_prim<R: UsdRead>(
         projection,
         Tonemapping::AgX,
         Exposure::default(),
-        big_space::prelude::CellCoord::default(),
     ));
 
     info!(

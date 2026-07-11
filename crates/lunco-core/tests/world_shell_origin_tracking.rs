@@ -133,4 +133,14 @@ fn ensure_world_root_root_owns_grid_and_bigspace() {
         world.get::<big_space::prelude::BigSpace>(root).is_some(),
         "WorldRoot must carry BigSpace"
     );
+    assert!(
+        world.get::<Transform>(root).is_none(),
+        "WorldRoot must NOT carry a Transform: big_space's canonical root \
+         shape, and a root Transform re-arms the plain-f32 whole-tree \
+         propagation race. Physics apps must register \
+         BigSpacePhysicsBridgePlugin, whose rootless ColliderTransform \
+         propagation replaces the avian pass that needed this Transform \
+         (without the bridge, scale-carrying colliders collapse to unit \
+         size — measured 2026-07-11)."
+    );
 }

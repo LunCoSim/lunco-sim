@@ -118,21 +118,30 @@ pub fn ensure_world_root(world: &mut World) -> Entity {
     // this grid (`edge/2 + threshold`), i.e. it is a PRECISION knob — see
     // `docs/architecture/46` and the cell-edge rule in `big_space_setup.rs`.
     //
-    // It also carries the full spatial bundle INCLUDING `Transform`: Avian's
-    // physics transform handling follows the standard bevy convention
-    // (parentless root with a `Transform`), and removing it silently breaks
-    // every collider under the tree (rovers free-fall through the ground). The
-    // `Transform` also makes big_space's bevy-compat pass re-walk this tree
-    // with plain f32 math; `WorldShellPlugin` constrains
-    // `BigSpaceSystems::PropagateHighPrecision` to run AFTER the compat pass,
-    // so for every GlobalTransform big_space owns (now including the root and
-    // `WorldGrid`), the high-precision writer deterministically wins.
+    // NO `Transform` on the root — big_space's canonical root shape (its
+    // validator: `BigSpace + Grid + GlobalTransform`, WITHOUT `Transform`/
+    // `CellCoord`). A root `Transform` re-arms the plain-f32 bevy-compat
+    // pass over this whole tree (racing big_space's writers — held off only
+    // by ordering), and it was load-bearing for avian TWICE:
+    //
+    // 1. avian's default GT-based transform sync — severed by Phase 5's
+    //    `BigSpacePhysicsBridgePlugin` (owns Position ↔ cell/Transform).
+    // 2. avian's `propagate_collider_transforms`, whose root query skips
+    //    Transform-less tree roots, freezing `ColliderTransform` (offset AND
+    //    SCALE — `update_collider_scale` reads it). Measured 2026-07-11: the
+    //    4000×-scaled sandbox Ground collider collapsed to ~1 m and rovers
+    //    sank at ~17 m/s. Severed by the bridge's
+    //    `propagate_collider_transforms_rootless`, which computes every
+    //    collider's transform from its `ColliderOf` chain with no root
+    //    involved (`bridge_physics.rs::scaled_child_collider_ground_*`).
+    //
+    // Consequence: apps that spawn the world shell AND avian physics MUST
+    // register `BigSpacePhysicsBridgePlugin` (the sandbox does).
     let root = world
         .spawn((
             BigSpace::default(),
             Grid::new(cfg.cell_edge_length, 100.0),
             WorldRoot,
-            Transform::default(),
             GlobalTransform::default(),
             Visibility::default(),
             InheritedVisibility::default(),
@@ -199,6 +208,20 @@ impl Plugin for WorldShellPlugin {
                     .before(BigSpaceSystems::RecenterLargeTransforms),
             );
 
+        // Named companion to big_space's validator: that one dumps component
+        // lists but no `Name`s, which makes chasing a violation a guessing
+        // game. This audit logs the one class that actually corrupts poses —
+        // a `CellCoord` entity whose direct parent is not a `Grid` (big_space
+        // silently skips it, so it renders via the f32 compat convention
+        // while everything around it is origin-relative). Warns once per
+        // entity. Opt-in: `LUNCO_CELL_AUDIT=1`.
+        if std::env::var("LUNCO_CELL_AUDIT").is_ok_and(|v| v == "1") {
+            app.init_resource::<CellAuditReported>().add_systems(
+                PostUpdate,
+                audit_cells_under_non_grid_parents.after(BigSpaceSystems::PropagateHighPrecision),
+            );
+        }
+
         // Kill the dual-propagation race deterministically. big_space registers
         // BOTH its high-precision propagation AND a plain bevy-compat
         // `propagate_parent_transforms` in `TransformSystems::Propagate` with
@@ -254,5 +277,37 @@ fn anchor_owns_origin_by_default(
     }
     if let Some(anchor) = q_anchor.iter().next() {
         commands.entity(anchor).insert(FloatingOrigin);
+    }
+}
+
+/// Once-per-entity dedup for [`audit_cells_under_non_grid_parents`].
+#[derive(Resource, Default)]
+pub struct CellAuditReported(bevy::platform::collections::HashSet<Entity>);
+
+/// `LUNCO_CELL_AUDIT=1`: name every `CellCoord` entity whose direct parent is
+/// not a `Grid`. big_space's high-precision propagation only processes a
+/// cell-entity under a `Grid` parent — anywhere else the `CellCoord` is dead
+/// weight and the entity silently falls to the f32 compat pass (doc 45,
+/// violation class 2). The fix at the offending spawn/reparent site is to
+/// remove the `CellCoord` (plain `Transform` child) or parent to a grid.
+fn audit_cells_under_non_grid_parents(
+    mut reported: ResMut<CellAuditReported>,
+    q_cells: Query<(Entity, &ChildOf), With<CellCoord>>,
+    q_grids: Query<(), With<Grid>>,
+    q_names: Query<&Name>,
+) {
+    for (e, child_of) in q_cells.iter() {
+        let parent = child_of.parent();
+        if q_grids.get(parent).is_ok() || reported.0.contains(&e) {
+            continue;
+        }
+        reported.0.insert(e);
+        let name = q_names.get(e).map(|n| n.as_str().to_owned()).unwrap_or_else(|_| format!("{e:?}"));
+        let parent_name = q_names.get(parent).map(|n| n.as_str().to_owned()).unwrap_or_else(|_| format!("{parent:?}"));
+        bevy::log::warn!(
+            "[cell-audit] `{name}` ({e:?}) carries CellCoord but its parent \
+             `{parent_name}` ({parent:?}) is not a Grid — big_space will not \
+             propagate it (doc 45 class 2)"
+        );
     }
 }

@@ -578,7 +578,7 @@ fn on_apply_usd_op(trigger: On<ApplyUsdOp>, mut commands: Commands) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// AttachComponent — build-from-parts (doc 45 §3.1)
+// AttachComponent — build-from-parts (doc 48 §3.1)
 // ─────────────────────────────────────────────────────────────────────
 
 /// Attach a component asset to a host body as a jointed child, deriving the

@@ -162,3 +162,112 @@ Class 2 remains for `BodyFixed` trajectory views parented to body entities
 (today only the invisible `Artemis 2 Moon-Relative`): a cell-entity under a
 non-grid parent is rendered by the compat pass only. Any future visible
 BodyFixed view must parent to a grid, or drop its `CellCoord`.
+
+## ⚠ Addendum (2026-07-11): the strobe's writer is AVIAN's propagation, not (only) the compat pass
+
+The measured "~1 frame in 5–9 renders plain-f32 GTs for anything
+`touch_celestial_transforms` doesn't force-dirty" (3 385 jump events/15 s
+when the touch list was deleted) finally has a mechanism. There are THREE
+plain-f32 whole-tree GlobalTransform writers in the app:
+
+1. big_space's bevy-compat `propagate_parent_transforms` (PostUpdate) —
+   ordered before `PropagateHighPrecision` by `WorldShellPlugin` ✓;
+2. **avian's `propagate_before_physics`** (`avian3d
+   physics_transform/mod.rs:99-104`, default ON) — registers *bevy's own*
+   `propagate_parent_transforms` + `sync_simple_transforms` **inside the
+   `PhysicsSchedule`**, i.e. it rewrites every GT reachable from the
+   root-`Transform` `WorldRoot` in absolute convention on every 60 Hz physics
+   tick. In PostUpdate, big_space's change-gated HP pass rewrites only
+   changed/origin-moved entities and SKIPS the rest — so on tick frames
+   avian's plain values survive to the renderer. 60 Hz vs a ~300 fps
+   uncapped renderer = 1 frame in ~5. **This system was never ordered
+   against big_space and cannot be — it runs in a different schedule.**
+3. `sync_simple_transforms` (both registrations) — parentless entities only.
+
+Corollaries:
+- Physics is CORRECT under the traveling origin *because of* writer 2:
+  inside the `PhysicsSchedule`, GTs are avian-propagated absolute, so
+  `transform_to_position` (which reads `GlobalTransform`,
+  `physics_transform/mod.rs:188`) never sees big_space's origin-relative
+  values. Do NOT flip `propagate_before_physics: false` in isolation —
+  physics would then read origin-relative render GTs and break.
+- `touch_celestial_transforms` is the de-facto reconciler between writer 2
+  and the HP pass; it stays until physics gets its own transform domain.
+- This is the precise, mechanical statement of why Phase 5 (doc 47) /
+  the §3 two-space split is the real fix: physics must stop sharing
+  `GlobalTransform` with the render world.
+
+### Phase 5 landed (2026-07-11): the physics transform domain
+
+`BigSpacePhysicsBridgePlugin` (`lunco-usd-avian/src/big_space_bridge.rs`,
+registered in the sandbox after `PhysicsPlugins`) disables all three of
+avian's f32 sync systems — `propagate_before_physics` (writer 2 above),
+`transform_to_position`, `position_to_transform`; all runtime `run_if`
+gates on `PhysicsTransformConfig` — and owns the sync in the f64 cell
+chain:
+
+- **READ** (`pose_to_position`, Prepare): a body re-reads
+  `Position`/`Rotation` from `world_pose_seeded` ONLY when its own
+  `(CellCoord, Transform)` differs from the `BridgeShadow` copy captured at
+  the bridge's last write — i.e. when an external writer (spawn, teleport,
+  gizmo, USD animation, anchor system, big_space recentring) moved it. A
+  fired body re-reads all descendant bodies too (chassis teleport carries
+  jointed wheels). Standalone no-body colliders (sensor zones) are covered;
+  body-attached child colliders keep avian's `ColliderTransform` path.
+- **WRITEBACK** (`position_to_pose`, Writeback): Dynamic bodies only; the
+  solved world pose is written to `Transform` relative to the parent frame
+  (nearest ancestor body's fresh solve, else the ancestor grid's chain
+  pose) and the CURRENT cell. Cells are never written — big_space's
+  `recenter_large_transforms` owns the re-split, which round-trips through
+  the READ rule. Jointed sub-bodies without `CellCoord` (rover wheels) get
+  their local transform against the chassis' solved pose.
+- The 2026-07-09 `narrow_phase` island panic (`islands/mod.rs:547`) was the
+  FIRST bridge dirtying every static's `Position` every tick — whole-world
+  contact churn corrupted avian's island bookkeeping. The shadow gate is
+  the fix: statics at rest are never touched.
+- `Position` is now the **BigSpace root frame** (absolute), not the
+  collapsed plain-propagation frame: cell offsets are honoured (a body >1
+  cell from the site no longer collapses onto it) and physics is
+  magnitude-proof (integration-tested settling at 2e8 m with cell-local
+  `Transform`s). Consumers that compared avian `Position` against render
+  `GlobalTransform` coincide only near the floating origin — same caveat
+  as before, now stated.
+- With writer 2 gone, render GTs are big_space-owned exclusively; the
+  strobe writer no longer exists. `touch_celestial_transforms` stays until
+  its removal is re-measured under the bridge (`LUNCO_JUMP_PROBE=1`) — do
+  not delete the two together.
+
+### Canonicalization follow-up (same day) — LANDED on the second attempt
+
+- **First attempt (reverted within the hour):** removing WorldRoot's
+  `Transform` sank every live rover at damping-terminal ~17 m/s. Avian's
+  `propagate_collider_transforms` (ColliderTransformPlugin — NOT among the
+  three syncs Phase 5 disables) only descends from tree roots WITH a
+  `Transform`; with it frozen, `update_collider_scale`'s child branch read a
+  stale `ColliderTransform`, and the sandbox Ground — a UNIT cube with
+  `xformOp:scale = (4000, 0.2, 4000)` — collapsed to a ~1 m collider. The
+  camera-relative jump probe stayed SILENT throughout (the chase cam falls
+  with its rover): co-falling is invisible to relative probes; absolute API
+  position checks caught it.
+- **Second attempt (landed):** the bridge now owns collider transforms.
+  `propagate_collider_transforms_rootless` (bridge module, same
+  `PhysicsTransformSystems::Propagate` set) recomputes every collider's
+  `ColliderTransform` from its `ColliderOf` chain — plain nodes compose
+  translation/rotation/scale, rigid-body nodes reset translation/rotation
+  and keep the running scale, faithful to avian's recursion — with NO tree
+  root involved. avian's own pass still runs and no-ops on rootless trees.
+  With that in place: **WorldRoot is `Transform`-free (big_space-canonical)
+  and `BigSpaceValidationPlugin` is re-enabled** in sandbox debug builds.
+  Pinned by `bridge_physics.rs::
+  scaled_child_collider_ground_settles_without_root_transform` and the
+  structural ABSENCE assert in `world_shell_origin_tracking.rs`.
+  Consequence: any app that spawns the world shell AND avian physics must
+  register `BigSpacePhysicsBridgePlugin` (the sandbox does; `luncosim` has
+  no physics content).
+- **Trajectory views only carry `CellCoord` under Grid parents**
+  (`trajectory_alignment_system`): views spawn cell-less; the alignment
+  system inserts the cell when parenting to a grid and removes it when
+  falling back to a plain body entity (the last known class-2 violation —
+  "Artemis 2 Moon-Relative"). A cell-entity under a non-grid parent is
+  invalid; a plain `Transform` child there is the correct, compat-propagated
+  form. This part LANDED.

@@ -1445,26 +1445,27 @@ impl Plugin for SandboxCorePlugin {
                 ..Default::default()
             })
             // Persistent world shell: one BigSpace root + `WorldGrid` + one
-            // `FloatingOrigin`. big_space only registers its validation plugin
-            // under `debug_assertions`, so the `.disable()` is gated the same way
-            // (calling it in release would panic — the plugin isn't in the group).
-            .add_plugins({
-                let group = BigSpaceDefaultPlugins.build();
-                #[cfg(debug_assertions)]
-                let group = group.disable::<big_space::validation::BigSpaceValidationPlugin>();
-                group
-            })
+            // `FloatingOrigin`. The validation plugin (debug builds only, logs
+            // errors, never panics) is ENABLED: WorldRoot is Transform-free —
+            // big_space-canonical — now that the Phase 5 bridge owns BOTH
+            // things the root `Transform` was load-bearing for (avian's GT
+            // sync and its root-anchored ColliderTransform propagation). The
+            // validator is the guard that keeps new spawn paths canonical.
+            .add_plugins(BigSpaceDefaultPlugins)
             // EntityCount is cheap and useful any time we look at perf.
             .add_plugins(bevy::diagnostic::EntityCountDiagnosticsPlugin::default())
             .add_plugins(PhysicsPlugins::default().set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all()))
-            // NOTE: Phase 5 (BigSpacePhysicsBridgePlugin — decouple avian from the
-            // f32 render Transform) is intentionally NOT registered here. Replacing
-            // avian's transform sync surfaced deep coupling with its solver/island/
-            // contact bookkeeping (schedule-ambiguity panic fixed by PhysicsStepSystems
-            // ordering; then a runtime island panic in narrow_phase). Reverted to keep
-            // physics on avian's default sync, which is working. The bridge module +
-            // headless test remain in lunco-usd-avian for future work (the avian-native
-            // integration needs more than a sync-swap). See docs/architecture/47 + memory.
+            // Phase 5: physics stops sharing GlobalTransform with the render
+            // world. Disables ALL of avian's f32 transform sync — including
+            // `propagate_before_physics`, the third plain-GT whole-tree writer
+            // (the measured 1-in-5–9 render strobe; doc 45 addendum) — and owns
+            // the Position ↔ (cell, Transform) sync in the f64 cell chain. The
+            // 2026-07-09 narrow_phase island panic was the old bridge dirtying
+            // every static's Position every tick (whole-world contact churn);
+            // this bridge is shadow-gated: a body syncs only when an external
+            // writer actually moved it. Must be added AFTER PhysicsPlugins
+            // (it overrides PhysicsTransformConfig).
+            .add_plugins(lunco_usd::BigSpacePhysicsBridgePlugin)
             // 12 solver substeps (avian default 6): joint-based rovers buzz the
             // chassis under drive torque at 6 substeps. Quantified in the headless
             // `rover_jitter` probe. See `project_physical_rover_suspension`.

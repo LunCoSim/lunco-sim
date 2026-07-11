@@ -1,5 +1,5 @@
 //! Attach a component asset to a host body as a jointed child — the op-lowering
-//! behind "build from parts" (`docs/architecture/45-object-builder.md` §3.1).
+//! behind "build from parts" (`docs/architecture/48-object-builder.md` §3.1).
 //!
 //! ## The duplication this removes
 //!
@@ -134,7 +134,7 @@ impl AttachSpec {
     }
 
     /// Attach `asset` by matching a **plug frame on the part** to a **socket frame
-    /// on the host** — the mount abstraction (doc 45 §3.1). Both frames are given
+    /// on the host** — the mount abstraction (doc 48 §3.1). Both frames are given
     /// as local [`Transform`]s (read off `xformOp:*` on the socket/plug prims by the
     /// caller); this computes the part placement + rotation so the plug coincides
     /// with the socket, via [`resolve_mount_placement`]. The joint anchor still
@@ -436,7 +436,7 @@ mod tests {
         assert!(add_child < relate, "part exists before the joint targets it");
     }
 
-    // ── Mount-frame math (doc 45 §3.1) ──
+    // ── Mount-frame math (doc 48 §3.1) ──
 
     fn close(a: [f64; 3], b: [f64; 3]) -> bool {
         (0..3).all(|i| (a[i] - b[i]).abs() < 1e-4)
