@@ -126,5 +126,8 @@ impl Plugin for TerrainSurfacePlugin {
         // ever stop it again (one-sided, infinitely thin) — reseat it on the
         // surface, loudly. Physics cadence: only matters while the sim steps.
         app.add_systems(FixedUpdate, crate::collider_ring::rescue_tunneled_bodies);
+        // Overturn recovery: a `KeepUpright` vessel resting on its roof gets
+        // righted (whole jointed assembly, rigidly) after a settle delay.
+        app.add_systems(FixedUpdate, crate::collider_ring::rescue_overturned_vessels);
     }
 }

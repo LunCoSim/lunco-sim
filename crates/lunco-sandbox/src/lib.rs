@@ -1876,7 +1876,16 @@ fn parse_terrain_layer_stack<R: UsdRead>(
     // Whether the scene authors its OWN overzoom prim (even a zeroed/disabled one
     // counts — that's an explicit opt-out of the default sub-DEM detail).
     let mut authored_overzoom = false;
-    for child in reader.children(terrain) {
+    // CANONICAL child order. `children()` iterates a hash map, so its order varies
+    // per process AND per parse (bridge vs composed re-parse). The stack's fold
+    // order feeds `SurfaceOracle::content_key` — unsorted, every launch minted a
+    // fresh surface key for identical content, invalidating the entire tile/derived
+    // map cache (cold-bake storm on every boot) and reordering non-commutative
+    // edits. Sorting by path makes stack order — and thus the key and the composed
+    // surface — a pure function of the document.
+    let mut children: Vec<_> = reader.children(terrain).into_iter().collect();
+    children.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    for child in children {
         let attrs = UsdLayerAttrs { reader, sdf: child.clone() };
         // An edit prim (carries the packed `lunco:edit`)? Aggregate into the single
         // edits layer, keyed by its prim path (its stable identity).
@@ -2056,10 +2065,37 @@ struct TerrainDocument {
     doc: u64,
 }
 
-/// Monotonic suffix for authored edit prim names (`edit_<n>`), unique per session so a
-/// removed edit's name is never reused.
+/// Monotonic suffix for authored edit prim names (`edit_<n>` / `rock_<n>`), unique per
+/// session so a removed edit's name is never reused. Starts at 0 but is re-seeded past
+/// any existing children at every authoring site ([`seed_edit_seq_past_children`]) — a
+/// runtime overlay restored from `.lunco/runtime/…` carries last session's prims, and
+/// reusing a taken name would make the `AddPrim` fail (the edit silently dropped).
 #[derive(Resource, Default)]
 struct TerrainEditPrimSeq(u64);
+
+/// Advance `seq` past every `edit_<n>` / `rock_<n>` child already present under
+/// `terrain_path` in the composed (`base ⊕ runtime`) document, so the next authored
+/// name can never collide with a restored or historical prim. Runs at authoring time
+/// (not doc-mount time) so it cannot race the `DocumentOpened` runtime-overlay
+/// restore; `composed_arc` is memoized by generation, so this is a cheap child walk.
+fn seed_edit_seq_past_children(
+    registry: &lunco_usd::UsdDocumentRegistry,
+    doc: lunco_doc::DocumentId,
+    terrain_path: &str,
+    seq: &mut TerrainEditPrimSeq,
+) {
+    let Some(host) = registry.host(doc) else { return };
+    let Ok(sdf) = openusd::sdf::Path::new(terrain_path) else { return };
+    let composed = host.document().composed_arc();
+    for child in composed.children(&sdf) {
+        let Some(name) = child.as_str().rsplit('/').next() else { continue };
+        for prefix in ["edit_", "rock_"] {
+            if let Some(n) = name.strip_prefix(prefix).and_then(|s| s.parse::<u64>().ok()) {
+                seq.0 = seq.0.max(n + 1);
+            }
+        }
+    }
+}
 
 /// Author one edit onto every **doc-backed** terrain as USD ops on its document's
 /// **runtime** layer — non-destructive, ephemeral over the base DEM (Omniverse
@@ -2076,6 +2112,7 @@ fn author_terrain_edit(
 ) {
     for (prim_path, td) in terrains {
         let doc = lunco_doc::DocumentId::new(td.doc);
+        seed_edit_seq_past_children(registry, doc, &prim_path.path, seq);
         let name = format!("edit_{}", seq.0);
         seq.0 += 1;
         let edit_prim = format!("{}/{name}", prim_path.path.trim_end_matches('/'));
@@ -2090,7 +2127,8 @@ fn author_terrain_edit(
                 reference: None,
             },
         );
-        if added.is_err() {
+        if let Err(e) = added {
+            warn!("[terrain-edit] AddPrim {edit_prim} failed — edit dropped: {e:?}");
             continue;
         }
         // 2. The packed edit parameters (shared schema with `parse_edit`).
@@ -2190,22 +2228,21 @@ fn on_place_rock_authored(
     let Some(mut registry) = registry else { return };
     for (prim_path, td) in &terrains {
         let doc = lunco_doc::DocumentId::new(td.doc);
+        seed_edit_seq_past_children(&registry, doc, &prim_path.path, &mut seq);
         let name = format!("rock_{}", seq.0);
         seq.0 += 1;
         let rock_prim = format!("{}/{name}", prim_path.path.trim_end_matches('/'));
-        if registry
-            .apply(
-                doc,
-                lunco_usd::UsdOp::AddPrim {
-                    edit_target: lunco_usd::LayerId::runtime(),
-                    parent_path: prim_path.path.clone(),
-                    name,
-                    type_name: None,
-                    reference: None,
-                },
-            )
-            .is_err()
-        {
+        if let Err(e) = registry.apply(
+            doc,
+            lunco_usd::UsdOp::AddPrim {
+                edit_target: lunco_usd::LayerId::runtime(),
+                parent_path: prim_path.path.clone(),
+                name,
+                type_name: None,
+                reference: None,
+            },
+        ) {
+            warn!("[terrain-edit] AddPrim {rock_prim} failed — rock dropped: {e:?}");
             continue;
         }
         let attrs: [(&str, &str, String); 5] = [

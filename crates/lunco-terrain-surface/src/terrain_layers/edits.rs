@@ -127,9 +127,22 @@ impl EditsLayer {
         })
     }
 
-    /// Build from a list of identified edits, in fold order — the **projection** of
-    /// the terrain document's edit prims (the parser feeds this).
-    pub fn from_edits(edits: Vec<(LayerId, EditKind)>) -> Self {
+    /// Build from a list of identified edits — the **projection** of the terrain
+    /// document's edit prims (the parser feeds this). Fold order is CANONICALIZED to
+    /// creation order (the monotonic `edit_<n>` suffix, then the full id as a
+    /// tiebreak): the parser walks prims in storage order, which is neither authored
+    /// nor stable across parses, and edits do not commute (brush → flatten ≠
+    /// flatten → brush). Canonical order also keeps the layer's `content_key` a pure
+    /// function of the document, so tile/derived-map caches hit across relaunches.
+    pub fn from_edits(mut edits: Vec<(LayerId, EditKind)>) -> Self {
+        fn trailing_num(id: &LayerId) -> u64 {
+            let s = id.as_str();
+            let digits = s.rfind(|c: char| !c.is_ascii_digit()).map_or(s, |i| &s[i + 1..]);
+            digits.parse().unwrap_or(u64::MAX)
+        }
+        edits.sort_by(|(a, _), (b, _)| {
+            trailing_num(a).cmp(&trailing_num(b)).then_with(|| a.as_str().cmp(b.as_str()))
+        });
         EditsLayer { edits, min_wavelength: 0.0 }
     }
 

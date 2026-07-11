@@ -177,7 +177,10 @@ fn start_derived_bakes(
 /// v3: crater profile band-limited + continuous at reach (same crater
 /// `content_key`, different sampled surface).
 /// v4: albedo scalar packed into normal-map alpha; LAYER_RES 512 → 1024.
-const CACHE_FORMAT_VERSION: u64 = 4;
+/// v5: tone (albedo) derived with a 3-texel stencil on a 6-texel-limited source
+/// (1-texel stencil at the 2-texel band edge returned per-texel checker → the
+/// mid-field texel mosaic); AO marched at half res and bilinear-expanded.
+const CACHE_FORMAT_VERSION: u64 = 5;
 
 /// The derived-layer bake as a [`lunco_precompute::Bake`] — the content-addressed
 /// disk cache (Substrate B) owns the load/store/rebake orchestration; this only
@@ -307,14 +310,27 @@ fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
     let half = oracle.half_extent() as f64;
     let region = Square { center: [0.0, 0.0], half };
     let res = LAYER_RES;
-    // Gate over-zoom synthesis at the map's texel size (512² over the full
-    // extent is far coarser than the synthetic detail — skip it, don't alias it).
-    let oracle = &oracle.detail_limited(2.0 * half / res as f64);
+    let texel = 2.0 * half / res as f64;
+    // Gate over-zoom synthesis at the map's texel size (the map is far coarser
+    // than the synthetic detail — skip it, don't alias it).
+    let limited = oracle.detail_limited(2.0 * texel);
 
-    let normals = normal_map(oracle, &region, res);
-    let slope = slope_map(oracle, &region, res);
-    let ao = ao_map(oracle, &region, res, half * AO_RADIUS_FRAC, AO_DIRS, AO_STEPS);
-    let albedo = albedo_map(oracle, &region, res);
+    let normals = normal_map(&limited, &region, res);
+    let slope = slope_map(&limited, &region, res);
+    // AO is smooth by construction (a horizon integral over AO_RADIUS_FRAC of
+    // the extent) — bake the hemisphere march at HALF res (¼ the cost; this was
+    // the whole cold-bake wait) and bilinear-expand to pack resolution.
+    let ao_res = (res / 2).max(1);
+    let ao_limited = oracle.detail_limited(2.0 * (2.0 * half / ao_res as f64));
+    let ao_small =
+        ao_map(&ao_limited, &region, ao_res, half * AO_RADIUS_FRAC, AO_DIRS, AO_STEPS);
+    let ao = lunco_terrain_core::upsample_bilinear(&ao_small, ao_res, res);
+    // Tone: 3-texel curvature stencil on a source limited at 2× the stencil.
+    // The old 1-texel stencil on the 2-texel-limited source sat exactly AT
+    // Nyquist → per-texel checker noise → the hard texel mosaic at mid range.
+    const TONE_STENCIL_TEXELS: f64 = 3.0;
+    let tone_limited = oracle.detail_limited(2.0 * TONE_STENCIL_TEXELS * texel);
+    let albedo = albedo_map(&tone_limited, &region, res, TONE_STENCIL_TEXELS);
 
     let roughness: Vec<f32> =
         slope.iter().map(|&s| roughness_from_slope(s, ROUGH_BASE, ROUGH_STEEP_RAD)).collect();
