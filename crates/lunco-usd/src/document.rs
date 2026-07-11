@@ -1512,14 +1512,14 @@ mod tests {
             DocumentOrigin::writable_file("/tmp/attach.usda"),
         );
 
-        let spec = AttachSpec {
-            edit_target: LayerId::root(),
-            host_path: "/Rig/Chassis".into(),
-            name: "Wheel".into(),
-            asset: "components/mobility/wheel.usda".into(),
-            placement: [0.5, -0.3, 1.2],
-            joint: AttachJoint::Revolute { axis: Axis::X },
-        };
+        let spec = AttachSpec::new(
+            LayerId::root(),
+            "/Rig/Chassis",
+            "Wheel",
+            "components/mobility/wheel.usda",
+            [0.5, -0.3, 1.2],
+            AttachJoint::Revolute { axis: Axis::X },
+        );
         for op in attach_component_ops(&spec) {
             doc.apply(op).expect("each attach op applies in sequence");
         }

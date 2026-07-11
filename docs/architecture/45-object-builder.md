@@ -339,30 +339,51 @@ like any other edit. **Debounce it.** A drag advances the document generation ev
 
 ---
 
-## 5. Sequencing
+## 5. Sequencing & status
 
-Ordered by what unblocks what, not by visibility.
+Ordered by what unblocks what, not by visibility. Status as of the current pass.
 
-**Phase 0 — make the loop safe.** Refuse to open non-doc-backed scenes in the builder. Wire
-`UndoManager`. Add `SetVariantSelection`. Give `SetRelationship` an incremental author so the
-attach path doesn't rebuild the world. None of this is visible; all of it is load-bearing.
+**Phase 0 — make the loop safe.** ✅ mostly done. `SetVariantSelection` added; `SetRelationship`
+given an incremental live-stage author so the attach path doesn't rebuild the world (§3.3);
+`scene_document_for` provides the doc-back check a builder needs (§3.7). **Open:** wire
+`UndoManager` — this is *not* a wire-up, it's an architectural decision (see below). Refuse-to-open
+a non-doc-backed scene lands with the builder's open path.
 
-**Phase 1 — see and tune.** USD prim tree panel. Inspector reads `customData` for ranges and
-units. This alone delivers "modify parameters" and most of "edit USD models".
+**Phase 1 — see and tune.** ⏳ started. The **Object Builder perspective** exists
+(`lunco-sandbox-edit/src/ui/mod.rs`, `ObjectBuilderPerspective`) — it composes the entity tree +
+palette + viewport + Inspector into a build workspace, reachable as a title-bar tab. **Open:** a
+USD-*prim* tree (vs the entity tree) needs a `PrimTreeView` view-model + producer (panels can't
+query or read the non-send `CanonicalStages` — the producer is the only bridge); and the Inspector
+reading `customData {min,max,unit}` for bounded parameter sliders.
 
-**Phase 2 — wire.** Connection canvas as a second projector. Small, because the substrate and
-the op both exist.
+**Phase 2 — wire.** ⏳ open. Connection canvas as a second `lunco-canvas` projector. The substrate
+(`lunco-canvas` is generic) and the op (`SetConnection`, now with a working live author — §3.3) both
+exist. The projector (StageView → Scene of prim-nodes + connection-edges) is a pure, unit-testable
+transform; the egui interaction and wire-drag → `SetConnection` need the running app.
 
-**Phase 3 — assemble.** `lunco:mount:*` schema, `AttachComponent` macro op, palette drag-to-socket.
-This is what makes "build a new rover or a robotic arm" a real sentence. Retrofit `wheel.usda`
-and `rocker_bogie.usda` as the proving ground: the bogie should lose its hand-written joint anchors.
+**Phase 3 — assemble.** ⏳ math done, UI open. `AttachComponent` and its op-lowering are landed and
+tested (§3.1); `resolve_mount_placement` / `AttachSpec::from_mount` (`attach.rs`) compute a part's
+placement + rotation so a plug frame aligns to a socket frame, unit-tested against hand-computed
+matrices. **Open:** the `lunco:mount:*` schema on assets, the UI that reads two mount frames off the
+composed stage and calls `from_mount` (the frame *reading* is the app-validated part), and the
+`rocker_bogie.usda` retrofit that drops its hand-written joint anchors.
 
-**Phase 4 — behaviour.** Rhai editor with the Modelica layouter pattern, diagnostics gutter fed
-by the line/col that `ScriptStatus` already returns, and save-back-to-prim
-(`commands.rs:198`) closed.
+**Phase 4 — behaviour.** ⏳ half done. Save-back-to-prim is **closed** (§3.7). **Open:** the rhai
+editor panel (Modelica layouter pattern) with a diagnostics gutter fed by the line/col `ScriptStatus`
+already returns.
 
-Phase 3 is the interesting one and the only one that invents anything. Phases 0–2 are mostly
-connecting parts that were built for this and never joined up.
+### The `UndoManager` decision (Phase 0's open item)
+
+`UndoManager` (`lunco-twin-journal`) is built but unused, and wiring it is genuinely decision-blocked,
+not mechanical. Two undo stacks exist: the live per-document `DocumentHost` inverse stack (wired, what
+`Ctrl+Z` uses today) and the journal `UndoManager` (per-author, twin-wide scope). They record the same
+edits and **cannot both drive one `Undo` command** — running both double-undoes. Worse, the journal
+recorder fires identically for a fresh edit, an undo, and a redo, so it cannot feed `UndoManager`'s
+`record_local` / `record_redo` split correctly without new plumbing. The networked-author isolation is
+*safe* (local edits are the only ones a recorder-fed manager ever sees — peer edits bypass the recorder),
+so the block is purely: **make the journal authoritative and retire the `DocumentHost` stack, or demote
+`UndoManager` to a separate twin-wide/cross-document undo the per-document command doesn't touch.** That
+is a call to make deliberately, not to guess.
 
 ---
 

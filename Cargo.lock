@@ -7288,6 +7288,7 @@ dependencies = [
  "lunco-api",
  "lunco-assets",
  "lunco-avatar",
+ "lunco-canvas",
  "lunco-celestial",
  "lunco-controller",
  "lunco-core",
