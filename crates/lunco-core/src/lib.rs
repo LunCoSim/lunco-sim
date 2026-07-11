@@ -282,6 +282,13 @@ pub struct SelectableRoot;
 #[derive(Component)]
 pub struct Ground;
 
+/// Marker for vessel root bodies that have a meaningful "upright" (rovers,
+/// landers): recovery systems may auto-right the body — and its joint-connected
+/// assembly — when it comes to rest overturned. Plain props and rocks must NOT
+/// carry this; a tipped rock staying tipped is correct.
+#[derive(Component)]
+pub struct KeepUpright;
+
 /// Physical properties used for gravity, collision, and mass-based calculations.
 ///
 /// These properties use double precision (`f64`) to maintain simulation integrity

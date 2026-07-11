@@ -106,21 +106,15 @@ pub enum TerrainShaderMode {
 }
 
 impl TerrainShaderMode {
-    /// Platform default when a terrain authors no explicit mode. WEB uses the
-    /// cheap flat shader ([`Plain`](Self::Plain)): the production [`Lit`](Self::Lit)
-    /// regolith shader evaluates ~5+ `fbm` calls per fragment (bump normals via
-    /// finite differences + dust + grain), which is the dominant ~100 ms render
-    /// cost on a WebGL iGPU. Native keeps the full look. Switchable live in the
-    /// Inspector either way.
+    /// Platform default when a terrain authors no explicit mode: [`Lit`](Self::Lit)
+    /// everywhere. Web used to default to [`Plain`](Self::Plain) when the Lit
+    /// far field was carried by ~5 unconditional per-fragment `fbm` calls
+    /// (~100 ms on a WebGL iGPU); the far field is texture-driven now (baked
+    /// surface/normal maps) and `terrain_geomorph_web.wgsl` gates every bump
+    /// layer behind its distance fade, so distant fragments cost two texture
+    /// samples. Switchable live in the Inspector either way.
     pub fn platform_default() -> Self {
-        #[cfg(target_arch = "wasm32")]
-        {
-            TerrainShaderMode::Plain
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            TerrainShaderMode::Lit
-        }
+        TerrainShaderMode::Lit
     }
 
     /// The `.wgsl` this mode draws with (all carry the CDLOD vertex morph).

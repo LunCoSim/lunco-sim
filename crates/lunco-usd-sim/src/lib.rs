@@ -920,6 +920,9 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                 // `inherits` — so keyboard drive works on spawned rovers too.
                 FlightSoftware::new(port_map, &["throttle", "steer", "brake"]),
                 lunco_core::SelectableRoot,
+                // Rovers have a meaningful "upright" — opt into overturn
+                // recovery (see `lunco_terrain_surface::collider_ring`).
+                lunco_core::KeepUpright,
                 RoverWheels::default(),
             ));
 

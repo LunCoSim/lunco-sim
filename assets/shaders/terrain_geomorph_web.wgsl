@@ -308,7 +308,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         }
         if (blend > 0.0) {
             let vis = textureSampleLevel(shadow_cache, shadow_cache_sampler, in.uv, 0.0).r;
-            color = vec4(color.rgb * mix(1.0, vis, blend), color.a);
+            // Floor at 0.15 — post-lit multiply would crush the fill too.
+            color = vec4(color.rgb * mix(1.0, max(vis, 0.15), blend), color.a);
         }
     }
 #endif

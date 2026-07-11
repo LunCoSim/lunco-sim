@@ -131,9 +131,22 @@ pub fn ao_map<S: HeightSource>(
 /// distant relief legible even where geometry/shading detail has LOD'd away.
 /// Curvature is the central-difference Laplacian normalised by the texel step,
 /// squashed through `tanh` so extreme relief saturates instead of clipping.
-pub fn albedo_map<S: HeightSource>(src: &S, region: &Square, res: usize) -> Vec<f32> {
+///
+/// `stencil_texels` widens the curvature stencil (in texels). A 1-texel
+/// Laplacian on a source band-limited at 2 texels sits exactly AT Nyquist and
+/// returns per-texel checker noise instead of curvature — rendered as a hard
+/// mosaic of map texels at mid distance. Pair a stencil of `s` texels with a
+/// source limited to wavelengths ≥ `2·s` texels; the `/ stencil` keeps the
+/// response to SMOOTH curvature at the same visual level regardless of width.
+pub fn albedo_map<S: HeightSource>(
+    src: &S,
+    region: &Square,
+    res: usize,
+    stencil_texels: f64,
+) -> Vec<f32> {
     let res = res.max(1);
-    let eps = texel_eps(region, res);
+    let stencil = stencil_texels.max(1.0);
+    let eps = texel_eps(region, res) * stencil;
     let mut out = Vec::with_capacity(res * res);
     for iz in 0..res {
         for ix in 0..res {
@@ -146,10 +159,38 @@ pub fn albedo_map<S: HeightSource>(src: &S, region: &Square, res: usize) -> Vec<
                 - 4.0 * h)
                 / eps;
             // Concave (positive Laplacian) → darker; convex → brighter.
-            let curve = (-lap * 2.0).tanh() as f32;
+            let curve = (-lap * 2.0 / stencil).tanh() as f32;
             let slope = src.slope_at(x, z, eps) as f32;
             let a = 0.5 + 0.30 * curve + 0.10 * (slope / 0.6).min(1.0);
             out.push(a.clamp(0.0, 1.0));
+        }
+    }
+    out
+}
+
+/// Bilinear upsample of a square scalar map from `src_res`² to `dst_res`².
+/// Lets smooth-by-construction channels (AO) bake at reduced resolution —
+/// quarter the hemisphere-march cost at half res — then expand to pack size.
+pub fn upsample_bilinear(src: &[f32], src_res: usize, dst_res: usize) -> Vec<f32> {
+    assert_eq!(src.len(), src_res * src_res);
+    if src_res == dst_res {
+        return src.to_vec();
+    }
+    let mut out = Vec::with_capacity(dst_res * dst_res);
+    let scale = if dst_res > 1 { (src_res - 1) as f32 / (dst_res - 1) as f32 } else { 0.0 };
+    for iz in 0..dst_res {
+        let fz = iz as f32 * scale;
+        let z0 = (fz as usize).min(src_res - 1);
+        let z1 = (z0 + 1).min(src_res - 1);
+        let tz = fz - z0 as f32;
+        for ix in 0..dst_res {
+            let fx = ix as f32 * scale;
+            let x0 = (fx as usize).min(src_res - 1);
+            let x1 = (x0 + 1).min(src_res - 1);
+            let tx = fx - x0 as f32;
+            let top = src[z0 * src_res + x0] * (1.0 - tx) + src[z0 * src_res + x1] * tx;
+            let bot = src[z1 * src_res + x0] * (1.0 - tx) + src[z1 * src_res + x1] * tx;
+            out.push(top * (1.0 - tz) + bot * tz);
         }
     }
     out
@@ -317,7 +358,7 @@ mod tests {
     #[test]
     fn albedo_map_rim_brighter_than_bowl() {
         let r = region();
-        let a = albedo_map(&Pit, &r, 16);
+        let a = albedo_map(&Pit, &r, 16, 1.0);
         let res = 16;
         let at = |ix: usize, iz: usize| a[iz * res + ix];
         // The conical pit's floor is concave (positive Laplacian) → darker than
