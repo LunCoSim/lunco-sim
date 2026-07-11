@@ -27,7 +27,11 @@ use crate::tile_mesh::{bake_tile_mesh, TileMesh};
 /// retires tiles baked with the old aliasing profile).
 /// v3: shading-normal `eps` is a fixed world scale across LOD depths (was
 /// per-depth → per-depth brightness steps under the normal-driven lunar BRDF).
-const CACHE_FORMAT_VERSION: u64 = 3;
+/// v4: vertex heights gated at 2·step (true Nyquist — 1·step kept rim-scale
+/// features right at the sampling limit → mid-field sawtooth craters); morph
+/// targets sample a 4·step parent-gated surface (were this tile's finer heights
+/// on the 2×-spaced even lattice → aliased morph band + pop at the tile swap).
+const CACHE_FORMAT_VERSION: u64 = 4;
 
 /// One tile bake as a [`lunco_precompute::Bake`] entry.
 struct TileBake<'a> {
@@ -60,11 +64,21 @@ impl lunco_precompute::Bake for TileBake<'_> {
     }
 
     fn bake(&self) -> TileMesh {
-        // Gate synthetic over-zoom detail at THIS tile's vertex spacing (part of
-        // the pure bake definition — and of the key via `res` + region size).
+        // Band-limit at TRUE Nyquist for this tile's vertex spacing (2 samples
+        // per shortest wavelength — the collider path's convention). Morph
+        // targets live on the parent's 2×-spaced lattice, so they sample a
+        // 2×-coarser gate again: the fully-morphed tile IS the parent surface.
         let step = self.region.side() / (self.res.max(2) - 1) as f64;
-        let limited = self.oracle.detail_limited(step);
-        bake_tile_mesh(&limited, self.region, self.res, self.dem_half_extent, self.origin_xz)
+        let limited = self.oracle.detail_limited(2.0 * step);
+        let parent_limited = self.oracle.detail_limited(4.0 * step);
+        bake_tile_mesh(
+            &limited,
+            &parent_limited,
+            self.region,
+            self.res,
+            self.dem_half_extent,
+            self.origin_xz,
+        )
     }
 
     fn store(dir: &Path, out: &TileMesh) -> lunco_precompute::StorageResult<()> {

@@ -414,6 +414,21 @@ pub struct DemBuildPhysicsHold {
     paused_by_us: bool,
 }
 
+/// The ring node (canonical-depth quadtree coord) covering terrain-local
+/// `(x, z)`, or `None` outside the terrain footprint. Must agree with the
+/// wanted-set derivation in [`update_collider_ring`].
+fn ring_node(half: f64, depth: u8, x: f64, z: f64) -> Option<QuadCoord> {
+    if x.abs() > half || z.abs() > half {
+        return None;
+    }
+    let tiles_per_side = 1u32 << depth;
+    let tile_side = (2.0 * half) / tiles_per_side as f64;
+    let idx = |v: f64| -> u32 {
+        (((v + half) / tile_side).floor() as i64).clamp(0, tiles_per_side as i64 - 1) as u32
+    };
+    Some(QuadCoord { depth, x: idx(x), z: idx(z) })
+}
+
 /// Freeze the sim while a DEM terrain is still building, so physics-driven bodies
 /// (rovers) don't fall through the not-yet-ready terrain collider.
 ///
@@ -427,13 +442,51 @@ pub struct DemBuildPhysicsHold {
 /// outstanding (it's present from the USD bridge until `finish_dem_builds` removes
 /// it — even on a build error, so this can never dead-lock), then release to
 /// `Playing` so the rovers settle onto the freshly-built collider.
+/// Additionally to the DEM build itself, the hold now covers the **collider-ring
+/// warm-up gap**: on a ring terrain the static collider is suppressed, and the
+/// per-body ring tiles bake OFF-THREAD after the build lands — releasing physics
+/// in that window let a joint-suspension (fully `Dynamic`) rover free-fall,
+/// tunnel under the heightfield, and be gone (the raycast rovers merely hovered).
+/// The transport stays `Paused` until every `Dynamic` body inside a ring
+/// terrain's footprint has a RESIDENT ring tile under it. Never dead-locks:
+/// `update_collider_ring` derives its wanted set from the same bodies every
+/// frame, so the awaited tiles are exactly the ones already baking.
+#[allow(clippy::type_complexity)]
 pub fn hold_physics_until_dem_ready(
     mut hold: ResMut<DemBuildPhysicsHold>,
     building: Query<(), With<crate::terrain::DemTerrainRequest>>,
+    rings: Query<(
+        &GlobalTransform,
+        &crate::stream_viz::DemHeightField,
+        &TerrainColliderRing,
+        &ColliderTiles,
+    )>,
+    bodies: Query<(&RigidBody, &GlobalTransform)>,
     transport: Option<ResMut<lunco_time::TimeTransport>>,
 ) {
     let Some(mut transport) = transport else { return };
-    if !building.is_empty() {
+    let mut wait = !building.is_empty();
+    if !wait {
+        'terrains: for (t_gt, hf, ring, tiles) in &rings {
+            let inv = t_gt.affine().inverse();
+            let half = hf.0.half_extent() as f64;
+            for (rb, gt) in &bodies {
+                if !matches!(rb, RigidBody::Dynamic) {
+                    continue;
+                }
+                let local = inv.transform_point3(gt.translation());
+                let Some(coord) = ring_node(half, ring.depth, local.x as f64, local.z as f64)
+                else {
+                    continue; // off this terrain — its ring doesn't apply
+                };
+                if !tiles.map.contains_key(&coord) {
+                    wait = true;
+                    break 'terrains;
+                }
+            }
+        }
+    }
+    if wait {
         if matches!(transport.mode, lunco_time::TransportMode::Playing) {
             transport.mode = lunco_time::TransportMode::Paused;
             hold.paused_by_us = true;
@@ -441,6 +494,70 @@ pub fn hold_physics_until_dem_ready(
     } else if hold.paused_by_us {
         transport.mode = lunco_time::TransportMode::Playing;
         hold.paused_by_us = false;
+    }
+}
+
+/// How far BELOW the analytic surface a body must be before the rescue fires.
+/// Generous: crater bowls are part of the surface (the oracle includes them),
+/// so a legitimately-parked body is never more than its own radius below.
+const TUNNEL_RESCUE_MARGIN: f64 = 5.0;
+
+/// Safety net for tunneled bodies: any `Dynamic` body more than
+/// [`TUNNEL_RESCUE_MARGIN`] below the composed surface (inside a ring terrain's
+/// footprint) is reseated just above the surface with its velocity zeroed.
+/// Heightfields are infinitely thin one-sided surfaces — once a body gets below
+/// one (boot gap, extreme speed, a solver blow-up) no collider will ever stop
+/// it again; without this net it falls forever. Fires rarely and loudly.
+pub fn rescue_tunneled_bodies(
+    terrains: Query<
+        (&GlobalTransform, &crate::stream_viz::DemHeightField),
+        With<TerrainColliderRing>,
+    >,
+    mut bodies: Query<(
+        Entity,
+        &RigidBody,
+        &GlobalTransform,
+        &mut Transform,
+        Option<&mut avian3d::prelude::LinearVelocity>,
+        Option<&mut avian3d::prelude::AngularVelocity>,
+    )>,
+) {
+    for (t_gt, hf) in &terrains {
+        let inv = t_gt.affine().inverse();
+        let half = hf.0.half_extent() as f64;
+        for (entity, rb, gt, mut tf, lin, ang) in &mut bodies {
+            if !matches!(rb, RigidBody::Dynamic) {
+                continue;
+            }
+            let local = inv.transform_point3(gt.translation());
+            let (x, z) = (local.x as f64, local.z as f64);
+            if x.abs() > half || z.abs() > half {
+                continue;
+            }
+            let surface = hf.0.height_at(x, z);
+            let depth_below = surface - local.y as f64;
+            if depth_below <= TUNNEL_RESCUE_MARGIN {
+                continue;
+            }
+            // Lift in the terrain's frame: move the body's own Transform up by
+            // the world-space delta (terrain frames are unrotated in practice;
+            // the delta is computed in local Y and mapped back through the
+            // terrain rotation for correctness).
+            let lift_local = bevy::math::DVec3::new(0.0, depth_below + 1.0, 0.0);
+            let lift_world = t_gt.affine().transform_vector3(lift_local.as_vec3());
+            tf.translation += lift_world;
+            if let Some(mut v) = lin {
+                v.0 = bevy::math::DVec3::ZERO;
+            }
+            if let Some(mut w) = ang {
+                w.0 = bevy::math::DVec3::ZERO;
+            }
+            warn!(
+                "[collider-ring] rescued tunneled body {entity:?}: {:.1} m below the \
+                 surface at local ({x:.0}, {z:.0}) — reseated on top, velocity zeroed",
+                depth_below
+            );
+        }
     }
 }
 

@@ -116,10 +116,15 @@ impl Plugin for TerrainSurfacePlugin {
                 crate::collider_ring::despawn_orphaned_collider_tiles,
             ),
         );
-        // Freeze the sim while a DEM terrain is still building so rovers don't fall
-        // through the not-yet-ready collider (esp. web, where the DEM load is slow).
-        // See `collider_ring::hold_physics_until_dem_ready`.
+        // Freeze the sim while a DEM terrain is still building — and, on ring
+        // terrains, until the ring tiles under every dynamic body are resident —
+        // so rovers don't fall through the not-yet-ready collider (esp. web,
+        // where the DEM load is slow). See `collider_ring::hold_physics_until_dem_ready`.
         app.init_resource::<crate::collider_ring::DemBuildPhysicsHold>();
         app.add_systems(Update, crate::collider_ring::hold_physics_until_dem_ready);
+        // Tunnel rescue: once a body slips under a heightfield no collider will
+        // ever stop it again (one-sided, infinitely thin) — reseat it on the
+        // surface, loudly. Physics cadence: only matters while the sim steps.
+        app.add_systems(FixedUpdate, crate::collider_ring::rescue_tunneled_bodies);
     }
 }

@@ -43,8 +43,15 @@ pub struct TileMesh {
 /// anchor** (UVs stay DEM-global). Pass the tile's own world centre to keep
 /// vertices small and f32-precise when the tile is anchored to its own big_space
 /// `CellCoord`; pass `[0.0, 0.0]` for DEM-absolute positions.
+/// `morph_src` is the surface the CDLOD **morph targets** sample — band-limited
+/// for the PARENT lattice's spacing (2× this tile's). The morph end-state is
+/// what the parent tile actually renders; sampling it from this tile's finer
+/// surface aliased rim-scale features across the 2×-spaced even lattice (the
+/// mid-field "sawtooth craters") and made the tile→parent swap pop. Pass the
+/// same source twice when no distinct parent gate exists (tests, flat ground).
 pub fn bake_tile_mesh(
     src: &dyn HeightSource,
+    morph_src: &dyn HeightSource,
     region: Square,
     res: usize,
     dem_half_extent: f64,
@@ -83,6 +90,18 @@ pub fn bake_tile_mesh(
         [n[0] as f32, n[1] as f32, n[2] as f32]
     };
 
+    // Pre-sample the PARENT-gated surface on the even lattice — the heights every
+    // morph target lerps toward. One sample per even/even vertex (res²/4), each
+    // shared by up to four vertices that snap to it.
+    let even = res.div_ceil(2);
+    let mut parent_y = vec![0.0f32; even * even];
+    for iz in (0..res).step_by(2) {
+        for ix in (0..res).step_by(2) {
+            let (wx, wz) = world(ix, iz);
+            parent_y[(iz / 2) * even + (ix / 2)] = morph_src.height_at(wx, wz) as f32;
+        }
+    }
+
     let mut positions = Vec::with_capacity(res * res);
     let mut morph_targets = Vec::with_capacity(res * res);
     let mut normals = Vec::with_capacity(res * res);
@@ -96,13 +115,12 @@ pub fn bake_tile_mesh(
             max_y = max_y.max(y);
             positions.push([(wx - ox) as f32, y, (wz - oz) as f32]);
 
-            // Snap to the parent's even lattice. The snap target `(ix & !1, iz & !1)`
-            // is always an already-baked grid vertex (row-major walk, indices only
-            // snap DOWN), so its height is reused from `positions` instead of
-            // re-sampling the oracle — the same `height(world(..))` value, halving
-            // the bake's oracle samples. Even/even vertices reuse their own `y`.
+            // Snap to the parent's even lattice, with the PARENT-gated height —
+            // NOT this tile's own finer height at that spot. Even/even vertices
+            // morph in place vertically onto the parent's value too, so the fully
+            // morphed tile IS the parent surface (pop-free swap, no aliasing).
             let (sx, sz) = world(ix & !1, iz & !1);
-            let sy = positions[(iz & !1) * res + (ix & !1)][1];
+            let sy = parent_y[(iz / 2) * even + (ix / 2)];
             morph_targets.push([(sx - ox) as f32, sy, (sz - oz) as f32]);
 
             normals.push(normal_at(wx, wz));
@@ -204,7 +222,8 @@ mod tests {
     #[test]
     fn flat_dem_bakes_flat_no_morph() {
         let res = 5;
-        let m = bake_tile_mesh(&flat_dem(), Square { center: [0.0, 0.0], half: 50.0 }, res, 100.0, [0.0, 0.0]);
+        let dem = flat_dem();
+        let m = bake_tile_mesh(&dem, &dem, Square { center: [0.0, 0.0], half: 50.0 }, res, 100.0, [0.0, 0.0]);
         // Interior grid first, then appended skirt verts.
         assert!(m.positions.len() >= res * res);
         assert!(m.indices.len() >= 4 * 4 * 6);
@@ -220,7 +239,7 @@ mod tests {
         let dem = ramp_dem();
         let region = Square { center: [0.0, 0.0], half: 50.0 };
         let res = 5;
-        let m = bake_tile_mesh(&dem, region, res, 100.0, [0.0, 0.0]);
+        let m = bake_tile_mesh(&dem, &dem, region, res, 100.0, [0.0, 0.0]);
         let step = region.side() / (res as f64 - 1.0);
         let x0 = region.center[0] - region.half;
         for iz in 0..res {
@@ -244,7 +263,7 @@ mod tests {
     fn positions_carry_dem_height() {
         let dem = ramp_dem();
         let res = 5;
-        let m = bake_tile_mesh(&dem, Square { center: [0.0, 0.0], half: 50.0 }, res, 100.0, [0.0, 0.0]);
+        let m = bake_tile_mesh(&dem, &dem, Square { center: [0.0, 0.0], half: 50.0 }, res, 100.0, [0.0, 0.0]);
         // height == world x on this ramp (interior verts only; skirts hang below).
         for p in &m.positions[..res * res] {
             assert!((p[1] - p[0]).abs() < 1e-2, "pos.y {} != world x {}", p[1], p[0]);
