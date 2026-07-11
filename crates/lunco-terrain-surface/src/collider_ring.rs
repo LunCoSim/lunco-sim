@@ -370,6 +370,8 @@ pub fn update_collider_ring(
             let res = ring.res;
             let oracle_arc: Arc<SurfaceOracle> = hf.0.clone();
             let task = pool.spawn(async move {
+                // Off-thread body → own Tracy zone.
+                let _span = bevy::log::info_span!("collider_ring_tile_bake").entered();
                 let heights = sample_heights_xz(&oracle_arc, region, res);
                 heightfield_collider(heights, side)
             });

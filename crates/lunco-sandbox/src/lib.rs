@@ -73,6 +73,8 @@ mod ui;
 /// `ui`-gated. See [`light_policy`].
 #[cfg(feature = "ui")]
 mod light_policy;
+#[cfg(feature = "ui")]
+mod terrain_horizon;
 /// OS `luncosim://` scheme registration (desktop integration). Native + the
 /// networking feature only — there's nothing to dial without the wire.
 #[cfg(all(feature = "networking", not(target_family = "wasm")))]
@@ -1578,6 +1580,8 @@ impl Plugin for SandboxCorePlugin {
         app.init_resource::<TerrainEditPrimSeq>()
             .add_observer(on_brush_terrain_authored)
             .add_observer(on_flatten_terrain_authored)
+            .add_observer(on_place_crater_authored)
+            .add_observer(on_place_rock_authored)
             .add_observer(on_remove_terrain_edit_authored)
             // Doc-backed crater/rock tuning authors to USD (→ project → regen), instead
             // of the direct stack-mutation path (which handles document-free terrains).
@@ -1595,6 +1599,13 @@ impl Plugin for SandboxCorePlugin {
         // scene open. Pure derived read of `TerrainStreamStatus`.
         #[cfg(feature = "ui")]
         app.add_systems(Update, report_terrain_stream_status);
+
+        // Far-field self-shadow for STREAMED terrains: bake the horizon
+        // heightfield from the surface oracle (no static mesh to rasterize) and
+        // mirror the environment's R8 sun-visibility cache onto the LOD tile
+        // materials. See `terrain_horizon`.
+        #[cfg(feature = "ui")]
+        terrain_horizon::register(app);
 
         // Engine light-handling policy: the locally-possessed vessel's headlights
         // cast shadows, the parked rovers stay cheap (reactive on possession
@@ -2141,6 +2152,82 @@ fn on_flatten_terrain_authored(
         &mut registry,
         &mut seq,
     );
+}
+
+fn on_place_crater_authored(
+    trigger: On<lunco_terrain_surface::PlaceCrater>,
+    terrains: Query<(&lunco_usd::UsdPrimPath, &TerrainDocument), With<lunco_terrain_surface::DemTerrainSurface>>,
+    registry: Option<ResMut<lunco_usd::UsdDocumentRegistry>>,
+    mut seq: ResMut<TerrainEditPrimSeq>,
+) {
+    let ev = trigger.event();
+    if ev.radius <= 0.0 {
+        return;
+    }
+    let Some(mut registry) = registry else { return };
+    author_terrain_edit(
+        lunco_terrain_surface::EditKind::Crater {
+            center: [ev.x as f64, ev.z as f64],
+            radius: ev.radius as f64,
+            depth: ev.depth_or_default(),
+        },
+        &terrains,
+        &mut registry,
+        &mut seq,
+    );
+}
+
+/// Doc-backed manual rock placement: author ONE `lunco:layer = "rock"` child prim
+/// (x/z/size/seed attrs) on the runtime layer. The stack re-parse picks it up via
+/// the `rock` parser — a single addressable boulder, removable by its prim path.
+fn on_place_rock_authored(
+    trigger: On<lunco_terrain_surface::PlaceRock>,
+    terrains: Query<(&lunco_usd::UsdPrimPath, &TerrainDocument), With<lunco_terrain_surface::DemTerrainSurface>>,
+    registry: Option<ResMut<lunco_usd::UsdDocumentRegistry>>,
+    mut seq: ResMut<TerrainEditPrimSeq>,
+) {
+    let ev = trigger.event();
+    let Some(mut registry) = registry else { return };
+    for (prim_path, td) in &terrains {
+        let doc = lunco_doc::DocumentId::new(td.doc);
+        let name = format!("rock_{}", seq.0);
+        seq.0 += 1;
+        let rock_prim = format!("{}/{name}", prim_path.path.trim_end_matches('/'));
+        if registry
+            .apply(
+                doc,
+                lunco_usd::UsdOp::AddPrim {
+                    edit_target: lunco_usd::LayerId::runtime(),
+                    parent_path: prim_path.path.clone(),
+                    name,
+                    type_name: None,
+                    reference: None,
+                },
+            )
+            .is_err()
+        {
+            continue;
+        }
+        let attrs: [(&str, &str, String); 5] = [
+            ("lunco:layer", "string", "\"rock\"".to_string()),
+            ("x", "float", format!("{}", ev.x)),
+            ("z", "float", format!("{}", ev.z)),
+            ("size", "float", format!("{}", ev.size_or_default())),
+            ("seed", "int64", format!("{}", ev.seed_or_default() as i64)),
+        ];
+        for (attr, ty, value) in attrs {
+            let _ = registry.apply(
+                doc,
+                lunco_usd::UsdOp::SetAttribute {
+                    edit_target: lunco_usd::LayerId::runtime(),
+                    path: rock_prim.clone(),
+                    name: attr.to_string(),
+                    type_name: ty.to_string(),
+                    value,
+                },
+            );
+        }
+    }
 }
 
 /// Remove a doc-backed terrain edit by authoring a `RemovePrim` of its edit prim — the

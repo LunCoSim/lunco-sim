@@ -23,7 +23,7 @@
 use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
 use big_space::prelude::Grid;
-use lunco_terrain_surface::{BrushTerrain, FlattenTerrain};
+use lunco_terrain_surface::{BrushTerrain, FlattenTerrain, PlaceCrater, PlaceRock};
 
 /// Which terrain brush is armed. `None` = the tool is off and clicks pass
 /// through to possess / select as usual.
@@ -36,6 +36,11 @@ pub enum TerrainTool {
     Sculpt,
     /// Level the surface toward the clicked height — the landing-pad tool.
     Flatten,
+    /// Stamp one realistic impact crater (rim radius = brush radius) at the
+    /// clicked point. Same analytic morphology as the procedural field.
+    Crater,
+    /// Place one boulder (radius = brush radius, capped) at the clicked point.
+    Rock,
 }
 
 /// Live terrain-tool state, driven by the Tools palette and the scene click /
@@ -137,6 +142,8 @@ fn action_color(tool: TerrainTool, alt: bool, ctrl: bool) -> Color {
         TerrainTool::Sculpt if ctrl => Color::srgba(0.4, 0.6, 1.0, 0.35), // blue (quick flatten)
         TerrainTool::Sculpt if alt => Color::srgba(1.0, 0.4, 0.4, 0.35), // red (dig)
         TerrainTool::Sculpt => Color::srgba(0.4, 1.0, 0.5, 0.35),  // green (raise)
+        TerrainTool::Crater => Color::srgba(1.0, 0.75, 0.3, 0.35), // orange (impact)
+        TerrainTool::Rock => Color::srgba(0.75, 0.7, 0.6, 0.35),   // grey-tan (boulder)
         TerrainTool::None => Color::NONE,
     }
 }
@@ -271,10 +278,16 @@ pub fn on_scene_click_terrain(
     let ctrl = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     let (x, z, radius) = (point.x, point.z, state.radius);
 
-    // Ctrl overrides Sculpt into a one-shot flatten-to-clicked-height; the
-    // Flatten tool always flattens.
-    let flatten = state.tool == TerrainTool::Flatten || ctrl;
-    if flatten {
+    // Crater stamps one impact; Rock drops one boulder; Ctrl overrides Sculpt
+    // into a one-shot flatten-to-clicked-height; the Flatten tool always flattens.
+    if state.tool == TerrainTool::Crater {
+        // depth 0 → the command's realistic default (0.4·radius).
+        commands.trigger(PlaceCrater { x, z, radius, depth: 0.0, id: String::new() });
+    } else if state.tool == TerrainTool::Rock {
+        // size 0 would mean "default"; the brush radius is the boulder radius
+        // (the command clamps it to sane boulder bounds). seed 0 = derived.
+        commands.trigger(PlaceRock { x, z, size: radius, seed: 0, id: String::new() });
+    } else if state.tool == TerrainTool::Flatten || ctrl {
         commands.trigger(FlattenTerrain { x, z, radius, target_y: point.y, id: String::new() });
     } else {
         let amplitude = if alt { -state.strength } else { state.strength };

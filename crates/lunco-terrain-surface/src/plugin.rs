@@ -78,6 +78,11 @@ impl Plugin for TerrainSurfacePlugin {
             (
                 crate::stream_viz::update_lod_tiles,
                 crate::stream_viz::animate_tile_reveal,
+                // Late-bind: derived maps / shadow cache finish baking seconds
+                // after the first tiles exist — patch the cached tile materials
+                // in place.
+                crate::stream_viz::bind_derived_maps_to_tiles,
+                crate::stream_viz::bind_shadow_cache_to_tiles,
                 // Change-driven: early-outs unless a `TerrainLodViz` removal
                 // event fired this frame (stays in `Update` so its
                 // `RemovedComponents` reader drains every frame).

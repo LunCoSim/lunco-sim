@@ -40,7 +40,7 @@ use crate::stream_viz::DemHeightField;
 pub use craters::{crater_layer, make_crater_layer};
 pub use edits::{edit_attr_write, parse_edit, EditKind, EditsLayer, EDIT_ATTR};
 pub use overzoom::default_overzoom_layer;
-pub use rocks::{rock_layer, TerrainRock};
+pub use rocks::{rock_instance_layer, rock_layer, TerrainRock};
 
 /// Rebuild the `craters`/`rocks` layers of `stack` from a typed [`ObstacleFieldSpec`]
 /// (the Inspector's editable model), preserving every other layer (the surface
@@ -248,7 +248,16 @@ pub trait TerrainLayer: Send + Sync + 'static {
     /// Stamp height deltas into the working raster grid (off-thread in the DEM
     /// build). Only for layers that genuinely rasterise — prefer
     /// [`height_modifier`](Self::height_modifier). Default: contributes no height.
+    /// A layer that overrides this MUST also override [`stamps`](Self::stamps).
     fn stamp(&self, _grid: &mut HeightGrid) {}
+    /// Whether [`stamp`](Self::stamp) actually writes the grid. The restamp path
+    /// clones the whole base grid ONLY when some layer stamps — with today's
+    /// all-analytic layers (craters/edits/over-zoom are oracle modifiers) that
+    /// clone is skipped entirely, which is what makes live edits cheap on big
+    /// maps. Keep in sync with [`stamp`](Self::stamp).
+    fn stamps(&self) -> bool {
+        false
+    }
     /// The **serializable** form of this layer's stamp, when it has one — so the SAME
     /// stamp drives the wasm DEM Web Worker (which can't hold a `dyn TerrainLayer`) AND
     /// the native bake, deterministic from the seed. A stamp layer overrides this to
@@ -288,6 +297,7 @@ impl Default for TerrainLayerParserRegistry {
         parsers.insert("craters".to_string(), craters::parse_crater_layer as TerrainLayerParser);
         parsers.insert("overzoom".to_string(), overzoom::parse_overzoom_layer as TerrainLayerParser);
         parsers.insert("rocks".to_string(), rocks::parse_rock_layer as TerrainLayerParser);
+        parsers.insert("rock".to_string(), rocks::parse_rock_instance as TerrainLayerParser);
         parsers.insert("shader".to_string(), shader::parse_shader_layer as TerrainLayerParser);
         Self { parsers }
     }

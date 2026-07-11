@@ -483,6 +483,112 @@ fn on_flatten_terrain(
     }
 }
 
+/// Place ONE hand-authored impact crater: rim radius `radius` m centred at
+/// terrain-local `(x, z)`, bowl `depth` m (0 = realistic default `0.4·radius`,
+/// the fresh d/D ≈ 0.2 morphology). Same analytic profile as the procedural
+/// field, so it lands in mesh + collider + derived maps alike, and it is an
+/// addressable edit — remove it later via `RemoveTerrainLayer{id}`. Reachable
+/// as `cmd("PlaceCrater", #{x, z, radius})`.
+#[Command(default)]
+pub struct PlaceCrater {
+    pub x: f32,
+    pub z: f32,
+    pub radius: f32,
+    /// Bowl depth in metres; 0/absent = realistic default (0.4·radius).
+    pub depth: f32,
+    /// Optional stable id for the edit (so it can be removed later). Empty = auto.
+    pub id: String,
+}
+
+impl PlaceCrater {
+    /// The effective bowl depth: authored, or the fresh-crater default.
+    pub fn depth_or_default(&self) -> f64 {
+        if self.depth > 0.0 {
+            self.depth as f64
+        } else {
+            0.4 * self.radius as f64
+        }
+    }
+}
+
+#[on_command(PlaceCrater)]
+fn on_place_crater(
+    trigger: On<PlaceCrater>,
+    mut terrains: Query<&mut crate::terrain_layers::TerrainLayerStack, Without<DocBackedTerrain>>,
+    mut seq: ResMut<TerrainEditSeq>,
+) {
+    let ev = trigger.event();
+    if ev.radius <= 0.0 {
+        return;
+    }
+    let id = edit_id(&ev.id, "crater", &mut seq);
+    let kind = crate::terrain_layers::EditKind::Crater {
+        center: [ev.x as f64, ev.z as f64],
+        radius: ev.radius as f64,
+        depth: ev.depth_or_default(),
+    };
+    for mut stack in &mut terrains {
+        stack.add_edit(id.clone(), kind);
+    }
+}
+
+/// Place ONE hand-authored boulder at terrain-local `(x, z)`, radius `size` m —
+/// its own addressable layer (removable via `RemoveTerrainLayer{id}`). Same
+/// mesh/collider derivation as the procedural rock field, so it looks and
+/// drives identically. Reachable as `cmd("PlaceRock", #{x, z, size})`.
+#[Command(default)]
+pub struct PlaceRock {
+    pub x: f32,
+    pub z: f32,
+    /// Boulder radius in metres; 0/absent = 0.6 m.
+    pub size: f32,
+    /// Shape/orientation seed; 0 = derived from position (stable, varied).
+    pub seed: u64,
+    /// Optional stable id for the layer (so it can be removed later). Empty = auto.
+    pub id: String,
+}
+
+impl PlaceRock {
+    /// Effective boulder radius (default 0.6 m, clamped to sane bounds).
+    pub fn size_or_default(&self) -> f32 {
+        if self.size > 0.0 {
+            self.size.clamp(0.05, 10.0)
+        } else {
+            0.6
+        }
+    }
+
+    /// Effective shape seed: authored, or a stable hash of the position so two
+    /// placed rocks never share facets/yaw by default.
+    pub fn seed_or_default(&self) -> u64 {
+        if self.seed != 0 {
+            return self.seed;
+        }
+        let mut h = lunco_precompute::Fnv1a::new();
+        h.write_u64((self.x as f64).to_bits());
+        h.write_u64((self.z as f64).to_bits());
+        h.finish() | 1
+    }
+}
+
+#[on_command(PlaceRock)]
+fn on_place_rock(
+    trigger: On<PlaceRock>,
+    mut terrains: Query<&mut crate::terrain_layers::TerrainLayerStack, Without<DocBackedTerrain>>,
+    mut seq: ResMut<TerrainEditSeq>,
+) {
+    let ev = trigger.event();
+    let id = edit_id(&ev.id, "rock", &mut seq);
+    let layer = crate::terrain_layers::rock_instance_layer(
+        [ev.x as f64, ev.z as f64],
+        ev.size_or_default(),
+        ev.seed_or_default(),
+    );
+    for mut stack in &mut terrains {
+        stack.push_layer(id.clone(), layer.clone());
+    }
+}
+
 /// Remove a terrain layer by its [`LayerId`] — undo a specific dig/flatten (or any
 /// addressable layer). Re-bakes via `Changed<TerrainLayerStack>`. Reachable as
 /// `cmd("RemoveTerrainLayer", #{id})`.
@@ -509,6 +615,8 @@ register_commands!(
     on_spawn_dem_terrain,
     on_brush_terrain,
     on_flatten_terrain,
+    on_place_crater,
+    on_place_rock,
     on_remove_terrain_layer
 );
 
@@ -1295,7 +1403,9 @@ struct DemRestampDebounce(Timer);
 
 /// Settle delay before a layer edit triggers the off-thread re-stamp. Long enough to
 /// swallow a continuous slider drag, short enough to feel responsive on release.
-const RESTAMP_DEBOUNCE_SECS: f32 = 0.3;
+/// (Halved from 0.3 once the all-analytic restamp stopped cloning the base grid —
+/// the re-compose itself is now microseconds, so the debounce IS the edit latency.)
+const RESTAMP_DEBOUNCE_SECS: f32 = 0.15;
 
 /// Spawn the off-thread **re-compose** task: rebuild the surface oracle from the
 /// pristine [`DemBaseGrid`] + the stack's current layers. With analytic height
@@ -1312,17 +1422,25 @@ fn spawn_restamp_task(
     let base_grid = base.0.clone();
     let layers: Vec<_> = stack.0.iter().map(|e| e.layer.clone()).collect();
     let task = AsyncComputeTaskPool::get().spawn(async move {
+        // Off-thread body → own Tracy zone (per-system spans don't reach here).
+        let _span = bevy::log::info_span!("terrain_restamp").entered();
         let half_extent = base_grid.half_extent;
-        let mut grid = (*base_grid).clone();
-        for layer in &layers {
-            layer.stamp(&mut grid);
-        }
+        // All-analytic stacks (the norm: craters/edits/over-zoom are oracle
+        // modifiers) reuse the base grid Arc directly — cloning + re-stamping
+        // the whole raster was a multi-MB memcpy on EVERY brush stroke, for a
+        // grid that came out identical.
+        let grid = if layers.iter().any(|l| l.stamps()) {
+            let mut grid = (*base_grid).clone();
+            for layer in &layers {
+                layer.stamp(&mut grid);
+            }
+            std::sync::Arc::new(grid)
+        } else {
+            base_grid.clone()
+        };
         let contributions: Vec<_> =
             layers.iter().filter_map(|l| l.height_modifier(half_extent)).collect();
-        std::sync::Arc::new(crate::oracle::SurfaceOracle::new(
-            std::sync::Arc::new(grid),
-            contributions,
-        ))
+        std::sync::Arc::new(crate::oracle::SurfaceOracle::new(grid, contributions))
     });
     commands.entity(entity).try_insert(DemRestampTask(task));
 }
@@ -1401,6 +1519,7 @@ pub(crate) fn finish_dem_restamp(
         Has<Mesh3d>,
         Has<DemRestampPending>,
         Option<&TerrainDirty>,
+        Has<TerrainRescatter>,
     )>,
     scattered: Query<Entity, With<crate::terrain_layers::TerrainScatterEntity>>,
     mut meshes: Option<ResMut<Assets<Mesh>>>,
@@ -1410,8 +1529,18 @@ pub(crate) fn finish_dem_restamp(
     // Whether ANY terrain did a WHOLE-terrain re-bake this pass (spec change / load) —
     // only then do the (global) scatter entities need dropping + rebuilding.
     let mut any_full = false;
-    for (entity, mut task, src, mut hf, tiles, pending, has_static_mesh, was_pending, dirty) in
-        &mut tasks
+    for (
+        entity,
+        mut task,
+        src,
+        mut hf,
+        tiles,
+        pending,
+        has_static_mesh,
+        was_pending,
+        dirty,
+        rescatter,
+    ) in &mut tasks
     {
         let Some(oracle) = future::block_on(future::poll_once(&mut task.0)) else {
             continue;
@@ -1483,8 +1612,11 @@ pub(crate) fn finish_dem_restamp(
         // A bounded edit leaves the crater/rock fields untouched, so DON'T re-scatter
         // (that despawn+respawn of every rock is a big part of the per-edit cost). A
         // whole-terrain change re-scatters: clear the applied-marker so scatter re-runs.
-        if !scoped {
+        // The scatter-only tier (`TerrainRescatter` — e.g. a placed rock) re-scatters
+        // too, while keeping the tile re-bake scoped to the marked bounds.
+        if !scoped || rescatter {
             commands.entity(entity).try_remove::<crate::terrain_layers::TerrainLayersApplied>();
+            commands.entity(entity).try_remove::<TerrainRescatter>();
             any_full = true;
         }
 
@@ -1542,6 +1674,8 @@ fn start_dem_collider(
         }
         let oracle = hf.0.clone();
         let task = AsyncComputeTaskPool::get().spawn(async move {
+            // Off-thread body → own Tracy zone.
+            let _span = bevy::log::info_span!("terrain_static_collider_bake").entered();
             // Rasterise the composed surface at base resolution for the one static
             // heightfield (streamed rings sample the oracle per-tile instead).
             let grid = oracle.materialize();
@@ -1619,6 +1753,13 @@ pub struct TerrainDirty {
     pub bounds: Option<[f64; 4]>,
 }
 
+/// Scatter-only dirty tier: the stack gained/lost a SCATTER layer (e.g. a placed
+/// rock) but heights are untouched — the re-bake stays scoped (no tile/mesh-cache
+/// invalidation beyond the marked bounds) yet the scatter layers still re-run.
+/// Consumed by [`finish_dem_restamp`] alongside [`TerrainDirty`].
+#[derive(Component)]
+pub struct TerrainRescatter;
+
 impl TerrainDirty {
     /// Grow the dirty region by a bounded edit's AABB. A whole-terrain (`None`) mark
     /// is a superset, so a later bounded patch can never shrink it back.
@@ -1683,6 +1824,37 @@ fn on_flatten_terrain_dirty(
     accumulate_terrain_dirty(&mut commands, &mut q, Some(edit_command_aabb(ev.x, ev.z, ev.radius)));
 }
 
+/// Mark a placed crater's footprint dirty (see [`TerrainDirty`]) — the ejecta
+/// apron reaches past the rim radius, so the footprint uses the crater reach.
+fn on_place_crater_dirty(
+    trigger: On<PlaceCrater>,
+    mut commands: Commands,
+    mut q: Query<(Entity, Option<&mut TerrainDirty>), With<DemBaseGrid>>,
+) {
+    let ev = trigger.event();
+    if ev.radius <= 0.0 {
+        return;
+    }
+    let reach = ev.radius * lunco_terrain_core::CRATER_REACH as f32;
+    accumulate_terrain_dirty(&mut commands, &mut q, Some(edit_command_aabb(ev.x, ev.z, reach)));
+}
+
+/// A placed rock changes no heights: mark its tiny footprint dirty (keeps the
+/// tile re-bake scoped ≈ no-op) and arm the scatter-only tier so the rock
+/// actually spawns (see [`TerrainRescatter`]).
+fn on_place_rock_dirty(
+    trigger: On<PlaceRock>,
+    mut commands: Commands,
+    mut q: Query<(Entity, Option<&mut TerrainDirty>), With<DemBaseGrid>>,
+) {
+    let ev = trigger.event();
+    let size = ev.size_or_default();
+    accumulate_terrain_dirty(&mut commands, &mut q, Some(edit_command_aabb(ev.x, ev.z, size)));
+    for (e, _) in q.iter() {
+        commands.entity(e).try_insert(TerrainRescatter);
+    }
+}
+
 /// Scope an undo/remove to the removed edit's footprint (see [`TerrainDirty`]). A
 /// removed brush/flatten dirties only its own AABB; removing a whole layer (crater/
 /// rock) or an unknown id falls back to a whole-terrain re-bake. Reads the stack
@@ -1730,6 +1902,8 @@ pub(crate) fn register(app: &mut App) {
         // remove reads the edit's bounds before the removal applies.
         .add_observer(on_brush_terrain_dirty)
         .add_observer(on_flatten_terrain_dirty)
+        .add_observer(on_place_crater_dirty)
+        .add_observer(on_place_rock_dirty)
         .add_observer(on_remove_terrain_layer_dirty)
         .add_observer(on_obstacle_spec_dirty)
         .add_systems(

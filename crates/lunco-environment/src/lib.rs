@@ -69,7 +69,10 @@ const FALLBACK_MAX_SHADOW_DISTANCE: f32 = 1500.0;
 #[cfg(feature = "render")]
 pub mod horizon;
 #[cfg(feature = "render")]
-pub use horizon::{HorizonMap, HorizonShadowCacheConfig, HorizonShadowPlugin};
+pub use horizon::{
+    install_horizon_map_from_field, HeightField, HorizonMap, HorizonShadowCache,
+    HorizonShadowCacheConfig, HorizonShadowPlugin,
+};
 
 /// System sets for environment computation and consumption.
 ///

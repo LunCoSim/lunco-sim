@@ -51,6 +51,10 @@ fn terrain_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, tokens: &lunco_theme::
             .on_hover_text("Left-click raises · Alt+click digs · Ctrl+click flattens");
         tool_button(ui, ctx, tokens, "Flatten", TerrainTool::Flatten, tool)
             .on_hover_text("Left-click levels the surface to the clicked height");
+        tool_button(ui, ctx, tokens, "Crater", TerrainTool::Crater, tool)
+            .on_hover_text("Left-click stamps one impact crater (rim radius = brush radius)");
+        tool_button(ui, ctx, tokens, "Rock", TerrainTool::Rock, tool)
+            .on_hover_text("Left-click places one boulder (radius = brush radius)");
         if tool != TerrainTool::None && ui.button("Off").clicked() {
             set_tool(ctx, TerrainTool::None);
         }

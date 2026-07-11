@@ -208,6 +208,85 @@ pub fn rock_layer(
     Arc::new(RockScatterLayer { rocks, region_half_extent, pattern, seed })
 }
 
+/// One hand-placed boulder — its own layer prim, addressable/removable by its
+/// [`LayerId`](super::LayerId) (= prim path when doc-backed). Unlike the
+/// procedural field it is NOT skipped on web: a handful of placed rocks is
+/// cheap everywhere.
+struct RockInstanceLayer {
+    /// Terrain-local XZ (metres).
+    position: [f64; 2],
+    /// Boulder radius (metres).
+    size: f32,
+    /// Shape/orientation seed (mesh facets + yaw).
+    seed: u64,
+}
+
+impl TerrainLayer for RockInstanceLayer {
+    fn id(&self) -> &'static str {
+        "rock"
+    }
+    fn scatter(&self, cx: &mut LayerScatterCx) {
+        let oracle = cx.oracle;
+        let y = lunco_terrain_core::HeightSource::height_at(
+            oracle,
+            self.position[0],
+            self.position[1],
+        ) as f32;
+        let r = self.size.max(0.05);
+        let mesh = cx
+            .meshes
+            .as_deref_mut()
+            .map(|meshes| meshes.add(faceted_rock_mesh(self.seed, 4, r)));
+        let material = cx.materials.as_deref_mut().map(|materials| {
+            materials.add(StandardMaterial {
+                base_color: Color::srgb(0.19, 0.19, 0.20),
+                perceptual_roughness: 1.0,
+                ..default()
+            })
+        });
+        // Deterministic yaw from the seed (golden-ratio hash → well spread).
+        let yaw = (self.seed as f32 * 0.618_034).fract() * std::f32::consts::TAU;
+        cx.commands.entity(cx.terrain).with_children(|parent| {
+            // Same collider/sink derivation as the procedural field (0.6·r sphere
+            // sunk 0.25·r) so a placed rock drives identically.
+            let mut rock = parent.spawn((
+                TerrainRock,
+                TerrainScatterEntity,
+                Name::new("TerrainRock (placed)"),
+                Transform::from_xyz(self.position[0] as f32, y - r * 0.25, self.position[1] as f32)
+                    .with_rotation(Quat::from_rotation_y(yaw)),
+                Visibility::Inherited,
+                RigidBody::Static,
+                Collider::sphere((r * 0.6) as f64),
+            ));
+            if let (Some(mesh), Some(material)) = (mesh, material) {
+                rock.insert((
+                    Mesh3d(mesh),
+                    MeshMaterial3d(material),
+                    bevy::light::NotShadowCaster,
+                ));
+            }
+        });
+    }
+}
+
+/// Build a single-rock layer (the `PlaceRock` command's doc-free tier).
+pub fn rock_instance_layer(position: [f64; 2], size: f32, seed: u64) -> Arc<dyn TerrainLayer> {
+    Arc::new(RockInstanceLayer { position, size, seed })
+}
+
+/// Parse a `lunco:layer = "rock"` prim — ONE hand-placed boulder: `x`/`z`
+/// (terrain-local m, required), `size` (radius m), `seed`.
+pub(super) fn parse_rock_instance(a: &dyn LayerAttrSource) -> Option<Arc<dyn TerrainLayer>> {
+    let x = a.get_f32("x")?;
+    let z = a.get_f32("z")?;
+    Some(Arc::new(RockInstanceLayer {
+        position: [x as f64, z as f64],
+        size: a.get_f32("size").unwrap_or(0.6),
+        seed: a.get_i64("seed").map(|s| s as u64).unwrap_or(0x0C1),
+    }))
+}
+
 /// Parse a `lunco:layer = "rocks"` prim: `density` (per ha, required > 0), `sizeMode`
 /// (modal radius m), `sizeMin`/`sizeMax` (radius band m), `dynamicFrac`,
 /// `regionM` (near-field scatter half-extent), `seed`.
