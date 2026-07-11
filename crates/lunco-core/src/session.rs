@@ -426,6 +426,34 @@ pub struct OwnedLocally;
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct PredictedDynamic;
 
+/// **Contact-prediction eligibility:** this non-owned replicated body *may* be
+/// promoted to a locally-`Dynamic` [`PredictedDynamic`] body, but **only while an
+/// [`OwnedLocally`] body is actually touching it** (`promote_contacting_proxies`).
+/// The rest of the time it stays a kinematic snapshot proxy — perfectly synced to
+/// authority, no drift.
+///
+/// Why this exists (the fix for the "predict-all → drift then chaos" bug): the
+/// earlier design flipped *every* non-owned rover/prop to `PredictedDynamic` the
+/// moment it was seen, so N mutually-colliding Dynamic bodies free-ran local
+/// physics reconciled only against a ~0.18 s-stale curve — the solver pushed the
+/// pile apart faster than the bounded correction could pull it back → chaos.
+/// Kinematic proxies (pose forced by snapshots) provably cannot drift; the ONLY
+/// reason to make a body Dynamic is so it *yields* when your owned rover shoves
+/// it. So we gate that Dynamic window to the exact interval a shove is happening,
+/// against exactly one pusher — the stable regime. On promotion the body gains
+/// `PredictedDynamic` (every proxy-driving seam already excludes that marker); on
+/// contact-end it loses it and `drive_kinematic_proxies` re-seats it on the
+/// authoritative curve.
+///
+/// Stamped by `maintain_predicted_dynamic` (free props) and
+/// `maintain_predicted_vehicles` (remote raycast rovers) on the same eligible set
+/// they used to promote outright — cosim/opaque ([`NotPredictable`]), articulated
+/// ([`ArticulatedVehicle`], which flips if made Dynamic), owned, and static bodies
+/// are all excluded there. Removed when this peer possesses the body (the
+/// input-replay [`OwnedLocally`] path takes over). Client-only; harmless elsewhere.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct ContactPredictable;
+
 /// **Opaque-body guard** (design in git history): this body's motion is
 /// **not locally computable** — it is driven by forces the client does not run
 /// (primarily **cosim / Modelica** bodies: a balloon's buoyancy, a thruster, any

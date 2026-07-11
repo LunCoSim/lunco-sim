@@ -72,7 +72,8 @@ pub use world::{
 pub use identity::Provenance;
 pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
 pub use session::{
-    authorize, AppliedInputSeq, ArticulatedLink, ArticulatedVehicle, IncomingSnapshots, InputFrame,
+    authorize, AppliedInputSeq, ArticulatedLink, ArticulatedVehicle, ContactPredictable,
+    IncomingSnapshots, InputFrame,
     LocalSession,
     NetConnectRequest, NetDisconnectRequest,
     NetExcluded, NetReplicate, NetSpawn, PendingConnect, PendingConnectRequest,
