@@ -29,7 +29,7 @@ use std::sync::Arc;
 use lunco_canvas::{
     empty_node_data, Edge, Node, Pos, Port, PortId, PortRef, Rect, Scene,
 };
-use lunco_usd_bevy::UsdRead;
+use lunco_usd_bevy::{SdfPath, UsdRead};
 
 /// Node kind id registered in the canvas `VisualRegistry`.
 pub(crate) const NODE_KIND: &str = "usd.prim";
@@ -92,21 +92,30 @@ pub(crate) struct Wire {
     pub target_conn: String,
 }
 
-/// Read every active prim + its connections out of a composed stage.
+/// Read every prim in `prim_paths` + its connections out of a composed stage.
 ///
-/// Mirrors the enumeration in `rewire_usd_connections`: `inputs:<c>` attrs are
-/// sinks, their `connections()` are the producers, split at the last `.` into
-/// `(prim, connector-leaf)`. A prim carrying both joint bodies becomes a joint
-/// wire and is NOT itself emitted as a node.
-pub(crate) fn collect_graph<R: UsdRead>(view: &R) -> (Vec<PrimNode>, Vec<Wire>) {
+/// `prim_paths` are the scene's prim path strings — supplied by the caller from
+/// the ECS `UsdPrimPath` entities, exactly the enumeration
+/// `rewire_usd_connections` uses (a live `StageView::prim_paths()` traversal can
+/// miss composed children, so we key off the entities that were actually
+/// spawned). `inputs:<c>` attrs are sinks, their `connections()` are the
+/// producers, split at the last `.` into `(prim, connector-leaf)`. A prim
+/// carrying both joint bodies becomes a joint wire and is NOT itself a node.
+pub(crate) fn collect_graph<R: UsdRead>(
+    view: &R,
+    prim_paths: &[String],
+) -> (Vec<PrimNode>, Vec<Wire>) {
     let mut nodes: Vec<PrimNode> = Vec::new();
     let mut wires: Vec<Wire> = Vec::new();
 
-    for p in view.prim_paths() {
+    for path in prim_paths {
+        let Ok(p) = SdfPath::new(path) else {
+            continue;
+        };
         if !view.is_active(&p) {
             continue;
         }
-        let path = p.to_string();
+        let path = path.clone();
 
         // A prim with both bodies is a joint: render it as an edge between the
         // two bodies, not as a node.
