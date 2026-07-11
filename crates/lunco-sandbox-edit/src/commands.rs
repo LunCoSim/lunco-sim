@@ -10,7 +10,7 @@
 
 use bevy::prelude::*;
 use bevy::math::DVec3;
-use avian3d::prelude::{AngularVelocity, LinearVelocity, PhysicsSystems, RigidBody};
+use avian3d::prelude::{AngularVelocity, Collisions, LinearVelocity, PhysicsSystems, RigidBody};
 use avian3d::physics_transform::{Position, Rotation};
 use big_space::prelude::Grid;
 use lunco_core::Command;
@@ -20,7 +20,7 @@ use lunco_usd::document::{UsdOp, LayerId};
 use lunco_usd::registry::UsdDocumentRegistry;
 use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
 use lunco_doc::{DocumentId, DocumentOrigin};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use crate::catalog::{SpawnCatalog, SpawnSource, spawn_usd_entry};
 
 /// Spawn an entity from the catalog at a given world position.
@@ -1326,12 +1326,16 @@ pub fn reconcile_owned_prediction(
     }
 }
 
-/// Client Phase B (design in git history): designate **every replicated free
-/// dynamic prop** (a ball / crate / cone — whether runtime-spawned OR authored
-/// scene content) as [`lunco_core::PredictedDynamic`], so it runs local physics +
-/// state-reconcile instead of being kinematic-pinned + interpolated. That makes
-/// physics feel **live on the client**: bump a prop and it moves in the same
-/// frame, then the snapshot reconcile corrects any drift.
+/// Client Phase B (design in git history): mark **every replicated free dynamic
+/// prop** (a ball / crate / cone — whether runtime-spawned OR authored scene
+/// content) as [`lunco_core::ContactPredictable`] — *eligible* to become a
+/// locally-`Dynamic` [`lunco_core::PredictedDynamic`] body, but only transiently,
+/// while an owned body is shoving it (`promote_contacting_proxies`). Until then it
+/// stays a kinematic snapshot proxy, perfectly synced to authority. This is the
+/// fix for the old "predict every prop the moment it's seen" design, whose N
+/// permanently-Dynamic bodies drifted then piled into chaos (see
+/// `ContactPredictable`'s doc). Bump a prop and it still yields live in the same
+/// contact — the eligibility just defers the `Dynamic` flip to the contact window.
 ///
 /// The cosim guard is now [`lunco_core::NotPredictable`] ALONE — stamped on every
 /// cosim-driven / server-only body by `tag_cosim_opaque` and the USD net policy
@@ -1341,9 +1345,8 @@ pub fn reconcile_owned_prediction(
 /// `NotPredictable`'s doc) — so we no longer restrict to runtime spawns, which
 /// had frozen plain scene-content physics props server-only. Wheeled vehicles
 /// (a `FlightSoftware` control surface) and the possessed rover (`OwnedLocally`)
-/// are excluded — they have their own paths. Flips the body to `Dynamic` (it may already have been
-/// pinned `Kinematic` by `force_kinematic_proxies` the prior frame); a `Static`
-/// prop is left alone. Client-only.
+/// are excluded — they have their own paths. A `Static` prop is left alone.
+/// Client-only.
 pub fn maintain_predicted_dynamic(
     role: Res<lunco_core::NetworkRole>,
     mut commands: Commands,
@@ -1357,7 +1360,9 @@ pub fn maintain_predicted_dynamic(
             // `NotPredictable` guard below.
             Without<lunco_fsw::FlightSoftware>,
             Without<lunco_core::OwnedLocally>,
-            Without<lunco_core::PredictedDynamic>,
+            // Stamp the eligibility marker at most once (a promoted body carries
+            // both `ContactPredictable` and `PredictedDynamic`).
+            Without<lunco_core::ContactPredictable>,
             // The cosim/server-only guard: a cosim-driven body (Modelica balloon,
             // CosimTarget, …) has forces we can't reproduce locally, so it must
             // never be predicted — it stays a kinematic, snapshot-driven proxy.
@@ -1368,11 +1373,12 @@ pub fn maintain_predicted_dynamic(
         ),
     >,
     // If this peer later POSSESSES the prop, the owned (input-replay) path takes
-    // over — drop the free-body marker so the two reconcilers don't both act on it.
+    // over — drop BOTH the eligibility marker and any live promotion so neither the
+    // contact-gate nor the free-body reconciler acts on it.
     q_demote: Query<
         Entity,
         (
-            With<lunco_core::PredictedDynamic>,
+            With<lunco_core::ContactPredictable>,
             With<lunco_core::OwnedLocally>,
         ),
     >,
@@ -1384,36 +1390,41 @@ pub fn maintain_predicted_dynamic(
         if matches!(*rb, RigidBody::Static) {
             continue; // a static prop has no dynamics worth predicting
         }
-        commands
-            .entity(e)
-            .insert((lunco_core::PredictedDynamic, RigidBody::Dynamic));
+        // Mark eligible, but leave it a kinematic proxy: `promote_contacting_proxies`
+        // flips it `Dynamic` only while an owned body is touching it.
+        commands.entity(e).insert(lunco_core::ContactPredictable);
     }
     for e in q_demote.iter() {
-        commands.entity(e).remove::<lunco_core::PredictedDynamic>();
+        commands.entity(e).remove::<(
+            lunco_core::ContactPredictable,
+            lunco_core::PredictedDynamic,
+            ContactPredictLinger,
+        )>();
     }
 }
 
-/// Client Step 4 (`PREDICT_AND_SMOOTH` §5, predict-all-vehicles): designate every
-/// **remote rover** (a `FlightSoftware` vehicle you don't possess) as
-/// [`lunco_core::PredictedDynamic`] too — locally `Dynamic`, state-reconciled to
-/// authority each snapshot — reusing the Phase B machinery wholesale.
+/// Client Step 4 (`PREDICT_AND_SMOOTH` §5): mark every **remote raycast rover**
+/// (a `FlightSoftware` vehicle you don't possess and don't own) as
+/// [`lunco_core::ContactPredictable`] — *eligible* for the same transient
+/// promotion as a free prop, so it **yields** the moment your owned rover shoves
+/// it, then re-syncs.
 ///
-/// Why: with Step 1 a remote rover is a *kinematic* proxy. It can push your owned
-/// rover (its velocity enters contact), but it never **yields** to *being* pushed —
-/// so when YOU drive into it, your predicted rover bounces off an immovable wall
-/// while authority shows that rover yielding and moving away → reconcile fights the
-/// mismatch → the "client push" jitter. Making it locally `Dynamic` means it yields
-/// in the same step you push it, matching authority → crisp mutual push.
+/// Why not immovable proxies: with Step 1 alone a remote rover is a permanent
+/// *kinematic* proxy. It can push your owned rover (its velocity enters contact)
+/// but never yields to *being* pushed — you'd bounce off an immovable wall while
+/// authority shows it moving away. Why not permanently `Dynamic` (the old Step 4):
+/// N non-owned Dynamic rovers all free-running local physics against a stale curve
+/// drifted then piled into chaos. The fix is the middle path — Dynamic *only while
+/// you're touching it* (`promote_contacting_proxies`), one pusher at a time.
 ///
-/// Reuses `PredictedDynamic` (not a separate marker): every predict-own seam
-/// already excludes it (kinematic pin / drive / interpolate), and
-/// [`maintain_predicted_dynamic`]'s possession-demote already removes the marker
-/// when you possess the rover (its input-replay path takes over). Cosim-flown
-/// vessels are safe — `tag_cosim_opaque` marks cosim-driven bodies
-/// `NotPredictable`, which we still exclude here. Between snapshots the rover dead-reckons on the
-/// authoritative velocity seated by `reconcile_predicted_dynamic`; held-input
-/// feed-forward (Step 3) would sharpen the actively-driven-remote case but is not
-/// needed for the push fix. Client-only.
+/// The contact-gate reuses `PredictedDynamic` for the live-promotion state (not a
+/// separate marker): every predict-own seam already excludes it (kinematic pin /
+/// drive / interpolate), and [`maintain_predicted_dynamic`]'s possession-demote
+/// clears both markers when you possess the rover (its input-replay path takes
+/// over). Cosim-flown vessels are safe — `tag_cosim_opaque` marks cosim-driven
+/// bodies `NotPredictable`, excluded here. Articulated rovers are excluded too
+/// (they flip if made single-body Dynamic) and stay pure kinematic proxies.
+/// Client-only.
 pub fn maintain_predicted_vehicles(
     role: Res<lunco_core::NetworkRole>,
     local: Res<lunco_core::LocalSession>,
@@ -1429,14 +1440,16 @@ pub fn maintain_predicted_vehicles(
             // so this resolves to exactly the locally-simulated rovers.
             With<lunco_fsw::FlightSoftware>,
             Without<lunco_core::OwnedLocally>,
-            Without<lunco_core::PredictedDynamic>,
+            // Stamp eligibility at most once (a promoted rover carries both).
+            Without<lunco_core::ContactPredictable>,
             Without<lunco_core::NotPredictable>,
             // Articulated (Physical/joint) rovers must NOT be single-body
             // predicted: only the chassis is replicated, so making it Dynamic +
             // reconciling its pose each snapshot while the jointed wheels run
             // free injects joint energy → flip. They stay kinematic proxies
-            // (chassis pose forced by snapshots, cannot flip). Raycast rovers are
-            // single bodies and predict fine.
+            // (chassis pose forced by snapshots, cannot flip), so they never
+            // become contact-eligible. Raycast rovers are single bodies and
+            // yield fine when a shove promotes them.
             Without<lunco_core::ArticulatedVehicle>,
         ),
     >,
@@ -1448,7 +1461,7 @@ pub fn maintain_predicted_vehicles(
         if matches!(*rb, RigidBody::Static) {
             continue;
         }
-        // NEVER vehicle-predict a rover THIS session owns: its prediction
+        // NEVER contact-predict a rover THIS session owns: its prediction
         // membership belongs exclusively to Phase A (`maintain_owned_locally`,
         // OwnedLocally + input-replay). Phase A's drive-grace lapses between key
         // taps; without this guard the rover flapped OwnedLocally→PredictedDynamic
@@ -1459,9 +1472,117 @@ pub fn maintain_predicted_vehicles(
         if reg.owns(local.0, gid.get()) {
             continue;
         }
-        commands
-            .entity(e)
-            .insert((lunco_core::PredictedDynamic, RigidBody::Dynamic));
+        // Eligible only: stays a kinematic proxy until an owned body shoves it,
+        // at which point `promote_contacting_proxies` flips it `Dynamic` to yield.
+        commands.entity(e).insert(lunco_core::ContactPredictable);
+    }
+}
+
+/// Linger window (s) a contact-promoted body stays `Dynamic` after the last tick an
+/// owned body was touching it. Contacts chatter — a rolling/bouncing shove makes
+/// and breaks the manifold — so demoting the instant a touch drops would flip-flop
+/// Kinematic↔Dynamic mid-bump. Holding it Dynamic briefly keeps the yield smooth,
+/// then it demotes and re-syncs to authority.
+const CONTACT_PREDICT_LINGER: f32 = 0.30;
+
+/// Per-body countdown (seconds remaining) keeping a contact-promoted proxy
+/// `Dynamic`. Re-armed to [`CONTACT_PREDICT_LINGER`] every tick an owned body is
+/// touching it; drained otherwise. Removed together with `PredictedDynamic` on
+/// demotion. Present only on client, only during a shove.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct ContactPredictLinger(f32);
+
+/// The contact-gate that makes the hybrid work (see [`lunco_core::ContactPredictable`]):
+/// promote a `ContactPredictable` kinematic proxy to a locally-`Dynamic`
+/// [`lunco_core::PredictedDynamic`] body **only while an [`lunco_core::OwnedLocally`]
+/// body is touching it** (plus [`CONTACT_PREDICT_LINGER`]), then demote it back.
+///
+/// Non-owned bodies otherwise stay perfectly-synced kinematic proxies; the ONLY
+/// interval one runs local dynamics is the brief window your owned rover is shoving
+/// it, against exactly one pusher — so it yields crisply without the N-body free-run
+/// that produced the old drift-then-chaos. On demotion the body loses
+/// `PredictedDynamic`, so `force_kinematic_proxies` re-pins it `Kinematic` and
+/// `drive_kinematic_proxies` re-seats it on the authoritative curve next frame.
+///
+/// Contact is read from avian's `Collisions` graph via the **rigid-body** entities
+/// (`ContactPair::body{1,2}`), so it is robust to colliders living on child entities
+/// (compound/wheel colliders). Only `OwnedLocally` bodies act as pushers, which
+/// bounds promotion to one body at a time — a promoted body cannot cascade-promote a
+/// pile. Registered in `Update` **before** `force_kinematic_proxies` reads the
+/// marker; the chain's auto-inserted sync point applies the promote/demote command
+/// before the kinematic-pin pass runs, so a promoted body is skipped by the pin the
+/// same frame and a demoted one is re-pinned the same frame. Client-only.
+pub fn promote_contacting_proxies(
+    role: Res<lunco_core::NetworkRole>,
+    time: Res<Time>,
+    collisions: Collisions,
+    q_owned: Query<(), With<lunco_core::OwnedLocally>>,
+    q_eligible: Query<(), With<lunco_core::ContactPredictable>>,
+    // Bodies currently promoted (Dynamic) that carry the linger countdown.
+    mut q_promoted: Query<
+        (Entity, &mut ContactPredictLinger),
+        With<lunco_core::PredictedDynamic>,
+    >,
+    mut commands: Commands,
+) {
+    if !matches!(*role, lunco_core::NetworkRole::Client) {
+        return;
+    }
+    // Which eligible proxies is an owned body touching this tick?
+    let mut touched: HashSet<Entity> = HashSet::new();
+    for pair in collisions.iter() {
+        if !pair.is_touching() {
+            continue;
+        }
+        // `body{1,2}` are the rigid-body entities behind each collider (None for a
+        // colliderless static). `OwnedLocally` / `ContactPredictable` live on those
+        // body entities, so match against them, not the collider entities.
+        let (Some(b1), Some(b2)) = (pair.body1, pair.body2) else {
+            continue;
+        };
+        let proxy = if q_owned.contains(b1) && q_eligible.contains(b2) {
+            b2
+        } else if q_owned.contains(b2) && q_eligible.contains(b1) {
+            b1
+        } else {
+            continue; // not an owned↔eligible pair
+        };
+        touched.insert(proxy);
+    }
+
+    // Age already-promoted bodies: re-arm the linger if still shoved, else drain it
+    // and demote when the window closes. Consume (`remove`) the touched entries here
+    // so whatever remains in `touched` is a fresh promotion handled below — this also
+    // avoids re-inserting `RigidBody::Dynamic` every tick (which would churn avian's
+    // change detection) on a body that's already Dynamic.
+    let dt = time.delta_secs();
+    for (e, mut linger) in q_promoted.iter_mut() {
+        if touched.remove(&e) {
+            linger.0 = CONTACT_PREDICT_LINGER; // still shoved — re-arm
+        } else {
+            linger.0 -= dt;
+            if linger.0 <= 0.0 {
+                // Hand the body back to the kinematic proxy path.
+                // `force_kinematic_proxies` (later in this chain) re-pins it
+                // `Kinematic`; `drive_kinematic_proxies` re-seats it on the
+                // authoritative curve (snapping if it drifted > 2 m).
+                commands
+                    .entity(e)
+                    .remove::<(lunco_core::PredictedDynamic, ContactPredictLinger)>();
+            }
+        }
+    }
+
+    // Fresh promotions: eligible proxies newly shoved this tick (not already in
+    // `q_promoted`). Inserting `PredictedDynamic` excludes the body from every
+    // kinematic-proxy seam so it free-runs local physics and yields to the shove;
+    // `reconcile_predicted_dynamic` keeps it from drifting past authority meanwhile.
+    for e in touched {
+        commands.entity(e).insert((
+            lunco_core::PredictedDynamic,
+            RigidBody::Dynamic,
+            ContactPredictLinger(CONTACT_PREDICT_LINGER),
+        ));
     }
 }
 
@@ -3427,11 +3548,15 @@ impl Plugin for SpawnCommandPlugin {
                 // Phase B: classify free predicted props BEFORE the interpolate /
                 // kinematic-pin systems read the `PredictedDynamic` marker.
                 maintain_predicted_dynamic,
-                // Step 4: predict remote rovers too (reuses PredictedDynamic), so
-                // they yield to your push. Must run before the kinematic/interpolate
-                // systems read the marker; after maintain_predicted_dynamic so the
+                // Step 4: mark remote raycast rovers contact-eligible (like props),
+                // so they yield to your push. After maintain_predicted_dynamic so the
                 // possession-demote ordering is stable.
                 maintain_predicted_vehicles,
+                // Contact-gate: promote an eligible proxy to Dynamic only while an
+                // owned body shoves it, demote it back otherwise. MUST run before
+                // force_kinematic_proxies so the chain's sync point applies the
+                // promote/demote before the kinematic-pin pass reads the marker.
+                promote_contacting_proxies,
                 ingest_snapshots,
                 interpolate_proxies,
                 force_kinematic_proxies,
