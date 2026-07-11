@@ -85,6 +85,11 @@ pub struct AttachSpec {
     /// Where the part sits in the host body's local frame. Also the derived joint
     /// anchor — authored once, here.
     pub placement: [f64; 3],
+    /// The part's orientation in the host frame, as `xformOp:rotateXYZ` Euler
+    /// degrees. `[0,0,0]` (the common case, and [`AttachSpec::new`]'s default)
+    /// authors no rotation. Set by [`AttachSpec::from_mount`] so a plug frame
+    /// aligns to a socket frame.
+    pub rotate_deg: [f64; 3],
     /// The joint fixing the part to the host.
     pub joint: AttachJoint,
 }
@@ -99,12 +104,67 @@ impl Default for AttachSpec {
             name: String::new(),
             asset: String::new(),
             placement: [0.0; 3],
+            rotate_deg: [0.0; 3],
             joint: AttachJoint::Fixed,
         }
     }
 }
 
 impl AttachSpec {
+    /// Attach `asset` as `name` under `host_path`, placed by translation only
+    /// (no rotation) with joint `joint`. The common case — a wheel, a sensor, a
+    /// tank that sits axis-aligned where you put it.
+    pub fn new(
+        edit_target: LayerId,
+        host_path: impl Into<String>,
+        name: impl Into<String>,
+        asset: impl Into<String>,
+        placement: [f64; 3],
+        joint: AttachJoint,
+    ) -> Self {
+        Self {
+            edit_target,
+            host_path: host_path.into(),
+            name: name.into(),
+            asset: asset.into(),
+            placement,
+            rotate_deg: [0.0; 3],
+            joint,
+        }
+    }
+
+    /// Attach `asset` by matching a **plug frame on the part** to a **socket frame
+    /// on the host** — the mount abstraction (doc 45 §3.1). Both frames are given
+    /// as local [`Transform`]s (read off `xformOp:*` on the socket/plug prims by the
+    /// caller); this computes the part placement + rotation so the plug coincides
+    /// with the socket, via [`resolve_mount_placement`]. The joint anchor still
+    /// derives from the placement, so a bogie reconfiguration is "move the socket".
+    ///
+    /// Frame *reading* stays with the caller (it needs the composed stage); this
+    /// keeps the frame math a pure, unit-tested function of two transforms — a wrong
+    /// frame conversion is a physics bug you can only see with the renderer running,
+    /// so it is isolated here where it can be checked against hand-computed matrices.
+    pub fn from_mount(
+        edit_target: LayerId,
+        host_path: impl Into<String>,
+        name: impl Into<String>,
+        asset: impl Into<String>,
+        joint: AttachJoint,
+        socket: bevy::prelude::Transform,
+        plug: bevy::prelude::Transform,
+    ) -> Self {
+        let (placement, rotate_deg) = resolve_mount_placement(socket, plug);
+        Self {
+            edit_target,
+            host_path: host_path.into(),
+            name: name.into(),
+            asset: asset.into(),
+            placement,
+            rotate_deg,
+            joint,
+        }
+    }
+
     fn child_path(&self) -> String {
         format!("{}/{}", self.host_path.trim_end_matches('/'), self.name)
     }
@@ -192,6 +252,20 @@ pub fn attach_component_ops(spec: &AttachSpec) -> Vec<UsdOp> {
         },
     ];
 
+    // 2b. Orientation, only when the placement carries one (a mount that rotates
+    //     the part). Authored right after the translate so the placement stays one
+    //     unit; the joint anchor is a point (`localPos*`), unaffected by rotation.
+    if spec.rotate_deg != [0.0, 0.0, 0.0] {
+        ops.insert(
+            2,
+            UsdOp::SetRotate {
+                edit_target: et.clone(),
+                path: child.clone(),
+                value: spec.rotate_deg,
+            },
+        );
+    }
+
     // 7. The moving axis, for the non-fixed joints.
     let axis = match spec.joint {
         AttachJoint::Fixed => None,
@@ -212,9 +286,45 @@ pub fn attach_component_ops(spec: &AttachSpec) -> Vec<UsdOp> {
     ops
 }
 
+/// Compute a part's host-local placement (translation + `rotateXYZ` Euler degrees)
+/// so its **plug frame** coincides with the host's **socket frame** — the geometry
+/// behind [`AttachSpec::from_mount`].
+///
+/// Both `socket` and `plug` are local frames: `socket` in the host body's space,
+/// `plug` in the part's space. Placing the part at transform `P` puts its plug at
+/// `P ∘ plug` (in host space); we want that to equal `socket`, so
+///
+/// ```text
+///   P ∘ plug = socket   ⇒   P = socket ∘ plug⁻¹
+/// ```
+///
+/// Returns `P` decomposed into `(translation, rotateXYZ-degrees)`, the two things
+/// [`attach_component_ops`] authors. Pure and total — no stage, no I/O — so the
+/// frame conversion (a physics bug you'd otherwise only catch in the renderer) is
+/// unit-tested against hand-computed matrices.
+pub fn resolve_mount_placement(
+    socket: bevy::prelude::Transform,
+    plug: bevy::prelude::Transform,
+) -> ([f64; 3], [f64; 3]) {
+    use bevy::math::EulerRot;
+    let p = socket.compute_affine() * plug.compute_affine().inverse();
+    let (_scale, rot, trans) = p.to_scale_rotation_translation();
+    let (rx, ry, rz) = rot.to_euler(EulerRot::XYZ);
+    (
+        [trans.x as f64, trans.y as f64, trans.z as f64],
+        [
+            (rx as f64).to_degrees(),
+            (ry as f64).to_degrees(),
+            (rz as f64).to_degrees(),
+        ],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::math::Quat;
+    use bevy::prelude::Transform;
 
     fn wheel_spec(joint: AttachJoint) -> AttachSpec {
         AttachSpec {
@@ -223,6 +333,7 @@ mod tests {
             name: "Wheel_FL".into(),
             asset: "components/mobility/wheel.usda".into(),
             placement: [-0.25, -0.4, -1.2],
+            rotate_deg: [0.0, 0.0, 0.0],
             joint,
         }
     }
@@ -323,5 +434,78 @@ mod tests {
         assert!(add_child < place, "child exists before it is placed");
         assert!(add_joint < relate, "joint exists before it relates bodies");
         assert!(add_child < relate, "part exists before the joint targets it");
+    }
+
+    // ── Mount-frame math (doc 45 §3.1) ──
+
+    fn close(a: [f64; 3], b: [f64; 3]) -> bool {
+        (0..3).all(|i| (a[i] - b[i]).abs() < 1e-4)
+    }
+
+    #[test]
+    fn mount_identity_frames_place_at_origin() {
+        let (t, r) = resolve_mount_placement(Transform::IDENTITY, Transform::IDENTITY);
+        assert!(close(t, [0.0, 0.0, 0.0]) && close(r, [0.0, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn mount_socket_translation_becomes_placement() {
+        // Socket sits at (1,2,3) on the host, plug at the part origin → the part
+        // goes to (1,2,3), no rotation.
+        let socket = Transform::from_xyz(1.0, 2.0, 3.0);
+        let (t, r) = resolve_mount_placement(socket, Transform::IDENTITY);
+        assert!(close(t, [1.0, 2.0, 3.0]), "translation carried through: {t:?}");
+        assert!(close(r, [0.0, 0.0, 0.0]), "no rotation: {r:?}");
+    }
+
+    #[test]
+    fn mount_cancels_plug_offset() {
+        // Socket at the host origin; the plug sticks out +Z by 1 from the part
+        // origin. To land the plug on the socket, the part origin must go to -Z.
+        let plug = Transform::from_xyz(0.0, 0.0, 1.0);
+        let (t, _r) = resolve_mount_placement(Transform::IDENTITY, plug);
+        assert!(close(t, [0.0, 0.0, -1.0]), "plug offset is cancelled: {t:?}");
+    }
+
+    #[test]
+    fn mount_socket_rotation_becomes_placement_rotation() {
+        // A 45° socket rotation about Z (Z is the last XYZ-Euler axis — no gimbal
+        // lock) → the part is rotated 45° about Z, at the origin.
+        let socket = Transform::from_rotation(Quat::from_rotation_z(45f32.to_radians()));
+        let (t, r) = resolve_mount_placement(socket, Transform::IDENTITY);
+        assert!(close(t, [0.0, 0.0, 0.0]), "no translation: {t:?}");
+        assert!(close(r, [0.0, 0.0, 45.0]), "rotation carried through: {r:?}");
+    }
+
+    #[test]
+    fn from_mount_authors_rotation_only_when_present() {
+        // A rotating socket → the lowering emits a SetRotate; a plain placement
+        // (via `new`) does not (the common axis-aligned case stays translate-only).
+        let rotated = AttachSpec::from_mount(
+            LayerId::root(),
+            "/RockerBogie/RockerL",
+            "Wheel_FL",
+            "components/mobility/wheel.usda",
+            AttachJoint::Fixed,
+            Transform::from_rotation(Quat::from_rotation_z(30f32.to_radians())),
+            Transform::IDENTITY,
+        );
+        assert!(
+            attach_component_ops(&rotated).iter().any(|op| matches!(op, UsdOp::SetRotate { .. })),
+            "a rotated mount authors SetRotate"
+        );
+
+        let plain = AttachSpec::new(
+            LayerId::root(),
+            "/RockerBogie/RockerL",
+            "Wheel_FL",
+            "components/mobility/wheel.usda",
+            [1.0, 0.0, 0.0],
+            AttachJoint::Fixed,
+        );
+        assert!(
+            !attach_component_ops(&plain).iter().any(|op| matches!(op, UsdOp::SetRotate { .. })),
+            "an axis-aligned placement stays translate-only"
+        );
     }
 }

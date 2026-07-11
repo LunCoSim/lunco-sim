@@ -14,6 +14,7 @@ pub mod spawn_palette;
 pub mod inspector;
 pub mod entity_list;
 pub mod terrain_tools;
+pub mod connection_canvas;
 
 /// Schedule slot (in `Update`) for the UI *view-model* producers — the
 /// change-driven systems that derive render-ready state into resources for the
@@ -43,6 +44,7 @@ impl Plugin for SandboxEditUiPlugin {
             .register_panel(inspector::Inspector)
             .register_panel(entity_list::EntityList)
             .register_panel(terrain_tools::ToolsPanel)
+            .register_panel(connection_canvas::UsdCanvasPanel)
             .register_panel(ViewportPanel)
             // Order matters for auto-activation — View first so it's
             // the default when the rover binary boots.
@@ -119,6 +121,28 @@ impl Plugin for SandboxEditUiPlugin {
                     ],
                     has_tour: false,
                 },
+            )
+            .register_perspective(ObjectBuilderPerspective)
+            .register_perspective_help(
+                PerspectiveId("object_builder"),
+                lunco_workbench::PerspectiveHelp {
+                    title: "🧩 Object Builder",
+                    description: "Assemble and edit objects from parts. Navigate the \
+                                  object's structure in the tree, attach components from \
+                                  the palette, and tune the selected prim's parameters in \
+                                  the Inspector.",
+                    shortcuts: vec![
+                        HelpShortcut { keys: "Ctrl+Z", description: "Undo the last edit" },
+                        HelpShortcut { keys: "Delete", description: "Remove the selected part" },
+                        HelpShortcut { keys: "Esc", description: "Clear selection / gizmo" },
+                    ],
+                    mouse: vec![
+                        HelpMouse { interaction: "Click a tree node", description: "Select a part to inspect / edit" },
+                        HelpMouse { interaction: "Alt+Left-Click", description: "Select + transform gizmo (drag to move)" },
+                        HelpMouse { interaction: "Right-Drag", description: "Orbit / rotate the camera" },
+                    ],
+                    has_tour: false,
+                },
             );
 
         // WP-8: the Entity list is a pure view over `EntityTreeView`, derived by
@@ -138,6 +162,15 @@ impl Plugin for SandboxEditUiPlugin {
             inspector::populate_inspector_view
                 .in_set(ViewModelSet)
                 .run_if(inspector::inspector_inputs_changed),
+        );
+
+        // USD connection canvas: the scene is derived from the live composed
+        // stage by a main-thread producer (the stage is `!Send`), hash-gated so
+        // it only rebuilds on a topology change. No `run_if` — the system
+        // early-returns cheaply when nothing is wired or the topology is stable.
+        app.init_resource::<connection_canvas::UsdCanvasState>().add_systems(
+            Update,
+            connection_canvas::produce_usd_canvas.in_set(ViewModelSet),
         );
 
         // Debug-viz settings menu rows (joint + wheel-force gizmos).
@@ -216,6 +249,46 @@ impl Perspective for BuildPerspective {
             // workbench doesn't). The workbench filters unknown ids.
             PanelId("rover_code"),
         ]);
+        layout.set_bottom(None);
+    }
+}
+
+/// Object Builder mode — assemble and edit objects from parts.
+///
+/// Distinct from Build (which leads with the spawn palette for dropping loose
+/// props into a scene): this leads with the **object's structure** — the entity
+/// tree on the left, so you navigate and select a rover's rocker → bogie → wheel
+/// — with the component palette beneath it for attaching parts, the 3D view in the
+/// centre, and the Inspector on the right to tune the selected prim's parameters.
+/// The panels are the proven ones (tree / palette / viewport / inspector); this is
+/// the workspace that arranges them for building rather than observing.
+///
+/// The connection canvas and rhai editor that will also live here are separate,
+/// larger additions; this establishes the perspective they dock into.
+pub struct ObjectBuilderPerspective;
+
+impl Perspective for ObjectBuilderPerspective {
+    fn id(&self) -> PerspectiveId { PerspectiveId("object_builder") }
+    // 🧩 renders in the bundled fallback (unlike 🏗, which tofus — see welcome.rs).
+    fn title(&self) -> String { "🧩 Object Builder".into() }
+    fn apply(&self, layout: &mut WorkbenchLayout) {
+        layout.set_activity_bar(false);
+        // Structure first: the tree to navigate/select parts, the palette to add
+        // them. (Unknown ids — e.g. `rover_models` in other apps — are filtered.)
+        layout.set_side_browser_tabs(vec![
+            PanelId("entity_list"),
+            PanelId("spawn_palette"),
+        ]);
+        // Two central tabs: the 3D build view and the connection canvas. The
+        // canvas is where you see and rewire the scene's co-sim connections and
+        // joints; the 3D view is where you place and transform parts. Viewport
+        // first so it's the default tab (its 3D renders through the empty tab).
+        layout.set_center(vec![
+            VIEWPORT_PANEL_ID,
+            connection_canvas::USD_CANVAS_PANEL_ID,
+        ]);
+        // The Inspector alone on the right — parameter editing is the point here.
+        layout.set_right_inspector_tabs(vec![PanelId("sandbox_inspector")]);
         layout.set_bottom(None);
     }
 }
