@@ -27,6 +27,7 @@ use bevy::prelude::*;
 // through openusd's Stage by SDF path (`lunco_usd_bevy::author`); the old
 // `text_edit` byte-splicer and the `edit_target_spike` proof are gone now that
 // Phase C2/C3 lands the real Stage-backed authoring.
+pub mod attach;
 pub mod commands;
 pub mod document;
 pub mod live_consume;

@@ -322,6 +322,75 @@ impl CanonicalStage {
         Ok(())
     }
 
+    /// Author relationship `name` on `prim`, pointing at `targets` — the
+    /// live-stage counterpart of the document's `SetRelationship` op.
+    ///
+    /// Without this, every relationship edit fell to the projector's whole-scene
+    /// rebuild path. That is the difference between snapping a part onto an
+    /// assembly and respawning every prim in the world: a physics joint authors
+    /// `physics:body0` / `physics:body1`, so a component attach is *two*
+    /// relationship edits. Set-semantics — `targets` replaces any prior list.
+    pub fn author_relationship(
+        &self,
+        prim: &SdfPath,
+        name: &str,
+        targets: &[String],
+    ) -> anyhow::Result<()> {
+        use anyhow::anyhow;
+        let target_paths = targets
+            .iter()
+            .map(|t| {
+                openusd::sdf::Path::new(t)
+                    .map_err(|e| anyhow!("relationship {prim}.{name}: bad target `{t}`: {e}"))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        self.stage
+            .create_relationship(format!("{}.{}", prim.as_str(), name))
+            .map_err(|e| anyhow!("author relationship {prim}.{name}: {e}"))?
+            .set_targets(target_paths)
+            .map_err(|e| anyhow!("set relationship targets {prim}.{name}: {e}"))?;
+        Ok(())
+    }
+
+    /// Author attribute `name`'s connection targets (`connectionPaths`) onto the
+    /// prim at `prim` — the live-stage counterpart of the document's
+    /// `SetConnection` op. Creates the attribute spec if absent (like
+    /// [`author_attribute`](Self::author_attribute)) so a wire can be drawn to a
+    /// not-yet-materialised port. `sources` replaces any prior list; empty clears.
+    ///
+    /// The projector classified `SetConnection` as an incremental op but had no
+    /// author for it, so the op reached the document and never the live stage —
+    /// a silently dropped edit. Every cosim wire authored at runtime went
+    /// nowhere until the next full rebuild.
+    pub fn author_connection(
+        &self,
+        prim: &SdfPath,
+        name: &str,
+        type_name: &str,
+        sources: &[String],
+    ) -> anyhow::Result<()> {
+        use anyhow::anyhow;
+        let source_paths = sources
+            .iter()
+            .map(|s| {
+                openusd::sdf::Path::new(s)
+                    .map_err(|e| anyhow!("connection {prim}.{name}: bad source `{s}`: {e}"))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        self.stage
+            .create_attribute(format!("{}.{}", prim.as_str(), name), type_name)
+            .map_err(|e| anyhow!("author connection {prim}.{name} ({type_name}): {e}"))?
+            .set_connections(source_paths)
+            .map_err(|e| anyhow!("set connection sources {prim}.{name}: {e}"))?;
+        Ok(())
+    }
+
+    // NOTE: no live-stage `author_api_schemas` / `author_active`. Those two ops
+    // change a prim's ECS component set / entity presence, which the incremental
+    // subtree refresh (visual-only) can't reconcile — they take the projector's
+    // rebuild path instead, which composes from the document (already carrying the
+    // authored metadata). See `twin_projection::op_needs_rebuild`.
+
     /// Author attribute `name = value` (USD type `type_name`) onto the prim at
     /// `prim` (root edit target), firing the sink so the projection refreshes the
     /// prim's visual. Creates the attribute if absent, overwrites it otherwise —
@@ -773,4 +842,62 @@ mod authoring_tests {
             "the referenced rover's Body child must compose under the runtime spawn"
         );
     }
+
+    // ── Object-builder live authors (doc 45 §3.2/§3.3) ──
+    // These four are what made the rebuild cliff go away: each edit now composes on
+    // the LIVE stage instead of forcing a whole-scene rebuild. The document-level
+    // `UsdOp` tests prove the ops author into save-data; THESE prove the live-stage
+    // counterparts compose, which is the claim the projector arms actually depend on.
+
+    const RIG: &str = "#usda 1.0\n(\n    defaultPrim = \"Rig\"\n)\ndef Xform \"Rig\"\n{\n    def Xform \"Chassis\"\n    {\n    }\n    def Xform \"Wheel\"\n    {\n    }\n    def PhysicsRevoluteJoint \"Hinge\"\n    {\n    }\n    def Xform \"Bus\"\n    {\n        float inputs:voltage\n    }\n    def Xform \"Battery\"\n    {\n        float outputs:voltage = 28\n    }\n}\n";
+
+    #[test]
+    fn author_relationship_composes_joint_bodies_on_live_stage() {
+        let recipe = StageRecipe::from_source("rig.usda", RIG);
+        let mut cs = CanonicalStage::from_recipe(&recipe).expect("build rig");
+        let _ = cs.drain_changes();
+
+        let hinge = SdfPath::new("/Rig/Hinge").unwrap();
+        cs.author_relationship(&hinge, "physics:body0", &["/Rig/Chassis".into()])
+            .expect("author body0");
+        cs.author_relationship(&hinge, "physics:body1", &["/Rig/Wheel".into()])
+            .expect("author body1");
+
+        // The joint's two bodies compose on the LIVE stage — this is the read the
+        // Avian joint builder does. Before the live author, this required a rebuild.
+        assert_eq!(
+            cs.view().rel_targets(&hinge, "physics:body0").iter().map(|p| p.to_string()).collect::<Vec<_>>(),
+            vec!["/Rig/Chassis".to_string()],
+        );
+        assert_eq!(
+            cs.view().rel_targets(&hinge, "physics:body1").iter().map(|p| p.to_string()).collect::<Vec<_>>(),
+            vec!["/Rig/Wheel".to_string()],
+        );
+    }
+
+    #[test]
+    fn author_connection_composes_on_live_stage() {
+        // The silent-bug fix: SetConnection was classified incremental but had no
+        // live author, so a wire drawn at runtime vanished until the next rebuild.
+        let recipe = StageRecipe::from_source("rig.usda", RIG);
+        let mut cs = CanonicalStage::from_recipe(&recipe).expect("build rig");
+        let _ = cs.drain_changes();
+
+        let bus = SdfPath::new("/Rig/Bus").unwrap();
+        cs.author_connection(&bus, "inputs:voltage", "float", &["/Rig/Battery.outputs:voltage".into()])
+            .expect("author connection");
+
+        assert_eq!(
+            cs.view().connections(&bus, "inputs:voltage"),
+            vec!["/Rig/Battery.outputs:voltage".to_string()],
+            "the authored wire composes on the live stage (was silently dropped before)"
+        );
+    }
+
+    // SetApiSchemas / SetActive have no live-stage author here on purpose: their
+    // ECS effect (physics component set / entity presence) can't be reconciled by
+    // the visual-only subtree refresh, so they take the projector's rebuild path.
+    // Their document-level authoring + inverse are covered in
+    // `lunco_usd::document::tests`, and their rebuild routing in
+    // `lunco_usd::twin_projection::tests`.
 }

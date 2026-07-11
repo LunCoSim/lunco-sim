@@ -277,6 +277,7 @@ fn update_viewport_placeholder(
 
 register_commands!(
     on_apply_usd_op,
+    on_attach_component,
     on_new_document,
     on_open_file,
     on_open_file_for_usd,
@@ -573,6 +574,55 @@ fn on_apply_usd_op(trigger: On<ApplyUsdOp>, mut commands: Commands) {
                 bevy::log::warn!("[ApplyUsdOp] {} rejected: {:?}", doc, reject);
             }
         }
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// AttachComponent — build-from-parts (doc 45 §3.1)
+// ─────────────────────────────────────────────────────────────────────
+
+/// Attach a component asset to a host body as a jointed child, deriving the
+/// joint anchor from the placement so it is authored once, not twice. Lowers to
+/// the primitive [`UsdOp`]s in [`crate::attach::attach_component_ops`] — each
+/// journals and inverts on its own, so undo peels the attach off op-by-op.
+///
+/// If any op is rejected (e.g. the host prim doesn't exist), the rest are still
+/// attempted and each logs its own rejection — the partial result is visible and
+/// undoable rather than silently half-applied behind a rollback the journal can't
+/// see. Validate the host exists before dispatching.
+#[Command(default)]
+pub struct AttachComponent {
+    /// Target document.
+    pub doc: DocumentId,
+    /// The attachment to perform.
+    pub spec: crate::attach::AttachSpec,
+}
+
+#[on_command(AttachComponent)]
+fn on_attach_component(trigger: On<AttachComponent>, mut commands: Commands) {
+    let doc = trigger.event().doc;
+    let spec = trigger.event().spec.clone();
+    commands.queue(move |world: &mut World| {
+        let ops = crate::attach::attach_component_ops(&spec);
+        let n = ops.len();
+        let mut registry = world.resource_mut::<UsdDocumentRegistry>();
+        let mut applied = 0usize;
+        for op in ops {
+            match registry.apply(doc, op) {
+                Ok(_) => applied += 1,
+                Err(reject) => {
+                    bevy::log::warn!(
+                        "[AttachComponent] {doc} op rejected ({}/{n} applied): {reject:?}",
+                        applied
+                    );
+                }
+            }
+        }
+        bevy::log::info!(
+            "[AttachComponent] {doc}: attached `{}` to `{}` ({applied}/{n} ops)",
+            spec.name,
+            spec.host_path
+        );
     });
 }
 
