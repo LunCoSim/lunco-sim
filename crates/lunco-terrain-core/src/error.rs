@@ -45,40 +45,51 @@ const CELL_SAMPLES: &[(f64, f64)] = &[
 /// node's mesh vertex count per side (≥ 2). Zero for a surface the mesh represents
 /// exactly (e.g. planar); grows with detail the mesh cannot capture.
 pub fn measure_node_error(src: &dyn HeightSource, region: Square, res: usize) -> f64 {
+    thread_local! {
+        /// Reused vertex-height scratch — this runs per LOD node (on cache miss),
+        /// so a fresh `Vec` per call churned the allocator. Purely local, so the
+        /// reuse is invisible to callers.
+        static VERT_SCRATCH: std::cell::RefCell<Vec<f64>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
     let n = res.max(2);
     let side = region.side();
     let step = side / (n as f64 - 1.0);
     let x0 = region.center[0] - region.half;
     let z0 = region.center[1] - region.half;
 
-    // Vertex height grid the node's mesh would use.
-    let mut verts = vec![0.0f64; n * n];
-    for j in 0..n {
-        for i in 0..n {
-            verts[j * n + i] = src.height_at(x0 + i as f64 * step, z0 + j as f64 * step);
+    VERT_SCRATCH.with(|scratch| {
+        // Vertex height grid the node's mesh would use (reused buffer).
+        let mut verts = scratch.borrow_mut();
+        verts.clear();
+        verts.resize(n * n, 0.0f64);
+        for j in 0..n {
+            for i in 0..n {
+                verts[j * n + i] = src.height_at(x0 + i as f64 * step, z0 + j as f64 * step);
+            }
         }
-    }
 
-    let mut max_err = 0.0f64;
-    for cj in 0..n - 1 {
-        for ci in 0..n - 1 {
-            let h00 = verts[cj * n + ci];
-            let h10 = verts[cj * n + ci + 1];
-            let h01 = verts[(cj + 1) * n + ci];
-            let h11 = verts[(cj + 1) * n + ci + 1];
-            for &(u, v) in CELL_SAMPLES {
-                let bil = bilerp(h00, h10, h01, h11, u, v);
-                let px = x0 + (ci as f64 + u) * step;
-                let pz = z0 + (cj as f64 + v) * step;
-                let truth = src.height_at(px, pz);
-                let e = (truth - bil).abs();
-                if e > max_err {
-                    max_err = e;
+        let mut max_err = 0.0f64;
+        for cj in 0..n - 1 {
+            for ci in 0..n - 1 {
+                let h00 = verts[cj * n + ci];
+                let h10 = verts[cj * n + ci + 1];
+                let h01 = verts[(cj + 1) * n + ci];
+                let h11 = verts[(cj + 1) * n + ci + 1];
+                for &(u, v) in CELL_SAMPLES {
+                    let bil = bilerp(h00, h10, h01, h11, u, v);
+                    let px = x0 + (ci as f64 + u) * step;
+                    let pz = z0 + (cj as f64 + v) * step;
+                    let truth = src.height_at(px, pz);
+                    let e = (truth - bil).abs();
+                    if e > max_err {
+                        max_err = e;
+                    }
                 }
             }
         }
-    }
-    max_err
+        max_err
+    })
 }
 
 /// Bilinear interpolation of a cell's four corner heights at unit-cell `(u, v)`.

@@ -162,13 +162,16 @@ pub fn update_terrain_brush_ghost(
     keys: Res<ButtonInput<KeyCode>>,
     cameras: Query<(&Camera, &GlobalTransform, &bevy::camera::RenderTarget), With<Camera3d>>,
     windows: Query<&Window>,
-    q_ghost: Query<(Entity, &MeshMaterial3d<StandardMaterial>), With<TerrainBrushGhost>>,
+    mut q_ghost: Query<
+        (Entity, &mut Transform, &MeshMaterial3d<StandardMaterial>),
+        With<TerrainBrushGhost>,
+    >,
     grids: Query<Entity, With<Grid>>,
     raycaster: avian3d::prelude::SpatialQuery,
     terrains: crate::spawn::TerrainOracles,
 ) {
     if !state.armed() {
-        for (ghost, _) in q_ghost.iter() {
+        for (ghost, _, _) in q_ghost.iter() {
             commands.entity(ghost).despawn();
         }
         return;
@@ -218,10 +221,18 @@ pub fn update_terrain_brush_ghost(
     let transform = Transform::from_translation(point + Vec3::Y * 0.05)
         .with_scale(Vec3::new(state.radius, 1.0, state.radius));
 
-    if let Some((ghost, mat)) = q_ghost.iter().next() {
-        commands.entity(ghost).insert(transform);
-        if let Some(mut m) = materials.get_mut(&mat.0) {
-            m.base_color = color;
+    if let Some((_, mut tf, mat)) = q_ghost.iter_mut().next() {
+        // Write the transform directly (change detection marks it only when the
+        // cursor actually moved) instead of re-inserting via Commands every frame.
+        *tf = transform;
+        // `Assets::get_mut` marks the material modified → a uniform re-upload EVERY
+        // frame if called unconditionally. The tint only changes when a modifier
+        // (Alt/Ctrl) toggles, so peek immutably and touch it only on a real change.
+        let changed = materials.get(&mat.0).is_some_and(|m| m.base_color != color);
+        if changed {
+            if let Some(m) = materials.get_mut(&mat.0) {
+                m.base_color = color;
+            }
         }
     } else {
         let Some(grid) = grids.iter().next() else { return };
@@ -233,6 +244,8 @@ pub fn update_terrain_brush_ghost(
             alpha_mode: AlphaMode::Blend,
             ..default()
         });
+        // `Visibility` pulls in `InheritedVisibility` + `ViewVisibility` as required
+        // components in Bevy 0.19 — no need to insert them explicitly.
         commands.spawn((
             Name::new("TerrainBrushGhost"),
             TerrainBrushGhost,
@@ -241,8 +254,6 @@ pub fn update_terrain_brush_ghost(
             MeshMaterial3d(mat),
             ChildOf(grid),
             Visibility::Visible,
-            InheritedVisibility::default(),
-            ViewVisibility::default(),
         ));
     }
 }
@@ -257,11 +268,24 @@ pub fn update_terrain_brush_ghost(
 pub fn on_scene_click_terrain(
     mut click: On<bevy::picking::events::Pointer<bevy::picking::events::Click>>,
     state: Res<TerrainToolState>,
+    // Gate on the SAME resource selection/possession read (not `state.armed()`
+    // directly): `terrain_tool_state_system` mirrors `state` into `TerrainToolActive`
+    // one system later, so reading `state` here would open a one-frame window where
+    // this observer thinks the tool is armed while selection still thinks it is not
+    // (or vice-versa) — a click that both sculpts AND selects/possesses. One gate,
+    // one source of truth.
+    active: Res<lunco_core::TerrainToolActive>,
     keys: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
 ) {
     use bevy::picking::pointer::PointerButton;
-    if !state.armed() {
+    if !active.0 {
+        return;
+    }
+    // `active` says a tool is armed; the disarm mirror lags a frame, so if `state`
+    // has already cleared the tool this frame, drop the click (don't sculpt with
+    // `TerrainTool::None`) rather than fall through to a default brush.
+    if state.tool == TerrainTool::None {
         return;
     }
     // We own the click while armed — stop it bubbling to ancestors.

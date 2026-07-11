@@ -71,8 +71,9 @@ pub enum BakeStage {
 pub const COARSE_RES: usize = 384;
 
 /// One bake output (either stage). `grid` is crater-stamped; `base_grid` is the
-/// pre-crater working grid retained for a live re-bake (native), a clone of the
-/// stamped grid on web (doc-backed terrains never live-regenerate).
+/// pre-crater working grid (cloned before the stamp loop on both platforms),
+/// retained for a live re-bake — native re-stamps off it; web keeps it for the
+/// analytic re-compose (doc-backed terrains never live-regenerate the raster).
 pub struct BakedGrid {
     pub grid: HeightGrid,
     pub base_grid: HeightGrid,

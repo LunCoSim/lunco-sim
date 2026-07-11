@@ -140,16 +140,32 @@ pub(crate) fn finish_streamed_horizon_bakes(
 pub(crate) fn mark_streamed_horizon_stale(
     mut commands: Commands,
     time: Res<Time>,
+    // NOTE: this must NOT filter `With<HorizonMap>`. The first edit removes the map,
+    // so a `With<HorizonMap>` filter would stop matching mid-drag and never refresh
+    // `since` — the debounce would then fire at edit+0.75 s against a still-editing
+    // oracle and re-bake repeatedly per stroke. Match any already-managed terrain
+    // (live map OR debounce already armed) and re-arm on every change instead.
     changed: Query<
-        Entity,
-        (Changed<DemHeightField>, With<HorizonMap>, With<TerrainLodViz>, Without<Mesh3d>),
+        (Entity, Has<HorizonMap>, Has<StreamedHorizonStale>),
+        (Changed<DemHeightField>, With<TerrainLodViz>, Without<Mesh3d>),
     >,
 ) {
-    for entity in &changed {
-        commands
-            .entity(entity)
-            .try_remove::<(HorizonMap, HorizonShadowCache)>()
-            .try_insert(StreamedHorizonStale { since: time.elapsed_secs_f64() });
+    let now = time.elapsed_secs_f64();
+    for (entity, has_map, is_stale) in &changed {
+        // An un-shadowed terrain's FIRST bake is handled by the bake system; only
+        // (re)arm terrains that already have a horizon map or a pending debounce.
+        if !has_map && !is_stale {
+            continue;
+        }
+        let mut e = commands.entity(entity);
+        if has_map {
+            // The live map now shadows terrain that no longer exists — drop it and
+            // the cache so tile sampling reverts to CSM until the re-bake lands.
+            e.try_remove::<(HorizonMap, HorizonShadowCache)>();
+        }
+        // (Re)arm the debounce on EVERY edit so a continuous drag keeps pushing the
+        // deadline out → exactly one coalesced bake once the surface goes quiescent.
+        e.try_insert(StreamedHorizonStale { since: now });
     }
 }
 

@@ -379,20 +379,24 @@ pub struct TerrainNodeErrors {
 /// handle instead of re-baking + re-uploading — the "tile caching" that was missing.
 /// Bounded: trimmed to currently-resident tiles when it grows past `CACHE_CAP`.
 #[derive(Resource, Default)]
-pub struct LodMeshCache(HashMap<QuadCoord, Handle<Mesh>>);
+pub struct LodMeshCache(HashMap<(Entity, QuadCoord), Handle<Mesh>>);
 
 impl LodMeshCache {
-    /// Drop cached meshes a live height edit invalidated. This cache keys purely by
-    /// `QuadCoord` (geometry = pure function of the node), which holds ONLY while the
-    /// oracle is fixed; a brush/flatten changes the surface, so a re-selected tile in
-    /// the edited area would otherwise reuse its pre-edit mesh. `Some(bounds)` drops
-    /// just the overlapping nodes (the incremental patch); `None` (a whole-terrain
-    /// spec change) clears all. Non-overlapping entries survive so revisiting
-    /// unedited ground still hits the cache.
-    pub fn drop_region(&mut self, bounds: Option<[f64; 4]>, root_half_extent: f64) {
+    /// Drop cached meshes a live height edit invalidated, scoped to one `terrain`.
+    /// Geometry is a pure function of `(terrain, coord)` only while that terrain's
+    /// oracle is fixed; a brush/flatten changes its surface, so a re-selected tile
+    /// in the edited area would otherwise reuse its pre-edit mesh. `Some(bounds)`
+    /// drops just the overlapping nodes (the incremental patch); `None` (a whole-
+    /// terrain spec change) clears the terrain's entries. Other terrains' entries —
+    /// and this terrain's non-overlapping ones — survive, so revisiting unedited
+    /// ground still hits the cache. Keying on the terrain `Entity` (not the coord
+    /// alone) is what stops one terrain reusing another's mesh for a shared coord.
+    pub fn drop_region(&mut self, terrain: Entity, bounds: Option<[f64; 4]>, root_half_extent: f64) {
         match bounds {
-            None => self.0.clear(),
-            Some(aabb) => self.0.retain(|coord, _| !node_overlaps_aabb(*coord, root_half_extent, aabb)),
+            None => self.0.retain(|(e, _), _| *e != terrain),
+            Some(aabb) => self.0.retain(|(e, coord), _| {
+                *e != terrain || !node_overlaps_aabb(*coord, root_half_extent, aabb)
+            }),
         }
     }
 }
@@ -969,7 +973,7 @@ pub fn update_lod_tiles(
                 continue;
             }
             let handle = meshes.add(baked.mesh);
-            mesh_cache.0.insert(coord, handle.clone());
+            mesh_cache.0.insert((terrain, coord), handle.clone());
             // No longer selected while it baked → keep the cached mesh, skip spawning.
             if !wanted.contains(&coord) {
                 continue;
@@ -1009,7 +1013,7 @@ pub fn update_lod_tiles(
             // Per-node morph band: finite for sub-root nodes, "never" for the root
             // (the sentinel `snap_band` maps to the no-morph bucket).
             let morph_end = if s.morph_end.is_finite() { s.morph_end as f32 } else { 1.0e21 };
-            if let Some(cached) = mesh_cache.0.get(&s.coord) {
+            if let Some(cached) = mesh_cache.0.get(&(terrain, s.coord)) {
                 let (ent, shared) = spawn_tile(
                     &mut commands, grid, grid_entity, terrain, s.coord, cached.clone(),
                     s.region.center, depth, morph_end, mode, &shader, maps, shadow,
@@ -1090,13 +1094,14 @@ pub fn update_lod_tiles(
         stream_status.resident += wanted.iter().filter(|c| tiles.tiles.contains_key(c)).count();
         stream_status.pending += pending.0.len();
 
-        // Bound the mesh cache: when it grows past the cap, keep only meshes for
-        // currently-resident tiles (deterministic geometry → dropped ones re-bake on
-        // demand). Single-terrain scenes are the norm; with several terrains this may
-        // drop another's cached meshes, which is harmless (they re-bake).
+        // Bound the mesh cache: when it grows past the cap, drop THIS terrain's
+        // non-resident meshes (deterministic geometry → they re-bake on demand).
+        // Other terrains' entries are left untouched — the cap is a soft memory
+        // bound, and dropping a terrain we're not currently processing would just
+        // force it to re-bake next frame.
         if mesh_cache.0.len() > CACHE_CAP {
             let resident: HashSet<QuadCoord> = tiles.tiles.keys().copied().collect();
-            mesh_cache.0.retain(|c, _| resident.contains(c));
+            mesh_cache.0.retain(|(e, c), _| *e != terrain || resident.contains(c));
         }
     }
 }

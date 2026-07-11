@@ -65,7 +65,7 @@ pub use lunco_terrain_core::{
     AnalyticHeightSource, HeightSource, QuadCoord, Quadtree, Selected, Square, TileCoord, TileGrid,
 };
 pub use oracle::{raycast_surface, HeightContribution, SurfaceOracle};
-pub use plugin::{TerrainSurfaceConfig, TerrainSurfacePlugin};
+pub use plugin::TerrainSurfacePlugin;
 pub use derived_layers::{DerivedLayersBuilt, TerrainDerivedMaps};
 pub use georef::TerrainGeoref;
 pub use query::{register_terrain_queries, TerrainHeightProvider};
@@ -84,6 +84,6 @@ pub use terrain_layers::{
 pub use terrain::{
     BrushTerrain, DemBaseGrid, DemTerrainRequest, DemTerrainSource, DemTerrainSurface, DocBackedTerrain,
     FlattenTerrain, PlaceCrater, PlaceRock, RegenerateTerrainLayers, RemoveTerrainLayer,
-    SpawnDemTerrain, TerrainGenStatus,
+    SpawnDemTerrain, TerrainGenPhase, TerrainGenStatus,
 };
 pub use tile_mesh::{bake_tile_mesh, TileMesh};

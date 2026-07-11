@@ -38,6 +38,16 @@ thread_local! {
     static POOL: RefCell<Option<WorkerPool>> = const { RefCell::new(None) };
     static WORKER_URL: RefCell<Option<String>> = const { RefCell::new(None) };
     static REPLIES: RefCell<VecDeque<WorkerReply>> = RefCell::new(VecDeque::new());
+    /// Ids dispatched but not yet terminated (a `Full` reply or any error ends a
+    /// job; `Coarse` keeps it). On a worker-level crash (`on_error`) these have no
+    /// pending terminal reply, so the terrain systems would wait forever — we
+    /// synthesise error replies for them so the job cleans up.
+    static INFLIGHT: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Mark a job terminated (drop its id from the in-flight set).
+fn retire_inflight(id: u32) {
+    INFLIGHT.with(|f| f.borrow_mut().retain(|&x| x != id));
 }
 
 /// Register the worker bootstrap URL (e.g. `./dem-worker/dem_worker_bootstrap.js`)
@@ -65,9 +75,30 @@ fn ensure_pool() -> Result<(), JsValue> {
                 on_message: Rc::new(|_idx, data| handle_reply(data)),
                 on_ready: Callbacks::noop(),
                 on_error: Rc::new(|idx| {
+                    // A worker-level crash posts no terminal reply, so every job it
+                    // was baking would leave its entity pending forever. Synthesise a
+                    // terminal error reply per in-flight id (a `Coarse` error makes the
+                    // consumer drop both the request and the job).
+                    let stuck: Vec<u32> = INFLIGHT.with(|f| f.borrow_mut().drain(..).collect());
                     web_sys::console::warn_1(
-                        &format!("[dem-worker] worker {idx} errored (bake dropped)").into(),
+                        &format!(
+                            "[dem-worker] worker {idx} errored — failing {} in-flight bake(s)",
+                            stuck.len()
+                        )
+                        .into(),
                     );
+                    for id in stuck {
+                        REPLIES.with(|r| {
+                            r.borrow_mut().push_back(WorkerReply {
+                                id,
+                                stage: BakeStage::Coarse,
+                                site: String::new(),
+                                native_res: 0,
+                                res: 0,
+                                grid: Err("dem worker crashed".to_string()),
+                            })
+                        });
+                    }
                 }),
                 on_wire_mismatch: Rc::new(|_idx, _got| {}),
             };
@@ -105,11 +136,27 @@ fn handle_reply(data: JsValue) {
             Ok(buf) if !buf.is_undefined() => {
                 // ArrayBuffer (transferred) → view → copy into wasm memory.
                 let heights = Float64Array::new(&buf).to_vec();
-                Ok(HeightGrid { res: header.res, half_extent: header.half_extent, heights })
+                let expected = header.res * header.res;
+                if heights.len() != expected {
+                    // A truncated/foreign buffer would later index out of bounds far
+                    // from here (`heights[z*res+x]`); fail the reply at the source.
+                    Err(format!(
+                        "worker grid size mismatch: got {} heights, expected {expected} ({}²)",
+                        heights.len(),
+                        header.res
+                    ))
+                } else {
+                    Ok(HeightGrid { res: header.res, half_extent: header.half_extent, heights })
+                }
             }
             _ => Err("worker reply missing heights buffer".to_string()),
         }
     };
+
+    // A `Full` reply or any error terminates the job; `Coarse` keeps it in flight.
+    if header.stage == BakeStage::Full || grid.is_err() {
+        retire_inflight(header.id);
+    }
 
     REPLIES.with(|r| {
         r.borrow_mut().push_back(WorkerReply {
@@ -147,7 +194,9 @@ pub fn dispatch(id: u32, job: &DemBakeJob, meta_yaml: &str, tif: &[u8]) -> Resul
     Reflect::set(&obj, &"tif".into(), &tif_buf)?;
 
     let transfer = Array::of1(&tif_buf);
-    POOL.with(|p| p.borrow().as_ref().unwrap().post_transfer(0, &obj, &transfer))
+    POOL.with(|p| p.borrow().as_ref().unwrap().post_transfer(0, &obj, &transfer))?;
+    INFLIGHT.with(|f| f.borrow_mut().push(id));
+    Ok(())
 }
 
 /// Inject a locally-produced reply (e.g. an OPFS grid-cache hit) into the SAME
