@@ -28,7 +28,7 @@ impl Plugin for LunCoHardwarePlugin {
                motor_actuator_system,
                brake_actuator_system,
                sensor_velocity_system,
-           ).chain().run_if(|t: Res<Time<Virtual>>| t.relative_speed_f64() > 0.0));
+           ).chain().run_if(|t: Res<Time<Virtual>>| !t.is_paused() && t.relative_speed_f64() > 0.0));
     }
 }
 

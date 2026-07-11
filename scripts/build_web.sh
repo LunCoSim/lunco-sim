@@ -121,7 +121,18 @@ stage_one_twin() {
 # index.html autoloader). See the LC_TWIN_* env docs at the call site.
 stage_twins() {
     local dist="$1"
-    local default_src="${LC_TWIN_SRC-$HOME/Documents/lunco/moonbase/twin}"
+    # Prune the whole twins root first, so a twin baked by a PREVIOUS build (e.g.
+    # an earlier `LC_TWIN_SRC=…/moonbase` run) does not survive into a build that
+    # no longer stages it: `scenes.json` would omit it, but its ~90 MB of files
+    # would still ship in the bundle. `rsync --delete` in `stage_one_twin` only
+    # keeps an individually-staged twin clean; it can't remove one that isn't
+    # staged this run at all. Everything under here is re-created below.
+    rm -rf "$dist/assets/twins"
+    # Default: do NOT bake the moonbase — on web it ships from the server on
+    # connect (see SERVER_TWIN_DELIVERY_DESIGN.md), so the deploy boots a small
+    # demo scene. Set LC_TWIN_SRC=/path/to/twin to bake one in (server-host
+    # build / offline testing).
+    local default_src="${LC_TWIN_SRC:-}"
     local default_scene="${LC_TWIN_SCENE:-moonbase_scene.usda}"
 
     local entries="" default_path=""
@@ -153,8 +164,10 @@ stage_twins() {
     fi
 
     if [ -z "$entries" ]; then
-        info "No twin packed — sandbox will boot its built-in scene."
-        rm -f "$dist/scenes.json"
+        # No twin baked in → boot the lightweight demo scene (staged under
+        # assets/scenes/sandbox/). The moonbase arrives from the server on connect.
+        printf '{"default":"scenes/sandbox/sandbox_scene.usda","scenes":[]}\n' > "$dist/scenes.json"
+        info "Wrote scenes.json (default: lightweight demo; moonbase via server)"
         return 0
     fi
     # Default is the first staged twin unless it failed (then no autoload key).
@@ -663,7 +676,8 @@ Run: cargo run -p lunco-assets --bin lunco-assets -- download -a perseverance &&
     # index.html autoloader opens the default one on boot. Dynamic, not
     # compiled in — override the source or add scenes without rebuilding:
     #   LC_TWIN_SRC=/path/to/twin        default twin folder to pack
-    #                                    ("" to skip; default = bundled moonbase)
+    #                                    (optional; default = none → lightweight
+    #                                     demo, moonbase arrives via server)
     #   LC_TWIN_NAME=moonbase            dist name under assets/twins/
     #   LC_TWIN_SCENE=moonbase_scene.usda   scene file within the twin
     #   LC_TWIN_EXTRA="lab=lab.usda=/path/lab;…"  extra non-default scenes

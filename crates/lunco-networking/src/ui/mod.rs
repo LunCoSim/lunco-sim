@@ -305,8 +305,11 @@ fn draw_top_banner(
             ui.painter()
                 .rect_stroke(banner_rect, 6.0, stroke, egui::StrokeKind::Outside);
             let child_rect = banner_rect.shrink2(shrink);
-            let mut child_ui =
-                ui.child_ui(child_rect, egui::Layout::left_to_right(egui::Align::Center), None);
+            let mut child_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(child_rect)
+                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            );
             child_ui.horizontal(|ui| add_contents(ui));
         });
 }

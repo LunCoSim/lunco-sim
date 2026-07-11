@@ -28,6 +28,10 @@ mod models_palette;
 mod rhai_repl_panel;
 /// Centered "Generating terrain…" overlay during the initial DEM bake.
 mod terrain_progress;
+/// Centered "Downloading <scenario>" overlay during scenario-sync asset fetch.
+/// Networking-only — the file carries its own `#![cfg(feature = "networking")]`.
+#[cfg(feature = "networking")]
+mod scenario_download;
 
 /// The sandbox's interactive layer: egui workbench, bevy_picking, the USD Twin
 /// browser + RTT viewport, the in-scene editor, materials, rover panels, and
@@ -144,6 +148,13 @@ impl Plugin for SandboxUiPlugin {
                 bevy_egui::EguiPrimaryContextPass,
                 terrain_progress::draw_terrain_progress,
             );
+        // G2: "Downloading <scenario>" overlay during scenario-sync asset fetch.
+        // Networking-only — the module is `#[cfg(feature = "networking")]`.
+        #[cfg(feature = "networking")]
+        app.add_systems(
+            bevy_egui::EguiPrimaryContextPass,
+            scenario_download::draw_scenario_download,
+        );
 
         // Scene-backed tutorials declare their catalog entry on their OWN scene
         // (`lunco:tutorial*` on the default prim), the hybrid alternative to a
@@ -430,6 +441,49 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         // the orchestrator script. Hovering an entry reveals its blurb — the
         // plain-language "what does this teach" tip.
         render_tutorials_submenu(ui, world);
+
+        // ── Downloaded Twins (scenario-sync cache, G3) ───────────────────
+        // Twins fetched from a server into the local cache — loadable offline
+        // via `scenario://`. Networking-only; the registry rebuilds from
+        // `<cache>/scenarios/index.json` at boot and updates as downloads finish.
+        #[cfg(feature = "networking")]
+        {
+            use lunco_networking::scenario_sync::CachedTwinsRegistry;
+            let entries = world
+                .get_resource::<CachedTwinsRegistry>()
+                .map(|r| r.entries.clone())
+                .unwrap_or_default();
+            ui.collapsing(format!("📦 Downloaded Twins ({})", entries.len()), |ui| {
+                if entries.is_empty() {
+                    ui.label(
+                        bevy_egui::egui::RichText::new("(connect to a server to download one)")
+                            .weak()
+                            .italics(),
+                    );
+                }
+                for entry in &entries {
+                    let mb = (entry.total_bytes as f64) / (1024.0 * 1024.0);
+                    let label = if entry.name.is_empty() {
+                        format!("Downloaded twin  ({mb:.0} MB)")
+                    } else {
+                        format!("{}  ({mb:.0} MB)", entry.name)
+                    };
+                    if ui.button(label).clicked() {
+                        if let Some(scene) = entry.default_scene.clone() {
+                            let path = lunco_networking::scenario_sync::scenario_asset_uri(
+                                &entry.scenario_id,
+                                &scene,
+                            );
+                            world.trigger(lunco_usd::LoadScene {
+                                path,
+                                root_prim: String::new(),
+                            });
+                            ui.close();
+                        }
+                    }
+                }
+            });
+        }
 
         ui.separator();
 

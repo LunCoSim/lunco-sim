@@ -122,7 +122,7 @@ impl Plugin for UsdSimPlugin {
            // freshly-placed body. Same `relative_speed > 0` gate as raycast wheels.
            .add_systems(FixedUpdate, (reconstruct_proxy_wheels, animate_proxy_physical_wheels)
                .chain()
-               .run_if(|t: Res<Time<Virtual>>| t.relative_speed_f64() > 0.0))
+               .run_if(|t: Res<Time<Virtual>>| !t.is_paused() && t.relative_speed_f64() > 0.0))
            .add_observer(on_add_usd_sim_prim)
            // `try_wire_wheel` runs in PreUpdate so that Wire entities exist
            // before `wire_system` (Update) propagates values through them.

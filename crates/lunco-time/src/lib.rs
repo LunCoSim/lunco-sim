@@ -335,8 +335,10 @@ pub struct TimeSpineSet;
 
 /// The Bevy adapter: feed [`advance_clock`] the tick + wall clock, write the
 /// derived `WorldTime` (per frame — the clock is moving), and project the rate
-/// onto `Time<Virtual>.relative_speed` (the **single** control state, which is
-/// also the tick/physics gate: `relative_speed > 0` ⇒ running). Runs in
+/// onto `Time<Virtual>` (the **single** control state). A running clock sets
+/// `relative_speed = rate`; a frozen one (paused, or a tick-stopping warp regime)
+/// raises Bevy's `paused` flag and leaves `relative_speed` a positive rate — so
+/// the tick/physics gate is `effective_speed > 0` ⇒ running. Runs in
 /// `PreUpdate` (before `FixedUpdate` physics/tick) so the regime gate and the
 /// unified rate take effect this frame.
 pub fn advance_world_clock(
@@ -360,14 +362,30 @@ pub fn advance_world_clock(
     world.met_secs = clock.met_secs(tick.0, real_secs);
     world.regime = clock.regime;
 
+    // Frozen (paused, or a warp regime where the tick stops) is projected onto
+    // Bevy's `paused` FLAG, never onto `relative_speed = 0`. `relative_speed` is a
+    // *rate*, and consumers divide by it — lightyear's interpolation timeline does
+    // `delta.div_f32(time.relative_speed())`, so a zero there yields `inf` and
+    // panics `Duration::from_secs_f32`. Pausing instead zeroes `effective_speed`
+    // (and `delta`), which is what every "is it running?" gate reads.
+    let frozen = relative_speed <= 0.0;
+    let configured = if frozen { 1.0 } else { relative_speed };
+
     // Control projection is **change-driven**: only touch `Time<Virtual>` when the
     // rate actually changed. Comparing the value (rather than gating the whole
     // system on `resource_changed`) keeps it self-healing — if anything clobbers
     // `relative_speed` out of band, the mismatch is corrected next frame — while
     // avoiding a redundant per-frame write and the spurious change-detection it
     // would trigger.
-    if virtual_time.relative_speed_f64() != relative_speed {
-        virtual_time.set_relative_speed_f64(relative_speed);
+    if virtual_time.relative_speed_f64() != configured {
+        virtual_time.set_relative_speed_f64(configured);
+    }
+    if frozen != virtual_time.is_paused() {
+        if frozen {
+            virtual_time.pause();
+        } else {
+            virtual_time.unpause();
+        }
     }
 }
 
@@ -521,5 +539,66 @@ mod tests {
         let rs = advance_clock(&mut c, 0, 5000.0, true, 0.0);
         assert_eq!(c.regime, TimeRegime::RealtimePhysics);
         assert_eq!(rs, 0.0);
+    }
+
+    /// A frozen spine must raise Bevy's `paused` flag and keep `relative_speed`
+    /// a POSITIVE rate — never 0.
+    ///
+    /// `relative_speed` is a rate that consumers divide by: lightyear's
+    /// interpolation timeline computes `delta.div_f32(time.relative_speed())`, so
+    /// a zero there yields `inf` and panics `Duration::from_secs_f32` ("cannot
+    /// convert float seconds to Duration"). This crashed every networked client
+    /// the moment it loaded a DEM-terrain scene, because `hold_physics_until_dem_ready`
+    /// pauses the transport while the heightfield builds. `effective_speed` (0 when
+    /// paused) is what the tick/physics gates read, so freezing still works.
+    #[test]
+    fn frozen_spine_pauses_and_never_zeroes_relative_speed() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        for (mode, rate) in [
+            (TransportMode::Paused, 1.0),   // explicit pause (the DEM hold)
+            (TransportMode::Playing, 0.0),  // rate 0 is also "frozen"
+            (TransportMode::Playing, 5e4),  // warp regime: tick frozen
+        ] {
+            let mut world = bevy::prelude::World::new();
+            world.insert_resource(lunco_core::SimTick(0));
+            world.insert_resource(TimeTransport { mode, rate });
+            world.insert_resource(Time::<bevy::time::Real>::default());
+            world.insert_resource(MissionClock::default());
+            world.insert_resource(WorldTime::default());
+            world.insert_resource(Time::<Virtual>::default());
+
+            world.run_system_once(advance_world_clock).unwrap();
+
+            let vt = world.resource::<Time<Virtual>>();
+            assert!(vt.is_paused(), "{mode:?}/{rate} should freeze via the paused flag");
+            assert!(
+                vt.relative_speed_f64() > 0.0,
+                "{mode:?}/{rate} left relative_speed at {} — consumers divide by it",
+                vt.relative_speed_f64()
+            );
+        }
+    }
+
+    /// The complement: a running spine is unpaused and carries the rate.
+    #[test]
+    fn running_spine_projects_rate_and_unpauses() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = bevy::prelude::World::new();
+        world.insert_resource(lunco_core::SimTick(0));
+        world.insert_resource(TimeTransport { mode: TransportMode::Playing, rate: 2.0 });
+        world.insert_resource(Time::<bevy::time::Real>::default());
+        world.insert_resource(MissionClock::default());
+        world.insert_resource(WorldTime::default());
+        let mut vt = Time::<Virtual>::default();
+        vt.pause(); // start frozen, so we prove the transition back
+        world.insert_resource(vt);
+
+        world.run_system_once(advance_world_clock).unwrap();
+
+        let vt = world.resource::<Time<Virtual>>();
+        assert!(!vt.is_paused());
+        assert_eq!(vt.relative_speed_f64(), 2.0);
     }
 }

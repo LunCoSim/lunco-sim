@@ -89,7 +89,7 @@ impl Plugin for LunCoMobilityPlugin {
                FixedUpdate,
                differential_coupling_system
                    .run_if(any_with_component::<DifferentialCoupling>)
-                   .run_if(|t: Res<Time<Virtual>>| t.relative_speed_f64() > 0.0),
+                   .run_if(|t: Res<Time<Virtual>>| !t.is_paused() && t.relative_speed_f64() > 0.0),
            )
            .add_systems(FixedUpdate, (
                suspension_system,
@@ -112,7 +112,7 @@ impl Plugin for LunCoMobilityPlugin {
                // and the per-chassis `RigidBody::Kinematic` guard inside each wheel
                // system already skips those. So host/standalone simulate every
                // rover (unchanged) and a client simulates only its owned one.
-               |t: Res<Time<Virtual>>| t.relative_speed_f64() > 0.0));
+               |t: Res<Time<Virtual>>| !t.is_paused() && t.relative_speed_f64() > 0.0));
 
         // Expose every FSW's logical command ports (a rover's throttle/steer/brake,
         // etc.) through the shared port substrate, so the ONE generic `SetPorts`

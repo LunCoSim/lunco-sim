@@ -2754,6 +2754,12 @@ impl Plugin for SyncPlugin {
             // role, not only after `setup_host`.
             .init_resource::<crate::scenario_sync::PendingAssetOffers>()
             .init_resource::<crate::scenario_sync::AssetPersist>()
+            .init_resource::<crate::scenario_sync::AssetCacheProbe>()
+            .init_resource::<crate::scenario_sync::CacheProbeState>()
+            .init_resource::<crate::http_fetch::AssetHttpFetch>()
+            .init_resource::<crate::scenario_sync::ScenarioDownloadStatus>()
+            .init_resource::<crate::scenario_sync::CachedTwinsRegistry>()
+            .init_resource::<crate::scenario_sync::CachedTwinsIndex>()
             // Scripted-policy plane: the active rhai policy set (merge / authz /
             // drive-kernel). Host-authoritative; clients fill it from the host's
             // broadcast (`drain_sync_inbox`). Present on every peer.
@@ -2790,19 +2796,37 @@ impl Plugin for SyncPlugin {
                 // to `interest_hz`). The server-side `assemble_and_send_snapshots`
                 // routes pose updates by these sets.
                 recompute_interest,
-                // Scenario asset transfer (Phase 3), client-side: request missing
-                // assets when a new manifest lands, and reassemble+persist the
-                // chunks the host streams back. Both no-op on the host. The
-                // host-side serve/send pair is registered in `setup_host`.
-                crate::scenario_sync::request_missing_assets,
-                crate::scenario_sync::reassemble_asset_chunks,
-                crate::scenario_sync::drain_persist_results,
                 // Journal plane: both roles stream new journal entries — the
                 // host relays all (fan-out hub), clients send their own edits.
                 // Policies ride this too — a `LuncoPolicy` prim is a USD doc op —
                 // so there is no separate policy broadcast.
                 crate::journal_plane::broadcast_journal_entries,
             ))
+            // Scenario asset transfer (Phase 3 + G1/G2/G3), client-side. Split
+            // into its own tuple (bevy caps system-tuple arity); ordered after
+            // `drain_sync_inbox` so the manifest/chunk queues it fills are current
+            // this frame, and `drive_cache_probe` runs before
+            // `request_missing_assets` so already-cached CIDs are skipped.
+            .add_systems(
+                Update,
+                (
+                    crate::scenario_sync::drive_cache_probe,
+                    // Bytes plane: HTTP when the host advertises an endpoint,
+                    // else the in-session chunk request below. Exactly one of the
+                    // two claims each CID (both gate on `requested`).
+                    crate::http_fetch::fetch_missing_assets_http,
+                    crate::scenario_sync::request_missing_assets,
+                    crate::scenario_sync::reassemble_asset_chunks,
+                    crate::scenario_sync::drain_persist_results,
+                    // G1: persist `.scenario.json` once fully cached.
+                    crate::scenario_sync::write_scenario_index,
+                    // G2: refresh the download-progress resource for the overlay.
+                    crate::scenario_sync::update_scenario_download_status,
+                    // G3: rebuild the cached-twins registry from index.json (boot).
+                    crate::scenario_sync::refresh_cached_twins_registry,
+                )
+                    .after(drain_sync_inbox),
+            )
             // `gather_snapshot` runs on the sim clock (`FixedPostUpdate`): it only
             // writes our `SyncOutbox` (never calls lightyear), so it's safe off the
             // render clock. This decouples snapshot GENERATION (a steady 20 Hz,
@@ -2946,6 +2970,7 @@ mod codec_roundtrip {
             default_scene: None,
             assets: Vec::new(),
             journal_head: None,
+            asset_base_url: None,
         });
         let bytes = serialize_env(&manifest).expect("serialize");
         assert_eq!(&bytes[..4], &[13, 0, 0, 0], "ScenarioManifest must be index 13");
@@ -3049,6 +3074,7 @@ mod codec_roundtrip {
                 author: lunco_twin_journal::AuthorId::new("host"),
                 lamport: 7,
             }),
+            asset_base_url: Some("http://10.0.0.5:5889/assets/".into()),
         });
         let back = deserialize_env(&serialize_env(&env).expect("serialize")).expect("deserialize");
         match back {
@@ -3062,6 +3088,9 @@ mod codec_roundtrip {
                 assert_eq!(m.assets[0].path, "scenes/main.usda");
                 assert_eq!(m.assets[0].cid.len(), 36);
                 assert_eq!(m.assets[1].size, 9);
+                // The bytes-plane endpoint survives the round-trip (appended last,
+                // so the positional bincode layout of the older fields is unchanged).
+                assert_eq!(m.asset_base_url.as_deref(), Some("http://10.0.0.5:5889/assets/"));
             }
             _ => panic!("wrong variant after round-trip"),
         }

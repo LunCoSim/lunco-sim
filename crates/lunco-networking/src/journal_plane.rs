@@ -393,6 +393,77 @@ mod tests {
         assert_eq!(vals(&scene_ops_after(&host, None, &AuthorId::new("host"), &none)), vec![3]);
     }
 
+    /// A host that opens a twin whose journal was authored by SOMEONE ELSE must
+    /// not replay that saved history: the `.usda` files it just loaded already
+    /// contain it. Basing on the head captured at load (what the manifest
+    /// advertises) is what makes that true — `base = None` + the `author != me`
+    /// filter does NOT, because every entry looks foreign.
+    ///
+    /// This is the `LUNCO_PEER_ID=local-host` crash: 982 stale entries replayed
+    /// over already-baked files, churning rovers until avian panicked on an
+    /// orphaned wheel joint (`assert!(island.joint_count > 0)`).
+    #[test]
+    fn host_does_not_replay_saved_history_authored_by_another_peer() {
+        use lunco_doc::DocumentId;
+        use lunco_twin_journal::{AuthorTag, TwinId};
+
+        let twin = TwinId::new("t");
+        // The twin's history was written by `peer-old` (another machine/session).
+        let saved = JournalResource::new(twin.clone(), AuthorId::new("peer-old"));
+        let author_usd = |j: &JournalResource, v: i32| {
+            j.with_write(|jj| {
+                jj.append_local(
+                    AuthorTag::for_tool("test"),
+                    DocumentId::new(1),
+                    EntryKind::Op {
+                        domain: DomainKind::Usd,
+                        op: serde_json::json!({ "v": v }),
+                        inverse: serde_json::json!({}),
+                    },
+                    None,
+                )
+            })
+        };
+        author_usd(&saved, 1);
+        author_usd(&saved, 2);
+
+        // The host boots with a DIFFERENT local author id and loads those files.
+        let me = AuthorId::new("local-host");
+        let none = HashSet::new();
+        let vals = |ops: &[(EntryId, serde_json::Value)]| {
+            ops.iter().map(|(_, v)| v["v"].as_i64().unwrap()).collect::<Vec<_>>()
+        };
+
+        // The OLD behaviour — base `None` — re-applies the whole saved history.
+        assert_eq!(
+            vals(&scene_ops_after(&saved, None, &me, &none)),
+            vec![1, 2],
+            "base=None double-applies history already baked into the files"
+        );
+
+        // The FIX: base = the head captured at load (what the manifest advertises).
+        let head = saved.with_read(|j| j.merged_head()).expect("history is non-empty");
+        assert!(
+            scene_ops_after(&saved, Some(&head), &me, &none).is_empty(),
+            "nothing to replay: the loaded files already reflect the whole journal"
+        );
+
+        // …and a client edit arriving AFTER that head still replays.
+        let client = JournalResource::new(twin, AuthorId::new("peer-client"));
+        for msg in full_journal_msgs(&saved) {
+            apply_inbound_entry(&client, &msg);
+        }
+        author_usd(&client, 3);
+        for msg in full_journal_msgs(&client) {
+            apply_inbound_entry(&saved, &msg);
+        }
+        assert_eq!(
+            vals(&scene_ops_after(&saved, Some(&head), &me, &none)),
+            vec![3],
+            "live client edits past the base must still project onto the host's scene"
+        );
+    }
+
     #[test]
     fn scene_ops_after_selects_remote_usd_ops_past_base() {
         use lunco_doc::DocumentId;

@@ -756,15 +756,29 @@ async fn read_bytes(path: std::path::PathBuf) -> Result<Vec<u8>, String> {
     }
     #[cfg(target_arch = "wasm32")]
     {
-        // Fetch the DEM bytes same-origin over HTTP (the Twin's terrain folder is
-        // staged next to the wasm under `assets/`), cached in a Cache-Storage
-        // bucket so the (large) heightmap re-hydrates instantly on the next load.
-        // These URLs are MUTABLE — a host-side twin update can replace the file
-        // in place — so the cached copy is served now and a background
-        // `If-None-Match`/`If-Modified-Since` probe refreshes the cache for the
-        // next reload. The DEM request URI is asset-relative on web (resolved
-        // against the scene's own directory — no `twin://`), so prepend the bevy
-        // web asset root unless it's already absolute/prefixed.
+        use lunco_storage::{OpfsStorage, StorageHandle};
+        // Two DEM origins on web, disambiguated by where the file actually lives:
+        //  • a **scenario-sync twin** — fetched over the network into the OPFS
+        //    scenario cache `<cache>/scenarios/<id>/…`. The scene loads via
+        //    `scenario://`, whose `AssetPath::path()` strips the source, so the
+        //    DEM source resolves to `<id>/terrain/…` (no scheme prefix). Read it
+        //    straight from OPFS at `<cache>/scenarios/<id>/terrain/…`.
+        //  • the **baked-in demo twin** — staged next to the wasm under `assets/`,
+        //    fetched same-origin over HTTP, cached in Cache-Storage. Those URLs
+        //    are MUTABLE — a host-side twin update can replace the file in place —
+        //    so the cached copy is served now and a background
+        //    `If-None-Match`/`If-Modified-Since` probe refreshes the cache for the
+        //    next reload.
+        // The baked demo's `twins/…` path never exists under `scenarios/`, so an
+        // OPFS existence check cleanly picks the right backend.
+        let opfs_candidate = lunco_assets::cache_dir().join("scenarios").join(&path);
+        let opfs = OpfsStorage::new();
+        if opfs.exists(&StorageHandle::File(opfs_candidate.clone())).await {
+            return opfs
+                .read(&StorageHandle::File(opfs_candidate))
+                .await
+                .map_err(|e| e.to_string());
+        }
         let rel = path.to_string_lossy().replace('\\', "/");
         let url = if rel.starts_with("assets/") || rel.starts_with("http") || rel.starts_with('/') {
             rel
@@ -868,40 +882,69 @@ fn start_dem_builds(
                         }
                     };
                     
-                    let rel = tif_path.to_string_lossy().replace('\\', "/");
-                    let url = if rel.starts_with("assets/") || rel.starts_with("http") || rel.starts_with('/') {
-                        rel
+                    // A scenario-synced twin's DEM already lives in the OPFS scenario
+                    // cache — read it from there rather than re-fetching it over HTTP
+                    // (where it doesn't exist: `assets/<scenario-id>/…` is a 404).
+                    // Only the baked-in demo twin is staged under `assets/`. This
+                    // mirrors `read_bytes`, which the `metadata.yaml` read above goes
+                    // through; the .tif can't reuse it because it wants progress.
+                    let opfs_tif = lunco_assets::cache_dir().join("scenarios").join(&tif_path);
+                    let opfs_handle = lunco_storage::StorageHandle::File(opfs_tif);
+                    let opfs = lunco_storage::OpfsStorage::new();
+                    let tif = if opfs.exists(&opfs_handle).await {
+                        // Local read: no network, so report it as instantly complete
+                        // rather than leaving the progress bar at zero.
+                        match opfs.read(&opfs_handle).await {
+                            Ok(b) => {
+                                if let Ok(mut s) = download_progress.lock() {
+                                    let n = b.len() as u64;
+                                    *s = Some((n, n));
+                                }
+                                b
+                            }
+                            Err(e) => {
+                                bevy::log::error!("[dem-terrain] tif read from scenario cache failed: {e}");
+                                let _ = tx.send(id);
+                                return;
+                            }
+                        }
                     } else {
-                        format!("assets/{rel}")
-                    };
+                        let rel = tif_path.to_string_lossy().replace('\\', "/");
+                        let url = if rel.starts_with("assets/") || rel.starts_with("http") || rel.starts_with('/') {
+                            rel
+                        } else {
+                            format!("assets/{rel}")
+                        };
 
-                    let progress_slot = download_progress.clone();
-                    let progress_cb = wasm_bindgen::closure::Closure::<dyn FnMut(f64, f64)>::new(move |done: f64, total: f64| {
-                        if let Ok(mut s) = progress_slot.lock() {
-                            *s = Some((done as u64, total as u64));
-                        }
-                    });
+                        let progress_slot = download_progress.clone();
+                        let progress_cb = wasm_bindgen::closure::Closure::<dyn FnMut(f64, f64)>::new(move |done: f64, total: f64| {
+                            if let Ok(mut s) = progress_slot.lock() {
+                                *s = Some((done as u64, total as u64));
+                            }
+                        });
 
-                    // Cached-first with a download bar, plus a background
-                    // conditional revalidate: the heightmap URL is mutable (a
-                    // host-side twin update replaces it in place), so a changed
-                    // DEM is re-cached for the next reload instead of being
-                    // served stale forever.
-                    let tif = match lunco_assets::web_fetch::fetch_cached_with_progress_conditional(
-                        "lunco-twin-v1",
-                        &url,
-                        0,
-                        progress_cb.as_ref().unchecked_ref(),
-                    )
-                    .await {
-                        Ok(b) => b,
-                        Err(e) => {
-                            bevy::log::error!("[dem-terrain] tif fetch failed: {e}");
-                            let _ = tx.send(id);
-                            return;
+                        // Cached-first with a download bar, plus a background
+                        // conditional revalidate: the heightmap URL is mutable (a
+                        // host-side twin update replaces it in place), so a changed
+                        // DEM is re-cached for the next reload instead of being
+                        // served stale forever.
+                        let fetched = lunco_assets::web_fetch::fetch_cached_with_progress_conditional(
+                            "lunco-twin-v1",
+                            &url,
+                            0,
+                            progress_cb.as_ref().unchecked_ref(),
+                        )
+                        .await;
+                        drop(progress_cb);
+                        match fetched {
+                            Ok(b) => b,
+                            Err(e) => {
+                                bevy::log::error!("[dem-terrain] tif fetch failed: {e}");
+                                let _ = tx.send(id);
+                                return;
+                            }
                         }
                     };
-                    drop(progress_cb);
 
                     // OPFS grid cache: key = format version + the RAW fetched
                     // bytes + the job params (content-exact — composes with the

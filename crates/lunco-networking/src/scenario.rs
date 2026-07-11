@@ -173,6 +173,24 @@ pub struct ScenarioManifestMsg {
     /// `None` if the host has no journal / an empty history. (bincode-safe:
     /// `EntryId` is `{author: String, lamport: u64}`, no `serde_json::Value`.)
     pub journal_head: Option<lunco_twin_journal::EntryId>,
+    /// Where to fetch asset bytes over **HTTP**, e.g.
+    /// `http://10.0.0.5:5889/scenario-assets/` or (behind an nginx proxy,
+    /// same-origin for a wasm client) `/scenario-assets/`. A CID is appended
+    /// verbatim: `<base><cid-base32>`.
+    ///
+    /// Never route this at `/assets/`: that is bevy's web asset root, and a proxy
+    /// there swallows every shader/scene/model the wasm bundle loads.
+    ///
+    /// The bytes plane rides HTTP, not the QUIC game port: lightyear's reliable
+    /// sender queues without bound (`buffer_send` never rejects), so streaming a
+    /// multi-MB twin through `AssetChunkMsg` saturates the link and stalls the
+    /// session. HTTP gives us the OS's own flow control for free. `None` = the host
+    /// serves no asset endpoint; the client falls back to the QUIC chunk path,
+    /// which is correct but only viable for small scenarios.
+    ///
+    /// Appended last: bincode is positional, so new fields must not shift the
+    /// existing ones (see `media_type`).
+    pub asset_base_url: Option<String>,
 }
 
 /// Client → host: "I'm missing these assets — send me their bytes." Each entry

@@ -21,6 +21,11 @@ mod http;
 #[cfg(all(feature = "transport-http", not(target_arch = "wasm32")))]
 pub use http::*;
 
+/// Read-only content-addressed asset server (`GET /scenario-assets/<cid>`) — the
+/// bytes plane of scenario distribution. Native-only, same reasoning as `http` above.
+#[cfg(all(feature = "transport-http", not(target_arch = "wasm32")))]
+pub mod assets;
+
 /// In-browser JS bridge (`window.lunco_api`). Reuses the entire bridge core;
 /// replaces the TcpListener transport with a `#[wasm_bindgen]` async export.
 /// Always compiled on wasm32 — no feature gate.

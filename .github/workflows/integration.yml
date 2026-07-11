@@ -1,0 +1,111 @@
+# ============================================================================
+# LunCoSim — networking integration tests
+# ============================================================================
+# Runs the two-process scenario-sync integration test
+# (scripts/scenario_sync_test.sh): a headless HOST serves the in-repo sandbox
+# twin and a cold-cache CLIENT joins over the real lightyear WebTransport wire;
+# the test asserts the twin is delivered (manifest over QUIC), fetched + verified
+# + cached (bytes over HTTP), and loaded — plus the host-side rhai automation
+# path. Self-contained: uses the in-repo scene, needs no downloaded assets.
+#
+# Triggers on changes to the networking / sandbox / API crates or the test
+# scripts (the code this exercises), and manually from the Actions tab.
+# ============================================================================
+
+name: Integration Tests
+
+on:
+  push:
+    paths:
+      - 'crates/lunco-networking/**'
+      - 'crates/lunco-sandbox/**'
+      - 'crates/lunco-api/**'
+      - 'crates/lunco-time/**'
+      - 'crates/lunco-usd-sim/**'
+      - 'scripts/scenario_sync_test.sh'
+      - 'scripts/scenario_sync_assert.rhai'
+      - 'scripts/api/rhai_eval.py'
+      - 'scripts/api/entities_present.py'
+      - '.github/workflows/integration.yml'
+  pull_request:
+    paths:
+      - 'crates/lunco-networking/**'
+      - 'crates/lunco-sandbox/**'
+      - 'crates/lunco-api/**'
+      - 'crates/lunco-time/**'
+      - 'crates/lunco-usd-sim/**'
+      - 'scripts/scenario_sync_test.sh'
+      - 'scripts/scenario_sync_assert.rhai'
+      - 'scripts/api/**'
+      - '.github/workflows/integration.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  scenario-sync:
+    name: Scenario sync (2-process, real WebTransport)
+    runs-on: ubuntu-22.04
+    # A cold build of the sandbox dep tree with the default linker is slow;
+    # swatinem/rust-cache makes subsequent runs incremental.
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Project-local cache root so cache_dir() is deterministic on the runner.
+      # The test creates its own subdirs; no asset download is required.
+      LUNCOSIM_CACHE: ${{ github.workspace }}/.cache
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-02-27
+          components: rust-src
+
+      # Bevy's Linux windowing stack (winit/wayland/x11) needs these dev headers
+      # at build time even for the headless `--no-ui` sandbox binary (the deps are
+      # compiled in; only the runtime window is skipped). Mirrors nightly.yml.
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            libasound2-dev libudev-dev \
+            libwayland-dev libxkbcommon-dev \
+            libx11-dev xorg-dev
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ubuntu-22.04-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ubuntu-22.04-cargo-registry-
+
+      - name: Cache target directory
+        uses: swatinem/rust-cache@v2
+        with:
+          key: integration-linux-x86_64
+
+      # Builds `target/debug/sandbox` (--features networking) and runs the
+      # 2-process test against the in-repo sandbox twin. Exits non-zero on FAIL,
+      # so a broken sync / journal-replay panic / CID-verify failure fails CI.
+      - name: Run scenario-sync integration test
+        run: ./scripts/scenario_sync_test.sh
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenario-sync-logs
+          path: |
+            /tmp/scenario_sync_host.log
+            /tmp/scenario_sync_client.log
+          if-no-files-found: warn
+          retention-days: 7
