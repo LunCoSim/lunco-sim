@@ -7160,6 +7160,7 @@ dependencies = [
  "lunco-twin-journal",
  "lunco-workbench",
  "lunco-workspace",
+ "openusd",
  "rustls-pemfile",
  "serde",
  "serde_json",

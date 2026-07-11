@@ -188,6 +188,7 @@ fn drive_from_bindings(
 fn record_control_input(
     trigger: On<lunco_cosim::SetPorts>,
     role: Res<lunco_core::NetworkRole>,
+    sim_tick: Res<lunco_core::SimTick>,
     mut owned_log: ResMut<lunco_core::OwnedInputLog>,
     mut applied: ResMut<lunco_core::AppliedInputSeq>,
     q: Query<(&lunco_core::GlobalEntityId, Has<lunco_core::OwnedLocally>)>,
@@ -223,9 +224,14 @@ fn record_control_input(
     }
     // Prediction-membership signal (Phase A): record activity on ANY nonzero
     // write, independent of `owned`/`seq`, so the first real input can bootstrap
-    // prediction even while the body is still an interpolated proxy.
+    // prediction even while the body is still an interpolated proxy. Stamp the
+    // CURRENT sim tick, NOT `cmd.tick`: the tick field is the caller's ordering
+    // hint and is 0 for host-local scenario/API drives (the `drive()` prelude,
+    // HTTP `SetPorts`), which would pin `last_active_tick` at 0 forever and never
+    // promote the body to predicted. `drive_from_bindings` already sends the real
+    // tick, so keyboard behaviour is unchanged.
     if cmd.writes.iter().any(|(_, v)| v.abs() > INPUT_EPS) {
-        owned_log.0.entry(g).or_default().last_active_tick = cmd.tick;
+        owned_log.0.entry(g).or_default().last_active_tick = sim_tick.0;
     }
 }
 

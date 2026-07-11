@@ -7,7 +7,7 @@ use lightyear::netcode::server_plugin::NetcodeConfig;
 use lightyear::netcode::NetcodeServer;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
-use std::collections::HashSet;
+use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, SocketAddr};
 
 use crate::sync::{
@@ -906,6 +906,10 @@ struct ScenarioBuildInput {
     scenario_id: [u8; 16],
     name: String,
     default_scene: Option<String>,
+    /// Entry scene relative to the Twin root (pre-re-rooting), for a client that
+    /// has the Twin locally to load `twin://` host-identically. See
+    /// [`ScenarioManifestMsg::twin_scene`](crate::scenario::ScenarioManifestMsg::twin_scene).
+    twin_scene: Option<String>,
     descriptors: Vec<AssetDescriptor>,
     /// The host's journal head at build time — the base the asset snapshot
     /// corresponds to (journal-plane Layer B). Captured on the main thread by
@@ -943,32 +947,81 @@ fn collect_scenario_input(
     twin: &Twin,
     journal_head: Option<lunco_twin_journal::EntryId>,
 ) -> ScenarioBuildInput {
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut descriptors = Vec::new();
+    // 1. Folder walk → in-tree assets keyed by absolute path (dedup). A parent
+    //    Twin's `files()` recurses into child-Twin subdirs, so the same asset can
+    //    surface twice; the map keeps one. `is_runtime_state` is judged on the
+    //    Twin-relative path (its semantic form) BEFORE any re-rooting in step 3.
+    let mut by_abs: BTreeMap<PathBuf, Option<String>> = BTreeMap::new();
     for t in twin.walk() {
         for entry in t.files() {
             let abs_path = t.root.join(&entry.relative_path);
-            let Ok(rel_path) = abs_path.strip_prefix(&twin.root) else {
+            let Ok(rel) = abs_path.strip_prefix(&twin.root) else {
                 continue;
             };
-            let path = rel_path.to_string_lossy().replace('\\', "/");
-            if !seen.insert(path.clone()) {
-                // Already enumerated via a different Twin in the walk (parent's
-                // recursive `files()` overlapping a child Twin's own `files()`).
+            let twin_rel = rel.to_string_lossy().replace('\\', "/");
+            if is_runtime_state(&twin_rel) {
                 continue;
             }
-            if is_runtime_state(&path) {
-                continue;
-            }
-            let media_type = match entry.relative_path.extension().and_then(|s| s.to_str()) {
-                Some("usd" | "usda" | "usdc") => Some("model/vnd.usd".to_string()),
-                Some("glb") => Some("model/gltf-binary".to_string()),
-                Some("png") => Some("image/png".to_string()),
-                Some("jpg" | "jpeg") => Some("image/jpeg".to_string()),
-                _ => None,
-            };
-            descriptors.push(AssetDescriptor { abs_path, rel_path: path, media_type });
+            by_abs
+                .entry(abs_path)
+                .or_insert_with(|| media_type_for(&entry.relative_path));
         }
+    }
+
+    let default_scene_raw = twin
+        .manifest
+        .as_ref()
+        .and_then(|m| m.usd.as_ref())
+        .and_then(|usd| usd.default_scene.clone());
+
+    // 2. Reference closure. A sandbox scene references its rovers/components from
+    //    OUTSIDE its own folder (`@../../vessels/rovers/ackermann_rover.usda@`),
+    //    which the folder walk never sees — so the client's `scenario://` load
+    //    404'd on the sublayer and rendered an empty scene. Walk the entry
+    //    scene's transitive subLayers/references/payload graph and add every
+    //    reached file that lives outside the Twin root (in-tree deps are already
+    //    covered above). Seed from the entry scene (what Phase-4 auto-loads); with
+    //    no `default_scene`, seed from every in-tree USD layer.
+    let roots: Vec<PathBuf> = match &default_scene_raw {
+        Some(ds) => vec![twin.root.join(ds)],
+        None => by_abs
+            .keys()
+            .filter(|p| crate::usd_closure::is_usd_layer(p))
+            .cloned()
+            .collect(),
+    };
+    for f in crate::usd_closure::reference_closure(&roots) {
+        if f.starts_with(&twin.root) {
+            continue; // in-tree — already enumerated by the folder walk
+        }
+        let mt = media_type_for(&f);
+        by_abs.entry(f).or_insert(mt);
+    }
+
+    // 3. Re-root at the common ancestor of the Twin root and every asset, so an
+    //    out-of-tree file gets a `..`-free manifest key (the client's
+    //    `scenario://` resolver rejects `..` — scenario_source::resolve). A
+    //    self-contained scenario (no external refs) keeps `manifest_root ==
+    //    twin.root`, so its paths stay byte-identical to before — moonbase and
+    //    every terrain twin are unaffected.
+    let mut manifest_root = twin.root.clone();
+    for abs in by_abs.keys() {
+        if let Some(parent) = abs.parent() {
+            manifest_root = common_ancestor(&manifest_root, parent);
+        }
+    }
+
+    // 4. Descriptors, keyed relative to the manifest root. Once re-rooted, a
+    //    reference like `@../../vessels/…@` in the entry scene canonicalizes back
+    //    INSIDE the scenario root on the client (its loader mirrors this path
+    //    math), so it resolves against the now-shipped cached file.
+    let mut descriptors = Vec::with_capacity(by_abs.len());
+    for (abs_path, media_type) in by_abs {
+        let Ok(rel) = abs_path.strip_prefix(&manifest_root) else {
+            continue;
+        };
+        let rel_path = rel.to_string_lossy().replace('\\', "/");
+        descriptors.push(AssetDescriptor { abs_path, rel_path, media_type });
     }
 
     let scenario_id = twin
@@ -988,13 +1041,49 @@ fn collect_scenario_input(
         .as_ref()
         .map(|m| m.name.clone())
         .unwrap_or_else(|| twin.root.file_name().unwrap_or_default().to_string_lossy().into_owned());
-    let default_scene = twin
-        .manifest
-        .as_ref()
-        .and_then(|m| m.usd.as_ref())
-        .and_then(|usd| usd.default_scene.clone());
+    // 5. Two entry-scene forms:
+    //    - `twin_scene` = the Twin-relative path (raw `default_scene`), so a
+    //      client holding the Twin locally loads `twin://<name>/<twin_scene>` —
+    //      the *same asset path the host loaded* → matching per-prim gids.
+    //    - `default_scene` = re-rooted to the manifest root, so a client WITHOUT
+    //      the Twin (web) loads `scenario://<id>/<default_scene>` from the cache.
+    let twin_scene = default_scene_raw.clone();
+    let default_scene = default_scene_raw.map(|ds| {
+        twin.root
+            .join(&ds)
+            .strip_prefix(&manifest_root)
+            .ok()
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or(ds)
+    });
 
-    ScenarioBuildInput { scenario_id, name, default_scene, descriptors, journal_head }
+    ScenarioBuildInput { scenario_id, name, default_scene, twin_scene, descriptors, journal_head }
+}
+
+/// Extension → manifest media type (USD text/binary, glTF binary, images).
+fn media_type_for(path: &Path) -> Option<String> {
+    match path.extension().and_then(|s| s.to_str()) {
+        Some("usd" | "usda" | "usdc") => Some("model/vnd.usd".to_string()),
+        Some("glb") => Some("model/gltf-binary".to_string()),
+        Some("png") => Some("image/png".to_string()),
+        Some("jpg" | "jpeg") => Some("image/jpeg".to_string()),
+        _ => None,
+    }
+}
+
+/// Longest shared path prefix of two paths — their deepest common ancestor
+/// directory, compared component-wise. Picks a manifest root that contains both
+/// the Twin and any out-of-tree references it pulls in.
+fn common_ancestor(a: &Path, b: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for (ca, cb) in a.components().zip(b.components()) {
+        if ca == cb {
+            out.push(ca.as_os_str());
+        } else {
+            break;
+        }
+    }
+    out
 }
 
 /// Stable 16-byte scenario id derived from the scenario root path — the
@@ -1023,7 +1112,7 @@ fn scenario_id_from_path(root: &Path) -> [u8; 16] {
 type ScenarioBuildOutput = (ScenarioManifestMsg, Vec<(Vec<u8>, PathBuf)>);
 
 fn build_manifest_from_input(input: ScenarioBuildInput) -> Option<ScenarioBuildOutput> {
-    let ScenarioBuildInput { scenario_id, name, default_scene, descriptors, journal_head } = input;
+    let ScenarioBuildInput { scenario_id, name, default_scene, twin_scene, descriptors, journal_head } = input;
     let mut assets = Vec::with_capacity(descriptors.len());
     let mut cid_paths = Vec::with_capacity(descriptors.len());
     for d in descriptors {
@@ -1065,6 +1154,7 @@ fn build_manifest_from_input(input: ScenarioBuildInput) -> Option<ScenarioBuildO
             assets,
             journal_head,
             asset_base_url: None,
+            twin_scene,
         },
         cid_paths,
     ))

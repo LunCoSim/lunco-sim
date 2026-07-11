@@ -552,6 +552,9 @@ impl Plugin for LunCoAvatarPlugin {
         // command itself is registered as a REAL command via `register_commands!`
         // below (API-discoverable); here we only need its toast queue.
         app.init_resource::<ScreenNotifications>();
+        // Notifications are a per-client toast — client-local, so a client-scoped
+        // presentation scenario may issue them (see `ClientCommandPolicy`).
+        lunco_core::MarkClientLocalExt::mark_client_local::<ShowNotification>(app);
 
         // Native input → script EVENT bus: project key presses onto the shared
         // `TelemetryEvent` bus so scenarios can `wait_for("key:KeyG")` / `on_event`

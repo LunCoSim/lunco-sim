@@ -35,7 +35,7 @@ use bevy::ecs::system::SystemState;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::*;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use lunco_api::executor::{authz_target_gid, ApiCommandEvent};
 use lunco_api::queries::ApiQueryRegistry;
@@ -246,6 +246,21 @@ thread_local! {
     /// the scenario driver and per-eval by the `RunRhai` drain; reset to `None`
     /// whenever a [`WorldScope`] enters or drops, so it never leaks across evals.
     static SCRIPT_AUTHORITY: Cell<Option<SessionId>> = const { Cell::new(None) };
+
+    /// True while a **client-scoped** scenario runs on a predicting client. Its
+    /// [`cmd`] calls are then restricted to the client-local surface
+    /// ([`lunco_core::ClientCommandPolicy`]) so a presentation/HUD script can't
+    /// mutate authoritative sim state. Set per-pass by the scenario driver; reset
+    /// with the [`WorldScope`] so it never leaks across evals.
+    static SCRIPT_CLIENT_LOCAL: Cell<bool> = const { Cell::new(false) };
+
+    /// Names of authoritative commands a client-scoped scenario tried to issue
+    /// and were dropped this hook (see [`cmd_raw`]). The scenario driver drains
+    /// this per-entity via [`take_script_rejects`] and folds it into that
+    /// scenario's *diagnostics* — the drop surfaces once in the editor as an
+    /// authoring warning, not as a per-tick server log line. Deduped; reset with
+    /// the [`WorldScope`].
+    static SCRIPT_REJECTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
 /// RAII guard that publishes a `&mut World` to the thread-local for the lifetime
@@ -265,6 +280,8 @@ impl Drop for WorldScope {
     fn drop(&mut self) {
         WORLD_PTR.with(|p| p.set(std::ptr::null_mut()));
         SCRIPT_AUTHORITY.with(|a| a.set(None));
+        SCRIPT_CLIENT_LOCAL.with(|c| c.set(false));
+        SCRIPT_REJECTS.with(|r| r.borrow_mut().clear());
     }
 }
 
@@ -278,6 +295,28 @@ pub fn set_script_authority(session: Option<SessionId>) {
 /// The session the current [`cmd`] is authorized against, if any.
 pub fn script_authority() -> Option<SessionId> {
     SCRIPT_AUTHORITY.with(|a| a.get())
+}
+
+/// Mark the current script pass as a client-scoped scenario on a predicting
+/// client, so [`cmd`] restricts it to the client-local command surface. Set by
+/// the scenario driver; reset with the [`WorldScope`].
+pub fn set_script_client_local(on: bool) {
+    SCRIPT_CLIENT_LOCAL.with(|c| c.set(on));
+}
+
+/// Whether the current script is a client-scoped scenario (its `cmd()`s are
+/// restricted to the client-local surface).
+pub fn script_is_client_local() -> bool {
+    SCRIPT_CLIENT_LOCAL.with(|c| c.get())
+}
+
+/// Take (and clear) the authoritative commands a client-scoped scenario tried to
+/// issue and were dropped since the last drain. The scenario driver calls this
+/// once per entity, right after its hooks, and turns any names into a single
+/// per-scenario diagnostic — so the drop is surfaced once in the editor instead
+/// of spamming the server log every tick.
+pub fn take_script_rejects() -> Vec<String> {
+    SCRIPT_REJECTS.with(|r| std::mem::take(&mut *r.borrow_mut()))
 }
 
 /// Well-known capability keys for script operations that are NOT a reflected
@@ -387,9 +426,81 @@ pub fn controller_role(gid: u64) -> Option<String> {
 /// HTTP API / MCP use) and return its `{ id, ok, data?, error? }` result as
 /// JSON. `params` is the JSON the API contract expects. Runs SYNCHRONOUSLY (the
 /// bridge flushes) so `data` carries any values the handler assigned.
-pub fn cmd_raw(name: &str, params: serde_json::Value) -> serde_json::Value {
+pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
     let id = OpId::new().0;
     with_world(|world| {
+        // Client-scoped scenario on a predicting client: allow ONLY the
+        // client-local surface (HUD / notifications / camera). Anything else is
+        // an authoritative mutation the host owns — running it here would
+        // double-apply or fight replication, so drop it (the host stays the sole
+        // author of shared sim state). Deny-all by default: a command opts in via
+        // `App::mark_client_local` in its own crate.
+        if script_is_client_local() {
+            let allowed = world
+                .get_resource::<lunco_core::ClientCommandPolicy>()
+                .is_some_and(|p| p.allows(name));
+            // Case 2 — a client script may drive what it OWNS. Beyond the static
+            // client-local surface (Case 1), a client-scoped script may issue an
+            // **ownership-gated** command (e.g. `SetPorts`) against a target this
+            // client possesses. That is the legitimate predict-own input path: the
+            // command applies LOCALLY this tick (immediate client-side prediction)
+            // AND is forwarded to the host, which re-authorizes under the SAME
+            // ownership gate — so no authority is smuggled. A non-owned target, or
+            // a command that isn't ownership-gated, stays dropped (Case 1). This
+            // reuses the authority substrate (`CommandPolicyRegistry` +
+            // `SessionRegistry`) rather than a second allowlist.
+            let owns_target = !allowed
+                && world
+                    .get_resource::<CommandPolicyRegistry>()
+                    .is_some_and(|reg| reg.policy_for(name).ownership_gated)
+                && match (
+                    command_target_gid(world, name, &params),
+                    world.get_resource::<lunco_core::LocalSession>(),
+                    world.get_resource::<SessionRegistry>(),
+                ) {
+                    (Some(gid), Some(local), Some(reg)) => reg.owns(local.0, gid),
+                    _ => false,
+                };
+            if !allowed && !owns_target {
+                // Record the dropped command name for the driver to surface as a
+                // per-scenario diagnostic (once, located to the script) rather
+                // than logging it every tick. Dedup within the pass.
+                SCRIPT_REJECTS.with(|r| {
+                    let mut v = r.borrow_mut();
+                    if !v.iter().any(|n| n == name) {
+                        v.push(name.to_string());
+                    }
+                });
+                return serde_json::json!({
+                    "id": id, "ok": false,
+                    "error": format!("`{name}` is not permitted from a client-scoped script"),
+                });
+            }
+            // Thread a real `seq`/`tick` for a client-owned control command so it
+            // engages the PREDICT-OWN path the same way keyboard input does
+            // (`drive_from_bindings`). A scenario/API `drive()` sends `seq:0`/
+            // `tick:0`; `record_control_input` only buffers an input frame when
+            // `seq != 0`, and `maintain_owned_locally`'s activity signal needs a
+            // real tick — so without this the owned rover never predicts locally
+            // (it stays a snapshot proxy and only crawls from the host's authority).
+            // Stamping the next per-vessel seq here — at the origin, BEFORE
+            // `capture_command` serializes the command for the wire — means the
+            // client and host agree on the seq the reconcile acks against.
+            if owns_target && name == "SetPorts" {
+                if let Some(gid) = command_target_gid(world, name, &params) {
+                    let tick = world.get_resource::<lunco_core::SimTick>().map_or(0, |t| t.0);
+                    let seq = world.get_resource_mut::<lunco_core::OwnedInputLog>().map(|mut log| {
+                        let entry = log.0.entry(gid).or_default();
+                        entry.next_seq = entry.next_seq.wrapping_add(1); // seq 0 reserved
+                        entry.next_seq
+                    });
+                    if let (Some(seq), Some(obj)) = (seq, params.as_object_mut()) {
+                        obj.insert("seq".into(), serde_json::json!(seq));
+                        obj.insert("tick".into(), serde_json::json!(tick));
+                    }
+                }
+            }
+        }
         // §3.4: a script launched by a remote session must not exceed that
         // session's authority. When an authority is set (remote launch),
         // re-authorize through the SAME gate the networked command path uses; an

@@ -78,6 +78,23 @@ impl DocumentDiagnostics {
         self.started.remove(&id);
     }
 
+    /// Record diagnostics whose *severity* decides the compile state: any
+    /// error-severity diagnostic ⇒ [`CompileState::Error`]; a warning/info-only
+    /// set ⇒ [`CompileState::Ready`] (it compiled and ran — the diagnostics are
+    /// advisory and still surface); an empty set clears to `Ready`, like
+    /// [`set_ok`](Self::set_ok). Use this where a document can carry non-fatal
+    /// notices (e.g. a scenario warning) that must not masquerade as a red
+    /// compile error.
+    pub fn set_diagnostics(&mut self, id: DocumentId, diagnostics: Vec<Diagnostic>) {
+        let has_error = diagnostics
+            .iter()
+            .any(|d| d.severity == lunco_doc::DiagnosticSeverity::Error);
+        let e = self.by_doc.entry(id).or_default();
+        e.state = if has_error { CompileState::Error } else { CompileState::Ready };
+        e.diagnostics = diagnostics;
+        self.started.remove(&id);
+    }
+
     /// Convenience: record an error from a single flat message (no location).
     pub fn set_error_message(&mut self, id: DocumentId, message: impl Into<String>) {
         self.set_error(id, vec![Diagnostic::message_only(message)]);

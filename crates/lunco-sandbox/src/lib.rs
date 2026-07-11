@@ -298,6 +298,9 @@ fn load_ready_scenario(
     role: Res<lunco_core::NetworkRole>,
     remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
     downloads: Res<lunco_networking::scenario_sync::AssetDownloads>,
+    // Locally-registered Twins (native same-machine): lets a client that already
+    // has the host's Twin load `twin://` host-identically instead of `scenario://`.
+    twins: Res<lunco_assets::twin_source::TwinRoots>,
     // Last scenario revision we triggered a load for — reload only on change.
     mut last_loaded: Local<Option<[u8; 32]>>,
     mut commands: Commands,
@@ -312,6 +315,25 @@ fn load_ready_scenario(
         return; // scenario advertises no entry scene → nothing to auto-load
     };
     if *last_loaded == Some(m.revision) || !downloads.all_cached(m) {
+        return;
+    }
+    // If this scenario's Twin is registered locally (native same-machine dev),
+    // the client already booted on that Twin's default scene — the SAME asset
+    // path the host loaded (`twin://<name>/<scene>`), so every prim already
+    // shares the host's `GlobalEntityId` (identity = `hash(namespace:source:path)`,
+    // `source` = asset path) and possession + client prediction bind across the
+    // wire. Do NOT re-load it: a redundant teardown+reload of the live scene
+    // races avian's island solver (`assert!(island.body_count > 0)` → client
+    // panic). Mark the revision handled and keep the host-identical scene. A
+    // client WITHOUT the Twin (web) has no `twin://` to load and falls through to
+    // the `scenario://` cache copy — whose different `source` gives each prim a
+    // per-peer gid (the identity-binding limitation tracked separately).
+    if m.twin_scene.is_some() && twins.names().contains(&m.name) {
+        info!(
+            "[net] scenario twin '{}' is local — keeping the host-identical twin:// scene (no scenario:// swap)",
+            m.name
+        );
+        *last_loaded = Some(m.revision);
         return;
     }
     let uri = lunco_networking::scenario_sync::scenario_asset_uri(&m.scenario_id, scene);

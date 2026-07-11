@@ -1024,11 +1024,16 @@ pub fn maintain_owned_locally(
                 // stays `Kinematic`, mobility's per-chassis guard skips it, and
                 // predict-own is inert. Losing ownership needs no counterpart —
                 // `force_kinematic_proxies` re-pins `Kinematic` + zeros velocity.
+                info!(
+                    "[predict] promote owned rover gid={} -> Dynamic (last_active={}, now={})",
+                    gid.get(), last_active, tick.0
+                );
                 commands
                     .entity(e)
                     .insert((lunco_core::OwnedLocally, RigidBody::Dynamic));
             }
             (false, true) => {
+                info!("[predict] demote owned rover gid={} (idle/released)", gid.get());
                 commands.entity(e).remove::<lunco_core::OwnedLocally>();
             }
             _ => {}
