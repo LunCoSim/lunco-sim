@@ -1,0 +1,70 @@
+#usda 1.0
+(
+    defaultPrim = "CommsMast"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# LunaNet Comms Mast — tall tower + shallow dish (flattened sphere) + feed.
+# Wants a high ridge point for Earth line-of-sight.
+def Xform "CommsMast"
+{
+    custom bool lunco:spawnable = true
+    custom string lunco:description = "LunaNet comms mast — tower, dish and feed horn. The base's link home; put it on the highest ground you have for Earth line-of-sight."
+
+    def Cube "FootPad" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, 0.15, 0)
+        double3 xformOp:scale = (1.5, 0.3, 1.5)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.33, 0.32, 0.31)
+        bool physics:collisionEnabled = true
+    }
+
+    def Cylinder "Tower" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        uniform token axis = "Y"
+        double radius = 0.2
+        double height = 10.0
+        double3 xformOp:translate = (0, 5.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.55, 0.55, 0.58)
+        bool physics:collisionEnabled = true
+    }
+
+    def Cube "Head"
+    {
+        double size = 0.6
+        double3 xformOp:translate = (0, 10.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.4, 0.4, 0.43)
+    }
+
+    # Dish — flattened sphere reads as a shallow paraboloid, tilted to Earth.
+    def Sphere "Dish"
+    {
+        double radius = 2.0
+        double3 xformOp:translate = (0, 10.6, 0.8)
+        double3 xformOp:rotateXYZ = (35, 0, 0)
+        double3 xformOp:scale = (1.0, 0.25, 1.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        color3f primvars:displayColor = (0.85, 0.85, 0.88)
+    }
+
+    # Feed horn — thin cylinder pointing into the dish.
+    def Cylinder "Feed"
+    {
+        uniform token axis = "Y"
+        double radius = 0.05
+        double height = 1.2
+        double3 xformOp:translate = (0, 10.9, 1.4)
+        double3 xformOp:rotateXYZ = (35, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        color3f primvars:displayColor = (0.6, 0.6, 0.62)
+    }
+}

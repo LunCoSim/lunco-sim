@@ -1,0 +1,79 @@
+#usda 1.0
+(
+    defaultPrim = "HabitatFsh"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Foundation Surface Habitat (FSH) — basic primitive build.
+# Vertical cylinder can + hemisphere dome + side airlock + radiators + legs.
+# Static structure: children carry PhysicsCollisionAPI, root has no
+# rigid-body API (it stays put). Origin at the ground plane; the body
+# rises +8 m. Spawn the root at the terrain surface position.
+def Xform "HabitatFsh"
+{
+    custom bool lunco:spawnable = true
+    custom string lunco:description = "Foundation Surface Habitat — pressurized can, dome, airlock and radiators. The crew module; site it central, uphill of the landing pad and away from the reactor."
+
+    # --- Pressurized can ---
+    def Cylinder "Body" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        uniform token axis = "Y"
+        double radius = 3.0
+        double height = 8.0
+        double3 xformOp:translate = (0, 4.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.72, 0.72, 0.75)
+        bool physics:collisionEnabled = true
+    }
+
+    # --- Hemisphere dome cap ---
+    def Sphere "Dome" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double radius = 3.0
+        double3 xformOp:translate = (0, 8.0, 0)
+        double3 xformOp:scale = (1.0, 0.5, 1.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.78, 0.78, 0.8)
+        bool physics:collisionEnabled = true
+    }
+
+    # --- Airlock (protrudes along +Z) ---
+    def Cylinder "Airlock" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        uniform token axis = "Z"
+        double radius = 1.1
+        double height = 2.5
+        double3 xformOp:translate = (0, 2.2, 4.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.6, 0.6, 0.63)
+        bool physics:collisionEnabled = true
+    }
+
+    # --- Radiator panels (thin cubes, splayed off the body) ---
+    def Cube "RadiatorA"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (-3.6, 5.0, 0)
+        double3 xformOp:rotateXYZ = (0, 0, 20)
+        double3 xformOp:scale = (0.08, 2.5, 4.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        color3f primvars:displayColor = (0.3, 0.3, 0.33)
+    }
+
+    def Cube "RadiatorB"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (3.6, 5.0, 0)
+        double3 xformOp:rotateXYZ = (0, 0, -20)
+        double3 xformOp:scale = (0.08, 2.5, 4.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        color3f primvars:displayColor = (0.3, 0.3, 0.33)
+    }
+}

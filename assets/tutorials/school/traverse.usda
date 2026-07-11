@@ -1,0 +1,105 @@
+#usda 1.0
+(
+    defaultPrim = "Traverse"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# ── Scene: The Traverse (shared stage for S2, S4, S5, S6) ────────────────────
+# The 1000×1000 m event site from the brief (task §3.2): a rover starts NW, a
+# point-of-interest sits on the low ground at centre, an SE highland casts shadow,
+# the sun is low from the ESE, and Earth is low on the E horizon so the centre
+# sits in radio-shadow. The lessons that use this scene teach reading + traversing
+# it.
+#
+# ── PLACEHOLDER TERRAIN ──────────────────────────────────────────────────────
+# The real relief — the NE→SW rille (or the crater bowl, task §3.2 "вместо борозды
+# — кратер") 40–50 m deep with borderline slopes — is authored OFFLINE as a
+# float32 GeoTIFF DEM and imported as a `dem` terrain layer (see
+# 04_IMPLEMENTATION_PLAN.md §1). That is a roadmap item (P0.2). Until it lands,
+# this scene uses a flat plot + a blocky SE hill so the lessons load and the
+# layout (start / POI / hill / sun / Earth) is correct. Swap the `Ground` prim for
+# the dem layer when the DEM is baked; nothing else here changes.
+# NEEDS: DEM crater/rille terrain (roadmap P0.2).
+def Xform "Traverse"
+{
+    custom bool lunco:spawnable = false
+    custom string lunco:description = "The 1000×1000 m event traverse: start NW, POI at centre, SE highland shadow, low ESE sun, Earth low on the E horizon (centre in radio-shadow). Placeholder terrain until the DEM crater/rille lands."
+
+    # ── Published scene geometry constants (the ДЗЗ side needs these to match) ──
+    # Sun and Earth directions are authored here as the single source of truth so
+    # the QGIS shadow/radio-shadow analysis uses the SAME geometry as the sim.
+    custom float lunco:sun:azimuthDeg = 110.0     # ESE
+    custom float lunco:sun:elevationDeg = 8.0     # low
+    custom float lunco:earth:azimuthDeg = 95.0    # low on the E horizon
+    custom float lunco:earth:elevationDeg = 4.0
+
+    # Flat plot, ±500 m (the full 1 km site). PLACEHOLDER — see header.
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (1000.0, 1.0, 1000.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.34, 0.32, 0.31)
+        bool physics:collisionEnabled = true
+        float physics:friction = 1.0
+    }
+
+    # SE highland — casts the long shadow across the centre (task §3.2). A blocky
+    # stand-in for the real relief; the DEM carries the true hill.
+    def Cube "Highland" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (320.0, 25.0, -320.0)
+        double3 xformOp:scale = (240.0, 55.0, 240.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.30, 0.28, 0.27)
+        bool physics:collisionEnabled = true
+    }
+
+    # Point of interest at the centre low ground — the traverse goal (task §3.3).
+    def Xform "POI" (
+        prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
+    )
+    {
+        double3 xformOp:translate = (0.0, 1.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        custom string lunco:label = "Point of Interest"
+    }
+
+    # The team rover, NW corner (task §3.2). Asset-root ref to the shared kit.
+    def Xform "Rover" (
+        prepend references = @lunco://vessels/rovers/variants/rover_medium.usda@</RoverMedium>
+    )
+    {
+        double3 xformOp:translate = (-380.0, 1.0, -380.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # Low ESE sun — deep shadows, centre shadowed by the highland (task §3.2).
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 10000
+        float inputs:angle = 0.53
+        double3 xformOp:rotateXYZ = (-8.0, 110.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+        custom float lunco:shadow:maxDistance = 1400.0
+        custom float lunco:shadow:firstCascadeFarBound = 30.0
+        custom int lunco:shadow:numCascades = 5
+    }
+
+    # Overview fly-cam from the NW, looking toward the POI and the SE highland.
+    def Xform "Avatar"
+    {
+        string lunco:avatar = "true"
+        string lunco:cameraMode = "freeflight"
+        custom double3 lunco:cameraLookAt = (0.0, 0.0, 0.0)
+        double3 xformOp:translate = (-420.0, 160.0, -420.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+}

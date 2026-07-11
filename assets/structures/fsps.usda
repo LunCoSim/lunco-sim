@@ -1,0 +1,89 @@
+#usda 1.0
+(
+    defaultPrim = "Fsps"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Fission Surface Power System — reactor drum + shadow shield (flattened
+# sphere) + 4 umbrella radiators on a boom. Place offset + sunk, away from
+# the habitat (radiation standoff).
+def Xform "Fsps"
+{
+    custom bool lunco:spawnable = true
+    custom string lunco:description = "Fission Surface Power — reactor drum, shadow shield and umbrella radiators. Steady kilowatts through the lunar night; site it well offset from the habitat for radiation standoff."
+
+    # Shadow shield — flattened sphere skirt at the base (the cone-berm fake).
+    def Sphere "ShadowShield" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double radius = 2.0
+        double3 xformOp:translate = (0, 0.4, 0)
+        double3 xformOp:scale = (1.0, 0.4, 1.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.28, 0.27, 0.26)
+        bool physics:collisionEnabled = true
+    }
+
+    def Cylinder "ReactorDrum" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        uniform token axis = "Y"
+        double radius = 1.2
+        double height = 2.5
+        double3 xformOp:translate = (0, 2.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.5, 0.5, 0.55)
+        bool physics:collisionEnabled = true
+    }
+
+    def Cylinder "Boom"
+    {
+        uniform token axis = "Y"
+        double radius = 0.1
+        double height = 4.0
+        double3 xformOp:translate = (0, 5.2, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.45, 0.45, 0.48)
+    }
+
+    # Four umbrella radiator panels, tilted out around the boom top.
+    def Cube "RadiatorN"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, 6.5, 1.6)
+        double3 xformOp:rotateXYZ = (35, 0, 0)
+        double3 xformOp:scale = (3.0, 0.06, 3.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        color3f primvars:displayColor = (0.6, 0.6, 0.62)
+    }
+    def Cube "RadiatorS"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, 6.5, -1.6)
+        double3 xformOp:rotateXYZ = (-35, 0, 0)
+        double3 xformOp:scale = (3.0, 0.06, 3.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        color3f primvars:displayColor = (0.6, 0.6, 0.62)
+    }
+    def Cube "RadiatorE"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (1.6, 6.5, 0)
+        double3 xformOp:rotateXYZ = (0, 0, -35)
+        double3 xformOp:scale = (3.0, 0.06, 3.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        color3f primvars:displayColor = (0.6, 0.6, 0.62)
+    }
+    def Cube "RadiatorW"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (-1.6, 6.5, 0)
+        double3 xformOp:rotateXYZ = (0, 0, 35)
+        double3 xformOp:scale = (3.0, 0.06, 3.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        color3f primvars:displayColor = (0.6, 0.6, 0.62)
+    }
+}

@@ -1,0 +1,86 @@
+#usda 1.0
+(
+    defaultPrim = "SlopeTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# ── Scene: Slope Test (lesson B3 — Slopes & Tip-Over) ────────────────────────
+# A flat approach and one broad ~18° grade rising to the east, with a marker at
+# the top. The AWFUL rover (Overloaded Hauler, high centre of mass) is pre-placed
+# at the base: climbing straight up the fall-line works; steering across the grade
+# rolls it — which is the whole lesson. Slope angle is tunable via the Ramp's
+# rotateXYZ; ~18° sits on the edge for this rover.
+def Xform "SlopeTest"
+{
+    custom bool lunco:spawnable = false
+    custom string lunco:description = "A borderline ~18° grade with the top-heavy Hauler at its base — the tip-over teaching stage."
+
+    # Flat approach plot, ±60 m.
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (120.0, 1.0, 120.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.34, 0.32, 0.31)
+        bool physics:collisionEnabled = true
+        float physics:friction = 1.0
+    }
+
+    # Broad ~18° grade rising to +X (tilt about Z raises the +X edge). 40 m wide in
+    # Z so there is room to (mistakenly) steer across the fall-line.
+    def Cube "Ramp" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (8.0, 3.6, 0.0)
+        double3 xformOp:rotateXYZ = (0.0, 0.0, -18.0)
+        double3 xformOp:scale = (34.0, 0.6, 40.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        color3f primvars:displayColor = (0.40, 0.36, 0.33)
+        bool physics:collisionEnabled = true
+        float physics:friction = 0.95
+    }
+
+    # The awful rover at the base of the grade, nose pointing uphill (+X).
+    def Xform "Rover" (
+        prepend references = @lunco://vessels/rovers/variants/rover_awful.usda@</RoverAwful>
+    )
+    {
+        double3 xformOp:translate = (-18.0, 1.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # Marker at the top of the grade — the climb goal.
+    def Xform "Marker" (
+        prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
+    )
+    {
+        double3 xformOp:translate = (23.0, 11.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 11000
+        float inputs:angle = 0.53
+        double3 xformOp:rotateXYZ = (-16.0, 60.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+        custom float lunco:shadow:maxDistance = 600.0
+        custom float lunco:shadow:firstCascadeFarBound = 20.0
+        custom int lunco:shadow:numCascades = 4
+    }
+
+    def Xform "Avatar"
+    {
+        string lunco:avatar = "true"
+        string lunco:cameraMode = "freeflight"
+        custom double3 lunco:cameraLookAt = (5.0, 4.0, 0.0)
+        double3 xformOp:translate = (-30.0, 16.0, -34.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+}

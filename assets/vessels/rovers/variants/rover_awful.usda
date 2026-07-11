@@ -1,0 +1,37 @@
+#usda 1.0
+(
+    defaultPrim = "RoverAwful"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# ── Rover variant: AWFUL ("Overloaded Hauler") ───────────────────────────────
+# The deliberately punishing tier-3 rover the brief explicitly asks for (task §5:
+# "ровер «высокой сложности» можно сделать намеренно очень неудобным — чтобы и
+# опрокидывался, и слабые моторы имел"). It tips easily and climbs poorly.
+#
+# The tip-over is driven by the CONFIRMED knob: a HIGH centre of mass (mass sitting
+# well above the axles) plus light damping, so any across-slope steering rolls it.
+# Weak torque + low grip are authored so it also struggles up the borderline wall
+# — feel-check that the drivetrain honours them (05_SEMINAR_TUTORIALS.md §C).
+def Xform "RoverAwful" (
+    prepend references = @lunco://vessels/rovers/six_wheel_rover.usda@</SixWheelRover>
+)
+{
+    custom bool lunco:spawnable = true
+    custom string lunco:description = "Awful rover (Overloaded Hauler) — top-heavy, weak motors, poor grip. Tips at the slightest across-slope steer and barely climbs. The expert tier: only a careful straight-up line and gentle inputs get it to the floor and back."
+
+    # Top-heavy: CoM ABOVE the axles + heavier + under-damped → rolls easily.
+    float3 physics:centerOfMass = (0.0, 0.45, 0.0)
+    float physics:mass = 1900.0
+    float3 physics:diagonalInertia = (1600.0, 2000.0, 900.0)
+    float physics:angularDamping = 0.8
+
+    # Intended handling (verify honoured): weak engine, low grip, twitchy steer.
+    custom float physxVehicleEngine:peakTorque = 380.0
+    custom float lunco:frictionCoefficient = 0.7
+    custom float lunco:maxSteerAngle = 18.0
+
+    # Livery — hazard red (hard).
+    over "Chassis" { color3f primvars:displayColor = (0.85, 0.20, 0.15) }
+}
