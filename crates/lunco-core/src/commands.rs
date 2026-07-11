@@ -427,6 +427,12 @@ impl ClientCommandPolicy {
     pub fn allows(&self, name: &str) -> bool {
         self.client_local.contains(name)
     }
+    /// The command names currently on the client-local surface. Lets the wire
+    /// layer cross-check the client-local ⊆ non-networked invariant at startup
+    /// (a client-scriptable command must never ride a networked channel).
+    pub fn iter(&self) -> impl Iterator<Item = &str> {
+        self.client_local.iter().map(String::as_str)
+    }
 }
 
 /// App extension: mark a command type as **client-local** — safe for a

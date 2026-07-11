@@ -2604,6 +2604,55 @@ fn setup_host_rbac(
     });
 }
 
+/// Startup invariant guard: **client-local ⊆ non-networked**.
+///
+/// A `// @scope client` script may only issue commands that never replicate —
+/// otherwise the command double-applies / fights replication on a predicting
+/// client (the Case 1 rationale). The capability axis
+/// ([`lunco_core::ClientCommandPolicy`] via `mark_client_local`) and the routing
+/// axis ([`SyncChannelRegistry`] via [`declare_channel`]) are DELIBERATELY
+/// separate registries (see [`SyncChannel`]'s orthogonality note), so nothing
+/// structurally stops a command being marked client-local AND declared on a
+/// networked channel. This catches that miswiring loudly — `error!` always, plus
+/// a `debug_assert` so dev/test builds fail fast — instead of letting a client
+/// script quietly smuggle an authoritative command onto the wire. A command that
+/// is `Local` or simply undeclared (de-facto local) is fine.
+///
+/// TODO(b — fold client-local into the authority substrate): the deeper
+/// unification is NOT with `SyncChannel` (wrong axis — routing ≠ capability) but
+/// with the RBAC gate ([`lunco_core::session::CommandPolicyRegistry`] /
+/// `authorize`). A client-scoped script is just a low-privilege *principal*; its
+/// `cmd()`s should resolve through the SAME `authorize()` seam every other
+/// command uses, so operator overrides and the `rbac.authorize` hook apply to it
+/// uniformly (one authorization gate, not two). Design friction to resolve first:
+/// `authorize` defaults OPEN (absent → allow) while client scripts need
+/// deny-by-default — so it needs a deny-by-default capability class / synthetic
+/// client-script principal, not a straight fold. Until (b) lands, the two
+/// registries stay separate and THIS guard enforces the invariant between them.
+fn validate_client_local_channels(
+    channels: Res<SyncChannelRegistry>,
+    policy: Option<Res<lunco_core::ClientCommandPolicy>>,
+) {
+    let Some(policy) = policy else { return };
+    for name in policy.iter() {
+        if let Some(&channel) = channels.0.get(name) {
+            if channel != SyncChannel::Local {
+                error!(
+                    "client-local invariant violated: `{name}` is marked \
+                     client-local (mark_client_local) but declared on networked \
+                     channel {channel:?} — a `@scope client` script could smuggle \
+                     it onto the wire. Drop the mark_client_local or the \
+                     declare_channel for `{name}`."
+                );
+                debug_assert!(
+                    false,
+                    "client-local command `{name}` is on networked channel {channel:?}"
+                );
+            }
+        }
+    }
+}
+
 /// Observer system to handle Profile updates: marks client as authenticated and promotes role.
 fn on_update_profile_rbac(
     trigger: On<lunco_avatar::UpdateProfile>,
@@ -2859,7 +2908,7 @@ impl Plugin for SyncPlugin {
             .init_resource::<SyncChannelRegistry>()
             .add_observer(apply_sync_command)
             .add_observer(on_update_profile_rbac)
-            .add_systems(Startup, setup_host_rbac)
+            .add_systems(Startup, (setup_host_rbac, validate_client_local_channels))
             // Journal plane: stamp this peer's stable per-install journal author
             // (both roles) so edits are attributable + durable across reconnects.
             // Reactive: runs once the frame the JournalResource appears.
