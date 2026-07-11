@@ -46,6 +46,12 @@ def Xform "Drivetrain" (
     # Each wheel is bound to the rover root by a `PhysicsRevoluteJoint` with a
     # `PhysicsDriveAPI:angular` motor. Targets are authored against this file's
     # `Drivetrain` root and translate onto the referencing rover.
+    #
+    # The joints DELIBERATELY omit `physics:localPos0`/`localPos1`: each wheel's
+    # placement is already the `over Wheel_*.xformOp:translate` above, and the avian
+    # joint reader DERIVES the anchor from that (body1's origin in body0's frame,
+    # anchor on body1 = origin) — so the position is authored once, not typed twice
+    # and left to drift. Author a `localPos0` on a joint to override the derivation.
     def PhysicsRevoluteJoint "Wheel_FL_Hinge" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
     )
@@ -53,8 +59,6 @@ def Xform "Drivetrain" (
         rel physics:body0 = </Drivetrain>
         rel physics:body1 = </Drivetrain/Wheel_FL>
         uniform token physics:axis = "X"
-        point3f physics:localPos0 = (-0.9, -0.65, -1.225)
-        point3f physics:localPos1 = (0, 0, 0)
         float drive:angular:physics:maxForce = 12000.0
         uniform token drive:angular:physics:type = "force"
     }
@@ -65,8 +69,6 @@ def Xform "Drivetrain" (
         rel physics:body0 = </Drivetrain>
         rel physics:body1 = </Drivetrain/Wheel_FR>
         uniform token physics:axis = "X"
-        point3f physics:localPos0 = (0.9, -0.65, -1.225)
-        point3f physics:localPos1 = (0, 0, 0)
         float drive:angular:physics:maxForce = 12000.0
         uniform token drive:angular:physics:type = "force"
     }
@@ -77,8 +79,6 @@ def Xform "Drivetrain" (
         rel physics:body0 = </Drivetrain>
         rel physics:body1 = </Drivetrain/Wheel_RL>
         uniform token physics:axis = "X"
-        point3f physics:localPos0 = (-0.9, -0.65, 1.225)
-        point3f physics:localPos1 = (0, 0, 0)
         float drive:angular:physics:maxForce = 12000.0
         uniform token drive:angular:physics:type = "force"
     }
@@ -89,8 +89,6 @@ def Xform "Drivetrain" (
         rel physics:body0 = </Drivetrain>
         rel physics:body1 = </Drivetrain/Wheel_RR>
         uniform token physics:axis = "X"
-        point3f physics:localPos0 = (0.9, -0.65, 1.225)
-        point3f physics:localPos1 = (0, 0, 0)
         float drive:angular:physics:maxForce = 12000.0
         uniform token drive:angular:physics:type = "force"
     }

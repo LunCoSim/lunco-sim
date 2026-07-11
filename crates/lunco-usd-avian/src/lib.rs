@@ -48,8 +48,9 @@ use bevy::mesh::VertexAttributeValues;
 use avian3d::prelude::*;
 use avian3d::physics_transform::{Position, Rotation};
 use lunco_usd_bevy::{
-    read_shape_dims, read_transform_from_usd,
-    read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims, UsdAnimated, UsdRead, UsdVisualSynced,
+    local_transform_at, read_shape_dims, read_transform_from_usd,
+    read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims, StageView, UsdAnimated, UsdRead,
+    UsdVisualSynced,
 };
 pub use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset, UsdInstanceRoot};
 use openusd::sdf::Path as SdfPath;
@@ -744,6 +745,54 @@ fn extract_avian_prim<R: UsdRead>(
     }
 }
 
+/// The composed local-to-world [`Transform`] of `path`: folds the LOCAL transforms
+/// (translate + rotate + **scale**) of every prim from the stage root down to it, so
+/// an ancestor's scale is baked into a descendant's world position — exactly how the
+/// renderer places it. Missing xform ops compose as identity.
+fn world_transform<R: UsdRead>(reader: &R, path: &SdfPath) -> Transform {
+    let mut chain = Vec::new();
+    let mut cur = Some(path.clone());
+    while let Some(p) = cur {
+        if p.is_abs_root() {
+            break;
+        }
+        chain.push(p.clone());
+        cur = p.parent();
+    }
+    let mut acc = Transform::IDENTITY;
+    for p in chain.iter().rev() {
+        acc = acc.mul_transform(local_transform_at(reader, p, 0.0).unwrap_or(Transform::IDENTITY));
+    }
+    acc
+}
+
+/// Derive a joint's local anchors from the composed transform hierarchy, for the
+/// **body1-origin** convention every rover joint uses: the joint sits at `body1`'s
+/// origin, so its anchor on `body1` is the origin (`localPos1 = 0`) and its anchor on
+/// `body0` is `body1`'s origin expressed in `body0`'s rotation frame. Returns
+/// `(local_pos0, local_pos1)`.
+///
+/// This lets an asset author each part's placement ONCE — as the prim's
+/// `xformOp:translate` — instead of typing it again as the joint's `physics:localPos0`.
+/// `read_joint_spec_typed` calls it only when the anchor is UNAUTHORED, so authored
+/// joints are untouched (no regression) and hand-tuned anchors always win.
+///
+/// Uses WORLD poses, not an ancestor walk, so it is correct for **sibling** joints
+/// (a rocker ↔ bogie hinge where neither body contains the other) and for **scaled**
+/// hierarchies: `localPos0 = rot(world(b0))⁻¹ · (pos(world(b1)) − pos(world(b0)))`.
+/// Ancestor scales are baked into the world positions; the anchor is expressed in
+/// body0's rotation frame (avian applies a body's rotation — not its scale — to a
+/// local anchor). Relative, hence invariant under the reference/path-translation that
+/// drops a shared component onto each rover root.
+fn derive_joint_anchor<R: UsdRead>(reader: &R, body0: &str, body1: &str) -> Option<(DVec3, DVec3)> {
+    let p0 = SdfPath::new(body0).ok()?;
+    let p1 = SdfPath::new(body1).ok()?;
+    let w0 = world_transform(reader, &p0);
+    let w1 = world_transform(reader, &p1);
+    let rel = w0.rotation.inverse() * (w1.translation - w0.translation);
+    Some((DVec3::new(rel.x as f64, rel.y as f64, rel.z as f64), DVec3::ZERO))
+}
+
 /// Read the STANDARD UsdPhysics joint at `path` off the LIVE composed stage via
 /// openusd's typed schema (`openusd::schemas::physics`) into the deferred
 /// [`PendingUsdJoint`]. The typed schema wraps a live `Prim`, so it reads the
@@ -766,14 +815,28 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     };
     // Shared JointBase reads (both bodies + local anchors). `None` unless BOTH
     // bodies are authored — world-anchored joints aren't mapped to avian here.
-    fn base<J: JointBase>(j: &J) -> Option<(String, String, DVec3, DVec3)> {
+    // A missing anchor is DERIVED from the transform hierarchy (see
+    // [`derive_joint_anchor`]) so an asset need not type the wheel's position twice
+    // — once as its `xformOp:translate` and again as the joint's `localPos0`. An
+    // authored anchor always wins.
+    fn base<J: JointBase, R: UsdRead>(j: &J, reader: &R) -> Option<(String, String, DVec3, DVec3)> {
         let to_dvec = |a: [f32; 3]| DVec3::new(a[0] as f64, a[1] as f64, a[2] as f64);
-        let b0 = j.body0_rel().targets().ok()?.into_iter().next()?;
-        let b1 = j.body1_rel().targets().ok()?.into_iter().next()?;
-        let lp0 = j.local_pos0_attr().get::<[f32; 3]>().ok().flatten().map(to_dvec).unwrap_or(DVec3::ZERO);
-        let lp1 = j.local_pos1_attr().get::<[f32; 3]>().ok().flatten().map(to_dvec).unwrap_or(DVec3::ZERO);
-        Some((b0.to_string(), b1.to_string(), lp0, lp1))
+        let b0 = j.body0_rel().targets().ok()?.into_iter().next()?.to_string();
+        let b1 = j.body1_rel().targets().ok()?.into_iter().next()?.to_string();
+        let lp0_auth = j.local_pos0_attr().get::<[f32; 3]>().ok().flatten().map(to_dvec);
+        let lp1_auth = j.local_pos1_attr().get::<[f32; 3]>().ok().flatten().map(to_dvec);
+        let (lp0, lp1) = if lp0_auth.is_none() || lp1_auth.is_none() {
+            let derived = derive_joint_anchor(reader, &b0, &b1);
+            (
+                lp0_auth.or(derived.map(|d| d.0)).unwrap_or(DVec3::ZERO),
+                lp1_auth.or(derived.map(|d| d.1)).unwrap_or(DVec3::ZERO),
+            )
+        } else {
+            (lp0_auth.unwrap(), lp1_auth.unwrap())
+        };
+        Some((b0, b1, lp0, lp1))
     }
+    let view = StageView::new(stage);
     let read_drive = |ns: &str| -> Option<JointDrive> {
         let d = physics::DriveAPI::get(stage, path.clone(), ns).ok().flatten()?;
         let tp = d.target_position_attr().get::<f32>().ok().flatten().map(|v| v as f64);
@@ -784,7 +847,7 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     };
 
     let spec = if let Some(j) = physics::RevoluteJoint::get(stage, path.clone()).ok().flatten() {
-        let (b0, b1, lp0, lp1) = base(&j)?;
+        let (b0, b1, lp0, lp1) = base(&j, &view)?;
         let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten());
         let lo = j.lower_limit_attr().get::<f32>().ok().flatten()
             .map(|d| (d as f64).to_radians()).unwrap_or(f64::NEG_INFINITY);
@@ -796,7 +859,7 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
             swing_limit: None, drive: read_drive("angular"),
         }
     } else if let Some(j) = physics::PrismaticJoint::get(stage, path.clone()).ok().flatten() {
-        let (b0, b1, lp0, lp1) = base(&j)?;
+        let (b0, b1, lp0, lp1) = base(&j, &view)?;
         let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten());
         let lo = j.lower_limit_attr().get::<f32>().ok().flatten().map(|v| v as f64).unwrap_or(f64::NEG_INFINITY);
         let hi = j.upper_limit_attr().get::<f32>().ok().flatten().map(|v| v as f64).unwrap_or(f64::INFINITY);
@@ -806,7 +869,7 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
             swing_limit: None, drive: read_drive("linear"),
         }
     } else if let Some(j) = physics::SphericalJoint::get(stage, path.clone()).ok().flatten() {
-        let (b0, b1, lp0, lp1) = base(&j)?;
+        let (b0, b1, lp0, lp1) = base(&j, &view)?;
         let axis = axis_of(j.axis_attr().get::<JointAxis>().ok().flatten());
         let swing = j.cone_angle0_limit_attr().get::<f32>().ok().flatten()
             .zip(j.cone_angle1_limit_attr().get::<f32>().ok().flatten())
@@ -817,14 +880,14 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
             joint_type: "PhysicsSphericalJoint".into(), swing_limit: swing, drive: None,
         }
     } else if let Some(j) = physics::FixedJoint::get(stage, path.clone()).ok().flatten() {
-        let (b0, b1, lp0, lp1) = base(&j)?;
+        let (b0, b1, lp0, lp1) = base(&j, &view)?;
         PendingUsdJoint {
             body0_path: b0, body1_path: b1, axis: DVec3::Y, local_pos0: lp0, local_pos1: lp1,
             limit_lower: f64::NEG_INFINITY, limit_upper: f64::INFINITY,
             joint_type: "PhysicsFixedJoint".into(), swing_limit: None, drive: None,
         }
     } else if let Some(j) = physics::DistanceJoint::get(stage, path.clone()).ok().flatten() {
-        let (b0, b1, lp0, lp1) = base(&j)?;
+        let (b0, b1, lp0, lp1) = base(&j, &view)?;
         let lo = j.min_distance_attr().get::<f32>().ok().flatten().map(|v| v as f64).unwrap_or(f64::NEG_INFINITY);
         let hi = j.max_distance_attr().get::<f32>().ok().flatten().map(|v| v as f64).unwrap_or(f64::INFINITY);
         PendingUsdJoint {
@@ -834,7 +897,7 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         }
     } else if let Some(j) = physics::Joint::get(stage, path.clone()).ok().flatten() {
         // Generic/D6 → reduce via per-DOF UsdPhysicsLimitAPI (typed).
-        let (b0, b1, lp0, lp1) = base(&j)?;
+        let (b0, b1, lp0, lp1) = base(&j, &view)?;
         let (reduced, axis, lo, hi) = reduce_generic_joint_typed(stage, path)?;
         PendingUsdJoint {
             body0_path: b0, body1_path: b1, axis, local_pos0: lp0, local_pos1: lp1,
@@ -1402,6 +1465,110 @@ def PhysicsRevoluteJoint "Hinge" (
         std::fs::write(&f, "#usda 1.0\ndef Xform \"Plain\" {}\n").unwrap();
         let stage = compose_file_to_stage(&f).expect("compose stage");
         assert!(read_joint_spec_typed(&stage, &SdfPath::new("/Plain").unwrap()).is_none());
+    }
+
+    /// Anchors round-trip through `[f32;3]` both when authored and when derived, so
+    /// compare at f32 precision — the point is that the derived value equals what the
+    /// file used to hand-author (byte-identical physics), not full f64 equality.
+    fn close(a: DVec3, b: DVec3) -> bool {
+        (a - b).length() < 1e-5
+    }
+
+    fn write_and_compose(name: &str, body: &str) -> openusd::usd::Stage {
+        let dir = std::env::temp_dir().join("lunco_joint_derive");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join(name);
+        std::fs::write(&f, body).unwrap();
+        compose_file_to_stage(&f).expect("compose stage")
+    }
+
+    const DERIVE_FIXTURE: &str = "#usda 1.0\n\
+def Xform \"Rover\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
+    def Xform \"Wheel\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n    {\n\
+        double3 xformOp:translate = (0.9, -0.65, 1.225)\n\
+        uniform token[] xformOpOrder = [\"xformOp:translate\"]\n    }\n\
+    def PhysicsRevoluteJoint \"Hinge\"\n    {\n\
+        rel physics:body0 = </Rover>\n\
+        rel physics:body1 = </Rover/Wheel>\n\
+        uniform token physics:axis = \"X\"\nAUTHORED    }\n}\n";
+
+    #[test]
+    fn derives_unauthored_joint_anchor_from_child_translate() {
+        // A wheel placed by its own `xformOp:translate`, jointed to the root with NO
+        // `physics:localPos0/1`. The reader must DERIVE the anchor: lp0 = the wheel's
+        // origin in the root frame (its translate), lp1 = origin. This is what lets
+        // `physical_drivetrain.usda` state each wheel's position once, not twice.
+        let stage = write_and_compose("derive.usda", &DERIVE_FIXTURE.replace("AUTHORED", ""));
+        let j = read_joint_spec_typed(&stage, &SdfPath::new("/Rover/Hinge").unwrap())
+            .expect("revolute joint reads");
+        assert!(close(j.local_pos0, DVec3::new(0.9, -0.65, 1.225)), "lp0 derived from wheel translate: {:?}", j.local_pos0);
+        assert_eq!(j.local_pos1, DVec3::ZERO, "lp1 = body1 origin");
+    }
+
+    #[test]
+    fn authored_anchor_is_not_overridden_by_derivation() {
+        // An explicit `physics:localPos0` must win — the derivation is a fallback for
+        // UNAUTHORED anchors only, so hand-tuned joints never change.
+        let stage = write_and_compose(
+            "authored.usda",
+            &DERIVE_FIXTURE.replace("AUTHORED", "        point3f physics:localPos0 = (1, 2, 3)\n"),
+        );
+        let j = read_joint_spec_typed(&stage, &SdfPath::new("/Rover/Hinge").unwrap())
+            .expect("revolute joint reads");
+        assert_eq!(j.local_pos0, DVec3::new(1.0, 2.0, 3.0), "authored lp0 wins over derivation");
+    }
+
+    #[test]
+    fn rocker_bogie_hinge_joints_derive_end_to_end() {
+        // The HARD retrofit, through the real load path. `rocker_bogie.usda` now omits
+        // every anchor. Its FOUR structural hinges flow through `read_joint_spec_typed`
+        // and must be DERIVED — including the two SIBLING bogie hinges (`BogieHinge*`:
+        // body0 does NOT contain body1) and a scaled hierarchy — reproducing the values
+        // the file used to hand-author (byte-identical → unchanged physics).
+        //
+        // (The six WHEEL joints are `physxVehicleWheel`-tagged and owned by
+        // `lunco-usd-sim`, which builds them from the wheel's own transform —
+        // `mount_local = existing_tf.translation`, never reading `localPos0`. So those
+        // dropped anchors were already dead there; nothing to derive here.)
+        let f = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/vessels/rovers/rocker_bogie.usda");
+        let stage = compose_file_to_stage(&f).expect("compose rocker_bogie");
+        for (name, lp0) in [
+            ("HingeL", [-0.9, -0.2, 0.0]),       // chassis ↔ rocker (ancestor)
+            ("HingeR", [0.9, -0.2, 0.0]),
+            ("BogieHingeL", [0.0, -0.2, 0.6]),   // rocker ↔ bogie (SIBLING)
+            ("BogieHingeR", [0.0, -0.2, 0.6]),
+        ] {
+            let j = read_joint_spec_typed(&stage, &SdfPath::new(&format!("/RockerBogie/{name}")).unwrap())
+                .unwrap_or_else(|| panic!("{name} reads + derives"));
+            assert!(
+                close(j.local_pos0, DVec3::new(lp0[0], lp0[1], lp0[2])),
+                "{name}: derived {:?} != old authored {lp0:?}",
+                j.local_pos0
+            );
+            assert_eq!(j.local_pos1, DVec3::ZERO, "{name}: lp1 = origin");
+        }
+    }
+
+    #[test]
+    fn physical_drivetrain_derives_all_four_wheel_anchors() {
+        // The shipped retrofit: `physical_drivetrain.usda` now OMITS every
+        // localPos0/1. The reader must reproduce, exactly, the four wheel anchors the
+        // file used to type twice — proving the retrofit preserves the physics.
+        let f = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/components/mobility/physical_drivetrain.usda");
+        let stage = compose_file_to_stage(&f).expect("compose drivetrain");
+        for (name, lp0) in [
+            ("Wheel_FL_Hinge", DVec3::new(-0.9, -0.65, -1.225)),
+            ("Wheel_FR_Hinge", DVec3::new(0.9, -0.65, -1.225)),
+            ("Wheel_RL_Hinge", DVec3::new(-0.9, -0.65, 1.225)),
+            ("Wheel_RR_Hinge", DVec3::new(0.9, -0.65, 1.225)),
+        ] {
+            let j = read_joint_spec_typed(&stage, &SdfPath::new(&format!("/Drivetrain/{name}")).unwrap())
+                .unwrap_or_else(|| panic!("{name} reads"));
+            assert!(close(j.local_pos0, lp0), "{name}: anchor derived from the wheel over-translate: {:?}", j.local_pos0);
+            assert_eq!(j.local_pos1, DVec3::ZERO, "{name}: lp1 = origin");
+        }
     }
 }
 

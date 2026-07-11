@@ -438,15 +438,33 @@ plug to a socket, where the plug lives inside the *not-yet-loaded asset*, not th
   egui click-through (no egui MCP automation; a live GUI instance was unavailable — the user's own
   host+client session held the ports, and a competing GPU instance would risk it).
 
-**Still open — the shipped-rover retrofit (`physical_drivetrain.usda` / `rocker_bogie.usda`).** These author
-the duplication the schema removes literally — `over Wheel_FL.translate == Wheel_FL_Hinge.localPos0 ==
-(-0.9,-0.65,-1.225)`, one number typed twice per wheel. The retrofit *mechanism* is complete and proven
-(the verified `Base`/`Arm` snap is mechanically identical). What a literal "drop the hand-written anchors"
-needs beyond authoring mount frames is a **load-time mount-resolution pass** that derives `localPos0` from
-the frames at load — otherwise removing the anchors leaves the joints un-anchored. That is a separate
-feature, and authoring mounts onto a shipped, path-translated, cross-file drivetrain wants per-rover
-in-renderer physics verification (all wheels articulate) before it ships — so it is deliberately deferred
-rather than edited blind. The substrate (reader + `realign`/`from_mount` + snap UI) is what it rests on.
+**Shipped-rover retrofit — `physical_drivetrain.usda` AND `rocker_bogie.usda` DONE (2026-07-11).** These
+authored the duplication literally — `over Wheel_FL.translate == Wheel_FL_Hinge.localPos0 ==
+(-0.9,-0.65,-1.225)`, one number typed twice. The **load-time resolution pass** is now real: the avian joint
+reader (`read_joint_spec_typed` → `derive_joint_anchor`) DERIVES a joint's anchor whenever
+`physics:localPos0`/`localPos1` are **unauthored**, for the "joint at body1's origin" convention every rover
+joint uses (`localPos1 = 0`):
+
+```
+localPos0 = rot(world(body0))⁻¹ · ( pos(world(body1)) − pos(world(body0)) )
+```
+
+i.e. body1's origin in body0's **rotation** frame, using full composed WORLD poses (`world_transform` folds
+translate+rotate+**scale** from the stage root down). Two subtleties this gets right that a naive
+child-translate read does not: **sibling** joints — a rocker↔bogie hinge where neither body contains the
+other — and **scaled** hierarchies (ancestor scale is baked into the world positions; the anchor is in the
+rotation frame because avian applies a body's rotation, not its scale, to a local anchor). It is a FALLBACK:
+an authored anchor always wins, so no existing joint changes (an audit confirmed every shipped joint authors
+`localPos0`, so nothing relied on the old zero default). The derived value round-trips the same `[f32;3]` the
+authored one did → **byte-identical**, physics unchanged.
+
+- `physical_drivetrain.usda` drops all 8 anchor lines; test `physical_drivetrain_derives_all_four_wheel_anchors`
+  composes the shipped file and asserts the four anchors reproduce exactly.
+- `rocker_bogie.usda` drops all 20. Its four structural hinges (incl. the two SIBLING bogie hinges) derive
+  through `read_joint_spec_typed` — `rocker_bogie_hinge_joints_derive_end_to_end` proves it. Its six wheel
+  joints are `physxVehicleWheel`-tagged and built by `lunco-usd-sim` from the wheel's own transform
+  (`mount_local = existing_tf.translation`, `lib.rs:1542`), which never read `localPos0` — so those anchors
+  were already dead weight; dropping them is a no-op there.
 
 > **Merge check (2026-07-11), physics bridge `cc87d39f`:** the plan survives intact. The bridge
 > (`lunco-usd-avian/src/big_space_bridge.rs`) only replaces avian's f32↔f64 *body world-pose* sync;

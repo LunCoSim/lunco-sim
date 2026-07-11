@@ -645,22 +645,25 @@ def Xform "RockerBogie" (
         }
     }
 
+    # All joints below DELIBERATELY omit `physics:localPos0`/`localPos1`: each body's
+    # placement is already its `xformOp:translate`, and the avian joint reader DERIVES
+    # the anchor from the composed world poses (body1's origin in body0's rotation
+    # frame; anchor on body1 = origin). This works for the sibling rocker↔bogie hinges
+    # and the scaled hierarchy, so no anchor is typed — or left to drift — twice.
+    # Author a `localPos0` on a joint to override the derivation.
+    #
     # ── Lateral-axis revolute hinges (chassis ↔ rocker) ─────────────────────
     def PhysicsRevoluteJoint "HingeL"
     {
         rel physics:body0 = </RockerBogie>
         rel physics:body1 = </RockerBogie/RockerL>
         uniform token physics:axis = "X"
-        point3f physics:localPos0 = (-0.9, -0.2, 0.0)
-        point3f physics:localPos1 = (0.0, 0.0, 0.0)
     }
     def PhysicsRevoluteJoint "HingeR"
     {
         rel physics:body0 = </RockerBogie>
         rel physics:body1 = </RockerBogie/RockerR>
         uniform token physics:axis = "X"
-        point3f physics:localPos0 = (0.9, -0.2, 0.0)
-        point3f physics:localPos1 = (0.0, 0.0, 0.0)
     }
 
     # ── Lateral-axis revolute hinges (rocker ↔ bogie) ───────────────────────
@@ -669,16 +672,12 @@ def Xform "RockerBogie" (
         rel physics:body0 = </RockerBogie/RockerL>
         rel physics:body1 = </RockerBogie/BogieL>
         uniform token physics:axis = "X"
-        point3f physics:localPos0 = (0.0, -0.2, 0.6)
-        point3f physics:localPos1 = (0.0, 0.0, 0.0)
     }
     def PhysicsRevoluteJoint "BogieHingeR"
     {
         rel physics:body0 = </RockerBogie/RockerR>
         rel physics:body1 = </RockerBogie/BogieR>
         uniform token physics:axis = "X"
-        point3f physics:localPos0 = (0.0, -0.2, 0.6)
-        point3f physics:localPos1 = (0.0, 0.0, 0.0)
     }
 
     # ── Wheel revolute joints (rocker/bogie ↔ wheel) ────────────────────────
@@ -691,8 +690,6 @@ def Xform "RockerBogie" (
         rel physics:body0 = </RockerBogie/RockerL>
         rel physics:body1 = </RockerBogie/RockerL/Wheel_FL>
         uniform token physics:axis = "X"
-        point3f physics:localPos0 = (-0.25, -0.4, -1.2)
-        point3f physics:localPos1 = (0.0, 0.0, 0.0)
         float drive:angular:physics:maxForce = 12000.0
         uniform token drive:angular:physics:type = "force"
     }
@@ -704,8 +701,6 @@ def Xform "RockerBogie" (
         rel physics:body0 = </RockerBogie/RockerR>
         rel physics:body1 = </RockerBogie/RockerR/Wheel_FR>
         uniform token physics:axis = "X"
-        point3f physics:localPos0 = (0.25, -0.4, -1.2)
-        point3f physics:localPos1 = (0.0, 0.0, 0.0)
         float drive:angular:physics:maxForce = 12000.0
         uniform token drive:angular:physics:type = "force"
     }
@@ -717,8 +712,6 @@ def Xform "RockerBogie" (
         rel physics:body0 = </RockerBogie/BogieL>
         rel physics:body1 = </RockerBogie/BogieL/Wheel_ML>
         uniform token physics:axis = "X"
-        point3f physics:localPos0 = (-0.25, -0.2, -0.4)
-        point3f physics:localPos1 = (0.0, 0.0, 0.0)
         float drive:angular:physics:maxForce = 12000.0
         uniform token drive:angular:physics:type = "force"
     }
@@ -730,8 +723,6 @@ def Xform "RockerBogie" (
         rel physics:body0 = </RockerBogie/BogieR>
         rel physics:body1 = </RockerBogie/BogieR/Wheel_MR>
         uniform token physics:axis = "X"
-        point3f physics:localPos0 = (0.25, -0.2, -0.4)
-        point3f physics:localPos1 = (0.0, 0.0, 0.0)
         float drive:angular:physics:maxForce = 12000.0
         uniform token drive:angular:physics:type = "force"
     }
@@ -743,8 +734,6 @@ def Xform "RockerBogie" (
         rel physics:body0 = </RockerBogie/BogieL>
         rel physics:body1 = </RockerBogie/BogieL/Wheel_RL>
         uniform token physics:axis = "X"
-        point3f physics:localPos0 = (-0.25, -0.2, 0.6)
-        point3f physics:localPos1 = (0.0, 0.0, 0.0)
         float drive:angular:physics:maxForce = 12000.0
         uniform token drive:angular:physics:type = "force"
     }
@@ -756,8 +745,6 @@ def Xform "RockerBogie" (
         rel physics:body0 = </RockerBogie/BogieR>
         rel physics:body1 = </RockerBogie/BogieR/Wheel_RR>
         uniform token physics:axis = "X"
-        point3f physics:localPos0 = (0.25, -0.2, 0.6)
-        point3f physics:localPos1 = (0.0, 0.0, 0.0)
         float drive:angular:physics:maxForce = 12000.0
         uniform token drive:angular:physics:type = "force"
     }
