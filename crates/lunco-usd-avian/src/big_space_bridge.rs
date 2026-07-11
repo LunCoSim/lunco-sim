@@ -257,7 +257,17 @@ fn position_to_pose(
     }
 
     'bodies: for (e, pos, rot, cell, mut tf, mut shadow, rb) in &mut q_dyn {
-        if !matches!(rb, RigidBody::Dynamic) {
+        // Sync Position → Transform for every body avian moves via `Position`:
+        // `Dynamic` (solver-integrated) AND `Kinematic` (externally seated — the
+        // networked client pins replicated proxies `Kinematic` and drives their
+        // `Position` in `drive_kinematic_proxies`; a host-side animated platform
+        // is the same shape). Only `Static` is skipped — it never moves via
+        // `Position`, so recomputing its Transform is pure churn. This replaces
+        // avian's disabled `position_to_transform`, which likewise ran for all
+        // non-static bodies; restricting to `Dynamic` froze every kinematic proxy
+        // (Transform stuck at spawn) — visible only on a networked client, where
+        // kinematic bodies exist.
+        if matches!(rb, RigidBody::Static) {
             continue;
         }
 
