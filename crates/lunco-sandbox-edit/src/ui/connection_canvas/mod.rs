@@ -169,8 +169,16 @@ pub fn produce_usd_canvas(
     let Some(cs) = canonical.get(stage_id) else {
         return;
     };
+    // Enumerate prims from the ECS entities on this stage (parity with the
+    // co-sim wiring derivation) rather than a live-stage traversal, which can
+    // miss composed children.
+    let prim_paths: Vec<String> = q
+        .iter()
+        .filter(|p| p.stage_handle.id() == stage_id)
+        .map(|p| p.path.clone())
+        .collect();
     let view = cs.view();
-    let (nodes, wires) = collect_graph(&view);
+    let (nodes, wires) = collect_graph(&view, &prim_paths);
     let hash = topology_hash(&nodes, &wires);
 
     if state.built && state.stage_id == Some(stage_id) && state.topo_hash == hash {
@@ -180,6 +188,12 @@ pub fn produce_usd_canvas(
     let first_for_stage = !state.built || state.stage_id != Some(stage_id);
     let scene = build_scene(nodes, wires);
     let bounds = scene.bounds();
+    bevy::log::info!(
+        "[usd-canvas] rebuilt: {} prim entities -> {} nodes, {} edges",
+        prim_paths.len(),
+        scene.node_count(),
+        scene.edge_count()
+    );
 
     state.canvas.scene = scene;
     // Stale NodeId/EdgeId references would point at unrelated prims in the fresh
