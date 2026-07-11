@@ -79,11 +79,14 @@ calls, so prelude/library helpers must be stateless (take+return state).
 | `sim_tick()` | read | current FixedUpdate tick |
 | `emit(name, value)` | event | fire a `TelemetryEvent` on the shared bus |
 
-Everything else is **policy in rhai** — see the embedded prelude
+Everything else is **policy in rhai** — see the prelude
 `assets/scripting/prelude/` (one file per topic): vector math, `distance`/`arrived`,
 `steer_to`/`nav_to` (closed-loop steering), `run_plan` (declarative waypoint/
-objective executor), `drive`/`brake`/`load_scene` wrappers. The prelude is
-`include_str!`-embedded and registered as a global module (wasm-safe, no IO).
+objective executor), `drive`/`brake`/`load_scene` wrappers. The prelude is loaded
+FROM DISK at startup on native (edit → restart, no rebuild), with the
+`include_dir!`-embedded copy as the fallback and the wasm source of truth
+(wasm-safe, no IO). A disk file that fails to parse logs and falls back to the
+embedded prelude, so a broken edit can't brick startup.
 NB: `goto` is a reserved word in rhai — the nav helper is `nav_to`.
 
 ### Events / pub-sub
@@ -162,7 +165,7 @@ The pieces that make "manipulate everything from rhai" work, and where each live
 | Sandboxed rhai engine | `RhaiBackend` op/depth/size caps (`backend.rs:40-77`) |
 | rhai → World access | `ScenarioRuntime` exposes host functions to rhai engine |
 | Persistent script state across ticks | `this` map persisted on scenario entity across ticks |
-| Temporal sequencing (wait/over-time) | Task sequencer in `prelude/tasks.rhai`; coroutine-style via `__run_task` |
+| Temporal sequencing (wait/over-time) | Task-tree constructors in `prelude/tasks.rhai` (pure data), ticked NATIVELY on the `lunco-behavior` kernel (`lunco-scripting/src/task_tree.rs`) |
 | Navigation: waypoints/goals/arrival/path-follow | `nav_to`, `drive`, `run_plan` in `prelude/nav.rhai` |
 | By-name entity lookup | `find(name)` verb |
 | Timer "after N seconds" | `wait(secs)` / `wait_until(cond)` in sequencer |

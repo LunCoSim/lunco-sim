@@ -249,7 +249,12 @@ authoritative list. Highlights:
 - **View / cutscenes:** `set_camera(name)` — cut the scene viewport to a `def Camera` by name (leaf or full USD path); pairs with a timeline for cutscene camera changes. `possess(vessel)`, `notify(msg)`.
 - **Tutorial HUD** ([`hud.rhai`](../assets/scripting/prelude/hud.rhai)): `hint(msg)`/`clear_hint()` (sticky instruction), `spotlight(anchor, caption)`/`clear_spotlight()` (dim + ring a workbench widget by `HelpAnchors` key), `objectives_hud(list)` (or just declare a `mission(me)` — it auto-publishes), `coach_step(steps, i)` (a guided coach-mark tour step; advance the cursor in `on_event`). This is how tutorials are authored — a tutorial is just a scenario. See [`tutorials/README.md`](../assets/tutorials/README.md).
 
-Add helpers freely — editing the prelude needs no Rust rebuild.
+Add helpers freely — the prelude is loaded **from disk at startup** on native
+(`assets/scripting/prelude/*.rhai`): edit a helper, restart the app, no rebuild.
+The compiled-in copy is the fallback (missing directory, or a disk file that
+fails to parse — the app logs the error and boots on the embedded prelude
+rather than bricking) and the source of truth on wasm, so a rebuild still
+refreshes it for installed/web builds.
 
 ## C. Scenario parameters
 
