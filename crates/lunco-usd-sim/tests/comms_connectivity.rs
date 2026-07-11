@@ -81,7 +81,7 @@ fn build_app() -> (App, Vec<(Entity, &'static str)>) {
     let mut app = App::new();
     app.add_plugins(bevy::asset::AssetPlugin::default())
         .init_asset::<UsdStageAsset>()
-        .init_non_send_resource::<CanonicalStages>()
+        .init_non_send::<CanonicalStages>()
         .add_plugins(CommsPlugin);
 
     // Fixed epoch + deterministic ephemeris.
@@ -100,7 +100,7 @@ fn build_app() -> (App, Vec<(Entity, &'static str)>) {
         .add(UsdStageAsset { recipe: Some(recipe.clone()) });
     let id = handle.id();
     app.world_mut()
-        .non_send_resource_mut::<CanonicalStages>()
+        .non_send_mut::<CanonicalStages>()
         .get_or_build(id, &recipe)
         .expect("test scene builds");
 
@@ -127,7 +127,7 @@ fn build_app() -> (App, Vec<(Entity, &'static str)>) {
     {
         let world = app.world_mut();
         let stages = world
-            .remove_non_send_resource::<CanonicalStages>()
+            .remove_non_send::<CanonicalStages>()
             .expect("stages");
         {
             let view_stage = stages.get(id).expect("stage");
@@ -142,7 +142,7 @@ fn build_app() -> (App, Vec<(Entity, &'static str)>) {
             drop(commands);
             queue.apply(world);
         }
-        world.insert_non_send_resource(stages);
+        world.insert_non_send(stages);
     }
     // Mast local height (site frame maps local Y=2 up).
     let mast = entities.iter().find(|(_, n)| *n == "Mast").unwrap().0;

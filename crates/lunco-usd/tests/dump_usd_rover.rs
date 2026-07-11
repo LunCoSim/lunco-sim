@@ -36,7 +36,7 @@ fn test_dump_usd_rover_state() {
     let stage = compose_file_to_stage(&usd_path).expect("compose skid_rover");
     let cstage = CanonicalStage::from_stage(stage, usd_path.display().to_string());
     app.world_mut()
-        .get_non_send_resource_mut::<CanonicalStages>()
+        .get_non_send_mut::<CanonicalStages>()
         .expect("CanonicalStages resource (UsdBevyPlugin)")
         .insert(handle.id(), cstage);
 

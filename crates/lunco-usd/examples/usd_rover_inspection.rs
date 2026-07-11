@@ -16,7 +16,7 @@ fn main() {
     app.init_asset::<Image>();
     // The avian/sim extractors read the LIVE canonical stage; without
     // `UsdBevyPlugin` this harness must provide the resource itself.
-    app.init_non_send_resource::<CanonicalStages>();
+    app.init_non_send::<CanonicalStages>();
 
     app.add_plugins((
         UsdAvianPlugin,
@@ -37,7 +37,7 @@ fn main() {
         .expect("Failed to compose rucheyok.usda");
     let cstage = CanonicalStage::from_stage(stage, path.to_string());
     app.world_mut()
-        .get_non_send_resource_mut::<CanonicalStages>()
+        .get_non_send_mut::<CanonicalStages>()
         .expect("CanonicalStages resource")
         .insert(stage_handle.id(), cstage);
 

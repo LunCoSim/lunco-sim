@@ -206,7 +206,7 @@ def Xform "World"
         let new_recipe = StageRecipe::from_source("scene.usda", updated_usda_content);
         let mut canonical = app
             .world_mut()
-            .get_non_send_resource_mut::<CanonicalStages>()
+            .get_non_send_mut::<CanonicalStages>()
             .unwrap();
         assert!(
             canonical.rebuild(stage_handle.id(), &new_recipe),

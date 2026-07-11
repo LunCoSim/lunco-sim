@@ -70,7 +70,7 @@ fn add_canonical_from_file(app: &mut App, file_path: &Path) -> Handle<UsdStageAs
         .unwrap_or_else(|e| panic!("Composition failed for {}: {e}", file_path.display()));
     let cstage = CanonicalStage::from_stage(stage, file_path.display().to_string());
     app.world_mut()
-        .get_non_send_resource_mut::<CanonicalStages>()
+        .get_non_send_mut::<CanonicalStages>()
         .expect("CanonicalStages resource (UsdBevyPlugin)")
         .insert(handle.id(), cstage);
     handle

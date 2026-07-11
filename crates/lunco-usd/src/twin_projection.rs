@@ -371,7 +371,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         // first generations the async `LoadScene` is still building it — DEFER
         // (leave `synced` unchanged) so we retry once it lands.
         let stage_ready = world
-            .get_non_send_resource::<lunco_usd_bevy::CanonicalStages>()
+            .get_non_send::<lunco_usd_bevy::CanonicalStages>()
             .map(|s| s.get(scene_id).is_some())
             .unwrap_or(false);
         if has_work && !stage_ready {
@@ -506,7 +506,7 @@ fn apply_incremental_op_to_stage(
     match op {
         UsdOp::SetTranslate { path, value, .. } => {
             let Ok(sp) = openusd::sdf::Path::new(path) else { return };
-            if let Some(cs) = world.get_non_send_resource::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
+            if let Some(cs) = world.get_non_send::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
                 if let Err(e) = cs.author_translate(&sp, *value) {
                     warn!("[twin] author translate {path}: {e}");
                 }
@@ -514,7 +514,7 @@ fn apply_incremental_op_to_stage(
         }
         UsdOp::SetRotate { path, value, .. } => {
             let Ok(sp) = openusd::sdf::Path::new(path) else { return };
-            if let Some(cs) = world.get_non_send_resource::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
+            if let Some(cs) = world.get_non_send::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
                 if let Err(e) = cs.author_rotate(&sp, *value) {
                     warn!("[twin] author rotate {path}: {e}");
                 }
@@ -537,7 +537,7 @@ fn apply_incremental_op_to_stage(
                 }
             };
             let authored = match world
-                .get_non_send_resource::<CanonicalStages>()
+                .get_non_send::<CanonicalStages>()
                 .and_then(|s| s.get(scene_id))
             {
                 Some(cs) => match cs.author_attribute(&sp, name, type_name, v) {
@@ -563,7 +563,7 @@ fn apply_incremental_op_to_stage(
             // (including live physics bodies) alone.
             if authored {
                 let prim_ty = world
-                    .get_non_send_resource::<CanonicalStages>()
+                    .get_non_send::<CanonicalStages>()
                     .and_then(|s| s.get(scene_id))
                     .and_then(|cs| cs.view().prim_type_name(&sp));
                 if attribute_edit_needs_full_refresh(prim_ty.as_deref()) {
@@ -595,7 +595,7 @@ fn apply_incremental_op_to_stage(
         }
         UsdOp::RemovePrim { path, .. } => {
             let Ok(sp) = openusd::sdf::Path::new(path) else { return };
-            if let Some(cs) = world.get_non_send_resource::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
+            if let Some(cs) = world.get_non_send::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
                 if let Err(e) = cs.remove_prim_at(&sp) {
                     warn!("[twin] remove {path}: {e}");
                 }
@@ -611,7 +611,7 @@ fn apply_incremental_op_to_stage(
                 }
             };
             let authored = match world
-                .get_non_send_resource::<CanonicalStages>()
+                .get_non_send::<CanonicalStages>()
                 .and_then(|s| s.get(scene_id))
             {
                 Some(cs) => match cs.author_time_sample(&sp, name, type_name, *time, v) {
@@ -634,7 +634,7 @@ fn apply_incremental_op_to_stage(
         }
         UsdOp::SetRelationship { path, name, targets, .. } => {
             let Ok(sp) = openusd::sdf::Path::new(path) else { return };
-            let authored = match world.get_non_send_resource::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
+            let authored = match world.get_non_send::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
                 Some(cs) => match cs.author_relationship(&sp, name, targets) {
                     Ok(()) => true,
                     Err(e) => { warn!("[twin] author relationship {path}.{name}: {e}"); false }
@@ -651,7 +651,7 @@ fn apply_incremental_op_to_stage(
         }
         UsdOp::SetConnection { path, name, type_name, sources, .. } => {
             let Ok(sp) = openusd::sdf::Path::new(path) else { return };
-            let authored = match world.get_non_send_resource::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
+            let authored = match world.get_non_send::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
                 Some(cs) => match cs.author_connection(&sp, name, type_name, sources) {
                     Ok(()) => true,
                     Err(e) => { warn!("[twin] author connection {path}.{name}: {e}"); false }
@@ -719,7 +719,7 @@ fn spawn_prim_op(
 
     let Some(asset_path) = reference else {
         // Plain prim — author now.
-        if let Some(cs) = world.get_non_send_resource::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
+        if let Some(cs) = world.get_non_send::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
             if let Err(e) = cs.author_prim(&sp, type_name.as_deref()) {
                 warn!("[twin] spawn {prim_path}: {e}");
             }
@@ -733,7 +733,7 @@ fn spawn_prim_op(
         Fetch(String),
     }
     let plan = {
-        let Some(cs) = world.get_non_send_resource::<CanonicalStages>().and_then(|s| s.get(scene_id))
+        let Some(cs) = world.get_non_send::<CanonicalStages>().and_then(|s| s.get(scene_id))
         else {
             return;
         };
@@ -746,7 +746,7 @@ fn spawn_prim_op(
     };
     match plan {
         Plan::Now => {
-            if let Some(cs) = world.get_non_send_resource::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
+            if let Some(cs) = world.get_non_send::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
                 if let Err(e) = cs
                     .author_prim(&sp, type_name.as_deref())
                     .and_then(|_| cs.author_reference(&sp, &asset_path))
@@ -785,7 +785,7 @@ fn author_structural_edit(
     let Ok(sp) = openusd::sdf::Path::new(path) else { return };
     let Some(spec) = composed.spec(&sp).filter(|s| s.ty == openusd::sdf::SpecType::Prim) else {
         // Removed from the document → remove from the live stage.
-        if let Some(cs) = world.get_non_send_resource::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
+        if let Some(cs) = world.get_non_send::<CanonicalStages>().and_then(|s| s.get(scene_id)) {
             if let Err(e) = cs.remove_prim_at(&sp) {
                 warn!("[twin] remove {path}: {e}");
             }
@@ -908,7 +908,7 @@ fn rebuild_scene_from_composed(
     // Recipe = the edited composed source as the root layer + every referenced
     // `.usda` the current stage already loaded (keyed by the same canonical ids).
     let (scene_layer, mut bytes) = {
-        let Some(cs) = world.get_non_send_resource::<CanonicalStages>().and_then(|s| s.get(scene_id))
+        let Some(cs) = world.get_non_send::<CanonicalStages>().and_then(|s| s.get(scene_id))
         else {
             return;
         };
@@ -917,7 +917,7 @@ fn rebuild_scene_from_composed(
     bytes.insert(scene_layer.clone(), composed_source.as_bytes().to_vec());
     let recipe = StageRecipe { root_id: scene_layer, bytes };
     let rebuilt = world
-        .get_non_send_resource_mut::<CanonicalStages>()
+        .get_non_send_mut::<CanonicalStages>()
         .map(|mut stages| stages.rebuild(scene_id, &recipe))
         .unwrap_or(false);
     if rebuilt {
@@ -944,7 +944,7 @@ fn reconcile_full_to_composed(
 
     // Snapshot the authored-prim sets under a short borrow of the `!Send` stage.
     let (live_authored, composed_prims): (BTreeSet<String>, BTreeSet<String>) = {
-        let Some(cs) = world.get_non_send_resource::<CanonicalStages>().and_then(|s| s.get(scene_id))
+        let Some(cs) = world.get_non_send::<CanonicalStages>().and_then(|s| s.get(scene_id))
         else {
             return;
         };
@@ -1004,7 +1004,7 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
             continue;
         };
         let Ok(sp) = openusd::sdf::Path::new(&item.prim_path) else { continue };
-        let Some(cs) = world.get_non_send_resource::<CanonicalStages>().and_then(|s| s.get(item.scene_id))
+        let Some(cs) = world.get_non_send::<CanonicalStages>().and_then(|s| s.get(item.scene_id))
         else {
             continue; // scene stage gone — drop the spawn
         };

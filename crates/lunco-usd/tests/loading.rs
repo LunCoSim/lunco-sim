@@ -21,7 +21,7 @@ fn test_rover_loading_physics() {
     // The avian/sim extractors read the LIVE canonical stage; without
     // `UsdBevyPlugin` (which normally inits it) this minimal harness must
     // provide the resource itself so `get_or_build` can compose off the recipe.
-    app.init_non_send_resource::<CanonicalStages>();
+    app.init_non_send::<CanonicalStages>();
 
     // Add our mapping plugins
     // Note: UsdBevyPlugin might still try to use Hierarchy, so we add it if needed

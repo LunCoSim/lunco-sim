@@ -1596,7 +1596,7 @@ impl Plugin for SandboxCorePlugin {
             Update,
             write_run_result_artifact.run_if(
                 resource_exists::<lunco_experiments::ExperimentRegistry>
-                    .and(resource_exists::<lunco_workspace::WorkspaceResource>),
+                    .and_then(resource_exists::<lunco_workspace::WorkspaceResource>),
             ),
         );
         // Load half is change-driven on the registry (a definition synced, a run
@@ -1606,7 +1606,7 @@ impl Plugin for SandboxCorePlugin {
             Update,
             load_run_result_artifacts.run_if(
                 resource_changed::<lunco_experiments::ExperimentRegistry>
-                    .and(resource_exists::<lunco_workspace::WorkspaceResource>),
+                    .and_then(resource_exists::<lunco_workspace::WorkspaceResource>),
             ),
         );
 

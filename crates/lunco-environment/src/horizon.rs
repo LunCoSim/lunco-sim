@@ -1122,7 +1122,7 @@ impl Plugin for HorizonShadowPlugin {
                 shade_dynamic_entities,
             )
                 .chain()
-                .run_if(resource_exists::<Assets<Image>>.and(resource_exists::<Assets<Mesh>>)),
+                .run_if(resource_exists::<Assets<Image>>.and_then(resource_exists::<Assets<Mesh>>)),
         );
     }
 }

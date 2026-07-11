@@ -143,7 +143,7 @@ impl Plugin for UsdBevyPlugin {
             // Ph0′: the live canonical stages, built main-thread from each
             // loaded `UsdStageAsset`'s `StageRecipe` (`sync_canonical_stages`).
             // `NonSend` — holds `!Send` openusd `Stage`s.
-            .init_non_send_resource::<canonical::CanonicalStages>()
+            .init_non_send::<canonical::CanonicalStages>()
             .add_systems(Startup, load_diagnostic_label_font)
             .add_observer(on_usd_prim_added)
             .add_observer(light::on_usd_light_added)
@@ -1517,16 +1517,18 @@ fn apply_standard_material<R: UsdRead>(
             let addr_u = usd_wrap_to_address(read_token(reader, &texture_path, "inputs:wrapS").as_deref());
             let addr_v = usd_wrap_to_address(read_token(reader, &texture_path, "inputs:wrapT").as_deref());
 
-            Some(asset_server.load_with_settings::<Image, ImageLoaderSettings>(
-                resolved,
-                move |s: &mut ImageLoaderSettings| {
-                    s.is_srgb = is_srgb;
-                    let mut d = ImageSamplerDescriptor::linear();
-                    d.address_mode_u = addr_u;
-                    d.address_mode_v = addr_v;
-                    s.sampler = ImageSampler::Descriptor(d);
-                },
-            ))
+            Some(
+                asset_server
+                    .load_builder()
+                    .with_settings(move |s: &mut ImageLoaderSettings| {
+                        s.is_srgb = is_srgb;
+                        let mut d = ImageSamplerDescriptor::linear();
+                        d.address_mode_u = addr_u;
+                        d.address_mode_v = addr_v;
+                        s.sampler = ImageSampler::Descriptor(d);
+                    })
+                    .load::<Image>(resolved),
+            )
         };
 
         // diffuseColor: texture, else authored value, else geometry baseline.

@@ -61,11 +61,11 @@ fn find_live_entity(
 pub(crate) fn project_stage_changes(world: &mut World) {
     use lunco_usd_bevy::CanonicalStages;
 
-    if world.get_non_send_resource::<CanonicalStages>().is_none() {
+    if world.get_non_send::<CanonicalStages>().is_none() {
         return;
     }
     // Phase 1: drain the sink inboxes (owned + `Send`), releasing the borrow.
-    let batches = world.non_send_resource_mut::<CanonicalStages>().drain_all_changes();
+    let batches = world.non_send_mut::<CanonicalStages>().drain_all_changes();
     if batches.is_empty() {
         return;
     }
@@ -116,7 +116,7 @@ pub(crate) fn apply_translates_live(
     // Read every translate under one short borrow of the `!Send` stage, then
     // release it before mutating the world.
     let translates: Vec<(String, Vec3)> = {
-        let Some(stages) = world.get_non_send_resource::<CanonicalStages>() else {
+        let Some(stages) = world.get_non_send::<CanonicalStages>() else {
             return;
         };
         let Some(cs) = stages.get(id) else { return };
@@ -160,7 +160,7 @@ pub(crate) fn reconcile_structural_live(
     for path in resync_paths {
         let Ok(sp) = SdfPath::new(path) else { continue };
         let exists = {
-            let Some(stages) = world.get_non_send_resource::<CanonicalStages>() else {
+            let Some(stages) = world.get_non_send::<CanonicalStages>() else {
                 return;
             };
             match stages.get(id) {
@@ -177,7 +177,7 @@ pub(crate) fn reconcile_structural_live(
                 // Pre-read the child's translate under a short borrow; the
                 // observer builds the subtree from the still-present stage.
                 let tf = {
-                    let stages = world.non_send_resource::<CanonicalStages>();
+                    let stages = world.non_send::<CanonicalStages>();
                     stages
                         .get(id)
                         .and_then(|cs| {
@@ -217,7 +217,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(bevy::asset::AssetPlugin::default())
             .init_asset::<UsdStageAsset>()
-            .init_non_send_resource::<CanonicalStages>();
+            .init_non_send::<CanonicalStages>();
 
         // An asset carrying the ref-less in-memory scene + its build recipe.
         let recipe = StageRecipe::from_source("scene.usda", SCENE);
@@ -230,11 +230,11 @@ mod tests {
         // Build the live stage on demand, then drain its initial change set so
         // the only deltas we observe are the ones we author below.
         app.world_mut()
-            .non_send_resource_mut::<CanonicalStages>()
+            .non_send_mut::<CanonicalStages>()
             .get_or_build(id, &recipe)
             .expect("canonical stage builds from the recipe");
         app.world_mut()
-            .non_send_resource_mut::<CanonicalStages>()
+            .non_send_mut::<CanonicalStages>()
             .drain_all_changes();
 
         // The live `/World` scene-root entity the reconcile spawns children under.
@@ -246,7 +246,7 @@ mod tests {
 
         // Author a child prim ONTO THE LIVE STAGE → its sink records a resync.
         app.world()
-            .non_send_resource::<CanonicalStages>()
+            .non_send::<CanonicalStages>()
             .get(id)
             .unwrap()
             .stage()
@@ -268,7 +268,7 @@ mod tests {
 
         // Remove it → the sink records a resync for the vanished prim → despawn.
         app.world()
-            .non_send_resource::<CanonicalStages>()
+            .non_send::<CanonicalStages>()
             .get(id)
             .unwrap()
             .stage()

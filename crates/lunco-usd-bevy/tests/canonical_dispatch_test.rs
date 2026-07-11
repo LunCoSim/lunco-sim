@@ -95,7 +95,7 @@ fn recipe_asset_instantiates_off_live_canonical_stage() {
     // no-op the boot caught.
     let has_canonical = app
         .world()
-        .get_non_send_resource::<CanonicalStages>()
+        .get_non_send::<CanonicalStages>()
         .expect("CanonicalStages resource")
         .get(stage_id)
         .is_some();
@@ -154,7 +154,7 @@ fn recipeless_asset_builds_no_canonical_and_is_skipped() {
 
     // No recipe ⇒ no canonical stage ⇒ the dispatcher skips (no children spawned).
     assert!(
-        app.world().get_non_send_resource::<CanonicalStages>().unwrap().get(handle.id()).is_none(),
+        app.world().get_non_send::<CanonicalStages>().unwrap().get(handle.id()).is_none(),
         "a recipe-less asset builds no canonical stage"
     );
     assert!(

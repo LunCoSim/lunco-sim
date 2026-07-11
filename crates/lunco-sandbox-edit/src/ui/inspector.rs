@@ -1655,7 +1655,7 @@ fn material_pbr_section(
                     .and_then(|stages| stages.get(&prim.stage_handle))
                     .and_then(|a| a.recipe.clone());
                 if let Some(mut canonical) =
-                    world.get_non_send_resource_mut::<lunco_usd_bevy::CanonicalStages>()
+                    world.get_non_send_mut::<lunco_usd_bevy::CanonicalStages>()
                 {
                     if canonical.get(id).is_none() {
                         if let Some(r) = recipe.as_ref() {
@@ -1667,7 +1667,7 @@ fn material_pbr_section(
                     .as_ref()
                     .and_then(|mesh_sdf| {
                         let canonical =
-                            world.get_non_send_resource::<lunco_usd_bevy::CanonicalStages>()?;
+                            world.get_non_send::<lunco_usd_bevy::CanonicalStages>()?;
                         let view = canonical.get(id)?.view();
                         resolve_bound_shader(&view, mesh_sdf)
                     })

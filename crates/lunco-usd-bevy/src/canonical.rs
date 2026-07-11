@@ -64,7 +64,7 @@ pub struct RawStageChange {
 }
 
 /// The canonical live-composed stage for the active scene. `NonSend` (holds an
-/// `Rc`-backed `Stage`). Insert via `world.insert_non_send_resource(..)`.
+/// `Rc`-backed `Stage`). Insert via `world.insert_non_send(..)`.
 pub struct CanonicalStage {
     stage: Stage,
     /// Root (persisted) layer identifier — the scene `.usda`.
@@ -694,7 +694,7 @@ mod sync_system_tests {
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
             .init_asset::<crate::UsdStageAsset>()
-            .init_non_send_resource::<CanonicalStages>()
+            .init_non_send::<CanonicalStages>()
             .add_systems(Update, sync_canonical_stages);
 
         // `Assets::add` emits `AssetEvent::Added`, which the system reads.
@@ -709,7 +709,7 @@ mod sync_system_tests {
 
         let stages = app
             .world()
-            .get_non_send_resource::<CanonicalStages>()
+            .get_non_send::<CanonicalStages>()
             .expect("CanonicalStages resource present");
         assert_eq!(stages.len(), 1, "exactly one canonical stage built from the loaded asset");
         let cs = stages.get(handle.id()).expect("canonical stage keyed by the asset id");

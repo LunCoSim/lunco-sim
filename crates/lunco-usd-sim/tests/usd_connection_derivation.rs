@@ -23,7 +23,7 @@ fn setup() -> (App, AssetId<UsdStageAsset>, Handle<UsdStageAsset>) {
     let mut app = App::new();
     app.add_plugins(bevy::asset::AssetPlugin::default())
         .init_asset::<UsdStageAsset>()
-        .init_non_send_resource::<CanonicalStages>()
+        .init_non_send::<CanonicalStages>()
         .init_resource::<WiringDirty>();
 
     let recipe = StageRecipe::from_source("scene.usda", SCENE);
@@ -36,11 +36,11 @@ fn setup() -> (App, AssetId<UsdStageAsset>, Handle<UsdStageAsset>) {
     let id = handle.id();
 
     app.world_mut()
-        .non_send_resource_mut::<CanonicalStages>()
+        .non_send_mut::<CanonicalStages>()
         .get_or_build(id, &recipe)
         .expect("canonical stage builds from the recipe");
     app.world_mut()
-        .non_send_resource_mut::<CanonicalStages>()
+        .non_send_mut::<CanonicalStages>()
         .drain_all_changes();
     (app, id, handle)
 }
@@ -57,7 +57,7 @@ fn rewire_derives_at_load_and_clears() {
 
     // Author the connection ONTO THE LIVE STAGE (as `UsdOp::SetConnection` would).
     app.world()
-        .non_send_resource::<CanonicalStages>()
+        .non_send::<CanonicalStages>()
         .get(id)
         .unwrap()
         .stage()
@@ -112,7 +112,7 @@ fn rewire_derives_at_load_and_clears() {
     // Clear the connection → mark dirty (a live edit is not a structural change)
     // → rebuild drops the edge.
     app.world()
-        .non_send_resource::<CanonicalStages>()
+        .non_send::<CanonicalStages>()
         .get(id)
         .unwrap()
         .stage()
@@ -146,7 +146,7 @@ fn build_from_source(src: &str) -> (App, AssetId<UsdStageAsset>) {
     let mut app = App::new();
     app.add_plugins(bevy::asset::AssetPlugin::default())
         .init_asset::<UsdStageAsset>()
-        .init_non_send_resource::<CanonicalStages>();
+        .init_non_send::<CanonicalStages>();
     let recipe = StageRecipe::from_source("asset.usda", src);
     let handle = app
         .world_mut()
@@ -156,7 +156,7 @@ fn build_from_source(src: &str) -> (App, AssetId<UsdStageAsset>) {
         });
     let id = handle.id();
     app.world_mut()
-        .non_send_resource_mut::<CanonicalStages>()
+        .non_send_mut::<CanonicalStages>()
         .get_or_build(id, &recipe)
         .expect("migrated asset must build (valid .connect syntax)");
     (app, id)
@@ -164,7 +164,7 @@ fn build_from_source(src: &str) -> (App, AssetId<UsdStageAsset>) {
 
 /// The composed connection sources of `prim.attr` on the built stage.
 fn conns(app: &App, id: AssetId<UsdStageAsset>, prim: &str, attr: &str) -> Vec<String> {
-    let stages = app.world().non_send_resource::<CanonicalStages>();
+    let stages = app.world().non_send::<CanonicalStages>();
     let cs = stages.get(id).expect("stage present");
     cs.view().connections(&SdfPath::new(prim).unwrap(), attr)
 }
@@ -277,7 +277,7 @@ fn rewire_applies_factor_and_offset() {
     app.add_systems(Update, rewire_usd_connections);
 
     {
-        let stages = app.world().non_send_resource::<CanonicalStages>();
+        let stages = app.world().non_send::<CanonicalStages>();
         let stage = stages.get(id).unwrap().stage();
         stage
             .create_attribute("/World/Sink.inputs:force_y", "float")
@@ -327,7 +327,7 @@ fn rewire_reads_float_authored_transform() {
     app.add_systems(Update, rewire_usd_connections);
 
     {
-        let stages = app.world().non_send_resource::<CanonicalStages>();
+        let stages = app.world().non_send::<CanonicalStages>();
         let stage = stages.get(id).unwrap().stage();
         stage
             .create_attribute("/World/Sink.inputs:force_y", "float")
