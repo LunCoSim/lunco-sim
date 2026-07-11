@@ -122,6 +122,10 @@ impl Quadtree {
         target_pixel_error: f64,
     ) -> Self {
         let sse_denominator = 2.0 * (0.5 * fov_y_rad).tan();
+        // Guard the divisor: a `target_pixel_error` of 0 (an Inspector knob set to
+        // zero) would make `range_factor` infinite → every node refines to
+        // `max_depth` → a triangle/tile blow-up. Floor it at a sub-pixel epsilon.
+        let target_pixel_error = target_pixel_error.max(1e-3);
         let range_factor = screen_height_px / (sse_denominator * target_pixel_error);
         Quadtree::new(root_half_extent, max_depth, range_factor, root_geometric_error)
     }

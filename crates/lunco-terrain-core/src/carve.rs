@@ -18,9 +18,15 @@
 //! height brushes do. Primitives combine with a **smooth union** so intersecting
 //! bores blend into one organic void instead of showing a hard seam.
 
-use std::collections::HashMap;
-
 use crate::source::HeightSource;
+
+/// Soft cap on dense bucket-grid cells (mirrors [`crate::crater`]). The cell size is
+/// derived from the largest primitive extent, so a field of ONLY tiny carves spread
+/// over kilometres would otherwise mint millions of cells; doubling the cell size
+/// until the grid fits is output-neutral (a larger cell only makes a query consider
+/// more candidates, and a candidate beyond `2·smooth_k` folds as an exact `min`, so
+/// it cannot change the result).
+const MAX_BUCKET_CELLS: u128 = 1 << 21;
 
 /// A signed-distance primitive whose interior is void (carved away). Distances are
 /// in metres; negative inside the solid, zero on its surface, positive outside.
@@ -81,7 +87,20 @@ pub struct CarveField {
     /// Smooth-union radius (metres). `0` = hard union (`min`).
     smooth_k: f64,
     cell_size: f64,
-    buckets: HashMap<(i64, i64), Vec<u32>>,
+    /// Bucket-grid AABB origin: the cell coordinate of grid slot `(0, 0)`.
+    bucket_min: (i64, i64),
+    /// Bucket-grid dimensions (cells).
+    bucket_nx: usize,
+    bucket_nz: usize,
+    /// Dense row-major CSR bucket grid over the field's cell AABB (same layout as
+    /// [`crate::crater`]'s index): cell `(cx, cz)` holds
+    /// `entries[starts[k]..starts[k + 1]]` (`k = (cz − min_z)·nx + (cx − min_x)`) —
+    /// indices into `prims` whose expanded footprint overlaps that cell. The per-
+    /// sample `sdf`/`is_open` lookup is the baker + collider inner loop, so the tuple
+    /// hash a `HashMap<(i64, i64), Vec<u32>>` paid per sample cost more than the two
+    /// subtracts + multiply the dense grid pays. Queries outside the AABB → empty.
+    bucket_starts: Vec<u32>,
+    bucket_entries: Vec<u32>,
 }
 
 impl CarveField {
@@ -92,24 +111,90 @@ impl CarveField {
         // Cell just big enough that a primitive (plus its blend margin) spans a
         // bounded neighbourhood of cells.
         let max_extent = prims.iter().map(|p| p.xz_extent()).fold(0.0_f64, f64::max);
-        let cell_size = (max_extent + 4.0 * smooth_k).max(1.0);
-        let mut buckets: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
-        for (i, p) in prims.iter().enumerate() {
+        let mut cell_size = (max_extent + 4.0 * smooth_k).max(1.0);
+        // Expand each footprint by `2·smooth_k`: with the *gated* smooth-min (exact
+        // `min` once the nearest surface is ≥ k away), a primitive can only blend
+        // within `2k` of the query — so a `2k` margin captures every primitive the
+        // full fold would, making the bucketing exact.
+        let m = 2.0 * smooth_k;
+        let cell_box = |p: &CarvePrimitive, cell_size: f64| -> (i64, i64, i64, i64) {
             let (x0, z0, x1, z1) = p.xz_bounds();
-            // Expand the footprint by `2·smooth_k`: with the *gated* smooth-min (which
-            // is exact `min` once the nearest surface is ≥ k away), a primitive can
-            // only blend where it sits within `2k` of the query — so a `2k` margin
-            // captures every primitive the full fold would, making bucketing exact.
-            let m = 2.0 * smooth_k;
             let (min_cx, min_cz) = cell_of(x0 - m, z0 - m, cell_size);
             let (max_cx, max_cz) = cell_of(x1 + m, z1 + m, cell_size);
-            for cz in min_cz..=max_cz {
-                for cx in min_cx..=max_cx {
-                    buckets.entry((cx, cz)).or_default().push(i as u32);
+            (min_cx, min_cz, max_cx, max_cz)
+        };
+        // Grid AABB over every primitive's cell box; grow the cell until the dense
+        // grid stays bounded (see [`MAX_BUCKET_CELLS`] — output-neutral).
+        let (bucket_min, bucket_nx, bucket_nz) = loop {
+            let (mut min_cx, mut min_cz) = (i64::MAX, i64::MAX);
+            let (mut max_cx, mut max_cz) = (i64::MIN, i64::MIN);
+            for p in &prims {
+                let (x0, z0, x1, z1) = cell_box(p, cell_size);
+                min_cx = min_cx.min(x0);
+                min_cz = min_cz.min(z0);
+                max_cx = max_cx.max(x1);
+                max_cz = max_cz.max(z1);
+            }
+            if min_cx > max_cx {
+                break ((0, 0), 0, 0); // empty field
+            }
+            let nx = (max_cx - min_cx + 1) as u128;
+            let nz = (max_cz - min_cz + 1) as u128;
+            if nx * nz <= MAX_BUCKET_CELLS {
+                break ((min_cx, min_cz), nx as usize, nz as usize);
+            }
+            cell_size *= 2.0;
+        };
+        // CSR fill: count per cell, prefix-sum into starts, then place indices in
+        // ascending primitive order (same order the HashMap push gave).
+        let cells = bucket_nx * bucket_nz;
+        let slot = |cx: i64, cz: i64| -> usize {
+            (cz - bucket_min.1) as usize * bucket_nx + (cx - bucket_min.0) as usize
+        };
+        let mut counts = vec![0u32; cells];
+        for p in &prims {
+            let (x0, z0, x1, z1) = cell_box(p, cell_size);
+            if x0 > x1 {
+                continue;
+            }
+            for cz in z0..=z1 {
+                for cx in x0..=x1 {
+                    counts[slot(cx, cz)] += 1;
                 }
             }
         }
-        Self { prims, smooth_k, cell_size, buckets }
+        let mut bucket_starts = vec![0u32; cells + 1];
+        for k in 0..cells {
+            bucket_starts[k + 1] = bucket_starts[k] + counts[k];
+        }
+        let mut cursor: Vec<u32> = bucket_starts[..cells].to_vec();
+        let mut bucket_entries = vec![0u32; bucket_starts[cells] as usize];
+        for (i, p) in prims.iter().enumerate() {
+            let (x0, z0, x1, z1) = cell_box(p, cell_size);
+            if x0 > x1 {
+                continue;
+            }
+            for cz in z0..=z1 {
+                for cx in x0..=x1 {
+                    let k = slot(cx, cz);
+                    bucket_entries[cursor[k] as usize] = i as u32;
+                    cursor[k] += 1;
+                }
+            }
+        }
+        Self { prims, smooth_k, cell_size, bucket_min, bucket_nx, bucket_nz, bucket_starts, bucket_entries }
+    }
+
+    /// Candidate primitives for bucket cell `(cx, cz)` — empty outside the grid AABB.
+    #[inline]
+    fn bucket(&self, cx: i64, cz: i64) -> &[u32] {
+        let ux = cx.wrapping_sub(self.bucket_min.0);
+        let uz = cz.wrapping_sub(self.bucket_min.1);
+        if ux < 0 || uz < 0 || ux >= self.bucket_nx as i64 || uz >= self.bucket_nz as i64 {
+            return &[];
+        }
+        let k = uz as usize * self.bucket_nx + ux as usize;
+        &self.bucket_entries[self.bucket_starts[k] as usize..self.bucket_starts[k + 1] as usize]
     }
 
     /// Number of carve primitives.
@@ -120,10 +205,8 @@ impl CarveField {
     /// Signed distance to the carved void at `p` (negative inside the void). Folds
     /// only the primitives bucketed near `p`; empty/away → `f64::INFINITY` (solid).
     pub fn sdf(&self, p: [f64; 3]) -> f64 {
-        let key = cell_of(p[0], p[2], self.cell_size);
-        let Some(indices) = self.buckets.get(&key) else {
-            return f64::INFINITY;
-        };
+        let (cx, cz) = cell_of(p[0], p[2], self.cell_size);
+        let indices = self.bucket(cx, cz);
         let mut d = f64::INFINITY;
         for &i in indices {
             d = smin(d, self.prims[i as usize].sdf(p), self.smooth_k);
