@@ -1,0 +1,41 @@
+#usda 1.0
+(
+    defaultPrim = "Probe"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# A minimal mount-able component: the new-attach demo part (doc 48 §3.1).
+#
+# `Probe` is the `defaultPrim` — what an `AttachSpec`/`AttachComponent` references
+# in. It advertises a PLUG (`lunco:mount:plug` + `rel lunco:mount:frame`) so a host
+# socket that `accepts = "probe"` can snap it on: the Object Builder composes this
+# asset, reads the plug frame off `Mounts/hub`, and computes the placement that
+# makes the plug coincide with the socket. The plug sits 0.4 m above the part origin
+# on purpose, so the snap must CANCEL that offset — the visible proof mount frames
+# derive placement rather than trusting a hand-typed transform.
+def Cube "Probe" (
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+)
+{
+    double size = 0.8
+    color3f primvars:displayColor = (0.9, 0.2, 0.6)   # magenta
+    float physics:mass = 1.0
+    # Joints aren't replicated; keep this a stable kinematic-coupled body on clients
+    # (same rule as the JointTest/Base bodies).
+    string lunco:net:authority = "opaque"
+
+    uniform token lunco:mount:plug = "probe"
+    rel lunco:mount:frame = </Probe/Mounts/hub>
+
+    def Xform "Mounts"
+    {
+        def Xform "hub" (
+            kind = "mount"
+        )
+        {
+            double3 xformOp:translate = (0, 0.4, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
+    }
+}

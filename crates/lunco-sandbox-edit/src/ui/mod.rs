@@ -17,6 +17,7 @@ pub mod terrain_tools;
 pub mod connection_canvas;
 pub mod usd_prim_tree;
 pub mod usd_params;
+pub mod usd_mount;
 
 /// Schedule slot (in `Update`) for the UI *view-model* producers — the
 /// change-driven systems that derive render-ready state into resources for the
@@ -188,6 +189,13 @@ impl Plugin for SandboxEditUiPlugin {
         app.init_resource::<usd_params::UsdParamView>().add_systems(
             Update,
             usd_params::produce_usd_param_view.in_set(ViewModelSet),
+        );
+
+        // Mount snap: resolve each socket the selected host advertises + the
+        // placement that lands its part's plug on the socket (Inspector 🔩 Mount).
+        app.init_resource::<usd_mount::UsdMountView>().add_systems(
+            Update,
+            usd_mount::produce_usd_mount_view.in_set(ViewModelSet),
         );
 
         // Debug-viz settings menu rows (joint + wheel-force gizmos).

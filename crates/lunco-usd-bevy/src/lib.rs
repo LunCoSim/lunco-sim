@@ -55,6 +55,7 @@ pub mod author;
 pub mod usd_data;
 pub mod view;
 pub mod canonical;
+pub mod mount;
 pub mod read;
 use usd_data::UsdDataExt;
 pub use view::StageView;

@@ -362,9 +362,14 @@ Inspector + the two new projectors. The **USD prim tree** landed ✅ (2026-07-11
 flag off the composed stage via the same main-thread `CanonicalStages` producer the connection canvas
 uses (panels can't touch the `!Send` stage). Docked as the first `🌲 Prims` side-browser tab; clicking
 an entity-backed node selects it through the shared `apply_selection`; top two levels open by default.
-**Open:** the Inspector reading `customData {min,max,unit}` for bounded parameter sliders — still gated
-on assets authoring those ranges (§3.5), so it stays deferred until a consumer + authored data exist
-together.
+**Bounded parameter sliders — landed + renderer-verified (2026-07-11):** the Inspector reads per-attribute
+`customData {min,max,unit}` for data-driven sliders. Reader (`lunco-usd-bevy`: `AttrUiHint` +
+`StageView::attr_ui_hint`, parsing the `customData` `Dictionary` behind a plain-Rust struct so consumers
+need no `openusd`), view-model (`usd_params::produce_usd_param_view`), section
+(`inspector::usd_parameters_section`), authored ranges on `CosimTarget`
+(`primvars:wedge_count`/`band_count`). Write-back verified live: a `SetAttribute` on the primvar (the exact
+op the slider defers) re-runs the checker shader in the renderer (24×16 fine ↔ 2×3 coarse). Preserves the
+Inspector-*derives*-never-hardcodes rule (§3.5).
 
 **Phase 2 — wire.** ✅ **DONE** (2026-07-11). Connection canvas landed as a second `lunco-canvas`
 projector: `crates/lunco-sandbox-edit/src/ui/connection_canvas/` (`projection.rs` pure `collect_graph`
@@ -386,12 +391,62 @@ the HTTP/MCP API as-is — its nested `AttachSpec` (incl. the `AttachJoint` enum
 executor's `TypedReflectDeserializer`. **JSON contract** (single-field tuple structs unwrap to their
 inner value): `{ "doc": 1, "spec": { "edit_target": "@root@", "host_path": "/…", "name": "…", "asset":
 "<raw path>", "placement": [x,y,z], "rotate_deg": [x,y,z], "joint": "Fixed" | {"Revolute": {"axis":
-"X"}} } }`. So placement-based attach works today with one `execute_command`. **Open:** the
-`lunco:mount:*` schema on assets, the UI that reads two mount frames off the composed stage and calls
-`from_mount` (the frame *reading* is the app-validated part — note it needs the part's plug frame, which
-for a *new* attach lives in the not-yet-loaded asset, so it wants an asset-stage open; for a *retrofit*
-of an already-composed assembly both frames are on the live stage), and the
-`rocker_bogie.usda` retrofit that drops its hand-written joint anchors.
+"X"}} } }`. So placement-based attach works today with one `execute_command`.
+
+**Retrofit snap — landed + renderer-verified (2026-07-11).** The mount-frame *reading* the design held
+back (a wrong frame conversion is a physics bug only the renderer shows) is now built for the **retrofit**
+case, where both frames are on the live composed stage — no asset-stage open needed:
+
+- **`lunco:mount:*` schema** authored on a demo assembly (`sandbox_scene.usda` → `Base`): a host advertises
+  sockets under a `Mounts` group (`lunco:mount:socket` / `:joint` / `:axis`, `rel :part`), an attached
+  child part advertises its plug (`lunco:mount:plug`, `rel :frame`).
+- **Reader** (`lunco-usd-bevy/src/mount.rs`): `read_sockets` / `read_plug_frame` compose each mount prim's
+  frame **body-local** through the `Mounts` group via `local_transform_at` (`frame_in_body`). Tested against
+  a real composed stage (`mount_reader_tests`, 3 tests): socket reads body-local `(0,2.5,0)` not world
+  `(5,8.5,5)`; plug reads part-local; metadata + `part` rel compose.
+- **Op-lowering** `realign_component_ops` (`attach.rs`): re-authors an existing part's `xformOp:translate`/
+  `rotateXYZ` + the joint's `localPos0` from the resolved placement — *no* `AddPrim`/`SetRelationship`, so
+  it touches no topology and never rebuilds the world. Tested (2 tests): derives-anchor-from-placement,
+  authors-rotation-unconditionally (so a retrofit can clear a stale rotation to zero).
+- **UI**: Inspector `🔩 Mount` section (`inspector::mount_section`) over a NonSend view-model
+  (`usd_mount::produce_usd_mount_view`) — one row per socket, a `⟳ Snap` button that defers the realign ops
+  through `apply_usd_ops` (resolves the doc once, dispatches each journaled `ApplyUsdOp`), disabled when the
+  part is already aligned.
+- **Renderer-verified (2026-07-11):** dispatching the exact realign ops the button emits (`ApplyUsdOp` on
+  the twin doc) snapped the demo `Arm` from beside `Base` to directly on the socket (`(2,0,0)→(0,2.5,0)`),
+  **held stably** because `localPos0` moved with it — the joint didn't yank it back. This is the in-renderer
+  validation the frame math was held for. (The literal egui click isn't MCP-automatable, but the button's op
+  output is verified live; the section + view-model compile clean.)
+
+**New-attach snap — landed + tested (2026-07-11).** The other half: reference a component in and snap its
+plug to a socket, where the plug lives inside the *not-yet-loaded asset*, not the composed scene.
+
+- **`read_asset_plug_frame(fs_path)`** (`mount.rs`) composes the asset's full closure off disk
+  (`compose_file_to_stage`, resolving its references) and reads the plug frame off its `defaultPrim` — the
+  part every `AttachSpec` references in. Tested against the shipped demo component (`mount_probe.usda`,
+  plug 0.4 m above the part origin). Native-only (composition does file I/O).
+- **Socket schema** gained `lunco:mount:asset` (the raw component path a socket is designed to hold), read
+  into `MountSocket.asset`. An **empty** socket (no `rel :part`) that names an asset offers `⊕ Attach` in
+  the Inspector; the handler resolves the asset path against the asset root (`<cwd>/assets`),
+  `read_asset_plug_frame`s it, `AttachSpec::from_mount`s it onto the socket frame, and dispatches the
+  journaled `AttachComponent` (references + places + joints the part). Socket joint token → typed
+  `AttachJoint` via `attach_joint_from`.
+- **Demo:** `components/mount_probe.usda` (a magenta part with a `probe` plug) + an empty `probe` socket on
+  `Base` (`sandbox_scene.usda`) naming it. Select `Base` → `🔩 Mount` → `⊕ Attach mount_probe.usda`.
+- **Verified:** the reader/compose piece by the disk-compose test above; `from_mount` by its matrix tests;
+  `AttachComponent` was already API-verified (JSON contract above) with 5 op tests. Not run: the literal
+  egui click-through (no egui MCP automation; a live GUI instance was unavailable — the user's own
+  host+client session held the ports, and a competing GPU instance would risk it).
+
+**Still open — the shipped-rover retrofit (`physical_drivetrain.usda` / `rocker_bogie.usda`).** These author
+the duplication the schema removes literally — `over Wheel_FL.translate == Wheel_FL_Hinge.localPos0 ==
+(-0.9,-0.65,-1.225)`, one number typed twice per wheel. The retrofit *mechanism* is complete and proven
+(the verified `Base`/`Arm` snap is mechanically identical). What a literal "drop the hand-written anchors"
+needs beyond authoring mount frames is a **load-time mount-resolution pass** that derives `localPos0` from
+the frames at load — otherwise removing the anchors leaves the joints un-anchored. That is a separate
+feature, and authoring mounts onto a shipped, path-translated, cross-file drivetrain wants per-rover
+in-renderer physics verification (all wheels articulate) before it ships — so it is deliberately deferred
+rather than edited blind. The substrate (reader + `realign`/`from_mount` + snap UI) is what it rests on.
 
 > **Merge check (2026-07-11), physics bridge `cc87d39f`:** the plan survives intact. The bridge
 > (`lunco-usd-avian/src/big_space_bridge.rs`) only replaces avian's f32↔f64 *body world-pose* sync;

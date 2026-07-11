@@ -334,6 +334,10 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
         //    author a `customData {min,max,unit}` UI hint. ────────────────
         usd_parameters_section(ui, ctx, entity);
 
+        // ── Mount: snap an attached part onto the socket it declares, re-deriving
+        //    its placement + joint anchor from the mount frames (doc 48 §3.1). ──
+        mount_section(ui, ctx, entity);
+
         // ── Transform component ──────────────────────────────────────
         if ctx.get::<Transform>(entity).is_some() {
             egui::CollapsingHeader::new("Transform")
@@ -621,6 +625,174 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
                 });
             }
         });
+}
+
+/// Map a socket's `lunco:mount:joint` token (+ optional axis) to the typed
+/// [`AttachJoint`](lunco_usd::attach::AttachJoint) the attach lowering wants.
+/// Unknown tokens fall back to `Fixed` (the safe, axis-free default).
+#[cfg(not(target_arch = "wasm32"))]
+fn attach_joint_from(joint: &str, axis: Option<&str>) -> lunco_usd::attach::AttachJoint {
+    use lunco_usd::attach::{Axis, AttachJoint};
+    let axis = match axis {
+        Some("Y") => Axis::Y,
+        Some("Z") => Axis::Z,
+        _ => Axis::X,
+    };
+    match joint {
+        "revolute" => AttachJoint::Revolute { axis },
+        "prismatic" => AttachJoint::Prismatic { axis },
+        _ => AttachJoint::Fixed,
+    }
+}
+
+/// The 🔩 Mount section — one row per socket the selected host advertises.
+///
+/// - A socket **holding a part** offers **⟳ Snap**: re-author that part's transform
+///   + joint anchor from the mount frames (`realign_component_ops`) so both follow
+///   the socket. All frames are on the live stage.
+/// - An **empty socket** that names a default asset (`lunco:mount:asset`) offers
+///   **⊕ Attach**: the *new-attach* flow — compose the not-yet-loaded asset, read its
+///   plug frame, `from_mount` it onto the socket, and reference + joint it in via
+///   `AttachComponent`.
+///
+/// Reads the pre-resolved [`UsdMountView`](crate::ui::usd_mount::UsdMountView) (the
+/// socket frame math ran in the producer; it needs the `!Send` stage).
+fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
+    use lunco_usd::attach::realign_component_ops;
+
+    let (host_path, items) = match ctx.resource::<crate::ui::usd_mount::UsdMountView>() {
+        Some(v) if v.entity == Some(entity) && !v.items.is_empty() => {
+            (v.host_path.clone(), v.items.clone())
+        }
+        _ => return,
+    };
+
+    egui::CollapsingHeader::new("🔩 Mount")
+        .default_open(true)
+        .show(ui, |ui| {
+            let mut snap: Option<(String, String, [f64; 3], [f64; 3])> = None;
+            // (asset, child name, host, joint token, axis, socket frame)
+            let mut attach: Option<(String, String, String, String, Option<String>, Transform)> =
+                None;
+            for item in &items {
+                ui.horizontal(|ui| {
+                    let joint = match &item.axis {
+                        Some(ax) => format!("{} {}", item.joint, ax),
+                        None => item.joint.clone(),
+                    };
+                    ui.label(format!("🔌 {} ({}, {joint})", item.socket, item.accepts));
+                });
+                match (&item.part_path, &item.part_leaf, item.placement, item.rotate_deg) {
+                    (Some(part), Some(leaf), Some(placement), Some(rotate)) => {
+                        ui.horizontal(|ui| {
+                            let btn = egui::Button::new(format!("⟳ Snap {leaf}"));
+                            let resp = ui.add_enabled(!item.aligned, btn);
+                            if resp.clicked() {
+                                snap = Some((part.clone(), item.joint_path.clone(), placement, rotate));
+                            }
+                            if item.aligned {
+                                ui.weak("aligned");
+                            } else {
+                                ui.weak(format!(
+                                    "→ ({:.2}, {:.2}, {:.2})",
+                                    placement[0], placement[1], placement[2]
+                                ));
+                            }
+                        });
+                    }
+                    // Empty socket with a suggested asset → offer a new-attach.
+                    _ => match &item.attach_asset {
+                        Some(asset) => {
+                            let leaf = asset.rsplit('/').next().unwrap_or(asset);
+                            ui.horizontal(|ui| {
+                                if ui.button(format!("⊕ Attach {leaf}")).clicked() {
+                                    attach = Some((
+                                        asset.clone(),
+                                        item.socket.clone(),
+                                        host_path.clone(),
+                                        item.joint.clone(),
+                                        item.axis.clone(),
+                                        item.socket_frame,
+                                    ));
+                                }
+                                ui.weak("empty");
+                            });
+                        }
+                        None => {
+                            ui.weak("  (empty)");
+                        }
+                    },
+                }
+            }
+            if let Some((part, joint, placement, rotate)) = snap {
+                ctx.defer(move |world| {
+                    let ops = realign_component_ops(
+                        lunco_usd::document::LayerId::root(),
+                        part,
+                        joint,
+                        placement,
+                        rotate,
+                    );
+                    apply_usd_ops(world, entity, ops);
+                });
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some((asset, name, host, joint_tok, axis, socket_frame)) = attach {
+                ctx.defer(move |world| {
+                    attach_component_at_socket(
+                        world,
+                        entity,
+                        host,
+                        name,
+                        asset,
+                        attach_joint_from(&joint_tok, axis.as_deref()),
+                        socket_frame,
+                    );
+                });
+            }
+            #[cfg(target_arch = "wasm32")]
+            let _ = &attach;
+        });
+}
+
+/// Perform a new-attach: read the asset's plug frame off its (not-yet-loaded) file,
+/// `from_mount` it onto `socket_frame`, and dispatch [`AttachComponent`] to the
+/// host's document. Runs in a deferred `&mut World` closure (the asset composition
+/// does file I/O — a one-shot click, never per frame). Native-only.
+#[cfg(not(target_arch = "wasm32"))]
+fn attach_component_at_socket(
+    world: &mut World,
+    entity: Entity,
+    host_path: String,
+    name: String,
+    asset: String,
+    joint: lunco_usd::attach::AttachJoint,
+    socket_frame: Transform,
+) {
+    use lunco_usd::attach::AttachSpec;
+    // Asset paths are relative to the asset source root (`<cwd>/assets`), which is
+    // how the running app resolves them (see `AssetPlugin.file_path`).
+    let fs_path = std::env::current_dir()
+        .unwrap_or_default()
+        .join("assets")
+        .join(&asset);
+    let Some(plug) = lunco_usd_bevy::mount::read_asset_plug_frame(&fs_path) else {
+        bevy::log::warn!("[mount] no plug frame in asset `{asset}` ({}); attach skipped", fs_path.display());
+        return;
+    };
+    let Some(doc) = resolve_doc_for_entity(world, entity) else {
+        return;
+    };
+    let spec = AttachSpec::from_mount(
+        LayerId::root(),
+        host_path,
+        name,
+        asset,
+        joint,
+        socket_frame,
+        plug,
+    );
+    world.trigger(lunco_usd::commands::AttachComponent { doc, spec });
 }
 
 /// [`SetEnvironmentLight`](lunco_environment::SetEnvironmentLight) command
@@ -1936,6 +2108,44 @@ fn comms_orbit_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
     ui.separator();
 }
 
+/// Resolve the editable USD document backing `entity`'s stage — the same
+/// asset↔document match `apply_usd_path_attribute_change` needs, factored out so a
+/// caller authoring a *sequence* of ops (the mount snap) resolves the doc once and
+/// dispatches every op to it. Falls back to the viewport's active doc.
+fn resolve_doc_for_entity(world: &World, entity: Entity) -> Option<lunco_doc::DocumentId> {
+    let prim = world.get::<UsdPrimPath>(entity)?;
+    let asset_server = world.get_resource::<AssetServer>()?;
+    let asset_path = asset_server.get_path(prim.stage_handle.id())?;
+    let path_str = asset_path.path().to_string_lossy().to_string();
+
+    let doc_id = world.get_resource::<UsdDocumentRegistry>().and_then(|reg| {
+        reg.ids().find(|id| {
+            reg.host(*id).is_some_and(|h| match h.document().origin() {
+                DocumentOrigin::File { path, .. } => path.to_string_lossy().ends_with(&path_str),
+                _ => false,
+            })
+        })
+    });
+
+    doc_id.or_else(|| {
+        world
+            .get_resource::<UsdViewportState>()
+            .and_then(|v| v.active_doc())
+    })
+}
+
+/// Apply a sequence of typed [`UsdOp`]s to `entity`'s backing document, in order —
+/// each journals and inverts on its own. Used by the mount snap, which re-authors a
+/// part's transform + joint anchor as four ops.
+fn apply_usd_ops(world: &mut World, entity: Entity, ops: Vec<UsdOp>) {
+    let Some(doc) = resolve_doc_for_entity(world, entity) else {
+        return;
+    };
+    for op in ops {
+        world.trigger(ApplyUsdOp { doc, op });
+    }
+}
+
 fn apply_usd_path_attribute_change(
     world: &mut World,
     entity: Entity,
@@ -1944,40 +2154,7 @@ fn apply_usd_path_attribute_change(
     type_name: &str,
     value: String,
 ) {
-    let Some(prim) = world.get::<UsdPrimPath>(entity).cloned() else {
-        return;
-    };
-    let Some(asset_server) = world.get_resource::<AssetServer>() else {
-        return;
-    };
-    let Some(asset_path) = asset_server.get_path(prim.stage_handle.id()) else {
-        return;
-    };
-    let path_str = asset_path.path().to_string_lossy();
-
-    let Some(usd_registry) = world.get_resource::<UsdDocumentRegistry>() else {
-        return;
-    };
-    let doc_id = usd_registry.ids().find(|id| {
-        if let Some(h) = usd_registry.host(*id) {
-            match h.document().origin() {
-                DocumentOrigin::File { path, .. } => {
-                    path.to_string_lossy().ends_with(&*path_str)
-                }
-                _ => false,
-            }
-        } else {
-            false
-        }
-    });
-
-    let doc_id = doc_id.or_else(|| {
-        world
-            .get_resource::<UsdViewportState>()
-            .and_then(|v| v.active_doc())
-    });
-
-    if let Some(doc) = doc_id {
+    if let Some(doc) = resolve_doc_for_entity(world, entity) {
         let op = UsdOp::SetAttribute {
             edit_target: LayerId::root(),
             path: prim_path,
