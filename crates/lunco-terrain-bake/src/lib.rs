@@ -177,7 +177,7 @@ pub fn grid_cache_key(meta_yaml: &[u8], tif: &[u8], job: &DemBakeJob) -> u64 {
     h.write_bytes(tif);
     // Serialization of this plain struct can't fail; fold empty on the
     // impossible error rather than panicking a cache path.
-    h.write_bytes(&bincode::serialize(job).unwrap_or_default());
+    h.write_bytes(&bincode::serde::encode_to_vec(job, bincode::config::standard()).unwrap_or_default());
     h.finish()
 }
 

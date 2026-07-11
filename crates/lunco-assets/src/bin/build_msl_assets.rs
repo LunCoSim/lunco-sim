@@ -335,7 +335,8 @@ fn pre_parse(
 }
 
 fn serialise_parsed(parsed: &[(String, rumoca_ir_ast::StoredDefinition)], dest: &Path) -> u64 {
-    let raw = bincode::serialize(parsed).expect("bincode serialise parsed");
+    let raw = bincode::serde::encode_to_vec(parsed, bincode::config::standard())
+        .expect("bincode serialise parsed");
     let uncompressed = raw.len() as u64;
     let file = File::create(dest).expect("create parsed tmp");
     let buf = BufWriter::new(file);

@@ -152,6 +152,9 @@ lightyear = { version = "0.28.0", default-features = false, optional = true, fea
 # Host TLS identity loading (production certbot cert via env paths). File reads
 # route through lunco-storage (shared dep, see above); rustls-pemfile turns the
 # PEM into DER for wtransport's sync `Identity::new`.
+# Pinned to the wtransport that aeronet_webtransport 0.21 (lightyear 0.28's IO
+# layer) links — the Identity handed to lightyear must be the same type. Do not
+# bump past it until lightyear/aeronet do.
 wtransport = "0.6.1"
 rustls-pemfile = "2"
 # Single-instance IPC for `luncosim://` deep-links: forward a clicked link to the

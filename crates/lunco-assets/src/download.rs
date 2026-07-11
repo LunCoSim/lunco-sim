@@ -153,7 +153,8 @@ pub fn download_asset_with_control(
             if !expected.is_empty() {
                 use sha2::{Digest, Sha256};
                 if let Ok(bytes) = std::fs::read(&dest) {
-                    let hash = format!("{:x}", Sha256::digest(&bytes));
+                    let hash: String =
+                        Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
                     if hash == *expected {
                         println!(
                             "  ✓ {} already installed at {} (sha256 match)",
@@ -186,10 +187,12 @@ pub fn download_asset_with_control(
     let response = ureq::get(&entry.url).call()
         .map_err(|e| DownloadError::DownloadFailed(entry.url.clone(), e.to_string()))?;
     let total: u64 = response
-        .header("content-length")
+        .headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
-    let mut reader = response.into_reader();
+    let mut reader = response.into_body().into_reader();
     let mut bytes: Vec<u8> = if total > 0 {
         Vec::with_capacity(total as usize)
     } else {
@@ -213,8 +216,8 @@ pub fn download_asset_with_control(
     }
 
     // Compute SHA-256
-    use sha2::{Sha256, Digest};
-    let hash = format!("{:x}", Sha256::digest(&bytes));
+    use sha2::{Digest, Sha256};
+    let hash: String = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
 
     // Check against expected if provided and non-empty
     if let Some(ref expected) = entry.sha256 {

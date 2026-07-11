@@ -338,9 +338,13 @@ impl MslLoadPhase {
 /// error mid-load.
 ///
 /// BUMP THIS whenever the pinned rumoca changes its AST / `StoredDefinition`
-/// shape. Producer (`build_msl_assets`) and consumer (`msl_remote`) share this
-/// one source of truth, so they can never drift apart.
-pub const EXPECTED_RUMOCA_ARTIFACT_TAG: &str = "rumoca-main-2026-06-15";
+/// shape, **or** the bundle's bincode encoding changes. Producer
+/// (`build_msl_assets`) and consumer (`msl_remote`) share this one source of
+/// truth, so they can never drift apart. The `+bincode2` suffix marks the
+/// bincode 1.3 (fixint) → bincode 2 `standard()` (varint) codec switch, which
+/// makes any older bundle undecodable — this bump rejects them cleanly so the
+/// runtime falls back to a source parse instead of decoding garbage.
+pub const EXPECTED_RUMOCA_ARTIFACT_TAG: &str = "rumoca-main-2026-06-15+bincode2";
 
 /// Schema of `manifest.json` written by `build_msl_assets`. Kept here
 /// (not in the build binary) so both producer and consumer share the type.
@@ -352,8 +356,8 @@ pub struct MslManifest {
     /// Optional: when present the wasm runtime fetches and deserialises
     /// it instead of parsing source files (which is unworkably slow
     /// on wasm — ~600 ms/file × 2670 files ≈ 27 minutes). The encoding
-    /// is bincode 1.3 and must match the rumoca version this artifact
-    /// was produced against; the manifest carries `rumoca_artifact_tag`
+    /// is bincode 2 `standard()` and must match the rumoca version this
+    /// artifact was produced against; the manifest carries `rumoca_artifact_tag`
     /// for the runtime to validate.
     #[serde(default)]
     pub parsed: Option<MslBundleEntry>,

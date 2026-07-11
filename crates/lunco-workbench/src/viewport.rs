@@ -573,7 +573,7 @@ pub fn egui_viewport_aware_picking(
                 continue;
             }
             // Over real chrome that egui wants → emit a high-order capture hit.
-            if ctx.get_mut().wants_pointer_input() {
+            if ctx.get_mut().egui_wants_pointer_input() {
                 out.write(PointerHits::new(
                     *id,
                     vec![(entity, HitData::new(entity, 0.0, None, None))],
@@ -622,8 +622,8 @@ pub fn track_egui_focus(
     // input, the scene shouldn't get it.
     for mut ctx in q.iter_mut() {
         let c = ctx.get_mut();
-        kb |= c.wants_keyboard_input();
-        ptr |= c.wants_pointer_input();
+        kb |= c.egui_wants_keyboard_input();
+        ptr |= c.egui_wants_pointer_input();
     }
     // Over the viewport rect the pointer "want" is just the transparent
     // ViewportPanel leaf — the scene owns the pointer there.

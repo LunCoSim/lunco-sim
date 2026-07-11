@@ -2427,13 +2427,25 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
     // window control buttons (─ ▢ ✕) sit on the far right on
     // Linux/Windows. macOS keeps native traffic lights — we just inset
     // the menu past them.
-    egui::TopBottomPanel::top("lunco_workbench_menu_bar")
+    // egui 0.35 unified the panel API: panels, the central area, and the dock
+    // now render *inside* a `Ui` rather than directly onto the `Context`. Build
+    // one root Ui spanning the whole viewport; every panel below shows into it,
+    // consuming edges in call order, and the dock/centre takes the remainder.
+    let mut viewport_ui = egui::Ui::new(
+        ctx.clone(),
+        "lunco_workbench_viewport".into(),
+        egui::UiBuilder::new()
+            .layer_id(egui::LayerId::background())
+            .max_rect(ctx.viewport_rect()),
+    );
+
+    egui::Panel::top("lunco_workbench_menu_bar")
         // Match the dock tab-bar height so the merged title-bar
         // doesn't read as a thin sliver above thicker rows below.
         // 30px is roughly egui_dock's default tab strip height with
         // our font scale.
-        .exact_height(30.0)
-        .show(ctx, |ui| {
+        .exact_size(30.0)
+        .show(&mut viewport_ui, |ui| {
         ui.style_mut().visuals = theme.to_visuals();
 
         // Drag region must be registered BEFORE the menu buttons so
@@ -3142,17 +3154,17 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
     // shows in the strip; click opens a popup with recent history.
     // Falls back to the legacy `layout.status` text when the bus is
     // empty so existing callers keep working during the migration.
-    egui::TopBottomPanel::bottom("lunco_workbench_status_bar").show(ctx, |ui| {
+    egui::Panel::bottom("lunco_workbench_status_bar").show(&mut viewport_ui, |ui| {
         ui.style_mut().visuals = theme.to_visuals();
         render_status_bar_inner(ui, world, layout, theme);
     });
 
     // ── Activity bar ────────────────────────────────────────────────
     if layout.activity_bar {
-        egui::SidePanel::left("lunco_workbench_activity_bar")
+        egui::Panel::left("lunco_workbench_activity_bar")
             .resizable(false)
-            .exact_width(40.0)
-            .show(ctx, |ui| {
+            .exact_size(40.0)
+            .show(&mut viewport_ui, |ui| {
                 ui.style_mut().visuals = theme.to_visuals();
                 ui.vertical_centered(|ui| {
                     ui.add_space(4.0);
@@ -3198,7 +3210,7 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
             instance_panels,
             world,
         };
-        let mut style = Style::from_egui(ctx.style().as_ref());
+        let mut style = Style::from_egui(viewport_ui.style().as_ref());
         // Drop the outer dock border — it shows up as a thin line along
         // the inside edge of the side panels and looks like dead pixels
         // when the dock is otherwise transparent.
@@ -3274,7 +3286,7 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
             && screen.width() > 1.0
             && screen.height() > 1.0
         {
-            DockArea::new(dock).style(style).show(ctx, &mut viewer);
+            DockArea::new(dock).style(style).show_inside(&mut viewport_ui, &mut viewer);
             // After the dock has laid itself out, publish the area
             // rect under a generic "panel.center" anchor so the help
             // tour can spotlight the dock content as a whole.
@@ -3300,12 +3312,12 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
         let bottom_default = (screen.height() * 0.20).max(120.0);
 
         if let Some(id) = layout.side_browser.first().copied() {
-            let r = egui::SidePanel::left("lunco_workbench_side_panel_left")
+            let r = egui::Panel::left("lunco_workbench_side_panel_left")
                 .resizable(true)
-                .default_width(side_default)
-                .min_width(120.0)
-                .max_width(screen.width() * 0.3)
-                .show(ctx, |ui| {
+                .default_size(side_default)
+                .min_size(120.0)
+                .max_size(screen.width() * 0.3)
+                .show(&mut viewport_ui, |ui| {
                     ui.style_mut().visuals = theme.to_visuals();
                     render_panel_solo(ui, &id, layout, world);
                 });
@@ -3314,12 +3326,12 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
             }
         }
         if let Some(id) = layout.right_inspector.first().copied() {
-            let r = egui::SidePanel::right("lunco_workbench_side_panel_right")
+            let r = egui::Panel::right("lunco_workbench_side_panel_right")
                 .resizable(true)
-                .default_width(right_default)
-                .min_width(140.0)
-                .max_width(screen.width() * 0.3)
-                .show(ctx, |ui| {
+                .default_size(right_default)
+                .min_size(140.0)
+                .max_size(screen.width() * 0.3)
+                .show(&mut viewport_ui, |ui| {
                     ui.style_mut().visuals = theme.to_visuals();
                     render_panel_solo(ui, &id, layout, world);
                 });
@@ -3328,11 +3340,11 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
             }
         }
         if let Some(id) = layout.bottom.first().copied() {
-            let r = egui::TopBottomPanel::bottom("lunco_workbench_bottom_panel")
+            let r = egui::Panel::bottom("lunco_workbench_bottom_panel")
                 .resizable(true)
-                .default_height(bottom_default)
-                .min_height(60.0)
-                .show(ctx, |ui| {
+                .default_size(bottom_default)
+                .min_size(60.0)
+                .show(&mut viewport_ui, |ui| {
                     ui.style_mut().visuals = theme.to_visuals();
                     render_panel_solo(ui, &id, layout, world);
                 });

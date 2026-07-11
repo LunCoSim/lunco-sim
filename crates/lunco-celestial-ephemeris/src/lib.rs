@@ -401,10 +401,12 @@ struct EphemerisFetch {
 #[cfg(not(target_arch = "wasm32"))]
 fn fetch_horizons(url: &str) -> Option<String> {
     let resp = ureq::get(url)
-        .timeout(std::time::Duration::from_secs(20))
+        .config()
+        .timeout_global(Some(std::time::Duration::from_secs(20)))
+        .build()
         .call()
         .ok()?;
-    let text = resp.into_string().ok()?;
+    let text = resp.into_body().read_to_string().ok()?;
     let start = text.find("$$SOE")?;
     let end = text.find("$$EOE")?;
     Some(text[start..end].replace("$$SOE", "").replace("$$EOE", ""))

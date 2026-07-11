@@ -483,7 +483,7 @@ pub fn keyboard_to_intent(
     let wants_keyboard = egui_ctx
         .ctx_mut()
         .ok()
-        .map(|c| c.wants_keyboard_input())
+        .map(|c| c.egui_wants_keyboard_input())
         .unwrap_or(false);
 
     for (chord, intent) in keybindings.map.iter() {

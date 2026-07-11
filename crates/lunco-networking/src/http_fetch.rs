@@ -206,7 +206,8 @@ fn verified(cid: Vec<u8>, url: String, fetched: Result<Vec<u8>, String>) -> Fetc
 fn fetch_bytes_native(url: &str) -> Result<Vec<u8>, String> {
     let resp = ureq::get(url).call().map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();
-    std::io::Read::read_to_end(&mut resp.into_reader(), &mut bytes).map_err(|e| e.to_string())?;
+    std::io::Read::read_to_end(&mut resp.into_body().into_reader(), &mut bytes)
+        .map_err(|e| e.to_string())?;
     Ok(bytes)
 }
 

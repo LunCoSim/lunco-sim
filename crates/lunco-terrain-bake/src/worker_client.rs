@@ -87,8 +87,11 @@ fn handle_reply(data: JsValue) {
             return;
         }
     };
-    let header: BakeReplyHeader = match bincode::deserialize(&header_bytes) {
-        Ok(h) => h,
+    let header: BakeReplyHeader = match bincode::serde::decode_from_slice::<BakeReplyHeader, _>(
+        &header_bytes,
+        bincode::config::standard(),
+    ) {
+        Ok((h, _)) => h,
         Err(e) => {
             web_sys::console::error_2(&"[dem-worker] bad header".into(), &e.to_string().into());
             return;
@@ -125,8 +128,8 @@ fn handle_reply(data: JsValue) {
 /// copy). The worker replies asynchronously via [`drain_replies`].
 pub fn dispatch(id: u32, job: &DemBakeJob, meta_yaml: &str, tif: &[u8]) -> Result<(), JsValue> {
     ensure_pool()?;
-    let job_bytes =
-        bincode::serialize(job).map_err(|e| JsValue::from_str(&format!("job encode: {e}")))?;
+    let job_bytes = bincode::serde::encode_to_vec(job, bincode::config::standard())
+        .map_err(|e| JsValue::from_str(&format!("job encode: {e}")))?;
 
     let job_arr = Uint8Array::new_with_length(job_bytes.len() as u32);
     job_arr.copy_from(&job_bytes);

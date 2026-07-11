@@ -9,7 +9,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::render_resource::PrimitiveTopology;
 use bevy_mesh::Indices;
-use rand::Rng;
+use rand::RngExt;
 use rand_chacha::rand_core::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
@@ -75,22 +75,22 @@ pub fn faceted_rock_mesh(seed: u64, cube_count: usize, radius: f32) -> Mesh {
     let mut indices: Vec<u32> = Vec::new();
 
     for _ in 0..cube_count.max(1) {
-        let s = radius * rng.gen_range(0.45..0.95);
+        let s = radius * rng.random_range(0.45..0.95);
         let half = Vec3::new(
-            s * rng.gen_range(0.6..1.0),
-            s * rng.gen_range(0.5..0.9),
-            s * rng.gen_range(0.6..1.0),
+            s * rng.random_range(0.6..1.0),
+            s * rng.random_range(0.5..0.9),
+            s * rng.random_range(0.6..1.0),
         ) * 0.5;
         let offset = Vec3::new(
-            rng.gen_range(-0.4..0.4),
-            rng.gen_range(-0.15..0.35),
-            rng.gen_range(-0.4..0.4),
+            rng.random_range(-0.4..0.4),
+            rng.random_range(-0.15..0.35),
+            rng.random_range(-0.4..0.4),
         ) * radius;
         let rot = Quat::from_euler(
             EulerRot::XYZ,
-            rng.gen_range(0.0..std::f32::consts::TAU),
-            rng.gen_range(0.0..std::f32::consts::TAU),
-            rng.gen_range(0.0..std::f32::consts::TAU),
+            rng.random_range(0.0..std::f32::consts::TAU),
+            rng.random_range(0.0..std::f32::consts::TAU),
+            rng.random_range(0.0..std::f32::consts::TAU),
         );
         append_box(&mut positions, &mut normals, &mut uvs, &mut indices, half, offset, rot);
     }

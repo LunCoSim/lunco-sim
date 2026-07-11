@@ -7,7 +7,7 @@
 
 use bevy::math::Vec2;
 use rand::seq::SliceRandom;
-use rand::Rng;
+use rand::RngExt;
 use rand_chacha::ChaCha8Rng;
 use rand_chacha::rand_core::SeedableRng;
 
@@ -40,8 +40,8 @@ fn rng_for(seed: u64, salt: u64) -> ChaCha8Rng {
 /// Standard-normal sample via Box–Muller (avoids a rand_distr dependency).
 fn gaussian(rng: &mut ChaCha8Rng) -> f32 {
     // u1 in (0,1] to keep ln() finite.
-    let u1: f32 = 1.0 - rng.gen::<f32>();
-    let u2: f32 = rng.gen::<f32>();
+    let u1: f32 = 1.0 - rng.random::<f32>();
+    let u2: f32 = rng.random::<f32>();
     (-2.0 * u1.ln()).sqrt() * (std::f32::consts::TAU * u2).cos()
 }
 
@@ -93,15 +93,15 @@ pub fn sample_layer(
         .map(|pos| Placement {
             pos,
             size: size.sample(&mut rng),
-            yaw: rng.gen::<f32>() * std::f32::consts::TAU,
-            dynamic: rng.gen::<f32>() < dynamic_fraction,
+            yaw: rng.random::<f32>() * std::f32::consts::TAU,
+            dynamic: rng.random::<f32>() < dynamic_fraction,
         })
         .collect()
 }
 
 fn uniform_positions(rng: &mut ChaCha8Rng, h: f32, count: usize) -> Vec<Vec2> {
     (0..count)
-        .map(|_| Vec2::new(rng.gen_range(-h..=h), rng.gen_range(-h..=h)))
+        .map(|_| Vec2::new(rng.random_range(-h..=h), rng.random_range(-h..=h)))
         .collect()
 }
 
@@ -113,7 +113,7 @@ fn clustered_positions(
     spread: f32,
 ) -> Vec<Vec2> {
     let centers: Vec<Vec2> = (0..clusters)
-        .map(|_| Vec2::new(rng.gen_range(-h..=h), rng.gen_range(-h..=h)))
+        .map(|_| Vec2::new(rng.random_range(-h..=h), rng.random_range(-h..=h)))
         .collect();
     (0..count)
         .map(|i| {
@@ -143,7 +143,7 @@ fn poisson_positions(rng: &mut ChaCha8Rng, h: f32, min_spacing: f32, cap: usize)
     };
 
     // Seed with one random point.
-    let first = Vec2::new(rng.gen_range(-h..=h), rng.gen_range(-h..=h));
+    let first = Vec2::new(rng.random_range(-h..=h), rng.random_range(-h..=h));
     let (gx, gy) = to_grid(first);
     grid[gy * cols + gx] = 0;
     points.push(first);
@@ -154,8 +154,8 @@ fn poisson_positions(rng: &mut ChaCha8Rng, h: f32, min_spacing: f32, cap: usize)
         let origin = points[active_idx];
         let mut placed = false;
         for _ in 0..K {
-            let ang = rng.gen::<f32>() * std::f32::consts::TAU;
-            let rad = rng.gen_range(r..=2.0 * r);
+            let ang = rng.random::<f32>() * std::f32::consts::TAU;
+            let rad = rng.random_range(r..=2.0 * r);
             let cand = origin + Vec2::new(ang.cos(), ang.sin()) * rad;
             if cand.x < -h || cand.x > h || cand.y < -h || cand.y > h {
                 continue;

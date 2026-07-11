@@ -22,14 +22,18 @@ pub(crate) const PRIVATE_KEY: [u8; 32] = [0u8; 32];
 /// length prefix claims a huge `Vec`/`String` would otherwise make bincode
 /// pre-allocate that many bytes before reading a single field (memory DoS). 16
 /// MiB comfortably exceeds a full connect-baseline snapshot while bounding the
-/// blast radius. `with_fixint_encoding()` matches the format the free
-/// `bincode::serialize` below emits (the free fns are fixint; `options()` defaults
-/// to varint), so adding `.with_limit()` is purely a decode-side guard — the wire
-/// bytes are unchanged.
-pub(crate) const MAX_ENVELOPE_BYTES: u64 = 16 * 1024 * 1024;
+/// blast radius. The decode path threads this same cap into bincode's
+/// `Configuration::with_limit`, so a smaller frame with a lying length prefix
+/// still can't pre-allocate past it.
+pub(crate) const MAX_ENVELOPE_BYTES: usize = 16 * 1024 * 1024;
+
+// Wire codec = bincode 2 `standard()` (little-endian, variable-int). Encode and
+// decode MUST agree on the config; host and client always build together so the
+// schema-coupled binary format is safe. The decode path additionally clamps the
+// allocation limit — see `MAX_ENVELOPE_BYTES`.
 
 pub(crate) fn serialize_env(env: &SyncEnvelope) -> Option<Vec<u8>> {
-    match bincode::serialize(env) {
+    match bincode::serde::encode_to_vec(env, bincode::config::standard()) {
         Ok(bytes) => Some(bytes),
         Err(e) => {
             warn!("[sync] envelope encode failed: {e}");
@@ -41,16 +45,13 @@ pub(crate) fn serialize_env(env: &SyncEnvelope) -> Option<Vec<u8>> {
 pub(crate) fn deserialize_env(bytes: &[u8]) -> Option<SyncEnvelope> {
     // Reject oversize frames up front, then cap bincode's internal allocation so
     // a smaller frame with a lying length prefix can't pre-allocate gigabytes.
-    if bytes.len() as u64 > MAX_ENVELOPE_BYTES {
+    if bytes.len() > MAX_ENVELOPE_BYTES {
         warn!("[sync] envelope decode rejected: {} bytes exceeds cap", bytes.len());
         return None;
     }
-    use bincode::Options;
-    let opts = bincode::options()
-        .with_fixint_encoding()
-        .with_limit(MAX_ENVELOPE_BYTES);
-    match opts.deserialize(bytes) {
-        Ok(env) => Some(env),
+    let cfg = bincode::config::standard().with_limit::<MAX_ENVELOPE_BYTES>();
+    match bincode::serde::decode_from_slice::<SyncEnvelope, _>(bytes, cfg) {
+        Ok((env, _)) => Some(env),
         Err(e) => {
             warn!("[sync] envelope decode failed ({} bytes): {e}", bytes.len());
             None
