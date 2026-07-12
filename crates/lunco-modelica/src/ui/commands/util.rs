@@ -25,7 +25,7 @@ pub struct Exit {
 // ─── Observers ───────────────────────────────────────────────────────────────
 
 #[on_command(Ping)]
-pub fn on_ping(_cmd: Ping) {
+pub fn on_ping(trigger: On<Ping>) {
     // Intentional no-op.
 }
 

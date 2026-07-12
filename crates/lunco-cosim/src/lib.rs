@@ -252,7 +252,7 @@ pub struct SetPorts {
 /// through a `Commands` world closure.
 #[on_command(SetPorts)]
 fn on_set_ports(
-    cmd: SetPorts,
+    trigger: On<SetPorts>,
     registry: Res<lunco_core::ports::PortRegistry>,
     mut commands: Commands,
 ) {

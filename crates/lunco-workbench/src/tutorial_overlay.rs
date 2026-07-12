@@ -128,27 +128,27 @@ pub struct SetTourStep {
 pub struct ClearTour {}
 
 #[on_command(SetHint)]
-fn on_set_hint(cmd: SetHint, mut hud: ResMut<TutorialHud>) {
+fn on_set_hint(trigger: On<SetHint>, mut hud: ResMut<TutorialHud>) {
     hud.hint = cmd.text.clone();
 }
 
 #[on_command(SetObjectives)]
-fn on_set_objectives(cmd: SetObjectives, mut hud: ResMut<TutorialHud>) {
+fn on_set_objectives(trigger: On<SetObjectives>, mut hud: ResMut<TutorialHud>) {
     hud.objectives = cmd.text.clone();
 }
 
 #[on_command(Spotlight)]
-fn on_spotlight(cmd: Spotlight, mut hud: ResMut<TutorialHud>) {
+fn on_spotlight(trigger: On<Spotlight>, mut hud: ResMut<TutorialHud>) {
     hud.spotlight = Some((cmd.anchor.clone(), cmd.text.clone()));
 }
 
 #[on_command(ClearSpotlight)]
-fn on_clear_spotlight(_cmd: ClearSpotlight, mut hud: ResMut<TutorialHud>) {
+fn on_clear_spotlight(trigger: On<ClearSpotlight>, mut hud: ResMut<TutorialHud>) {
     hud.spotlight = None;
 }
 
 #[on_command(SetTourStep)]
-fn on_set_tour_step(cmd: SetTourStep, mut hud: ResMut<TutorialHud>) {
+fn on_set_tour_step(trigger: On<SetTourStep>, mut hud: ResMut<TutorialHud>) {
     hud.tour = Some(TourStep {
         index: cmd.index.max(0) as usize,
         total: cmd.total.max(0) as usize,
@@ -159,7 +159,7 @@ fn on_set_tour_step(cmd: SetTourStep, mut hud: ResMut<TutorialHud>) {
 }
 
 #[on_command(ClearTour)]
-fn on_clear_tour(_cmd: ClearTour, mut hud: ResMut<TutorialHud>) {
+fn on_clear_tour(trigger: On<ClearTour>, mut hud: ResMut<TutorialHud>) {
     hud.tour = None;
 }
 

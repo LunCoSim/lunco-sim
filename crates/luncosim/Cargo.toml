@@ -71,13 +71,9 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 # Celestial bodies + textures + ephemeris are the whole point, so on by default.
 default = ["celestial"]
 # Bakes Earth/Moon textures + the Artemis-II ephemeris into the binary (via
-# lunco-celestial's `embed-assets`). The celestial plugins themselves load
-# whenever `sandbox` is off (see below).
+# lunco-celestial's `embed-assets`). The celestial plugins themselves always
+# load — they ARE this binary.
 celestial = ["lunco-celestial/embed-assets"]
-# Legacy toggle: build the simulator WITHOUT the celestial/orbital layer (a
-# bare ground scene). `main.rs` gates `CelestialPlugin`/`EphemerisPlugin` on
-# `not(feature = "sandbox")`.
-sandbox = []
 
 [lints]
 workspace = true

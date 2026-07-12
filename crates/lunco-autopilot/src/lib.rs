@@ -1199,7 +1199,7 @@ pub struct EngageAutopilot {
 }
 
 #[on_command(EngageAutopilot)]
-fn on_engage_autopilot(cmd: EngageAutopilot, mut commands: Commands) {
+fn on_engage_autopilot(trigger: On<EngageAutopilot>, mut commands: Commands) {
     let throttle = if cmd.throttle != 0.0 { cmd.throttle } else { 0.5 };
     let mut e = commands.spawn(Autopilot::forward(cmd.vessel, cmd.index, throttle));
     if !cmd.spec_json.is_empty() {
@@ -1228,7 +1228,7 @@ pub struct SetAutopilotBehavior {
 
 #[on_command(SetAutopilotBehavior)]
 fn on_set_autopilot_behavior(
-    cmd: SetAutopilotBehavior,
+    trigger: On<SetAutopilotBehavior>,
     q: Query<(Entity, &Autopilot)>,
     mut commands: Commands,
 ) {

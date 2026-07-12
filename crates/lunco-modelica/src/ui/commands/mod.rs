@@ -48,16 +48,9 @@ impl Plugin for ModelicaCommandsPlugin {
             .init_resource::<PendingCloseAfterSave>()
             .init_resource::<PendingTabCloseScopes>()
             .init_resource::<lifecycle::AppCloseFlow>()
-            .add_observer(doc::on_undo_document)
-            .add_observer(doc::on_redo_document)
-            .add_observer(doc::on_save_document)
-            .add_observer(doc::on_save_as_document)
             .add_observer(lifecycle::finish_close_after_save)
-            .add_observer(lifecycle::on_close_document)
             .add_observer(lifecycle::on_document_closed_cleanup)
             .add_observer(crate::ui::uri_handler::on_modelica_uri_clicked)
-            .register_type::<AutoArrangeDiagram>()
-            .add_observer(crate::ui::panels::canvas_diagram::on_auto_arrange_diagram)
             .add_observer(intent::resolve_editor_intent)
             .add_observer(intent::resolve_new_document_intent)
             .add_systems(
@@ -94,6 +87,8 @@ impl Plugin for ModelicaCommandsPlugin {
 register_commands!(
     diagram::on_add_canvas_plot,
     plot::on_add_signal_to_plot,
+    crate::ui::panels::canvas_diagram::on_auto_arrange_diagram,
+    lifecycle::on_close_document,
     lifecycle::on_create_new_scratch_model,
     lifecycle::on_duplicate_active_doc,
     lifecycle::on_duplicate_model_from_read_only,
@@ -110,15 +105,20 @@ register_commands!(
     lifecycle::on_open,
     lifecycle::on_open_class,
     lifecycle::on_open_file,
+    lifecycle::on_open_in_new_view,
     nav::on_pan_canvas,
     util::on_ping,
     doc::on_redo,
+    doc::on_redo_document,
     doc::on_save_active_document,
     doc::on_save_active_document_as,
+    doc::on_save_as_document,
+    doc::on_save_document,
     sim::on_set_model_input,
     nav::on_set_view_mode,
     nav::on_set_zoom,
     doc::on_undo,
+    doc::on_undo_document,
 );
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

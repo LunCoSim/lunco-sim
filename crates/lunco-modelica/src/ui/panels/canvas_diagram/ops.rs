@@ -10,6 +10,7 @@ use bevy::prelude::*;
 
 use crate::document::ModelicaOp;
 use crate::pretty::{self, Placement};
+use crate::ui::commands::AutoArrangeDiagram;
 use crate::state::ModelicaDocumentRegistry;
 
 use super::coords::{ModelicaPos, canvas_to_modelica};
@@ -759,8 +760,9 @@ pub(super) fn apply_ops(
 ///
 /// Iterates the canvas scene (not the AST) so the order matches what
 /// the user sees. Each op is separately undo-able via Ctrl+Z.
+#[lunco_core::on_command(AutoArrangeDiagram)]
 pub fn on_auto_arrange_diagram(
-    trigger: On<crate::ui::commands::AutoArrangeDiagram>,
+    trigger: On<AutoArrangeDiagram>,
     mut commands: Commands,
 ) {
     let raw = trigger.event().doc;

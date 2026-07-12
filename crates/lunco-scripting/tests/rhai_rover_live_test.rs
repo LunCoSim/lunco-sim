@@ -42,6 +42,18 @@ struct BrakeCount(u32);
 #[derive(Resource, Default)]
 struct EventLog(Vec<String>); // names of every emitted TelemetryEvent
 
+// A SPY that deliberately shadows the real `SetPorts` (`lunco-cosim`).
+//
+// The name is load-bearing, not lazy copy-paste: command dispatch resolves by
+// *short type path*, so a rhai script calling `cmd("SetPorts", …)` is routed to
+// whichever `SetPorts` type this App registered. Declaring our own under the same
+// name is what lets the test intercept the script's real drive traffic and assert
+// on it — while keeping `lunco-scripting`'s test suite free of a dependency on
+// `lunco-cosim` (and thus on avian/physics) just to observe a port write.
+//
+// It is safe precisely because it is test-only: this type and the real one must
+// NEVER be registered in the same App, or the two observers would both fire. The
+// field layout mirrors the real command so the script-side payload is identical.
 #[Command]
 struct SetPorts {
     #[authz_target]
@@ -54,7 +66,7 @@ struct SetPorts {
 }
 
 #[on_command(SetPorts)]
-fn on_drive(_t: On<SetPorts>, mut log: ResMut<DriveLog>, mut brakes: ResMut<BrakeCount>) {
+fn on_drive(trigger: On<SetPorts>, mut log: ResMut<DriveLog>, mut brakes: ResMut<BrakeCount>) {
     let get = |name: &str| cmd.writes.iter().find(|(n, _)| n == name).map(|(_, v)| *v);
     if get("brake").is_some_and(|b| b > 0.5) {
         brakes.0 += 1;
@@ -68,13 +80,20 @@ fn on_drive(_t: On<SetPorts>, mut log: ResMut<DriveLog>, mut brakes: ResMut<Brak
 // A result-reporting command that "spawns" something and reports the new gid
 // back via `Ack.assigned` — stands in for any create command (AddComponent,
 // spawn, name allocation) whose result a script needs.
+//
+// Like the spy above, these fixtures are REAL commands (`#[Command]` +
+// `#[on_command]` + `register_commands!`, exactly as production verbs are wired),
+// not mocks. The whole point of the test is the round trip through the real
+// dispatch + `Ack.assigned` plumbing; a mock would only prove the mock works. Using
+// generic stand-in names instead of real verbs keeps the test honest about what it
+// covers — the *mechanism*, not one particular command.
 const SPAWNED_GID: i64 = 4242;
 
 #[Command(default)]
 struct SpawnThing {}
 
 #[on_command(SpawnThing)]
-fn on_spawn(_t: On<SpawnThing>) -> Result<Ack, String> {
+fn on_spawn(trigger: On<SpawnThing>) -> Result<Ack, String> {
     let mut ack = Ack::new(OpId::new());
     ack.assigned = serde_json::json!({ "gid": SPAWNED_GID });
     Ok(ack)
@@ -91,7 +110,7 @@ struct Report {
 }
 
 #[on_command(Report)]
-fn on_report(_t: On<Report>, mut cap: ResMut<CapturedData>) {
+fn on_report(trigger: On<Report>, mut cap: ResMut<CapturedData>) {
     cap.0.push(cmd.value);
 }
 

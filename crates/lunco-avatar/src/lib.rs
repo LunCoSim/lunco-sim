@@ -480,18 +480,14 @@ impl Plugin for LunCoAvatarPlugin {
            .init_resource::<SurfaceModeThreshold>();
         app.add_plugins(InputManagerPlugin::<UserIntent>::default());
         app.add_observer(on_user_intent);
-        app.add_observer(on_possess_command);
+        // Secondary observers on the SAME verbs — the authority-bookkeeping leg,
+        // not the command handlers (those go through `register_commands!`).
         app.add_observer(record_possession_authority);
-        app.add_observer(on_release_command);
         app.add_observer(release_possession_authority);
-        app.add_observer(on_focus_command);
         // Frame-consistent GT sampling for the orbit camera (see
         // `OrbitFrameSample`): First is the only point in the frame where
         // camera and site-anchored celestial GTs share one convention.
         app.add_systems(bevy::app::First, sample_orbit_frame);
-        app.add_observer(on_follow_command);
-        app.add_observer(on_surface_teleport_command);
-        app.add_observer(on_leave_surface_command);
         // Scene-click possession/follow/focus is now bevy_picking-driven: a
         // global `Pointer<Click>` observer (egui occlusion handled by the
         // framework), replacing the old `ScenePointer`-gated Update system.
@@ -527,21 +523,14 @@ impl Plugin for LunCoAvatarPlugin {
         // `recording` feature) the EasyScreenRecordPlugin encoder bridge.
         recording::build_recording(app);
         // Possession / follow commands cross the wire (a client takes control of
-        // the host's authoritative rover, then drives it). The wire apply path
-        // looks them up by reflected short type-path, so they MUST be in the type
-        // registry. Their observers are wired manually below (not via the
-        // `register_commands!` macro, which is what registers a type), so the
-        // types are otherwise never registered — the host then logs "unknown
-        // command type 'PossessVessel'", never records the client's ownership,
-        // and rejects every subsequent SetPorts as unauthorized (the "client
-        // rover won't move" bug). `#[Command]` already derives `#[reflect(Event)]`,
-        // so registering the type also attaches the `ReflectEvent` the apply path
-        // triggers through.
-        app.register_type::<PossessVessel>()
-           .register_type::<ReleaseVessel>()
-           .register_type::<FollowTarget>()
-           .register_type::<FocusTarget>();
-
+        // the host's authoritative rover, then drives it), and the wire apply path
+        // looks them up by reflected short type-path — so the type MUST be in the
+        // registry. They used to be wired observer-by-hand + type-by-hand, and when
+        // the second half was forgotten the host logged "unknown command type
+        // 'PossessVessel'", never recorded the client's ownership, and rejected
+        // every subsequent SetPorts as unauthorized (the "client rover won't move"
+        // bug). `register_commands!` now does both halves in one step, so the two
+        // can't drift apart again.
         app.register_type::<SpringArmCamera>()
            .register_type::<OrbitCamera>()
            .register_type::<ChaseCamera>()
@@ -555,7 +544,6 @@ impl Plugin for LunCoAvatarPlugin {
            .register_type::<MouseSensitivity>();
 
         app.register_settings_section::<ProfileSettings>();
-        app.register_type::<UpdateProfile>().add_observer(on_update_profile);
         app.init_resource::<RoverNameTagSettings>()
            .register_type::<RoverNameTagSettings>();
 
@@ -2170,6 +2158,7 @@ fn avatar_escape_possession(
 ///
 /// Keeps the camera at its current position — no jarring teleport.
 /// Switches to `FreeFlightCamera` mode with the current orientation preserved.
+#[on_command(ReleaseVessel)]
 fn on_release_command(
     trigger: On<ReleaseVessel>,
     mut commands: Commands,
@@ -2283,6 +2272,7 @@ fn get_grid_for_entity(
 }
 
 /// Possesses a vessel with an instant camera transition.
+#[on_command(PossessVessel)]
 fn on_possess_command(
     trigger: On<PossessVessel>,
     mut commands: Commands,
@@ -2451,6 +2441,7 @@ fn on_possess_command(
 /// vessel. Used for non-`Vessel` objects (balloons, props, observation
 /// targets). Idempotent — clicking the same already-followed target is a
 /// no-op so we don't churn components every frame.
+#[on_command(FollowTarget)]
 fn on_follow_command(
     trigger: On<FollowTarget>,
     mut commands: Commands,
@@ -2542,6 +2533,7 @@ fn on_follow_command(
 /// transforms. (An earlier version teleported the avatar here through
 /// `world_position_seeded`, which drops the site-anchored solar grids'
 /// rotations — landing the camera on a phantom point.)
+#[on_command(FocusTarget)]
 fn on_focus_command(
     trigger: On<FocusTarget>,
     mut commands: Commands,
@@ -2721,6 +2713,7 @@ fn update_avatar_clip_planes_system(
 /// itself. `SurfaceCamera` rebuilds world-space rotation every frame from
 /// `LocalGravityField.local_up`, so the camera stays surface-relative without
 /// inheriting the Body's rotation. `FloatingOrigin` must be on a Grid.
+#[on_command(TeleportToSurface)]
 fn on_surface_teleport_command(
     trigger: On<TeleportToSurface>,
     mut commands: Commands,
@@ -2832,6 +2825,7 @@ fn on_surface_teleport_command(
 ///
 /// Teleports camera to 3x body radius altitude and switches to OrbitCamera.
 /// Re-parents the camera back to the EMB Grid (star-fixed frame).
+#[on_command(LeaveSurface)]
 fn on_leave_surface_command(
     trigger: On<LeaveSurface>,
     mut commands: Commands,
@@ -3071,6 +3065,7 @@ fn project_possess_event(_t: On<PossessVessel>, mut commands: Commands) {
     });
 }
 
+#[on_command(UpdateProfile)]
 fn on_update_profile(
     trigger: On<UpdateProfile>,
     guard: Res<lunco_core::SyncApplyGuard>,
@@ -3106,7 +3101,7 @@ pub struct ScreenNotifications {
 /// and dispatchable through `/api/commands` and rhai `cmd("ShowNotification")`).
 /// Pushes a toast onto [`ScreenNotifications`]; the ui overlay renders it.
 #[on_command(ShowNotification)]
-pub fn on_show_notification(cmd: ShowNotification, mut notes: ResMut<ScreenNotifications>) {
+pub fn on_show_notification(trigger: On<ShowNotification>, mut notes: ResMut<ScreenNotifications>) {
     let secs = if cmd.secs > 0.0 { cmd.secs } else { 4.5 };
     let kind = if cmd.kind.is_empty() { "info" } else { cmd.kind.as_str() }.to_string();
     info!("[notify:{kind}] {}", cmd.text);
@@ -3164,5 +3159,12 @@ register_commands!(
     on_toggle_recording,
     on_start_recording,
     on_stop_recording,
-    on_show_notification
+    on_show_notification,
+    on_surface_teleport_command,
+    on_leave_surface_command,
+    on_possess_command,
+    on_release_command,
+    on_focus_command,
+    on_follow_command,
+    on_update_profile
 );

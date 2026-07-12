@@ -1081,7 +1081,7 @@ pub struct LoadScene {
 
 #[on_command(LoadScene)]
 fn on_load_scene(
-    cmd: LoadScene,
+    trigger: On<LoadScene>,
     asset_server: Res<AssetServer>,
     stages: Res<Assets<UsdStageAsset>>,
     mut commands: Commands,
@@ -1185,7 +1185,7 @@ pub struct RestartScene {}
 
 #[on_command(RestartScene)]
 fn on_restart_scene(
-    _cmd: RestartScene,
+    trigger: On<RestartScene>,
     asset_server: Res<AssetServer>,
     mut commands: Commands,
     q_usd: Query<(Entity, &UsdPrimPath)>,
@@ -1260,7 +1260,7 @@ pub struct ClearScene {}
 
 #[on_command(ClearScene)]
 fn on_clear_scene(
-    _cmd: ClearScene,
+    trigger: On<ClearScene>,
     mut commands: Commands,
     q_usd: Query<(Entity, &UsdPrimPath)>,
     q_wires: Query<Entity, With<SimConnection>>,

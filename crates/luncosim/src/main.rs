@@ -94,15 +94,18 @@ fn main() {
     // (and so it satisfies the camera-invariant sentinel). Mirrors sandbox.
     app.add_systems(Update, lunco_workbench::auto_tag_workbench_3d_cameras);
 
-    #[cfg(not(feature = "sandbox"))]
-    {
-        app.add_plugins(lunco_celestial::CelestialPlugin)
-            .add_plugins(lunco_environment::EnvironmentPlugin)
-            .insert_resource(ClearColor(Color::BLACK));
+    // The celestial/orbital layer is what this binary IS — bodies, ephemeris,
+    // solar-system-scale big_space. (It used to be switchable off by a `sandbox`
+    // feature, back when a flat-ground rover world was a MODE of this app; that
+    // role is now the separate `lunco-sandbox` binary, and this app carries no
+    // terrain/USD stack to fall back on, so the toggle only produced an empty
+    // scene. Unconditional now.)
+    app.add_plugins(lunco_celestial::CelestialPlugin)
+        .add_plugins(lunco_environment::EnvironmentPlugin)
+        .insert_resource(ClearColor(Color::BLACK));
 
-        #[cfg(not(target_arch = "wasm32"))]
-        app.add_plugins(lunco_celestial_ephemeris::EphemerisPlugin);
-    }
+    #[cfg(not(target_arch = "wasm32"))]
+    app.add_plugins(lunco_celestial_ephemeris::EphemerisPlugin);
 
     // The dynamic ShaderMaterial pipeline (registers MaterialPlugin::<ShaderMaterial>
     // + schema reflection). Celestial Earth/Moon tiles render with blueprint.wgsl.

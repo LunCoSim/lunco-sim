@@ -14,7 +14,7 @@ use bevy::math::Isometry3d;
 use bevy::math::primitives::Cuboid;
 
 use crate::{SpawnState, SelectedEntities};
-use lunco_core::Command;
+use lunco_core::{on_command, register_commands, Command};
 
 /// Component marking an entity as currently selected.
 #[derive(Component)]
@@ -101,6 +101,12 @@ pub(crate) fn clear_selection(
 
 /// Observer for [`SelectEntity`]: resolves the api_id and routes through the
 /// shared [`apply_selection`] (or [`clear_selection`] on id 0).
+// `SelectEntity` is editor-only (Inspector highlight + gizmo), so it is registered
+// by `SandboxEditPlugin` rather than the headless `SpawnCommandPlugin` — but it goes
+// through the SAME type+observer registration as every other verb.
+register_commands!(on_select_entity);
+
+#[on_command(SelectEntity)]
 pub fn on_select_entity(
     trigger: On<SelectEntity>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,

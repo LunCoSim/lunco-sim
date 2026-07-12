@@ -74,6 +74,7 @@ pub fn on_redo(trigger: On<Redo>, mut commands: Commands) {
     });
 }
 
+#[on_command(UndoDocument)]
 pub fn on_undo_document(
     trigger: On<UndoDocument>,
     mut registry: ResMut<ModelicaDocumentRegistry>,
@@ -90,6 +91,7 @@ pub fn on_undo_document(
     );
 }
 
+#[on_command(RedoDocument)]
 pub fn on_redo_document(
     trigger: On<RedoDocument>,
     mut registry: ResMut<ModelicaDocumentRegistry>,
@@ -158,6 +160,7 @@ pub fn sync_editor_buffer_to_source(
     workbench.editor_buffer = source.to_string();
 }
 
+#[on_command(SaveDocument)]
 pub fn on_save_document(
     trigger: On<SaveDocument>,
     mut registry: ResMut<ModelicaDocumentRegistry>,
@@ -225,6 +228,7 @@ pub fn on_save_document(
     }
 }
 
+#[on_command(SaveAsDocument)]
 pub fn on_save_as_document(
     trigger: On<SaveAsDocument>,
     mut registry: ResMut<ModelicaDocumentRegistry>,

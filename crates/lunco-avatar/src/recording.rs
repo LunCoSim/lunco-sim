@@ -124,18 +124,18 @@ pub struct StartRecording {}
 pub struct StopRecording {}
 
 #[on_command(ToggleRecording)]
-pub fn on_toggle_recording(_cmd: ToggleRecording, mut state: ResMut<RecordingState>) {
+pub fn on_toggle_recording(trigger: On<ToggleRecording>, mut state: ResMut<RecordingState>) {
     let next = !state.active;
     set_recording(&mut state, next);
 }
 
 #[on_command(StartRecording)]
-pub fn on_start_recording(_cmd: StartRecording, mut state: ResMut<RecordingState>) {
+pub fn on_start_recording(trigger: On<StartRecording>, mut state: ResMut<RecordingState>) {
     set_recording(&mut state, true);
 }
 
 #[on_command(StopRecording)]
-pub fn on_stop_recording(_cmd: StopRecording, mut state: ResMut<RecordingState>) {
+pub fn on_stop_recording(trigger: On<StopRecording>, mut state: ResMut<RecordingState>) {
     set_recording(&mut state, false);
 }
 

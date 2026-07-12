@@ -13,7 +13,7 @@ use bevy::math::DVec3;
 use avian3d::prelude::{AngularVelocity, Collisions, LinearVelocity, PhysicsSystems, RigidBody};
 use avian3d::physics_transform::{Position, Rotation};
 use big_space::prelude::Grid;
-use lunco_core::Command;
+use lunco_core::{on_command, register_commands, Command};
 use lunco_obstacle_field::ObstacleFieldRoot;
 use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd::document::{UsdOp, LayerId};
@@ -85,6 +85,7 @@ impl Default for DetachJoint {
 pub struct RescanSpawnCatalog {}
 
 /// Observer for [`RescanSpawnCatalog`].
+#[on_command(RescanSpawnCatalog)]
 pub fn on_rescan_spawn_catalog(
     _trigger: On<RescanSpawnCatalog>,
     twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
@@ -98,6 +99,7 @@ pub fn on_rescan_spawn_catalog(
 
 /// Observer that handles DetachJoint commands — despawns the live joint entity in
 /// BOTH modes (the visible effect). Persistence is a decoupled observer below.
+#[on_command(DetachJoint)]
 pub fn on_detach_joint(
     trigger: On<DetachJoint>,
     mut commands: Commands,
@@ -261,6 +263,7 @@ pub fn persist_detach_to_runtime_layer(
 }
 
 /// Observer that handles SpawnEntity commands.
+#[on_command(SpawnEntity)]
 pub fn on_spawn_entity_command(
     trigger: On<SpawnEntity>,
     mut commands: Commands,
@@ -1905,6 +1908,7 @@ pub struct MoveEntity {
 }
 
 /// Observer for `MoveEntity`.
+#[on_command(MoveEntity)]
 pub fn on_move_entity_command(
     trigger: On<MoveEntity>,
     time: Res<Time>,
@@ -2660,6 +2664,7 @@ fn apply_pbr_param(mat: &mut StandardMaterial, key: &str, value: &str) -> bool {
 }
 
 /// Observer for [`SetObjectProperty`].
+#[on_command(SetObjectProperty)]
 pub fn on_set_object_property(
     trigger: On<SetObjectProperty>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
@@ -2791,6 +2796,7 @@ pub struct PendingFocus {
 
 /// Observer: validate + record the focus; all spatial math happens in
 /// [`apply_pending_focus`].
+#[on_command(FocusEntityById)]
 pub fn on_focus_entity_by_id(
     trigger: On<FocusEntityById>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
@@ -2951,6 +2957,7 @@ pub struct SetCameraLookAt {
 }
 
 /// Observer for [`SetCameraLookAt`].
+#[on_command(SetCameraLookAt)]
 pub fn on_set_camera_look_at(
     trigger: On<SetCameraLookAt>,
     mut q_avatar: Query<
@@ -3051,6 +3058,7 @@ pub struct ReloadShader {
 }
 
 /// Observer for [`ReloadShader`].
+#[on_command(ReloadShader)]
 pub fn on_reload_shader(trigger: On<ReloadShader>, asset_server: Res<AssetServer>) {
     let p = trigger.event().path.trim().to_string();
     let paths: Vec<String> = if p.is_empty() {
@@ -3084,6 +3092,7 @@ pub struct SetShaderSource {
 }
 
 /// Observer for [`SetShaderSource`].
+#[on_command(SetShaderSource)]
 pub fn on_set_shader_source(
     trigger: On<SetShaderSource>,
     asset_server: Res<AssetServer>,
@@ -3269,6 +3278,7 @@ pub struct CreateShader {
 
 /// Observer for [`CreateShader`].
 #[allow(clippy::too_many_arguments)]
+#[on_command(CreateShader)]
 pub fn on_create_shader(
     trigger: On<CreateShader>,
     twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
@@ -3322,6 +3332,7 @@ pub struct ImportShader {
 
 /// Observer for [`ImportShader`].
 #[allow(clippy::too_many_arguments, unused_variables, unused_mut)]
+#[on_command(ImportShader)]
 pub fn on_import_shader(
     trigger: On<ImportShader>,
     twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
@@ -3435,6 +3446,7 @@ pub fn maintain_catalogs(
 }
 
 /// Observer for [`RescanShaders`] — manual full re-scan of the shader catalog.
+#[on_command(RescanShaders)]
 pub fn on_rescan_shaders(
     _trigger: On<RescanShaders>,
     twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
@@ -3478,6 +3490,7 @@ pub struct DeleteShader {
 
 /// Observer for [`DeleteShader`].
 #[allow(unused_variables)]
+#[on_command(DeleteShader)]
 pub fn on_delete_shader(
     trigger: On<DeleteShader>,
     twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
@@ -3572,10 +3585,34 @@ fn doc_for_stage(
     })
 }
 
+// Generates `register_all_commands(app)` — every `#[Command]` this module owns,
+// each wired type + observer together. `persist_*_to_runtime_layer` are NOT here:
+// they are additional observers on the same verbs (the journaling/runtime-layer
+// leg), not the command handlers, so they stay plain `add_observer`s.
+register_commands!(
+    on_create_shader,
+    on_delete_shader,
+    on_detach_joint,
+    on_focus_entity_by_id,
+    on_import_shader,
+    on_move_entity_command,
+    on_reload_shader,
+    on_rescan_shaders,
+    on_rescan_spawn_catalog,
+    on_set_camera_look_at,
+    on_set_object_property,
+    on_set_shader_source,
+    on_spawn_entity_command,
+);
+
 impl Plugin for SpawnCommandPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_spawn_entity_command);
-        app.add_observer(on_detach_joint);
+        // Every `#[Command]` this crate owns — type + observer in one call, so a
+        // verb can't end up observable-but-unconstructible (the old split wired
+        // the observer by hand and then patched the type registry separately, and
+        // whenever the second half was forgotten the command silently vanished
+        // from the HTTP API / rhai / `discover_schema`).
+        register_all_commands(app);
         // Dock release as an actuator on the intent→port machinery (replaces the
         // hardcoded G-to-detach): register the `release` port backend, attach a
         // ReleaseActuator to every control-bound vessel, and edge-detect → detach.
@@ -3588,13 +3625,10 @@ impl Plugin for SpawnCommandPlugin {
             Update,
             remove_legacy_ground_prim.run_if(obstacle_field_scene_changed),
         );
-        app.add_observer(on_move_entity_command);
         // C4b: persist authored-scene moves into the active doc's runtime layer.
         app.add_observer(persist_move_to_runtime_layer);
         // C4b: persist palette/API spawns as referenced runtime-layer prims.
         app.add_observer(persist_spawn_to_runtime_layer);
-        app.add_observer(on_rescan_spawn_catalog);
-        app.add_observer(on_set_object_property);
         // #4: persist scalar shader-param tunes into the active doc's runtime
         // overlay (non-destructive; Save stays base-only). Decoupled from the
         // live-mutation handler above, like the move/spawn persisters.
@@ -3607,7 +3641,6 @@ impl Plugin for SpawnCommandPlugin {
         // shadow range) as `SetAttribute`s on the sun's DistantLight prim, using
         // the names the loader already reads back — so it round-trips + journals.
         app.add_observer(persist_environment_light_to_runtime_layer);
-        app.add_observer(on_focus_entity_by_id);
         // Applies the recorded focus at frame start, when last frame's fully
         // propagated GlobalTransforms are mutually consistent (see PendingFocus).
         app.add_systems(bevy::app::First, apply_pending_focus);
@@ -3615,32 +3648,6 @@ impl Plugin for SpawnCommandPlugin {
         // Inspector highlight + gizmo) and live in the `ui`-gated `selection`
         // module; `SandboxEditPlugin` registers them. The headless server has no
         // selection, so they're absent here by design.
-        app.add_observer(on_set_camera_look_at);
-        app.add_observer(on_reload_shader);
-        app.add_observer(on_set_shader_source);
-        app.add_observer(on_create_shader);
-        app.add_observer(on_import_shader);
-        app.add_observer(on_rescan_shaders);
-        app.add_observer(on_delete_shader);
-        // Register with AppTypeRegistry so the reflection-based HTTP executor
-        // (`get_with_short_type_path`) can construct it from `{"command":"SetObjectProperty",...}`.
-        // SpawnEntity/MoveEntity have observers above but were missing from the
-        // type registry, so the API couldn't construct them (absent from
-        // `discover_schema`). Register them so MCP/HTTP clients can spawn from the
-        // catalog and teleport entities exactly like the in-app palette/gizmo.
-        app.register_type::<SpawnEntity>();
-        app.register_type::<DetachJoint>();
-        app.register_type::<MoveEntity>();
-        app.register_type::<RescanSpawnCatalog>();
-        app.register_type::<SetObjectProperty>();
-        app.register_type::<FocusEntityById>();
-        app.register_type::<SetCameraLookAt>();
-        app.register_type::<ReloadShader>();
-        app.register_type::<SetShaderSource>();
-        app.register_type::<CreateShader>();
-        app.register_type::<ImportShader>();
-        app.register_type::<RescanShaders>();
-        app.register_type::<DeleteShader>();
         // THE single catalog-population system: scans project USD → spawn
         // catalog and WGSL → shader catalog via the shared `lunco_assets`
         // discovery walk, once at first run and again only when the open-Twin

@@ -203,7 +203,13 @@ pub fn Command(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 /// Annotates an observer function for a typed command.
 ///
-/// 1. Wraps the function to accept `On<T>` as the first parameter.
+/// Write the handler as `fn on_x(trigger: On<T>, /* system params */)`. The first
+/// parameter must be the trigger: it is re-emitted as a canonical `On<T>` (so the
+/// handler's event type can never disagree with the `T` named here), and `cmd`
+/// is bound to `trigger.event()` for you. Any other first parameter is a
+/// compile error — it would otherwise be dropped on the floor.
+///
+/// 1. Rewrites the function's first parameter to `On<T>`.
 /// 2. Generates a `__register_<fn_name>(app)` helper (`register_type` +
 ///    `add_observer`). Don't call it by hand — list the observer in a
 ///    [`register_commands!`] invocation (bare or `module::fn` path) and
@@ -219,6 +225,49 @@ pub fn on_command(attr: TokenStream, item: TokenStream) -> TokenStream {
     let fn_vis = &func.vis;
     let fn_body = &func.block;
 
+    // Dropping the author's first parameter (the `skip(1)` below) is INTENTIONAL,
+    // not an oversight: we re-emit it ourselves as a canonical
+    // `trigger: On<#cmd_type>`. That substitution is the whole point — it is what
+    // makes the handler's event type structurally incapable of disagreeing with
+    // the `#cmd_type` named in the attribute, so `#[on_command(SpawnEntity)]` can
+    // never end up observing `MoveEntity`. The author's own annotation is
+    // redundant by construction, so it is discarded rather than trusted.
+    //
+    // The catch: that reasoning only holds if the first parameter really IS the
+    // trigger. If someone writes `#[on_command(X)] fn h(mut q: Query<..>)`, the
+    // `Query` is what gets thrown away — a genuine system param silently vanishing.
+    // So the convention is checked, not assumed, and violations are reported here
+    // at the call site instead of erupting as an inscrutable type error inside the
+    // expansion. (This check caught two long-standing offenders when it landed.)
+    let first_is_trigger = match func.sig.inputs.first() {
+        Some(syn::FnArg::Typed(pat)) => match &*pat.ty {
+            syn::Type::Path(tp) => tp
+                .path
+                .segments
+                .last()
+                .is_some_and(|seg| seg.ident == "On"),
+            _ => false,
+        },
+        _ => false,
+    };
+    if !first_is_trigger {
+        return syn::Error::new_spanned(
+            &func.sig,
+            format!(
+                "#[on_command({cmd})] expects the FIRST parameter to be the trigger, \
+                 `trigger: On<{cmd}>` — it is replaced with one, so any other first \
+                 parameter would be silently dropped. Add it, then take system params \
+                 after it.",
+                cmd = cmd_type,
+            ),
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    // `skip(1)` — deliberately drop the trigger the author wrote; the quote! blocks
+    // below re-add it as `trigger: On<#cmd_type>`. Everything AFTER it is passed
+    // through untouched, so a handler takes system params exactly like any observer.
     let existing_params: Vec<_> = func.sig.inputs.iter().skip(1).collect();
 
     let register_fn_name = Ident::new(

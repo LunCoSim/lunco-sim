@@ -11,7 +11,7 @@ pub struct CaptureScreenshot {}
 /// System to trigger screenshot capture of the primary window.
 #[on_command(CaptureScreenshot)]
 pub fn on_capture_screenshot(
-    _cmd: CaptureScreenshot,
+    trigger: On<CaptureScreenshot>,
     mut commands: Commands,
 ) {
     // Spawn a transient entity — do NOT insert on the camera, which carries

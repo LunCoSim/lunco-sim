@@ -326,7 +326,7 @@ pub struct Earthshine;
 #[cfg(feature = "render")]
 #[on_command(SetEnvironmentLight)]
 fn on_set_environment_light(
-    _cmd: SetEnvironmentLight,
+    trigger: On<SetEnvironmentLight>,
     // The sun(s): every directional light EXCEPT the earthshine fill, so an
     // illuminance/color/direction tweak never clobbers the fill light.
     mut q_sun: Query<

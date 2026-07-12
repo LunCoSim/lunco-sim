@@ -57,7 +57,13 @@ mod panel;
 pub use theme::CanvasThemeSnapshot;
 pub use panel::CanvasDiagramPanel;
 pub(crate) use panel::invalidate_port_icon_cache;
-pub use ops::{active_class_for_doc, active_class_for_doc_ctx, apply_ops_public, on_auto_arrange_diagram};
+// `__register_on_auto_arrange_diagram` is the registrar `#[on_command]` generates
+// next to the handler; `register_commands!` in `ui::commands` names the observer by
+// path, so the generated helper has to travel with it through this re-export.
+pub use ops::{
+    active_class_for_doc, active_class_for_doc_ctx, apply_ops_public, on_auto_arrange_diagram,
+    __register_on_auto_arrange_diagram,
+};
 // Op-application core moved to the egui-free `crate::doc_ops` module.
 pub use crate::doc_ops::{apply_one_op_as, drain_pending_structural_ops, PendingStructuralOps};
 // API-feedback queue data moved to the egui-free `crate::canvas_feedback`.

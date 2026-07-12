@@ -10,8 +10,16 @@
 //! workbench event. A `--no-ui` server doesn't install this.
 
 use bevy::prelude::*;
+use lunco_core::{on_command, register_commands};
+use lunco_workbench::file_ops::CopyShareLink;
 
 use crate::model_share::share_url;
+
+// The typed struct is owned by `lunco-workbench` (so HTTP-API introspection sees
+// the verb even in a `--no-ui` server that never installs this plugin); the
+// observer that actually touches the clipboard lives here, and registers itself
+// the same way as every other command.
+register_commands!(on_copy_share_link);
 
 /// Wires the `CopyShareLink` command observer (all platforms) and, on wasm,
 /// the boot-time "open the model in the URL" system. Add after the Modelica
@@ -20,7 +28,7 @@ pub struct ModelSharePlugin;
 
 impl Plugin for ModelSharePlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_copy_share_link);
+        register_all_commands(app);
         #[cfg(target_arch = "wasm32")]
         app.add_systems(Startup, load_shared_model_on_boot);
     }
@@ -44,8 +52,9 @@ fn active_share_url(world: &mut World) -> Option<String> {
 /// browser clipboard. The HTTP API exposes the same verb as a query that
 /// *returns* the URL instead (see `api_queries::CopyShareLinkProvider`),
 /// since a headless server has no clipboard.
+#[on_command(CopyShareLink)]
 fn on_copy_share_link(
-    _trigger: On<lunco_workbench::file_ops::CopyShareLink>,
+    trigger: On<CopyShareLink>,
     mut commands: Commands,
 ) {
     commands.queue(|world: &mut World| {

@@ -772,7 +772,11 @@ fn on_pick_resolved(trigger: On<PickResolved>, mut commands: Commands) {
 }
 
 // `register_commands!()` registers each command's type + observer in
-// one call. `on_pick_resolved` is *not* in this list — it observes a
+// one call — which is also what makes a verb reachable by NAME from the
+// HTTP API and rhai (dispatch resolves against the type registry). A
+// hand-rolled `add_observer` alone would leave the command working
+// in-process but invisible to both, so every `#[Command]` here goes
+// through this list. `on_pick_resolved` is *not* in it — it observes a
 // non-Command event (`PickResolved`) and is added directly in the
 // plugin's `build`. `OpenFile` is also absent: the observer that
 // loads `.mo` content lives in `lunco-modelica` and registers itself
@@ -786,7 +790,9 @@ register_commands!(
     on_rename_open_document,
     on_rename_twin_entry,
     on_save_all,
-    on_save_as_twin
+    on_save_as_twin,
+    on_show_open_file_picker,
+    on_show_open_folder_picker
 );
 
 /// Plugin that registers shell-level file-workflow commands.
@@ -807,8 +813,6 @@ impl Plugin for FileOpsPlugin {
         // CopyShareLink: workbench owns the typed struct so HTTP-API
         // introspection sees it; the observer lives in lunco-modelica.
         app.register_type::<CopyShareLink>();
-        app.add_observer(on_show_open_file_picker);
-        app.add_observer(on_show_open_folder_picker);
         app.add_observer(on_open_file);
         app.add_observer(on_pick_resolved);
         // Off-thread folder-scan pipeline: each `Open*` / `Add*` parks

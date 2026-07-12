@@ -115,8 +115,7 @@ impl Plugin for SandboxEditPlugin {
 
         // Editor-only `SelectEntity` API command (Inspector highlight + gizmo) —
         // registered here, not in the headless `SpawnCommandPlugin`.
-        app.add_observer(selection::on_select_entity);
-        app.register_type::<selection::SelectEntity>();
+        selection::register_all_commands(app);
         app.add_systems(Update, selection::draw_selection_bounds);
 
         // Gizmo systems run in Last schedule (after transform-gizmo-bevy's update_gizmos):

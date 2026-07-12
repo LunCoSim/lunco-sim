@@ -735,14 +735,19 @@ mod tests {
         assert_eq!(counter.next(), 2);
     }
 
-    // A result-reporting command: `Ok` → Succeeded, `Err` → Failed.
+    // A result-reporting command fixture: `Ok` → Succeeded, `Err` → Failed. It is a
+    // REAL command (same `#[Command]` + `#[on_command]` + `register_commands!` path
+    // as production verbs) rather than a mock, because what it exercises is the
+    // executor's own reflection dispatch — a hand-rolled stand-in would prove the
+    // stand-in works, not the dispatcher. Confined to `#[cfg(test)]`, so it never
+    // reaches a real App's registry.
     #[Command(default)]
     struct TestEcho {
         pub fail: bool,
     }
 
     #[on_command(TestEcho)]
-    fn on_test_echo(_t: On<TestEcho>) -> Result<Ack, String> {
+    fn on_test_echo(trigger: On<TestEcho>) -> Result<Ack, String> {
         if cmd.fail {
             Err("boom".into())
         } else {

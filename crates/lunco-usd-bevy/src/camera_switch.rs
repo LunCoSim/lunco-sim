@@ -47,7 +47,7 @@ pub struct ActivateCamera(pub Entity);
 /// [`ActivateCamera`]. Matches the full USD prim path *or* its leaf.
 #[on_command(SetActiveCamera)]
 pub fn on_set_active_camera(
-    cmd: SetActiveCamera,
+    trigger: On<SetActiveCamera>,
     q_cams: Query<(Entity, &Name), With<Camera3d>>,
     mut commands: Commands,
 ) {
