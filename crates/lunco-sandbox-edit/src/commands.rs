@@ -994,32 +994,85 @@ fn no_local_predict() -> bool {
     *V.get_or_init(|| std::env::var("LUNCO_NO_PREDICT").as_deref() == Ok("1"))
 }
 
-/// VISUAL-PREDICTION mode (`LUNCO_VISUAL_PREDICT=1`): the owned rover follows the
-/// host authoritatively for PHYSICS (no local `Dynamic` step — no wobble, correct
-/// contacts), and `lead_owned_rover_render` leads its RENDERED pose forward/turning
-/// by ~RTT so it feels responsive at any ping. The proper fix (see
-/// `project_predict_own_oscillation_cadence`): physics stays authoritative, only the
-/// visual anticipates. Implies follow-authority (no promotion), like `no_predict`.
-fn visual_predict() -> bool {
-    use std::sync::OnceLock;
-    static V: OnceLock<bool> = OnceLock::new();
-    *V.get_or_init(|| std::env::var("LUNCO_VISUAL_PREDICT").as_deref() == Ok("1"))
+/// Live-tunable settings for VISUAL PREDICTION (the owned rover follows the host
+/// authoritatively for PHYSICS — no wobble, correct contacts — while
+/// `lead_owned_rover_render` leads its RENDERED pose so it feels responsive at any
+/// ping; see `project_predict_own_oscillation_cadence`). A resource, not consts, so
+/// it can be tuned LIVE via the `SetVisualLead` command (no rebuild). Env vars seed
+/// the defaults: `LUNCO_VISUAL_PREDICT=1` → `enabled`, `LUNCO_SIM_LATENCY_MS` →
+/// `lead_secs` (the display lag to hide; in production this tracks measured RTT).
+#[derive(Resource, Clone, Debug)]
+pub struct VisualLeadSettings {
+    /// Master: visual-prediction on (follow-authority physics + render-lead).
+    pub enabled: bool,
+    /// Yaw lead rate — rad/s at full steer.
+    pub yaw_rate: f32,
+    /// Forward lead speed — m/s at full throttle.
+    pub speed: f32,
+    /// Lead time (s): how far ahead of authority to lead the visual. 0 disables.
+    pub lead_secs: f32,
 }
 
-/// Render-lead time in seconds — how far ahead of authority to lead the visual.
-/// For testing it tracks the simulated ping (`LUNCO_SIM_LATENCY_MS`, the display
-/// lag the lead must hide), capped so the extrapolation error stays bounded at
-/// extreme ping. In production this would track the measured RTT. 0 disables.
-fn visual_lead_secs() -> f32 {
-    use std::sync::OnceLock;
-    static V: OnceLock<f32> = OnceLock::new();
-    *V.get_or_init(|| {
-        let ms: f32 = std::env::var("LUNCO_SIM_LATENCY_MS")
+impl Default for VisualLeadSettings {
+    fn default() -> Self {
+        let enabled = std::env::var("LUNCO_VISUAL_PREDICT").as_deref() == Ok("1");
+        let lead_secs = std::env::var("LUNCO_SIM_LATENCY_MS")
             .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0.0);
-        (ms / 1000.0).min(0.5) // cap at 500 ms of lead
-    })
+            .and_then(|s| s.parse::<f32>().ok())
+            .unwrap_or(0.0)
+            / 1000.0;
+        // Gentle defaults — the lead is SMOOTHED (eased) so it never leaps; tune up
+        // via `SetVisualLead` to taste.
+        Self { enabled, yaw_rate: 0.5, speed: 4.0, lead_secs }
+    }
+}
+
+/// Per-gid SMOOTHED render-lead offset `(yaw_rad, forward_m)` — eased toward the
+/// input-driven target each frame so the visual never leaps/snaps when you
+/// tap/release throttle or steer (the abrupt-jump artifact of the first version:
+/// a 300 ms lead applied instantly is ~1.8 m + ~12° in one frame). Client-only,
+/// presentational.
+#[derive(Resource, Default)]
+struct VisualLeadState(std::collections::HashMap<u64, (f32, f32)>);
+
+/// Live-tune [`VisualLeadSettings`] (all fields optional → set only what you pass):
+/// `SetVisualLead {enabled?, yaw_rate?, speed?, lead_secs?}`. Lets you A/B the
+/// render-lead strength while driving, no rebuild.
+#[Command(default)]
+pub struct SetVisualLead {
+    #[serde(default)]
+    #[reflect(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    #[reflect(default)]
+    pub yaw_rate: Option<f32>,
+    #[serde(default)]
+    #[reflect(default)]
+    pub speed: Option<f32>,
+    #[serde(default)]
+    #[reflect(default)]
+    pub lead_secs: Option<f32>,
+}
+
+/// Observer for [`SetVisualLead`] — apply the passed fields to the live resource.
+pub fn on_set_visual_lead(trigger: On<SetVisualLead>, mut s: ResMut<VisualLeadSettings>) {
+    let cmd = trigger.event();
+    if let Some(v) = cmd.enabled {
+        s.enabled = v;
+    }
+    if let Some(v) = cmd.yaw_rate {
+        s.yaw_rate = v;
+    }
+    if let Some(v) = cmd.speed {
+        s.speed = v;
+    }
+    if let Some(v) = cmd.lead_secs {
+        s.lead_secs = v;
+    }
+    info!(
+        "[visual-lead] enabled={} yaw_rate={:.2} speed={:.2} lead_secs={:.3}",
+        s.enabled, s.yaw_rate, s.speed, s.lead_secs
+    );
 }
 
 pub fn maintain_owned_locally(
@@ -1040,6 +1093,7 @@ pub fn maintain_owned_locally(
     // its trajectory track the host instead of running a constant INTERP_DELAY
     // behind (the offset the reconcile keeps chasing → the drive-fighting wobble).
     buffers: Res<InterpBuffers>,
+    lead: Res<VisualLeadSettings>,
     mut commands: Commands,
     q: Query<
         (Entity, &lunco_core::GlobalEntityId, Has<lunco_core::OwnedLocally>),
@@ -1065,7 +1119,7 @@ pub fn maintain_owned_locally(
         // responsiveness on the presentation layer only.
         let mine = predicts_locally(owns, last_active, tick.0, PREDICT_GRACE_TICKS)
             && !no_local_predict()
-            && !visual_predict();
+            && !lead.enabled;
         match (mine, has_marker) {
             (true, false) => {
                 // Gaining ownership: mark it AND restore `Dynamic`. The marker
@@ -1184,31 +1238,48 @@ fn lead_owned_rover_render(
     local: Res<lunco_core::LocalSession>,
     reg: Res<lunco_core::SessionRegistry>,
     drive: Res<lunco_core::LocalDriveInput>,
+    settings: Res<VisualLeadSettings>,
+    time: Res<Time>,
+    mut state: ResMut<VisualLeadState>,
+    // Single-body (raycast) rovers ONLY: an articulated rover's wheels are separate
+    // physics bodies with joints, so rigidly offsetting their `GlobalTransform`
+    // fights the joint solver → jitter. Those stay follow-authority (no lead).
     q_rovers: Query<
         (Entity, &lunco_core::GlobalEntityId),
-        (With<lunco_core::NetReplicate>, Without<lunco_core::ArticulatedLink>),
+        (
+            With<lunco_core::NetReplicate>,
+            Without<lunco_core::ArticulatedLink>,
+            Without<lunco_core::ArticulatedVehicle>,
+        ),
     >,
     q_children: Query<&Children>,
     mut q_gt: Query<&mut GlobalTransform>,
 ) {
-    if !matches!(*role, lunco_core::NetworkRole::Client) || !visual_predict() {
+    if !matches!(*role, lunco_core::NetworkRole::Client) || !settings.enabled {
         return;
     }
-    let lead = visual_lead_secs();
+    let lead = settings.lead_secs;
     if lead <= 0.0 {
         return;
     }
-    // Rough motion model (presentational — imperfection just eases back visually).
-    const YAW_RATE: f32 = 0.7; // rad/s at full steer
-    const SPEED: f32 = 6.0; // m/s at full throttle
+    // Ease the offset toward its target over ~TAU seconds (frame-rate independent),
+    // so tapping/releasing input never leaps or snaps the visual.
+    const TAU: f32 = 0.12;
+    let alpha = 1.0 - (-time.delta_secs() / TAU).exp();
     for (e, gid) in q_rovers.iter() {
         if !reg.owns(local.0, gid.get()) {
             continue;
         }
-        let Some(&(throttle, steer)) = drive.0.get(&gid.get()) else {
-            continue;
-        };
-        if throttle.abs() < 1e-3 && steer.abs() < 1e-3 {
+        let (throttle, steer) = drive.0.get(&gid.get()).copied().unwrap_or((0.0, 0.0));
+        // Target offset from current input; eased into the persistent smoothed value.
+        let tgt_yaw = steer as f32 * settings.yaw_rate * lead;
+        let tgt_dist = throttle as f32 * settings.speed * lead;
+        let slot = state.0.entry(gid.get()).or_insert((0.0, 0.0));
+        slot.0 += (tgt_yaw - slot.0) * alpha;
+        slot.1 += (tgt_dist - slot.1) * alpha;
+        let (yaw, dist) = *slot;
+        // Below a hair of offset, skip (also lets a released rover settle exactly).
+        if yaw.abs() < 1e-4 && dist.abs() < 1e-4 {
             continue;
         }
         let (c, fwd) = {
@@ -1216,14 +1287,12 @@ fn lead_owned_rover_render(
             let fwd = (gt.rotation() * Vec3::NEG_Z).with_y(0.0).normalize_or_zero();
             (gt.translation(), fwd)
         };
-        let yaw = steer as f32 * YAW_RATE * lead;
-        let dist = throttle as f32 * SPEED * lead;
         // World rigid delta: yaw about the rover's centre, then translate forward.
         let d = bevy::math::Affine3A::from_translation(fwd * dist)
             * bevy::math::Affine3A::from_translation(c)
             * bevy::math::Affine3A::from_rotation_y(yaw)
             * bevy::math::Affine3A::from_translation(-c);
-        // Collect the assembly (rover + all descendants) and offset each GT.
+        // Collect the assembly (rover + all VISUAL descendants) and offset each GT.
         let mut all = vec![e];
         let mut stack = vec![e];
         while let Some(cur) = stack.pop() {
@@ -1239,6 +1308,49 @@ fn lead_owned_rover_render(
                 *gt = GlobalTransform::from(d * gt.affine());
             }
         }
+    }
+}
+
+/// HOST (FixedFirst): apply EXACTLY ONE buffered client input per fixed tick, in
+/// seq order, to each remote-owned rover — so the host integrates the same input
+/// sequence one-input-per-physics-step as the owning client predicted with. Without
+/// this the host applied forwarded `SetPorts` at render cadence (`on_set_ports` in
+/// `Update`, port-latched), so its rover saw a DIFFERENT number of drive steps than
+/// the client's local prediction → the two deterministic sims diverged → the
+/// reconcile had to fight it (the wobble). Runs before the drive reads the ports;
+/// `on_set_ports`' later `Update` write is harmlessly overwritten next tick (the
+/// consumer latches the last input, so it stays the port authority). Host-only.
+fn apply_buffered_client_inputs(
+    role: Res<lunco_core::NetworkRole>,
+    mut buf: ResMut<lunco_core::BufferedClientInputs>,
+    registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    ports: Res<lunco_core::ports::PortRegistry>,
+    mut commands: Commands,
+) {
+    if !role.is_host() {
+        return;
+    }
+    let gids: Vec<u64> = buf
+        .pending
+        .keys()
+        .chain(buf.last_writes.keys())
+        .copied()
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    for gid in gids {
+        let Some(writes) = buf.next_for_tick(gid, 8) else {
+            continue;
+        };
+        let Some(e) = registry.resolve(&lunco_core::GlobalEntityId::from_raw(gid)) else {
+            continue;
+        };
+        let reg = ports.clone();
+        commands.queue(move |world: &mut World| {
+            for (port, value) in &writes {
+                reg.write_port(world, e, port, *value);
+            }
+        });
     }
 }
 
@@ -3764,6 +3876,10 @@ impl Plugin for SpawnCommandPlugin {
         // module; `SandboxEditPlugin` registers them. The headless server has no
         // selection, so they're absent here by design.
         app.add_observer(on_set_camera_look_at);
+        app.init_resource::<VisualLeadSettings>();
+        app.init_resource::<VisualLeadState>();
+        app.register_type::<SetVisualLead>();
+        app.add_observer(on_set_visual_lead);
         app.add_observer(on_reload_shader);
         app.add_observer(on_set_shader_source);
         app.add_observer(on_create_shader);
@@ -3869,6 +3985,10 @@ impl Plugin for SpawnCommandPlugin {
         // and is the sole advance site for `ProxyPlaybackClock`. No-op on
         // host/standalone (guards on `NetworkRole::Client`).
         app.add_systems(FixedUpdate, drive_kinematic_proxies);
+        // HOST: apply one buffered client input per fixed tick BEFORE the drive
+        // reads the ports, so the host steps the client's input sequence in lockstep
+        // (the divergence fix behind proper prediction+reconciliation).
+        app.add_systems(FixedFirst, apply_buffered_client_inputs);
         // Visual prediction (`LUNCO_VISUAL_PREDICT=1`): lead the owned rover's
         // RENDERED pose in `Last` — after ALL transform propagation (incl.
         // big_space), before render extraction — so physics stays authoritative
