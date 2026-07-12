@@ -356,6 +356,23 @@ pub fn build_world_engine() -> Engine {
         }
     });
 
+    // world_rotation(id) -> [x, y, z, w] world orientation quaternion, or ().
+    // The general orientation accessor: up/forward/right are `quat * axis`,
+    // derived in the rhai prelude (see `world_up`/`world_right` helpers), so this
+    // one host fn covers every axis and feeds tilt/tip-over checks — no per-axis
+    // Rust. Same GlobalTransform source as world_forward.
+    engine.register_fn("world_rotation", |id: i64| -> Dynamic {
+        match bridge_core::world_rotation(id as u64) {
+            Some(q) => RhaiBuilder.array(vec![
+                Dynamic::from_float(q[0]),
+                Dynamic::from_float(q[1]),
+                Dynamic::from_float(q[2]),
+                Dynamic::from_float(q[3]),
+            ]),
+            None => Dynamic::UNIT,
+        }
+    });
+
     // register_hook(id, entry, src) -> bool — plug a rhai rule into ANY Rust
     // policy seam (lunco-hooks) from a scenario: merge policies, RBAC,
     // control-authority takeover, comms link availability

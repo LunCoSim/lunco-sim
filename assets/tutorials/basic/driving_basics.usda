@@ -1,0 +1,91 @@
+#usda 1.0
+(
+    defaultPrim = "DrivingBasics"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# ── Scene: Driving Basics (lesson S1) ────────────────────────────────────────
+# A small, safe practice plot: flat regolith to learn throttle/steer/brake, plus
+# one gentle ramp so the student feels wheel slip and the climb before ever
+# meeting the real borderline wall. A finish flag at the top of the ramp gives S1
+# its arrival objective. The medium rover spawns at the SW corner.
+#
+#   sandbox --scene tutorials/basic/driving_basics.usda
+def Xform "DrivingBasics"
+{
+    custom bool lunco:spawnable = false
+    custom string lunco:description = "Flat practice plot with one gentle ramp and a finish flag — the S1 driving-basics stage."
+
+    # Flat plot, ±60 m.
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (120.0, 1.0, 120.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.34, 0.32, 0.31)
+        bool physics:collisionEnabled = true
+        float physics:friction = 1.0
+    }
+
+    # A gentle ~12° ramp (a long wedge) to introduce climbing + wheel slip before
+    # the real slopes. 30 m long, tilted about X, its low lip flush with the plot.
+    def Cube "Ramp" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (25.0, 2.9, 0.0)
+        double3 xformOp:rotateXYZ = (12.0, 0.0, 0.0)
+        double3 xformOp:scale = (14.0, 0.6, 30.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        color3f primvars:displayColor = (0.40, 0.36, 0.33)
+        bool physics:collisionEnabled = true
+        float physics:friction = 0.9
+    }
+
+    # The medium rover, at the SW corner facing the ramp. Asset-root ref to the
+    # shared variant kit (resolves regardless of where this scene lives).
+    def Xform "Rover" (
+        prepend references = @lunco://vessels/rovers/variants/rover_medium.usda@</RoverMedium>
+    )
+    {
+        double3 xformOp:translate = (-35.0, 1.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # Finish flag at the top of the ramp — S1's arrival target. Shared asset via
+    # the asset-root `lunco://` scheme (resolves wherever the twin is mounted).
+    def Xform "Flag" (
+        prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
+    )
+    {
+        double3 xformOp:translate = (38.0, 6.2, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # Low ESE sun (matches the event lighting the teams will meet in the traverse).
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 11000
+        float inputs:angle = 0.53
+        double3 xformOp:rotateXYZ = (-14.0, 110.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+        custom float lunco:shadow:maxDistance = 600.0
+        custom float lunco:shadow:firstCascadeFarBound = 20.0
+        custom int lunco:shadow:numCascades = 4
+    }
+
+    # Chase-style fly-cam over the SW corner so the rover and ramp are both framed.
+    def Xform "Avatar"
+    {
+        string lunco:avatar = "true"
+        string lunco:cameraMode = "freeflight"
+        custom double3 lunco:cameraLookAt = (0.0, 2.0, 0.0)
+        double3 xformOp:translate = (-48.0, 18.0, -30.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+}

@@ -649,6 +649,23 @@ pub fn world_forward(gid: u64) -> Option<DVec3> {
     .flatten()
 }
 
+/// `world_rotation(id)` — the entity's true world orientation as a quaternion
+/// `[x, y, z, w]`, or `None`. The GENERAL orientation accessor: every world axis
+/// (`up`, `forward`, `right`) is `quat * unit_axis`, derived rhai-side, so this
+/// one host fn subsumes `world_forward` and unblocks tilt/tip-over logic (a rover
+/// is tipped when its up-vector's `y` drops below `cos(θ)`) without a per-axis
+/// Rust fn each. Same `GlobalTransform` source as `world_forward` — the float
+/// origin offsets only translation, so the world rotation is exact.
+pub fn world_rotation(gid: u64) -> Option<[f64; 4]> {
+    with_world(|world| {
+        let entity = resolve_entity(world, gid)?;
+        let gt = world.get::<GlobalTransform>(entity)?;
+        let q = gt.rotation();
+        Some([q.x as f64, q.y as f64, q.z as f64, q.w as f64])
+    })
+    .flatten()
+}
+
 /// Split `"Type.field.sub"` into the type's short name and a reflect sub-path
 /// (`".field.sub"`). A bare `"Type"` yields an empty sub-path (the whole value).
 fn split_type_path(path: &str) -> (&str, String) {

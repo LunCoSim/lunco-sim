@@ -287,6 +287,14 @@ pub struct LodTileOf(pub Entity);
 #[derive(Resource, Default)]
 pub struct LodMaterials(HashMap<(Entity, TerrainShaderMode, u32, u32), Handle<ShaderMaterial>>);
 
+impl LodMaterials {
+    /// Every cached shared material handle — the live-tuning path (e.g. the analysis
+    /// overlay) rewrites their uniforms in place without re-baking tiles.
+    pub fn values(&self) -> impl Iterator<Item = &Handle<ShaderMaterial>> {
+        self.0.values()
+    }
+}
+
 /// Quantise a morph-band end onto the shared bucket lattice. `u32::MAX` = the
 /// "never morphs" root sentinel.
 fn band_bucket(morph_end: f32) -> u32 {
@@ -379,20 +387,24 @@ pub struct TerrainNodeErrors {
 /// handle instead of re-baking + re-uploading — the "tile caching" that was missing.
 /// Bounded: trimmed to currently-resident tiles when it grows past `CACHE_CAP`.
 #[derive(Resource, Default)]
-pub struct LodMeshCache(HashMap<QuadCoord, Handle<Mesh>>);
+pub struct LodMeshCache(HashMap<(Entity, QuadCoord), Handle<Mesh>>);
 
 impl LodMeshCache {
-    /// Drop cached meshes a live height edit invalidated. This cache keys purely by
-    /// `QuadCoord` (geometry = pure function of the node), which holds ONLY while the
-    /// oracle is fixed; a brush/flatten changes the surface, so a re-selected tile in
-    /// the edited area would otherwise reuse its pre-edit mesh. `Some(bounds)` drops
-    /// just the overlapping nodes (the incremental patch); `None` (a whole-terrain
-    /// spec change) clears all. Non-overlapping entries survive so revisiting
-    /// unedited ground still hits the cache.
-    pub fn drop_region(&mut self, bounds: Option<[f64; 4]>, root_half_extent: f64) {
+    /// Drop cached meshes a live height edit invalidated, scoped to one `terrain`.
+    /// Geometry is a pure function of `(terrain, coord)` only while that terrain's
+    /// oracle is fixed; a brush/flatten changes its surface, so a re-selected tile
+    /// in the edited area would otherwise reuse its pre-edit mesh. `Some(bounds)`
+    /// drops just the overlapping nodes (the incremental patch); `None` (a whole-
+    /// terrain spec change) clears the terrain's entries. Other terrains' entries —
+    /// and this terrain's non-overlapping ones — survive, so revisiting unedited
+    /// ground still hits the cache. Keying on the terrain `Entity` (not the coord
+    /// alone) is what stops one terrain reusing another's mesh for a shared coord.
+    pub fn drop_region(&mut self, terrain: Entity, bounds: Option<[f64; 4]>, root_half_extent: f64) {
         match bounds {
-            None => self.0.clear(),
-            Some(aabb) => self.0.retain(|coord, _| !node_overlaps_aabb(*coord, root_half_extent, aabb)),
+            None => self.0.retain(|(e, _), _| *e != terrain),
+            Some(aabb) => self.0.retain(|(e, coord), _| {
+                *e != terrain || !node_overlaps_aabb(*coord, root_half_extent, aabb)
+            }),
         }
     }
 }
@@ -500,6 +512,7 @@ fn build_tile_material(
     shader: &Handle<Shader>,
     maps: Option<&TerrainDerivedMaps>,
     shadow: Option<&TileShadowCache>,
+    overlay: crate::overlay::OverlayUniforms,
     materials: &mut Assets<ShaderMaterial>,
 ) -> Handle<ShaderMaterial> {
     let mut m = ShaderMaterial::default();
@@ -519,6 +532,9 @@ fn build_tile_material(
             if let Some(shadow) = shadow {
                 apply_shadow_cache_to_material(&mut m, shadow);
             }
+            // Analysis overlay params (slope hazard). Only the Lit shaders declare
+            // them; a fresh tile thus paints the current overlay with no extra pass.
+            overlay.apply(&mut m);
         }
     }
     materials.add(m)
@@ -541,6 +557,7 @@ fn spawn_tile(
     shader: &Handle<Shader>,
     maps: Option<&TerrainDerivedMaps>,
     shadow: Option<&TileShadowCache>,
+    overlay: crate::overlay::OverlayUniforms,
     materials: &mut Assets<ShaderMaterial>,
     lod_mats: &mut LodMaterials,
 ) -> (Entity, Handle<ShaderMaterial>) {
@@ -552,7 +569,7 @@ fn spawn_tile(
     let mat = if let Some(h) = lod_mats.0.get(&(terrain, mode, depth, bucket)) {
         h.clone()
     } else {
-        let h = build_tile_material(mode, ms, me, depth, shader, maps, shadow, materials);
+        let h = build_tile_material(mode, ms, me, depth, shader, maps, shadow, overlay, materials);
         lod_mats.0.insert((terrain, mode, depth, bucket), h.clone());
         h
     };
@@ -678,7 +695,11 @@ pub fn update_lod_tiles(
     asset_server: Res<AssetServer>,
     mut stream_status: ResMut<TerrainStreamStatus>,
     settings: Option<Res<lunco_settings::TerrainSettings>>,
+    overlay_params: Res<crate::overlay::TerrainOverlayParams>,
 ) {
+    // Snapshot the analysis-overlay uniforms once; every tile built this frame paints
+    // the current params (live re-tuning of resident tiles rides `sync_terrain_overlay`).
+    let overlay = overlay_params.uniforms();
     *stream_status = TerrainStreamStatus::default();
     let enable_shaders = settings.as_ref().map(|s| s.enable_shaders).unwrap_or(true);
     // Use the first 3D camera as the focus. (Multiple cameras → the viz follows
@@ -721,7 +742,7 @@ pub fn update_lod_tiles(
                     h.clone()
                 } else {
                     let h = build_tile_material(
-                        mode, ms, me, depth, &shader, maps, shadow, &mut materials,
+                        mode, ms, me, depth, &shader, maps, shadow, overlay, &mut materials,
                     );
                     lod_mats.0.insert((terrain, mode, depth, bucket), h.clone());
                     h
@@ -969,7 +990,7 @@ pub fn update_lod_tiles(
                 continue;
             }
             let handle = meshes.add(baked.mesh);
-            mesh_cache.0.insert(coord, handle.clone());
+            mesh_cache.0.insert((terrain, coord), handle.clone());
             // No longer selected while it baked → keep the cached mesh, skip spawning.
             if !wanted.contains(&coord) {
                 continue;
@@ -977,7 +998,7 @@ pub fn update_lod_tiles(
             let depth = baked.depth;
             let (ent, shared) = spawn_tile(
                 &mut commands, grid, grid_entity, terrain, coord, handle, baked.center, depth,
-                baked.morph_end, mode, &shader, maps, shadow, &mut materials, &mut lod_mats,
+                baked.morph_end, mode, &shader, maps, shadow, overlay, &mut materials, &mut lod_mats,
             );
             // Sub-root tiles settle in from their parent's coarse lattice (no pop).
             if depth > 0 {
@@ -1009,10 +1030,10 @@ pub fn update_lod_tiles(
             // Per-node morph band: finite for sub-root nodes, "never" for the root
             // (the sentinel `snap_band` maps to the no-morph bucket).
             let morph_end = if s.morph_end.is_finite() { s.morph_end as f32 } else { 1.0e21 };
-            if let Some(cached) = mesh_cache.0.get(&s.coord) {
+            if let Some(cached) = mesh_cache.0.get(&(terrain, s.coord)) {
                 let (ent, shared) = spawn_tile(
                     &mut commands, grid, grid_entity, terrain, s.coord, cached.clone(),
-                    s.region.center, depth, morph_end, mode, &shader, maps, shadow,
+                    s.region.center, depth, morph_end, mode, &shader, maps, shadow, overlay,
                     &mut materials, &mut lod_mats,
                 );
                 if depth > 0 {
@@ -1090,13 +1111,14 @@ pub fn update_lod_tiles(
         stream_status.resident += wanted.iter().filter(|c| tiles.tiles.contains_key(c)).count();
         stream_status.pending += pending.0.len();
 
-        // Bound the mesh cache: when it grows past the cap, keep only meshes for
-        // currently-resident tiles (deterministic geometry → dropped ones re-bake on
-        // demand). Single-terrain scenes are the norm; with several terrains this may
-        // drop another's cached meshes, which is harmless (they re-bake).
+        // Bound the mesh cache: when it grows past the cap, drop THIS terrain's
+        // non-resident meshes (deterministic geometry → they re-bake on demand).
+        // Other terrains' entries are left untouched — the cap is a soft memory
+        // bound, and dropping a terrain we're not currently processing would just
+        // force it to re-bake next frame.
         if mesh_cache.0.len() > CACHE_CAP {
             let resident: HashSet<QuadCoord> = tiles.tiles.keys().copied().collect();
-            mesh_cache.0.retain(|c, _| resident.contains(c));
+            mesh_cache.0.retain(|(e, c), _| *e != terrain || resident.contains(c));
         }
     }
 }

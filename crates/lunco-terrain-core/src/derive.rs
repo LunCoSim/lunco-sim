@@ -220,10 +220,25 @@ pub fn hazard_from_slope(slope_rad: f32, safe_rad: f32, cliff_rad: f32) -> f32 {
 
 /// Pack the surface data layers into the RGBA8 layout the `terrain_layered.wgsl`
 /// `surface_map` slot samples: **R = roughness, G = AO, B = rock density,
-/// A = hazard**. Inputs are `[0, 1]` per channel, row-major `res×res`; `rock` may
+/// A = unused**. Inputs are `[0, 1]` per channel, row-major `res×res`; `rock` may
 /// be empty (→ 0) until a rock-density layer feeds it.
-pub fn pack_surface_rgba8(roughness: &[f32], ao: &[f32], rock: &[f32], hazard: &[f32]) -> Vec<u8> {
-    let n = roughness.len().min(ao.len()).min(hazard.len());
+///
+/// `A` once carried a slope-hazard bake. Hazard is now a *view*, not baked data:
+/// the shader evaluates it per-pixel from the geometric normal against the live
+/// `overlay_*` uniforms ([`crate::transfer::TransferFn::SlopeHazard`]), so the
+/// critical angle re-tunes with no re-bake. Nothing sampled `A`, and baking it
+/// pinned a second, frozen copy of the safe/cliff angles into the cache key.
+pub fn pack_surface_rgba8(roughness: &[f32], ao: &[f32], rock: &[f32]) -> Vec<u8> {
+    // The two required channels must be the same length (rock may be empty → 0);
+    // a mismatch means a caller bug that would otherwise silently produce a short,
+    // misaddressed texture. Catch it in dev; still degrade to the shortest in release.
+    debug_assert!(
+        roughness.len() == ao.len(),
+        "surface-map channels differ: rough={}, ao={}",
+        roughness.len(),
+        ao.len(),
+    );
+    let n = roughness.len().min(ao.len());
     let mut out = Vec::with_capacity(n * 4);
     let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
     for i in 0..n {
@@ -231,7 +246,7 @@ pub fn pack_surface_rgba8(roughness: &[f32], ao: &[f32], rock: &[f32], hazard: &
         out.push(q(roughness[i]));
         out.push(q(ao[i]));
         out.push(q(b));
-        out.push(q(hazard[i]));
+        out.push(255);
     }
     out
 }
@@ -344,9 +359,9 @@ mod tests {
 
     #[test]
     fn packing_layouts() {
-        // surface: R=rough G=ao B=rock A=hazard
-        let surf = pack_surface_rgba8(&[1.0], &[0.5], &[], &[0.0]);
-        assert_eq!(surf, vec![255, 128, 0, 0]);
+        // surface: R=rough G=ao B=rock (empty → 0) A=unused (opaque)
+        let surf = pack_surface_rgba8(&[1.0], &[0.5], &[]);
+        assert_eq!(surf, vec![255, 128, 0, 255]);
         // normal: up vector → (0.5,1.0,0.5)*255 biased; empty albedo → opaque
         let nrm = pack_normal_rgba8(&[[0.0, 1.0, 0.0]], &[]);
         assert_eq!(nrm, vec![128, 255, 128, 255]);

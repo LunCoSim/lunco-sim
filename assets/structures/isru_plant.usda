@@ -1,0 +1,78 @@
+#usda 1.0
+(
+    defaultPrim = "IsruPlant"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# ISRU Pilot Plant — drill rig + processor box + two storage tanks.
+# Staged at the PSR-facing slope (toward the cold-trap ice).
+def Xform "IsruPlant"
+{
+    custom bool lunco:spawnable = true
+    custom string lunco:description = "ISRU pilot plant — drill, processor and propellant tanks. Mines regolith/ice for water and fuel; site it toward the resource (PSR-facing slope), within rover range of the pad."
+
+    # Processor housing.
+    def Cube "Processor" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, 0.75, 0)
+        double3 xformOp:scale = (2.0, 1.5, 2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.6, 0.55, 0.4)
+        bool physics:collisionEnabled = true
+    }
+
+    # Drill mast over the housing.
+    def Cylinder "DrillMast" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        uniform token axis = "Y"
+        double radius = 0.4
+        double height = 4.0
+        double3 xformOp:translate = (0.7, 3.5, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.5, 0.48, 0.45)
+        bool physics:collisionEnabled = true
+    }
+
+    # Drill string dropping below into the regolith.
+    def Cylinder "DrillString"
+    {
+        uniform token axis = "Y"
+        double radius = 0.08
+        double height = 2.0
+        double3 xformOp:translate = (0.7, 0.5, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.3, 0.3, 0.32)
+    }
+
+    # Storage tanks (water / propellant).
+    def Cylinder "TankA" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        uniform token axis = "Y"
+        double radius = 0.8
+        double height = 2.5
+        double3 xformOp:translate = (-2.2, 1.25, 0.8)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.85, 0.85, 0.87)
+        bool physics:collisionEnabled = true
+    }
+    def Cylinder "TankB" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        uniform token axis = "Y"
+        double radius = 0.8
+        double height = 2.5
+        double3 xformOp:translate = (-2.2, 1.25, -0.8)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.85, 0.85, 0.87)
+        bool physics:collisionEnabled = true
+    }
+}

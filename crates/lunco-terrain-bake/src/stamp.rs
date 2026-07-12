@@ -34,13 +34,24 @@ pub fn crater_placements(craters: &CraterLayer, seed: u64, half_extent: f32) -> 
     if !craters.enabled || craters.density <= 0.0 {
         return Vec::new();
     }
+    /// `density` is craters per hectare; convert to a count over the window area.
+    const M2_PER_HECTARE: f64 = 10_000.0;
+    /// Blue-noise spacing as a fraction of the mean nearest-neighbour pitch (leaves
+    /// room to jitter without clumping).
+    const PITCH_FRACTION: f32 = 0.7;
+    /// Absolute floor (m) on crater centre spacing, so a dense field of tiny
+    /// craters can't stack rims into spikes.
+    const MIN_SPACING_FLOOR_M: f32 = 6.0;
+    /// Keep centres at least this many crater-diameters apart (`2 × radius mode`).
+    const DIAMETERS_APART: f32 = 2.0;
+
     let side = (2.0 * half_extent) as f64;
-    let count = ((craters.density as f64 * side * side) / 10_000.0).round().max(0.0) as usize;
+    let count = ((craters.density as f64 * side * side) / M2_PER_HECTARE).round().max(0.0) as usize;
     if count == 0 {
         return Vec::new();
     }
-    let pitch = (side / count.max(1) as f64).sqrt() as f32 * 0.7;
-    let min_spacing = (craters.size.mode * 2.0).max(pitch).max(6.0);
+    let pitch = (side / count.max(1) as f64).sqrt() as f32 * PITCH_FRACTION;
+    let min_spacing = (craters.size.mode * DIAMETERS_APART).max(pitch).max(MIN_SPACING_FLOOR_M);
     sample_layer(
         seed,
         salt::CRATERS,

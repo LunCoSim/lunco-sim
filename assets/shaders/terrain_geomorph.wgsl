@@ -33,6 +33,7 @@
 #import lunco::pbr_lit::lit_n
 #import lunco::lunar::regolith_factor
 #import lunco::horizon::SHADOW_FILL
+#import lunco::transfer::{slope_hazard_color, slope_of}
 
 //!@ui      albedo            color  "Albedo"
 //!@default albedo            0.13,0.13,0.13
@@ -63,6 +64,10 @@
 //!@default morph_start  1.0e20
 //!@default morph_end    1.0e21
 //!@default reveal       1.0
+//!@default overlay_mode      0
+//!@default overlay_opacity   0
+//!@default overlay_safe_rad  0
+//!@default overlay_cliff_rad 0
 struct Material {
     albedo:            vec3<f32>,
     macro_clump_scale: f32,
@@ -81,6 +86,10 @@ struct Material {
     morph_start:       f32,  // distance where geomorph toward the parent begins
     morph_end:         f32,  // distance where the parent fully takes over
     reveal:            f32,  // 1 = own geometry; <1 = settling in from the parent lattice
+    overlay_mode:      f32,  // analysis overlay: 0 = off, 1 = slope hazard
+    overlay_opacity:   f32,  // blend weight of the overlay colour over the lit surface
+    overlay_safe_rad:  f32,  // slope (rad) at/below which ground is green (safe)
+    overlay_cliff_rad: f32,  // slope (rad) at/above which ground is red (cliff)
 }
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
 var<uniform> mat: Material;
@@ -438,5 +447,17 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // calibrated lunar EV it vanishes and near tiles crushed to black next to
     // the fill-lifted heightfield.
     color = vec4(color.rgb + base_albedo * SHADOW_FILL, color.a);
+
+    // --- Analysis overlay (Data→Transfer→Blend, in-material shading plane) -----
+    // The Blend step: composite the Transfer's colour over the lit regolith. The
+    // transfer itself lives in `lunco::transfer` — ONE definition, shared with the
+    // Inspector legend and any headless export, so the swatch can't drift from the
+    // terrain it explains. Params are uniforms → dropping the cliff angle re-reds
+    // steeper ground with no re-bake.
+    if (mat.overlay_mode > 0.5 && mat.overlay_opacity > 0.0) {
+        let haz = slope_hazard_color(
+            slope_of(n_geo), mat.overlay_safe_rad, mat.overlay_cliff_rad);
+        color = vec4(mix(color.rgb, haz, mat.overlay_opacity), color.a);
+    }
     return color;
 }

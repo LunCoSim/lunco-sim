@@ -10,7 +10,7 @@ command structs themselves in `crates/`, so it always matches the code. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**153 commands** across **21** crates. 24 command(s) below lack a `///` description — marked _(no description)_; add a doc comment on the struct to fix it.
+**160 commands** across **21** crates. 24 command(s) below lack a `///` description — marked _(no description)_; add a doc comment on the struct to fix it.
 
 > **Regenerate:** `cargo run --manifest-path tools/gen-command-docs/Cargo.toml`
 
@@ -23,7 +23,7 @@ command structs themselves in `crates/`, so it always matches the code. See the
 
 **USD / scenes**
 
-- [`lunco-usd`](#lunco-usd) (`lunco-usd`, 2 commands)
+- [`lunco-usd`](#lunco-usd) (`lunco-usd`, 3 commands)
 - [`lunco-usd-bevy`](#lunco-usd-bevy) (`lunco-usd-bevy`, 1 command)
 - [`lunco-usd-sim`](#lunco-usd-sim) (`lunco-usd-sim`, 3 commands)
 
@@ -37,7 +37,7 @@ command structs themselves in `crates/`, so it always matches the code. See the
 
 **Vessels, mobility & control**
 
-- [`lunco-autopilot`](#lunco-autopilot) (`lunco-autopilot`, 2 commands)
+- [`lunco-autopilot`](#lunco-autopilot) (`lunco-autopilot`, 4 commands)
 
 **Avatar & possession**
 
@@ -74,7 +74,7 @@ command structs themselves in `crates/`, so it always matches the code. See the
 
 **Terrain**
 
-- [`lunco-terrain-surface`](#lunco-terrain-surface) (`lunco-terrain-surface`, 4 commands)
+- [`lunco-terrain-surface`](#lunco-terrain-surface) (`lunco-terrain-surface`, 7 commands)
 
 **Obstacle fields**
 
@@ -87,7 +87,7 @@ command structs themselves in `crates/`, so it always matches the code. See the
 **Other**
 
 - [`lunco-attributes`](#lunco-attributes) (`lunco-attributes`, 1 command)
-- [`lunco-sandbox`](#lunco-sandbox) (`lunco-sandbox`, 1 command)
+- [`lunco-sandbox`](#lunco-sandbox) (`lunco-sandbox`, 2 commands)
 
 ---
 
@@ -259,9 +259,14 @@ command structs themselves in `crates/`, so it always matches the code. See the
 
  Aim the free-flight avatar camera: place it at `eye` and look at `target`
  (both absolute world-space). The flexible primitive — the client computes the
- angle (e.g. approach a wheel from its outboard side) and distance. Sets the
- `FreeFlightCamera` yaw/pitch (the camera system rebuilds rotation from those
- each frame), so the aim sticks.
+ angle (e.g. approach a wheel from its outboard side) and distance.
+
+ Authoritative: whatever camera mode the avatar is in (orbit focus on a
+ planet, spring-arm follow, surface mode), this strips it and reinstates a
+ `FreeFlightCamera` at the requested pose — an API client asking for a
+ specific view must always get it. `eye` is split into cell + local
+ translation through the avatar's parent grid, so it lands in the scene
+ frame even when a previous orbit focus left the camera cells away.
 
 - *defined in:* `crates/lunco-sandbox-edit/src/commands.rs`
 
@@ -393,6 +398,25 @@ command structs themselves in `crates/`, so it always matches the code. See the
 |---|---|---|
 | `doc` | `DocumentId` |  Target document. |
 | `op` | `UsdOp` |  Operation to apply. |
+
+#### `AttachComponent`
+
+ Attach a component asset to a host body as a jointed child, deriving the
+ joint anchor from the placement so it is authored once, not twice. Lowers to
+ the primitive [`UsdOp`]s in [`crate::attach::attach_component_ops`] — each
+ journals and inverts on its own, so undo peels the attach off op-by-op.
+
+ If any op is rejected (e.g. the host prim doesn't exist), the rest are still
+ attempted and each logs its own rejection — the partial result is visible and
+ undoable rather than silently half-applied behind a rollback the journal can't
+ see. Validate the host exists before dispatching.
+
+- *defined in:* `crates/lunco-usd/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `doc` | `DocumentId` |  Target document. |
+| `spec` | `crate :: attach :: AttachSpec` |  The attachment to perform. |
 
 #### `SetActiveUsdViewport`
 
@@ -1152,6 +1176,31 @@ command structs themselves in `crates/`, so it always matches the code. See the
 | `index` | `u64` |  Actor index within the reserved session band (distinct autopilots differ). |
 | `throttle` | `f64` |  Constant forward setpoint used when no behaviour tree is given (default 0.5). |
 | `spec_json` | `String` |  Optional JSON [`BehaviorSpec`]; when present the autopilot navigates via the  behaviour tree instead of the constant `throttle`. |
+
+#### `ExportBehaviorXml`
+
+ Export a behaviour tree (JSON [`BehaviorSpec`]) to BehaviorTree.CPP v4 XML —
+ the format Groot2 edits and ROS/Nav2 runs. The result is returned in the Ack
+ (`xml`), so a rhai scenario or the API can convert a tree to a portable,
+ editable file. Round-trips with [`ImportBehaviorXml`].
+
+- *defined in:* `crates/lunco-autopilot/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `spec_json` | `String` |  A JSON [`BehaviorSpec`] (the same shape [`SetAutopilotBehavior`] takes). |
+
+#### `ImportBehaviorXml`
+
+ Import a BehaviorTree.CPP v4 XML tree back to a JSON [`BehaviorSpec`] — the
+ inverse of [`ExportBehaviorXml`]. The JSON is returned in the Ack (`spec_json`)
+ ready to feed [`SetAutopilotBehavior`] / [`EngageAutopilot`].
+
+- *defined in:* `crates/lunco-autopilot/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `xml` | `String` |  A BehaviorTree.CPP v4 XML document. |
 
 #### `SetAutopilotBehavior`
 
@@ -2199,7 +2248,7 @@ command structs themselves in `crates/`, so it always matches the code. See the
 | `sun_pitch` | `Option < f32 >` |  Sun elevation in radians (`EulerRot::YXZ` pitch); negative tilts the  light down. `None` keeps current. |
 | `illuminance` | `Option < f32 >` |  Sun illuminance in lux. `None` keeps current. |
 | `sun_color` | `Option < [f32 ; 3] >` |  Sun color as linear RGB. `None` keeps current. |
-| `shadows_enabled` | `Option < bool >` |  Whether the sun casts shadows. `None` keeps current. |
+| `shadow_maps_enabled` | `Option < bool >` |  Whether the sun casts shadows. `None` keeps current. |
 | `shadow_first_cascade_bound` | `Option < f32 >` |  Far bound of the first (sharpest) shadow cascade, metres.  `None` keeps current. |
 | `shadow_max_distance` | `Option < f32 >` |  Total shadow-casting range, metres. Smaller ⇒ denser shadow-map  texels ⇒ crisper shadows. `None` keeps current. |
 | `shadow_depth_bias` | `Option < f32 >` |  Shadow depth bias — raise to suppress self-shadow acne stripes  (cost: shadows detach slightly). `None` keeps current. |
@@ -2244,6 +2293,42 @@ command structs themselves in `crates/`, so it always matches the code. See the
 | `target_y` | `f32` |   |
 | `id` | `String` |  Optional stable id for the edit (so it can be removed later). Empty = auto. |
 
+#### `PlaceCrater`
+
+ Place ONE hand-authored impact crater: rim radius `radius` m centred at
+ terrain-local `(x, z)`, bowl `depth` m (0 = realistic default `0.4·radius`,
+ the fresh d/D ≈ 0.2 morphology). Same analytic profile as the procedural
+ field, so it lands in mesh + collider + derived maps alike, and it is an
+ addressable edit — remove it later via `RemoveTerrainLayer{id}`. Reachable
+ as `cmd("PlaceCrater", #{x, z, radius})`.
+
+- *defined in:* `crates/lunco-terrain-surface/src/terrain.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `x` | `f32` |   |
+| `z` | `f32` |   |
+| `radius` | `f32` |   |
+| `depth` | `f32` |  Bowl depth in metres; 0/absent = realistic default (0.4·radius). |
+| `id` | `String` |  Optional stable id for the edit (so it can be removed later). Empty = auto. |
+
+#### `PlaceRock`
+
+ Place ONE hand-authored boulder at terrain-local `(x, z)`, radius `size` m —
+ its own addressable layer (removable via `RemoveTerrainLayer{id}`). Same
+ mesh/collider derivation as the procedural rock field, so it looks and
+ drives identically. Reachable as `cmd("PlaceRock", #{x, z, size})`.
+
+- *defined in:* `crates/lunco-terrain-surface/src/terrain.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `x` | `f32` |   |
+| `z` | `f32` |   |
+| `size` | `f32` |  Boulder radius in metres; 0/absent = 0.6 m. |
+| `seed` | `u64` |  Shape/orientation seed; 0 = derived from position (stable, varied). |
+| `id` | `String` |  Optional stable id for the layer (so it can be removed later). Empty = auto. |
+
 #### `RemoveTerrainLayer`
 
  Remove a terrain layer by its [`LayerId`] — undo a specific dig/flatten (or any
@@ -2255,6 +2340,24 @@ command structs themselves in `crates/`, so it always matches the code. See the
 | Field | Type | Description |
 |---|---|---|
 | `id` | `String` |   |
+
+#### `SetTerrainOverlay`
+
+ Arm / re-tune the terrain analysis overlay at runtime (MCP / scripting / UI).
+
+ A numeric field left at its default `0` is treated as "keep the current value", so
+ `{ "enabled": true }` arms the overlay with the existing angles/opacity rather than
+ snapping everything to red. Pass positive `safe_deg` / `cliff_deg` / `opacity` to
+ set them.
+
+- *defined in:* `crates/lunco-terrain-surface/src/overlay.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `enabled` | `bool` |   |
+| `safe_deg` | `f32` |   |
+| `cliff_deg` | `f32` |   |
+| `opacity` | `f32` |   |
 
 #### `SpawnDemTerrain`
 
@@ -2327,6 +2430,29 @@ command structs themselves in `crates/`, so it always matches the code. See the
 
 ### `lunco-sandbox` <a id="lunco-sandbox"></a>
 
+#### `SaveScenario`
+
+ Save a live-edited rhai scenario's current source back onto its USD prim's
+ `lunco:script` attribute — the missing half of scenario authoring.
+
+ The LOAD path reads `lunco:script` off a prim into a running scenario; until
+ now a hot-edited scenario had no way *back* to the document. This resolves the
+ scripted entity's live source (from [`ScriptRegistry`](lunco_scripting::ScriptRegistry)),
+ its prim path, and the editable scene document backing it, then authors the
+ source onto `lunco:script` via [`SetAttribute`](lunco_usd::UsdOp::SetAttribute)
+ (whose `string` type authors the value RAW — no hand-escaping) — which journals,
+ and on `SaveDocument` writes through to the `.usda`.
+
+ Only doc-backed twin scenes have an editable document; a raw-file scene is
+ **refused** (logged, not silently dropped) — matching the rule that the builder
+ must only edit doc-backed scenes or it eats work on the next reload.
+
+- *defined in:* `crates/lunco-sandbox/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `target` | `Entity` |  The scripted entity whose live scenario source to persist onto its prim.  Ownership-gated (same as `RunScenario`): saving a scenario is editing it. |
+
 #### `SetRhaiPolicy`
 
  Convenience command: author (or hot-replace) a rhai policy as a `LuncoPolicy`
@@ -2353,4 +2479,4 @@ command structs themselves in `crates/`, so it always matches the code. See the
 
 ---
 
-<!-- scanned 576 .rs files across `crates/`; 0 parse failure(s) skipped -->
+<!-- scanned 603 .rs files across `crates/`; 0 parse failure(s) skipped -->

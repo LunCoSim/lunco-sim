@@ -1,0 +1,103 @@
+#usda 1.0
+(
+    defaultPrim = "SolarTower"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Vertical Solar Tower — a mast and a sun-tracking PV panel head.
+#
+# The rotational DOF is declared as a STANDARD USD `PhysicsRevoluteJoint`
+# (vertical Y axis, mast<->yaw-head) — the asset documents the axis/anchors.
+# The Sun rakes the polar horizon, so the panel face is vertical and the
+# array can track the sun's *azimuth* about the mast.
+#
+# Sun tracking is a cosim: a Modelica controller reads the live sun azimuth
+# and drives the head's yaw. That binding is authored in the moonbase Twin
+# (`twin://moonbase/models/SunTracker.mo` on the head) and needs that Twin
+# loaded, so it is omitted from this standalone spawnable part — the head is
+# hand-settable from the Inspector/API. See the "Cosim" tutorial to wire a
+# model to a body, and `scenes/sandbox/sun_tracker_test.usda` for the full rig.
+def Xform "SolarTower"
+{
+    custom bool lunco:spawnable = true
+    custom string lunco:description = "Vertical solar tower — mast + sun-tracking PV head on a revolute joint. Base power. Site it in the open with a clear horizon; keep it clear of the landing pad's plume."
+
+    def Cube "Pad" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, 0.1, 0)
+        double3 xformOp:scale = (2.0, 0.2, 2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.32, 0.31, 0.3)
+        bool physics:collisionEnabled = true
+    }
+
+    # Mast — the fixed joint anchor (body0). Kinematic so it holds station
+    # under the array load and gravity (same role as CubeA in joint_test).
+    def Cylinder "Mast" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        uniform token axis = "Y"
+        double radius = 0.18
+        double height = 5.0
+        double3 xformOp:translate = (0, 2.7, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.5, 0.5, 0.52)
+        float physics:mass = 200.0
+        bool physics:kinematicEnabled = true
+        bool physics:collisionEnabled = true
+    }
+
+    # Yaw head — the rotating part (body1 of the declared revolute joint).
+    # It is a PURE TRANSFORM node (no rigid body): an actuator (or the
+    # Inspector) writes its local Y rotation directly, which is reliable and
+    # immune to physics writeback / sleeping. The panel is parented under it,
+    # so it swings with the head. Sits above the mast top (5.2 m).
+    def Cylinder "YawHead"
+    {
+        uniform token axis = "Y"
+        double radius = 0.4
+        double height = 0.5
+        double3 xformOp:translate = (0, 5.6, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.45, 0.45, 0.48)
+
+        # Vertical PV panel — thin cube standing on edge, solar_panel
+        # shader. Visual-only child of the head, so it swings with the
+        # tracker (no physics of its own).
+        def Cube "Panel"
+        {
+            double size = 1.0
+            double3 xformOp:translate = (0, 1.2, 0)
+            double3 xformOp:scale = (4.0, 3.0, 0.06)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            color3f primvars:displayColor = (0.05, 0.05, 0.35)
+            string primvars:materialType = "shader"
+            string primvars:shaderPath = "shaders/solar_panel.wgsl"
+            color3f primvars:cell_color = (0.05, 0.05, 0.35)
+            color3f primvars:bus_color = (0.85, 0.85, 0.90)
+            color3f primvars:frame_color = (0.35, 0.35, 0.38)
+            float primvars:cell_rows = 8.0
+            float primvars:cell_cols = 12.0
+            float primvars:cell_gap = 0.02
+            float primvars:bus_width = 0.004
+            float primvars:border = 0.04
+        }
+    }
+
+    # Standard USD revolute joint: the array's single rotational DOF.
+    # Vertical (Y) hinge between mast (body0) and yaw head (body1); the
+    # anchors meet at the mast top / head centre (world y = 5.6).
+    def PhysicsRevoluteJoint "YawJoint"
+    {
+        rel physics:body0 = </SolarTower/Mast>
+        rel physics:body1 = </SolarTower/YawHead>
+        uniform token physics:axis = "Y"
+        point3f physics:localPos0 = (0, 2.9, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+    }
+}

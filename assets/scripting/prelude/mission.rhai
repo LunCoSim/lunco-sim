@@ -155,10 +155,15 @@ fn __init_mission(me) {
 //
 // Data step vocabulary (first matching field wins):
 //   #{ move_to: [x,y,z], speed: 1.0, radius: 2.0 }  drive until arrived (speed/radius optional)
+//   #{ move_to_entity: "/path", speed, radius }   drive to another entity, tracked live
+//   #{ possess: "/path" }                         take control of a vessel (PossessVessel)
+//   #{ brake: true, secs: 1.0 }                   hold the brake for N seconds
 //   #{ cmd: "Name", params: #{...} }              fire any command once, then advance
 //   #{ emit: "NAME", value: v }                   emit a telemetry marker once
 //   #{ wait: 5.0 }                                dwell N seconds
 //   #{ wait_event: "NAME" }                       hold until an event arrives
+// Any drive/brake step may add `subject: "/path"` to act on that entity instead
+// of the timeline's host (so one scenario can orchestrate a separate vessel).
 // Unknown steps lower to a no-op (skipped) — forward-compatible with new fields.
 //
 // Generic executor (RunTimeline injects exactly this around a `const TIMELINE`):
@@ -166,13 +171,37 @@ fn __init_mission(me) {
 //   fn on_tick(me)       { this.cur = run_steps(me, this.steps, this.cur); }
 //   fn on_event(me, evt) { this.cur = seq_note_event(this.cur, evt); }
 
+/// Resolve a step's subject entity: an explicit `subject` path, else host `m`.
+fn timeline_subject(m, s) {
+    if s.subject == () { return m; }
+    let g = find(s.subject);
+    if g != () { g } else { m }
+}
+
 /// Lower ONE data step to a Layer-1 step (closures capturing the step's fields).
 fn timeline_step(s) {
     if s.move_to != () {
         let wp  = s.move_to;
         let spd = if s.speed  != () { s.speed  } else { 1.0 };
         let rad = if s.radius != () { s.radius } else { 2.0 };
-        return step(|m| nav_to(m, wp, spd, rad), |m| arrived(m, wp, rad));
+        return step(|m| nav_to(timeline_subject(m, s), wp, spd, rad),
+                    |m| arrived(timeline_subject(m, s), wp, rad));
+    }
+    if s.move_to_entity != () {
+        let tgt = s.move_to_entity;
+        let spd = if s.speed  != () { s.speed  } else { 1.0 };
+        let rad = if s.radius != () { s.radius } else { 2.0 };
+        return step(
+            |m| { let g = find(tgt); if g != () { nav_to(timeline_subject(m, s), world_pos(g), spd, rad); } },
+            |m| { let g = find(tgt); g != () && arrived(timeline_subject(m, s), world_pos(g), rad) });
+    }
+    if s.possess != () {
+        let tgt = s.possess;
+        return once(|m| cmd("PossessVessel", #{ target: find(tgt) }));
+    }
+    if s.brake != () {
+        let secs = if s.secs != () { s.secs } else { 1.0 };
+        return #{ act: |m| brake(timeline_subject(m, s)), secs: secs };
     }
     if s.cmd != () {
         let name = s.cmd;

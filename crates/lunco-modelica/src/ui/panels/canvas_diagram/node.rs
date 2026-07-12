@@ -382,29 +382,6 @@ impl NodeVisual for IconNodeVisual {
                 .map(|(_, _, sx, sy, rot)| (*sx, *sy, *rot))
                 .unwrap_or((20.0, 20.0, 0.0));
             let mut painted_authored = false;
-            // The indexer ideally writes a fully-qualified path, but
-            // older indexes wrote the type as-declared (`"RealInput"`)
-            // — fall back to a scope-chain walk rooted at the parent
-            // class so cached indexes still resolve. First hit wins.
-            let parent_qualified = self.parent_qualified_type.as_str();
-            let candidates: Vec<String> = if connector_path.contains('.') {
-                vec![connector_path.to_string()]
-            } else if !connector_path.is_empty() {
-                let mut out = Vec::new();
-                let mut scope = parent_qualified.to_string();
-                while scope.contains('.') {
-                    let pkg = crate::ast_extract::parent_qualified(&scope).to_string();
-                    if !pkg.is_empty() {
-                        out.push(format!("{pkg}.Interfaces.{connector_path}"));
-                        out.push(format!("{pkg}.{connector_path}"));
-                    }
-                    scope = pkg;
-                }
-                out.push(connector_path.to_string());
-                out
-            } else {
-                Vec::new()
-            };
             // Paint stays lock-free: the connector class's `Icon`
             // was pre-resolved off-thread in `project_scene` and
             // baked into `port_connector_icons` (parallel to
@@ -413,7 +390,6 @@ impl NodeVisual for IconNodeVisual {
             // input/output triangle / acausal flange dot — drawing
             // it at the port location is what gives the diagram
             // its OMEdit-parity arrowheads, not a wire-end marker.
-            let _ = candidates; // legacy fallback kept compiling; no longer used.
             let resolved_icon: Option<crate::annotations::Icon> = self
                 .port_connector_paths
                 .iter()

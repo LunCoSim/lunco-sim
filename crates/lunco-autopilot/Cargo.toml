@@ -14,6 +14,10 @@ lunco-behavior = { path = "../lunco-behavior" }
 # hot-swap it. serde deserializes that data; the crate never compiles rhai.
 serde = { workspace = true }
 serde_json = { workspace = true }
+# BehaviorTree.CPP v4 XML interchange: the `btcpp_xml` codec round-trips a tree's
+# JSON to/from the de-facto robotics format (Groot2 editor, ROS/Nav2), so a
+# behaviour authored here can be edited/run by real flight software and back.
+quick-xml = "0.39"
 # Control is the ONE generic `SetPorts` command (a batch of named input-port
 # writes); the autopilot emits it exactly like the keyboard and scripts do.
 lunco-cosim = { path = "../lunco-cosim" }

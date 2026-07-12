@@ -739,7 +739,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // collider-only Cube prims hidden behind a glTF visual, and
         // raycast wheel cylinders that have no visible representation).
         let invisible = matches!(
-            get_attribute_as_string(reader, &sdf_path, "visibility").as_deref(),
+            read_token(reader, &sdf_path, "visibility").as_deref(),
             Some("invisible")
         );
 
@@ -853,12 +853,12 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // `lunco-scripting` attaches + runs it (the two crates stay decoupled —
         // neither depends on the other). Scenarios thus travel with the scene.
         if let Some(src) =
-            get_attribute_as_string(reader, &sdf_path, "lunco:script").filter(|s| !s.trim().is_empty())
+            read_token(reader, &sdf_path, "lunco:script").filter(|s| !s.trim().is_empty())
         {
             commands
                 .entity(entity)
                 .try_insert(lunco_core::EmbeddedScenarioSource(src));
-        } else if let Some(path) = get_attribute_as_string(reader, &sdf_path, "lunco:scriptPath")
+        } else if let Some(path) = read_token(reader, &sdf_path, "lunco:scriptPath")
             .filter(|s| !s.trim().is_empty())
         {
             // File-backed scenario: `lunco:scriptPath` references a `.rhai` asset.
@@ -879,7 +879,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // instead; a standalone rigid body (lander, spacecraft) needs this tag.
         // Empty `port_map` is fine — it means "possessable, no digital actuator
         // ports of its own" (a lander's actuation is its Modelica inputs).
-        if let Some(val) = get_attribute_as_string(reader, &sdf_path, "lunco:vessel") {
+        if let Some(val) = read_token(reader, &sdf_path, "lunco:vessel") {
             if val.eq_ignore_ascii_case("true") {
                 commands.entity(entity).try_insert(lunco_fsw::FlightSoftware::default());
             }
@@ -915,7 +915,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // Per-prim script params: `lunco:params = "wmax=1.05, lmax=3.6"`. Parsed
         // into a `ScriptParams` map a reusable script reads via `param(me, key,
         // default)` — the typed, fast alternative to inferring config from a name.
-        if let Some(spec) = get_attribute_as_string(reader, &sdf_path, "lunco:params") {
+        if let Some(spec) = read_token(reader, &sdf_path, "lunco:params") {
             let mut map = std::collections::HashMap::new();
             for entry in spec.split(',') {
                 if let Some((k, v)) = entry.split_once('=') {
@@ -932,7 +932,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // Tutorial chain: `lunco:nextScene = "scenes/foo.usda"` declares the scene
         // to load when this scene's mission completes. Stamped as a `NextScene`
         // marker; a generic handler (lunco-tutorial) loads it on MISSION_COMPLETE.
-        if let Some(next) = get_attribute_as_string(reader, &sdf_path, "lunco:nextScene")
+        if let Some(next) = read_token(reader, &sdf_path, "lunco:nextScene")
             .filter(|s| !s.trim().is_empty())
         {
             commands.entity(entity).try_insert(lunco_core::NextScene(next));
@@ -958,9 +958,9 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         //   materials, and lights at the cost of being opaque to the
         //   USD prim-path tree.
         if let Some(asset_uri) = reader.resolved_asset(&sdf_path) {
-            let mode = get_attribute_as_string(reader, &sdf_path, "lunco:assetMode")
+            let mode = read_token(reader, &sdf_path, "lunco:assetMode")
                 .unwrap_or_else(|| "scene".to_string());
-            let label = get_attribute_as_string(reader, &sdf_path, "lunco:assetLabel");
+            let label = read_token(reader, &sdf_path, "lunco:assetLabel");
 
             match mode.as_str() {
                 "mesh" => {
@@ -1510,7 +1510,7 @@ fn apply_standard_material<R: UsdRead>(
         let load_tex = |input: &str, is_color: bool| -> Option<Handle<Image>> {
             let conn = reader.rel_target(&shader_path, input)?;
             let texture_path = parent_prim_path(&conn)?;
-            let asset_path = get_attribute_as_string(reader, &texture_path, "inputs:file")?;
+            let asset_path = read_token(reader, &texture_path, "inputs:file")?;
             let resolved = resolve_texture_path(asset_server, stage_id, &asset_path)?;
 
             let is_srgb = match read_token(reader, &texture_path, "inputs:sourceColorSpace").as_deref() {
@@ -2349,12 +2349,6 @@ pub fn read_token<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<
         Value::AssetPath(a) => Some(a.as_str().to_string()),
         _ => None,
     }
-}
-
-/// Back-compat alias for the string/asset call sites (visibility,
-/// `lunco:resolvedAsset`, …). Same impl as [`read_token`].
-fn get_attribute_as_string<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<String> {
-    read_token(reader, path, attr)
 }
 
 /// USD `xformOp:rotateXYZ` (Euler XYZ, **degrees** as authored) → Bevy

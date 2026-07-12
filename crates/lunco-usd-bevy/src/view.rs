@@ -80,8 +80,8 @@ impl<'a> StageView<'a> {
     }
 
     /// Attribute `name` on `prim` coerced to a string — handles `String`,
-    /// `Token`, and `AssetPath` (the `@…@` form). Mirrors the legacy
-    /// `get_attribute_as_string` free helper.
+    /// `Token`, and `AssetPath` (the `@…@` form). Mirrors the
+    /// `read_token` free helper.
     pub fn value_str(&self, prim: &SdfPath, name: &str) -> Option<String> {
         match self.stage.prim(prim.clone()).attribute(name).get::<Value>().ok().flatten()? {
             Value::String(s) => Some(s),

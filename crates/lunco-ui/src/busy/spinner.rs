@@ -4,7 +4,7 @@
 //! variant of the indicator (per-tab overlay card, inline tree row,
 //! status-bar tick) shares one animation.
 
-use bevy_egui::egui::{self, Color32, Pos2, Stroke};
+use bevy_egui::egui::{self, Color32, Pos2};
 
 /// Paint three pulsing dots centred at `center`, animating with the
 /// frame-time clock from `ui.ctx().input(|i| i.time)`.
@@ -31,7 +31,4 @@ pub(crate) fn paint_three_dot(ui: &mut egui::Ui, center: Pos2, colour: Color32) 
     }
     // Keep animating while we're on screen.
     ui.ctx().request_repaint();
-    // Suppress unused warning when feature flags strip the stroke type;
-    // kept for future "ring" variant.
-    let _ = Stroke::NONE;
 }

@@ -205,9 +205,19 @@ const OCTAVE_COUNT: usize = 16;
 
 /// Radius-octave stratum of a crater: same-scale craters overprint, craters an
 /// octave apart superpose (see [`Craters::delta_at`]).
+///
+/// The stratum is `⌊log₂ radius⌋`, but computed **bit-exactly** from the f64's
+/// binary exponent rather than `log2().floor()`. `log2` is not in the IEEE-754
+/// correctly-rounded set, so a radius within a ULP of a power-of-two boundary
+/// could floor to different octaves on x86 / ARM / wasm — regrouping the discrete
+/// overprint strata and diverging collider heights + content hashes across peers
+/// (a structural break the `quantize` firewall cannot repair). `radius.max(1e-9)`
+/// is always a normal f64, so the biased-exponent field is exactly `⌊log₂ r⌋`.
 #[inline]
 fn octave_of(radius: f64) -> usize {
-    (radius.max(1e-9).log2().floor() as i32 - OCTAVE_BASE).clamp(0, OCTAVE_COUNT as i32 - 1) as usize
+    let r = radius.max(1e-9);
+    let exp2 = ((r.to_bits() >> 52) & 0x7ff) as i32 - 1023; // ⌊log₂ r⌋, bit-exact
+    (exp2 - OCTAVE_BASE).clamp(0, OCTAVE_COUNT as i32 - 1) as usize
 }
 
 /// Soft cap on dense bucket-grid cells. The cell size is derived from the largest

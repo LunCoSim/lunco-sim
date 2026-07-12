@@ -236,6 +236,9 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
     // `ensure_host` + `RunScenario` need `&mut World`; an observer only has
     // `Commands`, so defer to an exclusive closure.
     commands.queue(move |world: &mut World| {
+        // Starting a lesson dismisses any leftover "continue to next?" prompt from a
+        // previously completed one (it would otherwise overlay this lesson's HUD).
+        world.resource_mut::<PendingAdvance>().0 = None;
         let Some(meta) = world.resource::<TutorialRegistry>().get(&id) else {
             warn!("[tutorial] StartTutorial: unknown id '{id}'");
             return;
@@ -258,12 +261,18 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
 }
 
 #[on_command(SkipTutorial)]
-fn on_skip_tutorial(_t: On<SkipTutorial>, mut hud: ResMut<TutorialHud>, mut progress: ResMut<TutorialProgress>) {
+fn on_skip_tutorial(
+    _t: On<SkipTutorial>,
+    mut hud: ResMut<TutorialHud>,
+    mut progress: ResMut<TutorialProgress>,
+    mut pending: ResMut<PendingAdvance>,
+) {
     hud.hint.clear();
     hud.objectives.clear();
     hud.spotlight = None;
     hud.tour = None;
     progress.current = None;
+    pending.0 = None;
 }
 
 #[on_command(SetSubsystemEnabled)]

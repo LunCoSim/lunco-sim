@@ -1,0 +1,42 @@
+#usda 1.0
+(
+    defaultPrim = "LandingPad"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Landing Pad — blast-hardened disc. Place >=150 m down-sun from the
+# habitat/solar field so plume ejecta doesn't sandblast them.
+def Xform "LandingPad"
+{
+    custom bool lunco:spawnable = true
+    custom string lunco:description = "Blast-hardened landing pad — sintered disc with a centre hub. Where landers touch down; keep it well clear (>=150 m) of the habitat and solar field so plume ejecta can't sandblast them."
+
+    def Cylinder "Pad" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        uniform token axis = "Y"
+        double radius = 15.0
+        double height = 0.3
+        double3 xformOp:translate = (0, 0.15, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.18, 0.17, 0.16)
+        bool physics:collisionEnabled = true
+        # Darkened regolith — sintered/compacted blast pad.
+        string primvars:materialType = "shader"
+        string primvars:shaderPath = "shaders/regolith.wgsl"
+        color3f primvars:colorA = (0.1, 0.1, 0.1)
+    }
+
+    # Center marker hub.
+    def Cylinder "Hub"
+    {
+        uniform token axis = "Y"
+        double radius = 1.5
+        double height = 0.35
+        double3 xformOp:translate = (0, 0.18, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f primvars:displayColor = (0.7, 0.6, 0.2)
+    }
+}

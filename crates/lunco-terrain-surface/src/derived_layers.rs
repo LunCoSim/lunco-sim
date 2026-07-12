@@ -5,7 +5,7 @@
 //! each terrain that carries a retained height field ([`DemHeightField`]) we
 //! bake — **off the main thread** — two mipped RGBA8 textures:
 //!
-//! - `surface_map` (binding 6/7): R=roughness G=AO B=rockDensity A=hazard, and
+//! - `surface_map` (binding 6/7): R=roughness G=AO B=rockDensity A=unused, and
 //! - `normal_map`  (binding 8/9): the DEM-derived meso normal, with the
 //!   relief-correlated **albedo scalar in alpha**,
 //!
@@ -43,8 +43,8 @@ use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
 
 use lunco_materials::{ParamValue, ShaderMaterial};
 use lunco_terrain_core::{
-    albedo_map, ao_map, hazard_from_slope, normal_map, pack_normal_rgba8, pack_surface_rgba8,
-    roughness_from_slope, slope_map, Square,
+    albedo_map, ao_map, normal_map, pack_normal_rgba8, pack_surface_rgba8, roughness_from_slope,
+    slope_map, Square,
 };
 
 use crate::oracle::SurfaceOracle;
@@ -61,11 +61,9 @@ const AO_DIRS: usize = 8;
 const AO_STEPS: usize = 8;
 /// AO ray reach as a fraction of the tile half-extent.
 const AO_RADIUS_FRAC: f64 = 0.15;
-/// Slope (radians) at which roughness saturates and hazard tops out / starts.
+/// Slope (radians) at which roughness saturates.
 const ROUGH_BASE: f32 = 0.6;
 const ROUGH_STEEP_RAD: f32 = 0.6; // ~34°
-const SAFE_RAD: f32 = 0.2618; // 15°
-const CLIFF_RAD: f32 = 0.5236; // 30°
 
 /// One-shot marker: this terrain's derived layers are bound onto its own
 /// static-mesh `ShaderMaterial`. Stops re-scanning. Streamed tiles don't use
@@ -74,7 +72,7 @@ const CLIFF_RAD: f32 = 0.5236; // 30°
 pub struct DerivedLayersBuilt;
 
 /// The published derived maps for a terrain — GPU handles every terrain render
-/// path binds from. `surface` packs R=roughness G=AO B=rockDensity A=hazard;
+/// path binds from. `surface` packs R=roughness G=AO B=rockDensity A=unused;
 /// `normal` packs the meso normal in RGB and the albedo scalar in A. Removed
 /// (and re-baked) when the surface changes.
 #[derive(Component, Clone)]
@@ -202,7 +200,10 @@ fn start_derived_bakes(
 /// v5: tone (albedo) derived with a 3-texel stencil on a 6-texel-limited source
 /// (1-texel stencil at the 2-texel band edge returned per-texel checker → the
 /// mid-field texel mosaic); AO marched at half res and bilinear-expanded.
-const CACHE_FORMAT_VERSION: u64 = 5;
+/// v6: surface-map alpha is no longer a baked slope hazard (nothing sampled it;
+/// hazard is a live per-pixel view off the `overlay_*` uniforms). The frozen
+/// safe/cliff angles left the key with it.
+const CACHE_FORMAT_VERSION: u64 = 6;
 
 /// The derived-layer bake as a [`lunco_precompute::Bake`] — the content-addressed
 /// disk cache (Substrate B) owns the load/store/rebake orchestration; this only
@@ -231,8 +232,6 @@ impl lunco_precompute::Bake for DerivedBake<'_> {
         h.write_u64(AO_RADIUS_FRAC.to_bits());
         h.write_u64(ROUGH_BASE.to_bits() as u64);
         h.write_u64(ROUGH_STEEP_RAD.to_bits() as u64);
-        h.write_u64(SAFE_RAD.to_bits() as u64);
-        h.write_u64(CLIFF_RAD.to_bits() as u64);
         for &v in &grid.heights {
             h.write_u64(v.to_bits());
         }
@@ -356,12 +355,10 @@ fn bake_derived(oracle: &SurfaceOracle) -> DerivedMaps {
 
     let roughness: Vec<f32> =
         slope.iter().map(|&s| roughness_from_slope(s, ROUGH_BASE, ROUGH_STEEP_RAD)).collect();
-    let hazard: Vec<f32> =
-        slope.iter().map(|&s| hazard_from_slope(s, SAFE_RAD, CLIFF_RAD)).collect();
 
     DerivedMaps {
         res,
-        surface_rgba: pack_surface_rgba8(&roughness, &ao, &[], &hazard),
+        surface_rgba: pack_surface_rgba8(&roughness, &ao, &[]),
         normal_rgba: pack_normal_rgba8(&normals, &albedo),
     }
 }
@@ -475,7 +472,7 @@ fn mip_chain_rgba8(base: Vec<u8>, res: usize) -> (Vec<u8>, u32) {
 }
 
 /// A linear (non-sRGB) RGBA8 data texture with a full mip chain and
-/// trilinear/anisotropic filtering — these carry roughness/AO/hazard scalars,
+/// trilinear/anisotropic filtering — these carry the roughness/AO scalars,
 /// an encoded normal, and the albedo scalar, and are sampled out to the horizon.
 fn data_texture(res: usize, rgba: Vec<u8>) -> Image {
     use bevy::image::ImageSamplerDescriptor;

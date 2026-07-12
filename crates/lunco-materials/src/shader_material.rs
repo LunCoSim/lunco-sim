@@ -350,6 +350,13 @@ pub struct PbrLitModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
 #[derive(Resource)]
 pub struct LunarBrdfModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
 
+/// Keeps the shared `lunco::transfer` WGSL module (the value→colour plane of
+/// Data → Transfer → Blend) loaded so `#import lunco::transfer` resolves in the
+/// terrain shaders. The GPU twin of `lunco_terrain_core::transfer` — one ramp,
+/// so an analysis overlay and the legend explaining it cannot disagree.
+#[derive(Resource)]
+pub struct TransferModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
+
 impl Plugin for ShaderMaterialPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<ShaderMaterial>::default());
@@ -376,6 +383,11 @@ impl Plugin for ShaderMaterialPlugin {
             .resource::<AssetServer>()
             .load("shaders/lunar_brdf.wgsl");
         app.insert_resource(LunarBrdfModule(lunar));
+        let transfer = app
+            .world()
+            .resource::<AssetServer>()
+            .load("shaders/transfer.wgsl");
+        app.insert_resource(TransferModule(transfer));
     }
 }
 

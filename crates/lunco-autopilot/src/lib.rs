@@ -35,7 +35,10 @@ use lunco_behavior::{
     ReactiveSequence, Repeat, Retry, Selector, Sequence, Status,
 };
 use lunco_core::session::{AuthorityRole, SessionRbac, UserSession};
-use lunco_core::{Command, on_command, register_commands};
+use lunco_core::{Ack, Command, OpId, on_command, register_commands};
+
+/// BehaviorTree.CPP v4 XML ⇄ tree-JSON codec (Groot2 / ROS interop).
+pub mod btcpp_xml;
 use lunco_core::{GlobalEntityId, NetworkRole, SessionId, SessionRegistry};
 use lunco_cosim::SetPorts;
 use serde::Deserialize;
@@ -1245,7 +1248,50 @@ fn on_set_autopilot_behavior(
     }
 }
 
-register_commands!(on_engage_autopilot, on_set_autopilot_behavior);
+/// Export a behaviour tree (JSON [`BehaviorSpec`]) to BehaviorTree.CPP v4 XML —
+/// the format Groot2 edits and ROS/Nav2 runs. The result is returned in the Ack
+/// (`xml`), so a rhai scenario or the API can convert a tree to a portable,
+/// editable file. Round-trips with [`ImportBehaviorXml`].
+#[Command]
+pub struct ExportBehaviorXml {
+    /// A JSON [`BehaviorSpec`] (the same shape [`SetAutopilotBehavior`] takes).
+    pub spec_json: String,
+}
+
+#[on_command(ExportBehaviorXml)]
+fn on_export_behavior_xml(_t: On<ExportBehaviorXml>) -> Result<Ack, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(&cmd.spec_json).map_err(|e| format!("ExportBehaviorXml: {e}"))?;
+    let xml = btcpp_xml::value_to_xml(&value)?;
+    let mut ack = Ack::new(OpId::new());
+    ack.assigned = serde_json::json!({ "xml": xml });
+    Ok(ack)
+}
+
+/// Import a BehaviorTree.CPP v4 XML tree back to a JSON [`BehaviorSpec`] — the
+/// inverse of [`ExportBehaviorXml`]. The JSON is returned in the Ack (`spec_json`)
+/// ready to feed [`SetAutopilotBehavior`] / [`EngageAutopilot`].
+#[Command]
+pub struct ImportBehaviorXml {
+    /// A BehaviorTree.CPP v4 XML document.
+    pub xml: String,
+}
+
+#[on_command(ImportBehaviorXml)]
+fn on_import_behavior_xml(_t: On<ImportBehaviorXml>) -> Result<Ack, String> {
+    let value = btcpp_xml::xml_to_value(&cmd.xml)?;
+    let spec_json = serde_json::to_string(&value).map_err(|e| format!("ImportBehaviorXml: {e}"))?;
+    let mut ack = Ack::new(OpId::new());
+    ack.assigned = serde_json::json!({ "spec_json": spec_json });
+    Ok(ack)
+}
+
+register_commands!(
+    on_engage_autopilot,
+    on_set_autopilot_behavior,
+    on_export_behavior_xml,
+    on_import_behavior_xml
+);
 
 /// Headless-safe plugin: engage autopilots on spawn, drive them each fixed tick,
 /// and accept live behaviour updates. No rendering/UI/avatar dependency.

@@ -51,6 +51,8 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
      "Absolute (big_space float-origin) world position of an entity."),
     ("world_forward", "world_forward(id)", "[x, y, z] | ()",
      "Unit forward/heading vector of an entity in world space."),
+    ("world_rotation", "world_rotation(id)", "[x, y, z, w] | ()",
+     "World orientation quaternion of an entity. Derive any axis rhai-side (up/forward/right = quat * unit); feeds tilt/tip-over checks."),
     ("find", "find(name)", "id (i64)",
      "Entity id with the given Name, or -1 if none."),
     ("name", "name(id)", "string | ()",

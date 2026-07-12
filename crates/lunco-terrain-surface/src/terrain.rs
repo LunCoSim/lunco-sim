@@ -158,7 +158,13 @@ pub struct DemTerrainRequest {
 /// regenerate path clones this, re-stamps the current [`ObstacleFieldSpec`]
 /// craters, and swaps the result into [`crate::stream_viz::DemHeightField`].
 #[derive(Component, Clone)]
-pub struct DemBaseGrid(pub std::sync::Arc<HeightGrid>);
+pub struct DemBaseGrid(
+    pub std::sync::Arc<HeightGrid>,
+    /// Cached `grid_key` of the base grid (folds the whole raster). Computed once
+    /// at build time so a live re-stamp reusing this Arc never re-hashes the
+    /// multi-million-point grid — the all-analytic stack (the norm) reuses it.
+    pub u64,
+);
 
 /// Retained build settings a live re-bake needs (whether the static collider or a
 /// streamed collider ring carries physics).
@@ -176,14 +182,58 @@ pub struct DemTerrainSource {
 /// so it needs no plumbing through the async bake tasks. The heavy crater stamp
 /// exposes no incremental callback, so `fraction` stays `None` (the UI shows an
 /// animated spinner) — `phase` carries the meaningful signal.
+/// The current terrain-build phase — a **typed** signal so the UI caption can't
+/// drift from a stringly-matched substring (native "Baking"/"Preparing" silently
+/// fell through the old `phase.contains("…")` match to the wrong caption).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum TerrainGenPhase {
+    /// Queued, no bake started yet.
+    #[default]
+    Preparing,
+    /// Web: fetching the GeoTIFF from the server.
+    Downloading,
+    /// Web: baking the coarse preview (decode + stamp + collider).
+    Building,
+    /// Native: the single async decode + crater-stamp bake.
+    Baking,
+    /// Web: refining the full-resolution grid after the coarse preview.
+    Refining,
+}
+
+impl TerrainGenPhase {
+    /// Short label for the overlay title (e.g. `"Refining terrain"`).
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Preparing => "Preparing",
+            Self::Downloading => "Downloading terrain",
+            Self::Building => "Building terrain",
+            Self::Baking => "Baking terrain",
+            Self::Refining => "Refining terrain",
+        }
+    }
+
+    /// One-line caption describing what the phase is doing (overlay subtext).
+    pub fn caption(self) -> &'static str {
+        match self {
+            Self::Preparing => "Preparing terrain generation…",
+            Self::Downloading => "Fetching heightmap file from server…",
+            // Native "Baking" and web "Building" both decode + stamp + build colliders.
+            Self::Building | Self::Baking => {
+                "Decoding heightmap, stamping craters, building colliders…"
+            }
+            Self::Refining => "Refining high-detail meshes and colliders near camera…",
+        }
+    }
+}
+
 #[derive(Resource, Default, Clone)]
 pub struct TerrainGenStatus {
     /// A build is in flight — any tile queued, baking (native), or streaming (web).
     pub active: bool,
     /// Site label (last path segment of the DEM uri, e.g. `connecting_ridge`).
     pub site: String,
-    /// Current phase, e.g. "Preparing", "Baking terrain", "Building terrain".
-    pub phase: String,
+    /// Current phase (drives the overlay title + caption).
+    pub phase: TerrainGenPhase,
     /// `0.0..=1.0` when a real fraction is known; `None` = indeterminate (spinner).
     pub fraction: Option<f32>,
     /// Set to true if the user dismissed the loading overlay manually.
@@ -285,23 +335,23 @@ fn update_terrain_gen_status(
     // coarse preview (physics-ready) then refines to the full grid; native is a
     // single opaque task (indeterminate spinner).
     let (phase, fraction) = if refining_full {
-        ("Refining terrain", Some(0.66))
+        (TerrainGenPhase::Refining, Some(0.66))
     } else if streaming_coarse {
         if let Some(df) = download_fraction {
             if df < 1.0 {
-                ("Downloading terrain", Some(0.1 + df * 0.23))
+                (TerrainGenPhase::Downloading, Some(0.1 + df * 0.23))
             } else {
-                ("Building terrain", Some(0.33))
+                (TerrainGenPhase::Building, Some(0.33))
             }
         } else {
-            ("Building terrain", Some(0.33))
+            (TerrainGenPhase::Building, Some(0.33))
         }
     } else if baking {
-        ("Baking terrain", None)
+        (TerrainGenPhase::Baking, None)
     } else {
-        ("Preparing", Some(0.1))
+        (TerrainGenPhase::Preparing, Some(0.1))
     };
-    status.phase = phase.to_string();
+    status.phase = phase;
     status.fraction = fraction;
 }
 
@@ -1147,8 +1197,9 @@ fn assemble_dem_build(
         }
         // Retain the pristine base grid + source settings so the crater layer can be
         // re-baked live from the Inspector (`RegenerateField`) without disk I/O.
+        let base_key = crate::oracle::grid_key(&built.base_grid);
         e.try_insert((
-            DemBaseGrid(built.base_grid),
+            DemBaseGrid(built.base_grid, base_key),
             DemTerrainSource { collider_ring },
         ));
         // Retain the oracle + mark the streaming mode(s). `lod_viz` streams visual LOD
@@ -1463,6 +1514,7 @@ fn spawn_restamp_task(
     stack: &crate::terrain_layers::TerrainLayerStack,
 ) {
     let base_grid = base.0.clone();
+    let base_key = base.1;
     let layers: Vec<_> = stack.0.iter().map(|e| e.layer.clone()).collect();
     let task = AsyncComputeTaskPool::get().spawn(async move {
         // Off-thread body → own Tracy zone (per-system spans don't reach here).
@@ -1472,18 +1524,22 @@ fn spawn_restamp_task(
         // modifiers) reuse the base grid Arc directly — cloning + re-stamping
         // the whole raster was a multi-MB memcpy on EVERY brush stroke, for a
         // grid that came out identical.
-        let grid = if layers.iter().any(|l| l.stamps()) {
+        let contributions: Vec<_> =
+            layers.iter().filter_map(|l| l.height_modifier(half_extent)).collect();
+        let oracle = if layers.iter().any(|l| l.stamps()) {
+            // A stamp mutates the raster → a genuinely new grid, so its key must be
+            // re-folded (no reuse possible).
             let mut grid = (*base_grid).clone();
             for layer in &layers {
                 layer.stamp(&mut grid);
             }
-            std::sync::Arc::new(grid)
+            crate::oracle::SurfaceOracle::new(std::sync::Arc::new(grid), contributions)
         } else {
-            base_grid.clone()
+            // Same base Arc → reuse the cached key instead of re-hashing ~10M
+            // heights off-thread on every brush stroke.
+            crate::oracle::SurfaceOracle::new_with_base_key(base_grid, contributions, base_key)
         };
-        let contributions: Vec<_> =
-            layers.iter().filter_map(|l| l.height_modifier(half_extent)).collect();
-        std::sync::Arc::new(crate::oracle::SurfaceOracle::new(grid, contributions))
+        std::sync::Arc::new(oracle)
     });
     commands.entity(entity).try_insert(DemRestampTask(task));
 }
@@ -1656,7 +1712,7 @@ pub(crate) fn finish_dem_restamp(
         // The per-node mesh cache assumes geometry is a pure function of the coord,
         // which a live edit breaks — drop the entries the edit touched (or all, on a
         // whole-terrain change) so re-baked tiles pick up the new heights.
-        mesh_cache.drop_region(dirty_bounds, half);
+        mesh_cache.drop_region(entity, dirty_bounds, half);
 
         // A bounded edit leaves the crater/rock fields untouched, so DON'T re-scatter
         // (that despawn+respawn of every rock is a big part of the per-edit cost). A

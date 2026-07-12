@@ -21,7 +21,7 @@ layers the core deliberately omits. The complement to `lunco-terrain-globe`
 | `georef` | `TerrainGeoref` parsed from `lunco:anchor:*` (lat/lon/height, metersPerUnit) |
 | `terrain` | the DEM terrain surface + spawn requests (`DemTerrainSurface`, `DemTerrainRequest`, `SpawnDemTerrain`) |
 | `query` | terrain-height queries (`TerrainHeightProvider`, `register_terrain_queries`) |
-| `plugin` | `TerrainSurfacePlugin` + `TerrainSurfaceConfig` |
+| `plugin` | `TerrainSurfacePlugin` (wires the full DEM → streaming → collider pipeline) |
 
 ## Usage
 

@@ -1,0 +1,81 @@
+#usda 1.0
+(
+    defaultPrim = "BuildBase"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# ── Tutorial: Build a Lunar Base ─────────────────────────────────────────────
+# An open regolith plot and the spawn palette. The lesson coaches the student to
+# lay out a working surface base from the moonbase Structures kit — power, a
+# crew habitat, comms, ISRU and a landing pad — and, crucially, WHERE each one
+# goes and why (radiation standoff, plume ejecta, line-of-sight, resource reach).
+#
+# ALL lesson logic is data: this scene just sets the stage (flat ground, a raking
+# polar sun, a fly-cam), and the orchestrator `build_base.rhai` runs the mission
+# — it advances on REAL spawns (an entity of each kind appearing in the world),
+# never on a timer. See crates/lunco-tutorial and the tutorial_overlay HUD.
+#
+#   sandbox --scene tutorials/sandbox/build_base.usda
+# or start it from the 🎓 Tutorials panel.
+
+def Xform "BuildBase"
+{
+    # Environment, not a spawnable part.
+    custom bool lunco:spawnable = false
+    custom string lunco:description = "Lay out a working lunar surface base from the Structures kit — power, habitat, comms, ISRU and a landing pad — and learn where each one goes and why."
+
+    # ── Catalog entry (hybrid: metadata rides the scene, not tutorials.json) ──
+    # This scene-backed lesson declares its own catalog row here on the default
+    # prim; the launcher (`lunco_usd_bevy::tutorial_scene_metas`) scans it and
+    # merges it with the JSON manifest. Present ⇒ this .usda IS a tutorial.
+    custom string lunco:tutorialId = "build-base"
+    custom string lunco:tutorialTitle = "Build a Lunar Base"
+    custom string lunco:tutorialBlurb = "Compose a surface base from the moonbase Structures kit — solar/fission power, a crew habitat, a comms mast, an ISRU plant and a landing pad — and learn the siting rules for each."
+    custom string lunco:tutorialDifficulty = "beginner"
+    custom string lunco:tutorialScript = "sandbox/build_base.rhai"
+    custom string lunco:tutorialNext = "script-a-rover"
+
+    # ── The build plot: a wide, flat regolith plane (±250 m) so the ≥150 m
+    #    landing-pad standoff is a real distance to lay out. ─────────────────
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (500.0, 1.0, 500.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f primvars:displayColor = (0.34, 0.32, 0.31)
+        bool physics:collisionEnabled = true
+        float physics:friction = 1.0
+    }
+
+    # Raking polar sun — low on the horizon, the lighting a real polar base
+    # lives under (and the reason the solar tower's panel is vertical).
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 11000
+        float inputs:angle = 0.53
+        double3 xformOp:rotateXYZ = (-12.0, 35.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+        custom float lunco:shadow:maxDistance = 1200.0
+        custom float lunco:shadow:firstCascadeFarBound = 25.0
+        custom int lunco:shadow:numCascades = 5
+    }
+
+    # Fly-cam looking down over the empty plot from the south-west, so the
+    # student sees the whole build area and can fly in to place each part.
+    def Xform "Avatar"
+    {
+        string lunco:avatar = "true"
+        string lunco:cameraMode = "freeflight"
+        custom double3 lunco:cameraLookAt = (0.0, 0.0, 0.0)
+        double3 xformOp:translate = (-45.0, 35.0, -55.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # Environment only. The tutorial ORCHESTRATOR is the standalone
+    # `build_base.rhai` (run by the launcher on a host entity); it `load_scene`s
+    # this file in `on_start`.
+}

@@ -200,6 +200,34 @@ impl Plugin for SandboxUiPlugin {
             }
         }
 
+        // Extra tutorial TRACKS — Basic (rover fundamentals) and Space School
+        // (the IKI event scenario). `TutorialPlugin` is added once above for the
+        // primary "sandbox" app (its build() does the one-time command/panel/
+        // observer setup); adding it again would panic on duplicate-plugin. So
+        // these extra apps just contribute their JSON catalog into the shared
+        // `TutorialRegistry` via `register_tutorial`, exactly like the scene-metas
+        // block above. Data-driven: a new track is a `tutorials.json` + `.rhai`.
+        {
+            use lunco_tutorial::TutorialAppExt;
+            for track in ["basic", "school"] {
+                let path = format!("{track}/tutorials.json");
+                match lunco_assets::tutorials::tutorial_source(&path) {
+                    Some(src) => match serde_json::from_str::<Vec<lunco_tutorial::TutorialMeta>>(&src)
+                    {
+                        Ok(metas) => {
+                            for m in metas {
+                                app.register_tutorial(m);
+                            }
+                        }
+                        Err(e) => {
+                            bevy::log::warn!("tutorials manifest '{path}' failed to parse: {e}")
+                        }
+                    },
+                    None => bevy::log::warn!("no tutorials manifest at 'assets/tutorials/{path}'"),
+                }
+            }
+        }
+
         // Embed the FULL lunica workbench as the "Design" workspace via the
         // shared bundle — same clipboard bridge, autosave, worker, and panels
         // as standalone lunica, so the Design tab can't drift from the real
