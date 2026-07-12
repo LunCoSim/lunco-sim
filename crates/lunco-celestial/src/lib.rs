@@ -143,6 +143,11 @@ impl Plugin for CelestialPlugin {
         app.register_type::<link::LinkConfig>();
         app.register_type::<link::LinkNode>();
         link::register_all_commands(app);
+        // `update_links` is a REGULAR (non-exclusive) system — it writes through
+        // Commands and adds no extra command-flush sync point. (An earlier
+        // exclusive version, needed to call the TerrainRaycast provider with
+        // `&mut World`, inserted a sync point that interleaved with the
+        // twin/terrain despawns and tripped avian's island bookkeeping.)
         app.add_systems(Update, link::update_links);
         // Keep a host-app gravity choice (e.g. the sandbox's flat gravity);
         // default to surface gravity for the full client.

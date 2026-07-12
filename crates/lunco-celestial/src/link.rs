@@ -20,7 +20,6 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
-use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_core::{on_command, register_commands, Command, Severity, TelemetryEvent, TelemetryValue};
 use lunco_hooks::HookValue;
 use lunco_time::WorldTime;
@@ -102,7 +101,7 @@ register_commands!(on_set_link_cadence);
 /// Kernel scratch: last recompute epoch + the previous tick's live link set (for
 /// AOS/LOS edges).
 #[derive(Resource, Default)]
-struct LinkSolverState {
+pub(crate) struct LinkSolverState {
     last_jd: f64,
     prev_up: HashSet<String>,
 }
@@ -116,51 +115,52 @@ struct Node {
     pose: SolarFramePose,
 }
 
-/// The cadence-gated pairwise connectivity sweep. Exclusive so it can call the
-/// generic `TerrainRaycast` provider with `&mut World`.
-pub fn update_links(world: &mut World) {
-    let interval_s = world.get_resource::<LinkConfig>().map(|c| c.interval_s).unwrap_or(0.25);
-    let Some(jd) = world.get_resource::<WorldTime>().map(|w| w.epoch_jd) else {
+/// The cadence-gated pairwise connectivity sweep. A REGULAR system on purpose:
+/// it writes through `Commands`, so it adds NO extra command-flush sync point. An
+/// earlier EXCLUSIVE version (to call the `TerrainRaycast` provider with
+/// `&mut World`) inserted a sync point that interleaved with the twin/terrain
+/// despawns and tripped avian's island bookkeeping (`island.body_count > 0`).
+/// Terrain occlusion therefore moves to the verdict policy / a future cached
+/// oracle, not an in-loop world query.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn update_links(
+    config: Option<Res<LinkConfig>>,
+    world_time: Option<Res<WorldTime>>,
+    ephemeris: Option<Res<EphemerisResource>>,
+    registry: Option<Res<CelestialBodyRegistry>>,
+    q_nodes: Query<(Entity, &LinkNode, &SolarFramePose, Option<&Name>)>,
+    mut q_state: Query<&mut LinkState>,
+    mut state: Local<LinkSolverState>,
+    mut commands: Commands,
+) {
+    let (Some(config), Some(world_time)) = (config, world_time) else {
         return;
     };
-
-    // Cadence gate (epoch delta in seconds), plus a topology check via node count.
-    let mut node_count = 0usize;
-    {
-        let mut q = world.query::<(&LinkNode, &SolarFramePose)>();
-        node_count = q.iter(world).count();
-    }
-    if node_count < 2 {
+    let jd = world_time.epoch_jd;
+    if q_nodes.iter().count() < 2 {
         return;
     }
-    {
-        let mut st = world.get_resource_or_insert_with(LinkSolverState::default);
-        let advanced = (jd - st.last_jd).abs() * 86_400.0 >= interval_s;
-        if !advanced && st.last_jd != 0.0 {
-            return;
-        }
-        st.last_jd = jd;
+    let advanced = (jd - state.last_jd).abs() * 86_400.0 >= config.interval_s;
+    if !advanced && state.last_jd != 0.0 {
+        return;
     }
+    state.last_jd = jd;
 
-    // Snapshot nodes (release the world borrow before the terrain provider call).
-    let nodes: Vec<Node> = {
-        let mut q = world.query::<(Entity, &LinkNode, &SolarFramePose, Option<&Name>)>();
-        q.iter(world)
-            .map(|(e, n, p, name)| Node {
+    let nodes: Vec<Node> = q_nodes
+        .iter()
+        .map(|(e, n, p, name)| {
+            Node {
                 entity: e,
                 name: n.class.clone().unwrap_or_default(),
                 node: n.clone(),
                 pose: *p,
             }
-            .named(name, e))
-            .collect()
-    };
+            .named(name, e)
+        })
+        .collect();
 
-    // Body centers for occlusion (snapshot; frees the ephemeris/registry borrow).
-    let bodies: Vec<(String, DVec3, f64)> = match (
-        world.get_resource::<EphemerisResource>(),
-        world.get_resource::<CelestialBodyRegistry>(),
-    ) {
+    // Body centers for analytic occlusion.
+    let bodies: Vec<(String, DVec3, f64)> = match (ephemeris.as_deref(), registry.as_deref()) {
         (Some(eph), Some(reg)) => reg
             .bodies
             .iter()
@@ -175,9 +175,6 @@ pub fn update_links(world: &mut World) {
             .collect(),
         _ => Vec::new(),
     };
-
-    let terrain: Option<std::sync::Arc<dyn ApiQueryProvider>> =
-        world.get_resource::<ApiQueryRegistry>().and_then(|r| r.get("TerrainRaycast"));
 
     // Pairwise verdicts.
     let mut per_node: HashMap<Entity, Vec<LinkPeer>> = HashMap::new();
@@ -203,21 +200,14 @@ pub fn update_links(world: &mut World) {
                 .find(|(_, c, r)| segment_hits_sphere(a.pose.pos, b.pose.pos, *c, *r))
                 .map(|(n, _, _)| n.clone());
 
-            // Terrain: only when a surface endpoint could be shadowed by relief,
-            // and only after the cheap checks would pass — keeps the query rare.
             let cheap_ok = range_m <= a.node.max_range_m.min(b.node.max_range_m)
                 && elev_a >= a.node.min_elevation_deg
                 && elev_b >= b.node.min_elevation_deg
                 && occluded_by.is_none();
-            let surface = a.pose.up != DVec3::ZERO || b.pose.up != DVec3::ZERO;
-            let terrain_blocked = if cheap_ok && surface {
-                terrain
-                    .as_ref()
-                    .map(|p| terrain_hit(p.as_ref(), world, a.pose.local, b.pose.local))
-                    .unwrap_or(false)
-            } else {
-                false
-            };
+            // Terrain occlusion is left to the verdict policy / a future cached
+            // oracle so the kernel stays non-exclusive (an in-loop provider query
+            // needed `&mut World` → an exclusive system → the avian island crash).
+            let terrain_blocked = false;
 
             let ctx = HookValue::map([
                 ("a", HookValue::str(a.name.clone())),
@@ -261,21 +251,22 @@ pub fn update_links(world: &mut World) {
     debug!("[link] recompute: {} nodes, {} links up", nodes.len(), up_now.len());
 
     // AOS/LOS edges vs the previous recompute.
-    let prev = world.get_resource::<LinkSolverState>().map(|s| s.prev_up.clone()).unwrap_or_default();
-    for key in up_now.difference(&prev) {
-        world.trigger(link_event("link.aos", key, jd));
+    for key in up_now.difference(&state.prev_up) {
+        commands.trigger(link_event("link.aos", key, jd));
     }
-    for key in prev.difference(&up_now) {
-        world.trigger(link_event("link.los", key, jd));
+    for key in state.prev_up.difference(&up_now) {
+        commands.trigger(link_event("link.los", key, jd));
     }
-    if let Some(mut st) = world.get_resource_mut::<LinkSolverState>() {
-        st.prev_up = up_now;
-    }
+    state.prev_up = up_now;
 
-    // Publish per-node state.
+    // Publish per-node state — update in place, else insert.
     for node in &nodes {
         let peers = per_node.remove(&node.entity).unwrap_or_default();
-        world.entity_mut(node.entity).insert(LinkState { peers });
+        if let Ok(mut st) = q_state.get_mut(node.entity) {
+            st.peers = peers;
+        } else {
+            commands.entity(node.entity).insert(LinkState { peers });
+        }
     }
 }
 
@@ -287,25 +278,6 @@ impl Node {
                 .unwrap_or_else(|| format!("node_{}", e.index()));
         }
         self
-    }
-}
-
-/// Run the generic `TerrainRaycast` provider between two site-local points.
-fn terrain_hit(
-    provider: &dyn ApiQueryProvider,
-    world: &mut World,
-    a_local: DVec3,
-    b_local: DVec3,
-) -> bool {
-    let params = serde_json::json!({
-        "origin": [a_local.x, a_local.y, a_local.z],
-        "target": [b_local.x, b_local.y, b_local.z],
-    });
-    match provider.execute(world, &params) {
-        lunco_api::schema::ApiResponse::Ok { data: Some(d), .. } => {
-            d.get("hit").and_then(serde_json::Value::as_bool).unwrap_or(false)
-        }
-        _ => false,
     }
 }
 
@@ -330,6 +302,7 @@ fn link_event(name: &str, key: &str, jd: f64) -> TelemetryEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
 
     fn node(world: &mut World, class: &str, pos: DVec3, max_range: f64) -> Entity {
         world
@@ -353,7 +326,7 @@ mod tests {
         let a = node(&mut world, "rover", DVec3::ZERO, 1.0e12);
         node(&mut world, "relay", DVec3::new(10.0, 0.0, 0.0), 1.0e12);
 
-        update_links(&mut world);
+        world.run_system_once(update_links).unwrap();
 
         let sa = world.get::<LinkState>(a).expect("node a has LinkState");
         let peer = sa.peers.iter().find(|p| p.peer == "relay").expect("a sees relay");
@@ -366,7 +339,7 @@ mod tests {
         let mut world = world_at_epoch(0.0);
         let a = node(&mut world, "a", DVec3::ZERO, 5.0); // max range 5 m
         node(&mut world, "b", DVec3::new(10.0, 0.0, 0.0), 5.0); // 10 m away → out
-        update_links(&mut world);
+        world.run_system_once(update_links).unwrap();
         let sa = world.get::<LinkState>(a).unwrap();
         assert!(
             sa.peers.iter().all(|p| !p.connected),
@@ -387,7 +360,7 @@ mod tests {
             .id();
         // `b` sits on the horizon (elevation 0°) → below the 30° mask.
         node(&mut world, "b", DVec3::new(10.0, 0.0, 0.0), 1.0e12);
-        update_links(&mut world);
+        world.run_system_once(update_links).unwrap();
         let sa = world.get::<LinkState>(a).unwrap();
         assert!(sa.peers.iter().all(|p| !p.connected), "0° < 30° mask → down");
     }
