@@ -155,7 +155,12 @@ impl HeightField {
                 break;
             }
             let h = self.height_at(p * to_grid);
-            let occ = (h0 + slope * t - h) / (t * tan_sun_r);
+            // Penumbra width floored at 2 heightfield texels: the physical
+            // width `t * tan_sun_r` collapses below one texel for near casters
+            // at grazing sun, quantizing the stored visibility to a hard 0/1
+            // staircase. The floor keeps the gradient resolvable at the
+            // sampling rate (a deliberate softening of near-caster edges).
+            let occ = (h0 + slope * t - h) / (t * tan_sun_r).max(texel * 2.0);
             vis = vis.min(occ);
             if vis <= 0.0 {
                 return Some(0.0);
@@ -165,8 +170,9 @@ impl HeightField {
                 break;
             }
         }
-        let v = vis.clamp(0.0, 1.0);
-        Some(v * v * (3.0 - 2.0 * v))
+        // Linear penumbra — no terminal smoothstep: it steepened the already
+        // texel-narrow transition band back into a near-binary edge.
+        Some(vis.clamp(0.0, 1.0))
     }
 
     /// Side length of the heightfield grid (texels per edge).
@@ -200,13 +206,27 @@ impl HeightField {
         let res = target_res.max(2);
         let mut bytes = vec![0u8; (res as usize) * (res as usize)];
         let inv = 1.0 / (res - 1) as f32;
+        // 2×2 supersample per cache texel: a single ray per texel aliases
+        // along the sun azimuth into elongated streaks; averaging four
+        // quarter-texel-offset marches antialiases the stored edge. The bake
+        // runs off-thread on native, so the 4× cost never touches a frame.
+        const SUB: [Vec2; 4] = [
+            Vec2::new(-0.25, -0.25),
+            Vec2::new(0.25, -0.25),
+            Vec2::new(-0.25, 0.25),
+            Vec2::new(0.25, 0.25),
+        ];
         for y in 0..res {
             for x in 0..res {
-                let local_xz = self.min + Vec2::new(x as f32, y as f32) * inv * self.size;
-                // Outside the heightfield → fully lit (no obstruction possible).
-                let vis = self.sun_visibility(local_xz, sun_local, tan_sun_r).unwrap_or(1.0);
+                let mut vis = 0.0;
+                for s in SUB {
+                    let g = Vec2::new(x as f32, y as f32) + s;
+                    let local_xz = self.min + g * inv * self.size;
+                    // Outside the heightfield → fully lit (no obstruction possible).
+                    vis += self.sun_visibility(local_xz, sun_local, tan_sun_r).unwrap_or(1.0);
+                }
                 bytes[(y as usize) * (res as usize) + (x as usize)] =
-                    (vis * 255.0).round().clamp(0.0, 255.0) as u8;
+                    (vis * 0.25 * 255.0).round().clamp(0.0, 255.0) as u8;
             }
         }
         bytes
@@ -808,14 +828,16 @@ pub fn wire_terrain_materials(
     let Some(mut shader_mats) = shader_mats else { return };
     let Some((sun_gt, tan_r, csm_far)) = pick_sun(&sun) else { return };
     // NOTE on the near-camera march fade (`csm_far`): the fade is a PERF
-    // gate, not just cosmetics — streamed terrain tiles carry no baked
-    // shadow cache, so "march everywhere" ran the 48-step loop on every
-    // near pixel and turned low flight into a slideshow. The cost of the
-    // fade is that the CSM volume (~1.5 km) cannot contain multi-km ridge
+    // gate, not just cosmetics — inside it the live 48-step march is
+    // skipped (CSM owns the near field), and "march everywhere" turned low
+    // flight into a slideshow. (Streamed tiles DO get a baked cache on
+    // native — `lunco-sandbox/src/terrain_horizon.rs` samples the oracle
+    // into a `HorizonMap` and mirrors the cache to tiles — but the cache
+    // fades in on the same `csm_far` boundary.) The cost of the fade is
+    // that the CSM volume (~1.5 km) cannot contain multi-km ridge
     // occluders, so near terrain reads slightly lighter than the same
     // ground seen from altitude; the unconditional `SHADOW_FILL` in the
-    // terrain shaders keeps that difference subtle. The real cure is baked
-    // caches for streamed tiles.
+    // terrain shaders keeps that difference subtle.
     let to_sun_world: Vec3 = sun_gt.back().into();
 
     for (entity, terrain_gt, map, shadow_cache, shader_mat, std_mat) in &terrains {

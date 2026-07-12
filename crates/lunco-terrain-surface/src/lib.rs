@@ -66,7 +66,7 @@ pub use lunco_terrain_core::{
     hazard_color, hazard_from_slope, AnalyticHeightSource, HeightSource, QuadCoord, Quadtree,
     Selected, Square, TileCoord, TileGrid, TransferFn,
 };
-pub use oracle::{raycast_surface, HeightContribution, SurfaceOracle};
+pub use oracle::{raycast_surface, HeightContribution, SurfaceOracle, TerrainBodyCurvature};
 pub use plugin::TerrainSurfacePlugin;
 pub use derived_layers::{DerivedLayersBuilt, TerrainDerivedMaps};
 pub use georef::TerrainGeoref;

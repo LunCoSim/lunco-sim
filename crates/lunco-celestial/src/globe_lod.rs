@@ -81,6 +81,40 @@ fn tile_dist2(coord: &TileCoord, radius_m: f64, camera_body_local: DVec3) -> f64
     (cube_to_sphere(coord.face, u, v) * radius_m).distance_squared(camera_body_local)
 }
 
+/// Hole-punch under a site's DEM terrain patch: globe tiles that lie FULLY
+/// inside this cone around the site direction are dropped from the desired
+/// set. The DEM curves onto the sphere (`TerrainBodyCurvature`) and covers
+/// this region completely, so the globe underneath is pure overdraw — and
+/// worse, it pokes through crater floors that dip below the datum sphere.
+/// Tiles merely overlapping the cone's edge still render (the DEM's feathered
+/// edge sits `edge_lift_m` above them, so no z-fight). Inserted/updated by
+/// `placement::sync_terrain_body_curvature`.
+#[derive(Component, Clone, Copy, PartialEq)]
+pub struct GlobePunch {
+    /// Site direction (unit) in the tile frame (body-fixed).
+    pub dir: DVec3,
+    /// Cosine of the punch cone's angular radius.
+    pub cos_theta: f64,
+}
+
+/// Whether the tile's spherical footprint lies entirely inside the punch cone
+/// (all four corners + centre — sufficient for any tile small enough to fit a
+/// sub-degree cone; a level-0 face's 90°-spread corners can never all pass).
+fn tile_fully_in_punch(face: u8, level: u32, i: i32, j: i32, punch: &GlobePunch) -> bool {
+    let step = 2.0 / (1i64 << level) as f64;
+    let u0 = -1.0 + i as f64 * step;
+    let v0 = -1.0 + j as f64 * step;
+    [
+        (u0, v0),
+        (u0 + step, v0),
+        (u0, v0 + step),
+        (u0 + step, v0 + step),
+        (u0 + step * 0.5, v0 + step * 0.5),
+    ]
+    .iter()
+    .all(|&(u, v)| cube_to_sphere(face, u, v).dot(punch.dir) >= punch.cos_theta)
+}
+
 /// Whether two tiles overlap on the sphere: same body face and one is the
 /// other's quadtree ancestor (or the same node).
 fn tiles_overlap(a: &TileCoord, b: &TileCoord) -> bool {
@@ -118,7 +152,7 @@ pub fn update_globe_lod(
     cameras: Query<(&Camera, &GlobalTransform, &bevy::camera::RenderTarget), With<Camera3d>>,
     transforms: Query<&GlobalTransform>,
     grids: Query<&Grid>,
-    mut bodies: Query<(Entity, &GlobeLod, &mut GlobeTiles)>,
+    mut bodies: Query<(Entity, &GlobeLod, &mut GlobeTiles, Option<&GlobePunch>)>,
 ) {
     // ONLY the active window camera may steer the LOD. `iter().next()` picked
     // an arbitrary Camera3d — including offscreen preview cameras — and
@@ -136,7 +170,7 @@ pub fn update_globe_lod(
     };
     let cam_pos = cam.translation().as_dvec3();
 
-    for (body_ent, lod, mut tiles) in &mut bodies {
+    for (body_ent, lod, mut tiles, punch) in &mut bodies {
         // Camera relative to the body centre (= the surface grid origin, inertial),
         // in the frame the tiles live in. f32 render-space is plenty for choosing
         // the LOD; tile PLACEMENT below stays f64-precise via `translation_to_grid`.
@@ -163,6 +197,13 @@ pub fn update_globe_lod(
                 lod.max_lod,
                 lod.lod_distance_factor,
             );
+        }
+
+        // Site DEM hole-punch: tiles fully under the curved terrain patch are
+        // never desired (see `GlobePunch`). Retirement below then lets any
+        // resident tile there go once its surviving siblings are up.
+        if let Some(p) = punch {
+            desired.retain(|c| !tile_fully_in_punch(c.face, c.level, c.i, c.j, p));
         }
 
         // Spawn newly-desired tiles FIRST (so this frame's spawns count as
@@ -288,7 +329,19 @@ pub fn update_globe_lod(
         // retiring-tile overlap, cross-body name collisions).
         if std::env::var("LUNCO_LOD_VALIDATE").is_ok() {
             let resident: HashSet<TileCoord> = tiles.resident.keys().copied().collect();
-            fn covered(set: &HashSet<TileCoord>, body: Entity, face: u8, level: u32, i: i32, j: i32) -> bool {
+            fn covered(
+                set: &HashSet<TileCoord>,
+                punch: Option<&GlobePunch>,
+                body: Entity,
+                face: u8,
+                level: u32,
+                i: i32,
+                j: i32,
+            ) -> bool {
+                // The site hole-punch is an INTENTIONAL hole (the DEM covers it).
+                if punch.is_some_and(|p| tile_fully_in_punch(face, level, i, j, p)) {
+                    return true;
+                }
                 if set.contains(&TileCoord { body, face, level, i, j }) {
                     return true;
                 }
@@ -296,11 +349,11 @@ pub fn update_globe_lod(
                     return false;
                 }
                 (0..2).all(|di| (0..2).all(|dj| {
-                    covered(set, body, face, level + 1, i * 2 + di, j * 2 + dj)
+                    covered(set, punch, body, face, level + 1, i * 2 + di, j * 2 + dj)
                 }))
             }
             for face in 0..6u8 {
-                if !covered(&resident, body_ent, face, 0, 0, 0) {
+                if !covered(&resident, punch, body_ent, face, 0, 0, 0) {
                     warn!(
                         "globe LOD hole: body {body_ent} face {face} uncovered ({} resident, {} retiring)",
                         resident.len(),

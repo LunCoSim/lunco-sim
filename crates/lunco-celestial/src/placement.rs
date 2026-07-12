@@ -389,6 +389,83 @@ pub fn place_celestial_bound_entities(
     }
 }
 
+/// Feed the DEM terrain its parent body's radius whenever a site anchor
+/// exists: inserts/updates [`lunco_terrain_surface::TerrainBodyCurvature`], so
+/// every oracle composition folds a body-curvature modifier and the
+/// tangent-plane DEM curves down onto the globe sphere instead of floating the
+/// sagitta above it (the "terrain over the lunar surface" seam). The terrain
+/// side re-composes on resource change, so the ordering between the USD site
+/// anchor landing and the DEM build starting doesn't matter.
+pub fn sync_terrain_body_curvature(
+    mut commands: Commands,
+    registry: Res<CelestialBodyRegistry>,
+    q_site: Query<&GeodeticAnchor, With<SiteAnchor>>,
+    current: Option<Res<lunco_terrain_surface::TerrainBodyCurvature>>,
+    q_dem: Query<&lunco_terrain_surface::DemHeightField>,
+    q_globes: Query<(
+        Entity,
+        &crate::registry::CelestialBody,
+        Option<&crate::globe_lod::GlobePunch>,
+    )>,
+) {
+    let anchor = q_site.iter().next();
+    let Some(anchor) = anchor else {
+        // Site gone (scene unload): stop curving future DEM builds and
+        // restore full globe coverage.
+        if current.is_some() {
+            commands.remove_resource::<lunco_terrain_surface::TerrainBodyCurvature>();
+        }
+        for (e, _, punch) in &q_globes {
+            if punch.is_some() {
+                commands.entity(e).remove::<crate::globe_lod::GlobePunch>();
+            }
+        }
+        return;
+    };
+    let Some(desc) = registry.bodies.iter().find(|b| b.ephemeris_id == anchor.body) else {
+        return;
+    };
+    if current.is_none_or(|c| c.radius_m != desc.radius_m) {
+        commands.insert_resource(lunco_terrain_surface::TerrainBodyCurvature {
+            radius_m: desc.radius_m,
+        });
+        info!(
+            "site anchored to body {}: DEM terrain curves to sphere radius {:.0} m",
+            anchor.body, desc.radius_m
+        );
+    }
+    // Globe hole-punch under the DEM footprint (needs the built DEM for its
+    // half extent; until then the globe stays whole — the curved terrain sits
+    // `edge_lift_m` above it, so the brief overlap cannot z-fight).
+    let half_extent = q_dem.iter().map(|d| d.0.half_extent() as f64).fold(0.0, f64::max);
+    for (e, body, punch) in &q_globes {
+        if body.ephemeris_id != anchor.body {
+            continue;
+        }
+        if half_extent <= 0.0 || half_extent >= desc.radius_m {
+            if punch.is_some() {
+                commands.entity(e).remove::<crate::globe_lod::GlobePunch>();
+            }
+            continue;
+        }
+        // Punch only what the terrain provably covers: the inscribed disc of
+        // the square footprint, shrunk a hair so the boundary ring keeps its
+        // globe backing under the feathered terrain edge.
+        let sin_theta = (half_extent * 0.999) / desc.radius_m;
+        let next = crate::globe_lod::GlobePunch {
+            dir: geodetic_to_body_fixed(&anchor.geodetic, desc.radius_m).normalize(),
+            cos_theta: (1.0 - sin_theta * sin_theta).sqrt(),
+        };
+        if punch != Some(&next) {
+            commands.entity(e).insert(next);
+            info!(
+                "globe hole-punched under site DEM (body {}, footprint ±{:.0} m)",
+                anchor.body, half_extent
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

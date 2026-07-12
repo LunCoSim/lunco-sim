@@ -775,15 +775,20 @@ fn dem_build_from_baked(
 fn layer_contributions(
     stack: Option<&crate::terrain_layers::TerrainLayerStack>,
     half_extent: f32,
+    curvature_radius: Option<f64>,
 ) -> Vec<crate::oracle::HeightContribution> {
-    stack
+    let mut contributions: Vec<_> = stack
         .map(|s| {
             s.0.iter()
                 .filter(|e| e.layer.stamp_spec().is_none())
                 .filter_map(|e| e.layer.height_modifier(half_extent))
                 .collect()
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if let Some(r) = curvature_radius {
+        contributions.push(crate::oracle::curvature_contribution(r, half_extent));
+    }
+    contributions
 }
 
 /// Read a DEM file's bytes through the platform's I/O.
@@ -869,7 +874,13 @@ fn start_dem_builds(
         (Entity, &DemTerrainRequest, Option<&crate::terrain_layers::TerrainLayerStack>),
         (Without<DemBuildTask>, Without<DemWorkerJob>),
     >,
+    curvature: Option<Res<crate::oracle::TerrainBodyCurvature>>,
 ) {
+    // Parent-body radius for site-anchored scenes — folded LAST over the layer
+    // stack so the tangent-plane DEM hugs the body sphere. (If the celestial
+    // anchor lands AFTER this build captured `None`, `restamp_on_curvature`
+    // re-composes the oracle with it.)
+    let curvature_radius = curvature.map(|c| c.radius_m);
     for (entity, req, stack) in &q {
         let dir = std::path::PathBuf::from(&req.uri);
         let meta_path = dir.join("metadata.yaml");
@@ -1085,8 +1096,11 @@ fn start_dem_builds(
             // all sample this ONE source — crater rims resolve at each consumer's
             // own sampling density, unbounded by the DEM grid. Deterministic from
             // the spec seeds; the source DEM bytes are never touched.
-            let contributions: Vec<_> =
+            let mut contributions: Vec<_> =
                 layers.iter().filter_map(|l| l.height_modifier(half_extent)).collect();
+            if let Some(r) = curvature_radius {
+                contributions.push(crate::oracle::curvature_contribution(r, half_extent));
+            }
             let oracle = std::sync::Arc::new(crate::oracle::SurfaceOracle::new(
                 std::sync::Arc::new(tile),
                 contributions,
@@ -1281,7 +1295,9 @@ fn finish_dem_worker(
     stacks: Query<&crate::terrain_layers::TerrainLayerStack>,
     mut meshes: Option<ResMut<Assets<Mesh>>>,
     mut materials: Option<ResMut<Assets<StandardMaterial>>>,
+    curvature: Option<Res<crate::oracle::TerrainBodyCurvature>>,
 ) {
+    let curvature_radius = curvature.map(|c| c.radius_m);
     // Drain failed wasm bakes:
     if let Ok(rx) = get_wasm_bake_failures_rx().try_lock() {
         while let Ok(failed_id) = rx.try_recv() {
@@ -1302,7 +1318,7 @@ fn finish_dem_worker(
         };
         match (reply.stage, reply.grid) {
             (lunco_terrain_bake::BakeStage::Coarse, Ok(grid)) => {
-                let contributions = layer_contributions(stacks.get(entity).ok(), grid.half_extent);
+                let contributions = layer_contributions(stacks.get(entity).ok(), grid.half_extent, curvature_radius);
                 let baked = BakedGrid {
                     base_grid: grid.clone(),
                     grid,
@@ -1340,7 +1356,7 @@ fn finish_dem_worker(
                     });
                 }
                 // Re-compose the analytic oracle on the worker's full bare grid.
-                let contributions = layer_contributions(stacks.get(entity).ok(), grid.half_extent);
+                let contributions = layer_contributions(stacks.get(entity).ok(), grid.half_extent, curvature_radius);
                 if let Ok((mut hf, tiles, pending, has_static_mesh)) = swap_q.get_mut(entity) {
                     let oracle = std::sync::Arc::new(crate::oracle::SurfaceOracle::new(
                         std::sync::Arc::new(grid),
@@ -1512,6 +1528,7 @@ fn spawn_restamp_task(
     entity: Entity,
     base: &DemBaseGrid,
     stack: &crate::terrain_layers::TerrainLayerStack,
+    curvature_radius: Option<f64>,
 ) {
     let base_grid = base.0.clone();
     let base_key = base.1;
@@ -1524,8 +1541,11 @@ fn spawn_restamp_task(
         // modifiers) reuse the base grid Arc directly — cloning + re-stamping
         // the whole raster was a multi-MB memcpy on EVERY brush stroke, for a
         // grid that came out identical.
-        let contributions: Vec<_> =
+        let mut contributions: Vec<_> =
             layers.iter().filter_map(|l| l.height_modifier(half_extent)).collect();
+        if let Some(r) = curvature_radius {
+            contributions.push(crate::oracle::curvature_contribution(r, half_extent));
+        }
         let oracle = if layers.iter().any(|l| l.stamps()) {
             // A stamp mutates the raster → a genuinely new grid, so its key must be
             // re-folded (no reuse possible).
@@ -1562,7 +1582,9 @@ fn start_dem_restamp(
         Has<DemRestampTask>,
         Option<&mut DemRestampDebounce>,
     )>,
+    curvature: Option<Res<crate::oracle::TerrainBodyCurvature>>,
 ) {
+    let curvature_radius = curvature.map(|c| c.radius_m);
     // Re-bake when the stack CHANGED (a layer prim / the Inspector spec was edited →
     // the stack was re-parsed + re-inserted; change detection avoids the
     // command-ordering races a one-shot message would have), or when forced.
@@ -1597,7 +1619,7 @@ fn start_dem_restamp(
             commands.entity(entity).try_insert(DemRestampPending);
             continue;
         }
-        spawn_restamp_task(&mut commands, entity, base, &stack);
+        spawn_restamp_task(&mut commands, entity, base, &stack, curvature_radius);
     }
 }
 
@@ -1994,6 +2016,34 @@ fn on_obstacle_spec_dirty(
     accumulate_terrain_dirty(&mut commands, &mut q, None);
 }
 
+/// Force a whole-oracle re-compose when parent-body curvature arrives or
+/// changes. Two orderings need covering: the [`crate::oracle::TerrainBodyCurvature`]
+/// resource landing AFTER a DEM build captured `None` (resource change → regen),
+/// and a build finishing AFTER the resource landed but having been SPAWNED
+/// before it (fresh `DemHeightField` while the resource exists → regen). When
+/// the finished build already composed the same curvature, the re-stamp
+/// produces an identical `surface_key`, so tile bakes hit their caches — the
+/// redundant pass is cheap.
+fn restamp_on_curvature(
+    curvature: Option<Res<crate::oracle::TerrainBodyCurvature>>,
+    new_dems: Query<(), Added<crate::stream_viz::DemHeightField>>,
+    mut regen: MessageWriter<RegenerateTerrainLayers>,
+    mut had: Local<bool>,
+) {
+    let Some(c) = curvature else {
+        // Resource removed (site anchor gone) → flatten surviving DEMs back.
+        if *had {
+            *had = false;
+            regen.write(RegenerateTerrainLayers);
+        }
+        return;
+    };
+    *had = true;
+    if c.is_changed() || !new_dems.is_empty() {
+        regen.write(RegenerateTerrainLayers);
+    }
+}
+
 /// Register the DEM-terrain command + spawn systems. Called from
 /// [`crate::plugin::TerrainSurfacePlugin`].
 pub(crate) fn register(app: &mut App) {
@@ -2016,6 +2066,7 @@ pub(crate) fn register(app: &mut App) {
             (
                 start_dem_builds,
                 finish_dem_builds,
+                restamp_on_curvature.before(start_dem_restamp),
                 start_dem_restamp,
                 finish_dem_restamp,
                 start_dem_collider,

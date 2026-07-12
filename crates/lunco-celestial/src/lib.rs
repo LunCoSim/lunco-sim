@@ -240,6 +240,10 @@ impl Plugin for CelestialPlugin {
         // old fixed 24-tile shell). See `crate::globe_lod`.
         app.add_systems(Update, globe_lod::update_globe_lod);
 
+        // Site-anchored scenes: hand the DEM terrain the body radius so it
+        // curves onto the globe sphere (see `placement::sync_terrain_body_curvature`).
+        app.add_systems(Update, placement::sync_terrain_body_curvature);
+
         // Terrain spawning is now handled by lunco-terrain plugin
         // Systems like terrain_spawn_system run in that crate
 

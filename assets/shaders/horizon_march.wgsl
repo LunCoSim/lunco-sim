@@ -58,14 +58,18 @@ fn sun_visibility(
         let p = p0 + dir * t;
         if (p.x < 0.0 || p.y < 0.0 || p.x > size.x || p.y > size.y) { break; }
         let h = hf_height(tex, p * to_grid, ri);
-        let occ = (h0 + slope * t - h) / (t * tan_sun_r);
+        // Penumbra width floored at 2 heightfield texels (keep in sync with
+        // HeightField::sun_visibility): the physical width `t * tan_sun_r`
+        // collapses below one texel for near casters at grazing sun,
+        // quantizing visibility into a hard 0/1 staircase.
+        let occ = (h0 + slope * t - h) / max(t * tan_sun_r, texel * 2.0);
         vis = min(vis, occ);
         if (vis <= 0.0) { return 0.0; }
         t = t * 1.18 + texel * 0.5;
         if (t > max_t) { break; }
     }
-    let v = clamp(vis, 0.0, 1.0);
-    return v * v * (3.0 - 2.0 * v);
+    // Linear penumbra — no terminal smoothstep (it re-steepens the band).
+    return clamp(vis, 0.0, 1.0);
 }
 
 // Sun visibility resolved from the **pre-baked shadow cache** (a single
@@ -106,3 +110,14 @@ fn sun_visibility_resolved(
 // it is black. This is the deliberate artistic stand-in for earthshine and
 // scattered light; on sunlit ground it is a negligible +2%.
 const SHADOW_FILL: f32 = 0.26;
+
+// Weight for SHADOW_FILL: 1 in the DEM interior → 0 at the footprint edge.
+// The celestial globe tiles the terrain merges into carry NO fill, so a
+// uniform fill leaves the patch a visibly lighter square on the unlit globe
+// from altitude. Fading it out over the same outer band the geometry
+// feathers across (BodyCurvature, radial 0.6→1.0) makes the brightness
+// converge with the surface. `uv` is the DEM-global footprint UV.
+fn shadow_fill_weight(uv: vec2<f32>) -> f32 {
+    let m = length(uv - vec2(0.5)) * 2.0; // 0 centre → 1 at inscribed-disc edge
+    return 1.0 - smoothstep(0.6, 1.0, m);
+}

@@ -32,6 +32,35 @@ pub struct HeightContribution {
     pub content_key: u64,
 }
 
+/// Parent-body curvature for site-anchored DEM terrains. Inserted by the
+/// celestial layer when the scene anchors to a body's surface; while present,
+/// every oracle composition folds a [`lunco_terrain_core::BodyCurvature`]
+/// modifier LAST, so the tangent-plane DEM curves down onto the body sphere
+/// and its edge feathers onto the globe tiles instead of floating the sagitta
+/// (≈ 37 m at an 8 km patch edge on the Moon) above them. Because it enters
+/// through the normal contribution path, tile meshes, colliders, the shadow
+/// heightfield, and height queries all agree — and `content_key` folds it, so
+/// downstream caches invalidate correctly.
+#[derive(bevy::prelude::Resource, Clone, Copy, Debug, PartialEq)]
+pub struct TerrainBodyCurvature {
+    /// Body mean radius (metres).
+    pub radius_m: f64,
+}
+
+/// The [`TerrainBodyCurvature`] fold as a [`HeightContribution`] for a DEM of
+/// the given half extent. Composition sites append this AFTER the layer
+/// stack's contributions (the feather must see the fully composed relief).
+pub fn curvature_contribution(radius_m: f64, half_extent: f32) -> HeightContribution {
+    let m = lunco_terrain_core::BodyCurvature::new(radius_m, half_extent as f64);
+    let mut key = lunco_precompute::Fnv1a::new();
+    key.write_u64(0xB0D1_C42E); // domain tag: body curvature
+    key.write_u64(m.radius_m.to_bits());
+    key.write_u64(m.half_extent_m.to_bits());
+    key.write_u64(m.edge_lift_m.to_bits());
+    key.write_u64(m.feather_from.to_bits());
+    HeightContribution { modifier: Arc::new(m), content_key: key.finish() }
+}
+
 /// The composed surface: raster `base` + ordered analytic `modifiers`. Cheap to
 /// clone-share (`Arc` it once per terrain); `Send + Sync` so off-thread bakes
 /// sample it directly.

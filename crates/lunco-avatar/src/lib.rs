@@ -193,6 +193,16 @@ pub struct OrbitCamera {
 #[derive(Component, Debug, Clone, Copy)]
 pub struct SunlitArrival;
 
+/// Marks an `OrbitCamera` whose arm should be derived from the camera's
+/// CURRENT position — the pose-preserving arrival of the surface→orbital
+/// scroll-out transit (`scroll_out_to_orbit_system`), vs [`SunlitArrival`]
+/// which re-aims at the sunlit side. Resolved in `sample_orbit_frame`
+/// (`First`, frame-consistent GTs): the body→camera direction becomes the
+/// arm's yaw/pitch in the body's inertial host-grid axes, and the true range
+/// becomes the arm length — the camera doesn't move on mode entry.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct RadialArrival;
+
 /// Frame-consistent spatial inputs for `orbit_system`, sampled in `First`.
 ///
 /// `orbit_system` runs in `PostUpdate` after Avian's writeback and BEFORE
@@ -649,6 +659,11 @@ impl Plugin for LunCoAvatarPlugin {
         app.add_systems(PostUpdate, (
             orbital_exit_restore_system,
             chase_camera_system,
+            // Entry half of the scroll transit — must see the free-flight
+            // scroll BEFORE orbit_system's zoom consumption, and its mode
+            // swap lands next frame (commands), after which orbit_system owns
+            // the camera.
+            scroll_out_to_orbit_system,
             orbit_system,
             freeflight_system,
             surface_camera_system,
@@ -1141,7 +1156,18 @@ fn chase_camera_system(
 /// site-anchored celestial target's `GlobalTransform`s are guaranteed to be
 /// in ONE convention (last frame's final propagation).
 fn sample_orbit_frame(
-    mut q_avatar: Query<(Entity, &CellCoord, &Transform, &ChildOf, &mut OrbitCamera, Has<SunlitArrival>), With<Avatar>>,
+    mut q_avatar: Query<
+        (
+            Entity,
+            &CellCoord,
+            &Transform,
+            &ChildOf,
+            &mut OrbitCamera,
+            Has<SunlitArrival>,
+            Has<RadialArrival>,
+        ),
+        With<Avatar>,
+    >,
     q_globals: Query<&GlobalTransform>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
@@ -1151,7 +1177,9 @@ fn sample_orbit_frame(
     q_frames_ids: Query<&lunco_celestial::CelestialReferenceFrame>,
     mut commands: Commands,
 ) {
-    for (avatar_ent, cam_cell, cam_tf, cam_child_of, mut orbit, wants_sunlit) in q_avatar.iter_mut() {
+    for (avatar_ent, cam_cell, cam_tf, cam_child_of, mut orbit, wants_sunlit, wants_radial) in
+        q_avatar.iter_mut()
+    {
         // Root grid of the target's hierarchy (the grid orbit_system anchors to).
         let root_grid = {
             let mut g = orbit.target;
@@ -1198,65 +1226,90 @@ fn sample_orbit_frame(
             Some(s) => {
                 commands.entity(avatar_ent).insert(s);
 
-                // Aim the arrival at the sunlit side, in the same consistent
-                // frame. A body focused from a random side is usually its
-                // night hemisphere — a black disc on black space.
-                if wants_sunlit {
+                // Resolve a pending arrival in the same consistent frame.
+                if wants_sunlit || wants_radial {
                     let physical_target = get_physical_body(orbit.target, &q_children, &q_bodies);
-                    let sun = q_body_ents
-                        .iter()
-                        .find(|(e, b)| b.ephemeris_id == 10 && *e != physical_target);
-                    if let Some((sun_ent, _)) = sun {
-                        if let (Ok(sun_gt), Ok(tgt_gt)) =
-                            (q_globals.get(sun_ent), q_globals.get(physical_target))
-                        {
-                            // The aim must be expressed in the frame the
-                            // celestial branch renders in: the body's INERTIAL
-                            // host grid (+Y = engine north; skip the body's own
-                            // spinning frame) — NOT the world/site-ENU axes.
-                            let body_eph = q_bodies
-                                .get(physical_target)
-                                .map(|b| b.ephemeris_id)
-                                .unwrap_or(i32::MIN);
-                            let mut walk = physical_target;
-                            let mut host = None;
-                            for _ in 0..MAX_HIERARCHY_WALK_DEPTH {
-                                let Ok(co) = q_parents.get(walk) else { break };
-                                let parent = co.parent();
-                                if q_grids.contains(parent) {
-                                    let own_spin = q_frames_ids
-                                        .get(parent)
-                                        .is_ok_and(|f| f.ephemeris_id == body_eph)
-                                        && q_parents
-                                            .get(parent)
-                                            .is_ok_and(|pp| q_grids.contains(pp.parent()));
-                                    if !own_spin {
-                                        host = Some(parent);
-                                        break;
-                                    }
-                                }
-                                walk = parent;
+                    // The aim must be expressed in the frame the celestial
+                    // branch renders in: the body's INERTIAL host grid
+                    // (+Y = engine north; skip the body's own spinning
+                    // frame) — NOT the world/site-ENU axes.
+                    let body_eph = q_bodies
+                        .get(physical_target)
+                        .map(|b| b.ephemeris_id)
+                        .unwrap_or(i32::MIN);
+                    let mut walk = physical_target;
+                    let mut host = None;
+                    for _ in 0..MAX_HIERARCHY_WALK_DEPTH {
+                        let Ok(co) = q_parents.get(walk) else { break };
+                        let parent = co.parent();
+                        if q_grids.contains(parent) {
+                            let own_spin = q_frames_ids
+                                .get(parent)
+                                .is_ok_and(|f| f.ephemeris_id == body_eph)
+                                && q_parents
+                                    .get(parent)
+                                    .is_ok_and(|pp| q_grids.contains(pp.parent()));
+                            if !own_spin {
+                                host = Some(parent);
+                                break;
                             }
-                            let host_inv = host
-                                .and_then(|h| q_globals.get(h).ok())
-                                .map(|g| g.rotation().inverse())
-                                .unwrap_or(Quat::IDENTITY);
-                            let to_sun = host_inv * (sun_gt.translation() - tgt_gt.translation());
-                            if to_sun.length_squared() > 1.0 {
-                                let fwd = -to_sun.normalize();
-                                orbit.pitch = fwd.y.clamp(-1.0, 1.0).asin();
-                                // Small yaw offset off the exact sun line keeps
-                                // the terminator visible — a gibbous disk has
-                                // depth, a dead-on full disk is flat.
-                                orbit.yaw = (-fwd.x).atan2(-fwd.z) + 0.4;
+                        }
+                        walk = parent;
+                    }
+                    let host_inv = host
+                        .and_then(|h| q_globals.get(h).ok())
+                        .map(|g| g.rotation().inverse())
+                        .unwrap_or(Quat::IDENTITY);
+                    if wants_radial {
+                        // Pose-preserving arrival (surface→orbital scroll-out):
+                        // the arm is the live body→camera vector, so the mode
+                        // flip doesn't move the camera — only the subsequent
+                        // scroll does.
+                        if let (Ok(cam_gt), Ok(tgt_gt)) =
+                            (q_globals.get(avatar_ent), q_globals.get(physical_target))
+                        {
+                            let d = cam_gt.translation() - tgt_gt.translation();
+                            if d.length_squared() > 1.0 {
+                                let dir = (host_inv * d).normalize();
+                                orbit.pitch = dir.y.clamp(-1.0, 1.0).asin();
+                                orbit.yaw = (-dir.x).atan2(-dir.z);
+                                orbit.distance = d.length() as f64;
                                 info!(
-                                    "ORBIT ARRIVAL: sunlit aim yaw={:.2} pitch={:.2}",
-                                    orbit.yaw, orbit.pitch
+                                    "ORBIT ARRIVAL: radial (pose-preserving) yaw={:.2} pitch={:.2} dist={:.3e}",
+                                    orbit.yaw, orbit.pitch, orbit.distance
                                 );
                             }
                         }
+                        commands.entity(avatar_ent).remove::<RadialArrival>();
+                    } else {
+                        // Aim the arrival at the sunlit side. A body focused
+                        // from a random side is usually its night hemisphere —
+                        // a black disc on black space.
+                        let sun = q_body_ents
+                            .iter()
+                            .find(|(e, b)| b.ephemeris_id == 10 && *e != physical_target);
+                        if let Some((sun_ent, _)) = sun {
+                            if let (Ok(sun_gt), Ok(tgt_gt)) =
+                                (q_globals.get(sun_ent), q_globals.get(physical_target))
+                            {
+                                let to_sun =
+                                    host_inv * (sun_gt.translation() - tgt_gt.translation());
+                                if to_sun.length_squared() > 1.0 {
+                                    let fwd = -to_sun.normalize();
+                                    orbit.pitch = fwd.y.clamp(-1.0, 1.0).asin();
+                                    // Small yaw offset off the exact sun line keeps
+                                    // the terminator visible — a gibbous disk has
+                                    // depth, a dead-on full disk is flat.
+                                    orbit.yaw = (-fwd.x).atan2(-fwd.z) + 0.4;
+                                    info!(
+                                        "ORBIT ARRIVAL: sunlit aim yaw={:.2} pitch={:.2}",
+                                        orbit.yaw, orbit.pitch
+                                    );
+                                }
+                            }
+                        }
+                        commands.entity(avatar_ent).remove::<SunlitArrival>();
                     }
-                    commands.entity(avatar_ent).remove::<SunlitArrival>();
                 }
             }
             None => {
@@ -1714,6 +1767,81 @@ fn freeflight_system(
             Quat::from_euler(EulerRot::YXZ, ff.yaw, ff.pitch, 0.0)
         };
         tf.rotation = rot;
+    }
+}
+
+/// SCROLL-OUT to orbit — the ENTRY half of the scroll transit (the exit half
+/// is the ORBITAL SCROLL-THROUGH in `orbit_system`). In free flight on a
+/// site-anchored celestial scene, a scroll-out gesture hands the camera to
+/// the celestial `OrbitCamera` on the site's anchor body AT ITS CURRENT POSE:
+/// [`RadialArrival`] derives the arm from the camera's present position (no
+/// `SunlitArrival` re-aim), and the still-unconsumed negative scroll delta
+/// becomes the first zoom-out step of the celestial branch — so the whole
+/// ascent, from ground to orbit, reads as one continuous gesture. The
+/// counterpart descent already works: the orbital zoom floor scroll-through
+/// releases back to free flight at the current pose, which `orbit_system`
+/// parked in the pin on this entry.
+fn scroll_out_to_orbit_system(
+    mut commands: Commands,
+    mut q_avatar: Query<
+        (Entity, &mut CameraZoomInput, Option<&Camera>),
+        (With<Avatar>, With<FreeFlightCamera>, Without<OrbitCamera>),
+    >,
+    q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
+    q_bodies: Query<(Entity, &CelestialBody)>,
+) {
+    // Only meaningful on a site-anchored scene whose solar hierarchy is up.
+    let Some(anchor) = q_site.iter().next() else { return };
+    let Some((body_ent, body)) =
+        q_bodies.iter().find(|(_, b)| b.ephemeris_id == anchor.body)
+    else {
+        return;
+    };
+    for (avatar_ent, mut zoom, cam) in q_avatar.iter_mut() {
+        if zoom.delta == 0.0 {
+            continue;
+        }
+        // Scroll-IN has no free-flight meaning; drop it so it can't
+        // accumulate into a zoom jump on a later orbit entry.
+        if zoom.delta > 0.0 {
+            zoom.delta = 0.0;
+            continue;
+        }
+        // Only the active render camera transits (scenes carry inactive
+        // Avatar-tagged spawn cameras — same guard as `on_focus_command`).
+        if !cam.is_some_and(|c| c.is_active) {
+            zoom.delta = 0.0;
+            continue;
+        }
+        // Same mode swap as `on_focus_command`, with two deliberate
+        // differences: `RadialArrival` instead of `SunlitArrival` (preserve
+        // the pose), and the scroll delta left UNCONSUMED (the celestial
+        // branch applies it as the first zoom-out step once the arrival
+        // resolves — `distance` here is a fallback that only survives if the
+        // arrival could not resolve).
+        commands
+            .entity(avatar_ent)
+            .remove::<SpringArmCamera>()
+            .remove::<ChaseCamera>()
+            .remove::<FreeFlightCamera>()
+            .remove::<FrameBlend>()
+            .remove::<SurfaceCamera>()
+            .remove::<SurfaceRelativeMode>()
+            .remove::<GravityBody>()
+            .remove::<OrbitFrameSample>()
+            .insert(OrbitCamera {
+                target: body_ent,
+                distance: body.radius_m * 3.0,
+                yaw: 0.0,
+                pitch: 0.0,
+                damping: None,
+                vertical_offset: 0.0,
+            })
+            .insert(RadialArrival);
+        info!(
+            "SURFACE SCROLL-OUT: entering orbital view of body {} at current pose",
+            anchor.body
+        );
     }
 }
 

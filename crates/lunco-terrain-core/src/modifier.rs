@@ -172,6 +172,59 @@ impl HeightModifier for FlattenModifier {
     }
 }
 
+/// **Body curvature**: curves a tangent-plane DEM patch down onto its parent
+/// body's sphere and feathers the outer edge to land ON it.
+///
+/// A site-anchored DEM is authored in the local tangent frame (`y = 0` is the
+/// plane tangent to the sphere at the site point), while the celestial globe
+/// tiles ride the true sphere — so a flat patch floats above the globe by the
+/// sagitta `R − √(R² − d²)` (≈ 37 m at an 8 km patch edge on the Moon) and
+/// visibly doubles over it. This modifier, folded LAST over the composed
+/// surface, makes every oracle consumer (tile meshes, colliders, shadow
+/// heightfield, height queries) agree with the sphere:
+///
+/// * subtracts the sagitta, dropping the surface onto the sphere as `d` grows;
+/// * feathers the composed relief to zero over the outer radial band, so at
+///   `d = half_extent` the terrain sits exactly at sphere + `edge_lift_m`
+///   (a small lift so the last row never z-fights globe tiles);
+/// * beyond `d = half_extent` (the square footprint's corners) the surface is
+///   fully feathered — a sphere-hugging apron that reads as the globe itself.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BodyCurvature {
+    /// Body mean radius (metres).
+    pub radius_m: f64,
+    /// DEM half side length (metres) — feathering completes at this RADIAL
+    /// distance from the site origin.
+    pub half_extent_m: f64,
+    /// Height above the sphere at (and beyond) the feathered edge (metres).
+    pub edge_lift_m: f64,
+    /// Radial fraction of `half_extent_m` where the edge feather begins.
+    pub feather_from: f64,
+}
+
+impl BodyCurvature {
+    pub fn new(radius_m: f64, half_extent_m: f64) -> Self {
+        // feather_from 0.6: elevated sites (Shackleton ridge ≈ +1.9 km over
+        // the reference sphere) descend the full relief inside the feather
+        // band — a narrow band reads as a mesa cliff wall around the patch.
+        Self { radius_m, half_extent_m, edge_lift_m: 1.0, feather_from: 0.6 }
+    }
+}
+
+impl HeightModifier for BodyCurvature {
+    fn apply(&self, x: f64, z: f64, h_in: f64) -> f64 {
+        let d2 = x * x + z * z;
+        // Sphere height below the tangent plane at horizontal distance d
+        // (exact, not the d²/2R approximation — free in f64).
+        let sag = (self.radius_m * self.radius_m - d2).max(0.0).sqrt() - self.radius_m;
+        let start = self.half_extent_m * self.feather_from;
+        let band = (self.half_extent_m - start).max(1e-6);
+        let f = 1.0 - smoothstep((d2.sqrt() - start) / band); // 1 interior → 0 at edge
+        sag + h_in * f + self.edge_lift_m * (1.0 - f)
+    }
+    // No `with_min_wavelength` override: planet-scale wavelength, never aliases.
+}
+
 #[inline]
 fn dist2(a: [f64; 2], b: [f64; 2]) -> f64 {
     let dx = a[0] - b[0];
@@ -274,6 +327,24 @@ mod tests {
         let one = LayeredHeightSource::new(Arc::new(Flat(0.0))).with(Arc::new(a.clone()));
         let two = LayeredHeightSource::new(Arc::new(Flat(0.0))).with(Arc::new(a)).with(Arc::new(b));
         assert!((two.height_at(0.0, 0.0) - 2.0 * one.height_at(0.0, 0.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn body_curvature_hugs_sphere_and_feathers_edge() {
+        let (r, he) = (1.737e6, 8000.0);
+        let c = BodyCurvature::new(r, he);
+        // Site centre: untouched (full relief, zero sagitta).
+        assert!((c.apply(0.0, 0.0, 120.0) - 120.0).abs() < 1e-9);
+        // Interior (inside the feather start): relief kept, sagitta subtracted.
+        let d = 4000.0;
+        let sag = (r * r - d * d).sqrt() - r;
+        assert!(sag < -4.0, "sagitta at 4 km must be metres-scale, got {sag}");
+        assert!((c.apply(d, 0.0, 50.0) - (50.0 + sag)).abs() < 1e-6);
+        // Feathered edge: lands at sphere + edge_lift regardless of relief —
+        // this is the invariant that meets the globe tiles.
+        let sag_e = (r * r - he * he).sqrt() - r;
+        assert!((c.apply(he, 0.0, 300.0) - (sag_e + c.edge_lift_m)).abs() < 1e-6);
+        assert!((c.apply(0.0, -he, -300.0) - (sag_e + c.edge_lift_m)).abs() < 1e-6);
     }
 
     #[test]

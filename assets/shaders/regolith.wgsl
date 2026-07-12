@@ -45,7 +45,7 @@
     mesh_view_bindings::view,
     mesh_view_bindings::lights,
 }
-#import lunco::horizon::{sun_visibility_resolved, SHADOW_FILL}
+#import lunco::horizon::{sun_visibility_resolved, shadow_fill_weight, SHADOW_FILL}
 #import lunco::lunar::regolith_factor
 
 // Dynamic, self-describing parameters — the engine reflects this `Material`
@@ -315,7 +315,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Unconditional shadow fill — see `SHADOW_FILL` (lunco::horizon). Applied
     // outside the march branch so near (CSM) and far (march) pixels get the
     // SAME lift; a branch-local fill painted a bright ring at the handoff.
-    color = vec4(color.rgb + albedo * SHADOW_FILL, color.a);
+    color = vec4(color.rgb + albedo * SHADOW_FILL * shadow_fill_weight(in.uv), color.a);
 #endif
 
     color = pbr_functions::main_pass_post_lighting_processing(pbr_input, color);
