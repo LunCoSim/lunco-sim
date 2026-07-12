@@ -1546,7 +1546,10 @@ impl Plugin for SandboxCorePlugin {
             // Real VSOP2013/ELP body positions on ALL platforms (wasm too) —
             // replaces the NoOp provider CelestialPlugin seeds.
             .add_plugins(lunco_celestial_ephemeris::EphemerisPlugin)
-            .add_plugins(lunco_celestial::CommsPlugin)
+            // Connectivity is now AUTHORED (assets/scenarios/comms.rhai) over the
+            // generic geometry queries the CelestialPlugin registers — no comms
+            // Rust plugin. Scene-local endpoints opt into pose tracking via
+            // `lunco:solarTracked`.
             .add_systems(Update, enable_celestial_on_site_anchor)
             .add_plugins(LunCoHardwarePlugin)
             .add_plugins(LunCoMobilityPlugin)

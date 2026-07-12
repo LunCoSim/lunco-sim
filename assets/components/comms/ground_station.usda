@@ -19,9 +19,12 @@ def Xform "GroundStation" (
     kind = "component"
 )
 {
-    bool lunco:comms:antenna = true
-    double lunco:comms:maxRangeM = 1000000000000
-    double lunco:comms:minElevationDeg = 5
+    # Connectivity endpoint on Earth. Anchored (lunco:anchor:*) so the pose
+    # system tracks it automatically. `class = "earth"` marks it a route root; a
+    # 5° elevation mask is realistic for a DSN dish.
+    bool lunco:linkNode = true
+    string lunco:link:class = "earth"
+    double lunco:link:minElevationDeg = 5
     double lunco:anchor:lat = 0
     double lunco:anchor:lon = 0
     double lunco:anchor:height = 0

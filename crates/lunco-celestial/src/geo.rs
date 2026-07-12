@@ -165,6 +165,26 @@ pub fn solar_tangent_frame(
         .transformed(body_rotation(desc, epoch_jd), body_center_solar)
 }
 
+/// Segment–sphere occlusion: does the open interior of `p1→p2` dip inside the
+/// sphere at `center` with radius `radius_m`? Endpoints on (or above) the
+/// surface never occlude themselves: the closest-approach parameter clamps to
+/// the segment ends, which sit at ≥ radius. A small margin absorbs float noise
+/// for horizon-grazing links. Generic geometry — the `Occultation` query and
+/// any authored sight-line test compose over it.
+pub fn segment_hits_sphere(p1: DVec3, p2: DVec3, center: DVec3, radius_m: f64) -> bool {
+    let d = p2 - p1;
+    let len_sq = d.length_squared();
+    if len_sq < 1.0 {
+        return false;
+    }
+    let t = ((center - p1).dot(d) / len_sq).clamp(0.0, 1.0);
+    if t <= 0.0 || t >= 1.0 {
+        return false;
+    }
+    let closest = p1 + d * t;
+    (closest - center).length() < radius_m - 0.5
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

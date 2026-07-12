@@ -12,12 +12,16 @@
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
+use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_core::GlobalEntityId;
 use lunco_time::WorldTime;
 
-use crate::comms::segment_hits_sphere;
 use crate::coords::ecliptic_to_bevy;
+use crate::geo::segment_hits_sphere;
 use crate::ephemeris::EphemerisResource;
+use crate::geo::{solar_position_of_geodetic, GeodeticAnchor};
+use crate::kepler::KeplerOrbit;
 use crate::registry::CelestialBodyRegistry;
 
 /// Read a `[x,y,z]` array or `{x,y,z}` map into a solar-frame [`DVec3`].
@@ -122,13 +126,108 @@ impl ApiQueryProvider for BodyPositionProvider {
     }
 }
 
+/// `SolarPose` — an entity's solar-frame position (and local up, for surface
+/// points) from its `GeodeticAnchor` (ground stations) or `KeplerOrbit`
+/// (satellites). Domain-free celestial placement: an authored subsystem uses it
+/// to compute range / direction / elevation, then composes `Occultation` /
+/// `TerrainRaycast`. Generalizes cleanly to LEO / lunar-orbit relays — a
+/// satellite is just a `KeplerOrbit` endpoint.
+///
+/// params: `{ entity: <gid> }`. returns: `{ found, kind, body, pos:[x,y,z], up }`
+/// — `up` is `[x,y,z]` for a surface point, null for an orbit. **Scene-local**
+/// antennas (placed through the site frame with no own anchor/orbit) need the
+/// big_space system context, so they resolve via the pose SYSTEM, not this query
+/// (`{found:false, reason:"scene_local"}` here) — the next retirement step.
+pub struct SolarPoseProvider;
+
+impl ApiQueryProvider for SolarPoseProvider {
+    fn name(&self) -> &'static str {
+        "SolarPose"
+    }
+
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+        let Some(gid) = params.get("entity").and_then(serde_json::Value::as_i64) else {
+            return ApiResponse::error(
+                ApiErrorCode::DeserializationError,
+                "SolarPose: `entity` (gid) required".to_string(),
+            );
+        };
+        let not_found = || ApiResponse::ok(serde_json::json!({ "found": false }));
+        let Some(target) = world
+            .get_resource::<ApiEntityRegistry>()
+            .and_then(|r| r.resolve(&GlobalEntityId::from_raw(gid as u64)))
+        else {
+            return not_found();
+        };
+        // Prefer the system-written pose — it covers scene-local prims (a moving
+        // rover antenna) that this read-only path can't resolve. Falls through to
+        // the inline anchor/orbit compute for entities not yet posed.
+        if let Some(p) = world.get::<crate::pose::SolarFramePose>(target).copied() {
+            let is_orbit = p.up == bevy::math::DVec3::ZERO;
+            return ApiResponse::ok(serde_json::json!({
+                "found": true,
+                "kind": if is_orbit { "orbit" } else { "surface" },
+                "body": p.body,
+                "pos": [p.pos.x, p.pos.y, p.pos.z],
+                "local": [p.local.x, p.local.y, p.local.z],
+                "up": if is_orbit { serde_json::Value::Null } else {
+                    serde_json::json!([p.up.x, p.up.y, p.up.z])
+                },
+            }));
+        }
+        let Some(jd) = world.get_resource::<WorldTime>().map(|w| w.epoch_jd) else {
+            return not_found();
+        };
+        let anchor = world.get::<GeodeticAnchor>(target).copied();
+        let orbit = world.get::<KeplerOrbit>(target).copied();
+        let (Some(eph), Some(reg)) = (
+            world.get_resource::<EphemerisResource>(),
+            world.get_resource::<CelestialBodyRegistry>(),
+        ) else {
+            return not_found();
+        };
+        let center_of = |naif: i32| ecliptic_to_bevy(eph.provider.global_position(naif, jd));
+
+        // (pos, up, kind, body). A diverging branch early-returns.
+        let (pos, up, kind, body) = if let Some(a) = anchor {
+            let Some(desc) = reg.bodies.iter().find(|b| b.ephemeris_id == a.body) else {
+                return not_found();
+            };
+            let center = center_of(a.body);
+            let pos = solar_position_of_geodetic(desc, &a.geodetic, center, jd);
+            let up = (pos - center).normalize_or_zero();
+            (pos, Some(up), "surface", a.body)
+        } else if let Some(o) = orbit {
+            let Some(desc) = reg.bodies.iter().find(|b| b.ephemeris_id == o.body) else {
+                return not_found();
+            };
+            let pos = center_of(o.body) + o.elements.position_bevy_m(desc.gm, jd);
+            (pos, None, "orbit", o.body)
+        } else {
+            return ApiResponse::ok(serde_json::json!({ "found": false, "reason": "scene_local" }));
+        };
+
+        ApiResponse::ok(serde_json::json!({
+            "found": true,
+            "kind": kind,
+            "body": body,
+            "pos": [pos.x, pos.y, pos.z],
+            // Inline fallback (system hasn't posed this entity yet): no site frame
+            // on hand, so local ≈ solar pos. The component path returns true local.
+            "local": [pos.x, pos.y, pos.z],
+            "up": up.map(|u| serde_json::json!([u.x, u.y, u.z])),
+        }))
+    }
+}
+
 /// Register the generic celestial geometry providers into the [`ApiQueryRegistry`]
 /// (init-if-absent, mirroring `register_terrain_queries`). Called from
-/// [`CelestialPlugin`](crate::CelestialPlugin) — these are generic geometry, not
-/// comms, so they do NOT ride on `CommsPlugin`.
+/// [`CelestialPlugin`](crate::CelestialPlugin) — these are generic geometry that
+/// authored subsystems (comms/solar/thermal) compose over, not a domain.
 pub fn register_celestial_queries(app: &mut App) {
     app.init_resource::<ApiQueryRegistry>();
     let mut reg = app.world_mut().resource_mut::<ApiQueryRegistry>();
     reg.register(OccultationProvider);
     reg.register(BodyPositionProvider);
+    reg.register(SolarPoseProvider);
 }

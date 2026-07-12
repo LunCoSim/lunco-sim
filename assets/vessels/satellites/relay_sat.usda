@@ -14,8 +14,10 @@ def Xform "RelaySat" (
     kind = "component"
 )
 {
-    bool lunco:comms:antenna = true
-    double lunco:comms:maxRangeM = 1000000000000
+    # Connectivity relay on orbit. Orbiting (lunco:orbit:*) so the pose system
+    # tracks it automatically; `class = "relay"` for routing policy.
+    bool lunco:linkNode = true
+    string lunco:link:class = "relay"
     int lunco:orbit:body = 301
     double lunco:orbit:semiMajorAxisM = 6540000
     double lunco:orbit:eccentricity = 0.6

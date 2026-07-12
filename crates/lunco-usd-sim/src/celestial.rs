@@ -23,7 +23,6 @@ use bevy::prelude::*;
 
 use lunco_celestial::geo::{Geodetic, GeodeticAnchor, SiteAnchor};
 use lunco_celestial::kepler::{KeplerOrbit, KeplerianElements};
-use lunco_celestial::comms::CommsAntenna;
 use lunco_usd_bevy::UsdRead;
 use openusd::sdf::Path as SdfPath;
 
@@ -99,35 +98,38 @@ pub fn insert_celestial_comms_components<R: UsdRead>(
         );
     }
 
-    // --- Comms antenna flag ---
+    // --- Solar-pose tracking marker (generic celestial placement) ---
+    // A scene-local subsystem prim (a rover-mounted antenna, a panel) opts in so
+    // the pose system tracks its solar-frame position; anchored/orbiting prims
+    // are tracked automatically. Authored connectivity (`comms.rhai`) reads it
+    // through the `SolarPose` query — no comms component, no `lunco:comms:*`.
     if reader
-        .scalar::<bool>(sdf_path, "lunco:comms:antenna")
+        .scalar::<bool>(sdf_path, "lunco:solarTracked")
         .unwrap_or(false)
     {
-        // Stable peer identity for port names. Authored `lunco:comms:id`
-        // wins; a generic leaf ("Comms" on every rover) is disambiguated with
-        // the parent prim's leaf; otherwise the entity Name (= leaf) is fine.
-        let id = reader
-            .scalar::<String>(sdf_path, "lunco:comms:id")
-            .or_else(|| {
-                let mut parts = prim_path_str.rsplit('/');
-                let leaf = parts.next().unwrap_or_default();
-                let parent = parts.next().unwrap_or_default();
-                let generic = matches!(
-                    leaf.to_ascii_lowercase().as_str(),
-                    "comms" | "antenna" | "commsantenna"
-                );
-                (generic && !parent.is_empty()).then(|| format!("{parent}_{leaf}"))
-            });
-        let defaults = CommsAntenna::default();
-        commands.entity(entity).insert(CommsAntenna {
+        commands
+            .entity(entity)
+            .insert(lunco_celestial::pose::SolarTracked);
+    }
+
+    // --- Connectivity node (generic link kernel) ---
+    // Marks a prim as a link endpoint: the kernel pairs it with every other
+    // node, applies the `link.connected` verdict, and publishes link state. Pose
+    // tracking follows automatically. `class` is an authored role the routing /
+    // verdict policy reads — the core never interprets it.
+    if reader
+        .scalar::<bool>(sdf_path, "lunco:linkNode")
+        .unwrap_or(false)
+    {
+        let d = lunco_celestial::link::LinkNode::default();
+        commands.entity(entity).insert(lunco_celestial::link::LinkNode {
             max_range_m: reader
-                .real(sdf_path, "lunco:comms:maxRangeM")
-                .unwrap_or(defaults.max_range_m),
+                .real(sdf_path, "lunco:link:maxRangeM")
+                .unwrap_or(d.max_range_m),
             min_elevation_deg: reader
-                .real(sdf_path, "lunco:comms:minElevationDeg")
-                .unwrap_or(defaults.min_elevation_deg),
-            id,
+                .real(sdf_path, "lunco:link:minElevationDeg")
+                .unwrap_or(d.min_elevation_deg),
+            class: reader.scalar::<String>(sdf_path, "lunco:link:class"),
         });
     }
 }

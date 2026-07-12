@@ -17,8 +17,9 @@ pub mod ephemeris;
 pub mod registry;
 pub mod geo;
 pub mod kepler;
-pub mod comms;
+pub mod link;
 pub mod placement;
+pub mod pose;
 pub mod queries;
 mod big_space_setup;
 mod globe_lod;
@@ -46,8 +47,9 @@ pub use ephemeris::*;
 pub use registry::*;
 pub use geo::*;
 pub use kepler::*;
-pub use comms::*;
+pub use link::*;
 pub use placement::*;
+pub use pose::*;
 pub use big_space_setup::*;
 pub use systems::*;
 pub use gravity::*;
@@ -126,9 +128,22 @@ impl Plugin for CelestialPlugin {
         }
         app.init_resource::<TerrainMapRegistry>();
         app.init_resource::<CelestialConfig>();
-        // Generic celestial geometry queries (Occultation / BodyPosition) — the
-        // domain-free substrate authored subsystems compose over (docs 10/12).
+        // Generic celestial geometry queries (Occultation / BodyPosition /
+        // SolarPose) — the domain-free substrate authored subsystems compose
+        // over (docs 10/12) — plus the solar-pose tracking system that feeds
+        // `SolarPose` (incl. scene-local prims a read-only query can't resolve).
         queries::register_celestial_queries(app);
+        app.register_type::<pose::SolarTracked>();
+        app.add_systems(Update, pose::update_solar_poses);
+
+        // Generic connectivity kernel: cadence-gated pairwise link solving in
+        // Rust, verdict via the language-neutral `link.connected` hook, cadence
+        // tunable live via `SetLinkCadence` (docs 10/12). Domain-free.
+        app.init_resource::<link::LinkConfig>();
+        app.register_type::<link::LinkConfig>();
+        app.register_type::<link::LinkNode>();
+        link::register_all_commands(app);
+        app.add_systems(Update, link::update_links);
         // Keep a host-app gravity choice (e.g. the sandbox's flat gravity);
         // default to surface gravity for the full client.
         if app.world().get_resource::<Gravity>().is_none() {

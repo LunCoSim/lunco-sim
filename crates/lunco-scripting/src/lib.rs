@@ -163,11 +163,9 @@ fn register_builtin_policies() {
         // Boot-entry policy: what does the app do at startup? (onboard / load /
         // resume / nothing). Consulted by `lunco_tutorial::consult_boot`.
         ("boot", lunco_core::session::BOOT_HOOK, "boot_entry"),
-        // Comms link availability (doc 43): is a sight-line between two
-        // antennas a usable link? Consulted by lunco-celestial's connectivity
-        // layer per antenna pair (id = lunco_celestial::COMMS_LINK_HOOK; a
-        // string literal here to keep scripting free of a celestial dep).
-        ("comms_link", "comms.link.connected", "link_connected"),
+        // (Comms link availability is no longer a builtin policy: connectivity is
+        // authored in assets/scenarios/comms.rhai, which composes its constraints
+        // inline over the generic geometry queries.)
     ];
     for (stem, hook_id, entry) in BUILTINS {
         let Some(src) = lunco_assets::scripting::policy(stem) else {
