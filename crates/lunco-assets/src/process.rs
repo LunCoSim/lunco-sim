@@ -248,6 +248,12 @@ fn process_image(source: &Path, output: &Path, tw: u32, th: u32) -> Result<(), s
         img
     };
 
+    // Color textures must land as 8-bit: bevy tags 8-bit PNGs sRGB but loads
+    // 16-bit ones LINEAR, so a 16-bit sRGB source (the LROC moon map) skips
+    // gamma decode in the engine and renders washed-out white. 8 bits is
+    // plenty for albedo, and it quarters the file.
+    let processed = image::DynamicImage::ImageRgb8(processed.to_rgb8());
+
     processed.save(output)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
 }

@@ -198,6 +198,11 @@ impl Plugin for CelestialPlugin {
             // subtree — measured load-bearing; see the system doc (a deletion
             // attempt on 2026-07-11 strobed the whole tree ~1 frame in 5–9).
             touch_celestial_transforms,
+            // Orbital view only: the site scene straddles the Solar Grid's
+            // ~1 AU cell relative to the camera — force it onto the HP path
+            // too, or its compat-f32 GT sawtooths in ~16 km ULP buckets
+            // ("ground slides along the moon and jumps back").
+            touch_site_scene_transforms,
             soi_transition_system,
         ).chain().in_set(CelestialEpochSet).after(lunco_time::TimeSpineSet));
 

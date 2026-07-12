@@ -1149,6 +1149,7 @@ fn sample_orbit_frame(
     q_bodies: Query<&CelestialBody>,
     q_body_ents: Query<(Entity, &CelestialBody)>,
     q_children: Query<&Children>,
+    q_frames_ids: Query<&lunco_celestial::CelestialReferenceFrame>,
     mut commands: Commands,
 ) {
     for (avatar_ent, cam_cell, cam_tf, cam_child_of, mut orbit, wants_sunlit) in q_avatar.iter_mut() {
@@ -1206,14 +1207,41 @@ fn sample_orbit_frame(
                         .iter()
                         .find(|(e, b)| b.ephemeris_id == 10 && *e != physical_target);
                     if let Some((sun_ent, _)) = sun {
-                        if let (Ok(sun_gt), Ok(tgt_gt), Some(root)) =
-                            (q_globals.get(sun_ent), q_globals.get(physical_target), root_grid)
+                        if let (Ok(sun_gt), Ok(tgt_gt)) =
+                            (q_globals.get(sun_ent), q_globals.get(physical_target))
                         {
-                            let root_inv = q_globals
-                                .get(root)
+                            // The aim must be expressed in the frame the
+                            // celestial branch renders in: the body's INERTIAL
+                            // host grid (+Y = engine north; skip the body's own
+                            // spinning frame) — NOT the world/site-ENU axes.
+                            let body_eph = q_bodies
+                                .get(physical_target)
+                                .map(|b| b.ephemeris_id)
+                                .unwrap_or(i32::MIN);
+                            let mut walk = physical_target;
+                            let mut host = None;
+                            for _ in 0..MAX_HIERARCHY_WALK_DEPTH {
+                                let Ok(co) = q_parents.get(walk) else { break };
+                                let parent = co.parent();
+                                if q_grids.contains(parent) {
+                                    let own_spin = q_frames_ids
+                                        .get(parent)
+                                        .is_ok_and(|f| f.ephemeris_id == body_eph)
+                                        && q_parents
+                                            .get(parent)
+                                            .is_ok_and(|pp| q_grids.contains(pp.parent()));
+                                    if !own_spin {
+                                        host = Some(parent);
+                                        break;
+                                    }
+                                }
+                                walk = parent;
+                            }
+                            let host_inv = host
+                                .and_then(|h| q_globals.get(h).ok())
                                 .map(|g| g.rotation().inverse())
                                 .unwrap_or(Quat::IDENTITY);
-                            let to_sun = root_inv * (sun_gt.translation() - tgt_gt.translation());
+                            let to_sun = host_inv * (sun_gt.translation() - tgt_gt.translation());
                             if to_sun.length_squared() > 1.0 {
                                 let fwd = -to_sun.normalize();
                                 orbit.pitch = fwd.y.clamp(-1.0, 1.0).asin();
@@ -1406,31 +1434,56 @@ fn orbit_system(
             let Ok(host_ref) = q_grids.get(host_grid) else { continue };
             let Ok((p_cell, p_tf)) = q_spatial.get(pose_ent) else { continue };
 
-            // Rotation of the host grid's frame relative to the world (root)
-            // axes, composed from the STORED chain — for the EMB host this is
-            // exactly the site pin's `align`. The camera's local pose must be
-            // expressed in the host's rotated axes.
-            let mut chain_rot = bevy::math::DQuat::IDENTITY;
-            let mut g = host_grid;
-            for _ in 0..MAX_HIERARCHY_WALK_DEPTH {
-                if let Ok((_, t)) = q_spatial.get(g) {
-                    chain_rot = t.rotation.as_dquat() * chain_rot;
-                }
-                match q_parents.get(g) {
-                    Ok(p) => g = p.parent(),
-                    Err(_) => break,
-                }
-            }
-            let inv_chain = chain_rot.inverse();
-
+            // The camera pose is expressed DIRECTLY in the host grid's axes:
+            // inertial grids carry identity rotation, so host +Y is the
+            // engine/ecliptic NORTH pole. (The previous code referenced the
+            // WORLD axes and counter-rotated by the stored chain — i.e. the
+            // site pin's ENU `align`. At a south-polar site the ENU up is
+            // inertially SOUTH, so the Moon rendered south-up with the
+            // moonbase at the TOP of the disk; and because the site frame
+            // spins with the body, the yaw reference slowly crept. Bodies now
+            // always render north-up, wherever the site anchor is.)
             let edge = host_ref.cell_edge_length() as f64;
             let body_local =
                 bevy::math::DVec3::new(p_cell.x as f64, p_cell.y as f64, p_cell.z as f64) * edge
                     + p_tf.translation.as_dvec3();
-            let desired_local = body_local + inv_chain * dir * orbit.distance;
+
+            // Ease the arm LENGTH toward the commanded distance, mirroring the
+            // non-celestial branch ("zoom glides instead of snapping"). Without
+            // this, every wheel detent teleported the camera by the full step —
+            // MEGAMETERS at body range — in one frame: the whole scene jerked
+            // (jump probe: identical 1.2e6 m displacement on every landmark
+            // including WorldGrid in a single frame), globe LOD churned tiles
+            // mid-flight (surface blinking in/out during zoom), and the stale
+            // near plane sliced into the globe. Snap on first placement after
+            // the grid migration (arrival is an intentional teleport); once the
+            // arm converges the writes below go byte-identical again, so a
+            // parked view still lets big_space's change-gated propagation skip.
+            let arm_len = if child_of.parent() != host_grid {
+                orbit.distance
+            } else {
+                let cam_local =
+                    bevy::math::DVec3::new(cell.x as f64, cell.y as f64, cell.z as f64) * edge
+                        + tf.translation.as_dvec3();
+                let current_len = (cam_local - body_local).length();
+                let err = (orbit.distance - current_len).abs();
+                if err < orbit.distance * 5e-4 {
+                    orbit.distance
+                } else {
+                    let damping = orbit.damping.unwrap_or(defaults.damping);
+                    // Half the surface-orbit rate: at body range each easing
+                    // step is megameters, and the orbital views run heavy
+                    // (LOD re-tessellation), so frames are long — the doubled
+                    // time-constant keeps per-frame steps small enough to
+                    // read as a glide instead of a stutter.
+                    let alpha =
+                        (1.0 - (-0.5 * defaults.position_rate * (1.0 - damping) * dt).exp()) as f64;
+                    current_len + (orbit.distance - current_len) * alpha
+                }
+            };
+            let desired_local = body_local + dir * arm_len;
             let (new_cell, new_translation) = host_ref.translation_to_grid(desired_local);
-            // Pre-rotate so the camera's RENDERED orientation equals `rotation`.
-            let local_rot = (inv_chain.as_quat() * rotation).normalize();
+            let local_rot = rotation;
 
             let next = lunco_celestial::OrbitalViewPin {
                 active: true,
@@ -2088,15 +2141,22 @@ fn on_release_command(
     // Leaving an orbital view: deactivate the mode. The camera flew to the
     // focused body; `orbital_exit_restore_system` migrates it back to the
     // parked surface pose (`pin.anchor_world`/`anchor_rotation`) next frame.
+    let mut restored_rotation = None;
     if let Some(pin) = orbital_pin.as_mut() {
         if pin.active {
             pin.active = false;
+            // The live orbital rotation is in the HOST grid's rotated axes
+            // (`inv_chain × view_rot`); the free-flight euler below must match
+            // the parked world-axes pose the exit restore reinstates, or the
+            // first mouse move snaps the view to a stale orientation.
+            restored_rotation = Some(pin.anchor_rotation);
         }
     }
     let cmd = trigger.event();
     let avatar_ent = cmd.target;
     let (yaw, pitch, opt_link, is_surface) = if let Ok((tf, link, surface)) = q_avatar.get(avatar_ent) {
-        let (y, p, _) = tf.rotation.to_euler(EulerRot::YXZ);
+        let rot = restored_rotation.unwrap_or(tf.rotation);
+        let (y, p, _) = rot.to_euler(EulerRot::YXZ);
         (y, p, link, surface.is_some())
     } else { (0.0, 0.0, None, false) };
 
@@ -2585,11 +2645,23 @@ fn update_avatar_clip_planes_system(
                 // without touching the (already-fine) surface case, where
                 // `min_dist` collapses to ~0 and `near` floors at 0.1 m.
                 //
-                // 20 km headroom: `min_dist` measures to the body's REFERENCE
-                // sphere, but terrain (and the camera standing on it) can sit
-                // kilometres above it — Shackleton ridge is ~1.2 km up, which
-                // would otherwise clip the ground on close approach.
-                perspective.near = ((min_dist - 20_000.0).max(0.1)) as f32;
+                // Headroom is the LARGER of 20 km and 50% of the distance:
+                //
+                // * 20 km — `min_dist` measures to the body's REFERENCE sphere,
+                //   but terrain (and the camera standing on it) can sit
+                //   kilometres above it — Shackleton ridge is ~1.2 km up, which
+                //   would otherwise clip the ground on close approach.
+                // * 50% — this system runs BEFORE TransformSystems::Propagate,
+                //   so both GTs are one frame stale, and while zoom-easing at
+                //   body range the camera approaches by MEGAMETERS per frame —
+                //   far beyond a fixed 20 km. A stale `near` past the true
+                //   surface slices a cap off the globe: the "black circle
+                //   inside Earth while changing distance". Half-distance
+                //   headroom absorbs any single-frame approach ≤50% while
+                //   keeping the surface near the depth-precision peak
+                //   (reverse-Z cares about the near/dist RATIO, and 0.5 is
+                //   still 4 orders of magnitude better than the old 100 m pin).
+                perspective.near = ((min_dist - 20_000.0).min(min_dist * 0.5).max(0.1)) as f32;
                 perspective.far = ((max_far * 1.05).max(1.0e7)) as f32;
             }
         }

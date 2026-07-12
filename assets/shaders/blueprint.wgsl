@@ -86,7 +86,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         let ll_fade = 1.0 - smoothstep(
             mat.fade_range.x, mat.fade_range.y,
             max(fwidth(ll_coords).x, fwidth(ll_coords).y));
-        grid_mask = (1.0 - smoothstep(0.0, mat.line_width, ll_line)) * ll_fade;
+        // Fade the graticule out as `transition` approaches 0 (fully-textured
+        // imagery): a natural globe seen from orbit shows no lat/long lines;
+        // they belong to the blueprint look that fades in on approach.
+        grid_mask = (1.0 - smoothstep(0.0, mat.line_width, ll_line)) * ll_fade
+            * smoothstep(0.05, 0.45, mat.transition);
 #endif
     } else {
         // --- Blueprint grid (Cartesian XZ, flat ground).

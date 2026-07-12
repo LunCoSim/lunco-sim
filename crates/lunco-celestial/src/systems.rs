@@ -289,6 +289,47 @@ pub fn touch_celestial_transforms(
     }
 }
 
+/// While the ORBITAL view is active, force-dirty the site-anchored scene
+/// subtree onto the same high-precision propagation path the globe uses.
+///
+/// The orbital camera (floating origin) lives on the focused body's inertial
+/// host grid; the site scene lives in the WorldGrid, on the OTHER side of the
+/// Solar Grid's ~1 AU `CellCoord`. big_space rebases only against the
+/// origin's cell in each entity's IMMEDIATE grid, so that ancestor offset
+/// does not cancel for the terrain — and on frames the HP pass skips it, its
+/// GT falls to the plain-f32 compat value, which quantizes the ~1.06e11 m
+/// offset in ~16 km ULP buckets. As the site pin advances per frame the
+/// terrain slid smoothly within one bucket, then SNAPPED at each ULP wrap —
+/// "the ground moves along the moon and jumps back" (and the shadows wobble
+/// with it). Force-dirtying makes `PropagateHighPrecision` compose the
+/// subtree in i64 every frame, exactly like the globe tiles.
+///
+/// GROUND view keeps the `Without<SiteAnchor>` exclusion above: with the
+/// camera a direct WorldGrid child the site subtree needs no re-composition,
+/// and force-dirtying it there caused the 2026-07-10 "everything jumps"
+/// regression. Physics is safe either way — the avian bridge is shadow-gated
+/// on VALUES, and `set_changed` never alters the value.
+pub fn touch_site_scene_transforms(
+    orbital_pin: Option<Res<crate::placement::OrbitalViewPin>>,
+    q_site_roots: Query<Entity, With<crate::geo::SiteAnchor>>,
+    q_children: Query<&Children>,
+    mut q_tf: Query<&mut Transform>,
+) {
+    let Some(pin) = orbital_pin else { return };
+    if !pin.active {
+        return;
+    }
+    let mut stack: Vec<Entity> = q_site_roots.iter().collect();
+    while let Some(e) = stack.pop() {
+        if let Ok(mut tf) = q_tf.get_mut(e) {
+            tf.set_changed();
+        }
+        if let Ok(children) = q_children.get(e) {
+            stack.extend(children.iter());
+        }
+    }
+}
+
 pub fn celestial_visuals_system(
     mut materials: ResMut<Assets<ShaderMaterial>>,
     q_camera: Query<(Entity, &CellCoord, &Transform), (With<Camera>, With<lunco_core::Avatar>)>,

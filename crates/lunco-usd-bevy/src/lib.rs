@@ -121,6 +121,10 @@ impl Plugin for UsdBevyPlugin {
             .register_type::<bevy::gltf::GltfSceneExtras>()
             .register_type::<bevy::gltf::GltfMeshExtras>()
             .register_type::<bevy::gltf::GltfMeshName>()
+            // bevy 0.19: the glTF loader also stamps the scene name on spawned
+            // roots — unregistered, `world_instance_spawner_system` PANICS the
+            // frame a glb component (habitat, lander) instantiates.
+            .register_type::<bevy::gltf::GltfSceneName>()
             .register_type::<bevy::gltf::GltfMaterialExtras>()
             .register_type::<bevy::gltf::GltfMaterialName>();
         app.init_asset::<UsdStageAsset>()

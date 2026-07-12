@@ -31,6 +31,8 @@ mod models_palette;
 mod rhai_repl_panel;
 /// Centered "Generating terrain…" overlay during the initial DEM bake.
 mod terrain_progress;
+/// Surface ⇄ Moon ⇄ Earth view-mode switcher (site-anchored scenes only).
+mod view_mode;
 /// Centered "Downloading <scenario>" overlay during scenario-sync asset fetch.
 /// Networking-only — the file carries its own `#![cfg(feature = "networking")]`.
 #[cfg(feature = "networking")]
@@ -154,7 +156,12 @@ impl Plugin for SandboxUiPlugin {
             // reads as progress. Clears itself once the bake finishes.
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
-                terrain_progress::draw_terrain_progress,
+                (
+                    terrain_progress::draw_terrain_progress,
+                    // Surface ⇄ Moon ⇄ Earth switcher — appears only when the
+                    // celestial hierarchy is live (site-anchored scenes).
+                    view_mode::draw_view_mode_switcher,
+                ),
             );
         // G2: "Downloading <scenario>" overlay during scenario-sync asset fetch.
         // Networking-only — the module is `#[cfg(feature = "networking")]`.

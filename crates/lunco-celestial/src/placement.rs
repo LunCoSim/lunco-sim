@@ -52,7 +52,9 @@ pub struct OrbitalViewPin {
     pub active: bool,
     /// Ephemeris id of the focused body.
     pub body: i32,
-    /// Unit direction from the body centre toward the viewpoint, world axes.
+    /// Unit direction from the body centre toward the viewpoint, in the
+    /// focused body's INERTIAL host-grid axes (+Y = engine north — the frame
+    /// the orbital camera renders in; only `orbit_system` consumes this).
     pub dir: DVec3,
     /// Viewpoint distance from the body centre, metres.
     pub distance: f64,
@@ -199,24 +201,23 @@ pub fn anchor_solar_frame_to_site(
     );
 }
 
-/// While the orbital world-pin is active the celestial tree is slid away from
-/// the site so the focused body lands in front of the parked camera. The LOCAL
-/// scene stays glued to the parked camera and fills the foreground — that is
-/// the "focused Earth but it shows ground" report. Hide it; restore on exit.
+/// Hide UNANCHORED local scene roots while the orbital view is active; restore
+/// on exit. Geometry parked at the world origin has no celestial identity, so
+/// from an orbital viewpoint it would float in space in front of the body.
 ///
-/// Two subtleties, both established by experiment (hiding candidates one at a
-/// time through the API and screenshotting):
+/// The SITE-ANCHORED scene is the opposite case and stays VISIBLE: the site
+/// pin places it at its true geodetic point on the anchor body, and under
+/// doc 47 Phase 6 the camera flies while the scene never moves — so from
+/// lunar orbit the moonbase genuinely lies on the Moon, exactly where it
+/// belongs. (The blanket hide dated from the retired world-pin design, where
+/// the celestial tree was slid away from the site and the local scene stayed
+/// glued to the parked camera, filling the foreground — "focused Earth but it
+/// shows ground". That geometry no longer exists.)
 ///
-/// * The offending geometry is the scene's own prims (`Ground` cube, rover,
-///   ground-station masts) — NOT the site body's globe tiles, which sit below
-///   the horizon at surface altitude.
-/// * Hiding a scene ROOT is not enough: USD prims spawn with an explicit
-///   `Visibility::Visible`, which overrides an ancestor's `Hidden` rather than
-///   inheriting it. Every descendant must be toggled.
-///
-/// The site-anchored root also carries `GeodeticAnchor` (it declares
-/// `lunco:anchor:*`), so it is matched via `SiteAnchor`; ground stations and
-/// satellites bound to OTHER bodies belong to the sky and are left alone.
+/// Subtlety established by experiment: hiding a scene ROOT is not enough —
+/// USD prims spawn with an explicit `Visibility::Visible`, which overrides an
+/// ancestor's `Hidden` rather than inheriting it. Every descendant must be
+/// toggled.
 #[allow(clippy::type_complexity)]
 pub fn orbital_pin_scene_visibility(
     orbital_pin: Res<OrbitalViewPin>,
@@ -251,20 +252,24 @@ pub fn orbital_pin_scene_visibility(
     };
 
     // Collect each root plus its full subtree — descendants override the root's
-    // visibility, so the root alone would leave the ground on screen.
-    let mut stack: Vec<Entity> = q_local.iter().chain(q_site_root.iter()).collect();
-    let mut targets: Vec<Entity> = Vec::with_capacity(stack.len() * 8);
-    while let Some(e) = stack.pop() {
-        targets.push(e);
+    // visibility, so the root alone would leave the ground on screen. Unanchored
+    // locals toggle with the mode; the site-anchored subtree is pinned onto its
+    // body and is force-VISIBLE every pass (also self-heals scenes hidden by the
+    // pre-Phase-6 blanket hide).
+    let mut targets: Vec<(Entity, Visibility)> = Vec::new();
+    let mut stack: Vec<(Entity, Visibility)> = q_local.iter().map(|e| (e, target)).collect();
+    stack.extend(q_site_root.iter().map(|e| (e, Visibility::Inherited)));
+    while let Some((e, t)) = stack.pop() {
+        targets.push((e, t));
         if let Ok(children) = q_children.get(e) {
-            stack.extend(children.iter());
+            stack.extend(children.iter().map(|c| (c, t)));
         }
     }
 
-    for e in targets {
+    for (e, t) in targets {
         if let Ok(mut vis) = q_vis.get_mut(e) {
-            if *vis != target {
-                *vis = target;
+            if *vis != t {
+                *vis = t;
             }
         }
     }

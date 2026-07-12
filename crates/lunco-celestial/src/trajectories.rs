@@ -247,10 +247,18 @@ pub fn jump_probe_system(
     mut last_parent: Local<std::collections::HashMap<Entity, Entity>>,
     mut frame: Local<u64>,
     mut heartbeat: Local<(f64, String)>,
+    mut trace: Local<Option<Option<String>>>,
 ) {
     *frame += 1;
     let Ok(cam_gt) = q_cam.single() else { return };
     let cam = cam_gt.translation().as_dvec3();
+    // LUNCO_GT_TRACE=<name substring>: dump matching landmarks' camera-relative
+    // GT EVERY frame. Post-analysis of the series distinguishes smooth motion,
+    // f32-quat ULP stepping (~1e4 m at 1.5e11), and compat-pass f32 buckets
+    // (1.5e11·2⁻²³ ≈ 1.8e4 m) — different residual mechanisms, different fixes.
+    if trace.is_none() {
+        *trace = Some(std::env::var("LUNCO_GT_TRACE").ok());
+    }
     let label = |e: Entity, q: &Query<&Name>| -> String {
         q.get(e).map(|n| n.as_str().to_string()).unwrap_or_else(|_| format!("{e:?}"))
     };
@@ -274,6 +282,15 @@ pub fn jump_probe_system(
             }
         }
         let p = gt.translation().as_dvec3() - cam;
+        if let Some(Some(filter)) = trace.as_ref() {
+            let n = name.map(|n| n.as_str()).unwrap_or("");
+            if !filter.is_empty() && n.contains(filter.as_str()) {
+                bevy::log::info!(
+                    "[gt-trace] f{} {}: {:.3} {:.3} {:.3}",
+                    *frame, n, p.x, p.y, p.z
+                );
+            }
+        }
         if let Some((prev_p, prev_d)) = last.get(&e).copied() {
             let d = p - prev_p;
             let jerk = (d - prev_d).length();
@@ -579,6 +596,12 @@ pub fn trajectory_mesh_init_system(
                 Visibility::Visible,
                 NoFrustumCulling,
                 Transform::default(),
+                // Stamp what big_space 0.13 would insert via Commands one
+                // frame later anyway: a plain-Transform child of a
+                // cell-entity is a low-precision subtree root. Explicit =
+                // no spawn-frame validator report, no one-frame propagation
+                // gap.
+                big_space::grid::propagation::LowPrecisionRoot,
             ));
         });
     }
@@ -725,6 +748,8 @@ pub fn trajectory_alignment_system(
     q_frames: Query<(Entity, &CelestialReferenceFrame, Option<&big_space::prelude::Grid>, &Transform), Without<TrajectoryPath>>,
     q_bodies: Query<(Entity, &crate::registry::CelestialBody)>,
     mut q_vistas: Query<(Entity, &TrajectoryView, &TrajectoryPath, &mut Transform, Option<&mut CellCoord>, Option<&ChildOf>), Without<CelestialReferenceFrame>>,
+    q_view_children: Query<&Children>,
+    q_traj_mesh: Query<(), With<TrajectoryMeshMarker>>,
 ) {
     let jd = world.epoch_jd;
 
@@ -843,6 +868,7 @@ pub fn trajectory_alignment_system(
 
         if let Some(parent_ent) = target_parent {
             let is_current_parent = current_parent.map(|p| p.parent() == parent_ent).unwrap_or(false);
+            let had_cell = cell.is_some();
             if !is_current_parent {
                 // Trajectory views are NOT `GridAnchor`s — they parent to
                 // `CelestialBody` / `CelestialReferenceFrame` entities. The
@@ -901,6 +927,26 @@ pub fn trajectory_alignment_system(
             if transform.translation != new_translation || transform.rotation != counter_rotation {
                 transform.translation = new_translation;
                 transform.rotation = counter_rotation;
+            }
+            // Re-stamp the mesh children's `LowPrecisionRoot` on the two
+            // transitions that make this view a VALID cell-entity parent.
+            // big_space's `tag_low_precision_roots` strips the marker while
+            // the view is still unparented/cell-less (spawn-order window at
+            // scene load), and its re-tag only fires on the CHILD's
+            // Changed<ChildOf>/Added<Transform> — never again. Without the
+            // marker NO pass owns the mesh's GlobalTransform (the compat
+            // walk is severed at the Transform-less WorldRoot), so the
+            // polyline renders stale — visible trajectory-line jitter.
+            if parent_grid.is_some() && (!is_current_parent || !had_cell) {
+                if let Ok(children) = q_view_children.get(v_entity) {
+                    for child in children.iter() {
+                        if q_traj_mesh.contains(child) {
+                            commands
+                                .entity(child)
+                                .insert(big_space::grid::propagation::LowPrecisionRoot);
+                        }
+                    }
+                }
             }
         } else if view.reference_id == 10 {
             // Sun frame fallback: unparented → a plain Transform tree root;
