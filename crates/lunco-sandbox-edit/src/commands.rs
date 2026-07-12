@@ -982,6 +982,46 @@ pub fn drive_kinematic_proxies(
 /// not remote-owned ones — wrong meaning there). Ownership flips here (steal /
 /// release) flow to all seams at once: losing the marker re-pins the body
 /// `Kinematic` + re-interpolates it next frame; gaining it flips it `Dynamic`.
+/// TEST TOGGLE (`LUNCO_NO_PREDICT=1`): disable local physics-prediction of the
+/// owned rover, so it follows the host authoritatively like every other body
+/// (kinematic proxy via `drive_kinematic_proxies`). Used to validate the
+/// "visual-prediction" direction before building the render-lead: if the wobble +
+/// bad body-interactions vanish in follow mode, physics-prediction was the cause.
+/// Read once (env is process-static).
+fn no_local_predict() -> bool {
+    use std::sync::OnceLock;
+    static V: OnceLock<bool> = OnceLock::new();
+    *V.get_or_init(|| std::env::var("LUNCO_NO_PREDICT").as_deref() == Ok("1"))
+}
+
+/// VISUAL-PREDICTION mode (`LUNCO_VISUAL_PREDICT=1`): the owned rover follows the
+/// host authoritatively for PHYSICS (no local `Dynamic` step — no wobble, correct
+/// contacts), and `lead_owned_rover_render` leads its RENDERED pose forward/turning
+/// by ~RTT so it feels responsive at any ping. The proper fix (see
+/// `project_predict_own_oscillation_cadence`): physics stays authoritative, only the
+/// visual anticipates. Implies follow-authority (no promotion), like `no_predict`.
+fn visual_predict() -> bool {
+    use std::sync::OnceLock;
+    static V: OnceLock<bool> = OnceLock::new();
+    *V.get_or_init(|| std::env::var("LUNCO_VISUAL_PREDICT").as_deref() == Ok("1"))
+}
+
+/// Render-lead time in seconds — how far ahead of authority to lead the visual.
+/// For testing it tracks the simulated ping (`LUNCO_SIM_LATENCY_MS`, the display
+/// lag the lead must hide), capped so the extrapolation error stays bounded at
+/// extreme ping. In production this would track the measured RTT. 0 disables.
+fn visual_lead_secs() -> f32 {
+    use std::sync::OnceLock;
+    static V: OnceLock<f32> = OnceLock::new();
+    *V.get_or_init(|| {
+        let ms: f32 = std::env::var("LUNCO_SIM_LATENCY_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0);
+        (ms / 1000.0).min(0.5) // cap at 500 ms of lead
+    })
+}
+
 pub fn maintain_owned_locally(
     role: Res<lunco_core::NetworkRole>,
     local: Res<lunco_core::LocalSession>,
@@ -994,6 +1034,12 @@ pub fn maintain_owned_locally(
     // working correction ("pushed without contact").
     tick: Res<lunco_core::SimTick>,
     input_log: Res<lunco_core::OwnedInputLog>,
+    // Freshest authoritative snapshot per gid — the seed for a newly-promoted
+    // predicted body (see the promote arm). avian is deterministic
+    // (`determinism_probe`), so aligning the prediction's START to authority makes
+    // its trajectory track the host instead of running a constant INTERP_DELAY
+    // behind (the offset the reconcile keeps chasing → the drive-fighting wobble).
+    buffers: Res<InterpBuffers>,
     mut commands: Commands,
     q: Query<
         (Entity, &lunco_core::GlobalEntityId, Has<lunco_core::OwnedLocally>),
@@ -1013,7 +1059,13 @@ pub fn maintain_owned_locally(
         // interpolation (`force_kinematic_proxies` re-pins it).
         let owns = reg.owns(local.0, gid.get());
         let last_active = input_log.0.get(&gid.get()).map_or(0, |l| l.last_active_tick);
-        let mine = predicts_locally(owns, last_active, tick.0, PREDICT_GRACE_TICKS);
+        // `no_local_predict()` / `visual_predict()` force follow-authority mode:
+        // never promote to a local `Dynamic` step (the wobble source) — the rover
+        // stays a kinematic proxy. In `visual_predict` the render-lead adds back
+        // responsiveness on the presentation layer only.
+        let mine = predicts_locally(owns, last_active, tick.0, PREDICT_GRACE_TICKS)
+            && !no_local_predict()
+            && !visual_predict();
         match (mine, has_marker) {
             (true, false) => {
                 // Gaining ownership: mark it AND restore `Dynamic`. The marker
@@ -1031,6 +1083,30 @@ pub fn maintain_owned_locally(
                 commands
                     .entity(e)
                     .insert((lunco_core::OwnedLocally, RigidBody::Dynamic));
+                // SEED FROM AUTHORITY (predict-alignment, Stage 1): overwrite the
+                // INTERP_DELAY-stale interpolated pose the proxy carried with the
+                // FRESHEST authoritative snapshot, so the deterministic prediction
+                // starts where the host is — not ~2-3 ticks behind. Deferred through
+                // a world closure so it lands after the `Dynamic` flip; `Position`/
+                // `Rotation` are the physics truth the bridge syncs to `Transform`.
+                if let Some(s) = buffers.0.get(&gid.get()).and_then(|b| b.back()).copied() {
+                    let ent = e;
+                    commands.queue(move |world: &mut World| {
+                        let Ok(mut em) = world.get_entity_mut(ent) else { return };
+                        if let Some(mut p) = em.get_mut::<Position>() {
+                            p.0 = s.pos_world;
+                        }
+                        if let Some(mut r) = em.get_mut::<Rotation>() {
+                            r.0 = s.rot.as_dquat();
+                        }
+                        if let Some(mut lv) = em.get_mut::<LinearVelocity>() {
+                            lv.0 = s.lv.as_dvec3();
+                        }
+                        if let Some(mut av) = em.get_mut::<AngularVelocity>() {
+                            av.0 = s.av.as_dvec3();
+                        }
+                    });
+                }
             }
             (false, true) => {
                 info!("[predict] demote owned rover gid={} (idle/released)", gid.get());
@@ -1090,6 +1166,78 @@ pub fn propagate_owned_to_wheels(
                 commands.entity(e).remove::<lunco_core::OwnedLocally>();
             }
             _ => {}
+        }
+    }
+}
+
+/// VISUAL PREDICTION (client, `LUNCO_VISUAL_PREDICT=1`): lead the owned rover's
+/// RENDERED pose ahead of its authoritative pose by ~RTT, from the local drive
+/// input, so driving feels responsive at any ping while physics stays 100%
+/// host-authoritative (no wobble, correct contacts). Runs in `Last` — after ALL
+/// transform propagation (incl. big_space) — and offsets `GlobalTransform` (the
+/// render truth) for the owned rover AND its whole visual assembly (chassis +
+/// wheel/mesh children). Recomputed fresh each frame from the *current* input, so
+/// nothing accumulates, the sim (`Transform`/`Position`) is never touched, and when
+/// you stop steering the lead decays to zero — easing onto authority with no snap.
+fn lead_owned_rover_render(
+    role: Res<lunco_core::NetworkRole>,
+    local: Res<lunco_core::LocalSession>,
+    reg: Res<lunco_core::SessionRegistry>,
+    drive: Res<lunco_core::LocalDriveInput>,
+    q_rovers: Query<
+        (Entity, &lunco_core::GlobalEntityId),
+        (With<lunco_core::NetReplicate>, Without<lunco_core::ArticulatedLink>),
+    >,
+    q_children: Query<&Children>,
+    mut q_gt: Query<&mut GlobalTransform>,
+) {
+    if !matches!(*role, lunco_core::NetworkRole::Client) || !visual_predict() {
+        return;
+    }
+    let lead = visual_lead_secs();
+    if lead <= 0.0 {
+        return;
+    }
+    // Rough motion model (presentational — imperfection just eases back visually).
+    const YAW_RATE: f32 = 0.7; // rad/s at full steer
+    const SPEED: f32 = 6.0; // m/s at full throttle
+    for (e, gid) in q_rovers.iter() {
+        if !reg.owns(local.0, gid.get()) {
+            continue;
+        }
+        let Some(&(throttle, steer)) = drive.0.get(&gid.get()) else {
+            continue;
+        };
+        if throttle.abs() < 1e-3 && steer.abs() < 1e-3 {
+            continue;
+        }
+        let (c, fwd) = {
+            let Ok(gt) = q_gt.get(e) else { continue };
+            let fwd = (gt.rotation() * Vec3::NEG_Z).with_y(0.0).normalize_or_zero();
+            (gt.translation(), fwd)
+        };
+        let yaw = steer as f32 * YAW_RATE * lead;
+        let dist = throttle as f32 * SPEED * lead;
+        // World rigid delta: yaw about the rover's centre, then translate forward.
+        let d = bevy::math::Affine3A::from_translation(fwd * dist)
+            * bevy::math::Affine3A::from_translation(c)
+            * bevy::math::Affine3A::from_rotation_y(yaw)
+            * bevy::math::Affine3A::from_translation(-c);
+        // Collect the assembly (rover + all descendants) and offset each GT.
+        let mut all = vec![e];
+        let mut stack = vec![e];
+        while let Some(cur) = stack.pop() {
+            if let Ok(children) = q_children.get(cur) {
+                for ch in children.iter() {
+                    all.push(ch);
+                    stack.push(ch);
+                }
+            }
+        }
+        for ent in all {
+            if let Ok(mut gt) = q_gt.get_mut(ent) {
+                *gt = GlobalTransform::from(d * gt.affine());
+            }
         }
     }
 }
@@ -3721,6 +3869,11 @@ impl Plugin for SpawnCommandPlugin {
         // and is the sole advance site for `ProxyPlaybackClock`. No-op on
         // host/standalone (guards on `NetworkRole::Client`).
         app.add_systems(FixedUpdate, drive_kinematic_proxies);
+        // Visual prediction (`LUNCO_VISUAL_PREDICT=1`): lead the owned rover's
+        // RENDERED pose in `Last` — after ALL transform propagation (incl.
+        // big_space), before render extraction — so physics stays authoritative
+        // while the visual anticipates. No-op unless the mode is on.
+        app.add_systems(Last, lead_owned_rover_render);
         // Input-replay reconciliation (D2), in LOCKSTEP with physics —
         // `FixedPostUpdate` AFTER avian's writeback. `reconcile_owned_prediction` folds
         // in the authoritative ack (no-op in the common case → no rubber-band),

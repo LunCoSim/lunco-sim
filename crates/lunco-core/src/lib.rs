@@ -82,7 +82,7 @@ pub use session::{
     LocalSession,
     NetConnectRequest, NetDisconnectRequest,
     NetExcluded, NetReplicate, NetSpawn, PendingConnect, PendingConnectRequest,
-    BufferedClientInputs,
+    BufferedClientInputs, LocalDriveInput,
     NetStatus, NetworkRole, NotPredictable, OwnedInputLog, OwnedLocally, PendingReplicatedSpawns,
     PossessionPolicy,
     PredictedDynamic, ReplicatedChassisMotion, ReplicatedSpawn, SessionRegistry, SessionProfiles, SkipContentStamp,
@@ -578,6 +578,7 @@ pub(crate) fn register_core_resources(app: &mut App) {
         // or not the optional networking wire is present.
         .init_resource::<session::OwnedInputLog>()
         .init_resource::<session::BufferedClientInputs>()
+        .init_resource::<session::LocalDriveInput>()
         .init_resource::<session::AppliedInputSeq>()
         // Command-result substrate: result-reporting `#[on_command]` observers
         // require these to exist (same always-on rule as the session resources

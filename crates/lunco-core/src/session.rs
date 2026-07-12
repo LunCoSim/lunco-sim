@@ -623,6 +623,15 @@ pub struct VesselInputLog {
 #[derive(Resource, Default)]
 pub struct OwnedInputLog(pub HashMap<u64, VesselInputLog>);
 
+/// CLIENT-side latest local drive input per owned gid `(throttle, steer)`, captured
+/// from the outbound `SetPorts` in `record_control_input`. The render-lead
+/// (`lead_owned_rover_render`) reads it to visually anticipate the rover's motion —
+/// leading the *rendered* pose forward/turning by ~RTT so driving feels responsive
+/// even though physics stays 100% host-authoritative (see the visual-prediction
+/// design). Purely presentational; never touches the sim. Empty on host/standalone.
+#[derive(Resource, Default)]
+pub struct LocalDriveInput(pub HashMap<u64, (f64, f64)>);
+
 /// HOST-side per-tick input jitter buffer for CLIENT-owned (predicted) rovers.
 ///
 /// The owning client emits a **contiguous, per-fixed-tick, `seq`-stamped**

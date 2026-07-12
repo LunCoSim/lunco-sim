@@ -131,7 +131,7 @@ pub(crate) fn spawn_client(
         let mut ent = commands.spawn((
             Name::new("LunCoClient"),
             Client::default(),
-            Link::new(None),
+            Link::new(sim_latency_conditioner()),
             LocalAddr(client_addr),
             netcode,
         ));
@@ -320,6 +320,26 @@ fn client_cert_digest() -> String {
             })
             .unwrap_or_default()
     }
+}
+
+/// Test knob (`LUNCO_SIM_LATENCY_MS=<ms>`): attach a receive-side link conditioner
+/// that delays inbound payloads (snapshots, spawns) by the given milliseconds — so
+/// the client sees the host's authoritative state that much later, i.e. its
+/// rendered rover lags the local input by ~this ping. Used to validate prediction
+/// (the render-lead) at realistic 200–500 ms latencies on localhost. Off when
+/// unset or 0. Only the client side is conditioned; input still reaches the host
+/// fast, so the input→display latency the render-lead must hide is ≈ this value.
+pub(crate) fn sim_latency_conditioner() -> Option<RecvLinkConditioner> {
+    let ms: u64 = std::env::var("LUNCO_SIM_LATENCY_MS").ok()?.parse().ok()?;
+    if ms == 0 {
+        return None;
+    }
+    warn!("[net] SIMULATED inbound latency ENABLED: {ms} ms (LUNCO_SIM_LATENCY_MS)");
+    Some(RecvLinkConditioner::new(LinkConditionerConfig::new(
+        std::time::Duration::from_millis(ms),
+        std::time::Duration::ZERO,
+        0.0,
+    )))
 }
 
 /// Drain outgoing commands to the server on their declared channel.

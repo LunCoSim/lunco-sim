@@ -226,11 +226,26 @@ fn record_control_input(
     sim_tick: Res<lunco_core::SimTick>,
     mut owned_log: ResMut<lunco_core::OwnedInputLog>,
     mut applied: ResMut<lunco_core::AppliedInputSeq>,
+    // Latest local drive input per gid — the render-lead reads it to visually
+    // anticipate the rover's motion (presentational only; see `LocalDriveInput`).
+    mut drive_input: ResMut<lunco_core::LocalDriveInput>,
     q: Query<(&lunco_core::GlobalEntityId, Has<lunco_core::OwnedLocally>)>,
 ) {
     let cmd = trigger.event();
     let Ok((gid, owned)) = q.get(cmd.target) else { return };
     let g = gid.get();
+    // Capture throttle/steer for the render-lead (both roles harmless; the lead
+    // system is client-only). Undeclared names default to the prior value.
+    {
+        let entry = drive_input.0.entry(g).or_insert((0.0, 0.0));
+        for (name, v) in &cmd.writes {
+            match name.as_str() {
+                "throttle" | "forward" => entry.0 = *v,
+                "steer" => entry.1 = *v,
+                _ => {}
+            }
+        }
+    }
     if role.is_host() {
         // Host ack: highest applied seq per gid, stamped into snapshots so the
         // owning client can drop acked inputs.
