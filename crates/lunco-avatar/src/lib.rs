@@ -1935,10 +1935,11 @@ fn find_clickable_from_hit(
 /// `DragModeActive` blocks clicks while a transform gizmo is up so the user
 /// can drag a handle without flipping the camera.
 pub fn avatar_raycast_possession(
-    // Driven by bevy_picking: a global `On<Pointer<Click>>` observer. egui's
-    // picking backend resolves panel-vs-scene occlusion, so a click on chrome
-    // never reaches a scene vessel. The chrome guard is `hit.position.is_none()`
-    // (egui's pick carries no world position; a real mesh hit always does).
+    // Driven by bevy_picking: a global `On<Pointer<Click>>` observer. The
+    // egui-vs-scene guard is `EguiFocus.wants_pointer` (via `scene_click_ray`) —
+    // a global flag, fed by the workbench's egui-authoritative `pointer_over_scene`
+    // signal, so a click on any real chrome is stood down here even though this
+    // global observer can fire on a scene entity behind the panel.
     mut click: On<bevy::picking::events::Pointer<bevy::picking::events::Click>>,
     keys: Res<ButtonInput<KeyCode>>,
     camera_q: Query<(&Camera, &GlobalTransform, Entity), With<Avatar>>,

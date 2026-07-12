@@ -239,6 +239,19 @@ pub trait Panel: Send + Sync + 'static {
         false
     }
 
+    /// Whether this panel *is* the live 3D scene viewport (the transparent leaf
+    /// the Bevy camera renders through), as opposed to chrome. Default `false`.
+    ///
+    /// The scene-pick gate uses this to classify a docked leaf: chrome panels
+    /// paint a content-sized card and leave the rest of their leaf transparent
+    /// (the full-window 3D shows through), so the dock dispatch records each
+    /// chrome panel's painted card as a blocked region while the transparent gap
+    /// falls through to the scene. A scene-viewport panel is exempt — it *is* the
+    /// scene. Both workbench `ViewportPanel` and the USD viewport override this.
+    fn is_scene_viewport(&self) -> bool {
+        false
+    }
+
     /// Render the panel contents. The panel reads precomputed state via
     /// [`PanelCtx`] (view-model resources, selected-entity components) and
     /// emits user intent through [`PanelCtx::defer`]/[`PanelCtx::trigger`];
@@ -285,6 +298,13 @@ pub trait InstancePanel: Send + Sync + 'static {
     /// Whether the tab body should be rendered with a transparent
     /// background (defers to dock theme otherwise).
     fn transparent_background(&self) -> bool {
+        false
+    }
+
+    /// Whether this instance panel *is* a live 3D scene viewport (exempt from the
+    /// chrome-card recording in the scene-pick gate). Default `false`. See
+    /// [`Panel::is_scene_viewport`].
+    fn is_scene_viewport(&self) -> bool {
         false
     }
 

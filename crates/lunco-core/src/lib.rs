@@ -380,21 +380,27 @@ pub struct EguiFocus {
     pub wants_pointer: bool,
 }
 
-/// Robust egui-vs-scene guard + camera ray for a discrete scene click — the
-/// SINGLE shared entry point for every scene-click observer (possession,
-/// selection, placement).
+/// Camera ray for a discrete scene click — the SINGLE shared entry point for
+/// every scene-click observer (possession, selection, placement).
 ///
 /// Returns the world-space ray from `camera` through `cursor`, or `None` when the
-/// click belongs to egui ([`EguiFocus::wants_pointer`] — viewport-rect aware, so a
-/// click on the docked `ViewportPanel` leaf still counts as the scene) or the ray
-/// can't be built.
+/// click belongs to egui ([`EguiFocus::wants_pointer`]) or the ray can't be built.
 ///
-/// This replaces each observer's old `click.hit.position.is_none()` check, which
-/// was overloaded: it served as a chrome guard AND silently rejected valid scene
-/// clicks whenever bevy_picking found no mesh under the cursor (streamed terrain
-/// with no pickable tile that frame — the "can't place on the ground" bug).
-/// Callers cast the returned ray themselves — against avian colliders
-/// (`SpatialQuery`, e.g. the terrain) or their own analytic shapes (hit-spheres).
+/// `wants_pointer` is a **global** signal, and now (fed by the workbench's
+/// egui-authoritative `pointer_over_scene` hit test) it is `false` over the
+/// transparent docked `ViewportPanel` leaf yet `true` over ANY real chrome. That
+/// globality matters: a `Pointer<Click>` over chrome can fire on more than one
+/// entity (the egui host AND an underlying scene entity), so a per-target chrome
+/// check would leak the second fire through — gating on the global flag stands the
+/// observer down for every fire that frame.
+///
+/// The chrome guard is `wants_pointer`, NOT `click.hit.position.is_none()`: that
+/// old check was overloaded — it silently rejected valid scene clicks whenever
+/// bevy_picking found no mesh under the cursor (streamed terrain with no pickable
+/// tile that frame, or an analytic celestial/spacecraft body — the "can't place
+/// on the ground" bug). Callers cast the returned ray themselves — against avian
+/// colliders (`SpatialQuery`, e.g. the terrain) or their own analytic shapes
+/// (hit-spheres).
 pub fn scene_click_ray(
     focus: &EguiFocus,
     camera: &Camera,

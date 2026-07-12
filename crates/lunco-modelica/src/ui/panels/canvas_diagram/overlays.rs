@@ -15,13 +15,6 @@ use crate::ui::theme::ModelicaThemeExt;
 use super::active_doc_from_world_ctx;
 // `crate::sim_default::drilled_class_for_doc`.
 
-// `render_drill_in_loading_overlay` and `render_projecting_overlay`
-// retired — replaced by
-// `lunco_ui::busy::LoadingIndicator::for_scope(BusyScope::Document(d))
-//     .overlay_on(ui, rect, &bus, &theme)`. Drill-in / duplicate /
-// projection all push to `StatusBus`; the widget picks the
-// longest-running entry and renders the per-source verb.
-
 /// Painted when a drill-in / duplicate load failed (e.g. MSL bundle
 /// not yet ready, class missing, parse error). Replaces the spinner
 /// so the tab doesn't sit on "Loading resource…" forever.
