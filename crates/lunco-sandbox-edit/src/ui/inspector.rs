@@ -298,6 +298,12 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
             .show(ui, |ui| camera_section(ui, ctx));
         ui.separator();
 
+        // ── Terrain Overlay (slope-hazard analysis VIEW) ─────────────
+        egui::CollapsingHeader::new("Terrain Overlay")
+            .default_open(true)
+            .show(ui, |ui| terrain_overlay_section(ui, ctx));
+        ui.separator();
+
         // ── Obstacle Field (procedural craters + rocks) ──────────────
         egui::CollapsingHeader::new("Obstacle Field (Craters & Rocks)")
             .default_open(true)
@@ -1036,6 +1042,80 @@ fn terrain_lod_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         ui.add(egui::Slider::new(&mut cfg.bakes_per_frame, 1usize..=32).text("Bakes / frame"))
             .on_hover_text("1 = smoothest frame-time, slowest fill. Higher = faster load, bigger spikes.");
     });
+}
+
+/// Slope-hazard analysis overlay controls — the render VIEW of the terrain slope
+/// field. Edits the global `TerrainOverlayParams`; the tile shader colourises live
+/// (no re-bake). Read a Copy, edit locally, write back ONLY on a real change so the
+/// live-sync system stays change-driven instead of firing every frame.
+fn terrain_overlay_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+    use lunco_terrain_surface::overlay::TerrainOverlayParams;
+    let Some(cur) = ctx.resource::<TerrainOverlayParams>().copied() else {
+        ui.label("No streaming terrain in this scene.");
+        return;
+    };
+    let mut p = cur;
+    ui.checkbox(&mut p.enabled, "Slope hazard overlay")
+        .on_hover_text("Colour the terrain by steepness: green traversable → red impassable.");
+    ui.add_enabled_ui(p.enabled, |ui| {
+        ui.add(egui::Slider::new(&mut p.safe_deg, 0.0..=45.0).text("Safe ≤ (°)"))
+            .on_hover_text("Slopes at/below this stay green.");
+        ui.add(egui::Slider::new(&mut p.cliff_deg, 0.0..=45.0).text("Cliff ≥ (°)"))
+            .on_hover_text("The critical angle: slopes at/above this go red. Tunes live, no re-bake.");
+        ui.add(egui::Slider::new(&mut p.opacity, 0.0..=1.0).text("Opacity"));
+        // Keep the band ordered so the ramp never inverts.
+        if p.safe_deg > p.cliff_deg {
+            p.safe_deg = p.cliff_deg;
+        }
+        draw_slope_legend(ui, p.safe_deg, p.cliff_deg);
+    });
+    if p != cur {
+        ctx.resource_scope(|_c, r: &mut TerrainOverlayParams| *r = p);
+    }
+}
+
+/// A green→amber→red gradient bar over slope angle `[0°, 45°]`, coloured by the SAME
+/// `hazard_from_slope` + `hazard_color` the shader runs, so the legend and the terrain
+/// agree. Tick marks at the safe/cliff angles.
+fn draw_slope_legend(ui: &mut egui::Ui, safe_deg: f32, cliff_deg: f32) {
+    use lunco_terrain_surface::{hazard_color, hazard_from_slope};
+    const MAX_DEG: f32 = 45.0;
+    let w = ui.available_width().min(240.0);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 16.0), egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    let n = 96usize;
+    for i in 0..n {
+        let t = i as f32 / n as f32;
+        let deg = t * MAX_DEG;
+        let c = hazard_color(hazard_from_slope(deg.to_radians(), safe_deg.to_radians(), cliff_deg.to_radians()));
+        let col = egui::Color32::from_rgb((c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8);
+        let x0 = rect.left() + rect.width() * t;
+        let x1 = rect.left() + rect.width() * ((i + 1) as f32 / n as f32);
+        painter.rect_filled(
+            egui::Rect::from_min_max(egui::pos2(x0, rect.top()), egui::pos2(x1, rect.bottom())),
+            0.0,
+            col,
+        );
+    }
+    // Tick marks at the two critical angles.
+    for deg in [safe_deg, cliff_deg] {
+        let x = rect.left() + rect.width() * (deg / MAX_DEG).clamp(0.0, 1.0);
+        painter.line_segment(
+            [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+            egui::Stroke::new(1.0, egui::Color32::WHITE),
+        );
+    }
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("0°").weak().small());
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(egui::RichText::new(format!("{MAX_DEG:.0}°")).weak().small());
+        });
+    });
+    ui.label(
+        egui::RichText::new(format!("safe ≤ {safe_deg:.0}°   ·   cliff ≥ {cliff_deg:.0}°"))
+            .weak()
+            .small(),
+    );
 }
 
 fn obstacle_field_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {

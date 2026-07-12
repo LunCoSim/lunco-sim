@@ -56,7 +56,7 @@ impl OverlayUniforms {
 /// Live-tunable terrain analysis-overlay state (global across terrains; Inspector /
 /// `SetTerrainOverlay` command). Stored in degrees for a friendly UI; converted to the
 /// shader's radian uniforms by [`uniforms`](Self::uniforms).
-#[derive(Resource, Clone, Copy, Reflect)]
+#[derive(Resource, Clone, Copy, PartialEq, Reflect)]
 #[reflect(Resource)]
 pub struct TerrainOverlayParams {
     /// Whether the slope-hazard overlay is drawn at all.

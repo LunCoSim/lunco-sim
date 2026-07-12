@@ -63,7 +63,8 @@ pub use lunco_terrain_bake::{bake, dem};
 pub use bake::resample;
 pub use dem::{decode_geotiff_f64, height_grid_from_geotiff, DemError, DemMetadata};
 pub use lunco_terrain_core::{
-    AnalyticHeightSource, HeightSource, QuadCoord, Quadtree, Selected, Square, TileCoord, TileGrid,
+    hazard_color, hazard_from_slope, AnalyticHeightSource, HeightSource, QuadCoord, Quadtree,
+    Selected, Square, TileCoord, TileGrid,
 };
 pub use oracle::{raycast_surface, HeightContribution, SurfaceOracle};
 pub use plugin::TerrainSurfacePlugin;
