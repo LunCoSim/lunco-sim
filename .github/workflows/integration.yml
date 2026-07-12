@@ -8,36 +8,39 @@
 # + cached (bytes over HTTP), and loaded — plus the host-side rhai automation
 # path. Self-contained: uses the in-repo scene, needs no downloaded assets.
 #
-# Triggers on changes to the networking / sandbox / API crates or the test
-# scripts (the code this exercises), and manually from the Actions tab.
+# Manual trigger only (workflow_dispatch, from the Actions tab). The former
+# push / pull_request path filters are commented out below, ready to restore.
 # ============================================================================
 
 name: Integration Tests
 
 on:
-  push:
-    paths:
-      - 'crates/lunco-networking/**'
-      - 'crates/lunco-sandbox/**'
-      - 'crates/lunco-api/**'
-      - 'crates/lunco-time/**'
-      - 'crates/lunco-usd-sim/**'
-      - 'scripts/scenario_sync_test.sh'
-      - 'scripts/scenario_sync_assert.rhai'
-      - 'scripts/api/rhai_eval.py'
-      - 'scripts/api/entities_present.py'
-      - '.github/workflows/integration.yml'
-  pull_request:
-    paths:
-      - 'crates/lunco-networking/**'
-      - 'crates/lunco-sandbox/**'
-      - 'crates/lunco-api/**'
-      - 'crates/lunco-time/**'
-      - 'crates/lunco-usd-sim/**'
-      - 'scripts/scenario_sync_test.sh'
-      - 'scripts/scenario_sync_assert.rhai'
-      - 'scripts/api/**'
-      - '.github/workflows/integration.yml'
+  # Automatic triggers disabled — run this from the Actions tab instead.
+  # Uncomment to restore push / pull_request runs.
+  #
+  # push:
+  #   paths:
+  #     - 'crates/lunco-networking/**'
+  #     - 'crates/lunco-sandbox/**'
+  #     - 'crates/lunco-api/**'
+  #     - 'crates/lunco-time/**'
+  #     - 'crates/lunco-usd-sim/**'
+  #     - 'scripts/scenario_sync_test.sh'
+  #     - 'scripts/scenario_sync_assert.rhai'
+  #     - 'scripts/api/rhai_eval.py'
+  #     - 'scripts/api/entities_present.py'
+  #     - '.github/workflows/integration.yml'
+  # pull_request:
+  #   paths:
+  #     - 'crates/lunco-networking/**'
+  #     - 'crates/lunco-sandbox/**'
+  #     - 'crates/lunco-api/**'
+  #     - 'crates/lunco-time/**'
+  #     - 'crates/lunco-usd-sim/**'
+  #     - 'scripts/scenario_sync_test.sh'
+  #     - 'scripts/scenario_sync_assert.rhai'
+  #     - 'scripts/api/**'
+  #     - '.github/workflows/integration.yml'
   workflow_dispatch:
 
 env:
