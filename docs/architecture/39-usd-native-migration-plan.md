@@ -218,18 +218,19 @@ boundary-wired via connections; the synthesizer is a registered rhai-authored en
 
 ---
 
-## Phase 6 — The comms feature rides on top (doc 36) 🟡
+## Phase 6 — Connectivity rides on top (doc 49) 🟢 / Sky (doc 36 §2) 🟡
 
 Depends on Phases 1–2 (ports/connections/identity) + optionally 5 (electrical draw).
 
-- **P6.1 — `lunco-connectivity` crate:** `SightLine`/`CommsField` geometry core (analytic body-sphere
-  occlusion + elevation), reading `EphemerisResource`/`world_position_seeded` (doc 36 §3).
-- **P6.2 — `lunco:comms:antenna` flag → `CommsLink` component** via the USD-sim projection (doc 36 §5);
-  outputs to `PortRegistry` + AOS/LOS `TelemetryEvent`.
-- **P6.3 — `CommsLink.mo`** (doc 34 gap; template `Battery.mo`) + the comms **domain descriptor**; comms
-  component as a reusable multi-layer part (doc 36 §2).
+- **P6.1–P6.3 — DONE, but not as a comms feature.** There is no comms crate, no comms component and no
+  comms vocabulary: connectivity landed as a **generic link kernel** in `lunco-celestial`
+  (`LinkNode`/`LinkState`, cadence-gated geometry: range + elevation + body occlusion + terrain LOS),
+  with the verdict behind the language-neutral `link.connected` hook and routing authored in rhai over
+  the `query("Links")` snapshot. The USD vocabulary is `lunco:linkNode` / `lunco:link:*`. See
+  `49-connectivity-link-kernel.md`. A comms *domain* (link budget, `CommsLink.mo`, margin validation) is
+  authored content on top of that kernel — the domain-package shape of doc 38 — and remains open work.
 - **P6.4 — Sky:** reuse Earth `GlobeLod` (coarse `max_lod:0` default), honor `DomeLight.texture:file` →
-  `Skybox`/`EnvironmentMapLight` (doc 36 §7).
+  `Skybox`/`EnvironmentMapLight` (doc 36 §2).
 
 ---
 

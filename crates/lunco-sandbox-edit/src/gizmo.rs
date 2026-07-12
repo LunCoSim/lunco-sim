@@ -280,16 +280,21 @@ pub fn sync_gizmo_camera(
         .find(|(_, cam, target)| cam.is_active && matches!(target, RenderTarget::Window(_)))
         .map(|(e, _, _)| e);
 
-    // Untag any camera that is no longer the active window view.
+    // Untag any camera that is no longer the active window view. FALLIBLE: a scene
+    // clear (LoadScene) despawns the scene's cameras, and this system's queries were
+    // built before that despawn flushed — so `tagged`/`active` can already be dead by
+    // the time these commands apply. A plain `remove`/`insert` panics on that
+    // ("Entity despawned: ID … is invalid", from `apply_deferred`) and takes the app
+    // down mid-reload; the `try_` forms just no-op on a dead entity.
     for tagged in q_tagged.iter() {
         if Some(tagged) != active {
-            commands.entity(tagged).remove::<GizmoCamera>();
+            commands.entity(tagged).try_remove::<GizmoCamera>();
         }
     }
     // Tag the active window camera (idempotent).
     if let Some(active) = active {
         if !q_tagged.contains(active) {
-            commands.entity(active).insert(GizmoCamera);
+            commands.entity(active).try_insert(GizmoCamera);
         }
     }
 }

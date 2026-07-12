@@ -1,12 +1,16 @@
-//! USD → celestial/comms components (doc 43 §2.4): maps the authored
-//! `lunco:anchor:*` / `lunco:orbit:*` / `lunco:comms:*` vocabulary to
-//! `lunco-celestial` components. Called from `process_usd_sim_prim_read`
-//! (once per prim, either read source).
+//! USD → celestial components (doc 49): maps the authored `lunco:anchor:*` /
+//! `lunco:orbit:*` / `lunco:link:*` vocabulary to `lunco-celestial` components.
+//! Called from `process_usd_sim_prim_read` (once per prim, either read source).
+//!
+//! There is no comms vocabulary and no comms component — a connectivity endpoint
+//! is a generic [`LinkNode`](lunco_celestial::LinkNode), and the domain (roles,
+//! routing, link budget) is authored on top of it.
 //!
 //! ```usda
-//! bool   lunco:comms:antenna = true
-//! double lunco:comms:maxRangeM = 100000000
-//! double lunco:comms:minElevationDeg = 5
+//! bool   lunco:linkNode = true                  # a generic connectivity endpoint
+//! string lunco:link:class = "relay"             # authored role; the core never reads it
+//! double lunco:link:maxRangeM = 100000000
+//! double lunco:link:minElevationDeg = 5
 //! double lunco:anchor:lat = 40.4314    # + lon/height (shared with terrain
 //! int    lunco:anchor:body = 399       #   georef; body defaults to Moon 301)
 //! int    lunco:orbit:body = 301
@@ -17,7 +21,7 @@
 //!
 //! A root prim (path depth 1) authoring an anchor is the scene's **site
 //! anchor**: the local scene origin sits at that geodetic point (ENU axes) —
-//! it grounds every scene-local antenna (rover masts) on the body.
+//! it grounds every scene-local endpoint (rover masts) on the body.
 
 use bevy::prelude::*;
 
@@ -101,8 +105,8 @@ pub fn insert_celestial_comms_components<R: UsdRead>(
     // --- Solar-pose tracking marker (generic celestial placement) ---
     // A scene-local subsystem prim (a rover-mounted antenna, a panel) opts in so
     // the pose system tracks its solar-frame position; anchored/orbiting prims
-    // are tracked automatically. Authored connectivity (`comms.rhai`) reads it
-    // through the `SolarPose` query — no comms component, no `lunco:comms:*`.
+    // are tracked automatically. Authored subsystems read it through the
+    // `SolarPose` query — no domain component, no domain vocabulary.
     if reader
         .scalar::<bool>(sdf_path, "lunco:solarTracked")
         .unwrap_or(false)

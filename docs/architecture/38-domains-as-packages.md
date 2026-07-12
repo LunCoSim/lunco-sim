@@ -78,7 +78,7 @@ relationship-graph over prims + a scope + a composition layer + a descriptor ass
 reader.
 
 **(a) Namespace — `lunco:<domain>:*`.** Each domain owns an attribute prefix (`lunco:electrical:*`,
-`lunco:thermal:*`, `lunco:comms:*`). Already the open convention; the descriptor declares its prefix.
+`lunco:thermal:*`, `lunco:link:*`). Already the open convention; the descriptor declares its prefix.
 
 **(b) Membership — `apiSchemas` labels.** A prim joins a domain via `LunCo<Domain>API` (open, decorative
 today → the descriptor's synthesizer/editor filter on it). Multi-apply = multi-domain participation.
@@ -206,10 +206,15 @@ sim-driven authored 3D today; for auto-derived 3D geometry once rumoca MultiBody
 
 ## 6. Comms & electrical are instances, not special cases
 
-- **Comms (doc 36)** = a domain descriptor: namespace `lunco:comms`, connector kinds (`rf`, `data`),
-  parts (antenna component), synthesize (`CommsLink.mo`), visualize (antenna + link-line), editor
-  (topology graph), validate (margin ≥ 0). The reusable multi-layer *component* (doc 36 §2) is a part in
-  this domain's library.
+- **Comms** = a domain descriptor: its own namespace, connector kinds (`rf`, `data`), parts (antenna
+  component), synthesize (`CommsLink.mo`), visualize (antenna + link-line), editor (topology graph),
+  validate (margin ≥ 0). The reusable multi-layer *component* (doc 36 §1) is a part in this domain's
+  library. **This is the worked proof of the principle:** comms used to be a Rust module
+  (`lunco-celestial/src/comms.rs` + a `lunco:comms:*` vocabulary) and it was **deleted**. What the core
+  kept is the domain-neutral geometry it was hiding — the generic link kernel
+  (`49-connectivity-link-kernel.md`: `lunco:linkNode` / `lunco:link:*`, a `link.connected` verdict hook,
+  a `query("Links")` graph). A comms domain is now authored *on top* of that kernel, exactly as this doc
+  argues every domain should be. Nothing about "comms" survives in Rust.
 - **Electrical (doc 37)** = a domain descriptor: namespace `lunco:electrical`, connector kind
   `electrical.pin` (effort=v/flow=i), parts (MSL `Analog.Basic`), synthesize (netlist→`Electrical.mo`),
   visualize (schematic icons / sim-driven transforms), editor (schematic canvas), validate (DAE balance).
@@ -800,7 +805,7 @@ the SysML-v2→USD and USD→FMI projections become near-mechanical.
 
 `lunco:vessel`, `lunco:avatar`, `lunco:scenario`, `lunco:nextScene`, `lunco:triggerZone`, `lunco:waypoint`,
 `lunco:net:*`, `lunco:terrain:*`, `lunco:shadow:*`, `lunco:camera*` (behavior; the camera prim itself is
-`UsdGeomCamera`), `lunco:comms:*`, `lunco:celestial:*`, `lunco:placeholder`/`spawnable`/`resolvedAsset`.
+`UsdGeomCamera`), `lunco:link:*`, `lunco:celestial:*`, `lunco:placeholder`/`spawnable`/`resolvedAsset`.
 These are genuine LunCo glue — keep the `lunco:` prefix, group consistently (`lunco:<domain>:<prop>`), and
 prefer a `ui:nodegraph:node:pos` (UsdUI) over any bespoke diagram-position attr.
 
@@ -878,7 +883,7 @@ never dispatched) and **muddles domain with role**. Refactor:
 | `lunco:layer` (logical grouping) / render selection | **`UsdCollectionAPI`** (membership) + **`UsdGeomImageable.purpose`** (default/render/proxy/guide) + `visibility` | `openusd` has `collection.rs` |
 | `kind`, rigid body/joint/drive/vehicle | **`kind`**, **`UsdPhysics`/`Physx*`** | §14.1–2 |
 
-**`lunco:` glue that *stays* (tiers 2–3 — USD has no schema):** `lunco:comms:*`, `lunco:celestial:*`,
+**`lunco:` glue that *stays* (tiers 2–3 — USD has no schema):** `lunco:link:*`, `lunco:celestial:*`,
 `lunco:ephemeris_id` (SPICE metadata, §11), `lunco:net:*` (replication), `lunco:scenario`/`nextScene`/
 `triggerZone`/`waypoint` (sequencing/scene semantics), `lunco:vessel`/`avatar` (role — or a `LunCoVesselAPI`
 applied schema), `lunco:sensor:*` (mirror Isaac vendor schemas, §8.5), `lunco:terrain:*`/`shadow:*` (LunCo

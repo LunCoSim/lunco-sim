@@ -12,9 +12,9 @@ Status: **design / analysis** (2026-07-03). Substrate largely EXISTS; the rover-
 > a *netlist-from-USD synthesizer* that emits real, hand-editable Modelica text. This is precisely how
 > the Modelica industry (Dymola / OpenModelica / SystemModeler) already works, and we use real MSL v4.1.0.
 
-Companion to `36-comms-connectivity-and-sky.md` (which motivated it via the comms component's electrical
-layer) and `34-scenario-and-multidomain.md` (the sub-prim-per-model decision). Read §2.4 of doc 36 in
-light of this doc — it *upgrades* the earlier "causal now / acausal later" framing.
+Companion to `36-components-and-sky.md` (the multi-layer component model, whose electrical layer
+motivated this doc) and `34-scenario-and-multidomain.md` (the sub-prim-per-model decision).
+**This doc owns the causal-vs-acausal decision** for the electrical layer; doc 36 §1.3 defers to it.
 
 > **Reframed by `38-domains-as-packages.md`:** the synthesizer registry + hooks of §8 is one slot of a
 > general *domain descriptor*; "electrical" is a domain *package* (data + rhai), not a Rust primitive.
@@ -51,7 +51,7 @@ So the rule that resolves "how to do the electrical layer":
 > `lunco:modelicaModel` prim, whose BOUNDARY ports (bus voltage, per-load power/current, pack SoC)
 > scalar-wire to the other domain prims.** Kirchhoff stays inside one solve; the rest is co-sim.
 
-This supersedes doc 36 §2.4's "causal p_draw now, acausal later." Acausal is not "later" — it is the
+The rule is **not** "causal p_draw now, acausal later." Acausal is not "later" — it is the
 *correct home for the electrical network itself*, and it is available now. Causal scalar ports remain
 correct for the **cross-domain boundary** of that network (the loads reported to it, the bus voltage /
 SoC it reports out).
@@ -90,7 +90,7 @@ locked black box — it is a `.mo` a human can open and edit, and re-parse witho
 
 ## 3. Where the "basic components" come from — netlist-from-USD
 
-The elegant connection to the component model (doc 36 §2): **each USD component already declares its
+The elegant connection to the component model (doc 36 §1): **each USD component already declares its
 electrical contribution**, and the currently-**inert** `rel lunco:epsBus` / `rel lunco:powerInput`
 relationships (author-side topology, *no runtime reader today*) **are a netlist**. Synthesis reads the
 composed USD graph and emits the rover `Electrical.mo`:
@@ -147,7 +147,7 @@ richer structural carrier that can *export to* them.
 - **Open registries, not enums.** Components declare their electrical contribution via USD attrs + MSL
   *class names* (open, string-addressed) — not a closed Rust electrical-component enum. New part types
   are new MSL classes / new component `.usda`, no core change.
-- **Reusable-component composition (doc 36 §2).** The electrical layer is the first worked example: basic
+- **Reusable-component composition (doc 36 §1).** The electrical layer is the first worked example: basic
   components → synthesized domain model → boundary-wired into the multi-domain vehicle → nested up into
   robots. Same rules at every level.
 - **Digital-twin goal.** A rover whose electrical bus is a *real acausal circuit* built from reusable
@@ -173,7 +173,7 @@ richer structural carrier that can *export to* them.
 - **Co-sim boundary lag is real.** The one-tick Jacobi lag across domains is fine for loose couplings
   but can bite tight ones — keep genuinely stiff couplings *inside* one DAE (that is the whole point of
   the §1 rule), and only cross a scalar wire where a tick of delay is physically harmless.
-- **`instanceable` still dropped by flatten** (doc 36 §2.1) — many identical loads = N `references`, and
+- **`instanceable` still dropped by flatten** (doc 36 §1.1) — many identical loads = N `references`, and
   the synthesizer emits N instance lines; fine, just not prototype-shared.
 
 ---
@@ -195,7 +195,7 @@ richer structural carrier that can *export to* them.
 6. **Later tracks:** FMI export (rumoca `fmi2/fmi3` templates) for interop; live USD↔Modelica projection;
    `.ssp/.ssd` export; SysML v2 as the structural source-of-truth above USD.
 
-The reusable comms component (doc 36) is the first consumer: its `Power` layer contributes a load to the
+The reusable comms component (doc 36 §1.2) is the first consumer: its `Power` layer contributes a load to the
 synthesized rover electrical model, and its link dynamics stay a separate co-sim domain — exactly the
 two-level rule in action.
 

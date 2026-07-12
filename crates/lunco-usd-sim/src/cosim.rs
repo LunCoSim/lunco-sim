@@ -1285,6 +1285,33 @@ fn on_clear_scene(
 /// worker-side Modelica steppers / Python script docs they referenced.
 /// Shared by [`LoadScene`] (clear-before-reload) and [`ClearScene`]
 /// (clear-to-empty). Despawns are deferred through `commands`.
+///
+/// TODO(avian-bump): this plain batch despawn trips a DEBUG-only assert in avian
+/// 0.7 — `island.contact_count == 0` (islands/mod.rs:1372), from
+/// `BodyIslandNode::on_remove` when an island's last body leaves while a contact is
+/// still registered against it. It is currently silenced by
+/// `[profile.dev.package.avian3d] debug-assertions = false` (see the workspace
+/// Cargo.toml for the full rationale) — a MASK, not a fix. Verified benign: the
+/// island is deleted on the next line, and physics simulates correctly after a
+/// reload (rover stays finite and rests on terrain).
+///
+/// DO NOT "fix" this by reordering the teardown. Every sanctioned order was tried
+/// and ALL still panic: remove `RigidBody` then `Collider`; `Collider` then
+/// `RigidBody`; `RigidBody` alone; insert `ColliderDisabled` + `RigidBodyDisabled`;
+/// gather colliders via `RigidBodyColliders` rather than the Bevy hierarchy; and
+/// even stepping `PhysicsSchedule` mid-teardown. Each left islands holding contacts.
+/// Root cause is upstream: a collider's contacts drain ONLY on adding
+/// `ColliderDisabled`/`Disabled` or REMOVING `ColliderMarker` — and since
+/// `ColliderMarker` is a REQUIRED component, dropping `Collider` drains nothing
+/// while still unlinking it from `RigidBodyColliders` (which defeats the body's own
+/// drain); and `remove_collider_on` early-returns on a non-TOUCHING edge without
+/// unlinking it from the island. Re-test on the next avian bump.
+///
+/// NOTE: any system that touches scene entities through `Commands` must use the
+/// FALLIBLE forms (`try_despawn`/`try_remove`/`try_insert`) — its queries are built
+/// before this despawn flushes, so its targets can already be dead. A plain
+/// `remove`/`insert` panics in `apply_deferred` and takes the app down mid-reload
+/// (that was the `sync_gizmo_camera` crash).
 fn clear_scene_entities(
     commands: &mut Commands,
     q_usd: &Query<(Entity, &UsdPrimPath)>,

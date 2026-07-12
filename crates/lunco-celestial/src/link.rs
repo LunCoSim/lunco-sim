@@ -16,12 +16,14 @@
 //! The recompute cadence is a **runtime parameter** ([`LinkConfig::interval_s`]),
 //! tuned live via the [`SetLinkCadence`] command — never a build constant.
 
-use bevy::math::DVec3;
+use bevy::math::{DVec3, Vec3A};
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use lunco_core::{on_command, register_commands, Command, Severity, TelemetryEvent, TelemetryValue};
 use lunco_hooks::HookValue;
+use lunco_terrain_surface::{DemHeightField, SurfaceOracle};
 use lunco_time::WorldTime;
 
 use crate::coords::ecliptic_to_bevy;
@@ -64,13 +66,16 @@ impl Default for LinkNode {
 }
 
 /// One node's resolved peer links, written by [`update_links`]. Consumers read it
-/// (or subscribe to the AOS/LOS events); routing is authored over this.
-#[derive(Component, Debug, Clone, Default)]
+/// (or subscribe to the AOS/LOS events); routing is authored over this. Reflect so
+/// the inspector / API `query_entity` can read it and the [`LinkRoute`] query can
+/// walk the topology.
+#[derive(Component, Debug, Clone, Default, Reflect)]
+#[reflect(Component)]
 pub struct LinkState {
     pub peers: Vec<LinkPeer>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Reflect)]
 pub struct LinkPeer {
     pub peer: String,
     pub connected: bool,
@@ -120,8 +125,9 @@ struct Node {
 /// earlier EXCLUSIVE version (to call the `TerrainRaycast` provider with
 /// `&mut World`) inserted a sync point that interleaved with the twin/terrain
 /// despawns and tripped avian's island bookkeeping (`island.body_count > 0`).
-/// Terrain occlusion therefore moves to the verdict policy / a future cached
-/// oracle, not an in-loop world query.
+/// Terrain occlusion is instead read here through a plain `Query` over each DEM's
+/// [`DemHeightField`] oracle — a read-only component access, so the system stays
+/// non-exclusive (no `&mut World`, no sync point, no avian interference).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn update_links(
     config: Option<Res<LinkConfig>>,
@@ -129,6 +135,7 @@ pub(crate) fn update_links(
     ephemeris: Option<Res<EphemerisResource>>,
     registry: Option<Res<CelestialBodyRegistry>>,
     q_nodes: Query<(Entity, &LinkNode, &SolarFramePose, Option<&Name>)>,
+    q_terrain: Query<(&GlobalTransform, &DemHeightField)>,
     mut q_state: Query<&mut LinkState>,
     mut state: Local<LinkSolverState>,
     mut commands: Commands,
@@ -176,6 +183,11 @@ pub(crate) fn update_links(
         _ => Vec::new(),
     };
 
+    // DEM oracles for terrain LOS — snapshotted (Arc-shared, cheap) so the loop
+    // owns no world borrow. Empty when no terrain is loaded (orbital-only scenes).
+    let terrains: Vec<(GlobalTransform, Arc<SurfaceOracle>)> =
+        q_terrain.iter().map(|(gt, hf)| (*gt, hf.0.clone())).collect();
+
     // Pairwise verdicts.
     let mut per_node: HashMap<Entity, Vec<LinkPeer>> = HashMap::new();
     let mut up_now: HashSet<String> = HashSet::new();
@@ -204,10 +216,11 @@ pub(crate) fn update_links(
                 && elev_a >= a.node.min_elevation_deg
                 && elev_b >= b.node.min_elevation_deg
                 && occluded_by.is_none();
-            // Terrain occlusion is left to the verdict policy / a future cached
-            // oracle so the kernel stays non-exclusive (an in-loop provider query
-            // needed `&mut World` → an exclusive system → the avian island crash).
-            let terrain_blocked = false;
+            // Terrain relief (a rille rim / hill between the endpoints) shadows the
+            // link. March the DEM in the site-local frame — `SolarFramePose::local`
+            // IS the terrain oracle frame (see `pose.rs`). Skipped when the analytic
+            // body check already severs, and cheap when no terrain is loaded.
+            let terrain_blocked = cheap_ok && terrain_blocks(a.pose.local, b.pose.local, &terrains);
 
             let ctx = HookValue::map([
                 ("a", HookValue::str(a.name.clone())),
@@ -272,13 +285,63 @@ pub(crate) fn update_links(
 
 impl Node {
     fn named(mut self, name: Option<&Name>, e: Entity) -> Self {
-        if self.name.is_empty() {
-            self.name = name
-                .map(|n| n.as_str().to_string())
-                .unwrap_or_else(|| format!("node_{}", e.index()));
-        }
+        self.name = node_key(self.node.class.as_deref(), name, e);
         self
     }
+}
+
+/// The stable identifier a node is known by in [`LinkState::peers`] and the
+/// routing graph: authored `class` first, else the entity `Name`, else a synthetic
+/// `node_<index>`. The kernel and [`LinkRoute`](crate::queries) MUST agree on this.
+pub fn node_key(class: Option<&str>, name: Option<&Name>, e: Entity) -> String {
+    match class {
+        Some(c) if !c.is_empty() => c.to_string(),
+        _ => name
+            .map(|n| n.as_str().to_string())
+            .unwrap_or_else(|| format!("node_{}", e.index())),
+    }
+}
+
+/// Does any DEM's relief block the segment `a→b` (both in the site-local / terrain
+/// frame)? The single-ray `los_hit` kernel over each oracle, mirroring
+/// `TerrainRaycastProvider`. The march is capped to the terrain footprint
+/// (`±half_extent`) because terrain can only occlude within its own extent — this
+/// keeps the step at the DEM sample pitch even for a surface↔satellite segment
+/// (otherwise millions of metres of empty march).
+fn terrain_blocks(a: DVec3, b: DVec3, terrains: &[(GlobalTransform, Arc<SurfaceOracle>)]) -> bool {
+    if terrains.is_empty() {
+        return false;
+    }
+    let d = b - a;
+    let seg = d.length();
+    if seg < 1e-3 {
+        return false;
+    }
+    let dir = d / seg;
+    for (gt, oracle) in terrains {
+        let he = oracle.half_extent() as f64;
+        let max = seg.min(2.5 * he);
+        let inv = gt.affine().inverse();
+        let o = inv.transform_point3(Vec3::new(a.x as f32, a.y as f32, a.z as f32));
+        let dl = (inv.matrix3 * Vec3A::new(dir.x as f32, dir.y as f32, dir.z as f32))
+            .normalize_or_zero();
+        if dl.length_squared() < 0.5 {
+            continue;
+        }
+        let hit = lunco_terrain_core::los_hit(
+            oracle.as_ref(),
+            [o.x as f64, o.y as f64, o.z as f64],
+            [dl.x as f64, dl.y as f64, dl.z as f64],
+            max,
+            he,
+            oracle.spacing().max(0.5) as f64,
+            0.05, // endpoints sit above the surface — don't let them self-occlude
+        );
+        if hit.is_some() {
+            return true;
+        }
+    }
+    false
 }
 
 fn pair_key(a: &str, b: &str) -> String {

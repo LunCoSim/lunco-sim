@@ -142,6 +142,7 @@ impl Plugin for CelestialPlugin {
         app.init_resource::<link::LinkConfig>();
         app.register_type::<link::LinkConfig>();
         app.register_type::<link::LinkNode>();
+        app.register_type::<link::LinkState>();
         link::register_all_commands(app);
         // `update_links` is a REGULAR (non-exclusive) system — it writes through
         // Commands and adds no extra command-flush sync point. (An earlier

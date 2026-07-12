@@ -163,9 +163,10 @@ fn register_builtin_policies() {
         // Boot-entry policy: what does the app do at startup? (onboard / load /
         // resume / nothing). Consulted by `lunco_tutorial::consult_boot`.
         ("boot", lunco_core::session::BOOT_HOOK, "boot_entry"),
-        // (Comms link availability is no longer a builtin policy: connectivity is
-        // authored in assets/scenarios/comms.rhai, which composes its constraints
-        // inline over the generic geometry queries.)
+        // (Link availability is not a builtin policy. The generic link kernel
+        // computes the geometry and applies a builtin range+mask+occlusion rule;
+        // an authored `link.connected` hook overrides the verdict, and routing is
+        // rhai over `query("Links")` — see doc 49 / prelude/links.rhai.)
     ];
     for (stem, hook_id, entry) in BUILTINS {
         let Some(src) = lunco_assets::scripting::policy(stem) else {

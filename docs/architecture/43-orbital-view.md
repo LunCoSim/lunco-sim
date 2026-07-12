@@ -1,12 +1,14 @@
-# 43 — Orbital view & rover↔satellite↔Earth connectivity
+# 43 — Orbital view: satellites, ground stations & the site frame
 
-Status: design + first implementation slice · Audience: engine + content authors
+Status: design + implementation · Audience: engine + content authors
 
-The MoonDAO connectivity demo needs four things on top of the existing substrate:
-a Keplerian satellite, geodetically-placed ground stations (Earth + Moon), a
-line-of-sight/link-availability layer publishing ports, and a sandbox that can
-switch between the surface (moonbase terrain) and a solar-system view of the
-same scene.
+The celestial placement substrate: a Keplerian satellite, geodetically-placed
+ground stations (Earth + Moon), the **site frame** that grounds scene-local prims
+on a body, and a sandbox that can switch between the surface (moonbase terrain)
+and a solar-system view of the same scene.
+
+**Connectivity is not in this doc.** Links are a generic, domain-free kernel over
+this geometry — see [`49-connectivity-link-kernel.md`](49-connectivity-link-kernel.md).
 
 ## 1. What already exists (verified 2026-07-06)
 
@@ -61,18 +63,6 @@ the terrain-georef ENU choice (East=+X, North=−Z, Up=+Y in local scenes).
   mean_anomaly_deg, epoch_jd}`; `position_m(gm, jd)` solves Kepler (Newton) and
   returns ecliptic-frame meters relative to the central body. Component
   **`KeplerOrbit{body: i32, elements}`**.
-- `comms.rs` — component **`CommsAntenna{max_range_m, min_elevation_deg}`**;
-  resource `CommsLinks` (all pairwise `SightLine{range_m, elevation_deg,
-  occluded_by, connected}` + per-antenna Earth-route BFS); systems gated on
-  epoch/topology change. Antenna solar position resolution order:
-  `GeodeticAnchor` → `KeplerOrbit` → scene-local (entity world position mapped
-  through the **site frame**, below). Occlusion is the doc-36 analytic
-  body-sphere test against every registry body (a body an endpoint stands on is
-  excluded — the elevation mask owns the horizon there). AOS/LOS edges emit
-  `TelemetryEvent`s. `CommsPlugin` registers components, systems, and a
-  `PortBackend` publishing per-antenna ports:
-  `link/<peer>/connected|range_m|elevation_deg`, `route/earth/connected|hops`.
-
 ### 2.3 Site frame (scene ⇄ body)
 
 A scene root prim may author `lunco:anchor:lat/lon/height` (+
@@ -85,14 +75,6 @@ position, with or without the visual solar hierarchy.
 ### 2.4 USD vocabulary (authored, no schema code)
 
 ```
-bool   lunco:comms:antenna = true
-double lunco:comms:maxRangeM        # default 1e12 (unconstrained)
-double lunco:comms:minElevationDeg  # default 0 (surface antennas)
-string lunco:comms:id               # stable peer id for port names; derived
-                                    # when absent (parent leaf when the prim
-                                    # is a generic "Comms" child — two rovers'
-                                    # antennas stay distinct)
-
 double lunco:anchor:lat / lon / height   # existing namespace, reused
 int    lunco:anchor:body = 301           # NAIF id (399 Earth, 301 Moon)
 
@@ -157,9 +139,6 @@ state).
 - `lunco-celestial`: `geo.rs` (Geodetic, `GeodeticAnchor`, `SiteAnchor`,
   tangent frames, `body_rotation` — now shared with `body_rotation_system`),
   `kepler.rs` (`KeplerianElements`, `KeplerOrbit`, Newton solver),
-  `comms.rs` (`CommsAntenna{max_range_m,min_elevation_deg,id}`,
-  `CommsLinkState`, `CommsLinks`, `update_comms_links`, ports backend,
-  AOS/LOS `TelemetryEvent`s, `CommsPlugin`),
   `placement.rs` (`anchor_solar_frame_to_site`,
   `place_celestial_bound_entities`).
 - **`CelestialConfig`** `{spawn_hierarchy, spawn_observer_camera}` gates the
@@ -171,7 +150,7 @@ state).
   no longer clobbers a host's `Gravity` choice (and guards double-adds of
   Terrain/Gravity plugins).
 - Sandbox adds `CelestialPlugin` + `EphemerisPlugin` (all platforms, wasm
-  included) + `CommsPlugin`; the ephemeris dep moved out of the native-only
+  included);  the ephemeris dep moved out of the native-only
   section.
 - USD bridge: `lunco-usd-sim/src/celestial.rs`, called from
   `process_usd_sim_prim_read`.
@@ -186,21 +165,6 @@ state).
   consistency, Kepler radii/period/inclination, occlusion, port tokens) +
   `lunco-usd-sim/tests/comms_connectivity.rs` (attr bridge → links → ports on
   a deterministic test ephemeris; near-side direct + limb relay-route cases).
-
-### Link policy is rhai data
-
-The per-pair link verdict goes through the `comms.link.connected` hook
-(`lunco_celestial::COMMS_LINK_HOOK`). The authored rule is
-`assets/scripting/policy/comms_link.rhai` (`link_connected(ctx)` — ctx map:
-`a/b, range_m, elev_a/b, min_elev_a/b, occluded, occluded_by, max_range_m`),
-registered as a built-in policy by `lunco-scripting`. Scenarios re-shape it
-live via the generic rhai verb **`register_hook(id, entry, src)`**
-(world_bridge — works for ANY lunco-hooks seam: merge policy, RBAC,
-control authority, comms). The Rust range+mask+occlusion rule remains only as
-the fallback for a missing/broken script. `assets/scenarios/comms_demo.rhai`
-is the worked example: link-table readout from the `comms:*` ports, the
-surface→orbit→Earth camera tour, and a "solar storm" policy swap that cuts
-direct DSN paths and then restores the canonical rule.
 
 ### Globe tile assembly (fixed here)
 

@@ -3,11 +3,10 @@
 //! the terrain providers (`TerrainHeight` / `TerrainRaycast`).
 //!
 //! These are the geometry substrate that AUTHORED subsystems (comms, solar,
-//! thermal) compose over; **none of them names a domain** (docs 10/12). They
-//! reuse the ephemeris, the body registry, and the analytic `segment_hits_sphere`
-//! occlusion — so a link-availability or sun-exposure rule can be authored in
-//! rhai over `query("Occultation", …)` with no comms/solar Rust. As `comms.rs`
-//! is retired, its geometry half lives here; the domain half moves to `comms.rhai`.
+//! thermal) compose over; **none of them names a domain** (doc 49). They reuse the
+//! ephemeris, the body registry, and the analytic `segment_hits_sphere` occlusion —
+//! so a link-availability or sun-exposure rule is authored in rhai over
+//! `query("Occultation", …)` / `query("Links", …)` with no comms or solar Rust.
 
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -22,6 +21,7 @@ use crate::geo::segment_hits_sphere;
 use crate::ephemeris::EphemerisResource;
 use crate::geo::{solar_position_of_geodetic, GeodeticAnchor};
 use crate::kepler::KeplerOrbit;
+use crate::link::{node_key, LinkNode, LinkState};
 use crate::registry::CelestialBodyRegistry;
 
 /// Read a `[x,y,z]` array or `{x,y,z}` map into a solar-frame [`DVec3`].
@@ -220,6 +220,48 @@ impl ApiQueryProvider for SolarPoseProvider {
     }
 }
 
+/// `Links` — a snapshot of the live connectivity graph the kernel maintains, as
+/// plain DATA for scripts to route over. No traversal here: the core stays a pure
+/// cadence-gated geometry sweep, and reachability / preferred-path routing is
+/// authored in rhai over this snapshot **on demand** (at decision time — not per
+/// tick), which is where connectivity policy belongs. Keys are the authored
+/// [`node_key`] (class, else Name).
+///
+/// params: none. returns `{ nodes:[key], adj:{ key:[peer,…] }, edges:[{a,b,range_m}] }`
+/// — `adj` lists only UP (connected) links; `edges` is the deduped undirected set.
+pub struct LinksProvider;
+
+impl ApiQueryProvider for LinksProvider {
+    fn name(&self) -> &'static str {
+        "Links"
+    }
+
+    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
+        let mut nodes: Vec<String> = Vec::new();
+        let mut adj = serde_json::Map::new();
+        let mut edges: Vec<serde_json::Value> = Vec::new();
+        let mut q = world.query::<(Entity, Option<&Name>, &LinkNode, &LinkState)>();
+        for (e, name, node, state) in q.iter(world) {
+            let key = node_key(node.class.as_deref(), name, e);
+            let mut peers: Vec<String> = Vec::new();
+            for peer in state.peers.iter().filter(|p| p.connected) {
+                if !peers.contains(&peer.peer) {
+                    peers.push(peer.peer.clone());
+                }
+                // Dedup the undirected edge (each pair is listed from both sides).
+                if key <= peer.peer {
+                    edges.push(serde_json::json!({
+                        "a": key, "b": peer.peer, "range_m": peer.range_m,
+                    }));
+                }
+            }
+            adj.insert(key.clone(), serde_json::json!(peers));
+            nodes.push(key);
+        }
+        ApiResponse::ok(serde_json::json!({ "nodes": nodes, "adj": adj, "edges": edges }))
+    }
+}
+
 /// Register the generic celestial geometry providers into the [`ApiQueryRegistry`]
 /// (init-if-absent, mirroring `register_terrain_queries`). Called from
 /// [`CelestialPlugin`](crate::CelestialPlugin) — these are generic geometry that
@@ -230,4 +272,5 @@ pub fn register_celestial_queries(app: &mut App) {
     reg.register(OccultationProvider);
     reg.register(BodyPositionProvider);
     reg.register(SolarPoseProvider);
+    reg.register(LinksProvider);
 }
