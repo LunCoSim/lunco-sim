@@ -40,7 +40,14 @@ impl Plugin for LunCoControllerPlugin {
         //
         // Input → port writes are EMITTED once per fixed tick (so the
         // prediction replay is a clean 1:1 loop over `InputFrame`s).
-        app.add_systems(FixedUpdate, drive_from_bindings);
+        // Suppressed during a rollback replay: re-simulation feeds the RECORDED
+        // input for each replayed tick, so regenerating input from the live keyboard
+        // mid-replay would overwrite the very history we are replaying (and mint new
+        // seqs for ticks that already happened).
+        app.add_systems(
+            FixedUpdate,
+            drive_from_bindings.run_if(lunco_core::not_rolling_back),
+        );
         // The SINGLE input-bookkeeping chokepoint: every `SetPorts` — keyboard,
         // API, or wire-replayed — flows through this observer, so the client
         // prediction log and the host reconcile-ack no longer depend on how the

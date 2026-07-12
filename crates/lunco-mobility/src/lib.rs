@@ -145,6 +145,31 @@ impl Plugin for LunCoMobilityPlugin {
                 .chain()
                 .before(lunco_core::ControlDacSet),
         );
+
+        // ── Rollback replay ──────────────────────────────────────────────────
+        // Mirror the FULL actuation chain into `RollbackReplay` with the SAME
+        // relative order as `FixedUpdate`, so re-simulating a recorded input
+        // reproduces the host's forces exactly. No `Time<Virtual>` pause guard here:
+        // a replay step is an instantaneous re-simulation, not a wall-clock tick, so
+        // it must run regardless of the pause/speed state of the virtual clock.
+        app.add_systems(
+            lunco_core::RollbackReplay,
+            (sync_fsw_command_surface, apply_drive_mix)
+                .chain()
+                .before(lunco_core::ControlDacSet),
+        );
+        app.add_systems(
+            lunco_core::RollbackReplay,
+            (
+                suspension_system,
+                apply_wheel_suspension,
+                apply_wheel_drive,
+                apply_wheel_steering,
+                update_wheel_spin,
+            )
+                .chain()
+                .after(lunco_core::ControlDacSet),
+        );
     }
 }
 

@@ -9,8 +9,11 @@
 //!   way a human would with the gizmo.
 
 use bevy::prelude::*;
-use bevy::math::DVec3;
-use avian3d::prelude::{AngularVelocity, Collisions, LinearVelocity, PhysicsSystems, RigidBody};
+use bevy::math::{DQuat, DVec3};
+use avian3d::prelude::{
+    AngularVelocity, Collisions, LinearVelocity, PhysicsSystems, RigidBody, SubstepCount,
+};
+use avian3d::schedule::{PhysicsSchedule, Physics, Substeps};
 use avian3d::physics_transform::{Position, Rotation};
 use big_space::prelude::Grid;
 use lunco_core::Command;
@@ -1435,6 +1438,414 @@ pub fn record_predicted_state(
         });
         while vlog.ring.len() > MAX_PREDICTED_HISTORY {
             vlog.ring.pop_front();
+        }
+    }
+}
+
+// ─────────────────────────── Deterministic rollback ───────────────────────────
+//
+// The proper fix for predict-own divergence. The old `reconcile_owned_prediction`
+// BLENDS toward authority — a proportional controller that fights the live drive
+// and, under a changing (steering) input, never settles: the post-turn wobble.
+//
+// Rollback instead RE-DERIVES the present from the authoritative past: snap the
+// rover to the state the host actually had at the acked tick, then deterministically
+// re-simulate every input we've sent since. avian is deterministic (`determinism_probe`),
+// so the replay reproduces the host's trajectory exactly — the rover responds
+// immediately to local input AND carries no accumulating error, at any ping.
+//
+// Validated headlessly by `rollback_probe` before wiring: on the real solver, a
+// public-state-only restore + input replay reconverges to 0.24 mm steady-state
+// (vs 102 m free-running). Crucially it needs NO solver warm-start/contact-cache
+// restoration — which is what makes it implementable from a network snapshot.
+
+/// Enable deterministic rollback (`LUNCO_ROLLBACK=1`). Default OFF: the shipped
+/// path stays the current reconcile, so this cannot regress anything until chosen.
+fn rollback_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("LUNCO_ROLLBACK").map_or(false, |v| v == "1" || v == "true")
+    })
+}
+
+/// Don't rollback for noise. Below this the prediction already matches authority,
+/// and re-simulating would burn N physics steps to move the rover a few mm.
+const ROLLBACK_POS_EPS: f64 = 0.02; // m
+/// Rotation error (radians) that also justifies a re-simulation — heading error is
+/// what actually compounds under drive, so it gets its own (tight) trigger.
+const ROLLBACK_ROT_EPS: f64 = 0.01; // ~0.6°
+/// Safety cap on replayed steps per correction. At 60 Hz this is ~0.5 s of unacked
+/// input (≈500 ms RTT). Beyond it we snap without replay rather than stall the frame.
+const MAX_REPLAY_STEPS: usize = 32;
+
+/// Full physics state of ONE rigid body — everything a rollback restore needs, and
+/// exactly what avian reconverges from (no warm-start/contact caches; see the probe).
+#[derive(Clone, Copy)]
+struct RbState {
+    pos: DVec3,
+    rot: DQuat,
+    lv: DVec3,
+    av: DVec3,
+}
+
+/// The owned rover's ENTIRE articulated assembly at one input `seq`.
+///
+/// Why the whole assembly and not just the chassis: `apply_net_replication` excludes
+/// `ArticulatedLink`, so the wire carries the CHASSIS ONLY (the client rebuilds wheels
+/// from it). Snapping just the chassis to authority would leave its four wheel bodies
+/// behind and tear the revolute joints apart. So we keep a client-LOCAL history of every
+/// link (zero wire cost) and restore the assembly as a RIGID BODY — chassis lands exactly
+/// on authority while suspension compression, steer angle and wheel spin stay internally
+/// consistent.
+#[derive(Clone)]
+struct AssemblyState {
+    seq: u32,
+    chassis: RbState,
+    links: Vec<(Entity, RbState)>,
+}
+
+/// Per-gid ring of recent assembly states, keyed by the input seq that produced them.
+#[derive(Resource, Default)]
+pub struct AssemblyHistory(HashMap<u64, VecDeque<AssemblyState>>);
+
+fn rb_state(p: &Position, r: &Rotation, lv: &LinearVelocity, av: &AngularVelocity) -> RbState {
+    RbState { pos: p.0, rot: r.0, lv: lv.0, av: av.0 }
+}
+
+/// Record the owned rover's full assembly each fixed tick, keyed by the input seq
+/// applied that tick — the history rollback rewinds into. `FixedPostUpdate` after
+/// avian writeback (so it captures the post-step truth), and NOT during a replay.
+pub fn record_assembly_state(
+    input_log: Res<lunco_core::OwnedInputLog>,
+    mut hist: ResMut<AssemblyHistory>,
+    // The chassis: owned + articulated root. `propagate_owned_to_wheels` mirrors
+    // `OwnedLocally` onto the wheels too, so links MUST be excluded here or each
+    // wheel would be mistaken for a chassis.
+    q_chassis: Query<
+        (
+            Entity,
+            &lunco_core::GlobalEntityId,
+            &Position,
+            &Rotation,
+            &LinearVelocity,
+            &AngularVelocity,
+        ),
+        (
+            With<lunco_core::OwnedLocally>,
+            Without<lunco_core::ArticulatedLink>,
+        ),
+    >,
+    // Every rigid body in the rover, found by walking the subtree — NOT by assuming
+    // the wheels are direct children of the body that carries the gid. That
+    // assumption produced `links=0` in the live client: the rollback snapped the
+    // chassis to authority, left the four wheel bodies behind (they were even
+    // *restored* afterwards as part of the frozen set), tore the revolute joints,
+    // and launched the rover tens of metres. Walk the real hierarchy instead.
+    q_children: Query<&Children>,
+    q_body: Query<
+        (&Position, &Rotation, &LinearVelocity, &AngularVelocity),
+        With<RigidBody>,
+    >,
+) {
+    if !rollback_enabled() {
+        return;
+    }
+    for (chassis_e, gid, p, r, lv, av) in q_chassis.iter() {
+        let g = gid.get();
+        let Some(seq) = input_log.0.get(&g).and_then(|l| l.frames.back()).map(|f| f.seq) else {
+            continue;
+        };
+        let ring = hist.0.entry(g).or_default();
+        if ring.back().is_some_and(|s| s.seq == seq) {
+            continue; // one record per input seq
+        }
+        let links = collect_assembly_links(chassis_e, &q_children, &q_body);
+        ring.push_back(AssemblyState {
+            seq,
+            chassis: rb_state(p, r, lv, av),
+            links,
+        });
+        while ring.len() > MAX_PREDICTED_HISTORY {
+            ring.pop_front();
+        }
+    }
+}
+
+/// Every rigid body in the rover's subtree (wheels, bogies, any jointed part),
+/// excluding the root itself. Breadth-first over `Children`, so it doesn't care how
+/// deeply the USD prim hierarchy nests the links under the articulation root.
+fn collect_assembly_links(
+    root: Entity,
+    q_children: &Query<&Children>,
+    q_body: &Query<(&Position, &Rotation, &LinearVelocity, &AngularVelocity), With<RigidBody>>,
+) -> Vec<(Entity, RbState)> {
+    let mut out = Vec::new();
+    let mut stack: Vec<Entity> = q_children
+        .get(root)
+        .map(|c| c.iter().collect())
+        .unwrap_or_default();
+    while let Some(e) = stack.pop() {
+        if let Ok((p, r, lv, av)) = q_body.get(e) {
+            out.push((e, rb_state(p, r, lv, av)));
+        }
+        if let Ok(children) = q_children.get(e) {
+            stack.extend(children.iter());
+        }
+    }
+    out
+}
+
+/// Advance physics exactly one deterministic tick, replaying `input` — the same
+/// (actuation → solve) pair a live fixed tick performs, and nothing else.
+///
+/// Mirrors avian's `run_physics_schedule`: we cannot call that (it is a system inside
+/// `FixedPostUpdate`) nor re-enter `FixedMain` (Bevy takes a schedule OUT of the world
+/// to run it, so re-entrancy is impossible — and it would re-run every unrelated fixed
+/// system N times per correction). Instead: run the mirrored actuation chain
+/// (`RollbackReplay`), then step `PhysicsSchedule` by the fixed delta.
+fn replay_one_tick(
+    world: &mut World,
+    ports: &lunco_core::ports::PortRegistry,
+    chassis: Entity,
+    input: &lunco_core::InputFrame,
+) {
+    // Feed the RECORDED input by writing the ports directly. Deliberately NOT a
+    // `SetPorts` trigger: that would fire `record_control_input`, re-logging an input
+    // we are merely re-simulating (and bumping the host ack bookkeeping).
+    ports.write_port(world, chassis, "throttle", input.forward);
+    ports.write_port(world, chassis, "steer", input.steer);
+    ports.write_port(world, chassis, "brake", input.brake);
+
+    let dt = world.resource::<Time<Fixed>>().delta();
+
+    // Actuation runs on the FIXED clock, as it does live.
+    *world.resource_mut::<Time>() = world.resource::<Time<Fixed>>().as_generic();
+    world.run_schedule(lunco_core::RollbackReplay);
+
+    // Solve. Advance the physics + substep clocks exactly as avian's driver does,
+    // then run the schedule (which includes the big_space bridge's Prepare/Writeback).
+    world.resource_mut::<Time<Physics>>().advance_by(dt);
+    let SubstepCount(substeps) = *world.resource::<SubstepCount>();
+    world
+        .resource_mut::<Time<Substeps>>()
+        .advance_by(dt.div_f64(substeps as f64));
+    *world.resource_mut::<Time>() = world.resource::<Time<Physics>>().as_generic();
+    world.run_schedule(PhysicsSchedule);
+}
+
+/// **Deterministic rollback reconciliation** for the owned, locally-predicted rover.
+///
+/// On each snapshot that acks a NEW input seq: if our prediction at that seq diverged
+/// from authority, rewind the whole assembly onto the authoritative state and re-simulate
+/// every unacked input forward to the present. The rover therefore always shows a state
+/// that is (a) derived from the host's truth and (b) already includes every input the
+/// player has pressed since — immediate response, no accumulating error.
+///
+/// Exclusive, in `Update` (after `ingest_snapshots`, so the freshest ack is visible) —
+/// it MUST live outside the fixed loop to run schedules at all.
+pub fn rollback_owned_prediction(world: &mut World) {
+    if !rollback_enabled() {
+        return;
+    }
+
+    // ── Gather the owned chassis + its ack, without holding any borrows ──
+    let mut owned: Vec<(Entity, u64)> = Vec::new();
+    {
+        let mut q = world.query_filtered::<
+            (Entity, &lunco_core::GlobalEntityId),
+            (With<lunco_core::OwnedLocally>, Without<lunco_core::ArticulatedLink>),
+        >();
+        for (e, gid) in q.iter(world) {
+            owned.push((e, gid.get()));
+        }
+    }
+    if owned.is_empty() {
+        return;
+    }
+    // Which owned bodies are articulated (have joints that a partial restore would tear).
+    let articulated_set: HashSet<Entity> = {
+        let mut q = world.query_filtered::<Entity, With<lunco_core::ArticulatedVehicle>>();
+        q.iter(world).collect()
+    };
+
+    for (chassis, gid) in owned {
+        // Authority + the highest input seq the host has applied for us.
+        let Some(sample) = world
+            .resource::<InterpBuffers>()
+            .0
+            .get(&gid)
+            .and_then(|b| b.back())
+            .copied()
+        else {
+            continue;
+        };
+        let ack = sample.last_input_seq;
+        if ack == 0 {
+            continue; // host hasn't applied any of our input yet
+        }
+        // One rollback per new ack.
+        {
+            let mut hist = world.resource_mut::<PredictedStateLog>();
+            let vlog = hist.0.entry(gid).or_default();
+            if ack <= vlog.last_reconciled {
+                continue;
+            }
+            vlog.last_reconciled = ack;
+        }
+
+        // The assembly as WE predicted it at the acked seq — the rewind target.
+        let Some(pred) = world
+            .resource::<AssemblyHistory>()
+            .0
+            .get(&gid)
+            .and_then(|ring| ring.iter().find(|s| s.seq == ack))
+            .cloned()
+        else {
+            continue; // no recorded assembly for that seq (just promoted) — nothing to rewind
+        };
+
+        // Authoritative chassis state (f64 absolute position — gap A).
+        let auth = RbState {
+            pos: sample.pos_world,
+            rot: sample.rot.as_dquat(),
+            lv: sample.lv.as_dvec3(),
+            av: sample.av.as_dvec3(),
+        };
+
+        // ── Divergence test: did the prediction actually miss? ──
+        let dpos = (auth.pos - pred.chassis.pos).length();
+        let drot = auth.rot.angle_between(pred.chassis.rot);
+        let diverged = dpos > ROLLBACK_POS_EPS || drot > ROLLBACK_ROT_EPS;
+
+        // Inputs we've sent that the host hasn't acked — the ones to re-simulate.
+        let unacked: Vec<lunco_core::InputFrame> = world
+            .resource::<lunco_core::OwnedInputLog>()
+            .0
+            .get(&gid)
+            .map(|l| l.frames.iter().filter(|f| f.seq > ack).copied().collect())
+            .unwrap_or_default();
+
+        // SAFETY GATE: an articulated rover whose links we failed to gather must NEVER
+        // be rolled back. Seating the chassis alone while its wheels stay put tears the
+        // revolute joints apart and launches the vehicle — the exact catastrophic
+        // failure observed live (`links=0`). Better to leave the body uncorrected
+        // (a wobble) than to destroy it.
+        let articulated = articulated_set.contains(&chassis);
+        if diverged && articulated && pred.links.is_empty() {
+            warn!(
+                "[rollback] gid={gid}: articulated rover has NO recorded links — refusing to \
+                 roll back (would tear the joints). Skipping correction."
+            );
+            continue;
+        }
+
+        if diverged {
+            // ── RIGID RE-FRAME: move the WHOLE assembly onto authority ──
+            // The wire carries only the chassis, so derive the correction as a rigid
+            // transform of the assembly: chassis snaps exactly to authority, and every
+            // link is carried with it, preserving joint/suspension/steer/spin state.
+            let d_rot = auth.rot * pred.chassis.rot.inverse();
+            let mut restore: Vec<(Entity, RbState)> = Vec::with_capacity(pred.links.len() + 1);
+            restore.push((chassis, auth));
+            for (link_e, link) in &pred.links {
+                restore.push((
+                    *link_e,
+                    RbState {
+                        pos: auth.pos + d_rot * (link.pos - pred.chassis.pos),
+                        rot: d_rot * link.rot,
+                        lv: auth.lv + d_rot * (link.lv - pred.chassis.lv),
+                        av: auth.av + d_rot * (link.av - pred.chassis.av),
+                    },
+                ));
+            }
+
+            // Freeze the rest of the world: save every other non-static body and restore
+            // it after the replay. Re-simulation must not advance bodies that already
+            // live on their own authoritative timeline (proxies) or double-step props.
+            // They still act as colliders at their current pose, so contacts stay real.
+            let mut frozen: Vec<(Entity, RbState)> = Vec::new();
+            {
+                let assembly: HashSet<Entity> = restore.iter().map(|(e, _)| *e).collect();
+                let mut q = world.query::<(
+                    Entity,
+                    &RigidBody,
+                    &Position,
+                    &Rotation,
+                    &LinearVelocity,
+                    &AngularVelocity,
+                )>();
+                for (e, rb, p, r, lv, av) in q.iter(world) {
+                    if matches!(*rb, RigidBody::Static) || assembly.contains(&e) {
+                        continue;
+                    }
+                    frozen.push((e, rb_state(p, r, lv, av)));
+                }
+            }
+
+            let steps = unacked.len().min(MAX_REPLAY_STEPS);
+            let ports = world.resource::<lunco_core::ports::PortRegistry>().clone();
+            let saved_time = *world.resource::<Time>();
+
+            world.resource_mut::<lunco_core::RollbackInProgress>().0 = true;
+            apply_states(world, &restore);
+            for input in unacked.iter().take(steps) {
+                replay_one_tick(world, &ports, chassis, input);
+            }
+            // Put the frozen world back exactly as it was (they moved under gravity /
+            // their own velocity during the replay steps).
+            apply_states(world, &frozen);
+            world.resource_mut::<lunco_core::RollbackInProgress>().0 = false;
+            *world.resource_mut::<Time>() = saved_time;
+
+            debug!(
+                "[rollback] gid={gid} ack={ack} dpos={dpos:.3}m drot={drot:.3}rad replayed={steps} \
+                 (unacked={}) links={} frozen={}",
+                unacked.len(),
+                pred.links.len(),
+                frozen.len()
+            );
+            if unacked.len() > MAX_REPLAY_STEPS {
+                warn!(
+                    "[rollback] gid={gid}: {} unacked inputs exceeds cap {MAX_REPLAY_STEPS} — \
+                     snapped without full replay (latency too high?)",
+                    unacked.len()
+                );
+            }
+        }
+
+        // Prune what the ack has retired, whether or not we rolled back.
+        if let Some(il) = world
+            .resource_mut::<lunco_core::OwnedInputLog>()
+            .0
+            .get_mut(&gid)
+        {
+            while il.frames.front().is_some_and(|f| f.seq <= ack) {
+                il.frames.pop_front();
+            }
+        }
+        if let Some(ring) = world.resource_mut::<AssemblyHistory>().0.get_mut(&gid) {
+            while ring.front().is_some_and(|s| s.seq < ack) {
+                ring.pop_front();
+            }
+        }
+    }
+}
+
+/// Seat a batch of bodies' public physics state (the only state a rollback may touch).
+fn apply_states(world: &mut World, states: &[(Entity, RbState)]) {
+    for (e, s) in states {
+        let Ok(mut em) = world.get_entity_mut(*e) else { continue };
+        if let Some(mut p) = em.get_mut::<Position>() {
+            p.0 = s.pos;
+        }
+        if let Some(mut r) = em.get_mut::<Rotation>() {
+            r.0 = s.rot;
+        }
+        if let Some(mut lv) = em.get_mut::<LinearVelocity>() {
+            lv.0 = s.lv;
+        }
+        if let Some(mut av) = em.get_mut::<AngularVelocity>() {
+            av.0 = s.av;
         }
     }
 }
@@ -3984,7 +4395,10 @@ impl Plugin for SpawnCommandPlugin {
         // prior frame's `Update` — one-frame latency, absorbed by `INTERP_DELAY`)
         // and is the sole advance site for `ProxyPlaybackClock`. No-op on
         // host/standalone (guards on `NetworkRole::Client`).
-        app.add_systems(FixedUpdate, drive_kinematic_proxies);
+        app.add_systems(
+            FixedUpdate,
+            drive_kinematic_proxies.run_if(lunco_core::not_rolling_back),
+        );
         // HOST: apply one buffered client input per fixed tick BEFORE the drive
         // reads the ports, so the host steps the client's input sequence in lockstep
         // (the divergence fix behind proper prediction+reconciliation).
@@ -4000,26 +4414,48 @@ impl Plugin for SpawnCommandPlugin {
         // then `record_predicted_state` records this tick's pose keyed by the input
         // seq, so the NEXT ack can be compared apples-to-apples. Order matters:
         // reconcile first (may correct), then record the resulting pose.
+        // `reconcile_owned_prediction` is the BLEND corrector. Under `LUNCO_ROLLBACK=1`
+        // it is replaced wholesale by `rollback_owned_prediction` — running both would
+        // have them fight over the same body (the blend nudging a trajectory that
+        // rollback has already re-derived exactly).
         app.add_systems(
             FixedPostUpdate,
-            (reconcile_owned_prediction, record_predicted_state)
+            (
+                reconcile_owned_prediction.run_if(|| !rollback_enabled()),
+                record_predicted_state,
+                // Rollback's rewind target: the full assembly (chassis + every wheel),
+                // because the wire replicates the chassis only.
+                record_assembly_state,
+            )
                 .chain()
-                .after(PhysicsSystems::Writeback),
+                .after(PhysicsSystems::Writeback)
+                .run_if(lunco_core::not_rolling_back),
         );
         // Phase B: state-based reconcile for free predicted props (no input seq),
         // likewise after avian writeback. Independent of the owned-rover chain
         // above (acts on a disjoint set of bodies).
         app.add_systems(
             FixedPostUpdate,
-            reconcile_predicted_dynamic.after(PhysicsSystems::Writeback),
+            reconcile_predicted_dynamic
+                .after(PhysicsSystems::Writeback)
+                .run_if(lunco_core::not_rolling_back),
         );
+        // Deterministic rollback. `Update`, after `ingest_snapshots` has landed the
+        // freshest ack — and necessarily OUTSIDE the fixed loop, since it runs
+        // schedules (`RollbackReplay` + `PhysicsSchedule`) itself, which is impossible
+        // re-entrantly from within `FixedMain`. No-op unless `LUNCO_ROLLBACK=1`.
+        app.init_resource::<AssemblyHistory>();
+        app.add_systems(Update, rollback_owned_prediction.after(ingest_snapshots));
         // Step 2 (revised) correction smoothing: reconcilers PARK their correction
         // in `PendingCorrection`; this drain applies it to the physics pose a few
         // cm/deg per fixed tick, BEFORE the solve, so writeback + avian's
         // transform-interpolation render it smoothly. Game code never writes
         // `Transform` (which resets `bevy_transform_interpolation`'s easing — the
         // cause of the hold-the-key client jitter).
-        app.add_systems(FixedUpdate, drain_pending_corrections);
+        app.add_systems(
+            FixedUpdate,
+            drain_pending_corrections.run_if(lunco_core::not_rolling_back),
+        );
     }
 }
 

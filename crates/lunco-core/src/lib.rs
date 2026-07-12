@@ -115,6 +115,7 @@ pub use lunco_command_macro::{Command, on_command, register_commands};
 pub use serde;
 
 use bevy::prelude::*;
+use bevy::ecs::schedule::ScheduleLabel;
 
 /// The central plugin for the LunCo simulation core.
 ///
@@ -494,6 +495,43 @@ impl Default for IsServer {
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ControlDacSet;
 
+/// The **rollback replay** schedule: exactly the actuation chain of one simulation
+/// tick (FSW command surface → drive mix → DAC → wheel/hardware actuators), and
+/// NOTHING else — no tick advance, no scenario scripts, no sensors, no networking,
+/// no journaling.
+///
+/// Deterministic rollback re-simulates the owned rover's unacked inputs by running
+/// this schedule + avian's `PhysicsSchedule` once per replayed input. We cannot
+/// simply re-run `FixedMain`: Bevy's `run_schedule` takes the schedule *out* of the
+/// world, so re-entering `FixedMain` from inside it is impossible — and it would
+/// also re-run every unrelated fixed-tick system (scripts, sensors, the sim-tick
+/// advance) N times per correction. Mirroring only the actuation chain here keeps
+/// replay faithful AND side-effect free.
+///
+/// INVARIANT: every system a rover's actuation depends on in `FixedUpdate` must be
+/// registered here too, in the same relative order (see `ControlDacSet`). A system
+/// added to the live chain but forgotten here silently makes replay diverge from
+/// the host — the exact class of bug rollback exists to eliminate.
+#[derive(ScheduleLabel, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RollbackReplay;
+
+/// True only while the client is re-simulating the owned rover inside a rollback.
+///
+/// Systems that must NOT run during a replay step guard on this: the input source
+/// (`drive_from_bindings` — replay feeds *recorded* inputs, not the live keyboard),
+/// the proxy drivers, and the reconcilers/recorders (which would otherwise fold a
+/// correction into the very trajectory they are correcting). Everything scheduled
+/// in `Update` is naturally exempt — replay only runs `RollbackReplay` +
+/// `PhysicsSchedule`.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RollbackInProgress(pub bool);
+
+/// Run condition: true when NOT inside a rollback replay. Attach to any fixed-tick
+/// system whose side effects must happen exactly once per real tick.
+pub fn not_rolling_back(rb: Option<Res<RollbackInProgress>>) -> bool {
+    !rb.is_some_and(|r| r.0)
+}
+
 impl Plugin for LunCoCorePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(LunCoLogPlugin);
@@ -541,6 +579,11 @@ impl Plugin for LunCoCorePlugin {
         app.add_systems(FixedUpdate, wire_system.in_set(ControlDacSet))
            .add_systems(FixedUpdate, advance_sim_tick)
            .add_systems(PostUpdate, assign_global_entity_ids);
+        // Rollback replay mirrors the DAC (and ONLY the DAC from this crate —
+        // `advance_sim_tick` is deliberately excluded: a replayed tick must not
+        // advance the simulation's tick counter).
+        app.init_resource::<RollbackInProgress>();
+        app.add_systems(RollbackReplay, wire_system.in_set(ControlDacSet));
     }
 }
 
