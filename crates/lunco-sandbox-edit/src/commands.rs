@@ -3925,6 +3925,12 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(lunco_usd::commands::UsdCommandsPlugin);
+        // Persistence is a HOST behaviour: the observer deliberately skips
+        // `Standalone` (there the direct ECS spawn is the sole instance, and
+        // authoring it into the runtime layer too would double-instantiate it).
+        // A real app always has the role; this hand-built one must supply it or
+        // the observer fails `Res` validation.
+        app.insert_resource(lunco_core::NetworkRole::Host);
         app.add_observer(persist_spawn_to_runtime_layer);
 
         // Catalog with one spawnable asset.

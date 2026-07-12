@@ -378,15 +378,32 @@ split-debuginfo = "unpacked"
 [profile.dev.package."*"]
 opt-level = 3
 
-# avian 0.7's island solver carries `debug_assert!`s on incremental island
-# bookkeeping that a BATCH entity-despawn transiently violates — a full scene
-# swap (`load_scene` despawns the whole prior scene's connected physics island
-# in one frame) trips `island.body_count > 0` before avian's own empty-island
-# cleanup runs the next line, ABORTING dev builds on every tutorial scene load.
-# The code path is correct (it removes the empty island immediately after); only
-# the over-strict debug check panics. Release builds already omit it (the prior
-# verified runs were release). Disable it for avian ONLY, keeping our own
-# debug-assertions and avian's opt-level.
+# ── avian3d: debug-assertions OFF — TODO(avian-bump): WORKAROUND ─────
+# TODO(avian-bump): this MASKS an upstream avian 0.7 bug; it does not fix it.
+# Re-test on the next avian release and DELETE this block if the assert no longer
+# fires. If it still fires, file it upstream (the repro + analysis are below).
+#
+# avian 0.7's solver-island bookkeeping has a DEBUG-ONLY assert that a scene
+# teardown trips: `island.contact_count == 0` (islands/mod.rs:1372), fired from
+# `BodyIslandNode::on_remove` when an island's last BODY leaves while a contact is
+# still registered against it. It makes `LoadScene` over a live physics scene
+# panic in dev — and only in dev; release already compiles the assert out.
+#
+# Not fixable from our side. Avian drains a collider's contacts ONLY on adding
+# `ColliderDisabled`/`Disabled` or removing `ColliderMarker` (narrow_phase:155-156)
+# — note that removing the `Collider` component does neither, since `ColliderMarker`
+# is a REQUIRED component and survives it. And `remove_collider_on` early-returns on
+# a non-TOUCHING edge WITHOUT unlinking it from the island. Every sanctioned teardown
+# order was tried (remove RigidBody/Collider either way round; disable both; gather
+# colliders through `RigidBodyColliders` rather than the Bevy hierarchy; even step
+# `PhysicsSchedule` mid-teardown) and each still left islands holding contacts.
+#
+# The assert is over-strict rather than load-bearing: the island it fires on is
+# deleted on the very next line (`remove_island`), so the stale count has no
+# consumer, and the contacts are cleaned when the colliders themselves despawn.
+#
+# This MASKS an upstream avian bug; it does not fix it. Revisit on an avian bump.
+# See memory: project_avian_island_contact_count_reload_crash
 [profile.dev.package.avian3d]
 opt-level = 3
 debug-assertions = false

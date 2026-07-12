@@ -33,6 +33,7 @@ big_space = { workspace = true }
 # `EphemerisProvider` trait and a no-op default; apps that need real
 # planetary positions add the ephemeris crate's plugin.
 lunco-core = { path = "../lunco-core" }
+lunco-api = { path = "../lunco-api" }
 lunco-hooks = { path = "../lunco-hooks" }
 lunco-time = { path = "../lunco-time" }
 lunco-render = { path = "../lunco-render" }
@@ -48,6 +49,11 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 lunco-materials = { path = "../lunco-materials" }
 lunco-terrain-globe = { path = "../lunco-terrain-globe" }
+# Read-only terrain LOS: the link kernel marches `los_hit` over each DEM's
+# `SurfaceOracle` (a plain component read — no `&mut World`, so the system stays
+# non-exclusive). No cycle: terrain-surface does not depend on celestial.
+lunco-terrain-surface = { path = "../lunco-terrain-surface" }
+lunco-terrain-core = { path = "../lunco-terrain-core" }
 
 
 # ureq is desktop-only: HTTP client with TLS for downloading ephemeris data

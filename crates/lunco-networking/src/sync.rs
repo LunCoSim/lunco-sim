@@ -3108,34 +3108,50 @@ mod codec_roundtrip {
 
     #[test]
     fn despawn_appended_last_keeps_discriminants_stable() {
-        // The bincode codec is positional (fixint u32 discriminant, LE). `Despawn`
-        // was deliberately appended LAST so it doesn't shift any pre-existing
-        // variant's discriminant (which would silently break a version-skewed peer).
-        // Lock that: Handshake stays at index 3, Despawn is index 11. If someone
-        // re-inserts a variant mid-enum, Handshake's discriminant shifts and this
-        // fails loudly.
-        let handshake = serialize_env(&SyncEnvelope::Handshake(HandshakeMsg { session: 1, tick: 2, token: String::new() }))
-            .expect("serialize");
-        assert_eq!(&handshake[..4], &[3, 0, 0, 0], "Handshake discriminant moved");
-        let despawn = serialize_env(&SyncEnvelope::Despawn(DespawnReplicationMsg { gid: 9 }))
-            .expect("serialize");
-        assert_eq!(&despawn[..4], &[11, 0, 0, 0], "Despawn must be the last variant");
+        // The bincode codec is positional: the variant's INDEX in `SyncEnvelope`
+        // is the discriminant on the wire. `Despawn` was deliberately appended
+        // LAST so it doesn't shift any pre-existing variant's discriminant (which
+        // would silently break a version-skewed peer). Lock that: Handshake stays
+        // at index 3, Despawn at 11. A mid-enum insert shifts them and fails here.
+        //
+        // Encoding is bincode 2 `standard()` — varint, so an index < 128 is a
+        // SINGLE leading byte (see `shared::serialize_env`). These asserts used to
+        // expect a 4-byte fixint (`[3,0,0,0]`), which was bincode 1's `serialize()`;
+        // the crate moved to bincode 2 and the stale premise went unnoticed because
+        // the `networking` feature was outside the built feature set.
+        assert_eq!(discriminant_of(&SyncEnvelope::Handshake(HandshakeMsg {
+            session: 1,
+            tick: 2,
+            token: String::new(),
+        })), 3, "Handshake discriminant moved");
+        assert_eq!(
+            discriminant_of(&SyncEnvelope::Despawn(DespawnReplicationMsg { gid: 9 })),
+            11,
+            "Despawn must be the last variant"
+        );
+    }
+
+    /// The wire discriminant of `env`: the leading varint byte written by
+    /// [`serialize_env`]. Only valid while the enum has < 128 variants — past
+    /// that a varint spills to a second byte and this must grow a decoder.
+    fn discriminant_of(env: &SyncEnvelope) -> u8 {
+        let bytes = serialize_env(env).expect("serialize");
+        assert!(!bytes.is_empty(), "empty envelope encoding");
+        bytes[0]
     }
 
     #[test]
     fn scenario_variants_appended_after_viewcenter_keep_discriminants_stable() {
-        // Same positional-bincode rule as `Despawn`: the four scenario variants
-        // are appended after `ViewCenter` (index 12) so no prior discriminant
-        // shifts. Lock the indices so a future mid-enum insert fails loudly
-        // instead of silently breaking a version-skewed peer (stale wasm bundle
-        // vs fresh host). ViewCenter=12, ScenarioManifest=13, AssetRequest=14,
-        // AssetChunk=15, AssetHave=16.
-        let viewcenter = serialize_env(&SyncEnvelope::ViewCenter(ViewCenterMsg {
-            pos: [0.0; 3],
-            cell: [0; 3],
-        }))
-        .expect("serialize");
-        assert_eq!(&viewcenter[..4], &[12, 0, 0, 0], "ViewCenter discriminant moved");
+        // Same positional-bincode rule as `Despawn` (and the same single-byte
+        // varint discriminant — see `discriminant_of`): the scenario variants are
+        // appended after `ViewCenter` (index 12) so no prior discriminant shifts.
+        // Lock the indices so a future mid-enum insert fails loudly instead of
+        // silently breaking a version-skewed peer (stale wasm bundle vs fresh host).
+        assert_eq!(
+            discriminant_of(&SyncEnvelope::ViewCenter(ViewCenterMsg { pos: [0.0; 3], cell: [0; 3] })),
+            12,
+            "ViewCenter discriminant moved"
+        );
 
         let manifest = SyncEnvelope::ScenarioManifest(crate::scenario::ScenarioManifestMsg {
             scenario_id: [0u8; 16],
@@ -3147,35 +3163,40 @@ mod codec_roundtrip {
             asset_base_url: None,
             twin_scene: None,
         });
-        let bytes = serialize_env(&manifest).expect("serialize");
-        assert_eq!(&bytes[..4], &[13, 0, 0, 0], "ScenarioManifest must be index 13");
+        assert_eq!(discriminant_of(&manifest), 13, "ScenarioManifest must be index 13");
 
-        let req = serialize_env(&SyncEnvelope::AssetRequest(crate::scenario::AssetRequestMsg {
-            missing: Vec::new(),
-        }))
-        .expect("serialize");
-        assert_eq!(&req[..4], &[14, 0, 0, 0], "AssetRequest must be index 14");
+        assert_eq!(
+            discriminant_of(&SyncEnvelope::AssetRequest(crate::scenario::AssetRequestMsg {
+                missing: Vec::new(),
+            })),
+            14,
+            "AssetRequest must be index 14"
+        );
 
-        let chunk = serialize_env(&SyncEnvelope::AssetChunk(crate::scenario::AssetChunkMsg {
-            cid: Vec::new(),
-            offset: 0,
-            total: 0,
-            data: Vec::new(),
-        }))
-        .expect("serialize");
-        assert_eq!(&chunk[..4], &[15, 0, 0, 0], "AssetChunk must be index 15");
+        assert_eq!(
+            discriminant_of(&SyncEnvelope::AssetChunk(crate::scenario::AssetChunkMsg {
+                cid: Vec::new(),
+                offset: 0,
+                total: 0,
+                data: Vec::new(),
+            })),
+            15,
+            "AssetChunk must be index 15"
+        );
 
-        let have = serialize_env(&SyncEnvelope::AssetHave(crate::scenario::AssetHaveMsg {
-            cid: Vec::new(),
-        }))
-        .expect("serialize");
-        assert_eq!(&have[..4], &[16, 0, 0, 0], "AssetHave must be index 16");
+        assert_eq!(
+            discriminant_of(&SyncEnvelope::AssetHave(crate::scenario::AssetHaveMsg {
+                cid: Vec::new(),
+            })),
+            16,
+            "AssetHave must be index 16"
+        );
 
-        let journal = serialize_env(&SyncEnvelope::JournalEntry(JournalEntryMsg {
-            json: String::new(),
-        }))
-        .expect("serialize");
-        assert_eq!(&journal[..4], &[17, 0, 0, 0], "JournalEntry must be index 17");
+        assert_eq!(
+            discriminant_of(&SyncEnvelope::JournalEntry(JournalEntryMsg { json: String::new() })),
+            17,
+            "JournalEntry must be index 17"
+        );
     }
 
     /// A `JournalEntry` round-trips through the JSON-in-bincode envelope — the

@@ -1,12 +1,16 @@
-//! USD → celestial/comms components (doc 43 §2.4): maps the authored
-//! `lunco:anchor:*` / `lunco:orbit:*` / `lunco:comms:*` vocabulary to
-//! `lunco-celestial` components. Called from `process_usd_sim_prim_read`
-//! (once per prim, either read source).
+//! USD → celestial components (doc 49): maps the authored `lunco:anchor:*` /
+//! `lunco:orbit:*` / `lunco:link:*` vocabulary to `lunco-celestial` components.
+//! Called from `process_usd_sim_prim_read` (once per prim, either read source).
+//!
+//! There is no comms vocabulary and no comms component — a connectivity endpoint
+//! is a generic [`LinkNode`](lunco_celestial::LinkNode), and the domain (roles,
+//! routing, link budget) is authored on top of it.
 //!
 //! ```usda
-//! bool   lunco:comms:antenna = true
-//! double lunco:comms:maxRangeM = 100000000
-//! double lunco:comms:minElevationDeg = 5
+//! bool   lunco:linkNode = true                  # a generic connectivity endpoint
+//! string lunco:link:class = "relay"             # authored role; the core never reads it
+//! double lunco:link:maxRangeM = 100000000
+//! double lunco:link:minElevationDeg = 5
 //! double lunco:anchor:lat = 40.4314    # + lon/height (shared with terrain
 //! int    lunco:anchor:body = 399       #   georef; body defaults to Moon 301)
 //! int    lunco:orbit:body = 301
@@ -17,13 +21,12 @@
 //!
 //! A root prim (path depth 1) authoring an anchor is the scene's **site
 //! anchor**: the local scene origin sits at that geodetic point (ENU axes) —
-//! it grounds every scene-local antenna (rover masts) on the body.
+//! it grounds every scene-local endpoint (rover masts) on the body.
 
 use bevy::prelude::*;
 
 use lunco_celestial::geo::{Geodetic, GeodeticAnchor, SiteAnchor};
 use lunco_celestial::kepler::{KeplerOrbit, KeplerianElements};
-use lunco_celestial::comms::CommsAntenna;
 use lunco_usd_bevy::UsdRead;
 use openusd::sdf::Path as SdfPath;
 
@@ -99,35 +102,38 @@ pub fn insert_celestial_comms_components<R: UsdRead>(
         );
     }
 
-    // --- Comms antenna flag ---
+    // --- Solar-pose tracking marker (generic celestial placement) ---
+    // A scene-local subsystem prim (a rover-mounted antenna, a panel) opts in so
+    // the pose system tracks its solar-frame position; anchored/orbiting prims
+    // are tracked automatically. Authored subsystems read it through the
+    // `SolarPose` query — no domain component, no domain vocabulary.
     if reader
-        .scalar::<bool>(sdf_path, "lunco:comms:antenna")
+        .scalar::<bool>(sdf_path, "lunco:solarTracked")
         .unwrap_or(false)
     {
-        // Stable peer identity for port names. Authored `lunco:comms:id`
-        // wins; a generic leaf ("Comms" on every rover) is disambiguated with
-        // the parent prim's leaf; otherwise the entity Name (= leaf) is fine.
-        let id = reader
-            .scalar::<String>(sdf_path, "lunco:comms:id")
-            .or_else(|| {
-                let mut parts = prim_path_str.rsplit('/');
-                let leaf = parts.next().unwrap_or_default();
-                let parent = parts.next().unwrap_or_default();
-                let generic = matches!(
-                    leaf.to_ascii_lowercase().as_str(),
-                    "comms" | "antenna" | "commsantenna"
-                );
-                (generic && !parent.is_empty()).then(|| format!("{parent}_{leaf}"))
-            });
-        let defaults = CommsAntenna::default();
-        commands.entity(entity).insert(CommsAntenna {
+        commands
+            .entity(entity)
+            .insert(lunco_celestial::pose::SolarTracked);
+    }
+
+    // --- Connectivity node (generic link kernel) ---
+    // Marks a prim as a link endpoint: the kernel pairs it with every other
+    // node, applies the `link.connected` verdict, and publishes link state. Pose
+    // tracking follows automatically. `class` is an authored role the routing /
+    // verdict policy reads — the core never interprets it.
+    if reader
+        .scalar::<bool>(sdf_path, "lunco:linkNode")
+        .unwrap_or(false)
+    {
+        let d = lunco_celestial::link::LinkNode::default();
+        commands.entity(entity).insert(lunco_celestial::link::LinkNode {
             max_range_m: reader
-                .real(sdf_path, "lunco:comms:maxRangeM")
-                .unwrap_or(defaults.max_range_m),
+                .real(sdf_path, "lunco:link:maxRangeM")
+                .unwrap_or(d.max_range_m),
             min_elevation_deg: reader
-                .real(sdf_path, "lunco:comms:minElevationDeg")
-                .unwrap_or(defaults.min_elevation_deg),
-            id,
+                .real(sdf_path, "lunco:link:minElevationDeg")
+                .unwrap_or(d.min_elevation_deg),
+            class: reader.scalar::<String>(sdf_path, "lunco:link:class"),
         });
     }
 }

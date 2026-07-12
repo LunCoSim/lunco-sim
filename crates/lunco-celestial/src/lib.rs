@@ -17,8 +17,10 @@ pub mod ephemeris;
 pub mod registry;
 pub mod geo;
 pub mod kepler;
-pub mod comms;
+pub mod link;
 pub mod placement;
+pub mod pose;
+pub mod queries;
 mod big_space_setup;
 mod globe_lod;
 mod systems;
@@ -45,8 +47,9 @@ pub use ephemeris::*;
 pub use registry::*;
 pub use geo::*;
 pub use kepler::*;
-pub use comms::*;
+pub use link::*;
 pub use placement::*;
+pub use pose::*;
 pub use big_space_setup::*;
 pub use systems::*;
 pub use gravity::*;
@@ -125,6 +128,28 @@ impl Plugin for CelestialPlugin {
         }
         app.init_resource::<TerrainMapRegistry>();
         app.init_resource::<CelestialConfig>();
+        // Generic celestial geometry queries (Occultation / BodyPosition /
+        // SolarPose) — the domain-free substrate authored subsystems compose
+        // over (docs 10/12) — plus the solar-pose tracking system that feeds
+        // `SolarPose` (incl. scene-local prims a read-only query can't resolve).
+        queries::register_celestial_queries(app);
+        app.register_type::<pose::SolarTracked>();
+        app.add_systems(Update, pose::update_solar_poses);
+
+        // Generic connectivity kernel: cadence-gated pairwise link solving in
+        // Rust, verdict via the language-neutral `link.connected` hook, cadence
+        // tunable live via `SetLinkCadence` (docs 10/12). Domain-free.
+        app.init_resource::<link::LinkConfig>();
+        app.register_type::<link::LinkConfig>();
+        app.register_type::<link::LinkNode>();
+        app.register_type::<link::LinkState>();
+        link::register_all_commands(app);
+        // `update_links` is a REGULAR (non-exclusive) system — it writes through
+        // Commands and adds no extra command-flush sync point. (An earlier
+        // exclusive version, needed to call the TerrainRaycast provider with
+        // `&mut World`, inserted a sync point that interleaved with the
+        // twin/terrain despawns and tripped avian's island bookkeeping.)
+        app.add_systems(Update, link::update_links);
         // Keep a host-app gravity choice (e.g. the sandbox's flat gravity);
         // default to surface gravity for the full client.
         if app.world().get_resource::<Gravity>().is_none() {
@@ -253,6 +278,13 @@ pub struct GravityPlugin;
 impl Plugin for GravityPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LocalGravityField>();
+        // `update_local_gravity_field` reads the pin to HOLD the field while an
+        // orbital view is active. `CelestialPlugin` also inits it, but this
+        // plugin is the documented "gravity without the full CelestialPlugin"
+        // entry point, so it must stand alone — otherwise the system panics on
+        // a missing `Res` in any app that adds only this. `init_resource` is
+        // idempotent, so adding both plugins is still fine.
+        app.init_resource::<placement::OrbitalViewPin>();
         app.register_type::<GravityBody>();
         // AFTER the celestial epoch chain: this system reads celestial
         // Transform/CellCoords via `world_position_seeded`; unordered it could

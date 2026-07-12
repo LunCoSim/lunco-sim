@@ -6,18 +6,16 @@
 )
 
 # Comms antenna — rover/lander-mountable mast + dish (doc 43).
-# The `lunco:comms:*` attrs make this prim a connectivity endpoint: the comms
-# layer publishes `comms:<peer>:connected|range_m|elevation_deg` and
-# `comms:route_earth:*` ports on it. Range/mask are per-instance overridable.
+# `lunco:linkNode` makes this a connectivity endpoint: the generic link kernel
+# pairs it with every other node, applies the `link.connected` verdict (range,
+# elevation, body + terrain occlusion), and publishes link state. Pose tracking
+# follows automatically. Author `lunco:link:class` / `maxRangeM` / `minElevationDeg`
+# per instance in the scene (a rover vs a relay vs a ground station).
 def Xform "CommsAntenna" (
     kind = "component"
 )
 {
-    bool lunco:comms:antenna = true
-    double lunco:comms:maxRangeM = 100000000000
-    # Mask disabled (-90): occlusion geometry governs. Author a positive mask
-    # for horizon-sensitive stations (the DSN dishes use 5).
-    double lunco:comms:minElevationDeg = -90
+    bool lunco:linkNode = true
 
     def Cylinder "Mast"
     {

@@ -2048,16 +2048,15 @@ fn modelica_parameters_section(
 /// watch live link state. Edits update the live component (the USD bridge
 /// runs once per prim) AND persist as journaled `SetAttribute` ops.
 fn comms_orbit_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
-    use lunco_celestial::{CommsAntenna, CommsLinkState, GeodeticAnchor, KeplerOrbit};
+    use lunco_celestial::{GeodeticAnchor, KeplerOrbit};
 
     let anchor = ctx.get::<GeodeticAnchor>(entity).copied();
     let orbit = ctx.get::<KeplerOrbit>(entity).copied();
-    let antenna = ctx.get::<CommsAntenna>(entity).cloned();
-    if anchor.is_none() && orbit.is_none() && antenna.is_none() {
+    if anchor.is_none() && orbit.is_none() {
         return;
     }
 
-    egui::CollapsingHeader::new("Comms & Orbit")
+    egui::CollapsingHeader::new("Anchor & Orbit")
         .default_open(true)
         .show(ui, |ui| {
             if let Some(a) = anchor {
@@ -2136,59 +2135,6 @@ fn comms_orbit_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
                 }
             }
 
-            if let Some(ant) = antenna {
-                ui.label("Antenna:");
-                let mut max_range = ant.max_range_m;
-                let mut min_elev = ant.min_elevation_deg;
-                let changed = ui
-                    .horizontal(|ui| {
-                        ui.add(egui::DragValue::new(&mut max_range).speed(1_000.0).prefix("range≤ "))
-                            .changed()
-                            | ui.add(
-                                egui::DragValue::new(&mut min_elev)
-                                    .speed(0.1)
-                                    .range(-10.0..=89.0)
-                                    .prefix("elev≥ "),
-                            )
-                            .changed()
-                    })
-                    .inner;
-                if changed {
-                    ctx.defer(move |world| {
-                        if let Some(mut c) = world.get_mut::<CommsAntenna>(entity) {
-                            c.max_range_m = max_range;
-                            c.min_elevation_deg = min_elev;
-                        }
-                        apply_usd_attribute_change(world, entity, "lunco:comms:maxRangeM", "double", format!("{max_range}"));
-                        apply_usd_attribute_change(world, entity, "lunco:comms:minElevationDeg", "double", format!("{min_elev}"));
-                    });
-                }
-            }
-
-            if let Some(state) = ctx.get::<CommsLinkState>(entity) {
-                ui.separator();
-                ui.label("Links:");
-                for peer in &state.peers {
-                    let (icon, color) = if peer.connected {
-                        ("●", egui::Color32::from_rgb(0x4c, 0xaf, 0x50))
-                    } else {
-                        ("○", egui::Color32::from_rgb(0xe5, 0x73, 0x73))
-                    };
-                    let mut text = format!("{icon} {} — {:.0} km", peer.peer, peer.range_m / 1000.0);
-                    if let Some(e) = peer.elevation_deg {
-                        text.push_str(&format!(", elev {e:.1}°"));
-                    }
-                    if let Some(b) = &peer.occluded_by {
-                        text.push_str(&format!(" (behind {b})"));
-                    }
-                    ui.colored_label(color, text);
-                }
-                match state.earth_hops {
-                    Some(0) => ui.label("Earth route: this IS an Earth station"),
-                    Some(h) => ui.label(format!("Earth route: connected ({h} hop{})", if h == 1 { "" } else { "s" })),
-                    None => ui.label("Earth route: no path"),
-                };
-            }
         });
     ui.separator();
 }

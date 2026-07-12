@@ -1,0 +1,41 @@
+#usda 1.0
+(
+    defaultPrim = "LinkTest"
+    doc = "Minimal connectivity-kernel smoke scene: a lunar relay + two DSN ground stations, all `lunco:linkNode`. No terrain/globe/rovers, so it exercises the generic link kernel (pose → pairwise → verdict → LinkState) without the avian/terrain scene issues."
+)
+def Xform "LinkTest"
+{
+    bool lunco:spawnable = false
+    string lunco:description = "Connectivity-kernel smoke scene: a lunar relay plus two DSN ground stations, all `lunco:linkNode`. No terrain, globe or rovers — it exercises the generic link kernel (pose → pairwise → verdict → LinkState) on its own."
+
+    def Xform "Relay"
+    {
+        bool lunco:linkNode = true
+        string lunco:link:class = "relay"
+        int lunco:orbit:body = 301
+        double lunco:orbit:semiMajorAxisM = 6540000
+        double lunco:orbit:eccentricity = 0
+        double lunco:orbit:inclinationDeg = 0
+        double lunco:orbit:meanAnomalyDeg = 0
+    }
+
+    def Xform "DSS_Goldstone"
+    {
+        bool lunco:linkNode = true
+        string lunco:link:class = "earth"
+        double lunco:link:minElevationDeg = 5
+        double lunco:anchor:lat = 35.4267
+        double lunco:anchor:lon = -116.89
+        int lunco:anchor:body = 399
+    }
+
+    def Xform "DSS_Canberra"
+    {
+        bool lunco:linkNode = true
+        string lunco:link:class = "earth"
+        double lunco:link:minElevationDeg = 5
+        double lunco:anchor:lat = -35.4014
+        double lunco:anchor:lon = 148.9817
+        int lunco:anchor:body = 399
+    }
+}

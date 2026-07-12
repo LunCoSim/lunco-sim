@@ -10,7 +10,7 @@ command structs themselves in `crates/`, so it always matches the code. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**160 commands** across **21** crates. 24 command(s) below lack a `///` description — marked _(no description)_; add a doc comment on the struct to fix it.
+**161 commands** across **21** crates. 24 command(s) below lack a `///` description — marked _(no description)_; add a doc comment on the struct to fix it.
 
 > **Regenerate:** `cargo run --manifest-path tools/gen-command-docs/Cargo.toml`
 
@@ -69,7 +69,7 @@ command structs themselves in `crates/`, so it always matches the code. See the
 
 **Celestial, environment & comms**
 
-- [`lunco-celestial`](#lunco-celestial) (`lunco-celestial`, 2 commands)
+- [`lunco-celestial`](#lunco-celestial) (`lunco-celestial`, 3 commands)
 - [`lunco-environment`](#lunco-environment) (`lunco-environment`, 1 command)
 
 **Terrain**
@@ -2203,6 +2203,16 @@ command structs themselves in `crates/`, so it always matches the code. See the
 |---|---|---|
 | `target` | `Entity` |  The avatar entity leaving the surface. |
 
+#### `SetLinkCadence`
+
+ Set the connectivity recompute cadence at runtime (any client / language).
+
+- *defined in:* `crates/lunco-celestial/src/link.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `interval_s` | `f64` |   |
+
 #### `TeleportToSurface`
 
  Teleport the avatar to a celestial body's surface.
@@ -2479,4 +2489,4 @@ command structs themselves in `crates/`, so it always matches the code. See the
 
 ---
 
-<!-- scanned 603 .rs files across `crates/`; 0 parse failure(s) skipped -->
+<!-- scanned 604 .rs files across `crates/`; 0 parse failure(s) skipped -->

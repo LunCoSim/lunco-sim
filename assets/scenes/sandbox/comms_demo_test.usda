@@ -15,7 +15,7 @@ def Xform "CommsDemoScene" (
 )
 {
     bool lunco:spawnable = false
-    string lunco:description = "MoonDAO comms demo: Malapert Massif site with rover, base mast, lunar relay (ELFO) and the three DSN complexes on Earth — link state on comms:* ports."
+    string lunco:description = "MoonDAO comms demo: Malapert Massif site with rover, base mast, lunar relay (ELFO) and the three DSN complexes on Earth — connectivity via the generic link kernel (lunco:linkNode; link.aos/link.los events)."
 
     # Site frame: Shackleton–de Gerlache connecting ridge (Artemis site).
     # Malapert Massif summit region — the classic lunar comms-relay site:
@@ -129,4 +129,10 @@ def Xform "CommsDemoScene" (
         double lunco:anchor:height = 688
         int lunco:anchor:body = 399
     }
+
+    # Connectivity is computed by the generic link kernel over the `lunco:linkNode`
+    # endpoints (rover mast, base mast, relay, DSN stations) — no scenario needed;
+    # the builtin `link.connected` verdict applies range / elevation / body +
+    # terrain occlusion. Routing / autonomy is authored on top of its LinkState +
+    # link.aos / link.los events.
 }
