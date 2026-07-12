@@ -166,10 +166,15 @@ fn run_with_mode(headless: bool) -> AppExit {
 /// because the render backend and the window must be decided at `PluginGroup`
 /// build time — a plugin added later cannot reconfigure `RenderPlugin`/
 /// `WindowPlugin`. Headless (and every `--no-ui`-feature build) uses `backends:
-/// None`: the render world + asset stores initialise (so USD visual sync can
-/// populate the meshes avian colliders read), but no GPU device is created and
-/// nothing is drawn — `ScheduleRunnerPlugin` (added by [`SandboxHeadlessPlugin`])
-/// ticks the app in winit's place.
+/// None`: the asset stores still initialise (so USD visual sync can populate the
+/// meshes avian colliders read), but no GPU device is created and nothing is
+/// drawn — `ScheduleRunnerPlugin` (added by [`SandboxHeadlessPlugin`]) ticks the
+/// app in winit's place.
+///
+/// NB: with no backend, `RenderPlugin` does NOT build the render world — it skips
+/// `ExtractPlugin`/`SyncWorldPlugin` entirely, while still installing the render-
+/// sync component hooks that expect them. [`SandboxHeadlessPlugin`] adds
+/// `SyncWorldPlugin` back to keep despawns from aborting; see the note there.
 fn default_plugins(headless: bool) -> bevy::app::PluginGroupBuilder {
     use bevy::render::settings::WgpuSettings;
     // `headless` only selects render/window config in `ui` builds; a no-`ui`
@@ -2996,6 +3001,38 @@ impl Plugin for SandboxHeadlessPlugin {
         // physics — otherwise raycast rovers defer their drivetrain forever and
         // the authoritative server can't simulate or replicate a drivable rover.
         app.insert_resource(lunco_usd::NoRenderVisuals);
+
+        // Restore the render-world SYNC BOOKKEEPING that `backends: None` skips.
+        //
+        // Without this, `LoadScene` ABORTS the process headless. `RenderPlugin`
+        // only adds `ExtractPlugin` — and hence `SyncWorldPlugin`, the owner of
+        // the `PendingSyncEntity` resource — when a GPU backend actually comes up
+        // (bevy_render/src/lib.rs: "We only create the render world ... if we have
+        // a rendering backend"). But the per-component plugins it adds
+        // UNCONDITIONALLY (`SyncComponentPlugin`, via `CameraPlugin` and friends)
+        // still install component hooks that do a bare
+        // `world.resource_mut::<PendingSyncEntity>()`. So on a backend-less app the
+        // hook fires with no resource → `Res` validation failure → non-unwinding
+        // panic in a Drop → `abort`.
+        //
+        // It only bites on REMOVAL, which is why boot survived and only scene
+        // swaps died: the *add* observer lives in the absent `SyncWorldPlugin`, but
+        // the *remove* hook lives in the always-present `SyncComponentPlugin`.
+        // `NoRenderVisuals` keeps `Mesh3d` off a headless entity, but `Camera` and
+        // the lights are render-synced too — and `LoadScene` despawns them.
+        //
+        // `SyncWorldPlugin` alone is the minimal repair: it inits the resource and
+        // adds the matching add/remove observers, with NO render sub-app (adding
+        // `ExtractPlugin` would build one and then run render schedules against a
+        // device that doesn't exist). Nothing drains `PendingSyncEntity` here, so
+        // it accumulates — but only one small record per synced-entity spawn/despawn,
+        // never per frame, so a server that loads a scene now and then grows by a
+        // few hundred KB, not without bound in steady state.
+        //
+        // Upstream shape: bevy registers hooks that assume a plugin it may not have
+        // added. Re-test on the next bevy bump and drop this if it starts adding
+        // `SyncWorldPlugin` unconditionally.
+        app.add_plugins(bevy::render::sync_world::SyncWorldPlugin);
 
         // No winit event loop drives updates headless, so install a runner that
         // ticks the app at the sim's fixed rate. (Windowed builds are paced by
