@@ -171,6 +171,11 @@ impl Plugin for SandboxUiPlugin {
             scenario_download::draw_scenario_download,
         );
 
+        // Deterministic per-view-mode exposure for celestial scenes (orbital
+        // = calibrated EV, surface = 4 stops open for the earthshine-lit
+        // polar site).
+        app.add_systems(Update, mode_exposure);
+
         // Scene-backed tutorials declare their catalog entry on their OWN scene
         // (`lunco:tutorial*` on the default prim), the hybrid alternative to a
         // `tutorials.json` row — the `.usda` that IS the lesson environment
@@ -247,6 +252,46 @@ fn force_hard_shadow_filtering(
         commands
             .entity(e)
             .insert(bevy::light::ShadowFilteringMethod::Hardware2x2);
+    }
+}
+
+/// Per-view-mode exposure for celestial scenes. One physical scene spans ~14
+/// stops: a sunlit globe from orbit is correct at the calibrated EV 15, while
+/// the polar moonbase under a grazing sun is earthshine-lit — pitch black at
+/// that same fixed EV. Histogram auto-exposure was tried and metered the
+/// mostly-black space background instead (whole frame blown white), so this
+/// is DETERMINISTIC: orbital → the calibrated EV, surface → 4 stops open
+/// (earthshine-readable), eased like eye adaptation. Inert without the
+/// celestial hierarchy — studio scenes keep their authored EV.
+fn mode_exposure(
+    time: Res<Time>,
+    config: Option<Res<lunco_celestial::CelestialConfig>>,
+    pin: Option<Res<lunco_celestial::OrbitalViewPin>>,
+    sun: Option<Res<lunco_environment::LunarSun>>,
+    sun_dir: Option<Res<lunco_celestial::SunDirectionWorld>>,
+    mut q_exposure: Query<&mut bevy::camera::Exposure, With<lunco_core::Avatar>>,
+) {
+    let (Some(config), Some(sun)) = (config, sun) else { return };
+    if !config.spawn_hierarchy {
+        return;
+    }
+    let orbital = pin.is_some_and(|p| p.active);
+    let target = if orbital {
+        // Orbital views frame a sunlit globe: the calibrated EV is correct.
+        sun.exposure_ev100
+    } else {
+        // Surface: expose for the ACTUAL light level, decided by the real
+        // sun elevation at the site (the emit dir's -y in site-ENU axes).
+        // Sunlit terrain meters at the calibrated EV; below the horizon the
+        // ground is earthshine-lit — open up to EV 9 so it stays readable.
+        // Smooth across the terminator (−1° .. +3.5° elevation band).
+        let elev = sun_dir.map(|d| (-d.0.y).asin()).unwrap_or(0.3);
+        let sunlit = ((elev + 0.02) / 0.08).clamp(0.0, 1.0);
+        9.0 + (sun.exposure_ev100 - 9.0) * sunlit
+    };
+    let alpha = 1.0 - (-2.0 * time.delta_secs()).exp();
+    for mut exposure in &mut q_exposure {
+        exposure.ev100 += (target - exposure.ev100) * alpha;
     }
 }
 

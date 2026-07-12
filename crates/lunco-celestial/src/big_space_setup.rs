@@ -100,6 +100,14 @@ fn blueprint_tile_material(
 #[derive(Component)]
 pub struct SolarSystemRoot;
 
+/// Marker for the zero-translation grid between the `WorldGrid` and the Solar
+/// Grid that carries the site-ENU `align` rotation — the only rotated joint
+/// in the celestial chain, placed where the origin vector is near-zero so the
+/// f32 quat costs sub-millimetres instead of the 15–20 km it cost on the
+/// heliocentric Solar Grid (see the spawn-site comment).
+#[derive(Component)]
+pub struct SiteAlignGrid;
+
 /// Marker for the Earth-Moon barycenter grid (inertial, no rotation).
 #[derive(Component)]
 pub struct EMBRoot;
@@ -144,6 +152,7 @@ pub fn setup_big_space_hierarchy(
     q_world_grid: Query<Entity, With<lunco_core::WorldGrid>>,
     q_prior_origins: Query<Entity, With<FloatingOrigin>>,
     q_prior_fallback_lights: Query<Entity, With<lunco_core::FallbackSceneLight>>,
+    mut q_exposure: Query<&mut bevy::camera::Exposure>,
 ) {
     // Earth/Moon textures load from the `cached_textures://` source on EVERY
     // platform — NOT baked into the binary. Desktop reads the cache dir; wasm
@@ -214,6 +223,29 @@ pub fn setup_big_space_hierarchy(
     // Cells are `i64`, so small edges are free: 1 AU / 2 km ≈ 7.5e7 cells. Keep
     // every celestial grid at the same 2 km / 100 m as the root `WorldGrid` —
     // `max_distance` 1100 m, f32 ULP there ≈ 0.12 mm.
+    // ── Site-Align Grid — the ONLY rotated joint in the celestial chain ────
+    // Zero translation, zero cell; `anchor_solar_frame_to_site` writes the
+    // site-ENU `align` rotation HERE, not on the Solar Grid. big_space's
+    // origin propagation multiplies a grid's stored f32 rotation into the
+    // origin's position vector at that node: on the Solar Grid that vector
+    // is heliocentric (~1.5e11 m), so the f32 quat's ~1e-7 relative error
+    // cost 15–20 km — the measured ULP staircase that made the globe judder
+    // from the ground and the terrain judder from orbit ("the shadow on the
+    // moon oscillates"). At THIS node the origin vector is near-zero (the
+    // camera is within tens of km of the site), so the same f32 rotation
+    // costs sub-millimetres, and the 1 AU offset below travels through the
+    // EXACT i64 cells of the now identity-rotation Solar Grid.
+    let align_grid = commands.spawn((
+        SiteAlignGrid,
+        Grid::new(2_000.0, 100.0),
+        CellCoord::default(),
+        Transform::default(),
+        GlobalTransform::default(),
+        Visibility::default(),
+        InheritedVisibility::default(),
+        Name::new("Site Align Grid"),
+    )).set_parent_in_place(big_space_root).id();
+
     let solar_grid = commands.spawn((
         SolarSystemRoot,
         CelestialReferenceFrame { ephemeris_id: 10 },
@@ -224,7 +256,7 @@ pub fn setup_big_space_hierarchy(
         Visibility::default(),
         InheritedVisibility::default(),
         Name::new("Solar Grid (Inertial)"),
-    )).set_parent_in_place(big_space_root).id();
+    )).set_parent_in_place(align_grid).id();
 
     // ── Sun (simple entity on Solar Grid, no grid of its own) ─────────────
     let _sun_body = commands.spawn((
@@ -278,6 +310,16 @@ pub fn setup_big_space_hierarchy(
     let sun = lunco_render::LunarSunShadow::default();
     // Physical sun identity (illuminance / angular size) is environmental state.
     let ls = lunco_environment::LunarSun::default();
+    // Taking over the lighting rig means taking over the EXPOSURE with it:
+    // this spawn replaces the sandbox's studio sun (10 klux, EV 9.7 — a
+    // matched pair) with the calibrated 128 klux lunar sun. Cameras left at
+    // studio EV under the real sun are +3.7 stops — "everything is
+    // overexposed", surface and orbit alike. Write the resource (cameras
+    // spawned later read it) AND the live cameras.
+    commands.insert_resource(ls);
+    for mut exposure in q_exposure.iter_mut() {
+        exposure.ev100 = ls.exposure_ev100;
+    }
     commands.insert_resource(sun.shadow_map());
     // Top-level entity, NOT a child of the Solar Grid: a `DirectionalLight`
     // only needs orientation (`update_sun_light_system` steers it in WORLD

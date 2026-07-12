@@ -173,14 +173,24 @@ pub(crate) fn sun_emit_direction(p_sun: bevy::math::DVec3, p_moon: bevy::math::D
 /// installed; sandbox / NoOp contexts keep dynamic manual control. That single
 /// authoritative writer per context resolves the earlier web-build conflict
 /// where two systems fought over the sun direction every frame.
+/// The sun's EMIT direction in world (site-ENU) axes, published each frame by
+/// [`update_sun_light_system`]. Consumers: per-view-mode exposure (sun
+/// elevation at the site decides whether the surface is sunlit or
+/// earthshine-lit), future eclipse/illumination logic.
+#[derive(Resource, Debug, Default, Clone, Copy)]
+pub struct SunDirectionWorld(pub Vec3);
+
 pub fn update_sun_light_system(
     ephemeris: Option<Res<EphemerisResource>>,
     world: Res<WorldTime>,
+    mut sun_dir_out: ResMut<SunDirectionWorld>,
     mut q_light: Query<(&mut Transform, &DirectionalLight)>,
+    // The site-ENU alignment now lives on the Site Align Grid (the Solar
+    // Grid's rotation is IDENTITY — see `anchor_solar_frame_to_site`).
     q_solar: Query<
         &Transform,
         (
-            With<crate::big_space_setup::SolarSystemRoot>,
+            With<crate::big_space_setup::SiteAlignGrid>,
             With<big_space::prelude::Grid>,
             Without<DirectionalLight>,
         ),
@@ -215,13 +225,28 @@ pub fn update_sun_light_system(
         .map(|solar_tf| (solar_tf.rotation * dir).normalize())
         .unwrap_or(dir);
     let up = if dir.dot(Vec3::Y).abs() > 0.99 { Vec3::X } else { Vec3::Y };
+    if sun_dir_out.0 != dir {
+        sun_dir_out.0 = dir;
+    }
 
     // The sun is the brightest `DirectionalLight` (Earthshine fill is far dimmer).
     if let Some((mut light_tf, _)) = q_light
         .iter_mut()
         .max_by(|a, b| a.1.illuminance.total_cmp(&b.1.illuminance))
     {
-        light_tf.look_to(dir, up);
+        // DEAD-BAND the aim. Unguarded, this rewrote the light every frame
+        // from a direction that steps in f32-quat ULPs (the site pin's
+        // `align` is recomputed per frame) — continuous sub-texel
+        // light-direction churn defeats the cascade shadow maps' texel
+        // snapping, so every shadow edge crawls and waggles ("the shadow on
+        // the moon oscillates"), worst at the polar site's grazing sun.
+        // 2e-5 rad ≈ one update per ~1.4 s real at 5.7× time — real sun
+        // motion still tracks; between updates the direction is FROZEN and
+        // the shadow map is byte-stable.
+        let current_fwd: Vec3 = light_tf.forward().into();
+        if current_fwd.angle_between(dir) > 2.0e-5 {
+            light_tf.look_to(dir, up);
+        }
     }
 }
 
@@ -289,46 +314,14 @@ pub fn touch_celestial_transforms(
     }
 }
 
-/// While the ORBITAL view is active, force-dirty the site-anchored scene
-/// subtree onto the same high-precision propagation path the globe uses.
-///
-/// The orbital camera (floating origin) lives on the focused body's inertial
-/// host grid; the site scene lives in the WorldGrid, on the OTHER side of the
-/// Solar Grid's ~1 AU `CellCoord`. big_space rebases only against the
-/// origin's cell in each entity's IMMEDIATE grid, so that ancestor offset
-/// does not cancel for the terrain — and on frames the HP pass skips it, its
-/// GT falls to the plain-f32 compat value, which quantizes the ~1.06e11 m
-/// offset in ~16 km ULP buckets. As the site pin advances per frame the
-/// terrain slid smoothly within one bucket, then SNAPPED at each ULP wrap —
-/// "the ground moves along the moon and jumps back" (and the shadows wobble
-/// with it). Force-dirtying makes `PropagateHighPrecision` compose the
-/// subtree in i64 every frame, exactly like the globe tiles.
-///
-/// GROUND view keeps the `Without<SiteAnchor>` exclusion above: with the
-/// camera a direct WorldGrid child the site subtree needs no re-composition,
-/// and force-dirtying it there caused the 2026-07-10 "everything jumps"
-/// regression. Physics is safe either way — the avian bridge is shadow-gated
-/// on VALUES, and `set_changed` never alters the value.
-pub fn touch_site_scene_transforms(
-    orbital_pin: Option<Res<crate::placement::OrbitalViewPin>>,
-    q_site_roots: Query<Entity, With<crate::geo::SiteAnchor>>,
-    q_children: Query<&Children>,
-    mut q_tf: Query<&mut Transform>,
-) {
-    let Some(pin) = orbital_pin else { return };
-    if !pin.active {
-        return;
-    }
-    let mut stack: Vec<Entity> = q_site_roots.iter().collect();
-    while let Some(e) = stack.pop() {
-        if let Ok(mut tf) = q_tf.get_mut(e) {
-            tf.set_changed();
-        }
-        if let Ok(children) = q_children.get(e) {
-            stack.extend(children.iter());
-        }
-    }
-}
+// NOTE (2026-07-12): an orbital-only "touch_site_scene_transforms" pass was
+// tried here to force the site subtree onto the HP propagation path while the
+// orbital camera is on a celestial grid. Measured result: it did NOT remove
+// the camera↔terrain divergence (the site branch and the celestial branch
+// still disagree at f32-ULP scale across the Solar Grid's ~1 AU joint) and it
+// cost whole-subtree GT recomputation every frame (~1 FPS in orbital view).
+// The structural fix is re-branching the site scene under its anchor body's
+// grid (task #24) so no 1 AU joint separates camera from terrain.
 
 pub fn celestial_visuals_system(
     mut materials: ResMut<Assets<ShaderMaterial>>,

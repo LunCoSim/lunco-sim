@@ -802,6 +802,8 @@ pub fn wire_terrain_materials(
         // Skip preview-layer terrain (ARC-1) — mirrors `pick_sun`.
         Without<RenderLayers>,
     >,
+    // Hysteresis state for the cache↔march handoff, per terrain (see below).
+    mut cache_engaged: Local<std::collections::HashMap<Entity, bool>>,
 ) {
     let Some(mut shader_mats) = shader_mats else { return };
     let Some((sun_gt, tan_r, csm_far)) = pick_sun(&sun) else { return };
@@ -829,8 +831,23 @@ pub fn wire_terrain_materials(
         // the horizon or the cache is disabled. Below-horizon sun falls back
         // to the march, which short-circuits to 0 in its first branch.
         let cache_image: Option<Handle<Image>> = shadow_cache.map(|c| c.image.clone());
+        // HYSTERESIS on the cache↔march handoff. A single hard threshold
+        // (`y > 1e-4`) flaps when the real sun sits AT the horizon — exactly
+        // the polar-site situation — because every f32 ULP step of the light
+        // direction or terrain GT crosses it, alternating the ENTIRE terrain
+        // between baked-cache shadows and the ray-march's below-horizon
+        // short-circuit: "the shadow on the moon oscillates back and forth".
+        // Engage above ~0.3° elevation, release below ~0.06° — the band is
+        // wider than any per-frame jitter, so the mode changes at most once
+        // per real sunrise/sunset.
+        let engaged = {
+            let prev = cache_engaged.get(&entity).copied().unwrap_or(false);
+            let now = if prev { sun_local.y > 1.0e-3 } else { sun_local.y > 5.0e-3 };
+            cache_engaged.insert(entity, now);
+            now
+        };
         let shadow_cache_on: f32 =
-            if cfg.enabled && sun_local.y > 1e-4 && cache_image.is_some() { 1.0 } else { 0.0 };
+            if cfg.enabled && engaged && cache_image.is_some() { 1.0 } else { 0.0 };
 
         // Named engine uniforms consumed by the terrain shaders (regolith /
         // terrain_shadow declare these in their `Material` struct; the engine

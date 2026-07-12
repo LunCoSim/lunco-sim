@@ -78,6 +78,14 @@ pub fn anchor_solar_frame_to_site(
     // `SolarSystemRoot` also tags the Sun body — the grid filter picks the
     // one Solar Grid entity.
     mut q_solar: Query<(Entity, &mut CellCoord, &mut Transform), (With<SolarSystemRoot>, With<Grid>)>,
+    mut q_align: Query<
+        &mut Transform,
+        (
+            With<crate::big_space_setup::SiteAlignGrid>,
+            Without<SolarSystemRoot>,
+            Without<CelestialReferenceFrame>,
+        ),
+    >,
     q_frames_stored: Query<
         (Entity, &CelestialReferenceFrame, &CellCoord, &Transform, &ChildOf),
         (With<Grid>, Without<SolarSystemRoot>),
@@ -169,22 +177,41 @@ pub fn anchor_solar_frame_to_site(
         }
     };
 
-    // `align` is stored as an f32 quat; compute the translation from that
-    // ROUNDED rotation so `R_f32·site − R_f32·site = 0` exactly (an f64
-    // rotation here leaves `(R_f32 − R_f64)·1.5e11` ≈ metres of frame-varying
-    // error at the site).
+    // The ENU `align` rotation goes on the ZERO-TRANSLATION Site Align Grid
+    // (the Solar Grid's parent), NOT on the Solar Grid itself. big_space's
+    // origin propagation multiplies a grid's stored f32 quat into the
+    // origin's position vector at that node: on the Solar Grid that vector
+    // is heliocentric (~1.5e11 m), so the f32 quat's ~1e-7 relative error
+    // put a 15–20 km ULP STAIRCASE between the site branch and the celestial
+    // branch — the globe judders seen from the ground, the terrain judders
+    // seen from orbit. At the align node the origin vector is near-zero, so
+    // the same rotation costs sub-millimetres, and the 1 AU offset below
+    // travels through the Solar Grid's EXACT i64 cells in ecliptic axes.
+    //
+    // Cancellation is exact BY CONSTRUCTION now: the Solar pose is
+    // −site_in_solar in the SAME (ecliptic) axes the site composes through,
+    // so the rendered site lands on the origin whatever precision `align`
+    // has — the old "compute the translation from the rounded f32 quat"
+    // trick is obsolete.
     let align_f32 = align.as_quat();
+    if let Ok(mut align_tf) = q_align.single_mut() {
+        if align_tf.rotation != align_f32 {
+            align_tf.rotation = align_f32;
+        }
+    }
     // Site offset in the (rotating) body frame — rotated by the STORED
     // frame quat inside the walk, matching what tiles/children inherit.
     let site_in_solar = site_geo_offset
         .and_then(|(body_id, geo_local)| stored_in_solar(body_id, geo_local))
         .unwrap_or(site_frame_origin);
-    let translation = -(align_f32.as_dquat() * site_in_solar);
+    let translation = -site_in_solar;
 
     if let Ok(child_of) = q_parents.get(solar_entity) {
         if let Ok(parent_grid) = q_grids.get(child_of.parent()) {
             let (new_cell, new_translation) = parent_grid.translation_to_grid(translation);
-            tf.rotation = align_f32;
+            if tf.rotation != Quat::IDENTITY {
+                tf.rotation = Quat::IDENTITY;
+            }
             *cell = new_cell;
             tf.translation = new_translation;
             return;
