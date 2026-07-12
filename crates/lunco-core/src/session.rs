@@ -632,6 +632,24 @@ pub struct OwnedInputLog(pub HashMap<u64, VesselInputLog>);
 #[derive(Resource, Default)]
 pub struct LocalDriveInput(pub HashMap<u64, (f64, f64)>);
 
+/// CLIENT-side: the latest drive written to a vessel by something OTHER than the
+/// possessing human — the HTTP/MCP API, a rhai script, an autopilot. Keyed by gid,
+/// holding the raw `SetPorts` writes (a `seq == 0` command, i.e. not from the predicted
+/// controller stream).
+///
+/// Exists because the predicted input stream must be **the actuation truth, whatever its
+/// origin**. `drive_from_bindings` emits one `seq`-stamped `SetPorts` per fixed tick for a
+/// predicted vessel — and it built that command from the *keyboard alone*. So an idle human
+/// possessing the rover emitted an unbroken stream of ZEROS that (a) stomped any script/API
+/// drive of the same vessel (the `spec-034` "autopilot and avatar fight"), and (b) — far
+/// worse for netcode — made the client *predict and replay zeros* while the vessel was
+/// actually being driven, so client and host integrated different inputs and the
+/// reconciliation had a divergence it could never explain away.
+///
+/// The human still preempts: this is consulted ONLY while no drive intent is held.
+#[derive(Resource, Default)]
+pub struct ExternalDriveInput(pub HashMap<u64, Vec<(String, f64)>>);
+
 /// HOST-side per-tick input jitter buffer for CLIENT-owned (predicted) rovers.
 ///
 /// The owning client emits a **contiguous, per-fixed-tick, `seq`-stamped**

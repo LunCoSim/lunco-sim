@@ -101,6 +101,10 @@ fn drive_from_bindings(
     // `Option` so a controller-only test app without the session substrate runs.
     registry: Option<Res<lunco_core::SessionRegistry>>,
     local_session: Option<Res<lunco_core::LocalSession>>,
+    // Drive written by a non-human source (API / script / autopilot) — folded into the
+    // seq-stamped stream when no key is held, so the prediction input is the actuation
+    // truth regardless of origin.
+    external: Res<lunco_core::ExternalDriveInput>,
     q_ctrl: Query<(&ControllerLink, &ActionState<UserIntent>)>,
     q_binding: Query<&ControlBinding>,
     q_vessel: Query<(&lunco_core::GlobalEntityId, Has<lunco_core::OwnedLocally>)>,
@@ -188,7 +192,32 @@ fn drive_from_bindings(
         // keep-alive frames flagged `idle` that the port path ignores. Until
         // then, single-player/host gets the arbiter; the wire keeps its
         // contiguous stream.
-        let active = writes.iter().any(|(_, v)| v.abs() > f64::EPSILON);
+        let mut writes = writes;
+        let mut active = writes.iter().any(|(_, v)| v.abs() > f64::EPSILON);
+
+        // The human isn't touching it, but something else is (API / script / autopilot).
+        // Carry THAT drive in the seq-stamped stream rather than a stream of zeros.
+        //
+        // Two things break otherwise, and the second is the subtle one:
+        //  1. the zeros stomp the other driver every tick — the vessel simply won't move
+        //     (the `spec-034` "autopilot and avatar fight");
+        //  2. on a predicted client the stream IS the prediction input and the replay
+        //     input, so the client predicts/replays ZERO throttle while the vessel is
+        //     really being driven. Host and client then integrate different inputs and
+        //     reconciliation chases an error that no amount of rollback can explain.
+        //
+        // A held key still wins: this is consulted only while every bound intent is idle.
+        if !active {
+            if let Some(g) = owned_gid {
+                if let Some(ext) = external.0.get(&g) {
+                    if ext.iter().any(|(_, v)| v.abs() > f64::EPSILON) {
+                        writes = ext.clone();
+                        active = true;
+                    }
+                }
+            }
+        }
+
         let prev = was_active.insert(link.vessel_entity, active).unwrap_or(false);
         if !active && !prev && owned_gid.is_none() {
             continue;
@@ -243,11 +272,20 @@ fn record_control_input(
     reg: Res<lunco_core::SessionRegistry>,
     local: Res<lunco_core::LocalSession>,
     mut buffered: ResMut<lunco_core::BufferedClientInputs>,
+    // Non-human drives (API / script / autopilot) of a vessel this client predicts.
+    mut external: ResMut<lunco_core::ExternalDriveInput>,
     q: Query<(&lunco_core::GlobalEntityId, Has<lunco_core::OwnedLocally>)>,
 ) {
     let cmd = trigger.event();
     let Ok((gid, owned)) = q.get(cmd.target) else { return };
     let g = gid.get();
+    // A `seq == 0` SetPorts did NOT come from the predicted controller stream — it's the
+    // API, a script, or an autopilot. Remember it so `drive_from_bindings` folds it into
+    // the seq-stamped stream instead of overwriting it with keyboard zeros; otherwise the
+    // client predicts an input the vessel isn't actually being driven with.
+    if !role.is_host() && cmd.seq == 0 && !cmd.writes.is_empty() {
+        external.0.insert(g, cmd.writes.clone());
+    }
     // Capture throttle/steer for the render-lead (both roles harmless; the lead
     // system is client-only). Undeclared names default to the prior value.
     {
@@ -261,16 +299,26 @@ fn record_control_input(
         }
     }
     if role.is_host() {
-        // Host ack: highest applied seq per gid, stamped into snapshots so the
-        // owning client can drop acked inputs.
+        // A REMOTE-owned rover's forwarded input is QUEUED, not applied: the jitter
+        // buffer releases exactly one per `FixedUpdate` so the host integrates the same
+        // input sequence, one-per-tick, that the client predicted.
+        let queued = cmd.seq != 0 && reg.owner_of(g).is_some_and(|o| o != local.0);
+        if queued {
+            buffered.push(g, cmd.seq, cmd.writes.clone());
+            // DO NOT ack here. `AppliedInputSeq` is the reconcile ack — the client rewinds
+            // to its OWN state at this seq and compares it against the pose in the same
+            // snapshot. Acking on RECEIPT claims "I integrated seq N" while N is still
+            // sitting in the buffer behind ~a full RTT of backlog, so the client compares
+            // its state at N against a host state from ~20 ticks earlier. That is a
+            // SYSTEMATIC error the size of the unacked window (measured: a stubborn 1.87 m
+            // at 300 ms that rollback could never close, because nothing was actually
+            // wrong — the two sides were being compared at different instants).
+            // `apply_buffered_client_inputs` acks when the input is genuinely integrated.
+            return;
+        }
+        // The host's OWN drives apply immediately (unbuffered), so receipt IS application.
         let slot = applied.0.entry(g).or_insert(0);
         *slot = (*slot).max(cmd.seq);
-        // Queue a REMOTE-owned rover's forwarded input for per-tick application, so
-        // the host integrates the same input sequence one-per-tick as the client
-        // predicted (its own drives — owner == host — apply immediately, unbuffered).
-        if cmd.seq != 0 && reg.owner_of(g).is_some_and(|o| o != local.0) {
-            buffered.push(g, cmd.seq, cmd.writes.clone());
-        }
         return;
     }
     // --- Client ---

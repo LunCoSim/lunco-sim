@@ -254,8 +254,42 @@ pub struct SetPorts {
 fn on_set_ports(
     trigger: On<SetPorts>,
     registry: Res<lunco_core::ports::PortRegistry>,
+    // Host-side single-stream guard (below). All `Option` so a bare cosim test app
+    // without the session/networking substrate still applies ports normally.
+    role: Option<Res<lunco_core::NetworkRole>>,
+    sessions: Option<Res<lunco_core::SessionRegistry>>,
+    local: Option<Res<lunco_core::LocalSession>>,
+    q_gid: Query<&lunco_core::GlobalEntityId>,
     mut commands: Commands,
 ) {
+    // A vessel some CLIENT predicts is actuated on the host by exactly ONE thing: the
+    // contiguous, `seq`-stamped stream its owner emits, released one-per-fixed-tick by
+    // `apply_buffered_client_inputs`. That pacing is what keeps the two deterministic sims
+    // integrating the same input history.
+    //
+    // A `seq == 0` drive of that vessel (an API/script `SetPorts`, or the owner's own
+    // unstamped one arriving off the wire) would be applied HERE, immediately, on top of
+    // the paced stream — so the host would integrate the input on a different timeline than
+    // the client did. The client's reconciliation then sees a permanent gap that is not an
+    // error at all but a disagreement about *what was commanded*, and no amount of rollback
+    // can close it (measured: tens of metres of runaway divergence at 300 ms).
+    //
+    // So on the host, an unstamped drive of a client-predicted vessel is DROPPED. Ownership
+    // is control authority: the owner drives it, through its own stream. Every other vessel
+    // (host-owned, unowned, cranes, landers, cosim rigs) is unaffected.
+    if let (Some(role), Some(sessions), Some(local)) = (&role, &sessions, &local) {
+        if role.is_host() && cmd.seq == 0 {
+            if let Ok(gid) = q_gid.get(cmd.target) {
+                if sessions
+                    .owner_of(gid.get())
+                    .is_some_and(|owner| owner != local.0)
+                {
+                    return;
+                }
+            }
+        }
+    }
+
     let reg = registry.clone();
     let target = cmd.target;
     let writes = cmd.writes.clone();

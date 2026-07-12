@@ -1019,14 +1019,25 @@ pub struct VisualLeadSettings {
     pub lead_secs: f32,
 }
 
+/// Lead used when visual prediction is switched on without an explicit lead time.
+/// A plausible LAN-to-broadband round trip: enough to feel, small enough that an
+/// over-lead on a fast link stays sub-metre.
+const DEFAULT_LEAD_SECS: f32 = 0.15;
+
 impl Default for VisualLeadSettings {
     fn default() -> Self {
         let enabled = std::env::var("LUNCO_VISUAL_PREDICT").as_deref() == Ok("1");
+        // `enabled` DISARMS local prediction (`maintain_owned_locally`: `!lead.enabled`),
+        // so a zero lead here would be the worst of both worlds — prediction off AND the
+        // lead a no-op (`lead_secs <= 0.0` early-returns), leaving the rover to follow
+        // authority at full latency. That dead configuration is what you got from
+        // `LUNCO_VISUAL_PREDICT=1` on its own. If the operator asked for the lead, give
+        // them a real one; `LUNCO_SIM_LATENCY_MS` / `SetVisualLead` still override it.
         let lead_secs = std::env::var("LUNCO_SIM_LATENCY_MS")
             .ok()
             .and_then(|s| s.parse::<f32>().ok())
-            .unwrap_or(0.0)
-            / 1000.0;
+            .map(|ms| ms / 1000.0)
+            .unwrap_or(if enabled { DEFAULT_LEAD_SECS } else { 0.0 });
         // Gentle defaults — the lead is SMOOTHED (eased) so it never leaps; tune up
         // via `SetVisualLead` to taste.
         Self { enabled, yaw_rate: 0.5, speed: 4.0, lead_secs }
@@ -1100,6 +1111,13 @@ pub fn maintain_owned_locally(
     // behind (the offset the reconcile keeps chasing → the drive-fighting wobble).
     buffers: Res<InterpBuffers>,
     lead: Res<VisualLeadSettings>,
+    // Live stick input per gid — distinguishes "idle, correctly not predicting" from
+    // "driving, but prediction is broken".
+    drive_input: Res<lunco_core::LocalDriveInput>,
+    // One-shot: has this client ever believed it owns a replicated body?
+    mut announced_ownership: Local<bool>,
+    // Throttle for the "owned but not predicting" diagnostic.
+    mut last_gate_log: Local<u64>,
     mut commands: Commands,
     q: Query<
         (Entity, &lunco_core::GlobalEntityId, Has<lunco_core::OwnedLocally>),
@@ -1111,6 +1129,29 @@ pub fn maintain_owned_locally(
 ) {
     if !matches!(*role, lunco_core::NetworkRole::Client) {
         return;
+    }
+    // Prediction is inert unless the client BELIEVES it owns something — ownership
+    // arrives from the host's broadcast (`broadcast_ownership` → the `Ownership` arm
+    // of `drain_sync_inbox`). If that table never lands, EVERY downstream seam
+    // (promote → predict → reconcile → rollback) silently no-ops and the rover just
+    // follows authority at full latency, with nothing in the log to say why. Announce
+    // the adoption once, so its ABSENCE is diagnostic.
+    if !*announced_ownership {
+        let owned: Vec<u64> = q
+            .iter()
+            .map(|(_, g, _)| g.get())
+            .filter(|g| reg.owns(local.0, *g))
+            .collect();
+        if !owned.is_empty() {
+            *announced_ownership = true;
+            info!(
+                "[predict] ownership adopted: session={:?} owns {} replicated body(ies) {:?} — \
+                 prediction will engage on the next input.",
+                local.0,
+                owned.len(),
+                owned
+            );
+        }
     }
     for (e, gid, has_marker) in q.iter() {
         // Owned AND actively driven within the grace window. Grace gives
@@ -1126,6 +1167,31 @@ pub fn maintain_owned_locally(
         let mine = predicts_locally(owns, last_active, tick.0, PREDICT_GRACE_TICKS)
             && !no_local_predict()
             && !lead.enabled;
+        // Owned + ACTIVELY DRIVEN, yet not predicting — the genuinely broken state, and
+        // the one that is otherwise invisible: the rover just lags by the RTT with
+        // nothing in the log to explain it. Deliberately NOT warned for a possessed-but-
+        // idle rover: `predicts_locally` is *designed* to be false there (an idle body is
+        // dominated by forces this peer can't reproduce, so it interpolates as a proxy).
+        // Gate on real stick input, not on `last_active`, so this can still fire when the
+        // input bookkeeping itself is what failed.
+        let driving = drive_input
+            .0
+            .get(&gid.get())
+            .is_some_and(|(t, s)| t.abs() > 1e-3 || s.abs() > 1e-3);
+        if owns && driving && !mine && tick.0.wrapping_sub(*last_gate_log) > 120 {
+            *last_gate_log = tick.0;
+            warn!(
+                "[predict] gid={} is OWNED and being DRIVEN but prediction is OFF — the rover \
+                 will lag by the full RTT. last_active={} now={} grace={} no_local_predict={} \
+                 visual_lead={}",
+                gid.get(),
+                last_active,
+                tick.0,
+                PREDICT_GRACE_TICKS,
+                no_local_predict(),
+                lead.enabled,
+            );
+        }
         match (mine, has_marker) {
             (true, false) => {
                 // Gaining ownership: mark it AND restore `Dynamic`. The marker
@@ -1226,6 +1292,82 @@ pub fn propagate_owned_to_wheels(
                 commands.entity(e).remove::<lunco_core::OwnedLocally>();
             }
             _ => {}
+        }
+    }
+}
+
+/// The third step of predict → rollback → **smooth**: hide the rollback correction.
+///
+/// Rollback moves the rover onto a physically consistent state the moment an ack lands.
+/// At 300 ms ping that is ~20 corrections/second, and applying each one straight to the
+/// picture reads as a persistent grind — the simulation is right, the image is ugly. So
+/// the SIM keeps the correction (contacts, joints and collisions must be right *now*) and
+/// the PICTURE keeps the pre-correction pose, sliding onto the truth over [`SMOOTH_TAU`].
+/// The error is banked by `rollback_owned_prediction` and only ever decays here.
+///
+/// Applies ONE rigid delta to the whole assembly — chassis and every wheel — so the
+/// vehicle never visually comes apart. Safe on an articulated rover (unlike the render
+/// *lead*, which must skip them) precisely because it is a uniform whole-body offset that
+/// respects no wheel state and invents none: it just delays the truth by a few frames.
+///
+/// `GlobalTransform` only, in `Last`, after every propagation — the sim never sees it.
+fn smooth_rollback_correction(
+    role: Res<lunco_core::NetworkRole>,
+    time: Res<Time>,
+    mut smoothing: ResMut<RollbackSmoothing>,
+    q_owned: Query<
+        (Entity, &lunco_core::GlobalEntityId),
+        (
+            With<lunco_core::OwnedLocally>,
+            Without<lunco_core::ArticulatedLink>,
+        ),
+    >,
+    q_children: Query<&Children>,
+    mut q_gt: Query<&mut GlobalTransform>,
+) {
+    if !matches!(*role, lunco_core::NetworkRole::Client) || smoothing.0.is_empty() {
+        return;
+    }
+    // Frame-rate independent exponential decay toward the true pose.
+    let keep = (-time.delta_secs() / SMOOTH_TAU).exp();
+
+    for (e, gid) in q_owned.iter() {
+        let Some(slot) = smoothing.0.get_mut(&gid.get()) else {
+            continue;
+        };
+        slot.0 *= keep;
+        slot.1 = Quat::IDENTITY.slerp(slot.1, keep);
+        let (pos_off, rot_off) = *slot;
+
+        // Converged: drop it so the rover sits exactly on authority (no residual bias).
+        if pos_off.length() < 1e-4 && rot_off.angle_between(Quat::IDENTITY) < 1e-4 {
+            smoothing.0.remove(&gid.get());
+            continue;
+        }
+
+        // Rotate about the chassis centre, then translate — so the wheels swing with the
+        // body instead of shearing away from it.
+        let Ok(gt) = q_gt.get(e) else { continue };
+        let c = gt.translation();
+        let d = bevy::math::Affine3A::from_translation(pos_off)
+            * bevy::math::Affine3A::from_translation(c)
+            * bevy::math::Affine3A::from_quat(rot_off)
+            * bevy::math::Affine3A::from_translation(-c);
+
+        let mut all = vec![e];
+        let mut stack = vec![e];
+        while let Some(cur) = stack.pop() {
+            if let Ok(children) = q_children.get(cur) {
+                for ch in children.iter() {
+                    all.push(ch);
+                    stack.push(ch);
+                }
+            }
+        }
+        for ent in all {
+            if let Ok(mut gt) = q_gt.get_mut(ent) {
+                *gt = GlobalTransform::from(d * gt.affine());
+            }
         }
     }
 }
@@ -1331,6 +1473,12 @@ fn apply_buffered_client_inputs(
     mut buf: ResMut<lunco_core::BufferedClientInputs>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     ports: Res<lunco_core::ports::PortRegistry>,
+    // THE reconcile ack. Stamped HERE — where the input is actually integrated — and
+    // nowhere else for a remote-owned body. See the note in `record_control_input`:
+    // acking on receipt made the host claim it had integrated inputs still sitting in
+    // this buffer, so the client compared its state at seq N against a host state from
+    // ~a full RTT earlier and saw a permanent, uncloseable error.
+    mut applied: ResMut<lunco_core::AppliedInputSeq>,
     mut commands: Commands,
 ) {
     if !role.is_host() {
@@ -1351,6 +1499,14 @@ fn apply_buffered_client_inputs(
         let Some(e) = registry.resolve(&lunco_core::GlobalEntityId::from_raw(gid)) else {
             continue;
         };
+        // The cursor `next_for_tick` just advanced IS the highest seq this host has now
+        // integrated for `gid` — the honest ack. (On a tick with no fresh input it latches
+        // the last writes and the cursor is unchanged, which is also correct: nothing new
+        // was integrated.) `gather_snapshot` stamps this into `last_input_seq`.
+        if let Some(&seq) = buf.applied.get(&gid) {
+            let slot = applied.0.entry(gid).or_insert(0);
+            *slot = (*slot).max(seq);
+        }
         let reg = ports.clone();
         commands.queue(move |world: &mut World| {
             for (port, value) in &writes {
@@ -1462,12 +1618,37 @@ pub fn record_predicted_state(
 // (vs 102 m free-running). Crucially it needs NO solver warm-start/contact-cache
 // restoration — which is what makes it implementable from a network snapshot.
 
-/// Enable deterministic rollback (`LUNCO_ROLLBACK=1`). Default OFF: the shipped
-/// path stays the current reconcile, so this cannot regress anything until chosen.
+/// Deterministic rollback — **the shipped reconciler**. `LUNCO_ROLLBACK=0` falls back to
+/// the legacy blend ([`reconcile_owned_prediction`]).
+///
+/// Rollback rewinds the owned assembly to the acked host state and re-applies every
+/// unacked input through a real physics step, so the client lands on a state that is
+/// *physically consistent*, not merely *close*. The blend it replaces pushed the body
+/// toward authority without re-deriving that consistency — it fought the solver, and the
+/// residual it left is the drive wobble. Rollback is correct only because two other things
+/// are true: avian is deterministic (0.000 run-to-run divergence), and the owned rover's
+/// wheels are now on the wire (`replicate_owned_vehicle_links`) so the replay starts where
+/// the host started. Without the latter it damps but never converges (6.46 m vs 0.165 m).
+/// **DEFAULT OFF — the replay has an open bug.** `LUNCO_ROLLBACK=1` to opt in.
+///
+/// With real (non-zero) replayed input at 300 ms the corrected body RUNS AWAY: ~600 m of
+/// divergence over 25 s, growing monotonically. The signature is that of a rewind that never
+/// lands — the replay's ~21 physics steps per ack still execute, so instead of
+/// *re-simulating* the unacked window the rollback *fast-forwards* through it (~20 acks/s ×
+/// ~21 steps ≈ 7× extra simulation). `auth_links` is a clean 4/4 and no step is capped, so
+/// the seed and the wire are fine; the fault is that the restored state does not survive to
+/// the replay. Prime suspect: the big_space bridge (`pose_to_position`) re-deriving
+/// `Position` from `Transform` — writing the root's `Transform` too was not sufficient, and
+/// it additionally re-derives every DESCENDANT body whose ancestor moved, which would
+/// overwrite the authoritative wheel poses we just seated.
+///
+/// This was invisible until now because the harness replayed all-ZERO inputs (the controller
+/// stream was keyboard-only, so a headless client predicted zeros): a replay of zeros moves
+/// nothing, so a rewind that never lands looked exactly like one that worked.
 fn rollback_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| {
-        std::env::var("LUNCO_ROLLBACK").map_or(false, |v| v == "1" || v == "true")
+        std::env::var("LUNCO_ROLLBACK").is_ok_and(|v| v == "1" || v == "true")
     })
 }
 
@@ -1477,9 +1658,15 @@ const ROLLBACK_POS_EPS: f64 = 0.02; // m
 /// Rotation error (radians) that also justifies a re-simulation — heading error is
 /// what actually compounds under drive, so it gets its own (tight) trigger.
 const ROLLBACK_ROT_EPS: f64 = 0.01; // ~0.6°
-/// Safety cap on replayed steps per correction. At 60 Hz this is ~0.5 s of unacked
-/// input (≈500 ms RTT). Beyond it we snap without replay rather than stall the frame.
-const MAX_REPLAY_STEPS: usize = 32;
+/// Safety cap on replayed steps per correction — a backstop against stalling the frame,
+/// not a tuning knob. It must sit comfortably ABOVE the real unacked window, because the
+/// step past it is a hard snap: at 60 Hz, a 300 ms link leaves ~18 ticks unacked, plus the
+/// 20 Hz snapshot period (~3) plus jitter — so 32 was uncomfortably close to the cliff and
+/// a single hiccup would snap the rover. 64 ≈ 1 s of unacked input, which is past the point
+/// where prediction is meaningful anyway.
+///
+/// Cost is bounded by what is ACTUALLY unacked, not by this number.
+const MAX_REPLAY_STEPS: usize = 64;
 
 /// Full physics state of ONE rigid body — everything a rollback restore needs, and
 /// exactly what avian reconverges from (no warm-start/contact caches; see the probe).
@@ -1510,6 +1697,40 @@ struct AssemblyState {
 /// Per-gid ring of recent assembly states, keyed by the input seq that produced them.
 #[derive(Resource, Default)]
 pub struct AssemblyHistory(HashMap<u64, VecDeque<AssemblyState>>);
+
+/// Gids whose first rollback has already been announced, so the "rollback engaged"
+/// line is logged ONCE per vehicle rather than on every ack. That one line answers the
+/// only question that matters operationally — *is the replay seeded from authoritative
+/// wheels, or is it guessing?* — and a guessing replay cannot converge, so it must be
+/// visible at INFO without a debug build.
+#[derive(Resource, Default)]
+pub struct RollbackAnnounced(HashSet<u64>);
+
+/// Per-gid **render-only** error offset left over from a rollback correction:
+/// `visual = translate(pos) ∘ rot ∘ physical`, decayed to zero over [`SMOOTH_TAU`].
+///
+/// Rollback is *correct* but *abrupt*: it teleports the assembly onto a physically
+/// consistent state the instant an ack lands (~20×/s while driving). Applied straight to
+/// the render pose that reads as a constant grind — the sim is right and the picture is
+/// ugly. So the sim takes the correction immediately (contacts, joints and collisions must
+/// be right NOW) while the *picture* keeps the old pose and slides onto the new one. This
+/// is the standard predict → rollback → **smooth** third step; without it, rollback trades
+/// the blend's wobble for a stutter.
+///
+/// Never touches `Transform`/`Position` — only `GlobalTransform`, in `Last`, after all
+/// propagation. Nothing accumulates: the offset only ever decays toward identity.
+#[derive(Resource, Default)]
+pub struct RollbackSmoothing(HashMap<u64, (Vec3, Quat)>);
+
+/// Time constant for easing a rollback correction onto the screen. ~2 frames of visible
+/// motion at 60 Hz: long enough to read as movement rather than a jump, short enough that
+/// the picture never lies about where the rover is for more than a moment.
+const SMOOTH_TAU: f32 = 0.15;
+
+/// Corrections larger than this are NOT smoothed — they're snapped. Sliding a 2 m error in
+/// over 150 ms would look like the rover skating; a real desync that big should read as the
+/// discontinuity it is, not be disguised.
+const SMOOTH_MAX_POS: f32 = 2.0;
 
 fn rb_state(p: &Position, r: &Rotation, lv: &LinearVelocity, av: &AngularVelocity) -> RbState {
     RbState { pos: p.0, rot: r.0, lv: lv.0, av: av.0 }
@@ -1743,23 +1964,49 @@ pub fn rollback_owned_prediction(world: &mut World) {
         }
 
         if diverged {
-            // ── RIGID RE-FRAME: move the WHOLE assembly onto authority ──
-            // The wire carries only the chassis, so derive the correction as a rigid
-            // transform of the assembly: chassis snaps exactly to authority, and every
-            // link is carried with it, preserving joint/suspension/steer/spin state.
+            // ── Seed the replay with the most authoritative assembly we can build ──
+            //
+            // PREFERRED: the host replicates this vehicle's links, because we possess it
+            // (`replicate_owned_vehicle_links`). Then every wheel is seated from AUTHORITY
+            // and the seed is a true snapshot of the host's assembly — which is the whole
+            // ballgame: a deterministic replay reproduces the host exactly only if it
+            // starts where the host started. This converges (0.165 m measured).
+            //
+            // FALLBACK — RIGID RE-FRAME: no link samples (vehicle not possessed yet, links
+            // `NetExcluded`, or the first ticks before wheel samples arrive). Carry the
+            // predicted wheels rigidly with the chassis: joint/suspension/steer/spin stay
+            // internally consistent, so the vehicle survives intact — but the wheels are
+            // *guessed*, so it damps divergence rather than eliminating it (6.46 m). Never
+            // snap the chassis alone: that tears the joints and launches the rover.
             let d_rot = auth.rot * pred.chassis.rot.inverse();
             let mut restore: Vec<(Entity, RbState)> = Vec::with_capacity(pred.links.len() + 1);
             restore.push((chassis, auth));
+            let mut auth_links = 0usize;
             for (link_e, link) in &pred.links {
-                restore.push((
-                    *link_e,
-                    RbState {
+                let link_gid = world
+                    .get::<lunco_core::GlobalEntityId>(*link_e)
+                    .map(|g| g.get());
+                let authoritative =
+                    link_gid.and_then(|lgid| link_sample_at(world, lgid, sample.gen_t));
+
+                let state = match authoritative {
+                    Some(s) => {
+                        auth_links += 1;
+                        RbState {
+                            pos: s.pos_world,
+                            rot: s.rot.as_dquat(),
+                            lv: s.lv.as_dvec3(),
+                            av: s.av.as_dvec3(),
+                        }
+                    }
+                    None => RbState {
                         pos: auth.pos + d_rot * (link.pos - pred.chassis.pos),
                         rot: d_rot * link.rot,
                         lv: auth.lv + d_rot * (link.lv - pred.chassis.lv),
                         av: auth.av + d_rot * (link.av - pred.chassis.av),
                     },
-                ));
+                };
+                restore.push((*link_e, state));
             }
 
             // Freeze the rest of the world: save every other non-static body and restore
@@ -1789,6 +2036,13 @@ pub fn rollback_owned_prediction(world: &mut World) {
             let ports = world.resource::<lunco_core::ports::PortRegistry>().clone();
             let saved_time = *world.resource::<Time>();
 
+            // Where the rover LOOKS right now, before the correction moves it. The picture
+            // will hold this pose and slide onto the corrected one (see `RollbackSmoothing`).
+            let pre = world
+                .get_entity(chassis)
+                .ok()
+                .and_then(|e| Some((e.get::<Position>()?.0, e.get::<Rotation>()?.0)));
+
             world.resource_mut::<lunco_core::RollbackInProgress>().0 = true;
             apply_states(world, &restore);
             for input in unacked.iter().take(steps) {
@@ -1800,13 +2054,59 @@ pub fn rollback_owned_prediction(world: &mut World) {
             world.resource_mut::<lunco_core::RollbackInProgress>().0 = false;
             *world.resource_mut::<Time>() = saved_time;
 
+            // Bank the correction the viewer would otherwise see as a jump. Composed onto
+            // any offset still decaying from the previous ack, so back-to-back corrections
+            // (the norm at 300 ms) blend into one continuous slide instead of fighting.
+            if let (Some((pre_pos, pre_rot)), Ok(post)) = (pre, world.get_entity(chassis)) {
+                if let (Some(pp), Some(pr)) = (post.get::<Position>(), post.get::<Rotation>()) {
+                    let d_pos = (pre_pos - pp.0).as_vec3();
+                    let d_rot = (pre_rot * pr.0.inverse()).as_quat();
+                    // A correction this big is a genuine desync, not prediction error —
+                    // show it, don't smear it into a 150 ms skate.
+                    if d_pos.length() <= SMOOTH_MAX_POS {
+                        let mut smooth = world.resource_mut::<RollbackSmoothing>();
+                        let slot = smooth.0.entry(gid).or_insert((Vec3::ZERO, Quat::IDENTITY));
+                        slot.0 += d_pos;
+                        slot.1 = (d_rot * slot.1).normalize();
+                    } else {
+                        world.resource_mut::<RollbackSmoothing>().0.remove(&gid);
+                    }
+                }
+            }
+
             debug!(
                 "[rollback] gid={gid} ack={ack} dpos={dpos:.3}m drot={drot:.3}rad replayed={steps} \
-                 (unacked={}) links={} frozen={}",
+                 (unacked={}) links={} auth_links={auth_links} frozen={}",
                 unacked.len(),
                 pred.links.len(),
                 frozen.len()
             );
+            // Once per vehicle, at INFO: say which seed the replay is running on. An
+            // articulated rover replaying from GUESSED wheels cannot converge (it damps,
+            // then re-diverges on the next ack) — if that is what's happening, the fix is
+            // on the wire (`replicate_owned_vehicle_links`), not in this function, and
+            // that must not require a debug build to discover.
+            if world
+                .resource_mut::<RollbackAnnounced>()
+                .0
+                .insert(gid)
+            {
+                let links = pred.links.len();
+                if links == 0 {
+                    info!("[rollback] gid={gid}: engaged (single rigid body, no links).");
+                } else if auth_links == links {
+                    info!(
+                        "[rollback] gid={gid}: engaged — replaying from AUTHORITATIVE assembly \
+                         ({auth_links}/{links} links on the wire). Converging."
+                    );
+                } else {
+                    warn!(
+                        "[rollback] gid={gid}: replaying from RECONSTRUCTED wheels \
+                         ({auth_links}/{links} links authoritative) — the correction will DAMP but \
+                         NOT converge. The host is not replicating this vehicle's links."
+                    );
+                }
+            }
             if unacked.len() > MAX_REPLAY_STEPS {
                 warn!(
                     "[rollback] gid={gid}: {} unacked inputs exceeds cap {MAX_REPLAY_STEPS} — \
@@ -1834,6 +2134,37 @@ pub fn rollback_owned_prediction(world: &mut World) {
     }
 }
 
+/// The authoritative state of link `gid` as of the chassis snapshot at `gen_t` — the NEWEST
+/// sample at or before that host tick.
+///
+/// **Latest-wins, deliberately — not an exact tick match.** Two properties of the state
+/// plane make exact matching wrong:
+///   - the snapshot channel is **unordered-unreliable**: a given wheel's entry for a tick
+///     can simply be dropped, and is never retransmitted;
+///   - `diff_peer_batch` only sends a body whose **digest changed**, so a momentarily-still
+///     wheel is legitimately absent from that tick's batch.
+///
+/// In both cases the wheel's last received pose is still its true pose at `gen_t` — that is
+/// what latest-wins *means*. Requiring an exact tick threw those samples away and silently
+/// fell back to guessed wheels (`auth_links` flickering 0–3 instead of a steady 4), which is
+/// exactly the seed corruption that stops rollback converging: measured at 300 ms, it left a
+/// stubborn ~1.8 m error that would not close.
+///
+/// Samples NEWER than the chassis are still excluded — seeding a wheel from its chassis's
+/// future would reintroduce the incoherence this fix exists to remove.
+///
+/// `None` ⇒ the host isn't replicating this link at all (unpossessed vehicle, `NetExcluded`,
+/// or nothing has landed yet) ⇒ caller falls back to the rigid re-frame.
+fn link_sample_at(world: &World, gid: u64, gen_t: f64) -> Option<InterpSample> {
+    // Absorbs `tick × SECS_PER_TICK` float rounding.
+    const EPS: f64 = 1e-9;
+    world
+        .resource::<InterpBuffers>()
+        .0
+        .get(&gid)
+        .and_then(|buf| buf.iter().rev().find(|s| s.gen_t <= gen_t + EPS).copied())
+}
+
 /// Seat a batch of bodies' public physics state (the only state a rollback may touch).
 fn apply_states(world: &mut World, states: &[(Entity, RbState)]) {
     for (e, s) in states {
@@ -1849,6 +2180,33 @@ fn apply_states(world: &mut World, states: &[(Entity, RbState)]) {
         }
         if let Some(mut av) = em.get_mut::<AngularVelocity>() {
             av.0 = s.av;
+        }
+        // `Transform` must be rewound alongside `Position` — but ONLY on a root body.
+        //
+        // Why at all: the big_space bridge (`pose_to_position`) decides a body was "moved by
+        // an external writer" by diffing its `Transform` against a shadow copy, and then
+        // rewrites `Position` FROM `Transform`. Rewinding only `Position` left a stale
+        // `Transform` that the bridge took as truth, silently undoing the rewind — while the
+        // replay's physics steps still ran. So instead of *re-simulating* the unacked window
+        // the rollback merely FAST-FORWARDED the rover through it (~20 acks/s × ~21 steps ≈
+        // 8× extra simulation) and the prediction ran away — hundreds of metres at 300 ms.
+        // Invisible for exactly as long as the replayed inputs were all zeros.
+        //
+        // Why only a root: `Transform` is PARENT-RELATIVE, and an articulated rover's wheels
+        // are ECS children of the chassis. Writing an absolute world pose into a child's
+        // `Transform` makes Bevy re-compose it with the parent — the assembly detonates and
+        // avian dies in an island assertion. Links carry no stale `Transform` problem anyway:
+        // we never touch theirs, so the bridge never mistakes them for externally moved, and
+        // avian's writeback repairs them from `Position` after the step.
+        //
+        // Cell-relative == absolute while `cell == [0,0,0]` (all the wire encodes today; see
+        // `SnapshotEntry::cell`). The blend corrector's `Snap` path wrote both for this same
+        // reason.
+        if !em.contains::<ChildOf>() {
+            if let Some(mut tf) = em.get_mut::<Transform>() {
+                tf.translation = s.pos.as_vec3();
+                tf.rotation = s.rot.as_quat();
+            }
         }
     }
 }
@@ -2540,6 +2898,84 @@ pub fn apply_net_replication(
             continue;
         }
         commands.entity(e).insert(lunco_core::NetReplicate);
+    }
+}
+
+/// Put an owned rover's **wheels** on the wire — the relevance axis AOI doesn't model.
+///
+/// [`apply_net_replication`] deliberately omits `ArticulatedLink`: a remote rover's
+/// wheels are *reconstructed* from its chassis (`reconstruct_proxy_wheels`), which
+/// costs 4 fewer bodies/tick/rover and looks right. That trade is correct for a rover
+/// you merely **watch**.
+///
+/// It is wrong for the rover you **drive**. A predicting client rolls back and replays
+/// from authoritative state, and a replay is only ever as good as the state it starts
+/// from — seeding it with an authoritative chassis glued to *guessed* wheels re-diverges
+/// on every ack no matter how exact the replay is. This is an **information** limit, not
+/// an algorithmic one; no amount of solver or tuning work removes it. Measured on the
+/// real jointed vehicle (`rollback_rover_probe`, 58 m drive with steering):
+///
+/// | rollback seed                       | tail error                |
+/// |-------------------------------------|---------------------------|
+/// | chassis authority + *guessed* wheels | 6.46 m — never converges  |
+/// | chassis + **replicated** wheels      | **0.165 m — converges**   |
+/// | chassis only (wheels left behind)    | joints tear → vehicle launches |
+///
+/// So links ride the wire for exactly the vehicles some client actually predicts — the
+/// host knows who owns what ([`SessionRegistry`](lunco_core::session::SessionRegistry)).
+/// Every other rover keeps the cheap reconstruction, so the bandwidth cost is ~4 bodies
+/// per *possessed* rover, not per rover. Host-only: membership is an authority decision,
+/// and the client must never grant itself replication.
+///
+/// Releasing the vessel removes `NetReplicate` again, so an unpossessed rover falls back
+/// to reconstruction and stops paying for links.
+pub fn replicate_owned_vehicle_links(
+    mut commands: Commands,
+    role: Res<lunco_core::NetworkRole>,
+    registry: Res<lunco_core::session::SessionRegistry>,
+    q_vehicles: Query<
+        (Entity, &lunco_core::GlobalEntityId),
+        With<lunco_core::ArticulatedVehicle>,
+    >,
+    q_children: Query<&Children>,
+    q_links: Query<
+        (
+            Has<lunco_core::NetReplicate>,
+            Has<lunco_core::NetExcluded>,
+            Has<lunco_core::GlobalEntityId>,
+        ),
+        With<lunco_core::ArticulatedLink>,
+    >,
+) {
+    if !matches!(*role, lunco_core::NetworkRole::Host) {
+        return;
+    }
+    for (root, gid) in q_vehicles.iter() {
+        // Predicted by somebody ⇒ that somebody needs the true wheels to reconcile.
+        let predicted = registry.owner_of(gid.get()).is_some();
+
+        // Walk the whole subtree, not just direct children: a wheel can sit under an
+        // intermediate suspension/axle prim, and keying on `ChildOf == root` silently
+        // found ZERO links — which is precisely how the chassis once got snapped to
+        // authority while its wheels stayed behind, tearing the joints.
+        let mut stack: Vec<Entity> = q_children
+            .get(root)
+            .map(|c| c.iter().collect())
+            .unwrap_or_default();
+        while let Some(e) = stack.pop() {
+            if let Ok((has_repl, excluded, has_gid)) = q_links.get(e) {
+                // No gid ⇒ the peers can't agree on which body a sample refers to, so
+                // replicating it would be meaningless (`gather_snapshot` keys on gid).
+                if predicted && !has_repl && !excluded && has_gid {
+                    commands.entity(e).insert(lunco_core::NetReplicate);
+                } else if !predicted && has_repl {
+                    commands.entity(e).remove::<lunco_core::NetReplicate>();
+                }
+            }
+            if let Ok(children) = q_children.get(e) {
+                stack.extend(children.iter());
+            }
+        }
     }
 }
 
@@ -4390,6 +4826,12 @@ impl Plugin for SpawnCommandPlugin {
                 interpolate_proxies,
                 force_kinematic_proxies,
                 apply_net_replication,
+                // Host-only, and AFTER the default membership pass: a possessed rover's
+                // wheels join the wire so its owner can actually reconcile them (see
+                // `replicate_owned_vehicle_links`). Ownership can change at any time
+                // (possess / release / disconnect), so this re-asserts every frame rather
+                // than latching once at load.
+                replicate_owned_vehicle_links,
                 // L1: drop the interp ring of any proxy despawned this frame so the
                 // map doesn't leak per gid and a re-entering gid can't replay stale
                 // pre-exit samples. RemovedComponents-driven, order-independent.
@@ -4454,6 +4896,14 @@ impl Plugin for SpawnCommandPlugin {
         // schedules (`RollbackReplay` + `PhysicsSchedule`) itself, which is impossible
         // re-entrantly from within `FixedMain`. No-op unless `LUNCO_ROLLBACK=1`.
         app.init_resource::<AssemblyHistory>();
+        app.init_resource::<RollbackAnnounced>();
+        app.init_resource::<RollbackSmoothing>();
+        // The visual half of the correction: rollback fixes the SIM instantly (it must —
+        // contacts and joints are computed from it), this eases the PICTURE onto the fix so
+        // ~20 corrections/second at 300 ms ping don't read as a grind. `Last`, alongside
+        // the render-lead, so it lands after every transform propagation and touches only
+        // `GlobalTransform`.
+        app.add_systems(Last, smooth_rollback_correction);
         app.add_systems(Update, rollback_owned_prediction.after(ingest_snapshots));
         // Step 2 (revised) correction smoothing: reconcilers PARK their correction
         // in `PendingCorrection`; this drain applies it to the physics pose a few

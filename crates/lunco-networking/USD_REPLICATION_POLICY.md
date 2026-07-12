@@ -14,9 +14,14 @@ broader sync model.
 
 - Make a body move in multiplayer? **Nothing to do** — every non-static rigid body
   replicates by default (host-authoritative; clients see a smoothly interpolated proxy).
-- Chassis + jointed wheels (a *Physical* rover)? **Nothing to do** — the articulation
-  is read from the standard USD joint graph; the whole assembly replicates per-link and
-  the client renders the true articulation (no flip, no faked spin).
+- Chassis + jointed wheels (a *Physical* rover)? **Nothing to do** — the articulation is
+  read from the standard USD joint graph. Wheels are **not** on the wire by default: a
+  rover you only *watch* has its wheels reconstructed from the replicated chassis
+  (`reconstruct_proxy_wheels` — rigid mount + derived steer + cosmetic spin), which saves
+  ~4 bodies/tick/rover and is visually indistinguishable. The moment a client **possesses**
+  the rover, the host starts replicating that vehicle's links as well
+  (`replicate_owned_vehicle_links`), because a predicting client cannot reconcile an
+  assembly it can only guess at — see *Ownership-gated link replication* below.
 - A body driven by cosim/Modelica forces a client can't reproduce? **Nothing to do** —
   attaching a sim model marks it opaque automatically.
 - Want to *opt a body out* of the sync layer, or *force* a non-default authority? Author one
@@ -29,7 +34,7 @@ broader sync model.
 | Static collider / no `PhysicsRigidBodyAPI`                    | not replicated                                  | —                        |
 | Any non-static rigid body                                     | server-authoritative; client interpolates proxy | `NetReplicate`          |
 | Joint `physics:body0` target / `PhysicsArticulationRootAPI`   | articulated **root** (kinematic-proxy assembly) | `+ ArticulatedVehicle`   |
-| Joint `physics:body1` target                                  | articulated **link** (wheel)                    | `+ ArticulatedLink`      |
+| Joint `physics:body1` target                                  | articulated **link** (wheel) — replicated only while the vehicle is possessed | `+ ArticulatedLink`      |
 | Bound to a cosim `SimComponent`                               | **opaque** — never client-predicted             | `+ NotPredictable`       |
 | Runtime spawn (`SkipContentStamp`)                            | server-spawned + replicated                     | `SkipContentStamp + NetReplicate` |
 
@@ -57,6 +62,40 @@ both peers (allocated on the server, pinned on the client), descendants reconstr
 **locally** with matching ids — only the root replicates. Authored scene prims are
 unaffected: they keep `Content`, whose composed prim paths are already unique per reference.
 See README → *Entity Identity Mapping*, and `DECISIONS.md` sections D3 and D4.
+
+### Ownership-gated link replication
+
+Replication membership has a second axis besides *space* (area-of-interest): **role**.
+The same rover needs a different amount of state on the wire depending on whether you
+are watching it or driving it.
+
+| The rover you… | Wheels on the wire? | Client renders wheels via | Why |
+|---|---|---|---|
+| **watch** (remote) | no | `reconstruct_proxy_wheels` | Visual only. Rigid mount + derived steer + cosmetic spin is indistinguishable, and costs 4 fewer bodies/tick. |
+| **drive** (possessed) | **yes** | real local physics + rollback | The client *predicts* it, so it must **reconcile** it — and reconciliation is only as good as the state it replays from. |
+
+`replicate_owned_vehicle_links` (`lunco-sandbox-edit/src/commands.rs`) adds `NetReplicate`
+to the links of any `ArticulatedVehicle` whose gid has an owner in `SessionRegistry`, and
+removes it again on release. Host-only — membership is an authority decision.
+
+**Why this is not optional.** A client that predicts its rover rolls back to the last
+acked host state and replays its unacked inputs. Determinism makes the replay exact, but
+an exact replay of a *wrong starting state* is still wrong: seeding it with an
+authoritative chassis glued to **guessed** wheels re-diverges on every ack. This is an
+**information** limit — no solver, tuning, or smoothing work can close it. Measured on the
+real jointed vehicle (`rollback_rover_probe`, 58 m drive with steering):
+
+| rollback seed | tail error |
+|---|---|
+| chassis only — wheels left where they were | joints tear → vehicle launches (NaN) |
+| chassis authority + *guessed* wheels (rigid re-frame) | 6.46 m — damped, never converges |
+| chassis + **replicated** wheels | **0.165 m — converges** |
+
+So: **replicate every body you predict.** Partial state for a predicted assembly is not a
+cheaper approximation, it is a broken one. The rigid re-frame survives in
+`rollback_owned_prediction` only as a *fallback* (unpossessed vehicle, `NetExcluded` links,
+or the first ticks before link samples land) — it keeps the vehicle intact, it does not
+make it converge.
 
 ## Overrides — author only for exceptions
 

@@ -132,9 +132,37 @@ policy is a rhai/kernel program shipped by source, not a result broadcast.
 
 ## 6. Driving a rover over latency
 
-Physics stays **100 % host-authoritative** — the client never integrates its own
-rover and then argues with the host about it. Responsiveness is bought in two
-places instead, one on each side of the wire.
+The host stays the **authority** — it decides what happened. What changed is that the
+client no longer *waits* to find out: it predicts its own rover, and corrects when the
+authority disagrees. Two strategies are implemented, and they are **mutually exclusive**
+by construction (`maintain_owned_locally`: `mine = predicts_locally(..) && !no_local_predict() && !lead.enabled`).
+
+| | **Predict + reconcile** (default) | **Follow + render-lead** (`LUNCO_VISUAL_PREDICT=1`) |
+|---|---|---|
+| Owned rover's physics | integrated **locally** (`Dynamic`, `OwnedLocally`) | follows host authority exactly |
+| Responsiveness from | real local simulation | a *presentational* offset on `GlobalTransform` |
+| Correction | reconcile against the acked snapshot | none needed — never diverges |
+| Cost | must reconcile; can wobble if reconciliation is wrong | visual only: contacts/collisions lag by RTT |
+
+Render-lead is the safe fallback (it cannot desync, because it never simulates). Predict +
+reconcile is the real answer, and is what runs by default.
+
+**Reconciling correctly — rollback, not blend.** The shipped corrector is
+`rollback_owned_prediction`: rewind the owned assembly to the acked host state, re-apply
+every unacked input through a real `PhysicsSchedule` step, and arrive at a state that is
+*consistent* rather than merely *close*. avian is deterministic (0.000 run-to-run
+divergence, even with the 8-thread solver), so the replay reproduces the host exactly —
+**provided it starts from the host's state**, which is why an owned rover's wheels must be
+on the wire (§4, and `USD_REPLICATION_POLICY.md` → *Ownership-gated link replication*).
+Replaying from *guessed* wheels damps to 6.46 m and never converges; replaying from
+replicated wheels converges to 0.165 m. Harness: `rollback_rover_probe`.
+
+It replaces a *blend* (`reconcile_owned_prediction`, still reachable via `LUNCO_ROLLBACK=0`),
+which eased the residual error into `Position`/`Rotation` (`PendingCorrection`, bounded per
+tick). A blend pushes the body toward authority **without re-deriving a physically
+consistent state** — it fights the solver, and the residual it leaves is the drive wobble.
+Free predicted props (`reconcile_predicted_dynamic`, no input stream to replay) still use
+the blend by design: with no `seq` there is nothing to roll back *to*.
 
 **Host — per-tick input buffering.** An owning client emits a contiguous,
 `seq`-stamped `SetPorts` per *fixed tick*. The host used to apply each one the
@@ -181,10 +209,16 @@ prediction that is only ever exercised on a 0 ms loopback is not validated at al
 
 - **No dedicated design spec for the plane taxonomy existed before this doc** — it
   lived only in code comments. Keep this doc in step with `journal_plane.rs`.
-- Client-side **predicted-Dynamic body** divergence/desync is a known open issue
-  (predict-and-smooth reconciliation is partial). §6 is the shipped *mitigation* —
-  authoritative physics plus a presentational lead — not a full rollback solution;
-  the `rollback_probe` / `rollback_rover_probe` bins (`LUNCO_ROLLBACK`) are the
-  harness for the real one.
-- AOI interest is spatial only; **relevance by role/ownership** (e.g. always replicate
-  a possessed vessel regardless of distance) is not yet modelled.
+- The legacy **blend** corrector (`reconcile_owned_prediction`) is retained only behind
+  `LUNCO_ROLLBACK=0` as an escape hatch while rollback soaks on real links. Delete it once
+  rollback has run in anger.
+- Rollback caps replay at `MAX_REPLAY_STEPS` (32 ticks). Beyond that it seats authority
+  without a full replay — i.e. above ~0.5 s RTT the correction degrades to a snap.
+- **Contact-rich prediction** (predicted body resting on / colliding with a *proxy*)
+  is only as good as the proxy's pose; `ContactPredictable`/`promote_contacting_proxies`
+  narrow this but don't close it.
+- AOI interest is spatial only. **Relevance by ownership** now exists for the one case
+  that needs it (`replicate_owned_vehicle_links` puts a possessed rover's links on the
+  wire) but it is not a general axis of `compute_interest_sets` — e.g. a possessed vessel
+  far outside every peer's radius still relies on the owner-force-include in the
+  interest set, not on a role-aware LOD of *how much* state each body sends.
