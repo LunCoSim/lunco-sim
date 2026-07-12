@@ -321,6 +321,29 @@ shader mode.
 
 ## Phasing
 
+> **Implementation status (2026-07-12).** The headless **data + transfer** half of Phase 1
+> plus the render VIEW are landed and verified on the streamed DEM:
+> - `SurfaceField` (`lunco-terrain-core::field`) — slope / aspect / elevation as pure,
+>   headless, deterministic fields; `field_map` materialises a region raster.
+> - `TransferFn` (`lunco-terrain-core::transfer`) — Ramp / Threshold / **SlopeHazard**
+>   (live critical-angle, reusing `hazard_from_slope`) / Palette; `sample(v) → Rgba`,
+>   shared by the shader, the legend, and any headless export so they always agree.
+> - `TerrainField` query (`lunco-terrain-surface::query`) —
+>   `query("TerrainField", {field, x, z, half, res})` returns a headless region raster.
+> - **Overlay VIEW** — `TerrainOverlayParams` + `SetTerrainOverlay` command +
+>   `sync_terrain_overlay` live-tune, and overlay uniforms + the slope-hazard blend in
+>   `terrain_geomorph.wgsl` / `_web.wgsl` (slope from the geometric normal, running the
+>   same transfer math on-GPU as `transfer.rs`).
+> - **Inspector legend + sliders** (`lunco-sandbox-edit::ui::inspector`) — enable +
+>   Safe/Cliff/Opacity sliders + a gradient legend coloured by the same
+>   `hazard_from_slope` + `hazard_color`, so the legend matches the terrain exactly.
+>
+> Remaining in Phase 1: the `lunco:layer = "field"` USD descriptor + tiled materialisation
+> (the field is headless-queryable but not yet an addressable USD layer). Phases 2–5
+> (graticule, tiled overlay stack, dynamic maps, manual paint) are unstarted. The overlay
+> paints the **streamed CDLOD** terrain (`terrain_geomorph`); a statically-meshed DEM
+> (`lod_viz = false`) would need the same uniforms wired into its material.
+
 1. **Slope as a `SurfaceField` (data-first, headless).** Define slope as a field on the
    oracle (reuse `derive.rs::slope_map` + `normal_at`); the point query already returns
    it. Add a `lunco:layer = "field"` USD descriptor `{ field: slope }` so it's

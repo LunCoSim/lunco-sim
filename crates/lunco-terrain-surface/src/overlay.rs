@@ -124,7 +124,7 @@ fn on_set_terrain_overlay(
     if ev.opacity > 0.0 {
         params.opacity = ev.opacity.clamp(0.0, 1.0);
     }
-    info!(
+    debug!(
         "[terrain-overlay] enabled={} safe={}° cliff={}° opacity={}",
         params.enabled, params.safe_deg, params.cliff_deg, params.opacity
     );
