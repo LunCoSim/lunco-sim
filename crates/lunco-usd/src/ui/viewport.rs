@@ -664,6 +664,10 @@ impl Panel for UsdViewportPanel {
         PanelSlot::Center
     }
 
+    fn is_scene_viewport(&self) -> bool {
+        true
+    }
+
     fn closable(&self) -> bool {
         false
     }

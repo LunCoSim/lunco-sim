@@ -122,13 +122,19 @@ pub struct PanelRects {
     /// mode-resolved value (folding in egui's `is_pointer_over_egui`). Consumers
     /// read the resolved value.
     pointer_over_scene: bool,
-    /// Did a scene-hosting panel (the workbench [`ViewportPanel`] or the USD
-    /// viewport) render THIS frame? Set by [`record_scene_panel`](Self::record_scene_panel),
-    /// reset each frame. Distinguishes docked mode (the 3D scene is a transparent
-    /// egui_dock leaf inside the central area — `is_pointer_over_egui` can't see it,
-    /// so the leaf fold disambiguates) from full-window/View mode (no scene panel;
-    /// the scene IS the central area, so `!is_pointer_over_egui` is authoritative).
-    scene_panel_present: bool,
+    /// Per docked *chrome* panel this frame: `(body, card)` in egui points, where
+    /// `body` is the leaf content area the panel was given and `card` is the rect
+    /// it actually painted (`ui.min_rect()`). Chrome panels are transparent leaves
+    /// that paint a content-sized card, so `body − card` is a transparent gap where
+    /// the full-window 3D shows through and should be clickable. Recorded by the
+    /// dock dispatch for every non-`is_scene_viewport` panel (so it works in EVERY
+    /// docked perspective); reset each frame. Consumed by [`resolve_scene_pointer`].
+    chrome_cards: Vec<(egui::Rect, egui::Rect)>,
+    /// The DockArea's own rect this frame (egui points), if a dock rendered. The
+    /// dock does NOT always fill the window — anything OUTSIDE it is bare
+    /// full-window 3D (no egui), which must read as scene, not chrome. The
+    /// chrome blanket is bounded to this rect. `None` in full-window/View mode.
+    dock_rect: Option<egui::Rect>,
 }
 
 /// One panel's footprint inside the window, in *physical* pixels.
@@ -215,13 +221,11 @@ impl PanelRects {
         ui.rect_contains_pointer(ui.available_rect_before_wrap())
     }
 
-    /// Record that a scene-hosting panel rendered this frame, folding in whether
-    /// the pointer is over its leaf. Marks [`scene_panel_present`](Self::scene_panel_present)
-    /// (regardless of pointer) and OR-folds the pointer hit (so multiple scene
-    /// panels in one layout combine). Pair with
-    /// [`reset_pointer_over_scene`](Self::reset_pointer_over_scene) at frame start.
+    /// Record that a scene-viewport panel rendered this frame, OR-folding whether
+    /// the pointer is over its leaf (so multiple scene panels in one layout
+    /// combine). Pair with [`reset_pointer_over_scene`](Self::reset_pointer_over_scene)
+    /// at frame start.
     pub fn record_scene_panel(&mut self, over: bool) {
-        self.scene_panel_present = true;
         self.pointer_over_scene |= over;
     }
 
@@ -231,6 +235,39 @@ impl PanelRects {
         self.pointer_over_scene = over;
     }
 
+    /// Record a docked chrome panel's `(body, card)` this frame (egui points).
+    /// `body` = the leaf content area it was given; `card` = what it painted
+    /// (`ui.min_rect()`). Only for non-`is_scene_viewport` panels.
+    pub fn record_chrome_panel(&mut self, body: egui::Rect, card: egui::Rect) {
+        self.chrome_cards.push((body, card));
+    }
+
+    /// Record the DockArea's rect this frame (egui points). Called by
+    /// `render_layout` after `DockArea::show_inside`.
+    pub fn set_dock_rect(&mut self, rect: egui::Rect) {
+        self.dock_rect = Some(rect);
+    }
+
+    /// The DockArea rect this frame, or `None` in full-window/View mode.
+    pub fn dock_rect(&self) -> Option<egui::Rect> {
+        self.dock_rect
+    }
+
+    /// True if `pos` (egui points) is over some chrome panel's painted card.
+    pub fn pointer_over_card(&self, pos: egui::Pos2) -> bool {
+        self.chrome_cards.iter().any(|(_, card)| card.contains(pos))
+    }
+
+    /// True if `pos` is inside a chrome panel's body but OUTSIDE its painted card
+    /// — a transparent gap where the full-window 3D shows through (clickable
+    /// scene). Tab bars / separators are outside every panel body, so they are
+    /// NOT gaps and stay chrome.
+    pub fn pointer_in_transparent_gap(&self, pos: egui::Pos2) -> bool {
+        self.chrome_cards
+            .iter()
+            .any(|(body, card)| body.contains(pos) && !card.contains(pos))
+    }
+
     /// Clear the per-frame scene-pointer signals. Called once at the top of
     /// `render_workbench`, before any panel renders, so a frame where no scene
     /// panel is in the layout (or the pointer left the viewport) reads `false`.
@@ -238,13 +275,8 @@ impl PanelRects {
     /// confinement; only these per-frame bools reset.
     pub fn reset_pointer_over_scene(&mut self) {
         self.pointer_over_scene = false;
-        self.scene_panel_present = false;
-    }
-
-    /// Whether a scene-hosting panel rendered this frame — see
-    /// [`scene_panel_present`](Self::scene_panel_present) (the field).
-    pub fn scene_panel_present(&self) -> bool {
-        self.scene_panel_present
+        self.chrome_cards.clear();
+        self.dock_rect = None;
     }
 
     /// True when the pointer is over the live 3D scene (not chrome, not occluded)
@@ -308,6 +340,11 @@ impl Panel for ViewportPanel {
         // If the user closes the viewport tab, the centre region
         // collapses and the side panels reflow oddly. Keep it docked.
         false
+    }
+
+    fn is_scene_viewport(&self) -> bool {
+        // This IS the scene — exempt from the pick gate's chrome-card recording.
+        true
     }
 
     fn transparent_background(&self) -> bool {
@@ -582,68 +619,76 @@ pub fn disable_egui_pointer_capture(
     }
 }
 
-/// Collapse the per-frame scene-panel fold + egui's own geometry into the single
+/// Collapse egui's own geometry + the per-frame dock/panel rects into the single
 /// resolved `pointer_over_scene` signal that the pick gate ([`track_egui_focus`] →
 /// `EguiFocus.wants_pointer`) and [`egui_viewport_aware_picking`] read. Runs in
 /// PostUpdate after the egui pass, ordered BEFORE both consumers.
 ///
-/// Two modes, distinguished by whether a scene-hosting panel rendered this frame:
-///  • **Docked** (a `ViewportPanel` / USD viewport rendered): the 3D scene is a
-///    transparent egui_dock leaf INSIDE the central area. `is_pointer_over_egui`
-///    returns false across the whole central area, so it can't tell the leaf from
-///    its sibling chrome leaves (Spawn / Inspector / tab strip); the leaf fold
-///    (`record_scene_panel`) marks the true viewport. Chrome = anything egui owns
-///    OR inside the dock but off the leaf.
-///  • **Full-window / View** (no scene panel this frame): the scene IS the central
-///    area egui left free, so `!is_pointer_over_egui()` is authoritative.
+/// The pointer is over CHROME (scene picks stand down) when any of:
+///  • `is_pointer_over_egui()` — over a reserved egui panel / menu / status bar /
+///    floating window / popup. This is the authoritative signal for full-window
+///    ("View") mode and for any real (non-dock-leaf) egui surface, in EVERY
+///    perspective. Crucially it is pure geometry + occlusion (`layer_id_at`), NOT
+///    masked by mouse-button-down — unlike `egui_wants_pointer_input()`, whose
+///    `&& !any_down()` clause returned false at the exact frame of a press over a
+///    panel background/label (the original chrome-click leak). **This is the fix
+///    that matters and is confirmed working.**
+///  • `pointer_over_card()` — over a docked chrome panel's painted card. egui_dock
+///    leaves all share the Background layer, so `is_pointer_over_egui` can't see
+///    them; the per-panel card rect (recorded in `tab_ui`) does.
+///  • inside the dock rect, off the transparent viewport leaf, and not in an
+///    in-leaf transparent gap (keeps tab bars / separators blocked).
 ///
-/// Crucially this uses `is_pointer_over_egui()` — pure geometry + occlusion
-/// (`layer_id_at`), NOT masked by mouse-button-down — where the old code used
-/// `egui_wants_pointer_input()`, whose `&& !any_down()` clause returns false at the
-/// exact frame of a press over a panel background/label (the chrome-click leak).
+/// TODO(pick-gate): the "click the bare 3D BELOW the whole dock" case does NOT work
+/// yet. Intent: the dock often does not fill the window, so anything OUTSIDE
+/// `dock_rect` is full-window 3D and should be scene. But `dock_rect` is taken from
+/// `viewport_ui.min_rect()` after `DockArea::show_inside` (see `render_layout`), and
+/// that appears to report the full available area rather than the dock's true drawn
+/// extent — so `in_dock` stays true below the dock and the blanket keeps blocking
+/// it. Fix by measuring the dock's real bounds (e.g. the union of the recorded leaf
+/// body rects, or an egui_dock API for the laid-out tree rect) instead of
+/// `min_rect()`. The in-leaf gap path (`in_gap`) and the card/`is_pointer_over_egui`
+/// chrome paths are correct; only the below-dock region is unresolved.
 pub fn resolve_scene_pointer(
     mut panel_rects: ResMut<PanelRects>,
     mut q: Query<&mut bevy_egui::EguiContext, With<PrimaryEguiContext>>,
-    mut last: Local<Option<(bool, bool, bool, bool)>>,
 ) {
     let mut over_egui = false;
+    let mut pointer: Option<egui::Pos2> = None;
     for mut ctx in q.iter_mut() {
-        over_egui |= ctx.get_mut().is_pointer_over_egui();
+        let c = ctx.get_mut();
+        over_egui |= c.is_pointer_over_egui();
+        pointer = pointer.or_else(|| c.pointer_interact_pos());
     }
-    let dock_viewport = panel_rects.scene_panel_present();
     let on_leaf = panel_rects.pointer_over_scene(); // raw fold from the viewport leaf
-    // Chrome when: pointer over any egui panel/window/popup (side panels, menu &
-    // status bars, floating windows — both modes), OR, in docked mode, inside the
-    // central dock but NOT on the transparent viewport leaf.
-    let over_chrome = over_egui || (dock_viewport && !on_leaf);
+    // Over a chrome panel's painted card, in an in-leaf transparent gap, and/or
+    // inside the dock rect at all? (See the TODO above re: the dock_rect extent.)
+    let (over_card, in_gap, in_dock) = match pointer {
+        Some(p) => (
+            panel_rects.pointer_over_card(p),
+            panel_rects.pointer_in_transparent_gap(p),
+            panel_rects.dock_rect().is_some_and(|r| r.contains(p)),
+        ),
+        None => (false, false, false),
+    };
+    let over_chrome = over_egui || over_card || (in_dock && !on_leaf && !in_gap);
     panel_rects.set_pointer_over_scene(!over_chrome);
-
-    // DIAG (temporary): log the resolve inputs whenever they change, so we can see
-    // which signal is wrong when a chrome click leaks. Remove after diagnosis.
-    let snap = (over_egui, dock_viewport, on_leaf, over_chrome);
-    if *last != Some(snap) {
-        *last = Some(snap);
-        bevy::log::info!(
-            "[pickgate] over_egui={over_egui} scene_panel_present={dock_viewport} on_leaf={on_leaf} => over_chrome={over_chrome} (scene_owns_pointer={})",
-            !over_chrome
-        );
-    }
 }
 
-/// Viewport-rect-aware egui picking backend — the replacement for bevy_egui's
+/// Scene-vs-chrome-aware egui picking backend — the replacement for bevy_egui's
 /// blanket capture (disabled by [`disable_egui_pointer_capture`]).
 ///
-/// Emits a high-order `bevy_picking` hit for the egui context entity ONLY when
-/// the pointer is over egui chrome AND NOT over the live 3D viewport rect
-/// (`PanelRects`, recorded by [`ViewportPanel::render`]). So:
-///   • over a side/dock panel → egui hit wins → the 3D pick is suppressed;
-///   • over the bare viewport (full-window View mode, or the dock ViewportPanel
-///     leaf in Build mode) → no egui hit → bevy_picking's mesh hit reaches the
-///     scene observers.
-/// Mirrors bevy_egui's own `capture_pointer_input_system` (PostUpdate, hit with
-/// no world position so consumers can tell chrome from a real mesh pick), adding
-/// the viewport-rect exclusion. In View mode `PanelRects` is empty, so the
-/// exclusion is a no-op and this behaves exactly like the stock capture.
+/// Emits a high-order `bevy_picking` hit for the egui context entity ONLY when the
+/// pointer is over chrome, i.e. NOT over the scene. It reads the single resolved
+/// `PanelRects::pointer_over_scene()` computed by [`resolve_scene_pointer`] (which
+/// runs just before this), so:
+///   • over chrome → egui hit wins → the 3D pick is suppressed;
+///   • over the scene (viewport leaf, full-window View centre) → no egui hit →
+///     bevy_picking's mesh hit reaches the scene observers.
+/// Mirrors bevy_egui's own `capture_pointer_input_system` (PostUpdate, hit with no
+/// world position so consumers can tell chrome from a real mesh pick). Unlike the
+/// stock capture it does NOT gate on `egui_wants_pointer_input()` (button-masked —
+/// see [`resolve_scene_pointer`]); the resolved geometric signal is unconditional.
 pub fn egui_viewport_aware_picking(
     pointers: Query<(
         &bevy::picking::pointer::PointerId,
@@ -698,9 +743,11 @@ pub fn egui_viewport_aware_picking(
 /// egui reads its own copy of the winit events and never removes anything from
 /// Bevy's `ButtonInput`, so raw scene-input systems (keyboard driving, camera
 /// orbit, scroll-zoom) would otherwise fire even while an egui text field is
-/// focused or the pointer is over a panel. This publishes
-/// `wants_keyboard_input()` / `wants_pointer_input()` from the primary context
-/// so those systems can gate on `EguiFocus` without depending on `bevy_egui`.
+/// focused or the pointer is over a panel. This publishes `wants_keyboard` (from
+/// egui's `wants_keyboard_input()`) and `wants_pointer` (the negation of the
+/// resolved `PanelRects::pointer_over_scene()` — see [`resolve_scene_pointer`],
+/// NOT the button-masked `egui_wants_pointer_input()`) so those systems can gate
+/// on `EguiFocus` without depending on `bevy_egui`.
 ///
 /// Runs in `PostUpdate` after `EguiPostUpdateSet::ProcessOutput` (same slot as
 /// the picking backend) so the flags are this-frame-fresh; consumers in `Update`

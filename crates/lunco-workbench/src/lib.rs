@@ -2171,12 +2171,29 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                     // Capability-narrowed context (no raw &mut World).
                     // Mutations the panel emits are queued and applied
                     // after paint (WP-8 structural prevention).
+                    let is_scene = panel.is_scene_viewport();
+                    // Full leaf body (egui_dock clips the tab-content ui to the
+                    // whole leaf area, below the tab bar) — NOT `max_rect()`, which
+                    // only spans the growable content and misses the transparent
+                    // area below a short card.
+                    let body = ui.clip_rect();
                     let mut ctx = PanelCtx::new(self.world);
                     panel.render(ui, &mut ctx);
                     let deferred = ctx.into_deferred();
                     self.panels.insert(id, panel);
                     for f in deferred {
                         f(self.world);
+                    }
+                    // Chrome panels paint a content-sized card on a transparent
+                    // leaf; record (body, painted-card) so the scene-pick gate can
+                    // let the transparent gap through while blocking the card.
+                    if !is_scene {
+                        let card = ui.min_rect();
+                        if let Some(mut r) =
+                            self.world.get_resource_mut::<viewport::PanelRects>()
+                        {
+                            r.record_chrome_panel(body, card);
+                        }
                     }
                 } else {
                     ui.colored_label(
@@ -2187,12 +2204,22 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             }
             TabId::Instance { kind, instance } => {
                 if let Some(mut panel) = self.instance_panels.remove(&kind) {
+                    let is_scene = panel.is_scene_viewport();
+                    let body = ui.clip_rect();
                     let mut ctx = PanelCtx::new(self.world);
                     panel.render(ui, &mut ctx, instance);
                     let deferred = ctx.into_deferred();
                     self.instance_panels.insert(kind, panel);
                     for f in deferred {
                         f(self.world);
+                    }
+                    if !is_scene {
+                        let card = ui.min_rect();
+                        if let Some(mut r) =
+                            self.world.get_resource_mut::<viewport::PanelRects>()
+                        {
+                            r.record_chrome_panel(body, card);
+                        }
                     }
                 } else {
                     ui.colored_label(
@@ -3295,11 +3322,18 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
             && screen.height() > 1.0
         {
             DockArea::new(dock).style(style).show_inside(&mut viewport_ui, &mut viewer);
+            // Record the dock's actual rect for the scene-pick gate: the dock does
+            // NOT always fill the window, and anything below/outside it is bare
+            // full-window 3D that must read as scene, not chrome.
+            let dock_rect = viewport_ui.min_rect();
             // After the dock has laid itself out, publish the area
             // rect under a generic "panel.center" anchor so the help
             // tour can spotlight the dock content as a whole.
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
                 a.set("panel.center", screen);
+            }
+            if let Some(mut r) = world.get_resource_mut::<viewport::PanelRects>() {
+                r.set_dock_rect(dock_rect);
             }
         }
     } else {
