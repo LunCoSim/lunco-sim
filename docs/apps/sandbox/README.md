@@ -39,16 +39,26 @@ cargo run --bin sandbox -- [FLAGS]
 
 ### Flags
 
+`sandbox --help` prints this same list — it is generated from the flags the binary
+actually parses, so prefer it if this table and the binary ever disagree.
+
 | Flag | Description |
 |---|---|
-| `--api [PORT]` | Enable the HTTP API server. Default port is 4101. |
+| `-h`, `--help` | Print usage and exit, without launching the simulator. |
+| `--no-ui` | Run headless — no window, no GPU. Also via `LUNCO_NO_UI=1`. |
+| `--api [PORT]` | Enable the HTTP API server. Default port is 4101. **Not implied by `--no-ui`**: without this flag there is no API port at all. |
 | `--scene <PATH>` | Load a specific USD scene. Path is relative to `assets/`. Default: `scenes/sandbox/sandbox_scene.usda`. |
 | `--no-vsync` | Disable VSync. FPS will not be capped by the display refresh rate. |
 | `--no-throttle` | Disable background throttling. The window will update at full rate even when unfocused. |
 | `--log-diag` | Enable Bevy's `LogDiagnosticsPlugin` to print FPS, FrameTime, and physics stats to the console. |
 | `--window-pos <SPEC>` | Force the OS window to a specific screen region (e.g., `1920x1080+0+0`). |
-| `--host [PORT]` | Start a networked listen-server. |
-| `--connect <ADDR>` | Connect to a networked server via WebTransport. |
+| `--host [PORT]` | Start a networked listen-server. Default port is 5888. |
+| `--connect <ADDR>` | Connect to a networked server via WebTransport. An `ADDR` with no port implies `:5888`; a bare IP skips TLS validation (LAN/dev). |
+| `--cert <PATH>` | TLS certificate for `--host`: a certbot live dir, or a cert file (then pair with `--key`). Omit both for a dev self-signed cert. See [OPS](OPS.md). |
+| `--key <PATH>` | TLS private key, when `--cert` names a file rather than a directory. |
+
+Measuring FPS? Always pass `--no-vsync --no-throttle` — otherwise you are timing
+the compositor and the unfocused power-save throttle, not the renderer.
 
 ## Interactive Controls
 

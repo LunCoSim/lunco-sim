@@ -130,7 +130,41 @@ and drive kernels (`lunco:driveKernel`).
 **Determinism contract:** every peer must run the *identical compiled* policy — a
 policy is a rhai/kernel program shipped by source, not a result broadcast.
 
-## 6. Design invariants
+## 6. Driving a rover over latency
+
+Physics stays **100 % host-authoritative** — the client never integrates its own
+rover and then argues with the host about it. Responsiveness is bought in two
+places instead, one on each side of the wire.
+
+**Host — per-tick input buffering.** An owning client emits a contiguous,
+`seq`-stamped `SetPorts` per *fixed tick*. The host used to apply each one the
+moment it arrived, in `drain_sync_inbox` (`Update`, i.e. **render** cadence), and
+the port latched. So whenever the host's render rate lagged its fixed rate it
+**subsampled** the input stream and integrated a different input sequence than the
+client had. With a held input that is harmless; *during a turn* the changing steer
+gets subsampled, authoritative yaw diverges from the prediction, and the reconcile
+snap shows up as the post-turn wobble. `BufferedClientInputs` (`lunco-core`
+`session.rs`) is the jitter buffer that fixes it: one buffered input consumed per
+`FixedUpdate` tick, before the drive, so host and client integrate the same
+sequence. Knob: `LUNCO_INPUT_BUFFER`.
+
+**Client — render-lead (visual prediction).** The owned rover *follows* host
+authority for physics (no wobble, correct contacts) while `lead_owned_rover_render`
+leads its **rendered** pose forward/turning by roughly the RTT, from the local
+drive input captured in `LocalDriveInput`. Purely presentational — it never touches
+the sim. The lead is eased, not applied instantly (a 300 ms lead applied in one
+frame is ~1.8 m and ~12°, which reads as a snap). Tune it live, while driving, with
+the **`SetVisualLead`** command (`enabled`, `yaw_rate`, `speed`, `lead_secs` — all
+optional); seeded from `LUNCO_VISUAL_PREDICT=1` and `LUNCO_SIM_LATENCY_MS`.
+`LUNCO_NO_PREDICT=1` turns the whole thing off.
+
+**Testing it honestly.** `LUNCO_SIM_LATENCY_MS=<ms>` attaches a *receive-side* link
+conditioner on the client only, delaying inbound snapshots — so localhost behaves
+like a 200–500 ms link, input still reaches the host fast, and the input→display
+lag the render-lead has to hide is ≈ that value. This is how the lead is validated;
+prediction that is only ever exercised on a 0 ms loopback is not validated at all.
+
+## 7. Design invariants
 
 1. **One journal, many domains.** Never add a per-domain broadcast; add an
    `OpPayload` impl and a `DomainKind` variant. The obstacle-field migration
@@ -143,11 +177,14 @@ policy is a rhai/kernel program shipped by source, not a result broadcast.
 4. **Fail open on interest, fail loud on certs.** A centerless peer sees everything;
    a bad cert aborts rather than silently running insecure (headless `--no-ui` server).
 
-## 7. Open gaps
+## 8. Open gaps
 
 - **No dedicated design spec for the plane taxonomy existed before this doc** — it
   lived only in code comments. Keep this doc in step with `journal_plane.rs`.
 - Client-side **predicted-Dynamic body** divergence/desync is a known open issue
-  (predict-and-smooth reconciliation is partial).
+  (predict-and-smooth reconciliation is partial). §6 is the shipped *mitigation* —
+  authoritative physics plus a presentational lead — not a full rollback solution;
+  the `rollback_probe` / `rollback_rover_probe` bins (`LUNCO_ROLLBACK`) are the
+  harness for the real one.
 - AOI interest is spatial only; **relevance by role/ownership** (e.g. always replicate
   a possessed vessel regardless of distance) is not yet modelled.

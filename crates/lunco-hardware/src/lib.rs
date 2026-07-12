@@ -28,7 +28,18 @@ impl Plugin for LunCoHardwarePlugin {
                motor_actuator_system,
                brake_actuator_system,
                sensor_velocity_system,
-           ).chain().run_if(|t: Res<Time<Virtual>>| !t.is_paused() && t.relative_speed_f64() > 0.0));
+           ).chain().run_if(|t: Res<Time<Virtual>>| !t.is_paused() && t.relative_speed_f64() > 0.0))
+           // Rollback replay: the joint-motor actuators ARE the jointed rover's
+           // drive, so re-simulating an input must re-derive them. Ordered
+           // `.after(ControlDacSet)` — they read `PhysicalPort`, which the DAC
+           // writes from this tick's `DigitalPort` command. `sensor_velocity_system`
+           // is excluded: it publishes telemetry, not force, and replay must not
+           // emit sensor readings for ticks that already happened.
+           .add_systems(lunco_core::RollbackReplay, (
+               steering_actuator_system,
+               motor_actuator_system,
+               brake_actuator_system,
+           ).chain().after(lunco_core::ControlDacSet));
     }
 }
 

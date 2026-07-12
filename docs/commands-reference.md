@@ -10,7 +10,7 @@ command structs themselves in `crates/`, so it always matches the code. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**161 commands** across **21** crates. 24 command(s) below lack a `///` description — marked _(no description)_; add a doc comment on the struct to fix it.
+**162 commands** across **21** crates. 24 command(s) below lack a `///` description — marked _(no description)_; add a doc comment on the struct to fix it.
 
 > **Regenerate:** `cargo run --manifest-path tools/gen-command-docs/Cargo.toml`
 
@@ -19,7 +19,7 @@ command structs themselves in `crates/`, so it always matches the code. See the
 
 **Scene editing & authoring**
 
-- [`lunco-sandbox-edit`](#lunco-sandbox-edit) (`lunco-sandbox-edit`, 16 commands)
+- [`lunco-sandbox-edit`](#lunco-sandbox-edit) (`lunco-sandbox-edit`, 17 commands)
 
 **USD / scenes**
 
@@ -326,6 +326,21 @@ command structs themselves in `crates/`, so it always matches the code. See the
 |---|---|---|
 | `path` | `String` |  Asset path of the shader to overwrite, e.g. `"shaders/wheel.wgsl"`. |
 | `source` | `String` |  New WGSL source text. |
+
+#### `SetVisualLead`
+
+ Live-tune [`VisualLeadSettings`] (all fields optional → set only what you pass):
+ `SetVisualLead {enabled?, yaw_rate?, speed?, lead_secs?}`. Lets you A/B the
+ render-lead strength while driving, no rebuild.
+
+- *defined in:* `crates/lunco-sandbox-edit/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `enabled` | `Option < bool >` |   |
+| `yaw_rate` | `Option < f32 >` |   |
+| `speed` | `Option < f32 >` |   |
+| `lead_secs` | `Option < f32 >` |   |
 
 #### `SpawnEntity`
 
@@ -2489,4 +2504,4 @@ command structs themselves in `crates/`, so it always matches the code. See the
 
 ---
 
-<!-- scanned 604 .rs files across `crates/`; 0 parse failure(s) skipped -->
+<!-- scanned 607 .rs files across `crates/`; 0 parse failure(s) skipped -->

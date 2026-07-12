@@ -40,7 +40,14 @@ impl Plugin for LunCoControllerPlugin {
         //
         // Input → port writes are EMITTED once per fixed tick (so the
         // prediction replay is a clean 1:1 loop over `InputFrame`s).
-        app.add_systems(FixedUpdate, drive_from_bindings);
+        // Suppressed during a rollback replay: re-simulation feeds the RECORDED
+        // input for each replayed tick, so regenerating input from the live keyboard
+        // mid-replay would overwrite the very history we are replaying (and mint new
+        // seqs for ticks that already happened).
+        app.add_systems(
+            FixedUpdate,
+            drive_from_bindings.run_if(lunco_core::not_rolling_back),
+        );
         // The SINGLE input-bookkeeping chokepoint: every `SetPorts` — keyboard,
         // API, or wire-replayed — flows through this observer, so the client
         // prediction log and the host reconcile-ack no longer depend on how the
@@ -226,16 +233,44 @@ fn record_control_input(
     sim_tick: Res<lunco_core::SimTick>,
     mut owned_log: ResMut<lunco_core::OwnedInputLog>,
     mut applied: ResMut<lunco_core::AppliedInputSeq>,
+    // Latest local drive input per gid — the render-lead reads it to visually
+    // anticipate the rover's motion (presentational only; see `LocalDriveInput`).
+    mut drive_input: ResMut<lunco_core::LocalDriveInput>,
+    // Host-side per-tick input buffer + ownership table: a forwarded client input
+    // is queued by seq so `apply_buffered_client_inputs` steps EXACTLY ONE per
+    // fixed tick — matching the client's one-input-per-tick prediction, so the two
+    // deterministic sims stay in lockstep (no divergence → gentle reconcile).
+    reg: Res<lunco_core::SessionRegistry>,
+    local: Res<lunco_core::LocalSession>,
+    mut buffered: ResMut<lunco_core::BufferedClientInputs>,
     q: Query<(&lunco_core::GlobalEntityId, Has<lunco_core::OwnedLocally>)>,
 ) {
     let cmd = trigger.event();
     let Ok((gid, owned)) = q.get(cmd.target) else { return };
     let g = gid.get();
+    // Capture throttle/steer for the render-lead (both roles harmless; the lead
+    // system is client-only). Undeclared names default to the prior value.
+    {
+        let entry = drive_input.0.entry(g).or_insert((0.0, 0.0));
+        for (name, v) in &cmd.writes {
+            match name.as_str() {
+                "throttle" | "forward" => entry.0 = *v,
+                "steer" => entry.1 = *v,
+                _ => {}
+            }
+        }
+    }
     if role.is_host() {
         // Host ack: highest applied seq per gid, stamped into snapshots so the
         // owning client can drop acked inputs.
         let slot = applied.0.entry(g).or_insert(0);
         *slot = (*slot).max(cmd.seq);
+        // Queue a REMOTE-owned rover's forwarded input for per-tick application, so
+        // the host integrates the same input sequence one-per-tick as the client
+        // predicted (its own drives — owner == host — apply immediately, unbuffered).
+        if cmd.seq != 0 && reg.owner_of(g).is_some_and(|o| o != local.0) {
+            buffered.push(g, cmd.seq, cmd.writes.clone());
+        }
         return;
     }
     // --- Client ---
@@ -245,12 +280,28 @@ fn record_control_input(
         // the current positional reconcile (awaits true input-replay).
         let entry = owned_log.0.entry(g).or_default();
         if entry.frames.back().map_or(true, |f| f.seq != cmd.seq) {
+            // Capture the REAL actuation for deterministic input-replay rollback.
+            // `drive_from_bindings` resolves every bound port each tick, so the
+            // owned-client stream carries the full set; latch from the prior frame
+            // for any name a given command happens to omit (API/partial writes).
+            let prev = entry.frames.back();
+            let mut forward = prev.map_or(0.0, |f| f.forward);
+            let mut steer = prev.map_or(0.0, |f| f.steer);
+            let mut brake = prev.map_or(0.0, |f| f.brake);
+            for (name, v) in &cmd.writes {
+                match name.as_str() {
+                    "throttle" | "forward" => forward = *v,
+                    "steer" => steer = *v,
+                    "brake" => brake = *v,
+                    _ => {}
+                }
+            }
             entry.frames.push_back(lunco_core::InputFrame {
                 seq: cmd.seq,
                 tick: cmd.tick,
-                forward: 0.0,
-                steer: 0.0,
-                brake: 0.0,
+                forward,
+                steer,
+                brake,
             });
             while entry.frames.len() > MAX_INPUT_FRAMES {
                 entry.frames.pop_front();

@@ -623,6 +623,82 @@ pub struct VesselInputLog {
 #[derive(Resource, Default)]
 pub struct OwnedInputLog(pub HashMap<u64, VesselInputLog>);
 
+/// CLIENT-side latest local drive input per owned gid `(throttle, steer)`, captured
+/// from the outbound `SetPorts` in `record_control_input`. The render-lead
+/// (`lead_owned_rover_render`) reads it to visually anticipate the rover's motion —
+/// leading the *rendered* pose forward/turning by ~RTT so driving feels responsive
+/// even though physics stays 100% host-authoritative (see the visual-prediction
+/// design). Purely presentational; never touches the sim. Empty on host/standalone.
+#[derive(Resource, Default)]
+pub struct LocalDriveInput(pub HashMap<u64, (f64, f64)>);
+
+/// HOST-side per-tick input jitter buffer for CLIENT-owned (predicted) rovers.
+///
+/// The owning client emits a **contiguous, per-fixed-tick, `seq`-stamped**
+/// `SetPorts` stream (see `drive_from_bindings`). Without this buffer the host
+/// applied each forwarded `SetPorts` immediately in `drain_sync_inbox` (`Update` =
+/// RENDER cadence) and the port latched — so when the host's render rate lagged
+/// the fixed rate it *subsampled* the input stream, integrating a DIFFERENT input
+/// sequence than the client predicted with. Harmless for a held (constant) input,
+/// but during a turn the changing steer is subsampled → the authoritative yaw
+/// diverges from the prediction → the reconcile snap = the post-turn wobble.
+///
+/// The host consumer ([`BufferedClientInputs::next_for_tick`], run once per
+/// `FixedUpdate` tick BEFORE the drive/physics) applies exactly ONE buffered input
+/// per tick, in `seq` order, latching the last one when none is newer — so the
+/// host integrates the SAME sequence the client did, regardless of its render FPS.
+/// `BTreeMap` keeps `seq` order (absorbing reorder on the unreliable
+/// `ControlStream`). Empty on client/standalone.
+#[derive(Resource, Default)]
+pub struct BufferedClientInputs {
+    /// gid → (seq → the `SetPorts` writes stamped with that seq), still unapplied.
+    pub pending: HashMap<u64, std::collections::BTreeMap<u32, Vec<(String, f64)>>>,
+    /// gid → highest `seq` consumed so far (the per-tick cursor).
+    pub applied: HashMap<u64, u32>,
+    /// gid → the most recently consumed writes, re-applied (latched) on a tick
+    /// with no newer input so the consumer stays the body's sole port authority.
+    pub last_writes: HashMap<u64, Vec<(String, f64)>>,
+}
+
+impl BufferedClientInputs {
+    /// Record a forwarded client input (`seq` → `writes`) for `gid`. `seq` 0 is
+    /// reserved ("no input") and ignored.
+    pub fn push(&mut self, gid: u64, seq: u32, writes: Vec<(String, f64)>) {
+        if seq == 0 {
+            return;
+        }
+        self.pending.entry(gid).or_default().insert(seq, writes);
+    }
+
+    /// Consume ONE input for `gid` this fixed tick, in `seq` order: the smallest
+    /// buffered `seq` past the cursor. Returns the latched last input when none is
+    /// newer (so the caller always writes → stays the port authority). When the
+    /// backlog exceeds `cap` (host fell behind), skips to the newest to bound added
+    /// latency. Returns `None` only before the first input for `gid` ever arrives.
+    pub fn next_for_tick(&mut self, gid: u64, cap: usize) -> Option<Vec<(String, f64)>> {
+        let cursor = self.applied.get(&gid).copied().unwrap_or(0);
+        let target = {
+            let Some(map) = self.pending.get(&gid) else {
+                return self.last_writes.get(&gid).cloned();
+            };
+            match map.range((cursor + 1)..).next().map(|(s, _)| *s) {
+                None => return self.last_writes.get(&gid).cloned(),
+                Some(ns) if map.len() > cap => *map.keys().next_back().unwrap_or(&ns),
+                Some(ns) => ns,
+            }
+        };
+        let map = self.pending.get_mut(&gid)?;
+        let writes = map.get(&target).cloned();
+        // Drop everything up to and including the consumed seq.
+        *map = map.split_off(&(target + 1));
+        self.applied.insert(gid, target);
+        if let Some(w) = &writes {
+            self.last_writes.insert(gid, w.clone());
+        }
+        writes
+    }
+}
+
 /// Host-side record of the highest input `seq` applied per gid, written when a
 /// `SetPorts` control command is authorized + applied. Stamped into each snapshot's
 /// `last_input_seq` so the owning client knows how far the authoritative sim has

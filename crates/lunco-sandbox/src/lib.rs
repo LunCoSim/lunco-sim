@@ -105,10 +105,86 @@ pub fn run_headless() -> AppExit {
     run_with_mode(true)
 }
 
+/// Usage text for `--help`. Every flag here is one the binary ACTUALLY parses,
+/// and they are spread across crates — this crate (`--no-ui`, `--api`, `--scene`,
+/// `--no-vsync`, `--log-diag`), `ui::mod` (`--no-throttle`),
+/// `lunco_networking::NetworkMode::from_args` (`--host`, `--connect`),
+/// `lunco_networking::server::resolve_cert_paths` (`--cert`, `--key`) and
+/// `lunco_workbench::window_placement` (`--window-pos`). Grep all of them before
+/// editing this: an undocumented flag is invisible, and a documented flag that
+/// nothing parses is a lie.
+#[cfg(not(target_family = "wasm"))]
+fn help_text() -> String {
+    let api = lunco_core::session::DEFAULT_API_PORT;
+    let net = lunco_core::session::DEFAULT_HOST_PORT;
+    format!(
+        "\
+sandbox — the LunCoSim lunar simulator.
+
+USAGE:
+    sandbox [FLAGS]
+    sandbox rhai [--api PORT] [-e SNIPPET | -f FILE]
+
+FLAGS:
+    -h, --help           Print this help and exit.
+        --no-ui          Run headless (no window). Also via LUNCO_NO_UI=1.
+        --api [PORT]     Serve the HTTP command API (default {api}). NOT implied
+                         by --no-ui: without this flag there is no API port.
+                         POST /api/commands  {{\"command\":\"Name\",\"params\":{{…}}}}
+        --scene PATH     Load this USD scene at startup, relative to assets/.
+        --window-pos SPEC  Place the OS window, e.g. 1920x1080+0+0.
+
+NETWORKING:
+        --host [PORT]    Host a session over WebTransport (default {net}).
+        --connect ADDR   Join a hosted session (ADDR without a port ⇒ :{net}).
+                         A bare IP skips TLS validation (LAN/dev).
+        --cert PATH      TLS cert for --host: a certbot live dir, or a file
+                         (then --key, else the sibling privkey.pem). Omit both
+                         for a dev self-signed cert.
+        --key PATH       TLS private key, when --cert names a file.
+
+PERFORMANCE:
+        --no-vsync       Uncap the frame rate (present without vsync).
+        --no-throttle    Keep running at full rate while unfocused.
+        --log-diag       Log FPS / frame-time / physics diagnostics.
+
+SUBCOMMAND:
+    rhai                 REPL client against a RUNNING instance's --api port.
+                         Reads stdin, or -e SNIPPET / -f FILE for one-shot.
+
+Measuring FPS? Use --no-vsync --no-throttle, else you are timing the
+compositor and the unfocused power-save throttle, not the renderer.",
+    )
+}
+
+/// Handle `--help`/`-h` BEFORE the app is built: print usage and exit. It has to
+/// come first — building the app opens a window, spins up the GPU and loads a
+/// scene, which is why `sandbox --help` used to launch the simulator instead of
+/// answering the question.
+#[cfg(not(target_family = "wasm"))]
+fn print_help_if_requested() -> bool {
+    if std::env::args()
+        .skip(1)
+        .any(|a| a == "--help" || a == "-h")
+    {
+        println!("{}", help_text());
+        return true;
+    }
+    false
+}
+
 /// Composition root. Builds the shared core, then conditionally layers on the UI
 /// or the headless runner. Nothing UI-specific lives here beyond selecting the
 /// windowing backend in [`default_plugins`].
 fn run_with_mode(headless: bool) -> AppExit {
+    // Answer `--help` without building an app (see `print_help_if_requested`).
+    // Placed in the composition root, not in one bin's `main`, so EVERY entry
+    // point that runs the sandbox — GUI `sandbox`, headless `sandbox-server` —
+    // gets the same usage for free and they cannot drift apart.
+    #[cfg(not(target_family = "wasm"))]
+    if print_help_if_requested() {
+        return AppExit::Success;
+    }
     // Native deep-link single-instance gate (GUI only). Register the
     // `luncosim://` scheme handler (desktop integration, this crate), then decide
     // whether THIS process is the app or just a courier forwarding a clicked link
