@@ -269,28 +269,56 @@ fn mode_exposure(
     pin: Option<Res<lunco_celestial::OrbitalViewPin>>,
     sun: Option<Res<lunco_environment::LunarSun>>,
     sun_dir: Option<Res<lunco_celestial::SunDirectionWorld>>,
-    mut q_exposure: Query<&mut bevy::camera::Exposure, With<lunco_core::Avatar>>,
+    mut q_exposure: Query<
+        (
+            &mut bevy::camera::Exposure,
+            Option<&CellCoord>,
+            &Transform,
+            Option<&bevy::ecs::hierarchy::ChildOf>,
+        ),
+        With<lunco_core::Avatar>,
+    >,
+    q_grids: Query<&Grid>,
 ) {
     let (Some(config), Some(sun)) = (config, sun) else { return };
     if !config.spawn_hierarchy {
         return;
     }
     let orbital = pin.is_some_and(|p| p.active);
-    let target = if orbital {
-        // Orbital views frame a sunlit globe: the calibrated EV is correct.
-        sun.exposure_ev100
-    } else {
-        // Surface: expose for the ACTUAL light level, decided by the real
-        // sun elevation at the site (the emit dir's -y in site-ENU axes).
-        // Sunlit terrain meters at the calibrated EV; below the horizon the
-        // ground is earthshine-lit — open up to EV 9 so it stays readable.
-        // Smooth across the terminator (−1° .. +3.5° elevation band).
-        let elev = sun_dir.map(|d| (-d.0.y).asin()).unwrap_or(0.3);
-        let sunlit = ((elev + 0.02) / 0.08).clamp(0.0, 1.0);
-        9.0 + (sun.exposure_ev100 - 9.0) * sunlit
-    };
     let alpha = 1.0 - (-2.0 * time.delta_secs()).exp();
-    for mut exposure in &mut q_exposure {
+    for (mut exposure, cell, tf, child_of) in &mut q_exposure {
+        // Camera position in its parent grid's frame (site-ENU on the
+        // surface) via exact cell math — the camera's own GlobalTransform is
+        // floating-origin-relative (≈ zero) and useless for geography.
+        let cam_pos = match (cell, child_of.and_then(|c| q_grids.get(c.parent()).ok())) {
+            (Some(cell), Some(grid)) => grid.grid_position_double(cell, tf).as_vec3(),
+            _ => tf.translation,
+        };
+        let target = if orbital {
+            // Orbital views frame a sunlit globe: the calibrated EV is correct.
+            sun.exposure_ev100
+        } else {
+            // Surface: expose for the ACTUAL light level, decided by the sun
+            // elevation AT THE CAMERA'S LOCATION on the body — not at the
+            // site. The scroll-through exit can land the camera anywhere on
+            // the globe: with a site-referenced elevation, fully-sunlit
+            // ground elsewhere rendered ~3 stops open ("still overexposed").
+            // Local up = away from the body centre, which sits ~1 body
+            // radius below the site origin in the site-ENU frame.
+            // CRITICAL: a low sun does NOT mean dim surfaces — grazing
+            // incidence shrinks the LIT AREA, not the luminance of a
+            // sun-facing slope under the full ~124 klx. Any geometric
+            // daylight needs the full calibrated EV; the ramp down to the
+            // earthshine EV 9 spans ONLY the just-below-horizon band.
+            const MOON_RADIUS_M: f32 = 1.7374e6;
+            let to_sun = sun_dir.as_ref().map(|d| -d.0).unwrap_or(Vec3::Y);
+            let local_up = (cam_pos + Vec3::Y * MOON_RADIUS_M)
+                .try_normalize()
+                .unwrap_or(Vec3::Y);
+            let elev = to_sun.dot(local_up).clamp(-1.0, 1.0).asin();
+            let sunlit = ((elev + 0.02) / 0.02).clamp(0.0, 1.0);
+            9.0 + (sun.exposure_ev100 - 9.0) * sunlit
+        };
         exposure.ev100 += (target - exposure.ev100) * alpha;
     }
 }

@@ -79,7 +79,16 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     if (mat.transition < 0.5) {
         // --- Lat/Long grid (spherical bodies) — needs UVs.
 #ifdef VERTEX_UVS_A
-        base *= textureSample(albedo_tex, albedo_smp, in.uv).rgb;
+        // POLES: equirect longitude degenerates toward |lat| 90° — the
+        // pole-cap tiles compress the whole texture width into a small
+        // vertex fan, which renders as a smeared radial stripe down the
+        // polar meridian. Real polar imagery is nearly longitude-invariant,
+        // so cross-fade to a fixed-longitude sample there. (Both samples are
+        // unconditional: textureSample is illegal in non-uniform flow.)
+        let img = textureSample(albedo_tex, albedo_smp, in.uv).rgb;
+        let img_pole = textureSample(albedo_tex, albedo_smp, vec2(0.5, in.uv.y)).rgb;
+        let pole = smoothstep(0.95, 0.995, abs(in.uv.y * 2.0 - 1.0));
+        base *= mix(img, img_pole, pole);
         let ll_coords = in.uv * mat.subdivisions;
         let ll_f = abs(fract(ll_coords - 0.5) - 0.5) / fwidth(ll_coords);
         let ll_line = min(ll_f.x, ll_f.y);

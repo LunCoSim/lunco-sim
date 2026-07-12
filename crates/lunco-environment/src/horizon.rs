@@ -807,6 +807,15 @@ pub fn wire_terrain_materials(
 ) {
     let Some(mut shader_mats) = shader_mats else { return };
     let Some((sun_gt, tan_r, csm_far)) = pick_sun(&sun) else { return };
+    // NOTE on the near-camera march fade (`csm_far`): the fade is a PERF
+    // gate, not just cosmetics — streamed terrain tiles carry no baked
+    // shadow cache, so "march everywhere" ran the 48-step loop on every
+    // near pixel and turned low flight into a slideshow. The cost of the
+    // fade is that the CSM volume (~1.5 km) cannot contain multi-km ridge
+    // occluders, so near terrain reads slightly lighter than the same
+    // ground seen from altitude; the unconditional `SHADOW_FILL` in the
+    // terrain shaders keeps that difference subtle. The real cure is baked
+    // caches for streamed tiles.
     let to_sun_world: Vec3 = sun_gt.back().into();
 
     for (entity, terrain_gt, map, shadow_cache, shader_mat, std_mat) in &terrains {
@@ -837,12 +846,17 @@ pub fn wire_terrain_materials(
         // direction or terrain GT crosses it, alternating the ENTIRE terrain
         // between baked-cache shadows and the ray-march's below-horizon
         // short-circuit: "the shadow on the moon oscillates back and forth".
-        // Engage above ~0.3° elevation, release below ~0.06° — the band is
+        // Engage above ~0.01° elevation, release below ~0.003° — the band is
         // wider than any per-frame jitter, so the mode changes at most once
-        // per real sunrise/sunset.
+        // per real sunrise/sunset. The thresholds sit as LOW as possible: a
+        // disengaged cache means every terrain pixel runs the 48-step march
+        // per frame, and with the march now applied at ALL camera distances
+        // (see `csm_far` above) a polar sun parked in a "cache off" band
+        // turned whole sessions into a slideshow. Below the release
+        // threshold the march's own below-horizon short-circuit is cheap.
         let engaged = {
             let prev = cache_engaged.get(&entity).copied().unwrap_or(false);
-            let now = if prev { sun_local.y > 1.0e-3 } else { sun_local.y > 5.0e-3 };
+            let now = if prev { sun_local.y > 5.0e-5 } else { sun_local.y > 2.0e-4 };
             cache_engaged.insert(entity, now);
             now
         };

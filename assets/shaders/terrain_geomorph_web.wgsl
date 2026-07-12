@@ -9,6 +9,7 @@
     mesh_view_bindings::lights,
 }
 #import lunco::pbr_lit::lit_n
+#import lunco::horizon::SHADOW_FILL
 #import lunco::lunar::regolith_factor
 
 //!@ui      albedo            color  "Albedo"
@@ -313,5 +314,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         }
     }
 #endif
+    // Display-referred shadow fill, shared with every marched terrain shader
+    // (see `SHADOW_FILL`, lunco::horizon). The emissive-slot hemispheric fill
+    // above is scene-referred cd/m2 tuned for the old studio exposure — at the
+    // calibrated lunar EV it vanishes and near tiles crushed to black next to
+    // the fill-lifted heightfield.
+    color = vec4(color.rgb + base_albedo * SHADOW_FILL, color.a);
     return color;
 }

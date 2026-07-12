@@ -1426,7 +1426,13 @@ fn orbit_system(
                 && child_of.parent() != root_grid
             {
                 pin.anchor_world = sample.cam_root;
-                pin.anchor_rotation = sample.cam_rot_root;
+                // Keep the heading but LEVEL OUT: the orbital attitude looks
+                // at the body centre (nadir-ish), which reads upside-down as
+                // a surface view. A mild downward pitch puts the ground at
+                // the bottom of the screen and the sky above — the natural
+                // hand-over attitude for the descent.
+                let (yaw, _pitch, _roll) = sample.cam_rot_root.to_euler(EulerRot::YXZ);
+                pin.anchor_rotation = Quat::from_euler(EulerRot::YXZ, yaw, -0.55, 0.0);
                 zoom.delta = 0.0;
                 commands.trigger(ReleaseVessel { target: avatar_ent });
                 info!("ORBITAL SCROLL-THROUGH: exiting to surface at current pose");

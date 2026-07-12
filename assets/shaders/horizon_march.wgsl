@@ -98,3 +98,11 @@ fn sun_visibility_resolved(
     }
     return sun_visibility(height_tex, uv, sun_local, tan_sun_r, size, res);
 }
+
+// Additive shadow fill applied by every consumer AFTER the march multiply:
+// display-referred, shaped by the surface albedo so texture/relief survive.
+// A multiplicative visibility floor CANNOT light a polar scene — at grazing
+// sun even fully LIT flat ground shades to a few percent, so any fraction of
+// it is black. This is the deliberate artistic stand-in for earthshine and
+// scattered light; on sunlit ground it is a negligible +2%.
+const SHADOW_FILL: f32 = 0.26;

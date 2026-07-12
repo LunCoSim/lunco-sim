@@ -153,7 +153,20 @@ pub fn setup_big_space_hierarchy(
     q_prior_origins: Query<Entity, With<FloatingOrigin>>,
     q_prior_fallback_lights: Query<Entity, With<lunco_core::FallbackSceneLight>>,
     mut q_exposure: Query<&mut bevy::camera::Exposure>,
+    subsystems: Option<ResMut<lunco_core::subsystems::SubsystemToggles>>,
 ) {
+    // A site-anchored DEM twin authors its own rocks and bakes rock features
+    // into the far-field maps — the generated obstacle field on top is
+    // redundant decoration that costs over a second per frame in views that
+    // include it (thousands of collider+mesh rock entities across the DEM;
+    // measured 0.7 → 32 FPS by toggling it off). Default it OFF here; the
+    // procedural rover sandbox (no site anchor) keeps it, and
+    // `SetSubsystemEnabled { name: "obstacle-field", on: true }` re-enables
+    // it live for rover-testing on a twin.
+    if let Some(mut toggles) = subsystems {
+        toggles.set("obstacle-field", false);
+        info!("celestial takeover: obstacle-field subsystem defaulted OFF (site-anchored scene)");
+    }
     // Earth/Moon textures load from the `cached_textures://` source on EVERY
     // platform — NOT baked into the binary. Desktop reads the cache dir; wasm
     // HTTP-fetches them same-origin (`cache_dir()` = ".cache" on wasm, so the
@@ -334,6 +347,13 @@ pub fn setup_big_space_hierarchy(
     for mut exposure in q_exposure.iter_mut() {
         exposure.ev100 = ls.exposure_ev100;
     }
+    // NOTE on shadow readability: the ~23-stop lunar range (128 klx direct
+    // sun vs sub-lux earthshine) is NOT handled here with a global ambient —
+    // that lit the sky dome gray while the terrain march (which multiplies
+    // the FINAL color) killed it on the very terrain it was meant to lift.
+    // The fill lives in the march itself: `horizon_march.wgsl` floors sun
+    // visibility at a few percent, so shadowed terrain keeps its relief and
+    // space stays black.
     commands.insert_resource(sun.shadow_map());
     // Top-level entity, NOT a child of the Solar Grid: a `DirectionalLight`
     // only needs orientation (`update_sun_light_system` steers it in WORLD
