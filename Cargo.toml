@@ -378,6 +378,19 @@ split-debuginfo = "unpacked"
 [profile.dev.package."*"]
 opt-level = 3
 
+# avian 0.7's island solver carries `debug_assert!`s on incremental island
+# bookkeeping that a BATCH entity-despawn transiently violates — a full scene
+# swap (`load_scene` despawns the whole prior scene's connected physics island
+# in one frame) trips `island.body_count > 0` before avian's own empty-island
+# cleanup runs the next line, ABORTING dev builds on every tutorial scene load.
+# The code path is correct (it removes the empty island immediately after); only
+# the over-strict debug check panics. Release builds already omit it (the prior
+# verified runs were release). Disable it for avian ONLY, keeping our own
+# debug-assertions and avian's opt-level.
+[profile.dev.package.avian3d]
+opt-level = 3
+debug-assertions = false
+
 # ── Release profile (native, speed-first) ────────────────────────────
 # Default `cargo build --release` targets native binaries. Wants runtime
 # speed, not binary size. Earlier this profile was tuned for the wasm web
