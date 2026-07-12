@@ -1,5 +1,5 @@
 //! Screen recording: hotkey + persisted settings + command surface over
-//! Bevy 0.18's built-in [`EasyScreenRecordPlugin`] (h264 / x264 encoder).
+//! Bevy's built-in [`EasyScreenRecordPlugin`] (h264 / x264 encoder).
 //!
 //! # What's always compiled
 //!
@@ -17,22 +17,16 @@
 //! `--features recording` on Linux/macOS. Without the feature, toggling logs a
 //! warning and records nothing.
 //!
-//! # Filenames & output folder (built-in encoder constraints)
+//! # Filenames & output folder
 //!
-//! Bevy 0.18.1's recorder hard-codes the output to `<window-title>-<epoch_ms>.h264`
-//! (a raw H.264 elementary stream) written to the **process working directory** —
-//! the `output_dir` field only exists on bevy `main`, not 0.18.1. Our window
-//! title is the binary name (`sandbox`), so files come out `sandbox-<ms>.h264`,
-//! i.e. "binary + timestamp".
-//!
-//! To honour [`RecordingSettings::output_dir`] anyway, on stop we spawn a small
-//! worker thread (`encoder::spawn_relocator`) that waits for the encoder's own
-//! background flush to finish (file size goes stable), then relocates the new
-//! `.h264` into the configured folder under a **sanitized** name — applying the
-//! `overwrite` flag. It runs off the Bevy loop on purpose: the app's winit loop
-//! can go idle right after the stop event, so a poll-in-`Update` finalizer would
-//! stall until something else ticked the loop. Best-effort and time-boxed: on
-//! timeout the file is left in the working directory (logged), never blocking.
+//! The recorder writes `<window-title>-<epoch_ms>.h264` (a raw H.264 elementary
+//! stream) into the plugin's `output_dir`, which we set from
+//! [`RecordingSettings::output_dir`] at startup (Bevy ≥0.19; on 0.18.1 this field
+//! did not exist and files landed in the working directory, which required a
+//! post-stop relocator thread — since removed). The dir is resolved once when the
+//! plugin is built; changing `output_dir` in settings takes effect on the next
+//! launch. The [`RecordingSettings::overwrite`] flag is advisory — the encoder
+//! timestamps filenames, so collisions don't occur.
 //!
 //! `.h264` is a raw stream; remux to mp4 with
 //! `ffmpeg -framerate 30 -i file.h264 -c copy file.mp4`.
@@ -292,7 +286,7 @@ fn recording_hotkey_input(
     }
 }
 
-// ─── Encoder bridge + file relocation (feature-gated) ────────────────────────
+// ─── Encoder bridge (feature-gated) ──────────────────────────────────────────
 
 /// Everything that touches the `bevy_dev_tools` encoder. Compiled only with the
 /// `recording` feature (which is native-/non-Windows-only — that's where the
@@ -300,39 +294,14 @@ fn recording_hotkey_input(
 #[cfg(feature = "recording")]
 mod encoder {
     use super::*;
-    use std::collections::HashSet;
-    use std::ffi::OsString;
-    use std::path::{Path, PathBuf};
 
-    /// Holds the `.h264` set present in the working dir when recording started,
-    /// so the relocator can spot the new file (set difference). The built-in
-    /// 0.18.1 encoder writes there with no folder control — see the module docs.
-    #[derive(Resource, Default)]
-    pub(super) struct RecorderIo {
-        snapshot: HashSet<OsString>,
-    }
-
-    /// `.h264` files currently in `dir`.
-    fn h264_in(dir: &Path) -> HashSet<OsString> {
-        let mut set = HashSet::new();
-        if let Ok(rd) = std::fs::read_dir(dir) {
-            for entry in rd.flatten() {
-                if entry.path().extension().and_then(|e| e.to_str()) == Some("h264") {
-                    set.insert(entry.file_name());
-                }
-            }
-        }
-        set
-    }
-
-    /// Bridge [`RecordingState`] changes → `RecordScreen` messages. On start,
-    /// snapshot the working dir's `.h264` files; on stop, hand off relocation to
-    /// a background thread. Skips the initial `active == false` observation so
-    /// startup doesn't emit a spurious `Stop`.
+    /// Bridge [`RecordingState`] changes → `RecordScreen` messages so our
+    /// Ctrl+Shift+R hotkey drives the encoder (its own single-key toggle is
+    /// parked on F24). Skips the initial `active == false` observation so startup
+    /// doesn't emit a spurious `Stop`. The encoder writes finished files straight
+    /// into the plugin's `output_dir` (set in [`build_recording`]).
     pub(super) fn drive_screen_record(
         state: Res<RecordingState>,
-        settings: Res<RecordingSettings>,
-        mut io: ResMut<RecorderIo>,
         mut last: Local<Option<bool>>,
         mut writer: bevy::prelude::MessageWriter<bevy_dev_tools::RecordScreen>,
     ) {
@@ -344,176 +313,10 @@ mod encoder {
             return;
         }
         *last = Some(state.active);
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         if state.active {
-            io.snapshot = h264_in(&cwd);
             writer.write(bevy_dev_tools::RecordScreen::Start);
         } else {
             writer.write(bevy_dev_tools::RecordScreen::Stop);
-            // Relocate OFF the Bevy loop: the encoder flushes the file on its own
-            // background thread, and the app's winit loop may go idle right after
-            // the stop event (reactive mode / occluded window) — so a poll-in-
-            // `Update` finalizer would stall until something else ticked the loop
-            // (observed in testing). A dedicated thread is independent of that.
-            spawn_relocator(
-                std::mem::take(&mut io.snapshot),
-                cwd,
-                settings.resolved_output_dir(),
-                settings.overwrite,
-            );
-        }
-    }
-
-    /// Wait (off the Bevy loop) for the encoder's new `.h264` to appear in `cwd`
-    /// and finish flushing — its size stable for ~0.6 s — then move it into
-    /// `out_dir`. Time-boxed; on timeout the file is left in `cwd` (logged).
-    ///
-    /// Pure std + a worker thread: deliberately bypasses the `disallowed_methods`
-    /// lint (raw `std::fs`/`std::thread`), which exists to keep wasm-reachable
-    /// code portable. This whole module is `#[cfg(feature = "recording")]`, which
-    /// is native-/non-Windows-only and never compiled for wasm.
-    #[allow(clippy::disallowed_methods)]
-    fn spawn_relocator(
-        snapshot: HashSet<OsString>,
-        cwd: PathBuf,
-        out_dir: PathBuf,
-        overwrite: bool,
-    ) {
-        use std::time::Duration;
-        const STEP: Duration = Duration::from_millis(200);
-        const STEP_MS: u64 = 200;
-        const FIND_TIMEOUT_MS: u64 = 15_000;
-        const STABLE_MS: u64 = 600;
-        const TOTAL_TIMEOUT_MS: u64 = 30_000;
-
-        std::thread::spawn(move || {
-            // 1. Find the file the encoder created (not present at start).
-            let mut waited = 0u64;
-            let name = loop {
-                if let Some(n) = h264_in(&cwd).difference(&snapshot).next().cloned() {
-                    break n;
-                }
-                if waited >= FIND_TIMEOUT_MS {
-                    warn!("[recording] no .h264 appeared after stop; gave up");
-                    return;
-                }
-                std::thread::sleep(STEP);
-                waited += STEP_MS;
-            };
-
-            // 2. Wait for the encoder's flush to finish (size stable).
-            let src = cwd.join(&name);
-            let mut last_size = 0u64;
-            let mut stable = 0u64;
-            let mut total = waited;
-            loop {
-                let size = std::fs::metadata(&src).map(|m| m.len()).unwrap_or(0);
-                if size > 0 && size == last_size {
-                    stable += STEP_MS;
-                } else {
-                    stable = 0;
-                    last_size = size;
-                }
-                if stable >= STABLE_MS {
-                    break;
-                }
-                if total >= TOTAL_TIMEOUT_MS {
-                    warn!("[recording] {} never stabilized; left in working dir", src.display());
-                    return;
-                }
-                std::thread::sleep(STEP);
-                total += STEP_MS;
-            }
-
-            // 3. Move it into the configured folder.
-            relocate(&src, &out_dir, overwrite, &name);
-        });
-    }
-
-    /// Move `src` into `dir` under a shell-safe name, honouring `overwrite`.
-    /// Falls back to copy+remove across filesystems. Logs the final path and a
-    /// quoted ffmpeg remux hint. Runs on the relocator thread (see
-    /// `spawn_relocator` for the `disallowed_methods` rationale).
-    #[allow(clippy::disallowed_methods)]
-    fn relocate(src: &Path, dir: &Path, overwrite: bool, name: &OsString) {
-        if let Err(e) = std::fs::create_dir_all(dir) {
-            warn!(
-                "[recording] mkdir {} failed: {e}; left {} in working dir",
-                dir.display(),
-                src.display()
-            );
-            return;
-        }
-        // The built-in encoder names the file after the window title, which can
-        // contain spaces / em-dashes (e.g. "sandbox — Listening on 4011-…"):
-        // ugly and shell-hostile. Sanitize to `<safe>-<ms>.h264`.
-        let safe = sanitize_filename(name);
-        let mut dest = dir.join(&safe);
-        if dest.exists() && !overwrite {
-            let stem = dest
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("recording")
-                .to_string();
-            dest = dir.join(format!("{stem}-1.h264"));
-        }
-        let moved = std::fs::rename(src, &dest).is_ok()
-            || (std::fs::copy(src, &dest).is_ok() && std::fs::remove_file(src).is_ok());
-        if moved {
-            info!("[recording] saved {}", dest.display());
-            info!(
-                "[recording] raw H.264 — remux: ffmpeg -framerate 30 -i '{}' -c copy '{}.mp4'",
-                dest.display(),
-                dest.with_extension("").display()
-            );
-        } else {
-            warn!(
-                "[recording] could not move {} → {}; left in working dir",
-                src.display(),
-                dest.display()
-            );
-        }
-    }
-
-    #[cfg(test)]
-    mod enc_tests {
-        #[test]
-        fn sanitizes_window_title_name() {
-            let n = std::ffi::OsString::from("sandbox — Listening on 4011-1781233931122.h264");
-            assert_eq!(
-                super::sanitize_filename(&n),
-                "sandbox-Listening-on-4011-1781233931122.h264"
-            );
-        }
-
-        #[test]
-        fn sanitize_trims_and_collapses() {
-            let n = std::ffi::OsString::from("  weird   name!!.h264 ");
-            assert_eq!(super::sanitize_filename(&n), "weird-name-.h264");
-        }
-    }
-
-    /// Make a filename shell-safe: keep `[A-Za-z0-9._]`, collapse every other
-    /// run (spaces, em-dashes, hyphens, …) into a single `-`, and trim leading/
-    /// trailing `-`. Empty result falls back to `recording.h264`.
-    fn sanitize_filename(name: &OsString) -> String {
-        let raw = name.to_string_lossy();
-        let mut out = String::with_capacity(raw.len());
-        let mut prev_sep = false;
-        for c in raw.chars() {
-            if c.is_ascii_alphanumeric() || c == '.' || c == '_' {
-                out.push(c);
-                prev_sep = false;
-            } else if !prev_sep {
-                out.push('-');
-                prev_sep = true;
-            }
-        }
-        let trimmed = out.trim_matches('-');
-        if trimmed.is_empty() {
-            "recording.h264".to_string()
-        } else {
-            trimmed.to_string()
         }
     }
 }
@@ -531,20 +334,21 @@ pub fn build_recording(app: &mut App) {
 
     #[cfg(feature = "recording")]
     {
+        let dir = lunco_settings::load_section_from_disk::<RecordingSettings>()
+            .resolved_output_dir();
         app.add_plugins(bevy_dev_tools::EasyScreenRecordPlugin {
             // We drive recording via Ctrl+Shift+R → RecordScreen messages, so
             // park the plugin's own single-key toggle on a key no keyboard has
             // (its default is Space, which we want to keep free).
             toggle: KeyCode::F24,
+            // Native output folder (Bevy ≥0.19). Resolved once at startup.
+            output_dir: Some(dir.clone()),
             ..default()
         });
-        app.init_resource::<encoder::RecorderIo>();
         app.add_systems(Update, encoder::drive_screen_record);
-        let dir = lunco_settings::load_section_from_disk::<RecordingSettings>()
-            .resolved_output_dir();
         info!(
-            "[recording] encoder enabled (Ctrl+Shift+R). bevy 0.18.1 writes \
-             <title>-<ms>.h264 to the working dir; finished files are moved to {}.",
+            "[recording] encoder enabled (Ctrl+Shift+R). Writes \
+             <title>-<ms>.h264 to {}.",
             dir.display()
         );
     }

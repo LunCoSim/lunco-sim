@@ -676,9 +676,14 @@ impl Panel for UsdViewportPanel {
         // the full panel body) and written after paint via `defer` —
         // the panel has no `&mut World`.
         let panel_rect = PanelRects::panel_rect_from_ui(ui);
+        // Authoritative scene-vs-chrome signal — egui's own occlusion-aware hit
+        // test (same as the workbench ViewportPanel), so a pick over this USD
+        // preview reaches the scene and a pick over surrounding chrome does not.
+        let over_scene = PanelRects::scene_pointer_from_ui(ui);
         ctx.defer(move |world| {
             if let Some(mut rects) = world.get_resource_mut::<PanelRects>() {
                 rects.record(USD_VIEWPORT_PANEL_ID, panel_rect);
+                rects.record_scene_panel(over_scene);
             }
         });
 

@@ -1409,14 +1409,6 @@ fn classify_connector(
     }
 }
 
-/// Extract a `"literal"` from an `Expression::Terminal` that holds
-// Local `string_literal_of` deleted. Replaced by the canonical
-// `crate::ast_extract::string_literal_value`, which checks
-// `TerminalType::String` properly and decodes the full Modelica
-// escape table. The old local was a third divergent implementation
-// of the same op (strict-type check missing, no escape decoding,
-// `trim_matches('"')` instead of exact-one-pair strip).
-
 /// Lookup the first colored graphic's line / fill color on a
 /// connector class. Split out from the old `resolve_connector_icon_color`
 /// so it can be called alongside `classify_connector` from the

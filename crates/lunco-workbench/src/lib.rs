@@ -2059,6 +2059,14 @@ fn render_workbench(world: &mut World) {
         anchors.clear();
     }
 
+    // Reset the per-frame "pointer over scene" signal before any panel renders;
+    // each scene-hosting viewport panel OR-folds its egui-authoritative hit test
+    // back in as it paints. A frame with no scene panel (or pointer off-scene)
+    // then reads `false`. (The rect map persists — only this bool resets.)
+    if let Some(mut rects) = world.get_resource_mut::<viewport::PanelRects>() {
+        rects.reset_pointer_over_scene();
+    }
+
     let theme = world.resource::<lunco_theme::Theme>().clone();
 
     // Apply theme to the egui ctx itself (not just per-ui) — the
