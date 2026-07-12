@@ -6938,6 +6938,7 @@ dependencies = [
  "lunco-core",
  "lunco-cosim",
  "lunco-time",
+ "quick-xml 0.39.4",
  "serde",
  "serde_json",
 ]

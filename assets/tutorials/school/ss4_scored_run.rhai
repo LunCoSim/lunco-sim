@@ -69,17 +69,19 @@ fn on_event(me, evt) {
 }
 
 // DEBUG autopilot — run the whole scored traverse hands-free for regression.
+// The traverse is authored as pure DATA (a timeline): `RegisterTimeline` can
+// store it in the Twin and the BT.CPP-XML codec can export it for Groot2/ROS.
 fn task(me) {
     if !is_debug() { return; }
-    let rover = "/Traverse/Rover";
-    let poi   = "/Traverse/POI";
-    seq([
-        wait(1.0),
-        once(|m| cmd("PossessVessel", #{ target: find(rover) })),
-        wait(0.5),
-        step(|m| nav_to(find(rover), world_pos(find(poi)), 0.75, 8.0), |m| arrived(find(rover), world_pos(find(poi)), 8.0)),
-        wait(0.5),
-        step(|m| nav_to(find(rover), [-380.0, 1.0, -380.0], 0.75, 11.0), |m| arrived(find(rover), [-380.0, 1.0, -380.0], 11.0)),
-        #{ act: |m| brake(find(rover)), secs: 1.5 },
-    ])
+    let r = "/Traverse/Rover";
+    let drive = [
+        #{ wait: 1.0 },
+        #{ possess: r },
+        #{ wait: 0.5 },
+        #{ move_to_entity: "/Traverse/POI", speed: 0.75, radius: 8.0, subject: r },
+        #{ wait: 0.5 },
+        #{ move_to: [-380.0, 1.0, -380.0], speed: 0.75, radius: 11.0, subject: r },
+        #{ brake: true, secs: 1.5, subject: r },
+    ];
+    seq(compile_timeline(drive))
 }

@@ -14,13 +14,30 @@
 #
 # ── PLACEHOLDER TERRAIN ──────────────────────────────────────────────────────
 # The real relief — the NE→SW rille (or the crater bowl, task §3.2 "вместо борозды
-# — кратер") 40–50 m deep with borderline slopes — is authored OFFLINE as a
-# float32 GeoTIFF DEM and imported as a `dem` terrain layer (see
-# 04_IMPLEMENTATION_PLAN.md §1). That is a roadmap item (P0.2). Until it lands,
-# this scene uses a flat plot + a blocky SE hill so the lessons load and the
-# layout (start / POI / hill / sun / Earth) is correct. Swap the `Ground` prim for
-# the dem layer when the DEM is baked; nothing else here changes.
-# NEEDS: DEM crater/rille terrain (roadmap P0.2).
+# — кратер") 40–50 m deep with borderline slopes — is a roadmap item (P0.2). Until
+# it lands, this scene uses a flat plot + a blocky SE hill so the lessons load and
+# the layout (start / POI / hill / sun / Earth) is correct.
+#
+# ── ACTIVATION RECIPE (verified against the layered-terrain parser) ───────────
+# The relief runs on the SAME layered pipeline as moonbase_scene.usda. It needs a
+# `dem` base layer with a resolvable `demSource` (a flat/analytic base is NOT
+# supported — `lunco-sandbox/src/lib.rs` bails with no ground if `demSource` is
+# absent). Two ways to supply the base:
+#   • REAL DEM (event-grade): bake the site's float32 GeoTIFF so it matches the
+#     ДЗЗ/QGIS shadow analysis (shared geometry, below). This is the event target.
+#   • Synthetic base (dev relief): a tiny flat 64×64 `Gray32Float` GeoTIFF (all
+#     zeros) + `metadata.yaml` (size_x_m=1000, resolution_x=64) under
+#     `terrain/flat1km/`, then carve one central bowl with an analytic EDIT prim
+#     (NOT the scattered `craters` layer):  def Xform "CentralBowl" {
+#       custom string lunco:edit = "crater 0 0 280 45" }  → 45 m bowl, ~19° walls.
+#     The collider ring auto-enables when an `edits`/`overzoom` layer is present.
+#
+# ⚠ CAUTION when activating: `arrived`/`distance` (math.rhai) are 3-D, so every
+# mission checkpoint authored at y≈1 (POI, the ДЗЗ route beads, the NW start) must
+# be re-authored to the bowl-floor height (centre floor ≈ −45 m) or the SS2/SS4
+# arrival objectives never fire. Kept flat here precisely so those lessons pass;
+# activate relief and re-height the checkpoints together.
+# NEEDS: DEM crater/rille terrain + checkpoint re-heighting (roadmap P0.2).
 def Xform "Traverse"
 {
     custom bool lunco:spawnable = false

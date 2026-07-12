@@ -45,20 +45,21 @@ fn on_event(me, evt) {
 
 // DEBUG autopilot — runs alongside the mission for CI/regression (see
 // first_drive.rhai). Release build → is_debug() false → a human drives.
+//
+// The drive is authored as pure DATA (a timeline) and lowered with
+// `compile_timeline` — the same steps `RegisterTimeline` stores in the Twin and
+// the BT.CPP-XML codec exports. `subject` drives the rover from the scenario host.
 fn task(me) {
     if !is_debug() { return; }
-    let rover = "/DrivingBasics/Rover";
-    let flag  = "/DrivingBasics/Flag";
-    seq([
-        wait(1.0),
-        once(|m| { cmd("PossessVessel", #{ target: find(rover) });
-                   notify_kind("[debug] autopilot engaged", "info"); }),
-        wait(0.5),
-        // Roll onto the flat first (satisfies roll_out), then climb to the flag.
-        step(|m| nav_to(find(rover), [-15.0, 0.0, 0.0], 0.6, 6.0),
-             |m| arrived(find(rover), [-15.0, 0.0, 0.0], 6.0)),
-        step(|m| nav_to(find(rover), world_pos(find(flag)), 0.6, 5.0),
-             |m| arrived(find(rover), world_pos(find(flag)), 5.0)),
-        #{ act: |m| brake(find(rover)), secs: 2.0 },
-    ])
+    let r = "/DrivingBasics/Rover";
+    let drive = [
+        #{ wait: 1.0 },
+        #{ possess: r },
+        #{ wait: 0.5 },
+        // Roll onto the flat first, then climb to the finish flag.
+        #{ move_to: [-15.0, 0.0, 0.0], speed: 0.6, radius: 6.0, subject: r },
+        #{ move_to_entity: "/DrivingBasics/Flag", speed: 0.6, radius: 5.0, subject: r },
+        #{ brake: true, secs: 2.0, subject: r },
+    ];
+    seq(compile_timeline(drive))
 }
