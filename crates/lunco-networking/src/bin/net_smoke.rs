@@ -73,6 +73,36 @@ const G3_GID: u64 = 0x00AB_C003;
 /// registration, well before `RUN_SECS` so the client observes the removal.
 const G3_DESPAWN_AT: f32 = 10.0;
 
+/// Cadence sub-test (proves the server-side input buffer): the client drives G2
+/// with a **changing** throttle SWEEP, one seq-stamped `SetPorts` per fixed tick.
+/// The host's `Update` is throttled below its fixed rate, so without the buffer
+/// its `drain`+latch *subsamples* the sweep and its integrated distance falls
+/// short of the client's ideal integral — the cadence divergence behind the
+/// post-turn wobble. With `LUNCO_INPUT_BUFFER=1` the host consumes the buffer one
+/// input per fixed tick, in seq order, and the distance matches.
+///
+/// Host `Update` target rate (below the 64 Hz fixed rate → forces subsampling).
+const HOST_UPDATE_HZ: f64 = 40.0;
+/// Peak forward speed at throttle 1.0 (matches `host_apply_and_integrate`).
+const FWD_SPEED: f32 = 2.0;
+
+/// Throttle for cadence tick `seq`: a positive sweep in [0.15, 1.0] (never 0 so G2
+/// keeps moving forward for the existing "G2 moved" assert), value CHANGING every
+/// tick so subsampling actually loses information.
+fn cadence_throttle(seq: u32) -> f64 {
+    0.575 + 0.425 * ((seq as f64) * 0.20).sin()
+}
+
+/// Whether the host consumes the per-tick input buffer (`LUNCO_INPUT_BUFFER=1`)
+/// instead of the latched, render-cadence-subsampled `DriveVel`.
+#[derive(Resource)]
+struct BufferEnabled(bool);
+
+/// Client-side running integral of the sweep it SENT — the distance the host
+/// should reach if it applied every input (the cadence ground truth).
+#[derive(Resource, Default)]
+struct ClientIdealX(f32);
+
 #[derive(Component)]
 struct TestRover;
 
@@ -114,7 +144,16 @@ fn main() {
     let is_host = matches!(mode, NetworkMode::Host { .. });
 
     let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
+    // Throttle the HOST's Update loop below the fixed rate so `drain_sync_inbox`
+    // (Update) subsamples the client's per-fixed-tick input stream — reproducing
+    // the render-cadence input loss the buffer fixes. The client runs unthrottled.
+    if is_host {
+        app.add_plugins(MinimalPlugins.set(bevy::app::ScheduleRunnerPlugin::run_loop(
+            std::time::Duration::from_secs_f64(1.0 / HOST_UPDATE_HZ),
+        )));
+    } else {
+        app.add_plugins(MinimalPlugins);
+    }
     app.add_plugins(bevy::log::LogPlugin::default());
     // A domain plugin (core/api/networking) uses `init_state`, which needs the
     // `StateTransition` schedule — absent from `MinimalPlugins`. `DefaultPlugins`
@@ -150,16 +189,25 @@ fn main() {
     app.add_systems(Startup, activate_smoke_merge_policy);
 
     if is_host {
+        let buffer_on = std::env::var("LUNCO_INPUT_BUFFER").as_deref() == Ok("1");
+        info!("[test] HOST input buffer: {}", if buffer_on { "ON" } else { "OFF (render-cadence subsample)" });
+        app.insert_resource(BufferEnabled(buffer_on));
         app.add_systems(Startup, host_spawn_rovers);
         app.add_observer(host_on_possess);
         app.add_observer(host_on_drive);
+        // Integrate per FIXED tick (not render Update): the cadence divergence is a
+        // fixed-vs-render-rate artifact, so the integrator must live on the fixed clock.
+        app.add_systems(FixedUpdate, host_apply_and_integrate);
         app.add_systems(
             Update,
-            (host_integrate, host_report, host_despawn_g3, host_author_journal_entry, host_journal_report),
+            (host_report, host_despawn_g3, host_author_journal_entry, host_journal_report),
         );
     } else {
         app.init_resource::<MaxProxyX>();
+        app.init_resource::<ClientIdealX>();
         app.add_systems(Startup, client_spawn_proxies);
+        // The cadence drive runs on the FIXED clock (one seq-stamped input per tick).
+        app.add_systems(FixedUpdate, client_drive_cadence);
         app.add_systems(
             Update,
             (client_act, test_apply_snapshots, client_report, client_author_journal_entry),
@@ -226,12 +274,20 @@ fn host_on_possess(
 /// Applied (authorized) drive → set the rover's synthetic forward speed from the
 /// `"throttle"` port write. An *unauthorized* drive never reaches here —
 /// `apply_sync_command` rejects it at the authority gate before triggering.
-fn host_on_drive(trigger: On<lunco_cosim::SetPorts>, mut q: Query<&mut DriveVel>) {
+fn host_on_drive(
+    trigger: On<lunco_cosim::SetPorts>,
+    mut q: Query<(&lunco_core::GlobalEntityId, &mut DriveVel)>,
+    mut buf: ResMut<lunco_core::BufferedClientInputs>,
+) {
     let cmd = trigger.event();
-    if let Ok(mut v) = q.get_mut(cmd.target) {
+    if let Ok((gid, mut v)) = q.get_mut(cmd.target) {
         if let Some((_, throttle)) = cmd.writes.iter().find(|(n, _)| n == "throttle") {
+            // Latched value — what the render-cadence path uses (buffer OFF): the
+            // LAST input seen this Update wins, dropping the intervening sweep.
             v.0 = *throttle as f32;
         }
+        // Buffered by seq — the per-tick path uses this (buffer ON).
+        buf.push(gid.get(), cmd.seq, cmd.writes.clone());
     }
 }
 
@@ -255,12 +311,26 @@ fn host_despawn_g3(
     }
 }
 
-/// Synthetic physics: integrate forward speed into the rover's x (stands in for
-/// the real cosim/avian drive→motion, which is out of scope for a wire test).
-fn host_integrate(time: Res<Time>, mut q: Query<(&DriveVel, &mut Transform), With<TestRover>>) {
+/// Synthetic physics on the FIXED clock: integrate forward speed into the rover's
+/// x. When the buffer is ON, pull this tick's throttle from the per-tick input
+/// buffer (seq-ordered, one per fixed tick) instead of the render-cadence-latched
+/// `DriveVel` — so the host integrates the client's full input sequence.
+fn host_apply_and_integrate(
+    time: Res<Time>,
+    buffer_on: Res<BufferEnabled>,
+    mut buf: ResMut<lunco_core::BufferedClientInputs>,
+    mut q: Query<(&RoverGid, &mut DriveVel, &mut Transform), With<TestRover>>,
+) {
     let dt = time.delta_secs();
-    for (v, mut tf) in q.iter_mut() {
-        tf.translation.x += v.0 * 2.0 * dt; // 2 m/s at full forward
+    for (gid, mut v, mut tf) in q.iter_mut() {
+        if buffer_on.0 {
+            if let Some(writes) = buf.next_for_tick(gid.0, 8) {
+                if let Some((_, throttle)) = writes.iter().find(|(n, _)| n == "throttle") {
+                    v.0 = *throttle as f32;
+                }
+            }
+        }
+        tf.translation.x += v.0 * FWD_SPEED * dt;
     }
 }
 
@@ -324,9 +394,41 @@ fn client_act(
         *acted = true;
         info!("[test] client requested possession of G2 (free) and G1 (host-owned)");
     }
-    // Drive both — only the owned one (G2) should actually move.
-    commands.trigger(lunco_cosim::SetPorts { target: rovers.g2, writes: vec![("throttle".into(), 1.0), ("steer".into(), 0.0)], seq: 0, tick: 0 });
+    // Drive G1 (host-owned) — must be REJECTED by the host authority gate (the
+    // client never owns it). G2 (owned) is driven by `client_drive_cadence` on the
+    // fixed clock — the seq-stamped sweep that the cadence sub-test measures.
     commands.trigger(lunco_cosim::SetPorts { target: rovers.g1, writes: vec![("throttle".into(), 1.0), ("steer".into(), 0.0)], seq: 0, tick: 0 });
+}
+
+/// Client cadence drive (FIXED clock): once possessed, send ONE seq-stamped
+/// `SetPorts` per fixed tick for G2 with a CHANGING throttle sweep, and accumulate
+/// the ideal x (integral of the sweep) — the distance the host reaches iff it
+/// applies EVERY input. The host's actual G2 x (adopted back via snapshot into the
+/// client's own G2 proxy) is compared against this in `client_report`: they match
+/// with the buffer, and fall short without it.
+fn client_drive_cadence(
+    time: Res<Time>,
+    local: Res<lunco_core::LocalSession>,
+    rovers: Option<Res<Rovers>>,
+    mut seq: Local<u32>,
+    mut ideal: ResMut<ClientIdealX>,
+    mut commands: Commands,
+) {
+    if local.0 .0 == 0 {
+        return; // handshake not yet received
+    }
+    let Some(rovers) = rovers else {
+        return;
+    };
+    *seq += 1;
+    let throttle = cadence_throttle(*seq);
+    commands.trigger(lunco_cosim::SetPorts {
+        target: rovers.g2,
+        writes: vec![("throttle".into(), throttle)],
+        seq: *seq,
+        tick: *seq as u64,
+    });
+    ideal.0 += (throttle as f32) * FWD_SPEED * time.delta_secs();
 }
 
 /// Client-side snapshot apply (mirrors `lunco_sandbox_edit::apply_incoming_snapshots`
@@ -355,22 +457,34 @@ fn client_report(
     rovers: Option<Res<Rovers>>,
     q: Query<(&RoverGid, &Transform), With<TestRover>>,
     mut maxx: ResMut<MaxProxyX>,
+    ideal: Res<ClientIdealX>,
 ) {
     if rovers.is_none() {
         return;
     }
+    let mut g2_now = 0.0;
     for (gid, tf) in q.iter() {
         let x = tf.translation.x;
         match gid.0 {
             G1_GID => maxx.g1 = maxx.g1.max(x),
-            G2_GID => maxx.g2 = maxx.g2.max(x),
+            G2_GID => {
+                maxx.g2 = maxx.g2.max(x);
+                g2_now = x;
+            }
             _ => {}
         }
     }
     *t += time.delta_secs();
     if *t > 1.0 {
         *t = 0.0;
-        info!("[test] client proxies x: g1={:.2} g2={:.2}", maxx.g1, maxx.g2);
+        // CADENCE metric: host's actual G2 x (via snapshot) vs the client's ideal
+        // integral of the sweep it sent. ratio → 1.0 means the host applied every
+        // input (buffer ON / no subsample); ratio < 1 is dropped-input cadence loss.
+        let ratio = if ideal.0 > 0.01 { g2_now / ideal.0 } else { 1.0 };
+        info!(
+            "[test] CADENCE g2_actual={:.2} ideal={:.2} ratio={:.3} (g1={:.2})",
+            g2_now, ideal.0, ratio, maxx.g1
+        );
     }
 }
 
