@@ -22,10 +22,29 @@ use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
-use lunco_terrain_core::HeightSource;
+use lunco_terrain_core::{
+    field_map, AspectField, ElevationField, HeightSource, SlopeField, Square, SurfaceField,
+};
 
 use crate::oracle::SurfaceOracle;
 use crate::stream_viz::DemHeightField;
+
+/// Largest raster a single `TerrainField` query may materialise per side (256×256 =
+/// 65 k texels). A deliberate readback for a tool/analyst, not a streaming path — the
+/// cap just bounds one JSON payload; larger coverage is a tiled/streamed concern.
+const FIELD_MAX_RES: usize = 256;
+
+/// Resolve a field id (the stable [`SurfaceField::id`]) to a boxed instance. The set
+/// mirrors `lunco_terrain_core`'s geometric fields; a caller naming an unknown field
+/// gets an error rather than a silent empty raster.
+fn field_by_id(id: &str) -> Option<Box<dyn SurfaceField>> {
+    match id {
+        "slope" => Some(Box::new(SlopeField)),
+        "aspect" => Some(Box::new(AspectField)),
+        "elevation" => Some(Box::new(ElevationField)),
+        _ => None,
+    }
+}
 
 /// `TerrainHeight` — analytic elevation / normal / slope at a world `(x, z)`,
 /// read straight from the DEM height field (no physics raycast).
@@ -107,14 +126,108 @@ impl ApiQueryProvider for TerrainHeightProvider {
     }
 }
 
+/// `TerrainField` — materialise a [`SurfaceField`] (slope / aspect / elevation) to a
+/// row-major `res × res` raster over a world-space square, read straight from the DEM
+/// height field. The **headless, tool-facing** twin of `TerrainHeight`: where that
+/// answers one point, this answers a region, so a rover planner / GIS export / the
+/// render VIEW all read the SAME derived numbers (fields are data; render is one
+/// consumer — see `docs/architecture/terrain-layered-rendering.md`).
+///
+/// params: `{ field: "slope"|"aspect"|"elevation", x: f64, z: f64, half: f64,
+/// res?: usize }` — `(x, z)` is the region centre (world), `half` its half side
+/// (metres), `res` the per-side texel count (default 64, capped at
+/// [`FIELD_MAX_RES`]). The finite-difference step is the field raster's own cell size
+/// ([`field_map`]), matching the derived-map / tile-UV convention.
+///
+/// returns: `{ found, field, res, half, center:[x,z], min, max, data:[f32; res*res] }`
+/// where `data` is row-major (row `iz` outer, `ix` inner), texel `(ix,iz)` sampled at
+/// the texel centre. `{ found: false }` when no DEM terrain covers the centre. The
+/// region is sampled as-is against the covering terrain's oracle; texels past the
+/// footprint edge take the oracle's clamped/extrapolated value (no NoData mask yet —
+/// that arrives with tiled multi-map coverage).
+pub struct TerrainFieldProvider;
+
+impl ApiQueryProvider for TerrainFieldProvider {
+    fn name(&self) -> &'static str {
+        "TerrainField"
+    }
+
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+        let field_id = params.get("field").and_then(serde_json::Value::as_str).unwrap_or("slope");
+        let Some(field) = field_by_id(field_id) else {
+            return ApiResponse::error(
+                ApiErrorCode::DeserializationError,
+                format!("TerrainField: unknown field `{field_id}` (slope|aspect|elevation)"),
+            );
+        };
+        let (Some(x), Some(z), Some(half)) = (
+            params.get("x").and_then(serde_json::Value::as_f64),
+            params.get("z").and_then(serde_json::Value::as_f64),
+            params.get("half").and_then(serde_json::Value::as_f64),
+        ) else {
+            return ApiResponse::error(
+                ApiErrorCode::DeserializationError,
+                "TerrainField: `x`, `z`, `half` required".to_string(),
+            );
+        };
+        if !(half > 0.0) {
+            return ApiResponse::error(
+                ApiErrorCode::DeserializationError,
+                "TerrainField: `half` must be > 0".to_string(),
+            );
+        }
+        let res = params
+            .get("res")
+            .and_then(serde_json::Value::as_u64)
+            .map(|r| (r as usize).clamp(1, FIELD_MAX_RES))
+            .unwrap_or(64);
+
+        // Snapshot DEM terrains, releasing the world borrow (see `TerrainHeight`).
+        let mut q = world.query::<(Entity, &GlobalTransform, &DemHeightField)>();
+        let terrains: Vec<(GlobalTransform, Arc<SurfaceOracle>)> =
+            q.iter(world).map(|(_, gt, hf)| (*gt, hf.0.clone())).collect();
+
+        // First terrain whose footprint covers the region centre wins. The field is
+        // evaluated in the terrain's LOCAL XZ frame — an origin-anchored DEM makes
+        // local ≈ world, but the inverse transform keeps it correct under offset/rot.
+        for (gt, oracle) in terrains {
+            let inv = gt.affine().inverse();
+            let local = inv.transform_point3(Vec3::new(x as f32, 0.0, z as f32));
+            let hx = oracle.half_extent();
+            if local.x.abs() > hx || local.z.abs() > hx {
+                continue;
+            }
+            let region = Square { center: [local.x as f64, local.z as f64], half };
+            let data = field_map(field.as_ref(), oracle.as_ref(), &region, res);
+            let (mut min, mut max) = (f32::INFINITY, f32::NEG_INFINITY);
+            for &v in &data {
+                min = min.min(v);
+                max = max.max(v);
+            }
+            return ApiResponse::ok(serde_json::json!({
+                "found": true,
+                "field": field_id,
+                "res": res,
+                "half": half,
+                "center": [x, z],
+                "min": min,
+                "max": max,
+                "data": data,
+            }));
+        }
+
+        ApiResponse::ok(serde_json::json!({ "found": false }))
+    }
+}
+
 /// Register the terrain query providers into the [`ApiQueryRegistry`]. Init-if-
 /// absent so plugin ordering vs. `LunCoApiPlugin` doesn't matter (mirrors
 /// `lunco_mobility::sensing::register_physics_queries`).
 pub fn register_terrain_queries(app: &mut App) {
     app.init_resource::<ApiQueryRegistry>();
-    app.world_mut()
-        .resource_mut::<ApiQueryRegistry>()
-        .register(TerrainHeightProvider);
+    let mut reg = app.world_mut().resource_mut::<ApiQueryRegistry>();
+    reg.register(TerrainHeightProvider);
+    reg.register(TerrainFieldProvider);
 }
 
 #[cfg(test)]
@@ -176,5 +289,59 @@ mod tests {
         let mut world = World::new();
         let resp = TerrainHeightProvider.execute(&mut world, &json!({"x": 1.0}));
         assert!(matches!(resp, ApiResponse::Error { .. }));
+    }
+
+    #[test]
+    fn field_raster_is_constant_slope_over_a_tilt() {
+        let mut world = World::new();
+        tilted_terrain(&mut world); // height = 0.1·x → slope atan(0.1) everywhere
+        let d = ok_data(TerrainFieldProvider.execute(
+            &mut world,
+            // ±5 m region well inside the ±10 m footprint, so every texel-centred
+            // finite difference stays in the linear region.
+            &json!({"field": "slope", "x": 0.0, "z": 0.0, "half": 5.0, "res": 4}),
+        ));
+        assert_eq!(d["found"], json!(true));
+        assert_eq!(d["res"], json!(4));
+        let want = 0.1f64.atan();
+        assert!((d["min"].as_f64().unwrap() - want).abs() < 1e-3, "min {d}");
+        assert!((d["max"].as_f64().unwrap() - want).abs() < 1e-3, "max {d}");
+        let data = d["data"].as_array().unwrap();
+        assert_eq!(data.len(), 16); // res*res
+        assert!(data.iter().all(|v| (v.as_f64().unwrap() - want).abs() < 1e-3));
+    }
+
+    #[test]
+    fn field_reports_not_found_outside_footprint() {
+        let mut world = World::new();
+        tilted_terrain(&mut world);
+        let d = ok_data(TerrainFieldProvider.execute(
+            &mut world,
+            &json!({"field": "slope", "x": 100.0, "z": 0.0, "half": 5.0}),
+        ));
+        assert_eq!(d["found"], json!(false));
+    }
+
+    #[test]
+    fn field_unknown_id_and_bad_half_error() {
+        let mut world = World::new();
+        tilted_terrain(&mut world);
+        let bad_field = TerrainFieldProvider
+            .execute(&mut world, &json!({"field": "mineral", "x": 0.0, "z": 0.0, "half": 5.0}));
+        assert!(matches!(bad_field, ApiResponse::Error { .. }));
+        let bad_half = TerrainFieldProvider
+            .execute(&mut world, &json!({"field": "slope", "x": 0.0, "z": 0.0, "half": 0.0}));
+        assert!(matches!(bad_half, ApiResponse::Error { .. }));
+    }
+
+    #[test]
+    fn field_res_is_capped() {
+        let mut world = World::new();
+        tilted_terrain(&mut world);
+        let d = ok_data(TerrainFieldProvider.execute(
+            &mut world,
+            &json!({"field": "elevation", "x": 0.0, "z": 0.0, "half": 5.0, "res": 100000}),
+        ));
+        assert_eq!(d["res"], json!(FIELD_MAX_RES as u64));
     }
 }

@@ -223,6 +223,16 @@ pub fn hazard_from_slope(slope_rad: f32, safe_rad: f32, cliff_rad: f32) -> f32 {
 /// A = hazard**. Inputs are `[0, 1]` per channel, row-major `res×res`; `rock` may
 /// be empty (→ 0) until a rock-density layer feeds it.
 pub fn pack_surface_rgba8(roughness: &[f32], ao: &[f32], rock: &[f32], hazard: &[f32]) -> Vec<u8> {
+    // The three required channels must be the same length (rock may be empty → 0);
+    // a mismatch means a caller bug that would otherwise silently produce a short,
+    // misaddressed texture. Catch it in dev; still degrade to the shortest in release.
+    debug_assert!(
+        roughness.len() == ao.len() && roughness.len() == hazard.len(),
+        "surface-map channels differ: rough={}, ao={}, hazard={}",
+        roughness.len(),
+        ao.len(),
+        hazard.len(),
+    );
     let n = roughness.len().min(ao.len()).min(hazard.len());
     let mut out = Vec::with_capacity(n * 4);
     let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;

@@ -49,7 +49,10 @@ pub fn create_quadsphere_tile_mesh(
             }
 
             let u_tex = (u_raw + std::f64::consts::PI) / (2.0 * std::f64::consts::PI);
-            let v_tex = (pos_sphere.y.asin() + (std::f64::consts::PI / 2.0)) / std::f64::consts::PI;
+            // `pos_sphere` is normalised, but rounding can nudge `y` a hair past ±1
+            // → `asin` = NaN → NaN UVs at the face corners. Clamp to the valid domain.
+            let v_tex = (pos_sphere.y.clamp(-1.0, 1.0).asin() + (std::f64::consts::PI / 2.0))
+                / std::f64::consts::PI;
             uvs.push(Vec2::new(u_tex as f32, 1.0 - v_tex as f32));
         }
     }

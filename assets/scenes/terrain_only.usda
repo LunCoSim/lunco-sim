@@ -1,0 +1,26 @@
+#usda 1.0
+(
+    defaultPrim = "TerrainOnly"
+    metersPerUnit = 1
+    upAxis = "Y"
+    doc = "Empty staging scene for viewing a streamed DEM with no default ground plane. Spawn terrain via SpawnDemTerrain; the app environment provides the sun."
+)
+
+def Xform "TerrainOnly" (
+    kind = "component"
+)
+{
+    custom bool lunco:spawnable = false
+    custom string lunco:description = "Bare scene: a free-flight camera and nothing else. Load a DEM on top with SpawnDemTerrain."
+
+    # --- Avatar (Camera) --- freeflight, parked high so a spawned DEM (site
+    #     elevation ~2 km) is in front of it before SetCameraLookAt reframes.
+    def Xform "Avatar"
+    {
+        string lunco:avatar = "true"
+        string lunco:cameraMode = "freeflight"
+        custom double3 lunco:cameraLookAt = (0.0, 1945.0, 0.0)
+        double3 xformOp:translate = (300.0, 2600.0, 500.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+}

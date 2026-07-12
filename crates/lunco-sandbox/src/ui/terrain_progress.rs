@@ -29,9 +29,9 @@ pub(crate) fn draw_terrain_progress(mut egui_ctx: EguiContexts, mut status: ResM
     ctx.request_repaint();
 
     let phase = if status.site.is_empty() {
-        status.phase.clone()
+        status.phase.label().to_string()
     } else {
-        format!("{} — {}", status.phase, status.site)
+        format!("{} — {}", status.phase.label(), status.site)
     };
 
     egui::Area::new(egui::Id::new("terrain_gen_overlay"))
@@ -68,15 +68,10 @@ pub(crate) fn draw_terrain_progress(mut egui_ctx: EguiContexts, mut status: ResM
                             }
                         }
                         ui.add_space(4.0);
-                        let subtext = if status.phase.contains("Download") {
-                            "Fetching heightmap file from server…"
-                        } else if status.phase.contains("Build") {
-                            "Decoding heightmap, stamping craters, building colliders…"
-                        } else if status.phase.contains("Refin") {
-                            "Refining high-detail meshes and colliders near camera…"
-                        } else {
-                            "Preparing terrain generation…"
-                        };
+                        // Typed phase → caption (no fragile substring matching; the
+                        // native "Baking" phase now shows the decode/stamp caption
+                        // instead of falling through to "Preparing…").
+                        let subtext = status.phase.caption();
                         ui.label(
                             egui::RichText::new(subtext)
                                 .weak()

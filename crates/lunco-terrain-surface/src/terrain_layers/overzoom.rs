@@ -44,14 +44,6 @@ impl TerrainLayer for OverzoomLayer {
     }
 }
 
-/// Parse a `lunco:layer = "overzoom"` prim:
-/// - `amplitude` — micro-relief amplitude (m), default 0.08; `0` disables relief;
-/// - `reliefScale` — coarsest relief wavelength (m), default 14;
-/// - `maxFeature` / `minFeature` — synthetic craterlet radius range (m), default 6 / 0.4;
-/// - `density` — mean craterlets per band cell, default 0.9; `0` disables craterlets;
-/// - `seed` — determinism seed.
-///
-/// Returns `None` (layer disabled) when both channels are zeroed.
 /// The default sub-DEM detail layer (all [`Overzoom::default`] parameters:
 /// 0.4–2 m craterlets handing off to the crater layer's 2 m SFD floor + FBM
 /// micro-relief). The USD bridge folds this in when a terrain authors no
@@ -64,6 +56,14 @@ pub fn default_overzoom_layer() -> Arc<dyn TerrainLayer> {
     Arc::new(OverzoomLayer { spec: Overzoom::default() })
 }
 
+/// Parse a `lunco:layer = "overzoom"` prim:
+/// - `amplitude` — micro-relief amplitude (m), default 0.08; `0` disables relief;
+/// - `reliefScale` — coarsest relief wavelength (m), default 14;
+/// - `maxFeature` / `minFeature` — synthetic craterlet radius range (m), default 6 / 0.4;
+/// - `density` — mean craterlets per band cell, default 0.9; `0` disables craterlets;
+/// - `seed` — determinism seed.
+///
+/// Returns `None` (layer disabled) when both channels are zeroed.
 pub(super) fn parse_overzoom_layer(a: &dyn LayerAttrSource) -> Option<Arc<dyn TerrainLayer>> {
     let defaults = Overzoom::default();
     let relief_amp = a.get_f32("amplitude").map(f64::from).unwrap_or(defaults.relief_amp);

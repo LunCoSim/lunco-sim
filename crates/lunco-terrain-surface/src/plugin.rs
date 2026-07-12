@@ -1,51 +1,24 @@
 //! Bevy plugin for streamed terrain.
 //!
-//! **M0: inert.** This registers [`TerrainSurfaceConfig`] only — no systems,
-//! no entities, no behaviour change — mirroring `lunco_terrain_globe::TerrainPlugin`.
-//! It establishes the crate's seam in the app so the streaming systems (tile
-//! manager + mesh build in M2, collider rings in M3) can be added behind this
-//! config without touching the call site again. See `docs/terrain-streaming-PLAN.md`.
+//! Wires the full DEM → oracle → streaming pipeline: the terrain build/edit
+//! systems ([`crate::terrain`]), the `TerrainHeight` scripting query
+//! ([`crate::query`]), off-thread derived surface/normal maps
+//! ([`crate::derived_layers`]), camera-driven CDLOD visual tile streaming
+//! ([`crate::stream_viz`]), the composable USD terrain-layer stack
+//! ([`crate::terrain_layers`]), and the per-body heightfield collider ring +
+//! physics-hold / tunnel / overturn rescues ([`crate::collider_ring`]). The
+//! runtime LOD knobs live in [`crate::stream_viz::TerrainLodConfig`].
 
 use bevy::prelude::*;
 
-/// Tunable streaming parameters. Edited live in the inspector later (M6); for now
-/// it is the inert anchor the streaming systems will read.
-#[derive(Resource, Debug, Clone, Copy)]
-pub struct TerrainSurfaceConfig {
-    /// Tile edge in metres. MUST be ≤ the big_space cell edge so a tile never
-    /// straddles a cell boundary (see crate docs / Part F.2).
-    pub tile_size_m: f64,
-    /// Chebyshev radius (in tiles) of the resident visual ring around the viewer.
-    pub load_radius_tiles: i32,
-    /// Chebyshev radius (in tiles) of the high-res **physics collider** ring
-    /// around dynamic bodies. Independent of visual LOD — kept small and at a
-    /// canonical resolution so contact is deterministic across peers (Part F.4).
-    pub collider_radius_tiles: i32,
-    /// Number of LOD steps from the finest (ring centre) outward.
-    pub lod_levels: u32,
-}
-
-impl Default for TerrainSurfaceConfig {
-    fn default() -> Self {
-        Self {
-            // 128 m ≪ the 2000 m world cell → tiles are plain children of one
-            // cell in the common case; well clear of any boundary.
-            tile_size_m: 128.0,
-            load_radius_tiles: 6,
-            collider_radius_tiles: 2,
-            lod_levels: 4,
-        }
-    }
-}
-
-/// Streamed-terrain plugin. Inert at M0 (config registration only).
+/// Streamed-terrain plugin — registers the DEM build, streaming, layer, and
+/// collider-ring systems (see the module docs for the pipeline).
 pub struct TerrainSurfacePlugin;
 
 impl Plugin for TerrainSurfacePlugin {
     fn build(&self, app: &mut App) {
         use lunco_settings::AppSettingsExt;
         app.register_settings_section::<lunco_settings::TerrainSettings>();
-        app.init_resource::<TerrainSurfaceConfig>();
         app.register_type::<crate::georef::TerrainGeoref>();
         app.register_type::<crate::stream_viz::TerrainShaderMode>();
         // Runtime-tunable LOD knobs (Inspector → "Terrain LOD") + the tile-mesh cache.
@@ -60,6 +33,10 @@ impl Plugin for TerrainSurfacePlugin {
         // `query("TerrainHeight", #{x, z})` — analytic height/normal/slope, no
         // raycast. See `crate::query`.
         crate::query::register_terrain_queries(app);
+        // Analysis-overlay VIEW: the `TerrainOverlayParams` resource + `SetTerrainOverlay`
+        // command + live-sync system that paints the slope-hazard transfer over the lit
+        // tiles (in-material shading plane of Data→Transfer→Blend). See `crate::overlay`.
+        crate::overlay::register(app);
         // P3b: bake DEM-derived surface (rough/AO/hazard) + normal layers off the
         // main thread and bind them onto the terrain `ShaderMaterial`. Inert
         // headless (gated on render assets existing). See `crate::derived_layers`.
