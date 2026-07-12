@@ -33,6 +33,10 @@ impl Plugin for TerrainSurfacePlugin {
         // `query("TerrainHeight", #{x, z})` — analytic height/normal/slope, no
         // raycast. See `crate::query`.
         crate::query::register_terrain_queries(app);
+        // Analysis-overlay VIEW: the `TerrainOverlayParams` resource + `SetTerrainOverlay`
+        // command + live-sync system that paints the slope-hazard transfer over the lit
+        // tiles (in-material shading plane of Data→Transfer→Blend). See `crate::overlay`.
+        crate::overlay::register(app);
         // P3b: bake DEM-derived surface (rough/AO/hazard) + normal layers off the
         // main thread and bind them onto the terrain `ShaderMaterial`. Inert
         // headless (gated on render assets existing). See `crate::derived_layers`.

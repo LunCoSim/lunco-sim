@@ -34,6 +34,7 @@ pub mod quadtree;
 pub mod quantize;
 pub mod source;
 pub mod tile;
+pub mod transfer;
 
 pub use carve::{CarveField, CarvePrimitive};
 pub use collider::{prepare_collider_heights, slope_limit_grid};
@@ -50,3 +51,4 @@ pub use quadtree::{QuadCoord, Quadtree, Selected, Square};
 pub use quantize::{quantize, QuantizedHeightSource};
 pub use source::{AnalyticHeightSource, CompositeHeightSource, HeightSource};
 pub use tile::{TileCoord, TileGrid};
+pub use transfer::{hazard_color, Rgba, TransferFn, HAZARD_CLIFF, HAZARD_SAFE, HAZARD_WARN};

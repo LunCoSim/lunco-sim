@@ -287,6 +287,14 @@ pub struct LodTileOf(pub Entity);
 #[derive(Resource, Default)]
 pub struct LodMaterials(HashMap<(Entity, TerrainShaderMode, u32, u32), Handle<ShaderMaterial>>);
 
+impl LodMaterials {
+    /// Every cached shared material handle — the live-tuning path (e.g. the analysis
+    /// overlay) rewrites their uniforms in place without re-baking tiles.
+    pub fn values(&self) -> impl Iterator<Item = &Handle<ShaderMaterial>> {
+        self.0.values()
+    }
+}
+
 /// Quantise a morph-band end onto the shared bucket lattice. `u32::MAX` = the
 /// "never morphs" root sentinel.
 fn band_bucket(morph_end: f32) -> u32 {
@@ -504,6 +512,7 @@ fn build_tile_material(
     shader: &Handle<Shader>,
     maps: Option<&TerrainDerivedMaps>,
     shadow: Option<&TileShadowCache>,
+    overlay: crate::overlay::OverlayUniforms,
     materials: &mut Assets<ShaderMaterial>,
 ) -> Handle<ShaderMaterial> {
     let mut m = ShaderMaterial::default();
@@ -523,6 +532,9 @@ fn build_tile_material(
             if let Some(shadow) = shadow {
                 apply_shadow_cache_to_material(&mut m, shadow);
             }
+            // Analysis overlay params (slope hazard). Only the Lit shaders declare
+            // them; a fresh tile thus paints the current overlay with no extra pass.
+            overlay.apply(&mut m);
         }
     }
     materials.add(m)
@@ -545,6 +557,7 @@ fn spawn_tile(
     shader: &Handle<Shader>,
     maps: Option<&TerrainDerivedMaps>,
     shadow: Option<&TileShadowCache>,
+    overlay: crate::overlay::OverlayUniforms,
     materials: &mut Assets<ShaderMaterial>,
     lod_mats: &mut LodMaterials,
 ) -> (Entity, Handle<ShaderMaterial>) {
@@ -556,7 +569,7 @@ fn spawn_tile(
     let mat = if let Some(h) = lod_mats.0.get(&(terrain, mode, depth, bucket)) {
         h.clone()
     } else {
-        let h = build_tile_material(mode, ms, me, depth, shader, maps, shadow, materials);
+        let h = build_tile_material(mode, ms, me, depth, shader, maps, shadow, overlay, materials);
         lod_mats.0.insert((terrain, mode, depth, bucket), h.clone());
         h
     };
@@ -682,7 +695,11 @@ pub fn update_lod_tiles(
     asset_server: Res<AssetServer>,
     mut stream_status: ResMut<TerrainStreamStatus>,
     settings: Option<Res<lunco_settings::TerrainSettings>>,
+    overlay_params: Res<crate::overlay::TerrainOverlayParams>,
 ) {
+    // Snapshot the analysis-overlay uniforms once; every tile built this frame paints
+    // the current params (live re-tuning of resident tiles rides `sync_terrain_overlay`).
+    let overlay = overlay_params.uniforms();
     *stream_status = TerrainStreamStatus::default();
     let enable_shaders = settings.as_ref().map(|s| s.enable_shaders).unwrap_or(true);
     // Use the first 3D camera as the focus. (Multiple cameras → the viz follows
@@ -725,7 +742,7 @@ pub fn update_lod_tiles(
                     h.clone()
                 } else {
                     let h = build_tile_material(
-                        mode, ms, me, depth, &shader, maps, shadow, &mut materials,
+                        mode, ms, me, depth, &shader, maps, shadow, overlay, &mut materials,
                     );
                     lod_mats.0.insert((terrain, mode, depth, bucket), h.clone());
                     h
@@ -981,7 +998,7 @@ pub fn update_lod_tiles(
             let depth = baked.depth;
             let (ent, shared) = spawn_tile(
                 &mut commands, grid, grid_entity, terrain, coord, handle, baked.center, depth,
-                baked.morph_end, mode, &shader, maps, shadow, &mut materials, &mut lod_mats,
+                baked.morph_end, mode, &shader, maps, shadow, overlay, &mut materials, &mut lod_mats,
             );
             // Sub-root tiles settle in from their parent's coarse lattice (no pop).
             if depth > 0 {
@@ -1016,7 +1033,7 @@ pub fn update_lod_tiles(
             if let Some(cached) = mesh_cache.0.get(&(terrain, s.coord)) {
                 let (ent, shared) = spawn_tile(
                     &mut commands, grid, grid_entity, terrain, s.coord, cached.clone(),
-                    s.region.center, depth, morph_end, mode, &shader, maps, shadow,
+                    s.region.center, depth, morph_end, mode, &shader, maps, shadow, overlay,
                     &mut materials, &mut lod_mats,
                 );
                 if depth > 0 {

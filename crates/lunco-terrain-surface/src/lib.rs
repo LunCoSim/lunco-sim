@@ -43,6 +43,7 @@ pub mod collider_ring;
 pub mod derived_layers;
 pub mod georef;
 pub mod oracle;
+pub mod overlay;
 pub mod plugin;
 pub mod query;
 pub mod stream_viz;
