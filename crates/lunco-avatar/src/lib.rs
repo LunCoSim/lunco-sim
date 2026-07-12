@@ -663,7 +663,7 @@ impl Plugin for LunCoAvatarPlugin {
             // scroll BEFORE orbit_system's zoom consumption, and its mode
             // swap lands next frame (commands), after which orbit_system owns
             // the camera.
-            scroll_out_to_orbit_system,
+            freeflight_scroll_transit_system,
             orbit_system,
             freeflight_system,
             surface_camera_system,
@@ -792,6 +792,36 @@ fn radial_up(pos: DVec3) -> Vec3 {
         (pos / pos.length()).as_vec3()
     } else {
         Vec3::Y
+    }
+}
+
+/// The site anchor's body: `(body entity, radius, body centre in the SITE
+/// frame)` — `None` when the scene isn't site-anchored. The world origin IS
+/// the anchor point with up = +Y (`anchor_solar_frame_to_site`), so the
+/// centre sits `radius + anchor height` straight down.
+fn site_body_center(
+    q_site: &Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
+    q_bodies: &Query<(Entity, &CelestialBody)>,
+) -> Option<(Entity, f64, DVec3)> {
+    let anchor = q_site.iter().next()?;
+    let (ent, body) = q_bodies.iter().find(|(_, b)| b.ephemeris_id == anchor.body)?;
+    Some((
+        ent,
+        body.radius_m,
+        DVec3::new(0.0, -(body.radius_m + anchor.geodetic.height_m), 0.0),
+    ))
+}
+
+/// Radial "up" for a camera at `pos` in ITS parent grid's frame. In the old
+/// rover sandbox the grid origin IS the body centre, so `pos` normalized is
+/// the surface normal. A site-anchored scene parents free cameras to the
+/// WorldGrid, whose origin is the SITE point on the sphere — there the body
+/// centre sits `radius + height` straight down (`site_center`), and ignoring
+/// that offset made "up" wrong everywhere except directly over the site.
+fn surface_up(pos: DVec3, parent_is_world_grid: bool, site_center: Option<DVec3>) -> Vec3 {
+    match site_center {
+        Some(c) if parent_is_world_grid => radial_up(pos - c),
+        _ => radial_up(pos),
     }
 }
 
@@ -1464,16 +1494,35 @@ fn orbit_system(
             if pin.active
                 && zoom.delta > 0.0
                 && orbit.distance <= min_dist * 1.0005
+                // The camera EASES toward the commanded arm — a fast scroll-in
+                // parks the arm on the floor while the camera is still
+                // hundreds of km up. Exiting then strands free flight at that
+                // altitude (where surface-relative orientation used to
+                // disengage → world-levelled camera → "the moon is in the
+                // corner"). Hold the exit until the camera has ARRIVED near
+                // the floor; extra detents while easing are consumed as
+                // ordinary (no-op) zoom and the next one exits on arrival.
+                && (sample.cam_root - sample.target_pos).length() <= min_dist * 1.02
                 && child_of.parent() != root_grid
             {
                 pin.anchor_world = sample.cam_root;
-                // Keep the heading but LEVEL OUT: the orbital attitude looks
-                // at the body centre (nadir-ish), which reads upside-down as
-                // a surface view. A mild downward pitch puts the ground at
-                // the bottom of the screen and the sky above — the natural
-                // hand-over attitude for the descent.
-                let (yaw, _pitch, _roll) = sample.cam_rot_root.to_euler(EulerRot::YXZ);
-                pin.anchor_rotation = Quat::from_euler(EulerRot::YXZ, yaw, -0.55, 0.0);
+                // Keep the heading but LEVEL OUT against the LOCAL radial up:
+                // the orbital attitude looks at the body centre (nadir-ish),
+                // which reads upside-down as a surface view. A mild downward
+                // pitch below the LOCAL horizon puts the ground at the bottom
+                // of the screen and the sky above. (World-Y levelling only
+                // worked directly above the site — exiting anywhere else on
+                // the globe put "the Moon on top": +Y is not up there.)
+                let up_l = (sample.cam_root - sample.target_pos)
+                    .normalize_or_zero()
+                    .as_vec3();
+                let fwd_cur = sample.cam_rot_root * Vec3::NEG_Z;
+                let heading = (fwd_cur - up_l * fwd_cur.dot(up_l))
+                    .try_normalize()
+                    .unwrap_or_else(|| up_l.any_orthonormal_vector());
+                // ~31° below the local horizon (cos/sin of the old -0.55 rad).
+                let dir = (heading * 0.852 - up_l * 0.522).normalize();
+                pin.anchor_rotation = Transform::IDENTITY.looking_to(dir, up_l).rotation;
                 zoom.delta = 0.0;
                 commands.trigger(ReleaseVessel { target: avatar_ent });
                 info!("ORBITAL SCROLL-THROUGH: exiting to surface at current pose");
@@ -1742,13 +1791,21 @@ fn freeflight_system(
         Option<&SurfaceRelativeMode>,
     ), (With<Avatar>, Without<FrameBlend>, Without<OrbitCamera>)>,
     q_grids: Query<&Grid>,
+    q_world: Query<(), With<lunco_core::WorldGrid>>,
+    q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
+    q_bodies: Query<(Entity, &CelestialBody)>,
     _gravity_field: Res<LocalGravityField>,
 ) {
+    let site_center = site_body_center(&q_site, &q_bodies).map(|(_, _, c)| c);
     for (mut tf, mut ff, cell, child_of, surface_mode) in q_avatar.iter_mut() {
         let rot = if surface_mode.is_some() {
-            // Compute "up" from camera's grid-local position (body center → camera).
+            // "Up" under the camera — body-centre aware (see `surface_up`).
             let up_v = if let Ok(grid) = q_grids.get(child_of.0) {
-                radial_up(grid.grid_position_double(cell, &tf))
+                surface_up(
+                    grid.grid_position_double(cell, &tf),
+                    q_world.contains(child_of.0),
+                    site_center,
+                )
             } else { Vec3::Y };
 
             // In surface mode, apply yaw/pitch as incremental rotations.
@@ -1770,41 +1827,48 @@ fn freeflight_system(
     }
 }
 
-/// SCROLL-OUT to orbit — the ENTRY half of the scroll transit (the exit half
-/// is the ORBITAL SCROLL-THROUGH in `orbit_system`). In free flight on a
-/// site-anchored celestial scene, a scroll-out gesture hands the camera to
-/// the celestial `OrbitCamera` on the site's anchor body AT ITS CURRENT POSE:
-/// [`RadialArrival`] derives the arm from the camera's present position (no
-/// `SunlitArrival` re-aim), and the still-unconsumed negative scroll delta
-/// becomes the first zoom-out step of the celestial branch — so the whole
-/// ascent, from ground to orbit, reads as one continuous gesture. The
-/// counterpart descent already works: the orbital zoom floor scroll-through
-/// releases back to free flight at the current pose, which `orbit_system`
-/// parked in the pin on this entry.
-fn scroll_out_to_orbit_system(
+/// Free-flight scroll transit — the ENTRY half of the scroll loop (the exit
+/// half is the ORBITAL SCROLL-THROUGH in `orbit_system`). On a site-anchored
+/// celestial scene, the wheel DOLLIES the free-flight camera along its LOOK
+/// direction with an exponential step scaled by altitude (approach slows near
+/// the ground, retreat accelerates with height) — "scroll toward what you
+/// look at". Once a scroll-OUT carries the camera past the orbital zoom
+/// floor, the avatar hands over to the celestial `OrbitCamera` AT ITS
+/// CURRENT POSE: [`RadialArrival`] derives the arm from the camera's present
+/// position (no `SunlitArrival` re-aim), and because the handover altitude
+/// equals the orbital floor the arm is already legal — no clamp jump, one
+/// continuous gesture from ground to orbit. The descent mirrors it:
+/// scroll-through at the floor releases back to free flight (pose parked in
+/// the pin on this entry), where scroll-in keeps dollying down.
+fn freeflight_scroll_transit_system(
     mut commands: Commands,
     mut q_avatar: Query<
-        (Entity, &mut CameraZoomInput, Option<&Camera>),
-        (With<Avatar>, With<FreeFlightCamera>, Without<OrbitCamera>),
+        (
+            Entity,
+            &mut Transform,
+            &mut CellCoord,
+            &ChildOf,
+            &mut CameraZoomInput,
+            Option<&Camera>,
+        ),
+        (
+            With<Avatar>,
+            Or<(With<FreeFlightCamera>, With<SurfaceCamera>)>,
+            Without<OrbitCamera>,
+            Without<FrameBlend>,
+        ),
     >,
+    q_grids: Query<&Grid>,
+    q_world: Query<(), With<lunco_core::WorldGrid>>,
     q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
     q_bodies: Query<(Entity, &CelestialBody)>,
 ) {
     // Only meaningful on a site-anchored scene whose solar hierarchy is up.
-    let Some(anchor) = q_site.iter().next() else { return };
-    let Some((body_ent, body)) =
-        q_bodies.iter().find(|(_, b)| b.ephemeris_id == anchor.body)
-    else {
+    let Some((body_ent, radius_m, center)) = site_body_center(&q_site, &q_bodies) else {
         return;
     };
-    for (avatar_ent, mut zoom, cam) in q_avatar.iter_mut() {
+    for (avatar_ent, mut tf, mut cell, child_of, mut zoom, cam) in q_avatar.iter_mut() {
         if zoom.delta == 0.0 {
-            continue;
-        }
-        // Scroll-IN has no free-flight meaning; drop it so it can't
-        // accumulate into a zoom jump on a later orbit entry.
-        if zoom.delta > 0.0 {
-            zoom.delta = 0.0;
             continue;
         }
         // Only the active render camera transits (scenes carry inactive
@@ -1813,35 +1877,67 @@ fn scroll_out_to_orbit_system(
             zoom.delta = 0.0;
             continue;
         }
-        // Same mode swap as `on_focus_command`, with two deliberate
-        // differences: `RadialArrival` instead of `SunlitArrival` (preserve
-        // the pose), and the scroll delta left UNCONSUMED (the celestial
-        // branch applies it as the first zoom-out step once the arrival
-        // resolves — `distance` here is a fallback that only survives if the
-        // arrival could not resolve).
-        commands
-            .entity(avatar_ent)
-            .remove::<SpringArmCamera>()
-            .remove::<ChaseCamera>()
-            .remove::<FreeFlightCamera>()
-            .remove::<FrameBlend>()
-            .remove::<SurfaceCamera>()
-            .remove::<SurfaceRelativeMode>()
-            .remove::<GravityBody>()
-            .remove::<OrbitFrameSample>()
-            .insert(OrbitCamera {
-                target: body_ent,
-                distance: body.radius_m * 3.0,
-                yaw: 0.0,
-                pitch: 0.0,
-                damping: None,
-                vertical_offset: 0.0,
-            })
-            .insert(RadialArrival);
-        info!(
-            "SURFACE SCROLL-OUT: entering orbital view of body {} at current pose",
-            anchor.body
-        );
+        // The altitude math below is in the SITE (WorldGrid) frame. Right
+        // after an orbital scroll-through the avatar is still parented to the
+        // body's grid for one frame (until `orbital_exit_restore_system`
+        // migrates it back) — running there turned one detent into an ~84 km
+        // step that flung the camera across the globe. Leave the delta
+        // unconsumed; it applies next frame once the restore lands.
+        if !q_world.contains(child_of.parent()) {
+            continue;
+        }
+        let Ok(grid) = q_grids.get(child_of.parent()) else {
+            zoom.delta = 0.0;
+            continue;
+        };
+        let pos = grid.grid_position_double(&cell, &tf);
+        let alt = (pos - center).length() - radius_m;
+        // Same exponential the orbit arm uses (`apply_scroll_zoom`), applied
+        // to the altitude scale: factor > 1 on scroll-out, < 1 on scroll-in.
+        // Clamped to ±25% per FRAME: wheel events batch, and an accumulated
+        // delta must never become a teleport-sized step.
+        let factor = (-zoom.delta as f64 * ZOOM_SENSITIVITY as f64 * 0.01)
+            .exp()
+            .clamp(0.75, 1.25);
+        let scroll_out = zoom.delta < 0.0;
+        zoom.delta = 0.0;
+        // Signed dolly step: negative (forward) on scroll-in. The 50 m floor
+        // keeps ground-level scrolling responsive; free flight is a ghost
+        // camera, so overshooting into terrain is no worse than flying there.
+        let step = alt.abs().max(50.0) * (factor - 1.0);
+        let fwd = (tf.rotation * Vec3::NEG_Z).as_dvec3();
+        let next = pos - fwd * step;
+        let (new_cell, new_tf) = grid.translation_to_grid(next);
+        *cell = new_cell;
+        tf.translation = new_tf;
+
+        // Past the orbital floor going OUT → hand over to the celestial
+        // OrbitCamera. Same mode swap as `on_focus_command`, with ONE
+        // deliberate difference: `RadialArrival` instead of `SunlitArrival`
+        // (preserve the pose; `distance` below is a fallback that only
+        // survives if the arrival cannot resolve).
+        if scroll_out && (next - center).length() - radius_m > SCROLL_EXIT_ALTITUDE_M {
+            commands
+                .entity(avatar_ent)
+                .remove::<SpringArmCamera>()
+                .remove::<ChaseCamera>()
+                .remove::<FreeFlightCamera>()
+                .remove::<FrameBlend>()
+                .remove::<SurfaceCamera>()
+                .remove::<SurfaceRelativeMode>()
+                .remove::<GravityBody>()
+                .remove::<OrbitFrameSample>()
+                .insert(OrbitCamera {
+                    target: body_ent,
+                    distance: radius_m * 3.0,
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    damping: None,
+                    vertical_offset: 0.0,
+                })
+                .insert(RadialArrival);
+            info!("SURFACE SCROLL-OUT: entering orbital view at current pose");
+        }
     }
 }
 
@@ -1869,13 +1965,20 @@ fn surface_camera_system(
         &ChildOf,
     ), (With<Avatar>, Without<FrameBlend>)>,
     q_grids: Query<&Grid>,
+    q_world: Query<(), With<lunco_core::WorldGrid>>,
+    q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
+    q_bodies: Query<(Entity, &CelestialBody)>,
 ) {
+    let site_center = site_body_center(&q_site, &q_bodies).map(|(_, _, c)| c);
     for (mut tf, cam, cell, child_of) in q_avatar.iter_mut() {
         let Ok(grid) = q_grids.get(child_of.0) else { continue };
 
-        // Grid-local position = world-space vector from body center to camera.
-        // Body is at Grid origin (Transform::default()), so no offset needed.
-        let up = radial_up(grid.grid_position_double(cell, &tf));
+        // Surface normal under the camera — body-centre aware (see `surface_up`).
+        let up = surface_up(
+            grid.grid_position_double(cell, &tf),
+            q_world.contains(child_of.0),
+            site_center,
+        );
 
         // Rebuild the rotation from scratch each frame from heading + pitch
         // around the surface normal (local north = world-Y onto the tangent
@@ -1909,10 +2012,14 @@ fn apply_fly(
         Option<&SurfaceRelativeMode>,
     ), With<Avatar>>,
     q_grids: Query<&Grid>,
+    q_world: Query<(), With<lunco_core::WorldGrid>>,
+    q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
+    q_bodies: Query<(Entity, &CelestialBody)>,
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time<bevy::time::Real>>,
     mut commands: Commands,
 ) {
+    let site_center = site_body_center(&q_site, &q_bodies).map(|(_, _, c)| c);
     let ctrl_pressed = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     let boost = if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) { 10.0 } else { 1.0 };
 
@@ -1934,8 +2041,13 @@ fn apply_fly(
         // Actively moving → cancel any idle auto-action.
         commands.entity(entity).remove::<lunco_core::ActiveAction>();
 
-        // In surface mode, "up" = radial direction from body center; else world Y.
-        let up_dir = if surface_mode.is_some() { radial_up(current_pos) } else { Vec3::Y };
+        // In surface mode, "up" = radial direction from the body centre
+        // (body-centre aware — see `surface_up`); else world Y.
+        let up_dir = if surface_mode.is_some() {
+            surface_up(current_pos, q_world.contains(child_of.0), site_center)
+        } else {
+            Vec3::Y
+        };
 
         let mut move_vec = Vec3::ZERO;
         move_vec += *tf.forward() * forward;
@@ -2293,6 +2405,8 @@ fn on_release_command(
     q_avatar: Query<(&Transform, Option<&ControllerLink>, Option<&SurfaceRelativeMode>), With<Avatar>>,
     guard: Res<lunco_core::SyncApplyGuard>,
     mut orbital_pin: Option<ResMut<lunco_celestial::OrbitalViewPin>>,
+    q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
+    q_bodies: Query<(Entity, &CelestialBody)>,
 ) {
     // A wire-applied release (a client telling the host it let go) carries that
     // client's avatar, which is meaningless here — the host frees ownership in
@@ -2303,21 +2417,21 @@ fn on_release_command(
     // Leaving an orbital view: deactivate the mode. The camera flew to the
     // focused body; `orbital_exit_restore_system` migrates it back to the
     // parked surface pose (`pin.anchor_world`/`anchor_rotation`) next frame.
-    let mut restored_rotation = None;
+    let mut restored_from_orbit = None;
     if let Some(pin) = orbital_pin.as_mut() {
         if pin.active {
             pin.active = false;
             // The live orbital rotation is in the HOST grid's rotated axes
-            // (`inv_chain × view_rot`); the free-flight euler below must match
-            // the parked world-axes pose the exit restore reinstates, or the
-            // first mouse move snaps the view to a stale orientation.
-            restored_rotation = Some(pin.anchor_rotation);
+            // (`inv_chain × view_rot`); the euler below must match the parked
+            // world-axes pose the exit restore reinstates, or the first mouse
+            // move snaps the view to a stale orientation.
+            restored_from_orbit = Some((pin.anchor_world, pin.anchor_rotation));
         }
     }
     let cmd = trigger.event();
     let avatar_ent = cmd.target;
     let (yaw, pitch, opt_link, is_surface) = if let Ok((tf, link, surface)) = q_avatar.get(avatar_ent) {
-        let rot = restored_rotation.unwrap_or(tf.rotation);
+        let rot = restored_from_orbit.map(|(_, r)| r).unwrap_or(tf.rotation);
         let (y, p, _) = rot.to_euler(EulerRot::YXZ);
         (y, p, link, surface.is_some())
     } else { (0.0, 0.0, None, false) };
@@ -2344,6 +2458,7 @@ fn on_release_command(
         .remove::<OrbitCamera>()
         .remove::<OrbitFrameSample>()
         .remove::<SunlitArrival>()
+        .remove::<RadialArrival>()
         .remove::<FrameBlend>()
         // FreeFlight/Surface cameras run in PostUpdate at render rate, so
         // strip the fixed-step interpolation that SpringArmCamera relied on.
@@ -2357,6 +2472,26 @@ fn on_release_command(
             heading: yaw, // approximate mapping from euler yaw
             pitch,
         });
+    } else if let (Some((anchor_world, rot)), Some((_, _, center))) =
+        (restored_from_orbit, site_body_center(&q_site, &q_bodies))
+    {
+        // Descending out of an orbital view on a site-anchored scene resumes
+        // in SURFACE-RELATIVE mode: the body stays at the bottom of the
+        // screen (local "down" = gravity) and WASD follows the local tangent
+        // frame — a world-euler FreeFlightCamera only behaves that way
+        // directly over the site. Decompose the parked attitude against the
+        // LOCAL up with the SAME reference `tangent_frame` uses, so the
+        // resume doesn't visibly rotate the view.
+        let up = (anchor_world - center).normalize_or_zero().as_vec3();
+        let fwd = rot * Vec3::NEG_Z;
+        let ref_dir = if up.dot(Vec3::Y).abs() < 0.9 { Vec3::Y } else { Vec3::Z };
+        let east = up.cross(ref_dir).normalize();
+        let north = east.cross(up).normalize();
+        let heading = fwd.dot(east).atan2(fwd.dot(north));
+        let s_pitch = fwd.dot(up).clamp(-1.0, 1.0).asin();
+        commands
+            .entity(avatar_ent)
+            .insert((SurfaceCamera { heading, pitch: s_pitch }, SurfaceRelativeMode));
     } else {
         commands.entity(avatar_ent).insert(FreeFlightCamera {
             yaw,
@@ -2665,7 +2800,7 @@ fn on_follow_command(
 fn on_focus_command(
     trigger: On<FocusTarget>,
     mut commands: Commands,
-    q_avatar: Query<(Entity, &Transform, Option<&Camera>), With<Avatar>>,
+    q_avatar: Query<(Entity, &Transform, Option<&Camera>, Option<&OrbitCamera>), With<Avatar>>,
     q_bodies: Query<&CelestialBody>,
     q_sc: Query<&Spacecraft>,
     q_children: Query<&Children>,
@@ -2677,14 +2812,24 @@ fn on_focus_command(
     // steal the focus.
     let resolved = cmd.avatar
         .and_then(|a| q_avatar.get(a).ok())
-        .or_else(|| q_avatar.iter().find(|(_, _, cam)| cam.is_some_and(|c| c.is_active)))
+        .or_else(|| q_avatar.iter().find(|(_, _, cam, _)| cam.is_some_and(|c| c.is_active)))
         .or_else(|| q_avatar.iter().next());
-    let Some((avatar_ent, cam_tf, _)) = resolved else { return; };
+    let Some((avatar_ent, cam_tf, _, current_orbit)) = resolved else { return; };
 
     // Compute distance based on target type.
     let mut distance = 20.0;
     let physical_target = get_physical_body(cmd.target, &q_children, &q_bodies);
     let is_body = q_bodies.contains(physical_target);
+
+    // Already orbiting this very body (clicking the focused globe, re-clicking
+    // its view pill): a repeat focus must be a NO-OP. Re-running the swap
+    // re-arms `SunlitArrival`, which snaps the camera back to the arrival
+    // pose — "I jump to the original position".
+    if let Some(orbit) = current_orbit {
+        if get_physical_body(orbit.target, &q_children, &q_bodies) == physical_target {
+            return;
+        }
+    }
     if let Ok(body) = q_bodies.get(physical_target) {
         distance = body.radius_m * 3.0;
     } else if let Ok(sc) = q_sc.get(cmd.target) {
@@ -3034,6 +3179,7 @@ fn surface_mode_transition_system(
     q_bodies: Query<&CelestialBody>,
     thresholds: Res<SurfaceModeThreshold>,
     field: Res<LocalGravityField>,
+    q_site: Query<(), With<lunco_celestial::SiteAnchor>>,
     mut commands: Commands,
 ) {
     // `Without<OrbitCamera>`: focusing a celestial body activates the orbital
@@ -3074,7 +3220,16 @@ fn surface_mode_transition_system(
 
     let in_surface_mode = maybe_mode.is_some();
 
-    if in_surface_mode && altitude > thresholds.disengage_altitude {
+    // Site-anchored scenes NEVER altitude-disengage: the user's frame of
+    // reference is the anchor body at every height below the orbital handover
+    // ("the planetary body always at the bottom of the screen, following the
+    // direction of gravity"). Falling back to the world-euler FreeFlight
+    // camera up there levels the view to world +Y instead of the local up —
+    // the tilted-horizon / "moon in the corner" report. Beyond ~50 km the
+    // scroll transit hands the camera to the orbital mode anyway.
+    let site_anchored = !q_site.is_empty();
+
+    if in_surface_mode && altitude > thresholds.disengage_altitude && !site_anchored {
         // Too high → exit surface mode. Swap SurfaceCamera → FreeFlightCamera.
         commands.entity(avatar_ent).remove::<SurfaceRelativeMode>();
         if let Some(sc) = maybe_sc {
