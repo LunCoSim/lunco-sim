@@ -159,8 +159,22 @@ pub fn setup_big_space_hierarchy(
     // HTTP-fetches them same-origin (`cache_dir()` = ".cache" on wasm, so the
     // bevy HTTP reader resolves `<origin>/.cache/textures/<tex>`, staged there by
     // build_web.sh). A 4K Earth + Moon are tens of MB — far too large to embed.
-    let earth_texture: Handle<Image> = asset_server.load("cached_textures://earth.png");
-    let moon_texture: Handle<Image> = asset_server.load("cached_textures://moon.png");
+    // REPEAT addressing on U is REQUIRED: the quadsphere tile UVs unwrap the
+    // equirectangular longitude around each tile's centre so triangles never
+    // interpolate backwards across the ±180° seam — which legitimately pushes
+    // u outside [0,1] (a seam-centred face sits entirely in u ∈ [-0.5, 0]).
+    // Under the default clamp-to-edge sampler that whole region sampled one
+    // texel column: a face-wide horizontally-streaked "patch" on both globes.
+    let seam_wrap = |s: &mut bevy::image::ImageLoaderSettings| {
+        s.sampler = bevy::image::ImageSampler::Descriptor(bevy::image::ImageSamplerDescriptor {
+            address_mode_u: bevy::image::ImageAddressMode::Repeat,
+            ..bevy::image::ImageSamplerDescriptor::linear()
+        });
+    };
+    let earth_texture: Handle<Image> =
+        asset_server.load_with_settings("cached_textures://earth.png", seam_wrap);
+    let moon_texture: Handle<Image> =
+        asset_server.load_with_settings("cached_textures://moon.png", seam_wrap);
 
     // Blueprint grid shader (self-describing ShaderMaterial), loaded by path so it
     // hot-reloads on native and HTTP-fetches on web like every other shader.

@@ -45,7 +45,10 @@ use bevy::prelude::*;
 pub struct LunarSun {
     /// Direct solar illuminance on a surface facing the Sun, **lux**.
     /// ~128 000 lx on the airless Moon (vs ~100 000 lx through Earth's
-    /// atmosphere). This is the scene's key-light brightness.
+    /// atmosphere). This is the scene's key-light brightness — the **1 AU
+    /// calibration**: in ephemeris-driven scenes `update_sun_light_system`
+    /// (lunco-celestial) scales the live light by 1/r² of the site body's
+    /// actual solar distance.
     pub illuminance_lux: f32,
     /// Apparent angular **diameter** of the Sun, **degrees** (~0.53° from the
     /// Moon — essentially identical to the view from Earth). Sets the

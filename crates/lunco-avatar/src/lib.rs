@@ -100,6 +100,12 @@ pub struct CameraZoomInput {
 /// zoom-per-notch.
 const ZOOM_SENSITIVITY: f32 = 5.0;
 
+/// Altitude of the orbital zoom's min-distance floor above a celestial body's
+/// surface. Doubles as the scroll-through threshold: one more inward detent
+/// while the arm sits on this floor exits the orbital view to the surface
+/// camera at the current pose (task: seamless orbit⇄terrain, no clicks).
+const SCROLL_EXIT_ALTITUDE_M: f64 = 50_000.0;
+
 /// Global default values for camera behavior parameters.
 ///
 /// Individual behavior components can override these with their own values
@@ -210,6 +216,11 @@ pub struct OrbitFrameSample {
     pub target_pos: DVec3,
     /// Camera position in the root grid's frame (for re-anchoring migration).
     pub cam_root: DVec3,
+    /// Camera rotation in the root grid's frame — the world-axes counterpart
+    /// of the live orbital rotation (which is in HOST-grid axes). The
+    /// scroll-through exit stamps this into `pin.anchor_rotation` so
+    /// free-flight resumes looking exactly where the orbital zoom left off.
+    pub cam_rot_root: Quat,
 }
 
 /// Free-flight camera: moves independently of any target.
@@ -1192,6 +1203,7 @@ fn sample_orbit_frame(
                 target_pos: cam_abs
                     + (root_inv * (tgt_gt.translation() - cam_gt.translation())).as_dvec3(),
                 cam_root: (root_inv * (cam_gt.translation() - root_gt.translation())).as_dvec3(),
+                cam_rot_root: (root_inv * cam_gt.rotation()).normalize(),
             })
         });
         match sample {
@@ -1372,9 +1384,12 @@ fn orbit_system(
         let Ok(root_ref) = q_grids.get(root_grid) else { continue };
 
         // Compute minimum distance to prevent zooming inside the target body.
+        // For a celestial body the floor sits ~50 km above the surface — low
+        // enough that zooming in reads as a descent, and the floor doubles as
+        // the scroll-through exit threshold (see below).
         let physical_target = get_physical_body(orbit.target, &q_children, &q_bodies);
         let min_dist = if let Ok(body) = q_bodies.get(physical_target) {
-            body.radius_m * 1.5
+            body.radius_m + SCROLL_EXIT_ALTITUDE_M
         } else if let Ok(sc) = q_sc.get(orbit.target) {
             (sc.hit_radius_m as f64).max(10.0)
         } else {
@@ -1394,6 +1409,29 @@ fn orbit_system(
         // mesh rebuild, body spin, LOD tiles, markers — displaced its entity
         // by megameters: "planets jump around when I rotate".)
         if let (Ok(body), Some(pin)) = (q_bodies.get(physical_target), orbital_pin.as_mut()) {
+            // SCROLL-THROUGH to the surface: scrolling IN while the commanded
+            // arm already sits ON the min-distance floor is an unambiguous
+            // "take me down" — leave the orbital view AT THE CURRENT POSE
+            // instead of the pose parked on entry. Stamp the pin's anchor
+            // with the camera's present world pose and fire the canonical
+            // `ReleaseVessel` unwind (the Backspace / Surface-pill path):
+            // `on_release_command` drops the body focus and derives the
+            // free-flight view from the stamped rotation, then
+            // `orbital_exit_restore_system` migrates the camera to the
+            // WorldGrid at the stamped position — the descent continues
+            // seamlessly in the surface camera.
+            if pin.active
+                && zoom.delta > 0.0
+                && orbit.distance <= min_dist * 1.0005
+                && child_of.parent() != root_grid
+            {
+                pin.anchor_world = sample.cam_root;
+                pin.anchor_rotation = sample.cam_rot_root;
+                zoom.delta = 0.0;
+                commands.trigger(ReleaseVessel { target: avatar_ent });
+                info!("ORBITAL SCROLL-THROUGH: exiting to surface at current pose");
+                continue;
+            }
             apply_scroll_zoom(&mut orbit.distance, &mut zoom.delta, ZOOM_SENSITIVITY, min_dist, 1.0e11);
             let rotation = Quat::from_euler(EulerRot::YXZ, orbit.yaw, orbit.pitch, 0.0);
             let dir = rotation.mul_vec3(Vec3::Z).as_dvec3();

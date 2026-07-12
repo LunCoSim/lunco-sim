@@ -183,8 +183,9 @@ pub struct SunDirectionWorld(pub Vec3);
 pub fn update_sun_light_system(
     ephemeris: Option<Res<EphemerisResource>>,
     world: Res<WorldTime>,
+    sun_cal: Option<Res<lunco_environment::LunarSun>>,
     mut sun_dir_out: ResMut<SunDirectionWorld>,
-    mut q_light: Query<(&mut Transform, &DirectionalLight)>,
+    mut q_light: Query<(&mut Transform, &mut DirectionalLight)>,
     // The site-ENU alignment now lives on the Site Align Grid (the Solar
     // Grid's rotation is IDENTITY — see `anchor_solar_frame_to_site`).
     q_solar: Query<
@@ -230,7 +231,7 @@ pub fn update_sun_light_system(
     }
 
     // The sun is the brightest `DirectionalLight` (Earthshine fill is far dimmer).
-    if let Some((mut light_tf, _)) = q_light
+    if let Some((mut light_tf, mut light)) = q_light
         .iter_mut()
         .max_by(|a, b| a.1.illuminance.total_cmp(&b.1.illuminance))
     {
@@ -246,6 +247,30 @@ pub fn update_sun_light_system(
         let current_fwd: Vec3 = light_tf.forward().into();
         if current_fwd.angle_between(dir) > 2.0e-5 {
             light_tf.look_to(dir, up);
+        }
+
+        // 1/r² illuminance. `LunarSun`'s calibrated pair (~128 klx / EV 15)
+        // is the 1 AU value; ephemeris positions are AU, so the live scale is
+        // 1/r². At the Moon this breathes ±3% over the year (Earth-orbit
+        // eccentricity); a site on a body elsewhere gets its real solar
+        // constant. Exposure deliberately does NOT compensate — the
+        // brightness difference IS the realism. Dead-banded at 0.5%:
+        // sub-percent deltas are invisible and per-frame light mutation is
+        // needless render-world churn.
+        if let Some(cal) = &sun_cal {
+            let r2 = (p_sun - p_moon).length_squared();
+            if r2 > 1.0e-4 {
+                let target = (cal.illuminance_lux as f64 / r2) as f32;
+                if (light.illuminance - target).abs() > target * 5.0e-3 {
+                    info!(
+                        "sun illuminance {:.0} lx (r = {:.4} AU, 1 AU cal {:.0} lx)",
+                        target,
+                        r2.sqrt(),
+                        cal.illuminance_lux
+                    );
+                    light.illuminance = target;
+                }
+            }
         }
     }
 }

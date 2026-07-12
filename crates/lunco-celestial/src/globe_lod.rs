@@ -20,6 +20,7 @@ use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 use bevy::camera::visibility::NoFrustumCulling;
+use bevy::math::DVec3;
 use big_space::prelude::*;
 use lunco_materials::ShaderMaterial;
 use lunco_terrain_globe::quad_sphere::{cube_to_sphere, subdivide_face, tile_center_uv};
@@ -60,6 +61,36 @@ pub struct GlobeTiles {
 
 /// Frames an outgoing tile stays alive after its replacement spawned.
 const TILE_RETIRE_FRAMES: u8 = 3;
+
+/// Max fresh tiles spawned per body per frame. A fast zoom crosses several
+/// LOD levels in a handful of frames; unbudgeted, one frame could demand
+/// hundreds of fresh meshes (build + `Assets<Mesh>` add + render-world
+/// upload) — the p99 ~150 ms zoom hitch. Outgoing tiles stay resident until
+/// their replacements are up (see the coverage rule in [`update_globe_lod`]),
+/// so spreading spawns costs nothing but a few frames of refinement latency.
+const TILE_SPAWN_BUDGET: usize = 16;
+
+/// Max retired-tile entities despawned per body per frame. A zoom-out merges
+/// hundreds of fine tiles into a few coarse ones in one step; freeing all
+/// their entities + mesh assets in one frame is its own (smaller) hitch.
+const TILE_DESPAWN_BUDGET: usize = 32;
+
+/// Squared camera distance to a tile's centre (body-local) — spawn priority.
+fn tile_dist2(coord: &TileCoord, radius_m: f64, camera_body_local: DVec3) -> f64 {
+    let (u, v) = tile_center_uv(coord.face, coord.level, coord.i, coord.j);
+    (cube_to_sphere(coord.face, u, v) * radius_m).distance_squared(camera_body_local)
+}
+
+/// Whether two tiles overlap on the sphere: same body face and one is the
+/// other's quadtree ancestor (or the same node).
+fn tiles_overlap(a: &TileCoord, b: &TileCoord) -> bool {
+    if a.body != b.body || a.face != b.face {
+        return false;
+    }
+    let (deep, shallow) = if a.level >= b.level { (a, b) } else { (b, a) };
+    let d = deep.level - shallow.level;
+    (deep.i >> d) == shallow.i && (deep.j >> d) == shallow.j
+}
 
 // TODO(globe-invisible): In luncosim's dev `cargo run`, the globe is NOT
 // visible — the viewport renders black even though this system spawns the
@@ -134,34 +165,31 @@ pub fn update_globe_lod(
             );
         }
 
-        // Move tiles no longer desired to the retirement queue (despawned a
-        // few frames later, once their replacements are renderable).
-        let mut newly_retired: Vec<(Entity, u8)> = Vec::new();
-        tiles.resident.retain(|coord, ent| {
-            let keep = desired.contains(coord);
-            if !keep {
-                newly_retired.push((*ent, TILE_RETIRE_FRAMES));
-            }
-            keep
-        });
-        tiles.retiring.extend(newly_retired);
-        tiles.retiring.retain_mut(|(ent, frames)| {
-            if *frames == 0 {
-                commands.entity(*ent).despawn();
-                false
-            } else {
-                *frames -= 1;
-                true
-            }
-        });
-
-        // Spawn newly-desired tiles — placement verbatim from the proven static
+        // Spawn newly-desired tiles FIRST (so this frame's spawns count as
+        // coverage for retirement below), BUDGETED per frame — see
+        // `TILE_SPAWN_BUDGET`. Coarse-and-near first: a coarse tile covers the
+        // most area (unblocks the most retirements), a near tile is what the
+        // viewer is looking at. Placement verbatim from the proven static
         // path: mesh in body-local (tile_center = ZERO), entity anchored at the
         // tile centre via the surface grid, reparented in place.
-        for coord in &desired {
-            if tiles.resident.contains_key(coord) {
-                continue;
-            }
+        let mut missing: Vec<TileCoord> = desired
+            .iter()
+            .filter(|c| !tiles.resident.contains_key(c))
+            .copied()
+            .collect();
+        missing.sort_by(|a, b| {
+            a.level.cmp(&b.level).then_with(|| {
+                tile_dist2(a, lod.radius_m, camera_body_local)
+                    .total_cmp(&tile_dist2(b, lod.radius_m, camera_body_local))
+            })
+        });
+        // INITIAL fill is unbudgeted: with no resident tiles there is no old
+        // coverage to hold the sphere together while spawns amortize — a
+        // budgeted first fill shows a partially-tiled globe for ~15 frames at
+        // scene load. One synchronous fill there is the old (pre-budget)
+        // behavior and is hidden behind scene loading anyway.
+        let budget = if tiles.resident.is_empty() { usize::MAX } else { TILE_SPAWN_BUDGET };
+        for coord in missing.into_iter().take(budget) {
             let (u, v) = tile_center_uv(coord.face, coord.level, coord.i, coord.j);
             let tile_center_dir = cube_to_sphere(coord.face, u, v);
             let tile_body_local = tile_center_dir * lod.radius_m;
@@ -191,7 +219,7 @@ pub fn update_globe_lod(
                 .spawn((
                     Mesh3d(meshes.add(mesh)),
                     MeshMaterial3d(lod.material.clone()),
-                    *coord,
+                    coord,
                     TerrainTile,
                     tile_cell,
                     Transform::from_translation(tile_local_pos),
@@ -211,7 +239,75 @@ pub fn update_globe_lod(
                     ChildOf(lod.surface_grid),
                 ))
                 .id();
-            tiles.resident.insert(*coord, ent);
+            tiles.resident.insert(coord, ent);
+        }
+
+        // Retire resident tiles that left the desired set — but ONLY once
+        // every desired tile overlapping their footprint is itself resident.
+        // With budgeted spawning the replacements arrive over several frames;
+        // retiring on a fixed schedule would open holes in the sphere while
+        // the spawn queue catches up. The extra overlap is coplanar identical
+        // surface — invisible, same as the retire grace.
+        let resident_now: HashSet<TileCoord> = tiles.resident.keys().copied().collect();
+        let mut newly_retired: Vec<(Entity, u8)> = Vec::new();
+        tiles.resident.retain(|coord, ent| {
+            if desired.contains(coord) {
+                return true;
+            }
+            let covered = desired
+                .iter()
+                .filter(|d| tiles_overlap(d, coord))
+                .all(|d| resident_now.contains(d));
+            if covered {
+                newly_retired.push((*ent, TILE_RETIRE_FRAMES));
+                false
+            } else {
+                true
+            }
+        });
+        tiles.retiring.extend(newly_retired);
+        let mut despawned = 0usize;
+        tiles.retiring.retain_mut(|(ent, frames)| {
+            if *frames == 0 {
+                if despawned < TILE_DESPAWN_BUDGET {
+                    commands.entity(*ent).despawn();
+                    despawned += 1;
+                    return false;
+                }
+                // Over budget — despawn on a later frame.
+                return true;
+            }
+            *frames -= 1;
+            true
+        });
+
+        // `LUNCO_LOD_VALIDATE=1`: assert the resident set still covers the
+        // whole sphere after this frame's spawn/retire pass (the invariant
+        // the budgeted streaming must never break). Ground truth for hole
+        // reports — API-side entity censuses are ambiguous (registry lag,
+        // retiring-tile overlap, cross-body name collisions).
+        if std::env::var("LUNCO_LOD_VALIDATE").is_ok() {
+            let resident: HashSet<TileCoord> = tiles.resident.keys().copied().collect();
+            fn covered(set: &HashSet<TileCoord>, body: Entity, face: u8, level: u32, i: i32, j: i32) -> bool {
+                if set.contains(&TileCoord { body, face, level, i, j }) {
+                    return true;
+                }
+                if level > 12 {
+                    return false;
+                }
+                (0..2).all(|di| (0..2).all(|dj| {
+                    covered(set, body, face, level + 1, i * 2 + di, j * 2 + dj)
+                }))
+            }
+            for face in 0..6u8 {
+                if !covered(&resident, body_ent, face, 0, 0, 0) {
+                    warn!(
+                        "globe LOD hole: body {body_ent} face {face} uncovered ({} resident, {} retiring)",
+                        resident.len(),
+                        tiles.retiring.len()
+                    );
+                }
+            }
         }
     }
 }
