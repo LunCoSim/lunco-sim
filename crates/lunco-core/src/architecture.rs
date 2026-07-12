@@ -130,7 +130,10 @@ impl Default for IntentAnalogState {
 pub fn parse_user_intent(name: &str) -> Option<UserIntent> {
     match name.trim().to_ascii_lowercase().as_str() {
         "forward" | "moveforward" | "pitch_down" => Some(UserIntent::MoveForward),
-        "backward" | "back" | "movebackward" | "pitch_up" => Some(UserIntent::MoveBackward),
+        // NOTE: `"back"` is NOT an alias here — it belongs to `Cancel` below
+        // (menu/unpossess "go back"). Listing it in both arms made this arm win
+        // and silently drove the vessel backward on an unpossess binding.
+        "backward" | "movebackward" | "pitch_up" => Some(UserIntent::MoveBackward),
         "left" | "moveleft" | "roll_left" => Some(UserIntent::MoveLeft),
         "right" | "moveright" | "roll_right" => Some(UserIntent::MoveRight),
         "up" | "moveup" | "yaw_right" => Some(UserIntent::MoveUp),
@@ -326,5 +329,18 @@ mod tests {
         };
 
         assert_eq!(wire.scale, 2.5);
+    }
+
+    /// `"back"` used to appear in BOTH the `MoveBackward` and the `Cancel` arm;
+    /// the first arm won, so a scene binding `"back"` to unpossess drove the
+    /// vessel backward instead. `"back"` belongs to `Cancel` only.
+    #[test]
+    fn back_parses_as_cancel_not_move_backward() {
+        assert_eq!(parse_user_intent("back"), Some(UserIntent::Cancel));
+        assert_eq!(parse_user_intent("Back"), Some(UserIntent::Cancel));
+        assert_eq!(parse_user_intent("backward"), Some(UserIntent::MoveBackward));
+        assert_eq!(parse_user_intent("movebackward"), Some(UserIntent::MoveBackward));
+        assert_eq!(parse_user_intent("cancel"), Some(UserIntent::Cancel));
+        assert_eq!(parse_user_intent("unpossess"), Some(UserIntent::Cancel));
     }
 }

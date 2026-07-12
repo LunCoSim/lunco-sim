@@ -309,9 +309,9 @@ pub use perspective::{Perspective, PerspectiveId};
 // `session` here is just the workbench-side recents persistence.
 use lunco_workspace::WorkspaceResource;
 pub use viewport::{
-    auto_tag_workbench_3d_cameras, PanelRect, PanelRects, ViewportPanel, ViewportPlaceholder,
-    WorkbenchEguiHost, WorkbenchSceneCamera, WorkbenchViewportCamera, WorkbenchViewportPlugin,
-    VIEWPORT_PANEL_ID,
+    auto_tag_workbench_3d_cameras, PanelRect, PanelRects, ScenePickGate, SceneTarget, ViewportPanel,
+    ViewportPlaceholder, WorkbenchEguiHost, WorkbenchSceneCamera, WorkbenchViewportCamera,
+    WorkbenchViewportPlugin, VIEWPORT_PANEL_ID,
 };
 
 /// Get the backdrop colour from the active theme.
@@ -704,7 +704,12 @@ impl WorkbenchLayout {
         // Already open? Focus it.
         if let Some(path) = self.dock.find_tab(&tab) {
             self.dock.set_focused_node_and_surface(path.node_path());
-            self.dock.set_active_tab(path);
+            if let Err(e) = self.dock.set_active_tab(path) {
+                bevy::log::warn!(
+                    "open_instance: could not foreground tab {kind:?}#{instance} \
+                     at {path:?}: {e:?}"
+                );
+            }
             return;
         }
 
@@ -768,7 +773,12 @@ impl WorkbenchLayout {
             main[leaf].append_tab(tab);
             // Focus the just-appended tab.
             if let Some(count) = main[leaf].tabs_count().checked_sub(1) {
-                main.set_active_tab(leaf, count);
+                if let Err(e) = main.set_active_tab(leaf, count) {
+                    bevy::log::warn!(
+                        "open_instance: appended {kind:?}#{instance} to leaf \
+                         {leaf:?} but could not foreground it: {e:?}"
+                    );
+                }
             }
             // Focus the leaf/surface too so egui_dock foregrounds it.
             self.dock
@@ -1593,7 +1603,13 @@ impl WorkbenchLayout {
         let tab = TabId::Singleton(id);
         if let Some(pos) = self.dock.find_tab(&tab) {
             self.dock.set_focused_node_and_surface(pos.node_path());
-            self.dock.set_active_tab(pos);
+            // A stale path here means the tab is present but unreachable — report
+            // failure to the caller (the `FocusPanel` command) instead of silently
+            // claiming success while nothing foregrounds.
+            if let Err(e) = self.dock.set_active_tab(pos) {
+                bevy::log::warn!("focus_singleton: could not foreground {id:?} at {pos:?}: {e:?}");
+                return false;
+            }
             true
         } else {
             false
@@ -2059,12 +2075,21 @@ fn render_workbench(world: &mut World) {
         anchors.clear();
     }
 
-    // Reset the per-frame "pointer over scene" signal before any panel renders;
-    // each scene-hosting viewport panel OR-folds its egui-authoritative hit test
-    // back in as it paints. A frame with no scene panel (or pointer off-scene)
-    // then reads `false`. (The rect map persists — only this bool resets.)
+    // Drop last pass's panel rects; the panels in the active layout refill them as
+    // they paint. A panel that left the layout (closed tab, perspective switch)
+    // must not keep driving its consumer (`resize_viewport_image`) from a stale
+    // rect. Cleared HERE rather than in `First` because the consumers run in
+    // `Update` — i.e. before this pass — and would otherwise always see an empty
+    // map.
     if let Some(mut rects) = world.get_resource_mut::<viewport::PanelRects>() {
-        rects.reset_pointer_over_scene();
+        rects.clear();
+    }
+
+    // Tell the pick gate its per-frame inputs are real this frame. (The inputs
+    // themselves were cleared in `First` by `reset_scene_pick_gate`, which — unlike
+    // this pass — is guaranteed to run every frame. See `ScenePickGate`.)
+    if let Some(mut gate) = world.get_resource_mut::<viewport::ScenePickGate>() {
+        gate.mark_rendered();
     }
 
     let theme = world.resource::<lunco_theme::Theme>().clone();
@@ -2121,6 +2146,27 @@ where
     None
 }
 
+/// Record a docked panel's blocked region into the scene-pick gate.
+///
+/// `body` is the whole leaf content area the panel was given. What it *blocks*
+/// depends on its background:
+/// - **Transparent** leaf → egui_dock paints nothing, so only the card the panel
+///   actually drew (`ui.min_rect()`) blocks; `body − card` is see-through and the
+///   full-window 3D behind it must stay clickable.
+/// - **Opaque** leaf (the default: egui_dock fills it with `tab_body.bg_fill`) →
+///   the WHOLE body blocks. Recording `min_rect()` here was the bug: any panel
+///   whose content is shorter than its leaf turned its own painted background into
+///   a "transparent gap", so clicking the empty lower half of a Modelica panel
+///   picked in the hidden 3D scene behind it. (Worse for a panel that early-returns
+///   without allocating: `min_rect()` is then a zero-size rect at the leaf's
+///   top-left and the entire body read as gap.)
+fn record_chrome(world: &mut World, ui: &egui::Ui, body: egui::Rect, transparent: bool) {
+    let card = if transparent { ui.min_rect() } else { body };
+    if let Some(mut gate) = world.get_resource_mut::<viewport::ScenePickGate>() {
+        gate.record_chrome_panel(body, card);
+    }
+}
+
 /// `egui_dock::TabViewer` impl that delegates each tab's render to
 /// the matching `Panel` (for singletons) or `InstancePanel` (for
 /// multi-instance tabs), looking them up by the tab's [`TabId`].
@@ -2171,7 +2217,9 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                     // Capability-narrowed context (no raw &mut World).
                     // Mutations the panel emits are queued and applied
                     // after paint (WP-8 structural prevention).
-                    let is_scene = panel.is_scene_viewport();
+                    let is_main_scene =
+                        panel.scene_target() == Some(viewport::SceneTarget::MainViewport);
+                    let transparent = panel.transparent_background();
                     // Full leaf body (egui_dock clips the tab-content ui to the
                     // whole leaf area, below the tab bar) — NOT `max_rect()`, which
                     // only spans the growable content and misses the transparent
@@ -2184,16 +2232,8 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                     for f in deferred {
                         f(self.world);
                     }
-                    // Chrome panels paint a content-sized card on a transparent
-                    // leaf; record (body, painted-card) so the scene-pick gate can
-                    // let the transparent gap through while blocking the card.
-                    if !is_scene {
-                        let card = ui.min_rect();
-                        if let Some(mut r) =
-                            self.world.get_resource_mut::<viewport::PanelRects>()
-                        {
-                            r.record_chrome_panel(body, card);
-                        }
+                    if !is_main_scene {
+                        record_chrome(self.world, ui, body, transparent);
                     }
                 } else {
                     ui.colored_label(
@@ -2204,7 +2244,10 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             }
             TabId::Instance { kind, instance } => {
                 if let Some(mut panel) = self.instance_panels.remove(&kind) {
-                    let is_scene = panel.is_scene_viewport();
+                    // Instance tabs are always chrome — no `InstancePanel` hosts a
+                    // live scene (the scene viewport and the USD preview are both
+                    // singleton `Panel`s).
+                    let transparent = panel.transparent_background();
                     let body = ui.clip_rect();
                     let mut ctx = PanelCtx::new(self.world);
                     panel.render(ui, &mut ctx, instance);
@@ -2213,14 +2256,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                     for f in deferred {
                         f(self.world);
                     }
-                    if !is_scene {
-                        let card = ui.min_rect();
-                        if let Some(mut r) =
-                            self.world.get_resource_mut::<viewport::PanelRects>()
-                        {
-                            r.record_chrome_panel(body, card);
-                        }
-                    }
+                    record_chrome(self.world, ui, body, transparent);
                 } else {
                     ui.colored_label(
                         egui::Color32::LIGHT_RED,
@@ -3321,19 +3357,27 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
             && screen.width() > 1.0
             && screen.height() > 1.0
         {
+            // The dock's true extent for the scene-pick gate: the rect we are
+            // ABOUT to hand it — i.e. what's left of the root Ui after the menu /
+            // status / activity bars consumed their edges. Anything outside it is
+            // bare full-window 3D that must read as scene, not chrome.
+            //
+            // Must be measured BEFORE `show_inside`. The old code took
+            // `viewport_ui.min_rect()` AFTER it, but `viewport_ui` is the ROOT
+            // background Ui spanning the whole window — the menu bar and status bar
+            // are drawn into it too — so `min_rect()` came back as ≈ the entire
+            // window. `in_dock` was then true everywhere and the chrome blanket
+            // swallowed every click on bare 3D outside a dock leaf.
+            let dock_rect = viewport_ui.available_rect_before_wrap();
             DockArea::new(dock).style(style).show_inside(&mut viewport_ui, &mut viewer);
-            // Record the dock's actual rect for the scene-pick gate: the dock does
-            // NOT always fill the window, and anything below/outside it is bare
-            // full-window 3D that must read as scene, not chrome.
-            let dock_rect = viewport_ui.min_rect();
             // After the dock has laid itself out, publish the area
             // rect under a generic "panel.center" anchor so the help
             // tour can spotlight the dock content as a whole.
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
                 a.set("panel.center", screen);
             }
-            if let Some(mut r) = world.get_resource_mut::<viewport::PanelRects>() {
-                r.set_dock_rect(dock_rect);
+            if let Some(mut g) = world.get_resource_mut::<viewport::ScenePickGate>() {
+                g.set_dock_rect(dock_rect);
             }
         }
     } else {

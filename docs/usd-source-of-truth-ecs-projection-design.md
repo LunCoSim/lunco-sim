@@ -1,12 +1,23 @@
 # USD as source of truth → ECS projection
 
-**Status:** **implemented**. Edits now flow *into*
-USD (`ApplyUsdOp` → `UsdDocument` base⊕runtime layers) and *project out* to ECS via
-the op-driven live-stage pipeline: `twin_projection::sync_twin_overlays` replays the
-typed op onto the `CanonicalStage` (`lunco-usd-bevy/src/canonical.rs`), openusd's
+**Status:** **PARTIALLY implemented — the rest of this document is a PLAN, not a
+description of the code.**
+
+*Built:* the op-driven projection pipeline. An `ApplyUsdOp` edit lands in the
+`UsdDocument` (base⊕runtime layers), `twin_projection::sync_twin_overlays` replays
+the typed op onto the `CanonicalStage` (`lunco-usd-bevy/src/canonical.rs`), openusd's
 change sink fires, and `live_consume::project_stage_changes` reconciles the ECS. See
 [`architecture/21-domain-usd.md`](architecture/21-domain-usd.md) § "Op-driven
-projection". The narrative below is retained as the design rationale.
+projection". Spawn / remove / reference are USD-first through this path.
+
+*Not built:* the two hottest **edit** paths still bypass USD entirely. The gizmo
+writes `Transform` directly (zero USD references in `lunco-sandbox-edit/src/gizmo.rs`)
+— a drag is **lost on reload**. `SetObjectProperty` mutates `Visibility` /
+`StandardMaterial` / `ShaderMaterial` / `WheelRaycast` in place, and its shadow-write
+excludes shader/visible/PBR/colour. And every type named in the plan below —
+`UsdPrimIndex`, `UsdAttrProjection`, `project_usd_attrs_to_components` — is
+**proposed, not written**: all three grep to zero hits repo-wide. Read §2–§5 as the
+design to implement, not as a map of what runs today.
 **Scope:** make editing flow *into* USD and *project out* to ECS, instead of the
 current ECS-first model where `SetObjectProperty` mutates components directly and
 only a partial, lossy shadow-write reaches USD.

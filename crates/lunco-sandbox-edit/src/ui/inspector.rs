@@ -20,7 +20,7 @@ use lunco_core::ports::PortRegistry;
 
 use lunco_obstacle_field::{ObstacleFieldSpec, Pattern, plugin::UpdateObstacleFieldSpec};
 
-use crate::{SelectedEntities, UndoStack, UndoAction};
+use crate::SelectedEntities;
 use lunco_usd::document::{UsdOp, LayerId};
 use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd::registry::UsdDocumentRegistry;
@@ -252,6 +252,24 @@ impl Panel for Inspector {
     }
 }
 
+/// Delete `entity` from the scene — the single delete path for both the Del
+/// hotkey and the Delete button.
+///
+/// Authors the removal into the active document's runtime layer FIRST (so the
+/// delete is a journaled, undoable, networked document op — the editor keeps no
+/// private history), then performs the live despawn for immediate feedback and
+/// drops it from the selection. A non-document entity (a palette spawn the doc
+/// doesn't own) simply isn't authored — it just despawns.
+fn delete_entity(world: &mut World, entity: Entity) {
+    crate::commands::author_prim_removal(world, entity);
+    if world.get_entity(entity).is_ok() {
+        world.despawn(entity);
+    }
+    if let Some(mut selected) = world.get_resource_mut::<SelectedEntities>() {
+        selected.entities.retain(|e| *e != entity);
+    }
+}
+
 fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
 
         // Delete hotkey
@@ -260,17 +278,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
                 .resource::<SelectedEntities>()
                 .and_then(|s| s.primary());
             if let Some(entity) = primary {
-                ctx.defer(move |world| {
-                    if let Some(mut undo) = world.get_resource_mut::<UndoStack>() {
-                        undo.push(UndoAction::Spawned { entity });
-                    }
-                    if world.get_entity(entity).is_ok() {
-                        world.despawn(entity);
-                    }
-                    if let Some(mut selected) = world.get_resource_mut::<SelectedEntities>() {
-                        selected.entities.retain(|e| *e != entity);
-                    }
-                });
+                ctx.defer(move |world| delete_entity(world, entity));
                 return;
             }
         }
@@ -345,53 +353,40 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
         mount_section(ui, ctx, entity);
 
         // ── Transform component ──────────────────────────────────────
+        // The sliders author a **document op**, they do not poke ECS: a committed
+        // edit fires `MoveEntity`, whose observers both move the body (physics
+        // seat + kinematic pulse — the old hand-copied CQ-510 block, now in ONE
+        // place) and author `UsdOp::SetTranslate` into the runtime layer. So an
+        // Inspector move survives reload, journals, syncs, and is undone by the
+        // same Ctrl+Z as a gizmo drag. Committed = drag released or value typed —
+        // per-frame firing during a drag would push one op per frame.
         if ctx.get::<Transform>(entity).is_some() {
             egui::CollapsingHeader::new("Transform")
                 .default_open(true)
                 .show(ui, |ui| {
-                    if let Some((old_tf, new_vals)) =
-                        ctx.get::<Transform>(entity).map(|tf| {
-                            (
-                                (tf.translation, tf.rotation),
-                                (tf.translation.x, tf.translation.y, tf.translation.z),
-                            )
-                        })
-                    {
-                        let mut x = new_vals.0;
-                        let mut y = new_vals.1;
-                        let mut z = new_vals.2;
-                        let changed = ui.add(egui::Slider::new(&mut x, -1000.0..=1000.0).text("X")).changed()
-                            | ui.add(egui::Slider::new(&mut y, -1000.0..=1000.0).text("Y")).changed()
-                            | ui.add(egui::Slider::new(&mut z, -1000.0..=1000.0).text("Z")).changed();
-                        if changed {
-                            let (old_t, old_r) = old_tf;
+                    if let Some(t) = ctx.get::<Transform>(entity).map(|tf| tf.translation) {
+                        let (mut x, mut y, mut z) = (t.x, t.y, t.z);
+                        let rx = ui.add(egui::Slider::new(&mut x, -1000.0..=1000.0).text("X"));
+                        let ry = ui.add(egui::Slider::new(&mut y, -1000.0..=1000.0).text("Y"));
+                        let rz = ui.add(egui::Slider::new(&mut z, -1000.0..=1000.0).text("Z"));
+                        let committed = [&rx, &ry, &rz]
+                            .iter()
+                            .any(|r| r.drag_stopped() || (r.changed() && !r.dragged()));
+                        if committed {
+                            let new_t = Vec3::new(x, y, z);
                             ctx.defer(move |world| {
-                                if let Some(mut undo) = world.get_resource_mut::<UndoStack>() {
-                                    undo.push(UndoAction::TransformChanged {
-                                        entity,
-                                        old_translation: old_t,
-                                        old_rotation: old_r,
-                                    });
-                                }
-                                let new_t = Vec3::new(x, y, z);
-                                if let Some(mut tf) = world.get_mut::<Transform>(entity) {
-                                    tf.translation = new_t;
-                                }
-                                // CQ-510: on a physics body avian re-derives
-                                // Transform from its f64 `Position` every tick,
-                                // so writing only Transform silently no-ops.
-                                // Mirror `MoveEntity`: seat `Position` and force
-                                // Kinematic so the new pose is authoritative.
-                                if let Some(mut pos) =
-                                    world.get_mut::<avian3d::physics_transform::Position>(entity)
-                                {
-                                    pos.0 = new_t.as_dvec3();
-                                }
-                                if world.get::<avian3d::prelude::RigidBody>(entity).is_some() {
-                                    world
-                                        .entity_mut(entity)
-                                        .insert(avian3d::prelude::RigidBody::Kinematic);
-                                }
+                                let Some(gid) =
+                                    world.get::<lunco_core::GlobalEntityId>(entity).copied()
+                                else {
+                                    warn!(
+                                        "INSPECTOR: {entity:?} has no GlobalEntityId — not movable"
+                                    );
+                                    return;
+                                };
+                                world.trigger(crate::commands::MoveEntity {
+                                    entity_id: gid.get(),
+                                    translation: new_t,
+                                });
                             });
                         }
                     }
@@ -580,17 +575,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
         // Delete button
         ui.separator();
         if ui.button("🗑 Delete Entity (Del)").clicked() {
-            ctx.defer(move |world| {
-                if let Some(mut undo) = world.get_resource_mut::<UndoStack>() {
-                    undo.push(UndoAction::Spawned { entity });
-                }
-                if world.get_entity(entity).is_ok() {
-                    world.despawn(entity);
-                }
-                if let Some(mut selected) = world.get_resource_mut::<SelectedEntities>() {
-                    selected.entities.retain(|e| *e != entity);
-                }
-            });
+            ctx.defer(move |world| delete_entity(world, entity));
         }
     }
 

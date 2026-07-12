@@ -61,6 +61,7 @@ pub async fn lunco_api(json: String) -> Result<String, JsValue> {
             command_id: None,
             data: Some(serde_json::json!({ "png_base64": STANDARD.encode(&png_bytes) })),
             error: None,
+            error_code: None,
         };
         return serde_json::to_string(&envelope)
             .map_err(|e| JsValue::from_str(&format!("lunco_api: encode failed: {e}")));

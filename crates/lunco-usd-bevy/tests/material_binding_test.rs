@@ -1,3 +1,8 @@
+//! Integration test: writes a USDA fixture to disk and loads it. Native-only, so
+//! the workspace `std::fs` ban (a wasm-runtime guard) does not apply — exactly the
+//! `tests/` exemption `clippy.toml` describes but cargo cannot express as config.
+#![allow(clippy::disallowed_methods)]
+
 use bevy::prelude::*;
 use lunco_usd_bevy::*;
 

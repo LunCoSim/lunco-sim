@@ -10,7 +10,10 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
-use std::time::Instant;
+// `web_time::Instant`, NOT `std::time::Instant`: this module is unconditionally
+// `pub mod indexer` (lib.rs), so it ships to wasm — where `std::time::Instant::now()`
+// PANICS. `web_time` is a drop-in that uses `performance.now()` there.
+use web_time::Instant;
 
 /// Indexer options. Used by both the CLI binary and the in-process
 /// startup task in `MslRemotePlugin`. Kept tiny on purpose — adding

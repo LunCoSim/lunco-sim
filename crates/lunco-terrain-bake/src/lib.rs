@@ -71,11 +71,16 @@ pub enum BakeStage {
 pub const COARSE_RES: usize = 384;
 
 /// One bake output (either stage). `grid` is crater-stamped; `base_grid` is the
-/// pre-crater working grid (cloned before the stamp loop on both platforms),
-/// retained for a live re-bake — native re-stamps off it; web keeps it for the
-/// analytic re-compose (doc-backed terrains never live-regenerate the raster).
+/// pre-crater working grid (cloned before the stamp loop on both platforms — for the
+/// Full stage ONLY), retained for a live re-bake — native re-stamps off it; web keeps
+/// it for the analytic re-compose (doc-backed terrains never live-regenerate the
+/// raster).
 pub struct BakedGrid {
     pub grid: HeightGrid,
+    /// The stamp-FREE grid a live regenerate re-stamps off. **Only populated for
+    /// [`BakeStage::Full`]** — the Coarse preview is thrown away when Full lands and
+    /// its base grid never crosses the worker wire, so it carries an EMPTY grid
+    /// (`res = 0`) rather than a ~19 MB clone nobody reads.
     pub base_grid: HeightGrid,
     pub site: String,
     /// Native crop resolution before any resample (for honest logging).
@@ -121,8 +126,15 @@ pub fn finish_bake(raw: &HeightGrid, site: &str, job: &DemBakeJob, stage: BakeSt
         tile = bake::resample(&tile, tile.half_extent as f64, up);
     }
     let res = tile.res;
-    // Retain the crater-FREE grid so a live regenerate re-stamps off it (native).
-    let base_grid = tile.clone();
+    // Retain the crater-FREE grid so a live regenerate re-stamps off it — but ONLY
+    // for the Full stage. The Coarse preview is a throwaway (it is replaced the
+    // moment `Full` lands, and the worker posts only `grid` over the wire, never
+    // `base_grid`), so cloning the working grid for it was pure waste: res² × f64 —
+    // with `detail_upsample` that is ~19 MB per bake.
+    let base_grid = match stage {
+        BakeStage::Full => tile.clone(),
+        BakeStage::Coarse => HeightGrid { res: 0, half_extent: tile.half_extent, heights: Vec::new() },
+    };
     // Apply the geometry STAMP layers (craters, …) into the working grid so both
     // the streamed tiles and the heightfield collider carry the same features.
     for stamp in &job.stamps {
@@ -218,6 +230,32 @@ pub fn decode_grid_blob(bytes: &[u8]) -> Option<(HeightGrid, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coarse_stage_carries_no_base_grid_clone() {
+        // The Coarse preview is a throwaway; cloning its (up to ~19 MB) working grid
+        // into `base_grid` was pure waste. Full still carries the stamp-free base.
+        let res = 65usize;
+        let raw = HeightGrid {
+            res,
+            half_extent: 1000.0,
+            heights: (0..res * res).map(|i| (i % 7) as f64).collect(),
+        };
+        let job = DemBakeJob {
+            half_window: 900.0,
+            target_res: 33,
+            detail_upsample: 1,
+            stamps: Vec::new(),
+        };
+        let coarse = finish_bake(&raw, "site", &job, BakeStage::Coarse);
+        assert_eq!(coarse.base_grid.res, 0);
+        assert!(coarse.base_grid.heights.is_empty());
+        assert!(!coarse.grid.heights.is_empty());
+
+        let full = finish_bake(&raw, "site", &job, BakeStage::Full);
+        assert_eq!(full.base_grid.res, full.grid.res);
+        assert_eq!(full.base_grid.heights.len(), full.grid.heights.len());
+    }
 
     #[test]
     fn grid_blob_round_trips() {

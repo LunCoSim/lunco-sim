@@ -11,7 +11,11 @@ lunco-storage      = { path = "../lunco-storage" }
 # Twin edit-journal persistence (B1): `JournalResource` (the in-memory journal
 # handle) + `Journal` save/load. Neither depends on this crate, so no cycle.
 lunco-twin-journal = { path = "../lunco-twin-journal" }
-lunco-doc-bevy     = { path = "../lunco-doc-bevy" }
+# `default-features = false` is LOAD-BEARING: lunco-doc-bevy's default `ui`
+# feature pulls in bevy_egui, and cargo unifies features across the graph — so
+# omitting it here switches egui/wgpu/winit ON for every consumer of this crate,
+# including the `--no-ui` server and the wasm worker. See docs/reviews (A1).
+lunco-doc-bevy     = { path = "../lunco-doc-bevy", default-features = false }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # Bevy ECS/app SUBSTRATE only (no render/winit/egui). Declared directly rather

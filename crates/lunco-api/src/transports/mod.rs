@@ -104,8 +104,17 @@ pub fn spawn_server(config: HttpServerConfig, bridge: HttpBridge) {
             }
         };
         rt.block_on(async move {
+            // Three routes, all of them real (the docs used to list four more
+            // that were never registered — every curl example 404'd):
+            //   POST /api/commands        — the one command funnel
+            //   GET  /api/health          — liveness; no world access
+            //   GET  /api/commands/schema — the `DiscoverSchema` result, i.e.
+            //                               the same derived list the MCP tool
+            //                               surface is built from
             let app = axum::Router::new()
                 .route("/api/commands", axum::routing::post(http::handle_api_commands))
+                .route("/api/commands/schema", axum::routing::get(http::handle_schema))
+                .route("/api/health", axum::routing::get(http::handle_health))
                 .with_state(bridge);
 
             let listener = match tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await {

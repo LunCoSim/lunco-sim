@@ -71,6 +71,10 @@ impl Plugin for TerrainSurfacePlugin {
         // each `lunco:layer` type → a parser; register more with `App::add_terrain_layer`
         // — no changes to the build/scatter/regen systems. See `crate::terrain_layers`.
         app.init_resource::<crate::terrain_layers::TerrainLayerParserRegistry>();
+        // Boulder meshes + the single boulder material, shared by every rock layer
+        // (procedural scatter AND `PlaceRock`) so rocks batch instead of each one
+        // adding a draw call + a bind group.
+        app.init_resource::<crate::terrain_layers::SharedRockAssets>();
         app.add_systems(Update, crate::terrain_layers::scatter_terrain_layers);
         // M7 (physics): opt-in per-rover canonical-res heightfield COLLIDER ring.
         // Inert unless a DEM is built with `collider_ring`; then it replaces the

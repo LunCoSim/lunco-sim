@@ -1,15 +1,38 @@
-//! Auto-generates `docs/commands-reference.md` from every `#[Command]` struct
-//! under `crates/`.
+//! Generates `docs/commands-reference.md` from the **runtime** command schema.
 //!
 //! ```sh
-//! cargo run --manifest-path tools/gen-command-docs/Cargo.toml
+//! # 1. dump the schema from a running app (headless is fine):
+//! cargo run -p lunco-sandbox-server -- --api --no-ui &
+//! curl -s http://127.0.0.1:4101/api/commands/schema > /tmp/schema.json
+//! # 2. generate:
+//! cargo run -p gen-command-docs -- --schema /tmp/schema.json
 //! ```
 //!
-//! It parses Rust **source** with `syn` — no app build, no reflection — so each
-//! command's description comes straight from its `#[doc]` comments and the list
-//! can never drift from the code. Re-run whenever commands are added or changed.
-//! Undocumented commands (no `///`) are flagged in the output so they're easy to
-//! find and document.
+//! # Why a schema, not a grep
+//!
+//! The previous version text-scraped `#[Command]` structs out of `crates/**.rs`
+//! with `syn` and called that the command list. It was wrong in both directions:
+//! it MISSED commands (a `#[Command]` behind a `macro_rules!` or a re-export
+//! never matched the pattern) and it INVENTED them — it published `TestEcho`, a
+//! `#[cfg(test)]` unit-test fixture, as public API, and it could not see
+//! `ApiVisibility::hide`, so internal-only verbs leaked into the doc too.
+//!
+//! `DiscoverSchema` is the same derived, visibility-filtered list that drives the
+//! MCP tool surface and the API itself. Making it the source here means the doc
+//! can only ever describe commands that a caller can actually call.
+//!
+//! Source is still parsed — but only for *prose*: the `///` doc comments and the
+//! defining file, neither of which survives into the reflect schema. A command in
+//! the schema with no source match still gets documented (name + fields); a
+//! `#[Command]` in source that is NOT in the schema is deliberately omitted and
+//! listed in a trailing HTML comment, because it is not reachable.
+//!
+//! A host-side dev tool: it reads `.rs` files and writes a `.md` file, and never
+//! runs on wasm. The workspace `disallowed_methods` ban on `std::fs` exists to
+//! keep the *browser* build from calling a wasm-panicking API; it does not apply
+//! here (`clippy.toml`'s header says so, but cargo has no path-scoped lint
+//! config, so the exemption has to be written out).
+#![allow(clippy::disallowed_methods)]
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -18,21 +41,67 @@ use std::{
 };
 
 use quote::ToTokens;
+use serde::Deserialize;
 use syn::{visit::Visit, Attribute, Field, File, ItemStruct};
 
-#[derive(Clone)]
-struct FieldInfo {
+// ── The runtime schema (`DiscoverSchema`) ───────────────────────────────────
+
+/// One command as the app itself reports it. Field order/types come from
+/// `bevy_reflect`, so they are what the deserializer actually accepts.
+#[derive(Debug, Deserialize)]
+struct SchemaCommand {
     name: String,
+    #[serde(default)]
+    fields: Vec<SchemaField>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SchemaField {
+    name: String,
+    type_name: String,
+}
+
+/// The response body of `GET /api/commands/schema` (or a `DiscoverSchema`
+/// `POST /api/commands`). Both wrap the payload in the API envelope
+/// (`{"data": {"commands": [...]}}`); a bare `{"commands": [...]}` is accepted
+/// too, so a hand-dumped schema works.
+#[derive(Debug, Deserialize)]
+struct SchemaEnvelope {
+    data: Option<ApiSchema>,
+    commands: Option<Vec<SchemaCommand>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApiSchema {
+    commands: Vec<SchemaCommand>,
+}
+
+fn load_schema(path: &Path) -> Vec<SchemaCommand> {
+    let raw = fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("cannot read schema `{}`: {e}", path.display()));
+    let env: SchemaEnvelope = serde_json::from_str(&raw)
+        .unwrap_or_else(|e| panic!("`{}` is not a DiscoverSchema response: {e}", path.display()));
+    env.data
+        .map(|d| d.commands)
+        .or(env.commands)
+        .unwrap_or_else(|| panic!("`{}` has no `commands` array", path.display()))
+}
+
+// ── Source scrape (prose only) ──────────────────────────────────────────────
+
+#[derive(Clone, Default)]
+struct FieldDoc {
     ty: String,
     doc: String,
 }
 
 #[derive(Clone)]
-struct CommandInfo {
-    name: String,
+struct SourceInfo {
     doc: String,
-    fields: Vec<FieldInfo>,
-    rel_file: String, // crates/<crate>/src/...rs, for traceability
+    /// field name → its `///` doc + written-out Rust type.
+    fields: BTreeMap<String, FieldDoc>,
+    rel_file: String,
+    crate_name: String,
 }
 
 /// Repo root = two levels up from this package's manifest dir.
@@ -62,7 +131,6 @@ fn doc_of(attrs: &[Attribute]) -> String {
             }
         }
     }
-    // Drop trailing blank doc lines.
     while lines.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
         lines.pop();
     }
@@ -72,46 +140,53 @@ fn doc_of(attrs: &[Attribute]) -> String {
 /// True if the item carries the `#[Command]` attribute macro
 /// (matches `Command`, `crate::Command`, `lunco_command_macro::Command`, …).
 fn has_command_attr(attrs: &[Attribute]) -> bool {
-    attrs
-        .iter()
-        .any(|a| a.path().segments.last().map(|s| s.ident == "Command").unwrap_or(false))
+    attrs.iter().any(|a| {
+        a.path()
+            .segments
+            .last()
+            .map(|s| s.ident == "Command")
+            .unwrap_or(false)
+    })
 }
 
 struct Collector {
     rel_file: String,
-    out: Vec<CommandInfo>,
+    crate_name: String,
+    out: Vec<(String, SourceInfo)>,
 }
 
 impl<'ast> Visit<'ast> for Collector {
     fn visit_item_struct(&mut self, i: &'ast ItemStruct) {
         if has_command_attr(&i.attrs) {
-            let fields: Vec<FieldInfo> = i
-                .fields
-                .iter()
-                .filter_map(|f: &Field| {
-                    let name = f.ident.as_ref()?.to_string();
-                    // Normalize the token stream spacing (`f64 , x` → `f64, x`).
-                    let ty = f
-                        .ty
-                        .to_token_stream()
-                        .to_string()
-                        .split_whitespace()
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                        .replace(" ,", ",");
-                    let doc = doc_of(&f.attrs);
-                    Some(FieldInfo { name, ty, doc })
-                })
-                .collect();
-            self.out.push(CommandInfo {
-                name: i.ident.to_string(),
-                doc: doc_of(&i.attrs),
-                fields,
-                rel_file: self.rel_file.clone(),
-            });
+            let mut fields = BTreeMap::new();
+            for f in i.fields.iter() {
+                let Some(name) = f.ident.as_ref().map(|n| n.to_string()) else {
+                    continue;
+                };
+                fields.insert(name, FieldDoc { ty: type_str(f), doc: doc_of(&f.attrs) });
+            }
+            self.out.push((
+                i.ident.to_string(),
+                SourceInfo {
+                    doc: doc_of(&i.attrs),
+                    fields,
+                    rel_file: self.rel_file.clone(),
+                    crate_name: self.crate_name.clone(),
+                },
+            ));
         }
         syn::visit::visit_item_struct(self, i);
     }
+}
+
+/// Normalize a field's token stream spacing (`f64 , x` → `f64, x`).
+fn type_str(f: &Field) -> String {
+    f.ty.to_token_stream()
+        .to_string()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace(" ,", ",")
 }
 
 /// Recursively collect `.rs` files, skipping `target/`.
@@ -171,105 +246,160 @@ fn domain_title(crate_name: &str) -> (&'static str, u32) {
         "lunco-celestial" | "lunco-celestial-ephemeris" | "lunco-environment" => {
             ("Celestial, environment & comms", 90)
         }
-        "lunco-terrain-surface" | "lunco-terrain-globe" | "lunco-terrain-core" => {
-            ("Terrain", 91)
-        }
+        "lunco-terrain-surface" | "lunco-terrain-globe" | "lunco-terrain-core" => ("Terrain", 91),
         "lunco-obstacle-field" => ("Obstacle fields", 92),
         "lunco-materials" => ("Shaders & materials", 93),
         "lunco-api" => ("API & schema", 94),
         "lunco-core" => ("Core", 95),
-        _ => ("Other", 99),
+        _ => ("Other (source location unknown)", 99),
     }
 }
 
+/// The reflect type path is fully qualified (`alloc::string::String`,
+/// `bevy_ecs::entity::Entity`). Show the last segment — that's what a caller
+/// reads — but keep generics intact.
+fn short_type(path: &str) -> String {
+    match path.rsplit("::").next() {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => path.to_string(),
+    }
+}
+
+const USAGE: &str = "\
+usage: cargo run -p gen-command-docs -- --schema <schema.json>
+
+  <schema.json> is a `DiscoverSchema` response from a RUNNING app — the
+  authoritative, visibility-filtered command list (the same one MCP reads):
+
+      cargo run -p lunco-sandbox-server -- --api --no-ui &
+      curl -s http://127.0.0.1:4101/api/commands/schema > /tmp/schema.json
+
+  There is deliberately no source-scrape fallback: a grep of `#[Command]` both
+  misses commands and invents them (it used to publish the `TestEcho` unit-test
+  fixture as public API), and a doc that is confidently wrong is worse than one
+  that refuses to build.
+";
+
 fn main() {
+    let mut args = std::env::args().skip(1);
+    let mut schema_path: Option<PathBuf> = None;
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--schema" => schema_path = args.next().map(PathBuf::from),
+            "-h" | "--help" => {
+                eprint!("{USAGE}");
+                return;
+            }
+            other => {
+                eprintln!("unknown argument `{other}`\n\n{USAGE}");
+                std::process::exit(2);
+            }
+        }
+    }
+    let Some(schema_path) = schema_path else {
+        eprint!("{USAGE}");
+        std::process::exit(2);
+    };
+
     let root = repo_root();
-    let crates_dir = root.join("crates");
     let out_path = root.join("docs/commands-reference.md");
 
-    let mut files = Vec::new();
-    walk_rs(&crates_dir, &mut files);
+    // 1. The authoritative list.
+    let mut schema = load_schema(&schema_path);
+    schema.sort_by(|a, b| a.name.cmp(&b.name));
 
-    // crate name → (set of dedup keys, list of commands)
-    let mut by_crate: BTreeMap<String, Vec<CommandInfo>> = BTreeMap::new();
-    let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
+    // 2. The prose, scraped from source and joined by name.
+    let mut files = Vec::new();
+    walk_rs(&root.join("crates"), &mut files);
+    let mut source: BTreeMap<String, SourceInfo> = BTreeMap::new();
     let mut files_scanned = 0u32;
     let mut parse_failures = 0u32;
-
     for f in &files {
         let rel = f
             .strip_prefix(&root)
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|_| f.clone());
-        let crate_name = crate_of(&rel);
-        let rel_str = rel.to_string_lossy().to_string();
-
-        let src = match fs::read_to_string(f) {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-        let file: File = match syn::parse_file(&src) {
-            Ok(file) => file,
-            Err(_) => {
-                parse_failures += 1;
-                continue;
-            }
+        let Ok(src) = fs::read_to_string(f) else { continue };
+        let Ok(file) = syn::parse_file(&src) else {
+            parse_failures += 1;
+            continue;
         };
         files_scanned += 1;
-
-        let mut col = Collector { rel_file: rel_str, out: Vec::new() };
+        let mut col = Collector {
+            rel_file: rel.to_string_lossy().to_string(),
+            crate_name: crate_of(&rel),
+            out: Vec::new(),
+        };
         col.visit_file(&file);
-        for cmd in col.out {
-            let key = (crate_name.clone(), cmd.name.clone());
-            if !seen.insert(key) {
-                continue; // same command defined twice in one crate — keep first
-            }
-            by_crate.entry(crate_name.clone()).or_default().push(cmd);
+        for (name, info) in col.out {
+            source.entry(name).or_insert(info);
         }
     }
 
-    // Sort commands alphabetically within each crate.
-    for v in by_crate.values_mut() {
-        v.sort_by(|a, b| a.name.cmp(&b.name));
-    }
+    // 3. Join. The schema decides WHAT exists; source only decorates it.
+    let schema_names: BTreeSet<&str> = schema.iter().map(|c| c.name.as_str()).collect();
+    let unreachable: Vec<&String> = source
+        .keys()
+        .filter(|n| !schema_names.contains(n.as_str()))
+        .collect();
+    let undocumented: Vec<&str> = schema
+        .iter()
+        .map(|c| c.name.as_str())
+        .filter(|n| source.get(*n).map(|s| s.doc.is_empty()).unwrap_or(true))
+        .collect();
+    let unknown_source: Vec<&str> = schema
+        .iter()
+        .map(|c| c.name.as_str())
+        .filter(|n| !source.contains_key(*n))
+        .collect();
 
-    // Crates in domain order (then alphabetical).
-    let mut crates_sorted: Vec<(&String, &Vec<CommandInfo>)> = by_crate.iter().collect();
+    // Group by the crate the command is DEFINED in (schema doesn't carry that).
+    let mut by_crate: BTreeMap<String, Vec<&SchemaCommand>> = BTreeMap::new();
+    for c in &schema {
+        let crate_name = source
+            .get(&c.name)
+            .map(|s| s.crate_name.clone())
+            .unwrap_or_else(|| "?".to_string());
+        by_crate.entry(crate_name).or_default().push(c);
+    }
+    let mut crates_sorted: Vec<(&String, &Vec<&SchemaCommand>)> = by_crate.iter().collect();
     crates_sorted.sort_by_key(|(c, _)| (domain_title(c).1, c.to_string()));
 
-    let total_commands: usize = by_crate.values().map(|v| v.len()).sum();
-    let undocumented: usize = by_crate
-        .values()
-        .flatten()
-        .filter(|c| c.doc.is_empty())
-        .count();
-
     // ── Emit markdown ───────────────────────────────────────────────────────
+    let total = schema.len();
     let mut md = String::new();
-    md.push_str("<!-- AUTO-GENERATED by `cargo run --manifest-path tools/gen-command-docs/Cargo.toml`.\n");
-    md.push_str("     Do not edit by hand — edit the `#[doc]` on each `#[Command]` struct and re-run. -->\n\n");
+    md.push_str("<!-- AUTO-GENERATED. Do not edit by hand.\n");
+    md.push_str("     Source of truth: the running app's `DiscoverSchema` (GET /api/commands/schema),\n");
+    md.push_str("     decorated with the `///` docs on each `#[Command]` struct.\n");
+    md.push_str("     Regenerate: cargo run -p gen-command-docs -- --schema <schema.json> -->\n\n");
     md.push_str("# Command Reference\n\n");
     md.push_str(
         "Every verb in LunCoSim is a typed `#[Command]` — an event dispatched through one\n\
          bus, reachable from the **HTTP API** (`POST /api/commands`, `{\"command\":\"…\",\"params\":{…}}`),\n\
          **MCP**, and **rhai** (`cmd(\"CommandName\", #{ … })`). This page is generated from the\n\
-         command structs themselves in `crates/`, so it always matches the code. See the\n\
+         **runtime schema** the app itself advertises, so every command below is one you can\n\
+         actually call, with the fields the deserializer actually accepts. See the\n\
          [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the\n\
          [API doc](architecture/12-api.md) for the HTTP contract.\n\n",
     );
     md.push_str(&format!(
-        "**{total_commands} commands** across **{n_crates}** crates. ",
-        n_crates = by_crate.len(),
+        "**{total} commands** across **{}** crates. ",
+        by_crate.len()
     ));
-    if undocumented > 0 {
-        md.push_str(&format!(
-            "{undocumented} command(s) below lack a `///` description — marked _(no description)_; \
-             add a doc comment on the struct to fix it.\n\n",
-        ));
-    } else {
+    if undocumented.is_empty() {
         md.push_str("All documented.\n\n");
+    } else {
+        md.push_str(&format!(
+            "{} command(s) lack a `///` description — marked _(no description)_ below, and shown \
+             the same way in the MCP tool list an agent reads; add a doc comment on the struct to \
+             fix it.\n\n",
+            undocumented.len()
+        ));
     }
-    md.push_str("> **Regenerate:** `cargo run --manifest-path tools/gen-command-docs/Cargo.toml`\n\n");
+    md.push_str(
+        "> **Regenerate:** dump the schema from a running app, then\n\
+         > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).\n\n",
+    );
 
     // Quick-jump index.
     md.push_str("## Index\n\n");
@@ -281,10 +411,9 @@ fn main() {
             last_domain = Some(domain);
         }
         md.push_str(&format!(
-            "- [`{}`](#{}) (`{}`, {} command{})\n",
+            "- [`{}`](#{}) ({} command{})\n",
             crate_name,
             crate_name.replace('_', "-"),
-            crate_name,
             cmds.len(),
             if cmds.len() == 1 { "" } else { "s" },
         ));
@@ -306,24 +435,35 @@ fn main() {
             crate_name.replace('_', "-"),
         ));
         for c in cmds.iter() {
+            let src = source.get(&c.name);
             md.push_str(&format!("#### `{}`\n\n", c.name));
-            if c.doc.is_empty() {
-                md.push_str("*(no description — add a `///` doc on the struct)*\n\n");
-            } else {
-                md.push_str(&format!("{}\n\n", c.doc));
+            match src.map(|s| s.doc.as_str()).unwrap_or("") {
+                "" => md.push_str("*(no description — add a `///` doc on the struct)*\n\n"),
+                doc => md.push_str(&format!("{doc}\n\n")),
             }
-            md.push_str(&format!("- *defined in:* `{}`\n", c.rel_file));
+            if let Some(s) = src {
+                md.push_str(&format!("- *defined in:* `{}`\n", s.rel_file));
+            }
             if c.fields.is_empty() {
-                md.push_str(&format!("- *fields:* none — call with `{}` (no params)\n\n", c.name));
+                md.push_str(&format!(
+                    "- *fields:* none — call with `{}` (no params)\n\n",
+                    c.name
+                ));
             } else {
                 md.push_str("\n| Field | Type | Description |\n|---|---|---|\n");
                 for f in &c.fields {
-                    let desc = if f.doc.is_empty() {
-                        " ".to_string()
-                    } else {
-                        f.doc.replace('\n', " ")
-                    };
-                    md.push_str(&format!("| `{}` | `{}` | {} |\n", f.name, f.ty, desc));
+                    let fd = src.and_then(|s| s.fields.get(&f.name));
+                    // Prefer the written-out Rust type from source (`Option<f64>`
+                    // reads better than the reflect path); fall back to the
+                    // schema's, which is always present.
+                    let ty = fd
+                        .map(|d| d.ty.clone())
+                        .unwrap_or_else(|| short_type(&f.type_name));
+                    let desc = fd
+                        .map(|d| d.doc.replace('\n', " "))
+                        .unwrap_or_default();
+                    let desc = if desc.trim().is_empty() { " ".into() } else { desc };
+                    md.push_str(&format!("| `{}` | `{}` | {} |\n", f.name, ty, desc));
                 }
                 md.push('\n');
             }
@@ -332,13 +472,52 @@ fn main() {
 
     md.push_str("---\n\n");
     md.push_str(&format!(
-        "<!-- scanned {files_scanned} .rs files across `crates/`; {parse_failures} parse failure(s) skipped -->\n",
+        "<!-- {total} commands from the runtime schema; scanned {files_scanned} .rs files for docs \
+         ({parse_failures} parse failure(s) skipped).\n"
     ));
+    if !unknown_source.is_empty() {
+        md.push_str(&format!(
+            "     In the schema but no `#[Command]` struct found in source (macro-generated?): {}\n",
+            unknown_source.join(", ")
+        ));
+    }
+    if !unreachable.is_empty() {
+        md.push_str(&format!(
+            "     `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden\n\
+             \x20    (`ApiVisibility::hide`), or never registered; deliberately not documented: {}\n",
+            unreachable
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    md.push_str("-->\n");
 
     fs::write(&out_path, md).expect("write commands-reference.md");
     eprintln!(
-        "wrote {} — {total_commands} commands across {} crates ({undocumented} undocumented)",
+        "wrote {} — {total} commands across {} crates",
         out_path.display(),
-        by_crate.len(),
+        by_crate.len()
     );
+    if !undocumented.is_empty() {
+        eprintln!(
+            "\n{} command(s) with NO doc comment (they render as `_(no description)_` in the MCP \
+             tool list an agent reads):\n  {}",
+            undocumented.len(),
+            undocumented.join("\n  ")
+        );
+    }
+    if !unreachable.is_empty() {
+        eprintln!(
+            "\n{} `#[Command]` struct(s) in source are NOT in the runtime schema (hidden, \
+             test-only, or unregistered) and were omitted:\n  {}",
+            unreachable.len(),
+            unreachable
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join("\n  ")
+        );
+    }
 }

@@ -43,8 +43,33 @@ pub const J2000_JD: f64 = 2_451_545.0;
 /// the world clock switches to [`TimeRegime::KinematicWarp`]: the tick freezes
 /// (physics pauses) and only **pure** consumers (ephemeris, lighting, sidereal)
 /// advance, as a pure function of `epoch`. Makes the implicit
-/// "`speed > 100 → physics_enabled = false`" cliff explicit.
-pub const MAX_REALTIME_RATE: f64 = 100.0;
+/// "`speed > MAX → physics_enabled = false`" cliff explicit.
+///
+/// # Why the ceiling is small (and why 100 was a death spiral)
+///
+/// Bevy clamps the **raw** frame delta to `max_delta` (33 ms in the sandbox) and
+/// only *then* multiplies by `relative_speed` (= this rate). So the virtual time
+/// handed to `FixedUpdate` in a hitched frame is `33 ms × rate`, and the number
+/// of fixed steps run **in that one frame** is `33 ms × rate / SECS_PER_TICK`
+/// (1/60 s):
+///
+/// | rate | virtual time per clamped frame | fixed steps in that frame | avian substeps (×12) |
+/// |------|-------------------------------|---------------------------|----------------------|
+/// | 8    | 0.264 s                       | ~16                       | ~190                 |
+/// | 100  | 3.3 s                         | **~198**                  | **~2376**            |
+///
+/// At 100 the frame that runs 198 steps is itself slow, which re-clamps to
+/// `max_delta`, which yields another 198 — the clamp does not save you, it
+/// *pins you at the worst case*. 8× keeps the worst-case burst inside what the
+/// solver sustains on native while still being a useful fast-forward; anything
+/// beyond it belongs in [`TimeRegime::KinematicWarp`], which is exactly what
+/// crossing this constant selects.
+///
+/// TODO(P11): a ceiling alone is a mitigation, not the fix. The structural fix is
+/// a **per-frame fixed-step budget** (cap the steps drained per frame and degrade
+/// fidelity rather than spin — doc 28 §3.3). That budget lives with the
+/// `Time<Fixed>`/`max_delta` configuration in `lunco-sandbox`, not here.
+pub const MAX_REALTIME_RATE: f64 = 8.0;
 
 /// Transport play state. Replaces the scattered `paused` booleans.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Reflect)]
@@ -481,9 +506,30 @@ mod tests {
     #[test]
     fn realtime_rate_unifies_the_knob() {
         let mut c = MissionClock::default();
-        let rs = advance_clock(&mut c, 0, 50.0, false, 0.0);
+        // Any rate at or below the solver ceiling stays in realtime physics.
+        let rs = advance_clock(&mut c, 0, MAX_REALTIME_RATE, false, 0.0);
         assert_eq!(c.regime, TimeRegime::RealtimePhysics);
-        assert_eq!(rs, 50.0); // one rate → relative_speed (> 0 ⇒ running)
+        assert_eq!(rs, MAX_REALTIME_RATE); // one rate → relative_speed (> 0 ⇒ running)
+    }
+
+    /// The ceiling exists because `max_delta`-clamped frames × `relative_speed`
+    /// is the fixed-step burst size (see [`MAX_REALTIME_RATE`]). Lock it low
+    /// enough that one hitched 33 ms frame cannot demand a runaway step count.
+    #[test]
+    fn realtime_ceiling_bounds_the_fixed_step_burst() {
+        const MAX_DELTA_S: f64 = 1.0 / 30.0; // Bevy's clamp (sandbox uses ~33 ms)
+        let steps_per_hitched_frame = MAX_DELTA_S * MAX_REALTIME_RATE / SECS_PER_TICK;
+        assert!(
+            steps_per_hitched_frame <= 20.0,
+            "MAX_REALTIME_RATE={MAX_REALTIME_RATE} lets one clamped frame demand \
+             {steps_per_hitched_frame:.0} fixed steps — that frame is slow, which \
+             re-clamps, which demands the same burst again (death spiral)"
+        );
+        // Just above the ceiling must escape to the kinematic (tick-frozen) regime.
+        let mut c = MissionClock::default();
+        let rs = advance_clock(&mut c, 0, MAX_REALTIME_RATE + 1.0, false, 0.0);
+        assert_eq!(c.regime, TimeRegime::KinematicWarp);
+        assert_eq!(rs, 0.0);
     }
 
     #[test]

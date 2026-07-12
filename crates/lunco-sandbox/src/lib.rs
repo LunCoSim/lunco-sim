@@ -3262,11 +3262,26 @@ fn load_startup_scene(world: &mut World, scene_path: String) {
     world.insert_resource(StartupSceneGuard { file: scene_file.clone() });
 
     let mut twin_loaded = false;
-    if let Ok(twin_mode) = lunco_twin::TwinMode::open(&twin_root) {
-        let mut twin = match twin_mode {
-            lunco_twin::TwinMode::Twin(t) | lunco_twin::TwinMode::Folder(t) => t,
-            lunco_twin::TwinMode::Orphan(_) => panic!("expected folder or twin"),
-        };
+    // `--scene` is user-supplied, so `twin_root` may resolve to a directory that
+    // is not a twin at all. `Orphan` means exactly that — a normal outcome, not a
+    // bug. Report it and fall through to the direct `LoadScene` below; a bad path
+    // must never be a hard crash at boot.
+    let opened = match lunco_twin::TwinMode::open(&twin_root) {
+        Ok(lunco_twin::TwinMode::Twin(t)) | Ok(lunco_twin::TwinMode::Folder(t)) => Some(t),
+        Ok(lunco_twin::TwinMode::Orphan(path)) => {
+            warn!(
+                "[sandbox] `{}` is not a twin or folder (orphan `{}`) — loading `{scene_path}` directly instead",
+                twin_root.display(),
+                path.display()
+            );
+            None
+        }
+        Err(err) => {
+            warn!("[sandbox] could not open `{}` as a twin: {err} — loading `{scene_path}` directly instead", twin_root.display());
+            None
+        }
+    };
+    if let Some(mut twin) = opened {
 
         // Override or insert default_scene in the manifest
         let rel_scene_path = abs_path.strip_prefix(&twin_root)

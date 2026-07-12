@@ -1,0 +1,46 @@
+# ─────────────────────────────────────────────────────────────────────
+# LunCoSim — clippy config for the WASM-TARGET lint run only
+# ─────────────────────────────────────────────────────────────────────
+#
+# Selected via `CLIPPY_CONF_DIR=ci/wasm-lint` in the `wasm-lint` job of
+# `.github/workflows/lint.yml`. It is NOT used by the normal native run,
+# which reads the workspace-root `clippy.toml`.
+#
+# Why a second config: the `std::time::Instant::now` ban is *unenforceable on
+# native*. `web_time` provides its native impl via `pub use std::time::*`, so on
+# native `web_time::Instant` IS `std::time::Instant` — same DefId — and clippy
+# resolves through the re-export, flagging every correct `web_time` caller. In the
+# root config that produced 73 false positives in lunco-modelica alone and zero
+# true positives, so the entry has been removed from there.
+#
+# On `wasm32-unknown-unknown` the two are genuinely distinct types. The ban then
+# fires ONLY on code that literally reaches for `std::time::Instant` in a
+# wasm-shipped module — i.e. code that will PANIC in the browser. That is a real
+# bug class (it caught `lunco-modelica/src/indexer.rs`, which is an unconditional
+# `pub mod` and therefore ships to the web), and here it reports it with no noise.
+#
+# Keep this list in sync with the root `clippy.toml`; this file is the root list
+# PLUS the time entry.
+
+disallowed-methods = [
+    # ── Filesystem I/O ────────────────────────────────────────────────
+    { path = "std::fs::read",            reason = "Use bevy::asset::AssetServer::load — std::fs is wasm-incompatible" },
+    { path = "std::fs::read_to_string",  reason = "Use bevy::asset::AssetServer::load — std::fs is wasm-incompatible" },
+    { path = "std::fs::File::open",      reason = "Use bevy::asset::AssetServer::load — std::fs is wasm-incompatible" },
+    { path = "std::fs::write",           reason = "Use lunco-storage for persistence — std::fs is wasm-incompatible" },
+
+    # ── Threading ────────────────────────────────────────────────────
+    { path = "std::thread::spawn",       reason = "Use AsyncComputeTaskPool / Web Worker — std::thread panics on wasm" },
+
+    # ── Time — THE REASON THIS FILE EXISTS ────────────────────────────
+    # Meaningful only here. See the header.
+    { path = "std::time::Instant::now",  reason = "Use web_time::Instant — std::time::Instant::now() PANICS on wasm32-unknown-unknown" },
+
+    # ── Atomic re-parenting of big_space `GridAnchor` entities ─────────
+    { path = "bevy_ecs::system::EntityCommands::add_child", reason = "Re-parenting a GridAnchor must use lunco_core::attach::migrate_to_grid for atomic (ChildOf, CellCoord, Transform) writes." },
+    { path = "bevy_ecs::world::EntityWorldMut::add_child", reason = "See EntityCommands::add_child — same atomicity contract." },
+    { path = "bevy_transform::commands::BuildChildrenTransformExt::set_parent_in_place", reason = "Use lunco_core::attach::migrate_to_grid." },
+
+    # ── Deep-cloning a USD stage reader ───────────────────────────────
+    { path = "openusd::usda::TextReader::clone", reason = "Borrow `&*stage.reader` — deep-cloning the stage reader copies the whole HashMap per call." },
+]

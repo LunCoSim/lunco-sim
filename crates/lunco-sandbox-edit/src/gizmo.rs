@@ -184,11 +184,29 @@ pub fn restore_dragged_transform(
     }
 }
 
-/// Restores dynamic state and re-enables origin tracking when gizmo drag ends.
+/// Restores dynamic state and re-enables origin tracking when gizmo drag ends —
+/// and **authors the completed move into USD**.
+///
+/// USD is the source of truth for *authored* state, so a gizmo drag must end up
+/// as a document op, not just an ECS `Transform` write (which is lost on reload
+/// and never reaches the Twin journal / networked peers). The op-authoring path
+/// already exists — [`crate::commands::MoveEntity`] is observed by
+/// `persist_move_to_runtime_layer`, which authors `UsdOp::SetTranslate` into the
+/// active document's runtime layer (ownership-guarded: a non-document entity
+/// simply doesn't author). So drag-end fires exactly ONE `MoveEntity` per
+/// completed drag — not one per frame, which would flood the journal with a
+/// thousand ops for a single drag.
+///
+/// No fight with re-projection: `SetTranslate` lands as an `InfoOnly` change and
+/// `live_consume::apply_translates_live` writes the entity's `Transform` to the
+/// value we just authored (identical to where the drag left it), with no
+/// structural rebuild. The drag is over by then, so the gizmo has nothing to
+/// fight.
 pub fn restore_gizmo_dynamic(
     gizmo_targets: Query<&GizmoTarget>,
     q_prev_pos: Query<(Entity, &GizmoPrevPos)>,
     mut q_lin_vel: Query<&mut LinearVelocity>,
+    q_gid: Query<(&lunco_core::GlobalEntityId, &Transform)>,
     q_avatar: Query<Entity, With<lunco_core::Avatar>>,
     q_floating_origin: Query<Entity, With<FloatingOrigin>>,
     mut commands: Commands,
@@ -198,7 +216,7 @@ pub fn restore_gizmo_dynamic(
         if let Ok(gizmo_target) = gizmo_targets.get(entity) {
             if gizmo_target.is_active() { continue; }
         }
-        
+
         restored_any = true;
 
         info!("GIZMO: drag ended for {:?}, restoring coordinate systems", entity);
@@ -214,6 +232,19 @@ pub fn restore_gizmo_dynamic(
         commands.entity(entity)
             .insert(prev.original_body)
             .remove::<GizmoPrevPos>();
+
+        // AUTHOR THE MOVE. Queued AFTER the `original_body` insert above, so the
+        // `MoveEntity` observer captures the pre-drag body kind (not the
+        // Kinematic the drag forced) into `JustMovedKinematic.restore` and
+        // `clear_kinematic_pulse_velocity` hands it back one tick later. An
+        // entity without a `GlobalEntityId` isn't API/USD-addressable, so there
+        // is nothing to author for it.
+        if let Ok((gid, tf)) = q_gid.get(entity) {
+            commands.trigger(crate::commands::MoveEntity {
+                entity_id: gid.get(),
+                translation: tf.translation,
+            });
+        }
     }
 
     // Re-attach FloatingOrigin to the avatar camera ONLY when the LAST drag
@@ -340,8 +371,85 @@ mod tests {
         app.world_mut().resource_mut::<SelectedEntities>().entities.push(vessel);
 
         app.update();
-        
+
         assert_eq!(app.world().get::<RigidBody>(vessel), Some(&RigidBody::Dynamic));
         assert!(app.world().get::<GizmoPrevPos>(vessel).is_none());
+    }
+
+    /// A2: the gizmo is not an authority — a completed drag authors USD.
+    /// Drag-end fires `MoveEntity`, whose `persist_move_to_runtime_layer`
+    /// observer writes `xformOp:translate` into the document's RUNTIME layer, so
+    /// the move survives a reload instead of living only in ECS.
+    #[test]
+    fn drag_end_authors_the_move_into_the_runtime_layer() {
+        use lunco_usd::registry::UsdDocumentRegistry;
+        use lunco_usd_bevy::usd_data::UsdDataExt;
+        use lunco_usd_bevy::UsdPrimPath;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        // Provides `UsdDocumentRegistry` + the `ApplyUsdOp` handler the
+        // persister dispatches into.
+        app.add_plugins(lunco_usd::commands::UsdCommandsPlugin);
+        app.init_resource::<lunco_api::registry::ApiEntityRegistry>();
+        app.add_observer(crate::commands::persist_move_to_runtime_layer);
+        app.add_systems(Update, restore_gizmo_dynamic);
+
+        let doc = {
+            let mut reg = app.world_mut().resource_mut::<UsdDocumentRegistry>();
+            reg.allocate(
+                "#usda 1.0\ndef Xform \"World\"\n{\n}\n".to_string(),
+                lunco_doc::DocumentOrigin::untitled("Scene.usda".to_string()),
+            )
+        };
+        let mut ws = lunco_workspace::Workspace::default();
+        ws.active_document = Some(doc);
+        app.insert_resource(lunco_workspace::WorkspaceResource(ws));
+
+        // An entity mid-drag (has `GizmoPrevPos`) whose drag just ended (no
+        // active `GizmoTarget`), sitting where the drag left it.
+        let dragged = app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(Vec3::new(3.0, 4.0, 5.0)),
+                RigidBody::Kinematic,
+                LinearVelocity::default(),
+                UsdPrimPath {
+                    stage_handle: Handle::default(),
+                    path: "/World".to_string(),
+                },
+                lunco_core::GlobalEntityId::from_raw(42),
+                GizmoPrevPos {
+                    local_pos: DVec3::new(3.0, 4.0, 5.0),
+                    original_body: RigidBody::Dynamic,
+                    had_translation_interpolation: false,
+                    had_rotation_interpolation: false,
+                },
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<lunco_api::registry::ApiEntityRegistry>()
+            .assign(dragged, lunco_core::GlobalEntityId::from_raw(42));
+
+        for _ in 0..3 {
+            app.update();
+        }
+
+        let reg = app.world().resource::<UsdDocumentRegistry>();
+        let docu = reg.host(doc).expect("doc alive").document();
+        let world_path = lunco_usd_bevy::SdfPath::new("/World").unwrap();
+        assert_eq!(
+            docu.runtime_data()
+                .prim_attribute_value::<[f64; 3]>(&world_path, "xformOp:translate"),
+            Some([3.0, 4.0, 5.0]),
+            "drag-end must author the move into the runtime layer"
+        );
+        // Save stays base-only: the runtime move never dirties the .usda.
+        assert!(
+            !docu.source().contains("xformOp:translate"),
+            "base layer untouched by a runtime move"
+        );
+        // Drag bookkeeping still completes (body restored, marker cleared).
+        assert!(app.world().get::<GizmoPrevPos>(dragged).is_none());
     }
 }

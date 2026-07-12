@@ -227,6 +227,12 @@ fn octave_of(radius: f64) -> usize {
 /// out-of-reach candidates contribute exactly zero either way).
 const MAX_BUCKET_CELLS: u128 = 1 << 21;
 
+/// Largest world coordinate / reach a crater may carry (metres). Beyond it — and for
+/// any non-finite value — the cell index saturates and the CSR build panics; such a
+/// crater is simply not bucketed (it contributes nothing). Mirrors the same guard in
+/// [`crate::carve`].
+const MAX_COORD: f64 = 1e12;
+
 /// The immutable placement set + spatial bucket index behind [`Craters`].
 #[derive(Debug)]
 struct CraterIndex {
@@ -276,12 +282,26 @@ impl Craters {
     /// each bucket holds a bounded candidate set; an empty set contributes nothing.
     pub fn new(craters: Vec<Crater>) -> Self {
         // Cell just big enough that the biggest crater spans a bounded 3×3 of cells.
-        let max_reach = craters.iter().map(|c| c.reach()).fold(0.0_f64, f64::max);
+        // Only SANE reaches size the cell (a non-finite one would make it `inf`).
+        let max_reach = craters
+            .iter()
+            .map(|c| c.reach())
+            .filter(|r| r.is_finite() && *r <= MAX_COORD)
+            .fold(0.0_f64, f64::max);
         let mut cell_size = max_reach.max(1.0);
         // Cell box a crater's reach bbox covers (`None` for zero-reach craters).
         let cell_box = |c: &Crater, cell_size: f64| -> Option<(i64, i64, i64, i64)> {
             let reach = c.reach();
-            if reach <= 0.0 {
+            // A non-finite (or absurd) reach/centre — an authored divide-by-zero —
+            // saturates `(x / cell) as i64` to `i64::MIN/MAX`, whose span overflows
+            // the CSR sizing (debug panic) or wraps to a zero-sized grid the fill
+            // loop then indexes out of bounds (release panic). Such a crater is not
+            // bucketed: it simply contributes nothing.
+            if !reach.is_finite() // NaN / ±inf
+                || reach <= 0.0
+                || reach > MAX_COORD
+                || !c.center.iter().all(|v| v.is_finite() && v.abs() <= MAX_COORD)
+            {
                 return None;
             }
             let (min_cx, min_cz) = cell_of(c.center[0] - reach, c.center[1] - reach, cell_size);
@@ -303,8 +323,9 @@ impl Craters {
             if min_cx > max_cx {
                 break ((0, 0), 0, 0); // no craters with reach
             }
-            let nx = (max_cx - min_cx + 1) as u128;
-            let nz = (max_cz - min_cz + 1) as u128;
+            // i128 so a saturated span can never overflow the subtraction.
+            let nx = (max_cx as i128 - min_cx as i128 + 1) as u128;
+            let nz = (max_cz as i128 - min_cz as i128 + 1) as u128;
             if nx * nz <= MAX_BUCKET_CELLS {
                 break ((min_cx, min_cz), nx as usize, nz as usize);
             }
@@ -511,6 +532,23 @@ mod tests {
             tallest[o] = tallest[o].max(d);
         }
         deepest.iter().sum::<f64>() + tallest.iter().sum::<f64>()
+    }
+
+    #[test]
+    fn non_finite_craters_do_not_panic_the_index() {
+        // An authored divide-by-zero (`radius = 1/0`, an `inf`/`NaN` centre) used to
+        // saturate the cell index → CSR span overflow (debug) / OOB fill (release).
+        // Such craters are not bucketed; the finite ones still stamp.
+        let mut bad = crater(0.0, 0.0, f64::INFINITY);
+        let mut nan = crater(f64::NAN, 0.0, 10.0);
+        nan.depth = f64::NAN;
+        bad.rim_height = f64::INFINITY;
+        let huge = crater(1e300, 1e300, 1e300);
+        let good = crater(0.0, 0.0, 20.0);
+        let f = CraterField::new(Flat(5.0), vec![bad, nan, huge, good]);
+        // The good crater still depresses its centre; the bad ones contribute nothing.
+        assert!(f.height_at(0.0, 0.0) < 5.0);
+        assert_eq!(f.height_at(5000.0, 5000.0), 5.0);
     }
 
     #[test]

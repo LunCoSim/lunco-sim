@@ -1,5 +1,9 @@
 //! On-Board Computer (OBC) emulation systems.
 //!
+//! **VESTIGIAL — not wired.** No crate depends on this and no binary reaches it.
+//! The live DAC/ADC path is `lunco-core`'s `ControlDacSet` + the port substrate,
+//! NOT this crate. Kept as a design sketch; do not assume any of it runs.
+//!
 //! This crate implements the interface between the high-level Flight Software
 //! (digital) and the simulation physics (physical). It emulates hardware
 //! signal processing:

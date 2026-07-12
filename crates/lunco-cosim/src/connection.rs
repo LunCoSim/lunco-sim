@@ -102,3 +102,84 @@ impl Default for SimConnection {
         }
     }
 }
+
+/// **The coupling tier of a co-simulated model** —
+/// `docs/architecture/28-modelica-realtime-physics.md` §2 (A4).
+///
+/// Declared in USD as `lunco:cosim:tier = "A" | "B" | "C"`, **never inferred**.
+/// It states what the model is allowed to do to the physics loop:
+///
+/// * **A — realtime-safe.** May drive an avian force/torque port on a
+///   client-predicted `Dynamic` body. Requires a deterministic, bounded-cost
+///   step: same stop-times and same work on every peer, every tick.
+/// * **B — slow-domain.** Thermal, power, ECLSS, battery: coupled by *state*
+///   (a signal read by scripts/UI/telemetry), never by force on a predicted
+///   body. Free to be stiff and adaptive; its cost may vary.
+/// * **C — offline.** Batch/experiment only; not stepped in the live loop.
+///
+/// The tier is a property of the MODEL (the entity carrying the
+/// `SimComponent`), and it gates the wires OUT of it. An unset tier is
+/// "undeclared", which is not the same as A: the wiring pass warns when an
+/// undeclared or non-A model reaches a predicted body's force port
+/// (`lunco-usd-sim`'s `rewire_usd_connections`).
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Reflect)]
+#[reflect(Component)]
+pub enum CosimTier {
+    /// Realtime-safe: may drive predicted physics.
+    A,
+    /// Slow-domain: state coupling only.
+    B,
+    /// Offline / batch only.
+    C,
+}
+
+impl CosimTier {
+    /// Parse the USD `lunco:cosim:tier` attribute. Case-insensitive; anything
+    /// else is a *declaration error*, not a silent default — the caller warns.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_uppercase().as_str() {
+            "A" => Some(Self::A),
+            "B" => Some(Self::B),
+            "C" => Some(Self::C),
+            _ => None,
+        }
+    }
+
+    /// May a model of this tier drive a force/torque port on a client-predicted
+    /// `Dynamic` body? Only Tier A. (An UNSET tier is `None` at the call site
+    /// and is likewise not permitted — undeclared ≠ A.)
+    pub fn may_drive_predicted_physics(self) -> bool {
+        matches!(self, Self::A)
+    }
+}
+
+/// Is `port` an avian force/torque input — i.e. does writing it push a
+/// rigid body around? These are the port names the avian backend exposes
+/// (`force_x/y/z`, `torque_x/y/z`), and they are the ONLY ports whose writer
+/// can desync a client-predicted body. Used by the tier gate (A4).
+pub fn is_physics_force_port(port: &str) -> bool {
+    port.starts_with("force") || port.starts_with("torque")
+}
+
+#[cfg(test)]
+mod tier_tests {
+    use super::*;
+
+    #[test]
+    fn tier_parses_and_gates() {
+        assert_eq!(CosimTier::parse("a"), Some(CosimTier::A));
+        assert_eq!(CosimTier::parse(" B "), Some(CosimTier::B));
+        assert_eq!(CosimTier::parse("realtime"), None);
+        assert!(CosimTier::A.may_drive_predicted_physics());
+        assert!(!CosimTier::B.may_drive_predicted_physics());
+        assert!(!CosimTier::C.may_drive_predicted_physics());
+    }
+
+    #[test]
+    fn force_ports_are_the_gated_ones() {
+        assert!(is_physics_force_port("force_y"));
+        assert!(is_physics_force_port("torque_z"));
+        assert!(!is_physics_force_port("throttle"));
+        assert!(!is_physics_force_port("angle"));
+    }
+}

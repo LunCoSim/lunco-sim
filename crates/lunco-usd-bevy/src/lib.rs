@@ -3334,14 +3334,14 @@ pub fn reveal_placeholder_on_failure(
                 if let Some(s) = check_path(&sibling_placeholder_path)
                     .or_else(|| check_path(&prim_path.path))
                 {
-                    info!("[usd-bevy] Found scale: {:?}", s);
+                    debug!("[usd-bevy] Found scale: {:?}", s);
                     scale = s;
                 } else {
-                    info!("[usd-bevy] No scale or size found on paths: {:?} or {:?}", sibling_placeholder_path, prim_path.path);
+                    debug!("[usd-bevy] No scale or size found on paths: {:?} or {:?}", sibling_placeholder_path, prim_path.path);
                 }
             }
 
-            info!("[usd-bevy] Computed stub scale: {:?}", scale);
+            debug!("[usd-bevy] Computed stub scale: {:?}", scale);
 
             // Just the filename — strip the `lunco-lib://…/` path prefix and
             // the `#Scene0` glTF sub-label.

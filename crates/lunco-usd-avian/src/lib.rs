@@ -1286,7 +1286,12 @@ fn apply_rigid_body_mass_props<R: UsdRead>(
 #[reflect(Component, Default)]
 pub struct ShouldBeDynamic;
 
+// USDA fixtures are written to a temp dir and composed from disk. Native-only
+// test code: the `disallowed_methods` ban on `std::fs` guards wasm *runtime*
+// paths (clippy.toml names `tests/` as exempt; cargo has no path-scoped lint
+// config, so the exemption is written out).
 #[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(clippy::disallowed_methods)]
 mod collider_parity_tests {
     //! Ph0′ S2c: the collider read path is generic over `UsdRead`, driven off the
     //! live `StageView` over the canonical stage. Exercises the geometry read
@@ -1334,6 +1339,7 @@ mod collider_parity_tests {
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(clippy::disallowed_methods)] // temp-dir USDA fixtures; see `collider_parity_tests`
 mod extract_parity_tests {
     //! Ph0′ S2e CUTOVER verification: running the REAL `extract_avian_prim` off a
     //! live `StageView` must produce byte-identical physics components to running
@@ -1399,6 +1405,7 @@ mod extract_parity_tests {
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(clippy::disallowed_methods)] // temp-dir USDA fixtures; see `collider_parity_tests`
 mod joint_typed_tests {
     //! Ph0′ physics rework: the joint projector reads the STANDARD UsdPhysics
     //! joint schema (`openusd::schemas::physics`) off the live stage into the

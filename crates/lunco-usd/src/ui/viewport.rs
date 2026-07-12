@@ -79,7 +79,9 @@ use lunco_doc::{Document, DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{DocumentChanged, DocumentClosed, DocumentOpened};
 use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdVisualSynced};
 use lunco_core::{Command, on_command, register_commands};
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelRects, PanelSlot, WorkbenchAppExt};
+use lunco_workbench::{
+    Panel, PanelCtx, PanelId, PanelRects, PanelSlot, ScenePickGate, SceneTarget, WorkbenchAppExt,
+};
 
 use crate::registry::UsdDocumentRegistry;
 
@@ -664,8 +666,16 @@ impl Panel for UsdViewportPanel {
         PanelSlot::Center
     }
 
-    fn is_scene_viewport(&self) -> bool {
-        true
+    fn scene_target(&self) -> Option<SceneTarget> {
+        // This is NOT the full-window 3D scene: it renders a camera to an offscreen
+        // `Image` and shows it as an `egui::Image` with its own `click_and_drag`
+        // orbit handling (below). Declaring `MainViewport` here made every drag over
+        // the preview ALSO drive the main avatar camera, and let `bevy_picking` mesh
+        // hits fire in the main scene *behind* the image. As an `Offscreen` target it
+        // owns its own input and the gate keeps the main scene out of it — while the
+        // dock dispatch still records it as an opaque blocked region (it has the
+        // default opaque background), so nothing leaks through.
+        Some(SceneTarget::Offscreen(USD_VIEWPORT_PANEL_ID))
     }
 
     fn closable(&self) -> bool {
@@ -680,14 +690,9 @@ impl Panel for UsdViewportPanel {
         // the full panel body) and written after paint via `defer` —
         // the panel has no `&mut World`.
         let panel_rect = PanelRects::panel_rect_from_ui(ui);
-        // Authoritative scene-vs-chrome signal — egui's own occlusion-aware hit
-        // test (same as the workbench ViewportPanel), so a pick over this USD
-        // preview reaches the scene and a pick over surrounding chrome does not.
-        let over_scene = PanelRects::scene_pointer_from_ui(ui);
         ctx.defer(move |world| {
             if let Some(mut rects) = world.get_resource_mut::<PanelRects>() {
                 rects.record(USD_VIEWPORT_PANEL_ID, panel_rect);
-                rects.record_scene_panel(over_scene);
             }
         });
 
@@ -731,6 +736,20 @@ impl Panel for UsdViewportPanel {
             egui::Image::new(egui::load::SizedTexture::new(tex_id, size))
                 .sense(egui::Sense::click_and_drag()),
         );
+
+        // The pointer is over THIS scene only when it's over the image itself —
+        // measured from the image's own rect, after it's laid out. (Measuring the
+        // panel's `available_rect_before_wrap()` up front, as the workbench viewport
+        // leaf does, would have put this panel's title row inside its "scene".)
+        let over_scene = ui.rect_contains_pointer(response.rect);
+        ctx.defer(move |world| {
+            if let Some(mut gate) = world.get_resource_mut::<ScenePickGate>() {
+                gate.record_scene_leaf(
+                    SceneTarget::Offscreen(USD_VIEWPORT_PANEL_ID),
+                    over_scene,
+                );
+            }
+        });
 
         // Orbit: drag spins yaw/pitch, scroll zooms.
         let drag = response.drag_delta();

@@ -44,6 +44,10 @@ struct CompiledWire {
     src_entity: Entity,
     src_port: String,
     src_resolved: Option<ResolvedPort>,
+    /// The source's network-stable identity ([`lunco_core::GlobalEntityId`]), or
+    /// `None` for a purely local entity. The **sort key** that makes summation
+    /// order peer-independent — see [`CompiledWiring::rebuild`] (P10).
+    src_gid: Option<u64>,
     /// Index into [`CompiledWiring::targets`] — the accumulator slot.
     dst_index: usize,
     scale: f64,
@@ -112,11 +116,42 @@ impl CompiledWiring {
                 src_entity: c.start_element,
                 src_port: c.start_connector.clone(),
                 src_resolved,
+                src_gid: world
+                    .get::<lunco_core::GlobalEntityId>(c.start_element)
+                    .map(|g| g.get()),
                 dst_index,
                 scale: c.scale,
                 offset: c.offset,
             });
         }
+
+        // P10 — **the summation order must not be archetype order.**
+        //
+        // Wires fanning into one input SUM (`acc[dst_index] += …`), and f64
+        // addition is not associative: reorder the terms and you get a different
+        // last bit. The wires above were collected in ECS iteration order, which
+        // depends on the order `SimConnection` entities were spawned — and host
+        // and client reach the same wiring through DIFFERENT paths (local USD
+        // load vs replicated spawn). Same wires, different order, different
+        // rounding: a bit-level divergence at the root of the force path, on the
+        // very bodies the client predicts.
+        //
+        // Sorting on a network-stable key removes the dependency entirely. One
+        // sort per wiring change; ZERO per-tick cost.
+        //
+        // Key: (dst slot, source's GlobalEntityId, source port). `src_gid` is the
+        // identity both peers agree on; local-only sources (`None`) sort first
+        // among themselves and are, by construction, not replicated — so they
+        // cannot be the thing that differs across peers. The `src_entity` tail is
+        // a total-order tiebreak (two wires from the same source port into the
+        // same input are numerically interchangeable anyway).
+        self.wires.sort_by(|a, b| {
+            a.dst_index
+                .cmp(&b.dst_index)
+                .then_with(|| a.src_gid.cmp(&b.src_gid))
+                .then_with(|| a.src_port.cmp(&b.src_port))
+                .then_with(|| a.src_entity.to_bits().cmp(&b.src_entity.to_bits()))
+        });
     }
 }
 
@@ -204,5 +239,66 @@ pub fn propagate_connections(
                 t.entity
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod wire_order_tests {
+    use super::*;
+    use lunco_core::GlobalEntityId;
+
+    /// P10: the fabric is compiled from ECS iteration order, but the SUMMATION
+    /// order must be a function of the wires' *identities*, not of the order the
+    /// `SimConnection` entities happened to be spawned in. Host and client reach
+    /// the same wiring by different spawn paths, so archetype order can differ —
+    /// and f64 `+` is not associative, so a different order is a different last
+    /// bit on the force feeding a predicted body.
+    ///
+    /// Build the same three wires into one input in two different spawn orders;
+    /// the compiled wire sequence must come out identical.
+    #[test]
+    fn wire_summation_order_is_spawn_order_independent() {
+        fn compile(spawn_order: &[u64]) -> Vec<(Option<u64>, String)> {
+            let mut world = World::new();
+            world.init_resource::<PortRegistry>();
+
+            // Three distinct sources with stable network ids 10/20/30.
+            let mut src = std::collections::HashMap::new();
+            for gid in [10_u64, 20, 30] {
+                src.insert(gid, world.spawn(GlobalEntityId::from_raw(gid)).id());
+            }
+            let sink = world.spawn_empty().id();
+
+            for gid in spawn_order {
+                world.spawn(SimConnection {
+                    start_element: src[gid],
+                    start_connector: format!("out_{gid}"),
+                    end_element: sink,
+                    end_connector: "force_y".into(),
+                    scale: 1.0,
+                    offset: 0.0,
+                });
+            }
+
+            let mut compiled = CompiledWiring::default();
+            compiled.rebuild(&mut world);
+            compiled
+                .wires
+                .iter()
+                .map(|w| (w.src_gid, w.src_port.clone()))
+                .collect()
+        }
+
+        let a = compile(&[10, 20, 30]);
+        let b = compile(&[30, 10, 20]);
+        let c = compile(&[20, 30, 10]);
+        assert_eq!(a.len(), 3);
+        assert_eq!(a, b, "wire order must not depend on SimConnection spawn order");
+        assert_eq!(a, c, "wire order must not depend on SimConnection spawn order");
+        // …and it is the network-stable order, not an accident.
+        assert_eq!(
+            a.iter().map(|(g, _)| *g).collect::<Vec<_>>(),
+            vec![Some(10), Some(20), Some(30)]
+        );
     }
 }

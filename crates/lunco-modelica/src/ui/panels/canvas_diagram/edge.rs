@@ -12,8 +12,7 @@ use bevy_egui::egui;
 use lunco_canvas::{DrawCtx, EdgeVisual, Pos as CanvasPos};
 
 use super::paint::{
-    brighten, dist_point_to_segment, paint_arrowhead, paint_wire_tooltip, segment_dist_sq,
-    wire_color_for,
+    brighten, dist_point_to_segment, paint_wire_tooltip, segment_dist_sq, wire_color_for,
 };
 use super::node::paint_flow_dots;
 use super::theme::modelica_icon_palette_from_ctx;
@@ -273,17 +272,6 @@ impl EdgeVisual for OrthogonalEdgeVisual {
             for w in polyline.windows(2) {
                 painter.line_segment([w[0], w[1]], core);
             }
-        }
-
-        if false && self.is_causal && polyline.len() >= 2 {
-            let n = polyline.len();
-            paint_arrowhead(
-                painter,
-                polyline[n - 2],
-                polyline[n - 1],
-                col,
-                scale,
-            );
         }
 
         let anim_time = ctx

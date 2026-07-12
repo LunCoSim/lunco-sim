@@ -4722,6 +4722,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gen-command-docs"
+version = "0.0.0"
+dependencies = [
+ "quote",
+ "serde",
+ "serde_json",
+ "syn 2.0.118",
+]
+
+[[package]]
 name = "generativity"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7019,7 +7029,6 @@ dependencies = [
  "lunco-workbench",
  "serde",
  "serde_json",
- "ureq",
  "uuid",
 ]
 

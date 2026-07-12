@@ -69,6 +69,59 @@ FixedPostUpdate:
 The master loop reads outputs, propagates through connections, writes inputs,
 then steps all engines — this is the FMI master algorithm.
 
+## The macro-step contract (what step 6 actually promises)
+
+The ordering above is *within* a tick. The other half of an FMI-CS master is the
+**communication step** itself: what `dt` each engine is asked for, and who waits
+for whom. Stating it explicitly (finding `A3` — it was previously unstated, and
+the code did not implement any coherent version of it):
+
+**1. The communication grid is the FIXED-STEP clock.** Every model carries
+`target_time` — the world clock, in model-local seconds — and it advances by
+exactly one `Time<Fixed>` delta per **unpaused fixed tick**. Not per render
+frame. A `TimeTransport.rate` burst yields *more ticks*, so it yields
+proportionally more model time, automatically.
+
+**2. The macro step is `target_time − current_time`, clamped.** `current_time` is
+the model's own clock (`stepper.time()`), reported back by the worker. The
+requested `dt` is therefore the model's whole **deficit**, capped at
+`MAX_MACRO_STEP_DT` (~0.18 s) so one long gap cannot hand the solver a ten-second
+step. A model that missed ticks — a slow solver, a long compile, a hitched frame
+— **catches the time back up over the following ticks**. Nothing is dropped.
+Consequently: **model time is a pure function of the fixed-step clock**, not of
+frame rate, GPU load, or window focus.
+
+**3. The coupling is explicit (Jacobi-flavoured), and the delay is measured, not
+assumed.** The `Step` dispatched at tick *N* is executed on the worker thread and
+its result lands at tick *N+k*, k ≥ 1. So the forces avian integrates at tick *N*
+were computed from a model state that is one macro step old. This is an
+**explicit / loosely-coupled** master (no iteration to a fixed point, no step
+rejection, no `SetFMUState` rollback), and the resulting coupling error is
+first-order in the macro step. A strict Gauss-Seidel barrier — block the fixed
+tick on the worker result — is the rigorous alternative and is **deliberately not
+implemented**: it would put an unbounded solver on the critical path of the main
+loop, which the app's responsiveness mandate forbids.
+
+Because the delay is real, it is **surfaced**: `lunco_modelica::worker::CosimLag`
+records `|model_time − world_time|` for every live model every fixed tick, and
+`warn!`s (rate-limited) past 0.25 s. In steady state it sits at about one macro
+step; a sustained rise means the solver cannot keep up with the sim rate and the
+forces are being computed from a stale model — the coupling has degraded from
+co-simulation into extrapolation, and you can see it happen.
+
+**4. Steps are never coalesced.** A `Step` is an integration, not a setpoint.
+The worker's command-squashing (which correctly collapses redundant
+`UpdateParameters`/`Compile`) explicitly does **not** apply to `Step`: dropping
+one would delete `dt` of simulated time and ack it as a success. If back-pressure
+is ever needed there, `dt`s must be **summed**, never dropped.
+
+**5. The live solver is not the batch solver.** The interactive path integrates a
+fixed ladder of `SECS_PER_TICK / 3` micro-steps with an explicit-family solver;
+the batch/Fast-Run path keeps its adaptive-implicit BDF. See
+[`28-modelica-realtime-physics.md`](28-modelica-realtime-physics.md) §2a — that
+doc also states, honestly, how far short of true Tier-A determinism this still
+falls.
+
 ## Where the master loop fits
 
 The pipeline above is the *body* of the per-tick advance. The layer that

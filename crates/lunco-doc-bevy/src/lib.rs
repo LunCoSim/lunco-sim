@@ -682,17 +682,24 @@ impl JournalResource {
     }
 
     /// Run a closure with shared read access to the journal. Returns
-    /// the closure's value. Panics if the lock is poisoned.
+    /// the closure's value.
+    ///
+    /// Poison recovery: a panic in *any* journal writer would otherwise poison
+    /// this mutex forever, turning one glitch into a per-frame panic loop that
+    /// nothing can clear. The journal is an append-only log of already-applied
+    /// ops — a mid-write panic leaves no broken invariant behind (a partially
+    /// pushed entry is not possible; `Vec::push` is the last step), so the
+    /// guard is recovered with `into_inner` rather than re-panicked.
     pub fn with_read<R>(&self, f: impl FnOnce(&CanonicalJournal) -> R) -> R {
-        let guard = self.inner.lock().expect("journal lock poisoned");
-        f(&*guard)
+        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        f(&guard)
     }
 
     /// Run a closure with exclusive write access to the journal.
-    /// Panics if the lock is poisoned.
+    /// Poison-recovering — see [`with_read`](Self::with_read).
     pub fn with_write<R>(&self, f: impl FnOnce(&mut CanonicalJournal) -> R) -> R {
-        let mut guard = self.inner.lock().expect("journal lock poisoned");
-        f(&mut *guard)
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        f(&mut guard)
     }
 
     /// The author id stamped onto locally-recorded entries. Placeholder
@@ -707,6 +714,30 @@ impl JournalResource {
     /// must set a distinct id so cross-peer entry ids don't collide.
     pub fn set_local_author(&self, author: AuthorId) {
         self.with_write(|j| j.set_local_author(author));
+    }
+
+    /// Run `f` with a change set open: every journal entry recorded inside it —
+    /// by ANY recorder, at any depth, since they all append with
+    /// `change_set: None` and inherit the ambient one — joins a single
+    /// transaction-style undo unit, which `UndoManager::take_undo_group` then
+    /// undoes as a whole.
+    ///
+    /// This is the seam a multi-op command handler wraps itself in.
+    /// `AttachComponent` lowers to seven `UsdOp`s; without this, seven journal
+    /// entries land and one undo peels off ONE of them, leaving the object
+    /// half-attached. With it, they are one unit.
+    ///
+    /// The change set is closed even if `f` returns early. It is NOT closed on a
+    /// panic unwinding through `f` — but a panic there wedges the command
+    /// anyway, and the next `begin` simply replaces the ambient id, so a stale
+    /// open set cannot corrupt later entries beyond over-grouping one command.
+    /// Do not nest (see [`Journal::begin_change_set`]).
+    pub fn change_set<R>(&self, label: impl Into<String>, f: impl FnOnce() -> R) -> R {
+        let author = AuthorTag::local_user();
+        self.with_write(|j| j.begin_change_set(label.into(), author));
+        let out = f();
+        self.with_write(|j| j.end_change_set());
+        out
     }
 
     /// Build a [`JournalSink`] handle that records into this resource.
@@ -753,7 +784,8 @@ impl JournalSink for BevyJournalSink {
         // The trait exists so future remote-replay paths (entries
         // arriving from a peer with pre-allocated EntryIds) can push
         // through the same generic sink interface.
-        let mut guard = self.inner.lock().expect("journal lock poisoned");
+        // Poison-recovering: see `JournalResource::with_read`.
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         guard.append_remote(entry);
     }
 }
@@ -799,10 +831,13 @@ impl<O: lunco_twin_journal::OpPayload> lunco_doc::OpRecorder<O> for JournalOpRec
     fn record(&self, forward: &O, inverse: &O) {
         // Consume the one-shot author; absent one, the edit is the local
         // user's (manual edits, undo/redo).
+        // Poison-recovering: an `Option<AuthorTag>` has no invariant a mid-write
+        // panic can break, and re-panicking here would wedge every subsequent
+        // edit, every frame. See `JournalResource::with_read`.
         let author = self
             .next_author
             .lock()
-            .expect("journal author lock poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .take()
             .unwrap_or_else(AuthorTag::local_user);
         self.journal.with_write(|j| {
@@ -816,7 +851,7 @@ impl<O: lunco_twin_journal::OpPayload> lunco_doc::OpRecorder<O> for JournalOpRec
         *self
             .next_author
             .lock()
-            .expect("journal author lock poisoned") = Some(AuthorTag {
+            .unwrap_or_else(|e| e.into_inner()) = Some(AuthorTag {
             user: user.to_string(),
             tool: tool.to_string(),
         });

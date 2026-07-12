@@ -17,15 +17,21 @@ use bevy_mesh::Indices;
 use big_space::prelude::CellCoord;
 use lunco_core::{ArticulatedVehicle, GridAnchor, WorldGrid, Command, on_command, register_commands};
 
+// Rock scatter is native-only (see `regenerate_obstacle_field`); its helpers are
+// unused on wasm.
+#[cfg(not(target_arch = "wasm32"))]
 use crate::assets::{bucket_index, bucket_sizes};
 use crate::field::{build_height_grid, HeightGrid};
+#[cfg(not(target_arch = "wasm32"))]
 use crate::rock::faceted_rock_mesh;
 use crate::sampler::{sample_layer, salt};
 use crate::spec::{ObstacleFieldSpec, Pattern};
 
 /// Number of shared rock meshes per size bucket (geometric size buckets).
+#[cfg(not(target_arch = "wasm32"))]
 const ROCK_BUCKETS: usize = 6;
 /// Distinct faceted shapes generated per bucket; instances pick one by position.
+#[cfg(not(target_arch = "wasm32"))]
 const ROCK_VARIANTS: usize = 4;
 
 /// Distance LOD margins (metres). Rocks fade out beyond `LOD_FAR`; the terrain
@@ -185,25 +191,26 @@ fn manage_physics_hold(
 ///   then builds **no** slab (it would float on / z-fight the DEM) and leaves
 ///   [`RegenerateField`] for the terrain crate to apply to the DEM.
 ///
-/// So the moonbase sandbox sets `DemDelegated` and the *one* Inspector panel tunes
-/// the DEM craters/rocks live; a slab-only scene leaves it `Standalone`.
-// TODO: remove `Standalone` (and with it the slab build + the
-// `stamp_crater`/`stamp_craters`/`build_height_grid`/`crater_delta` stamp chain
-// in `field.rs`). No production path reaches it: the only `ObstacleFieldPlugin`
-// consumer (the sandbox) hardcodes `DemDelegated`, and nothing — scene attr,
-// API, rhai — can select Standalone at runtime. It survives as the enum default
-// + unit-test scaffolding only. Removing it leaves
-// `lunco_terrain_core::crater_profile` as the single crater cross-section.
-#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug)]
+/// So the moonbase sandbox sets `DemDelegated` (the DEFAULT); a slab-only scene
+/// must opt IN to `Standalone`.
+///
+/// [`DemDelegated`](ObstacleFieldMode::DemDelegated) is the default because
+/// `Standalone` is the *expensive* path — a full slab heightfield plus a rock
+/// scatter that spawns one ECS entity + one static `Collider::sphere` per rock
+/// (the 43×-FPS regression shape). A default that builds it for any app that
+/// merely adds the plugin and forgets the resource is a fuse, not a fix.
+///
+/// TODO: remove `Standalone` (and with it the slab build). No production path
+/// reaches it: the only `ObstacleFieldPlugin` consumer (the sandbox) sets
+/// `DemDelegated`, and nothing — scene attr, API, rhai — can select Standalone at
+/// runtime. It survives as unit-test scaffolding only.
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum ObstacleFieldMode {
+    /// Pre-DEM test scaffold: this plugin builds its own flat-slab arena.
     Standalone,
+    /// Production: the DEM terrain owns crater/rock generation from the same spec.
+    #[default]
     DemDelegated,
-}
-
-impl Default for ObstacleFieldMode {
-    fn default() -> Self {
-        Self::Standalone
-    }
 }
 
 impl ObstacleFieldMode {
@@ -222,13 +229,24 @@ fn trigger_initial(mode: Res<ObstacleFieldMode>, mut ev: MessageWriter<Regenerat
 /// Build a Bevy `Mesh` from raw height-grid vertex arrays. The single
 /// `MeshData`/`TileMesh` → `Mesh` glue, shared by the obstacle field, the static
 /// DEM terrain, and the streaming LOD tiles (was duplicated in three places).
+///
+/// `usages` is the caller's choice because the two consumers genuinely differ:
+/// - the **static** terrain / slab keeps [`RenderAssetUsages::default()`]
+///   (`MAIN_WORLD | RENDER_WORLD`) — `lunco-environment`'s horizon bake reads its
+///   `ATTRIBUTE_POSITION` back on the CPU and rewrites its UVs;
+/// - the **streamed LOD tiles** pass [`RenderAssetUsages::RENDER_WORLD`]: nothing
+///   reads their CPU vertex data back (physics rides the collider ring, picking
+///   rides the oracle), so keeping ~160 KB × up-to-1024 cached tiles resident in
+///   `Assets<Mesh>` after GPU upload was pure waste — ~164 MB, doubled against
+///   VRAM, on a wasm heap with a 2–4 GB ceiling.
 pub fn grid_mesh(
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
     uvs: Vec<[f32; 2]>,
     indices: Vec<u32>,
+    usages: RenderAssetUsages,
 ) -> Mesh {
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, usages);
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
@@ -352,7 +370,14 @@ fn regenerate_obstacle_field(
     ));
     if let (Some(meshes), Some(materials)) = (meshes.as_mut(), materials.as_mut()) {
         let crate::field::MeshData { positions, normals, uvs, indices } = grid.to_mesh_data();
-        let mesh = meshes.add(grid_mesh(positions, normals, uvs, indices));
+        // Slab: keep the CPU copy (`default()`) — the horizon bake reads it back.
+        let mesh = meshes.add(grid_mesh(
+            positions,
+            normals,
+            uvs,
+            indices,
+            RenderAssetUsages::default(),
+        ));
         let material = materials.add(StandardMaterial {
             base_color: Color::srgb(0.32, 0.30, 0.28),
             perceptual_roughness: 1.0,
@@ -362,7 +387,15 @@ fn regenerate_obstacle_field(
     }
 
     // --- Rocks → bucketed scatter --------------------------------------------
+    // WEB: scatter no rocks at all — the same bail as `terrain_layers::rocks`
+    // (lunco-terrain-surface). Every rock is a distinct ECS entity with a static
+    // sphere collider, and on WebGL the `VisibilityRange` distance cull is
+    // unavailable (it breaks the PBR pipeline binding — see
+    // `rock_visibility_range`), so all of them would render AND sit in the avian
+    // broadphase every frame on the single wasm thread.
+    #[allow(unused_mut)]
     let mut rock_count = 0;
+    #[cfg(not(target_arch = "wasm32"))]
     if spec.rocks.enabled {
         let placements = sample_layer(
             spec.seed,
@@ -569,10 +602,35 @@ fn reseat_bodies(
     }
 }
 
+// `EntityWorldMut::add_child` is banned because re-parenting a big_space
+// `GridAnchor` must go through `lunco_core::attach::migrate_to_grid` for an atomic
+// `(ChildOf, CellCoord, Transform)` write. These tests parent a plain wheel body
+// under a plain root in a bare test `World` — no `GridAnchor`, no observers, no
+// grid — so the hazard the ban exists for cannot occur here.
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
+
+    /// R6: the DEFAULT must be the cheap path. `Standalone` builds a slab
+    /// heightfield + one ECS entity & static sphere collider per rock; any app
+    /// that adds `ObstacleFieldPlugin` and forgets to insert the resource used to
+    /// get that at `Startup`. It must now be opt-in, and `trigger_initial` must
+    /// stay silent under the default.
+    #[test]
+    fn default_mode_is_dem_delegated_and_fires_no_initial_regen() {
+        assert_eq!(ObstacleFieldMode::default(), ObstacleFieldMode::DemDelegated);
+        assert!(!ObstacleFieldMode::default().is_standalone());
+
+        let mut app = App::new();
+        app.add_message::<RegenerateField>()
+            .init_resource::<ObstacleFieldMode>()
+            .add_systems(Startup, trigger_initial);
+        app.update();
+        let msgs = app.world().resource::<Messages<RegenerateField>>();
+        assert_eq!(msgs.len(), 0, "default mode must not trigger a slab build");
+    }
 
     /// The core robustness property: an articulated rover moves as ONE rigid unit.
     /// A wheel at a spot where the local terrain DIDN'T change must still shift by

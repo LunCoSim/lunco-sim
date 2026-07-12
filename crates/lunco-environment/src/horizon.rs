@@ -77,6 +77,7 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::image::ImageSampler;
 use bevy::light::{CascadeShadowConfig, NotShadowCaster};
 use bevy::mesh::{Indices, VertexAttributeValues};
+use bevy::platform::time::Instant;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::tasks::{AsyncComputeTaskPool, Task};
@@ -408,8 +409,14 @@ pub fn start_horizon_bakes(
 }
 
 /// Pure CPU bake: rasterize the DEM triangles into a max-height grid.
+// `Instant` is `bevy::platform::time::Instant` — portable (std on native,
+// web-time on wasm). clippy's `disallowed_methods` ban targets the wasm-panicking
+// `std::time::Instant`, but on the *native* target bevy's re-export resolves to
+// the same `DefId`, so it fires on correct code. Documented false positive; see
+// clippy.toml's Time section.
+#[allow(clippy::disallowed_methods)]
 fn bake_heightfield(positions: &[[f32; 3]], indices: &[u32], resolution: u32) -> BakeResult {
-    let start = std::time::Instant::now();
+    let start = Instant::now();
     let r = resolution as usize;
 
     let (mut min, mut max) = (Vec2::MAX, Vec2::MIN);
@@ -601,7 +608,9 @@ fn make_shadow_cache_image(images: &mut Assets<Image>, bytes: Vec<u8>, res: u32)
 /// above-horizon cache. A fresh bake fires when the sun rises past the
 /// threshold again.
 #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut, unused_variables))]
-#[allow(clippy::type_complexity)]
+// `Instant` is bevy's portable clock (see `bake_heightfield`) — the
+// `disallowed_methods` hit is the documented native-only false positive.
+#[allow(clippy::type_complexity, clippy::disallowed_methods)]
 pub fn start_shadow_cache_bake(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
@@ -661,7 +670,7 @@ pub fn start_shadow_cache_bake(
             // and march every cache texel on a worker. The frame never blocks.
             let field = map.field.clone();
             let task = AsyncComputeTaskPool::get().spawn(async move {
-                let start = std::time::Instant::now();
+                let start = Instant::now();
                 let bytes = field.bake_visibility_cache(sun_local, tan_r, target_res);
                 ShadowCacheResult { bytes, resolution: target_res, sun_local, millis: start.elapsed().as_millis() }
             });
@@ -672,7 +681,7 @@ pub fn start_shadow_cache_bake(
             // Inline (no worker threads on wasm): a one-time cost per sun
             // threshold crossing, at a capped resolution. The threshold makes
             // it rare; the cap keeps it a hitch, not a stall.
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             let bytes = map.field.bake_visibility_cache(sun_local, tan_r, target_res);
             let millis = start.elapsed().as_millis();
             install_shadow_cache(&mut commands, &mut images, entity, bytes, target_res, sun_local, millis);
@@ -1063,7 +1072,7 @@ pub fn shade_dynamic_entities(
         if let (Some(handle), Some(mats)) = (shader_mat, shader_mats.as_mut()) {
             let needs = mats
                 .get(&handle.0)
-                .is_some_and(|m| m.get_scalar("sun_vis").map_or(true, |s| (s - q).abs() > 1e-3));
+                .is_some_and(|m| m.get_scalar("sun_vis").is_none_or(|s| (s - q).abs() > 1e-3));
             if needs {
                 if let Some(mut m) = mats.get_mut(&handle.0) {
                     m.set_scalar("sun_vis", q);
@@ -1215,9 +1224,9 @@ mod tests {
         let sun = Vec3::new(-1.0, 0.5, 0.0).normalize();
         let bytes = field.bake_visibility_cache(sun, 0.0046, 8);
         // Texel (3, 0) → world (3, 0): beyond the ridge → shadowed.
-        assert_eq!(bytes[0 * 8 + 3], 0, "texel beyond the ridge is shadowed");
+        assert_eq!(bytes[3], 0, "texel beyond the ridge is shadowed");
         // Texel (0, 0) → world (0, 0): sun-facing side → lit.
-        assert_eq!(bytes[0 * 8 + 0], 255, "sun-facing texel is lit");
+        assert_eq!(bytes[0], 255, "sun-facing texel is lit");
     }
 
     /// The cache may be baked at a coarser resolution than the heightfield
@@ -1236,8 +1245,8 @@ mod tests {
         let bytes = field.bake_visibility_cache(sun, 0.0046, 4);
         assert_eq!(bytes.len(), 16);
         // Cache texel (3, 0) → world (7, 0): beyond the ridge → shadowed.
-        assert_eq!(bytes[0 * 4 + 3], 0, "coarse-cache texel beyond the ridge is shadowed");
+        assert_eq!(bytes[3], 0, "coarse-cache texel beyond the ridge is shadowed");
         // Cache texel (0, 0) → world (0, 0): sun-facing → lit.
-        assert_eq!(bytes[0 * 4 + 0], 255, "coarse-cache sun-facing texel is lit");
+        assert_eq!(bytes[0], 255, "coarse-cache sun-facing texel is lit");
     }
 }

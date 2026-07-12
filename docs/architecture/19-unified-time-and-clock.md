@@ -39,7 +39,7 @@ This architecture uses **one stored master (the tick), a tree of derived clocks,
 | A | `CelestialClock` (Historical) | `lunco-core` | J2000 `2451545.0`, or wall-seeded | advanced from **`Res<Time>` (Virtual)**, *accumulated* |
 | B | `TimeWarpState` (Historical) | `lunco-core` | mirror of A | written by A's tick system |
 | C | `Time<Fixed>` 60 Hz + `SimTick(u64)` | `lunco-core` | tick 0 | `Time<Fixed>` ← Virtual; tick gated by `is_running()` |
-| D | Modelica `current_time` | `lunco-modelica/src/worker.rs` | `0.0` | `Time<Fixed>` Δ, capped `0.033`/3 substeps |
+| D | Modelica `current_time` | `lunco-modelica/src/worker.rs` | `0.0` | *(then)* `Time<Fixed>` Δ, capped `0.033`/3 substeps — but only ONE dispatch per render frame (`A3`). *(now)* driven to `target_time`, which advances one `Time<Fixed>` Δ per **fixed tick** |
 | E | `RunBounds` | `lunco-experiments` | relative `0.0` | its own offline loop |
 
 They did **not** share an origin (three time-zeros: J2000, `0.0`, `0.0`) and had **no
@@ -303,6 +303,25 @@ whether it **integrates** and whether it **interacts**:
 - **`RealtimePhysics`** — tick advances; epoch slaved to tick; `rate` scales the fixed-step cadence
   *uniformly* (drives both `Time<Virtual>.relative_speed` **and** the tick), so physics + Modelica +
   epoch move together. Bounded by solver stability.
+
+  > **How Modelica actually keeps up** (finding `A3`, fixed 2026-07-12). A `rate` burst produces
+  > **more fixed ticks**, never longer ones, and the Modelica solver runs off-thread — so "moving
+  > together" cannot mean "one solver step per dispatch." It means the model's clock is driven to the
+  > fixed-step clock: `ModelicaModel.target_time` advances by exactly one `Time<Fixed>` delta per
+  > **unpaused fixed tick**, and each tick the master requests
+  > `dt = target_time − current_time` (clamped to `MAX_MACRO_STEP_DT`, then integrated as an integer
+  > ladder of `SECS_PER_TICK / 3` micro-steps). A model that misses ticks — worker busy, long compile,
+  > `rate = 10` — **catches the time up** instead of losing it.
+  >
+  > **Model time is therefore a pure function of the fixed-step clock. It does not depend on the
+  > render frame rate, on GPU load, or on window focus.** It used to: the dispatcher skipped any tick
+  > with a step in flight and always sent `Time<Fixed>::delta`, so at most one macro step ran per
+  > RENDER FRAME — at 30 FPS the model ran at half speed, at `rate = 10` it ran 10× too slow, and the
+  > skipped time was gone for good.
+  >
+  > The residual coupling delay (the model state is one in-flight macro step old) is **measured**, not
+  > assumed: `lunco_modelica::worker::CosimLag` records `|model_time − world_time|` every fixed tick
+  > and warns past 0.25 s.
 - **`KinematicWarp`** — tick **freezes** (physics/Modelica pause — the existing `speed>100 →
   physics_enabled=false` cliff, made explicit); only **pure** consumers (ephemeris, spin, lighting,
   sidereal) advance, as pure functions of epoch.

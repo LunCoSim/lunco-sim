@@ -778,6 +778,11 @@ fn persist_workspace_state(world: &mut World) {
     last.json = current;
 }
 
+// Test fixtures live on disk — the case `clippy.toml`'s allow-list already names
+// but cannot express (cargo has no path-scoped lint config). Tests never run on
+// wasm, so the ban's failure mode is unreachable here. Production `save()` goes
+// through `lunco_storage`, which is the point of the lint.
+#[allow(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
     use super::*;

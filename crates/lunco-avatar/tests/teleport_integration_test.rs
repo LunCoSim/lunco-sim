@@ -2,6 +2,11 @@
 //!
 //! This test runs a headless Bevy app that:
 //! 1. Sets up the BigSpace hierarchy (Solar Grid → EMB Grid → Moon Grid → Moon Body)
+//!
+// One-time test scene construction — the `set_parent_in_place` exemption
+// `clippy.toml` already grants to bootstrap code that runs before any observer is
+// registered. Cargo has no path-scoped lint config, so it must be stated here.
+#![allow(clippy::disallowed_methods)]
 //! 2. Spawns an avatar camera on the Moon Grid (simulating orbit)
 //! 3. Triggers teleport by setting camera to surface position
 //! 4. Runs the app for several frames to propagate transforms

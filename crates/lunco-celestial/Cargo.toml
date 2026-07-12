@@ -55,11 +55,9 @@ lunco-terrain-globe = { path = "../lunco-terrain-globe" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-terrain-core = { path = "../lunco-terrain-core" }
 
-
-# ureq is desktop-only: HTTP client with TLS for downloading ephemeris data
-# On wasm32, use browser fetch() via web-sys instead
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ureq = { workspace = true }
+# NOTE: `ureq` used to live here for an ephemeris-download path that no longer
+# exists in this crate (zero references in `src/`). Ephemeris fetching is
+# `lunco-celestial-ephemeris`'s job. Do not re-add without a call site.
 
 [lints]
 workspace = true

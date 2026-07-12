@@ -217,6 +217,26 @@ pub struct LayerScatterCx<'a, 'w, 's> {
     /// builds a `terrain_geomorph` material here instead of a `StandardMaterial`.
     pub shader_materials: Option<&'a mut Assets<lunco_materials::ShaderMaterial>>,
     pub asset_server: &'a AssetServer,
+    /// Boulder meshes/material shared across ALL rock layers on ALL terrains — one
+    /// bind group and a handful of meshes instead of one of each per placed rock.
+    /// See [`SharedRockAssets`].
+    pub rock_assets: &'a mut SharedRockAssets,
+}
+
+/// The shared boulder assets every rock layer draws with.
+///
+/// The procedural scatter already bucketed its meshes and shared one material;
+/// `PlaceRock` (the hand-placed instance layer) allocated a NEW `Mesh` **and** a NEW
+/// `StandardMaterial` per rock — each one a permanent extra draw call + bind group.
+/// Hoisting both into a resource means every rock, placed or scattered, batches: ~6
+/// draws for thousands of boulders.
+#[derive(Resource, Default)]
+pub struct SharedRockAssets {
+    /// One shared boulder `StandardMaterial` (all rocks look alike by design).
+    pub material: Option<Handle<StandardMaterial>>,
+    /// Bucketed boulder meshes, keyed by the quantised radius bucket (see
+    /// `rocks::size_bucket`).
+    pub meshes: std::collections::HashMap<u32, Handle<Mesh>>,
 }
 
 /// A geometry/material layer on a DEM terrain. Implement + register a parser (in its
@@ -342,6 +362,7 @@ pub fn scatter_terrain_layers(
     materials: Option<ResMut<Assets<StandardMaterial>>>,
     shader_materials: Option<ResMut<Assets<lunco_materials::ShaderMaterial>>>,
     asset_server: Res<AssetServer>,
+    mut rock_assets: ResMut<SharedRockAssets>,
     q: Query<
         (Entity, &DemHeightField, &TerrainLayerStack),
         Without<TerrainLayersApplied>,
@@ -371,6 +392,7 @@ pub fn scatter_terrain_layers(
             materials: materials.as_deref_mut(),
             shader_materials: shader_materials.as_deref_mut(),
             asset_server: &asset_server,
+            rock_assets: &mut rock_assets,
         };
         for entry in &stack.0 {
             entry.layer.scatter(&mut cx);

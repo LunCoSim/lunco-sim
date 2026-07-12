@@ -99,6 +99,12 @@ impl CelestialEphemerisProvider {
     /// (potentially slow / hanging) JPL Horizons fetches are done off the
     /// main thread by [`EphemerisPlugin`]. This is the H1 launch-stall fix:
     /// `build()` no longer blocks on `ureq` while constructing the app.
+    // `disallowed_methods` bans `std::fs` for its wasm failure mode. Unreachable
+    // here: the `read_dir` below returns `Err` on wasm, so the loop that owns
+    // every `read_to_string` never runs. The web target does not use this path at
+    // all — it constructs the provider via `new_with_embedded_ephemeris`, which
+    // takes the CSVs as data instead of reading them off a disk it does not have.
+    #[allow(clippy::disallowed_methods)]
     fn load_local() -> (Self, Vec<PendingFetch>) {
         let mut custom_data: HashMap<i32, Vec<CsvDataPoint>> = HashMap::new();
         let mut pending = Vec::new();
@@ -432,6 +438,9 @@ fn spawn_ephemeris_fetches(mut fetch: ResMut<EphemerisFetch>) {
 /// Update: poll outstanding fetches; on success write the CSV cache and
 /// insert the parsed vectors into the shared map so `position()` sees
 /// them immediately. Cheap no-op once all tasks have drained.
+// Native-only (`cfg` below): the CSV cache write cannot run on wasm, which is the
+// failure mode `disallowed_methods` exists to catch.
+#[allow(clippy::disallowed_methods)]
 #[cfg(not(target_arch = "wasm32"))]
 fn poll_ephemeris_fetches(mut fetch: ResMut<EphemerisFetch>) {
     use bevy::tasks::{block_on, futures_lite::future};

@@ -60,7 +60,11 @@ members = [
     "crates/lunco-worker-transport",
     "crates/lunco-terrain-bake",
     "crates/lunco-terrain-surface",
-    "crates/lunco-tutorial"
+    "crates/lunco-tutorial",
+    # Doc generator. A workspace member so `cargo clippy --workspace` /
+    # `cargo test --workspace` actually cover it — it used to be its own
+    # standalone workspace and was never built by anything.
+    "tools/gen-command-docs"
 ]
 # Bare `cargo build`/`check`/`test` (no `-p`/`--workspace`) operates on just the
 # two app crates and their dependency closure. This skips workspace members that
@@ -168,7 +172,12 @@ bevy = { version = "0.19.0", default-features = false, features = [
                                    # Enables `#[Command]` to always derive serde without per-field worry.
 ] }
 lunco-assets = { path = "crates/lunco-assets" }
-avian3d = { version = "0.7.0", default-features = false, features = ["3d", "f64", "parry-f64", "parallel", "debug-plugin", "default-collider", "collider-from-mesh", "bevy_diagnostic", "xpbd_joints"] }
+# NOTE: `debug-plugin` is deliberately OFF. It pulls bevy_gizmos → bevy_render →
+# wgpu/naga/x11rb into every consumer, including the `--no-ui` server and the
+# wasm worker — the same feature-unification trap as A1. Nothing in the tree
+# constructs `PhysicsDebugPlugin` or `PhysicsGizmos`; re-enable it here (and only
+# here) if collider debug-draw is ever wired up.
+avian3d = { version = "0.7.0", default-features = false, features = ["3d", "f64", "parry-f64", "parallel", "default-collider", "collider-from-mesh", "bevy_diagnostic", "xpbd_joints"] }
 # big_space bevy-0.19 support is not released yet; consume PR #73
 # (aevyrie/big_space#73, "update to bevy 0.19") pinned to its head commit.
 # TODO(deps): swap back to a crates.io release once one ships for bevy 0.19.

@@ -914,6 +914,9 @@ pub fn on_compile_model(
             // ResumeActiveModel (FastRunActiveModel batch runs are unaffected).
             model.paused = true;
             model.current_time = 0.0;
+            // The macro-step target restarts with the model (A3): a fresh
+            // stepper owes no catch-up for the time the previous one ran.
+            model.target_time = 0.0;
             model.last_step_time = 0.0;
             // …unless this compile was kicked off by a "Run live" that
             // wants to play as soon as the stepper lands. Don't clobber a
@@ -941,6 +944,10 @@ pub fn on_compile_model(
                     model_path: "".into(),
                     model_name: model_name.clone(),
                     current_time: 0.0,
+                    // The world clock this model is coupled to starts with it
+                    // (A3 — the macro-step target, advanced one fixed-tick delta
+                    // per tick by `spawn_modelica_requests`).
+                    target_time: 0.0,
                     last_step_time: 0.0,
                     session_id,
                     // Newly-compiled model starts paused/ready — no auto-start.
@@ -2079,6 +2086,10 @@ pub fn on_reset_active_model(trigger: On<ResetActiveModel>, mut commands: Comman
             model.session_id += 1;
             model.is_stepping = true;
             model.current_time = 0.0;
+            // Reset rewinds the world clock this model is coupled to as well
+            // (A3) — otherwise the reset model would immediately owe the
+            // catch-up path every second the pre-reset one had simulated.
+            model.target_time = 0.0;
             model.last_step_time = 0.0;
             model.variables.clear();
             model.session_id

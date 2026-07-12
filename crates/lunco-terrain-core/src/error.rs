@@ -58,38 +58,44 @@ pub fn measure_node_error(src: &dyn HeightSource, region: Square, res: usize) ->
     let x0 = region.center[0] - region.half;
     let z0 = region.center[1] - region.half;
 
-    VERT_SCRATCH.with(|scratch| {
-        // Vertex height grid the node's mesh would use (reused buffer).
-        let mut verts = scratch.borrow_mut();
-        verts.clear();
-        verts.resize(n * n, 0.0f64);
-        for j in 0..n {
-            for i in 0..n {
-                verts[j * n + i] = src.height_at(x0 + i as f64 * step, z0 + j as f64 * step);
-            }
+    // TAKE the scratch buffer out of the cell for the duration instead of holding a
+    // `borrow_mut` across `src.height_at()`. `HeightSource` is a PUBLIC trait: an
+    // implementation that transitively re-enters `measure_node_error` (a composed
+    // oracle, an LOD-aware source) would otherwise hit `BorrowMutError` and PANIC.
+    // With `take`, the re-entrant call simply allocates its own Vec — slower, never
+    // fatal — and the outer call puts its buffer back at the end.
+    let mut verts = VERT_SCRATCH.with(|s| s.take());
+    verts.clear();
+    verts.resize(n * n, 0.0f64);
+    for j in 0..n {
+        for i in 0..n {
+            verts[j * n + i] = src.height_at(x0 + i as f64 * step, z0 + j as f64 * step);
         }
+    }
 
-        let mut max_err = 0.0f64;
-        for cj in 0..n - 1 {
-            for ci in 0..n - 1 {
-                let h00 = verts[cj * n + ci];
-                let h10 = verts[cj * n + ci + 1];
-                let h01 = verts[(cj + 1) * n + ci];
-                let h11 = verts[(cj + 1) * n + ci + 1];
-                for &(u, v) in CELL_SAMPLES {
-                    let bil = bilerp(h00, h10, h01, h11, u, v);
-                    let px = x0 + (ci as f64 + u) * step;
-                    let pz = z0 + (cj as f64 + v) * step;
-                    let truth = src.height_at(px, pz);
-                    let e = (truth - bil).abs();
-                    if e > max_err {
-                        max_err = e;
-                    }
+    let mut max_err = 0.0f64;
+    for cj in 0..n - 1 {
+        for ci in 0..n - 1 {
+            let h00 = verts[cj * n + ci];
+            let h10 = verts[cj * n + ci + 1];
+            let h01 = verts[(cj + 1) * n + ci];
+            let h11 = verts[(cj + 1) * n + ci + 1];
+            for &(u, v) in CELL_SAMPLES {
+                let bil = bilerp(h00, h10, h01, h11, u, v);
+                let px = x0 + (ci as f64 + u) * step;
+                let pz = z0 + (cj as f64 + v) * step;
+                let truth = src.height_at(px, pz);
+                let e = (truth - bil).abs();
+                if e > max_err {
+                    max_err = e;
                 }
             }
         }
-        max_err
-    })
+    }
+    // Return the buffer for the next call (a re-entrant inner call may have parked
+    // its own — either is fine; the buffer is pure scratch).
+    VERT_SCRATCH.with(|s| s.replace(verts));
+    max_err
 }
 
 /// Bilinear interpolation of a cell's four corner heights at unit-cell `(u, v)`.
@@ -170,5 +176,31 @@ mod tests {
         let src = AnalyticHeightSource::default();
         let region = sq(123.0, -456.0, 250.0);
         assert_eq!(measure_node_error(&src, region, 16), measure_node_error(&src, region, 16));
+    }
+
+    /// A `HeightSource` that re-enters `measure_node_error` from `height_at` — the
+    /// scratch buffer must not be borrow-locked across the callback (it used to be:
+    /// `BorrowMutError` panic).
+    struct Reentrant {
+        depth: std::sync::atomic::AtomicU32,
+    }
+    impl HeightSource for Reentrant {
+        fn height_at(&self, x: f64, _z: f64) -> f64 {
+            use std::sync::atomic::Ordering::SeqCst;
+            if self.depth.load(SeqCst) == 0 {
+                self.depth.store(1, SeqCst);
+                let inner = measure_node_error(self, sq(0.0, 0.0, 10.0), 4);
+                self.depth.store(0, SeqCst);
+                return x + inner;
+            }
+            x
+        }
+    }
+
+    #[test]
+    fn a_reentrant_source_does_not_panic() {
+        let src = Reentrant { depth: std::sync::atomic::AtomicU32::new(0) };
+        let e = measure_node_error(&src, sq(0.0, 0.0, 100.0), 8);
+        assert!(e.is_finite());
     }
 }

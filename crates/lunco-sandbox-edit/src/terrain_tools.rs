@@ -222,9 +222,11 @@ pub fn update_terrain_brush_ghost(
         .with_scale(Vec3::new(state.radius, 1.0, state.radius));
 
     if let Some((_, mut tf, mat)) = q_ghost.iter_mut().next() {
-        // Write the transform directly (change detection marks it only when the
-        // cursor actually moved) instead of re-inserting via Commands every frame.
-        *tf = transform;
+        // `set_if_neq`, NOT `*tf = transform`: the latter goes through `DerefMut`, so
+        // it marks `Changed<Transform>` EVERY frame the brush is armed — whether or
+        // not the cursor moved (and every downstream propagation with it). Compare
+        // first, write only on a real move.
+        tf.set_if_neq(transform);
         // `Assets::get_mut` marks the material modified → a uniform re-upload EVERY
         // frame if called unconditionally. The tint only changes when a modifier
         // (Alt/Ctrl) toggles, so peek immutably and touch it only on a real change.

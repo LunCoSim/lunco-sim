@@ -322,8 +322,11 @@ source: nasa_pgda_78
     /// `LUNCO_DEM_TEST_DIR` points at a site directory (e.g. the moonbase Twin's
     /// `terrain/connecting_ridge`), so CI without the 40 MB asset still passes.
     /// Uses `std::fs` — test-only scaffolding; the library itself stays
-    /// filesystem-free / wasm-safe.
+    /// filesystem-free / wasm-safe, which is why the workspace's
+    /// `disallowed_methods` gate is waived HERE (a native-only, opt-in test) rather
+    /// than relaxed for the crate.
     #[test]
+    #[allow(clippy::disallowed_methods)]
     fn loads_real_exporter_asset() {
         let Ok(dir) = std::env::var("LUNCO_DEM_TEST_DIR") else {
             eprintln!("skipping: set LUNCO_DEM_TEST_DIR to a DEM site dir to run");

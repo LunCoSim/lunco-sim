@@ -1138,10 +1138,14 @@ fn solver_choice_to_rumoca(
 /// lunar rover thermal system completes its full two-lunar-day run at `1e-6`),
 /// so there's no reason to loosen below the Modelica convention. It stays
 /// per-run editable through the experiments Setup dialog (`bounds.tolerance`).
-/// This is the ONE source of the default — the live interactive sim
-/// (`worker::build_stepper`) reaches it by delegating to
-/// [`stepper_options_from_bounds`], so the two surfaces can't drift on
-/// tolerance, `atol`/`rtol` policy, or solver family.
+///
+/// **Batch only.** The LIVE interactive/co-simulated path deliberately does NOT
+/// share this policy (A4): an adaptive-implicit solver whose step sequence comes
+/// from per-machine error estimates must not run inside the client-predicted
+/// fixed-step loop. It has its own configuration in `worker::live_stepper_options`
+/// (explicit family, fixed micro-step ladder, fixed tolerance). The two surfaces
+/// are meant to differ here — see
+/// `docs/architecture/28-modelica-realtime-physics.md` §2a.
 pub const DEFAULT_TOLERANCE: f64 = 1e-6;
 
 pub fn stepper_options_from_bounds(bounds: &RunBounds) -> rumoca_sim::SimOptions {

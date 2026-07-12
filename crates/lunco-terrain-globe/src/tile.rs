@@ -2,8 +2,7 @@
 
 use bevy::prelude::*;
 use bevy::math::DVec3;
-use bevy::render::render_resource::PrimitiveTopology;
-use bevy_mesh::Indices;
+use bevy_mesh::{Indices, PrimitiveTopology};
 use crate::quad_sphere::cube_to_sphere;
 
 /// Generate a mesh for a single QuadSphere tile.

@@ -5,7 +5,11 @@ edition = "2021"
 description = "Whole-body cube-sphere terrain tiling (orbital/planetary scale) for LunCoSim. The 'globe' projection of the terrain family; pairs with lunco-terrain-surface (local DEM ground) over the shared lunco-terrain-core LOD spine."
 
 [dependencies]
-bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "mesh_picking"] }
+# `bevy_mesh` only — it builds `Mesh` DATA and never touches a material, light or
+# camera. `bevy_mesh` depends on `wgpu-types` (types, no GPU) but NOT on
+# bevy_render, so this crate stays out of the wgpu/naga closure. The PBR feature
+# list it used to carry pulled bevy_render into every consumer for nothing.
+bevy = { workspace = true, features = ["bevy_mesh"] }
 bevy_mesh = { workspace = true }
 
 [lints]

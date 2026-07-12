@@ -2,6 +2,12 @@
 //!
 //! These tests verify the 4 key assumptions that the implementation plan depends on.
 //! If any of these fail, the architecture must be redesigned before implementation.
+
+// One-time test scene construction, which `clippy.toml` already names as exempt
+// for `set_parent_in_place` ("bootstrap code — runs before any observer is
+// registered") and for `std::fs` in tests. Cargo has no path-scoped lint config,
+// so that exemption has to be written here rather than in clippy.toml.
+#![allow(clippy::disallowed_methods)]
 //!
 //! **Important**: Tests 1-3 use isolated big_space setups (no CelestialPlugin)
 //! because the CelestialPlugin's integration tests have pre-existing breakage

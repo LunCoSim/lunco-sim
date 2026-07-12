@@ -55,6 +55,10 @@ pub const TIMELINES_DIR: &str = "timelines";
 /// A single unreadable file is logged and skipped, never blocking the rest. A
 /// missing dir is the common case (twin has none) → empty, not an error.
 /// Native-only.
+// `disallowed_methods` bans `std::fs` because it silently fails on wasm. This fn
+// is `cfg(not(wasm32))`, so that failure mode is unreachable. Scoped to this fn,
+// not the module, so the lint stays live for anything wasm-reachable added later.
+#[allow(clippy::disallowed_methods)]
 #[cfg(not(target_arch = "wasm32"))]
 pub fn load_timelines_from_dir(root: &std::path::Path) -> Vec<(String, String)> {
     let dir = root.join(TIMELINES_DIR);
@@ -83,6 +87,9 @@ pub fn load_timelines_from_dir(root: &std::path::Path) -> Vec<(String, String)> 
 /// Persist a timeline's JSON to `<root>/timelines/<name>.json` (creating the dir
 /// if needed). The on-disk counterpart of [`TimelineStore::insert`], so an
 /// interactively-registered timeline survives a restart. Native-only.
+// See `load_timelines_from_dir` — native-only, so the wasm foot-gun the
+// `disallowed_methods` ban guards against cannot occur here.
+#[allow(clippy::disallowed_methods)]
 #[cfg(not(target_arch = "wasm32"))]
 pub fn save_timeline_file(
     root: &std::path::Path,

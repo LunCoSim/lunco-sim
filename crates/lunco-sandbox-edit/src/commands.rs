@@ -23,6 +23,7 @@ use lunco_usd::document::{UsdOp, LayerId};
 use lunco_usd::registry::UsdDocumentRegistry;
 use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
 use lunco_doc::{DocumentId, DocumentOrigin};
+use lunco_doc_bevy::{RedoDocument, UndoDocument};
 use std::collections::{HashMap, HashSet, VecDeque};
 use crate::catalog::{SpawnCatalog, SpawnSource, spawn_usd_entry};
 
@@ -2715,6 +2716,131 @@ pub fn persist_move_to_runtime_layer(
     });
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Document history — THE history
+//
+// The 3D editor has no private undo stack. Every editor mutation is
+// authored as a `UsdOp` (the persisters above), so its history is the
+// document's history: Lamport-ordered, op+inverse, journaled, networked.
+// `UndoDocument`/`RedoDocument` are the generic verbs; each domain
+// observes them and acts only on documents its own registry owns.
+// ─────────────────────────────────────────────────────────────────────
+
+/// Per-domain [`UndoDocument`] handler for **USD** documents: pop the document's
+/// last op and apply its inverse. The generation bump is picked up by
+/// `sync_twin_overlays`, which replays the inverse op onto the live stage — so
+/// the ECS projection follows automatically (no ECS surgery here).
+///
+/// No-ops for a `doc` this registry doesn't own (a Modelica document is handled
+/// by Modelica's observer), per the `UndoDocument` ownership convention.
+#[on_command(UndoDocument)]
+pub fn on_undo_usd_document(
+    trigger: On<UndoDocument>,
+    mut registry: ResMut<UsdDocumentRegistry>,
+) {
+    let doc = trigger.event().doc;
+    let outcome = {
+        let Some(host) = registry.host_mut(doc) else { return };
+        host.undo()
+    };
+    match outcome {
+        Ok(true) => {
+            // `host_mut` bypasses the registry's `apply` funnel, so the Changed
+            // notification has to be raised by hand (documented on `host_mut`).
+            registry.mark_changed(doc);
+            info!("[usd] undo applied on {doc}");
+        }
+        Ok(false) => info!("[usd] nothing to undo on {doc}"),
+        Err(e) => warn!("[usd] undo failed on {doc}: {e:?}"),
+    }
+}
+
+/// Per-domain [`RedoDocument`] handler for **USD** documents. Counterpart of
+/// [`on_undo_usd_document`]; same ownership rules.
+#[on_command(RedoDocument)]
+pub fn on_redo_usd_document(
+    trigger: On<RedoDocument>,
+    mut registry: ResMut<UsdDocumentRegistry>,
+) {
+    let doc = trigger.event().doc;
+    let outcome = {
+        let Some(host) = registry.host_mut(doc) else { return };
+        host.redo()
+    };
+    match outcome {
+        Ok(true) => {
+            registry.mark_changed(doc);
+            info!("[usd] redo applied on {doc}");
+        }
+        Ok(false) => info!("[usd] nothing to redo on {doc}"),
+        Err(e) => warn!("[usd] redo failed on {doc}: {e:?}"),
+    }
+}
+
+/// Ctrl+Z / Ctrl+Shift+Z in the 3D editor → [`UndoDocument`] / [`RedoDocument`]
+/// on the **active document**. The editor's edits are document ops, so this is
+/// the same history the Inspector, the journal and every networked peer see —
+/// there is no second, in-memory editor stack to disagree with it.
+pub fn handle_undo_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    mut commands: Commands,
+) {
+    if !keys.just_pressed(KeyCode::KeyZ) {
+        return;
+    }
+    if !keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]) {
+        return;
+    }
+    let Some(workspace) = workspace else { return };
+    let Some(doc) = workspace.0.active_document else {
+        info!("UNDO: no active document");
+        return;
+    };
+    if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
+        commands.trigger(RedoDocument { doc });
+    } else {
+        commands.trigger(UndoDocument { doc });
+    }
+}
+
+/// Author the **removal** of `entity`'s prim into the active document's runtime
+/// layer, so a delete in the 3D editor is a document op — journaled, synced, and
+/// undoable through [`UndoDocument`] like any other edit.
+///
+/// Same ownership guard as every other persister: no active USD doc, no
+/// `UsdPrimPath`, or a prim the document doesn't hold → nothing is authored (the
+/// caller's live despawn still stands; it just isn't part of document history,
+/// because the entity was never part of the document).
+pub fn author_prim_removal(world: &mut World, entity: Entity) {
+    let Some(prim) = world.get::<UsdPrimPath>(entity).map(|p| p.path.clone()) else { return };
+    let Some(doc) = world
+        .get_resource::<lunco_workspace::WorkspaceResource>()
+        .and_then(|w| w.0.active_document)
+    else {
+        return;
+    };
+    let Ok(prim_sdf) = lunco_usd_bevy::SdfPath::new(&prim) else { return };
+    let owned = world
+        .get_resource::<UsdDocumentRegistry>()
+        .and_then(|r| r.host(doc))
+        .map(|h| {
+            h.document().data().spec(&prim_sdf).is_some()
+                || h.document().runtime_data().spec(&prim_sdf).is_some()
+        })
+        .unwrap_or(false);
+    if !owned {
+        return;
+    }
+    world.trigger(ApplyUsdOp {
+        doc,
+        op: UsdOp::RemovePrim {
+            edit_target: LayerId::runtime(),
+            path: prim,
+        },
+    });
+}
+
 /// Persist a `SetObjectProperty` **shader-param tune** into the active USD
 /// document's **runtime overlay** (#4 — non-destructive layer tuning).
 ///
@@ -2740,7 +2866,11 @@ pub fn persist_property_to_runtime_layer(
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
-    // Structural props aren't USD attributes; skip them.
+    // Not shader *params*: `shader` swaps the material (no USD reader — the
+    // `shaderPath` attribute was deliberately vetoed, so it stays live-only) and
+    // `visible` is authored as standard `token visibility` by
+    // [`persist_wheel_and_pbr_to_runtime_layer`]. Disjoint, so neither is
+    // double-authored.
     if matches!(cmd.property.as_str(), "shader" | "visible") {
         return;
     }
@@ -2798,33 +2928,103 @@ pub fn persist_property_to_runtime_layer(
     });
 }
 
-/// Maps a `SetObjectProperty` **wheel-dynamics** property name to the USD
-/// attribute the loader (`lunco_usd_sim`) reads back onto `WheelRaycast`, so a
-/// per-wheel tune round-trips on reload. Only the names with an existing reader
-/// are mapped; `slip_stiffness` / `friction_mu` have none, so they stay live-only.
-/// All are `float`.
-fn wheel_property_usd_attr(name: &str) -> Option<&'static str> {
-    Some(match name {
-        "drive_torque" | "drive_torque_max" => "physxVehicleEngine:peakTorque",
-        "brake_torque" | "brake_torque_max" => "physxVehicleWheel:maxBrakeTorque",
-        "bearing_damping" | "damping_rate" => "physxVehicleWheel:dampingRate",
-        "moi" | "moment_of_inertia" => "physxVehicleWheel:moi",
-        "wheel_radius" | "radius" => "physxVehicleWheel:radius",
-        "rest_length" => "physxVehicleSuspension:restLength",
-        "spring_k" | "spring_stiffness" => "physxVehicleSuspension:springStiffness",
-        "damping_c" | "spring_damping" => "physxVehicleSuspension:springDamping",
-        _ => return None,
-    })
+/// One wheel-dynamics parameter — **the** single source of truth for it.
+///
+/// A wheel param has exactly three facets and they must never drift apart:
+/// the names `SetObjectProperty` accepts for it, the live `WheelRaycast` field
+/// it sets, and the USD attribute `lunco_usd_sim` reads back onto that field on
+/// load. Two hand-synced tables (a `name → setter` match and a separate
+/// `name → attr` match) had already drifted — `slip_stiffness` / `friction_mu`
+/// were settable but not persistable, so tuning them was silently lost on
+/// reload. One row per param makes that structurally impossible: a field cannot
+/// exist in one table and not the other, because there is only one table.
+pub(crate) struct WheelParam {
+    /// Accepted `SetObjectProperty` names — the Rust field name first, USD-style
+    /// aliases after (`radius`, `spring_stiffness`, …).
+    pub aliases: &'static [&'static str],
+    /// Live setter on `WheelRaycast`. Non-capturing closures coerce to `fn`.
+    pub set: fn(&mut lunco_mobility::WheelRaycast, f64),
+    /// The USD attribute the loader reads back into this field (`float`).
+    pub usd_attr: &'static str,
 }
 
-/// Persist a `SetObjectProperty` **wheel-dynamics** or **PBR base-colour** tune
-/// into the active USD document's runtime overlay — the counterpart of
-/// [`persist_property_to_runtime_layer`] for the two property classes it skips
-/// (it guards to shader-material prims). Fully decoupled + disjoint: it only
-/// authors for wheel-param names (via [`wheel_property_usd_attr`]) or `base_color`
-/// on a `StandardMaterial` prim, both of which the loader already reads back — so
-/// they round-trip on reload and ride the Twin journal. Ownership-guarded and
-/// no-op without an active USD doc, like every other persister.
+/// Every wheel-dynamics parameter `SetObjectProperty` can tune. Each row's
+/// `usd_attr` is a name `lunco_usd_sim`'s wheel loader actually reads, so every
+/// tune round-trips through the runtime layer on reload.
+pub(crate) const WHEEL_PARAMS: &[WheelParam] = &[
+    WheelParam {
+        aliases: &["drive_torque", "drive_torque_max"],
+        set: |w, v| w.drive_torque_max = v,
+        usd_attr: "physxVehicleEngine:peakTorque",
+    },
+    WheelParam {
+        aliases: &["brake_torque", "brake_torque_max"],
+        set: |w, v| w.brake_torque_max = v,
+        usd_attr: "physxVehicleWheel:maxBrakeTorque",
+    },
+    WheelParam {
+        aliases: &["slip_stiffness"],
+        set: |w, v| w.slip_stiffness = v,
+        usd_attr: "physxVehicleTire:longitudinalStiffness",
+    },
+    WheelParam {
+        aliases: &["bearing_damping", "damping_rate"],
+        set: |w, v| w.bearing_damping = v,
+        usd_attr: "physxVehicleWheel:dampingRate",
+    },
+    WheelParam {
+        aliases: &["friction_mu", "friction"],
+        set: |w, v| w.friction_mu = v,
+        usd_attr: "lunco:frictionCoefficient",
+    },
+    WheelParam {
+        aliases: &["mass"],
+        set: |w, v| w.mass = v,
+        usd_attr: "physics:mass",
+    },
+    WheelParam {
+        aliases: &["moi", "moment_of_inertia"],
+        set: |w, v| w.moment_of_inertia = v,
+        usd_attr: "physxVehicleWheel:moi",
+    },
+    WheelParam {
+        aliases: &["wheel_radius", "radius"],
+        set: |w, v| w.wheel_radius = v,
+        usd_attr: "physxVehicleWheel:radius",
+    },
+    WheelParam {
+        aliases: &["rest_length"],
+        set: |w, v| w.rest_length = v,
+        usd_attr: "physxVehicleSuspension:restLength",
+    },
+    WheelParam {
+        aliases: &["spring_k", "spring_stiffness"],
+        set: |w, v| w.spring_k = v,
+        usd_attr: "physxVehicleSuspension:springStiffness",
+    },
+    WheelParam {
+        aliases: &["damping_c", "spring_damping"],
+        set: |w, v| w.damping_c = v,
+        usd_attr: "physxVehicleSuspension:springDamping",
+    },
+];
+
+/// Look a `SetObjectProperty` property name up in [`WHEEL_PARAMS`], or `None`
+/// if it isn't a wheel field. Both the live-mutation path and the USD-authoring
+/// path go through this one lookup.
+pub(crate) fn wheel_param(name: &str) -> Option<&'static WheelParam> {
+    WHEEL_PARAMS.iter().find(|p| p.aliases.contains(&name))
+}
+
+/// Persist a `SetObjectProperty` **wheel-dynamics**, **visibility** or **PBR
+/// base-colour** tune into the active USD document's runtime overlay — the
+/// counterpart of [`persist_property_to_runtime_layer`] for the property classes
+/// it skips (it guards to shader-material prims). Fully decoupled + disjoint: it
+/// authors for wheel-param names (via [`wheel_param`]), `visible` (standard USD
+/// `token visibility`) or `base_color` on a `StandardMaterial` prim — all of
+/// which the loader already reads back, so they round-trip on reload and ride the
+/// Twin journal. Ownership-guarded and no-op without an active USD doc, like
+/// every other persister.
 pub fn persist_wheel_and_pbr_to_runtime_layer(
     trigger: On<SetObjectProperty>,
     api_registry: Res<lunco_api::registry::ApiEntityRegistry>,
@@ -2838,13 +3038,21 @@ pub fn persist_wheel_and_pbr_to_runtime_layer(
 
     // Route the property to a USD attribute the loader reads back.
     let authored: Option<(String, &str, String)> =
-        if let Some(attr) = wheel_property_usd_attr(&cmd.property) {
-            // Wheel dynamics → physxVehicle* scalar.
+        if let Some(param) = wheel_param(&cmd.property) {
+            // Wheel dynamics → the single `WHEEL_PARAMS` row's USD attribute.
             cmd.value
                 .trim()
                 .parse::<f32>()
                 .ok()
-                .map(|v| (attr.to_string(), "float", v.to_string()))
+                .map(|v| (param.usd_attr.to_string(), "float", v.to_string()))
+        } else if cmd.property == "visible" {
+            // Visibility → standard USD `token visibility`, which the prim
+            // instantiator already reads back (`inherited` / `invisible`), so a
+            // hide survives reload instead of being a live-only ECS `Visibility`
+            // write. A `token` literal is QUOTED in USD.
+            let hidden = matches!(cmd.value.trim(), "false" | "0" | "hidden");
+            let tok = if hidden { "invisible" } else { "inherited" };
+            Some(("visibility".to_string(), "token", format!("\"{tok}\"")))
         } else if cmd.property == "base_color" {
             // PBR base colour → `primvars:displayColor` (loader reads it into
             // `StandardMaterial.base_color`). Linear r,g,b (drop any alpha).
@@ -3265,28 +3473,6 @@ pub struct SetObjectProperty {
     pub value: String,
 }
 
-/// Maps a `SetObjectProperty` property name to a setter on `WheelRaycast`, or
-/// `None` if the name isn't a wheel field. Non-capturing closures coerce to
-/// `fn` pointers, so this stays a cheap lookup table. Accepts both the Rust
-/// field names and the USD-style aliases (`radius`, `spring_stiffness`, …).
-fn wheel_param_setter(name: &str) -> Option<fn(&mut lunco_mobility::WheelRaycast, f64)> {
-    use lunco_mobility::WheelRaycast as W;
-    Some(match name {
-        "drive_torque" | "drive_torque_max" => |w: &mut W, v| w.drive_torque_max = v,
-        "brake_torque" | "brake_torque_max" => |w: &mut W, v| w.brake_torque_max = v,
-        "slip_stiffness" => |w: &mut W, v| w.slip_stiffness = v,
-        "bearing_damping" | "damping_rate" => |w: &mut W, v| w.bearing_damping = v,
-        "friction_mu" | "friction" => |w: &mut W, v| w.friction_mu = v,
-        "mass" => |w: &mut W, v| w.mass = v,
-        "moi" | "moment_of_inertia" => |w: &mut W, v| w.moment_of_inertia = v,
-        "wheel_radius" | "radius" => |w: &mut W, v| w.wheel_radius = v,
-        "rest_length" => |w: &mut W, v| w.rest_length = v,
-        "spring_k" | "spring_stiffness" => |w: &mut W, v| w.spring_k = v,
-        "damping_c" | "spring_damping" => |w: &mut W, v| w.damping_c = v,
-        _ => return None,
-    })
-}
-
 /// Apply one `StandardMaterial` (PBR) property addressed by `SetObjectProperty`.
 ///
 /// Value formats: colors are comma-separated **linear** `r,g,b[,a]` in 0..1 (so
@@ -3357,7 +3543,7 @@ pub fn on_set_object_property(
 
     // Per-wheel tire-spin dynamics. Each wheel is its own entity, so addressing
     // a single `api_id` sets the field on just that wheel — independent control.
-    if let Some(setter) = wheel_param_setter(&cmd.property) {
+    if let Some(param) = wheel_param(&cmd.property) {
         let Ok(value) = cmd.value.trim().parse::<f64>() else {
             warn!("SET_PROPERTY: '{}' expects a number, got '{}'", cmd.property, cmd.value);
             return;
@@ -3366,7 +3552,7 @@ pub fn on_set_object_property(
             warn!("SET_PROPERTY: entity {} has no WheelRaycast", cmd.entity_id);
             return;
         };
-        setter(&mut wheel, value);
+        (param.set)(&mut wheel, value);
         info!("SET_PROPERTY: wheel {} {} = {}", cmd.entity_id, cmd.property, value);
         return;
     }
@@ -4267,6 +4453,7 @@ register_commands!(
     on_focus_entity_by_id,
     on_import_shader,
     on_move_entity_command,
+    on_redo_usd_document,
     on_reload_shader,
     on_rescan_shaders,
     on_rescan_spawn_catalog,
@@ -4275,6 +4462,7 @@ register_commands!(
     on_set_shader_source,
     on_set_visual_lead,
     on_spawn_entity_command,
+    on_undo_usd_document,
 );
 
 impl Plugin for SpawnCommandPlugin {
@@ -4596,6 +4784,101 @@ mod tests {
         let attr = lunco_usd_bevy::SdfPath::new("/World.xformOp:translate").unwrap();
         assert!(docu.data().spec(&attr).is_none(), "base layer untouched");
         assert!(!docu.source().contains("xformOp:translate"), "save excludes runtime move");
+    }
+
+    // ── A10: ONE wheel-param table ──────────────────────────────────────
+
+    /// The whole point of collapsing the two hand-synced tables: a wheel
+    /// property cannot be settable-but-not-persistable (the drift that lost
+    /// `slip_stiffness` / `friction_mu` tunes on every reload). One row = one
+    /// param = a setter AND a USD attribute, always.
+    #[test]
+    fn every_wheel_param_has_both_a_setter_and_a_usd_attr() {
+        use super::*;
+        use std::collections::HashSet;
+
+        assert!(!WHEEL_PARAMS.is_empty());
+        let mut seen_alias: HashSet<&str> = HashSet::new();
+        let mut seen_attr: HashSet<&str> = HashSet::new();
+        for p in WHEEL_PARAMS {
+            assert!(!p.aliases.is_empty(), "a param with no name is unreachable");
+            assert!(!p.usd_attr.is_empty(), "every param must round-trip through USD");
+            assert!(seen_attr.insert(p.usd_attr), "duplicate USD attr {}", p.usd_attr);
+            for a in p.aliases {
+                assert!(seen_alias.insert(a), "duplicate alias {a}");
+                // Both consumers (live setter + USD persister) resolve through the
+                // SAME lookup, so a name that sets a field always has an attr.
+                let row = wheel_param(a).expect("alias resolves");
+                assert_eq!(row.usd_attr, p.usd_attr);
+            }
+        }
+
+        // The two names the old split tables disagreed about are now complete.
+        for name in ["slip_stiffness", "friction_mu", "mass"] {
+            let row = wheel_param(name).expect("wheel param exists");
+            assert!(!row.usd_attr.is_empty(), "{name} persists to USD");
+        }
+        assert!(wheel_param("not_a_wheel_field").is_none());
+
+        // Setters write the field they claim.
+        let mut w = lunco_mobility::WheelRaycast::default();
+        (wheel_param("slip_stiffness").unwrap().set)(&mut w, 1234.0);
+        (wheel_param("friction_mu").unwrap().set)(&mut w, 0.5);
+        assert_eq!(w.slip_stiffness, 1234.0);
+        assert_eq!(w.friction_mu, 0.5);
+    }
+
+    // ── A8: one history — the document's ────────────────────────────────
+
+    /// Ctrl+Z routes to `UndoDocument`, which pops the USD document's last op
+    /// and applies its inverse. The editor keeps no private undo stack, so the
+    /// journal and the editor can no longer disagree.
+    #[test]
+    fn undo_document_reverts_the_last_usd_op() {
+        use bevy::prelude::*;
+        use super::*;
+        use lunco_doc::Document;
+        use lunco_usd_bevy::usd_data::UsdDataExt;
+
+        let (mut app, doc) = app_with_runtime_producer("/World", 42);
+        app.add_observer(on_undo_usd_document);
+        app.world_mut().trigger(MoveEntity {
+            entity_id: 42,
+            translation: Vec3::new(3.0, 4.0, 5.0),
+        });
+        for _ in 0..3 {
+            app.update();
+        }
+        let world_path = lunco_usd_bevy::SdfPath::new("/World").unwrap();
+        let gen_after_move = {
+            let reg = app.world().resource::<UsdDocumentRegistry>();
+            let docu = reg.host(doc).unwrap().document();
+            assert_eq!(
+                docu.runtime_data()
+                    .prim_attribute_value::<[f64; 3]>(&world_path, "xformOp:translate"),
+                Some([3.0, 4.0, 5.0])
+            );
+            docu.generation()
+        };
+
+        // The editor's undo verb — the SAME one the journal / other domains use.
+        app.world_mut().trigger(UndoDocument { doc });
+        for _ in 0..3 {
+            app.update();
+        }
+
+        let reg = app.world().resource::<UsdDocumentRegistry>();
+        let docu = reg.host(doc).unwrap().document();
+        assert!(
+            docu.generation() > gen_after_move,
+            "undo applies an inverse op (history moves forward, state moves back)"
+        );
+        assert_ne!(
+            docu.runtime_data()
+                .prim_attribute_value::<[f64; 3]>(&world_path, "xformOp:translate"),
+            Some([3.0, 4.0, 5.0]),
+            "the move is undone in the document, not just in ECS"
+        );
     }
 
     #[test]

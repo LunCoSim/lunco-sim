@@ -1,5 +1,12 @@
 //! Generic resource cache with in-flight dedup.
 //!
+//! **VESTIGIAL — not wired.** Zero reverse-dependencies: no crate in the
+//! workspace uses this, and ~8 bespoke ad-hoc `HashMap` memos exist instead
+//! (modelica's class cache, the terrain stream-viz memos, the horizon cache…).
+//! That is a gap worth closing — this IS the abstraction those want — but as of
+//! today it is a proposal, not a live subsystem. Do not read the API below as
+//! "what the codebase does".
+//!
 //! # What this solves
 //!
 //! Three kinds of work recur across our domain crates:

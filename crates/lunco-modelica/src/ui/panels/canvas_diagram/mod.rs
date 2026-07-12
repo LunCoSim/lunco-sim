@@ -133,7 +133,6 @@ fn build_registry() -> VisualRegistry {
             port_connector_paths: d.port_connector_paths.clone(),
             port_connector_icons: d.port_connector_icons.clone(),
             is_conditional: d.is_conditional,
-            parent_qualified_type: d.qualified_type.clone(),
         }
     });
     reg.register_edge_kind("modelica.connection", |data: &lunco_canvas::NodeData| {

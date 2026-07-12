@@ -1,4 +1,10 @@
 //! Unit tests for lunco-materials crate.
+//!
+//! Integration tests run natively and read their WGSL fixtures off disk. The
+//! workspace `disallowed_methods` ban on `std::fs` guards *wasm runtime* code
+//! paths, not `tests/` — `clippy.toml`'s header already says so; cargo has no
+//! path-scoped lint config, so the exemption has to be written out.
+#![allow(clippy::disallowed_methods)]
 
 use lunco_materials::{ParamSchema, ParamType, ParamValue, ShaderMaterial};
 use std::path::Path;

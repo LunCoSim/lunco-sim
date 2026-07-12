@@ -15,6 +15,12 @@ pub struct ApiResponseEnvelope {
     pub data: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The `ApiErrorCode` behind `error` (400 CommandNotFound, 404
+    /// EntityNotFound, 422 DeserializationError, 500 InternalError). The HTTP
+    /// transport also maps it to the status line; the wasm/JS bridge has no
+    /// status line, so it reads the code from here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<u16>,
 }
 
 /// Legacy request format:
@@ -151,10 +157,10 @@ mod tests {
 impl From<ApiResponse> for ApiResponseEnvelope {
     fn from(response: ApiResponse) -> Self {
         match response {
-            ApiResponse::Ok { command_id, data } => ApiResponseEnvelope { command_id, data, error: None },
-            ApiResponse::Error { code: _, message } => ApiResponseEnvelope { command_id: None, data: None, error: Some(message) },
-            ApiResponse::TelemetryEvent(event) => ApiResponseEnvelope { command_id: None, data: Some(serde_json::json!(event)), error: None },
-            ApiResponse::Screenshot { .. } => ApiResponseEnvelope { command_id: None, data: None, error: Some("unexpected screenshot response".into()) },
+            ApiResponse::Ok { command_id, data } => ApiResponseEnvelope { command_id, data, error: None, error_code: None },
+            ApiResponse::Error { code, message } => ApiResponseEnvelope { command_id: None, data: None, error: Some(message), error_code: Some(code) },
+            ApiResponse::TelemetryEvent(event) => ApiResponseEnvelope { command_id: None, data: Some(serde_json::json!(event)), error: None, error_code: None },
+            ApiResponse::Screenshot { .. } => ApiResponseEnvelope { command_id: None, data: None, error: Some("unexpected screenshot response".into()), error_code: Some(crate::schema::ApiErrorCode::InternalError as u16) },
         }
     }
 }

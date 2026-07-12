@@ -1,5 +1,10 @@
 //! # Telemetry Reflectance & Mirroring Subsystem
 //!
+//! **VESTIGIAL — not wired.** No crate depends on this and no binary reaches it.
+//! The live telemetry path is `lunco_core::TelemetryEvent` + the API's
+//! `SubscribeTelemetry`, NOT this crate. Kept as a design sketch; do not assume
+//! any of it runs.
+//!
 //! This crate implements the simulation's "Optical Fibers"—a generic, 
 //! reflection-based data extraction engine. 
 //!

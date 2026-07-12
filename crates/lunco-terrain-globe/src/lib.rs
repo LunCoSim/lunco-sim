@@ -1,5 +1,14 @@
 //! Terrain generation, QuadSphere tiling, and collision for LunCoSim.
 //!
+//! **VESTIGIAL — not wired. This is NOT the terrain system that runs.**
+//! `TerrainPlugin::build` registers ZERO systems (only `init_resource` +
+//! `register_type`), so nothing below ever executes: no tiles are generated, no
+//! LOD is selected, no colliders are built. The live LOD/terrain path is
+//! `lunco-terrain-core` / `lunco-terrain-surface` / `lunco-terrain-bake`, and the
+//! globe↔surface transition is NOT implemented here. Read this crate as an
+//! unfinished second attempt, not as a subsystem. Anything below describing
+//! behaviour describes intent.
+//!
 //! This crate provides:
 //! - **QuadSphere**: Cube-to-sphere projection and LOD subdivision
 //! - **Terrain Tiles**: Procedural mesh generation with height sampling

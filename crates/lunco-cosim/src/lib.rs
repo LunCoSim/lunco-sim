@@ -81,6 +81,7 @@ impl Plugin for CoSimPlugin {
         app.register_type::<SimComponent>()
             .register_type::<PendingForces>()
             .register_type::<SimConnection>()
+            .register_type::<CosimTier>()
             .register_type::<sensors::ImuSensor>()
             .register_type::<sensors::RangeSensor>()
             .register_type::<sensors::ContactSensor>();
@@ -189,15 +190,15 @@ impl Plugin for CoSimPlugin {
                 .before(systems::propagate::CosimSet::Propagate),
         );
 
-        // Range-sensor beam gizmos are debug viz only — kept out of the sensing
-        // system so raycasting doesn't depend on render infra. Gated on the gizmo
-        // store so headless runs without `GizmoPlugin` skip it (Bevy 0.18 would
-        // otherwise panic on the missing `Gizmos` param).
-        app.add_systems(
-            Update,
-            sensors::draw_range_sensor_gizmos
-                .run_if(resource_exists::<GizmoConfigStore>),
-        );
+        // TODO(render-decoupling): the range-sensor beam viz used to live here as
+        // a `Gizmos` system. It is gone: `lunco-cosim` is a render-free
+        // simulation crate, and naming `Gizmos`/`GizmoConfigStore` dragged
+        // `bevy_gizmos → bevy_render → wgpu + naga` into every build — including
+        // the `--no-ui` server and the wasm worker. The beam drawing is being
+        // re-homed into the render layer, which reads `RangeSensor` +
+        // `RangeSensor::visualize` (see `docs/architecture/render-decoupling.md`).
+        // The sensing itself (`update_range_sensors`, a `SpatialQuery` raycast)
+        // is unchanged and stays here.
 
         app.add_systems(Update, systems::collider::sync_collider);
 
@@ -247,9 +248,30 @@ pub struct SetPorts {
 /// [`PortRegistry`] — the single dispatch that reaches Modelica `SimComponent`
 /// inputs, a `FlightSoftware`'s command inputs (throttle/steer/brake, …),
 /// `PhysicalPort`/`DigitalPort` registers, or any future backend, all by name.
-/// `write_port` needs `&mut
-/// World`, so we clone the (cheap, `fn`-pointer) registry and defer the writes
-/// through a `Commands` world closure.
+/// `write_port` needs `&mut World`, so we clone the (cheap, `fn`-pointer)
+/// registry and defer the writes through a `Commands` world closure.
+///
+/// TODO(P9): the control-path latency "input at tick N → wheels at tick N" is
+/// currently an ACCIDENT OF SCHEDULING, not a declared edge. Two halves:
+///
+/// 1. **Producer ordering (not in this crate).** `drive_from_bindings`
+///    (`lunco-controller`) and `drive_autopilots` (`lunco-autopilot`) are added
+///    to `FixedUpdate` with NO ordering relative to
+///    [`lunco_core::ControlDacSet`]. They must be
+///    `.before(lunco_core::ControlDacSet)` explicitly, so the `SetPorts` they
+///    emit is flushed — and the `DigitalPort` written — before the DAC
+///    propagates it into `PhysicalPort` and the wheel systems read it. Without
+///    that edge, adding any unrelated `.after()` anywhere in the fixed graph can
+///    silently move the actuation a whole tick.
+/// 2. **This write-through.** The observer cannot apply the writes itself:
+///    `PortRegistry::write_port` takes `&mut World`, and an EXCLUSIVE system
+///    cannot be an observer in Bevy (`bevy_ecs`'s own
+///    `exclusive_system_cannot_be_observer` test asserts the panic), while
+///    `DeferredWorld` gives no `&mut World`. Removing the second defer therefore
+///    requires a `DeferredWorld`-shaped backend signature in
+///    `lunco_core::ports` — a core change, out of scope here. Note the queued
+///    closure is appended to the SAME command queue that is being flushed, so it
+///    lands within that flush; the ordering risk is (1), not this hop.
 #[on_command(SetPorts)]
 fn on_set_ports(
     trigger: On<SetPorts>,

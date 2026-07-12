@@ -1644,12 +1644,15 @@ fn orbit_system(
         tf.rotation = rotation;
 
         // Arm telemetry: convergence toward the commanded distance is the
-        // invariant every focus bug so far has violated. Dense while far off
-        // (every frame), quiet once converged.
+        // invariant every focus bug so far has violated. This is developer
+        // telemetry, not user-facing status — at `info!` the `far_off` branch
+        // fired EVERY frame for the whole approach (60 lines/s of 200-char
+        // lines). `debug!` keeps it available behind `RUST_LOG` and off the
+        // default console; the countdown still rate-limits the converged case.
         let far_off = current_len > orbit.distance * 1.5;
         if far_off || *log_countdown == 0 {
             *log_countdown = 240;
-            info!(
+            debug!(
                 "ORBIT: arm {:.4e}→{:.4e} (cmd {:.3e}) cell=({},{},{}) tf=({:.1},{:.1},{:.1}) tgt=({:.4e},{:.4e},{:.4e}) next=({:.4e},{:.4e},{:.4e}) yaw={:.2} pitch={:.2}",
                 current_len, final_len, orbit.distance,
                 cell.x, cell.y, cell.z,
@@ -2640,7 +2643,15 @@ fn update_avatar_clip_planes_system(
         // frame "distances" swing by kilometres per epoch tick and the clip
         // planes flap, strobing the whole viewport.)
         let cam_pos = cam_gt.translation().as_dvec3();
-        if let Projection::Perspective(ref mut perspective) = *projection {
+        // Peek through `&*` — NOT `*projection`. Deref-mut on a `Mut<Projection>`
+        // flags the component `Changed` even when the value it writes is
+        // identical, so a completely static camera re-triggered a frustum
+        // recompute and a view-uniform re-upload EVERY PostUpdate. Read here,
+        // compute, and take the mutable deref below only if a plane really moved.
+        let Projection::Perspective(current) = &*projection else {
+            continue;
+        };
+        {
             // Adaptive near AND far, both derived from the bodies in frame.
             // `near` tracks the nearest body surface (no near-clipping on
             // approach); `far` tracks the FARTHEST body surface (+5% margin)
@@ -2659,15 +2670,14 @@ fn update_avatar_clip_planes_system(
                 if near_edge < min_dist { min_dist = near_edge; }
                 if far_edge > max_far { max_far = far_edge; }
             }
-            if max_far <= 0.0 {
+            let (near, far) = if max_far <= 0.0 {
                 // No `CelestialBody` contributed (flat sandbox scene, or the
                 // offscreen USD preview camera). The body-derived `min_dist` is
                 // still its 1e15 sentinel here — feeding it to the clamp below
                 // pins `near` to the 100 m ceiling, which clips away the ENTIRE
                 // nearby scene (rovers, ground) and renders black. Use a small
                 // near + the 10 000 km far floor so a body-less scene renders.
-                perspective.near = 0.1;
-                perspective.far = 1.0e7;
+                (0.1_f32, 1.0e7_f32)
             } else {
                 // Near plane rides just in front of the NEAREST body surface, so
                 // it scales with viewing distance. The old `* 0.01` + clamp to
@@ -2698,8 +2708,24 @@ fn update_avatar_clip_planes_system(
                 //   keeping the surface near the depth-precision peak
                 //   (reverse-Z cares about the near/dist RATIO, and 0.5 is
                 //   still 4 orders of magnitude better than the old 100 m pin).
-                perspective.near = ((min_dist - 20_000.0).min(min_dist * 0.5).max(0.1)) as f32;
-                perspective.far = ((max_far * 1.05).max(1.0e7)) as f32;
+                (
+                    ((min_dist - 20_000.0).min(min_dist * 0.5).max(0.1)) as f32,
+                    ((max_far * 1.05).max(1.0e7)) as f32,
+                )
+            };
+
+            // Relative-epsilon gate. The GTs jitter by metres at 1e8 m, so an
+            // exact compare would still fire most frames; 1e-4 relative is far
+            // below any visible clip-plane motion and leaves a parked camera
+            // byte-stable, which is what keeps `Changed<Projection>` quiet.
+            let moved = (current.near - near).abs() > near.abs() * 1e-4
+                || (current.far - far).abs() > far.abs() * 1e-4;
+            if !moved {
+                continue;
+            }
+            if let Projection::Perspective(perspective) = &mut *projection {
+                perspective.near = near;
+                perspective.far = far;
             }
         }
     }

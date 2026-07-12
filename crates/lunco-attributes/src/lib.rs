@@ -1,5 +1,10 @@
 //! # Distributed Attribute Management
 //!
+//! **VESTIGIAL — not wired.** Nothing in the workspace depends on this crate and
+//! no binary reaches it (see the note above `default-members` in the root
+//! `Cargo.toml`). It is kept as a design sketch, not as live code: treat every
+//! claim below as a proposal. Do not assume it runs.
+//!
 //! This crate implements the simulation's "Tuning Registry"—a bridge between 
 //! raw ECS memory and external System Modeling (SysML) definitions.
 //!

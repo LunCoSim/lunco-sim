@@ -19,6 +19,12 @@ pub struct ReplResource {
     pub receiver: Receiver<String>,
 }
 
+// `disallowed_methods` bans `std::thread::spawn` because it panics on wasm. The
+// whole `repl` module is `#[cfg(not(target_arch = "wasm32"))]` (see lib.rs) —
+// this is a blocking stdin reader, which the web target has no equivalent of, so
+// it cannot be reached there. `AsyncComputeTaskPool` is not a substitute: on wasm
+// it runs on the main thread, so a blocking read loop would hang the page.
+#[allow(clippy::disallowed_methods)]
 pub fn spawn_repl_thread() -> ReplResource {
     let (tx, rx) = unbounded();
     // The default backend is rhai; only a python-only build prompts for Python.

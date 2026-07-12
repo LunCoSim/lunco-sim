@@ -2,6 +2,11 @@
 //!
 //! Key insight: terrain tiles have `CellCoord` and are parented to the Grid.
 //! big_space's `propagate_high_precision` computes their GlobalTransform from
+//!
+// One-time test scene construction — the `set_parent_in_place` exemption
+// `clippy.toml` already grants to bootstrap code that runs before any observer is
+// registered. Cargo has no path-scoped lint config, so it must be stated here.
+#![allow(clippy::disallowed_methods)]
 //! CellCoord + Transform.translation, **ignoring Transform.rotation**.
 //!
 //! The solution: `tile_rotation_sync_system` runs AFTER big_space propagation
@@ -209,8 +214,8 @@ fn test_body_rotation_propagates_to_tile_with_cellcoord() {
     // Note: Bevy uses a right-handed Y-up coordinate system where +Y rotation
     // rotates +X toward -Z.
     let r = moon_radius as f32;
-    let expected_x = r * 0.7071; // R * cos(45°)
-    let expected_z = -r * 0.7071; // R * -sin(45°)
+    let expected_x = r * std::f32::consts::FRAC_1_SQRT_2; // R * cos(45°)
+    let expected_z = -r * std::f32::consts::FRAC_1_SQRT_2; // R * -sin(45°)
 
     // Allow some tolerance for floating-point accumulation and Grid offset
     let tolerance = r * 0.05;

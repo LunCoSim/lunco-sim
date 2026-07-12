@@ -239,17 +239,21 @@ pub trait Panel: Send + Sync + 'static {
         false
     }
 
-    /// Whether this panel *is* the live 3D scene viewport (the transparent leaf
-    /// the Bevy camera renders through), as opposed to chrome. Default `false`.
+    /// Which live 3D scene, if any, this panel hosts. Default `None` — chrome.
     ///
-    /// The scene-pick gate uses this to classify a docked leaf: chrome panels
-    /// paint a content-sized card and leave the rest of their leaf transparent
-    /// (the full-window 3D shows through), so the dock dispatch records each
-    /// chrome panel's painted card as a blocked region while the transparent gap
-    /// falls through to the scene. A scene-viewport panel is exempt — it *is* the
-    /// scene. Both workbench `ViewportPanel` and the USD viewport override this.
-    fn is_scene_viewport(&self) -> bool {
-        false
+    /// The scene-pick gate uses this to classify a docked leaf:
+    /// - `None` (chrome) → the dock dispatch records the panel's blocked region so
+    ///   picks over it never reach a scene. A *transparent* chrome panel blocks
+    ///   only the card it painted; the see-through remainder of its leaf falls
+    ///   through to the full-window 3D behind it.
+    /// - `Some(SceneTarget::MainViewport)` → this leaf IS the full-window scene
+    ///   (`ViewportPanel`). Exempt from chrome recording.
+    /// - `Some(SceneTarget::Offscreen(id))` → this panel renders a scene to its own
+    ///   offscreen image and handles its own drag/scroll (the USD preview). It is
+    ///   still chrome *from the main scene's point of view* — the gate blocks the
+    ///   main scene behind it — but the pointer resolves to its own target.
+    fn scene_target(&self) -> Option<crate::viewport::SceneTarget> {
+        None
     }
 
     /// Render the panel contents. The panel reads precomputed state via
@@ -298,13 +302,6 @@ pub trait InstancePanel: Send + Sync + 'static {
     /// Whether the tab body should be rendered with a transparent
     /// background (defers to dock theme otherwise).
     fn transparent_background(&self) -> bool {
-        false
-    }
-
-    /// Whether this instance panel *is* a live 3D scene viewport (exempt from the
-    /// chrome-card recording in the scene-pick gate). Default `false`. See
-    /// [`Panel::is_scene_viewport`].
-    fn is_scene_viewport(&self) -> bool {
         false
     }
 

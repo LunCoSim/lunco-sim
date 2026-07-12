@@ -107,6 +107,54 @@ pub fn project_command_events(trigger: On<ApiCommandEvent>, mut commands: Comman
     });
 }
 
+/// Can `params` actually become this command? `Ok(())` if it deserializes AND
+/// is constructible; `Err(message)` otherwise.
+///
+/// The two ways a command dies silently, checked here so a caller learns about
+/// them from its own HTTP response instead of from a log line it can't see:
+///
+/// 1. **Deserialize failure** — a misspelled/mistyped field.
+/// 2. **Not constructible** — deserializes as a partial `dyn Reflect`, but
+///    `FromReflect` can't build the concrete type (a field with no `Default`
+///    was omitted). `ReflectEvent::trigger` PANICS on that, so the dispatcher
+///    guards it and drops the command.
+///
+/// This mirrors exactly what `api_command_dispatcher` does, deliberately: the
+/// dispatcher stays authoritative (it also serves in-process triggers), and this
+/// is the synchronous gate in front of it.
+pub fn validate_command_params(
+    command: &str,
+    params: &serde_json::Value,
+    registration: &bevy::reflect::TypeRegistration,
+    type_reg: &TypeRegistry,
+    entities: &ApiEntityRegistry,
+) -> Result<(), String> {
+    use serde::de::DeserializeSeed;
+
+    let mut resolved = params.clone();
+    // Unit-struct commands (`Exit`, `Ping`) arrive with no `params` at all.
+    if resolved.is_null() {
+        resolved = serde_json::Value::Object(serde_json::Map::new());
+    }
+    resolve_command_ids(&mut resolved, registration.type_id(), type_reg, entities);
+
+    let de = bevy::reflect::serde::TypedReflectDeserializer::new(registration, type_reg);
+    let reflected = de
+        .deserialize(resolved)
+        .map_err(|e| format!("Command '{command}': invalid params: {e}"))?;
+
+    let constructible = registration
+        .data::<bevy::reflect::ReflectFromReflect>()
+        .map(|fr| fr.from_reflect(reflected.as_ref()).is_some())
+        .unwrap_or(true);
+    if !constructible {
+        return Err(format!(
+            "Command '{command}': params are not constructible into the command type (a required field is missing or invalid)"
+        ));
+    }
+    Ok(())
+}
+
 /// Dynamic dispatcher: converts generic [ApiCommandEvent] into pure simulation events.
 ///
 /// This system listens for all API-triggered commands and uses reflection to
@@ -159,7 +207,19 @@ pub fn api_command_dispatcher(
 
                 // Re-deserialize inside the world queue where we have access to everything
                 let reflect_deserializer = bevy::reflect::serde::TypedReflectDeserializer::new(registration, &type_reg);
-                if let Ok(reflected) = reflect_deserializer.deserialize(resolved_params) {
+                let reflected = match reflect_deserializer.deserialize(resolved_params) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let msg = format!("command '{cmd_name}': invalid params: {e}");
+                        warn!("[lunco-api] {msg}; dropped");
+                        world.resource_mut::<lunco_core::CommandResults>().insert(
+                            cmd_id,
+                            lunco_core::CommandOutcome::Rejected(lunco_core::Reject::InvalidOp(msg)),
+                        );
+                        return;
+                    }
+                };
+                {
                     // Guard against a panic in `ReflectEvent::trigger`: it builds
                     // the concrete type via `FromReflect`, falling back to
                     // `Default`/`FromWorld` and PANICKING when none apply (e.g. a
@@ -172,8 +232,18 @@ pub fn api_command_dispatcher(
                         .map(|fr| fr.from_reflect(reflected.as_ref()).is_some())
                         .unwrap_or(true);
                     if !constructible {
-                        warn!(
-                            "[lunco-api] command '{cmd_name}' not constructible from params (missing/invalid fields); dropped"
+                        let msg = format!(
+                            "command '{cmd_name}' not constructible from params (missing/invalid fields)"
+                        );
+                        warn!("[lunco-api] {msg}; dropped");
+                        // Record a TERMINAL outcome. A dropped command used to
+                        // leave `CommandResults` empty, so `QueryCommandResult`
+                        // answered `outcome: null` — the same answer a healthy
+                        // fire-and-forget command gives. A poller could not tell
+                        // "never ran" from "ran fine".
+                        world.resource_mut::<lunco_core::CommandResults>().insert(
+                            cmd_id,
+                            lunco_core::CommandOutcome::Rejected(lunco_core::Reject::InvalidOp(msg)),
                         );
                         return;
                     }
@@ -188,7 +258,19 @@ pub fn api_command_dispatcher(
             });
         },
         Err(e) => {
-            warn!("[lunco-api] Deserialization error for '{}': {}", event.command, e);
+            // Terminal, and RECORDED — see the `!constructible` branch above.
+            // An external caller sees this synchronously as a 422 from
+            // `execute_request`'s pre-flight validation; an in-process trigger
+            // learns about it by polling `QueryCommandResult`.
+            let msg = format!("command '{}': invalid params: {e}", event.command);
+            warn!("[lunco-api] {msg}; dropped");
+            let cmd_id = event.id;
+            commands.queue(move |world: &mut World| {
+                world.resource_mut::<lunco_core::CommandResults>().insert(
+                    cmd_id,
+                    lunco_core::CommandOutcome::Rejected(lunco_core::Reject::InvalidOp(msg)),
+                );
+            });
         }
     }
 }
@@ -547,6 +629,23 @@ fn execute_request(
                 return Some(ApiResponse::error(ApiErrorCode::CommandNotFound, format!("Command '{}' not found or not API-accessible", command)));
             }
 
+            // Validate the PARAMS synchronously, here, while the registry is in
+            // hand. Previously this returned `command_accepted` immediately and
+            // the dispatcher, running later, just `warn!`d and dropped anything
+            // that failed to deserialize — so a typo'd param returned 200 OK and
+            // `QueryCommandResult` came back `outcome: null`, which is also what
+            // a fire-and-forget success looks like. A bad command was
+            // INDISTINGUISHABLE from a good one. Now it is a synchronous 422.
+            //
+            // The dispatcher still re-validates (it must: `ApiCommandEvent` can
+            // be triggered in-process too), so this is a gate, not the only
+            // check.
+            if let Some(registration) = registration {
+                if let Err(msg) = validate_command_params(command, params, registration, type_registry, registry) {
+                    return Some(ApiResponse::error(ApiErrorCode::DeserializationError, msg));
+                }
+            }
+
             // Trigger as ApiCommandEvent — handled by api_command_dispatcher
             let command_id = id_counter.next();
             commands.trigger(ApiCommandEvent {
@@ -614,9 +713,14 @@ fn execute_request(
             Some(ApiResponse::ok(serde_json::json!({ "subscription_id": id })))
         }
         ApiRequest::QueryCommandResult { id } => {
-            // `outcome: null` means no result recorded for this id — either a
-            // bad id, or a fire-and-forget command whose handler reports no
-            // outcome. Callers that need a result use result-reporting commands.
+            // `outcome: null` = STILL PENDING (or an unknown id): the command was
+            // accepted and no terminal outcome has been recorded yet. It no
+            // longer doubles as "was silently dropped" — invalid params are now
+            // rejected synchronously (422) by `execute_request`, and the
+            // dispatcher records `Rejected` for anything it drops. A
+            // fire-and-forget command whose handler reports nothing also stays
+            // `null`; that's the one remaining ambiguity, and it is bounded to
+            // handlers that never report.
             let outcome = cmd_results.get(*id);
             Some(ApiResponse::ok(serde_json::json!({
                 "id": id,
@@ -783,6 +887,81 @@ mod tests {
         // No active id (in-process trigger) → nothing recorded.
         app.world_mut().trigger(TestEcho { fail: false });
         assert!(app.world().resource::<CommandResults>().get(99).is_none());
+    }
+
+    // ── Params validation (a failed command must NOT report success) ──────
+    //
+    // The bug: `execute_request` minted a `command_id` and returned
+    // `command_accepted` BEFORE anything looked at the params; the dispatcher
+    // later dropped an undeserializable command with a `warn!`, and
+    // `QueryCommandResult` answered `outcome: null` — the same thing it says
+    // for a healthy fire-and-forget command. `{"command":"X","params":{bad}}`
+    // was a 200 OK. These pin the synchronous gate that replaced it.
+
+    fn test_registry() -> bevy::reflect::TypeRegistry {
+        let mut reg = bevy::reflect::TypeRegistry::new();
+        reg.register::<TestEcho>();
+        reg
+    }
+
+    #[test]
+    fn valid_params_pass_validation() {
+        let reg = test_registry();
+        let registration = reg.get_with_short_type_path("TestEcho").unwrap();
+        assert!(validate_command_params(
+            "TestEcho",
+            &serde_json::json!({ "fail": true }),
+            registration,
+            &reg,
+            &ApiEntityRegistry::default(),
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn absent_params_pass_validation() {
+        // Unit-ish command sent as `{"command":"TestEcho"}` — no params at all.
+        // All fields default, so this is legitimately valid.
+        let reg = test_registry();
+        let registration = reg.get_with_short_type_path("TestEcho").unwrap();
+        assert!(validate_command_params(
+            "TestEcho",
+            &serde_json::Value::Null,
+            registration,
+            &reg,
+            &ApiEntityRegistry::default(),
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn wrong_field_type_fails_validation() {
+        let reg = test_registry();
+        let registration = reg.get_with_short_type_path("TestEcho").unwrap();
+        let err = validate_command_params(
+            "TestEcho",
+            &serde_json::json!({ "fail": "not-a-bool" }),
+            registration,
+            &reg,
+            &ApiEntityRegistry::default(),
+        )
+        .unwrap_err();
+        assert!(err.contains("TestEcho"), "error names the command: {err}");
+    }
+
+    #[test]
+    fn unknown_field_fails_validation() {
+        // The headline case: a typo'd param name. This used to return 200 OK.
+        let reg = test_registry();
+        let registration = reg.get_with_short_type_path("TestEcho").unwrap();
+        assert!(validate_command_params(
+            "TestEcho",
+            &serde_json::json!({ "nope": true }),
+            registration,
+            &reg,
+            &ApiEntityRegistry::default(),
+        )
+        .is_err());
     }
 }
 

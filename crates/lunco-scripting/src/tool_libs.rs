@@ -62,6 +62,11 @@ pub const TOOLS_DIR: &str = "tools";
 /// Scan `<root>/tools/*.rhai` and register each as a tool library (the file
 /// stem is the library name). Returns the names loaded. A single unreadable
 /// file is logged and skipped — never blocks the rest. Native-only.
+// `disallowed_methods` bans `std::fs` because it silently fails on wasm. This fn
+// is `cfg(not(wasm32))`, so that failure mode is unreachable — it does not exist
+// on the web target at all. Scoped to this fn, not the module, so the lint stays
+// live for anything wasm-reachable added here later.
+#[allow(clippy::disallowed_methods)]
 #[cfg(not(target_arch = "wasm32"))]
 pub fn load_tool_libraries_from_dir(root: &std::path::Path) -> Vec<String> {
     let dir = root.join(TOOLS_DIR);
@@ -94,6 +99,9 @@ pub fn load_tool_libraries_from_dir(root: &std::path::Path) -> Vec<String> {
 /// Persist a tool library's source to `<root>/tools/<name>.rhai` (creating the
 /// dir if needed). The on-disk counterpart of [`register_tool_library`], so an
 /// interactively-registered library survives a restart. Native-only.
+// See `load_tool_libraries_from_dir` — native-only, so the wasm foot-gun the
+// `disallowed_methods` ban guards against cannot occur here.
+#[allow(clippy::disallowed_methods)]
 #[cfg(not(target_arch = "wasm32"))]
 pub fn save_tool_library_file(
     root: &std::path::Path,

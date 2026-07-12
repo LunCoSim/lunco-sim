@@ -215,7 +215,12 @@ pub fn compose_file_to_stage(path: &std::path::Path) -> Result<Stage> {
 }
 
 
+// Writes USDA fixtures to a temp dir and composes them from disk. Native-only
+// test code — the `std::fs` ban guards wasm *runtime* paths, and `clippy.toml`
+// already names tests as exempt (cargo has no path-scoped lint config, so the
+// exemption has to be written out).
 #[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(clippy::disallowed_methods)]
 mod inherits_compose_tests {
     use super::*;
     use crate::{CanonicalStage, StageView, UsdRead};
