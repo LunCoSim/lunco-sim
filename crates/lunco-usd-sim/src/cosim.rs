@@ -1328,71 +1328,17 @@ fn clear_scene_entities(
     commands.trigger(lunco_core::RestoreFallbackLights);
 }
 
-/// Despawn a single USD prim **subtree** (one runtime prim and its descendants)
-/// and free the worker-side state it referenced — the per-prim analogue of
-/// [`clear_scene_entities`], used by E2 incremental despawn
-/// ([`lunco_usd::live_consume`]) when a `Resync` reports a prim removed from the
-/// composed document. Unlike the whole-scene clear, this touches only the
-/// subtree under `root`, so sibling rovers / terrain stay live.
+/// Despawn a single USD prim **subtree** (one runtime prim and its descendants).
 ///
-/// Worker cleanup mirrors [`clear_scene_entities`]: `ModelicaCommand::Despawn`
-/// for every `ModelicaModel` in the subtree (so the worker's stepper / cached
-/// model / sim-stream maps don't leak) and a `ScriptRegistry` document drop for
-/// every `ScriptedModel`. Resources are read optionally — a headless / test
-/// world without the cosim workers still despawns cleanly. Despawn is recursive
-/// (Bevy hierarchy-aware), so passing the subtree root frees the whole branch.
+/// Under Bevy 0.19's relationship system, despawning the root entity recursively
+/// despawns all descendants. Component removal triggers (`On<Remove, T>`) fire automatically,
+/// freeing any worker-side state (such as Modelica steppers or Python script documents)
+/// via the reactive observers registered in `lunco-modelica` and `lunco-scripting`.
 pub fn despawn_usd_subtree(world: &mut World, root: Entity) {
-    if world.get_entity(root).is_err() {
-        return;
-    }
-    // Gather root + all descendants (BFS over the `Children` relationship) so we
-    // can free worker state for the whole branch before it is despawned.
-    let mut subtree = vec![root];
-    let mut idx = 0;
-    while idx < subtree.len() {
-        let e = subtree[idx];
-        if let Some(children) = world.get::<Children>(e) {
-            let kids: Vec<Entity> = children.iter().collect();
-            subtree.extend(kids);
-        }
-        idx += 1;
-    }
-
-    let mut modelica_entities = Vec::new();
-    let mut script_doc_ids = Vec::new();
-    for &e in &subtree {
-        if world.get::<ModelicaModel>(e).is_some() {
-            modelica_entities.push(e);
-        }
-        if let Some(sm) = world.get::<ScriptedModel>(e) {
-            if let Some(raw) = sm.document_id {
-                script_doc_ids.push(raw);
-            }
-        }
-    }
-    if !modelica_entities.is_empty() {
-        if let Some(channels) = world.get_resource::<ModelicaChannels>() {
-            for e in &modelica_entities {
-                let _ = channels.tx.send(ModelicaCommand::Despawn { entity: *e });
-            }
-        }
-    }
-    if !script_doc_ids.is_empty() {
-        if let Some(mut reg) = world.get_resource_mut::<ScriptRegistry>() {
-            for raw in &script_doc_ids {
-                reg.documents.remove(&DocumentId::new(*raw));
-            }
-        }
-    }
     if let Ok(em) = world.get_entity_mut(root) {
         em.despawn();
+        info!("[scene] incremental despawn: entity {:?}", root);
     }
-    info!(
-        "[scene] incremental despawn: {} entities, {} Modelica steppers freed, {} Python docs freed",
-        subtree.len(),
-        modelica_entities.len(),
-        script_doc_ids.len(),
-    );
 }
 
 /// Spawn one new USD child prim into a live scene, mirroring the child branch of
