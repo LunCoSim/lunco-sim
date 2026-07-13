@@ -277,6 +277,8 @@ fn update_viewport_placeholder(
 
 register_commands!(
     on_apply_usd_op,
+    on_undo_edit,
+    on_redo_edit,
     on_attach_component,
     on_new_document,
     on_open_file,
@@ -573,6 +575,70 @@ fn on_apply_usd_op(trigger: On<ApplyUsdOp>, mut commands: Commands) {
             Err(reject) => {
                 bevy::log::warn!("[ApplyUsdOp] {} rejected: {:?}", doc, reject);
             }
+        }
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// UndoEdit / RedoEdit — the ONE undo
+// ─────────────────────────────────────────────────────────────────────
+
+/// Undo the document's last op.
+///
+/// This is the **only** undo. Every authored edit — spawn, move, delete, terrain
+/// stroke, waypoint, property — reaches the world as a [`UsdOp`] through
+/// [`ApplyUsdOp`], and `UsdDocument::apply` hands back a typed inverse for each. So
+/// undo is a document concern, not an editor one: pop the inverse, apply it, and the
+/// projection re-derives the ECS ([`crate::live_consume`]). It journals (undo/redo
+/// record through the same `OpRecorder` seam) and replicates like any other op.
+///
+/// An editor-side "remember the old Transform and write it back" stack cannot do
+/// this: it does not know about the document, so an undone spawn stays in the layer
+/// and the journal, and the two disagree. There used to be one; it is gone.
+#[Command(default)]
+pub struct UndoEdit {
+    /// Document to undo in.
+    pub doc: DocumentId,
+}
+
+#[on_command(UndoEdit)]
+fn on_undo_edit(trigger: On<UndoEdit>, mut commands: Commands) {
+    let doc = trigger.event().doc;
+    commands.queue(move |world: &mut World| {
+        let mut registry = world.resource_mut::<UsdDocumentRegistry>();
+        let Some(host) = registry.host_mut(doc) else { return };
+        match host.undo() {
+            Ok(true) => {
+                // The op changed the doc; the twin projection re-derives the scene.
+                registry.mark_changed(doc);
+                bevy::log::info!("[undo] {doc}");
+            }
+            Ok(false) => bevy::log::info!("[undo] nothing to undo"),
+            Err(err) => bevy::log::warn!("[undo] failed: {err:?}"),
+        }
+    });
+}
+
+/// Redo the last undone op — the mirror of [`UndoEdit`].
+#[Command(default)]
+pub struct RedoEdit {
+    /// Document to redo in.
+    pub doc: DocumentId,
+}
+
+#[on_command(RedoEdit)]
+fn on_redo_edit(trigger: On<RedoEdit>, mut commands: Commands) {
+    let doc = trigger.event().doc;
+    commands.queue(move |world: &mut World| {
+        let mut registry = world.resource_mut::<UsdDocumentRegistry>();
+        let Some(host) = registry.host_mut(doc) else { return };
+        match host.redo() {
+            Ok(true) => {
+                registry.mark_changed(doc);
+                bevy::log::info!("[redo] {doc}");
+            }
+            Ok(false) => bevy::log::info!("[redo] nothing to redo"),
+            Err(err) => bevy::log::warn!("[redo] failed: {err:?}"),
         }
     });
 }

@@ -1,133 +1,61 @@
-//! Undo system for sandbox editing operations.
+//! Ctrl+Z / Ctrl+Shift+Z — bound to the **document's** undo.
+//!
+//! There is no editor-side undo stack. There used to be: a `Vec<UndoAction>` that
+//! remembered "this entity was spawned" / "this was its old Transform" and wrote the
+//! ECS back on Ctrl+Z. It was a second, weaker undo running alongside the real one,
+//! and it was wrong in both directions:
+//!
+//! - It **did not know about the document.** An undone spawn stayed in the runtime
+//!   layer and in the journal, so the scene and its source of truth disagreed — and
+//!   the next projection could bring the "undone" entity back.
+//! - It **only knew two verbs.** Spawn and transform. Terrain strokes, property
+//!   edits, attaches, detaches and waypoints — all authored, all invertible — were
+//!   simply not undoable, because nobody had taught the stack about them.
+//!
+//! Every authored edit already reaches the world as a `UsdOp` through `ApplyUsdOp`,
+//! and `UsdDocument::apply` returns a **typed inverse** for each. So undo is a
+//! property of the document, and it is free: pop the inverse, apply it, let the
+//! projection re-derive the ECS. It journals and replicates like any other op, it
+//! covers every verb automatically, and there is exactly one of it.
+//!
+//! The editor's job is therefore only to bind the key.
 
-use avian3d::physics_transform::{Position, Rotation};
-use avian3d::prelude::RigidBody;
 use bevy::prelude::*;
+use lunco_usd::commands::{RedoEdit, UndoEdit};
 
-/// Stack of undoable actions.
-#[derive(Resource)]
-pub struct UndoStack {
-    actions: Vec<UndoAction>,
-    max_depth: usize,
-}
-
-impl Default for UndoStack {
-    fn default() -> Self {
-        Self {
-            actions: Vec::new(),
-            max_depth: 100,
-        }
-    }
-}
-
-/// An undoable operation.
-#[derive(Clone, Debug)]
-pub enum UndoAction {
-    /// An entity was spawned. Undo = despawn.
-    Spawned { entity: Entity },
-    /// An entity's transform was changed. Undo = restore old transform.
-    TransformChanged {
-        entity: Entity,
-        old_translation: Vec3,
-        old_rotation: Quat,
-    },
-}
-
-impl UndoStack {
-    /// Push an action onto the stack.
-    pub fn push(&mut self, action: UndoAction) {
-        self.actions.push(action);
-        if self.actions.len() > self.max_depth {
-            self.actions.drain(..self.actions.len() - self.max_depth);
-        }
-    }
-
-    /// Check if the stack has actions to undo.
-    pub fn can_undo(&self) -> bool {
-        !self.actions.is_empty()
-    }
-
-    /// Clear the undo stack.
-    pub fn clear(&mut self) {
-        self.actions.clear();
-    }
-}
-
-/// Handles Ctrl+Z input to undo the last action.
+/// Ctrl+Z → undo, Ctrl+Shift+Z / Ctrl+Y → redo, both on the active document.
+///
+/// Ignored while egui holds the keyboard, so Ctrl+Z in a text field (the rhai editor,
+/// a name box) edits the text instead of reverting the scene.
 pub fn handle_undo_input(
     keys: Res<ButtonInput<KeyCode>>,
-    mut undo_stack: ResMut<UndoStack>,
+    egui_focus: Res<lunco_core::EguiFocus>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut commands: Commands,
-    mut q_transforms: Query<&mut Transform>,
-    mut q_pos: Query<&mut Position>,
-    mut q_rot: Query<&mut Rotation>,
-    q_has_rb: Query<(), With<RigidBody>>,
 ) {
-    if keys.just_pressed(KeyCode::KeyZ)
-        && (keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight))
-    {
-        let Some(action) = undo_stack.actions.pop() else {
-            info!("Nothing to undo");
-            return;
-        };
-
-        match action {
-            UndoAction::Spawned { entity } => {
-                commands.entity(entity).try_despawn();
-                info!("Undo: despawned entity {:?}", entity);
-            }
-            UndoAction::TransformChanged { entity, old_translation, old_rotation } => {
-                if let Ok(mut tf) = q_transforms.get_mut(entity) {
-                    tf.translation = old_translation;
-                    tf.rotation = old_rotation;
-                    info!("Undo: restored transform for entity {:?}", entity);
-                }
-                // CQ-510: mirror `MoveEntity` / the inspector edit path — on a
-                // physics body avian writeback reverts a Transform-only change,
-                // so seat the f64 `Position`/`Rotation` and force Kinematic.
-                if let Ok(mut pos) = q_pos.get_mut(entity) {
-                    pos.0 = old_translation.as_dvec3();
-                }
-                if let Ok(mut rot) = q_rot.get_mut(entity) {
-                    rot.0 = old_rotation.as_dquat();
-                }
-                if q_has_rb.get(entity).is_ok() {
-                    commands.entity(entity).insert(RigidBody::Kinematic);
-                }
-            }
-        }
-        info!("Undo performed");
+    if egui_focus.wants_keyboard {
+        return;
     }
-}
+    let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    if !ctrl {
+        return;
+    }
+    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_undo_stack_empty() {
-        let stack = UndoStack::default();
-        assert!(!stack.can_undo());
+    let redo = keys.just_pressed(KeyCode::KeyY) || (shift && keys.just_pressed(KeyCode::KeyZ));
+    let undo = !shift && keys.just_pressed(KeyCode::KeyZ);
+    if !undo && !redo {
+        return;
     }
 
-    #[test]
-    fn test_undo_push_and_clear() {
-        let mut stack = UndoStack::default();
-        stack.push(UndoAction::Spawned { entity: Entity::PLACEHOLDER });
-        assert!(stack.can_undo());
-        stack.clear();
-        assert!(!stack.can_undo());
-    }
-
-    #[test]
-    fn test_undo_max_depth() {
-        let mut stack = UndoStack {
-            actions: Vec::new(),
-            max_depth: 5,
-        };
-        for i in 0..10u32 {
-            stack.push(UndoAction::Spawned { entity: Entity::PLACEHOLDER });
-        }
-        assert_eq!(stack.actions.len(), 5);
+    let Some(workspace) = workspace else { return };
+    let Some(doc) = workspace.0.active_document else {
+        info!("[undo] no active document — nothing to undo");
+        return;
+    };
+    if redo {
+        commands.trigger(RedoEdit { doc });
+    } else {
+        commands.trigger(UndoEdit { doc });
     }
 }

@@ -242,25 +242,17 @@ pub fn persist_detach_to_runtime_layer(
     if !cmd.intent.is_persistent() {
         return;
     }
-    let Some(workspace) = workspace else { return };
-    let Some(doc) = workspace.0.active_document else { return };
-    let Some(host) = usd_registry.host(doc) else { return };
-
-    // Resolve the joint entity's USD prim path; skip if it isn't USD-backed.
-    let Ok(prim) = q_prim.get(cmd.target) else { return };
-    // Ownership guard: only persist removal of prims the active document holds.
-    let Ok(prim_sdf) = lunco_usd_bevy::SdfPath::new(&prim.path) else { return };
-    let owned = host.document().data().spec(&prim_sdf).is_some()
-        || host.document().runtime_data().spec(&prim_sdf).is_some();
-    if !owned {
+    let Some((doc, path)) =
+        authorable_prim(cmd.target, &q_prim, &usd_registry, workspace.as_deref())
+    else {
         return;
-    }
+    };
 
     commands.trigger(ApplyUsdOp {
         doc,
         op: UsdOp::RemovePrim {
             edit_target: LayerId::runtime(),
-            path: prim.path.clone(),
+            path,
         },
     });
 }
@@ -2685,32 +2677,113 @@ pub fn persist_move_to_runtime_layer(
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
-    // Active document — `None` headless / no scene open. Only USD documents have
-    // a host in `usd_registry`; a Modelica (or other) active doc is skipped.
-    let Some(workspace) = workspace else { return };
-    let Some(doc) = workspace.0.active_document else { return };
-    let Some(host) = usd_registry.host(doc) else { return };
-
-    // Resolve the moved sim entity and its USD prim path.
     let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
     let Some(target) = api_registry.resolve(&global_id) else { return };
-    let Ok(prim) = q_prim.get(target) else { return };
-
-    // Ownership guard: only persist moves of prims the active document holds.
-    let Ok(prim_sdf) = lunco_usd_bevy::SdfPath::new(&prim.path) else { return };
-    let owned = host.document().data().spec(&prim_sdf).is_some()
-        || host.document().runtime_data().spec(&prim_sdf).is_some();
-    if !owned {
+    let Some((doc, path)) = authorable_prim(target, &q_prim, &usd_registry, workspace.as_deref())
+    else {
         return;
-    }
+    };
 
     let v = cmd.translation;
     commands.trigger(ApplyUsdOp {
         doc,
         op: UsdOp::SetTranslate {
             edit_target: LayerId::runtime(),
-            path: prim.path.clone(),
+            path,
             value: [v.x as f64, v.y as f64, v.z as f64],
+        },
+    });
+}
+
+/// The preamble EVERY persister repeats: resolve the active USD document, resolve the
+/// entity's prim path, and ownership-guard it against that document.
+///
+/// Factored out because the duplication was load-bearing: each `persist_*` observer
+/// re-derived this by hand, and the ones that forgot to (the transform gizmo, the
+/// Inspector's delete) simply mutated the ECS and never reached the document — which
+/// is exactly why a gizmo drag used to be invisible to save, undo, the journal and the
+/// network. If an edit path can call this, it has no excuse not to author.
+///
+/// Returns `None` when there is no active USD document (headless, a Modelica doc, no
+/// scene), when the entity is not USD-backed, or when its prim belongs to some other
+/// document.
+pub fn authorable_prim(
+    entity: Entity,
+    q_prim: &Query<&UsdPrimPath>,
+    usd_registry: &UsdDocumentRegistry,
+    workspace: Option<&lunco_workspace::WorkspaceResource>,
+) -> Option<(lunco_doc::DocumentId, String)> {
+    let doc = workspace?.0.active_document?;
+    let host = usd_registry.host(doc)?;
+    let prim = q_prim.get(entity).ok()?;
+    let prim_sdf = lunco_usd_bevy::SdfPath::new(&prim.path).ok()?;
+    let owned = host.document().data().spec(&prim_sdf).is_some()
+        || host.document().runtime_data().spec(&prim_sdf).is_some();
+    owned.then(|| (doc, prim.path.clone()))
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// DeleteEntity — removal, authored
+// ─────────────────────────────────────────────────────────────────────
+
+/// Delete an entity from the scene.
+///
+/// The typed verb for "remove this", replacing the ad-hoc `world.despawn(entity)` the
+/// Inspector used to do in two places. A bare despawn is invisible to the document:
+/// the prim survives in the layer, so the deletion never journals, never replicates,
+/// never persists, and the next projection can bring the entity straight back.
+///
+/// This despawns AND (via [`persist_delete_to_runtime_layer`]) authors a `RemovePrim`
+/// — which is what makes deletion undoable, because the document hands back an
+/// `AddPrim` inverse for free.
+// Plain `#[Command]`, not `#[Command(default)]`: `default` derives `Default`, and
+// `Entity` has none — the same reason `DetachJoint` above is plain.
+#[Command]
+pub struct DeleteEntity {
+    /// Entity to remove.
+    pub target: Entity,
+    /// `Persistent` (the default) authors the removal into the document; an
+    /// `Interactive` delete is live-only and does not journal.
+    #[serde(default)]
+    #[reflect(default)]
+    pub intent: lunco_core::EditIntent,
+}
+
+/// Live leg: despawn the entity and drop it from the selection.
+#[on_command(DeleteEntity)]
+pub fn on_delete_entity(
+    trigger: On<DeleteEntity>,
+    mut selected: ResMut<crate::SelectedEntities>,
+    mut commands: Commands,
+) {
+    let _ = trigger;
+    commands.entity(cmd.target).try_despawn();
+    selected.entities.retain(|e| *e != cmd.target);
+}
+
+/// Authoring leg: remove the prim, so the deletion persists, journals, replicates —
+/// and undoes. Same shape as every other `persist_*` observer.
+pub fn persist_delete_to_runtime_layer(
+    trigger: On<DeleteEntity>,
+    usd_registry: Res<UsdDocumentRegistry>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    q_prim: Query<&UsdPrimPath>,
+    mut commands: Commands,
+) {
+    let cmd = trigger.event();
+    if !cmd.intent.is_persistent() {
+        return;
+    }
+    let Some((doc, path)) =
+        authorable_prim(cmd.target, &q_prim, &usd_registry, workspace.as_deref())
+    else {
+        return;
+    };
+    commands.trigger(ApplyUsdOp {
+        doc,
+        op: UsdOp::RemovePrim {
+            edit_target: LayerId::runtime(),
+            path,
         },
     });
 }
@@ -4262,6 +4335,7 @@ fn doc_for_stage(
 // leg), not the command handlers, so they stay plain `add_observer`s.
 register_commands!(
     on_create_shader,
+    on_delete_entity,
     on_delete_shader,
     on_detach_joint,
     on_focus_entity_by_id,
@@ -4293,6 +4367,7 @@ impl Plugin for SpawnCommandPlugin {
         app.add_systems(Update, (attach_release_actuator, joint_release_system));
         // Persist a Persistent DetachJoint into the active doc's runtime layer.
         app.add_observer(persist_detach_to_runtime_layer);
+        app.add_observer(persist_delete_to_runtime_layer);
         app.add_systems(
             Update,
             remove_legacy_ground_prim.run_if(obstacle_field_scene_changed),

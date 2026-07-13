@@ -20,7 +20,7 @@ use lunco_core::ports::PortRegistry;
 
 use lunco_obstacle_field::{ObstacleFieldSpec, Pattern, plugin::UpdateObstacleFieldSpec};
 
-use crate::{SelectedEntities, UndoStack, UndoAction};
+use crate::SelectedEntities;
 use lunco_usd::document::{UsdOp, LayerId};
 use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd::registry::UsdDocumentRegistry;
@@ -261,15 +261,12 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
                 .and_then(|s| s.primary());
             if let Some(entity) = primary {
                 ctx.defer(move |world| {
-                    if let Some(mut undo) = world.get_resource_mut::<UndoStack>() {
-                        undo.push(UndoAction::Spawned { entity });
-                    }
-                    if world.get_entity(entity).is_ok() {
-                        world.despawn(entity);
-                    }
-                    if let Some(mut selected) = world.get_resource_mut::<SelectedEntities>() {
-                        selected.entities.retain(|e| *e != entity);
-                    }
+                    // The typed verb — despawns AND authors the `RemovePrim`, so the
+                    // delete persists, journals, replicates, and undoes (Ctrl+Z).
+                    world.trigger(crate::commands::DeleteEntity {
+                        target: entity,
+                        intent: lunco_core::EditIntent::Persistent,
+                    });
                 });
                 return;
             }
@@ -349,14 +346,9 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
             egui::CollapsingHeader::new("Transform")
                 .default_open(true)
                 .show(ui, |ui| {
-                    if let Some((old_tf, new_vals)) =
-                        ctx.get::<Transform>(entity).map(|tf| {
-                            (
-                                (tf.translation, tf.rotation),
-                                (tf.translation.x, tf.translation.y, tf.translation.z),
-                            )
-                        })
-                    {
+                    if let Some(new_vals) = ctx.get::<Transform>(entity).map(|tf| {
+                        (tf.translation.x, tf.translation.y, tf.translation.z)
+                    }) {
                         let mut x = new_vals.0;
                         let mut y = new_vals.1;
                         let mut z = new_vals.2;
@@ -364,34 +356,26 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
                             | ui.add(egui::Slider::new(&mut y, -1000.0..=1000.0).text("Y")).changed()
                             | ui.add(egui::Slider::new(&mut z, -1000.0..=1000.0).text("Z")).changed();
                         if changed {
-                            let (old_t, old_r) = old_tf;
                             ctx.defer(move |world| {
-                                if let Some(mut undo) = world.get_resource_mut::<UndoStack>() {
-                                    undo.push(UndoAction::TransformChanged {
-                                        entity,
-                                        old_translation: old_t,
-                                        old_rotation: old_r,
-                                    });
-                                }
-                                let new_t = Vec3::new(x, y, z);
-                                if let Some(mut tf) = world.get_mut::<Transform>(entity) {
-                                    tf.translation = new_t;
-                                }
-                                // CQ-510: on a physics body avian re-derives
-                                // Transform from its f64 `Position` every tick,
-                                // so writing only Transform silently no-ops.
-                                // Mirror `MoveEntity`: seat `Position` and force
-                                // Kinematic so the new pose is authoritative.
-                                if let Some(mut pos) =
-                                    world.get_mut::<avian3d::physics_transform::Position>(entity)
-                                {
-                                    pos.0 = new_t.as_dvec3();
-                                }
-                                if world.get::<avian3d::prelude::RigidBody>(entity).is_some() {
-                                    world
-                                        .entity_mut(entity)
-                                        .insert(avian3d::prelude::RigidBody::Kinematic);
-                                }
+                                // Route through the typed `MoveEntity` verb rather than
+                                // poking `Transform` here. It already owns the
+                                // physics-aware pose seat (CQ-510: writing only
+                                // `Transform` silently no-ops on a body, because avian
+                                // re-derives it from the f64 `Position` each tick), and
+                                // its persister authors the `SetTranslate` — so the edit
+                                // journals, replicates, persists, and undoes. The
+                                // hand-rolled copy that used to live here did none of
+                                // that.
+                                let Some(gid) = world
+                                    .get::<lunco_core::GlobalEntityId>(entity)
+                                    .map(|g| g.get())
+                                else {
+                                    return;
+                                };
+                                world.trigger(crate::commands::MoveEntity {
+                                    entity_id: gid,
+                                    translation: Vec3::new(x, y, z),
+                                });
                             });
                         }
                     }
@@ -581,15 +565,10 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
         ui.separator();
         if ui.button("🗑 Delete Entity (Del)").clicked() {
             ctx.defer(move |world| {
-                if let Some(mut undo) = world.get_resource_mut::<UndoStack>() {
-                    undo.push(UndoAction::Spawned { entity });
-                }
-                if world.get_entity(entity).is_ok() {
-                    world.despawn(entity);
-                }
-                if let Some(mut selected) = world.get_resource_mut::<SelectedEntities>() {
-                    selected.entities.retain(|e| *e != entity);
-                }
+                world.trigger(crate::commands::DeleteEntity {
+                    target: entity,
+                    intent: lunco_core::EditIntent::Persistent,
+                });
             });
         }
     }

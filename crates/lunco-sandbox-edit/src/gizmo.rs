@@ -184,13 +184,26 @@ pub fn restore_dragged_transform(
     }
 }
 
-/// Restores dynamic state and re-enables origin tracking when gizmo drag ends.
+/// Restores dynamic state and re-enables origin tracking when gizmo drag ends — and
+/// **authors the final pose into the document**.
+///
+/// The drag itself is deliberately ECS-only: authoring every frame of it would spam
+/// the journal (that is what `EditIntent::Interactive` means elsewhere). The pose is
+/// authored ONCE, on release — which is the moment the edit becomes real.
+///
+/// Before this, a gizmo drag was invisible to USD: it never saved, never journaled,
+/// never replicated, and Ctrl+Z could not touch it. That is the same class of gap the
+/// old editor-side undo stack was papering over.
 pub fn restore_gizmo_dynamic(
     gizmo_targets: Query<&GizmoTarget>,
     q_prev_pos: Query<(Entity, &GizmoPrevPos)>,
     mut q_lin_vel: Query<&mut LinearVelocity>,
     q_avatar: Query<Entity, With<lunco_core::Avatar>>,
     q_floating_origin: Query<Entity, With<FloatingOrigin>>,
+    q_tf: Query<&Transform>,
+    q_prim: Query<&lunco_usd_bevy::UsdPrimPath>,
+    usd_registry: Option<Res<lunco_usd::registry::UsdDocumentRegistry>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut commands: Commands,
 ) {
     let mut restored_any = false;
@@ -198,10 +211,43 @@ pub fn restore_gizmo_dynamic(
         if let Ok(gizmo_target) = gizmo_targets.get(entity) {
             if gizmo_target.is_active() { continue; }
         }
-        
+
         restored_any = true;
 
         info!("GIZMO: drag ended for {:?}, restoring coordinate systems", entity);
+
+        // Author the released pose. Same guard every other edit path uses, so a prim
+        // the active document doesn't own is left alone.
+        if let (Some(reg), Ok(tf)) = (usd_registry.as_deref(), q_tf.get(entity)) {
+            if let Some((doc, path)) =
+                crate::commands::authorable_prim(entity, &q_prim, reg, workspace.as_deref())
+            {
+                let t = tf.translation;
+                commands.trigger(lunco_usd::commands::ApplyUsdOp {
+                    doc,
+                    op: lunco_usd::document::UsdOp::SetTranslate {
+                        edit_target: lunco_usd::document::LayerId::runtime(),
+                        path: path.clone(),
+                        value: [t.x as f64, t.y as f64, t.z as f64],
+                    },
+                });
+                // The gizmo rotates as well as translates, so the rotation is part of
+                // the authored pose — `xformOp:rotateXYZ`, Euler degrees.
+                let (rx, ry, rz) = tf.rotation.to_euler(EulerRot::XYZ);
+                commands.trigger(lunco_usd::commands::ApplyUsdOp {
+                    doc,
+                    op: lunco_usd::document::UsdOp::SetRotate {
+                        edit_target: lunco_usd::document::LayerId::runtime(),
+                        path,
+                        value: [
+                            rx.to_degrees() as f64,
+                            ry.to_degrees() as f64,
+                            rz.to_degrees() as f64,
+                        ],
+                    },
+                });
+            }
+        }
 
         // 2. RESTORE INTERPOLATION
         if prev.had_translation_interpolation { commands.entity(entity).insert(TranslationInterpolation); }

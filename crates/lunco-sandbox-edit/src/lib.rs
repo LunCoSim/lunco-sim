@@ -6,7 +6,8 @@
 //! - **Selection** — Shift+click entities to select them with transform gizmo
 //! - **Transform Gizmo** — translate/rotate selected entities
 //! - **Inspector Panel** — view entity parameters (in `ui/` module)
-//! - **Undo** — Ctrl+Z to revert spawns
+//! - **Undo** — Ctrl+Z, bound to the *document*'s typed-inverse undo (there is no
+//!   editor-side undo stack; see `undo`)
 //!
 //! ## UI
 //!
@@ -60,8 +61,6 @@ pub mod ui;
 
 use bevy::prelude::*;
 
-#[cfg(feature = "ui")]
-pub use undo::{UndoStack, UndoAction};
 
 /// Master plugin for all sandbox editing tools.
 #[cfg(feature = "ui")]
@@ -73,7 +72,6 @@ impl Plugin for SandboxEditPlugin {
         app.init_resource::<SpawnState>()
             .init_resource::<SelectedEntities>()
             .init_resource::<InspectorTarget>()
-            .init_resource::<UndoStack>()
             .init_resource::<catalog::SpawnCatalog>()
             .init_resource::<spawn::FootprintCache>()
             .insert_resource(lunco_core::DragModeActive { active: false })
