@@ -34,6 +34,7 @@ lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-twin-journal = { path = "../lunco-twin-journal" }
 serde = { workspace = true }
+serde_json = { workspace = true }
 lunco-api = { path = "../lunco-api", default-features = false }
 lunco-controller = { path = "../lunco-controller" }
 lunco-mobility = { path = "../lunco-mobility" }
@@ -54,6 +55,7 @@ lunco-materials = { path = "../lunco-materials" }
 # Terrain shader-mode selector (Lit / Debug-LOD / Plain) in the Inspector.
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
+lunco-autopilot = { path = "../lunco-autopilot" }
 lunco-assets = { path = "../lunco-assets" }
 
 [features]

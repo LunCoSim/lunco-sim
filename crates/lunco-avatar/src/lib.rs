@@ -39,6 +39,9 @@ pub mod commands;
 pub use commands::*;
 pub mod screenshot;
 pub use screenshot::*;
+/// Science instrument tools (behaviour-tree `execute()` handlers) — the
+/// `take_photo` tool that a patrol waypoint's arrival action fires.
+pub mod science;
 pub mod recording;
 pub use recording::*;
 
@@ -478,6 +481,10 @@ impl Plugin for LunCoAvatarPlugin {
         app.init_resource::<MouseSensitivity>()
            .init_resource::<CameraDefaults>()
            .init_resource::<SurfaceModeThreshold>();
+        // Register the avatar-crate's science instrument tools (e.g.
+        // `science::take_photo`) into the global `lunco_tools` registry so the
+        // behaviour-tree tool dispatcher (`lunco-tools-bevy`) can run them.
+        science::register_science_tools();
         app.add_plugins(InputManagerPlugin::<UserIntent>::default());
         app.add_observer(on_user_intent);
         // Secondary observers on the SAME verbs — the authority-bookkeeping leg,
@@ -3156,6 +3163,7 @@ fn sync_profile(
 // called from LunCoAvatarPlugin::build().
 register_commands!(
     on_capture_screenshot,
+    on_capture_from_camera,
     on_toggle_recording,
     on_start_recording,
     on_stop_recording,

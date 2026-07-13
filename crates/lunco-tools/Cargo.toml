@@ -5,9 +5,9 @@ edition = "2021"
 
 # Runtime-agnostic tool registry: a tool is a named bundle of callable functions
 # with metadata, independent of HOW it is implemented (rhai, native Rust, future
-# Python/…). Deliberately dependency-free (no rhai, no bevy) so any crate can
-# describe / register / discover tools; runtime BINDING lives in adapter crates
-# (e.g. lunco-tools-rhai). wasm-clean.
+# Python/…). Deliberately dependency-free (no rhai, no bevy) so the rhai-binding
+# adapter (`lunco-tools-rhai`) stays slim — bevy-aware execution (the behaviour
+# tree's `run_tool` action path) lives in `lunco-tools-bevy`, not here. wasm-clean.
 
 [dependencies]
 

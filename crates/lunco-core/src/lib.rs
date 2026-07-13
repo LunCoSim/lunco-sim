@@ -49,6 +49,8 @@ pub mod derived;
 
 pub mod mobility;
 
+pub mod tools;
+
 pub use architecture::*;
 pub use derived::RebuildOnChange;
 pub use mobility::Mobility;

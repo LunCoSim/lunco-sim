@@ -42,6 +42,7 @@ members = [
     "crates/lunco-twin-journal",
     "crates/lunco-tools",
     "crates/lunco-tools-rhai",
+    "crates/lunco-tools-bevy",
     "crates/lunco-hooks",
     "crates/lunco-hooks-rhai",
     "crates/lunco-workbench",

@@ -41,7 +41,7 @@ use lunco_core::{Ack, Command, OpId, on_command, register_commands};
 pub mod btcpp_xml;
 use lunco_core::{GlobalEntityId, NetworkRole, SessionId, SessionRegistry};
 use lunco_cosim::SetPorts;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Base of the reserved `SessionId` band for local autopilots. Kept clear of
 /// [`SessionId::LOCAL`] (`0`, the human/host) and of host-minted client ids
@@ -156,7 +156,19 @@ pub struct DriveCtx {
     /// [`Clearance`]). All-clear where physics isn't running. Read by the raycast
     /// leaves `path_blocked` / `steer_clear`.
     pub clearance: Clearance,
+    /// Outgoing tool calls queued this tick by [`BehaviorSpec::RunTool`] leaves.
+    /// Leaves have no ECS access, so they push here; `drive_autopilots` drains
+    /// the queue after the tick and re-emits each as a [`ToolFired`] event.
+    /// Reset to empty every tick when the `DriveCtx` is constructed.
+    pub fired: Vec<ToolInvocation>,
 }
+
+// `ToolInvocation` and `ToolFired` are the shared tool-call vocabulary. They
+// live in `lunco-core` (see `lunco_core::tools`) so that handler crates can
+// observe `ToolFired` without depending on this crate — instruments must not
+// depend on the driver. Re-exported here so existing `lunco_autopilot::`
+// references keep resolving.
+pub use lunco_core::tools::{ToolFired, ToolInvocation};
 
 /// Data description of an autopilot behaviour tree — authored as rhai/JSON DATA
 /// (the glue), compiled by [`build_tree`] into a [`lunco_behavior`] tree whose
@@ -170,7 +182,97 @@ pub struct DriveCtx {
 ///   {"kind":"drive_to","target":[10,0,10]}
 /// ]}
 /// ```
-#[derive(Debug, Clone, Deserialize)]
+///
+/// `Serialize` so the UI can round-trip a spec (read → append a checkpoint →
+/// re-emit via `SetAutopilotBehavior`) without a separate JSON mirror.
+
+/// One stop on a [`BehaviorSpec::Patrol`] loop. Carries a world position plus
+/// optional per-waypoint tuning (dwell) and **arrival actions** — the tools to
+/// fire when the vessel reaches this waypoint (e.g. `take_photo`).
+///
+/// This is the declarative home for "fire a tool at a patrol waypoint": instead
+/// of authoring a hand-composed `sequence[arrived, run_tool]` tree in rhai, a
+/// mission just lists `on_arrival` actions on the waypoint and the patrol
+/// engine injects them into the compiled tree (see `build_patrol`). rhai/JSON
+/// authors *data*, not trees.
+///
+/// **Backward-compat serde:** a bare `[x, y, z]` array deserializes into a
+/// waypoint at that position with no actions and no dwell, so the legacy
+/// `waypoints: [[x,y,z], ...]` shape (used by `patrol.rhai` and Ctrl+LMB)
+/// keeps working unchanged.
+#[derive(Debug, Clone, Serialize)]
+pub struct PatrolWaypoint {
+    /// World-space position `[x, y, z]`.
+    pub pos: [f32; 3],
+    /// Seconds to hold (braked) at this waypoint before its actions + departure.
+    /// `None` → inherit the patrol's top-level `dwell`. Defaults to `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dwell: Option<f64>,
+    /// Actions to run on arrival (after any dwell), in order. Empty by default.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub on_arrival: Vec<WaypointAction>,
+}
+
+impl PatrolWaypoint {
+    /// A bare waypoint at `pos` with no actions and no per-waypoint dwell.
+    pub fn at(pos: [f32; 3]) -> Self {
+        Self { pos, dwell: None, on_arrival: Vec::new() }
+    }
+}
+
+/// An action fired when a patrol vessel arrives at a waypoint. Today only
+/// `RunTool` (fire a named tool via the `ToolFired` event); the enum is
+/// extensible for future core actions (sample, transmit, …) without reshaping
+/// the patrol data again.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WaypointAction {
+    /// Fire a named tool call (same shape as [`BehaviorSpec::RunTool`]).
+    RunTool {
+        /// Tool name (convention `family::verb`, e.g. `"science::take_photo"`).
+        tool: String,
+        /// Opaque args string forwarded verbatim to the tool's handler.
+        #[serde(default)]
+        args: String,
+    },
+}
+
+// Backward-compat: a bare `[x, y, z]` array deserializes to a no-action
+// `PatrolWaypoint`. Lets legacy `waypoints: [[x,y,z], ...]` JSON / rhai keep
+// working after the `Vec<[f32;3]>` → `Vec<PatrolWaypoint>` type change.
+//
+// NOTE: this dual-shape (array vs object) handling is JSON-only — it peeks at
+// `serde_json::Value` to pick the branch, so it won't work with bincode or other
+// self-describing formats. That's fine here: `BehaviorSpec`'s only wire path is
+// JSON (rhai `to_json` / the HTTP API / USD metadata), never bincode. If a
+// binary format is ever needed, give `PatrolWaypoint` two explicit
+// `#[serde(deserialize_with = …)]` arms or a newtype wrapper instead.
+impl<'de> serde::Deserialize<'de> for PatrolWaypoint {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        #[derive(Deserialize)]
+        struct Full {
+            pos: [f32; 3],
+            #[serde(default)]
+            dwell: Option<f64>,
+            #[serde(default)]
+            on_arrival: Vec<WaypointAction>,
+        }
+        // Two accepted shapes:
+        //  1. `[x, y, z]`            — legacy bare array (no actions, no dwell).
+        //  2. `{pos: [...], dwell?, on_arrival?}` — full struct.
+        let v = serde_json::Value::deserialize(d)?;
+        if v.is_array() {
+            // Bare-array legacy form.
+            let p: [f32; 3] = serde_json::from_value(v).map_err(D::Error::custom)?;
+            return Ok(PatrolWaypoint::at(p));
+        }
+        let f: Full = serde_json::from_value(v).map_err(D::Error::custom)?;
+        Ok(PatrolWaypoint { pos: f.pos, dwell: f.dwell, on_arrival: f.on_arrival })
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BehaviorSpec {
     /// Run children in order; fail on first failure, succeed when all succeed.
@@ -224,15 +326,19 @@ pub enum BehaviorSpec {
     /// `forever(sequence([drive_to, wait?]...))` — the common patrol pattern as one
     /// node. See [`build_tree`].
     Patrol {
-        /// Ordered world-space waypoints `[[x, y, z], ...]`.
-        waypoints: Vec<[f32; 3]>,
+        /// Ordered waypoints. Each carries a position + optional per-waypoint
+        /// dwell and arrival actions (e.g. `take_photo`). Accepts the legacy
+        /// `[[x,y,z], ...]` bare-array shape (no actions) for backward compat
+        /// with existing rhai/JSON — see [`PatrolWaypoint`]'s serde impl.
+        waypoints: Vec<PatrolWaypoint>,
         /// Cruise speed `[0, 1]`.
         #[serde(default = "default_speed")]
         speed: f64,
         /// Arrival radius per waypoint (world units).
         #[serde(default = "default_radius")]
         radius: f32,
-        /// Seconds to hold (braked) at each waypoint before moving on (`0` = none).
+        /// Default seconds to hold (braked) at each waypoint before moving on
+        /// (`0` = none). Overridden by a waypoint's own `dwell` when set.
         #[serde(default)]
         dwell: f64,
     },
@@ -423,11 +529,26 @@ pub enum BehaviorSpec {
         #[serde(default = "default_speed")]
         speed: f64,
     },
+    /// Fire a named tool call once per activation (e.g. `science::take_photo`
+    /// at a patrol waypoint). One-shot: latches `Success` after the first tick
+    /// and won't re-fire until the tree's [`Node::reset`] clears it (which the
+    /// `repeat` / `cooldown` decorators drive). The `tool` string names the
+    /// tool; `args` is an opaque payload the tool's observer interprets
+    /// (typically JSON) — the core stays tool-agnostic. The fired call is
+    /// queued on [`DriveCtx::fired`] and re-emitted as a [`ToolFired`] event by
+    /// `drive_autopilots`, since leaves have no ECS access.
+    RunTool {
+        /// Tool name (convention `family::verb`, e.g. `"science::take_photo"`).
+        tool: String,
+        /// Opaque args string forwarded verbatim to the tool's observer.
+        #[serde(default)]
+        args: String,
+    },
 }
 
 /// Completion rule for a [`BehaviorSpec::Parallel`], mapped to
 /// [`ParallelPolicy`]. Defaults to `all`.
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ParallelRequire {
     /// Succeed when all children succeed; fail on the first failure.
@@ -535,6 +656,9 @@ pub fn build_tree(spec: &BehaviorSpec) -> BoxNode<DriveCtx> {
         }
         BehaviorSpec::PathBlocked { distance } => leaf_path_blocked(*distance),
         BehaviorSpec::SteerClear { speed } => leaf_steer_clear(*speed),
+        BehaviorSpec::RunTool { tool, args } => {
+            Box::new(RunToolNode::new(tool.clone(), args.clone()))
+        }
     }
 }
 
@@ -553,15 +677,34 @@ const PROBE_HEIGHTS: [f32; 3] = [-0.2, 0.4, 1.0];
 /// Each waypoint becomes a `drive_to`; a non-zero `dwell` appends a braked
 /// [`WaitNode`] so the rover pauses before moving on. The whole leg-sequence loops
 /// forever — the `forever` resets it each lap, which resets the waits' timers.
-fn build_patrol(waypoints: &[[f32; 3]], speed: f64, radius: f32, dwell: f64) -> BoxNode<DriveCtx> {
+///
+/// Each waypoint's `on_arrival` actions are appended after its (optional) wait,
+/// so a waypoint like `{pos:[...], on_arrival:[run_tool("take_photo")]}` compiles
+/// to `sequence[drive_to, wait?, run_tool]` — the declarative home for
+/// "fire a tool at a patrol waypoint" (no rhai tree-composition needed).
+fn build_patrol(waypoints: &[PatrolWaypoint], speed: f64, radius: f32, dwell: f64) -> BoxNode<DriveCtx> {
     let legs: Vec<BoxNode<DriveCtx>> = waypoints
         .iter()
         .map(|wp| {
-            let drive = leaf_drive_to(Vec3::from_array(*wp), speed, radius);
-            if dwell > 0.0 {
-                Box::new(Sequence::new(vec![drive, Box::new(WaitNode::new(dwell))])) as BoxNode<DriveCtx>
+            let drive = leaf_drive_to(Vec3::from_array(wp.pos), speed, radius);
+            // Per-waypoint dwell overrides the patrol's top-level default.
+            let wp_dwell = wp.dwell.unwrap_or(dwell);
+            let mut steps: Vec<BoxNode<DriveCtx>> = vec![drive];
+            if wp_dwell > 0.0 {
+                steps.push(Box::new(WaitNode::new(wp_dwell)));
+            }
+            // Arrival actions (tools to fire) run after the dwell, in order.
+            for act in &wp.on_arrival {
+                match act {
+                    WaypointAction::RunTool { tool, args } => {
+                        steps.push(Box::new(RunToolNode::new(tool.clone(), args.clone())));
+                    }
+                }
+            }
+            if steps.len() == 1 {
+                steps.pop().unwrap()
             } else {
-                drive
+                Box::new(Sequence::new(steps)) as BoxNode<DriveCtx>
             }
         })
         .collect();
@@ -817,6 +960,45 @@ impl Node<DriveCtx> for WaitNode {
     }
 }
 
+/// Leaf that fires a named tool call once per activation. Stateful (not a plain
+/// `Action::new`) so it doesn't re-fire every tick: a `fired` latch gates the
+/// push into [`DriveCtx::fired`], and [`Node::reset`] clears it so a `repeat` /
+/// `cooldown` decorator can re-arm it. Returns `Success` after firing — the
+/// natural status for a one-shot inside a `Sequence` ("drive to waypoint → take
+/// photo → drive on").
+pub struct RunToolNode {
+    tool: String,
+    args: String,
+    /// `true` once the tool has been queued this activation. Cleared by `reset`.
+    fired: bool,
+}
+
+impl RunToolNode {
+    /// A one-shot leaf that queues `tool` (with `args`) on the next tick.
+    pub fn new(tool: String, args: String) -> Self {
+        Self { tool, args, fired: false }
+    }
+}
+
+impl Node<DriveCtx> for RunToolNode {
+    fn tick(&mut self, ctx: &mut DriveCtx) -> Status {
+        // Hold position while/after firing — a tool call is not a drive command.
+        ctx.out = (0.0, 0.0, 1.0);
+        if !self.fired {
+            ctx.fired.push(ToolInvocation {
+                tool: self.tool.clone(),
+                args: self.args.clone(),
+            });
+            self.fired = true;
+        }
+        Status::Success
+    }
+
+    fn reset(&mut self) {
+        self.fired = false;
+    }
+}
+
 /// Decorator: run `child`, but abort with `Failure` if it stays `Running` past
 /// `seconds` of **mission time** (a child terminal before then passes straight
 /// through). The clock is [`DriveCtx::now`], so — like [`WaitNode`] — the budget
@@ -915,6 +1097,50 @@ impl AutopilotBehavior {
         serde_json::from_str::<BehaviorSpec>(json)
             .map(|s| Self::new(&s))
             .map_err(|e| e.to_string())
+    }
+}
+
+/// The **source** [`BehaviorSpec`] an autopilot's tree was compiled from, mirrored
+/// onto the **vessel** entity (not the autopilot actor) so the UI / gizmo can
+/// read the waypoints back for visualization and interactive editing (Ctrl+LMB
+/// append, right-click delete) without reverse-engineering the opaque compiled
+/// [`AutopilotBehavior`] tree. [` BehaviorSpec `] is `Serialize`, so the UI
+/// round-trips a spec (read → mutate → re-emit via `SetAutopilotBehavior`) with
+/// no separate JSON mirror.
+///
+/// Lives next to [`AutopilotBehavior`] (which stays on the autopilot actor
+/// entity) — set in [`on_engage_autopilot`] / [`on_set_autopilot_behavior`].
+/// Cleared when an autopilot disengages / when [`ClearAutopilotBehavior`] fires.
+#[derive(Component, Debug, Clone)]
+pub struct AutopilotBehaviorSpec(pub BehaviorSpec);
+
+impl AutopilotBehaviorSpec {
+    /// Construct from a parsed spec.
+    pub fn new(spec: BehaviorSpec) -> Self {
+        Self(spec)
+    }
+
+    /// Parse from JSON (the same shape [`SetAutopilotBehavior`] takes).
+    pub fn from_json(json: &str) -> Result<Self, String> {
+        serde_json::from_str::<BehaviorSpec>(json)
+            .map(Self)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Serialize back to JSON for re-emitting via `SetAutopilotBehavior`.
+    pub fn to_json(&self) -> Result<String, String> {
+        serde_json::to_string(&self.0).map_err(|e| e.to_string())
+    }
+
+    /// Borrowed view of the patrol waypoints, if the spec's top-level node is a
+    /// [`BehaviorSpec::Patrol`]. `None` for non-patrol trees (the UI hides the
+    /// checkpoint list in that case). This is the read path the path-line gizmo
+    /// and the Ctrl+LMB "append" both use.
+    pub fn patrol_waypoints(&self) -> Option<&[PatrolWaypoint]> {
+        match &self.0 {
+            BehaviorSpec::Patrol { waypoints, .. } => Some(waypoints.as_slice()),
+            _ => None,
+        }
     }
 }
 
@@ -1069,7 +1295,7 @@ pub fn drive_autopilots(
             continue; // lost the vessel → stop driving (one writer per tick)
         }
 
-        let (throttle, steer, brake) = match (behavior, q_xf.get(ap.vessel).ok()) {
+        let (throttle, steer, brake, mut fired) = match (behavior, q_xf.get(ap.vessel).ok()) {
             (Some(mut tree), Some(xf)) => {
                 let clearance = clearances
                     .as_ref()
@@ -1083,11 +1309,12 @@ pub fn drive_autopilots(
                     out: (ap.throttle, ap.steer, 0.0),
                     targets: targets.clone(),
                     clearance,
+                    fired: Vec::new(),
                 };
                 tree.0.tick(&mut ctx);
-                ctx.out
+                (ctx.out.0, ctx.out.1, ctx.out.2, ctx.fired)
             }
-            _ => (ap.throttle, ap.steer, 0.0),
+            _ => (ap.throttle, ap.steer, 0.0, Vec::new()),
         };
 
         commands.trigger(SetPorts {
@@ -1100,6 +1327,21 @@ pub fn drive_autopilots(
             seq: 0,
             tick: 0,
         });
+
+        // Re-emit any tool calls queued by `RunTool` leaves this tick. Leaves
+        // can't reach ECS, so they push into `DriveCtx::fired`; this is the one
+        // place with `Commands` access to fan them out as `ToolFired` events.
+        // `vessel_gid` (the api_id) is passed so a handler can feed it back
+        // through a command's Entity field — the reflect-dispatch resolver maps
+        // api_id → local Entity (NOT Entity::to_bits, which is a different u64).
+        for inv in fired.drain(..) {
+            commands.trigger(ToolFired {
+                vessel: ap.vessel,
+                vessel_gid: gid.get(),
+                tool: inv.tool,
+                args: inv.args,
+            });
+        }
     }
 }
 
@@ -1206,6 +1448,13 @@ fn on_engage_autopilot(trigger: On<EngageAutopilot>, mut commands: Commands) {
         match AutopilotBehavior::from_json(&cmd.spec_json) {
             Ok(b) => {
                 e.insert(b);
+                // Mirror the source spec onto the VESSEL entity (not the
+                // autopilot actor) so the UI / path-line gizmo can read the
+                // waypoints back without walking the autopilot→vessel link.
+                let spec = AutopilotBehaviorSpec::from_json(&cmd.spec_json);
+                if let Ok(s) = spec {
+                    commands.entity(cmd.vessel).try_insert(s);
+                }
             }
             Err(err) => warn!("[autopilot] EngageAutopilot: bad spec: {err}"),
         }
@@ -1242,9 +1491,77 @@ fn on_set_autopilot_behavior(
     match q.iter().find(|(_, ap)| ap.vessel == cmd.vessel) {
         Some((entity, _)) => {
             commands.entity(entity).insert(behavior);
+            // Mirror the source spec onto the vessel (read path for UI/gizmo).
+            if let Ok(spec) = AutopilotBehaviorSpec::from_json(&cmd.spec_json) {
+                commands.entity(cmd.vessel).try_insert(spec);
+            }
             info!("[autopilot] behaviour updated for vessel {:?}", cmd.vessel);
         }
         None => warn!("[autopilot] SetAutopilotBehavior: no autopilot owns vessel {:?}", cmd.vessel),
+    }
+}
+
+/// Clear the patrol (or any behaviour) on `vessel` and stop it: sets the
+/// autopilot's behaviour to [`BehaviorSpec::Brake`] AND removes the
+/// [`AutopilotBehaviorSpec`] mirror from the vessel, so the path-line gizmo /
+/// Command Deck stop showing checkpoints. The single canonical "stop & clear"
+/// verb — replaces the hand-built `SetAutopilotBehavior` + `Brake`-JSON dance
+/// that was duplicated in the Command Deck, the right-click menu, and the
+/// delete-last-waypoint path (§4.2 — one input shape, every surface).
+#[Command]
+pub struct ClearPatrol {
+    /// Vessel whose patrol to clear.
+    pub vessel: Entity,
+}
+
+#[on_command(ClearPatrol)]
+fn on_clear_patrol(
+    _trigger: On<ClearPatrol>,
+    q: Query<(Entity, &Autopilot)>,
+    mut commands: Commands,
+) {
+    // Brake the compiled tree directly — we have the typed `BehaviorSpec::Brake`
+    // value, so no JSON round-trip (unlike SetAutopilotBehavior, which receives
+    // a wire string and must parse).
+    let brake = AutopilotBehavior::new(&BehaviorSpec::Brake);
+    match q.iter().find(|(_, ap)| ap.vessel == cmd.vessel) {
+        Some((entity, _)) => {
+            commands.entity(entity).insert(brake);
+        }
+        None => warn!("[autopilot] ClearPatrol: no autopilot owns vessel {:?}", cmd.vessel),
+    }
+    // Remove the source-spec mirror so the UI/gizmo stop showing checkpoints.
+    commands.entity(cmd.vessel).remove::<AutopilotBehaviorSpec>();
+    info!("[autopilot] ClearPatrol: vessel {:?} cleared + braked", cmd.vessel);
+}
+
+/// Disengage the autopilot on `vessel` WITHOUT clearing its patrol: replaces
+/// the live behaviour with [`BehaviorSpec::Brake`] (the vessel stops) but
+/// LEAVES the [`AutopilotBehaviorSpec`] mirror intact so the patrol survives a
+/// later re-engage. Distinct from [`ClearPatrol`] (which wipes the patrol data
+/// too) — the Command Deck "Disengage" button wants this one (pause driving,
+/// keep the route).
+#[Command]
+pub struct DisengageAutopilot {
+    /// Vessel whose autopilot to disengage (brake, keep patrol data).
+    pub vessel: Entity,
+}
+
+#[on_command(DisengageAutopilot)]
+fn on_disengage_autopilot(
+    _trigger: On<DisengageAutopilot>,
+    q: Query<(Entity, &Autopilot)>,
+    mut commands: Commands,
+) {
+    // Brake the compiled tree directly (typed — no JSON round-trip). The
+    // spec mirror is intentionally NOT removed: a re-engage restores the patrol.
+    let brake = AutopilotBehavior::new(&BehaviorSpec::Brake);
+    match q.iter().find(|(_, ap)| ap.vessel == cmd.vessel) {
+        Some((entity, _)) => {
+            commands.entity(entity).insert(brake);
+            info!("[autopilot] DisengageAutopilot: vessel {:?} braked (patrol kept)", cmd.vessel);
+        }
+        None => warn!("[autopilot] DisengageAutopilot: no autopilot owns vessel {:?}", cmd.vessel),
     }
 }
 
@@ -1289,6 +1606,8 @@ fn on_import_behavior_xml(_t: On<ImportBehaviorXml>) -> Result<Ack, String> {
 register_commands!(
     on_engage_autopilot,
     on_set_autopilot_behavior,
+    on_clear_patrol,
+    on_disengage_autopilot,
     on_export_behavior_xml,
     on_import_behavior_xml
 );

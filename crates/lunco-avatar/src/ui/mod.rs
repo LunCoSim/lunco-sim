@@ -9,6 +9,7 @@ use lunco_core::{Avatar, GlobalEntityId, SessionProfiles, SessionRegistry};
 use crate::RoverNameTagSettings;
 use lunco_celestial::{CelestialBody, LocalGravityField, LeaveSurface};
 use big_space::prelude::{CellCoord, Grid};
+use lunco_controller::ControllerLink;
 
 use crate::{SpringArmCamera, OrbitCamera, FreeFlightCamera, FrameBlend};
 
@@ -76,6 +77,12 @@ pub struct AvatarStatusView {
     mode_label: String,
     /// Secondary mode detail, e.g. `"Distance: 12.0 m"` (empty if none).
     mode_detail: String,
+    /// The vessel the local avatar is currently controlling (`ControllerLink`
+    /// target), or `None` when free-flying. Drives the "Driving: <vessel>" /
+    /// "Free flight" readout.
+    possessing_vessel: Option<Entity>,
+    /// Display label for the possessed vessel (Name or gid), empty when free.
+    possessed_label: String,
 }
 
 /// Avatar status panel — camera mode and surface coordinates.
@@ -101,6 +108,12 @@ impl Panel for AvatarStatusPanel {
             .as_ref()
             .map(|p| p.peach)
             .unwrap_or(egui::Color32::PLACEHOLDER);
+        // "Driving: <vessel>" readout uses the success semantic token (green),
+        // resolved from `Theme.tokens` (§3.1) — not the raw palette.
+        let success_color = ctx
+            .resource::<lunco_theme::Theme>()
+            .map(|t| t.tokens.success)
+            .unwrap_or(egui::Color32::PLACEHOLDER);
 
         ui.heading("Avatar Status");
         ui.separator();
@@ -108,6 +121,23 @@ impl Panel for AvatarStatusPanel {
         // The panel is a pure reader of the change-driven view-model; if it
         // hasn't been produced yet there's nothing to draw.
         let Some(view) = ctx.resource::<AvatarStatusView>() else { return };
+
+        // ── Possession readout ──
+        // Step 6: surface "Driving: <vessel>" when the avatar's `ControllerLink`
+        // targets a vessel, else "Free flight". The producer
+        // (`populate_avatar_status_view`) resolves `ControllerLink` → label.
+        if let Some(_vessel) = view.possessing_vessel {
+            ui.horizontal(|ui| {
+                ui.label("Driving:");
+                ui.colored_label(success_color, &view.possessed_label);
+            });
+        } else {
+            ui.horizontal(|ui| {
+                ui.label("Status:");
+                ui.weak("Free flight");
+            });
+        }
+        ui.separator();
 
         // ── Surface Mode Info ──
         // `leave_target` defers the `LeaveSurface` trigger until after the
@@ -186,10 +216,30 @@ pub fn populate_avatar_status_view(
     spring: Query<&SpringArmCamera>,
     orbit: Query<&OrbitCamera>,
     free_flight: Query<&FreeFlightCamera>,
+    q_link: Query<&ControllerLink>,
+    q_name: Query<&Name>,
+    q_gid: Query<&GlobalEntityId>,
 ) {
     let _ = &palette; // colours resolved at paint; producer only records slots.
     let avatar_ent = avatars.iter().next();
     view.avatar = avatar_ent;
+
+    // ── Possession readout ──
+    // Resolve the avatar's `ControllerLink` target (the vessel it's driving) and
+    // its display label. `None` → free flight.
+    (view.possessing_vessel, view.possessed_label) = match avatar_ent {
+        Some(av) => match q_link.get(av) {
+            Ok(link) => {
+                let v = link.vessel_entity;
+                let label = q_name.get(v).ok().map(|n| n.as_str().to_string())
+                    .or_else(|| q_gid.get(v).ok().map(|g| format!("vessel #{}", g.get())))
+                    .unwrap_or_else(|| format!("{:?}", v));
+                (Some(v), label)
+            }
+            Err(_) => (None, String::new()),
+        },
+        None => (None, String::new()),
+    };
 
     // ── Surface readout ──
     view.surface = gravity.as_ref().and_then(|gf| {

@@ -234,9 +234,9 @@ no JSON round-trip on the read or write path.
 ## B. Prelude helpers
 
 The [`prelude/`](../assets/scripting/prelude) directory (one `.rhai` per topic —
-`nav`, `sensing`, `control`, `tasks`, `mission`, `hud`, …) is the hot-reloadable
-helper library on top of the verbs — read the topic files for the full,
-authoritative list. Highlights:
+`nav`, `sensing`, `control`, `tasks`, `mission`, `patrol`, `science`, `links`,
+`math`, `select`, `hud`, …) is the hot-reloadable helper library on top of the
+verbs — read the topic files for the full, authoritative list. Highlights:
 
 - **Vector math:** `vsub`/`vadd`/`vlen`/`vdot`/`vcross`/`vnorm`/`vscale`/`clamp`, `distance`, `arrived`.
 - **Navigation:** `drive(rover, fwd, steer)`, `brake(rover)`, `steer_to`, `nav_to(entity, target, speed, radius)`, `run_plan`.
@@ -247,7 +247,9 @@ authoritative list. Highlights:
 - **Task trees (`this.task`):** composites `seq`/`par_all`/`par_race`/`repeat`/`forever` plus the failure-aware kernel vocabulary `check(pred)`/`sel`/`retry`/`invert`/`force_ok`/`force_fail`/`reactive_seq`/`reactive_sel`. The constructors build pure data; the tree is compiled once and TICKED NATIVELY on the `lunco-behavior` kernel (the same engine the rover autopilot uses) — a `seq` advances through instantly-done steps within one tick, so use `wait`/`wait_until`/`wait_for` as the suspension points. Emits `TASK_COMPLETE` on root success, `TASK_FAILED` on root failure.
 - **Timeline (Layer 2):** `compile_timeline`, `timeline_step`.
 - **Selection toolkit:** `all_of_type`, `min_by`/`max_by`, `count_where`, `nearest_where`/`farthest_where`, `has_component`, `kind`.
-- **View / cutscenes:** `set_camera(name)` — cut the scene viewport to a `def Camera` by name (leaf or full USD path); pairs with a timeline for cutscene camera changes. `possess(vessel)`, `notify(msg)`.
+- **View / cutscenes:** `set_camera(name)` — cut the scene viewport to a `def Camera` by name (leaf or full USD path); pairs with a timeline for cutscene camera changes. `possess(vessel)`, `notify(msg)`, `photo()` (capture from the active camera).
+- **Patrol / checkpoints** ([`patrol.rhai`](../assets/scripting/prelude/patrol.rhai)): `engage_patrol(vessel, points, speed?, radius?, dwell?)`, `patrol(vessel, points, …)` (hot-swap an engaged vessel's route), `add_checkpoint(vessel, x, y, z)`, `clear_patrol(vessel)`. Each waypoint may be a bare `[x,y,z]` or a `#{pos, dwell?, on_arrival?}` map carrying arrival actions — the declarative way to "fire a tool at a waypoint" (no tree composition). `clear_patrol` fires the `ClearPatrol` typed command (the canonical stop-&-clear verb).
+- **Science instruments** ([`science.rhai`](../assets/scripting/prelude/science.rhai)): `photo_from(vessel)` (capture from a vessel's mounted camera — fires `CaptureFromCamera`), `take_photo()` / `take_photo(args)` (a `run_tool` action value for a waypoint's `on_arrival` list, naming the registered `science::take_photo` tool). The Rust core owns firing & cleaning via the `lunco-tools` registry + `lunco-tools-bevy` dispatch; these helpers just NAME the tool from data.
 - **Tutorial HUD** ([`hud.rhai`](../assets/scripting/prelude/hud.rhai)): `hint(msg)`/`clear_hint()` (sticky instruction), `spotlight(anchor, caption)`/`clear_spotlight()` (dim + ring a workbench widget by `HelpAnchors` key), `objectives_hud(list)` (or just declare a `mission(me)` — it auto-publishes), `coach_step(steps, i)` (a guided coach-mark tour step; advance the cursor in `on_event`). This is how tutorials are authored — a tutorial is just a scenario. See [`tutorials/README.md`](../assets/tutorials/README.md).
 
 Add helpers freely — the prelude is loaded **from disk at startup** on native
@@ -349,7 +351,7 @@ fn on_start(me) {
 Available nodes include:
 - **Composites:** `sequence`, `selector`, `parallel`, `reactive_sequence`, `reactive_selector`.
 - **Decorators:** `invert`, `force_success`, `force_failure`, `timeout`, `cooldown`.
-- **Actions:** `drive_to`, `follow`, `intercept`, `patrol`, `face`, `cruise`, `brake`, `hold`, `steer_clear`, `wait`.
+- **Actions:** `drive_to`, `follow`, `intercept`, `patrol`, `face`, `cruise`, `brake`, `hold`, `steer_clear`, `wait`, `run_tool`. `patrol` waypoints may each carry an `on_arrival` list of actions (e.g. `run_tool`) — see [`patrol.rhai`](../assets/scripting/prelude/patrol.rhai); `run_tool` fires a registered tool once (latched, re-armed by `repeat`/`cooldown`) and is dispatched by `lunco-tools-bevy`.
 - **Conditions:** `arrived`, `facing`, `obstacle_ahead`, `path_blocked`.
 
 ## I. Persistence

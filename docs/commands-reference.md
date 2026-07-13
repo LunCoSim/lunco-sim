@@ -10,7 +10,7 @@ command structs themselves in `crates/`, so it always matches the code. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**162 commands** across **21** crates. 24 command(s) below lack a `///` description — marked _(no description)_; add a doc comment on the struct to fix it.
+**168 commands** across **21** crates. 24 command(s) below lack a `///` description — marked _(no description)_; add a doc comment on the struct to fix it.
 
 > **Regenerate:** `cargo run --manifest-path tools/gen-command-docs/Cargo.toml`
 
@@ -19,7 +19,7 @@ command structs themselves in `crates/`, so it always matches the code. See the
 
 **Scene editing & authoring**
 
-- [`lunco-sandbox-edit`](#lunco-sandbox-edit) (`lunco-sandbox-edit`, 17 commands)
+- [`lunco-sandbox-edit`](#lunco-sandbox-edit) (`lunco-sandbox-edit`, 20 commands)
 
 **USD / scenes**
 
@@ -37,11 +37,11 @@ command structs themselves in `crates/`, so it always matches the code. See the
 
 **Vessels, mobility & control**
 
-- [`lunco-autopilot`](#lunco-autopilot) (`lunco-autopilot`, 4 commands)
+- [`lunco-autopilot`](#lunco-autopilot) (`lunco-autopilot`, 6 commands)
 
 **Avatar & possession**
 
-- [`lunco-avatar`](#lunco-avatar) (`lunco-avatar`, 10 commands)
+- [`lunco-avatar`](#lunco-avatar) (`lunco-avatar`, 11 commands)
 
 **Workbench UI & panels**
 
@@ -95,6 +95,21 @@ command structs themselves in `crates/`, so it always matches the code. See the
 
 ### `lunco-sandbox-edit` <a id="lunco-sandbox-edit"></a>
 
+#### `AppendCheckpoint`
+
+ Append a checkpoint to the selected vessel's patrol. Triggered by the
+ Ctrl+LMB observer below. A typed command (not a UI poke) so the same action
+ is reachable from rhai / the HTTP API / MCP — the UI is just one dispatch
+ surface for it (§4.2). Addressed by the vessel `Entity` (the UI has it
+ directly; rhai callers address it via the selection or by spawning).
+
+- *defined in:* `crates/lunco-sandbox-edit/src/ui/checkpoint_click.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `vessel` | `Entity` |  Vessel to add the checkpoint to. |
+| `position` | `[f64 ; 3]` |  World-space position `[x, y, z]`. |
+
 #### `CreateShader`
 
  Create a new dynamic shader from a built-in template (or supplied WGSL),
@@ -115,6 +130,18 @@ command structs themselves in `crates/`, so it always matches the code. See the
 | `template` | `String` |  Template id when `source` is empty: `"solid"` (default) or `"checker"`. |
 | `source` | `String` |  Full WGSL source. Empty → generate from `template`. |
 | `target` | `u64` |  API id of an entity to apply the new shader to. `0` = create only. |
+
+#### `DeleteCheckpoint`
+
+ Remove a checkpoint by patrol index from the vessel's patrol. Triggered by
+ the right-click "Delete" menu entry (and reusable from rhai / API).
+
+- *defined in:* `crates/lunco-sandbox-edit/src/ui/checkpoint_click.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `vessel` | `Entity` |   |
+| `index` | `u32` |   |
 
 #### `DeleteShader`
 
@@ -274,6 +301,21 @@ command structs themselves in `crates/`, so it always matches the code. See the
 |---|---|---|
 | `eye` | `Vec3` |   |
 | `target` | `Vec3` |   |
+
+#### `SetCheckpointGizmo`
+
+ Live-tune the gizmo settings (all fields optional → set only what you pass).
+ Reachable from UI / rhai / the HTTP API like any `#[Command]`.
+
+- *defined in:* `crates/lunco-sandbox-edit/src/checkpoint_gizmo.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `pin_radius` | `Option < f32 >` |   |
+| `line_width` | `Option < f32 >` |   |
+| `show_path` | `Option < bool >` |   |
+| `show_approach` | `Option < bool >` |   |
+| `pin_pick_radius_px` | `Option < f32 >` |   |
 
 #### `SetObjectProperty`
 
@@ -1175,6 +1217,37 @@ command structs themselves in `crates/`, so it always matches the code. See the
 
 ### `lunco-autopilot` <a id="lunco-autopilot"></a>
 
+#### `ClearPatrol`
+
+ Clear the patrol (or any behaviour) on `vessel` and stop it: sets the
+ autopilot's behaviour to [`BehaviorSpec::Brake`] AND removes the
+ [`AutopilotBehaviorSpec`] mirror from the vessel, so the path-line gizmo /
+ Command Deck stop showing checkpoints. The single canonical "stop & clear"
+ verb — replaces the hand-built `SetAutopilotBehavior` + `Brake`-JSON dance
+ that was duplicated in the Command Deck, the right-click menu, and the
+ delete-last-waypoint path (§4.2 — one input shape, every surface).
+
+- *defined in:* `crates/lunco-autopilot/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `vessel` | `Entity` |  Vessel whose patrol to clear. |
+
+#### `DisengageAutopilot`
+
+ Disengage the autopilot on `vessel` WITHOUT clearing its patrol: replaces
+ the live behaviour with [`BehaviorSpec::Brake`] (the vessel stops) but
+ LEAVES the [`AutopilotBehaviorSpec`] mirror intact so the patrol survives a
+ later re-engage. Distinct from [`ClearPatrol`] (which wipes the patrol data
+ too) — the Command Deck "Disengage" button wants this one (pause driving,
+ keep the route).
+
+- *defined in:* `crates/lunco-autopilot/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `vessel` | `Entity` |  Vessel whose autopilot to disengage (brake, keep patrol data). |
+
 #### `EngageAutopilot`
 
  Engage an autopilot on `vessel`: spawn an [`Autopilot`] actor (its `AiAgent`
@@ -1235,6 +1308,26 @@ command structs themselves in `crates/`, so it always matches the code. See the
 ## Avatar & possession
 
 ### `lunco-avatar` <a id="lunco-avatar"></a>
+
+#### `CaptureFromCamera`
+
+ Capture a screenshot from a specific camera. With `target = None` (the
+ default) captures from the active scene camera (`SceneViewport::active_camera`),
+ falling back to the primary window; with `target = Some(vessel)` captures
+ from a `Camera3d` mounted on that vessel (found by walking the vessel's
+ descendant hierarchy). The latter is what a `run_tool("science::take_photo")`
+ leaf fires to photograph from a rover's viewpoint.
+
+ The captured frame flows through the existing `ScreenshotCaptured` observer
+ in `lunco-api` (file-save / PNG-encode) for the HTTP path; in-process/rhai
+ captures without the API just spawn the `Screenshot` (matching
+ [`CaptureScreenshot`]'s behaviour today).
+
+- *defined in:* `crates/lunco-avatar/src/screenshot.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `target` | `Option < Entity >` |  Vessel whose mounted camera to capture from. `None` → the active scene  camera, falling back to the primary window when none is bound. |
 
 #### `CaptureScreenshot`
 
@@ -2504,4 +2597,4 @@ command structs themselves in `crates/`, so it always matches the code. See the
 
 ---
 
-<!-- scanned 607 .rs files across `crates/`; 0 parse failure(s) skipped -->
+<!-- scanned 617 .rs files across `crates/`; 0 parse failure(s) skipped -->

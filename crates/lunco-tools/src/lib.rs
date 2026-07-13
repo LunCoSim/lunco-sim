@@ -1,19 +1,27 @@
 //! Backend-agnostic **tool** registry.
 //!
-//! A *tool* is a named, reusable bundle of callable functions — a library of
-//! selection / behaviour policy a scenario can call as `name::fn(...)`. The key
-//! design point: a tool's IMPLEMENTATION is pluggable. It may be authored in
-//! rhai source, in native Rust, or (later) in any other runtime — all are the
-//! same [`Tool`] to this crate. That extensibility is why this crate is
-//! deliberately dependency-free: it owns only the *abstraction* + the global
-//! registry + discovery. The actual binding of a tool into a script runtime
-//! lives in an adapter crate (e.g. `lunco-tools-rhai`), so non-rhai consumers
-//! can still enumerate and describe tools without pulling rhai in.
+//! A *tool* is a named, reusable unit a scenario reaches two ways:
+//!
+//! - **As a script-call library** — a bundle of callable functions invoked as
+//!   `name::fn(...)`. A tool's IMPLEMENTATION is pluggable: rhai source, native
+//!   Rust, or (later) any other runtime. The `lunco-tools-rhai` adapter binds
+//!   each registered tool into a script engine so a scenario can call it.
+//! - **As a behaviour-tree action** — when the autopilot's `run_tool` leaf
+//!   fires a tool name, the bevy-aware adapter (`lunco-tools-bevy`) runs it.
+//!   That path is bevy-specific (it needs `&mut World`/`Commands`), so it lives
+//!   in `lunco-tools-bevy`, NOT here — see [`ExecutableTool`] there.
+//!
+//! This crate owns only the *abstraction* + the global registry + discovery,
+//! and is deliberately dependency-free so the rhai-binding adapter
+//! (`lunco-tools-rhai`) stays slim. The two adapter capabilities —
+//! script-binding (rhai) and behaviour-tree execution (bevy) — live in their
+//! own crates, each pulling only what it needs.
 //!
 //! ```ignore
-//! // a native Rust adapter registers a tool…
-//! lunco_tools::register(Arc::new(MyNativeTool));
-//! // …a rhai adapter binds every registered tool into an engine as `name::fn`.
+//! // any adapter registers a tool (script-callable; optionally executable)…
+//! lunco_tools::register(Arc::new(MyTool));
+//! // …lunco-tools-rhai binds it into an engine as `name::fn(...)`,
+//! // …lunco-tools-bevy runs it (if it's also an ExecutableTool) on a run_tool leaf.
 //! ```
 
 use std::any::Any;
@@ -27,6 +35,11 @@ use std::sync::{Arc, OnceLock, RwLock};
 /// `lunco-tools-rhai`, a future `PythonTool`, etc. The metadata methods are
 /// runtime-neutral (used for discovery here); a runtime adapter downcasts via
 /// [`Tool::as_any`], or reads [`Tool::source`], to actually bind the tool.
+///
+/// This trait is **bevy-free** — it covers discovery + script-binding only. A
+/// tool that is ALSO executable as a behaviour-tree action additionally
+/// implements `lunco_tools_bevy::ExecutableTool` (which carries `&mut World`).
+/// The bevy-free / bevy-aware split keeps `lunco-tools-rhai` slim.
 pub trait Tool: Send + Sync + 'static {
     /// Namespace the tool is invoked under (`name::fn(...)`). Unique key.
     fn name(&self) -> &str;
@@ -41,7 +54,8 @@ pub trait Tool: Send + Sync + 'static {
         None
     }
     /// Downcast hook so a runtime adapter can recover a concrete tool type it
-    /// knows how to bind (e.g. a native tool carrying a Rust builder closure).
+    /// knows how to bind (e.g. a native tool carrying a Rust builder closure),
+    /// and so `lunco-tools-bevy` can recover an [`ExecutableTool`] supertrait.
     fn as_any(&self) -> &dyn Any;
 }
 

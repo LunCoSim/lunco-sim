@@ -5,6 +5,10 @@ edition = "2021"
 
 [dependencies]
 bevy = { workspace = true }
+# Tool execution adapter — the avatar-crate's science instruments (e.g.
+# `take_photo`) register as closure tools whose `execute()` fires typed commands
+# (`CaptureFromCamera`) directly via `ctx.world()`. No JSON, no reflection.
+lunco-tools-bevy = { path = "../lunco-tools-bevy" }
 # egui + the workbench/theme shell are used ONLY by `src/ui/` (AvatarUiPlugin).
 # Optional so consumers that need just the camera components (e.g. lunco-usd-sim
 # on a headless server) build with `default-features = false` → no egui→winit.
