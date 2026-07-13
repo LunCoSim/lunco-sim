@@ -65,6 +65,8 @@ schedule ordering encodes a data dependency. Those look cacheable and are not
 | **Real CIDv1 content-address** | `lunco-networking/src/scenario.rs:54-66` `cid_for_content`/`cid_from_bytes` | IPLD CIDv1 (raw `0x55` + sha2-256), `ipfs add`-compatible; incremental fail-closed verify (`scenario_sync.rs:88-94`). **First real content-addressing in the repo** — but scoped to networking. |
 | **OPFS web blob backend** | `lunco-storage/src/opfs_storage.rs` | Working async `read`/`write`/`exists` on wasm via `createWritable` (main-thread-legal). Path-keyed on `StorageHandle::File`. |
 | **`inventory` asset-scheme registry** | `lunco-assets/src/asset_sources.rs:41-96` `AssetSchemeProvider` | Per-crate `inventory::submit!`'d URI schemes drained before `AssetPlugin`; `scenario://` uses it. Clean extension point for a `precompute://`/`cache://` reader. |
+| **Shared material cache** | `lunco-render-bevy/src/look_cache.rs` `LookCache<L: CachedLook>` | Content-key → one `Handle<Material>` (the batching property), an `unshared` bypass for animated looks, and ONE `sweep_look_cache` for eviction. Serves both `PbrLook` and `ShaderLook` — they were the same code twice, and had already drifted (the shader cache swept at 1024; the PBR cache never swept and grew unbounded). |
+| **One invalidation signal for source-derived memos** | `lunco-modelica/src/icon_memo.rs` `SourceMemo<V>` + `invalidate_source_memos()` | A `name → Option<V>` memo, **negatives included**, that self-drops on a source/library change. One atomic bump reaches every memo — including ones added later, which the invalidation site never has to name. |
 
 > **Retired: `lunco-cache`.** An earlier draft of this doc proposed a generic
 > `ResourceCache<L: ResourceLoader>` — a `HashMap<K, Task>` + pending map — as the
@@ -88,6 +90,23 @@ schedule ordering encodes a data dependency. Those look cacheable and are not
 >
 > If you need async dedup, reach for the ECS idiom in the table above. If you need
 > a *disk* bake, that is `lunco-precompute::bake_or_load` (§2), which shipped.
+
+> **The rule both of the above were written to enforce: a cache is defined by its
+> INVALIDATION, not by its lookup.** Every cache bug found in the 2026-07-13 audit
+> was a missing or divergent invalidation, never a wrong hit:
+>
+> - `PbrLookCache` and `ShaderLookCache` — same shape, same exposure, one swept and
+>   one didn't. Nothing forced them to agree, so they drifted.
+> - The bitmap-texture memo — invalidated by **nothing**, and it cached *negatives*.
+>   A missing asset was remembered as missing for the life of the process. On wasm
+>   that is every MSL bitmap (the bundle ships no `Resources/`), so shipping them in
+>   the bundler would still have rendered blank until restart.
+> - `port_icon_cache` — a cache with no producer and no consumer. Its only caller was
+>   its own `invalidate`, wired to an observer clearing a permanently-empty map.
+>
+> **Caching a miss is a promise to retry it.** If you cache `Option<V>`, you owe it an
+> invalidation signal, and that signal must be one thing the whole subsystem shares —
+> not a list of caches each new author has to remember to append to.
 
 **Gaps in the foundation:**
 - **No shared hashing util, but now two families in play.** Change-detection

@@ -1666,6 +1666,31 @@ see."* ⇒ if op 4 of 7 fails, ops 1–3 are journaled and applied, and one undo
 successful apply. A failed op is not journaled.)*
 
 ### H11 · Dead weight
+
+> **⚠ CORRECTION (2026-07-13). Both claims in this section were wrong, and both were
+> acted on before being checked. Read the resolution before trusting the text below.**
+>
+> - **`lunco-cache` was NOT "exactly the abstraction the codebase needed."** It was
+>   deleted, not adopted. The "~8 bespoke memos" cited below are mostly a *different
+>   shape*: of ~46 cache-like sites, ~17 are synchronous memos with no in-flight
+>   window and ~20 are plain registries — `ResourceCache` would only add overhead. The
+>   three sites named by name all fail: `modelica/class_cache.rs` is **synchronous**;
+>   `horizon.rs` is a per-Entity Component, not a HashMap; `stream_viz.rs` needs
+>   generation-versioning + inflight backpressure that `ResourceCache` lacks, so
+>   migrating it would be a *downgrade*. Async dedup in this codebase is the ECS idiom
+>   (a `Task` Component + `Without<BakeTask>` — the query filter IS the pending set),
+>   which is why a `Resource<HashMap<K, Task>>` found no users. See
+>   `docs/architecture/caching-and-precompute-strategy.md` §1.
+> - **`lunco-terrain-globe` is NOT non-functional.** "Registers zero systems" is true
+>   and irrelevant: it is the **geometry spine of the live orbital view** —
+>   `globe_lod.rs` imports its cube-sphere math and `update_globe_lod` runs every
+>   frame. A plugin with no systems is not a crate with no callers. Deleting it on the
+>   strength of the paragraph below would have cost the orbital view.
+>
+> The real defects the cache audit *did* surface were all **invalidation**, not
+> duplication: two material caches with divergent eviction, and a bitmap-texture memo
+> that cached negatives and was invalidated by nothing. Fixed 2026-07-13.
+
 - **4 orphan crates, 697 LOC, zero reverse-deps, zero references** (root `Cargo.toml:67` already names
   them): `lunco-attributes` (188), `lunco-cache` (229), `lunco-obc` (111), `lunco-telemetry` (169).
   **The painful one:** `lunco-cache` is a generic `ResourceLoader` + `ResourceCache<L>` **with in-flight
