@@ -25,7 +25,7 @@
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
 use lunco_assets::assets_dir;
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{on_command, register_commands, Command, OriginAnchor, WorldGrid};
 use lunco_cosim::{SimComponent, SimConnection, SimStatus};
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_modelica::source_asset::ModelicaSource;
@@ -1085,12 +1085,10 @@ fn on_load_scene(
     asset_server: Res<AssetServer>,
     stages: Res<Assets<UsdStageAsset>>,
     mut commands: Commands,
+    q_grid: Query<&Children, With<WorldGrid>>,
+    q_origin: Query<(), With<OriginAnchor>>,
     q_usd: Query<(Entity, &UsdPrimPath)>,
     q_wires: Query<Entity, With<SimConnection>>,
-    q_modelica: Query<Entity, With<ModelicaModel>>,
-    q_scripted: Query<(Entity, &ScriptedModel)>,
-    channels: Res<ModelicaChannels>,
-    mut script_registry: ResMut<lunco_scripting::ScriptRegistry>,
     in_flight: Option<Res<SceneLoadInFlight>>,
 ) {
     // Accept an absolute path (Twin manifests join `default_scene` to
@@ -1146,12 +1144,9 @@ fn on_load_scene(
     // `ClearScene`).
     clear_scene_entities(
         &mut commands,
-        &q_usd,
+        &q_grid,
+        &q_origin,
         &q_wires,
-        &q_modelica,
-        &q_scripted,
-        &channels,
-        &mut script_registry,
     );
 
     // Force a fresh disk read ONLY for a genuine re-open — i.e. the asset is
@@ -1188,12 +1183,10 @@ fn on_restart_scene(
     trigger: On<RestartScene>,
     asset_server: Res<AssetServer>,
     mut commands: Commands,
+    q_grid: Query<&Children, With<WorldGrid>>,
+    q_origin: Query<(), With<OriginAnchor>>,
     q_usd: Query<(Entity, &UsdPrimPath)>,
     q_wires: Query<Entity, With<SimConnection>>,
-    q_modelica: Query<Entity, With<ModelicaModel>>,
-    q_scripted: Query<(Entity, &ScriptedModel)>,
-    channels: Res<ModelicaChannels>,
-    mut script_registry: ResMut<lunco_scripting::ScriptRegistry>,
 ) {
     // Every loaded prim shares the scene's stage handle. REUSE that handle (not a
     // freshly-resolved path) so the exact same asset — INCLUDING its source scheme
@@ -1222,12 +1215,9 @@ fn on_restart_scene(
     // stale window camera survives into the fresh scene.
     clear_scene_entities(
         &mut commands,
-        &q_usd,
+        &q_grid,
+        &q_origin,
         &q_wires,
-        &q_modelica,
-        &q_scripted,
-        &channels,
-        &mut script_registry,
     );
 
     // Force a fresh disk read so on-disk edits actually apply (the whole point).
@@ -1262,27 +1252,23 @@ pub struct ClearScene {}
 fn on_clear_scene(
     trigger: On<ClearScene>,
     mut commands: Commands,
-    q_usd: Query<(Entity, &UsdPrimPath)>,
+    q_grid: Query<&Children, With<WorldGrid>>,
+    q_origin: Query<(), With<OriginAnchor>>,
     q_wires: Query<Entity, With<SimConnection>>,
-    q_modelica: Query<Entity, With<ModelicaModel>>,
-    q_scripted: Query<(Entity, &ScriptedModel)>,
-    channels: Res<ModelicaChannels>,
-    mut script_registry: ResMut<lunco_scripting::ScriptRegistry>,
 ) {
     info!("[clear-scene] clearing viewport");
     clear_scene_entities(
         &mut commands,
-        &q_usd,
+        &q_grid,
+        &q_origin,
         &q_wires,
-        &q_modelica,
-        &q_scripted,
-        &channels,
-        &mut script_registry,
     );
 }
 
-/// Despawn the current scene's USD entities + cosim wires and free the
-/// worker-side Modelica steppers / Python script docs they referenced.
+/// Despawn the current scene's USD entities + cosim wires.
+/// External/worker state (such as Modelica steppers or Python script documents)
+/// is cleaned up automatically via reactive `On<Remove, T>` component observers
+/// registered in their respective home crates (`lunco-modelica` and `lunco-scripting`).
 /// Shared by [`LoadScene`] (clear-before-reload) and [`ClearScene`]
 /// (clear-to-empty). Despawns are deferred through `commands`.
 ///
@@ -1314,57 +1300,30 @@ fn on_clear_scene(
 /// (that was the `sync_gizmo_camera` crash).
 fn clear_scene_entities(
     commands: &mut Commands,
-    q_usd: &Query<(Entity, &UsdPrimPath)>,
+    q_grid: &Query<&Children, With<WorldGrid>>,
+    q_origin: &Query<(), With<OriginAnchor>>,
     q_wires: &Query<Entity, With<SimConnection>>,
-    q_modelica: &Query<Entity, With<ModelicaModel>>,
-    q_scripted: &Query<(Entity, &ScriptedModel)>,
-    channels: &ModelicaChannels,
-    script_registry: &mut lunco_scripting::ScriptRegistry,
 ) {
-    // Worker-side cleanup before despawn. Send Despawn for every
-    // Modelica-bearing entity so the worker's `steppers` /
-    // `cached_models` / `sim_streams` hashmaps don't leak.
-    let mut modelica_freed = 0usize;
-    for e in q_modelica.iter() {
-        let _ = channels.tx.send(ModelicaCommand::Despawn { entity: e });
-        modelica_freed += 1;
-    }
-    // Drop registered script documents for SCENE scripts only (USD-prim-backed —
-    // those entities are despawned below). A standalone scenario host — a tutorial
-    // coach-tour, or an API `RunScenario` on a bare entity — is session-level, NOT
-    // scene content: evicting its document here would drop it from the scenario
-    // driver's `work` set (which skips entities whose document is gone), so it
-    // silently stops receiving `on_event`/`on_tick`. That is exactly how a
-    // tutorial's Next/Skip go dead the moment its `on_start` calls `load_scene`.
-    // Keep those alive across a scene clear.
-    let mut scripts_freed = 0usize;
-    for (e, sm) in q_scripted.iter() {
-        if !q_usd.contains(e) {
-            continue;
-        }
-        if let Some(raw_id) = sm.document_id {
-            if script_registry
-                .documents
-                .remove(&DocumentId::new(raw_id))
-                .is_some()
-            {
-                scripts_freed += 1;
+    let mut despawned = 0usize;
+
+    // Despawn all children of the WorldGrid (recursively), except the persistent OriginAnchor
+    if let Ok(children) = q_grid.single() {
+        for child in children.iter() {
+            if !q_origin.contains(child) {
+                commands.entity(child).try_despawn();
+                despawned += 1;
             }
         }
     }
 
-    let mut despawned = 0usize;
-    for (e, _) in q_usd.iter() {
-        commands.entity(e).try_despawn();
-        despawned += 1;
-    }
+    // Despawn any root-level derived connection wires (which are spawned as root entities)
     for e in q_wires.iter() {
         commands.entity(e).try_despawn();
         despawned += 1;
     }
     info!(
-        "[scene] cleanup: {} entities despawned, {} Modelica steppers freed, {} Python docs freed",
-        despawned, modelica_freed, scripts_freed,
+        "[scene] cleanup: {} entities despawned",
+        despawned
     );
     commands.trigger(lunco_core::RestoreFallbackLights);
 }
@@ -1862,6 +1821,8 @@ pub(crate) fn install(app: &mut App) {
 }
 
 register_commands!(on_load_scene, on_clear_scene, on_restart_scene,);
+
+
 
 #[cfg(test)]
 mod tests {

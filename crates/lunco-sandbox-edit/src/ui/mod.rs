@@ -200,6 +200,39 @@ impl Plugin for SandboxEditUiPlugin {
 
         // Debug-viz settings menu rows (joint + wheel-force gizmos).
         app.add_systems(Startup, register_debug_viz_settings);
+
+        app.add_observer(on_select_progress);
+        app.add_observer(on_spawn_progress);
+    }
+}
+
+fn trigger_tutorial_next(commands: &mut Commands) {
+    commands.trigger(lunco_core::TelemetryEvent {
+        name: "cmd:TutorialNext".to_string(),
+        source: 0,
+        severity: lunco_core::Severity::Info,
+        data: lunco_core::TelemetryValue::Bool(true),
+        timestamp: 0.0,
+    });
+}
+
+fn on_select_progress(
+    _trigger: On<crate::selection::SelectEntity>,
+    hud: Option<Res<lunco_workbench::tutorial_overlay::TutorialHud>>,
+    mut commands: Commands,
+) {
+    if hud.is_some_and(|h| h.tour.as_ref().and_then(|t| t.require.as_deref()) == Some("select")) {
+        trigger_tutorial_next(&mut commands);
+    }
+}
+
+fn on_spawn_progress(
+    _trigger: On<crate::commands::SpawnEntity>,
+    hud: Option<Res<lunco_workbench::tutorial_overlay::TutorialHud>>,
+    mut commands: Commands,
+) {
+    if hud.is_some_and(|h| h.tour.as_ref().and_then(|t| t.require.as_deref()) == Some("spawn")) {
+        trigger_tutorial_next(&mut commands);
     }
 }
 

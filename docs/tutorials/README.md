@@ -28,18 +28,9 @@ shared HUD (`lunco-workbench::tutorial_overlay`) + the `hud.rhai` prelude.
   (`assets/scripting/policy/boot.rhai`, id `boot.entry`) decides to show the
   onboarding tutorial instead of loading the default — one load, no race. Rewrite
   it (or hot-replace by id) to change startup behavior with no rebuild.
-- **Shipped lessons**: *sandbox* — Sandbox Intro → First Drive → Lander & Rover
-  Mission, plus an authoring track (Build a Scene → Script a Rover → Inspect the
-  Simulation → Cosim); *lunica* — a 7-lesson workbench course + the Welcome-panel
-  [learning paths](../../assets/tutorials/learning_paths.json). The sandbox also
-  embeds the full lunica modeling IDE as its **Design workspace** (open `.mo`,
-  compile, run, plot) — the lunica lessons run there too, though they are
-  currently registered under *lunica*; see the [sandbox app doc](../apps/sandbox/README.md).
-- **Add one — data, not Rust**: drop `assets/tutorials/<app>/<name>.rhai` + an entry
-  in `assets/tutorials/<app>/tutorials.json` (the app's `TutorialPlugin { app }`
-  scans it). No rebuild. Full recipe in
-  [`../../assets/tutorials/README.md`](../../assets/tutorials/README.md) and the
-  [`author-tutorial`](../../skills/author-tutorial/SKILL.md) skill.
+- **Shipped lessons**: *sandbox* — Sandbox Intro (teaching WASD, camera cycling, Shift+click selection, ESC/Backspace clear, and Backspace release) → First Drive → Script a Rover → Rhai Editor & REPL → Lander & Rover Mission; *lunica* — a 7-lesson workbench course + the Welcome-panel [learning paths](../../assets/tutorials/learning_paths.json).
+- **Dynamic Twin-scoped lessons**: Scoped lessons (like the *Space School Seminar* track, SS1–SS4) are isolated inside the active Twin directory (`sim/tutorials/tutorials.json`). The loader dynamically scans and appends them to the 🎓 Tutorials menu on the fly when the Twin is loaded.
+- **Add one — data, not Rust**: drop `assets/tutorials/<app>/<name>.rhai` + an entry in `assets/tutorials/<app>/tutorials.json` (or inside a Twin's `sim/tutorials/tutorials.json`). The registry and custom menus scan them automatically at runtime. No rebuild. Full recipe in [`../../assets/tutorials/README.md`](../../assets/tutorials/README.md) and the [`author-tutorial`](../../skills/author-tutorial/SKILL.md) skill.
 
 ## Authoring walkthroughs
 

@@ -59,6 +59,8 @@ pub struct TourStep {
     pub title: String,
     /// Card body text.
     pub body: String,
+    /// Optional action requirement key for automatic progression.
+    pub require: Option<String>,
 }
 
 // ── Commands ────────────────────────────────────────────────────────────────
@@ -121,6 +123,10 @@ pub struct SetTourStep {
     #[serde(default)]
     #[reflect(default)]
     pub body: String,
+    /// Optional action requirement key for automatic progression.
+    #[serde(default)]
+    #[reflect(default)]
+    pub require: Option<String>,
 }
 
 /// End the guided tour (hide the coach card + scrim). Rhai: `end_tour()`.
@@ -155,6 +161,7 @@ fn on_set_tour_step(trigger: On<SetTourStep>, mut hud: ResMut<TutorialHud>) {
         anchor: cmd.anchor.clone(),
         title: cmd.title.clone(),
         body: cmd.body.clone(),
+        require: cmd.require.clone(),
     });
 }
 

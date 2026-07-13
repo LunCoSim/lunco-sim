@@ -1,35 +1,43 @@
-//! Sandbox Intro — a guided COACH-MARK tour (lunica-style), authored in rhai.
+//! Sandbox Onboarding Tour — guided COACH-MARK tour with live action progression.
 //!
-//! Demonstrates the guided-tour kind: manual, step-by-step, advancing on the
-//! coach card's Back / Next / Skip controls (which emit `cmd:TutorialNext` /
-//! `cmd:TutorialBack` / `cmd:TutorialSkip` on the event bus). The step cursor
-//! lives on `this.i`; `on_event` moves it and re-renders — this gives Back/jump
-//! for free, reproducing the lunica tour's behaviour with no Rust.
-//!
-//! `steps()` is a FUNCTION (not a top-level `const`) so it's callable from other
-//! functions — rhai named fns can't see script-level consts. `show(s, i)` takes
-//! the steps as an argument for the same reason (`this` is bound only in the
-//! directly-called hook, not in helpers it calls).
+//! Employs interactive progression: steps listen for specific user actions
+//! (camera cycle, flight locomotion, shift-select, spawn, possess, release)
+//! and advance automatically, while retaining "Back" / "Skip" and fallback "Next"
+//! controls.
 
 fn steps() {
     [
-        #{ anchor: "",                      title: "Welcome to LunCoSim",   body: "A 60-second tour of the workspace. Use Next / Back below — or Skip anytime." },
-        #{ anchor: "panel.center",          title: "The Viewport",          body: "Your 3D world: spacecraft, rovers, lunar terrain. Right-drag to look around, scroll to zoom." },
-        #{ anchor: "panel.side_browser",    title: "Browser & Tutorials",   body: "Scenes, models, and the Tutorials launcher live here on the left." },
-        #{ anchor: "panel.right_inspector", title: "Inspector",             body: "Select any object to view and edit its properties here." },
-        #{ anchor: "panel.bottom",          title: "Console & Plots",       body: "Logs, live telemetry plots, and the spawn palette dock along the bottom." },
-        #{ anchor: "",                      title: "You're set!",           body: "Next up: the First Drive lesson — take control of a rover and drive it." },
+        // 0
+        #{ anchor: "",                      title: "Welcome to LunCoSim",   body: "Welcome! This is the Sandbox, a 3D digital twin of the solar system. Let's learn the basics: camera navigation, selecting, spawning, avatars, and agentic workflows. Click Next to begin.", require: "next" },
+        // 1
+        #{ anchor: "panel.center",          title: "Moving: Orbit & Zoom",  body: "Let's look around! In Avatar mode (orbit rig by default), hold RIGHT MOUSE BUTTON and drag to orbit the target, or scroll the MOUSE WHEEL to zoom. Click Next when done.", require: "next" },
+        // 2
+        #{ anchor: "panel.center",          title: "Moving: Panning",       body: "To pan the camera in Avatar mode (orbit rig), hold the MIDDLE MOUSE BUTTON (or Shift + Right Mouse Button) and drag. Select any object and press F to focus on it. Click Next.", require: "next" },
+        // 3
+        #{ anchor: "panel.center",          title: "Camera Cycling",        body: "You can cycle perspectives. Press the C key to switch camera views (Avatar, Follow, First-Person). Press C now!", require: "cycle" },
+        // 4
+        #{ anchor: "panel.center",          title: "Locomotion: Flight",    body: "In Avatar flight mode, RMB drag looks around, and WASD keys fly you through space (hold Shift to boost speed x10). Pan and Zoom do not apply here. Try flying with W, A, S, or D now!", require: "fly" },
+        // 5
+        #{ anchor: "panel.side_browser",    title: "Selecting Objects",     body: "Hold SHIFT and left-click the Rover (or any object) in the 3D viewport to select it (or click multiple to extend selection). Or click it in the Twin Browser (left panel). Hold Shift and select now!", require: "select" },
+        // 6
+        #{ anchor: "panel.bottom",          title: "Spawning Objects",      body: "Open the Spawn Palette tab in the bottom dock. Click on any catalogued rover, prop, or structure to spawn it. Spawn something now!", require: "spawn" },
+        // 7
+        #{ anchor: "panel.right_inspector", title: "What is the Avatar?",   body: "Your presence in the simulation is your Avatar. You can possess a vehicle (like a rover) by selecting it and pressing F (or clicking 'Possess' in the Inspector). Possess a vehicle now!", require: "possess" },
+        // 8
+        #{ anchor: "panel.right_inspector", title: "Releasing Control",     body: "This links your keyboard controls directly to it. Press BACKSPACE to release control and return to Avatar mode. Press Backspace now!", require: "release" },
+        // 9
+        #{ anchor: "panel.bottom",          title: "Agentic Workflows",     body: "LunCoSim is built for automation! You can write scripts using Rhai, run co-simulations, or connect external AI coding agents via the HTTP API and MCP tools. Click Next to complete.", require: "next" },
+        // 10
+        #{ anchor: "",                      title: "You're ready!",         body: "Now you know the layout, camera, and core concepts. Next up: S1 Moon Driving Basics — take control of a rover and feel a slope.", require: "next" },
     ]
 }
 
 fn show(s, i) {
     let step = s[i];
-    coach(i, s.len(), step.anchor, step.title, step.body);
+    coach(i, s.len(), step.anchor, step.title, step.body, step.require);
 }
 
 fn on_start(me) {
-    // One source: the tutorial script loads its own light backdrop so the
-    // "Viewport" step has something to frame.
     load_scene("tutorials/sandbox/sandbox_intro.usda");
     this.i = 0;
     show(steps(), 0);
@@ -45,7 +53,7 @@ fn on_event(me, evt) {
     if this.i >= s.len() {
         end_tour();
         notify_kind("Tour complete!", "success");
-        emit("MISSION_COMPLETE", 0);   // marks the lesson done + advances the `next:` chain (→ First Drive)
+        emit("MISSION_COMPLETE", 0);
     } else {
         show(s, this.i);
     }

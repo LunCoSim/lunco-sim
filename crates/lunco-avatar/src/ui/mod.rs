@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use bevy::math::DVec3;
 use bevy_egui::{egui, EguiContexts};
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt};
+use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt, tutorial_overlay::TutorialHud};
 
 use lunco_core::{Avatar, GlobalEntityId, SessionProfiles, SessionRegistry};
 use crate::RoverNameTagSettings;
@@ -250,14 +250,81 @@ fn compute_lat_lon_height(
     Some((lat, lon, height))
 }
 
+fn trigger_tutorial_next(commands: &mut Commands) {
+    commands.trigger(lunco_core::TelemetryEvent {
+        name: "cmd:TutorialNext".to_string(),
+        source: 0,
+        severity: lunco_core::Severity::Info,
+        data: lunco_core::TelemetryValue::Bool(true),
+        timestamp: 0.0,
+    });
+}
+
+fn on_possess_progress(
+    _trigger: On<crate::commands::PossessVessel>,
+    hud: Option<Res<TutorialHud>>,
+    mut commands: Commands,
+) {
+    if hud.is_some_and(|h| h.tour.as_ref().and_then(|t| t.require.as_deref()) == Some("possess")) {
+        trigger_tutorial_next(&mut commands);
+    }
+}
+
+fn on_release_progress(
+    _trigger: On<crate::commands::ReleaseVessel>,
+    hud: Option<Res<TutorialHud>>,
+    mut commands: Commands,
+) {
+    if hud.is_some_and(|h| h.tour.as_ref().and_then(|t| t.require.as_deref()) == Some("release")) {
+        trigger_tutorial_next(&mut commands);
+    }
+}
+
+fn check_tutorial_keyboard_progress(
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    hud: Option<Res<TutorialHud>>,
+    mut commands: Commands,
+) {
+    let Some(keys) = keys else { return; };
+    let Some(hud) = hud else { return; };
+    let Some(tour) = &hud.tour else { return; };
+    let Some(require) = &tour.require else { return; };
+
+    let mut done = false;
+    match require.as_str() {
+        "cycle" => {
+            if keys.just_pressed(KeyCode::KeyC) {
+                done = true;
+            }
+        }
+        "fly" => {
+            if keys.any_just_pressed([KeyCode::KeyW, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD]) {
+                done = true;
+            }
+        }
+        "release" => {
+            if keys.just_pressed(KeyCode::Backspace) {
+                done = true;
+            }
+        }
+        _ => {}
+    }
+
+    if done {
+        trigger_tutorial_next(&mut commands);
+    }
+}
+
 /// Plugin that registers avatar UI panels.
 pub struct AvatarUiPlugin;
 
 impl Plugin for AvatarUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AvatarStatusView>();
-        app.add_systems(Update, populate_avatar_status_view);
+        app.add_systems(Update, (populate_avatar_status_view, check_tutorial_keyboard_progress));
         app.register_panel(AvatarStatusPanel);
+        app.add_observer(on_possess_progress);
+        app.add_observer(on_release_progress);
     }
 }
 

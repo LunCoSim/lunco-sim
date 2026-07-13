@@ -1426,6 +1426,7 @@ fn build_modelica_core(app: &mut App) {
     );
 
     app.register_type::<ModelicaModel>()
+        .add_observer(worker::on_remove_modelica)
         .add_systems(FixedUpdate, (
             handle_modelica_responses.in_set(ModelicaSet::HandleResponses),
             spawn_modelica_requests.in_set(ModelicaSet::SpawnRequests),

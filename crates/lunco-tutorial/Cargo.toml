@@ -17,6 +17,8 @@ lunco-workbench = { path = "../lunco-workbench" }
 lunco-api = { path = "../lunco-api" }
 # Persisted per-tutorial progress (completed set + last-started).
 lunco-settings = { path = "../lunco-settings" }
+# Workspace structure and active Twin session tracking.
+lunco-workspace = { path = "../lunco-workspace" }
 # The ONE delivery: `RunScenario` attaches a tutorial's `.rhai` to a host entity.
 lunco-scripting = { path = "../lunco-scripting" }
 # `tutorial_source(rel)` — loads a tutorial's `.rhai` (disk on native, embedded

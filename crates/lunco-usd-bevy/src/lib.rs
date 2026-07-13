@@ -3280,7 +3280,7 @@ pub fn reveal_placeholder_on_failure(
     // grace timeout on web, where a broken load may never report `is_failed()`.
     mut waited: Local<std::collections::HashMap<Entity, f32>>,
 ) {
-    for (e, root, global_transform, uri, prim_path) in scene_roots.iter() {
+    for (e, root, _global_transform, uri, prim_path) in scene_roots.iter() {
         let state = asset_server.load_state(root.0.id());
         // The asset arrived — stop tracking; `hide_glb_placeholder_meshes`
         // drops the marker on the next `LoadedWithDependencies` event.
@@ -3300,8 +3300,6 @@ pub fn reveal_placeholder_on_failure(
                 uri.0,
             );
 
-            // Spawn a new independent diagnostic entity in world space
-            let transform = global_transform.compute_transform();
 
             // Default scale
             let mut scale = Vec3::ONE;
@@ -3354,8 +3352,7 @@ pub fn reveal_placeholder_on_failure(
                 .next()
                 .unwrap_or(&uri.0);
 
-            commands.spawn((
-                Name::new("DiagnosticStub"),
+            commands.entity(e).try_insert((
                 Mesh3d(meshes.add(Cuboid::from_size(scale))),
                 MeshMaterial3d(materials.add(StandardMaterial {
                     base_color: cfg.box_color,
@@ -3364,8 +3361,6 @@ pub fn reveal_placeholder_on_failure(
                     unlit: true, // readable even with no scene lighting
                     ..default()
                 })),
-                transform,
-                Visibility::Visible,
                 DiagnosticStub,
                 // The label is baked on once the font is ready (frame 1 on
                 // native, whenever the fetch lands on web).
@@ -3374,9 +3369,6 @@ pub fn reveal_placeholder_on_failure(
                     box_size: scale,
                 },
             ));
-
-            // Mark the original prim as having a diagnostic stub
-            commands.entity(e).try_insert(DiagnosticStub);
         }
     }
 }

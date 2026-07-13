@@ -22,6 +22,9 @@ fn clear_spotlight()           { cmd("ClearSpotlight") }
 fn coach(index, total, anchor, title, body) {
     cmd("SetTourStep", #{ index: index, total: total, anchor: anchor, title: title, body: body });
 }
+fn coach(index, total, anchor, title, body, require) {
+    cmd("SetTourStep", #{ index: index, total: total, anchor: anchor, title: title, body: body, require: require });
+}
 fn end_tour()                  { cmd("ClearTour") }
 
 /// Render step `i` of a `steps` array of `#{ anchor, title, body, focus }`:

@@ -209,7 +209,7 @@ impl Plugin for SandboxUiPlugin {
         // block above. Data-driven: a new track is a `tutorials.json` + `.rhai`.
         {
             use lunco_tutorial::TutorialAppExt;
-            for track in ["basic", "school"] {
+            for track in ["basic"] {
                 let path = format!("{track}/tutorials.json");
                 match lunco_assets::tutorials::tutorial_source(&path) {
                     Some(src) => match serde_json::from_str::<Vec<lunco_tutorial::TutorialMeta>>(&src)

@@ -7625,6 +7625,7 @@ dependencies = [
  "lunco-scripting",
  "lunco-settings",
  "lunco-workbench",
+ "lunco-workspace",
  "serde",
  "serde_json",
 ]
