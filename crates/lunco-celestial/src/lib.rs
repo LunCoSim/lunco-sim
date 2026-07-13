@@ -25,7 +25,14 @@ pub mod queries;
 mod big_space_setup;
 mod globe_lod;
 mod systems;
-mod coords;
+/// Coordinate-frame newtypes. Zero-cost, and they make the two silent frame-mix incidents
+/// this crate has already shipped (the Shackleton sun 45° below the horizon; an ecliptic sun
+/// direction published as site-ENU) into COMPILE ERRORS.
+pub mod frames;
+/// The frame conversions. `coords` is `pub` because `lunco-celestial-ephemeris` was
+/// re-implementing `ecliptic_to_bevy` by hand for want of access — a conversion people copy
+/// is a conversion that drifts.
+pub mod coords;
 mod gravity;
 mod soi;
 mod trajectories;

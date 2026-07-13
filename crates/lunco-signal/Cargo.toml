@@ -1,0 +1,15 @@
+[package]
+name = "lunco-signal"
+version = "0.1.0"
+edition = "2021"
+description = "The signal model — what timeseries data looks like BEFORE any viz touches it. Render-free by construction: SignalRegistry is a ring buffer of f64s, and a headless run needs it just as much as a plot does. It was extracted from lunco-viz (which links bevy_egui → bevy_render) precisely so lunco-telemetry could push into it without dragging a GPU stack into the --no-ui server. lunco-viz re-exports it, so every existing `lunco_viz::SignalRegistry` caller is unaffected."
+
+[dependencies]
+# NOTE: no `bevy_egui`, no `egui_plot`, no `lunco-workbench`. That is the whole point —
+# see the crate description. `color_for_signal` (the one genuinely render-bound item in
+# the original module) deliberately stayed behind in `lunco-viz`.
+bevy = { workspace = true }
+serde = { workspace = true }
+
+[lints]
+workspace = true

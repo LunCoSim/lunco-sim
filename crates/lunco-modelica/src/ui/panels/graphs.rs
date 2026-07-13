@@ -249,6 +249,9 @@ fn collect_live_extras(
     let Some(cfg) = reg.get(viz_id) else {
         return Vec::new();
     };
+    // Resolved once, not per line: the theme is a resource, and a plot with 20 series
+    // shouldn't look it up 20 times.
+    let theme = ctx.resource::<lunco_theme::Theme>();
     let Some(sigs) = ctx.resource::<SignalRegistry>() else {
         return Vec::new();
     };
@@ -261,9 +264,13 @@ fn collect_live_extras(
                 return None;
             }
             let points: Vec<[f64; 2]> = hist.iter().map(|s| [s.time, s.value]).collect();
-            let color = b
-                .color
-                .unwrap_or_else(|| lunco_viz::signal::color_for_signal(&b.source.path));
+            // Series colour comes from the THEME (`PlotTokens`), not a hardcoded
+            // palette — plots follow the active theme like every other surface.
+            let color = b.color.unwrap_or_else(|| {
+                theme
+                    .map(|t| lunco_viz::signal::color_for_signal(t, &b.source.path))
+                    .unwrap_or(bevy_egui::egui::Color32::GRAY)
+            });
             let label = b.label.clone().unwrap_or_else(|| b.source.path.clone());
             Some(crate::ui::panels::experiments::PlotExtraLine {
                 label,

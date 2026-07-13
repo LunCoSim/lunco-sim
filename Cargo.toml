@@ -4,12 +4,10 @@ members = [
     "crates/lunco-hash",
     "crates/lunco-precompute",
     "crates/lunco-time",
-    "crates/lunco-obc",
     "crates/lunco-fsw",
     "crates/lunco-behavior",
     "crates/lunco-controller",
     "crates/lunco-autopilot",
-    "crates/lunco-attributes",
     "crates/lunco-avatar",
     "crates/luncosim",
     "crates/lunco-sandbox",
@@ -47,6 +45,7 @@ members = [
     "crates/lunco-workbench",
     "crates/lunco-web",
     "crates/lunco-scripting",
+    "crates/lunco-signal",
     "crates/lunco-viz",
     "crates/lunco-canvas",
     "crates/lunco-theme",
@@ -68,9 +67,10 @@ members = [
 ]
 # Bare `cargo build`/`check`/`test` (no `-p`/`--workspace`) operates on just the
 # two app crates and their dependency closure. This skips workspace members that
-# no binary reaches — lunco-attributes, lunco-obc, lunco-telemetry, and the
-# feature-gated lunco-networking — so default builds don't compile dead weight.
-# Use `--workspace` to include everything (e.g. CI lint/test sweeps).
+# no binary reaches — the feature-gated lunco-networking — so default builds don't
+# compile dead weight. Use `--workspace` to include everything (e.g. CI lint/test
+# sweeps). (`lunco-telemetry` used to be listed here as unreached; it is now wired into
+# lunco-sandbox, which is what made `SubscribeTelemetry` able to deliver at all.)
 #
 # `lunco-sandbox-server` is intentionally NOT here — for LEANNESS, not
 # correctness: built via `-p lunco-sandbox-server`, Cargo resolves

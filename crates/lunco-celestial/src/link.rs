@@ -217,13 +217,13 @@ pub(crate) fn update_links(
             .bodies
             .iter()
             .filter(|b| b.radius_m > 0.0)
-            .map(|b| {
-                (
-                    b.name.clone(),
-                    ecliptic_to_bevy(eph.provider.global_position(b.ephemeris_id, jd)),
-                    b.radius_m,
-                )
+            // A body we cannot place cannot occlude anything. Skipping it is right; placing it
+            // at the Sun's centre (the old behaviour) would have it eclipse everything.
+            .filter_map(|b| {
+                let p = eph.provider.global_position(b.ephemeris_id, jd)?;
+                Some((b.name.clone(), ecliptic_to_bevy(p), b.radius_m))
             })
+            .map(|(n, p, r)| (n, p.raw(), r))
             .collect(),
         _ => Vec::new(),
     };

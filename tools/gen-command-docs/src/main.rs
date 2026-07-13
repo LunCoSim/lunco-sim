@@ -266,13 +266,25 @@ fn short_type(path: &str) -> String {
 }
 
 const USAGE: &str = "\
-usage: cargo run -p gen-command-docs -- --schema <schema.json>
+usage: cargo run -p gen-command-docs -- --schema <a.json> [--schema <b.json> ...]
 
-  <schema.json> is a `DiscoverSchema` response from a RUNNING app — the
-  authoritative, visibility-filtered command list (the same one MCP reads):
+  Each <schema.json> is a `DiscoverSchema` response from a RUNNING app — the
+  authoritative, visibility-filtered command list (the same one MCP reads).
 
+  PASS BOTH DUMPS. No single app registers every command:
+    - the headless server has no workbench, so no `CaptureScreenshot`;
+    - a GUI build has none of the server-only verbs.
+  Generating from one dump alone silently DELETES the other's commands from the
+  reference.
+
+      # headless
       cargo run -p lunco-sandbox-server -- --api --no-ui &
-      curl -s http://127.0.0.1:4101/api/commands/schema > /tmp/schema.json
+      curl -s http://127.0.0.1:4101/api/commands/schema > /tmp/schema-server.json
+      # GUI (needs a display)
+      cargo run -p lunco-sandbox -- --api &
+      curl -s http://127.0.0.1:4101/api/commands/schema > /tmp/schema-gui.json
+
+      cargo run -p gen-command-docs -- --schema /tmp/schema-server.json --schema /tmp/schema-gui.json
 
   There is deliberately no source-scrape fallback: a grep of `#[Command]` both
   misses commands and invents them (it used to publish the `TestEcho` unit-test
@@ -282,10 +294,14 @@ usage: cargo run -p gen-command-docs -- --schema <schema.json>
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let mut schema_path: Option<PathBuf> = None;
+    // MULTIPLE schemas, unioned. No single running app knows every command: a headless
+    // server has no workbench (so no `CaptureScreenshot`), and a GUI build has no
+    // server-only verbs. Generating from one dump alone silently DELETES the other's
+    // commands from this reference — which is how a doc that is confidently wrong gets made.
+    let mut schema_paths: Vec<PathBuf> = Vec::new();
     while let Some(a) = args.next() {
         match a.as_str() {
-            "--schema" => schema_path = args.next().map(PathBuf::from),
+            "--schema" => schema_paths.extend(args.next().map(PathBuf::from)),
             "-h" | "--help" => {
                 eprint!("{USAGE}");
                 return;
@@ -296,16 +312,30 @@ fn main() {
             }
         }
     }
-    let Some(schema_path) = schema_path else {
+    if schema_paths.is_empty() {
         eprint!("{USAGE}");
         std::process::exit(2);
-    };
+    }
 
     let root = repo_root();
     let out_path = root.join("docs/commands-reference.md");
 
-    // 1. The authoritative list.
-    let mut schema = load_schema(&schema_path);
+    // 1. The authoritative list — the UNION of every dump, deduped by name. First definition
+    //    of a name wins (they agree; a command is the same type wherever it is registered).
+    let mut seen = std::collections::HashSet::new();
+    let mut schema: Vec<SchemaCommand> = Vec::new();
+    for path in &schema_paths {
+        for cmd in load_schema(path) {
+            if seen.insert(cmd.name.clone()) {
+                schema.push(cmd);
+            }
+        }
+    }
+    eprintln!(
+        "[gen-command-docs] {} commands from {} schema dump(s)",
+        schema.len(),
+        schema_paths.len()
+    );
     schema.sort_by(|a, b| a.name.cmp(&b.name));
 
     // 2. The prose, scraped from source and joined by name.

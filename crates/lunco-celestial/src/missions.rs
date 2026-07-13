@@ -275,9 +275,16 @@ pub fn update_spacecraft_position_system(
 ) {
     let jd = world.epoch_jd;
     for (sc, mut tf, cell, child_of) in q_spacecraft.iter_mut() {
-        let p_target = ephemeris.provider.global_position(sc.ephemeris_id, jd);
-        let p_ref = ephemeris.provider.global_position(sc.reference_id, jd);
-        let rel_pos = crate::coords::ecliptic_to_bevy(p_target - p_ref);
+        // P8(d): a spacecraft whose ephemeris CSV failed to fetch used to be placed at its
+        // reference body's centre — inside the Earth, looking exactly like a real position.
+        // Now it simply is not moved.
+        let (Some(p_target), Some(p_ref)) = (
+            ephemeris.provider.global_position(sc.ephemeris_id, jd),
+            ephemeris.provider.global_position(sc.reference_id, jd),
+        ) else {
+            continue;
+        };
+        let rel_pos = crate::coords::ecliptic_to_bevy(p_target - p_ref).raw();
 
         // Split through the parent (reference) grid so the spacecraft stays
         // within one cell — precise placement instead of a raw f32 at up to
@@ -307,8 +314,8 @@ pub fn update_spacecraft_position_system(
 
         // Point solar panels towards the Sun
         // Sun ID is 10
-        let p_sun = ephemeris.provider.global_position(10, jd);
-        let to_sun = crate::coords::ecliptic_to_bevy(p_sun - p_target).as_vec3().normalize_or_zero();
+        let Some(p_sun) = ephemeris.provider.global_position(10, jd) else { continue };
+        let to_sun = crate::coords::ecliptic_to_bevy(p_sun - p_target).raw().as_vec3().normalize_or_zero();
         if to_sun.length_squared() > 0.0 {
             // Bevy's look_to makes Local -Z point at the target.
             // Our panels are in the XY plane (width X, height Y), so they face +Z and -Z.

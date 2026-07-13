@@ -16,6 +16,19 @@ pub use lunco_core::GlobalEntityId as ApiEntityId;
 pub struct TelemetryFilter {
     pub names: Vec<String>,
     pub min_severity: Option<String>,
+    /// Cap the delivery rate for *this subscription*, in samples per second of simulation
+    /// time. `None` ⇒ every sample the channel produces.
+    ///
+    /// Independent of the channel's own `rate_hz`: a 60 Hz channel can feed a 1 Hz
+    /// dashboard without the dashboard drowning, and without slowing the channel down for
+    /// everyone else.
+    ///
+    /// **Caveat, stated honestly:** telemetry is delivered as ONE shared stream to all
+    /// connected clients, not fanned out per subscriber. So the effective decimation is
+    /// the *fastest* rate any matching subscriber asked for — a slow subscriber does not
+    /// throttle a fast one, and cannot. Per-subscriber fan-out would need a routed
+    /// transport; until then this is a stream-level cap, not a private one.
+    pub rate_hz: Option<f64>,
 }
 
 /// Transport-agnostic API request.
@@ -34,6 +47,12 @@ pub enum ApiRequest {
     ListEntities,
     DiscoverSchema,
     SubscribeTelemetry { filter: Option<TelemetryFilter> },
+    /// Cancel a subscription created by [`ApiRequest::SubscribeTelemetry`].
+    ///
+    /// `TelemetrySubscriptions::unsubscribe` existed from the start but **nothing could
+    /// reach it** — every subscription leaked for the life of the process, and a client
+    /// that reconnected accumulated a new one each time.
+    UnsubscribeTelemetry { id: u64 },
     /// Poll the outcome of a previously-accepted command by its
     /// `command_id` (the request id returned in `command_accepted`).
     QueryCommandResult { id: u64 },
@@ -77,16 +96,37 @@ pub struct TelemetryResponse {
     pub name: String,
     pub value: serde_json::Value,
     pub unit: String,
+    /// Absolute TDB epoch (Julian Date) — for wall-clock labelling and ephemeris
+    /// correlation. **Not a Δt timebase**: at JD magnitudes an `f64` has ~86 µs of
+    /// resolution left, so differencing two of these destroys the precision. Use
+    /// [`sim_secs`](Self::sim_secs).
     pub timestamp: f64,
+    /// Seconds on the sample's own time domain — starts near zero, keeps full `f64`
+    /// precision. **This is the field to plot against and to difference.** `None` for
+    /// discrete `TelemetryEvent`s, which are not sampled on a clock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sim_secs: Option<f64>,
+    /// The `api_id` of the entity that owns the channel. Parameter names are **not**
+    /// unique — two rovers both report `"motor_current"` — so a subscriber needs this
+    /// to tell them apart. `None` when the source entity has no global id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<u64>,
 }
 
 impl TelemetryResponse {
-    pub fn from_sampled(param: &lunco_core::telemetry::SampledParameter) -> Self {
+    /// `source` is the sampling entity's `GlobalEntityId`, resolved by the caller (the
+    /// observer has the world; this type does not).
+    pub fn from_sampled(
+        param: &lunco_core::telemetry::SampledParameter,
+        source: Option<u64>,
+    ) -> Self {
         Self {
             name: param.name.clone(),
             value: telemetry_value_to_json(&param.value),
             unit: param.unit.clone(),
             timestamp: param.timestamp,
+            sim_secs: Some(param.sim_secs),
+            source,
         }
     }
     pub fn from_event(event: &lunco_core::telemetry::TelemetryEvent) -> Self {
@@ -95,6 +135,10 @@ impl TelemetryResponse {
             value: telemetry_value_to_json(&event.data),
             unit: String::new(),
             timestamp: event.timestamp,
+            // A discrete event isn't sampled on a clock and has no domain time.
+            sim_secs: None,
+            // `TelemetryEvent` already carries its emitter as a gid; 0 = "no entity".
+            source: (event.source != 0).then_some(event.source),
         }
     }
 }

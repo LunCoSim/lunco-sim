@@ -15,8 +15,8 @@ use std::sync::Arc;
 #[derive(Debug)]
 struct StubEphemeris;
 impl EphemerisProvider for StubEphemeris {
-    fn position(&self, _body_id: i32, epoch_jd: f64) -> bevy::math::DVec3 {
-        bevy::math::DVec3::new(epoch_jd, 0.0, 0.0)
+    fn position(&self, _body_id: i32, epoch_jd: f64) -> Option<lunco_celestial::frames::EclipticAu> {
+        Some(lunco_celestial::frames::EclipticAu::new(bevy::math::DVec3::new(epoch_jd, 0.0, 0.0)))
     }
 }
 

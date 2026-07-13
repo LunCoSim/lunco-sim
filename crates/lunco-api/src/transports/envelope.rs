@@ -87,6 +87,9 @@ impl From<ApiRequestUnified> for ApiRequest {
             Some("SubscribeTelemetry") => ApiRequest::SubscribeTelemetry {
                 filter: env.filter.and_then(|v| serde_json::from_value(v).ok()),
             },
+            Some("UnsubscribeTelemetry") => ApiRequest::UnsubscribeTelemetry {
+                id: env.id.unwrap_or(0),
+            },
             None if env.command.is_some() => {
                 // Legacy format: {"command": "...", "params": {...}}
                 ApiRequest::ExecuteCommand {

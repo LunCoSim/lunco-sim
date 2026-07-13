@@ -251,6 +251,73 @@ pub struct SchematicTokens {
     pub canvas_paper: egui::Color32,
 }
 
+/// Plot / timeseries tokens — the colours every signal-plotting surface draws with.
+///
+/// [`series`](Self::series) is an **ordered** palette: a signal picks its colour by a
+/// stable hash of its path into this list, so the same signal is the same colour on the
+/// Graphs panel, in a canvas plot node, and in a `VizPanel` — and stays that colour
+/// across sessions.
+///
+/// It used to be a 12-entry Tab10 palette hardcoded inside `lunco-viz`, which meant plot
+/// colours ignored the active theme entirely (the same garish blues on a light theme as a
+/// dark one) and could not be re-themed. Deriving it from [`ColorPalette`] here puts plot
+/// colour where every other colour in the app already lives.
+///
+/// **Only ever APPEND to this list.** The index is a hash modulo its length, so changing
+/// the length re-colours every existing saved layout.
+#[derive(Clone, Debug)]
+pub struct PlotTokens {
+    /// Ordered series colours, indexed by a stable hash of the signal path.
+    pub series: Vec<egui::Color32>,
+    /// Colour for a signal whose value is out of range / non-finite, and for the
+    /// "no data" placeholder.
+    pub series_invalid: egui::Color32,
+}
+
+impl PlotTokens {
+    /// Map the raw palette onto the plot-series intent. The only site that does so.
+    ///
+    /// Twelve accents, ordered so that consecutive signals are maximally distinguishable
+    /// (warm/cool alternating) rather than in palette order, which would put four blues
+    /// next to each other.
+    pub fn from_palette(p: &ColorPalette) -> Self {
+        Self {
+            series: vec![
+                p.blue,
+                p.peach,
+                p.green,
+                p.red,
+                p.mauve,
+                p.teal,
+                p.yellow,
+                p.pink,
+                p.sky,
+                p.lavender,
+                p.maroon,
+                p.sapphire,
+            ],
+            series_invalid: p.overlay0,
+        }
+    }
+
+    /// Deterministic colour for a signal path. Same path ⇒ same colour, on every plot
+    /// surface and across sessions.
+    ///
+    /// FNV-1a, so it does not depend on `HashMap`'s randomised hasher (which would give a
+    /// different colour every run — the bug this function's fixed hash exists to avoid).
+    pub fn color_for_path(&self, path: &str) -> egui::Color32 {
+        if self.series.is_empty() {
+            return self.series_invalid;
+        }
+        let mut h: u32 = 0x811c_9dc5;
+        for b in path.as_bytes() {
+            h ^= *b as u32;
+            h = h.wrapping_mul(0x0100_0193);
+        }
+        self.series[(h as usize) % self.series.len()]
+    }
+}
+
 impl SchematicTokens {
     /// Build the semantic schematic-editor colours from a raw
     /// palette. This is the *only* site that maps palette entries
@@ -363,6 +430,9 @@ pub struct Theme {
     pub schematic: SchematicTokens,
     /// Edit-journal / history-log row colours, keyed by edit category.
     pub journal: JournalTokens,
+    /// Plot / timeseries colours. The signal-series palette lives here rather than
+    /// hardcoded in `lunco-viz`, so plots follow the active theme like everything else.
+    pub plot: PlotTokens,
     /// Anchor + invert rules for re-coloring authored Modelica icon
     /// primitives so MSL (designed for paper-white backgrounds) reads
     /// well under the active theme. Identity in light mode.
@@ -588,6 +658,7 @@ impl Theme {
         let tokens = DesignTokens::from_palette(&colors, ThemeMode::Dark);
         let schematic = SchematicTokens::from_palette(&colors);
         let journal = JournalTokens::from_palette(&colors);
+        let plot = PlotTokens::from_palette(&colors);
         let modelica_icons = ModelicaIconPalette::dark_default(&colors);
         Self {
             mode: ThemeMode::Dark,
@@ -595,6 +666,7 @@ impl Theme {
             tokens,
             schematic,
             journal,
+            plot,
             modelica_icons,
             spacing: SpacingScale::default(),
             rounding: RoundingScale::default(),
@@ -607,12 +679,14 @@ impl Theme {
         let tokens = DesignTokens::from_palette(&colors, ThemeMode::Light);
         let schematic = SchematicTokens::from_palette(&colors);
         let journal = JournalTokens::from_palette(&colors);
+        let plot = PlotTokens::from_palette(&colors);
         Self {
             mode: ThemeMode::Light,
             colors,
             tokens,
             schematic,
             journal,
+            plot,
             modelica_icons: ModelicaIconPalette::identity(),
             spacing: SpacingScale::default(),
             rounding: RoundingScale::default(),

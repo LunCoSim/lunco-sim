@@ -431,9 +431,17 @@ pub fn spawn_trajectory_update_task(
                 // aligned epoch — subtracted from every sample so the curve
                 // is expressed relative to the tracked body (see above).
                 let anchor = if anchored {
-                    let p_target = provider.global_position(view_copy.tracked_id, aligned_epoch);
-                    let p_ref = provider.global_position(view_copy.reference_id, aligned_epoch);
-                    crate::coords::ecliptic_to_bevy(p_target - p_ref)
+                    // No ephemeris for either end ⇒ no anchor. Falling back to ZERO would pin
+                    // the trajectory to the Sun's centre and look like a real answer.
+                    match (
+                        provider.global_position(view_copy.tracked_id, aligned_epoch),
+                        provider.global_position(view_copy.reference_id, aligned_epoch),
+                    ) {
+                        (Some(p_target), Some(p_ref)) => {
+                            crate::coords::ecliptic_to_bevy(p_target - p_ref).raw()
+                        }
+                        _ => bevy::math::DVec3::ZERO,
+                    }
                 } else {
                     bevy::math::DVec3::ZERO
                 };
@@ -448,9 +456,16 @@ pub fn spawn_trajectory_update_task(
                         let jd = start + (i as f64) * view_copy.sampling_step;
                         if jd > end { break; } // Don't overshoot
                         
-                        let p_target = provider.global_position(view_copy.tracked_id, jd);
-                        let p_ref = provider.global_position(view_copy.reference_id, jd);
-                        let mut rel_pos = crate::coords::ecliptic_to_bevy(p_target - p_ref);
+                        // A sample we cannot compute is a sample we do not plot — it used to
+                        // become a point at the Sun's centre, dragging a spurious line across
+                        // the whole solar system.
+                        let (Some(p_target), Some(p_ref)) = (
+                            provider.global_position(view_copy.tracked_id, jd),
+                            provider.global_position(view_copy.reference_id, jd),
+                        ) else {
+                            continue;
+                        };
+                        let mut rel_pos = crate::coords::ecliptic_to_bevy(p_target - p_ref).raw();
                         
                         if view_copy.frame == TrajectoryFrame::BodyFixed {
                             if let Some(desc) = registry_arc.bodies.iter().find(|b| b.ephemeris_id == view_copy.reference_id) {
@@ -473,10 +488,14 @@ pub fn spawn_trajectory_update_task(
                     
                     for i in -half_count..=half_count {
                         let jd = aligned_epoch + (i as f64) * view_copy.sampling_step;
-                        let p_target = provider.global_position(view_copy.tracked_id, jd);
-                        let p_ref = provider.global_position(view_copy.reference_id, jd);
-                        let mut rel_pos = crate::coords::ecliptic_to_bevy(p_target - p_ref);
-                        
+                        let (Some(p_target), Some(p_ref)) = (
+                            provider.global_position(view_copy.tracked_id, jd),
+                            provider.global_position(view_copy.reference_id, jd),
+                        ) else {
+                            continue; // no data for this sample — plot nothing, invent nothing
+                        };
+                        let mut rel_pos = crate::coords::ecliptic_to_bevy(p_target - p_ref).raw();
+
                         if view_copy.frame == TrajectoryFrame::BodyFixed {
                             if let Some(desc) = registry_arc.bodies.iter().find(|b| b.ephemeris_id == view_copy.reference_id) {
                                 // Share `geo::body_rotation` — the IAU model — rather than
@@ -808,11 +827,10 @@ pub fn trajectory_alignment_system(
                     // the tracked body), whatever f32 rounding the stored grid
                     // chain carries: the view is a CHILD of that grid, so it
                     // inherits the identical rounding.
-                    tracked_translation = ephemeris.as_ref().map(|e| {
-                        crate::coords::ecliptic_to_bevy(
-                            e.provider.global_position(view.tracked_id, jd)
-                                - e.provider.global_position(view.reference_id, jd),
-                        )
+                    tracked_translation = ephemeris.as_ref().and_then(|e| {
+                        let p_target = e.provider.global_position(view.tracked_id, jd)?;
+                        let p_ref = e.provider.global_position(view.reference_id, jd)?;
+                        Some(crate::coords::ecliptic_to_bevy(p_target - p_ref).raw())
                     });
                     break;
                 }

@@ -635,6 +635,64 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             commands.entity(entity).insert(lunco_cosim::sensors::ContactSensor::default());
         }
 
+        // USD-authored TELEMETRY channel → `lunco_core::telemetry::Parameter`.
+        //
+        // A channel is a named, rate-limited, clock-bound view of one live value. The
+        // source is either a PORT (the fast path — and note the sensors authored just
+        // above already expose ports, so `lunco:telemetry:port` can simply name one of
+        // them) or a reflection path (the escape hatch, for a field no port exposes).
+        //
+        // Only `retention` is measured in samples rather than seconds: it is what bounds
+        // memory, and letting someone raise the rate must not silently multiply the
+        // buffer. See docs/architecture/telemetry-subsystem.md.
+        if reader.scalar::<bool>(&sdf_path, "lunco:telemetry").unwrap_or(false) {
+            let port = lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:telemetry:port");
+            let reflect = lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:telemetry:reflect");
+            let source = match (port, reflect) {
+                (Some(p), _) => Some(lunco_core::telemetry::ChannelSource::Port(p)),
+                (None, Some(r)) => Some(lunco_core::telemetry::ChannelSource::Reflect(r)),
+                (None, None) => {
+                    warn!(
+                        "{sdf_path}: lunco:telemetry is set but neither lunco:telemetry:port \
+                         nor lunco:telemetry:reflect names a source — no channel authored"
+                    );
+                    None
+                }
+            };
+            if let Some(source) = source {
+                // Default the mnemonic to the port/field name rather than refusing: a
+                // channel whose name you didn't bother to pick is still a channel.
+                let name = lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:telemetry:name")
+                    .unwrap_or_else(|| match &source {
+                        lunco_core::telemetry::ChannelSource::Port(p) => p.clone(),
+                        lunco_core::telemetry::ChannelSource::Reflect(r) => r.clone(),
+                        // Not authorable from USD — a Diagnostic is engine-global, not a
+                        // property of a prim. `lunco-telemetry` publishes those itself.
+                        lunco_core::telemetry::ChannelSource::Diagnostic(d) => d.clone(),
+                    });
+                commands.entity(entity).insert(lunco_core::telemetry::Parameter {
+                    name,
+                    // The tag sits on the prim it measures — no indirection needed. (A channel
+                    // created through the API is its own entity and sets `target`, because a
+                    // Component caps an entity at one channel.)
+                    target: None,
+                    unit: lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:telemetry:unit")
+                        .unwrap_or_default(),
+                    source,
+                    rate_hz: reader.real(&sdf_path, "lunco:telemetry:rateHz"),
+                    // Absent ⇒ enabled. An authored channel is a live one; you turn it off
+                    // by saying so, not by forgetting to say anything.
+                    enabled: reader
+                        .scalar::<bool>(&sdf_path, "lunco:telemetry:enabled")
+                        .unwrap_or(true),
+                    deadband: reader.real(&sdf_path, "lunco:telemetry:deadband"),
+                    retention: reader
+                        .scalar::<i64>(&sdf_path, "lunco:telemetry:retention")
+                        .map(|n| n.max(1) as usize),
+                });
+            }
+        }
+
         // USD-authored celestial/comms vocabulary → lunco-celestial components
         // (geodetic anchors, Kepler orbits, comms antennas — doc 43).
         celestial::insert_celestial_comms_components(

@@ -374,16 +374,48 @@ const STATIC_TOOLS = [
   },
   {
     name: 'watch_ports',
-    description: 'Sample one entity\'s telemetry ports repeatedly in a single call and return the time-series — the realtime/streaming view within request/response MCP. Returns `{api_id, interval_ms, series:[{i, t_ms, <port>:<value>, ...}]}`. Use to watch a value evolve (settle, oscillate, diverge) without manual re-polling. Bounded: `samples`≤120, `interval_ms` 50–5000, total wall-clock ≤30 s (auto-clamped).',
+    description: 'Watch one entity\'s ports over time and return the time-series. Creates a real telemetry CHANNEL per port on the server (sampled on the SIMULATION clock at `rate_hz`, retained in a ring buffer), waits, then reads the exact history back. Returns `{api_id, channels, series:[{t, <port>:<value>}]}` where `t` is `sim_secs` — the precise simulation timebase, NOT wall-clock. This replaces the old client-side poll loop, which sampled at HTTP latency and silently missed anything faster than its interval. Channels are removed afterwards unless `keep: true`.',
     inputSchema: {
       type: 'object',
       properties: {
         api_id: { type: 'integer', description: 'Entity to watch (from list_entities / read_ports).' },
-        ports: { type: 'array', items: { type: 'string' }, description: 'Optional port-name allowlist (default: all of the entity\'s ports).' },
-        samples: { type: 'integer', description: 'Number of samples (default 10, max 120).', default: 10 },
-        interval_ms: { type: 'integer', description: 'Delay between samples in ms (default 200, clamped 50–5000).', default: 200 },
+        ports: { type: 'array', items: { type: 'string' }, description: 'Port names to watch (default: all of the entity\'s ports).' },
+        rate_hz: { type: 'number', description: 'Sampling rate in samples per SIMULATION second (default 20, capped server-side at the 60 Hz fixed step).', default: 20 },
+        duration_s: { type: 'number', description: 'Wall-clock seconds to let the sim run before reading the history back (default 2, max 30).', default: 2 },
+        keep: { type: 'boolean', description: 'Leave the channels in place afterwards so they keep recording (default false).', default: false },
       },
       required: ['api_id'],
+    },
+  },
+  {
+    name: 'list_telemetry_channels',
+    description: 'List every telemetry channel that exists: `{key, name, source, unit, rate_hz, deadband, enabled, samples, retention}`. `key` is `"<api_id>:<name>"` — names are NOT unique (two rovers both report "motor_current"), so the key carries the owning entity. This is the DICTIONARY an OpenMCT-style client needs before it can plot anything.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'query_telemetry_history',
+    description: 'Read a channel\'s retained history: `{key, samples:[{t, v}], epoch_jd}`. `t` is `sim_secs` (the precise simulation timebase — do NOT difference `epoch_jd`, a Julian Date has only ~86 us of f64 resolution left). Optionally windowed by `start`/`end` and capped by `limit` (which keeps the NEWEST samples). This is how a client sees what happened BEFORE it connected.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'Channel key, "<api_id>:<name>" (from list_telemetry_channels).' },
+        start: { type: 'number', description: 'Inclusive lower bound on sim_secs.' },
+        end: { type: 'number', description: 'Inclusive upper bound on sim_secs.' },
+        limit: { type: 'integer', description: 'Keep at most this many of the NEWEST samples.' },
+      },
+      required: ['key'],
+    },
+  },
+  {
+    name: 'export_telemetry_recording',
+    description: 'Export several channels as one columnar recording: `{times, series:{key:[v,...]}}` — the same shape experiments produce, so it plots and exports with no second code path. Channels sample at DIFFERENT rates, so `times` is the sorted union of all sample times and a channel\'s missing slots are `null` (never interpolated: a hole is data the channel genuinely never reported).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        keys: { type: 'array', items: { type: 'string' }, description: 'Channel keys (default: every channel).' },
+        start: { type: 'number', description: 'Inclusive lower bound on sim_secs.' },
+        end: { type: 'number', description: 'Inclusive upper bound on sim_secs.' },
+      },
     },
   },
 ];
@@ -808,34 +840,101 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'watch_ports': {
-        // Realtime view: sample one entity's ports `samples` times at
-        // `interval_ms` and return the time-series. Bounded so a single call
-        // can't run away (≤120 samples, 50–5000 ms, ≤30 s total wall-clock).
-        const { api_id, ports: portFilter } = args ?? {};
+        // Watch ports by creating REAL telemetry channels server-side, letting the sim run,
+        // then reading the exact history back.
+        //
+        // This used to be a client-side poll loop: `ListPorts` every 200 ms in JavaScript.
+        // That sampled at HTTP latency, on the WALL clock, so it silently missed anything
+        // faster than its interval, drifted with load, and kept sampling a PAUSED sim. A
+        // channel samples on the FIXED simulation clock at a rate you ask for, retains a ring
+        // buffer, and hands back exact `sim_secs` timestamps.
+        const { api_id, ports: portFilter, keep } = args ?? {};
         if (api_id === undefined) {
           return { content: [{ type: 'text', text: 'Error: `api_id` is required' }], isError: true };
         }
-        const interval = Math.min(5000, Math.max(50, Number(args?.interval_ms ?? 200)));
-        let samples = Math.min(120, Math.max(1, Number(args?.samples ?? 10)));
-        if (samples * interval > 30000) samples = Math.max(1, Math.floor(30000 / interval));
-        const allow = portFilter && portFilter.length ? new Set(portFilter) : null;
-        const series = [];
-        for (let i = 0; i < samples; i++) {
+        const rate_hz = Math.max(0.01, Number(args?.rate_hz ?? 20));
+        const duration_s = Math.min(30, Math.max(0.1, Number(args?.duration_s ?? 2)));
+
+        // Which ports? Default to everything the entity exposes.
+        let names = portFilter && portFilter.length ? portFilter : null;
+        if (!names) {
           const r = await executeCommand('ListPorts', { api_id });
-          if (r.error) {
-            return { content: [{ type: 'text', text: `Error: ${r.error}` }], isError: true };
-          }
-          const data = r.data ?? r;
-          const row = { i, t_ms: i * interval };
-          for (const p of data.ports ?? []) {
-            if (!allow || allow.has(p.name)) row[p.name] = p.value;
-          }
-          series.push(row);
-          if (i < samples - 1) await new Promise((res) => setTimeout(res, interval));
+          if (r.error) return { content: [{ type: 'text', text: `Error: ${r.error}` }], isError: true };
+          names = ((r.data ?? r).ports ?? []).map((p) => p.name);
         }
+        if (!names.length) {
+          return { content: [{ type: 'text', text: `Entity ${api_id} exposes no ports.` }], isError: true };
+        }
+
+        // One channel per port. `Parameter` is a Component, so each channel is its own entity
+        // targeting this one — which is why watching N ports on a single rover is possible.
+        for (const name of names) {
+          const r = await executeCommand('ControlTelemetry', {
+            entity: api_id, channel: name, port: name, rate_hz,
+          });
+          if (r.error) return { content: [{ type: 'text', text: `Error creating channel '${name}': ${r.error}` }], isError: true };
+        }
+
+        await new Promise((res) => setTimeout(res, duration_s * 1000));
+
+        const keys = names.map((n) => `${api_id}:${n}`);
+        const rec = await executeCommand('ExportTelemetryRecording', { keys });
+
+        if (!keep) {
+          for (const name of names) {
+            await executeCommand('ControlTelemetry', { channel: name, enabled: false });
+          }
+        }
+
+        if (rec.error) return { content: [{ type: 'text', text: `Error: ${rec.error}` }], isError: true };
+        const data = rec.data ?? rec;
+        // Columnar {times, series} → row-wise {t, port: value} for readability.
+        const series = (data.times ?? []).map((t, i) => {
+          const row = { t };
+          for (const name of names) {
+            const col = (data.series ?? {})[`${api_id}:${name}`];
+            if (col && col[i] !== null && col[i] !== undefined) row[name] = col[i];
+          }
+          return row;
+        });
         return {
-          content: [{ type: 'text', text: JSON.stringify({ api_id, samples, interval_ms: interval, series }, null, 2) }],
+          content: [{ type: 'text', text: JSON.stringify({
+            api_id, channels: keys, rate_hz, duration_s,
+            note: '`t` is sim_secs — the simulation timebase, not wall-clock.',
+            series,
+          }, null, 2) }],
         };
+      }
+
+      case 'list_telemetry_channels': {
+        const r = await executeCommand('ListTelemetryChannels', {});
+        if (r.error) return { content: [{ type: 'text', text: `Error: ${r.error}` }], isError: true };
+        return { content: [{ type: 'text', text: JSON.stringify(r.data ?? r, null, 2) }] };
+      }
+
+      case 'query_telemetry_history': {
+        const { key, start, end, limit } = args ?? {};
+        if (!key) {
+          return { content: [{ type: 'text', text: 'Error: `key` is required (see list_telemetry_channels)' }], isError: true };
+        }
+        const params = { key };
+        if (start !== undefined) params.start = start;
+        if (end !== undefined) params.end = end;
+        if (limit !== undefined) params.limit = limit;
+        const r = await executeCommand('QueryTelemetryHistory', params);
+        if (r.error) return { content: [{ type: 'text', text: `Error: ${r.error}` }], isError: true };
+        return { content: [{ type: 'text', text: JSON.stringify(r.data ?? r, null, 2) }] };
+      }
+
+      case 'export_telemetry_recording': {
+        const { keys, start, end } = args ?? {};
+        const params = {};
+        if (keys !== undefined) params.keys = keys;
+        if (start !== undefined) params.start = start;
+        if (end !== undefined) params.end = end;
+        const r = await executeCommand('ExportTelemetryRecording', params);
+        if (r.error) return { content: [{ type: 'text', text: `Error: ${r.error}` }], isError: true };
+        return { content: [{ type: 'text', text: JSON.stringify(r.data ?? r, null, 2) }] };
       }
 
       case 'compile_model': {

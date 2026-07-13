@@ -78,6 +78,9 @@ impl Visualization for LinePlot {
     fn compatible_views(&self) -> &'static [ViewKind] { &[ViewKind::Panel2D] }
 
     fn render_panel_2d(&self, ctx: &mut Panel2DCtx, config: &VisualizationConfig) {
+        // Series colours come from the active THEME (`PlotTokens::series`), published
+        // into the egui data cache once per frame — plots re-theme like everything else.
+        let theme = lunco_theme::active(ctx.ui.ctx());
         // Toolbar first — lets the user edit bindings even before
         // any signal data arrives. Returns the mutation the user
         // requested, which we apply after releasing the read borrow
@@ -185,7 +188,7 @@ impl Visualization for LinePlot {
                 });
                 let color = b
                     .color
-                    .unwrap_or_else(|| crate::signal::color_for_signal(&b.source.path));
+                    .unwrap_or_else(|| crate::signal::color_for_signal(&theme, &b.source.path));
                 Some(Line::new(label, PlotPoints::new(pts)).color(color))
             })
             .collect();

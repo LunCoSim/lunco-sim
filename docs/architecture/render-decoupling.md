@@ -125,9 +125,28 @@ Not everything visual is *appearance*. Three things had no honest intent represe
 - **`terrain_maps`** — the derived-layer bind onto the terrain material that `lunco-usd-sim` authors
   asynchronously (no component to restate).
 
-Screenshots deliberately do **not** live there: `CaptureScreenshot` has exactly one implementation, in
-`lunco-api::executor`, which must own it because raw-PNG mode defers the HTTP response until
-`ScreenshotCaptured` fires.
+Screenshots do **not** live there either — but not for the reason this document used to give.
+`CaptureScreenshot` needs `bevy_render`, and that dependency sat inside **`lunco-api`** behind a
+`render` feature that was **on by default**. So render-free was the *non-default* path, every consumer
+had to remember `default-features = false`, and **three forgot** (`lunco-doc-bevy`,
+`lunco-celestial`/`lunco-tutorial`, `lunco-telemetry`) — each silently re-linking wgpu into the
+`--no-ui` server. **An unsafe default is a trap that fires forever.**
+
+The GPU half now lives in **`lunco-workbench::screenshot`**, and `lunco-api` has no `render` feature at
+all: it *cannot* link a renderer. Not `lunco-render-bevy`, because **`lunica` takes screenshots and has
+no 3D renderer** — it links `bevy_render` through egui but never adds `LuncoRenderPlugin`. The right
+home was the smallest crate for which "this binary can render *something*" is already true, and both
+GUI binaries already add it.
+
+`lunco-api` keeps only the DISPATCH, because raw-PNG mode must defer the HTTP response until the capture
+lands and only the executor knows the correlation id. That deferral is now **generic**
+(`register_deferred_command::<T>()`), so the substrate no longer names a domain command — and a
+`DeferredRequests` watchdog turns a handler that forgets to answer into an error instead of a hung
+caller.
+
+**Feature placement trap:** enable `lunco-workbench/api` from a crate's **`ui`** feature, never from its
+`lunco-api` feature. The headless server enables `lunco-api` too, and hanging the workbench off it drags
+egui + wgpu straight back in. (This regression happened, and the guard caught it.)
 
 ## Why this needs a machine, not vigilance
 

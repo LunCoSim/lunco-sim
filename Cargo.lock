@@ -6884,7 +6884,6 @@ dependencies = [
  "axum",
  "base64",
  "bevy",
- "image",
  "lunco-core",
  "lunco-fsw",
  "serde",
@@ -6892,7 +6891,6 @@ dependencies = [
  "tokio",
  "wasm-bindgen",
  "wasm-bindgen-futures",
- "web-time",
 ]
 
 [[package]]
@@ -6928,14 +6926,6 @@ dependencies = [
  "web-sys",
  "which",
  "zstd",
-]
-
-[[package]]
-name = "lunco-attributes"
-version = "0.6.0-dev"
-dependencies = [
- "bevy",
- "lunco-core",
 ]
 
 [[package]]
@@ -7303,14 +7293,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lunco-obc"
-version = "0.6.0-dev"
-dependencies = [
- "bevy",
- "lunco-core",
-]
-
-[[package]]
 name = "lunco-obstacle-field"
 version = "0.1.0-dev"
 dependencies = [
@@ -7404,6 +7386,7 @@ dependencies = [
  "lunco-scripting",
  "lunco-settings",
  "lunco-storage",
+ "lunco-telemetry",
  "lunco-terrain-globe",
  "lunco-terrain-surface",
  "lunco-theme",
@@ -7511,6 +7494,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-signal"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "serde",
+]
+
+[[package]]
 name = "lunco-storage"
 version = "0.1.0"
 dependencies = [
@@ -7529,8 +7520,13 @@ name = "lunco-telemetry"
 version = "0.6.0-dev"
 dependencies = [
  "bevy",
+ "lunco-api",
  "lunco-core",
+ "lunco-settings",
+ "lunco-signal",
  "lunco-time",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -7794,6 +7790,7 @@ dependencies = [
  "bevy_egui",
  "egui_plot",
  "lunco-canvas",
+ "lunco-signal",
  "lunco-theme",
  "lunco-workbench",
  "serde",
@@ -7817,7 +7814,9 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "egui_dock",
+ "image",
  "js-sys",
+ "lunco-api",
  "lunco-assets",
  "lunco-core",
  "lunco-doc",

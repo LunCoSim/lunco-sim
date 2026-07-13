@@ -14,6 +14,7 @@
 
 use bevy::prelude::*;
 use bevy::math::DVec3;
+use lunco_celestial::frames::{EclipticAu, IcrfAu};
 use celestial_time::TDB;
 use celestial_time::julian::JulianDate;
 use celestial_ephemeris::{Vsop2013Earth, Vsop2013Sun, planets::Vsop2013Emb, moon::ElpMpp02Moon};
@@ -42,9 +43,37 @@ pub struct CelestialEphemerisProvider {
     // blocking app startup. Reads on the (hot) `position` path take an
     // uncontended read lock.
     custom_data: Arc<RwLock<HashMap<i32, Vec<CsvDataPoint>>>>,
+    /// body → parent, THE gravitational hierarchy. Read from `BodyRegistry` (the registry's
+    /// `BodyDescriptor::parent_id` is the single source of truth) plus each mission's own
+    /// declared `center`.
+    ///
+    /// P8(c): this used to be a `match` hardcoded in `EphemerisProvider::global_position`,
+    /// duplicating the registry — and the two had already drifted apart (the `match` knew
+    /// mission id `-1024`; the registry did not). Two descriptions of the shape of the solar
+    /// system is one too many.
+    parents: Arc<RwLock<HashMap<i32, i32>>>,
 }
 
 const AU_KM: f64 = 149_597_870.7;
+
+/// A JPL Horizons `CENTER` (`"@399"`, `"500@399"`, `"399"`) → NAIF id.
+///
+/// A mission's own config already says what it orbits, so the mission half of the tree comes
+/// from the mission — not from a `match` arm someone has to remember to add. (The old hardcoded
+/// tree knew exactly ONE mission id, `-1024`. The second mission would have rendered at the
+/// Sun.)
+fn parse_center(center: &str) -> Option<i32> {
+    center.rsplit('@').next()?.trim().parse::<i32>().ok()
+}
+
+/// The parent tree, straight out of the body registry — no second copy.
+fn parents_from_registry() -> HashMap<i32, i32> {
+    lunco_celestial::CelestialBodyRegistry::default_system()
+        .bodies
+        .iter()
+        .filter_map(|b| b.parent_id.map(|p| (b.ephemeris_id, p)))
+        .collect()
+}
 
 /// Parse JPL-Horizons CSV vector text into sorted [`CsvDataPoint`]s.
 /// Lines with `$$` markers and blanks are skipped. Column layout:
@@ -65,7 +94,12 @@ fn parse_ephemeris_csv(text: &str) -> Vec<CsvDataPoint> {
             ) {
                 points.push(CsvDataPoint {
                     jd,
-                    pos_au: DVec3::new(x / AU_KM, y / AU_KM, z / AU_KM),
+                    // ASSERTED ecliptic, because the mission JSON asked JPL for
+                    // `REF_PLANE=ECLIPTIC`. Still UNVALIDATED: a mission asking for `FRAME`
+                    // would re-introduce the Shackleton bug for that one body, silently. The
+                    // newtype makes the downstream plumbing safe; it cannot check what JPL
+                    // was asked for.
+                    pos_au: EclipticAu::new(DVec3::new(x / AU_KM, y / AU_KM, z / AU_KM)),
                 });
             }
         }
@@ -107,6 +141,8 @@ impl CelestialEphemerisProvider {
     #[allow(clippy::disallowed_methods)]
     fn load_local() -> (Self, Vec<PendingFetch>) {
         let mut custom_data: HashMap<i32, Vec<CsvDataPoint>> = HashMap::new();
+        // The tree comes from the registry; missions add their own declared centre below.
+        let mut parents: HashMap<i32, i32> = parents_from_registry();
         let mut pending = Vec::new();
         let missions_dir = lunco_assets::assets_dir().join("missions");
 
@@ -130,6 +166,15 @@ impl CelestialEphemerisProvider {
                     if std::path::Path::new(&csv_path).exists() {
                         if let Ok(text) = std::fs::read_to_string(&csv_path) {
                             custom_data.insert(src.target_id, parse_ephemeris_csv(&text));
+                            match parse_center(&src.center) {
+                                Some(parent) => { parents.insert(src.target_id, parent); }
+                                None => warn!(
+                                    "[ephemeris] mission {} has an unparseable center '{}' — it \
+                                     will be treated as heliocentric, which is almost certainly \
+                                     not what you meant",
+                                    src.target_id, src.center
+                                ),
+                            }
                         }
                     } else {
                         // Queue for background fetch instead of blocking here.
@@ -177,6 +222,7 @@ impl CelestialEphemerisProvider {
                 emb: Vsop2013Emb,
                 moon: ElpMpp02Moon::new(),
                 custom_data: Arc::new(RwLock::new(custom_data)),
+                parents: Arc::new(RwLock::new(parents)),
             },
             pending,
         )
@@ -185,6 +231,7 @@ impl CelestialEphemerisProvider {
     /// Wasm32 constructor that accepts embedded ephemeris CSV data.
     pub fn new_with_embedded_ephemeris(ephemeris_csvs: &[(&str, &str)]) -> Self {
         let mut custom_data = std::collections::HashMap::new();
+        let parents = parents_from_registry();
         for (target_id_str, csv_content) in ephemeris_csvs {
             if let Ok(target_id) = target_id_str.parse::<i32>() {
                 let mut points = Vec::new();
@@ -200,7 +247,7 @@ impl CelestialEphemerisProvider {
                         ) {
                             points.push(CsvDataPoint {
                                 jd,
-                                pos_au: DVec3::new(x / AU_KM, y / AU_KM, z / AU_KM),
+                                pos_au: EclipticAu::new(DVec3::new(x / AU_KM, y / AU_KM, z / AU_KM)),
                             });
                         }
                     }
@@ -214,6 +261,7 @@ impl CelestialEphemerisProvider {
             earth: Vsop2013Earth::new(),
             emb: Vsop2013Emb,
             moon: ElpMpp02Moon::new(),
+            parents: Arc::new(RwLock::new(parents)),
             custom_data: Arc::new(RwLock::new(custom_data)),
         }
     }
@@ -237,54 +285,70 @@ impl Default for CelestialEphemerisProvider {
 /// unconverted tilts every "up"/"north" by 23.4°: measured at the Shackleton
 /// site anchor this rendered the sun ~45° below the horizon (pitch-black
 /// ground) instead of the real grazing ~1°.
-fn equatorial_to_ecliptic(p: DVec3) -> DVec3 {
-    let epsilon = (23.439281f64).to_radians();
+///
+/// **It is now typed**, and that is the fix that outlives the incident: it takes an [`IcrfAu`]
+/// and returns an [`EclipticAu`], so it is the ONLY way to produce the frame the
+/// `EphemerisProvider` contract promises. A raw `DVec3` from VSOP/ELP cannot skip it, and the
+/// geodesy downstream will not accept anything else. The bug is no longer a thing you can write.
+///
+/// The obliquity comes from `lunco_celestial::iau::OBLIQUITY_J2000_DEG` — the same constant the
+/// IAU pole transform uses. It used to be a second literal here, with a comment in `iau.rs`
+/// begging the two to agree; if they ever drifted, every "north" in the sim would be wrong by
+/// the difference, silently.
+pub fn equatorial_to_ecliptic(p: IcrfAu) -> EclipticAu {
+    let epsilon = lunco_celestial::iau::OBLIQUITY_J2000_DEG.to_radians();
     let (sin_e, cos_e) = epsilon.sin_cos();
-    DVec3::new(
+    let p = p.raw();
+    EclipticAu::new(DVec3::new(
         p.x,
         p.y * cos_e + p.z * sin_e,
         -p.y * sin_e + p.z * cos_e,
-    )
+    ))
 }
 
 impl EphemerisProvider for CelestialEphemerisProvider {
-    fn position(&self, body_id: i32, epoch_jd: f64) -> DVec3 {
+    /// P8(c): read from the tree, which is the registry's — not a `match` that duplicates it.
+    fn parent_id(&self, body_id: i32) -> Option<i32> {
+        self.parents.read().ok()?.get(&body_id).copied()
+    }
+
+    fn position(&self, body_id: i32, epoch_jd: f64) -> Option<EclipticAu> {
         let julian = JulianDate::new(epoch_jd, 0.0);
         let tdb = TDB::from_julian_date(julian);
 
         match body_id {
-            10 => DVec3::ZERO,
+            10 => Some(EclipticAu::ZERO), // the Sun IS the origin of this frame
             3 => {
                 let p = self.emb.heliocentric_position(&tdb).unwrap_or_else(|_| Vector3::zeros());
-                equatorial_to_ecliptic(DVec3::new(p.x, p.y, p.z))
+                Some(equatorial_to_ecliptic(IcrfAu::new(DVec3::new(p.x, p.y, p.z))))
             }
             399 => {
                 let p_emb = self.emb.heliocentric_position(&tdb).unwrap_or_else(|_| Vector3::zeros());
                 let p_earth = self.earth.heliocentric_position(&tdb).unwrap_or_else(|_| Vector3::zeros());
-                equatorial_to_ecliptic(DVec3::new(
+                Some(equatorial_to_ecliptic(IcrfAu::new(DVec3::new(
                     p_earth.x - p_emb.x,
                     p_earth.y - p_emb.y,
                     p_earth.z - p_emb.z,
-                ))
+                ))))
             }
             301 => {
                 let p_m_geo_arr = self.moon.geocentric_position_icrs(&tdb).unwrap_or_else(|_| [0.0, 0.0, 0.0]);
                 const AU_KM: f64 = 149_597_870.7;
-                let p_m_geo_au = equatorial_to_ecliptic(DVec3::new(
+                let p_m_geo_au = equatorial_to_ecliptic(IcrfAu::new(DVec3::new(
                     p_m_geo_arr[0] / AU_KM,
                     p_m_geo_arr[1] / AU_KM,
                     p_m_geo_arr[2] / AU_KM,
-                ));
+                )));
 
                 let p_emb = self.emb.heliocentric_position(&tdb).unwrap_or_else(|_| Vector3::zeros());
                 let p_earth = self.earth.heliocentric_position(&tdb).unwrap_or_else(|_| Vector3::zeros());
-                let p_earth_rel_emb = equatorial_to_ecliptic(DVec3::new(
+                let p_earth_rel_emb = equatorial_to_ecliptic(IcrfAu::new(DVec3::new(
                     p_earth.x - p_emb.x,
                     p_earth.y - p_emb.y,
                     p_earth.z - p_emb.z,
-                ));
+                )));
 
-                p_m_geo_au + p_earth_rel_emb
+                Some(p_m_geo_au + p_earth_rel_emb)
             }
             other_id => {
                 // Uncontended read lock; the background fetch only takes a
@@ -292,18 +356,31 @@ impl EphemerisProvider for CelestialEphemerisProvider {
                 let guard = self.custom_data.read().unwrap_or_else(|e| e.into_inner());
                 if let Some(data) = guard.get(&other_id) {
                     if !data.is_empty() {
-                        if epoch_jd <= data.first().unwrap().jd { return data.first().unwrap().pos_au; }
-                        if epoch_jd >= data.last().unwrap().jd { return data.last().unwrap().pos_au; }
+                        if epoch_jd <= data.first().unwrap().jd { return Some(data.first().unwrap().pos_au); }
+                        if epoch_jd >= data.last().unwrap().jd { return Some(data.last().unwrap().pos_au); }
                         let idx = data.partition_point(|p| p.jd <= epoch_jd);
                         if idx > 0 && idx < data.len() {
                             let p0 = &data[idx - 1];
                             let p1 = &data[idx];
                             let t = (epoch_jd - p0.jd) / (p1.jd - p0.jd);
-                            return p0.pos_au.lerp(p1.pos_au, t);
+                            return Some(p0.pos_au.lerp(p1.pos_au, t));
                         }
                     }
                 }
-                DVec3::ZERO
+                // P8(d): an unknown id — or a body whose CSV failed to fetch — lands HERE, at
+                // the parent's centre, indistinguishable from a valid position. A failed
+                // Mars fetch renders Mars inside the Sun and nothing says so. Making this an
+                // `Option<EclipticAu>` is the right fix and is now CHEAP (the type is already
+                // threaded); it forces all ~22 call sites to decide what "no ephemeris" means,
+                // P8(d) FIXED. This used to return ZERO — a *position* — so a body whose CSV
+                // failed to fetch rendered at its parent's centre, indistinguishable from a
+                // real result. `None` says what is actually true: we do not know. Callers now
+                // skip the body rather than drawing it inside the Sun.
+                bevy::log::warn_once!(
+                    "[ephemeris] no data for NAIF id {body_id} — it will not be placed. \
+                     (Previously it was drawn at its parent's centre, silently.)"
+                );
+                None
             }
         }
     }
@@ -314,11 +391,15 @@ mod frame_tests {
     use super::*;
     use lunco_celestial::{solar_tangent_frame, CelestialBodyRegistry, Geodetic};
 
-    /// Ecliptic (AU) → Bevy axes, direction-only (mirrors
-    /// `lunco_celestial::coords::ecliptic_to_bevy` sans the meter scale).
-    fn ecl_to_bevy(p: DVec3) -> DVec3 {
-        DVec3::new(p.x, p.z, -p.y)
-    }
+    /// The REAL conversion, not a copy of it.
+    ///
+    /// This used to be a hand-rolled `fn ecl_to_bevy` here — a second implementation of
+    /// `lunco_celestial::coords::ecliptic_to_bevy`, written only because that one was
+    /// `pub(crate)` and therefore unreachable from this crate. A conversion people have to copy
+    /// is a conversion that drifts, and this pair is the one whose drift once put the sun 45°
+    /// below the horizon. `coords` is now `pub`, so the test exercises the same code the
+    /// product does.
+    use lunco_celestial::coords::ecliptic_to_bevy;
 
     /// End-to-end frame check: with the provider's equatorial→ecliptic
     /// conversion and the tilt-aware geodesy, the sun's elevation at the
@@ -337,10 +418,10 @@ mod frame_tests {
         let mut best = (0.0_f64, f64::MIN);
         for step in 0..=(366 * 4) {
             let jd = 2461228.5 + step as f64 * 0.25; // 6 h steps from 2026-07-07
-            let p_moon = provider.global_position(301, jd); // ecliptic, AU
-            let center_m = ecl_to_bevy(p_moon) * 1.495_978_707e11;
+            let p_moon = provider.global_position(301, jd).expect("VSOP/ELP always have the Moon");
+            let center_m = ecliptic_to_bevy(p_moon).raw();
             let frame = solar_tangent_frame(moon, &site, center_m, jd);
-            let to_sun = ecl_to_bevy(-p_moon).normalize();
+            let to_sun = ecliptic_to_bevy(-p_moon).normalize().raw();
             let elev_deg = to_sun.dot(frame.up).clamp(-1.0, 1.0).asin().to_degrees();
             assert!(
                 elev_deg.abs() < 2.5,
@@ -386,10 +467,12 @@ mod frame_tests {
             let jd = 2_451_545.0 + step as f64 * 11.0;
 
             // Earth as seen from the Moon, in the engine (ecliptic-Bevy) frame.
-            let to_earth = ecl_to_bevy(
-                provider.global_position(399, jd) - provider.global_position(301, jd),
+            let to_earth = ecliptic_to_bevy(
+                provider.global_position(399, jd).expect("Earth")
+                    - provider.global_position(301, jd).expect("Moon"),
             )
-            .normalize();
+            .normalize()
+            .raw();
 
             // Into the Moon's body-fixed frame → the sub-Earth geodetic point.
             let body_fixed = body_rotation(moon, jd).inverse() * to_earth;

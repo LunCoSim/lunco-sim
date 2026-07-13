@@ -122,7 +122,12 @@ pub fn anchor_solar_frame_to_site(
         else {
             return;
         };
-        let body_center = ecliptic_to_bevy(ephemeris.provider.global_position(anchor.body, jd));
+        // No ephemeris ⇒ we do not know where the body IS, so we cannot anchor a site to it.
+        // Leaving the anchor un-placed is honest; placing it at the Sun's centre is not.
+        let Some(p) = ephemeris.provider.global_position(anchor.body, jd) else {
+            return;
+        };
+        let body_center = ecliptic_to_bevy(p).raw();
         let frame = solar_tangent_frame(desc, &anchor.geodetic, body_center, jd);
         // Rows East/Up/−North → world axes.
         let align = DQuat::from_mat3(&bevy::math::DMat3::from_cols(

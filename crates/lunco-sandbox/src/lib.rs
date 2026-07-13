@@ -252,6 +252,13 @@ fn run_with_mode(headless: bool) -> AppExit {
 /// sync component hooks that expect them. [`SandboxHeadlessPlugin`] adds
 /// `SyncWorldPlugin` back to keep despawns from aborting; see the note there.
 fn default_plugins(headless: bool) -> bevy::app::PluginGroupBuilder {
+    // `bevy::render` EXISTS ONLY IN A `ui` BUILD. The no-`ui` server does not link
+    // bevy_render at all (that is the point of the render decoupling), so every
+    // `bevy::render::*` path below must be gated — an ungated one does not merely link a
+    // GPU stack, it fails to compile. It did: `cargo check -p lunco-sandbox-server` was
+    // broken, and nothing caught it because `--workspace` unifies `ui` on and the CI render
+    // guard only runs `cargo tree` (which resolves the graph but never builds it).
+    #[cfg(feature = "ui")]
     use bevy::render::settings::WgpuSettings;
     // `headless` only selects render/window config in `ui` builds; a no-`ui`
     // build is always windowless, so the param is unused there.
@@ -302,8 +309,6 @@ fn default_plugins(headless: bool) -> bevy::app::PluginGroupBuilder {
     } else {
         lunco_workbench::preferred_wgpu_settings().into()
     };
-    #[cfg(not(feature = "ui"))]
-    let render_creation = WgpuSettings { backends: None, ..default() }.into();
 
     let group = DefaultPlugins
         .set(AssetPlugin {
@@ -317,8 +322,12 @@ fn default_plugins(headless: bool) -> bevy::app::PluginGroupBuilder {
             // Quieten third-party noise (rumoca JIT + diffsol per-step).
             filter: "wgpu=error,naga=warn,cranelift=warn,cranelift_jit=warn,cranelift_codegen=warn,diffsol=warn,info".into(),
             ..default()
-        })
-        .set(bevy::render::RenderPlugin { render_creation, ..default() });
+        });
+
+    // Only a `ui` build has a render stack to configure. Without `ui`, `DefaultPlugins`
+    // carries no `RenderPlugin` (bevy_render isn't linked) and there is nothing to set.
+    #[cfg(feature = "ui")]
+    let group = group.set(bevy::render::RenderPlugin { render_creation, ..default() });
 
     // Window/winit setup. With the `ui` feature the runtime `headless` flag still
     // picks the windowless variant (no primary window, WinitPlugin disabled).
@@ -1610,6 +1619,15 @@ impl Plugin for SandboxCorePlugin {
             .add_plugins(CoSimPlugin)
             .add_plugins(lunco_core::LunCoCorePlugin)
             .add_plugins(lunco_core::WorldShellPlugin)
+            // Parameter telemetry — the PRODUCER of `SampledParameter`. Its consumer
+            // side (`lunco_api`'s `sampled_param_observer`, i.e. `SubscribeTelemetry`,
+            // plus `TelemetryResponse::from_sampled` and core's logger) was already
+            // shipped and wired; this plugin was the one missing link, so the API
+            // advertised parameter telemetry that could never arrive. Costs nothing
+            // until someone authors a `Parameter` (the sampler is `run_if`-gated on
+            // one existing), and it samples on the FIXED clock, so headless runs get a
+            // stable telemetry rate instead of one that tracks the frame rate.
+            .add_plugins(lunco_telemetry::LunCoTelemetryPlugin)
             // Canonical Twin change-journal (op log). CORE substrate, not UI:
             // it must exist on the headless server + every client so authored
             // edits are recorded (the domain registries' `wire_*_journal_handle`
@@ -1727,6 +1745,7 @@ impl Plugin for SandboxCorePlugin {
         // in the GUI and the headless compile server alike.
         #[cfg(feature = "lunco-api")]
         app.add_plugins(lunco_api::LunCoApiPlugin::default());
+
 
         // Durable twin history for headless (`lunco-sandbox-server` / any
         // `--no-ui` host): the SAME twin-folder-scoped persistence the GUI uses
@@ -3132,6 +3151,10 @@ impl Plugin for SandboxHeadlessPlugin {
         // Upstream shape: bevy registers hooks that assume a plugin it may not have
         // added. Re-test on the next bevy bump and drop this if it starts adding
         // `SyncWorldPlugin` unconditionally.
+        // ONLY in a `ui` build. The hooks this works around are installed by
+        // `RenderPlugin` itself — with no bevy_render linked (the `--no-ui` server) there
+        // are no render-sync hooks, so there is nothing to repair and no plugin to add.
+        #[cfg(feature = "ui")]
         app.add_plugins(bevy::render::sync_world::SyncWorldPlugin);
 
         // No winit event loop drives updates headless, so install a runner that

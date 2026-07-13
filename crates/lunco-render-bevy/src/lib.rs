@@ -59,13 +59,15 @@ use lunco_render::{PbrLook, PbrLookKey, SurfaceAlpha};
 /// - `env_light` — the `bloom` arm of `SetEnvironmentLight` (from `lunco-environment`);
 /// - `terrain_maps` — the derived-layer bind onto the async USD terrain material.
 ///
-/// **Screenshots deliberately do NOT live here.** `CaptureScreenshot` has exactly one
-/// implementation, in `lunco-api::executor` — which has to own it, because raw-PNG
-/// mode defers the HTTP response until `ScreenshotCaptured` fires. A second
-/// `#[Command]` + observer once existed (in `lunco-avatar`, and briefly here) that
-/// also spawned `Screenshot::primary_window()`; it was **unreachable dead code**,
-/// because `execute_request` matches the command by name and returns early. It is
-/// gone. Do not re-add it.
+/// **Screenshots deliberately do NOT live here** — they live in
+/// `lunco_workbench::screenshot`. This crate is the 3D *material* binder, and `lunica`
+/// takes screenshots without ever adding it; putting capture here would silently kill the
+/// Modelica workbench's screenshots. The workbench is the smallest crate for which "this
+/// binary can render something" is already true, and both GUI binaries add it.
+///
+/// A second `#[Command]` + observer once existed (in `lunco-avatar`, and briefly here) that
+/// also spawned `Screenshot::primary_window()`; it was **unreachable dead code**. Gone. Do
+/// not re-add it.
 pub struct LuncoRenderPlugin;
 
 impl Plugin for LuncoRenderPlugin {

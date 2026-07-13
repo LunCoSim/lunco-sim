@@ -9,12 +9,14 @@ description = "Native Modelica simulation integration for LunCoSim using Rumoca"
 # --api` Just Works for screenshot-driven debugging. Building without it
 # (`cargo build --no-default-features`) drops the axum/tokio web stack,
 # which matters for the wasm32 binary.
-default = ["lunco-api", "lunco-api/transport-http", "lunco-api/render", "ui", "scripting"]
+default = ["lunco-api", "lunco-api/transport-http", "ui", "scripting"]
 # The egui Modelica IDE: panels, diagram canvas, plots, docs viewer. OFF ⇒ the
 # compile core (ModelicaCorePlugin) builds headless — no egui/winit, no lyon,
 # no workbench shell. Consumers that need only the compiler (lunco-usd-sim on a
 # server) build with `default-features = false`.
 ui = [
+    # Screenshot backend — workbench-only, and NOT on `lunco-api` (a server build enables that).
+    "lunco-workbench/api",
     "dep:bevy_egui", "dep:lunco-theme", "dep:lunco-workbench", "dep:lunco-ui",
     "dep:lunco-viz", "dep:lunco-canvas", "dep:egui_plot", "dep:egui_commonmark",
     "dep:egui_extras", "dep:htmd", "dep:lyon_tessellation", "dep:lyon_path",
@@ -35,7 +37,7 @@ ui = [
 # `window.lunco_api` JS bridge automatically via `cfg(target_arch="wasm32")`.
 lunco-api = ["dep:lunco-api"]
 # Headless Modelica compile/run server: the HTTP API, no `ui`. Build the lunica
-# bin with `--no-default-features --features server`. No `lunco-api/render` (the
+# bin with `--no-default-features --features server`. No screenshot backend (`lunco-workbench/api`; the
 # server captures no screenshots) and no winit/egui.
 server = ["lunco-api", "lunco-api/transport-http"]
 # In-app rhai scripting: run/hot-reload scenarios and drive the workbench from

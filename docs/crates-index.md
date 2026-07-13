@@ -53,7 +53,6 @@ The "Brains and Brawn" — Flight Software (FSW), On-Board Computer (OBC), mobil
 | **`lunco-mobility`** | Parameterized surface-vehicle physics: contact-plane raycast wheels (incl. leaning bikes), suspension, drive mixing, rocker-bogie differential. |
 | **`lunco-robotics`** | High-level assembly logic and rover structural definitions (`assembler`). |
 | **`lunco-avatar`** | Human-interaction layer: composable camera **rigs** (SpringArm, Orbit, FreeFlight, Surface) and control intents. (Camera *selection* / viewport lives in `lunco-usd-bevy` + `lunco-core::SceneViewport`.) |
-| **`lunco-obc`** | Hardware interface emulation (ADC/DAC) between digital FSW registers and physical units. |
 | **`lunco-fsw`** | Decentralized Flight Software architecture for coordinating vessel subsystems (GNC, Power, etc.). |
 | **`lunco-hardware`** | Concrete physical actuators and sensors bridging `PhysicalPort` values to the `avian3d` physics engine. |
 | **`lunco-controller`** | Translation of raw user input (Keyboard/Gamepad) into typed `VesselIntent` actions for FSW. Yields a vessel to its owning session (spec 034), so the human never fights an autopilot. |
@@ -81,8 +80,8 @@ External communication, ECS replication, telemetry extraction, and distributed a
 | :--- | :--- |
 | **`lunco-networking`** | Multiplayer layer: transport-agnostic replication, authentication, and collaborative edit logs. Host-authoritative planes broadcast on connect + change: the **journal plane** (convergent op-log merge), the **scenario plane** (CID asset manifest + scenario sync), the **scripted-policy plane** (rhai merge/authorize/drive-kernel hooks distributed so every peer runs the identical one), and per-peer AOI snapshot routing. |
 | **`lunco-api`** | Transport-agnostic API core: introspection-based command discovery and ULID entity registry. |
-| **`lunco-telemetry`** | Generic reflection-based data extraction engine for "No-Code" telemetry mirroring. |
-| **`lunco-attributes`** | String-based distributed tuning registry for mapping SysML paths to raw ECS memory. |
+| **`lunco-telemetry`** | Telemetry channels: per-channel rate + deadband, bound to a `TimeDomain` (so pause/warp come free), retained in `lunco-signal`'s ring buffer, plus the OpenMCT-shaped query surface (catalog / history / recording). |
+| **`lunco-signal`** | The signal DATA model — `SignalRegistry`, `SignalRef`, `ScalarHistory` (per-signal ring buffer). **Render-free by construction**: split out of `lunco-viz` (which links bevy_egui → bevy_render) so a headless run can retain history without a GPU stack. `lunco-viz` re-exports it. |
 
 ---
 
@@ -222,9 +221,6 @@ High-level vessel assembly and spawning logic. Orchestrates the composition of c
 **`lunco-avatar`**
 Human-interaction layer. Provides composable camera **rigs** (SpringArm, Orbit, FreeFlight, Surface) with smooth jitter-free transitions and coordinate-grid awareness for avatar-based exploration of celestial bodies. The rigs decide *how* a camera moves; *which* camera the viewport shows is owned by the reconciler in `lunco-usd-bevy` (they compose — possession changes the avatar camera's rig without changing the active view).
 
-**`lunco-obc`**
-On-Board Computer emulation. Acts as the signal-processing bridge (DAC/ADC) between digital Flight Software registers (`i16`) and physical hardware units (`f32`), emulating hardware quantization and scaling.
-
 **`lunco-fsw`**
 Decentralized Flight Software architecture. Manages vessel subsystems as independent ECS entities communicating via asynchronous typed commands, mapping semantic SysML names to hardware entities.
 
@@ -265,9 +261,6 @@ Transport-agnostic API core. Exposes simulation state and command discovery via 
 
 **`lunco-telemetry`**
 Reflection-based data extraction engine. Automatically samples and standardizes internal physics and software values for broadcast to external monitoring systems or Mission Control bridges (YAMCS/XTCE).
-
-**`lunco-attributes`**
-Distributed tuning registry. Allows external processes to mutate simulation state using string-based paths (e.g., `"vessel.rover1.suspension.k"`) that map 1:1 with SysML architectural models.
 
 ---
 

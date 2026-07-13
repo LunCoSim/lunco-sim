@@ -5,20 +5,25 @@ edition = "2021"
 description = "Transport-agnostic API layer for LunCoSim — HTTP, ROS2, IPC, etc."
 
 [features]
-default = ["transport-http", "render"]
+# THERE IS NO `render` FEATURE ANY MORE — and that is the point.
+#
+# It existed only for `CaptureScreenshot` (`Screenshot` / `ScreenshotCaptured` live in
+# bevy_render). It was ON BY DEFAULT, so staying render-free was the *non-default* path and
+# every consumer had to remember `default-features = false`. Three forgot — `lunco-doc-bevy`,
+# `lunco-celestial`/`lunco-tutorial`, `lunco-telemetry` — and each silently re-linked wgpu
+# into the `--no-ui` server. Feature unification makes that invisible to code review; only
+# `cargo tree` sees it.
+#
+# A feature you can forget is a trap that fires forever, so the GPU half now lives in
+# `lunco-workbench::screenshot` and this crate CANNOT link a renderer, by construction. What
+# here is a pure-data contract (`PendingScreenshotRequest` + `ScreenshotRequested`).
+default = ["transport-http"]
 # Native HTTP server (axum + TcpListener). Opt-in so library consumers that
 # only need the registry/schema types stay axum-free. Its deps (axum + tokio's
 # `full` runtime) live in the non-wasm target table below, so they are ABSENT on
 # wasm by construction — enabling this feature for a browser build pulls nothing
 # wasm-incompatible (no tokio/net → no mio). The wasm JS bridge needs no feature.
 transport-http = ["dep:axum", "dep:tokio"]
-
-# Screenshot / `CaptureScreenshot` support. Pulls bevy's render stack
-# (`Screenshot` + `ScreenshotCaptured` live in `bevy_render`). A headless
-# server leaves this off so the whole crate builds render-free — the
-# `CaptureScreenshot` command then simply reports "command not found".
-# On by default so GUI binaries get screenshots with no extra opt-in.
-render = ["bevy/bevy_render", "bevy/bevy_core_pipeline", "bevy/bevy_window", "dep:image", "dep:web-time"]
 
 # Windowed-app optimization: hook the winit event loop so an incoming HTTP
 # request wakes the app immediately (vs. waiting for the next reactive tick).
@@ -35,20 +40,11 @@ winit = ["bevy/bevy_winit"]
 [dependencies]
 lunco-core = { path = "../lunco-core" }
 lunco-fsw = { path = "../lunco-fsw" }
-# Substrate-only by default; the `render` feature adds the bevy render stack
-# the screenshot path needs (see `[features]` above). A headless server depends
-# on this crate with `default-features = false` (or without `render`) to stay
-# render-free.
+# SUBSTRATE ONLY — no bevy_render, no way to opt in. The screenshot's GPU half lives in
+# `lunco-workbench::screenshot`; see the note above `default`.
 bevy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-# Screenshot-only deps — pulled in by the `render` feature. `image` encodes the
-# captured frame; `web-time` is a wasm-safe `SystemTime` for the screenshot
-# filename timestamp (std::time panics on wasm and trips the disallowed_methods
-# lint).
-image = { workspace = true, optional = true }
-web-time = { workspace = true, optional = true }
-
 # Native-only HTTP server transport (optional, pulled by `transport-http`). axum
 # + tokio's `full` runtime live in THIS non-wasm table — and crucially `full` is
 # set on the dependency here, NOT via a `tokio/full` line in the feature. A

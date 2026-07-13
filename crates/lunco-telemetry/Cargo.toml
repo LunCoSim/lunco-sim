@@ -7,6 +7,25 @@ edition = "2021"
 bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-time = { path = "../lunco-time" }
+# `TelemetrySettings` is a persisted `SettingsSection` ("telemetry" key), same as
+# `PerfHudSettings` / `ExperimentSettings` — one settings plane, not a bespoke config.
+lunco-settings = { path = "../lunco-settings" }
+# The RETENTION plane: `SignalRegistry` is the ring buffer every plot surface already
+# reads. Render-free by construction (it was split out of `lunco-viz`, which links
+# bevy_egui → bevy_render), so a `--no-ui` run keeps history without a GPU stack.
+lunco-signal = { path = "../lunco-signal" }
+# The QUERY surface (channel catalog + history) is registered as `ApiQueryProvider`s, the
+# same extension point Modelica's `SnapshotVariables` uses. Render-free. This is what lets
+# an OpenMCT-shaped client ask "what channels exist" and "what happened before I connected"
+# instead of only receiving a live firehose.
+# `default-features = false`: this crate needs only the query/schema surface, not the HTTP
+# transport (axum + tokio). It is no longer load-bearing for RENDER — `lunco-api`'s `render`
+# feature was removed from its defaults precisely because a plain `{ path = ... }` here
+# silently re-linked bevy_render → wgpu into the `--no-ui` server (the third crate to trip
+# that wire). See the note in lunco-api/Cargo.toml.
+lunco-api = { path = "../lunco-api", default-features = false }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

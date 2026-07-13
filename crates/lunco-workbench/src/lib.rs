@@ -73,6 +73,11 @@ mod viewport;
 pub mod file_ops;
 pub mod files_panel;
 pub mod perf_hud;
+/// Screenshot capture — the render-bound half of `CaptureScreenshot`. Here, and not in
+/// `lunco-api`, so that crate cannot link a GPU stack; and not in `lunco-render-bevy`,
+/// because lunica screenshots its egui workbench with no 3D renderer.
+#[cfg(feature = "api")]
+pub mod screenshot;
 pub mod perspective_command;
 pub mod picker;
 pub mod status_bus;
@@ -336,6 +341,12 @@ impl Plugin for WorkbenchPlugin {
         // `preferred_wgpu_settings()`, which each binary feeds into its
         // `RenderPlugin` at `DefaultPlugins` build time.
         render_robustness::install_wgpu_error_handler(app);
+
+        // Screenshot backend. Its ABSENCE (a headless server, which links no workbench) is
+        // what makes `CaptureScreenshot` reject cleanly there instead of deferring a
+        // response that nothing would ever send.
+        #[cfg(feature = "api")]
+        app.add_plugins(screenshot::ScreenshotPlugin);
         if !app.is_plugin_added::<bevy_egui::EguiPlugin>() {
             app.add_plugins(bevy_egui::EguiPlugin::default());
         }
@@ -3512,6 +3523,12 @@ fn render_status_bar_inner(
         (latest, history)
     };
     let perf_stats = world.resource::<perf_hud::PerfStats>().clone();
+    // Raw frame times straight out of Bevy's own `Diagnostic` ring buffer — `PerfStats`
+    // no longer shadows it with a second `VecDeque` holding the same values.
+    let frame_history: Vec<f32> = world
+        .get_resource::<bevy::diagnostic::DiagnosticsStore>()
+        .map(perf_hud::frame_history)
+        .unwrap_or_default();
     let perf_enabled = world.resource::<perf_hud::PerfHudSettings>().enabled;
     // The networking chip only paints when not standalone; reserve room
     // for it on the right so the clickable status region doesn't overlap.
@@ -3602,8 +3619,7 @@ fn render_status_bar_inner(
                     .physics_ms
                     .map(|ms| format!(" · phys {:>4.1}ms", ms))
                     .unwrap_or_default();
-                let p99 = perf_stats
-                    .frame_ms_stats()
+                let p99 = perf_hud::frame_ms_stats(&frame_history)
                     .map(|(_, _, p99)| format!(" · p99 {:>5.1}ms", p99))
                     .unwrap_or_default();
                 // Fixed-width fields so the HUD doesn't shift when
@@ -3619,7 +3635,7 @@ fn render_status_bar_inner(
                     .small()
                     .monospace(),
                 );
-                draw_frame_time_sparkline(ui, &perf_stats, theme);
+                draw_frame_time_sparkline(ui, &frame_history, theme);
             });
         }
 
@@ -3722,10 +3738,10 @@ fn render_net_chip(
 /// line at 16.67 ms (60 FPS) anchors the eye.
 fn draw_frame_time_sparkline(
     ui: &mut egui::Ui,
-    stats: &perf_hud::PerfStats,
+    frame_history: &[f32],
     theme: &lunco_theme::Theme,
 ) {
-    if stats.frame_history.is_empty() {
+    if frame_history.is_empty() {
         return;
     }
     // Plot dimensions chosen to fit the 18 px-tall status bar with
@@ -3737,12 +3753,11 @@ fn draw_frame_time_sparkline(
     // Auto-scale: top of the plot is the worst recent sample, but
     // never below ~25 ms so a calm 60 FPS run doesn't make 1 ms
     // jitter look like a spike.
-    let max_ms: f32 = stats
-        .frame_history
+    let max_ms: f32 = frame_history
         .iter()
         .copied()
         .fold(0.0_f32, f32::max)
-        .max(25.0);
+        .max(25.0_f32);
 
     // 16.67 ms (60 FPS) reference line — pulls from `text_subdued`
     // and softens with alpha so it doesn't compete with the trace.
@@ -3754,10 +3769,10 @@ fn draw_frame_time_sparkline(
         egui::Stroke::new(0.5, muted_soft),
     );
 
-    let n = stats.frame_history.len();
+    let n = frame_history.len();
     let step = rect.width() / (perf_hud::FRAME_HISTORY_LEN - 1).max(1) as f32;
     let mut prev: Option<egui::Pos2> = None;
-    for (i, ms) in stats.frame_history.iter().enumerate() {
+    for (i, ms) in frame_history.iter().enumerate() {
         let x = rect.left() + i as f32 * step;
         let y = rect.bottom() - rect.height() * (*ms / max_ms).clamp(0.0, 1.0);
         let here = egui::pos2(x, y);

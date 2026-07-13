@@ -52,8 +52,12 @@ pub fn ephemeris_update_system(
         }
 
         // EphemerisProvider::position returns position relative to its parent defined in registry/hierarchy
-        let rel_pos_au = ephemeris.provider.position(ephemeris_id, world.epoch_jd);
-        let pos_bevy_m = ecliptic_to_bevy(rel_pos_au);
+        // P8(d): no data ⇒ leave the body where it is. It used to be teleported to its
+        // parent's centre — a failed CSV fetch put the body inside the Sun, and nothing said so.
+        let Some(rel_pos_au) = ephemeris.provider.position(ephemeris_id, world.epoch_jd) else {
+            continue;
+        };
+        let pos_bevy_m = ecliptic_to_bevy(rel_pos_au).raw();
 
         // Find the grid this entity is in. Since body/frame entities are typically children of their reference frame grid:
         // We need to resolve which grid we are relative to. 
@@ -181,9 +185,15 @@ pub fn body_rotation_system(
 /// travels from the Sun toward the scene, given heliocentric Sun and Moon
 /// positions (ecliptic J2000, AU). Returns `None` when degenerate (e.g. the
 /// `NoOpEphemerisProvider` returns ZERO for everything).
-pub(crate) fn sun_emit_direction(p_sun: bevy::math::DVec3, p_moon: bevy::math::DVec3) -> Option<Vec3> {
+/// The inputs are typed `EclipticAu` on purpose: this is the exact pipe that once carried
+/// EQUATORIAL vectors while claiming to be ecliptic, and put the sun 45° below the horizon at
+/// Shackleton. A raw `DVec3` can no longer be handed to it.
+pub(crate) fn sun_emit_direction(
+    p_sun: crate::frames::EclipticAu,
+    p_moon: crate::frames::EclipticAu,
+) -> Option<Vec3> {
     // `to_sun` = Moon→Sun in Bevy world space; the light emits the other way.
-    let to_sun = crate::coords::ecliptic_to_bevy(p_sun - p_moon).as_vec3().normalize_or_zero();
+    let to_sun = crate::coords::ecliptic_to_bevy(p_sun - p_moon).raw().as_vec3().normalize_or_zero();
     if to_sun.length_squared() < 0.5 {
         return None;
     }
@@ -195,7 +205,7 @@ pub(crate) fn sun_emit_direction(p_sun: bevy::math::DVec3, p_moon: bevy::math::D
 /// hardcoded `Vec3::NEG_Z`).
 ///
 /// The Sun sits at the heliocentre, so the Moon→Sun direction is just
-/// `-ecliptic_to_bevy(global_position(Moon))` (mirrors the solar-panel pointing
+/// `-ecliptic_to_bevy(global_position(Moon)).raw()` (mirrors the solar-panel pointing
 /// in [`crate::missions`]). A `DirectionalLight` emits along its local forward
 /// (`-Z`) and rays travel FROM the Sun INTO the scene, so the light's forward is
 /// set to `-to_sun`. The brightest light is taken as the sun (the Earthshine
@@ -245,8 +255,16 @@ pub fn update_sun_light_system(
     }
     let Some(ephemeris) = ephemeris else { return; };
 
-    let p_sun = ephemeris.provider.global_position(10, world.epoch_jd);
-    let p_moon = ephemeris.provider.global_position(301, world.epoch_jd);
+    // No ephemeris for the Sun or the Moon ⇒ we do not know where the light comes from, so we
+    // leave it under manual control. This used to be an in-band sentinel (`length_squared() <
+    // 0.5`, i.e. "is it suspiciously close to the origin?"), which is exactly the guess the
+    // `Option` now removes.
+    let (Some(p_sun), Some(p_moon)) = (
+        ephemeris.provider.global_position(10, world.epoch_jd),
+        ephemeris.provider.global_position(301, world.epoch_jd),
+    ) else {
+        return;
+    };
     let Some(dir) = sun_emit_direction(p_sun, p_moon) else {
         // NoOp / degenerate ephemeris — leave the light to manual control.
         return;
@@ -445,24 +463,25 @@ mod sun_dir_tests {
     //! Pure ephemeris→sun-direction math ([`sun_emit_direction`], doc 19 — T2).
     use super::*;
     use bevy::math::DVec3;
+    use crate::frames::EclipticAu;
 
     #[test]
     fn degenerate_ephemeris_yields_no_direction() {
         // NoOpEphemerisProvider returns ZERO for every body → no sun direction,
         // so the system leaves the light under manual control.
-        assert!(sun_emit_direction(DVec3::ZERO, DVec3::ZERO).is_none());
+        assert!(sun_emit_direction(EclipticAu::ZERO, EclipticAu::ZERO).is_none());
     }
 
     #[test]
     fn emit_direction_is_unit_and_points_away_from_sun() {
         // Sun at the heliocentre, Moon offset along +X (ecliptic).
-        let d = sun_emit_direction(DVec3::ZERO, DVec3::new(1.0, 0.0, 0.0))
+        let d = sun_emit_direction(EclipticAu::ZERO, EclipticAu::new(DVec3::new(1.0, 0.0, 0.0)))
             .expect("non-degenerate");
         assert!((d.length() - 1.0).abs() < 1e-5, "emit dir must be unit length");
 
         // The light emits AWAY from the Sun: with the Moon on the far side, the
         // emit direction flips to the antipode.
-        let d_opp = sun_emit_direction(DVec3::ZERO, DVec3::new(-1.0, 0.0, 0.0))
+        let d_opp = sun_emit_direction(EclipticAu::ZERO, EclipticAu::new(DVec3::new(-1.0, 0.0, 0.0)))
             .expect("non-degenerate");
         assert!((d + d_opp).length() < 1e-5, "antipodal Moon → antipodal light");
     }
@@ -471,8 +490,8 @@ mod sun_dir_tests {
     fn emit_direction_tracks_the_moon_position() {
         // Two distinct Moon positions give two distinct light directions — i.e.
         // advancing the epoch (which moves the Moon) re-aims the sun.
-        let a = sun_emit_direction(DVec3::ZERO, DVec3::new(1.0, 0.2, 0.0)).unwrap();
-        let b = sun_emit_direction(DVec3::ZERO, DVec3::new(1.0, 0.0, 0.3)).unwrap();
+        let a = sun_emit_direction(EclipticAu::ZERO, EclipticAu::new(DVec3::new(1.0, 0.2, 0.0))).unwrap();
+        let b = sun_emit_direction(EclipticAu::ZERO, EclipticAu::new(DVec3::new(1.0, 0.0, 0.3))).unwrap();
         assert!((a - b).length() > 1e-3, "different Moon positions → different sun aim");
     }
 }

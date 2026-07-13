@@ -77,6 +77,12 @@ pub fn settings_path() -> PathBuf {
 /// runtime won't retro-actively register/unregister plugins; that
 /// requires an app restart.
 pub fn load_section_from_disk<S: SettingsSection>() -> S {
+    // Same guard as `Settings::load_from_disk` — a test binary must not have its behaviour
+    // decided by the developer's real config. This path is the sneakier of the two: it
+    // reads the file *before the App exists*, to gate plugin registration.
+    if !disk_backed() {
+        return S::default();
+    }
     // Same blob the App-built `Settings` resource loads, read before the App
     // exists — through the Storage API on both targets (native
     // `<config>/settings.json`; wasm the `localStorage` mirror via
@@ -122,6 +128,12 @@ impl Settings {
     }
 
     fn load_from_disk() -> Self {
+        // A test binary MUST NOT read the developer's real settings — otherwise a value
+        // some other test persisted (or that the developer set by hand) decides how this
+        // test behaves. See `disk_backed`.
+        if !disk_backed() {
+            return Self::default();
+        }
         // One path for native and wasm: read the settings blob through the
         // Storage API. Native resolves `<config>/settings.json` on the local
         // filesystem; wasm maps the same path onto a `localStorage` key via
@@ -158,6 +170,13 @@ impl Settings {
 
     fn write_if_dirty(&mut self) {
         if !self.dirty {
+            return;
+        }
+        // THE GUARD. A test binary must never write the developer's real settings file.
+        // Clear the dirty bit so we don't re-attempt (and the in-memory value still
+        // reflects the change — only persistence is suppressed).
+        if !disk_backed() {
+            self.dirty = false;
             return;
         }
         let json = match serde_json::to_string_pretty(&self.raw) {
@@ -234,9 +253,94 @@ impl AppSettingsExt for App {
     }
 }
 
+/// Is this process a `cargo test` binary?
+///
+/// Cargo builds test/bench binaries into `target/<profile>/deps/`; real application
+/// binaries live one level up (`target/<profile>/<name>`), examples in `examples/`, and an
+/// installed binary anywhere else. Nothing legitimately *runs* an app from `deps/`, so
+/// "my parent directory is named `deps`" identifies a test harness without libtest
+/// cooperating (it sets no env var we could read).
+#[cfg(not(target_arch = "wasm32"))]
+fn is_test_binary() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| {
+            exe.parent()
+                .map(|dir| dir.file_name() == Some(std::ffi::OsStr::new("deps")))
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn is_test_binary() -> bool {
+    // No `current_exe` in a browser, and no cargo-test harness either.
+    false
+}
+
+/// Whether the settings plane may touch the filesystem at all.
+///
+/// **This is a safety gate, and it defaults to SAFE in tests.**
+///
+/// `register_settings_section` auto-adds [`SettingsPlugin`], which loads `settings.json`
+/// from the user's real config dir and installs a flush system that writes it back on any
+/// change. That is correct for the app and *actively dangerous* in a test: a test app that
+/// merely installs a domain plugin inherits real, persistent, cross-process state. A
+/// `lunco-telemetry` test flipped `TelemetrySettings::enabled` to `false`; that `false`
+/// landed in the developer's real `~/.lunco/settings.json`, and every subsequent test in
+/// the process — and the developer's next real run of the app — read it back. It presented
+/// as a cluster of unrelated failures whose membership *changed with the test-thread
+/// count*, because the poison travelled through the filesystem rather than the code.
+///
+/// So: a test binary is **in-memory only** — no read, no write — unless it explicitly names
+/// a config dir via `LUNCOSIM_CONFIG` (which is how a test that genuinely wants to exercise
+/// persistence opts in, pointing at a temp dir; see [`isolate_config_dir_for_tests`]).
+///
+/// Nine crates register settings sections. Gating here means none of them has to remember.
+fn disk_backed() -> bool {
+    // An explicit config dir is an explicit choice — honour it. Tests that want to test
+    // persistence set it to a throwaway path.
+    if std::env::var_os("LUNCOSIM_CONFIG").is_some() {
+        return true;
+    }
+    !is_test_binary()
+}
+
+/// Point the settings plane at a throwaway config directory.
+///
+/// Mostly unnecessary now — [`disk_backed`] already makes a test binary in-memory by
+/// default. Use this only when a test needs settings to genuinely *round-trip through a
+/// file* (persistence tests), pointing at a temp dir rather than the real config.
+///
+/// Settings persist automatically: [`persist_section`] fires on *any* change to the typed
+/// resource, and `flush_settings` then writes `settings.json`. In a test that means a
+/// plugin under test which mutates its own settings resource **writes into the developer's
+/// real `~/.lunco/settings.json`** — and the next test app, and their next real run of the
+/// application, load it back.
+///
+/// This is not hypothetical. A `lunco-telemetry` test flipped `TelemetrySettings::enabled`
+/// to `false`, that `false` landed in the real user config, and every subsequent test in
+/// the process read it back and sampled nothing. It presented as a cluster of unrelated
+/// failures whose membership *changed with the test-thread count*, because the poison
+/// travelled through the filesystem rather than through the code.
+///
+/// Idempotent and safe to call from every test.
+pub fn isolate_config_dir_for_tests(tag: &str) {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let dir = std::env::temp_dir().join(format!("lunco-test-config-{tag}"));
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::remove_file(dir.join("settings.json"));
+        // `lunco_assets::user_config_dir()` reads this first — see its docs.
+        std::env::set_var("LUNCOSIM_CONFIG", &dir);
+    });
+}
+
 /// Per-section persister — when the typed resource changes,
 /// re-serialise and stash the JSON value back into `Settings.raw`.
 /// The central `flush_settings` system then writes the file.
+///
+/// NOTE: this fires in tests too, writing to whatever `user_config_dir()` resolves to —
+/// the developer's real config unless a test called [`isolate_config_dir_for_tests`].
 fn persist_section<S: SettingsSection>(
     section: Res<S>,
     mut settings: ResMut<Settings>,
@@ -296,3 +400,60 @@ impl SettingsSection for TerrainSettings {
     const KEY: &'static str = "terrain";
 }
 
+
+#[cfg(test)]
+mod disk_guard_tests {
+    use super::*;
+
+    /// Self-verifying: this assertion runs INSIDE a cargo-test binary, so if the detector
+    /// is right it must say so. If cargo ever stops building test binaries into `deps/`,
+    /// this test fails loudly rather than the guard silently opening up and letting the
+    /// whole suite write to the developer's real config again.
+    #[test]
+    fn a_test_binary_is_detected_as_such() {
+        assert!(
+            is_test_binary(),
+            "the settings disk-guard no longer recognises a cargo-test binary — every \
+             SettingsSection in the workspace is now free to overwrite the developer's \
+             real ~/.lunco/settings.json"
+        );
+    }
+
+    /// THE GUARD. With no explicit `LUNCOSIM_CONFIG`, a test process must be in-memory
+    /// only. This is what stops one test's `enabled: false` from persisting into the
+    /// developer's config and poisoning every later test in the process.
+    #[test]
+    fn a_test_process_does_not_touch_the_real_config_by_default() {
+        // Only meaningful when the env override is absent — which is the state a plain
+        // `cargo test` runs in.
+        if std::env::var_os("LUNCOSIM_CONFIG").is_none() {
+            assert!(!disk_backed(), "a test binary must never read or write the real settings");
+        }
+    }
+
+    /// A dirty in-memory Settings must NOT write when the guard is closed — and must clear
+    /// its dirty bit so it doesn't retry every frame.
+    #[test]
+    fn write_if_dirty_is_a_noop_under_the_guard() {
+        if std::env::var_os("LUNCOSIM_CONFIG").is_some() {
+            return; // persistence is explicitly enabled; nothing to assert here
+        }
+        let mut s = Settings::default();
+        s.raw.insert("telemetry".into(), serde_json::json!({ "enabled": false }));
+        s.dirty = true;
+        s.write_if_dirty();
+        assert!(!s.dirty, "the dirty bit must clear so we don't retry the suppressed write");
+    }
+
+    /// An explicitly-named config dir re-enables persistence — that is how a test that
+    /// genuinely wants a file round-trip opts in, pointing at a temp path.
+    #[test]
+    fn an_explicit_config_dir_re_enables_persistence() {
+        // Deliberately not mutating the process env here (it is global and would race with
+        // the tests above). Assert the policy directly.
+        assert!(
+            disk_backed() == std::env::var_os("LUNCOSIM_CONFIG").is_some() || !is_test_binary(),
+            "LUNCOSIM_CONFIG must be the opt-in for a test binary"
+        );
+    }
+}
