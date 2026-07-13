@@ -109,10 +109,12 @@ bevy-aware split kept clean so the rhai-binding adapter stays slim:
 - **`lunco-tools-bevy`** (new crate) owns the bevy-aware **`ExecutableTool`**
   supertrait + **`ClosureTool`**. It observes `ToolFired`, downcasts the
   registered tool to `ExecutableTool`, and runs it. **No JSON, no reflection** —
-  a `ClosureTool`'s closure triggers its typed command directly via `&mut World`
-  (`world.trigger(CaptureFromCamera { target: vessel })`). The closure IS the
-  tool definition; adding an instrument is one closure, no per-instrument Rust
-  struct. rhai only NAMES tools (`take_photo()` → a `run_tool` action value).
+  a `ClosureTool`'s closure triggers its typed command directly via
+  `DeferredWorld` (`world.trigger(CaptureFromCamera { target: vessel })`).
+  `DeferredWorld` (not `&mut World`) because Bevy 0.19 forbids exclusive systems
+  as observers. The closure IS the tool definition; adding an instrument is one
+  closure, no per-instrument Rust struct. rhai only NAMES tools (`take_photo()`
+  → a `run_tool` action value).
 - **`PatrolWaypoint`** reshapes `Patrol` to carry per-waypoint `on_arrival`
   actions — the declarative home for "fire a tool at a patrol waypoint"
   (no rhai tree-composition). Backward-compatible: legacy bare-array
