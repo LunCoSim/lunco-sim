@@ -219,18 +219,10 @@ impl Plugin for SandboxEditUiPlugin {
         // Debug-viz settings menu rows (joint + wheel-force gizmos).
         app.add_systems(Startup, register_debug_viz_settings);
 
-        // Interactive checkpoint authoring: Ctrl+LMB appends a waypoint to the
-        // selected vessel's patrol (`AppendCheckpoint`); right-click opens an
-        // egui popup (`CheckpointContextMenu` → `draw_checkpoint_context_menu`).
-        // Both route through the EXISTING `SetAutopilotBehavior` /
-        // `EngageAutopilot` typed commands — no new domain (§4.2).
-        app.init_resource::<checkpoint_click::CheckpointContextMenu>();
-        checkpoint_click::register_all_commands(app);
+        // Ctrl+LMB drops a mission waypoint by AUTHORING A USD PRIM (`ApplyUsdOp`) —
+        // no checkpoint command, no checkpoint domain. Moving, deleting, undoing and
+        // inspecting it are then the ordinary prim paths. See `checkpoint_click`.
         app.add_observer(checkpoint_click::on_scene_click_checkpoint);
-        app.add_systems(
-            bevy_egui::EguiPrimaryContextPass,
-            checkpoint_click::draw_checkpoint_context_menu,
-        );
 
         app.add_observer(on_select_progress);
         app.add_observer(on_spawn_progress);

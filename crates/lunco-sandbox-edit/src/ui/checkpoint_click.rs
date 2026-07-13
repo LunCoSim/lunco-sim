@@ -1,185 +1,50 @@
-//! Interactive checkpoint authoring — Ctrl+Left‑click on the ground appends a
-//! waypoint to the selected vessel's patrol, Right‑click on a pin opens a
-//! small context menu (Delete today; extensible).
+//! Ctrl+LMB — drop a mission waypoint by **authoring a USD prim**.
 //!
-//! Both edits route through the **existing** [`SetAutopilotBehavior`] /
-//! [`EngageAutopilot`] typed commands (§4.2 — one input shape, every surface).
-//! The patrol spec lives in `AutopilotBehaviorSpec` (mirrored on the vessel);
-//! this module only reads it, mutates the data, and re‑emits the command. No
-//! new verb, no new journal domain — same path the `patrol.rhai` prelude and
-//! the Command Deck use.
+//! There is no checkpoint domain. A waypoint is an ordinary prim referencing
+//! `vessels/markers/waypoint.usda`, and the vessel's BT.CPP mission
+//! (`lunco:behavior`) gains a `drive_to` leaf that names it by path. Both edits go
+//! through the one authoring funnel, [`ApplyUsdOp`] — so the waypoint is journaled,
+//! undoable, persisted to `.usda`, and replicated exactly like every other prim, with
+//! no new command verb.
 //!
-//! # Click partition (global `Pointer<Click>` observers all run for one click)
+//! Everything else about a waypoint is therefore already implemented, by code that
+//! knows nothing about waypoints:
 //!
-//! - **Plain Left** → avatar possession (`lunco_avatar::avatar_raycast_possession`).
-//! - **Shift+Left** → entity selection (`selection::on_scene_click_select`).
-//! - **Ctrl+Left** (this observer) → append checkpoint to the primary-selected
-//!   vessel's patrol; no‑op when nothing is selected (possession then takes it).
-//! - **Right (Secondary)** (this observer) → open the checkpoint context menu on
-//!   the pin under the cursor; no‑op when no pin is near.
+//! - **Move it** — it is selectable, so the ordinary transform gizmo drags it, and
+//!   `lunco_autopilot::usd_tree` recompiles the route when it moves.
+//! - **Delete it** — the ordinary Delete key removes the prim.
+//! - **Undo** — the document's typed inverse ops.
+//! - **Inspect it** — its attributes are ordinary prim parameters.
 //!
-//! Spawn‑tool / terrain‑tool armed → this observer stands down (matches the
-//! existing three-observer gate convention).
+//! That is the whole point of putting it in USD: the feature mostly stops existing.
 
-use bevy::prelude::*;
 use bevy::picking::events::{Click, Pointer};
 use bevy::picking::pointer::PointerButton;
-use bevy_egui::{egui, EguiContexts};
-use lunco_autopilot::{Autopilot, AutopilotBehaviorSpec, BehaviorSpec};
-use lunco_core::{on_command, register_commands, Command, EguiFocus, SpawnToolActive, TerrainToolActive};
+use bevy::prelude::*;
+use lunco_autopilot::usd_tree::{append_waypoint_leaf, BehaviorXml};
+use lunco_core::{EguiFocus, SpawnToolActive, TerrainToolActive};
+use lunco_usd::document::{LayerId, UsdOp};
+use lunco_usd::registry::UsdDocumentRegistry;
+use lunco_usd::commands::ApplyUsdOp;
+use lunco_usd_bevy::UsdPrimPath;
 
-use crate::SelectedEntities;
 use crate::spawn::{terrain_ray_hit, TerrainOracles};
+use crate::SelectedEntities;
 
-/// Right-click context menu state. Set by the Secondary click observer;
-/// consumed by the egui popup system. One menu at a time.
-#[derive(Resource, Default, Clone)]
-pub enum CheckpointContextMenu {
-    #[default]
-    Closed,
-    Open {
-        /// Vessel whose patrol owns the pin.
-        vessel: Entity,
-        /// Index in the patrol waypoint list (the deletion target).
-        index: usize,
-        /// Screen-space position for the popup (pixels).
-        screen_pos: [f64; 2],
-    },
-}
+/// The prim the marker asset is referenced from — the pin's visuals ARE the USD
+/// scene, not a debug gizmo.
+const WAYPOINT_ASSET: &str = "vessels/markers/waypoint.usda";
+/// Scope the authored waypoints are parented under, beneath the stage's default prim.
+/// A route lives in WORLD space, so it is deliberately NOT a child of the vessel —
+/// parented under the rover, the waypoints would ride along as it drives.
+const BEHAVIORS_SCOPE: &str = "Behaviors";
 
-/// Append a checkpoint to the selected vessel's patrol. Triggered by the
-/// Ctrl+LMB observer below. A typed command (not a UI poke) so the same action
-/// is reachable from rhai / the HTTP API / MCP — the UI is just one dispatch
-/// surface for it (§4.2). Addressed by the vessel `Entity` (the UI has it
-/// directly; rhai callers address it via the selection or by spawning).
-#[Command(reflect_default)]
-pub struct AppendCheckpoint {
-    /// Vessel to add the checkpoint to.
-    pub vessel: Entity,
-    /// World-space position `[x, y, z]`.
-    pub position: [f64; 3],
-}
-
-impl Default for AppendCheckpoint {
-    fn default() -> Self {
-        Self { vessel: Entity::PLACEHOLDER, position: [0.0; 3] }
-    }
-}
-
-/// Remove a checkpoint by patrol index from the vessel's patrol. Triggered by
-/// the right-click "Delete" menu entry (and reusable from rhai / API).
-#[Command(reflect_default)]
-pub struct DeleteCheckpoint {
-    pub vessel: Entity,
-    pub index: u32,
-}
-
-impl Default for DeleteCheckpoint {
-    fn default() -> Self {
-        Self { vessel: Entity::PLACEHOLDER, index: 0 }
-    }
-}
-
-#[on_command(AppendCheckpoint)]
-fn on_append_checkpoint(
-    trigger: On<AppendCheckpoint>,
-    mut commands: Commands,
-    q_spec: Query<&AutopilotBehaviorSpec>,
-    q_autopilot: Query<&Autopilot>,
-    defaults: Res<crate::checkpoint_gizmo::PatrolDefaults>,
-) {
-    let cmd = trigger.event();
-    let new_wp = [cmd.position[0] as f32, cmd.position[1] as f32, cmd.position[2] as f32];
-    // Build the new patrol spec: clone the existing Patrol's waypoints + append,
-    // or start a fresh patrol from this single waypoint (defaults from the
-    // tunable `PatrolDefaults` resource, not literals — §3). New checkpoints
-    // added via Ctrl+LMB are bare waypoints (no arrival actions) — a mission
-    // authors actions in rhai/USD; interactive editing is geometry-only.
-    let fresh = || BehaviorSpec::Patrol {
-        waypoints: vec![lunco_autopilot::PatrolWaypoint::at(new_wp)],
-        speed: defaults.speed,
-        radius: defaults.radius,
-        dwell: defaults.dwell,
-    };
-    let spec_json = match q_spec.get(cmd.vessel) {
-        Ok(spec) => {
-            let new_spec = match &spec.0 {
-                BehaviorSpec::Patrol { waypoints, speed, radius, dwell } => {
-                    let mut wps = waypoints.clone();
-                    wps.push(lunco_autopilot::PatrolWaypoint::at(new_wp));
-                    BehaviorSpec::Patrol {
-                        waypoints: wps,
-                        speed: *speed,
-                        radius: *radius,
-                        dwell: *dwell,
-                    }
-                }
-                // Non-patrol spec present → replace with a patrol starting here.
-                _ => fresh(),
-            };
-            serde_json::to_string(&new_spec).unwrap_or_default()
-        }
-        // No spec yet → start a patrol from this single waypoint.
-        Err(_) => serde_json::to_string(&fresh()).unwrap_or_default(),
-    };
-    // An autopilot actor must exist for `SetAutopilotBehavior` to find it (its
-    // observer keys by `ap.vessel`). If none exists, engage one — it will both
-    // claim the vessel and adopt the patrol spec.
-    let need_engage = !q_autopilot.iter().any(|a| a.vessel == cmd.vessel);
-    if need_engage {
-        // No autopilot actor for this vessel yet — engage one with the patrol.
-        commands.trigger(lunco_autopilot::EngageAutopilot {
-            vessel: cmd.vessel,
-            index: 0,
-            throttle: defaults.engage_throttle,
-            spec_json,
-        });
-    } else {
-        // An autopilot is already driving — just hot-swap its behaviour.
-        commands.trigger(lunco_autopilot::SetAutopilotBehavior {
-            vessel: cmd.vessel,
-            spec_json,
-        });
-    }
-    info!("APPEND_CHECKPOINT: vessel {:?} at {:?}", cmd.vessel, cmd.position);
-}
-
-#[on_command(DeleteCheckpoint)]
-fn on_delete_checkpoint(
-    trigger: On<DeleteCheckpoint>,
-    mut commands: Commands,
-    q_spec: Query<&AutopilotBehaviorSpec>,
-) {
-    let cmd = trigger.event();
-    let Some(spec) = q_spec.get(cmd.vessel).ok() else { return };
-    let BehaviorSpec::Patrol { waypoints, speed, radius, dwell } = &spec.0 else { return };
-    let idx = cmd.index as usize;
-    if idx >= waypoints.len() {
-        return;
-    }
-    let mut wps = waypoints.clone();
-    wps.remove(idx);
-    if wps.is_empty() {
-        // Empty patrol → clear it entirely (brake + drop the spec mirror) via
-        // the canonical verb, instead of hand-building a Brake spec JSON.
-        commands.trigger(lunco_autopilot::ClearPatrol { vessel: cmd.vessel });
-        info!("DELETE_CHECKPOINT: vessel {:?} idx {} (last → cleared)", cmd.vessel, cmd.index);
-        return;
-    }
-    let new_spec = BehaviorSpec::Patrol { waypoints: wps, speed: *speed, radius: *radius, dwell: *dwell };
-    let spec_json = serde_json::to_string(&new_spec).unwrap_or_default();
-    commands.trigger(lunco_autopilot::SetAutopilotBehavior {
-        vessel: cmd.vessel,
-        spec_json,
-    });
-    info!("DELETE_CHECKPOINT: vessel {:?} idx {}", cmd.vessel, cmd.index);
-}
-
-register_commands!(on_append_checkpoint, on_delete_checkpoint,);
-
-/// Global `Pointer<Click>` observer — Ctrl+LMB appends a checkpoint, Right
-/// opens the context menu. Stands down when the spawn / terrain sculpt tool is
-/// armed (matches the existing observers).
+/// Global `Pointer<Click>` observer: Ctrl+LMB drops a waypoint prim for the selected
+/// vessel and appends the matching `drive_to` leaf to its mission.
+///
+/// Stands down when the spawn / terrain-sculpt tool is armed, and when egui owns the
+/// pointer (the authoritative gate). Ctrl is excluded from the possession observer, so
+/// a checkpoint click does not also possess or follow what the ray hit.
 pub fn on_scene_click_checkpoint(
     mut click: On<Pointer<Click>>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -189,132 +54,143 @@ pub fn on_scene_click_checkpoint(
     selected: Res<SelectedEntities>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     terrains: TerrainOracles,
-    q_spec: Query<&AutopilotBehaviorSpec>,
-    gizmo_settings: Res<crate::checkpoint_gizmo::CheckpointGizmoSettings>,
-    mut menu: ResMut<CheckpointContextMenu>,
+    q_prim: Query<&UsdPrimPath>,
+    q_xml: Query<&BehaviorXml>,
+    usd_registry: Res<UsdDocumentRegistry>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    // Monotonic disambiguator for waypoint prim names within a session.
+    mut wp_seq: Local<u32>,
     mut commands: Commands,
 ) {
     click.propagate(false);
-    if egui_focus.wants_pointer {
+    if egui_focus.wants_pointer || spawn_tool.0 || terrain_tool.0 {
         return;
     }
-    if spawn_tool.0 || terrain_tool.0 {
+    if click.button != PointerButton::Primary {
         return;
     }
-    match click.button {
-        PointerButton::Primary => {
-            // Ctrl+LMB only — plain click belongs to possession, Shift+click to
-            // selection (the partition documented in `selection.rs`).
-            if !(keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight)) {
-                return;
-            }
-            let Some(vessel) = selected.primary() else { return };
-            let Some((camera, cam_gtf)) = cameras.iter().find(|(c, _)| c.is_active) else { return };
-            let Some(ray) = lunco_core::scene_click_ray(
-                &egui_focus,
-                camera,
-                cam_gtf,
-                click.pointer_location.position,
-            ) else { return };
-            // Ground-truth terrain hit (the DEM oracle, not the band-limited
-            // collider ring) — same path `spawn::on_scene_click_spawn` uses.
-            let origin = ray.origin.as_dvec3();
-            let dir = ray.direction.as_dvec3();
-            let Some((_, hit)) = terrain_ray_hit(&terrains, origin, dir, 1.0e6) else { return };
-            commands.trigger(AppendCheckpoint {
-                vessel,
-                position: [hit.x, hit.y, hit.z],
-            });
+    // Ctrl+LMB only — a plain click possesses, Shift+click selects (the partition
+    // documented in `selection.rs`).
+    if !(keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight)) {
+        return;
+    }
+
+    let Some(vessel) = selected.primary() else { return };
+    let Ok(vessel_prim) = q_prim.get(vessel) else {
+        warn!("[waypoint] selected vessel is not a USD prim; cannot author a mission for it");
+        return;
+    };
+    let Some(workspace) = workspace else { return };
+    let Some(doc) = workspace.0.active_document else { return };
+    let Some(host) = usd_registry.host(doc) else { return };
+
+    // Ground-truth terrain hit (the DEM oracle, not the band-limited collider ring) —
+    // the same path `spawn::on_scene_click_spawn` uses.
+    let Some((camera, cam_gtf)) = cameras.iter().find(|(c, _)| c.is_active) else { return };
+    let Some(ray) = lunco_core::scene_click_ray(
+        &egui_focus,
+        camera,
+        cam_gtf,
+        click.pointer_location.position,
+    ) else {
+        return;
+    };
+    let Some((_, hit)) = terrain_ray_hit(&terrains, ray.origin.as_dvec3(), ray.direction.as_dvec3(), 1.0e6)
+    else {
+        return;
+    };
+
+    // ── Where the pin goes ────────────────────────────────────────────────────
+    let root = lunco_usd_bevy::stage_default_prim(host.document().data())
+        .map(|p| format!("/{p}"))
+        .unwrap_or_else(|| "/".to_string());
+    let scope_path = join_prim(&root, BEHAVIORS_SCOPE);
+
+    // Create the `Behaviors` scope on first use. `AddPrim` on an existing prim is a
+    // rejection, not a merge, so only author it when it is genuinely absent.
+    let scope_exists = prim_exists(host, &scope_path);
+    if !scope_exists {
+        commands.trigger(ApplyUsdOp {
+            doc,
+            op: UsdOp::AddPrim {
+                edit_target: LayerId::runtime(),
+                parent_path: root.clone(),
+                name: BEHAVIORS_SCOPE.to_string(),
+                type_name: Some("Scope".to_string()),
+                reference: None,
+            },
+        });
+    }
+
+    // A stable, valid USD identifier, scoped by the vessel so two rovers' routes never
+    // collide.
+    *wp_seq += 1;
+    let stem: String = vessel_prim
+        .path
+        .rsplit('/')
+        .next()
+        .unwrap_or("vessel")
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    let name = format!("{stem}_wp{}", *wp_seq);
+    let wp_path = join_prim(&scope_path, &name);
+
+    // ── The mission's topology ────────────────────────────────────────────────
+    // Append the leaf FIRST: if the tree is a shape the editor must not restructure,
+    // bail out before authoring an orphan pin no mission references.
+    let current = q_xml.get(vessel).ok().map(|x| x.0.as_str());
+    let xml = match append_waypoint_leaf(current, &wp_path) {
+        Ok(xml) => xml,
+        Err(err) => {
+            warn!("[waypoint] not adding a checkpoint: {err}");
+            return;
         }
-        PointerButton::Secondary => {
-            // Right-click: find nearest pin to the cursor and open the menu.
-            let Some(vessel) = selected.primary() else { return };
-            let Ok(spec) = q_spec.get(vessel) else { return };
-            let BehaviorSpec::Patrol { waypoints, .. } = &spec.0 else { return };
-            let Some((camera, cam_gtf)) = cameras.iter().find(|(c, _)| c.is_active) else { return };
-            let cursor = click.pointer_location.position;
-            let mut best: Option<(usize, f32)> = None;
-            for (i, wp) in waypoints.iter().enumerate() {
-                let wp_world = Vec3::from_array(wp.pos);
-                if let Ok(viewport) = camera.world_to_viewport(cam_gtf, wp_world) {
-                    let d = Vec2::new(viewport.x - cursor.x, viewport.y - cursor.y).length_squared();
-                    if best.map(|(_, bd)| d < bd).unwrap_or(true) {
-                        best = Some((i, d));
-                    }
-                }
-            }
-            // Pick radius comes from `CheckpointGizmoSettings` so it tracks the
-            // visual pin size the gizmo draws (§3 — no magic numbers).
-            let pick_r = gizmo_settings.pin_pick_radius_px;
-            if let Some((idx, d2)) = best {
-                if d2 <= pick_r * pick_r {
-                    *menu = CheckpointContextMenu::Open {
-                        vessel,
-                        index: idx,
-                        screen_pos: [cursor.x as f64, cursor.y as f64],
-                    };
-                }
-            }
-        }
-        _ => {}
+    };
+
+    // ── Author: pin prim, its position, and the mission that names it ─────────
+    commands.trigger(ApplyUsdOp {
+        doc,
+        op: UsdOp::AddPrim {
+            edit_target: LayerId::runtime(),
+            parent_path: scope_path,
+            name,
+            type_name: None,
+            reference: Some(WAYPOINT_ASSET.to_string()),
+        },
+    });
+    commands.trigger(ApplyUsdOp {
+        doc,
+        op: UsdOp::SetTranslate {
+            edit_target: LayerId::runtime(),
+            path: wp_path,
+            value: [hit.x, hit.y, hit.z],
+        },
+    });
+    commands.trigger(ApplyUsdOp {
+        doc,
+        op: UsdOp::SetAttribute {
+            edit_target: LayerId::runtime(),
+            path: vessel_prim.path.clone(),
+            name: "lunco:behavior".to_string(),
+            type_name: "string".to_string(),
+            value: xml,
+        },
+    });
+}
+
+/// Join a parent prim path and a child name, handling the stage root (`"/"`).
+fn join_prim(parent: &str, name: &str) -> String {
+    if parent == "/" {
+        format!("/{name}")
+    } else {
+        format!("{parent}/{name}")
     }
 }
 
-/// Egui popup for the open checkpoint context menu. Drawn in the workbench's
-/// `EguiPrimaryContextPass`. "Delete" fires [`DeleteCheckpoint`]; "Cancel", a
-/// click outside the popup, or the target checkpoint going away closes it.
-pub fn draw_checkpoint_context_menu(
-    mut egui_ctx: EguiContexts,
-    mut menu: ResMut<CheckpointContextMenu>,
-    q_spec: Query<&AutopilotBehaviorSpec>,
-    mut commands: Commands,
-) {
-    let Ok(ctx) = egui_ctx.ctx_mut() else { return };
-    let (vessel, index, pos) = match &*menu {
-        CheckpointContextMenu::Open { vessel, index, screen_pos } => {
-            (*vessel, *index, *screen_pos)
-        }
-        CheckpointContextMenu::Closed => return,
-    };
-    // `index` is a SNAPSHOT taken at right-click time, but the patrol underneath
-    // it can change while the popup sits open (delete a pin from the Command
-    // Deck, clear the patrol, despawn the vessel). Re-validate against the live
-    // spec every frame: otherwise "Delete" would happily remove whatever waypoint
-    // now happens to occupy that index — a different pin than the user opened.
-    let target_exists = q_spec
-        .get(vessel)
-        .ok()
-        .and_then(|s| s.patrol_waypoints())
-        .is_some_and(|w| index < w.len());
-    if !target_exists {
-        *menu = CheckpointContextMenu::Closed;
-        return;
-    }
-    let pos = egui::pos2(pos[0] as f32, pos[1] as f32);
-    let resp = egui::Area::new(egui::Id::new("lunco_checkpoint_menu"))
-        .order(egui::Order::Foreground)
-        .fixed_pos(pos)
-        .show(ctx, |ui| {
-            ui.set_max_width(160.0);
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                if ui.button("🗑  Delete checkpoint").clicked() {
-                    commands.trigger(DeleteCheckpoint {
-                        vessel,
-                        index: index as u32,
-                    });
-                    true // close
-                } else if ui.button("Cancel").clicked() {
-                    true
-                } else {
-                    false
-                }
-            }).inner
-        });
-    // A button was hit → close. Otherwise dismiss on any click that lands outside
-    // the popup (the doc's "any outside interaction closes it" — without this the
-    // popup survives left-clicks, deselection, and camera moves).
-    let clicked_away = ctx.input(|i| i.pointer.any_click()) && !resp.response.contains_pointer();
-    if resp.inner || clicked_away {
-        *menu = CheckpointContextMenu::Closed;
-    }
+/// Whether `path` is already authored in either layer of the document.
+fn prim_exists(host: &lunco_doc::DocumentHost<lunco_usd::document::UsdDocument>, path: &str) -> bool {
+    let Ok(sdf) = lunco_usd_bevy::SdfPath::new(path) else { return false };
+    host.document().data().spec(&sdf).is_some()
+        || host.document().runtime_data().spec(&sdf).is_some()
 }

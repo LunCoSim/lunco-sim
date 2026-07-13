@@ -22,6 +22,10 @@ lunco-hardware = { path = "../lunco-hardware" }
 # headless server build.
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-controller = { path = "../lunco-controller" }
+# USD → autopilot bridge: `lunco:behavior`/`lunco:behaviorPath` (BT.CPP XML) and the
+# waypoint prims its leaves reference. This crate owns prim-path → entity resolution;
+# lunco-autopilot stays USD-free and just compiles what it is handed.
+lunco-autopilot = { path = "../lunco-autopilot" }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-modelica = { path = "../lunco-modelica", default-features = false }
 rumoca-phase-parse = { workspace = true }

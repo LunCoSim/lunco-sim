@@ -126,7 +126,10 @@ impl Plugin for UsdSimPlugin {
             .add_observer(on_add_usd_sim_prim)
            // `try_wire_wheel` runs in PreUpdate so that Wire entities exist
            // before `wire_system` (Update) propagates values through them.
-           .add_systems(PreUpdate, (try_wire_wheel, resolve_differential_coupling))
+           .add_systems(
+               PreUpdate,
+               (try_wire_wheel, resolve_differential_coupling, resolve_behavior_targets),
+           )
            // USD → ShaderMaterial authoring. Ordered AFTER the visuals exist
            // and BEFORE `process_usd_sim_prims` consumes them, so the material
            // is always present before a wheel is split onto its visual child
@@ -937,6 +940,28 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             }
 
             info!("Successfully initialized FSW for {}", prim_path.path);
+        }
+
+        // 1b. Mission behaviour: a BT.CPP v4 XML tree, inline (`lunco:behavior`) or
+        // by asset path (`lunco:behaviorPath`). Mirrors the `lunco:script` /
+        // `lunco:scriptPath` pair exactly, inline winning over the file. The tree's
+        // spatial leaves reference WAYPOINT PRIMS by path; `resolve_behavior_targets`
+        // binds those, and `lunco_autopilot::usd_tree` bakes their live positions into
+        // the compiled tree.
+        if let Some(xml) = reader
+            .scalar::<String>(&sdf_path, "lunco:behavior")
+            .filter(|s| !s.trim().is_empty())
+        {
+            commands
+                .entity(entity)
+                .insert(lunco_autopilot::usd_tree::BehaviorXml(xml));
+        } else if let Some(path) = reader
+            .scalar::<String>(&sdf_path, "lunco:behaviorPath")
+            .filter(|s| !s.trim().is_empty())
+        {
+            commands
+                .entity(entity)
+                .insert(lunco_autopilot::usd_tree::BehaviorXmlPath(path));
         }
 
         // 2. Detect the drive allocation → a `DriveMix { kernel, ports, entries }`
@@ -2000,6 +2025,45 @@ fn try_wire_wheel(
         } else {
             debug!("Wheel {} FSW not found yet, retrying next frame", prim_path.path);
         }
+    }
+}
+
+/// Bind the waypoint prims a vessel's behaviour tree references (`<Action ID="drive_to"
+/// target="/World/Behaviors/RoverPatrol/wp0"/>`) to their live entities, so
+/// `lunco_autopilot::usd_tree::compile_behavior_xml` can bake their world positions
+/// into the compiled tree.
+///
+/// Prim-path → entity resolution is USD's job, which is why it lives HERE and not in
+/// `lunco-autopilot` — that crate stays USD-free and merely compiles the bindings it
+/// is handed.
+///
+/// Re-runs when a tree's XML changes or when any prim spawns (a waypoint may spawn
+/// after the vessel that names it — prim order is not guaranteed). Unresolved paths
+/// are simply left out of the map; the compiler refuses a tree with a dangling
+/// target rather than driving to the origin.
+fn resolve_behavior_targets(
+    q_trees: Query<(Entity, &lunco_autopilot::usd_tree::BehaviorXml, &UsdPrimPath)>,
+    q_prims: Query<(Entity, &UsdPrimPath)>,
+    q_new_prims: Query<(), Added<UsdPrimPath>>,
+    q_changed_xml: Query<(), Changed<lunco_autopilot::usd_tree::BehaviorXml>>,
+    mut commands: Commands,
+) {
+    // Only re-resolve when the cast could actually change: a new prim appeared, or a
+    // tree was (re)authored.
+    if q_trees.is_empty() || (q_new_prims.is_empty() && q_changed_xml.is_empty()) {
+        return;
+    }
+    for (vessel, xml, vessel_path) in q_trees.iter() {
+        let mut bindings = lunco_autopilot::usd_tree::TargetBindings::default();
+        for path in lunco_autopilot::usd_tree::target_paths(&xml.0) {
+            if let Some((e, _)) = q_prims
+                .iter()
+                .find(|(_, p)| p.path == path && p.stage_handle == vessel_path.stage_handle)
+            {
+                bindings.0.insert(path, e);
+            }
+        }
+        commands.entity(vessel).insert(bindings);
     }
 }
 

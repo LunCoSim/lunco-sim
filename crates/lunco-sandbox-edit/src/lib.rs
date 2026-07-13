@@ -37,12 +37,6 @@ pub mod commands;
 /// Shaders as a journaled, synced, live-editable domain (WGSL twin of rhai's
 /// `ScriptDocument`) — edits record to the Twin journal (`DomainKind::Shader`).
 pub mod shader_doc;
-/// Path-line gizmo for a vessel's `AutopilotBehaviorSpec::Patrol` waypoints —
-/// the render projection of the behaviour tree (checkpoint list). Ui-gated:
-/// headless has no gizmos; the spec + `SetAutopilotBehavior` command the gizmo
-/// visualizes are headless-safe (live in `lunco-autopilot`).
-#[cfg(feature = "ui")]
-pub mod checkpoint_gizmo;
 #[cfg(feature = "ui")]
 pub mod gizmo;
 #[cfg(feature = "ui")]
@@ -172,12 +166,10 @@ impl Plugin for SandboxEditPlugin {
         );
         joint_viz::register_all_commands(app);
 
-        // Checkpoint path-line gizmo — visualises the patrol waypoints stored
-        // on a vessel's `AutopilotBehaviorSpec` (the behaviour tree the rhai
-        // `patrol.rhai` prelude authors via `SetAutopilotBehavior`). Reads the
-        // spec + vessel GlobalTransform, draws numbered pins + connecting
-        // lines; tunable via `SetCheckpointGizmo` (UI/API/Rhai parity).
-        app.add_plugins(checkpoint_gizmo::CheckpointGizmoPlugin);
+        // NOTE: waypoints have no gizmo, and no plugin. A waypoint is a USD prim
+        // referencing `vessels/markers/waypoint.usda` — the USD scene renders it, the
+        // ordinary transform gizmo drags it, and Delete removes it. See
+        // `ui::checkpoint_click`.
 
         // NOTE: gizmo handle picking is provided by transform-gizmo-bevy's own
         // `TransformGizmoPickingPlugin` (added by `TransformGizmoPlugin`). Its

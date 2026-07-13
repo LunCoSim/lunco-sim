@@ -19,6 +19,9 @@ lunco-behavior = { path = "../lunco-behavior" }
 # hot-swap it. serde deserializes that data; the crate never compiles rhai.
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Error type for the `.btxml` behaviour-tree asset loader (Bevy's `AssetLoader`
+# requires a `std::error::Error`), matching the `.rhai`/`.py` source loaders.
+anyhow = { workspace = true }
 # BehaviorTree.CPP v4 XML interchange: the `btcpp_xml` codec round-trips a tree's
 # JSON to/from the de-facto robotics format (Groot2 editor, ROS/Nav2), so a
 # behaviour authored here can be edited/run by real flight software and back.

@@ -39,6 +39,9 @@ use lunco_core::{Ack, Command, OpId, on_command, register_commands};
 
 /// BehaviorTree.CPP v4 XML ⇄ tree-JSON codec (Groot2 / ROS interop).
 pub mod btcpp_xml;
+/// Behaviour trees authored as USD prims (one prim per node) — the source of truth
+/// for a mission. `AutopilotBehaviorSpec` is derived from them, never authored.
+pub mod usd_tree;
 use lunco_core::{GlobalEntityId, NetworkRole, SessionId, SessionRegistry};
 use lunco_cosim::SetPorts;
 use serde::{Deserialize, Serialize};
@@ -601,7 +604,7 @@ fn default_cone() -> f64 {
 pub fn build_tree(spec: &BehaviorSpec) -> BoxNode<DriveCtx> {
     match spec {
         BehaviorSpec::Sequence { children } => {
-            Box::new(Sequence::new(children.iter().map(build_tree).collect()))
+            Box::new(Sequence::new(build_sequence_children(children)))
         }
         BehaviorSpec::Selector { children } => {
             Box::new(Selector::new(children.iter().map(build_tree).collect()))
@@ -629,7 +632,7 @@ pub fn build_tree(spec: &BehaviorSpec) -> BoxNode<DriveCtx> {
         BehaviorSpec::Succeed => Box::new(Action::new(|_: &mut DriveCtx| Status::Success)),
         BehaviorSpec::Fail => Box::new(Action::new(|_: &mut DriveCtx| Status::Failure)),
         BehaviorSpec::ReactiveSequence { children } => {
-            Box::new(ReactiveSequence::new(children.iter().map(build_tree).collect()))
+            Box::new(ReactiveSequence::new(build_sequence_children(children)))
         }
         BehaviorSpec::ReactiveSelector { children } => {
             Box::new(ReactiveSelector::new(children.iter().map(build_tree).collect()))
@@ -723,6 +726,49 @@ fn build_patrol(waypoints: &[PatrolWaypoint], speed: f64, radius: f32, dwell: f6
         })
         .collect();
     Box::new(Repeat::forever(Box::new(Sequence::new(legs))))
+}
+
+/// Compile a sequence's children, wiring the **arrival latch** from each `drive_to`
+/// to the `run_tool` leaves that follow it in the same sequence.
+///
+/// `sequence[drive_to, run_tool]` under a `forever` is the hand-authored (rhai/USD)
+/// spelling of a patrol leg, and it hits exactly the tick-rate re-fire that
+/// [`RunToolNode::arm`] describes: `Sequence` resets its children the moment it
+/// completes, so a rover parked inside the drive_to radius completes the whole
+/// sequence every tick and re-fires the tool at 60 Hz. [`build_patrol`] arms its own
+/// legs; this is the same guarantee for every other way of writing one.
+///
+/// The rule: a `run_tool` fires on the ARRIVAL of the nearest preceding `drive_to`
+/// in its sequence. A `run_tool` with no preceding `drive_to` is ungated (nothing
+/// re-activates it at tick rate).
+fn build_sequence_children(children: &[BehaviorSpec]) -> Vec<BoxNode<DriveCtx>> {
+    let mut out: Vec<BoxNode<DriveCtx>> = Vec::with_capacity(children.len());
+    let mut arm: Option<Arc<AtomicBool>> = None;
+    for child in children {
+        match child {
+            BehaviorSpec::DriveTo { target, speed, radius } => {
+                // Starts ARMED so the first arrival fires even when the vessel is
+                // already standing on the target.
+                let a = Arc::new(AtomicBool::new(true));
+                arm = Some(a.clone());
+                out.push(leaf_drive_to_arming(
+                    Vec3::from_array(*target),
+                    *speed,
+                    *radius,
+                    Some(a),
+                ));
+            }
+            BehaviorSpec::RunTool { tool, args } => {
+                let mut node = RunToolNode::new(tool.clone(), args.clone());
+                if let Some(a) = &arm {
+                    node = node.armed_by(a.clone());
+                }
+                out.push(Box::new(node));
+            }
+            other => out.push(build_tree(other)),
+        }
+    }
+    out
 }
 
 /// Leaf: steer toward `target` (Rust nav math); `Success` once within `radius`.
@@ -1718,6 +1764,30 @@ register_commands!(
     on_import_behavior_xml
 );
 
+/// Tunable defaults for an interactively-authored patrol (§3 — no magic numbers at
+/// the call sites). Domain tuning, so it lives with the autopilot rather than the
+/// editor: rhai, the API and the UI all read the same knobs.
+///
+/// Per-waypoint / per-mission values authored in USD or the BT.CPP XML always win;
+/// these are only the fallback the editor reaches for when a mission does not say.
+#[derive(Resource, Clone, Copy, Debug)]
+pub struct PatrolDefaults {
+    /// Cruise speed between waypoints.
+    pub speed: f64,
+    /// Arrival radius (m) — within this, the route advances.
+    pub radius: f32,
+    /// Dwell at each waypoint (s).
+    pub dwell: f64,
+    /// Throttle `EngageAutopilot` starts a patrol at.
+    pub engage_throttle: f64,
+}
+
+impl Default for PatrolDefaults {
+    fn default() -> Self {
+        Self { speed: 0.6, radius: 3.0, dwell: 0.0, engage_throttle: 0.6 }
+    }
+}
+
 /// Headless-safe plugin: engage autopilots on spawn, drive them each fixed tick,
 /// and accept live behaviour updates. No rendering/UI/avatar dependency.
 pub struct AutopilotPlugin;
@@ -1739,6 +1809,19 @@ impl Plugin for AutopilotPlugin {
             app.add_plugins(lunco_tools_bevy::ToolDispatchPlugin);
         }
         app.init_resource::<ClearanceField>();
+        app.init_resource::<PatrolDefaults>();
+        // Missions authored as BT.CPP XML + USD waypoint prims. The spec on the vessel
+        // is DERIVED from them; dragging a waypoint pin recompiles the route. See
+        // `usd_tree`.
+        app.init_asset::<usd_tree::BehaviorXmlAsset>()
+            .init_asset_loader::<usd_tree::BehaviorXmlLoader>();
+        app.add_systems(
+            Update,
+            (
+                usd_tree::load_behavior_xml_assets,
+                usd_tree::compile_behavior_xml,
+            ),
+        );
         app.add_systems(Update, setup_autopilot_session);
         // Sense obstacles (physics raycast) before driving, so `path_blocked` /
         // `steer_clear` see this tick's clearance. Gated on the avian spatial pipeline

@@ -7,16 +7,15 @@
 //!   deck addresses. (No selection → the panel renders an idle hint.)
 //! - **Possession** — read from the avatar's `ControllerLink`. Shows "Driving:
 //!   <vessel>" when the selected vessel is possessed, else "Free flight".
-//! - **Behaviour / checkpoints** — reads `AutopilotBehaviorSpec` on the vessel
-//!   so the user sees the live patrol (the same data the path-line gizmo
-//!   draws) and can clear it. Authoring happens in the 3D viewport (Ctrl+LMB)
-//!   or via rhai (`patrol.rhai`); this panel is the read+control surface.
+//! - **Behaviour / route** — reads the vessel's `AutopilotBehaviorSpec`, which is
+//!   DERIVED from its BT.CPP mission + the waypoint prims it references. The route
+//!   readout is therefore strictly read-only: a waypoint is edited in the scene (drag
+//!   the pin, press Delete), not from a list here. Authoring is Ctrl+LMB in the
+//!   viewport, rhai, or the `.usda` / Groot2 directly.
 //!
 //! Buttons emit the EXISTING typed commands — `PossessVessel`, `ReleaseVessel`,
-//! `EngageAutopilot`, `SetAutopilotBehavior` (via `DeleteCheckpoint` /
-//! `ClearPatrol` thin wrappers in [`crate::ui::checkpoint_click`]). One input
-//! shape, every surface (§4.2): the same verbs the rhai prelude and the HTTP
-//! API expose.
+//! `EngageAutopilot`, `DisengageAutopilot`. One input shape, every surface (§4.2):
+//! the same verbs the rhai prelude and the HTTP API expose.
 
 use bevy::prelude::*;
 use bevy_egui::egui;
@@ -25,7 +24,7 @@ use lunco_controller::ControllerLink;
 use lunco_core::{Avatar, GlobalEntityId};
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
-use crate::ui::checkpoint_click::{DeleteCheckpoint, CheckpointContextMenu};
+
 use crate::SelectedEntities;
 
 /// Change-driven view-model for the Command Deck. Reads selection, possession
@@ -226,7 +225,7 @@ impl Panel for CommandDeck {
                             .unwrap_or_default();
                         // Throttle from the tunable resource, not a literal (§3).
                         let throttle = world
-                            .get_resource::<crate::checkpoint_gizmo::PatrolDefaults>()
+                            .get_resource::<lunco_autopilot::PatrolDefaults>()
                             .copied()
                             .unwrap_or_default()
                             .engage_throttle;
@@ -241,61 +240,36 @@ impl Panel for CommandDeck {
             }
         });
 
-        // ── Checkpoint list ──────────────────────────────────────────────
+        // ── Route readout ────────────────────────────────────────────────
+        // READ-ONLY. A waypoint is a USD prim, so it is edited in the scene, not in
+        // this list: select the pin to move it with the transform gizmo, or press
+        // Delete to remove it. There is no delete button here because there is no
+        // checkpoint command to call — the prim's own Delete path is the verb.
         if view.is_patrol && !view.patrol.is_empty() {
             ui.separator();
-            ui.label("Checkpoints");
-            let mut to_delete: Option<u32> = None;
-            let mut to_clear = false;
+            ui.label("Route");
             egui::ScrollArea::vertical().show(ui, |ui| {
                 for (i, wp) in view.patrol.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        // Action marker: 🛰 when this waypoint fires a tool on
-                        // arrival (authored in rhai/USD), so a geometry-only
-                        // Ctrl+LMB pin is distinguishable from an armed one.
-                        let marker = view
-                            .patrol_actions
-                            .get(i)
-                            .filter(|n| **n > 0)
-                            .map(|n| format!(" 🛰×{}", n))
-                            .unwrap_or_default();
-                        ui.label(format!("{}.  [{:.1}, {:.1}, {:.1}]{marker}", i + 1, wp[0], wp[1], wp[2]));
-                        if ui.small_button("🗑").on_hover_text("Delete this checkpoint").clicked() {
-                            to_delete = Some(i as u32);
-                        }
-                    });
+                    // Action marker: 🛰 when this waypoint fires a tool on arrival, so
+                    // a geometry-only pin is distinguishable from an armed one.
+                    let marker = view
+                        .patrol_actions
+                        .get(i)
+                        .filter(|n| **n > 0)
+                        .map(|n| format!(" 🛰×{}", n))
+                        .unwrap_or_default();
+                    ui.label(format!(
+                        "{}.  [{:.1}, {:.1}, {:.1}]{marker}",
+                        i + 1,
+                        wp[0],
+                        wp[1],
+                        wp[2]
+                    ));
                 }
             });
-            ui.horizontal(|ui| {
-                if ui.button("Clear patrol").clicked() {
-                    to_clear = true;
-                }
-            });
-            // Defer the deletes AFTER the egui borrow ends.
-            if let Some(idx) = to_delete {
-                let v = vessel;
-                ctx.defer(move |world| {
-                    world.trigger(DeleteCheckpoint { vessel: v, index: idx });
-                });
-            }
-            if to_clear {
-                let v = vessel;
-                ctx.defer(move |world| {
-                    // Clear patrol: the single canonical verb — brakes the tree
-                    // AND removes the spec mirror so the gizmo/deck update. No
-                    // hand-built Brake JSON (§4.2 — one input shape, every surface).
-                    world.trigger(lunco_autopilot::ClearPatrol { vessel: v });
-                    // Also close any open context menu.
-                    if let Some(mut m) = world.get_resource_mut::<CheckpointContextMenu>() {
-                        *m = CheckpointContextMenu::Closed;
-                    }
-                });
-            }
         }
 
         ui.separator();
-        ui.small(
-            "Ctrl+Left-click ground: add checkpoint · Right-click pin: delete",
-        );
+        ui.small("Ctrl+Left-click ground: drop a waypoint · click a pin to select, drag to move, Delete to remove");
     }
 }

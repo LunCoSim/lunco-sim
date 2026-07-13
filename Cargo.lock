@@ -6932,6 +6932,7 @@ dependencies = [
 name = "lunco-autopilot"
 version = "0.6.0-dev"
 dependencies = [
+ "anyhow",
  "avian3d",
  "bevy",
  "lunco-behavior",
@@ -7757,6 +7758,7 @@ dependencies = [
  "leafwing-input-manager",
  "lunco-api",
  "lunco-assets",
+ "lunco-autopilot",
  "lunco-avatar",
  "lunco-celestial",
  "lunco-controller",
