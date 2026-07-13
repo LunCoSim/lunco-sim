@@ -18,6 +18,9 @@ use avian3d::physics_transform::{Position, Rotation};
 use big_space::prelude::Grid;
 use lunco_core::{on_command, register_commands, Command};
 use lunco_obstacle_field::ObstacleFieldRoot;
+// Appearance INTENT (render-free). `SetObjectProperty`'s PBR keys mutate this
+// component; the render binder re-materialises on `Changed<PbrLook>`.
+use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd::document::{UsdOp, LayerId};
 use lunco_usd::registry::UsdDocumentRegistry;
@@ -3031,7 +3034,10 @@ pub fn persist_wheel_and_pbr_to_runtime_layer(
     usd_registry: Res<UsdDocumentRegistry>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     q_prim: Query<&UsdPrimPath>,
-    q_std_mat: Query<(), With<MeshMaterial3d<StandardMaterial>>>,
+    // "Is this a PBR (non-shader) prim?" — a `PbrLook` intent OR a bound
+    // `StandardMaterial`. Headless has no binder, so only the intent exists
+    // there; a glTF import has only the material. Either qualifies.
+    q_std_mat: Query<(), Or<(With<PbrLook>, With<MeshMaterial3d<StandardMaterial>>)>>,
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
@@ -3473,7 +3479,88 @@ pub struct SetObjectProperty {
     pub value: String,
 }
 
+/// The `SetObjectProperty` PBR keys [`PbrLook`] can express.
+///
+/// These go through the **appearance-intent component**, not the material asset:
+/// mutating `PbrLook` is enough, because `lunco-render-bevy`'s `Changed<PbrLook>`
+/// binder re-materialises the entity. That is why they must NOT reach
+/// [`apply_pbr_param`] — the binder's material handles are *shared by look*, so an
+/// in-place `Assets<StandardMaterial>` write would bleed onto every other entity
+/// with the same look.
+///
+/// This is every PBR key `SetObjectProperty` accepts — the legacy
+/// [`apply_pbr_param`] path below now only serves entities that have a material
+/// but no `PbrLook` (a glTF import that brought its own).
+const PBR_LOOK_KEYS: &[&str] = &[
+    "base_color",
+    "emissive",
+    "metallic",
+    "roughness",
+    "perceptual_roughness",
+    "reflectance",
+    "alpha",
+    "opacity",
+    "unlit",
+    "double_sided",
+];
+
+/// Apply one PBR property addressed by `SetObjectProperty` to a [`PbrLook`] —
+/// appearance **intent**, no material asset touched.
+///
+/// Same value grammar as [`apply_pbr_param`]. Only the keys in [`PBR_LOOK_KEYS`]
+/// are understood; anything else returns `false` and the caller falls back.
+fn apply_pbr_look(look: &mut PbrLook, key: &str, value: &str) -> bool {
+    let f: Vec<f32> = value
+        .split(',')
+        .filter_map(|s| s.trim().parse::<f32>().ok())
+        .collect();
+    let parse_bool = |v: &str| matches!(v.trim(), "true" | "1" | "yes" | "on");
+    match key {
+        "base_color" => {
+            if f.len() < 3 {
+                return false;
+            }
+            let a = f.get(3).copied().unwrap_or(look.base_color.alpha);
+            look.base_color = LinearRgba::new(f[0], f[1], f[2], a);
+        }
+        "emissive" => {
+            if f.len() < 3 {
+                return false;
+            }
+            look.emissive = LinearRgba::new(f[0], f[1], f[2], f.get(3).copied().unwrap_or(1.0));
+        }
+        "metallic" => {
+            let Some(v) = f.first() else { return false };
+            look.metallic = v.clamp(0.0, 1.0);
+        }
+        "roughness" | "perceptual_roughness" => {
+            let Some(v) = f.first() else { return false };
+            look.perceptual_roughness = v.clamp(0.0, 1.0);
+        }
+        "reflectance" => {
+            let Some(v) = f.first() else { return false };
+            look.reflectance = v.clamp(0.0, 1.0);
+        }
+        "alpha" | "opacity" => {
+            let Some(v) = f.first() else { return false };
+            let v = v.clamp(0.0, 1.0);
+            look.base_color.alpha = v;
+            look.alpha = if v >= 1.0 { SurfaceAlpha::Opaque } else { SurfaceAlpha::Blend };
+        }
+        "unlit" => look.unlit = parse_bool(value),
+        "double_sided" => look.double_sided = parse_bool(value),
+        _ => return false,
+    }
+    true
+}
+
 /// Apply one `StandardMaterial` (PBR) property addressed by `SetObjectProperty`.
+///
+/// The **fallback** path, for the properties `PbrLook` cannot yet express
+/// (`emissive`, `reflectance`, `alpha`/`opacity`) and for entities that carry a
+/// material without a `PbrLook` (e.g. a glTF import). Everything in
+/// [`PBR_LOOK_KEYS`] on a `PbrLook`-bearing entity goes through
+/// [`apply_pbr_look`] instead.
 ///
 /// Value formats: colors are comma-separated **linear** `r,g,b[,a]` in 0..1 (so
 /// they round-trip the Inspector's `color_edit_button_rgb`); scalars a single
@@ -3530,6 +3617,7 @@ pub fn on_set_object_property(
     mut std_materials: ResMut<Assets<StandardMaterial>>,
     q_mat: Query<&MeshMaterial3d<lunco_materials::ShaderMaterial>>,
     q_std_mat: Query<&MeshMaterial3d<StandardMaterial>>,
+    mut q_look: Query<&mut PbrLook>,
     mut q_vis: Query<&mut Visibility>,
     mut q_wheel: Query<&mut lunco_mobility::WheelRaycast>,
     mut commands: Commands,
@@ -3572,6 +3660,9 @@ pub fn on_set_object_property(
             commands
                 .entity(target)
                 .remove::<MeshMaterial3d<StandardMaterial>>()
+                // Drop the PBR intent as well — otherwise the render binder
+                // re-materialises it and the mesh carries TWO materials.
+                .remove::<PbrLook>()
                 .insert(MeshMaterial3d(handle));
             info!("SET_PROPERTY: {} shader = {}", cmd.entity_id, cmd.value);
         }
@@ -3587,15 +3678,32 @@ pub fn on_set_object_property(
                 Visibility::Visible
             };
         }
-        // StandardMaterial (PBR) properties — for props/rovers that use the
-        // default bevy material rather than a custom `ShaderMaterial`. Mutates
-        // the live asset in place (same immediate-feedback path as the shader
-        // params below). Explicit arms so these names never get stolen by the
-        // shader-param fallback.
+        // PBR properties — for props/rovers that use the default bevy material
+        // rather than a custom `ShaderMaterial`. Explicit arms so these names
+        // never get stolen by the shader-param fallback.
+        //
+        // Preferred path: mutate the entity's `PbrLook` *intent* component. The
+        // render binder's `Changed<PbrLook>` system re-materialises it, so
+        // "edit the material" is just "mutate a component" — no asset handles,
+        // and it works headless (the intent is still in the world; nothing binds
+        // it). Falls through to the legacy `Assets<StandardMaterial>` write only
+        // for a material-bearing entity that has no `PbrLook` behind it — a glTF
+        // import that brought its own material. Delete that fallback once every
+        // spawn path authors a `PbrLook`.
         "base_color" | "emissive" | "metallic" | "roughness" | "perceptual_roughness"
         | "reflectance" | "alpha" | "opacity" | "unlit" | "double_sided" => {
+            if PBR_LOOK_KEYS.contains(&cmd.property.as_str()) {
+                if let Ok(mut look) = q_look.get_mut(target) {
+                    if apply_pbr_look(&mut look, cmd.property.as_str(), &cmd.value) {
+                        info!("SET_PROPERTY: {} look {} = {}", cmd.entity_id, cmd.property, cmd.value);
+                    } else {
+                        warn!("SET_PROPERTY: bad value '{}' for pbr '{}'", cmd.value, cmd.property);
+                    }
+                    return;
+                }
+            }
             let Ok(m) = q_std_mat.get(target) else {
-                warn!("SET_PROPERTY: entity {} has no StandardMaterial", cmd.entity_id);
+                warn!("SET_PROPERTY: entity {} has no PbrLook / StandardMaterial", cmd.entity_id);
                 return;
             };
             let Some(mut mat) = std_materials.get_mut(&m.0) else { return };
@@ -4101,6 +4209,8 @@ fn install_shader(
                 commands
                     .entity(ent)
                     .remove::<MeshMaterial3d<StandardMaterial>>()
+                    // …and the PBR intent, or the binder re-adds a second material.
+                    .remove::<PbrLook>()
                     .insert(MeshMaterial3d(mat_handle));
                 info!("INSTALL_SHADER: applied {asset_path} to entity {target}");
             }

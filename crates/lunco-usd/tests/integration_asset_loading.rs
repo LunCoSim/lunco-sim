@@ -221,12 +221,16 @@ fn test_rover_components_via_bevy_pipeline() {
         assert!((he[2] - 1.75).abs() < 0.1,
             "{label}: Collider hz must be ~1.75 (depth/2), got {}", he[2]);
 
-        // Visual (Mesh3d + material) — on the Chassis child, not the Xform root.
+        // Visual (Mesh3d + appearance INTENT) — on the Chassis child, not the Xform
+        // root. The prim carries a `PbrLook`, not a `MeshMaterial3d`: the material is
+        // bound by `LuncoRenderPlugin` in render builds only, so this headless test
+        // asserts the intent, which is what USD actually authors.
+        // See docs/architecture/render-decoupling.md.
         let chassis = chassis_child(&app, rover_ent, label);
         let _mesh = app.world().get::<Mesh3d>(chassis)
             .unwrap_or_else(|| panic!("{label}: Chassis Missing Mesh3d (body not visible!)"));
-        let _mat = app.world().get::<MeshMaterial3d<StandardMaterial>>(chassis)
-            .unwrap_or_else(|| panic!("{label}: Chassis Missing MeshMaterial3d (body not visible!)"));
+        let _look = app.world().get::<lunco_render::PbrLook>(chassis)
+            .unwrap_or_else(|| panic!("{label}: Chassis Missing PbrLook (body would not be visible!)"));
 
         // Steering allocation: every rover carries a `DriveMix` naming a kernel.
         // Ackermann → the `linear` kernel with a `steering` term; skid → the

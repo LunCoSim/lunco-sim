@@ -12,7 +12,10 @@ use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::VisibilityRange;
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use bevy::render::render_resource::PrimitiveTopology;
+// `bevy_mesh`, not `bevy::render` — `PrimitiveTopology` is re-exported from
+// `wgpu-types` and needs no render pipeline. See docs/architecture/render-decoupling.md.
+use bevy_mesh::PrimitiveTopology;
+use lunco_render::PbrLook;
 use bevy_mesh::Indices;
 use big_space::prelude::CellCoord;
 use lunco_core::{ArticulatedVehicle, GridAnchor, WorldGrid, Command, on_command, register_commands};
@@ -279,11 +282,16 @@ fn regenerate_obstacle_field(
     mut hold: ResMut<PhysicsHold>,
     mut heights: ResMut<ObstacleFieldHeights>,
     mut commands: Commands,
-    // Optional so the headless server (no render → no asset collections) still
-    // builds the colliders. Physics is then identical on server + client; only
-    // the client adds visuals. This keeps networked rover runs deterministic.
+    // Optional so the headless server (no render → no `Assets<Mesh>`) still builds
+    // the colliders. Physics is then identical on server + client; only the client
+    // adds visuals. This keeps networked rover runs deterministic.
+    //
+    // There is no `Assets<StandardMaterial>` here any more: this crate states
+    // appearance as `PbrLook` intent and never names a material, which is what
+    // keeps `bevy_pbr` (→ bevy_render → wgpu/naga) out of every build that links
+    // it. `lunco-render-bevy` binds the material in render builds.
+    // See docs/architecture/render-decoupling.md.
     meshes: Option<ResMut<Assets<Mesh>>>,
-    materials: Option<ResMut<Assets<StandardMaterial>>>,
 ) {
     // In DEM-delegated mode the DEM terrain owns crater/rock generation from the
     // shared spec (see `lunco-terrain-surface`), so the flat slab must NOT build —
@@ -317,8 +325,10 @@ fn regenerate_obstacle_field(
     }
 
     let mut meshes = meshes;
-    let mut materials = materials;
-    let render = meshes.is_some() && materials.is_some();
+    // "Are we a render build?" is now exactly "do we have a mesh asset collection?"
+    // — the material side is intent (`PbrLook`) and is spawned unconditionally;
+    // `lunco-render-bevy` binds it only where it exists.
+    let render = meshes.is_some();
 
     let h = spec.region_half_extent;
     let res = spec.grid_resolution as usize;
@@ -368,7 +378,7 @@ fn regenerate_obstacle_field(
         RigidBody::Static,
         collider,
     ));
-    if let (Some(meshes), Some(materials)) = (meshes.as_mut(), materials.as_mut()) {
+    if let Some(meshes) = meshes.as_mut() {
         let crate::field::MeshData { positions, normals, uvs, indices } = grid.to_mesh_data();
         // Slab: keep the CPU copy (`default()`) — the horizon bake reads it back.
         let mesh = meshes.add(grid_mesh(
@@ -378,12 +388,10 @@ fn regenerate_obstacle_field(
             indices,
             RenderAssetUsages::default(),
         ));
-        let material = materials.add(StandardMaterial {
-            base_color: Color::srgb(0.32, 0.30, 0.28),
-            perceptual_roughness: 1.0,
-            ..default()
-        });
-        terrain.insert((Mesh3d(mesh), MeshMaterial3d(material)));
+        terrain.insert((
+            Mesh3d(mesh),
+            PbrLook::matte(Color::srgb(0.32, 0.30, 0.28).into()),
+        ));
     }
 
     // --- Rocks → bucketed scatter --------------------------------------------
@@ -411,32 +419,33 @@ fn regenerate_obstacle_field(
         // Shared per-bucket visual assets (client only). Each bucket gets several
         // faceted boulder shapes (merged cubes); instances pick one by position.
         let buckets = bucket_sizes(spec.rocks.size.min, spec.rocks.size.max, ROCK_BUCKETS);
-        let visuals = match (meshes.as_mut(), materials.as_mut()) {
-            (Some(meshes), Some(materials)) => {
-                let mut rock_meshes: Vec<Handle<Mesh>> =
-                    Vec::with_capacity(buckets.len() * ROCK_VARIANTS);
-                for (bi, &r) in buckets.iter().enumerate() {
-                    for v in 0..ROCK_VARIANTS {
-                        let mesh_seed = spec.seed
-                            ^ 0x9E37_79B9_7F4A_7C15u64
-                            ^ ((bi as u64) << 8)
-                            ^ ((v as u64) << 20);
-                        rock_meshes.push(meshes.add(faceted_rock_mesh(mesh_seed, 4 + v, r)));
-                    }
-                }
-                let rock_material = materials.add(StandardMaterial {
-                    base_color: Color::srgb(0.22, 0.21, 0.20),
-                    perceptual_roughness: 1.0,
-                    // Generated facets aren't guaranteed outward-wound; render both
-                    // sides so no triangles drop out.
-                    double_sided: true,
-                    cull_mode: None,
-                    ..default()
-                });
-                Some((rock_meshes, rock_material))
-            }
-            _ => None,
+        // The rock look is ONE value shared by every instance. `lunco-render-bevy`
+        // caches by `PbrLook::key()`, so all N rocks resolve to a single material
+        // and a single bind group — the batching property this scatter depends on
+        // (it used to be preserved by hand-threading one `Handle` through the
+        // loop; now it cannot be forgotten).
+        let rock_look = PbrLook {
+            base_color: Color::srgb(0.22, 0.21, 0.20).into(),
+            perceptual_roughness: 1.0,
+            // Generated facets aren't guaranteed outward-wound; render both sides
+            // so no triangles drop out.
+            double_sided: true,
+            ..Default::default()
         };
+        let visuals = meshes.as_mut().map(|meshes| {
+            let mut rock_meshes: Vec<Handle<Mesh>> =
+                Vec::with_capacity(buckets.len() * ROCK_VARIANTS);
+            for (bi, &r) in buckets.iter().enumerate() {
+                for v in 0..ROCK_VARIANTS {
+                    let mesh_seed = spec.seed
+                        ^ 0x9E37_79B9_7F4A_7C15u64
+                        ^ ((bi as u64) << 8)
+                        ^ ((v as u64) << 20);
+                    rock_meshes.push(meshes.add(faceted_rock_mesh(mesh_seed, 4 + v, r)));
+                }
+            }
+            rock_meshes
+        });
 
         for p in &placements {
             let y = grid.height_at(p.pos.x, p.pos.y);
@@ -459,7 +468,7 @@ fn regenerate_obstacle_field(
                 ))
                 .id();
 
-            if let Some((rock_meshes, rock_material)) = &visuals {
+            if let Some(rock_meshes) = &visuals {
                 let bi = bucket_index(p.size, &buckets);
                 // Pick a faceted variant deterministically from position.
                 let variant =
@@ -467,7 +476,10 @@ fn regenerate_obstacle_field(
                 let scale = p.size / buckets[bi];
                 let rock_child = commands.spawn((
                     Mesh3d(rock_meshes[bi * ROCK_VARIANTS + variant].clone()),
-                    MeshMaterial3d(rock_material.clone()),
+                    // `PbrLook` carries texture handles, so it is Clone, not Copy.
+                    // Cloning the LOOK does not clone a material: every clone keys to
+                    // the same cached one.
+                    rock_look.clone(),
                     Transform::from_scale(Vec3::splat(scale)),
                     ChildOf(rock),
                 )).id();

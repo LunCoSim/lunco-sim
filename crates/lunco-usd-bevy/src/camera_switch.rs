@@ -11,7 +11,7 @@
 //!
 //! This lives in `lunco-usd-bevy` (avatar-free, present in every windowed
 //! binary) so switching works in a static/headless world with no avatar and no
-//! input. A *switchable* camera is any [`Camera3d`] with a window
+//! input. A *switchable* camera is any [`SceneCamera`] with a window
 //! [`RenderTarget`]: every USD `def Camera`, plus whatever free/avatar camera a
 //! host adds. RTT (`Image`-target) cameras and the egui `Camera2d` are never
 //! touched.
@@ -25,8 +25,9 @@ use bevy::camera::{RenderTarget, Viewport};
 use bevy::prelude::*;
 use big_space::prelude::{FloatingOrigin, Grid};
 use lunco_core::{on_command, Command, LocalAvatar, SceneViewport};
+use lunco_render::SceneCamera;
 
-/// Switch the viewport's active camera to the `Camera3d` whose `Name` matches.
+/// Switch the viewport's active camera to the `SceneCamera` whose `Name` matches.
 ///
 /// Works with no avatar present. `name` matches the full USD prim path *or*
 /// its leaf, so a cutscene can `set_camera("ChaseCam")` to reach
@@ -48,7 +49,7 @@ pub struct ActivateCamera(pub Entity);
 #[on_command(SetActiveCamera)]
 pub fn on_set_active_camera(
     trigger: On<SetActiveCamera>,
-    q_cams: Query<(Entity, &Name), With<Camera3d>>,
+    q_cams: Query<(Entity, &Name), With<SceneCamera>>,
     mut commands: Commands,
 ) {
     let want = cmd.name.trim();
@@ -73,7 +74,7 @@ pub fn cycle_active_camera(
     // plugin). It simply never cycles — the command path still works there.
     keys: Option<Res<ButtonInput<KeyCode>>>,
     vp: Res<SceneViewport>,
-    q_cams: Query<(Entity, &RenderTarget, &Name), With<Camera3d>>,
+    q_cams: Query<(Entity, &RenderTarget, &Name), With<SceneCamera>>,
     mut commands: Commands,
 ) {
     let Some(keys) = keys else {
@@ -116,7 +117,7 @@ pub fn cycle_active_camera(
 /// directly (single-writer discipline).
 pub fn on_activate_camera(
     trigger: On<ActivateCamera>,
-    q_cams: Query<&RenderTarget, With<Camera3d>>,
+    q_cams: Query<&RenderTarget, With<SceneCamera>>,
     mut vp: ResMut<SceneViewport>,
 ) {
     let target = trigger.event().0;
@@ -126,7 +127,7 @@ pub fn on_activate_camera(
             info!("[camera] viewport → {target:?}");
         }
         Ok(_) => warn!("[camera] activate: {target:?} does not render to a window"),
-        Err(_) => warn!("[camera] activate: {target:?} is not a Camera3d"),
+        Err(_) => warn!("[camera] activate: {target:?} is not a SceneCamera"),
     }
 }
 
@@ -139,7 +140,7 @@ pub fn on_activate_camera(
 /// which the reconciler's "keep a valid binding" rule wouldn't correct on its own.
 pub fn bind_avatar_camera_on_add(
     add: On<Add, LocalAvatar>,
-    q: Query<&RenderTarget, With<Camera3d>>,
+    q: Query<&RenderTarget, With<SceneCamera>>,
     mut vp: ResMut<SceneViewport>,
 ) {
     let e = add.entity;
@@ -162,8 +163,8 @@ pub fn bind_avatar_camera_on_add(
 /// leave zero or many active cameras.
 pub fn reconcile_scene_viewport(
     mut vp: ResMut<SceneViewport>,
-    mut q_cams: Query<(Entity, &mut Camera, &RenderTarget, Option<&ChildOf>), With<Camera3d>>,
-    q_avatar_cam: Query<Entity, (With<Camera3d>, With<LocalAvatar>)>,
+    mut q_cams: Query<(Entity, &mut Camera, &RenderTarget, Option<&ChildOf>), With<SceneCamera>>,
+    q_avatar_cam: Query<Entity, (With<SceneCamera>, With<LocalAvatar>)>,
     q_grids: Query<(), With<Grid>>,
     q_origins: Query<Entity, With<FloatingOrigin>>,
     mut commands: Commands,
@@ -258,7 +259,7 @@ mod tests {
 
     fn window_cam(is_active: bool, name: &str) -> impl Bundle {
         (
-            Camera3d::default(),
+            SceneCamera::default(),
             Camera {
                 is_active,
                 ..default()
@@ -271,7 +272,7 @@ mod tests {
     fn active_set(app: &mut App) -> Vec<Entity> {
         let mut q = app
             .world_mut()
-            .query_filtered::<(Entity, &Camera), With<Camera3d>>();
+            .query_filtered::<(Entity, &Camera), With<SceneCamera>>();
         q.iter(app.world())
             .filter(|(_, c)| c.is_active)
             .map(|(e, _)| e)

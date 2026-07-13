@@ -210,30 +210,30 @@ pub struct LayerScatterCx<'a, 'w, 's> {
     /// The composed surface (rocks resolve ground height off this).
     pub oracle: &'a crate::oracle::SurfaceOracle,
     pub commands: &'a mut Commands<'w, 's>,
+    /// `None` headless — and "are we a render build?" is now exactly "is this
+    /// `Some`?". There is no material store here: a layer states its surface as
+    /// appearance INTENT (`lunco_render::PbrLook`, or a `ShaderLook` for a custom
+    /// shader) next to its `Mesh3d`, and `lunco-render-bevy` binds it.
     pub meshes: Option<&'a mut Assets<Mesh>>,
-    pub materials: Option<&'a mut Assets<StandardMaterial>>,
-    /// The terrain `ShaderMaterial` store + asset server — a layer that wants its
-    /// overlay geometry to match the streamed regolith tiles (the craters overlay)
-    /// builds a `terrain_geomorph` material here instead of a `StandardMaterial`.
-    pub shader_materials: Option<&'a mut Assets<lunco_materials::ShaderMaterial>>,
     pub asset_server: &'a AssetServer,
-    /// Boulder meshes/material shared across ALL rock layers on ALL terrains — one
-    /// bind group and a handful of meshes instead of one of each per placed rock.
-    /// See [`SharedRockAssets`].
+    /// Boulder meshes shared across ALL rock layers on ALL terrains — a handful of
+    /// meshes instead of one per placed rock. See [`SharedRockAssets`].
     pub rock_assets: &'a mut SharedRockAssets,
 }
 
 /// The shared boulder assets every rock layer draws with.
 ///
-/// The procedural scatter already bucketed its meshes and shared one material;
-/// `PlaceRock` (the hand-placed instance layer) allocated a NEW `Mesh` **and** a NEW
-/// `StandardMaterial` per rock — each one a permanent extra draw call + bind group.
-/// Hoisting both into a resource means every rock, placed or scattered, batches: ~6
-/// draws for thousands of boulders.
+/// `PlaceRock` (the hand-placed instance layer) used to allocate a NEW `Mesh` per
+/// rock — a permanent extra draw call each. Bucketing them into a resource means
+/// every rock, placed or scattered, batches: ~6 draws for thousands of boulders.
+///
+/// The material half of this used to live here too (one shared
+/// `Handle<StandardMaterial>`, hand-threaded through the scatter loop). It is gone:
+/// rocks carry [`rocks::ROCK_LOOK`](super::terrain_layers::rocks) — one `PbrLook`
+/// value — and `lunco-render-bevy` caches by its key, so the single shared material
+/// is now a consequence of the data instead of something a caller can forget.
 #[derive(Resource, Default)]
 pub struct SharedRockAssets {
-    /// One shared boulder `StandardMaterial` (all rocks look alike by design).
-    pub material: Option<Handle<StandardMaterial>>,
     /// Bucketed boulder meshes, keyed by the quantised radius bucket (see
     /// `rocks::size_bucket`).
     pub meshes: std::collections::HashMap<u32, Handle<Mesh>>,
@@ -359,8 +359,6 @@ impl TerrainLayerAppExt for App {
 pub fn scatter_terrain_layers(
     mut commands: Commands,
     meshes: Option<ResMut<Assets<Mesh>>>,
-    materials: Option<ResMut<Assets<StandardMaterial>>>,
-    shader_materials: Option<ResMut<Assets<lunco_materials::ShaderMaterial>>>,
     asset_server: Res<AssetServer>,
     mut rock_assets: ResMut<SharedRockAssets>,
     q: Query<
@@ -372,8 +370,6 @@ pub fn scatter_terrain_layers(
         return;
     }
     let mut meshes = meshes;
-    let mut materials = materials;
-    let mut shader_materials = shader_materials;
     for (entity, dem, stack) in &q {
         // `try_insert`: a doc-backed scene reload (E1b) can despawn + re-instantiate
         // this terrain in the same frame, so the entity may be gone by the time
@@ -389,8 +385,6 @@ pub fn scatter_terrain_layers(
             oracle: &dem.0,
             commands: &mut commands,
             meshes: meshes.as_deref_mut(),
-            materials: materials.as_deref_mut(),
-            shader_materials: shader_materials.as_deref_mut(),
             asset_server: &asset_server,
             rock_assets: &mut rock_assets,
         };

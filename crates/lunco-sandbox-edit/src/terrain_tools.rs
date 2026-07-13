@@ -157,13 +157,12 @@ fn action_color(tool: TerrainTool, alt: bool, ctrl: bool) -> Color {
 pub fn update_terrain_brush_ghost(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     state: Res<TerrainToolState>,
     keys: Res<ButtonInput<KeyCode>>,
     cameras: Query<(&Camera, &GlobalTransform, &bevy::camera::RenderTarget), With<Camera3d>>,
     windows: Query<&Window>,
     mut q_ghost: Query<
-        (Entity, &mut Transform, &MeshMaterial3d<StandardMaterial>),
+        (Entity, &mut Transform, &mut lunco_render::PbrLook),
         With<TerrainBrushGhost>,
     >,
     grids: Query<Entity, With<Grid>>,
@@ -221,31 +220,23 @@ pub fn update_terrain_brush_ghost(
     let transform = Transform::from_translation(point + Vec3::Y * 0.05)
         .with_scale(Vec3::new(state.radius, 1.0, state.radius));
 
-    if let Some((_, mut tf, mat)) = q_ghost.iter_mut().next() {
+    if let Some((_, mut tf, mut look)) = q_ghost.iter_mut().next() {
         // `set_if_neq`, NOT `*tf = transform`: the latter goes through `DerefMut`, so
         // it marks `Changed<Transform>` EVERY frame the brush is armed — whether or
         // not the cursor moved (and every downstream propagation with it). Compare
         // first, write only on a real move.
         tf.set_if_neq(transform);
-        // `Assets::get_mut` marks the material modified → a uniform re-upload EVERY
-        // frame if called unconditionally. The tint only changes when a modifier
-        // (Alt/Ctrl) toggles, so peek immutably and touch it only on a real change.
-        let changed = materials.get(&mat.0).is_some_and(|m| m.base_color != color);
-        if changed {
-            if let Some(mut m) = materials.get_mut(&mat.0) {
-                m.base_color = color;
-            }
+        // Same discipline for the tint: `DerefMut` on `PbrLook` marks it `Changed`,
+        // and the render binder re-materialises on `Changed<PbrLook>` — so an
+        // unconditional write would re-bind every frame. The tint only changes when
+        // a modifier (Alt/Ctrl) toggles: compare first, write only on a real change.
+        if look.base_color != color.to_linear() {
+            look.base_color = color.to_linear();
         }
     } else {
         let Some(grid) = grids.iter().next() else { return };
         // Unit-radius flat disc; scaled by `radius` each frame via the transform.
         let mesh = meshes.add(Cylinder::new(1.0, 0.02).mesh().resolution(48).build());
-        let mat = materials.add(StandardMaterial {
-            base_color: color,
-            unlit: true,
-            alpha_mode: AlphaMode::Blend,
-            ..default()
-        });
         // `Visibility` pulls in `InheritedVisibility` + `ViewVisibility` as required
         // components in Bevy 0.19 — no need to insert them explicitly.
         commands.spawn((
@@ -253,7 +244,17 @@ pub fn update_terrain_brush_ghost(
             TerrainBrushGhost,
             transform,
             Mesh3d(mesh),
-            MeshMaterial3d(mat),
+            // Appearance INTENT — the render binder makes the material. Only a
+            // handful of distinct tints exist (one per tool × modifier), so the
+            // binder's look-keyed cache holds a handful of materials, not one
+            // per frame.
+            lunco_render::PbrLook {
+                base_color: color.to_linear(),
+                unlit: true,
+                alpha: lunco_render::SurfaceAlpha::Blend,
+                perceptual_roughness: 0.5,
+                ..default()
+            },
             ChildOf(grid),
             Visibility::Visible,
         ));

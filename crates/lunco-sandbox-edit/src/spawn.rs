@@ -198,7 +198,6 @@ pub(crate) fn terrain_height_at(terrains: &TerrainOracles, world: DVec3) -> Opti
 pub fn update_spawn_ghost(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     spawn_state: Res<SpawnState>,
     catalog: Res<SpawnCatalog>,
     asset_server: Res<AssetServer>,
@@ -374,10 +373,6 @@ pub fn update_spawn_ghost(
                 Some(g) => g,
                 None => return,
             };
-            let mat = materials.add(StandardMaterial {
-                base_color: Color::srgba(0.5, 1.0, 0.5, 0.4),
-                ..default()
-            });
             commands.spawn((
                 Name::new("SpawnGhost"),
                 SpawnGhost,
@@ -387,7 +382,15 @@ pub fn update_spawn_ghost(
                     ..default()
                 },
                 Mesh3d(meshes.add(Sphere::new(0.5).mesh().ico(8).unwrap())),
-                MeshMaterial3d(mat),
+                // Appearance INTENT — the render binder turns this into a
+                // `StandardMaterial`. `perceptual_roughness: 0.5` reproduces
+                // bevy's `StandardMaterial::default()` exactly (PbrLook defaults
+                // to 1.0, the regolith value), so the ghost looks unchanged.
+                lunco_render::PbrLook {
+                    base_color: Color::srgba(0.5, 1.0, 0.5, 0.4).to_linear(),
+                    perceptual_roughness: 0.5,
+                    ..default()
+                },
                 ChildOf(grid),
                 Visibility::Visible,
                 InheritedVisibility::default(),

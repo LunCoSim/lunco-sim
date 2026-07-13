@@ -4,11 +4,18 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# Render ASSET-STORE bevy features stay always-on (the catalog/commands path
-# spawns USD entities with meshes + materials, and the headless server still
-# runs RenderPlugin in `backends:None`). The editor-only render-effect + picking
-# features (bevy_post_process/bevy_anti_alias/mesh_picking) ride the `ui` feature.
+# `bevy_pbr` CANNOT be dropped from this crate yet — see
+# `docs/architecture/render-decoupling.md`. The PBR *look* is already decoupled
+# (`lunco-render::PbrLook` intent + the `lunco-render-bevy` binder), but the
+# always-compiled `commands.rs` still names `lunco_materials::ShaderMaterial`
+# (an `AsBindGroup` type, hence wgpu) for `SetObjectProperty`'s shader-swap and
+# shader-uniform paths, and `ui/` names it for the shader picker / param editor.
+# `ShaderMaterial` needs its own intent design first; until then this feature
+# list stays. Nothing NEW may bind a material here — use `PbrLook`.
 bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light"] }
+# Appearance intent (render-free): `PbrLook`. The PBR half of every material site
+# in this crate goes through it instead of `Assets<StandardMaterial>`.
+lunco-render = { path = "../lunco-render" }
 # egui inspector, theme, transform gizmo, and the picking backend are all editor
 # concerns — optional, on `ui`. `commands::SpawnCommandPlugin` (the only thing a
 # headless server adds from this crate) uses none of them.
@@ -73,6 +80,12 @@ ui = [
     "bevy/bevy_post_process",
     "bevy/bevy_anti_alias",
     "bevy/mesh_picking",
+    # Immediate-mode gizmo overlays: `physics_viz` (velocity/force arrows),
+    # `joint_viz` (joint + wheel-force lines) and `selection` (selection bounds)
+    # all take a `Gizmos` param, and all three are `ui`-gated. The crate used to
+    # get `bevy_gizmos` for free from another crate's feature union; the render
+    # decoupling took that away, so declare it where it is actually used.
+    "bevy/bevy_gizmos",
 ]
 
 [lints]

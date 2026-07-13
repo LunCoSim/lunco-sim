@@ -28,9 +28,9 @@
 
 use bevy::prelude::*;
 use lunco_core::{on_command, register_commands, Command};
-use lunco_materials::{ParamValue, ShaderMaterial};
+use lunco_materials::{ParamValue, ShaderLook};
 
-use crate::stream_viz::LodMaterials;
+use crate::stream_viz::{set_param, LodTiles, TerrainShaderMode};
 
 /// The overlay's shader uniforms — the compact, per-material form of
 /// [`TerrainOverlayParams`]. `Copy` so it threads cheaply through the tile-spawn path.
@@ -52,14 +52,14 @@ impl OverlayUniforms {
     /// The disabled state — every tile builds with this until an overlay is armed.
     pub const OFF: Self = Self { mode: 0.0, opacity: 0.0, safe_rad: 0.0, cliff_rad: 0.0 };
 
-    /// Write the four params onto a tile material by name (repacks once).
-    pub fn apply(&self, m: &mut ShaderMaterial) {
-        m.set_many([
-            ("overlay_mode", ParamValue::F32(self.mode)),
-            ("overlay_opacity", ParamValue::F32(self.opacity)),
-            ("overlay_safe_rad", ParamValue::F32(self.safe_rad)),
-            ("overlay_cliff_rad", ParamValue::F32(self.cliff_rad)),
-        ]);
+    /// Write the four params onto a tile's [`ShaderLook`] by name. They are part of
+    /// the look's key, so every tile at the same overlay setting still shares one
+    /// material — the overlay is a *uniform*, not a re-bake (`D2`).
+    pub fn apply(&self, look: &mut ShaderLook) {
+        set_param(look, "overlay_mode", ParamValue::F32(self.mode));
+        set_param(look, "overlay_opacity", ParamValue::F32(self.opacity));
+        set_param(look, "overlay_safe_rad", ParamValue::F32(self.safe_rad));
+        set_param(look, "overlay_cliff_rad", ParamValue::F32(self.cliff_rad));
     }
 }
 
@@ -148,25 +148,31 @@ fn on_set_terrain_overlay(
 
 register_commands!(on_set_terrain_overlay);
 
-/// Push the current overlay params onto every resident tile material when they
-/// change — the live-tuning path (existing cached materials; freshly-built tiles
-/// already read the current params at build). Change-driven: no-op on unchanged
-/// frames, so a still overlay costs nothing.
+/// Push the current overlay params onto every resident tile's look when they change
+/// — the live-tuning path (freshly-built tiles already read the current params at
+/// build). Change-driven: no-op on unchanged frames, so a still overlay costs
+/// nothing; a slider drag re-states N looks that all collapse back onto ONE material
+/// in the binder's cache.
 pub fn sync_terrain_overlay(
     params: Res<TerrainOverlayParams>,
-    lod_mats: Res<LodMaterials>,
-    mut materials: ResMut<Assets<ShaderMaterial>>,
+    terrains: Query<&LodTiles>,
+    mut looks: Query<&mut ShaderLook>,
 ) {
     if !params.is_changed() {
         return;
     }
     let u = params.uniforms();
-    // Lit materials ONLY: the flat/debug shader declares no `overlay_*` params, so
-    // writing them there just inserts dead keys, repacks and dirties the asset — a
-    // pointless uniform re-upload per sync (`build_tile_material` gates the same way).
-    for h in lod_mats.lit_values() {
-        if let Some(mut m) = materials.get_mut(h) {
-            u.apply(&mut m);
+    // D8 — Lit tiles ONLY: the flat/debug shader declares no `overlay_*` params, so
+    // writing them there would only insert dead keys and mint a pointless material
+    // variant per band (`tile_look` gates the same way).
+    for tiles in &terrains {
+        if tiles.shader_mode() != TerrainShaderMode::Lit {
+            continue;
+        }
+        for entity in tiles.tile_entities() {
+            if let Ok(mut look) = looks.get_mut(entity) {
+                u.apply(&mut look);
+            }
         }
     }
 }

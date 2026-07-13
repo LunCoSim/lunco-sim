@@ -4,11 +4,21 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "mesh_picking"] }
+# RENDER-FREE by construction (docs/architecture/render-decoupling.md): NO
+# `bevy_pbr` / `bevy_core_pipeline` / `bevy_post_process` / `bevy_anti_alias`.
+# This crate states appearance + camera INTENT (`lunco_render::{PbrLook,
+# SceneCamera}`, `lunco_materials::ShaderLook`); `lunco-render-bevy` binds it.
+bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "mesh_picking"] }
 openusd = { workspace = true }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
+# `ShaderLook` + `ParamValue` (the open, WGSL-reflected parameter set). NOTE:
+# `lunco-materials` itself still enables `bevy_pbr` for `shader_material.rs`
+# (the `AsBindGroup` impl) — see the TODO in its Cargo.toml. Until that file
+# moves to `lunco-render-bevy`, this crate's dep GRAPH still reaches wgpu even
+# though its CODE names no material.
 lunco-materials = { path = "../lunco-materials" }
+lunco-render = { path = "../lunco-render" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-core = { path = "../lunco-core" }

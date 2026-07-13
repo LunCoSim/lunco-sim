@@ -64,6 +64,15 @@ lunco-autopilot = { path = "../lunco-autopilot" }
 # in non-server builds via Cargo feature unification.)
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-render = { path = "../lunco-render" }
+# The bevy_pbr binding layer. Added as a PLUGIN only in non-headless builds
+# (`SandboxCorePlugin::build`), which is the entire render gate.
+#
+# TODO(render-decoupling): once every domain crate is render-free, make this
+# `optional = true` under the `ui` feature so the `--no-ui` server stops LINKING
+# bevy_pbr as well as not running it. Today other crates (terrain-surface,
+# celestial, usd-bevy, sandbox-edit) still name materials directly, so the server
+# links wgpu regardless and there is nothing to win yet.
+lunco-render-bevy = { path = "../lunco-render-bevy" }
 # Engine light-handling policy (ShadowCastingSettings) is a client render
 # concern, so the settings dep rides the `ui` feature (see `light_policy.rs`).
 lunco-settings = { path = "../lunco-settings", optional = true }

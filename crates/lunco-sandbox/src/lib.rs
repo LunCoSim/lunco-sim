@@ -1499,6 +1499,23 @@ impl Plugin for SandboxCorePlugin {
     fn build(&self, app: &mut App) {
         let args: Vec<String> = std::env::args().collect();
 
+        // THE RENDER GATE — and the whole of it.
+        //
+        // Domain crates state appearance as `lunco_render` INTENT (`PbrLook`) next
+        // to their `Mesh3d` and never name a material. `LuncoRenderPlugin` — the one
+        // `bevy_pbr` consumer in the graph — is what turns intent into a real
+        // `MeshMaterial3d`. Headless simply does not add it.
+        //
+        // That is why there is no `#[cfg(feature = "render")]` anywhere in the
+        // simulation crates: the gate is *which plugins you add*, not conditional
+        // compilation threaded through the domain. Adding it here (and only here)
+        // also means a scene keeps its appearance data on the server — inspectable,
+        // journalable, replicable — it just isn't given a GPU material.
+        // See docs/architecture/render-decoupling.md.
+        if !self.headless {
+            app.add_plugins(lunco_render_bevy::LuncoRenderPlugin);
+        }
+
         // Convenience command: `SetRhaiPolicy` authors a `LuncoPolicy` prim as USD
         // doc ops (journals → syncs → projector activates). Authoring works with or
         // without networking; the activation projector is networking-gated for now.

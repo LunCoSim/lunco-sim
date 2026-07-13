@@ -1160,8 +1160,11 @@ fn finish_dem_builds(
     mut commands: Commands,
     mut tasks: Query<(Entity, &mut DemBuildTask, &DemTerrainRequest)>,
     // Optional so the headless server (no render assets) still builds colliders.
+    //
+    // There is no `Assets<StandardMaterial>` here any more: the default surface is
+    // stated as `lunco_render::PbrLook` INTENT and bound by `lunco-render-bevy`, so
+    // this crate names no material and links no `bevy_pbr`.
     mut meshes: Option<ResMut<Assets<Mesh>>>,
-    mut materials: Option<ResMut<Assets<StandardMaterial>>>,
 ) {
     use bevy::tasks::futures_lite::future;
 
@@ -1187,7 +1190,6 @@ fn finish_dem_builds(
             req.with_default_material,
             built,
             meshes.as_deref_mut(),
-            materials.as_deref_mut(),
         );
     }
 }
@@ -1205,7 +1207,6 @@ fn assemble_dem_build(
     with_default_material: bool,
     built: DemBuild,
     meshes: Option<&mut Assets<Mesh>>,
-    materials: Option<&mut Assets<StandardMaterial>>,
 ) {
     if built.res > HEAVY_TILE_RES {
         warn!(
@@ -1266,17 +1267,14 @@ fn assemble_dem_build(
             bevy::asset::RenderAssetUsages::default(),
         ));
         commands.entity(entity).insert(Mesh3d(handle));
-        // Default material only for the standalone command path; the USD path authors
-        // its own via `materialType` (don't clobber it).
+        // Default surface only for the standalone command path; the USD path authors
+        // its own via `materialType` (don't clobber it). Stated as INTENT —
+        // `lunco-render-bevy` turns it into a `StandardMaterial`, and a headless
+        // build simply keeps the data and binds nothing.
         if with_default_material {
-            if let Some(materials) = materials {
-                let mat = materials.add(StandardMaterial {
-                    base_color: Color::srgb(0.30, 0.29, 0.27),
-                    perceptual_roughness: 1.0,
-                    ..default()
-                });
-                commands.entity(entity).insert(MeshMaterial3d(mat));
-            }
+            commands
+                .entity(entity)
+                .insert(lunco_render::PbrLook::matte(Color::srgb(0.30, 0.29, 0.27).into()));
         }
     }
     let mode = match (lod_viz, collider_ring) {
@@ -1316,7 +1314,6 @@ fn finish_dem_worker(
     // re-composed onto the worker's bare grid so web keeps full analytic realism.
     stacks: Query<&crate::terrain_layers::TerrainLayerStack>,
     mut meshes: Option<ResMut<Assets<Mesh>>>,
-    mut materials: Option<ResMut<Assets<StandardMaterial>>>,
 ) {
     // Drain failed wasm bakes:
     if let Ok(rx) = get_wasm_bake_failures_rx().try_lock() {
@@ -1360,7 +1357,6 @@ fn finish_dem_worker(
                     job.with_default_material,
                     built,
                     meshes.as_deref_mut(),
-                    materials.as_deref_mut(),
                 );
             }
             (lunco_terrain_bake::BakeStage::Full, Ok(grid)) => {

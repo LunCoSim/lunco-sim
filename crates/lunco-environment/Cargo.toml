@@ -6,23 +6,35 @@ description = "Per-entity environmental state (gravity, atmosphere, radiation) c
 
 [features]
 default = ["render"]
-# Presentation half of the environment crate: the sun/earthshine lighting
-# (`SetEnvironmentLight`, `Earthshine`), the solar→cosim direction feed (reads
-# the scene `DirectionalLight`), and the baked horizon terrain self-shadowing.
-# OFF ⇒ only the render-free sim core builds: gravity (`LocalGravity`, force
-# application, the gravity→cosim bridge) and the pure-data lighting params
-# (`LunarSun`, `EarthshineParams`). A headless server takes
-# `default-features = false` and stays free of bevy_pbr/light/render.
+# What is STILL render-bound in this crate — exactly two things, both of which
+# must move to a render crate before `lunco-environment` can drop wgpu:
+#
+#   1. `src/horizon.rs` — the whole heightfield-shadow *material wiring* half
+#      (`wire_terrain_materials`, `shade_dynamic_entities`) writes
+#      `lunco_materials::ShaderMaterial` params and `StandardMaterial` base
+#      colours → `bevy_pbr`. The horizon *maths* (`HeightField`, the bakes,
+#      `HorizonMap`) is render-free and would stay here.
+#   2. The `Bloom` arm of `SetEnvironmentLight` (`bevy_post_process`).
+#
+# Everything else in the crate is render-free and unconditional: gravity
+# (`LocalGravity`, force application, the gravity→cosim bridge), the lighting
+# params (`LunarSun`, `EarthshineParams`), the `Earthshine` fill light, and the
+# solar→cosim direction feed (`LocalSolar`) — `bevy_light` + `bevy_camera` do
+# NOT depend on `bevy_render`. See docs/architecture/render-decoupling.md.
 render = [
     "bevy/bevy_pbr", "bevy/bevy_gltf", "bevy/bevy_world_serialization", "bevy/bevy_mesh",
-    "bevy/bevy_light", "bevy/bevy_post_process", "bevy/bevy_anti_alias",
+    "bevy/bevy_post_process", "bevy/bevy_anti_alias",
     "bevy/mesh_picking", "dep:lunco-materials",
 ]
 
 [dependencies]
-# Substrate-only by default; the `render` feature adds the bevy render stack the
-# lighting/horizon half needs.
-bevy = { workspace = true }
+# RENDER-FREE baseline. `bevy_light` gives `DirectionalLight` /
+# `CascadeShadowConfig` / `GlobalAmbientLight`; `bevy_camera` gives
+# `RenderLayers` + `Exposure`. Neither depends on `bevy_render`, so the gravity
+# core, the earthshine fill and the sun→cosim feed all build without wgpu.
+# DO NOT add `bevy_pbr` here — it belongs to the `render` feature above (and,
+# properly, to a render crate).
+bevy = { workspace = true, features = ["bevy_camera", "bevy_light"] }
 avian3d = { workspace = true }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-core = { path = "../lunco-core" }

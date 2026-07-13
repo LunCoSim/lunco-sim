@@ -192,8 +192,11 @@ fn test_all_rover_files_match_procedural() {
         // Visual — body mesh + material live on the Chassis child.
         let chassis = chassis_child(&app, rover, &label);
         assert!(app.world().get::<Mesh3d>(chassis).is_some(), "{label}: Chassis missing Mesh3d (body invisible!)");
-        assert!(app.world().get::<MeshMaterial3d<StandardMaterial>>(chassis).is_some(),
-            "{label}: Chassis missing MeshMaterial3d (body invisible!)");
+        // Appearance INTENT, not a bound material: `LuncoRenderPlugin` (absent in a
+        // headless test) is what turns `PbrLook` into `MeshMaterial3d`.
+        // See docs/architecture/render-decoupling.md.
+        assert!(app.world().get::<lunco_render::PbrLook>(chassis).is_some(),
+            "{label}: Chassis missing PbrLook (body would be invisible!)");
 
         // Steering allocation: every rover carries a `DriveMix` naming a kernel.
         let mix = app.world().get::<DriveMix>(rover).expect(&format!("{label}: missing DriveMix"));

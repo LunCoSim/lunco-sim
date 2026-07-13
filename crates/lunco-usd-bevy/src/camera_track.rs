@@ -34,6 +34,7 @@
 //! and its keys grow the preview [`Playback`] range like any animated clip.
 
 use bevy::prelude::*;
+use lunco_render::SceneCamera;
 use lunco_time::{AnimationPreview, Playback, ResolvedDomains, TimeBinding, WorldTime};
 
 use crate::camera_switch::ActivateCamera;
@@ -179,7 +180,7 @@ pub fn sample_camera_tracks(
     world: Res<WorldTime>,
     resolved: Res<ResolvedDomains>,
     mut q: Query<(&mut CameraTrackPlan, Option<&TimeBinding>)>,
-    q_cams: Query<(Entity, &Name), With<Camera3d>>,
+    q_cams: Query<(Entity, &Name), With<SceneCamera>>,
     mut commands: Commands,
 ) {
     for (mut plan, binding) in &mut q {

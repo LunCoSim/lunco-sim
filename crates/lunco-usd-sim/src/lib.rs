@@ -57,6 +57,12 @@ use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
 pub use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdInstanceRoot};
 use lunco_usd_bevy::{CanonicalStages, UsdRead};
 use lunco_usd_avian::ShouldBeDynamic;
+// Appearance + camera **intent** — this crate must never name `MeshMaterial3d`,
+// `StandardMaterial`, `ShaderMaterial` or `Camera3d` (all `bevy_pbr` /
+// `bevy_core_pipeline` → wgpu + naga). `lunco-render-bevy` binds these.
+// See docs/architecture/render-decoupling.md.
+use lunco_materials::ShaderLook;
+use lunco_render::{PbrLook, SceneCamera};
 use openusd::sdf::Path as SdfPath;
 use lunco_mobility::{WheelRaycast, DifferentialCoupling};
 use lunco_core::kernels::DriveMix;
@@ -96,15 +102,20 @@ use std::collections::HashMap;
 ///
 /// No custom `lunco:` tokens drive this dispatch.
 /// Marker resource present **only** on a headless build with no GPU renderer
-/// (the `--no-ui` server). Visual components (`Mesh3d`, and especially the
-/// shader-pipeline `ShaderMaterial`) are produced by render-side systems that
-/// don't run without a renderer, so any setup that *waits* for them would block
-/// forever headless. [`process_usd_sim_prims`] consults this so the rover's
-/// raycast-wheel **physics** (drivetrain, ports, ray-casters) is built without a
-/// renderer — otherwise the authoritative headless server can never simulate or
-/// replicate a drivable rover (wheels stay deferred → no `WheelRaycast` → frozen
-/// rover). Absent on GUI builds, where the visuals do arrive and the wait is
-/// correct (keeps the wheel's shader material on the split visual child).
+/// (the `--no-ui` server): "do not wait for visual components before building
+/// wheel physics".
+///
+/// **Largely redundant since the render decoupling.** The things
+/// [`process_usd_sim_prims`] waits on are now `Mesh3d` (`bevy_mesh`) and the
+/// appearance *intent* (`PbrLook` / `ShaderLook`), all of which this crate and
+/// `lunco-usd-bevy` author with plain systems that run headless. The old deadlock
+/// — waiting for a `ShaderMaterial` that only a GPU-side observer could produce —
+/// is structurally gone.
+///
+/// It is kept because it is `pub` and inserted outside this crate
+/// (`lunco-sandbox`'s headless boot, `lunco-usd`'s integration tests), and because
+/// it remains a correct, cheap "don't wait" switch. Removing it is a separate,
+/// cross-crate change.
 #[derive(Resource, Default, Debug, Clone, Copy)]
 pub struct NoRenderVisuals;
 
@@ -323,8 +334,8 @@ struct ForceBuildNoVisual;
 
 /// Self-healing watchdog (structural guard against the wheel-shader class of bug).
 /// `process_usd_sim_prims` defers a prim by `continue`-ing without marking it
-/// `UsdSimProcessed`; if the awaited dependency never arrives (e.g. a render-only
-/// `ShaderMaterial` on the headless server) the prim defers FOREVER and nothing
+/// `UsdSimProcessed`; if the awaited dependency never arrives (historically: a
+/// render-only material on the headless server) the prim defers FOREVER and nothing
 /// complains — the rover silently never gets wheels. Once the unprocessed set has
 /// been **stuck (non-decreasing) for [`STUCK_PRIM_DEADLINE_SECS`]**, this:
 /// 1. logs a loud `error!` to the console (the built-in `tracing` system), and
@@ -357,7 +368,7 @@ fn recover_stuck_usd_prims(
         let sample: Vec<String> = q.iter().take(8).map(|(_, p)| p.path.clone()).collect();
         error!(
             "[usd-sim] {count} USD prim(s) stuck unprocessed for >{:.0}s — an unmet \
-             dependency (most likely a render-only `ShaderMaterial`/`Mesh3d` that a \
+             dependency (most likely a render-only visual component that a \
              headless/no-GPU build never produces) was deadlocking sim setup. \
              RECOVERING: building physics without the missing visual. Paths: {sample:?}",
             STUCK_PRIM_DEADLINE_SECS,
@@ -374,7 +385,10 @@ fn recover_stuck_usd_prims(
 
 fn process_usd_sim_prims(
     mut commands: Commands,
-    query: Query<(Entity, &UsdPrimPath, Option<&Transform>, Option<&Mesh3d>, Option<&MeshMaterial3d<StandardMaterial>>, Option<&MeshMaterial3d<lunco_materials::ShaderMaterial>>, Option<&ChildOf>, Option<&ForceBuildNoVisual>), Without<UsdSimProcessed>>,
+    // Appearance INTENT, not materials: the wheel split MOVES the `PbrLook` /
+    // `ShaderLook` onto the visual child and `lunco-render-bevy` rebinds. Neither
+    // component names `bevy_pbr`.
+    query: Query<(Entity, &UsdPrimPath, Option<&Transform>, Option<&Mesh3d>, Option<&PbrLook>, Option<&ShaderLook>, Option<&ChildOf>, Option<&ForceBuildNoVisual>), Without<UsdSimProcessed>>,
     q_all_prims: Query<&UsdPrimPath>,
     q_grids: Query<Entity, With<Grid>>,
     q_existing_floating_origins: Query<Entity, With<FloatingOrigin>>,
@@ -526,8 +540,8 @@ fn process_usd_sim_prim_read<R: UsdRead>(
     sdf_path: SdfPath,
     maybe_tf: Option<&Transform>,
     maybe_mesh: Option<&Mesh3d>,
-    maybe_mat: Option<&MeshMaterial3d<StandardMaterial>>,
-    maybe_shader_mat: Option<&MeshMaterial3d<lunco_materials::ShaderMaterial>>,
+    maybe_mat: Option<&PbrLook>,
+    maybe_shader_mat: Option<&ShaderLook>,
     maybe_child_of: Option<&ChildOf>,
     wait_for_visuals: bool,
     joint_targets: &HashMap<(Handle<UsdStageAsset>, String), String>,
@@ -671,22 +685,24 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                         prim_path.path
                     );
                     commands.entity(prior).try_remove::<(
-                        Camera3d,
-                        // `Camera3d` REQUIRES `Camera`/`RenderTarget`/`Projection`,
-                        // and required components are NOT removed with their
-                        // requirer — so stripping `Camera3d` alone left a bare
-                        // `Camera` (still `is_active: true`, still window-targeted)
-                        // that `bevy_render::extract_cameras` renders but the
-                        // arbiter (`reconcile_scene_viewport`, filtered
-                        // `With<Camera3d>`) can never deactivate: a GHOST second
-                        // active order-0 window camera — the whole scene rendered
-                        // twice + a per-frame camera-order-ambiguity warning.
+                        SceneCamera,
+                        // The camera identity marker is not enough on its own:
+                        // `Camera` (and its required `RenderTarget`/`Projection`)
+                        // must go too. A bare `Camera` (still `is_active: true`,
+                        // still window-targeted) is rendered by
+                        // `bevy_render::extract_cameras` but the arbiter
+                        // (`reconcile_scene_viewport`, filtered `With<SceneCamera>`)
+                        // can never deactivate it: a GHOST second active order-0
+                        // window camera — the whole scene rendered twice + a
+                        // per-frame camera-order-ambiguity warning. The pipeline
+                        // half (`Camera3d`/`Tonemapping`/`Msaa`, attached by
+                        // `lunco-render-bevy`) is left behind but INERT: every
+                        // render path extracts through `Camera`, which is gone.
                         (
                             bevy::camera::Camera,
                             bevy::camera::RenderTarget,
                             bevy::camera::Projection,
                             bevy::camera::Exposure,
-                            bevy::core_pipeline::tonemapping::Tonemapping,
                             AdaptiveNearPlane,
                         ),
                         Avatar,
@@ -751,8 +767,8 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             // workbench camera with `Smaa` renders a blank/black viewport — and
             // without the `smaa_luts` feature it additionally drops every frame
             // on a wgpu bind-group validation error. Both failure modes look like
-            // a lighting/camera bug. Keep workbench cameras SMAA-free; MSAA (the
-            // `Camera3d` default) handles geometry-edge AA.
+            // a lighting/camera bug. Keep workbench cameras SMAA-free; MSAA (from
+            // `SceneCamera`, bound by `lunco-render-bevy`) handles geometry-edge AA.
             let ev100 = active_sun
                 .copied()
                 .unwrap_or_default()
@@ -765,8 +781,8 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                 (
                     // Spawn INACTIVE. `reconcile_scene_viewport` is the ONE
                     // writer of `Camera::is_active` and turns the bound camera
-                    // on within a frame — but a `Camera3d` left to its required
-                    // `Camera` default is active the moment it spawns, so a
+                    // on within a frame — but a `Camera` left at its default is
+                    // active the moment it spawns, so a
                     // stage recompose that re-instantiates this prim renders as
                     // a SECOND active order-0 window camera (Bevy's per-frame
                     // "camera order ambiguities" warning + the whole scene
@@ -774,7 +790,10 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                     // deferred despawn catch up.
                     bevy::camera::Camera { is_active: false, ..Default::default() },
                     bevy::camera::Exposure { ev100 },
-                    bevy::core_pipeline::tonemapping::Tonemapping::AgX,
+                    // Camera INTENT: `lunco-render-bevy` binds `Camera3d` +
+                    // `Tonemapping::AgX` + MSAA. Render-free here, and it is what
+                    // every "which entity is the scene camera?" query filters on.
+                    SceneCamera::agx(),
                 )
             };
 
@@ -782,7 +801,6 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             match camera_mode.as_str() {
                 "freeflight" => {
                     commands.entity(entity).insert((
-                        Camera3d::default(),
                         camera_look(),
                         FreeFlightCamera { yaw, pitch, damping: None },
                         AdaptiveNearPlane,
@@ -798,7 +816,6 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                 }
                 "orbit" => {
                     commands.entity(entity).insert((
-                        Camera3d::default(),
                         camera_look(),
                         OrbitCamera {
                             target: Entity::PLACEHOLDER,
@@ -821,7 +838,6 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                 }
                 "springarm" => {
                     commands.entity(entity).insert((
-                        Camera3d::default(),
                         camera_look(),
                         SpringArmCamera {
                             target: Entity::PLACEHOLDER,
@@ -849,7 +865,6 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                 _ => {
                     warn!("Unknown camera mode '{}' for avatar at {}, using freeflight", camera_mode, prim_path.path);
                     commands.entity(entity).insert((
-                        Camera3d::default(),
                         camera_look(),
                         FreeFlightCamera { yaw, pitch, damping: None },
                         AdaptiveNearPlane,
@@ -1013,27 +1028,25 @@ fn process_usd_sim_prim_read<R: UsdRead>(
 
             // Backstop for the USD-authored shader. `apply_usd_shader_materials`
             // (see shader.rs) is ordered `before` this system, and Bevy's
-            // automatic sync-point insertion normally flushes its `ShaderMaterial`
+            // automatic sync-point insertion normally flushes its `ShaderLook`
             // insert before we run — so in the default configuration this guard
             // never fires. It exists to keep the wheel split correct even if that
             // ordering guarantee is ever weakened (e.g. `auto_insert_apply_deferred`
-            // disabled): without the material we'd split the wheel carrying only
-            // the default `StandardMaterial` and lose the shader. If a wheel wants
+            // disabled): without it we'd split the wheel carrying only
+            // the plain `PbrLook` and lose the shader. If a wheel wants
             // a shader but it hasn't landed, retry next frame (don't mark
             // UsdSimProcessed).
             let wants_shader = matches!(
                 reader.scalar::<String>(&sdf_path, "primvars:materialType").as_deref(),
                 Some("shader") | Some("usd_shader")
             ) && reader.scalar::<String>(&sdf_path, "primvars:shaderPath").is_some();
-            // Headless (no renderer): the `ShaderMaterial` is produced by a
-            // render-side observer that never runs without a GPU, so waiting for
-            // it deferred the wheel FOREVER — the server then never built the
-            // raycast drivetrain and rovers could not be driven or replicated.
-            // Build the physics now; the cosmetic wheel shader is irrelevant
-            // server-side. GUI builds still wait (so the split visual keeps it),
-            // unless the watchdog recovered this prim after a deadlock.
+            // Since the decoupling the `ShaderLook` is authored by a plain system
+            // that runs headless too (it is intent, not a GPU material), so this no
+            // longer deadlocks a `--no-ui` server. The wait is kept because the
+            // ordering backstop above still wants it, and `wait_for_visuals`
+            // (headless / watchdog-recovered) still short-circuits it.
             if wants_shader && maybe_shader_mat.is_none() && wait_for_visuals {
-                debug!("Wheel {} awaits ShaderMaterial from observer, deferring", prim_path.path);
+                debug!("Wheel {} awaits ShaderLook, deferring", prim_path.path);
                 return;
             }
             info!("Intercepted PhysxVehicleWheelAPI for {}", prim_path.path);
@@ -1258,8 +1271,8 @@ fn setup_raycast_wheel(
     prim_path: &UsdPrimPath,
     existing_tf: &Transform,
     maybe_mesh: Option<&Mesh3d>,
-    maybe_mat: Option<&MeshMaterial3d<StandardMaterial>>,
-    maybe_shader_mat: Option<&MeshMaterial3d<lunco_materials::ShaderMaterial>>,
+    maybe_mat: Option<&PbrLook>,
+    maybe_shader_mat: Option<&ShaderLook>,
     maybe_child_of: Option<&ChildOf>,
     radius: f32,
     _index: i32,
@@ -1318,10 +1331,13 @@ fn setup_raycast_wheel(
             wheel_mesh.unwrap(),
             ChildOf(entity),
         ));
-        // Move whichever material the prim received onto the visual child. A USD
-        // `materialType="shader"` prim gets a `ShaderMaterial` (applied by the
-        // material observer before this split runs) — prefer it over the default
-        // `StandardMaterial` so USD-authored shaders survive the wheel split.
+        // Move whichever appearance INTENT the prim received onto the visual child;
+        // `lunco-render-bevy` rebinds the material there. A USD
+        // `materialType="shader"` prim gets a `ShaderLook` (authored by
+        // `apply_usd_shader_materials`, ordered before this split) — prefer it over
+        // the plain `PbrLook` so USD-authored shaders survive the wheel split. The
+        // two are mutually exclusive on one entity (an entity carrying both would
+        // draw twice), so `remove` BOTH from the physics entity.
         if let Some(sm) = maybe_shader_mat.cloned() {
             visual.insert(sm);
         } else if let Some(mat) = maybe_mat.cloned() {
@@ -1329,8 +1345,8 @@ fn setup_raycast_wheel(
         }
         wheel.visual_entity = Some(visual.id());
         commands.entity(entity).remove::<Mesh3d>();
-        commands.entity(entity).remove::<MeshMaterial3d<StandardMaterial>>();
-        commands.entity(entity).remove::<MeshMaterial3d<lunco_materials::ShaderMaterial>>();
+        commands.entity(entity).remove::<PbrLook>();
+        commands.entity(entity).remove::<ShaderLook>();
     }
 
     // Physics entity: identity rotation, position preserved
@@ -1404,8 +1420,8 @@ fn setup_physical_wheel(
     prim_path: &UsdPrimPath,
     existing_tf: &Transform,
     maybe_mesh: Option<&Mesh3d>,
-    maybe_mat: Option<&MeshMaterial3d<StandardMaterial>>,
-    maybe_shader_mat: Option<&MeshMaterial3d<lunco_materials::ShaderMaterial>>,
+    maybe_mat: Option<&PbrLook>,
+    maybe_shader_mat: Option<&ShaderLook>,
     maybe_child_of: Option<&ChildOf>,
     radius: f32,
     p_drive: Entity,
@@ -1464,18 +1480,17 @@ fn setup_physical_wheel(
             ChildOf(entity),
         ));
         visual_id = Some(visual.id());
-        // Move whichever material the prim received onto the visual child. A USD
-        // `materialType="shader"` prim gets a `ShaderMaterial` (applied by the
-        // material observer before this split runs) — prefer it over the default
-        // `StandardMaterial` so USD-authored shaders survive the wheel split.
+        // Move whichever appearance INTENT the prim received onto the visual child
+        // (see `setup_raycast_wheel` for the full rationale): the `ShaderLook` wins
+        // over the plain `PbrLook`, and both are removed from the physics entity.
         if let Some(sm) = maybe_shader_mat.cloned() {
             visual.insert(sm);
         } else if let Some(mat) = maybe_mat.cloned() {
             visual.insert(mat);
         }
         commands.entity(entity).remove::<Mesh3d>();
-        commands.entity(entity).remove::<MeshMaterial3d<StandardMaterial>>();
-        commands.entity(entity).remove::<MeshMaterial3d<lunco_materials::ShaderMaterial>>();
+        commands.entity(entity).remove::<PbrLook>();
+        commands.entity(entity).remove::<ShaderLook>();
     }
 
     commands.entity(entity).remove::<WheelRaycast>()

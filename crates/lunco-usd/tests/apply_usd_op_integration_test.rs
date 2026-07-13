@@ -112,17 +112,21 @@ def Xform "World"
     }
     let mesh_entity = mesh_entity.expect("MeshWithMaterial child entity should have been spawned");
 
-    // Check material properties before applying any command
-    let material_h = app.world().get::<MeshMaterial3d<StandardMaterial>>(mesh_entity)
-        .expect("Entity should have a StandardMaterial component");
-    let materials = app.world().resource::<Assets<StandardMaterial>>();
-    let mat = materials.get(&material_h.0).expect("Material should be in assets");
-    
+    // Check appearance before applying any command.
+    //
+    // The prim carries a `PbrLook` (appearance INTENT), not a `MeshMaterial3d`: the
+    // concrete material is bound by `LuncoRenderPlugin`, which a headless test does
+    // not add. Asserting on the intent is strictly better here — it is what USD
+    // authors, and it is what survives on a server with no GPU.
+    // See docs/architecture/render-decoupling.md.
+    let look = app.world().get::<lunco_render::PbrLook>(mesh_entity)
+        .expect("Entity should have a PbrLook (the appearance authored by the USD material)");
+
     // Assert initial diffuse color (1.0, 0.5, 0.25) and roughness (0.75)
-    assert!((mat.base_color.to_linear().to_vec4()[0] - 1.0).abs() < 1e-4);
-    assert!((mat.base_color.to_linear().to_vec4()[1] - 0.5).abs() < 1e-4);
-    assert!((mat.base_color.to_linear().to_vec4()[2] - 0.25).abs() < 1e-4);
-    assert!((mat.perceptual_roughness - 0.75).abs() < 1e-4);
+    assert!((look.base_color.red - 1.0).abs() < 1e-4);
+    assert!((look.base_color.green - 0.5).abs() < 1e-4);
+    assert!((look.base_color.blue - 0.25).abs() < 1e-4);
+    assert!((look.perceptual_roughness - 0.75).abs() < 1e-4);
 
     // 6. Dispatch ApplyUsdOp commands to update the diffuse color and roughness
     let color_op = UsdOp::SetAttribute {
@@ -165,17 +169,14 @@ def Xform "World"
     }
     let updated_mesh_entity = updated_mesh_entity.expect("MeshWithMaterial should exist after reload");
 
-    let material_h2 = app.world().get::<MeshMaterial3d<StandardMaterial>>(updated_mesh_entity)
-        .expect("Entity should have a StandardMaterial component after reload");
-    let materials2 = app.world().resource::<Assets<StandardMaterial>>();
-    let mat2 = materials2.get(&material_h2.0).expect("Material should be in assets");
+    let look2 = app.world().get::<lunco_render::PbrLook>(updated_mesh_entity)
+        .expect("Entity should have a PbrLook after reload");
 
-    // Assert that the material has updated base color to Blue (0.0, 0.0, 1.0) and roughness to 0.1
-    println!("Updated material: base_color={:?}, roughness={}", mat2.base_color.to_linear().to_vec4(), mat2.perceptual_roughness);
-    assert!((mat2.base_color.to_linear().to_vec4()[0] - 0.0).abs() < 1e-4);
-    assert!((mat2.base_color.to_linear().to_vec4()[1] - 0.0).abs() < 1e-4);
-    assert!((mat2.base_color.to_linear().to_vec4()[2] - 1.0).abs() < 1e-4);
-    assert!((mat2.perceptual_roughness - 0.1).abs() < 1e-4);
+    // Assert the appearance updated to Blue (0.0, 0.0, 1.0) and roughness 0.1
+    assert!((look2.base_color.red - 0.0).abs() < 1e-4);
+    assert!((look2.base_color.green - 0.0).abs() < 1e-4);
+    assert!((look2.base_color.blue - 1.0).abs() < 1e-4);
+    assert!((look2.perceptual_roughness - 0.1).abs() < 1e-4);
 
     // 7b. Exercise the coarse full-reload path explicitly: a whole-source
     // `ReplaceSource` (the genuine whole-layer revert, and still the inverse for a
@@ -205,17 +206,15 @@ def Xform "World"
         }
     }
     let reverted_entity = reverted_entity.expect("MeshWithMaterial must survive the ReplaceSource rebuild");
-    let material_h3 = app.world().get::<MeshMaterial3d<StandardMaterial>>(reverted_entity)
-        .expect("Entity should have a StandardMaterial after the full-reload rebuild");
-    let materials3 = app.world().resource::<Assets<StandardMaterial>>();
-    let mat3 = materials3.get(&material_h3.0).expect("Material should be in assets");
+    let look3 = app.world().get::<lunco_render::PbrLook>(reverted_entity)
+        .expect("Entity should have a PbrLook after the full-reload rebuild");
     // Back to the original diffuse (1.0, 0.5, 0.25) + roughness 0.75.
-    assert!((mat3.base_color.to_linear().to_vec4()[0] - 1.0).abs() < 1e-4,
-        "material red must revert after full-reload, got {:?}", mat3.base_color.to_linear().to_vec4());
-    assert!((mat3.base_color.to_linear().to_vec4()[1] - 0.5).abs() < 1e-4);
-    assert!((mat3.base_color.to_linear().to_vec4()[2] - 0.25).abs() < 1e-4);
-    assert!((mat3.perceptual_roughness - 0.75).abs() < 1e-4,
-        "roughness must revert to 0.75 after full-reload, got {}", mat3.perceptual_roughness);
+    assert!((look3.base_color.red - 1.0).abs() < 1e-4,
+        "base_color red must revert after full-reload, got {:?}", look3.base_color);
+    assert!((look3.base_color.green - 0.5).abs() < 1e-4);
+    assert!((look3.base_color.blue - 0.25).abs() < 1e-4);
+    assert!((look3.perceptual_roughness - 0.75).abs() < 1e-4,
+        "roughness must revert to 0.75 after full-reload, got {}", look3.perceptual_roughness);
 
     // 8. Confirm viewport state has been updated
     let state = app.world().resource::<UsdViewportState>();

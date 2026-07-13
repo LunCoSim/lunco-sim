@@ -9,7 +9,7 @@
 //! offset (its local `xformOp:translate` + `lunco:cameraLookAt` rotation).
 //!
 //! Two systems:
-//! - [`resolve_camera_mounts`] — once per camera: a `Camera3d` whose `ChildOf`
+//! - [`resolve_camera_mounts`] — once per camera: a `SceneCamera` whose `ChildOf`
 //!   is not a `Grid` is reparented to the mount's grid and given a
 //!   [`MountedCamera`]; a grid-direct camera is just marked resolved.
 //! - [`follow_mounted_cameras`] — each frame: write the mount's double-precision
@@ -21,6 +21,7 @@
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
+use lunco_render::SceneCamera;
 
 /// Walk this far up a `ChildOf` chain looking for the enclosing `Grid`.
 const MAX_MOUNT_GRID_WALK: usize = 16;
@@ -45,7 +46,7 @@ pub struct CameraMountResolved;
 /// Runs once per camera. Retries next frame if the mount's grid isn't spawned
 /// yet (async scene load).
 pub fn resolve_camera_mounts(
-    q_new: Query<(Entity, &ChildOf, &Transform), (With<Camera3d>, Without<CameraMountResolved>)>,
+    q_new: Query<(Entity, &ChildOf, &Transform), (With<SceneCamera>, Without<CameraMountResolved>)>,
     q_is_grid: Query<(), With<Grid>>,
     q_parents: Query<&ChildOf>,
     mut commands: Commands,
@@ -99,7 +100,7 @@ pub fn resolve_camera_mounts(
 /// [`resolve_camera_mounts`]); a rover that migrates grids would need the same
 /// cross-grid handling `spring_arm_system` has — deferred (rovers stay put).
 pub fn follow_mounted_cameras(
-    mut q_cam: Query<(&MountedCamera, &mut CellCoord, &mut Transform, &ChildOf), With<Camera3d>>,
+    mut q_cam: Query<(&MountedCamera, &mut CellCoord, &mut Transform, &ChildOf), With<SceneCamera>>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<MountedCamera>>,
     q_grids: Query<&Grid>,
 ) {

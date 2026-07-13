@@ -17,7 +17,9 @@
 //! self-describing `assets/shaders/blueprint.wgsl` applied via `ShaderMaterial`.
 
 pub mod dyn_params;
+pub mod look;
 mod shader_material;
 
 pub use dyn_params::{ParamField, ParamSchema, ParamType, ParamValue, UiKind};
+pub use look::{ShaderLook, ShaderLookKey, TextureLayer};
 pub use shader_material::*;

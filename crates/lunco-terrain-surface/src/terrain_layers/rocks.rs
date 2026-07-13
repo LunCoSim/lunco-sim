@@ -68,24 +68,27 @@ fn bucket_radius_of(bucket: u32) -> f32 {
     ((bucket as f32 - 64.0) / 8.0).exp()
 }
 
-/// The ONE boulder `StandardMaterial` every rock — procedural or hand-placed —
-/// draws with. Exposed boulders are BRIGHTER than mature regolith (~0.2 vs ~0.12
-/// albedo — fresh rock faces vs gardened dust). Near-black rocks with no cast shadow
-/// were literally invisible inside shadowed crater bowls ("invisible wall").
-fn shared_rock_material(
-    rocks: &mut SharedRockAssets,
-    materials: &mut Assets<StandardMaterial>,
-) -> Handle<StandardMaterial> {
-    rocks
-        .material
-        .get_or_insert_with(|| {
-            materials.add(StandardMaterial {
-                base_color: Color::srgb(0.19, 0.19, 0.20),
-                perceptual_roughness: 1.0,
-                ..default()
-            })
-        })
-        .clone()
+/// The ONE boulder look every rock — procedural or hand-placed — draws with.
+/// Exposed boulders are BRIGHTER than mature regolith (~0.2 vs ~0.12 albedo — fresh
+/// rock faces vs gardened dust). Near-black rocks with no cast shadow were literally
+/// invisible inside shadowed crater bowls ("invisible wall").
+///
+/// It is a `PbrLook` — appearance INTENT, not a material — so this crate names no
+/// material at all. `lunco-render-bevy` caches by `PbrLook::key()`, which means the
+/// thousands of rocks still resolve to ONE `StandardMaterial` and one bind group
+/// (the batching this scatter depends on), except that it can no longer be lost by
+/// forgetting to thread a shared handle through the loop.
+fn rock_look() -> lunco_render::PbrLook {
+    lunco_render::PbrLook {
+        base_color: Color::srgb(0.19, 0.19, 0.20).into(),
+        perceptual_roughness: 1.0,
+        // Hundreds-to-thousands of scattered rocks: casting each into all 4 sun
+        // cascades every frame is a big chunk of the shadow pass. They still
+        // RECEIVE shadows; skip casting (their own tiny contact shadow isn't worth
+        // 4× re-submission of the whole field).
+        no_shadow_cast: true,
+        ..Default::default()
+    }
 }
 
 /// The shared boulder mesh for a size bucket (built once, then reused by every rock
@@ -174,12 +177,9 @@ impl TerrainLayer for RockScatterLayer {
                 })
                 .collect()
         });
-        // ONE boulder material for every rock in the world (see `shared_rock_material`).
-        let rock_assets = &mut *cx.rock_assets;
-        let rock_material = cx
-            .materials
-            .as_deref_mut()
-            .map(|materials| shared_rock_material(rock_assets, materials));
+        // ONE boulder look for every rock in the world (see `rock_look`); the binder's
+        // key cache turns it into ONE material + ONE bind group.
+        let look = rock_look();
 
         let bucket_of = |sz: f32| -> usize {
             let t = ((sz - size.min) / span).clamp(0.0, 1.0);
@@ -214,16 +214,11 @@ impl TerrainLayer for RockScatterLayer {
                     RigidBody::Static,
                     Collider::sphere((r_vis * 0.6) as f64),
                 ));
-                if let (Some(handles), Some(mat)) = (&bucket_handles, &rock_material) {
-                    rock.insert((
-                        Mesh3d(handles[bucket_of(p.size)].clone()),
-                        MeshMaterial3d(mat.clone()),
-                        // Hundreds-to-thousands of scattered rocks: casting each into all
-                        // 4 sun cascades every frame is a big chunk of the shadow pass.
-                        // They still RECEIVE shadows; skip casting (their own tiny
-                        // contact shadow isn't worth 4× re-submission of the whole field).
-                        bevy::light::NotShadowCaster,
-                    ));
+                if let Some(handles) = &bucket_handles {
+                    // `no_shadow_cast` rides on the look — `lunco-render-bevy` inserts
+                    // `NotShadowCaster` for it. Cloning the look does NOT clone a
+                    // material: every clone keys to the same cached one.
+                    rock.insert((Mesh3d(handles[bucket_of(p.size)].clone()), look.clone()));
                     // Distance LOD cull — native only (see `rock_visibility_range`).
                     #[cfg(not(target_arch = "wasm32"))]
                     rock.insert(rock_visibility_range());
@@ -279,9 +274,9 @@ impl TerrainLayer for RockInstanceLayer {
         ) as f32;
         // SHARED assets: a placed rock used to mint a fresh `Mesh` AND a fresh
         // `StandardMaterial` — one permanent extra draw call + bind group per
-        // `PlaceRock`. It now draws the shared boulder material and its size
-        // bucket's shared mesh, exactly like the procedural scatter. Its radius
-        // snaps to the bucket so collider, sink and visual all agree.
+        // `PlaceRock`. It now draws the shared boulder look (→ one cached material)
+        // and its size bucket's shared mesh, exactly like the procedural scatter. Its
+        // radius snaps to the bucket so collider, sink and visual all agree.
         let bucket = size_bucket(self.size);
         let r = bucket_radius_of(bucket).max(0.05);
         let rock_assets = &mut *cx.rock_assets;
@@ -289,10 +284,7 @@ impl TerrainLayer for RockInstanceLayer {
             .meshes
             .as_deref_mut()
             .map(|meshes| shared_rock_mesh(rock_assets, meshes, bucket));
-        let material = cx
-            .materials
-            .as_deref_mut()
-            .map(|materials| shared_rock_material(rock_assets, materials));
+        let look = rock_look();
         // Deterministic yaw from the seed (golden-ratio hash → well spread). The
         // MESH is shared now, so the yaw is what keeps placed boulders from all
         // looking identically oriented.
@@ -310,12 +302,8 @@ impl TerrainLayer for RockInstanceLayer {
                 RigidBody::Static,
                 Collider::sphere((r * 0.6) as f64),
             ));
-            if let (Some(mesh), Some(material)) = (mesh, material) {
-                rock.insert((
-                    Mesh3d(mesh),
-                    MeshMaterial3d(material),
-                    bevy::light::NotShadowCaster,
-                ));
+            if let Some(mesh) = mesh {
+                rock.insert((Mesh3d(mesh), look));
             }
         });
     }

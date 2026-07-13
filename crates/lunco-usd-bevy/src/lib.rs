@@ -36,6 +36,11 @@
 
 use bevy::prelude::*;
 use bevy::asset::{AssetLoader, LoadContext, io::Reader};
+// Appearance **intent**, not a material: this crate must never name
+// `MeshMaterial3d`/`StandardMaterial` (they live in `bevy_pbr` → wgpu + naga).
+// `lunco-render-bevy` observes these and binds the real material.
+// See docs/architecture/render-decoupling.md.
+use lunco_render::{PbrLook, PbrTextures, SurfaceAlpha};
 pub use openusd::sdf::Path as SdfPath;
 // openusd `main` removed `TextReader`. The composed stage is flattened to a
 // Send-safe `sdf::Data` (see `compose`), queried via the `usd_data` helpers.
@@ -107,7 +112,11 @@ impl Plugin for UsdBevyPlugin {
             .register_type::<Children>()
             .register_type::<bevy::camera::primitives::Aabb>()
             .register_type::<Mesh3d>()
-            .register_type::<MeshMaterial3d<StandardMaterial>>()
+            // NOTE: `MeshMaterial3d<StandardMaterial>` used to be registered here for
+            // the glTF-scene deserializer. It is `bevy_pbr` — unnameable in this crate
+            // now — and Bevy's own `MaterialPlugin<StandardMaterial>` (added by
+            // `PbrPlugin`) already registers it in every render build, which is the
+            // only build where a glTF scene carries one.
             // Skinned/morph meshes — glTF rover payloads are skinned.
             .register_type::<bevy::mesh::skinning::SkinnedMesh>()
             .register_type::<bevy::mesh::morph::MorphWeights>()
@@ -565,7 +574,6 @@ fn instantiate_usd_prim(
     canonical: &mut CanonicalStages,
     asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
 ) {
     // The LIVE canonical stage is the single source of truth: meshes, materials,
     // lights, cameras, and transforms come off the composed `Stage` directly, and
@@ -587,7 +595,7 @@ fn instantiate_usd_prim(
     };
     instantiate_usd_prim_read(
         &cs.view(), entity, prim_path, existing_vis, existing_tf, load_into_grid,
-        is_instance_root, inherited_member, commands, asset_server, meshes, materials,
+        is_instance_root, inherited_member, commands, asset_server, meshes,
     );
 }
 
@@ -608,7 +616,6 @@ fn instantiate_usd_prim_read<R: UsdRead>(
     commands: &mut Commands,
     asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
 ) {
     {
 
@@ -835,13 +842,12 @@ fn instantiate_usd_prim_read<R: UsdRead>(
             }
         };
 
-        // Apply standard PBR material with USD color
+        // Author the PBR appearance intent (`PbrLook`) with the USD colour/textures
         if let Some(ref m) = mesh_handle {
             apply_standard_material(
                 reader,
                 &sdf_path,
                 m,
-                materials,
                 &mut commands.entity(entity),
                 asset_server,
                 prim_path.stage_handle.id(),
@@ -974,7 +980,6 @@ fn instantiate_usd_prim_read<R: UsdRead>(
                         reader,
                         &sdf_path,
                         &mesh_h,
-                        materials,
                         &mut commands.entity(entity),
                         asset_server,
                         prim_path.stage_handle.id(),
@@ -1217,7 +1222,6 @@ fn on_usd_prim_added(
     mut canonical: NonSendMut<CanonicalStages>,
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let entity = trigger.entity;
     let Ok((prim_path, vis, tf, load_into, is_instance_root, member)) = q.get(entity) else { return; };
@@ -1240,7 +1244,6 @@ fn on_usd_prim_added(
         &mut canonical,
         &asset_server,
         &mut meshes,
-        &mut materials,
     );
 }
 
@@ -1298,7 +1301,6 @@ pub fn sync_usd_visuals(
     mut canonical: NonSendMut<CanonicalStages>,
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     use bevy::asset::AssetId;
     let mut loaded: Vec<AssetId<UsdStageAsset>> = Vec::new();
@@ -1325,7 +1327,6 @@ pub fn sync_usd_visuals(
                 &mut canonical,
                 &asset_server,
                 &mut meshes,
-                &mut materials,
             );
         }
     }
@@ -1430,13 +1431,24 @@ fn usd_wrap_to_address(wrap: Option<&str>) -> bevy::image::ImageAddressMode {
     }
 }
 
-/// Applies a standard PBR material to an entity, resolving material bindings
-/// and shader networks if present, or falling back to direct prim attributes.
+/// Authors the PBR appearance **intent** ([`lunco_render::PbrLook`]) for an
+/// entity, resolving material bindings and shader networks if present, or
+/// falling back to direct prim attributes.
+///
+/// This crate never names `StandardMaterial` — `lunco-render-bevy` observes the
+/// `PbrLook` and binds the real material (see
+/// `docs/architecture/render-decoupling.md`). Texture *loading* stays here: it
+/// is `AssetServer` + `bevy_image` (sRGB per channel, `wrapS`/`wrapT` sampler
+/// address modes), all render-free.
+///
+/// **Animated prims get an `unshared` look**: the material sampler
+/// ([`sample_usd_material_animation`]) mutates the `PbrLook` every frame, and a
+/// shared (content-keyed) look would mint a fresh material per frame and free
+/// none. `unshared` gives it a private material the binder mutates in place.
 fn apply_standard_material<R: UsdRead>(
     reader: &R,
     sdf_path: &SdfPath,
     mesh_handle: &Handle<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
     entity_cmd: &mut EntityCommands,
     asset_server: &AssetServer,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
@@ -1489,8 +1501,7 @@ fn apply_standard_material<R: UsdRead>(
     let mut opacity_threshold = 0.0f32;
     let mut opacity_connected = false;
 
-    // Specular-workflow tint (default white = untinted) + clearcoat layer.
-    let mut specular_tint = Color::WHITE;
+    // Clearcoat layer.
     let mut clearcoat = 0.0f32;
     let mut clearcoat_roughness = 0.0f32;
 
@@ -1579,12 +1590,25 @@ fn apply_standard_material<R: UsdRead>(
         }
 
         // Specular workflow: `useSpecularWorkflow = 1` describes a dielectric by
-        // `specularColor` instead of metalness → tint the specular and force
-        // metallic 0 (USD's specular workflow has no metalness channel).
+        // `specularColor` instead of metalness → force metallic 0 (USD's specular
+        // workflow has no metalness channel).
+        //
+        // NOTE: the `specularColor` TINT is not carried. `PbrLook` has no
+        // `specular_tint` channel (`StandardMaterial::specular_tint` has no home in
+        // the appearance intent), so a specular-workflow prim authoring a coloured
+        // specular renders with an untinted (white) specular highlight. No scene in
+        // the repo authors one; adding it means one field on `PbrLook` +
+        // `standard_material()` in `lunco-render-bevy`, which is not this crate's to
+        // change. Everything else about the specular workflow (metallic = 0) is
+        // preserved.
         if get_attribute_as_f32(reader, &shader_path, "inputs:useSpecularWorkflow").unwrap_or(0.0) >= 0.5 {
             metallic = 0.0;
-            if let Some(c) = get_attribute_as_vec3(reader, &shader_path, "inputs:specularColor") {
-                specular_tint = Color::linear_rgb(c.x, c.y, c.z);
+            if get_attribute_as_vec3(reader, &shader_path, "inputs:specularColor").is_some() {
+                debug!(
+                    "[usd-bevy] {} authors inputs:specularColor — the specular TINT is \
+                     not represented in PbrLook and is dropped (metallic forced to 0).",
+                    sdf_path.as_str()
+                );
             }
         }
 
@@ -1610,41 +1634,55 @@ fn apply_standard_material<R: UsdRead>(
         }
     }
 
-    // UsdPreviewSurface alpha semantics → Bevy `AlphaMode`: a non-zero
+    // UsdPreviewSurface alpha semantics → `SurfaceAlpha`: a non-zero
     // `opacityThreshold` is a cutout (`Mask`); otherwise any sub-1 opacity or a
     // connected opacity input is alpha-blended; fully-opaque stays `Opaque` so
     // the depth-sorted transparent pass is only paid for when needed.
     let alpha_mode = if opacity_threshold > 0.0 {
-        AlphaMode::Mask(opacity_threshold)
+        SurfaceAlpha::Mask(opacity_threshold)
     } else if alpha < 1.0 || opacity_connected {
-        AlphaMode::Blend
+        SurfaceAlpha::Blend
     } else {
-        AlphaMode::Opaque
+        SurfaceAlpha::Opaque
     };
+
+    // An animated material channel means the sampler rewrites this look every
+    // frame → it MUST NOT share a content-keyed material (that leaks one material
+    // per distinct value, forever). `unshared` = a private material the binder
+    // mutates in place.
+    let animated = attr_has_time_samples(reader, sdf_path, "primvars:displayColor")
+        || attr_has_time_samples(reader, sdf_path, "primvars:displayOpacity")
+        || resolve_bound_shader(reader, sdf_path).is_some_and(|shader| {
+            ANIMATED_SHADER_INPUTS
+                .iter()
+                .any(|i| attr_has_time_samples(reader, &shader, i))
+        });
 
     // `try_insert`: the prim may have been despawned between sync's iterate
     // and ApplyDeferred (see `sync_usd_visuals`'s panic-safe note) — a
     // missing entity here is a quiet no-op, not a wasm panic.
     entity_cmd.try_insert((
         Mesh3d(mesh_handle.clone()),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: base_color.with_alpha(alpha),
-            base_color_texture,
+        PbrLook {
+            base_color: base_color.with_alpha(alpha).to_linear(),
             emissive,
-            emissive_texture,
-            metallic,
             perceptual_roughness: roughness,
-            metallic_roughness_texture,
-            normal_map_texture,
-            occlusion_texture,
+            metallic,
             reflectance,
             ior,
-            alpha_mode,
-            specular_tint,
             clearcoat,
             clearcoat_perceptual_roughness: clearcoat_roughness,
+            alpha: alpha_mode,
+            textures: PbrTextures {
+                base_color: base_color_texture,
+                emissive: emissive_texture,
+                metallic_roughness: metallic_roughness_texture,
+                normal_map: normal_map_texture,
+                occlusion: occlusion_texture,
+            },
+            unshared: animated,
             ..default()
-        }))
+        },
     ));
 }
 
@@ -2217,29 +2255,38 @@ pub fn sample_usd_animation(
 /// Per-frame USD **material** animation (doc 19 — T5 material channels).
 ///
 /// Sibling of [`sample_usd_animation`] for the visual-material path: for each
-/// [`UsdAnimated`] entity that owns a `StandardMaterial`, sample the bound
+/// [`UsdAnimated`] entity that owns a [`PbrLook`], sample the bound
 /// surface shader's animated `inputs:diffuseColor` / `inputs:opacity` (or the
 /// geom's `primvars:displayColor`) at the entity's resolved time code and write
-/// them into the live material asset. Each channel is gated on
+/// them into the look. Each channel is gated on
 /// [`attr_has_time_samples`], so an entity animated only in xform/visibility
 /// does a few cheap `HashMap` lookups and touches no material. Runs in `Update`
 /// after [`lunco_time::DomainResolveSet`], like the transform sampler.
+///
+/// This writes **intent**, not a material asset — `lunco-render-bevy`'s
+/// `rebind_changed_pbr_look` picks the change up. Those looks are authored
+/// `unshared` (see [`apply_standard_material`]), so the binder mutates ONE
+/// private material in place per prim instead of minting a fresh cached material
+/// every frame (which would be an unbounded leak).
+///
+/// Change-detection note: `Mut<PbrLook>` is only dereferenced *mutably* when a
+/// channel actually resolves a sample, so a static frame does not mark the look
+/// changed.
 pub fn sample_usd_material_animation(
     world: Res<lunco_time::WorldTime>,
     resolved: Res<lunco_time::ResolvedDomains>,
     canonical: NonSend<CanonicalStages>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    q: Query<
+    mut q: Query<
         (
             &UsdPrimPath,
             &AnimationPlan,
-            &MeshMaterial3d<StandardMaterial>,
+            &mut PbrLook,
             Option<&lunco_time::TimeBinding>,
         ),
         With<UsdAnimated>,
     >,
 ) {
-    for (prim, plan, mat_handle, binding) in &q {
+    for (prim, plan, mut look, binding) in &mut q {
         // Cheap gate: the plan already resolved the shader + which channels move.
         let Some(mat) = &plan.material else { continue };
         let Some(cs) = canonical.get(prim.stage_handle.id()) else { continue };
@@ -2249,7 +2296,6 @@ pub fn sample_usd_material_animation(
 
         let secs = lunco_time::domain_time(&resolved, binding, &world);
         let t = secs * plan.time_codes_per_second;
-        let Some(mut material) = materials.get_mut(&mat_handle.0) else { continue };
 
         // Base color: a shader `inputs:diffuseColor` wins over geom displayColor.
         // USD `color3f` is linear scene-referred (matches `apply_standard_material`).
@@ -2263,9 +2309,9 @@ pub fn sample_usd_material_animation(
         let color_attr = if mat.diffuse { "inputs:diffuseColor" } else { "primvars:displayColor" };
         if let Some(src) = color_src {
             if let Some(c) = read_vec3_f64_at(reader, src, color_attr, t) {
-                let a = material.base_color.alpha();
-                material.base_color =
-                    Color::linear_rgb(c[0] as f32, c[1] as f32, c[2] as f32).with_alpha(a);
+                let a = look.base_color.alpha;
+                look.base_color =
+                    LinearRgba::new(c[0] as f32, c[1] as f32, c[2] as f32, a);
             }
         }
 
@@ -2275,9 +2321,9 @@ pub fn sample_usd_material_animation(
             if let Some(o) =
                 read_f32_at(reader, mat.shader.as_ref().unwrap_or(sdf_path), "inputs:opacity", t)
             {
-                material.base_color = material.base_color.with_alpha(o);
-                if o < 1.0 && material.alpha_mode == AlphaMode::Opaque {
-                    material.alpha_mode = AlphaMode::Blend;
+                look.base_color.alpha = o;
+                if o < 1.0 && look.alpha == SurfaceAlpha::Opaque {
+                    look.alpha = SurfaceAlpha::Blend;
                 }
             }
         }
@@ -2838,7 +2884,11 @@ pub fn read_usd_mesh_indexed<R: UsdRead>(
 /// (see `resolver.rs` `TODO(glb-composability)`).
 pub fn build_usd_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> {
     use bevy::asset::RenderAssetUsages;
-    use bevy::render::render_resource::PrimitiveTopology;
+    // `bevy_mesh`, NOT `bevy::render::render_resource` — the latter is a
+    // re-export through `bevy_render` (wgpu + naga). `bevy_mesh` depends only on
+    // `wgpu-types`, so naming the topology here costs no GPU stack.
+    // See docs/architecture/render-decoupling.md.
+    use bevy_mesh::PrimitiveTopology;
 
     let points = reader.scalar::<Vec<[f32; 3]>>(path, "points")?;
     let counts = read_int_array(reader, path, "faceVertexCounts")?;
@@ -3070,7 +3120,10 @@ fn poll_diagnostic_label_font(
 /// no camera, no render pass, no per-frame work. `None` if `text` is empty.
 fn rasterize_label(text: &str, font: &ab_glyph::FontVec, cfg: &DiagnosticLabelConfig) -> Option<Image> {
     use ab_glyph::{Font, ScaleFont, point, PxScale};
-    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    // The POD texture descriptors, straight from `wgpu-types` — the same types
+    // `bevy_image` itself takes. NOT `bevy::render::render_resource`, which is a
+    // `bevy_render` re-export and would drag wgpu + naga into this crate.
+    use wgpu_types::{Extent3d, TextureDimension, TextureFormat};
     use bevy::asset::RenderAssetUsages;
 
     if text.is_empty() {
@@ -3156,7 +3209,6 @@ fn bake_pending_labels(
     font: Res<DiagnosticLabelFont>,
     pending: Query<(Entity, &PendingDiagnosticLabel)>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
     let Some(font) = font.0.as_ref() else { return };
@@ -3167,14 +3219,21 @@ fn bake_pending_labels(
         };
         let aspect = (image.width() as f32 / image.height().max(1) as f32).max(0.01);
         let tex = images.add(image);
-        // One material shared across all faces.
-        let label_mat = materials.add(StandardMaterial {
-            base_color_texture: Some(tex),
-            alpha_mode: AlphaMode::Blend,
+        // One look shared across all faces — the binder's content-keyed cache
+        // gives every face the same material handle, as the hand-shared
+        // `label_mat` did. `double_sided` == the old `cull_mode: None`
+        // (readable from either side).
+        let label_look = PbrLook {
+            // WHITE, explicitly: `PbrLook::default()`'s base colour is mid-grey,
+            // which would tint the baked glyphs 50% dark. `StandardMaterial`'s
+            // default (what this used to build) is white.
+            base_color: LinearRgba::WHITE,
+            textures: PbrTextures { base_color: Some(tex), ..default() },
+            alpha: SurfaceAlpha::Blend,
             unlit: true,
-            cull_mode: None, // readable from either side
+            double_sided: true,
             ..default()
-        });
+        };
         let s = pending.box_size;
         let (hx, hy, hz) = (s.x / 2.0, s.y / 2.0, s.z / 2.0);
         let eps = 0.01;
@@ -3208,7 +3267,7 @@ fn bake_pending_labels(
                     Name::new("DiagnosticStubLabel"),
                     DiagnosticStubLabel,
                     Mesh3d(meshes.add(Rectangle::new(qw, qh))),
-                    MeshMaterial3d(label_mat.clone()),
+                    label_look.clone(),
                     Transform::from_translation(offset).with_rotation(rot),
                 ));
             }
@@ -3239,9 +3298,12 @@ fn hide_glb_placeholder_meshes(
                     if let Ok(mut vis) = visibility.get_mut(e) {
                         *vis = Visibility::Inherited;
                     }
+                    // Dropping `Mesh3d` is what stops the placeholder drawing;
+                    // dropping `PbrLook` retires its appearance intent (the binder
+                    // owns the `MeshMaterial3d`, which is inert with no mesh).
                     commands.entity(e)
                         .remove::<Mesh3d>()
-                        .remove::<MeshMaterial3d<StandardMaterial>>()
+                        .remove::<PbrLook>()
                         .remove::<GlbPlaceholder>()
                         .remove::<PlaceholderAssetUri>();
 
@@ -3251,7 +3313,7 @@ fn hide_glb_placeholder_meshes(
                                 if sib != e && has_mesh.get(sib).is_ok() {
                                     commands.entity(sib)
                                         .remove::<Mesh3d>()
-                                        .remove::<MeshMaterial3d<StandardMaterial>>();
+                                        .remove::<PbrLook>();
                                 }
                             }
                         }
@@ -3275,7 +3337,6 @@ pub fn reveal_placeholder_on_failure(
     cfg: Res<DiagnosticLabelConfig>,
     scene_roots: Query<(Entity, &WorldAssetRoot, &GlobalTransform, &PlaceholderAssetUri, &UsdPrimPath), (With<GlbPlaceholder>, Without<DiagnosticStub>)>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     // Per-placeholder time spent waiting on its glTF scene. Used to trip the
     // grace timeout on web, where a broken load may never report `is_failed()`.
     mut waited: Local<std::collections::HashMap<Entity, f32>>,
@@ -3357,13 +3418,13 @@ pub fn reveal_placeholder_on_failure(
             commands.spawn((
                 Name::new("DiagnosticStub"),
                 Mesh3d(meshes.add(Cuboid::from_size(scale))),
-                MeshMaterial3d(materials.add(StandardMaterial {
-                    base_color: cfg.box_color,
+                PbrLook {
+                    base_color: cfg.box_color.to_linear(),
                     emissive: LinearRgba::from(cfg.box_color),
-                    alpha_mode: AlphaMode::Blend, // Support transparency
+                    alpha: SurfaceAlpha::Blend, // Support transparency
                     unlit: true, // readable even with no scene lighting
                     ..default()
-                })),
+                },
                 transform,
                 Visibility::Visible,
                 DiagnosticStub,

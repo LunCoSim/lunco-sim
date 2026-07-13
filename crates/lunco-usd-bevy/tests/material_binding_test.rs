@@ -1,25 +1,31 @@
 //! Integration test: writes a USDA fixture to disk and loads it. Native-only, so
 //! the workspace `std::fs` ban (a wasm-runtime guard) does not apply — exactly the
 //! `tests/` exemption `clippy.toml` describes but cargo cannot express as config.
+//!
+//! Asserts on the render-free appearance **intent** ([`PbrLook`]) rather than on a
+//! `StandardMaterial`: `lunco-usd-bevy` no longer names `bevy_pbr` (see
+//! `docs/architecture/render-decoupling.md`), and `lunco-render-bevy`'s own tests
+//! cover the `PbrLook` → `StandardMaterial` binding. Every channel asserted here
+//! is the same one the old material assertions checked.
 #![allow(clippy::disallowed_methods)]
 
 use bevy::prelude::*;
+use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd_bevy::*;
 
 #[test]
 fn test_usd_material_binding_parsing() {
     let mut app = App::new();
-    
+
     // Core Bevy plugins
     app.add_plugins(MinimalPlugins);
     app.add_plugins(AssetPlugin::default());
-    
+
     // Register assets manually to avoid full render plugin dependencies
     app.init_asset::<UsdStageAsset>();
     app.init_asset::<Mesh>();
-    app.init_asset::<StandardMaterial>();
     app.init_asset::<Image>();
-    
+
     app.add_plugins(UsdBevyPlugin);
 
     // Setup a mock USD stage with a Material, Shader and a bound Cube Mesh
@@ -77,40 +83,39 @@ def Xform "World"
     // Check if the entity was processed and has visual sync
     assert!(app.world().get::<UsdVisualSynced>(test_entity).is_some());
 
-    // Verify standard material component exists
-    let material_h = app.world().get::<MeshMaterial3d<StandardMaterial>>(test_entity)
-        .expect("Entity should have a StandardMaterial component");
-
-    let materials = app.world().resource::<Assets<StandardMaterial>>();
-    let mat = materials.get(&material_h.0).expect("Material should be registered in assets");
-    println!("Parsed material: base_color={:?}, roughness={}, metallic={}, emissive={:?}", mat.base_color.to_linear().to_vec4(), mat.perceptual_roughness, mat.metallic, mat.emissive);
+    // Verify the appearance intent exists
+    let look = app.world().get::<PbrLook>(test_entity)
+        .expect("Entity should have a PbrLook component");
 
     // Assert PBR properties parsed from shader network matches expectation
-    assert!((mat.base_color.to_linear().to_vec4()[0] - 1.0).abs() < 1e-4);
-    assert!((mat.base_color.to_linear().to_vec4()[1] - 0.5).abs() < 1e-4);
-    assert!((mat.base_color.to_linear().to_vec4()[2] - 0.25).abs() < 1e-4);
+    assert!((look.base_color.red - 1.0).abs() < 1e-4);
+    assert!((look.base_color.green - 0.5).abs() < 1e-4);
+    assert!((look.base_color.blue - 0.25).abs() < 1e-4);
 
-    assert!((mat.perceptual_roughness - 0.75).abs() < 1e-4);
-    assert!((mat.metallic - 0.25).abs() < 1e-4);
+    assert!((look.perceptual_roughness - 0.75).abs() < 1e-4);
+    assert!((look.metallic - 0.25).abs() < 1e-4);
 
-    let emissive = mat.emissive;
+    let emissive = look.emissive;
     assert!((emissive.red - 0.1).abs() < 1e-4);
     assert!((emissive.green - 0.2).abs() < 1e-4);
     assert!((emissive.blue - 0.3).abs() < 1e-4);
+
+    // A static material shares its (content-keyed) material with every identical
+    // look — only an ANIMATED one opts out.
+    assert!(!look.unshared, "a static material must stay shareable");
 }
 
 #[test]
 fn test_usd_material_modification() {
     let mut app = App::new();
-    
+
     app.add_plugins(MinimalPlugins);
     app.add_plugins(AssetPlugin::default());
-    
+
     app.init_asset::<UsdStageAsset>();
     app.init_asset::<Mesh>();
-    app.init_asset::<StandardMaterial>();
     app.init_asset::<Image>();
-    
+
     app.add_plugins(UsdBevyPlugin);
 
     // Initial USDA content
@@ -163,12 +168,10 @@ def Xform "World"
     app.update();
 
     // Verify initial values
-    let material_h = app.world().get::<MeshMaterial3d<StandardMaterial>>(test_entity)
-        .expect("Entity should have standard material");
-    let materials = app.world().resource::<Assets<StandardMaterial>>();
-    let mat = materials.get(&material_h.0).expect("Material should be registered");
-    assert!((mat.base_color.to_linear().to_vec4()[0] - 1.0).abs() < 1e-4);
-    assert!((mat.perceptual_roughness - 0.75).abs() < 1e-4);
+    let look = app.world().get::<PbrLook>(test_entity)
+        .expect("Entity should have a PbrLook");
+    assert!((look.base_color.red - 1.0).abs() < 1e-4);
+    assert!((look.perceptual_roughness - 0.75).abs() < 1e-4);
 
     // Now simulate updating the USD document
     let updated_usda_content = r#"#usda 1.0
@@ -227,29 +230,26 @@ def Xform "World"
     app.update();
 
     // Verify updated values
-    let material_h2 = app.world().get::<MeshMaterial3d<StandardMaterial>>(test_entity)
-        .expect("Entity should still have standard material");
-    let materials2 = app.world().resource::<Assets<StandardMaterial>>();
-    let mat2 = materials2.get(&material_h2.0).expect("Material should be registered");
+    let look2 = app.world().get::<PbrLook>(test_entity)
+        .expect("Entity should still have a PbrLook");
 
     // base color should now be blue (0.0, 0.0, 1.0)
-    assert!((mat2.base_color.to_linear().to_vec4()[0] - 0.0).abs() < 1e-4);
-    assert!((mat2.base_color.to_linear().to_vec4()[1] - 0.0).abs() < 1e-4);
-    assert!((mat2.base_color.to_linear().to_vec4()[2] - 1.0).abs() < 1e-4);
+    assert!((look2.base_color.red - 0.0).abs() < 1e-4);
+    assert!((look2.base_color.green - 0.0).abs() < 1e-4);
+    assert!((look2.base_color.blue - 1.0).abs() < 1e-4);
 
-    assert!((mat2.perceptual_roughness - 0.1).abs() < 1e-4);
-    assert!((mat2.metallic - 0.9).abs() < 1e-4);
+    assert!((look2.perceptual_roughness - 0.1).abs() < 1e-4);
+    assert!((look2.metallic - 0.9).abs() < 1e-4);
 }
 
 /// Helper: parse a USDA stage, bind it to one prim, run the visual sync, and
-/// return the resulting `StandardMaterial`.
-fn material_for(usda: &str, prim_path: &str) -> StandardMaterial {
+/// return the resulting appearance intent.
+fn material_for(usda: &str, prim_path: &str) -> PbrLook {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(AssetPlugin::default());
     app.init_asset::<UsdStageAsset>();
     app.init_asset::<Mesh>();
-    app.init_asset::<StandardMaterial>();
     app.init_asset::<Image>();
     app.add_plugins(UsdBevyPlugin);
 
@@ -268,13 +268,10 @@ fn material_for(usda: &str, prim_path: &str) -> StandardMaterial {
         .id();
     app.update();
 
-    let mh = app
-        .world()
-        .get::<MeshMaterial3d<StandardMaterial>>(entity)
-        .expect("entity should have a StandardMaterial")
-        .0
-        .clone();
-    app.world().resource::<Assets<StandardMaterial>>().get(&mh).unwrap().clone()
+    app.world()
+        .get::<PbrLook>(entity)
+        .expect("entity should have a PbrLook")
+        .clone()
 }
 
 const OPACITY_STAGE: &str = r#"#usda 1.0
@@ -304,10 +301,10 @@ def Xform "World"
 /// `inputs:opacity < 1` → base-color alpha + alpha-blended; `inputs:ior` binds.
 #[test]
 fn opacity_drives_alpha_blend_and_ior() {
-    let mat = material_for(OPACITY_STAGE, "/World/Pane");
-    assert!((mat.base_color.alpha() - 0.4).abs() < 1e-4, "alpha from inputs:opacity");
-    assert!(matches!(mat.alpha_mode, AlphaMode::Blend), "sub-1 opacity → Blend");
-    assert!((mat.ior - 1.45).abs() < 1e-4, "ior bound");
+    let look = material_for(OPACITY_STAGE, "/World/Pane");
+    assert!((look.base_color.alpha - 0.4).abs() < 1e-4, "alpha from inputs:opacity");
+    assert!(matches!(look.alpha, SurfaceAlpha::Blend), "sub-1 opacity → Blend");
+    assert!((look.ior - 1.45).abs() < 1e-4, "ior bound");
 }
 
 const CUTOUT_STAGE: &str = r#"#usda 1.0
@@ -333,12 +330,12 @@ def Xform "World"
 }
 "#;
 
-/// A non-zero `inputs:opacityThreshold` → cutout (`AlphaMode::Mask`).
+/// A non-zero `inputs:opacityThreshold` → cutout (`SurfaceAlpha::Mask`).
 #[test]
 fn opacity_threshold_is_alpha_mask() {
-    let mat = material_for(CUTOUT_STAGE, "/World/Leaf");
-    match mat.alpha_mode {
-        AlphaMode::Mask(t) => assert!((t - 0.5).abs() < 1e-4),
+    let look = material_for(CUTOUT_STAGE, "/World/Leaf");
+    match look.alpha {
+        SurfaceAlpha::Mask(t) => assert!((t - 0.5).abs() < 1e-4),
         other => panic!("expected Mask(0.5), got {other:?}"),
     }
 }
@@ -347,9 +344,9 @@ fn opacity_threshold_is_alpha_mask() {
 /// transparent pass.
 #[test]
 fn opaque_material_stays_opaque() {
-    let mat = material_for(OPACITY_STAGE.replace("float inputs:opacity = 0.4\n", "").as_str(), "/World/Pane");
-    assert!(matches!(mat.alpha_mode, AlphaMode::Opaque), "no opacity → Opaque");
-    assert!((mat.base_color.alpha() - 1.0).abs() < 1e-4);
+    let look = material_for(OPACITY_STAGE.replace("float inputs:opacity = 0.4\n", "").as_str(), "/World/Pane");
+    assert!(matches!(look.alpha, SurfaceAlpha::Opaque), "no opacity → Opaque");
+    assert!((look.base_color.alpha - 1.0).abs() < 1e-4);
 }
 
 const SPECULAR_STAGE: &str = r#"#usda 1.0
@@ -379,14 +376,16 @@ def Xform "World"
 }
 "#;
 
-/// Specular workflow forces `metallic = 0` and binds `specularColor` →
-/// `specular_tint`; clearcoat + clearcoatRoughness map 1:1.
+/// Specular workflow forces `metallic = 0`; clearcoat + clearcoatRoughness map 1:1.
+///
+/// KNOWN GAP: the `specularColor` TINT is not carried — `PbrLook` has no
+/// `specular_tint` channel, so a specular-workflow prim renders with an untinted
+/// (white) specular highlight. Closing it means adding one field to `PbrLook` and
+/// to `lunco-render-bevy`'s `standard_material()`; no scene in the repo authors one.
 #[test]
 fn specular_workflow_and_clearcoat_bind() {
-    let mat = material_for(SPECULAR_STAGE, "/World/Body");
-    assert!((mat.metallic - 0.0).abs() < 1e-4, "specular workflow → metallic 0");
-    let t = mat.specular_tint.to_linear();
-    assert!((t.red - 0.9).abs() < 1e-4 && (t.green - 0.1).abs() < 1e-4 && (t.blue - 0.1).abs() < 1e-4);
-    assert!((mat.clearcoat - 1.0).abs() < 1e-4, "clearcoat bound");
-    assert!((mat.clearcoat_perceptual_roughness - 0.2).abs() < 1e-4, "clearcoatRoughness bound");
+    let look = material_for(SPECULAR_STAGE, "/World/Body");
+    assert!((look.metallic - 0.0).abs() < 1e-4, "specular workflow → metallic 0");
+    assert!((look.clearcoat - 1.0).abs() < 1e-4, "clearcoat bound");
+    assert!((look.clearcoat_perceptual_roughness - 0.2).abs() < 1e-4, "clearcoatRoughness bound");
 }

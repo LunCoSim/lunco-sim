@@ -5,12 +5,17 @@ edition = "2021"
 description = "Procedural crater + rock field generation for rover testing in LunCoSim"
 
 [dependencies]
-# `bevy_render` carries `VisibilityRange` (mesh LOD) and `Mesh`; `bevy_pbr` the
-# StandardMaterial used for generated terrain/rock surfaces. The pure generation
-# modules (spec/sampler/field/assets) only touch glam (Vec2/Vec3), available at
-# the substrate level — the render features are for the plugin layer.
-bevy = { workspace = true, features = ["bevy_pbr", "bevy_mesh", "bevy_render", "bevy_world_serialization", "bevy_light"] }
+# RENDER-FREE. `bevy_mesh` gives `Mesh` + `Mesh3d`, `bevy_camera` gives
+# `Visibility` + `VisibilityRange` — neither depends on `bevy_render`, so this
+# crate does not drag wgpu/naga into the `--no-ui` server or the wasm worker.
+#
+# `bevy_pbr` was here for the `StandardMaterial` on generated terrain/rock
+# surfaces. That is now stated as `lunco_render::PbrLook` intent and bound by
+# `lunco-render-bevy`. DO NOT add `bevy_pbr` back: if you need a material here,
+# you want an intent component instead. See docs/architecture/render-decoupling.md.
+bevy = { workspace = true, features = ["bevy_mesh", "bevy_camera", "bevy_world_serialization", "bevy_light"] }
 bevy_mesh = { workspace = true }
+lunco-render = { path = "../lunco-render" }
 avian3d = { workspace = true }
 big_space = { workspace = true }
 lunco-core = { path = "../lunco-core" }

@@ -4,7 +4,17 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "mesh_picking", "tonemapping_luts"] }
+# `zstd_rust`: bevy_image refuses to build without a zstd backend chosen. It was
+# only ever compiling because another crate in the graph happened to select one —
+# name it here so this crate stands alone.
+#
+# TODO(render-decoupling): `bevy_pbr` is still here ONLY for `shader_material.rs`
+# (the `AsBindGroup` impl). The render-free half of this crate — `dyn_params` (the
+# WGSL-reflected parameter schema) and `look` (`ShaderLook`) — is what domain
+# crates should use. Once every consumer states `ShaderLook` intent instead of
+# building a `ShaderMaterial`, move `shader_material.rs` into `lunco-render-bevy`
+# and this crate goes render-free. See docs/architecture/render-decoupling.md.
+bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "mesh_picking", "tonemapping_luts", "zstd_rust"] }
 
 [lints]
 workspace = true

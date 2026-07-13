@@ -11,12 +11,16 @@
 //!
 //! and publish them as a [`TerrainDerivedMaps`] component. Consumers:
 //!
-//! - the **static-mesh path** ([`apply_derived_layers`]) binds them onto the
-//!   terrain's own `ShaderMaterial` (`terrain_layered.wgsl` slots) and raises
-//!   `weight_rough`/`weight_ao`/`weight_normal`;
-//! - the **streamed-tile path** (`stream_viz`) binds them onto every LOD-tile
-//!   geomorph material — this is what carries crater rims / AO / tonal variation
-//!   at distances where tile geometry and the procedural FBM have LOD'd away.
+//! - the **streamed-tile path** (`stream_viz`) sets them as the `Surface`/`Normal`
+//!   texture layers of every LOD tile's `ShaderLook` — this is what carries crater
+//!   rims / AO / tonal variation at distances where tile geometry and the procedural
+//!   FBM have LOD'd away;
+//! - the **static-mesh path** binds them onto the terrain's own `ShaderMaterial`
+//!   (`terrain_layered.wgsl` slots). That material is authored asynchronously by
+//!   `lunco-usd-sim`, so there is no intent component to restate — filling its slots
+//!   means naming `MeshMaterial3d`, and that lives in `lunco-render-bevy`
+//!   (`terrain_maps.rs`), the one crate allowed to. It is why this crate can publish
+//!   the maps without linking `bevy_pbr`.
 //!
 //! Render-gated by data, not `cfg`: the bake only starts when `Assets<Image>`
 //! exists, so the headless server (no render assets) never bakes — it needs only
@@ -29,19 +33,21 @@
 //!
 //! Flow: [`mark_derived_stale`] → [`start_derived_bakes`] (one async task per
 //! terrain) → [`finish_derived_bakes`] (upload as `Image`s + publish
-//! [`TerrainDerivedMaps`]) → [`apply_derived_layers`] (static-mesh bind; the
-//! material asset is created asynchronously by the USD shader path, so binding
-//! retries).
+//! [`TerrainDerivedMaps`]). The two consumers above then bind from the published
+//! component.
 
 use std::sync::Arc;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
+// `wgpu-types`, not `bevy::render` — these are plain POD texture descriptors
+// (`bevy_image` itself takes them from here) and carry no pipeline, no wgpu device,
+// no naga. `bevy::render::render_resource` merely re-exports them, and importing it
+// would drag the whole GPU stack in. See docs/architecture/render-decoupling.md.
+use wgpu_types::{Extent3d, TextureDimension, TextureFormat};
 
-use lunco_materials::{ParamValue, ShaderMaterial};
 use lunco_terrain_core::{
     albedo_map, ao_map, normal_map, pack_normal_rgba8, pack_surface_rgba8, roughness_from_slope,
     slope_map, Square,
@@ -406,38 +412,6 @@ fn finish_derived_bakes(
     }
 }
 
-/// Bind the baked layers onto the terrain's own static-mesh material once it
-/// exists (created async by the USD shader path → retry until ready), then mark
-/// the terrain done. Streamed tiles bind separately in `stream_viz`.
-fn apply_derived_layers(
-    mut commands: Commands,
-    q: Query<(Entity, &TerrainDerivedMaps, &MeshMaterial3d<ShaderMaterial>), Without<DerivedLayersBuilt>>,
-    materials: Option<ResMut<Assets<ShaderMaterial>>>,
-) {
-    let Some(mut materials) = materials else { return };
-    for (entity, handles, mat3d) in &q {
-        let Some(mut material) = materials.get_mut(&mat3d.0) else { continue };
-        // Yield to an authored map: a USD `lunco:terrain:layer:surface/normal:map`
-        // (bound elsewhere) takes precedence — only fill a slot still empty, so
-        // the derived bake is the fallback, not an override.
-        let mut weights: Vec<(&str, ParamValue)> = Vec::new();
-        if material.surface_map.is_none() {
-            material.surface_map = Some(handles.surface.clone());
-            weights.push(("weight_rough", ParamValue::F32(1.0)));
-            weights.push(("weight_ao", ParamValue::F32(1.0)));
-        }
-        if material.normal_map.is_none() {
-            material.normal_map = Some(handles.normal.clone());
-            weights.push(("weight_normal", ParamValue::F32(1.0)));
-        }
-        if !weights.is_empty() {
-            material.set_many(weights);
-        }
-        commands.entity(entity).try_insert(DerivedLayersBuilt);
-        info!("[terrain-layers] bound DEM-derived surface+normal layers ({}²)", handles.res);
-    }
-}
-
 /// Build the full RGBA8 box-filtered mip chain for a square `res²` texture.
 /// Returns the concatenated level data (level 0 first) and the level count.
 /// Mips matter here: these maps are sampled out to the horizon, and without
@@ -509,7 +483,10 @@ fn data_texture(res: usize, rgba: Vec<u8>) -> Image {
 pub(crate) fn register(app: &mut App) {
     app.add_systems(
         Update,
-        (mark_derived_stale, start_derived_bakes, finish_derived_bakes, apply_derived_layers)
+        // The static-mesh bind (`lunco-render-bevy`'s `apply_derived_layers`) is no
+        // longer in this chain: it names a material, so it lives on the render side.
+        // It retries until the async USD material exists, so it needs no ordering.
+        (mark_derived_stale, start_derived_bakes, finish_derived_bakes)
             .chain()
             // The `.after` inserts the sync point that makes `finish_dem_restamp`'s
             // deferred `DerivedDirtyRegion` insert visible in the same frame as its
