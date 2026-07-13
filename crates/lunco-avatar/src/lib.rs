@@ -1966,9 +1966,21 @@ fn avatar_behavior_input_system(
     }
 }
 
-fn avatar_global_hotkeys(q_avatar: Query<&IntentState, With<Avatar>>, mut transport: Option<ResMut<TimeTransport>>) {
-    for intent_state in q_avatar.iter() {
-        if intent_state.just_pressed(&UserIntent::Pause) {
+fn avatar_global_hotkeys(
+    q_avatar: Query<(&IntentState, Option<&ControllerLink>), With<Avatar>>,
+    mut transport: Option<ResMut<TimeTransport>>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+) {
+    for (intent_state, opt_link) in q_avatar.iter() {
+        let mut toggle = intent_state.just_pressed(&UserIntent::Pause);
+
+        // Also if we are in Avatar mode (not possessing a vessel, i.e., no ControllerLink),
+        // let's make a press on Space pause/unpause.
+        if opt_link.is_none() && keyboard.just_pressed(KeyCode::Space) {
+            toggle = true;
+        }
+
+        if toggle {
             if let Some(transport) = transport.as_deref_mut() {
                 transport.mode = match transport.mode {
                     TransportMode::Playing => TransportMode::Paused,

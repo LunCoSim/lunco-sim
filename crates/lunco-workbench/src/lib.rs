@@ -2872,11 +2872,44 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
             anchor_rects.push(("menu.view", r_view.response.rect));
 
             // Custom top-level menus
+            let is_onboarded = world
+                .get_resource::<lunco_settings::Settings>()
+                .and_then(|s| s.raw("tour_seen"))
+                .and_then(|v| v.get("onboarded"))
+                .and_then(|b| b.as_bool())
+                .unwrap_or(false);
+
             let custom_menus = std::mem::take(&mut layout.custom_menus);
+            let theme = world.resource::<lunco_theme::Theme>();
+            let warn_color = theme.tokens.warning;
+
             for (name, cb) in &custom_menus {
-                let r_custom = ui.menu_button(*name, |ui| {
+                let is_tutorials = *name == "🎓 Tutorials";
+                let highlight = is_tutorials && !is_onboarded;
+
+                let text = if highlight {
+                    egui::RichText::new(*name)
+                        .color(warn_color)
+                        .strong()
+                } else {
+                    egui::RichText::new(*name)
+                };
+
+                let r_custom = ui.menu_button(text, |ui| {
                     cb(ui, world);
                 });
+
+                if highlight {
+                    let rect = r_custom.response.rect.expand(2.0);
+                    let stroke_color = warn_color.linear_multiply(0.8);
+                    ui.painter().rect_stroke(
+                        rect,
+                        egui::CornerRadius::same(4),
+                        egui::Stroke::new(2.0, stroke_color),
+                        egui::StrokeKind::Outside,
+                    );
+                }
+
                 anchor_rects.push((*name, r_custom.response.rect));
             }
             layout.custom_menus = custom_menus;

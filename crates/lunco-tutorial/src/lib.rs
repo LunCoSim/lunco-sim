@@ -243,9 +243,23 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
             warn!("[tutorial] StartTutorial: unknown id '{id}'");
             return;
         };
-        // Native reads the `.rhai` fresh from disk each launch (edit-and-replay);
-        // wasm serves the embedded copy — the asset crate owns that policy.
-        let Some(source) = lunco_assets::tutorials::tutorial_source(&meta.script) else {
+        // Try loading from the active twin first (dynamic twin tutorials)
+        let mut source = None;
+        if let Some(ws) = world.get_resource::<lunco_workspace::WorkspaceResource>() {
+            if let Some(active_id) = ws.0.active_twin {
+                if let Some(twin) = ws.0.twin(active_id) {
+                    let twin_script_path = twin.root.join(&meta.script);
+                    if let Ok(src) = std::fs::read_to_string(&twin_script_path) {
+                        source = Some(src);
+                    }
+                }
+            }
+        }
+
+        // Fall back to general assets
+        let source = source.or_else(|| lunco_assets::tutorials::tutorial_source(&meta.script));
+
+        let Some(source) = source else {
             warn!("[tutorial] no source for '{id}' ({})", meta.script);
             return;
         };
@@ -257,6 +271,9 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
             params: String::new(),
         });
         world.resource_mut::<TutorialProgress>().current = Some(id);
+        if let Some(mut s) = world.get_resource_mut::<TutorialSeen>() {
+            s.onboarded = true;
+        }
     });
 }
 
@@ -550,6 +567,52 @@ fn register_tutorials_menu(world: &mut World) {
         return;
     };
     layout.register_custom_menu("🎓 Tutorials", |ui, world| {
+        // Dynamic twin tutorials: check if active twin has a tutorials.json in sim/tutorials/
+        let active_twin_info = if let Some(ws) = world.get_resource::<lunco_workspace::WorkspaceResource>() {
+            if let Some(active_id) = ws.0.active_twin {
+                ws.0.twin(active_id).map(|t| (active_id, t.root.clone()))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        #[derive(Resource, Default)]
+        struct LastLoadedTwinTutorials(Option<lunco_workspace::TwinId>);
+
+        let last_twin = world.get_resource::<LastLoadedTwinTutorials>().map(|r| r.0).flatten();
+        let current_active_id = active_twin_info.as_ref().map(|(id, _)| *id);
+
+        if last_twin != current_active_id {
+            // Clear any previous space school tutorials
+            if let Some(mut registry) = world.get_resource_mut::<TutorialRegistry>() {
+                registry.tutorials.retain(|t| t.app != "school");
+            }
+            
+            // If there's an active twin, try to load its tutorials.json
+            if let Some((_, root)) = &active_twin_info {
+                let manifest_path = root.join("sim/tutorials/tutorials.json");
+                if let Ok(json_text) = std::fs::read_to_string(&manifest_path) {
+                    if let Ok(metas) = serde_json::from_str::<Vec<TutorialMeta>>(&json_text) {
+                        if let Some(mut registry) = world.get_resource_mut::<TutorialRegistry>() {
+                            for mut m in metas {
+                                // Force app = "school" so it groups under the Space School submenu
+                                m.app = "school".to_string();
+                                registry.register_tutorial(m);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if world.contains_resource::<LastLoadedTwinTutorials>() {
+                world.resource_mut::<LastLoadedTwinTutorials>().0 = current_active_id;
+            } else {
+                world.insert_resource(LastLoadedTwinTutorials(current_active_id));
+            }
+        }
+
         let registry = world.get_resource::<TutorialRegistry>().cloned().unwrap_or_default();
         let progress = world.get_resource::<TutorialProgress>().cloned().unwrap_or_default();
         if registry.tutorials.is_empty() {
@@ -558,18 +621,58 @@ fn register_tutorials_menu(world: &mut World) {
         }
         ui.label(egui::RichText::new("Interactive, scripted lessons").weak().small());
         ui.separator();
+
+        let mut grouped: std::collections::HashMap<String, Vec<&TutorialMeta>> = std::collections::HashMap::new();
         for meta in registry.ordered() {
-            let done = progress.is_completed(&meta.id);
-            let glyph = if done { "✓" } else { "🎓" };
-            if ui
-                .button(format!("{glyph}  {}", meta.title))
-                .on_hover_text(meta.blurb.as_str())
-                .clicked()
-            {
-                world.trigger(StartTutorial { id: meta.id.to_string() });
-                ui.close();
+            grouped.entry(meta.app.clone()).or_default().push(meta);
+        }
+
+        let tracks = [
+            ("sandbox", "1️⃣ Sandbox Onboarding"),
+            ("basic", "2️⃣ Rover Driving & Slopes"),
+            ("school", "3️⃣ Space School Seminar"),
+            ("lunica", "4️⃣ Modelica Workbench"),
+        ];
+
+        for &(app_key, label) in &tracks {
+            if let Some(metas) = grouped.get(app_key) {
+                ui.menu_button(label, |ui| {
+                    for meta in metas {
+                        let done = progress.is_completed(&meta.id);
+                        let glyph = if done { "✓" } else { "🎓" };
+                        if ui
+                            .button(format!("{glyph}  {}", meta.title))
+                            .on_hover_text(meta.blurb.as_str())
+                            .clicked()
+                        {
+                            world.trigger(StartTutorial { id: meta.id.to_string() });
+                            ui.close();
+                        }
+                    }
+                });
             }
         }
+
+        // Any other apps/tracks not in our hardcoded list
+        for (app_key, metas) in &grouped {
+            if !tracks.iter().any(|(k, _)| k == app_key) {
+                ui.menu_button(app_key.as_str(), |ui| {
+                    for meta in metas {
+                        let done = progress.is_completed(&meta.id);
+                        let glyph = if done { "✓" } else { "🎓" };
+                        if ui
+                            .button(format!("{glyph}  {}", meta.title))
+                            .on_hover_text(meta.blurb.as_str())
+                            .clicked()
+                        {
+                            world.trigger(StartTutorial { id: meta.id.to_string() });
+                            ui.close();
+                        }
+                    }
+                });
+            }
+        }
+
         ui.separator();
         ui.add_enabled_ui(progress.current.is_some(), |ui| {
             if ui.button("⏹ Stop tutorial").clicked() {
