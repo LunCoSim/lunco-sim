@@ -36,6 +36,31 @@
 
 use bevy::prelude::*;
 
+/// A world-space text label — stated as data, so a domain crate can say "this thing
+/// is labelled X" without linking a text/sprite render pipeline.
+///
+/// `Text2d` lives in `bevy_sprite`, whose `bevy_sprite_render` feature pulls
+/// `bevy_render` → wgpu + naga. A spacecraft's *name* is simulation data; the
+/// glyphs are not. So the name stays here and `lunco-render-bevy` builds the
+/// `Text2d` + `TextFont` + `TextColor` in render builds.
+///
+/// This was the LAST edge dragging wgpu into the `--no-ui` server: one billboard
+/// label on a spacecraft.
+#[derive(Component, Clone, Debug, PartialEq, Reflect)]
+#[reflect(Component)]
+pub struct WorldLabel {
+    pub text: String,
+    /// Font size in pixels.
+    pub size_px: f32,
+    pub color: LinearRgba,
+}
+
+impl WorldLabel {
+    pub fn new(text: impl Into<String>, size_px: f32) -> Self {
+        Self { text: text.into(), size_px, color: LinearRgba::WHITE }
+    }
+}
+
 /// Tonemapping curve, named without depending on `bevy_core_pipeline`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Reflect)]
 pub enum ToneMap {

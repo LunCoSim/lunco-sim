@@ -8,7 +8,6 @@ use lunco_usd_avian::*;
 use lunco_usd_sim::*;
 use lunco_mobility::WheelRaycast;
 use lunco_core::kernels::DriveMix;
-use lunco_materials::ShaderMaterial;
 use lunco_fsw::FlightSoftware;
 
 /// The rover root carries `PhysicsRigidBodyAPI`, so avian builds a
@@ -142,7 +141,6 @@ fn load_rover_through_bevy(file_path: &Path, prim_path: &str) -> App {
     app.init_asset::<Mesh>();
     app.init_asset::<StandardMaterial>();
     app.init_asset::<Image>();
-    app.init_asset::<ShaderMaterial>();
         app.init_asset::<bevy::shader::Shader>();
     // No GPU here, so a wheel's render-only `ShaderMaterial` never arrives —
     // mark headless so sim builds wheel physics without waiting (the `--no-ui`
@@ -376,7 +374,6 @@ fn test_rover_sim_processing_after_async_load() {
         app.init_asset::<Mesh>();
         app.init_asset::<StandardMaterial>();
         app.init_asset::<Image>();
-        app.init_asset::<ShaderMaterial>();
         app.init_asset::<bevy::shader::Shader>();
         // No GPU here, so a wheel's render-only `ShaderMaterial` never arrives —
     // mark headless so sim builds wheel physics without waiting (the `--no-ui`
@@ -519,7 +516,6 @@ fn test_full_scene_loads_with_rovers() {
     // `AssetServer::load::<WorldAsset>` — register the asset so handle
     // allocation doesn't panic in this minimal harness.
     app.init_asset::<bevy::world_serialization::WorldAsset>();
-    app.init_asset::<ShaderMaterial>();
     app.init_asset::<bevy::shader::Shader>();
     // Physical rovers create revolute joints whose `JointCollisionDisabled`
     // hook reads avian's `JointGraph` resource — without the physics plugins

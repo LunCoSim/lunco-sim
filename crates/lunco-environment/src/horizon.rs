@@ -19,6 +19,22 @@
 //! ([`SunAngularDiameter`](lunco_core::SunAngularDiameter)). Any sun
 //! direction works at any time — no relight pass, no latency.
 //!
+//! ## What lives here, and what does not
+//!
+//! **This module is render-free**: the heightfield, the bakes, the
+//! sun-visibility cache and the R32Float/R8Unorm `Image` uploads are all
+//! `bevy_mesh` / `bevy_image` / `bevy_light` — no `bevy_pbr`, no wgpu. It runs
+//! headless.
+//!
+//! The half that writes those textures and uniforms INTO a concrete material —
+//! `wire_terrain_materials` (terrain `ShaderMaterial`) and
+//! `shade_dynamic_entities` (prop `ShaderMaterial` / `StandardMaterial`
+//! darkening) — lives in **`lunco-render-bevy::horizon_shade`**. It is a
+//! per-frame *uniform feed*, not appearance intent, so `PbrLook`/`ShaderLook`
+//! cannot express it; the binder crate (the only one allowed to name a
+//! material) hosts it instead — the same move `terrain_maps.rs` made for
+//! `lunco-terrain-surface`. See `docs/architecture/render-decoupling.md`.
+//!
 //! ## Pipeline
 //!
 //! 1. **Bake** (once per terrain, async, ~100 ms): rasterize the terrain
@@ -26,18 +42,18 @@
 //!    geometry, not lighting — it never needs re-baking. Terrains opt in
 //!    via the [`HorizonShadowTerrain`] marker (USD:
 //!    `custom bool lunco:terrain:horizonShadows`).
-//! 2. **Material wiring** (idempotent): the heightfield (R32Float texture)
-//!    and sun uniforms are written into the terrain's
-//!    [`ShaderMaterial`](lunco_materials::ShaderMaterial) — the authored
-//!    one (e.g. regolith) if present, else a default `terrain_shadow.wgsl`
-//!    is applied, keeping the prim's `displayColor` as albedo. The mesh
-//!    gets planar UVs so shaders can address the heightfield.
+//! 2. **Material wiring** (idempotent, RENDER-SIDE): the heightfield
+//!    (R32Float texture) and sun uniforms are written into the terrain's
+//!    `ShaderMaterial` — the authored one (e.g. regolith) if present, else a
+//!    default `terrain_shadow.wgsl` is applied, keeping the prim's
+//!    `displayColor` as albedo. The mesh gets planar UVs (done here, in
+//!    [`install_horizon_map`]) so shaders can address the heightfield.
 //!
 //!    The terrain stays a **CSM caster**: within the sun's cascade range the
 //!    shadow map renders the actual mesh, giving mesh-accurate self-shadow
 //!    and contact shadows (and the only terrain shadows on wasm, where the
 //!    bake is skipped). The march fades in only beyond ~half the cascade
-//!    range (`engine2.w` carries the CSM far bound), so its heightfield-
+//!    range (`csm_far` carries the CSM far bound), so its heightfield-
 //!    texel-quantized edges never show up close and near pixels skip the
 //!    march entirely.
 //! 2b. **Shadow cache** (sun-driven, off-thread on native): the per-pixel
@@ -52,14 +68,14 @@
 //!     `shadow_cache_on` uniform) instead of the loop — dropping fragment
 //!     cost to near zero. Defaults off on wasm (the streamed-tile path
 //!     bypasses the march there, and an inline bake would hitch under a fast
-//!     day cycle). See [`start_shadow_cache_bake`] / [`wire_terrain_materials`].
-//! 3. **Dynamic shading**: every mesh entity's position is run through the
-//!    SAME march on the CPU ([`HeightField::sun_visibility`]) — object and
-//!    ground can never disagree. The visibility darkens the entity's
-//!    material (`engine.x` for prop `ShaderMaterial`s; `base_color` scale
-//!    for `StandardMaterial`s, cloned to a unique handle first so shared
-//!    glb materials don't darken together), and a fully shadowed entity
-//!    gets [`NotShadowCaster`]. (A `RenderLayers` swap does NOT work for
+//!     day cycle). See [`start_shadow_cache_bake`].
+//! 3. **Dynamic shading** (RENDER-SIDE): every mesh entity's position is run
+//!    through the SAME march on the CPU ([`HeightField::sun_visibility`]) —
+//!    object and ground can never disagree. The visibility darkens the
+//!    entity's material (`sun_vis` for prop `ShaderMaterial`s; `base_color`
+//!    scale for `StandardMaterial`s, cloned to a unique handle first so
+//!    shared glb materials don't darken together), and a fully shadowed
+//!    entity gets `NotShadowCaster`. (A `RenderLayers` swap does NOT work for
 //!    darkening: a light's layers gate per-mesh *shadow casting*, but
 //!    main-pass illumination is applied per view.)
 //!
@@ -75,14 +91,16 @@ use std::sync::Arc;
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::image::ImageSampler;
-use bevy::light::{CascadeShadowConfig, NotShadowCaster};
+use bevy::light::CascadeShadowConfig;
 use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::platform::time::Instant;
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::tasks::{AsyncComputeTaskPool, Task};
 use lunco_core::{HorizonShadowTerrain, SunAngularDiameter};
-use lunco_materials::{ParamValue, ShaderMaterial};
+// The POD texture descriptors `bevy_image` itself takes from `wgpu-types`.
+// `bevy::render::render_resource` only RE-EXPORTS them, and importing THAT would
+// drag wgpu + naga into this crate. `wgpu-types` is not `wgpu`.
+use wgpu_types::{Extent3d, TextureDimension, TextureFormat};
 
 /// Tan of the sun's angular radius for a diameter given in degrees.
 fn tan_sun_radius(diameter_deg: f32) -> f32 {
@@ -175,6 +193,17 @@ impl HeightField {
         self.resolution
     }
 
+    /// Terrain-local XZ extent the grid covers (metres). Read by the render-side
+    /// material wiring to pack the `hf_size` shader uniform.
+    pub fn size(&self) -> Vec2 {
+        self.size
+    }
+
+    /// Terrain-local XZ origin of the grid (metres).
+    pub fn min(&self) -> Vec2 {
+        self.min
+    }
+
     /// Bakes the sun-visibility cache — a `target_res²` grid of `u8` values
     /// (0..255 ← 0..1 visibility) sampled from [`sun_visibility`] over the
     /// heightfield footprint, for the given terrain-local sun direction.
@@ -192,6 +221,8 @@ impl HeightField {
     /// cache and any live fallback march can never disagree. Off-thread on
     /// native (`AsyncComputeTaskPool`); inline on wasm (see
     /// [`start_shadow_cache_bake`]).
+    ///
+    /// [`sun_visibility`]: HeightField::sun_visibility
     pub fn bake_visibility_cache(
         &self,
         sun_local: Vec3,
@@ -215,11 +246,17 @@ impl HeightField {
 }
 
 /// Baked heightfield living on the terrain entity: CPU copy for entity
-/// shading + the GPU texture wired into the terrain material.
+/// shading + the GPU texture the terrain material binds.
+///
+/// The R32Float `image` is uploaded here (render-free — an `Image` asset is
+/// `bevy_image`); it is *bound* into the terrain's `ShaderMaterial` by
+/// `lunco-render-bevy::horizon_shade`, the only crate allowed to name a material.
 #[derive(Component)]
 pub struct HorizonMap {
     pub field: HeightField,
-    image: Handle<Image>,
+    /// The heightfield as an R32Float texture (shader binding). Public so the
+    /// render-side wiring can bind it without owning the bake.
+    pub image: Handle<Image>,
 }
 
 /// In-flight async bake for a terrain entity.
@@ -305,28 +342,6 @@ struct ShadowCacheResult {
     resolution: u32,
     sun_local: Vec3,
     millis: u128,
-}
-
-/// Marker: the horizon system inserted [`NotShadowCaster`] on this entity
-/// (it sits in terrain shadow, so it cannot block sunlight). Only what we
-/// inserted is ever removed — authored `NotShadowCaster`s are left alone.
-#[derive(Component)]
-pub struct HorizonShadowed;
-
-/// Engine-applied darkening of a `StandardMaterial` entity inside terrain
-/// shadow. Records the authored base colour (restored as visibility returns
-/// to 1) and the last visibility written, to avoid re-uploading the asset
-/// every frame.
-#[derive(Component)]
-pub struct HorizonShade {
-    original: Color,
-    last_vis: f32,
-    /// The authored shared `StandardMaterial` handle (held strongly here while
-    /// the entity is darkened). Restored when the entity returns to full
-    /// sunlight, at which point the entity's only strong handle to the unique
-    /// darkened clone drops and the clone is freed — so a shadowed prop never
-    /// keeps a permanent extra material (CPU-4).
-    shared: Handle<StandardMaterial>,
 }
 
 struct BakeResult {
@@ -480,7 +495,8 @@ fn bake_heightfield(positions: &[[f32; 3]], indices: &[u32], resolution: u32) ->
 /// GPU texture) and gives the mesh planar UVs (how shaders address the
 /// heightfield). The terrain deliberately STAYS a CSM caster — cascades
 /// supply the mesh-accurate near-field self-shadow; the march covers the
-/// range beyond them. Material wiring happens in [`wire_terrain_materials`].
+/// range beyond them. Material wiring happens render-side
+/// (`lunco-render-bevy::horizon_shade::wire_terrain_materials`).
 pub fn finish_horizon_bakes(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -603,10 +619,10 @@ fn make_shadow_cache_image(images: &mut Assets<Image>, bytes: Vec<u8>, res: u32)
 /// day-cycle animation doesn't queue an unbounded backlog.
 ///
 /// Below-horizon sun is skipped: the march short-circuits to 0 there (its
-/// first branch), and `wire_terrain_materials` drops `shadow_cache_on` to 0
-/// so the shader falls back to that cheap march instead of sampling a stale
-/// above-horizon cache. A fresh bake fires when the sun rises past the
-/// threshold again.
+/// first branch), and the render-side `wire_terrain_materials` drops
+/// `shadow_cache_on` to 0 so the shader falls back to that cheap march instead
+/// of sampling a stale above-horizon cache. A fresh bake fires when the sun
+/// rises past the threshold again.
 #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut, unused_variables))]
 // `Instant` is bevy's portable clock (see `bake_heightfield`) — the
 // `disallowed_methods` hit is the documented native-only false positive.
@@ -615,15 +631,7 @@ pub fn start_shadow_cache_bake(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     cfg: Res<HorizonShadowCacheConfig>,
-    sun: Query<
-        (
-            &GlobalTransform,
-            &DirectionalLight,
-            Option<&SunAngularDiameter>,
-            Option<&CascadeShadowConfig>,
-        ),
-        Without<RenderLayers>,
-    >,
+    sun: SunQuery,
     terrains: Query<
         (Entity, &GlobalTransform, &HorizonMap, Option<&HorizonShadowCache>),
         (Without<RenderLayers>, Without<ShadowCacheBakeTask>),
@@ -691,9 +699,9 @@ pub fn start_shadow_cache_bake(
 
 /// Collects finished off-thread visibility-cache bakes and installs them
 /// (native). The cache handle swaps atomically: the old `HorizonShadowCache`
-/// image is dropped, the fresh one takes over, and `wire_terrain_materials`
-/// rebinds it next frame. While the bake ran the stale cache stayed bound
-/// (within the sun threshold → visually lossless).
+/// image is dropped, the fresh one takes over, and the render-side
+/// `wire_terrain_materials` rebinds it next frame. While the bake ran the stale
+/// cache stayed bound (within the sun threshold → visually lossless).
 pub fn finish_shadow_cache_bake(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
@@ -717,8 +725,8 @@ pub fn finish_shadow_cache_bake(
 /// Installs a finished visibility-cache bake on the terrain entity: uploads
 /// the `R8Unorm` texture and inserts/replaces [`HorizonShadowCache`]. The
 /// previous cache image handle (if any) is dropped here — the material
-/// rebinding happens in [`wire_terrain_materials`] next frame. Shared by the
-/// native async finish and the wasm inline bake so the two paths can't drift.
+/// rebinding happens render-side next frame. Shared by the native async finish
+/// and the wasm inline bake so the two paths can't drift.
 fn install_shadow_cache(
     commands: &mut Commands,
     images: &mut Assets<Image>,
@@ -739,28 +747,36 @@ fn install_shadow_cache(
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 2. Material wiring — heightfield + sun uniforms into the terrain shader
+// 2. The canonical sun — shared by the bakes (here) and the render-side
+//    material wiring (`lunco-render-bevy::horizon_shade`)
 // ─────────────────────────────────────────────────────────────────────────
+
+/// The sun query every horizon system agrees on. Named so the render-side
+/// wiring declares the exact same one and reuses [`pick_sun`] instead of
+/// re-implementing the pick — two implementations disagreeing on which light is
+/// "the sun" is precisely what shows up as flickering half-shaded objects.
+///
+/// All four components are render-FREE: `DirectionalLight` /
+/// `CascadeShadowConfig` are `bevy_light`, `RenderLayers` is `bevy_camera`.
+pub type SunQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static GlobalTransform,
+        &'static DirectionalLight,
+        Option<&'static SunAngularDiameter>,
+        Option<&'static CascadeShadowConfig>,
+    ),
+    Without<RenderLayers>,
+>;
 
 /// The single sun all horizon systems agree on: the brightest
 /// `DirectionalLight` not scoped to another render layer (preview-viewport
 /// suns carry `RenderLayers`). Deterministic — query iteration order is
-/// not, and systems disagreeing on the sun shows up as flickering
-/// half-shaded objects. Returns the transform, tan(angular radius), and the
-/// CSM far bound in metres (0 when the sun casts no cascade shadows — the
-/// march then covers the whole range).
-#[allow(clippy::type_complexity)]
-fn pick_sun<'a>(
-    sun: &'a Query<
-        (
-            &GlobalTransform,
-            &DirectionalLight,
-            Option<&SunAngularDiameter>,
-            Option<&CascadeShadowConfig>,
-        ),
-        Without<RenderLayers>,
-    >,
-) -> Option<(&'a GlobalTransform, f32, f32)> {
+/// not. Returns the transform, tan(angular radius), and the CSM far bound in
+/// metres (0 when the sun casts no cascade shadows — the march then covers the
+/// whole range).
+pub fn pick_sun<'a>(sun: &'a SunQuery) -> Option<(&'a GlobalTransform, f32, f32)> {
     sun.iter().max_by(|a, b| a.1.illuminance.total_cmp(&b.1.illuminance)).map(
         |(gt, light, ang, csm)| {
             let csm_far = if light.shadow_maps_enabled {
@@ -776,368 +792,20 @@ fn pick_sun<'a>(
     )
 }
 
-/// Keeps every horizon terrain's `ShaderMaterial` wired: heightfield
-/// texture, static `engine2` (size/resolution), the per-frame sun direction
-/// in `engine`, and the **shadow cache** binding + `shadow_cache_on` flag.
-/// A terrain with no authored shader gets the default `terrain_shadow.wgsl`
-/// (albedo from its `displayColor`). Idempotent and self-healing against
-/// later material swaps; steady-state cost is a uniform compare per terrain
-/// (writes only when the sun moves or the cache swaps).
-#[allow(clippy::type_complexity)]
-pub fn wire_terrain_materials(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    cfg: Res<HorizonShadowCacheConfig>,
-    sun: Query<
-        (
-            &GlobalTransform,
-            &DirectionalLight,
-            Option<&SunAngularDiameter>,
-            Option<&CascadeShadowConfig>,
-        ),
-        Without<RenderLayers>,
-    >,
-    shader_mats: Option<ResMut<Assets<ShaderMaterial>>>,
-    std_mats: Res<Assets<StandardMaterial>>,
-    terrains: Query<
-        (
-            Entity,
-            &GlobalTransform,
-            &HorizonMap,
-            Option<&HorizonShadowCache>,
-            Option<&MeshMaterial3d<ShaderMaterial>>,
-            Option<&MeshMaterial3d<StandardMaterial>>,
-        ),
-        // Skip preview-layer terrain (ARC-1) — mirrors `pick_sun`.
-        Without<RenderLayers>,
-    >,
-    // Hysteresis state for the cache↔march handoff, per terrain (see below).
-    mut cache_engaged: Local<std::collections::HashMap<Entity, bool>>,
-) {
-    let Some(mut shader_mats) = shader_mats else { return };
-    let Some((sun_gt, tan_r, csm_far)) = pick_sun(&sun) else { return };
-    // NOTE on the near-camera march fade (`csm_far`): the fade is a PERF
-    // gate, not just cosmetics — streamed terrain tiles carry no baked
-    // shadow cache, so "march everywhere" ran the 48-step loop on every
-    // near pixel and turned low flight into a slideshow. The cost of the
-    // fade is that the CSM volume (~1.5 km) cannot contain multi-km ridge
-    // occluders, so near terrain reads slightly lighter than the same
-    // ground seen from altitude; the unconditional `SHADOW_FILL` in the
-    // terrain shaders keeps that difference subtle. The real cure is baked
-    // caches for streamed tiles.
-    let to_sun_world: Vec3 = sun_gt.back().into();
-
-    for (entity, terrain_gt, map, shadow_cache, shader_mat, std_mat) in &terrains {
-        let sun_local = terrain_gt
-            .affine()
-            .inverse()
-            .transform_vector3(to_sun_world)
-            .normalize_or_zero();
-        let engine = Vec4::new(sun_local.x, sun_local.y, sun_local.z, tan_r);
-        let engine2 = Vec4::new(
-            map.field.size.x,
-            map.field.size.y,
-            map.field.resolution as f32,
-            csm_far,
-        );
-
-        // Shadow cache binding + the uniform flag that tells the fragment
-        // shader to sample it (`1.0`) instead of ray-marching (`0.0`). The
-        // handle is bound whenever a cache exists (it stays allocated on the
-        // `HorizonShadowCache` component regardless); only the flag toggles —
-        // cheap uniform write, no bind-group churn — when the sun dips below
-        // the horizon or the cache is disabled. Below-horizon sun falls back
-        // to the march, which short-circuits to 0 in its first branch.
-        let cache_image: Option<Handle<Image>> = shadow_cache.map(|c| c.image.clone());
-        // HYSTERESIS on the cache↔march handoff. A single hard threshold
-        // (`y > 1e-4`) flaps when the real sun sits AT the horizon — exactly
-        // the polar-site situation — because every f32 ULP step of the light
-        // direction or terrain GT crosses it, alternating the ENTIRE terrain
-        // between baked-cache shadows and the ray-march's below-horizon
-        // short-circuit: "the shadow on the moon oscillates back and forth".
-        // Engage above ~0.01° elevation, release below ~0.003° — the band is
-        // wider than any per-frame jitter, so the mode changes at most once
-        // per real sunrise/sunset. The thresholds sit as LOW as possible: a
-        // disengaged cache means every terrain pixel runs the 48-step march
-        // per frame, and with the march now applied at ALL camera distances
-        // (see `csm_far` above) a polar sun parked in a "cache off" band
-        // turned whole sessions into a slideshow. Below the release
-        // threshold the march's own below-horizon short-circuit is cheap.
-        let engaged = {
-            let prev = cache_engaged.get(&entity).copied().unwrap_or(false);
-            let now = if prev { sun_local.y > 5.0e-5 } else { sun_local.y > 2.0e-4 };
-            cache_engaged.insert(entity, now);
-            now
-        };
-        let shadow_cache_on: f32 =
-            if cfg.enabled && engaged && cache_image.is_some() { 1.0 } else { 0.0 };
-
-        // Named engine uniforms consumed by the terrain shaders (regolith /
-        // terrain_shadow declare these in their `Material` struct; the engine
-        // packs them at the reflected offsets).
-        let sun_dir = ParamValue::Vec3([engine.x, engine.y, engine.z]);
-        // World-space to-sun for the BRDF opposition term. The march uses the
-        // terrain-LOCAL `sun_dir` (heightfield space); the lunar BRDF runs in
-        // world space (world N/V), so it needs the world-space sun. Passing the
-        // CPU-picked canonical sun here means the shader never has to guess it
-        // from `directional_lights[0]` — robust to the earthshine fill light.
-        let sun_dir_world = ParamValue::Vec3([to_sun_world.x, to_sun_world.y, to_sun_world.z]);
-        let hf_size = ParamValue::Vec2([engine2.x, engine2.y]);
-        let write_engine = |m: &mut ShaderMaterial| {
-            // Handle is a cheap Arc bump, but skip even that when unchanged (MAT-3).
-            if m.height_map.as_ref() != Some(&map.image) {
-                m.height_map = Some(map.image.clone());
-            }
-            // Shadow cache handle: swap only when the baked image changes
-            // (first bind / re-bake finished). Stays bound otherwise.
-            if m.shadow_cache != cache_image {
-                m.shadow_cache = cache_image.clone();
-            }
-            // One repack for all engine fields instead of one-per-field (MAT-1).
-            m.set_many([
-                ("sun_dir", sun_dir),
-                ("sun_dir_world", sun_dir_world),
-                ("sun_tan_radius", ParamValue::F32(tan_r)),
-                ("hf_size", hf_size),
-                ("hf_res", ParamValue::F32(engine2.z)),
-                ("csm_far", ParamValue::F32(csm_far)),
-                ("shadow_cache_on", ParamValue::F32(shadow_cache_on)),
-            ]);
-        };
-
-        if let Some(handle) = shader_mat {
-            // Compare before `get_mut` — a blind `get_mut` re-uploads the
-            // asset every frame. Sun direction + heightfield identity + csm
-            // bound + cache handle/flag cover everything that changes.
-            let needs = shader_mats.get(&handle.0).is_some_and(|m| {
-                m.height_map.as_ref() != Some(&map.image)
-                    || m.shadow_cache != cache_image
-                    || m.get_scalar("shadow_cache_on").is_none_or(|s| (s - shadow_cache_on).abs() > 1e-3)
-                    || m.get_vec4("sun_dir")
-                        .is_none_or(|v| (v.truncate() - Vec3::new(engine.x, engine.y, engine.z)).length() > 1e-4)
-                    || m.get_scalar("csm_far").is_none_or(|c| (c - csm_far).abs() > 1e-3)
-            });
-            if needs {
-                if let Some(mut m) = shader_mats.get_mut(&handle.0) {
-                    write_engine(&mut m);
-                }
-            }
-        } else {
-            // No authored shader: apply the default ray-march terrain
-            // shader, carrying the displayColor albedo over.
-            let albedo = std_mat
-                .and_then(|h| std_mats.get(&h.0))
-                .map(|m| m.base_color)
-                .unwrap_or(Color::srgb(0.5, 0.5, 0.5));
-            let a = albedo.to_linear();
-            let mut material = ShaderMaterial {
-                shader: asset_server.load("shaders/terrain_shadow.wgsl"),
-                height_map: Some(map.image.clone()),
-                shadow_cache: cache_image.clone(),
-                ..Default::default()
-            };
-            material.set("albedo", ParamValue::Vec3([a.red, a.green, a.blue]));
-            write_engine(&mut material);
-            let handle = shader_mats.add(material);
-            info!("[horizon] applied terrain_shadow.wgsl to {entity:?}");
-            commands
-                .entity(entity)
-                .remove::<MeshMaterial3d<StandardMaterial>>()
-                .insert(MeshMaterial3d(handle));
-        }
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// 3. Dynamic objects — darken by CPU-marched visibility
-// ─────────────────────────────────────────────────────────────────────────
-
-/// Minimum sun movement (cosine of angle) before objects are re-evaluated
-/// — ~0.1°.
-const SUN_EPSILON_COS: f32 = 0.999_998_5;
-
-/// Scales a colour's linear RGB by `q`, keeping alpha.
-fn scale_color(c: Color, q: f32) -> Color {
-    let l = c.to_linear();
-    Color::LinearRgba(LinearRgba::new(l.red * q, l.green * q, l.blue * q, l.alpha))
-}
-
-/// Runs every mesh entity's position through the same heightfield march the
-/// terrain shader uses and darkens the entity by its sun visibility (see
-/// module docs §3). Change-driven: a full pass only when the sun moved;
-/// otherwise only entities whose `GlobalTransform` changed.
-#[allow(clippy::type_complexity)]
-pub fn shade_dynamic_entities(
-    mut commands: Commands,
-    mut last_sun: Local<Option<Vec3>>,
-    mut sweep_timer: Local<Option<Timer>>,
-    time: Res<Time>,
-    sun: Query<
-        (
-            &GlobalTransform,
-            &DirectionalLight,
-            Option<&SunAngularDiameter>,
-            Option<&CascadeShadowConfig>,
-        ),
-        Without<RenderLayers>,
-    >,
-    terrains: Query<(&GlobalTransform, &HorizonMap), Without<RenderLayers>>,
-    mut shader_mats: Option<ResMut<Assets<ShaderMaterial>>>,
-    mut std_mats: ResMut<Assets<StandardMaterial>>,
-    mut entities: Query<
-        (
-            Entity,
-            Ref<GlobalTransform>,
-            Has<RenderLayers>,
-            Has<HorizonShadowed>,
-            Has<NotShadowCaster>,
-            Option<&MeshMaterial3d<ShaderMaterial>>,
-            Option<&MeshMaterial3d<StandardMaterial>>,
-            Option<&mut HorizonShade>,
-            Option<&Name>,
-        ),
-        (With<Mesh3d>, Without<HorizonMap>, Without<DirectionalLight>),
-    >,
-) {
-    if terrains.is_empty() {
-        return;
-    }
-    let Some((sun_gt, tan_r, _csm_far)) = pick_sun(&sun) else { return };
-    let to_sun_world: Vec3 = sun_gt.back().into();
-
-    // Throttle the expensive full sweep — O(entities × terrains × ≤48-step
-    // CPU ray-march) — to ~30 Hz so it no longer fires at uncapped render FPS
-    // (120–175) every frame the sun animates (day cycle, `SetEnvironmentLight`
-    // slider drag). Moving entities still update every frame via the
-    // `gt.is_changed()` fast path below; only the sun-moved full pass is gated.
-    let timer = sweep_timer
-        .get_or_insert_with(|| Timer::from_seconds(1.0 / 30.0, TimerMode::Repeating));
-    timer.tick(time.delta());
-
-    let sun_moved = match *last_sun {
-        Some(prev) => prev.dot(to_sun_world) <= SUN_EPSILON_COS,
-        None => true,
-    };
-    // Commit to a full sweep only when the throttle fires (or on first run).
-    // Until then `last_sun` is NOT advanced, so a sun change arriving between
-    // ticks is still picked up at the next tick (≤33 ms later — imperceptible
-    // given the 1/32 visibility quantization).
-    let do_full = sun_moved && (timer.just_finished() || last_sun.is_none());
-    if do_full {
-        *last_sun = Some(to_sun_world);
-    }
-
-    // Per-terrain loop-invariants — the affine inverse and sun-in-terrain-local
-    // depend only on the terrain transform + sun, not the shaded entity — so
-    // compute them once here instead of N×M times inside the entity loop (CPU-2;
-    // `transform_point3(entity_pos)` stays inside since it is entity-dependent).
-    let terrain_cache: Vec<_> = terrains
-        .iter()
-        .map(|(terrain_gt, map)| {
-            let inv = terrain_gt.affine().inverse();
-            let sun_local = inv.transform_vector3(to_sun_world).normalize_or_zero();
-            (inv, sun_local, map)
-        })
-        .collect();
-
-    for (entity, gt, has_layers, shadowed, has_nsc, shader_mat, std_mat, shade, name) in
-        &mut entities
-    {
-        if !do_full && !gt.is_changed() {
-            continue;
-        }
-        // Entities scoped to other render layers (preview viewports, viz
-        // overlays) live outside the main scene's lighting — leave alone.
-        if has_layers {
-            continue;
-        }
-
-        // Min visibility across all horizon terrains containing the point —
-        // the SAME march the terrain pixels run.
-        let mut vis: f32 = 1.0;
-        for (inv, sun_local, map) in &terrain_cache {
-            let local = inv.transform_point3(gt.translation());
-            if let Some(v) =
-                map.field.sun_visibility(Vec2::new(local.x, local.z), *sun_local, tan_r)
-            {
-                vis = vis.min(v);
-            }
-        }
-        // Quantized so a slowly drifting sun doesn't re-upload materials
-        // every frame.
-        let q = (vis * 32.0).round() / 32.0;
-
-        // Prop ShaderMaterials (wheels, panels, balls): the engine channel
-        // is multiplied into the shader's lit output.
-        if let (Some(handle), Some(mats)) = (shader_mat, shader_mats.as_mut()) {
-            let needs = mats
-                .get(&handle.0)
-                .is_some_and(|m| m.get_scalar("sun_vis").is_none_or(|s| (s - q).abs() > 1e-3));
-            if needs {
-                if let Some(mut m) = mats.get_mut(&handle.0) {
-                    m.set_scalar("sun_vis", q);
-                }
-            }
-        } else if let Some(handle) = std_mat {
-            // StandardMaterials (chassis, props): scale the albedo. Cloned
-            // to a unique handle on first shading so glb materials shared
-            // across instances don't darken together.
-            match shade {
-                None => {
-                    if q < 0.999 {
-                        if let Some(mut m) = std_mats.get(&handle.0).cloned() {
-                            let original = m.base_color;
-                            m.base_color = scale_color(original, q);
-                            let unique = std_mats.add(m);
-                            debug!("[horizon-dbg] {entity:?} {name:?} vis={q:.2} SHADE-NEW (std)");
-                            commands.entity(entity).insert((
-                                MeshMaterial3d(unique),
-                                HorizonShade { original, last_vis: q, shared: handle.0.clone() },
-                            ));
-                        }
-                    }
-                }
-                Some(mut state) => {
-                    if q >= 0.999 {
-                        // Back in full sun: restore the shared authored material.
-                        // Overwriting `MeshMaterial3d` drops the entity's only
-                        // strong handle to the unique darkened clone, so the
-                        // clone is freed rather than kept forever (CPU-4).
-                        commands
-                            .entity(entity)
-                            .insert(MeshMaterial3d(state.shared.clone()))
-                            .remove::<HorizonShade>();
-                        debug!("[horizon-dbg] {entity:?} {name:?} vis={q:.2} SHADE-CLEAR (std)");
-                    } else if (state.last_vis - q).abs() > 1e-3 {
-                        if let Some(mut m) = std_mats.get_mut(&handle.0) {
-                            m.base_color = scale_color(state.original, q);
-                        }
-                        debug!("[horizon-dbg] {entity:?} {name:?} vis={q:.2} SHADE-UPDATE (std)");
-                        state.last_vis = q;
-                    }
-                }
-            }
-        }
-
-        // A body inside terrain shadow receives no sunlight, so it must not
-        // throw a CSM shadow onto lit ground at the terminator either.
-        // Hysteresis avoids flicker; authored `NotShadowCaster`s are never
-        // touched (we only remove what we inserted).
-        if !shadowed && !has_nsc && vis < 0.35 {
-            commands.entity(entity).insert((NotShadowCaster, HorizonShadowed));
-        } else if shadowed && vis > 0.65 {
-            commands.entity(entity).remove::<(NotShadowCaster, HorizonShadowed)>();
-        }
-    }
-}
-
 // ─────────────────────────────────────────────────────────────────────────
 // Plugin
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Registers the heightfield-shadow pipeline. Added by [`EnvironmentPlugin`]
-/// — binaries need no extra wiring; terrains opt in via the
-/// [`HorizonShadowTerrain`] marker (stamped by the USD loader).
+/// Registers the heightfield-shadow **bake** pipeline (render-free). Added by
+/// [`EnvironmentPlugin`](crate::EnvironmentPlugin) — binaries need no extra
+/// wiring; terrains opt in via the [`HorizonShadowTerrain`] marker (stamped by
+/// the USD loader).
+///
+/// The material half (`wire_terrain_materials` / `shade_dynamic_entities`) is
+/// added by `lunco_render_bevy::LuncoRenderPlugin`, and ordered after these
+/// systems. Headless simply never adds it: the heightfields and caches are still
+/// baked (they are simulation-visible data — a shadow query, a solar-power
+/// model), they just never reach a GPU material.
 pub struct HorizonShadowPlugin;
 
 impl Plugin for HorizonShadowPlugin {
@@ -1145,12 +813,10 @@ impl Plugin for HorizonShadowPlugin {
         app.register_type::<HorizonShadowTerrain>();
         app.register_type::<HorizonShadowCacheConfig>();
         app.init_resource::<HorizonShadowCacheConfig>();
-        // Horizon baking/shading is a render-only feature: every system here
-        // needs render-asset stores (`Assets<Mesh>`/`Assets<Image>`/materials).
-        // Gate the whole chain on those existing so a headless app (cosim
-        // integration tests, server builds) cleanly skips it instead of
-        // panicking on a missing `ResMut<Assets<…>>`. The real app always has
-        // them, so this is a no-op there.
+        // Every system here needs the asset stores (`Assets<Mesh>`/`Assets<Image>`).
+        // Gate the chain on those existing so an app with no AssetPlugin (cosim
+        // integration tests) cleanly skips it instead of panicking on a missing
+        // `ResMut<Assets<…>>`. The real app always has them, so this is a no-op there.
         app.add_systems(
             Update,
             (
@@ -1158,8 +824,6 @@ impl Plugin for HorizonShadowPlugin {
                 finish_horizon_bakes,
                 start_shadow_cache_bake,
                 finish_shadow_cache_bake,
-                wire_terrain_materials,
-                shade_dynamic_entities,
             )
                 .chain()
                 .run_if(resource_exists::<Assets<Image>>.and_then(resource_exists::<Assets<Mesh>>)),

@@ -19,6 +19,7 @@ use lunco_cosim::{joint_angle_holder, JOINT_ANGLE_PORT};
 use lunco_core::ports::PortRegistry;
 // Appearance INTENT. The Material (PBR) section edits this component, not the
 // material asset — see `material_pbr_section`.
+use lunco_materials::ShaderLook;
 use lunco_render::PbrLook;
 
 use lunco_obstacle_field::{ObstacleFieldSpec, Pattern, plugin::UpdateObstacleFieldSpec};
@@ -1308,31 +1309,23 @@ fn joint_control_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, j: JointReadout)
 }
 
 /// Walk `root`'s subtree once, returning its PBR-surface **entities** and the
-/// first `ShaderMaterial`-bearing entity. Replaces the former
+/// first [`ShaderLook`]-bearing entity. Replaces the former
 /// `collect_std_handles` + `first_shader_holder`, which each ran an
 /// independent `subtree` walk of the same root (CQ-204).
 ///
-/// PBR surfaces are addressed by ENTITY, not by `Handle<StandardMaterial>`: the
-/// appearance is now a [`PbrLook`] component and the material is derived from it
-/// (`lunco-render-bevy` re-binds on `Changed<PbrLook>`). Editing by handle would
-/// be actively wrong — the binder *shares* one material across every entity with
-/// the same look, so an in-place asset write bleeds onto all of them. A subtree
-/// entity that has a material but no `PbrLook` (a glTF import that brought its
-/// own) is still listed; [`material_pbr_section`] falls back to the asset for it.
+/// Surfaces are addressed by ENTITY and classified by their appearance **intent**
+/// ([`PbrLook`] / [`ShaderLook`]), never by a bound material: the material is
+/// derived from the intent (`lunco-render-bevy` re-binds on `Changed<…Look>`), it is
+/// *shared* across every entity with the same look — so an in-place asset write would
+/// bleed onto all of them — and naming it would drag `bevy_pbr` into this crate.
 fn part_materials(ctx: &PanelCtx, root: Entity) -> (Vec<Entity>, Option<Entity>) {
     let mut parts: Vec<Entity> = Vec::new();
     let mut shader_holder: Option<Entity> = None;
     for e in subtree(ctx, root) {
-        if ctx.get::<PbrLook>(e).is_some()
-            || ctx.get::<MeshMaterial3d<StandardMaterial>>(e).is_some()
-        {
+        if ctx.get::<PbrLook>(e).is_some() {
             parts.push(e);
         }
-        if shader_holder.is_none()
-            && ctx
-                .get::<MeshMaterial3d<lunco_materials::ShaderMaterial>>(e)
-                .is_some()
-        {
+        if shader_holder.is_none() && ctx.get::<ShaderLook>(e).is_some() {
             shader_holder = Some(e);
         }
     }
@@ -1344,12 +1337,8 @@ fn editable_parts(ctx: &PanelCtx, root: Entity) -> Vec<(Entity, String)> {
     let ents = subtree(ctx, root);
     let mut out = Vec::new();
     for e in ents {
-        let has_shader =
-            ctx.get::<MeshMaterial3d<lunco_materials::ShaderMaterial>>(e).is_some();
-        // A PBR part is one with a `PbrLook` (the intent) or, for a glTF import
-        // that brought its own material, a bound `StandardMaterial`.
-        let has_std = ctx.get::<PbrLook>(e).is_some()
-            || ctx.get::<MeshMaterial3d<StandardMaterial>>(e).is_some();
+        let has_shader = ctx.get::<ShaderLook>(e).is_some();
+        let has_std = ctx.get::<PbrLook>(e).is_some();
         if has_shader || has_std {
             let label = ctx
                 .get::<Name>(e)
@@ -1366,7 +1355,7 @@ fn default_part(ctx: &PanelCtx, parts: &[(Entity, String)]) -> Option<Entity> {
     parts
         .iter()
         .map(|(e, _)| *e)
-        .find(|e| ctx.get::<MeshMaterial3d<lunco_materials::ShaderMaterial>>(*e).is_none())
+        .find(|e| ctx.get::<ShaderLook>(*e).is_none())
         .or_else(|| parts.first().map(|(e, _)| *e))
 }
 
@@ -1436,29 +1425,23 @@ fn shader_picker_for_part(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
     }
 }
 
-/// Bind shader `path` to `part`, building a fresh [`ShaderMaterial`]
-/// (carrying over the previous one's uniforms) and removing the part's
-/// `StandardMaterial`. Runs inside a deferred closure (`&mut World`).
+/// Point `part`'s [`ShaderLook`] at shader `path`, carrying over the params it
+/// already had (the render binder swaps the material). Runs inside a deferred
+/// closure (`&mut World`).
 fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
-    use lunco_materials::ShaderMaterial;
-    let template = world
-        .get::<MeshMaterial3d<ShaderMaterial>>(part)
-        .map(|m| m.0.clone())
-        .and_then(|h| world.resource::<Assets<ShaderMaterial>>().get(&h).cloned())
-        .unwrap_or_default();
-    let shader = world.resource::<AssetServer>().load(path.to_string());
-    let handle = world
-        .resource_mut::<Assets<ShaderMaterial>>()
-        .add(lunco_materials::build_shader_material(shader, template));
+    let mut look = world.get::<ShaderLook>(part).cloned().unwrap_or_default();
+    look.shader = path.to_string();
     world
         .commands()
         .entity(part)
-        .remove::<MeshMaterial3d<StandardMaterial>>()
-        // The `PbrLook` intent must go too. Leaving it would have the render
-        // binder immediately re-insert `MeshMaterial3d<StandardMaterial>`
-        // alongside the `ShaderMaterial` — two materials on one mesh.
+        // The `PbrLook` intent must go. Leaving it would have the PBR binder keep
+        // re-inserting its own material alongside the shader one — two materials on
+        // one mesh, drawn twice.
         .remove::<PbrLook>()
-        .insert(MeshMaterial3d(handle));
+        .insert(look);
+    // …and the material that binder ALREADY bound, or the same double-draw happens
+    // once, statically. (Removed reflectively — this crate may not name `bevy_pbr`.)
+    crate::commands::drop_bound_pbr_material(world, part);
 
     // Propagate changes to USD
     if world.get::<UsdPrimPath>(part).is_some() {
@@ -1479,18 +1462,11 @@ fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
     }
 }
 
-/// The full asset-path string of `part`'s current `ShaderMaterial` shader
-/// (read via [`PanelCtx`]), or `None` if it isn't using one.
+/// The asset path of `part`'s current shader (read via [`PanelCtx`]), or `None` if
+/// it isn't using one. The path IS the intent — no material lookup.
 fn current_shader_path(ctx: &PanelCtx, part: Entity) -> Option<String> {
-    let h = ctx
-        .get::<MeshMaterial3d<lunco_materials::ShaderMaterial>>(part)
-        .map(|m| m.0.clone())?;
-    let sid = ctx
-        .resource::<Assets<lunco_materials::ShaderMaterial>>()?
-        .get(&h)
-        .map(|m| m.shader.id())?;
-    let p = ctx.resource::<AssetServer>()?.get_path(sid)?;
-    Some(p.to_string())
+    let look = ctx.get::<ShaderLook>(part)?;
+    (!look.shader.is_empty()).then(|| look.shader.clone())
 }
 
 /// "Shader Tools" — GUI front-end for the live shader-authoring commands.
@@ -1644,11 +1620,11 @@ fn apply_if_registered(world: &mut World, part: Entity, stem: &str) {
 ///
 /// Edits the [`PbrLook`] **intent** component, not the material asset: the render
 /// binder re-materialises on `Changed<PbrLook>`. This is not merely tidier — it is
-/// required for correctness, because the binder shares one `StandardMaterial`
-/// across every entity with the same look, so the old `Assets::get_mut(handle)`
-/// write would now bleed onto unrelated entities that happen to look alike.
-/// Entities with a material but no `PbrLook` (glTF imports) still take the legacy
-/// asset path.
+/// required for correctness, because the binder shares one material across every
+/// entity with the same look, so the old `Assets::get_mut(handle)` write would now
+/// bleed onto unrelated entities that happen to look alike. (It is also what keeps
+/// this crate off `bevy_pbr`.) A surface with no `PbrLook` is not listed as a part,
+/// so there is nothing here to fall back to.
 ///
 /// Reads a snapshot via [`PanelCtx`]; the component + USD writes are deferred.
 fn material_pbr_section(
@@ -1662,8 +1638,11 @@ fn material_pbr_section(
     };
 
     // Snapshot current values — no world borrow held while drawing widgets.
-    // Prefer the intent; fall back to the bound material for glTF-owned surfaces.
-    let snap = if let Some(look) = ctx.get::<PbrLook>(first) {
+    let Some(look) = ctx.get::<PbrLook>(first) else {
+        ui.label("Material still loading…");
+        return;
+    };
+    let snap = {
         let b = look.base_color;
         let e = look.emissive;
         (
@@ -1675,27 +1654,6 @@ fn material_pbr_section(
             look.reflectance,
             look.unlit,
             look.double_sided,
-        )
-    } else {
-        let Some(m) = ctx
-            .get::<MeshMaterial3d<StandardMaterial>>(first)
-            .map(|m| m.0.clone())
-            .and_then(|h| ctx.resource::<Assets<StandardMaterial>>()?.get(&h).cloned())
-        else {
-            ui.label("Material still loading…");
-            return;
-        };
-        let base = m.base_color.to_linear();
-        let e = m.emissive;
-        (
-            [base.red, base.green, base.blue], // base rgb
-            base.alpha,
-            [e.red, e.green, e.blue], // emissive rgb
-            m.metallic,
-            m.perceptual_roughness,
-            m.reflectance,
-            m.unlit,
-            m.double_sided,
         )
     };
     let (mut base, mut alpha, mut emissive, mut metallic, mut roughness, mut reflectance, mut unlit, mut double_sided) = snap;
@@ -1735,42 +1693,22 @@ fn material_pbr_section(
         let parts = parts.to_vec();
         ctx.defer(move |world| {
             for e in &parts {
-                // Intent first — the binder re-materialises it (and, sharing by
+                // Intent only — the binder re-materialises it (and, sharing by
                 // look, gives this entity its own handle if the edit made it
-                // unique). Only a material WITHOUT a `PbrLook` behind it is still
-                // written as an asset.
-                if let Some(mut look) = world.get_mut::<PbrLook>(*e) {
-                    look.base_color = LinearRgba::new(base[0], base[1], base[2], alpha);
-                    look.emissive = LinearRgba::new(emissive[0], emissive[1], emissive[2], 1.0);
-                    look.metallic = metallic;
-                    look.perceptual_roughness = roughness;
-                    look.reflectance = reflectance;
-                    look.unlit = unlit;
-                    look.double_sided = double_sided;
-                    look.alpha = if alpha >= 1.0 {
-                        lunco_render::SurfaceAlpha::Opaque
-                    } else {
-                        lunco_render::SurfaceAlpha::Blend
-                    };
-                    continue;
-                }
-                let Some(handle) = world.get::<MeshMaterial3d<StandardMaterial>>(*e).map(|m| m.0.clone())
-                else {
-                    continue;
+                // unique).
+                let Some(mut look) = world.get_mut::<PbrLook>(*e) else { continue };
+                look.base_color = LinearRgba::new(base[0], base[1], base[2], alpha);
+                look.emissive = LinearRgba::new(emissive[0], emissive[1], emissive[2], 1.0);
+                look.metallic = metallic;
+                look.perceptual_roughness = roughness;
+                look.reflectance = reflectance;
+                look.unlit = unlit;
+                look.double_sided = double_sided;
+                look.alpha = if alpha >= 1.0 {
+                    lunco_render::SurfaceAlpha::Opaque
+                } else {
+                    lunco_render::SurfaceAlpha::Blend
                 };
-                let Some(mut mats) = world.get_resource_mut::<Assets<StandardMaterial>>() else {
-                    continue;
-                };
-                let Some(mut m) = mats.get_mut(&handle) else { continue };
-                m.base_color = Color::LinearRgba(LinearRgba::new(base[0], base[1], base[2], alpha));
-                m.emissive = LinearRgba::new(emissive[0], emissive[1], emissive[2], 1.0);
-                m.metallic = metallic;
-                m.perceptual_roughness = roughness;
-                m.reflectance = reflectance;
-                m.unlit = unlit;
-                m.double_sided = double_sided;
-                m.alpha_mode = if alpha >= 1.0 { AlphaMode::Opaque } else { AlphaMode::Blend };
-                m.cull_mode = if double_sided { None } else { Some(bevy::render::render_resource::Face::Back) };
             }
 
             // Propagate changes to USD.
@@ -1840,16 +1778,38 @@ fn material_pbr_section(
     }
 }
 
-/// Render named, range-bounded controls for the selected entity's
-/// [`ShaderMaterial`](lunco_materials::ShaderMaterial) generic uniforms.
-/// Reads a snapshot via [`PanelCtx`]; the live-asset + USD writes deferred.
-fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
-    use lunco_materials::{ParamType, ParamValue, ShaderMaterial, UiKind};
+/// The reflected [`ParamSchema`](lunco_materials::ParamSchema) of a shader asset
+/// path — parsed from the loaded WGSL source, so the editor derives its widgets from
+/// the *shader* rather than from a material (or a hardcoded table).
+///
+/// `None` while the shader is still loading, or if it declares no `Material` struct.
+fn shader_schema_of(ctx: &PanelCtx, path: &str) -> Option<lunco_materials::ParamSchema> {
+    if path.is_empty() {
+        return None;
+    }
+    let handle = ctx.resource::<AssetServer>()?.load::<bevy::shader::Shader>(path.to_string());
+    let shaders = ctx.resource::<Assets<bevy::shader::Shader>>()?;
+    let src = match &shaders.get(&handle)?.source {
+        bevy::shader::Source::Wgsl(s) => s.as_ref().to_string(),
+        _ => return None,
+    };
+    lunco_materials::ParamSchema::parse(&src)
+}
 
-    let Some(handle) = ctx
-        .get::<MeshMaterial3d<ShaderMaterial>>(entity)
-        .map(|m| m.0.clone())
-    else {
+/// Render named, range-bounded controls for the selected entity's [`ShaderLook`]
+/// parameters.
+///
+/// The rows are DERIVED — from the shader's own `ParamSchema` (reflected out of its
+/// WGSL `Material` struct), never from a hand-written list; the current values come
+/// from `ShaderLook::values` (falling back to each field's declared default). An
+/// edit mutates the component and the binder re-materialises on `Changed<ShaderLook>`,
+/// so nothing here touches a material asset.
+///
+/// Reads a snapshot via [`PanelCtx`]; the component + USD writes are deferred.
+fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
+    use lunco_materials::{ParamType, ParamValue, UiKind};
+
+    let Some(look) = ctx.get::<ShaderLook>(entity).cloned() else {
         return;
     };
 
@@ -1863,20 +1823,24 @@ fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Enti
         color: [f32; 3],
     }
     let rows: Vec<Row> = {
-        let Some(mats) = ctx.resource::<Assets<ShaderMaterial>>() else {
-            ui.label("Material still loading…");
+        // The schema is a property of the ASSET: read it from the loaded WGSL
+        // source. `None` = the shader hasn't loaded yet.
+        let Some(schema) = shader_schema_of(ctx, &look.shader) else {
+            ui.label("Shader still loading…");
             return;
         };
-        let Some(mat) = mats.get(&handle) else {
-            ui.label("Material still loading…");
-            return;
-        };
-        mat.schema
+        schema
             .fields
             .iter()
             .filter(|f| !matches!(f.ui, UiKind::Engine))
             .map(|f| {
-                let floats = mat.get(&f.name).map(|v| v.as_floats()).unwrap_or_default();
+                let floats = look
+                    .values
+                    .get(&f.name)
+                    .copied()
+                    .or(f.default)
+                    .map(|v| v.as_floats())
+                    .unwrap_or_default();
                 Row {
                     name: f.name.clone(),
                     label: f.label.clone(),
@@ -1944,11 +1908,9 @@ fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Enti
     if !edits.is_empty() {
         let usd_prim_exists = ctx.get::<UsdPrimPath>(entity).is_some();
         ctx.defer(move |world| {
-            if let Some(mut mats) = world.get_resource_mut::<Assets<ShaderMaterial>>() {
-                if let Some(mut mat) = mats.get_mut(&handle) {
-                    for (name, v) in edits.iter() {
-                        mat.set(name, *v);
-                    }
+            if let Some(mut look) = world.get_mut::<ShaderLook>(entity) {
+                for (name, v) in edits.iter() {
+                    look.values.insert(name.clone(), *v);
                 }
             }
 

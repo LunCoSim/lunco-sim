@@ -18,8 +18,11 @@ use avian3d::physics_transform::{Position, Rotation};
 use big_space::prelude::Grid;
 use lunco_core::{on_command, register_commands, Command};
 use lunco_obstacle_field::ObstacleFieldRoot;
-// Appearance INTENT (render-free). `SetObjectProperty`'s PBR keys mutate this
-// component; the render binder re-materialises on `Changed<PbrLook>`.
+// Appearance INTENT (render-free). `SetObjectProperty`'s PBR keys mutate `PbrLook`
+// and its shader keys mutate `ShaderLook`; the render binders re-materialise on
+// `Changed<PbrLook>` / `Changed<ShaderLook>`. This file names no material type —
+// see `docs/architecture/render-decoupling.md`.
+use lunco_materials::{ParamSchema, ParamType, ParamValue, ShaderLook};
 use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd::document::{UsdOp, LayerId};
@@ -2847,7 +2850,7 @@ pub fn author_prim_removal(world: &mut World, entity: Entity) {
 /// Persist a `SetObjectProperty` **shader-param tune** into the active USD
 /// document's **runtime overlay** (#4 — non-destructive layer tuning).
 ///
-/// [`on_set_object_property`] mutates the live `ShaderMaterial` for immediate
+/// [`on_set_object_property`] mutates the live [`ShaderLook`] for immediate
 /// feedback but writes nothing back to USD, so a tweak (e.g. a terrain
 /// `weight_albedo`) is lost on reload. This decoupled observer authors the same
 /// edit as a `SetAttribute` into `LayerId::runtime()` — the session overlay that
@@ -2857,15 +2860,19 @@ pub fn author_prim_removal(world: &mut World, entity: Entity) {
 /// same runtime target, fully decoupled from the live-mutation handler.
 ///
 /// Scope: **scalar** params (covers every layer `weight_*` and roughness knob) on
-/// entities backed by a `ShaderMaterial` whose prim the active document owns.
-/// Colors/vectors and PBR/`StandardMaterial` props stay live-only for now.
+/// entities carrying a [`ShaderLook`] whose prim the active document owns.
+/// Colors/vectors and PBR props stay live-only for now.
+///
+/// The "is this a shader prim?" guard is a CLASSIFICATION query, so it asks the
+/// *intent* (`With<ShaderLook>`), not the bound material: the intent exists headless
+/// too, where nothing ever binds a `ShaderMaterial`.
 pub fn persist_property_to_runtime_layer(
     trigger: On<SetObjectProperty>,
     api_registry: Res<lunco_api::registry::ApiEntityRegistry>,
     usd_registry: Res<UsdDocumentRegistry>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     q_prim: Query<&UsdPrimPath>,
-    q_shader: Query<(), With<MeshMaterial3d<lunco_materials::ShaderMaterial>>>,
+    q_shader: Query<(), With<ShaderLook>>,
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
@@ -2901,7 +2908,7 @@ pub fn persist_property_to_runtime_layer(
 
     let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
     let Some(target) = api_registry.resolve(&global_id) else { return };
-    // Only shader-material prims (the layer-tuning case) — not PBR/StandardMaterial.
+    // Only shader-look prims (the layer-tuning case) — not PBR ones.
     if q_shader.get(target).is_err() {
         return;
     }
@@ -3024,7 +3031,7 @@ pub(crate) fn wheel_param(name: &str) -> Option<&'static WheelParam> {
 /// counterpart of [`persist_property_to_runtime_layer`] for the property classes
 /// it skips (it guards to shader-material prims). Fully decoupled + disjoint: it
 /// authors for wheel-param names (via [`wheel_param`]), `visible` (standard USD
-/// `token visibility`) or `base_color` on a `StandardMaterial` prim — all of
+/// `token visibility`) or `base_color` on a PBR prim — all of
 /// which the loader already reads back, so they round-trip on reload and ride the
 /// Twin journal. Ownership-guarded and no-op without an active USD doc, like
 /// every other persister.
@@ -3034,10 +3041,10 @@ pub fn persist_wheel_and_pbr_to_runtime_layer(
     usd_registry: Res<UsdDocumentRegistry>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     q_prim: Query<&UsdPrimPath>,
-    // "Is this a PBR (non-shader) prim?" — a `PbrLook` intent OR a bound
-    // `StandardMaterial`. Headless has no binder, so only the intent exists
-    // there; a glTF import has only the material. Either qualifies.
-    q_std_mat: Query<(), Or<(With<PbrLook>, With<MeshMaterial3d<StandardMaterial>>)>>,
+    // "Is this a PBR (non-shader) prim?" — the `PbrLook` *intent*, which exists
+    // headless as well as in a render build (the bound `StandardMaterial` is the
+    // binder's business and this crate may not name it).
+    q_std_mat: Query<(), With<PbrLook>>,
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
@@ -3060,8 +3067,8 @@ pub fn persist_wheel_and_pbr_to_runtime_layer(
             let tok = if hidden { "invisible" } else { "inherited" };
             Some(("visibility".to_string(), "token", format!("\"{tok}\"")))
         } else if cmd.property == "base_color" {
-            // PBR base colour → `primvars:displayColor` (loader reads it into
-            // `StandardMaterial.base_color`). Linear r,g,b (drop any alpha).
+            // PBR base colour → `primvars:displayColor` (the loader reads it back
+            // into the prim's `PbrLook`). Linear r,g,b (drop any alpha).
             let f: Vec<f32> = cmd
                 .value
                 .split(',')
@@ -3079,7 +3086,7 @@ pub fn persist_wheel_and_pbr_to_runtime_layer(
         };
     let Some((name, type_name, value)) = authored else { return };
 
-    // `base_color` only applies to StandardMaterial prims; wheel params resolve
+    // `base_color` only applies to PBR prims; wheel params resolve
     // regardless (the guard is cheap and disjoint from the shader persister).
     let Some(workspace) = workspace else { return };
     let Some(doc) = workspace.0.active_document else { return };
@@ -3455,10 +3462,11 @@ pub fn clear_kinematic_pulse_velocity(
 /// ```
 ///
 /// Recognised `property` values:
-/// - `shader` → load that `.wgsl` (asset path) and bind it as a `ShaderMaterial`.
+/// - `shader` → author a [`ShaderLook`] for that `.wgsl` (asset path); the render
+///   binder turns it into a material.
 /// - any parameter named by the shader's `Material` struct (e.g. `albedo`,
-///   `wedge_count`, `cell_a`) → update that shader uniform in place by name
-///   (requires `shader` set first, or a USD shader material). The material's
+///   `wedge_count`, `cell_a`) → set that named value on the entity's `ShaderLook`
+///   (requires `shader` set first, or a USD shader material). The shader's
 ///   reflected schema resolves the type; colours are `r,g,b`.
 /// - `visible` → `true`/`false` toggles `Visibility`.
 /// - Per-wheel tire-spin dynamics (target a single wheel entity by its `api_id`):
@@ -3481,16 +3489,13 @@ pub struct SetObjectProperty {
 
 /// The `SetObjectProperty` PBR keys [`PbrLook`] can express.
 ///
-/// These go through the **appearance-intent component**, not the material asset:
+/// These go through the **appearance-intent component**, not a material asset:
 /// mutating `PbrLook` is enough, because `lunco-render-bevy`'s `Changed<PbrLook>`
-/// binder re-materialises the entity. That is why they must NOT reach
-/// [`apply_pbr_param`] — the binder's material handles are *shared by look*, so an
-/// in-place `Assets<StandardMaterial>` write would bleed onto every other entity
-/// with the same look.
-///
-/// This is every PBR key `SetObjectProperty` accepts — the legacy
-/// [`apply_pbr_param`] path below now only serves entities that have a material
-/// but no `PbrLook` (a glTF import that brought its own).
+/// binder re-materialises the entity. There is no longer an `Assets<StandardMaterial>`
+/// fallback — an in-place asset write would have been actively wrong anyway (the
+/// binder's handles are *shared by look*, so it would bleed onto every other entity
+/// that looks the same), and naming the material would drag `bevy_pbr` (wgpu, naga)
+/// into the headless server that links this file.
 const PBR_LOOK_KEYS: &[&str] = &[
     "base_color",
     "emissive",
@@ -3507,8 +3512,10 @@ const PBR_LOOK_KEYS: &[&str] = &[
 /// Apply one PBR property addressed by `SetObjectProperty` to a [`PbrLook`] —
 /// appearance **intent**, no material asset touched.
 ///
-/// Same value grammar as [`apply_pbr_param`]. Only the keys in [`PBR_LOOK_KEYS`]
-/// are understood; anything else returns `false` and the caller falls back.
+/// Value formats: colors are comma-separated **linear** `r,g,b[,a]` in 0..1 (so they
+/// round-trip the Inspector's `color_edit_button_rgb`); scalars a single float;
+/// booleans `true`/`1`/`yes`/`on`. Only the keys in [`PBR_LOOK_KEYS`] are understood;
+/// anything else returns `false`.
 fn apply_pbr_look(look: &mut PbrLook, key: &str, value: &str) -> bool {
     let f: Vec<f32> = value
         .split(',')
@@ -3554,57 +3561,95 @@ fn apply_pbr_look(look: &mut PbrLook, key: &str, value: &str) -> bool {
     true
 }
 
-/// Apply one `StandardMaterial` (PBR) property addressed by `SetObjectProperty`.
+/// The reflected parameter schema of a shader **asset path**.
 ///
-/// The **fallback** path, for the properties `PbrLook` cannot yet express
-/// (`emissive`, `reflectance`, `alpha`/`opacity`) and for entities that carry a
-/// material without a `PbrLook` (e.g. a glTF import). Everything in
-/// [`PBR_LOOK_KEYS`] on a `PbrLook`-bearing entity goes through
-/// [`apply_pbr_look`] instead.
+/// Read straight out of the loaded WGSL source (`Material` struct + `//!@`
+/// annotations) rather than off a material — the schema is a property of the
+/// *asset*, and reading it this way keeps the shader-param paths render-free.
+/// `None` while the shader is still loading (or if it declares no `Material`), in
+/// which case callers infer the type from the value's arity, exactly as the old
+/// material path did with its empty default schema.
+fn shader_schema(
+    path: &str,
+    asset_server: &AssetServer,
+    shaders: &Assets<bevy::shader::Shader>,
+) -> Option<ParamSchema> {
+    let handle = asset_server.load::<bevy::shader::Shader>(path.to_string());
+    let src = match &shaders.get(&handle)?.source {
+        bevy::shader::Source::Wgsl(s) => s.as_ref().to_string(),
+        _ => return None,
+    };
+    ParamSchema::parse(&src)
+}
+
+/// Parse one `SetObjectProperty` value into a typed [`ParamValue`] for `key`.
 ///
-/// Value formats: colors are comma-separated **linear** `r,g,b[,a]` in 0..1 (so
-/// they round-trip the Inspector's `color_edit_button_rgb`); scalars a single
-/// float; booleans `true`/`1`/`yes`/`on`. Returns `false` if the value didn't
-/// parse so the caller can warn.
-fn apply_pbr_param(mat: &mut StandardMaterial, key: &str, value: &str) -> bool {
-    let f: Vec<f32> = value
-        .split(',')
-        .filter_map(|s| s.trim().parse::<f32>().ok())
-        .collect();
-    let parse_bool = |v: &str| matches!(v.trim(), "true" | "1" | "yes" | "on");
-    match key {
-        "base_color" => {
-            if f.len() < 3 { return false; }
-            let a = f.get(3).copied().unwrap_or_else(|| mat.base_color.to_linear().alpha);
-            mat.base_color = Color::LinearRgba(LinearRgba::new(f[0], f[1], f[2], a));
+/// Same grammar (and the same type resolution) as the former
+/// `lunco_materials::apply_param`: the field's type comes from the shader's
+/// reflected schema when it is known, else from the value's arity; a vector field
+/// takes `r,g,b` and is stored as a `Vec4` with alpha 1, which is what
+/// `ShaderMaterial::set_color` did and what the shader's uniform block expects.
+fn shader_param_value(schema: Option<&ParamSchema>, key: &str, value: &str) -> Option<ParamValue> {
+    let ty = schema.and_then(|s| s.field(key)).map(|f| f.ty).unwrap_or_else(|| {
+        match value.split(',').filter(|s| !s.trim().is_empty()).count() {
+            0 | 1 => ParamType::F32,
+            2 => ParamType::Vec2,
+            3 => ParamType::Vec3,
+            _ => ParamType::Vec4,
         }
-        "emissive" => {
-            if f.len() < 3 { return false; }
-            mat.emissive = LinearRgba::new(f[0], f[1], f[2], f.get(3).copied().unwrap_or(1.0));
+    });
+    match ty {
+        ParamType::Vec3 | ParamType::Vec4 => {
+            let n: Vec<f32> =
+                value.split(',').filter_map(|s| s.trim().parse::<f32>().ok()).collect();
+            (n.len() >= 3).then(|| ParamValue::Vec4([n[0], n[1], n[2], 1.0]))
         }
-        "metallic" => { let Some(v) = f.first() else { return false }; mat.metallic = v.clamp(0.0, 1.0); }
-        "roughness" | "perceptual_roughness" => {
-            let Some(v) = f.first() else { return false };
-            mat.perceptual_roughness = v.clamp(0.0, 1.0);
-        }
-        "reflectance" => { let Some(v) = f.first() else { return false }; mat.reflectance = v.clamp(0.0, 1.0); }
-        "alpha" | "opacity" => {
-            let Some(v) = f.first() else { return false };
-            let v = v.clamp(0.0, 1.0);
-            let mut lin = mat.base_color.to_linear();
-            lin.alpha = v;
-            mat.base_color = Color::LinearRgba(lin);
-            mat.alpha_mode = if v >= 1.0 { AlphaMode::Opaque } else { AlphaMode::Blend };
-        }
-        "unlit" => mat.unlit = parse_bool(value),
-        "double_sided" => {
-            let b = parse_bool(value);
-            mat.double_sided = b;
-            mat.cull_mode = if b { None } else { Some(bevy::render::render_resource::Face::Back) };
-        }
-        _ => return false,
+        _ => ParamValue::parse(ty, value),
     }
-    true
+}
+
+/// Give `target` a [`ShaderLook`] for `shader_path`, carrying over any params it
+/// already had (so swapping the `.wgsl` keeps tuned values — what cloning the old
+/// `ShaderMaterial` as a template used to do).
+///
+/// Drops the [`PbrLook`] intent: an entity that carries both draws twice, because
+/// each binder materialises its own. See `lunco-render-bevy`'s caller contract.
+pub(crate) fn author_shader_look(
+    commands: &mut Commands,
+    target: Entity,
+    existing: Option<&ShaderLook>,
+    shader_path: &str,
+) {
+    let mut look = existing.cloned().unwrap_or_default();
+    look.shader = shader_path.to_string();
+    commands.entity(target).remove::<PbrLook>().insert(look);
+    commands.queue(move |world: &mut World| drop_bound_pbr_material(world, target));
+}
+
+/// Drop the concrete PBR material a render build already bound to `e`.
+///
+/// Removing the [`PbrLook`] *intent* stops the binder re-materialising the entity,
+/// but the `MeshMaterial3d<StandardMaterial>` it inserted earlier stays put — and a
+/// mesh carrying that AND the shader material draws twice. That component is
+/// `bevy_pbr`'s and this crate may not name it (render-decoupling rule), so it is
+/// resolved out of the type registry instead (`MaterialPlugin` registers it, and it
+/// is `#[reflect(Component)]`).
+///
+/// No-op headless and in tests, where nothing ever bound a material — and a no-op the
+/// day `lunco-render-bevy` grows an `On<Remove, PbrLook>` observer that unbinds its
+/// own material, which is where this really belongs.
+pub(crate) fn drop_bound_pbr_material(world: &mut World, e: Entity) {
+    let Some(registry) = world.get_resource::<AppTypeRegistry>().cloned() else { return };
+    let reflect_component = {
+        let reg = registry.read();
+        reg.get_with_short_type_path("MeshMaterial3d<StandardMaterial>")
+            .and_then(|r| r.data::<bevy::ecs::reflect::ReflectComponent>())
+            .cloned()
+    };
+    let Some(rc) = reflect_component else { return };
+    if let Ok(mut entity) = world.get_entity_mut(e) {
+        rc.remove(&mut entity);
+    }
 }
 
 /// Observer for [`SetObjectProperty`].
@@ -3613,11 +3658,10 @@ pub fn on_set_object_property(
     trigger: On<SetObjectProperty>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     asset_server: Res<AssetServer>,
-    mut materials: ResMut<Assets<lunco_materials::ShaderMaterial>>,
-    mut std_materials: ResMut<Assets<StandardMaterial>>,
-    q_mat: Query<&MeshMaterial3d<lunco_materials::ShaderMaterial>>,
-    q_std_mat: Query<&MeshMaterial3d<StandardMaterial>>,
+    shaders: Res<Assets<bevy::shader::Shader>>,
     mut q_look: Query<&mut PbrLook>,
+    mut q_shader_look: Query<&mut ShaderLook>,
+    q_mesh: Query<(), With<Mesh3d>>,
     mut q_vis: Query<&mut Visibility>,
     mut q_wheel: Query<&mut lunco_mobility::WheelRaycast>,
     mut commands: Commands,
@@ -3647,23 +3691,10 @@ pub fn on_set_object_property(
 
     match cmd.property.as_str() {
         "shader" => {
-            // Preserve existing uniforms if the object already has a
-            // ShaderMaterial, so swapping the .wgsl keeps tuned params.
-            let template = q_mat
-                .get(target)
-                .ok()
-                .and_then(|m| materials.get(&m.0))
-                .cloned()
-                .unwrap_or_default();
-            let shader = asset_server.load(&cmd.value);
-            let handle = materials.add(lunco_materials::build_shader_material(shader, template));
-            commands
-                .entity(target)
-                .remove::<MeshMaterial3d<StandardMaterial>>()
-                // Drop the PBR intent as well — otherwise the render binder
-                // re-materialises it and the mesh carries TWO materials.
-                .remove::<PbrLook>()
-                .insert(MeshMaterial3d(handle));
+            // Preserve existing uniforms if the object already has a shader look,
+            // so swapping the .wgsl keeps tuned params.
+            let existing = q_shader_look.get(target).ok().cloned();
+            author_shader_look(&mut commands, target, existing.as_ref(), &cmd.value);
             info!("SET_PROPERTY: {} shader = {}", cmd.entity_id, cmd.value);
         }
         "visible" => {
@@ -3678,50 +3709,54 @@ pub fn on_set_object_property(
                 Visibility::Visible
             };
         }
-        // PBR properties — for props/rovers that use the default bevy material
-        // rather than a custom `ShaderMaterial`. Explicit arms so these names
-        // never get stolen by the shader-param fallback.
+        // PBR properties — for props/rovers on a plain surface rather than a custom
+        // shader. Explicit arm ([`PBR_LOOK_KEYS`]) so these names never get stolen by
+        // the shader-param fallback below.
         //
-        // Preferred path: mutate the entity's `PbrLook` *intent* component. The
-        // render binder's `Changed<PbrLook>` system re-materialises it, so
-        // "edit the material" is just "mutate a component" — no asset handles,
-        // and it works headless (the intent is still in the world; nothing binds
-        // it). Falls through to the legacy `Assets<StandardMaterial>` write only
-        // for a material-bearing entity that has no `PbrLook` behind it — a glTF
-        // import that brought its own material. Delete that fallback once every
-        // spawn path authors a `PbrLook`.
-        "base_color" | "emissive" | "metallic" | "roughness" | "perceptual_roughness"
-        | "reflectance" | "alpha" | "opacity" | "unlit" | "double_sided" => {
-            if PBR_LOOK_KEYS.contains(&cmd.property.as_str()) {
-                if let Ok(mut look) = q_look.get_mut(target) {
-                    if apply_pbr_look(&mut look, cmd.property.as_str(), &cmd.value) {
-                        info!("SET_PROPERTY: {} look {} = {}", cmd.entity_id, cmd.property, cmd.value);
-                    } else {
-                        warn!("SET_PROPERTY: bad value '{}' for pbr '{}'", cmd.value, cmd.property);
-                    }
-                    return;
+        // The edit is a mutation of the entity's `PbrLook` *intent* component: the
+        // render binder's `Changed<PbrLook>` system re-materialises it, so "edit the
+        // material" is just "mutate a component" — no asset handles, and it works
+        // headless (the intent is in the world; nothing binds it). A mesh with no
+        // intent yet (a glTF import that brought its own material) is ADOPTED into an
+        // intent, which is the only render-free way to keep this command working on
+        // it; note that adoption starts from `PbrLook::default()`, so the import's own
+        // textures are not carried over.
+        key if PBR_LOOK_KEYS.contains(&key) => {
+            if let Ok(mut look) = q_look.get_mut(target) {
+                if apply_pbr_look(&mut look, key, &cmd.value) {
+                    info!("SET_PROPERTY: {} look {} = {}", cmd.entity_id, cmd.property, cmd.value);
+                } else {
+                    warn!("SET_PROPERTY: bad value '{}' for pbr '{}'", cmd.value, cmd.property);
                 }
-            }
-            let Ok(m) = q_std_mat.get(target) else {
-                warn!("SET_PROPERTY: entity {} has no PbrLook / StandardMaterial", cmd.entity_id);
                 return;
-            };
-            let Some(mut mat) = std_materials.get_mut(&m.0) else { return };
-            if apply_pbr_param(&mut mat, cmd.property.as_str(), &cmd.value) {
-                info!("SET_PROPERTY: {} pbr {} = {}", cmd.entity_id, cmd.property, cmd.value);
+            }
+            if q_mesh.get(target).is_err() {
+                warn!("SET_PROPERTY: entity {} has no PbrLook / mesh", cmd.entity_id);
+                return;
+            }
+            let mut look = PbrLook::default();
+            if apply_pbr_look(&mut look, key, &cmd.value) {
+                commands.entity(target).insert(look);
+                info!("SET_PROPERTY: {} adopted a PbrLook, {} = {}", cmd.entity_id, cmd.property, cmd.value);
             } else {
                 warn!("SET_PROPERTY: bad value '{}' for pbr '{}'", cmd.value, cmd.property);
             }
         }
         key => {
-            // param/color → mutate the live shader material's uniforms in place.
-            let Ok(m) = q_mat.get(target) else {
-                warn!("SET_PROPERTY: entity {} has no usd_shader material — set 'shader' first", cmd.entity_id);
+            // param/color → set the named value on the entity's shader look. The
+            // binder swaps in the material for the new look (`Changed<ShaderLook>`).
+            let Ok(mut look) = q_shader_look.get_mut(target) else {
+                warn!("SET_PROPERTY: entity {} has no shader look — set 'shader' first", cmd.entity_id);
                 return;
             };
-            let Some(mut mat) = materials.get_mut(&m.0) else { return };
-            if !lunco_materials::apply_param(&mut mat, key, &cmd.value) {
-                warn!("SET_PROPERTY: unknown property '{}'", key);
+            // USD authors params camelCase, WGSL declares them snake_case.
+            let name = lunco_materials::to_snake_case(key);
+            let schema = shader_schema(&look.shader, &asset_server, &shaders);
+            match shader_param_value(schema.as_ref(), &name, &cmd.value) {
+                Some(v) => {
+                    look.values.insert(name, v);
+                }
+                None => warn!("SET_PROPERTY: unknown property '{}'", key),
             }
         }
     }
@@ -4141,8 +4176,7 @@ fn install_shader(
     shaders: &mut Assets<bevy::shader::Shader>,
     catalog: &mut lunco_materials::ShaderCatalog,
     registry: &lunco_api::registry::ApiEntityRegistry,
-    materials: &mut Assets<lunco_materials::ShaderMaterial>,
-    q_mat: &Query<&MeshMaterial3d<lunco_materials::ShaderMaterial>>,
+    q_look: &Query<&ShaderLook>,
     commands: &mut Commands,
 ) -> Option<String> {
     // Gate: must be a self-describing `Material` shader whose only engine field
@@ -4198,20 +4232,9 @@ fn install_shader(
         let gid = lunco_core::GlobalEntityId::from_raw(target);
         match registry.resolve(&gid) {
             Some(ent) => {
-                let template = q_mat
-                    .get(ent)
-                    .ok()
-                    .and_then(|m| materials.get(&m.0))
-                    .cloned()
-                    .unwrap_or_default();
-                let mat_handle =
-                    materials.add(lunco_materials::build_shader_material(shader_handle.clone(), template));
-                commands
-                    .entity(ent)
-                    .remove::<MeshMaterial3d<StandardMaterial>>()
-                    // …and the PBR intent, or the binder re-adds a second material.
-                    .remove::<PbrLook>()
-                    .insert(MeshMaterial3d(mat_handle));
+                // Intent, not material: the binder loads the same `asset_path` we
+                // just inserted the compiled source under, so it renders at once.
+                author_shader_look(commands, ent, q_look.get(ent).ok(), &asset_path);
                 info!("INSTALL_SHADER: applied {asset_path} to entity {target}");
             }
             None => warn!("INSTALL_SHADER: target id {target} not in registry"),
@@ -4253,8 +4276,7 @@ pub fn on_create_shader(
     mut shaders: ResMut<Assets<bevy::shader::Shader>>,
     mut catalog: ResMut<lunco_materials::ShaderCatalog>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    mut materials: ResMut<Assets<lunco_materials::ShaderMaterial>>,
-    q_mat: Query<&MeshMaterial3d<lunco_materials::ShaderMaterial>>,
+    q_look: Query<&ShaderLook>,
     mut commands: Commands,
 ) {
     let ev = trigger.event();
@@ -4273,8 +4295,7 @@ pub fn on_create_shader(
         &mut shaders,
         &mut catalog,
         &registry,
-        &mut materials,
-        &q_mat,
+        &q_look,
         &mut commands,
     );
 }
@@ -4307,8 +4328,7 @@ pub fn on_import_shader(
     mut shaders: ResMut<Assets<bevy::shader::Shader>>,
     mut catalog: ResMut<lunco_materials::ShaderCatalog>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    mut materials: ResMut<Assets<lunco_materials::ShaderMaterial>>,
-    q_mat: Query<&MeshMaterial3d<lunco_materials::ShaderMaterial>>,
+    q_look: Query<&ShaderLook>,
     mut commands: Commands,
 ) {
     let ev = trigger.event();
@@ -4343,8 +4363,7 @@ pub fn on_import_shader(
             &mut shaders,
             &mut catalog,
             &registry,
-            &mut materials,
-            &q_mat,
+            &q_look,
             &mut commands,
         );
     }

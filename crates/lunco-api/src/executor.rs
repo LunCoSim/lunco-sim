@@ -733,6 +733,49 @@ fn execute_request(
 #[cfg(feature = "render")]
 use bevy::render::view::screenshot::ScreenshotCaptured;
 
+/// **The one screenshot command.**
+///
+/// It lives here, next to the only implementation, and it declares the parameters
+/// that implementation actually reads. Both of those were previously untrue:
+///
+/// - There used to be a SECOND `CaptureScreenshot` — a `#[Command]` + observer that
+///   also called `Screenshot::primary_window()` (it lived in `lunco-avatar`, then
+///   moved with the render code). It was **unreachable**: `execute_request` matches
+///   this command by name and returns early on both branches, so the command event
+///   was never dispatched and that observer never ran. Two spawn sites, one of them
+///   dead. Deleted.
+/// - The registered command was `CaptureScreenshot {}` — **no fields** — while the
+///   executor read `save_to_file`, `path` and `region` out of the raw params. So the
+///   schema that MCP agents and `commands-reference.md` are generated from
+///   advertised a parameterless command. The fields below make the declared surface
+///   the real one.
+///
+/// Registered (under the `render` feature) purely so `DiscoverSchema` sees it; there
+/// is deliberately no `#[on_command]` handler, because the executor owns this path —
+/// it has to, since the raw-PNG mode must defer the HTTP response until
+/// `ScreenshotCaptured` fires.
+#[cfg(feature = "render")]
+#[derive(
+    bevy::prelude::Event,
+    bevy::prelude::Reflect,
+    Clone,
+    Debug,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[reflect(Default)]
+pub struct CaptureScreenshot {
+    /// Write the PNG to `path` instead of returning the bytes to the caller.
+    pub save_to_file: bool,
+    /// Destination when `save_to_file`. Empty ⇒ a timestamped name in the cwd.
+    pub path: String,
+    /// Optional crop `[x, y, w, h]` in physical pixels, applied before save/encode.
+    /// Empty ⇒ the full frame. Cropping server-side means a caller can zoom into a
+    /// panel without an external image tool.
+    pub region: Vec<u32>,
+}
+
 /// Pending screenshot request — set before the screenshot is triggered so the
 /// ScreenshotCaptured observer knows what to do with the image.
 #[cfg(feature = "render")]
@@ -770,8 +813,16 @@ impl Plugin for ApiExecutorPlugin {
 
         // Screenshot capture rides the bevy render stack — only present with
         // the `render` feature (off on a headless server).
+        //
+        // `register_type` (no `#[on_command]` handler) is deliberate: it puts
+        // `CaptureScreenshot` in the type registry so `DiscoverSchema` — and hence
+        // the MCP tool list and the generated command reference — sees it WITH its
+        // real parameters. The execution itself is owned by `execute_request`, which
+        // must handle it inline because raw-PNG mode defers the HTTP response until
+        // `ScreenshotCaptured` fires. One command, one implementation.
         #[cfg(feature = "render")]
-        app.init_resource::<PendingScreenshotRequest>()
+        app.register_type::<CaptureScreenshot>()
+            .init_resource::<PendingScreenshotRequest>()
             .add_observer(save_screenshot);
     }
 }

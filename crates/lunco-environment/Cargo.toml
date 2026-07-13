@@ -2,45 +2,34 @@
 name = "lunco-environment"
 version = "0.1.0"
 edition = "2021"
-description = "Per-entity environmental state (gravity, atmosphere, radiation) computed from celestial body providers."
-
-[features]
-default = ["render"]
-# What is STILL render-bound in this crate — exactly two things, both of which
-# must move to a render crate before `lunco-environment` can drop wgpu:
-#
-#   1. `src/horizon.rs` — the whole heightfield-shadow *material wiring* half
-#      (`wire_terrain_materials`, `shade_dynamic_entities`) writes
-#      `lunco_materials::ShaderMaterial` params and `StandardMaterial` base
-#      colours → `bevy_pbr`. The horizon *maths* (`HeightField`, the bakes,
-#      `HorizonMap`) is render-free and would stay here.
-#   2. The `Bloom` arm of `SetEnvironmentLight` (`bevy_post_process`).
-#
-# Everything else in the crate is render-free and unconditional: gravity
-# (`LocalGravity`, force application, the gravity→cosim bridge), the lighting
-# params (`LunarSun`, `EarthshineParams`), the `Earthshine` fill light, and the
-# solar→cosim direction feed (`LocalSolar`) — `bevy_light` + `bevy_camera` do
-# NOT depend on `bevy_render`. See docs/architecture/render-decoupling.md.
-render = [
-    "bevy/bevy_pbr", "bevy/bevy_gltf", "bevy/bevy_world_serialization", "bevy/bevy_mesh",
-    "bevy/bevy_post_process", "bevy/bevy_anti_alias",
-    "bevy/mesh_picking", "dep:lunco-materials",
-]
+description = "Per-entity environmental state (gravity, atmosphere, radiation, lighting) computed from celestial body providers. RENDER-FREE."
 
 [dependencies]
-# RENDER-FREE baseline. `bevy_light` gives `DirectionalLight` /
-# `CascadeShadowConfig` / `GlobalAmbientLight`; `bevy_camera` gives
-# `RenderLayers` + `Exposure`. Neither depends on `bevy_render`, so the gravity
-# core, the earthshine fill and the sun→cosim feed all build without wgpu.
-# DO NOT add `bevy_pbr` here — it belongs to the `render` feature above (and,
-# properly, to a render crate).
-bevy = { workspace = true, features = ["bevy_camera", "bevy_light"] }
+# RENDER-FREE. There is no `render` feature any more and there must not be one:
+# the gate is *which plugins you add*, not `#[cfg]`. `bevy_light` gives
+# `DirectionalLight` / `CascadeShadowConfig` / `GlobalAmbientLight`; `bevy_camera`
+# gives `RenderLayers` + `Exposure`; `bevy_mesh` + `bevy_image` give the horizon
+# bake its `Mesh3d` input and its `Image` output. NONE of them depends on
+# `bevy_render`, so gravity, the earthshine fill, the sun→cosim feed AND the
+# heightfield-shadow bakes all build and run without wgpu.
+#
+# The two things that used to force `bevy_pbr` here have MOVED to the binder crate:
+#   1. `wire_terrain_materials` / `shade_dynamic_entities` → `lunco-render-bevy::horizon_shade`
+#   2. the `Bloom` arm of `SetEnvironmentLight`           → `lunco-render-bevy::env_light`
+# DO NOT add `bevy_pbr` / `bevy_post_process` back — see
+# docs/architecture/render-decoupling.md.
+#
+# `zstd_rust`: `bevy_image` refuses to build without a zstd backend chosen; name it
+# here so a per-crate `cargo check/test -p lunco-environment` stands alone.
+bevy = { workspace = true, features = ["bevy_camera", "bevy_light", "bevy_mesh", "bevy_image", "zstd_rust"] }
+# `Extent3d` / `TextureFormat` / `TextureDimension` for the baked heightfield +
+# shadow-cache `Image`s. These are the POD descriptors `bevy_image` itself takes
+# from `wgpu-types`; `bevy::render::render_resource` only re-exports them, and
+# importing THAT would drag in wgpu + naga. `wgpu-types` is not `wgpu`.
+wgpu-types = "29"
 avian3d = { workspace = true }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-core = { path = "../lunco-core" }
-# Render-only: the horizon shadow shaders use `ShaderMaterial`. Pulled in by the
-# `render` feature.
-lunco-materials = { path = "../lunco-materials", optional = true }
 
 [lints]
 workspace = true

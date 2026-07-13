@@ -12,11 +12,21 @@
 //!
 //! See `docs/architecture/render-decoupling.md`.
 
+mod env_light;
+pub mod horizon_shade;
 mod scene_camera;
+pub mod shader_material;
 mod shader_look;
 mod terrain_maps;
+mod world_label;
 
 pub use shader_look::ShaderLookCache;
+// The concrete custom-shader material + its render pipeline. It lived in
+// `lunco-materials` until the render decoupling; that crate is now render-free and
+// holds only the *intent* (`ShaderLook`) and the reflected schema. Re-exported here
+// so the GUI binaries (and anything else that legitimately needs the concrete type
+// in a RENDER build) can still reach it.
+pub use shader_material::*;
 
 use bevy::light::NotShadowCaster;
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
@@ -39,6 +49,22 @@ use lunco_render::{PbrLook, PbrLookKey, SurfaceAlpha};
 /// The look binders cache by *content*, so identical looks share one material and
 /// one bind group. That sharing is not an optimisation afterthought: the rock
 /// scatter and the terrain LOD band/reveal lattice depend on it for batching.
+///
+/// It also hosts the render-only code that has **no intent form** and therefore had
+/// to move here bodily rather than be expressed as a component:
+/// - `horizon_shade` — the per-frame heightfield/sun *uniform feed* into the terrain
+///   `ShaderMaterial` and the `StandardMaterial` darkening of shadowed props (from
+///   `lunco-environment`);
+/// - `env_light` — the `bloom` arm of `SetEnvironmentLight` (from `lunco-environment`);
+/// - `terrain_maps` — the derived-layer bind onto the async USD terrain material.
+///
+/// **Screenshots deliberately do NOT live here.** `CaptureScreenshot` has exactly one
+/// implementation, in `lunco-api::executor` — which has to own it, because raw-PNG
+/// mode defers the HTTP response until `ScreenshotCaptured` fires. A second
+/// `#[Command]` + observer once existed (in `lunco-avatar`, and briefly here) that
+/// also spawned `Screenshot::primary_window()`; it was **unreachable dead code**,
+/// because `execute_request` matches the command by name and returns early. It is
+/// gone. Do not re-add it.
 pub struct LuncoRenderPlugin;
 
 impl Plugin for LuncoRenderPlugin {
@@ -47,8 +73,19 @@ impl Plugin for LuncoRenderPlugin {
             .add_observer(bind_pbr_look)
             .add_systems(Update, rebind_changed_pbr_look);
         scene_camera::build(app);
+        // `shader_look::build` first: it registers the `ShaderMaterial` + `Shader`
+        // asset stores (idempotently), which `ShaderMaterialPlugin` needs in place
+        // before it loads the shared WGSL modules through the `AssetServer`.
         shader_look::build(app);
+        // The `ShaderMaterial` RENDER PIPELINE. Added here and ONLY here — it used
+        // to be added by hand in `lunco-sandbox`'s UI plugin and `luncosim`'s main;
+        // both were deleted when the material moved into this crate, because Bevy
+        // panics on a duplicate plugin.
+        app.add_plugins(shader_material::ShaderMaterialPlugin);
         terrain_maps::build(app);
+        horizon_shade::build(app);
+        env_light::build(app);
+        world_label::build(app);
     }
 }
 
@@ -79,6 +116,7 @@ fn standard_material(look: &PbrLook) -> StandardMaterial {
             SurfaceAlpha::Opaque => AlphaMode::Opaque,
             SurfaceAlpha::Mask(t) => AlphaMode::Mask(t),
             SurfaceAlpha::Blend => AlphaMode::Blend,
+            SurfaceAlpha::Add => AlphaMode::Add,
         },
         base_color_texture: look.textures.base_color.clone(),
         emissive_texture: look.textures.emissive.clone(),

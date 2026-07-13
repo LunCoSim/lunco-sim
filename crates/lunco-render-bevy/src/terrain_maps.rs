@@ -19,7 +19,8 @@
 
 use bevy::pbr::MeshMaterial3d;
 use bevy::prelude::*;
-use lunco_materials::{ParamValue, ShaderMaterial};
+use crate::shader_material::ShaderMaterial;
+use lunco_materials::ParamValue;
 use lunco_terrain_surface::{DerivedLayersBuilt, TerrainDerivedMaps};
 
 /// Bind the baked surface/normal layers onto the terrain's own static-mesh

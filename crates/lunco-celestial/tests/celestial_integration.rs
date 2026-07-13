@@ -2,7 +2,6 @@ use bevy::prelude::*;
 use big_space::prelude::*;
 use lunco_celestial::CelestialPlugin;
 use lunco_celestial::CelestialBody;
-use lunco_materials::ShaderMaterial;
 use lunco_time::WorldTime;
 use lunco_celestial::{EphemerisProvider, EphemerisResource};
 use std::sync::Arc;
@@ -37,22 +36,15 @@ fn test_celestial_startup_and_movement() {
     let _ = lunco_assets::register_lunco_asset_sources(&mut app);
     app.add_plugins(bevy::asset::AssetPlugin::default());
     app.init_resource::<Assets<Mesh>>();
-    app.init_resource::<Assets<StandardMaterial>>();
-    // `init_asset` (not `init_resource`): `setup_big_space_hierarchy` does
-    // `asset_server.load("shaders/blueprint.wgsl")`, and bevy 0.18 panics on the
-    // async load task unless the Shader asset *type* is registered (handle
-    // provider), which only `init_asset` does. (Image is already `init_asset`'d
-    // below; Mesh/StandardMaterial/ShaderMaterial are only `.add()`'d, so the
-    // plain resource suffices for them.)
-    app.init_asset::<bevy_shader::Shader>();
-    app.init_resource::<Assets<ShaderMaterial>>();
+    // NO material asset stores, and no `Shader` asset type, any more: the crate is
+    // render-free (2026-07-13). It states appearance as INTENT (`PbrLook` /
+    // `ShaderLook` components) and never `.add()`s a material or holds a
+    // `Handle<Shader>` — `lunco-render-bevy` does both, and this headless app simply
+    // never adds it. Which is exactly the property this test now also proves: the
+    // whole celestial hierarchy builds and steps with no GPU stack registered at all.
     app.init_asset::<Image>();
-    // bevy 0.19: `GizmoPlugin` registers `draw_skinned_mesh_bounds`, which
-    // hard-requires `Assets<SkinnedMeshInverseBindposes>` (normally registered
-    // by the render stack's `MeshPlugin`, absent headless) — and 0.19's default
-    // error handler PANICS on failed param validation instead of warning.
-    app.init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
-    app.add_plugins(bevy::gizmos::GizmoPlugin);
+    // `GizmoPlugin` is likewise gone — it came from `bevy_gizmos` (a render feature),
+    // and nothing in this crate draws gizmos.
     app.add_plugins(CelestialPlugin);
     // Override the NoOp provider (installed by CelestialPlugin) with one whose
     // output depends on the epoch, so the clock seek below actually repositions

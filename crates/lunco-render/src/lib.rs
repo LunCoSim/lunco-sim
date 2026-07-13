@@ -17,5 +17,5 @@ pub mod camera;
 pub mod sun;
 
 pub use appearance::{PbrLook, PbrLookKey, PbrTextures, SurfaceAlpha};
-pub use camera::{BloomLook, MsaaLevel, SceneCamera, ToneMap};
+pub use camera::{BloomLook, MsaaLevel, SceneCamera, ToneMap, WorldLabel};
 pub use sun::LunarSunShadow;

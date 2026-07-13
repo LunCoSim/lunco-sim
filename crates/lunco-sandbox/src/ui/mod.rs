@@ -91,7 +91,11 @@ impl Plugin for SandboxUiPlugin {
             .add_plugins(lunco_usd::ui::UsdUiPlugin)
             .add_plugins(lunco_sandbox_edit::SandboxEditPlugin)
             .add_plugins(lunco_sandbox_edit::ui::SandboxEditUiPlugin)
-            .add_plugins(lunco_materials::ShaderMaterialPlugin)
+            // NOTE: `ShaderMaterialPlugin` (the dynamic `ShaderMaterial` render
+            // pipeline) used to be added here. It now lives inside
+            // `lunco_render_bevy::LuncoRenderPlugin` — the one crate that may name
+            // `bevy_pbr` — and adding it a second time panics Bevy.
+            // See docs/architecture/render-decoupling.md.
             // The shared tutorial launcher: registry + 🎓 menu + panel +
             // Start/Skip/SetSubsystemEnabled + progress + onboarding + F1.
             // Tutorials load from assets/tutorials/sandbox/tutorials.json (data, not code).
@@ -387,6 +391,15 @@ fn spawn_fallback_avatar(
 
     info!("No USD camera after {FALLBACK_AVATAR_GRACE_SECS}s, spawning fallback FreeFlightCamera");
     commands.spawn((
+        // `SceneCamera` is what marks this as THE scene camera. It is not cosmetic:
+        // `lunco-celestial`'s `update_globe_lod` now selects the camera with
+        // `With<SceneCamera>` (it used to use `With<Camera3d>`, which forced every
+        // domain crate to link a GPU stack merely to ask "which camera is the scene
+        // one?"). Without it this fallback camera would stream NO globe tiles.
+        // The `Camera3d` below is redundant in a render build — the `SceneCamera`
+        // binder inserts it — but harmless, and it keeps this spawn readable.
+        // See docs/architecture/render-decoupling.md.
+        lunco_render::SceneCamera::default(),
         Camera3d::default(),
         // NO SMAA on this (workbench) camera: SMAA's post-process resolve does
         // not survive the full-window-3D + egui-overlay compositing, so it
@@ -416,9 +429,15 @@ fn spawn_fallback_avatar(
         CellCoord::default(),
         Avatar,
         LocalAvatar,
-        IntentAnalogState::default(),
-        ActionState::<lunco_core::UserIntent>::default(),
-        lunco_controller::get_avatar_input_map(),
+        // Nested: a tuple bundle tops out at 15 elements and adding `SceneCamera`
+        // (the render-decoupling intent marker, above) pushed this spawn to 16.
+        // Grouping the input triple is semantically identical — a nested tuple is
+        // just as much a `Bundle`.
+        (
+            IntentAnalogState::default(),
+            ActionState::<lunco_core::UserIntent>::default(),
+            lunco_controller::get_avatar_input_map(),
+        ),
         ChildOf(grid),
     ));
     *done = true;

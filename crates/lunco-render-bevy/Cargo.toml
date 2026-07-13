@@ -12,7 +12,11 @@ description = "The bevy_pbr binding layer for LunCoSim. Domain crates state appe
 # (Bloom / Tonemapping / Msaa). They pull bevy_core_pipeline → bevy_render, which is
 # exactly why this crate exists: those names are confined here so a domain crate can
 # say "I am the scene camera" without linking a GPU stack to say it.
-bevy = { workspace = true, features = ["bevy_pbr", "bevy_mesh", "bevy_light", "bevy_image", "bevy_post_process", "bevy_anti_alias", "tonemapping_luts", "zstd_rust"] }
+# `bevy_text` + `bevy_sprite_render` + `default_font` are here for the `WorldLabel`
+# binder (`Text2d`). They pull bevy_render, which is exactly why they belong on THIS
+# side of the boundary — a domain crate can now say "this spacecraft is labelled X"
+# without linking a text rasteriser.
+bevy = { workspace = true, features = ["bevy_pbr", "bevy_mesh", "bevy_light", "bevy_image", "bevy_post_process", "bevy_anti_alias", "tonemapping_luts", "bevy_text", "bevy_sprite_render", "default_font", "zstd_rust"] }
 lunco-render = { path = "../lunco-render" }
 # `ShaderLook` (the custom-shader intent) + `ShaderMaterial` (the thing it binds
 # to). `lunco-materials` is render-only by nature — it owns the `AsBindGroup` — so
@@ -24,6 +28,12 @@ lunco-materials = { path = "../lunco-materials" }
 # only this crate may do. Moving that one system here is what let
 # `lunco-terrain-surface` stop naming a material at all.
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
+# The horizon heightfield/shadow-cache BAKES (render-free, they stay there) plus
+# `SetEnvironmentLight`. The two render-bound halves — the per-frame uniform feed
+# into the terrain shader (`horizon_shade.rs`) and the command's `bloom` arm
+# (`env_light.rs`) — moved HERE, which is what let `lunco-environment` drop wgpu.
+lunco-environment = { path = "../lunco-environment" }
+lunco-core = { path = "../lunco-core" }
 
 [lints]
 workspace = true

@@ -5,11 +5,11 @@
 //! coarsen far away, so a body shows planetary curvature from orbit and finer
 //! relief as you approach. The selection is the globe crate's sphere-correct
 //! `subdivide_face` (camera distance vs tile arc-size) — kept there as the pure
-//! spine; this module is the scene integration (spawn/despawn + material), which
-//! lives in `lunco-celestial` because that's what owns the bodies, textures, grids
-//! and the blueprint `ShaderMaterial`.
+//! spine; this module is the scene integration (spawn/despawn + appearance intent),
+//! which lives in `lunco-celestial` because that's what owns the bodies, textures,
+//! grids and the blueprint look.
 //!
-//! Per body, [`GlobeLod`] carries the params + the surface grid + material;
+//! Per body, [`GlobeLod`] carries the params + the surface grid + look;
 //! [`GlobeTiles`] tracks the resident tile set; [`update_globe_lod`] diffs the
 //! desired set against it each frame. Tile placement replicates the proven static
 //! pattern verbatim (mesh body-local, entity anchored at the tile centre via the
@@ -22,7 +22,8 @@ use bevy::prelude::*;
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::math::DVec3;
 use big_space::prelude::*;
-use lunco_materials::ShaderMaterial;
+use lunco_materials::ShaderLook;
+use lunco_render::SceneCamera;
 use lunco_terrain_globe::quad_sphere::{cube_to_sphere, subdivide_face, tile_center_uv};
 use lunco_terrain_globe::{create_quadsphere_tile_mesh, TerrainTile, TileCoord};
 
@@ -34,8 +35,11 @@ pub struct GlobeLod {
     pub radius_m: f64,
     /// The surface grid the tiles anchor into (its own `CellCoord` per tile).
     pub surface_grid: Entity,
-    /// Material applied to every tile (the body's blueprint `ShaderMaterial`).
-    pub material: Handle<ShaderMaterial>,
+    /// Appearance intent applied to every tile (the body's blueprint look). Cloned
+    /// onto each tile; the binder's content-keyed cache collapses them back to ONE
+    /// `ShaderMaterial` per body — the same single-handle batching the old
+    /// `Handle<ShaderMaterial>` field guaranteed by hand.
+    pub look: ShaderLook,
     /// Vertices per tile side.
     pub res: u32,
     /// Deepest subdivision level near the camera.
@@ -115,7 +119,10 @@ fn tiles_overlap(a: &TileCoord, b: &TileCoord) -> bool {
 pub fn update_globe_lod(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    cameras: Query<(&Camera, &GlobalTransform, &bevy::camera::RenderTarget), With<Camera3d>>,
+    // `With<SceneCamera>`, NOT `With<Camera3d>`: "which entity is the scene camera?"
+    // is a render-FREE question, and asking it with `Camera3d` was what made this
+    // crate link bevy_core_pipeline → wgpu. See `lunco_render::camera`.
+    cameras: Query<(&Camera, &GlobalTransform, &bevy::camera::RenderTarget), With<SceneCamera>>,
     transforms: Query<&GlobalTransform>,
     grids: Query<&Grid>,
     mut bodies: Query<(Entity, &GlobeLod, &mut GlobeTiles)>,
@@ -218,7 +225,7 @@ pub fn update_globe_lod(
             let ent = commands
                 .spawn((
                     Mesh3d(meshes.add(mesh)),
-                    MeshMaterial3d(lod.material.clone()),
+                    lod.look.clone(),
                     coord,
                     TerrainTile,
                     tile_cell,

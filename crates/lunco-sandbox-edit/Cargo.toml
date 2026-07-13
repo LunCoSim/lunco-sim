@@ -4,17 +4,20 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# `bevy_pbr` CANNOT be dropped from this crate yet — see
-# `docs/architecture/render-decoupling.md`. The PBR *look* is already decoupled
-# (`lunco-render::PbrLook` intent + the `lunco-render-bevy` binder), but the
-# always-compiled `commands.rs` still names `lunco_materials::ShaderMaterial`
-# (an `AsBindGroup` type, hence wgpu) for `SetObjectProperty`'s shader-swap and
-# shader-uniform paths, and `ui/` names it for the shader picker / param editor.
-# `ShaderMaterial` needs its own intent design first; until then this feature
-# list stays. Nothing NEW may bind a material here — use `PbrLook`.
-bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light"] }
-# Appearance intent (render-free): `PbrLook`. The PBR half of every material site
-# in this crate goes through it instead of `Assets<StandardMaterial>`.
+# NO `bevy_pbr` — this crate names no material type (`MeshMaterial3d`,
+# `StandardMaterial`, `ShaderMaterial`). Appearance is stated as INTENT
+# (`lunco_render::PbrLook`, `lunco_materials::ShaderLook`) and bound by
+# `lunco-render-bevy`; see `docs/architecture/render-decoupling.md`. The compiler
+# is the enforcement — put `bevy_pbr` back and the rule quietly rots.
+#
+# `bevy_shader` is here for the live shader-AUTHORING commands only
+# (`SetShaderSource`/`CreateShader`/`ImportShader` compile WGSL into
+# `Assets<Shader>` so an edit renders without a disk round-trip). It pulls `naga`
+# but NOT wgpu; moving those three onto an intent+binder of their own is the
+# follow-up that would take naga out of the headless server too.
+bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "bevy_shader"] }
+# Appearance intent (render-free): `PbrLook`. Every PBR material site in this crate
+# goes through it instead of `Assets<StandardMaterial>`.
 lunco-render = { path = "../lunco-render" }
 # egui inspector, theme, transform gizmo, and the picking backend are all editor
 # concerns — optional, on `ui`. `commands::SpawnCommandPlugin` (the only thing a

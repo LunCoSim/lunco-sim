@@ -25,7 +25,7 @@
 //! storm — the property `R5` bought and this must not give back.
 //!
 //! The schema (parameter name → std140 offset, reflected out of the WGSL) is
-//! filled in by `lunco-materials`' own `reflect_shader_schemas` once the shader
+//! filled in by [`reflect_shader_schemas`](crate::reflect_shader_schemas) once the shader
 //! source loads; a freshly built material carries the empty schema and its values
 //! by name, and is repacked the moment the schema lands. That machinery is
 //! untouched.
@@ -34,9 +34,8 @@ use bevy::pbr::MeshMaterial3d;
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy::shader::Shader;
-use lunco_materials::{
-    build_shader_material, ShaderLook, ShaderLookKey, ShaderMaterial, TextureLayer,
-};
+use crate::shader_material::{build_shader_material, ShaderMaterial};
+use lunco_materials::{ShaderLook, ShaderLookKey, TextureLayer};
 
 /// Shared `ShaderMaterial` per distinct [`ShaderLookKey`] — see the module docs.
 #[derive(Resource, Default)]
@@ -172,17 +171,17 @@ fn sweep_shader_look_cache(mut cache: ResMut<ShaderLookCache>, looks: Query<&Sha
 /// Wire the `ShaderLook` binder into an app. Called by
 /// [`LuncoRenderPlugin`](crate::LuncoRenderPlugin).
 ///
-/// NOTE: this does **not** add `lunco_materials::ShaderMaterialPlugin` (the render
-/// pipeline for `ShaderMaterial`). `lunco-sandbox`'s UI plugin and `luncosim`'s
-/// `main` already add it, and Bevy panics on a duplicate plugin — so adding it here
-/// too would break both binaries. The pipeline should move here (one `add_plugins`
-/// line deleted in each of those two files, one added below), which is the last step
-/// of the decoupling and needs an edit outside this crate.
+/// NOTE: this does **not** add [`ShaderMaterialPlugin`](crate::ShaderMaterialPlugin)
+/// — [`LuncoRenderPlugin`](crate::LuncoRenderPlugin) does, right after calling this,
+/// and exactly once (the hand-rolled adds in `lunco-sandbox` and `luncosim` were
+/// deleted; Bevy panics on a duplicate plugin). Keeping the two separate lets this
+/// binder be unit-tested on a bare `MinimalPlugins` app, with no render pipeline.
 pub(crate) fn build(app: &mut App) {
     // The `ShaderMaterial` store must exist for the binder even before the
     // pipeline plugin registers it (plugin order is not ours to control), and the
     // `Shader` asset must be registered for `asset_server.load::<Shader>` not to
-    // panic. Both are idempotent.
+    // panic. Both are idempotent — `MaterialPlugin`'s own `init_asset` is a no-op
+    // when the store already exists, so nothing is double-registered.
     bevy::asset::AssetApp::init_asset::<ShaderMaterial>(app);
     bevy::asset::AssetApp::init_asset::<Shader>(app);
     app.init_resource::<ShaderLookCache>()

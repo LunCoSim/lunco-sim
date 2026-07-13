@@ -48,7 +48,14 @@ required-features = ["ui"]
 # command line past its internal limit (link aborted with `std::length_error`).
 # Instead `UsdBevyPlugin` explicitly `register_type`s the bounded set of
 # glTF/USD scene component types — see `crates/lunco-usd-bevy/src/lib.rs`.
-bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "bevy_window"] }
+# NO `bevy_pbr`. It used to be here for the render ASSET STORES, on the theory that
+# the `--no-ui` server needs `Assets<StandardMaterial>` even with
+# `RenderPlugin { backends: None }`. It does not any more: no crate in the headless
+# closure names a material — they state `PbrLook`/`ShaderLook` intent, and the
+# binder that turns intent into an asset lives behind the `ui` feature with
+# `lunco-render-bevy`. Re-adding `bevy_pbr` here silently re-links wgpu + naga into
+# the server. The CI guard in `.github/workflows/lint.yml` fails if it comes back.
+bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "bevy_window"] }
 avian3d = { workspace = true }
 big_space = { workspace = true }
 leafwing-input-manager = { workspace = true }
@@ -67,12 +74,16 @@ lunco-render = { path = "../lunco-render" }
 # The bevy_pbr binding layer. Added as a PLUGIN only in non-headless builds
 # (`SandboxCorePlugin::build`), which is the entire render gate.
 #
-# TODO(render-decoupling): once every domain crate is render-free, make this
-# `optional = true` under the `ui` feature so the `--no-ui` server stops LINKING
-# bevy_pbr as well as not running it. Today other crates (terrain-surface,
-# celestial, usd-bevy, sandbox-edit) still name materials directly, so the server
-# links wgpu regardless and there is nothing to win yet.
-lunco-render-bevy = { path = "../lunco-render-bevy" }
+# THE RENDER GATE, at the dependency level. `lunco-render-bevy` is the one crate
+# that names `bevy_pbr`, so making it `optional` + `ui`-only is what finally stops
+# the `--no-ui` server from LINKING wgpu/naga, not merely from running them.
+#
+# This was blocked until every domain crate stopped naming materials directly
+# (terrain-surface, celestial, usd-bevy, usd-sim, sandbox-edit, environment,
+# obstacle-field, and finally lunco-materials itself). That is now done — they all
+# state INTENT (`PbrLook` / `ShaderLook` / `SceneCamera`) instead.
+# See docs/architecture/render-decoupling.md.
+lunco-render-bevy = { path = "../lunco-render-bevy", optional = true }
 # Engine light-handling policy (ShadowCastingSettings) is a client render
 # concern, so the settings dep rides the `ui` feature (see `light_policy.rs`).
 lunco-settings = { path = "../lunco-settings", optional = true }
@@ -179,9 +190,15 @@ mimalloc = "0.1"
 default = ["ui", "celestial", "lunco-api", "transport-http", "lunco-api/render", "networking"]
 # Windowed GUI: the winit windowing backend + render-effect features + every
 # UI crate (egui workbench, material editors, doc/theme/ui). Off for a headless
-# server. The render ASSET-STORE features (bevy_pbr/mesh/light/window) stay in
-# the always-on `bevy` dep above — the server still needs them for `backends:None`.
+# server.
+#
+# `dep:lunco-render-bevy` — THE RENDER GATE. This is the crate that names
+# `bevy_pbr`, so gating it here is what keeps wgpu + naga out of the `--no-ui`
+# server's LINK, not just out of its runtime. Domain crates state appearance as
+# intent (`PbrLook`/`ShaderLook`/`SceneCamera`); this binds it.
+# See docs/architecture/render-decoupling.md.
 ui = [
+    "dep:lunco-render-bevy",
     "lunco-avatar/ui",
     "lunco-usd/ui",
     "lunco-sandbox-edit/ui",

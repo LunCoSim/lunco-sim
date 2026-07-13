@@ -34,6 +34,10 @@ lunco-materials = { path = "../lunco-materials" }
 lunco-avatar = { path = "../lunco-avatar" }
 lunco-celestial = { path = "../lunco-celestial" }
 lunco-environment = { path = "../lunco-environment" }
+# The bevy_pbr binding layer — turns appearance/camera INTENT into real materials
+# and pipelines, and hosts the render-only code moved out of the domain crates
+# (horizon uniform feed, SetEnvironmentLight's bloom arm, CaptureScreenshot).
+lunco-render-bevy = { path = "../lunco-render-bevy" }
 lunco-fsw = { path = "../lunco-fsw" }
 lunco-hardware = { path = "../lunco-hardware" }
 lunco-mobility = { path = "../lunco-mobility" }

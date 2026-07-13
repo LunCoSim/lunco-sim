@@ -48,6 +48,10 @@ pub enum SurfaceAlpha {
     Mask(f32),
     /// Sorted alpha blending.
     Blend,
+    /// Additive. Distinct from `Blend` only where the destination is NOT black —
+    /// which for an orbit line means exactly where it crosses a lit body. Over the
+    /// sky the two are identical (`dst + src·a` ≡ `dst·(1−a) + src·a` when `dst ≈ 0`).
+    Add,
 }
 
 /// The texture channels a PBR surface can carry.
@@ -193,6 +197,7 @@ impl PbrLook {
                 SurfaceAlpha::Opaque => (0, 0),
                 SurfaceAlpha::Mask(t) => (1, q(t)),
                 SurfaceAlpha::Blend => (2, 0),
+                SurfaceAlpha::Add => (3, 0),
             },
             textures: [
                 tex(&self.textures.base_color),

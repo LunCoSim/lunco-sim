@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy::tasks::Task;
-use bevy::render::render_resource::PrimitiveTopology;
-use bevy::asset::{RenderAssetUsages, load_internal_asset};
+use bevy_mesh::PrimitiveTopology;
+use bevy::asset::RenderAssetUsages;
 use big_space::prelude::CellCoord;
 use futures_lite::future;
 use std::sync::Arc;
@@ -9,70 +9,21 @@ use crate::ephemeris::EphemerisResource;
 use crate::registry::{CelestialBodyRegistry, CelestialReferenceFrame};
 use lunco_time::WorldTime;
 
-use bevy::shader::ShaderRef;
-use bevy::render::render_resource::AsBindGroup;
 use bevy::math::cubic_splines::CubicCardinalSpline;
-use bevy::pbr::{MaterialExtension, ExtendedMaterial};
 use bevy::camera::visibility::NoFrustumCulling;
-use bevy_shader::Shader;
+use lunco_render::{PbrLook, SurfaceAlpha};
 
 pub struct TrajectoryPlugin;
 
-#[derive(Asset, AsBindGroup, TypePath, Debug, Clone, Copy)]
-pub struct TrajectoryExtension {
-    #[uniform(100)]
-    pub color: LinearRgba,
-    #[uniform(100)]
-    pub time: f32,
-    #[uniform(100)]
-    pub pulse_pos: f32,
-    #[uniform(100)]
-    pub pulse_width: f32,
-    #[uniform(100)]
-    pub noise_scale: f32,
-    #[uniform(100)]
-    pub emissive_mult: f32,
-}
-
-impl MaterialExtension for TrajectoryExtension {
-    fn fragment_shader() -> ShaderRef {
-        // Returns the handle to our embedded shader (set by EmbeddedAssetsPlugin on wasm32)
-        crate::embedded_assets::TRAJECTORY_SHADER_HANDLE.clone().into()
-    }
-}
-
-/// Registers the embedded trajectory shader into the asset server.
-pub struct TrajectoryShaderPlugin;
-
-impl Plugin for TrajectoryShaderPlugin {
-    fn build(&self, app: &mut App) {
-        load_internal_asset!(
-            app,
-            crate::embedded_assets::TRAJECTORY_SHADER_HANDLE,
-            "../../../assets/shaders/trajectory.wgsl",
-            Shader::from_wgsl
-        );
-    }
-}
-
-/// Holds the compiled trajectory shader handle.
-#[derive(Resource)]
-pub struct TrajectoryShaderHandle(pub Handle<Shader>);
-
-pub type TrajectoryMaterial = ExtendedMaterial<StandardMaterial, TrajectoryExtension>;
-
-impl Default for TrajectoryExtension {
-    fn default() -> Self {
-        Self {
-            color: LinearRgba::WHITE,
-            time: 0.0,
-            pulse_pos: 0.0,
-            pulse_width: 0.05,
-            noise_scale: 100.0,
-            emissive_mult: 10.0,
-        }
-    }
-}
+// REMOVED (2026-07-13, render decoupling): `TrajectoryExtension` /
+// `TrajectoryMaterial` (an `ExtendedMaterial<StandardMaterial, _>`),
+// `TrajectoryShaderPlugin` and `TrajectoryShaderHandle`. The material type was
+// DEAD — declared, `AsBindGroup`-derived, and never instantiated anywhere in the
+// workspace (`trajectory_mesh_init_system` has always used a plain unlit
+// `StandardMaterial`, now a `PbrLook`). All it did was pull `bevy_pbr` +
+// `bevy_shader` (→ naga) into every binary that links this crate, and register a
+// `trajectory.wgsl` no pipeline ever read. `assets/shaders/trajectory.wgsl` is left
+// on disk; nothing loads it.
 
 #[derive(Component, Reflect, Clone, Copy, Debug)]
 #[reflect(Component)]
@@ -566,7 +517,6 @@ pub fn handle_trajectory_tasks(
 pub fn trajectory_mesh_init_system(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     q_new_views: Query<(Entity, &TrajectoryView), Added<TrajectoryPath>>,
 ) {
     for (entity, view) in q_new_views.iter() {
@@ -580,18 +530,29 @@ pub fn trajectory_mesh_init_system(
         let mesh_handle = meshes.add(mesh);
         let color = view.color;
         let emissive_color = color * 15.0;
-        
-        let mat_handle = materials.add(StandardMaterial {
-            base_color: Color::linear_rgba(emissive_color.red, emissive_color.green, emissive_color.blue, 1.0),
+
+        // The orbit line, stated as appearance intent. Unlit + 15× brightness, with
+        // the per-point fade carried in the mesh's ATTRIBUTE_COLOR alpha
+        // (`trajectory_alpha_update_system`), exactly as before.
+        //
+        // `SurfaceAlpha::Add` — the same `AlphaMode::Add` this used before the
+        // decoupling, so the compositing is unchanged. (It matters only where a line
+        // crosses a lit body: over the black sky additive and blended coincide,
+        // because `dst + src·a` ≡ `dst·(1−a) + src·a` when `dst ≈ 0`.)
+        //
+        // Not shared with anything: each view's colour differs, so this is 2–3
+        // materials in total.
+        let look = PbrLook {
+            base_color: LinearRgba::new(emissive_color.red, emissive_color.green, emissive_color.blue, 1.0),
             unlit: true,
-            alpha_mode: AlphaMode::Add,
+            alpha: SurfaceAlpha::Add,
             ..default()
-        });
+        };
 
         commands.entity(entity).with_children(|parent| {
             parent.spawn((
                 Mesh3d(mesh_handle),
-                MeshMaterial3d(mat_handle),
+                look,
                 TrajectoryMeshMarker,
                 Visibility::Visible,
                 NoFrustumCulling,

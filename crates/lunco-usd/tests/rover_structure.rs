@@ -9,7 +9,6 @@ use lunco_usd_avian::*;
 use lunco_usd_sim::*;
 use lunco_mobility::WheelRaycast;
 use lunco_core::kernels::DriveMix;
-use lunco_materials::ShaderMaterial;
 use avian3d::prelude::*;
 use lunco_fsw::FlightSoftware;
 
@@ -70,7 +69,6 @@ fn compose_and_load(file_path: &Path, prim_path: &str) -> App {
     app.init_asset::<Mesh>();
     app.init_asset::<StandardMaterial>();
     app.init_asset::<Image>();
-    app.init_asset::<ShaderMaterial>();
     app.init_asset::<bevy::shader::Shader>();
     // No GPU in this harness, so a wheel's render-only `ShaderMaterial` never
     // arrives — mark the app headless so sim builds wheel PHYSICS without waiting

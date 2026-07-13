@@ -6970,6 +6970,7 @@ dependencies = [
  "lunco-cosim",
  "lunco-environment",
  "lunco-fsw",
+ "lunco-render",
  "lunco-settings",
  "lunco-theme",
  "lunco-time",
@@ -7007,9 +7008,8 @@ version = "0.6.0-dev"
 dependencies = [
  "avian3d",
  "bevy",
- "bevy_asset",
  "bevy_egui",
- "bevy_shader",
+ "bevy_mesh",
  "big_space",
  "futures-lite",
  "lunco-api",
@@ -7029,7 +7029,6 @@ dependencies = [
  "lunco-workbench",
  "serde",
  "serde_json",
- "uuid",
 ]
 
 [[package]]
@@ -7127,7 +7126,7 @@ dependencies = [
  "bevy",
  "lunco-core",
  "lunco-cosim",
- "lunco-materials",
+ "wgpu-types",
 ]
 
 [[package]]
@@ -7361,6 +7360,8 @@ name = "lunco-render-bevy"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "lunco-core",
+ "lunco-environment",
  "lunco-materials",
  "lunco-render",
  "lunco-terrain-surface",
@@ -7892,6 +7893,7 @@ dependencies = [
  "lunco-hardware",
  "lunco-materials",
  "lunco-mobility",
+ "lunco-render-bevy",
  "lunco-robotics",
  "lunco-time",
  "lunco-ui",

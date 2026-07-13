@@ -4,7 +4,17 @@ version = "0.6.0-dev"
 edition = "2021"
 
 [dependencies]
-bevy = { workspace = true }
+# RENDER-FREE. `bevy_camera` gives `Camera` / `Projection` / `Visibility` /
+# `RenderLayers`, `bevy_light` the lights, `bevy_mesh` `Mesh3d` — none of them pulls
+# `bevy_render`. There is no `bevy_pbr` / `bevy_core_pipeline` here and there must
+# not be: the camera *pipeline* (`Camera3d`, tonemapping, MSAA, bloom) is attached by
+# `lunco-render-bevy` from the `lunco_render::SceneCamera` intent this crate spawns,
+# and `CaptureScreenshot` (a render-world readback) moved there wholesale.
+# See docs/architecture/render-decoupling.md.
+bevy = { workspace = true, features = ["bevy_camera", "bevy_light", "bevy_mesh"] }
+# Camera INTENT: `SceneCamera` — "this entity is the scene camera, and this is how it
+# should look" — stated without naming a render pipeline.
+lunco-render = { path = "../lunco-render" }
 # egui + the workbench/theme shell are used ONLY by `src/ui/` (AvatarUiPlugin).
 # Optional so consumers that need just the camera components (e.g. lunco-usd-sim
 # on a headless server) build with `default-features = false` → no egui→winit.

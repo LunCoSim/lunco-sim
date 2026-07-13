@@ -7,7 +7,7 @@ use lunco_time::WorldTime;
 use crate::registry::{CelestialBody, CelestialBodyRegistry, CelestialReferenceFrame};
 use crate::coords::ecliptic_to_bevy;
 use crate::coords::world_position_seeded;
-use lunco_materials::{ParamValue, ShaderMaterial};
+use lunco_materials::{ParamValue, ShaderLook};
 
 /// Update body and frame positions based on ephemeris data.
 /// Optimized: Only re-computes if Epoch has changed significantly.
@@ -349,10 +349,9 @@ pub fn touch_celestial_transforms(
 // grid (task #24) so no 1 AU joint separates camera from terrain.
 
 pub fn celestial_visuals_system(
-    mut materials: ResMut<Assets<ShaderMaterial>>,
     q_camera: Query<(Entity, &CellCoord, &Transform), (With<Camera>, With<lunco_core::Avatar>)>,
     q_bodies: Query<(Entity, &CellCoord, &Transform, &CelestialBody)>,
-    q_tiles: Query<(&MeshMaterial3d<ShaderMaterial>, &lunco_terrain_globe::TileCoord), With<lunco_terrain_globe::TerrainTile>>,
+    mut q_tiles: Query<(&mut ShaderLook, &lunco_terrain_globe::TileCoord), With<lunco_terrain_globe::TerrainTile>>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
@@ -385,11 +384,21 @@ pub fn celestial_visuals_system(
         per_body.insert(body_ent, transition);
     }
 
-    for (mat_handle, coord) in q_tiles.iter() {
-        if let Some(&transition) = per_body.get(&coord.body) {
-            if let Some(mut mat) = materials.get_mut(mat_handle) {
-                mat.set("transition", ParamValue::F32(transition));
-            }
+    // Write the transition into each tile's appearance INTENT; `lunco-render-bevy`
+    // rebinds the material. Every tile of a body gets the SAME value, so the binder's
+    // content-keyed cache still resolves the body's whole tile set to one material and
+    // one bind group — the property the old single shared `Handle<ShaderMaterial>`
+    // gave by construction.
+    //
+    // GUARDED WRITE, and it is load-bearing: `Mut` only marks the component changed on
+    // `DerefMut`, so comparing first means a parked camera dirties nothing and the
+    // rebind system does no work. Unguarded, all ~600 resident tiles would re-key and
+    // re-bind every frame.
+    for (mut look, coord) in q_tiles.iter_mut() {
+        let Some(&transition) = per_body.get(&coord.body) else { continue };
+        let next = ParamValue::F32(transition);
+        if look.values.get("transition") != Some(&next) {
+            look.values.insert("transition".into(), next);
         }
     }
 }

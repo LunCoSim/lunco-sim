@@ -1508,10 +1508,17 @@ impl Plugin for SandboxCorePlugin {
         //
         // That is why there is no `#[cfg(feature = "render")]` anywhere in the
         // simulation crates: the gate is *which plugins you add*, not conditional
-        // compilation threaded through the domain. Adding it here (and only here)
-        // also means a scene keeps its appearance data on the server — inspectable,
-        // journalable, replicable — it just isn't given a GPU material.
+        // compilation threaded through the domain. A scene therefore keeps its full
+        // appearance data on the server — inspectable, journalable, replicable — it
+        // just isn't given a GPU material.
+        //
+        // The `#[cfg(feature = "ui")]` here is the ONE place conditional compilation
+        // appears, and it has to: `lunco-render-bevy` is an OPTIONAL dependency under
+        // `ui`, which is what stops the `--no-ui` server from LINKING bevy_pbr (→
+        // bevy_render → wgpu + naga), not merely from running it. The runtime
+        // `!headless` check remains for a `ui`-built binary launched headless.
         // See docs/architecture/render-decoupling.md.
+        #[cfg(feature = "ui")]
         if !self.headless {
             app.add_plugins(lunco_render_bevy::LuncoRenderPlugin);
         }
@@ -1950,7 +1957,7 @@ struct LayerRole {
     /// USD namespace segment + log label, e.g. `"albedo"`.
     name: &'static str,
     /// Sets the matching `Option<Handle<Image>>` slot on the material.
-    set_slot: fn(&mut lunco_materials::ShaderMaterial, Handle<Image>),
+    set_slot: fn(&mut lunco_render_bevy::ShaderMaterial, Handle<Image>),
     /// Reflected `weight_*` params raised to the authored weight (surface has two).
     weights: &'static [&'static str],
 }
@@ -2020,13 +2027,13 @@ fn report_terrain_stream_status(
 #[cfg(feature = "ui")]
 fn bind_terrain_layers(
     q: Query<
-        (Entity, &lunco_usd::UsdPrimPath, &MeshMaterial3d<lunco_materials::ShaderMaterial>),
+        (Entity, &lunco_usd::UsdPrimPath, &MeshMaterial3d<lunco_render_bevy::ShaderMaterial>),
         (With<lunco_terrain_surface::DemTerrainSurface>, Without<TerrainLayersBound>),
     >,
     stages: Res<Assets<lunco_usd::UsdStageAsset>>,
     twins: Res<lunco_assets::twin_source::TwinRoots>,
     asset_server: Res<AssetServer>,
-    mut mats: ResMut<Assets<lunco_materials::ShaderMaterial>>,
+    mut mats: ResMut<Assets<lunco_render_bevy::ShaderMaterial>>,
     mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
     mut commands: Commands,
 ) {
