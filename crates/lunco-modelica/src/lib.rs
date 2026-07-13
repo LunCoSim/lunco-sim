@@ -74,11 +74,14 @@ pub mod ast_mut;
 /// for migration order.
 pub mod document;
 
-/// Shared parse + I/O cache for Modelica classes, built on
-/// `lunco_cache`. Drill-in, AddComponent preload, and (later)
-/// compile dep-walk all funnel through here so every class file is
-/// read once, parsed once, and shared as `Arc<AstCache>` across tabs
-/// and compile jobs.
+/// Shared parse + I/O cache for Modelica classes. Drill-in, AddComponent
+/// preload, and compile dep-walk all funnel through here so every class file is
+/// read once, parsed once, and shared as an `Arc` across tabs and compile jobs.
+///
+/// The load is **synchronous** (`peek_or_load_msl_class_blocking`), under a
+/// two-phase lock: probe → parse *outside* the lock → install. That is why
+/// [`MslLookupMode::Cached`] exists — off-thread callers must never block on a
+/// cold parse, so they take the peek-only path and miss rather than stall.
 pub mod class_cache;
 pub mod library_fs;
 

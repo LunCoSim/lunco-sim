@@ -14,6 +14,7 @@
 
 mod env_light;
 pub mod horizon_shade;
+pub mod look_cache;
 mod scene_camera;
 mod sensor_beams;
 pub mod shader_material;
@@ -31,7 +32,6 @@ pub use shader_material::*;
 
 use bevy::light::NotShadowCaster;
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
-use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use lunco_render::{PbrLook, PbrLookKey, SurfaceAlpha};
 
@@ -72,7 +72,10 @@ impl Plugin for LuncoRenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PbrLookCache>()
             .add_observer(bind_pbr_look)
-            .add_systems(Update, rebind_changed_pbr_look);
+            .add_systems(
+                Update,
+                (rebind_changed_pbr_look, look_cache::sweep_look_cache::<PbrLook>),
+            );
         scene_camera::build(app);
         // `shader_look::build` first: it registers the `ShaderMaterial` + `Shader`
         // asset stores (idempotently), which `ShaderMaterialPlugin` needs in place
@@ -97,8 +100,24 @@ impl Plugin for LuncoRenderPlugin {
 /// 6000 rocks that all look alike must cost ONE material and ONE bind group. The
 /// pre-decoupling code achieved that by hand-threading a single `Handle` through
 /// the scatter loop; the cache makes it automatic and impossible to forget.
-#[derive(Resource, Default)]
-struct PbrLookCache(HashMap<PbrLookKey, Handle<StandardMaterial>>);
+///
+/// Sharing, the `unshared` bypass, and eviction are
+/// [`LookCache`](look_cache::LookCache)'s — shared with the `ShaderLook` binder, so
+/// the two cannot drift apart on policy again (they already had: this one never
+/// swept, and grew without bound).
+type PbrLookCache = look_cache::LookCache<PbrLook>;
+
+impl look_cache::CachedLook for PbrLook {
+    type Key = PbrLookKey;
+    type Material = StandardMaterial;
+
+    fn look_key(&self) -> PbrLookKey {
+        self.key()
+    }
+    fn is_unshared(&self) -> bool {
+        self.unshared
+    }
+}
 
 /// Build the concrete `StandardMaterial` a look describes.
 fn standard_material(look: &PbrLook) -> StandardMaterial {
@@ -136,27 +155,15 @@ fn standard_material(look: &PbrLook) -> StandardMaterial {
     }
 }
 
-/// Resolve a look to a handle.
-///
-/// Shared looks go through the content-keyed cache. **`unshared` looks bypass it
-/// entirely** and get a private material — which is what keeps an ANIMATED look (a
-/// USD `displayColor` sweep, a pulsing highlight) from re-keying the cache every
-/// frame and minting a material per distinct value that is never freed. That leak
-/// presents as a slow memory climb, not an obvious bug, so the opt-out is explicit
-/// rather than inferred.
+/// Resolve a look to a handle. Sharing + the `unshared` bypass are
+/// [`LookCache::resolve`](look_cache::LookCache::resolve)'s job; this only supplies
+/// the build recipe.
 fn material_for(
     look: &PbrLook,
     cache: &mut PbrLookCache,
     materials: &mut Assets<StandardMaterial>,
 ) -> Handle<StandardMaterial> {
-    if look.unshared {
-        return materials.add(standard_material(look));
-    }
-    cache
-        .0
-        .entry(look.key())
-        .or_insert_with(|| materials.add(standard_material(look)))
-        .clone()
+    cache.resolve(look, materials, standard_material)
 }
 
 /// `On<Add, PbrLook>` — the moment intent appears, give it a material.
@@ -275,5 +282,60 @@ mod tests {
         let e = app.world_mut().spawn(PbrLook::default().no_shadows()).id();
         app.update();
         assert!(app.world().entity(e).contains::<NotShadowCaster>());
+    }
+
+    fn app_with_n_distinct_looks(n: usize) -> (App, Vec<Entity>) {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<StandardMaterial>()
+            .add_plugins(LuncoRenderPlugin);
+        let ids = (0..n)
+            .map(|i| {
+                // Distinct base colours ⇒ distinct keys ⇒ one cache entry each.
+                let c = LinearRgba::rgb(i as f32 / n as f32, 0.5, 0.5);
+                app.world_mut().spawn(PbrLook::matte(c)).id()
+            })
+            .collect();
+        app.update();
+        (app, ids)
+    }
+
+    /// The PBR cache used to grow WITHOUT BOUND — it had no sweep at all, while the
+    /// shader cache next door swept at 1024. Both now share one policy. A scene swap
+    /// (despawn everything) must reclaim the dead entries once the cache is
+    /// implausibly large, or every dead look keeps pinning its textures forever.
+    #[test]
+    fn sweep_reclaims_entries_no_live_look_refers_to() {
+        let (mut app, ids) = app_with_n_distinct_looks(1100);
+        assert_eq!(app.world().resource::<PbrLookCache>().len(), 1100);
+
+        for e in ids {
+            app.world_mut().entity_mut(e).despawn();
+        }
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<PbrLookCache>().len(),
+            0,
+            "no look is live, so the sweep must drop every cached material"
+        );
+    }
+
+    /// …and BELOW the threshold it must not run: a steady scene pays nothing, and a
+    /// look that is momentarily unspawned (a tile between LOD bands, a reloading
+    /// prim) must still find its material cached when it comes back.
+    #[test]
+    fn sweep_does_not_run_below_the_threshold() {
+        let (mut app, ids) = app_with_n_distinct_looks(10);
+        for e in ids {
+            app.world_mut().entity_mut(e).despawn();
+        }
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<PbrLookCache>().len(),
+            10,
+            "under the sweep threshold the cache is retained for reuse"
+        );
     }
 }

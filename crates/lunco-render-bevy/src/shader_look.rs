@@ -31,32 +31,28 @@
 //! untouched.
 
 use bevy::pbr::MeshMaterial3d;
-use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy::shader::Shader;
+use crate::look_cache::{sweep_look_cache, CachedLook, LookCache};
 use crate::shader_material::{build_shader_material, ShaderMaterial};
 use lunco_materials::{ShaderLook, ShaderLookKey, TextureLayer};
 
 /// Shared `ShaderMaterial` per distinct [`ShaderLookKey`] — see the module docs.
-#[derive(Resource, Default)]
-pub struct ShaderLookCache(HashMap<ShaderLookKey, Handle<ShaderMaterial>>);
+/// Sharing, the `unshared` bypass, and eviction all live in
+/// [`LookCache`](crate::look_cache::LookCache), shared with the PBR binder.
+pub type ShaderLookCache = LookCache<ShaderLook>;
 
-impl ShaderLookCache {
-    /// Number of distinct materials currently cached (tests / diagnostics).
-    pub fn len(&self) -> usize {
-        self.0.len()
+impl CachedLook for ShaderLook {
+    type Key = ShaderLookKey;
+    type Material = ShaderMaterial;
+
+    fn look_key(&self) -> ShaderLookKey {
+        self.key()
     }
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+    fn is_unshared(&self) -> bool {
+        self.unshared
     }
 }
-
-/// Cached materials retained before a sweep runs. The terrain's live band set is a
-/// few hundred at most; anything beyond this is a dead scene's leftovers (each
-/// holding strong `Handle<Image>`s to its derived maps — megabytes of GPU texture),
-/// so sweep them against the live looks. Same job the terrain's
-/// `despawn_orphaned_lod_tiles` used to do by hand for its own cache.
-const CACHE_SWEEP_AT: usize = 1024;
 
 /// Build the concrete `ShaderMaterial` a look describes.
 fn shader_material(look: &ShaderLook, asset_server: &AssetServer) -> ShaderMaterial {
@@ -88,28 +84,15 @@ fn shader_material(look: &ShaderLook, asset_server: &AssetServer) -> ShaderMater
     build_shader_material(asset_server.load::<Shader>(look.shader.clone()), m)
 }
 
-/// Resolve a look to a handle.
-///
-/// Shared looks go through the content-keyed cache — the batching property. An
-/// **`unshared`** look bypasses it and gets a private material, which is what keeps
-/// an ANIMATED look from re-keying the cache every frame and minting a material per
-/// distinct value that is never freed.
+/// Resolve a look to a handle. Sharing + the `unshared` bypass are
+/// [`LookCache::resolve`]'s job; this only supplies the build recipe.
 fn material_for(
     look: &ShaderLook,
     cache: &mut ShaderLookCache,
     materials: &mut Assets<ShaderMaterial>,
     asset_server: &AssetServer,
 ) -> Handle<ShaderMaterial> {
-    if look.unshared {
-        return materials.add(shader_material(look, asset_server));
-    }
-    let key = look.key();
-    if let Some(handle) = cache.0.get(&key) {
-        return handle.clone();
-    }
-    let handle = materials.add(shader_material(look, asset_server));
-    cache.0.insert(key, handle.clone());
-    handle
+    cache.resolve(look, materials, |l| shader_material(l, asset_server))
 }
 
 /// `On<Add, ShaderLook>` — the moment intent appears, give it a material.
@@ -156,18 +139,6 @@ fn rebind_changed_shader_look(
     }
 }
 
-/// Drop cached materials no live look refers to any more (a twin reload / scene
-/// swap leaves a dead terrain's whole band set behind, each entry pinning its
-/// derived-map textures). Only runs once the cache is implausibly large, so the
-/// steady state pays nothing.
-fn sweep_shader_look_cache(mut cache: ResMut<ShaderLookCache>, looks: Query<&ShaderLook>) {
-    if cache.0.len() <= CACHE_SWEEP_AT {
-        return;
-    }
-    let live: HashSet<ShaderLookKey> = looks.iter().map(|l| l.key()).collect();
-    cache.0.retain(|k, _| live.contains(k));
-}
-
 /// Wire the `ShaderLook` binder into an app. Called by
 /// [`LuncoRenderPlugin`](crate::LuncoRenderPlugin).
 ///
@@ -186,7 +157,10 @@ pub(crate) fn build(app: &mut App) {
     bevy::asset::AssetApp::init_asset::<Shader>(app);
     app.init_resource::<ShaderLookCache>()
         .add_observer(bind_shader_look)
-        .add_systems(Update, (rebind_changed_shader_look, sweep_shader_look_cache));
+        .add_systems(
+            Update,
+            (rebind_changed_shader_look, sweep_look_cache::<ShaderLook>),
+        );
 }
 
 #[cfg(test)]

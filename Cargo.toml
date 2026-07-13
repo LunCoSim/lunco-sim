@@ -49,7 +49,6 @@ members = [
     "crates/lunco-scripting",
     "crates/lunco-viz",
     "crates/lunco-canvas",
-    "crates/lunco-cache",
     "crates/lunco-theme",
     "crates/lunco-storage",
     "crates/lunco-workspace",
@@ -69,9 +68,9 @@ members = [
 ]
 # Bare `cargo build`/`check`/`test` (no `-p`/`--workspace`) operates on just the
 # two app crates and their dependency closure. This skips workspace members that
-# no binary reaches — lunco-attributes, lunco-cache, lunco-obc, lunco-telemetry,
-# and the feature-gated lunco-networking — so default builds don't compile dead
-# weight. Use `--workspace` to include everything (e.g. CI lint/test sweeps).
+# no binary reaches — lunco-attributes, lunco-obc, lunco-telemetry, and the
+# feature-gated lunco-networking — so default builds don't compile dead weight.
+# Use `--workspace` to include everything (e.g. CI lint/test sweeps).
 #
 # `lunco-sandbox-server` is intentionally NOT here — for LEANNESS, not
 # correctness: built via `-p lunco-sandbox-server`, Cargo resolves
