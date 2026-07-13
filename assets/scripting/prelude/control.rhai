@@ -49,6 +49,10 @@ fn focus(target)               { cmd("FocusTarget", #{ target: target }) }
 /// Chase a target with a spring-arm follow cam (rides behind/above it).
 fn follow(target)              { cmd("FollowTarget", #{ target: target }) }
 
+/// Capture a screenshot from the active scene camera. For a vessel-mounted
+/// photo, see `photo_from(vessel)` in `science.rhai`.
+fn photo()                    { cmd("CaptureFromCamera") }
+
 // World-time transport — pause/resume the WHOLE simulation (tick + physics) and
 // set its speed. `pause()` freezes everything (great right after restart_scene()
 // to inspect a scene without it running away); `set_rate(4.0)` = 4× realtime.

@@ -39,6 +39,9 @@ pub mod commands;
 pub use commands::*;
 pub mod screenshot;
 pub use screenshot::*;
+/// Science instrument tools (behaviour-tree `execute()` handlers) — the
+/// `take_photo` tool that a patrol waypoint's arrival action fires.
+pub mod science;
 pub mod recording;
 pub use recording::*;
 
@@ -488,6 +491,10 @@ impl Plugin for LunCoAvatarPlugin {
         app.init_resource::<MouseSensitivity>()
            .init_resource::<CameraDefaults>()
            .init_resource::<SurfaceModeThreshold>();
+        // Register the avatar-crate's science instrument tools (e.g.
+        // `science::take_photo`) into the global `lunco_tools` registry so the
+        // behaviour-tree tool dispatcher (`lunco-tools-bevy`) can run them.
+        science::register_science_tools();
         app.add_plugins(InputManagerPlugin::<UserIntent>::default());
         app.add_observer(on_user_intent);
         // Secondary observers on the SAME verbs — the authority-bookkeeping leg,
@@ -2303,6 +2310,12 @@ pub fn avatar_raycast_possession(
     if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) { return; }
     // Alt-click is likewise reserved for the editor.
     if keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]) { return; }
+    // Ctrl-click appends a patrol checkpoint (`on_scene_click_checkpoint`, the
+    // third global `Pointer<Click>` observer). Both observers see the same click
+    // — `propagate(false)` stops bubbling, not sibling observers — so without
+    // this guard every checkpoint placement would ALSO possess/follow whatever
+    // the ray hit, yanking the camera onto the terrain.
+    if keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]) { return; }
     // Mid-drag on a transform gizmo: don't flip the camera under the user.
     if drag_mode_active.active { return; }
     // Spawn placement tool armed: clicks place objects, don't possess.
@@ -3451,6 +3464,7 @@ fn sync_profile(
 // called from LunCoAvatarPlugin::build().
 register_commands!(
     on_capture_screenshot,
+    on_capture_from_camera,
     on_toggle_recording,
     on_start_recording,
     on_stop_recording,

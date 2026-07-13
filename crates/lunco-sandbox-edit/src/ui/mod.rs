@@ -18,6 +18,14 @@ pub mod connection_canvas;
 pub mod usd_prim_tree;
 pub mod usd_params;
 pub mod usd_mount;
+/// Interactive checkpoint authoring — Ctrl+LMB append + right-click context
+/// menu, routing through the existing `SetAutopilotBehavior`/`EngageAutopilot`
+/// commands (no new journal domain).
+pub mod checkpoint_click;
+/// Command Deck panel — the read+control surface for the selected vessel
+/// (possession status, autopilot engage/disengage, checkpoint list). Pure
+/// reader: every mutation dispatches a typed command (§4.2).
+pub mod command_deck;
 
 /// Schedule slot (in `Update`) for the UI *view-model* producers — the
 /// change-driven systems that derive render-ready state into resources for the
@@ -49,6 +57,7 @@ impl Plugin for SandboxEditUiPlugin {
             .register_panel(terrain_tools::ToolsPanel)
             .register_panel(connection_canvas::UsdCanvasPanel)
             .register_panel(usd_prim_tree::UsdPrimTreePanel)
+            .register_panel(command_deck::CommandDeck)
             .register_panel(ViewportPanel)
             // Order matters for auto-activation — View first so it's
             // the default when the rover binary boots.
@@ -198,8 +207,30 @@ impl Plugin for SandboxEditUiPlugin {
             usd_mount::produce_usd_mount_view.in_set(ViewModelSet),
         );
 
+        // Command Deck view-model: selection + possession + behaviour-spec
+        // readout for the currently-selected vessel. Cheap O(1) single-entity
+        // lookups each `Update` (the sanctioned live-readout exception to §7),
+        // so no change-gate — same shape as the avatar status producer.
+        app.init_resource::<command_deck::CommandDeckView>().add_systems(
+            Update,
+            command_deck::populate_command_deck_view.in_set(ViewModelSet),
+        );
+
         // Debug-viz settings menu rows (joint + wheel-force gizmos).
         app.add_systems(Startup, register_debug_viz_settings);
+
+        // Interactive checkpoint authoring: Ctrl+LMB appends a waypoint to the
+        // selected vessel's patrol (`AppendCheckpoint`); right-click opens an
+        // egui popup (`CheckpointContextMenu` → `draw_checkpoint_context_menu`).
+        // Both route through the EXISTING `SetAutopilotBehavior` /
+        // `EngageAutopilot` typed commands — no new domain (§4.2).
+        app.init_resource::<checkpoint_click::CheckpointContextMenu>();
+        checkpoint_click::register_all_commands(app);
+        app.add_observer(checkpoint_click::on_scene_click_checkpoint);
+        app.add_systems(
+            bevy_egui::EguiPrimaryContextPass,
+            checkpoint_click::draw_checkpoint_context_menu,
+        );
 
         app.add_observer(on_select_progress);
         app.add_observer(on_spawn_progress);

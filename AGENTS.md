@@ -25,7 +25,7 @@ LunCoSim is a digital twin of the solar system built with the Bevy engine. It fo
 - **Large-scale space**: big_space (0.12.0) — f64 floating-origin.
 - **Input Management**: leafwing-input-manager (0.20.0)
 - **Modelica**: `rumoca` (consumed from its `main` branch) compiles `.mo` → DAE; runtime in `lunco-modelica`, Bevy cosim bridge in `lunco-cosim`.
-- **Scripting**: **rhai** is the canonical embedded language (`lunco-scripting`; tool layer `lunco-tools` + `lunco-tools-rhai`). Python is **one-shot eval only** (`RunPython`); Lua/Luau is a *reserved, unimplemented* language id — do not write docs/code implying it works.
+- **Scripting**: **rhai** is the canonical embedded language (`lunco-scripting`; tool layer `lunco-tools` + `lunco-tools-rhai` for script-binding + `lunco-tools-bevy` for behaviour-tree `run_tool` action dispatch). Python is **one-shot eval only** (`RunPython`); Lua/Luau is a *reserved, unimplemented* language id — do not write docs/code implying it works.
 - **Networking**: **lightyear** (WebTransport) in `lunco-networking` — shipped: server-authoritative sync, client prediction + Hermite smoothing + reconciliation, RBAC relay gating, headless `--no-ui --host` server.
 - **3D/USD**: `openusd` (consumed from `main`); native USD mesh + trimesh colliders via `lunco-usd*` crates.
 

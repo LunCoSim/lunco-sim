@@ -6,6 +6,11 @@ edition = "2021"
 [dependencies]
 bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }
+# The `run_tool` leaf EMITS `ToolFired`; this crate's plugin guard-adds the
+# dispatcher that CONSUMES it, so the producer and consumer are never wired
+# apart (a `run_tool` leaf firing into a world with no dispatcher is a silent
+# no-op — the bug this coupling exists to prevent).
+lunco-tools-bevy = { path = "../lunco-tools-bevy" }
 # The driving BEHAVIOUR is a lunco-behavior tree (sequence waypoints, when-to-brake
 # — the GLUE); its leaves call this crate's Rust steering math. Dependency-free BT
 # kernel, so the autopilot is engine/rhai-free.

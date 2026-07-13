@@ -329,6 +329,16 @@ pub fn build_world_engine() -> Engine {
         bridge_core::cmd(&RhaiBuilder, name.as_str(), serde_json::json!({}))
     });
 
+    // to_json(map) -> string — serialize a rhai map to a JSON string. Lets a
+    // script author a structured value (e.g. a [`BehaviorSpec`] patrol) as a
+    // native `#{...}` and feed it to a command that takes a JSON *string* field
+    // (`SetAutopilotBehavior.spec_json`) — keeping the Rust core free of any
+    // domain-specific authoring (§4.2: one input shape, one entry point).
+    engine.register_fn("to_json", |m: Map| -> ImmutableString {
+        let v = map_to_json(m);
+        serde_json::to_string(&v).unwrap_or_else(|_| "null".into()).into()
+    });
+
     // world_pos(id) -> [x, y, z] absolute world space, or () on miss.
     engine.register_fn("world_pos", |id: i64| -> Dynamic {
         match bridge_core::world_pos(id as u64) {

@@ -6938,6 +6938,7 @@ dependencies = [
  "lunco-core",
  "lunco-cosim",
  "lunco-time",
+ "lunco-tools-bevy",
  "quick-xml 0.39.4",
  "serde",
  "serde_json",
@@ -6963,6 +6964,7 @@ dependencies = [
  "lunco-settings",
  "lunco-theme",
  "lunco-time",
+ "lunco-tools-bevy",
  "lunco-workbench",
  "serde",
 ]
@@ -7420,6 +7422,7 @@ dependencies = [
  "big_space",
  "lunco-api",
  "lunco-assets",
+ "lunco-autopilot",
  "lunco-avatar",
  "lunco-canvas",
  "lunco-celestial",
@@ -7444,6 +7447,7 @@ dependencies = [
  "lunco-workbench",
  "lunco-workspace",
  "serde",
+ "serde_json",
  "transform-gizmo-bevy",
 ]
 
@@ -7602,6 +7606,15 @@ dependencies = [
 [[package]]
 name = "lunco-tools"
 version = "0.1.0"
+
+[[package]]
+name = "lunco-tools-bevy"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lunco-core",
+ "lunco-tools",
+]
 
 [[package]]
 name = "lunco-tools-rhai"
