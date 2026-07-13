@@ -132,10 +132,12 @@ pub struct ModelicaEngine {
     /// call. Measured at ~80 ms/frame for a class with a deep MSL chain
     /// (a static model card recomputed from scratch 60×/s). rumoca's
     /// internal annotation memoisation does NOT eliminate these repeated
-    /// ClassDef clones, so we cache the merged result here. Cleared on
-    /// any AST install (icon graphics can change with the source) —
-    /// same lifecycle as `class_uri_misses`.
-    icon_cache: HashMap<String, Option<crate::annotations::Icon>>,
+    /// ClassDef clones, so we cache the merged result here. Invalidated on
+    /// any AST install (icon graphics can change with the source) — via
+    /// [`crate::icon_memo::invalidate_source_memos`], which reaches the
+    /// paint-side bitmap-texture memo too. This field must NOT be cleared
+    /// directly: clearing it alone is what left those textures stale.
+    icon_cache: crate::icon_memo::SourceMemo<crate::annotations::Icon>,
     /// Documents whose async parse is currently in flight. Prevents
     /// double-spawning the same parse while a worker is mid-flight.
     /// Inserted by `mark_pending`; cleared by the worker on completion.
@@ -165,7 +167,7 @@ impl ModelicaEngine {
             uri_for_doc: HashMap::new(),
             class_to_uri: HashMap::new(),
             class_uri_misses: HashSet::new(),
-            icon_cache: HashMap::new(),
+            icon_cache: crate::icon_memo::SourceMemo::default(),
             pending: HashSet::new(),
             completed: Vec::new(),
             parse_diags: HashMap::new(),
@@ -184,8 +186,10 @@ impl ModelicaEngine {
         // A newly-installed AST can make a previously-unresolvable class
         // resolvable — drop the negative cache so `class_def` retries.
         self.class_uri_misses.clear();
-        // Icon graphics can change with the source — drop the icon cache.
-        self.icon_cache.clear();
+        // Icon graphics — and the bitmap files they reference — can change with the
+        // source. ONE signal invalidates every derived memo, here and on the paint
+        // side; see `crate::icon_memo`.
+        crate::icon_memo::invalidate_source_memos();
         let prefix = ast.within.as_ref().map(|w| w.to_string()).unwrap_or_default();
         for class_key in ast.classes.keys() {
             let qualified = if prefix.is_empty() {
@@ -285,7 +289,7 @@ impl ModelicaEngine {
         let uri = self.uri(doc_id);
         self.uri_for_doc.entry(doc_id).or_insert_with(|| uri.clone());
         self.class_uri_misses.clear();
-        self.icon_cache.clear();
+        crate::icon_memo::invalidate_source_memos();
         let _ = self.session.add_document(&uri, source);
     }
 
@@ -365,11 +369,11 @@ impl ModelicaEngine {
         // per-base ClassDef clones in `extract_icon_via_engine` are far
         // too costly to repeat every frame for a static class. Cleared
         // on AST install so edits still reflect.
-        if let Some(hit) = self.icon_cache.get(qualified) {
-            return hit.clone();
+        if let Some(hit) = self.icon_cache.peek(qualified) {
+            return hit;
         }
         let icon = crate::annotations::extract_icon_via_engine(qualified, self);
-        self.icon_cache.insert(qualified.to_string(), icon.clone());
+        self.icon_cache.insert(qualified, icon.clone());
         icon
     }
 
@@ -416,9 +420,10 @@ impl ModelicaEngine {
                 count += 1;
             }
         }
-        // New library classes may resolve previously-missing lookups.
+        // New library classes may resolve previously-missing lookups — and new
+        // library *assets* may resolve previously-missing bitmaps.
         self.class_uri_misses.clear();
-        self.icon_cache.clear();
+        crate::icon_memo::invalidate_source_memos();
         count
     }
 

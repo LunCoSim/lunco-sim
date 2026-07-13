@@ -119,13 +119,15 @@ use crate::ModelicaModel;
 /// 5b.1 migration. Once step 5c retires the legacy `ModelicaDocumentRegistry`
 /// / `ModelTabs` / the registry-by-doc lookup triad, this observer
 /// becomes the sole population point for the Workspace's document list.
-/// Wholesale-clear the canvas paint-side port-icon cache when any
-/// doc changes. Cheap on rumoca's content-hash cache; the next
-/// paint refills.
-fn invalidate_port_icon_cache_on_doc_changed(
-    _trigger: On<lunco_doc_bevy::DocumentChanged>,
-) {
-    crate::ui::panels::canvas_diagram::invalidate_port_icon_cache();
+/// Invalidate every source-derived memo when any doc changes — the merged icons in
+/// `ModelicaEngine` and the decoded bitmap textures on the paint side.
+///
+/// Costs one atomic increment; the memos drop themselves lazily on next access, so
+/// a change nobody paints after is free. This used to clear a paint-side port-icon
+/// cache that was, in fact, dead — while the bitmap textures it *should* have been
+/// clearing were never invalidated at all. See [`crate::icon_memo`].
+fn invalidate_source_memos_on_doc_changed(_trigger: On<lunco_doc_bevy::DocumentChanged>) {
+    crate::icon_memo::invalidate_source_memos();
 }
 
 /// Per-doc generation watermark for the
@@ -837,11 +839,11 @@ impl Plugin for ModelicaUiPlugin {
             .add_observer(sync_workspace_on_doc_closed)
             .add_observer(sync_workspace_on_doc_saved)
             // Coarse cache invalidation: any doc edit can shift
-            // cross-file inheritance chains, so the paint-hot
-            // port-icon cache flushes wholesale. Re-fills lazily
-            // on next paint via rumoca's content-hash cache —
-            // unchanged classes return the same icon instantly.
-            .add_observer(invalidate_port_icon_cache_on_doc_changed)
+            // cross-file inheritance chains, so every source-derived
+            // memo flushes wholesale. Re-fills lazily on next paint
+            // via rumoca's content-hash cache — unchanged classes
+            // return the same icon instantly.
+            .add_observer(invalidate_source_memos_on_doc_changed)
             // Cross-truth rule R4: close tabs drilled into a removed
             // class. Watermark resource keeps the observer O(new
             // changes) per fire.

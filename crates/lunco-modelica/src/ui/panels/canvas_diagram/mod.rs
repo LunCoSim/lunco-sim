@@ -56,7 +56,6 @@ mod ops;
 mod panel;
 pub use theme::CanvasThemeSnapshot;
 pub use panel::CanvasDiagramPanel;
-pub(crate) use panel::invalidate_port_icon_cache;
 // `__register_on_auto_arrange_diagram` is the registrar `#[on_command]` generates
 // next to the handler; `register_commands!` in `ui::commands` names the observer by
 // path, so the generated helper has to travel with it through this re-export.

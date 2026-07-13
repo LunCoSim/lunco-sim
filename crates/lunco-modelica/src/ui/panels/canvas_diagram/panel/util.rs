@@ -1,26 +1,18 @@
-//! Utility helpers and shared caches for the Diagram Panel.
+//! Utility helpers for the Diagram Panel.
 
-use bevy::prelude::*;
-use crate::annotations::Icon;
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 
 /// Wall-clock timestamp of the most recent `apply_ops` call. Used
 /// by the post-Add window tracker in the panel render to log every
 /// frame for ~2 seconds after each Add.
 pub(crate) static LAST_APPLY_AT: Mutex<Option<web_time::Instant>> = Mutex::new(None);
 
-/// Process-shared cache of resolved port-connector icons.
-/// Memoises `qualified_class → Option<Icon>` across all frames.
-pub(crate) fn port_icon_cache() -> &'static Mutex<HashMap<String, Option<Icon>>> {
-    static CACHE: OnceLock<Mutex<HashMap<String, Option<Icon>>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// Clear the process-shared port-icon cache.
-pub(crate) fn invalidate_port_icon_cache() {
-    port_icon_cache().lock().expect("port_icon_cache poisoned").clear();
-}
+// The process-shared `port_icon_cache` that used to live here is GONE. It had no
+// producer and no consumer — nothing ever read it and nothing ever inserted into
+// it; its only caller was its own `invalidate`, wired to a `DocumentChanged`
+// observer that dutifully cleared a map which was always empty. Port icons resolve
+// through `ModelicaEngine::icon_for`, which memoises them properly (see
+// `crate::icon_memo`).
 
 /// Mark a phase in the render loop for tracing.
 pub(crate) fn mark(label: &'static str, t: &mut web_time::Instant, log: &mut Vec<(&'static str, f64)>) {

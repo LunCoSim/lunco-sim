@@ -101,6 +101,13 @@ pub mod diagram;
 /// produces structs ready for the canvas renderer.
 pub mod annotations;
 
+/// One invalidation signal for every memo derived from Modelica source — the
+/// engine's merged icons and the paint side's decoded bitmap textures. Before it,
+/// three memos were invalidated by three unrelated mechanisms and the bitmap cache
+/// by none, so a missing asset was remembered as missing for the life of the
+/// process.
+pub mod icon_memo;
+
 /// egui painter for the typed graphics produced by [`annotations`].
 /// Renders `Rectangle`, `Line`, `Polygon`, and `Text` directly into a
 /// destination screen rect, mapping Modelica diagram coordinates

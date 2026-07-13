@@ -1027,26 +1027,34 @@ fn texture_for_bitmap(
     ctx: &egui::Context,
     filename: &str,
 ) -> Option<egui::TextureHandle> {
-    use std::collections::HashMap;
+    use crate::icon_memo::SourceMemo;
     use std::sync::{Mutex, OnceLock};
-    // The cache stores `Option<TextureHandle>` so a failed load is
-    // remembered and not retried every frame (failure is usually a
-    // missing asset, not a transient error).
-    static CACHE: OnceLock<Mutex<HashMap<String, Option<egui::TextureHandle>>>> =
-        OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Ok(map) = cache.lock() {
-        if let Some(slot) = map.get(filename) {
-            return slot.clone();
+    // The memo stores `Option<TextureHandle>` so a failed load is remembered and not
+    // retried every frame (failure is usually a missing asset, not a transient
+    // error) — and it is a `SourceMemo` so that remembered failure is DROPPED when
+    // the library changes. It previously had no invalidation of any kind: a bitmap
+    // missing at first paint stayed blank for the life of the process, which is the
+    // state every MSL bitmap is in on wasm (the bundle ships no `Resources/`).
+    static CACHE: OnceLock<Mutex<SourceMemo<egui::TextureHandle>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(SourceMemo::default()));
+    if let Ok(mut memo) = cache.lock() {
+        if let Some(slot) = memo.peek(filename) {
+            return slot;
         }
     }
 
-    let bytes = load_bitmap_bytes(filename)?;
+    let Some(bytes) = load_bitmap_bytes(filename) else {
+        // Remember the miss — but as a SourceMemo entry, so a library reload retries.
+        if let Ok(mut memo) = cache.lock() {
+            memo.insert(filename, None);
+        }
+        return None;
+    };
     let img = match image::load_from_memory(&bytes) {
         Ok(i) => i.to_rgba8(),
         Err(_) => {
-            if let Ok(mut map) = cache.lock() {
-                map.insert(filename.to_string(), None);
+            if let Ok(mut memo) = cache.lock() {
+                memo.insert(filename, None);
             }
             return None;
         }
@@ -1066,8 +1074,8 @@ fn texture_for_bitmap(
         color_img,
         egui::TextureOptions::LINEAR,
     );
-    if let Ok(mut map) = cache.lock() {
-        map.insert(filename.to_string(), Some(handle.clone()));
+    if let Ok(mut memo) = cache.lock() {
+        memo.insert(filename, Some(handle.clone()));
     }
     Some(handle)
 }

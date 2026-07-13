@@ -15,8 +15,6 @@ use super::{CANVAS_DIAGRAM_PANEL_ID, CanvasDiagramState, active_doc_from_world_c
 use projection_sync::{trigger_projection_if_needed, poll_and_swap_projection};
 use render::render_diagram_canvas;
 
-pub(crate) use util::{invalidate_port_icon_cache};
-
 pub struct CanvasDiagramPanel;
 
 impl Panel for CanvasDiagramPanel {
