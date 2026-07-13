@@ -222,6 +222,7 @@ impl Plugin for LunCoScriptingPlugin {
         }
 
         app.register_type::<ScriptedModel>()
+           .add_observer(doc::on_remove_scripted)
            .register_type::<doc::ScriptLanguage>();
 
         let python_status = python::get_python_status();

@@ -498,12 +498,12 @@ command structs themselves in `crates/`, so it always matches the code. See the
  in the world is used as the parent — i.e. the `BigSpace` host
  stays put across reloads.
 
- Cleans up worker-side state too: sends `ModelicaCommand::Despawn`
- for every entity carrying a `ModelicaModel` (the Modelica worker
- drops its `steppers` / `cached_models` / `sim_streams` entries) and
- drops `ScriptRegistry::documents` entries for every `ScriptedModel`.
- Without this, repeated reloads accumulate stale steppers and parsed
- scripts indefinitely.
+ Cleans up worker-side state too: when scene entities are despawned,
+ reactive `On<Remove, T>` component observers registered in `lunco-modelica`
+ and `lunco-scripting` automatically send `ModelicaCommand::Despawn`
+ (for `ModelicaModel`) and remove the script document from `ScriptRegistry`
+ (for `ScriptedModel`). Without this, repeated reloads accumulate stale
+ steppers and parsed scripts indefinitely.
 
 - *defined in:* `crates/lunco-usd-sim/src/cosim.rs`
 

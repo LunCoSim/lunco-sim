@@ -58,7 +58,6 @@ pub fn handle_undo_input(
     keys: Res<ButtonInput<KeyCode>>,
     mut undo_stack: ResMut<UndoStack>,
     mut commands: Commands,
-    q_children: Query<&Children>,
     mut q_transforms: Query<&mut Transform>,
     mut q_pos: Query<&mut Position>,
     mut q_rot: Query<&mut Rotation>,
@@ -74,7 +73,7 @@ pub fn handle_undo_input(
 
         match action {
             UndoAction::Spawned { entity } => {
-                despawn_recursive(entity, &mut commands, &q_children);
+                commands.entity(entity).try_despawn();
                 info!("Undo: despawned entity {:?}", entity);
             }
             UndoAction::TransformChanged { entity, old_translation, old_rotation } => {
@@ -98,23 +97,6 @@ pub fn handle_undo_input(
             }
         }
         info!("Undo performed");
-    }
-}
-
-/// Recursively despawns an entity and all its children.
-fn despawn_recursive(
-    entity: Entity,
-    commands: &mut Commands,
-    q_children: &Query<&Children>,
-) {
-    if let Ok(children) = q_children.get(entity) {
-        let child_list: Vec<Entity> = children.iter().collect();
-        for child in child_list {
-            despawn_recursive(child, commands, q_children);
-        }
-    }
-    if commands.get_entity(entity).is_ok() {
-        commands.entity(entity).despawn();
     }
 }
 

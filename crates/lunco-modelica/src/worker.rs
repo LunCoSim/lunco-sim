@@ -1465,6 +1465,15 @@ pub struct ModelicaModel {
     pub resume_after_compile: bool,
 }
 
+pub fn on_remove_modelica(
+    trigger: On<Remove, ModelicaModel>,
+    channels: Res<ModelicaChannels>,
+) {
+    let entity = trigger.entity;
+    let _ = channels.tx.send(ModelicaCommand::Despawn { entity });
+    info!("[modelica] observer: sent Despawn to Modelica for entity {:?}", entity);
+}
+
 /// Sends `Step` commands for each active model.
 ///
 /// Runs in [`FixedUpdate`] using the fixed timestep delta. All models step with

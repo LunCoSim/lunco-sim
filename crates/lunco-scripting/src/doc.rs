@@ -198,6 +198,21 @@ pub struct ScriptedModel {
     pub outputs: HashMap<String, f64>,
 }
 
+pub fn on_remove_scripted(
+    trigger: On<Remove, ScriptedModel>,
+    q_scripted: Query<&ScriptedModel>,
+    mut script_registry: ResMut<crate::ScriptRegistry>,
+) {
+    let entity = trigger.entity;
+    if let Ok(sm) = q_scripted.get(entity) {
+        if let Some(raw_id) = sm.document_id {
+            if script_registry.documents.remove(&DocumentId::new(raw_id)).is_some() {
+                info!("[scripting] observer: removed Python script document {} for entity {:?}", raw_id, entity);
+            }
+        }
+    }
+}
+
 impl Default for ScriptLanguage {
     fn default() -> Self {
         Self::Python
