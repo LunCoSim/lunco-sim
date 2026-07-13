@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use big_space::prelude::*;
 
-use crate::big_space_setup::{SolarSystemRoot, EarthRoot, MoonRoot};
+use crate::big_space_setup::{SolarSystemRoot, EarthRoot, InertialAnchor, MoonRoot};
 use crate::ephemeris::EphemerisResource;
 use lunco_time::WorldTime;
 use crate::registry::{CelestialBody, CelestialBodyRegistry, CelestialReferenceFrame};
@@ -102,6 +102,43 @@ pub fn ephemeris_update_system(
     }
 }
 
+/// Keep each [`InertialAnchor`] co-located with its body's grid — **position
+/// only**.
+///
+/// The body grids rotate ([`body_rotation_system`]), which is right for the
+/// surface features parented to them and wrong for an orbit camera. This copies
+/// the body grid's `(CellCoord, translation)` onto the anchor and leaves the
+/// anchor's `rotation` at IDENTITY, giving a star-fixed frame that still follows
+/// the body through space.
+///
+/// Runs after `ephemeris_update_system` (which writes the pose being copied).
+/// Guarded writes: an unconditional write would dirty the Transform every frame
+/// on a paused clock and re-run propagation — the same re-rounding wobble
+/// `body_rotation_system` documents.
+pub fn sync_inertial_anchors(
+    q_frames: Query<(&CelestialReferenceFrame, &CellCoord, &Transform), Without<InertialAnchor>>,
+    mut q_anchors: Query<
+        (&InertialAnchor, &mut CellCoord, &mut Transform),
+        Without<CelestialReferenceFrame>,
+    >,
+) {
+    for (anchor, mut cell, mut tf) in q_anchors.iter_mut() {
+        let Some((_, src_cell, src_tf)) = q_frames
+            .iter()
+            .find(|(frame, _, _)| frame.ephemeris_id == anchor.ephemeris_id)
+        else {
+            continue;
+        };
+        if *cell != *src_cell {
+            *cell = *src_cell;
+        }
+        if tf.translation != src_tf.translation {
+            tf.translation = src_tf.translation;
+        }
+        // `tf.rotation` is deliberately NEVER written. That is the anchor.
+    }
+}
+
 /// Rotate each celestial body's Grid around its polar axis.
 /// Per big_space docs: "if you have a planet rotating and orbiting around
 /// its star... you can place the planet and all objects on its surface in
@@ -115,7 +152,7 @@ pub fn body_rotation_system(
 ) {
     for (mut tf, frame) in q_grids.iter_mut() {
         if let Some(desc) = registry.bodies.iter().find(|d| d.ephemeris_id == frame.ephemeris_id) {
-            if desc.rotation_rate_rad_per_day != 0.0 {
+            if desc.spins() {
                 // Shared with the geodesy math (`geo::body_rotation`) so
                 // rendered grids and comms/anchor positions cannot diverge.
                 let next = crate::geo::body_rotation(desc, world.epoch_jd).as_quat();

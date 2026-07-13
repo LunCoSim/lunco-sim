@@ -71,7 +71,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-bevy`** | Core visual bridge (`UsdBevyPlugin`): maps USD hierarchy, shapes, transforms, and `timeSamples` animation to Bevy entities/components. Owns composition/flattening (`compose.rs`, `flatten_stage`), USD `def Camera` translation + rover-mounted camera followers (`camera.rs`, `camera_mount.rs`), and the single-authority viewport-camera reconciler + `SetActiveCamera` switch (`camera_switch.rs`). |
 | **`lunco-usd-avian`** | Physics bridge (`UsdAvianPlugin`): maps `UsdPhysics` schemas (RigidBody, Colliders, all joint kinds + drive API) to Avian3D — the single home for joint construction. |
 | **`lunco-usd-sim`** | Simulation-schema bridge (`UsdSimPlugin`): intercepts specialized vehicle/cosim schemas (e.g., PhysX Vehicles) and maps them to LunCo models. |
-| **`lunco-materials`** | The one general self-describing `ShaderMaterial` (any `.wgsl` per-instance; params reflected from the shader's `struct Material`) for the USD rendering pipeline. |
+| **`lunco-materials`** | Shader appearance **intent**, render-free: `ShaderLook` (`.wgsl` path + open `dyn_params` + texture layers), the WGSL-reflected param schema, the CDLOD vertex attribute. Names no material type. |
 
 ---
 
@@ -97,7 +97,8 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/sandbox e
 | **`lunco-viz`** | Domain-agnostic visualization: `SignalRegistry`, LinePlots, and future 3D/Rerun bridges. |
 | **`lunco-canvas`** | Stateful 2D scene editor substrate for diagrams and annotation overlays. |
 | **`lunco-sandbox-edit`** | In-scene editing tools: spawn systems, transform gizmos, and inspector panels. |
-| **`lunco-render`** | Shared render-look configuration: the single source of truth for lunar sun shadows (and future exposure/AA/sky look settings). |
+| **`lunco-render`** | Appearance **intent**, render-free: `PbrLook`, `SceneCamera`, `WorldLabel`, sun/shadow look. Names `Mesh3d`, never `MeshMaterial3d`. |
+| **`lunco-render-bevy`** | The **only** crate that names `bevy_pbr`. Binds the intent (`PbrLook`/`ShaderLook`/`SceneCamera`/`WorldLabel`) to real materials & cameras; owns `ShaderMaterial`. Headless never adds it. |
 | **`lunco-web`** | Shared web-frontend boot library for wasm apps: streaming loader + `WebReadyPlugin` (signals the HTML loader on first paint). |
 
 ---
@@ -254,7 +255,7 @@ Physics bridge for OpenUSD (`UsdAvianPlugin`). Maps `UsdPhysics` schemas — rig
 Specialized simulation metadata bridge. Intercepts complex industry-standard vehicle schemas (like NVIDIA PhysX Vehicles) and substitutes them with optimized LunCo simulation models (e.g., Raycast wheels).
 
 **`lunco-materials`**
-Material library for the USD pipeline. Provides one general self-describing `ShaderMaterial`: any `.wgsl` runs per-instance, its parameters reflected from the shader's `struct Material` and authored from USD `primvars` (e.g. `solar_panel.wgsl`, `blueprint.wgsl`, `regolith.wgsl`). No bespoke Rust material type per look.
+Shader appearance **intent** — **render-free**. Holds `ShaderLook` (a `.wgsl` path + an open `dyn_params` map + named texture layers), the WGSL-reflected `ParamSchema` (parameter names/ranges/defaults are parsed from each shader's own `struct Material` — **none are hardcoded in Rust**, so adding a parameter is editing a shader), and the CDLOD geomorph vertex attribute. It names **no** material type and no render pipeline, so a domain crate may depend on it without linking `bevy_render`. The concrete `ShaderMaterial` it describes lives in `lunco-render-bevy`. See [architecture/shader-layers-and-params.md](architecture/shader-layers-and-params.md).
 
 ---
 
@@ -292,7 +293,10 @@ Domain-agnostic visualization framework. Collects simulation data into a `Signal
 In-scene editing toolkit for the 3D viewport. Implements click-to-place spawning, transform gizmos for manipulation, and inspector panels for real-time property editing during simulation assembly.
 
 **`lunco-render`**
-Shared render-look configuration. The single source of truth for lunar sun shadows, and the future home for exposure, anti-aliasing, and sky look settings, keeping render tuning out of individual app crates.
+Appearance **intent** — **render-free**. The vocabulary a domain crate uses to say what a thing should look like without naming a renderer: `PbrLook` (a plain surface as data — colour, roughness, metallic, emissive, alpha mode, texture channels), `SceneCamera`, `WorldLabel`, and the sun/shadow look settings. It names `Mesh3d` but **never `MeshMaterial3d`** — that one line is the whole rule.
+
+**`lunco-render-bevy`**
+The **only** crate that names `bevy_pbr`. Binds the intent above to real Bevy materials: `PbrLook` → `StandardMaterial`, `ShaderLook` → `ShaderMaterial` (the one general self-describing `AsBindGroup`, any `.wgsl` per-instance), plus `SceneCamera` → camera bundle, `WorldLabel` → billboard text, environment light and horizon shading. Headless simply never adds this plugin — which is why `--no-ui` links **no wgpu, no `bevy_render`, no `bevy_pbr`, no egui, no winit**. See [architecture/render-decoupling.md](architecture/render-decoupling.md).
 
 **`lunco-web`**
 Shared web-frontend boot library for the wasm apps. Provides the streaming loader (`web/lunco-boot.{js,css}`) plus `WebReadyPlugin`, which signals the HTML loader once Bevy paints its first frame.

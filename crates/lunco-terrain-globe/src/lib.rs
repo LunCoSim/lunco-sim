@@ -1,22 +1,39 @@
-//! Terrain generation, QuadSphere tiling, and collision for LunCoSim.
+//! Cube-sphere (**globe-scale**) tiling: the pure geometry spine.
 //!
-//! **VESTIGIAL — not wired. This is NOT the terrain system that runs.**
-//! `TerrainPlugin::build` registers ZERO systems (only `init_resource` +
-//! `register_type`), so nothing below ever executes: no tiles are generated, no
-//! LOD is selected, no colliders are built. The live LOD/terrain path is
-//! `lunco-terrain-core` / `lunco-terrain-surface` / `lunco-terrain-bake`, and the
-//! globe↔surface transition is NOT implemented here. Read this crate as an
-//! unfinished second attempt, not as a subsystem. Anything below describing
-//! behaviour describes intent.
+//! **This crate is a LIBRARY, not a subsystem — by design.** `TerrainPlugin::build`
+//! registers zero systems (only `init_resource` + `register_type`) because this
+//! crate owns no behaviour: it owns the cube→sphere projection
+//! ([`quad_sphere::cube_to_sphere`]), the camera-driven quadtree LOD selection
+//! ([`quad_sphere::subdivide_face`]), the tile mesh builder
+//! ([`create_quadsphere_tile_mesh`]), and the tile identity components
+//! ([`TerrainTile`], [`TileCoord`]).
 //!
-//! This crate provides:
-//! - **QuadSphere**: Cube-to-sphere projection and LOD subdivision
-//! - **Terrain Tiles**: Procedural mesh generation with height sampling
-//! - **Collision**: Avian3D integration for physics interaction
+//! **The systems that drive it live in [`lunco_celestial::globe_lod`]** —
+//! `update_globe_lod`, which is registered and runs every frame — because scene
+//! integration (spawn/despawn, grids, textures, appearance intent) needs the
+//! bodies, and `lunco-celestial` owns those. `lunco-usd-avian` also queries
+//! `TerrainTile`. So: **the tiles you see on a globe from orbit come from here.**
 //!
-//! Terrain is split into two layers:
-//! - **Layer 2 (Domain)**: Tile definitions, collision shapes (always loaded, server + client)
-//! - **Layer 3 (Visual)**: Mesh generation, rendering (feature-gated, client only)
+//! Do not confuse this with the **surface**-scale terrain
+//! (`lunco-terrain-core` / `-surface` / `-bake`): that is the CDLOD heightfield you
+//! drive a rover across. Two different scales, two different systems, both live.
+//! The globe↔surface handover is not implemented in either.
+//!
+//! (An older version of this header claimed the crate was "VESTIGIAL — not wired".
+//! That was wrong and would have cost someone the orbital view: the plugin having
+//! no systems is not the same as the code having no callers.)
+//!
+//! ## Known-dead within this crate
+//!
+//! [`PendingTile`], [`TerrainTileConfig`] and [`registry`]'s `TerrainMapRegistry` /
+//! `CustomMap` are leftovers of the abandoned in-crate tiling attempt: they are
+//! constructed (`init_resource`) but **never read** by anything, and no system
+//! populates them. `update_globe_lod` carries its own params on [`GlobeLod`].
+//! They are still `pub` and named across crate boundaries, so removing them is an
+//! API change, not a cleanup — see the staleness sweep report.
+//!
+//! [`lunco_celestial::globe_lod`]: https://docs.rs/lunco-celestial
+//! [`GlobeLod`]: https://docs.rs/lunco-celestial
 
 use bevy::prelude::*;
 

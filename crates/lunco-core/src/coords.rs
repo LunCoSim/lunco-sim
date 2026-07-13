@@ -226,9 +226,11 @@ mod tests {
     // A recentering-ENABLED grid: `Grid::new` sets `maximum_distance_from_origin
     // = cell_edge/2 + switching_threshold`, and `translation_to_grid` keeps a
     // point in cell 0 until it exceeds that. With threshold 0 ⇒ max_dist =
-    // edge/2 = 1000 m, so cells actually bin (the live WorldGrid uses 1e10 ⇒
-    // never bins ⇒ cell always 0, which is exactly what S2 will change). The
-    // within-cell offset is therefore bounded by edge/2 here.
+    // edge/2 = 1000 m, so cells actually bin, and the within-cell offset is
+    // bounded by edge/2 here. The live `WorldGrid` bins too, since its
+    // `switching_threshold` was corrected from 1e10 (⇒ cell always 0, the whole
+    // position in a raw f32 — 32 m of ULP at Earth–Moon distance) to 100 m —
+    // see `WorldGridConfig::default`.
     fn grid() -> Grid {
         Grid::new(EDGE, 0.0)
     }

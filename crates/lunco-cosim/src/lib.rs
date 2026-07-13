@@ -190,15 +190,13 @@ impl Plugin for CoSimPlugin {
                 .before(systems::propagate::CosimSet::Propagate),
         );
 
-        // TODO(render-decoupling): the range-sensor beam viz used to live here as
-        // a `Gizmos` system. It is gone: `lunco-cosim` is a render-free
-        // simulation crate, and naming `Gizmos`/`GizmoConfigStore` dragged
-        // `bevy_gizmos → bevy_render → wgpu + naga` into every build — including
-        // the `--no-ui` server and the wasm worker. The beam drawing is being
-        // re-homed into the render layer, which reads `RangeSensor` +
-        // `RangeSensor::visualize` (see `docs/architecture/render-decoupling.md`).
-        // The sensing itself (`update_range_sensors`, a `SpatialQuery` raycast)
-        // is unchanged and stays here.
+        // The range-sensor BEAM is drawn by `lunco-render-bevy`'s `sensor_beams`,
+        // not here: naming `Gizmos`/`GizmoConfigStore` dragged
+        // `bevy_gizmos → bevy_render → wgpu + naga` into every build, including the
+        // `--no-ui` server and the wasm worker. The SENSING (`update_range_sensors`,
+        // a `SpatialQuery` raycast) is simulation, must run headless, and stays here
+        // — the render layer reads its stored result and re-casts nothing.
+        // See `docs/architecture/render-decoupling.md`.
 
         app.add_systems(Update, systems::collider::sync_collider);
 

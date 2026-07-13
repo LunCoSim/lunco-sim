@@ -72,7 +72,10 @@ fn progress_file_path() -> PathBuf {
 /// → fresh empty ledger. Logged at debug so test runs don't spam.
 pub fn load_progress() -> ExampleProgress {
     let path = progress_file_path();
-    match std::fs::read_to_string(&path) {
+    // Through `lunco-storage`: a small user-progress ledger is exactly what the
+    // portable backend is for — a JSON file on native, a localStorage key on
+    // the web. With `std::fs` the web build silently lost the user's progress.
+    match crate::source_asset::read_text_sync(&path) {
         Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
             bevy::log::debug!(
                 "welcome_progress: couldn't parse {:?} ({e}) — starting fresh",
@@ -88,12 +91,16 @@ pub fn load_progress() -> ExampleProgress {
 /// and swallowed, since this is UX polish, not data-of-record.
 pub fn save_progress(progress: &ExampleProgress) {
     let path = progress_file_path();
+    #[cfg(not(target_arch = "wasm32"))]
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     match serde_json::to_string_pretty(progress) {
         Ok(s) => {
-            if let Err(e) = std::fs::write(&path, s) {
+            // `lunco-storage` write: atomic tmp+rename on native, localStorage
+            // on wasm. Same call, both targets — the web now actually persists
+            // "example opened" state across reloads instead of dropping it.
+            if let Err(e) = crate::source_asset::write_text_sync(&path, &s) {
                 bevy::log::warn!(
                     "welcome_progress: couldn't write {:?}: {e}",
                     path

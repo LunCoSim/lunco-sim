@@ -231,8 +231,9 @@ impl Default for CelestialEphemerisProvider {
 /// The `celestial-ephemeris` VSOP2013 wrappers (`heliocentric_position`) and
 /// the ELP/MPP02 moon (`geocentric_position_icrs`) all return ICRS/equatorial
 /// axes, while the `EphemerisProvider` contract — and everything downstream
-/// (`ecliptic_to_bevy`, the geodesy in `lunco_celestial::geo`, the registry's
-/// `polar_axis = +Y`) — is ecliptic J2000. Feeding equatorial vectors through
+/// (`ecliptic_to_bevy`, the geodesy in `lunco_celestial::geo`, and
+/// `BodyDescriptor::polar_axis`, which maps the IAU/WGCCRE pole out of the ICRF
+/// into exactly this frame) — is ecliptic J2000. Feeding equatorial vectors through
 /// unconverted tilts every "up"/"north" by 23.4°: measured at the Shackleton
 /// site anchor this rendered the sun ~45° below the horizon (pitch-black
 /// ground) instead of the real grazing ~1°.
@@ -354,6 +355,73 @@ mod frame_tests {
             best.1 > 1.0,
             "Shackleton should reach >1° sun elevation within a year; best {:.3}°",
             best.1
+        );
+    }
+
+    /// **P2 regression — the Moon's near side must actually face Earth.**
+    ///
+    /// The test above cannot see the bug that shipped: it checks Shackleton's
+    /// *elevation*, and at a pole elevation is **longitude-insensitive**. So a
+    /// rotation model with the correct RATE and NO PHASE (`W₀` absent — exactly
+    /// what this codebase had) passes it while the whole Moon sits 38.3° out of
+    /// true, ~1160 km of surface at the equator.
+    ///
+    /// This is the longitude-SENSITIVE check. The Moon is tidally locked, so the
+    /// **sub-Earth point** — where Earth is at the lunar zenith — must stay near
+    /// lunar longitude 0 forever. Optical libration in longitude swings it ±8°
+    /// (the orbit is eccentric, the spin is uniform), so bound it at 10°.
+    ///
+    /// Under the old model this reads ≈ 38° at J2000 and wanders — a hard fail.
+    #[test]
+    fn moon_near_side_faces_earth_across_epochs() {
+        use lunco_celestial::{body_fixed_to_geodetic, body_rotation};
+
+        let provider = CelestialEphemerisProvider::new();
+        let registry = CelestialBodyRegistry::default_system();
+        let moon = registry.bodies.iter().find(|b| b.ephemeris_id == 301).unwrap();
+
+        let mut worst = (0.0_f64, 0.0_f64);
+        // ~14 months at 11-day steps: samples every phase of the libration cycle.
+        for step in 0..40 {
+            let jd = 2_451_545.0 + step as f64 * 11.0;
+
+            // Earth as seen from the Moon, in the engine (ecliptic-Bevy) frame.
+            let to_earth = ecl_to_bevy(
+                provider.global_position(399, jd) - provider.global_position(301, jd),
+            )
+            .normalize();
+
+            // Into the Moon's body-fixed frame → the sub-Earth geodetic point.
+            let body_fixed = body_rotation(moon, jd).inverse() * to_earth;
+            let sub_earth = body_fixed_to_geodetic(body_fixed, 1.0);
+
+            // Longitude is the one the missing W₀ destroyed. (Latitude librates
+            // ±6.7° too, from the 1.54° pole tilt + the 5.1° orbit inclination.)
+            let lon = sub_earth.lon_deg;
+            assert!(
+                lon.abs() < 10.0,
+                "the sub-Earth point must stay near lunar lon 0 (tidal lock; \
+                 optical libration is ±8°), got {lon:.2}° at JD {jd:.1} — \
+                 ≈38° means the W₀ prime-meridian epoch went missing again"
+            );
+            assert!(
+                sub_earth.lat_deg.abs() < 10.0,
+                "sub-Earth latitude librates ±6.7°, got {:.2}° at JD {jd:.1}",
+                sub_earth.lat_deg
+            );
+            if lon.abs() > worst.1.abs() {
+                worst = (jd, lon);
+            }
+        }
+        println!("worst sub-Earth longitude: {:.2}° at JD {:.1}", worst.1, worst.0);
+
+        // And it must genuinely LIBRATE, not be pinned at 0 by a degenerate
+        // model that happens to satisfy the bound.
+        assert!(
+            worst.1.abs() > 1.0,
+            "the sub-Earth longitude should librate by several degrees; \
+             |max| was only {:.3}°",
+            worst.1.abs()
         );
     }
 }

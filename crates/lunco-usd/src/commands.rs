@@ -581,15 +581,77 @@ fn on_apply_usd_op(trigger: On<ApplyUsdOp>, mut commands: Commands) {
 // AttachComponent — build-from-parts (doc 48 §3.1)
 // ─────────────────────────────────────────────────────────────────────
 
+/// Apply a lowered [`UsdOp`] sequence to `doc` as **one journal change set** —
+/// i.e. one undo unit (H10).
+///
+/// A command that lowers to many primitive ops (`AttachComponent` → up to 8,
+/// `realign_component_ops` → 4) must not journal them as N independent entries:
+/// one undo would then peel off ONE op and leave the object half-attached. The
+/// journal's change-set API exists for exactly this
+/// ([`lunco_doc_bevy::JournalResource::change_set`] → `Journal::begin_change_set`),
+/// and the auto-recorder on the registry appends with `change_set: None`, so every
+/// entry recorded inside the closure inherits the ambient set with no per-op code.
+/// `UndoManager::take_undo_group` then undoes the whole group.
+///
+/// **Every multi-op USD handler should route through this** — including the
+/// `realign_component_ops` call sites in `lunco-sandbox-edit` (`ui/inspector.rs`,
+/// `ui/usd_mount.rs`), which still apply op-by-op.
+///
+/// Ops that are rejected are logged and skipped (unchanged semantics — a partial
+/// apply stays visible rather than hiding behind a rollback the journal can't
+/// see); the difference is that whatever *did* apply is now one atomic undo unit.
+/// Headless builds with no `JournalResource` simply apply the ops — nothing to
+/// group.
+///
+/// Returns `(applied, total)`.
+pub fn apply_ops_as_change_set(
+    world: &mut World,
+    doc: DocumentId,
+    label: impl Into<String>,
+    ops: Vec<UsdOp>,
+) -> (usize, usize) {
+    let total = ops.len();
+    // Clone the handle FIRST: `registry.apply` takes `&mut World`'s registry, so
+    // the journal resource can't stay borrowed across it.
+    let journal = world
+        .get_resource::<lunco_doc_bevy::JournalResource>()
+        .cloned();
+
+    let apply_all = |world: &mut World| {
+        let mut registry = world.resource_mut::<UsdDocumentRegistry>();
+        let mut applied = 0usize;
+        for op in ops {
+            match registry.apply(doc, op) {
+                Ok(_) => applied += 1,
+                Err(reject) => bevy::log::warn!(
+                    "[usd] {doc} op rejected ({applied}/{total} applied): {reject:?}"
+                ),
+            }
+        }
+        applied
+    };
+
+    let applied = match journal {
+        Some(j) => j.change_set(label, || apply_all(world)),
+        None => apply_all(world),
+    };
+    (applied, total)
+}
+
 /// Attach a component asset to a host body as a jointed child, deriving the
 /// joint anchor from the placement so it is authored once, not twice. Lowers to
-/// the primitive [`UsdOp`]s in [`crate::attach::attach_component_ops`] — each
-/// journals and inverts on its own, so undo peels the attach off op-by-op.
+/// the primitive [`UsdOp`]s in [`crate::attach::attach_component_ops`].
+///
+/// The whole lowering is applied inside **one journal change set**
+/// ([`apply_ops_as_change_set`]), so the attach is **one undo unit** — undo removes
+/// the part, its placement, its joint and the joint's anchors together. (It used to
+/// journal one entry per op: an undo peeled off a single op and left the object
+/// half-attached.)
 ///
 /// If any op is rejected (e.g. the host prim doesn't exist), the rest are still
-/// attempted and each logs its own rejection — the partial result is visible and
-/// undoable rather than silently half-applied behind a rollback the journal can't
-/// see. Validate the host exists before dispatching.
+/// attempted and each logs its own rejection — the partial result stays visible
+/// rather than silently half-applied behind a rollback the journal can't see — but
+/// it is now undone as a whole. Validate the host exists before dispatching.
 #[Command(default)]
 pub struct AttachComponent {
     /// Target document.
@@ -604,22 +666,10 @@ fn on_attach_component(trigger: On<AttachComponent>, mut commands: Commands) {
     let spec = trigger.event().spec.clone();
     commands.queue(move |world: &mut World| {
         let ops = crate::attach::attach_component_ops(&spec);
-        let n = ops.len();
-        let mut registry = world.resource_mut::<UsdDocumentRegistry>();
-        let mut applied = 0usize;
-        for op in ops {
-            match registry.apply(doc, op) {
-                Ok(_) => applied += 1,
-                Err(reject) => {
-                    bevy::log::warn!(
-                        "[AttachComponent] {doc} op rejected ({}/{n} applied): {reject:?}",
-                        applied
-                    );
-                }
-            }
-        }
+        let label = format!("Attach {} to {}", spec.name, spec.host_path);
+        let (applied, n) = apply_ops_as_change_set(world, doc, label, ops);
         bevy::log::info!(
-            "[AttachComponent] {doc}: attached `{}` to `{}` ({applied}/{n} ops)",
+            "[AttachComponent] {doc}: attached `{}` to `{}` ({applied}/{n} ops, one change set)",
             spec.name,
             spec.host_path
         );
@@ -688,6 +738,149 @@ pub fn is_usd_path(path: &str) -> bool {
             .and_then(|s| s.to_str()),
         Some("usda") | Some("usdc") | Some("usd")
     )
+}
+
+#[cfg(test)]
+mod change_set_tests {
+    //! **H10** — a multi-op command undoes as ONE unit.
+    //!
+    //! `AttachComponent` lowers to 8 `UsdOp`s. Each journals its own lossless
+    //! `(forward, inverse)` entry, so before this fix one undo peeled off ONE op
+    //! and left the part attached-but-unplaced (or jointed to nothing).
+    //! `ChangeSetId` was designed for exactly this and used by nobody.
+    use super::*;
+    use crate::attach::{attach_component_ops, AttachJoint, AttachSpec, Axis};
+    use crate::document::LayerId;
+    use lunco_doc_bevy::JournalResource;
+    use lunco_twin_journal::{AuthorTag, UndoManager, UndoScope};
+
+    const RIG: &str = "#usda 1.0\ndef Xform \"Rig\"\n{\n    def Xform \"Chassis\"\n    {\n    }\n}\n";
+
+    fn wheel_spec() -> AttachSpec {
+        AttachSpec::new(
+            LayerId::root(),
+            "/Rig/Chassis",
+            "Wheel",
+            "components/mobility/wheel.usda",
+            [0.5, -0.3, 1.2],
+            AttachJoint::Revolute { axis: Axis::X },
+        )
+    }
+
+    /// A journal-wired world holding one open USD document.
+    fn world_with_doc() -> (World, DocumentId, JournalResource) {
+        let mut world = World::new();
+        let journal = JournalResource::default();
+        world.insert_resource(journal.clone());
+
+        let mut registry = UsdDocumentRegistry::default();
+        // The A3 auto-bridge, done by hand (the system that does this in-app is
+        // `wire_usd_journal_handle`): the recorder is what journals each op.
+        registry.set_journal(journal.clone());
+        let doc = registry.allocate(
+            RIG.to_string(),
+            DocumentOrigin::writable_file("/tmp/lunco_h10_attach.usda"),
+        );
+        world.insert_resource(registry);
+        (world, doc, journal)
+    }
+
+    #[test]
+    fn attach_component_journals_one_change_set_and_undoes_as_one_unit() {
+        let (mut world, doc, journal) = world_with_doc();
+        let spec = wheel_spec();
+        let ops = attach_component_ops(&spec);
+        let n = ops.len();
+        assert!(n > 1, "the attach lowering is multi-op — that is the whole finding");
+
+        let (applied, total) =
+            apply_ops_as_change_set(&mut world, doc, "Attach Wheel", ops);
+        assert_eq!((applied, total), (n, n), "every op applies onto a valid host");
+
+        journal.with_read(|j| {
+            let entries: Vec<_> = j.entries_for_doc(doc).collect();
+            assert_eq!(entries.len(), n, "one journal entry per op (unchanged)");
+
+            // THE FIX: they all belong to ONE change set.
+            let cs = entries[0]
+                .change_set
+                .expect("the handler must open a change set — this is H10");
+            assert!(
+                entries.iter().all(|e| e.change_set == Some(cs)),
+                "every op of the command must join the SAME change set"
+            );
+            assert_eq!(
+                j.change_set_entries(cs).len(),
+                n,
+                "the change set groups all {n} ops"
+            );
+
+            // And the undo view takes the whole group: one undo, whole attach.
+            let mut um = UndoManager::new(AuthorTag::local_user());
+            for e in &entries {
+                um.record_local(e.id.clone());
+            }
+            let group = um.take_undo_group(&UndoScope::Document(doc), j);
+            assert_eq!(
+                group.len(),
+                n,
+                "one undo must peel off the WHOLE attach, not 1-of-{n}"
+            );
+            assert!(!um.can_undo(), "nothing left behind — the attach was one unit");
+        });
+    }
+
+    /// The un-grouped baseline: applying the same ops one-by-one through the
+    /// registry (what every multi-op site did before) journals `n` *independent*
+    /// undo units — one undo leaves the object half-attached. This is the bug the
+    /// test above asserts is gone, pinned so a regression is unambiguous.
+    #[test]
+    fn ungrouped_apply_undoes_one_op_at_a_time() {
+        let (mut world, doc, journal) = world_with_doc();
+        let ops = attach_component_ops(&wheel_spec());
+        let n = ops.len();
+        {
+            let mut registry = world.resource_mut::<UsdDocumentRegistry>();
+            for op in ops {
+                registry.apply(doc, op).expect("applies");
+            }
+        }
+        journal.with_read(|j| {
+            let entries: Vec<_> = j.entries_for_doc(doc).collect();
+            assert_eq!(entries.len(), n);
+            assert!(
+                entries.iter().all(|e| e.change_set.is_none()),
+                "no ambient change set ⇒ no grouping"
+            );
+            let mut um = UndoManager::new(AuthorTag::local_user());
+            for e in &entries {
+                um.record_local(e.id.clone());
+            }
+            assert_eq!(
+                um.take_undo_group(&UndoScope::Document(doc), j).len(),
+                1,
+                "ungrouped: one undo peels off ONE op — the half-applied state H10 describes"
+            );
+        });
+    }
+
+    /// No journal (headless) — the ops still apply; there is simply nothing to
+    /// group. The helper must not require a `JournalResource`.
+    #[test]
+    fn applies_without_a_journal() {
+        let mut world = World::new();
+        let mut registry = UsdDocumentRegistry::default();
+        let doc = registry.allocate(
+            RIG.to_string(),
+            DocumentOrigin::writable_file("/tmp/lunco_h10_nojournal.usda"),
+        );
+        world.insert_resource(registry);
+
+        let ops = attach_component_ops(&wheel_spec());
+        let n = ops.len();
+        let (applied, total) = apply_ops_as_change_set(&mut world, doc, "Attach Wheel", ops);
+        assert_eq!((applied, total), (n, n));
+    }
 }
 
 #[cfg(test)]

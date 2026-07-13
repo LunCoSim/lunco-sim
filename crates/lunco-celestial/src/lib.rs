@@ -14,6 +14,7 @@ use bevy::math::DVec3;
 use lunco_environment::{Gravity, GravityBody};
 
 pub mod ephemeris;
+pub mod iau;
 pub mod registry;
 pub mod geo;
 pub mod kepler;
@@ -44,6 +45,7 @@ pub mod commands;
 pub use commands::*;
 
 pub use ephemeris::*;
+pub use iau::*;
 pub use registry::*;
 pub use geo::*;
 pub use kepler::*;
@@ -213,6 +215,10 @@ impl Plugin for CelestialPlugin {
         app.add_systems(PreUpdate, (
             ephemeris_update_system,
             body_rotation_system,
+            // Star-fixed frames co-located with the rotating body grids (the
+            // orbit camera lives in one). After the ephemeris, whose pose it
+            // copies.
+            systems::sync_inertial_anchors,
             // Doc 43: site-anchored solar frame + geodetic/orbit placement.
             // `ephemeris_update_system` never touches the Solar Grid (id 10),
             // so the pin persists between anchor runs — no mid-chain window

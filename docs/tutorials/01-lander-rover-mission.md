@@ -430,7 +430,7 @@ further children of `MyLander`:
 ```
 
 Two things to notice. The hull's warm gold is just `displayColor` — that's
-multi-layer insulation foil, and a plain `StandardMaterial` renders it fine. The
+multi-layer insulation foil, and a plain PBR surface renders it fine. The
 wings, by contrast, set `materialType = "shader"` and point at a real WGSL shader,
 whose knobs are ordinary `primvars` you can tune per instance. Reach for a shader
 when the surface has *structure* (cells, busbars); reach for `displayColor` when it

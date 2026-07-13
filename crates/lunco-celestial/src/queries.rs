@@ -227,8 +227,10 @@ impl ApiQueryProvider for SolarPoseProvider {
 /// tick), which is where connectivity policy belongs. Keys are the authored
 /// [`node_key`] (class, else Name).
 ///
-/// params: none. returns `{ nodes:[key], adj:{ key:[peer,…] }, edges:[{a,b,range_m}] }`
+/// params: none. returns
+/// `{ nodes:[key], adj:{ key:[peer,…] }, edges:[{a,b,range_m,light_time_s}] }`
 /// — `adj` lists only UP (connected) links; `edges` is the deduped undirected set.
+/// `light_time_s` is the one-way propagation delay (1.28 s Earth↔Moon).
 pub struct LinksProvider;
 
 impl ApiQueryProvider for LinksProvider {
@@ -252,6 +254,7 @@ impl ApiQueryProvider for LinksProvider {
                 if key <= peer.peer {
                     edges.push(serde_json::json!({
                         "a": key, "b": peer.peer, "range_m": peer.range_m,
+                        "light_time_s": peer.light_time_s,
                     }));
                 }
             }

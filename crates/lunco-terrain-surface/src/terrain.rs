@@ -1426,7 +1426,6 @@ fn finish_dem_worker(
                         job.with_default_material,
                         built,
                         meshes.as_deref_mut(),
-                        materials.as_deref_mut(),
                     );
                 }
                 commands.entity(entity).remove::<DemWorkerJob>();

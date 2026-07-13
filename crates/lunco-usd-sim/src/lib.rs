@@ -160,10 +160,12 @@ impl Plugin for UsdSimPlugin {
                     .run_if(any_with_component::<ShouldBeDynamic>),
             ));
         // Self-healing watchdog: a USD prim that stays unprocessed forever means
-        // an unmet dependency is silently deadlocking setup (the wheel-shader bug:
-        // physics deferred until a render-only `ShaderMaterial` that never arrives
-        // headless). This turns that invisible deadlock into a loud `error!` AND
-        // recovers by building the physics without the missing visual.
+        // an unmet dependency is silently deadlocking setup (historically the
+        // wheel-shader bug: physics deferred until a render-only `ShaderMaterial`
+        // that never arrived headless — structurally impossible now that the waits
+        // are on render-free intent, see `NoRenderVisuals`). This turns that class
+        // of invisible deadlock into a loud `error!` AND recovers by building the
+        // physics without the missing visual.
         app.add_systems(Update, recover_stuck_usd_prims);
         // Wheel-joint lifecycle tether: joints are spawned DETACHED (they link two
         // bodies, they're nobody's child), so a doc-backed scene reload despawns
@@ -321,7 +323,7 @@ fn any_unprocessed_usd_sim(
 /// real deadlock and recovers. Every prim `process_usd_sim_prims` touches is
 /// marked `UsdSimProcessed` in the same frame; the *only* prims that linger are
 /// ones it deliberately defers waiting on a dependency (a wheel waiting for its
-/// `Mesh3d`/`ShaderMaterial`). Async scene loads settle in well under this.
+/// `Mesh3d` / `PbrLook` / `ShaderLook`). Async scene loads settle in well under this.
 const STUCK_PRIM_DEADLINE_SECS: f32 = 10.0;
 
 /// Stamped by [`recover_stuck_usd_prims`] on a prim that has been deferred too
@@ -405,10 +407,16 @@ fn process_usd_sim_prims(
     // sun under a bright-tuned camera blacked the viewport). `Option` so the
     // loader still works in a stripped app without `EnvironmentPlugin`.
     active_sun: Option<Res<lunco_environment::LunarSun>>,
-    // Present only on a headless (`--no-ui`) server with no GPU. When set, do NOT
-    // wait for visual components (`Mesh3d`/`ShaderMaterial`) before building wheel
-    // PHYSICS — the renderer never produces them, so waiting deadlocks the
-    // drivetrain and the server can't simulate/replicate a drivable rover.
+    // Inserted by a headless (`--no-ui`) boot. When set, do NOT wait for visual
+    // components (`Mesh3d` / `PbrLook` / `ShaderLook`) before building wheel
+    // PHYSICS, and skip the visual-only wheel split.
+    //
+    // Since the render decoupling all three of those ARE authored headless (they
+    // are render-free intent, not GPU handles), so this is no longer load-bearing
+    // against a deadlock — it is a cheap "don't bother with the visual half"
+    // switch. The historical bug it was added for (waiting on a `ShaderMaterial`
+    // only a GPU-side observer could mint) is structurally gone. See
+    // `NoRenderVisuals` and `docs/architecture/render-decoupling.md`.
     no_render_visuals: Option<Res<NoRenderVisuals>>,
 ) {
     // Whether visual components will ever arrive. `false` headless ⇒ build the

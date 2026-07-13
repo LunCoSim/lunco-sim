@@ -174,17 +174,47 @@ prediction that is only ever exercised on a 0 ms loopback is not validated at al
    typed op (author-once coherence, see [`21-domain-usd.md`](21-domain-usd.md)).
 3. **Match the plane to the data's lifetime.** Continuous → State (lossy). Authored →
    Journal (convergent). Immutable bytes → Content (CID). Don't cross them.
-4. **Fail open on interest, fail loud on certs.** A centerless peer sees everything;
-   a bad cert aborts rather than silently running insecure (headless `--no-ui` server).
+4. **Fail open on interest — but BOUNDED — and fail loud on certs.** A peer with no
+   view center sees up to `sync::FAIL_OPEN_CAP` bodies (it is the state of every
+   connect's first ~200 ms, and the permanent state of a free observer whose lossy
+   `ViewCenter` reports drop, so it must not mean "the whole scene"). A bad cert
+   aborts rather than silently running insecure (headless `--no-ui` server).
+5. **The wire is versioned, because the codec is positional.** `bincode` does not
+   fail on a layout mismatch — it decodes *wrong*. `HandshakeMsg.wire_version` is
+   checked before anything is applied; **bump `sync::WIRE_VERSION` on any field-layout
+   change** to a wire type. Appending a `SyncEnvelope` variant at the end is the one
+   compatible edit.
+6. **The ack is what was integrated, never what was received.** The host consumes one
+   buffered client input per *fixed* tick (`BufferedClientInputs::next_for_tick`) and
+   stamps the snapshot with the `seq` it actually ran. Acking `max(seq)` at receive
+   time (on the render clock) claimed K inputs applied when physics had run one — the
+   client then discarded predicted frames it had really simulated, and the divergence
+   scaled with input *variability*, i.e. it appeared on turns and stops.
+7. **An input-ack watermark is per (vessel, owner), and resets when the vessel changes
+   hands** (`AppliedInputSeq`). A gid-only watermark permanently disabled the next
+   owner's reconciliation.
 
-## 8. Open gaps
+## 8. Reconciliation: what is shipped, what is opt-in
+
+The shipped reconcile is **state-sync + smoothing**, not rollback — see
+[`specs/005-multiplayer-core`](../../specs/005-multiplayer-core/spec.md) FR-003 for the
+full statement. In one line: compare prediction-at-the-acked-seq against
+authority-at-that-seq, ease a genuine divergence into the present, snap on gross
+desync. **Deterministic input replay is built and opt-in** (`LUNCO_ROLLBACK=1`,
+`rollback_owned_prediction` + the `RollbackReplay` schedule), validated by the
+`rollback_probe` bin.
+
+**Desync is observable** (it was not, before): every client reconcile feeds
+`lunco_core::DivergenceStats` — per-body live error, worst-ever, and a rebaseline
+count — a sustained divergence logs `[desync]`, and the `net-diag` feature exports the
+gauge each second. A snap/teleport to authority is a *rebaseline* and is counted.
+
+## 9. Open gaps
 
 - **No dedicated design spec for the plane taxonomy existed before this doc** — it
   lived only in code comments. Keep this doc in step with `journal_plane.rs`.
-- Client-side **predicted-Dynamic body** divergence/desync is a known open issue
-  (predict-and-smooth reconciliation is partial). §6 is the shipped *mitigation* —
-  authoritative physics plus a presentational lead — not a full rollback solution;
-  the `rollback_probe` / `rollback_rover_probe` bins (`LUNCO_ROLLBACK`) are the
-  harness for the real one.
-- AOI interest is spatial only; **relevance by role/ownership** (e.g. always replicate
-  a possessed vessel regardless of distance) is not yet modelled.
+- Predicted-Dynamic divergence is *reconciled and now measured*, but the correction is
+  still a spring onto a delayed authoritative curve; contact-rich cases remain the
+  weakest regime.
+- AOI interest is spatial only; **relevance by role/ownership** beyond the owner's own
+  vessels (which are force-included) is not yet modelled.

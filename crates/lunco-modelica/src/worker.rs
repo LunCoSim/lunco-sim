@@ -539,6 +539,15 @@ fn apply_input_defaults_validated(
 }
 
 /// The background worker that owns the !Send SimSteppers and cached DAEs.
+///
+/// **Native only.** It is spawned on a real `std::thread` (see
+/// `ModelicaPlugin::build`) and reads/writes the model file on disk. The browser
+/// has neither: wasm dispatches the *same* commands through
+/// [`process_inline_command`] (inline, or in the `lunica_worker` Web Worker
+/// bundle) with the source carried in the message instead of read from a path.
+/// Gating it native-only is what keeps `std::fs` out of the wasm bundle rather
+/// than shipping calls that always `Err` in a browser.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
     let mut steppers: HashMap<Entity, (u64, String, SimStepper)> = HashMap::default();
     let mut current_sessions: HashMap<Entity, u64> = HashMap::default();

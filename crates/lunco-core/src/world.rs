@@ -67,12 +67,25 @@ pub struct WorldGridConfig {
     /// `FloatingOrigin` in units of this.
     pub cell_edge_length: f32,
     /// Distance from cell centre at which big_space switches the origin's cell.
+    ///
+    /// A **PRECISION** knob, not an extent knob. big_space derives
+    /// `maximum_distance_from_origin = cell_edge/2 + switching_threshold`, and
+    /// `translation_to_grid` short-circuits below it — returning cell `(0,0,0)`
+    /// and the *whole* position as a raw **f32** `Transform`. A large threshold
+    /// therefore disables cell binning outright: at 1e10 (the historical value)
+    /// every entity inside 1e10 m stayed in cell 0, so f32 ULP alone bounded
+    /// precision — **32 m at Earth–Moon distance**, 64 m at 1e9 m.
+    ///
+    /// Cells are `i64`, so a small threshold costs nothing (1 AU / 2 km ≈ 7.5e7
+    /// cells). Keep it at 100 m — the same value the root grid below has always
+    /// used, and the same rule `big_space_setup.rs` states for every celestial
+    /// grid: f32 ULP at `edge/2 + 100` = 1100 m is ≈ 0.12 mm.
     pub switching_threshold: f32,
 }
 
 impl Default for WorldGridConfig {
     fn default() -> Self {
-        Self { cell_edge_length: 2000.0, switching_threshold: 1.0e10 }
+        Self { cell_edge_length: 2000.0, switching_threshold: 100.0 }
     }
 }
 
@@ -308,6 +321,54 @@ fn audit_cells_under_non_grid_parents(
             "[cell-audit] `{name}` ({e:?}) carries CellCoord but its parent \
              `{parent_name}` ({parent:?}) is not a Grid — big_space will not \
              propagate it (doc 45 class 2)"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::math::DVec3;
+
+    /// The canonical `WorldGrid` must actually BIN into cells.
+    ///
+    /// `switching_threshold` bounds `maximum_distance_from_origin = edge/2 +
+    /// threshold`, below which `translation_to_grid` returns cell `(0,0,0)` and
+    /// the entire position as a raw **f32**. At the historical `1e10` that
+    /// covered the whole Earth–Moon system: everything sat in cell 0 and the
+    /// f32 `Transform` alone carried 3.8e8 m, where one ULP is **32 m**.
+    ///
+    /// This asserts the two properties that make the grid a high-precision
+    /// grid at all: a distant point gets a NON-ZERO cell, and its f32 remainder
+    /// stays inside `max_distance` (so its ULP is sub-millimetre).
+    #[test]
+    fn world_grid_bins_cells_at_lunar_distance() {
+        let cfg = WorldGridConfig::default();
+        let grid = Grid::new(cfg.cell_edge_length, cfg.switching_threshold);
+        let max_dist = (cfg.cell_edge_length / 2.0 + cfg.switching_threshold) as f64;
+
+        // Earth–Moon distance: the case the review measured 32 m of ULP at.
+        let p = DVec3::new(3.844e8, 0.0, 0.0);
+        let (cell, offset) = grid.translation_to_grid(p);
+
+        assert_ne!(
+            cell,
+            CellCoord::default(),
+            "a point at 3.8e8 m must NOT stay in cell (0,0,0) — a raw f32 there \
+             has 32 m of ULP (switching_threshold is a precision knob: {} m)",
+            cfg.switching_threshold
+        );
+        assert!(
+            (offset.abs().max_element() as f64) <= max_dist + 1e-3,
+            "the f32 remainder {offset:?} must stay within max_distance {max_dist} m"
+        );
+
+        // The decomposition is still exact: cells (i64) carry the magnitude.
+        let back = grid.grid_position_double(&cell, &Transform::from_translation(offset));
+        assert!(
+            (back - p).length() < 1e-2,
+            "cell+offset must reassemble to the input, off by {} m",
+            (back - p).length()
         );
     }
 }

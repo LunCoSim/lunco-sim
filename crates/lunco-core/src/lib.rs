@@ -62,7 +62,7 @@ pub use telemetry::Severity;
 pub use log::*;
 pub use commands::{
     Ack, ActiveCommandId, ClientCommandPolicy, CommandOutcome, CommandResults, EditIntent,
-    MarkClientLocalExt, Mutation, OpId, Reject, SessionId, SyncChannel,
+    MarkClientLocalExt, Mutation, OpId, Reject, SessionId, SpawnEntity, SyncChannel,
 };
 pub use markers::{
     ActuatorDrivenJoint, EmbeddedScenarioPath, EmbeddedScenarioSource, FallbackSceneLight,
@@ -77,13 +77,15 @@ pub use world::{
 pub use identity::Provenance;
 pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
 pub use session::{
-    authorize, AppliedInputSeq, ArticulatedLink, ArticulatedVehicle, ContactPredictable,
+    authorize, AppliedInputSeq, AppliedSlot, MAX_SEQ_JUMP, ArticulatedLink, ArticulatedVehicle, ContactPredictable,
+    BodyDivergence, DivergenceStats, PredictionKind,
     IncomingSnapshots, InputFrame,
     LocalSession,
     NetConnectRequest, NetDisconnectRequest,
     NetExcluded, NetReplicate, NetSpawn, PendingConnect, PendingConnectRequest,
     BufferedClientInputs, LocalDriveInput,
-    NetStatus, NetworkRole, NotPredictable, OwnedInputLog, OwnedLocally, PendingReplicatedSpawns,
+    NetStatus, NetworkRole, NotPredictable, OwnedInputLog, OwnedLocally, PendingCorrection,
+    PendingReplicatedSpawns,
     PossessionPolicy,
     PredictedDynamic, ReplicatedChassisMotion, ReplicatedSpawn, SessionRegistry, SessionProfiles, SkipContentStamp,
     SnapshotSample,
@@ -585,6 +587,11 @@ impl Plugin for LunCoCorePlugin {
         app.add_systems(FixedUpdate, wire_system.in_set(ControlDacSet))
            .add_systems(FixedUpdate, advance_sim_tick)
            .add_systems(PostUpdate, assign_global_entity_ids);
+        // Host: keep the per-gid input-ack watermarks keyed to their CURRENT owner.
+        // A re-possessed vessel must not keep acking the previous owner's `seq`
+        // stream — see `AppliedInputSeq`. Change-detected on the registry, so it
+        // costs nothing on a steady frame; always-on substrate (no wire dep).
+        app.add_systems(FixedFirst, sync_applied_seq_owners);
         // Rollback replay mirrors the DAC (and ONLY the DAC from this crate —
         // `advance_sim_tick` is deliberately excluded: a replayed tick must not
         // advance the simulation's tick counter).
@@ -629,11 +636,48 @@ pub(crate) fn register_core_resources(app: &mut App) {
         .init_resource::<session::BufferedClientInputs>()
         .init_resource::<session::LocalDriveInput>()
         .init_resource::<session::AppliedInputSeq>()
+        // Client desync gauge (review N3) — written by the reconcilers, read by the
+        // netcode diagnostics. Always-on substrate: the reconcilers run whether or
+        // not the wire feature is compiled in.
+        .init_resource::<session::DivergenceStats>()
         // Command-result substrate: result-reporting `#[on_command]` observers
         // require these to exist (same always-on rule as the session resources
         // above — see the AppliedInputSeq fix).
         .init_resource::<CommandResults>()
         .init_resource::<ActiveCommandId>();
+}
+
+/// HOST: re-key the input-ack watermarks against the authoritative ownership
+/// table whenever it changes (a claim, a release, a disconnect).
+///
+/// Without this, a vessel re-possessed by a second client keeps stamping the FIRST
+/// client's `seq` (e.g. 5000) into every snapshot. The new owner's client latches
+/// that as `last_reconciled`, then early-returns on every subsequent (lower) ack —
+/// its prediction is never reconciled again, and the rover drifts without bound.
+/// This is the failure users hit in ordinary play, with no attacker involved.
+///
+/// Also frees the slot of a vessel nobody owns any more, so the map tracks the
+/// live ownership table rather than growing across possession churn.
+pub fn sync_applied_seq_owners(
+    role: Res<session::NetworkRole>,
+    registry: Res<session::SessionRegistry>,
+    mut applied: ResMut<session::AppliedInputSeq>,
+    mut buffered: ResMut<session::BufferedClientInputs>,
+) {
+    if !role.is_host() || !registry.is_changed() {
+        return;
+    }
+    // Any gid whose owner changed loses BOTH its ack watermark and whatever the
+    // previous owner had queued but unintegrated — replaying A's inputs into B's
+    // vessel would be a control leak, not just a stale ack.
+    for gid in applied
+        .changed_owner_gids(&registry)
+        .into_iter()
+        .collect::<Vec<_>>()
+    {
+        buffered.clear_gid(gid);
+    }
+    applied.sync_owners(&registry);
 }
 
 /// Advance the discrete [`SimTick`] once per fixed step, *only while time is

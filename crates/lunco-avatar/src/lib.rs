@@ -37,11 +37,18 @@ use lunco_settings::{AppSettingsExt, ProfileSettings};
 
 pub mod commands;
 pub use commands::*;
-// `screenshot.rs` MOVED to `lunco-render-bevy` (2026-07-13): it named
+// `screenshot.rs` was DELETED here (2026-07-13, render decoupling): it named
 // `bevy::render::view::screenshot::Screenshot`, a genuine render-world readback with
-// no render-free form. `CaptureScreenshot` keeps its name and registration, now via
-// `LuncoRenderPlugin`. The HTTP/MCP path was never affected — `lunco-api`'s executor
-// special-cases the command by name and does the capture itself.
+// no render-free form, which made this crate link `bevy_render`.
+//
+// It was NOT re-homed into `lunco-render-bevy`. `CaptureScreenshot` has exactly ONE
+// implementation, in `lunco-api`'s executor, which must own it because raw-PNG mode
+// defers the HTTP response until `ScreenshotCaptured` fires. The copy here was a dead
+// duplicate: the executor matches the command by NAME and returns early, so this
+// crate's `#[Command]` + observer was unreachable, and it declared `CaptureScreenshot {}`
+// — no fields — while the real one takes `save_to_file`/`path`/`region`, so the
+// reflected schema that generates the MCP tool list was lying.
+// See docs/architecture/render-decoupling.md ("What has no intent form").
 pub mod recording;
 pub use recording::*;
 
@@ -3190,7 +3197,8 @@ fn sync_profile(
 
 // Wires the avatar's commands into `register_all_commands(app)`, called from
 // LunCoAvatarPlugin::build(). (`CaptureScreenshot` used to be first in this list; it
-// now registers from `lunco-render-bevy` — see the `screenshot` note at the top.)
+// was a dead duplicate and is gone — the one live registration is `lunco-api`'s.
+// See the `screenshot` note at the top of this file.)
 register_commands!(
     on_toggle_recording,
     on_start_recording,

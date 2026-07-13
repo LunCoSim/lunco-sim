@@ -454,10 +454,14 @@ pub fn spawn_trajectory_update_task(
                         
                         if view_copy.frame == TrajectoryFrame::BodyFixed {
                             if let Some(desc) = registry_arc.bodies.iter().find(|b| b.ephemeris_id == view_copy.reference_id) {
-                                let days_since_j2000 = jd - lunco_time::J2000_JD;
-                                let angle = days_since_j2000 * desc.rotation_rate_rad_per_day;
-                                let rot = bevy::math::DQuat::from_axis_angle(desc.polar_axis, angle);
-                                rel_pos = rot.inverse() * rel_pos;
+                                // Share `geo::body_rotation` — the IAU model — rather than
+                                // re-deriving a rotation here. This local copy was a THIRD
+                                // spelling of the body rotation, and it was doubly wrong:
+                                // no `W₀` phase (like the original `geo`) AND it spun about
+                                // the polar axis without first mapping body-fixed +Y onto
+                                // it, so body-fixed ground tracks were tilted as well as
+                                // rotated.
+                                rel_pos = crate::geo::body_rotation(desc, jd).inverse() * rel_pos;
                             }
                         }
 
@@ -475,10 +479,14 @@ pub fn spawn_trajectory_update_task(
                         
                         if view_copy.frame == TrajectoryFrame::BodyFixed {
                             if let Some(desc) = registry_arc.bodies.iter().find(|b| b.ephemeris_id == view_copy.reference_id) {
-                                let days_since_j2000 = jd - lunco_time::J2000_JD;
-                                let angle = days_since_j2000 * desc.rotation_rate_rad_per_day;
-                                let rot = bevy::math::DQuat::from_axis_angle(desc.polar_axis, angle);
-                                rel_pos = rot.inverse() * rel_pos;
+                                // Share `geo::body_rotation` — the IAU model — rather than
+                                // re-deriving a rotation here. This local copy was a THIRD
+                                // spelling of the body rotation, and it was doubly wrong:
+                                // no `W₀` phase (like the original `geo`) AND it spun about
+                                // the polar axis without first mapping body-fixed +Y onto
+                                // it, so body-fixed ground tracks were tilted as well as
+                                // rotated.
+                                rel_pos = crate::geo::body_rotation(desc, jd).inverse() * rel_pos;
                             }
                         }
 
@@ -727,7 +735,7 @@ pub fn trajectory_alignment_system(
         let spins = registry
             .bodies
             .iter()
-            .any(|d| d.ephemeris_id == eph_id && d.rotation_rate_rad_per_day != 0.0);
+            .any(|d| d.ephemeris_id == eph_id && d.spins());
         if spins { tf.rotation.inverse() } else { Quat::IDENTITY }
     };
     for (v_entity, view, path, mut transform, cell, current_parent) in q_vistas.iter_mut() {

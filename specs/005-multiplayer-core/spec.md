@@ -52,7 +52,8 @@ As a mission participant, I want to see the real-time positions, orientations, a
 - `Transform`, `Sensor`, and `Actuator` component data is synchronized from server to all clients.
 - **Port State Sync**: All `DigitalPort` (i16) and `PhysicalPort` (f32) values are synchronized to provide real-time hardware telemetry (e.g., motor torque, battery voltage) across all clients.
 - Latency in updates is minimized via state interpolation on the client side.
-- State prediction rollbacks are supported by tying into the `avian` ECS-native physics engine.
+- Client prediction is reconciled against server state; see FR-003 for what is shipped
+  by default and what is opt-in.
 
 ### Story 3: Single-Operator Control (Priority: P0)
 As a rover operator, I want to take control of a space system and have my inputs reflected in the shared world, while other users observe.
@@ -82,9 +83,11 @@ As a mission participant, I want to have a user profile so that my identity and 
 ## Requirements
 
 ### Functional Requirements
-- **FR-001**: **Server-Authoritative Physics**: ALL physics computation (avian, Modelica, FSW) MUST execute exclusively on the server. Clients MUST NOT run independent physics.
-- **FR-002**: **f32 Client Transport**: The server MUST compute and transmit entity positions as f32 values relative to each client's floating origin. Clients perform zero f64 computation.
-- **FR-003**: **Client-Side Prediction**: Clients MAY predict local input effects for up to 1 second using f32 arithmetic. Server state corrections are reconciled via rollback.
+- **FR-001**: **Server-Authoritative Physics**: the server is the ONLY authority on physics (avian, Modelica, FSW): its state always wins, and no client result is ever adopted by the host. A client MAY run a *local, disposable* copy of avian for the bodies it predicts (the vessel it drives, and free dynamic bodies near it) — that copy exists only to hide latency and is continuously corrected against, or discarded in favour of, the server's state. It is never authoritative and never leaves the client.
+- **FR-002**: **f32 Client Transport**: entity positions cross the wire as a big_space `(cell: i64, remainder: i32 @ 1 mm)` pair, which the client composes back to an absolute f64 world position; the render path is f32 relative to the floating origin.
+- **FR-003**: **Client-Side Prediction and Reconciliation.** The client predicts the effect of its own input on the vessel it drives, and the shipped reconcile is **state-sync + smoothing**, NOT rollback: on each snapshot that acks a new input `seq`, the client compares *what it predicted at that seq* against *authority at that same seq* (so its legitimate latency lead cancels), and — only if that diverges past a dead-zone — eases the error into the present pose over a few acks (`lunco_core::reconcile_decision`), or hard-snaps past a gross-desync threshold. There is no re-simulation on this path, and none is required: the coupled cosim/Modelica forces a client cannot reproduce make bit-exact re-simulation of the general case impossible anyway (which is what the `NotPredictable` marker concedes).
+  **Deterministic rollback (input replay) IS built, and is opt-in** (`LUNCO_ROLLBACK=1`): the client keeps the real actuation per input `seq` (`lunco_core::InputFrame`) and the whole articulated assembly's physics state per seq, rewinds the assembly onto the acked authoritative state, and re-simulates every unacked input through a dedicated `RollbackReplay` schedule + avian's `PhysicsSchedule`. It is validated headlessly by the `rollback_probe` bin (a public-state-only restore + input replay reconverges to sub-mm). It is OFF by default so it cannot regress the shipped path until it is chosen.
+  **Do not state "corrections are reconciled via rollback" without qualification** — that sentence stood here while the shipped path did no re-simulation at all, and it is the reason this requirement is now written in this much detail.
 - **FR-004**: **Bandwidth Efficiency**: The sync protocol MUST support delta compression (only send changed components) and configurable update rates per entity priority.
 
 ### Key Entities

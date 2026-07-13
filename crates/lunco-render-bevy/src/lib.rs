@@ -15,6 +15,7 @@
 mod env_light;
 pub mod horizon_shade;
 mod scene_camera;
+mod sensor_beams;
 pub mod shader_material;
 mod shader_look;
 mod terrain_maps;
@@ -86,6 +87,7 @@ impl Plugin for LuncoRenderPlugin {
         horizon_shade::build(app);
         env_light::build(app);
         world_label::build(app);
+        sensor_beams::build(app);
     }
 }
 

@@ -35,35 +35,12 @@ use crate::catalog::{SpawnCatalog, SpawnSource, spawn_usd_entry};
 
 /// Spawn an entity from the catalog at a given world position.
 ///
-/// `reflect_default` so API/rhai callers can omit optional fields: a missing
-/// `rotation` defaults to `None` (→ identity) and a missing/unresolved `target`
-/// falls back to the first grid in `on_spawn_entity_command`. Without this, the
-/// reflect deserializer rejects any partial params ("not constructible") and the
-/// command is silently dropped — the GUI path always supplies every field, so the
-/// gap only bit API/HTTP callers that sent just `{entry_id, position}`.
-#[Command(reflect_default)]
-pub struct SpawnEntity {
-    /// The grid entity to spawn under. `Entity::PLACEHOLDER` (or an id that
-    /// doesn't resolve) → first grid.
-    pub target: Entity,
-    /// The catalog entry ID (e.g. "ball_dynamic", "skid_rover").
-    pub entry_id: String,
-    /// World-space position (x, y, z).
-    pub position: Vec3,
-    /// World-space rotation (optional; omitted → identity).
-    pub rotation: Option<Quat>,
-}
-
-impl Default for SpawnEntity {
-    fn default() -> Self {
-        Self {
-            target: Entity::PLACEHOLDER,
-            entry_id: String::new(),
-            position: Vec3::ZERO,
-            rotation: None,
-        }
-    }
-}
+/// The TYPE lives in `lunco_core::commands` (review A6): the networking crate
+/// declares this command's wire channel and needs nothing but the type, so keeping
+/// the definition in core is what let `lunco-networking` drop its dependency on
+/// this crate. The HANDLER (`on_spawn_entity_command`) stays here, with the
+/// catalog it spawns from. Re-exported so existing call sites are unchanged.
+pub use lunco_core::SpawnEntity;
 
 /// Detach a joint by despawning it.
 #[Command(reflect_default)]
@@ -1338,6 +1315,10 @@ fn apply_buffered_client_inputs(
     mut buf: ResMut<lunco_core::BufferedClientInputs>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     ports: Res<lunco_core::ports::PortRegistry>,
+    // The reconcile ack is stamped HERE, from the seq this tick actually integrated
+    // (review N2) — see the comment in the loop.
+    sessions: Res<lunco_core::SessionRegistry>,
+    mut applied: ResMut<lunco_core::AppliedInputSeq>,
     mut commands: Commands,
 ) {
     if !role.is_host() {
@@ -1355,6 +1336,14 @@ fn apply_buffered_client_inputs(
         let Some(writes) = buf.next_for_tick(gid, 8) else {
             continue;
         };
+        // THE ACK (review N2). `next_for_tick` advanced the per-gid cursor by at most
+        // ONE seq — the input this fixed tick will integrate — so the cursor is the
+        // honest "how far the authoritative sim has consumed your input" watermark.
+        // Stamped even if the entity fails to resolve below: the input was consumed
+        // either way, and a stalled ack would strand the owner's reconcile.
+        // `record` also re-keys the slot to the current owner and rejects an
+        // implausible seq (review N1).
+        applied.record(gid, sessions.owner_of(gid), buf.cursor(gid));
         let Some(e) = registry.resolve(&lunco_core::GlobalEntityId::from_raw(gid)) else {
             continue;
         };
@@ -1693,6 +1682,17 @@ pub fn rollback_owned_prediction(world: &mut World) {
         if ack == 0 {
             continue; // host hasn't applied any of our input yet
         }
+        // STALE-ACK GUARD (review N1) — same reasoning as `reconcile_owned_prediction`:
+        // an ack above the highest seq we ever minted belongs to the vessel's PREVIOUS
+        // owner, and latching it as `last_reconciled` disables this path permanently.
+        let next_seq = world
+            .resource::<lunco_core::OwnedInputLog>()
+            .0
+            .get(&gid)
+            .map_or(0, |l| l.next_seq);
+        if ack > next_seq {
+            continue;
+        }
         // One rollback per new ack.
         {
             let mut hist = world.resource_mut::<PredictedStateLog>();
@@ -1883,6 +1883,8 @@ pub fn reconcile_owned_prediction(
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     mut hist: ResMut<PredictedStateLog>,
     mut input_log: ResMut<lunco_core::OwnedInputLog>,
+    // Desync detection (review N3): every ack feeds the per-body gauge.
+    mut divergence: ResMut<lunco_core::DivergenceStats>,
     q_owned: Query<&lunco_core::GlobalEntityId, With<lunco_core::OwnedLocally>>,
     mut q: Query<(
         &mut Transform,
@@ -1904,6 +1906,19 @@ pub fn reconcile_owned_prediction(
         let ack = sample.last_input_seq;
         if ack == 0 {
             continue; // host hasn't applied any of our inputs yet
+        }
+        // STALE-ACK GUARD (review N1). An ack can only be ours if we have actually
+        // MINTED that seq. A snapshot still carrying the PREVIOUS owner's watermark
+        // — in flight, or sitting in `InterpBuffers`, when we took possession —
+        // would otherwise be latched below as `last_reconciled`; every ack from our
+        // own stream (which restarts at 1) is then `<=` it, so this system
+        // early-returns FOREVER and the rover we are driving is never reconciled
+        // again. The host now resets the watermark on re-possession
+        // (`sync_applied_seq_owners`); this is the client-side half, and it is what
+        // covers the in-flight window between the two.
+        let next_seq = input_log.0.get(&g).map_or(0, |l| l.next_seq);
+        if ack > next_seq {
+            continue;
         }
         let Some(vlog) = hist.0.get_mut(&g) else {
             continue;
@@ -1950,6 +1965,20 @@ pub fn reconcile_owned_prediction(
             sample.rot,
             lunco_core::ReconcileParams::default(),
         );
+        // DESYNC GAUGE (review N3). The error at the acked seq IS the prediction
+        // error (the latency lead cancels), so this is the honest per-body
+        // divergence — recorded on every ack, InSync included, so the gauge shows
+        // the healthy baseline too. A sustained metre says so out loud: before this
+        // there was no way to observe a desync in the field at all.
+        let err_m = (sample.pos - hs.pos).length();
+        if divergence.observe(g, lunco_core::PredictionKind::Owned, err_m) {
+            warn!(
+                "[desync] owned gid={g:x} diverging: {err_m:.2} m at ack seq={ack} for \
+                 {} consecutive acks (max {:.2} m). The prediction is not tracking the host.",
+                divergence.warn_streak,
+                divergence.bodies.get(&g).map_or(err_m, |b| b.max_m),
+            );
+        }
         // COMMON CASE: prediction matched authority → leave the body alone.
         if matches!(decision, lunco_core::Reconciliation::InSync) {
             continue;
@@ -1981,6 +2010,15 @@ pub fn reconcile_owned_prediction(
             // included; the interpolation easing-reset on a real teleport is
             // exactly what we want) and drop any queued residual.
             lunco_core::Reconciliation::Snap { pos: new_pos, rot: new_rot } => {
+                // The force-rebaseline. It used to be SILENT; it is now counted and
+                // announced (review N3) — a snapping owned body is the loudest
+                // symptom the netcode has, and it was invisible in the field.
+                divergence.note_rebaseline(g);
+                warn!(
+                    "[desync] owned gid={g:x} REBASELINED (snap {:.1} m to authority at ack \
+                     seq={ack}) — prediction grossly desynced",
+                    (sample.pos - tf.translation).length()
+                );
                 tf.translation = new_pos;
                 tf.rotation = new_rot;
                 if let Some(mut p) = pos {
@@ -2304,6 +2342,9 @@ pub fn reconcile_predicted_dynamic(
     buffers: Res<InterpBuffers>,
     clock: Res<ProxyPlaybackClock>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    // Desync detection (review N3): free predicted bodies feed the same gauge as the
+    // owned rover, so a drifting prop is observable instead of silently teleporting.
+    mut divergence: ResMut<lunco_core::DivergenceStats>,
     q_pred: Query<&lunco_core::GlobalEntityId, With<lunco_core::PredictedDynamic>>,
     mut q: Query<(
         Option<&mut Position>,
@@ -2358,7 +2399,20 @@ pub fn reconcile_predicted_dynamic(
         }
         let angle = rot_err.to_axis_angle().1.abs();
 
+        // DESYNC GAUGE (review N3) — same signal as the owned body, for the free
+        // predicted set (props, bumped rocks, contact-gated remote rovers).
+        if divergence.observe(g, lunco_core::PredictionKind::Free, dist as f32) {
+            warn!(
+                "[desync] free predicted gid={g:x} diverging: {dist:.2} m from authority for {} \
+                 consecutive ticks — local physics is not reproducing the host",
+                divergence.warn_streak,
+            );
+        }
+
         if dist > RECONCILE_SNAP_DIST {
+            // Counted + announced: this teleport was silent before (review N3).
+            divergence.note_rebaseline(g);
+            debug!("[desync] free predicted gid={g:x} REBASELINED (teleport {dist:.1} m)");
             // Gross desync / first sight: teleport. Seat Position/Rotation directly
             // (NEVER `Transform` — avian writeback derives it; a Transform write here
             // resets `bevy_transform_interpolation` → the historical jitter) and seat
@@ -2414,30 +2468,16 @@ pub fn reconcile_predicted_dynamic(
     }
 }
 
-/// Step 2 (revised): residual reconcile correction, drained in **physics space**
-/// a tick at a time by [`drain_pending_corrections`].
+/// Step 2 (revised): the residual reconcile correction, drained in **physics
+/// space** a tick at a time by [`drain_pending_corrections`].
 ///
-/// The first Step-2 design (a decaying offset written onto the render `Transform`
-/// in `PostUpdate`) was architecturally wrong for this app: the sandbox enables
-/// `PhysicsInterpolationPlugin::interpolate_all()`, so `bevy_transform_interpolation`
-/// owns every body's `Transform` at render rate — and treats ANY external
-/// `Transform` write as a teleport, resetting its easing. Our offset writer
-/// therefore *disabled* interpolation for the corrected body (≈ continuously while
-/// driving, since corrections land every ~1–2 s and the offset decayed for ~1 s)
-/// → the rover rendered at raw 64 Hz steps = the persistent "jitters while just
-/// holding the key" the host never shows.
-///
-/// Correct composition: never touch `Transform` from game code. Park the
-/// correction here and let the drain system nudge `Position`/`Rotation` by a tiny
-/// bounded amount each FIXED tick; writeback + interpolation then render it
-/// perfectly smoothly with no second writer anywhere.
-#[derive(Component, Clone, Copy, Debug, Default)]
-pub struct PendingCorrection {
-    /// Remaining position delta to apply (world metres).
-    pub pos: Vec3,
-    /// Remaining orientation delta (applied as `rot * current`).
-    pub rot: Quat,
-}
+/// The TYPE now lives in `lunco_core::session` (review A6 — it and `SpawnEntity`
+/// were the only two symbols `lunco-networking` needed from this 13.4k-LOC crate,
+/// and that one edge dragged the whole editor closure into every networking build).
+/// The producer (`reconcile_owned_prediction`) and the drain stay here; the
+/// rationale for parking a correction instead of writing `Transform` is on the type.
+/// Re-exported so existing call sites are unchanged.
+pub use lunco_core::PendingCorrection;
 
 /// Time-constant (s) for draining a pending correction: ~63% applied per
 /// `CORRECTION_TAU`, ≈ fully in ~3×. Long enough to be invisible, short enough to
@@ -2452,11 +2492,8 @@ const CORRECTION_MAX_POS_PER_TICK: f64 = 0.025;
 /// Per-tick cap on the drained rotation nudge (rad, ~0.9°/tick ≈ 57°/s capacity).
 const CORRECTION_MAX_ROT_PER_TICK: f64 = 0.016;
 
-impl PendingCorrection {
-    pub fn is_negligible(&self) -> bool {
-        self.pos.length_squared() < 1e-8 && self.rot.angle_between(Quat::IDENTITY) < 1e-4
-    }
-}
+// `PendingCorrection::is_negligible` moved to `lunco_core::session` with the type
+// (review A6) — an inherent impl must live in the type's own crate.
 
 /// Drain each body's [`PendingCorrection`] into its avian `Position`/`Rotation`
 /// in small per-tick steps (exp toward zero residual, hard per-tick caps).
@@ -5152,6 +5189,7 @@ mod pose_write_tests {
         world.init_resource::<InterpBuffers>();
         world.init_resource::<PredictedStateLog>();
         world.init_resource::<lunco_core::OwnedInputLog>();
+        world.init_resource::<lunco_core::DivergenceStats>();
 
         let gid = 0x00AB_CDEFu64;
         let predicted = Quat::IDENTITY; // == Transform::default().rotation
@@ -5171,6 +5209,14 @@ mod pose_write_tests {
             .id();
         registry_with(&mut world, e, gid);
 
+        // This client really did emit input seq 1 — the stale-ack guard (review N1)
+        // only accepts an ack it could have produced.
+        world
+            .resource_mut::<lunco_core::OwnedInputLog>()
+            .0
+            .entry(gid)
+            .or_default()
+            .next_seq = 1;
         // We predicted `predicted` at input seq 1…
         world
             .resource_mut::<PredictedStateLog>()
@@ -5378,6 +5424,7 @@ mod pose_write_tests {
     fn predicted_dynamic_snaps_far_body_and_seats_velocity() {
         let mut world = World::new();
         world.init_resource::<InterpBuffers>();
+        world.init_resource::<lunco_core::DivergenceStats>();
         // reconcile only runs as a connected Client; the clock is the render instant.
         world.insert_resource(lunco_core::NetworkRole::Client);
         world.insert_resource(lunco_core::NetStatus { connected: true, ..Default::default() });
@@ -5430,6 +5477,7 @@ mod pose_write_tests {
     fn predicted_dynamic_in_sync_is_left_untouched() {
         let mut world = World::new();
         world.init_resource::<InterpBuffers>();
+        world.init_resource::<lunco_core::DivergenceStats>();
         world.insert_resource(lunco_core::NetworkRole::Client);
         world.insert_resource(lunco_core::NetStatus { connected: true, ..Default::default() });
         world.insert_resource(ProxyPlaybackClock { t: 0.5, init: true });
@@ -5470,6 +5518,114 @@ mod pose_write_tests {
         assert!(
             (v.x - 5.0).abs() < 1e-9,
             "InSync must NOT seat velocity — local physics keeps running; got {v:?}"
+        );
+        // The gauge saw the (tiny) divergence — a healthy body is measured, not just
+        // an unhealthy one, so the baseline is visible in the field (review N3).
+        let stats = world.resource::<lunco_core::DivergenceStats>();
+        assert_eq!(stats.bodies[&gid].kind, lunco_core::PredictionKind::Free);
+        assert!(stats.bodies[&gid].last_m < 0.1);
+        assert_eq!(stats.bodies[&gid].rebaselines, 0);
+    }
+
+    /// **The re-possession bug, client side (review N1).** A snapshot still carrying
+    /// the PREVIOUS owner's input ack — in flight, or already sitting in
+    /// `InterpBuffers`, when we took possession — must not be latched as
+    /// `last_reconciled`. If it is, every ack from OUR seq stream (which restarts at
+    /// 1) is `<=` it and this system early-returns forever: the rover we are driving
+    /// is never reconciled again, and drifts without bound. The host resets the
+    /// watermark on the handover; this guard covers the in-flight window between the
+    /// two, and is what keeps a `Snap` reachable at all.
+    #[test]
+    fn stale_ack_from_a_previous_owner_does_not_kill_reconciliation() {
+        let mut world = World::new();
+        world.init_resource::<InterpBuffers>();
+        world.init_resource::<PredictedStateLog>();
+        world.init_resource::<lunco_core::OwnedInputLog>();
+        world.init_resource::<lunco_core::DivergenceStats>();
+
+        let gid = 0x00CC_0001u64;
+        let e = world
+            .spawn((
+                Transform::default(),
+                Position::default(),
+                Rotation::default(),
+                LinearVelocity::default(),
+                AngularVelocity::default(),
+                lunco_core::GlobalEntityId::from_raw(gid),
+                lunco_core::OwnedLocally,
+                lunco_core::NetReplicate,
+            ))
+            .id();
+        registry_with(&mut world, e, gid);
+
+        // WE have emitted exactly one input (seq 1) — we just possessed this rover.
+        world
+            .resource_mut::<lunco_core::OwnedInputLog>()
+            .0
+            .entry(gid)
+            .or_default()
+            .next_seq = 1;
+        world
+            .resource_mut::<PredictedStateLog>()
+            .0
+            .entry(gid)
+            .or_default()
+            .ring
+            .push_back(PredictedState { seq: 1, pos: Vec3::ZERO, rot: Quat::IDENTITY });
+
+        // A stale snapshot arrives still advertising the PREVIOUS owner's seq 5000.
+        world
+            .resource_mut::<InterpBuffers>()
+            .0
+            .entry(gid)
+            .or_default()
+            .push_back(InterpSample {
+                gen_t: 0.0,
+                pos: Vec3::new(100.0, 0.0, 0.0),
+                rot: Quat::IDENTITY,
+                pos_world: DVec3::new(100.0, 0.0, 0.0),
+                lv: Vec3::ZERO,
+                av: Vec3::ZERO,
+                last_input_seq: 5000,
+            });
+        world.run_system_once(reconcile_owned_prediction).unwrap();
+
+        // It must have been IGNORED — not latched as `last_reconciled`.
+        assert_eq!(
+            world.resource::<PredictedStateLog>().0[&gid].last_reconciled,
+            0,
+            "an ack above the highest seq we ever minted is not ours; latching it \
+             disables this system permanently"
+        );
+
+        // Now OUR ack (seq 1) lands, with authority 100 m away → the Snap path, which
+        // the stale ack would otherwise have made unreachable for the whole session.
+        world
+            .resource_mut::<InterpBuffers>()
+            .0
+            .entry(gid)
+            .or_default()
+            .push_back(InterpSample {
+                gen_t: 0.1,
+                pos: Vec3::new(100.0, 0.0, 0.0),
+                rot: Quat::IDENTITY,
+                pos_world: DVec3::new(100.0, 0.0, 0.0),
+                lv: Vec3::ZERO,
+                av: Vec3::ZERO,
+                last_input_seq: 1,
+            });
+        world.run_system_once(reconcile_owned_prediction).unwrap();
+
+        assert_eq!(world.resource::<PredictedStateLog>().0[&gid].last_reconciled, 1);
+        let p = world.entity(e).get::<Position>().unwrap().0;
+        assert!(
+            (p.x - 100.0).abs() < 1e-4,
+            "the gross-desync snap must still fire for the new owner; got {p:?}"
+        );
+        // …and the rebaseline was counted + announced rather than being silent (N3).
+        assert_eq!(
+            world.resource::<lunco_core::DivergenceStats>().bodies[&gid].rebaselines,
+            1
         );
     }
 }

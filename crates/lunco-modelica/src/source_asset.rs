@@ -60,6 +60,28 @@ impl AssetLoader for ModelicaSourceLoader {
     }
 }
 
+/// Read a path's UTF-8 text through the platform-portable storage backend.
+///
+/// The synchronous counterpart of the asset loader above, for the paths that do
+/// **not** come from the asset pipeline: a file the user picked, a workspace
+/// `.mo` dependency, a small JSON ledger. `std::fs::read_to_string` is banned in
+/// this crate because it silently `Err`s in a browser; [`lunco_storage`] routes
+/// the same call to `FileStorage` on native and `WebStorage` (localStorage) on
+/// wasm, so one call site is correct on both targets.
+pub fn read_text_sync(path: &std::path::Path) -> Result<String, String> {
+    let bytes = lunco_storage::read_file_sync(path)
+        .map_err(|e| format!("read failed `{}`: {e}", path.display()))?;
+    String::from_utf8(bytes).map_err(|e| format!("non-utf8 text `{}`: {e}", path.display()))
+}
+
+/// Write UTF-8 text to a path through the platform-portable storage backend.
+/// See [`read_text_sync`] — same rationale, write side (native `FileStorage`
+/// does an atomic tmp+rename; wasm maps the path onto a localStorage key).
+pub fn write_text_sync(path: &std::path::Path, text: &str) -> Result<(), String> {
+    lunco_storage::write_file_sync(path, text.as_bytes())
+        .map_err(|e| format!("write failed `{}`: {e}", path.display()))
+}
+
 /// Plugin that registers the `.mo` asset loader. Add once at app build —
 /// usually pulled in by `ModelicaCorePlugin`, which composes it
 /// idempotently so binaries that also add it directly don't double-register.

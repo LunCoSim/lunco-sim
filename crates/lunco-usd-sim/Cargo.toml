@@ -12,11 +12,10 @@ bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", 
 openusd = { workspace = true }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
-# `ShaderLook` + `ParamValue` (the open, WGSL-reflected parameter set). NOTE:
-# `lunco-materials` itself still enables `bevy_pbr` for `shader_material.rs`
-# (the `AsBindGroup` impl) — see the TODO in its Cargo.toml. Until that file
-# moves to `lunco-render-bevy`, this crate's dep GRAPH still reaches wgpu even
-# though its CODE names no material.
+# `ShaderLook` + `ParamValue` (the open, WGSL-reflected parameter set).
+# `lunco-materials` is render-free: `shader_material.rs` (the `AsBindGroup` that
+# pulled `bevy_pbr`) moved to `lunco-render-bevy` on 2026-07-13, so this crate's
+# dep GRAPH no longer reaches wgpu either. Keep it that way.
 lunco-materials = { path = "../lunco-materials" }
 lunco-render = { path = "../lunco-render" }
 lunco-settings = { path = "../lunco-settings" }

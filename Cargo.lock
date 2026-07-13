@@ -7292,7 +7292,6 @@ dependencies = [
  "lunco-hash",
  "lunco-hooks",
  "lunco-hooks-rhai",
- "lunco-sandbox-edit",
  "lunco-settings",
  "lunco-storage",
  "lunco-twin",
@@ -7361,6 +7360,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "lunco-core",
+ "lunco-cosim",
  "lunco-environment",
  "lunco-materials",
  "lunco-render",

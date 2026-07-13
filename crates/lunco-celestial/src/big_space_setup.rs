@@ -7,35 +7,60 @@
 
 //! Sets up the big_space coordinate hierarchy for the solar system.
 //!
-//! ## Architecture: Inertial Grid + Rotating Body
+//! ## Architecture: Rotating Grid + Body-fixed children
 //!
-//! Each celestial body uses a two-layer pattern:
+//! **The GRID rotates. The Body does not.** `body_rotation_system`
+//! (`systems.rs`) queries `(&mut Transform, &CelestialReferenceFrame)`, and
+//! `CelestialReferenceFrame` lives on the **grids** — never on the body
+//! entities, which sit at identity. Everything else in the crate is built on
+//! that fact (`placement.rs` inverse-rotates inertial orbits INTO the grid;
+//! `coords.rs`'s stored-chain test assumes a spinning grid), which is why it is
+//! the grid that spins and not the body:
 //!
-//! 1. **Grid Anchor (inertial)** — carries `Grid` + `CelestialReferenceFrame`.
-//!    Positioned by the ephemeris system. Does NOT rotate.
-//!    This provides a stable ecliptic-locked frame for orbit cameras.
+//! 1. **Body Grid (ROTATING)** — carries `Grid` + `CelestialReferenceFrame`.
+//!    Positioned by the ephemeris system, **and rotated** by
+//!    `body_rotation_system` with the body's IAU rotation (`geo::body_rotation`).
+//!    Its children are therefore **body-fixed**: terrain tiles, ground stations
+//!    and surface ops inherit the spin for free, in high precision — which is
+//!    exactly what big_space recommends ("place the planet and all objects on
+//!    its surface in the same grid").
 //!
-//! 2. **Body Entity (rotating)** — child of the Grid. Carries `CelestialBody`,
-//!    mesh, collider, `SOI`, and `GravityProvider`. Rotates via
-//!    `body_rotation_system`. Terrain tiles and surface entities are children
-//!    of the Body, inheriting rotation via standard Bevy transform propagation.
+//! 2. **Body Entity** — child of the Grid, identity transform. Carries
+//!    `CelestialBody`, mesh, collider, `SOI`, `GravityProvider`.
+//!
+//! 3. **Inertial Anchor** — a NON-rotating sibling grid tracking the body's
+//!    position but not its spin ([`InertialAnchor`]). This is where a
+//!    star-fixed observer belongs; see "Why an inertial anchor" below.
 //!
 //! ```text
 //! BigSpace Root
-//!   └── Solar Grid (inertial, edge=1e9)
+//!   └── Solar Grid (inertial — the Sun does not spin here)
 //!         ├── Sun (simple entity, no grid)
 //!         ├── Sun Light
-//!         ├── EMB Grid (inertial, edge=1e8)
-//!         │     ├── Earth Grid (rotating, ephemeris, edge=1e4)
+//!         ├── EMB Grid (inertial — a barycenter has no rotation model)
+//!         │     ├── Earth Grid (ROTATING: ephemeris + IAU spin)
 //!         │     │     ├── Earth Body (mesh+collider, identity transform)
-//!         │     │     └── Earth Surface Grid (edge=1e3, surface sub-frame)
-//!         │     │           └── 24 terrain tiles + rovers + surface ops
-//!         │     └── Moon Grid (rotating, ephemeris, edge=1e4)
+//!         │     │     └── Earth Surface Grid (surface sub-frame, body-fixed)
+//!         │     │           └── terrain tiles + rovers + surface ops
+//!         │     ├── Earth Inertial Anchor (position only, NO spin)
+//!         │     │     └── Observer Camera  ← star-fixed
+//!         │     └── Moon Grid (ROTATING: ephemeris + IAU spin)
 //!         │           ├── Moon Body (mesh+collider, identity transform)
-//!         │           └── Moon Surface Grid (edge=1e3, surface sub-frame)
-//!         │                 └── 24 terrain tiles + rovers + surface ops
+//!         │           └── Moon Surface Grid (surface sub-frame, body-fixed)
+//!         │                 └── terrain tiles + rovers + surface ops
 //!         └── Other planets (simple entities)
 //! ```
+//!
+//! ## Why an inertial anchor
+//!
+//! This doc block used to assert the exact opposite of the code — "Grid Anchor
+//! (inertial) … does NOT rotate", "Body Entity (rotating)" — and the Observer
+//! Camera was parented to the Earth Grid on the strength of that claim, with the
+//! comment "(inertial) for orbit view". The grid spins, so **the orbit view was
+//! not star-fixed**: the camera was dragged around Earth once per sidereal day,
+//! a ~19,000 km circle. The fix is not to flip the code (the rest of the crate
+//! correctly assumes rotating grids) — it is to give the camera a frame that
+//! really is inertial.
 //!
 //! ## Surface sub-Grids
 //!
@@ -107,17 +132,44 @@ pub struct SolarSystemRoot;
 #[derive(Component)]
 pub struct SiteAlignGrid;
 
-/// Marker for the Earth-Moon barycenter grid (inertial, no rotation).
+/// Marker for the Earth-Moon barycenter grid (genuinely inertial — the EMB is a
+/// barycenter, so it has no IAU rotation model and `body_rotation_system` skips
+/// it).
 #[derive(Component)]
 pub struct EMBRoot;
 
-/// Marker for Earth's inertial grid anchor.
+/// Marker for Earth's grid. **Rotating** (ephemeris position + IAU spin) — its
+/// children are body-fixed. For a star-fixed frame at Earth use the
+/// [`InertialAnchor`], not this.
 #[derive(Component)]
 pub struct EarthRoot;
 
-/// Marker for Moon's inertial grid anchor.
+/// Marker for the Moon's grid. **Rotating**, as [`EarthRoot`].
 #[derive(Component)]
 pub struct MoonRoot;
+
+/// A grid that tracks a body's POSITION but never its rotation — a star-fixed
+/// (inertial) frame co-located with the body.
+///
+/// `systems::sync_inertial_anchors` copies the body grid's `(CellCoord,
+/// Transform.translation)` here each epoch and leaves `Transform.rotation` at
+/// IDENTITY. That is the entire mechanism.
+///
+/// **Why it is a separate entity and not just "the body grid without the spin":**
+/// the body grid must spin, because its children are surface features that have
+/// to be carried by the body's rotation in high precision. An orbit camera needs
+/// the opposite. Both frames are legitimate; they are different frames, so they
+/// are different entities.
+///
+/// It deliberately does NOT carry `CelestialReferenceFrame` — that component is
+/// what `body_rotation_system` rotates and what `placement` searches to find "the
+/// grid for body N". A second entity answering that search would make the choice
+/// of frame for every ground station and orbit **nondeterministic**.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct InertialAnchor {
+    /// NAIF id of the body whose position this anchor tracks.
+    pub ephemeris_id: i32,
+}
 
 /// Marker for Earth's surface sub-grid (edge=1e3 m).
 ///
@@ -406,6 +458,25 @@ pub fn setup_big_space_hierarchy(
         Name::new("Earth Grid (Inertial)"),
     )).set_parent_in_place(emb_grid).id();
 
+    // ── Earth Inertial Anchor (star-fixed frame at Earth) ──────────────────
+    // Same position as the Earth Grid, NO rotation. `sync_inertial_anchors`
+    // keeps the position in step; the rotation stays IDENTITY forever. The
+    // Observer Camera hangs here so the orbit view is actually star-fixed
+    // (parented to the rotating Earth Grid it swung a 19,000 km circle once per
+    // sidereal day — the whole point of `InertialAnchor`).
+    let earth_inertial = commands.spawn((
+        InertialAnchor { ephemeris_id: 399 },
+        // Same 2 km / 100 m as every other celestial grid — cell edge is a
+        // PRECISION knob (see the Solar Grid note).
+        Grid::new(2_000.0, 100.0),
+        CellCoord::default(),
+        Transform::default(),
+        GlobalTransform::default(),
+        Visibility::default(),
+        InheritedVisibility::default(),
+        Name::new("Earth Inertial Anchor"),
+    )).set_parent_in_place(emb_grid).id();
+
     // ── Earth Body (rotating child of Earth Grid) ─────────────────────────
     // Note: Body does NOT have CellCoord. It's a low-precision entity whose
     // GlobalTransform = Grid × local Transform. This allows rotation from
@@ -543,9 +614,11 @@ pub fn setup_big_space_hierarchy(
         crate::globe_lod::GlobeTiles::default(),
     ));
 
-    // ── Observer Camera (on Earth Grid for close-up orbit view) ────────────
-    // Camera stays on the Grid (star-fixed). For surface views, it uses
-    // SurfaceCamera which recomputes world-space rotation from LocalGravityField.
+    // ── Observer Camera (on Earth's INERTIAL ANCHOR, for the orbit view) ───
+    // The camera must sit in a star-fixed frame, and the Earth Grid is NOT one:
+    // it rotates with Earth (`body_rotation_system`). See `InertialAnchor`.
+    // For surface views the camera uses SurfaceCamera, which recomputes
+    // world-space rotation from LocalGravityField.
     let earth_radius_m = 6_371_000.0;
     let earth_orbit_distance = earth_radius_m * 3.0;
     let cam_pos = Vec3::new(0.0, earth_orbit_distance * 0.4, earth_orbit_distance);
@@ -598,7 +671,7 @@ pub fn setup_big_space_hierarchy(
         lunco_controller::get_avatar_input_map(),
         lunco_core::IntentAnalogState::default(),
         Name::new("Observer Camera"),
-    )).set_parent_in_place(earth_grid); // On Earth Grid (inertial) for orbit view.
+    )).set_parent_in_place(earth_inertial); // Star-fixed frame at Earth — NOT the rotating Earth Grid.
     } // config.spawn_observer_camera
 
     // ── Other Planets (simple entities on Solar Grid) ──────────────────────

@@ -1,8 +1,26 @@
 # Render decoupling — the material is the boundary
 
+**Status: DONE (2026-07-13).** The `--no-ui` server links no GPU stack:
+
+```
+$ cargo tree -p lunco-sandbox-server -i wgpu               # package ID not found
+$ cargo tree -p lunco-sandbox-server -i bevy_render        # package ID not found
+$ cargo tree -p lunco-sandbox-server -i bevy_pbr           # package ID not found
+$ cargo tree -p lunco-sandbox-server -i bevy_core_pipeline # package ID not found
+$ cargo tree -p lunco-sandbox-server -i egui               # package ID not found
+$ cargo tree -p lunco-sandbox-server -i winit              # package ID not found
+```
+
+`naga` remains, via `bevy_shader` — the WGSL **compiler**, kept for live shader editing
+(`SetShaderSource` / `CreateShader` compile WGSL into `Assets<Shader>` so an edit renders without a
+disk round-trip). A compiler, not a GPU stack. Moving it behind the gate is a separate, smaller job.
+
+The [`render-decoupling` CI job](../../.github/workflows/lint.yml) enforces all of the above. **Do not
+delete it** — see [Why this needs a machine, not vigilance](#why-this-needs-a-machine-not-vigilance).
+
 **Goal:** a headless build (`--no-ui`, the wasm worker, every integration test) that does not link
 wgpu, naga, or `bevy_render` — achieved **without a single `#[cfg(feature = "render")]` inside domain
-code.** The gate must be *which plugins you add*, not conditional compilation sprinkled through the
+code.** The gate is *which plugins you add*, not conditional compilation sprinkled through the
 simulation.
 
 ## The finding that makes this cheap
@@ -65,52 +83,82 @@ This is the same move the codebase already made for panels (a trait-object regis
 for materials (WGSL-reflected, not a hardcoded table). It is not a new idea here — it is the existing
 doctrine applied to the last place that dodged it.
 
-## Where the work is
+## The three intents
 
-21 files insert `MeshMaterial3d`. That is the entire surface:
+`lunco-render` (render-free) and `lunco-materials` (render-free) hold the whole vocabulary.
+`lunco-render-bevy` is the **only** crate in the graph that names `bevy_pbr`, and it binds them.
 
-| crate | files | intent component to introduce |
-|---|---|---|
-| `lunco-terrain-surface` | `stream_viz.rs`, `terrain.rs`, `derived_layers.rs`, `terrain_layers/{mod,rocks}.rs` | `TerrainTileVisual`, `RockVisual` |
-| `lunco-celestial` | `big_space_setup.rs`, `globe_lod.rs`, `systems.rs`, `missions.rs`, `trajectories.rs` | `BodyVisual`, `TrajectoryVisual` |
-| `lunco-usd-bevy` | `lib.rs` (`instantiate_prim`), `camera*.rs` | `PrimVisual { color, shader }` |
-| `lunco-sandbox-edit` | `spawn.rs`, `commands.rs`, `terrain_tools.rs`, `ui/*` | reuse `PrimVisual`; UI is already gated |
-| `lunco-usd-sim` | `lib.rs`, `shader.rs` | reuse `PrimVisual` |
-| `lunco-obstacle-field` | `plugin.rs`, `rock.rs` | reuse `RockVisual` |
-| `lunco-environment` | `horizon.rs` | `SkyVisual` |
-| `lunco-avatar` | `screenshot.rs`, `ui/mod.rs` | render-only already — move wholesale |
-| `lunco-materials` | all | **render-only by nature.** Not split — just stops being a dependency of domain crates. |
+| intent | in | binds to | notes |
+|---|---|---|---|
+| **`PbrLook`** | `lunco-render` | `MeshMaterial3d<StandardMaterial>` | a plain surface as data: colour, roughness, metallic, emissive, reflectance, IOR, clearcoat, specular tint, `SurfaceAlpha::{Opaque,Mask,Blend,Add}`, and all five `Handle<Image>` texture channels (`bevy_image` is render-free) |
+| **`ShaderLook`** | `lunco-materials` | `MeshMaterial3d<ShaderMaterial>` | a custom `.wgsl` with an **open, user-defined parameter set** — see [shader-layers-and-params.md](shader-layers-and-params.md) |
+| **`SceneCamera`** | `lunco-render` | `Camera3d` + tonemapping + MSAA + bloom | because `Camera3d` was being used as the *query filter* for "which camera is the scene one?", which made domain crates link a GPU stack **merely to ask a question** |
+| **`WorldLabel`** | `lunco-render` | `Text2d` + font + colour | a spacecraft's *name* is simulation data; the glyphs are not |
 
-`lunco-render` already exists and already declares itself "the future home for exposure/AA/sky look
-settings". It becomes the home for all material binding, `Camera3d`/post-processing setup, and
-screenshot capture.
+### Two rules you must not break
 
-`lunco-robotics` and `lunco-terrain-globe` were already render-free in fact but declared the full PBR
-feature list; both are fixed (2026-07-12).
+1. **Identical looks share one material.** The binders cache by the look's *content*
+   (`PbrLook::key()` / `ShaderLook::key()`, floats quantised to 1e-4 so a rounding error cannot mint a
+   second material). 6000 rocks that look alike cost **one** material and **one** bind group. The old
+   code preserved this by hand-threading a single `Handle` through the scatter loop — easy to forget,
+   and it *was* forgotten in one of the two rock paths. Now it cannot be.
+   **Corollary: never vary a look per-instance.** Bucket the value first (see the terrain LOD band and
+   the rock radius buckets for the pattern), or you get a material and a draw call per instance.
 
-## Order of work
+2. **Anything ANIMATED must set `unshared: true`.** A look whose value changes every frame re-keys the
+   content cache every frame — minting a material per frame and freeing none. That is an unbounded leak
+   that presents as a slow memory climb, not a crash. `unshared` gives it a private material the binder
+   mutates in place. (USD `displayColor` timeSamples hit this immediately.)
 
-1. **`lunco-render` grows the binding layer** — `LuncoRenderPlugin`, and the `Appearance` intent
-   components (they live here, or in `lunco-core` if a domain crate must construct them without
-   depending on render; prefer `lunco-core`).
-2. **One domain crate at a time**, easiest first, each landing green:
-   `lunco-obstacle-field` → `lunco-environment` → `lunco-terrain-surface` → `lunco-usd-bevy` →
-   `lunco-celestial` → `lunco-usd-sim` → `lunco-sandbox-edit`.
-3. **Drop `bevy_pbr` from each crate's `bevy` feature list** as it goes clean. The compiler enforces
-   the rest — if the crate still names a material, it will not build.
-4. **CI guard, so it cannot regress:**
-   ```bash
-   cargo tree -p lunco-sandbox-server -i wgpu    # must FAIL: "package ID not found"
-   cargo tree -p lunco-sandbox-server -i naga    # must FAIL
-   ```
-   Same guard that now protects `bevy_egui` (A1). This is the part that makes the architecture real
-   rather than aspirational — the review's core lesson was *the craft is high, the enforcement is
-   absent.*
+3. **An entity must never carry `PbrLook` and a shader material at once**, or the mesh **draws twice**.
+   Taking the shader path must `remove::<PbrLook>()`, not merely replace the material.
+
+## What has no intent form — and moved bodily instead
+
+Not everything visual is *appearance*. Three things had no honest intent representation and were
+**moved** into `lunco-render-bevy` rather than tortured into a component:
+
+- **`horizon_shade`** — a per-frame heightfield/sun **uniform feed** into the terrain shader (from
+  `lunco-environment`). Not a look; a data pump. The horizon **maths** stayed behind — it was already
+  render-free, and `lunco-sandbox` imports exactly that half.
+- **`env_light`** — the `bloom` arm of `SetEnvironmentLight`.
+- **`terrain_maps`** — the derived-layer bind onto the terrain material that `lunco-usd-sim` authors
+  asynchronously (no component to restate).
+
+Screenshots deliberately do **not** live there: `CaptureScreenshot` has exactly one implementation, in
+`lunco-api::executor`, which must own it because raw-PNG mode defers the HTTP response until
+`ScreenshotCaptured` fires.
+
+## Why this needs a machine, not vigilance
+
+The failure mode is **invisible to code review**. Cargo unifies features across the whole graph, so a
+single missing `default-features = false` anywhere silently re-links wgpu into every binary. It has
+already happened **twice in this repo**:
+
+1. `lunco-workspace` → `lunco-doc-bevy` (whose default `ui` feature pulls `bevy_egui`), putting egui +
+   winit + wgpu into the headless server. CI had even **rationalised the symptom** — `integration.yml`
+   carried a comment explaining why Linux windowing headers were needed *"even for the headless
+   binary."* Nobody suspected the comma.
+2. `lunco-celestial` → `lunco-api` (whose default `render` feature pulls `bevy_render`). This was found
+   **at the very end of the decoupling**, after every material, camera and shader had already been
+   moved — the same trap, one layer deeper, still invisible.
+
+And the last edge before that one was a **single billboard `Text2d` label on a spacecraft** — because
+`bevy_sprite_render` pulls `bevy_render`. Nobody would guess the server links a GPU driver because of a
+text label. **Only `cargo tree` sees any of this.**
+
+Hence the `render-decoupling` job in [`.github/workflows/lint.yml`](../../.github/workflows/lint.yml):
+it asserts the server links none of `wgpu`/`bevy_render`/`bevy_pbr`/`bevy_core_pipeline`/`egui`/`winit`,
+and that no crate other than `lunco-render-bevy` enables `bevy_pbr`. The review's central lesson was
+*the craft is high, the enforcement is absent.* This is the enforcement.
 
 ## What this is not
 
-It is **not** a "headless renderer" or a second render path. The render crate is the only consumer of
-`bevy_pbr`, and the GUI build is byte-for-byte the same as today. The only observable difference in
-the GUI is that material binding happens in an observer one frame-boundary later than the spawn — if
-any code depends on the material existing in the same tick as the mesh, that is a latent ordering bug
-worth surfacing anyway.
+It is **not** a "headless renderer" or a second render path. `lunco-render-bevy` is the only consumer of
+`bevy_pbr`, and the GUI build renders exactly as before. The one observable difference is that material
+binding happens in an observer, a frame-boundary after the spawn — if any code depended on the material
+existing in the same tick as the mesh, that was a latent ordering bug worth surfacing anyway.
+
+The GUI is **not** feature-gated into the domain: there is exactly **one** `#[cfg(feature = "ui")]` in
+the whole scheme, in `SandboxCorePlugin::build`, and it exists only because `lunco-render-bevy` is an
+optional dependency. The simulation crates contain none.

@@ -27,17 +27,17 @@ embed-assets = []
 # Dropped with it: `bevy_post_process`/`bevy_anti_alias`/`smaa_luts` (the observer
 # camera's `Bloom` was a no-op on a non-HDR target — review `R4` — and SMAA was
 # already gone; MSAA/tonemapping now come from `SceneCamera`) and `tonemapping_luts`.
+#
+# Also dropped: `bevy_text`/`bevy_sprite_render`/`default_font`. They were here for
+# ONE billboard `Text2d` on a spacecraft — and `bevy_sprite_render` pulls
+# `bevy_render`, which made this crate the LAST thing dragging the whole GPU stack
+# into the `--no-ui` server, long after every material and camera had been decoupled.
+# A spacecraft's NAME is simulation data and stays here (`lunco_render::WorldLabel`);
+# the glyphs are built by `lunco-render-bevy`.
+#
 # KEPT: `bevy_mesh` (Mesh3d/PrimitiveTopology — render-free), `bevy_camera`
-# (Camera/Projection/Exposure/Visibility), `bevy_light` (DirectionalLight,
-# NotShadowCaster), `bevy_gltf`, `mesh_picking`, and
-# `bevy_text`/`bevy_sprite_render`/`default_font` for the spacecraft billboard
-# labels (missions.rs `Text2d`).
-# RENDER-FREE. `bevy_sprite_render` / `bevy_text` / `default_font` used to be here
-# for ONE billboard `Text2d` on a spacecraft — and `bevy_sprite_render` pulls
-# `bevy_render` → wgpu + naga, which made this crate the last thing dragging the
-# whole GPU stack into the `--no-ui` server. The spacecraft's NAME is simulation
-# data and stays here as `lunco_render::WorldLabel`; the glyphs are built by
-# `lunco-render-bevy`. See docs/architecture/render-decoupling.md.
+# (Camera/Projection/Exposure/Visibility/Hdr), `bevy_light` (DirectionalLight,
+# NotShadowCaster), `bevy_gltf`, `mesh_picking`.
 bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_camera", "bevy_light", "mesh_picking"] }
 bevy_mesh = { workspace = true }
 # egui shell used only by `src/ui/` (CelestialUiPlugin) — optional for headless.
@@ -75,12 +75,9 @@ serde_json = { workspace = true }
 # `MaterialExtension` (removed 2026-07-13). Nothing here holds a shader handle now.
 #
 # `ShaderLook` + `ParamValue` — the custom-shader appearance INTENT the globe tiles
-# state (blueprint.wgsl, named by path). NOTE: `lunco-materials` still exposes
-# `ShaderMaterial` (an `AsBindGroup`, hence `bevy_pbr`), so it currently drags wgpu
-# into this crate's dep graph even though nothing here names a material — the same
-# residue `lunco-terrain-surface` carries. That is `lunco-materials`' own TODO (move
-# `shader_material.rs` into `lunco-render-bevy`); when it lands, this crate's closure
-# goes wgpu-free with no further change here.
+# state (blueprint.wgsl, named by path). `lunco-materials` is render-free:
+# `ShaderMaterial` (the `AsBindGroup`, hence `bevy_pbr`) moved to `lunco-render-bevy`
+# on 2026-07-13, so this crate's closure is wgpu-free. Keep it that way.
 lunco-materials = { path = "../lunco-materials" }
 lunco-terrain-globe = { path = "../lunco-terrain-globe" }
 # Read-only terrain LOS: the link kernel marches `los_hit` over each DEM's

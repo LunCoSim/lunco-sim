@@ -9,6 +9,46 @@ acting. Everything else is `CONFIRMED`.
 & time conventions, IAU-WGCCRE rotation models, FMI 2.0/3.0 co-simulation, CDLOD/chunked-LOD
 planetary rendering, server-authoritative + rollback netcode).
 
+---
+
+## ⚠️ STATUS — 2026-07-13: most of this is FIXED. Read this box first.
+
+This document is the **original review**, kept as written for the record. It is no longer a to-do list.
+
+| | |
+|---|---|
+| **§1 Security** | **DEFERRED BY DESIGN.** The project has accepted that it does not enforce access control. See [`TODO-rbac-not-enforced.md`](TODO-rbac-not-enforced.md). The one exception — the `SpawnDemTerrain.target_res` OOM (input validation, not authorization) — is **fixed**. |
+| **§2 Architecture** | Fixed: `A1` (+ the avian `debug-plugin` leak it exposed), `A2`, `A3`, `A4`, `A5`, `A7`(partial), `A8`, `A10`(partial), `A11`. Open: `A6`, `A9`. |
+| **§3 Simulation** | Fixed: `P9`, `P10`, `P11`. **Deliberately untouched at the user's direction: `P1`–`P6` (celestial/orbital).** `P2` in particular — **the Moon's near side still does not face Earth.** Open: `P7`, `P8`, `P12`. |
+| **§4 Netcode** | **Untouched at the user's direction.** `N1`–`N6` all open. `N1` is the one users will hit. |
+| **§5 Performance** | Fixed: `R1`(partial), `R2`, `R3`, `R4`, `R5`, `R6`, `R7`, `R8`, `R9`, `R10`, `R11`, `R12`, `R13`(most). |
+| **§6 Branch diff** | Fixed: `D1`, `D2`, `D3`, `D4`, `D5`, `D6`, `D7`, `D8`, `D9`. |
+| **§7 Hygiene** | Fixed: `H1` (clippy now green workspace-wide — see below), `H2`(partial), `H3`, `H4`, `H5`, `H7`, `H8`, `H9`, `H10`, `H11`(documented, not deleted), `H12`. Open: `H6`, `H13`. |
+
+**Three corrections to this document, found while fixing it.** Do not trust these paragraphs:
+
+- **`D2`** claims the hazard is baked into `surface_tex.a`. **It is not, any more** — `pack_surface_rgba8`
+  writes `A = 255` and hazard is deliberately a *view*. Sampling it would have shaded the world red. The
+  fix uses the baked **normal** map instead.
+- **`D4`** claims the shaders hard-code the hazard palette. **Half-true** — both shaders already import a
+  shared `lunco::transfer` WGSL module; only the Rust↔WGSL constant pair remains duplicated. And
+  `TransferFn::SlopeHazard` **does** have a consumer (the Inspector legend), contrary to the finding.
+- **`H1`'s framing was wrong**, and the right diagnosis matters more than the fix. The wasm-portability
+  bans were being enforced **on native — the one target where they cannot be true.** `Instant::now`
+  produced **73 false positives and zero true positives** (on native, `web_time::Instant` *is*
+  `std::time::Instant` — same DefId — so clippy flagged every *correct* caller). A lint that is wrong
+  every time it fires is a lint people silence; that is *why* the hole stayed open. Those bans now run on
+  `--target wasm32-unknown-unknown`, where `cfg` strips native-only code and the types are distinct.
+
+**Two bugs the new wasm gate caught immediately, which no native build or lint can see:**
+the **web build was broken** (`transports/wasm.rs` never got a field added to `ApiResponseEnvelope`), and
+`indexer.rs` shipped `std::time::Instant` into the browser, where `now()` **panics**.
+
+**Also done, beyond this review:** the [render decoupling](../architecture/render-decoupling.md) — the
+`--no-ui` server now links **no wgpu, no bevy_render, no bevy_pbr, no egui, no winit**.
+
+---
+
 ## How to use this document
 
 - Each finding has a stable ID (`S1`, `A3`, `R7`, `D6`, `H1`, `P2`, `N1`). Reference it in commits.

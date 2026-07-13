@@ -2,10 +2,15 @@
 //!
 //! Provides a way to validate engineering models independently from the Bevy engine.
 
+// Native-only CLI: it reads a model file off disk. The browser has no
+// filesystem (and no CLI), so the body is `mod native` and wasm32 gets the stub
+// `main` at the bottom.
+#[cfg(not(target_arch = "wasm32"))]
+mod native {
 use lunco_modelica::ModelicaCompiler;
 use std::path::PathBuf;
 
-fn main() -> anyhow::Result<()> {
+pub(crate) fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
         println!("Usage: modelica_tester <model_path.mo> [model_name]");
@@ -106,3 +111,12 @@ fn env_f64(name: &str, default: f64) -> f64 {
         .and_then(|s| s.parse().ok())
         .unwrap_or(default)
 }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn main() -> anyhow::Result<()> {
+    native::main()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn main() {}

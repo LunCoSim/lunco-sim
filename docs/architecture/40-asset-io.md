@@ -4,8 +4,9 @@
 
 **TL;DR.** Domain crates read assets through `bevy::asset::AssetServer` —
 never `std::fs::read*`, `std::thread::spawn`, `std::time::Instant`, or
-`tokio::fs`. Workspace clippy denies the offenders; a wasm build gate in
-CI catches anything that slips through (transitive deps, std API drift).
+`tokio::fs`. These are denied by clippy **on the wasm target**, which is the only
+place they are actually true (see *Enforcement layers*); a wasm build gate in CI
+catches anything that slips through (transitive deps, std API drift).
 
 ---
 
@@ -105,12 +106,42 @@ trail.
 
 ## Enforcement layers
 
+**There are two clippy configs, and the split is the whole point.**
+
 | Layer | Catches | Where |
 |---|---|---|
-| `clippy.toml` `disallowed-methods` | New direct `std::fs::*` / `std::thread::spawn` / `std::time::Instant` in workspace source | `clippy.toml` at repo root |
-| `cargo clippy --workspace -- -D warnings` (CI) | Above, fails PR | `.github/workflows/` |
-| `scripts/check_wasm.sh` (CI) | **Anything** that breaks the wasm link — including transitive deps that pull `mio`/`tokio-fs`/`std::thread`. Strongest gate. | `scripts/check_wasm.sh` |
-| `docs/architecture/40-asset-io.md` (this file) | Human awareness | here |
+| `ci/wasm-lint/clippy.toml` + the **`wasm-lint`** CI job | The wasm-portability bans — `std::fs::*`, `std::thread::spawn`, `std::time::Instant::now` — run with `--target wasm32-unknown-unknown` on the crates that actually ship to the browser | `.github/workflows/lint.yml` (`CLIPPY_CONF_DIR=ci/wasm-lint`) |
+| `clippy.toml` at the repo root + the **`clippy`** CI job | Everything that is genuinely wrong *on native* too: the `big_space` re-parenting atomicity contract (`add_child` / `set_parent_in_place` → `migrate_to_grid`) and the USD stage deep-clone (`TextReader::clone`) | `clippy.toml`, `.github/workflows/lint.yml` |
+| `scripts/check_wasm.sh` — **run by hand; no workflow invokes it** | **Anything** that breaks the wasm *link*, including transitive deps that pull `mio`/`tokio-fs`/`std::thread`. Strongest check, but it is not a gate until something calls it. | `scripts/check_wasm.sh` |
+| This file | Human awareness | here |
+
+> ### Why the portability bans do NOT run on native
+>
+> **Native is the one target where they cannot be true**, and enforcing them there
+> is what made clippy unusable in this repo:
+>
+> - **`std::fs` / `std::thread`** — the overwhelming majority of call sites are
+>   already inside `#[cfg(not(target_arch = "wasm32"))]`, where using them is
+>   *correct*. Native clippy sees that code anyway and flags it.
+> - **`std::time::Instant::now`** — worse. `web_time` supplies its native impl via
+>   `pub use std::time::*`, so on native `web_time::Instant` **is**
+>   `std::time::Instant` — the same DefId. Clippy resolves straight through the
+>   re-export and flags every *correct* caller: **73 hits in `lunco-modelica`
+>   alone, all false, not one true.**
+>
+> **A lint that is wrong every single time it fires is a lint people silence** —
+> and a silenced lint is how the hole stayed open. On `wasm32`, `cfg` strips the
+> native-only code before clippy sees it and the two `Instant` types are genuinely
+> distinct, so the bans fire **only** on code that will actually break in a browser.
+>
+> **Do not move these entries back into the root `clippy.toml`.**
+
+**Known debt, counted rather than hidden:** `lunco-modelica` has ~16 `std::fs`
+calls that *are* reachable on wasm (the MSL indexer, the package browser, the icon
+loader) — the long-standing "MSL missing on the web" symptom. They are **not**
+`#[allow]`ed: a non-fatal CI step prints the count and the sites every run, and it
+must trend to zero. An `#[allow]` would hide the debt *and* blind the gate to new
+wasm bugs in those same files.
 
 The wasm-build step is the killer. Clippy only sees our source; the
 linker sees the whole graph. Today's whole adventure (mio, crossbeam,

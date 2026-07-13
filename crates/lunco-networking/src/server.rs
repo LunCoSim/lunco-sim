@@ -397,6 +397,9 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
     app.init_resource::<crate::sync::PendingRunStatus>();
     // Public rebuild seam (mid-session content → manifest rebuild).
     app.init_resource::<crate::sync::RequestManifestRebuild>();
+    // Connect-time journal replay queue (review N5) — metered by
+    // `replay_journal_chunks` instead of blasted from the connect observer.
+    app.init_resource::<PendingJournalReplay>();
     app.add_systems(Startup, spawn_initial_scenario_manifest);
 
     app.add_observer(on_server_connected);
@@ -447,6 +450,11 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
                 broadcast_scenario_manifest,
                 host_send_outbox,
                 assemble_and_send_snapshots,
+                // Connect-time journal history, chunked + budgeted (review N5).
+                // Shares `ServerMultiMessageSender` with the sends above → chained.
+                // Ordered AFTER them so a joiner's session-context frames are never
+                // stuck behind its (potentially thousands of entries) history.
+                replay_journal_chunks,
                 // Phase-3: poll finished read jobs and stream their chunks to the
                 // requesting peer. Shares `ServerMultiMessageSender` with the two
                 // sends above, so it's chained (not parallel) to avoid the param
@@ -561,6 +569,7 @@ fn server_send(
 /// spawn (the assembler's per-peer `spawned` set starts empty and can't know what this
 /// one-shot already sent). Handshake/Ownership/Profiles stay — they're session context,
 /// not entity state, and the assembler doesn't carry them.
+#[allow(clippy::too_many_arguments)]
 fn on_server_connected(
     trigger: On<Add, Connected>,
     q_client: Query<&RemoteId, With<ClientOf>>,
@@ -573,6 +582,7 @@ fn on_server_connected(
     mut sender: ServerMultiMessageSender,
     mut rbac: ResMut<lunco_core::session::SessionRbac>,
     mut assigned: ResMut<AssignedSessions>,
+    mut replay: ResMut<PendingJournalReplay>,
 ) {
     let Ok(remote) = q_client.get(trigger.entity) else {
         return;
@@ -584,6 +594,9 @@ fn on_server_connected(
     // authority id (review H4/H5).
     let peer_key = peer_to_session(peer).0;
     let session = assigned.assign(peer_key, trigger.entity);
+    // Server-side credential for `is_authorized`. It is NOT sent to the client any
+    // more (review N6): the client stored it and never read it back, while real
+    // authority is bound to the connection.
     let token = lunco_core::ids::random_token();
 
     // Initialize client session in RBAC registry as an *authenticated* Observer with
@@ -598,7 +611,7 @@ fn on_server_connected(
         username: format!("Player {}", session.0),
         role: lunco_core::session::AuthorityRole::Observer,
         authenticated: true,
-        token: Some(token.clone()),
+        token: Some(token),
     });
     let server = server.into_inner();
     let target = NetworkTarget::Single(peer);
@@ -611,7 +624,9 @@ fn on_server_connected(
         &SyncEnvelope::Handshake(HandshakeMsg {
             session: session.0,
             tick: tick.0,
-            token,
+            // Review N4: the client refuses the session on a mismatch rather than
+            // mis-decoding every later message (bincode is positional).
+            wire_version: crate::sync::WIRE_VERSION,
         }),
     );
     // Current ownership table, so the joiner immediately knows who owns what
@@ -654,21 +669,165 @@ fn on_server_connected(
     // Full Twin-journal replay so a late joiner converges on the host's edit
     // history (journal plane). Ongoing appends then stream via the plane's
     // `broadcast_journal_entries`; overlap is idempotent (dedup by EntryId).
+    //
+    // QUEUED, NOT BLASTED (review N5). This used to push ONE reliable envelope per
+    // journal entry, right here, inside the connect observer. `server_send`'s own
+    // comment says it: lightyear's reliable sender queues WITHOUT BOUND — the exact
+    // reason asset bytes were moved off this channel and onto HTTP. A twin with a
+    // few thousand edits (their own test cites a real 982-entry journal) therefore
+    // enqueued 982 reliable messages at the precise moment the client also needs its
+    // ownership/profile/manifest frames and is fetching assets. Now the entries are
+    // handed to `replay_journal_chunks`, which ships them in batches under a
+    // per-frame budget, behind the session-context frames above.
     if let Some(journal) = &journal {
-        for msg in crate::journal_plane::full_journal_msgs(journal) {
-            server_send(
-                &mut sender,
-                server,
-                &target,
-                SyncChannel::BulkData,
-                &SyncEnvelope::JournalEntry(msg),
+        let entries = crate::journal_plane::full_journal_msgs(journal);
+        if !entries.is_empty() {
+            info!(
+                "[net] queueing {} journal entries for replay to session {} \
+                 (chunked, {JOURNAL_REPLAY_BUDGET} entries/frame)",
+                entries.len(),
+                session.0
             );
+            replay.0.push_back(PeerJournalReplay {
+                peer,
+                remaining: entries.into(),
+            });
         }
     }
     // Policies need no connect-time push: a `LuncoPolicy` prim is a USD doc op, so
     // it arrives in the full journal replay above and each peer's projector
     // activates it — determinism by identical composition, not by broadcast.
     info!("[net] client connected: peer={peer:?} session={}", session.0);
+}
+
+// ── Connect-time journal replay, metered (review N5) ──────────────────────────
+
+/// Journal entries per `JournalBatch` envelope. Batching amortizes the per-message
+/// framing/ack overhead of the reliable channel over many small entries.
+const JOURNAL_REPLAY_CHUNK: usize = 32;
+
+/// Journal entries a single peer's replay may enqueue **per frame**. With the
+/// default ~60 Hz `Update`, a 982-entry journal drains in ~4 frames instead of
+/// landing in the reliable queue all at once, so the connect frames (ownership,
+/// profiles, manifest) and the asset fetch are not stuck behind it.
+const JOURNAL_REPLAY_BUDGET: usize = 256;
+
+/// One connected peer's outstanding journal replay.
+struct PeerJournalReplay {
+    peer: PeerId,
+    remaining: std::collections::VecDeque<crate::journal_plane::JournalEntryMsg>,
+}
+
+/// Host: journal replays still owed to freshly-connected peers.
+#[derive(Resource, Default)]
+struct PendingJournalReplay(std::collections::VecDeque<PeerJournalReplay>);
+
+/// Ship each connecting peer's journal history in chunks, under a per-frame budget.
+///
+/// The connect observer only *queues* the history (see `on_server_connected`);
+/// this drains it. Runs in the same chained `Update` tuple as the other sends
+/// because it shares `ServerMultiMessageSender`.
+fn replay_journal_chunks(
+    mut replay: ResMut<PendingJournalReplay>,
+    server: Single<&Server>,
+    mut sender: ServerMultiMessageSender,
+) {
+    if replay.0.is_empty() {
+        return;
+    }
+    let server = server.into_inner();
+    for pending in replay.0.iter_mut() {
+        let target = NetworkTarget::Single(pending.peer);
+        for chunk in take_replay_chunks(
+            &mut pending.remaining,
+            JOURNAL_REPLAY_BUDGET,
+            JOURNAL_REPLAY_CHUNK,
+        ) {
+            server_send(
+                &mut sender,
+                server,
+                &target,
+                SyncChannel::BulkData,
+                &SyncEnvelope::JournalBatch(chunk),
+            );
+        }
+    }
+    replay.0.retain(|p| !p.remaining.is_empty());
+}
+
+/// The per-frame send plan for one peer's journal replay: take at most `budget`
+/// entries off the front, in chunks of `chunk`. Pure, so the budget/chunk behaviour
+/// is testable without a lightyear sender.
+fn take_replay_chunks(
+    remaining: &mut std::collections::VecDeque<crate::journal_plane::JournalEntryMsg>,
+    budget: usize,
+    chunk: usize,
+) -> Vec<Vec<crate::journal_plane::JournalEntryMsg>> {
+    let mut out = Vec::new();
+    let mut sent = 0usize;
+    while sent < budget && !remaining.is_empty() {
+        let n = chunk.min(remaining.len()).min(budget - sent);
+        sent += n;
+        out.push(remaining.drain(..n).collect());
+    }
+    out
+}
+
+#[cfg(test)]
+mod journal_replay_tests {
+    use super::*;
+    use crate::journal_plane::JournalEntryMsg;
+
+    fn journal(n: usize) -> std::collections::VecDeque<JournalEntryMsg> {
+        (0..n).map(|i| JournalEntryMsg { json: format!("{{\"i\":{i}}}") }).collect()
+    }
+
+    /// **Review N5.** The connect-time replay used to push ONE reliable envelope per
+    /// journal entry, inside the connect observer — and lightyear's reliable sender
+    /// queues WITHOUT BOUND (that is why asset bytes were moved to HTTP). A real
+    /// 982-entry twin therefore dumped 982 reliable messages into the queue at the
+    /// exact moment the joiner needs its ownership/profile/manifest frames. It is now
+    /// chunked and metered: bounded work per frame, and every entry still delivered.
+    #[test]
+    fn connect_replay_is_chunked_and_budgeted() {
+        let mut remaining = journal(982);
+
+        let frame1 = take_replay_chunks(&mut remaining, JOURNAL_REPLAY_BUDGET, JOURNAL_REPLAY_CHUNK);
+        let sent1: usize = frame1.iter().map(Vec::len).sum();
+        assert_eq!(sent1, JOURNAL_REPLAY_BUDGET, "one frame ships exactly its budget");
+        assert!(
+            frame1.len() < 20,
+            "982 entries must not become ~982 reliable messages; got {} in frame 1",
+            frame1.len()
+        );
+        assert!(frame1.iter().all(|c| c.len() <= JOURNAL_REPLAY_CHUNK));
+        assert_eq!(remaining.len(), 982 - JOURNAL_REPLAY_BUDGET);
+
+        // …and the whole history still arrives, in order, over a bounded number of frames.
+        let mut frames = 1;
+        let mut total = sent1;
+        while !remaining.is_empty() {
+            total += take_replay_chunks(&mut remaining, JOURNAL_REPLAY_BUDGET, JOURNAL_REPLAY_CHUNK)
+                .iter()
+                .map(Vec::len)
+                .sum::<usize>();
+            frames += 1;
+            assert!(frames < 100, "replay must terminate");
+        }
+        assert_eq!(total, 982, "every entry is replayed");
+        assert_eq!(frames, 982_usize.div_ceil(JOURNAL_REPLAY_BUDGET));
+    }
+
+    /// A journal smaller than one budget goes out in a single frame (no regression
+    /// for the common small-twin case).
+    #[test]
+    fn small_journal_replays_in_one_frame() {
+        let mut remaining = journal(10);
+        let frame = take_replay_chunks(&mut remaining, JOURNAL_REPLAY_BUDGET, JOURNAL_REPLAY_CHUNK);
+        assert_eq!(frame.len(), 1);
+        assert_eq!(frame[0].len(), 10);
+        assert!(remaining.is_empty());
+    }
 }
 
 /// Client dropped: free everything its session owned (G5) and remove its profile.
@@ -686,14 +845,19 @@ fn on_server_disconnected(
     mut pending_offers: ResMut<crate::scenario_sync::PendingAssetOffers>,
     mut pending_requests: ResMut<crate::scenario_sync::PendingAssetRequests>,
     mut serve_tasks: ResMut<crate::scenario_sync::AssetServeTasks>,
+    mut replay: ResMut<PendingJournalReplay>,
 ) {
     // Resolve the connection key via `RemoteId` when it's still present, else via
     // the entity itself — a despawning client entity may have lost `RemoteId`
     // before this observer runs, and its session must be freed regardless.
-    let peer_key = q_client
-        .get(trigger.entity)
-        .map(|remote| peer_to_session(remote.0).0)
-        .ok()
+    let peer = q_client.get(trigger.entity).map(|remote| remote.0).ok();
+    // Stop replaying journal history at a peer that has left (review N5) — its
+    // queue would otherwise keep feeding the reliable sender for a dead connection.
+    if let Some(peer) = peer {
+        replay.0.retain(|p| p.peer != peer);
+    }
+    let peer_key = peer
+        .map(|p| peer_to_session(p).0)
         .or_else(|| assigned.peer_key_of(trigger.entity));
     let Some(peer_key) = peer_key else {
         return;

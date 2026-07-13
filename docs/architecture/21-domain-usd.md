@@ -436,7 +436,14 @@ assets, not just single-layer files. A prim with any animated channel is tagged
 - **Transform** — the full transform decode above, evaluated at the entity's resolved time.
 - **Visibility** — animated `visibility` token (held).
 - **Material** — animated `inputs:diffuseColor` / `inputs:opacity` (and geom
-  `primvars:displayColor`) into the live `StandardMaterial`.
+  `primvars:displayColor`) into the entity's **`PbrLook`** — the render-free appearance
+  intent ([`render-decoupling.md`](render-decoupling.md)). This crate names no material
+  type; `lunco-render-bevy` binds `PbrLook` to a real material.
+
+  > An animated prim carries the **`unshared`** opt-out. `PbrLook` materials are cached
+  > by content, so an animated `displayColor` re-keys the cache every frame — minting a
+  > material per frame and freeing none. That is an unbounded leak that presents as a
+  > slow memory climb, not a crash.
 
 An animated rigid body is demoted to `RigidBody::Kinematic` (`lunco-usd-avian`) so the
 sampler's writes don't fight the physics solver. Playback is independent of the physics

@@ -62,6 +62,8 @@ pub mod view;
 pub mod canonical;
 pub mod mount;
 pub mod read;
+pub mod units;
+pub use units::{stage_convention, ConventionTransform, StageMetrics, UpAxis};
 use usd_data::UsdDataExt;
 pub use view::StageView;
 pub use canonical::{CanonicalStage, CanonicalStages, RawStageChange, StageRecipe};
@@ -1032,8 +1034,15 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // it applies on top of any user-authored rotation.
         if matches!(prim_type.as_deref(), Some("Cylinder" | "Cone" | "Capsule" | "Plane")) {
             let axis = read_token(reader, &sdf_path, "axis").unwrap_or_else(|| "Z".to_string());
-            if let Some(q) = usd_axis_to_quat(&axis) {
-                transform.rotation = transform.rotation * q;
+            // The `axis` token names an axis of the STAGE's frame, while the Bevy
+            // primitive is generated in the canonical one — so the axis rotation is
+            // pre-rotated by the stage convention (`Q·q_axis`). On a Z-up stage an
+            // `axis = "Z"` cylinder therefore stands up along canonical +Y, as it
+            // did along the stage's +Z. Identity on a Y-up stage.
+            let conv = stage_convention(reader);
+            let q_axis = conv.orient(usd_axis_to_quat(&axis).unwrap_or(Quat::IDENTITY));
+            if !q_axis.abs_diff_eq(Quat::IDENTITY, 1e-6) {
+                transform.rotation = transform.rotation * q_axis;
             }
             info!(
                 "[usd-bevy] {} {} axis={} rot={:?}",
@@ -1054,7 +1063,10 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // rover-local space and the aim rides the rover.
         if prim_type.as_deref() == Some("Camera") {
             if let Some([tx, ty, tz]) = read_vec3_f64(reader, &sdf_path, "lunco:cameraLookAt") {
-                let target = Vec3::new(tx as f32, ty as f32, tz as f32);
+                // A point in the camera's PARENT-local (stage-frame) space →
+                // canonical, exactly like every other authored point.
+                let target = stage_convention(reader)
+                    .point(Vec3::new(tx as f32, ty as f32, tz as f32));
                 let eye = transform.translation;
                 if (target - eye).length_squared() > 1e-6 {
                     transform.rotation = Transform::from_translation(eye)
@@ -2200,9 +2212,17 @@ pub fn sample_usd_animation(
         let t = secs * plan.time_codes_per_second;
 
         // Drive the local transform per the plan's cached channel topology.
+        // Every channel is converted to the canonical frame by the stage's
+        // `ConventionTransform` — the sampler drives raw sub-decoders (not
+        // `local_transform_at`), so it must convert explicitly or an animated prim
+        // on a Z-up/cm stage would snap back to stage units every frame.
+        // Conjugation is separable across translate/rotate/scale, so the
+        // per-channel conversion agrees with the whole-transform one.
+        let conv = stage_convention(reader);
         match &plan.xform {
             XformDrive::OpOrder => {
                 if let Some(m) = compose_xform_order_at(reader, &sdf_path, t) {
+                    let m = conv.local_transform(m);
                     tf.translation = m.translation;
                     tf.rotation = m.rotation;
                     tf.scale = m.scale;
@@ -2210,6 +2230,7 @@ pub fn sample_usd_animation(
             }
             XformDrive::Matrix => {
                 if let Some(m) = read_matrix_transform_at(reader, &sdf_path, t) {
+                    let m = conv.local_transform(m);
                     tf.translation = m.translation;
                     tf.rotation = m.rotation;
                     tf.scale = m.scale;
@@ -2218,19 +2239,20 @@ pub fn sample_usd_animation(
             XformDrive::Trs { translate, rotate, scale } => {
                 if *translate {
                     if let Some(v) = sample_animated_vec3(reader, &sdf_path, "xformOp:translate", t) {
-                        tf.translation = Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32);
+                        tf.translation =
+                            conv.point(Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32));
                     }
                 }
                 // Any animated rotation channel → recompose the full local rotation
                 // (Euler order / `orient` slerp / single-axis) at `t`.
                 if *rotate {
                     if let Some(q) = local_rotation_at(reader, &sdf_path, t) {
-                        tf.rotation = q;
+                        tf.rotation = conv.rotation(q);
                     }
                 }
                 if *scale {
                     if let Some(v) = sample_animated_vec3(reader, &sdf_path, "xformOp:scale", t) {
-                        tf.scale = Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32);
+                        tf.scale = conv.scale_vec(Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32));
                     }
                 }
             }
@@ -2600,13 +2622,29 @@ pub fn compose_xform_order_at<R: UsdRead>(reader: &R, path: &SdfPath, time: f64)
     Some(Transform::from_matrix(m))
 }
 
-/// The prim's full local `Transform` at time `time`: `xformOpOrder` composition
-/// when authored (authoritative), else a full `xformOp:transform` matrix, else
-/// the implicit-order piecewise fallback (translate + [`local_rotation_at`] +
-/// scale). `None` when the prim authors no xform op at all — the caller then
-/// keeps the entity's existing transform. Shared by the static decoder and the
-/// animation sampler so both agree.
+/// The prim's full local `Transform` at time `time`, **in the canonical frame**:
+/// `xformOpOrder` composition when authored (authoritative), else a full
+/// `xformOp:transform` matrix, else the implicit-order piecewise fallback
+/// (translate + [`local_rotation_at`] + scale). `None` when the prim authors no
+/// xform op at all — the caller then keeps the entity's existing transform.
+/// Shared by the static decoder and the animation sampler so both agree.
+///
+/// **Units/axes convert here** (`docs/architecture/41-axes-and-units.md`): the
+/// raw stage-frame transform is conjugated by the stage's
+/// [`ConventionTransform`](units::ConventionTransform), so a Z-up / centimetre
+/// stage (Omniverse, Isaac Sim) yields an upright, metre-scaled local transform.
+/// A canonical stage (all our own assets) takes the identity path — unchanged.
+/// Every downstream consumer (visual sync, avian colliders, mounts, the gizmo)
+/// funnels through here, so none of them sees stage units.
 pub fn local_transform_at<R: UsdRead>(reader: &R, path: &SdfPath, time: f64) -> Option<Transform> {
+    let raw = local_transform_at_raw(reader, path, time)?;
+    Some(stage_convention(reader).local_transform(raw))
+}
+
+/// [`local_transform_at`] **before** the canonical conversion — the transform as
+/// authored, in the stage's own frame and units. Private: no consumer may hold a
+/// raw spatial value (doc 41 — "visibility is the guardrail").
+fn local_transform_at_raw<R: UsdRead>(reader: &R, path: &SdfPath, time: f64) -> Option<Transform> {
     if let Some(tf) = compose_xform_order_at(reader, path, time) {
         return Some(tf);
     }
@@ -2760,12 +2798,46 @@ pub enum ShapeDims {
     Plane { width: f64, length: f64 },
 }
 
-/// Read the dimensions of a USD primitive shape prim. `type_name` is the
-/// prim's `typeName` token (callers already have it). Returns `None` for
+/// Read the dimensions of a USD primitive shape prim, **in metres**. `type_name`
+/// is the prim's `typeName` token (callers already have it). Returns `None` for
 /// an unsupported type. **The defaults here are the single source of
 /// truth** for both `lunco-usd-avian` (→ `Collider`) and this crate
 /// (→ `Mesh`); changing one here changes both, so they can't drift.
+///
+/// Every dimension is scaled by the stage's `metersPerUnit`
+/// ([`ConventionTransform::length`]) — a centimetre stage's `radius = 50` reads
+/// back `0.5` m. Identity (and therefore unchanged) for a metre stage.
 pub fn read_shape_dims<R: UsdRead>(reader: &R, path: &SdfPath, type_name: &str) -> Option<ShapeDims> {
+    let dims = read_shape_dims_raw(reader, path, type_name)?;
+    let conv = stage_convention(reader);
+    if conv.is_identity() {
+        return Some(dims);
+    }
+    let m = |x: f64| conv.length(x);
+    Some(match dims {
+        ShapeDims::Cube { size, legacy_extents } => ShapeDims::Cube {
+            size: m(size),
+            legacy_extents: legacy_extents.map(|[w, h, d]| [m(w), m(h), m(d)]),
+        },
+        ShapeDims::Sphere { radius } => ShapeDims::Sphere { radius: m(radius) },
+        ShapeDims::Cylinder { radius, height } => {
+            ShapeDims::Cylinder { radius: m(radius), height: m(height) }
+        }
+        ShapeDims::Cone { radius, height } => ShapeDims::Cone { radius: m(radius), height: m(height) },
+        ShapeDims::Capsule { radius, height } => {
+            ShapeDims::Capsule { radius: m(radius), height: m(height) }
+        }
+        ShapeDims::Plane { width, length } => ShapeDims::Plane { width: m(width), length: m(length) },
+    })
+}
+
+/// [`read_shape_dims`] **before** the unit conversion — dimensions in the stage's
+/// own linear unit. Private (doc 41: no public raw spatial accessor).
+fn read_shape_dims_raw<R: UsdRead>(
+    reader: &R,
+    path: &SdfPath,
+    type_name: &str,
+) -> Option<ShapeDims> {
     let dims = match type_name {
         "Cube" => {
             let size = reader.real(path, "size").unwrap_or(2.0);
@@ -2808,6 +2880,31 @@ pub fn read_shape_dims<R: UsdRead>(reader: &R, path: &SdfPath, type_name: &str) 
 /// cover integer arrays, so mesh topology (`faceVertexCounts` /
 /// `faceVertexIndices`) is matched directly. `None` if absent or not an int
 /// array.
+/// A `Mesh` prim's `points`, converted to the canonical frame: `p' = k·Q·p`
+/// (see [`units`]). The one place mesh geometry crosses the unit/axis boundary —
+/// both the render mesh ([`build_usd_mesh`]) and the physics trimesh
+/// ([`read_usd_mesh_indexed`]) read through it, so they cannot disagree.
+fn read_mesh_points<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Vec<[f32; 3]>> {
+    let points = reader.scalar::<Vec<[f32; 3]>>(path, "points")?;
+    let conv = stage_convention(reader);
+    if conv.is_identity() {
+        return Some(points);
+    }
+    Some(points.into_iter().map(|p| conv.point(Vec3::from_array(p)).to_array()).collect())
+}
+
+/// A `Mesh` prim's `normals`, rotated into the canonical frame (`n' = Q·n`) — a
+/// direction, so never scaled. `None` when unauthored (the caller then computes
+/// flat normals).
+fn read_mesh_normals<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Vec<[f32; 3]>> {
+    let normals = reader.scalar::<Vec<[f32; 3]>>(path, "normals")?;
+    let conv = stage_convention(reader);
+    if conv.is_identity() {
+        return Some(normals);
+    }
+    Some(normals.into_iter().map(|n| conv.dir(Vec3::from_array(n)).to_array()).collect())
+}
+
 fn read_int_array<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<Vec<i32>> {
     match reader.attr_value(path, attr)? {
         Value::IntVec(v) => Some(v),
@@ -2830,7 +2927,10 @@ pub fn read_usd_mesh_indexed<R: UsdRead>(
     reader: &R,
     path: &SdfPath,
 ) -> Option<(Vec<[f32; 3]>, Vec<[u32; 3]>)> {
-    let points = reader.scalar::<Vec<[f32; 3]>>(path, "points")?;
+    // Points are converted to the canonical frame (Y-up, metres) — the trimesh
+    // collider must land where the rendered mesh lands. Identity for a canonical
+    // stage. See `units`.
+    let points = read_mesh_points(reader, path)?;
     let counts = read_int_array(reader, path, "faceVertexCounts")?;
     let indices = read_int_array(reader, path, "faceVertexIndices")?;
     if points.is_empty() || counts.is_empty() || indices.is_empty() {
@@ -2890,7 +2990,8 @@ pub fn build_usd_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> {
     // See docs/architecture/render-decoupling.md.
     use bevy_mesh::PrimitiveTopology;
 
-    let points = reader.scalar::<Vec<[f32; 3]>>(path, "points")?;
+    // Canonical-frame points/normals (Y-up, metres); identity for our stages.
+    let points = read_mesh_points(reader, path)?;
     let counts = read_int_array(reader, path, "faceVertexCounts")?;
     let indices = read_int_array(reader, path, "faceVertexIndices")?;
     if points.is_empty() || counts.is_empty() || indices.is_empty() {
@@ -2899,7 +3000,7 @@ pub fn build_usd_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> {
 
     // Optional vertex attributes. `primvars:st` is the de-facto UV channel;
     // accept the bare `st`/`st0` spellings some exporters emit.
-    let normals = reader.scalar::<Vec<[f32; 3]>>(path, "normals");
+    let normals = read_mesh_normals(reader, path);
     let uvs = reader
         .scalar::<Vec<[f32; 2]>>(path, "primvars:st")
         .or_else(|| reader.scalar::<Vec<[f32; 2]>>(path, "primvars:st0"))
@@ -3949,6 +4050,176 @@ def Xform "Std"
         let mover_reader = parse(SCENE);
         assert!(prim_is_animated(&mover_reader, &SdfPath::new("/Mover").unwrap()));
         assert!(!prim_is_animated(&mover_reader, &SdfPath::new("/Static").unwrap()));
+    }
+}
+
+#[cfg(test)]
+mod stage_metrics_import_tests {
+    //! **P7** — the importer honours the stage's `metersPerUnit` / `upAxis`
+    //! (`docs/architecture/41-axes-and-units.md`: "convert once, at the
+    //! importer"). Before this, an Omniverse / Isaac Sim stage — Z-up,
+    //! centimetres, *their* defaults — imported rotated 90° and 100× too small,
+    //! silently. These tests are the fixture doc 41 asks for: load a Z-up/cm
+    //! stage, assert SI Y-up out.
+    use super::*;
+    use crate::units::{StageMetrics, UpAxis};
+    use openusd::sdf::Path as SdfPath;
+
+    fn parse(usda: &str) -> UsdData {
+        openusd::usda::parse(usda).expect("parse USDA")
+    }
+
+    /// An Isaac-Sim-flavoured stage: Z-up, centimetres. `/Tower` sits 3 m up the
+    /// stage's up-axis (+Z = 300 cm) and 1 m along +X; it is a Z-axial cylinder
+    /// (upright in a Z-up world) of radius 0.5 m / height 2 m, authored in cm.
+    const ZUP_CM: &str = r#"#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 0.01
+    upAxis = "Z"
+)
+
+def Xform "World"
+{
+    def Cylinder "Tower"
+    {
+        double3 xformOp:translate = (100, 0, 300)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        token axis = "Z"
+        double radius = 50
+        double height = 200
+    }
+
+    def Mesh "Slab"
+    {
+        point3f[] points = [(0, 0, 100), (100, 0, 100), (0, 100, 100)]
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+    }
+}
+"#;
+
+    /// The same scene in our canonical metrics (Y-up, metres) — the control.
+    const YUP_M: &str = r#"#usda 1.0
+(
+    defaultPrim = "World"
+)
+
+def Xform "World"
+{
+    def Cylinder "Tower"
+    {
+        double3 xformOp:translate = (1, 3, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        token axis = "Y"
+        double radius = 0.5
+        double height = 2
+    }
+}
+"#;
+
+    #[test]
+    fn reads_stage_metrics() {
+        let m = StageMetrics::from_reader(&parse(ZUP_CM));
+        assert_eq!(m.up_axis, UpAxis::Z);
+        assert_eq!(m.meters_per_unit, 0.01);
+        assert!(!m.is_canonical());
+
+        // Unauthored ⇒ the USD defaults, which are our canonical frame.
+        let m = StageMetrics::from_reader(&parse(YUP_M));
+        assert_eq!(m.up_axis, UpAxis::Y);
+        assert_eq!(m.meters_per_unit, 1.0);
+        assert!(m.is_canonical(), "a Y-up metre stage must convert to the identity");
+    }
+
+    /// The headline regression: the Z-up centimetre stage imports **upright and
+    /// at true scale**. Before the fix, `translate` read back `(100, 0, 300)` —
+    /// 100× too large and with the up-axis on Z.
+    #[test]
+    fn zup_centimetre_stage_imports_upright_and_metre_scaled() {
+        let reader = parse(ZUP_CM);
+        let tower = SdfPath::new("/World/Tower").unwrap();
+
+        let tf = local_transform_at(&reader, &tower, 0.0).expect("prim authors an xform");
+        // (100, 0, 300) cm, Z-up  →  (1, 3, 0) m, Y-up: the stage's +Z (up) is now
+        // canonical +Y (up); +X is untouched; the metre scale is 1/100.
+        assert!(
+            tf.translation.abs_diff_eq(Vec3::new(1.0, 3.0, 0.0), 1e-5),
+            "expected (1, 3, 0) m Y-up, got {:?}",
+            tf.translation
+        );
+
+        // Dimensions convert to metres — the collider and the mesh both read this.
+        match read_shape_dims(&reader, &tower, "Cylinder") {
+            Some(ShapeDims::Cylinder { radius, height }) => {
+                assert!((radius - 0.5).abs() < 1e-9, "radius {radius} m");
+                assert!((height - 2.0).abs() < 1e-9, "height {height} m");
+            }
+            other => panic!("expected Cylinder dims, got {other:?}"),
+        }
+
+        // Mesh points convert as points: (0,0,100)cm Z-up → (0,1,0)m Y-up, and
+        // (0,100,100) → (0, 1, -1).
+        let (points, tris) =
+            read_usd_mesh_indexed(&reader, &SdfPath::new("/World/Slab").unwrap()).expect("mesh");
+        assert_eq!(tris.len(), 1);
+        assert!(Vec3::from_array(points[0]).abs_diff_eq(Vec3::new(0.0, 1.0, 0.0), 1e-5));
+        assert!(Vec3::from_array(points[1]).abs_diff_eq(Vec3::new(1.0, 1.0, 0.0), 1e-5));
+        assert!(Vec3::from_array(points[2]).abs_diff_eq(Vec3::new(0.0, 1.0, -1.0), 1e-5));
+
+        // The `axis` token is a STAGE-frame axis: a Z-axial cylinder stands up in a
+        // Z-up world, so after conversion it must stand up along canonical +Y —
+        // i.e. the composed geometry rotation maps the primitive's own +Y to +Y.
+        let conv = stage_convention(&reader);
+        let q = conv.orient(usd_axis_to_quat("Z").unwrap_or(Quat::IDENTITY));
+        assert!(
+            (q * Vec3::Y).abs_diff_eq(Vec3::Y, 1e-5),
+            "a Z-axial cylinder on a Z-up stage must end up axial with canonical up, got {:?}",
+            q * Vec3::Y
+        );
+    }
+
+    /// The Z-up/cm stage and its hand-written canonical twin import to the SAME
+    /// pose and dimensions — the round-trip guard doc 41 §"three holes" asks for.
+    #[test]
+    fn zup_cm_stage_matches_its_canonical_twin() {
+        let zup = parse(ZUP_CM);
+        let yup = parse(YUP_M);
+        let tower = SdfPath::new("/World/Tower").unwrap();
+
+        let a = local_transform_at(&zup, &tower, 0.0).unwrap();
+        let b = local_transform_at(&yup, &tower, 0.0).unwrap();
+        assert!(a.translation.abs_diff_eq(b.translation, 1e-5));
+
+        assert_eq!(
+            read_shape_dims(&zup, &tower, "Cylinder"),
+            read_shape_dims(&yup, &tower, "Cylinder"),
+        );
+    }
+
+    /// A canonical stage is bit-for-bit unaffected — every asset we ship takes
+    /// this path, so the conversion cannot regress existing content.
+    #[test]
+    fn canonical_stage_is_untouched() {
+        let reader = parse(YUP_M);
+        let tower = SdfPath::new("/World/Tower").unwrap();
+        assert!(stage_convention(&reader).is_identity());
+        let tf = local_transform_at(&reader, &tower, 0.0).unwrap();
+        assert!(tf.translation.abs_diff_eq(Vec3::new(1.0, 3.0, 0.0), 1e-6));
+        assert!(tf.rotation.abs_diff_eq(Quat::IDENTITY, 1e-6));
+        assert!(tf.scale.abs_diff_eq(Vec3::ONE, 1e-6));
+    }
+
+    /// An unsupported declaration must not import silently-wrong: it falls back
+    /// to the canonical frame (and logs an error — see `StageMetrics::from_reader`).
+    #[test]
+    fn unsupported_declarations_fall_back_to_canonical() {
+        let bogus = parse(
+            "#usda 1.0\n(\n    upAxis = \"X\"\n    metersPerUnit = 0\n)\ndef Xform \"W\"\n{\n}\n",
+        );
+        let m = StageMetrics::from_reader(&bogus);
+        assert_eq!(m.up_axis, UpAxis::Y);
+        assert_eq!(m.meters_per_unit, 1.0);
     }
 }
 

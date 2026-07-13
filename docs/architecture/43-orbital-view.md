@@ -14,9 +14,10 @@ this geometry — see [`49-connectivity-link-kernel.md`](49-connectivity-link-ke
 
 | Substrate | Where | Notes |
 |---|---|---|
-| Body catalog (Sun/EMB/Earth/Moon: radius, **GM**, rotation rate, polar axis) | `lunco-celestial/registry.rs` `CelestialBodyRegistry::default_system` | NAIF ids; GM is exactly what a Kepler propagator needs |
+| Body catalog (Sun/EMB/Earth/Moon: radius, **GM**, and an optional `IauRotation`) | `lunco-celestial/registry.rs` `CelestialBodyRegistry::default_system` | NAIF ids; GM is exactly what a Kepler propagator needs. Rotation is **not** stored as a rate/axis pair — see below |
 | Real ephemeris (VSOP2013/ELP) | `lunco-celestial-ephemeris` `EphemerisProvider::global_position(naif, epoch_jd)` → ecliptic J2000 AU | NoOp fallback installed by `CelestialPlugin` |
-| Frame conventions | `coords.rs::ecliptic_to_bevy` (AU→m, obliquity, Y-up remap); `systems.rs::body_rotation_system` (grid spins `days_since_j2000 · rate` about `polar_axis`) | Body-fixed = grid frame under that rotation; angle 0 at J2000 |
+| Rotation model (IAU/WGCCRE) | `lunco-celestial/iau.rs` `IauRotation` | The published elements, verbatim: `pole_ra`, `pole_dec` (+ their per-century rates), `w0`, `w_rate`. Pole, spin and body-fixed rotation are all **derived** from them |
+| Frame conventions | `coords.rs::ecliptic_to_bevy` (AU→m, obliquity, Y-up remap); `systems.rs::body_rotation_system` (grid rotation = `geo::body_rotation(desc, jd)`) | Body-fixed = grid frame under that rotation |
 | big_space solar hierarchy + globes | `big_space_setup.rs` (Solar→EMB→Earth/Moon grids, `GlobeLod` cube-sphere Earth/Moon, Observer camera) | Nests under `WorldShellPlugin` root when present (`.after(WorldShellSet)`); only the `luncosim` app enables it today |
 | Camera stack | `lunco-avatar`: `OrbitCamera`/`SurfaceCamera`/`FreeFlightCamera`, **`FrameBlend`** smooth transition, `FocusTarget`/`FollowTarget` commands | Smooth view changes ride `FrameBlend` |
 | Georef anchor vocabulary | `lunco:anchor:lat/lon/height` + `metersPerUnit` → `TerrainGeoref` (`lunco-terrain-surface/georef.rs`), read by the USD→DEM bridge | Pure data; no lat/lon→cartesian math yet |
@@ -44,14 +45,46 @@ widgets). Everything vehicle-specific is USD content.
 All link math runs in the **solar frame**: Bevy-axes (Y-up), meters,
 heliocentric — i.e. `ecliptic_to_bevy(global_position(naif, jd))` for body
 centers. Body-fixed points use the same rotation the render grids use:
-`DQuat::from_axis_angle(polar_axis, days_since_j2000 · rate)` (shared helper so
-math and visuals cannot diverge).
+`geo::body_rotation(desc, jd)` — the one shared helper, so math and visuals
+cannot diverge.
+
+### Rotation is the IAU/WGCCRE model, authored once
+
+`geo::body_rotation` delegates to `IauRotation::rotation_bevy`. **The rotation
+elements are stored exactly as the IAU/WGCCRE reports publish them** — pole right
+ascension and declination (with their per-century rates), the prime-meridian angle
+`W₀`, and the spin rate `Ẇ` — plus a body-specific periodic (nutation/libration)
+series. Everything the engine consumes is **derived** from those:
+
+| Derived quantity | From |
+|---|---|
+| `BodyDescriptor::polar_axis(jd)` | `IauRotation::pole_bevy` — the (α, δ) pole, transformed ICRF → engine |
+| `BodyDescriptor::rotation_rate_rad_per_day()` | `Ẇ`, converted |
+| the body-fixed rotation quaternion | `IauRotation::rotation_bevy` — pole tilt **composed with** the prime-meridian angle `W(t) = W₀ + Ẇ·d` |
+
+> **Why derived and not stored.** These are not three independent knobs; they are
+> three views of one published dataset. A cached `rotation_rate_rad_per_day` field
+> alongside the elements is a value that can silently disagree with them. There is
+> exactly one authored copy (`iau.rs`), and the rest are functions of it.
+
+> **Why `W₀` cannot be pasted in as a spin angle.** `W₀` is published as the angle
+> **east of the node of the body's equator on the ICRF equator** — *not* of this
+> engine's ecliptic +X. Composing it as a naked spin about the pole is wrong by the
+> angle between those two references. `iau.rs::icrf_to_bevy` / `bevy_to_icrf` are
+> the explicit frame transform that makes the composition correct; the 23.44°
+> obliquity skew is real and will produce a plausible-looking, wrong answer if you
+> skip it. **Without a prime-meridian epoch at all, the Moon's near side does not
+> face Earth** — that is the bug this model exists to prevent.
 
 Geodetic convention (spherical, matches `TerrainGeoref` docs): body-fixed
 position for lat φ, east-lon λ, height h is
-`(R+h)·(cosφ·cosλ, sinφ, −cosφ·sinλ)` with Y = north pole, λ=0 on +X at J2000.
+`(R+h)·(cosφ·cosλ, sinφ, −cosφ·sinλ)` with Y = north pole.
 ENU tangent basis: `Up` radial, `East = ∂/∂λ`, `North = Up × East` — matches
 the terrain-georef ENU choice (East=+X, North=−Z, Up=+Y in local scenes).
+
+**Solar azimuth is north-referenced** (`lunco-environment::solar`): radians
+clockwise from north, `0 = N`, `+π/2 = E`. That is the standard solar convention;
+a south-referenced azimuth is off by 180° and looks entirely plausible.
 
 ### 2.2 New celestial modules (`lunco-celestial`)
 
@@ -59,10 +92,19 @@ the terrain-georef ENU choice (East=+X, North=−Z, Up=+Y in local scenes).
   `geodetic_to_body_fixed`, `solar_position_of_geodetic`, `LocalTangentFrame`
   (ENU basis + `to_solar`/`from_solar` for scene-local points). Component
   **`GeodeticAnchor{body: i32, geodetic: Geodetic}`**.
-- `kepler.rs` — `KeplerianElements{a_m, e, inc_deg, raan_deg, argp_deg,
-  mean_anomaly_deg, epoch_jd}`; `position_m(gm, jd)` solves Kepler (Newton) and
-  returns ecliptic-frame meters relative to the central body. Component
-  **`KeplerOrbit{body: i32, elements}`**.
+- `kepler.rs` — `KeplerianElements{a_m, e, inclination_deg, raan_deg, argp_deg,
+  mean_anomaly_deg, epoch_jd}`; `position_bevy_m(gm, jd)` solves Kepler (Newton).
+  Component **`KeplerOrbit{body: i32, elements}`**.
+
+  > **The elements are referenced to the BODY'S EQUATOR, not the ecliptic.**
+  > Inclination is measured from the body's equatorial plane and RAAN about the
+  > body's pole — the same pole latitudes use in `geo`, so `i = 90°` really does
+  > fly over the geographic poles of the rendered globe. `position_bevy_m` returns
+  > a **pole-up orbit frame** (pole = +Y); lifting it into the engine frame is
+  > `geo::equatorial_frame` (tilts +Y onto the body's real pole), and only *then*
+  > may the body's spin be composed. Collapsing those two steps measures
+  > inclination about the **ecliptic** pole instead — for Earth's 23.44° tilt that
+  > puts an ISS-like `i = 51.6°` orbit visibly in the wrong plane.
 ### 2.3 Site frame (scene ⇄ body)
 
 A scene root prim may author `lunco:anchor:lat/lon/height` (+

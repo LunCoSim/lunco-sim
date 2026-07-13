@@ -50,15 +50,21 @@ lunco-api = { path = "../lunco-api", default-features = false }
 # The ONE generic vessel-control command `SetPorts` lives here; the wire declares
 # a channel for it (replacing the old rover drive/brake command pair).
 lunco-cosim = { path = "../lunco-cosim" }
-# Wire substrate needs avatar/sandbox-edit COMPONENTS + commands, never their
-# egui editor UI — `default-features = false` keeps the networked headless server
-# (and this crate) egui/winit-free.
+# Wire substrate needs avatar COMPONENTS + commands, never its egui editor UI —
+# `default-features = false` keeps the networked headless server (and this crate)
+# egui/winit-free.
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
 # `default-features = false`: we read only `CelestialReferenceFrame` (the
 # always-compiled registry component) for snapshot grid parenting — never
 # celestial's egui inspector (`ui` feature). Keeps the headless server egui-free.
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
-lunco-sandbox-edit = { path = "../lunco-sandbox-edit", default-features = false }
+# NO `lunco-sandbox-edit` EDGE (review A6). The wire needs exactly two symbols the
+# editor used to own — `SpawnEntity` (channel declaration) and `PendingCorrection`
+# (prediction diagnostics) — and both now live in `lunco-core`, where the wire and
+# the editor can share them. That one edge used to drag the whole editor closure
+# (→ modelica → workspace → doc-bevy) into every networking build. Do not re-add it:
+# if the wire needs a type the editor defines, the type belongs in core.
+#
 # `default-features = false`: we use only the egui-free `Presence`/`UserId`/
 # `PresenceInfo` document-lifecycle types, never doc-bevy's `ui` editor-intent
 # systems. Default features here would turn on `lunco-doc-bevy/ui` (→ bevy_egui)

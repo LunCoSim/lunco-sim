@@ -23,16 +23,19 @@
 //!
 //! MSL
 //! ---
-//! TODO(arch-msl-handoff): the worker needs MSL to be present in its own
-//! `GLOBAL_PARSED_MSL` slot before the first Compile resolves any
-//! `Modelica.*` reference. The minimum-viable path is to have the main
-//! app send an `InstallParsedMsl(Vec<(String, StoredDefinition)>)` envelope
-//! to the worker once its own MSL fetch lands; the worker decodes and
-//! installs. That requires a `WireMessage` envelope around `ModelicaCommand`
-//! (variants: `Command(ModelicaCommand)` / `InstallMsl(...)`). Until that's
-//! wired, the worker compiles will fail with "unresolved reference
-//! Modelica.*" — the channel architecture is still verifiable by sending a
-//! Compile of a self-contained model that doesn't reference MSL.
+//! The worker needs MSL in its own `GLOBAL_PARSED_MSL` slot before the first
+//! Compile can resolve any `Modelica.*` reference — its wasm instance has a
+//! separate linear memory from the page's, so nothing is shared implicitly.
+//! That handoff is WIRED: `worker_transport::WireMessage` wraps every
+//! `ModelicaCommand` and carries two extra variants —
+//! `InstallParsedMslCompressed { bytes, provide_to_main }` (the boot path: the
+//! ~19 MB zstd blob, decompressed + bincode-decoded here, off the main thread)
+//! and `InstallParsedMsl(Vec<(uri, StoredDefinition)>)` (the already-decoded
+//! form). The worker installs it and answers `WireResult::MslReady`; with
+//! `provide_to_main` it also hands the decoded bytes back to the page
+//! (`msl_remote::ingest_worker_decoded_msl`), so the main thread never pays the
+//! decode. (The old `TODO(arch-msl-handoff)` here described this as unbuilt —
+//! it has been built; the note is kept only to say where to look.)
 
 // Wasm32-only binary; the desktop stub below keeps `cargo build` for the
 // host target passing without producing a meaningful executable.

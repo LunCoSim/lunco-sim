@@ -8,11 +8,14 @@
 /// History: this function used to ALSO rotate by the obliquity (making the
 /// world frame equatorial), which compensated the ephemeris provider's
 /// mislabeled equatorial output. The provider now returns true ecliptic
-/// vectors (see `lunco-celestial-ephemeris::equatorial_to_ecliptic`), and the
-/// ecliptic frame keeps the Moon's polar axis within 1.5° of +Y — which is
-/// what the geodesy (`geo.rs`) and the registry's default `polar_axis = +Y`
-/// assume. Earth's real tilted axis is carried per-body in the registry and
-/// honored by `geo::body_rotation`.
+/// vectors (see `lunco-celestial-ephemeris::equatorial_to_ecliptic`).
+///
+/// Body ORIENTATION enters the same frame by the same two steps, in
+/// `iau::icrf_to_bevy` — the IAU/WGCCRE poles and prime meridians are published
+/// in the ICRF, and that function is the one explicit place they cross into
+/// this frame. Positions and orientations therefore share one obliquity
+/// constant; if they ever disagree, every "north" in the sim is wrong by 23.4°
+/// (which has happened here before).
 pub(crate) fn ecliptic_to_bevy(pos: bevy::math::DVec3) -> bevy::math::DVec3 {
     let au_to_m = 1.495_978_707e11;
     let pos_m = pos * au_to_m;

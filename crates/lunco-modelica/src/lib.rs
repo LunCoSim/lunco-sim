@@ -974,6 +974,16 @@ impl Default for ModelicaUiConfig {
     }
 }
 pub mod msl_settings;
+/// The MSL **indexer** — a host-side tool, not a runtime component: it walks the
+/// on-disk MSL tree, parses every `.mo`, and emits `msl_index.json` + the
+/// pre-parsed `parsed-msl.bin` bundle. It is `std::fs`-shaped by definition and
+/// has no wasm caller — the browser never *builds* an index, it *consumes* the
+/// artifacts this produces (`msl_remote` fetches the bundle over HTTP and
+/// installs it via `install_global_parsed_msl`). It used to be an unconditional
+/// `pub mod`, so ~1.6k lines of dead directory-walking code shipped in the wasm
+/// bundle and tripped the wasm lint. Native-gated now: the web MSL path is
+/// `msl_remote`, and this is the thing that makes its input.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod indexer;
 pub mod sim_stream;
 pub mod worker;

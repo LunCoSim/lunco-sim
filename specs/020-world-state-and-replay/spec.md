@@ -2,7 +2,21 @@
 
 **Feature Branch**: `020-world-state-and-replay`
 **Created**: 2026-03-29
-**Status**: Partial — doc journal + snapshot + replay built; no ECS WorldSnapshot/MCAP.
+**Status**: Partial.
+- **Built:** the *document* journal (`lunco-twin-journal` + `lunco-doc-bevy`) — ops for
+  `DomainKind::{Usd, Modelica, Script, Shader, Experiment, ObstacleField, ToolLibrary, Timeline}`,
+  each with its inverse, undo/redo, cross-peer merge, `to_bytes` persistence, and **document-level**
+  replay (journal → document → scene projection).
+- **NOT built — US3 (Deterministic Replay):** there is **no Input Log**. `#[Command]`s are not
+  journaled: `api_command_dispatcher` (`lunco-api::executor`, the single funnel for every HTTP / MCP /
+  rhai / UI command) performs zero journal interaction, and there is no `DomainKind::Command`. So
+  `SpawnEntity`, `PossessVessel`, `DriveRover`, `SetPorts`, terrain spawn/overlay and all time control
+  are neither recorded nor replayable, and entries carry no sim-tick/seed. **Replaying a session is
+  impossible today**; reopening a twin restores *document* state only. See
+  [`docs/architecture/command-journal.md`](../../docs/architecture/command-journal.md) for the design
+  and the four prerequisites.
+- **NOT built — US1/US2/US4/US5:** no ECS `WorldSnapshot`, no `PeriodicSave`, no MCAP/ROSbag export or
+  playback.
 **Input**: Unified ECS State Persistence, check-pointing, deterministic replay, MCAP streaming, and replaying missions.
 
 ## Problem Statement

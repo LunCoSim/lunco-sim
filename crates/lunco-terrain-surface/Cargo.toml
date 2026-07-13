@@ -55,11 +55,9 @@ lunco-terrain-bake = { path = "../lunco-terrain-bake" }
 # `terrain_geomorph` CDLOD-morph shader path, its named params, its texture layers).
 # Also `ATTRIBUTE_MORPH_TARGET` (a `bevy_mesh` vertex attribute) for the tile bake.
 #
-# NOTE: `lunco-materials` still exposes `ShaderMaterial` (an `AsBindGroup`, hence
-# `bevy_pbr`), so it currently drags wgpu into this crate's dep graph even though
-# nothing here names a material. That is `lunco-materials`' own TODO: move
-# `shader_material.rs` into `lunco-render-bevy` and the crate goes render-free —
-# and so does this one, with no further change here.
+# `lunco-materials` is render-free: `ShaderMaterial` (the `AsBindGroup`, hence
+# `bevy_pbr`) moved to `lunco-render-bevy` on 2026-07-13, so this crate's dep
+# graph no longer reaches wgpu. Keep it that way — do not add `bevy_pbr` here.
 lunco-materials = { path = "../lunco-materials" }
 lunco-settings = { path = "../lunco-settings" }
 # M3 spawn: avian heightfield collider + big_space anchoring + cross-platform

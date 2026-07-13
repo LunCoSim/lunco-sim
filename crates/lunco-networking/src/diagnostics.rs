@@ -2,10 +2,10 @@
 //!
 //! These are **read-only observers of public ECS state** (no instrumentation of the
 //! hot netcode systems): they query rendered `GlobalTransform`, avian velocities,
-//! and `PendingCorrection` residuals, and report anomalies via `tracing`. Because
-//! the prediction systems live one crate down (`lunco-sandbox-edit`) and this crate
-//! depends on it, the networking crate is the natural home — it sees everything the
-//! prediction touches without re-coupling.
+//! and `PendingCorrection` residuals, and report anomalies via `tracing`. The
+//! prediction SYSTEMS live in `lunco-sandbox-edit`, but every type they publish is
+//! substrate in `lunco-core` — so this module observes the prediction without this
+//! crate depending on the editor at all (review A6).
 //!
 //! **Compiled out of normal builds** — gated behind the `net-diag` cargo feature
 //! (off by default), so it costs nothing unless you opt in. Build with it when
@@ -37,7 +37,7 @@
 
 use avian3d::prelude::{LinearVelocity, RigidBody};
 use bevy::prelude::*;
-use lunco_sandbox_edit::commands::PendingCorrection;
+use lunco_core::PendingCorrection;
 use std::collections::HashMap;
 
 /// Speed (m/s) above which a replicated body is almost certainly mis-driven — no
@@ -69,7 +69,37 @@ impl Plugin for NetDiagnosticsPlugin {
         // Jitter detection reads the FINAL GlobalTransform → run in `Last`, after
         // transform propagation has built it for this frame.
         app.add_systems(Last, report_render_jitter);
-        app.add_systems(Update, (report_proxy_velocity, report_corrections));
+        app.add_systems(
+            Update,
+            (report_proxy_velocity, report_corrections, report_divergence),
+        );
+    }
+}
+
+/// **Desync gauge** (review N3): the per-body divergence the client's reconcilers
+/// measure (`lunco_core::DivergenceStats`), exported as a periodic max + rebaseline
+/// census. Before this the netcode had *no* observable desync signal at all — the
+/// only backstop was a silent per-body snap, and the owned-body half of it could be
+/// permanently disabled by a stale input ack (N1). A healthy client shows a max well
+/// under a metre and zero rebaselines; a climbing max or a rebaseline count that
+/// keeps ticking is a desync, named by gid.
+fn report_divergence(stats: Res<lunco_core::DivergenceStats>, mut n: Local<u32>) {
+    *n = n.wrapping_add(1);
+    if *n % 60 != 0 || stats.bodies.is_empty() {
+        return;
+    }
+    let rebaselines: u32 = stats.bodies.values().map(|b| b.rebaselines).sum();
+    let worst_max = stats
+        .bodies
+        .iter()
+        .max_by(|a, b| a.1.max_m.total_cmp(&b.1.max_m))
+        .map(|(&g, b)| (g, b.max_m));
+    if let (Some((live_gid, live)), Some((max_gid, max))) = (stats.worst(), worst_max) {
+        info!(
+            "[net-diag desync] {} predicted bodies | live max={live:.2}m (gid={live_gid:x}) | \
+             worst-ever={max:.2}m (gid={max_gid:x}) | rebaselines={rebaselines}",
+            stats.bodies.len(),
+        );
     }
 }
 

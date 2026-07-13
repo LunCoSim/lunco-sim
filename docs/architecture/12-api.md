@@ -611,5 +611,5 @@ that want a runtime-toggleable opt-out.
 |---|---|
 | Connection refused | Make sure sim was started with `--api` flag |
 | "Command not found" | Check `/api/commands/schema` for available commands |
-| "Entity not found" | Check `/api/entities` for valid ULID strings |
+| "Entity not found" | `POST /api/commands` with `{"type":"ListEntities"}` for valid ULID strings — there is no `GET /api/entities` route |
 | `lunco_api` not found in `Cargo.toml` | Add `lunco-api = { path = "../lunco-api" }` dependency |

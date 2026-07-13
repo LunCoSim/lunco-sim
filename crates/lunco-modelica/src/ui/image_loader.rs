@@ -18,29 +18,21 @@
 //! [`egui_extras::install_image_loaders`] — this one returns
 //! `LoadError::NotSupported` for anything it doesn't handle.
 //!
-//! # TODO: web target
+//! # One path, both targets
 //!
-//! On `wasm32-unknown-unknown` the browser sandbox blocks
-//! `std::fs::read`, and [`lunco_assets::msl_dir`] points at a
-//! filesystem path that doesn't exist on the client. Options for
-//! the web build:
+//! Bytes are fetched through [`lunco_assets::msl::msl_read`] — the MSL
+//! *virtual* filesystem — not `std::fs`. `msl_read` resolves a
+//! bundle-relative path (`Modelica/Resources/Images/…`) against whichever MSL
+//! root is installed: the on-disk tree on native, the in-memory bundle the web
+//! fetcher unpacked on wasm. So this loader compiles and runs identically on
+//! both targets, with no `#[cfg]` in the load path.
 //!
-//! 1. **Bundle MSL image assets at build time** — `include_bytes!`
-//!    each file into a static `HashMap<uri, &[u8]>`. Simplest, but
-//!    adds a few MB to the wasm bundle. Worth it only for the
-//!    frequently-opened examples.
-//! 2. **Fetch over HTTP at runtime** — serve `.cache/msl/` under
-//!    `/assets/msl/` on the static host, rewrite `modelica://` URIs
-//!    to `/assets/msl/…` paths, let `egui_extras`'s http loader do
-//!    the work. Zero bundle cost, needs CORS + hosting alignment.
-//! 3. **Accept broken images on web for v1** — render the `alt`
-//!    text, skip the raster.
-//!
-//! The `cfg(not(target_arch = "wasm32"))` gate on the body of
-//! [`crate::ui::image_loader::ModelicaImageLoader::load`] is the obvious place to branch
-//! once we pick an approach. For now the loader is native-only; on
-//! wasm it'll silently return `NotSupported` for every
-//! `modelica://` URI, yielding the alt-text fallback (option 3).
+//! **Known gap (not in this crate):** the *web* MSL bundle currently carries
+//! only `.mo` sources — `crates/lunco-assets/src/bin/build_msl_assets.rs`
+//! explicitly skips `Resources/` (images, matrix data). Until that bundler ships
+//! them, `msl_read` returns `None` in the browser and Documentation images fall
+//! back to their `alt` text, exactly as before. The fix is one step in the
+//! bundler, and this loader needs no change when it lands.
 
 use bevy_egui::egui;
 use std::sync::{Arc, Mutex};
@@ -128,8 +120,8 @@ impl ModelicaImageLoader {
                     let Some(path) = Self::resolve_uri(uri) else {
                         continue;
                     };
-                    match std::fs::read(&path) {
-                        Ok(bytes) => {
+                    match lunco_assets::msl::msl_read(&path) {
+                        Some(bytes) => {
                             let arc: Arc<[u8]> = Arc::from(bytes);
                             total_bytes += arc.len();
                             loaded += 1;
@@ -140,7 +132,7 @@ impl ModelicaImageLoader {
                                 );
                             }
                         }
-                        Err(_) => {
+                        None => {
                             failed += 1;
                         }
                     }
@@ -154,27 +146,25 @@ impl ModelicaImageLoader {
             .detach();
     }
 
-    /// Resolve `modelica://Modelica/Resources/…` → filesystem path.
-    /// Returns `None` for URIs in unknown packages or paths that
-    /// escape the MSL root (defence-in-depth against a malformed
-    /// `..` traversal).
+    /// Resolve `modelica://Modelica/Resources/…` → an **MSL-root-relative**
+    /// path (`Modelica/Resources/…`), the key
+    /// [`lunco_assets::msl::msl_read`] takes. The root itself (a directory on
+    /// native, the in-memory bundle on wasm) is the storage layer's business,
+    /// not ours — which is what makes this one function correct on both
+    /// targets.
+    ///
+    /// Returns `None` for non-`modelica://` URIs and for any path segment `..`
+    /// (defence-in-depth: a malformed URI must not climb out of the MSL root).
     fn resolve_uri(uri: &str) -> Option<std::path::PathBuf> {
         let rest = uri.strip_prefix("modelica://")?;
         // Strip a leading "Modelica/" if present so both
         // `modelica://Modelica/Resources/…` (MSL-internal) and
         // `modelica:///Resources/…` resolve the same way.
         let rel: &str = rest.strip_prefix("Modelica/").unwrap_or(rest);
-        let root = lunco_assets::msl_dir().join("Modelica");
-        let joined = root.join(rel);
-        // Canonical-path check: refuse anything that climbed out of
-        // the MSL root via `..`. Skip when canonicalisation fails
-        // (file doesn't exist yet) — the subsequent read will surface
-        // an NotFound error naturally.
-        match (joined.canonicalize(), root.canonicalize()) {
-            (Ok(j), Ok(r)) if j.starts_with(&r) => Some(j),
-            (Ok(_), Ok(_)) => None,
-            _ => Some(joined),
+        if rel.split('/').any(|seg| seg == "..") {
+            return None;
         }
+        Some(std::path::Path::new("Modelica").join(rel))
     }
 }
 
@@ -195,16 +185,6 @@ impl egui::load::BytesLoader for ModelicaImageLoader {
         uri: &str,
     ) -> egui::load::BytesLoadResult {
         if !uri.starts_with("modelica://") {
-            return Err(egui::load::LoadError::NotSupported);
-        }
-        // Web builds can't read the disk. See module docs for the
-        // three options under review (bundle / fetch / alt-text).
-        // Until we pick one, wasm falls through to the alt-text
-        // fallback via NotSupported.
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = uri;
-            let _ = ctx;
             return Err(egui::load::LoadError::NotSupported);
         }
 
@@ -282,9 +262,10 @@ impl egui::load::BytesLoader for ModelicaImageLoader {
         // would have to move the mouse to see it appear.
         let ctx = ctx.clone();
         bevy::tasks::IoTaskPool::get().spawn(async move {
+            // MSL virtual FS: on-disk tree (native) or in-memory bundle (web).
             let read_result: Result<Arc<[u8]>, String> =
-                match std::fs::read(&path) {
-                    Ok(bytes) => {
+                match lunco_assets::msl::msl_read(&path) {
+                    Some(bytes) => {
                         log::info!(
                             "[ModelicaImageLoader] loaded {} → {} ({} bytes)",
                             uri_for_worker,
@@ -293,17 +274,15 @@ impl egui::load::BytesLoader for ModelicaImageLoader {
                         );
                         Ok(Arc::from(bytes))
                     }
-                    Err(e) => {
+                    None => {
                         log::warn!(
-                            "[ModelicaImageLoader] read failed: {} → {}: {}",
+                            "[ModelicaImageLoader] not found in any MSL root: {} → {}",
                             uri_for_worker,
                             path.display(),
-                            e,
                         );
                         Err(format!(
-                            "modelica:// image read failed ({}): {}",
+                            "modelica:// image not found in the MSL root ({})",
                             path.display(),
-                            e
                         ))
                     }
                 };

@@ -291,8 +291,14 @@ fn collect_child_colliders_from_usd<R: UsdRead>(
             if matches!(ty.as_str(), "Cylinder" | "Cone" | "Capsule" | "Plane") {
                 let axis_tok = read_token_attribute(reader, &child_path, "axis")
                     .unwrap_or_else(|| "Z".to_string());
-                if let Some(q) = usd_axis_to_quat(&axis_tok) {
-                    child_tf.rotation = child_tf.rotation * q;
+                // Pre-rotate by the stage convention: the `axis` token names an
+                // axis of the STAGE's frame while the collider is built in the
+                // canonical one (identical to what usd-bevy does for the visual
+                // Transform, so mesh and collider can't disagree on a Z-up stage).
+                let q_axis = lunco_usd_bevy::stage_convention(reader)
+                    .orient(usd_axis_to_quat(&axis_tok).unwrap_or(Quat::IDENTITY));
+                if !q_axis.abs_diff_eq(Quat::IDENTITY, 1e-6) {
+                    child_tf.rotation = child_tf.rotation * q_axis;
                 }
             }
         }

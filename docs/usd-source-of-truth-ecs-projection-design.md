@@ -10,14 +10,27 @@ change sink fires, and `live_consume::project_stage_changes` reconciles the ECS.
 [`architecture/21-domain-usd.md`](architecture/21-domain-usd.md) § "Op-driven
 projection". Spawn / remove / reference are USD-first through this path.
 
-*Not built:* the two hottest **edit** paths still bypass USD entirely. The gizmo
-writes `Transform` directly (zero USD references in `lunco-sandbox-edit/src/gizmo.rs`)
-— a drag is **lost on reload**. `SetObjectProperty` mutates `Visibility` /
-`StandardMaterial` / `ShaderMaterial` / `WheelRaycast` in place, and its shadow-write
-excludes shader/visible/PBR/colour. And every type named in the plan below —
-`UsdPrimIndex`, `UsdAttrProjection`, `project_usd_attrs_to_components` — is
-**proposed, not written**: all three grep to zero hits repo-wide. Read §2–§5 as the
-design to implement, not as a map of what runs today.
+*Also built — the gizmo authors USD.* Drag-end fires `MoveEntity`, whose
+`persist_move_to_runtime_layer` observer authors `UsdOp::SetTranslate` into the
+runtime layer. A drag therefore **survives a reload**, and Ctrl+Z goes through the
+Twin journal like every other edit.
+
+> **Why this is called out rather than assumed.** The correct path existed and was
+> only ever fired from tests: the gizmo wrote `Transform` directly and **every move
+> was silently lost on reload**. There was also no `UndoDocument` observer for USD
+> documents at all, so undo on a USD twin was a **silent no-op**, and a private
+> in-memory `undo.rs` history shadowed the journal. That second history is gone.
+> If you add a new direct-manipulation tool, wire it to the op — not to `Transform`.
+
+*Not built:* `SetObjectProperty` still mutates ECS in place — `Visibility`,
+`WheelRaycast`, and the appearance **intent** components `PbrLook` / `ShaderLook`
+(see [`architecture/render-decoupling.md`](architecture/render-decoupling.md); the
+crate names no material type, and `lunco-render-bevy` binds the intent to a real
+material). Its shadow-write excludes shader/visible/PBR/colour. And every type
+named in the plan below — `UsdPrimIndex`, `UsdAttrProjection`,
+`project_usd_attrs_to_components` — is **proposed, not written**: all three grep to
+zero hits repo-wide. Read §2–§5 as the design to implement, not as a map of what
+runs today.
 **Scope:** make editing flow *into* USD and *project out* to ECS, instead of the
 current ECS-first model where `SetObjectProperty` mutates components directly and
 only a partial, lossy shadow-write reaches USD.
@@ -95,15 +108,22 @@ so it is a no-op.
 | Property | Mutation | Authors USD? |
 |---|---|---|
 | `drive_torque`, `brake_torque`, `friction_mu`, `wheel_radius`, `spring_k`, … | `WheelRaycast` fields (`wheel_param_setter`) | no |
-| `shader` | swaps `MeshMaterial3d<ShaderMaterial>` asset | no |
+| `shader` | swaps the `ShaderLook`'s shader | no |
 | `visible` | sets `Visibility` (Hidden/Visible) | no |
-| `base_color`, `emissive`, `metallic`, `roughness`, `reflectance`, `alpha`, `unlit`, … | live `StandardMaterial` via `apply_pbr_param` (`commands.rs:1891`) | no |
-| *(fallback)* any shader-material param | live `ShaderMaterial` via `lunco_materials::apply_param` + `to_snake_case` | no |
+| `base_color`, `emissive`, `metallic`, `roughness`, `reflectance`, `alpha`, `unlit`, … | the entity's `PbrLook` via `apply_pbr_look` | no |
+| *(fallback)* any shader param | the entity's `ShaderLook.dyn_params` (`lunco_materials`) + `to_snake_case` | no |
+
+All five mutate **appearance intent**, never a material asset: `lunco-render-bevy`
+watches `Changed<PbrLook>` / `Changed<ShaderLook>` and rebinds. `SetObjectProperty`'s
+crate names no material type at all.
+
+> **Why intent and not `Assets::get_mut(handle)`.** Materials are cached by *content*,
+> so identical-looking prims **share one handle**. Reaching through the handle to
+> recolour "this rock" would recolour **every rock that looked like it**.
 
 Sibling observer `persist_property_to_runtime_layer` (`commands.rs:1656`):
 - skips `shader`/`visible`; requires a **scalar float** value; requires an **active
-  document** that **owns** the prim; requires `MeshMaterial3d<ShaderMaterial>` +
-  `UsdPrimPath`.
+  document** that **owns** the prim; requires a `ShaderLook` + `UsdPrimPath`.
 - emits `UsdOp::SetAttribute { edit_target: LayerId::runtime(), path:
   <UsdPrimPath.path>, name: "primvars:<snake>", type: "float", value }`.
 
@@ -188,8 +208,8 @@ Built-in projectors:
 
 | Domain | USD attr | Type |
 |---|---|---|
-| ShaderMaterial params | `primvars:<snake>` (reuse `to_snake_case`/`apply_param`) | float / color3f / color4f |
-| StandardMaterial / PBR | UsdPreviewSurface inputs, or `primvars:*` | float / color3f / bool |
+| `ShaderLook.dyn_params` | `primvars:<snake>` (reuse `to_snake_case`) | float / color3f / color4f |
+| `PbrLook` | UsdPreviewSurface inputs, or `primvars:*` | float / color3f / bool |
 | Visibility | `visibility` (USD-native) | token (`inherited`/`invisible`) |
 | WheelRaycast | `lunco:wheel:<field>` (matches existing `lunco-usd-sim` convention) | float |
 | Transform | `xformOp:translate` / `:orient` / `:scale` (already via `apply_translates`) | — |

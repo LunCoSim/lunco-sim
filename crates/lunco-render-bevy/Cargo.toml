@@ -16,7 +16,12 @@ description = "The bevy_pbr binding layer for LunCoSim. Domain crates state appe
 # binder (`Text2d`). They pull bevy_render, which is exactly why they belong on THIS
 # side of the boundary — a domain crate can now say "this spacecraft is labelled X"
 # without linking a text rasteriser.
-bevy = { workspace = true, features = ["bevy_pbr", "bevy_mesh", "bevy_light", "bevy_image", "bevy_post_process", "bevy_anti_alias", "tonemapping_luts", "bevy_text", "bevy_sprite_render", "default_font", "zstd_rust"] }
+# `bevy_gizmos` + `bevy_gizmos_render` are here for the range-sensor beams
+# (`sensor_beams.rs`). They pull `bevy_render`, which is exactly why they belong on
+# THIS side of the boundary: `lunco-cosim` casts the ray and declares
+# `RangeSensor::visualize`, and never names `Gizmos` — that is what kept
+# bevy_gizmos → wgpu out of the `--no-ui` server.
+bevy = { workspace = true, features = ["bevy_pbr", "bevy_mesh", "bevy_light", "bevy_image", "bevy_post_process", "bevy_anti_alias", "tonemapping_luts", "bevy_text", "bevy_sprite_render", "default_font", "bevy_gizmos", "bevy_gizmos_render", "zstd_rust"] }
 lunco-render = { path = "../lunco-render" }
 # `ShaderLook` (the custom-shader intent) + `ShaderMaterial` (the thing it binds
 # to). `lunco-materials` is render-only by nature — it owns the `AsBindGroup` — so
@@ -34,6 +39,10 @@ lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 # (`env_light.rs`) — moved HERE, which is what let `lunco-environment` drop wgpu.
 lunco-environment = { path = "../lunco-environment" }
 lunco-core = { path = "../lunco-core" }
+# `RangeSensor` — the sensing is simulation (it must run headless, so `lunco-cosim`
+# is render-free and never names `Gizmos`); the BEAM is not. `sensor_beams.rs` draws
+# it from the sensor's already-stored result, re-casting nothing.
+lunco-cosim = { path = "../lunco-cosim" }
 
 [lints]
 workspace = true

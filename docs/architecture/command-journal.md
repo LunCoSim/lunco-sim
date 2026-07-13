@@ -1,10 +1,56 @@
 # Command Journal — one op log for identity, undo, sync, and replay
 
-> Audience: contributors adding new domain mutations.
+> **Status: DESIGN. The name of this document is aspirational — the journal does
+> NOT journal commands today.** Audience: contributors adding new domain mutations.
+>
+> ### What exists (2026-07)
+>
+> - **The op-log substrate is real and load-bearing:** `lunco-twin-journal`
+>   (`record_op` forward+inverse, `EntryId`, `LamportClock`, `ChangeSet`, `Marker`,
+>   `merged_order`, `to_bytes`) + the Bevy bridge (`lunco-doc-bevy`:
+>   `JournalResource`, `BevyJournalSink`, the auto-recorder `JournalOpRecorder`).
+> - **It records *authoring-document* ops only** — `DomainKind::{Usd, Modelica,
+>   Script, Shader, Experiment, ObstacleField, ToolLibrary, Timeline}`. Those DO
+>   get identity, inverse/undo, journal-plane sync, persistence, and doc-level
+>   replay, with no per-op code.
+>
+> ### What does NOT exist
+>
+> - **`#[Command]`s are not journaled.** `api_command_dispatcher`
+>   (`lunco-api::executor`) — the single funnel every HTTP / MCP / rhai / UI command
+>   passes through — has **zero** journal interaction. There is no
+>   `DomainKind::Command`.
+> - ⇒ `SpawnEntity`, `PossessVessel`, `DriveRover`, `SetPorts`, `SetTerrainOverlay`,
+>   `SpawnDemTerrain` and all time control are **not** recorded, **not** undoable and
+>   **not** replayable. Load a twin, drive a rover, spawn terrain, reopen: the journal
+>   replays *document* state only — the runtime mutation history is gone.
+> - ⇒ **Session-level deterministic replay does not exist.** The Input Log of
+>   [`specs/020-world-state-and-replay`](../../specs/020-world-state-and-replay)
+>   User Story 3 is **unbuilt**; this document describes how it would be built.
+> - Terrain edits do not ride the journal yet either (Phase 1 below is not done).
+>
+> ### What it would take (why it is not "one call away")
+>
+> Recording at the dispatcher is easy; making the recording *mean* something is not:
+> 1. **Selection.** Journaling every command floods a persisted, network-synced log
+>    with per-frame `DriveRover`/time-control traffic. Needs an opt-in marker on the
+>    command type (a reflect attribute → `lunco-command-macro`), i.e. mutations only.
+> 2. **Inverses.** Undo needs a per-command inverse (or an explicit "non-undoable,
+>    replay-only" declaration). See "Decisions" §2.
+> 3. **Determinism.** Entries carry `lamport`/`at_ms`, not a **sim tick**. Replay needs
+>    tick + RNG seed in the payload and a replay driver that re-dispatches at the right
+>    tick (spec 020 US3).
+> 4. **Netcode.** The journal IS the sync plane. Command entries would replicate to
+>    peers *in addition to* the existing command-replication path — a double-execution
+>    hazard that has to be designed against `lunco-networking`'s journal-merge plane
+>    first.
+>
+> Until those land, do not describe command journaling as existing. Everything below
+> the line is the **design**, in the future tense it deserves.
 
 The command journal substrate is [`lunco-twin-journal`](../../crates/lunco-twin-journal) + the Bevy bridge (`lunco-doc-bevy`: `JournalResource`, `BevyJournalSink`, and the auto-recorder `JournalOpRecorder` — `impl<O: OpPayload> OpRecorder<O>` records forward + inverse, undo/redo included). Domains plug in via `impl OpPayload` + a `DomainKind` variant (`Usd`, `Modelica`, `Script`, `Shader`, `Experiment`, `ObstacleField`, `ToolLibrary`, `Timeline`, …). Sync rides the **journal plane** (see [`31-networking-and-state-sync.md`](31-networking-and-state-sync.md)).
 
-This records how *every* mutating interaction — terrain edit, spawn, possess, model edit, USD prim edit — becomes a single kind of thing: an **op in one journal**. Identity, ordering, undo/redo, multi-peer sync, and deterministic replay then all come from one substrate instead of each feature reinventing a sliver of it. It realizes the **Input Log** of [`specs/020-world-state-and-replay`](../../specs/020-world-state-and-replay) (User Story 3).
+This design records how *every* mutating interaction — terrain edit, spawn, possess, model edit, USD prim edit — **would** become a single kind of thing: an **op in one journal**. Identity, ordering, undo/redo, multi-peer sync, and deterministic replay would then all come from one substrate instead of each feature reinventing a sliver of it. It is how the **Input Log** of [`specs/020-world-state-and-replay`](../../specs/020-world-state-and-replay) (User Story 3) is meant to be realized — today, only the document domains are on it.
 
 ## The thesis
 
@@ -15,6 +61,10 @@ each feature would otherwise grow — a monotonic id counter here, an undo stack
 a replication path somewhere else — collapses into one question: *record the command
 in the log.* Do that once, at the one place every command already funnels through, and
 every interaction inherits:
+
+The table below is what a journaled command **would** inherit. Today it inherits
+none of it — the rows are live only for the *document* domains (`Usd`, `Modelica`,
+`Script`, …), which do record through `JournalOpRecorder`.
 
 | Capability | Where it comes from |
 |---|---|
@@ -198,15 +248,35 @@ to forbid.
   — not the divergence-prone dual-write — and a peer's edit syncs by replaying the same
   USD op. It **converges** with the USD-canonical merge (these edits are already Stage
   ops). The interim ECS `EditsLayer` (built now) is exactly the projection target.
-- **Phase 2 — Undo/redo.** Apply recorded inverses; `ChangeSet` grouping; a UI
-  undo stack that is just a cursor over the journal.
+- **Phase 2 — Undo/redo.** Apply recorded inverses; a UI undo stack that is just a
+  cursor over the journal.
+
+  > **`ChangeSet` grouping is already live for multi-op USD commands.**
+  > `lunco_usd::commands::apply_ops_as_change_set(world, doc, label, ops)` wraps a
+  > whole lowering in one `JournalResource::change_set`, so a command that lowers to
+  > several `UsdOp`s is **one undo unit**. `AttachComponent` is the canonical user:
+  > undo removes the part, its placement, its joint and the joint's anchors
+  > *together*.
+  >
+  > **Why this matters, and why a new multi-op command must use it.** It used to
+  > journal one entry per op — so an undo peeled off a single op and left the object
+  > **half-attached**. A partially-applied edit that the journal cannot undo as a
+  > unit is worse than no undo at all.
+  >
+  > Rejected ops are logged and skipped rather than rolled back: a partial apply
+  > stays *visible* instead of hiding behind a rollback the journal cannot see.
+  > Headless builds with no `JournalResource` simply apply the ops.
 - **Phase 3 — Replay / determinism.** Seeds + sim-time in ops; replay `merged_order`
   → spec 020's deterministic Input Log; divergence checks.
 - **Phase 4 — Projection-authoritative.** State = snapshot + replay(log); ECS becomes a
   pure projection, converging with the USD-canonical projection membrane. This is the
   merge-coupled end-state, not a prerequisite for Phases 1–3.
 
-## What each interaction becomes
+## What each interaction becomes (target — none of these rows exist yet)
+
+Only the last row is real today: a USD prim edit journals as a `DomainKind::Usd` doc
+op with its inverse. The four command rows above it are the **unbuilt** part — the
+commands run, mutate ECS directly, and leave no journal entry.
 
 | Interaction | Op (`#[Command]`) | Inverse | Author |
 |---|---|---|---|
