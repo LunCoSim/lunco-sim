@@ -1591,6 +1591,26 @@ pub fn spawn_scene_root_world(
     spawn_scene_root_with_stage(world, &asset_path, root_prim_in, handle)
 }
 
+/// The mounted scene root — the entity a scene's whole prim subtree hangs from.
+///
+/// It is the only entity that knows **both** halves of "where does a scene-level
+/// edit go?": its [`UsdPrimPath::stage_handle`] resolves to the editable document
+/// (via `lunco_usd::twin_projection::scene_document_for`), and its
+/// [`UsdPrimPath::path`] is the *mounted root prim* — `/SandboxScene`, `/World`,
+/// `/HdriTest`, whatever this scene's `defaultPrim` happens to be.
+///
+/// Before this marker existed, a command that wanted to author a new top-level
+/// prim had to guess at both (count the document registry; hardcode `/World`) —
+/// and a hardcoded `/World` authors under a parent that does not exist in a scene
+/// rooted at `/SandboxScene`, so the prim composes into the layer and is then
+/// never mounted. The scene root is the answer to both questions; ask it.
+///
+/// The preview viewport (`lunco_usd::ui::viewport`) mounts its own private root
+/// the same way, so consumers that must act on the *running* scene should scope
+/// their query rather than assume a single one exists.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct UsdSceneRoot;
+
 /// Spawn a USD scene root from an **already-built** stage handle.
 ///
 /// The handle-supplying sibling of [`spawn_scene_root_world`]: instead of
@@ -1649,6 +1669,7 @@ pub fn spawn_scene_root_with_stage(
     let root = world
         .spawn((
             Name::new(format!("Scene:{}", asset_path)),
+            UsdSceneRoot,
             UsdPrimPath {
                 stage_handle: handle,
                 path: root_prim.clone(),

@@ -45,7 +45,7 @@ use lunco_workbench::ViewportPlaceholder;
 use lunco_workspace::{TwinAdded, WorkspaceResource};
 use lunco_usd_bevy::UsdPrimPath;
 
-use crate::document::UsdOp;
+use crate::document::{LayerId, UsdOp};
 use lunco_usd_sim::cosim::{ClearScene, LoadScene};
 use crate::registry::UsdDocumentRegistry;
 
@@ -283,6 +283,7 @@ register_commands!(
     on_undo_usd_document,
     on_redo_usd_document,
     on_attach_component,
+    on_set_dome_light,
     on_new_document,
     on_open_file,
     on_open_file_for_usd,
@@ -746,6 +747,193 @@ fn on_attach_component(trigger: On<AttachComponent>, mut commands: Commands) {
             "[AttachComponent] {doc}: attached `{}` to `{}` ({applied}/{n} ops, one change set)",
             spec.name,
             spec.host_path
+        );
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// SetDomeLight — HDRI environment, authored as a UsdLuxDomeLight
+// ─────────────────────────────────────────────────────────────────────
+
+/// Author the scene's HDRI environment: a `UsdLuxDomeLight` carrying
+/// `inputs:texture:file`. Projected by `lunco_usd_bevy::dome` into a skybox +
+/// image-based lighting.
+///
+/// **This is the only way to change the environment at runtime.** It lowers to
+/// [`UsdOp`]s and goes through [`apply_ops_as_change_set`], so the edit saves,
+/// journals, undoes as ONE unit, and replicates — exactly like any other USD
+/// edit. Writing to the `Skybox`/`GeneratedEnvironmentMapLight` components
+/// directly would light the local viewport and be invisible to all four of
+/// those, which is the failure mode this command exists to prevent.
+///
+/// Idempotent: `AddPrim` is a `define_prim`, so re-issuing hot-replaces the
+/// dome rather than stacking duplicates. Every field is `Option` — `None`
+/// leaves the authored value alone, so a lighting tweak need not restate the
+/// texture.
+#[Command(default)]
+pub struct SetDomeLight {
+    /// Document to author into. `None` = the workspace's active document.
+    pub doc: Option<DocumentId>,
+    /// Prim path of the dome. `None` = `/World/Sky`.
+    ///
+    /// It must live **under the stage's `defaultPrim` subtree** (`/World` in
+    /// every scene here) — a prim authored outside it composes into the layer
+    /// but is never mounted, so the sky would silently not appear.
+    pub path: Option<String>,
+    /// `inputs:texture:file` — the HDRI, resolved relative to the stage layer
+    /// (e.g. `../hdri/lunar_horizon_2k.hdr`). Equirectangular (`.hdr`, `.png`)
+    /// or a `.ktx2` cubemap.
+    pub texture: Option<String>,
+    /// `inputs:intensity` — multiplier on the image (1.0 = as authored).
+    pub intensity: Option<f32>,
+    /// `inputs:exposure` — stops, applied as intensity × 2^exposure.
+    pub exposure: Option<f32>,
+    /// `inputs:color` — linear RGB tint multiplied into the image.
+    pub color: Option<[f32; 3]>,
+    /// `xformOp:rotateXYZ`, **degrees** — spins the environment. The usual case
+    /// is yaw only (`[0, heading, 0]`).
+    pub rotation: Option<[f32; 3]>,
+    /// `lunco:dome:skybox` — `false` lights the scene from the HDRI but leaves
+    /// the sky black. The lunar case: real bounce light, no visible sky.
+    pub skybox: Option<bool>,
+    /// `lunco:dome:faceSize` — cubemap face resolution. Rounded up to a power
+    /// of two.
+    pub face_size: Option<u32>,
+}
+
+#[on_command(SetDomeLight)]
+fn on_set_dome_light(
+    trigger: On<SetDomeLight>,
+    backed: Option<Res<crate::twin_projection::DocBackedTwinScenes>>,
+    asset_server: Res<AssetServer>,
+    roots: Query<&UsdPrimPath, With<lunco_usd_sim::cosim::UsdSceneRoot>>,
+    mut commands: Commands,
+) {
+    let cmd = trigger.event();
+
+    // The running scene's root is the single entity that knows both things this
+    // command needs: which document to author into, and which prim to author
+    // under. Ask it for both, rather than counting registry entries (the
+    // registry also holds terrain and script documents, so "the only one" is not
+    // a thing that exists) or hardcoding `/World` (the sandbox scene is rooted
+    // at `/SandboxScene`, and a prim authored under a non-existent parent
+    // composes into the layer and is then never mounted — an invisible sky).
+    let root = match roots.iter().collect::<Vec<_>>()[..] {
+        [root] => root,
+        [] => {
+            bevy::log::warn!("[SetDomeLight] no scene is loaded — nothing to author a dome onto");
+            return;
+        }
+        _ => {
+            bevy::log::warn!(
+                "[SetDomeLight] several scenes are mounted — pass `doc` and `path` explicitly"
+            );
+            return;
+        }
+    };
+
+    let doc = match cmd.doc {
+        Some(doc) => doc,
+        None => {
+            let Some(doc) = backed.as_ref().and_then(|b| {
+                crate::twin_projection::scene_document_for(
+                    b,
+                    &asset_server,
+                    root.stage_handle.id(),
+                )
+            }) else {
+                bevy::log::warn!(
+                    "[SetDomeLight] the running scene is a raw-file scene (not doc-backed), so it \
+                     has no document to journal into — open it as a Twin, or pass `doc`"
+                );
+                return;
+            };
+            doc
+        }
+    };
+
+    // Default the dome to a `Sky` prim directly under the scene's *mounted root*
+    // — `/SandboxScene/Sky`, `/World/Sky`, … — which is inside the subtree the
+    // stage actually mounts, and so is the one place a new prim is guaranteed to
+    // compose AND appear.
+    let path = cmd.path.clone().unwrap_or_else(|| {
+        let root_path = root.path.trim_end_matches('/');
+        format!("{root_path}/Sky")
+    });
+
+    // Split `/SandboxScene/Sky` → parent `/SandboxScene`, name `Sky`: `AddPrim`
+    // takes them separately.
+    let Some((parent, name)) = path.rsplit_once('/') else {
+        bevy::log::warn!("[SetDomeLight] `{path}` is not an absolute prim path");
+        return;
+    };
+    let parent = if parent.is_empty() { "/" } else { parent }.to_string();
+    let name = name.to_string();
+    if name.is_empty() {
+        bevy::log::warn!("[SetDomeLight] `{path}` has no prim name");
+        return;
+    }
+
+    let cmd = cmd.clone();
+    commands.queue(move |world: &mut World| {
+        let root = LayerId::root();
+        let mut ops = vec![UsdOp::AddPrim {
+            edit_target: root.clone(),
+            parent_path: parent,
+            name,
+            type_name: Some("DomeLight".into()),
+            reference: None,
+        }];
+
+        // `SetAttribute`'s non-string branch parses `value` as a USDA literal,
+        // so an asset path is spelled with its `@…@` delimiters and a color3f
+        // as `(r, g, b)`. See the op's docs — this is the one place the
+        // encoding is decided, and no call site hand-escapes.
+        let mut attr = |name: &str, ty: &str, value: String| {
+            ops.push(UsdOp::SetAttribute {
+                edit_target: root.clone(),
+                path: path.clone(),
+                name: name.into(),
+                type_name: ty.into(),
+                value,
+            });
+        };
+        if let Some(t) = &cmd.texture {
+            attr("inputs:texture:file", "asset", format!("@{t}@"));
+            // Be explicit rather than leaning on USD's `automatic`: it makes the
+            // authored intent legible in the .usda, and `automatic` is what a
+            // reader has to *guess* at.
+            attr("inputs:texture:format", "token", "\"latlong\"".into());
+        }
+        if let Some(i) = cmd.intensity {
+            attr("inputs:intensity", "float", i.to_string());
+        }
+        if let Some(e) = cmd.exposure {
+            attr("inputs:exposure", "float", e.to_string());
+        }
+        if let Some([r, g, b]) = cmd.color {
+            attr("inputs:color", "color3f", format!("({r}, {g}, {b})"));
+        }
+        if let Some(s) = cmd.skybox {
+            attr("lunco:dome:skybox", "bool", s.to_string());
+        }
+        if let Some(f) = cmd.face_size {
+            attr("lunco:dome:faceSize", "int", f.to_string());
+        }
+        // Rotation is an xformOp, not a plain attribute: `SetRotate` also
+        // authors `xformOpOrder` when the prim has none, which a bare
+        // `SetAttribute` would not — the sky would then simply not rotate.
+        if let Some([x, y, z]) = cmd.rotation {
+            ops.push(UsdOp::SetRotate {
+                edit_target: root.clone(),
+                path: path.clone(),
+                value: [x as f64, y as f64, z as f64],
+            });
+        }
+
+        let (applied, n) = apply_ops_as_change_set(world, doc, "Set dome light", ops);
+        bevy::log::info!(
+            "[SetDomeLight] {doc}: authored `{path}` ({applied}/{n} ops, one change set)"
         );
     });
 }

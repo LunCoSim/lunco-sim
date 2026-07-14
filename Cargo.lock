@@ -7754,6 +7754,7 @@ dependencies = [
  "bevy",
  "bevy_mesh",
  "big_space",
+ "half",
  "lunco-assets",
  "lunco-core",
  "lunco-fsw",

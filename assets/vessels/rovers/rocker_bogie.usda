@@ -27,6 +27,26 @@ def Xform "RockerBogie" (
     ]
 )
 {
+    # Emission REQUIRES a material: USD has no "display emissive" primvar the way
+    # it has `displayColor`/`displayOpacity`, so the headlight glow is a
+    # UsdPreviewSurface input on a Shader, bound to both lenses.
+    def Scope "Looks"
+    {
+        def Material "Lens_Mat"
+        {
+            token outputs:surface.connect = </RockerBogie/Looks/Lens_Mat/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (1.0, 0.95, 0.85)
+                # HDR (>1) so the lens reads as a GLOW the sun cannot wash out.
+                color3f inputs:emissiveColor = (5.0, 4.75, 4.25)
+                token outputs:surface
+            }
+        }
+    }
+
     # --- VEHICLE MASS & DAMPING ---
     # Edit the chassis mass here (default 300 kg)
     float physics:mass = 300.0
@@ -158,8 +178,7 @@ def Xform "RockerBogie" (
             double height = 0.02
             double3 xformOp:translate = (0, 0, -0.01)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (1.0, 0.95, 0.85)
-            color3f primvars:emissiveColor = (5.0, 4.75, 4.25)
+            rel material:binding = </RockerBogie/Looks/Lens_Mat>
             bool physics:collisionEnabled = false
         }
     }
@@ -199,8 +218,7 @@ def Xform "RockerBogie" (
             double height = 0.02
             double3 xformOp:translate = (0, 0, -0.01)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (1.0, 0.95, 0.85)
-            color3f primvars:emissiveColor = (5.0, 4.75, 4.25)
+            rel material:binding = </RockerBogie/Looks/Lens_Mat>
             bool physics:collisionEnabled = false
         }
     }

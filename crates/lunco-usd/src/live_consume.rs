@@ -21,6 +21,9 @@ use openusd::sdf::Path as SdfPath;
 /// The attribute a move edit (`UsdOp::SetTranslate`) records as `InfoOnly`.
 const TRANSLATE_ATTR: &str = "xformOp:translate";
 
+/// The attribute a rotate edit (`UsdOp::SetRotate`) records as `InfoOnly`.
+const ROTATE_ATTR: &str = "xformOp:rotateXYZ";
+
 // Edit → live-stage projection is now **op-driven** (author-once): the twin
 // projection (`twin_projection::sync_twin_overlays`) replays the document's typed
 // ops directly onto the `CanonicalStage`, so the old change-ring *classification*
@@ -84,6 +87,12 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         info_only.dedup();
 
         apply_translates_live(world, id, &info_only);
+        apply_rotates_live(world, id, &info_only);
+        // A `DomeLight`'s attributes (its HDRI, intensity, skybox flag) are not
+        // transforms, so neither of the above sees them. Without this, a
+        // `SetDomeLight` on an already-live dome would journal and save but
+        // leave the rendered sky untouched.
+        refresh_domes_live(world, id, &info_only);
         reconcile_structural_live(world, id, &resynced);
     }
 
@@ -135,6 +144,98 @@ pub(crate) fn apply_translates_live(
             if let Some(mut tf) = world.entity_mut(entity).get_mut::<Transform>() {
                 tf.translation = v;
             }
+        }
+    }
+}
+
+/// Apply the composed `xformOp:rotateXYZ` (Euler XYZ, **degrees**) of each
+/// `path` to its live entity — the rotation counterpart of
+/// [`apply_translates_live`], and read the same way (one short borrow of the
+/// `!Send` stage, released before the world is mutated).
+///
+/// Without this, [`UsdOp::SetRotate`](crate::document::UsdOp::SetRotate) authored,
+/// journaled and saved, but nothing moved until the scene was reloaded — it is
+/// how a `DomeLight`'s environment is spun, and how the sun is aimed.
+pub(crate) fn apply_rotates_live(
+    world: &mut World,
+    id: AssetId<UsdStageAsset>,
+    paths: &[String],
+) {
+    use lunco_usd_bevy::CanonicalStages;
+    if paths.is_empty() {
+        return;
+    }
+    let rotations: Vec<(String, Quat)> = {
+        let Some(stages) = world.get_non_send::<CanonicalStages>() else {
+            return;
+        };
+        let Some(cs) = stages.get(id) else { return };
+        let view = cs.view();
+        paths
+            .iter()
+            .filter_map(|p| {
+                let sp = SdfPath::new(p).ok()?;
+                lunco_usd_bevy::get_attribute_as_vec3(&view, &sp, ROTATE_ATTR)
+                    // Degrees → quat, via the canonical converter, so the Euler
+                    // order lives in exactly one place.
+                    .map(|deg| (p.clone(), lunco_usd_bevy::euler_xyz_deg_to_quat(deg)))
+            })
+            .collect()
+    };
+    for (path, q) in rotations {
+        if let Some(entity) = find_live_entity(world, id, &path) {
+            if let Some(mut tf) = world.entity_mut(entity).get_mut::<Transform>() {
+                tf.rotation = q;
+            }
+        }
+    }
+}
+
+/// Re-read every changed `DomeLight` prim and push its authored state back onto
+/// the live entity (`lunco_usd_bevy::dome`). The HDRI, its tint/intensity and
+/// the skybox toggle are plain attributes, so only this sees them move.
+pub(crate) fn refresh_domes_live(
+    world: &mut World,
+    id: AssetId<UsdStageAsset>,
+    paths: &[String],
+) {
+    use lunco_usd_bevy::{dome, CanonicalStages};
+    if paths.is_empty() {
+        return;
+    }
+    // `AssetServer` is a cheap handle-clone; taking it now keeps the world free
+    // to be borrowed mutably below.
+    let Some(asset_server) = world.get_resource::<AssetServer>().cloned() else {
+        return;
+    };
+
+    // Re-read the intent under one short borrow of the `!Send` stage.
+    let domes: Vec<(String, Option<dome::UsdDomeEnvironment>, f32)> = {
+        let Some(stages) = world.get_non_send::<CanonicalStages>() else {
+            return;
+        };
+        let Some(cs) = stages.get(id) else { return };
+        let view = cs.view();
+        paths
+            .iter()
+            .filter_map(|p| {
+                let sp = SdfPath::new(p).ok()?;
+                if view.type_name(&sp).as_deref() != Some("DomeLight") {
+                    return None;
+                }
+                let env = dome::read_dome_environment(&view, &sp, &asset_server, id);
+                // The fallback if the author dropped the texture: a bare dome is
+                // a scalar ambient.
+                let ambient = lunco_usd_bevy::get_attribute_as_f32(&view, &sp, "inputs:intensity")
+                    .unwrap_or(0.0);
+                Some((p.clone(), env, ambient))
+            })
+            .collect()
+    };
+
+    for (path, env, ambient) in domes {
+        if let Some(entity) = find_live_entity(world, id, &path) {
+            dome::refresh_dome_entity(world, entity, env, ambient);
         }
     }
 }

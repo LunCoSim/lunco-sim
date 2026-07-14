@@ -36,6 +36,7 @@ use bevy::prelude::*;
 use lunco_render::LunarSunShadow;
 use openusd::sdf::{Path as SdfPath, Value};
 
+use crate::dome;
 use crate::read::UsdRead;
 
 /// Tag for a binary's built-in default sun — defined in `lunco-core` (so
@@ -105,6 +106,11 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
     prim_type: Option<&str>,
     commands: &mut Commands,
     entity: Entity,
+    // A `DomeLight`'s `inputs:texture:file` is an asset path relative to the
+    // stage layer, so resolving it needs both the server and the stage it came
+    // from — same pair `apply_standard_material` uses for its texture inputs.
+    asset_server: &AssetServer,
+    stage_id: bevy::asset::AssetId<crate::UsdStageAsset>,
 ) -> bool {
     match prim_type {
         Some("DistantLight") => {
@@ -181,12 +187,37 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
             true
         }
         Some("DomeLight") => {
-            let intensity =
-                get_attribute_as_f32(reader, sdf_path, "inputs:intensity").unwrap_or(0.0);
-            commands
-                .entity(entity)
-                .insert((UsdDomeAmbient(intensity), UsdAuthoredLight));
-            info!("[usd-bevy] {} DomeLight ambient={intensity}", sdf_path.as_str());
+            // Two domes in one prim type, and USD says which by whether the
+            // author supplied an image:
+            //
+            //  * `inputs:texture:file` authored → a real HDRI environment.
+            //    Image-based lighting + (optionally) a visible sky. See
+            //    `dome.rs`.
+            //  * no texture → the historical meaning: a flat ambient term.
+            //    UsdLux has no "ambient light" concept, and a bare dome is the
+            //    standard way to spell one.
+            //
+            // A textured dome deliberately contributes NO `UsdDomeAmbient`. The
+            // IBL is a strictly better version of the same quantity; summing
+            // both would count the sky twice and wash out every shadow.
+            let Some(env) = dome::read_dome_environment(reader, sdf_path, asset_server, stage_id)
+            else {
+                let intensity =
+                    get_attribute_as_f32(reader, sdf_path, "inputs:intensity").unwrap_or(0.0);
+                commands
+                    .entity(entity)
+                    .insert((UsdDomeAmbient(intensity), UsdAuthoredLight));
+                info!("[usd-bevy] {} DomeLight ambient={intensity}", sdf_path.as_str());
+                return true;
+            };
+
+            info!(
+                "[usd-bevy] {} DomeLight HDRI intensity={} skybox={}",
+                sdf_path.as_str(),
+                env.intensity,
+                env.skybox,
+            );
+            commands.entity(entity).insert((env, UsdAuthoredLight));
             true
         }
         Some("SphereLight") => {

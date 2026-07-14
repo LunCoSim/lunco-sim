@@ -1,0 +1,171 @@
+#usda 1.0
+(
+    defaultPrim = "HdriTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# HDRI environment probe: a textured `UsdLuxDomeLight` drives both the visible
+# sky and the image-based lighting on the spheres below.
+#
+# `DomeLight` is the stock USD schema for this — nothing here is a lunco
+# invention except the two `lunco:dome:*` knobs, which UsdLux has no equivalent
+# for. Any DCC that exports an environment writes this same prim.
+#
+# What to look for: the chrome sphere should MIRROR the sky, the brushed one
+# should show a blurred version of it, and the diffuse one should pick up the
+# sky's colour gradient across its surface — none of which a flat ambient can
+# do, and all of which come from the same cubemap.
+def Xform "HdriTest"
+{
+    custom string lunco:description = "HDRI environment probe: a textured UsdLuxDomeLight driving skybox + image-based lighting on a row of metal/rough spheres."
+
+    def DomeLight "Sky"
+    {
+        # Equirectangular ("latlong") — the format every HDRI library ships and
+        # the only one USD's `automatic` will resolve to for a 2:1 image.
+        #
+        # `cached_textures://` is the same downloaded-asset source the Earth and
+        # Moon globe maps use, so the 5.6 MB .hdr is fetched once into the shared
+        # cache instead of living in git. Populate it with:
+        #     cargo run -p lunco-assets --bin lunco-assets -- download
+        # (declared in crates/lunco-usd-bevy/Assets.toml — Poly Haven, CC0.)
+        asset inputs:texture:file = @cached_textures://kloppenheim_02_puresky_2k.hdr@
+        token inputs:texture:format = "latlong"
+
+        # Sky luminance in cd/m². The cameras run at a physically-calibrated
+        # EV100 ~ 15 (a 128 klx sun), so this has to be in the thousands to be
+        # visible at all — UsdLux's spec default of 1.0 renders pure black here.
+        # A few hundred = dim/overcast; ~10000 clips the sky to white.
+        float inputs:intensity = 1500
+        float inputs:exposure = 0.0
+        color3f inputs:color = (1, 1, 1)
+
+        # Spin the environment. This is an xformOp, so it also needs xformOpOrder.
+        double3 xformOp:rotateXYZ = (0.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+
+        # lunco extensions: draw the sky (vs. light-only), and the cubemap face
+        # resolution the equirect is projected into.
+        custom bool lunco:dome:skybox = true
+        custom int lunco:dome:faceSize = 1024
+    }
+
+    # The sun still exists as a real DistantLight: an HDRI gives soft ambient +
+    # reflections, but a 0.53°-disc sun in a 2k equirect is a handful of texels
+    # and cannot cast a sharp shadow. The dome lights, the DistantLight shadows.
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 100000
+        float inputs:angle = 0.53
+        double3 xformOp:rotateXYZ = (-20.0, 160.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    def Xform "Avatar"
+    {
+        string lunco:avatar = "true"
+        string lunco:cameraMode = "freeflight"
+        custom double3 lunco:cameraLookAt = (0.0, 1.0, 0.0)
+        double3 xformOp:translate = (0.0, 2.0, 10.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # Materials, authored the way USD actually specifies them: `inputs:*` is the
+    # UsdShade namespace, so metallic/roughness live on a `UsdPreviewSurface`
+    # Shader inside a `Material`, and geometry points at it with a
+    # `material:binding` relationship. (They are NOT geom attributes — a
+    # `float inputs:metallic` on a Sphere is not valid USD, and no DCC will
+    # round-trip it.)
+    def Scope "Looks"
+    {
+        def Material "Chrome"
+        {
+            token outputs:surface.connect = </HdriTest/Looks/Chrome/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.9, 0.9, 0.9)
+                float inputs:metallic = 1.0
+                float inputs:roughness = 0.05
+                token outputs:surface
+            }
+        }
+
+        def Material "BrushedMetal"
+        {
+            token outputs:surface.connect = </HdriTest/Looks/BrushedMetal/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.8, 0.7, 0.5)
+                float inputs:metallic = 1.0
+                float inputs:roughness = 0.35
+                token outputs:surface
+            }
+        }
+
+        def Material "Diffuse"
+        {
+            token outputs:surface.connect = </HdriTest/Looks/Diffuse/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.6, 0.6, 0.62)
+                float inputs:metallic = 0.0
+                float inputs:roughness = 0.9
+                token outputs:surface
+            }
+        }
+
+        def Material "Regolith"
+        {
+            token outputs:surface.connect = </HdriTest/Looks/Regolith/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.35, 0.34, 0.32)
+                float inputs:metallic = 0.0
+                float inputs:roughness = 1.0
+                token outputs:surface
+            }
+        }
+    }
+
+    def Sphere "Chrome"
+    {
+        double radius = 1.0
+        rel material:binding = </HdriTest/Looks/Chrome>
+        double3 xformOp:translate = (-2.5, 1.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Sphere "BrushedMetal"
+    {
+        double radius = 1.0
+        rel material:binding = </HdriTest/Looks/BrushedMetal>
+        double3 xformOp:translate = (0.0, 1.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Sphere "Diffuse"
+    {
+        double radius = 1.0
+        rel material:binding = </HdriTest/Looks/Diffuse>
+        double3 xformOp:translate = (2.5, 1.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Cube "Ground"
+    {
+        double size = 1.0
+        rel material:binding = </HdriTest/Looks/Regolith>
+        double3 xformOp:translate = (0.0, -0.5, 0.0)
+        double3 xformOp:scale = (40.0, 1.0, 40.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+}

@@ -1763,35 +1763,76 @@ fn material_pbr_section(
                     })
                     .map(|p| p.to_string());
 
-                let mut write = |attr: &str, ty: &str, value: String| match &shader_path {
-                    Some(sp) => apply_usd_path_attribute_change(world, part, sp.clone(), attr, ty, value),
-                    None => apply_usd_attribute_change(world, part, attr, ty, value),
+                // Where do shader inputs go? Onto a `Shader` prim, always —
+                // `inputs:*` is the UsdShade namespace and is meaningless on a
+                // Gprim. If this mesh has no material yet, BUILD one rather than
+                // scribbling shader inputs onto the geometry (which is what this
+                // used to do, and which no other DCC would ever read back).
+                //
+                // The whole thing — Scope + Material + Shader + binding + every
+                // changed input — lands as ONE journal change set, so it is one
+                // undo unit: undo removes the material it created, not just the
+                // last slider you touched.
+                let (mut ops, shader) = match &shader_path {
+                    Some(sp) => (Vec::new(), sp.clone()),
+                    None => {
+                        let Some(prim) = world.get::<UsdPrimPath>(part).cloned() else {
+                            return;
+                        };
+                        let Some((ops, shader)) =
+                            lunco_usd::material::ensure_preview_surface_ops(&prim.path)
+                        else {
+                            return;
+                        };
+                        (ops, shader)
+                    }
+                };
+                // A freshly-created material must reproduce what is on screen
+                // right now, not snap to UsdPreviewSurface's defaults — so seed
+                // every input, not only the one the user just dragged.
+                let fresh = shader_path.is_none();
+                let root = LayerId::root();
+                let mut set = |attr: &str, ty: &str, value: String| {
+                    ops.push(UsdOp::SetAttribute {
+                        edit_target: root.clone(),
+                        path: shader.clone(),
+                        name: attr.to_string(),
+                        type_name: ty.to_string(),
+                        value,
+                    });
                 };
 
-                if base_changed {
-                    let value = format!("({}, {}, {})", base[0], base[1], base[2]);
-                    if shader_path.is_some() {
-                        write("inputs:diffuseColor", "color3f", value);
-                    } else {
-                        write(
-                            "primvars:displayColor",
-                            "color3f[]",
-                            format!("[({}, {}, {})]", base[0], base[1], base[2]),
-                        );
-                    }
+                if base_changed || fresh {
+                    set(
+                        "inputs:diffuseColor",
+                        "color3f",
+                        format!("({}, {}, {})", base[0], base[1], base[2]),
+                    );
                 }
-                if emissive_changed {
-                    let attr = if shader_path.is_some() { "inputs:emissiveColor" } else { "primvars:emissiveColor" };
-                    write(attr, "color3f", format!("({}, {}, {})", emissive[0], emissive[1], emissive[2]));
+                if emissive_changed || fresh {
+                    set(
+                        "inputs:emissiveColor",
+                        "color3f",
+                        format!("({}, {}, {})", emissive[0], emissive[1], emissive[2]),
+                    );
                 }
-                if metallic_changed {
-                    write("inputs:metallic", "float", format!("{:.3}", metallic));
+                if metallic_changed || fresh {
+                    set("inputs:metallic", "float", format!("{:.3}", metallic));
                 }
-                if roughness_changed {
-                    write("inputs:roughness", "float", format!("{:.3}", roughness));
+                if roughness_changed || fresh {
+                    set("inputs:roughness", "float", format!("{:.3}", roughness));
                 }
-                if reflectance_changed {
-                    write("inputs:reflectance", "float", format!("{:.3}", reflectance));
+                if reflectance_changed || fresh {
+                    set("inputs:reflectance", "float", format!("{:.3}", reflectance));
+                }
+
+                if let Some(doc) = resolve_doc_for_entity(world, part) {
+                    lunco_usd::commands::apply_ops_as_change_set(
+                        world,
+                        doc,
+                        "Edit material",
+                        ops,
+                    );
                 }
             }
         });

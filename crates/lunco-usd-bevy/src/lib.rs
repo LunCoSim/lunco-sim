@@ -51,6 +51,7 @@ use big_space::prelude::CellCoord;
 mod resolver;
 mod compose;
 mod light;
+pub mod dome;
 mod camera;
 pub mod camera_mount;
 pub mod camera_switch;
@@ -191,6 +192,9 @@ impl Plugin for UsdBevyPlugin {
                 camera_mount::follow_mounted_cameras
                     .before(bevy::transform::TransformSystems::Propagate),
             )
+            // HDRI environment: project an authored `DomeLight`'s equirect into
+            // a cubemap and bind it to the cameras (`dome.rs`).
+            .add_plugins(dome::DomePlugin)
             // `sync_usd_visuals` runs only on frames where a stage's
             // `LoadedWithDependencies` event was emitted. Idle frames
             // skip it entirely (run-condition short-circuits).
@@ -708,11 +712,21 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // Get prim type (Cube, Cylinder, Sphere, etc.)
         let prim_type = reader.type_name(&sdf_path);
 
-        // UsdLux light prims (`DistantLight` sun / `DomeLight` ambient —
-        // see `light.rs`). A light produces no mesh; the shared transform
-        // path below still applies, which is how a DistantLight gets its
-        // orientation from `xformOp:rotateXYZ`.
-        light::instantiate_light_prim(reader, &sdf_path, prim_type.as_deref(), commands, entity);
+        // UsdLux light prims (`DistantLight` sun / `DomeLight` sky — see
+        // `light.rs`, and `dome.rs` for a DomeLight that carries an HDRI). A
+        // light produces no mesh; the shared transform path below still
+        // applies, which is how a DistantLight gets its orientation from
+        // `xformOp:rotateXYZ` — and how a DomeLight gets the rotation that
+        // spins its environment.
+        light::instantiate_light_prim(
+            reader,
+            &sdf_path,
+            prim_type.as_deref(),
+            commands,
+            entity,
+            asset_server,
+            prim_path.stage_handle.id(),
+        );
 
         // UsdGeomCamera (`def Camera`) → an inactive Bevy `Camera3d` (see
         // `camera.rs`). Standard USD camera prim; which one renders is Bevy's
@@ -1479,23 +1493,26 @@ fn apply_standard_material<R: UsdRead>(
         .map(|v| Color::linear_rgb(v.x, v.y, v.z))
         .unwrap_or(Color::WHITE);
 
-    let mut emissive = get_attribute_as_vec3(reader, sdf_path, "primvars:emissiveColor")
-        .or_else(|| get_attribute_as_vec3(reader, sdf_path, "emissiveColor"))
-        .map(|v| LinearRgba::new(v.x, v.y, v.z, 1.0))
-        .unwrap_or(LinearRgba::BLACK);
-
-    let mut metallic = get_attribute_as_f32(reader, sdf_path, "inputs:metallic")
-        .or_else(|| get_attribute_as_f32(reader, sdf_path, "metallic"))
-        .unwrap_or(0.0);
-
-    let mut roughness = get_attribute_as_f32(reader, sdf_path, "inputs:roughness")
-        .or_else(|| get_attribute_as_f32(reader, sdf_path, "roughness"))
-        .or_else(|| get_attribute_as_f32(reader, sdf_path, "inputs:perceptual_roughness"))
-        .unwrap_or(0.5);
-
-    let mut reflectance = get_attribute_as_f32(reader, sdf_path, "inputs:reflectance")
-        .or_else(|| get_attribute_as_f32(reader, sdf_path, "reflectance"))
-        .unwrap_or(0.5);
+    // Emissive, metallic, roughness and reflectance are **shader** inputs. They
+    // are NOT read from the geometry, deliberately.
+    //
+    // This used to accept `inputs:metallic` (and bare `metallic`, `roughness`,
+    // `reflectance`, `emissiveColor`, `inputs:perceptual_roughness`) authored
+    // straight onto the Gprim. That is not valid USD — `inputs:*` is the
+    // UsdShade namespace, and a `float inputs:metallic` on a Sphere is a value no
+    // other DCC will ever read. The Inspector happily authored it, this read it
+    // back, and the two bugs hid each other: scenes looked correct here and lost
+    // their materials the moment they were opened anywhere else.
+    //
+    // Now there is exactly ONE way to have a material — bind one
+    // (`lunco_usd::material::ensure_preview_surface_ops` builds it) — and exactly
+    // one place these values come from: the bound `UsdPreviewSurface` below.
+    // Deleting the fallback is the point: with it, nothing forces the correct
+    // form; without it, the wrong form visibly does nothing.
+    let mut emissive = LinearRgba::BLACK;
+    let mut metallic = 0.0f32;
+    let mut roughness = 0.5f32;
+    let mut reflectance = 0.5f32;
 
     // UsdPreviewSurface transparency + refraction. Default opaque (alpha 1) and
     // the glass-ish `ior` 1.5 USD uses; overridden only when a bound shader
@@ -1506,9 +1523,10 @@ fn apply_standard_material<R: UsdRead>(
     // bound shader network (used by the waypoint-marker asset). A bound shader's
     // `inputs:opacity` still wins below. A sub-1 value flips `AlphaMode::Blend`
     // via the rule further down.
-    let mut alpha = get_attribute_as_f32(reader, sdf_path, "primvars:displayOpacity")
-        .or_else(|| get_attribute_as_f32(reader, sdf_path, "displayOpacity"))
-        .unwrap_or(1.0);
+    // `primvars:displayOpacity` ONLY — the bare `displayOpacity` alias is gone.
+    // It is not a UsdGeomGprim attribute, and accepting it meant a typo'd primvar
+    // still worked here and nowhere else.
+    let mut alpha = get_attribute_as_f32(reader, sdf_path, "primvars:displayOpacity").unwrap_or(1.0);
     let mut ior = 1.5f32;
     let mut opacity_threshold = 0.0f32;
     let mut opacity_connected = false;
@@ -1582,12 +1600,12 @@ fn apply_standard_material<R: UsdRead>(
             }
         }
 
-        // roughness
+        // roughness. `inputs:roughness` ONLY — `inputs:perceptual_roughness` is
+        // Bevy's field name, not a UsdPreviewSurface input, and accepting it here
+        // just taught callers to author a value usdview will never read.
         let roughness_texture = load_tex("inputs:roughness", false);
         if roughness_texture.is_none() {
-            if let Some(r) = get_attribute_as_f32(reader, &shader_path, "inputs:roughness")
-                .or_else(|| get_attribute_as_f32(reader, &shader_path, "inputs:perceptual_roughness"))
-            {
+            if let Some(r) = get_attribute_as_f32(reader, &shader_path, "inputs:roughness") {
                 roughness = r;
             }
         }

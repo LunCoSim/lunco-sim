@@ -28,6 +28,12 @@ use bevy::prelude::*;
 // `text_edit` byte-splicer and the `edit_target_spike` proof are gone now that
 // Phase C2/C3 lands the real Stage-backed authoring.
 pub mod attach;
+/// Lowering a material edit into a real UsdShade network (`Material` +
+/// `UsdPreviewSurface` + `material:binding`). Crate-agnostic op builder — the
+/// Inspector, the command API and scripting all author materials through it, so
+/// none of them can reinvent the non-standard "shader inputs on a geom prim"
+/// spelling.
+pub mod material;
 pub mod commands;
 pub mod document;
 pub mod live_consume;

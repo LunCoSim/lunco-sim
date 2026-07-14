@@ -1,0 +1,43 @@
+# lunco-usd-bevy Assets
+#
+# HDRI environments for `UsdLuxDomeLight` (see `src/dome.rs`).
+# Run: cargo run -p lunco-assets -- download
+#
+# Both are from Poly Haven, which licenses every asset on the site as **CC0**
+# (public domain — no attribution required, redistribution and modification
+# permitted): https://polyhaven.com/license. That is the only license clean
+# enough to ship and cache without conditions, which is why nothing here comes
+# from an attribution-only source.
+#
+# There is deliberately NO `[<name>.process]` block. Processing resizes to PNG,
+# which is 8-bit — it would crush the very thing an HDRI exists for (a sun disc
+# is thousands of nits; LDR clamps it to white and image-based lighting goes
+# flat and grey). The `.hdr` is used exactly as downloaded.
+#
+# Reference from a scene as `@cached_textures://<filename>@`:
+#
+#   def DomeLight "Sky" {
+#       asset inputs:texture:file = @cached_textures://kloppenheim_02_puresky_2k.hdr@
+#   }
+#
+# To add another, copy an entry — any Poly Haven HDRI's URL follows the same
+# shape (`.../hdr/2k/<id>_2k.hdr`), and `download` prints the sha256 to paste
+# back in on the first run.
+
+# Sky dome. "Pure Sky" = the ground half is painted out, leaving only sky — the
+# right choice here, because the scene supplies its own terrain and a dome with
+# grass and trees baked into it would light lunar regolith green.
+[hdri_sky]
+name = "Kloppenheim 02 Pure Sky (Poly Haven, CC0)"
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/kloppenheim_02_puresky_2k.hdr"
+dest = "textures/kloppenheim_02_puresky_2k.hdr"
+sha256 = "e06091a38c4c778b06123ba13dca8f2c91a21c13c14eec91048c5003815d21b8"
+
+# Neutral studio lighting for *inspecting* a vessel or rover — even reflections
+# from every side, which is what reads shape and material. Not a sky: pair it
+# with `lunco:dome:skybox = false` if you want the lighting without the backdrop.
+[hdri_studio]
+name = "Brown Photostudio 02 (Poly Haven, CC0)"
+url = "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/brown_photostudio_02_2k.hdr"
+dest = "textures/brown_photostudio_02_2k.hdr"
+sha256 = "153ca0cb899575c00f5b23065958d250a0f73e8789c8cf5957ccea313baf2bb6"

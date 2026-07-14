@@ -14,7 +14,14 @@ edition = "2021"
 # `zstd_rust`: `bevy_image` refuses to build without a zstd backend chosen; the
 # pure-Rust (ruzstd) one keeps `cargo test -p lunco-usd-bevy` standalone and
 # wasm-compatible.
-bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "mesh_picking", "zstd_rust"] }
+#
+# `hdr` / `ktx2`: the two image codecs a `UsdLuxDomeLight` needs (see `dome.rs`).
+# `hdr` is the Radiance `.hdr` equirect every HDRI library ships; `ktx2` reads a
+# pre-baked cubemap. Both are `bevy_image` codec features (`hdr = image/hdr`,
+# `ktx2 = dep:ktx2`) — NEITHER pulls `bevy_render`, so the render-free contract
+# above still holds. The IBL components themselves (`Skybox`,
+# `GeneratedEnvironmentMapLight`) live in `bevy_light`, already enabled.
+bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "mesh_picking", "zstd_rust", "hdr", "ktx2"] }
 # `Mesh`, `Mesh3d`, `Indices`, `PrimitiveTopology` — render-FREE (depends only on
 # `wgpu-types`). Named directly so mesh building never reaches for
 # `bevy::render::render_resource`, which is a `bevy_render` (wgpu + naga)
@@ -25,6 +32,11 @@ bevy_mesh = { workspace = true }
 # `wgpu-types`; reaching for them via `bevy::render::render_resource` would pull
 # in wgpu + naga. `wgpu-types` is NOT `wgpu`.
 wgpu-types = "29"
+# `f16` for the `Rgba16Float` dome cubemap (`dome.rs`). Rgba16Float is the
+# widest float format wgpu guarantees is *filterable* — Rgba32Float is not, and
+# a skybox/IBL cubemap must be linearly sampled. Same crate bevy_image itself
+# uses to build its gradient cubemaps.
+half = "2"
 openusd = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 # `FlightSoftware` = the unified control-surface tag stamped on any
