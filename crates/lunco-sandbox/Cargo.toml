@@ -127,13 +127,15 @@ lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 # server gets its terrain collider without linking any UI.
 lunco-usd-terrain = { path = "../lunco-usd-terrain" }
 openusd = { workspace = true }
-# `lunco-sandbox-edit` is NOT optional: the headless server needs its
-# `commands::SpawnCommandPlugin` (runtime spawn/move + `NetReplicate` tagging).
-# The gizmo/selection/physics-viz halves are gated behind `feature = "ui"` in
-# sandbox.rs, not here.
-# Headless server needs only `commands::SpawnCommandPlugin` (kept feature-free);
-# the editor (gizmo/selection/inspector) rides `lunco-sandbox-edit/ui` below.
-lunco-sandbox-edit = { path = "../lunco-sandbox-edit", default-features = false }
+# The scene/document COMMAND LAYER — NOT optional: the headless server needs its
+# `commands::SpawnCommandPlugin` (runtime spawn/move + `NetReplicate` tagging) and
+# the journaled shader domain. Render-free, UI-free.
+lunco-scene-commands = { path = "../lunco-scene-commands" }
+# The in-scene EDITOR (gizmo, selection, inspector, physics-viz, spawn ghost).
+# Optional + `ui`-only: the server used to link a crate called "edit" purely to get
+# `SpawnEntity`, which now lives in `lunco-scene-commands` above. A `--no-ui` build
+# no longer contains the editor at all.
+lunco-sandbox-edit = { path = "../lunco-sandbox-edit", default-features = false, optional = true }
 lunco-web = { workspace = true }
 lunco-assets = { workspace = true }
 lunco-workspace = { path = "../lunco-workspace" }
@@ -213,6 +215,7 @@ ui = [
     "dep:lunco-render-bevy",
     "lunco-avatar/ui",
     "lunco-usd/ui",
+    "dep:lunco-sandbox-edit",
     "lunco-sandbox-edit/ui",
     "lunco-modelica/ui",
     # egui presence/tutorial overlays + Network menu bridge — only when networking

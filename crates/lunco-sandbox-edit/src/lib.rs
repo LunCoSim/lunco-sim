@@ -31,21 +31,15 @@
 //! });
 //! ```
 
-// Headless-safe: `catalog` (spawn registry) + `commands` (SpawnCommandPlugin =
-// runtime spawn/move + NetReplicate tagging) are the only parts a `--no-ui`
-// server needs. Everything below is the in-scene editor (gizmo/picking/egui),
-// gated on `ui`.
-pub mod catalog;
-pub mod spawn_meta;
-pub mod commands;
-/// Headless-safe: resolve an entity's backing USD document + its bound shader prim.
-/// Shared by `commands` (the authoring tier) and the Inspector panel — it lived in
-/// the panel, which is what broke the `--no-ui` server build (`commands` reached
-/// into `crate::ui` for it).
-mod doc_resolve;
-/// Shaders as a journaled, synced, live-editable domain (WGSL twin of rhai's
-/// `ScriptDocument`) — edits record to the Twin journal (`DomainKind::Shader`).
-pub mod shader_doc;
+// The headless-safe half — `catalog` (spawn registry), `commands`
+// (SpawnCommandPlugin = runtime spawn/move + NetReplicate tagging), `spawn_meta`,
+// `shader_doc`, `doc_resolve` and `SelectedEntities` — moved out to
+// `lunco-scene-commands`, so a `--no-ui` server can link the command layer without
+// linking the editor. Re-exported here under their old paths: everything below is
+// the in-scene editor (gizmo/picking/egui), gated on `ui`, and it reaches for them
+// as `crate::catalog::…` / `crate::SelectedEntities` exactly as before.
+pub use lunco_scene_commands::{catalog, commands, doc_resolve, shader_doc, spawn_meta, SelectedEntities};
+
 #[cfg(feature = "ui")]
 pub mod gizmo;
 #[cfg(feature = "ui")]
@@ -206,20 +200,6 @@ pub enum SpawnState {
         /// ID of the catalog entry to spawn.
         entry_id: String,
     },
-}
-
-/// Tracks which entities are currently selected.
-#[derive(Resource, Default, Clone)]
-pub struct SelectedEntities {
-    /// The selected entities. The last one added is the "primary" selection.
-    pub entities: Vec<Entity>,
-}
-
-impl SelectedEntities {
-    /// Returns the primary selected entity, if any.
-    pub fn primary(&self) -> Option<Entity> {
-        self.entities.last().copied()
-    }
 }
 
 /// Which sub-part of the [`SelectedEntities`] the Inspector edits.

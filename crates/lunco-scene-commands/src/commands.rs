@@ -1545,7 +1545,7 @@ pub(crate) fn author_shader_look(
 /// No-op headless and in tests, where nothing ever bound a material — and a no-op the
 /// day `lunco-render-bevy` grows an `On<Remove, PbrLook>` observer that unbinds its
 /// own material, which is where this really belongs.
-pub(crate) fn drop_bound_pbr_material(world: &mut World, e: Entity) {
+pub fn drop_bound_pbr_material(world: &mut World, e: Entity) {
     let Some(registry) = world.get_resource::<AppTypeRegistry>().cloned() else { return };
     let reflect_component = {
         let reg = registry.read();

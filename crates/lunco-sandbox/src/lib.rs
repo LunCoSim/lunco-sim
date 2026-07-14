@@ -682,7 +682,7 @@ fn replay_scenario_journal_shader(
     role: Res<lunco_core::NetworkRole>,
     remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
-    registry: Option<ResMut<lunco_sandbox_edit::shader_doc::ShaderRegistry>>,
+    registry: Option<ResMut<lunco_scene_commands::shader_doc::ShaderRegistry>>,
     asset_server: Option<Res<AssetServer>>,
     shaders: Option<ResMut<Assets<bevy::shader::Shader>>>,
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
@@ -710,7 +710,7 @@ fn replay_scenario_journal_shader(
     );
     for (id, op) in pending {
         if let Ok(shader_op) =
-            serde_json::from_value::<lunco_sandbox_edit::shader_doc::ShaderOp>(op)
+            serde_json::from_value::<lunco_scene_commands::shader_doc::ShaderOp>(op)
         {
             if let Some((path, source)) = registry.apply_replayed(&shader_op) {
                 // Same hot-reload hook as the local edit: overwrite the asset id
@@ -1779,7 +1779,7 @@ impl Plugin for SandboxCorePlugin {
             app.add_plugins(lunco_networking::LunCoNetworkingPlugin { mode });
             // Client-side netcode over avian bodies: snapshot interpolation,
             // prediction, rollback, reconciliation, correction smoothing. Used to
-            // ride along inside `lunco_sandbox_edit::commands::SpawnCommandPlugin`
+            // ride along inside `lunco_scene_commands::commands::SpawnCommandPlugin`
             // (which still registers `apply_replicated_spawns`, the spawn half — see
             // `lunco_core::NetcodeSet` for how the two halves stay ordered). Added
             // here, in `SandboxCorePlugin`, so BOTH the GUI and the headless server
@@ -1902,7 +1902,7 @@ impl Plugin for SandboxCorePlugin {
         // Environment-settings projection: apply a persisted `LuncoEnvironment`
         // prim's render knobs (exposure/bloom/ambient/earthshine) to the live
         // render state on stage change. UI-gated (render/camera state); core
-        // persistence (authoring the prim) happens in `lunco-sandbox-edit`.
+        // persistence (authoring the prim) happens in `lunco-scene-commands`.
         #[cfg(feature = "ui")]
         app.add_systems(Update, project_env_settings);
 
@@ -2153,7 +2153,7 @@ impl Plugin for SandboxHeadlessPlugin {
         // `SandboxEditPlugin`; without it the headless host replicates NOTHING
         // (the connect baseline is empty) because nothing marks the rovers. The
         // gizmo/selection/physics-viz halves of `SandboxEditPlugin` stay UI-only.
-        app.add_plugins(lunco_sandbox_edit::commands::SpawnCommandPlugin);
+        app.add_plugins(lunco_scene_commands::commands::SpawnCommandPlugin);
 
         // No GPU renderer here, so the render-side systems that produce visual
         // components (`Mesh3d`, and the shader-pipeline `ShaderMaterial`) never
@@ -2496,7 +2496,7 @@ fn startup_scene_failguard(
 
 // (The hardcoded G-to-detach system was removed: dock release is now a vessel-class
 //  actuator on the normal intent→port machinery — the `Release` intent (KeyG) → the
-//  `release` port → `lunco_sandbox_edit::commands::ReleaseActuator` → DetachJoint.
+//  `release` port → `lunco_scene_commands::commands::ReleaseActuator` → DetachJoint.
 //  See the joint-as-actuator refactor. Works for any possessed vessel + dock joint.)
 
 fn on_restore_fallback_lights(

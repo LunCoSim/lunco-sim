@@ -24,7 +24,7 @@ use lunco_usd_bevy::{resolve_bound_shader, SdfPath, UsdPrimPath};
 /// Inspector panel and the `SetObjectProperty` command — must agree on WHERE the look
 /// lives, or one of them will scribble `inputs:*` somewhere no other DCC reads it
 /// back from.
-pub(crate) fn bound_shader_prim(world: &mut World, prim: &UsdPrimPath) -> Option<String> {
+pub fn bound_shader_prim(world: &mut World, prim: &UsdPrimPath) -> Option<String> {
     let id = prim.stage_handle.id();
     let mesh_sdf = SdfPath::new(&prim.path).ok()?;
 
@@ -52,7 +52,7 @@ pub(crate) fn bound_shader_prim(world: &mut World, prim: &UsdPrimPath) -> Option
 /// Falls back to the viewport's active doc, which is a GUI notion — a headless server
 /// has no viewport, so there the registry match is the only answer (and the honest
 /// one: with no open viewport there is no "active" document to mean).
-pub(crate) fn resolve_doc_for_entity(world: &World, entity: Entity) -> Option<lunco_doc::DocumentId> {
+pub fn resolve_doc_for_entity(world: &World, entity: Entity) -> Option<lunco_doc::DocumentId> {
     let prim = world.get::<UsdPrimPath>(entity)?;
     let asset_server = world.get_resource::<AssetServer>()?;
     let asset_path = asset_server.get_path(prim.stage_handle.id())?;

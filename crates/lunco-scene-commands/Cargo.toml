@@ -1,0 +1,59 @@
+[package]
+name = "lunco-scene-commands"
+version = "0.1.0"
+edition = "2021"
+description = "The scene/document command layer: every runtime mutation of the scene (spawn, move, delete, set-property, shader edits) authored as journaled USD ops on the open document's runtime layer. Render-free and UI-free, so the headless server links it without the editor."
+
+[dependencies]
+# NO `bevy_pbr` — this crate names no material type (`MeshMaterial3d`,
+# `StandardMaterial`, `ShaderMaterial`). Appearance is stated as INTENT
+# (`lunco_render::PbrLook`, `lunco_materials::ShaderLook`) and bound by
+# `lunco-render-bevy`; see `docs/architecture/render-decoupling.md`. The compiler
+# is the enforcement — put `bevy_pbr` back and the rule quietly rots.
+#
+# `bevy_shader` is here for the live shader-AUTHORING commands only
+# (`SetShaderSource`/`CreateShader`/`ImportShader` compile WGSL into
+# `Assets<Shader>` so an edit renders without a disk round-trip). It pulls `naga`
+# but NOT wgpu; moving those three onto an intent+binder of their own is the
+# follow-up that would take naga out of the headless server too.
+bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "bevy_shader"] }
+# Appearance intent (render-free): `PbrLook`. Every PBR material site in this crate
+# goes through it instead of `Assets<StandardMaterial>`.
+lunco-render = { path = "../lunco-render" }
+avian3d = { workspace = true }
+
+big_space.workspace = true
+lunco-core = { path = "../lunco-core" }
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-doc = { path = "../lunco-doc" }
+# Shader source is a journaled DOMAIN (ShaderDocument): edits record to the Twin
+# journal (DomainKind::Shader) and hot-reload — like a rhai script / Modelica model.
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-twin-journal = { path = "../lunco-twin-journal" }
+serde = { workspace = true }
+lunco-api = { path = "../lunco-api", default-features = false }
+lunco-mobility = { path = "../lunco-mobility" }
+lunco-obstacle-field = { path = "../lunco-obstacle-field" }
+lunco-usd = { path = "../lunco-usd", default-features = false }
+lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+# Active-document resolution for C4b runtime-layer persistence (ECS-only, no UI).
+lunco-workspace = { path = "../lunco-workspace" }
+lunco-usd-sim = { path = "../lunco-usd-sim" }
+lunco-environment = { path = "../lunco-environment" }
+lunco-materials = { path = "../lunco-materials" }
+lunco-terrain-surface = { path = "../lunco-terrain-surface" }
+lunco-avatar = { path = "../lunco-avatar", default-features = false }
+lunco-assets = { path = "../lunco-assets" }
+
+[features]
+default = []
+# NOT an editor feature — this crate has no UI. It exists for exactly one
+# fallback: `doc_resolve::resolve_doc_for_entity` falls back to the VIEWPORT's
+# active document when the registry match fails, and a viewport is a GUI notion
+# (`lunco_usd::ui::viewport::UsdViewportState`). A headless server has no
+# viewport, so there the registry match is the only answer. `lunco-sandbox-edit`'s
+# `ui` feature forwards to this one so GUI behaviour is unchanged.
+ui = ["lunco-usd/ui"]
+
+[lints]
+workspace = true
