@@ -13,6 +13,7 @@ def Xform "SolarPanel" (
     prepend apiSchemas = ["PhysicsRigidBodyAPI"]
 )
 {
+    custom bool lunco:spawnable = true
     float physics:mass = 15.0
     float lunco:spawnLift = 2.0
 
@@ -31,7 +32,7 @@ def Xform "SolarPanel" (
 
     # Panel Surface — photovoltaic cells (very thin, on top of frame)
     def Cube "PanelSurface" (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LuncoMaterialAPI"]
     )
     {
         double size = 1.0
@@ -43,8 +44,8 @@ def Xform "SolarPanel" (
 
         # Use the general ShaderMaterial, driven entirely by the shader file
         # + generic primvars (no bespoke Rust material).
-        string primvars:materialType = "shader"
-        string primvars:shaderPath = "shaders/solar_panel.wgsl"
+        uniform token lunco:material:type = "shader"
+        uniform string lunco:material:shader = "shaders/solar_panel.wgsl"
 
         # Generic shader params (see assets/shaders/solar_panel.wgsl):
         color3f primvars:cell_color = (0.05, 0.05, 0.35)   # cell

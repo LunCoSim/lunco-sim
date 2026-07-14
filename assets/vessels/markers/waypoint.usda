@@ -17,6 +17,7 @@ def Xform "WaypointMarker" (
     kind = "component"
 )
 {
+    custom bool lunco:spawnable = true
     custom string lunco:waypoint = "true"
 
     # Emission REQUIRES a material. `displayColor` and `displayOpacity` are real

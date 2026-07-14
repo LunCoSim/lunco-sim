@@ -1,0 +1,188 @@
+#usda 1.0
+(
+    "Generated schema for luncoSchema"
+    """
+    GENERATED — do not edit. Regenerate with `usdGenSchema schema.usda .` after
+    editing `schema.usda`, which is the authoritative source.
+
+    This is the file a USD runtime actually registers (via `plugInfo.json`), and
+    the file `lunco_usd::schema` parses to answer "what does this property's
+    schema declare?" — its type, its variability, and whether it is `custom`.
+    """
+)
+
+class LuncoEnvironment "LuncoEnvironment" (
+    doc = """Scene-wide render settings with no natural light-prim home."""
+)
+{
+    float lunco:env:exposureEv100 = 15 (
+        doc = "Camera exposure in EV100."
+    )
+    float lunco:env:bloomIntensity = 0 (
+        doc = "Bloom intensity, 0 = off."
+    )
+    float lunco:env:ambientBrightness = 0 (
+        doc = "Flat ambient term."
+    )
+    float lunco:env:earthshineIntensity = 0 (
+        doc = "Earthshine illuminance in lux."
+    )
+    color3f lunco:env:earthshineColor = (0.6, 0.7, 1) (
+        doc = "Earthshine tint."
+    )
+}
+
+class LuncoPolicy "LuncoPolicy" (
+    doc = """A scripted authorization hook, expressed as a prim."""
+)
+{
+    uniform string lunco:policy:seam = "" (
+        doc = "The seam this policy governs."
+    )
+    string lunco:policy:source = "" (
+        doc = "The rhai source of the hook."
+    )
+    string lunco:policy:entry = "" (
+        doc = "Entry-point function name."
+    )
+    bool lunco:policy:deterministic = true (
+        doc = "Whether the hook is pure (replayable from the journal)."
+    )
+}
+
+class "LuncoTerrainAPI" (
+    doc = """A LunCoSim procedural/DEM terrain surface and its build parameters."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    bool lunco:terrain:horizonShadows = false (
+        doc = "Bake a horizon map for distant self-shadowing."
+    )
+    int lunco:terrain:horizonMapResolution = 0 (
+        doc = "Horizon-map bake grid resolution."
+    )
+    int lunco:terrain:horizonMapAzimuths = 0 (
+        doc = "Horizon-map bake azimuth count."
+    )
+}
+
+class "LuncoTerrainLayerAPI" (
+    doc = """One layer of a layered terrain (DEM, craters, rocks, edits)."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    uniform token lunco:layer = "" (
+        allowedTokens = ["", "dem", "craters", "rocks", "rock", "overzoom", "shader", "edit"]
+        doc = "Which layer kind this prim is."
+    )
+    string lunco:layer:demSource = "" (
+        doc = "Path to the DEM source (the `dem` ground layer)."
+    )
+    float lunco:layer:windowM = 0 (
+        doc = "Half-window of the DEM patch, metres."
+    )
+    int lunco:layer:targetRes = 0 (
+        doc = "Target heightfield resolution."
+    )
+    bool lunco:layer:lodViz = true (
+        doc = "Build the visual CDLOD mesh."
+    )
+    bool lunco:layer:colliderRing = true (
+        doc = "Build colliders only in a ring around the origin."
+    )
+    token lunco:layer:mode = "" (
+        doc = "Sub-mode of a layer kind (the `shader` layer's variant)."
+    )
+    float lunco:layer:x = 0 (
+        doc = "Terrain-local X, metres."
+    )
+    float lunco:layer:z = 0 (
+        doc = "Terrain-local Z, metres."
+    )
+    float lunco:layer:size = 0.6 (
+        doc = "Instance radius, metres."
+    )
+    int64 lunco:layer:seed = 0 (
+        doc = "Deterministic scatter/noise seed."
+    )
+    float lunco:layer:density = 0 (
+        doc = "Scatter density, instances per square metre."
+    )
+    float lunco:layer:sizeMin = 0 (
+        doc = "Minimum scattered instance size, metres."
+    )
+    float lunco:layer:sizeMax = 0 (
+        doc = "Maximum scattered instance size, metres."
+    )
+    float lunco:layer:sizeMode = 0 (
+        doc = "Mode of the scattered size distribution."
+    )
+    float lunco:layer:amplitude = 0 (
+        doc = "Noise amplitude, metres."
+    )
+    float lunco:layer:depthRatio = 0 (
+        doc = "Crater depth as a fraction of radius."
+    )
+    float lunco:layer:rimRatio = 0 (
+        doc = "Crater rim height as a fraction of radius."
+    )
+    float lunco:layer:minFeature = 0 (
+        doc = "Smallest generated feature, metres."
+    )
+    float lunco:layer:maxFeature = 0 (
+        doc = "Largest generated feature, metres."
+    )
+    float lunco:layer:regionM = 0 (
+        doc = "Region size the layer covers, metres."
+    )
+    float lunco:layer:reliefScale = 0 (
+        doc = "Vertical relief scale factor."
+    )
+    float lunco:layer:dynamicFrac = 0 (
+        doc = "Fraction of scattered instances that are dynamic."
+    )
+}
+
+class "LuncoShadowAPI" (
+    doc = """Cascaded-shadow tuning for a UsdLux light."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    float lunco:shadow:maxDistance = 1500 (
+        doc = "Far bound of the shadow cascades, metres."
+    )
+    float lunco:shadow:firstCascadeFarBound = 40 (
+        doc = "Far bound of the first cascade, metres."
+    )
+    float lunco:shadow:depthBias = 0 (
+        doc = "Shadow depth bias."
+    )
+    float lunco:shadow:normalBias = 0 (
+        doc = "Shadow normal bias."
+    )
+    int lunco:shadow:numCascades = 1 (
+        doc = "Number of cascades within one light."
+    )
+}
+
+class "LuncoMaterialAPI" (
+    doc = """Selects a custom (WGSL) render material for a prim."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    uniform token lunco:material:type = "" (
+        allowedTokens = ["", "shader"]
+        doc = "Which material implementation drives this prim."
+    )
+    uniform string lunco:material:shader = "" (
+        doc = "Path to the WGSL shader declaring the pipeline's bindings."
+    )
+}

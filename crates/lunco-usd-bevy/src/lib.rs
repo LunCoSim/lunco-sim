@@ -1435,7 +1435,8 @@ pub fn parent_prim_path(target: &str) -> Option<SdfPath> {
 /// ([`apply_standard_material`]) and the inspector's material editor.
 pub fn resolve_bound_shader<R: UsdRead>(reader: &R, mesh_path: &SdfPath) -> Option<SdfPath> {
     let mat_path = resolve_bound_material(reader, mesh_path, MaterialPurpose::Render)?;
-    let surf_conn = reader.rel_target(&mat_path, "outputs:surface")?;
+    // `outputs:surface` is an attribute CONNECTION, not a relationship.
+    let surf_conn = reader.connection_source(&mat_path, "outputs:surface")?;
     parent_prim_path(&surf_conn)
 }
 
@@ -1458,67 +1459,41 @@ pub enum MaterialPurpose {
 }
 
 impl MaterialPurpose {
-    /// The relationship name this purpose binds through.
-    pub fn relationship(self) -> &'static str {
+    /// The USD binding *purpose* token. All-purpose is the empty token (the
+    /// `material:binding` relationship); a restricted purpose names itself
+    /// (`material:binding:physics`).
+    pub fn token(self) -> &'static str {
         match self {
-            MaterialPurpose::Render => "material:binding",
-            MaterialPurpose::Physics => "material:binding:physics",
+            MaterialPurpose::Render => openusd::schemas::shade::tokens::PURPOSE_ALL,
+            MaterialPurpose::Physics => "physics",
         }
     }
 }
 
-/// Resolve the `Material` prim bound to `prim` for a given purpose.
+/// Resolve the `Material` prim bound to `prim` for a given purpose —
+/// `UsdShadeMaterialBindingAPI::ComputeBoundMaterial`, delegated to openusd.
 ///
-/// Implements the two USD binding rules that a naive `rel_target` on the prim
-/// itself misses, and that authors rely on:
+/// The rules are openusd's, not ours: bindings inherit down namespace (nearest
+/// ancestor wins, unless an ancestor is `strongerThanDescendants`), a restricted
+/// purpose resolves across the WHOLE ancestor chain before falling back to
+/// all-purpose, and a collection binding whose collection includes the prim beats
+/// a direct binding. We used to re-derive the first two by hand and support
+/// neither of the last two.
 ///
-/// 1. **Bindings inherit down namespace.** A material bound on a rover root
-///    applies to every mesh inside it. Nearest ancestor wins.
-/// 2. **A purpose-specific binding falls back to the all-purpose one.** So a
-///    prim bound only with `material:binding` still resolves for `Physics` — and
-///    a single Material carrying both a surface shader and `PhysicsMaterialAPI`
-///    drives look *and* friction from one binding, which is the whole point of
-///    the shared model.
+/// Resolution runs on the prim as it is — `MaterialBindingAPI::on` rather than
+/// `::get` — because the prim being asked about (a mesh deep inside a rover)
+/// normally authors no binding at all, and so carries no `MaterialBindingAPI` in
+/// its `apiSchemas`. `::get` returns `None` there, which would silently drop
+/// every *inherited* binding: the common case, not the corner case.
 pub fn resolve_bound_material<R: UsdRead>(
     reader: &R,
     prim: &SdfPath,
     purpose: MaterialPurpose,
 ) -> Option<SdfPath> {
-    // ORDER MATTERS, and it is subtle. USD resolves the restricted purpose across
-    // the ENTIRE ancestor chain first, and only then falls back to the all-purpose
-    // binding across that same chain. It does NOT fall back per-prim on the way
-    // up.
-    //
-    // Get this backwards and a `material:binding:physics` authored on a rover ROOT
-    // loses to a plain (look-only) `material:binding` on one of its wheels — the
-    // authored physics material is silently dropped and the wheel gets default
-    // friction. That is the bug this ordering exists to prevent.
-    //
-    // (openusd implements this as `shade::MaterialBindingAPI::compute_bound_material`,
-    // including collection bindings and `bindMaterialAs` strength, which we do not.
-    // We can't call it from here yet: it needs a live `&Stage`, while these
-    // extractors are generic over `UsdRead` so they also run on the flattened
-    // read path. When that flattened impl retires, delete this and call openusd.)
-    let chain = |rel: &str| -> Option<SdfPath> {
-        let mut at = prim.clone();
-        loop {
-            if let Some(target) = reader.rel_target(&at, rel) {
-                return SdfPath::new(&target).ok();
-            }
-            let parent = at.prim_path().parent()?;
-            if parent.as_str() == at.as_str() || parent.as_str() == "/" {
-                return None;
-            }
-            at = parent;
-        }
-    };
-
-    chain(purpose.relationship()).or_else(|| match purpose {
-        // An all-purpose binding IS the render binding; there is nothing to fall
-        // back to.
-        MaterialPurpose::Render => None,
-        MaterialPurpose::Physics => chain(MaterialPurpose::Render.relationship()),
-    })
+    openusd::schemas::shade::MaterialBindingAPI::on(reader.usd_stage(), prim.clone())
+        .compute_bound_material(purpose.token())
+        .ok()
+        .flatten()
 }
 
 /// Maps a `UsdUVTexture` `inputs:wrapS`/`inputs:wrapT` token to a Bevy sampler
@@ -1630,7 +1605,7 @@ fn apply_standard_material<R: UsdRead>(
         // a `UsdUVTexture inputs:sourceColorSpace` of `raw`/`sRGB` overrides it.
         // `inputs:wrapS`/`wrapT` drive the sampler address modes at load time.
         let load_tex = |input: &str, is_color: bool| -> Option<Handle<Image>> {
-            let conn = reader.rel_target(&shader_path, input)?;
+            let conn = reader.connection_source(&shader_path, input)?;
             let texture_path = parent_prim_path(&conn)?;
             let asset_path = read_token(reader, &texture_path, "inputs:file")?;
             let resolved = resolve_texture_path(asset_server, stage_id, &asset_path)?;
@@ -1738,7 +1713,7 @@ fn apply_standard_material<R: UsdRead>(
         }
         opacity_threshold =
             get_attribute_as_f32(reader, &shader_path, "inputs:opacityThreshold").unwrap_or(0.0);
-        opacity_connected = reader.rel_target(&shader_path, "inputs:opacity").is_some();
+        opacity_connected = reader.connection_source(&shader_path, "inputs:opacity").is_some();
 
         if let Some(i) = get_attribute_as_f32(reader, &shader_path, "inputs:ior") {
             ior = i;
@@ -2840,24 +2815,23 @@ pub fn local_transform_at<R: UsdRead>(reader: &R, path: &SdfPath, time: f64) -> 
 /// authored, in the stage's own frame and units. Private: no consumer may hold a
 /// raw spatial value (doc 41 — "visibility is the guardrail").
 fn local_transform_at_raw<R: UsdRead>(reader: &R, path: &SdfPath, time: f64) -> Option<Transform> {
-    if let Some(tf) = compose_xform_order_at(reader, path, time) {
-        return Some(tf);
-    }
-    if let Some(tf) = read_matrix_transform_at(reader, path, time) {
-        return Some(tf);
-    }
-    let t = read_vec3_f64_at(reader, path, "xformOp:translate", time);
-    let r = local_rotation_at(reader, path, time);
-    let s = read_vec3_f64_at(reader, path, "xformOp:scale", time);
-    if t.is_none() && r.is_none() && s.is_none() {
-        return None;
-    }
-    let vec3 = |v: [f64; 3]| Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32);
-    Some(Transform {
-        translation: t.map(vec3).unwrap_or(Vec3::ZERO),
-        rotation: r.unwrap_or(Quat::IDENTITY),
-        scale: s.map(vec3).unwrap_or(Vec3::ONE),
-    })
+    // `xformOpOrder` IS the transform. UsdGeomXformable defines a prim's local
+    // transform as the ordered composition of exactly the ops that attribute lists;
+    // an `xformOp:*` attribute the order does not name is inert data, and a prim
+    // with no `xformOpOrder` is the IDENTITY — not "whatever ops happen to be lying
+    // around".
+    //
+    // We used to fall back to a piecewise translate+rotate+scale decode whenever the
+    // order was absent, which quietly made us *more* permissive than USD: a stage
+    // that renders at the origin in usdview rendered somewhere else here. The
+    // permissiveness also hid authoring bugs — the way to get a transform is to
+    // author the order, and `UsdOp::SetTranslate`/`SetRotate` do exactly that
+    // (synthesizing `xformOpOrder` when the prim has none).
+    //
+    // Composition applies, so this is not a burden on `over`s: an `over` that
+    // overrides `xformOp:translate` inherits the base prim's `xformOpOrder` through
+    // the reference and composes correctly.
+    compose_xform_order_at(reader, path, time)
 }
 
 /// Canonical local-transform decode via [`local_transform_at`] — `xformOpOrder`

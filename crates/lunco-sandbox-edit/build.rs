@@ -5,9 +5,7 @@
 //! `lunco-assets` bakes as `asset_path`, so the wasm lookup matches):
 //!
 //! - `BAKED_SPAWN_META: &[(&str, bool, f32)]` — `lunco:spawnable` /
-//!   `lunco:spawnLift`. Without this, web defaults every file to
-//!   `spawnable = true`, so scenes/missions that opt out would wrongly appear
-//!   in the spawn palette. Keeping it data-driven (no Rust folder
+//!   `lunco:spawnLift`. Keeping the palette data-driven (no Rust folder
 //!   special-casing) means the flag must travel to web as data;
 //!   `discovery::list_assets` (lunco-assets) owns *which* files exist, this
 //!   owns *their spawn metadata*.
@@ -15,11 +13,13 @@
 //!   human-readable "what is this demo" string shown as a Scenarios menu
 //!   tooltip. Only files that author the attribute are listed.
 //!
-//! `read_spawn_meta` / `read_usd_description` line-scan each USD file at
-//! runtime — impossible in the browser (no filesystem). Native runtime reads
-//! the description through openusd's real USDA parser
-//! (`lunco_usd_bevy::read_default_prim_attr`); this build-time mirror exists
-//! only so the web build (which can't parse at runtime) shows the same text.
+//! The browser has no filesystem, so it cannot read the USD files at startup the
+//! way native does — hence the bake. But the *parse* is shared, not mirrored: both
+//! sides call `parse_spawn_meta` from `src/spawn_meta.rs`, which this script
+//! `include!`s. It used to be a second implementation kept in sync by hand, and it
+//! had already drifted (native read the description through openusd's real parser,
+//! the bake through a text scan — so the two platforms could disagree about what a
+//! file said about itself).
 //!
 //! Build scripts run at compile time on the *host*, never on wasm, so the
 //! workspace `disallowed_methods` ban on `std::fs` (a wasm-runtime foot-gun)
@@ -105,7 +105,8 @@ fn walk(base: &Path, dir: &Path, out: &mut Vec<Meta>) {
         } else if p.extension().and_then(|s| s.to_str()) == Some("usda") {
             if let Ok(rel) = p.strip_prefix(base) {
                 if let Some(rel_s) = rel.to_str() {
-                    let (spawnable, lift, description) = parse_meta(&p);
+                    let SpawnMeta { spawnable, lift, description } =
+                        std::fs::read_to_string(&p).map(|src| parse_spawn_meta(&src)).unwrap_or_default();
                     out.push(Meta {
                         rel: rel_s.replace('\\', "/"),
                         spawnable,
@@ -119,45 +120,9 @@ fn walk(base: &Path, dir: &Path, out: &mut Vec<Meta>) {
     }
 }
 
-/// Mirror of `catalog::read_spawn_meta` + `catalog::read_usd_description`
-/// (native: the openusd parser) — keep all three in sync. Reads, by a cheap
-/// line scan, the three root-prim attributes a `*.usda` may author:
-/// - `float lunco:spawnLift` — metres to lift the spawn point (default `0.0`).
-/// - `bool  lunco:spawnable` — whether this file is a spawnable part at all
-///   (default `true`); scenes set it `false` so they're not offered as
-///   instances.
-/// - `string lunco:description` — the demo blurb shown as a Scenarios tooltip
-///   (default `None`).
-fn parse_meta(path: &Path) -> (bool, f32, Option<String>) {
-    let (mut spawnable, mut lift, mut description) = (true, 0.0_f32, None);
-    let Ok(src) = std::fs::read_to_string(path) else { return (spawnable, lift, description) };
-    for line in src.lines() {
-        if let Some((_, rhs)) = line.split_once("lunco:spawnLift") {
-            if let Some(v) = rhs.split('=').nth(1) {
-                if let Ok(f) = v.trim().parse::<f32>() {
-                    lift = f;
-                }
-            }
-        } else if let Some((_, rhs)) = line.split_once("lunco:spawnable") {
-            if let Some(v) = rhs.split('=').nth(1) {
-                spawnable = v.trim().starts_with("true") || v.trim().starts_with('1');
-            }
-        } else if let Some((_, rhs)) = line.split_once("lunco:description") {
-            description = parse_quoted(rhs);
-        }
-    }
-    (spawnable, lift, description)
-}
-
-/// Pull the first double-quoted run out of the `= "..."` half of an authored
-/// attribute line (`rhs` is the text after `lunco:description`). Mirrors the
-/// string extraction openusd's parser performs natively; sufficient for the
-/// plain-language prose our scenes author (no escapes / nested quotes).
-fn parse_quoted(rhs: &str) -> Option<String> {
-    let after_eq = rhs.split_once('=')?.1.trim();
-    let rest = after_eq
-        .strip_prefix('"')
-        .or_else(|| after_eq.find('"').map(|i| &after_eq[i + 1..]))?;
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
-}
+/// The ONE spawn-metadata parser, shared verbatim with the library
+/// (`src/spawn_meta.rs`). A build script cannot depend on the crate it builds, so
+/// it is `include!`d rather than imported — but it is the same code, which is the
+/// point: the web's baked table and the native runtime read must not be two
+/// implementations that "stay in sync" by discipline. They drifted before.
+include!("src/spawn_meta.rs");

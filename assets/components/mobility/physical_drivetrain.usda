@@ -26,21 +26,26 @@ def Xform "Drivetrain" (
     prepend apiSchemas = ["PhysicsArticulationRootAPI"]
 )
 {
+    custom bool lunco:spawnable = true
     over "Wheel_FL"
     {
         double3 xformOp:translate = (-0.9, -0.65, -1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
     over "Wheel_FR"
     {
         double3 xformOp:translate = (0.9, -0.65, -1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
     over "Wheel_RL"
     {
         double3 xformOp:translate = (-0.9, -0.65, 1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
     over "Wheel_RR"
     {
         double3 xformOp:translate = (0.9, -0.65, 1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
     # Each wheel is bound to the rover root by a `PhysicsRevoluteJoint` with a

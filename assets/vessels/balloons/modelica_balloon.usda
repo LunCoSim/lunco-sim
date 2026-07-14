@@ -28,16 +28,17 @@
 
 def Sphere "ModelicaBalloon" (
     kind = "component"
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "LuncoMaterialAPI"]
 )
 {
+    custom bool lunco:spawnable = true
     double radius = 1.0
     color3f[] primvars:displayColor = [(0.9, 0.2, 0.2)]
 
     # Spin-revealing checker via the general ShaderMaterial, loaded at USD-load
     # time (see assets/shaders/balloon.wgsl).
-    string primvars:materialType = "shader"
-    string primvars:shaderPath = "shaders/balloon.wgsl"
+    uniform token lunco:material:type = "shader"
+    uniform string lunco:material:shader = "shaders/balloon.wgsl"
     color3f primvars:cell_a = (0.9, 0.2, 0.2)    # cell A (balloon identity)
     color3f primvars:cell_b = (0.12, 0.12, 0.14) # cell B (dark)
     color3f primvars:marker_color = (1.0, 1.0, 1.0) # marker wedge + poles

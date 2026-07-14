@@ -10,6 +10,7 @@ def Xform "BallStatic" (
     kind = "component"
 )
 {
+    custom bool lunco:spawnable = true
     def Sphere "Body" (
         prepend apiSchemas = ["PhysicsCollisionAPI"]
     )

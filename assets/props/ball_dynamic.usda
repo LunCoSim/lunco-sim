@@ -13,6 +13,7 @@ def Xform "BallDynamic" (
     prepend apiSchemas = ["PhysicsRigidBodyAPI"]
 )
 {
+    custom bool lunco:spawnable = true
 
     # UsdPhysicsMaterialAPI — friction/restitution live on a Material
     # bound with the purpose-specific `material:binding:physics`, which is

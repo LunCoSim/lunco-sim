@@ -13,7 +13,7 @@ def Xform "LandingPad"
     custom string lunco:description = "Blast-hardened landing pad — sintered disc with a centre hub. Where landers touch down; keep it well clear (>=150 m) of the habitat and solar field so plume ejecta can't sandblast them."
 
     def Cylinder "Pad" (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LuncoMaterialAPI"]
     )
     {
         uniform token axis = "Y"
@@ -24,8 +24,8 @@ def Xform "LandingPad"
         color3f[] primvars:displayColor = [(0.18, 0.17, 0.16)]
         bool physics:collisionEnabled = true
         # Darkened regolith — sintered/compacted blast pad.
-        string primvars:materialType = "shader"
-        string primvars:shaderPath = "shaders/regolith.wgsl"
+        uniform token lunco:material:type = "shader"
+        uniform string lunco:material:shader = "shaders/regolith.wgsl"
         color3f primvars:colorA = (0.1, 0.1, 0.1)
     }
 

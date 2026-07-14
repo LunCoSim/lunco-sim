@@ -14,6 +14,7 @@ def Xform "RelaySat" (
     kind = "component"
 )
 {
+    custom bool lunco:spawnable = true
     # Connectivity relay on orbit. Orbiting (lunco:orbit:*) so the pose system
     # tracks it automatically; `class = "relay"` for routing policy.
     bool lunco:linkNode = true

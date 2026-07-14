@@ -39,6 +39,7 @@ pub mod document;
 pub mod live_consume;
 pub mod registry;
 pub mod runtime_persistence;
+pub mod schema;
 pub mod twin_projection;
 #[cfg(feature = "ui")]
 pub mod ui;

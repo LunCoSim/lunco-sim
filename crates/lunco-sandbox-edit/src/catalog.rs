@@ -192,35 +192,11 @@ fn categorize(rel: &str) -> String {
 
 /// Read the optional `float lunco:spawnLift` attribute from a USD file by a
 /// cheap line scan (no full parse). Returns `0.0` if absent/unreadable — the
-/// Spawn-related metadata read from a USD file by a cheap line scan (no full
-/// parse). Both fields are authored on the default prim:
-/// - `float lunco:spawnLift` — metres to lift the spawn point (default `0.0`).
-/// - `bool  lunco:spawnable` — whether this file is a spawnable part at all
-///   (default `true`); scenes set it `false` so they're not offered as
-///   instances. Data-driven, so no Rust code special-cases "scenes".
-struct SpawnMeta {
-    lift: f32,
-    spawnable: bool,
-}
+use crate::spawn_meta::SpawnMeta;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn read_spawn_meta(path: &std::path::Path) -> SpawnMeta {
-    let mut meta = SpawnMeta { lift: 0.0, spawnable: true };
-    let Ok(src) = std::fs::read_to_string(path) else { return meta };
-    for line in src.lines() {
-        if let Some((_, rhs)) = line.split_once("lunco:spawnLift") {
-            if let Some(v) = rhs.split('=').nth(1) {
-                if let Ok(f) = v.trim().parse::<f32>() {
-                    meta.lift = f;
-                }
-            }
-        } else if let Some((_, rhs)) = line.split_once("lunco:spawnable") {
-            if let Some(v) = rhs.split('=').nth(1) {
-                meta.spawnable = v.trim().starts_with("true") || v.trim().starts_with('1');
-            }
-        }
-    }
-    meta
+    read_spawn_meta_native(path)
 }
 
 /// Spawn metadata baked by `build.rs` (the browser can't line-scan the USD
@@ -232,7 +208,9 @@ mod baked_spawn_meta {
 
 /// Web: look the spawn metadata up in the baked manifest. `path` is the bare
 /// engine-relative path (`discovery::list_assets` sets `abs_path` to it on
-/// wasm), matching the keys `build.rs` baked. Unknown ⇒ spawnable default.
+/// wasm), matching the keys `build.rs` baked. Unknown ⇒ NOT spawnable: an asset
+/// the bake never saw cannot have claimed to be a part, and opting it in on a
+/// lookup miss is how the web palette would silently diverge from native.
 #[cfg(target_arch = "wasm32")]
 fn read_spawn_meta(path: &std::path::Path) -> SpawnMeta {
     let key = path.to_str().unwrap_or_default();
@@ -241,7 +219,7 @@ fn read_spawn_meta(path: &std::path::Path) -> SpawnMeta {
             return SpawnMeta { lift: *lift, spawnable: *spawnable };
         }
     }
-    SpawnMeta { lift: 0.0, spawnable: true }
+    SpawnMeta { lift: 0.0, spawnable: false }
 }
 
 /// Read a USD scene's `lunco:description` attribute — the human-readable
@@ -256,8 +234,16 @@ fn read_spawn_meta(path: &std::path::Path) -> SpawnMeta {
 /// the root prim, so no referenced sub-layer needs resolving.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_usd_description(path: &std::path::Path) -> Option<String> {
-    let Ok(src) = std::fs::read_to_string(path) else { return None };
-    lunco_usd_bevy::read_default_prim_attr(&src, "lunco:description")
+    read_spawn_meta_native(path).description
+}
+
+/// The full metadata read, so `read_spawn_meta` and `read_usd_description` share
+/// one parse of one file rather than two different ones.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_spawn_meta_native(path: &std::path::Path) -> SpawnMeta {
+    std::fs::read_to_string(path)
+        .map(|src| crate::spawn_meta::parse_spawn_meta(&src))
+        .unwrap_or_default()
 }
 
 /// Descriptions baked by `build.rs` (the browser has no filesystem to parse at

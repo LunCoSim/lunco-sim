@@ -3557,6 +3557,99 @@ const PBR_LOOK_KEYS: &[&str] = &[
 /// round-trip the Inspector's `color_edit_button_rgb`); scalars a single float;
 /// booleans `true`/`1`/`yes`/`on`. Only the keys in [`PBR_LOOK_KEYS`] are understood;
 /// anything else returns `false`.
+/// Author a `PbrLook` edit into the USD document, so a material change persists,
+/// journals, undoes and replicates like every other edit.
+///
+/// The look's USD home is a `UsdPreviewSurface` Shader reached through the geom's
+/// `material:binding`. If the prim has no material yet, one is created
+/// (`ensure_preview_surface_ops` — Looks scope + Material + Shader + binding) and
+/// EVERY input is seeded from the current look, not just the edited one: a
+/// freshly-created material must reproduce what is on screen, rather than snapping
+/// the untouched channels to `UsdPreviewSurface`'s defaults.
+///
+/// `double_sided` is deliberately NOT a shader input — it is `uniform bool
+/// doubleSided` on `UsdGeomGprim`, a property of the geometry — so it is authored
+/// on the geom prim instead. `unlit` and `reflectance` have no USD equivalent at
+/// all (see [`lunco_usd::material::preview_surface_input`]) and stay render-only;
+/// they are the two knobs a saved scene will not carry.
+fn author_look_to_usd(commands: &mut Commands, target: Entity, key: &str, look: &PbrLook) {
+    let look = look.clone();
+    let key = key.to_string();
+    commands.queue(move |world: &mut World| {
+        let Some(doc) = crate::ui::inspector::resolve_doc_for_entity(world, target) else {
+            return;
+        };
+        let Some(prim) = world.get::<UsdPrimPath>(target).cloned() else {
+            return;
+        };
+
+        // `doubleSided` lives on the geometry, not the surface.
+        if key == "double_sided" {
+            world.trigger(ApplyUsdOp {
+                doc,
+                op: UsdOp::SetAttribute {
+                    edit_target: LayerId::root(),
+                    path: prim.path.clone(),
+                    name: "doubleSided".into(),
+                    type_name: "bool".into(),
+                    value: look.double_sided.to_string(),
+                },
+            });
+            return;
+        }
+        if lunco_usd::material::preview_surface_input(&key).is_none() {
+            return; // `unlit` / `reflectance` — no USD surface input to write.
+        }
+
+        // An existing bound shader, else create the material.
+        let existing = crate::ui::inspector::bound_shader_prim(world, &prim);
+        let (mut ops, shader, fresh) = match existing {
+            Some(sp) => (Vec::new(), sp, false),
+            None => match lunco_usd::material::ensure_preview_surface_ops(&prim.path) {
+                Some((ops, shader)) => (ops, shader, true),
+                None => return,
+            },
+        };
+
+        let mut set = |attr: &str, ty: &str, value: String| {
+            ops.push(UsdOp::SetAttribute {
+                edit_target: LayerId::root(),
+                path: shader.clone(),
+                name: attr.into(),
+                type_name: ty.into(),
+                value,
+            });
+        };
+        let c = |c: LinearRgba| format!("({}, {}, {})", c.red, c.green, c.blue);
+        for (k, ty, v) in [
+            ("base_color", "color3f", c(look.base_color)),
+            ("emissive", "color3f", c(look.emissive)),
+            ("metallic", "float", look.metallic.to_string()),
+            ("roughness", "float", look.perceptual_roughness.to_string()),
+            ("opacity", "float", look.base_color.alpha.to_string()),
+        ] {
+            // A fresh material seeds every input; an existing one writes only what
+            // changed (so an unrelated authored input is not clobbered).
+            if !fresh && !key_matches(&key, k) {
+                continue;
+            }
+            if let Some((attr, _)) = lunco_usd::material::preview_surface_input(k) {
+                set(attr, ty, v);
+            }
+        }
+        for op in ops {
+            world.trigger(ApplyUsdOp { doc, op: op.clone() });
+        }
+    });
+}
+
+/// Whether the edited look key names the same `UsdPreviewSurface` input as `slot`
+/// (`roughness` and `perceptual_roughness` are one input; so are `alpha`/`opacity`).
+fn key_matches(key: &str, slot: &str) -> bool {
+    lunco_usd::material::preview_surface_input(key)
+        == lunco_usd::material::preview_surface_input(slot)
+}
+
 fn apply_pbr_look(look: &mut PbrLook, key: &str, value: &str) -> bool {
     let f: Vec<f32> = value
         .split(',')
@@ -3765,6 +3858,12 @@ pub fn on_set_object_property(
         key if PBR_LOOK_KEYS.contains(&key) => {
             if let Ok(mut look) = q_look.get_mut(target) {
                 if apply_pbr_look(&mut look, key, &cmd.value) {
+                    // ALSO author it into USD. Mutating `PbrLook` alone updates the
+                    // screen and nothing else — the edit would never reach the
+                    // document, so it would not save, journal, undo, or replicate.
+                    // Every edit goes through `ApplyUsdOp`; this one was quietly
+                    // exempt.
+                    author_look_to_usd(&mut commands, target, key, &look);
                     info!("SET_PROPERTY: {} look {} = {}", cmd.entity_id, cmd.property, cmd.value);
                 } else {
                     warn!("SET_PROPERTY: bad value '{}' for pbr '{}'", cmd.value, cmd.property);

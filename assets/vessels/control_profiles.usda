@@ -17,6 +17,7 @@
 # ── Wheeled rover: forward/back -> throttle, left/right -> steer, action -> brake.
 def "RoverControls"
 {
+    custom bool lunco:spawnable = true
     def "forward"
     {
         uniform string lunco:port = "throttle"

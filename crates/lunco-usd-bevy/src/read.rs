@@ -13,6 +13,7 @@
 //! [`real`](UsdRead::real)).
 
 use openusd::sdf::{Path as SdfPath, SpecType, Value};
+use openusd::usd::Stage;
 
 use crate::usd_data::UsdDataExt;
 use crate::view::StageView;
@@ -108,17 +109,39 @@ pub trait UsdRead {
     /// (`PhysicsRigidBodyAPI` / `PhysicsCollisionAPI` / `LunCoTerrainAPI`).
     fn has_api_schema(&self, prim: &SdfPath, schema: &str) -> bool;
 
-    /// First composed target of relationship `name` on `prim`, as a path string
-    /// (e.g. a joint's `physics:body0`). Composed = PCP-translated.
+    /// First composed target of **relationship** `name` on `prim`, as a path
+    /// string (e.g. a joint's `physics:body0`). Composed = PCP-translated.
+    ///
+    /// A relationship ONLY. It does not fall back to an attribute *connection* of
+    /// the same name — those are different USD concepts and conflating them is a
+    /// trap: a relationship is an untyped namespace link (`physics:body0`,
+    /// `material:binding`), while a connection is a typed dataflow edge on an
+    /// attribute (`outputs:surface`, `inputs:diffuseColor`). Reading one where the
+    /// author wrote the other used to "work", which meant a scene could author the
+    /// WRONG one and never find out. Use
+    /// [`connection_source`](Self::connection_source) for connections.
     fn rel_target(&self, prim: &SdfPath, name: &str) -> Option<String>;
 
     /// **All** composed connection sources of attribute `name` on `prim` — the
-    /// full `connectionPaths` list (fan-in), as path strings, in list order.
-    /// [`rel_target`](Self::rel_target) returns only the *first* target; the
+    /// full `connectionPaths` list (fan-in), as path strings, in list order. The
     /// co-sim wiring derivation needs *every* source on an `inputs:` attr (a
     /// fan-in sink sums multiple producers). Empty when the attribute carries no
     /// authored connections.
     fn connections(&self, prim: &SdfPath, name: &str) -> Vec<String>;
+
+    /// First composed connection source of **attribute** `name` on `prim` — the
+    /// single-producer read (`outputs:surface` on a Material, `inputs:diffuseColor`
+    /// on a Shader). The connection counterpart of
+    /// [`rel_target`](Self::rel_target). Provided.
+    fn connection_source(&self, prim: &SdfPath, name: &str) -> Option<String> {
+        self.connections(prim, name).into_iter().next()
+    }
+
+    /// The live composed [`Stage`] behind this view — the escape hatch to
+    /// openusd's typed schemas (`UsdShadeMaterialBindingAPI`, `UsdGeomXformable`),
+    /// so we resolve bindings and compose transforms with openusd's spec
+    /// implementation instead of re-deriving USD's rules here.
+    fn usd_stage(&self) -> &Stage;
 
     /// Immediate composed prim children of `prim`.
     fn children(&self, prim: &SdfPath) -> Vec<SdfPath>;
@@ -249,20 +272,21 @@ impl UsdRead for StageView<'_> {
             .unwrap_or(false)
     }
 
+    fn usd_stage(&self) -> &Stage {
+        StageView::stage(self)
+    }
+
     fn rel_target(&self, prim: &SdfPath, name: &str) -> Option<String> {
-        let p = self.stage().prim(prim.clone());
-        // Relationship targets first (`material:binding`, `physics:body0`)…
-        if let Some(t) = p.relationship(name).targets().unwrap_or_default().into_iter().next() {
-            return Some(t.to_string());
-        }
-        // …else an attribute connection (`.connect`, e.g. `outputs:surface`). The
-        // flattened reader folds both `targetPaths` and `connectionPaths` into one
-        // `read_rel_target`; mirror that here so the bind→shader walk resolves off
-        // the live stage.
-        p.attribute(name)
-            .connections()
-            .ok()
-            .and_then(|c| c.into_iter().next())
+        // Relationship targets ONLY (`material:binding`, `physics:body0`). An
+        // attribute connection of the same name is deliberately NOT accepted —
+        // see the trait doc.
+        self.stage()
+            .prim(prim.clone())
+            .relationship(name)
+            .targets()
+            .unwrap_or_default()
+            .into_iter()
+            .next()
             .map(|t| t.to_string())
     }
 

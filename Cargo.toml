@@ -99,8 +99,16 @@ resolver = "2"
 # `usd::evaluate` export — while still reporting version 0.5.0 (satisfies the
 # `=0.5.0` requirement below). We consume the canonical git version rather than a
 # local checkout; local patches land on the fork's main, then `cargo update -p openusd`.
-# To develop against a local rumoca-style checkout, uncomment the [patch] block
-# below and point it at `../openusd`.
+# To develop against a local checkout, point this at `../openusd` — but land the
+# change on the fork's `main` before committing, or nobody else can build.
+#
+# Fork-only API we depend on (beyond the authoring/journaling features above):
+# `shade::MaterialBindingAPI::on()` — a public constructor that wraps ANY prim
+# (C++ ctor semantics). `::get()` requires the schema to be applied, but bindings
+# INHERIT, so the prim we query (a mesh inside a rover) authors none; resolving
+# through `::get()` would silently drop every inherited binding. This is what lets
+# `resolve_bound_material` (lunco-usd-bevy) delegate to openusd's spec
+# implementation instead of re-deriving USD's binding rules by hand.
 openusd = { git = "https://github.com/LunCoSim/openusd", branch = "main" }
 
 # transform-gizmo: NO upstream ref has bevy 0.19 AND egui 0.35 together — the

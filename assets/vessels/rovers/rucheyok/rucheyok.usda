@@ -19,6 +19,7 @@ def Xform "Rucheyok" (
     ]
 )
 {
+    custom bool lunco:spawnable = true
     # Mass & damping live on the rigid body root.
     float physics:mass = 800.0
 

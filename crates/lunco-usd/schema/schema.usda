@@ -1,0 +1,277 @@
+#usda 1.0
+(
+    """
+    luncoSchema — the LunCoSim USD schema library.
+
+    This is the usdGenSchema *source*. It is the single authoritative definition
+    of every prim type and API schema LunCoSim adds to USD, and it is what makes
+    them legitimate rather than squatted: an unregistered typeName composes fine
+    but carries no schema, which means no declared variability, no fallbacks, no
+    validation, and no meaning to any other DCC.
+
+    CODELESS (`skipCodeGeneration = true`), exactly like Omniverse's PhysxSchema:
+    there is no generated C++/Python, only the registered definitions. `usdGenSchema`
+    turns this file into `generatedSchema.usda`, which `plugInfo.json` registers and
+    which `lunco_usd::schema` parses at runtime.
+
+    REGENERATE:
+        usdGenSchema schema.usda .
+
+    NAMING. Every property lives under the `lunco:` namespace, sub-namespaced by
+    concern (`lunco:env:`, `lunco:terrain:`, `lunco:policy:`). Bare names are
+    forbidden — they collide with core schemas (a terrain layer's `size` collided
+    with `UsdGeomCube`'s real `double size`, which is precisely the bug this
+    library exists to prevent).
+
+    WHAT IS *NOT* HERE, BY DESIGN. Per-model simulation parameters
+    (`lunco:voltage`, `lunco:capacity`, `lunco:torqueConstant`, …) are deliberately
+    NOT schema properties. They vary per Modelica model, so no fixed schema can
+    declare them — they are authored as `custom` attributes, which is exactly what
+    USD's `custom` keyword means: "not defined by this prim's schema". Only the
+    stable contracts the engine's projectors read by name belong in here.
+    """
+    subLayers = [
+        @usd/schema.usda@,
+        @usdGeom/schema.usda@
+    ]
+)
+
+over "GLOBAL" (
+    customData = {
+        string libraryName = "luncoSchema"
+        string libraryPath = "."
+        bool skipCodeGeneration = true
+        bool useLiteralIdentifier = true
+    }
+)
+{
+}
+
+class LuncoEnvironment "LuncoEnvironment" (
+    inherits = </Typed>
+    doc = """Scene-wide render settings that have no natural light-prim home —
+    exposure, bloom, ambient and earthshine. These apply to global/camera state
+    rather than to any one light, so they live on a dedicated singleton prim under
+    the stage's default prim instead of being smuggled onto a UsdLux light."""
+)
+{
+    float lunco:env:exposureEv100 = 15 (
+        doc = """Camera exposure in EV100. The lunar default (~15) is full
+        daylight; grazing polar light needs a much lower value (~12.5), and the
+        difference between them is the difference between a lit scene and a black
+        one."""
+    )
+    float lunco:env:bloomIntensity = 0 (
+        doc = "Bloom intensity, 0 = off."
+    )
+    float lunco:env:ambientBrightness = 0 (
+        doc = """Flat ambient term. A *textured* dome light contributes real
+        image-based lighting and so contributes NO flat ambient — this is the
+        knob for scenes without one."""
+    )
+    float lunco:env:earthshineIntensity = 0 (
+        doc = "Earthshine illuminance in lux."
+    )
+    color3f lunco:env:earthshineColor = (0.6, 0.7, 1) (
+        doc = "Earthshine tint — Earth's albedo is blue-biased."
+    )
+}
+
+class LuncoPolicy "LuncoPolicy" (
+    inherits = </Typed>
+    doc = """A scripted authorization hook, expressed as a prim so that policy
+    distribution rides the normal USD/journal plane instead of a bespoke one: a
+    policy is authored, composed, journaled, undone and network-synced exactly
+    like any other scene edit."""
+)
+{
+    uniform string lunco:policy:seam = "" (
+        doc = """The seam this policy governs (the extension point it hooks).
+        Uniform: a policy cannot change which seam it guards over time."""
+    )
+    string lunco:policy:source = "" (
+        doc = "The rhai source of the hook. Editing it live re-registers the hook."
+    )
+    string lunco:policy:entry = "" (
+        doc = "Entry-point function name within the source."
+    )
+    bool lunco:policy:deterministic = true (
+        doc = """Whether the hook is pure. A non-deterministic policy cannot be
+        replayed from the journal, so it may not participate in rollback."""
+    )
+}
+
+class "LuncoTerrainAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Marks a prim as a LunCoSim procedural/DEM terrain surface and carries
+    its build parameters.
+
+    This replaces an earlier `PhysxTerrainAPI`, which squatted NVIDIA's `Physx`
+    prefix for a schema NVIDIA does not define — an unregistered name pretending
+    to be a registered one."""
+)
+{
+    bool lunco:terrain:horizonShadows = false (
+        doc = "Bake a horizon map so distant terrain self-shadows."
+    )
+    int lunco:terrain:horizonMapResolution = 0 (
+        doc = "Horizon-map bake grid resolution."
+    )
+    int lunco:terrain:horizonMapAzimuths = 0 (
+        doc = "Horizon-map bake azimuth count."
+    )
+}
+
+class "LuncoTerrainLayerAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """One layer of a layered terrain — the composable unit the terrain
+    pipeline stacks (DEM ground, craters, rocks, hand edits). `lunco:layer` is the
+    discriminator; the `lunco:layer:*` properties are its parameters.
+
+    Every parameter is namespaced. They used to be authored bare (`x`, `z`,
+    `size`, `seed`), which is how a rock layer's `size` came to collide with
+    `UsdGeomCube`'s real `double size` property."""
+)
+{
+    uniform token lunco:layer = "" (
+        doc = """Which layer kind this prim is: `dem`, `craters`, `rocks`,
+        `overzoom`, `shader` (the registered composable layers), plus `rock` (one
+        hand-placed boulder) and `edit` (one brush edit). Uniform: a layer cannot
+        change kind over time."""
+        allowedTokens = ["", "dem", "craters", "rocks", "rock", "overzoom", "shader", "edit"]
+    )
+    string lunco:layer:demSource = "" (
+        doc = """Path to the DEM source, resolved against the open document —
+        the `dem` (ground) layer."""
+    )
+    float lunco:layer:windowM = 0 (
+        doc = "Half-window of the DEM patch, in metres."
+    )
+    int lunco:layer:targetRes = 0 (
+        doc = "Target heightfield resolution."
+    )
+    bool lunco:layer:lodViz = true (
+        doc = "Whether to build the visual CDLOD mesh."
+    )
+    bool lunco:layer:colliderRing = true (
+        doc = """Build colliders only in a ring around the origin rather than
+        across the whole patch."""
+    )
+    token lunco:layer:mode = "" (
+        doc = "Sub-mode of a layer kind (the `shader` layer's variant)."
+    )
+    float lunco:layer:x = 0 (
+        doc = "Terrain-local X (metres) — hand-placed instance layers."
+    )
+    float lunco:layer:z = 0 (
+        doc = "Terrain-local Z (metres) — hand-placed instance layers."
+    )
+    float lunco:layer:size = 0.6 (
+        doc = "Instance radius, metres."
+    )
+    int64 lunco:layer:seed = 0 (
+        doc = "Deterministic scatter/noise seed."
+    )
+    float lunco:layer:density = 0 (
+        doc = "Scatter density, instances per square metre."
+    )
+    float lunco:layer:sizeMin = 0 (
+        doc = "Minimum scattered instance size, metres."
+    )
+    float lunco:layer:sizeMax = 0 (
+        doc = "Maximum scattered instance size, metres."
+    )
+    float lunco:layer:sizeMode = 0 (
+        doc = "Mode of the scattered size distribution."
+    )
+    float lunco:layer:amplitude = 0 (
+        doc = "Noise amplitude, metres."
+    )
+    float lunco:layer:depthRatio = 0 (
+        doc = "Crater depth as a fraction of its radius."
+    )
+    float lunco:layer:rimRatio = 0 (
+        doc = "Crater rim height as a fraction of its radius."
+    )
+    float lunco:layer:minFeature = 0 (
+        doc = "Smallest generated feature, metres."
+    )
+    float lunco:layer:maxFeature = 0 (
+        doc = "Largest generated feature, metres."
+    )
+    float lunco:layer:regionM = 0 (
+        doc = "Region size the layer covers, metres."
+    )
+    float lunco:layer:reliefScale = 0 (
+        doc = "Vertical relief scale factor."
+    )
+    float lunco:layer:dynamicFrac = 0 (
+        doc = "Fraction of scattered instances that are dynamic rigid bodies."
+    )
+}
+
+class "LuncoShadowAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Cascaded-shadow tuning for a UsdLux light. UsdLux has `ShadowAPI`
+    (enable/colour/distance) but says nothing about cascade counts or depth bias,
+    which are renderer concerns — so these are ours, and namespaced as such rather
+    than invented into the `shadow:` namespace UsdLux already owns."""
+)
+{
+    float lunco:shadow:maxDistance = 1500 (
+        doc = "Far bound of the shadow cascades, metres."
+    )
+    float lunco:shadow:firstCascadeFarBound = 40 (
+        doc = "Far bound of the first (highest-resolution) cascade, metres."
+    )
+    float lunco:shadow:depthBias = 0 (
+        doc = "Shadow depth bias — trades acne against peter-panning."
+    )
+    float lunco:shadow:normalBias = 0 (
+        doc = "Shadow normal bias."
+    )
+    int lunco:shadow:numCascades = 1 (
+        doc = "Number of cascades in the near/far split of ONE light."
+    )
+}
+
+class "LuncoMaterialAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Selects a custom (WGSL) render material for a prim, for looks that
+    UsdPreviewSurface cannot express (regolith, solar panels, layered terrain).
+
+    These were previously authored as `primvars:materialType` / `primvars:shaderPath`,
+    which misused the `primvars:` namespace: a primvar is *interpolated geometric
+    data* that inherits down to child geometry and binds to shader inputs per-vertex.
+    A material-type token is none of those things. Being in `primvars:` meant it was
+    picked up by the generic primvar sweep and offered to shaders as vertex data."""
+)
+{
+    uniform token lunco:material:type = "" (
+        doc = """Which material implementation drives this prim. `shader` selects
+        the WGSL pipeline named by `lunco:material:shader`. Uniform: it cannot vary
+        over time."""
+        allowedTokens = ["", "shader"]
+    )
+    uniform string lunco:material:shader = "" (
+        doc = """Path to the WGSL shader that declares the pipeline's bindings,
+        e.g. `shaders/terrain_layered.wgsl`.
+
+        TODO(asset-type): this is really a `UsdAsset` reference and should be typed
+        `asset` so USD's own resolver handles it (and so asset-sync closes over it).
+        It is `string` today because the read path threads it as a plain string; the
+        divergence corrected here was the *namespace*, not the type."""
+    )
+}

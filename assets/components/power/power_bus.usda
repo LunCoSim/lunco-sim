@@ -11,6 +11,7 @@ def Xform "PowerBus" (
     prepend apiSchemas = ["LunCoPowerDistributionAPI"]
 )
 {
+    custom bool lunco:spawnable = true
     # --- Modelica model ---
     string lunco:modelicaModel = "models/power_bus.mo"
     string lunco:modelicaClassName = "LunCo.Power.Bus.DCBus"

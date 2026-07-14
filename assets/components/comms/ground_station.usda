@@ -19,6 +19,7 @@ def Xform "GroundStation" (
     kind = "component"
 )
 {
+    custom bool lunco:spawnable = true
     # Connectivity endpoint on Earth. Anchored (lunco:anchor:*) so the pose
     # system tracks it automatically. `class = "earth"` marks it a route root; a
     # 5° elevation mask is realistic for a DSN dish.

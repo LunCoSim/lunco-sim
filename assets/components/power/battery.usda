@@ -13,6 +13,7 @@ def Cube "Battery" (
     prepend apiSchemas = ["LunCoPowerComponentAPI"]
 )
 {
+    custom bool lunco:spawnable = true
     # --- Geometry (spec-compliant: size × xformOp:scale) ---
     double size = 1.0
     double3 xformOp:translate = (0, 0, 0)

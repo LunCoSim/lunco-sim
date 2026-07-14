@@ -21,6 +21,7 @@
 # Invisible: no geometry, pure telemetry.
 def Xform "Imu"
 {
+    custom bool lunco:spawnable = true
     token visibility = "invisible"
     custom bool lunco:sensor:imu = true
     custom double3 lunco:sensor:offset = (0.0, 0.0, 0.0)

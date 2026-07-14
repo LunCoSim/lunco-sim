@@ -1182,9 +1182,19 @@ impl Document for UsdDocument {
                     },
                     None => self.coarse_inverse(target, &id),
                 };
+                // Variability and `custom` are declared by the SCHEMA, not by the
+                // call site — see `crate::schema`. Deciding them here, in the one
+                // place attributes are authored, is what makes it impossible for a
+                // caller to author `info:id` as `varying` (which is how it *was*
+                // authored, because nothing knew better) or to omit `custom` on a
+                // per-model `lunco:` param that no schema declares.
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 stage
                     .create_attribute(format!("{path}.{name}"), type_name.as_str())
+                    .map_err(author_err)?
+                    .set_variability(crate::schema::variability_of(&name))
+                    .map_err(author_err)?
+                    .set_custom(crate::schema::is_custom(&name))
                     .map_err(author_err)?
                     .set(val)
                     .map_err(author_err)?;
@@ -2512,6 +2522,64 @@ mod tests {
         assert!(!prim_exists(&doc, "/World/Obstacle"));
         assert!(runtime_prim_exists(&doc, "/World/Obstacle"));
         assert!(!runtime_prim_exists(&doc, "/Rover"));
+    }
+
+    /// Variability and `custom` come from the schema, not the call site — so the
+    /// SAME `SetAttribute` op yields `uniform` for one attribute and `varying` for
+    /// another, and no caller has to know which. This is the fix for `info:id` and
+    /// `physics:axis` having been authored `varying`: they are `uniform` in their
+    /// schemas, nothing at the call site knew that, and the value silently diverged.
+    #[test]
+    fn set_attribute_authors_variability_and_custom_from_the_schema() {
+        let mut host = DocumentHost::new(UsdDocument::with_origin(
+            DocumentId::new(41),
+            "#usda 1.0\ndef Shader \"Surface\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/var.usda"),
+        ));
+        let set = |host: &mut DocumentHost<UsdDocument>, name: &str, ty: &str, value: &str| {
+            host.apply(Mutation::local(UsdOp::SetAttribute {
+                edit_target: LayerId::root(),
+                path: "/Surface".into(),
+                name: name.into(),
+                type_name: ty.into(),
+                value: value.into(),
+            }))
+            .unwrap();
+        };
+
+        // Core USD, declared `uniform` by UsdShadeShader.
+        set(&mut host, "info:id", "token", "\"UsdPreviewSurface\"");
+        // Ours, declared `uniform` by luncoSchema.
+        set(&mut host, "lunco:material:type", "token", "\"shader\"");
+        // Ours, declared `varying` by luncoSchema.
+        set(&mut host, "lunco:env:exposureEv100", "float", "12.5");
+        // Ours, declared by NO schema — a per-model Modelica param, genuinely custom.
+        set(&mut host, "lunco:voltage", "float", "28.0");
+
+        let src = host.document().source();
+        assert!(
+            src.contains("uniform token info:id"),
+            "info:id is uniform per UsdShadeShader: {src}"
+        );
+        assert!(
+            src.contains("uniform token lunco:material:type"),
+            "lunco:material:type is uniform per luncoSchema: {src}"
+        );
+        assert!(
+            src.contains("float lunco:env:exposureEv100") && !src.contains("uniform float lunco:env"),
+            "lunco:env:exposureEv100 is varying per luncoSchema: {src}"
+        );
+        assert!(
+            src.contains("custom float lunco:voltage"),
+            "a lunco: attr no schema declares must be authored `custom`: {src}"
+        );
+        // A core attr we have no schema for must NOT be claimed custom — that would
+        // be a lie about a perfectly ordinary schema property.
+        assert!(
+            !src.contains("custom token info:id"),
+            "info:id is a schema property, not custom: {src}"
+        );
+        assert!(reparses_cleanly(host.document()), "authored variability must reparse");
     }
 
     #[test]

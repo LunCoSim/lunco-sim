@@ -32,15 +32,15 @@ def Xform "SandboxScene" (
     # non-uniform extents. The ground is a 4 km × 0.2 m × 4 km slab.
     def Cube "Ground"
     (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "LuncoMaterialAPI"]
     )
     {
         double size = 1.0
         double3 xformOp:translate = (0, -0.1, 0)
         double3 xformOp:scale = (4000.0, 0.2, 4000.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        string primvars:materialType = "shader"
-        string primvars:shaderPath = "shaders/blueprint.wgsl"
+        uniform token lunco:material:type = "shader"
+        uniform string lunco:material:shader = "shaders/blueprint.wgsl"
         color3f primvars:surface_color = (0.15, 0.15, 0.18)
         color3f primvars:high_line_color = (0.20, 0.20, 0.23)
         color3f primvars:low_line_color = (0.20, 0.20, 0.23)
@@ -59,7 +59,7 @@ def Xform "SandboxScene" (
     # --- Ramp obstacles (static terrain) ---
     def Cube "Ramp"
     (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "LuncoMaterialAPI"]
     )
     {
         double size = 1.0
@@ -67,8 +67,8 @@ def Xform "SandboxScene" (
         double3 xformOp:rotateXYZ = (0, 0, 17.1887)
         double3 xformOp:scale = (60.0, 2.0, 80.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        string primvars:materialType = "shader"
-        string primvars:shaderPath = "shaders/blueprint.wgsl"
+        uniform token lunco:material:type = "shader"
+        uniform string lunco:material:shader = "shaders/blueprint.wgsl"
         color3f primvars:surface_color = (0.25, 0.22, 0.18)
         color3f primvars:high_line_color = (0.30, 0.27, 0.23)
         color3f primvars:low_line_color = (0.30, 0.27, 0.23)
@@ -87,7 +87,7 @@ def Xform "SandboxScene" (
 
     def Cube "Ramp1"
     (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "LuncoMaterialAPI"]
     )
     {
         double size = 1.0
@@ -95,8 +95,8 @@ def Xform "SandboxScene" (
         double3 xformOp:rotateXYZ = (0, 0, 17.1887)
         double3 xformOp:scale = (60.0, 2.0, 80.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        string primvars:materialType = "shader"
-        string primvars:shaderPath = "shaders/blueprint.wgsl"
+        uniform token lunco:material:type = "shader"
+        uniform string lunco:material:shader = "shaders/blueprint.wgsl"
         color3f primvars:surface_color = (0.25, 0.52, 0.18)
         color3f primvars:high_line_color = (0.30, 0.57, 0.23)
         color3f primvars:low_line_color = (0.30, 0.57, 0.23)
@@ -359,15 +359,15 @@ def Xform "SandboxScene" (
     }
 
     def Sphere "CosimTarget" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "LuncoMaterialAPI"]
     )
     {
         double radius = 0.5
         color3f[] primvars:displayColor = [(0.9, 0.7, 0.2)]
         # Spin-revealing checker (same general ShaderMaterial as the balloons),
         # so this cosim-driven ball shows its motion. Yellow identity via cell_a.
-        string primvars:materialType = "shader"
-        string primvars:shaderPath = "shaders/balloon.wgsl"
+        uniform token lunco:material:type = "shader"
+        uniform string lunco:material:shader = "shaders/balloon.wgsl"
         color3f primvars:cell_a = (0.9, 0.7, 0.2)    # cell A (yellow identity)
         color3f primvars:cell_b = (0.12, 0.12, 0.14) # cell B (dark)
         # `customData {min,max,unit}` = the UI hint the Inspector's data-driven

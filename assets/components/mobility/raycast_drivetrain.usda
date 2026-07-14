@@ -19,20 +19,25 @@ def Xform "Drivetrain" (
     kind = "component"
 )
 {
+    custom bool lunco:spawnable = true
     over "Wheel_FL"
     {
         double3 xformOp:translate = (-1.0, -0.15, -1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
     over "Wheel_FR"
     {
         double3 xformOp:translate = (1.0, -0.15, -1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
     over "Wheel_RL"
     {
         double3 xformOp:translate = (-1.0, -0.15, 1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
     over "Wheel_RR"
     {
         double3 xformOp:translate = (1.0, -0.15, 1.225)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 }

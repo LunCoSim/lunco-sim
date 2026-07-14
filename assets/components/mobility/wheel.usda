@@ -10,9 +10,10 @@
 
 def Cylinder "Wheel" (
     kind = "component"
-    prepend apiSchemas = ["LunCoMobilityComponentAPI"]
+    prepend apiSchemas = ["LunCoMobilityComponentAPI", "LuncoMaterialAPI"]
 )
 {
+    custom bool lunco:spawnable = true
     # --- Geometry ---
     # `axis = "X"` so the cylinder lies along the rover's left/right
     # axle direction (perpendicular to forward). Instances may
@@ -27,8 +28,8 @@ def Cylinder "Wheel" (
     # Spin-revealing wheel (tire + rim + spokes) via the general ShaderMaterial,
     # loaded at USD-load time (see assets/shaders/wheel.wgsl). Survives the
     # physics/visual wheel split (lunco_usd_sim::setup_*_wheel carry it through).
-    string primvars:materialType = "shader"
-    string primvars:shaderPath = "shaders/wheel.wgsl"
+    uniform token lunco:material:type = "shader"
+    uniform string lunco:material:shader = "shaders/wheel.wgsl"
     color3f primvars:rim_color = (0.98, 0.98, 1.00)   # spoke / rim (bright metal → white on the lit side)
     color3f primvars:tire_color = (0.10, 0.10, 0.11)  # tire (rubber)
     float primvars:spoke_count = 6.0    # spoke count

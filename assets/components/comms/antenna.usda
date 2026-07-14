@@ -15,6 +15,7 @@ def Xform "CommsAntenna" (
     kind = "component"
 )
 {
+    custom bool lunco:spawnable = true
     bool lunco:linkNode = true
 
     def Cylinder "Mast"

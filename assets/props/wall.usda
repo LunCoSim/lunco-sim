@@ -10,6 +10,7 @@ def Xform "Wall" (
     kind = "component"
 )
 {
+    custom bool lunco:spawnable = true
     def Cube "Body" (
         prepend apiSchemas = ["PhysicsCollisionAPI"]
     )

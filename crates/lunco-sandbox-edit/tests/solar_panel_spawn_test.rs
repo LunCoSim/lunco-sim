@@ -29,12 +29,16 @@ fn test_solar_panel_usda_has_material_type() {
     let content = std::fs::read_to_string(usda_path)
         .unwrap_or_else(|e| panic!("solar_panel.usda should exist at {:?}: {}", usda_path, e));
     assert!(
-        content.contains("primvars:materialType = \"shader\""),
-        "PanelSurface must have primvars:materialType = shader"
+        content.contains("uniform token lunco:material:type = \"shader\""),
+        "PanelSurface must have lunco:material:type = shader (LuncoMaterialAPI)"
     );
     assert!(
         content.contains("shaders/solar_panel.wgsl"),
-        "PanelSurface must point primvars:shaderPath at shaders/solar_panel.wgsl"
+        "PanelSurface must point lunco:material:shader at shaders/solar_panel.wgsl"
+    );
+    assert!(
+        content.contains("LuncoMaterialAPI"),
+        "a prim carrying lunco:material:* must apply LuncoMaterialAPI"
     );
 }
 

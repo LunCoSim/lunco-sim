@@ -2158,22 +2158,52 @@ struct UsdLayerAttrs<'a, R: UsdRead> {
     sdf: openusd::sdf::Path,
 }
 
+/// The USD property name for a layer parameter: `"size"` → `"lunco:layer:size"`
+/// (`LuncoTerrainLayerAPI`).
+///
+/// The one place the mapping lives. Layer parsers speak *logical* names (`x`,
+/// `size`, `seed`) — they are USD-free by design — and this adapter is what binds
+/// them to USD, so the namespace belongs here rather than smeared across a dozen
+/// parsers that would each have to remember it.
+///
+/// They used to be authored BARE, in the root property namespace, which is how a
+/// rock layer's `size` came to collide with `UsdGeomCube`'s real `double size`:
+/// two different meanings for one property name on prims that can be both.
+fn layer_attr(name: &str) -> String {
+    let full = format!("lunco:layer:{name}");
+    // The mapping is stringly, so VERIFY it instead of trusting it: a parser reading
+    // a parameter `LuncoTerrainLayerAPI` does not declare is either a typo or a new
+    // parameter someone forgot to add to the schema, and both should be loud. This
+    // fires the first time any test or debug run touches a layer, so the schema and
+    // the parsers cannot drift apart silently — which is the whole failure mode the
+    // bare names had.
+    debug_assert!(
+        lunco_usd::schema::SchemaRegistry::global()
+            .property(&full)
+            .is_some(),
+        "terrain layer parameter `{name}` is not declared by LuncoTerrainLayerAPI \
+         (crates/lunco-usd/schema/schema.usda) — add it there, or fix the typo"
+    );
+    full
+}
+
 impl<R: UsdRead> lunco_terrain_surface::LayerAttrSource for UsdLayerAttrs<'_, R> {
     fn get_f32(&self, name: &str) -> Option<f32> {
-        self.reader.real_f32(&self.sdf, name)
+        self.reader.real_f32(&self.sdf, &layer_attr(name))
     }
     fn get_i64(&self, name: &str) -> Option<i64> {
         // `TryFrom<Value>` is strict per variant, so probe both authored widths:
         // `int64` (the Inspector authors seeds full-range) and hand-authored `int`.
+        let name = layer_attr(name);
         self.reader
-            .scalar::<i64>(&self.sdf, name)
-            .or_else(|| self.reader.scalar::<i32>(&self.sdf, name).map(|v| v as i64))
+            .scalar::<i64>(&self.sdf, &name)
+            .or_else(|| self.reader.scalar::<i32>(&self.sdf, &name).map(|v| v as i64))
     }
     fn get_string(&self, name: &str) -> Option<String> {
-        self.reader.scalar::<String>(&self.sdf, name)
+        self.reader.scalar::<String>(&self.sdf, &layer_attr(name))
     }
     fn get_bool(&self, name: &str) -> Option<bool> {
-        self.reader.scalar::<bool>(&self.sdf, name)
+        self.reader.scalar::<bool>(&self.sdf, &layer_attr(name))
     }
 }
 
@@ -2272,40 +2302,41 @@ fn sync_obstacle_spec_from_usd<R: UsdRead>(
     spec: &mut lunco_obstacle_field::spec::ObstacleFieldSpec,
 ) {
     use lunco_obstacle_field::spec::SizeDist;
+    use lunco_terrain_surface::LayerAttrSource;
     for child in reader.children(terrain) {
+        // Read through the SAME adapter the layer parsers use, so the `lunco:layer:`
+        // namespace is applied in one place ([`layer_attr`]) and this panel cannot
+        // drift from the parsers by reading a name they no longer author.
+        let a = UsdLayerAttrs {
+            reader,
+            sdf: child.clone(),
+        };
         match reader.scalar::<String>(&child, "lunco:layer").as_deref() {
             Some("craters") => {
-                let density = reader.real_f32(&child, "density").unwrap_or(0.0);
-                let mode = reader.real_f32(&child, "sizeMode").unwrap_or(22.0);
+                let density = a.get_f32("density").unwrap_or(0.0);
+                let mode = a.get_f32("sizeMode").unwrap_or(22.0);
                 spec.craters.enabled = density > 0.0;
                 spec.craters.density = density;
-                spec.craters.depth_ratio = reader.real_f32(&child, "depthRatio").unwrap_or(0.4);
-                spec.craters.rim_height_ratio =
-                    reader.real_f32(&child, "rimRatio").unwrap_or(0.18);
-                let size_min = reader.real_f32(&child, "sizeMin").unwrap_or(2.0);
-                let size_max = reader.real_f32(&child, "sizeMax").unwrap_or(60.0);
+                spec.craters.depth_ratio = a.get_f32("depthRatio").unwrap_or(0.4);
+                spec.craters.rim_height_ratio = a.get_f32("rimRatio").unwrap_or(0.18);
+                let size_min = a.get_f32("sizeMin").unwrap_or(2.0);
+                let size_max = a.get_f32("sizeMax").unwrap_or(60.0);
                 spec.craters.size =
                     SizeDist::new(size_min.min(mode), mode, size_max.max(mode), 0.7);
-                if let Some(seed) = reader
-                    .scalar::<i64>(&child, "seed")
-                    .or_else(|| reader.scalar::<i32>(&child, "seed").map(|v| v as i64))
-                {
+                if let Some(seed) = a.get_i64("seed") {
                     spec.seed = seed as u64;
                 }
             }
             Some("rocks") => {
-                let density = reader.real_f32(&child, "density").unwrap_or(0.0);
-                let mode = reader.real_f32(&child, "sizeMode").unwrap_or(0.6);
+                let density = a.get_f32("density").unwrap_or(0.0);
+                let mode = a.get_f32("sizeMode").unwrap_or(0.6);
                 spec.rocks.enabled = density > 0.0;
                 spec.rocks.density = density;
-                let size_min = reader.real_f32(&child, "sizeMin").unwrap_or(0.2);
-                let size_max = reader
-                    .real_f32(&child, "sizeMax")
-                    .unwrap_or((mode * 4.0).max(2.5));
+                let size_min = a.get_f32("sizeMin").unwrap_or(0.2);
+                let size_max = a.get_f32("sizeMax").unwrap_or((mode * 4.0).max(2.5));
                 spec.rocks.size =
                     SizeDist::new(size_min.min(mode), mode, size_max.max(mode), 0.6);
-                spec.rocks.dynamic_fraction =
-                    reader.real_f32(&child, "dynamicFrac").unwrap_or(0.0);
+                spec.rocks.dynamic_fraction = a.get_f32("dynamicFrac").unwrap_or(0.0);
             }
             _ => {}
         }
@@ -2572,14 +2603,19 @@ fn on_place_rock_authored(
             warn!("[terrain-edit] AddPrim {rock_prim} failed — rock dropped: {e:?}");
             continue;
         }
+        // `LuncoTerrainLayerAPI`. Namespaced, not bare: a bare `size` here is
+        // `UsdGeomCube`'s real `double size` under a different meaning. The reader
+        // side of this contract is `layer_attr`.
         let attrs: [(&str, &str, String); 5] = [
-            // RAW content — `SetAttribute` authors `string` values verbatim
-            // (no literal parsing); hand-quoting embeds the quotes.
-            ("lunco:layer", "string", "rock".to_string()),
-            ("x", "float", format!("{}", ev.x)),
-            ("z", "float", format!("{}", ev.z)),
-            ("size", "float", format!("{}", ev.size_or_default())),
-            ("seed", "int64", format!("{}", ev.seed_or_default() as i64)),
+            ("lunco:layer", "token", "\"rock\"".to_string()),
+            ("lunco:layer:x", "float", format!("{}", ev.x)),
+            ("lunco:layer:z", "float", format!("{}", ev.z)),
+            ("lunco:layer:size", "float", format!("{}", ev.size_or_default())),
+            (
+                "lunco:layer:seed",
+                "int64",
+                format!("{}", ev.seed_or_default() as i64),
+            ),
         ];
         for (attr, ty, value) in attrs {
             let _ = registry.apply(
@@ -2952,27 +2988,28 @@ fn bridge_dem_prim_read<R: UsdRead>(
     // `bypass_change_detection` so it doesn't look like a runtime edit).
     sync_obstacle_spec_from_usd(reader, sdf, obstacle_spec);
 
-    // DEM/ground parameters: prefer a `dem` child layer prim (plain attr names);
-    // fall back to the Terrain prim's own `lunco:terrain:*` attrs (back-compat).
+    // DEM/ground parameters live on the `dem` child LAYER prim, as
+    // `LuncoTerrainLayerAPI` (`lunco:layer:*`) — one prim, one name.
+    //
+    // There used to be a fallback chain: bare names (`windowM`, `demSource`) on the
+    // dem prim, else `lunco:terrain:*` on the Terrain prim. Two names for one thing,
+    // on two different prims, is not back-compat — it is two ways to be right and
+    // several ways to be silently wrong, and the bare half collided with core USD
+    // (`size`). The namespace split is now by prim: a LAYER prim carries
+    // `lunco:layer:*`, the terrain SURFACE carries `lunco:terrain:*`.
+    use lunco_terrain_surface::LayerAttrSource;
     let dem = dem_layer_sdf.clone();
-    let attr_f32 = |name: &str, legacy: &str| -> Option<f32> {
-        dem.as_ref().and_then(|d| reader.real_f32(d, name)).or_else(|| reader.real_f32(sdf, legacy))
+    let dem_attrs = dem.as_ref().map(|d| UsdLayerAttrs {
+        reader,
+        sdf: d.clone(),
+    });
+    let attr_f32 = |name: &str| -> Option<f32> { dem_attrs.as_ref()?.get_f32(name) };
+    let attr_i32 = |name: &str| -> Option<i32> {
+        dem_attrs.as_ref()?.get_i64(name).map(|v| v as i32)
     };
-    let attr_i32 = |name: &str, legacy: &str| -> Option<i32> {
-        dem.as_ref()
-            .and_then(|d| reader.scalar::<i32>(d, name))
-            .or_else(|| reader.scalar::<i32>(sdf, legacy))
-    };
-    let attr_bool = |name: &str, legacy: &str| -> Option<bool> {
-        dem.as_ref()
-            .and_then(|d| reader.scalar::<bool>(d, name))
-            .or_else(|| reader.scalar::<bool>(sdf, legacy))
-    };
+    let attr_bool = |name: &str| -> Option<bool> { dem_attrs.as_ref()?.get_bool(name) };
 
-    let rel = dem
-        .as_ref()
-        .and_then(|d| reader.scalar::<String>(d, "demSource"))
-        .or_else(|| reader.scalar::<String>(sdf, "lunco:terrain:demSource"));
+    let rel = dem_attrs.as_ref().and_then(|a| a.get_string("demSource"));
     let Some(rel) = rel else {
         warn!("[usd-dem] prim {} is a DEM terrain but has no dem-layer demSource", prim_path.path);
         return;
@@ -3021,18 +3058,18 @@ fn bridge_dem_prim_read<R: UsdRead>(
     };
     // `windowM` = side length (m) realized at native res. 0 = whole map; >0 = side;
     // absent/negative = a safe 4 km window (avoid an accidental full-map build).
-    let half_window = match attr_f32("windowM", "lunco:terrain:windowM") {
+    let half_window = match attr_f32("windowM") {
         Some(w) if w == 0.0 => f64::INFINITY,
         Some(w) if w > 0.0 => (w * 0.5) as f64,
         _ => 2048.0,
     };
     // `targetRes` = visual-quality downsample target (samples/side). ≤ 0 = native.
-    let target_res = attr_i32("targetRes", "lunco:terrain:targetRes")
+    let target_res = attr_i32("targetRes")
         .filter(|&r| r > 0)
         .map(|r| r as usize)
         .unwrap_or(0);
     // `lodViz` = stream CDLOD tiles (default ON) vs one static mesh.
-    let lod_viz = attr_bool("lodViz", "lunco:terrain:lodViz").unwrap_or(true);
+    let lod_viz = attr_bool("lodViz").unwrap_or(true);
     // `colliderRing` = stream a per-body collider ring vs one static collider.
     // The static full-DEM collider is Nyquist-gated at the DEM base spacing
     // (~3.9 m), so it fades every crater below ~12 m radius FLAT in physics while
@@ -3051,7 +3088,7 @@ fn bridge_dem_prim_read<R: UsdRead>(
     let collider_ring = if lod_viz && has_height_layers {
         true
     } else {
-        attr_bool("colliderRing", "lunco:terrain:colliderRing").unwrap_or(lod_viz)
+        attr_bool("colliderRing").unwrap_or(lod_viz)
     };
     // (`detailUpsample` is retired: craters/edits are ANALYTIC modifiers on the
     // surface oracle now, sampled at each consumer's own resolution — grid

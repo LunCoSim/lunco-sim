@@ -19,6 +19,7 @@
 # so guidance stays sane above the sensor's reach). Honours `lunco:sensor:offset`.
 def Xform "Altimeter"
 {
+    custom bool lunco:spawnable = true
     token visibility = "invisible"
     custom bool lunco:sensor:range = true
     custom token lunco:sensor:rangeAxis = "-Y"

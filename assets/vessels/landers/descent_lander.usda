@@ -379,6 +379,9 @@ def Cylinder "DescentLander" (
     # HERE (a recognisable array) instead of wrapping the hull. Thin slabs, no
     # collider — visual only.
     def Cube "SolarWingPX"
+    (
+        prepend apiSchemas = ["LuncoMaterialAPI"]
+    )
     {
         double size = 1.0
         double3 xformOp:translate = (5.4, 1.4, 0)
@@ -386,8 +389,8 @@ def Cylinder "DescentLander" (
         double3 xformOp:scale = (5.6, 0.06, 3.4)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.06, 0.06, 0.22)]
-        string primvars:materialType = "shader"
-        string primvars:shaderPath = "shaders/solar_panel.wgsl"
+        uniform token lunco:material:type = "shader"
+        uniform string lunco:material:shader = "shaders/solar_panel.wgsl"
         float primvars:v_scale = 1.7
         float primvars:cell_rows = 8.0
         float primvars:cell_cols = 14.0
@@ -400,6 +403,9 @@ def Cylinder "DescentLander" (
         bool physics:collisionEnabled = false
     }
     def Cube "SolarWingNX"
+    (
+        prepend apiSchemas = ["LuncoMaterialAPI"]
+    )
     {
         double size = 1.0
         double3 xformOp:translate = (-5.4, 1.4, 0)
@@ -407,8 +413,8 @@ def Cylinder "DescentLander" (
         double3 xformOp:scale = (5.6, 0.06, 3.4)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.06, 0.06, 0.22)]
-        string primvars:materialType = "shader"
-        string primvars:shaderPath = "shaders/solar_panel.wgsl"
+        uniform token lunco:material:type = "shader"
+        uniform string lunco:material:shader = "shaders/solar_panel.wgsl"
         float primvars:v_scale = 1.7
         float primvars:cell_rows = 8.0
         float primvars:cell_cols = 14.0

@@ -48,10 +48,10 @@ use std::collections::BTreeMap;
 #[derive(Component)]
 pub struct UsdShaderResolved;
 
-/// Authors [`ShaderLook`] from `primvars:materialType = "shader"` (or the
-/// legacy alias `"usd_shader"`) + `primvars:shaderPath`, reading generic
-/// colors/params from primvars. Runs between `sync_usd_visuals` and the sim
-/// consumers (see module docs).
+/// Authors [`ShaderLook`] from `LuncoMaterialAPI` — `lunco:material:type = "shader"`
+/// + `lunco:material:shader` — reading the shader's generic colors/params from
+/// primvars (those genuinely ARE primvars: per-prim shader inputs). Runs between
+/// `sync_usd_visuals` and the sim consumers (see module docs).
 pub fn apply_usd_shader_materials(
     q: Query<(Entity, &UsdPrimPath), (With<UsdVisualSynced>, Without<UsdShaderResolved>)>,
     stages: Res<Assets<UsdStageAsset>>,
@@ -98,14 +98,19 @@ fn apply_usd_shader_material_read<R: UsdRead>(
     // From here on the prim is evaluated regardless of outcome.
     commands.entity(entity).try_insert(UsdShaderResolved);
 
-    let mat_type: Option<String> = reader.scalar(sdf_path, "primvars:materialType");
-    if !matches!(mat_type.as_deref(), Some("shader") | Some("usd_shader")) {
+    // `LuncoMaterialAPI` (see lunco-usd/schema/schema.usda). These were once
+    // `primvars:materialType` / `primvars:shaderPath`, which misused the primvars
+    // namespace: a primvar is interpolated geometric data that inherits to child
+    // geometry and binds per-vertex, and a material-type token is none of those —
+    // it was being swept up and offered to shaders as vertex data.
+    let mat_type: Option<String> = reader.scalar(sdf_path, "lunco:material:type");
+    if mat_type.as_deref() != Some("shader") {
         return;
     }
 
-    let Some(shader_path) = reader.scalar::<String>(sdf_path, "primvars:shaderPath") else {
+    let Some(shader_path) = reader.scalar::<String>(sdf_path, "lunco:material:shader") else {
         warn!(
-            "[shader] prim {} has materialType=shader but no primvars:shaderPath",
+            "[shader] prim {} has lunco:material:type=shader but no lunco:material:shader",
             prim_path.path
         );
         return;

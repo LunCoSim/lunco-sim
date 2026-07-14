@@ -36,6 +36,7 @@
 // server needs. Everything below is the in-scene editor (gizmo/picking/egui),
 // gated on `ui`.
 pub mod catalog;
+pub mod spawn_meta;
 pub mod commands;
 /// Shaders as a journaled, synced, live-editable domain (WGSL twin of rhai's
 /// `ScriptDocument`) — edits record to the Twin journal (`DomainKind::Shader`).

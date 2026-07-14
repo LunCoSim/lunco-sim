@@ -14,6 +14,7 @@ def Xform "LandingLocationMarker" (
     kind = "component"
 )
 {
+    custom bool lunco:spawnable = true
     custom string lunco:landingLocation = "true"
 
     # Emission REQUIRES a material. `displayColor` / `displayOpacity` are real

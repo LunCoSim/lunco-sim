@@ -50,6 +50,7 @@ def Xform "SkidRover" (
     }
 )
 {
+    custom bool lunco:spawnable = true
     # Emission REQUIRES a material: USD has no "display emissive" primvar the way
     # it has `displayColor`/`displayOpacity`, so the headlight glow is a
     # UsdPreviewSurface input on a Shader, bound to both lenses.

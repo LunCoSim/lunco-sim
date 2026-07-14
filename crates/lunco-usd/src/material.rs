@@ -225,6 +225,33 @@ pub fn ensure_physics_material_ops(
     Some(ops)
 }
 
+/// The `UsdPreviewSurface` input a LunCoSim PBR look key maps to, as
+/// `(attribute, USD type)` — or `None` when USD's surface model has no equivalent.
+///
+/// The single home for the mapping, so the Inspector's material editor and the
+/// `SetObjectProperty` command cannot disagree about what "roughness" means. This
+/// is the crate the mapping belongs in (not the editor) precisely so every crate
+/// that edits a look authors the SAME USD.
+///
+/// `None` is a real answer, not a gap:
+/// - `unlit` and `reflectance` have no `UsdPreviewSurface` input. (Bevy's
+///   `reflectance` is a remap of specular response; USD models it with `ior` /
+///   `specularColor` under a different parameterisation, so writing one to the
+///   other would be a lossy invention, not a translation.)
+/// - `double_sided` is NOT a surface input at all — it is `uniform bool
+///   doubleSided` on `UsdGeomGprim`, i.e. a property of the *geometry*, not the
+///   material. It is handled by the caller, on the geom prim.
+pub fn preview_surface_input(key: &str) -> Option<(&'static str, &'static str)> {
+    Some(match key {
+        "base_color" => ("inputs:diffuseColor", "color3f"),
+        "emissive" => ("inputs:emissiveColor", "color3f"),
+        "metallic" => ("inputs:metallic", "float"),
+        "roughness" | "perceptual_roughness" => ("inputs:roughness", "float"),
+        "alpha" | "opacity" => ("inputs:opacity", "float"),
+        _ => return None,
+    })
+}
+
 /// Coerce a prim-path fragment into a legal USD identifier (alphanumerics and
 /// `_`, never leading with a digit).
 fn sanitize(s: &str) -> String {
