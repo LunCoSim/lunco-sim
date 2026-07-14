@@ -282,33 +282,38 @@ including planned upstream fixes to the rumoca fork.
 
 ## USD-driven authoring (`lunco_usd_sim::cosim`)
 
-Cosim entities and wires are declared in USD scenes — no per-scene Rust.
-The translator (`lunco-usd-sim/src/cosim.rs`, registered by
-`UsdSimPlugin`) reads three attribute kinds from any USD prim that
-participates in a cosim:
+Cosim programs and wires are declared in USD scenes — no per-scene Rust.
+A program is a PRIM, with typed ports that CONNECT — the same shape
+`UsdShade` gives a shader. The translator (`lunco-usd-sim/src/cosim.rs`,
+registered by `UsdSimPlugin`) reads:
 
-| Attribute | What it does |
+| Property | What it does |
 |---|---|
-| `string lunco:modelicaModel = "models/Balloon.mo"` | Opens the source, dispatches `ModelicaCommand::Compile`, populates `ModelicaModel` + `SimComponent` once the worker returns. |
-| `string lunco:pythonModel = "models/Amplifier.py"` | Registers a `ScriptDocument`, attaches `ScriptedModel` + `SimComponent`. Stepped by `lunco-scripting::run_scripted_models` each `FixedUpdate`. |
-| `string lunco:simWires = "from:to,from:to:scale,..."` | Comma-separated **self-loop** wires (same entity, different ports). Each entry spawns one `SimConnection`. Empty string is legal for cross-entity-only entities. |
+| `uniform asset lunco:program:sourceAsset = @models/Balloon.mo@` | Names the program's file. The ENGINE follows from the extension, never from a second attribute: `.mo` opens the source, dispatches `ModelicaCommand::Compile` and populates `ModelicaModel` + `SimComponent` once the worker returns; `.py` registers a `ScriptDocument` and attaches `ScriptedModel` + `SimComponent`, stepped by `lunco-scripting::run_scripted_models` each `FixedUpdate`. |
+| `uniform string lunco:program:sourceCode` | The same, for a program authored in place rather than in a file. |
+| `uniform bool lunco:program:realtimeSafe` | The author's promise that the program may drive a force on a client-predicted body (see [`28-modelica-realtime-physics.md`](28-modelica-realtime-physics.md)). |
+| `float inputs:<port>` / `float outputs:<port>` | The program's ports. A `.connect` makes one a wire; a constant makes it a parameter. A prim is stepped iff it BOTH binds a program AND declares ports. |
 
-For wires *between* entities, declare a typeless prim with two rels:
+A program that is bolted onto a thing — a guidance law, a battery, a supervisory script
+— is a `def LuncoProgram` CHILD prim, so deleting the prim removes the behaviour. A prim
+that IS a program — a vessel's own flight-control system, inseparable from the airframe
+— applies `LuncoProgramAPI` in place instead.
+
+A wire is a native USD connection, authored on the prim that CONSUMES the value. The
+same form serves within one prim (a model's output driving the body's force input) and
+*between* prims (the target path simply names another one):
 
 ```usda
-def "OscToAmp"
+def LuncoProgram "Amplifier"
 {
-    rel    lunco:wireFrom = </Scene/Oscillator>
-    string lunco:fromPort = "signal"
-    rel    lunco:wireTo   = </Scene/Amplifier>
-    string lunco:toPort   = "signal"
-    double lunco:scale    = 1.0
+    uniform asset lunco:program:sourceAsset = @models/Amplifier.py@
+    float inputs:signal.connect = </Scene/Oscillator.outputs:signal>
 }
 ```
 
-`process_usd_cosim_wires` resolves rels to ECS entities each tick
+`rewire_usd_connections` resolves each connection to ECS entities
 (deferred until both endpoints exist — handles async USD asset loads)
-and spawns one `SimConnection` per resolved wire.
+and spawns one `SimConnection` per resolved edge.
 
 The result: a multi-component, multi-language cosim is a USD edit, not
 a Rust edit. `cross_entity_cosim_test` exercises the canonical chain

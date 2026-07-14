@@ -5,23 +5,16 @@
     metersPerUnit = 1
 )
 
-
-def Cylinder "Motor" (
+# A drive motor, as a spawnable part. It carries its electrical ratings and its power
+# connection; the root is an `Xform` — a component, not a cylinder — so the visible
+# housing is an ordinary child gprim that both renders and collides, and the rigid body
+# is the root.
+def Xform "Motor" (
     kind = "component"
     prepend apiSchemas = ["LunCoActuatorAPI", "LuncoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = true
-    # --- Geometry ---
-    double radius = 0.3
-    double height = 0.8
-    double3 xformOp:translate = (0, 0, 0)
-    uniform token[] xformOpOrder = ["xformOp:translate"]
-    color3f[] primvars:displayColor = [(0.4, 0.4, 0.4)]
-
-    # --- Modelica model ---
-    string lunco:modelicaModel = "models/motor.mo"
-    string lunco:modelicaClassName = "LunCo.Mobility.Motor.BLDC"
 
     # --- Motor properties ---
     double lunco:ratedPower = 2000.0
@@ -38,5 +31,15 @@ def Cylinder "Motor" (
     # --- Physics ---
     bool physics:rigidBodyEnabled = true
     float physics:mass = 8.0
-    bool physics:collisionEnabled = true
+
+    # --- Housing: renders and collides ---
+    def Cylinder "Body" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double radius = 0.3
+        double height = 0.8
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.4)]
+        bool physics:collisionEnabled = true
+    }
 }

@@ -5,64 +5,68 @@
     metersPerUnit = 1
 )
 
-# Reusable Modelica-driven balloon. Geometry and physics live here in USD
-# (see PhysicsRigidBodyAPI / PhysicsCollisionAPI from the Avian translator).
-# The cosim layer is wired via two custom attributes:
+# Reusable Modelica-driven balloon.
 #
-#   string lunco:modelicaModel = "models/Balloon.mo"
-#       — Path (relative to assets/) of the Modelica source. The cosim
-#       translator opens it, registers a document, and triggers compile.
+# The balloon IS its plant: the buoyancy model is not bolted onto the sphere, it is
+# what makes the sphere a balloon — so `LuncoProgramAPI` is applied to the vessel prim
+# itself and `lunco:program:sourceAsset` names the Modelica source. The model's
+# `netForce` output is the body's `force_y` input; the body's height and velocity are
+# the model's inputs. One prim, one self-loop.
 #
-#   string lunco:simWires = "fromPort:toPort,fromPort:toPort:scale,..."
-#       — Comma-separated self-loop wires connecting Modelica ↔ AvianSim
-#       ports on this same entity. Each entry spawns one `SimConnection`.
-#       `:scale` is optional (defaults to 1.0). Encoded as a single
-#       string because `string[]` arrays don't compose across `references`
-#       in the current openusd parser.
+# The root is an `Xform` — a vehicle, not a sphere — so the visible envelope is an
+# ordinary child gprim that both renders and collides, and the rigid body is the root.
 #
 # Instantiate in scenes via reference + overrides:
-#   def Sphere "RedBalloon" (prepend references = @../balloons/modelica_balloon.usda@</ModelicaBalloon>) {
+#   def Xform "RedBalloon" (prepend references = @../balloons/modelica_balloon.usda@</ModelicaBalloon>) {
 #       double3 xformOp:translate = (10, 5, 0)
-#       color3f[] primvars:displayColor = [(0.9, 0.2, 0.2)]
+#       uniform token[] xformOpOrder = ["xformOp:translate"]
 #   }
 
-def Sphere "ModelicaBalloon" (
+def Xform "ModelicaBalloon" (
     kind = "component"
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "LuncoMaterialAPI", "LuncoCatalogAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LuncoCatalogAPI", "LuncoProgramAPI"]
 )
 {
     uniform bool lunco:spawnable = true
-    double radius = 1.0
-    color3f[] primvars:displayColor = [(0.9, 0.2, 0.2)]
-
-    # Spin-revealing checker via the general ShaderMaterial, loaded at USD-load
-    # time (see assets/shaders/balloon.wgsl).
-    uniform token lunco:material:type = "shader"
-    uniform asset lunco:material:shader = @shaders/balloon.wgsl@
-    color3f primvars:cell_a = (0.9, 0.2, 0.2)    # cell A (balloon identity)
-    color3f primvars:cell_b = (0.12, 0.12, 0.14) # cell B (dark)
-    color3f primvars:marker_color = (1.0, 1.0, 1.0) # marker wedge + poles
-    float primvars:wedge_count = 8.0             # longitude cells
-    float primvars:band_count = 6.0              # latitude cells
-
-    bool physics:rigidBodyEnabled = true
-    bool physics:collisionEnabled = true
-    float physics:mass = 4.5
     float lunco:spawnLift = 2.0
 
-    # Modelica source + cosim wires. The translator (`lunco_usd_sim::cosim`)
-    # picks these up after `sync_usd_visuals` populates Transform/Mesh.
-    # Wires are comma-separated `from:to` (or `from:to:scale`) entries —
-    # `string[]` arrays don't compose across `references` in the current
-    # openusd parser, so we encode them in a single string.
-    string lunco:modelicaModel = "models/Balloon.mo"
+    bool physics:rigidBodyEnabled = true
+    float physics:mass = 4.5
+
+    # ── The plant ────────────────────────────────────────────────────────────
+    # Buoyancy, drag and envelope volume. `asset`, so the resolver and the reference
+    # closure can see the file this scene depends on.
+    uniform asset lunco:program:sourceAsset = @models/Balloon.mo@
+
+    # It drives `force_y` every solver step on a body the client predicts, so it must
+    # promise it steps fast enough to be trusted with a force.
+    uniform bool lunco:program:realtimeSafe = true
 
     # Co-sim wiring — native USD `connectionPaths` (derived to `SimConnection` by
     # `reconcile_usd_connections`). Self-loop on this one prim, carrying both the
     # Modelica model ports (out: netForce, volume; in: height, velocity) and the
-    # Avian physics ports (out: height, velocity_y; in: force_y, collider).
+    # Avian physics ports (out: height, velocity_y; in: force_y).
     float inputs:force_y.connect = </ModelicaBalloon.outputs:netForce>
     float inputs:collider.connect = </ModelicaBalloon.outputs:volume>
     float inputs:height.connect = </ModelicaBalloon.outputs:height>
     float inputs:velocity.connect = </ModelicaBalloon.outputs:velocity_y>
+
+    # ── The envelope: renders and collides ───────────────────────────────────
+    def Sphere "Envelope" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LuncoMaterialAPI"]
+    )
+    {
+        double radius = 1.0
+        color3f[] primvars:displayColor = [(0.9, 0.2, 0.2)]
+        bool physics:collisionEnabled = true
+
+        # Spin-revealing checker via the general ShaderMaterial, loaded at USD-load
+        # time (see assets/shaders/balloon.wgsl).
+        uniform asset lunco:material:shader = @shaders/balloon.wgsl@
+        color3f primvars:cell_a = (0.9, 0.2, 0.2)    # cell A (balloon identity)
+        color3f primvars:cell_b = (0.12, 0.12, 0.14) # cell B (dark)
+        color3f primvars:marker_color = (1.0, 1.0, 1.0) # marker wedge + poles
+        float primvars:wedge_count = 8.0             # longitude cells
+        float primvars:band_count = 6.0              # latitude cells
+    }
 }

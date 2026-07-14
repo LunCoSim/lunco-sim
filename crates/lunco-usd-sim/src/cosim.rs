@@ -242,11 +242,20 @@ fn process_usd_cosim_prim_read<R: UsdRead>(
     // `inputs:angle`, a rigid body receiving `inputs:force_y`). Wiring itself
     // is native `connectionPaths`, derived by `rewire_usd_connections`
     // (the journaled, distributed path), never parsed here.
-    let modelica_path = reader.scalar::<String>(sdf_path, "lunco:modelicaModel");
-    let python_path = reader.scalar::<String>(sdf_path, "lunco:pythonModel");
-    if modelica_path.is_none() && python_path.is_none() {
-        return;
-    }
+    // A program names its source as an `asset`. The LANGUAGE comes from the file's
+    // extension, never from a second attribute: the same `.py` is a plant on one
+    // prim and a script on the next, so a `lunco:pythonModel`-style name would be
+    // asserting a role the file does not have. This is how USD itself dispatches
+    // `.usda` / `.usdc` / `.usdz`.
+    let source = reader.asset(sdf_path, "lunco:program:sourceAsset");
+    let (modelica_path, python_path) = match source.as_deref().map(solver_language) {
+        Some(Some(SolverLanguage::Modelica)) => (source.clone(), None),
+        Some(Some(SolverLanguage::Python)) => (None, source.clone()),
+        // A program this crate does not solve (a `.rhai` script, a `.xml` tree).
+        // It is somebody else's to run; it is not a cosim model.
+        Some(None) => return,
+        None => return,
+    };
     let has_ports = reader
         .attr_names(sdf_path)
         .iter()
@@ -292,68 +301,115 @@ fn process_usd_cosim_prim_read<R: UsdRead>(
     // happens later, in `dispatch_loaded_modelica_sources` /
     // `dispatch_loaded_python_sources`, once the asset is ready.
     // See `docs/architecture/40-asset-io.md`.
-    if let Some(rel) = modelica_path.as_ref() {
-        let asset_path = strip_assets_prefix(rel);
+    if let Some(asset_path) = modelica_path {
         commands.entity(entity).try_insert(PendingModelicaSource {
             handle: asset_server.load(asset_path.clone()),
             asset_path,
         });
     }
-    if let Some(rel) = python_path.as_ref() {
-        let asset_path = strip_assets_prefix(rel);
+    if let Some(asset_path) = python_path {
         commands.entity(entity).try_insert(PendingPythonSource {
             handle: asset_server.load(asset_path.clone()),
             asset_path,
         });
     }
 
-    // Coupling tier (A4) — `lunco:cosim:tier = "A" | "B" | "C"`. DECLARED, never
-    // inferred: it is the model author's statement about what this model is
-    // allowed to do to the physics loop (see `lunco_cosim::CosimTier` and
-    // `docs/architecture/28-modelica-realtime-physics.md`). Absent ⇒ undeclared,
-    // which is NOT the same as Tier A: `rewire_usd_connections` gates force /
-    // torque wires on it.
-    if let Some(spec) = reader.scalar::<String>(sdf_path, "lunco:cosim:tier") {
-        match lunco_cosim::CosimTier::parse(&spec) {
-            Some(tier) => {
-                commands.entity(entity).try_insert(tier);
-            }
-            None => warn!(
-                "[usd-cosim] {}: lunco:cosim:tier = '{}' is not one of A/B/C — treating the \
-                 model as UNDECLARED (it may not drive predicted physics)",
-                prim_path.path, spec
-            ),
-        }
+    // The realtime promise — `lunco:program:realtimeSafe = true`. DECLARED, never
+    // inferred: no amount of reading a model's source establishes how long it takes
+    // to step. Absent ⇒ not promised, and `rewire_usd_connections` refuses it a
+    // force/torque port on a client-predicted body (see
+    // `docs/architecture/28-modelica-realtime-physics.md`).
+    if reader
+        .scalar::<bool>(sdf_path, "lunco:program:realtimeSafe")
+        .unwrap_or(false)
+    {
+        commands.entity(entity).try_insert(lunco_cosim::RealtimeSafe);
     }
 
-    // Port-edge event rules: `lunco:portEvents = "m_prop<200:lander_low_fuel, ..."`.
-    // Each turns a model OUTPUT-signal threshold crossing into a discrete
-    // TelemetryEvent (the rumoca-safe Modelica `when` — see fire_model_port_events).
-    if let Some(spec) = reader.scalar::<String>(sdf_path, "lunco:portEvents") {
-        let rules = parse_port_events(&spec);
-        if !rules.is_empty() {
-            commands.entity(entity).try_insert(ModelEventRules(rules));
-        }
+    // Event rules are `LuncoPortEvent` CHILD prims — one prim per rule, each with a
+    // port, a comparison, a threshold and a name. Each turns a threshold crossing on
+    // a model output into a discrete TelemetryEvent (see `fire_model_port_events`).
+    let rules = read_port_event_prims(reader, sdf_path);
+    if !rules.is_empty() {
+        commands.entity(entity).try_insert(ModelEventRules(rules));
     }
 
-    let kind = if modelica_path.is_some() {
-        "modelica"
-    } else {
-        "python"
-    };
     info!(
-        "[usd-cosim] wired {} ({}) from USD attrs",
-        prim_path.path, kind
+        "[usd-cosim] program {} bound ({})",
+        prim_path.path,
+        source.as_deref().unwrap_or("<none>"),
     );
 }
 
-/// USD attributes sometimes carry an `assets/` prefix
-/// (`lunco:modelicaModel = "assets/models/Balloon.mo"`) and sometimes
-/// don't (`"models/Balloon.mo"`). Bevy's `AssetServer` resolves paths
-/// against the default asset source's root (already `assets/`), so an
-/// `assets/` prefix would cause a double-prefix on native. Strip it.
-fn strip_assets_prefix(path: &str) -> String {
-    path.strip_prefix("assets/").unwrap_or(path).to_string()
+/// The languages this crate can put a solver behind. Everything else is a program
+/// somebody else runs — the rhai engine, the behaviour-tree compiler — and this
+/// crate leaves it alone.
+enum SolverLanguage {
+    Modelica,
+    Python,
+}
+
+/// Which solver, if any, runs a program — decided by its file's extension, exactly
+/// as USD picks a file-format plugin by `.usda` / `.usdc` / `.usdz`. `None` is not
+/// an error: it is a program with a different engine behind it.
+fn solver_language(path: &str) -> Option<SolverLanguage> {
+    match path.rsplit_once('.').map(|(_, ext)| ext) {
+        Some("mo") => Some(SolverLanguage::Modelica),
+        Some("py") => Some(SolverLanguage::Python),
+        _ => None,
+    }
+}
+
+/// Read a program's [`LuncoPortEvent`] children into threshold rules.
+///
+/// One prim per rule, so each part of it — the port, the comparison, the threshold,
+/// the event name — is a typed property that validates, inspects, journals and
+/// replicates like any other. A rule packed into a string is none of those things.
+fn read_port_event_prims<R: UsdRead>(reader: &R, sdf_path: &SdfPath) -> Vec<PortEventRule> {
+    let mut rules = Vec::new();
+    for child in reader.children(sdf_path) {
+        if reader.type_name(&child).as_deref() != Some("LuncoPortEvent") {
+            continue;
+        }
+        let (Some(port), Some(emit)) = (
+            reader.text(&child, "lunco:event:port"),
+            reader.text(&child, "lunco:event:emit"),
+        ) else {
+            warn!(
+                "[usd-cosim] {}: a LuncoPortEvent needs both `lunco:event:port` and \
+                 `lunco:event:emit` — ignoring it",
+                child.as_str(),
+            );
+            continue;
+        };
+        let op = match reader
+            .text(&child, "lunco:event:op")
+            .unwrap_or_else(|| "lt".to_string())
+            .as_str()
+        {
+            "lt" => EdgeOp::Lt,
+            "le" => EdgeOp::Le,
+            "gt" => EdgeOp::Gt,
+            "ge" => EdgeOp::Ge,
+            other => {
+                warn!(
+                    "[usd-cosim] {}: `lunco:event:op = \"{}\"` is not one of lt/le/gt/ge — \
+                     ignoring this rule",
+                    child.as_str(),
+                    other,
+                );
+                continue;
+            }
+        };
+        rules.push(PortEventRule {
+            port,
+            op,
+            threshold: reader.real(&child, "lunco:event:threshold").unwrap_or(0.0),
+            event: emit,
+            armed: true,
+        });
+    }
+    rules
 }
 
 /// Drain `PendingModelicaSource` for entities whose `.mo` text has
@@ -627,53 +683,9 @@ struct PortEventRule {
     armed: bool,
 }
 
-/// Port-edge event rules on a cosim entity, parsed from `lunco:portEvents`.
+/// Port-edge event rules on a program, read from its [`LuncoPortEvent`] children.
 #[derive(Component, Default)]
 pub struct ModelEventRules(Vec<PortEventRule>);
-
-/// Parse `"port OP thr : event, ..."` (OP ∈ `<`, `<=`, `>`, `>=`). Skips
-/// malformed entries. e.g. `"m_prop<200:lander_low_fuel, throttle>0.01:firing"`.
-fn parse_port_events(spec: &str) -> Vec<PortEventRule> {
-    let mut out = Vec::new();
-    for raw in spec.split(',') {
-        let entry = raw.trim();
-        if entry.is_empty() {
-            continue;
-        }
-        let Some((cond, event)) = entry.split_once(':') else {
-            continue;
-        };
-        let event = event.trim().to_string();
-        let cond = cond.trim();
-        // Longest operator first so "<=" isn't misread as "<".
-        let (op, idx, oplen) = if let Some(i) = cond.find("<=") {
-            (EdgeOp::Le, i, 2)
-        } else if let Some(i) = cond.find(">=") {
-            (EdgeOp::Ge, i, 2)
-        } else if let Some(i) = cond.find('<') {
-            (EdgeOp::Lt, i, 1)
-        } else if let Some(i) = cond.find('>') {
-            (EdgeOp::Gt, i, 1)
-        } else {
-            continue;
-        };
-        let port = cond[..idx].trim().to_string();
-        let Ok(threshold) = cond[idx + oplen..].trim().parse::<f64>() else {
-            continue;
-        };
-        if port.is_empty() || event.is_empty() {
-            continue;
-        }
-        out.push(PortEventRule {
-            port,
-            op,
-            threshold,
-            event,
-            armed: true,
-        });
-    }
-    out
-}
 
 /// Per-tick: evaluate each entity's port-edge rules against its fresh
 /// `SimComponent.outputs` and fire a `TelemetryEvent` (source = the model
@@ -752,15 +764,16 @@ pub fn rewire_usd_connections(
     mut dirty: ResMut<WiringDirty>,
     q_all: Query<(Entity, &UsdPrimPath)>,
     q_edges: Query<Entity, With<UsdWiredConnection>>,
-    // A4 tier gate: the source model's declared tier, and whether the SINK is a
-    // client-predicted dynamic body (a `RigidBody` that was NOT opted out of
-    // prediction). Both `Option`-shaped at the call site — absence is the
-    // dangerous case for the tier, and the safe case for the body.
-    q_tier: Query<&lunco_cosim::CosimTier>,
+    // The realtime gate: whether the SOURCE program promised it is realtime-safe,
+    // and whether the SINK is a client-predicted dynamic body (a `RigidBody` NOT
+    // opted out of prediction). Absence of the promise is the dangerous case;
+    // absence of the body is the safe one.
+    q_realtime_safe: Query<&lunco_cosim::RealtimeSafe>,
     q_predicted_body: Query<
         &avian3d::prelude::RigidBody,
         Without<lunco_core::NotPredictable>,
     >,
+    q_defaults: Query<&UsdInputDefaults>,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
 ) {
@@ -776,6 +789,11 @@ pub fn rewire_usd_connections(
     for (e, p) in q_all.iter() {
         by_path.insert(p.path.clone(), e);
     }
+
+    // Authored constants on unconnected `inputs:` ports — a model's parameters.
+    // Gathered in the same sweep that derives the wires, because "has no wire" is
+    // exactly what makes an input a parameter.
+    let mut defaults: HashMap<Entity, HashMap<String, f64>> = HashMap::new();
 
     // Rebuild: drop every derived edge, then re-derive from the composed stage.
     for e in q_edges.iter() {
@@ -820,7 +838,25 @@ pub fn rewire_usd_connections(
             let offset = view
                 .real(&sink_sdf, &format!("lunco:offset:{sink_conn}"))
                 .unwrap_or(0.0);
-            for src in view.connections(&sink_sdf, &attr) {
+
+            // A PARAMETER IS AN INPUT WITH A CONSTANT INSTEAD OF A CONNECTION.
+            // An `inputs:` port with no wire into it is authored data — `float
+            // inputs:kv = 1.2` — and it is the ONLY way USD reaches a model's
+            // parameters. Collected here (the one pass that already enumerates
+            // every `inputs:` port with the composed reader in hand) and applied
+            // by `seed_usd_input_defaults` once the model exists.
+            let sources = view.connections(&sink_sdf, &attr);
+            if sources.is_empty() {
+                if let Some(v) = view.real(&sink_sdf, &attr) {
+                    defaults
+                        .entry(entity)
+                        .or_default()
+                        .insert(sink_conn.to_string(), v);
+                }
+                continue;
+            }
+
+            for src in sources {
                 // Split `/A.outputs:netForce` → prim `/A`, leaf `outputs:netForce`.
                 let Some((src_prim, src_leaf)) = src.rsplit_once('.') else {
                     warn!(
@@ -830,8 +866,22 @@ pub fn rewire_usd_connections(
                     continue;
                 };
                 let Some(&start_element) = by_path.get(src_prim) else {
-                    // Source prim not spawned yet — its later spawn is a structural
-                    // change that re-runs this and completes the edge.
+                    // Two very different situations, and they must not look alike.
+                    // A prim that EXISTS on the stage but has no entity yet is
+                    // mid-spawn: its later spawn is a structural change that re-runs
+                    // this and completes the edge. A prim that is not on the stage at
+                    // all is a typo'd or stale target that will never resolve, and a
+                    // silently dropped wire is how a vehicle ends up with no forces
+                    // and no explanation.
+                    if let Ok(src_sdf) = SdfPath::new(src_prim) {
+                        if !view.has_prim(&src_sdf) {
+                            warn!(
+                                "[usd-cosim] {}.{}: connection source '{}' names a prim that does \
+                                 not exist on this stage — the wire is dropped. Check the path.",
+                                prim_path.path, attr, src_prim
+                            );
+                        }
+                    }
                     continue;
                 };
                 let src_conn = src_leaf
@@ -839,13 +889,14 @@ pub fn rewire_usd_connections(
                     .or_else(|| src_leaf.strip_prefix("inputs:"))
                     .unwrap_or(src_leaf);
 
-                // ── A4: the tier gate ───────────────────────────────────────
-                // A model may only push a client-predicted `Dynamic` body around
-                // if it DECLARED itself realtime-safe (`lunco:cosim:tier = "A"`).
-                // Anything else — Tier B/C, or (the common case today) a model
-                // with no tier attribute at all — means an adaptive, variable-cost
-                // solver is deciding the forces inside the prediction loop, which
-                // is exactly what docs/28 §1 forbids.
+                // ── The realtime gate ───────────────────────────────────────
+                // A program may only push a client-predicted `Dynamic` body around
+                // if it PROMISED it steps fast enough
+                // (`lunco:program:realtimeSafe = true`). Without that promise — the
+                // common case, since the default is `false` — an adaptive,
+                // variable-cost solver is deciding the forces inside the prediction
+                // loop, and the body diverges from the server every frame the solver
+                // runs late.
                 //
                 // Warn, don't refuse: cosim prims are stamped `NotPredictable` at
                 // prim-read time, so a scene that trips this gate has ALREADY
@@ -857,17 +908,14 @@ pub fn rewire_usd_connections(
                         q_predicted_body.get(entity),
                         Ok(avian3d::prelude::RigidBody::Dynamic)
                     )
-                    && !q_tier
-                        .get(start_element)
-                        .map(|t| t.may_drive_predicted_physics())
-                        .unwrap_or(false)
+                    && q_realtime_safe.get(start_element).is_err()
                 {
                     warn!(
-                        "[usd-cosim] {}.{}: a co-simulated model ({}) drives a force/torque port \
-                         on a CLIENT-PREDICTED dynamic body without declaring \
-                         `lunco:cosim:tier = \"A\"`. Its solver's step sequence and cost are not \
+                        "[usd-cosim] {}.{}: the program at {} drives a force/torque port on a \
+                         CLIENT-PREDICTED dynamic body without declaring \
+                         `lunco:program:realtimeSafe = true`. Its step sequence and cost are not \
                          guaranteed identical across peers — the predicted body can diverge. \
-                         Declare the tier on the model prim (see \
+                         Declare it on the program prim (see \
                          docs/architecture/28-modelica-realtime-physics.md).",
                         prim_path.path, attr, src_prim,
                     );
@@ -884,6 +932,59 @@ pub fn rewire_usd_connections(
                     },
                     UsdWiredConnection,
                 ));
+            }
+        }
+    }
+
+    // Publish the authored parameters — but ONLY where they changed. This runs on
+    // every structural change (any prim spawning anywhere re-runs the whole pass),
+    // and `seed_usd_input_defaults` reacts to `Changed`. Re-inserting an identical
+    // map would fire `Changed` anyway and re-seed the model, clobbering a value a
+    // script had since written through `SetPorts` — an autopilot's `engage` would
+    // silently snap back to its authored default the next time anything spawned.
+    for (entity, map) in defaults {
+        if q_defaults.get(entity).map(|d| d.0 != map).unwrap_or(true) {
+            commands.entity(entity).try_insert(UsdInputDefaults(map));
+        }
+    }
+}
+
+/// The authored constants on a prim's unconnected `inputs:` ports — a model's
+/// parameters, as USD stated them.
+///
+/// Kept as its own component rather than written straight into `SimComponent`
+/// because the two arrive in either order: the wiring pass reads USD the frame the
+/// prim spawns, while the `SimComponent` only exists once the model has been
+/// fetched, compiled, and wrapped, which is several frames later on native and an
+/// HTTP round-trip later on the web.
+#[derive(Component, Debug, Clone, Default)]
+pub struct UsdInputDefaults(pub HashMap<String, f64>);
+
+/// Seed a model's inputs from the constants USD authored on its unconnected ports.
+///
+/// This is the ONLY path from USD to a model's parameters. Runs when the model
+/// appears (`Added<SimComponent>`) and when the authored values change (a live edit
+/// re-runs the wiring pass, which re-publishes [`UsdInputDefaults`]) — never on a
+/// plain re-derive, so a value written by a script or the network is not undone.
+///
+/// A key the model does not declare is dropped by the port backend, so a typo'd
+/// parameter is not a silent no-op: it is named here.
+pub fn seed_usd_input_defaults(
+    mut q: Query<
+        (&UsdInputDefaults, &mut SimComponent, &UsdPrimPath),
+        Or<(Added<SimComponent>, Changed<UsdInputDefaults>)>,
+    >,
+) {
+    for (defaults, mut sim, prim_path) in q.iter_mut() {
+        for (port, value) in &defaults.0 {
+            if sim.inputs.contains_key(port) {
+                sim.inputs.insert(port.clone(), *value);
+            } else {
+                warn!(
+                    "[usd-cosim] {}: `inputs:{}` is authored but the model ({}) declares no such \
+                     input — the value is ignored. Check the port name against the model.",
+                    prim_path.path, port, sim.model_name,
+                );
             }
         }
     }
@@ -1802,6 +1903,10 @@ pub(crate) fn install(app: &mut App) {
             // `connectionPaths` edit is drained (`WiringDirty`); dormant otherwise.
             rewire_usd_connections,
             wrap_modelica_into_simcomponent.run_if(any_unwrapped_modelica),
+            // Parameters: the authored constants the wiring pass gathered off the
+            // unconnected `inputs:` ports, pushed into the model once it exists.
+            // After the wrap, because it needs the `SimComponent` to write into.
+            seed_usd_input_defaults,
             // §6 opaque guard: once a body is cosim-driven, mark it unpredictable
             // (after the SimComponent wrap above, so it sees freshly-wrapped bodies).
             tag_cosim_opaque,

@@ -103,77 +103,39 @@ impl Default for SimConnection {
     }
 }
 
-/// **The coupling tier of a co-simulated model** —
-/// `docs/architecture/28-modelica-realtime-physics.md` §2 (A4).
+/// **A program's promise that it is fast enough to be trusted with a force** —
+/// `docs/architecture/28-modelica-realtime-physics.md` §2.
 ///
-/// Declared in USD as `lunco:cosim:tier = "A" | "B" | "C"`, **never inferred**.
-/// It states what the model is allowed to do to the physics loop:
+/// Declared in USD as `lunco:program:realtimeSafe = true`, **never inferred**.
+/// Only a program carrying it may drive an avian `force_*` / `torque_*` port on a
+/// client-**predicted** `Dynamic` body: that requires a deterministic,
+/// bounded-cost step — the same stop-times and the same work on every peer, every
+/// tick. A model that takes 40ms to step, wired into a predicted body, diverges
+/// from the server every frame it is late.
 ///
-/// * **A — realtime-safe.** May drive an avian force/torque port on a
-///   client-predicted `Dynamic` body. Requires a deterministic, bounded-cost
-///   step: same stop-times and same work on every peer, every tick.
-/// * **B — slow-domain.** Thermal, power, ECLSS, battery: coupled by *state*
-///   (a signal read by scripts/UI/telemetry), never by force on a predicted
-///   body. Free to be stiff and adaptive; its cost may vary.
-/// * **C — offline.** Batch/experiment only; not stepped in the live loop.
+/// Absent is the default and means "not promised", which the wiring pass refuses a
+/// force port (`lunco-usd-sim`'s `rewire_usd_connections`). Programs that never
+/// touch physics — a supervisory script, a battery model — simply never declare it;
+/// they are free to be stiff, adaptive, and slow, because state coupling cannot
+/// desync a predicted body.
 ///
-/// The tier is a property of the MODEL (the entity carrying the
-/// `SimComponent`), and it gates the wires OUT of it. An unset tier is
-/// "undeclared", which is not the same as A: the wiring pass warns when an
-/// undeclared or non-A model reaches a predicted body's force port
-/// (`lunco-usd-sim`'s `rewire_usd_connections`).
+/// It is not a quality rating, and there is nothing below it: whether a program is
+/// stepped in the live loop at all is decided by whether a live scene references it.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Reflect)]
 #[reflect(Component)]
-pub enum CosimTier {
-    /// Realtime-safe: may drive predicted physics.
-    A,
-    /// Slow-domain: state coupling only.
-    B,
-    /// Offline / batch only.
-    C,
-}
-
-impl CosimTier {
-    /// Parse the USD `lunco:cosim:tier` attribute. Case-insensitive; anything
-    /// else is a *declaration error*, not a silent default — the caller warns.
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.trim().to_ascii_uppercase().as_str() {
-            "A" => Some(Self::A),
-            "B" => Some(Self::B),
-            "C" => Some(Self::C),
-            _ => None,
-        }
-    }
-
-    /// May a model of this tier drive a force/torque port on a client-predicted
-    /// `Dynamic` body? Only Tier A. (An UNSET tier is `None` at the call site
-    /// and is likewise not permitted — undeclared ≠ A.)
-    pub fn may_drive_predicted_physics(self) -> bool {
-        matches!(self, Self::A)
-    }
-}
+pub struct RealtimeSafe;
 
 /// Is `port` an avian force/torque input — i.e. does writing it push a
 /// rigid body around? These are the port names the avian backend exposes
 /// (`force_x/y/z`, `torque_x/y/z`), and they are the ONLY ports whose writer
-/// can desync a client-predicted body. Used by the tier gate (A4).
+/// can desync a client-predicted body. Used by the [`RealtimeSafe`] gate.
 pub fn is_physics_force_port(port: &str) -> bool {
     port.starts_with("force") || port.starts_with("torque")
 }
 
 #[cfg(test)]
-mod tier_tests {
+mod realtime_gate_tests {
     use super::*;
-
-    #[test]
-    fn tier_parses_and_gates() {
-        assert_eq!(CosimTier::parse("a"), Some(CosimTier::A));
-        assert_eq!(CosimTier::parse(" B "), Some(CosimTier::B));
-        assert_eq!(CosimTier::parse("realtime"), None);
-        assert!(CosimTier::A.may_drive_predicted_physics());
-        assert!(!CosimTier::B.may_drive_predicted_physics());
-        assert!(!CosimTier::C.may_drive_predicted_physics());
-    }
 
     #[test]
     fn force_ports_are_the_gated_ones() {

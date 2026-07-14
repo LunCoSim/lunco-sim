@@ -427,14 +427,15 @@ An adaptive solver driven at 3 fixed stop-times per macro step. Its internal ste
 from **per-machine floating-point error estimates** — precisely what
 `docs/architecture/28-modelica-realtime-physics.md` §1 says must never enter the prediction loop.
 
-`docs/28` defines a Tier A/B/C contract and says the tier is *"declared in USD, never inferred"*.
-**grep finds no tier anywhere in the code** (`crates/lunco-cosim/**`, `crates/lunco-usd/**`: zero hits
-for tier / coupling class). So today **any** Modelica model can be wired to `force_y` on a
-client-predicted `Dynamic` chassis, and nothing stops it. The doc's load-bearing anti-goal is
-unenforced.
+`docs/28` says a program may drive a force on a client-predicted body only if it declares the
+realtime-safe promise, and that the promise is *"declared in USD, never inferred"*. **grep finds no
+promise anywhere in the code** (`crates/lunco-cosim/**`, `crates/lunco-usd/**`: zero hits). So today
+**any** Modelica model can be wired to `force_y` on a client-predicted `Dynamic` chassis, and nothing
+stops it. The doc's load-bearing anti-goal is unenforced.
 
-**Fix:** implement the USD-declared tier and hard-refuse a `SimConnection` from a tier-unset / Tier-B
-model into an avian force/torque port on a predicted body. Failing that, at minimum make the **live**
+**Fix:** implement the USD-declared `lunco:program:realtimeSafe` promise and hard-refuse a
+`SimConnection` from a program that has not made it into an avian force/torque port on a predicted
+body. Failing that, at minimum make the **live**
 path use a fixed-step explicit / semi-implicit solver family, distinct from the batch path.
 
 ---
@@ -1623,8 +1624,8 @@ correct. **Zero `dbg!` in the workspace.** ✅
   already derived, correct, and drives the MCP tool list).
   **Fix:** spin the headless app, dump `DiscoverSchema` JSON, generate from that; run it in CI and fail
   on diff.
-- `docs/architecture/28-modelica-realtime-physics.md` — defines a Tier A/B/C contract *"declared in
-  USD"*. **Zero hits in code** (`A4`).
+- `docs/architecture/28-modelica-realtime-physics.md` — requires a realtime-safe promise *"declared in
+  USD"* before a program may drive predicted physics. **Zero hits in code** (`A4`).
 - `specs/005-multiplayer-core` FR-003 — claims rollback. **There is none** (`P12`).
 - `docs/architecture/19-unified-time-and-clock.md:57` vs `:304` — the two lines contradict each other
   about whether Modelica advances with the world (`A3`).

@@ -98,11 +98,13 @@ def Xform "SlopeTest" (
         custom int lunco:shadow:numCascades = 4
     }
 
-    def Xform "Avatar"
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LuncoAvatarAPI"]
+    )
     {
-        string lunco:avatar = "true"
-        string lunco:cameraMode = "freeflight"
-        custom double3 lunco:cameraLookAt = (5.0, 4.0, 0.0)
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (5.0, 4.0, 0.0)
         double3 xformOp:translate = (-30.0, 16.0, -34.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

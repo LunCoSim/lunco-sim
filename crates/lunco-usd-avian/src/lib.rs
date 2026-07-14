@@ -294,7 +294,8 @@ fn collect_child_colliders_from_usd<R: UsdRead>(
         // for the entity Transform — same canonical `usd_axis_to_quat`).
         if let Some(ty) = reader.type_name(&child_path) {
             if matches!(ty.as_str(), "Cylinder" | "Cone" | "Capsule" | "Plane") {
-                let axis_tok = read_token_attribute(reader, &child_path, "axis")
+                let axis_tok = reader
+                    .text(&child_path, "axis")
                     .unwrap_or_else(|| "Z".to_string());
                 // Pre-rotate by the stage convention: the `axis` token names an
                 // axis of the STAGE's frame while the collider is built in the
@@ -372,7 +373,7 @@ fn build_collider_from_usd<R: UsdRead>(reader: &R, sdf_path: &SdfPath) -> Option
         // `convexHull`/`convexDecomposition` produce the solid volumes a DYNAMIC
         // body needs (a trimesh can't be a moving rigid body in parry). Read via
         // the standard token so it works off either the live stage or the flatten.
-        let collider = match read_token_attribute(reader, sdf_path, ptok::A_APPROXIMATION).as_deref() {
+        let collider = match reader.text(sdf_path, ptok::A_APPROXIMATION).as_deref() {
             Some("convexHull") => {
                 Collider::convex_hull(verts.clone()).unwrap_or_else(|| Collider::trimesh(verts, tris))
             }
@@ -1209,14 +1210,6 @@ pub fn wheel_revolute_joint(
         .with_motor(drive_motor)
 }
 
-/// Reads a USD token attribute (e.g., `uniform token axis = "X"`).
-///
-/// Thin delegate to the canonical [`lunco_usd_bevy::read_token`] — the
-/// single home for token/string parsing shared with usd-bevy.
-fn read_token_attribute<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<String> {
-    lunco_usd_bevy::read_token(reader, path, attr)
-}
-
 /// Reads a `DVec3` attribute (e.g., `double3 xformOp:translate`) at full
 /// f64 precision.
 ///
@@ -1424,12 +1417,10 @@ pub fn read_physics_material<R: UsdRead>(reader: &R, prim: &SdfPath) -> Option<P
     let dynamic_friction = reader.real_f32(&mat, ptok::A_DYNAMIC_FRICTION);
     let static_friction = reader.real_f32(&mat, ptok::A_STATIC_FRICTION);
     let restitution = reader.real_f32(&mat, ptok::A_RESTITUTION);
-    let friction_combine = combine_mode(
-        read_token_attribute(reader, &mat, PHYSX_FRICTION_COMBINE_MODE).as_deref(),
-    );
-    let restitution_combine = combine_mode(
-        read_token_attribute(reader, &mat, PHYSX_RESTITUTION_COMBINE_MODE).as_deref(),
-    );
+    let friction_combine =
+        combine_mode(reader.text(&mat, PHYSX_FRICTION_COMBINE_MODE).as_deref());
+    let restitution_combine =
+        combine_mode(reader.text(&mat, PHYSX_RESTITUTION_COMBINE_MODE).as_deref());
 
     // A Material bound only for LOOKS resolves here via the purpose→all-purpose
     // fallback but carries no `PhysicsMaterialAPI` properties. That is not a

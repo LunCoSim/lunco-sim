@@ -2442,14 +2442,14 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `SaveScenario`
 
- Save a live-edited rhai scenario's current source back onto its USD prim's
- `lunco:script` attribute — the missing half of scenario authoring.
+ Save a live-edited rhai scenario's current source back onto its `LuncoProgram`
+ prim's `lunco:program:sourceCode` — the missing half of scenario authoring.
 
- The LOAD path reads `lunco:script` off a prim into a running scenario; until
+ The LOAD path reads a program prim's source into a running scenario; until
  now a hot-edited scenario had no way *back* to the document. This resolves the
  scripted entity's live source (from [`ScriptRegistry`](lunco_scripting::ScriptRegistry)),
  its prim path, and the editable scene document backing it, then authors the
- source onto `lunco:script` via [`SetAttribute`](lunco_usd::UsdOp::SetAttribute)
+ source onto `lunco:program:sourceCode` via [`SetAttribute`](lunco_usd::UsdOp::SetAttribute)
  (whose `string` type authors the value RAW — no hand-escaping) — which journals,
  and on `SaveDocument` writes through to the `.usda`.
 

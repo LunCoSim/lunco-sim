@@ -82,11 +82,13 @@ def Xform "BuildBase" (
 
     # Fly-cam looking down over the empty plot from the south-west, so the
     # student sees the whole build area and can fly in to place each part.
-    def Xform "Avatar"
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LuncoAvatarAPI"]
+    )
     {
-        string lunco:avatar = "true"
-        string lunco:cameraMode = "freeflight"
-        custom double3 lunco:cameraLookAt = (0.0, 0.0, 0.0)
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 0.0, 0.0)
         double3 xformOp:translate = (-45.0, 35.0, -55.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

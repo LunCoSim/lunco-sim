@@ -118,13 +118,16 @@ the outgoing program's `on_stop` runs first).
 
 ### Persist it in the scene
 
-So it runs automatically on load, attach it to the prim in your `.usda`:
+So it runs automatically on load, give the prim a program child in your `.usda`. A
+program is a prim, not an attribute — delete the prim and the behaviour goes with it:
 
 ```usda
 def Xform "Rover_01" {
-    custom string lunco:scriptPath = "scenarios/my_rover_mission.rhai"
-    # …or embed it inline:
-    # custom string lunco:script = '''<rhai source>'''
+    def LuncoProgram "Mission" {
+        uniform asset lunco:program:sourceAsset = @scenarios/my_rover_mission.rhai@
+        # …or author the source in place:
+        # uniform string lunco:program:sourceCode = '''<rhai source>'''
+    }
 }
 ```
 
@@ -215,7 +218,7 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 | `emit(name, value?)` | bool | fire a `TelemetryEvent` (delivered to `on_event` next tick) |
 | `sim_tick()` / `dt()` / `elapsed_seconds()` | i64 / f64 / f64 | the fixed simulation clock |
 | `rand()` / `rand_range(lo,hi)` / `rand_int(lo,hi)` | f64 / f64 / i64 | **deterministic** RNG — seeded per hook from `(entity, tick, hook)`, identical on every peer and replay |
-| `param(id, key, default)` | any | read a `lunco:params` attribute key from a prim by name; returns `default` if the key is absent |
+| `param(id, key, default)` | any | read a `lunco:param:<key>` attribute from a prim (`custom float lunco:param:wmax = 1.05`); returns `default` if it is absent |
 | `detach_joint(id)` | bool | despawn a joint entity (releases the rigid link between two bodies, e.g. lander→rover) |
 | `notify(msg)` / `notify_kind(msg, kind)` | () | send a HUD notification; `kind` is `"info"` / `"warn"` / `"error"` |
 
@@ -356,13 +359,24 @@ Available nodes include:
 
 ## I. Persistence
 
-- **Per-entity scenarios → USD (load):** Two attributes attach a script to a prim at spawn:
-  - `custom string lunco:scriptPath = "scenarios/foo.rhai"` — path relative to the asset root; the engine loads the file.
-  - `custom string lunco:script = '''<rhai>'''` — inline source embedded directly in the USD layer.
-  Both auto-attach and run when the prim is spawned. *(Writing a live-edited scenario back onto its prim is not yet supported — it needs a USD asset↔document bridge.)*
+- **Per-entity scenarios → USD (load):** a script is a `LuncoProgram` child prim, and it
+  auto-attaches and runs when the prim is spawned:
+  - `uniform asset lunco:program:sourceAsset = @scenarios/foo.rhai@` — the file, resolved
+    like every other asset the scene depends on.
+  - `uniform string lunco:program:sourceCode = '''<rhai>'''` — the source authored in place
+    in the USD layer. An edit to it is an ordinary attribute edit, so it journals, undoes
+    and replicates like any other.
+  - `custom float lunco:param:<key> = <v>` — one typed attribute per per-instance setting,
+    read in-script by `param(me, "<key>", default)`.
 - **Tool libraries → files:** `<twin>/tools/*.rhai` (see [§E](#e-tools-shared-libraries)).
 - **Timelines → files:** `RegisterTimeline { name, timeline }` stores to `<twin>/timelines/<name>.json`; reloaded on Twin open. Discover with `ListTimelines`/`GetTimeline`; run a stored one with `RunStoredTimeline { target, name }`.
-- **Port-threshold events → USD:** author `custom string lunco:portEvents = "port<threshold:event_name, ..."` on a prim to fire telemetry events automatically when a cosim port crosses a threshold. Format: `portname<value:event` or `portname<=value:event` (supports `<`, `<=`, `>`, `>=`). Example: `"m_prop<200:lander_low_fuel, m_prop<=0.5:lander_depleted"` fires `lander_low_fuel` when the `m_prop` port drops below 200 and `lander_depleted` when it is ≤ 0.5. Scripts receive these via `on_event`.
+- **Port-threshold events → USD:** author one `def LuncoPortEvent` child prim per rule on
+  the program whose port it watches, and a telemetry event fires automatically when the
+  port crosses the threshold. Each rule is four typed properties: `lunco:event:port`
+  (token), `lunco:event:op` (token — `lt` \| `le` \| `gt` \| `ge`), `lunco:event:threshold`
+  (double), `lunco:event:emit` (token). Example — the lander's `LowFuel` prim watches
+  `m_prop` with `lt` 200 and emits `lander_low_fuel`; its `Depleted` prim watches the same
+  port with `le` 0.5 and emits `lander_depleted`. Scripts receive these via `on_event`.
 
 ## J. Introspection & discovery
 

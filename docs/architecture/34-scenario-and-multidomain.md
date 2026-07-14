@@ -19,17 +19,16 @@ hands to the rover → progressively harder player tasks that exercise **energy*
 
 | Capability | Mechanism | Status |
 |---|---|---|
-| One model per prim | `lunco:modelicaModel` / `lunco:pythonModel` → `SimComponent` | ✅ |
-| Cross-entity wiring (SSP Connection) | typeless wire prim with `lunco:wireFrom`/`wireTo`/`fromPort`/`toPort`/`scale` → `SimConnection` | ✅ |
-| Self-wire (output→input, same entity, cross-backend) | `lunco:simWires = "out:in,…"` | ✅ |
-| Gravity from environment | env publishes `gravity_accel` output (`GRAVITY_SOURCE_CONNECTOR`); model takes `g` input + wire `gravity_accel:g` | ✅ |
-| Many scripts in one world | each prim with `lunco:script` → own `EmbeddedScenarioSource` → independent rhai | ✅ |
+| One program per prim | a `LuncoProgram` prim (or `LuncoProgramAPI` applied in place) + `lunco:program:sourceAsset` → `SimComponent`; the engine follows the extension | ✅ |
+| Wiring (SSP Connection) | a native USD connection on the consumer — `inputs:x.connect = </Other.outputs:y>` → `SimConnection`; same form within a prim and across prims | ✅ |
+| Gravity from environment | env publishes `gravity_accel` output (`GRAVITY_SOURCE_CONNECTOR`); the model connects `inputs:g` to it | ✅ |
+| Many scripts in one world | each `LuncoProgram` prim → own `EmbeddedScenarioSource` → independent rhai | ✅ |
 | Task state machines | rhai `seq`/`par_all`/`par_race`/`repeat` sequencer + `fn task(me)` | ✅ |
 | Connector/`connect()` Modelica | rumoca flattens `RC_Circuit.mo`, `CascadedRCFilter.mo` | ✅ (verify MSL `LimPID` specifically) |
 | Live input retune (no recompile) | port write changes `input Real` next step | ✅ (must be a model **input**, not a `parameter`) |
 | Named trigger zones (geofence events) | `lunco:triggerZone="name"` → overlap-only Sensor → `enter:/exit:<name>` events | ✅ |
-| Modelica `when` / threshold events | `lunco:portEvents="m_prop<200:evt,…"` → edge-detect a model output signal in native code → event | ✅ (rumoca-safe: edge logic out of the model) |
-| Per-instance script config | `lunco:params="k=v,…"` → `ScriptParams` → rhai `param(me,k,default)` | ✅ (the right answer instead of `name(me)` matching) |
+| Threshold events on a model port | one `def LuncoPortEvent` child prim per rule (`lunco:event:port`/`op`/`threshold`/`emit`) → edge-detect a model output in native code → event | ✅ (rumoca-safe: edge logic out of the model) |
+| Per-instance program config | one typed attribute per key on the program prim — `custom float lunco:param:wmax = 1.05` → rhai `param(me,k,default)` | ✅ (the right answer instead of `name(me)` matching) |
 | Emitter identity on events | `TelemetryEvent.source` (sensor/script gid); `wait_for_from(name, src)`, `evt.source` | ✅ |
 | On-screen notifications | `ShowNotification` command + rhai `notify`/`notify_kind` + ui overlay | ✅ |
 | Native/foreign event → script bus | `App::project_events::<E>(…)`; e.g. keyboard → `key:<KeyCode>` events | ✅ (input wired; network projector pending) |
@@ -40,31 +39,48 @@ hands to the rover → progressively harder player tasks that exercise **energy*
 > every mechanism in this table.
 
 **Conclusion:** "several models / several scripts in the world" needs **no core
-change** — it is the SSP sub-prim-per-model pattern below.
+change** — it is the SSP one-program-prim-per-domain pattern below.
 
-## Decision 1 — Multi-domain vehicle = sub-prim-per-model + wires (SSP)
+## Decision 1 — Multi-domain vehicle = one program prim per domain + connections (SSP)
 
-Model each physical domain as its **own prim** under the vehicle Xform, each with
-its own `.mo`, wired through the port surface. This *is* the FMI/SSP system
-structure and needs nothing new.
+A program is a PRIM with typed ports, and ports connect — the same shape `UsdShade`
+gives a shader. Model each physical domain as its **own** `LuncoProgram` under the
+vehicle Xform, each naming its own `.mo`, wired through the port surface. This *is* the
+FMI/SSP system structure and needs nothing new.
 
 ```
 def Xform "Lander" (PhysicsRigidBodyAPI …)        # the rigid body (avian ports)
 {
-    string lunco:simWires = "thrust:force_local_y" # GNC thrust → body
-    def Scope "GNC"   { string lunco:modelicaModel = "models/LanderGNC.mo"
-                        string lunco:simWires = "height:altitude,velocity_y:descent_rate,gravity_accel:g" }
-    def Scope "Power" { string lunco:modelicaModel = "models/Battery.mo" }
-    def Scope "Therm" { string lunco:modelicaModel = "models/ThermalNode.mo" }
-    # wire prims connect GNC.thrust→Power.load, Power.soc→GNC.engine_enable, …
+    float inputs:force_local_y.connect = </Lander/GNC.outputs:thrust>   # GNC thrust → body
+
+    def LuncoProgram "GNC" {
+        uniform asset lunco:program:sourceAsset = @models/LanderGNC.mo@
+        uniform bool  lunco:program:realtimeSafe = true                 # it drives a force
+        float inputs:altitude.connect      = </Lander.outputs:height>
+        float inputs:descent_rate.connect  = </Lander.outputs:velocity_y>
+        float inputs:g.connect             = </Environment.outputs:gravity_accel>
+        float inputs:engine_enable.connect = </Lander/Power.outputs:soc>
+    }
+    def LuncoProgram "Power" {
+        uniform asset lunco:program:sourceAsset = @models/Battery.mo@
+        float inputs:load.connect = </Lander/GNC.outputs:thrust>
+    }
+    def LuncoProgram "Therm" {
+        uniform asset lunco:program:sourceAsset = @models/ThermalNode.mo@
+    }
 }
 ```
 
 **Reject "N models on one entity" as the default.** `SimComponent` is one
 input/output map; hosting multiple solvers on a single entity would force it to a
-keyed multi-instance map and touch the propagation core. Sub-prim-per-model gives
-the same composition with zero core change and clean per-domain identity/telemetry.
-Revisit only if a need appears that sub-prims genuinely can't express.
+keyed multi-instance map and touch the propagation core. One program prim per domain
+gives the same composition with zero core change and clean per-domain
+identity/telemetry. Revisit only if a need appears that program prims genuinely can't
+express.
+
+(The one prim that carries a program *in place*, via `LuncoProgramAPI`, is a vessel
+whose flight-control system is its airframe — its `inputs:` are the control surface the
+stick writes.)
 
 ## Decision 2 — One canonical input-write path (collapse API onto ports)
 
@@ -110,8 +126,13 @@ Introduce a typed scenario root so tooling can recognize it:
 def Scope "Scenario" ( kind = "component" )
 {
     custom string lunco:scenario = "rover-surface-ops"
-    custom string lunco:script = """ … mission state machine … """   # orchestration
-    # objectives as child prims or a structured custom attr:
+
+    def LuncoProgram "Mission" {                                     # orchestration
+        uniform asset lunco:program:sourceAsset = @scenarios/rover_surface_ops.rhai@
+        # …or author the state machine in place:
+        # uniform string lunco:program:sourceCode = """ … """
+    }
+    # objectives as child prims or typed attributes:
     #   drive_to_rock(target, radius) · capture_photo() · hold_thermal(band) …
 }
 ```

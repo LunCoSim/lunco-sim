@@ -762,7 +762,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // collider-only Cube prims hidden behind a glTF visual, and
         // raycast wheel cylinders that have no visible representation).
         let invisible = matches!(
-            read_token(reader, &sdf_path, "visibility").as_deref(),
+            reader.text(&sdf_path, "visibility").as_deref(),
             Some("invisible")
         );
 
@@ -867,41 +867,32 @@ fn instantiate_usd_prim_read<R: UsdRead>(
             );
         }
 
-        // Embedded per-entity scenario: a `custom string lunco:script` on the
-        // prim carries a rhai scenario. Stamp the lunco-core marker so
-        // `lunco-scripting` attaches + runs it (the two crates stay decoupled —
-        // neither depends on the other). Scenarios thus travel with the scene.
-        if let Some(src) =
-            read_token(reader, &sdf_path, "lunco:script").filter(|s| !s.trim().is_empty())
-        {
-            commands
-                .entity(entity)
-                .try_insert(lunco_core::EmbeddedScenarioSource(src));
-        } else if let Some(path) = read_token(reader, &sdf_path, "lunco:scriptPath")
-            .filter(|s| !s.trim().is_empty())
-        {
-            // File-backed scenario: `lunco:scriptPath` references a `.rhai` asset.
-            // Stamp a lunco_core path marker; lunco-scripting loads it via the
-            // AssetServer (wasm-safe) and swaps in EmbeddedScenarioSource. Inline
-            // `lunco:script` wins if both are present.
-            commands
-                .entity(entity)
-                .try_insert(lunco_core::EmbeddedScenarioPath(path));
-        }
+        // Scripts are `LuncoProgram` CHILD prims whose source is a `.rhai` — read
+        // from here, the owner, because a script acts on behalf of the thing that
+        // carries it: `me` is the vessel, not the program prim. The program prim is
+        // what makes the binding composable (it arrives on a `references` arc and can
+        // be deleted to take the behaviour away), and what gives the script its own
+        // typed parameters, which live on it rather than on the owner.
+        //
+        // A program with a source this engine does not run — a `.mo` solved by
+        // lunco-usd-sim, an `.xml` compiled by the behaviour-tree engine — is not
+        // ours; extension picks the engine, exactly as USD picks a file format.
+        attach_rhai_programs(reader, &sdf_path, entity, commands);
 
-        // Custom `lunco:vessel = "true"` marks this prim as possessable by
-        // stamping `FlightSoftware` — the unified control-surface tag. There is
-        // no separate `Vessel` marker: "possessable/controllable" is exactly
-        // "has a control surface", so the avatar routes plain-clicks to
-        // `PossessVessel` for anything carrying `FlightSoftware` (or a Modelica
-        // `SimComponent`). Rovers get `FlightSoftware` from `PhysxVehicleContextAPI`
-        // instead; a standalone rigid body (lander, spacecraft) needs this tag.
-        // Empty `port_map` is fine — it means "possessable, no digital actuator
-        // ports of its own" (a lander's actuation is its Modelica inputs).
-        if let Some(val) = read_token(reader, &sdf_path, "lunco:vessel") {
-            if val.eq_ignore_ascii_case("true") {
-                commands.entity(entity).try_insert(lunco_fsw::FlightSoftware::default());
-            }
+        // `lunco:vessel` marks this prim as possessable by stamping `FlightSoftware`
+        // — the unified control-surface tag. There is no separate `Vessel` marker:
+        // "possessable/controllable" is exactly "has a control surface", so the avatar
+        // routes plain-clicks to `PossessVessel` for anything carrying
+        // `FlightSoftware` (or a Modelica `SimComponent`). Rovers get it from
+        // `PhysxVehicleContextAPI` instead; a standalone rigid body (lander,
+        // spacecraft) needs this tag. Empty `port_map` is fine — it means
+        // "possessable, no digital actuator ports of its own" (a lander's actuation is
+        // its flight-control program's inputs).
+        if reader
+            .scalar::<bool>(&sdf_path, "lunco:vessel")
+            .unwrap_or(false)
+        {
+            commands.entity(entity).try_insert(lunco_fsw::FlightSoftware::default());
         }
 
         // Per-vessel intent→port control map (stage 2 of control), authored as a
@@ -931,27 +922,11 @@ fn instantiate_usd_prim_read<R: UsdRead>(
             }
         }
 
-        // Per-prim script params: `lunco:params = "wmax=1.05, lmax=3.6"`. Parsed
-        // into a `ScriptParams` map a reusable script reads via `param(me, key,
-        // default)` — the typed, fast alternative to inferring config from a name.
-        if let Some(spec) = read_token(reader, &sdf_path, "lunco:params") {
-            let mut map = std::collections::HashMap::new();
-            for entry in spec.split(',') {
-                if let Some((k, v)) = entry.split_once('=') {
-                    if let Ok(val) = v.trim().parse::<f64>() {
-                        map.insert(k.trim().to_string(), val);
-                    }
-                }
-            }
-            if !map.is_empty() {
-                commands.entity(entity).try_insert(lunco_core::ScriptParams(map));
-            }
-        }
 
         // Tutorial chain: `lunco:nextScene = "scenes/foo.usda"` declares the scene
         // to load when this scene's mission completes. Stamped as a `NextScene`
         // marker; a generic handler (lunco-tutorial) loads it on MISSION_COMPLETE.
-        if let Some(next) = read_token(reader, &sdf_path, "lunco:nextScene")
+        if let Some(next) = reader.text(&sdf_path, "lunco:nextScene")
             .filter(|s| !s.trim().is_empty())
         {
             commands.entity(entity).try_insert(lunco_core::NextScene(next));
@@ -977,9 +952,10 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         //   materials, and lights at the cost of being opaque to the
         //   USD prim-path tree.
         if let Some(asset_uri) = reader.resolved_asset(&sdf_path) {
-            let mode = read_token(reader, &sdf_path, "lunco:assetMode")
+            let mode = reader
+                .text(&sdf_path, "lunco:assetMode")
                 .unwrap_or_else(|| "scene".to_string());
-            let label = read_token(reader, &sdf_path, "lunco:assetLabel");
+            let label = reader.text(&sdf_path, "lunco:assetLabel");
 
             match mode.as_str() {
                 "mesh" => {
@@ -1044,7 +1020,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // an explicit `xformOp:rotateXYZ` hack. Goes after rotateXYZ so
         // it applies on top of any user-authored rotation.
         if matches!(prim_type.as_deref(), Some("Cylinder" | "Cone" | "Capsule" | "Plane")) {
-            let axis = read_token(reader, &sdf_path, "axis").unwrap_or_else(|| "Z".to_string());
+            let axis = reader.text(&sdf_path, "axis").unwrap_or_else(|| "Z".to_string());
             // The `axis` token names an axis of the STAGE's frame, while the Bevy
             // primitive is generated in the canonical one — so the axis rotation is
             // pre-rotated by the stage convention (`Q·q_axis`). On a Z-up stage an
@@ -1610,16 +1586,16 @@ fn apply_standard_material<R: UsdRead>(
         let load_tex = |input: &str, is_color: bool| -> Option<Handle<Image>> {
             let conn = reader.connection_source(&shader_path, input)?;
             let texture_path = parent_prim_path(&conn)?;
-            let asset_path = read_token(reader, &texture_path, "inputs:file")?;
+            let asset_path = reader.asset(&texture_path, "inputs:file")?;
             let resolved = resolve_texture_path(asset_server, stage_id, &asset_path)?;
 
-            let is_srgb = match read_token(reader, &texture_path, "inputs:sourceColorSpace").as_deref() {
+            let is_srgb = match reader.text(&texture_path, "inputs:sourceColorSpace").as_deref() {
                 Some("sRGB") => true,
                 Some("raw") => false,
                 _ => is_color, // "auto" / absent → channel default
             };
-            let addr_u = usd_wrap_to_address(read_token(reader, &texture_path, "inputs:wrapS").as_deref());
-            let addr_v = usd_wrap_to_address(read_token(reader, &texture_path, "inputs:wrapT").as_deref());
+            let addr_u = usd_wrap_to_address(reader.text(&texture_path, "inputs:wrapS").as_deref());
+            let addr_v = usd_wrap_to_address(reader.text(&texture_path, "inputs:wrapT").as_deref());
 
             Some(
                 asset_server
@@ -2201,26 +2177,24 @@ pub fn stage_time_codes_per_second<R: UsdRead>(reader: &R) -> f64 {
     }
 }
 
-/// Held-sampled token/string attribute at time code `time` (USD tokens hold,
-/// never interpolate). `None` when the attribute has no `timeSamples` or the
-/// held sample isn't a token/string/asset value. The animated twin of
-/// [`read_token`] — note tokens can't go through `prim_attribute_value_at::<String>`
-/// because `String::try_from(Value::Token)` fails on openusd `main`.
+/// Held-sampled `token`/`string` attribute at time code `time` (USD tokens hold,
+/// never interpolate) — the animated twin of [`UsdRead::text`], reading the same
+/// [`Value::as_str`] coercion at a time code. `None` when the attribute has no
+/// `timeSamples` or the held sample isn't textual. An `asset`-typed channel is
+/// deliberately NOT read here: an asset reference is a different thing from a
+/// token, and no animated channel we author is one.
 pub(crate) fn read_token_at<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str, time: f64) -> Option<String> {
     // Gate on authored `timeSamples` (never fall back to `default`): a token
     // channel with no samples isn't animated. `attr_value_at` evaluates the
     // samples — for a non-lerpable token type openusd's Linear interpolation
-    // falls back to Held (the nearest previous sample), matching the prior
-    // explicit Held read.
+    // falls back to Held (the nearest previous sample).
     if !reader.has_time_samples(path, attr) {
         return None;
     }
-    match reader.attr_value_at(path, attr, time)? {
-        Value::String(s) => Some(s),
-        Value::Token(s) => Some(s.to_string()),
-        Value::AssetPath(a) => Some(a.as_str().to_string()),
-        _ => None,
-    }
+    reader
+        .attr_value_at(path, attr, time)?
+        .as_str()
+        .map(str::to_string)
 }
 
 /// Enumerate a token/string channel's authored keys as `(time_code, value)`
@@ -2635,16 +2609,69 @@ pub fn get_attribute_as_vec3<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str)
     read_vec3_f64(reader, path, attr).map(|v| Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32))
 }
 
-/// Canonical USD token/string attribute reader. Reads the attribute's
-/// `default` value at `prim.attr` and returns it as a `String` for
-/// `token`, `string`, and `asset` value types. `None` if absent or a
-/// different type.
-pub fn read_token<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<String> {
-    match reader.attr_value(path, attr)? {
-        Value::String(s) => Some(s),
-        Value::Token(s) => Some(s.to_string()),
-        Value::AssetPath(a) => Some(a.as_str().to_string()),
-        _ => None,
+/// Attach the rhai programs a prim carries — its `LuncoProgram` children whose
+/// source is a `.rhai` — to `entity`, the prim that OWNS them.
+///
+/// The script's `me` is its owner, because that is what a script is for: it acts on
+/// behalf of the vessel, reads the vessel's ports, moves the vessel's transform. The
+/// program prim exists to make the binding composable and to hold the script's own
+/// typed parameters, not to be the thing the script talks about.
+///
+/// A program whose source this engine does not run — a `.mo`, an `.xml` — belongs to
+/// another engine and is skipped here: the extension picks the engine.
+fn attach_rhai_programs<R: UsdRead>(
+    reader: &R,
+    owner: &SdfPath,
+    entity: Entity,
+    commands: &mut Commands,
+) {
+    for child in reader.children(owner) {
+        if reader.type_name(&child).as_deref() != Some("LuncoProgram") {
+            continue;
+        }
+
+        // Inline source wins over a file: `sourceCode` is the live-authoring path,
+        // and an author editing it in place means it.
+        let inline = reader
+            .scalar::<String>(&child, "lunco:program:sourceCode")
+            .filter(|s| !s.trim().is_empty());
+        let file = reader
+            .asset(&child, "lunco:program:sourceAsset")
+            .filter(|s| s.ends_with(".rhai"));
+        if inline.is_none() && file.is_none() {
+            continue;
+        }
+
+        // A script's parameters are typed attributes on its own program prim, one
+        // per key — `float lunco:param:wmax = 1.05`. Read by `param(me, key,
+        // default)`, which is how one reusable script drives many prims (each flame
+        // cone scales itself from its own numbers).
+        let params: std::collections::HashMap<String, f64> = reader
+            .attr_names(&child)
+            .iter()
+            .filter_map(|name| {
+                let key = name.strip_prefix("lunco:param:")?;
+                Some((key.to_string(), reader.real(&child, name)?))
+            })
+            .collect();
+        if !params.is_empty() {
+            commands
+                .entity(entity)
+                .try_insert(lunco_core::ScriptParams(params));
+        }
+
+        if let Some(src) = inline {
+            commands
+                .entity(entity)
+                .try_insert(lunco_core::EmbeddedScenarioSource(src));
+        } else if let Some(path) = file {
+            // lunco-scripting loads it via the AssetServer (wasm-safe) and swaps in
+            // an `EmbeddedScenarioSource`. The two crates stay decoupled: neither
+            // depends on the other, and the marker is the whole contract.
+            commands
+                .entity(entity)
+                .try_insert(lunco_core::EmbeddedScenarioPath(path));
+        }
     }
 }
 
@@ -3233,8 +3260,7 @@ pub fn build_usd_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> {
     let uvs_per_vertex = uvs.as_ref().is_some_and(|u| u.len() == points.len());
     let uvs_per_corner = uvs.as_ref().is_some_and(|u| u.len() == n_corners);
 
-    let left_handed =
-        read_token(reader, path, "orientation").as_deref() == Some("leftHanded");
+    let left_handed = reader.text(path, "orientation").as_deref() == Some("leftHanded");
 
     let mut positions: Vec<[f32; 3]> = Vec::with_capacity(n_corners);
     let mut out_normals: Vec<[f32; 3]> = Vec::new();

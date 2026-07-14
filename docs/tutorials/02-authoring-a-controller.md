@@ -57,7 +57,7 @@ fn on_event(me, evt) {
 ```
 
 (A real controller sequences phases here with `wait_for`/`wait_until` or reacts to
-`lunco:portEvents`. Never write command ports every tick from rhai.)
+events raised by `LuncoPortEvent` prims. Never write command ports every tick from rhai.)
 
 ## Step 3 — sensors + wiring (USD)
 
@@ -68,18 +68,31 @@ model force → body. Mass comes from the body's own port (no magic number):
 def "Altimeter" (prepend references = @../../vessels/sensors/altimeter.usda@</Altimeter>)
 { double3 xformOp:translate = (0, -1, 0); uniform token[] xformOpOrder = ["xformOp:translate"] }
 
-# on the vessel prim:
-string lunco:modelicaModel = "models/Hover.mo"
-string lunco:simWires = "force_y:force_y,velocity_y:climb_rate,mass:vehicle_mass,piloted:piloted,throttle:throttle"
-custom string lunco:scriptPath = "scenarios/hover_super.rhai"
+# on the vessel prim — its flight-control system is inseparable from the airframe, so
+# apply `LuncoProgramAPI` and name the model in place:
+uniform asset lunco:program:sourceAsset = @models/Hover.mo@
+uniform bool  lunco:program:realtimeSafe = true      # it drives a force on a predicted body
+
+# a wire is a native USD connection, authored on the consumer:
+float inputs:force_y.connect      = </Vessel.outputs:force_y>
+float inputs:climb_rate.connect   = </Vessel.outputs:velocity_y>
+float inputs:vehicle_mass.connect = </Vessel.outputs:mass>
+float inputs:piloted.connect      = </Vessel.outputs:piloted>
+float inputs:throttle.connect     = </Vessel.outputs:throttle>
+
+# the supervisor is bolted on, so it is a child program prim:
+def LuncoProgram "Supervisor" {
+    uniform asset lunco:program:sourceAsset = @scenarios/hover_super.rhai@
+}
 ```
 
-Feed `altitude` from the altimeter with a cross-prim wire (like `AltimeterToLander`):
-`lunco:wireFrom = <Altimeter>`, `fromPort = "range"`, `wireTo = <vessel>`, `toPort = "altitude"`.
+Feed `altitude` from the altimeter with a cross-prim connection — the same form, the
+target path just names another prim:
+`float inputs:altitude.connect = </Vessel/Altimeter.outputs:range>`.
 
 ## Step 4 — control authority (already done!)
 
-You wired `piloted:piloted` in Step 3 — that's the whole authority mechanism. The
+You connected `inputs:piloted` in Step 3 — that's the whole authority mechanism. The
 `piloted` port is `1.0` whenever a session (a user **or** an autopilot) possesses the
 vessel, derived from the possession registry (`PILOTED_BACKEND`). Add a pilot
 intent→port binding — a `Controls` child that `references` a profile — so the stick

@@ -40,7 +40,6 @@ def Xform "SandboxScene" (
         double3 xformOp:translate = (0, -0.1, 0)
         double3 xformOp:scale = (4000.0, 0.2, 4000.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        uniform token lunco:material:type = "shader"
         uniform asset lunco:material:shader = @shaders/blueprint.wgsl@
         color3f primvars:surface_color = (0.15, 0.15, 0.18)
         color3f primvars:high_line_color = (0.20, 0.20, 0.23)
@@ -68,7 +67,6 @@ def Xform "SandboxScene" (
         double3 xformOp:rotateXYZ = (0, 0, 17.1887)
         double3 xformOp:scale = (60.0, 2.0, 80.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        uniform token lunco:material:type = "shader"
         uniform asset lunco:material:shader = @shaders/blueprint.wgsl@
         color3f primvars:surface_color = (0.25, 0.22, 0.18)
         color3f primvars:high_line_color = (0.30, 0.27, 0.23)
@@ -96,7 +94,6 @@ def Xform "SandboxScene" (
         double3 xformOp:rotateXYZ = (0, 0, 17.1887)
         double3 xformOp:scale = (60.0, 2.0, 80.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        uniform token lunco:material:type = "shader"
         uniform asset lunco:material:shader = @shaders/blueprint.wgsl@
         color3f primvars:surface_color = (0.25, 0.52, 0.18)
         color3f primvars:high_line_color = (0.30, 0.57, 0.23)
@@ -117,11 +114,13 @@ def Xform "SandboxScene" (
     # --- Avatar (Camera) ---
     # Position, camera mode, and orientation defined in USD.
     # lunco:cameraMode = "freeflight" | "orbit" | "springarm"
-    def Xform "Avatar"
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LuncoAvatarAPI"]
+    )
     {
-        string lunco:avatar = "true"
-        string lunco:cameraMode = "freeflight"
-        custom double3 lunco:cameraLookAt = (0.0, 5.0, 0.0)
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 5.0, 0.0)
         double3 xformOp:translate = (-30.0, 15.0, -20.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
@@ -316,7 +315,7 @@ def Xform "SandboxScene" (
 
     # --- Balloons (cosim entities — geometry/physics + Modelica/Python wiring all in USD) ---
 
-    def Sphere "RedBalloon" (
+    def "RedBalloon" (
         prepend references = @../../vessels/balloons/modelica_balloon.usda@</ModelicaBalloon>
     )
     {
@@ -324,7 +323,7 @@ def Xform "SandboxScene" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    def Sphere "GreenBalloon" (
+    def "GreenBalloon" (
         prepend references = @../../vessels/balloons/python_balloon.usda@</PythonBalloon>
     )
     {
@@ -344,16 +343,23 @@ def Xform "SandboxScene" (
     # resolves them to ECS entities and spawns one `SimConnection` each.
     # Result: the target sphere bobs ±50 N at 1 Hz.
 
-    def "Oscillator"
+    def "Oscillator" (
+        prepend apiSchemas = ["LuncoProgramAPI"]
+    )
     {
-        string lunco:modelicaModel = "models/Oscillator.mo"
+        uniform asset lunco:program:sourceAsset = @models/Oscillator.mo@
         # Pure source: declares its output port (the active-cosim marker).
         float outputs:signal
     }
 
-    def "Amplifier"
+    def "Amplifier" (
+        prepend apiSchemas = ["LuncoProgramAPI"]
+    )
     {
-        string lunco:pythonModel = "models/Amplifier.py"
+        uniform asset lunco:program:sourceAsset = @models/Amplifier.py@
+        # Its `scaled` output lands on CosimTarget's `force_y` — a force on a body
+        # the client predicts, which only a realtime-safe program may drive.
+        uniform bool lunco:program:realtimeSafe = true
         # `signal` in ← Oscillator; `scaled` out → CosimTarget.
         float inputs:signal.connect = </SandboxScene/Oscillator.outputs:signal>
         float outputs:scaled
@@ -367,7 +373,6 @@ def Xform "SandboxScene" (
         color3f[] primvars:displayColor = [(0.9, 0.7, 0.2)]
         # Spin-revealing checker (same general ShaderMaterial as the balloons),
         # so this cosim-driven ball shows its motion. Yellow identity via cell_a.
-        uniform token lunco:material:type = "shader"
         uniform asset lunco:material:shader = @shaders/balloon.wgsl@
         color3f primvars:cell_a = (0.9, 0.7, 0.2)    # cell A (yellow identity)
         color3f primvars:cell_b = (0.12, 0.12, 0.14) # cell B (dark)
@@ -514,7 +519,7 @@ def Xform "SandboxScene" (
             {
                 uniform token lunco:mount:socket = "probe"
                 uniform token lunco:mount:joint  = "fixed"
-                uniform token lunco:mount:asset  = "components/mount_probe.usda"
+                uniform asset lunco:mount:asset  = @components/mount_probe.usda@
                 double3 xformOp:translate = (0, -2.5, 0)
                 uniform token[] xformOpOrder = ["xformOp:translate"]
             }

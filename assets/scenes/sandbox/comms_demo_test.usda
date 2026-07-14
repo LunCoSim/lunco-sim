@@ -64,10 +64,12 @@ def Xform "CommsDemoScene" (
         float lunco:env:exposureEv100 = 12.5
     }
 
-    def Xform "Avatar"
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LuncoAvatarAPI"]
+    )
     {
-        string lunco:avatar = "true"
-        string lunco:cameraMode = "freeflight"
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
         double3 xformOp:translate = (14, 6, 14)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

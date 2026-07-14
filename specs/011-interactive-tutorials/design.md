@@ -31,7 +31,7 @@ Everything a *dynamic* tutorial needs already exists in `lunco-scripting`, built
 | **Goal evaluation** ("Reach Tycho >20% battery") | `fn mission(me){ [objective(id,#{requires, dwell, fail, on_complete})] }` → emits `OBJECTIVE_COMPLETE`/`MISSION_COMPLETE` (`prelude.rhai:363-476`) |
 | Toggle fidelity / load env (Story 2) | `cmd("LoadScene"/"SetSetting"/any command)` — every `#[Command]` is callable by name |
 | Show instructions | `notify(msg)` / `notify_kind(msg, kind)` → `ShowNotification` toast |
-| Multi-scenario | Any `.rhai` on any target; `RunScenario` command; USD `lunco:scriptPath` |
+| Multi-scenario | Any `.rhai` on any target; `RunScenario` command; a USD `LuncoProgram` prim |
 
 **So the tutorial "logic" moves to Rhai for free.** The gap is not logic — it is (a) a **persistent display surface** (toasts fade; a tutorial needs a sticky objectives panel + spotlight), (b) a **registry/launcher** for selecting among many tutorials with resumable progress, and (c) a few **input/state events** projected onto the bus so steps can react to UI actions.
 
@@ -40,7 +40,7 @@ Everything a *dynamic* tutorial needs already exists in `lunco-scripting`, built
 ```
 ┌────────────────────────────────────────────────────────────┐
 │ tutorials/<name>/                (data, no Rust)            │
-│   tutorial.usda   ── scene: env, entities, lunco:scriptPath │
+│   tutorial.usda   ── scene: env, entities, LuncoProgram prim│
 │   tutorial.rhai   ── fn mission(me){ steps as objectives }  │
 │   meta.toml       ── title, blurb, difficulty, app: sandbox │
 │                       |lunica, prerequisites                │

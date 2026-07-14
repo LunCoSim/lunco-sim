@@ -605,7 +605,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             commands.entity(entity).try_insert(lunco_cosim::sensors::ImuSensor::mounted(sensor_offset));
         }
         if reader.scalar::<bool>(&sdf_path, "lunco:sensor:range").is_some() {
-            let axis = match lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:sensor:rangeAxis").as_deref() {
+            let axis = match reader.text(&sdf_path, "lunco:sensor:rangeAxis").as_deref() {
                 Some("X") => DVec3::X,
                 Some("-X") => DVec3::NEG_X,
                 Some("Y") => DVec3::Y,
@@ -615,7 +615,10 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                 _ => DVec3::NEG_Y,
             };
             let max_distance = reader.real(&sdf_path, "lunco:sensor:rangeMax").unwrap_or(100.0);
-            let out_of_range_mode = match lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:sensor:rangeOutOfRangeMode").as_deref() {
+            let out_of_range_mode = match reader
+                .text(&sdf_path, "lunco:sensor:rangeOutOfRangeMode")
+                .as_deref()
+            {
                 Some("NegativeOne") => lunco_cosim::sensors::OutOfRangeMode::NegativeOne,
                 Some("NaN") => lunco_cosim::sensors::OutOfRangeMode::NaN,
                 Some("IdealAltitude") => lunco_cosim::sensors::OutOfRangeMode::IdealAltitude,
@@ -649,8 +652,8 @@ fn process_usd_sim_prim_read<R: UsdRead>(
         // memory, and letting someone raise the rate must not silently multiply the
         // buffer. See docs/architecture/telemetry-subsystem.md.
         if reader.scalar::<bool>(&sdf_path, "lunco:telemetry").unwrap_or(false) {
-            let port = lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:telemetry:port");
-            let reflect = lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:telemetry:reflect");
+            let port = reader.text(&sdf_path, "lunco:telemetry:port");
+            let reflect = reader.text(&sdf_path, "lunco:telemetry:reflect");
             let source = match (port, reflect) {
                 (Some(p), _) => Some(lunco_core::telemetry::ChannelSource::Port(p)),
                 (None, Some(r)) => Some(lunco_core::telemetry::ChannelSource::Reflect(r)),
@@ -665,7 +668,8 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             if let Some(source) = source {
                 // Default the mnemonic to the port/field name rather than refusing: a
                 // channel whose name you didn't bother to pick is still a channel.
-                let name = lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:telemetry:name")
+                let name = reader
+                    .text(&sdf_path, "lunco:telemetry:name")
                     .unwrap_or_else(|| match &source {
                         lunco_core::telemetry::ChannelSource::Port(p) => p.clone(),
                         lunco_core::telemetry::ChannelSource::Reflect(r) => r.clone(),
@@ -679,8 +683,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                     // created through the API is its own entity and sets `target`, because a
                     // Component caps an entity at one channel.)
                     target: None,
-                    unit: lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:telemetry:unit")
-                        .unwrap_or_default(),
+                    unit: reader.text(&sdf_path, "lunco:telemetry:unit").unwrap_or_default(),
                     source,
                     rate_hz: reader.real(&sdf_path, "lunco:telemetry:rateHz"),
                     // Absent ⇒ enabled. An authored channel is a live one; you turn it off
@@ -707,7 +710,10 @@ fn process_usd_sim_prim_read<R: UsdRead>(
         );
 
         // 0. Detect Avatar prim
-        if reader.scalar::<String>(&sdf_path, "lunco:avatar").is_some() {
+        if reader
+            .scalar::<bool>(&sdf_path, "lunco:avatar")
+            .unwrap_or(false)
+        {
             info!("Detected Avatar prim at {}, setting up camera", prim_path.path);
             // `big_space` enforces "exactly one `FloatingOrigin` per
             // `BigSpace`". Other crates (e.g. `lunco-celestial`'s
@@ -786,7 +792,10 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                     )>();
                 }
             }
-            let camera_mode = reader.scalar::<String>(&sdf_path, "lunco:cameraMode")
+            // `token`, per luncoSchema — so `text`, not `scalar::<String>`, which
+            // matches `Value::String` alone and reads every token as `None`.
+            let camera_mode = reader
+                .text(&sdf_path, "lunco:cameraMode")
                 .unwrap_or_else(|| "freeflight".to_string());
             let mut yaw = reader
                 .real_f32(&sdf_path, "lunco:cameraYaw")
@@ -1023,26 +1032,35 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             info!("Successfully initialized FSW for {}", prim_path.path);
         }
 
-        // 1b. Mission behaviour: a BT.CPP v4 XML tree, inline (`lunco:behavior`) or
-        // by asset path (`lunco:behaviorPath`). Mirrors the `lunco:script` /
-        // `lunco:scriptPath` pair exactly, inline winning over the file. The tree's
-        // spatial leaves reference WAYPOINT PRIMS by path; `resolve_behavior_targets`
-        // binds those, and `lunco_autopilot::usd_tree` bakes their live positions into
-        // the compiled tree.
-        if let Some(xml) = reader
-            .scalar::<String>(&sdf_path, "lunco:behavior")
-            .filter(|s| !s.trim().is_empty())
-        {
-            commands
-                .entity(entity)
-                .try_insert(lunco_autopilot::usd_tree::BehaviorXml(xml));
-        } else if let Some(path) = reader
-            .scalar::<String>(&sdf_path, "lunco:behaviorPath")
-            .filter(|s| !s.trim().is_empty())
-        {
-            commands
-                .entity(entity)
-                .try_insert(lunco_autopilot::usd_tree::BehaviorXmlPath(path));
+        // 1b. Mission behaviour: a BT.CPP v4 XML tree, carried by a `LuncoProgram`
+        // child of this prim — the vessel OWNS the tree, so the tree is read from
+        // here, its owner. Inline source wins over a file: an author editing a tree in
+        // place means it. The tree's spatial leaves reference WAYPOINT PRIMS by path;
+        // `resolve_behavior_targets` binds those, and `lunco_autopilot::usd_tree` bakes
+        // their live positions into the compiled tree.
+        //
+        // A `.xml` is the one program with a role of its own: a declarative tree is
+        // not a script, it is compiled and ticked by the behaviour engine. Extension
+        // picks the engine, exactly as it does for `.mo` and `.rhai`.
+        for child in reader.children(&sdf_path) {
+            if reader.type_name(&child).as_deref() != Some("LuncoProgram") {
+                continue;
+            }
+            if let Some(xml) = reader
+                .scalar::<String>(&child, "lunco:program:sourceCode")
+                .filter(|s| s.trim_start().starts_with('<'))
+            {
+                commands
+                    .entity(entity)
+                    .try_insert(lunco_autopilot::usd_tree::BehaviorXml(xml));
+            } else if let Some(path) = reader
+                .asset(&child, "lunco:program:sourceAsset")
+                .filter(|s| s.ends_with(".xml"))
+            {
+                commands
+                    .entity(entity)
+                    .try_insert(lunco_autopilot::usd_tree::BehaviorXmlPath(path));
+            }
         }
 
         // 2. Detect the drive allocation → a `DriveMix { kernel, ports, entries }`
@@ -1086,7 +1104,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             reader.rel_target(&sdf_path, "lunco:differential:rockerB"),
         ) {
             let read_f = |name: &str, dflt: f64| reader.real(&sdf_path, name).unwrap_or(dflt);
-            let axis = match lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:differential:axis").as_deref() {
+            let axis = match reader.text(&sdf_path, "lunco:differential:axis").as_deref() {
                 Some("Y") => DVec3::Y,
                 Some("Z") => DVec3::Z,
                 _ => DVec3::X,

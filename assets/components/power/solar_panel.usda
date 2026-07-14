@@ -44,7 +44,6 @@ def Xform "SolarPanel" (
 
         # Use the general ShaderMaterial, driven entirely by the shader file
         # + generic primvars (no bespoke Rust material).
-        uniform token lunco:material:type = "shader"
         uniform asset lunco:material:shader = @shaders/solar_panel.wgsl@
 
         # Generic shader params (see assets/shaders/solar_panel.wgsl):

@@ -43,9 +43,14 @@ constants):
 ```
 
 ```usda
-def Xform "Rover" {
-    custom string lunco:vessel = "true"
-    custom string lunco:behaviorPath = "behaviors/rover_patrol.btxml"   # or inline lunco:behavior
+def Xform "Rover" (
+    prepend apiSchemas = ["LuncoVesselAPI"]
+) {
+    uniform bool lunco:vessel = true
+
+    def LuncoProgram "Patrol" {
+        uniform asset lunco:program:sourceAsset = @behaviors/rover_patrol.btxml@
+    }
 }
 
 def Scope "Behaviors" {
@@ -56,8 +61,11 @@ def Scope "Behaviors" {
 }
 ```
 
-`lunco:behavior` (inline) / `lunco:behaviorPath` (asset) mirror the proven
-`lunco:script` / `lunco:scriptPath` pair, inline winning over the file.
+A behaviour tree is a program like any other: a `LuncoProgram` child prim naming the
+XML through `lunco:program:sourceAsset` (or carrying it in `lunco:program:sourceCode`).
+The engine that runs it comes from the source's extension, so nothing about the tree
+needs a binding of its own — and deleting the prim deletes the mission, which is exactly
+what a patrol should be.
 
 Two things fell out of the existing codebase rather than being invented:
 
@@ -90,7 +98,8 @@ A tree naming a deleted waypoint **refuses to compile** and keeps its last good 
 
 **No new command verbs.** Ctrl+LMB triggers `ApplyUsdOp` three times: `AddPrim` (the
 pin, referencing the marker asset), `SetTranslate` (where it landed), `SetAttribute`
-(`lunco:behavior` — the mission that now names it).
+(`lunco:program:sourceCode` on the mission's `LuncoProgram` prim — the tree that now
+names it).
 
 Everything else about a waypoint is *already implemented*, by code that knows nothing
 about waypoints:

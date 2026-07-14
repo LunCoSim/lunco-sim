@@ -98,25 +98,14 @@ fn apply_usd_shader_material_read<R: UsdRead>(
     // From here on the prim is evaluated regardless of outcome.
     commands.entity(entity).try_insert(UsdShaderResolved);
 
-    // `LuncoMaterialAPI` (see lunco-usd/schema/schema.usda). These were once
-    // `primvars:materialType` / `primvars:shaderPath`, which misused the primvars
-    // namespace: a primvar is interpolated geometric data that inherits to child
-    // geometry and binds per-vertex, and a material-type token is none of those —
-    // it was being swept up and offered to shaders as vertex data.
-    // `token`, per luncoSchema — so `text`, not `scalar::<String>` (which matches
-    // `Value::String` alone and reads every token as `None`).
-    let mat_type = reader.text(sdf_path, "lunco:material:type");
-    if mat_type.as_deref() != Some("shader") {
-        return;
-    }
-
+    // `LuncoMaterialAPI` (see lunco-usd/schema/schema.usda). NAMING a shader is
+    // SELECTING it: a prim with one renders through the WGSL pipeline, a prim without
+    // one does not. There is no second attribute saying "and I mean it" — an enum
+    // whose only value is implied by the presence of its neighbour is not a choice.
+    //
     // `asset`-typed, not `string` — so USD's resolver and the reference closure can
     // see the `.wgsl` this scene depends on. `scalar::<String>` would read `None`.
     let Some(shader_path) = reader.asset(sdf_path, "lunco:material:shader") else {
-        warn!(
-            "[shader] prim {} has lunco:material:type=shader but no lunco:material:shader",
-            prim_path.path
-        );
         return;
     };
 

@@ -63,11 +63,13 @@ def Xform "FirstDrive" (
         rel material:binding:physics = </FirstDrive/PhysicsMaterials/Friction_1_0>
     }
 
-    def Xform "Avatar"
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LuncoAvatarAPI"]
+    )
     {
-        string lunco:avatar = "true"
-        string lunco:cameraMode = "freeflight"
-        custom double3 lunco:cameraLookAt = (7.0, 0.0, 4.0)
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (7.0, 0.0, 4.0)
         double3 xformOp:translate = (-6.0, 6.0, -8.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
@@ -83,9 +85,10 @@ def Xform "FirstDrive" (
     # The rover the student drives. Skid-steer vehicle; possessable.
     def Xform "Rover" (
         prepend references = @../../vessels/rovers/skid_rover.usda@</SkidRover>
+        prepend apiSchemas = ["LuncoVesselAPI"]
     )
     {
-        string lunco:vessel = "true"
+        uniform bool lunco:vessel = true
         double3 xformOp:translate = (0, 1.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
@@ -102,6 +105,6 @@ def Xform "FirstDrive" (
 
     # Environment only. The tutorial ORCHESTRATOR is the standalone
     # `first_drive.rhai` (run by the launcher on a host entity); it `load_scene`s
-    # this file in `on_start`. No embedded `lunco:scriptPath` — a tutorial is one
-    # source (the .rhai), and the chain lives in the launcher registry, not USD.
+    # this file in `on_start`. No embedded program prim — a tutorial is one source
+    # (the .rhai), and the chain lives in the launcher registry, not USD.
 }

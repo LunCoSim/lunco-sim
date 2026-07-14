@@ -10,11 +10,11 @@ description: >
   behaviour", "package this as a Twin", or "connect the GNC output to the
   thruster". Any request to compose more than one domain (USD + Modelica + cosim
   + rhai) into one running system belongs here. (For the agent mid-code:
-  `twin.toml`, `lunco:modelicaModel`, `lunco:simWires`, a sub-prim-per-domain
-  layout, `SimConnection` / port wiring, a `lunco:scenario` orchestration prim,
+  `twin.toml`, a `LuncoProgram` prim per domain, native USD connections,
+  `SimConnection` / port wiring, a `lunco:scenario` orchestration prim,
   or `SetPorts`/`SetModelInput` fighting each other.) Project-specific and
   non-obvious: a vehicle is a USD FILE (not a Rust struct), each physical domain
-  is its OWN sub-prim with its own `.mo` wired via ports (SSP), the PortRegistry
+  is its OWN program prim with its own `.mo` wired via ports (SSP), the PortRegistry
   is the SINGLE input-write path (direct `SetModelInput` on a cosim'd entity is
   clobbered every tick), and gravity comes from the environment (don't apply it
   in `.mo`). Design: docs/architecture/33-spacecraft-modeling.md, 34-scenario-and-multidomain.md.
@@ -26,7 +26,7 @@ A full mission layers cleanly — never blur the layers:
 
 | Layer ("…") | Owns | Lives in |
 |---|---|---|
-| **Structure + wiring** ("what") | bodies, colliders, mass/inertia, joints, topology, model bindings, cosim wires | **USD** (authored) |
+| **Structure + wiring** ("what") | bodies, colliders, mass/inertia, joints, topology, program prims, port connections | **USD** (authored) |
 | **Subsystem dynamics** ("how a part behaves") | thrust, propellant, battery, thermal, controllers | **Modelica / rhai** (cosim) |
 | **Substrate + behavior library** ("the laws") | solver, force/joint/port plumbing, parameterized wheel/suspension/friction | **Rust** (reusable, never bespoke) |
 
@@ -57,27 +57,45 @@ Everything the mission needs lives under that folder: the scene, referenced
 vehicle assets, `.mo` models, `.rhai` scenarios. Open the Twin and the default
 scene loads.
 
-## Decision 1 — a multi-domain vehicle is sub-prim-per-model + wires (SSP)
+## Decision 1 — a multi-domain vehicle is one program prim per domain + connections (SSP)
 
-Model each physical domain as its **own prim** under the vehicle Xform, each with
-its own `.mo`, wired through the port surface. This *is* FMI/SSP — no new machinery.
+A program is a PRIM, not an attribute on the thing it drives — the same reason a
+`UsdShade` shader is a prim: it has typed ports, and ports connect. Model each physical
+domain as its own `def LuncoProgram` under the vehicle Xform, each naming its own `.mo`,
+wired through the port surface. This *is* FMI/SSP — no new machinery.
 
 ```usda
 def Xform "Lander" (PhysicsRigidBodyAPI …)              # rigid body (Avian ports)
 {
-    string lunco:simWires = "thrust:force_local_y"      # GNC thrust → body force
-    def Scope "GNC"   { string lunco:modelicaModel = "models/LanderGNC.mo"
-                        string lunco:simWires = "height:altitude,velocity_y:descent_rate,gravity_accel:g" }
-    def Scope "Power" { string lunco:modelicaModel = "models/Battery.mo" }
-    def Scope "Therm" { string lunco:modelicaModel = "models/ThermalNode.mo" }
-    # wire prims connect GNC.thrust→Power.load, Power.soc→GNC.engine_enable, …
+    float inputs:force_local_y.connect = </Lander/GNC.outputs:thrust>   # GNC thrust → body force
+
+    def LuncoProgram "GNC" {
+        uniform asset lunco:program:sourceAsset = @models/LanderGNC.mo@
+        uniform bool  lunco:program:realtimeSafe = true                 # it drives a force
+        float inputs:altitude.connect     = </Lander.outputs:height>
+        float inputs:descent_rate.connect = </Lander.outputs:velocity_y>
+        float inputs:engine_enable.connect = </Lander/Power.outputs:soc>
+        float inputs:g = 1.62                                           # a parameter is an input with a constant
+    }
+    def LuncoProgram "Power" {
+        uniform asset lunco:program:sourceAsset = @models/Battery.mo@
+        float inputs:load.connect = </Lander/GNC.outputs:thrust>
+    }
+    def LuncoProgram "Therm" {
+        uniform asset lunco:program:sourceAsset = @models/ThermalNode.mo@
+    }
 }
 ```
 
-`lunco:simWires` is `"provider:consumer,…"` (a source port → a model input). **Do
-not** host N solvers on one entity — that forces `SimComponent` to a multi-instance
-map and touches the propagation core. Sub-prim-per-model gives the same composition
+A wire is a native USD connection, authored on the prim that CONSUMES the value. **Do
+not** host N solvers on one entity — that forces `SimComponent` to a multi-instance map
+and touches the propagation core. One program prim per domain gives the same composition
 with zero core change and clean per-domain telemetry.
+
+A vessel's OWN flight-control system is the one exception to the child prim: it is not
+separable from the airframe (its `inputs:` are what the stick talks to), so the vessel
+prim applies `LuncoProgramAPI` in place — see
+[`authoring-vessel-controllers`](../authoring-vessel-controllers/SKILL.md).
 
 ## Decision 2 — the PortRegistry is the ONE input-write path
 
@@ -97,15 +115,21 @@ A *scenario* is the scene that bundles vehicles (referenced assets) + cosim wiri
 def Scope "Scenario" ( kind = "component" )
 {
     custom string lunco:scenario = "rover-surface-ops"
-    custom string lunco:script = """ … mission state machine + objectives … """
+
+    def LuncoProgram "Mission" {
+        uniform asset lunco:program:sourceAsset = @scenarios/rover_surface_ops.rhai@
+        # or author the mission state machine in place:
+        # uniform string lunco:program:sourceCode = """ … """
+    }
 }
 ```
 
 - **Orchestration** (rhai): phases via the sequencer (`descend → touchdown →
   deploy → handover → task_1…`), advancing on **port-read predicates** (altitude,
   joint presence, SoC, distance, temp).
-- **Per-vehicle** scripts (`lunco:scriptPath`): local behaviour (flight assist,
-  autonomy helpers).
+- **Per-vehicle** scripts: a `def LuncoProgram` child prim on the vehicle for local
+  behaviour (flight assist, autonomy helpers) — delete the prim and the behaviour goes
+  with it.
 - **Objectives / scoring**: rhai predicates over ports — no new engine.
 
 ## Recipe
@@ -114,14 +138,16 @@ def Scope "Scenario" ( kind = "component" )
 2. **Reference vehicles:** pull authored assets into the scene (e.g.
    `assets/vessels/rovers/{skid,ackermann}_rover.usda`, a lander) — wheel count,
    params, joints, drive type all come from USD; nothing hardcoded.
-3. **Add subsystems per vehicle:** a `def Scope` per domain with
-   `lunco:modelicaModel` + `lunco:simWires`; the body carries `PhysicsRigidBodyAPI`
-   + force wires. Reuse existing `.mo` (`models/RocketEngine.mo`, an MSL `LimPID`
+3. **Add subsystems per vehicle:** a `def LuncoProgram` per domain naming its
+   `lunco:program:sourceAsset`; the body carries `PhysicsRigidBodyAPI` + the force
+   connections. Reuse existing `.mo` (`models/RocketEngine.mo`, an MSL `LimPID`
    for GNC).
-4. **Wire cross-domain ports** in `simWires` (GNC.thrust→Power.load,
-   Power.soc→GNC.engine_enable, …).
-5. **Add the Scenario prim:** an orchestration `lunco:script` (phases + objectives
-   as port predicates) + per-vehicle `lunco:scriptPath`.
+4. **Wire cross-domain ports** with connections on the consumer
+   (`inputs:load.connect = </Lander/GNC.outputs:thrust>`,
+   `inputs:engine_enable.connect = </Lander/Power.outputs:soc>`, …).
+5. **Add the Scenario prim:** a `LuncoProgram` child naming the orchestration script
+   (phases + objectives as port predicates), plus a `LuncoProgram` child on each
+   vehicle for its own behaviour.
 6. **Open + verify:** load the Twin, then use
    [`inspect-simulation`](../inspect-simulation/SKILL.md) — `cosim_status` to see the
    whole Modelica→physics chain, `read_ports` for specific values, a screenshot to
@@ -134,4 +160,4 @@ def Scope "Scenario" ( kind = "component" )
 - **`set_input(me,…)` is not a rhai verb** — inside a scenario use `set(me, "port", v)` (routes through `write_port`).
 - **A vehicle is a USD file** — spawn/param it in USD; if you're writing a Rust struct for a specific rover, stop.
 - **Unwired algebraic Modelica inputs fold to their default** — see [`authoring-vessel-controllers`](../authoring-vessel-controllers/SKILL.md) for the `der`-feed / wiring fix.
-- **Per-domain identity is the point** — one `def Scope` per subsystem gives clean per-domain telemetry; don't collapse them onto the body.
+- **Per-domain identity is the point** — one `LuncoProgram` prim per subsystem gives clean per-domain telemetry; don't collapse them onto the body.

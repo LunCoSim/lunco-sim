@@ -112,7 +112,8 @@ fn read_projection<R: UsdRead>(reader: &R, path: &SdfPath) -> Projection {
         })
         .unwrap_or([DEFAULT_NEAR, DEFAULT_FAR]);
 
-    let is_ortho = crate::read_token(reader, path, "projection")
+    let is_ortho = reader
+        .text(path, "projection")
         .map(|t| t == "orthographic")
         .unwrap_or(false);
 

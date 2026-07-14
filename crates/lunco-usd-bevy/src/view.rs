@@ -80,8 +80,9 @@ impl<'a> StageView<'a> {
     }
 
     /// Attribute `name` on `prim` coerced to a string — handles `String`,
-    /// `Token`, and `AssetPath` (the `@…@` form). Mirrors the
-    /// `read_token` free helper.
+    /// `Token`, and `AssetPath` (the `@…@` form). Inherent helper for the reads
+    /// whose value type is genuinely either (`lunco:resolvedAsset`, authored by
+    /// the composer as a path but read as plain text).
     pub fn value_str(&self, prim: &SdfPath, name: &str) -> Option<String> {
         match self.stage.prim(prim.clone()).attribute(name).get::<Value>().ok().flatten()? {
             Value::String(s) => Some(s),

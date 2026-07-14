@@ -40,10 +40,9 @@ components are authored assets, not runtime-built).
 ### 1.2 Anatomy of a multi-layer component
 
 A component is a **referenceable USD asset** (`defaultPrim` = an `Xform`, USD
-`kind="component"`) whose children are **one sub-prim per layer/domain**, each binding at
-most one model — because the runtime is **one solver per prim** (doc 34; a bare
-`lunco:modelicaModel` with no `lunco:simWires` is inert doc, so extra domains *must* be
-separate prims).
+`kind="component"`) whose children are **one program prim per layer/domain**, each binding
+at most one model — because the runtime is **one solver per prim** (doc 34; a program with
+no ports is inert documentation, so extra domains *must* be separate prims).
 
 Worked example — a communications component. Note that **nothing here is a comms
 primitive in the core**: the link layer is just a generic [`LinkNode`](49-connectivity-link-kernel.md)
@@ -61,22 +60,36 @@ def Xform "CommsSystem" (kind = "component") {          # ── the reusable un
         prepend payload = @lunco-lib://models/hga.glb@  #     heavy mesh → deferred binary payload
         # + collider, mount frame, optional gimbal joint
     }
-    def Scope "Link" {                                  # ── Layer 2: RF dynamics (Modelica)
-        custom string lunco:modelicaModel = "models/CommsLink.mo"   # Friis → data-rate → buffer
-        custom string lunco:simWires  = "range_km:u_range, connected:u_up, dataRate:data_out"
-        custom string lunco:portEvents = "margin_db<0:comms:loss, margin_db>3:comms:acquire"
+    def LuncoProgram "Link" {                           # ── Layer 2: RF dynamics (Modelica)
+        uniform asset lunco:program:sourceAsset = @models/CommsLink.mo@   # Friis → data-rate → buffer
+        float inputs:u_range.connect = </CommsSystem/Geom.outputs:range_km>
+        float inputs:u_up.connect    = </CommsSystem/Geom.outputs:connected>
+
+        def LuncoPortEvent "Loss" {
+            uniform token lunco:event:port = "margin_db"
+            uniform token lunco:event:op = "lt"
+            double lunco:event:threshold = 0.0
+            uniform token lunco:event:emit = "comms:loss"
+        }
+        def LuncoPortEvent "Acquire" {
+            uniform token lunco:event:port = "margin_db"
+            uniform token lunco:event:op = "gt"
+            double lunco:event:threshold = 3.0
+            uniform token lunco:event:emit = "comms:acquire"
+        }
     }
-    def Scope "Power" {                                 # ── Layer 3: electrical draw (Modelica)
-        custom string lunco:modelicaModel = "models/CommsPower.mo"  # TX state → DC watts
-        custom string lunco:simWires = "txActive:u_tx, p_draw:p_draw"   # p_draw → vehicle EPS bus
+    def LuncoProgram "Power" {                          # ── Layer 3: electrical draw (Modelica)
+        uniform asset lunco:program:sourceAsset = @models/CommsPower.mo@  # TX state → DC watts
+        float inputs:u_tx.connect = </CommsSystem/Link.outputs:txActive>
+        # its `outputs:p_draw` is what the vehicle's EPS bus consumes
     }
-    def Scope "Policy" {                                # ── Layer 4: mode/relay policy (rhai)
-        custom string lunco:script = "scripts/comms_policy.rhai"   # handover, duty-cycle, safe-mode
+    def LuncoProgram "Policy" {                         # ── Layer 4: mode/relay policy (rhai)
+        uniform asset lunco:program:sourceAsset = @scripts/comms_policy.rhai@   # handover, duty-cycle, safe-mode
     }
 }
 ```
 
-Layers are wired **internally** by `lunco:simWires` / wire-prims through `PortRegistry`.
+Layers are wired **internally** by native USD connections through `PortRegistry`.
 The **geometry/LOS layer is not per-component Modelica** — it is the shared generic link
 kernel (doc 49) publishing `range_m` / `elevation_deg` / `connected` on `LinkState`, which
 the Link `.mo` consumes. This is the house layering exactly: **USD = structure/wiring,
@@ -113,7 +126,7 @@ shipping drivetrain `raycast|physical` variant:
 def Xform "CommsSystem" (kind="component") {
     variantSet "fidelity" = {
         "ideal"     { over "Link" { } over "Power" { } }        # kernel LOS only → connected bool
-        "linkbudget"{ over "Link" (lunco:modelicaModel="models/CommsLink.mo") { } }   # + Friis/buffer
+        "linkbudget"{ over "Link" { uniform asset lunco:program:sourceAsset = @models/CommsLink.mo@ } }   # + Friis/buffer
         "full"      { over "Link" {…} over "Power" {…} over "Therm" {…} }             # + electrical + thermal
     }
     prepend variantSets = "fidelity"

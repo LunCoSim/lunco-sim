@@ -178,12 +178,112 @@ class "LuncoMaterialAPI" (
     }
 )
 {
-    uniform token lunco:material:type = "" (
-        allowedTokens = ["", "shader"]
-        doc = "Which material implementation drives this prim."
-    )
     uniform asset lunco:material:shader = @@ (
-        doc = "Path to the WGSL shader declaring the pipeline's bindings."
+        doc = "The WGSL shader declaring the pipeline's bindings. Naming one selects it."
+    )
+}
+
+class LuncoProgram "LuncoProgram" (
+    doc = """One program bound to the prim that owns it — a Modelica plant, a rhai
+    controller, a Python model, a behaviour tree. A prim, not an attribute: it has
+    typed ports and those ports connect."""
+)
+{
+    uniform token lunco:program:implementationSource = "sourceAsset" (
+        allowedTokens = ["sourceAsset", "sourceCode"]
+        doc = "Whether the program is an external file or text authored in place."
+    )
+    uniform asset lunco:program:sourceAsset = @@ (
+        doc = "The program's file."
+    )
+    uniform string lunco:program:sourceCode = "" (
+        doc = "The program's text, authored in place."
+    )
+    uniform token lunco:program:sourceAsset:subIdentifier = "" (
+        doc = """Which definition inside the source, when the file holds more than one.
+        Empty means the file's single definition."""
+    )
+    uniform bool lunco:program:realtimeSafe = false (
+        doc = """Whether this program may drive a force/torque port on a client-predicted
+        body. A promise about step latency, declared by the author, never inferred."""
+    )
+}
+
+class "LuncoProgramAPI" (
+    doc = """A prim that IS a program, rather than one carrying programs as children.
+    A vessel's flight-control system is its airframe; a guidance law is bolted on."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    uniform token lunco:program:implementationSource = "sourceAsset" (
+        allowedTokens = ["sourceAsset", "sourceCode"]
+        doc = "Whether the program is an external file or text authored in place."
+    )
+    uniform asset lunco:program:sourceAsset = @@ (
+        doc = "The program's file."
+    )
+    uniform string lunco:program:sourceCode = "" (
+        doc = "The program's text, authored in place."
+    )
+    uniform token lunco:program:sourceAsset:subIdentifier = "" (
+        doc = """Which definition inside the source, when the file holds more than one.
+        Empty means the file's single definition."""
+    )
+    uniform bool lunco:program:realtimeSafe = false (
+        doc = "Whether this program may drive a force/torque port on a predicted body."
+    )
+}
+
+class LuncoPortEvent "LuncoPortEvent" (
+    doc = """A threshold crossing on one port, published as a named event. A child
+    prim of the program whose port it watches."""
+)
+{
+    uniform token lunco:event:port = "" (
+        doc = "The watched port, by name, on the owning program."
+    )
+    uniform token lunco:event:op = "lt" (
+        allowedTokens = ["lt", "le", "gt", "ge"]
+        doc = "The comparison that fires the event."
+    )
+    double lunco:event:threshold = 0 (
+        doc = "The value the port is compared against."
+    )
+    uniform token lunco:event:emit = "" (
+        doc = "The event published on the crossing."
+    )
+}
+
+class "LuncoVesselAPI" (
+    doc = "A vessel: a thing a session can possess and drive."
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    uniform bool lunco:vessel = false (
+        doc = "Whether this prim is a possessable vessel."
+    )
+}
+
+class "LuncoAvatarAPI" (
+    doc = "The scene's player viewpoint — where the camera starts and how it moves."
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    uniform bool lunco:avatar = false (
+        doc = "Whether this prim is the scene's avatar."
+    )
+    uniform token lunco:cameraMode = "freeflight" (
+        allowedTokens = ["freeflight", "orbit", "springarm"]
+        doc = "How the avatar's camera moves."
+    )
+    double3 lunco:cameraLookAt = (0, 0, 0) (
+        doc = "The point the avatar's camera faces on spawn."
     )
 }
 

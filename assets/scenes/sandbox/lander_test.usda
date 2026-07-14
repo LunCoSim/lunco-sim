@@ -68,11 +68,13 @@ def Xform "LanderTest" (
         rel material:binding:physics = </LanderTest/PhysicsMaterials/Friction_1_0>
     }
 
-    def Xform "Avatar"
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LuncoAvatarAPI"]
+    )
     {
-        string lunco:avatar = "true"
-        string lunco:cameraMode = "freeflight"
-        custom double3 lunco:cameraLookAt = (0.0, 30.0, 0.0)
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 30.0, 0.0)
         double3 xformOp:translate = (18.0, 12.0, 20.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
@@ -86,11 +88,23 @@ def Xform "LanderTest" (
     }
 
     # ── The powered-descent lander ────────────────────────────────────────────
-    # The whole vehicle — GNC model, altimeter/IMU, flame, legs, cosim wiring —
-    # arrives through this one reference. The scene overrides only its initial
-    # CONDITIONS: where it starts and the cross-range velocity it carries in.
-    def Cylinder "Lander" (
-        prepend references = @../../vessels/landers/descent_lander.usda@</DescentLander>
+    # TWO arcs, and the second one is the mission. The airframe — engine, altimeter,
+    # flame, legs, avionics — arrives on the first; on its own it flies nowhere,
+    # because an airframe has no reason to want to land. The DESCENT GUIDANCE is a
+    # component this scene bolts on, wiring included (it reads the airframe's own
+    # altimeter and commands its throttle — see the component for the diagram).
+    #
+    # Drop the second arc and you have a lander you must fly yourself. That is the
+    # only difference between a vehicle and a mission.
+    #
+    # The scene overrides only its initial CONDITIONS: where it starts and the
+    # cross-range velocity it carries in. No type on the `def` — the lander's own
+    # `Xform` composes in through the arc.
+    def "Lander" (
+        prepend references = [
+            @../../vessels/landers/descent_lander.usda@</DescentLander>,
+            @../../components/gnc/descent_guidance.usda@</DescentGuidance>,
+        ]
     )
     {
         double3 xformOp:translate = (0, 60.0, 0)
@@ -107,10 +121,15 @@ def Xform "LanderTest" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         double3 physics:velocity = (-5.0, 0.0, -5.0)
 
-        # Autopilot: drives the deployed rover through the waypoint course, and
-        # yields to the player on any key press. Engages on the `rover_deployed`
-        # event; see scenarios/rover_autopilot.rhai.
-        custom string lunco:scriptPath = "scenarios/rover_autopilot.rhai"
+        # Autopilot: drives the deployed rover through the waypoint course, and yields
+        # to the player on any key press. Engages on the `rover_deployed` event. A
+        # program the SCENE adds to a stock rover — the same separation the lander's
+        # guidance gets, and for the same reason: a rover asset that patrolled the
+        # moment you spawned it would be a surprise, not a feature.
+        def LuncoProgram "Autopilot"
+        {
+            uniform asset lunco:program:sourceAsset = @scenarios/rover_autopilot.rhai@
+        }
     }
 
     # ── The fixed joint holding the rover and lander together ──
@@ -174,10 +193,14 @@ def Xform "LanderTest" (
     def Scope "Scenario"
     {
         custom string lunco:scenario = "rover-surface-ops"
+
         # Orchestration lives in a dedicated, hot-reloadable .rhai file (loaded via
         # the AssetServer → RhaiSource → EmbeddedScenarioSource). It's a declarative
         # prelude `task` — timing from internal sim time (`wait`), advancement from
         # state predicates (`wait_until`); no tick-counting / dt integration in rhai.
-        custom string lunco:scriptPath = "scenarios/rover_surface_ops.rhai"
+        def LuncoProgram "Mission"
+        {
+            uniform asset lunco:program:sourceAsset = @scenarios/rover_surface_ops.rhai@
+        }
     }
 }

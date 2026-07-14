@@ -59,11 +59,13 @@ def Xform "SunTrackerTest" (
     }
 
     # Camera looking at the tower head from the side, so a yaw change is obvious.
-    def Xform "Avatar"
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LuncoAvatarAPI"]
+    )
     {
-        string lunco:avatar = "true"
-        string lunco:cameraMode = "freeflight"
-        custom double3 lunco:cameraLookAt = (0.0, 4.0, 0.0)
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 4.0, 0.0)
         double3 xformOp:translate = (10.0, 7.0, 12.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
@@ -142,7 +144,6 @@ def Xform "SunTrackerTest" (
                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
                 color3f[] primvars:displayColor = [(0.05, 0.05, 0.35)]
                 bool physics:collisionEnabled = false
-                uniform token lunco:material:type = "shader"
                 uniform asset lunco:material:shader = @shaders/solar_panel.wgsl@
                 color3f primvars:cell_color = (0.05, 0.05, 0.35)
                 color3f primvars:bus_color = (0.85, 0.85, 0.90)
@@ -178,9 +179,11 @@ def Xform "SunTrackerTest" (
         # Controller — the SunTracker.mo co-sim model. Self-loop connection feeds
         # the solar bridge's `sun_azimuth` output into the model's `sun_azimuth`
         # input (same name on both sides — one signal).
-        def Xform "Controller"
+        def Xform "Controller" (
+            prepend apiSchemas = ["LuncoProgramAPI"]
+        )
         {
-            string lunco:modelicaModel = "models/SunTracker.mo"
+            uniform asset lunco:program:sourceAsset = @models/SunTracker.mo@
             float inputs:sun_azimuth.connect = </SunTrackerTest/SolarTower/Controller.outputs:sun_azimuth>
         }
     }

@@ -12,9 +12,6 @@ def Xform "PowerBus" (
 )
 {
     uniform bool lunco:spawnable = true
-    # --- Modelica model ---
-    string lunco:modelicaModel = "models/power_bus.mo"
-    string lunco:modelicaClassName = "LunCo.Power.Bus.DCBus"
 
     # --- Electrical properties ---
     double lunco:nominalVoltage = 48.0

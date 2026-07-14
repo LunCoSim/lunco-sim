@@ -19,11 +19,13 @@ def Xform "ShaderFallbackTest" (
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }
 
-    def Xform "Avatar"
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LuncoAvatarAPI"]
+    )
     {
-        string lunco:avatar = "true"
-        string lunco:cameraMode = "freeflight"
-        custom double3 lunco:cameraLookAt = (0.0, 0.0, 0.0)
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 0.0, 0.0)
         double3 xformOp:translate = (4.0, 3.0, 6.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
@@ -36,7 +38,6 @@ def Xform "ShaderFallbackTest" (
         double size = 2.0
         color3f[] primvars:displayColor = [(0.9, 0.3, 0.2)]
         # INVALID: pbr_lit.wgsl is an importable library (no @fragment).
-        uniform token lunco:material:type = "shader"
         uniform asset lunco:material:shader = @shaders/pbr_lit.wgsl@
     }
 }

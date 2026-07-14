@@ -163,8 +163,13 @@ over "LanderTest" (
     # ── Swap the orchestration script for the cut-scene director ──
     # Same prim, same mission structure — the cinematic script adds camera cuts
     # and the animation transport around the existing land→deploy→survey phases.
+    # This layer is stronger than `lander_test.usda`, so re-pointing the mission
+    # program's source REPLACES the script it runs; it does not add a second one.
     over "Scenario"
     {
-        custom string lunco:scriptPath = "scenarios/lander_cinematic.rhai"
+        over "Mission"
+        {
+            uniform asset lunco:program:sourceAsset = @scenarios/lander_cinematic.rhai@
+        }
     }
 }

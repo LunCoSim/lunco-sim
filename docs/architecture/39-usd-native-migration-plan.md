@@ -112,13 +112,11 @@ encoding switch + moving derivation onto the reconcile.
   `inputs:`>, scale, offset }` (fan-in → multiple rows; `propagate` sums). Self-loop (`A==B`) and cross-entity
   (`A≠B`) fall out of the same rule. Empty drain = zero work; the hot loop (`RebuildOnChange` → `CompiledWiring`
   → `propagate_connections` by-slot) and `SimConnection`'s shape are untouched — they are derived caches.
-  Covered by `usd_connection_derivation.rs`: derivation-at-load + clear, plus every migrated asset reads back
-  the exact edges the old `lunco:simWires` / wire-prims encoded.
-- **P1.4 🟡 — Migrate all assets to `connectionPaths` (via `SetConnection`, so the migration itself is journaled),
-  then delete ALL legacy.** Remove: the `lunco:simWires` parse in `process_usd_cosim_prim_read` + `parse_wire`;
-  `process_usd_cosim_wire_read` (whole system) + `lunco:wireFrom`/`wireTo`/`fromPort`/`toPort`; the
-  `any_unprocessed_usd_cosim_wires` gate + the `UsdSourcedWire` marker; `rel lunco:epsBus`; **and any code path
-  that spawns `SimConnection` outside the reconcile** (the bypass of requirement 3). One canonical form, no shim.
+  Covered by `usd_connection_derivation.rs`: derivation-at-load + clear, plus every asset reads back the exact
+  edges it authors.
+- **P1.4 🟡 — Every asset authors its wiring as `connectionPaths`** (via `SetConnection`, so the authoring is
+  journaled), and **no code path spawns a `SimConnection` outside the reconcile** (the bypass of requirement 3).
+  One canonical form, no shim.
 - **P1.5 [in place] — `PortType` / `port_type` / `classify` deleted entirely.** The tag was cosmetic: it fed
   only the port API's `"kind"` field, which had **zero** programmatic consumers (no UI, rhai, MCP, or
   connection-validation branch read it), and it was not even reliable — `classify(name)`, a lossy name
@@ -144,15 +142,17 @@ by-slot hot loop are untouched; two peers converge on identical wiring from repl
   attribute/`kind`, not a schema-per-role (doc 38 §14.7). *Risk:* `openusd`'s schema registry is a stub
   (`schemas/registry.rs`) — needs either typed views or a light codeless-schema registry contribution.
   *Verify:* `has_api_schema` gates dispatch.
-- **P2.2 🟡 — Gate on applied schema, not the `simWires`-presence heuristic** (`cosim.rs:149`). Identity =
-  "has `LunCoModelBindingAPI`" / domain schema, not "has a wire attr."
-- **P2.3 🟡 — Unify the behavior binding:** `lunco:modelicaModel`/`pythonModel`/`scriptModel` →
-  **`lunco:behavior:model`** + **`lunco:behavior:kind`** (`modelica|python|rhai|fmu`); `modelicaClassName`
-  → `behavior:className`. This is a **SysML allocation** and the USD+FMI convergence hook (doc 38 §14.2,
-  §14.5, §A10). *Verify:* cosim binding resolves identically across all three backends.
+- **P2.2 🟡 — Gate on applied schema, never a heuristic** (`cosim.rs`). Identity = "this prim binds a program
+  and declares ports" — read off `LuncoProgram`/`LuncoProgramAPI` and the domain schema, not off the shape of
+  an attribute value.
+- **P2.3 🟡 — Keep the binding neutral:** a program names its source (`lunco:program:sourceAsset`, plus
+  `:subIdentifier` when the file holds several definitions) and the engine follows the extension —
+  `modelica|python|rhai|fmu` is never a second attribute, because role is not declarable (the same `.py` is a
+  plant on one prim and a script on the next). This is a **SysML allocation** and the USD+FMI convergence hook
+  (doc 38 §14.2, §14.5, §A10). *Verify:* the binding resolves identically across every backend.
 
 **Phase 2 done when:** domain identity is a load-bearing applied schema; the binding is one neutral
-`lunco:behavior:*` allocation.
+`lunco:program:*` allocation.
 
 ---
 
@@ -161,13 +161,11 @@ by-slot hot loop are untouched; two peers converge on identical wiring from repl
 Mostly independent of Phases 1–2; can interleave.
 
 - **P3.1 — Fold EPS/motor params into model parameters.** `lunco:voltage`/`capacity`/`resistance`/
-  `torqueConstant`/… are the bound model's parameters (FMI parameter / SysML attribute), authored via
-  `lunco:params` → **typed USD attributes**; use the MSL class's own name where it exists (`R`, …). Drop
-  bespoke duplicates.
+  `torqueConstant`/… are the bound program's parameters (FMI parameter / SysML attribute): a parameter is an
+  `inputs:` port with a constant instead of a connection (`float inputs:R = 1.2`). Use the MSL class's own name
+  where it exists (`R`, …). Drop bespoke duplicates.
 - **P3.2 — Camera → `UsdGeomCamera`; lights → `UsdLux`; sensors → mirror Isaac shapes** (doc 38 §8.5).
   Keep `lunco:cameraMode` (behavior). *Verify:* camera/light/sensor behavior unchanged.
-- **P3.3 — `lunco:params` string-dict → typed USD attributes** (removes a bespoke encoding; aligns to
-  "no JSON for internal logic").
 - **P3.4 — Lean placeholder/asset resolution on USD payloads + Ar;** `lunco:resolvedAsset`/`assetMode`
   shrink to a thin runtime cache (doc 38 §14.7).
 
@@ -252,7 +250,7 @@ in `openusd` v0.5** (doc 38 §12.2) — adoption is deletion on our side, not im
 ## Federation seams (track, don't build now; doc 38 §11)
 
 - **SPICE → USD xforms** — already done (`lunco-celestial`); carry NAIF ids as prim metadata.
-- **USD+FMI** — the one live convergence; `lunco:behavior:*` (P2.3) is the hook. Track AOUSD; doc 37 already
+- **USD+FMI** — the one live convergence; `lunco:program:*` (P2.3) is the hook. Track AOUSD; doc 37 already
   implements the pattern (candidate to contribute).
 - **SysML v2 API → USD projection** — future; the naming (part/port/connection/flow/allocation, doc 38 §14.5)
   makes it near-mechanical when built.

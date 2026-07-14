@@ -26,18 +26,33 @@ runs in `FixedUpdate` at one shared `dt` so both engines agree on time.
 
 The scene only says *where* the lander starts; the cosim chain travels with the
 vessel. Open `assets/vessels/landers/descent_lander.usda` and read the root prim.
-Three attributes do the work:
+A model is a PROGRAM, and a program is a prim with typed ports — exactly as a
+`UsdShade` shader is a prim. Three things do the work:
 
 ```usda
-# 1. Attach the model. This is what turns a physics body into a cosim vessel.
-string lunco:modelicaModel = "models/Lander.mo"
+# 1. Name the model. The lander's flight-control system is inseparable from the
+#    airframe, so the vessel prim APPLIES `LuncoProgramAPI` and carries it in place
+#    (a bolted-on program — a guidance law, a supervisor — is a child prim instead).
+uniform asset lunco:program:sourceAsset = @models/Lander.mo@
 
-# 2. Wire it. Native USD connectionPaths are derived into a SimConnection
-#    (source output port -> target input port), the FMI/SSP pattern.
-#    (connectionPaths block on the prim — see the scene for the exact edges.)
+#    It drives a force on a body the client predicts, so it must promise it steps
+#    fast enough to be trusted with one.
+uniform bool lunco:program:realtimeSafe = true
 
-# 3. Surface Modelica `when` events on the bus. "<condition>:<event-name>".
-custom string lunco:portEvents = "m_prop<200:lander_low_fuel, m_prop<=0.5:lander_depleted"
+# 2. Wire it. A wire is a native USD connection, authored on the prim that CONSUMES
+#    the value, and derived into a SimConnection — the FMI/SSP pattern.
+float inputs:force_y.connect = </DescentLander.outputs:force_y>
+float inputs:q_w.connect     = </DescentLander.outputs:quat_w>
+#    (…see the asset for the full set of edges.)
+
+# 3. Surface threshold crossings on the bus — one `LuncoPortEvent` child prim per
+#    rule: the port, the comparison, the threshold and the name, each typed.
+def LuncoPortEvent "LowFuel" {
+    uniform token lunco:event:port = "m_prop"
+    uniform token lunco:event:op = "lt"
+    double lunco:event:threshold = 200.0
+    uniform token lunco:event:emit = "lander_low_fuel"
+}
 ```
 
 `Lander.mo` holds the guidance law and exposes command inputs (`throttle`,
@@ -48,13 +63,14 @@ wiring.
 
 ## Watch it from the side
 
-A small supervisor script (`assets/scenarios/lander_subsystems.rhai`) is attached
-to the same prim via `lunco:scriptPath`. It does **not** drive the lander — it
-only reacts, which is the right shape for cosim orchestration:
+A small supervisor script (`assets/scenarios/lander_subsystems.rhai`) rides on the
+same vessel as a `def LuncoProgram "Subsystems"` child prim — bolted on, so deleting
+the prim removes it. It does **not** drive the lander — it only reacts, which is the
+right shape for cosim orchestration:
 
 ```rhai
 fn on_event(me, evt) {
-    // Native Modelica fuel `when` events, from `lunco:portEvents` above.
+    // The fuel events, from the `LuncoPortEvent` prims above.
     if evt.name == "lander_low_fuel"  { notify_kind("Lander low on fuel.", "warn"); }
     else if evt.name == "lander_depleted" { notify_kind("Propellant depleted.", "warn"); }
 }
@@ -92,10 +108,12 @@ equation
 
 To cosim it onto a rover:
 
-1. **Attach** — put `lunco:modelicaModel = "models/Battery.mo"` on the rover prim.
-2. **Wire** — add a `connectionPaths` edge from the rover's motor current (or a
-   proxy proportional to throttle) into the model's `current_in`, and from
-   `soc_out` back out to a port you want to observe.
+1. **Attach** — add a `def LuncoProgram "Power"` child prim on the rover with
+   `uniform asset lunco:program:sourceAsset = @models/Battery.mo@`. It is a subsystem
+   bolted on, not the rover's own control law, so it is a child prim.
+2. **Wire** — connect the rover's motor current (or a proxy proportional to throttle)
+   into the program's `inputs:current_in`, and read `outputs:soc_out` from wherever you
+   want to observe it.
 3. **Observe** — `watch_ports` on `soc_out` while you drive; it falls as current
    flows.
 

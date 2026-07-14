@@ -11,7 +11,7 @@ description: >
   my controller / thruster respond?". Any request to model how a vehicle
   behaves under power, or to add/fix its self-driving or manual control,
   belongs here — the user will NOT know the internal terms. (For the agent
-  mid-code, it also covers: a `.mo` control model, `lunco:simWires`, the
+  mid-code, it also covers: a `.mo` control model, a `LuncoProgram` prim, the
   `piloted` port, `external_throttle`, `possess`/`follow`, or a rumoca
   input that `set()` writes but that has no effect — and catch-yourself
   moments like putting control math in rhai, a bespoke mode flag, a
@@ -33,7 +33,7 @@ each in the language that fits it**. Never blur them.
 |---|---|---|---|
 | **Control LAW** | **Modelica** (`.mo`) | the math: PID, schedules, mixing, τ=I·α | ALL control math lives here. Never compute a control law in rhai. |
 | **Logic / sequencing** | **rhai** (`.rhai`) | phases, events, mission steps, reactions | EVENT-DRIVEN only. No per-tick control loops, no time-stepping. |
-| **Structure / wiring / authority** | **USD** (`.usda`) | sensors, wires, possession, identity | Declarative. Sensors are referenced library prims; control is `simWires`. |
+| **Structure / wiring / authority** | **USD** (`.usda`) | sensors, wires, possession, identity | Declarative. Sensors are referenced library prims; a wire is a native USD connection. |
 
 The reference is the lander: `assets/models/Lander.mo`,
 `assets/scenarios/lander_subsystems.rhai`, `assets/vessels/landers/descent_lander.usda`
@@ -41,8 +41,17 @@ The reference is the lander: `assets/models/Lander.mo`,
 
 ## 1. The control law → a Modelica model
 
-The model reads what the vessel **senses** and outputs force/torque. It is a
-`SimComponent` bound by `lunco:modelicaModel` and self-wired by `lunco:simWires`.
+The model reads what the vessel **senses** and outputs force/torque. It is a PROGRAM,
+and a program is a prim: the vessel's own flight-control system is inseparable from the
+airframe, so the vessel prim applies `LuncoProgramAPI` and names the model in place —
+`uniform asset lunco:program:sourceAsset = @models/MyController.mo@`. Its `inputs:` ARE
+the vessel's control surface. A control law that is *bolted on* (a guidance component, a
+supervisory script) is a `def LuncoProgram` CHILD prim instead, so deleting the prim
+removes the behaviour. Ports are wired with native USD connections (§3).
+
+Because it drives a force on a body the client predicts, it must promise it steps fast
+enough for that: `uniform bool lunco:program:realtimeSafe = true`. Without the promise
+the wiring pass refuses it a `force_*`/`torque_*` port and says why.
 
 ```modelica
 model MyController
@@ -75,8 +84,10 @@ end MyController;
 
 ## 2. High-level logic → rhai, event-driven
 
-A `lunco:scriptPath` scenario on the vessel does supervision and sequencing —
-**never a control loop**. React to events; don't poll or step.
+A `def LuncoProgram` child prim on the vessel, naming a `.rhai` scenario
+(`uniform asset lunco:program:sourceAsset = @scenarios/my_supervisor.rhai@`), does
+supervision and sequencing — **never a control loop**. React to events; don't poll or
+step.
 
 ```rhai
 fn on_event(me, evt) {
@@ -86,7 +97,9 @@ fn on_event(me, evt) {
 ```
 
 - Phase timing comes from the mission sequencer (`wait`, `wait_for`, `wait_until`) or
-  `lunco:portEvents` (Modelica threshold crossings → bus events), not `dt` counting.
+  from `LuncoPortEvent` child prims (a threshold crossing on a model port → a bus
+  event), not `dt` counting. One prim per rule:
+  `def LuncoPortEvent "LowFuel" { uniform token lunco:event:port = "m_prop"; uniform token lunco:event:op = "lt"; double lunco:event:threshold = 200.0; uniform token lunco:event:emit = "lander_low_fuel" }`.
 - **Do not** write the vessel's command ports every tick from rhai. If you're tempted
   to, the logic belongs in the model (math) or the wiring (authority).
 
@@ -100,10 +113,15 @@ def "Altimeter" (prepend references = @../../vessels/sensors/altimeter.usda@</Al
 { double3 xformOp:translate = (0, -3.3, 0); uniform token[] xformOpOrder = ["xformOp:translate"] }
 ```
 
-Wire sensor outputs → model inputs in `lunco:simWires` (`provider:consumer`), e.g.
-`velocity_y:descent_rate`. Wired inputs are live (they reach the solver). Physical
-constants a model needs (mass, inertia) come from the body's own ports
-(`mass:vehicle_mass`, `inertia_xx:inertia_xx`) — USD-derived, not magic numbers.
+A wire is a native USD connection, authored on the prim that CONSUMES the value —
+`float inputs:descent_rate.connect = </Lander.outputs:velocity_y>`,
+`float inputs:altitude.connect = </Lander/Altimeter.outputs:range>`. Wired inputs are
+live (they reach the solver). Physical constants a model needs (mass, inertia) come from
+the body's own ports (`inputs:vehicle_mass.connect = </Lander.outputs:mass>`,
+`inputs:inertia_xx.connect = …`) — USD-derived, not magic numbers.
+
+A **parameter** is an input with a constant instead of a connection:
+`float inputs:kv = 1.2`. Wire it later and nothing about the model changes.
 
 ## 4. Control authority → the `piloted` signal + possession
 
@@ -115,7 +133,7 @@ constants a model needs (mass, inertia) come from the body's own ports
 - The internal controller **yields** to whoever possesses via the **`piloted`** port:
   a read-only cosim port (`PILOTED_BACKEND`, `lunco-cosim/src/ports.rs`) that is `1.0`
   when any session owns the vessel (`SessionRegistry::owner_of(...).is_some()`), else `0`.
-- Wire it (`piloted:piloted`) into the model and gate on it:
+- Wire it (`float inputs:piloted.connect = </Lander.outputs:piloted>`) into the model and gate on it:
   `cmd = piloted ? pilot_stick : gnc`. Because it's wired it's a live input — **no
   in-model flag, no rhai toggle, no per-tick check.** Possession is the single source
   of truth; Rust never reasons about "autopilot" vs "user".
@@ -172,11 +190,14 @@ def "Controls" (
    clamps; DIRECT control path; a `piloted` gate. Der-feed any tunable gain you want
    Inspector-editable at sim-rate.
 2. Reference the sensors it needs from `assets/vessels/sensors/` and mount them.
-3. In the vessel prim: `lunco:modelicaModel`, `lunco:simWires` (sensor+body ports →
-   model inputs, incl. `piloted:piloted`, and model force/torque → body), and a
-   `Controls` child that `references` a profile (`</LanderControls>`) so the pilot's
-   intents reach the stick ports.
-4. Add a `lunco:scriptPath` rhai supervisor for events/sequencing (no control loop).
+3. On the vessel prim: apply `LuncoProgramAPI`, name the model
+   (`uniform asset lunco:program:sourceAsset = @models/MyController.mo@`), promise
+   `uniform bool lunco:program:realtimeSafe = true`, author the connections (sensor +
+   body ports → model `inputs:`, incl. `inputs:piloted`, and model force/torque → the
+   body), and add a `Controls` child that `references` a profile (`</LanderControls>`)
+   so the pilot's intents reach the stick ports.
+4. Add a `def LuncoProgram` child prim naming a `.rhai` supervisor for events/sequencing
+   (no control loop), with a `LuncoPortEvent` child per threshold rule.
 5. Verify: unpossessed → the GNC flies it; possess → the pilot drives (gate flips via
    `piloted`); release → GNC resumes. Tune live via the Inspector or `set()`.
 

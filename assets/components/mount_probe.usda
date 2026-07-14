@@ -14,13 +14,14 @@
 # makes the plug coincide with the socket. The plug sits 0.4 m above the part origin
 # on purpose, so the snap must CANCEL that offset — the visible proof mount frames
 # derive placement rather than trusting a hand-typed transform.
-def Cube "Probe" (
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI", "LuncoCatalogAPI"]
+#
+# The root is an `Xform` — a part, not a cube — so the visible body is an ordinary child
+# gprim that both renders and collides, and the rigid body is the root.
+def Xform "Probe" (
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "LuncoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = true
-    double size = 0.8
-    color3f[] primvars:displayColor = [(0.9, 0.2, 0.6)] # magenta
     float physics:mass = 1.0
     # Joints aren't replicated; keep this a stable kinematic-coupled body on clients
     # (same rule as the JointTest/Base bodies).
@@ -28,6 +29,15 @@ def Cube "Probe" (
 
     uniform token lunco:mount:plug = "probe"
     rel lunco:mount:frame = </Probe/Mounts/hub>
+
+    def Cube "Body" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 0.8
+        color3f[] primvars:displayColor = [(0.9, 0.2, 0.6)] # magenta
+        bool physics:collisionEnabled = true
+    }
 
     def Xform "Mounts"
     {
