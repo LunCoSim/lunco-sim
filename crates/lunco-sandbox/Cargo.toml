@@ -122,7 +122,10 @@ lunco-usd = { path = "../lunco-usd", default-features = false }
 # the USD-reading systems below read the LIVE composed stage first, falling back
 # to the flattened `stage.reader` only for recipe-less legacy assets.
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
-# USD→DEM bridge: read `lunco:terrain:demSource` off authored terrain prims.
+# USD→terrain projection: authored terrain prims → DEM request + layer stack, and
+# hand edits back onto the document's runtime layer. Render-free, so the headless
+# server gets its terrain collider without linking any UI.
+lunco-usd-terrain = { path = "../lunco-usd-terrain" }
 openusd = { workspace = true }
 # `lunco-sandbox-edit` is NOT optional: the headless server needs its
 # `commands::SpawnCommandPlugin` (runtime spawn/move + `NetReplicate` tagging).

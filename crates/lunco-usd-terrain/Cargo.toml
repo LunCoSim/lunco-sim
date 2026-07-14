@@ -1,0 +1,30 @@
+[package]
+name = "lunco-usd-terrain"
+version = "0.1.0"
+edition = "2021"
+
+# The USD→terrain projector: authored terrain prims (`lunco:assetMode = "dem"` +
+# `lunco:layer:*` child layer prims) → `lunco-terrain-surface`'s DEM request +
+# composable layer stack, and the authoring tier back (hand edits → USD ops on the
+# document's runtime layer). Peer of `lunco-usd-avian` (physics), `lunco-usd-sim`
+# (behaviour), `lunco-usd-bevy` (render) — one crate per USD→domain projection.
+#
+# Render-free by construction: a headless server projects a USD terrain (and gets
+# its collider) without linking any UI. The terrain material rides the universal
+# USD material path in `lunco-usd-bevy`, so nothing here names a material.
+[dependencies]
+bevy = { workspace = true }
+openusd = { workspace = true }
+lunco-usd = { path = "../lunco-usd", default-features = false }
+lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-terrain-surface = { path = "../lunco-terrain-surface" }
+lunco-obstacle-field = { path = "../lunco-obstacle-field" }
+lunco-assets = { workspace = true }
+lunco-doc = { path = "../lunco-doc" }
+# The canonical change-journal (`JournalResource`): an authored edit is ONE undo
+# step / one journal change set. `default-features = false` keeps `lunco-doc-bevy/ui`
+# (→ bevy_egui) out of the headless closure.
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+
+[lints]
+workspace = true
