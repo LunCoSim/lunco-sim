@@ -34,9 +34,10 @@ avian3d = { workspace = true }
 big_space.workspace = true
 lunco-core = { path = "../lunco-core" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
-# `FlightSoftware` = the topology signal for "is a wheeled vehicle" in the
-# predict-membership queries (replaces the removed `RoverVessel` marker).
-lunco-fsw = { path = "../lunco-fsw" }
+# NO `lunco-fsw`: its only use here was `FlightSoftware` as the "is a wheeled
+# vehicle" topology signal in the predict-membership queries, and those moved out
+# with the netcode (→ `lunco-networking::prediction`). Nothing in the editor names
+# it any more, so the edge is gone.
 lunco-time = { path = "../lunco-time" }
 lunco-doc = { path = "../lunco-doc" }
 # Shader source is a journaled DOMAIN (ShaderDocument): edits record to the Twin

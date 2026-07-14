@@ -1777,6 +1777,15 @@ impl Plugin for SandboxCorePlugin {
             let mode = lunco_networking::NetworkMode::resolve(self.headless);
             info!("[net] networking mode: {mode:?}");
             app.add_plugins(lunco_networking::LunCoNetworkingPlugin { mode });
+            // Client-side netcode over avian bodies: snapshot interpolation,
+            // prediction, rollback, reconciliation, correction smoothing. Used to
+            // ride along inside `lunco_sandbox_edit::commands::SpawnCommandPlugin`
+            // (which still registers `apply_replicated_spawns`, the spawn half — see
+            // `lunco_core::NetcodeSet` for how the two halves stay ordered). Added
+            // here, in `SandboxCorePlugin`, so BOTH the GUI and the headless server
+            // get it exactly once; gated on `networking` like every other
+            // `lunco_networking` use in this crate.
+            app.add_plugins(lunco_networking::prediction::NetcodePredictionPlugin);
             // Scenario distribution Phase 4: once a connected client has fully
             // downloaded the host's advertised scenario, load its entry scene from
             // the `scenario://` cache (read-only consume). The bridge lives here —

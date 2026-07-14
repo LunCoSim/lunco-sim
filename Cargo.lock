@@ -7430,7 +7430,6 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-environment",
- "lunco-fsw",
  "lunco-materials",
  "lunco-mobility",
  "lunco-modelica",
