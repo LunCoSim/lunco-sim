@@ -15,10 +15,12 @@
 #   "Built USD joint PhysicsDistanceJoint ..." with NO "Unsupported" warning.
 # Loaded by `sandbox --scene scenes/sandbox/g7_joints_test.usda`.
 
-def Xform "SandboxScene"
+def Xform "SandboxScene" (
+    doc = "Three different joints on display: a ball joint that swings inside a cone, a tether that holds at a fixed distance, and a hinge that only turns around one axis."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
+)
 {
-    custom bool lunco:spawnable = false
-    custom string lunco:description = "Three different joints on display: a ball joint that swings inside a cone, a tether that holds at a fixed distance, and a hinge that only turns around one axis."
+    uniform bool lunco:spawnable = false
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]

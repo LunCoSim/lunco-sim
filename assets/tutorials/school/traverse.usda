@@ -38,7 +38,10 @@
 # arrival objectives never fire. Kept flat here precisely so those lessons pass;
 # activate relief and re-height the checkpoints together.
 # NEEDS: DEM crater/rille terrain + checkpoint re-heighting (roadmap P0.2).
-def Xform "Traverse"
+def Xform "Traverse" (
+    doc = "The 1000×1000 m event traverse: start NW, POI at centre, SE highland shadow, low ESE sun, Earth low on the E horizon (centre in radio-shadow). Placeholder terrain until the DEM crater/rille lands."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
+)
 {
 
     # UsdPhysicsMaterialAPI — friction/restitution live on a Material
@@ -54,8 +57,7 @@ def Xform "Traverse"
             float physics:staticFriction = 1.0
         }
     }
-    custom bool lunco:spawnable = false
-    custom string lunco:description = "The 1000×1000 m event traverse: start NW, POI at centre, SE highland shadow, low ESE sun, Earth low on the E horizon (centre in radio-shadow). Placeholder terrain until the DEM crater/rille lands."
+    uniform bool lunco:spawnable = false
 
     # ── Published scene geometry constants (the ДЗЗ side needs these to match) ──
     # Sun and Earth directions are authored here as the single source of truth so

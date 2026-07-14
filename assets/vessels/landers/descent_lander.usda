@@ -40,7 +40,8 @@
 #   Backspace   — release possession
 
 def Cylinder "DescentLander" (
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    doc = "A powered-descent lander that flies itself down on its own GNC. Possess it to take the stick: Space thrusts, WASD tilts, Q/E turns."
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI", "LuncoCatalogAPI"]
 )
 {
     # Emission REQUIRES a material. `displayColor` / `displayOpacity` are real
@@ -97,8 +98,7 @@ def Cylinder "DescentLander" (
     # A scene component, not a palette item: it descends under its own GNC the
     # moment it exists, so spawning one into an arbitrary scene is surprising.
     # Reference it from a scene instead. (Same call as `rovers/differential_rig.usda`.)
-    custom bool lunco:spawnable = false
-    custom string lunco:description = "A powered-descent lander that flies itself down on its own GNC. Possess it to take the stick: Space thrusts, WASD tilts, Q/E turns."
+    uniform bool lunco:spawnable = false
 
     uniform token axis = "Y"
     double radius = 2.5

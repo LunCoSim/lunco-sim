@@ -11,10 +11,11 @@
 #
 # Drop it anywhere with `prepend references` + `xformOp:translate`.
 def Xform "LandingLocationMarker" (
+    prepend apiSchemas = ["LuncoCatalogAPI"]
     kind = "component"
 )
 {
-    custom bool lunco:spawnable = true
+    uniform bool lunco:spawnable = true
     custom string lunco:landingLocation = "true"
 
     # Emission REQUIRES a material. `displayColor` / `displayOpacity` are real

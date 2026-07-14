@@ -15,7 +15,10 @@
 #   contact_force alongside its rigid-body ports.
 # Loaded by `sandbox --scene scenes/sandbox/sensor_test.usda`.
 
-def Xform "SandboxScene"
+def Xform "SandboxScene" (
+    doc = "A box resting on the ground carrying simple sensors: one that feels motion, one that measures distance to the ground, and one that feels touch. Checks that each reports sensible numbers."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
+)
 {
 
     # UsdPhysicsMaterialAPI — friction/restitution live on a Material
@@ -31,8 +34,7 @@ def Xform "SandboxScene"
             float physics:staticFriction = 1.0
         }
     }
-    custom bool lunco:spawnable = false
-    custom string lunco:description = "A box resting on the ground carrying simple sensors: one that feels motion, one that measures distance to the ground, and one that feels touch. Checks that each reports sensible numbers."
+    uniform bool lunco:spawnable = false
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]

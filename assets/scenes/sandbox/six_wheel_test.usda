@@ -16,7 +16,10 @@
 # port drive_left" and ".../Wheel_R* drive to FSW port drive_right" (the authored
 # bindings, not index parity). DriveRover should yaw the body by skid steering.
 
-def Xform "SixWheelTest"
+def Xform "SixWheelTest" (
+    doc = "A six-wheel rover on flat ground. Checks that all six wheels drive together and the rover can turn by skidding its left and right sides."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
+)
 {
 
     # UsdPhysicsMaterialAPI — friction/restitution live on a Material
@@ -32,8 +35,7 @@ def Xform "SixWheelTest"
             float physics:staticFriction = 1.0
         }
     }
-    custom bool lunco:spawnable = false
-    custom string lunco:description = "A six-wheel rover on flat ground. Checks that all six wheels drive together and the rover can turn by skidding its left and right sides."
+    uniform bool lunco:spawnable = false
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]

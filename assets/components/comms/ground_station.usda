@@ -16,10 +16,11 @@
 # The comms layer places it on the (rotating) body from the ephemeris — its
 # scene transform is ignored. Elevation mask defaults to a realistic 5°.
 def Xform "GroundStation" (
+    prepend apiSchemas = ["LuncoCatalogAPI"]
     kind = "component"
 )
 {
-    custom bool lunco:spawnable = true
+    uniform bool lunco:spawnable = true
     # Connectivity endpoint on Earth. Anchored (lunco:anchor:*) so the pose
     # system tracks it automatically. `class = "earth"` marks it a route root; a
     # 5° elevation mask is realistic for a DSN dish.

@@ -24,11 +24,11 @@ def Xform "SixWheelRover" (
         "PhysicsRigidBodyAPI", "PhysxRigidBodyAPI",
         "PhysicsMassAPI",
         "PhysxVehicleContextAPI",
-        "PhysxVehicleTankDifferentialAPI"
+        "PhysxVehicleTankDifferentialAPI", "LuncoCatalogAPI"
     ]
 )
 {
-    custom bool lunco:spawnable = true
+    uniform bool lunco:spawnable = true
     float physics:mass = 1400.0
     float lunco:spawnLift = 1.0
     float physxRigidBody:linearDamping = 0.5

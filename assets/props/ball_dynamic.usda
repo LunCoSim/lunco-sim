@@ -10,10 +10,10 @@
 # else. `lunco:spawnLift` lifts the spawn point so it drops onto the terrain.
 def Xform "BallDynamic" (
     kind = "component"
-    prepend apiSchemas = ["PhysicsRigidBodyAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LuncoCatalogAPI"]
 )
 {
-    custom bool lunco:spawnable = true
+    uniform bool lunco:spawnable = true
 
     # UsdPhysicsMaterialAPI — friction/restitution live on a Material
     # bound with the purpose-specific `material:binding:physics`, which is

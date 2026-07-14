@@ -17,7 +17,10 @@
 #   sandbox --scene tutorials/first_drive/first_drive.usda
 # or start it from the Tutorials panel.
 
-def Xform "FirstDrive"
+def Xform "FirstDrive" (
+    doc = "Take control of a rover and drive it to the glowing flag. Click the rover (or press F) to possess it, then drive with W/A/S/D."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
+)
 {
 
     # UsdPhysicsMaterialAPI — friction/restitution live on a Material
@@ -33,8 +36,7 @@ def Xform "FirstDrive"
             float physics:staticFriction = 1.0
         }
     }
-    custom bool lunco:spawnable = false
-    custom string lunco:description = "Take control of a rover and drive it to the glowing flag. Click the rover (or press F) to possess it, then drive with W/A/S/D."
+    uniform bool lunco:spawnable = false
 
     # ── Catalog entry (hybrid: metadata rides the scene, not tutorials.json) ──
     # This scene-backed lesson declares its own catalog row here on the default

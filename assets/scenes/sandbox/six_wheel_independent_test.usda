@@ -14,7 +14,10 @@
 # Verify (server log): "Detected custom driveMix for /.../Rover (6 ports)";
 # six "Wired wheel .../Wheel_LN drive to FSW port drive_wM" lines.
 
-def Xform "SixWheelIndependentTest"
+def Xform "SixWheelIndependentTest" (
+    doc = "A six-wheel rover where every wheel has its own motor. Checks that all six motors are wired up and can each be driven on its own."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
+)
 {
 
     # UsdPhysicsMaterialAPI — friction/restitution live on a Material
@@ -30,8 +33,7 @@ def Xform "SixWheelIndependentTest"
             float physics:staticFriction = 1.0
         }
     }
-    custom bool lunco:spawnable = false
-    custom string lunco:description = "A six-wheel rover where every wheel has its own motor. Checks that all six motors are wired up and can each be driven on its own."
+    uniform bool lunco:spawnable = false
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]

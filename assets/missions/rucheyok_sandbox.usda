@@ -6,10 +6,11 @@
 )
 
 def Xform "RucheyokSandbox" (
+    prepend apiSchemas = ["LuncoCatalogAPI"]
     kind = "assembly"
 )
 {
-    custom bool lunco:spawnable = false
+    uniform bool lunco:spawnable = false
 
     def Xform "Rucheyok" (
         prepend references = @../vessels/rovers/rucheyok/rucheyok.usda@

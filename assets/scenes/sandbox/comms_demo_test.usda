@@ -11,11 +11,12 @@
 # frame that grounds every scene-local antenna. Link state is published as
 # ports: e.g. `read_port <rover>/comms:route_earth:connected`.
 def Xform "CommsDemoScene" (
+    doc = "MoonDAO comms demo: Malapert Massif site with rover, base mast, lunar relay (ELFO) and the three DSN complexes on Earth — connectivity via the generic link kernel (lunco:linkNode; link.aos/link.los events)."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
     kind = "assembly"
 )
 {
     bool lunco:spawnable = false
-    string lunco:description = "MoonDAO comms demo: Malapert Massif site with rover, base mast, lunar relay (ELFO) and the three DSN complexes on Earth — connectivity via the generic link kernel (lunco:linkNode; link.aos/link.los events)."
 
     # Site frame: Shackleton–de Gerlache connecting ridge (Artemis site).
     # Malapert Massif summit region — the classic lunar comms-relay site:

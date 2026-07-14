@@ -11,7 +11,10 @@
 # at the base: climbing straight up the fall-line works; steering across the grade
 # rolls it — which is the whole lesson. Slope angle is tunable via the Ramp's
 # rotateXYZ; ~18° sits on the edge for this rover.
-def Xform "SlopeTest"
+def Xform "SlopeTest" (
+    doc = "A borderline ~18° grade with the top-heavy Hauler at its base — the tip-over teaching stage."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
+)
 {
 
     # UsdPhysicsMaterialAPI — friction/restitution live on a Material
@@ -34,8 +37,7 @@ def Xform "SlopeTest"
             float physics:staticFriction = 1.0
         }
     }
-    custom bool lunco:spawnable = false
-    custom string lunco:description = "A borderline ~18° grade with the top-heavy Hauler at its base — the tip-over teaching stage."
+    uniform bool lunco:spawnable = false
 
     # Flat approach plot, ±60 m.
     def Cube "Ground" (

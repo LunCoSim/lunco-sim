@@ -8,10 +8,10 @@
 
 def Cylinder "Motor" (
     kind = "component"
-    prepend apiSchemas = ["LunCoActuatorAPI"]
+    prepend apiSchemas = ["LunCoActuatorAPI", "LuncoCatalogAPI"]
 )
 {
-    custom bool lunco:spawnable = true
+    uniform bool lunco:spawnable = true
     # --- Geometry ---
     double radius = 0.3
     double height = 0.8

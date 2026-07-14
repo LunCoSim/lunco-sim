@@ -1861,6 +1861,30 @@ impl DefaultPrim {
         self.data.field(&attr_path, "default")
     }
 
+    /// The prim's `doc` metadata — USD's own human-readable "what is this thing"
+    /// string, which usdview and every other DCC already display.
+    ///
+    /// Metadata on the prim, NOT an attribute on it, so it is read off the prim
+    /// spec rather than through [`value`](Self::value). Authored in the metadata
+    /// parens:
+    ///
+    /// ```usda
+    /// def Xform "LandingPad" (
+    ///     doc = "Blast-hardened landing pad — sintered disc with a centre hub."
+    /// )
+    /// ```
+    ///
+    /// We used to invent `custom string lunco:description` for exactly this, which
+    /// is the same mistake as `inputs:reflectance` (USD had `inputs:ior`) and
+    /// `primvars:materialType` (never primvar data): a bespoke name for a field USD
+    /// already defines. The invention is deleted; this is its replacement.
+    pub fn documentation(&self) -> Option<String> {
+        self.data
+            .field(&self.path, "documentation")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+    }
+
     /// Typed read, via the same `TryFrom<Value>` conversion `UsdRead::scalar`
     /// uses — so a `bool` attribute reads as a `bool` and nothing else.
     pub fn scalar<T: TryFrom<Value>>(&self, attr: &str) -> Option<T> {

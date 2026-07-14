@@ -15,11 +15,12 @@
 # Weak torque + low grip are authored so it also struggles up the borderline wall
 # — feel-check that the drivetrain honours them (05_SEMINAR_TUTORIALS.md §C).
 def Xform "RoverAwful" (
+    doc = "Awful rover (Overloaded Hauler) — top-heavy, weak motors, poor grip. Tips at the slightest across-slope steer and barely climbs. The expert tier: only a careful straight-up line and gentle inputs get it to the floor and back."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
     prepend references = @lunco://vessels/rovers/six_wheel_rover.usda@</SixWheelRover>
 )
 {
-    custom bool lunco:spawnable = true
-    custom string lunco:description = "Awful rover (Overloaded Hauler) — top-heavy, weak motors, poor grip. Tips at the slightest across-slope steer and barely climbs. The expert tier: only a careful straight-up line and gentle inputs get it to the floor and back."
+    uniform bool lunco:spawnable = true
 
     # Top-heavy: CoM ABOVE the axles + heavier + under-damped → rolls easily.
     float3 physics:centerOfMass = (0.0, 0.45, 0.0)

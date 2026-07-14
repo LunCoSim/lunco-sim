@@ -20,7 +20,7 @@
 # ~−HingeL.angle with it. No ground-contact or chassis-roll confounds.
 
 def Xform "DiffRig" (
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI", "LuncoCatalogAPI"]
 )
 {
     float physics:mass = 3000.0

@@ -11,7 +11,10 @@
 # off, the step under the left-front corner should ROLL the chassis noticeably
 # more than the coupled case — isolating the differential's leveling effect.
 
-def Xform "RockerBogieTest"
+def Xform "RockerBogieTest" (
+    doc = "The rocker-bogie rover over a step, but with the body-leveling linkage switched off. The body tips more, showing what the linkage normally does."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
+)
 {
 
     # UsdPhysicsMaterialAPI — friction/restitution live on a Material
@@ -27,8 +30,7 @@ def Xform "RockerBogieTest"
             float physics:staticFriction = 1.0
         }
     }
-    custom bool lunco:spawnable = false
-    custom string lunco:description = "The rocker-bogie rover over a step, but with the body-leveling linkage switched off. The body tips more, showing what the linkage normally does."
+    uniform bool lunco:spawnable = false
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]

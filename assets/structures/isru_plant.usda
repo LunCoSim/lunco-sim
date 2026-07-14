@@ -7,10 +7,12 @@
 
 # ISRU Pilot Plant — drill rig + processor box + two storage tanks.
 # Staged at the PSR-facing slope (toward the cold-trap ice).
-def Xform "IsruPlant"
+def Xform "IsruPlant" (
+    doc = "ISRU pilot plant — drill, processor and propellant tanks. Mines regolith/ice for water and fuel; site it toward the resource (PSR-facing slope), within rover range of the pad."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
+)
 {
-    custom bool lunco:spawnable = true
-    custom string lunco:description = "ISRU pilot plant — drill, processor and propellant tanks. Mines regolith/ice for water and fuel; site it toward the resource (PSR-facing slope), within rover range of the pad."
+    uniform bool lunco:spawnable = true
 
     # Processor housing.
     def Cube "Processor" (

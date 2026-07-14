@@ -187,6 +187,48 @@ class "LuncoMaterialAPI" (
     )
 }
 
+class "LuncoCatalogAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Marks a `*.usda` as a **spawnable part** — something the editor offers
+    in its palette and drops into the scene — and carries the one authoring hint
+    that placement needs.
+
+    Applied to the stage's `defaultPrim`, because the unit of spawning is the FILE:
+    the catalogue asks each asset whether it is a part, and spawning it mounts its
+    default prim. An asset that does not apply this schema is not a part, which is
+    why `lunco:spawnable` defaults to `false` — see its doc.
+
+    WHAT IS NOT HERE: the human-readable "what is this thing" blurb. That was
+    `lunco:description`, an invented name for a field USD already has — every prim
+    carries `doc` metadata, which is exactly this string and which usdview and every
+    other DCC already display. It is now authored as `doc = "..."` in the prim's
+    metadata, and the invention is deleted. Do not re-add it."""
+)
+{
+    uniform bool lunco:spawnable = false (
+        doc = """Whether this asset is a spawnable part.
+
+        **Opt-in**, and deliberately so. It used to default to `true`, which meant
+        the catalogue offered *every* USD file in the project — so every scene,
+        mission and scenario had to remember to disclaim it, and three scenes had
+        silently forgotten to and showed up as spawnable parts. A default that must
+        be disclaimed everywhere is a default that leaks.
+
+        Uniform: an asset does not stop being a part partway through a shot."""
+    )
+    float lunco:spawnLift = 0 (
+        doc = """Metres to lift the spawn point above the click/terrain hit.
+
+        Data, not a category rule. A dynamic prop that must settle onto the terrain
+        wants a positive value; a structure authored with its origin already at
+        ground level wants `0`. Encoding that as "props get lifted, structures
+        don't" would put a content decision in Rust."""
+    )
+}
+
 class "LuncoTerrainEditAPI" (
     inherits = </APISchemaBase>
     customData = {

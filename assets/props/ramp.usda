@@ -7,10 +7,11 @@
 
 # Angled ramp — static cuboid tilted ~17°.
 def Xform "Ramp" (
+    prepend apiSchemas = ["LuncoCatalogAPI"]
     kind = "component"
 )
 {
-    custom bool lunco:spawnable = true
+    uniform bool lunco:spawnable = true
 
     # UsdPhysicsMaterialAPI — friction/restitution live on a Material
     # bound with the purpose-specific `material:binding:physics`, which is

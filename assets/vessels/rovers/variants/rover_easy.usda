@@ -18,11 +18,12 @@
 # torque/friction/steer are authored as intent and should be feel-checked in a
 # playtest (see 05_SEMINAR_TUTORIALS.md §C).
 def Xform "RoverEasy" (
+    doc = "Easy rover (Explorer LT) — low centre of mass, planted and forgiving. The trainer tier: it climbs the borderline slope and resists tipping. Start here."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
     prepend references = @lunco://vessels/rovers/six_wheel_rover.usda@</SixWheelRover>
 )
 {
-    custom bool lunco:spawnable = true
-    custom string lunco:description = "Easy rover (Explorer LT) — low centre of mass, planted and forgiving. The trainer tier: it climbs the borderline slope and resists tipping. Start here."
+    uniform bool lunco:spawnable = true
 
     # Planted: CoM well below the axles, extra mass, strong damping.
     float3 physics:centerOfMass = (0.0, -0.25, 0.0)

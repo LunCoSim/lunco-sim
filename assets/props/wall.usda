@@ -7,10 +7,11 @@
 
 # Wall — static cuboid barrier.
 def Xform "Wall" (
+    prepend apiSchemas = ["LuncoCatalogAPI"]
     kind = "component"
 )
 {
-    custom bool lunco:spawnable = true
+    uniform bool lunco:spawnable = true
     def Cube "Body" (
         prepend apiSchemas = ["PhysicsCollisionAPI"]
     )

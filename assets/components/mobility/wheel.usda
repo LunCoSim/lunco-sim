@@ -10,10 +10,10 @@
 
 def Cylinder "Wheel" (
     kind = "component"
-    prepend apiSchemas = ["LunCoMobilityComponentAPI", "LuncoMaterialAPI"]
+    prepend apiSchemas = ["LunCoMobilityComponentAPI", "LuncoMaterialAPI", "LuncoCatalogAPI"]
 )
 {
-    custom bool lunco:spawnable = true
+    uniform bool lunco:spawnable = true
     # --- Geometry ---
     # `axis = "X"` so the cylinder lies along the rover's left/right
     # axle direction (perpendicular to forward). Instances may

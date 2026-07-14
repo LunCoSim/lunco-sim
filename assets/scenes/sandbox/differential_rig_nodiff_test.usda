@@ -8,7 +8,10 @@
 # G5 isolated differential test — coupling OFF (control). Local stiffness=0
 # opinion disables the coupling. RockerR should stay at ≈0 (no mirror).
 
-def Xform "DiffRigTest"
+def Xform "DiffRigTest" (
+    doc = "The same balancing-linkage test as the differential rig, but with the linkage switched off. Shows what the linkage does by showing what changes when it is gone."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
+)
 {
 
     # UsdPhysicsMaterialAPI — friction/restitution live on a Material
@@ -24,8 +27,7 @@ def Xform "DiffRigTest"
             float physics:staticFriction = 1.0
         }
     }
-    custom bool lunco:spawnable = false
-    custom string lunco:description = "The same balancing-linkage test as the differential rig, but with the linkage switched off. Shows what the linkage does by showing what changes when it is gone."
+    uniform bool lunco:spawnable = false
 
     def Cube "Ground" (prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"])
     {

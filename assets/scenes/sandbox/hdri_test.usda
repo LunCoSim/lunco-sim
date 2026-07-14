@@ -16,9 +16,10 @@
 # should show a blurred version of it, and the diffuse one should pick up the
 # sky's colour gradient across its surface — none of which a flat ambient can
 # do, and all of which come from the same cubemap.
-def Xform "HdriTest"
+def Xform "HdriTest" (
+    doc = "HDRI environment probe: a textured UsdLuxDomeLight driving skybox + image-based lighting on a row of metal/rough spheres."
+)
 {
-    custom string lunco:description = "HDRI environment probe: a textured UsdLuxDomeLight driving skybox + image-based lighting on a row of metal/rough spheres."
 
     def DomeLight "Sky"
     {

@@ -7,10 +7,11 @@
 
 # Static ball — collider + mesh, no rigid body (stays put).
 def Xform "BallStatic" (
+    prepend apiSchemas = ["LuncoCatalogAPI"]
     kind = "component"
 )
 {
-    custom bool lunco:spawnable = true
+    uniform bool lunco:spawnable = true
     def Sphere "Body" (
         prepend apiSchemas = ["PhysicsCollisionAPI"]
     )

@@ -12,7 +12,10 @@
 # its arrival objective. The medium rover spawns at the SW corner.
 #
 #   sandbox --scene tutorials/basic/driving_basics.usda
-def Xform "DrivingBasics"
+def Xform "DrivingBasics" (
+    doc = "Flat practice plot with one gentle ramp and a finish flag — the S1 driving-basics stage."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
+)
 {
 
     # UsdPhysicsMaterialAPI — friction/restitution live on a Material
@@ -35,8 +38,7 @@ def Xform "DrivingBasics"
             float physics:staticFriction = 1.0
         }
     }
-    custom bool lunco:spawnable = false
-    custom string lunco:description = "Flat practice plot with one gentle ramp and a finish flag — the S1 driving-basics stage."
+    uniform bool lunco:spawnable = false
 
     # Flat plot, ±60 m.
     def Cube "Ground" (

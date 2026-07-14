@@ -16,10 +16,11 @@
 # `physical` variant can supply its own drop without losing to a stronger local
 # opinion (USD LIVERPS strength: local > variant/reference).
 def Xform "Drivetrain" (
+    prepend apiSchemas = ["LuncoCatalogAPI"]
     kind = "component"
 )
 {
-    custom bool lunco:spawnable = true
+    uniform bool lunco:spawnable = true
     over "Wheel_FL"
     {
         double3 xformOp:translate = (-1.0, -0.15, -1.225)

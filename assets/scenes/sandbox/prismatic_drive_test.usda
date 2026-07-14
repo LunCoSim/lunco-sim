@@ -28,7 +28,10 @@
 #
 # Loaded by `sandbox --scene scenes/sandbox/prismatic_drive_test.usda`.
 
-def Xform "SandboxScene"
+def Xform "SandboxScene" (
+    doc = "A platform that slides up and down a vertical rail. Checks that a motorized slider can move to a chosen height and hold there against gravity."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
+)
 {
 
     # UsdPhysicsMaterialAPI — friction/restitution live on a Material
@@ -44,8 +47,7 @@ def Xform "SandboxScene"
             float physics:staticFriction = 1.0
         }
     }
-    custom bool lunco:spawnable = false
-    custom string lunco:description = "A platform that slides up and down a vertical rail. Checks that a motorized slider can move to a chosen height and hold there against gravity."
+    uniform bool lunco:spawnable = false
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]

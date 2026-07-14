@@ -5,9 +5,11 @@
     metersPerUnit = 1
 )
 
-def Xform "Orion"
+def Xform "Orion" (
+    prepend apiSchemas = ["LuncoCatalogAPI"]
+)
 {
-    custom bool lunco:spawnable = true
+    uniform bool lunco:spawnable = true
     custom string lunco:name = "Orion Capsule"
     custom int lunco:ephemeris_id = -1024
     custom float lunco:hit_radius_m = 1000.0

@@ -7,11 +7,12 @@
 )
 
 def Xform "TerrainOnly" (
+    doc = "Bare scene: a free-flight camera and nothing else. Load a DEM on top with SpawnDemTerrain."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
     kind = "component"
 )
 {
-    custom bool lunco:spawnable = false
-    custom string lunco:description = "Bare scene: a free-flight camera and nothing else. Load a DEM on top with SpawnDemTerrain."
+    uniform bool lunco:spawnable = false
 
     # --- Avatar (Camera) --- freeflight, parked high so a spawned DEM (site
     #     elevation ~2 km) is in front of it before SetCameraLookAt reframes.

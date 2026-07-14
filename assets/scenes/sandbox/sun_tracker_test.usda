@@ -24,7 +24,10 @@
 #
 #   sandbox --scene scenes/sandbox/sun_tracker_test.usda
 
-def Xform "SunTrackerTest"
+def Xform "SunTrackerTest" (
+    doc = "A solar panel that turns to face the sun. A controller reads where the sun is and turns the panel to point at it; move the sun and watch the panel re-aim."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
+)
 {
 
     # UsdPhysicsMaterialAPI — friction/restitution live on a Material
@@ -40,8 +43,7 @@ def Xform "SunTrackerTest"
             float physics:staticFriction = 1.0
         }
     }
-    custom bool lunco:spawnable = false
-    custom string lunco:description = "A solar panel that turns to face the sun. A controller reads where the sun is and turns the panel to point at it; move the sun and watch the panel re-aim."
+    uniform bool lunco:spawnable = false
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]

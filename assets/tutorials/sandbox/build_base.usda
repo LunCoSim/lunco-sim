@@ -19,7 +19,10 @@
 #   sandbox --scene tutorials/sandbox/build_base.usda
 # or start it from the 🎓 Tutorials panel.
 
-def Xform "BuildBase"
+def Xform "BuildBase" (
+    doc = "Lay out a working lunar surface base from the Structures kit — power, habitat, comms, ISRU and a landing pad — and learn where each one goes and why."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
+)
 {
 
     # UsdPhysicsMaterialAPI — friction/restitution live on a Material
@@ -36,8 +39,7 @@ def Xform "BuildBase"
         }
     }
     # Environment, not a spawnable part.
-    custom bool lunco:spawnable = false
-    custom string lunco:description = "Lay out a working lunar surface base from the Structures kit — power, habitat, comms, ISRU and a landing pad — and learn where each one goes and why."
+    uniform bool lunco:spawnable = false
 
     # ── Catalog entry (hybrid: metadata rides the scene, not tutorials.json) ──
     # This scene-backed lesson declares its own catalog row here on the default

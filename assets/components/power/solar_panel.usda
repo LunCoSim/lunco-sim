@@ -10,10 +10,10 @@
 # children have PhysicsCollisionAPI only.
 def Xform "SolarPanel" (
     kind = "component"
-    prepend apiSchemas = ["PhysicsRigidBodyAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LuncoCatalogAPI"]
 )
 {
-    custom bool lunco:spawnable = true
+    uniform bool lunco:spawnable = true
     float physics:mass = 15.0
     float lunco:spawnLift = 2.0
 

@@ -8,10 +8,12 @@
 # Fission Surface Power System — reactor drum + shadow shield (flattened
 # sphere) + 4 umbrella radiators on a boom. Place offset + sunk, away from
 # the habitat (radiation standoff).
-def Xform "Fsps"
+def Xform "Fsps" (
+    doc = "Fission Surface Power — reactor drum, shadow shield and umbrella radiators. Steady kilowatts through the lunar night; site it well offset from the habitat for radiation standoff."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
+)
 {
-    custom bool lunco:spawnable = true
-    custom string lunco:description = "Fission Surface Power — reactor drum, shadow shield and umbrella radiators. Steady kilowatts through the lunar night; site it well offset from the habitat for radiation standoff."
+    uniform bool lunco:spawnable = true
 
     # Shadow shield — flattened sphere skirt at the base (the cone-berm fake).
     def Sphere "ShadowShield" (

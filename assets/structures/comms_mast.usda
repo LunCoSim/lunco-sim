@@ -7,10 +7,12 @@
 
 # LunaNet Comms Mast — tall tower + shallow dish (flattened sphere) + feed.
 # Wants a high ridge point for Earth line-of-sight.
-def Xform "CommsMast"
+def Xform "CommsMast" (
+    doc = "LunaNet comms mast — tower, dish and feed horn. The base's link home; put it on the highest ground you have for Earth line-of-sight."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
+)
 {
-    custom bool lunco:spawnable = true
-    custom string lunco:description = "LunaNet comms mast — tower, dish and feed horn. The base's link home; put it on the highest ground you have for Earth line-of-sight."
+    uniform bool lunco:spawnable = true
 
     def Cube "FootPad" (
         prepend apiSchemas = ["PhysicsCollisionAPI"]

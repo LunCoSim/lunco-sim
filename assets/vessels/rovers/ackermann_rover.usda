@@ -23,7 +23,7 @@ def Xform "AckermannRover" (
         "PhysicsRigidBodyAPI", "PhysxRigidBodyAPI",
         "PhysicsMassAPI",
         "PhysxVehicleContextAPI",
-        "PhysxVehicleAckermannSteeringAPI"
+        "PhysxVehicleAckermannSteeringAPI", "LuncoCatalogAPI"
     ]
     prepend variantSets = "drivetrain"
     variants = {
@@ -31,7 +31,7 @@ def Xform "AckermannRover" (
     }
 )
 {
-    custom bool lunco:spawnable = true
+    uniform bool lunco:spawnable = true
     # Emission REQUIRES a material: USD has no "display emissive" primvar the way
     # it has `displayColor`/`displayOpacity`, so the headlight glow is a
     # UsdPreviewSurface input on a Shader, bound to both lenses.

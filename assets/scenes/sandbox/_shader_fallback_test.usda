@@ -8,9 +8,10 @@
 # Robustness probe: a cube that (wrongly) points its material at pbr_lit.wgsl —
 # a shader LIBRARY with no @fragment entry. The app must NOT storm the pipeline
 # cache; it should keep the StandardMaterial (displayColor) and warn once.
-def Xform "ShaderFallbackTest"
+def Xform "ShaderFallbackTest" (
+    doc = "Robustness probe: a cube that wrongly points its material at a shader library with no fragment entry. The app must keep the StandardMaterial and warn once instead of storming the pipeline cache."
+)
 {
-    custom string lunco:description = "Robustness probe: a cube that wrongly points its material at a shader library with no fragment entry. The app must keep the StandardMaterial and warn once instead of storming the pipeline cache."
     def DistantLight "Sun"
     {
         float inputs:intensity = 8000

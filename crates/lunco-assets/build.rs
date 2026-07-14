@@ -25,6 +25,13 @@
 //! So: if you are tempted to bake a *value* out of an asset here, don't. Bake
 //! the name; read the value.
 //!
+//! TODO(manifest): the listing is still baked into the *binary*, so an asset
+//! added to a deployed bundle is invisible until the wasm is rebuilt — the
+//! bundle and the binary's idea of the bundle can drift. The fix is to emit this
+//! as a shipped `assets/manifest.json` and fetch it at boot (one request, before
+//! the per-asset reads that already happen). Then the name-listing is served by
+//! the bundle that owns it, and nothing about the assets lives in the binary.
+//!
 //! Build scripts run at compile time on the *host*, never on wasm, so the
 //! workspace `disallowed_methods` ban on `std::fs` (a wasm-runtime foot-gun)
 //! does not apply here. `clippy.toml`'s header already names `build.rs` as

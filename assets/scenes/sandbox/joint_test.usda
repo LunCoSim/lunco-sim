@@ -19,7 +19,10 @@
 #
 # Loaded by `sandbox --scene scenes/sandbox/joint_test.usda`.
 
-def Xform "SandboxScene"
+def Xform "SandboxScene" (
+    doc = "Two cubes glued together by a fixed joint. Drag one with the mouse and the other should follow exactly - a basic check that the joint holds."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
+)
 {
 
     # UsdPhysicsMaterialAPI — friction/restitution live on a Material
@@ -35,8 +38,7 @@ def Xform "SandboxScene"
             float physics:staticFriction = 1.0
         }
     }
-    custom bool lunco:spawnable = false
-    custom string lunco:description = "Two cubes glued together by a fixed joint. Drag one with the mouse and the other should follow exactly - a basic check that the joint holds."
+    uniform bool lunco:spawnable = false
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]

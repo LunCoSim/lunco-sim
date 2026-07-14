@@ -31,6 +31,21 @@
 //!   served the old metadata; ship an asset the bake never saw and it was, by
 //!   its own fallback, "not spawnable".
 //! - **No `build.rs`** in this crate at all.
+//!
+//! # The properties are real USD now
+//!
+//! `lunco:spawnable` and `lunco:spawnLift` are declared by **`LuncoCatalogAPI`**
+//! (`lunco-usd/schema/schema.usda`), applied to the asset's default prim. They were
+//! undeclared names, and the assets disagreed about admitting it — `custom bool
+//! lunco:spawnable` was honest, while `float lunco:spawnLift` was authored *without*
+//! `custom`, claiming a schema that did not exist.
+//!
+//! `lunco:description` is **deleted**, not declared. USD already has this field: every
+//! prim carries `doc` metadata — the standard "what is this thing" string that usdview
+//! and every other DCC display. Inventing a `lunco:` attribute to hold exactly what
+//! `doc` holds is the same mistake as `inputs:reflectance` (USD had `inputs:ior`) and
+//! `primvars:materialType` (never primvar data). Declaring it would have made the
+//! invention official instead of fixing it. It is now `doc = "..."`.
 
 use lunco_usd_bevy::DefaultPrim;
 
@@ -48,7 +63,12 @@ pub struct SpawnMeta {
     pub spawnable: bool,
     /// `float lunco:spawnLift` — metres to lift the spawn point.
     pub lift: f32,
-    /// `string lunco:description` — the blurb shown as a palette/Scenarios tooltip.
+    /// The prim's **`doc` metadata** — the blurb shown as a palette/Scenarios
+    /// tooltip.
+    ///
+    /// USD's own field, not ours. This was `custom string lunco:description`: a
+    /// bespoke attribute invented to hold precisely what `doc` already holds, and
+    /// which — being ours — no other tool could see. usdview shows `doc`.
     pub description: Option<String>,
 }
 
@@ -74,9 +94,11 @@ pub fn parse_spawn_meta(src: &str) -> SpawnMeta {
     SpawnMeta {
         // Typed: `bool`, not the string "true". The scan this replaces accepted
         // `true` or `1` textually and would equally have accepted `truthy`.
+        // Both are declared by `LuncoCatalogAPI` (see lunco-usd/schema/schema.usda).
         spawnable: prim.scalar::<bool>("lunco:spawnable").unwrap_or(false),
         lift: prim.real_f32("lunco:spawnLift").unwrap_or(0.0),
-        description: prim.text("lunco:description"),
+        // USD's `doc` prim metadata — NOT an attribute of ours. See the field doc.
+        description: prim.documentation(),
     }
 }
 
@@ -89,11 +111,13 @@ mod tests {
     defaultPrim = "Rover"
 )
 
-def Xform "Rover"
+def Xform "Rover" (
+    doc = "A rover."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
+)
 {
-    custom bool lunco:spawnable = true
+    uniform bool lunco:spawnable = true
     float lunco:spawnLift = 1.5
-    custom string lunco:description = "A rover."
 }
 "#;
 
@@ -132,7 +156,7 @@ def Xform "Rover"
     /// parse treats the value as a value.
     #[test]
     fn description_survives_an_equals_sign() {
-        let src = "#usda 1.0\n(\n    defaultPrim = \"X\"\n)\n\ndef Xform \"X\"\n{\n    custom string lunco:description = \"Set thrust = 1, then go.\"\n}\n";
+        let src = "#usda 1.0\n(\n    defaultPrim = \"X\"\n)\n\ndef Xform \"X\" (\n    doc = \"Set thrust = 1, then go.\"\n)\n{\n}\n";
         assert_eq!(
             parse_spawn_meta(src).description.as_deref(),
             Some("Set thrust = 1, then go.")
@@ -151,7 +175,7 @@ def Xform "Rover"
     /// description is expressed by the delimiter choice, exactly as here.
     #[test]
     fn description_can_span_lines_and_contain_quotes() {
-        let src = "#usda 1.0\n(\n    defaultPrim = \"X\"\n)\n\ndef Xform \"X\"\n{\n    custom string lunco:description = \"\"\"Line one.\nThen \"go\".\"\"\"\n}\n";
+        let src = "#usda 1.0\n(\n    defaultPrim = \"X\"\n)\n\ndef Xform \"X\" (\n    doc = \"\"\"Line one.\nThen \"go\".\"\"\"\n)\n{\n}\n";
         assert_eq!(
             parse_spawn_meta(src).description.as_deref(),
             Some("Line one.\nThen \"go\".")

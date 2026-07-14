@@ -11,10 +11,11 @@
 # a 6540 km, e 0.6, i 57.7°, ω 90° so apolune dwells over the lunar SOUTH pole
 # (long visibility windows from a Shackleton-area base).
 def Xform "RelaySat" (
+    prepend apiSchemas = ["LuncoCatalogAPI"]
     kind = "component"
 )
 {
-    custom bool lunco:spawnable = true
+    uniform bool lunco:spawnable = true
     # Connectivity relay on orbit. Orbiting (lunco:orbit:*) so the pose system
     # tracks it automatically; `class = "relay"` for routing policy.
     bool lunco:linkNode = true

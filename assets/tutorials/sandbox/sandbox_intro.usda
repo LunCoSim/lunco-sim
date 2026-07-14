@@ -14,7 +14,10 @@
 #   sandbox --scene tutorials/sandbox_intro/sandbox_intro.usda
 # or start it from the Tutorials panel.
 
-def Xform "SandboxIntro"
+def Xform "SandboxIntro" (
+    doc = "A guided tour of the LunCoSim workspace: viewport, browser, inspector, and console."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
+)
 {
 
     # UsdPhysicsMaterialAPI — friction/restitution live on a Material
@@ -30,8 +33,7 @@ def Xform "SandboxIntro"
             float physics:staticFriction = 1.0
         }
     }
-    custom bool lunco:spawnable = false
-    custom string lunco:description = "A guided tour of the LunCoSim workspace: viewport, browser, inspector, and console."
+    uniform bool lunco:spawnable = false
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]

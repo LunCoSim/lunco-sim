@@ -12,10 +12,11 @@
 # follows automatically. Author `lunco:link:class` / `maxRangeM` / `minElevationDeg`
 # per instance in the scene (a rover vs a relay vs a ground station).
 def Xform "CommsAntenna" (
+    prepend apiSchemas = ["LuncoCatalogAPI"]
     kind = "component"
 )
 {
-    custom bool lunco:spawnable = true
+    uniform bool lunco:spawnable = true
     bool lunco:linkNode = true
 
     def Cylinder "Mast"

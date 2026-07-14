@@ -16,7 +16,10 @@
 # `angle` — opposite signs, near-zero sum; server logs "Resolved rocker-bogie
 # differential on /RockerBogieTest/Rover".
 
-def Xform "RockerBogieTest"
+def Xform "RockerBogieTest" (
+    doc = "The rocker-bogie rover (the kind Mars rovers use) driving over a small step. The linkage should keep the body level as one side lifts."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
+)
 {
 
     # UsdPhysicsMaterialAPI — friction/restitution live on a Material
@@ -32,8 +35,7 @@ def Xform "RockerBogieTest"
             float physics:staticFriction = 1.0
         }
     }
-    custom bool lunco:spawnable = false
-    custom string lunco:description = "The rocker-bogie rover (the kind Mars rovers use) driving over a small step. The linkage should keep the body level as one side lifts."
+    uniform bool lunco:spawnable = false
 
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]

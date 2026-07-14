@@ -10,10 +10,12 @@
 # Static structure: children carry PhysicsCollisionAPI, root has no
 # rigid-body API (it stays put). Origin at the ground plane; the body
 # rises +8 m. Spawn the root at the terrain surface position.
-def Xform "HabitatFsh"
+def Xform "HabitatFsh" (
+    doc = "Foundation Surface Habitat — pressurized can, dome, airlock and radiators. The crew module; site it central, uphill of the landing pad and away from the reactor."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
+)
 {
-    custom bool lunco:spawnable = true
-    custom string lunco:description = "Foundation Surface Habitat — pressurized can, dome, airlock and radiators. The crew module; site it central, uphill of the landing pad and away from the reactor."
+    uniform bool lunco:spawnable = true
 
     # --- Pressurized can ---
     def Cylinder "Body" (

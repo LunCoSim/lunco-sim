@@ -3,10 +3,12 @@
     defaultPrim = "LinkTest"
     doc = "Minimal connectivity-kernel smoke scene: a lunar relay + two DSN ground stations, all `lunco:linkNode`. No terrain/globe/rovers, so it exercises the generic link kernel (pose → pairwise → verdict → LinkState) without the avian/terrain scene issues."
 )
-def Xform "LinkTest"
+def Xform "LinkTest" (
+    doc = "Connectivity-kernel smoke scene: a lunar relay plus two DSN ground stations, all `lunco:linkNode`. No terrain, globe or rovers — it exercises the generic link kernel (pose → pairwise → verdict → LinkState) on its own."
+    prepend apiSchemas = ["LuncoCatalogAPI"]
+)
 {
     bool lunco:spawnable = false
-    string lunco:description = "Connectivity-kernel smoke scene: a lunar relay plus two DSN ground stations, all `lunco:linkNode`. No terrain, globe or rovers — it exercises the generic link kernel (pose → pairwise → verdict → LinkState) on its own."
 
     def Xform "Relay"
     {
