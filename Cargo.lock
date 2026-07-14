@@ -6966,7 +6966,6 @@ dependencies = [
  "lunco-settings",
  "lunco-theme",
  "lunco-time",
- "lunco-tools-bevy",
  "lunco-workbench",
  "serde",
 ]
@@ -7841,6 +7840,7 @@ dependencies = [
  "lunco-storage",
  "lunco-theme",
  "lunco-time",
+ "lunco-tools-bevy",
  "lunco-twin",
  "lunco-workspace",
  "rfd",
