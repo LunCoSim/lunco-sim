@@ -79,11 +79,12 @@ pub struct RescanSpawnCatalog {}
 pub fn on_rescan_spawn_catalog(
     _trigger: On<RescanSpawnCatalog>,
     twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
+    manifest: Res<lunco_assets::discovery::AssetManifest>,
     mut scan: ResMut<crate::catalog::CatalogScan>,
 ) {
     if let Some(roots) = twin_roots.as_deref() {
         scan.forget();
-        let n = crate::catalog::dispatch_usd_scan(roots, &mut scan);
+        let n = crate::catalog::dispatch_usd_scan(&manifest, roots, &mut scan);
         info!("RESCAN_SPAWN_CATALOG: re-reading {n} USD asset(s)");
     }
 }
@@ -4529,11 +4530,12 @@ pub struct RescanShaders {}
 /// filter: the picker lists all shaders and flags any whose `@engine` inputs a
 /// part can't provide. Idempotent (`add` dedups). Returns the count added.
 pub fn scan_wgsl_into_catalog(
+    manifest: &lunco_assets::discovery::AssetManifest,
     roots: &lunco_assets::twin_source::TwinRoots,
     catalog: &mut lunco_materials::ShaderCatalog,
 ) -> usize {
     let mut n = 0;
-    for a in lunco_assets::discovery::list_assets(roots, "wgsl") {
+    for a in lunco_assets::discovery::list_assets(manifest, roots, "wgsl") {
         if catalog.add(a.asset_path) {
             n += 1;
         }
@@ -4545,8 +4547,27 @@ pub fn scan_wgsl_into_catalog(
 /// re-scans whenever the set of open Twins changes (so a freshly-opened Twin's
 /// files appear) — twin-open is async, so a guarded `Update` check is more
 /// robust than racing the `TwinAdded` observer that registers the twin root.
-/// It only *enumerates* on first run and on change; every other frame it
-/// early-returns after a cheap name-set comparison (no per-frame rescan).
+///
+/// # Driven by its inputs, not by a "have I run yet" flag
+///
+/// This re-enumerates exactly when one of its two inputs changes: the engine-library
+/// [`AssetManifest`](lunco_assets::discovery::AssetManifest), or the set of open
+/// Twins. Every other frame it early-returns on a cheap comparison — no per-frame
+/// walk.
+///
+/// It used to carry a `did_first_scan: Local<bool>` latch instead. That is a
+/// hand-rolled, *write-once* record of "I have looked" — and it cannot tell whether
+/// the look found anything real. On the web the manifest arrives by `fetch`, so the
+/// first frames have no listing at all; the latch would be set on that empty state
+/// and **never cleared**, leaving a permanently empty palette with no error to
+/// explain it. Guarding the latch against that one input would only hold until the
+/// next not-yet-ready input came along.
+///
+/// So there is no latch. Bevy already tracks whether a resource changed, which is
+/// the actual question — and a manifest that arrives late is simply a manifest that
+/// changed. Re-dispatch is idempotent (`CatalogScan` dedups by asset path, and
+/// `ShaderCatalog::add` dedups by name), so a redundant pass costs a list walk and
+/// re-reads nothing.
 ///
 /// The two catalogs differ in what they need from a file. Shaders are catalogued by
 /// *name* — enumeration is the whole job, so it finishes here. Spawnables are
@@ -4555,21 +4576,22 @@ pub fn scan_wgsl_into_catalog(
 /// they complete.
 pub fn maintain_catalogs(
     twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
+    manifest: Res<lunco_assets::discovery::AssetManifest>,
     mut scan: ResMut<crate::catalog::CatalogScan>,
     mut shaders: ResMut<lunco_materials::ShaderCatalog>,
     mut last_twins: Local<Vec<String>>,
-    mut did_first_scan: Local<bool>,
 ) {
     let Some(roots) = twin_roots.as_deref() else { return };
+
     let names = roots.names();
-    if *did_first_scan && names == *last_twins {
+    let twins_changed = names != *last_twins;
+    if !manifest.is_changed() && !twins_changed {
         return;
     }
-    *did_first_scan = true;
     *last_twins = names;
 
-    let s = crate::catalog::dispatch_usd_scan(roots, &mut scan);
-    let w = scan_wgsl_into_catalog(roots, &mut shaders);
+    let s = crate::catalog::dispatch_usd_scan(&manifest, roots, &mut scan);
+    let w = scan_wgsl_into_catalog(&manifest, roots, &mut shaders);
     if s > 0 || w > 0 {
         info!("CATALOG_SCAN: reading {s} USD asset(s), +{w} shader(s)");
     }
@@ -4580,10 +4602,11 @@ pub fn maintain_catalogs(
 pub fn on_rescan_shaders(
     _trigger: On<RescanShaders>,
     twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
+    manifest: Res<lunco_assets::discovery::AssetManifest>,
     mut catalog: ResMut<lunco_materials::ShaderCatalog>,
 ) {
     if let Some(roots) = twin_roots.as_deref() {
-        let n = scan_wgsl_into_catalog(roots, &mut catalog);
+        let n = scan_wgsl_into_catalog(&manifest, roots, &mut catalog);
         info!("RESCAN_SHADERS: +{n} shader(s)");
     }
 }
@@ -4813,6 +4836,9 @@ impl Plugin for SpawnCommandPlugin {
         //   - `ShaderCatalog`  — read by `maintain_catalogs` (per-frame) + the shader
         //     command observers. Lives in `lunco_materials`; an empty one is fine on
         //     a server (shader discovery populates it but nothing renders it).
+        // Answers "which files ship" — walks `assets/` on native, fetches
+        // `assets/manifest.json` on the web. Everything below is downstream of it.
+        app.add_plugins(lunco_assets::discovery::AssetDiscoveryPlugin);
         app.init_resource::<crate::catalog::SpawnCatalog>();
         // `CatalogScan` — the async read pipeline `maintain_catalogs` dispatches
         // into. `AssetMetaStore` — what the scanned files said about themselves;

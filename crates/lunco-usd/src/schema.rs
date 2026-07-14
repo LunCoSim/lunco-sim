@@ -8,40 +8,49 @@
 //! `uniform` in their schemas and we authored them `varying` for exactly this
 //! reason — nothing in the codebase knew any better.
 //!
-//! So this module is the one place that knows. It has two sources, and the split
-//! matters:
+//! So this module is the one place that knows. It reads **real schemas** — every
+//! one of them, ours and USD's, from the same kind of file, through the same
+//! parser:
 //!
-//! 1. **`luncoSchema`** — our own types, parsed at first use from the embedded
-//!    [`GENERATED_SCHEMA`] (`../schema/generatedSchema.usda`). That file is
-//!    generated from `../schema/schema.usda`, which is a real, codeless USD
-//!    schema — registrable by any USD runtime through `../schema/plugInfo.json`.
-//!    It is authoritative: to add a property, edit the schema, not this code.
+//! 1. **`luncoSchema`** — our own types, from the embedded [`GENERATED_SCHEMA`]
+//!    (`../schema/generatedSchema.usda`), generated from `../schema/schema.usda`,
+//!    a real codeless USD schema registrable by any USD runtime through
+//!    `../schema/plugInfo.json`.
 //!
-//! 2. **[`CORE_UNIFORM`]** — the handful of *core* USD properties we author that
-//!    are `uniform`. Core schemas live in OpenUSD, not here, and Rust `openusd`
-//!    has no schema registry to load them from, so this is a curated table. Each
-//!    entry cites the schema that declares it.
+//! 2. **Core USD** — [`CORE_SCHEMAS`]: OpenUSD's own `generatedSchema.usda` for
+//!    `usd`, `usdGeom`, `usdShade`, `usdLux` and `usdPhysics`, vendored verbatim
+//!    under `../schema/core/` (see the README there for provenance).
 //!
-//! ## `custom`, and why we don't guess it
+//! A `generatedSchema.usda` is just USDA, and we already parse USDA. Core USD's
+//! schema definitions were never unavailable to us — they simply weren't *read*.
 //!
-//! In USD, `custom` marks a property that **no schema declares**. It would be
-//! tempting to say "not in the registry ⇒ custom", but that is a trap: this
-//! registry does not know the core schemas, so `physics:mass` and
-//! `inputs:intensity` are absent from it despite being perfectly ordinary schema
-//! properties. Marking them `custom` would be a lie.
+//! ### What this replaced
 //!
-//! We therefore assert `custom` only where we can *know* it: inside the `lunco:`
-//! namespace, which is ours. A `lunco:` property that `luncoSchema` does not
-//! declare is genuinely custom — and that is not a defect. Per-model simulation
-//! parameters (`lunco:voltage`, `lunco:capacity`, …) vary per Modelica model, so
-//! no schema can declare them; `custom` is precisely the right encoding.
+//! A hand-written `CORE_UNIFORM` table: ten core properties we happened to author,
+//! each typed out with the variability someone had looked up. It was there because
+//! "Rust `openusd` has no schema registry", which was true and beside the point —
+//! the fork has no schema registry, but it has a USDA parser, and a schema is a
+//! USDA file.
 //!
-//! Outside `lunco:`, we leave `custom` unauthored (i.e. non-custom, USD's
-//! default), which is correct for every core property we author.
+//! The table's failure mode was silence. Author a `SetAttribute` for a core
+//! `uniform` property nobody had added to it, and the property was written
+//! `varying` — no error, just a subtly wrong layer. That is precisely how
+//! `info:id` and `physics:axis` came to be authored wrong in the first place. The
+//! registry now knows all 202 core properties, not the 10 we remembered.
 //!
-//! TODO(openusd): when the fork grows a real `UsdSchemaRegistry` that loads
-//! `plugInfo.json` (ours *and* core), [`CORE_UNIFORM`] and this hand-rolled
-//! parse both collapse into a delegation to it.
+//! ## `custom`, and why we still don't guess it
+//!
+//! In USD, `custom` marks a property that **no schema declares**. Now that core is
+//! loaded it is tempting to say "not in the registry ⇒ custom" — still a trap. We
+//! vendor five core modules, not all of them (no `usdRender`, `usdSkel`, `usdMedia`,
+//! no third-party schema a scene might legitimately apply). Absence from this
+//! registry means "we don't know", which is not the same as "no schema declares it".
+//!
+//! So we assert `custom` only where we can *know* it: inside the `lunco:` namespace,
+//! which is ours. A `lunco:` property that `luncoSchema` does not declare is genuinely
+//! custom — and that is correct, not a defect. Per-model simulation parameters
+//! (`lunco:voltage`, `lunco:capacity`, …) vary per Modelica model, so no schema can
+//! declare them; `custom` is exactly the right encoding.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -52,22 +61,21 @@ use openusd::sdf::{self, SpecType};
 /// Embedded so the registry needs no filesystem (it must work on wasm).
 pub const GENERATED_SCHEMA: &str = include_str!("../schema/generatedSchema.usda");
 
-/// Core USD properties we author that their schema declares `uniform`.
+/// OpenUSD's own schema definitions, vendored verbatim under `../schema/core/`.
 ///
-/// Not exhaustive over core USD — exhaustive over *what LunCoSim authors*. Adding
-/// a `SetAttribute` for a new core `uniform` property means adding it here, or it
-/// is silently authored `varying`, which is the bug this table exists to close.
-const CORE_UNIFORM: &[(&str, &str)] = &[
-    ("info:id", "UsdShadeShader"),
-    ("info:implementationSource", "UsdShadeShader"),
-    ("xformOpOrder", "UsdGeomXformable"),
-    ("purpose", "UsdGeomImageable"),
-    ("subdivisionScheme", "UsdGeomMesh"),
-    ("physics:axis", "UsdPhysicsRevoluteJoint / PrismaticJoint"),
-    ("physics:approximation", "UsdPhysicsMeshCollisionAPI"),
-    ("physics:excludeFromArticulation", "UsdPhysicsJoint"),
-    ("physics:startsAsleep", "UsdPhysicsRigidBodyAPI"),
-    ("inputs:texture:format", "UsdLuxDomeLight"),
+/// These are the *real* `generatedSchema.usda` files that ship with USD — the same
+/// artifacts `usdGenSchema` produces for us. Embedded (not read from disk) because
+/// the registry must work on wasm, and because a schema the binary disagrees with
+/// is worse than no schema.
+///
+/// Only the modules we actually author against. Adding one is a copy, not code:
+/// drop the file in and add a line here.
+const CORE_SCHEMAS: &[(&str, &str)] = &[
+    ("usd", include_str!("../schema/core/usd.usda")),
+    ("usdGeom", include_str!("../schema/core/usdGeom.usda")),
+    ("usdShade", include_str!("../schema/core/usdShade.usda")),
+    ("usdLux", include_str!("../schema/core/usdLux.usda")),
+    ("usdPhysics", include_str!("../schema/core/usdPhysics.usda")),
 ];
 
 /// A `typeName` field is authored as a token; accept a plain string too rather
@@ -115,35 +123,45 @@ impl SchemaRegistry {
         REGISTRY.get_or_init(SchemaRegistry::load)
     }
 
-    /// Parse [`GENERATED_SCHEMA`] and fold in [`CORE_UNIFORM`].
+    /// Parse [`CORE_SCHEMAS`] and [`GENERATED_SCHEMA`] — every schema, one parser.
     ///
-    /// A malformed generated schema is a build-time bug, not a runtime condition
-    /// — it is embedded, so it cannot vary per user. It is still tolerated rather
-    /// than panicking (an empty registry degrades to "everything varying", i.e.
-    /// today's behaviour), and the unit tests below assert it parses.
+    /// Core goes in FIRST so that if `luncoSchema` ever declared a name core also
+    /// declares, ours would win. It never should: the schema forbids bare names
+    /// precisely so a `lunco:`-namespaced property cannot collide with a core one.
+    ///
+    /// A malformed embedded schema is a build-time bug, not a runtime condition —
+    /// it cannot vary per user. It is still tolerated rather than panicking (a
+    /// missing schema degrades to "everything varying", the old behaviour), and the
+    /// tests below assert every one of them parses and yields the properties we
+    /// author.
     fn load() -> SchemaRegistry {
         let mut reg = SchemaRegistry::default();
 
-        for (name, schema) in CORE_UNIFORM {
-            reg.properties.insert(
-                (*name).to_string(),
-                PropertySpec {
-                    // Core types are declared by the caller (SetAttribute carries a
-                    // type_name); we only claim variability for them.
-                    type_name: String::new(),
-                    variability: sdf::Variability::Uniform,
-                    declared_by: (*schema).to_string(),
-                },
-            );
+        for (_module, src) in CORE_SCHEMAS {
+            // Core prim types / API schemas are NOT recorded in `prim_types` /
+            // `api_schemas`: those answer "which types does *luncoSchema* define",
+            // which is what our own registration and validation ask. Only the
+            // property declarations are folded in.
+            reg.ingest(src, false);
         }
+        reg.ingest(GENERATED_SCHEMA, true);
+        reg
+    }
 
-        let Ok(data) = lunco_usd_bevy::author::usda_to_data(GENERATED_SCHEMA) else {
-            return reg;
+    /// Fold one `generatedSchema.usda` into the registry. `own` records the file's
+    /// prim types and API schemas as *ours* (see [`load`](Self::load)).
+    fn ingest(&mut self, src: &str, own: bool) {
+        let reg = self;
+        let Ok(data) = lunco_usd_bevy::author::usda_to_data(src) else {
+            return;
         };
 
         for (path, spec) in data.iter() {
             match spec.ty {
                 SpecType::Prim => {
+                    if !own {
+                        continue;
+                    }
                     let Some(class) = path.as_str().strip_prefix('/') else {
                         continue;
                     };
@@ -190,7 +208,6 @@ impl SchemaRegistry {
                 _ => {}
             }
         }
-        reg
     }
 
     /// What a schema declares about property `name`, or `None` when no schema this
@@ -281,12 +298,34 @@ mod tests {
             variability_of("lunco:env:exposureEv100"),
             sdf::Variability::Varying
         );
-        // Core USD, from CORE_UNIFORM — the two the audit caught being authored
-        // `varying`.
+        // Core USD, read from OpenUSD's OWN generatedSchema — including the two the
+        // audit caught being authored `varying`.
         assert_eq!(variability_of("info:id"), sdf::Variability::Uniform);
         assert_eq!(variability_of("physics:axis"), sdf::Variability::Uniform);
-        // Unknown → USD's default.
+        assert_eq!(variability_of("xformOpOrder"), sdf::Variability::Uniform);
+        assert_eq!(variability_of("subdivisionScheme"), sdf::Variability::Uniform);
+        assert_eq!(variability_of("purpose"), sdf::Variability::Uniform);
+        // `physics:mass` is `varying` — and we now KNOW that, rather than defaulting
+        // to it because we'd never heard of the property. The hand table this
+        // replaced could not tell those two cases apart, which is exactly why a core
+        // `uniform` property missing from it was authored wrong in silence.
         assert_eq!(variability_of("physics:mass"), sdf::Variability::Varying);
+        assert!(SchemaRegistry::global().property("physics:mass").is_some());
+        // Genuinely unknown (no schema we vendor declares it) → USD's default.
+        assert_eq!(variability_of("nonesuch:madeUp"), sdf::Variability::Varying);
+        assert!(SchemaRegistry::global().property("nonesuch:madeUp").is_none());
+    }
+
+    /// Core USD types come from the real schema too — not a table of what someone
+    /// remembered, and not left blank for the call site to assert.
+    #[test]
+    fn core_schema_declares_property_types() {
+        let reg = SchemaRegistry::global();
+        assert_eq!(reg.property("physics:mass").unwrap().type_name, "float");
+        assert_eq!(reg.property("xformOpOrder").unwrap().type_name, "token[]");
+        assert_eq!(reg.property("radius").unwrap().type_name, "double");
+        // …and each cites the schema that actually declares it.
+        assert_eq!(reg.property("subdivisionScheme").unwrap().declared_by, "Mesh");
     }
 
     /// Types come from the schema too, so a scene authoring the wrong type can be

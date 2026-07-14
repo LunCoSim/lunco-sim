@@ -609,6 +609,28 @@ generate_bindings() {
     if [ "$binary" = "sandbox" ] && [ -d "$PROJECT_DIR/assets" ]; then
         info "Copying assets/ → $dist_dir/assets/"
         rsync -a --delete "$PROJECT_DIR/assets/" "$dist_dir/assets/"
+
+        # The bundle ships its own file listing. The browser has no `readdir`, so
+        # the spawn/shader catalogs cannot discover `*.usda`/`*.wgsl` by walking —
+        # they fetch this manifest at boot (`lunco_assets::discovery`).
+        #
+        # It is generated HERE, from the tree we just staged, rather than baked
+        # into the wasm by a `build.rs`. A baked listing describes the bundle the
+        # binary was compiled against; this one describes the bundle that actually
+        # shipped. They are the same thing right up until they aren't — swap an
+        # asset into a deployed `dist/` and a baked listing never sees it.
+        info "Writing $dist_dir/assets/manifest.json"
+        ( cd "$dist_dir/assets" && python3 -c "
+import json, os, sys
+rels = sorted(
+    os.path.relpath(os.path.join(dp, f), '.').replace(os.sep, '/')
+    for dp, _, fs in os.walk('.')
+    for f in fs
+    if f.endswith(('.usda', '.wgsl'))
+)
+json.dump(rels, open('manifest.json', 'w'), indent=0)
+print(f'  {len(rels)} asset(s) listed', file=sys.stderr)
+" ) || die "failed to write assets/manifest.json"
     fi
 
     # Include the deployment script in the dist bundle

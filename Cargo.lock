@@ -6900,6 +6900,7 @@ dependencies = [
  "bevy",
  "bincode 2.0.1",
  "bzip2",
+ "crossbeam-channel",
  "dirs",
  "flate2",
  "image",

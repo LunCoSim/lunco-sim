@@ -623,7 +623,21 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             return;
         };
 
-        let mut assets = lunco_assets::discovery::list_usd_assets(roots);
+        let Some(manifest) = world.get_resource::<lunco_assets::discovery::AssetManifest>() else {
+            return;
+        };
+        // On the web the listing arrives by fetch. "Not loaded yet" is not "no
+        // scenes" — say which, rather than showing an empty menu that looks final.
+        if !manifest.ready() {
+            ui.label(
+                bevy_egui::egui::RichText::new("(loading asset list…)")
+                    .weak()
+                    .italics(),
+            );
+            return;
+        }
+
+        let mut assets = lunco_assets::discovery::list_usd_assets(manifest, roots);
         assets.retain(|asset| asset.rel.starts_with("scenes/"));
         assets.sort_by(|a, b| a.stem.cmp(&b.stem));
 

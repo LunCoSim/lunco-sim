@@ -329,11 +329,12 @@ pub async fn read_asset_meta(asset: &AssetFile) -> SpawnMeta {
 /// files exist" from the filesystem (native) or the shipped manifest (web).
 /// It is only the *contents* that need I/O.
 pub fn dispatch_usd_scan(
+    manifest: &lunco_assets::discovery::AssetManifest,
     roots: &lunco_assets::twin_source::TwinRoots,
     scan: &mut CatalogScan,
 ) -> usize {
     let mut started = 0;
-    for asset in lunco_assets::discovery::list_usd_assets(roots) {
+    for asset in lunco_assets::discovery::list_usd_assets(manifest, roots) {
         if !scan.dispatched.insert(asset.asset_path.clone()) {
             continue;
         }
@@ -413,11 +414,12 @@ fn title_case(stem: &str) -> String {
 /// dispatch/drain pair instead.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn scan_usd_into_catalog_blocking(
+    manifest: &lunco_assets::discovery::AssetManifest,
     roots: &lunco_assets::twin_source::TwinRoots,
     catalog: &mut SpawnCatalog,
 ) -> usize {
     let mut added = 0;
-    for asset in lunco_assets::discovery::list_usd_assets(roots) {
+    for asset in lunco_assets::discovery::list_usd_assets(manifest, roots) {
         let meta = futures_lite::future::block_on(read_asset_meta(&asset));
         if meta.spawnable && catalog.add_unique(entry_for(&asset, &meta)) {
             added += 1;

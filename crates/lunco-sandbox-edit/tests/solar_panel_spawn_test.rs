@@ -64,8 +64,16 @@ fn test_solar_panel_catalog_entry() {
     let roots = TwinRoots::default();
     roots.register("assets", assets);
 
+    // The workspace `assets/` is registered above as a Twin ROOT, so the Twin walk
+    // discovers it with correct absolute paths regardless of cwd (`cargo test` runs
+    // in the crate dir, not the workspace root). The engine-library manifest — the
+    // *other* half of discovery — is therefore empty here, but must still be marked
+    // ready: unready means "not known yet", and the scan would rightly wait.
+    let mut manifest = lunco_assets::discovery::AssetManifest::default();
+    manifest.set(Vec::new());
+
     let mut catalog = lunco_sandbox_edit::catalog::SpawnCatalog::default();
-    lunco_sandbox_edit::catalog::scan_usd_into_catalog_blocking(&roots, &mut catalog);
+    lunco_sandbox_edit::catalog::scan_usd_into_catalog_blocking(&manifest, &roots, &mut catalog);
 
     let entry = catalog
         .get("solar_panel")
