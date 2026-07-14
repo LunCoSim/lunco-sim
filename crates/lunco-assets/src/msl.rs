@@ -344,7 +344,7 @@ impl MslLoadPhase {
 /// bincode 1.3 (fixint) → bincode 2 `standard()` (varint) codec switch, which
 /// makes any older bundle undecodable — this bump rejects them cleanly so the
 /// runtime falls back to a source parse instead of decoding garbage.
-pub const EXPECTED_RUMOCA_ARTIFACT_TAG: &str = "rumoca-main-2026-06-15+bincode2";
+pub const EXPECTED_RUMOCA_ARTIFACT_TAG: &str = "rumoca-main-2026-07-14+bincode2";
 
 /// Schema of `manifest.json` written by `build_msl_assets`. Kept here
 /// (not in the build binary) so both producer and consumer share the type.

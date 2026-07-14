@@ -41,7 +41,7 @@ The single most important design fact, and it is physics, not preference:
   wires.** These couplings are looser and directional (motor electrical power → mechanical torque;
   battery SoC → GNC engine-enable; comms TX state → electrical draw). A one-tick Jacobi lag is
   acceptable and standard (this is what an FMI-CS master does). This is **already what the runtime
-  does**: each `lunco:modelicaModel` prim compiles to its own `SimStepper` DAE solver on a background
+  does**: each `lunco:modelicaModel` prim compiles to its own `SimulationSession` DAE solver on a background
   thread, and `propagate_connections` (`lunco-cosim/src/systems/propagate.rs:146`) copies
   `src·scale+offset` between them each `FixedUpdate`, summing multiple wires into one input.
 
@@ -60,7 +60,7 @@ SoC it reports out).
 
 ## 2. Can we synthesize Modelica at runtime? Yes — three tiers, all shipping
 
-The artifact the simulator steps is a `DaeCompilationResult` → `rumoca_sim::SimStepper`, and the entry
+The artifact the simulator steps is a `DaeCompilationResult` → `rumoca_sim::SimulationSession`, and the entry
 point takes a **string**, not a file: `ModelicaCompiler::compile_str(model_name, source: &str,
 filename) -> DaeCompilationResult` (`lunco-modelica/src/lib.rs:499`; `compile_str_multi` for cross-doc).
 So *any* runtime-generated Modelica text compiles and runs. Three ways to generate that text, in
@@ -99,7 +99,7 @@ composed USD graph and emits the rover `Electrical.mo`:
 |---|---|---|
 | each electrical component prim (battery, bus, motor, comms `Power` layer) + its `lunco:` params | → | one instance line — a component `.mo` class or an MSL primitive, parameterized |
 | each `rel lunco:epsBus` edge (battery↔bus↔loads) | → | one `connect(a.pin, b.pin)` line |
-| the whole set | → | one `Electrical.mo` → one DAE (`compile_str` → `SimStepper`) |
+| the whole set | → | one `Electrical.mo` → one DAE (`compile_str` → `SimulationSession`) |
 | boundary quantities (V_bus, I_load[i], SoC) | → | causal ports scalar-wired to thermal/GNC/comms prims |
 
 This is exactly SPICE netlist → circuit, and it is **the gap** the explorers flagged: per-model diagram
@@ -186,7 +186,7 @@ richer structural carrier that can *export to* them.
 2. **Rule:** lock the two-level composition — acausal within domain (one DAE), causal across domains
    (scalar co-sim). Document the electrical layer as one `lunco:modelicaModel` prim + boundary ports.
 3. **Synthesizer v1 (the new Rust):** read composed USD components + `lunco:epsBus` edges → emit
-   `Electrical.mo` (string/`ast_mut`) → `compile_str` → `SimStepper`. Scaffold-and-own; explicit
+   `Electrical.mo` (string/`ast_mut`) → `compile_str` → `SimulationSession`. Scaffold-and-own; explicit
    re-synthesis; hand-edits preserved (text-canonical).
 4. **Manual editing UI:** reuse the existing Modelica diagram builder — it *already* does
    drag-MSL-parts→`.mo`; point it at the synthesized `Electrical.mo`.

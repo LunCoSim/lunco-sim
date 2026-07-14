@@ -209,7 +209,7 @@ domain-op selection + scripted merge-policy hook + machine-unique `AuthorTag` + 
   MSL-electrical numeric sim yet). Decide MSL-import vs self-contained on cold-compile feel.
 - **P5.2 — Netlist-from-USD synthesizer + `SynthesizerRegistry`** (rhai policy + Rust primitives + hooks;
   doc 37 §3, §8): read the connectable electrical graph → emit one acausal `Electrical.mo` → `compile_str`
-  → `SimStepper`; boundary ports scalar-wired to other domains. Scaffold-and-own (hand-editable).
+  → `SimulationSession`; boundary ports scalar-wired to other domains. Scaffold-and-own (hand-editable).
 - **P5.3 — Enforce the two-level rule** (doc 37 §1): acausal within a `.mo`, causal across via connections.
   A `wiring` synthesizer can even emit the cross-domain `SimConnection` boundary.
 

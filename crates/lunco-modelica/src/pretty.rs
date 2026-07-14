@@ -245,7 +245,7 @@ fn fmt_num(n: f32) -> String {
 /// Rust's default `f64` `Display` already emits the shortest round-tripping
 /// decimal and never switches to scientific notation, which is exactly the
 /// hand-authored Modelica shape — so we lean on it directly.
-fn fmt_num_f64(n: f64) -> String {
+pub fn fmt_num_f64(n: f64) -> String {
     if n.is_nan() {
         return "0".to_string();
     }
@@ -259,7 +259,7 @@ fn fmt_point(x: f32, y: f32) -> String {
     format!("{{{},{}}}", fmt_num(x), fmt_num(y))
 }
 
-fn fmt_points(points: &[(f32, f32)]) -> String {
+pub fn fmt_points(points: &[(f32, f32)]) -> String {
     let parts: Vec<String> = points.iter().map(|(x, y)| fmt_point(*x, *y)).collect();
     format!("{{{}}}", parts.join(","))
 }

@@ -2,35 +2,51 @@
 //! [`lunco_modelica::ast_mut`]: `add_component`, `remove_component`,
 //! `add_connection`, `remove_connection`.
 //!
-//! Same shape as the batch-1 tests — parse → mutate → emit → reparse →
-//! assert. Headless. Pinned end-to-end via
-//! `tests/op_to_patch_topology.rs` (separate file, runs the full
-//! `host.apply()` route).
+//! Shape: parse → mutate → **splice the patch into the source** → reparse →
+//! assert. That middle step is the point: a mutation's product is a byte patch
+//! against the original text, never a re-emission of the class (see
+//! `ast_mut/edit.rs`). Headless. Pinned end-to-end via
+//! `tests/op_to_patch_topology.rs`, which runs the full `host.apply()` route,
+//! and `tests/ast_mut_preserves_untouched_source.rs`, which pins what a patch
+//! may *not* touch.
 
-use lunco_modelica::ast_mut::{self, AstMutError};
+use lunco_modelica::ast_mut::{self, AstMutError, Edit};
 use lunco_modelica::pretty::{ComponentDecl, ConnectEquation, PortRef};
 use rumoca_phase_parse::parse_to_ast;
 use rumoca_compile::parsing::ast::{ClassDef, Component, Equation};
 
+/// Run `op` against `class_name`, apply the resulting splice to `source`, and
+/// reparse — the same route `Document::apply` takes.
 fn mutate_and_reparse_class<F>(
     source: &str,
     class_name: &str,
     op: F,
 ) -> rumoca_compile::parsing::ast::ClassDef
 where
-    F: FnOnce(&mut ClassDef),
+    F: FnOnce(&mut ClassDef, &mut Edit<'_>) -> Result<(), AstMutError>,
 {
-    let mut sd = parse_to_ast(source, "test.mo").expect("first parse");
-    let class = ast_mut::lookup_class_mut(&mut sd, class_name).expect("class lookup");
-    op(class);
-    let regen = sd.to_modelica();
-    let sd2 = parse_to_ast(&regen, "test.mo").unwrap_or_else(|e| {
-        panic!("post-mutation reparse failed: {e:?}\n=== regen ===\n{regen}\n=============")
+    let sd = parse_to_ast(source, "test.mo").expect("first parse");
+    let (range, replacement, _) =
+        ast_mut::class_patch(source, &sd, class_name, op).expect("class_patch");
+    let mut patched = source.to_string();
+    patched.replace_range(range, &replacement);
+    let sd2 = parse_to_ast(&patched, "test.mo").unwrap_or_else(|e| {
+        panic!("post-splice reparse failed: {e:?}\n=== patched ===\n{patched}\n=============")
     });
     sd2.classes
         .get(class_name)
-        .unwrap_or_else(|| panic!("class `{class_name}` missing after reparse:\n{regen}"))
+        .unwrap_or_else(|| panic!("class `{class_name}` missing after reparse:\n{patched}"))
         .clone()
+}
+
+/// Run `op` for its error, discarding any patch.
+fn mutate_err<F>(source: &str, class_name: &str, op: F) -> AstMutError
+where
+    F: FnOnce(&mut ClassDef, &mut Edit<'_>) -> Result<(), AstMutError>,
+{
+    let sd = parse_to_ast(source, "test.mo").expect("first parse");
+    ast_mut::class_patch(source, &sd, class_name, op)
+        .expect_err("expected the mutation to fail")
 }
 
 fn decl(type_name: &str, name: &str) -> ComponentDecl {
@@ -68,8 +84,8 @@ fn is_connect(eq: &Equation, from_comp: &str, from_port: &str, to_comp: &str, to
 
 #[test]
 fn add_component_inserts_into_empty_class() {
-    let class = mutate_and_reparse_class("model M\nend M;\n", "M", |c| {
-        ast_mut::add_component(c, &decl("Real", "x")).expect("add");
+    let class = mutate_and_reparse_class("model M\nend M;\n", "M", |c, e| {
+        ast_mut::add_component(c, e, &decl("Real", "x"))
     });
     let comp: &Component = class.components.get("x").expect("x added");
     // Type ref resolves to "Real" — single-segment component reference.
@@ -78,22 +94,18 @@ fn add_component_inserts_into_empty_class() {
 
 #[test]
 fn add_component_preserves_existing_components() {
-    let class = mutate_and_reparse_class(
-        "model M\n  Real a;\nend M;\n",
-        "M",
-        |c| {
-            ast_mut::add_component(c, &decl("Real", "b")).expect("add");
-        },
-    );
+    let class = mutate_and_reparse_class("model M\n  Real a;\nend M;\n", "M", |c, e| {
+        ast_mut::add_component(c, e, &decl("Real", "b"))
+    });
     assert!(class.components.contains_key("a"), "existing component dropped");
     assert!(class.components.contains_key("b"), "new component missing");
 }
 
 #[test]
 fn add_component_duplicate_returns_error() {
-    let mut sd = parse_to_ast("model M\n  Real x;\nend M;\n", "t.mo").unwrap();
-    let c = ast_mut::lookup_class_mut(&mut sd, "M").unwrap();
-    let err = ast_mut::add_component(c, &decl("Real", "x")).unwrap_err();
+    let err = mutate_err("model M\n  Real x;\nend M;\n", "M", |c, e| {
+        ast_mut::add_component(c, e, &decl("Real", "x"))
+    });
     match err {
         AstMutError::DuplicateComponent { class, component } => {
             assert_eq!(class, "M");
@@ -109,22 +121,18 @@ fn add_component_duplicate_returns_error() {
 
 #[test]
 fn remove_component_drops_target() {
-    let class = mutate_and_reparse_class(
-        "model M\n  Real a;\n  Real b;\nend M;\n",
-        "M",
-        |c| {
-            ast_mut::remove_component(c, "a").expect("remove");
-        },
-    );
+    let class = mutate_and_reparse_class("model M\n  Real a;\n  Real b;\nend M;\n", "M", |c, e| {
+        ast_mut::remove_component(c, e, "a")
+    });
     assert!(!class.components.contains_key("a"), "a still present");
     assert!(class.components.contains_key("b"), "b dropped");
 }
 
 #[test]
 fn remove_component_unknown_returns_error() {
-    let mut sd = parse_to_ast("model M\n  Real a;\nend M;\n", "t.mo").unwrap();
-    let c = ast_mut::lookup_class_mut(&mut sd, "M").unwrap();
-    let err = ast_mut::remove_component(c, "nope").unwrap_err();
+    let err = mutate_err("model M\n  Real a;\nend M;\n", "M", |c, e| {
+        ast_mut::remove_component(c, e, "nope")
+    });
     assert!(matches!(
         err,
         AstMutError::ComponentNotFound { component, .. } if component == "nope"
@@ -138,37 +146,36 @@ fn remove_component_unknown_returns_error() {
 #[test]
 fn add_connection_appends_to_equation_section() {
     let class = mutate_and_reparse_class(
-        "model M\n  SI.Position a;\n  SI.Position b;\nend M;\n",
+        "model M\n  SI.Position a;\n  SI.Position b;\nequation\n  connect(a.z, b.z);\nend M;\n",
         "M",
-        |c| {
+        |c, e| {
             ast_mut::add_connection(
                 c,
+                e,
                 &ConnectEquation { from: port("a", "p"), to: port("b", "q"), line: None },
             )
-            .expect("add_connection");
         },
     );
     assert!(
         class.equations.iter().any(|eq| is_connect(eq, "a", "p", "b", "q")),
         "expected connect(a.p, b.q) in equations"
     );
+    assert!(
+        class.equations.iter().any(|eq| is_connect(eq, "a", "z", "b", "z")),
+        "the existing connect was dropped"
+    );
 }
 
 #[test]
 fn add_connection_creates_equation_section_when_missing() {
-    // Source has no `equation` keyword. After add, regen's equation
-    // section should contain our connect.
-    let class = mutate_and_reparse_class(
-        "model M\n  SI.Position a;\nend M;\n",
-        "M",
-        |c| {
-            ast_mut::add_connection(
-                c,
-                &ConnectEquation { from: port("a", "p"), to: port("a", "q"), line: None },
-            )
-            .expect("add_connection");
-        },
-    );
+    // Source has no `equation` keyword — the splice has to introduce one.
+    let class = mutate_and_reparse_class("model M\n  SI.Position a;\nend M;\n", "M", |c, e| {
+        ast_mut::add_connection(
+            c,
+            e,
+            &ConnectEquation { from: port("a", "p"), to: port("a", "q"), line: None },
+        )
+    });
     assert!(
         class.equations.iter().any(|eq| is_connect(eq, "a", "p", "a", "q")),
         "expected connect equation in (newly created) equation section"
@@ -184,9 +191,7 @@ fn remove_connection_drops_matching_equation() {
     let class = mutate_and_reparse_class(
         "model M\n  Real a;\n  Real b;\nequation\n  connect(a, b);\nend M;\n",
         "M",
-        |c| {
-            ast_mut::remove_connection(c, &port("a", ""), &port("b", "")).expect("remove");
-        },
+        |c, e| ast_mut::remove_connection(c, e, &port("a", ""), &port("b", "")),
     );
     // Expecting no remaining connect for (a,b). `remove_connection`
     // matches on `component.port`; with empty port the AST ref is
@@ -197,20 +202,12 @@ fn remove_connection_drops_matching_equation() {
 
 #[test]
 fn remove_connection_preserves_other_connections() {
-    let mut sd = parse_to_ast(
+    let class = mutate_and_reparse_class(
         "model M\n  Real a;\n  Real b;\n  Real c;\nequation\n  connect(a, b);\n  connect(b, c);\nend M;\n",
-        "test.mo",
-    )
-    .unwrap();
-    let c = ast_mut::lookup_class_mut(&mut sd, "M").unwrap();
-    ast_mut::remove_connection(c, &port("a", ""), &port("b", "")).expect("remove");
-    let regen = sd.to_modelica();
-    let sd2 = parse_to_ast(&regen, "t.mo")
-        .unwrap_or_else(|e| panic!("reparse: {e:?}\n=== regen ===\n{regen}"));
-    let connects: Vec<_> = sd2
-        .classes
-        .get("M")
-        .unwrap()
+        "M",
+        |c, e| ast_mut::remove_connection(c, e, &port("a", ""), &port("b", "")),
+    );
+    let connects: Vec<_> = class
         .equations
         .iter()
         .filter(|eq| matches!(eq, Equation::Connect { .. }))
@@ -220,13 +217,11 @@ fn remove_connection_preserves_other_connections() {
 
 #[test]
 fn remove_connection_missing_returns_error() {
-    let mut sd = parse_to_ast(
+    let err = mutate_err(
         "model M\n  Real a;\n  Real b;\nequation\n  connect(a, b);\nend M;\n",
-        "t.mo",
-    )
-    .unwrap();
-    let c = ast_mut::lookup_class_mut(&mut sd, "M").unwrap();
-    let err = ast_mut::remove_connection(c, &port("x", "p"), &port("y", "q")).unwrap_err();
+        "M",
+        |c, e| ast_mut::remove_connection(c, e, &port("x", "p"), &port("y", "q")),
+    );
     match err {
         AstMutError::ConnectionNotFound { class, from, to } => {
             assert_eq!(class, "M");

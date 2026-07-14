@@ -12,14 +12,28 @@
 //!      solver.
 
 use lunco_modelica::ModelicaCompiler;
-use rumoca_sim::{SimOptions, SimStepper};
+use rumoca_sim::{SimOptions, SimulationSession};
+
+/// `SimulationSession::get` reports two different failures: the session state
+/// was unreadable (`Err`), or the variable isn't in it (`Ok(None)`). These
+/// tests only care about the second, so collapse the first into a panic.
+trait Probe {
+    fn get_var(&self, name: &str) -> Option<f64>;
+}
+
+impl Probe for SimulationSession {
+    fn get_var(&self, name: &str) -> Option<f64> {
+        self.get(name)
+            .unwrap_or_else(|e| panic!("session state unreadable while reading {name}: {e:?}"))
+    }
+}
 
 fn src() -> &'static str {
     lunco_modelica::models::get_model("AnnotatedRocketStage.mo")
         .expect("bundled AnnotatedRocketStage.mo")
 }
 
-fn build_stepper(initial_throttle: Option<f64>) -> SimStepper {
+fn build_stepper(initial_throttle: Option<f64>) -> SimulationSession {
     let (stripped, _) = lunco_modelica::ast_extract::strip_input_defaults(src());
     let mut compiler = ModelicaCompiler::new();
     let dae = compiler
@@ -30,12 +44,17 @@ fn build_stepper(initial_throttle: Option<f64>) -> SimStepper {
         )
         .expect("RocketStage should compile");
 
+    // `t_end` must cover the longest scenario below (60 s burn): the session
+    // clamps every advance at `opts.t_end`, and the default is 1.0 — a stepping
+    // test that leaves it there parks at t=1s and asserts against a frozen model.
     let opts = SimOptions {
         atol: 1e-2,
         rtol: 1e-2,
+        t_start: 0.0,
+        t_end: 120.0,
         ..Default::default()
     };
-    let mut stepper = SimStepper::new(&dae.dae, opts).expect("stepper build");
+    let mut stepper = SimulationSession::new(&dae.dae, opts).expect("stepper build");
     if let Some(v) = initial_throttle {
         stepper
             .set_input("valve.opening", v)
@@ -44,7 +63,7 @@ fn build_stepper(initial_throttle: Option<f64>) -> SimStepper {
     stepper
 }
 
-fn advance(stepper: &mut SimStepper, dt: f64, steps: usize) {
+fn advance(stepper: &mut SimulationSession, dt: f64, steps: usize) {
     for i in 0..steps {
         stepper
             .step(dt)
@@ -64,13 +83,13 @@ fn rocket_throttle_seeded_at_ic_drives_thrust_and_lift() {
         "expected `valve.opening` in input_names; got {inputs:?}",
     );
 
-    let m0 = stepper.get("tank.m").expect("tank.m");
-    let alt0 = stepper.get("airframe.altitude").expect("altitude");
+    let m0 = stepper.get_var("tank.m").expect("tank.m");
+    let alt0 = stepper.get_var("airframe.altitude").expect("altitude");
 
     advance(&mut stepper, 0.1, 100); // 10 s
 
-    let m1 = stepper.get("tank.m").expect("tank.m after");
-    let alt1 = stepper.get("airframe.altitude").expect("altitude after");
+    let m1 = stepper.get_var("tank.m").expect("tank.m after");
+    let alt1 = stepper.get_var("airframe.altitude").expect("altitude after");
 
     assert!(m1 < m0, "tank should deplete: {m0} -> {m1}");
     assert!(alt1 > alt0, "altitude should rise: {alt0} -> {alt1}");
@@ -90,14 +109,14 @@ fn rocket_throttle_opened_mid_sim_drives_thrust_and_lift() {
     let mut stepper = build_stepper(None); // throttle defaults to 0
 
     // Idle briefly — no thrust, no flow, tank mass constant.
-    let m_idle_before = stepper.get("tank.m").expect("tank.m");
+    let m_idle_before = stepper.get_var("tank.m").expect("tank.m");
     advance(&mut stepper, 0.1, 5); // 0.5 s idling
-    let m_idle_after = stepper.get("tank.m").expect("tank.m");
+    let m_idle_after = stepper.get_var("tank.m").expect("tank.m");
     assert!(
         (m_idle_after - m_idle_before).abs() < 1e-3,
         "tank should NOT deplete while throttle=0: {m_idle_before} -> {m_idle_after}",
     );
-    let v_at_open = stepper.get("airframe.velocity").expect("velocity");
+    let v_at_open = stepper.get_var("airframe.velocity").expect("velocity");
 
     // Open the throttle mid-run.
     stepper
@@ -106,8 +125,8 @@ fn rocket_throttle_opened_mid_sim_drives_thrust_and_lift() {
 
     advance(&mut stepper, 0.1, 100);
 
-    let m_end = stepper.get("tank.m").expect("tank.m end");
-    let v_end = stepper.get("airframe.velocity").expect("velocity end");
+    let m_end = stepper.get_var("tank.m").expect("tank.m end");
+    let v_end = stepper.get_var("airframe.velocity").expect("velocity end");
 
     assert!(
         m_end < m_idle_after,
@@ -129,14 +148,14 @@ fn rocket_throttle_closed_mid_sim_stops_tank_drain() {
 
     advance(&mut stepper, 0.1, 50); // 5 s burn
 
-    let m_at_close = stepper.get("tank.m").expect("tank.m");
+    let m_at_close = stepper.get_var("tank.m").expect("tank.m");
     stepper
         .set_input("valve.opening", 0.0)
         .expect("throttle is a valid input");
 
     advance(&mut stepper, 0.1, 50); // 5 s coasting
 
-    let m_after_close = stepper.get("tank.m").expect("tank.m after");
+    let m_after_close = stepper.get_var("tank.m").expect("tank.m after");
     assert!(
         (m_after_close - m_at_close).abs() < 1e-1,
         "tank should NOT deplete further once throttle=0: {m_at_close} -> {m_after_close}",
@@ -152,12 +171,12 @@ fn rocket_throttle_closed_mid_sim_stops_tank_drain() {
 fn rocket_tank_empties_gracefully_without_negative_mass() {
     let mut stepper = build_stepper(Some(100.0));
     advance(&mut stepper, 0.1, 600); // 60 s — well past 40 s drain time
-    let m_end = stepper.get("tank.m").expect("tank.m");
+    let m_end = stepper.get_var("tank.m").expect("tank.m");
     let availability = stepper
-        .get("tank.availability")
+        .get_var("tank.availability")
         .expect("tank.availability");
     let port_flow = stepper
-        .get("valve.port_a.m_flow")
+        .get_var("valve.port_a.m_flow")
         .expect("valve.port_a.m_flow");
     assert!(
         m_end > -1e-2,
@@ -195,7 +214,7 @@ fn rocket_throttle_varied_mid_sim_stays_stable() {
         (10.0, 15),
     ];
 
-    let m_start = stepper.get("tank.m").expect("tank.m");
+    let m_start = stepper.get_var("tank.m").expect("tank.m");
 
     for &(value, steps) in sequence {
         stepper
@@ -204,7 +223,7 @@ fn rocket_throttle_varied_mid_sim_stays_stable() {
         advance(&mut stepper, 0.1, steps);
     }
 
-    let m_end = stepper.get("tank.m").expect("tank.m");
+    let m_end = stepper.get_var("tank.m").expect("tank.m");
     let t_end = stepper.time();
 
     assert!(

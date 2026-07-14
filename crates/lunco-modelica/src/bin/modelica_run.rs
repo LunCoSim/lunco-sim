@@ -2,7 +2,7 @@
 //!
 //! Compile a Modelica model and step it for a fixed duration, optionally
 //! writing per-step variable values to a CSV. Reuses the same compile
-//! path the workbench uses (`ModelicaCompiler` → `SimStepper`), so a
+//! path the workbench uses (`ModelicaCompiler` → `SimulationSession`), so a
 //! model that runs in the workbench runs here, and the rumoca cache
 //! warmed by `msl_indexer --warm` benefits both.
 //!
@@ -58,7 +58,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use lunco_modelica::ModelicaCompiler;
-use rumoca_sim::{SimOptions, SimStepper};
+use rumoca_sim::SimulationSession;
 
 /// CLI options. Hand-parsed (no `clap`) so the binary stays cheap to
 /// build and link — same rationale as `msl_indexer`.
@@ -250,15 +250,21 @@ pub(crate) fn main() {
         t_compile.elapsed().as_secs_f64()
     );
 
-    // SimOptions: mirror what the workbench uses (lib.rs ~899) so
-    // headless and interactive runs see the same numerics. atol/rtol
-    // 1e-1 is loose for production but matches the workbench default;
-    // override via env vars if you want tighter convergence.
-    let mut stepper_opts = SimOptions::default();
-    stepper_opts.atol = 1e-1;
-    stepper_opts.rtol = 1e-1;
+    // Solver options come from the library's single source of truth
+    // (`stepper_options_from_bounds`), never hand-rolled here: it is what keeps
+    // this headless runner numerically identical to the workbench, and it is the
+    // one place that carries the run's real horizon into `SimOptions::t_end`
+    // (the session clamps every advance at it). atol/rtol 1e-1 is loose for
+    // production but matches the workbench default.
+    let bounds = lunco_experiments::RunBounds {
+        t_start: 0.0,
+        t_end: opts.duration,
+        tolerance: Some(1e-1),
+        ..Default::default()
+    };
+    let stepper_opts = lunco_modelica::experiments_runner::stepper_options_from_bounds(&bounds);
 
-    let mut stepper = match SimStepper::new(&comp_res.dae, stepper_opts) {
+    let mut stepper = match SimulationSession::new(&comp_res.dae, stepper_opts) {
         Ok(s) => s,
         Err(e) => die(&format!("stepper init failed: {e:?}")),
     };
@@ -291,11 +297,13 @@ pub(crate) fn main() {
     // narrow. Either way, capture the columns NOW so the CSV header is
     // stable for the whole run, even if the stepper's reported set
     // varies frame-to-frame (rumoca occasionally drops a NaN'd var).
-    let initial_state: Vec<(String, f64)> = {
-        stepper.state().values.into_iter()
-            .filter(|(name, val)| val.is_finite() && name != "time")
-            .collect()
-    };
+    let initial_state: Vec<(String, f64)> = stepper
+        .state()
+        .unwrap_or_else(|e| die(&format!("initial state unreadable: {e:?}")))
+        .values
+        .into_iter()
+        .filter(|(name, val)| val.is_finite() && name != "time")
+        .collect();
 
     let columns: Vec<String> = match &opts.record {
         Some(explicit) => explicit.clone(),
@@ -364,9 +372,20 @@ pub(crate) fn main() {
 
         // Sample current state and write to CSV.
         if let Some(w) = csv_writer.as_mut() {
-            let state: Vec<(String, f64)> = stepper.state().values.into_iter()
-                .filter(|(_, v): &(String, f64)| v.is_finite())
-                .collect();
+            let state: Vec<(String, f64)> = match stepper.state() {
+                Ok(s) => s
+                    .values
+                    .into_iter()
+                    .filter(|(_, v): &(String, f64)| v.is_finite())
+                    .collect(),
+                Err(e) => {
+                    step_err = Some(format!(
+                        "state unreadable at t={:.6}s: {e:?}",
+                        stepper.time()
+                    ));
+                    break;
+                }
+            };
             let map: HashMap<&str, f64> = state
                 .iter()
                 .map(|(n, v): &(String, f64)| (n.as_str(), *v))

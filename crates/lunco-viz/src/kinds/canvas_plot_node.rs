@@ -218,7 +218,7 @@ pub fn queue_input_write(ctx: &egui::Context, name: &str, value: f64) {
 /// Drain the per-frame input-write queue. Called by the host once
 /// per render pass after the canvas is done; returns the pending
 /// writes for the host to apply to its `ModelicaModel.inputs`
-/// (which the worker forwards to `SimStepper::set_input`).
+/// (which the worker forwards to `SimulationSession::set_input`).
 pub fn drain_input_writes(ctx: &egui::Context) -> Vec<(String, f64)> {
     let queue: Option<Arc<std::sync::Mutex<std::collections::HashMap<String, f64>>>> =
         ctx.data(|d| d.get_temp(input_writes_id()));

@@ -246,14 +246,14 @@ fn within_clause() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tier 5 — known-risky shapes flagged in the audit.
-// `#[ignore]` with TODO(A.2) so failures are documented gaps, not
-// hidden ones. Remove the ignore as the gap is closed (either upstream
-// fix or local workaround).
+// Tier 5 — shapes flagged as risky in the audit. All three round-trip cleanly
+// as of rumoca 0.9.20 and are no longer `#[ignore]`d: they now GUARD the
+// behaviour instead of documenting its absence. (The one genuinely broken shape
+// is `component_with_modification` above — multi-modifier + binding — which
+// still loses data.)
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
-#[ignore = "TODO(A.2): redeclare semantics may not round-trip; investigate before A.2 batch 3"]
 fn redeclare_short_class() {
     let src = "\
 model M
@@ -264,7 +264,6 @@ end M;
 }
 
 #[test]
-#[ignore = "TODO(A.2): conditional component (`if`) shape — verify SetParameter path"]
 fn conditional_component() {
     let src = "\
 model M
@@ -276,7 +275,6 @@ end M;
 }
 
 #[test]
-#[ignore = "TODO(A.2): inner/outer prefix preservation"]
 fn inner_outer_prefix() {
     let src = "\
 model M

@@ -217,7 +217,7 @@ impl std::str::FromStr for SolverChoice {
 ///    output spacing. This is the robust default: stiff long-horizon
 ///    models (e.g. the lunar rover thermal system across multiple
 ///    day/night cycles) complete here regardless of the output `dt`.
-///  * [`Interactive`](RuntimeMode::Interactive) — the live `SimStepper`
+///  * [`Interactive`](RuntimeMode::Interactive) — the live `SimulationSession`
 ///    loop (`run_stepping_loop`). The solver is advanced one output
 ///    `dt` at a time so the run can stream/pause/scrub in real time, but
 ///    that couples the solver step to the output spacing: too coarse a

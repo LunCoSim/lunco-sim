@@ -50,7 +50,7 @@ The Modelica runtime is **rumoca**, our fork:
   ECS projection  (Tier 2: runtime)
     - ModelicaModel component: parameters, inputs, variables, paused, session_id
     - ModelicaChannels resource: crossbeam channels to background worker
-    - Background worker thread: owns SimStepper instances, async
+    - Background worker thread: owns SimulationSession instances, async
        │
        │  DocumentView<ModelicaDocument>
        │
@@ -65,9 +65,9 @@ The Modelica runtime is **rumoca**, our fork:
 
 ## 3. Runtime architecture — background worker
 
-`SimStepper` (rumoca's solver) is `!Send` — it can't cross threads. So we
-own it on a dedicated background worker thread; the main Bevy thread
-communicates via `crossbeam` channels:
+`SimulationSession` (rumoca's solver; it replaced `SimStepper` in rumoca 0.9.20)
+is `!Send` — it can't cross threads. So we own it on a dedicated background
+worker thread; the main Bevy thread communicates via `crossbeam` channels:
 
 - `ModelicaCommand::Compile { entity, source, session_id }` — parse + build
   DAE + instantiate stepper
@@ -81,6 +81,23 @@ communicates via `crossbeam` channels:
 
 Session IDs fence stale results: when a Compile or UpdateParameters bumps
 the session, any in-flight Step for the old session is discarded.
+
+**`SimOptions::t_end` is a hard ceiling on the model clock.** Since rumoca
+0.9.20, `SimulationSession` clamps every `step`/`advance_to` at `t_end` — and
+does it *silently*: the call still returns `Ok`, the clock simply stops
+advancing. The default is `1.0`, so any caller that builds options from
+`SimOptions::default()` parks at t=1s and then reports a frozen model rather
+than an error. Two consequences, both deliberate:
+
+- The batch/offline path builds options **only** through
+  `experiments_runner::stepper_options_from_bounds`, which carries the run's
+  real horizon through. Nothing else may hand-roll `SimOptions`.
+- The live path is driven by `step(dt)` forever and has no horizon, so
+  `worker::live_stepper_options` sets `t_end = u32::MAX` as an explicit
+  "no ceiling" sentinel.
+
+`tests/rumoca_api_coverage.rs::simulation_session_clamps_advance_at_t_end` pins
+this behaviour, so a future rumoca bump that drops the clamp fails loudly.
 
 Panics in the worker are caught (`catch_unwind`) and reported as solver
 errors rather than crashing the app. This tolerance is essential for

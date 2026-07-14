@@ -5,7 +5,7 @@ Modelica simulation integration for LunCoSim using Rumoca.
 ## What This Crate Does
 
 - **Modelica compilation** — parses and compiles `.mo` files via `rumoca-session`
-- **Simulation execution** — runs Modelica models as `SimStepper` instances
+- **Simulation execution** — runs Modelica models as `SimulationSession` instances
 - **Workbench UI** — code editor, component diagrams, parameter tuning, time-series plots
 - **AST-based editing** — a `ModelicaDocument` whose source is canonical and whose AST is cached + refreshed per op; every editing action (diagram, code editor, parameter inspector) funnels through a typed `ModelicaOp` and a single span-based apply pipeline
 

@@ -27,59 +27,83 @@ fn host(source: &str) -> DocumentHost<ModelicaDocument> {
 // add_short_class — helper level
 // ─────────────────────────────────────────────────────────────────────
 
+/// Apply a document-level mutation's splice to `source` and return the patched
+/// text — the same route `Document::apply` takes.
+fn doc_patched<F>(source: &str, mutate: F) -> String
+where
+    F: FnOnce(
+        &mut rumoca_compile::parsing::ast::StoredDefinition,
+        &mut ast_mut::Edit<'_>,
+    ) -> Result<(), ast_mut::AstMutError>,
+{
+    let sd = parse_to_ast(source, "t.mo").expect("first parse");
+    let (range, replacement, _) =
+        ast_mut::document_patch(source, &sd, mutate).expect("document_patch");
+    let mut patched = source.to_string();
+    patched.replace_range(range, &replacement);
+    patched
+}
+
+/// Same for a single-class mutation.
+fn class_patched<F>(source: &str, class: &str, mutate: F) -> String
+where
+    F: FnOnce(
+        &mut rumoca_compile::parsing::ast::ClassDef,
+        &mut ast_mut::Edit<'_>,
+    ) -> Result<(), ast_mut::AstMutError>,
+{
+    let sd = parse_to_ast(source, "t.mo").expect("first parse");
+    let (range, replacement, _) =
+        ast_mut::class_patch(source, &sd, class, mutate).expect("class_patch");
+    let mut patched = source.to_string();
+    patched.replace_range(range, &replacement);
+    patched
+}
+
 #[test]
 fn add_short_class_at_top_level() {
-    let mut sd = parse_to_ast("", "t.mo").unwrap();
-    ast_mut::add_short_class(
-        &mut sd,
-        "",
-        "MyConnector",
-        ClassKindSpec::Connector,
-        "Real",
-        &[],
-        &[("unit".to_string(), "\"V\"".to_string())],
-    )
-    .expect("add_short_class");
-    let regen = sd.to_modelica();
-    let sd2 = parse_to_ast(&regen, "t.mo")
-        .unwrap_or_else(|e| panic!("reparse: {e:?}\n=== regen ===\n{regen}"));
+    let patched = doc_patched("model Host\nend Host;\n", |sd, e| {
+        ast_mut::add_short_class(
+            sd,
+            e,
+            "",
+            "MyConnector",
+            ClassKindSpec::Connector,
+            "Real",
+            &[],
+            &[("unit".to_string(), "\"V\"".to_string())],
+        )
+    });
+    let sd2 = parse_to_ast(&patched, "t.mo")
+        .unwrap_or_else(|e| panic!("reparse: {e:?}\n=== patched ===\n{patched}"));
     assert!(
         sd2.classes.contains_key("MyConnector"),
-        "MyConnector missing after add_short_class:\n{regen}"
+        "MyConnector missing after add_short_class:\n{patched}"
+    );
+    assert!(
+        sd2.classes.contains_key("Host"),
+        "the existing class was dropped:\n{patched}"
     );
 }
 
 #[test]
 fn add_short_class_nested() {
-    let mut sd = parse_to_ast("package P\nend P;\n", "t.mo").unwrap();
-    ast_mut::add_short_class(
-        &mut sd,
-        "P",
-        "Pin",
-        ClassKindSpec::Connector,
-        "Real",
-        &[],
-        &[],
-    )
-    .expect("add_short_class nested");
-    let regen = sd.to_modelica();
-    let sd2 = parse_to_ast(&regen, "t.mo").expect("reparse");
+    let patched = doc_patched("package P\nend P;\n", |sd, e| {
+        ast_mut::add_short_class(sd, e, "P", "Pin", ClassKindSpec::Connector, "Real", &[], &[])
+    });
+    let sd2 = parse_to_ast(&patched, "t.mo")
+        .unwrap_or_else(|e| panic!("reparse: {e:?}\n=== patched ===\n{patched}"));
     assert!(sd2.classes.get("P").unwrap().classes.contains_key("Pin"));
 }
 
 #[test]
 fn add_short_class_duplicate_returns_error() {
-    let mut sd = parse_to_ast("connector A = Real;\n", "t.mo").unwrap();
-    let err = ast_mut::add_short_class(
-        &mut sd,
-        "",
-        "A",
-        ClassKindSpec::Connector,
-        "Real",
-        &[],
-        &[],
-    )
-    .unwrap_err();
+    let source = "connector A = Real;\n";
+    let sd = parse_to_ast(source, "t.mo").unwrap();
+    let err = ast_mut::document_patch(source, &sd, |sd, e| {
+        ast_mut::add_short_class(sd, e, "", "A", ClassKindSpec::Connector, "Real", &[], &[])
+    })
+    .expect_err("duplicate must fail");
     assert!(matches!(
         err,
         ast_mut::AstMutError::DuplicateClass { name, .. } if name == "A"
@@ -92,43 +116,43 @@ fn add_short_class_duplicate_returns_error() {
 
 #[test]
 fn add_equation_appends_simple_equation() {
-    let mut sd = parse_to_ast("model M\n  Real x;\nend M;\n", "t.mo").unwrap();
-    let class = ast_mut::lookup_class_mut(&mut sd, "M").unwrap();
-    ast_mut::add_equation(
-        class,
-        &EquationDecl {
-            lhs: Some("x".into()),
-            rhs: "time".into(),
-        },
-    )
-    .expect("add_equation");
-    let regen = sd.to_modelica();
-    let sd2 = parse_to_ast(&regen, "t.mo")
-        .unwrap_or_else(|e| panic!("reparse: {e:?}\n=== regen ===\n{regen}"));
+    let patched = class_patched("model M\n  Real x;\nend M;\n", "M", |c, e| {
+        ast_mut::add_equation(
+            c,
+            e,
+            &EquationDecl {
+                lhs: Some("x".into()),
+                rhs: "time".into(),
+            },
+        )
+    });
+    let sd2 = parse_to_ast(&patched, "t.mo")
+        .unwrap_or_else(|e| panic!("reparse: {e:?}\n=== patched ===\n{patched}"));
     let equations = &sd2.classes.get("M").unwrap().equations;
     assert!(
         !equations.is_empty(),
-        "expected at least one equation, got 0; regen:\n{regen}"
+        "expected at least one equation, got 0; patched:\n{patched}"
     );
 }
 
 #[test]
 fn add_equation_creates_equation_section_when_missing() {
-    let mut sd = parse_to_ast("model M\nend M;\n", "t.mo").unwrap();
-    let class = ast_mut::lookup_class_mut(&mut sd, "M").unwrap();
-    ast_mut::add_equation(
-        class,
-        &EquationDecl {
-            lhs: Some("y".into()),
-            rhs: "1".into(),
-        },
-    )
-    .expect("add_equation in empty class");
-    let regen = sd.to_modelica();
+    let patched = class_patched("model M\nend M;\n", "M", |c, e| {
+        ast_mut::add_equation(
+            c,
+            e,
+            &EquationDecl {
+                lhs: Some("y".into()),
+                rhs: "1".into(),
+            },
+        )
+    });
     assert!(
-        regen.contains("equation"),
-        "expected `equation` keyword in regen; got:\n{regen}"
+        patched.contains("equation"),
+        "expected an `equation` section to be created; got:\n{patched}"
     );
+    parse_to_ast(&patched, "t.mo")
+        .unwrap_or_else(|e| panic!("reparse: {e:?}\n=== patched ===\n{patched}"));
 }
 
 // ─────────────────────────────────────────────────────────────────────

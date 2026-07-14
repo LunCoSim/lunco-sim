@@ -1,9 +1,18 @@
-//! Bisection of a rumoca structural-analysis bug that kills
+//! Bisection of a rumoca structural-analysis bug that killed
 //! simulation of many MSL examples (PID_Controller,
 //! OvervoltageProtection, ResonanceCircuits, TestSensors, …).
-//! All affected models stall on the first step with
+//! All affected models stalled on the first step with
 //! `SolverError("Step size is too small")` or
 //! `Exceeded maximum number of nonlinear solver failures`.
+//!
+//! ## STATUS (rumoca 0.9.20, 2026-07-14): MOSTLY FIXED UPSTREAM
+//!
+//! Every isolated trigger below now simulates — LimPID with either
+//! init flavour (T4b/T4c), and KinematicPTP feeding an algebraic
+//! feedback path both through a `Gain` and directly (T4d/T4d-direct).
+//! Those tests are no longer `#[ignore]`d: they now GUARD the fix.
+//! Only the full `Modelica.Blocks.Examples.PID_Controller` (T5) still
+//! fails, so the analysis below is kept as the map for that remnant.
 //!
 //! ## Symptom in the sim trace
 //!
@@ -54,11 +63,11 @@
 //!   RUMOCA_SIM_TRACE=1 cargo test --package lunco-modelica \
 //!       --test rumoca_structural_bug_bisection -- --nocapture
 //!
-//! Tests marked `#[ignore]` are the ones that currently fail due
-//! to this bug — `cargo test` skips them by default so CI stays
+//! The one test still marked `#[ignore]` (T5) is the one that
+//! currently fails — `cargo test` skips it by default so CI stays
 //! green; run with `cargo test -- --ignored` to reproduce.
 
-use rumoca_sim::{SimOptions, SimStepper};
+use rumoca_sim::{SimOptions, SimulationSession};
 
 fn try_run(label: &str, model_name: &str, source: &str) -> Result<(), String> {
     let mut compiler = lunco_modelica::ModelicaCompiler::new();
@@ -68,7 +77,7 @@ fn try_run(label: &str, model_name: &str, source: &str) -> Result<(), String> {
     let mut opts = SimOptions::default();
     opts.atol = 1e-2;
     opts.rtol = 1e-2;
-    let mut stepper = SimStepper::new(&dae.dae, opts)
+    let mut stepper = SimulationSession::new(&dae.dae, opts)
         .map_err(|e| format!("{label}: stepper build failed: {e}"))?;
     stepper
         .step(0.001)
@@ -244,7 +253,6 @@ end T4b;
 "#;
 
 #[test]
-#[ignore = "rumoca structural bug: LimPID + closed-loop feedback trips eliminate_trivial"]
 fn tier_4b_add_lim_pid_default_init() {
     try_run("T4b", "T4b", T4B_SRC).unwrap();
 }
@@ -279,7 +287,6 @@ end T4c;
 "#;
 
 #[test]
-#[ignore = "rumoca structural bug"]
 fn tier_4c_add_lim_pid_steadystate_init() {
     try_run("T4c", "T4c", T4C_SRC).unwrap();
 }
@@ -348,7 +355,6 @@ end T4d;
 "#;
 
 #[test]
-#[ignore = "rumoca structural bug: KinematicPTP + sensor-in-connect-set + algebraic feedback"]
 fn tier_4d_closed_loop_with_gain_only() {
     try_run("T4d", "T4d", T4D_SRC).unwrap();
 }
@@ -523,14 +529,13 @@ end T4d_ptpdirect;
 "#;
 
 #[test]
-#[ignore = "rumoca structural bug: same as T4d but KinematicPTP output direct"]
 fn tier_4d_ptpdirect_kinematic_ptp_direct_setpoint() {
     try_run("T4d-ptpdirect", "T4d_ptpdirect", T4D_PTPDIRECT_SRC).unwrap();
 }
 
 /// T5 — full PID_Controller (the original user report).
 #[test]
-#[ignore = "rumoca structural bug: full Modelica.Blocks.Examples.PID_Controller"]
+#[ignore = "rumoca structural bug (0.9.20): full Modelica.Blocks.Examples.PID_Controller still fails, though every isolated trigger (T4b/T4c/T4d) now passes — the remnant needs a fresh bisection"]
 fn tier_5_full_pid_controller() {
     try_run(
         "T5",

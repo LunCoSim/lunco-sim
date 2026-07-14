@@ -333,16 +333,19 @@ pub fn strip_input_defaults(source: &str) -> (String, HashMap<String, f64>) {
 
     // Walk the AST for every `input` component with an explicit binding
     // and collect the source byte range covering `= <expr>` (the
-    // declaration equation), derived from the binding `Expression`'s
-    // span (rumoca 0.9.1 `Expression::span()`).
+    // declaration equation), derived from the binding `Expression`'s span.
     //
-    // WHY this exists: rumoca 0.9.1 *demotes* an `input` with a binding
-    // to an algebraic variable (rumoca-phase-dae, MLS §4.4.1), so
-    // `input Real g = 9.81` would NOT appear in `SimStepper::input_names()`
-    // and `set_input("g", …)` would fail. By neutralising the binding we
-    // keep it a true runtime slot; the original default is returned in
-    // `defaults` so the UI can seed it via `set_input`. No rumoca
-    // compile-time "runtime override" API exists to do this for us.
+    // WHY this exists: rumoca *demotes* an `input` with a binding to an
+    // algebraic variable (rumoca-phase-dae, MLS §4.4.1), so `input Real g =
+    // 9.81` would NOT appear in `SimulationSession::input_names()` and
+    // `set_input("g", …)` would fail. By neutralising the binding we keep it a
+    // true runtime slot; the original default is returned in `defaults` so the
+    // UI can seed it via `set_input`. rumoca still exposes no compile-time
+    // "runtime override" API to do this for us.
+    //
+    // STILL REQUIRED as of rumoca 0.9.20 — re-verified at that bump by
+    // compiling `input Real g = 9.81` unstripped: `input_names()` came back
+    // EMPTY. Delete this only when that probe lists `g`.
     //
     // CRUCIAL: we BLANK the range in place with spaces (newlines kept)
     // rather than DELETING bytes. The worker compiles this stripped
@@ -856,11 +859,11 @@ pub fn hash_content(source: &str) -> u64 {
 mod tests {
     use super::*;
 
-    // --- strip_input_defaults (rumoca 0.9.1 bound-input regression) ---
+    // --- strip_input_defaults (rumoca bound-input demotion) ---
 
     #[test]
     fn strip_input_defaults_blanks_binding_length_preserving() {
-        // rumoca 0.9.1 demotes a bound `input` to an algebraic variable,
+        // rumoca demotes a bound `input` to an algebraic variable,
         // so the `= 9.81` must be neutralised to keep `g` a runtime slot.
         // The blanking MUST be length-preserving so diagnostic offsets
         // computed against this stripped source still map onto the editor.

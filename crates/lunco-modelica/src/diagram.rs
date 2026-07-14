@@ -1193,7 +1193,7 @@ end MyLib;
                     })
                     .collect(),
                 def_id: None,
-                span: Span::default(),
+                span: Span::DUMMY,
             }
         }
 
