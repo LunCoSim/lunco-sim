@@ -799,9 +799,9 @@ fn stamp_avatar_controls(trigger: On<Add, LocalAvatar>, mut commands: Commands) 
     let mut ec = commands.entity(trigger.entity);
     // Empty port_map (no hardware actuators — `apply_fly` reads the command inputs
     // directly); the `forward`/`side`/`up` surface is filled from the binding.
-    ec.insert(lunco_fsw::FlightSoftware::new(std::collections::HashMap::new(), &[]));
+    ec.try_insert(lunco_fsw::FlightSoftware::new(std::collections::HashMap::new(), &[]));
     if let Some(b) = binding {
-        ec.insert(b);
+        ec.try_insert(b);
     }
 }
 
@@ -1283,7 +1283,7 @@ fn sample_orbit_frame(
         });
         match sample {
             Some(s) => {
-                commands.entity(avatar_ent).insert(s);
+                commands.entity(avatar_ent).try_insert(s);
 
                 // Resolve a pending arrival in the same consistent frame.
                 if wants_sunlit || wants_radial {
@@ -1673,7 +1673,7 @@ fn orbit_system(
                     new_cell,
                     Transform::from_translation(new_translation).with_rotation(local_rot),
                 );
-                commands.entity(avatar_ent).insert(OrbitalViewCamera);
+                commands.entity(avatar_ent).try_insert(OrbitalViewCamera);
             } else {
                 // Guarded writes: a parked view stays byte-identical, so
                 // big_space's change-gated propagation can skip cleanly.
@@ -1959,7 +1959,7 @@ fn freeflight_scroll_transit_system(
                 .remove::<SurfaceRelativeMode>()
                 .remove::<GravityBody>()
                 .remove::<OrbitFrameSample>()
-                .insert(OrbitCamera {
+                .try_insert(OrbitCamera {
                     target: body_ent,
                     distance: radius_m * 3.0,
                     yaw: 0.0,
@@ -1967,7 +1967,7 @@ fn freeflight_scroll_transit_system(
                     damping: None,
                     vertical_offset: 0.0,
                 })
-                .insert(RadialArrival);
+                .try_insert(RadialArrival);
             info!("SURFACE SCROLL-OUT: entering orbital view at current pose");
         }
     }
@@ -2518,7 +2518,7 @@ fn on_release_command(
     // In surface mode, use SurfaceCamera (recomputed from scratch each frame);
     // otherwise use FreeFlightCamera (incremental euler angles).
     if is_surface {
-        commands.entity(avatar_ent).insert(SurfaceCamera {
+        commands.entity(avatar_ent).try_insert(SurfaceCamera {
             heading: yaw, // approximate mapping from euler yaw
             pitch,
         });
@@ -2541,9 +2541,9 @@ fn on_release_command(
         let s_pitch = fwd.dot(up).clamp(-1.0, 1.0).asin();
         commands
             .entity(avatar_ent)
-            .insert((SurfaceCamera { heading, pitch: s_pitch }, SurfaceRelativeMode));
+            .try_insert((SurfaceCamera { heading, pitch: s_pitch }, SurfaceRelativeMode));
     } else {
-        commands.entity(avatar_ent).insert(FreeFlightCamera {
+        commands.entity(avatar_ent).try_insert(FreeFlightCamera {
             yaw,
             pitch,
             damping: None,
@@ -2687,7 +2687,7 @@ fn on_possess_command(
     // pure camera+link bind here.
     commands
         .entity(avatar_ent)
-        .insert(ControllerLink { vessel_entity: cmd.target });
+        .try_insert(ControllerLink { vessel_entity: cmd.target });
 
     // Detect if target is a surface vehicle (has GravityBody) and propagate surface mode.
     let is_surface_vehicle = q_vessel_gravity.get(cmd.target).is_ok();
@@ -2701,7 +2701,7 @@ fn on_possess_command(
             // didn't take".
             .remove::<SpringArmCamera>()
             .remove::<SurfaceRelativeMode>()
-            .insert(OrbitCamera {
+            .try_insert(OrbitCamera {
                 target: cmd.target,
                 distance: end_distance,
                 yaw: if is_spacecraft { current_yaw } else { end_yaw },
@@ -2715,7 +2715,7 @@ fn on_possess_command(
         // on a body / spacecraft possession) would overwrite the spring-arm
         // pose every frame.
         cmd_ent.remove::<OrbitCamera>();
-        cmd_ent.insert((
+        cmd_ent.try_insert((
             SpringArmCamera {
                 target: cmd.target,
                 distance: end_distance,
@@ -2735,9 +2735,9 @@ fn on_possess_command(
         // If possessing a surface vehicle, enable surface-relative camera mode
         if is_surface_vehicle {
             if let Ok(gb) = q_vessel_gravity.get(cmd.target) {
-                cmd_ent.insert(*gb);
+                cmd_ent.try_insert(*gb);
             }
-            cmd_ent.insert(SurfaceRelativeMode);
+            cmd_ent.try_insert(SurfaceRelativeMode);
         }
     }
 
@@ -2814,7 +2814,7 @@ fn on_follow_command(
         .remove::<SurfaceCamera>()
         .remove::<OrbitCamera>()
         .remove::<FrameBlend>()
-        .insert((
+        .try_insert((
             SpringArmCamera {
                 target: cmd.target,
                 distance: end_distance,
@@ -2831,7 +2831,7 @@ fn on_follow_command(
 
     // Surface-relative mode if following a body on a gravity well.
     if let Ok(gb) = q_vessel_gravity.get(cmd.target) {
-        cmd_ent.insert(*gb).insert(SurfaceRelativeMode);
+        cmd_ent.try_insert(*gb).try_insert(SurfaceRelativeMode);
     } else {
         cmd_ent.remove::<SurfaceRelativeMode>();
     }
@@ -2903,7 +2903,7 @@ fn on_focus_command(
         // Any previous sample belongs to the previous target; drop it so
         // orbit_system idles until `sample_orbit_frame` refreshes it.
         .remove::<OrbitFrameSample>()
-        .insert(OrbitCamera {
+        .try_insert(OrbitCamera {
             target: cmd.target,
             distance,
             yaw,
@@ -2914,7 +2914,7 @@ fn on_focus_command(
     // Celestial bodies: aim the arrival at the sunlit side (resolved in
     // `First` by `sample_orbit_frame`, where GTs are frame-consistent).
     if is_body {
-        ent.insert(SunlitArrival);
+        ent.try_insert(SunlitArrival);
     }
     info!(
         "FOCUS: avatar={avatar_ent:?} target={:?} (physical {physical_target:?}) body={is_body} distance={distance:.3e}",
@@ -2933,14 +2933,14 @@ fn avatar_init_system(
 ) {
     for (entity, tf) in q_avatar.iter() {
         let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
-        commands.entity(entity).insert(FreeFlightCamera {
+        commands.entity(entity).try_insert(FreeFlightCamera {
             yaw,
             pitch,
             damping: None,
         });
     }
     for entity in q_proj.iter() {
-        commands.entity(entity).insert(AdaptiveNearPlane);
+        commands.entity(entity).try_insert(AdaptiveNearPlane);
     }
 }
 
@@ -3144,9 +3144,9 @@ fn on_surface_teleport_command(
         migrate_to_grid(&mut commands, avatar_ent, grid_entity, new_cell, local_tf);
 
         commands.entity(avatar_ent)
-            .insert(GravityBody { body_entity })
-            .insert(SurfaceRelativeMode)
-            .insert(SurfaceCamera {
+            .try_insert(GravityBody { body_entity })
+            .try_insert(SurfaceRelativeMode)
+            .try_insert(SurfaceCamera {
                 heading: 0.0,
                 pitch: -0.2,
             })
@@ -3207,7 +3207,7 @@ fn on_leave_surface_command(
     migrate_to_grid(&mut commands, avatar_ent, emb_grid, new_cell, local_tf);
 
     commands.entity(avatar_ent)
-        .insert(OrbitCamera {
+        .try_insert(OrbitCamera {
             target: body_entity,
             distance: altitude,
             yaw: 0.0,
@@ -3310,7 +3310,7 @@ fn surface_mode_transition_system(
             // but provides a reasonable starting orientation.
             commands.entity(avatar_ent)
                 .remove::<SurfaceCamera>()
-                .insert(FreeFlightCamera {
+                .try_insert(FreeFlightCamera {
                     yaw: sc.heading,
                     pitch: sc.pitch,
                     damping: None,
@@ -3320,12 +3320,12 @@ fn surface_mode_transition_system(
         // Low enough and explicitly bound to a body → enter surface mode.
         let has_body = maybe_gb.is_some();
         if has_body {
-            commands.entity(avatar_ent).insert(SurfaceRelativeMode);
+            commands.entity(avatar_ent).try_insert(SurfaceRelativeMode);
             // Swap FreeFlightCamera → SurfaceCamera.
             if let Some(ff) = maybe_ff {
                 commands.entity(avatar_ent)
                     .remove::<FreeFlightCamera>()
-                    .insert(SurfaceCamera {
+                    .try_insert(SurfaceCamera {
                         heading: ff.yaw,
                         pitch: ff.pitch,
                     });

@@ -154,10 +154,10 @@ pub fn auto_mark_dynamic_bodies(
                 force: settings.force,
             };
             for e in q_unmarked.iter() {
-                commands.entity(e).insert(arrows);
+                commands.entity(e).try_insert(arrows);
             }
             for e in q_marked.iter() {
-                commands.entity(e).insert(arrows);
+                commands.entity(e).try_insert(arrows);
             }
         } else {
             for e in q_marked.iter() {
@@ -177,7 +177,7 @@ pub fn auto_mark_dynamic_bodies(
         force: settings.force,
     };
     for e in q_unmarked.iter() {
-        commands.entity(e).insert(arrows);
+        commands.entity(e).try_insert(arrows);
     }
 }
 

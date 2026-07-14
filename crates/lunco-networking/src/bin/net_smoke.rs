@@ -305,7 +305,7 @@ fn host_despawn_g3(
         return;
     }
     if let Some(rovers) = rovers {
-        commands.entity(rovers.g3).despawn();
+        commands.entity(rovers.g3).try_despawn();
         *done = true;
         info!("[test] host despawned G3 ({G3_GID:#x}) — expect client proxy removal");
     }

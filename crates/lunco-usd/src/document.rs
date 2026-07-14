@@ -1012,7 +1012,7 @@ impl Document for UsdDocument {
                     .ok()
                     .and_then(|p| layer.spec(&p).map(|_| ()))
                     .is_some();
-                let old_translate = layer.scalar::<[f64; 3]>(&prim_sdf, "xformOp:translate");
+                let old_translate = layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:translate");
 
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 stage
@@ -1073,7 +1073,7 @@ impl Document for UsdDocument {
                     .ok()
                     .and_then(|p| layer.spec(&p).map(|_| ()))
                     .is_some();
-                let old_rotate = layer.scalar::<[f64; 3]>(&prim_sdf, "xformOp:rotateXYZ");
+                let old_rotate = layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:rotateXYZ");
 
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 stage

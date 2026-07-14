@@ -18,20 +18,34 @@
 
 def Xform "RockerBogieTest"
 {
+
+    # UsdPhysicsMaterialAPI — friction/restitution live on a Material
+    # bound with the purpose-specific `material:binding:physics`, which is
+    # how UsdPhysics (and Omniverse) actually spell a surface.
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
     custom bool lunco:spawnable = false
     custom string lunco:description = "The rocker-bogie rover (the kind Mars rovers use) driving over a small step. The linkage should keep the body level as one side lifts."
 
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
     )
     {
         double size = 1.0
         double3 xformOp:translate = (0, -0.5, 0)
         double3 xformOp:scale = (200.0, 1.0, 200.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.4, 0.4, 0.45)
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
         bool physics:collisionEnabled = true
-        float physics:friction = 1.0
+        rel material:binding:physics = </RockerBogieTest/PhysicsMaterials/Friction_1_0>
     }
 
     # The step under the left-front foot (world x≈-1.0, z≈+1.3). Static collider
@@ -44,9 +58,9 @@ def Xform "RockerBogieTest"
         double3 xformOp:translate = (-1.0, 0.0, 1.2)
         double3 xformOp:scale = (0.7, 0.5, 0.7)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.6, 0.5, 0.4)
+        color3f[] primvars:displayColor = [(0.6, 0.5, 0.4)]
         bool physics:collisionEnabled = true
-        float physics:friction = 1.0
+        rel material:binding:physics = </RockerBogieTest/PhysicsMaterials/Friction_1_0>
     }
 
     def DistantLight "Sun"

@@ -134,7 +134,7 @@ pub fn load_behavior_xml_assets(
     for (e, path) in q_pending.iter() {
         commands
             .entity(e)
-            .insert(BehaviorXmlHandle(server.load(path.0.clone())));
+            .try_insert(BehaviorXmlHandle(server.load(path.0.clone())));
     }
     for (e, handle) in q_loading.iter() {
         let Some(asset) = assets.get(&handle.0) else {
@@ -142,7 +142,7 @@ pub fn load_behavior_xml_assets(
         };
         commands
             .entity(e)
-            .insert(BehaviorXml(asset.text.clone()))
+            .try_insert(BehaviorXml(asset.text.clone()))
             .remove::<BehaviorXmlPath>()
             .remove::<BehaviorXmlHandle>();
     }

@@ -43,7 +43,7 @@ fn msaa_of(m: MsaaLevel) -> Msaa {
 /// loudly, instead of silently wasting the passes.
 fn apply(commands: &mut Commands, e: Entity, cam: &SceneCamera) {
     let mut ec = commands.entity(e);
-    ec.insert((
+    ec.try_insert((
         Camera3d::default(),
         tonemapping_of(cam.tone_map),
         msaa_of(cam.msaa),
@@ -52,14 +52,14 @@ fn apply(commands: &mut Commands, e: Entity, cam: &SceneCamera) {
     // `Hdr` is a marker component in `bevy_camera` — render-FREE. So "this camera is
     // HDR" is expressible headless too; only the pipeline that acts on it is not.
     if cam.hdr {
-        ec.insert(Hdr);
+        ec.try_insert(Hdr);
     } else {
         ec.remove::<Hdr>();
     }
 
     match (cam.bloom, cam.hdr) {
         (Some(b), true) => {
-            ec.insert(Bloom {
+            ec.try_insert(Bloom {
                 intensity: b.intensity,
                 low_frequency_boost: b.low_frequency_boost,
                 ..Bloom::default()

@@ -123,7 +123,7 @@ pub fn update_solar_poses(
         if let Ok(mut existing) = q_pose.get_mut(entity) {
             *existing = pose;
         } else {
-            commands.entity(entity).insert(pose);
+            commands.entity(entity).try_insert(pose);
         }
     }
 }

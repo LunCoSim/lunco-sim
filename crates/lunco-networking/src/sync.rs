@@ -1170,7 +1170,7 @@ pub fn drain_sync_inbox(
                     // O(1) gid→entity via the canonical registry (the same map the
                     // render path resolves), not a linear scan of every gid'd entity.
                     if let Some(proxy) = entities.resolve(&GlobalEntityId::from_raw(d.gid)) {
-                        commands.entity(proxy).despawn();
+                        commands.entity(proxy).try_despawn();
                     }
                 }
             }

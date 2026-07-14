@@ -20,7 +20,7 @@ def Xform "CommsMast"
         double3 xformOp:translate = (0, 0.15, 0)
         double3 xformOp:scale = (1.5, 0.3, 1.5)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.33, 0.32, 0.31)
+        color3f[] primvars:displayColor = [(0.33, 0.32, 0.31)]
         bool physics:collisionEnabled = true
     }
 
@@ -33,7 +33,7 @@ def Xform "CommsMast"
         double height = 10.0
         double3 xformOp:translate = (0, 5.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.55, 0.55, 0.58)
+        color3f[] primvars:displayColor = [(0.55, 0.55, 0.58)]
         bool physics:collisionEnabled = true
     }
 
@@ -42,7 +42,7 @@ def Xform "CommsMast"
         double size = 0.6
         double3 xformOp:translate = (0, 10.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.4, 0.4, 0.43)
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.43)]
     }
 
     # Dish — flattened sphere reads as a shallow paraboloid, tilted to Earth.
@@ -53,7 +53,7 @@ def Xform "CommsMast"
         double3 xformOp:rotateXYZ = (35, 0, 0)
         double3 xformOp:scale = (1.0, 0.25, 1.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f primvars:displayColor = (0.85, 0.85, 0.88)
+        color3f[] primvars:displayColor = [(0.85, 0.85, 0.88)]
     }
 
     # Feed horn — thin cylinder pointing into the dish.
@@ -65,6 +65,6 @@ def Xform "CommsMast"
         double3 xformOp:translate = (0, 10.9, 1.4)
         double3 xformOp:rotateXYZ = (35, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-        color3f primvars:displayColor = (0.6, 0.6, 0.62)
+        color3f[] primvars:displayColor = [(0.6, 0.6, 0.62)]
     }
 }

@@ -44,7 +44,7 @@ def Xform "Rucheyok" (
         double3 xformOp:translate = (0, 2.0, 0)
         double3 xformOp:scale = (15.0, 4.0, 20.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.2, 0.5, 0.8)
+        color3f[] primvars:displayColor = [(0.2, 0.5, 0.8)]
     }
 
     # --- Solar Panel (from component, with rover-specific parameters) ---
@@ -55,7 +55,7 @@ def Xform "Rucheyok" (
         double3 xformOp:translate = (0, 4.5, 0)
         double3 xformOp:scale = (12.0, 0.2, 6.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.05, 0.05, 0.5)
+        color3f[] primvars:displayColor = [(0.05, 0.05, 0.5)]
 
         bool physics:rigidBodyEnabled = true
         float physics:mass = 15.0
@@ -78,7 +78,7 @@ def Xform "Rucheyok" (
         double3 xformOp:translate = (0, 0.8, 0)
         double3 xformOp:scale = (4.0, 0.8, 6.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.8, 0.2, 0.2)
+        color3f[] primvars:displayColor = [(0.8, 0.2, 0.2)]
 
         bool physics:rigidBodyEnabled = true
         float physics:mass = 50.0
@@ -110,7 +110,7 @@ def Xform "Rucheyok" (
         double height = 1.5
         double3 xformOp:translate = (-8.5, 0, -10.5)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.2, 0.8, 0.2)
+        color3f[] primvars:displayColor = [(0.2, 0.8, 0.2)]
 
         int physxVehicleWheel:index = 0
         float physxVehicleWheel:radius = 2.0
@@ -135,7 +135,7 @@ def Xform "Rucheyok" (
         double height = 1.5
         double3 xformOp:translate = (8.5, 0, -10.5)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.2, 0.8, 0.2)
+        color3f[] primvars:displayColor = [(0.2, 0.8, 0.2)]
 
         int physxVehicleWheel:index = 1
         float physxVehicleWheel:radius = 2.0
@@ -158,7 +158,7 @@ def Xform "Rucheyok" (
         double height = 1.5
         double3 xformOp:translate = (-8.5, 0, 10.5)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.8, 0.2, 0.2)
+        color3f[] primvars:displayColor = [(0.8, 0.2, 0.2)]
 
         int physxVehicleWheel:index = 2
         float physxVehicleWheel:radius = 2.0
@@ -181,7 +181,7 @@ def Xform "Rucheyok" (
         double height = 1.5
         double3 xformOp:translate = (8.5, 0, 10.5)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.8, 0.2, 0.2)
+        color3f[] primvars:displayColor = [(0.8, 0.2, 0.2)]
 
         int physxVehicleWheel:index = 3
         float physxVehicleWheel:radius = 2.0

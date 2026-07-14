@@ -21,7 +21,7 @@ def Xform "LandingPad"
         double height = 0.3
         double3 xformOp:translate = (0, 0.15, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.18, 0.17, 0.16)
+        color3f[] primvars:displayColor = [(0.18, 0.17, 0.16)]
         bool physics:collisionEnabled = true
         # Darkened regolith — sintered/compacted blast pad.
         string primvars:materialType = "shader"
@@ -37,6 +37,6 @@ def Xform "LandingPad"
         double height = 0.35
         double3 xformOp:translate = (0, 0.18, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.7, 0.6, 0.2)
+        color3f[] primvars:displayColor = [(0.7, 0.6, 0.2)]
     }
 }

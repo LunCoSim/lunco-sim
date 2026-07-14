@@ -13,21 +13,42 @@
 # rotateXYZ; ~18° sits on the edge for this rover.
 def Xform "SlopeTest"
 {
+
+    # UsdPhysicsMaterialAPI — friction/restitution live on a Material
+    # bound with the purpose-specific `material:binding:physics`, which is
+    # how UsdPhysics (and Omniverse) actually spell a surface.
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_0_95" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 0.95
+            float physics:staticFriction = 0.95
+        }
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
     custom bool lunco:spawnable = false
     custom string lunco:description = "A borderline ~18° grade with the top-heavy Hauler at its base — the tip-over teaching stage."
 
     # Flat approach plot, ±60 m.
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
     )
     {
         double size = 1.0
         double3 xformOp:translate = (0, -0.5, 0)
         double3 xformOp:scale = (120.0, 1.0, 120.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.34, 0.32, 0.31)
+        color3f[] primvars:displayColor = [(0.34, 0.32, 0.31)]
         bool physics:collisionEnabled = true
-        float physics:friction = 1.0
+        rel material:binding:physics = </SlopeTest/PhysicsMaterials/Friction_1_0>
     }
 
     # Broad ~18° grade rising to +X (tilt about Z raises the +X edge). 40 m wide in
@@ -41,9 +62,9 @@ def Xform "SlopeTest"
         double3 xformOp:rotateXYZ = (0.0, 0.0, -18.0)
         double3 xformOp:scale = (34.0, 0.6, 40.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f primvars:displayColor = (0.40, 0.36, 0.33)
+        color3f[] primvars:displayColor = [(0.40, 0.36, 0.33)]
         bool physics:collisionEnabled = true
-        float physics:friction = 0.95
+        rel material:binding:physics = </SlopeTest/PhysicsMaterials/Friction_0_95>
     }
 
     # The awful rover at the base of the grade, nose pointing uphill (+X).

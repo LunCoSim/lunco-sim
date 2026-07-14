@@ -41,8 +41,11 @@ use crate::document::{LayerId, UsdOp};
 
 /// The shader prim's name inside its `Material`.
 const SURFACE: &str = "Surface";
-/// The `Scope` that collects a scene's materials, by convention.
+/// The `Scope` that collects a scene's *look* materials, by convention.
 const LOOKS: &str = "Looks";
+/// The `Scope` that collects a scene's *physics* materials. Separate from
+/// [`LOOKS`] on purpose — see [`ensure_physics_material_ops`].
+const PHYSICS_MATERIALS: &str = "PhysicsMaterials";
 
 /// Ops that give `geom_path` a bound `UsdPreviewSurface`, plus the path of the
 /// `Shader` prim to write `inputs:*` onto.
@@ -130,6 +133,98 @@ pub fn ensure_preview_surface_ops(geom_path: &str) -> Option<(Vec<UsdOp>, String
     Some((ops, shader))
 }
 
+/// Ops that give `geom_path` a bound **physics** surface: a `Material` carrying
+/// `UsdPhysicsMaterialAPI`, bound through the purpose-specific
+/// `material:binding:physics`.
+///
+/// # Why this is a SEPARATE Material from the look
+///
+/// USD *permits* one `Material` prim to carry both a `UsdPreviewSurface` and an
+/// applied `PhysicsMaterialAPI` — that is precisely why binding resolution falls
+/// back from `material:binding:physics` to `material:binding` (openusd's own
+/// `physics::tokens` documents the fallback). So a merged material is legal.
+///
+/// We still author them apart, and only *share the code*:
+///
+/// - A look and a surface are not the same authoring decision. Ice and glass look
+///   alike and grip nothing alike; regolith and concrete grip alike and look
+///   nothing alike. Forcing one prim couples two axes that authors vary
+///   independently, and there is no way back out of it once scenes are written.
+/// - Physics materials are a small shared vocabulary (a handful of surfaces reused
+///   across a whole scene), while looks are per-object. They have different
+///   cardinality, so one prim per geom is the wrong shape for physics.
+///
+/// What IS shared is the part that should never diverge: binding *resolution* —
+/// namespace inheritance and the purpose fallback — which lives once in
+/// [`lunco_usd_bevy::resolve_bound_material`] and serves both. A scene that DOES
+/// merge them still resolves correctly through that fallback, so we read the
+/// legal form even though we don't author it.
+pub fn ensure_physics_material_ops(
+    geom_path: &str,
+    name: &str,
+    dynamic_friction: f32,
+    static_friction: f32,
+    restitution: Option<f32>,
+) -> Option<Vec<UsdOp>> {
+    let geom = geom_path.strip_prefix('/')?;
+    let root_name = geom.split('/').next()?;
+    if root_name.is_empty() {
+        return None;
+    }
+    let root = format!("/{root_name}");
+    let scope = format!("{root}/{PHYSICS_MATERIALS}");
+    let mat_name = sanitize(name);
+    let mat = format!("{scope}/{mat_name}");
+
+    let root_layer = LayerId::root();
+    let mut ops = vec![
+        UsdOp::AddPrim {
+            edit_target: root_layer.clone(),
+            parent_path: root,
+            name: PHYSICS_MATERIALS.into(),
+            type_name: Some("Scope".into()),
+            reference: None,
+        },
+        UsdOp::AddPrim {
+            edit_target: root_layer.clone(),
+            parent_path: scope,
+            name: mat_name,
+            type_name: Some("Material".into()),
+            reference: None,
+        },
+        UsdOp::SetApiSchemas {
+            edit_target: root_layer.clone(),
+            path: mat.clone(),
+            schemas: vec!["PhysicsMaterialAPI".into()],
+        },
+    ];
+
+    let mut attr = |name: &str, value: String| {
+        ops.push(UsdOp::SetAttribute {
+            edit_target: root_layer.clone(),
+            path: mat.clone(),
+            name: name.into(),
+            type_name: "float".into(),
+            value,
+        });
+    };
+    // Dynamic and static friction stay distinct — USD models them separately and
+    // so does the solver.
+    attr("physics:dynamicFriction", dynamic_friction.to_string());
+    attr("physics:staticFriction", static_friction.to_string());
+    if let Some(r) = restitution {
+        attr("physics:restitution", r.to_string());
+    }
+
+    ops.push(UsdOp::SetRelationship {
+        edit_target: root_layer,
+        path: geom_path.to_string(),
+        name: "material:binding:physics".into(),
+        targets: vec![mat],
+    });
+    Some(ops)
+}
+
 /// Coerce a prim-path fragment into a legal USD identifier (alphanumerics and
 /// `_`, never leading with a digit).
 fn sanitize(s: &str) -> String {
@@ -208,5 +303,60 @@ mod tests {
     fn rejects_non_absolute_paths() {
         assert!(ensure_preview_surface_ops("World/Ball").is_none());
         assert!(ensure_preview_surface_ops("/").is_none());
+    }
+
+    /// A physics material is its OWN `Material` prim, in its own scope, bound for
+    /// the `physics` purpose — NOT merged into the geom's look material. Looks are
+    /// per-object; surfaces are a small shared vocabulary. (USD would permit the
+    /// merged form — that is what the purpose fallback is for — and we still READ
+    /// it; we just don't author it. See `ensure_physics_material_ops`.)
+    #[test]
+    fn physics_material_is_separate_from_the_look() {
+        let ops = ensure_physics_material_ops("/World/Ground", "Regolith", 0.9, 1.0, Some(0.1))
+            .expect("ops");
+
+        assert!(
+            ops.iter().any(|o| matches!(o, UsdOp::SetApiSchemas { path, schemas, .. }
+                if path == "/World/PhysicsMaterials/Regolith"
+                    && schemas == &["PhysicsMaterialAPI".to_string()])),
+            "PhysicsMaterialAPI applies to a Material in the PhysicsMaterials scope"
+        );
+
+        let bindings: Vec<(&str, &str)> = ops
+            .iter()
+            .filter_map(|o| match o {
+                UsdOp::SetRelationship { name, targets, .. } => {
+                    Some((name.as_str(), targets[0].as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            bindings,
+            vec![(
+                "material:binding:physics",
+                "/World/PhysicsMaterials/Regolith"
+            )],
+            "bound for the physics purpose only — the look binding is untouched"
+        );
+
+        // Dynamic and static friction survive as DISTINCT values.
+        let friction: Vec<(&str, &str)> = ops
+            .iter()
+            .filter_map(|o| match o {
+                UsdOp::SetAttribute { name, value, .. } if name.starts_with("physics:") => {
+                    Some((name.as_str(), value.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            friction,
+            vec![
+                ("physics:dynamicFriction", "0.9"),
+                ("physics:staticFriction", "1"),
+                ("physics:restitution", "0.1"),
+            ]
+        );
     }
 }

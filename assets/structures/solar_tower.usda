@@ -31,7 +31,7 @@ def Xform "SolarTower"
         double3 xformOp:translate = (0, 0.1, 0)
         double3 xformOp:scale = (2.0, 0.2, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.32, 0.31, 0.3)
+        color3f[] primvars:displayColor = [(0.32, 0.31, 0.3)]
         bool physics:collisionEnabled = true
     }
 
@@ -46,7 +46,7 @@ def Xform "SolarTower"
         double height = 5.0
         double3 xformOp:translate = (0, 2.7, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.5, 0.5, 0.52)
+        color3f[] primvars:displayColor = [(0.5, 0.5, 0.52)]
         float physics:mass = 200.0
         bool physics:kinematicEnabled = true
         bool physics:collisionEnabled = true
@@ -64,7 +64,7 @@ def Xform "SolarTower"
         double height = 0.5
         double3 xformOp:translate = (0, 5.6, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.45, 0.45, 0.48)
+        color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
 
         # Vertical PV panel — thin cube standing on edge, solar_panel
         # shader. Visual-only child of the head, so it swings with the
@@ -75,7 +75,7 @@ def Xform "SolarTower"
             double3 xformOp:translate = (0, 1.2, 0)
             double3 xformOp:scale = (4.0, 3.0, 0.06)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-            color3f primvars:displayColor = (0.05, 0.05, 0.35)
+            color3f[] primvars:displayColor = [(0.05, 0.05, 0.35)]
             string primvars:materialType = "shader"
             string primvars:shaderPath = "shaders/solar_panel.wgsl"
             color3f primvars:cell_color = (0.05, 0.05, 0.35)

@@ -45,8 +45,8 @@ def Xform "WaypointMarker" (
     {
         double radius = 2.5
         rel material:binding = </WaypointMarker/Looks/Dome_Mat>
-        color3f primvars:displayColor = (0.2, 0.95, 0.5)
-        float primvars:displayOpacity = 0.28
+        color3f[] primvars:displayColor = [(0.2, 0.95, 0.5)]
+        float[] primvars:displayOpacity = [0.28]
         bool physics:collisionEnabled = false
     }
 

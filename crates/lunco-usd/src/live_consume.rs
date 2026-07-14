@@ -91,8 +91,14 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         // A `DomeLight`'s attributes (its HDRI, intensity, skybox flag) are not
         // transforms, so neither of the above sees them. Without this, a
         // `SetDomeLight` on an already-live dome would journal and save but
-        // leave the rendered sky untouched.
+        // leave the rendered sky untouched. Runs before the general refresh
+        // below, which then skips domes — this path is the cheaper one (it keeps
+        // the projected cubemap when only the brightness moved).
         refresh_domes_live(world, id, &info_only);
+        // EVERYTHING ELSE. Any other authored attribute — a colour, a material
+        // input, a light's intensity, a radius, `visibility` — re-projects here,
+        // so a live edit shows up without reloading the scene.
+        refresh_edited_prims_live(world, id, &info_only);
         reconcile_structural_live(world, id, &resynced);
     }
 
@@ -240,6 +246,85 @@ pub(crate) fn refresh_domes_live(
     }
 }
 
+/// Re-project every prim whose attributes were edited — the general live-edit
+/// path, so **an edit shows up without reloading the scene**.
+///
+/// `info_only` carries both the owning prim path and the PROPERTY path naming the
+/// changed attribute (pinned by `info_only_reports_both_prim_and_property_paths`).
+/// That attribute name is what lets this be precise instead of a reload:
+///
+/// - **`xformOp:*`** — skipped. [`apply_translates_live`] / [`apply_rotates_live`]
+///   already wrote the `Transform` in place. Re-instantiating on a transform edit
+///   would rebuild the mesh and re-run the physics observers on every frame of a
+///   gizmo drag.
+/// - **`Shader` / `Material` prims** — a material edit fans out through
+///   `material:binding` to arbitrary meshes elsewhere in the scene, so the prim's
+///   own subtree is not enough: refresh the scene's visuals.
+/// - **anything else** — re-instantiate just that prim's subtree.
+///
+/// `DomeLight`s are excluded: [`refresh_domes_live`] already handled them, and it
+/// is strictly better (it keeps the projected cubemap when only the intensity or
+/// the skybox flag moved, instead of re-projecting a 1024² cubemap per edit).
+pub(crate) fn refresh_edited_prims_live(
+    world: &mut World,
+    id: AssetId<UsdStageAsset>,
+    info_only: &[String],
+) {
+    use lunco_usd_bevy::CanonicalStages;
+    if info_only.is_empty() {
+        return;
+    }
+
+    // Split the property paths into (prim, attr). A prim path carries no `.`,
+    // so the ones that do not split are the prim-path half of the same change and
+    // are simply skipped here.
+    let mut prims: Vec<String> = Vec::new();
+    for p in info_only {
+        let Some((prim, attr)) = p.split_once('.') else {
+            continue;
+        };
+        if attr.starts_with("xformOp:") {
+            continue;
+        }
+        if !prims.iter().any(|s| s == prim) {
+            prims.push(prim.to_string());
+        }
+    }
+    if prims.is_empty() {
+        return;
+    }
+
+    // Classify under one short borrow of the `!Send` stage, then release it —
+    // the refreshes below mutate the world.
+    let mut scene_wide = false;
+    let mut subtrees: Vec<String> = Vec::new();
+    {
+        let Some(stages) = world.get_non_send::<CanonicalStages>() else {
+            return;
+        };
+        let Some(cs) = stages.get(id) else { return };
+        let view = cs.view();
+        for prim in prims {
+            let Ok(sp) = SdfPath::new(&prim) else { continue };
+            match view.type_name(&sp).as_deref() {
+                // Already re-projected, better, by `refresh_domes_live`.
+                Some("DomeLight") => {}
+                // Material network edits fan out to every prim bound to them.
+                Some("Shader") | Some("Material") => scene_wide = true,
+                _ => subtrees.push(prim),
+            }
+        }
+    }
+
+    if scene_wide {
+        crate::twin_projection::refresh_scene_visuals(world, id);
+        return;
+    }
+    for prim in subtrees {
+        crate::twin_projection::refresh_prim_subtree(world, id, &prim);
+    }
+}
+
 /// Reconcile the live entities of the scene scoped to `id` against the **live
 /// [`CanonicalStage`]** for the structurally-changed `resync_paths`: spawn the
 /// added (present in the stage, no live entity), despawn the removed (absent,
@@ -379,6 +464,78 @@ mod tests {
         assert!(
             !live(app.world_mut()),
             "removing the prim from the live stage must despawn its entity"
+        );
+    }
+
+    /// **The shape of an `info_only` entry.** An attribute edit reports BOTH the
+    /// owning prim path (`/World/Ball`) and the property path
+    /// (`/World/Ball.primvars:displayColor`).
+    ///
+    /// Pinned by a test because the live-edit bridge depends on both halves and
+    /// they are easy to assume away in either direction:
+    /// - the prim path is what [`apply_translates_live`] matches on (drop it and
+    ///   gizmo moves stop projecting);
+    /// - the property path is what names the CHANGED ATTRIBUTE, which is the only
+    ///   way [`refresh_edited_prims_live`] can tell "the colour moved, re-project
+    ///   the look" from "it was just a drag, use the cheap transform path".
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn info_only_reports_both_prim_and_property_paths() {
+        use bevy::asset::AssetApp;
+        use bevy::prelude::*;
+        use lunco_usd_bevy::{CanonicalStages, StageRecipe};
+
+        let mut app = App::new();
+        app.add_plugins(bevy::asset::AssetPlugin::default())
+            .init_asset::<UsdStageAsset>()
+            .init_non_send::<CanonicalStages>();
+
+        let recipe = StageRecipe::from_source("scene.usda", TINY);
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<UsdStageAsset>>()
+            .add(UsdStageAsset { recipe: Some(recipe.clone()) });
+        let id = handle.id();
+        app.world_mut()
+            .non_send_mut::<CanonicalStages>()
+            .get_or_build(id, &recipe)
+            .expect("stage builds");
+
+        // Define the prim, then drain so only the ATTRIBUTE edit is observed.
+        {
+            let stages = app.world().non_send::<CanonicalStages>();
+            let stage = stages.get(id).unwrap().stage();
+            stage.define_prim("/World/Ball").unwrap().set_type_name("Sphere").unwrap();
+        }
+        app.world_mut().non_send_mut::<CanonicalStages>().drain_all_changes();
+
+        // Author an attribute value — an "info only" change, no restructuring.
+        {
+            let stages = app.world().non_send::<CanonicalStages>();
+            let stage = stages.get(id).unwrap().stage();
+            stage
+                .create_attribute("/World/Ball.primvars:displayColor", "color3f[]")
+                .unwrap();
+        }
+
+        let batches = app.world_mut().non_send_mut::<CanonicalStages>().drain_all_changes();
+        let paths: Vec<String> = batches
+            .into_iter()
+            .flat_map(|(_, cs)| cs)
+            .flat_map(|c| c.info_only.iter().map(|p| p.to_string()).collect::<Vec<_>>())
+            .collect();
+
+        assert!(
+            paths.iter().any(|p| p == "/World/Ball"),
+            "info_only must carry the owning PRIM path (what the transform fast \
+             path matches on). got: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .any(|p| p == "/World/Ball.primvars:displayColor"),
+            "info_only must carry the PROPERTY path, naming the changed attribute. \
+             got: {paths:?}"
         );
     }
 }

@@ -76,7 +76,11 @@ impl Plugin for LuncoRenderPlugin {
             .add_observer(bind_pbr_look)
             .add_systems(
                 Update,
-                (rebind_changed_pbr_look, look_cache::sweep_look_cache::<PbrLook>),
+                (rebind_changed_pbr_look, look_cache::sweep_look_cache::<PbrLook>)
+                    // Names the binders; carries no ordering rule. The despawn race
+                    // that used to live here is solved a schedule up — the USD
+                    // projector runs in `PreUpdate`. See `lunco_render::LookRebind`.
+                    .in_set(lunco_render::LookRebind),
             );
         scene_camera::build(app);
         // `shader_look::build` first: it registers the `ShaderMaterial` + `Shader`
@@ -181,9 +185,9 @@ fn bind_pbr_look(
     let handle = material_for(look, &mut cache, &mut materials);
 
     let mut ec = commands.entity(e);
-    ec.insert(MeshMaterial3d(handle));
+    ec.try_insert(MeshMaterial3d(handle));
     if look.no_shadow_cast {
-        ec.insert(NotShadowCaster);
+        ec.try_insert(NotShadowCaster);
     }
 }
 
@@ -217,15 +221,25 @@ fn rebind_changed_pbr_look(
             }
         }
         let handle = material_for(look, &mut cache, &mut materials);
-        commands.entity(e).insert(MeshMaterial3d(handle));
+        // `try_insert`, not `insert`. The USD projector's despawns can no longer
+        // race this (it runs in `PreUpdate`), but `ClearScene` and the preview
+        // viewport still despawn entities *within* `Update`, and Bevy's deferred
+        // commands make "queued insert on an entity despawned later this frame" a
+        // real state. `try_insert` is Bevy's answer to exactly that; here it is
+        // correct rather than a cover-up — the entity is genuinely gone, so there
+        // is nothing to render and nothing to lose.
+        commands.entity(e).try_insert(MeshMaterial3d(handle));
         apply_shadow_flag(&mut commands, e, look);
     }
 }
 
 fn apply_shadow_flag(commands: &mut Commands, e: Entity, look: &PbrLook) {
+    // `try_insert` for the same reason as the caller: the entity can be despawned
+    // (a live-edit subtree rebuild) before this command buffer applies. `remove`
+    // on a despawned entity is already a no-op.
     let mut ec = commands.entity(e);
     if look.no_shadow_cast {
-        ec.insert(NotShadowCaster);
+        ec.try_insert(NotShadowCaster);
     } else {
         ec.remove::<NotShadowCaster>();
     }

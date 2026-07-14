@@ -91,8 +91,8 @@ pub fn capture_gizmo_start(
         info!("GIZMO: drag started for {:?}, local_pos={:?}", entity, local_pos);
 
         commands.entity(entity)
-            .insert(RigidBody::Kinematic)
-            .insert(GizmoPrevPos { 
+            .try_insert(RigidBody::Kinematic)
+            .try_insert(GizmoPrevPos { 
                 local_pos, 
                 original_body,
                 had_translation_interpolation: had_translation,
@@ -264,15 +264,15 @@ pub fn restore_gizmo_dynamic(
         }
 
         // 2. RESTORE INTERPOLATION
-        if prev.had_translation_interpolation { commands.entity(entity).insert(TranslationInterpolation); }
-        if prev.had_rotation_interpolation { commands.entity(entity).insert(RotationInterpolation); }
+        if prev.had_translation_interpolation { commands.entity(entity).try_insert(TranslationInterpolation); }
+        if prev.had_rotation_interpolation { commands.entity(entity).try_insert(RotationInterpolation); }
 
         if let Ok(mut vel) = q_lin_vel.get_mut(entity) {
             vel.0 = DVec3::ZERO;
         }
 
         commands.entity(entity)
-            .insert(prev.original_body)
+            .try_insert(prev.original_body)
             .remove::<GizmoPrevPos>();
 
         // AUTHOR THE MOVE. Queued AFTER the `original_body` insert above, so the
@@ -304,7 +304,7 @@ pub fn restore_gizmo_dynamic(
         }
         // Re-attach FloatingOrigin to the avatar camera.
         for av_ent in q_avatar.iter() {
-            commands.entity(av_ent).insert(FloatingOrigin);
+            commands.entity(av_ent).try_insert(FloatingOrigin);
             info!("GIZMO: restored FloatingOrigin on avatar camera {:?}", av_ent);
         }
     }

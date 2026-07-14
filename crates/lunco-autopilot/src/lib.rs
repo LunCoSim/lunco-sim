@@ -1572,7 +1572,7 @@ fn on_engage_autopilot(
     let mut e = match existing {
         Some(actor) => {
             let mut ec = commands.entity(actor);
-            ec.insert(Autopilot::forward(cmd.vessel, cmd.index, throttle));
+            ec.try_insert(Autopilot::forward(cmd.vessel, cmd.index, throttle));
             // Drop any tree from the previous engage: an empty `spec_json` means
             // "constant forward throttle", which only holds if no stale
             // `AutopilotBehavior` is left attached to out-vote it.
@@ -1584,7 +1584,7 @@ fn on_engage_autopilot(
     if !cmd.spec_json.is_empty() {
         match AutopilotBehavior::from_json(&cmd.spec_json) {
             Ok(b) => {
-                e.insert(b);
+                e.try_insert(b);
                 // Mirror the source spec onto the VESSEL entity (not the
                 // autopilot actor) so the UI / path-line gizmo can read the
                 // waypoints back without walking the autopilot→vessel link.
@@ -1627,7 +1627,7 @@ fn on_set_autopilot_behavior(
     };
     match q.iter().find(|(_, ap)| ap.vessel == cmd.vessel) {
         Some((entity, _)) => {
-            commands.entity(entity).insert(behavior);
+            commands.entity(entity).try_insert(behavior);
             // Mirror the source spec onto the vessel (read path for UI/gizmo).
             if let Ok(spec) = AutopilotBehaviorSpec::from_json(&cmd.spec_json) {
                 commands.entity(cmd.vessel).try_insert(spec);
@@ -1663,7 +1663,7 @@ fn on_clear_patrol(
     let brake = AutopilotBehavior::new(&BehaviorSpec::Brake);
     match q.iter().find(|(_, ap)| ap.vessel == cmd.vessel) {
         Some((entity, _)) => {
-            commands.entity(entity).insert(brake);
+            commands.entity(entity).try_insert(brake);
         }
         None => warn!("[autopilot] ClearPatrol: no autopilot owns vessel {:?}", cmd.vessel),
     }
@@ -1706,7 +1706,7 @@ fn on_disengage_autopilot(
             // whose actor is gone — `may_possess` would then deny the human the
             // very vessel the UI reports as disengaged.
             let freed = registry.release_session(ap.session);
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             info!(
                 "[autopilot] DisengageAutopilot: vessel {:?} disengaged (patrol kept, {} claim(s) freed)",
                 cmd.vessel,

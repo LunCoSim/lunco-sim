@@ -214,7 +214,7 @@ pub(crate) fn attach_rhai_scenario(
     // is wired, so this live edit (and every hot-reload SetSource) auto-records.
     registry.insert_document(DocumentId::new(doc_id_raw), doc);
 
-    commands.entity(target).insert((
+    commands.entity(target).try_insert((
         ScriptedModel {
             document_id: Some(doc_id_raw),
             language: Some(ScriptLanguage::Rhai),
@@ -309,7 +309,7 @@ pub fn resolve_embedded_scenario_paths(
         if let Some(src) = sources.get(&*handle) {
             commands
                 .entity(entity)
-                .insert(lunco_core::EmbeddedScenarioSource(src.text.clone()))
+                .try_insert(lunco_core::EmbeddedScenarioSource(src.text.clone()))
                 .remove::<lunco_core::EmbeddedScenarioPath>();
             pending.remove(&entity);
         }

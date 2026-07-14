@@ -30,7 +30,7 @@ def Xform "ShaderFallbackTest"
     def Cube "BadShaderCube"
     {
         double size = 2.0
-        color3f primvars:displayColor = (0.9, 0.3, 0.2)
+        color3f[] primvars:displayColor = [(0.9, 0.3, 0.2)]
         # INVALID: pbr_lit.wgsl is an importable library (no @fragment).
         string primvars:materialType = "shader"
         string primvars:shaderPath = "shaders/pbr_lit.wgsl"

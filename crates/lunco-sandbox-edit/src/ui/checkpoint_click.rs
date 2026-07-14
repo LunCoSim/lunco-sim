@@ -101,7 +101,7 @@ pub fn on_scene_click_checkpoint(
     };
 
     // ── Where the pin goes ────────────────────────────────────────────────────
-    let root = lunco_usd_bevy::stage_default_prim(host.document().data())
+    let root = lunco_usd_bevy::layer_default_prim(host.document().data())
         .map(|p| format!("/{p}"))
         .unwrap_or_else(|| "/".to_string());
     let scope_path = join_prim(&root, BEHAVIORS_SCOPE);

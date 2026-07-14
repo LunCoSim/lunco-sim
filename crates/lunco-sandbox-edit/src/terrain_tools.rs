@@ -171,7 +171,7 @@ pub fn update_terrain_brush_ghost(
 ) {
     if !state.armed() {
         for (ghost, _, _) in q_ghost.iter() {
-            commands.entity(ghost).despawn();
+            commands.entity(ghost).try_despawn();
         }
         return;
     }

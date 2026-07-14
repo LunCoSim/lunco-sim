@@ -15,7 +15,7 @@ def Xform "BallStatic" (
     )
     {
         double radius = 0.5
-        color3f primvars:displayColor = (0.3, 0.3, 0.9)
+        color3f[] primvars:displayColor = [(0.3, 0.3, 0.9)]
         bool physics:collisionEnabled = true
     }
 }

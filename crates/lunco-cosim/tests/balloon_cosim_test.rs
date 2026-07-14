@@ -69,7 +69,7 @@ fn compile_balloon_model(
         let params = extract_parameters(&source);
         let inputs = extract_inputs_with_defaults(&source);
 
-        commands.entity(entity).insert(ModelicaModel {
+        commands.entity(entity).try_insert(ModelicaModel {
             model_path: std::path::PathBuf::from("balloon.mo"),
             model_name: model_name.clone(),
             parameters: params,
@@ -112,7 +112,7 @@ fn setup_balloon_wires(
             outputs: model.variables.clone(),
             ..default()
         };
-        commands.entity(entity).insert(comp);
+        commands.entity(entity).try_insert(comp);
 
         commands.spawn(SimConnection {
             start_element: entity, start_connector: "netForce".into(),

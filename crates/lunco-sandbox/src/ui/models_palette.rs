@@ -184,13 +184,13 @@ pub(crate) fn on_scene_click_attach(
 
     match pending {
         PendingAttachment::ModelicaBalloon => {
-            commands.entity(target).insert((
+            commands.entity(target).try_insert((
                 Name::new("Red Balloon (Modelica)"),
                 BalloonModelMarker,
             ));
         }
         PendingAttachment::PythonBalloon => {
-            commands.entity(target).insert((
+            commands.entity(target).try_insert((
                 Name::new("Green Balloon (Python)"),
                 PythonBalloonMarker,
             ));

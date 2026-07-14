@@ -727,7 +727,7 @@ fn assign_global_entity_ids(
             if is_server.0 {
                 commands
                     .entity(entity)
-                    .insert(GlobalEntityId::allocate_authoritative());
+                    .try_insert(GlobalEntityId::allocate_authoritative());
             }
             continue;
         }
@@ -735,7 +735,7 @@ fn assign_global_entity_ids(
             Some(Provenance::Local) => { /* never networked, no id */ }
             Some(p @ (Provenance::Content { .. } | Provenance::Derived { .. })) => {
                 if let Some(id) = identity::derive_id(p) {
-                    commands.entity(entity).insert(GlobalEntityId::from_raw(id));
+                    commands.entity(entity).try_insert(GlobalEntityId::from_raw(id));
                 }
             }
             Some(Provenance::Authoritative) => {
@@ -743,7 +743,7 @@ fn assign_global_entity_ids(
                 if is_server.0 {
                     commands
                         .entity(entity)
-                        .insert(GlobalEntityId::allocate_authoritative());
+                        .try_insert(GlobalEntityId::allocate_authoritative());
                 }
             }
             None => {
@@ -760,7 +760,7 @@ fn assign_global_entity_ids(
                 }
                 commands
                     .entity(entity)
-                    .insert(GlobalEntityId::allocate_authoritative());
+                    .try_insert(GlobalEntityId::allocate_authoritative());
             }
         }
     }

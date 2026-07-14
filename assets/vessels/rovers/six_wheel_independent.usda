@@ -20,7 +20,7 @@
 def Xform "SixWheelIndependent" (
     kind = "component"
     prepend apiSchemas = [
-        "PhysicsRigidBodyAPI",
+        "PhysicsRigidBodyAPI", "PhysxRigidBodyAPI",
         "PhysicsMassAPI",
         "PhysxVehicleContextAPI"
     ]
@@ -28,8 +28,8 @@ def Xform "SixWheelIndependent" (
 {
     float physics:mass = 1400.0
     float lunco:spawnLift = 1.0
-    float physics:linearDamping = 0.5
-    float physics:angularDamping = 2.0
+    float physxRigidBody:linearDamping = 0.5
+    float physxRigidBody:angularDamping = 2.0
     float3 physics:diagonalInertia = (2400.0, 3000.0, 1200.0)
     float3 physics:centerOfMass = (0.0, -0.1, 0.0)
 
@@ -56,7 +56,7 @@ def Xform "SixWheelIndependent" (
         double size = 1.0
         double3 xformOp:scale = (2.0, 0.3, 5.0)
         uniform token[] xformOpOrder = ["xformOp:scale"]
-        color3f primvars:displayColor = (0.2, 0.7, 0.85)
+        color3f[] primvars:displayColor = [(0.2, 0.7, 0.85)]
     }
 
     # --- Left bank → drive_w0/w1/w2 -----------------------------------------
@@ -70,7 +70,7 @@ def Xform "SixWheelIndependent" (
         double height = 0.3
         double3 xformOp:translate = (-1.0, -0.15, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (1.0, 0.0, 0.0)
+        color3f[] primvars:displayColor = [(1.0, 0.0, 0.0)]
         int physxVehicleWheel:index = 0
         float physxVehicleWheel:radius = 0.4
         string lunco:drivePort = "drive_w0"
@@ -89,7 +89,7 @@ def Xform "SixWheelIndependent" (
         double height = 0.3
         double3 xformOp:translate = (-1.0, -0.15, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (1.0, 0.4, 0.0)
+        color3f[] primvars:displayColor = [(1.0, 0.4, 0.0)]
         int physxVehicleWheel:index = 2
         float physxVehicleWheel:radius = 0.4
         string lunco:drivePort = "drive_w1"
@@ -108,7 +108,7 @@ def Xform "SixWheelIndependent" (
         double height = 0.3
         double3 xformOp:translate = (-1.0, -0.15, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.0, 0.0, 1.0)
+        color3f[] primvars:displayColor = [(0.0, 0.0, 1.0)]
         int physxVehicleWheel:index = 4
         float physxVehicleWheel:radius = 0.4
         string lunco:drivePort = "drive_w2"
@@ -128,7 +128,7 @@ def Xform "SixWheelIndependent" (
         double height = 0.3
         double3 xformOp:translate = (1.0, -0.15, -2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (1.0, 0.0, 0.0)
+        color3f[] primvars:displayColor = [(1.0, 0.0, 0.0)]
         int physxVehicleWheel:index = 1
         float physxVehicleWheel:radius = 0.4
         string lunco:drivePort = "drive_w3"
@@ -147,7 +147,7 @@ def Xform "SixWheelIndependent" (
         double height = 0.3
         double3 xformOp:translate = (1.0, -0.15, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (1.0, 0.4, 0.0)
+        color3f[] primvars:displayColor = [(1.0, 0.4, 0.0)]
         int physxVehicleWheel:index = 3
         float physxVehicleWheel:radius = 0.4
         string lunco:drivePort = "drive_w4"
@@ -166,7 +166,7 @@ def Xform "SixWheelIndependent" (
         double height = 0.3
         double3 xformOp:translate = (1.0, -0.15, 2.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.0, 0.0, 1.0)
+        color3f[] primvars:displayColor = [(0.0, 0.0, 1.0)]
         int physxVehicleWheel:index = 5
         float physxVehicleWheel:radius = 0.4
         string lunco:drivePort = "drive_w5"

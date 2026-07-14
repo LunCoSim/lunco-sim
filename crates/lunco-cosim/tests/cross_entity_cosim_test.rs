@@ -50,7 +50,7 @@ fn wrap_modelica_into_simcomponent(
 ) {
     for (entity, model) in q_new.iter() {
         if model.variables.is_empty() { continue; }
-        commands.entity(entity).insert(SimComponent {
+        commands.entity(entity).try_insert(SimComponent {
             model_name: model.model_name.clone(),
             parameters: model.parameters.clone(),
             inputs: model.inputs.clone(),

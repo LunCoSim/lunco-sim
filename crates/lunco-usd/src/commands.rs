@@ -124,8 +124,32 @@ impl Plugin for UsdCommandsPlugin {
         // `MinimalPlugins` test apps — and a partial setup can have one without
         // the other — so require both. Chained before `project_stage_changes`
         // (below) so a spawn authored this frame projects the same frame.
+        // `PreUpdate`, NOT `Update` — and this is structural, not a preference.
+        //
+        // `project_stage_changes` DESPAWNS and rebuilds the subtree of any prim
+        // whose attributes changed. In `Update` it raced every system that queues
+        // commands against those entities: the render binder reacts to
+        // `Changed<PbrLook>` and queues `insert(MeshMaterial3d(..))`, the projector
+        // then despawns the entity, and the buffered insert panics on apply
+        // ("Entity despawned … its index now has generation 1"). Opening the
+        // moonbase twin — which replays a runtime overlay, changing looks AND
+        // rebuilding subtrees in one frame — hit exactly this.
+        //
+        // Ordering the projector before that ONE binder would have fixed that ONE
+        // panic. But seven crates bind looks and several despawn USD entities, so a
+        // per-binder `.before(..)` rule is a rule each of them must remember — i.e.
+        // one that gets forgotten by the next system anyone adds. Running the
+        // projector a schedule EARLIER makes the hazard unrepresentable instead:
+        // every `Update` system, present and future, observes a world the projector
+        // has already settled, and none of them can hold a command queued against
+        // an entity it is about to despawn.
+        //
+        // Cost: an op authored during `Update` projects on the next frame's
+        // `PreUpdate` rather than the same frame. That is one frame of latency on a
+        // path that is already asynchronous (the gizmo writes `Transform`
+        // optimistically; nothing reads back the projection within the frame).
         app.add_systems(
-            Update,
+            PreUpdate,
             (
                 crate::twin_projection::drain_pending_twin_docs,
                 // Author doc deltas (translate / spawn / remove) onto the live

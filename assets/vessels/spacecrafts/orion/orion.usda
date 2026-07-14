@@ -16,7 +16,7 @@ def Xform "Orion"
         double radius = 1.0
         double3 xformOp:translate = (0, 2.5, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (1.0, 1.0, 1.0)
+        color3f[] primvars:displayColor = [(1.0, 1.0, 1.0)]
     }
 
     def Cube "Body"
@@ -25,7 +25,7 @@ def Xform "Orion"
         double3 xformOp:translate = (0, 0, 0)
         double3 xformOp:scale = (3.0, 3.0, 3.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.2, 0.8, 0.2)
+        color3f[] primvars:displayColor = [(0.2, 0.8, 0.2)]
     }
 
     def Cylinder "ServiceModule"
@@ -34,6 +34,6 @@ def Xform "Orion"
         double height = 4.0
         double3 xformOp:translate = (0, -3.5, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.5, 0.5, 0.5)
+        color3f[] primvars:displayColor = [(0.5, 0.5, 0.5)]
     }
 }

@@ -218,10 +218,10 @@ impl TerrainLayer for RockScatterLayer {
                     // `no_shadow_cast` rides on the look — `lunco-render-bevy` inserts
                     // `NotShadowCaster` for it. Cloning the look does NOT clone a
                     // material: every clone keys to the same cached one.
-                    rock.insert((Mesh3d(handles[bucket_of(p.size)].clone()), look.clone()));
+                    rock.try_insert((Mesh3d(handles[bucket_of(p.size)].clone()), look.clone()));
                     // Distance LOD cull — native only (see `rock_visibility_range`).
                     #[cfg(not(target_arch = "wasm32"))]
-                    rock.insert(rock_visibility_range());
+                    rock.try_insert(rock_visibility_range());
                 }
                 spawned += 1;
             }
@@ -303,7 +303,7 @@ impl TerrainLayer for RockInstanceLayer {
                 Collider::sphere((r * 0.6) as f64),
             ));
             if let Some(mesh) = mesh {
-                rock.insert((Mesh3d(mesh), look));
+                rock.try_insert((Mesh3d(mesh), look));
             }
         });
     }

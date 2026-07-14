@@ -25,7 +25,7 @@ def Xform "RoverAwful" (
     float3 physics:centerOfMass = (0.0, 0.45, 0.0)
     float physics:mass = 1900.0
     float3 physics:diagonalInertia = (1600.0, 2000.0, 900.0)
-    float physics:angularDamping = 0.8
+    float physxRigidBody:angularDamping = 0.8
 
     # Intended handling (verify honoured): weak engine, low grip, twitchy steer.
     custom float physxVehicleEngine:peakTorque = 380.0
@@ -33,5 +33,5 @@ def Xform "RoverAwful" (
     custom float lunco:maxSteerAngle = 18.0
 
     # Livery — hazard red (hard).
-    over "Chassis" { color3f primvars:displayColor = (0.85, 0.20, 0.15) }
+    over "Chassis" { color3f[] primvars:displayColor = [(0.85, 0.20, 0.15)] }
 }

@@ -21,14 +21,14 @@ def Xform "SandboxScene"
     custom string lunco:description = "Three different joints on display: a ball joint that swings inside a cone, a tether that holds at a fixed distance, and a hinge that only turns around one axis."
 
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
     )
     {
         double size = 1.0
         double3 xformOp:translate = (0, -0.5, 0)
         double3 xformOp:scale = (200.0, 1.0, 200.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.4, 0.4, 0.45)
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
         bool physics:collisionEnabled = true
     }
 
@@ -49,7 +49,7 @@ def Xform "SandboxScene"
         double size = 0.4
         double3 xformOp:translate = (-2.0, 6.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (1.0, 0.3, 0.3)
+        color3f[] primvars:displayColor = [(1.0, 0.3, 0.3)]
         float physics:mass = 1.0
         bool physics:kinematicEnabled = true
     }
@@ -62,7 +62,7 @@ def Xform "SandboxScene"
         double3 xformOp:translate = (-2.0, 5.0, 0.0)
         double3 xformOp:scale = (1.0, 3.0, 1.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.2, 0.6, 1.0)
+        color3f[] primvars:displayColor = [(0.2, 0.6, 1.0)]
         float physics:mass = 2.0
     }
 
@@ -85,7 +85,7 @@ def Xform "SandboxScene"
         double size = 0.4
         double3 xformOp:translate = (2.0, 6.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (1.0, 0.3, 0.3)
+        color3f[] primvars:displayColor = [(1.0, 0.3, 0.3)]
         float physics:mass = 1.0
         bool physics:kinematicEnabled = true
     }
@@ -97,7 +97,7 @@ def Xform "SandboxScene"
         double size = 0.5
         double3 xformOp:translate = (2.0, 4.5, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.3, 0.9, 0.4)
+        color3f[] primvars:displayColor = [(0.3, 0.9, 0.4)]
         float physics:mass = 5.0
     }
 
@@ -120,7 +120,7 @@ def Xform "SandboxScene"
         double size = 0.4
         double3 xformOp:translate = (0.0, 6.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (1.0, 0.3, 0.3)
+        color3f[] primvars:displayColor = [(1.0, 0.3, 0.3)]
         float physics:mass = 1.0
         bool physics:kinematicEnabled = true
     }
@@ -133,7 +133,7 @@ def Xform "SandboxScene"
         double3 xformOp:translate = (0.0, 5.0, 0.0)
         double3 xformOp:scale = (1.0, 3.0, 1.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.9, 0.6, 0.2)
+        color3f[] primvars:displayColor = [(0.9, 0.6, 0.2)]
         float physics:mass = 2.0
     }
 

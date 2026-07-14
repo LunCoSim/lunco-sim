@@ -26,20 +26,34 @@
 
 def Xform "SunTrackerTest"
 {
+
+    # UsdPhysicsMaterialAPI — friction/restitution live on a Material
+    # bound with the purpose-specific `material:binding:physics`, which is
+    # how UsdPhysics (and Omniverse) actually spell a surface.
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
     custom bool lunco:spawnable = false
     custom string lunco:description = "A solar panel that turns to face the sun. A controller reads where the sun is and turns the panel to point at it; move the sun and watch the panel re-aim."
 
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
     )
     {
         double size = 1.0
         double3 xformOp:translate = (0, -0.5, 0)
         double3 xformOp:scale = (200.0, 1.0, 200.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.4, 0.4, 0.45)
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
         bool physics:collisionEnabled = true
-        float physics:friction = 1.0
+        rel material:binding:physics = </SunTrackerTest/PhysicsMaterials/Friction_1_0>
     }
 
     # Camera looking at the tower head from the side, so a yaw change is obvious.
@@ -81,7 +95,7 @@ def Xform "SunTrackerTest"
             double height = 5.0
             double3 xformOp:translate = (0, 2.7, 0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.5, 0.5, 0.52)
+            color3f[] primvars:displayColor = [(0.5, 0.5, 0.52)]
             float physics:mass = 100.0
             bool physics:kinematicEnabled = true
 
@@ -91,7 +105,7 @@ def Xform "SunTrackerTest"
                 double3 xformOp:translate = (0, -2.6, 0)
                 double3 xformOp:scale = (2.0, 0.2, 2.0)
                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-                color3f primvars:displayColor = (0.32, 0.31, 0.3)
+                color3f[] primvars:displayColor = [(0.32, 0.31, 0.3)]
                 bool physics:collisionEnabled = false
             }
         }
@@ -111,7 +125,7 @@ def Xform "SunTrackerTest"
             double height = 0.5
             double3 xformOp:translate = (0, 5.3, 0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.45, 0.45, 0.48)
+            color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
             float physics:mass = 50.0
 
             # Vertical PV panel — thin cube on edge, solar_panel shader.
@@ -121,7 +135,7 @@ def Xform "SunTrackerTest"
                 double3 xformOp:translate = (0, 1.5, 0)
                 double3 xformOp:scale = (4.0, 3.0, 0.06)
                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-                color3f primvars:displayColor = (0.05, 0.05, 0.35)
+                color3f[] primvars:displayColor = [(0.05, 0.05, 0.35)]
                 bool physics:collisionEnabled = false
                 string primvars:materialType = "shader"
                 string primvars:shaderPath = "shaders/solar_panel.wgsl"

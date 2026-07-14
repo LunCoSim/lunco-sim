@@ -18,7 +18,7 @@ def Cube "Battery" (
     double3 xformOp:translate = (0, 0, 0)
     double3 xformOp:scale = (2.0, 0.5, 3.0)
     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-    color3f primvars:displayColor = (0.8, 0.2, 0.2)
+    color3f[] primvars:displayColor = [(0.8, 0.2, 0.2)]
 
     # --- Modelica model ---
     string lunco:modelicaModel = "models/battery.mo"

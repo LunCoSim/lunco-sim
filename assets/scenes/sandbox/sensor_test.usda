@@ -17,20 +17,34 @@
 
 def Xform "SandboxScene"
 {
+
+    # UsdPhysicsMaterialAPI — friction/restitution live on a Material
+    # bound with the purpose-specific `material:binding:physics`, which is
+    # how UsdPhysics (and Omniverse) actually spell a surface.
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
     custom bool lunco:spawnable = false
     custom string lunco:description = "A box resting on the ground carrying simple sensors: one that feels motion, one that measures distance to the ground, and one that feels touch. Checks that each reports sensible numbers."
 
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
     )
     {
         double size = 1.0
         double3 xformOp:translate = (0, -0.5, 0)
         double3 xformOp:scale = (200.0, 1.0, 200.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.4, 0.4, 0.45)
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
         bool physics:collisionEnabled = true
-        float physics:friction = 1.0
+        rel material:binding:physics = </SandboxScene/PhysicsMaterials/Friction_1_0>
     }
 
     def Xform "Avatar"
@@ -50,7 +64,7 @@ def Xform "SandboxScene"
         double size = 1.0
         double3 xformOp:translate = (0.0, 0.5, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.9, 0.7, 0.2)
+        color3f[] primvars:displayColor = [(0.9, 0.7, 0.2)]
         float physics:mass = 100.0
         bool physics:collisionEnabled = true
 
@@ -72,7 +86,7 @@ def Xform "SandboxScene"
         double size = 1.0
         double3 xformOp:translate = (6.0, 0.5, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.2, 0.8, 0.9)
+        color3f[] primvars:displayColor = [(0.2, 0.8, 0.9)]
         float physics:mass = 50.0
         bool physics:collisionEnabled = true
         custom bool lunco:sensor:contact = true

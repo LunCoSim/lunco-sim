@@ -992,7 +992,7 @@ pub fn on_close_document(
     // VisualizationRegistry — otherwise stale variables (der(C2.v),
     // …) linger in the Graphs X/Y picker after the doc is closed.
     for entity in registry.entities_linked_to(doc) {
-        commands.entity(entity).despawn();
+        commands.entity(entity).try_despawn();
     }
     registry.remove_document(doc);
 }

@@ -20,7 +20,7 @@
 def Xform "AckermannRover" (
     kind = "component"
     prepend apiSchemas = [
-        "PhysicsRigidBodyAPI",
+        "PhysicsRigidBodyAPI", "PhysxRigidBodyAPI",
         "PhysicsMassAPI",
         "PhysxVehicleContextAPI",
         "PhysxVehicleAckermannSteeringAPI"
@@ -53,8 +53,8 @@ def Xform "AckermannRover" (
 
     float physics:mass = 1000.0
     float lunco:spawnLift = 1.0
-    float physics:linearDamping = 0.5
-    float physics:angularDamping = 2.0
+    float physxRigidBody:linearDamping = 0.5
+    float physxRigidBody:angularDamping = 2.0
 
     # Control profile (intent -> port). Child `references` arc so it composes
     # through a spawn/reference exactly like the wheels below.
@@ -72,7 +72,7 @@ def Xform "AckermannRover" (
         double size = 1.0
         double3 xformOp:scale = (2.0, 0.3, 3.5)
         uniform token[] xformOpOrder = ["xformOp:scale"]
-        color3f primvars:displayColor = (0.8, 0.8, 0.8)
+        color3f[] primvars:displayColor = [(0.8, 0.8, 0.8)]
     }
 
     # Headlights (Spotlights pointing forward and tilted down by 15 deg, with visual geometry and light source)
@@ -83,6 +83,9 @@ def Xform "AckermannRover" (
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
 
         def SphereLight "Light"
+        (
+            prepend apiSchemas = ["ShapingAPI", "ShadowAPI"]
+        )
         {
             float inputs:intensity = 1000000.0  # 1M lumens for daylight exposure visibility
             float inputs:exposure = 0.0
@@ -101,7 +104,7 @@ def Xform "AckermannRover" (
             double height = 0.15
             double3 xformOp:translate = (0, 0, 0.075)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.1, 0.1, 0.1) # Dark grey/black matte housing
+            color3f[] primvars:displayColor = [(0.1, 0.1, 0.1)] # Dark grey/black matte housing
             bool physics:collisionEnabled = false
         }
 
@@ -125,6 +128,9 @@ def Xform "AckermannRover" (
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
 
         def SphereLight "Light"
+        (
+            prepend apiSchemas = ["ShapingAPI", "ShadowAPI"]
+        )
         {
             float inputs:intensity = 1000000.0
             float inputs:exposure = 0.0
@@ -143,7 +149,7 @@ def Xform "AckermannRover" (
             double height = 0.15
             double3 xformOp:translate = (0, 0, 0.075)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.1, 0.1, 0.1)
+            color3f[] primvars:displayColor = [(0.1, 0.1, 0.1)]
             bool physics:collisionEnabled = false
         }
 
@@ -170,7 +176,7 @@ def Xform "AckermannRover" (
         double radius = 0.4
         double height = 0.3
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (1.0, 0.0, 0.0)
+        color3f[] primvars:displayColor = [(1.0, 0.0, 0.0)]
 
         int physxVehicleWheel:index = 0
         float physxVehicleWheel:radius = 0.4
@@ -188,7 +194,7 @@ def Xform "AckermannRover" (
         double radius = 0.4
         double height = 0.3
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (1.0, 0.0, 0.0)
+        color3f[] primvars:displayColor = [(1.0, 0.0, 0.0)]
 
         int physxVehicleWheel:index = 1
         float physxVehicleWheel:radius = 0.4
@@ -206,7 +212,7 @@ def Xform "AckermannRover" (
         double radius = 0.4
         double height = 0.3
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.0, 0.0, 1.0)
+        color3f[] primvars:displayColor = [(0.0, 0.0, 1.0)]
 
         int physxVehicleWheel:index = 2
         float physxVehicleWheel:radius = 0.4
@@ -224,7 +230,7 @@ def Xform "AckermannRover" (
         double radius = 0.4
         double height = 0.3
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.0, 0.0, 1.0)
+        color3f[] primvars:displayColor = [(0.0, 0.0, 1.0)]
 
         int physxVehicleWheel:index = 3
         float physxVehicleWheel:radius = 0.4

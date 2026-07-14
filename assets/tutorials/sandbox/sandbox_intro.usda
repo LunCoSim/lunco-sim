@@ -16,20 +16,34 @@
 
 def Xform "SandboxIntro"
 {
+
+    # UsdPhysicsMaterialAPI — friction/restitution live on a Material
+    # bound with the purpose-specific `material:binding:physics`, which is
+    # how UsdPhysics (and Omniverse) actually spell a surface.
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
     custom bool lunco:spawnable = false
     custom string lunco:description = "A guided tour of the LunCoSim workspace: viewport, browser, inspector, and console."
 
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
     )
     {
         double size = 1.0
         double3 xformOp:translate = (0, -0.5, 0)
         double3 xformOp:scale = (200.0, 1.0, 200.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.35, 0.33, 0.38)
+        color3f[] primvars:displayColor = [(0.35, 0.33, 0.38)]
         bool physics:collisionEnabled = true
-        float physics:friction = 1.0
+        rel material:binding:physics = </SandboxIntro/PhysicsMaterials/Friction_1_0>
     }
 
     def Xform "Avatar"

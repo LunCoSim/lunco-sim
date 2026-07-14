@@ -22,7 +22,7 @@ def Cylinder "Wheel" (
     double height = 4.0
     double3 xformOp:translate = (0, 0, 0)
     uniform token[] xformOpOrder = ["xformOp:translate"]
-    color3f primvars:displayColor = (0.3, 0.3, 0.3)
+    color3f[] primvars:displayColor = [(0.3, 0.3, 0.3)]
 
     # Spin-revealing wheel (tire + rim + spokes) via the general ShaderMaterial,
     # loaded at USD-load time (see assets/shaders/wheel.wgsl). Survives the

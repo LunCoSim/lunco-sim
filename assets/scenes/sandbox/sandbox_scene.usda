@@ -9,6 +9,20 @@ def Xform "SandboxScene" (
     kind = "assembly"
 )
 {
+
+    # UsdPhysicsMaterialAPI — friction/restitution live on a Material
+    # bound with the purpose-specific `material:binding:physics`, which is
+    # how UsdPhysics (and Omniverse) actually spell a surface.
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
     # A whole scene, not a spawnable part — excluded from the spawn catalog.
     custom bool lunco:spawnable = false
     custom string lunco:description = "The main sandbox: a large flat ground with ramps and rovers. The everyday space for driving rovers around obstacles."
@@ -18,7 +32,7 @@ def Xform "SandboxScene" (
     # non-uniform extents. The ground is a 4 km × 0.2 m × 4 km slab.
     def Cube "Ground"
     (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
     )
     {
         double size = 1.0
@@ -39,13 +53,13 @@ def Xform "SandboxScene" (
         float primvars:minor_line_fade = 0.15
         bool physics:rigidBodyEnabled = false
         bool physics:collisionEnabled = true
-        float physics:friction = 1.0
+        rel material:binding:physics = </SandboxScene/PhysicsMaterials/Friction_1_0>
     }
 
     # --- Ramp obstacles (static terrain) ---
     def Cube "Ramp"
     (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
     )
     {
         double size = 1.0
@@ -65,15 +79,15 @@ def Xform "SandboxScene" (
         float primvars:major_line_width = 1.0
         float primvars:minor_line_width = 0.5
         float primvars:minor_line_fade = 0.15
-        color3f primvars:displayColor = (0.25, 0.22, 0.18)
+        color3f[] primvars:displayColor = [(0.25, 0.22, 0.18)]
         bool physics:rigidBodyEnabled = false
         bool physics:collisionEnabled = true
-        float physics:friction = 1.0
+        rel material:binding:physics = </SandboxScene/PhysicsMaterials/Friction_1_0>
     }
 
     def Cube "Ramp1"
     (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
     )
     {
         double size = 1.0
@@ -93,10 +107,10 @@ def Xform "SandboxScene" (
         float primvars:major_line_width = 1.0
         float primvars:minor_line_width = 0.5
         float primvars:minor_line_fade = 0.15
-        color3f primvars:displayColor = (0.25, 0.22, 0.18)
+        color3f[] primvars:displayColor = [(0.25, 0.22, 0.18)]
         bool physics:rigidBodyEnabled = false
         bool physics:collisionEnabled = true
-        float physics:friction = 1.0
+        rel material:binding:physics = </SandboxScene/PhysicsMaterials/Friction_1_0>
     }
 
     # --- Avatar (Camera) ---
@@ -157,7 +171,7 @@ def Xform "SandboxScene" (
 
         over "Chassis"
         {
-            color3f primvars:displayColor = (0.8, 0.2, 0.2)
+            color3f[] primvars:displayColor = [(0.8, 0.2, 0.2)]
         }
 
         # Onboard rover camera: a plain `def Camera` nested under the rover
@@ -185,7 +199,7 @@ def Xform "SandboxScene" (
 
         over "Chassis"
         {
-            color3f primvars:displayColor = (0.2, 0.8, 0.2)
+            color3f[] primvars:displayColor = [(0.2, 0.8, 0.2)]
         }
     }
 
@@ -210,7 +224,7 @@ def Xform "SandboxScene" (
 
         over "Chassis"
         {
-            color3f primvars:displayColor = (0.2, 0.2, 0.8)
+            color3f[] primvars:displayColor = [(0.2, 0.2, 0.8)]
         }
     }
 
@@ -225,7 +239,7 @@ def Xform "SandboxScene" (
 
         over "Chassis"
         {
-            color3f primvars:displayColor = (0.8, 0.8, 0.2)
+            color3f[] primvars:displayColor = [(0.8, 0.8, 0.2)]
         }
     }
 
@@ -243,7 +257,7 @@ def Xform "SandboxScene" (
 
         over "Chassis"
         {
-            color3f primvars:displayColor = (0.8, 0.5, 0.1)
+            color3f[] primvars:displayColor = [(0.8, 0.5, 0.1)]
         }
     }
 
@@ -280,7 +294,7 @@ def Xform "SandboxScene" (
             double size = 1.0
             double3 xformOp:scale = (2.7, 1.85, 3.1)
             uniform token[] xformOpOrder = ["xformOp:scale"]
-            color3f primvars:displayColor = (0.6, 0.4, 0.2)   # Mars-tan
+            color3f[] primvars:displayColor = [(0.6, 0.4, 0.2)] # Mars-tan
             # `lunco:placeholder = true` keeps the Cube hidden in our
             # pipeline — third-party USD tools (Blender, usdview) still
             # render it because they ignore the custom attribute and
@@ -349,7 +363,7 @@ def Xform "SandboxScene" (
     )
     {
         double radius = 0.5
-        color3f primvars:displayColor = (0.9, 0.7, 0.2)
+        color3f[] primvars:displayColor = [(0.9, 0.7, 0.2)]
         # Spin-revealing checker (same general ShaderMaterial as the balloons),
         # so this cosim-driven ball shows its motion. Yellow identity via cell_a.
         string primvars:materialType = "shader"
@@ -405,7 +419,7 @@ def Xform "SandboxScene" (
         double size = 1.0
         double3 xformOp:translate = (-5.0, 6.0, 5.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (1.0, 0.2, 0.2)   # red
+        color3f[] primvars:displayColor = [(1.0, 0.2, 0.2)] # red
         float physics:mass = 5.0
         # Born kinematic — externally controlled (gizmo / `MoveEntity`
         # API command). Doesn't fall under gravity; doesn't fight back
@@ -426,7 +440,7 @@ def Xform "SandboxScene" (
         double size = 1.0
         double3 xformOp:translate = (-2.0, 6.0, 5.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (1.0, 0.6, 0.1)   # orange
+        color3f[] primvars:displayColor = [(1.0, 0.6, 0.1)] # orange
         float physics:mass = 5.0
         # Same reason as JointTestA: the PhysicsFixedJoint that constrains
         # this body is not replicated; making it PredictedDynamic on the
@@ -466,7 +480,7 @@ def Xform "SandboxScene" (
         double size = 1.0
         double3 xformOp:translate = (5.0, 6.0, 5.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.2, 0.5, 1.0)   # blue host
+        color3f[] primvars:displayColor = [(0.2, 0.5, 1.0)] # blue host
         float physics:mass = 5.0
         # Kinematic host: stays put so the snap is easy to read (the Arm moves,
         # the Base doesn't). Same opaque-authority rule as the JointTest bodies —
@@ -514,7 +528,7 @@ def Xform "SandboxScene" (
             # it (→ (0, 2.5, 0), directly above Base).
             double3 xformOp:translate = (2.0, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (1.0, 0.8, 0.1)   # yellow part
+            color3f[] primvars:displayColor = [(1.0, 0.8, 0.1)] # yellow part
             float physics:mass = 2.0
             string lunco:net:authority = "opaque"
             uniform token lunco:mount:plug = "arm"
@@ -558,7 +572,7 @@ def Xform "SandboxScene" (
         token axis = "Z" # Default USD axis (tests rotation correction)
         double3 xformOp:translate = (0.0, 5.0, -20.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.2, 0.6, 0.9)
+        color3f[] primvars:displayColor = [(0.2, 0.6, 0.9)]
         bool physics:rigidBodyEnabled = true
         bool physics:collisionEnabled = true
         float physics:mass = 1.0
@@ -573,7 +587,7 @@ def Xform "SandboxScene" (
         token axis = "Y" # Test Y axis
         double3 xformOp:translate = (5.0, 5.0, -20.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.9, 0.3, 0.3)
+        color3f[] primvars:displayColor = [(0.9, 0.3, 0.3)]
         bool physics:rigidBodyEnabled = true
         bool physics:collisionEnabled = true
         float physics:mass = 1.0
@@ -588,7 +602,7 @@ def Xform "SandboxScene" (
         token axis = "X" # Test X axis
         double3 xformOp:translate = (10.0, 5.0, -20.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.3, 0.8, 0.3)
+        color3f[] primvars:displayColor = [(0.3, 0.8, 0.3)]
         bool physics:rigidBodyEnabled = true
         bool physics:collisionEnabled = true
         float physics:mass = 1.0
@@ -603,7 +617,7 @@ def Xform "SandboxScene" (
         token axis = "Y" # Horizontal platform normal facing up
         double3 xformOp:translate = (-5.0, 1.0, -20.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.8, 0.8, 0.8)
+        color3f[] primvars:displayColor = [(0.8, 0.8, 0.8)]
         bool physics:rigidBodyEnabled = false # Static platform
         bool physics:collisionEnabled = true
     }

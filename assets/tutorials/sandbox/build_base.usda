@@ -21,6 +21,20 @@
 
 def Xform "BuildBase"
 {
+
+    # UsdPhysicsMaterialAPI — friction/restitution live on a Material
+    # bound with the purpose-specific `material:binding:physics`, which is
+    # how UsdPhysics (and Omniverse) actually spell a surface.
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
     # Environment, not a spawnable part.
     custom bool lunco:spawnable = false
     custom string lunco:description = "Lay out a working lunar surface base from the Structures kit — power, habitat, comms, ISRU and a landing pad — and learn where each one goes and why."
@@ -39,16 +53,16 @@ def Xform "BuildBase"
     # ── The build plot: a wide, flat regolith plane (±250 m) so the ≥150 m
     #    landing-pad standoff is a real distance to lay out. ─────────────────
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
     )
     {
         double size = 1.0
         double3 xformOp:translate = (0, -0.5, 0)
         double3 xformOp:scale = (500.0, 1.0, 500.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.34, 0.32, 0.31)
+        color3f[] primvars:displayColor = [(0.34, 0.32, 0.31)]
         bool physics:collisionEnabled = true
-        float physics:friction = 1.0
+        rel material:binding:physics = </BuildBase/PhysicsMaterials/Friction_1_0>
     }
 
     # Raking polar sun — low on the horizon, the lighting a real polar base

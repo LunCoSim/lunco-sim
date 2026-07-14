@@ -14,21 +14,42 @@
 #   sandbox --scene tutorials/basic/driving_basics.usda
 def Xform "DrivingBasics"
 {
+
+    # UsdPhysicsMaterialAPI — friction/restitution live on a Material
+    # bound with the purpose-specific `material:binding:physics`, which is
+    # how UsdPhysics (and Omniverse) actually spell a surface.
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_0_9" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 0.9
+            float physics:staticFriction = 0.9
+        }
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
     custom bool lunco:spawnable = false
     custom string lunco:description = "Flat practice plot with one gentle ramp and a finish flag — the S1 driving-basics stage."
 
     # Flat plot, ±60 m.
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
     )
     {
         double size = 1.0
         double3 xformOp:translate = (0, -0.5, 0)
         double3 xformOp:scale = (120.0, 1.0, 120.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.34, 0.32, 0.31)
+        color3f[] primvars:displayColor = [(0.34, 0.32, 0.31)]
         bool physics:collisionEnabled = true
-        float physics:friction = 1.0
+        rel material:binding:physics = </DrivingBasics/PhysicsMaterials/Friction_1_0>
     }
 
     # A gentle ~12° ramp (a long wedge) to introduce climbing + wheel slip before
@@ -42,9 +63,9 @@ def Xform "DrivingBasics"
         double3 xformOp:rotateXYZ = (12.0, 0.0, 0.0)
         double3 xformOp:scale = (14.0, 0.6, 30.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f primvars:displayColor = (0.40, 0.36, 0.33)
+        color3f[] primvars:displayColor = [(0.40, 0.36, 0.33)]
         bool physics:collisionEnabled = true
-        float physics:friction = 0.9
+        rel material:binding:physics = </DrivingBasics/PhysicsMaterials/Friction_0_9>
     }
 
     # The medium rover, at the SW corner facing the ramp. Asset-root ref to the

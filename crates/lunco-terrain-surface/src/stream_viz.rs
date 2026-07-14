@@ -1108,7 +1108,7 @@ pub fn update_lod_tiles(
                 baked.morph_end, reveal, mode, maps, shadow, overlay,
             );
             if depth > 0 {
-                commands.entity(ent).insert(TileReveal { elapsed: 0.0, step: 0 });
+                commands.entity(ent).try_insert(TileReveal { elapsed: 0.0, step: 0 });
             }
             // Replace any stale slot at this coord, despawning the tile it held.
             if let Some(old) = tiles.tiles.insert(
@@ -1143,7 +1143,7 @@ pub fn update_lod_tiles(
                     s.region.center, depth, morph_end, reveal, mode, maps, shadow, overlay,
                 );
                 if depth > 0 {
-                    commands.entity(ent).insert(TileReveal { elapsed: 0.0, step: 0 });
+                    commands.entity(ent).try_insert(TileReveal { elapsed: 0.0, step: 0 });
                 }
                 if let Some(old) = tiles
                     .tiles
@@ -1280,7 +1280,7 @@ pub fn despawn_orphaned_lod_tiles(
     }
     for (ent, owner) in &tiles {
         if orphaned.contains(&owner.0) && streaming.get(owner.0).is_err() {
-            commands.entity(ent).despawn();
+            commands.entity(ent).try_despawn();
         }
     }
     let dead = |t: &Entity| orphaned.contains(t) && streaming.get(*t).is_err();

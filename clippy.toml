@@ -108,4 +108,31 @@ disallowed-methods = [
     # bump) resolves to `Arc::clone` and is NOT matched by this entry —
     # only the inner `TextReader::clone` is banned. See scripts/perf/README.md.
     { path = "openusd::usda::TextReader::clone", reason = "Borrow `&*stage.reader` — deep-cloning the stage reader copies the whole HashMap per call (caused the 2026-05-29 FPS regression). Arc::clone is fine." },
+
+    # ── Deferred writes to an entity that may already be gone ─────────
+    # `Commands` are DEFERRED: they apply at a later sync point, and by then
+    # another system may have despawned the entity. `insert`/`despawn` PANIC in
+    # that window ("Entity despawned … its index now has generation 1");
+    # `try_insert`/`try_despawn` no-op, which is the correct outcome — the entity
+    # is genuinely gone, so there is nothing to render and nothing to lose.
+    #
+    # This is not hypothetical. It crashed the app: `rebind_changed_pbr_look`
+    # queued `insert(MeshMaterial3d(..))` for a `Changed<PbrLook>` entity, and the
+    # USD projector despawned + rebuilt that entity's subtree in the same frame
+    # (a live edit re-instantiates the edited prim). The projector now runs a
+    # schedule earlier, which closes THAT race — but `ClearScene`, scene reload
+    # and the preview viewport still despawn inside `Update`, so the window is
+    # real for any system holding a queued write.
+    #
+    # The convention already existed and was applied unevenly: `lunco-usd-avian`
+    # is 100% `try_insert`, while `lunco-usd-sim` had ~25 plain `insert`s on the
+    # SAME entities. An unenforced convention is one that drifts, so it is a lint
+    # now — the compiler is the only reviewer that never forgets.
+    #
+    # NOT banned: `remove` (already a no-op on a despawned entity) and
+    # `EntityWorldMut::*` (direct-World mode is synchronous — the entity provably
+    # exists). Local `#[allow]` is fine where the entity was spawned by the SAME
+    # command buffer and cannot have been despawned yet; say so in the comment.
+    { path = "bevy_ecs::system::EntityCommands::insert", reason = "Use `try_insert`: a deferred insert can apply after another system despawned the entity (live USD re-instantiation, ClearScene, scene reload) and PANICS. `remove` is already despawn-safe; `insert` is not." },
+    { path = "bevy_ecs::system::EntityCommands::despawn", reason = "Use `try_despawn`: the entity may already be gone by the time the command applies." },
 ]

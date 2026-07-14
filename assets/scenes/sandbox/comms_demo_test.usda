@@ -42,14 +42,14 @@ def Xform "CommsDemoScene" (
     double lunco:time:epochJd = 2461395.5
 
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysxTerrainAPI"]
+        prepend apiSchemas = ["LunCoTerrainAPI"]
     )
     {
         double size = 1.0
         double3 xformOp:translate = (0, -0.1, 0)
         double3 xformOp:scale = (400, 0.2, 400)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.42, 0.4, 0.38)
+        color3f[] primvars:displayColor = [(0.42, 0.4, 0.38)]
         bool physics:collisionEnabled = true
     }
 

@@ -384,7 +384,7 @@ pub fn place_celestial_bound_entities(
         };
 
         let (new_cell, new_translation) = grid.translation_to_grid(local);
-        commands.entity(entity).insert((
+        commands.entity(entity).try_insert((
             new_cell,
             Transform {
                 translation: new_translation,
@@ -470,7 +470,7 @@ pub fn sync_terrain_body_curvature(
             cos_theta: (1.0 - sin_theta * sin_theta).sqrt(),
         };
         if punch != Some(&next) {
-            commands.entity(e).insert(next);
+            commands.entity(e).try_insert(next);
             info!(
                 "globe hole-punched under site DEM (body {}, footprint ±{:.0} m)",
                 anchor.body, half_extent

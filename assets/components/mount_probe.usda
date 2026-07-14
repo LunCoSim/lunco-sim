@@ -19,7 +19,7 @@ def Cube "Probe" (
 )
 {
     double size = 0.8
-    color3f primvars:displayColor = (0.9, 0.2, 0.6)   # magenta
+    color3f[] primvars:displayColor = [(0.9, 0.2, 0.6)] # magenta
     float physics:mass = 1.0
     # Joints aren't replicated; keep this a stable kinematic-coupled body on clients
     # (same rule as the JointTest/Base bodies).

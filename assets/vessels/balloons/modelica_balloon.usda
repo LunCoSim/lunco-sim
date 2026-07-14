@@ -23,7 +23,7 @@
 # Instantiate in scenes via reference + overrides:
 #   def Sphere "RedBalloon" (prepend references = @../balloons/modelica_balloon.usda@</ModelicaBalloon>) {
 #       double3 xformOp:translate = (10, 5, 0)
-#       color3f primvars:displayColor = (0.9, 0.2, 0.2)
+#       color3f[] primvars:displayColor = [(0.9, 0.2, 0.2)]
 #   }
 
 def Sphere "ModelicaBalloon" (
@@ -32,7 +32,7 @@ def Sphere "ModelicaBalloon" (
 )
 {
     double radius = 1.0
-    color3f primvars:displayColor = (0.9, 0.2, 0.2)
+    color3f[] primvars:displayColor = [(0.9, 0.2, 0.2)]
 
     # Spin-revealing checker via the general ShaderMaterial, loaded at USD-load
     # time (see assets/shaders/balloon.wgsl).

@@ -353,10 +353,10 @@ fn setup(mut commands: Commands, cfg: Res<Config>) {
         }
         let mut e = commands.spawn((joint, JointCollisionDisabled));
         if drive_this {
-            e.insert(DriveJoint { side });
+            e.try_insert(DriveJoint { side });
         }
         if steered {
-            e.insert(SteerFrame);
+            e.try_insert(SteerFrame);
         }
     }
 }

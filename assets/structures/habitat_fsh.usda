@@ -25,7 +25,7 @@ def Xform "HabitatFsh"
         double height = 8.0
         double3 xformOp:translate = (0, 4.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.72, 0.72, 0.75)
+        color3f[] primvars:displayColor = [(0.72, 0.72, 0.75)]
         bool physics:collisionEnabled = true
     }
 
@@ -38,7 +38,7 @@ def Xform "HabitatFsh"
         double3 xformOp:translate = (0, 8.0, 0)
         double3 xformOp:scale = (1.0, 0.5, 1.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.78, 0.78, 0.8)
+        color3f[] primvars:displayColor = [(0.78, 0.78, 0.8)]
         bool physics:collisionEnabled = true
     }
 
@@ -52,7 +52,7 @@ def Xform "HabitatFsh"
         double height = 2.5
         double3 xformOp:translate = (0, 2.2, 4.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.6, 0.6, 0.63)
+        color3f[] primvars:displayColor = [(0.6, 0.6, 0.63)]
         bool physics:collisionEnabled = true
     }
 
@@ -64,7 +64,7 @@ def Xform "HabitatFsh"
         double3 xformOp:rotateXYZ = (0, 0, 20)
         double3 xformOp:scale = (0.08, 2.5, 4.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f primvars:displayColor = (0.3, 0.3, 0.33)
+        color3f[] primvars:displayColor = [(0.3, 0.3, 0.33)]
     }
 
     def Cube "RadiatorB"
@@ -74,6 +74,6 @@ def Xform "HabitatFsh"
         double3 xformOp:rotateXYZ = (0, 0, -20)
         double3 xformOp:scale = (0.08, 2.5, 4.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f primvars:displayColor = (0.3, 0.3, 0.33)
+        color3f[] primvars:displayColor = [(0.3, 0.3, 0.33)]
     }
 }

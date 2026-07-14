@@ -31,7 +31,7 @@ def Xform "RelaySat" (
         double size = 1.0
         double3 xformOp:scale = (1.2, 1.0, 1.0)
         uniform token[] xformOpOrder = ["xformOp:scale"]
-        color3f primvars:displayColor = (0.75, 0.7, 0.55)
+        color3f[] primvars:displayColor = [(0.75, 0.7, 0.55)]
     }
 
     def Cube "WingPlus"
@@ -40,7 +40,7 @@ def Xform "RelaySat" (
         double3 xformOp:translate = (2.2, 0, 0)
         double3 xformOp:scale = (3.0, 0.02, 1.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.05, 0.05, 0.55)
+        color3f[] primvars:displayColor = [(0.05, 0.05, 0.55)]
     }
 
     def Cube "WingMinus"
@@ -49,7 +49,7 @@ def Xform "RelaySat" (
         double3 xformOp:translate = (-2.2, 0, 0)
         double3 xformOp:scale = (3.0, 0.02, 1.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.05, 0.05, 0.55)
+        color3f[] primvars:displayColor = [(0.05, 0.05, 0.55)]
     }
 
     def Sphere "Dish"
@@ -58,6 +58,6 @@ def Xform "RelaySat" (
         double3 xformOp:translate = (0, -0.9, 0)
         double3 xformOp:scale = (1.0, 0.35, 1.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.9, 0.9, 0.95)
+        color3f[] primvars:displayColor = [(0.9, 0.9, 0.95)]
     }
 }

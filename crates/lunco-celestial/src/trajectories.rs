@@ -520,7 +520,7 @@ pub fn spawn_trajectory_update_task(
                 }
             });
             
-            commands.entity(entity).insert(TrajectoryTask(task));
+            commands.entity(entity).try_insert(TrajectoryTask(task));
         }
     }
 }
@@ -899,7 +899,7 @@ pub fn trajectory_alignment_system(
                             }
                         }
                         None => {
-                            commands.entity(v_entity).insert(new_cell);
+                            commands.entity(v_entity).try_insert(new_cell);
                         }
                     }
                     t
@@ -930,7 +930,7 @@ pub fn trajectory_alignment_system(
                         if q_traj_mesh.contains(child) {
                             commands
                                 .entity(child)
-                                .insert(big_space::grid::propagation::LowPrecisionRoot);
+                                .try_insert(big_space::grid::propagation::LowPrecisionRoot);
                         }
                     }
                 }

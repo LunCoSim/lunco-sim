@@ -14,7 +14,7 @@
 #   )
 #   {
 #       double3 xformOp:translate = (0, 60.0, 0)
-#       double3 physics:linearVelocity = (-5.0, 0.0, -5.0)
+#       double3 physics:velocity = (-5.0, 0.0, -5.0)
 #   }
 #
 # Everything below the reference is the vehicle itself and travels with it:
@@ -40,7 +40,7 @@
 #   Backspace   — release possession
 
 def Cylinder "DescentLander" (
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
 )
 {
     # Emission REQUIRES a material. `displayColor` / `displayOpacity` are real
@@ -123,12 +123,12 @@ def Cylinder "DescentLander" (
     # pipeline (`opaque_mesh_pipeline` validation spam → dropped frames / viewport
     # blink). Only whole shaders with a `@fragment fn fragment` (e.g.
     # solar_panel.wgsl) are valid material shaders; the hull uses displayColor.
-    color3f primvars:displayColor = (0.78, 0.62, 0.27)
+    color3f[] primvars:displayColor = [(0.78, 0.62, 0.27)]
 
     bool physics:rigidBodyEnabled = true
     bool physics:collisionEnabled = true
     float physics:mass = 2000.0
-    float physics:linearDamping = 0.02
+    float physxRigidBody:linearDamping = 0.02
 
     string lunco:vessel = "true"
 
@@ -236,7 +236,7 @@ def Cylinder "DescentLander" (
         double height = 0.15
         double3 xformOp:translate = (0, 1.55, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.6, 0.58, 0.55)
+        color3f[] primvars:displayColor = [(0.6, 0.58, 0.55)]
         bool physics:collisionEnabled = false
     }
 
@@ -249,7 +249,7 @@ def Cylinder "DescentLander" (
         double height = 1.4
         double3 xformOp:translate = (0.0, 2.35, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.7, 0.7, 0.72)
+        color3f[] primvars:displayColor = [(0.7, 0.7, 0.72)]
         bool physics:collisionEnabled = false
     }
 
@@ -264,7 +264,7 @@ def Cylinder "DescentLander" (
         double3 xformOp:translate = (0.0, 3.6, 0.0)
         double3 xformOp:rotateXYZ = (180.0, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-        color3f primvars:displayColor = (0.82, 0.82, 0.86)
+        color3f[] primvars:displayColor = [(0.82, 0.82, 0.86)]
         bool physics:collisionEnabled = false
     }
 
@@ -274,7 +274,7 @@ def Cylinder "DescentLander" (
         double radius = 0.3
         double3 xformOp:translate = (1.3, 1.9, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.9, 0.9, 0.92)
+        color3f[] primvars:displayColor = [(0.9, 0.9, 0.92)]
         bool physics:collisionEnabled = false
     }
 
@@ -311,7 +311,7 @@ def Cylinder "DescentLander" (
         double3 xformOp:scale = (0.02, 0.02, 0.02)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/Flame_Mat>
-        float primvars:displayOpacity = 0.4
+        float[] primvars:displayOpacity = [0.4]
         bool physics:collisionEnabled = false
         custom string lunco:params = "wmax=1.05, lmax=3.6, flick=1.0"
         custom string lunco:scriptPath = "scenarios/flame.rhai"
@@ -326,7 +326,7 @@ def Cylinder "DescentLander" (
         double3 xformOp:scale = (0.02, 0.02, 0.02)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         rel material:binding = </DescentLander/Looks/FlameCore_Mat>
-        float primvars:displayOpacity = 0.85
+        float[] primvars:displayOpacity = [0.85]
         bool physics:collisionEnabled = false
         custom string lunco:params = "wmax=0.5, lmax=2.5, flick=0.5"
         custom string lunco:scriptPath = "scenarios/flame.rhai"
@@ -340,7 +340,7 @@ def Cylinder "DescentLander" (
         double height = 2.4
         double3 xformOp:translate = (2.2, 0.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.75, 0.72, 0.65)
+        color3f[] primvars:displayColor = [(0.75, 0.72, 0.65)]
         bool physics:collisionEnabled = false
     }
     def Capsule "TankNX"
@@ -350,7 +350,7 @@ def Cylinder "DescentLander" (
         double height = 2.4
         double3 xformOp:translate = (-2.2, 0.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.75, 0.72, 0.65)
+        color3f[] primvars:displayColor = [(0.75, 0.72, 0.65)]
         bool physics:collisionEnabled = false
     }
     def Capsule "TankPZ"
@@ -360,7 +360,7 @@ def Cylinder "DescentLander" (
         double height = 2.4
         double3 xformOp:translate = (0, 0.0, 2.2)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.75, 0.72, 0.65)
+        color3f[] primvars:displayColor = [(0.75, 0.72, 0.65)]
         bool physics:collisionEnabled = false
     }
     def Capsule "TankNZ"
@@ -370,7 +370,7 @@ def Cylinder "DescentLander" (
         double height = 2.4
         double3 xformOp:translate = (0, 0.0, -2.2)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.75, 0.72, 0.65)
+        color3f[] primvars:displayColor = [(0.75, 0.72, 0.65)]
         bool physics:collisionEnabled = false
     }
 
@@ -385,7 +385,7 @@ def Cylinder "DescentLander" (
         double3 xformOp:rotateXYZ = (0, 0, -12.0)
         double3 xformOp:scale = (5.6, 0.06, 3.4)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f primvars:displayColor = (0.06, 0.06, 0.22)
+        color3f[] primvars:displayColor = [(0.06, 0.06, 0.22)]
         string primvars:materialType = "shader"
         string primvars:shaderPath = "shaders/solar_panel.wgsl"
         float primvars:v_scale = 1.7
@@ -406,7 +406,7 @@ def Cylinder "DescentLander" (
         double3 xformOp:rotateXYZ = (0, 0, 12.0)
         double3 xformOp:scale = (5.6, 0.06, 3.4)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f primvars:displayColor = (0.06, 0.06, 0.22)
+        color3f[] primvars:displayColor = [(0.06, 0.06, 0.22)]
         string primvars:materialType = "shader"
         string primvars:shaderPath = "shaders/solar_panel.wgsl"
         float primvars:v_scale = 1.7
@@ -430,7 +430,7 @@ def Cylinder "DescentLander" (
         double3 xformOp:rotateXYZ = (0, 0, 25.0)
         double3 xformOp:scale = (0.15, 7.33, 0.15)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f primvars:displayColor = (0.55, 0.55, 0.57)
+        color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
         bool physics:collisionEnabled = false
     }
     def Cylinder "PadPX"
@@ -440,7 +440,7 @@ def Cylinder "DescentLander" (
         double height = 0.08
         double3 xformOp:translate = (5.5, -5.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.45, 0.45, 0.48)
+        color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
         bool physics:collisionEnabled = true
     }
 
@@ -452,7 +452,7 @@ def Cylinder "DescentLander" (
         double3 xformOp:rotateXYZ = (0, 0, -25.0)
         double3 xformOp:scale = (0.15, 7.33, 0.15)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f primvars:displayColor = (0.55, 0.55, 0.57)
+        color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
         bool physics:collisionEnabled = false
     }
     def Cylinder "PadNX"
@@ -462,7 +462,7 @@ def Cylinder "DescentLander" (
         double height = 0.08
         double3 xformOp:translate = (-5.5, -5.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.45, 0.45, 0.48)
+        color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
         bool physics:collisionEnabled = true
     }
 
@@ -474,7 +474,7 @@ def Cylinder "DescentLander" (
         double3 xformOp:rotateXYZ = (-25.0, 0, 0)
         double3 xformOp:scale = (0.15, 7.33, 0.15)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f primvars:displayColor = (0.55, 0.55, 0.57)
+        color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
         bool physics:collisionEnabled = false
     }
     def Cylinder "PadPZ"
@@ -484,7 +484,7 @@ def Cylinder "DescentLander" (
         double height = 0.08
         double3 xformOp:translate = (0, -5.0, 5.5)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.45, 0.45, 0.48)
+        color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
         bool physics:collisionEnabled = true
     }
 
@@ -496,7 +496,7 @@ def Cylinder "DescentLander" (
         double3 xformOp:rotateXYZ = (25.0, 0, 0)
         double3 xformOp:scale = (0.15, 7.33, 0.15)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f primvars:displayColor = (0.55, 0.55, 0.57)
+        color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
         bool physics:collisionEnabled = false
     }
     def Cylinder "PadNZ"
@@ -506,7 +506,7 @@ def Cylinder "DescentLander" (
         double height = 0.08
         double3 xformOp:translate = (0, -5.0, -5.5)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.45, 0.45, 0.48)
+        color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
         bool physics:collisionEnabled = true
     }
 }

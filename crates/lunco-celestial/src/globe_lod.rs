@@ -318,7 +318,7 @@ pub fn update_globe_lod(
         tiles.retiring.retain_mut(|(ent, frames)| {
             if *frames == 0 {
                 if despawned < TILE_DESPAWN_BUDGET {
-                    commands.entity(*ent).despawn();
+                    commands.entity(*ent).try_despawn();
                     despawned += 1;
                     return false;
                 }

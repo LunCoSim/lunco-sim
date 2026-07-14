@@ -266,7 +266,7 @@ fn arm_sensor_collision_events(
     mut commands: Commands,
 ) {
     for e in &q {
-        commands.entity(e).insert(CollisionEventsEnabled);
+        commands.entity(e).try_insert(CollisionEventsEnabled);
     }
 }
 

@@ -327,7 +327,7 @@ pub(crate) fn update_links(
         if let Ok(mut st) = q_state.get_mut(node.entity) {
             st.peers = peers;
         } else {
-            commands.entity(node.entity).insert(LinkState { peers });
+            commands.entity(node.entity).try_insert(LinkState { peers });
         }
     }
 }

@@ -213,7 +213,7 @@ pub fn update_spawn_ghost(
 ) {
     let SpawnState::Selecting { entry_id } = spawn_state.as_ref() else {
         for (ghost, _) in q_ghost.iter() {
-            commands.entity(ghost).despawn();
+            commands.entity(ghost).try_despawn();
         }
         return;
     };
@@ -363,7 +363,7 @@ pub fn update_spawn_ghost(
         let point3 = ghost_pos.as_vec3();
 
         if let Some((ghost, _)) = q_ghost.iter().next() {
-            commands.entity(ghost).insert(Transform {
+            commands.entity(ghost).try_insert(Transform {
                 translation: point3,
                 rotation,
                 ..default()
@@ -417,7 +417,7 @@ pub fn spawn_tool_state_system(
 
     if tool_active.0 && keys.just_pressed(KeyCode::Escape) {
         for ghost in q_ghost.iter() {
-            commands.entity(ghost).despawn();
+            commands.entity(ghost).try_despawn();
         }
         *spawn_state = SpawnState::Idle;
     }
@@ -615,7 +615,7 @@ pub fn on_scene_click_spawn(
     let sticky = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     if !sticky {
         for ghost in q_ghost.iter() {
-            commands.entity(ghost).despawn();
+            commands.entity(ghost).try_despawn();
         }
         *spawn_state = SpawnState::Idle;
     }

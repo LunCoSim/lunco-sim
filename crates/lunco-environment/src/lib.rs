@@ -158,7 +158,7 @@ pub fn compute_local_gravity(
                 continue;
             }
         }
-        commands.entity(entity).insert(LocalGravity(g));
+        commands.entity(entity).try_insert(LocalGravity(g));
     }
 }
 

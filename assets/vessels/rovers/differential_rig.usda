@@ -20,7 +20,7 @@
 # ~−HingeL.angle with it. No ground-contact or chassis-roll confounds.
 
 def Xform "DiffRig" (
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI"]
 )
 {
     float physics:mass = 3000.0
@@ -61,37 +61,37 @@ def Xform "DiffRig" (
         double size = 1.0
         double3 xformOp:scale = (1.5, 3.0, 1.5)
         uniform token[] xformOpOrder = ["xformOp:scale"]
-        color3f primvars:displayColor = (0.6, 0.6, 0.65)
+        color3f[] primvars:displayColor = [(0.6, 0.6, 0.65)]
     }
 
     # Front-heavy rocker: centre 0.75 m forward of its pivot (pivot at rear end).
     def Cube "RockerL" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
     )
     {
         double size = 1.0
         float physics:mass = 60.0
         float3 physics:diagonalInertia = (50.0, 50.0, 5.0)
-        float physics:angularDamping = 8.0
+        float physxRigidBody:angularDamping = 8.0
         double3 xformOp:translate = (-1.2, 1.0, 0.75)
         double3 xformOp:scale = (0.2, 0.2, 1.5)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.85, 0.2, 0.2)
+        color3f[] primvars:displayColor = [(0.85, 0.2, 0.2)]
     }
 
     # Balanced rocker: pivot at its centre (no gravity torque).
     def Cube "RockerR" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI"]
     )
     {
         double size = 1.0
         float physics:mass = 60.0
         float3 physics:diagonalInertia = (50.0, 50.0, 5.0)
-        float physics:angularDamping = 8.0
+        float physxRigidBody:angularDamping = 8.0
         double3 xformOp:translate = (1.2, 1.0, 0.0)
         double3 xformOp:scale = (0.2, 0.2, 1.5)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.2, 0.2, 0.85)
+        color3f[] primvars:displayColor = [(0.2, 0.2, 0.85)]
     }
 
     def PhysicsRevoluteJoint "HingeL"

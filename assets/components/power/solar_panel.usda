@@ -25,7 +25,7 @@ def Xform "SolarPanel" (
         double3 xformOp:translate = (0, -0.005, 0)
         double3 xformOp:scale = (6.2, 0.02, 3.2)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.45, 0.45, 0.48)  # Aluminum gray
+        color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)] # Aluminum gray
         bool physics:collisionEnabled = true
     }
 
@@ -38,7 +38,7 @@ def Xform "SolarPanel" (
         double3 xformOp:translate = (0, 0.0115, 0)
         double3 xformOp:scale = (6.0, 0.003, 3.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.05, 0.05, 0.85)  # Deep blue
+        color3f[] primvars:displayColor = [(0.05, 0.05, 0.85)] # Deep blue
         bool physics:collisionEnabled = true
 
         # Use the general ShaderMaterial, driven entirely by the shader file

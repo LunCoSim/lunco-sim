@@ -147,7 +147,7 @@ pub(crate) fn spawn_client(
         } else {
             normalized
         };
-        ent.insert(crate::wt_client::WtUrlClientIo {
+        ent.try_insert(crate::wt_client::WtUrlClientIo {
             url: format!("https://{server}"),
             certificate_digest,
         });
@@ -188,7 +188,7 @@ fn on_join_server(
 ) {
     // Drop any current connection first, then dial the new address.
     for e in &existing {
-        commands.entity(e).despawn();
+        commands.entity(e).try_despawn();
     }
     let address = crate::normalize_addr(&cmd.address);
     spawn_client(&mut commands, &address, crate::next_client_id(), &cmd.digest);
@@ -214,7 +214,7 @@ fn on_leave_server(
     mut local: ResMut<LocalSession>,
 ) {
     for e in &existing {
-        commands.entity(e).despawn();
+        commands.entity(e).try_despawn();
     }
     *role = NetworkRole::Standalone;
     status.role = NetworkRole::Standalone;

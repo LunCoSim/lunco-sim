@@ -22,7 +22,7 @@ def Xform "Fsps"
         double3 xformOp:translate = (0, 0.4, 0)
         double3 xformOp:scale = (1.0, 0.4, 1.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.28, 0.27, 0.26)
+        color3f[] primvars:displayColor = [(0.28, 0.27, 0.26)]
         bool physics:collisionEnabled = true
     }
 
@@ -35,7 +35,7 @@ def Xform "Fsps"
         double height = 2.5
         double3 xformOp:translate = (0, 2.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.5, 0.5, 0.55)
+        color3f[] primvars:displayColor = [(0.5, 0.5, 0.55)]
         bool physics:collisionEnabled = true
     }
 
@@ -46,7 +46,7 @@ def Xform "Fsps"
         double height = 4.0
         double3 xformOp:translate = (0, 5.2, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.45, 0.45, 0.48)
+        color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
     }
 
     # Four umbrella radiator panels, tilted out around the boom top.
@@ -57,7 +57,7 @@ def Xform "Fsps"
         double3 xformOp:rotateXYZ = (35, 0, 0)
         double3 xformOp:scale = (3.0, 0.06, 3.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f primvars:displayColor = (0.6, 0.6, 0.62)
+        color3f[] primvars:displayColor = [(0.6, 0.6, 0.62)]
     }
     def Cube "RadiatorS"
     {
@@ -66,7 +66,7 @@ def Xform "Fsps"
         double3 xformOp:rotateXYZ = (-35, 0, 0)
         double3 xformOp:scale = (3.0, 0.06, 3.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f primvars:displayColor = (0.6, 0.6, 0.62)
+        color3f[] primvars:displayColor = [(0.6, 0.6, 0.62)]
     }
     def Cube "RadiatorE"
     {
@@ -75,7 +75,7 @@ def Xform "Fsps"
         double3 xformOp:rotateXYZ = (0, 0, -35)
         double3 xformOp:scale = (3.0, 0.06, 3.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f primvars:displayColor = (0.6, 0.6, 0.62)
+        color3f[] primvars:displayColor = [(0.6, 0.6, 0.62)]
     }
     def Cube "RadiatorW"
     {
@@ -84,6 +84,6 @@ def Xform "Fsps"
         double3 xformOp:rotateXYZ = (0, 0, 35)
         double3 xformOp:scale = (3.0, 0.06, 3.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f primvars:displayColor = (0.6, 0.6, 0.62)
+        color3f[] primvars:displayColor = [(0.6, 0.6, 0.62)]
     }
 }

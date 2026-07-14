@@ -93,7 +93,7 @@ pub fn on_detach_joint(
 ) {
     let cmd = trigger.event();
     if let Ok(mut entity) = commands.get_entity(cmd.target) {
-        entity.despawn();
+        entity.try_despawn();
         info!("DETACH_JOINT: despawned joint entity {:?} ({:?})", cmd.target, cmd.intent);
     }
 }
@@ -305,7 +305,7 @@ pub fn on_spawn_entity_command(
     // Authoritative, never colliding `Content`), is marked for transform
     // replication, and records what to replicate so the host can broadcast the
     // spawn to clients.
-    commands.entity(result.root_entity).insert((
+    commands.entity(result.root_entity).try_insert((
         lunco_core::SkipContentStamp,
         lunco_core::NetReplicate,
         lunco_core::NetSpawn {
@@ -344,7 +344,7 @@ pub fn apply_replicated_spawns(
         let result = spawn_usd_entry(&mut commands, &asset_server, entry, pos, Quat::IDENTITY, grid);
         // Pin the host id; mark runtime instance + replication target. Forced
         // Kinematic by `force_kinematic_proxies` so snapshots drive it.
-        commands.entity(result.root_entity).insert((
+        commands.entity(result.root_entity).try_insert((
             lunco_core::GlobalEntityId::from_raw(job.gid),
             lunco_core::SkipContentStamp,
             lunco_core::NetReplicate,
@@ -396,7 +396,7 @@ pub fn force_kinematic_proxies(
     for (e, rb, lin, ang) in q.iter_mut() {
         // `RigidBody` is an immutable Avian component — replace it via `insert`.
         if !matches!(*rb, RigidBody::Kinematic) {
-            commands.entity(e).insert(RigidBody::Kinematic);
+            commands.entity(e).try_insert(RigidBody::Kinematic);
         }
         if frozen {
             // No authority to follow — pin velocity to zero so the body holds.
@@ -824,7 +824,7 @@ pub fn interpolate_proxies(
         match motion {
             Some(mut m) => *m = hint,
             None => {
-                commands.entity(e).insert(hint);
+                commands.entity(e).try_insert(hint);
             }
         }
     }
@@ -947,7 +947,7 @@ pub fn drive_kinematic_proxies(
         match motion {
             Some(mut m) => *m = hint,
             None => {
-                commands.entity(e).insert(hint);
+                commands.entity(e).try_insert(hint);
             }
         }
     }
@@ -1118,7 +1118,7 @@ pub fn maintain_owned_locally(
                 );
                 commands
                     .entity(e)
-                    .insert((lunco_core::OwnedLocally, RigidBody::Dynamic));
+                    .try_insert((lunco_core::OwnedLocally, RigidBody::Dynamic));
                 // SEED FROM AUTHORITY (predict-alignment, Stage 1): overwrite the
                 // INTERP_DELAY-stale interpolated pose the proxy carried with the
                 // FRESHEST authoritative snapshot, so the deterministic prediction
@@ -1194,7 +1194,7 @@ pub fn propagate_owned_to_wheels(
                 // restore in `maintain_owned_locally`).
                 commands
                     .entity(e)
-                    .insert((lunco_core::OwnedLocally, RigidBody::Dynamic));
+                    .try_insert((lunco_core::OwnedLocally, RigidBody::Dynamic));
             }
             (false, true) => {
                 // Chassis released: hand the wheel back to the snapshot-driven
@@ -1994,7 +1994,7 @@ pub fn reconcile_owned_prediction(
                     None => {
                         commands
                             .entity(e)
-                            .insert(PendingCorrection { pos: dpos, rot: drot });
+                            .try_insert(PendingCorrection { pos: dpos, rot: drot });
                     }
                 }
             }
@@ -2108,7 +2108,7 @@ pub fn maintain_predicted_dynamic(
         }
         // Mark eligible, but leave it a kinematic proxy: `promote_contacting_proxies`
         // flips it `Dynamic` only while an owned body is touching it.
-        commands.entity(e).insert(lunco_core::ContactPredictable);
+        commands.entity(e).try_insert(lunco_core::ContactPredictable);
     }
     for e in q_demote.iter() {
         commands.entity(e).remove::<(
@@ -2190,7 +2190,7 @@ pub fn maintain_predicted_vehicles(
         }
         // Eligible only: stays a kinematic proxy until an owned body shoves it,
         // at which point `promote_contacting_proxies` flips it `Dynamic` to yield.
-        commands.entity(e).insert(lunco_core::ContactPredictable);
+        commands.entity(e).try_insert(lunco_core::ContactPredictable);
     }
 }
 
@@ -2294,7 +2294,7 @@ pub fn promote_contacting_proxies(
     // kinematic-proxy seam so it free-runs local physics and yields to the shove;
     // `reconcile_predicted_dynamic` keeps it from drifting past authority meanwhile.
     for e in touched {
-        commands.entity(e).insert((
+        commands.entity(e).try_insert((
             lunco_core::PredictedDynamic,
             RigidBody::Dynamic,
             ContactPredictLinger(CONTACT_PREDICT_LINGER),
@@ -2451,7 +2451,7 @@ pub fn reconcile_predicted_dynamic(
                     None => {
                         commands
                             .entity(e)
-                            .insert(PendingCorrection { pos: dpos, rot: rot_err });
+                            .try_insert(PendingCorrection { pos: dpos, rot: rot_err });
                     }
                 }
         }
@@ -2575,7 +2575,7 @@ pub fn apply_net_replication(
         if matches!(*rb, RigidBody::Static) {
             continue;
         }
-        commands.entity(e).insert(lunco_core::NetReplicate);
+        commands.entity(e).try_insert(lunco_core::NetReplicate);
     }
 }
 
@@ -2661,7 +2661,7 @@ pub fn on_move_entity_command(
             .filter(|rb| !matches!(rb, RigidBody::Kinematic)),
     };
     if q_rb.get(target).is_ok() {
-        commands.entity(target).insert(RigidBody::Kinematic);
+        commands.entity(target).try_insert(RigidBody::Kinematic);
     }
 
     if let Some(mut pos) = pos_opt {
@@ -2692,7 +2692,7 @@ pub fn on_move_entity_command(
             delta.z as f64 / dt,
         );
     }
-    commands.entity(target).insert(JustMovedKinematic { restore });
+    commands.entity(target).try_insert(JustMovedKinematic { restore });
 
     info!(
         "MOVE_ENTITY: {:?} → ({:.3}, {:.3}, {:.3})",
@@ -3111,11 +3111,15 @@ pub fn persist_wheel_and_pbr_to_runtime_layer(
                 .split(',')
                 .filter_map(|s| s.trim().parse::<f32>().ok())
                 .collect();
+            // ARRAY-valued: `UsdGeomGprim` declares `color3f[] primvars:displayColor`
+            // with `constant` interpolation — one element for the whole prim. A
+            // scalar `color3f` here is a type mismatch every other DCC falls back
+            // to grey on.
             (f.len() >= 3).then(|| {
                 (
                     "primvars:displayColor".to_string(),
-                    "color3f",
-                    format!("({}, {}, {})", f[0], f[1], f[2]),
+                    "color3f[]",
+                    format!("[({}, {}, {})]", f[0], f[1], f[2]),
                 )
             })
         } else {
@@ -3299,7 +3303,7 @@ pub fn persist_environment_light_to_runtime_layer(
         ));
     }
     if !env_attrs.is_empty() {
-        let parent_path = lunco_usd_bevy::stage_default_prim(host.document().data())
+        let parent_path = lunco_usd_bevy::layer_default_prim(host.document().data())
             .map(|p| format!("/{p}"))
             .unwrap_or_else(|| "/".to_string());
         let env_path = if parent_path == "/" {
@@ -3391,7 +3395,7 @@ pub fn persist_spawn_to_runtime_layer(
 
     // Parent under the document's default prim (scene root) when it has one,
     // else at the stage root. `stage_default_prim` returns the bare prim name.
-    let parent_path = lunco_usd_bevy::stage_default_prim(host.document().data())
+    let parent_path = lunco_usd_bevy::layer_default_prim(host.document().data())
         .map(|p| format!("/{p}"))
         .unwrap_or_else(|| "/".to_string());
 
@@ -3475,7 +3479,7 @@ pub fn clear_kinematic_pulse_velocity(
         // Re-inserting RigidBody goes through avian's replace hook, which
         // wakes the island — a body released in mid-air falls.
         if let Some(kind) = marker.restore {
-            commands.entity(e).insert(kind);
+            commands.entity(e).try_insert(kind);
         }
         commands.entity(e).remove::<JustMovedKinematic>();
     }
@@ -3659,7 +3663,7 @@ pub(crate) fn author_shader_look(
 ) {
     let mut look = existing.cloned().unwrap_or_default();
     look.shader = shader_path.to_string();
-    commands.entity(target).remove::<PbrLook>().insert(look);
+    commands.entity(target).remove::<PbrLook>().try_insert(look);
     commands.queue(move |world: &mut World| drop_bound_pbr_material(world, target));
 }
 
@@ -3773,7 +3777,7 @@ pub fn on_set_object_property(
             }
             let mut look = PbrLook::default();
             if apply_pbr_look(&mut look, key, &cmd.value) {
-                commands.entity(target).insert(look);
+                commands.entity(target).try_insert(look);
                 info!("SET_PROPERTY: {} adopted a PbrLook, {} = {}", cmd.entity_id, cmd.property, cmd.value);
             } else {
                 warn!("SET_PROPERTY: bad value '{}' for pbr '{}'", cmd.value, cmd.property);
@@ -3968,7 +3972,7 @@ pub fn apply_pending_focus(
                 .remove::<lunco_avatar::SurfaceCamera>()
                 .remove::<lunco_avatar::SurfaceRelativeMode>()
                 .remove::<lunco_avatar::FrameBlend>()
-                .insert(lunco_avatar::FreeFlightCamera { yaw, pitch, damping: None });
+                .try_insert(lunco_avatar::FreeFlightCamera { yaw, pitch, damping: None });
         }
     }
     info!(
@@ -4075,7 +4079,7 @@ pub fn on_set_camera_look_at(
             .remove::<lunco_avatar::SurfaceCamera>()
             .remove::<lunco_avatar::SurfaceRelativeMode>()
             .remove::<lunco_avatar::FrameBlend>()
-            .insert(lunco_avatar::FreeFlightCamera { yaw, pitch, damping: None });
+            .try_insert(lunco_avatar::FreeFlightCamera { yaw, pitch, damping: None });
     }
     info!(
         "SET_CAMERA: eye=({:.2},{:.2},{:.2}) target=({:.2},{:.2},{:.2})",
@@ -4575,7 +4579,7 @@ fn remove_legacy_ground_prim(
                 },
             });
         }
-        commands.entity(entity).despawn();
+        commands.entity(entity).try_despawn();
     }
 }
 

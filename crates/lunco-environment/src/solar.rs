@@ -122,7 +122,7 @@ pub fn compute_local_solar(
         if existing == Some(&next) {
             continue;
         }
-        commands.entity(entity).insert(next);
+        commands.entity(entity).try_insert(next);
     }
 }
 

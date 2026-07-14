@@ -10,6 +10,20 @@ def Xform "Ramp" (
     kind = "component"
 )
 {
+
+    # UsdPhysicsMaterialAPI — friction/restitution live on a Material
+    # bound with the purpose-specific `material:binding:physics`, which is
+    # how UsdPhysics (and Omniverse) actually spell a surface.
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
     def Cube "Body" (
         prepend apiSchemas = ["PhysicsCollisionAPI"]
     )
@@ -18,8 +32,8 @@ def Xform "Ramp" (
         double3 xformOp:rotateXYZ = (0, 0, 17.1887)
         double3 xformOp:scale = (6.0, 2.0, 8.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ", "xformOp:scale"]
-        color3f primvars:displayColor = (0.5, 0.5, 0.5)
+        color3f[] primvars:displayColor = [(0.5, 0.5, 0.5)]
         bool physics:collisionEnabled = true
-        float physics:friction = 1.0
+        rel material:binding:physics = </Ramp/PhysicsMaterials/Friction_1_0>
     }
 }

@@ -289,7 +289,7 @@ fn anchor_owns_origin_by_default(
         return;
     }
     if let Some(anchor) = q_anchor.iter().next() {
-        commands.entity(anchor).insert(FloatingOrigin);
+        commands.entity(anchor).try_insert(FloatingOrigin);
     }
 }
 

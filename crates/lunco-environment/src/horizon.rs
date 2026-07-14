@@ -446,7 +446,7 @@ pub fn start_horizon_bakes(
             );
             let task = AsyncComputeTaskPool::get()
                 .spawn(async move { bake_heightfield(&positions, &indices, resolution) });
-            commands.entity(entity).insert(HorizonBakeTask(task));
+            commands.entity(entity).try_insert(HorizonBakeTask(task));
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -633,7 +633,7 @@ pub fn install_horizon_map_from_field(
          ray-march shadows active (near field stays on CSM)",
         field.resolution, millis
     );
-    commands.entity(entity).remove::<HorizonBakeTask>().insert(HorizonMap { field, image });
+    commands.entity(entity).remove::<HorizonBakeTask>().try_insert(HorizonMap { field, image });
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -794,7 +794,7 @@ fn install_shadow_cache(
     commands
         .entity(entity)
         .remove::<ShadowCacheBakeTask>()
-        .insert(HorizonShadowCache { image, last_sun_local: sun_local });
+        .try_insert(HorizonShadowCache { image, last_sun_local: sun_local });
 }
 
 // ─────────────────────────────────────────────────────────────────────────

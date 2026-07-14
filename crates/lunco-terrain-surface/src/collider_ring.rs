@@ -401,7 +401,7 @@ pub fn despawn_orphaned_collider_tiles(
     }
     for (ent, owner) in &tiles {
         if orphaned.contains(&owner.0) && ringing.get(owner.0).is_err() {
-            commands.entity(ent).despawn();
+            commands.entity(ent).try_despawn();
         }
     }
 }

@@ -1458,7 +1458,7 @@ fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
         // re-inserting its own material alongside the shader one — two materials on
         // one mesh, drawn twice.
         .remove::<PbrLook>()
-        .insert(look);
+        .try_insert(look);
     // …and the material that binder ALREADY bound, or the same double-draw happens
     // once, statically. (Removed reflectively — this crate may not name `bevy_pbr`.)
     crate::commands::drop_bound_pbr_material(world, part);

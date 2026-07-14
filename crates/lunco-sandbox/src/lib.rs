@@ -46,6 +46,10 @@ use lunco_hardware::LunCoHardwarePlugin;
 use lunco_usd::{LoadScene, UsdPlugins, UsdPrimPath, UsdStageAsset};
 // The USD-reading terrain systems read the LIVE canonical stage via `StageView`
 // (which implements `UsdRead`).
+// `UsdRead` = the COMPOSED stage (one impl: `StageView`).
+// `UsdDataExt` = a raw AUTHORED layer (the document's own `sdf::Data`).
+// Two different jobs; the retired flattened reader used to blur them.
+use lunco_usd_bevy::usd_data::UsdDataExt;
 use lunco_usd_bevy::UsdRead;
 use bevy::asset::AssetLoadFailedEvent;
 
@@ -2410,7 +2414,7 @@ fn seed_edit_seq_past_children(
     let Some(host) = registry.host(doc) else { return };
     let Ok(sdf) = openusd::sdf::Path::new(terrain_path) else { return };
     let composed = host.document().composed_arc();
-    for child in composed.children(&sdf) {
+    for child in composed.prim_children(&sdf) {
         let Some(name) = child.as_str().rsplit('/').next() else { continue };
         for prefix in ["edit_", "rock_"] {
             if let Some(n) = name.strip_prefix(prefix).and_then(|s| s.parse::<u64>().ok()) {
@@ -2664,6 +2668,14 @@ struct TerrainDocGeneration(u64);
 /// projected asset — covering twin default and live-imported (`OpenFile`) scenes alike.
 fn refresh_docbacked_terrain_from_doc(
     registry: Option<Res<lunco_usd::UsdDocumentRegistry>>,
+    // The live, PCP-composed stage. The terrain layer stack used to be re-parsed
+    // from the DOCUMENT's merged `sdf::Data` layers, which meant the terrain
+    // parser had to be generic over both a composed stage and a raw authored
+    // layer — the very thing that kept the flattened reader alive. The
+    // `CanonicalStage` IS the composed document (twin_projection replays every op
+    // onto it), so there is one source, and it is the same one everything else
+    // projects from.
+    stages: NonSend<lunco_usd_bevy::CanonicalStages>,
     parser: Res<lunco_terrain_surface::TerrainLayerParserRegistry>,
     mut terrains: Query<
         (
@@ -2719,11 +2731,8 @@ fn refresh_docbacked_terrain_from_doc(
             }
         }
         let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else { continue };
-        // `composed_arc` is memoized by generation, so this shares the SAME recompose
-        // the twin overlay serialize already paid for this edit (was a second full
-        // O(stage) layer merge on the main thread per brush stroke).
-        let composed = host.document().composed_arc();
-        let stack = parse_terrain_layer_stack(composed.as_ref(), &sdf, &parser);
+        let Some(cs) = stages.get(prim_path.stage_handle.id()) else { continue };
+        let stack = parse_terrain_layer_stack(&cs.view(), &sdf, &parser);
         // Despawn-safe: a scene reload can despawn this terrain between queue
         // time and apply_deferred — no-op instead of panicking.
         commands.entity(entity).try_insert(stack);
@@ -2786,11 +2795,11 @@ fn on_obstacle_spec_authored(
         // take it mutably.
         let Some(composed) = registry.host(doc).map(|h| h.document().composed()) else { continue };
         let layers: Vec<(String, String)> = composed
-            .children(&sdf)
+            .prim_children(&sdf)
             .into_iter()
             .filter_map(|child| {
                 composed
-                    .scalar::<String>(&child, "lunco:layer")
+                    .prim_attribute_value::<String>(&child, "lunco:layer")
                     .map(|ty| (child.as_str().to_string(), ty))
             })
             .collect();

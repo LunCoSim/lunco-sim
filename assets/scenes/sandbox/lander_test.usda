@@ -36,20 +36,34 @@
 
 def Xform "LanderTest"
 {
+
+    # UsdPhysicsMaterialAPI — friction/restitution live on a Material
+    # bound with the purpose-specific `material:binding:physics`, which is
+    # how UsdPhysics (and Omniverse) actually spell a surface.
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
     custom bool lunco:spawnable = false
     custom string lunco:description = "A lander dropping under gravity with a rocket you can fire to slow and steer it. Hold Space to thrust, WASD to tilt, Q/E to turn, G to release the rover, P to pause."
 
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
     )
     {
         double size = 1.0
         double3 xformOp:translate = (0, -0.5, 0)
         double3 xformOp:scale = (200.0, 1.0, 200.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.35, 0.33, 0.38)
+        color3f[] primvars:displayColor = [(0.35, 0.33, 0.38)]
         bool physics:collisionEnabled = true
-        float physics:friction = 1.0
+        rel material:binding:physics = </LanderTest/PhysicsMaterials/Friction_1_0>
     }
 
     def Xform "Avatar"
@@ -79,7 +93,7 @@ def Xform "LanderTest"
     {
         double3 xformOp:translate = (0, 60.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        double3 physics:linearVelocity = (-5.0, 0.0, -5.0)
+        double3 physics:velocity = (-5.0, 0.0, -5.0)
     }
 
     # ── The rover attached to the lander ──
@@ -89,7 +103,7 @@ def Xform "LanderTest"
     {
         double3 xformOp:translate = (0, 58.35, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        double3 physics:linearVelocity = (-5.0, 0.0, -5.0)
+        double3 physics:velocity = (-5.0, 0.0, -5.0)
 
         # Autopilot: drives the deployed rover through the waypoint course, and
         # yields to the player on any key press. Engages on the `rover_deployed`

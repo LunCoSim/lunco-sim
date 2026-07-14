@@ -353,7 +353,7 @@ pub fn spacecraft_alignment_system(
                     // pre-parenting window). Frames without a Grid get no
                     // cell; the position system falls back to raw f32 there.
                     if frame_is_grid {
-                        commands.entity(sc_entity).insert(CellCoord::default());
+                        commands.entity(sc_entity).try_insert(CellCoord::default());
                         // Re-stamp the mesh/billboard children as low-precision
                         // subtree roots: big_space strips the marker while the
                         // spacecraft is still an invalid parent (pre-cell), and
@@ -364,7 +364,7 @@ pub fn spacecraft_alignment_system(
                             for child in children.iter() {
                                 commands
                                     .entity(child)
-                                    .insert(big_space::grid::propagation::LowPrecisionRoot);
+                                    .try_insert(big_space::grid::propagation::LowPrecisionRoot);
                             }
                         }
                     }

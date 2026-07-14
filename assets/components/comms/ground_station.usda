@@ -37,7 +37,7 @@ def Xform "GroundStation" (
         double height = 8.0
         double3 xformOp:translate = (0, 4.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.8, 0.8, 0.82)
+        color3f[] primvars:displayColor = [(0.8, 0.8, 0.82)]
     }
 
     # Dish — flattened sphere paraboloid, tipped toward the sky.
@@ -48,7 +48,7 @@ def Xform "GroundStation" (
         double3 xformOp:rotateXYZ = (45, 0, 0)
         double3 xformOp:scale = (1.0, 0.3, 1.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f primvars:displayColor = (0.92, 0.92, 0.95)
+        color3f[] primvars:displayColor = [(0.92, 0.92, 0.95)]
     }
 
     def Cylinder "Feed"
@@ -59,6 +59,6 @@ def Xform "GroundStation" (
         double3 xformOp:translate = (0, 15.0, 3.5)
         double3 xformOp:rotateXYZ = (45, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-        color3f primvars:displayColor = (0.6, 0.6, 0.65)
+        color3f[] primvars:displayColor = [(0.6, 0.6, 0.65)]
     }
 }

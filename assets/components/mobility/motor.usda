@@ -16,7 +16,7 @@ def Cylinder "Motor" (
     double height = 0.8
     double3 xformOp:translate = (0, 0, 0)
     uniform token[] xformOpOrder = ["xformOp:translate"]
-    color3f primvars:displayColor = (0.4, 0.4, 0.4)
+    color3f[] primvars:displayColor = [(0.4, 0.4, 0.4)]
 
     # --- Modelica model ---
     string lunco:modelicaModel = "models/motor.mo"

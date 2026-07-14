@@ -79,7 +79,7 @@ pub(crate) fn apply_selection(
         commands.entity(target).remove::<Selected>().remove::<GizmoTarget>();
         selected.entities.retain(|e| *e != target);
     } else {
-        commands.entity(target).insert((Selected, GizmoTarget::default()));
+        commands.entity(target).try_insert((Selected, GizmoTarget::default()));
         if !selected.entities.contains(&target) {
             selected.entities.push(target);
         }

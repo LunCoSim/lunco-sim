@@ -283,7 +283,7 @@ fn force_hard_shadow_filtering(
     for e in &q {
         commands
             .entity(e)
-            .insert(bevy::light::ShadowFilteringMethod::Hardware2x2);
+            .try_insert(bevy::light::ShadowFilteringMethod::Hardware2x2);
     }
 }
 

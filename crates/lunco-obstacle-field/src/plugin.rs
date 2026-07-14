@@ -301,7 +301,7 @@ fn regenerate_obstacle_field(
     if !mode.is_standalone() {
         events.clear();
         for e in &existing {
-            commands.entity(e).despawn();
+            commands.entity(e).try_despawn();
         }
         return;
     }
@@ -321,7 +321,7 @@ fn regenerate_obstacle_field(
 
     // Tear down any previous field.
     for e in &existing {
-        commands.entity(e).despawn();
+        commands.entity(e).try_despawn();
     }
 
     let mut meshes = meshes;
@@ -388,7 +388,7 @@ fn regenerate_obstacle_field(
             indices,
             RenderAssetUsages::default(),
         ));
-        terrain.insert((
+        terrain.try_insert((
             Mesh3d(mesh),
             PbrLook::matte(Color::srgb(0.32, 0.30, 0.28).into()),
         ));
@@ -485,7 +485,7 @@ fn regenerate_obstacle_field(
                 )).id();
                 // Distance LOD cull — native only (see `rock_visibility_range`).
                 #[cfg(not(target_arch = "wasm32"))]
-                commands.entity(rock_child).insert(rock_visibility_range());
+                commands.entity(rock_child).try_insert(rock_visibility_range());
                 #[cfg(target_arch = "wasm32")]
                 let _ = rock_child;
             }

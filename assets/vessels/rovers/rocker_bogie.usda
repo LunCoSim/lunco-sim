@@ -19,7 +19,7 @@
 def Xform "RockerBogie" (
     kind = "component"
     prepend apiSchemas = [
-        "PhysicsRigidBodyAPI",
+        "PhysicsRigidBodyAPI", "PhysxRigidBodyAPI",
         "PhysicsMassAPI",
         "PhysicsArticulationRootAPI",
         "PhysxVehicleContextAPI",
@@ -51,8 +51,8 @@ def Xform "RockerBogie" (
     # Edit the chassis mass here (default 300 kg)
     float physics:mass = 300.0
     float lunco:spawnLift = 1.5
-    float physics:linearDamping = 0.4
-    float physics:angularDamping = 2.0
+    float physxRigidBody:linearDamping = 0.4
+    float physxRigidBody:angularDamping = 2.0
 
     # Intent->port control (stage 2): shared rover profile as a child `references`
     # arc so it composes through a spawn/reference like the wheels.
@@ -82,7 +82,7 @@ def Xform "RockerBogie" (
         double size = 1.0
         double3 xformOp:scale = (1.2, 0.4, 1.8)
         uniform token[] xformOpOrder = ["xformOp:scale"]
-        color3f primvars:displayColor = (0.85, 0.75, 0.2)
+        color3f[] primvars:displayColor = [(0.85, 0.75, 0.2)]
     }
 
     # Slanted Solar panel deck on top of the chassis
@@ -92,7 +92,7 @@ def Xform "RockerBogie" (
         double3 xformOp:translate = (0.0, 0.21, 0.0)
         double3 xformOp:scale = (1.3, 0.02, 1.9)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.05, 0.05, 0.2)
+        color3f[] primvars:displayColor = [(0.05, 0.05, 0.2)]
         bool physics:collisionEnabled = false
     }
 
@@ -104,7 +104,7 @@ def Xform "RockerBogie" (
         double height = 0.3
         double3 xformOp:translate = (0.3, 0.35, 0.6)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.6, 0.6, 0.6)
+        color3f[] primvars:displayColor = [(0.6, 0.6, 0.6)]
         bool physics:collisionEnabled = false
     }
 
@@ -116,7 +116,7 @@ def Xform "RockerBogie" (
         double3 xformOp:translate = (0.3, 0.5, 0.6)
         double3 xformOp:rotateXYZ = (30.0, 45.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-        color3f primvars:displayColor = (0.8, 0.8, 0.8)
+        color3f[] primvars:displayColor = [(0.8, 0.8, 0.8)]
         bool physics:collisionEnabled = false
     }
 
@@ -128,7 +128,7 @@ def Xform "RockerBogie" (
         double height = 0.8
         double3 xformOp:translate = (0.0, 0.5, -0.6)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f primvars:displayColor = (0.6, 0.6, 0.6)
+        color3f[] primvars:displayColor = [(0.6, 0.6, 0.6)]
         bool physics:collisionEnabled = false
     }
 
@@ -138,7 +138,7 @@ def Xform "RockerBogie" (
         double3 xformOp:scale = (0.2, 0.15, 0.15)
         double3 xformOp:translate = (0.0, 0.95, -0.6)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.15, 0.15, 0.15)
+        color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
         bool physics:collisionEnabled = false
     }
 
@@ -150,6 +150,9 @@ def Xform "RockerBogie" (
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
 
         def SphereLight "Light"
+        (
+            prepend apiSchemas = ["ShapingAPI", "ShadowAPI"]
+        )
         {
             float inputs:intensity = 1000000.0
             float inputs:exposure = 0.0
@@ -167,7 +170,7 @@ def Xform "RockerBogie" (
             double height = 0.15
             double3 xformOp:translate = (0, 0, 0.075)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.1, 0.1, 0.1)
+            color3f[] primvars:displayColor = [(0.1, 0.1, 0.1)]
             bool physics:collisionEnabled = false
         }
 
@@ -190,6 +193,9 @@ def Xform "RockerBogie" (
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
 
         def SphereLight "Light"
+        (
+            prepend apiSchemas = ["ShapingAPI", "ShadowAPI"]
+        )
         {
             float inputs:intensity = 1000000.0
             float inputs:exposure = 0.0
@@ -207,7 +213,7 @@ def Xform "RockerBogie" (
             double height = 0.15
             double3 xformOp:translate = (0, 0, 0.075)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.1, 0.1, 0.1)
+            color3f[] primvars:displayColor = [(0.1, 0.1, 0.1)]
             bool physics:collisionEnabled = false
         }
 
@@ -225,7 +231,7 @@ def Xform "RockerBogie" (
 
     # ── Left rocker ─────────────────────────────────────────────────────────
     def Xform "RockerL" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
         float physics:mass = 50.0
@@ -243,7 +249,7 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.0, -0.2, -0.6)
             double3 xformOp:rotateXYZ = (-18.43, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            color3f primvars:displayColor = (0.35, 0.35, 0.38)
+            color3f[] primvars:displayColor = [(0.35, 0.35, 0.38)]
             bool physics:collisionEnabled = false
         }
 
@@ -257,7 +263,7 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.0, -0.1, 0.3)
             double3 xformOp:rotateXYZ = (18.43, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            color3f primvars:displayColor = (0.35, 0.35, 0.38)
+            color3f[] primvars:displayColor = [(0.35, 0.35, 0.38)]
             bool physics:collisionEnabled = false
         }
 
@@ -269,7 +275,7 @@ def Xform "RockerBogie" (
             double height = 0.25
             double3 xformOp:translate = (-0.125, -0.4, -1.2)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.6, 0.6, 0.6)
+            color3f[] primvars:displayColor = [(0.6, 0.6, 0.6)]
             bool physics:collisionEnabled = false
         }
 
@@ -281,7 +287,7 @@ def Xform "RockerBogie" (
             double height = 0.12
             double3 xformOp:translate = (0.0, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.85, 0.7, 0.2)
+            color3f[] primvars:displayColor = [(0.85, 0.7, 0.2)]
             bool physics:collisionEnabled = false
         }
 
@@ -311,7 +317,7 @@ def Xform "RockerBogie" (
             double height = 0.3
             double3 xformOp:translate = (-0.25, -0.4, -1.2)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.15, 0.15, 0.15)
+            color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
             # --- WHEEL DYNAMICS CONFIGURATION ---
             int physxVehicleWheel:index = 0
@@ -324,7 +330,7 @@ def Xform "RockerBogie" (
 
     # ── Right rocker ────────────────────────────────────────────────────────
     def Xform "RockerR" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
         float physics:mass = 50.0
@@ -340,7 +346,7 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.0, -0.2, -0.6)
             double3 xformOp:rotateXYZ = (-18.43, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            color3f primvars:displayColor = (0.35, 0.35, 0.38)
+            color3f[] primvars:displayColor = [(0.35, 0.35, 0.38)]
             bool physics:collisionEnabled = false
         }
 
@@ -352,7 +358,7 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.0, -0.1, 0.3)
             double3 xformOp:rotateXYZ = (18.43, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            color3f primvars:displayColor = (0.35, 0.35, 0.38)
+            color3f[] primvars:displayColor = [(0.35, 0.35, 0.38)]
             bool physics:collisionEnabled = false
         }
 
@@ -363,7 +369,7 @@ def Xform "RockerBogie" (
             double height = 0.25
             double3 xformOp:translate = (0.125, -0.4, -1.2)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.6, 0.6, 0.6)
+            color3f[] primvars:displayColor = [(0.6, 0.6, 0.6)]
             bool physics:collisionEnabled = false
         }
 
@@ -374,7 +380,7 @@ def Xform "RockerBogie" (
             double height = 0.12
             double3 xformOp:translate = (0.0, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.85, 0.7, 0.2)
+            color3f[] primvars:displayColor = [(0.85, 0.7, 0.2)]
             bool physics:collisionEnabled = false
         }
 
@@ -404,7 +410,7 @@ def Xform "RockerBogie" (
             double height = 0.3
             double3 xformOp:translate = (0.25, -0.4, -1.2)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.15, 0.15, 0.15)
+            color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
             int physxVehicleWheel:index = 1
             float physxVehicleWheel:radius = 0.4
@@ -416,7 +422,7 @@ def Xform "RockerBogie" (
 
     # ── Left bogie ──────────────────────────────────────────────────────────
     def Xform "BogieL" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
         float physics:mass = 30.0
@@ -434,7 +440,7 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.0, -0.1, -0.2)
             double3 xformOp:rotateXYZ = (-26.57, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            color3f primvars:displayColor = (0.45, 0.45, 0.48)
+            color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
             bool physics:collisionEnabled = false
         }
 
@@ -448,7 +454,7 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.0, -0.1, 0.3)
             double3 xformOp:rotateXYZ = (18.43, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            color3f primvars:displayColor = (0.45, 0.45, 0.48)
+            color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
             bool physics:collisionEnabled = false
         }
 
@@ -460,7 +466,7 @@ def Xform "RockerBogie" (
             double height = 0.25
             double3 xformOp:translate = (-0.125, -0.2, -0.4)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.6, 0.6, 0.6)
+            color3f[] primvars:displayColor = [(0.6, 0.6, 0.6)]
             bool physics:collisionEnabled = false
         }
 
@@ -472,7 +478,7 @@ def Xform "RockerBogie" (
             double height = 0.25
             double3 xformOp:translate = (-0.125, -0.2, 0.6)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.6, 0.6, 0.6)
+            color3f[] primvars:displayColor = [(0.6, 0.6, 0.6)]
             bool physics:collisionEnabled = false
         }
 
@@ -484,7 +490,7 @@ def Xform "RockerBogie" (
             double height = 0.1
             double3 xformOp:translate = (0.0, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.85, 0.7, 0.2)
+            color3f[] primvars:displayColor = [(0.85, 0.7, 0.2)]
             bool physics:collisionEnabled = false
         }
 
@@ -512,7 +518,7 @@ def Xform "RockerBogie" (
             double height = 0.3
             double3 xformOp:translate = (-0.25, -0.2, -0.4)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.15, 0.15, 0.15)
+            color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
             int physxVehicleWheel:index = 2
             float physxVehicleWheel:radius = 0.4
@@ -532,7 +538,7 @@ def Xform "RockerBogie" (
             double height = 0.3
             double3 xformOp:translate = (-0.25, -0.2, 0.6)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.15, 0.15, 0.15)
+            color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
             int physxVehicleWheel:index = 4
             float physxVehicleWheel:radius = 0.4
@@ -544,7 +550,7 @@ def Xform "RockerBogie" (
 
     # ── Right bogie ─────────────────────────────────────────────────────────
     def Xform "BogieR" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
         float physics:mass = 30.0
@@ -560,7 +566,7 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.0, -0.1, -0.2)
             double3 xformOp:rotateXYZ = (-26.57, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            color3f primvars:displayColor = (0.45, 0.45, 0.48)
+            color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
             bool physics:collisionEnabled = false
         }
 
@@ -572,7 +578,7 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.0, -0.1, 0.3)
             double3 xformOp:rotateXYZ = (18.43, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            color3f primvars:displayColor = (0.45, 0.45, 0.48)
+            color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
             bool physics:collisionEnabled = false
         }
 
@@ -583,7 +589,7 @@ def Xform "RockerBogie" (
             double height = 0.25
             double3 xformOp:translate = (0.125, -0.2, -0.4)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.6, 0.6, 0.6)
+            color3f[] primvars:displayColor = [(0.6, 0.6, 0.6)]
             bool physics:collisionEnabled = false
         }
 
@@ -594,7 +600,7 @@ def Xform "RockerBogie" (
             double height = 0.25
             double3 xformOp:translate = (0.125, -0.2, 0.6)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.6, 0.6, 0.6)
+            color3f[] primvars:displayColor = [(0.6, 0.6, 0.6)]
             bool physics:collisionEnabled = false
         }
 
@@ -605,7 +611,7 @@ def Xform "RockerBogie" (
             double height = 0.1
             double3 xformOp:translate = (0.0, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.85, 0.7, 0.2)
+            color3f[] primvars:displayColor = [(0.85, 0.7, 0.2)]
             bool physics:collisionEnabled = false
         }
 
@@ -633,7 +639,7 @@ def Xform "RockerBogie" (
             double height = 0.3
             double3 xformOp:translate = (0.25, -0.2, -0.4)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.15, 0.15, 0.15)
+            color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
             int physxVehicleWheel:index = 3
             float physxVehicleWheel:radius = 0.4
@@ -653,7 +659,7 @@ def Xform "RockerBogie" (
             double height = 0.3
             double3 xformOp:translate = (0.25, -0.2, 0.6)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f primvars:displayColor = (0.15, 0.15, 0.15)
+            color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
             int physxVehicleWheel:index = 5
             float physxVehicleWheel:radius = 0.4

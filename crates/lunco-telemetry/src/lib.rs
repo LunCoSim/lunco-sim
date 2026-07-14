@@ -182,7 +182,7 @@ fn on_control_telemetry(
                 .map(|(e, _, _)| e);
             match existing {
                 Some(chan) => {
-                    commands.entity(chan).remove::<ChannelClock>().insert(param);
+                    commands.entity(chan).remove::<ChannelClock>().try_insert(param);
                 }
                 None => {
                     commands.spawn((Name::new(format!("telemetry:{}", param.name)), param));

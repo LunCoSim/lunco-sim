@@ -30,7 +30,7 @@ pub fn migrate_to_grid(
     cell: CellCoord,
     local_transform: Transform,
 ) {
-    commands.entity(entity).insert((
+    commands.entity(entity).try_insert((
         ChildOf(new_grid),
         cell,
         local_transform,

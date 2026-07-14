@@ -19,3 +19,17 @@ pub mod sun;
 pub use appearance::{PbrLook, PbrLookKey, PbrTextures, SurfaceAlpha};
 pub use camera::{BloomLook, MsaaLevel, SceneCamera, ToneMap, WorldLabel};
 pub use sun::LunarSunShadow;
+
+/// The systems that BIND a look intent (`PbrLook`, …) onto an entity as a
+/// concrete render component — everything in `lunco-render-bevy` that queues
+/// `insert(MeshMaterial3d(..))` for a changed look.
+///
+/// This set exists to make the binders *nameable*, not to carry an ordering
+/// contract. The ordering problem it was briefly used for is solved structurally
+/// instead: the USD projector — which despawns and rebuilds the subtree of any
+/// edited prim — runs in **`PreUpdate`**, a frame earlier than every binder here.
+/// So a binder cannot queue an insert against an entity the projector is about to
+/// despawn, and no binder has to remember to opt into an ordering rule (7 crates
+/// bind looks; a rule each of them must remember is a rule that gets forgotten).
+#[derive(bevy::ecs::schedule::SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LookRebind;

@@ -104,7 +104,7 @@ over "LanderTest"
         # Cinematic descent: kill the base scene's sideways drift so the lander
         # comes straight down and settles UPRIGHT on its legs (the base test scene
         # keeps the drift on purpose to exercise lateral GNC).
-        double3 physics:linearVelocity = (0, 0, 0)
+        double3 physics:velocity = (0, 0, 0)
 
         # Wide heroic establishing shot — mounted FAR back/up so it rides the whole
         # descent while always auto-framing the lander (camera_mount re-aims every
@@ -147,7 +147,7 @@ over "LanderTest"
     over "SkidRover"
     {
         # Match the lander so the pair descends straight (no drift → clean landing).
-        double3 physics:linearVelocity = (0, 0, 0)
+        double3 physics:velocity = (0, 0, 0)
 
         def Camera "RoverCam"
         {

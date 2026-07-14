@@ -41,8 +41,8 @@ def Xform "LandingLocationMarker" (
     {
         double radius = 2.5
         rel material:binding = </LandingLocationMarker/Looks/Dome_Mat>
-        color3f primvars:displayColor = (0.95, 0.2, 0.2)
-        float primvars:displayOpacity = 0.28
+        color3f[] primvars:displayColor = [(0.95, 0.2, 0.2)]
+        float[] primvars:displayOpacity = [0.28]
         bool physics:collisionEnabled = false
     }
 

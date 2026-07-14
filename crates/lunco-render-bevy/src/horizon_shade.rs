@@ -233,7 +233,7 @@ pub fn wire_terrain_materials(
                 .entity(entity)
                 .remove::<MeshMaterial3d<StandardMaterial>>()
                 .remove::<lunco_render::PbrLook>()
-                .insert(MeshMaterial3d(handle));
+                .try_insert(MeshMaterial3d(handle));
         }
     }
 }
@@ -372,7 +372,7 @@ pub fn shade_dynamic_entities(
                             m.base_color = scale_color(original, q);
                             let unique = std_mats.add(m);
                             debug!("[horizon-dbg] {entity:?} {name:?} vis={q:.2} SHADE-NEW (std)");
-                            commands.entity(entity).insert((
+                            commands.entity(entity).try_insert((
                                 MeshMaterial3d(unique),
                                 HorizonShade { original, last_vis: q, shared: handle.0.clone() },
                             ));
@@ -387,7 +387,7 @@ pub fn shade_dynamic_entities(
                         // clone is freed rather than kept forever (CPU-4).
                         commands
                             .entity(entity)
-                            .insert(MeshMaterial3d(state.shared.clone()))
+                            .try_insert(MeshMaterial3d(state.shared.clone()))
                             .remove::<HorizonShade>();
                         debug!("[horizon-dbg] {entity:?} {name:?} vis={q:.2} SHADE-CLEAR (std)");
                     } else if (state.last_vis - q).abs() > 1e-3 {
@@ -406,7 +406,7 @@ pub fn shade_dynamic_entities(
         // Hysteresis avoids flicker; authored `NotShadowCaster`s are never
         // touched (we only remove what we inserted).
         if !shadowed && !has_nsc && vis < 0.35 {
-            commands.entity(entity).insert((NotShadowCaster, HorizonShadowed));
+            commands.entity(entity).try_insert((NotShadowCaster, HorizonShadowed));
         } else if shadowed && vis > 0.65 {
             commands.entity(entity).remove::<(NotShadowCaster, HorizonShadowed)>();
         }

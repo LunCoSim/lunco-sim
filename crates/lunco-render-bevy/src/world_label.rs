@@ -37,7 +37,7 @@ fn bind_world_label(
 ) {
     let e = add.entity;
     let Ok(label) = labels.get(e) else { return };
-    commands.entity(e).insert(text_bundle(label));
+    commands.entity(e).try_insert(text_bundle(label));
 }
 
 /// Re-render when the text or style changes (a renamed mission, a recoloured label).
@@ -46,7 +46,7 @@ fn rebind_changed_world_label(
     mut commands: Commands,
 ) {
     for (e, label) in &changed {
-        commands.entity(e).insert(text_bundle(label));
+        commands.entity(e).try_insert(text_bundle(label));
     }
 }
 

@@ -451,7 +451,7 @@ fn on_spawn_dem_terrain(
         Visibility::Inherited,
     ));
     if let Ok(grid) = grids.single() {
-        e.insert((CellCoord::default(), GridAnchor, ChildOf(grid)));
+        e.try_insert((CellCoord::default(), GridAnchor, ChildOf(grid)));
     }
     info!(
         "[dem-terrain] queued build for {} (window {} m, target_res {})",
@@ -1280,7 +1280,7 @@ fn assemble_dem_build(
             indices,
             bevy::asset::RenderAssetUsages::default(),
         ));
-        commands.entity(entity).insert(Mesh3d(handle));
+        commands.entity(entity).try_insert(Mesh3d(handle));
         // Default surface only for the standalone command path; the USD path authors
         // its own via `materialType` (don't clobber it). Stated as INTENT —
         // `lunco-render-bevy` turns it into a `StandardMaterial`, and a headless
@@ -1288,7 +1288,7 @@ fn assemble_dem_build(
         if with_default_material {
             commands
                 .entity(entity)
-                .insert(lunco_render::PbrLook::matte(Color::srgb(0.30, 0.29, 0.27).into()));
+                .try_insert(lunco_render::PbrLook::matte(Color::srgb(0.30, 0.29, 0.27).into()));
         }
     }
     let mode = match (lod_viz, collider_ring) {
@@ -1886,7 +1886,7 @@ fn finish_dem_collider(
         commands
             .entity(entity)
             .try_remove::<DemColliderTask>()
-            .insert((RigidBody::Static, collider));
+            .try_insert((RigidBody::Static, collider));
     }
 }
 

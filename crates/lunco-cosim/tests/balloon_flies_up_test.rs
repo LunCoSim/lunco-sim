@@ -72,7 +72,7 @@ fn compile_balloon_model(
         let params = extract_parameters(&source);
         let inputs = extract_inputs_with_defaults(&source);
 
-        commands.entity(entity).insert(ModelicaModel {
+        commands.entity(entity).try_insert(ModelicaModel {
             model_path: std::path::PathBuf::from("balloon.mo"),
             model_name: model_name.clone(),
             parameters: params,
@@ -107,7 +107,7 @@ fn setup_balloon_wires(
             model.variables.keys().collect::<Vec<_>>()
         );
 
-        commands.entity(entity).insert(SimComponent {
+        commands.entity(entity).try_insert(SimComponent {
             model_name: model.model_name.clone(),
             parameters: model.parameters.clone(),
             inputs: model.inputs.clone(),

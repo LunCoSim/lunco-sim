@@ -40,6 +40,20 @@
 # NEEDS: DEM crater/rille terrain + checkpoint re-heighting (roadmap P0.2).
 def Xform "Traverse"
 {
+
+    # UsdPhysicsMaterialAPI — friction/restitution live on a Material
+    # bound with the purpose-specific `material:binding:physics`, which is
+    # how UsdPhysics (and Omniverse) actually spell a surface.
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
     custom bool lunco:spawnable = false
     custom string lunco:description = "The 1000×1000 m event traverse: start NW, POI at centre, SE highland shadow, low ESE sun, Earth low on the E horizon (centre in radio-shadow). Placeholder terrain until the DEM crater/rille lands."
 
@@ -53,16 +67,16 @@ def Xform "Traverse"
 
     # Flat plot, ±500 m (the full 1 km site). PLACEHOLDER — see header.
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxTerrainAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
     )
     {
         double size = 1.0
         double3 xformOp:translate = (0, -0.5, 0)
         double3 xformOp:scale = (1000.0, 1.0, 1000.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.34, 0.32, 0.31)
+        color3f[] primvars:displayColor = [(0.34, 0.32, 0.31)]
         bool physics:collisionEnabled = true
-        float physics:friction = 1.0
+        rel material:binding:physics = </Traverse/PhysicsMaterials/Friction_1_0>
     }
 
     # SE highland — casts the long shadow across the centre (task §3.2). A blocky
@@ -75,7 +89,7 @@ def Xform "Traverse"
         double3 xformOp:translate = (320.0, 25.0, -320.0)
         double3 xformOp:scale = (240.0, 55.0, 240.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f primvars:displayColor = (0.30, 0.28, 0.27)
+        color3f[] primvars:displayColor = [(0.30, 0.28, 0.27)]
         bool physics:collisionEnabled = true
     }
 
