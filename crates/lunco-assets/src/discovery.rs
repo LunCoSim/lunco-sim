@@ -119,11 +119,35 @@ impl Plugin for AssetDiscoveryPlugin {
 #[cfg(not(target_arch = "wasm32"))]
 fn load_manifest_native(mut manifest: ResMut<AssetManifest>) {
     let dir = std::env::current_dir().unwrap_or_default().join("assets");
-    let mut rels = Vec::new();
-    walk_any(&dir, &dir, &mut |rel| rels.push(rel));
-    rels.sort();
+    let rels = scan_library(&dir);
     info!("ASSET_MANIFEST: {} file(s) under {}", rels.len(), dir.display());
     manifest.set(rels);
+}
+
+/// Every catalogued file under `dir`, as sorted `/`-separated relative paths.
+///
+/// **The one definition of "which files ship."** Native calls it to build its
+/// manifest at startup; the `build_asset_manifest` binary calls it to write the
+/// `manifest.json` the web build ships. One function, so the two platforms cannot
+/// disagree about what an asset is.
+///
+/// It used to be two: this, and an `os.walk` inlined in `scripts/build_web.sh` that
+/// re-decided the extensions and the skip rules for itself. On the source `assets/`
+/// tree the two agreed (86 files, exactly) — which is the trap, because they were
+/// not the same rule. The shell walk descended into hidden directories; this one
+/// skips them. And the manifest is generated from the **staged** `dist/assets/`
+/// tree, into which `build_web.sh` copies Twins — and a Twin carries
+/// `.lunco/runtime/*.usda`. So the web listing would have contained a Twin's
+/// private runtime layers that native discovery never sees: a native/web
+/// divergence, which is exactly what the deleted `build.rs` bake used to cause.
+///
+/// A packaging step must not re-derive what the runtime already defines.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn scan_library(dir: &Path) -> Vec<String> {
+    let mut rels = Vec::new();
+    walk_any(dir, dir, &mut |rel| rels.push(rel));
+    rels.sort();
+    rels
 }
 
 /// Web: fetch the manifest the bundle ships alongside the assets it describes.

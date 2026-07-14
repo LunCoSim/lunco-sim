@@ -4,17 +4,17 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+# THE COMMAND LAYER, now its own crate. Spawn/move/delete/set-property, the spawn +
+# shader catalogs, the runtime-layer USD persisters, `SelectedEntities` — everything
+# a `--no-ui` server needs and an editor is merely one caller of. The editor DEPENDS
+# on it; the direction never reverses. This crate re-exports it (`lib.rs`) so the
+# panels keep saying `crate::catalog::…`.
+lunco-scene-commands = { path = "../lunco-scene-commands" }
 # NO `bevy_pbr` — this crate names no material type (`MeshMaterial3d`,
 # `StandardMaterial`, `ShaderMaterial`). Appearance is stated as INTENT
 # (`lunco_render::PbrLook`, `lunco_materials::ShaderLook`) and bound by
 # `lunco-render-bevy`; see `docs/architecture/render-decoupling.md`. The compiler
 # is the enforcement — put `bevy_pbr` back and the rule quietly rots.
-#
-# `bevy_shader` is here for the live shader-AUTHORING commands only
-# (`SetShaderSource`/`CreateShader`/`ImportShader` compile WGSL into
-# `Assets<Shader>` so an edit renders without a disk round-trip). It pulls `naga`
-# but NOT wgpu; moving those three onto an intent+binder of their own is the
-# follow-up that would take naga out of the headless server too.
 bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "bevy_shader"] }
 # Appearance intent (render-free): `PbrLook`. Every PBR material site in this crate
 # goes through it instead of `Assets<StandardMaterial>`.
@@ -34,17 +34,16 @@ avian3d = { workspace = true }
 big_space.workspace = true
 lunco-core = { path = "../lunco-core" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
-# `FlightSoftware` = the topology signal for "is a wheeled vehicle" in the
-# predict-membership queries (replaces the removed `RoverVessel` marker).
-lunco-fsw = { path = "../lunco-fsw" }
+# NO `lunco-fsw`: its only use here was `FlightSoftware` as the "is a wheeled
+# vehicle" topology signal in the predict-membership queries, and those moved out
+# with the netcode (→ `lunco-networking::prediction`). Nothing in the editor names
+# it any more, so the edge is gone.
 lunco-time = { path = "../lunco-time" }
 lunco-doc = { path = "../lunco-doc" }
-# Shader source is a journaled DOMAIN (ShaderDocument): edits record to the Twin
-# journal (DomainKind::Shader) and hot-reload — like a rhai script / Modelica model.
+# `JournalResource` — the run condition that attaches the shader-journal recorder
+# (`shader_doc::wire_shader_journal_handle`) when the journal appears. The
+# ShaderDocument domain itself moved to `lunco-scene-commands`.
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
-lunco-twin-journal = { path = "../lunco-twin-journal" }
-serde = { workspace = true }
-serde_json = { workspace = true }
 lunco-api = { path = "../lunco-api", default-features = false }
 lunco-controller = { path = "../lunco-controller" }
 lunco-mobility = { path = "../lunco-mobility" }
@@ -67,28 +66,23 @@ lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-autopilot = { path = "../lunco-autopilot" }
 lunco-assets = { path = "../lunco-assets" }
-# The catalogue scan is async (reading a shipped asset on the web is an HTTP
-# fetch), so completed reads come back over a channel and a drain system folds
-# them in. `futures-lite::block_on` backs the native blocking scan used by tests.
-crossbeam-channel = { workspace = true }
-futures-lite = { workspace = true }
-
-# Web: a browser `fetch` future is `!Send`, so the asset reads cannot go on a
-# Bevy task pool — they are driven by `spawn_local` on the JS event loop.
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen-futures = { workspace = true }
 
 [features]
 default = ["ui"]
 # In-scene editor: gizmo, selection, inspector panels, physics-viz, spawn ghost.
-# OFF ⇒ only `catalog` + `commands::SpawnCommandPlugin` compile (the headless
-# server's runtime spawn / NetReplicate path) — no egui, no winit, no picking.
+# OFF ⇒ this crate is nothing but a re-export of `lunco-scene-commands` — no egui,
+# no winit, no picking. A headless server should not depend on it at all: it wants
+# `lunco-scene-commands` directly (`commands::SpawnCommandPlugin`).
 ui = [
     "dep:bevy_egui",
     "dep:lunco-theme",
     "dep:transform-gizmo-bevy",
     "dep:lunco-workbench",
     "dep:lunco-canvas",
+    # Forwards to the command layer's lone GUI concession:
+    # `doc_resolve::resolve_doc_for_entity`'s fallback to the viewport's active
+    # document. Drop this and a GUI edit resolves a different document.
+    "lunco-scene-commands/ui",
     "lunco-modelica/ui",
     "lunco-avatar/ui",
     "lunco-usd/ui",

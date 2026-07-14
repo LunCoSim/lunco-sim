@@ -542,6 +542,24 @@ pub fn not_rolling_back(rb: Option<Res<RollbackInProgress>>) -> bool {
     !rb.is_some_and(|r| r.0)
 }
 
+/// Ordering anchor for the client-netcode `Update` pipeline, which now **spans two
+/// crates**: the spawn half (`apply_replicated_spawns`, in `lunco-sandbox-edit`,
+/// because it instantiates from the spawn catalog) must run before the prediction
+/// half (interp / kinematic-pin / reconcile / rollback, in `lunco-networking`).
+/// The two used to sit in one `.chain()` in a single file; a plain `.chain()` can't
+/// express the ordering across the crate boundary, and neither crate may depend on
+/// the other (`lunco-networking` must never gain a `lunco-sandbox-edit` edge — see
+/// its Cargo.toml, review A6). `lunco-core` is the one crate both already depend on,
+/// so the shared set lives here.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NetcodeSet {
+    /// Instantiate host-replicated spawns (`apply_replicated_spawns`, sandbox-edit).
+    InstantiateSpawns,
+    /// The client-prediction pipeline (`lunco-networking::prediction`), after the
+    /// spawns it may act on exist.
+    Predict,
+}
+
 impl Plugin for LunCoCorePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(LunCoLogPlugin);

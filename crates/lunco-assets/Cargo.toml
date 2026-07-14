@@ -39,6 +39,14 @@ dirs = "5"
 name = "build_msl_assets"
 path = "src/bin/build_msl_assets.rs"
 
+# Writes the engine-library `manifest.json` the web bundle ships (the browser has
+# no `readdir`). Calls `discovery::scan_library` — the SAME scanner the native
+# runtime uses — so the packaging step cannot disagree with the runtime about what
+# an asset is. See the binary's docs.
+[[bin]]
+name = "build_asset_manifest"
+path = "src/bin/build_asset_manifest.rs"
+
 # Desktop-only: HTTP client for asset downloads, tarball extraction, hashing
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = { workspace = true }

@@ -25,6 +25,7 @@ members = [
     "crates/lunco-usd-terrain",
     "crates/lunco-usd",
     "crates/lunco-sandbox-edit",
+    "crates/lunco-scene-commands",
     "crates/lunco-ui",
     "crates/lunco-assets",
     "crates/lunco-materials",

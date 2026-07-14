@@ -630,7 +630,13 @@ rels = sorted(
 )
 json.dump(rels, open('manifest.json', 'w'), indent=0)
 print(f'  {len(rels)} asset(s) listed', file=sys.stderr)
-" ) || die "failed to write assets/manifest.json"
+" ) || {
+            # Without the manifest the browser cannot enumerate anything: the spawn
+            # palette and the shader catalog come up empty. Fail the build rather
+            # than ship a bundle whose assets are unreachable.
+            error "failed to write assets/manifest.json — the web build would have an empty asset catalog"
+            exit 1
+        }
     fi
 
     # Include the deployment script in the dist bundle

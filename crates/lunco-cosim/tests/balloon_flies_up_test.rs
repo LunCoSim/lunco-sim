@@ -53,7 +53,7 @@ use lunco_modelica::{
     extract_inputs_with_defaults, extract_model_name, extract_parameters, ModelicaChannels,
     ModelicaCommand, ModelicaCorePlugin, ModelicaModel,
 };
-use lunco_sandbox_edit::catalog::BalloonModelMarker;
+use lunco_scene_commands::catalog::BalloonModelMarker;
 
 fn balloon_mo() -> &'static str {
     lunco_modelica::models::get_model("Balloon.mo").expect("bundled Balloon.mo")

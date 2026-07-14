@@ -7078,7 +7078,7 @@ dependencies = [
  "lunco-doc",
  "lunco-environment",
  "lunco-modelica",
- "lunco-sandbox-edit",
+ "lunco-scene-commands",
  "lunco-scripting",
 ]
 
@@ -7386,6 +7386,7 @@ dependencies = [
  "lunco-render",
  "lunco-render-bevy",
  "lunco-sandbox-edit",
+ "lunco-scene-commands",
  "lunco-scripting",
  "lunco-settings",
  "lunco-storage",
@@ -7419,8 +7420,6 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "big_space",
- "crossbeam-channel",
- "futures-lite",
  "lunco-api",
  "lunco-assets",
  "lunco-autopilot",
@@ -7433,25 +7432,21 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-environment",
- "lunco-fsw",
  "lunco-materials",
  "lunco-mobility",
  "lunco-modelica",
  "lunco-obstacle-field",
  "lunco-render",
+ "lunco-scene-commands",
  "lunco-terrain-surface",
  "lunco-theme",
  "lunco-time",
- "lunco-twin-journal",
  "lunco-usd",
  "lunco-usd-bevy",
  "lunco-usd-sim",
  "lunco-workbench",
  "lunco-workspace",
- "serde",
- "serde_json",
  "transform-gizmo-bevy",
- "wasm-bindgen-futures",
 ]
 
 [[package]]
@@ -7459,6 +7454,37 @@ name = "lunco-sandbox-server"
 version = "0.6.0-dev"
 dependencies = [
  "lunco-sandbox",
+]
+
+[[package]]
+name = "lunco-scene-commands"
+version = "0.1.0"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "big_space",
+ "crossbeam-channel",
+ "futures-lite",
+ "lunco-api",
+ "lunco-assets",
+ "lunco-avatar",
+ "lunco-celestial",
+ "lunco-core",
+ "lunco-doc",
+ "lunco-doc-bevy",
+ "lunco-environment",
+ "lunco-materials",
+ "lunco-mobility",
+ "lunco-obstacle-field",
+ "lunco-render",
+ "lunco-terrain-surface",
+ "lunco-twin-journal",
+ "lunco-usd",
+ "lunco-usd-bevy",
+ "lunco-usd-sim",
+ "lunco-workspace",
+ "serde",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]

@@ -25,12 +25,12 @@ use lunco_render::PbrLook;
 use lunco_obstacle_field::{ObstacleFieldSpec, Pattern, plugin::UpdateObstacleFieldSpec};
 
 use crate::SelectedEntities;
+// Doc resolution + material-binding walk: headless-safe, shared verbatim with the
+// command layer (which is why they don't live in this panel — see `doc_resolve`).
+use crate::doc_resolve::{bound_shader_prim, resolve_doc_for_entity};
 use lunco_usd::document::{UsdOp, LayerId};
 use lunco_usd::commands::ApplyUsdOp;
-use lunco_usd::registry::UsdDocumentRegistry;
-use lunco_usd::ui::viewport::UsdViewportState;
-use lunco_doc::DocumentOrigin;
-use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset, SdfPath, resolve_bound_shader};
+use lunco_usd_bevy::UsdPrimPath;
 
 // ─────────────────────────────────────────────────────────────────────
 // View-model (WP-8) — query-derived inspector state.
@@ -2192,61 +2192,6 @@ fn comms_orbit_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
 
         });
     ui.separator();
-}
-
-/// Resolve the editable USD document backing `entity`'s stage — the same
-/// asset↔document match `apply_usd_path_attribute_change` needs, factored out so a
-/// caller authoring a *sequence* of ops (the mount snap) resolves the doc once and
-/// dispatches every op to it. Falls back to the viewport's active doc.
-/// The `UsdPreviewSurface` Shader prim bound to `prim`'s geometry, or `None` when
-/// it has no material yet.
-///
-/// Walks `material:binding` → the Material's `outputs:surface` connection → the
-/// Shader, on the LIVE canonical stage (building it from the asset's recipe if it
-/// has not been built yet). Shared, because the two places that edit a look — the
-/// Inspector panel and the `SetObjectProperty` command — must agree on WHERE the
-/// look lives, or one of them will scribble `inputs:*` somewhere no other DCC
-/// reads it back from.
-pub(crate) fn bound_shader_prim(world: &mut World, prim: &UsdPrimPath) -> Option<String> {
-    let id = prim.stage_handle.id();
-    let mesh_sdf = SdfPath::new(&prim.path).ok()?;
-
-    let recipe = world
-        .get_resource::<Assets<lunco_usd_bevy::UsdStageAsset>>()
-        .and_then(|stages| stages.get(&prim.stage_handle))
-        .and_then(|a| a.recipe.clone());
-    if let Some(mut canonical) = world.get_non_send_mut::<lunco_usd_bevy::CanonicalStages>() {
-        if canonical.get(id).is_none() {
-            if let Some(r) = recipe.as_ref() {
-                canonical.get_or_build(id, r);
-            }
-        }
-    }
-    let canonical = world.get_non_send::<lunco_usd_bevy::CanonicalStages>()?;
-    let view = canonical.get(id)?.view();
-    resolve_bound_shader(&view, &mesh_sdf).map(|p| p.to_string())
-}
-
-pub(crate) fn resolve_doc_for_entity(world: &World, entity: Entity) -> Option<lunco_doc::DocumentId> {
-    let prim = world.get::<UsdPrimPath>(entity)?;
-    let asset_server = world.get_resource::<AssetServer>()?;
-    let asset_path = asset_server.get_path(prim.stage_handle.id())?;
-    let path_str = asset_path.path().to_string_lossy().to_string();
-
-    let doc_id = world.get_resource::<UsdDocumentRegistry>().and_then(|reg| {
-        reg.ids().find(|id| {
-            reg.host(*id).is_some_and(|h| match h.document().origin() {
-                DocumentOrigin::File { path, .. } => path.to_string_lossy().ends_with(&path_str),
-                _ => false,
-            })
-        })
-    });
-
-    doc_id.or_else(|| {
-        world
-            .get_resource::<UsdViewportState>()
-            .and_then(|v| v.active_doc())
-    })
 }
 
 /// Apply a sequence of typed [`UsdOp`]s to `entity`'s backing document, in order —
