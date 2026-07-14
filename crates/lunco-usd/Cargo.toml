@@ -46,6 +46,17 @@ ui = ["dep:bevy_egui", "dep:lunco-workbench", "dep:lunco-theme", "dep:lunco-ui",
 [dev-dependencies]
 avian3d = { workspace = true }
 big_space = { workspace = true }
+# DEV-ONLY `bevy_pbr`. The library is render-free (`bevy = { workspace = true }` above, no
+# pbr), and stays that way. But `examples/usd_rover_visual.rs` is a `DefaultPlugins` visual
+# demo that spawns a `StandardMaterial` ground plane, so the EXAMPLE genuinely needs the pbr
+# types. Declaring it here keeps `cargo check -p lunco-usd --all-targets` honest: without it
+# the examples only built under `--workspace`, where feature unification silently borrowed
+# `bevy_pbr` from another crate — green in CI's workspace build, broken per-crate.
+bevy = { workspace = true, features = ["bevy_pbr"] }
+# The entity-pipeline tests assert on appearance INTENT (`PbrLook`), not on a bound
+# `MeshMaterial3d` — a headless test adds no `LuncoRenderPlugin`, and the intent is
+# what USD actually authors. See docs/architecture/render-decoupling.md.
+lunco-render = { path = "../lunco-render" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-fsw = { path = "../lunco-fsw" }
 # Wheels author `primvars:materialType = "shader"`, so the headless

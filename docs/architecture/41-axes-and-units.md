@@ -1,12 +1,75 @@
 # 41 — Axes and Units (coordinate + unit conversion boundary)
 
-> Status: Active · Audience: contributors importing/exporting coordinates & units
+> Status: Active — **the USD import spoke is built**; the remaining spokes, the
+> mass/stiffness/damping dimension machinery, and the save-side inversion are
+> design · Audience: contributors importing/exporting coordinates & units
 >
 > External tools disagree on **up-axis** and **units**; LunCoSim must not.
 > The engine runs in **one fixed canonical frame** (spec 009: f64, Y-up, RH,
 > −Z-forward, SI). Any external representation (USD, glTF, Blender, Isaac, ROS)
-> is converted **once, at the importer**, and converted back on save. Internal
-> code never branches on convention.
+> is converted **once, at the importer**. Internal code never branches on
+> convention.
+
+## As built — the USD spoke (`lunco-usd-bevy/src/units.rs`)
+
+The mandate above is **honoured for USD geometry and transforms**. Two types:
+
+| Type | What it is |
+|---|---|
+| **`StageMetrics`** | the stage's declared convention — `meters_per_unit: f64` + `up_axis: UpAxis::{Y,Z}` — read from the pseudo-root metadata by `StageMetrics::from_reader`. This is the **only** place `upAxis` / `metersPerUnit` are interpreted. |
+| **`ConventionTransform`** | the precomputed stage→canonical **similarity** `S = k·Q` (uniform scale `k = metersPerUnit`, rotation `Q` = identity for Y-up, `Rx(−90°)` for Z-up). Built solely by `ConventionTransform::from_stage_metrics`. `#[must_use]`. |
+
+**The conversion is baked into the shared decoders, not applied to a root
+entity.** A root-only rotation/scale is explicitly rejected here (see *Boundary
+discipline* below): avian colliders, `big_space`, and the f64 frame tree all
+assume SI Y-up, so a non-SI value must never flow downstream. Every consumer —
+the visual sync, `lunco-usd-avian`'s colliders, the gizmo — already funnels
+through these decoders:
+
+| decoder | conversion applied |
+|---|---|
+| `local_transform_at` (→ `read_transform_from_usd`, the mount/footprint walks) | `ConventionTransform::local_transform` |
+| `read_shape_dims` | `ConventionTransform::length` on every dimension |
+| `build_usd_mesh` / `read_usd_mesh_indexed` | `point` on positions, `dir` on normals |
+| the `axis` token of a `Cylinder`/`Cone`/`Capsule`/`Plane` | `ConventionTransform::orient` |
+| the animation sampler's translate/rotate/scale channels | `point` / `rotation` / `scale_vec` (conjugation is separable across the three, so per-channel agrees exactly with the whole-transform conversion) |
+
+**Why *conjugation*, not a left-multiply.** For a prim chain
+`W = L₁·L₂·…·Lₙ` acting on local geometry `p`, the canonical world position is
+`S·W·p`. Rewriting:
+
+```text
+S·L₁·L₂·…·Lₙ·p  =  (S·L₁·S⁻¹)(S·L₂·S⁻¹)…(S·Lₙ·S⁻¹) · S·p
+```
+
+⇒ conjugate **every local transform** (`Lᵢ' = S·Lᵢ·S⁻¹`) **and** convert the
+leaf geometry (`p' = S·p`). Both, not either — which is exactly why the decoders
+convert transforms *and* points/dims. Conjugation is what lets each level of the
+hierarchy be converted independently, with no knowledge of its parents.
+
+`Q` is either the identity or a ±90° axis swap (USD defines only `upAxis` `Y`/`Z`),
+so componentwise `|Q·s|` on a non-uniform scale is exact. It would **not** be for
+an arbitrary rotation — that is why `Q` is derived from a two-valued token and
+never from free-form data.
+
+**Failure behaviour is loud, never silent.** An `upAxis` that is neither `Y` nor
+`Z`, or a non-finite/non-positive `metersPerUnit`, is an `error_once!` (and falls
+back to the canonical value). A *supported but non-canonical* stage logs a
+one-shot warning naming what is being converted.
+
+**Every asset we ship is `upAxis="Y", metersPerUnit=1`, so
+`ConventionTransform::is_identity()` holds and the hot decoders early-out** —
+import of our own content is bit-for-bit what it was before this module existed.
+The seam exists, is exercised by unit tests (Z-up remap, centimetre stage,
+identity stage, and a conjugated-chain property test), and costs nothing.
+
+### The known gap: save is not yet inverted
+
+`from_canonical` on write-back **does not exist**. Authoring a transform onto a
+**non-canonical** stage (gizmo drag, `ApplyUsdOp`) writes canonical values into a
+stage that declares other metrics. `StageMetrics::from_reader` says so, loudly,
+once, when it sees such a stage. This is step 4 of the staged plan below and is
+**not** built.
 
 ## How other software does this (prior art)
 
@@ -92,7 +155,16 @@ only conversion edge is *external-document ↔ canonical*. N spokes, not N²
 adapters — but each spoke is only worth building when its convention actually
 appears (see staged plan).
 
-## API shape (pure: glam + f64; optional `bevy` feature)
+## Full API shape — **design; does not exist yet**
+
+> **This section is a target, not a description.** What exists today is the
+> `StageMetrics` / `ConventionTransform` pair described in *As built* above:
+> a `metersPerUnit` scale + an up-axis rotation, with `point` / `dir` / `orient` /
+> `rotation` / `scale_vec` / `length` / `local_transform`. There is **no `Units`
+> struct, no `Dimension` exponents, no `kilogramsPerUnit`, and no
+> `mass()` / `stiffness()` / `damping()` accessor** — mass and the physics scalars
+> are read unconverted. Every asset we own is SI, so nothing is wrong today; the
+> machinery below is what a non-SI *mass* would need.
 
 ```rust
 /// Which way is up / forward + chirality. All our targets are right-handed
@@ -147,10 +219,19 @@ impl ConventionTransform {
 }
 ```
 
-Spec 030 SC-003 (`springStrength` / `dampingRate` parity USD↔Avian) is then a
-*special case* of `stiffness()` / `damping()` — not a hand-tuned constant.
+Spec 030 SC-003 (`springStrength` / `dampingRate` parity USD↔Avian) would then be
+a *special case* of `stiffness()` / `damping()` rather than a hand-tuned constant.
+It is not one today.
 
 ## Enforcement — convenient AND hard to forget
+
+> **Design.** The as-built USD spoke takes the *spirit* of this — a single
+> construction point (`from_stage_metrics`), named dimension-fixing accessors
+> (`length`, never a bare `qty`), and `#[must_use]` on the transform — but the
+> `CanonicalScene` trait and the `raw_*`-is-private reader gate below are **not
+> built**. `UsdRead` still exposes raw reads; the discipline is that the *shared
+> decoders* (`local_transform_at`, `read_shape_dims`, `build_usd_mesh`) are the
+> only callers of them, and every consumer goes through those decoders.
 
 The design serves both goals at once rather than trading one off.
 
@@ -225,51 +306,52 @@ Plus `#[must_use]` on `ConventionTransform` so an unused gate warns.
 
 ## Boundary discipline — bake to canonical at import
 
-- **Import:** apply the transform to every prim xform **and every physical
-  attribute** as Links materialize → the internal world is true SI Y-up. A
-  root-only rotation is rejected: avian colliders, `big_space`, and the spec-009
-  f64 tree all assume SI Y-up, so non-SI must never flow downstream.
+- **Import:** the transform is applied to every prim xform and every geometric
+  dimension as prims materialize → the internal world is true SI Y-up. **A
+  root-only rotation/scale is rejected**: avian colliders, `big_space`, and the
+  spec-009 f64 tree all assume SI Y-up, so non-SI must never flow downstream.
+  This is the single most re-introducible mistake in this subsystem — parenting
+  the import under a scaled/rotated root *looks* right in the viewport and is
+  wrong everywhere else.
 - **Authoritative source keeps its convention.** The USD document stays in its
-  declared metrics; we store `Convention` / `Units` as metadata and apply
-  `from_canonical` on **save** so files round-trip. (Policy option:
-  normalise-on-save to `upAxis=Y, metersPerUnit=1`.)
+  declared metrics — we never rewrite the stage's `upAxis`/`metersPerUnit`. The
+  matching `from_canonical`-on-save is the **open** half of this (see the staged
+  plan); until it lands, edits authored onto a non-canonical stage are written in
+  canonical units, and the importer warns about exactly that.
 
 ## Spokes
 
 | Spoke | Convention source | Status |
 |---|---|---|
-| **USD** | stage metrics: `upAxis`, `metersPerUnit`, `kilogramsPerUnit` | **first** — load + save |
-| glTF | fixed Y-up / metres (≈ identity spoke) | additive |
-| Blender (live) | Z-up / −Y-fwd / metres, via USD interchange | additive |
-| Isaac Sim | USD Z-up (+ its unit choice) | additive (USD spoke covers it) |
-| ROS / URDF | Z-up / X-fwd / metres (REP-103) | additive |
+| **USD** | stage metrics: `upAxis`, `metersPerUnit` | **built (import)** — `StageMetrics` / `ConventionTransform`. Save-side inversion is not built. `kilogramsPerUnit` is not read. |
+| glTF | fixed Y-up / metres (≈ identity spoke) | not built — additive |
+| Blender (live) | Z-up / −Y-fwd / metres, via USD interchange | not built — the USD spoke already covers a Z-up Blender export |
+| Isaac Sim | USD Z-up + centimetres | **covered by the USD spoke** — this is the exact stage the spoke was built for |
+| ROS / URDF | Z-up / X-fwd / metres (REP-103) | not built — additive |
 
-`UsdComposer::get_default_prim` already exists for rooting; add a
-`get_stage_metrics` sibling (reads `upAxis` / `metersPerUnit` /
-`kilogramsPerUnit`) to feed the USD spoke.
+## Staged plan
 
-## Staged plan — identity seam now, crate + trait when a 2nd convention lands
+**Every asset we own is `upAxis="Y", metersPerUnit=1`** → the transform is the
+identity for our own content, and the decoders early-out on it. So the smallest
+correct thing was built first; the full machinery is promoted only when it earns
+its keep (YAGNI).
 
-**Every asset we own is already `upAxis="Y", metersPerUnit=1`** → the transform
-is **identity today**. So build the smallest correct thing first; promote to the
-full machinery only when it earns its keep (YAGNI).
-
-1. **Identity seam (now).** A small `ConventionTransform` *module* (not yet a
-   separate crate): `from_stage_metrics`, `IDENTITY`, `point`/`dir`/`rot` +
-   named scalars. Add `UsdComposer::get_stage_metrics`. `UsdStageAsset` holds a
-   transform (identity for our content) and exposes named accessors; raw reads
-   go `pub(crate)`. Switch `sync_usd_visuals` + the sim/avian translators to the
-   named accessors. **Zero behavioural change today**, but the seam exists and
-   is exercised.
-2. **Round-trip test.** One synthetic Z-up/cm fixture proves the seam before any
-   real non-conforming asset shows up. Add the grep/lint guard.
-3. **Promote to `lunco-axes-and-units` crate + `CanonicalScene` trait** when the
-   second convention actually arrives (live Blender, Isaac). That is when
-   N-spokes pays off; building it now is speculative.
-4. **Save path.** `from_canonical` on `SaveDocument` so files round-trip in
-   their declared metrics.
-
-Same end-state as the full hub-and-spoke design, built when it pays.
+1. **Identity seam — DONE.** `StageMetrics` + `ConventionTransform` in
+   `lunco-usd-bevy/src/units.rs`, applied inside the shared decoders (not at a
+   root entity). Zero behavioural change on canonical content; a Z-up/cm stage
+   now imports correctly instead of rotated 90° and 100× too small.
+2. **Round-trip tests — DONE for import.** Unit tests cover the Z-up remap, the
+   centimetre stage, the identity stage, and the conjugated-chain property
+   (`S·W·p = L₁'·L₂'·S·p`). The **save**-side round-trip test is blocked on step 4.
+3. **Promote to a `lunco-axes-and-units` crate + `CanonicalScene` trait** when a
+   *second* format spoke actually arrives. Speculative today — USD is the
+   interchange hub, so Blender/Isaac arrive *through* USD, not beside it.
+4. **Save path — OPEN.** `from_canonical` on write-back so files round-trip in
+   their declared metrics. Until it exists, authoring onto a non-canonical stage
+   is a known, warned-about gap.
+5. **Dimensional scalars — OPEN.** `kilogramsPerUnit`, and the
+   `mass()`/`stiffness()`/`damping()` accessors that a non-SI mass would need.
+   Nothing we load is non-SI in mass today.
 
 ## Relationship to other specs
 

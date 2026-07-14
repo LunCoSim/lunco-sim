@@ -57,7 +57,7 @@ schedule ordering encodes a data dependency. Those look cacheable and are not
 | Per-platform cache root | `lunco-assets/src/lib.rs:168` `cache_dir()` | `~/.cache/lunco` (Linux) / `~/Library/Caches/lunco` (mac) / `%LOCALAPPDATA%\lunco` (win), `LUNCOSIM_CACHE` override, `cache://` asset source. wasm returns nominal (no FS). |
 | Named cache subdirs | `lunco-assets` `cache_subdir`, `textures_dir`, `msl_dir`, … | An established taxonomy under the root. |
 | **Content-addressed disk bake (reference impl)** | `lunco-terrain-surface/src/derived_layers.rs:110` `bake_or_load` | FNV-1a over params + **every height sample** → `cache://terrain/derived/<key>/`, load-if-present else bake+write, `CACHE_FORMAT_VERSION` invalidation. **This is the pattern to replicate everywhere.** |
-| In-memory dedup cache | `lunco-cache` `ResourceCache<L>` | HashMap + in-flight task dedup, polled per frame. RAM only. |
+| In-memory async dedup | **The ECS idiom** — a `Task` *Component* + `Without<BakeTask>` in the spawning query (`lunco-environment/src/horizon.rs:274`, `terrain-surface/src/derived_layers.rs:96`, `celestial/src/trajectories.rs:82`, …) | Entity-keyed load with in-flight dedup **for free** — the query filter *is* the pending set. This is what the codebase actually converged on; see the note below. |
 | I/O chokepoint | `lunco-storage` `atomic_write` / `read_file_sync` | Cross-target, wasm-aware; tmp+fsync+rename. |
 | SHA-256 asset pinning | `lunco-assets/src/download.rs:63` | Integrity + skip-redownload on hash match. |
 | rumoca parse cache | `.cache/rumoca/parsed-files/` (content-hash keyed) + `parsed-msl.bin` bincode bundle | Cold-parse avoidance for Modelica. |
@@ -65,6 +65,48 @@ schedule ordering encodes a data dependency. Those look cacheable and are not
 | **Real CIDv1 content-address** | `lunco-networking/src/scenario.rs:54-66` `cid_for_content`/`cid_from_bytes` | IPLD CIDv1 (raw `0x55` + sha2-256), `ipfs add`-compatible; incremental fail-closed verify (`scenario_sync.rs:88-94`). **First real content-addressing in the repo** — but scoped to networking. |
 | **OPFS web blob backend** | `lunco-storage/src/opfs_storage.rs` | Working async `read`/`write`/`exists` on wasm via `createWritable` (main-thread-legal). Path-keyed on `StorageHandle::File`. |
 | **`inventory` asset-scheme registry** | `lunco-assets/src/asset_sources.rs:41-96` `AssetSchemeProvider` | Per-crate `inventory::submit!`'d URI schemes drained before `AssetPlugin`; `scenario://` uses it. Clean extension point for a `precompute://`/`cache://` reader. |
+| **Shared material cache** | `lunco-render-bevy/src/look_cache.rs` `LookCache<L: CachedLook>` | Content-key → one `Handle<Material>` (the batching property), an `unshared` bypass for animated looks, and ONE `sweep_look_cache` for eviction. Serves both `PbrLook` and `ShaderLook` — they were the same code twice, and had already drifted (the shader cache swept at 1024; the PBR cache never swept and grew unbounded). |
+| **One invalidation signal for source-derived memos** | `lunco-modelica/src/icon_memo.rs` `SourceMemo<V>` + `invalidate_source_memos()` | A `name → Option<V>` memo, **negatives included**, that self-drops on a source/library change. One atomic bump reaches every memo — including ones added later, which the invalidation site never has to name. |
+
+> **Retired: `lunco-cache`.** An earlier draft of this doc proposed a generic
+> `ResourceCache<L: ResourceLoader>` — a `HashMap<K, Task>` + pending map — as the
+> RAM tier. It was built, never adopted by a single crate, and **deleted on
+> 2026-07-13**. The reason is worth keeping, because the crate's own doc comment
+> asserted it was "the abstraction those [~8 bespoke memos] want" and that claim
+> then propagated into a code review and a remediation plan before anyone checked
+> it:
+>
+> - **Almost none of those memos have its shape.** Of ~46 cache-like sites in the
+>   workspace, ~17 are *synchronous* memos (content-hash → handle; no task, no
+>   in-flight window — `ResourceCache` would only add overhead) and ~20 are plain
+>   registries. Only ~9 are true async loads.
+> - **Of those ~9, only two are keyed HashMaps.** The rest are Entity-keyed, so
+>   the pending set is a query filter, not a map. A `Resource<HashMap<K, Task>>`
+>   has nothing to attach to.
+> - **The one genuine candidate needs strictly more than it offered.** The terrain
+>   tile baker (`stream_viz.rs:494`) carries generation-versioning (discard bakes
+>   from a superseded terrain gen) and a `MAX_INFLIGHT_BAKES` budget.
+>   `ResourceCache::request` has neither — migrating would have been a downgrade.
+>
+> If you need async dedup, reach for the ECS idiom in the table above. If you need
+> a *disk* bake, that is `lunco-precompute::bake_or_load` (§2), which shipped.
+
+> **The rule both of the above were written to enforce: a cache is defined by its
+> INVALIDATION, not by its lookup.** Every cache bug found in the 2026-07-13 audit
+> was a missing or divergent invalidation, never a wrong hit:
+>
+> - `PbrLookCache` and `ShaderLookCache` — same shape, same exposure, one swept and
+>   one didn't. Nothing forced them to agree, so they drifted.
+> - The bitmap-texture memo — invalidated by **nothing**, and it cached *negatives*.
+>   A missing asset was remembered as missing for the life of the process. On wasm
+>   that is every MSL bitmap (the bundle ships no `Resources/`), so shipping them in
+>   the bundler would still have rendered blank until restart.
+> - `port_icon_cache` — a cache with no producer and no consumer. Its only caller was
+>   its own `invalidate`, wired to an observer clearing a permanently-empty map.
+>
+> **Caching a miss is a promise to retry it.** If you cache `Option<V>`, you owe it an
+> invalidation signal, and that signal must be one thing the whole subsystem shares —
+> not a list of caches each new author has to remember to append to.
 
 **Gaps in the foundation:**
 - **No shared hashing util, but now two families in play.** Change-detection
@@ -88,8 +130,8 @@ schedule ordering encodes a data dependency. Those look cacheable and are not
 
 ## 2. Proposed substrate: one content-addressed cache crate
 
-Introduce `lunco-precompute` (or fold into `lunco-cache`) that generalizes
-`derived_layers.rs` into a reusable API:
+**Status: shipped.** `lunco-precompute` exists and is adopted by
+`lunco-terrain-surface`. It generalizes `derived_layers.rs` into a reusable API:
 
 ```rust
 /// Load `key`'s artifact from the disk cache, or produce+store it.
@@ -104,8 +146,10 @@ fn bake_or_load<T: Cacheable>(key: CacheKey, produce: impl FnOnce() -> T) -> T
   channelled back to a Bevy system. **Do not try to make OPFS `impl Storage`**
   (it can't — non-`Send`); the substrate is the *one* place the `#[cfg]` fork
   lives, so every caller stays backend-agnostic. Because OPFS's cheapest
-  `exists` is async, **`bake_or_load` is async** and layers under the existing
-  `lunco-cache::ResourceCache` (poll-per-frame) — the RAM tier fronts the disk tier.
+  `exists` is async, **`bake_or_load` grows an async variant** — and the RAM tier
+  that fronts it is the ECS idiom (a `Task` component + `Without<BakeTask>`), not
+  a generic cache resource. `derived_layers.rs:96` `DerivedBakeTask` is the
+  reference: it already wraps a `bake_or_load` in exactly that shape.
 - **CID-keyed blob store (this is the dedup the scenario cache lacks).** Store at
   `cache_dir()/precompute/<domain>/<cid>`; identical content in two domains
   hits the same blob. Lift `cid_for_content`/`cid_from_bytes` + the incremental
@@ -355,8 +399,9 @@ Live sim feeds client prediction + replication; these constraints are hard:
    `safe_rel_path` out of `lunco-networking` (invert the dep); reuse the
    existing `OpfsStorage` async backend behind one internal `#[cfg]` fork; keep a
    fast non-crypto hash for change-detection (§2 two-tier). *Net-new:*
-   `CacheKey{domain,content,lod,variant}` (§2.1), async `bake_or_load` layered
-   under `lunco-cache::ResourceCache`, CID-keyed blob layout for dedup, and the
+   `CacheKey{domain,content,lod,variant}` (§2.1), an async `bake_or_load` fronted
+   by the ECS task-component idiom (**not** a generic cache resource — see the
+   `lunco-cache` retirement note in §1), CID-keyed blob layout for dedup, and the
    startup LRU/size-budget sweep covering both `precompute/` and `scenarios/`.
 2. **`Mobility` component + per-layer detectors** (§2.2, §3) — USD first (reuse
    the animation-flatten `timeSamples` + physics-body signals), then Modelica

@@ -39,6 +39,12 @@ impl SettingsSection for PerfHudSettings {
 /// At 60 FPS that's about 4 seconds — long enough to spot a hitch
 /// in your peripheral vision, short enough that the plot redraws
 /// quickly when conditions change.
+///
+/// This is now the history depth of Bevy's OWN `Diagnostic` ring buffer
+/// (`FrameTimeDiagnosticsPlugin::new`), not of a second buffer we keep beside it. A
+/// `Diagnostic` already IS a named ring buffer with a configurable depth and built-in
+/// smoothing; `PerfStats` used to shadow it with a hand-rolled `VecDeque<f32>` that
+/// stored exactly the same values.
 pub const FRAME_HISTORY_LEN: usize = 240;
 
 /// Live, per-frame perf samples. Not persisted — these are reset
@@ -52,27 +58,32 @@ pub struct PerfStats {
     /// Wall-clock cost of the avian physics step, ms. `None` when no
     /// physics-aware plugin is publishing.
     pub physics_ms: Option<f32>,
-    /// Ring buffer of recent frame times, oldest first. Used by the
-    /// status-bar sparkline so spikes that the smoothed `frame_ms`
-    /// number hides become visible. Capped at [`FRAME_HISTORY_LEN`].
-    pub frame_history: std::collections::VecDeque<f32>,
 }
 
-impl PerfStats {
-    /// `(min, max, p99)` over `frame_history`, all in ms. Returns
-    /// `None` when the history is empty so callers can skip drawing.
-    pub fn frame_ms_stats(&self) -> Option<(f32, f32, f32)> {
-        if self.frame_history.is_empty() {
-            return None;
-        }
-        let mut sorted: Vec<f32> = self.frame_history.iter().copied().collect();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let min = *sorted.first().unwrap();
-        let max = *sorted.last().unwrap();
-        let p99_idx = ((sorted.len() as f32) * 0.99) as usize;
-        let p99 = sorted[p99_idx.min(sorted.len() - 1)];
-        Some((min, max, p99))
+/// Recent RAW frame times (ms), oldest first — straight out of Bevy's own `Diagnostic`
+/// history. Raw, not smoothed, so a spike the headline number hides still shows.
+///
+/// There is no second ring buffer: `Diagnostic` is one already.
+pub fn frame_history(diags: &DiagnosticsStore) -> Vec<f32> {
+    diags
+        .get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
+        .map(|d| d.values().map(|v| *v as f32).collect())
+        .unwrap_or_default()
+}
+
+/// `(min, max, p99)` over a frame-time history, all in ms. `None` when empty, so callers
+/// can skip drawing.
+pub fn frame_ms_stats(history: &[f32]) -> Option<(f32, f32, f32)> {
+    if history.is_empty() {
+        return None;
     }
+    let mut sorted: Vec<f32> = history.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let min = *sorted.first().unwrap();
+    let max = *sorted.last().unwrap();
+    let p99_idx = ((sorted.len() as f32) * 0.99) as usize;
+    let p99 = sorted[p99_idx.min(sorted.len() - 1)];
+    Some((min, max, p99))
 }
 
 /// Flip the perf HUD on/off. Persisted via `lunco-settings`.
@@ -100,9 +111,7 @@ fn sample_frame_time(
     mut stats: ResMut<PerfStats>,
 ) {
     if !settings.enabled {
-        if stats.fps != 0.0 || stats.frame_ms != 0.0 || stats.physics_ms.is_some()
-            || !stats.frame_history.is_empty()
-        {
+        if stats.fps != 0.0 || stats.frame_ms != 0.0 || stats.physics_ms.is_some() {
             *stats = PerfStats::default();
         }
         return;
@@ -113,15 +122,9 @@ fn sample_frame_time(
         }
     }
     if let Some(d) = diags.get(&FrameTimeDiagnosticsPlugin::FRAME_TIME) {
-        // Push the **raw** (un-smoothed) value to the history so
-        // spikes survive into the sparkline; keep the smoothed value
-        // for the headline number where stability is preferred.
-        if let Some(raw) = d.value() {
-            if stats.frame_history.len() == FRAME_HISTORY_LEN {
-                stats.frame_history.pop_front();
-            }
-            stats.frame_history.push_back(raw as f32);
-        }
+        // The smoothed value for the headline number, where stability is preferred. The
+        // RAW history the sparkline needs is already kept by the `Diagnostic` itself —
+        // read it with `frame_history()` rather than shadowing it in a second buffer.
         if let Some(v) = d.smoothed() {
             stats.frame_ms = v as f32;
         }
@@ -166,7 +169,8 @@ impl Plugin for PerfHudPlugin {
         // runtime needs the data to be there already. The sampler
         // bails early when the HUD is off.
         if !app.is_plugin_added::<FrameTimeDiagnosticsPlugin>() {
-            app.add_plugins(FrameTimeDiagnosticsPlugin::default());
+            // Deep enough for the sparkline — this IS the sparkline's buffer now.
+            app.add_plugins(FrameTimeDiagnosticsPlugin::new(FRAME_HISTORY_LEN));
         }
         app.add_systems(Update, sample_frame_time);
         app.add_systems(Startup, register_settings_menu);

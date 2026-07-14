@@ -254,6 +254,8 @@ impl PlotNodeVisual {
 
 impl NodeVisual for PlotNodeVisual {
     fn draw(&self, ctx: &mut DrawCtx, node: &Node, selected: bool) {
+        // Series colour from the active THEME, not a hardcoded palette.
+        let theme = lunco_theme::active(ctx.ui.ctx());
         // Transform the world rect to screen so the plot tracks
         // pan/zoom like any other node.
         let screen_rect = ctx
@@ -367,7 +369,7 @@ impl NodeVisual for PlotNodeVisual {
             // Tiny — just paint a sparkline directly into the rect,
             // no child UI.
             if !points.is_empty() {
-                let color = crate::signal::color_for_signal(&self.data.signal_path);
+                let color = crate::signal::color_for_signal(&theme, &self.data.signal_path);
                 let (mut tmin, mut tmax, mut vmin, mut vmax) =
                     (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
                 for p in points.iter() {
@@ -449,7 +451,7 @@ impl NodeVisual for PlotNodeVisual {
         } else {
             0.0
         };
-        let color = crate::signal::color_for_signal(&self.data.signal_path);
+        let color = crate::signal::color_for_signal(&theme, &self.data.signal_path);
         // Explicit width/height so the plot fills the child area
         // *except* a small bottom-right strip reserved for the
         // canvas's resize grip. Without this reservation egui_plot

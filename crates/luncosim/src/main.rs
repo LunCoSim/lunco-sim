@@ -107,9 +107,18 @@ fn main() {
     #[cfg(not(target_arch = "wasm32"))]
     app.add_plugins(lunco_celestial_ephemeris::EphemerisPlugin);
 
-    // The dynamic ShaderMaterial pipeline (registers MaterialPlugin::<ShaderMaterial>
-    // + schema reflection). Celestial Earth/Moon tiles render with blueprint.wgsl.
-    app.add_plugins(lunco_materials::ShaderMaterialPlugin)
+    // THE RENDER GATE. Domain crates state appearance as INTENT (`PbrLook`,
+    // `ShaderLook`, `SceneCamera`) and never name a material or a render
+    // pipeline; this plugin — the one `bevy_pbr` consumer in the graph — binds
+    // it. It also owns the dynamic `ShaderMaterial` pipeline itself
+    // (`ShaderMaterialPlugin` + schema reflection; celestial Earth/Moon tiles
+    // render with blueprint.wgsl), so that must NOT be added separately — Bevy
+    // panics on a duplicate plugin. It also hosts the render-only code that has no
+    // intent form: the horizon uniform feed, `SetEnvironmentLight`'s bloom arm, and
+    // the `CaptureScreenshot` readback. This is a windowed binary, so it always adds
+    // it (the `--no-ui` server does not, which is the entire gate).
+    // See docs/architecture/render-decoupling.md.
+    app.add_plugins(lunco_render_bevy::LuncoRenderPlugin)
         .add_plugins(PhysicsPlugins::default())
         // 12 solver substeps (avian default 6): the rigid joint-rover wheel
         // hinge leaks wheel-contact + drive impulses into the chassis as

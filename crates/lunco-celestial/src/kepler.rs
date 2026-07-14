@@ -1,11 +1,23 @@
 //! Two-body Keplerian propagation (doc 43 §2.2).
 //!
-//! Elements are referenced to the **engine equator** of the central body: the
-//! orbital plane is measured from the Bevy XZ plane with the body's pole = +Y
-//! — the same pole latitudes use in [`crate::geo`], so "i = 90°" really flies
-//! over the poles of the rendered globe. [`KeplerianElements::position_bevy_m`]
-//! returns body-centered meters in Bevy axes; add the body center's solar
-//! position for the solar frame.
+//! Elements are referenced to the **body's equator**: inclination is measured
+//! from the body's equatorial plane and RAAN about the body's pole — the same
+//! pole latitudes use in [`crate::geo`], so "i = 90°" really does fly over the
+//! geographic poles of the rendered globe (`geo::tests::
+//! polar_orbit_passes_over_the_geographic_poles` locks exactly that).
+//!
+//! [`KeplerianElements::position_bevy_m`] returns the orbit in a **pole-up
+//! ORBIT frame** (pole = +Y): body-centered meters, Bevy axes. To place it,
+//! lift it into the engine frame with [`crate::geo::equatorial_frame`] — which
+//! tilts +Y onto the body's real pole — and only then compose the body's spin.
+//! `placement::place_celestial_bound_entities` is the reference consumer.
+//!
+//! **Do not skip that lift.** This doc used to make the claim above while the
+//! code did not: the orbit was built about +Y, `placement` cancelled the FULL
+//! body rotation on top, the two collapsed, and inclination ended up measured
+//! about the **ecliptic** pole. For Earth (23.44° tilt) an ISS-like i = 51.6°
+//! orbit had a ground-track latitude wrong by up to ±23.4°, and RAAN was not
+//! comparable to any TLE.
 //!
 //! Classic chain: mean anomaly → Kepler's equation (Newton) → perifocal →
 //! Rz(Ω)·Rx(i)·Rz(ω) in z-up math axes → remap to Bevy (x, z, −y), identical

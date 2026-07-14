@@ -406,7 +406,10 @@ pub fn ensure_loaded(
             )
         }
         SourceRootKind::WorkspaceFile { path } => {
-            let source = match std::fs::read_to_string(path) {
+            // Through `lunco-storage` (FileStorage native / WebStorage on wasm),
+            // not `std::fs`: a workspace dependency can be opened in the web
+            // build too, where the picked file's text lives in browser storage.
+            let source = match crate::source_asset::read_text_sync(path) {
                 Ok(s) => s,
                 Err(e) => {
                     bevy::log::warn!(

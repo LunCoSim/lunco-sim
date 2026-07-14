@@ -1,12 +1,15 @@
-//! `UsdGeomCamera` (`def Camera`) → Bevy `Camera3d`.
+//! `UsdGeomCamera` (`def Camera`) → Bevy `Camera` + [`SceneCamera`] intent.
 //!
 //! Scene files author cameras as **standard** USD `def Camera` prims; this
-//! translator projects each to a Bevy `Camera3d` that keeps the prim's `Name`
-//! and gets a `Projection` derived from the USD film-back attributes. There is
-//! deliberately **no bespoke camera marker**: a "switchable scene camera" is
-//! just a `Camera3d` whose `RenderTarget` is a window. Which one renders is
-//! Bevy's own `Camera::is_active`; the switch mechanism (in `lunco-avatar`)
-//! toggles it and relocates the big_space `FloatingOrigin`.
+//! translator projects each to a Bevy `Camera` that keeps the prim's `Name`
+//! and gets a `Projection` derived from the USD film-back attributes. The
+//! render *pipeline* half (`Camera3d`, tonemapping, MSAA, bloom) is attached by
+//! `lunco-render-bevy` when it observes [`SceneCamera`] — so a headless world
+//! still holds a fully-formed camera and this crate links no wgpu. A
+//! "switchable scene camera" is a [`SceneCamera`] whose `RenderTarget` is a
+//! window. Which one renders is Bevy's own `Camera::is_active`; the switch
+//! mechanism (`camera_switch`) toggles it and relocates the big_space
+//! `FloatingOrigin`.
 //!
 //! Cameras therefore spawn **inactive** — exactly one window camera renders at
 //! a time, and the avatar/free camera stays the default view until the user
@@ -24,8 +27,8 @@
 //! transform propagation — that's "camera on a rover" for free.
 
 use bevy::camera::Exposure;
-use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::prelude::*;
+use lunco_render::SceneCamera;
 use openusd::sdf::Path as SdfPath;
 
 use crate::read::UsdRead;
@@ -59,10 +62,10 @@ pub(crate) fn instantiate_camera_prim<R: UsdRead>(
         _ => "perspective",
     };
 
-    // Spawn INACTIVE: exactly one window `Camera3d` renders at a time, and the
+    // Spawn INACTIVE: exactly one window scene camera renders at a time, and the
     // switch mechanism (lunco-avatar) chooses it by toggling `is_active`.
     //
-    // `Tonemapping::AgX` + a placeholder `Exposure` mirror the avatar camera's
+    // `SceneCamera::agx()` (AgX tonemapping) + a placeholder `Exposure` mirror the avatar camera's
     // filmic look so a switch doesn't jump the grade. The activation system
     // re-syncs `Exposure` to the active-scene sun (the same source as the sun
     // illuminance) so lux and EV move together — without it a lunar scene
@@ -77,18 +80,21 @@ pub(crate) fn instantiate_camera_prim<R: UsdRead>(
     // (next Update at the latest), the camera is a plain Transform child of a
     // cell-entity: valid, propagated, and inactive anyway.
     commands.entity(entity).insert((
-        Camera3d::default(),
         Camera {
             is_active: false,
             ..default()
         },
+        // The render-free scene-camera marker. `lunco-render-bevy` turns this
+        // into `Camera3d` + `Tonemapping::AgX` + MSAA in render builds; headless
+        // it stays pure scene data. Every "which entity is the scene camera?"
+        // query filters `With<SceneCamera>`.
+        SceneCamera::agx(),
         projection,
-        Tonemapping::AgX,
         Exposure::default(),
     ));
 
     info!(
-        "[usd-bevy] {} Camera → inactive Camera3d ({kind})",
+        "[usd-bevy] {} Camera → inactive SceneCamera ({kind})",
         sdf_path.as_str()
     );
     true

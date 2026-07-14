@@ -17,6 +17,14 @@
 //! `WireMessage`/`WireResult`/`ModelicaCommand` definitions). Any change bumps
 //! the id, so a mismatched pair can never be mistaken for compatible.
 
+// `clippy.toml`'s `disallowed_methods` bans `std::fs::read`/`read_to_string` so
+// that RUNTIME I/O goes through the Storage API (wasm has no filesystem). A
+// build script is not runtime: it runs on the host, at build time, and reading
+// `Cargo.lock` + this crate's `src/` tree is the whole point of it. cargo has no
+// way to scope a lint config to "everything except build scripts", so the
+// exemption `clippy.toml`'s own header claims for build scripts is spelled here.
+#![allow(clippy::disallowed_methods)]
+
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
 use std::path::Path;

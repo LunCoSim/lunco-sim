@@ -12,7 +12,6 @@ fn main() {
 
     app.init_asset::<UsdStageAsset>();
     app.init_asset::<Mesh>();
-    app.init_asset::<StandardMaterial>();
     app.init_asset::<Image>();
     // The avian/sim extractors read the LIVE canonical stage; without
     // `UsdBevyPlugin` this harness must provide the resource itself.

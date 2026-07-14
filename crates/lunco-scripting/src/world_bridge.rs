@@ -1164,12 +1164,31 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
     fn maintain(&mut self) {
         // Hot-reload tool libraries if any were (re)registered since last pass.
         let cur = crate::tool_libs::generation();
-        if self.tool_gen != cur {
-            // No task ctx is alive between ticks, so the Arc is unique here.
-            let engine = std::sync::Arc::get_mut(&mut self.engine)
-                .expect("engine Arc must be unique outside a task tick");
-            crate::tool_libs::refresh(engine);
-            self.tool_gen = cur;
+        if self.tool_gen == cur {
+            return;
+        }
+        // The engine handle is normally unique here (no task ctx outlives its
+        // tick), but "normally" is not "always": a `RhaiTaskCtx` — or any
+        // re-entrant call back into the bridge from script/REPL input — holds an
+        // `Arc` clone, and script input is untrusted. This used to
+        // `.expect("engine Arc must be unique outside a task tick")`, i.e. a
+        // script could **take down the whole application**. It must not: a
+        // contended refresh is deferred, never fatal.
+        match std::sync::Arc::get_mut(&mut self.engine) {
+            Some(engine) => {
+                crate::tool_libs::refresh(engine);
+                self.tool_gen = cur;
+            }
+            None => {
+                // `tool_gen` is deliberately NOT advanced — the next `maintain`
+                // (once the borrow is gone) still sees the generation mismatch and
+                // performs the refresh. Worst case a hot-reloaded tool library
+                // lands one tick late.
+                bevy::log::warn_once!(
+                    "[rhai] tool-library hot-reload deferred: the engine is still borrowed by a \
+                     live task/re-entrant script call. Retrying next tick."
+                );
+            }
         }
     }
 }
@@ -1533,6 +1552,49 @@ mod tests {
     //! so a parse error would otherwise only surface at runtime as a logged
     //! "prelude compile failed". `compile` checks syntax (unresolved function
     //! calls resolve at runtime, so calling prelude verbs here is fine).
+
+    /// **H6** — a re-entrant call into the bridge must not take down the app.
+    ///
+    /// `maintain()` used to `.expect("engine Arc must be unique outside a task
+    /// tick")`. A live `RhaiTaskCtx` (or any script/REPL call that re-enters the
+    /// bridge) holds an `Arc<Engine>` clone, so that expectation is violable from
+    /// **script input** — and violating it panicked the whole application. It must
+    /// now degrade: skip the hot-reload, keep the stale generation, retry later.
+    #[test]
+    fn reentrant_engine_borrow_defers_reload_instead_of_panicking() {
+        use crate::scenario::ScenarioRuntime;
+
+        crate::tool_libs::register_builtins();
+        let mut rt = super::RhaiScenarioRuntime::default();
+
+        // Simulate the re-entrant call: something else (a task ctx, a nested
+        // script call) is holding the engine while a tool library is (re)registered.
+        let borrowed = rt.engine.clone();
+        crate::tool_libs::register_tool_library(
+            "h6_reentrancy_probe",
+            "fn h6_probe() { 42 }",
+        );
+        let bumped = crate::tool_libs::generation();
+        assert_ne!(rt.tool_gen, bumped, "registering a library must bump the generation");
+
+        // The line under test. Before the fix: panic → app down.
+        rt.maintain();
+
+        assert_eq!(
+            rt.tool_gen, rt.tool_gen,
+            "survived the contended maintain (a panic here is the bug)"
+        );
+        assert_ne!(
+            rt.tool_gen, bumped,
+            "the deferred refresh must NOT mark itself done — it has to retry"
+        );
+
+        // Once the re-entrant borrow is gone, the very next maintain performs the
+        // refresh it deferred: degraded, not dropped.
+        drop(borrowed);
+        rt.maintain();
+        assert_eq!(rt.tool_gen, bumped, "the deferred hot-reload lands on the next tick");
+    }
 
     #[test]
     fn get_returns_vectors_as_arrays() {

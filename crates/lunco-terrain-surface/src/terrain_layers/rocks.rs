@@ -12,7 +12,7 @@ use lunco_obstacle_field::rock::faceted_rock_mesh;
 use lunco_obstacle_field::sampler::{salt, sample_layer};
 use lunco_obstacle_field::spec::{Pattern, RockLayer, SizeDist};
 
-use super::{LayerAttrSource, LayerScatterCx, TerrainLayer, TerrainScatterEntity};
+use super::{LayerAttrSource, LayerScatterCx, SharedRockAssets, TerrainLayer, TerrainScatterEntity};
 
 /// One scattered rock (kept distinct from [`TerrainScatterEntity`] for selection).
 #[derive(Component)]
@@ -53,6 +53,59 @@ fn rock_visibility_range() -> VisibilityRange {
         end_margin: LOD_FAR..(LOD_FAR + LOD_FADE),
         use_aabb: false,
     }
+}
+
+/// Quantise a boulder radius onto a shared-mesh bucket (~12% steps, so a bucket's
+/// mesh is never visibly the wrong size). The bucket index IS the mesh cache key in
+/// [`SharedRockAssets`], so any two rocks of near-equal size draw the same mesh.
+fn size_bucket(r: f32) -> u32 {
+    // Eighth-log steps, biased by +64 so sub-metre radii (ln < 0) stay positive.
+    ((r.max(0.02).ln() * 8.0).round() + 64.0).clamp(0.0, 255.0) as u32
+}
+
+/// The representative radius of a bucket (the inverse of [`size_bucket`]).
+fn bucket_radius_of(bucket: u32) -> f32 {
+    ((bucket as f32 - 64.0) / 8.0).exp()
+}
+
+/// The ONE boulder look every rock — procedural or hand-placed — draws with.
+/// Exposed boulders are BRIGHTER than mature regolith (~0.2 vs ~0.12 albedo — fresh
+/// rock faces vs gardened dust). Near-black rocks with no cast shadow were literally
+/// invisible inside shadowed crater bowls ("invisible wall").
+///
+/// It is a `PbrLook` — appearance INTENT, not a material — so this crate names no
+/// material at all. `lunco-render-bevy` caches by `PbrLook::key()`, which means the
+/// thousands of rocks still resolve to ONE `StandardMaterial` and one bind group
+/// (the batching this scatter depends on), except that it can no longer be lost by
+/// forgetting to thread a shared handle through the loop.
+fn rock_look() -> lunco_render::PbrLook {
+    lunco_render::PbrLook {
+        base_color: Color::srgb(0.19, 0.19, 0.20).into(),
+        perceptual_roughness: 1.0,
+        // Hundreds-to-thousands of scattered rocks: casting each into all 4 sun
+        // cascades every frame is a big chunk of the shadow pass. They still
+        // RECEIVE shadows; skip casting (their own tiny contact shadow isn't worth
+        // 4× re-submission of the whole field).
+        no_shadow_cast: true,
+        ..Default::default()
+    }
+}
+
+/// The shared boulder mesh for a size bucket (built once, then reused by every rock
+/// in that bucket, on every terrain).
+fn shared_rock_mesh(
+    rocks: &mut SharedRockAssets,
+    meshes: &mut Assets<Mesh>,
+    bucket: u32,
+) -> Handle<Mesh> {
+    rocks
+        .meshes
+        .entry(bucket)
+        .or_insert_with(|| {
+            let r = bucket_radius_of(bucket);
+            meshes.add(faceted_rock_mesh(0xB0 ^ bucket as u64, 4, r.max(0.05)))
+        })
+        .clone()
 }
 
 /// Scatters faceted boulders bounded to a near-field region around the origin.
@@ -124,17 +177,9 @@ impl TerrainLayer for RockScatterLayer {
                 })
                 .collect()
         });
-        let rock_material = cx.materials.as_deref_mut().map(|materials| {
-            materials.add(StandardMaterial {
-                // Exposed boulders are BRIGHTER than mature regolith (~0.2 vs
-                // ~0.12 albedo — fresh rock faces vs gardened dust). Near-black
-                // rocks with no cast shadow were literally invisible inside
-                // shadowed crater bowls — solid but unseeable = "invisible wall".
-                base_color: Color::srgb(0.19, 0.19, 0.20),
-                perceptual_roughness: 1.0,
-                ..default()
-            })
-        });
+        // ONE boulder look for every rock in the world (see `rock_look`); the binder's
+        // key cache turns it into ONE material + ONE bind group.
+        let look = rock_look();
 
         let bucket_of = |sz: f32| -> usize {
             let t = ((sz - size.min) / span).clamp(0.0, 1.0);
@@ -169,16 +214,11 @@ impl TerrainLayer for RockScatterLayer {
                     RigidBody::Static,
                     Collider::sphere((r_vis * 0.6) as f64),
                 ));
-                if let (Some(handles), Some(mat)) = (&bucket_handles, &rock_material) {
-                    rock.insert((
-                        Mesh3d(handles[bucket_of(p.size)].clone()),
-                        MeshMaterial3d(mat.clone()),
-                        // Hundreds-to-thousands of scattered rocks: casting each into all
-                        // 4 sun cascades every frame is a big chunk of the shadow pass.
-                        // They still RECEIVE shadows; skip casting (their own tiny
-                        // contact shadow isn't worth 4× re-submission of the whole field).
-                        bevy::light::NotShadowCaster,
-                    ));
+                if let Some(handles) = &bucket_handles {
+                    // `no_shadow_cast` rides on the look — `lunco-render-bevy` inserts
+                    // `NotShadowCaster` for it. Cloning the look does NOT clone a
+                    // material: every clone keys to the same cached one.
+                    rock.insert((Mesh3d(handles[bucket_of(p.size)].clone()), look.clone()));
                     // Distance LOD cull — native only (see `rock_visibility_range`).
                     #[cfg(not(target_arch = "wasm32"))]
                     rock.insert(rock_visibility_range());
@@ -232,19 +272,22 @@ impl TerrainLayer for RockInstanceLayer {
             self.position[0],
             self.position[1],
         ) as f32;
-        let r = self.size.max(0.05);
+        // SHARED assets: a placed rock used to mint a fresh `Mesh` AND a fresh
+        // `StandardMaterial` — one permanent extra draw call + bind group per
+        // `PlaceRock`. It now draws the shared boulder look (→ one cached material)
+        // and its size bucket's shared mesh, exactly like the procedural scatter. Its
+        // radius snaps to the bucket so collider, sink and visual all agree.
+        let bucket = size_bucket(self.size);
+        let r = bucket_radius_of(bucket).max(0.05);
+        let rock_assets = &mut *cx.rock_assets;
         let mesh = cx
             .meshes
             .as_deref_mut()
-            .map(|meshes| meshes.add(faceted_rock_mesh(self.seed, 4, r)));
-        let material = cx.materials.as_deref_mut().map(|materials| {
-            materials.add(StandardMaterial {
-                base_color: Color::srgb(0.19, 0.19, 0.20),
-                perceptual_roughness: 1.0,
-                ..default()
-            })
-        });
-        // Deterministic yaw from the seed (golden-ratio hash → well spread).
+            .map(|meshes| shared_rock_mesh(rock_assets, meshes, bucket));
+        let look = rock_look();
+        // Deterministic yaw from the seed (golden-ratio hash → well spread). The
+        // MESH is shared now, so the yaw is what keeps placed boulders from all
+        // looking identically oriented.
         let yaw = (self.seed as f32 * 0.618_034).fract() * std::f32::consts::TAU;
         cx.commands.entity(cx.terrain).with_children(|parent| {
             // Same collider/sink derivation as the procedural field (0.6·r sphere
@@ -259,12 +302,8 @@ impl TerrainLayer for RockInstanceLayer {
                 RigidBody::Static,
                 Collider::sphere((r * 0.6) as f64),
             ));
-            if let (Some(mesh), Some(material)) = (mesh, material) {
-                rock.insert((
-                    Mesh3d(mesh),
-                    MeshMaterial3d(material),
-                    bevy::light::NotShadowCaster,
-                ));
+            if let Some(mesh) = mesh {
+                rock.insert((Mesh3d(mesh), look));
             }
         });
     }
@@ -285,6 +324,27 @@ pub(super) fn parse_rock_instance(a: &dyn LayerAttrSource) -> Option<Arc<dyn Ter
         size: a.get_f32("size").unwrap_or(0.6),
         seed: a.get_i64("seed").map(|s| s as u64).unwrap_or(0x0C1),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// R9: a placed rock draws its size BUCKET's shared mesh, so the bucket must
+    /// track the requested radius closely (else a boulder visibly resizes) while
+    /// still collapsing near-equal rocks onto one mesh (else there is no sharing).
+    #[test]
+    fn rock_size_buckets_are_tight_and_shared() {
+        for r in [0.05f32, 0.2, 0.6, 1.0, 2.5, 5.0, 12.0] {
+            let q = bucket_radius_of(size_bucket(r));
+            let err = (q - r).abs() / r;
+            assert!(err < 0.07, "radius {r} → bucket radius {q} ({:.1}% off)", err * 100.0);
+        }
+        // Near-equal rocks land in the SAME bucket → they share one mesh.
+        assert_eq!(size_bucket(0.60), size_bucket(0.62));
+        // Genuinely different sizes do not.
+        assert_ne!(size_bucket(0.6), size_bucket(2.0));
+    }
 }
 
 /// Parse a `lunco:layer = "rocks"` prim: `density` (per ha, required > 0), `sizeMode`

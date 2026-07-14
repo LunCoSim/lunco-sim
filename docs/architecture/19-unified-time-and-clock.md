@@ -39,29 +39,35 @@ This architecture uses **one stored master (the tick), a tree of derived clocks,
 | A | `CelestialClock` (Historical) | `lunco-core` | J2000 `2451545.0`, or wall-seeded | advanced from **`Res<Time>` (Virtual)**, *accumulated* |
 | B | `TimeWarpState` (Historical) | `lunco-core` | mirror of A | written by A's tick system |
 | C | `Time<Fixed>` 60 Hz + `SimTick(u64)` | `lunco-core` | tick 0 | `Time<Fixed>` ← Virtual; tick gated by `is_running()` |
-| D | Modelica `current_time` | `lunco-modelica/src/worker.rs` | `0.0` | `Time<Fixed>` Δ, capped `0.033`/3 substeps |
+| D | Modelica `current_time` | `lunco-modelica/src/worker.rs` | `0.0` | `Time<Fixed>` Δ, capped — but only ONE dispatch per **render frame** (`A3`), so the model's rate depended on GPU load |
 | E | `RunBounds` | `lunco-experiments` | relative `0.0` | its own offline loop |
 
 They did **not** share an origin (three time-zeros: J2000, `0.0`, `0.0`) and had **no
 conversion layer**.
 
-### 1b. The sharper problem — four integrators, four answers to "speed up"
+### 1b. The sharper problem the audit found — four integrators, four answers to "speed up" (Historical)
 
-The deeper finding from the audit: there isn't even one coherent *realtime* timebase.
+> **This subsection is the *problem statement*, not the current behaviour.** §3's
+> `RealtimePhysics` regime is the answer to it: one `rate`, uniformly scaling the
+> fixed-step cadence, so epoch, avian **and Modelica** move together. Read this
+> table as what a change here must not reintroduce.
 
-| Subsystem | Timebase | `speed_multiplier = 50×` | `Time<Virtual>` slow-mo 0.01× |
+The audit's deeper finding was that there was not even one coherent *realtime*
+timebase:
+
+| Subsystem | Timebase (then) | `speed_multiplier = 50×` | `Time<Virtual>` slow-mo 0.01× |
 |---|---|---|---|
 | `CelestialClock.epoch` | Virtual, **accumulated** | sun races 50× | slows |
 | `SimTick` (netcode) | Fixed, gated by `is_running()` | runs (≤100×) else **freezes** | unaffected |
 | avian physics | Fixed ← Virtual | **stays 1×** | slows |
 | Modelica solver | Fixed Δ, capped, gated by per-model `paused` | **stays 1×** | unaffected |
 
-At 50× warp today: the sun moves 50×, the netcode tick 1×, the rover physics 1×, the
-Modelica model 1× — **the calendar is detached from every integrator**, and `epoch`
-(Virtual-accumulated) isn't even the same clock as `sim_secs` (Fixed-tick-derived) in plain
+At 50× warp the sun moved 50×, the netcode tick 1×, the rover physics 1×, the
+Modelica model 1× — **the calendar was detached from every integrator**, and `epoch`
+(Virtual-accumulated) was not even the same clock as `sim_secs` (Fixed-tick-derived) in plain
 "play." The two speed knobs — `CelestialClock.speed_multiplier`/`TimeWarpState.speed`
 (scales epoch + gates stepping) vs `Time<Virtual>.relative_speed` (scales avian + `Res<Time>`
-consumers) — are **never cross-wired**, so warp is effectively cosmetic.
+consumers) — were **never cross-wired**, so warp was effectively cosmetic.
 
 ### 1c. The one thing already correct
 
@@ -303,9 +309,36 @@ whether it **integrates** and whether it **interacts**:
 - **`RealtimePhysics`** — tick advances; epoch slaved to tick; `rate` scales the fixed-step cadence
   *uniformly* (drives both `Time<Virtual>.relative_speed` **and** the tick), so physics + Modelica +
   epoch move together. Bounded by solver stability.
-- **`KinematicWarp`** — tick **freezes** (physics/Modelica pause — the existing `speed>100 →
-  physics_enabled=false` cliff, made explicit); only **pure** consumers (ephemeris, spin, lighting,
-  sidereal) advance, as pure functions of epoch.
+
+  > **How Modelica actually keeps up** (finding `A3`, fixed 2026-07-12). A `rate` burst produces
+  > **more fixed ticks**, never longer ones, and the Modelica solver runs off-thread — so "moving
+  > together" cannot mean "one solver step per dispatch." It means the model's clock is driven to the
+  > fixed-step clock: `ModelicaModel.target_time` advances by exactly one `Time<Fixed>` delta per
+  > **unpaused fixed tick**, and each tick the master requests
+  > `dt = target_time − current_time` (clamped to `MAX_MACRO_STEP_DT`, then integrated as an integer
+  > ladder of `SECS_PER_TICK / 3` micro-steps). A model that misses ticks — worker busy, long compile,
+  > `rate = 10` — **catches the time up** instead of losing it.
+  >
+  > **Model time is therefore a pure function of the fixed-step clock. It does not depend on the
+  > render frame rate, on GPU load, or on window focus.** It used to: the dispatcher skipped any tick
+  > with a step in flight and always sent `Time<Fixed>::delta`, so at most one macro step ran per
+  > RENDER FRAME — at 30 FPS the model ran at half speed, at `rate = 10` it ran 10× too slow, and the
+  > skipped time was gone for good.
+  >
+  > The residual coupling delay (the model state is one in-flight macro step old) is **measured**, not
+  > assumed: `lunco_modelica::worker::CosimLag` records `|model_time − world_time|` every fixed tick
+  > and warns past 0.25 s.
+- **`KinematicWarp`** — tick **freezes** (physics and Modelica pause); only **pure** consumers
+  (ephemeris, spin, lighting, sidereal) advance, as pure functions of epoch. **A `rate` above
+  `MAX_REALTIME_RATE` falls into this regime** (`lunco-time/src/lib.rs`).
+
+  > **Why `MAX_REALTIME_RATE` is `8.0`, not 100.** A rate is realised as *more fixed ticks per
+  > frame*. At rate 100, one hitched frame demands ~198 fixed steps (≈2376 avian substeps) in a
+  > single frame — which makes that frame slow, which demands the same burst again next frame. It
+  > is a guaranteed death spiral: the engine cannot integrate 100× realtime physics and trying is
+  > worse than declining. Above the cap the tick is frozen and only the pure, closed-form consumers
+  > advance, which they can do at any rate. **A scenario that used to ask for physics at 20× now
+  > warps instead.**
 
 **Live world vs offline run** are *different axes*. The batch/interactive runner
 (`experiments_runner.rs:1184`) owns its own loop, decoupled from Bevy. It is **not** a transport
@@ -483,8 +516,16 @@ T5, and T7 are built; T4, T4.5, and T6 are planned (marked below).
   `rotateXYZ`…`rotateZYX`, the slerped quaternion `xformOp:orient` incl. half-precision `quath`, and
   single-axis `rotateX/Y/Z`). The same helpers back the static load decoder (`read_transform_from_usd`
   + the instantiate path), so static and animated transforms agree. `sample_usd_material_animation`
-  (sibling system) writes animated base-color / opacity into the live `StandardMaterial`. Per-channel
-  gated — static channels keep their instantiated pose.
+  (sibling system) writes animated base-color / opacity into the entity's **`PbrLook`** — the
+  render-free appearance intent ([`render-decoupling.md`](render-decoupling.md)); `lunco-render-bevy`
+  is the only crate that turns that into a `StandardMaterial`. Per-channel gated — static channels
+  keep their instantiated pose.
+
+  > **Why the animated prim opts out of material sharing.** `PbrLook` materials are cached by
+  > *content*, so identical-looking prims share one handle. A prim whose `displayColor` is animated
+  > re-keys **every frame** — which would mint a fresh material per frame and free none, an unbounded
+  > leak that presents as a slow memory climb rather than a crash. Animated prims therefore carry the
+  > explicit `unshared` opt-out and own their material outright.
 - **Composed `timeSamples` reach the runtime** (`lunco-usd-bevy/src/compose.rs`):
   `flatten_stage` now copies each attribute's composed `timeSamples` (via `Attribute::time_samples()`)
   alongside its `default`, and stamps `timeCodesPerSecond` on the pseudo-root. Previously flatten kept

@@ -16,7 +16,6 @@ fn test_rover_loading_physics() {
     // Register types and assets manually to avoid RenderPlugin dependency
     app.init_asset::<UsdStageAsset>();
     app.init_asset::<Mesh>();
-    app.init_asset::<StandardMaterial>();
     app.init_asset::<Image>();
     // The avian/sim extractors read the LIVE canonical stage; without
     // `UsdBevyPlugin` (which normally inits it) this minimal harness must

@@ -334,6 +334,13 @@ shader mode.
 >   `sync_terrain_overlay` live-tune, and overlay uniforms + the slope-hazard blend in
 >   `terrain_geomorph.wgsl` / `_web.wgsl` (slope from the geometric normal, running the
 >   same transfer math on-GPU as `transfer.rs`).
+>
+>   **Every `SetTerrainOverlay` field is `Option<T>`** — `enabled`, `safe_deg`,
+>   `cliff_deg`, `opacity`. An omitted field means *leave it alone*. When `enabled` was
+>   a plain `#[Command(default)]` bool it was written unconditionally on every call, so
+>   `{"cliff_deg": 25}` **silently switched the overlay off** while appearing to tune
+>   it. A partial-update command whose fields are not optional cannot express "change
+>   only this" — it can only express "set everything, defaulting what you didn't say."
 > - **Inspector legend + sliders** (`lunco-sandbox-edit::ui::inspector`) — enable +
 >   Safe/Cliff/Opacity sliders + a gradient legend coloured by the same
 >   `hazard_from_slope` + `hazard_color`, so the legend matches the terrain exactly.

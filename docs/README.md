@@ -57,10 +57,13 @@ We are evolving from a high-fidelity sandbox into a complete autonomous mission 
 | [`scripting-guide.md`](scripting-guide.md) | How to write rhai scenarios — beginner tutorial + full reference (verbs, sequencing, tools, persistence) |
 | [`commands-reference.md`](commands-reference.md) | Every `#[Command]` — the full callable surface (HTTP / MCP / rhai `cmd()`), auto-generated from source |
 | [`rhai-integration-design.md`](rhai-integration-design.md) | Rhai scripting design rationale + as-built reference |
-| [`architecture/`](architecture/) | Design narrative — how LunCoSim is structured |
+| [**`architecture/README.md`**](architecture/README.md) | **Index of the design narrative** — start here for how LunCoSim is structured |
+| [`architecture/render-decoupling.md`](architecture/render-decoupling.md) | The material is the boundary — domain crates state appearance *intent*; only `lunco-render-bevy` names `bevy_pbr`, so `--no-ui` links no wgpu/`bevy_render`/egui/winit |
+| [`architecture/shader-layers-and-params.md`](architecture/shader-layers-and-params.md) | Shader looks — WGSL-reflected parameters and named texture layers; adding a parameter is editing a shader, not editing Rust |
 | [`architecture/31-networking-and-state-sync.md`](architecture/31-networking-and-state-sync.md) | Multiplayer sync — the five replication planes (command/state/content/journal/presence), the wire, area-of-interest routing, policy-as-journal |
 | [`architecture/terrain-substrate.md`](architecture/terrain-substrate.md) | Terrain height oracle — one `HeightSource` model from orbit to rover; USD layers, three channels, error-driven detail, solar-system scale |
 | [`architecture/01-ontology.md`](architecture/01-ontology.md) | Terminology reference — Space System, Port, Connection, Attribute |
+| [`reviews/`](reviews/) | Code reviews and the accepted security posture — **the project does not enforce access control** ([`TODO-rbac-not-enforced.md`](reviews/TODO-rbac-not-enforced.md)); trusted LAN only |
 | `../specs/` | Detailed feature specifications (contracts for implementation) |
 | `../crates/<crate>/README.md` | Per-crate quick-start (use this when you want to use a crate) |
 | [`../scripts/perf/README.md`](../scripts/perf/README.md) | Performance profiling subsystem |

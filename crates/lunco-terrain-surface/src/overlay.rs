@@ -5,9 +5,19 @@
 //! [`TerrainField`](crate::query)); this module is ONE consumer of it — the on-screen
 //! colourised overlay painted over the lit regolith on the streamed LOD tiles. The
 //! slope-hazard transfer (green ≤ safe angle → red ≥ cliff angle) is evaluated **in
-//! the tile shader** from the geometric normal, running the SAME smoothstep + ramp as
-//! [`lunco_terrain_core::transfer`], so the pixel colour matches a legend swatch or a
-//! headless export exactly.
+//! the tile shader**, running the SAME smoothstep + ramp as
+//! [`lunco_terrain_core::transfer`] (one definition, shared via the `lunco::transfer`
+//! WGSL module), so the colour RAMP matches the legend swatch.
+//!
+//! **The slope it ramps is view-dependent, and that is a known limit.** The shader
+//! takes its slope from the baked DEM-resolution normal map where that map is bound
+//! (`weight_normal > 0` — the far/coarse tiles, exactly where the LOD mesh has thrown
+//! the relief away), and otherwise from the tile's own geometric normal. Near tiles
+//! out-resolve the map, so their mesh normal IS the finer truth; but a tile whose
+//! geometry is coarse and whose map is not yet baked still shades from LOD geometry
+//! and can under-report a cliff. So the pixel is a good guide, **not** a substitute
+//! for querying the field: a headless `TerrainField`/`SlopeField` read (un-band-limited
+//! oracle, `eps = cell size`) is the authority a traversability decision must use.
 //!
 //! Everything is **uniform-driven**: [`TerrainOverlayParams`] flows into the tile
 //! materials as a handful of floats ([`OverlayUniforms`]), so re-tuning the critical
@@ -18,9 +28,9 @@
 
 use bevy::prelude::*;
 use lunco_core::{on_command, register_commands, Command};
-use lunco_materials::{ParamValue, ShaderMaterial};
+use lunco_materials::{ParamValue, ShaderLook};
 
-use crate::stream_viz::LodMaterials;
+use crate::stream_viz::{set_param, LodTiles, TerrainShaderMode};
 
 /// The overlay's shader uniforms — the compact, per-material form of
 /// [`TerrainOverlayParams`]. `Copy` so it threads cheaply through the tile-spawn path.
@@ -42,14 +52,14 @@ impl OverlayUniforms {
     /// The disabled state — every tile builds with this until an overlay is armed.
     pub const OFF: Self = Self { mode: 0.0, opacity: 0.0, safe_rad: 0.0, cliff_rad: 0.0 };
 
-    /// Write the four params onto a tile material by name (repacks once).
-    pub fn apply(&self, m: &mut ShaderMaterial) {
-        m.set_many([
-            ("overlay_mode", ParamValue::F32(self.mode)),
-            ("overlay_opacity", ParamValue::F32(self.opacity)),
-            ("overlay_safe_rad", ParamValue::F32(self.safe_rad)),
-            ("overlay_cliff_rad", ParamValue::F32(self.cliff_rad)),
-        ]);
+    /// Write the four params onto a tile's [`ShaderLook`] by name. They are part of
+    /// the look's key, so every tile at the same overlay setting still shares one
+    /// material — the overlay is a *uniform*, not a re-bake (`D2`).
+    pub fn apply(&self, look: &mut ShaderLook) {
+        set_param(look, "overlay_mode", ParamValue::F32(self.mode));
+        set_param(look, "overlay_opacity", ParamValue::F32(self.opacity));
+        set_param(look, "overlay_safe_rad", ParamValue::F32(self.safe_rad));
+        set_param(look, "overlay_cliff_rad", ParamValue::F32(self.cliff_rad));
     }
 }
 
@@ -96,16 +106,20 @@ impl TerrainOverlayParams {
 
 /// Arm / re-tune the terrain analysis overlay at runtime (MCP / scripting / UI).
 ///
-/// A numeric field left at its default `0` is treated as "keep the current value", so
-/// `{ "enabled": true }` arms the overlay with the existing angles/opacity rather than
-/// snapping everything to red. Pass positive `safe_deg` / `cliff_deg` / `opacity` to
-/// set them.
+/// **Every field is optional: an OMITTED field keeps its current value.** So
+/// `{ "enabled": true }` arms the overlay with the existing angles/opacity, and
+/// `{ "cliff_deg": 25 }` re-tunes the critical angle without touching `enabled`.
+///
+/// The fields are `Option<T>` rather than zero-sentinels because the sentinel form
+/// could not represent "omitted" for `enabled` — `#[Command(default)]` gave it
+/// `false`, so a re-tune like `{"cliff_deg":25}` silently turned the overlay OFF —
+/// and it made `opacity: 0` unsettable.
 #[Command(default)]
 pub struct SetTerrainOverlay {
-    pub enabled: bool,
-    pub safe_deg: f32,
-    pub cliff_deg: f32,
-    pub opacity: f32,
+    pub enabled: Option<bool>,
+    pub safe_deg: Option<f32>,
+    pub cliff_deg: Option<f32>,
+    pub opacity: Option<f32>,
 }
 
 #[on_command(SetTerrainOverlay)]
@@ -114,15 +128,17 @@ fn on_set_terrain_overlay(
     mut params: ResMut<TerrainOverlayParams>,
 ) {
     let ev = trigger.event();
-    params.enabled = ev.enabled;
-    if ev.safe_deg > 0.0 {
-        params.safe_deg = ev.safe_deg;
+    if let Some(enabled) = ev.enabled {
+        params.enabled = enabled;
     }
-    if ev.cliff_deg > 0.0 {
-        params.cliff_deg = ev.cliff_deg;
+    if let Some(safe) = ev.safe_deg {
+        params.safe_deg = safe;
     }
-    if ev.opacity > 0.0 {
-        params.opacity = ev.opacity.clamp(0.0, 1.0);
+    if let Some(cliff) = ev.cliff_deg {
+        params.cliff_deg = cliff;
+    }
+    if let Some(opacity) = ev.opacity {
+        params.opacity = opacity.clamp(0.0, 1.0);
     }
     debug!(
         "[terrain-overlay] enabled={} safe={}° cliff={}° opacity={}",
@@ -132,22 +148,31 @@ fn on_set_terrain_overlay(
 
 register_commands!(on_set_terrain_overlay);
 
-/// Push the current overlay params onto every resident tile material when they
-/// change — the live-tuning path (existing cached materials; freshly-built tiles
-/// already read the current params at build). Change-driven: no-op on unchanged
-/// frames, so a still overlay costs nothing.
+/// Push the current overlay params onto every resident tile's look when they change
+/// — the live-tuning path (freshly-built tiles already read the current params at
+/// build). Change-driven: no-op on unchanged frames, so a still overlay costs
+/// nothing; a slider drag re-states N looks that all collapse back onto ONE material
+/// in the binder's cache.
 pub fn sync_terrain_overlay(
     params: Res<TerrainOverlayParams>,
-    lod_mats: Res<LodMaterials>,
-    mut materials: ResMut<Assets<ShaderMaterial>>,
+    terrains: Query<&LodTiles>,
+    mut looks: Query<&mut ShaderLook>,
 ) {
     if !params.is_changed() {
         return;
     }
     let u = params.uniforms();
-    for h in lod_mats.values() {
-        if let Some(mut m) = materials.get_mut(h) {
-            u.apply(&mut m);
+    // D8 — Lit tiles ONLY: the flat/debug shader declares no `overlay_*` params, so
+    // writing them there would only insert dead keys and mint a pointless material
+    // variant per band (`tile_look` gates the same way).
+    for tiles in &terrains {
+        if tiles.shader_mode() != TerrainShaderMode::Lit {
+            continue;
+        }
+        for entity in tiles.tile_entities() {
+            if let Ok(mut look) = looks.get_mut(entity) {
+                u.apply(&mut look);
+            }
         }
     }
 }
@@ -159,4 +184,56 @@ pub fn register(app: &mut App) {
     app.register_type::<TerrainOverlayParams>();
     app.add_systems(Update, sync_terrain_overlay);
     register_all_commands(app);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_app() -> App {
+        let mut app = App::new();
+        app.init_resource::<TerrainOverlayParams>();
+        app.add_observer(on_set_terrain_overlay);
+        app
+    }
+
+    /// D1: an OMITTED field keeps its current value. Re-tuning the critical angle
+    /// must not disarm the overlay (the old `enabled: bool` + `#[Command(default)]`
+    /// made `{"cliff_deg":25}` silently turn it OFF).
+    #[test]
+    fn retuning_an_angle_does_not_disarm_the_overlay() {
+        let mut app = test_app();
+        app.world_mut().resource_mut::<TerrainOverlayParams>().enabled = true;
+
+        app.world_mut()
+            .trigger(SetTerrainOverlay { cliff_deg: Some(25.0), ..default() });
+        app.world_mut().flush();
+
+        let p = *app.world().resource::<TerrainOverlayParams>();
+        assert!(p.enabled, "omitted `enabled` must keep the overlay armed");
+        assert_eq!(p.cliff_deg, 25.0);
+        assert_eq!(p.safe_deg, 15.0, "omitted `safe_deg` must keep its value");
+        assert_eq!(p.opacity, 0.6, "omitted `opacity` must keep its value");
+    }
+
+    /// D1 (same class): the zero-sentinel made `opacity: 0` unsettable.
+    #[test]
+    fn opacity_zero_is_settable() {
+        let mut app = test_app();
+        app.world_mut()
+            .trigger(SetTerrainOverlay { opacity: Some(0.0), ..default() });
+        app.world_mut().flush();
+        assert_eq!(app.world().resource::<TerrainOverlayParams>().opacity, 0.0);
+    }
+
+    /// And an explicit `enabled: false` still disarms it.
+    #[test]
+    fn explicit_disable_still_works() {
+        let mut app = test_app();
+        app.world_mut().resource_mut::<TerrainOverlayParams>().enabled = true;
+        app.world_mut()
+            .trigger(SetTerrainOverlay { enabled: Some(false), ..default() });
+        app.world_mut().flush();
+        assert!(!app.world().resource::<TerrainOverlayParams>().enabled);
+    }
 }

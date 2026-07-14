@@ -68,8 +68,13 @@ This spec lays the **foundational world architecture** for a solar-scale lunar c
 **Rationale:** Multiple systems need this conversion (ephemeris updates, trajectory rendering, SOI checks). Centralizing it prevents inconsistencies and bugs. The conversion chain (ecliptic J2000 → equatorial via 23.44° obliquity rotation → Bevy Y-up axes → AU-to-meters) is non-trivial and must be consistent everywhere.
 
 ### AD-7: Body Rotation
-**Decision:** Simple constant-rate rotation based on epoch. Earth: sidereal (~360°/23h56m). Moon: tidally locked.
-**Rationale:** Earth must show correct continent orientation when observed from the Moon's surface (SC-007). Tidal locking is essential — the Moon's near side must always face Earth. Constant-rate rotation is sufficient because precession/nutation/libration effects are sub-degree over the timescales we visualize. Full IAU rotation models are overkill for Phase 1.
+**Decision:** The **IAU/WGCCRE** rotation model (`lunco-celestial/src/iau.rs`), authored once as the published elements — pole right ascension and declination (with their per-century rates), the prime-meridian angle `W₀`, the spin rate `Ẇ`, and a body-specific periodic (nutation/libration) series. **The polar axis, the spin rate and the body-fixed rotation quaternion are all *derived* from those elements**, never stored alongside them.
+
+**Rationale:** Earth must show correct continent orientation when observed from the Moon's surface (SC-007), and the Moon's near side must always face Earth. A constant-rate spin about a fixed axis **cannot do the second one**: with no prime-meridian epoch, the Moon's near side does not face Earth at all — the phase is simply undefined. `W₀` is the missing quantity, and there is no "simple" version of it.
+
+**The frame trap this decision exists to prevent:** `W₀` is published **east of the node of the body's equator on the ICRF equator** — *not* of the engine's ecliptic +X. It can never be pasted in as a naked spin angle about the pole; doing so is wrong by the angle between those two references, and the 23.44° obliquity skew produces a plausible-looking but wrong answer. `iau::icrf_to_bevy` / `bevy_to_icrf` are the explicit frame transform, and they are the only place that crossing happens.
+
+Storing a cached `rotation_rate_rad_per_day` field beside the elements is likewise rejected: it is a value that can silently disagree with the dataset it was computed from. One authored copy, everything else a function of it.
 
 ### AD-8: Skybox
 **Decision:** Skipped for Phase 1. Black background.
@@ -204,7 +209,7 @@ As a developer, I want to run the flat-ground sandbox for quick physics iteratio
     -   Default (`celestial`): Full celestial world with bodies, grids, observer camera.
     -   `sandbox` feature: Flat-ground sandbox (current `setup_scenario`). No `big_space`.
 -   **FR-019**: **Coordinate Conversion Utility** (AD-6): Shared `celestial::coords` module converting ecliptic J2000 (AU) → Bevy coordinate space (meters, Y-up). Handles obliquity rotation and unit scaling.
--   **FR-020**: **Body Rotation** (AD-7): Each body rotates based on epoch. Earth: sidereal rotation (~360°/23h56m) around its tilted polar axis. Moon: tidally locked — rotation synchronized to orbital position. Earth must appear realistically oriented when observed from the lunar surface.
+-   **FR-020**: **Body Rotation** (AD-7): Each body's orientation at an epoch is evaluated from its IAU/WGCCRE elements — pole (α, δ) tilt **composed with** the prime-meridian angle `W(t) = W₀ + Ẇ·d`. Earth must appear realistically oriented when observed from the lunar surface, and **the Moon's near side must face Earth** (which is what `W₀` buys, and which no constant-rate spin can produce).
 -   **FR-021**: **Time Scale Conversion** (AD-10): Use `celestial-time` crate for Julian Date (TDB) ↔ UTC conversion. Time scrubber UI displays UTC; internal clock stores Julian Date.
 -   **FR-022**: **Sun as Mesh + Light Source** (AD-9): Sun is rendered as a physical sphere mesh (`ico(4)`). It also carries a `DirectionalLight` and a screen-space UI marker. Optics fixes (FR-025) ensure it remains visible across solar system distances.
 -   **FR-023**: **Planet Rendering Strategy** (AD-11): Each body is rendered as a single icosphere mesh (`ico(5)`, 10,242 vertices). At altitude < threshold, a hard cut transitions to terrain tiles. No billboard phase or multi-LOD mesh for Phase 1.
@@ -268,7 +273,7 @@ As a developer, I want to run the flat-ground sandbox for quick physics iteratio
 -   **Per-entity gravity (multiple bodies simultaneously)** → future upgrade from global `Gravity`
 -   **Skybox / star background** → deferred (AD-8)
 -   **Sun as visible sphere / billboard** → deferred (AD-9), currently light-only
--   **Precession, nutation, libration** → future (body rotation is constant-rate for Phase 1)
+-   Precession, nutation and libration are **in** the rotation model (AD-7): the pole's per-century rates carry precession, and each body's `PeriodicTerms` series carries its nutation/libration.
 -   **Billboard LOD for tiny distant planets** → deferred (AD-11), single sphere mesh sufficient for E-M scale
 -   **Seamless sphere-to-terrain transition (quadtree CDLOD)** → future terrain spec (AD-12), hard cut acceptable for Phase 1
 -   **Logarithmic depth buffer** → not needed, Bevy Infinite Reverse-Z handles it (AD-13)

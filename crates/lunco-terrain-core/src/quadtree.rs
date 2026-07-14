@@ -24,6 +24,40 @@
 //! Pure + `no-bevy` → unit-tested and wasm-safe. The Bevy streaming manager (S3) and
 //! the collider ring (S4) both consume this.
 
+use std::collections::HashSet;
+
+/// LOD **hysteresis** factor: a node refines when the focus is inside its refine
+/// range `r`, and coarsens back only past `1.15 · r`. The bare `dist < r` test has no
+/// dead band, so a focus resting ON a boundary re-splits and re-merges that node
+/// every frame — a despawn + spawn + reveal animation per flip on a tile whose LOD
+/// never changed. 15 % is wide enough to swallow camera jitter and narrow enough that
+/// the coarsen edge still lands inside the node's geomorph band (`morph_ratio` 0.7),
+/// so the swap that eventually happens is still blended, not popped.
+pub const REFINE_HYSTERESIS: f64 = 1.15;
+
+/// Was `coord` an INTERNAL (already-refined) node of the previous selection?
+///
+/// `prev` is an exact REPLACE cover, so for any node exactly one holds: it is a
+/// selected leaf (`coord ∈ prev`), it lay under a coarser selected leaf (an ancestor
+/// ∈ `prev`), or its own descendants covered it — i.e. it was refined. So "refined"
+/// is precisely "no self-or-ancestor in `prev`". An empty `prev` (first frame, or the
+/// deterministic walk) therefore yields `false` for the root and no hysteresis at all.
+fn was_refined(prev: &HashSet<QuadCoord>, coord: QuadCoord) -> bool {
+    if prev.is_empty() {
+        return false;
+    }
+    let mut c = coord;
+    loop {
+        if prev.contains(&c) {
+            return false; // it (or an ancestor) was a leaf → it was not refined
+        }
+        if c.depth == 0 {
+            return true; // no self-or-ancestor leaf → descendants covered it
+        }
+        c = QuadCoord { depth: c.depth - 1, x: c.x / 2, z: c.z / 2 };
+    }
+}
+
 /// An axis-aligned **square** region in the terrain XZ plane (metres).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Square {
@@ -121,11 +155,18 @@ impl Quadtree {
         fov_y_rad: f64,
         target_pixel_error: f64,
     ) -> Self {
-        let sse_denominator = 2.0 * (0.5 * fov_y_rad).tan();
-        // Guard the divisor: a `target_pixel_error` of 0 (an Inspector knob set to
-        // zero) would make `range_factor` infinite → every node refines to
-        // `max_depth` → a triangle/tile blow-up. Floor it at a sub-pixel epsilon.
-        let target_pixel_error = target_pixel_error.max(1e-3);
+        // Guard BOTH divisors. A `target_pixel_error` of 0 (an Inspector knob set to
+        // zero) or a `fov_y_rad` of 0 (an uninitialised camera) makes `range_factor`
+        // infinite → every node refines to `max_depth` → a triangle/tile blow-up
+        // (and `inf · 0 = NaN` downstream). A sub-pixel epsilon floor would only
+        // dodge the inf: at 1e-3 px the range factor is still ~1000× sane and the
+        // tree STILL refines to max_depth. So clamp to a USABLE band — the same one
+        // the caller's own knob uses (`stream_viz` clamps 0.5..32 px).
+        let target_pixel_error =
+            if target_pixel_error.is_nan() { 2.0 } else { target_pixel_error.clamp(0.25, 64.0) };
+        // `tan` of a 0 / non-finite fov → floor at a small positive denominator
+        // (`f64::max` also returns the finite side of a NaN).
+        let sse_denominator = (2.0 * (0.5 * fov_y_rad).tan()).max(1e-4);
         let range_factor = screen_height_px / (sse_denominator * target_pixel_error);
         Quadtree::new(root_half_extent, max_depth, range_factor, root_geometric_error)
     }
@@ -176,9 +217,19 @@ impl Quadtree {
     /// `range_factor · node_error(coord)`, so flat ground stays coarse and rims /
     /// peaks earn deeper subdivision automatically.
     ///
+    /// `prev` is the **previous frame's selected cover** (the [`Selected::coord`] set
+    /// — empty on the first selection). It supplies the [`REFINE_HYSTERESIS`] band: a
+    /// node that was already refined last frame keeps its children until the focus
+    /// backs out past `1.15 ×` the refine range. Without it a camera hovering ON a
+    /// node's refine boundary flips that node in/out EVERY frame — the mesh cache
+    /// absorbs the re-bake, but each flip still costs a despawn + spawn + a 0.35 s
+    /// reveal animation on a tile whose LOD never actually changed. The band is a
+    /// *view* concern: it makes the visual selection depend on the previous frame, so
+    /// it is NOT peer-deterministic — pass an empty set for the deterministic
+    /// (physics-ring / headless) walk, which is what [`select`](Self::select) does.
+    ///
     /// `node_error` must be a **pure function of the surface** (same inputs → same
-    /// output on every platform) to keep selection peer-deterministic like
-    /// [`select`](Self::select). It is called only for nodes the walk visits (lazy,
+    /// output on every platform). It is called only for nodes the walk visits (lazy,
     /// O(visited) — no eager error map). To bound the coarsest tile size over a truly
     /// flat region, have the caller clamp `node_error` to a floor.
     pub fn select_with_error(
@@ -186,9 +237,18 @@ impl Quadtree {
         focus_xz: [f64; 2],
         eye_height: f64,
         node_error: impl Fn(QuadCoord, Square) -> f64,
+        prev: &HashSet<QuadCoord>,
     ) -> Vec<Selected> {
         let mut out = Vec::new();
-        self.select_node_with_error(QuadCoord::ROOT, f64::INFINITY, focus_xz, eye_height, &node_error, &mut out);
+        self.select_node_with_error(
+            QuadCoord::ROOT,
+            f64::INFINITY,
+            focus_xz,
+            eye_height,
+            &node_error,
+            prev,
+            &mut out,
+        );
         out
     }
 
@@ -387,6 +447,10 @@ impl Quadtree {
         out
     }
 
+    // The recursive walk threads the whole selection context (node, parent band,
+    // focus, eye height, the error fn, the hysteresis memory, the out buffer) — a
+    // context struct would just move the same 7 values behind a name.
+    #[allow(clippy::too_many_arguments)]
     fn select_node_with_error(
         &self,
         coord: QuadCoord,
@@ -394,16 +458,31 @@ impl Quadtree {
         focus: [f64; 2],
         eye_height: f64,
         node_error: &impl Fn(QuadCoord, Square) -> f64,
+        prev: &HashSet<QuadCoord>,
         out: &mut Vec<Selected>,
     ) {
         let region = self.region(coord);
         let horizontal = region.distance_to(focus);
         let dist = (horizontal * horizontal + eye_height * eye_height).sqrt();
         let refine_range = self.range_factor * node_error(coord, region).max(0.0);
-        let refine = coord.depth < self.max_depth && dist < refine_range;
+        // Hysteresis: refine at `r`, but only COARSEN once past `1.15 · r`. A node
+        // that was already split last frame keeps its children through the band, so
+        // a focus sitting on the boundary stops flip-flopping (see the `prev` doc on
+        // [`select_with_error`]).
+        let threshold =
+            if was_refined(prev, coord) { refine_range * REFINE_HYSTERESIS } else { refine_range };
+        let refine = coord.depth < self.max_depth && dist < threshold;
         if refine {
             for child in coord.children() {
-                self.select_node_with_error(child, refine_range, focus, eye_height, node_error, out);
+                self.select_node_with_error(
+                    child,
+                    refine_range,
+                    focus,
+                    eye_height,
+                    node_error,
+                    prev,
+                    out,
+                );
             }
             return;
         }
@@ -445,6 +524,11 @@ mod tests {
     fn qt() -> Quadtree {
         // 16 km root region, up to 6 levels deep, error-derived ranges.
         Quadtree::new(8000.0, 6, 4.0, 8000.0)
+    }
+
+    /// No previous selection → no hysteresis (the bare metric).
+    fn fresh() -> HashSet<QuadCoord> {
+        HashSet::new()
     }
 
     #[test]
@@ -506,7 +590,7 @@ mod tests {
         let q = qt();
         // Uniform measured error = the per-depth schedule → same walk as select().
         let err = |c: QuadCoord, _r: Square| q.geometric_error(c.depth);
-        let free = q.select_with_error([100.0, 200.0], 0.0, err);
+        let free = q.select_with_error([100.0, 200.0], 0.0, err, &fresh());
         let bud = q.select_with_error_budgeted([100.0, 200.0], 0.0, err, usize::MAX);
         let key = |s: &Selected| (s.coord.depth, s.coord.x, s.coord.z);
         let mut a: Vec<_> = free.iter().map(key).collect();
@@ -526,7 +610,7 @@ mod tests {
         let q = qt();
         let focus = [100.0, 200.0];
         let err = |c: QuadCoord, _r: Square| q.geometric_error(c.depth);
-        let unb = q.select_with_error(focus, 0.0, err);
+        let unb = q.select_with_error(focus, 0.0, err, &fresh());
         let cap = unb.len() / 2; // force the budget to bind
         let sel = q.select_with_error_budgeted(focus, 0.0, err, cap);
         assert!(sel.len() <= cap, "{} tiles > cap {cap}", sel.len());
@@ -596,11 +680,44 @@ mod tests {
 
     #[test]
     fn screen_metric_factor_is_positive_and_scales() {
-        let q = Quadtree::from_screen_metric(8000.0, 6, 8000.0, 1080.0, 0.7854, 2.0);
+        use std::f64::consts::FRAC_PI_4;
+        let q = Quadtree::from_screen_metric(8000.0, 6, 8000.0, 1080.0, FRAC_PI_4, 2.0);
         assert!(q.range_factor > 0.0);
         // Tighter pixel error → larger range_factor (refine sooner / from farther).
-        let tight = Quadtree::from_screen_metric(8000.0, 6, 8000.0, 1080.0, 0.7854, 1.0);
+        let tight = Quadtree::from_screen_metric(8000.0, 6, 8000.0, 1080.0, FRAC_PI_4, 1.0);
         assert!(tight.range_factor > q.range_factor);
+    }
+
+    #[test]
+    fn degenerate_screen_metric_stays_finite_and_clamped() {
+        use std::f64::consts::FRAC_PI_4;
+        let mk = |fov: f64, px: f64| Quadtree::from_screen_metric(8000.0, 6, 8000.0, 1080.0, fov, px);
+
+        // `target_pixel_error = 0` (an Inspector knob dragged to zero) must NOT give
+        // an infinite range factor — it clamps to the usable floor (0.25 px), i.e. the
+        // SAME tree a 0.25-px request builds, not a 1e-3-px one (≈1000× off).
+        let zero_px = mk(FRAC_PI_4, 0.0);
+        assert!(zero_px.range_factor.is_finite());
+        assert_eq!(zero_px.range_factor, mk(FRAC_PI_4, 0.25).range_factor);
+        // …and NOT the old 1e-3-px floor, which was ~250× tighter (every node to
+        // max_depth — the blow-up the guard claimed to prevent).
+        let old_floor_factor = 1080.0 / (2.0 * (0.5 * FRAC_PI_4).tan() * 1e-3);
+        assert!(zero_px.range_factor < old_floor_factor * 0.01);
+
+        // `fov_y_rad = 0` (uninitialised camera): `tan(0) = 0` used to zero the
+        // divisor ⇒ inf range factor ⇒ every node to max_depth + `inf·0 = NaN` morph
+        // bands. The floored denominator keeps everything finite.
+        let zero_fov = mk(0.0, 2.0);
+        assert!(zero_fov.range_factor.is_finite());
+        let sel = zero_fov.select([0.0, 0.0]);
+        assert!(!sel.is_empty());
+        assert!(sel.iter().all(|s| !s.morph_start.is_nan() && !s.morph_end.is_nan()));
+
+        // NaN / inf knobs stay finite too (NaN → the 2 px default; inf → the ceiling).
+        assert!(mk(FRAC_PI_4, f64::NAN).range_factor.is_finite());
+        assert!(mk(FRAC_PI_4, f64::INFINITY).range_factor.is_finite());
+        assert_eq!(mk(FRAC_PI_4, f64::INFINITY).range_factor, mk(FRAC_PI_4, 64.0).range_factor);
+        assert!(mk(f64::NAN, 2.0).range_factor.is_finite());
     }
 
     #[test]
@@ -608,7 +725,7 @@ mod tests {
         // A dead-flat surface (error 0 everywhere) never earns refinement → the whole
         // region is a single root tile, however close the focus.
         let q = qt();
-        let sel = q.select_with_error([0.0, 0.0], 0.0, |_, _| 0.0);
+        let sel = q.select_with_error([0.0, 0.0], 0.0, |_, _| 0.0, &fresh());
         assert_eq!(sel.len(), 1);
         assert_eq!(sel[0].coord, QuadCoord::ROOT);
     }
@@ -620,7 +737,7 @@ mod tests {
         let q = qt();
         let focus = [1234.0, -567.0];
         let uniform = q.select(focus);
-        let via_error = q.select_with_error(focus, 0.0, |c, _| q.geometric_error(c.depth));
+        let via_error = q.select_with_error(focus, 0.0, |c, _| q.geometric_error(c.depth), &fresh());
         assert_eq!(uniform, via_error);
     }
 
@@ -638,7 +755,7 @@ mod tests {
             }
         };
         // Focus far away so distance never drives refinement — only the feature error does.
-        let sel = q.select_with_error([7000.0, 7000.0], 0.0, node_error);
+        let sel = q.select_with_error([7000.0, 7000.0], 0.0, node_error, &fresh());
         let leaf = sel.iter().find(|s| s.region.distance_to(feature) <= 1e-6).unwrap();
         assert_eq!(leaf.coord.depth, q.max_depth, "feature cell should reach max depth");
         // A point far from the feature stays coarse: its node stops as soon as its
@@ -653,9 +770,14 @@ mod tests {
         // Coverage invariant must hold for the error-driven path too (REPLACE refinement).
         let q = qt();
         let feature = [1500.0, 2500.0];
-        let sel = q.select_with_error([0.0, 0.0], 0.0, |_c, region| {
-            if region.distance_to(feature) <= 1e-6 { q.root_geometric_error } else { 0.0 }
-        });
+        let sel = q.select_with_error(
+            [0.0, 0.0],
+            0.0,
+            |_c, region| {
+                if region.distance_to(feature) <= 1e-6 { q.root_geometric_error } else { 0.0 }
+            },
+            &fresh(),
+        );
         let area: f64 = sel.iter().map(|s| s.region.side() * s.region.side()).sum();
         let root_area = (2.0 * q.root_half_extent).powi(2);
         assert!((area - root_area).abs() < 1e-3, "area {area} vs {root_area}");
@@ -678,7 +800,7 @@ mod tests {
         // cover of the root (REPLACE refinement invariant).
         let q = qt();
         let flat = |_c: QuadCoord, _r: Square| 0.05; // near-flat → coarse everywhere
-        let mut sel = q.select_with_error([0.0, 0.0], 4000.0, flat);
+        let mut sel = q.select_with_error([0.0, 0.0], 4000.0, flat, &fresh());
         assert!(
             sel.iter().all(|s| s.coord.depth < q.max_depth),
             "precondition: coarse selection"
@@ -715,8 +837,61 @@ mod tests {
     fn error_driven_deterministic() {
         let q = qt();
         let f = |_c: QuadCoord, r: Square| r.distance_to([100.0, 100.0]);
-        let a = q.select_with_error([50.0, 50.0], 3.0, f);
-        let b = q.select_with_error([50.0, 50.0], 3.0, f);
+        let a = q.select_with_error([50.0, 50.0], 3.0, f, &fresh());
+        let b = q.select_with_error([50.0, 50.0], 3.0, f, &fresh());
         assert_eq!(a, b);
+    }
+
+    /// A focus oscillating by ±ε ACROSS a node's refine boundary must not flip that
+    /// node in and out — the whole point of [`REFINE_HYSTERESIS`].
+    #[test]
+    fn hysteresis_stops_the_boundary_flip_flop() {
+        let q = qt();
+        let err = |c: QuadCoord, _r: Square| q.geometric_error(c.depth);
+        let cover = |sel: &[Selected]| -> HashSet<QuadCoord> {
+            sel.iter().map(|s| s.coord).collect()
+        };
+        // Put the focus exactly on the ROOT's refine boundary: `dist == refine_range`
+        // is the bare test's tipping point, so ±ε flips the whole tree in and out.
+        let r0 = q.refine_range(0);
+        let eps = 1e-6 * r0;
+        // The root region is origin-centred with half-extent 8000; a focus this far
+        // out along +X sits `dist` from its edge.
+        let at = |d: f64| [q.root_half_extent + d, 0.0];
+
+        // WITHOUT memory (the old behaviour): just inside → refined; just outside →
+        // a single root tile. That is the flip.
+        let inside = q.select_with_error(at(r0 - eps), 0.0, err, &fresh());
+        let outside = q.select_with_error(at(r0 + eps), 0.0, err, &fresh());
+        assert!(inside.len() > 1, "just inside the range must refine");
+        assert_eq!(outside.len(), 1, "just outside it must not (no hysteresis)");
+
+        // WITH the previous cover: a focus oscillating by ±ε across the boundary must
+        // NOT flip the node — the refined state sticks through the whole band.
+        let mut prev = cover(&inside);
+        for i in 0..8 {
+            let d = if i % 2 == 0 { r0 + eps } else { r0 - eps };
+            let sel = q.select_with_error(at(d), 0.0, err, &prev);
+            assert_eq!(
+                cover(&sel),
+                prev,
+                "selection flipped at oscillation step {i} (d = {d})"
+            );
+            prev = cover(&sel);
+        }
+
+        // …and it DOES coarsen once the focus really backs out past the band.
+        let out = q.select_with_error(at(r0 * REFINE_HYSTERESIS + eps), 0.0, err, &prev);
+        assert_eq!(out.len(), 1, "past 1.15·r the node must finally coarsen");
+    }
+
+    #[test]
+    fn hysteresis_never_widens_the_first_selection() {
+        // An empty `prev` (first frame / the deterministic walk) must reproduce the
+        // bare metric exactly — the band only ever HOLDS an existing refinement.
+        let q = qt();
+        let err = |c: QuadCoord, _r: Square| q.geometric_error(c.depth);
+        let focus = [1234.0, -567.0];
+        assert_eq!(q.select_with_error(focus, 0.0, err, &fresh()), q.select(focus));
     }
 }

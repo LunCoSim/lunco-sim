@@ -307,6 +307,25 @@ fn process_usd_cosim_prim_read<R: UsdRead>(
         });
     }
 
+    // Coupling tier (A4) — `lunco:cosim:tier = "A" | "B" | "C"`. DECLARED, never
+    // inferred: it is the model author's statement about what this model is
+    // allowed to do to the physics loop (see `lunco_cosim::CosimTier` and
+    // `docs/architecture/28-modelica-realtime-physics.md`). Absent ⇒ undeclared,
+    // which is NOT the same as Tier A: `rewire_usd_connections` gates force /
+    // torque wires on it.
+    if let Some(spec) = reader.scalar::<String>(sdf_path, "lunco:cosim:tier") {
+        match lunco_cosim::CosimTier::parse(&spec) {
+            Some(tier) => {
+                commands.entity(entity).try_insert(tier);
+            }
+            None => warn!(
+                "[usd-cosim] {}: lunco:cosim:tier = '{}' is not one of A/B/C — treating the \
+                 model as UNDECLARED (it may not drive predicted physics)",
+                prim_path.path, spec
+            ),
+        }
+    }
+
     // Port-edge event rules: `lunco:portEvents = "m_prop<200:lander_low_fuel, ..."`.
     // Each turns a model OUTPUT-signal threshold crossing into a discrete
     // TelemetryEvent (the rumoca-safe Modelica `when` — see fire_model_port_events).
@@ -733,6 +752,15 @@ pub fn rewire_usd_connections(
     mut dirty: ResMut<WiringDirty>,
     q_all: Query<(Entity, &UsdPrimPath)>,
     q_edges: Query<Entity, With<UsdWiredConnection>>,
+    // A4 tier gate: the source model's declared tier, and whether the SINK is a
+    // client-predicted dynamic body (a `RigidBody` that was NOT opted out of
+    // prediction). Both `Option`-shaped at the call site — absence is the
+    // dangerous case for the tier, and the safe case for the body.
+    q_tier: Query<&lunco_cosim::CosimTier>,
+    q_predicted_body: Query<
+        &avian3d::prelude::RigidBody,
+        Without<lunco_core::NotPredictable>,
+    >,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
 ) {
@@ -810,6 +838,41 @@ pub fn rewire_usd_connections(
                     .strip_prefix("outputs:")
                     .or_else(|| src_leaf.strip_prefix("inputs:"))
                     .unwrap_or(src_leaf);
+
+                // ── A4: the tier gate ───────────────────────────────────────
+                // A model may only push a client-predicted `Dynamic` body around
+                // if it DECLARED itself realtime-safe (`lunco:cosim:tier = "A"`).
+                // Anything else — Tier B/C, or (the common case today) a model
+                // with no tier attribute at all — means an adaptive, variable-cost
+                // solver is deciding the forces inside the prediction loop, which
+                // is exactly what docs/28 §1 forbids.
+                //
+                // Warn, don't refuse: cosim prims are stamped `NotPredictable` at
+                // prim-read time, so a scene that trips this gate has ALREADY
+                // routed around the guard some other way, and dropping the wire
+                // silently would leave a vehicle with no forces at all. The warn
+                // names the attribute and the prim so it is actionable.
+                if lunco_cosim::is_physics_force_port(sink_conn)
+                    && matches!(
+                        q_predicted_body.get(entity),
+                        Ok(avian3d::prelude::RigidBody::Dynamic)
+                    )
+                    && !q_tier
+                        .get(start_element)
+                        .map(|t| t.may_drive_predicted_physics())
+                        .unwrap_or(false)
+                {
+                    warn!(
+                        "[usd-cosim] {}.{}: a co-simulated model ({}) drives a force/torque port \
+                         on a CLIENT-PREDICTED dynamic body without declaring \
+                         `lunco:cosim:tier = \"A\"`. Its solver's step sequence and cost are not \
+                         guaranteed identical across peers — the predicted body can diverge. \
+                         Declare the tier on the model prim (see \
+                         docs/architecture/28-modelica-realtime-physics.md).",
+                        prim_path.path, attr, src_prim,
+                    );
+                }
+
                 commands.spawn((
                     SimConnection {
                         start_element,

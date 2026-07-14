@@ -152,6 +152,41 @@ pub enum WireMessage {
     CancelRun { run_id: lunco_experiments::ExperimentId },
 }
 
+/// Index of [`WireMessage::InstallParsedMsl`] among `WireMessage`'s variants.
+///
+/// serde's derive numbers variants in declaration order, and bincode writes that
+/// index as the discriminant. [`InstallParsedMslRef`] hand-writes the same
+/// encoding, so this constant MUST equal the position of `InstallParsedMsl` in
+/// the enum above (`Command` = 0, `InstallParsedMsl` = 1, …).
+///
+/// If you reorder `WireMessage`, update this — and note that reordering is
+/// already a wire-format break that `LUNCO_WIRE_BUILD_ID` (see `build.rs`) will
+/// catch between a stale worker and a fresh main bundle.
+const INSTALL_PARSED_MSL_VARIANT: u32 = 1;
+
+/// Borrowing, serialize-only mirror of [`WireMessage::InstallParsedMsl`].
+///
+/// CQ-213. The parsed MSL bundle is ~165 MB in memory. Wrapping it in the owned
+/// `WireMessage` variant just to hand it to bincode meant a full deep clone of
+/// every `StoredDefinition` — a multi-second, multi-hundred-MB spike on the main
+/// thread, to produce bytes we then throw the clone away for. This type
+/// serializes the exact same bincode bytes (same variant discriminant, same
+/// sequence payload — a `&[T]` and a `Vec<T>` are indistinguishable to serde)
+/// while borrowing the caller's slice, so the worker's owned deserialize into
+/// `WireMessage` is bit-identical and unchanged.
+struct InstallParsedMslRef<'a>(&'a [(String, rumoca_compile::parsing::StoredDefinition)]);
+
+impl serde::Serialize for InstallParsedMslRef<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_newtype_variant(
+            "WireMessage",
+            INSTALL_PARSED_MSL_VARIANT,
+            "InstallParsedMsl",
+            self.0,
+        )
+    }
+}
+
 /// Wire-format envelope from worker → main. Same multiplexing principle as
 /// `WireMessage`: lets the worker emit out-of-band log lines that surface
 /// in the main page's console (Web Workers have a separate console context
@@ -1237,15 +1272,13 @@ pub fn __lc_test_dispatch_compile(model_name: &str, source: &str) {
 pub fn install_msl_in_worker(
     parsed: &[(String, rumoca_compile::parsing::StoredDefinition)],
 ) {
-    // TODO(CQ-213): `parsed.to_vec()` deep-clones the full ~165 MB parsed
-    // MSL bundle solely to wrap it in `WireMessage` for bincode. Serialize
-    // from a borrowing wrapper instead — a `#[derive(Serialize)]` enum whose
-    // `InstallParsedMsl(&[(String, StoredDefinition)])` variant reproduces the
-    // exact bincode discriminant + payload layout of the owned `WireMessage`
-    // variant (so the worker's owned deserialize is unaffected). Brittle
-    // (variant order must stay in lockstep) and wasm-only / unverifiable
-    // without a worker runtime, so deferred. See docs/code-quality-remediation.md.
-    let envelope = WireMessage::InstallParsedMsl(parsed.to_vec());
+    // CQ-213: encode straight out of the caller's slice. The old code did
+    // `WireMessage::InstallParsedMsl(parsed.to_vec())` — a deep clone of the
+    // full ~165 MB parsed MSL bundle whose ONLY purpose was to own the payload
+    // long enough for bincode to read it back out. `InstallParsedMslRef`
+    // serializes byte-for-byte as that variant while borrowing (see its docs),
+    // so the worker's owned `WireMessage` deserialize is unchanged.
+    let envelope = InstallParsedMslRef(parsed);
     let bytes = match bincode::serde::encode_to_vec(&envelope, bincode::config::standard()) {
         Ok(b) => b,
         Err(e) => {

@@ -57,25 +57,34 @@ pub(crate) fn start_streamed_horizon_bakes(
     mut commands: Commands,
     time: Res<Time>,
     q: Query<
-        (Entity, &HorizonShadowTerrain, &DemHeightField, Option<&StreamedHorizonStale>),
         (
-            With<TerrainLodViz>,
-            Without<Mesh3d>,
-            Without<HorizonMap>,
-            Without<StreamedHorizonBake>,
-            Without<RenderLayers>,
+            Entity,
+            &HorizonShadowTerrain,
+            &DemHeightField,
+            Option<&StreamedHorizonStale>,
+            Has<HorizonMap>,
         ),
+        // NOT `Without<HorizonMap>`: an edit made WHILE a bake was in flight lands its
+        // (pre-edit) map and re-arms `StreamedHorizonStale` — "map present + stale
+        // armed" must therefore re-bake, or the far-field sun-visibility cache stays
+        // wrong for the rest of the session (see `mark_streamed_horizon_stale`).
+        (With<TerrainLodViz>, Without<Mesh3d>, Without<StreamedHorizonBake>, Without<RenderLayers>),
     >,
 ) {
     if cfg!(target_arch = "wasm32") {
         return;
     }
     let now = time.elapsed_secs_f64();
-    for (entity, cfg, hf, stale) in &q {
-        if let Some(stale) = stale {
-            if now - stale.since < REBAKE_DEBOUNCE_SECS {
-                continue;
-            }
+    for (entity, cfg, hf, stale, has_map) in &q {
+        match stale {
+            // Debounce: wait for the surface to go quiescent (a drag keeps pushing
+            // the deadline out → exactly one coalesced bake).
+            Some(stale) if now - stale.since < REBAKE_DEBOUNCE_SECS => continue,
+            Some(_) => {}
+            // No map and nothing armed → this is the terrain's FIRST bake.
+            // Map present and nothing armed → it is current; nothing to do.
+            None if has_map => continue,
+            None => {}
         }
         let oracle = hf.0.clone();
         let res = cfg.resolution.max(2);
@@ -146,15 +155,23 @@ pub(crate) fn mark_streamed_horizon_stale(
     // oracle and re-bake repeatedly per stroke. Match any already-managed terrain
     // (live map OR debounce already armed) and re-arm on every change instead.
     changed: Query<
-        (Entity, Has<HorizonMap>, Has<StreamedHorizonStale>),
+        (Entity, Has<HorizonMap>, Has<StreamedHorizonStale>, Has<StreamedHorizonBake>),
         (Changed<DemHeightField>, With<TerrainLodViz>, Without<Mesh3d>),
     >,
 ) {
     let now = time.elapsed_secs_f64();
-    for (entity, has_map, is_stale) in &changed {
+    for (entity, has_map, is_stale, is_baking) in &changed {
         // An un-shadowed terrain's FIRST bake is handled by the bake system; only
-        // (re)arm terrains that already have a horizon map or a pending debounce.
-        if !has_map && !is_stale {
+        // (re)arm terrains that already have a horizon map, a pending debounce, or a
+        // bake IN FLIGHT.
+        //
+        // `is_baking` matters: `start_streamed_horizon_bakes` removes the stale marker
+        // when it starts, so while the task runs an edited terrain has no map AND no
+        // marker — this used to `continue`, the bake then installed a map from the
+        // PRE-EDIT oracle snapshot, and nothing ever re-armed. Brush a crater ~0.8 s
+        // into a multi-second bake and the far-field sun-visibility cache stayed wrong
+        // for the whole session.
+        if !has_map && !is_stale && !is_baking {
             continue;
         }
         let mut e = commands.entity(entity);

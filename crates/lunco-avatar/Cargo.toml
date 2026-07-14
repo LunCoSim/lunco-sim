@@ -4,11 +4,23 @@ version = "0.6.0-dev"
 edition = "2021"
 
 [dependencies]
-bevy = { workspace = true }
-# Tool execution adapter — the avatar-crate's science instruments (e.g.
-# `take_photo`) register as closure tools whose `execute()` fires typed commands
-# (`CaptureFromCamera`) directly via `ctx.world()`. No JSON, no reflection.
-lunco-tools-bevy = { path = "../lunco-tools-bevy" }
+# RENDER-FREE. `bevy_camera` gives `Camera` / `Projection` / `Visibility` /
+# `RenderLayers`, `bevy_light` the lights, `bevy_mesh` `Mesh3d` — none of them pulls
+# `bevy_render`. There is no `bevy_pbr` / `bevy_core_pipeline` here and there must
+# not be: the camera *pipeline* (`Camera3d`, tonemapping, MSAA, bloom) is attached by
+# `lunco-render-bevy` from the `lunco_render::SceneCamera` intent this crate spawns.
+#
+# `screenshot.rs` was DELETED for the same reason: a render-world readback has no
+# render-free form. Its dead `CaptureScreenshot` duplicate is gone, and the live
+# `CaptureFromCamera` (the `science::take_photo` instrument) moved WITH its observer
+# and its tool registration to `lunco-workbench::screenshot`, which is where the one
+# `CaptureScreenshot` lives — a binary that cannot render cannot photograph, and now
+# says so by simply not registering the command.
+# See docs/architecture/render-decoupling.md.
+bevy = { workspace = true, features = ["bevy_camera", "bevy_light", "bevy_mesh"] }
+# Camera INTENT: `SceneCamera` — "this entity is the scene camera, and this is how it
+# should look" — stated without naming a render pipeline.
+lunco-render = { path = "../lunco-render" }
 # egui + the workbench/theme shell are used ONLY by `src/ui/` (AvatarUiPlugin).
 # Optional so consumers that need just the camera components (e.g. lunco-usd-sim
 # on a headless server) build with `default-features = false` → no egui→winit.

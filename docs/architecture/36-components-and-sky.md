@@ -209,7 +209,7 @@ camera-distance vs tile arc-size in `update_globe_lod`. Two ways to get "coarse 
 Today the body list is a **hardcoded Rust `vec!`** (`registry.rs default_system()`) and the
 Earth/Moon spawn **bypasses several registry fields with inline literals** (name/id/radius
 hardcoded; texture hardcoded, ignoring `BodyDescriptor.texture_path`). There is **no
-celestial↔USD bridge** — a plain USD `Sphere` prim imports as a static StandardMaterial
+celestial↔USD bridge** — a plain USD `Sphere` prim imports as a static `PbrLook`
 sphere, *not* the `GlobeLod` globe. So moving Earth into USD is a clean, worthwhile refactor
 but it is **new work**, not a config change.
 

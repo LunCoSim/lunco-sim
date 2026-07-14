@@ -261,15 +261,27 @@ fn record_control_input(
         }
     }
     if role.is_host() {
-        // Host ack: highest applied seq per gid, stamped into snapshots so the
-        // owning client can drop acked inputs.
-        let slot = applied.0.entry(g).or_insert(0);
-        *slot = (*slot).max(cmd.seq);
+        let owner = reg.owner_of(g);
         // Queue a REMOTE-owned rover's forwarded input for per-tick application, so
         // the host integrates the same input sequence one-per-tick as the client
         // predicted (its own drives — owner == host — apply immediately, unbuffered).
-        if cmd.seq != 0 && reg.owner_of(g).is_some_and(|o| o != local.0) {
+        if cmd.seq != 0 && owner.is_some_and(|o| o != local.0) {
+            // ACK DISCIPLINE (review N2): do NOT ack here. This observer runs on the
+            // RENDER clock (`drain_sync_inbox` is in `Update`), so a host whose
+            // `Update` is slower than its `FixedUpdate` drains K of the client's
+            // per-tick `SetPorts` in one frame. Acking `max(seq)` here claimed all K
+            // were applied while physics had integrated only the one that
+            // `apply_buffered_client_inputs` consumes this fixed tick — the client
+            // then dropped K−1 predicted frames it had actually simulated, and the
+            // divergence scaled with input VARIABILITY (i.e. showed up on turns and
+            // stops: the "post-turn oscillation"). The ack is now stamped by the
+            // consumer, from the seq it really integrated.
             buffered.push(g, cmd.seq, cmd.writes.clone());
+        } else {
+            // Host-local / API drive: applied straight to the ports, so the ack is
+            // immediate. `record` binds the slot to its owner and rejects an
+            // implausible seq jump (review N1).
+            applied.record(g, owner, cmd.seq);
         }
         return;
     }
@@ -371,6 +383,174 @@ pub fn build_avatar_input_map(json: &str) -> leafwing_input_manager::prelude::In
 /// to rebind.
 pub fn get_avatar_input_map() -> leafwing_input_manager::prelude::InputMap<lunco_core::UserIntent> {
     build_avatar_input_map(KEYBINDINGS_JSON)
+}
+
+#[cfg(test)]
+mod input_ack_tests {
+    use super::*;
+    use lunco_core::{
+        AppliedInputSeq, BufferedClientInputs, GlobalEntityId, LocalDriveInput, LocalSession,
+        NetworkRole, OwnedInputLog, SessionId, SessionRegistry, SimTick,
+    };
+
+    const HOST: SessionId = SessionId(0);
+    const CLIENT_A: SessionId = SessionId(11);
+    const CLIENT_B: SessionId = SessionId(22);
+
+    /// A host app carrying just the substrate `record_control_input` touches, plus
+    /// the observer itself — no physics, no wire.
+    fn host_app(owner: SessionId, gid: u64) -> (App, Entity) {
+        let mut app = App::new();
+        app.insert_resource(NetworkRole::Host)
+            .insert_resource(LocalSession(HOST))
+            .init_resource::<SimTick>()
+            .init_resource::<OwnedInputLog>()
+            .init_resource::<AppliedInputSeq>()
+            .init_resource::<LocalDriveInput>()
+            .init_resource::<BufferedClientInputs>()
+            .init_resource::<SessionRegistry>();
+        app.world_mut()
+            .resource_mut::<SessionRegistry>()
+            .claim(owner, gid)
+            .expect("claim");
+        app.add_observer(record_control_input);
+        let e = app.world_mut().spawn(GlobalEntityId::from_raw(gid)).id();
+        (app, e)
+    }
+
+    fn drive(app: &mut App, target: Entity, seq: u32, steer: f64) {
+        app.world_mut().trigger(lunco_cosim::SetPorts {
+            target,
+            writes: vec![("steer".to_string(), steer)],
+            seq,
+            tick: seq as u64,
+        });
+        app.update();
+    }
+
+    /// The host's fixed-tick consumer, in miniature: exactly what
+    /// `apply_buffered_client_inputs` (lunco-sandbox-edit) does to the ack.
+    fn integrate_one_fixed_tick(app: &mut App, gid: u64) {
+        let owner = app.world().resource::<SessionRegistry>().owner_of(gid);
+        let mut buf = app.world_mut().resource_mut::<BufferedClientInputs>();
+        let consumed = buf.next_for_tick(gid, 8).is_some();
+        let cursor = buf.cursor(gid);
+        if consumed {
+            app.world_mut()
+                .resource_mut::<AppliedInputSeq>()
+                .record(gid, owner, cursor);
+        }
+    }
+
+    /// **N2 — the host must not ack input it has not integrated.** The wire is drained
+    /// on the RENDER clock, so one frame can deliver K of the client's per-fixed-tick
+    /// `SetPorts`; physics runs ONE per fixed tick. The old code stamped `max(seq)`
+    /// into the snapshot the moment the command arrived — claiming all K applied.
+    /// The client then dropped K−1 predicted frames it had genuinely simulated, and
+    /// the resulting divergence scaled with how much the input CHANGED across them:
+    /// i.e. it appeared on turns and stops. That is the reported "post-turn
+    /// oscillation", and the widened reconcile dead-zone was a band-aid over it.
+    #[test]
+    fn host_acks_only_the_input_it_actually_integrated() {
+        let gid = 0xBEEF_0001;
+        let (mut app, e) = host_app(CLIENT_A, gid);
+
+        // One slow render frame delivers three ticks of a TURN (steer sweeping).
+        drive(&mut app, e, 1, 0.0);
+        drive(&mut app, e, 2, 0.5);
+        drive(&mut app, e, 3, 1.0);
+
+        // Nothing has been integrated yet — physics has not run a fixed tick.
+        assert_eq!(
+            app.world().resource::<AppliedInputSeq>().ack(gid),
+            0,
+            "receiving an input is not applying it (this was `max(seq)` = 3)"
+        );
+        assert_eq!(
+            app.world().resource::<BufferedClientInputs>().pending[&gid].len(),
+            3,
+            "all three inputs are queued for per-tick consumption"
+        );
+
+        // Each fixed tick integrates exactly one, and the ack follows it.
+        for expected in 1..=3u32 {
+            integrate_one_fixed_tick(&mut app, gid);
+            assert_eq!(
+                app.world().resource::<AppliedInputSeq>().ack(gid),
+                expected,
+                "the ack must name the seq physics ran on tick {expected}"
+            );
+        }
+    }
+
+    /// **N1 — the bug users hit in ordinary play.** Client A drives the rover to a
+    /// high `seq` and releases; client B possesses it and starts from `seq = 1`. The
+    /// gid-only watermark kept stamping A's 5000 into every snapshot, which B's
+    /// reconcile latched as `last_reconciled` — after which every ack from B's own
+    /// stream was `<=` it and reconciliation early-returned FOREVER. B's rover then
+    /// drifts, unreconciled, with no attacker and no packet loss involved.
+    #[test]
+    fn repossession_resets_the_ack_so_the_new_owner_is_reconciled() {
+        let gid = 0xBEEF_0002;
+        let (mut app, e) = host_app(CLIENT_A, gid);
+
+        // A drives a long way into its seq stream (and the host integrates it).
+        for seq in 1..=50u32 {
+            drive(&mut app, e, seq, 1.0);
+            integrate_one_fixed_tick(&mut app, gid);
+        }
+        assert_eq!(app.world().resource::<AppliedInputSeq>().ack(gid), 50);
+
+        // A releases, B possesses — the ownership table changed, so the host re-keys
+        // its watermarks (`sync_applied_seq_owners`, LunCoCorePlugin/FixedFirst).
+        {
+            let mut reg = app.world_mut().resource_mut::<SessionRegistry>();
+            reg.release_session(CLIENT_A);
+            reg.claim(CLIENT_B, gid).expect("B claims the rover");
+        }
+        app.add_systems(FixedFirst, lunco_core::sync_applied_seq_owners);
+        app.world_mut().run_schedule(FixedFirst);
+
+        assert_eq!(
+            app.world().resource::<AppliedInputSeq>().ack(gid),
+            0,
+            "the snapshot must stop advertising the PREVIOUS owner's seq the moment \
+             the vessel changes hands — otherwise B latches it and never reconciles again"
+        );
+
+        // B's stream starts at 1 and is acked from there — reconciliation lives.
+        drive(&mut app, e, 1, 0.3);
+        integrate_one_fixed_tick(&mut app, gid);
+        assert_eq!(app.world().resource::<AppliedInputSeq>().ack(gid), 1);
+        drive(&mut app, e, 2, 0.6);
+        integrate_one_fixed_tick(&mut app, gid);
+        assert_eq!(app.world().resource::<AppliedInputSeq>().ack(gid), 2);
+    }
+
+    /// A hostile/corrupt `SetPorts { seq: u32::MAX }` must not poison the gid — for
+    /// this owner or any future one. Under the old rule nothing could ever exceed the
+    /// watermark again, so no ack was ever "new" and the owner's reconcile
+    /// early-returned for the life of the process.
+    #[test]
+    fn a_wild_seq_cannot_poison_the_vessel() {
+        let gid = 0xBEEF_0003;
+        let (mut app, e) = host_app(CLIENT_A, gid);
+        drive(&mut app, e, 1, 0.0);
+        integrate_one_fixed_tick(&mut app, gid);
+
+        drive(&mut app, e, u32::MAX, 1.0);
+        integrate_one_fixed_tick(&mut app, gid);
+        assert_eq!(
+            app.world().resource::<AppliedInputSeq>().ack(gid),
+            1,
+            "u32::MAX must never become the watermark"
+        );
+
+        // …and the vessel still works: the next genuine input is consumed and acked.
+        drive(&mut app, e, 2, 0.2);
+        integrate_one_fixed_tick(&mut app, gid);
+        assert_eq!(app.world().resource::<AppliedInputSeq>().ack(gid), 2);
+    }
 }
 
 #[cfg(test)]

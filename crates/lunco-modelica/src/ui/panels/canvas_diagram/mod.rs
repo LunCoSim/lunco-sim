@@ -56,7 +56,6 @@ mod ops;
 mod panel;
 pub use theme::CanvasThemeSnapshot;
 pub use panel::CanvasDiagramPanel;
-pub(crate) use panel::invalidate_port_icon_cache;
 // `__register_on_auto_arrange_diagram` is the registrar `#[on_command]` generates
 // next to the handler; `register_commands!` in `ui::commands` names the observer by
 // path, so the generated helper has to travel with it through this re-export.
@@ -133,7 +132,6 @@ fn build_registry() -> VisualRegistry {
             port_connector_paths: d.port_connector_paths.clone(),
             port_connector_icons: d.port_connector_icons.clone(),
             is_conditional: d.is_conditional,
-            parent_qualified_type: d.qualified_type.clone(),
         }
     });
     reg.register_edge_kind("modelica.connection", |data: &lunco_canvas::NodeData| {

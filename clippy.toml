@@ -7,66 +7,80 @@
 # under `[workspace.lints.clippy]` (currently `disallowed_methods =
 # "deny"`); this file only enumerates the banned symbols.
 #
-# Why a workspace-wide ban list at all? Because every entry below is a
-# foot-gun whose failure mode is **wasm-only** — code compiles, tests
-# pass on native, then the browser binary either silently no-ops or
-# panics at runtime. Catching it at PR time via `cargo clippy --workspace`
-# is much cheaper than catching it from a user bug report ("the red
-# ball doesn't fly").
+# TWO CONFIGS, BY DESIGN. This file is the NATIVE run. The wasm-portability
+# bans (`std::fs::*`, `std::thread::spawn`, `std::time::Instant::now`) live in
+# `ci/wasm-lint/clippy.toml` and are applied by the `wasm-lint` CI job with
+# `--target wasm32-unknown-unknown`.
 #
-# Allow-list. Three classes of crate legitimately need raw fs/thread/
-# instant access and override the workspace lint locally with
-# `#![allow(clippy::disallowed_methods)]` at the top of `lib.rs` (or
-# `main.rs` for binaries):
+# Why the split — this is the whole reason clippy was unusable here. Those three
+# bans exist to catch code that compiles on native and then no-ops or panics in
+# the browser. But checking them ON NATIVE is checking them in the one place they
+# cannot be true:
 #
-#   * lunco-assets             — owns the on-disk asset cache layout
-#   * lunco-storage            — owns local-fs persistence (native only)
-#   * build scripts (*build.rs)— run at compile time on the host
-#   * `tests/` modules         — test fixtures live on disk
-#   * native-only binaries     — `lunica`, `sandbox`, etc. (the wasm
-#                                pair lives in `lunica` /
-#                                `sandbox` and uses AssetServer).
+#   * `std::fs` / `std::thread` — the overwhelming majority of call sites are
+#     already inside `#[cfg(not(target_arch = "wasm32"))]`, where using them is
+#     CORRECT. Native clippy sees that code anyway and flags it.
+#   * `std::time::Instant::now` — worse: `web_time` supplies its native impl via
+#     `pub use std::time::*`, so on native `web_time::Instant` IS
+#     `std::time::Instant` (same DefId). Clippy resolves through the re-export
+#     and flags every *correct* `web_time` caller. That was 73 hits in
+#     lunco-modelica alone, all false, none true.
 #
-# Adding new entries to the allow-list requires PR review; the override
-# is local (a single `#![allow(...)]`), so reviewers can see and
-# challenge each escape.
+# On the wasm target all three become exact: `cfg` strips the native-only code
+# before clippy sees it, and `web_time::Instant` is a distinct type. The ban then
+# fires only on code that will actually break in a browser — which is how
+# `lunco-modelica/src/indexer.rs` was caught importing `std::time::Instant` into
+# an unconditional `pub mod` that ships to the web.
+#
+# A lint that is wrong every time it fires is a lint people silence, and a
+# silenced lint is how this hole stayed open. So: enforce each ban where it is
+# true, and nowhere else.
+#
+# What remains BELOW is banned on native because it is genuinely wrong on native:
+# the big_space re-parenting atomicity contract, and the USD stage deep-clone.
+#
+# Local overrides (`#[allow(clippy::disallowed_methods)]`) still apply and still
+# require review — but they should now be rare, and each one should say why.
 
 disallowed-methods = [
-    # ── Filesystem I/O ────────────────────────────────────────────────
-    # wasm32 returns `Err("operation not supported on this platform")`
-    # from every fs read. Domain code must route asset reads through
-    # `bevy::asset::AssetServer::load(...)` so the same call works on
-    # native (default `assets/` source) and wasm (HTTP fetch).
-    { path = "std::fs::read",            reason = "Use bevy::asset::AssetServer::load — std::fs is wasm-incompatible" },
-    { path = "std::fs::read_to_string",  reason = "Use bevy::asset::AssetServer::load — std::fs is wasm-incompatible" },
-    { path = "std::fs::File::open",      reason = "Use bevy::asset::AssetServer::load — std::fs is wasm-incompatible" },
-    { path = "std::fs::write",           reason = "Use lunco-storage for persistence — std::fs is wasm-incompatible" },
-
-    # ── Threading ────────────────────────────────────────────────────
-    # wasm32-unknown-unknown has no pthread support. `std::thread::spawn`
-    # panics. Off-thread work goes through a Web Worker bundle on wasm
-    # (see lunica_worker) or `AsyncComputeTaskPool` (which is main-thread
-    # on wasm, see `lunco-workbench` tracked-task helpers for the
-    # cross-platform wrapper).
-    { path = "std::thread::spawn",       reason = "Use AsyncComputeTaskPool / Web Worker — std::thread panics on wasm" },
+    # ── Filesystem I/O and Threading — NOT BANNED HERE ────────────────
+    # `std::fs::*` fails and `std::thread::spawn` panics on wasm32. Both are
+    # real foot-guns, but banning them on the NATIVE target is the wrong place
+    # to catch them: most call sites are already inside
+    # `#[cfg(not(target_arch = "wasm32"))]` blocks, where using `std::fs` is
+    # not just allowed but CORRECT — and clippy sees them anyway on native, so
+    # the ban fires on code that can never reach a browser.
+    #
+    # They are enforced instead by the `wasm-lint` CI job
+    # (`.github/workflows/lint.yml`, config `ci/wasm-lint/clippy.toml`), which
+    # runs clippy with `--target wasm32-unknown-unknown`. There, `cfg` strips
+    # the native-only code before clippy ever sees it, so the ban fires ONLY on
+    # code that genuinely ships to the browser. Same rule, no false positives,
+    # and no `#[allow]` sprinkled through correct native code.
+    #
+    # Everything BELOW this line is a ban that is real on native too, which is
+    # why it lives here.
 
     # ── Time ─────────────────────────────────────────────────────────
-    # `std::time::Instant::now()` panics on wasm32-unknown-unknown.
-    # `web_time::Instant` is a drop-in that uses `performance.now()` on
-    # wasm and `std::time::Instant` on native.
+    # `std::time::Instant::now()` panics on wasm32-unknown-unknown;
+    # `web_time::Instant` is the drop-in (`performance.now()` on wasm,
+    # `std::time::Instant` on native).
     #
-    # ⚠️ FREQUENT FALSE POSITIVE on the *native* target: `web_time`
-    # achieves its native impl via `pub use std::time::*`, so on native
-    # `web_time::Instant` IS `std::time::Instant` (same DefId). clippy
-    # resolves through the re-export, so it flags *correct* code that
-    # already uses `web_time::Instant` (e.g. `lunco-workbench`'s
-    # status_bus). There is no way to distinguish the two on native — the
-    # ban only reads true on `--target wasm32-unknown-unknown`, where
-    # `web_time::Instant` is a distinct struct. So: treat native hits here
-    # as noise *if* the call site imports `web_time::Instant`; only a
-    # literal `std::time::Instant::now` written out is a real bug. Kept
-    # for the wasm-target run and as a documentation signpost.
-    { path = "std::time::Instant::now",  reason = "Use web_time::Instant — std::time::Instant panics on wasm (NOTE: false-positives on native for web_time users; see comment above)" },
+    # DELIBERATELY NOT BANNED HERE — it is unenforceable on the native
+    # target. `web_time` provides its native impl via `pub use std::time::*`,
+    # so on native `web_time::Instant` IS `std::time::Instant` (same DefId)
+    # and clippy resolves straight through the re-export. Listing it here
+    # produced **73 hits in lunco-modelica alone, every one of them a false
+    # positive on code that already does the right thing**, and zero true
+    # positives. A lint that is wrong every single time is a lint people
+    # silence — which is exactly how it went unnoticed that `indexer.rs` was
+    # importing `std::time::Instant` into a wasm-shipped module.
+    #
+    # It IS enforced, precisely, by the `wasm-lint` job in
+    # `.github/workflows/lint.yml`, which runs clippy with
+    # `--target wasm32-unknown-unknown`. There the two types are genuinely
+    # distinct, so the ban fires on real bugs only. See that job for the
+    # `disallowed-methods` entry it applies.
 
     # ── Atomic re-parenting of big_space `GridAnchor` entities ─────────
     # Splitting `(ChildOf, CellCoord, Transform)` writes across separate

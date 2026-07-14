@@ -215,32 +215,53 @@ pub struct DespawnReplicationMsg {
     pub gid: u64,
 }
 
-/// Host → a freshly-connected client: your **server-assigned** session id, the
-/// current tick, and a server-issued auth token. The session id is allocated from
-/// server entropy (the client cannot pick or guess it — review H4/H5); the token
-/// is the credential the client holds to prove it owns this session (review M2).
+/// The wire-format version, checked in the handshake (review N4).
+///
+/// **Why this exists.** The envelope codec is `bincode` — positional and NOT
+/// self-describing. A peer built against a different field layout does not fail to
+/// decode; it decodes *wrong*, field-for-field. A stale cached wasm bundle against
+/// a fresh host mis-reads `SnapshotEntry` and the garbage `cell` it lands on is
+/// multiplied by `cell_edge` in [`compose_cell_pos`] — **every body teleports by
+/// kilometres**, silently, with no error anywhere. The enum-discriminant tests
+/// below lock variant ORDER; nothing detected field-layout skew until this.
+///
+/// **BUMP THIS whenever any wire type's field layout changes** — a field added,
+/// removed, reordered, or retyped in `SyncEnvelope` or anything it transitively
+/// contains. Appending a new `SyncEnvelope` *variant* at the end is the one
+/// backward-compatible edit and does not require a bump (see the note on the enum).
+///
+/// The handshake is the host's first reliable message, so a mismatched peer is
+/// rejected before it can apply a single snapshot.
+pub const WIRE_VERSION: u32 = 1;
+
+/// Host → a freshly-connected client: the **wire version**, your **server-assigned**
+/// session id, and the current tick. The session id is allocated from server entropy
+/// (the client cannot pick or guess it — review H4/H5).
+///
+/// The former `token` field is **gone** (review N6): it was stored by the client and
+/// never read again by any code path. Authority is bound to the CONNECTION (the host
+/// attributes every inbound envelope to the server-assigned session of the socket it
+/// arrived on, never to a value from the wire), so the token proved nothing and only
+/// made the security posture look stronger than it is. The host still issues a token
+/// into its own `SessionRbac` — that one IS read, by `is_authorized`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HandshakeMsg {
     pub session: u64,
     pub tick: u64,
-    pub token: String,
-}
-
-/// Client-side store for the server-issued auth token received in the handshake.
-/// Empty on host/standalone. Held as proof-of-possession of the server-assigned
-/// session for a future challenge/elevation path (review M2).
-#[derive(Resource, Default, Clone, Debug)]
-pub struct SessionCredential {
-    pub token: Option<String>,
+    /// Sender's [`WIRE_VERSION`]. A client whose value differs refuses the session.
+    pub wire_version: u32,
 }
 
 /// Low-use resources bundled so [`drain_sync_inbox`] stays within Bevy's
-/// 16-param ceiling: the client's session-credential store (handshake), the clock
-/// (tutor-status timestamps), and the per-command/-capability authorization policy
-/// registry (relay gates).
+/// 16-param ceiling: the clock (tutor-status timestamps), the per-command/-capability
+/// authorization policy registry (relay gates), the AOI view centers, the world grid
+/// config, and the client's scenario-manifest stash.
+///
+/// (It no longer carries a client-side session-credential store: that resource was
+/// deleted in review N6 — the client stored the handshake token and never read it
+/// back, while authority is bound to the CONNECTION. See [`HandshakeMsg`].)
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct InboundClientCtx<'w> {
-    credential: ResMut<'w, SessionCredential>,
     time: Res<'w, Time>,
     command_policies: Res<'w, lunco_core::session::CommandPolicyRegistry>,
     // Host-side AOI view centers, updated from inbound `ViewCenter` reports (B4 Phase 1).
@@ -589,6 +610,13 @@ pub enum SyncEnvelope {
     // Host → client: ephemeral experiment run-status (presence plane). Appended
     // LAST (positional-codec rule) — a stale peer never sends/handles it.
     RunStatus(RunStatusMsg),
+    // Host → client: a CHUNK of the connect-time journal replay (review N5).
+    // Appended LAST (positional-codec rule). One envelope per journal entry on a
+    // reliable, unbounded-queue channel was the shape that put a 982-entry twin's
+    // whole history into the send queue at connect — exactly when the client needs
+    // its ownership/manifest frames. `replay_journal_chunks` (server.rs) meters
+    // these out under a per-frame budget instead.
+    JournalBatch(Vec<crate::journal_plane::JournalEntryMsg>),
 }
 
 // ── Resources (the contract `lunco-networking` touches) ───────────────────────
@@ -1148,15 +1176,26 @@ pub fn drain_sync_inbox(
             }
             SyncEnvelope::Handshake(h) => {
                 if !role.is_host() {
+                    // WIRE-VERSION GATE (review N4). bincode is positional: a peer
+                    // built against a different field layout decodes every later
+                    // message WRONG rather than failing — a mis-read `cell` times
+                    // `cell_edge` teleports every body by kilometres. Refuse the
+                    // session loudly instead of rendering a corrupt world. The
+                    // handshake is the first reliable message, so nothing has been
+                    // applied yet.
+                    if h.wire_version != WIRE_VERSION {
+                        error!(
+                            "[net] WIRE VERSION MISMATCH — host speaks v{}, this build speaks v{}. \
+                             Refusing the session: the codec is positional, so continuing would \
+                             silently mis-decode every snapshot (bodies teleporting by kilometres). \
+                             Update the client (a stale cached web bundle is the usual cause).",
+                            h.wire_version, WIRE_VERSION
+                        );
+                        commands.trigger(crate::client::LeaveServer {});
+                        continue;
+                    }
                     local.0 = SessionId(h.session);
                     tick.0 = h.tick;
-                    // Hold the server-issued token. The host already binds this
-                    // client's authority to its connection (the inbound sender is the
-                    // server-assigned session, never a value from the wire), so the
-                    // token is the client's proof-of-possession for a future
-                    // challenge/elevation path — stored now so the handshake field is
-                    // load-bearing rather than dead.
-                    ctx.credential.token = Some(h.token);
                     // NOTE: the journal author is NOT (re)stamped here anymore. It's
                     // set once at startup to a stable per-install id
                     // (`journal_plane::stamp_local_journal_author`) so a peer's own
@@ -1499,6 +1538,28 @@ pub fn drain_sync_inbox(
                     ctx.pending_run_status.0.push(msg);
                 }
             }
+            SyncEnvelope::JournalBatch(msgs) => {
+                // Chunked connect-time replay (review N5) — identical semantics to
+                // `JournalEntry`, N entries per envelope. Same capability gate: a
+                // batch is not a way around `JournalEdit`.
+                if !authed_for_capability(
+                    &role,
+                    &rbac,
+                    &ctx.command_policies,
+                    sender,
+                    lunco_core::session::capability::JOURNAL_EDIT,
+                ) {
+                    warn!(
+                        "[journal-plane] rejected journal batch ({} entries) from unauthorized \
+                         session {sender}",
+                        msgs.len()
+                    );
+                } else if let Some(journal) = ctx.journal.as_ref() {
+                    for msg in &msgs {
+                        crate::journal_plane::apply_inbound_entry(journal, msg);
+                    }
+                }
+            }
         }
     }
 }
@@ -1515,7 +1576,10 @@ pub fn gather_snapshot(
     mut last_sent: Local<HashMap<u64, PoseDigest>>,
     // gids currently emitting a non-finite pose; warn once per gid, clear on recovery.
     mut nonfinite_warned: Local<HashSet<u64>>,
-    applied: Res<AppliedInputSeq>,
+    // `ResMut` for the prune at the bottom: the ack watermarks are keyed by gid and
+    // gids are never reused, so without it the map grows by one slot per despawned
+    // vessel forever on a long-lived host (review N1, failure C).
+    mut applied: ResMut<AppliedInputSeq>,
     q: Query<
         (
             &GlobalEntityId,
@@ -1604,7 +1668,7 @@ pub fn gather_snapshot(
         // Keying on `last_input_seq` too ships the ack even when the pose is
         // unchanged, so client prediction can't silently diverge during the stall
         // and then pop on motion resume.
-        let last_input_seq = applied.0.get(&key).copied().unwrap_or(0);
+        let last_input_seq = applied.ack(key);
         let entry = SnapshotEntry {
             gid: key,
             pos_q,
@@ -1637,6 +1701,10 @@ pub fn gather_snapshot(
     last_sent.retain(|k, _| live.contains(k));
     nonfinite_warned.retain(|k| live.contains(k));
     repl.entries.retain(|k, _| live.contains(k));
+    // The input-ack watermarks are pruned on the SAME live set (review N1, failure
+    // C): they were the one per-gid map this sweep didn't cover, so a host with
+    // spawn/despawn churn leaked a slot per dead vessel for the life of the process.
+    applied.retain_gids(|k| live.contains(&k));
     // Phase 2: prune the spawn catalog the same way (gids are never reused). A
     // despawned NetSpawn body leaving here means the assembler will re-`Spawn` it for
     // a peer only if a NEW gid is later minted — correct, since the old proxy was
@@ -1654,6 +1722,12 @@ pub fn gather_snapshot(
 /// The per-peer assembler (`assemble_and_send_snapshots`) chunks each peer's batch at
 /// this bound.
 pub const MAX_SNAPSHOT_ENTRIES: usize = 20;
+
+/// Upper bound on the gids a peer with **no view center** is fed (review N5). Big
+/// enough that an ordinary scene is unaffected (the fail-open stays a true fail-open
+/// for the first ~200 ms of a connect); small enough that a large scene cannot blast
+/// full-scene replication at a peer the host knows nothing about.
+pub const FAIL_OPEN_CAP: usize = 200;
 
 /// Pure AOI interest computation — the per-peer relevance rule of [`recompute_interest`],
 /// extracted so it's unit-testable without a Bevy `App`/`Time`/throttle. For each
@@ -1695,7 +1769,26 @@ pub(crate) fn compute_interest_sets(
             .find_map(|g| positions.get(g).copied())
             .or_else(|| view_centers.get(&session).copied());
         let Some(c) = center else {
-            next.insert(session, all.clone()); // fail-open
+            // FAIL-OPEN, BUT BOUNDED (review N5). A peer with no view center gets
+            // "everything" — and that is the state for the first ~200 ms of EVERY
+            // connect, and PERMANENTLY for a free observer whose `ViewCenter` reports
+            // are dropped (they ride the lossy `ControlStream`). Unbounded, that
+            // silently reinstates full-scene replication for the peer that can least
+            // afford it. Cap the fail-open set: keep at most `FAIL_OPEN_CAP` gids,
+            // chosen by gid order so the choice is deterministic across peers and
+            // recomputes (there is no center to be "nearest" to — that is the whole
+            // problem — so distance cannot rank them). The peer's real set lands on
+            // its next recompute, the moment a center exists.
+            let mut set: HashSet<u64> = if all.len() <= FAIL_OPEN_CAP {
+                all.clone()
+            } else {
+                let mut gids: Vec<u64> = all.iter().copied().collect();
+                gids.sort_unstable();
+                gids.into_iter().take(FAIL_OPEN_CAP).collect()
+            };
+            // The peer's own vessels are never culled, cap or no cap.
+            set.extend(owned.iter().copied());
+            next.insert(session, set);
             continue;
         };
         let prev_set = prev.get(&session);
@@ -2857,7 +2950,6 @@ impl Plugin for SyncPlugin {
             .init_resource::<CursorSettings>()
             .init_resource::<TutorialSettings>()
             .init_resource::<TutorStatusResource>()
-            .init_resource::<SessionCredential>()
             .init_resource::<Presence>()
             // B4 interest management: persistent per-gid state (written by
             // `gather_snapshot`) + per-peer interest sets (written by
@@ -3122,12 +3214,67 @@ mod codec_roundtrip {
         assert_eq!(discriminant_of(&SyncEnvelope::Handshake(HandshakeMsg {
             session: 1,
             tick: 2,
-            token: String::new(),
+            wire_version: WIRE_VERSION,
         })), 3, "Handshake discriminant moved");
         assert_eq!(
             discriminant_of(&SyncEnvelope::Despawn(DespawnReplicationMsg { gid: 9 })),
             11,
-            "Despawn must be the last variant"
+            "Despawn must not move (it is no longer last — see `JournalBatch`)"
+        );
+    }
+
+    /// **Review N4 — the wire has a version now, because the codec is positional.**
+    /// `bincode` does not fail on a field-layout mismatch; it decodes WRONG, field for
+    /// field. A stale cached wasm bundle against a fresh host mis-reads
+    /// `SnapshotEntry`, and the garbage `cell` it lands on is multiplied by
+    /// `cell_edge` — every body teleports by kilometres, silently. The discriminant
+    /// tests above lock variant ORDER; nothing detected field-layout skew at all.
+    ///
+    /// This test locks the two halves of the fix: the handshake CARRIES the version
+    /// through the codec, and a peer speaking a different one is detectable (the
+    /// client refuses the session in `drain_sync_inbox`).
+    #[test]
+    fn handshake_carries_the_wire_version_and_detects_skew() {
+        let env = SyncEnvelope::Handshake(HandshakeMsg {
+            session: 42,
+            tick: 7,
+            wire_version: WIRE_VERSION,
+        });
+        let back = deserialize_env(&serialize_env(&env).expect("serialize")).expect("deserialize");
+        match back {
+            SyncEnvelope::Handshake(h) => {
+                assert_eq!(h.session, 42);
+                assert_eq!(h.tick, 7);
+                assert_eq!(h.wire_version, WIRE_VERSION, "the version must survive the codec");
+            }
+            _ => panic!("wrong variant after round-trip"),
+        }
+
+        // A peer from a different build is refused rather than mis-decoding forever.
+        let stale = HandshakeMsg { session: 1, tick: 0, wire_version: WIRE_VERSION - 1 };
+        assert_ne!(
+            stale.wire_version, WIRE_VERSION,
+            "a version-skewed handshake must be distinguishable — this is the check \
+             `drain_sync_inbox` makes before it applies a single message"
+        );
+    }
+
+    /// The chunked journal replay (review N5) rides a NEW envelope variant, appended
+    /// last so no existing discriminant shifts.
+    #[test]
+    fn journal_batch_is_appended_last() {
+        let last = discriminant_of(&SyncEnvelope::JournalBatch(Vec::new()));
+        let run_status = discriminant_of(&SyncEnvelope::RunStatus(RunStatusMsg {
+            experiment_id: [0u8; 16],
+            phase: 0,
+            t_current: 0.0,
+            wall_time_ms: 0,
+            error: String::new(),
+        }));
+        assert!(
+            last > run_status,
+            "JournalBatch must be appended AFTER every existing variant \
+             (positional codec): got {last} vs RunStatus {run_status}"
         );
     }
 
@@ -3508,6 +3655,78 @@ mod aoi {
             R_PRED,
         );
         assert_eq!(set, positions.keys().copied().collect::<HashSet<_>>(), "fail-open = all bodies");
+    }
+
+    /// **Review N5.** Fail-open must not mean "replicate the whole scene". It is the
+    /// state of every connect's first ~200 ms, and the PERMANENT state of a free
+    /// observer whose `ViewCenter` reports drop (they ride the lossy `ControlStream`)
+    /// — so on a large scene it silently reinstated full-scene replication for the
+    /// peer that can least afford it. It is now capped, deterministically, and the
+    /// peer's own vessels are still never culled.
+    #[test]
+    fn fail_open_is_capped_on_a_large_scene() {
+        let peer = SessionId(10);
+        let n = FAIL_OPEN_CAP as u64 * 3;
+        let mut positions: HashMap<u64, Vec3> =
+            (0..n).map(|g| (g, pos_at(g as f32 * 10.0))).collect();
+        // The peer owns one body way out past everything else.
+        let owned_gid = 999_999u64;
+        positions.insert(owned_gid, pos_at(1.0e6));
+
+        let set = interest_for(
+            peer,
+            &positions,
+            &HashSet::new(),
+            &[], // owns nothing *positioned* — see below; center still unknown…
+            &HashMap::new(), // …and no view report → fail-open
+            R_ENTER,
+            R_EXIT,
+            R_PRED,
+        );
+        assert!(
+            set.len() <= FAIL_OPEN_CAP,
+            "a centerless peer must not be fed the whole scene: {} > {FAIL_OPEN_CAP}",
+            set.len()
+        );
+        assert!(!set.is_empty(), "…but it must still see something (fail OPEN, not closed)");
+
+        // Determinism: the same world yields the same capped set every recompute
+        // (otherwise the peer would churn re-baselines).
+        let again = interest_for(
+            peer,
+            &positions,
+            &HashSet::new(),
+            &[],
+            &HashMap::new(),
+            R_ENTER,
+            R_EXIT,
+            R_PRED,
+        );
+        assert_eq!(set, again, "the capped fail-open set must be stable across recomputes");
+    }
+
+    /// The cap never costs a peer its OWN vessel — but note that owning a positioned
+    /// body gives the host a center, so this only bites for an owned body with no
+    /// known position. Force-include holds either way.
+    #[test]
+    fn fail_open_cap_never_drops_the_peers_own_vessels() {
+        let peer = SessionId(10);
+        let n = FAIL_OPEN_CAP as u64 * 2;
+        let positions: HashMap<u64, Vec3> = (0..n).map(|g| (g, pos_at(g as f32 * 10.0))).collect();
+        // Owned gid that has no entry in `positions` → no derivable center → fail-open.
+        let owned_gid = 888_888u64;
+        let set = interest_for(
+            peer,
+            &positions,
+            &HashSet::new(),
+            &[(owned_gid, peer.0)],
+            &HashMap::new(),
+            R_ENTER,
+            R_EXIT,
+            R_PRED,
+        );
+        assert!(set.contains(&owned_gid), "the peer's own vessel survives the cap");
+        assert!(set.len() <= FAIL_OPEN_CAP + 1);
     }
 
     #[test]

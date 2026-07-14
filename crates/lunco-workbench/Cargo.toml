@@ -5,6 +5,19 @@ edition = "2021"
 build = "build.rs"
 description = "LunCoSim's own workbench shell — activity bar, side browsers, central viewport, right inspector, bottom dock, status bar. Native replacement for bevy_workbench."
 
+[features]
+default = []
+# Screenshot capture. Enabled by any binary that serves the API (lunco-sandbox, lunica).
+api = ["dep:lunco-api", "dep:image"]  # `web-time` is already an unconditional dep
+
+# `screenshot.rs` (and hence `CaptureFromCamera`) is `#[cfg(feature = "api")]`, so its test
+# only compiles with that feature on. Without this the test target would fail to resolve the
+# module on a bare `cargo test -p lunco-workbench`; with it, run the test as
+# `cargo test -p lunco-workbench --features api`.
+[[test]]
+name = "capture_from_camera_test"
+required-features = ["api"]
+
 [dependencies]
 # `bevy_render` facade feature: `render_robustness.rs` names
 # `bevy::render::{RenderApp, RenderDevice, WgpuSettings, RenderStartup}`
@@ -16,6 +29,11 @@ description = "LunCoSim's own workbench shell — activity bar, side browsers, c
 # transitively.
 bevy = { workspace = true, features = ["bevy_render"] }
 bevy_egui = { workspace = true }
+# The screenshot backend (`screenshot.rs`). OPTIONAL: only a binary that actually serves the
+# API needs `CaptureScreenshot`, and `lunco-api` itself is now render-free BY CONSTRUCTION —
+# the GPU half is here, in the one crate every screenshot-taking binary already links.
+lunco-api = { path = "../lunco-api", optional = true, default-features = false }
+image = { workspace = true, optional = true }
 # Needed only to name `wgpu::Error` in the uncaptured-error handler
 # (`render_robustness.rs`). No version unification risk: `29` resolves to the
 # exact 29.0.x bevy already locks, so `RenderDevice::wgpu_device()` and our
@@ -32,6 +50,10 @@ egui_dock = { version = "0.20", features = ["serde"] }
 # `OpenFolder`, `OpenTwin`, ...) onto the same typed-command bus that
 # domain crates already use.
 lunco-core = { path = "../lunco-core" }
+# Tool-execution adapter. The `science::take_photo` instrument registers as a closure tool
+# whose body triggers the typed `CaptureFromCamera` directly (no JSON, no reflection). It is
+# registered HERE, next to that command's render-world observer — see `src/screenshot.rs`.
+lunco-tools-bevy = { path = "../lunco-tools-bevy" }
 lunco-time = { path = "../lunco-time" }
 lunco-doc = { path = "../lunco-doc" }
 # `SaveDocument` / `SaveAsDocument` / `CloseDocument` Command structs +

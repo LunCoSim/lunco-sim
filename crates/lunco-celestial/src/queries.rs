@@ -77,7 +77,9 @@ impl ApiQueryProvider for OccultationProvider {
         };
         let mut by: Option<String> = None;
         for b in reg.bodies.iter().filter(|b| b.radius_m > 0.0) {
-            let center = ecliptic_to_bevy(eph.provider.global_position(b.ephemeris_id, jd));
+            // A body we cannot place cannot block a line of sight.
+            let Some(p) = eph.provider.global_position(b.ephemeris_id, jd) else { continue };
+            let center = ecliptic_to_bevy(p).raw();
             if segment_hits_sphere(o, t, center, b.radius_m) {
                 by = Some(b.name.clone());
                 break;
@@ -117,7 +119,13 @@ impl ApiQueryProvider for BodyPositionProvider {
             .get_resource::<CelestialBodyRegistry>()
             .and_then(|r| r.bodies.iter().find(|b| b.ephemeris_id == naif).map(|b| b.radius_m))
             .unwrap_or(0.0);
-        let p = ecliptic_to_bevy(eph.provider.global_position(naif, jd));
+        let Some(p) = eph.provider.global_position(naif, jd) else {
+            return ApiResponse::error(
+                lunco_api::schema::ApiErrorCode::EntityNotFound,
+                format!("no ephemeris for NAIF {naif}"),
+            );
+        };
+        let p = ecliptic_to_bevy(p).raw();
         ApiResponse::ok(serde_json::json!({
             "found": true,
             "pos": [p.x, p.y, p.z],
@@ -186,14 +194,15 @@ impl ApiQueryProvider for SolarPoseProvider {
         ) else {
             return not_found();
         };
-        let center_of = |naif: i32| ecliptic_to_bevy(eph.provider.global_position(naif, jd));
+        let center_of = |naif: i32| eph.provider.global_position(naif, jd).map(ecliptic_to_bevy);
 
         // (pos, up, kind, body). A diverging branch early-returns.
         let (pos, up, kind, body) = if let Some(a) = anchor {
             let Some(desc) = reg.bodies.iter().find(|b| b.ephemeris_id == a.body) else {
                 return not_found();
             };
-            let center = center_of(a.body);
+            let Some(center) = center_of(a.body) else { return not_found() };
+            let center = center.raw();
             let pos = solar_position_of_geodetic(desc, &a.geodetic, center, jd);
             let up = (pos - center).normalize_or_zero();
             (pos, Some(up), "surface", a.body)
@@ -201,7 +210,8 @@ impl ApiQueryProvider for SolarPoseProvider {
             let Some(desc) = reg.bodies.iter().find(|b| b.ephemeris_id == o.body) else {
                 return not_found();
             };
-            let pos = center_of(o.body) + o.elements.position_bevy_m(desc.gm, jd);
+            let Some(center) = center_of(o.body) else { return not_found() };
+            let pos = center.raw() + o.elements.position_bevy_m(desc.gm, jd);
             (pos, None, "orbit", o.body)
         } else {
             return ApiResponse::ok(serde_json::json!({ "found": false, "reason": "scene_local" }));
@@ -227,8 +237,10 @@ impl ApiQueryProvider for SolarPoseProvider {
 /// tick), which is where connectivity policy belongs. Keys are the authored
 /// [`node_key`] (class, else Name).
 ///
-/// params: none. returns `{ nodes:[key], adj:{ key:[peer,…] }, edges:[{a,b,range_m}] }`
+/// params: none. returns
+/// `{ nodes:[key], adj:{ key:[peer,…] }, edges:[{a,b,range_m,light_time_s}] }`
 /// — `adj` lists only UP (connected) links; `edges` is the deduped undirected set.
+/// `light_time_s` is the one-way propagation delay (1.28 s Earth↔Moon).
 pub struct LinksProvider;
 
 impl ApiQueryProvider for LinksProvider {
@@ -252,6 +264,7 @@ impl ApiQueryProvider for LinksProvider {
                 if key <= peer.peer {
                     edges.push(serde_json::json!({
                         "a": key, "b": peer.peer, "range_m": peer.range_m,
+                        "light_time_s": peer.light_time_s,
                     }));
                 }
             }

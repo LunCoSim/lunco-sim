@@ -40,6 +40,28 @@ what's the atmospheric density profile, etc.). `Local*` components cache
 the computed value at each entity's current position each `FixedUpdate`.
 Consumers read `Local*` — they don't recompute from position.
 
+## Invariants
+
+**1. Nothing here is gated on rendering.** `lunco-environment` is **render-free** —
+it has no `render` feature and must not grow one ([`render-decoupling.md`](render-decoupling.md)).
+Gravity, the earthshine fill and **the sun feed** all run headless.
+
+> The `solar` module was once behind `#[cfg(feature = "render")]` despite naming
+> nothing render-related. The consequence was silent: **a sun-tracking Modelica model
+> running headless received nothing at all** — no error, no warning, just zeros. If a
+> module here needs a renderer, it is in the wrong crate; the two things that genuinely
+> did (`wire_terrain_materials` / `shade_dynamic_entities`, and the `Bloom` arm of
+> `SetEnvironmentLight`) now live in `lunco-render-bevy`.
+
+**2. Solar azimuth is NORTH-referenced** — radians clockwise from north
+(`0 = N`, `+π/2 = E`, `±π = S`), which is the standard solar convention. This is the
+value published on the `sun_azimuth` port and consumed by sun-tracker models.
+
+> A south-referenced azimuth is off by exactly 180° and produces output that looks
+> entirely plausible — a panel that tracks confidently in the wrong direction. The
+> convention is stated on `SunDirection::azimuth` and on `SOLAR_AZIMUTH_CONNECTOR`
+> for exactly that reason.
+
 ## Modelica `inner`/`outer` analog
 
 Modelica's `inner World world` / `outer World world` pattern, implemented

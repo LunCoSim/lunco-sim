@@ -6,14 +6,23 @@
 //!
 //! Body-fixed points use the SAME rotation the render grids use
 //! ([`body_rotation`], shared with `body_rotation_system`), so math and
-//! visuals cannot diverge: `DQuat::from_axis_angle(polar_axis,
-//! days_since_j2000 · rate)`, angle 0 at J2000.
+//! visuals cannot diverge. That rotation is the **IAU/WGCCRE** model
+//! ([`crate::iau`]): pole from `α₀/δ₀`, prime meridian from `W = W₀ + Ẇ·d`,
+//! both mapped out of the ICRF into this engine's ecliptic-Bevy frame.
+//!
+//! It used to be `from_axis_angle(polar_axis, days · rate)` — the right RATE
+//! with **no phase at all** (`W₀` simply absent). That left the Moon rotated
+//! 38.3° from its true orientation (~1160 km at the equator — the near side did
+//! not face Earth) and Earth's ground stations ~190° of longitude off.
 //!
 //! Geodetic convention (spherical — sub-meter at km scale, no ellipsoid):
-//! latitude about the body's `polar_axis` (north = +Y), longitude 0 on +X at
-//! J2000, **east-positive** toward −Z (the direction
-//! `DQuat::from_axis_angle(Y, +θ)` sweeps +X). ENU tangent basis matches the
-//! terrain-georef scene convention: East=+X, North=−Z, Up=+Y in local scenes.
+//! latitude about the body's pole (body-fixed +Y), longitude 0 on body-fixed
+//! +X, **east-positive** toward −Z (the direction `from_axis_angle(Y, +θ)`
+//! sweeps +X — the same sense a prograde `Ẇ` advances `W`, which is what keeps
+//! these longitudes IAU-east). Body-fixed +X is the body's true prime meridian
+//! at the epoch, NOT "engine +X at J2000" — that conflation was the bug.
+//! ENU tangent basis matches the terrain-georef scene convention: East=+X,
+//! North=−Z, Up=+Y in local scenes.
 
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
@@ -54,23 +63,41 @@ pub struct GeodeticAnchor {
 #[reflect(Component)]
 pub struct SiteAnchor;
 
-/// Rotation of `desc`'s body-fixed frame at `epoch_jd` — the exact formula
+/// Rotation of `desc`'s body-fixed frame at `epoch_jd` — the exact rotation
 /// `body_rotation_system` applies to the render grids.
 ///
-/// Composite: first orient the body-fixed +Y pole onto the body's actual
-/// `polar_axis` (obliquity tilt — identity when the axis IS +Y, e.g. the
-/// Moon's ecliptic-frame approximation), then spin about that axis. Body-fixed
-/// coordinates ([`geodetic_to_body_fixed`]) always use +Y as the pole, so a
-/// tilted axis MUST include this arc or surface points would spin about an
-/// axis their latitude wasn't measured against (Earth ground stations 23°
-/// off in the ecliptic world frame).
+/// The full IAU/WGCCRE model, built in [`crate::iau::IauRotation::rotation_bevy`]:
+/// it carries the body-fixed pole (+Y) onto the body's true pole AND the
+/// body-fixed prime meridian (+X) onto its true prime meridian `W(t) = W₀ + Ẇ·d`.
+///
+/// **The `W₀` phase is the whole point.** `W₀` is published east of the node of
+/// the body's equator on the ICRF equator — NOT of this engine's +X — so it can
+/// never be pasted in as a spin angle here; `iau.rs` does the frame transform.
+/// Bodies with no IAU elements (Sun, EMB) do not rotate.
 pub fn body_rotation(desc: &BodyDescriptor, epoch_jd: f64) -> DQuat {
-    if desc.rotation_rate_rad_per_day == 0.0 {
-        return DQuat::IDENTITY;
+    match &desc.iau {
+        Some(iau) => iau.rotation_bevy(epoch_jd),
+        None => DQuat::IDENTITY,
     }
-    let days = epoch_jd - lunco_time::J2000_JD;
-    let tilt = DQuat::from_rotation_arc(DVec3::Y, desc.polar_axis.normalize_or_zero());
-    tilt * DQuat::from_axis_angle(DVec3::Y, days * desc.rotation_rate_rad_per_day)
+}
+
+/// Rotation from the body's **equatorial inertial** frame into the engine
+/// frame at `epoch_jd`: it tilts the engine's +Y onto the body's pole, but does
+/// NOT spin with the body.
+///
+/// This is the frame Keplerian elements are referenced to (`kepler.rs`):
+/// inclination is measured from the body's equator and RAAN about the body's
+/// pole, exactly as `geo` measures latitude — so `i = 90°` really does fly over
+/// the geographic poles.
+///
+/// The minimal arc from +Y to the pole rotates about `Y × pole`. For Earth that
+/// axis is ±X, so the arc **fixes +X = the vernal equinox** — which lies in
+/// Earth's equator. RAAN is therefore measured from the equinox, and is directly
+/// comparable to a TLE's. (Before this existed, orbits were built about the
+/// ECLIPTIC pole and `placement` cancelled the body rotation on top, so an
+/// ISS-like i = 51.6° orbit had a ground-track latitude wrong by up to ±23.4°.)
+pub fn equatorial_frame(desc: &BodyDescriptor, epoch_jd: f64) -> DQuat {
+    DQuat::from_rotation_arc(DVec3::Y, desc.polar_axis(epoch_jd))
 }
 
 /// Body-fixed cartesian position of a geodetic point (meters).
@@ -236,21 +263,91 @@ mod tests {
     fn east_longitude_advances_with_body_rotation() {
         // A surface point carried by body rotation must advance in east
         // longitude: rotating the body by +θ about the pole moves the point
-        // that WAS at lon λ to inertial direction λ+θ. Uses an untilted
-        // (+Y) pole so `body_fixed_to_geodetic` (which measures about +Y)
-        // reads the spin angle exactly — the real Moon's 1.5° Cassini tilt
-        // would leak ~0.02° into the measured longitude.
-        let mut desc = moon();
-        desc.polar_axis = DVec3::Y;
+        // that WAS at lon λ ahead by θ. Measure the advance IN THE BODY'S OWN
+        // equatorial frame (`equatorial_frame().inverse()`), so the pole's tilt
+        // — real now, derived from the IAU elements — doesn't leak into the
+        // reading. (This used to force `polar_axis = +Y` to dodge that; the
+        // field is gone, and this is the honest version of the same check.)
+        let desc = moon();
         let geo = Geodetic::new(0.0, 10.0, 0.0);
         let jd0 = lunco_time::J2000_JD;
-        let quarter_day = 0.25 * std::f64::consts::TAU / desc.rotation_rate_rad_per_day;
-        let p0 = body_rotation(&desc, jd0) * geodetic_to_body_fixed(&geo, desc.radius_m);
-        let p1 = body_rotation(&desc, jd0 + quarter_day) * geodetic_to_body_fixed(&geo, desc.radius_m);
-        let inertial_lon0 = body_fixed_to_geodetic(p0, desc.radius_m).lon_deg;
-        let inertial_lon1 = body_fixed_to_geodetic(p1, desc.radius_m).lon_deg;
-        let delta = (inertial_lon1 - inertial_lon0).rem_euclid(360.0);
-        assert!((delta - 90.0).abs() < 1e-6, "quarter turn should advance lon by 90°, got {delta}");
+        let quarter_day = 0.25 * std::f64::consts::TAU / desc.rotation_rate_rad_per_day();
+        let lon_at = |jd: f64| {
+            let p_inertial = body_rotation(&desc, jd) * geodetic_to_body_fixed(&geo, desc.radius_m);
+            let p_eq = equatorial_frame(&desc, jd).inverse() * p_inertial;
+            body_fixed_to_geodetic(p_eq, desc.radius_m).lon_deg
+        };
+        let delta = (lon_at(jd0 + quarter_day) - lon_at(jd0)).rem_euclid(360.0);
+        // Tolerance covers the pole's own slow motion + lunar physical libration
+        // over the quarter turn (~6.8 d), both of which are now modelled.
+        assert!((delta - 90.0).abs() < 0.5, "quarter turn should advance lon by 90°, got {delta}");
+    }
+
+    /// **P2 regression — the missing prime-meridian epoch (`W₀`).**
+    ///
+    /// A rotation model with the right RATE and no PHASE looks fine in every
+    /// rate-only test (a quarter turn is still a quarter turn) and in every
+    /// polar-site elevation test (longitude-insensitive at the pole). It is
+    /// wrong by a fixed offset — 38.3° for the Moon, ~1160 km at the equator.
+    ///
+    /// Pin the phase directly: at J2000 the Moon's prime meridian (lon 0) must
+    /// point `W₀ = 38.32°` east of the node of its equator, not 0°.
+    #[test]
+    fn moon_prime_meridian_has_the_w0_phase_at_j2000() {
+        let desc = moon();
+        let jd = lunco_time::J2000_JD;
+        // Where lon 0 actually points, expressed in the body's equatorial frame
+        // (whose +X is the engine's equinox direction, tilted onto the equator).
+        let pm = equatorial_frame(&desc, jd).inverse()
+            * (body_rotation(&desc, jd) * geodetic_to_body_fixed(&Geodetic::new(0.0, 0.0, 0.0), 1.0));
+        let angle = (-pm.z).atan2(pm.x).to_degrees().rem_euclid(360.0);
+        assert!(
+            (angle - 38.3).abs() < 1.5,
+            "the Moon's prime meridian must lead by W₀ ≈ 38.3° at J2000, got {angle:.2}° \
+             (0° ⇒ the W₀ phase is missing again — the near side stops facing Earth)"
+        );
+    }
+
+    /// **P3 regression — Kepler elements must be referenced to the body's
+    /// equator, not the ecliptic.**
+    ///
+    /// A `i = 90°` orbit about Earth must pass over the GEOGRAPHIC (body-fixed)
+    /// poles. Built about the ecliptic pole instead — which is what
+    /// `position_bevy_m` + `placement`'s full-rotation cancellation used to do —
+    /// the same orbit tops out at latitude 66.6°, i.e. 23.4° short: an Arctic
+    /// Circle orbit sold as a polar one.
+    #[test]
+    fn polar_orbit_passes_over_the_geographic_poles() {
+        use crate::kepler::KeplerianElements;
+        let earth = crate::registry::CelestialBodyRegistry::default_system()
+            .bodies
+            .into_iter()
+            .find(|b| b.ephemeris_id == 399)
+            .unwrap();
+        let el = KeplerianElements {
+            semi_major_axis_m: 6_778.0e3,
+            eccentricity: 0.0,
+            inclination_deg: 90.0,
+            raan_deg: 0.0,
+            ..Default::default()
+        };
+        let period_days = el.period_s(earth.gm) / 86_400.0;
+
+        let mut max_lat: f64 = 0.0;
+        for k in 0..400 {
+            let jd = el.epoch_jd + period_days * (k as f64) / 400.0;
+            // The chain `placement` uses: elements → body equatorial frame →
+            // inertial → body-fixed.
+            let p_inertial = equatorial_frame(&earth, jd) * el.position_bevy_m(earth.gm, jd);
+            let p_fixed = body_rotation(&earth, jd).inverse() * p_inertial;
+            let lat = body_fixed_to_geodetic(p_fixed, earth.radius_m).lat_deg;
+            max_lat = max_lat.max(lat.abs());
+        }
+        assert!(
+            max_lat > 89.5,
+            "an i=90° orbit must cross the geographic poles; peak |lat| was {max_lat:.2}° \
+             (≈66.6° ⇒ the elements are referenced to the ECLIPTIC pole, 23.4° off Earth's)"
+        );
     }
 
     #[test]

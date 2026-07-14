@@ -17,6 +17,10 @@ use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_mobility::WheelRaycast;
 use lunco_cosim::{joint_angle_holder, JOINT_ANGLE_PORT};
 use lunco_core::ports::PortRegistry;
+// Appearance INTENT. The Material (PBR) section edits this component, not the
+// material asset — see `material_pbr_section`.
+use lunco_materials::ShaderLook;
+use lunco_render::PbrLook;
 
 use lunco_obstacle_field::{ObstacleFieldSpec, Pattern, plugin::UpdateObstacleFieldSpec};
 
@@ -252,6 +256,19 @@ impl Panel for Inspector {
     }
 }
 
+/// Delete `entity` from the scene — the single delete path for both the Del
+/// hotkey and the Delete button.
+///
+/// Authors the removal into the active document's runtime layer FIRST (so the
+/// delete is a journaled, undoable, networked document op — the editor keeps no
+/// private history), then performs the live despawn for immediate feedback and
+/// drops it from the selection. A non-document entity (a palette spawn the doc
+/// doesn't own) simply isn't authored — it just despawns.
+// NOTE: there is no local `delete_entity` helper any more. It did the same three things
+// the typed `commands::DeleteEntity` verb does (author the `RemovePrim`, despawn, drop
+// the selection), so it was a second delete path that the command bus — and hence the
+// API, the journal and networked peers — never saw. The Inspector triggers the command.
+
 fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
 
         // Delete hotkey
@@ -261,8 +278,9 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
                 .and_then(|s| s.primary());
             if let Some(entity) = primary {
                 ctx.defer(move |world| {
-                    // The typed verb — despawns AND authors the `RemovePrim`, so the
-                    // delete persists, journals, replicates, and undoes (Ctrl+Z).
+                    // The typed verb — despawns, drops the selection, AND authors the
+                    // `RemovePrim`, so the delete persists, journals, replicates, and
+                    // undoes (Ctrl+Z).
                     world.trigger(crate::commands::DeleteEntity {
                         target: entity,
                         intent: lunco_core::EditIntent::Persistent,
@@ -342,20 +360,30 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
         mount_section(ui, ctx, entity);
 
         // ── Transform component ──────────────────────────────────────
+        // The sliders author a **document op**, they do not poke ECS: a committed
+        // edit fires `MoveEntity`, whose observers both move the body (physics
+        // seat + kinematic pulse — the old hand-copied CQ-510 block, now in ONE
+        // place) and author `UsdOp::SetTranslate` into the runtime layer. So an
+        // Inspector move survives reload, journals, syncs, and is undone by the
+        // same Ctrl+Z as a gizmo drag. Committed = drag released or value typed —
+        // per-frame firing during a drag would push one op per frame.
         if ctx.get::<Transform>(entity).is_some() {
             egui::CollapsingHeader::new("Transform")
                 .default_open(true)
                 .show(ui, |ui| {
-                    if let Some(new_vals) = ctx.get::<Transform>(entity).map(|tf| {
-                        (tf.translation.x, tf.translation.y, tf.translation.z)
-                    }) {
-                        let mut x = new_vals.0;
-                        let mut y = new_vals.1;
-                        let mut z = new_vals.2;
-                        let changed = ui.add(egui::Slider::new(&mut x, -1000.0..=1000.0).text("X")).changed()
-                            | ui.add(egui::Slider::new(&mut y, -1000.0..=1000.0).text("Y")).changed()
-                            | ui.add(egui::Slider::new(&mut z, -1000.0..=1000.0).text("Z")).changed();
-                        if changed {
+                    if let Some(t) = ctx.get::<Transform>(entity).map(|tf| tf.translation) {
+                        let (mut x, mut y, mut z) = (t.x, t.y, t.z);
+                        let rx = ui.add(egui::Slider::new(&mut x, -1000.0..=1000.0).text("X"));
+                        let ry = ui.add(egui::Slider::new(&mut y, -1000.0..=1000.0).text("Y"));
+                        let rz = ui.add(egui::Slider::new(&mut z, -1000.0..=1000.0).text("Z"));
+                        // Author ONCE, on release — not on every `changed()` frame, which
+                        // would flood the journal with an op per mouse-move for a single
+                        // drag. Same rule as the gizmo's drag-end authoring.
+                        let committed = [&rx, &ry, &rz]
+                            .iter()
+                            .any(|r| r.drag_stopped() || (r.changed() && !r.dragged()));
+                        if committed {
+                            let new_t = Vec3::new(x, y, z);
                             ctx.defer(move |world| {
                                 // Route through the typed `MoveEntity` verb rather than
                                 // poking `Transform` here. It already owns the
@@ -366,15 +394,17 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
                                 // journals, replicates, persists, and undoes. The
                                 // hand-rolled copy that used to live here did none of
                                 // that.
-                                let Some(gid) = world
-                                    .get::<lunco_core::GlobalEntityId>(entity)
-                                    .map(|g| g.get())
+                                let Some(gid) =
+                                    world.get::<lunco_core::GlobalEntityId>(entity).copied()
                                 else {
+                                    warn!(
+                                        "INSPECTOR: {entity:?} has no GlobalEntityId — not movable"
+                                    );
                                     return;
                                 };
                                 world.trigger(crate::commands::MoveEntity {
-                                    entity_id: gid,
-                                    translation: Vec3::new(x, y, z),
+                                    entity_id: gid.get(),
+                                    translation: new_t,
                                 });
                             });
                         }
@@ -492,7 +522,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
                 // distinct PBR material handles (CQ-204: was two independent
                 // `subtree` walks of the same part — `first_shader_holder` +
                 // `collect_std_handles`).
-                let (std_handles, shader_holder) = part_materials(ctx, part);
+                let (pbr_parts, shader_holder) = part_materials(ctx, part);
                 if let Some(holder) = shader_holder {
                     egui::CollapsingHeader::new("Shader Parameters")
                         .default_open(true)
@@ -500,11 +530,11 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
                             shader_parameters_section(ui, ctx, holder);
                         });
                 }
-                if !std_handles.is_empty() {
+                if !pbr_parts.is_empty() {
                     egui::CollapsingHeader::new("Material (PBR)")
                         .default_open(true)
                         .show(ui, |ui| {
-                            material_pbr_section(ui, ctx, part, &std_handles);
+                            material_pbr_section(ui, ctx, part, &pbr_parts);
                         });
                 }
             }
@@ -1298,31 +1328,28 @@ fn joint_control_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, j: JointReadout)
     }
 }
 
-/// Walk `root`'s subtree once, returning its distinct `StandardMaterial`
-/// handles and the first `ShaderMaterial`-bearing entity. Replaces the
-/// former `collect_std_handles` + `first_shader_holder`, which each ran an
+/// Walk `root`'s subtree once, returning its PBR-surface **entities** and the
+/// first [`ShaderLook`]-bearing entity. Replaces the former
+/// `collect_std_handles` + `first_shader_holder`, which each ran an
 /// independent `subtree` walk of the same root (CQ-204).
-fn part_materials(
-    ctx: &PanelCtx,
-    root: Entity,
-) -> (Vec<Handle<StandardMaterial>>, Option<Entity>) {
-    let mut handles: Vec<Handle<StandardMaterial>> = Vec::new();
+///
+/// Surfaces are addressed by ENTITY and classified by their appearance **intent**
+/// ([`PbrLook`] / [`ShaderLook`]), never by a bound material: the material is
+/// derived from the intent (`lunco-render-bevy` re-binds on `Changed<…Look>`), it is
+/// *shared* across every entity with the same look — so an in-place asset write would
+/// bleed onto all of them — and naming it would drag `bevy_pbr` into this crate.
+fn part_materials(ctx: &PanelCtx, root: Entity) -> (Vec<Entity>, Option<Entity>) {
+    let mut parts: Vec<Entity> = Vec::new();
     let mut shader_holder: Option<Entity> = None;
     for e in subtree(ctx, root) {
-        if let Some(m) = ctx.get::<MeshMaterial3d<StandardMaterial>>(e) {
-            if !handles.iter().any(|h| h.id() == m.0.id()) {
-                handles.push(m.0.clone());
-            }
+        if ctx.get::<PbrLook>(e).is_some() {
+            parts.push(e);
         }
-        if shader_holder.is_none()
-            && ctx
-                .get::<MeshMaterial3d<lunco_materials::ShaderMaterial>>(e)
-                .is_some()
-        {
+        if shader_holder.is_none() && ctx.get::<ShaderLook>(e).is_some() {
             shader_holder = Some(e);
         }
     }
-    (handles, shader_holder)
+    (parts, shader_holder)
 }
 
 /// Material-bearing parts of `root`'s subtree, each labelled by its leaf name.
@@ -1330,9 +1357,8 @@ fn editable_parts(ctx: &PanelCtx, root: Entity) -> Vec<(Entity, String)> {
     let ents = subtree(ctx, root);
     let mut out = Vec::new();
     for e in ents {
-        let has_shader =
-            ctx.get::<MeshMaterial3d<lunco_materials::ShaderMaterial>>(e).is_some();
-        let has_std = ctx.get::<MeshMaterial3d<StandardMaterial>>(e).is_some();
+        let has_shader = ctx.get::<ShaderLook>(e).is_some();
+        let has_std = ctx.get::<PbrLook>(e).is_some();
         if has_shader || has_std {
             let label = ctx
                 .get::<Name>(e)
@@ -1349,7 +1375,7 @@ fn default_part(ctx: &PanelCtx, parts: &[(Entity, String)]) -> Option<Entity> {
     parts
         .iter()
         .map(|(e, _)| *e)
-        .find(|e| ctx.get::<MeshMaterial3d<lunco_materials::ShaderMaterial>>(*e).is_none())
+        .find(|e| ctx.get::<ShaderLook>(*e).is_none())
         .or_else(|| parts.first().map(|(e, _)| *e))
 }
 
@@ -1419,25 +1445,23 @@ fn shader_picker_for_part(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
     }
 }
 
-/// Bind shader `path` to `part`, building a fresh [`ShaderMaterial`]
-/// (carrying over the previous one's uniforms) and removing the part's
-/// `StandardMaterial`. Runs inside a deferred closure (`&mut World`).
+/// Point `part`'s [`ShaderLook`] at shader `path`, carrying over the params it
+/// already had (the render binder swaps the material). Runs inside a deferred
+/// closure (`&mut World`).
 fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
-    use lunco_materials::ShaderMaterial;
-    let template = world
-        .get::<MeshMaterial3d<ShaderMaterial>>(part)
-        .map(|m| m.0.clone())
-        .and_then(|h| world.resource::<Assets<ShaderMaterial>>().get(&h).cloned())
-        .unwrap_or_default();
-    let shader = world.resource::<AssetServer>().load(path.to_string());
-    let handle = world
-        .resource_mut::<Assets<ShaderMaterial>>()
-        .add(lunco_materials::build_shader_material(shader, template));
+    let mut look = world.get::<ShaderLook>(part).cloned().unwrap_or_default();
+    look.shader = path.to_string();
     world
         .commands()
         .entity(part)
-        .remove::<MeshMaterial3d<StandardMaterial>>()
-        .insert(MeshMaterial3d(handle));
+        // The `PbrLook` intent must go. Leaving it would have the PBR binder keep
+        // re-inserting its own material alongside the shader one — two materials on
+        // one mesh, drawn twice.
+        .remove::<PbrLook>()
+        .insert(look);
+    // …and the material that binder ALREADY bound, or the same double-draw happens
+    // once, statically. (Removed reflectively — this crate may not name `bevy_pbr`.)
+    crate::commands::drop_bound_pbr_material(world, part);
 
     // Propagate changes to USD
     if world.get::<UsdPrimPath>(part).is_some() {
@@ -1458,18 +1482,11 @@ fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
     }
 }
 
-/// The full asset-path string of `part`'s current `ShaderMaterial` shader
-/// (read via [`PanelCtx`]), or `None` if it isn't using one.
+/// The asset path of `part`'s current shader (read via [`PanelCtx`]), or `None` if
+/// it isn't using one. The path IS the intent — no material lookup.
 fn current_shader_path(ctx: &PanelCtx, part: Entity) -> Option<String> {
-    let h = ctx
-        .get::<MeshMaterial3d<lunco_materials::ShaderMaterial>>(part)
-        .map(|m| m.0.clone())?;
-    let sid = ctx
-        .resource::<Assets<lunco_materials::ShaderMaterial>>()?
-        .get(&h)
-        .map(|m| m.shader.id())?;
-    let p = ctx.resource::<AssetServer>()?.get_path(sid)?;
-    Some(p.to_string())
+    let look = ctx.get::<ShaderLook>(part)?;
+    (!look.shader.is_empty()).then(|| look.shader.clone())
 }
 
 /// "Shader Tools" — GUI front-end for the live shader-authoring commands.
@@ -1619,39 +1636,44 @@ fn apply_if_registered(world: &mut World, part: Entity, stem: &str) {
     }
 }
 
-/// Editable PBR controls for the selected object's `StandardMaterial`s.
-/// Reads a snapshot via [`PanelCtx`]; the asset + USD writes are deferred.
+/// Editable PBR controls for the selected object's surfaces.
+///
+/// Edits the [`PbrLook`] **intent** component, not the material asset: the render
+/// binder re-materialises on `Changed<PbrLook>`. This is not merely tidier — it is
+/// required for correctness, because the binder shares one material across every
+/// entity with the same look, so the old `Assets::get_mut(handle)` write would now
+/// bleed onto unrelated entities that happen to look alike. (It is also what keeps
+/// this crate off `bevy_pbr`.) A surface with no `PbrLook` is not listed as a part,
+/// so there is nothing here to fall back to.
+///
+/// Reads a snapshot via [`PanelCtx`]; the component + USD writes are deferred.
 fn material_pbr_section(
     ui: &mut egui::Ui,
     ctx: &mut PanelCtx,
     part: Entity,
-    handles: &[Handle<StandardMaterial>],
+    parts: &[Entity],
 ) {
-    let Some(handle) = handles.first().cloned() else {
+    let Some(&first) = parts.first() else {
         return;
     };
 
     // Snapshot current values — no world borrow held while drawing widgets.
+    let Some(look) = ctx.get::<PbrLook>(first) else {
+        ui.label("Material still loading…");
+        return;
+    };
     let snap = {
-        let Some(mats) = ctx.resource::<Assets<StandardMaterial>>() else {
-            ui.label("Material still loading…");
-            return;
-        };
-        let Some(m) = mats.get(&handle) else {
-            ui.label("Material still loading…");
-            return;
-        };
-        let base = m.base_color.to_linear();
-        let e = m.emissive;
+        let b = look.base_color;
+        let e = look.emissive;
         (
-            [base.red, base.green, base.blue], // base rgb
-            base.alpha,
-            [e.red, e.green, e.blue], // emissive rgb
-            m.metallic,
-            m.perceptual_roughness,
-            m.reflectance,
-            m.unlit,
-            m.double_sided,
+            [b.red, b.green, b.blue],
+            b.alpha,
+            [e.red, e.green, e.blue],
+            look.metallic,
+            look.perceptual_roughness,
+            look.reflectance,
+            look.unlit,
+            look.double_sided,
         )
     };
     let (mut base, mut alpha, mut emissive, mut metallic, mut roughness, mut reflectance, mut unlit, mut double_sided) = snap;
@@ -1683,26 +1705,30 @@ fn material_pbr_section(
     changed |= reflectance_changed;
     changed |= ui.checkbox(&mut unlit, "Unlit").changed();
     changed |= ui.checkbox(&mut double_sided, "Double-sided").changed();
-    if handles.len() > 1 {
-        ui.label(egui::RichText::new(format!("applies to {} parts", handles.len())).weak());
+    if parts.len() > 1 {
+        ui.label(egui::RichText::new(format!("applies to {} parts", parts.len())).weak());
     }
 
     if changed {
-        let handles = handles.to_vec();
+        let parts = parts.to_vec();
         ctx.defer(move |world| {
-            if let Some(mut mats) = world.get_resource_mut::<Assets<StandardMaterial>>() {
-                for handle in &handles {
-                    let Some(mut m) = mats.get_mut(handle) else { continue };
-                    m.base_color = Color::LinearRgba(LinearRgba::new(base[0], base[1], base[2], alpha));
-                    m.emissive = LinearRgba::new(emissive[0], emissive[1], emissive[2], 1.0);
-                    m.metallic = metallic;
-                    m.perceptual_roughness = roughness;
-                    m.reflectance = reflectance;
-                    m.unlit = unlit;
-                    m.double_sided = double_sided;
-                    m.alpha_mode = if alpha >= 1.0 { AlphaMode::Opaque } else { AlphaMode::Blend };
-                    m.cull_mode = if double_sided { None } else { Some(bevy::render::render_resource::Face::Back) };
-                }
+            for e in &parts {
+                // Intent only — the binder re-materialises it (and, sharing by
+                // look, gives this entity its own handle if the edit made it
+                // unique).
+                let Some(mut look) = world.get_mut::<PbrLook>(*e) else { continue };
+                look.base_color = LinearRgba::new(base[0], base[1], base[2], alpha);
+                look.emissive = LinearRgba::new(emissive[0], emissive[1], emissive[2], 1.0);
+                look.metallic = metallic;
+                look.perceptual_roughness = roughness;
+                look.reflectance = reflectance;
+                look.unlit = unlit;
+                look.double_sided = double_sided;
+                look.alpha = if alpha >= 1.0 {
+                    lunco_render::SurfaceAlpha::Opaque
+                } else {
+                    lunco_render::SurfaceAlpha::Blend
+                };
             }
 
             // Propagate changes to USD.
@@ -1772,16 +1798,38 @@ fn material_pbr_section(
     }
 }
 
-/// Render named, range-bounded controls for the selected entity's
-/// [`ShaderMaterial`](lunco_materials::ShaderMaterial) generic uniforms.
-/// Reads a snapshot via [`PanelCtx`]; the live-asset + USD writes deferred.
-fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
-    use lunco_materials::{ParamType, ParamValue, ShaderMaterial, UiKind};
+/// The reflected [`ParamSchema`](lunco_materials::ParamSchema) of a shader asset
+/// path — parsed from the loaded WGSL source, so the editor derives its widgets from
+/// the *shader* rather than from a material (or a hardcoded table).
+///
+/// `None` while the shader is still loading, or if it declares no `Material` struct.
+fn shader_schema_of(ctx: &PanelCtx, path: &str) -> Option<lunco_materials::ParamSchema> {
+    if path.is_empty() {
+        return None;
+    }
+    let handle = ctx.resource::<AssetServer>()?.load::<bevy::shader::Shader>(path.to_string());
+    let shaders = ctx.resource::<Assets<bevy::shader::Shader>>()?;
+    let src = match &shaders.get(&handle)?.source {
+        bevy::shader::Source::Wgsl(s) => s.as_ref().to_string(),
+        _ => return None,
+    };
+    lunco_materials::ParamSchema::parse(&src)
+}
 
-    let Some(handle) = ctx
-        .get::<MeshMaterial3d<ShaderMaterial>>(entity)
-        .map(|m| m.0.clone())
-    else {
+/// Render named, range-bounded controls for the selected entity's [`ShaderLook`]
+/// parameters.
+///
+/// The rows are DERIVED — from the shader's own `ParamSchema` (reflected out of its
+/// WGSL `Material` struct), never from a hand-written list; the current values come
+/// from `ShaderLook::values` (falling back to each field's declared default). An
+/// edit mutates the component and the binder re-materialises on `Changed<ShaderLook>`,
+/// so nothing here touches a material asset.
+///
+/// Reads a snapshot via [`PanelCtx`]; the component + USD writes are deferred.
+fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
+    use lunco_materials::{ParamType, ParamValue, UiKind};
+
+    let Some(look) = ctx.get::<ShaderLook>(entity).cloned() else {
         return;
     };
 
@@ -1795,20 +1843,24 @@ fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Enti
         color: [f32; 3],
     }
     let rows: Vec<Row> = {
-        let Some(mats) = ctx.resource::<Assets<ShaderMaterial>>() else {
-            ui.label("Material still loading…");
+        // The schema is a property of the ASSET: read it from the loaded WGSL
+        // source. `None` = the shader hasn't loaded yet.
+        let Some(schema) = shader_schema_of(ctx, &look.shader) else {
+            ui.label("Shader still loading…");
             return;
         };
-        let Some(mat) = mats.get(&handle) else {
-            ui.label("Material still loading…");
-            return;
-        };
-        mat.schema
+        schema
             .fields
             .iter()
             .filter(|f| !matches!(f.ui, UiKind::Engine))
             .map(|f| {
-                let floats = mat.get(&f.name).map(|v| v.as_floats()).unwrap_or_default();
+                let floats = look
+                    .values
+                    .get(&f.name)
+                    .copied()
+                    .or(f.default)
+                    .map(|v| v.as_floats())
+                    .unwrap_or_default();
                 Row {
                     name: f.name.clone(),
                     label: f.label.clone(),
@@ -1876,11 +1928,9 @@ fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Enti
     if !edits.is_empty() {
         let usd_prim_exists = ctx.get::<UsdPrimPath>(entity).is_some();
         ctx.defer(move |world| {
-            if let Some(mut mats) = world.get_resource_mut::<Assets<ShaderMaterial>>() {
-                if let Some(mut mat) = mats.get_mut(&handle) {
-                    for (name, v) in edits.iter() {
-                        mat.set(name, *v);
-                    }
+            if let Some(mut look) = world.get_mut::<ShaderLook>(entity) {
+                for (name, v) in edits.iter() {
+                    look.values.insert(name.clone(), *v);
                 }
             }
 

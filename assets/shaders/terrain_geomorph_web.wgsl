@@ -130,10 +130,18 @@ fn ramp(x: f32, lo: f32, hi: f32) -> f32 {
     return saturate((x - lo) / (hi - lo));
 }
 
+// Layer CUT-OUT threshold in screen px per noise period — the knob that sets the
+// radius of the disc where the bump FBM is paid at all (see the long note in
+// `terrain_geomorph.wgsl`). Kept identical to the native shader so the two look the
+// same at a given distance; the WebGL saving is bigger here, since this is the
+// single-threaded target.
+const AA_CUT_PX: f32 = 5.0;
+const AA_RAMP_PX: f32 = 7.0;
+
 fn aa_fade(scale: f32, pw: f32) -> f32 {
     let px_per_period = 1.0 / max(scale * pw, 1e-6);
     // Tight ramp — the baked derived maps take over beyond the near field.
-    return saturate((px_per_period - 3.0) / 9.0);
+    return saturate((px_per_period - AA_CUT_PX) / AA_RAMP_PX);
 }
 
 // --- height-field bump ---------------------------------------------------
@@ -332,10 +340,19 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
 
     // --- Analysis overlay (see terrain_geomorph.wgsl) -------------------------
     // Blend the Transfer's colour over the lit surface; the ramp itself is the
-    // shared `lunco::transfer`, uniform-driven (live critical angle).
+    // shared `lunco::transfer`, uniform-driven (live critical angle). Slope comes
+    // from the baked DEM normal wherever that map is bound (`weight_normal > 0` —
+    // the coarse tiles), NOT from the LOD mesh normal, which under-reports cliffs at
+    // distance. Same rule as the native shader.
     if (mat.overlay_mode > 0.5 && mat.overlay_opacity > 0.0) {
+        var n_haz = n_geo;
+#ifdef VERTEX_UVS_A
+        if (mat.weight_normal > 0.0) {
+            n_haz = normalize(map_n.xyz * 2.0 - 1.0);
+        }
+#endif
         let haz = slope_hazard_color(
-            slope_of(n_geo), mat.overlay_safe_rad, mat.overlay_cliff_rad);
+            slope_of(n_haz), mat.overlay_safe_rad, mat.overlay_cliff_rad);
         color = vec4(mix(color.rgb, haz, mat.overlay_opacity), color.a);
     }
     return color;

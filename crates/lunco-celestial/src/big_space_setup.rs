@@ -7,35 +7,60 @@
 
 //! Sets up the big_space coordinate hierarchy for the solar system.
 //!
-//! ## Architecture: Inertial Grid + Rotating Body
+//! ## Architecture: Rotating Grid + Body-fixed children
 //!
-//! Each celestial body uses a two-layer pattern:
+//! **The GRID rotates. The Body does not.** `body_rotation_system`
+//! (`systems.rs`) queries `(&mut Transform, &CelestialReferenceFrame)`, and
+//! `CelestialReferenceFrame` lives on the **grids** — never on the body
+//! entities, which sit at identity. Everything else in the crate is built on
+//! that fact (`placement.rs` inverse-rotates inertial orbits INTO the grid;
+//! `coords.rs`'s stored-chain test assumes a spinning grid), which is why it is
+//! the grid that spins and not the body:
 //!
-//! 1. **Grid Anchor (inertial)** — carries `Grid` + `CelestialReferenceFrame`.
-//!    Positioned by the ephemeris system. Does NOT rotate.
-//!    This provides a stable ecliptic-locked frame for orbit cameras.
+//! 1. **Body Grid (ROTATING)** — carries `Grid` + `CelestialReferenceFrame`.
+//!    Positioned by the ephemeris system, **and rotated** by
+//!    `body_rotation_system` with the body's IAU rotation (`geo::body_rotation`).
+//!    Its children are therefore **body-fixed**: terrain tiles, ground stations
+//!    and surface ops inherit the spin for free, in high precision — which is
+//!    exactly what big_space recommends ("place the planet and all objects on
+//!    its surface in the same grid").
 //!
-//! 2. **Body Entity (rotating)** — child of the Grid. Carries `CelestialBody`,
-//!    mesh, collider, `SOI`, and `GravityProvider`. Rotates via
-//!    `body_rotation_system`. Terrain tiles and surface entities are children
-//!    of the Body, inheriting rotation via standard Bevy transform propagation.
+//! 2. **Body Entity** — child of the Grid, identity transform. Carries
+//!    `CelestialBody`, mesh, collider, `SOI`, `GravityProvider`.
+//!
+//! 3. **Inertial Anchor** — a NON-rotating sibling grid tracking the body's
+//!    position but not its spin ([`InertialAnchor`]). This is where a
+//!    star-fixed observer belongs; see "Why an inertial anchor" below.
 //!
 //! ```text
 //! BigSpace Root
-//!   └── Solar Grid (inertial, edge=1e9)
+//!   └── Solar Grid (inertial — the Sun does not spin here)
 //!         ├── Sun (simple entity, no grid)
 //!         ├── Sun Light
-//!         ├── EMB Grid (inertial, edge=1e8)
-//!         │     ├── Earth Grid (rotating, ephemeris, edge=1e4)
+//!         ├── EMB Grid (inertial — a barycenter has no rotation model)
+//!         │     ├── Earth Grid (ROTATING: ephemeris + IAU spin)
 //!         │     │     ├── Earth Body (mesh+collider, identity transform)
-//!         │     │     └── Earth Surface Grid (edge=1e3, surface sub-frame)
-//!         │     │           └── 24 terrain tiles + rovers + surface ops
-//!         │     └── Moon Grid (rotating, ephemeris, edge=1e4)
+//!         │     │     └── Earth Surface Grid (surface sub-frame, body-fixed)
+//!         │     │           └── terrain tiles + rovers + surface ops
+//!         │     ├── Earth Inertial Anchor (position only, NO spin)
+//!         │     │     └── Observer Camera  ← star-fixed
+//!         │     └── Moon Grid (ROTATING: ephemeris + IAU spin)
 //!         │           ├── Moon Body (mesh+collider, identity transform)
-//!         │           └── Moon Surface Grid (edge=1e3, surface sub-frame)
-//!         │                 └── 24 terrain tiles + rovers + surface ops
+//!         │           └── Moon Surface Grid (surface sub-frame, body-fixed)
+//!         │                 └── terrain tiles + rovers + surface ops
 //!         └── Other planets (simple entities)
 //! ```
+//!
+//! ## Why an inertial anchor
+//!
+//! This doc block used to assert the exact opposite of the code — "Grid Anchor
+//! (inertial) … does NOT rotate", "Body Entity (rotating)" — and the Observer
+//! Camera was parented to the Earth Grid on the strength of that claim, with the
+//! comment "(inertial) for orbit view". The grid spins, so **the orbit view was
+//! not star-fixed**: the camera was dragged around Earth once per sidereal day,
+//! a ~19,000 km circle. The fix is not to flip the code (the rest of the crate
+//! correctly assumes rotating grids) — it is to give the camera a frame that
+//! really is inertial.
 //!
 //! ## Surface sub-Grids
 //!
@@ -64,36 +89,35 @@ use crate::registry::{CelestialBodyRegistry, CelestialReferenceFrame, CelestialB
 use crate::gravity::PointMassGravity;
 use lunco_environment::GravityProvider;
 use crate::soi::SOI;
-use lunco_materials::{ParamValue, ShaderMaterial};
+use lunco_materials::{ParamValue, ShaderLook, TextureLayer};
+use lunco_render::{PbrLook, SceneCamera};
 
-/// Build a blueprint-grid [`ShaderMaterial`] for a celestial body tile: planet
-/// imagery (`albedo_map`) tinted by `surface`, with the lat/long grid overlay
-/// (`transition = 0`, the spherical mode of `blueprint.wgsl`). Replaces the old
-/// hand-rolled `BlueprintMaterial` (an `ExtendedMaterial`) — see `blueprint.wgsl`.
-fn blueprint_tile_material(
-    shader: Handle<bevy::shader::Shader>,
+/// Build the blueprint-grid [`ShaderLook`] for a celestial body's tiles: planet
+/// imagery (the `Albedo` layer) tinted by `surface`, with the lat/long grid overlay
+/// (`transition = 0`, the spherical mode of `blueprint.wgsl`).
+///
+/// Appearance **intent** only — `lunco-render-bevy` turns it into the real
+/// `ShaderMaterial` (see `docs/architecture/render-decoupling.md`). Identical looks
+/// share one material, so a body's whole tile set is still ONE material and one bind
+/// group, exactly as the single hand-threaded handle used to guarantee.
+fn blueprint_tile_look(
     texture: Handle<Image>,
     surface: [f32; 3],
     line: [f32; 3],
     subdivisions: [f32; 2],
     line_width: f32,
     roughness: f32,
-    materials: &mut Assets<ShaderMaterial>,
-) -> Handle<ShaderMaterial> {
-    let mut m = ShaderMaterial::default();
-    m.shader = shader;
-    m.albedo_map = Some(texture);
-    m.set_many([
-        ("surface_color", ParamValue::Vec3(surface)),
-        ("roughness", ParamValue::F32(roughness)),
-        ("high_line_color", ParamValue::Vec3(line)),
-        ("low_line_color", ParamValue::Vec3(line)),
-        ("subdivisions", ParamValue::Vec2(subdivisions)),
-        ("fade_range", ParamValue::Vec2([0.2, 0.6])),
-        ("line_width", ParamValue::F32(line_width)),
-        ("transition", ParamValue::F32(0.0)),
-    ]);
-    materials.add(m)
+) -> ShaderLook {
+    ShaderLook::new("shaders/blueprint.wgsl")
+        .with_texture(TextureLayer::Albedo, texture)
+        .with("surface_color", ParamValue::Vec3(surface))
+        .with("roughness", ParamValue::F32(roughness))
+        .with("high_line_color", ParamValue::Vec3(line))
+        .with("low_line_color", ParamValue::Vec3(line))
+        .with("subdivisions", ParamValue::Vec2(subdivisions))
+        .with("fade_range", ParamValue::Vec2([0.2, 0.6]))
+        .with("line_width", ParamValue::F32(line_width))
+        .with("transition", ParamValue::F32(0.0))
 }
 
 /// Marker for the solar system root grid (inertial, no rotation).
@@ -108,17 +132,44 @@ pub struct SolarSystemRoot;
 #[derive(Component)]
 pub struct SiteAlignGrid;
 
-/// Marker for the Earth-Moon barycenter grid (inertial, no rotation).
+/// Marker for the Earth-Moon barycenter grid (genuinely inertial — the EMB is a
+/// barycenter, so it has no IAU rotation model and `body_rotation_system` skips
+/// it).
 #[derive(Component)]
 pub struct EMBRoot;
 
-/// Marker for Earth's inertial grid anchor.
+/// Marker for Earth's grid. **Rotating** (ephemeris position + IAU spin) — its
+/// children are body-fixed. For a star-fixed frame at Earth use the
+/// [`InertialAnchor`], not this.
 #[derive(Component)]
 pub struct EarthRoot;
 
-/// Marker for Moon's inertial grid anchor.
+/// Marker for the Moon's grid. **Rotating**, as [`EarthRoot`].
 #[derive(Component)]
 pub struct MoonRoot;
+
+/// A grid that tracks a body's POSITION but never its rotation — a star-fixed
+/// (inertial) frame co-located with the body.
+///
+/// `systems::sync_inertial_anchors` copies the body grid's `(CellCoord,
+/// Transform.translation)` here each epoch and leaves `Transform.rotation` at
+/// IDENTITY. That is the entire mechanism.
+///
+/// **Why it is a separate entity and not just "the body grid without the spin":**
+/// the body grid must spin, because its children are surface features that have
+/// to be carried by the body's rotation in high precision. An orbit camera needs
+/// the opposite. Both frames are legitimate; they are different frames, so they
+/// are different entities.
+///
+/// It deliberately does NOT carry `CelestialReferenceFrame` — that component is
+/// what `body_rotation_system` rotates and what `placement` searches to find "the
+/// grid for body N". A second entity answering that search would make the choice
+/// of frame for every ground station and orbit **nondeterministic**.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct InertialAnchor {
+    /// NAIF id of the body whose position this anchor tracks.
+    pub ephemeris_id: i32,
+}
 
 /// Marker for Earth's surface sub-grid (edge=1e3 m).
 ///
@@ -143,8 +194,6 @@ pub fn setup_big_space_hierarchy(
     registry: Res<CelestialBodyRegistry>,
     config: Res<crate::CelestialConfig>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut shader_materials: ResMut<Assets<ShaderMaterial>>,
     asset_server: Res<AssetServer>,
     // The single world-shell root (WorldShellPlugin) to nest under, and any prior
     // FloatingOrigin holder (the shell's OriginAnchor) the Observer Camera claims.
@@ -189,9 +238,10 @@ pub fn setup_big_space_hierarchy(
     let moon_texture: Handle<Image> =
         asset_server.load_with_settings("cached_textures://moon.png", seam_wrap);
 
-    // Blueprint grid shader (self-describing ShaderMaterial), loaded by path so it
-    // hot-reloads on native and HTTP-fetches on web like every other shader.
-    let blueprint_shader = asset_server.load("shaders/blueprint.wgsl");
+    // The blueprint grid shader is named by PATH in the `ShaderLook` (see
+    // `blueprint_tile_look`) and loaded by the binder, so it still hot-reloads on
+    // native and HTTP-fetches on web like every other shader — this crate just never
+    // holds a `Handle<Shader>` (that type is `bevy_shader`, which pulls naga).
 
     // 1. Reuse the single world-shell hierarchy if present; otherwise
     //    (standalone celestial, no WorldShellPlugin) spawn our own root. This is
@@ -307,12 +357,20 @@ pub fn setup_big_space_hierarchy(
         // site-anchored surface), while terrain beyond cascade range lit fine.
         bevy::light::NotShadowCaster,
         Mesh3d(meshes.add(Sphere::new(696_340.0e3).mesh().ico(4).unwrap())),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::BLACK,
+        // `no_shadow_cast` mirrors the `NotShadowCaster` above and is NOT optional:
+        // the binder's `Changed<PbrLook>` pass reconciles the marker from the look, so
+        // a look that said `false` would STRIP the marker on the first frame and bring
+        // back the sun-eclipses-everything bug the comment above describes.
+        PbrLook {
+            base_color: LinearRgba::BLACK,
             emissive: LinearRgba::from(Color::srgb(1.0, 0.9, 0.4)) * 5.0,
-            unlit: false,
+            // `StandardMaterial`'s default, which this spawn used to inherit via
+            // `..default()`. `PbrLook`'s own default is 1.0 (regolith), so it must be
+            // stated explicitly to keep the sun disc's shading identical.
+            perceptual_roughness: 0.5,
+            no_shadow_cast: true,
             ..default()
-        })),
+        },
         Name::new("Sun Body"),
         Collider::sphere(696_340.0e3),
     )).set_parent_in_place(solar_grid).id();
@@ -400,6 +458,25 @@ pub fn setup_big_space_hierarchy(
         Name::new("Earth Grid (Inertial)"),
     )).set_parent_in_place(emb_grid).id();
 
+    // ── Earth Inertial Anchor (star-fixed frame at Earth) ──────────────────
+    // Same position as the Earth Grid, NO rotation. `sync_inertial_anchors`
+    // keeps the position in step; the rotation stays IDENTITY forever. The
+    // Observer Camera hangs here so the orbit view is actually star-fixed
+    // (parented to the rotating Earth Grid it swung a 19,000 km circle once per
+    // sidereal day — the whole point of `InertialAnchor`).
+    let earth_inertial = commands.spawn((
+        InertialAnchor { ephemeris_id: 399 },
+        // Same 2 km / 100 m as every other celestial grid — cell edge is a
+        // PRECISION knob (see the Solar Grid note).
+        Grid::new(2_000.0, 100.0),
+        CellCoord::default(),
+        Transform::default(),
+        GlobalTransform::default(),
+        Visibility::default(),
+        InheritedVisibility::default(),
+        Name::new("Earth Inertial Anchor"),
+    )).set_parent_in_place(emb_grid).id();
+
     // ── Earth Body (rotating child of Earth Grid) ─────────────────────────
     // Note: Body does NOT have CellCoord. It's a low-precision entity whose
     // GlobalTransform = Grid × local Transform. This allows rotation from
@@ -448,16 +525,15 @@ pub fn setup_big_space_hierarchy(
 
     // Earth terrain: camera-driven cube-sphere LOD (replaces the old fixed 24-tile
     // shell). `update_globe_lod` streams tiles parented to the Earth Surface Grid.
-    let earth_blueprint = blueprint_tile_material(
-        blueprint_shader.clone(), earth_texture.clone(),
+    let earth_blueprint = blueprint_tile_look(
+        earth_texture.clone(),
         [1.0, 1.0, 1.0], [0.0, 0.5, 1.0], [36.0, 18.0], 1.0, 0.5,
-        &mut shader_materials,
     );
     commands.entity(earth_body).insert((
         crate::globe_lod::GlobeLod {
             radius_m: 6371.0e3,
             surface_grid: earth_surface_grid,
-            material: earth_blueprint,
+            look: earth_blueprint,
             res: 32,
             max_lod: 8,
             lod_distance_factor: 2.0,
@@ -522,16 +598,15 @@ pub fn setup_big_space_hierarchy(
     )).set_parent_in_place(moon_grid).id();
 
     // Moon terrain: camera-driven cube-sphere LOD (replaces the fixed 24-tile shell).
-    let moon_blueprint = blueprint_tile_material(
-        blueprint_shader.clone(), moon_texture.clone(),
+    let moon_blueprint = blueprint_tile_look(
+        moon_texture.clone(),
         [0.5, 0.5, 0.5], [0.6, 0.6, 0.6], [24.0, 12.0], 2.0, 0.9,
-        &mut shader_materials,
     );
     commands.entity(moon_body).insert((
         crate::globe_lod::GlobeLod {
             radius_m: 1737.0e3,
             surface_grid: moon_surface_grid,
-            material: moon_blueprint,
+            look: moon_blueprint,
             res: 32,
             max_lod: 8,
             lod_distance_factor: 2.0,
@@ -539,9 +614,11 @@ pub fn setup_big_space_hierarchy(
         crate::globe_lod::GlobeTiles::default(),
     ));
 
-    // ── Observer Camera (on Earth Grid for close-up orbit view) ────────────
-    // Camera stays on the Grid (star-fixed). For surface views, it uses
-    // SurfaceCamera which recomputes world-space rotation from LocalGravityField.
+    // ── Observer Camera (on Earth's INERTIAL ANCHOR, for the orbit view) ───
+    // The camera must sit in a star-fixed frame, and the Earth Grid is NOT one:
+    // it rotates with Earth (`body_rotation_system`). See `InertialAnchor`.
+    // For surface views the camera uses SurfaceCamera, which recomputes
+    // world-space rotation from LocalGravityField.
     let earth_radius_m = 6_371_000.0;
     let earth_orbit_distance = earth_radius_m * 3.0;
     let cam_pos = Vec3::new(0.0, earth_orbit_distance * 0.4, earth_orbit_distance);
@@ -559,32 +636,32 @@ pub fn setup_big_space_hierarchy(
 
     commands.spawn((
         Camera::default(),
-        Camera3d::default(),
+        // The scene camera stated as INTENT: `lunco-render-bevy` attaches `Camera3d`,
+        // the tonemapper and MSAA. Systems asking "which entity is the scene camera?"
+        // filter on `With<SceneCamera>` — that question no longer costs a GPU stack.
+        //
+        // BLOOM IS DELIBERATELY OFF. This spawn used to carry a tuned `Bloom`, but
+        // `hdr` is set true NOWHERE in this repo (review finding `R4`), so that bloom
+        // rendered NOTHING while still paying for its downsample/upsample chain.
+        // Keeping it off is therefore what preserves today's actual output; turning it
+        // on would be a visual change smuggled in by a decoupling pass. If someone
+        // wants real bloom, that is a separate, deliberate decision:
+        // `SceneCamera::default().with_bloom(..)` — which turns HDR on for you, because
+        // bloom without HDR is exactly the bug `SceneCamera` exists to make
+        // unrepresentable.
+        //
+        // Tonemapping stays `TonyMcMapface` (`ToneMap::default()`). SMAA was already
+        // dropped here — it blanks egui-composited viewports (the SMAA black-viewport
+        // fix on main).
+        SceneCamera::default(),
         // Physical exposure paired with the canonical sun illuminance
-        // (single source of truth — lunco_environment::LunarSun). SMAA was
-        // deliberately dropped here — it blanks egui-composited viewports
-        // (see the SMAA black-viewport fix on main).
+        // (single source of truth — lunco_environment::LunarSun).
         bevy::camera::Exposure { ev100: lunco_environment::LunarSun::default().exposure_ev100 },
         Projection::Perspective(PerspectiveProjection {
             near: 1.0,
             far: 1.0e15,
             ..default()
         }),
-        bevy::post_process::bloom::Bloom {
-            // Airless world: no atmospheric glow — only genuine specular glints
-            // / the sun disc should bloom. The high prefilter threshold gates it.
-            intensity: 0.15,
-            low_frequency_boost: 0.5,
-            low_frequency_boost_curvature: 0.5,
-            high_pass_frequency: 1.0,
-            prefilter: bevy::post_process::bloom::BloomPrefilter {
-                threshold: 2.0,
-                threshold_softness: 0.5,
-            },
-            composite_mode: bevy::post_process::bloom::BloomCompositeMode::EnergyConserving,
-            ..bevy::post_process::bloom::Bloom::NATURAL
-        },
-        bevy::core_pipeline::tonemapping::Tonemapping::TonyMcMapface,
         FloatingOrigin,
         CellCoord::default(),
         Transform::from_translation(cam_pos).looking_at(Vec3::ZERO, Vec3::Y),
@@ -594,7 +671,7 @@ pub fn setup_big_space_hierarchy(
         lunco_controller::get_avatar_input_map(),
         lunco_core::IntentAnalogState::default(),
         Name::new("Observer Camera"),
-    )).set_parent_in_place(earth_grid); // On Earth Grid (inertial) for orbit view.
+    )).set_parent_in_place(earth_inertial); // Star-fixed frame at Earth — NOT the rotating Earth Grid.
     } // config.spawn_observer_camera
 
     // ── Other Planets (simple entities on Solar Grid) ──────────────────────
@@ -614,10 +691,13 @@ pub fn setup_big_space_hierarchy(
             Transform::default(),
             GlobalTransform::default(),
             Mesh3d(meshes.add(Sphere::new(body_desc.radius_m as f32).mesh().ico(2).unwrap())),
-            MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: Color::srgb(0.5, 0.5, 0.5),
+            PbrLook {
+                base_color: LinearRgba::from(Color::srgb(0.5, 0.5, 0.5)),
+                // `StandardMaterial`'s default (inherited via `..default()` before);
+                // `PbrLook`'s default is 1.0, so state it or the planets go matte.
+                perceptual_roughness: 0.5,
                 ..default()
-            })),
+            },
             Name::new(format!("{} Body", body_desc.name)),
             Collider::sphere(body_desc.radius_m),
         )).set_parent_in_place(solar_grid);

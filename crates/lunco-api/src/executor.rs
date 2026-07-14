@@ -10,8 +10,6 @@
 
 use bevy::prelude::*;
 use bevy::reflect::TypeRegistry;
-#[cfg(feature = "render")]
-use std::io::Cursor;
 use crate::{
     registry::ApiEntityRegistry,
     queries::{ApiQueryRegistry, ApiVisibility},
@@ -70,16 +68,20 @@ pub fn api_request_observer(
     // of Avian's `Position` directly) to keep this crate free of an
     // avian3d dep.
     q_transforms: Query<&GlobalTransform>,
+    // Which commands answer later, on the correlation id. Populated by whichever crate owns
+    // them (`register_deferred_command`), never by name here.
+    deferred_commands: Option<Res<DeferredCommands>>,
 ) {
     let req = trigger.event();
     let correlation_id = req.correlation_id;
 
     let maybe_response = {
         let type_reg = type_registry.read();
-        execute_request(&req.request, &mut commands, &mut id_counter, &registry, &query_registry, &visibility, &type_reg, &cmd_results, &mut subscriptions, &q_meta, &q_transforms, correlation_id)
+        execute_request(&req.request, &mut commands, &mut id_counter, &registry, &query_registry, &visibility, &type_reg, &cmd_results, &mut subscriptions, &q_meta, &q_transforms, deferred_commands.as_deref(), correlation_id)
     };
 
-    // None means the response is deferred (e.g. waiting for ScreenshotCaptured).
+    // None means the response is deferred — a deferred command or query provider will
+    // answer on this correlation id later. See `DeferredCommands`.
     if let Some(response) = maybe_response {
         commands.trigger(ApiResponseEvent { response, correlation_id });
     }
@@ -105,6 +107,54 @@ pub fn project_command_events(trigger: On<ApiCommandEvent>, mut commands: Comman
         data: lunco_core::TelemetryValue::String(name.clone()),
         timestamp: 0.0,
     });
+}
+
+/// Can `params` actually become this command? `Ok(())` if it deserializes AND
+/// is constructible; `Err(message)` otherwise.
+///
+/// The two ways a command dies silently, checked here so a caller learns about
+/// them from its own HTTP response instead of from a log line it can't see:
+///
+/// 1. **Deserialize failure** — a misspelled/mistyped field.
+/// 2. **Not constructible** — deserializes as a partial `dyn Reflect`, but
+///    `FromReflect` can't build the concrete type (a field with no `Default`
+///    was omitted). `ReflectEvent::trigger` PANICS on that, so the dispatcher
+///    guards it and drops the command.
+///
+/// This mirrors exactly what `api_command_dispatcher` does, deliberately: the
+/// dispatcher stays authoritative (it also serves in-process triggers), and this
+/// is the synchronous gate in front of it.
+pub fn validate_command_params(
+    command: &str,
+    params: &serde_json::Value,
+    registration: &bevy::reflect::TypeRegistration,
+    type_reg: &TypeRegistry,
+    entities: &ApiEntityRegistry,
+) -> Result<(), String> {
+    use serde::de::DeserializeSeed;
+
+    let mut resolved = params.clone();
+    // Unit-struct commands (`Exit`, `Ping`) arrive with no `params` at all.
+    if resolved.is_null() {
+        resolved = serde_json::Value::Object(serde_json::Map::new());
+    }
+    resolve_command_ids(&mut resolved, registration.type_id(), type_reg, entities);
+
+    let de = bevy::reflect::serde::TypedReflectDeserializer::new(registration, type_reg);
+    let reflected = de
+        .deserialize(resolved)
+        .map_err(|e| format!("Command '{command}': invalid params: {e}"))?;
+
+    let constructible = registration
+        .data::<bevy::reflect::ReflectFromReflect>()
+        .map(|fr| fr.from_reflect(reflected.as_ref()).is_some())
+        .unwrap_or(true);
+    if !constructible {
+        return Err(format!(
+            "Command '{command}': params are not constructible into the command type (a required field is missing or invalid)"
+        ));
+    }
+    Ok(())
 }
 
 /// Dynamic dispatcher: converts generic [ApiCommandEvent] into pure simulation events.
@@ -159,7 +209,19 @@ pub fn api_command_dispatcher(
 
                 // Re-deserialize inside the world queue where we have access to everything
                 let reflect_deserializer = bevy::reflect::serde::TypedReflectDeserializer::new(registration, &type_reg);
-                if let Ok(reflected) = reflect_deserializer.deserialize(resolved_params) {
+                let reflected = match reflect_deserializer.deserialize(resolved_params) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let msg = format!("command '{cmd_name}': invalid params: {e}");
+                        warn!("[lunco-api] {msg}; dropped");
+                        world.resource_mut::<lunco_core::CommandResults>().insert(
+                            cmd_id,
+                            lunco_core::CommandOutcome::Rejected(lunco_core::Reject::InvalidOp(msg)),
+                        );
+                        return;
+                    }
+                };
+                {
                     // Guard against a panic in `ReflectEvent::trigger`: it builds
                     // the concrete type via `FromReflect`, falling back to
                     // `Default`/`FromWorld` and PANICKING when none apply (e.g. a
@@ -172,8 +234,18 @@ pub fn api_command_dispatcher(
                         .map(|fr| fr.from_reflect(reflected.as_ref()).is_some())
                         .unwrap_or(true);
                     if !constructible {
-                        warn!(
-                            "[lunco-api] command '{cmd_name}' not constructible from params (missing/invalid fields); dropped"
+                        let msg = format!(
+                            "command '{cmd_name}' not constructible from params (missing/invalid fields)"
+                        );
+                        warn!("[lunco-api] {msg}; dropped");
+                        // Record a TERMINAL outcome. A dropped command used to
+                        // leave `CommandResults` empty, so `QueryCommandResult`
+                        // answered `outcome: null` — the same answer a healthy
+                        // fire-and-forget command gives. A poller could not tell
+                        // "never ran" from "ran fine".
+                        world.resource_mut::<lunco_core::CommandResults>().insert(
+                            cmd_id,
+                            lunco_core::CommandOutcome::Rejected(lunco_core::Reject::InvalidOp(msg)),
                         );
                         return;
                     }
@@ -188,7 +260,19 @@ pub fn api_command_dispatcher(
             });
         },
         Err(e) => {
-            warn!("[lunco-api] Deserialization error for '{}': {}", event.command, e);
+            // Terminal, and RECORDED — see the `!constructible` branch above.
+            // An external caller sees this synchronously as a 422 from
+            // `execute_request`'s pre-flight validation; an in-process trigger
+            // learns about it by polling `QueryCommandResult`.
+            let msg = format!("command '{}': invalid params: {e}", event.command);
+            warn!("[lunco-api] {msg}; dropped");
+            let cmd_id = event.id;
+            commands.queue(move |world: &mut World| {
+                world.resource_mut::<lunco_core::CommandResults>().insert(
+                    cmd_id,
+                    lunco_core::CommandOutcome::Rejected(lunco_core::Reject::InvalidOp(msg)),
+                );
+            });
         }
     }
 }
@@ -428,7 +512,7 @@ fn convert_leaf(
 }
 
 /// Execute a single API request against the ECS world.
-/// Returns `None` when the response is deferred (e.g. waiting for ScreenshotCaptured).
+/// Returns `None` when the response is deferred — see [`DeferredCommands`].
 fn execute_request(
     request: &ApiRequest,
     commands: &mut Commands,
@@ -441,71 +525,41 @@ fn execute_request(
     subscriptions: &mut TelemetrySubscriptions,
     q_meta: &Query<(Option<&Name>, Has<lunco_fsw::FlightSoftware>, Option<&lunco_core::CelestialBody>)>,
     q_transforms: &Query<&GlobalTransform>,
+    deferred_commands: Option<&DeferredCommands>,
     correlation_id: u64,
 ) -> Option<ApiResponse> {
     match request {
         ApiRequest::ExecuteCommand { command, params } => {
-            // Special-case: CaptureScreenshot — response depends on save_to_file param.
-            // Only available with the `render` feature; on a headless server this
-            // falls through and resolves as "command not found".
-            #[cfg(feature = "render")]
-            if command == "CaptureScreenshot" {
-                let save_to_file = params
-                    .get("save_to_file")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-
-                // Optional crop region [x, y, w, h] in physical pixels.
-                // Cropped server-side before save/encode so callers don't
-                // need an external image tool to zoom into a panel.
-                let region = params.get("region").and_then(|v| {
-                    let a = v.as_array()?;
-                    if a.len() != 4 { return None; }
-                    let n: Vec<u32> = a.iter().filter_map(|x| x.as_u64().map(|u| u as u32)).collect();
-                    if n.len() != 4 { return None; }
-                    Some((n[0], n[1], n[2], n[3]))
+            // A DEFERRED command answers on this request's correlation id, later. The
+            // executor does not know (and must not know) which commands those are — a crate
+            // that owns one calls `register_deferred_command::<T>()`. See `DeferredCommands`.
+            //
+            // Note the ordering: we only defer for a command that is ALSO registered as a
+            // type below. A binary without the owning plugin therefore falls through to the
+            // ordinary `CommandNotFound` path instead of deferring into silence and hanging
+            // the caller forever.
+            if deferred_commands.is_some_and(|d| d.contains(command))
+                && type_registry.get_with_short_type_path(command).is_some()
+            {
+                commands.insert_resource(PendingApiRequest { correlation_id });
+                // Arm the watchdog BEFORE dispatching: if the handler forgets to answer (or
+                // dies trying), the caller gets a clear error instead of hanging forever.
+                commands.queue(move |world: &mut World| {
+                    let now = world
+                        .get_resource::<Time<bevy::time::Real>>()
+                        .map(|t| t.elapsed_secs_f64())
+                        .unwrap_or(0.0);
+                    if let Some(mut deferred) = world.get_resource_mut::<DeferredRequests>() {
+                        let deadline = now + deferred.timeout_secs;
+                        deferred.outstanding.insert(correlation_id, deadline);
+                    }
                 });
-
-                // Spawn Bevy's screenshot capture entity directly here
-                // instead of relying on a domain-side observer. Earlier
-                // the executor only triggered `ApiCommandEvent` and
-                // hoped a `CaptureScreenshot` observer downstream would
-                // call `Screenshot::primary_window()`. That observer
-                // only ships in `lunco-avatar`; binaries that don't pull
-                // it in (lunica, hello_workbench) silently
-                // never produced a screenshot — curl would just hang.
-                // Doing the spawn here keeps the screenshot path
-                // self-contained in lunco-api.
-                use bevy::render::view::screenshot::Screenshot;
-                if save_to_file {
-                    // Honor a caller-supplied path (e.g. /tmp/lunco_screenshot.png),
-                    // else fall back to a timestamped name in the cwd.
-                    let path = params
-                        .get("path")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| format!("screenshot_{}.png",
-                            web_time::SystemTime::now()
-                                .duration_since(web_time::UNIX_EPOCH)
-                                .unwrap()
-                                .as_secs()));
-                    commands.insert_resource(PendingScreenshotRequest {
-                        correlation_id: None,   // response already sent
-                        save_path: Some(path.clone()),
-                        region,
-                    });
-                    commands.spawn(Screenshot::primary_window());
-                    return Some(ApiResponse::ok(serde_json::json!({ "path": path })));
-                } else {
-                    // Raw-PNG mode: defer response until ScreenshotCaptured fires.
-                    commands.insert_resource(PendingScreenshotRequest {
-                        correlation_id: Some(correlation_id),
-                        save_path: None,
-                        region,
-                    });
-                    commands.spawn(Screenshot::primary_window());
-                    return None; // response deferred
-                }
+                commands.trigger(ApiCommandEvent {
+                    command: command.clone(),
+                    params: params.clone(),
+                    id: id_counter.next(),
+                });
+                return None; // the handler answers on `correlation_id`
             }
 
             // Visibility gate — commands marked hidden in `ApiVisibility`
@@ -545,6 +599,23 @@ fn execute_request(
 
             if !has_reflect_event {
                 return Some(ApiResponse::error(ApiErrorCode::CommandNotFound, format!("Command '{}' not found or not API-accessible", command)));
+            }
+
+            // Validate the PARAMS synchronously, here, while the registry is in
+            // hand. Previously this returned `command_accepted` immediately and
+            // the dispatcher, running later, just `warn!`d and dropped anything
+            // that failed to deserialize — so a typo'd param returned 200 OK and
+            // `QueryCommandResult` came back `outcome: null`, which is also what
+            // a fire-and-forget success looks like. A bad command was
+            // INDISTINGUISHABLE from a good one. Now it is a synchronous 422.
+            //
+            // The dispatcher still re-validates (it must: `ApiCommandEvent` can
+            // be triggered in-process too), so this is a gate, not the only
+            // check.
+            if let Some(registration) = registration {
+                if let Err(msg) = validate_command_params(command, params, registration, type_registry, registry) {
+                    return Some(ApiResponse::error(ApiErrorCode::DeserializationError, msg));
+                }
             }
 
             // Trigger as ApiCommandEvent — handled by api_command_dispatcher
@@ -613,10 +684,22 @@ fn execute_request(
             let id = subscriptions.subscribe(filter.clone());
             Some(ApiResponse::ok(serde_json::json!({ "subscription_id": id })))
         }
+        ApiRequest::UnsubscribeTelemetry { id } => {
+            // `unsubscribe` has existed since the beginning with NOTHING able to call
+            // it — subscriptions leaked for the life of the process, and a client that
+            // reconnected piled up a new one every time.
+            subscriptions.unsubscribe(*id);
+            Some(ApiResponse::ok(serde_json::json!({ "unsubscribed": id })))
+        }
         ApiRequest::QueryCommandResult { id } => {
-            // `outcome: null` means no result recorded for this id — either a
-            // bad id, or a fire-and-forget command whose handler reports no
-            // outcome. Callers that need a result use result-reporting commands.
+            // `outcome: null` = STILL PENDING (or an unknown id): the command was
+            // accepted and no terminal outcome has been recorded yet. It no
+            // longer doubles as "was silently dropped" — invalid params are now
+            // rejected synchronously (422) by `execute_request`, and the
+            // dispatcher records `Rejected` for anything it drops. A
+            // fire-and-forget command whose handler reports nothing also stays
+            // `null`; that's the one remaining ambiguity, and it is bounded to
+            // handlers that never report.
             let outcome = cmd_results.get(*id);
             Some(ApiResponse::ok(serde_json::json!({
                 "id": id,
@@ -626,22 +709,170 @@ fn execute_request(
     }
 }
 
-#[cfg(feature = "render")]
-use bevy::render::view::screenshot::ScreenshotCaptured;
+/// **Commands that answer LATER, on the request's correlation id.**
+///
+/// Most commands are fire-and-report: the executor validates them, dispatches an
+/// `ApiCommandEvent`, and answers `command_accepted` immediately. A few cannot — their
+/// result only exists after something asynchronous happens (a GPU frame is captured, a bake
+/// finishes, a file is written). Those want to put the *actual payload* in the HTTP response
+/// rather than make the caller poll `QueryCommandResult`.
+///
+/// The mechanism already existed for query providers (`return None; // response deferred`,
+/// then answer with an [`ApiResponseEvent`] carrying the same `correlation_id`). This makes
+/// it available to COMMANDS too, and — crucially — **without `lunco-api` knowing what any of
+/// them are.**
+///
+/// It used to know. The executor special-cased the literal string `"CaptureScreenshot"`, and
+/// carried a `PendingScreenshotRequest` resource and a `ScreenshotBackend` marker to go with
+/// it — a domain capability named inside the substrate, plus a hand-rolled second answer to
+/// "does this binary have that command?" that the type registry already gives you for free.
+///
+/// A crate that owns such a command registers it:
+///
+/// ```ignore
+/// app.register_deferred_command::<CaptureScreenshot>();
+/// ```
+///
+/// and its `#[on_command]` handler answers when ready:
+///
+/// ```ignore
+/// let cid = pending.correlation_id;              // Res<PendingApiRequest>
+/// commands.trigger(ApiResponseEvent { correlation_id: cid, response });
+/// ```
+///
+/// **Contract:** a deferred command MUST eventually send exactly one `ApiResponseEvent` on
+/// that id. If it never does, the caller hangs — which is precisely why a command that is
+/// not registered here (because its plugin isn't in this binary) must fall through to the
+/// ordinary `CommandNotFound` path rather than defer into silence.
+#[derive(Resource, Default, Debug)]
+pub struct DeferredCommands(std::collections::HashSet<String>);
 
-/// Pending screenshot request — set before the screenshot is triggered so the
-/// ScreenshotCaptured observer knows what to do with the image.
-#[cfg(feature = "render")]
-#[derive(Resource, Default)]
-pub struct PendingScreenshotRequest {
-    /// correlation_id of the HTTP request waiting for the screenshot (raw-PNG mode).
-    /// None when save_to_file is true (response is already sent).
-    pub correlation_id: Option<u64>,
-    /// When Some, save to this path and do not return bytes to the caller.
-    pub save_path: Option<String>,
-    /// Optional crop region [x, y, w, h] in physical pixels, applied before
-    /// save/encode. None = full frame.
-    pub region: Option<(u32, u32, u32, u32)>,
+impl DeferredCommands {
+    pub fn contains(&self, command: &str) -> bool {
+        self.0.contains(command)
+    }
+}
+
+/// **The watchdog.** Every deferred response the executor is still waiting for, and when it
+/// gives up.
+///
+/// A deferred command owes the caller exactly one [`ApiResponseEvent`] on its correlation id.
+/// If it never sends one — a handler that forgot, a capture that never landed, a task that
+/// panicked — the caller does not get an error. It gets **nothing**: the HTTP oneshot is
+/// never resolved and the request hangs until some client-side timeout, with no trace in the
+/// log. That is the worst failure mode available, and "the handler must remember" is not a
+/// mechanism — it is a hope.
+///
+/// So the executor holds itself accountable: it records what it deferred, and if no answer
+/// arrives inside [`timeout_secs`](Self::timeout_secs) it sends the error itself. A slow
+/// handler degrades to a clear 500 instead of a silent hang.
+///
+/// This bit *immediately*: making deferral generic moved `save_to_file` screenshots onto this
+/// path, and that branch answers early and never sends a second response — so the first thing
+/// the watchdog caught was a real hang, in a command that had worked for months.
+#[derive(Resource, Debug)]
+pub struct DeferredRequests {
+    /// correlation_id → deadline, in `Time<Real>` seconds. REAL time, deliberately: a paused
+    /// or warped simulation must not change when an HTTP caller gives up.
+    outstanding: std::collections::HashMap<u64, f64>,
+    /// How long a deferred command may take. Generous — a GPU readback is a frame, but a bake
+    /// or an export could be seconds — while still bounded.
+    pub timeout_secs: f64,
+}
+
+impl Default for DeferredRequests {
+    fn default() -> Self {
+        Self { outstanding: std::collections::HashMap::new(), timeout_secs: 15.0 }
+    }
+}
+
+impl DeferredRequests {
+    /// Number of responses still owed (tests / diagnostics).
+    pub fn outstanding(&self) -> usize {
+        self.outstanding.len()
+    }
+}
+
+/// Any response — from a deferred command, a query provider, or an ordinary reply — settles
+/// the debt for its correlation id.
+fn clear_answered_request(
+    trigger: On<ApiResponseEvent>,
+    deferred: Option<ResMut<DeferredRequests>>,
+) {
+    if let Some(mut deferred) = deferred {
+        deferred.outstanding.remove(&trigger.event().correlation_id);
+    }
+}
+
+/// Nobody answered in time — answer for them, so the caller gets an error instead of silence.
+fn expire_deferred_requests(
+    time: Res<Time<bevy::time::Real>>,
+    mut deferred: ResMut<DeferredRequests>,
+    mut commands: Commands,
+) {
+    if deferred.outstanding.is_empty() {
+        return;
+    }
+    let now = time.elapsed_secs_f64();
+    let expired: Vec<u64> = deferred
+        .outstanding
+        .iter()
+        .filter(|(_, &deadline)| now >= deadline)
+        .map(|(&id, _)| id)
+        .collect();
+
+    for correlation_id in expired {
+        deferred.outstanding.remove(&correlation_id);
+        error!(
+            "[lunco-api] a deferred command never answered request {correlation_id} within {}s \
+             — returning an error. The handler must send exactly one ApiResponseEvent on its \
+             correlation id; see DeferredRequests.",
+            deferred.timeout_secs
+        );
+        commands.trigger(ApiResponseEvent {
+            correlation_id,
+            response: ApiResponse::error(
+                ApiErrorCode::InternalError,
+                "the command accepted this request but never produced a response",
+            ),
+        });
+    }
+}
+
+/// The correlation id of the request a deferred command is currently answering.
+///
+/// Set by the executor immediately before it dispatches the command; read by the handler
+/// (and by whatever async completion the handler arms) to address the response.
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct PendingApiRequest {
+    pub correlation_id: u64,
+}
+
+/// `app.register_deferred_command::<T>()` — declare that `T` answers on the correlation id.
+pub trait DeferredCommandAppExt {
+    fn register_deferred_command<T: bevy::prelude::Event + bevy::reflect::GetTypeRegistration>(
+        &mut self,
+    ) -> &mut Self;
+}
+
+impl DeferredCommandAppExt for App {
+    fn register_deferred_command<T: bevy::prelude::Event + bevy::reflect::GetTypeRegistration>(
+        &mut self,
+    ) -> &mut Self {
+        self.init_resource::<DeferredCommands>();
+        self.init_resource::<PendingApiRequest>();
+        // Registering the TYPE is what makes the command exist for this binary at all — it
+        // is the same signal `DiscoverSchema` and the not-found check already read. No
+        // separate "backend installed" marker.
+        self.register_type::<T>();
+        let short = std::any::type_name::<T>()
+            .rsplit("::")
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        self.world_mut().resource_mut::<DeferredCommands>().0.insert(short);
+        self
+    }
 }
 
 /// Plugin that registers the API executor observer.
@@ -664,59 +895,15 @@ impl Plugin for ApiExecutorPlugin {
             .add_observer(api_command_dispatcher)
             .add_observer(project_command_events);
 
-        // Screenshot capture rides the bevy render stack — only present with
-        // the `render` feature (off on a headless server).
-        #[cfg(feature = "render")]
-        app.init_resource::<PendingScreenshotRequest>()
-            .add_observer(save_screenshot);
-    }
-}
-
-#[cfg(feature = "render")]
-fn save_screenshot(
-    trigger: On<ScreenshotCaptured>,
-    mut pending: ResMut<PendingScreenshotRequest>,
-    mut commands: Commands,
-) {
-    let event = trigger.event();
-    let correlation_id = pending.correlation_id.take();
-    let save_path = pending.save_path.take();
-    let region = pending.region.take();
-
-    let Ok(mut dyn_img) = event.image.clone().try_into_dynamic() else {
-        error!("[lunco-api] Screenshot: failed to convert image");
-        return;
-    };
-
-    // Crop to the requested region (clamped to image bounds) so callers can
-    // zoom into a panel without an external image tool.
-    if let Some((x, y, w, h)) = region {
-        let (iw, ih) = (dyn_img.width(), dyn_img.height());
-        if x < iw && y < ih && w > 0 && h > 0 {
-            let cw = w.min(iw - x);
-            let ch = h.min(ih - y);
-            dyn_img = dyn_img.crop_imm(x, y, cw, ch);
-        } else {
-            error!("[lunco-api] Screenshot region {:?} outside image {}x{} — saving full frame", region, iw, ih);
-        }
-    }
-
-    if let Some(path) = save_path {
-        // save_to_file mode — write to disk, response already sent
-        if let Err(e) = dyn_img.save(&path) {
-            error!("[lunco-api] Failed to save screenshot to '{}': {}", path, e);
-        }
-    } else if let Some(cid) = correlation_id {
-        // raw-PNG mode — encode and send back via the deferred HTTP response
-        let mut png_bytes: Vec<u8> = Vec::new();
-        if let Ok(()) = dyn_img.write_to(&mut Cursor::new(&mut png_bytes), image::ImageFormat::Png) {
-            commands.trigger(ApiResponseEvent {
-                response: crate::schema::ApiResponse::Screenshot { png_bytes },
-                correlation_id: cid,
-            });
-        } else {
-            error!("[lunco-api] Failed to encode screenshot as PNG");
-        }
+        // Deferred-command plumbing. WHICH commands are deferred is not decided here — a
+        // crate that owns one calls `register_deferred_command::<T>()`.
+        app.init_resource::<DeferredCommands>()
+            .init_resource::<PendingApiRequest>()
+            // The watchdog: a deferred response that never arrives becomes an error, not a
+            // hang. See `DeferredRequests`.
+            .init_resource::<DeferredRequests>()
+            .add_observer(clear_answered_request)
+            .add_systems(Update, expire_deferred_requests);
     }
 }
 
@@ -726,6 +913,90 @@ mod tests {
     use lunco_core::{
         on_command, ActiveCommandId, Ack, Command, CommandOutcome, CommandResults, OpId,
     };
+
+    /// THE WATCHDOG. A deferred command that never answers must produce an ERROR, not
+    /// silence. Before this, a handler that forgot to send its `ApiResponseEvent` left the
+    /// HTTP oneshot unresolved: the caller hung until a client-side timeout, and nothing was
+    /// logged anywhere. "The handler must remember" is a hope, not a mechanism.
+    #[test]
+    fn a_deferred_command_that_never_answers_becomes_an_error() {
+        use bevy::time::TimeUpdateStrategy;
+        use std::sync::{Arc, Mutex};
+        use std::time::Duration;
+
+        let mut app = App::new();
+        app.add_plugins(bevy::time::TimePlugin);
+        app.init_resource::<DeferredRequests>();
+        app.add_observer(clear_answered_request);
+        app.add_systems(Update, expire_deferred_requests);
+        // 5 s of real time per update — well past the default 15 s deadline in a few ticks.
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs(5)));
+
+        // (correlation_id, is_error) — `ApiResponseEvent` isn't `Clone`.
+        let seen: Arc<Mutex<Vec<(u64, bool)>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        app.add_observer(move |t: On<ApiResponseEvent>| {
+            let e = t.event();
+            sink.lock().unwrap().push((e.correlation_id, matches!(e.response, ApiResponse::Error { .. })));
+        });
+
+        // A command deferred at t=0 that nobody ever answers.
+        app.world_mut().resource_mut::<DeferredRequests>().outstanding.insert(7, 15.0);
+        assert_eq!(app.world().resource::<DeferredRequests>().outstanding(), 1);
+
+        for _ in 0..5 {
+            app.update();
+        }
+
+        let seen = seen.lock().unwrap();
+        let (_, is_error) = *seen.iter().find(|(id, _)| *id == 7).expect("the caller must get AN answer");
+        assert!(is_error, "an unanswered deferred command must surface as an error, not a hang");
+        assert_eq!(
+            app.world().resource::<DeferredRequests>().outstanding(),
+            0,
+            "the expired request must be dropped, not re-fired every frame"
+        );
+    }
+
+    /// …and a command that DOES answer must not then be second-guessed by the watchdog.
+    #[test]
+    fn an_answered_request_is_not_timed_out() {
+        use bevy::time::TimeUpdateStrategy;
+        use std::sync::{Arc, Mutex};
+        use std::time::Duration;
+
+        let mut app = App::new();
+        app.add_plugins(bevy::time::TimePlugin);
+        app.init_resource::<DeferredRequests>();
+        app.add_observer(clear_answered_request);
+        app.add_systems(Update, expire_deferred_requests);
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs(5)));
+
+        let count: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
+        let sink = Arc::clone(&count);
+        app.add_observer(move |t: On<ApiResponseEvent>| {
+            if t.event().correlation_id == 9 {
+                *sink.lock().unwrap() += 1;
+            }
+        });
+
+        app.world_mut().resource_mut::<DeferredRequests>().outstanding.insert(9, 15.0);
+
+        // The handler answers, promptly.
+        app.world_mut().trigger(ApiResponseEvent {
+            correlation_id: 9,
+            response: ApiResponse::ok(serde_json::json!({ "ok": true })),
+        });
+        app.update();
+        assert_eq!(app.world().resource::<DeferredRequests>().outstanding(), 0);
+
+        // Long past the deadline — the watchdog must stay quiet. A SECOND response on the same
+        // id would resolve the caller's oneshot twice.
+        for _ in 0..5 {
+            app.update();
+        }
+        assert_eq!(*count.lock().unwrap(), 1, "exactly one response per request");
+    }
 
     #[test]
     fn test_command_id_generation() {
@@ -783,6 +1054,81 @@ mod tests {
         // No active id (in-process trigger) → nothing recorded.
         app.world_mut().trigger(TestEcho { fail: false });
         assert!(app.world().resource::<CommandResults>().get(99).is_none());
+    }
+
+    // ── Params validation (a failed command must NOT report success) ──────
+    //
+    // The bug: `execute_request` minted a `command_id` and returned
+    // `command_accepted` BEFORE anything looked at the params; the dispatcher
+    // later dropped an undeserializable command with a `warn!`, and
+    // `QueryCommandResult` answered `outcome: null` — the same thing it says
+    // for a healthy fire-and-forget command. `{"command":"X","params":{bad}}`
+    // was a 200 OK. These pin the synchronous gate that replaced it.
+
+    fn test_registry() -> bevy::reflect::TypeRegistry {
+        let mut reg = bevy::reflect::TypeRegistry::new();
+        reg.register::<TestEcho>();
+        reg
+    }
+
+    #[test]
+    fn valid_params_pass_validation() {
+        let reg = test_registry();
+        let registration = reg.get_with_short_type_path("TestEcho").unwrap();
+        assert!(validate_command_params(
+            "TestEcho",
+            &serde_json::json!({ "fail": true }),
+            registration,
+            &reg,
+            &ApiEntityRegistry::default(),
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn absent_params_pass_validation() {
+        // Unit-ish command sent as `{"command":"TestEcho"}` — no params at all.
+        // All fields default, so this is legitimately valid.
+        let reg = test_registry();
+        let registration = reg.get_with_short_type_path("TestEcho").unwrap();
+        assert!(validate_command_params(
+            "TestEcho",
+            &serde_json::Value::Null,
+            registration,
+            &reg,
+            &ApiEntityRegistry::default(),
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn wrong_field_type_fails_validation() {
+        let reg = test_registry();
+        let registration = reg.get_with_short_type_path("TestEcho").unwrap();
+        let err = validate_command_params(
+            "TestEcho",
+            &serde_json::json!({ "fail": "not-a-bool" }),
+            registration,
+            &reg,
+            &ApiEntityRegistry::default(),
+        )
+        .unwrap_err();
+        assert!(err.contains("TestEcho"), "error names the command: {err}");
+    }
+
+    #[test]
+    fn unknown_field_fails_validation() {
+        // The headline case: a typo'd param name. This used to return 200 OK.
+        let reg = test_registry();
+        let registration = reg.get_with_short_type_path("TestEcho").unwrap();
+        assert!(validate_command_params(
+            "TestEcho",
+            &serde_json::json!({ "nope": true }),
+            registration,
+            &reg,
+            &ApiEntityRegistry::default(),
+        )
+        .is_err());
     }
 }
 

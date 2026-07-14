@@ -58,12 +58,23 @@ fn sun_visibility(
         let p = p0 + dir * t;
         if (p.x < 0.0 || p.y < 0.0 || p.x > size.x || p.y > size.y) { break; }
         let h = hf_height(tex, p * to_grid, ri);
-        // Penumbra width floored at 2 heightfield texels (keep in sync with
-        // HeightField::sun_visibility): the physical width `t * tan_sun_r`
-        // collapses below one texel for near casters at grazing sun,
-        // quantizing visibility into a hard 0/1 staircase.
-        let occ = (h0 + slope * t - h) / max(t * tan_sun_r, texel * 2.0);
-        vis = min(vis, occ);
+        // Penumbra width floored at ONE heightfield texel (keep in sync with
+        // HeightField::sun_visibility): the physical width `t * tan_sun_r` collapses far
+        // below a texel for near casters at grazing sun, quantizing visibility into a hard
+        // 0/1 staircase. One texel, not two: the floor also sets how far above the ray an
+        // occluder must stand to reach full umbra, and at two texels nothing ever got
+        // properly dark.
+        let width = max(t * tan_sun_r, texel);
+        // How far the terrain rises ABOVE the ray, in penumbra widths — the only thing
+        // that may darken a sample. `1 - rise` is fully lit while the ray is clear and
+        // fades to 0 once the occluder stands a full width above it.
+        //
+        // NOT `(ray - h) / width`: that demanded the ray clear the terrain by a whole
+        // penumbra width to read lit, so with the 2-texel floor dominating (it does
+        // almost everywhere — the physical width is centimetres) even FLAT ground came
+        // back ~32% lit. The floor softens the shadow EDGE; it must not dim open ground.
+        let rise = (h - (h0 + slope * t)) / width;
+        vis = min(vis, 1.0 - rise);
         if (vis <= 0.0) { return 0.0; }
         t = t * 1.18 + texel * 0.5;
         if (t > max_t) { break; }

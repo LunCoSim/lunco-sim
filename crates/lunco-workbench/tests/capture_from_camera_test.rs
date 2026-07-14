@@ -6,13 +6,12 @@
 
 use bevy::prelude::*;
 use bevy::render::view::screenshot::Screenshot;
-use lunco_avatar::CaptureFromCamera;
-use lunco_core::Command;
+use lunco_workbench::screenshot::CaptureFromCamera;
 
-/// Wire just the capture observer (no full AvatarPlugin — keeps the test
-/// focused + fast). Mirrors `checkpoint_click_test`'s minimal wiring.
+/// Wire just the capture observers (no full `WorkbenchPlugin` — keeps the test
+/// focused + fast, and avoids standing up egui/winit).
 fn wire(app: &mut App) {
-    lunco_avatar::register_all_commands(app);
+    lunco_workbench::screenshot::register_all_commands(app);
 }
 
 #[test]

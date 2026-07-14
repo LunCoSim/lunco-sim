@@ -335,7 +335,11 @@ impl Workspace {
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Test fixtures live on disk and run natively — the `disallowed_methods` ban on
+// `std::fs` guards wasm *runtime* paths, not tests (clippy.toml says so; cargo has
+// no path-scoped lint config, so it must be written out).
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use lunco_twin::TwinMode;

@@ -2,7 +2,6 @@ use bevy::prelude::*;
 use big_space::prelude::*;
 use lunco_celestial::CelestialPlugin;
 use lunco_celestial::CelestialBody;
-use lunco_materials::ShaderMaterial;
 use lunco_time::WorldTime;
 use lunco_celestial::{EphemerisProvider, EphemerisResource};
 use std::sync::Arc;
@@ -16,9 +15,112 @@ use std::sync::Arc;
 #[derive(Debug)]
 struct StubEphemeris;
 impl EphemerisProvider for StubEphemeris {
-    fn position(&self, _body_id: i32, epoch_jd: f64) -> bevy::math::DVec3 {
-        bevy::math::DVec3::new(epoch_jd, 0.0, 0.0)
+    fn position(&self, _body_id: i32, epoch_jd: f64) -> Option<lunco_celestial::frames::EclipticAu> {
+        Some(lunco_celestial::frames::EclipticAu::new(bevy::math::DVec3::new(epoch_jd, 0.0, 0.0)))
     }
+}
+
+/// Build the headless celestial app the tests share (see the notes in
+/// `test_celestial_startup_and_movement` for why each piece is here).
+fn celestial_test_app() -> App {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(bevy::input::InputPlugin::default());
+    app.add_plugins(bevy::transform::TransformPlugin);
+    let _ = lunco_assets::register_lunco_asset_sources(&mut app);
+    app.add_plugins(bevy::asset::AssetPlugin::default());
+    app.init_resource::<Assets<Mesh>>();
+    app.init_asset::<Image>();
+    app.add_plugins(CelestialPlugin);
+    app
+}
+
+/// **P4 regression — the orbit view must be STAR-FIXED.**
+///
+/// `big_space_setup`'s doc block claimed "Grid Anchor (inertial) — does NOT
+/// rotate", and the Observer Camera was parented to the Earth Grid on the
+/// strength of that claim ("On Earth Grid (inertial) for orbit view"). The
+/// opposite is true: `body_rotation_system` queries `CelestialReferenceFrame`,
+/// which lives on the **grids**, so the Earth Grid spins once per sidereal day
+/// and dragged the camera around a ~19,000 km circle with it.
+///
+/// The camera now hangs off an `InertialAnchor`: tracks Earth's position, never
+/// its rotation. Assert exactly that split — the body grid DOES rotate, the
+/// camera's parent does NOT, and the two stay co-located.
+#[test]
+fn observer_camera_hangs_in_a_star_fixed_frame() {
+    let mut app = celestial_test_app();
+    app.insert_resource(EphemerisResource { provider: Arc::new(StubEphemeris) });
+    app.update();
+
+    // The camera's parent must be the inertial anchor, not the rotating grid.
+    let mut cam_q = app
+        .world_mut()
+        .query_filtered::<&ChildOf, With<bevy::camera::Camera>>();
+    let parent = cam_q
+        .iter(app.world())
+        .next()
+        .expect("Observer Camera should exist (spawn_observer_camera defaults true)")
+        .parent();
+
+    assert!(
+        app.world().get::<lunco_celestial::InertialAnchor>(parent).is_some(),
+        "the Observer Camera must be parented to an InertialAnchor"
+    );
+    assert!(
+        app.world().get::<lunco_celestial::EarthRoot>(parent).is_none(),
+        "…and NOT to the Earth Grid, which rotates once per sidereal day"
+    );
+
+    let earth_rot_of = |app: &mut App| -> Quat {
+        let mut q = app
+            .world_mut()
+            .query_filtered::<&Transform, With<lunco_celestial::EarthRoot>>();
+        q.iter(app.world()).next().unwrap().rotation
+    };
+    let earth_rot_before = earth_rot_of(&mut app);
+
+    // Advance a third of a sidereal day — a ~119° spin.
+    {
+        let mut mission = app.world_mut().resource_mut::<lunco_time::MissionClock>();
+        mission.anchor.epoch0_jd += 0.33;
+        mission.mission_epoch0_jd += 0.33;
+    }
+    app.update();
+
+    // The body grid spun… (compare against ITS OWN prior rotation — the absolute
+    // angle vs identity depends on the epoch and could be anything.)
+    let earth_rot_after = earth_rot_of(&mut app);
+    assert!(
+        earth_rot_after.angle_between(earth_rot_before) > 1.0,
+        "the Earth Grid must carry the body's spin: 0.33 sidereal days ≈ 119°, \
+         but the rotation moved by {:.3} rad",
+        earth_rot_after.angle_between(earth_rot_before)
+    );
+
+    // …and the camera's frame did NOT.
+    let anchor_tf = *app.world().get::<Transform>(parent).unwrap();
+    assert!(
+        anchor_tf.rotation.angle_between(Quat::IDENTITY) < 1e-6,
+        "the InertialAnchor must never rotate — the orbit view is star-fixed \
+         (got {:?})",
+        anchor_tf.rotation
+    );
+
+    // But it still FOLLOWS Earth: same cell + translation as the body grid.
+    let mut earth_pose_q = app
+        .world_mut()
+        .query_filtered::<(&CellCoord, &Transform), With<lunco_celestial::EarthRoot>>();
+    let (earth_cell, earth_tf) = earth_pose_q.iter(app.world()).next().unwrap();
+    assert_eq!(
+        *app.world().get::<CellCoord>(parent).unwrap(),
+        *earth_cell,
+        "the anchor must track Earth's cell"
+    );
+    assert!(
+        (anchor_tf.translation - earth_tf.translation).length() < 1e-3,
+        "the anchor must track Earth's translation"
+    );
 }
 
 #[test]
@@ -37,22 +139,15 @@ fn test_celestial_startup_and_movement() {
     let _ = lunco_assets::register_lunco_asset_sources(&mut app);
     app.add_plugins(bevy::asset::AssetPlugin::default());
     app.init_resource::<Assets<Mesh>>();
-    app.init_resource::<Assets<StandardMaterial>>();
-    // `init_asset` (not `init_resource`): `setup_big_space_hierarchy` does
-    // `asset_server.load("shaders/blueprint.wgsl")`, and bevy 0.18 panics on the
-    // async load task unless the Shader asset *type* is registered (handle
-    // provider), which only `init_asset` does. (Image is already `init_asset`'d
-    // below; Mesh/StandardMaterial/ShaderMaterial are only `.add()`'d, so the
-    // plain resource suffices for them.)
-    app.init_asset::<bevy_shader::Shader>();
-    app.init_resource::<Assets<ShaderMaterial>>();
+    // NO material asset stores, and no `Shader` asset type, any more: the crate is
+    // render-free (2026-07-13). It states appearance as INTENT (`PbrLook` /
+    // `ShaderLook` components) and never `.add()`s a material or holds a
+    // `Handle<Shader>` — `lunco-render-bevy` does both, and this headless app simply
+    // never adds it. Which is exactly the property this test now also proves: the
+    // whole celestial hierarchy builds and steps with no GPU stack registered at all.
     app.init_asset::<Image>();
-    // bevy 0.19: `GizmoPlugin` registers `draw_skinned_mesh_bounds`, which
-    // hard-requires `Assets<SkinnedMeshInverseBindposes>` (normally registered
-    // by the render stack's `MeshPlugin`, absent headless) — and 0.19's default
-    // error handler PANICS on failed param validation instead of warning.
-    app.init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
-    app.add_plugins(bevy::gizmos::GizmoPlugin);
+    // `GizmoPlugin` is likewise gone — it came from `bevy_gizmos` (a render feature),
+    // and nothing in this crate draws gizmos.
     app.add_plugins(CelestialPlugin);
     // Override the NoOp provider (installed by CelestialPlugin) with one whose
     // output depends on the epoch, so the clock seek below actually repositions

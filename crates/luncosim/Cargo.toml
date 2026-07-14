@@ -27,13 +27,17 @@ lunco-assets = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-time = { path = "../lunco-time" }
 lunco-ui = { path = "../lunco-ui" }
-lunco-workbench = { path = "../lunco-workbench" }
+lunco-workbench = { path = "../lunco-workbench", features = ["api"] }
 lunco-materials = { path = "../lunco-materials" }
 # avatar's egui UI (`avatar::ui::AvatarUiPlugin`) is used, so keep its `ui`
 # feature (default-on) — no `default-features = false` here.
 lunco-avatar = { path = "../lunco-avatar" }
 lunco-celestial = { path = "../lunco-celestial" }
 lunco-environment = { path = "../lunco-environment" }
+# The bevy_pbr binding layer — turns appearance/camera INTENT into real materials
+# and pipelines, and hosts the render-only code moved out of the domain crates
+# (horizon uniform feed, SetEnvironmentLight's bloom arm, CaptureScreenshot).
+lunco-render-bevy = { path = "../lunco-render-bevy" }
 lunco-fsw = { path = "../lunco-fsw" }
 lunco-hardware = { path = "../lunco-hardware" }
 lunco-mobility = { path = "../lunco-mobility" }
@@ -53,7 +57,10 @@ lunco-web = { workspace = true }
 # Earth/Moon ephemeris (Artemis-II) — native only; wasm skips it (see the
 # `#[cfg(not(target_arch = "wasm32"))]` in main.rs).
 lunco-celestial-ephemeris = { path = "../lunco-celestial-ephemeris" }
-lunco-api = { path = "../lunco-api", default-features = false, features = ["transport-http", "render", "winit"] }
+# No `render` feature any more — it does not exist. `lunco-api` is render-free BY
+# CONSTRUCTION; the screenshot's GPU half lives in `lunco-workbench::screenshot`, enabled
+# below via `lunco-workbench/api`.
+lunco-api = { path = "../lunco-api", default-features = false, features = ["transport-http", "winit"] }
 
 # Web: the JS-bridge API + the wasm glue (panic hook, canvas sizing, RNG backend).
 [target.'cfg(target_arch = "wasm32")'.dependencies]

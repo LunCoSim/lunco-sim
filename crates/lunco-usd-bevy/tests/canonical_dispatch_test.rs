@@ -9,12 +9,19 @@
 //! flatten. Here we assert (a) the `CanonicalStages` resource actually holds the
 //! stage after instantiation — i.e. the on-demand build fired, so the LIVE
 //! branch was taken — and (b) the resulting Bevy components (mesh, bound-shader
-//! material, light) are correct, proving the live extraction produced them.
+//! appearance intent, light) are correct, proving the live extraction produced
+//! them.
+//!
+//! The appearance assertion is on the render-free `PbrLook` **intent** — this
+//! crate no longer names `StandardMaterial` (see
+//! `docs/architecture/render-decoupling.md`); `lunco-render-bevy` binds the look
+//! to a material, and its own tests cover that half.
 //!
 //! What a headless test CANNOT cover is the final GPU pixel output; everything
 //! up to and including the emitted ECS components is checked here.
 
 use bevy::prelude::*;
+use lunco_render::PbrLook;
 use lunco_usd_bevy::{CanonicalStages, StageRecipe, UsdPrimPath, UsdStageAsset};
 
 const SCENE: &str = r#"#usda 1.0
@@ -50,7 +57,6 @@ fn app() -> App {
         .add_plugins(AssetPlugin::default());
     app.init_asset::<UsdStageAsset>();
     app.init_asset::<Mesh>();
-    app.init_asset::<StandardMaterial>();
     app.init_asset::<Image>();
     app.add_plugins(lunco_usd_bevy::UsdBevyPlugin);
     app
@@ -105,24 +111,22 @@ fn recipe_asset_instantiates_off_live_canonical_stage() {
          not fall back to the flattened reader"
     );
 
-    // (b) The bound-shader material resolved off the live stage: base color is the
+    // (b) The bound-shader appearance resolved off the live stage: base color is the
     // shader's diffuseColor (0.1, 0.2, 0.8), which only resolves if the
     // material:binding → outputs:surface(.connect) → shader walk works on the
     // live `StageView` (the attribute-connection fix).
     let box_e = entity_at(&mut app, "/World/Box").expect("Box prim entity");
-    let mat_h = app
+    let look = app
         .world()
-        .get::<MeshMaterial3d<StandardMaterial>>(box_e)
-        .expect("Box has a StandardMaterial")
-        .0
+        .get::<PbrLook>(box_e)
+        .expect("Box has a PbrLook")
         .clone();
     assert!(app.world().get::<Mesh3d>(box_e).is_some(), "Box has a Mesh3d");
-    let materials = app.world().resource::<Assets<StandardMaterial>>();
-    let mat = materials.get(&mat_h).expect("material registered");
-    let lin = mat.base_color.to_linear();
+    let lin = look.base_color;
     assert!((lin.red - 0.1).abs() < 1e-4, "diffuse R off live shader: {}", lin.red);
     assert!((lin.green - 0.2).abs() < 1e-4, "diffuse G off live shader: {}", lin.green);
     assert!((lin.blue - 0.8).abs() < 1e-4, "diffuse B off live shader: {}", lin.blue);
+    assert!((look.perceptual_roughness - 0.4).abs() < 1e-4, "roughness off live shader");
 
     // (c) The UsdLux light extracted off the live stage → a Bevy DirectionalLight.
     let sun_e = entity_at(&mut app, "/World/Sun").expect("Sun prim entity");

@@ -1,29 +1,20 @@
 //! Embedded assets for wasm32 builds.
 //!
-//! Shaders and mission data are baked into the binary at compile time. Textures
-//! are NOT — Earth/Moon are tens of MB, so they load from `cached_textures://`
-//! over HTTP on web (see `big_space_setup`), not `include_bytes!`.
+//! Mission data is baked into the binary at compile time. Textures are NOT —
+//! Earth/Moon are tens of MB, so they load from `cached_textures://` over HTTP on
+//! web (see `big_space_setup`), not `include_bytes!`.
 //!
-//! On desktop, these are ignored — assets load normally from disk.
+//! **No shaders are embedded here any more.** The only one ever was
+//! `trajectory.wgsl`, held by a const `Handle<Shader>` for a `MaterialExtension`
+//! that was never instantiated (see the removal note in `trajectories.rs`).
+//! `Handle<Shader>` is `bevy_shader`, which pulls naga, so holding one made this
+//! crate — and every binary linking it, `--no-ui` server included — link the GPU
+//! stack for a dead asset. Live shaders are named by PATH in a `ShaderLook` and
+//! loaded by `lunco-render-bevy`.
+//!
+//! On desktop, this plugin is a no-op — assets load normally from disk.
 
 use bevy::prelude::*;
-use bevy_shader::Shader;
-#[cfg(all(target_arch = "wasm32", feature = "embed-assets"))]
-use bevy_asset::load_internal_asset;
-use std::marker::PhantomData;
-use uuid::Uuid;
-
-// ============================================================================
-// Embedded Shaders
-// Shader source is embedded at compile time from root assets/ folder.
-// Registered with known UUID handles at runtime so MaterialExtension can resolve them.
-// ============================================================================
-
-/// UUID for the trajectory shader — must match what `TrajectoryExtension::fragment_shader()` returns.
-const TRAJECTORY_SHADER_UUID: Uuid = Uuid::from_u128(0x2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e);
-
-/// Const UUID-based handle for the trajectory shader.
-pub const TRAJECTORY_SHADER_HANDLE: Handle<Shader> = Handle::Uuid(TRAJECTORY_SHADER_UUID, PhantomData);
 
 // ============================================================================
 // Embedded Missions
@@ -53,16 +44,6 @@ impl Plugin for EmbeddedAssetsPlugin {
     fn build(&self, app: &mut App) {
         #[cfg(all(target_arch = "wasm32", feature = "embed-assets"))]
         {
-            // Register the trajectory shader with its const UUID handle so its
-            // MaterialExtension can resolve it (blueprint is now a path-loaded
-            // ShaderMaterial — `blueprint.wgsl` — fetched over HTTP like the rest).
-            load_internal_asset!(
-                app,
-                TRAJECTORY_SHADER_HANDLE,
-                "../../../assets/shaders/trajectory.wgsl",
-                Shader::from_wgsl
-            );
-
             // Register mission data (JSON via the asset-owning crate).
             let artemis_2 = lunco_assets::missions::mission_source("artemis-2.json")
                 .expect("artemis-2.json must be embedded in assets/missions/")

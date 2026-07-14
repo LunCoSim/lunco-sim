@@ -4,7 +4,12 @@ version = "0.6.0-dev"
 edition = "2021"
 
 [dependencies]
-bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "mesh_picking"] }
+# Substrate only. This crate uses nothing but `bevy::prelude` — it spawns no
+# meshes, materials, lights or cameras — so the PBR/render feature list it used
+# to carry only served to pull bevy_render → wgpu/naga into every consumer,
+# including the `--no-ui` server. Do not re-add render features without a type
+# from them actually appearing in `src/`.
+bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 
 [lints]

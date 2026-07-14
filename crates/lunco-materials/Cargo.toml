@@ -4,7 +4,18 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "mesh_picking", "tonemapping_luts"] }
+# RENDER-FREE. This crate states shader appearance *intent* (`ShaderLook`), the
+# WGSL-reflected parameter schema (`dyn_params`), the CDLOD vertex attribute
+# (`vertex` — `bevy_mesh`, not `bevy_render`), the shader catalog/templates and the
+# param-name bridge. `ShaderMaterial` (the `AsBindGroup`, hence `bevy_pbr` →
+# `bevy_render` → wgpu/naga) lives in `lunco-render-bevy`. Do not add `bevy_pbr`
+# back — see docs/architecture/render-decoupling.md.
+#
+# `bevy_image`: `Handle<Image>` in a `ShaderLook` texture layer.
+# `zstd_rust`: bevy_image refuses to build without a zstd backend chosen. It was
+# only ever compiling because another crate in the graph happened to select one —
+# name it here so this crate stands alone.
+bevy = { workspace = true, features = ["bevy_mesh", "bevy_image", "zstd_rust"] }
 
 [lints]
 workspace = true

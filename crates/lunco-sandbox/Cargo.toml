@@ -48,12 +48,24 @@ required-features = ["ui"]
 # command line past its internal limit (link aborted with `std::length_error`).
 # Instead `UsdBevyPlugin` explicitly `register_type`s the bounded set of
 # glTF/USD scene component types — see `crates/lunco-usd-bevy/src/lib.rs`.
-bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "bevy_window"] }
+# NO `bevy_pbr`. It used to be here for the render ASSET STORES, on the theory that
+# the `--no-ui` server needs `Assets<StandardMaterial>` even with
+# `RenderPlugin { backends: None }`. It does not any more: no crate in the headless
+# closure names a material — they state `PbrLook`/`ShaderLook` intent, and the
+# binder that turns intent into an asset lives behind the `ui` feature with
+# `lunco-render-bevy`. Re-adding `bevy_pbr` here silently re-links wgpu + naga into
+# the server. The CI guard in `.github/workflows/lint.yml` fails if it comes back.
+bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "bevy_window"] }
 avian3d = { workspace = true }
 big_space = { workspace = true }
 leafwing-input-manager = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-hardware = { path = "../lunco-hardware" }
+# The PRODUCER of `SampledParameter`. Its consumer (`lunco-api`'s
+# `sampled_param_observer` — i.e. `SubscribeTelemetry`) was already shipped and
+# wired, so leaving this out meant the API advertised parameter telemetry that could
+# never arrive. Render-free: it is the eyes-and-ears of a `--no-ui` run.
+lunco-telemetry = { path = "../lunco-telemetry" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-controller = { path = "../lunco-controller" }
 lunco-autopilot = { path = "../lunco-autopilot" }
@@ -64,6 +76,19 @@ lunco-autopilot = { path = "../lunco-autopilot" }
 # in non-server builds via Cargo feature unification.)
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-render = { path = "../lunco-render" }
+# The bevy_pbr binding layer. Added as a PLUGIN only in non-headless builds
+# (`SandboxCorePlugin::build`), which is the entire render gate.
+#
+# THE RENDER GATE, at the dependency level. `lunco-render-bevy` is the one crate
+# that names `bevy_pbr`, so making it `optional` + `ui`-only is what finally stops
+# the `--no-ui` server from LINKING wgpu/naga, not merely from running them.
+#
+# This was blocked until every domain crate stopped naming materials directly
+# (terrain-surface, celestial, usd-bevy, usd-sim, sandbox-edit, environment,
+# obstacle-field, and finally lunco-materials itself). That is now done — they all
+# state INTENT (`PbrLook` / `ShaderLook` / `SceneCamera`) instead.
+# See docs/architecture/render-decoupling.md.
+lunco-render-bevy = { path = "../lunco-render-bevy", optional = true }
 # Engine light-handling policy (ShadowCastingSettings) is a client render
 # concern, so the settings dep rides the `ui` feature (see `light_policy.rs`).
 lunco-settings = { path = "../lunco-settings", optional = true }
@@ -167,12 +192,22 @@ mimalloc = "0.1"
 # player with no wire: `--no-default-features --features ui,celestial,lunco-api`.
 # The wasm build sets its own feature set (`--no-default-features`), so this
 # default does not affect it.
-default = ["ui", "celestial", "lunco-api", "transport-http", "lunco-api/render", "networking"]
+default = ["ui", "celestial", "lunco-api", "transport-http", "networking"]
 # Windowed GUI: the winit windowing backend + render-effect features + every
 # UI crate (egui workbench, material editors, doc/theme/ui). Off for a headless
-# server. The render ASSET-STORE features (bevy_pbr/mesh/light/window) stay in
-# the always-on `bevy` dep above — the server still needs them for `backends:None`.
+# server.
+#
+# `dep:lunco-render-bevy` — THE RENDER GATE. This is the crate that names
+# `bevy_pbr`, so gating it here is what keeps wgpu + naga out of the `--no-ui`
+# server's LINK, not just out of its runtime. Domain crates state appearance as
+# intent (`PbrLook`/`ShaderLook`/`SceneCamera`); this binds it.
+# See docs/architecture/render-decoupling.md.
 ui = [
+    # The screenshot backend lives in the workbench, which only a GUI build links at all.
+    # NOT on the `lunco-api` feature: the headless server enables that too, and hanging the
+    # workbench off it dragged egui + wgpu straight back into the --no-ui binary.
+    "lunco-workbench/api",
+    "dep:lunco-render-bevy",
     "lunco-avatar/ui",
     "lunco-usd/ui",
     "lunco-sandbox-edit/ui",

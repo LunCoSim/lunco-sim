@@ -11,16 +11,13 @@
 use avian3d::prelude::{Forces, Mass, RigidBody, WriteRigidBodyForces};
 use bevy::prelude::*;
 use bevy::math::DVec3;
-// Render-only: the `SetEnvironmentLight` tuner reaches into the bevy light /
-// camera / post-process stack. Gated so the sim core (gravity) builds without
-// bevy_light/bevy_render.
-#[cfg(feature = "render")]
+// All render-FREE: `CascadeShadowConfig` / `GlobalAmbientLight` are `bevy_light`,
+// `Exposure` is `bevy_camera`. Neither depends on `bevy_render`. The one knob in
+// `SetEnvironmentLight` that IS render-bound — `bloom_intensity` — is applied by a
+// second observer in `lunco-render-bevy` (`env_light.rs`), so this crate names no
+// post-processing type. See docs/architecture/render-decoupling.md.
 use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, GlobalAmbientLight};
-#[cfg(feature = "render")]
 use bevy::camera::Exposure;
-#[cfg(feature = "render")]
-use bevy::post_process::bloom::Bloom;
-#[cfg(feature = "render")]
 use lunco_core::{Command, on_command, register_commands};
 
 /// USD prim type for the scene-level **environment settings** prim (a singleton
@@ -45,12 +42,13 @@ pub mod lighting;
 pub use lighting::{EarthshineParams, LunarSun};
 
 /// Solar direction as a co-simulation source (`LocalSolar` + the sun→cosim
-/// bridge). The lighting-direction analog of the gravity bridge. Render-gated:
-/// it reads the scene `DirectionalLight` for the sun direction, which only
-/// exists when bevy_light is compiled.
-#[cfg(feature = "render")]
+/// bridge). The lighting-direction analog of the gravity bridge.
+///
+/// **Render-free.** It reads the scene `DirectionalLight` (`bevy_light`) and
+/// filters on `RenderLayers` (`bevy_camera`) — neither depends on `bevy_render`,
+/// so the sun→cosim feed works on a headless server exactly as it does in the
+/// GUI. See `docs/architecture/render-decoupling.md`.
 pub mod solar;
-#[cfg(feature = "render")]
 pub use solar::{compute_local_solar, inject_local_solar_into_cosim, LocalSolar};
 
 // Empty-bounds fallbacks for `SetEnvironmentLight`'s cascade rebuild. These
@@ -59,19 +57,17 @@ pub use solar::{compute_local_solar, inject_local_solar_into_cosim, LocalSolar};
 // layering: render is presentation, below environment). Keep in sync by hand if
 // the render defaults change — they rarely do, and a drift only affects the
 // runtime tuner's fallback when no live cascade bounds exist.
-#[cfg(feature = "render")]
 const FALLBACK_FIRST_CASCADE_FAR_BOUND: f32 = 40.0;
-#[cfg(feature = "render")]
 const FALLBACK_MAX_SHADOW_DISTANCE: f32 = 1500.0;
 
 /// Baked horizon-map terrain self-shadowing (the long-range half of the
-/// two-system shadow design). See the module docs.
-#[cfg(feature = "render")]
+/// two-system shadow design). **Render-free**: the heightfield bakes and the
+/// sun-visibility cache run headless; the material wiring they feed lives in
+/// `lunco-render-bevy::horizon_shade`. See the module docs.
 pub mod horizon;
-#[cfg(feature = "render")]
 pub use horizon::{
-    install_horizon_map_from_field, HeightField, HorizonMap, HorizonShadowCache,
-    HorizonShadowCacheConfig, HorizonShadowPlugin,
+    install_horizon_map_from_field, pick_sun, HeightField, HorizonMap, HorizonShadowCache,
+    HorizonShadowCacheConfig, HorizonShadowPlugin, SunQuery,
 };
 
 /// System sets for environment computation and consumption.
@@ -257,7 +253,6 @@ pub fn inject_local_gravity_into_cosim(
 ///   scene-wide fill; the per-camera `AmbientLight` component is only an
 ///   override). Lower it (~30–60) for deep, high-contrast lunar shadow cores;
 ///   the airless Moon has near-black shadows.
-#[cfg(feature = "render")]
 #[Command(default)]
 pub struct SetEnvironmentLight {
     /// Sun azimuth in radians (`EulerRot::YXZ` yaw). `None` keeps current.
@@ -293,8 +288,14 @@ pub struct SetEnvironmentLight {
     /// [`Earthshine`] fill color, linear RGB (cool blue ≈ 0.6,0.75,1.0).
     /// `None` keeps current.
     pub earthshine_color: Option<[f32; 3]>,
-    /// Bloom intensity on cameras that carry a `Bloom` component
-    /// (airless ⇒ low, ~0.15). `None` keeps current.
+    /// Bloom intensity on the scene cameras (airless ⇒ low, ~0.15). `None`
+    /// keeps current.
+    ///
+    /// **Applied render-side** (`lunco_render_bevy::env_light`) — bloom is
+    /// `bevy_post_process`, and this crate must not name it. That observer
+    /// writes `lunco_render::SceneCamera::bloom`, whose binder REFUSES bloom on
+    /// a non-HDR camera (review `R4`) — and `hdr` is deliberately still off
+    /// everywhere, so this knob renders nothing today, exactly as before.
     pub bloom_intensity: Option<f32>,
 }
 
@@ -308,22 +309,28 @@ pub struct SetEnvironmentLight {
 /// Moon always has earthshine, so it survives the USD light-import that
 /// despawns fallback suns. The `SetEnvironmentLight` sun loop excludes it via
 /// `Without<Earthshine>` so a sun tweak never overwrites the fill.
-#[cfg(feature = "render")]
+///
+/// **Render-free**: a `DirectionalLight` is `bevy_light`, which does not depend
+/// on `bevy_render`. The marker (and the light it tags) exist headless too.
 #[derive(Component, Debug, Clone, Copy, Reflect, Default)]
 #[reflect(Component)]
 pub struct Earthshine;
 
 /// Applies a [`SetEnvironmentLight`] command to the live `DirectionalLight`,
-/// its `CascadeShadowConfig`, and `GlobalAmbientLight`. Resources/queries are
-/// tolerant of absence so the command is a no-op in headless contexts that
-/// have no lights.
+/// its `CascadeShadowConfig`, `GlobalAmbientLight` and camera `Exposure` — all
+/// render-FREE types, so the command works headless. Resources/queries are
+/// tolerant of absence so it is a no-op in contexts that have no lights.
+///
+/// The one render-bound field, `bloom_intensity`, is applied by a SECOND
+/// observer on this same command in `lunco-render-bevy` (`env_light.rs`) — a
+/// command may have as many observers as it has effects, and that is what keeps
+/// `bevy_post_process` out of this crate.
 ///
 /// This observer is the SINGLE mutation path for environment lighting —
 /// the HTTP/MCP API, the Inspector's Environment section, and any future
 /// script hooks all dispatch this same command. (The USD loader is the
 /// *creation* path: it spawns the light entity from `DistantLight` prims;
 /// every later change flows through here.)
-#[cfg(feature = "render")]
 #[on_command(SetEnvironmentLight)]
 fn on_set_environment_light(
     trigger: On<SetEnvironmentLight>,
@@ -335,7 +342,6 @@ fn on_set_environment_light(
     >,
     mut q_earthshine: Query<&mut DirectionalLight, With<Earthshine>>,
     mut q_exposure: Query<&mut Exposure>,
-    mut q_bloom: Query<&mut Bloom>,
     ambient: Option<ResMut<GlobalAmbientLight>>,
 ) {
     for (mut tf, mut light, cascades) in &mut q_sun {
@@ -407,15 +413,10 @@ fn on_set_environment_light(
         }
     }
 
-    // Bloom intensity (cameras with a Bloom component).
-    if let Some(i) = cmd.bloom_intensity {
-        for mut bloom in &mut q_bloom {
-            bloom.intensity = i;
-        }
-    }
+    // `bloom_intensity` is handled render-side (`lunco_render_bevy::env_light`),
+    // which writes `SceneCamera::bloom`. Bloom is `bevy_post_process` → wgpu.
 }
 
-#[cfg(feature = "render")]
 register_commands!(on_set_environment_light);
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -434,11 +435,10 @@ pub struct EnvironmentPlugin;
 /// just above the horizon — fixed for v1 (ephemeris-correct Earth direction is
 /// a later refinement); live-tunable level/color via `SetEnvironmentLight`.
 ///
-/// Render builds only, and within those, native only: the web build renders on
-/// WebGL2, which supports a single `DirectionalLight`. A second light there
-/// culls the sun, so earthshine is not spawned on wasm (see the gated
-/// registration in `EnvironmentPlugin`).
-#[cfg(all(feature = "render", not(target_arch = "wasm32")))]
+/// Native only: the web build renders on WebGL2, which supports a single
+/// `DirectionalLight`. A second light there culls the sun, so earthshine is not
+/// spawned on wasm (see the gated registration in `EnvironmentPlugin`).
+#[cfg(not(target_arch = "wasm32"))]
 fn spawn_earthshine(mut commands: Commands, existing: Query<(), With<Earthshine>>) {
     if !existing.is_empty() {
         return;
@@ -496,42 +496,45 @@ impl Plugin for EnvironmentPlugin {
             ),
         );
 
-        // Presentation half — the lighting tuner, earthshine fill, horizon
-        // shadows, and the solar→cosim direction feed (which reads the scene
-        // `DirectionalLight`). Off on a headless server.
-        #[cfg(feature = "render")]
-        {
-            app.register_type::<LocalSolar>();
-            app.register_type::<Earthshine>();
+        // Lighting half — RENDER-FREE. `DirectionalLight` is `bevy_light` and
+        // `RenderLayers` is `bevy_camera`; neither depends on `bevy_render`, so
+        // the earthshine fill and the sun→cosim direction feed run headless too
+        // (a sun-tracking Modelica model on the `--no-ui` server needs them).
+        app.register_type::<LocalSolar>();
+        app.register_type::<Earthshine>();
 
-            // Horizon-map terrain self-shadowing. Inert until a terrain
-            // carries the `HorizonShadowTerrain` marker (USD-stamped).
-            app.add_plugins(HorizonShadowPlugin);
+        // The cool-blue earthshine fill (persistent, shadowless). Skipped
+        // on web: WebGL2 supports only ONE `DirectionalLight`, and a second
+        // one culls the sun — keep the sun, drop the fill.
+        #[cfg(not(target_arch = "wasm32"))]
+        app.add_systems(Startup, spawn_earthshine);
 
-            // The cool-blue earthshine fill (persistent, shadowless). Skipped
-            // on web: WebGL2 supports only ONE `DirectionalLight`, and a second
-            // one culls the sun — keep the sun, drop the fill.
-            #[cfg(not(target_arch = "wasm32"))]
-            app.add_systems(Startup, spawn_earthshine);
+        // Solar source: mirror gravity. Compute the per-entity sun
+        // direction, then publish it as cosim outputs before propagation
+        // so a sun-tracking model reads it the same tick.
+        app.add_systems(
+            FixedUpdate,
+            (
+                compute_local_solar.in_set(EnvironmentSet::Compute),
+                inject_local_solar_into_cosim
+                    .in_set(EnvironmentSet::Apply)
+                    .before(lunco_cosim::systems::propagate::CosimSet::Propagate),
+            ),
+        );
 
-            // Register environment commands (SetEnvironmentLight). The
-            // macro-built `register_all_commands` does `register_type` +
-            // `add_observer` so the HTTP/MCP API can dispatch it by reflected
-            // type name.
-            register_all_commands(app);
+        // Horizon-map terrain self-shadowing — the BAKE half (heightfield +
+        // sun-visibility cache). Render-free: it produces `Image` assets and CPU
+        // fields, and never names a material. The wiring that feeds them into the
+        // terrain shader is `lunco_render_bevy::LuncoRenderPlugin`'s job, and it
+        // is simply absent headless. Inert until a terrain carries the
+        // `HorizonShadowTerrain` marker (USD-stamped).
+        app.add_plugins(HorizonShadowPlugin);
 
-            // Solar source: mirror gravity. Compute the per-entity sun
-            // direction, then publish it as cosim outputs before propagation
-            // so a sun-tracking model reads it the same tick.
-            app.add_systems(
-                FixedUpdate,
-                (
-                    compute_local_solar.in_set(EnvironmentSet::Compute),
-                    inject_local_solar_into_cosim
-                        .in_set(EnvironmentSet::Apply)
-                        .before(lunco_cosim::systems::propagate::CosimSet::Propagate),
-                ),
-            );
-        }
+        // Register environment commands (SetEnvironmentLight). The macro-built
+        // `register_all_commands` does `register_type` + `add_observer` so the
+        // HTTP/MCP API can dispatch it by reflected type name. The command is
+        // render-free now — its `bloom_intensity` field is applied by a second
+        // observer over in `lunco-render-bevy`.
+        register_all_commands(app);
     }
 }

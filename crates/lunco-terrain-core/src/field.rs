@@ -21,20 +21,10 @@
 use crate::quadtree::Square;
 use crate::source::HeightSource;
 
-/// What a field's scalar means, so consumers (transfer function, legend, planner)
-/// interpret it correctly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FieldKind {
-    /// A continuous scalar (slope radians, elevation metres, AO `0..1`).
-    Scalar,
-    /// A discrete class index encoded as a float (e.g. a mineral class).
-    Categorical,
-}
-
-/// A scalar / categorical field over the terrain surface — a pure function of a
-/// [`HeightSource`], evaluated headless and deterministically. Implementors are the
-/// analysis channels (slope, aspect, elevation, …); each is addressable by [`id`] for
-/// USD authoring and cache keys.
+/// A scalar field over the terrain surface — a pure function of a [`HeightSource`],
+/// evaluated headless and deterministically. Implementors are the analysis channels
+/// (slope, aspect, elevation, …); each is addressable by [`id`] for USD authoring and
+/// cache keys.
 ///
 /// [`id`]: SurfaceField::id
 pub trait SurfaceField: Send + Sync {
@@ -42,28 +32,21 @@ pub trait SurfaceField: Send + Sync {
     /// `eps` metres (for fields that need finite differences; ignored otherwise).
     fn value_at(&self, src: &dyn HeightSource, x: f64, z: f64, eps: f64) -> f32;
 
-    /// Scalar or categorical — drives the transfer function and legend.
-    fn kind(&self) -> FieldKind {
-        FieldKind::Scalar
-    }
-
     /// Stable identifier for USD layer authoring + cache keys (e.g. `"slope"`).
     fn id(&self) -> &'static str;
-
-    /// Content hash of the field's *parameters* (folds into any derived cache key).
-    /// Parameter-free fields return `0`.
-    fn content_key(&self) -> u64 {
-        0
-    }
 }
 
 /// Materialise a field to a row-major `res × res` raster over `region`, **headless**.
 /// Texel `(ix, iz)` is sampled at UV `((ix+0.5)/res, (iz+0.5)/res)` across the region
 /// — the same texel-centred convention [`crate::derive`] and the terrain shader use,
 /// so a materialised field aligns with the derived maps and the tile UVs.
-pub fn field_map(
+///
+/// Generic over the source (like [`crate::derive::slope_map`], which this reproduces
+/// exactly for [`SlopeField`]) so the concrete oracle is monomorphised in, not reached
+/// through a `&dyn` at the call site.
+pub fn field_map<S: HeightSource>(
     field: &dyn SurfaceField,
-    src: &dyn HeightSource,
+    src: &S,
     region: &Square,
     res: usize,
 ) -> Vec<f32> {

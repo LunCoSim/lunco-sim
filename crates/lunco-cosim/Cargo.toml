@@ -12,7 +12,10 @@ lunco-core = { path = "../lunco-core" }
 [dev-dependencies]
 avian3d = { workspace = true }
 lunco-sandbox-edit = { path = "../lunco-sandbox-edit" }
-lunco-modelica = { path = "../lunco-modelica" }
+# `default-features = false`: without it, `cargo test --workspace` unifies
+# `lunco-modelica/ui` (→ bevy_egui) ON for the entire graph, including the
+# headless server and the wasm worker. See docs/reviews (A1).
+lunco-modelica = { path = "../lunco-modelica", default-features = false }
 lunco-celestial = { path = "../lunco-celestial" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-scripting = { path = "../lunco-scripting" }

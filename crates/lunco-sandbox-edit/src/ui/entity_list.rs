@@ -37,7 +37,7 @@ pub struct EntityTreeView {
     pub kids: HashMap<Entity, Vec<Entity>>,
     /// Leaf display label per named entity.
     pub labels: HashMap<Entity, String>,
-    /// Shader-editable entities (custom `ShaderMaterial`), pinned group, sorted.
+    /// Shader-editable entities (those carrying a `ShaderLook`), pinned group, sorted.
     pub shader_rows: Vec<(Entity, String)>,
     /// Set once the first build runs, so the change-gate forces an initial fill.
     built: bool,
@@ -83,7 +83,9 @@ pub(crate) fn populate_entity_tree_view(
     child_q: Query<(Entity, &ChildOf)>,
     selectable_q: Query<Entity, With<lunco_core::SelectableRoot>>,
     mesh_q: Query<Entity, With<Mesh3d>>,
-    shader_q: Query<(Entity, &Name), With<MeshMaterial3d<lunco_materials::ShaderMaterial>>>,
+    // Classification by INTENT, not by bound material — `ShaderLook` is the thing a
+    // user can edit, and it exists whether or not a renderer bound it.
+    shader_q: Query<(Entity, &Name), With<lunco_materials::ShaderLook>>,
 ) {
     // ── Harvest (read-only).
     let named: Vec<(Entity, String)> =
@@ -104,7 +106,7 @@ pub(crate) fn populate_entity_tree_view(
     let selectable: HashSet<Entity> = selectable_q.iter().collect();
     let has_mesh: HashSet<Entity> = mesh_q.iter().collect();
 
-    // Shader-editable subset (terrain + props with a custom ShaderMaterial),
+    // Shader-editable subset (terrain + props with a custom shader look),
     // pinned at the top for quick access to the shader params.
     let mut shader_rows: Vec<(Entity, String)> =
         shader_q.iter().map(|(e, n)| (e, leaf(n.as_str()))).collect();
@@ -182,14 +184,14 @@ pub(crate) fn scene_topology_changed(
         Or<(
             Added<Mesh3d>,
             Added<lunco_core::SelectableRoot>,
-            Added<MeshMaterial3d<lunco_materials::ShaderMaterial>>,
+            Added<lunco_materials::ShaderLook>,
         )>,
     >,
     mut rm_name: RemovedComponents<Name>,
     mut rm_child: RemovedComponents<ChildOf>,
     mut rm_mesh: RemovedComponents<Mesh3d>,
     mut rm_sel: RemovedComponents<lunco_core::SelectableRoot>,
-    mut rm_shader: RemovedComponents<MeshMaterial3d<lunco_materials::ShaderMaterial>>,
+    mut rm_shader: RemovedComponents<lunco_materials::ShaderLook>,
 ) -> bool {
     // Drain removal buffers every frame (keeps them from accumulating) and note
     // whether anything relevant was removed.

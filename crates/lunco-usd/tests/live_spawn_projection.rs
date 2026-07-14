@@ -45,7 +45,6 @@ fn boot_app() -> App {
     app.add_plugins(AssetPlugin::default());
     app.init_asset::<UsdStageAsset>();
     app.init_asset::<Mesh>();
-    app.init_asset::<StandardMaterial>();
     app.init_asset::<Image>();
     app.add_plugins(UsdBevyPlugin);
     app.add_plugins(UsdCommandsPlugin);

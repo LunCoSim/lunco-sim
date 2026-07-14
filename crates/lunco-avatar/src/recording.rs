@@ -25,8 +25,9 @@
 //! did not exist and files landed in the working directory, which required a
 //! post-stop relocator thread — since removed). The dir is resolved once when the
 //! plugin is built; changing `output_dir` in settings takes effect on the next
-//! launch. The [`RecordingSettings::overwrite`] flag is advisory — the encoder
-//! timestamps filenames, so collisions don't occur.
+//! launch, and it is created if missing (the encoder opens the file at STOP and
+//! fails silently against a nonexistent directory). Filenames are timestamped,
+//! so recordings never collide.
 //!
 //! `.h264` is a raw stream; remux to mp4 with
 //! `ffmpeg -framerate 30 -i file.h264 -c copy file.mp4`.
@@ -50,11 +51,6 @@ pub struct RecordingSettings {
     /// Parsed as `[ctrl+][shift+][alt+]<key>` where `<key>` is a letter
     /// (`a`–`z`), digit (`0`–`9`), `f1`–`f12`, or `space`.
     pub hotkey: String,
-    /// Overwrite an existing file of the same name.
-    ///
-    /// Advisory only with the built-in encoder: it timestamps filenames so
-    /// collisions don't occur. Reserved for a future custom-filename backend.
-    pub overwrite: bool,
 }
 
 impl Default for RecordingSettings {
@@ -62,7 +58,6 @@ impl Default for RecordingSettings {
         Self {
             output_dir: String::new(),
             hotkey: "ctrl+shift+r".to_string(),
-            overwrite: false,
         }
     }
 }
@@ -336,6 +331,17 @@ pub fn build_recording(app: &mut App) {
     {
         let dir = lunco_settings::load_section_from_disk::<RecordingSettings>()
             .resolved_output_dir();
+        // Create it. The encoder opens `<dir>/<title>-<ms>.h264` at STOP — if the
+        // directory doesn't exist (a fresh box with no `~/Videos`, a custom
+        // `output_dir` typed into settings), that open fails deep inside the
+        // plugin and the user gets no file and no error. The relocator that used
+        // to `create_dir_all` here was deleted with the 0.18 workaround.
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            error!(
+                "[recording] cannot create output dir {}: {e} — recordings will fail to write",
+                dir.display()
+            );
+        }
         app.add_plugins(bevy_dev_tools::EasyScreenRecordPlugin {
             // We drive recording via Ctrl+Shift+R → RecordScreen messages, so
             // park the plugin's own single-key toggle on a key no keyboard has

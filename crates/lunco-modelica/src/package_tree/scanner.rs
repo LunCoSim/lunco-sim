@@ -328,6 +328,12 @@ impl LeafKind {
 /// a [`PackageNode::Category`] whose children mirror the nested
 /// classes, so the user can drill into individual entries (the
 /// MSL `Modelica.Blocks.Continuous` case).
+///
+/// Native-only, like its single caller [`scan_msl_dir_native`]: it reads a `.mo`
+/// off the on-disk MSL tree. The web has no such tree — the Package Browser
+/// there is built by [`scan_msl_inmem`] from the parsed bundle
+/// (`InMemoryLibraryTree`), which needs no file reads at all.
+#[cfg(not(target_arch = "wasm32"))]
 fn node_from_modelica_file(path: &Path, qualified: &str, display_name: &str) -> PackageNode {
     let leaf_unknown = || PackageNode::Model {
         id: msl_tree_id(qualified),
@@ -349,6 +355,9 @@ pub fn peek_class_kind_from_source(src: &str) -> Option<crate::index::ClassKind>
         .map(|(_, def)| crate::index::map_class_type(&def.class_type))
 }
 
+/// Native-only: both callers ([`scan_msl_dir_native`], [`node_from_modelica_file`])
+/// are. The web builds its nodes from the parsed bundle in [`scan_msl_inmem`].
+#[cfg(not(target_arch = "wasm32"))]
 fn class_def_to_node(
     path: &Path,
     qualified: &str,

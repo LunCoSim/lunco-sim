@@ -168,13 +168,28 @@ fn ramp(x: f32, lo: f32, hi: f32) -> f32 {
     return saturate((x - lo) / (hi - lo));
 }
 
+// Layer CUT-OUT threshold, in screen pixels per noise period. A layer costs its
+// full FBM (3 × `layer_height`, each octave an 8-tap `vnoise`) on EVERY fragment
+// where this is > 0 — so this number, not the ramp width, is what sets the radius
+// of the expensive disc around the camera. At 3 px the meso layer alone ran out to
+// ~960 m: essentially the whole screen when standing on the surface (~20 vnoise ≈
+// 160 hash13 per pixel).
+//
+// 5 px cuts each layer's disc radius by ~40% (⇒ ~2.8× fewer expensive fragments)
+// and drops exactly the band that was closest to aliasing anyway: a 5 px period is
+// where value-noise detail stops reading as relief and starts reading as shimmer.
+// The baked normal/AO/tone maps carry the relief past the hand-off — the ramp below
+// still fades rather than cuts, so nothing pops.
+const AA_CUT_PX: f32 = 5.0;
+const AA_RAMP_PX: f32 = 7.0;
+
 fn aa_fade(scale: f32, pw: f32) -> f32 {
     let px_per_period = 1.0 / max(scale * pw, 1e-6);
-    // Fade a layer out once its period shrinks under ~3 px. The ramp used to be
-    // very wide (/22 — FBM carried to ~1 km because nothing else textured the
+    // Fade a layer out once its period shrinks under `AA_CUT_PX`. The ramp used to
+    // be very wide (/22 — FBM carried to ~1 km because nothing else textured the
     // far field, at real fragment cost); now the baked derived maps take over
     // beyond the near field, so the procedural layers can hand off much sooner.
-    return saturate((px_per_period - 3.0) / 9.0);
+    return saturate((px_per_period - AA_CUT_PX) / AA_RAMP_PX);
 }
 
 // NOTE (Phase 1, 2026-07-05): the fragment previously faked crater + rock relief
@@ -454,9 +469,23 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Inspector legend and any headless export, so the swatch can't drift from the
     // terrain it explains. Params are uniforms → dropping the cliff angle re-reds
     // steeper ground with no re-bake.
+    //
+    // SLOPE SOURCE: `n_geo` is the interpolated LOD MESH normal, so on a far/coarse
+    // tile — where the mesh has thrown the relief away — a real cliff shaded green
+    // and re-coloured as the camera approached. That is the wrong failure direction
+    // for a traversability overlay. Where the baked normal map is bound
+    // (`weight_normal > 0` — exactly the coarse tiles), take the slope from the
+    // DEM-resolution normal instead; near tiles out-resolve the map, so their own
+    // geometry stays the better answer.
     if (mat.overlay_mode > 0.5 && mat.overlay_opacity > 0.0) {
+        var n_haz = n_geo;
+#ifdef VERTEX_UVS_A
+        if (mat.weight_normal > 0.0) {
+            n_haz = normalize(map_n.xyz * 2.0 - 1.0);
+        }
+#endif
         let haz = slope_hazard_color(
-            slope_of(n_geo), mat.overlay_safe_rad, mat.overlay_cliff_rad);
+            slope_of(n_haz), mat.overlay_safe_rad, mat.overlay_cliff_rad);
         color = vec4(mix(color.rgb, haz, mat.overlay_opacity), color.a);
     }
     return color;

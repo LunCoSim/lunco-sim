@@ -38,26 +38,26 @@ impl Plugin for TerrainSurfacePlugin {
         // tiles (in-material shading plane of Data→Transfer→Blend). See `crate::overlay`.
         crate::overlay::register(app);
         // P3b: bake DEM-derived surface (rough/AO/hazard) + normal layers off the
-        // main thread and bind them onto the terrain `ShaderMaterial`. Inert
-        // headless (gated on render assets existing). See `crate::derived_layers`.
+        // main thread and publish them as `TerrainDerivedMaps`. Inert headless
+        // (gated on render assets existing). See `crate::derived_layers`.
         crate::derived_layers::register(app);
         // S3 (visual-only): opt-in camera-driven CDLOD tile streaming for SEEING
         // LODs. Inert unless a DEM is built with `lod_viz`. Physics still rides the
         // static heightfield collider. See `crate::stream_viz`.
-        // Ensure the `ShaderMaterial` asset store exists even in the lean
-        // headless server, where the render-gated `MaterialPlugin::<ShaderMaterial>`
-        // is absent: `update_lod_tiles` holds `ResMut<Assets<ShaderMaterial>>` and
-        // would panic on a missing store. `init_asset` is idempotent, so the GUI's
-        // `MaterialPlugin` reuses this same store.
-        bevy::asset::AssetApp::init_asset::<lunco_materials::ShaderMaterial>(app);
-        app.init_resource::<crate::stream_viz::LodMaterials>().add_systems(
+        //
+        // NO material store is initialised here any more. A tile states its
+        // appearance as a `ShaderLook` and this crate never touches
+        // `Assets<ShaderMaterial>` — so the headless server needs no render assets
+        // and no `#[cfg]`; it simply never adds `LuncoRenderPlugin`, and the looks
+        // sit in the world as inspectable data. See docs/architecture/render-decoupling.md.
+        app.add_systems(
             Update,
             (
                 crate::stream_viz::update_lod_tiles,
                 crate::stream_viz::animate_tile_reveal,
                 // Late-bind: derived maps / shadow cache finish baking seconds
-                // after the first tiles exist — patch the cached tile materials
-                // in place.
+                // after the first tiles exist — restate the resident tiles' looks
+                // (no tile churn, no re-bake).
                 crate::stream_viz::bind_derived_maps_to_tiles,
                 crate::stream_viz::bind_shadow_cache_to_tiles,
                 // Change-driven: early-outs unless a `TerrainLodViz` removal
@@ -71,6 +71,10 @@ impl Plugin for TerrainSurfacePlugin {
         // each `lunco:layer` type → a parser; register more with `App::add_terrain_layer`
         // — no changes to the build/scatter/regen systems. See `crate::terrain_layers`.
         app.init_resource::<crate::terrain_layers::TerrainLayerParserRegistry>();
+        // Boulder meshes + the single boulder material, shared by every rock layer
+        // (procedural scatter AND `PlaceRock`) so rocks batch instead of each one
+        // adding a draw call + a bind group.
+        app.init_resource::<crate::terrain_layers::SharedRockAssets>();
         app.add_systems(Update, crate::terrain_layers::scatter_terrain_layers);
         // M7 (physics): opt-in per-rover canonical-res heightfield COLLIDER ring.
         // Inert unless a DEM is built with `collider_ring`; then it replaces the

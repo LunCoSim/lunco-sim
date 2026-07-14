@@ -74,11 +74,14 @@ pub mod ast_mut;
 /// for migration order.
 pub mod document;
 
-/// Shared parse + I/O cache for Modelica classes, built on
-/// `lunco_cache`. Drill-in, AddComponent preload, and (later)
-/// compile dep-walk all funnel through here so every class file is
-/// read once, parsed once, and shared as `Arc<AstCache>` across tabs
-/// and compile jobs.
+/// Shared parse + I/O cache for Modelica classes. Drill-in, AddComponent
+/// preload, and compile dep-walk all funnel through here so every class file is
+/// read once, parsed once, and shared as an `Arc` across tabs and compile jobs.
+///
+/// The load is **synchronous** (`peek_or_load_msl_class_blocking`), under a
+/// two-phase lock: probe → parse *outside* the lock → install. That is why
+/// [`MslLookupMode::Cached`] exists — off-thread callers must never block on a
+/// cold parse, so they take the peek-only path and miss rather than stall.
 pub mod class_cache;
 pub mod library_fs;
 
@@ -97,6 +100,13 @@ pub mod diagram;
 /// `Vec<Expression>` that rumoca preserves on each class/component and
 /// produces structs ready for the canvas renderer.
 pub mod annotations;
+
+/// One invalidation signal for every memo derived from Modelica source — the
+/// engine's merged icons and the paint side's decoded bitmap textures. Before it,
+/// three memos were invalidated by three unrelated mechanisms and the bitmap cache
+/// by none, so a missing asset was remembered as missing for the life of the
+/// process.
+pub mod icon_memo;
 
 /// egui painter for the typed graphics produced by [`annotations`].
 /// Renders `Rectangle`, `Line`, `Polygon`, and `Text` directly into a
@@ -974,6 +984,16 @@ impl Default for ModelicaUiConfig {
     }
 }
 pub mod msl_settings;
+/// The MSL **indexer** — a host-side tool, not a runtime component: it walks the
+/// on-disk MSL tree, parses every `.mo`, and emits `msl_index.json` + the
+/// pre-parsed `parsed-msl.bin` bundle. It is `std::fs`-shaped by definition and
+/// has no wasm caller — the browser never *builds* an index, it *consumes* the
+/// artifacts this produces (`msl_remote` fetches the bundle over HTTP and
+/// installs it via `install_global_parsed_msl`). It used to be an unconditional
+/// `pub mod`, so ~1.6k lines of dead directory-walking code shipped in the wasm
+/// bundle and tripped the wasm lint. Native-gated now: the web MSL path is
+/// `msl_remote`, and this is the thing that makes its input.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod indexer;
 pub mod sim_stream;
 pub mod worker;
@@ -1425,6 +1445,11 @@ fn build_modelica_core(app: &mut App) {
         (ModelicaSet::HandleResponses, ModelicaSet::SpawnRequests).chain(),
     );
 
+    // The model-vs-world clock divergence diagnostic (A3): written every fixed
+    // tick by `spawn_modelica_requests`, read by anything that wants to know
+    // whether the co-simulation is actually keeping up.
+    app.init_resource::<worker::CosimLag>();
+
     app.register_type::<ModelicaModel>()
         .add_observer(worker::on_remove_modelica)
         .add_systems(FixedUpdate, (
@@ -1639,22 +1664,46 @@ pub struct ModelicaOutput { pub variable_name: String, pub value: f64 }
 #[cfg(test)]
 mod observables_smoke {
     use super::*;
-    #[cfg(any())]
     use rumoca_sim::{SimOptions, SimStepper};
 
     /// End-to-end smoke test for the observables pipeline: compile the
     /// bundled RocketEngine, run one step at full throttle, and assert
     /// every algebraic observable shows up with a physically-sensible
-    /// value in [`collect_stepper_observables`]. Protects against
+    /// value in [`worker::collect_stepper_observables`]. Protects against
     /// (a) bumping rumoca to a version that drops `EliminationResult`
     ///     from the stepper again, and
     /// (b) reintroducing a Boolean intermediate in the bundled model
     ///     that rumoca's elimination pass can't reconstruct.
-    // FIXME: `collect_stepper_observables` was removed during the
-    // SnapshotStream refactor; this test still references it. Disable
-    // until the stepper-observable wiring lands in its new home.
-    #[cfg(any())]
+    ///
+    /// H12: this test was `#[cfg(any())]`-disabled behind a FIXME claiming
+    /// `collect_stepper_observables` had been "removed during the SnapshotStream
+    /// refactor". It was not removed — it lives in `worker.rs` and is on the hot
+    /// path of every Step (it is what fills `ModelicaResult.outputs`). The stale
+    /// FIXME was hiding the one test that covers it. Re-enabled against its real
+    /// home.
+    ///
+    /// STATUS: re-enabling it (the FIXME was false — `collect_stepper_observables`
+    /// was never removed) proved the thing it was written to catch is REALLY
+    /// HAPPENING, so it is `#[ignore]`d with the truth rather than silently
+    /// `cfg(any())`-deleted, matching how this crate already pins its other
+    /// upstream-rumoca failures.
+    ///
+    /// Two separate defects, both real:
+    ///  1. `m_dot = if m_prop > 0.0 and throttle > 0.01 then m_dot_max * throttle
+    ///     else 0.0` reconstructs as **0** at throttle = 1. The model's own comment
+    ///     says the Boolean was inlined *specifically* to dodge rumoca's
+    ///     "continuous substitutions only" reconstructor — that workaround does not
+    ///     work: the conditional still reads 0, which zeroes `thrust` and
+    ///     `p_chamber` with it. Every algebraic observable behind an `if` is dead.
+    ///  2. The `isp` assertion is stale: it expects `v_e = 2900`, but
+    ///     `assets/models/RocketEngine.mo` has said `v_e = 3100.0` for some time.
+    ///     Fixed below, but it could never have passed either.
+    ///
+    /// TODO(rumoca-observables): fix the elimination reconstructor (or stop
+    /// reporting conditional algebraics as observables instead of lying with a 0),
+    /// then remove the `#[ignore]`.
     #[test]
+    #[ignore = "rumoca's elimination reconstructor evaluates conditional algebraics as 0 — m_dot/thrust/p_chamber read 0 at full throttle. Real defect, see TODO(rumoca-observables)."]
     fn rocket_engine_observables_round_trip() {
         let raw = crate::models::get_model("RocketEngine.mo").expect("bundled RocketEngine.mo");
         let (src, _) = ast_extract::strip_input_defaults(raw);
@@ -1666,7 +1715,7 @@ mod observables_smoke {
         stepper.set_input("throttle", 1.0).expect("throttle is an input");
         stepper.step(0.01).expect("step ok");
 
-        let obs = collect_stepper_observables(&stepper);
+        let obs = worker::collect_stepper_observables(&stepper);
         let by_name: std::collections::HashMap<_, _> =
             obs.into_iter().collect();
 
@@ -1679,7 +1728,8 @@ mod observables_smoke {
             "thrust should be nonzero, got {}", by_name["thrust"]);
         assert!(by_name["p_chamber"] > 0.0,
             "p_chamber should be nonzero, got {}", by_name["p_chamber"]);
-        assert!((by_name["isp"] - 2900.0 / 9.80665).abs() < 1e-3,
+        // v_e = 3100.0 in assets/models/RocketEngine.mo (the old 2900 here was stale).
+        assert!((by_name["isp"] - 3100.0 / 9.80665).abs() < 1e-3,
             "isp should equal v_e / g, got {}", by_name["isp"]);
     }
 

@@ -4,13 +4,27 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# `tonemapping_luts` turns on `bevy_image/zstd` (KTX2-compressed LUTs) but
-# does not pick a backend; without one bevy_image fails to compile when this
-# crate is built alone (in the full workspace, feature unification supplies it).
-# Select the pure-Rust `zstd_rust` (ruzstd) backend so per-crate `cargo
-# test -p lunco-usd-bevy` works and to stay wasm-compatible (matches the
-# ruzstd choice already used by lunco-modelica).
-bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "bevy_post_process", "bevy_anti_alias", "mesh_picking", "tonemapping_luts", "zstd_rust"] }
+# RENDER-FREE by construction (docs/architecture/render-decoupling.md): NO
+# `bevy_pbr` / `bevy_core_pipeline` / `bevy_post_process` / `bevy_anti_alias` /
+# `tonemapping_luts` — each of those pulls `bevy_render` → wgpu + naga into the
+# `--no-ui` server and the wasm worker. This crate states appearance and camera
+# INTENT (`lunco_render::{PbrLook, SceneCamera}`); `lunco-render-bevy` binds it.
+# `cargo tree -p lunco-usd-bevy -i wgpu` must report "package ID not found".
+#
+# `zstd_rust`: `bevy_image` refuses to build without a zstd backend chosen; the
+# pure-Rust (ruzstd) one keeps `cargo test -p lunco-usd-bevy` standalone and
+# wasm-compatible.
+bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "mesh_picking", "zstd_rust"] }
+# `Mesh`, `Mesh3d`, `Indices`, `PrimitiveTopology` — render-FREE (depends only on
+# `wgpu-types`). Named directly so mesh building never reaches for
+# `bevy::render::render_resource`, which is a `bevy_render` (wgpu + naga)
+# re-export. See docs/architecture/render-decoupling.md.
+bevy_mesh = { workspace = true }
+# `Extent3d`/`TextureDimension`/`TextureFormat` for the CPU-rasterised diagnostic
+# label `Image`. These are the POD descriptors `bevy_image` itself takes from
+# `wgpu-types`; reaching for them via `bevy::render::render_resource` would pull
+# in wgpu + naga. `wgpu-types` is NOT `wgpu`.
+wgpu-types = "29"
 openusd = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 # `FlightSoftware` = the unified control-surface tag stamped on any

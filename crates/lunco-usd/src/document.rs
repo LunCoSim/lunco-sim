@@ -638,8 +638,13 @@ impl UsdDocument {
     /// recompose instead of each paying a full O(stage) layer merge.
     pub fn composed_arc(&self) -> std::sync::Arc<sdf::Data> {
         let gen = self.generation;
+        // Poison recovery: this is the hot compose path, hit every frame. A panic
+        // anywhere under the lock would otherwise poison it permanently, turning
+        // one glitch into an unrecoverable per-frame panic. The cache is a pure
+        // memo of `(generation, composed)` — a stale or absent entry is always
+        // safe (it just recomputes), so there is no invariant to protect.
         {
-            let cache = self.composed_cache.lock().unwrap();
+            let cache = self.composed_cache.lock().unwrap_or_else(|e| e.into_inner());
             if let Some((cached_gen, data)) = &*cache {
                 if *cached_gen == gen {
                     return data.clone();
@@ -647,7 +652,10 @@ impl UsdDocument {
             }
         }
         let data = std::sync::Arc::new(author::compose_layers(&self.base, &self.runtime));
-        *self.composed_cache.lock().unwrap() = Some((gen, data.clone()));
+        *self
+            .composed_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some((gen, data.clone()));
         data
     }
 

@@ -97,11 +97,19 @@ pub struct RangeSensor {
     pub distance: f64,
     /// Behavior when the sensor range is exceeded.
     pub out_of_range_mode: OutOfRangeMode,
-    /// Whether to draw the laser beam line using Bevy gizmos.
+    /// Whether the beam should be drawn. **Authored intent, not a render handle**
+    /// — this crate never draws anything.
+    ///
+    /// The sensing is simulation and must run headless, so `lunco-cosim` never
+    /// names `Gizmos` (that pulled `bevy_gizmos → bevy_render → wgpu + naga` into
+    /// every build, including the `--no-ui` server). The beam is drawn by
+    /// `lunco-render-bevy`'s `sensor_beams`, which reads this flag.
+    /// See `docs/architecture/render-decoupling.md`.
     pub visualize: bool,
-    /// Whether the last cast actually hit geometry (vs the out-of-range
-    /// fallback). Set by [`update_range_sensors`]; read by the separate
-    /// [`draw_range_sensor_gizmos`] viz system so drawing needs no re-cast.
+    /// Whether the last cast actually hit geometry (vs the out-of-range fallback).
+    /// Set by [`update_range_sensors`]; read by the beam viz so drawing re-casts
+    /// nothing — the line shows what the sensor actually reported, and cannot
+    /// disagree with the value the simulation is using.
     pub hit: bool,
 }
 
@@ -275,39 +283,6 @@ pub fn update_range_sensors(
                 false
             }
         };
-    }
-}
-
-/// Draw the laser-beam gizmo for every `visualize`d range sensor.
-///
-/// Split out of [`update_range_sensors`] so the *sensing* (a `SpatialQuery`
-/// raycast) never depends on the render-side `Gizmos` / `GizmoConfigStore`.
-/// Registered with a `resource_exists::<GizmoConfigStore>` gate so headless
-/// runs (integration tests, servers) without `GizmoPlugin` simply skip it
-/// instead of tripping Bevy 0.18's missing-param panic. Uses the stored
-/// `distance`/`hit` from the sensor pass, so it re-casts nothing.
-pub fn draw_range_sensor_gizmos(
-    q: Query<(&RangeSensor, &GlobalTransform)>,
-    mut gizmos: Gizmos,
-) {
-    for (s, transform) in &q {
-        if !s.visualize {
-            continue;
-        }
-        let origin = transform.translation().as_dvec3() + transform.rotation().as_dquat() * s.offset;
-        let dir_world = transform.rotation().as_dquat() * s.axis;
-        // Beam length: the hit distance when locked, else the full max range.
-        let beam = if s.hit { s.distance } else { s.max_distance };
-        let end = origin + dir_world * beam;
-        let color = if s.hit {
-            Color::srgb(1.0, 0.1, 0.1) // Bright red when hit-locked
-        } else {
-            Color::srgba(1.0, 0.1, 0.1, 0.4) // Faint translucent red when out of range
-        };
-        gizmos.line(origin.as_vec3(), end.as_vec3(), color);
-        if s.hit {
-            gizmos.sphere(end.as_vec3(), 0.15, color);
-        }
     }
 }
 

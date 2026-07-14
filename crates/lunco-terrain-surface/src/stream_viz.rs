@@ -13,9 +13,18 @@
 //!    (`POSITION → MORPH_TARGET` by camera distance, so no LOD pop) + the
 //!    procedural **regolith** fragment (FBM bump + PBR sun + CSM shadows).
 //!
-//! Materials are cached per LOD depth — they share the regolith look and differ
-//! only in the per-depth morph band. The companion canonical-res collider ring is
-//! [`crate::collider_ring`].
+//! # Appearance is INTENT here, not a material
+//!
+//! A tile carries a [`ShaderLook`] — the shader path, its named parameters (morph
+//! band, reveal step, overlay uniforms, per-depth map weights) and its texture
+//! layers — and **nothing in this crate names a material**. `lunco-render-bevy`
+//! binds it, caching by `ShaderLook::key()`, so tiles in the same LOD band and
+//! reveal step share ONE material and ONE bind group. That cache *is* the old
+//! hand-rolled `LodMaterials`/`MatKey` table, done generically: the `(mode, depth,
+//! band bucket, reveal step)` that `MatKey` encoded are simply the look's own
+//! content now. See `docs/architecture/render-decoupling.md`.
+//!
+//! The companion canonical-res collider ring is [`crate::collider_ring`].
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -26,7 +35,7 @@ use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use big_space::prelude::Grid;
 use lunco_core::WorldGrid;
 use lunco_obstacle_field::grid_mesh;
-use lunco_materials::{ParamValue, ShaderMaterial, ATTRIBUTE_MORPH_TARGET};
+use lunco_materials::{ParamValue, ShaderLook, TextureLayer, ATTRIBUTE_MORPH_TARGET};
 use lunco_terrain_core::{measure_node_error, HeightSource};
 
 use crate::derived_layers::TerrainDerivedMaps;
@@ -47,7 +56,7 @@ const TARGET_PIXEL_ERROR: f64 = 3.0;
 /// Canonical viewport for the screen metric (fixed → selection is independent of
 /// any client's real resolution/FOV; peers select identically).
 const CANON_SCREEN_H_PX: f64 = 1080.0;
-const CANON_FOV_Y_RAD: f64 = 0.7854; // 45°
+const CANON_FOV_Y_RAD: f64 = std::f64::consts::FRAC_PI_4; // 45°
 /// Probe mesh resolution for [`measure_node_error`] — coarse on purpose: the
 /// measurement senses "is there detail here worth refining toward," it does not
 /// need the tile's full 49² fidelity. ~657 oracle samples per (memoized) node.
@@ -204,9 +213,34 @@ pub struct LodTiles {
     /// base) so steady state costs ~1-2 walks and quality still recovers, a
     /// rung per selection, when the load drops. `None` = never fitted.
     last_fit_px: Option<f64>,
+    /// Last selection's cover — the LOD **hysteresis** memory
+    /// ([`lunco_terrain_core::REFINE_HYSTERESIS`]). A node already refined last frame
+    /// keeps its children until the camera backs out past `1.15 ×` its refine range,
+    /// so a camera hovering ON a refine boundary no longer re-splits and re-merges
+    /// that node every frame (a despawn + spawn + 0.35 s reveal per flip on a tile
+    /// whose LOD never changed). Empty = first selection → the bare metric.
+    prev_sel: HashSet<QuadCoord>,
 }
 
 impl LodTiles {
+    /// The shader mode the resident tiles were built with — the D8 gate: only `Lit`
+    /// tiles carry the map/overlay params, so only they are re-stated when those
+    /// change.
+    pub(crate) fn shader_mode(&self) -> TerrainShaderMode {
+        self.mode
+    }
+
+    /// Every resident tile entity (the late-bind / live-tune targets).
+    pub(crate) fn tile_entities(&self) -> impl Iterator<Item = Entity> + '_ {
+        self.tiles.values().map(|s| s.entity)
+    }
+
+    /// Every resident tile as `(quadtree depth, entity)` — the depth drives the
+    /// derived-map blend weights (`tile_map_weights`).
+    pub(crate) fn tiles_with_depth(&self) -> impl Iterator<Item = (u32, Entity)> + '_ {
+        self.tiles.iter().map(|(c, s)| (c.depth as u32, s.entity))
+    }
+
     /// Bump the generation: every live tile becomes stale and re-bakes from the new
     /// heights, near-camera-first, while still covering the surface until replaced.
     /// Called by the live re-bake instead of despawning the whole tile set.
@@ -277,23 +311,23 @@ fn node_overlaps_aabb(coord: QuadCoord, root_half_extent: f64, aabb: [f64; 4]) -
 #[derive(Component)]
 pub struct LodTileOf(pub Entity);
 
-/// Cached one geomorph material per (terrain, mode, depth, morph-band bucket)
-/// so tile churn at LOD boundaries doesn't allocate a new `ShaderMaterial`
-/// every spawn. With error-driven selection a depth's morph band varies per
-/// parent node, so bands snap to a coarse log-lattice bucket — near-identical
-/// bands share one batched material, genuinely different parent ranges get
-/// their own. Keyed by terrain because each terrain's materials carry its own
-/// baked derived-map handles.
-#[derive(Resource, Default)]
-pub struct LodMaterials(HashMap<(Entity, TerrainShaderMode, u32, u32), Handle<ShaderMaterial>>);
-
-impl LodMaterials {
-    /// Every cached shared material handle — the live-tuning path (e.g. the analysis
-    /// overlay) rewrites their uniforms in place without re-baking tiles.
-    pub fn values(&self) -> impl Iterator<Item = &Handle<ShaderMaterial>> {
-        self.0.values()
-    }
-}
+/// Quantisation steps of the reveal tween (`reveal` 0 → 1). 8 steps at
+/// [`REVEAL_SECS`] = 0.35 s is a step every ~44 ms — below the perceptual
+/// threshold for this soft lattice settle.
+///
+/// Quantising matters as much as it ever did, it just no longer needs a bespoke
+/// table: the reveal step is a PARAMETER VALUE in the tile's [`ShaderLook`], and
+/// the binder's content cache turns the 8 steps of a band into 8 shared materials
+/// rather than one per tile. (Reveal used to clone the shared material per tile and
+/// `get_mut` it every frame for 0.35 s: the uniform buffer + bind group were
+/// re-prepared every frame, batching died — ≈84 unique materials alive at 4
+/// bakes/frame × 60 fps — and the continuous `AssetEvent::Modified` defeated the
+/// `mat_changed` early-out in `lunco-materials`. A tile now changes its look ONLY on
+/// a step boundary, and the binder swaps a cached handle. Nothing mutates an asset.)
+const REVEAL_STEPS: u8 = 8;
+/// The `reveal == 1` (steady-state, batched) look — the one a tile keeps once its
+/// settle finishes, and the one every non-revealing tile draws with.
+const REVEAL_FULL: u8 = REVEAL_STEPS;
 
 /// Quantise a morph-band end onto the shared bucket lattice. `u32::MAX` = the
 /// "never morphs" root sentinel.
@@ -360,10 +394,20 @@ impl Default for TerrainLodConfig {
         let tile_budget = 64;
         #[cfg(not(target_arch = "wasm32"))]
         let tile_budget = 512;
+        // On wasm32 the `AsyncComputeTaskPool` has NO threads: the "off-thread"
+        // bake future runs to completion on the MAIN thread the instant it is
+        // polled. A tile bake is ~12k composed-oracle samples (2401 verts ×
+        // height_at + eps normals + the parent lattice), each walking the full
+        // modifier chain — so `bakes_per_frame` is a direct main-thread frame cost
+        // there. Cap it at 1, mirroring `collider_ring`'s wasm `bake_budget = 2`.
+        #[cfg(target_arch = "wasm32")]
+        let bakes_per_frame = 1;
+        #[cfg(not(target_arch = "wasm32"))]
+        let bakes_per_frame = 4;
         TerrainLodConfig {
             pixel_error: TARGET_PIXEL_ERROR,
             max_depth: MAX_DEPTH,
-            bakes_per_frame: 4,
+            bakes_per_frame,
             tile_budget,
         }
     }
@@ -420,16 +464,16 @@ const MAX_INFLIGHT_BAKES: usize = 64;
 const REVEAL_SECS: f32 = 0.35;
 
 /// A LOD tile currently playing its reveal "settle" (refine from the parent lattice
-/// to its own geometry). Carries a transient per-tile material being tweened; when
-/// the reveal completes the tile swaps back to the shared (batched) depth material
-/// and this is removed. Bounded by the per-frame spawn rate × [`REVEAL_SECS`].
+/// to its own geometry). The tile walks the [`REVEAL_STEPS`] quantised reveal values
+/// of its band — written into its own [`ShaderLook`], so the binder resolves each
+/// step to one SHARED material — and settles on the fully-revealed look when done.
+/// No per-tile material clone, no per-frame `Assets::get_mut`. Bounded by the
+/// per-frame spawn rate × [`REVEAL_SECS`].
 #[derive(Component)]
 pub(crate) struct TileReveal {
     elapsed: f32,
-    /// The transient clone being tweened (`reveal` 0→1); dropped when done.
-    anim: Handle<ShaderMaterial>,
-    /// The shared cached material to restore once revealed (recovers batching).
-    shared: Handle<ShaderMaterial>,
+    /// The reveal step currently written into the tile's look.
+    step: u8,
 }
 
 /// Result of an off-thread tile bake: the finished CPU `Mesh` (not yet uploaded)
@@ -462,13 +506,22 @@ pub struct TileShadowCache {
     pub csm_far: f32,
 }
 
-/// Bind a terrain's far-shadow cache onto one tile material (Lit only).
-fn apply_shadow_cache_to_material(m: &mut ShaderMaterial, cache: &TileShadowCache) {
-    m.shadow_cache = Some(cache.image.clone());
-    m.set_many([
-        ("shadow_cache_on", ParamValue::F32(cache.on)),
-        ("csm_far", ParamValue::F32(cache.csm_far)),
-    ]);
+/// Write one named parameter into a look, reusing the existing slot when the key is
+/// already present so the hot re-write path (the reveal step, the overlay sync)
+/// doesn't allocate a `String` per call.
+pub(crate) fn set_param(look: &mut ShaderLook, name: &str, v: ParamValue) {
+    if let Some(slot) = look.values.get_mut(name) {
+        *slot = v;
+    } else {
+        look.values.insert(name.to_string(), v);
+    }
+}
+
+/// Bind a terrain's far-shadow cache onto one tile look (Lit only).
+pub(crate) fn apply_shadow_cache_to_look(look: &mut ShaderLook, cache: &TileShadowCache) {
+    look.textures.insert(TextureLayer::ShadowCache, cache.image.clone());
+    set_param(look, "shadow_cache_on", ParamValue::F32(cache.on));
+    set_param(look, "csm_far", ParamValue::F32(cache.csm_far));
 }
 
 /// Per-depth weights for the baked derived maps, from the ratio of the tile's
@@ -490,57 +543,80 @@ fn tile_map_weights(depth: u32, map_res: usize) -> (f32, f32, f32) {
 }
 
 /// Bind a terrain's baked derived maps + per-depth weights onto one tile
-/// material (Lit mode only — the flat/debug shader declares no map bindings).
-fn apply_maps_to_material(m: &mut ShaderMaterial, maps: &TerrainDerivedMaps, depth: u32) {
-    m.surface_map = Some(maps.surface.clone());
-    m.normal_map = Some(maps.normal.clone());
+/// look (Lit mode only — the flat/debug shader declares no map bindings).
+///
+/// The map handles are part of `ShaderLook::key()`, so two terrains with different
+/// baked maps correctly get different materials, and every tile of ONE terrain at
+/// one depth still shares a single one.
+pub(crate) fn apply_maps_to_look(look: &mut ShaderLook, maps: &TerrainDerivedMaps, depth: u32) {
+    look.textures.insert(TextureLayer::Surface, maps.surface.clone());
+    look.textures.insert(TextureLayer::Normal, maps.normal.clone());
     let (w_normal, w_ao, w_tone) = tile_map_weights(depth, maps.res);
-    m.set_many([
-        ("weight_normal", ParamValue::F32(w_normal)),
-        ("weight_ao", ParamValue::F32(w_ao)),
-        ("weight_tone", ParamValue::F32(w_tone)),
-    ]);
+    set_param(look, "weight_normal", ParamValue::F32(w_normal));
+    set_param(look, "weight_ao", ParamValue::F32(w_ao));
+    set_param(look, "weight_tone", ParamValue::F32(w_tone));
 }
 
-/// Build a tile `ShaderMaterial` for a `(mode, depth)` with its morph band. The
-/// geomorph vertex stage is shared; the fragment + colour come from the mode.
-fn build_tile_material(
+/// The `reveal` uniform a quantised reveal step stands for (`REVEAL_FULL` → 1.0).
+fn reveal_value(step: u8) -> f32 {
+    if step >= REVEAL_FULL {
+        1.0
+    } else {
+        step as f32 / REVEAL_STEPS as f32
+    }
+}
+
+/// The appearance INTENT of one LOD tile: the geomorph shader (it drives both the
+/// `@vertex` morph and the `@fragment` stage), its morph band, its reveal step, and
+/// — in `Lit` mode — the derived maps, the far-shadow cache and the analysis
+/// overlay.
+///
+/// THE SHARING CONTRACT: two tiles in the same mode, band bucket and reveal step
+/// produce an EQUAL `ShaderLook::key()`, so `lunco-render-bevy` hands them the same
+/// `ShaderMaterial` handle — one bind group, one batch. This is the property the
+/// hand-rolled `MatKey`/`LodMaterials` cache existed for; it is now a consequence of
+/// the look's content rather than a table anyone has to remember to consult.
+/// Anything that varies per-tile (a raw `morph_end` instead of the snapped band, an
+/// un-bucketed value) would mint a material per tile and destroy batching — which is
+/// exactly why the band is snapped and the reveal is quantised before it lands here.
+fn tile_look(
     mode: TerrainShaderMode,
+    depth: u32,
     morph_start: f32,
     morph_end: f32,
-    depth: u32,
-    shader: &Handle<Shader>,
+    reveal: u8,
     maps: Option<&TerrainDerivedMaps>,
     shadow: Option<&TileShadowCache>,
     overlay: crate::overlay::OverlayUniforms,
-    materials: &mut Assets<ShaderMaterial>,
-) -> Handle<ShaderMaterial> {
-    let mut m = ShaderMaterial::default();
-    m.shader = shader.clone();
-    m.vertex_shader = Some(shader.clone());
-    m.set_many([
-        ("morph_start", ParamValue::F32(morph_start)),
-        ("morph_end", ParamValue::F32(morph_end)),
-    ]);
+) -> ShaderLook {
+    let path = mode.shader_path();
+    let mut look = ShaderLook::new(path).with_vertex_shader(path);
+    set_param(&mut look, "morph_start", ParamValue::F32(morph_start));
+    set_param(&mut look, "morph_end", ParamValue::F32(morph_end));
+    set_param(&mut look, "reveal", ParamValue::F32(reveal_value(reveal)));
     match mode {
-        TerrainShaderMode::DebugLod => m.set("base_color", ParamValue::Vec3(lod_rgb(depth))),
-        TerrainShaderMode::Plain => m.set("base_color", ParamValue::Vec3([0.35, 0.34, 0.32])),
+        TerrainShaderMode::DebugLod => {
+            set_param(&mut look, "base_color", ParamValue::Vec3(lod_rgb(depth)))
+        }
+        TerrainShaderMode::Plain => {
+            set_param(&mut look, "base_color", ParamValue::Vec3([0.35, 0.34, 0.32]))
+        }
         TerrainShaderMode::Lit => {
             if let Some(maps) = maps {
-                apply_maps_to_material(&mut m, maps, depth);
+                apply_maps_to_look(&mut look, maps, depth);
             }
             if let Some(shadow) = shadow {
-                apply_shadow_cache_to_material(&mut m, shadow);
+                apply_shadow_cache_to_look(&mut look, shadow);
             }
             // Analysis overlay params (slope hazard). Only the Lit shaders declare
             // them; a fresh tile thus paints the current overlay with no extra pass.
-            overlay.apply(&mut m);
+            overlay.apply(&mut look);
         }
     }
-    materials.add(m)
+    look
 }
 
-/// Spawn one LOD tile entity (mesh + per-(mode,depth) material, anchored to its own
+/// Spawn one LOD tile entity (mesh + its `ShaderLook` intent, anchored to its own
 /// big_space cell). Shared by the cache-hit and finalized-bake paths.
 #[allow(clippy::too_many_arguments)]
 fn spawn_tile(
@@ -553,30 +629,21 @@ fn spawn_tile(
     center: [f64; 2],
     depth: u32,
     morph_end: f32,
+    reveal: u8,
     mode: TerrainShaderMode,
-    shader: &Handle<Shader>,
     maps: Option<&TerrainDerivedMaps>,
     shadow: Option<&TileShadowCache>,
     overlay: crate::overlay::OverlayUniforms,
-    materials: &mut Assets<ShaderMaterial>,
-    lod_mats: &mut LodMaterials,
-) -> (Entity, Handle<ShaderMaterial>) {
+) -> Entity {
     let (cell, local) = grid.translation_to_grid(DVec3::new(center[0], 0.0, center[1]));
     // Snap the selected band onto the bucket lattice so tiles with near-identical
     // parent ranges share one batched material (`morph_start` is derived from the
     // snapped end at the fixed 0.7 ratio).
-    let (ms, me, bucket) = snap_band(morph_end);
-    let mat = if let Some(h) = lod_mats.0.get(&(terrain, mode, depth, bucket)) {
-        h.clone()
-    } else {
-        let h = build_tile_material(mode, ms, me, depth, shader, maps, shadow, overlay, materials);
-        lod_mats.0.insert((terrain, mode, depth, bucket), h.clone());
-        h
-    };
-    let ent = commands
+    let (ms, me, _bucket) = snap_band(morph_end);
+    commands
         .spawn((
             Mesh3d(mesh),
-            MeshMaterial3d(mat.clone()),
+            tile_look(mode, depth, ms, me, reveal, maps, shadow, overlay),
             cell,
             Transform::from_translation(local),
             Visibility::Inherited,
@@ -588,61 +655,52 @@ fn spawn_tile(
             // re-rendered into all 4 sun cascades every frame (the dominant terrain
             // frame cost — ~16ms; the flat scene has no such geometry). Crater-rim
             // self-shadowing rides the sun horizon ray-march, not the cascade pass.
+            // (`bevy::light` is render-FREE — this is not a `bevy_pbr` name.)
             bevy::light::NotShadowCaster,
             #[cfg(target_arch = "wasm32")]
             bevy::light::NotShadowReceiver,
         ))
-        .id();
-    (ent, mat)
+        .id()
 }
 
-/// Start a tile's reveal "settle": give it a transient clone of its shared material
-/// with `reveal = 0` (vertices ride the parent's coarse lattice) and a [`TileReveal`]
-/// so [`animate_tile_reveal`] tweens it up to its own geometry. Only sub-root tiles
-/// animate (the root has no coarser parent to grow from).
-fn begin_reveal(
-    commands: &mut Commands,
-    entity: Entity,
-    shared: Handle<ShaderMaterial>,
-    materials: &mut Assets<ShaderMaterial>,
-) {
-    let Some(mut anim) = materials.get(&shared).cloned() else { return };
-    anim.set("reveal", ParamValue::F32(0.0));
-    let anim = materials.add(anim);
-    commands
-        .entity(entity)
-        .insert((MeshMaterial3d(anim.clone()), TileReveal { elapsed: 0.0, anim, shared }));
-}
-
-/// Per-frame: advance each revealing tile's `reveal` 0→1, then restore the shared
-/// (batched) material + drop the transient clone. See [`TileReveal`] / [`REVEAL_SECS`].
+/// Per-frame: step each revealing tile through the quantised reveal lattice, then
+/// settle it on the fully-revealed value.
+///
+/// The tile's [`ShaderLook`] is touched **only when it crosses a step boundary** —
+/// so no asset is mutated, no uniform is re-uploaded, and the binder simply swaps in
+/// the cached material for that step. (Getting this wrong is the R5 regression: an
+/// unconditional `look.values` write would mark `Changed<ShaderLook>` every frame
+/// for every revealing tile and drag the binder along with it.) See [`TileReveal`] /
+/// [`REVEAL_SECS`].
 pub(crate) fn animate_tile_reveal(
     mut commands: Commands,
     time: Res<Time>,
-    mut materials: ResMut<Assets<ShaderMaterial>>,
-    mut q: Query<(Entity, &mut TileReveal)>,
+    mut q: Query<(Entity, &mut TileReveal, &mut ShaderLook)>,
 ) {
     let dt = time.delta_secs();
-    for (ent, mut rev) in &mut q {
+    for (ent, mut rev, mut look) in &mut q {
         rev.elapsed += dt;
         let t = (rev.elapsed / REVEAL_SECS).clamp(0.0, 1.0);
-        // smoothstep ease so the settle starts/ends gently.
-        let s = t * t * (3.0 - 2.0 * t);
-        if let Some(mut m) = materials.get_mut(&rev.anim) {
-            m.set("reveal", ParamValue::F32(s));
-        }
         if t >= 1.0 {
-            let anim = rev.anim.clone();
+            set_param(&mut look, "reveal", ParamValue::F32(reveal_value(REVEAL_FULL)));
             // A live re-bake (e.g. a brush/flatten edit or an obstacle-field
             // regen) can despawn this tile in the same frame, before these
             // deferred commands apply — `try_*` no-ops on a stale entity
             // instead of panicking the command buffer.
-            commands
-                .entity(ent)
-                .try_insert(MeshMaterial3d(rev.shared.clone()))
-                .try_remove::<TileReveal>();
-            materials.remove(&anim);
+            commands.entity(ent).try_remove::<TileReveal>();
+            continue;
         }
+        // smoothstep ease so the settle starts/ends gently, quantised to the
+        // shared step lattice.
+        let s = t * t * (3.0 - 2.0 * t);
+        let step = ((s * REVEAL_STEPS as f32) as u8).min(REVEAL_STEPS - 1);
+        if step == rev.step {
+            // NOT a step boundary: leave `ShaderLook` untouched so change detection
+            // stays quiet (touching it here is the per-frame-mutation trap).
+            continue;
+        }
+        rev.step = step;
+        set_param(&mut look, "reveal", ParamValue::F32(reveal_value(step)));
     }
 }
 
@@ -663,10 +721,28 @@ pub struct TerrainStreamStatus {
     pub pending: usize,
 }
 
+/// Per-frame scratch for [`update_lod_tiles`] — the five collections the streaming
+/// pass used to heap-allocate EVERY frame per terrain (material swaps, finished
+/// bakes, the sort keys, the hole-cover set, the wanted set). Hoisted into a
+/// `Local` so a moving camera reuses the capacity instead of re-allocating; the
+/// idle-signature gate already skips the whole pass when nothing moved.
+#[derive(Default)]
+pub struct StreamScratch {
+    swaps: Vec<(Entity, u32, f32)>,
+    done: Vec<(QuadCoord, u32, BakedTile)>,
+    keyed: Vec<(u8, u8, f64, Selected)>,
+    missing: Vec<Square>,
+    wanted: HashSet<QuadCoord>,
+}
+
 /// Per-frame: stream the LOD tile set for each streaming terrain against the camera.
 pub fn update_lod_tiles(
     mut commands: Commands,
-    cameras: Query<&GlobalTransform, With<Camera3d>>,
+    // `Camera3d` lives in `bevy_core_pipeline` (→ bevy_render → wgpu). The
+    // render-FREE `bevy_camera` equivalent for "a 3D scene camera" is a `Camera`
+    // with a PERSPECTIVE `Projection` — which is also what excludes the egui host's
+    // orthographic `Camera2d`. Same set of cameras as before, no GPU stack.
+    cameras: Query<(&GlobalTransform, &Projection), With<Camera>>,
     // Dynamic bodies (rovers, payloads) are FORCED refinement foci: the
     // physics collider ring under them is fixed-resolution, so the ground they
     // stand on must be drawn at matching detail even when the camera-driven
@@ -688,29 +764,39 @@ pub fn update_lod_tiles(
         Option<&TileShadowCache>,
     )>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ShaderMaterial>>,
-    mut lod_mats: ResMut<LodMaterials>,
     mut mesh_cache: ResMut<LodMeshCache>,
     cfg: Res<TerrainLodConfig>,
-    asset_server: Res<AssetServer>,
     mut stream_status: ResMut<TerrainStreamStatus>,
     settings: Option<Res<lunco_settings::TerrainSettings>>,
     overlay_params: Res<crate::overlay::TerrainOverlayParams>,
+    mut scratch: Local<StreamScratch>,
 ) {
     // Snapshot the analysis-overlay uniforms once; every tile built this frame paints
     // the current params (live re-tuning of resident tiles rides `sync_terrain_overlay`).
     let overlay = overlay_params.uniforms();
     *stream_status = TerrainStreamStatus::default();
+    // Split-borrow the per-frame scratch buffers (see [`StreamScratch`]).
+    let StreamScratch { swaps, done, keyed, missing, wanted } = &mut *scratch;
     let enable_shaders = settings.as_ref().map(|s| s.enable_shaders).unwrap_or(true);
     // Use the first 3D camera as the focus. (Multiple cameras → the viz follows
     // whichever; fine for a debug view.)
-    let Some(cam) = cameras.iter().next() else { return };
+    let Some(cam) = cameras
+        .iter()
+        .find(|(_, p)| matches!(p, Projection::Perspective(_)))
+        .map(|(gt, _)| gt)
+    else {
+        return;
+    };
     let cam_pos = cam.translation();
     // No world grid yet → can't anchor tiles; skip this frame.
     let Ok((grid_entity, grid)) = grids.single() else { return };
 
     // Per-frame bake budget shared across all terrains (amortise scale changes).
     let mut bake_budget = cfg.bakes_per_frame.max(1);
+    // Live streaming terrains — the mesh cache is GLOBAL (keyed by `(terrain,
+    // coord)`), so its cap must scale with them or two terrains would fight over
+    // one terrain's worth of entries and thrash each other every frame.
+    let terrain_count = terrains.iter().count().max(1);
 
     for (terrain, t_gt, hf, viz, mut tiles, mut pending, mut errs, mode_opt, maps, shadow) in
         &mut terrains
@@ -722,32 +808,24 @@ pub fn update_lod_tiles(
         // The terrain's current height generation: a tile/bake tagged with an older
         // gen is stale (a live re-bake changed the heights) and is replaced near-first.
         let cur_gen = tiles.gen;
-        // The mode's shader drives both the @vertex (CDLOD morph) and @fragment
-        // stages; load-by-path → cached handle, hot-reloads on edit.
-        let shader = asset_server.load(mode.shader_path());
-        // Shader mode changed (inspector edit) → SWAP the material on every live
-        // tile in place (same geometry, new shader/colour) instead of despawning +
+        // Shader mode changed (inspector edit) → RESTATE the look of every live tile
+        // in place (same geometry, new shader/colour) instead of despawning +
         // rebuilding, which left a one-frame black hole until the tiles re-baked.
+        // The binder resolves each new look through its cache, so the swap costs one
+        // material per (mode, band) — not one per tile.
         if tiles.mode != mode {
-            let swaps: Vec<(Entity, u32, f32)> = tiles
-                .tiles
-                .iter()
-                .map(|(c, s)| (s.entity, c.depth as u32, s.morph_end))
-                .collect();
-            for (ent, depth, morph_end) in swaps {
-                // Each tile carries its own morph band; rebuild/fetch the matching
-                // band-bucket material under the new mode.
-                let (ms, me, bucket) = snap_band(morph_end);
-                let handle = if let Some(h) = lod_mats.0.get(&(terrain, mode, depth, bucket)) {
-                    h.clone()
-                } else {
-                    let h = build_tile_material(
-                        mode, ms, me, depth, &shader, maps, shadow, overlay, &mut materials,
-                    );
-                    lod_mats.0.insert((terrain, mode, depth, bucket), h.clone());
-                    h
-                };
-                commands.entity(ent).try_insert(MeshMaterial3d(handle));
+            swaps.clear();
+            swaps.extend(
+                tiles.tiles.iter().map(|(c, s)| (s.entity, c.depth as u32, s.morph_end)),
+            );
+            for &(ent, depth, morph_end) in swaps.iter() {
+                // Each tile carries its own morph band; restate it under the new mode.
+                let (ms, me, _) = snap_band(morph_end);
+                let look = tile_look(mode, depth, ms, me, REVEAL_FULL, maps, shadow, overlay);
+                // A tile mid-settle would otherwise keep stepping the OLD mode's
+                // reveal values — end the settle instead; the mode swap is a rare,
+                // explicit Inspector action.
+                commands.entity(ent).try_insert(look).try_remove::<TileReveal>();
             }
             tiles.mode = mode;
         }
@@ -830,13 +908,18 @@ pub fn update_lod_tiles(
             )
         };
         let base_px = cfg.pixel_error.clamp(0.5, 32.0);
-        // Warm-start the budget fit (see [`LodTiles::last_fit_px`]): resume one
-        // coarsen step below the value that satisfied the budget last time,
-        // clamped to the configured base so quality can climb back when load drops.
-        let mut pixel_error = match tiles.last_fit_px {
-            Some(px) => (px / 1.6).max(base_px),
-            None => base_px,
-        };
+        // Warm-start the budget fit (see [`LodTiles::last_fit_px`]): resume at the
+        // value that satisfied the budget last time, clamped to the configured base
+        // so quality can climb back when the load drops.
+        //
+        // HYSTERESIS: the old warm start began one rung FINER (`px / 1.6`) and then
+        // coarsened back, so near the budget boundary it alternated between two
+        // `pixel_error` rungs every frame — which moves `morph_end` → moves
+        // `band_bucket` → swapped EVERY tile's material on alternating frames. Now
+        // we only COARSEN when over budget, and only try one refine step when the
+        // selection is comfortably (15%) under it — and keep the refinement only if
+        // it still fits. Both ends are one-way, so the fit settles.
+        let mut pixel_error = tiles.last_fit_px.unwrap_or(base_px).max(base_px);
         let mut qt = quadtree_for(pixel_error);
         // ERROR-DRIVEN selection: refine where the MEASURED surface error says
         // there is detail worth refining toward (crater rims, peaks), not on the
@@ -872,11 +955,27 @@ pub fn update_lod_tiles(
         // TOGETHER and the LOD edge stays a blend. Node errors are memoized, so
         // the re-walks are cheap; the loop is bounded by the 32 px clamp.
         let budget = cfg.tile_budget.max(16);
-        let mut sel = qt.select_with_error(focus, eye_height, &node_error);
-        while sel.len() > budget && pixel_error < 32.0 {
-            pixel_error = (pixel_error * 1.6).min(32.0);
-            qt = quadtree_for(pixel_error);
-            sel = qt.select_with_error(focus, eye_height, &node_error);
+        // The previous cover drives the refine HYSTERESIS band (see `LodTiles::prev_sel`).
+        let prev_sel = std::mem::take(&mut tiles.prev_sel);
+        let mut sel = qt.select_with_error(focus, eye_height, &node_error, &prev_sel);
+        if sel.len() > budget {
+            // Over budget → coarsen until it fits.
+            while sel.len() > budget && pixel_error < 32.0 {
+                pixel_error = (pixel_error * 1.6).min(32.0);
+                qt = quadtree_for(pixel_error);
+                sel = qt.select_with_error(focus, eye_height, &node_error, &prev_sel);
+            }
+        } else if pixel_error > base_px && sel.len() * 100 < budget * 85 {
+            // Comfortably under budget → try ONE refine step back toward the
+            // configured quality; keep it only if it still fits.
+            let finer = (pixel_error / 1.6).max(base_px);
+            let qt_finer = quadtree_for(finer);
+            let sel_finer = qt_finer.select_with_error(focus, eye_height, &node_error, &prev_sel);
+            if sel_finer.len() <= budget {
+                pixel_error = finer;
+                qt = qt_finer;
+                sel = sel_finer;
+            }
         }
         tiles.last_fit_px = Some(pixel_error);
         // Ground under dynamic bodies is ALWAYS drawn at max depth — the
@@ -895,7 +994,13 @@ pub fn update_lod_tiles(
             }
             qt.refine_selection_at(&mut sel, [bx, bz], &node_error);
         }
-        let wanted: HashSet<QuadCoord> = sel.iter().map(|s| s.coord).collect();
+        wanted.clear();
+        wanted.extend(sel.iter().map(|s| s.coord));
+        // Remember this cover as the next selection's hysteresis memory. Stored AFTER
+        // the body-forced splits so a node force-refined under a rover is also held
+        // through the band instead of flipping back the moment the rover drifts.
+        tiles.prev_sel.clear();
+        tiles.prev_sel.extend(wanted.iter().copied());
 
         // Intelligent baking, two phases:
         //
@@ -946,22 +1051,20 @@ pub fn update_lod_tiles(
         // (O(n log n) evaluations) — compute each tile's key once, sort on the
         // cached key. Carpet keys order by (0, depth, dist²); benefit keys by
         // (1, 0, benefit) — the same total order the comparator produced.
-        let mut keyed: Vec<(u8, u8, f64, Selected)> = sel
-            .drain(..)
-            .map(|s| {
-                if s.coord.depth <= CARPET_DEPTH {
-                    (0, s.coord.depth, dist2(&s), s)
-                } else {
-                    (1, 0, benefit(&s), s)
-                }
-            })
-            .collect();
+        keyed.clear();
+        keyed.extend(sel.drain(..).map(|s| {
+            if s.coord.depth <= CARPET_DEPTH {
+                (0, s.coord.depth, dist2(&s), s)
+            } else {
+                (1, 0, benefit(&s), s)
+            }
+        }));
         keyed.sort_by(|a, b| {
             (a.0, a.1)
                 .cmp(&(b.0, b.1))
                 .then(a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
         });
-        sel.extend(keyed.into_iter().map(|(_, _, _, s)| s));
+        sel.extend(keyed.drain(..).map(|(_, _, _, s)| s));
 
         // A coord is *fresh* (no work needed) when it has a resident tile OR an
         // in-flight bake tagged with the current generation. A stale entry (older
@@ -975,7 +1078,7 @@ pub fn update_lod_tiles(
         // Poll in-flight tasks; for each finished bake, upload its mesh (cheap, main
         // thread) + spawn the tile. The expensive DEM sampling already ran on a
         // worker thread, so the frame never blocks on baking.
-        let mut done: Vec<(QuadCoord, u32, BakedTile)> = Vec::new();
+        done.clear();
         pending.0.retain(|coord, (gen, task)| match block_on(future::poll_once(&mut *task)) {
             Some(baked) => {
                 done.push((*coord, *gen, baked));
@@ -983,7 +1086,7 @@ pub fn update_lod_tiles(
             }
             None => true,
         });
-        for (coord, gen, baked) in done {
+        for (coord, gen, baked) in done.drain(..) {
             // A bake from a superseded generation (heights changed while it ran) is
             // discarded — its mesh would show the OLD terrain.
             if gen != cur_gen {
@@ -996,13 +1099,16 @@ pub fn update_lod_tiles(
                 continue;
             }
             let depth = baked.depth;
-            let (ent, shared) = spawn_tile(
+            // Sub-root tiles settle in from their parent's coarse lattice (no pop):
+            // they are BORN at reveal step 0 and `animate_tile_reveal` walks them up.
+            // The root has no coarser parent to grow from → born fully revealed.
+            let reveal = if depth > 0 { 0 } else { REVEAL_FULL };
+            let ent = spawn_tile(
                 &mut commands, grid, grid_entity, terrain, coord, handle, baked.center, depth,
-                baked.morph_end, mode, &shader, maps, shadow, overlay, &mut materials, &mut lod_mats,
+                baked.morph_end, reveal, mode, maps, shadow, overlay,
             );
-            // Sub-root tiles settle in from their parent's coarse lattice (no pop).
             if depth > 0 {
-                begin_reveal(&mut commands, ent, shared, &mut materials);
+                commands.entity(ent).insert(TileReveal { elapsed: 0.0, step: 0 });
             }
             // Replace any stale slot at this coord, despawning the tile it held.
             if let Some(old) = tiles.tiles.insert(
@@ -1031,13 +1137,13 @@ pub fn update_lod_tiles(
             // (the sentinel `snap_band` maps to the no-morph bucket).
             let morph_end = if s.morph_end.is_finite() { s.morph_end as f32 } else { 1.0e21 };
             if let Some(cached) = mesh_cache.0.get(&(terrain, s.coord)) {
-                let (ent, shared) = spawn_tile(
+                let reveal = if depth > 0 { 0 } else { REVEAL_FULL };
+                let ent = spawn_tile(
                     &mut commands, grid, grid_entity, terrain, s.coord, cached.clone(),
-                    s.region.center, depth, morph_end, mode, &shader, maps, shadow, overlay,
-                    &mut materials, &mut lod_mats,
+                    s.region.center, depth, morph_end, reveal, mode, maps, shadow, overlay,
                 );
                 if depth > 0 {
-                    begin_reveal(&mut commands, ent, shared, &mut materials);
+                    commands.entity(ent).insert(TileReveal { elapsed: 0.0, step: 0 });
                 }
                 if let Some(old) = tiles
                     .tiles
@@ -1067,10 +1173,29 @@ pub fn update_lod_tiles(
                 // surface streams this tile from the `cache://` dir; a miss
                 // samples the oracle (over-zoom Nyquist-gated at this tile's
                 // vertex spacing inside the bake) and persists for next time.
+                //
+                // TODO(R1): on wasm this cache ALWAYS misses — every tile, every
+                // session. `bake_tile_mesh_cached` → `lunco_precompute::bake_or_load`
+                // → `lunco_precompute::{load_blob, store_blob}`, both hard no-ops on
+                // `target_arch = "wasm32"` (lunco-precompute/src/lib.rs). The seam to
+                // wire is `lunco_storage::opfs_blob::{read, write}` (already used for
+                // the DEM grid blob in `terrain.rs`), which is async — so
+                // `bake_or_load` needs an async twin. Owner: lunco-precompute.
                 let tm = crate::tile_cache::bake_tile_mesh_cached(
                     oracle_arc.as_ref(), coord, region, tile_res, half, center,
                 );
-                let mut mesh = grid_mesh(tm.positions, tm.normals, tm.uvs, tm.indices);
+                // RENDER_WORLD only: nothing reads a tile mesh's CPU vertex data back
+                // (physics rides the collider ring, picking rides the oracle), so the
+                // ~160 KB CPU copy per tile — ~164 MB across a full cache, doubled
+                // against VRAM — was pure waste. (The STATIC terrain mesh keeps
+                // `default()`: the horizon bake reads it back.)
+                let mut mesh = grid_mesh(
+                    tm.positions,
+                    tm.normals,
+                    tm.uvs,
+                    tm.indices,
+                    bevy::asset::RenderAssetUsages::RENDER_WORLD,
+                );
                 mesh.insert_attribute(ATTRIBUTE_MORPH_TARGET, tm.morph_targets);
                 BakedTile { mesh, center, depth, morph_end }
             });
@@ -1083,11 +1208,8 @@ pub fn update_lod_tiles(
         // makes a live re-bake progressive: on a generation bump every tile goes
         // stale at once, all keep covering the surface, and each is reaped only when
         // its current-gen replacement bakes in (near-camera-first).
-        let missing: Vec<Square> = sel
-            .iter()
-            .filter(|s| !fresh_tile(&tiles, &s.coord))
-            .map(|s| s.region)
-            .collect();
+        missing.clear();
+        missing.extend(sel.iter().filter(|s| !fresh_tile(&tiles, &s.coord)).map(|s| s.region));
         tiles.tiles.retain(|coord, slot| {
             // Keep ANY tile whose coord is still wanted — O(1). A fresh one is final;
             // a stale one covers the surface until its same-coord replacement bakes in
@@ -1116,7 +1238,14 @@ pub fn update_lod_tiles(
         // Other terrains' entries are left untouched — the cap is a soft memory
         // bound, and dropping a terrain we're not currently processing would just
         // force it to re-bake next frame.
-        if mesh_cache.0.len() > CACHE_CAP {
+        //
+        // The cap is GLOBAL but the cache is keyed by `(terrain, coord)`, so it
+        // scales with the live terrain count: a flat `CACHE_CAP` meant that with two
+        // terrains (or with entries left behind by a DEAD one — now evicted in
+        // `despawn_orphaned_lod_tiles`) `len() > CACHE_CAP` was true EVERY frame, and
+        // the live terrain's non-resident meshes were trimmed every frame — the tile
+        // cache permanently defeated, every trailing-edge tile re-baking on demand.
+        if mesh_cache.0.len() > CACHE_CAP * terrain_count {
             let resident: HashSet<QuadCoord> = tiles.tiles.keys().copied().collect();
             mesh_cache.0.retain(|(e, c), _| *e != terrain || resident.contains(c));
         }
@@ -1143,7 +1272,7 @@ pub fn despawn_orphaned_lod_tiles(
     mut removed: RemovedComponents<TerrainLodViz>,
     tiles: Query<(Entity, &LodTileOf)>,
     streaming: Query<(), With<TerrainLodViz>>,
-    mut lod_mats: ResMut<LodMaterials>,
+    mut mesh_cache: ResMut<LodMeshCache>,
 ) {
     let orphaned: HashSet<Entity> = removed.read().collect();
     if orphaned.is_empty() {
@@ -1154,54 +1283,62 @@ pub fn despawn_orphaned_lod_tiles(
             commands.entity(ent).despawn();
         }
     }
-    // Drop the dead terrain's cached materials too — they hold strong handles to
-    // its derived-map images (megabytes of GPU texture) that would otherwise
-    // outlive every reload.
-    lod_mats
-        .0
-        .retain(|(t, _, _, _), _| !orphaned.contains(t) || streaming.get(*t).is_ok());
+    let dead = |t: &Entity| orphaned.contains(t) && streaming.get(*t).is_err();
+    // (The dead terrain's cached MATERIALS — which pin its derived-map images,
+    // megabytes of GPU texture — are no longer this crate's problem: the tiles hold
+    // the only `ShaderLook`s that key them, so `lunco-render-bevy`'s binder cache
+    // sweep drops them once they are unreferenced. This crate owns no material.)
+    //
+    // Its cached MESHES still are. Nothing else evicts them: the cap-trim in
+    // `update_lod_tiles` only ever touches the terrain it is currently processing,
+    // so up to `CACHE_CAP` strong `Handle<Mesh>` per dead terrain (≈160 KB each ⇒
+    // ~164 MB) leaked FOREVER across every twin reload / scene swap — and once the
+    // dead entries alone exceeded the cap, they also defeated the live terrain's
+    // cache every frame.
+    mesh_cache.0.retain(|(t, _), _| !dead(t));
 }
 
 /// When a terrain's derived maps finish baking AFTER its tiles exist (the
 /// common case — the AO march takes seconds while the first tiles stream in),
-/// bind the maps + per-depth weights onto every cached Lit tile material in
-/// place — no tile churn, no re-bake. `Changed` also covers the re-bake that
-/// follows a live edit.
+/// restate the maps + per-depth weights on every resident Lit tile's look — no tile
+/// churn, no re-bake, and the binder collapses them back onto one material per
+/// depth. `Changed` also covers the re-bake that follows a live edit.
+///
+/// D8: **Lit tiles only.** The flat/debug shader declares no map bindings, so
+/// writing them there would only mint pointless material variants.
 pub(crate) fn bind_derived_maps_to_tiles(
     changed: Query<
-        (Entity, &TerrainDerivedMaps),
+        (&TerrainDerivedMaps, &LodTiles),
         (Changed<TerrainDerivedMaps>, With<TerrainLodViz>),
     >,
-    lod_mats: Res<LodMaterials>,
-    mut materials: ResMut<Assets<ShaderMaterial>>,
+    mut looks: Query<&mut ShaderLook>,
 ) {
-    for (terrain, maps) in &changed {
-        for ((t, mode, depth, _), handle) in lod_mats.0.iter() {
-            if *t != terrain || *mode != TerrainShaderMode::Lit {
-                continue;
-            }
-            if let Some(mut m) = materials.get_mut(handle) {
-                apply_maps_to_material(&mut m, maps, *depth);
+    for (maps, tiles) in &changed {
+        if tiles.mode != TerrainShaderMode::Lit {
+            continue;
+        }
+        for (depth, entity) in tiles.tiles_with_depth() {
+            if let Ok(mut look) = looks.get_mut(entity) {
+                apply_maps_to_look(&mut look, maps, depth);
             }
         }
     }
 }
 
 /// Same late-bind for the far-shadow cache: the horizon/shadow-cache bake (and
-/// every sun-driven re-bake) lands long after tiles exist — patch the cached
-/// Lit materials in place.
+/// every sun-driven re-bake) lands long after tiles exist — restate it on the
+/// resident Lit tiles' looks.
 pub(crate) fn bind_shadow_cache_to_tiles(
-    changed: Query<(Entity, &TileShadowCache), (Changed<TileShadowCache>, With<TerrainLodViz>)>,
-    lod_mats: Res<LodMaterials>,
-    mut materials: ResMut<Assets<ShaderMaterial>>,
+    changed: Query<(&TileShadowCache, &LodTiles), (Changed<TileShadowCache>, With<TerrainLodViz>)>,
+    mut looks: Query<&mut ShaderLook>,
 ) {
-    for (terrain, cache) in &changed {
-        for ((t, mode, _, _), handle) in lod_mats.0.iter() {
-            if *t != terrain || *mode != TerrainShaderMode::Lit {
-                continue;
-            }
-            if let Some(mut m) = materials.get_mut(handle) {
-                apply_shadow_cache_to_material(&mut m, cache);
+    for (cache, tiles) in &changed {
+        if tiles.mode != TerrainShaderMode::Lit {
+            continue;
+        }
+        for entity in tiles.tile_entities() {
+            if let Ok(mut look) = looks.get_mut(entity) {
+                apply_shadow_cache_to_look(&mut look, cache);
             }
         }
     }

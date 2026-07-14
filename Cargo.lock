@@ -4722,6 +4722,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gen-command-docs"
+version = "0.0.0"
+dependencies = [
+ "quote",
+ "serde",
+ "serde_json",
+ "syn 2.0.118",
+]
+
+[[package]]
 name = "generativity"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6874,7 +6884,6 @@ dependencies = [
  "axum",
  "base64",
  "bevy",
- "image",
  "lunco-core",
  "lunco-fsw",
  "serde",
@@ -6882,7 +6891,6 @@ dependencies = [
  "tokio",
  "wasm-bindgen",
  "wasm-bindgen-futures",
- "web-time",
 ]
 
 [[package]]
@@ -6921,14 +6929,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lunco-attributes"
-version = "0.6.0-dev"
-dependencies = [
- "bevy",
- "lunco-core",
-]
-
-[[package]]
 name = "lunco-autopilot"
 version = "0.6.0-dev"
 dependencies = [
@@ -6962,6 +6962,7 @@ dependencies = [
  "lunco-cosim",
  "lunco-environment",
  "lunco-fsw",
+ "lunco-render",
  "lunco-settings",
  "lunco-theme",
  "lunco-time",
@@ -6973,14 +6974,6 @@ dependencies = [
 [[package]]
 name = "lunco-behavior"
 version = "0.1.0"
-
-[[package]]
-name = "lunco-cache"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "futures-lite",
-]
 
 [[package]]
 name = "lunco-canvas"
@@ -7000,9 +6993,8 @@ version = "0.6.0-dev"
 dependencies = [
  "avian3d",
  "bevy",
- "bevy_asset",
  "bevy_egui",
- "bevy_shader",
+ "bevy_mesh",
  "big_space",
  "futures-lite",
  "lunco-api",
@@ -7022,8 +7014,6 @@ dependencies = [
  "lunco-workbench",
  "serde",
  "serde_json",
- "ureq",
- "uuid",
 ]
 
 [[package]]
@@ -7121,7 +7111,7 @@ dependencies = [
  "bevy",
  "lunco-core",
  "lunco-cosim",
- "lunco-materials",
+ "wgpu-types",
 ]
 
 [[package]]
@@ -7287,7 +7277,6 @@ dependencies = [
  "lunco-hash",
  "lunco-hooks",
  "lunco-hooks-rhai",
- "lunco-sandbox-edit",
  "lunco-settings",
  "lunco-storage",
  "lunco-twin",
@@ -7307,14 +7296,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lunco-obc"
-version = "0.6.0-dev"
-dependencies = [
- "bevy",
- "lunco-core",
-]
-
-[[package]]
 name = "lunco-obstacle-field"
 version = "0.1.0-dev"
 dependencies = [
@@ -7325,6 +7306,7 @@ dependencies = [
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
+ "lunco-render",
  "lunco-terrain-core",
  "lunco-time",
  "lunco-twin-journal",
@@ -7347,6 +7329,19 @@ name = "lunco-render"
 version = "0.1.0"
 dependencies = [
  "bevy",
+]
+
+[[package]]
+name = "lunco-render-bevy"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lunco-core",
+ "lunco-cosim",
+ "lunco-environment",
+ "lunco-materials",
+ "lunco-render",
+ "lunco-terrain-surface",
 ]
 
 [[package]]
@@ -7389,10 +7384,12 @@ dependencies = [
  "lunco-networking",
  "lunco-obstacle-field",
  "lunco-render",
+ "lunco-render-bevy",
  "lunco-sandbox-edit",
  "lunco-scripting",
  "lunco-settings",
  "lunco-storage",
+ "lunco-telemetry",
  "lunco-terrain-globe",
  "lunco-terrain-surface",
  "lunco-theme",
@@ -7438,6 +7435,7 @@ dependencies = [
  "lunco-mobility",
  "lunco-modelica",
  "lunco-obstacle-field",
+ "lunco-render",
  "lunco-terrain-surface",
  "lunco-theme",
  "lunco-time",
@@ -7501,6 +7499,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-signal"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "serde",
+]
+
+[[package]]
 name = "lunco-storage"
 version = "0.1.0"
 dependencies = [
@@ -7519,8 +7525,13 @@ name = "lunco-telemetry"
 version = "0.6.0-dev"
 dependencies = [
  "bevy",
+ "lunco-api",
  "lunco-core",
+ "lunco-settings",
+ "lunco-signal",
  "lunco-time",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -7569,6 +7580,7 @@ dependencies = [
  "lunco-materials",
  "lunco-obstacle-field",
  "lunco-precompute",
+ "lunco-render",
  "lunco-settings",
  "lunco-storage",
  "lunco-terrain-bake",
@@ -7577,6 +7589,7 @@ dependencies = [
  "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wgpu-types",
 ]
 
 [[package]]
@@ -7703,6 +7716,7 @@ dependencies = [
  "lunco-fsw",
  "lunco-materials",
  "lunco-mobility",
+ "lunco-render",
  "lunco-storage",
  "lunco-theme",
  "lunco-twin",
@@ -7739,6 +7753,7 @@ dependencies = [
  "ab_glyph",
  "anyhow",
  "bevy",
+ "bevy_mesh",
  "big_space",
  "lunco-assets",
  "lunco-core",
@@ -7746,6 +7761,7 @@ dependencies = [
  "lunco-render",
  "lunco-time",
  "openusd",
+ "wgpu-types",
 ]
 
 [[package]]
@@ -7771,6 +7787,7 @@ dependencies = [
  "lunco-materials",
  "lunco-mobility",
  "lunco-modelica",
+ "lunco-render",
  "lunco-scripting",
  "lunco-settings",
  "lunco-time",
@@ -7789,6 +7806,7 @@ dependencies = [
  "bevy_egui",
  "egui_plot",
  "lunco-canvas",
+ "lunco-signal",
  "lunco-theme",
  "lunco-workbench",
  "serde",
@@ -7812,7 +7830,9 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "egui_dock",
+ "image",
  "js-sys",
+ "lunco-api",
  "lunco-assets",
  "lunco-core",
  "lunco-doc",
@@ -7880,6 +7900,7 @@ dependencies = [
  "lunco-hardware",
  "lunco-materials",
  "lunco-mobility",
+ "lunco-render-bevy",
  "lunco-robotics",
  "lunco-time",
  "lunco-ui",

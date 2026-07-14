@@ -18,45 +18,29 @@ use avian3d::physics_transform::{Position, Rotation};
 use big_space::prelude::Grid;
 use lunco_core::{on_command, register_commands, Command};
 use lunco_obstacle_field::ObstacleFieldRoot;
+// Appearance INTENT (render-free). `SetObjectProperty`'s PBR keys mutate `PbrLook`
+// and its shader keys mutate `ShaderLook`; the render binders re-materialise on
+// `Changed<PbrLook>` / `Changed<ShaderLook>`. This file names no material type —
+// see `docs/architecture/render-decoupling.md`.
+use lunco_materials::{ParamSchema, ParamType, ParamValue, ShaderLook};
+use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd::document::{UsdOp, LayerId};
 use lunco_usd::registry::UsdDocumentRegistry;
 use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
 use lunco_doc::{DocumentId, DocumentOrigin};
+use lunco_doc_bevy::{RedoDocument, UndoDocument};
 use std::collections::{HashMap, HashSet, VecDeque};
 use crate::catalog::{SpawnCatalog, SpawnSource, spawn_usd_entry};
 
 /// Spawn an entity from the catalog at a given world position.
 ///
-/// `reflect_default` so API/rhai callers can omit optional fields: a missing
-/// `rotation` defaults to `None` (→ identity) and a missing/unresolved `target`
-/// falls back to the first grid in `on_spawn_entity_command`. Without this, the
-/// reflect deserializer rejects any partial params ("not constructible") and the
-/// command is silently dropped — the GUI path always supplies every field, so the
-/// gap only bit API/HTTP callers that sent just `{entry_id, position}`.
-#[Command(reflect_default)]
-pub struct SpawnEntity {
-    /// The grid entity to spawn under. `Entity::PLACEHOLDER` (or an id that
-    /// doesn't resolve) → first grid.
-    pub target: Entity,
-    /// The catalog entry ID (e.g. "ball_dynamic", "skid_rover").
-    pub entry_id: String,
-    /// World-space position (x, y, z).
-    pub position: Vec3,
-    /// World-space rotation (optional; omitted → identity).
-    pub rotation: Option<Quat>,
-}
-
-impl Default for SpawnEntity {
-    fn default() -> Self {
-        Self {
-            target: Entity::PLACEHOLDER,
-            entry_id: String::new(),
-            position: Vec3::ZERO,
-            rotation: None,
-        }
-    }
-}
+/// The TYPE lives in `lunco_core::commands` (review A6): the networking crate
+/// declares this command's wire channel and needs nothing but the type, so keeping
+/// the definition in core is what let `lunco-networking` drop its dependency on
+/// this crate. The HANDLER (`on_spawn_entity_command`) stays here, with the
+/// catalog it spawns from. Re-exported so existing call sites are unchanged.
+pub use lunco_core::SpawnEntity;
 
 /// Detach a joint by despawning it.
 #[Command(reflect_default)]
@@ -1323,6 +1307,10 @@ fn apply_buffered_client_inputs(
     mut buf: ResMut<lunco_core::BufferedClientInputs>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     ports: Res<lunco_core::ports::PortRegistry>,
+    // The reconcile ack is stamped HERE, from the seq this tick actually integrated
+    // (review N2) — see the comment in the loop.
+    sessions: Res<lunco_core::SessionRegistry>,
+    mut applied: ResMut<lunco_core::AppliedInputSeq>,
     mut commands: Commands,
 ) {
     if !role.is_host() {
@@ -1340,6 +1328,14 @@ fn apply_buffered_client_inputs(
         let Some(writes) = buf.next_for_tick(gid, 8) else {
             continue;
         };
+        // THE ACK (review N2). `next_for_tick` advanced the per-gid cursor by at most
+        // ONE seq — the input this fixed tick will integrate — so the cursor is the
+        // honest "how far the authoritative sim has consumed your input" watermark.
+        // Stamped even if the entity fails to resolve below: the input was consumed
+        // either way, and a stalled ack would strand the owner's reconcile.
+        // `record` also re-keys the slot to the current owner and rejects an
+        // implausible seq (review N1).
+        applied.record(gid, sessions.owner_of(gid), buf.cursor(gid));
         let Some(e) = registry.resolve(&lunco_core::GlobalEntityId::from_raw(gid)) else {
             continue;
         };
@@ -1678,6 +1674,17 @@ pub fn rollback_owned_prediction(world: &mut World) {
         if ack == 0 {
             continue; // host hasn't applied any of our input yet
         }
+        // STALE-ACK GUARD (review N1) — same reasoning as `reconcile_owned_prediction`:
+        // an ack above the highest seq we ever minted belongs to the vessel's PREVIOUS
+        // owner, and latching it as `last_reconciled` disables this path permanently.
+        let next_seq = world
+            .resource::<lunco_core::OwnedInputLog>()
+            .0
+            .get(&gid)
+            .map_or(0, |l| l.next_seq);
+        if ack > next_seq {
+            continue;
+        }
         // One rollback per new ack.
         {
             let mut hist = world.resource_mut::<PredictedStateLog>();
@@ -1868,6 +1875,8 @@ pub fn reconcile_owned_prediction(
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     mut hist: ResMut<PredictedStateLog>,
     mut input_log: ResMut<lunco_core::OwnedInputLog>,
+    // Desync detection (review N3): every ack feeds the per-body gauge.
+    mut divergence: ResMut<lunco_core::DivergenceStats>,
     q_owned: Query<&lunco_core::GlobalEntityId, With<lunco_core::OwnedLocally>>,
     mut q: Query<(
         &mut Transform,
@@ -1889,6 +1898,19 @@ pub fn reconcile_owned_prediction(
         let ack = sample.last_input_seq;
         if ack == 0 {
             continue; // host hasn't applied any of our inputs yet
+        }
+        // STALE-ACK GUARD (review N1). An ack can only be ours if we have actually
+        // MINTED that seq. A snapshot still carrying the PREVIOUS owner's watermark
+        // — in flight, or sitting in `InterpBuffers`, when we took possession —
+        // would otherwise be latched below as `last_reconciled`; every ack from our
+        // own stream (which restarts at 1) is then `<=` it, so this system
+        // early-returns FOREVER and the rover we are driving is never reconciled
+        // again. The host now resets the watermark on re-possession
+        // (`sync_applied_seq_owners`); this is the client-side half, and it is what
+        // covers the in-flight window between the two.
+        let next_seq = input_log.0.get(&g).map_or(0, |l| l.next_seq);
+        if ack > next_seq {
+            continue;
         }
         let Some(vlog) = hist.0.get_mut(&g) else {
             continue;
@@ -1935,6 +1957,20 @@ pub fn reconcile_owned_prediction(
             sample.rot,
             lunco_core::ReconcileParams::default(),
         );
+        // DESYNC GAUGE (review N3). The error at the acked seq IS the prediction
+        // error (the latency lead cancels), so this is the honest per-body
+        // divergence — recorded on every ack, InSync included, so the gauge shows
+        // the healthy baseline too. A sustained metre says so out loud: before this
+        // there was no way to observe a desync in the field at all.
+        let err_m = (sample.pos - hs.pos).length();
+        if divergence.observe(g, lunco_core::PredictionKind::Owned, err_m) {
+            warn!(
+                "[desync] owned gid={g:x} diverging: {err_m:.2} m at ack seq={ack} for \
+                 {} consecutive acks (max {:.2} m). The prediction is not tracking the host.",
+                divergence.warn_streak,
+                divergence.bodies.get(&g).map_or(err_m, |b| b.max_m),
+            );
+        }
         // COMMON CASE: prediction matched authority → leave the body alone.
         if matches!(decision, lunco_core::Reconciliation::InSync) {
             continue;
@@ -1966,6 +2002,15 @@ pub fn reconcile_owned_prediction(
             // included; the interpolation easing-reset on a real teleport is
             // exactly what we want) and drop any queued residual.
             lunco_core::Reconciliation::Snap { pos: new_pos, rot: new_rot } => {
+                // The force-rebaseline. It used to be SILENT; it is now counted and
+                // announced (review N3) — a snapping owned body is the loudest
+                // symptom the netcode has, and it was invisible in the field.
+                divergence.note_rebaseline(g);
+                warn!(
+                    "[desync] owned gid={g:x} REBASELINED (snap {:.1} m to authority at ack \
+                     seq={ack}) — prediction grossly desynced",
+                    (sample.pos - tf.translation).length()
+                );
                 tf.translation = new_pos;
                 tf.rotation = new_rot;
                 if let Some(mut p) = pos {
@@ -2289,6 +2334,9 @@ pub fn reconcile_predicted_dynamic(
     buffers: Res<InterpBuffers>,
     clock: Res<ProxyPlaybackClock>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    // Desync detection (review N3): free predicted bodies feed the same gauge as the
+    // owned rover, so a drifting prop is observable instead of silently teleporting.
+    mut divergence: ResMut<lunco_core::DivergenceStats>,
     q_pred: Query<&lunco_core::GlobalEntityId, With<lunco_core::PredictedDynamic>>,
     mut q: Query<(
         Option<&mut Position>,
@@ -2343,7 +2391,20 @@ pub fn reconcile_predicted_dynamic(
         }
         let angle = rot_err.to_axis_angle().1.abs();
 
+        // DESYNC GAUGE (review N3) — same signal as the owned body, for the free
+        // predicted set (props, bumped rocks, contact-gated remote rovers).
+        if divergence.observe(g, lunco_core::PredictionKind::Free, dist as f32) {
+            warn!(
+                "[desync] free predicted gid={g:x} diverging: {dist:.2} m from authority for {} \
+                 consecutive ticks — local physics is not reproducing the host",
+                divergence.warn_streak,
+            );
+        }
+
         if dist > RECONCILE_SNAP_DIST {
+            // Counted + announced: this teleport was silent before (review N3).
+            divergence.note_rebaseline(g);
+            debug!("[desync] free predicted gid={g:x} REBASELINED (teleport {dist:.1} m)");
             // Gross desync / first sight: teleport. Seat Position/Rotation directly
             // (NEVER `Transform` — avian writeback derives it; a Transform write here
             // resets `bevy_transform_interpolation` → the historical jitter) and seat
@@ -2399,30 +2460,16 @@ pub fn reconcile_predicted_dynamic(
     }
 }
 
-/// Step 2 (revised): residual reconcile correction, drained in **physics space**
-/// a tick at a time by [`drain_pending_corrections`].
+/// Step 2 (revised): the residual reconcile correction, drained in **physics
+/// space** a tick at a time by [`drain_pending_corrections`].
 ///
-/// The first Step-2 design (a decaying offset written onto the render `Transform`
-/// in `PostUpdate`) was architecturally wrong for this app: the sandbox enables
-/// `PhysicsInterpolationPlugin::interpolate_all()`, so `bevy_transform_interpolation`
-/// owns every body's `Transform` at render rate — and treats ANY external
-/// `Transform` write as a teleport, resetting its easing. Our offset writer
-/// therefore *disabled* interpolation for the corrected body (≈ continuously while
-/// driving, since corrections land every ~1–2 s and the offset decayed for ~1 s)
-/// → the rover rendered at raw 64 Hz steps = the persistent "jitters while just
-/// holding the key" the host never shows.
-///
-/// Correct composition: never touch `Transform` from game code. Park the
-/// correction here and let the drain system nudge `Position`/`Rotation` by a tiny
-/// bounded amount each FIXED tick; writeback + interpolation then render it
-/// perfectly smoothly with no second writer anywhere.
-#[derive(Component, Clone, Copy, Debug, Default)]
-pub struct PendingCorrection {
-    /// Remaining position delta to apply (world metres).
-    pub pos: Vec3,
-    /// Remaining orientation delta (applied as `rot * current`).
-    pub rot: Quat,
-}
+/// The TYPE now lives in `lunco_core::session` (review A6 — it and `SpawnEntity`
+/// were the only two symbols `lunco-networking` needed from this 13.4k-LOC crate,
+/// and that one edge dragged the whole editor closure into every networking build).
+/// The producer (`reconcile_owned_prediction`) and the drain stay here; the
+/// rationale for parking a correction instead of writing `Transform` is on the type.
+/// Re-exported so existing call sites are unchanged.
+pub use lunco_core::PendingCorrection;
 
 /// Time-constant (s) for draining a pending correction: ~63% applied per
 /// `CORRECTION_TAU`, ≈ fully in ~3×. Long enough to be invisible, short enough to
@@ -2437,11 +2484,8 @@ const CORRECTION_MAX_POS_PER_TICK: f64 = 0.025;
 /// Per-tick cap on the drained rotation nudge (rad, ~0.9°/tick ≈ 57°/s capacity).
 const CORRECTION_MAX_ROT_PER_TICK: f64 = 0.016;
 
-impl PendingCorrection {
-    pub fn is_negligible(&self) -> bool {
-        self.pos.length_squared() < 1e-8 && self.rot.angle_between(Quat::IDENTITY) < 1e-4
-    }
-}
+// `PendingCorrection::is_negligible` moved to `lunco_core::session` with the type
+// (review A6) — an inherent impl must live in the type's own crate.
 
 /// Drain each body's [`PendingCorrection`] into its avian `Position`/`Rotation`
 /// in small per-tick steps (exp toward zero residual, hard per-tick caps).
@@ -2695,6 +2739,58 @@ pub fn persist_move_to_runtime_layer(
     });
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Document history — THE history
+//
+// The 3D editor has no private undo stack. Every editor mutation is
+// authored as a `UsdOp` (the persisters above), so its history is the
+// document's history: Lamport-ordered, op+inverse, journaled, networked.
+// `UndoDocument`/`RedoDocument` are the generic verbs; each domain observes them
+// and acts only on documents its own registry owns. USD's observers live in
+// `lunco-usd` (the crate that owns `UsdDocumentRegistry`) — NOT here, so that a
+// headless binary with documents but no 3D editor can still undo. The editor's
+// only job is to bind the key.
+// ─────────────────────────────────────────────────────────────────────
+
+/// Ctrl+Z → undo, Ctrl+Shift+Z / Ctrl+Y → redo, on the **active document**.
+///
+/// The editor's edits are document ops, so this is the same history the Inspector, the
+/// journal and every networked peer see — there is no second, in-memory editor stack to
+/// disagree with it.
+///
+/// Ignored while egui holds the keyboard, so Ctrl+Z in a text field (the rhai editor, a
+/// name box) edits the text instead of silently reverting the scene.
+pub fn handle_undo_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    egui_focus: Res<lunco_core::EguiFocus>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    mut commands: Commands,
+) {
+    if egui_focus.wants_keyboard {
+        return;
+    }
+    if !keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]) {
+        return;
+    }
+    let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    let redo = keys.just_pressed(KeyCode::KeyY) || (shift && keys.just_pressed(KeyCode::KeyZ));
+    let undo = !shift && keys.just_pressed(KeyCode::KeyZ);
+    if !undo && !redo {
+        return;
+    }
+
+    let Some(workspace) = workspace else { return };
+    let Some(doc) = workspace.0.active_document else {
+        info!("[undo] no active document — nothing to undo");
+        return;
+    };
+    if redo {
+        commands.trigger(RedoDocument { doc });
+    } else {
+        commands.trigger(UndoDocument { doc });
+    }
+}
+
 /// The preamble EVERY persister repeats: resolve the active USD document, resolve the
 /// entity's prim path, and ownership-guard it against that document.
 ///
@@ -2791,7 +2887,7 @@ pub fn persist_delete_to_runtime_layer(
 /// Persist a `SetObjectProperty` **shader-param tune** into the active USD
 /// document's **runtime overlay** (#4 — non-destructive layer tuning).
 ///
-/// [`on_set_object_property`] mutates the live `ShaderMaterial` for immediate
+/// [`on_set_object_property`] mutates the live [`ShaderLook`] for immediate
 /// feedback but writes nothing back to USD, so a tweak (e.g. a terrain
 /// `weight_albedo`) is lost on reload. This decoupled observer authors the same
 /// edit as a `SetAttribute` into `LayerId::runtime()` — the session overlay that
@@ -2801,19 +2897,27 @@ pub fn persist_delete_to_runtime_layer(
 /// same runtime target, fully decoupled from the live-mutation handler.
 ///
 /// Scope: **scalar** params (covers every layer `weight_*` and roughness knob) on
-/// entities backed by a `ShaderMaterial` whose prim the active document owns.
-/// Colors/vectors and PBR/`StandardMaterial` props stay live-only for now.
+/// entities carrying a [`ShaderLook`] whose prim the active document owns.
+/// Colors/vectors and PBR props stay live-only for now.
+///
+/// The "is this a shader prim?" guard is a CLASSIFICATION query, so it asks the
+/// *intent* (`With<ShaderLook>`), not the bound material: the intent exists headless
+/// too, where nothing ever binds a `ShaderMaterial`.
 pub fn persist_property_to_runtime_layer(
     trigger: On<SetObjectProperty>,
     api_registry: Res<lunco_api::registry::ApiEntityRegistry>,
     usd_registry: Res<UsdDocumentRegistry>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     q_prim: Query<&UsdPrimPath>,
-    q_shader: Query<(), With<MeshMaterial3d<lunco_materials::ShaderMaterial>>>,
+    q_shader: Query<(), With<ShaderLook>>,
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
-    // Structural props aren't USD attributes; skip them.
+    // Not shader *params*: `shader` swaps the material (no USD reader — the
+    // `shaderPath` attribute was deliberately vetoed, so it stays live-only) and
+    // `visible` is authored as standard `token visibility` by
+    // [`persist_wheel_and_pbr_to_runtime_layer`]. Disjoint, so neither is
+    // double-authored.
     if matches!(cmd.property.as_str(), "shader" | "visible") {
         return;
     }
@@ -2841,7 +2945,7 @@ pub fn persist_property_to_runtime_layer(
 
     let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
     let Some(target) = api_registry.resolve(&global_id) else { return };
-    // Only shader-material prims (the layer-tuning case) — not PBR/StandardMaterial.
+    // Only shader-look prims (the layer-tuning case) — not PBR ones.
     if q_shader.get(target).is_err() {
         return;
     }
@@ -2871,56 +2975,137 @@ pub fn persist_property_to_runtime_layer(
     });
 }
 
-/// Maps a `SetObjectProperty` **wheel-dynamics** property name to the USD
-/// attribute the loader (`lunco_usd_sim`) reads back onto `WheelRaycast`, so a
-/// per-wheel tune round-trips on reload. Only the names with an existing reader
-/// are mapped; `slip_stiffness` / `friction_mu` have none, so they stay live-only.
-/// All are `float`.
-fn wheel_property_usd_attr(name: &str) -> Option<&'static str> {
-    Some(match name {
-        "drive_torque" | "drive_torque_max" => "physxVehicleEngine:peakTorque",
-        "brake_torque" | "brake_torque_max" => "physxVehicleWheel:maxBrakeTorque",
-        "bearing_damping" | "damping_rate" => "physxVehicleWheel:dampingRate",
-        "moi" | "moment_of_inertia" => "physxVehicleWheel:moi",
-        "wheel_radius" | "radius" => "physxVehicleWheel:radius",
-        "rest_length" => "physxVehicleSuspension:restLength",
-        "spring_k" | "spring_stiffness" => "physxVehicleSuspension:springStiffness",
-        "damping_c" | "spring_damping" => "physxVehicleSuspension:springDamping",
-        _ => return None,
-    })
+/// One wheel-dynamics parameter — **the** single source of truth for it.
+///
+/// A wheel param has exactly three facets and they must never drift apart:
+/// the names `SetObjectProperty` accepts for it, the live `WheelRaycast` field
+/// it sets, and the USD attribute `lunco_usd_sim` reads back onto that field on
+/// load. Two hand-synced tables (a `name → setter` match and a separate
+/// `name → attr` match) had already drifted — `slip_stiffness` / `friction_mu`
+/// were settable but not persistable, so tuning them was silently lost on
+/// reload. One row per param makes that structurally impossible: a field cannot
+/// exist in one table and not the other, because there is only one table.
+pub(crate) struct WheelParam {
+    /// Accepted `SetObjectProperty` names — the Rust field name first, USD-style
+    /// aliases after (`radius`, `spring_stiffness`, …).
+    pub aliases: &'static [&'static str],
+    /// Live setter on `WheelRaycast`. Non-capturing closures coerce to `fn`.
+    pub set: fn(&mut lunco_mobility::WheelRaycast, f64),
+    /// The USD attribute the loader reads back into this field (`float`).
+    pub usd_attr: &'static str,
 }
 
-/// Persist a `SetObjectProperty` **wheel-dynamics** or **PBR base-colour** tune
-/// into the active USD document's runtime overlay — the counterpart of
-/// [`persist_property_to_runtime_layer`] for the two property classes it skips
-/// (it guards to shader-material prims). Fully decoupled + disjoint: it only
-/// authors for wheel-param names (via [`wheel_property_usd_attr`]) or `base_color`
-/// on a `StandardMaterial` prim, both of which the loader already reads back — so
-/// they round-trip on reload and ride the Twin journal. Ownership-guarded and
-/// no-op without an active USD doc, like every other persister.
+/// Every wheel-dynamics parameter `SetObjectProperty` can tune. Each row's
+/// `usd_attr` is a name `lunco_usd_sim`'s wheel loader actually reads, so every
+/// tune round-trips through the runtime layer on reload.
+pub(crate) const WHEEL_PARAMS: &[WheelParam] = &[
+    WheelParam {
+        aliases: &["drive_torque", "drive_torque_max"],
+        set: |w, v| w.drive_torque_max = v,
+        usd_attr: "physxVehicleEngine:peakTorque",
+    },
+    WheelParam {
+        aliases: &["brake_torque", "brake_torque_max"],
+        set: |w, v| w.brake_torque_max = v,
+        usd_attr: "physxVehicleWheel:maxBrakeTorque",
+    },
+    WheelParam {
+        aliases: &["slip_stiffness"],
+        set: |w, v| w.slip_stiffness = v,
+        usd_attr: "physxVehicleTire:longitudinalStiffness",
+    },
+    WheelParam {
+        aliases: &["bearing_damping", "damping_rate"],
+        set: |w, v| w.bearing_damping = v,
+        usd_attr: "physxVehicleWheel:dampingRate",
+    },
+    WheelParam {
+        aliases: &["friction_mu", "friction"],
+        set: |w, v| w.friction_mu = v,
+        usd_attr: "lunco:frictionCoefficient",
+    },
+    WheelParam {
+        aliases: &["mass"],
+        set: |w, v| w.mass = v,
+        usd_attr: "physics:mass",
+    },
+    WheelParam {
+        aliases: &["moi", "moment_of_inertia"],
+        set: |w, v| w.moment_of_inertia = v,
+        usd_attr: "physxVehicleWheel:moi",
+    },
+    WheelParam {
+        aliases: &["wheel_radius", "radius"],
+        set: |w, v| w.wheel_radius = v,
+        usd_attr: "physxVehicleWheel:radius",
+    },
+    WheelParam {
+        aliases: &["rest_length"],
+        set: |w, v| w.rest_length = v,
+        usd_attr: "physxVehicleSuspension:restLength",
+    },
+    WheelParam {
+        aliases: &["spring_k", "spring_stiffness"],
+        set: |w, v| w.spring_k = v,
+        usd_attr: "physxVehicleSuspension:springStiffness",
+    },
+    WheelParam {
+        aliases: &["damping_c", "spring_damping"],
+        set: |w, v| w.damping_c = v,
+        usd_attr: "physxVehicleSuspension:springDamping",
+    },
+];
+
+/// Look a `SetObjectProperty` property name up in [`WHEEL_PARAMS`], or `None`
+/// if it isn't a wheel field. Both the live-mutation path and the USD-authoring
+/// path go through this one lookup.
+pub(crate) fn wheel_param(name: &str) -> Option<&'static WheelParam> {
+    WHEEL_PARAMS.iter().find(|p| p.aliases.contains(&name))
+}
+
+/// Persist a `SetObjectProperty` **wheel-dynamics**, **visibility** or **PBR
+/// base-colour** tune into the active USD document's runtime overlay — the
+/// counterpart of [`persist_property_to_runtime_layer`] for the property classes
+/// it skips (it guards to shader-material prims). Fully decoupled + disjoint: it
+/// authors for wheel-param names (via [`wheel_param`]), `visible` (standard USD
+/// `token visibility`) or `base_color` on a PBR prim — all of
+/// which the loader already reads back, so they round-trip on reload and ride the
+/// Twin journal. Ownership-guarded and no-op without an active USD doc, like
+/// every other persister.
 pub fn persist_wheel_and_pbr_to_runtime_layer(
     trigger: On<SetObjectProperty>,
     api_registry: Res<lunco_api::registry::ApiEntityRegistry>,
     usd_registry: Res<UsdDocumentRegistry>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     q_prim: Query<&UsdPrimPath>,
-    q_std_mat: Query<(), With<MeshMaterial3d<StandardMaterial>>>,
+    // "Is this a PBR (non-shader) prim?" — the `PbrLook` *intent*, which exists
+    // headless as well as in a render build (the bound `StandardMaterial` is the
+    // binder's business and this crate may not name it).
+    q_std_mat: Query<(), With<PbrLook>>,
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
 
     // Route the property to a USD attribute the loader reads back.
     let authored: Option<(String, &str, String)> =
-        if let Some(attr) = wheel_property_usd_attr(&cmd.property) {
-            // Wheel dynamics → physxVehicle* scalar.
+        if let Some(param) = wheel_param(&cmd.property) {
+            // Wheel dynamics → the single `WHEEL_PARAMS` row's USD attribute.
             cmd.value
                 .trim()
                 .parse::<f32>()
                 .ok()
-                .map(|v| (attr.to_string(), "float", v.to_string()))
+                .map(|v| (param.usd_attr.to_string(), "float", v.to_string()))
+        } else if cmd.property == "visible" {
+            // Visibility → standard USD `token visibility`, which the prim
+            // instantiator already reads back (`inherited` / `invisible`), so a
+            // hide survives reload instead of being a live-only ECS `Visibility`
+            // write. A `token` literal is QUOTED in USD.
+            let hidden = matches!(cmd.value.trim(), "false" | "0" | "hidden");
+            let tok = if hidden { "invisible" } else { "inherited" };
+            Some(("visibility".to_string(), "token", format!("\"{tok}\"")))
         } else if cmd.property == "base_color" {
-            // PBR base colour → `primvars:displayColor` (loader reads it into
-            // `StandardMaterial.base_color`). Linear r,g,b (drop any alpha).
+            // PBR base colour → `primvars:displayColor` (the loader reads it back
+            // into the prim's `PbrLook`). Linear r,g,b (drop any alpha).
             let f: Vec<f32> = cmd
                 .value
                 .split(',')
@@ -2938,7 +3123,7 @@ pub fn persist_wheel_and_pbr_to_runtime_layer(
         };
     let Some((name, type_name, value)) = authored else { return };
 
-    // `base_color` only applies to StandardMaterial prims; wheel params resolve
+    // `base_color` only applies to PBR prims; wheel params resolve
     // regardless (the guard is cheap and disjoint from the shader persister).
     let Some(workspace) = workspace else { return };
     let Some(doc) = workspace.0.active_document else { return };
@@ -3314,10 +3499,11 @@ pub fn clear_kinematic_pulse_velocity(
 /// ```
 ///
 /// Recognised `property` values:
-/// - `shader` → load that `.wgsl` (asset path) and bind it as a `ShaderMaterial`.
+/// - `shader` → author a [`ShaderLook`] for that `.wgsl` (asset path); the render
+///   binder turns it into a material.
 /// - any parameter named by the shader's `Material` struct (e.g. `albedo`,
-///   `wedge_count`, `cell_a`) → update that shader uniform in place by name
-///   (requires `shader` set first, or a USD shader material). The material's
+///   `wedge_count`, `cell_a`) → set that named value on the entity's `ShaderLook`
+///   (requires `shader` set first, or a USD shader material). The shader's
 ///   reflected schema resolves the type; colours are `r,g,b`.
 /// - `visible` → `true`/`false` toggles `Visibility`.
 /// - Per-wheel tire-spin dynamics (target a single wheel entity by its `api_id`):
@@ -3338,35 +3524,36 @@ pub struct SetObjectProperty {
     pub value: String,
 }
 
-/// Maps a `SetObjectProperty` property name to a setter on `WheelRaycast`, or
-/// `None` if the name isn't a wheel field. Non-capturing closures coerce to
-/// `fn` pointers, so this stays a cheap lookup table. Accepts both the Rust
-/// field names and the USD-style aliases (`radius`, `spring_stiffness`, …).
-fn wheel_param_setter(name: &str) -> Option<fn(&mut lunco_mobility::WheelRaycast, f64)> {
-    use lunco_mobility::WheelRaycast as W;
-    Some(match name {
-        "drive_torque" | "drive_torque_max" => |w: &mut W, v| w.drive_torque_max = v,
-        "brake_torque" | "brake_torque_max" => |w: &mut W, v| w.brake_torque_max = v,
-        "slip_stiffness" => |w: &mut W, v| w.slip_stiffness = v,
-        "bearing_damping" | "damping_rate" => |w: &mut W, v| w.bearing_damping = v,
-        "friction_mu" | "friction" => |w: &mut W, v| w.friction_mu = v,
-        "mass" => |w: &mut W, v| w.mass = v,
-        "moi" | "moment_of_inertia" => |w: &mut W, v| w.moment_of_inertia = v,
-        "wheel_radius" | "radius" => |w: &mut W, v| w.wheel_radius = v,
-        "rest_length" => |w: &mut W, v| w.rest_length = v,
-        "spring_k" | "spring_stiffness" => |w: &mut W, v| w.spring_k = v,
-        "damping_c" | "spring_damping" => |w: &mut W, v| w.damping_c = v,
-        _ => return None,
-    })
-}
-
-/// Apply one `StandardMaterial` (PBR) property addressed by `SetObjectProperty`.
+/// The `SetObjectProperty` PBR keys [`PbrLook`] can express.
 ///
-/// Value formats: colors are comma-separated **linear** `r,g,b[,a]` in 0..1 (so
-/// they round-trip the Inspector's `color_edit_button_rgb`); scalars a single
-/// float; booleans `true`/`1`/`yes`/`on`. Returns `false` if the value didn't
-/// parse so the caller can warn.
-fn apply_pbr_param(mat: &mut StandardMaterial, key: &str, value: &str) -> bool {
+/// These go through the **appearance-intent component**, not a material asset:
+/// mutating `PbrLook` is enough, because `lunco-render-bevy`'s `Changed<PbrLook>`
+/// binder re-materialises the entity. There is no longer an `Assets<StandardMaterial>`
+/// fallback — an in-place asset write would have been actively wrong anyway (the
+/// binder's handles are *shared by look*, so it would bleed onto every other entity
+/// that looks the same), and naming the material would drag `bevy_pbr` (wgpu, naga)
+/// into the headless server that links this file.
+const PBR_LOOK_KEYS: &[&str] = &[
+    "base_color",
+    "emissive",
+    "metallic",
+    "roughness",
+    "perceptual_roughness",
+    "reflectance",
+    "alpha",
+    "opacity",
+    "unlit",
+    "double_sided",
+];
+
+/// Apply one PBR property addressed by `SetObjectProperty` to a [`PbrLook`] —
+/// appearance **intent**, no material asset touched.
+///
+/// Value formats: colors are comma-separated **linear** `r,g,b[,a]` in 0..1 (so they
+/// round-trip the Inspector's `color_edit_button_rgb`); scalars a single float;
+/// booleans `true`/`1`/`yes`/`on`. Only the keys in [`PBR_LOOK_KEYS`] are understood;
+/// anything else returns `false`.
+fn apply_pbr_look(look: &mut PbrLook, key: &str, value: &str) -> bool {
     let f: Vec<f32> = value
         .split(',')
         .filter_map(|s| s.trim().parse::<f32>().ok())
@@ -3374,37 +3561,132 @@ fn apply_pbr_param(mat: &mut StandardMaterial, key: &str, value: &str) -> bool {
     let parse_bool = |v: &str| matches!(v.trim(), "true" | "1" | "yes" | "on");
     match key {
         "base_color" => {
-            if f.len() < 3 { return false; }
-            let a = f.get(3).copied().unwrap_or_else(|| mat.base_color.to_linear().alpha);
-            mat.base_color = Color::LinearRgba(LinearRgba::new(f[0], f[1], f[2], a));
+            if f.len() < 3 {
+                return false;
+            }
+            let a = f.get(3).copied().unwrap_or(look.base_color.alpha);
+            look.base_color = LinearRgba::new(f[0], f[1], f[2], a);
         }
         "emissive" => {
-            if f.len() < 3 { return false; }
-            mat.emissive = LinearRgba::new(f[0], f[1], f[2], f.get(3).copied().unwrap_or(1.0));
+            if f.len() < 3 {
+                return false;
+            }
+            look.emissive = LinearRgba::new(f[0], f[1], f[2], f.get(3).copied().unwrap_or(1.0));
         }
-        "metallic" => { let Some(v) = f.first() else { return false }; mat.metallic = v.clamp(0.0, 1.0); }
+        "metallic" => {
+            let Some(v) = f.first() else { return false };
+            look.metallic = v.clamp(0.0, 1.0);
+        }
         "roughness" | "perceptual_roughness" => {
             let Some(v) = f.first() else { return false };
-            mat.perceptual_roughness = v.clamp(0.0, 1.0);
+            look.perceptual_roughness = v.clamp(0.0, 1.0);
         }
-        "reflectance" => { let Some(v) = f.first() else { return false }; mat.reflectance = v.clamp(0.0, 1.0); }
+        "reflectance" => {
+            let Some(v) = f.first() else { return false };
+            look.reflectance = v.clamp(0.0, 1.0);
+        }
         "alpha" | "opacity" => {
             let Some(v) = f.first() else { return false };
             let v = v.clamp(0.0, 1.0);
-            let mut lin = mat.base_color.to_linear();
-            lin.alpha = v;
-            mat.base_color = Color::LinearRgba(lin);
-            mat.alpha_mode = if v >= 1.0 { AlphaMode::Opaque } else { AlphaMode::Blend };
+            look.base_color.alpha = v;
+            look.alpha = if v >= 1.0 { SurfaceAlpha::Opaque } else { SurfaceAlpha::Blend };
         }
-        "unlit" => mat.unlit = parse_bool(value),
-        "double_sided" => {
-            let b = parse_bool(value);
-            mat.double_sided = b;
-            mat.cull_mode = if b { None } else { Some(bevy::render::render_resource::Face::Back) };
-        }
+        "unlit" => look.unlit = parse_bool(value),
+        "double_sided" => look.double_sided = parse_bool(value),
         _ => return false,
     }
     true
+}
+
+/// The reflected parameter schema of a shader **asset path**.
+///
+/// Read straight out of the loaded WGSL source (`Material` struct + `//!@`
+/// annotations) rather than off a material — the schema is a property of the
+/// *asset*, and reading it this way keeps the shader-param paths render-free.
+/// `None` while the shader is still loading (or if it declares no `Material`), in
+/// which case callers infer the type from the value's arity, exactly as the old
+/// material path did with its empty default schema.
+fn shader_schema(
+    path: &str,
+    asset_server: &AssetServer,
+    shaders: &Assets<bevy::shader::Shader>,
+) -> Option<ParamSchema> {
+    let handle = asset_server.load::<bevy::shader::Shader>(path.to_string());
+    let src = match &shaders.get(&handle)?.source {
+        bevy::shader::Source::Wgsl(s) => s.as_ref().to_string(),
+        _ => return None,
+    };
+    ParamSchema::parse(&src)
+}
+
+/// Parse one `SetObjectProperty` value into a typed [`ParamValue`] for `key`.
+///
+/// Same grammar (and the same type resolution) as the former
+/// `lunco_materials::apply_param`: the field's type comes from the shader's
+/// reflected schema when it is known, else from the value's arity; a vector field
+/// takes `r,g,b` and is stored as a `Vec4` with alpha 1, which is what
+/// `ShaderMaterial::set_color` did and what the shader's uniform block expects.
+fn shader_param_value(schema: Option<&ParamSchema>, key: &str, value: &str) -> Option<ParamValue> {
+    let ty = schema.and_then(|s| s.field(key)).map(|f| f.ty).unwrap_or_else(|| {
+        match value.split(',').filter(|s| !s.trim().is_empty()).count() {
+            0 | 1 => ParamType::F32,
+            2 => ParamType::Vec2,
+            3 => ParamType::Vec3,
+            _ => ParamType::Vec4,
+        }
+    });
+    match ty {
+        ParamType::Vec3 | ParamType::Vec4 => {
+            let n: Vec<f32> =
+                value.split(',').filter_map(|s| s.trim().parse::<f32>().ok()).collect();
+            (n.len() >= 3).then(|| ParamValue::Vec4([n[0], n[1], n[2], 1.0]))
+        }
+        _ => ParamValue::parse(ty, value),
+    }
+}
+
+/// Give `target` a [`ShaderLook`] for `shader_path`, carrying over any params it
+/// already had (so swapping the `.wgsl` keeps tuned values — what cloning the old
+/// `ShaderMaterial` as a template used to do).
+///
+/// Drops the [`PbrLook`] intent: an entity that carries both draws twice, because
+/// each binder materialises its own. See `lunco-render-bevy`'s caller contract.
+pub(crate) fn author_shader_look(
+    commands: &mut Commands,
+    target: Entity,
+    existing: Option<&ShaderLook>,
+    shader_path: &str,
+) {
+    let mut look = existing.cloned().unwrap_or_default();
+    look.shader = shader_path.to_string();
+    commands.entity(target).remove::<PbrLook>().insert(look);
+    commands.queue(move |world: &mut World| drop_bound_pbr_material(world, target));
+}
+
+/// Drop the concrete PBR material a render build already bound to `e`.
+///
+/// Removing the [`PbrLook`] *intent* stops the binder re-materialising the entity,
+/// but the `MeshMaterial3d<StandardMaterial>` it inserted earlier stays put — and a
+/// mesh carrying that AND the shader material draws twice. That component is
+/// `bevy_pbr`'s and this crate may not name it (render-decoupling rule), so it is
+/// resolved out of the type registry instead (`MaterialPlugin` registers it, and it
+/// is `#[reflect(Component)]`).
+///
+/// No-op headless and in tests, where nothing ever bound a material — and a no-op the
+/// day `lunco-render-bevy` grows an `On<Remove, PbrLook>` observer that unbinds its
+/// own material, which is where this really belongs.
+pub(crate) fn drop_bound_pbr_material(world: &mut World, e: Entity) {
+    let Some(registry) = world.get_resource::<AppTypeRegistry>().cloned() else { return };
+    let reflect_component = {
+        let reg = registry.read();
+        reg.get_with_short_type_path("MeshMaterial3d<StandardMaterial>")
+            .and_then(|r| r.data::<bevy::ecs::reflect::ReflectComponent>())
+            .cloned()
+    };
+    let Some(rc) = reflect_component else { return };
+    if let Ok(mut entity) = world.get_entity_mut(e) {
+        rc.remove(&mut entity);
+    }
 }
 
 /// Observer for [`SetObjectProperty`].
@@ -3413,10 +3695,10 @@ pub fn on_set_object_property(
     trigger: On<SetObjectProperty>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     asset_server: Res<AssetServer>,
-    mut materials: ResMut<Assets<lunco_materials::ShaderMaterial>>,
-    mut std_materials: ResMut<Assets<StandardMaterial>>,
-    q_mat: Query<&MeshMaterial3d<lunco_materials::ShaderMaterial>>,
-    q_std_mat: Query<&MeshMaterial3d<StandardMaterial>>,
+    shaders: Res<Assets<bevy::shader::Shader>>,
+    mut q_look: Query<&mut PbrLook>,
+    mut q_shader_look: Query<&mut ShaderLook>,
+    q_mesh: Query<(), With<Mesh3d>>,
     mut q_vis: Query<&mut Visibility>,
     mut q_wheel: Query<&mut lunco_mobility::WheelRaycast>,
     mut commands: Commands,
@@ -3430,7 +3712,7 @@ pub fn on_set_object_property(
 
     // Per-wheel tire-spin dynamics. Each wheel is its own entity, so addressing
     // a single `api_id` sets the field on just that wheel — independent control.
-    if let Some(setter) = wheel_param_setter(&cmd.property) {
+    if let Some(param) = wheel_param(&cmd.property) {
         let Ok(value) = cmd.value.trim().parse::<f64>() else {
             warn!("SET_PROPERTY: '{}' expects a number, got '{}'", cmd.property, cmd.value);
             return;
@@ -3439,27 +3721,17 @@ pub fn on_set_object_property(
             warn!("SET_PROPERTY: entity {} has no WheelRaycast", cmd.entity_id);
             return;
         };
-        setter(&mut wheel, value);
+        (param.set)(&mut wheel, value);
         info!("SET_PROPERTY: wheel {} {} = {}", cmd.entity_id, cmd.property, value);
         return;
     }
 
     match cmd.property.as_str() {
         "shader" => {
-            // Preserve existing uniforms if the object already has a
-            // ShaderMaterial, so swapping the .wgsl keeps tuned params.
-            let template = q_mat
-                .get(target)
-                .ok()
-                .and_then(|m| materials.get(&m.0))
-                .cloned()
-                .unwrap_or_default();
-            let shader = asset_server.load(&cmd.value);
-            let handle = materials.add(lunco_materials::build_shader_material(shader, template));
-            commands
-                .entity(target)
-                .remove::<MeshMaterial3d<StandardMaterial>>()
-                .insert(MeshMaterial3d(handle));
+            // Preserve existing uniforms if the object already has a shader look,
+            // so swapping the .wgsl keeps tuned params.
+            let existing = q_shader_look.get(target).ok().cloned();
+            author_shader_look(&mut commands, target, existing.as_ref(), &cmd.value);
             info!("SET_PROPERTY: {} shader = {}", cmd.entity_id, cmd.value);
         }
         "visible" => {
@@ -3474,33 +3746,54 @@ pub fn on_set_object_property(
                 Visibility::Visible
             };
         }
-        // StandardMaterial (PBR) properties — for props/rovers that use the
-        // default bevy material rather than a custom `ShaderMaterial`. Mutates
-        // the live asset in place (same immediate-feedback path as the shader
-        // params below). Explicit arms so these names never get stolen by the
-        // shader-param fallback.
-        "base_color" | "emissive" | "metallic" | "roughness" | "perceptual_roughness"
-        | "reflectance" | "alpha" | "opacity" | "unlit" | "double_sided" => {
-            let Ok(m) = q_std_mat.get(target) else {
-                warn!("SET_PROPERTY: entity {} has no StandardMaterial", cmd.entity_id);
+        // PBR properties — for props/rovers on a plain surface rather than a custom
+        // shader. Explicit arm ([`PBR_LOOK_KEYS`]) so these names never get stolen by
+        // the shader-param fallback below.
+        //
+        // The edit is a mutation of the entity's `PbrLook` *intent* component: the
+        // render binder's `Changed<PbrLook>` system re-materialises it, so "edit the
+        // material" is just "mutate a component" — no asset handles, and it works
+        // headless (the intent is in the world; nothing binds it). A mesh with no
+        // intent yet (a glTF import that brought its own material) is ADOPTED into an
+        // intent, which is the only render-free way to keep this command working on
+        // it; note that adoption starts from `PbrLook::default()`, so the import's own
+        // textures are not carried over.
+        key if PBR_LOOK_KEYS.contains(&key) => {
+            if let Ok(mut look) = q_look.get_mut(target) {
+                if apply_pbr_look(&mut look, key, &cmd.value) {
+                    info!("SET_PROPERTY: {} look {} = {}", cmd.entity_id, cmd.property, cmd.value);
+                } else {
+                    warn!("SET_PROPERTY: bad value '{}' for pbr '{}'", cmd.value, cmd.property);
+                }
                 return;
-            };
-            let Some(mut mat) = std_materials.get_mut(&m.0) else { return };
-            if apply_pbr_param(&mut mat, cmd.property.as_str(), &cmd.value) {
-                info!("SET_PROPERTY: {} pbr {} = {}", cmd.entity_id, cmd.property, cmd.value);
+            }
+            if q_mesh.get(target).is_err() {
+                warn!("SET_PROPERTY: entity {} has no PbrLook / mesh", cmd.entity_id);
+                return;
+            }
+            let mut look = PbrLook::default();
+            if apply_pbr_look(&mut look, key, &cmd.value) {
+                commands.entity(target).insert(look);
+                info!("SET_PROPERTY: {} adopted a PbrLook, {} = {}", cmd.entity_id, cmd.property, cmd.value);
             } else {
                 warn!("SET_PROPERTY: bad value '{}' for pbr '{}'", cmd.value, cmd.property);
             }
         }
         key => {
-            // param/color → mutate the live shader material's uniforms in place.
-            let Ok(m) = q_mat.get(target) else {
-                warn!("SET_PROPERTY: entity {} has no usd_shader material — set 'shader' first", cmd.entity_id);
+            // param/color → set the named value on the entity's shader look. The
+            // binder swaps in the material for the new look (`Changed<ShaderLook>`).
+            let Ok(mut look) = q_shader_look.get_mut(target) else {
+                warn!("SET_PROPERTY: entity {} has no shader look — set 'shader' first", cmd.entity_id);
                 return;
             };
-            let Some(mut mat) = materials.get_mut(&m.0) else { return };
-            if !lunco_materials::apply_param(&mut mat, key, &cmd.value) {
-                warn!("SET_PROPERTY: unknown property '{}'", key);
+            // USD authors params camelCase, WGSL declares them snake_case.
+            let name = lunco_materials::to_snake_case(key);
+            let schema = shader_schema(&look.shader, &asset_server, &shaders);
+            match shader_param_value(schema.as_ref(), &name, &cmd.value) {
+                Some(v) => {
+                    look.values.insert(name, v);
+                }
+                None => warn!("SET_PROPERTY: unknown property '{}'", key),
             }
         }
     }
@@ -3920,8 +4213,7 @@ fn install_shader(
     shaders: &mut Assets<bevy::shader::Shader>,
     catalog: &mut lunco_materials::ShaderCatalog,
     registry: &lunco_api::registry::ApiEntityRegistry,
-    materials: &mut Assets<lunco_materials::ShaderMaterial>,
-    q_mat: &Query<&MeshMaterial3d<lunco_materials::ShaderMaterial>>,
+    q_look: &Query<&ShaderLook>,
     commands: &mut Commands,
 ) -> Option<String> {
     // Gate: must be a self-describing `Material` shader whose only engine field
@@ -3977,18 +4269,9 @@ fn install_shader(
         let gid = lunco_core::GlobalEntityId::from_raw(target);
         match registry.resolve(&gid) {
             Some(ent) => {
-                let template = q_mat
-                    .get(ent)
-                    .ok()
-                    .and_then(|m| materials.get(&m.0))
-                    .cloned()
-                    .unwrap_or_default();
-                let mat_handle =
-                    materials.add(lunco_materials::build_shader_material(shader_handle.clone(), template));
-                commands
-                    .entity(ent)
-                    .remove::<MeshMaterial3d<StandardMaterial>>()
-                    .insert(MeshMaterial3d(mat_handle));
+                // Intent, not material: the binder loads the same `asset_path` we
+                // just inserted the compiled source under, so it renders at once.
+                author_shader_look(commands, ent, q_look.get(ent).ok(), &asset_path);
                 info!("INSTALL_SHADER: applied {asset_path} to entity {target}");
             }
             None => warn!("INSTALL_SHADER: target id {target} not in registry"),
@@ -4030,8 +4313,7 @@ pub fn on_create_shader(
     mut shaders: ResMut<Assets<bevy::shader::Shader>>,
     mut catalog: ResMut<lunco_materials::ShaderCatalog>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    mut materials: ResMut<Assets<lunco_materials::ShaderMaterial>>,
-    q_mat: Query<&MeshMaterial3d<lunco_materials::ShaderMaterial>>,
+    q_look: Query<&ShaderLook>,
     mut commands: Commands,
 ) {
     let ev = trigger.event();
@@ -4050,8 +4332,7 @@ pub fn on_create_shader(
         &mut shaders,
         &mut catalog,
         &registry,
-        &mut materials,
-        &q_mat,
+        &q_look,
         &mut commands,
     );
 }
@@ -4084,8 +4365,7 @@ pub fn on_import_shader(
     mut shaders: ResMut<Assets<bevy::shader::Shader>>,
     mut catalog: ResMut<lunco_materials::ShaderCatalog>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    mut materials: ResMut<Assets<lunco_materials::ShaderMaterial>>,
-    q_mat: Query<&MeshMaterial3d<lunco_materials::ShaderMaterial>>,
+    q_look: Query<&ShaderLook>,
     mut commands: Commands,
 ) {
     let ev = trigger.event();
@@ -4120,8 +4400,7 @@ pub fn on_import_shader(
             &mut shaders,
             &mut catalog,
             &registry,
-            &mut materials,
-            &q_mat,
+            &q_look,
             &mut commands,
         );
     }
@@ -4673,6 +4952,103 @@ mod tests {
         assert!(!docu.source().contains("xformOp:translate"), "save excludes runtime move");
     }
 
+    // ── A10: ONE wheel-param table ──────────────────────────────────────
+
+    /// The whole point of collapsing the two hand-synced tables: a wheel
+    /// property cannot be settable-but-not-persistable (the drift that lost
+    /// `slip_stiffness` / `friction_mu` tunes on every reload). One row = one
+    /// param = a setter AND a USD attribute, always.
+    #[test]
+    fn every_wheel_param_has_both_a_setter_and_a_usd_attr() {
+        use super::*;
+        use std::collections::HashSet;
+
+        assert!(!WHEEL_PARAMS.is_empty());
+        let mut seen_alias: HashSet<&str> = HashSet::new();
+        let mut seen_attr: HashSet<&str> = HashSet::new();
+        for p in WHEEL_PARAMS {
+            assert!(!p.aliases.is_empty(), "a param with no name is unreachable");
+            assert!(!p.usd_attr.is_empty(), "every param must round-trip through USD");
+            assert!(seen_attr.insert(p.usd_attr), "duplicate USD attr {}", p.usd_attr);
+            for a in p.aliases {
+                assert!(seen_alias.insert(a), "duplicate alias {a}");
+                // Both consumers (live setter + USD persister) resolve through the
+                // SAME lookup, so a name that sets a field always has an attr.
+                let row = wheel_param(a).expect("alias resolves");
+                assert_eq!(row.usd_attr, p.usd_attr);
+            }
+        }
+
+        // The two names the old split tables disagreed about are now complete.
+        for name in ["slip_stiffness", "friction_mu", "mass"] {
+            let row = wheel_param(name).expect("wheel param exists");
+            assert!(!row.usd_attr.is_empty(), "{name} persists to USD");
+        }
+        assert!(wheel_param("not_a_wheel_field").is_none());
+
+        // Setters write the field they claim.
+        let mut w = lunco_mobility::WheelRaycast::default();
+        (wheel_param("slip_stiffness").unwrap().set)(&mut w, 1234.0);
+        (wheel_param("friction_mu").unwrap().set)(&mut w, 0.5);
+        assert_eq!(w.slip_stiffness, 1234.0);
+        assert_eq!(w.friction_mu, 0.5);
+    }
+
+    // ── A8: one history — the document's ────────────────────────────────
+
+    /// Ctrl+Z routes to `UndoDocument`, which pops the USD document's last op
+    /// and applies its inverse. The editor keeps no private undo stack, so the
+    /// journal and the editor can no longer disagree.
+    #[test]
+    fn undo_document_reverts_the_last_usd_op() {
+        use bevy::prelude::*;
+        use super::*;
+        use lunco_doc::Document;
+        use lunco_usd_bevy::usd_data::UsdDataExt;
+
+        let (mut app, doc) = app_with_runtime_producer("/World", 42);
+        // USD's half of the generic verb now lives in `lunco-usd` (see the note above
+        // `handle_undo_input`), so the test wires the real observer from there.
+        app.add_observer(lunco_usd::commands::on_undo_usd_document);
+        app.world_mut().trigger(MoveEntity {
+            entity_id: 42,
+            translation: Vec3::new(3.0, 4.0, 5.0),
+        });
+        for _ in 0..3 {
+            app.update();
+        }
+        let world_path = lunco_usd_bevy::SdfPath::new("/World").unwrap();
+        let gen_after_move = {
+            let reg = app.world().resource::<UsdDocumentRegistry>();
+            let docu = reg.host(doc).unwrap().document();
+            assert_eq!(
+                docu.runtime_data()
+                    .prim_attribute_value::<[f64; 3]>(&world_path, "xformOp:translate"),
+                Some([3.0, 4.0, 5.0])
+            );
+            docu.generation()
+        };
+
+        // The editor's undo verb — the SAME one the journal / other domains use.
+        app.world_mut().trigger(UndoDocument { doc });
+        for _ in 0..3 {
+            app.update();
+        }
+
+        let reg = app.world().resource::<UsdDocumentRegistry>();
+        let docu = reg.host(doc).unwrap().document();
+        assert!(
+            docu.generation() > gen_after_move,
+            "undo applies an inverse op (history moves forward, state moves back)"
+        );
+        assert_ne!(
+            docu.runtime_data()
+                .prim_attribute_value::<[f64; 3]>(&world_path, "xformOp:translate"),
+            Some([3.0, 4.0, 5.0]),
+            "the move is undone in the document, not just in ECS"
+        );
+    }
+
     #[test]
     fn move_of_unowned_entity_is_skipped() {
         use bevy::prelude::*;
@@ -4815,6 +5191,7 @@ mod pose_write_tests {
         world.init_resource::<InterpBuffers>();
         world.init_resource::<PredictedStateLog>();
         world.init_resource::<lunco_core::OwnedInputLog>();
+        world.init_resource::<lunco_core::DivergenceStats>();
 
         let gid = 0x00AB_CDEFu64;
         let predicted = Quat::IDENTITY; // == Transform::default().rotation
@@ -4834,6 +5211,14 @@ mod pose_write_tests {
             .id();
         registry_with(&mut world, e, gid);
 
+        // This client really did emit input seq 1 — the stale-ack guard (review N1)
+        // only accepts an ack it could have produced.
+        world
+            .resource_mut::<lunco_core::OwnedInputLog>()
+            .0
+            .entry(gid)
+            .or_default()
+            .next_seq = 1;
         // We predicted `predicted` at input seq 1…
         world
             .resource_mut::<PredictedStateLog>()
@@ -5041,6 +5426,7 @@ mod pose_write_tests {
     fn predicted_dynamic_snaps_far_body_and_seats_velocity() {
         let mut world = World::new();
         world.init_resource::<InterpBuffers>();
+        world.init_resource::<lunco_core::DivergenceStats>();
         // reconcile only runs as a connected Client; the clock is the render instant.
         world.insert_resource(lunco_core::NetworkRole::Client);
         world.insert_resource(lunco_core::NetStatus { connected: true, ..Default::default() });
@@ -5093,6 +5479,7 @@ mod pose_write_tests {
     fn predicted_dynamic_in_sync_is_left_untouched() {
         let mut world = World::new();
         world.init_resource::<InterpBuffers>();
+        world.init_resource::<lunco_core::DivergenceStats>();
         world.insert_resource(lunco_core::NetworkRole::Client);
         world.insert_resource(lunco_core::NetStatus { connected: true, ..Default::default() });
         world.insert_resource(ProxyPlaybackClock { t: 0.5, init: true });
@@ -5133,6 +5520,114 @@ mod pose_write_tests {
         assert!(
             (v.x - 5.0).abs() < 1e-9,
             "InSync must NOT seat velocity — local physics keeps running; got {v:?}"
+        );
+        // The gauge saw the (tiny) divergence — a healthy body is measured, not just
+        // an unhealthy one, so the baseline is visible in the field (review N3).
+        let stats = world.resource::<lunco_core::DivergenceStats>();
+        assert_eq!(stats.bodies[&gid].kind, lunco_core::PredictionKind::Free);
+        assert!(stats.bodies[&gid].last_m < 0.1);
+        assert_eq!(stats.bodies[&gid].rebaselines, 0);
+    }
+
+    /// **The re-possession bug, client side (review N1).** A snapshot still carrying
+    /// the PREVIOUS owner's input ack — in flight, or already sitting in
+    /// `InterpBuffers`, when we took possession — must not be latched as
+    /// `last_reconciled`. If it is, every ack from OUR seq stream (which restarts at
+    /// 1) is `<=` it and this system early-returns forever: the rover we are driving
+    /// is never reconciled again, and drifts without bound. The host resets the
+    /// watermark on the handover; this guard covers the in-flight window between the
+    /// two, and is what keeps a `Snap` reachable at all.
+    #[test]
+    fn stale_ack_from_a_previous_owner_does_not_kill_reconciliation() {
+        let mut world = World::new();
+        world.init_resource::<InterpBuffers>();
+        world.init_resource::<PredictedStateLog>();
+        world.init_resource::<lunco_core::OwnedInputLog>();
+        world.init_resource::<lunco_core::DivergenceStats>();
+
+        let gid = 0x00CC_0001u64;
+        let e = world
+            .spawn((
+                Transform::default(),
+                Position::default(),
+                Rotation::default(),
+                LinearVelocity::default(),
+                AngularVelocity::default(),
+                lunco_core::GlobalEntityId::from_raw(gid),
+                lunco_core::OwnedLocally,
+                lunco_core::NetReplicate,
+            ))
+            .id();
+        registry_with(&mut world, e, gid);
+
+        // WE have emitted exactly one input (seq 1) — we just possessed this rover.
+        world
+            .resource_mut::<lunco_core::OwnedInputLog>()
+            .0
+            .entry(gid)
+            .or_default()
+            .next_seq = 1;
+        world
+            .resource_mut::<PredictedStateLog>()
+            .0
+            .entry(gid)
+            .or_default()
+            .ring
+            .push_back(PredictedState { seq: 1, pos: Vec3::ZERO, rot: Quat::IDENTITY });
+
+        // A stale snapshot arrives still advertising the PREVIOUS owner's seq 5000.
+        world
+            .resource_mut::<InterpBuffers>()
+            .0
+            .entry(gid)
+            .or_default()
+            .push_back(InterpSample {
+                gen_t: 0.0,
+                pos: Vec3::new(100.0, 0.0, 0.0),
+                rot: Quat::IDENTITY,
+                pos_world: DVec3::new(100.0, 0.0, 0.0),
+                lv: Vec3::ZERO,
+                av: Vec3::ZERO,
+                last_input_seq: 5000,
+            });
+        world.run_system_once(reconcile_owned_prediction).unwrap();
+
+        // It must have been IGNORED — not latched as `last_reconciled`.
+        assert_eq!(
+            world.resource::<PredictedStateLog>().0[&gid].last_reconciled,
+            0,
+            "an ack above the highest seq we ever minted is not ours; latching it \
+             disables this system permanently"
+        );
+
+        // Now OUR ack (seq 1) lands, with authority 100 m away → the Snap path, which
+        // the stale ack would otherwise have made unreachable for the whole session.
+        world
+            .resource_mut::<InterpBuffers>()
+            .0
+            .entry(gid)
+            .or_default()
+            .push_back(InterpSample {
+                gen_t: 0.1,
+                pos: Vec3::new(100.0, 0.0, 0.0),
+                rot: Quat::IDENTITY,
+                pos_world: DVec3::new(100.0, 0.0, 0.0),
+                lv: Vec3::ZERO,
+                av: Vec3::ZERO,
+                last_input_seq: 1,
+            });
+        world.run_system_once(reconcile_owned_prediction).unwrap();
+
+        assert_eq!(world.resource::<PredictedStateLog>().0[&gid].last_reconciled, 1);
+        let p = world.entity(e).get::<Position>().unwrap().0;
+        assert!(
+            (p.x - 100.0).abs() < 1e-4,
+            "the gross-desync snap must still fire for the new owner; got {p:?}"
+        );
+        // …and the rebaseline was counted + announced rather than being silent (N3).
+        assert_eq!(
+            world.resource::<lunco_core::DivergenceStats>().bodies[&gid].rebaselines,
+            1
         );
     }
 }

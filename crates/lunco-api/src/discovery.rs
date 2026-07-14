@@ -20,7 +20,7 @@ pub fn discover_commands(
         .filter_map(|reg| {
             let info = reg.type_info();
             if !matches!(info, TypeInfo::Struct(_)) { return None; }
-            let Some(_) = reg.data::<bevy::ecs::reflect::ReflectEvent>() else { return None; };
+            reg.data::<bevy::ecs::reflect::ReflectEvent>()?;
             let struct_info = match info { TypeInfo::Struct(s) => s, _ => return None };
             let short_name = info.type_path_table().short_path().to_string();
             if short_name.starts_with("Api") || short_name.starts_with("Telemetry") { return None; }

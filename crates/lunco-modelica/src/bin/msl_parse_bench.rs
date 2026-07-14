@@ -10,6 +10,12 @@
 //! with `/usr/bin/time -v` to capture peak RSS (the metric that decides
 //! whether a weak machine swaps).
 
+// Native-only benchmark: it drives `indexer::parse_native_msl_bundle` (a
+// `#[cfg(not(wasm32))]` module) over an on-disk MSL tree, which does not exist
+// in a browser. The whole body lives in `mod native` so `wasm32` sees only the
+// stub `main` below — nothing here is meant to run, or lint, on the web.
+#[cfg(not(target_arch = "wasm32"))]
+mod native {
 use std::time::Instant;
 
 fn walk_mo(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
@@ -25,7 +31,7 @@ fn walk_mo(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-fn main() {
+pub(crate) fn main() {
     let mode = std::env::args().nth(1).unwrap_or_default();
     // arg 2 = rumoca cache root (rumoca ignores RUMOCA_CACHE_DIR; the cache
     // root is a programmatic override). A fresh dir = true cold parse; reuse
@@ -123,3 +129,12 @@ fn main() {
         }
     }
 }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn main() {
+    native::main();
+}
+
+#[cfg(target_arch = "wasm32")]
+fn main() {}

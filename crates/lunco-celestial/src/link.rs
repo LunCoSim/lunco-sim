@@ -15,6 +15,34 @@
 //!
 //! The recompute cadence is a **runtime parameter** ([`LinkConfig::interval_s`]),
 //! tuned live via the [`SetLinkCadence`] command — never a build constant.
+//!
+//! # Propagation delay
+//!
+//! Every link publishes [`LinkPeer::light_time_s`] = `range_m / c`
+//! ([`SPEED_OF_LIGHT_M_PER_S`]) alongside its range. Earth↔Moon one-way light
+//! time is **1.28 s** (2.56 s round trip) — the dominant constraint on the
+//! teleoperation scenarios this simulator exists to study, so it is a
+//! first-class output rather than something each consumer re-derives.
+//!
+//! # What the geometry does NOT model (say it, don't leave it silent)
+//!
+//! Ephemeris positions are **geometric at the epoch**: the state of every body
+//! and node is taken at the same instant `jd`.
+//!
+//! - **No light-time correction.** Range/elevation/occlusion are computed
+//!   between simultaneous positions, not between a receiver now and a
+//!   transmitter 1.28 s ago. The two differ by the emitter's motion over the
+//!   light time: ~1 km for the Moon about the Earth (≈ 1 km/s), which is
+//!   3e-6 rad at lunar range — far below any antenna beamwidth here, and it does
+//!   NOT accumulate. `light_time_s` gives consumers the DELAY (which matters
+//!   enormously); the geometry is uncorrected (which does not).
+//! - **No stellar aberration.** ≈ 20.5″ (1e-4 rad) — negligible for lighting and
+//!   pointing at these beamwidths.
+//! - **No relativistic delay** (Shapiro ≈ tens of ns) and no ionospheric or
+//!   tropospheric path delay.
+//!
+//! If this simulator ever grows radiometric navigation or two-way ranging
+//! residuals, those are the terms to add, and they belong here.
 
 use bevy::math::{DVec3, Vec3A};
 use bevy::prelude::*;
@@ -31,6 +59,17 @@ use crate::ephemeris::EphemerisResource;
 use crate::geo::segment_hits_sphere;
 use crate::pose::SolarFramePose;
 use crate::registry::CelestialBodyRegistry;
+
+/// Speed of light in vacuum, m/s — the SI definition (exact).
+pub const SPEED_OF_LIGHT_M_PER_S: f64 = 299_792_458.0;
+
+/// One-way propagation delay over `range_m`, seconds.
+///
+/// Earth↔Moon ≈ 1.28 s; a lunar surface relay hop ≈ microseconds.
+#[inline]
+pub fn light_time_s(range_m: f64) -> f64 {
+    range_m / SPEED_OF_LIGHT_M_PER_S
+}
 
 /// Runtime-tunable connectivity cadence. Links change slowly (bodies/rovers move
 /// metres per second), so recompute at an interval, not every physics tick.
@@ -80,13 +119,19 @@ pub struct LinkPeer {
     pub peer: String,
     pub connected: bool,
     pub range_m: f64,
+    /// One-way propagation delay, seconds — `range_m / c`. Published next to the
+    /// range because for anything Earth↔Moon (1.28 s) the DELAY, not the range,
+    /// is what the mission actually has to design around.
+    pub light_time_s: f64,
     pub elevation_deg: f64,
 }
 
 /// The verdict seam consulted per pair. `ctx` (a [`HookValue`] map): `a`, `b`,
-/// `class_a`, `class_b`, `range_m`, `elev_a`, `elev_b`, `min_elev_a`,
-/// `min_elev_b`, `occluded`, `occluded_by`, `terrain_blocked`, `max_range_m`.
-/// Return bool. No hook → the builtin range+mask+occlusion rule.
+/// `class_a`, `class_b`, `range_m`, `light_time_s`, `elev_a`, `elev_b`,
+/// `min_elev_a`, `min_elev_b`, `occluded`, `occluded_by`, `terrain_blocked`,
+/// `max_range_m`. Return bool. No hook → the builtin range+mask+occlusion rule
+/// (which does NOT gate on delay — a policy that refuses links slower than some
+/// latency budget is exactly the kind of thing this hook is for).
 pub const LINK_HOOK: &str = "link.connected";
 
 /// Set the connectivity recompute cadence at runtime (any client / language).
@@ -172,13 +217,13 @@ pub(crate) fn update_links(
             .bodies
             .iter()
             .filter(|b| b.radius_m > 0.0)
-            .map(|b| {
-                (
-                    b.name.clone(),
-                    ecliptic_to_bevy(eph.provider.global_position(b.ephemeris_id, jd)),
-                    b.radius_m,
-                )
+            // A body we cannot place cannot occlude anything. Skipping it is right; placing it
+            // at the Sun's centre (the old behaviour) would have it eclipse everything.
+            .filter_map(|b| {
+                let p = eph.provider.global_position(b.ephemeris_id, jd)?;
+                Some((b.name.clone(), ecliptic_to_bevy(p), b.radius_m))
             })
+            .map(|(n, p, r)| (n, p.raw(), r))
             .collect(),
         _ => Vec::new(),
     };
@@ -228,6 +273,7 @@ pub(crate) fn update_links(
                 ("class_a", HookValue::str(a.node.class.clone().unwrap_or_default())),
                 ("class_b", HookValue::str(b.node.class.clone().unwrap_or_default())),
                 ("range_m", HookValue::Float(range_m)),
+                ("light_time_s", HookValue::Float(light_time_s(range_m))),
                 ("elev_a", HookValue::Float(elev_a)),
                 ("elev_b", HookValue::Float(elev_b)),
                 ("min_elev_a", HookValue::Float(a.node.min_elevation_deg)),
@@ -246,16 +292,19 @@ pub(crate) fn update_links(
             if connected {
                 up_now.insert(pair_key(&a.name, &b.name));
             }
+            let delay_s = light_time_s(range_m);
             per_node.entry(a.entity).or_default().push(LinkPeer {
                 peer: b.name.clone(),
                 connected,
                 range_m,
+                light_time_s: delay_s,
                 elevation_deg: elev_a,
             });
             per_node.entry(b.entity).or_default().push(LinkPeer {
                 peer: a.name.clone(),
                 connected,
                 range_m,
+                light_time_s: delay_s,
                 elevation_deg: elev_b,
             });
         }
@@ -395,6 +444,39 @@ mod tests {
         let peer = sa.peers.iter().find(|p| p.peer == "relay").expect("a sees relay");
         assert!(peer.connected, "a clear 10 m link should be up: {peer:?}");
         assert!((peer.range_m - 10.0).abs() < 1e-6, "range {}", peer.range_m);
+    }
+
+    /// **P5 regression — propagation delay is published, not silently dropped.**
+    ///
+    /// Before this, `grep -rn 'light_time\|speed_of_light\|299792' crates/`
+    /// returned ZERO hits: the simulator whose reason to exist is lunar
+    /// teleoperation did not model, or even mention, the 1.28 s that dominates
+    /// it. A link at the mean Earth–Moon distance must report ~1.28 s.
+    #[test]
+    fn kernel_publishes_light_time_at_lunar_range() {
+        const EARTH_MOON_M: f64 = 384_400_000.0;
+        let mut world = world_at_epoch(0.0);
+        let a = node(&mut world, "earth_dsn", DVec3::ZERO, 1.0e12);
+        node(&mut world, "lunar_relay", DVec3::new(EARTH_MOON_M, 0.0, 0.0), 1.0e12);
+
+        world.run_system_once(update_links).unwrap();
+
+        let peer = world
+            .get::<LinkState>(a)
+            .unwrap()
+            .peers
+            .iter()
+            .find(|p| p.peer == "lunar_relay")
+            .cloned()
+            .expect("earth sees the relay");
+
+        assert!(
+            (peer.light_time_s - 1.282).abs() < 0.005,
+            "Earth↔Moon one-way light time must be ~1.28 s, got {:.4} s",
+            peer.light_time_s
+        );
+        // …and it is exactly range/c, not an approximation.
+        assert!((peer.light_time_s - peer.range_m / SPEED_OF_LIGHT_M_PER_S).abs() < 1e-12);
     }
 
     #[test]

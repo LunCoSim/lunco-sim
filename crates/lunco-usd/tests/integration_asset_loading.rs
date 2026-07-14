@@ -8,7 +8,6 @@ use lunco_usd_avian::*;
 use lunco_usd_sim::*;
 use lunco_mobility::WheelRaycast;
 use lunco_core::kernels::DriveMix;
-use lunco_materials::ShaderMaterial;
 use lunco_fsw::FlightSoftware;
 
 /// The rover root carries `PhysicsRigidBodyAPI`, so avian builds a
@@ -140,9 +139,7 @@ fn load_rover_through_bevy(file_path: &Path, prim_path: &str) -> App {
     app.add_plugins(AssetPlugin::default());
     app.init_asset::<UsdStageAsset>();
     app.init_asset::<Mesh>();
-    app.init_asset::<StandardMaterial>();
     app.init_asset::<Image>();
-    app.init_asset::<ShaderMaterial>();
         app.init_asset::<bevy::shader::Shader>();
     // No GPU here, so a wheel's render-only `ShaderMaterial` never arrives —
     // mark headless so sim builds wheel physics without waiting (the `--no-ui`
@@ -221,12 +218,16 @@ fn test_rover_components_via_bevy_pipeline() {
         assert!((he[2] - 1.75).abs() < 0.1,
             "{label}: Collider hz must be ~1.75 (depth/2), got {}", he[2]);
 
-        // Visual (Mesh3d + material) — on the Chassis child, not the Xform root.
+        // Visual (Mesh3d + appearance INTENT) — on the Chassis child, not the Xform
+        // root. The prim carries a `PbrLook`, not a `MeshMaterial3d`: the material is
+        // bound by `LuncoRenderPlugin` in render builds only, so this headless test
+        // asserts the intent, which is what USD actually authors.
+        // See docs/architecture/render-decoupling.md.
         let chassis = chassis_child(&app, rover_ent, label);
         let _mesh = app.world().get::<Mesh3d>(chassis)
             .unwrap_or_else(|| panic!("{label}: Chassis Missing Mesh3d (body not visible!)"));
-        let _mat = app.world().get::<MeshMaterial3d<StandardMaterial>>(chassis)
-            .unwrap_or_else(|| panic!("{label}: Chassis Missing MeshMaterial3d (body not visible!)"));
+        let _look = app.world().get::<lunco_render::PbrLook>(chassis)
+            .unwrap_or_else(|| panic!("{label}: Chassis Missing PbrLook (body would not be visible!)"));
 
         // Steering allocation: every rover carries a `DriveMix` naming a kernel.
         // Ackermann → the `linear` kernel with a `steering` term; skid → the
@@ -370,9 +371,7 @@ fn test_rover_sim_processing_after_async_load() {
         app.add_plugins(AssetPlugin::default());
         app.init_asset::<UsdStageAsset>();
         app.init_asset::<Mesh>();
-        app.init_asset::<StandardMaterial>();
-        app.init_asset::<Image>();
-        app.init_asset::<ShaderMaterial>();
+            app.init_asset::<Image>();
         app.init_asset::<bevy::shader::Shader>();
         // No GPU here, so a wheel's render-only `ShaderMaterial` never arrives —
     // mark headless so sim builds wheel physics without waiting (the `--no-ui`
@@ -509,13 +508,11 @@ fn test_full_scene_loads_with_rovers() {
     app.add_plugins(AssetPlugin::default());
     app.init_asset::<UsdStageAsset>();
     app.init_asset::<Mesh>();
-    app.init_asset::<StandardMaterial>();
     app.init_asset::<Image>();
     // The scene references the Perseverance glTF, which the loader hands to
     // `AssetServer::load::<WorldAsset>` — register the asset so handle
     // allocation doesn't panic in this minimal harness.
     app.init_asset::<bevy::world_serialization::WorldAsset>();
-    app.init_asset::<ShaderMaterial>();
     app.init_asset::<bevy::shader::Shader>();
     // Physical rovers create revolute joints whose `JointCollisionDisabled`
     // hook reads avian's `JointGraph` resource — without the physics plugins

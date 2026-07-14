@@ -668,6 +668,17 @@ pub struct Journal {
     next_change_set: u64,
     next_marker: u64,
 
+    /// The change set currently open on this peer, if any — see
+    /// [`begin_change_set`](Journal::begin_change_set).
+    ///
+    /// Transient session state, NOT persisted: a change set that was still open
+    /// when the process died has no meaning on reload (its entries are already
+    /// grouped by id in `change_sets`). Every `append_local` with an explicit
+    /// `change_set: None` — which is every recorder in the tree — inherits this
+    /// id, so a multi-op command handler groups its ops by wrapping itself
+    /// rather than by threading an id through every layer beneath it.
+    active_change_set: Option<ChangeSetId>,
+
     /// Which [`MergePolicy`] the convergent reads use. Configuration, not
     /// persisted data — reset to [`MergeStrategy::Default`] on load, then
     /// re-applied by the layer that activated it (see the persistence layer,
@@ -734,6 +745,7 @@ impl Journal {
             markers: HashMap::new(),
             next_change_set: 0,
             next_marker: 0,
+            active_change_set: None,
             merge_strategy: MergeStrategy::Default,
         };
         let main_stream = Stream {
@@ -824,6 +836,8 @@ impl Journal {
             markers: dto.markers.into_iter().map(|m| (m.id, m)).collect(),
             next_change_set: dto.next_change_set,
             next_marker: dto.next_marker,
+            // Transient — an open change set does not survive a reload.
+            active_change_set: None,
             // Policy is configuration, not persisted state; the persistence layer
             // re-applies the active strategy after a load swap.
             merge_strategy: MergeStrategy::Default,
@@ -848,6 +862,11 @@ impl Journal {
     /// Append a new local entry. Allocates a fresh lamport for the local
     /// author, links to the current branch head as parent if present,
     /// advances the branch head.
+    ///
+    /// `change_set: None` inherits the change set currently open on this peer
+    /// (see [`begin_change_set`](Self::begin_change_set)) — that is how a
+    /// multi-op command handler groups its ops into one undo unit without
+    /// threading an id through every recorder below it.
     pub fn append_local(
         &mut self,
         author: AuthorTag,
@@ -855,6 +874,7 @@ impl Journal {
         kind: EntryKind,
         change_set: Option<ChangeSetId>,
     ) -> EntryId {
+        let change_set = change_set.or(self.active_change_set);
         let lamport = self.clock.tick();
         let id = EntryId {
             author: self.local_author.clone(),
@@ -1110,6 +1130,45 @@ impl Journal {
         self.change_sets.get(&id)
     }
 
+    /// Open a change set AND make it the ambient one: every subsequent
+    /// `append_local` (i.e. every recorder — they all pass `change_set: None`)
+    /// joins it until [`end_change_set`](Self::end_change_set).
+    ///
+    /// This is the transaction seam for multi-op commands. A command that
+    /// lowers to N `UsdOp`s (`AttachComponent` is 7) wraps itself in one change
+    /// set, so the N entries form ONE undo unit instead of N — otherwise a
+    /// single undo peels off one op and leaves the object half-attached.
+    ///
+    /// Nesting is deliberately NOT supported: the inner `begin` replaces the
+    /// ambient id and the inner `end` clears it, which would silently un-group
+    /// the outer command's tail. Wrap at the outermost handler only. Prefer the
+    /// scoped helper on the Bevy side (`JournalResource::change_set`), which
+    /// pairs begin/end for you.
+    pub fn begin_change_set(&mut self, label: impl Into<String>, author: AuthorTag) -> ChangeSetId {
+        let id = self.open_change_set(label.into(), author);
+        self.active_change_set = Some(id);
+        id
+    }
+
+    /// Close the ambient change set. Returns the id that was open, if any.
+    /// Entries appended after this go back to being their own undo units.
+    pub fn end_change_set(&mut self) -> Option<ChangeSetId> {
+        self.active_change_set.take()
+    }
+
+    /// The change set currently open on this peer, if any.
+    pub fn active_change_set(&self) -> Option<ChangeSetId> {
+        self.active_change_set
+    }
+
+    /// The entries belonging to `id`, in append order. Empty for an unknown id.
+    pub fn change_set_entries(&self, id: ChangeSetId) -> &[EntryId] {
+        self.change_sets
+            .get(&id)
+            .map(|c| c.entries.as_slice())
+            .unwrap_or(&[])
+    }
+
     // ── Markers (named versions) ─────────────────────────────────────────
 
     pub fn create_marker(
@@ -1322,7 +1381,7 @@ impl Journal {
                 .filter(|id| !seen.contains(*id))
                 .cloned()
                 .collect();
-            leftover.sort_by(|a, b| key(a).cmp(&key(b)));
+            leftover.sort_by_key(&key);
             out.extend(leftover);
         }
         out
@@ -1495,6 +1554,10 @@ impl UndoManager {
     }
 
     /// Take the most recent undoable entry within a scope.
+    ///
+    /// Change-set-blind: an entry that belongs to a multi-op change set comes
+    /// back on its own, so undoing it half-applies the command. Callers that
+    /// dispatch inverses should use [`take_undo_group`](Self::take_undo_group).
     pub fn take_undo(&mut self, scope: &UndoScope, journal: &Journal) -> Option<EntryId> {
         let pos = self.undo_stack.iter().rposition(|id| {
             journal
@@ -1505,6 +1568,44 @@ impl UndoManager {
         let id = self.undo_stack.remove(pos);
         self.redo_stack.push(id.clone());
         Some(id)
+    }
+
+    /// Take the most recent undoable *unit* within a scope: the newest matching
+    /// entry, plus every sibling in its change set.
+    ///
+    /// Returned NEWEST-FIRST — that is inverse-application order, so the caller
+    /// dispatches the inverse of `[0]`, then `[1]`, … unwinding the command in
+    /// reverse. An entry with no change set yields a one-element vec, which is
+    /// exactly [`take_undo`](Self::take_undo)'s behaviour, so this is a
+    /// strict generalisation.
+    ///
+    /// This is the half of `ChangeSetId` that makes it load-bearing: a command
+    /// that lowered to 7 ops is undone as 7, not as 1-of-7.
+    pub fn take_undo_group(&mut self, scope: &UndoScope, journal: &Journal) -> Vec<EntryId> {
+        let Some(head) = self.take_undo(scope, journal) else {
+            return Vec::new();
+        };
+        let Some(cs) = journal.get(&head).and_then(|e| e.change_set) else {
+            return vec![head];
+        };
+        // Pull the remaining siblings off the undo stack (they may not be
+        // contiguous if another doc's edits interleaved) and stack them after
+        // the head, newest-first.
+        let siblings: Vec<EntryId> = journal
+            .change_set_entries(cs)
+            .iter()
+            .filter(|id| **id != head)
+            .cloned()
+            .collect();
+        let mut group = vec![head];
+        for id in siblings.iter().rev() {
+            if let Some(pos) = self.undo_stack.iter().position(|s| s == id) {
+                let taken = self.undo_stack.remove(pos);
+                self.redo_stack.push(taken.clone());
+                group.push(taken);
+            }
+        }
+        group
     }
 
     pub fn take_redo(&mut self, scope: &UndoScope, journal: &Journal) -> Option<EntryId> {
@@ -1726,6 +1827,66 @@ mod tests {
         let cs_ref = j.change_set(cs).unwrap();
         assert_eq!(cs_ref.entries.len(), 2);
         assert_eq!(cs_ref.label, "Rename Foo→Bar");
+    }
+
+    /// The ambient change set is what makes `ChangeSetId` usable: every recorder
+    /// in the tree passes `change_set: None`, so a multi-op command can only
+    /// group its ops by opening one around them.
+    #[test]
+    fn ambient_change_set_captures_recorders_that_pass_none() {
+        let mut j = new_journal();
+        let op = FakeOp { class: "Foo".into(), name: "k".into(), value: 2.0 };
+        let doc = DocumentId::new(1);
+
+        // Outside a change set: ungrouped.
+        let solo = j
+            .record_op(AuthorTag::local_user(), doc, &op, &op, None)
+            .unwrap();
+        assert!(j.get(&solo).unwrap().change_set.is_none());
+
+        // Inside: the SAME `None`-passing call joins the set.
+        let cs = j.begin_change_set("AttachComponent", AuthorTag::local_user());
+        for _ in 0..3 {
+            j.record_op(AuthorTag::local_user(), doc, &op, &op, None).unwrap();
+        }
+        j.end_change_set();
+        assert_eq!(j.change_set_entries(cs).len(), 3);
+
+        // After: ungrouped again.
+        let after = j
+            .record_op(AuthorTag::local_user(), doc, &op, &op, None)
+            .unwrap();
+        assert!(j.get(&after).unwrap().change_set.is_none());
+        assert!(j.active_change_set().is_none());
+    }
+
+    /// A 3-op command is undone as ONE unit, not as 1-of-3.
+    #[test]
+    fn undo_group_takes_the_whole_change_set() {
+        let mut j = new_journal();
+        let mut um = UndoManager::new(AuthorTag::local_user());
+        let op = FakeOp { class: "Foo".into(), name: "k".into(), value: 2.0 };
+        let doc = DocumentId::new(1);
+
+        let solo = j.record_op(AuthorTag::local_user(), doc, &op, &op, None).unwrap();
+        um.record_local(solo.clone());
+
+        j.begin_change_set("AttachComponent", AuthorTag::local_user());
+        for _ in 0..3 {
+            let id = j.record_op(AuthorTag::local_user(), doc, &op, &op, None).unwrap();
+            um.record_local(id);
+        }
+        j.end_change_set();
+
+        // One undo → the whole 3-op command, newest-first (inverse order).
+        let group = um.take_undo_group(&UndoScope::Twin, &j);
+        assert_eq!(group.len(), 3, "the command undoes as one unit");
+        assert!(group[0].lamport > group[2].lamport, "newest-first");
+
+        // The next undo reaches the ungrouped entry before it — and only that one.
+        let group = um.take_undo_group(&UndoScope::Twin, &j);
+        assert_eq!(group, vec![solo]);
+        assert!(!um.can_undo());
     }
 
     #[test]

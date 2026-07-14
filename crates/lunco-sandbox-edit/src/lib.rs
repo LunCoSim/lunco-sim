@@ -6,8 +6,10 @@
 //! - **Selection** — Shift+click entities to select them with transform gizmo
 //! - **Transform Gizmo** — translate/rotate selected entities
 //! - **Inspector Panel** — view entity parameters (in `ui/` module)
-//! - **Undo** — Ctrl+Z, bound to the *document*'s typed-inverse undo (there is no
-//!   editor-side undo stack; see `undo`)
+//! - **Undo** — Ctrl+Z / Ctrl+Shift+Z → `UndoDocument` / `RedoDocument` on the active
+//!   document (see `commands::handle_undo_input`). Editor edits are USD ops, so undo is
+//!   the *document's* typed-inverse history (journaled, networked) — there is no
+//!   editor-side undo stack. USD's half of the verb lives in `lunco-usd`.
 //!
 //! ## UI
 //!
@@ -52,15 +54,12 @@ pub mod selection;
 pub mod spawn;
 #[cfg(feature = "ui")]
 pub mod terrain_tools;
-#[cfg(feature = "ui")]
-pub mod undo;
 
 /// UI panels — WorkbenchPanel implementations (for editor mode).
 #[cfg(feature = "ui")]
 pub mod ui;
 
 use bevy::prelude::*;
-
 
 /// Master plugin for all sandbox editing tools.
 #[cfg(feature = "ui")]
@@ -139,7 +138,12 @@ impl Plugin for SandboxEditPlugin {
         // Publish the drag state as the core `GizmoDragging` marker so transform-
         // gizmo-free crates (avatar camera follow) can read it.
         app.add_systems(Update, gizmo::sync_gizmo_dragging_marker);
-        app.add_systems(Update, undo::handle_undo_input);
+        // Ctrl+Z / Ctrl+Shift+Z → `UndoDocument` / `RedoDocument` on the active
+        // document. The editor keeps NO private history: its edits are document
+        // ops (gizmo drag → `MoveEntity` → `UsdOp::SetTranslate`, delete →
+        // `UsdOp::RemovePrim`, …), so undo is the Twin journal's undo — one
+        // history, shared with the Inspector, the journal and every peer.
+        app.add_systems(Update, commands::handle_undo_input);
 
         // Physics-state arrows (velocity, force) for entities that
         // opt in via `PhysicsArrows`. Cheap when no entity opts in.

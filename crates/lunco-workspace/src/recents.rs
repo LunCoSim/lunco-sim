@@ -90,7 +90,9 @@ fn push_front_dedupe(list: &mut Vec<PathBuf>, path: PathBuf, cap: usize) {
     }
 }
 
+// Test fixtures on disk, native-only — see the note on `lib.rs`'s test module.
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 

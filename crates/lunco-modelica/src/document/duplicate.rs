@@ -170,7 +170,12 @@ pub(crate) fn collect_parent_imports(class_file: &std::path::Path) -> Vec<String
                 // Re-read source so we can slice each import's location
                 // back into its original `import ...;` text — preserves
                 // alias / wildcard / selective forms verbatim.
-                let src = match std::fs::read_to_string(&pkg) {
+                // Via `lunco-storage` (native fs / wasm storage) — see
+                // `source_asset::read_text_sync`. Note the whole walk is
+                // path-shaped and only reachable when the class came from a
+                // real on-disk package (native); the web resolves package
+                // imports out of the in-memory parsed bundle instead.
+                let src = match crate::source_asset::read_text_sync(&pkg) {
                     Ok(s) => s,
                     Err(_) => {
                         dir = d.parent();

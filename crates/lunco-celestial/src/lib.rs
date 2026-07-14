@@ -14,6 +14,7 @@ use bevy::math::DVec3;
 use lunco_environment::{Gravity, GravityBody};
 
 pub mod ephemeris;
+pub mod iau;
 pub mod registry;
 pub mod geo;
 pub mod kepler;
@@ -24,7 +25,14 @@ pub mod queries;
 mod big_space_setup;
 mod globe_lod;
 mod systems;
-mod coords;
+/// Coordinate-frame newtypes. Zero-cost, and they make the two silent frame-mix incidents
+/// this crate has already shipped (the Shackleton sun 45° below the horizon; an ecliptic sun
+/// direction published as site-ENU) into COMPILE ERRORS.
+pub mod frames;
+/// The frame conversions. `coords` is `pub` because `lunco-celestial-ephemeris` was
+/// re-implementing `ecliptic_to_bevy` by hand for want of access — a conversion people copy
+/// is a conversion that drifts.
+pub mod coords;
 mod gravity;
 mod soi;
 mod trajectories;
@@ -44,6 +52,7 @@ pub mod commands;
 pub use commands::*;
 
 pub use ephemeris::*;
+pub use iau::*;
 pub use registry::*;
 pub use geo::*;
 pub use kepler::*;
@@ -104,12 +113,11 @@ pub struct CelestialPlugin;
 
 impl Plugin for CelestialPlugin {
     fn build(&self, app: &mut App) {
-        // EmbeddedAssetsPlugin embeds shaders/textures/missions on wasm32, no-op on desktop
+        // EmbeddedAssetsPlugin embeds mission data on wasm32, no-op on desktop.
         app.add_plugins(embedded_assets::EmbeddedAssetsPlugin);
 
-        // Trajectory shader is desktop-only (wasm32 embeds it via EmbeddedAssetsPlugin).
-        #[cfg(not(target_arch = "wasm32"))]
-        app.add_plugins(trajectories::TrajectoryShaderPlugin);
+        // (`TrajectoryShaderPlugin` was removed with the dead trajectory
+        // `MaterialExtension` — see the note in `trajectories.rs`.)
 
         // Terrain is now in lunco-terrain crate — register it here (guarded:
         // the sandbox adds it directly as well).
@@ -214,6 +222,10 @@ impl Plugin for CelestialPlugin {
         app.add_systems(PreUpdate, (
             ephemeris_update_system,
             body_rotation_system,
+            // Star-fixed frames co-located with the rotating body grids (the
+            // orbit camera lives in one). After the ephemeris, whose pose it
+            // copies.
+            systems::sync_inertial_anchors,
             // Doc 43: site-anchored solar frame + geodetic/orbit placement.
             // `ephemeris_update_system` never touches the Solar Grid (id 10),
             // so the pin persists between anchor runs — no mid-chain window

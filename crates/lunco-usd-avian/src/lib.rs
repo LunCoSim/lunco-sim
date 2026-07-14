@@ -291,8 +291,14 @@ fn collect_child_colliders_from_usd<R: UsdRead>(
             if matches!(ty.as_str(), "Cylinder" | "Cone" | "Capsule" | "Plane") {
                 let axis_tok = read_token_attribute(reader, &child_path, "axis")
                     .unwrap_or_else(|| "Z".to_string());
-                if let Some(q) = usd_axis_to_quat(&axis_tok) {
-                    child_tf.rotation = child_tf.rotation * q;
+                // Pre-rotate by the stage convention: the `axis` token names an
+                // axis of the STAGE's frame while the collider is built in the
+                // canonical one (identical to what usd-bevy does for the visual
+                // Transform, so mesh and collider can't disagree on a Z-up stage).
+                let q_axis = lunco_usd_bevy::stage_convention(reader)
+                    .orient(usd_axis_to_quat(&axis_tok).unwrap_or(Quat::IDENTITY));
+                if !q_axis.abs_diff_eq(Quat::IDENTITY, 1e-6) {
+                    child_tf.rotation = child_tf.rotation * q_axis;
                 }
             }
         }
@@ -1286,7 +1292,12 @@ fn apply_rigid_body_mass_props<R: UsdRead>(
 #[reflect(Component, Default)]
 pub struct ShouldBeDynamic;
 
+// USDA fixtures are written to a temp dir and composed from disk. Native-only
+// test code: the `disallowed_methods` ban on `std::fs` guards wasm *runtime*
+// paths (clippy.toml names `tests/` as exempt; cargo has no path-scoped lint
+// config, so the exemption is written out).
 #[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(clippy::disallowed_methods)]
 mod collider_parity_tests {
     //! Ph0′ S2c: the collider read path is generic over `UsdRead`, driven off the
     //! live `StageView` over the canonical stage. Exercises the geometry read
@@ -1334,6 +1345,7 @@ mod collider_parity_tests {
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(clippy::disallowed_methods)] // temp-dir USDA fixtures; see `collider_parity_tests`
 mod extract_parity_tests {
     //! Ph0′ S2e CUTOVER verification: running the REAL `extract_avian_prim` off a
     //! live `StageView` must produce byte-identical physics components to running
@@ -1399,6 +1411,7 @@ mod extract_parity_tests {
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(clippy::disallowed_methods)] // temp-dir USDA fixtures; see `collider_parity_tests`
 mod joint_typed_tests {
     //! Ph0′ physics rework: the joint projector reads the STANDARD UsdPhysics
     //! joint schema (`openusd::schemas::physics`) off the live stage into the

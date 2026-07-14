@@ -42,6 +42,18 @@ const DEFAULT_WINDOW_M: f32 = 4096.0;
 /// large is heavy (e.g. the full 16 km map is 3200² ≈ 10 M verts ≈ 560 MB). Full
 /// detail at that scale belongs to tiled streaming (M7), not one mesh.
 const HEAVY_TILE_RES: usize = 2048;
+/// Largest `window_m` a `SpawnDemTerrain` command may ask for (metres). Bigger
+/// than any shipped DEM site (16 km) with headroom; a wild value from the API /
+/// rhai would otherwise crop far past the raster for no gain.
+const MAX_WINDOW_M: f32 = 64_000.0;
+/// Bounds on `SpawnDemTerrain::target_res` (samples per side). The value goes
+/// straight into a `res × res` vertex grid, so an unclamped `100000` from a
+/// command payload is a 10-billion-vertex allocation — an instant OOM. The crater
+/// COUNT is clamped the same way (`crater_placements`, 250 k); this applies the
+/// same pattern to the command's own params. `MAX` is 2× `HEAVY_TILE_RES`
+/// (4096² ≈ 16.8 M verts) — heavy, warned about, but survivable.
+const MIN_TARGET_RES: u32 = 16;
+const MAX_TARGET_RES: u32 = 4096;
 
 /// The driveable DEM surface: the bake fills **this** entity with a heightfield
 /// collider (+ visual mesh when rendering). Put on a command-spawned entity by
@@ -401,10 +413,25 @@ fn on_spawn_dem_terrain(
         stack.push_layer("craters", crate::terrain_layers::make_crater_layer(ev.crater_density, 22.0, 0.3, 0xC0FFEE));
     }
     let half_window = match ev.window_m {
+        w if !w.is_finite() => (DEFAULT_WINDOW_M * 0.5) as f64, // NaN/inf → default
         w if w == 0.0 => f64::INFINITY,          // whole map
         w if w < 0.0 => (DEFAULT_WINDOW_M * 0.5) as f64,
-        w => (w * 0.5) as f64,
+        w => (w.min(MAX_WINDOW_M) * 0.5) as f64,
     };
+    // Clamp the resample target the same way the crater count is clamped
+    // (`crater_placements`): `target_res` lands straight in a `res × res` vertex
+    // grid, so an unclamped `100000` from the API/rhai is an instant OOM. `0` =
+    // native (no decimation).
+    let target_res = match ev.target_res {
+        0 => 0,
+        r => (r.clamp(MIN_TARGET_RES, MAX_TARGET_RES)) as usize,
+    };
+    if ev.target_res != 0 && target_res != ev.target_res as usize {
+        warn!(
+            "[dem-terrain] target_res {} out of range — clamped to {}",
+            ev.target_res, target_res
+        );
+    }
     // Standalone entity, anchored into the world grid at the origin cell (when it
     // exists). The USD path instead places `DemTerrainRequest` on the prim entity,
     // which already carries its USD transform + grid parentage.
@@ -414,7 +441,7 @@ fn on_spawn_dem_terrain(
         DemTerrainRequest {
             uri: ev.uri.clone(),
             half_window,
-            target_res: ev.target_res as usize,
+            target_res,
             lod_viz: ev.lod_viz,
             collider_ring: ev.collider_ring,
             with_default_material: true,
@@ -1147,8 +1174,11 @@ fn finish_dem_builds(
     mut commands: Commands,
     mut tasks: Query<(Entity, &mut DemBuildTask, &DemTerrainRequest)>,
     // Optional so the headless server (no render assets) still builds colliders.
+    //
+    // There is no `Assets<StandardMaterial>` here any more: the default surface is
+    // stated as `lunco_render::PbrLook` INTENT and bound by `lunco-render-bevy`, so
+    // this crate names no material and links no `bevy_pbr`.
     mut meshes: Option<ResMut<Assets<Mesh>>>,
-    mut materials: Option<ResMut<Assets<StandardMaterial>>>,
 ) {
     use bevy::tasks::futures_lite::future;
 
@@ -1174,7 +1204,6 @@ fn finish_dem_builds(
             req.with_default_material,
             built,
             meshes.as_deref_mut(),
-            materials.as_deref_mut(),
         );
     }
 }
@@ -1192,7 +1221,6 @@ fn assemble_dem_build(
     with_default_material: bool,
     built: DemBuild,
     meshes: Option<&mut Assets<Mesh>>,
-    materials: Option<&mut Assets<StandardMaterial>>,
 ) {
     if built.res > HEAVY_TILE_RES {
         warn!(
@@ -1242,19 +1270,25 @@ fn assemble_dem_build(
     }
     if let (Some(meshes), Some(mesh)) = (meshes, built.mesh) {
         let MeshData { positions, normals, uvs, indices } = mesh;
-        let handle = meshes.add(lunco_obstacle_field::grid_mesh(positions, normals, uvs, indices));
+        // STATIC mesh: `default()` usages keep the CPU copy — `lunco-environment`'s
+        // horizon bake reads its positions back and rewrites its UVs. (The streamed
+        // LOD tiles are RENDER_WORLD-only; see `stream_viz`.)
+        let handle = meshes.add(lunco_obstacle_field::grid_mesh(
+            positions,
+            normals,
+            uvs,
+            indices,
+            bevy::asset::RenderAssetUsages::default(),
+        ));
         commands.entity(entity).insert(Mesh3d(handle));
-        // Default material only for the standalone command path; the USD path authors
-        // its own via `materialType` (don't clobber it).
+        // Default surface only for the standalone command path; the USD path authors
+        // its own via `materialType` (don't clobber it). Stated as INTENT —
+        // `lunco-render-bevy` turns it into a `StandardMaterial`, and a headless
+        // build simply keeps the data and binds nothing.
         if with_default_material {
-            if let Some(materials) = materials {
-                let mat = materials.add(StandardMaterial {
-                    base_color: Color::srgb(0.30, 0.29, 0.27),
-                    perceptual_roughness: 1.0,
-                    ..default()
-                });
-                commands.entity(entity).insert(MeshMaterial3d(mat));
-            }
+            commands
+                .entity(entity)
+                .insert(lunco_render::PbrLook::matte(Color::srgb(0.30, 0.29, 0.27).into()));
         }
     }
     let mode = match (lod_viz, collider_ring) {
@@ -1294,7 +1328,10 @@ fn finish_dem_worker(
     // re-composed onto the worker's bare grid so web keeps full analytic realism.
     stacks: Query<&crate::terrain_layers::TerrainLayerStack>,
     mut meshes: Option<ResMut<Assets<Mesh>>>,
-    mut materials: Option<ResMut<Assets<StandardMaterial>>>,
+    // `materials: Assets<StandardMaterial>` is GONE (render decoupling): `assemble_dem_build`
+    // no longer binds a material here — it states a `PbrLook` intent and `lunco-render-bevy`
+    // does the GPU bind. `curvature` stays: it is simulation data (the body-curvature "globe
+    // punch") that `layer_contributions` composes into the height field.
     curvature: Option<Res<crate::oracle::TerrainBodyCurvature>>,
 ) {
     let curvature_radius = curvature.map(|c| c.radius_m);
@@ -1340,7 +1377,6 @@ fn finish_dem_worker(
                     job.with_default_material,
                     built,
                     meshes.as_deref_mut(),
-                    materials.as_deref_mut(),
                 );
             }
             (lunco_terrain_bake::BakeStage::Full, Ok(grid)) => {
@@ -1358,10 +1394,23 @@ fn finish_dem_worker(
                 // Re-compose the analytic oracle on the worker's full bare grid.
                 let contributions = layer_contributions(stacks.get(entity).ok(), grid.half_extent, curvature_radius);
                 if let Ok((mut hf, tiles, pending, has_static_mesh)) = swap_q.get_mut(entity) {
-                    let oracle = std::sync::Arc::new(crate::oracle::SurfaceOracle::new(
-                        std::sync::Arc::new(grid),
-                        contributions,
-                    ));
+                    let base = std::sync::Arc::new(grid);
+                    // D9: the ONLY `DemBaseGrid` insert is `assemble_dem_build`, and on
+                    // web that ran for the COARSE preview. Without re-inserting it here
+                    // the retained base stays coarse, so the next brush stroke's
+                    // `spawn_restamp_task` re-composes from the coarse grid and the
+                    // terrain visibly REVERTS to preview heights after sculpting.
+                    let base_key = crate::oracle::grid_key(&base);
+                    commands
+                        .entity(entity)
+                        .try_insert(DemBaseGrid(base.clone(), base_key));
+                    let oracle = std::sync::Arc::new(
+                        crate::oracle::SurfaceOracle::new_with_base_key(
+                            base,
+                            contributions,
+                            base_key,
+                        ),
+                    );
                     swap_terrain_grid(
                         &mut commands,
                         entity,
@@ -1397,7 +1446,6 @@ fn finish_dem_worker(
                         job.with_default_material,
                         built,
                         meshes.as_deref_mut(),
-                        materials.as_deref_mut(),
                     );
                 }
                 commands.entity(entity).remove::<DemWorkerJob>();
@@ -1450,7 +1498,13 @@ fn swap_terrain_grid(
     if has_static_mesh {
         if let Some(meshes) = meshes {
             let MeshData { positions, normals, uvs, indices } = oracle.materialize().to_mesh_data();
-            let handle = meshes.add(lunco_obstacle_field::grid_mesh(positions, normals, uvs, indices));
+            let handle = meshes.add(lunco_obstacle_field::grid_mesh(
+                positions,
+                normals,
+                uvs,
+                indices,
+                bevy::asset::RenderAssetUsages::default(),
+            ));
             commands.entity(entity).insert(Mesh3d(handle));
         }
     }
@@ -1692,7 +1746,13 @@ pub(crate) fn finish_dem_restamp(
             if let Some(meshes) = meshes.as_mut() {
                 let MeshData { positions, normals, uvs, indices } = oracle.materialize().to_mesh_data();
                 commands.entity(entity).try_insert(Mesh3d(meshes.add(
-                    lunco_obstacle_field::grid_mesh(positions, normals, uvs, indices),
+                    lunco_obstacle_field::grid_mesh(
+                        positions,
+                        normals,
+                        uvs,
+                        indices,
+                        bevy::asset::RenderAssetUsages::default(),
+                    ),
                 )));
             }
         }

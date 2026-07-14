@@ -9,7 +9,6 @@ use lunco_usd_avian::*;
 use lunco_usd_sim::*;
 use lunco_mobility::WheelRaycast;
 use lunco_core::kernels::DriveMix;
-use lunco_materials::ShaderMaterial;
 use avian3d::prelude::*;
 use lunco_fsw::FlightSoftware;
 
@@ -68,9 +67,7 @@ fn compose_and_load(file_path: &Path, prim_path: &str) -> App {
     app.add_plugins(AssetPlugin::default());
     app.init_asset::<UsdStageAsset>();
     app.init_asset::<Mesh>();
-    app.init_asset::<StandardMaterial>();
     app.init_asset::<Image>();
-    app.init_asset::<ShaderMaterial>();
     app.init_asset::<bevy::shader::Shader>();
     // No GPU in this harness, so a wheel's render-only `ShaderMaterial` never
     // arrives — mark the app headless so sim builds wheel PHYSICS without waiting
@@ -99,16 +96,20 @@ fn compose_and_load(file_path: &Path, prim_path: &str) -> App {
 
 /// HEADLESS-PARITY GUARD — regression test for the wheel-shader deadlock.
 ///
-/// On the `--no-ui` server there is no GPU, so the materials plugin (and its
-/// render pipeline) is absent → `Assets<ShaderMaterial>` does not exist →
-/// `apply_usd_shader_materials` no-ops → a wheel's `materialType="shader"` material
-/// NEVER arrives. The wheel PHYSICS must still build (gated by the `NoRenderVisuals`
-/// marker), or the authoritative server can never simulate or replicate a drivable
-/// rover — every wheel deadlocks `Without<UsdSimProcessed>` forever.
+/// The `--no-ui` server never adds `LuncoRenderPlugin`, so **no material of any
+/// kind is ever bound** — `lunco-render-bevy` is the only crate that names one.
+/// The wheel PHYSICS must still build, or the authoritative server can never
+/// simulate or replicate a drivable rover: every wheel would deadlock
+/// `Without<UsdSimProcessed>` forever. That is what once shipped to the server.
 ///
-/// This reproduces that exact condition: **no `ShaderMaterial` asset registered**
-/// + `NoRenderVisuals` inserted. Without the fix, all 4 wheels deadlock (0
-/// `WheelRaycast`) and this fails — which is precisely what shipped to the server.
+/// This app reproduces the server's shape: **no render plugin, so no material
+/// binder** + `NoRenderVisuals` inserted.
+///
+/// NOTE (post render-decoupling): what `process_usd_sim_prims` waits on is now
+/// `Mesh3d` / `PbrLook` / `ShaderLook` — all render-FREE intent, all authored
+/// headless — so the original deadlock is structurally unreachable rather than
+/// merely fixed. This test is kept as the guard that it stays that way: if
+/// anyone re-couples the physics build to a GPU-side material, it fails here.
 #[test]
 fn headless_server_builds_wheel_physics_without_shader_material() {
     let file = Path::new("../../assets/vessels/rovers/skid_rover.usda");
@@ -118,11 +119,11 @@ fn headless_server_builds_wheel_physics_without_shader_material() {
     app.add_plugins(AssetPlugin::default());
     app.init_asset::<UsdStageAsset>();
     app.init_asset::<Mesh>();
-    app.init_asset::<StandardMaterial>();
     app.init_asset::<Image>();
     app.init_asset::<bevy::shader::Shader>();
-    // DELIBERATELY no `init_asset::<ShaderMaterial>()` — this is what makes the
-    // app a faithful stand-in for the headless server (no materials plugin).
+    // DELIBERATELY no `LuncoRenderPlugin` — that is the ONLY thing that binds a
+    // material, so its absence is exactly what makes this app a faithful stand-in
+    // for the `--no-ui` server.
     app.insert_resource(NoRenderVisuals); // the fix under test
     app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
 
@@ -192,8 +193,11 @@ fn test_all_rover_files_match_procedural() {
         // Visual — body mesh + material live on the Chassis child.
         let chassis = chassis_child(&app, rover, &label);
         assert!(app.world().get::<Mesh3d>(chassis).is_some(), "{label}: Chassis missing Mesh3d (body invisible!)");
-        assert!(app.world().get::<MeshMaterial3d<StandardMaterial>>(chassis).is_some(),
-            "{label}: Chassis missing MeshMaterial3d (body invisible!)");
+        // Appearance INTENT, not a bound material: `LuncoRenderPlugin` (absent in a
+        // headless test) is what turns `PbrLook` into `MeshMaterial3d`.
+        // See docs/architecture/render-decoupling.md.
+        assert!(app.world().get::<lunco_render::PbrLook>(chassis).is_some(),
+            "{label}: Chassis missing PbrLook (body would be invisible!)");
 
         // Steering allocation: every rover carries a `DriveMix` naming a kernel.
         let mix = app.world().get::<DriveMix>(rover).expect(&format!("{label}: missing DriveMix"));

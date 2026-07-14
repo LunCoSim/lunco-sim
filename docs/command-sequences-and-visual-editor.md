@@ -19,12 +19,14 @@ we already produce*, plus two small kernel/format additions. Don't build a new s
 | **BT kernel** — Sequence, Selector, Parallel(RequireAll/One), Repeat, Retry, Invert, Force, Reactive{Sequence,Selector}, Action leaf, event predicates | `lunco-behavior` (`node.rs`) | language/engine-agnostic, deterministic, unit-tested; **every node maps 1:1 to a JSON `BehaviorSpec`** |
 | **Sequences ARE serializable data** | `lunco-scripting/task_tree.rs` | the prelude's `seq/par_all/par_race/repeat/forever/once/wait/…` build **pure data maps**, compiled once to the kernel tree |
 | **Flat timeline sequence + runner** | `lunco-scripting/timelines.rs`, `RunTimeline` cmd, `compile_timeline` | a mission as a serializable step array (`move_to/wait/emit/wait_event/cmd`), runnable over the API with **zero rhai** |
-| **Command journal / oplog** | `lunco-twin-journal`, `registration_journal.rs` | every executed command is recorded → the **actual** run of a sequence already exists as data |
+| **Op journal / oplog** | `lunco-twin-journal`, `registration_journal.rs` | records **document** ops (`Usd`/`Modelica`/`Script`/…) and **registrations** (`RegisterToolLibrary`, `RegisterTimeline`). ⚠️ It does **not** record executed commands — `api_command_dispatcher` has no journal interaction (see [`architecture/command-journal.md`](architecture/command-journal.md) Status). A "planned vs actual" view needs that first. |
 | **Reusable node/edge graph canvas** | `lunco-canvas` (Nodes/Edges/Grid/Selection/ToolPreview layers, `VisualRegistry`) | the Modelica diagram runs on it; it is the ready-made substrate for a **graph-of-actions** view |
 | **Waypoint markers** | `vessels/markers/waypoint.usda` | present and spawnable; **no on-terrain polyline** yet (known route-line gap) |
 
-So a "sequence of commands" is already a first-class, serializable, executable, journaled artifact. The
-missing pieces are **references, views, and an authoring tool** — not the engine.
+So a "sequence of commands" is already a first-class, serializable, executable artifact — but **not a
+journaled one**: its *definition* (a `Timeline` registration) journals; its *execution* does not.
+The missing pieces are **references, views, an authoring tool** — and, for any "actual run" view,
+command journaling itself (unbuilt: see [`architecture/command-journal.md`](architecture/command-journal.md)).
 
 ---
 
@@ -74,11 +76,13 @@ Reactive↔`<ReactiveSequence>`, our `Ref`↔`<SubTree>`/PLEXIL library node, `c
 can express and *reports what it drops* (a guard the flight target can't evaluate, a sim-only closure)
 — never silently.
 
-### 2.4 The loop closes on the journal
-Our command journal already records the **actual** dispatched commands with timestamps — an executed
-timeline. So "author in sim → export XTCE dict + F´ `.seq` → run on an F´/cFS target → diff its
-execution against our journal" is a concrete **twin↔flight validation pipeline**, and it's export
-plumbing, not a runtime change.
+### 2.4 The loop closes on the journal — **once commands are journaled**
+"Author in sim → export XTCE dict + F´ `.seq` → run on an F´/cFS target → diff its execution against
+our journal" is a concrete **twin↔flight validation pipeline**. ⚠️ It has one unbuilt prerequisite:
+**we do not record dispatched commands.** The journal records document ops and registrations, not the
+executed command stream (`api_command_dispatcher` does no journaling —
+[`architecture/command-journal.md`](architecture/command-journal.md)). The export side is plumbing;
+the "actual" side is a feature that does not exist yet.
 
 **Which reactive target first is the one open call** — PLEXIL (space-native, closest to a flight
 autonomy executive) vs BehaviorTree.CPP (robotics, but ships Groot2 for free visual editing/monitoring).
@@ -123,8 +127,9 @@ model↔canvas↔code pattern):
    order (the missing route-line renderer — `BasisCurves`→mesh or a gizmo line-strip). The number IS
    the step index. This makes the 3D scene a live editor of the sequence.
 2. **Timeline view.** A horizontal lane: steps left→right in execution order, dwell durations as
-   widths, events/`wait_event` as markers, **planned vs actual** by overlaying the command journal.
-   New panel, small — it only reads the step array + journal.
+   widths, events/`wait_event` as markers. The **planned** lane reads the step array and is buildable
+   today. The **actual** lane needs command journaling, which does not exist — until then it must come
+   from the telemetry-event bus (`cmd:<Name>` events), not from the journal.
 3. **Graph-of-actions view.** Instantiate **`lunco-canvas`** with a `VisualRegistry` for BT node kinds;
    composites/decorators/leaves as nodes, child order as edges, `Ref` as a link into another sequence.
    **Live tick status** (Running/Success/Failure) colours nodes from the kernel tick — same data Groot2
@@ -146,7 +151,7 @@ doc. Dynamic creation falls out for free — a sequence is just a growing data a
    ┌────── one Sequence document (JSON BehaviorSpec; profile: linear | reactive | hybrid) ──────┐
  3D waypoint map ─edits►                                    ◄edits─ graph-of-actions (lunco-canvas)
    (numbered markers + terrain polyline)                    ◄edits─ timeline (steps + journal)
-                 └── compiled once ──► lunco-behavior kernel ── ticks ──► journal (actual run) ──► views
+                 └── compiled once ──► lunco-behavior kernel ── ticks ──► journal (actual run: NOT BUILT) ──► views
                             │                                                   │
               linear profile├──► F´ .seq / cFS SC / PUS-11        full tree ────┴──► PLEXIL / BT.CPP XML
 ```

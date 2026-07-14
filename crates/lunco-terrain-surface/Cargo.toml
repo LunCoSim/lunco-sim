@@ -10,12 +10,29 @@ description = "Local high-detail DEM ground terrain (surface scale): heightfield
 # (std + serde only), shared with the cube-sphere planetary tiler. This crate is
 # the PLANAR DEM adapter: it adds render/physics/big_space/DEM layers on top.
 lunco-terrain-core = { path = "../lunco-terrain-core" }
-# `zstd_rust`: lunco-materials (a dep) turns on `tonemapping_luts` →
-# `bevy_image/zstd`, which demands a backend choice; the workspace build gets
-# `zstd_rust` unified in from lunco-usd-bevy, but a per-crate `cargo check/test
-# -p lunco-terrain-surface` doesn't — same per-crate self-heal as lunco-usd-bevy.
-bevy = { workspace = true, features = ["bevy_pbr", "bevy_mesh", "bevy_render", "bevy_light", "zstd_rust"] }
+# RENDER-FREE by rule: this crate may name `Mesh3d`, never `MeshMaterial3d` /
+# `StandardMaterial` / `ShaderMaterial`. Tiles state appearance as
+# `lunco_materials::ShaderLook`, rocks + the static DEM surface as
+# `lunco_render::PbrLook`; `lunco-render-bevy` binds both.
+#
+# NO `bevy_pbr`, NO `bevy_render`. `bevy_mesh` gives `Mesh`/`Mesh3d`, `bevy_camera`
+# gives `Camera`/`Projection`/`Visibility`, `bevy_light` gives `NotShadowCaster` —
+# none of them depends on `bevy_render`. If you find yourself adding `bevy_pbr` back,
+# you are binding a material you should be *declaring*.
+# See docs/architecture/render-decoupling.md.
+#
+# `zstd_rust`: `bevy_image` refuses to build without a zstd backend chosen; name it
+# here so a per-crate `cargo check/test -p lunco-terrain-surface` stands alone.
+bevy = { workspace = true, features = ["bevy_mesh", "bevy_camera", "bevy_light", "bevy_image", "zstd_rust"] }
+# `Extent3d` / `TextureFormat` / `TextureDimension` for the baked derived-layer
+# `Image`s. These are the POD descriptors `bevy_image` itself takes from `wgpu-types`;
+# `bevy::render::render_resource` only re-exports them, and importing THAT would drag
+# in wgpu + naga. `wgpu-types` is not `wgpu`.
+wgpu-types = "29"
 lunco-core = { path = "../lunco-core" }
+# Appearance INTENT (`PbrLook`) for the static DEM surface and the scattered rocks —
+# render-free by construction (it names no material).
+lunco-render = { path = "../lunco-render" }
 # Read-side query seam: register a `TerrainHeight` provider into the shared
 # `ApiQueryRegistry` so scripts/HTTP/MCP can sample the DEM height field via
 # `query("TerrainHeight", #{x, z})` — no terrain dep leaks into lunco-api, the
@@ -34,8 +51,13 @@ lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 # the wasm Web Worker (`dem_worker`), so the off-thread web bake runs identical
 # code. Also owns the main-thread worker client (`worker_client`, wasm-only).
 lunco-terrain-bake = { path = "../lunco-terrain-bake" }
-# The one general self-describing material — LOD tiles use the `terrain_geomorph`
-# shader (CDLOD vertex morph) through `ShaderMaterial`, not a bespoke material type.
+# `ShaderLook` — the custom-shader appearance INTENT the LOD tiles state (the
+# `terrain_geomorph` CDLOD-morph shader path, its named params, its texture layers).
+# Also `ATTRIBUTE_MORPH_TARGET` (a `bevy_mesh` vertex attribute) for the tile bake.
+#
+# `lunco-materials` is render-free: `ShaderMaterial` (the `AsBindGroup`, hence
+# `bevy_pbr`) moved to `lunco-render-bevy` on 2026-07-13, so this crate's dep
+# graph no longer reaches wgpu. Keep it that way — do not add `bevy_pbr` here.
 lunco-materials = { path = "../lunco-materials" }
 lunco-settings = { path = "../lunco-settings" }
 # M3 spawn: avian heightfield collider + big_space anchoring + cross-platform

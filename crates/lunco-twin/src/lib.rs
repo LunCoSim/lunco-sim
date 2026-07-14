@@ -412,7 +412,11 @@ impl Twin {
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Test fixtures live on disk and run natively only — the workspace ban on
+// `std::fs` guards *wasm runtime* code paths, not tests (clippy.toml says so;
+// cargo has no path-scoped lint config, so the exemption is written out here).
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 

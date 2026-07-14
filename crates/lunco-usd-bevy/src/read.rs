@@ -201,6 +201,17 @@ pub trait UsdRead {
     /// camera-track key enumeration.
     fn time_sample_times(&self, prim: &SdfPath, name: &str) -> Vec<f64>;
 
+    /// The stage's authored `metersPerUnit` (SI metres per authored linear unit),
+    /// or `None` when unauthored — the USD default is then `1.0`. Tolerant of
+    /// `float`/`double` authoring. **Interpreted in exactly one place**:
+    /// [`StageMetrics::from_reader`](crate::units::StageMetrics::from_reader).
+    fn stage_meters_per_unit(&self) -> Option<f64>;
+
+    /// The stage's authored `upAxis` token (`"Y"` / `"Z"`), or `None` when
+    /// unauthored — the USD default is then `"Y"`. **Interpreted in exactly one
+    /// place**: [`StageMetrics::from_reader`](crate::units::StageMetrics::from_reader).
+    fn stage_up_axis(&self) -> Option<String>;
+
     /// The authored `timeSamples` span `(first, last)` of attribute `name` on
     /// `prim` — the min/max sample time codes. Provided from
     /// [`time_sample_times`](Self::time_sample_times) (samples are stored
@@ -371,6 +382,20 @@ impl UsdRead for StageView<'_> {
             .map(|s| s.iter().map(|(t, _)| *t).collect())
             .unwrap_or_default()
     }
+
+    fn stage_meters_per_unit(&self) -> Option<f64> {
+        // Composed pseudo-root metadata (session layer wins over root), the same
+        // resolution `timeCodesPerSecond` gets. Precision-tolerant: `metersPerUnit`
+        // is spec'd `double` but exporters do author `float`.
+        let v = self.stage().stage_metadata("metersPerUnit").ok().flatten()?;
+        v.clone().get::<f64>().or_else(|| v.get::<f32>().map(f64::from))
+    }
+
+    fn stage_up_axis(&self) -> Option<String> {
+        // `upAxis` is authored as a `Token`; `as_str` coerces Token/String alike.
+        let v = self.stage().stage_metadata("upAxis").ok().flatten()?;
+        v.as_str().map(str::to_string).filter(|s| !s.is_empty())
+    }
 }
 
 impl UsdRead for openusd::sdf::Data {
@@ -484,6 +509,20 @@ impl UsdRead for openusd::sdf::Data {
                 _ => None,
             })
             .unwrap_or_default()
+    }
+
+    fn stage_meters_per_unit(&self) -> Option<f64> {
+        // Pseudo-root stage metadata, flattened onto abs-root (same place
+        // `timeCodesPerSecond` lives). Precision-tolerant, see the live impl.
+        self.field_as::<f64>(&SdfPath::abs_root(), "metersPerUnit")
+            .or_else(|| self.field_as::<f32>(&SdfPath::abs_root(), "metersPerUnit").map(f64::from))
+    }
+
+    fn stage_up_axis(&self) -> Option<String> {
+        self.field(&SdfPath::abs_root(), "upAxis")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .filter(|s| !s.is_empty())
     }
 }
 

@@ -46,6 +46,12 @@
 //!     --output /tmp/run.csv
 //! ```
 
+// Native-only CLI: reads a `.mo` off disk, writes a CSV to disk, and times with
+// `std::time::Instant` (which panics on wasm32). None of that exists in a
+// browser — the web runs models through the Web Worker, not this binary. Body
+// lives in `mod native`; wasm32 sees only the stub `main` at the bottom.
+#[cfg(not(target_arch = "wasm32"))]
+mod native {
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
@@ -193,7 +199,7 @@ fn print_help() {
     println!("      --duration 10 --output /tmp/rocket.csv");
 }
 
-fn main() {
+pub(crate) fn main() {
     // Same one-liner as msl_indexer / ClassCachePlugin: route rumoca's
     // on-disk cache to the workspace's shared `.cache/rumoca`, so a
     // run here hits warm bytes from `msl_indexer --warm` and vice
@@ -455,3 +461,12 @@ fn format_num(v: f64) -> String {
         String::new()
     }
 }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn main() {
+    native::main();
+}
+
+#[cfg(target_arch = "wasm32")]
+fn main() {}

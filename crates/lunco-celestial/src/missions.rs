@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use lunco_render::{PbrLook, WorldLabel};
 use serde::Deserialize;
 use std::fs;
 use crate::trajectories::{TrajectoryView, TrajectoryPath, TrajectoryFrame};
@@ -104,11 +105,10 @@ pub fn load_missions_system(
     mut commands: Commands,
     mut registry: ResMut<MissionRegistry>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     #[cfg(target_arch = "wasm32")] embedded: Option<Res<crate::embedded_assets::EmbeddedMissionData>>,
 ) {
     // Helper: process a single mission JSON string
-    let spawn_mission = |commands: &mut Commands, meshes: &mut ResMut<Assets<Mesh>>, materials: &mut ResMut<Assets<StandardMaterial>>, registry: &mut ResMut<MissionRegistry>, content: &str| {
+    let spawn_mission = |commands: &mut Commands, meshes: &mut ResMut<Assets<Mesh>>, registry: &mut ResMut<MissionRegistry>, content: &str| {
         if let Ok(mission) = serde_json::from_str::<MissionData>(content) {
             info!("Loaded mission: {}", mission.name);
 
@@ -168,27 +168,30 @@ pub fn load_missions_system(
                 ));
 
                 sc_ent.with_children(|parent| {
+                    // Appearance is stated as INTENT (`PbrLook`); `lunco-render-bevy`
+                    // binds the `StandardMaterial`. Identical looks share one material,
+                    // so the two solar panels below cost one, not two.
                     // Main Body (Service Module) - Darker metallic grey
                     parent.spawn((
                         Mesh3d(meshes.add(Cylinder::new(radius_m, radius_m * 1.5).mesh())),
-                        MeshMaterial3d(materials.add(StandardMaterial {
-                            base_color: Color::srgb(0.2, 0.2, 0.2),
+                        PbrLook {
+                            base_color: LinearRgba::from(Color::srgb(0.2, 0.2, 0.2)),
                             metallic: 0.8,
                             perceptual_roughness: 0.2,
                             ..default()
-                        })),
+                        },
                         Name::new("Service Module"),
                     ));
 
                     // Capsule (Command Module) - Silver metallic
                     parent.spawn((
                         Mesh3d(meshes.add(Cylinder::new(radius_m * 0.1, radius_m).mesh())),
-                        MeshMaterial3d(materials.add(StandardMaterial {
-                            base_color: Color::srgb(0.8, 0.8, 0.8),
+                        PbrLook {
+                            base_color: LinearRgba::from(Color::srgb(0.8, 0.8, 0.8)),
                             metallic: 1.0,
                             perceptual_roughness: 0.1,
                             ..default()
-                        })),
+                        },
                         Transform::from_translation(Vec3::Y * radius_m * 1.25),
                         Name::new("Command Module"),
                     ));
@@ -201,27 +204,28 @@ pub fn load_missions_system(
                     for side in [-1.0, 1.0] {
                         parent.spawn((
                             Mesh3d(meshes.add(Cuboid::new(panel_width, panel_height, panel_thickness).mesh())),
-                            MeshMaterial3d(materials.add(StandardMaterial {
-                                base_color: Color::srgb(0.0, 0.1, 0.4), // Dark blue solar cells
+                            PbrLook {
+                                base_color: LinearRgba::from(Color::srgb(0.0, 0.1, 0.4)), // Dark blue solar cells
                                 emissive: LinearRgba::new(0.0, 0.2, 0.8, 1.0) * 2.0,
                                 metallic: 0.5,
                                 perceptual_roughness: 0.3,
                                 ..default()
-                            })),
+                            },
                             Transform::from_translation(Vec3::X * side * (radius_m + panel_width * 0.5)),
                             Name::new(if side < 0.0 { "Solar Panel Left" } else { "Solar Panel Right" }),
                         ));
                     }
 
-                    // Billboard Label
+                    // Billboard label, as INTENT. `Text2d` lives in `bevy_sprite`,
+                    // whose `bevy_sprite_render` feature pulls `bevy_render` → wgpu +
+                    // naga — and this one label was the last thing dragging the whole
+                    // GPU stack into the `--no-ui` server. The spacecraft's *name* is
+                    // simulation data and stays here; the glyphs are not, and
+                    // `lunco-render-bevy` builds them from `WorldLabel` in render
+                    // builds. See docs/architecture/render-decoupling.md.
                     parent.spawn((
                         SpacecraftBillboard,
-                        Text2d::new(sc.name.clone()),
-                        TextFont {
-                            font_size: bevy::text::FontSize::Px(100.0),
-                            ..default()
-                        },
-                        TextColor(Color::WHITE),
+                        WorldLabel::new(sc.name.clone(), 100.0),
                         Transform::from_translation(Vec3::Y * radius_m * 5.0),
                     ));
                 });
@@ -246,7 +250,7 @@ pub fn load_missions_system(
                         .read_sync(&lunco_storage::StorageHandle::File(entry.path()))
                     {
                         if let Ok(content) = String::from_utf8(bytes) {
-                            spawn_mission(&mut commands, &mut meshes, &mut materials, &mut registry, &content);
+                            spawn_mission(&mut commands, &mut meshes, &mut registry, &content);
                         }
                     }
                 }
@@ -258,7 +262,7 @@ pub fn load_missions_system(
     {
         // Web: use embedded mission data
         if let Some(embedded) = embedded {
-            spawn_mission(&mut commands, &mut meshes, &mut materials, &mut registry, &embedded.artemis_2);
+            spawn_mission(&mut commands, &mut meshes, &mut registry, &embedded.artemis_2);
         }
     }
 }
@@ -271,9 +275,16 @@ pub fn update_spacecraft_position_system(
 ) {
     let jd = world.epoch_jd;
     for (sc, mut tf, cell, child_of) in q_spacecraft.iter_mut() {
-        let p_target = ephemeris.provider.global_position(sc.ephemeris_id, jd);
-        let p_ref = ephemeris.provider.global_position(sc.reference_id, jd);
-        let rel_pos = crate::coords::ecliptic_to_bevy(p_target - p_ref);
+        // P8(d): a spacecraft whose ephemeris CSV failed to fetch used to be placed at its
+        // reference body's centre — inside the Earth, looking exactly like a real position.
+        // Now it simply is not moved.
+        let (Some(p_target), Some(p_ref)) = (
+            ephemeris.provider.global_position(sc.ephemeris_id, jd),
+            ephemeris.provider.global_position(sc.reference_id, jd),
+        ) else {
+            continue;
+        };
+        let rel_pos = crate::coords::ecliptic_to_bevy(p_target - p_ref).raw();
 
         // Split through the parent (reference) grid so the spacecraft stays
         // within one cell — precise placement instead of a raw f32 at up to
@@ -303,8 +314,8 @@ pub fn update_spacecraft_position_system(
 
         // Point solar panels towards the Sun
         // Sun ID is 10
-        let p_sun = ephemeris.provider.global_position(10, jd);
-        let to_sun = crate::coords::ecliptic_to_bevy(p_sun - p_target).as_vec3().normalize_or_zero();
+        let Some(p_sun) = ephemeris.provider.global_position(10, jd) else { continue };
+        let to_sun = crate::coords::ecliptic_to_bevy(p_sun - p_target).raw().as_vec3().normalize_or_zero();
         if to_sun.length_squared() > 0.0 {
             // Bevy's look_to makes Local -Z point at the target.
             // Our panels are in the XY plane (width X, height Y), so they face +Z and -Z.

@@ -76,15 +76,17 @@ pub fn update_solar_poses(
     };
     let jd = world_time.epoch_jd;
     let body_of = |naif: i32| registry.bodies.iter().find(|b| b.ephemeris_id == naif);
+    // `None` ⇒ no ephemeris for that body. Callers skip it rather than reporting a pose at the
+    // Sun's centre that looks exactly like a real one.
     let body_center =
-        |naif: i32| ecliptic_to_bevy(ephemeris.provider.global_position(naif, jd));
+        |naif: i32| ephemeris.provider.global_position(naif, jd).map(ecliptic_to_bevy);
 
     // The site frame (scene-root anchor), for scene-local prims.
     let site = q_site.iter().next().and_then(|anchor| {
         let desc = body_of(anchor.body)?;
         Some((
             anchor.body,
-            solar_tangent_frame(desc, &anchor.geodetic, body_center(anchor.body), jd),
+            solar_tangent_frame(desc, &anchor.geodetic, body_center(anchor.body)?.raw(), jd),
         ))
     });
 
@@ -92,12 +94,17 @@ pub fn update_solar_poses(
         // (solar pos, up, body) per placement kind; a diverging branch skips.
         let (pos, up, body) = if let Some(a) = anchor {
             let Some(desc) = body_of(a.body) else { continue };
-            let center = body_center(a.body);
+            // No ephemeris ⇒ no pose. Skipping beats reporting a pose at the Sun's centre.
+            let Some(center) = body_center(a.body) else { continue };
+            let center = center.raw();
             let pos = solar_position_of_geodetic(desc, &a.geodetic, center, jd);
             (pos, (pos - center).normalize_or_zero(), a.body)
         } else if let Some(o) = orbit {
             let Some(desc) = body_of(o.body) else { continue };
-            (body_center(o.body) + o.elements.position_bevy_m(desc.gm, jd), DVec3::ZERO, o.body)
+            {
+                let Some(center) = body_center(o.body) else { continue };
+                (center.raw() + o.elements.position_bevy_m(desc.gm, jd), DVec3::ZERO, o.body)
+            }
         } else if let Some((body, frame)) = &site {
             let Ok((cell, tf)) = q_spatial.get(entity) else { continue };
             let cell = cell.copied().unwrap_or_default();

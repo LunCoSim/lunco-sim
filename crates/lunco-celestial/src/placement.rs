@@ -26,7 +26,8 @@ use crate::big_space_setup::SolarSystemRoot;
 use crate::coords::ecliptic_to_bevy;
 use crate::ephemeris::EphemerisResource;
 use crate::geo::{
-    body_rotation, geodetic_to_body_fixed, solar_tangent_frame, GeodeticAnchor, SiteAnchor,
+    body_rotation, equatorial_frame, geodetic_to_body_fixed, solar_tangent_frame, GeodeticAnchor,
+    SiteAnchor,
 };
 use crate::kepler::KeplerOrbit;
 use crate::registry::{CelestialBodyRegistry, CelestialReferenceFrame};
@@ -121,7 +122,12 @@ pub fn anchor_solar_frame_to_site(
         else {
             return;
         };
-        let body_center = ecliptic_to_bevy(ephemeris.provider.global_position(anchor.body, jd));
+        // No ephemeris ⇒ we do not know where the body IS, so we cannot anchor a site to it.
+        // Leaving the anchor un-placed is honest; placing it at the Sun's centre is not.
+        let Some(p) = ephemeris.provider.global_position(anchor.body, jd) else {
+            return;
+        };
+        let body_center = ecliptic_to_bevy(p).raw();
         let frame = solar_tangent_frame(desc, &anchor.geodetic, body_center, jd);
         // Rows East/Up/−North → world axes.
         let align = DQuat::from_mat3(&bevy::math::DMat3::from_cols(
@@ -364,7 +370,14 @@ pub fn place_celestial_bound_entities(
             let up = p.normalize_or_zero();
             (p, DQuat::from_rotation_arc(DVec3::Y, up).as_quat())
         } else if let Some(orbit) = orbit {
-            let p_inertial = orbit.elements.position_bevy_m(desc.gm, jd);
+            // Elements are referenced to the body's EQUATOR (`kepler.rs`), so
+            // lift them out of the orbit frame with `equatorial_frame` before
+            // cancelling the body's spin. Without that lift the two rotations
+            // collapsed (`R⁻¹·p` rendered through the grid's `R` gives back
+            // `p`) and inclination silently ended up measured about the
+            // ECLIPTIC pole — 23.4° off Earth's, ±23.4° of ground-track error.
+            let p_orbit = orbit.elements.position_bevy_m(desc.gm, jd);
+            let p_inertial = equatorial_frame(desc, jd) * p_orbit;
             (body_rotation(desc, jd).inverse() * p_inertial, Quat::IDENTITY)
         } else {
             continue;

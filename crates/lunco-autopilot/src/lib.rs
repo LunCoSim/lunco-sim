@@ -670,7 +670,7 @@ pub fn build_tree(spec: &BehaviorSpec) -> BoxNode<DriveCtx> {
 /// Half-angle of the forward-left/right obstacle probes, radians (~30°). Shared by
 /// [`sense_clearance`] (which casts the probes) and [`leaf_steer_clear`] (which
 /// recomputes the probe directions to steer toward the open one), so they agree.
-const PROBE_SPREAD: f32 = 0.5236;
+const PROBE_SPREAD: f32 = std::f32::consts::FRAC_PI_6;
 /// How far the obstacle probes are cast (world units).
 const SENSOR_RANGE: f32 = 20.0;
 /// World-up offsets (m) from the vessel origin at which each lane is probed — a small

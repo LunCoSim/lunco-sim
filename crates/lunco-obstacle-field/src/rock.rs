@@ -7,7 +7,9 @@
 
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
-use bevy::render::render_resource::PrimitiveTopology;
+// `bevy_mesh`, not `bevy::render` — `PrimitiveTopology` is re-exported from
+// `wgpu-types` and needs no render pipeline. See docs/architecture/render-decoupling.md.
+use bevy_mesh::PrimitiveTopology;
 use bevy_mesh::Indices;
 use rand::RngExt;
 use rand_chacha::rand_core::SeedableRng;

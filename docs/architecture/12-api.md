@@ -41,22 +41,28 @@ curl http://127.0.0.1:4101/api/health
 # Discover all available commands
 curl http://127.0.0.1:4101/api/commands/schema | jq .
 
-# List all entities
-curl http://127.0.0.1:4101/api/entities | jq .
+# List all entities  (a POST request — there is no GET entities route)
+curl -s http://127.0.0.1:4101/api/commands \
+  -H 'content-type: application/json' \
+  -d '{"type":"ListEntities"}' | jq .
 
-# Query a specific entity
-curl http://127.0.0.1:4101/api/entities/<entity-ulid> | jq .
+# Query a specific entity by its numeric api_id (from ListEntities)
+curl -s http://127.0.0.1:4101/api/commands \
+  -H 'content-type: application/json' \
+  -d '{"type":"QueryEntity","id":98466552102768}' | jq .
 ```
 
 ## Endpoints
 
+Three routes. Everything that acts on the world goes through the **one** command
+funnel — entity listing/query included, as `ApiRequest` variants, not as REST
+resources.
+
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/health` | Server health check |
-| `GET` | `/api/commands/schema` | Discover all available commands with field types |
-| `POST` | `/api/commands` | Execute a command or query |
-| `GET` | `/api/entities` | List all entities |
-| `GET` | `/api/entities/{id}` | Query entity details |
+| `GET` | `/api/health` | Liveness. Answered by the transport thread; no world access. |
+| `GET` | `/api/commands/schema` | The runtime `DiscoverSchema` — every callable command and its field types. |
+| `POST` | `/api/commands` | Execute a command, or run a query (`ListEntities`, `QueryEntity`, `QueryCommandResult`, `DiscoverSchema`, `SubscribeTelemetry`). |
 
 ## API Queries (Data Retrieval)
 
@@ -190,7 +196,7 @@ pub struct Foo { pub doc: u64 }   // use DocumentId
 
 ## Command Execution (Side Effects)
 
-Commands are typed — each domain crate defines its own command structs. The API discovers them automatically via reflection. Use `GET /api/commands/schema` to see the full list of available commands and their parameters. For a static, documented catalog (descriptions + field types, generated from source), see [`../commands-reference.md`](../commands-reference.md).
+Commands are typed — each domain crate defines its own command structs. The API discovers them automatically via reflection. Use `GET /api/commands/schema` to see the full list of available commands and their parameters. For a static, documented catalog (descriptions + field types, generated from that same runtime schema), see [`../commands-reference.md`](../commands-reference.md).
 
 ### Common Commands
 
@@ -373,7 +379,7 @@ curl -X POST http://127.0.0.1:4101/api/commands \
 }
 ```
 
-Data responses include a `data` envelope. For example, `GET /api/entities` returns:
+Data responses include a `data` envelope. For example, `{"type":"ListEntities"}` returns:
 ```json
 {
   "data": {
@@ -387,9 +393,20 @@ Data responses include a `data` envelope. For example, `GET /api/entities` retur
 
 ```json
 {
-  "error": "Command 'UnknownCommand' not found"
+  "error": "Command 'UnknownCommand' not found or not API-accessible",
+  "error_code": 400
 }
 ```
+
+`error_code` is the typed `ApiErrorCode`, and the HTTP status line carries the same
+value (the wasm/JS bridge, which has no status line, reads `error_code`):
+
+| code | meaning |
+|---|---|
+| `400` | `CommandNotFound` — no such command, or it is hidden from the API. |
+| `404` | `EntityNotFound` — the `api_id` does not resolve. |
+| `422` | `DeserializationError` — the command exists, but the `params` don't fit it (unknown field, wrong type, missing required field). Checked **synchronously**, before the command is accepted: a typo'd param is an error, never a `200 OK`. |
+| `500` | `InternalError`. |
 
 ## Entity IDs
 
@@ -594,5 +611,5 @@ that want a runtime-toggleable opt-out.
 |---|---|
 | Connection refused | Make sure sim was started with `--api` flag |
 | "Command not found" | Check `/api/commands/schema` for available commands |
-| "Entity not found" | Check `/api/entities` for valid ULID strings |
+| "Entity not found" | `POST /api/commands` with `{"type":"ListEntities"}` for valid ULID strings — there is no `GET /api/entities` route |
 | `lunco_api` not found in `Cargo.toml` | Add `lunco-api = { path = "../lunco-api" }` dependency |

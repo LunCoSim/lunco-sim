@@ -20,30 +20,70 @@ use crate::ast_extract::strip_input_defaults;
 use crate::sim_stream::{SimSnapshot, SimStream};
 use crate::ModelicaCompiler;
 
-/// Build a `SimStepper` from a freshly-compiled model.
+/// Solver options for the **LIVE** (co-simulated, client-predicted) path.
 ///
-/// **Single source of truth** for stepper construction across the worker — every
-/// site routes through here instead of copy-pasting the `SimOptions` setup +
-/// `SimStepper::new` call (there were ~9 such copies).
+/// A4 — deliberately **NOT** [`crate::experiments_runner::stepper_options_from_bounds`].
+/// The batch runner solves an offline experiment: it wants the most accurate
+/// integrator available (diffsol BDF, adaptive-implicit, `atol = rtol = 1e-6`)
+/// and it does not care that its internal step sequence is chosen from
+/// floating-point error estimates. The live path is the exact opposite: it runs
+/// *inside* the fixed-step physics loop that feeds forces to avian on a
+/// client-predicted body, so its per-macro-step cost and its step sequence must
+/// be a function of the **requested `dt` alone** — see
+/// `docs/architecture/28-modelica-realtime-physics.md` §1.
 ///
-/// Tolerance + solver policy is delegated to
-/// [`crate::experiments_runner::stepper_options_from_bounds`] — the SAME
-/// function the batch-experiment and wasm-worker paths use — so the live
-/// interactive sim can't drift from batch runs on tolerance, the `atol`/`rtol`
-/// policy, or the solver family. We carry across only the model's
-/// `experiment(Tolerance=…)` annotation (the conventional reading of Modelica
-/// `Tolerance` → the solver tolerance); the rest of `RunBounds` doesn't affect
-/// `SimOptions` here (start/stop/interval drive the stepping loop, not the
-/// integrator), so it stays at its default.
+/// So the live path gets its own configuration:
+/// * **explicit family** ([`rumoca_sim::SimSolverMode::RkLike`]) — no Newton /
+///   LU iteration whose *count* varies with the machine's rounding, and no
+///   implicit tableau to fall back on,
+/// * a **fixed macro/micro step ladder** — the caller drives the stepper at
+///   [`LIVE_MICRO_DT`] micro-steps ([`micro_steps_for`]), so the stop-time
+///   sequence is an integer function of `dt`, identical on every peer,
+/// * `h0 = LIVE_MICRO_DT` so the integrator's first internal step matches the
+///   micro-step it is asked for,
+/// * an explicit, fixed tolerance ([`LIVE_TOL`]) — **not** the model's
+///   `experiment(Tolerance=…)` annotation, which is an *offline accuracy* knob
+///   and must not be able to change the realtime loop's behaviour.
+///
+/// CAVEAT (documented, not fixed here): rumoca's `RkLike` backend is an
+/// *embedded* RK45 — its internal sub-step size is still error-adapted
+/// (`adapt_step(h, error_norm)`), so a micro-step may internally split. rumoca
+/// exposes no fixed-tableau, no-error-control stepper today. Driving it at
+/// fixed micro-steps bounds the divergence to *within* one micro-step and keeps
+/// the macro stop-times identical everywhere, which is as far as this layer can
+/// go. Full Tier-A bit-determinism needs a fixed-step tableau upstream — see
+/// TODO(A4) in `docs/architecture/28-modelica-realtime-physics.md`.
+fn live_stepper_options() -> rumoca_sim::SimOptions {
+    let mut opts = rumoca_sim::SimOptions {
+        solver_mode: rumoca_sim::SimSolverMode::RkLike,
+        ..Default::default()
+    };
+    opts.atol = LIVE_TOL;
+    opts.rtol = LIVE_TOL;
+    // `SimOptions.dt` is the initial/maximum internal step (h0).
+    opts.dt = Some(LIVE_MICRO_DT);
+    // The live stepper is driven by `step(dt)` calls, never by `t_end`; the
+    // window is only used to derive defaults, so make it wide enough that no
+    // realistic session reaches it.
+    opts.t_start = 0.0;
+    opts.t_end = f64::from(u32::MAX);
+    opts
+}
+
+/// Build a `SimStepper` for the LIVE path from a freshly-compiled model.
+///
+/// **Single source of truth** for live stepper construction across the worker —
+/// every site routes through here instead of copy-pasting the `SimOptions` setup
+/// + `SimStepper::new` call (there were ~9 such copies).
+///
+/// Solver policy comes from [`live_stepper_options`] and is intentionally
+/// **distinct** from the batch/Fast-Run policy (A4). The model's
+/// `experiment(Tolerance=…)` annotation is deliberately ignored here: it is an
+/// offline-accuracy knob and must not reach into the realtime coupling loop.
 fn build_stepper(
     comp_res: &rumoca_compile::compile::DaeCompilationResult,
 ) -> Result<SimStepper, rumoca_sim::SimulationDiagnosticError> {
-    let bounds = lunco_experiments::RunBounds {
-        tolerance: comp_res.experiment_tolerance,
-        ..Default::default()
-    };
-    let opts = crate::experiments_runner::stepper_options_from_bounds(&bounds);
-    SimStepper::new(&comp_res.dae, opts)
+    SimStepper::new(&comp_res.dae, live_stepper_options())
 }
 
 /// Channels for communicating with the background simulation worker.
@@ -321,7 +361,7 @@ struct CachedModel {
 /// plots NaN. Filtering out parameters / inputs happens downstream in
 /// [`handle_modelica_responses`]; we report everything here so the UI has
 /// the full picture and decides what goes into `model.variables`.
-fn collect_stepper_observables(stepper: &SimStepper) -> Vec<(String, f64)> {
+pub(crate) fn collect_stepper_observables(stepper: &SimStepper) -> Vec<(String, f64)> {
     stepper
         .state()
         .values
@@ -330,15 +370,103 @@ fn collect_stepper_observables(stepper: &SimStepper) -> Vec<(String, f64)> {
         .collect()
 }
 
-/// Largest physics `dt` integrated per `Step` before sub-stepping, in
-/// seconds (~30 Hz). Caps the catch-up burst after a stalled frame so one
-/// long gap can't explode the solver. CQ-110: was the bare `0.033`
-/// duplicated in the native + wasm Step arms.
-const MAX_STEP_DT: f64 = 0.033;
-/// Solver sub-steps per capped `Step` dt — used for both the `sub_dt`
-/// divisor and the integration loop count. CQ-110: was the bare `3`
-/// duplicated likewise.
-const STEP_SUBSTEPS: u32 = 3;
+/// Fixed solver tolerance on the LIVE path. Explicit, and deliberately NOT the
+/// model's `experiment(Tolerance=…)` annotation nor the batch runner's default —
+/// see [`live_stepper_options`] (A4).
+const LIVE_TOL: f64 = 1e-6;
+
+/// The LIVE path's **micro-step**: the one and only step size handed to the
+/// solver. Three micro-steps per fixed tick (60 Hz ⇒ 180 Hz solver rate).
+///
+/// Derived from [`lunco_core::SECS_PER_TICK`], so the model's stop-time lattice
+/// is a pure function of the FIXED-STEP clock — never of the render frame, GPU
+/// load, or window focus (A3).
+const LIVE_MICRO_DT: f64 = lunco_core::SECS_PER_TICK / 3.0;
+
+/// Hard cap on micro-steps integrated inside ONE `Step` command.
+///
+/// This is the catch-up clamp: a model that has fallen behind the world clock
+/// (a long compile, a hitched frame, a `TimeTransport.rate` burst) asks for a
+/// large `dt`, and we integrate at most this many micro-steps for it —
+/// ~0.178 s of model time. Whatever is left over stays as lag and is caught up
+/// on the following ticks (`spawn_modelica_requests` recomputes the deficit from
+/// the model's OWN clock every tick, so nothing is lost). The clamp exists so a
+/// 10-second stall can't hand the solver a 10-second macro step.
+const MAX_MICRO_STEPS_PER_MACRO: u32 = 32;
+
+/// Largest `dt` one `Step` command may carry (= the clamp above, in seconds).
+/// `spawn_modelica_requests` clamps the requested catch-up to this; the worker
+/// clamps again ([`micro_steps_for`]) so a hand-built `Step` can't blow past it.
+pub const MAX_MACRO_STEP_DT: f64 = LIVE_MICRO_DT * MAX_MICRO_STEPS_PER_MACRO as f64;
+
+/// Below this deficit we don't dispatch a `Step` at all — the model is already
+/// at the communication point (within half a micro-step) and a sub-micro-step
+/// `dt` would just round to a full micro-step and overshoot.
+const MIN_MACRO_STEP_DT: f64 = LIVE_MICRO_DT * 0.5;
+
+/// How many [`LIVE_MICRO_DT`] micro-steps a macro step of `dt` seconds becomes.
+///
+/// Integer, monotone, and clamped to [`MAX_MICRO_STEPS_PER_MACRO`] — the same
+/// on every peer, for every `dt`. Round-to-nearest (rather than floor) keeps the
+/// model's clock centred on the world's: a residual of at most half a micro-step
+/// is carried into the next tick's deficit and cancels there.
+fn micro_steps_for(dt: f64) -> u32 {
+    if !(dt > 0.0) {
+        return 0;
+    }
+    let n = (dt / LIVE_MICRO_DT).round();
+    (n as u32).clamp(1, MAX_MICRO_STEPS_PER_MACRO)
+}
+
+/// Integrate one macro step: `micro_steps_for(dt)` fixed micro-steps.
+///
+/// The ONE integration loop for the live path — native worker and wasm inline
+/// worker both call it, so the two `#[cfg]` twins cannot drift on step policy.
+/// Advances the model's own clock by exactly `micro_steps_for(dt) *
+/// LIVE_MICRO_DT`; the caller reads `stepper.time()` for the truth and the Bevy
+/// side reconciles any residual against the world clock next tick.
+fn integrate_macro_step(
+    stepper: &mut SimStepper,
+    dt: f64,
+) -> Result<(), rumoca_sim::SimulationDiagnosticError> {
+    for _ in 0..micro_steps_for(dt) {
+        stepper.step(LIVE_MICRO_DT)?;
+    }
+    Ok(())
+}
+
+/// Model-vs-world lag past which the co-sim coupling is no longer trustworthy
+/// (the forces avian integrates this tick come from a model state this far in
+/// the past). Surfaced as a rate-limited `warn!` + [`CosimLag`].
+const LAG_WARN_SECS: f64 = 0.25;
+
+/// Fixed ticks between two lag warnings (5 s at 60 Hz) — the warn is on the
+/// per-tick hot path, so it must never become a per-frame spam source.
+const LAG_WARN_COOLDOWN_TICKS: u32 = 300;
+
+/// **The co-simulation lag diagnostic** (A3).
+///
+/// Every fixed tick, `spawn_modelica_requests` measures `|model.current_time −
+/// world_sim_secs|` for every live model and records the worst offender here.
+/// Before this existed, NOTHING compared the model's own clock to the world's —
+/// the model could run at half speed forever and no surface reported it.
+///
+/// `worst_secs` is the coupling delay: the age of the model state whose outputs
+/// the current tick's forces were computed from. In steady state it sits at
+/// roughly one macro step (the in-flight `Step`); a sustained rise means the
+/// worker cannot keep up with the fixed clock and the model is being carried by
+/// the catch-up path.
+#[derive(Resource, Default, Debug, Clone)]
+pub struct CosimLag {
+    /// Worst `|model_time − world_time|` seen on the last fixed tick, seconds.
+    pub worst_secs: f64,
+    /// The model entity that owned `worst_secs`.
+    pub worst_entity: Option<Entity>,
+    /// Live (unpaused, compiled) models measured on the last tick.
+    pub models: usize,
+    /// Ticks remaining before another `warn!` is allowed.
+    cooldown: u32,
+}
 
 /// Helper to build a ModelicaResult with defaults.
 fn result_ok(entity: Entity, session_id: u64) -> ModelicaResult {
@@ -411,6 +539,15 @@ fn apply_input_defaults_validated(
 }
 
 /// The background worker that owns the !Send SimSteppers and cached DAEs.
+///
+/// **Native only.** It is spawned on a real `std::thread` (see
+/// `ModelicaPlugin::build`) and reads/writes the model file on disk. The browser
+/// has neither: wasm dispatches the *same* commands through
+/// [`process_inline_command`] (inline, or in the `lunica_worker` Web Worker
+/// bundle) with the source carried in the message instead of read from a path.
+/// Gating it native-only is what keeps `std::fs` out of the wasm bundle rather
+/// than shipping calls that always `Err` in a browser.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
     let mut steppers: HashMap<Entity, (u64, String, SimStepper)> = HashMap::default();
     let mut current_sessions: HashMap<Entity, u64> = HashMap::default();
@@ -773,9 +910,10 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         if let Some((s_id, _, stepper)) = steppers.get_mut(&entity) {
                             if *s_id == session_id {
                                 for (name, val) in inputs { let _ = stepper.set_input(&name, val); }
-                                let capped_dt = dt.min(MAX_STEP_DT); let sub_dt = capped_dt / STEP_SUBSTEPS as f64;
-                                let mut step_err = None;
-                                for _ in 0..STEP_SUBSTEPS { if let Err(e) = stepper.step(sub_dt) { step_err = Some(e); break; } }
+                                // Macro step: integrate the requested `dt` — the
+                                // gap between the model's clock and the world's —
+                                // as a fixed ladder of micro-steps (A3/A4).
+                                let step_err = integrate_macro_step(stepper, dt).err();
                                 if let Some(e) = step_err {
                                     let mut r = result_ok(entity, session_id);
                                     r.new_time = stepper.time();
@@ -965,10 +1103,21 @@ fn cmd_session(cmd: &ModelicaCommand) -> u64 {
 /// Returns true if two consecutive commands can be squashed (same type, same entity).
 ///
 /// Squashing prevents "back-pressure" lag when the UI sends rapid updates
-/// (e.g., dragging a parameter slider). Only the latest value is processed.
+/// (e.g., dragging a parameter slider). Only the latest value is processed —
+/// the dropped command is acked with a synthetic success (`result_ok`).
+///
+/// **`Step` is NOT squashable** (A5). Squashing is only sound for commands that
+/// are *idempotent setpoints*: `UpdateParameters` (the last value wins — an
+/// earlier slider position has no lasting meaning) and `Compile` (the last
+/// source wins). A `Step` is an **integration**, not a setpoint: collapsing two
+/// `Step`s deletes `dt` of model time from the co-simulation and then reports
+/// SUCCESS for the step that never ran, so the model silently falls behind the
+/// world clock with nothing to show for it.
+///
+/// If back-pressure on `Step` is ever genuinely needed, coalesce by **summing
+/// the `dt`s** — never by dropping one.
 fn is_squashable(last: &ModelicaCommand, next: &ModelicaCommand) -> bool {
     match (last, next) {
-        (ModelicaCommand::Step { entity: e1, .. }, ModelicaCommand::Step { entity: e2, .. }) => e1 == e2,
         (ModelicaCommand::UpdateParameters { entity: e1, .. }, ModelicaCommand::UpdateParameters { entity: e2, .. }) => e1 == e2,
         (ModelicaCommand::Compile { entity: e1, .. }, ModelicaCommand::Compile { entity: e2, .. }) => e1 == e2,
         _ => false,
@@ -1118,10 +1267,8 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
             if let Some((s_id, _, stepper)) = w.steppers.get_mut(&entity) {
                 if *s_id == session_id {
                     for (name, val) in &inputs { let _ = stepper.set_input(name, *val); }
-                    let capped_dt = dt.min(MAX_STEP_DT);
-                    let sub_dt = capped_dt / STEP_SUBSTEPS as f64;
-                    let mut step_err = None;
-                    for _ in 0..STEP_SUBSTEPS { if let Err(e) = stepper.step(sub_dt) { step_err = Some(e); break; } }
+                    // Same macro-step ladder as the native worker (A3/A4).
+                    let step_err = integrate_macro_step(stepper, dt).err();
 
                     if let Some(e) = step_err {
                         send(ModelicaResult {
@@ -1403,7 +1550,16 @@ pub fn process_inline_command<F: FnMut(ModelicaResult)>(
 pub struct ModelicaModel {
     pub model_path: PathBuf,
     pub model_name: String,
+    /// The model's OWN clock — `stepper.time()` as of the last result that
+    /// landed. Lags [`Self::target_time`] by at least the in-flight macro step.
     pub current_time: f64,
+    /// The **world clock this model is coupled to**, in model-local seconds
+    /// (0 at compile/reset). Advanced by exactly one `Time<Fixed>` delta per
+    /// unpaused FIXED TICK — never per render frame (A3). The macro step
+    /// requested each tick is `target_time − current_time`, so a model that
+    /// missed ticks (worker busy, long compile, `rate` burst) catches the time
+    /// up instead of losing it forever.
+    pub target_time: f64,
     pub last_step_time: f64,
     pub session_id: u64,
     pub paused: bool,
@@ -1465,34 +1621,84 @@ pub struct ModelicaModel {
     pub resume_after_compile: bool,
 }
 
-pub fn on_remove_modelica(
-    trigger: On<Remove, ModelicaModel>,
-    channels: Res<ModelicaChannels>,
-) {
+/// Tears the model down on the worker when its `ModelicaModel` component goes away, so a
+/// despawned entity does not leave a `SimStepper` alive in the worker thread.
+/// Registered in `lib.rs` (`.add_observer(worker::on_remove_modelica)`).
+pub fn on_remove_modelica(trigger: On<Remove, ModelicaModel>, channels: Res<ModelicaChannels>) {
     let entity = trigger.entity;
     let _ = channels.tx.send(ModelicaCommand::Despawn { entity });
     info!("[modelica] observer: sent Despawn to Modelica for entity {:?}", entity);
 }
 
-/// Sends `Step` commands for each active model.
+/// Decide this tick's macro step for one model.
 ///
-/// Runs in [`FixedUpdate`] using the fixed timestep delta. All models step with
-/// the same dt, matching Avian physics and wire propagation.
+/// **The macro-step contract** (A3), factored out as a pure function so it is
+/// testable without a worker thread or an `App`:
+///
+/// * `target_time` — the world clock (model-local), advanced one fixed delta per
+///   fixed tick by the caller. NEVER a render-frame quantity.
+/// * `current_time` — the model's own clock, from the last worker result.
+/// * `in_flight` — a `Step` is already out at the worker for this model.
+///
+/// Returns the `dt` to request, or `None` for "nothing to do this tick".
+///
+/// The requested `dt` is the **whole deficit**, clamped to
+/// [`MAX_MACRO_STEP_DT`]: a model that fell behind asks for a bigger macro step
+/// and closes the gap over the next few ticks, instead of silently dropping the
+/// ticks it missed (the old code always sent `Time<Fixed>::delta` and skipped
+/// entirely whenever a step was in flight — so at 30 FPS the model ran at half
+/// speed, and at `rate = 10` it ran 10× too slow).
+///
+/// While a step is in flight we do not dispatch another (one macro step per
+/// model at a time — the worker owns one `SimStepper` per entity). The deficit
+/// is NOT lost: it keeps growing and the next dispatched step carries it.
+pub(crate) fn plan_macro_step(target_time: f64, current_time: f64, in_flight: bool) -> Option<f64> {
+    if in_flight {
+        return None;
+    }
+    let deficit = target_time - current_time;
+    if deficit < MIN_MACRO_STEP_DT {
+        // Already at (or, through micro-step rounding, just past) the
+        // communication point. Overshoot corrects itself: the deficit goes
+        // slightly negative and the next tick's fixed delta absorbs it.
+        return None;
+    }
+    Some(deficit.min(MAX_MACRO_STEP_DT))
+}
+
+/// Sends `Step` commands for each active model — **the co-simulation master's
+/// macro-step dispatch**.
+///
+/// Runs in [`FixedUpdate`]. Each live model's clock is driven toward
+/// `target_time`, which advances by exactly one `Time<Fixed>` delta per FIXED
+/// TICK. Model time is therefore a pure function of the fixed-step clock: it does
+/// not depend on the render frame rate, on GPU load, or on window focus.
+///
+/// Also measures the model-vs-world lag and publishes it to [`CosimLag`] — the
+/// only thing in the system that compares the two clocks at all.
 pub fn spawn_modelica_requests(
     channels: Res<ModelicaChannels>,
     time: Res<Time<Fixed>>,
     mut q_models: Query<(Entity, &mut ModelicaModel)>,
+    mut lag: ResMut<CosimLag>,
     // Auto-compile request goes out as a core event; the UI relays it to the
     // `CompileModel` command. Core no longer references the UI command.
     mut compile_requests: MessageWriter<crate::CompileRequested>,
 ) {
-    let dt = time.delta_secs_f64();
+    // The FIXED delta — constant (1/`FIXED_HZ`) by construction. `rate` bursts
+    // show up as MORE fixed ticks, never as a longer one, so accumulating it
+    // per tick is exactly "one tick of world time".
+    let fixed_dt = time.delta_secs_f64();
+
+    let mut worst_secs = 0.0_f64;
+    let mut worst_entity = None;
+    let mut live_models = 0usize;
 
     for (entity, mut model) in q_models.iter_mut() {
-        if model.is_stepping {
-            continue;
-        }
         if model.paused {
+            // A paused model's clock is frozen WITH the world's: the target does
+            // not advance, so unpausing does not trigger a catch-up burst for
+            // time the model was never supposed to simulate.
             continue;
         }
 
@@ -1500,12 +1706,13 @@ pub fn spawn_modelica_requests(
         // but no Compile has succeeded yet — the worker has no stepper
         // and a Step would just bounce back as "Click Compile first".
         // Auto-trigger CompileModel instead. The observer flips
-        // `is_stepping = true` and bumps `session_id`, so we won't
-        // re-trigger on subsequent frames; on a successful result the
-        // response handler sets `is_compiled = true` and unpauses.
+        // `is_compiling`/`is_stepping` and bumps `session_id`, so the guard
+        // below stops us re-triggering on subsequent ticks; on a successful
+        // result the response handler sets `is_compiled = true` and unpauses.
         if !model.is_compiled {
             let doc = model.document;
-            if doc != lunco_doc::DocumentId::default() {
+            let compile_in_flight = model.is_compiling || model.is_stepping;
+            if doc != lunco_doc::DocumentId::default() && !compile_in_flight {
                 compile_requests.write(crate::CompileRequested {
                     doc,
                     class: if model.model_name.is_empty() {
@@ -1520,10 +1727,29 @@ pub fn spawn_modelica_requests(
                     resume_after_compile: false,
                 });
             }
-            // Don't ship a Step this frame either way — let the
-            // compile flow run.
+            // Don't ship a Step this tick either way — let the
+            // compile flow run. The model isn't running yet, so its target
+            // clock stays put (no phantom catch-up debt accrues while the
+            // compile is in flight).
             continue;
         }
+
+        // ── The world clock advances by exactly one FIXED tick ──────────────
+        model.target_time += fixed_dt;
+
+        // ── Lag measurement (A3.2) ─────────────────────────────────────────
+        live_models += 1;
+        let lag_secs = (model.target_time - model.current_time).abs();
+        if lag_secs > worst_secs {
+            worst_secs = lag_secs;
+            worst_entity = Some(entity);
+        }
+
+        // ── Macro step to the communication point (A3.1) ────────────────────
+        let Some(dt) = plan_macro_step(model.target_time, model.current_time, model.is_stepping)
+        else {
+            continue;
+        };
 
         let inputs: Vec<(String, f64)> = model.inputs.iter()
             .map(|(name, val)| (name.clone(), *val))
@@ -1538,6 +1764,25 @@ pub fn spawn_modelica_requests(
             inputs,
             dt,
         });
+    }
+
+    lag.worst_secs = worst_secs;
+    lag.worst_entity = worst_entity;
+    lag.models = live_models;
+
+    // Rate-limited divergence alarm. A sustained lag means the forces avian is
+    // integrating come from a model state this far in the past — the coupling is
+    // no longer a co-simulation, it's an extrapolation.
+    if lag.cooldown > 0 {
+        lag.cooldown -= 1;
+    } else if worst_secs > LAG_WARN_SECS {
+        warn!(
+            "[cosim] Modelica model clock is {:.3}s behind the fixed-step world clock \
+             (entity {:?}, {} live model(s)). The solver cannot keep up with the sim rate; \
+             forces are being computed from a stale model state.",
+            worst_secs, worst_entity, live_models,
+        );
+        lag.cooldown = LAG_WARN_COOLDOWN_TICKS;
     }
 }
 
@@ -1820,12 +2065,18 @@ pub fn handle_modelica_responses(
                 }
 
                 model.current_time = 0.0;
+                model.target_time = 0.0;
                 model.last_step_time = 0.0;
             } else if result.is_parameter_update {
                 model.current_time = 0.0;
+                model.target_time = 0.0;
                 model.last_step_time = 0.0;
             } else if result.is_reset {
                 model.current_time = 0.0;
+                // The world clock this model is coupled to restarts WITH it —
+                // otherwise the fresh model would immediately owe the catch-up
+                // path every second the old one had run (A3).
+                model.target_time = 0.0;
                 model.last_step_time = 0.0;
                 model.variables.clear();
                 // Preserve inputs and parameters
@@ -1874,5 +2125,195 @@ pub fn handle_modelica_responses(
                 });
             }
         }
+    }
+}
+
+// ===========================================================================
+// The macro-step contract (A3/A4/A5)
+// ===========================================================================
+#[cfg(test)]
+mod macro_step_tests {
+    use super::*;
+
+    /// Stand-in for the worker: integrate what the worker WOULD integrate for a
+    /// requested `dt` — an integer number of fixed micro-steps — and return the
+    /// model's new own-clock value. This is the same arithmetic
+    /// [`integrate_macro_step`] performs, without a `SimStepper`.
+    fn worker_integrate(current_time: f64, dt: f64) -> f64 {
+        current_time + micro_steps_for(dt) as f64 * LIVE_MICRO_DT
+    }
+
+    /// Drive N fixed ticks, resolving the in-flight step after `latency_ticks`
+    /// ticks (0 = the worker answers within the same tick). Returns
+    /// `(model_time, world_time)`.
+    ///
+    /// `latency_ticks` stands in for "how many fixed ticks the worker takes" —
+    /// i.e. exactly the axis that used to be the RENDER FRAME. The contract is
+    /// that it must not change the model's time.
+    fn run_ticks(ticks: u32, latency_ticks: u32) -> (f64, f64) {
+        let fixed_dt = lunco_core::SECS_PER_TICK;
+        let mut model_time = 0.0_f64;
+        let mut target_time = 0.0_f64;
+        // (dt, ticks-remaining-until-it-lands)
+        let mut in_flight: Option<(f64, u32)> = None;
+
+        for _ in 0..ticks {
+            // `handle_modelica_responses` — the result lands, model clock moves.
+            if let Some((dt, 0)) = in_flight {
+                model_time = worker_integrate(model_time, dt);
+                in_flight = None;
+            } else if let Some((dt, n)) = in_flight {
+                in_flight = Some((dt, n - 1));
+            }
+
+            // `spawn_modelica_requests` — one fixed tick of world time.
+            target_time += fixed_dt;
+            if let Some(dt) = plan_macro_step(target_time, model_time, in_flight.is_some()) {
+                in_flight = Some((dt, latency_ticks));
+            }
+        }
+        // The world stops; let the model catch up. While the world is MOVING the
+        // model is legitimately up to (latency + 1) ticks behind — that is the
+        // in-flight step plus the tick that elapsed while it was in flight, and
+        // it is bounded, not cumulative. The A3 contract is that the deficit is
+        // never DISCARDED: once the world stops advancing, the model converges on
+        // it. So drain to convergence rather than landing a single step, which is
+        // what `spawn_modelica_requests` does on any tick the world is paused.
+        if let Some((dt, _)) = in_flight.take() {
+            model_time = worker_integrate(model_time, dt);
+        }
+        while let Some(dt) = plan_macro_step(target_time, model_time, false) {
+            model_time = worker_integrate(model_time, dt);
+        }
+        (model_time, target_time)
+    }
+
+    /// **The A3 regression test.** Model time must equal world time after N
+    /// ticks REGARDLESS of how long the worker (read: the render frame) takes to
+    /// answer. Before the fix, a worker/frame latency of k ticks made the model
+    /// run k+1× too slow, permanently.
+    #[test]
+    fn model_time_tracks_world_time_at_any_worker_latency() {
+        const TICKS: u32 = 600; // 10 s of world time at 60 Hz
+        let (_, world) = run_ticks(TICKS, 0);
+
+        for latency in [0_u32, 1, 2, 5, 10] {
+            let (model, w) = run_ticks(TICKS, latency);
+            assert!((w - world).abs() < 1e-9, "world clock must not depend on latency");
+            // Converged to within one micro-step (the rounding residual), NOT
+            // to within a factor of (latency + 1).
+            let err = (model - world).abs();
+            assert!(
+                err <= LIVE_MICRO_DT,
+                "latency={latency}: model={model:.6} world={world:.6} err={err:.6} \
+                 (> one micro-step: the model is losing time)"
+            );
+        }
+    }
+
+    /// The specific pre-fix failure: a worker that answers every OTHER tick used
+    /// to halve the model's rate. Assert we no longer lose ~half the time.
+    #[test]
+    fn every_other_tick_worker_does_not_halve_model_time() {
+        let (model, world) = run_ticks(600, 1);
+        assert!(
+            model > world * 0.99,
+            "model={model:.4} world={world:.4}: model is running slow (half-rate regression)"
+        );
+    }
+
+    /// A long stall (worker busy for 120 ticks — a compile) must be CAUGHT UP,
+    /// not lost. The per-step clamp bounds each macro step; several ticks close
+    /// the gap.
+    #[test]
+    fn stalled_model_catches_up_instead_of_losing_time() {
+        let fixed_dt = lunco_core::SECS_PER_TICK;
+        let mut model_time = 0.0_f64;
+        let mut target_time = 0.0_f64;
+
+        // 120 ticks of world time pass with the worker unavailable.
+        for _ in 0..120 {
+            target_time += fixed_dt;
+        }
+        assert!(model_time < target_time - 1.0);
+
+        // Now the worker answers immediately, one macro step per tick.
+        for _ in 0..200 {
+            target_time += fixed_dt;
+            if let Some(dt) = plan_macro_step(target_time, model_time, false) {
+                assert!(
+                    dt <= MAX_MACRO_STEP_DT + 1e-12,
+                    "macro step must stay clamped: {dt}"
+                );
+                model_time = worker_integrate(model_time, dt);
+            }
+        }
+        assert!(
+            (model_time - target_time).abs() <= LIVE_MICRO_DT,
+            "model={model_time:.4} world={target_time:.4}: the 2 s stall was never caught up"
+        );
+    }
+
+    /// The deficit is clamped per step (so one long gap can't hand the solver a
+    /// 10 s macro step), but never discarded.
+    #[test]
+    fn macro_step_is_clamped_but_deficit_survives() {
+        let dt = plan_macro_step(10.0, 0.0, false).expect("a 10 s deficit must request a step");
+        assert!((dt - MAX_MACRO_STEP_DT).abs() < 1e-12);
+        // In flight ⇒ no second step, but the deficit is still there next tick.
+        assert!(plan_macro_step(10.0, 0.0, true).is_none());
+    }
+
+    /// At the communication point, nothing is dispatched (and a sub-micro-step
+    /// overshoot is absorbed rather than integrated).
+    #[test]
+    fn no_step_at_the_communication_point() {
+        assert!(plan_macro_step(1.0, 1.0, false).is_none());
+        assert!(plan_macro_step(1.0, 1.0 + LIVE_MICRO_DT, false).is_none());
+        assert!(plan_macro_step(1.0 + LIVE_MICRO_DT, 1.0, false).is_some());
+    }
+
+    /// The micro-step ladder is an integer function of `dt` alone — same on
+    /// every peer, clamped, and never zero for a positive `dt` (A4).
+    #[test]
+    fn micro_step_ladder_is_deterministic_and_clamped() {
+        assert_eq!(micro_steps_for(0.0), 0);
+        assert_eq!(micro_steps_for(-1.0), 0);
+        assert_eq!(micro_steps_for(LIVE_MICRO_DT), 1);
+        assert_eq!(micro_steps_for(lunco_core::SECS_PER_TICK), 3);
+        assert_eq!(micro_steps_for(2.0 * lunco_core::SECS_PER_TICK), 6);
+        assert_eq!(micro_steps_for(1e-9), 1);
+        assert_eq!(micro_steps_for(1_000.0), MAX_MICRO_STEPS_PER_MACRO);
+    }
+
+    /// **A5.** `Step` is an integration, not a setpoint: two queued `Step`s must
+    /// NEVER collapse (the dropped one used to be acked with a fake success,
+    /// deleting `dt` of model time). Setpoint-shaped commands still squash.
+    #[test]
+    fn step_is_not_squashable() {
+        let e = Entity::PLACEHOLDER;
+        let step = |dt: f64| ModelicaCommand::Step {
+            entity: e,
+            session_id: 7,
+            model_path: PathBuf::new(),
+            model_name: "M".into(),
+            inputs: Vec::new(),
+            dt,
+        };
+        assert!(
+            !is_squashable(&step(0.016), &step(0.016)),
+            "two Steps collapsing silently deletes simulated time"
+        );
+
+        let params = || ModelicaCommand::UpdateParameters {
+            entity: e,
+            session_id: 7,
+            model_name: "M".into(),
+            source: String::new(),
+        };
+        assert!(
+            is_squashable(&params(), &params()),
+            "UpdateParameters is an idempotent setpoint — it SHOULD squash"
+        );
     }
 }

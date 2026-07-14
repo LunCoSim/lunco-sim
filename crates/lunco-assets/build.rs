@@ -6,6 +6,13 @@
 //! otherwise the spawn/shader catalogs come up empty on web (the `.usda`/`.wgsl`
 //! files ship in the bundle but can't be `readdir`'d). Only the catalog
 //! extensions (`usda`, `wgsl`) are baked, keeping the manifest small.
+//!
+//! Build scripts run at compile time on the *host*, never on wasm, so the
+//! workspace `disallowed_methods` ban on `std::fs` (a wasm-runtime foot-gun)
+//! does not apply here. `clippy.toml`'s header already names `build.rs` as
+//! exempt; cargo has no path-scoped lint config, so the exemption has to be
+//! written out.
+#![allow(clippy::disallowed_methods)]
 
 use std::path::Path;
 

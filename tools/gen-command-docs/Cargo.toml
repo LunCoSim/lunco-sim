@@ -3,14 +3,19 @@ name = "gen-command-docs"
 version = "0.0.0"
 edition = "2021"
 publish = false
-description = "Auto-generate docs/commands-reference.md from #[Command] structs in source."
+description = "Generate docs/commands-reference.md from the app's runtime DiscoverSchema."
 
+# A WORKSPACE MEMBER (see the root `Cargo.toml`'s `members`). It used to carry an
+# empty `[workspace]` table, which made it a separate workspace: never built,
+# never linted, never tested by any `--workspace` command — and it is the thing
+# that generates the command docs. Bit-rot with a blast radius.
+#
+#   cargo run -p gen-command-docs -- --schema <schema.json>
 [dependencies]
 syn = { version = "2", features = ["full", "extra-traits", "visit"] }
 quote = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
 
-# Standalone package: the empty [workspace] table excludes this from the main
-# Cargo workspace, so it has its own target dir and never touches the app build
-# graph. Run with:
-#   cargo run --manifest-path tools/gen-command-docs/Cargo.toml
-[workspace]
+[lints]
+workspace = true

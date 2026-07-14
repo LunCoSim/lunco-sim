@@ -4,11 +4,21 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# Render ASSET-STORE bevy features stay always-on (the catalog/commands path
-# spawns USD entities with meshes + materials, and the headless server still
-# runs RenderPlugin in `backends:None`). The editor-only render-effect + picking
-# features (bevy_post_process/bevy_anti_alias/mesh_picking) ride the `ui` feature.
-bevy = { workspace = true, features = ["bevy_pbr", "bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light"] }
+# NO `bevy_pbr` — this crate names no material type (`MeshMaterial3d`,
+# `StandardMaterial`, `ShaderMaterial`). Appearance is stated as INTENT
+# (`lunco_render::PbrLook`, `lunco_materials::ShaderLook`) and bound by
+# `lunco-render-bevy`; see `docs/architecture/render-decoupling.md`. The compiler
+# is the enforcement — put `bevy_pbr` back and the rule quietly rots.
+#
+# `bevy_shader` is here for the live shader-AUTHORING commands only
+# (`SetShaderSource`/`CreateShader`/`ImportShader` compile WGSL into
+# `Assets<Shader>` so an edit renders without a disk round-trip). It pulls `naga`
+# but NOT wgpu; moving those three onto an intent+binder of their own is the
+# follow-up that would take naga out of the headless server too.
+bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "bevy_shader"] }
+# Appearance intent (render-free): `PbrLook`. Every PBR material site in this crate
+# goes through it instead of `Assets<StandardMaterial>`.
+lunco-render = { path = "../lunco-render" }
 # egui inspector, theme, transform gizmo, and the picking backend are all editor
 # concerns — optional, on `ui`. `commands::SpawnCommandPlugin` (the only thing a
 # headless server adds from this crate) uses none of them.
@@ -75,6 +85,12 @@ ui = [
     "bevy/bevy_post_process",
     "bevy/bevy_anti_alias",
     "bevy/mesh_picking",
+    # Immediate-mode gizmo overlays: `physics_viz` (velocity/force arrows),
+    # `joint_viz` (joint + wheel-force lines) and `selection` (selection bounds)
+    # all take a `Gizmos` param, and all three are `ui`-gated. The crate used to
+    # get `bevy_gizmos` for free from another crate's feature union; the render
+    # decoupling took that away, so declare it where it is actually used.
+    "bevy/bevy_gizmos",
 ]
 
 [lints]

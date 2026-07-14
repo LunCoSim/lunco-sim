@@ -52,6 +52,56 @@ do not **predict** it. No determinism contract, no rollback, no reconciliation.
 inside the client-prediction loop. That is Tier A, and Tier A needs a different
 solver class.
 
+### 2a. Implementation status of the tier contract (read this before trusting §2)
+
+The tier contract above is a **design**. What is actually in the code, as of
+2026-07-12 (finding `A4`):
+
+| Piece | Status |
+|---|---|
+| `CosimTier` component (`A`/`B`/`C`) — `crates/lunco-cosim/src/connection.rs` | **implemented** |
+| Declared in USD as `lunco:cosim:tier`, read at prim-read time (`lunco-usd-sim/src/cosim.rs`) | **implemented** |
+| Gate: a non-Tier-A (or **undeclared**) model wiring a force/torque port on a client-predicted `Dynamic` body | **warns at wire-build time** (`rewire_usd_connections`); does **not** refuse the wire |
+| `lunco:replication` → always-on `Replication` metadata (§5, §"declared in USD") | **not implemented** — no code reads it |
+| Tier ↔ solver/caps validation at load ("rejected loudly on conflict") | **not implemented** |
+| A fixed-step deterministic (Tier-A-grade) solver | **not available** — see below |
+
+The live/interactive stepper no longer shares the batch runner's solver
+configuration (it used to: adaptive-implicit BDF/diffsol, `atol = rtol = 1e-6`,
+driven at 3 fixed sub-steps — an adaptive implicit solver inside the
+client-predicted loop, i.e. precisely the §1 anti-goal). The live path now has its
+own configuration, in `worker::live_stepper_options`:
+
+- **explicit family** (`SimSolverMode::RkLike`) — no Newton/LU iteration whose
+  *count* varies with the machine's rounding;
+- a **fixed micro-step ladder**: every macro step is an integer number of
+  `LIVE_MICRO_DT = SECS_PER_TICK / 3` micro-steps (`micro_steps_for(dt)`), so the
+  model's stop-time lattice is a pure function of the fixed-step clock and the
+  requested `dt` — identical on every peer;
+- a fixed tolerance, **not** the model's `experiment(Tolerance=…)` annotation (an
+  offline-accuracy knob must not reach into the realtime loop).
+
+**This is not yet Tier-A-grade determinism, and the doc will not pretend it is.**
+rumoca's `RkLike` backend is an *embedded* RK45: its internal sub-step size is
+still error-adapted (`adapt_step(h, error_norm)`), so a micro-step may split
+differently on two machines. rumoca exposes no fixed-tableau, error-control-free
+stepper today. Driving it at fixed micro-steps bounds the divergence to *within*
+one micro-step and pins the macro stop-times, which is as far as the client layer
+can go alone.
+
+> **TODO(A4)** — to close this properly:
+> 1. *Upstream (rumoca):* a fixed-step tableau with no error control — the
+>    "Realtime profile" of §7. This is the load-bearing missing piece; until it
+>    lands, no Modelica model is genuinely Tier A.
+> 2. *Enforcement:* promote the `rewire_usd_connections` warn to a **refusal**
+>    (drop the wire, surface a diagnostic) once scenes actually declare
+>    `lunco:cosim:tier`. Enforcement point:
+>    `crates/lunco-usd-sim/src/cosim.rs::rewire_usd_connections`, gate function
+>    `lunco_cosim::CosimTier::may_drive_predicted_physics`.
+> 3. *Replication:* wire `lunco:replication` (§5) to the tier, or delete it from
+>    this doc in favour of `lunco:cosim:tier` — today it is authored nowhere and
+>    read nowhere.
+
 ## 3. Realtime budget
 
 Adaptive implicit solvers can blow a frame budget on stiff systems — we have
@@ -347,10 +397,12 @@ BackendRegistry formalisation.
    nothing — §5), turning "what do we replicate?" into a lookup.
 2. **Adaptive solvers are for Tier B only.** They are non-deterministic across
    peers and must never enter the client-prediction loop (Tier A).
-2a. **The tier is declared in USD (`lunco:replication`), never inferred** — it sets
-   the always-on `Replication` metadata at spawn, killing the heuristic (same as the
-   schema-driven id/authz codec). Default `local`; declared Tier-A intent is still
-   validated against the model's solver/caps and rejected on conflict.
+2a. **The tier is declared in USD, never inferred.** *Implemented* as
+   `lunco:cosim:tier ∈ {A, B, C}` → the `CosimTier` component, read at prim-read
+   time and gated at wire-build time (§2a). *Designed, not implemented:*
+   `lunco:replication` → the always-on `Replication` metadata at spawn, and the
+   load-time tier ↔ solver/caps validation ("rejected on conflict"). Undeclared is
+   **not** Tier A: it may not drive predicted physics.
 3. **Tier A Modelica = a Realtime profile (§7): a special fixed-step deterministic
    solver + compiler-enforced model limitations**, authored in plain Modelica. Not
    "make the adaptive solver deterministic" — constrain the models instead. Robots

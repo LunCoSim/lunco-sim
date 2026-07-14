@@ -41,6 +41,12 @@ impl DocumentDiagnostics {
 
     /// Transition to `Compiling` and stamp the start time (clears stale
     /// diagnostics). Pair with [`mark_finished`](Self::mark_finished).
+    // `Instant` here is `bevy::platform::time::Instant` — the portable clock
+    // (std on native, web-time on wasm). On the *native* target bevy's re-export
+    // resolves to the same `DefId` as `std::time::Instant`, so clippy's
+    // `disallowed_methods` ban (which exists to catch the wasm-panicking std
+    // clock) fires on correct code. Documented false positive; see clippy.toml.
+    #[allow(clippy::disallowed_methods)]
     pub fn mark_started(&mut self, id: DocumentId) {
         let e = self.by_doc.entry(id).or_default();
         e.state = CompileState::Compiling;

@@ -1,4 +1,8 @@
-//! `UndoEdit` / `RedoEdit` — the ONE undo.
+//! `UndoDocument` / `RedoDocument` — the ONE undo, tested at the document level.
+//!
+//! These exercise `DocumentHost::undo()/redo()` directly: the command observers
+//! (`on_undo_usd_document` / `on_redo_usd_document` in `src/commands.rs`) are a thin
+//! per-domain dispatch over exactly this, so the invariants live here.
 //!
 //! Every authored edit reaches the world as a `UsdOp`, and `UsdDocument::apply` hands
 //! back a typed inverse. So undo is a property of the document and covers every verb

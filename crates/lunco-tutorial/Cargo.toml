@@ -14,7 +14,11 @@ lunco-core = { path = "../lunco-core" }
 # and `TutorialHud` to clear the HUD on skip.
 lunco-workbench = { path = "../lunco-workbench" }
 # `ApiCommandEvent` — the fidelity toggle & notifications dispatch generically.
-lunco-api = { path = "../lunco-api" }
+# `default-features = false` is LOAD-BEARING — lunco-api's defaults include its
+# `render` feature (→ bevy_render → wgpu/naga), and cargo unifies features across
+# the graph, so omitting it re-links the GPU stack into the `--no-ui` server.
+# See docs/architecture/render-decoupling.md.
+lunco-api = { path = "../lunco-api", default-features = false }
 # Persisted per-tutorial progress (completed set + last-started).
 lunco-settings = { path = "../lunco-settings" }
 # Workspace structure and active Twin session tracking.

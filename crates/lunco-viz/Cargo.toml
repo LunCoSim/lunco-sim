@@ -10,6 +10,11 @@ bevy_egui = { workspace = true }
 egui_plot = { workspace = true }
 lunco-workbench = { path = "../lunco-workbench" }
 lunco-theme = { path = "../lunco-theme" }
+# The signal DATA model (SignalRegistry / SignalRef / ScalarHistory). Render-free, and
+# re-exported from `signal.rs` so existing `lunco_viz::SignalRegistry` callers are
+# unaffected. It lives outside this crate so `lunco-telemetry` can push samples into the
+# ring buffer without linking bevy_egui → bevy_render (this crate does).
+lunco-signal = { path = "../lunco-signal" }
 # Used by `kinds::canvas_plot_node` to implement
 # `lunco_canvas::NodeVisual` so plots can live as first-class nodes
 # inside any `lunco_canvas::Scene` (Simulink-style scope blocks,

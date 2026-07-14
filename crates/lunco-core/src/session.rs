@@ -616,6 +616,144 @@ pub struct VesselInputLog {
     pub last_active_tick: u64,
 }
 
+/// Which prediction path a divergence sample came from (see [`DivergenceStats`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PredictionKind {
+    /// The body this peer owns and drives (`OwnedLocally`) — error measured at the
+    /// **acked input seq**, so the client's legitimate latency lead cancels.
+    #[default]
+    Owned,
+    /// A free locally-simulated body (`PredictedDynamic`: props, bumped rocks,
+    /// remote rovers under the contact gate) — error measured against the delayed
+    /// authoritative curve it is being reconciled onto.
+    Free,
+}
+
+/// Per-body divergence gauge for one gid.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BodyDivergence {
+    pub kind: PredictionKind,
+    /// Most recent |authority − prediction| (m).
+    pub last_m: f32,
+    /// Worst value seen since the body started being predicted.
+    pub max_m: f32,
+    /// Consecutive samples above [`DivergenceStats::warn_m`].
+    pub over_streak: u32,
+    /// How many times this body was force-rebaselined (hard snap to authority).
+    pub rebaselines: u32,
+}
+
+/// CLIENT-side desync detection (review N3).
+///
+/// Before this there was **no way to observe a desync in the field**: the only
+/// backstop was a *silent* per-body snap, and the owned-body half of it could be
+/// permanently disabled by the stale-ack bug (see [`AppliedInputSeq`]). A client
+/// could drift indefinitely and nothing said so — not a log line, not a counter.
+///
+/// Every client-side reconcile feeds a sample here, so each locally-simulated body
+/// carries a live error, a running max, and a rebaseline count. Sustained error
+/// past [`Self::warn_m`] is logged once per body per streak — the "I diverged"
+/// signal — and the existing snap/teleport paths count themselves as rebaselines.
+///
+/// **Deliberately not a wire state-hash.** A rolling digest of the host's pose set
+/// would tell the client only what each snapshot already tells it, body by body,
+/// with authority attached — and a client cannot recompute a host digest for
+/// *interpolated* bodies at all (it holds no tick-aligned local state for them; it
+/// holds the host's). Comparing local simulation against received authority is the
+/// same test, cheaper, and it names the body that diverged. Empty on host/standalone.
+#[derive(Resource, Debug)]
+pub struct DivergenceStats {
+    /// gid → gauge.
+    pub bodies: HashMap<u64, BodyDivergence>,
+    /// Error (m) above which a sample counts as divergence.
+    pub warn_m: f32,
+    /// Consecutive over-threshold samples before the client says so out loud.
+    pub warn_streak: u32,
+}
+
+impl Default for DivergenceStats {
+    fn default() -> Self {
+        // 1.0 m is comfortably above the reconcile dead-zones (0.40 m) and the
+        // measured free-driving prediction error (~13–27 cm per 20 Hz ack), and well
+        // below the 6 m gross-desync snap — so a sustained metre of error is real
+        // divergence, not noise, and it is reported BEFORE the snap papers over it.
+        Self { bodies: HashMap::new(), warn_m: 1.0, warn_streak: 5 }
+    }
+}
+
+impl DivergenceStats {
+    /// Record one |authority − prediction| sample for `gid`. Returns `true` exactly
+    /// on the sample where the body crosses into a sustained divergence (so the
+    /// caller logs once per streak, not once per tick).
+    pub fn observe(&mut self, gid: u64, kind: PredictionKind, err_m: f32) -> bool {
+        let warn_m = self.warn_m;
+        let warn_streak = self.warn_streak;
+        let b = self.bodies.entry(gid).or_default();
+        b.kind = kind;
+        b.last_m = err_m;
+        b.max_m = b.max_m.max(err_m);
+        if err_m > warn_m {
+            b.over_streak += 1;
+            b.over_streak == warn_streak
+        } else {
+            b.over_streak = 0;
+            false
+        }
+    }
+
+    /// Note that `gid` was force-rebaselined (hard snap / teleport to authority).
+    pub fn note_rebaseline(&mut self, gid: u64) {
+        let b = self.bodies.entry(gid).or_default();
+        b.rebaselines += 1;
+        b.over_streak = 0;
+    }
+
+    /// The worst live divergence `(gid, metres)` — the gauge the diagnostics export.
+    pub fn worst(&self) -> Option<(u64, f32)> {
+        self.bodies
+            .iter()
+            .max_by(|a, b| a.1.last_m.total_cmp(&b.1.last_m))
+            .map(|(&g, b)| (g, b.last_m))
+    }
+
+    /// Forget a body (despawn / no longer predicted).
+    pub fn forget(&mut self, gid: u64) {
+        self.bodies.remove(&gid);
+    }
+}
+
+/// A reconciliation residual parked on a predicted body, drained a little per
+/// fixed tick in **physics space** (`Position`/`Rotation`), never on `Transform`.
+///
+/// **Why not `Transform`.** The sandbox runs
+/// `PhysicsInterpolationPlugin::interpolate_all()`, so `bevy_transform_interpolation`
+/// owns every body's `Transform` at render rate and treats ANY external `Transform`
+/// write as a teleport — resetting its easing. An offset written there therefore
+/// *disabled* interpolation for the corrected body (≈ continuously while driving)
+/// and the rover rendered at raw fixed-tick steps: the "jitters while just holding
+/// the key" the host never showed. Parking the residual here and nudging
+/// `Position`/`Rotation` lets avian writeback + interpolation render it smoothly
+/// with no second writer anywhere.
+///
+/// **Why it lives in `lunco-core`** (review A6): `lunco-networking`'s prediction
+/// diagnostics read this component, and that was one of exactly two symbols pulling
+/// the whole 13.4k-LOC editor crate into every networking build. The producer/drain
+/// systems stay in `lunco-sandbox-edit` (which re-exports the type).
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct PendingCorrection {
+    /// Remaining position delta to apply (world metres).
+    pub pos: Vec3,
+    /// Remaining orientation delta (applied as `rot * current`).
+    pub rot: Quat,
+}
+
+impl PendingCorrection {
+    /// Residual small enough to drop the component (the drain is done).
+    pub fn is_negligible(&self) -> bool {
+        self.pos.length_squared() < 1e-8 && self.rot.angle_between(Quat::IDENTITY) < 1e-4
+    }
+}
+
 /// Client-side unacked input logs keyed by [`crate::GlobalEntityId`] raw `u64`.
 /// Populated only for vessels this peer owns + predicts (`OwnedLocally`); the
 /// reconcile drops acked frames and replays the rest over the owned avian body.
@@ -663,11 +801,55 @@ pub struct BufferedClientInputs {
 impl BufferedClientInputs {
     /// Record a forwarded client input (`seq` → `writes`) for `gid`. `seq` 0 is
     /// reserved ("no input") and ignored.
+    ///
+    /// **Server-side seq validation** (review N1): a `seq` at or below the cursor is
+    /// already integrated (a duplicate, or a reorder on the lossy `ControlStream`),
+    /// and once a stream is established a `seq` more than [`MAX_SEQ_JUMP`] ahead of
+    /// the cursor is not a plausible continuation of a once-per-fixed-tick stream.
+    /// Both are dropped. Without the upper check a single `SetPorts { seq: u32::MAX }`
+    /// would park the cursor at the top of the range and every genuine input after it
+    /// would sit in the queue unconsumed forever.
+    ///
+    /// The window is NOT applied at cursor 0 (no stream yet): a client's `seq` counter
+    /// is per (vessel, client) and does not restart when the vessel changes hands, so
+    /// a peer re-possessing a rover it drove earlier legitimately resumes at a high
+    /// seq against a freshly-cleared buffer. See `AppliedInputSeq::record`.
     pub fn push(&mut self, gid: u64, seq: u32, writes: Vec<(String, f64)>) {
         if seq == 0 {
             return;
         }
+        let cursor = self.cursor(gid);
+        if seq <= cursor {
+            return; // already integrated (duplicate / reorder behind the cursor)
+        }
+        // Reference = the highest seq we already know about for this gid (consumed or
+        // queued). Zero only before the very first input, where any seq is the
+        // stream's baseline.
+        let highest = self
+            .pending
+            .get(&gid)
+            .and_then(|m| m.keys().next_back().copied())
+            .unwrap_or(0)
+            .max(cursor);
+        if highest != 0 && seq > highest && seq - highest > MAX_SEQ_JUMP {
+            return;
+        }
         self.pending.entry(gid).or_default().insert(seq, writes);
+    }
+
+    /// The highest `seq` actually consumed for `gid` so far (0 = none). This — not
+    /// `max(seq)` over everything the wire delivered — is the honest reconcile ack:
+    /// the host integrates ONE buffered input per fixed tick, so a render frame that
+    /// drains K forwarded `SetPorts` has still only run one of them.
+    pub fn cursor(&self, gid: u64) -> u32 {
+        self.applied.get(&gid).copied().unwrap_or(0)
+    }
+
+    /// Forget everything buffered for `gid` (despawn / ownership change).
+    pub fn clear_gid(&mut self, gid: u64) {
+        self.pending.remove(&gid);
+        self.applied.remove(&gid);
+        self.last_writes.remove(&gid);
     }
 
     /// Consume ONE input for `gid` this fixed tick, in `seq` order: the smallest
@@ -681,7 +863,7 @@ impl BufferedClientInputs {
             let Some(map) = self.pending.get(&gid) else {
                 return self.last_writes.get(&gid).cloned();
             };
-            match map.range((cursor + 1)..).next().map(|(s, _)| *s) {
+            match map.range(cursor.saturating_add(1)..).next().map(|(s, _)| *s) {
                 None => return self.last_writes.get(&gid).cloned(),
                 Some(ns) if map.len() > cap => *map.keys().next_back().unwrap_or(&ns),
                 Some(ns) => ns,
@@ -699,12 +881,140 @@ impl BufferedClientInputs {
     }
 }
 
-/// Host-side record of the highest input `seq` applied per gid, written when a
-/// `SetPorts` control command is authorized + applied. Stamped into each snapshot's
+/// One gid's ack watermark **and the owner it belongs to**.
+///
+/// The owner is what makes the watermark meaningful: an input `seq` stream is
+/// per-(vessel, owning peer), and a new owner restarts its stream at 1. See
+/// [`AppliedInputSeq`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AppliedSlot {
+    /// Session whose `seq` stream this watermark tracks (`None` = unowned).
+    pub owner: Option<SessionId>,
+    /// Highest `seq` from that owner the host has actually **integrated** (0 = none).
+    pub seq: u32,
+}
+
+/// Largest forward `seq` jump the host will accept in one step.
+///
+/// The owning client emits one `seq` per fixed tick and the host acks what it
+/// integrates, so a legitimate gap is a handful of ticks (bounded by the input
+/// jitter buffer's skip-ahead cap). A larger jump is either garbage or hostile —
+/// e.g. a single `SetPorts { seq: u32::MAX }`, which under the old "watermark =
+/// max(seq)" rule permanently poisoned the gid for *every* future owner (no later
+/// seq could ever exceed it, so no ack was ever new again and the owning client's
+/// reconcile early-returned forever). Out-of-window jumps are dropped, not clamped:
+/// clamping would still advance the watermark past inputs the host never ran.
+pub const MAX_SEQ_JUMP: u32 = 1024;
+
+/// Host-side record of the highest input `seq` **integrated** per gid, together
+/// with the owner that `seq` belongs to. Stamped into each snapshot's
 /// `last_input_seq` so the owning client knows how far the authoritative sim has
-/// integrated its inputs (the reconcile ack). Empty on client/standalone.
+/// consumed its inputs (the reconcile ack). Empty on client/standalone.
+///
+/// **Two invariants this type exists to enforce** (both were violated by the bare
+/// `HashMap<u64, u32>` + `*slot = max(*slot, cmd.seq)` it replaces):
+///
+/// 1. **The watermark is per (gid, owner), and resets on re-possession.** Client A
+///    drives rover R to `seq = 5000` and releases; client B possesses R and its
+///    `seq` restarts at 1. A gid-only watermark keeps stamping 5000 into every
+///    snapshot, so B's `reconcile_owned_prediction` records `last_reconciled =
+///    5000`, finds no prediction at that seq, and early-returns on every later ack
+///    (all `≤ 5000`) — **B's prediction is never reconciled again, ever**. Slots
+///    therefore carry their owner and zero when it changes ([`Self::record`] and
+///    [`Self::sync_owners`], the latter catching claim/release/disconnect even
+///    before the new owner's first input arrives).
+/// 2. **The watermark only moves for a plausible `seq`** ([`MAX_SEQ_JUMP`]).
+///
+/// Slots are also pruned with the rest of the replication state
+/// ([`Self::retain_gids`]) so a long-lived host doesn't leak one per despawned gid.
 #[derive(Resource, Default)]
-pub struct AppliedInputSeq(pub HashMap<u64, u32>);
+pub struct AppliedInputSeq {
+    slots: HashMap<u64, AppliedSlot>,
+}
+
+impl AppliedInputSeq {
+    /// The ack to stamp into a snapshot for `gid` (0 = nothing integrated yet).
+    pub fn ack(&self, gid: u64) -> u32 {
+        self.slots.get(&gid).map_or(0, |s| s.seq)
+    }
+
+    /// The full slot (owner + seq), for tests/diagnostics.
+    pub fn slot(&self, gid: u64) -> AppliedSlot {
+        self.slots.get(&gid).copied().unwrap_or_default()
+    }
+
+    /// Record that the host **integrated** input `seq` for `gid`, sent by `owner`.
+    ///
+    /// Resets the watermark when the owner changed (invariant 1) and ignores an
+    /// implausible forward jump (invariant 2). `seq == 0` means "no input stream"
+    /// (host-local / API drives) and only (re)binds the owner.
+    pub fn record(&mut self, gid: u64, owner: Option<SessionId>, seq: u32) {
+        let slot = self.slots.entry(gid).or_default();
+        if slot.owner != owner {
+            *slot = AppliedSlot { owner, seq: 0 };
+        }
+        // The FIRST seq of a stream is the baseline and is taken as given: a client's
+        // `seq` counter is per (vessel, client) and does NOT restart when the vessel
+        // changes hands, so a peer that re-possesses a rover it drove earlier resumes
+        // at (say) 5001 against a freshly-zeroed slot. Windowing that first sample
+        // would refuse its every input for the rest of the session — the very bug
+        // this whole mechanism exists to prevent, reintroduced from the other side.
+        // Thereafter the window applies, so a wild `seq` cannot vault the watermark
+        // out of reach. A hostile FIRST seq (e.g. `u32::MAX`) can only strand the
+        // sender's own prediction on the vessel it possesses, and is cleared the
+        // moment the vessel changes hands.
+        if slot.seq == 0 || (seq > slot.seq && seq - slot.seq <= MAX_SEQ_JUMP) {
+            slot.seq = slot.seq.max(seq);
+        }
+    }
+
+    /// Re-key every slot against the authoritative ownership table, zeroing the
+    /// watermark of any gid whose owner changed. This is the half of invariant 1
+    /// that `record` alone cannot cover: between A's release and B's first input
+    /// the host would otherwise keep stamping A's stale `seq` into snapshots, and
+    /// B latches it as `last_reconciled` the moment it starts predicting.
+    pub fn sync_owners(&mut self, registry: &SessionRegistry) {
+        for (&gid, slot) in self.slots.iter_mut() {
+            let owner = registry.owner_of(gid);
+            if slot.owner != owner {
+                *slot = AppliedSlot { owner, seq: 0 };
+            }
+        }
+    }
+
+    /// The gids whose recorded owner no longer matches the registry — i.e. the
+    /// vessels that changed hands since the last sync. Read before
+    /// [`Self::sync_owners`] (which clears the difference) so the caller can also
+    /// drop the previous owner's queued-but-unintegrated inputs.
+    pub fn changed_owner_gids(&self, registry: &SessionRegistry) -> Vec<u64> {
+        self.slots
+            .iter()
+            .filter(|(&gid, slot)| slot.owner != registry.owner_of(gid))
+            .map(|(&gid, _)| gid)
+            .collect()
+    }
+
+    /// Drop the slot for one gid (despawn).
+    pub fn clear_gid(&mut self, gid: u64) {
+        self.slots.remove(&gid);
+    }
+
+    /// Keep only the slots whose gid passes `keep` — the prune that runs alongside
+    /// the snapshot diff-cache so the map tracks the live set.
+    pub fn retain_gids(&mut self, keep: impl Fn(u64) -> bool) {
+        self.slots.retain(|&gid, _| keep(gid));
+    }
+
+    /// Number of live slots (prune/leak assertions).
+    pub fn len(&self) -> usize {
+        self.slots.len()
+    }
+
+    /// Whether any gid has a watermark.
+    pub fn is_empty(&self) -> bool {
+        self.slots.is_empty()
+    }
+}
 
 /// What a command demands of its caller. The default is a **fully open
 /// sandbox**: any authenticated session (Observer floor) may issue it with no
@@ -1020,6 +1330,206 @@ mod tests {
     #[test]
     fn default_policy_is_exclusive() {
         assert_eq!(SessionRegistry::default().policy(), PossessionPolicy::Exclusive);
+    }
+
+    // ── Input-ack watermark (review N1) ───────────────────────────────────────
+
+    /// **THE re-possession bug.** Client A drives rover R up to `seq = 5000` and
+    /// releases; client B possesses R and its `seq` stream restarts at 1. Under the
+    /// old gid-only `max(seq)` watermark the host kept stamping 5000 into every
+    /// snapshot forever — B's reconcile latched 5000 as `last_reconciled`, found no
+    /// prediction at that seq, and early-returned on every later (lower) ack: B's
+    /// prediction was never reconciled again, and the rover it was driving drifted
+    /// without bound. No attacker, no packet loss — just two players and one rover.
+    #[test]
+    fn ack_watermark_resets_when_a_vessel_changes_hands() {
+        let mut reg = SessionRegistry::default();
+        let mut applied = AppliedInputSeq::default();
+
+        // A possesses R1 and drives it a long way into its seq stream.
+        reg.claim(A, R1).expect("A claims R1");
+        applied.record(R1, Some(A), 4000);
+        applied.record(R1, Some(A), 5000);
+        assert_eq!(applied.ack(R1), 5000);
+
+        // A releases; B possesses. The watermark must NOT survive the handover —
+        // this is what `sync_applied_seq_owners` calls on the host each time the
+        // ownership table changes, i.e. BEFORE B has sent a single input.
+        reg.release_session(A);
+        reg.claim(B, R1).expect("B claims R1");
+        applied.sync_owners(&reg);
+        assert_eq!(
+            applied.ack(R1),
+            0,
+            "a re-possessed vessel must not keep acking the previous owner's seq"
+        );
+        assert_eq!(applied.slot(R1).owner, Some(B));
+
+        // B's stream starts at 1 and is acked normally from there.
+        applied.record(R1, Some(B), 1);
+        assert_eq!(applied.ack(R1), 1);
+        applied.record(R1, Some(B), 2);
+        assert_eq!(applied.ack(R1), 2);
+    }
+
+    /// The other half of the same invariant: even without a `sync_owners` pass, the
+    /// first input from a NEW owner rebinds the slot instead of being compared
+    /// against the previous owner's watermark.
+    #[test]
+    fn ack_watermark_rebinds_on_first_input_from_a_new_owner() {
+        let mut applied = AppliedInputSeq::default();
+        applied.record(R1, Some(A), 5000);
+        applied.record(R1, Some(B), 1);
+        assert_eq!(applied.ack(R1), 1, "B's seq stream is its own, not A's");
+        assert_eq!(applied.slot(R1).owner, Some(B));
+    }
+
+    /// A hostile (or corrupt) `SetPorts { seq: u32::MAX }` used to poison the gid
+    /// permanently for every future owner: nothing could ever exceed the watermark
+    /// again, so no ack was ever "new" and the owner's reconcile early-returned for
+    /// the rest of the process's life. An implausible jump is now simply dropped.
+    #[test]
+    fn ack_watermark_ignores_an_implausible_seq_jump() {
+        let mut applied = AppliedInputSeq::default();
+        applied.record(R1, Some(A), 5);
+        applied.record(R1, Some(A), u32::MAX);
+        assert_eq!(applied.ack(R1), 5, "u32::MAX must not become the watermark");
+        // A jump just past the window is refused; one inside it is accepted.
+        applied.record(R1, Some(A), 5 + MAX_SEQ_JUMP + 1);
+        assert_eq!(applied.ack(R1), 5);
+        applied.record(R1, Some(A), 5 + MAX_SEQ_JUMP);
+        assert_eq!(applied.ack(R1), 5 + MAX_SEQ_JUMP);
+    }
+
+    /// **The other side of the same coin, and it bit this fix in review.** A client's
+    /// `seq` counter is per (vessel, client) and does NOT restart when the vessel
+    /// changes hands — so a peer that re-possesses a rover it drove earlier resumes at
+    /// 5001 against a freshly-zeroed slot. If the plausibility window were applied to
+    /// that first sample it would refuse the returning owner's every input for the
+    /// rest of the session: the exact class of permanent, silent breakage N1 is about,
+    /// just from the opposite direction. The first seq of a stream is the baseline.
+    #[test]
+    fn a_returning_owner_resumes_its_own_seq_stream() {
+        let mut reg = SessionRegistry::default();
+        let mut applied = AppliedInputSeq::default();
+        let mut buf = BufferedClientInputs::default();
+
+        // A drove R1 up to 5000, then B took it, then A takes it back.
+        reg.claim(A, R1).unwrap();
+        applied.record(R1, Some(A), 5000);
+        reg.release_session(A);
+        reg.claim(B, R1).unwrap();
+        applied.sync_owners(&reg);
+        buf.clear_gid(R1);
+        reg.release_session(B);
+        reg.claim(A, R1).unwrap();
+        applied.sync_owners(&reg);
+        buf.clear_gid(R1);
+
+        // A's client picks up where ITS counter left off — far past the zeroed slot.
+        buf.push(R1, 5001, vec![("throttle".into(), 1.0)]);
+        buf.push(R1, 5002, vec![("throttle".into(), 1.0)]);
+        assert!(buf.next_for_tick(R1, 8).is_some(), "the returning owner must be able to drive");
+        applied.record(R1, Some(A), buf.cursor(R1));
+        assert_eq!(applied.ack(R1), 5001);
+        buf.next_for_tick(R1, 8);
+        applied.record(R1, Some(A), buf.cursor(R1));
+        assert_eq!(applied.ack(R1), 5002, "and to keep being acked");
+    }
+
+    /// The watermark map is pruned on the same live set as the rest of the
+    /// replication state — gids are never reused, so without this a long-lived host
+    /// leaks one slot per despawned vessel forever.
+    #[test]
+    fn ack_watermarks_are_pruned_with_the_live_set() {
+        let mut applied = AppliedInputSeq::default();
+        applied.record(R1, Some(A), 3);
+        applied.record(R2, Some(B), 7);
+        assert_eq!(applied.len(), 2);
+        applied.retain_gids(|gid| gid == R1); // R2 despawned
+        assert_eq!(applied.len(), 1);
+        assert_eq!(applied.ack(R2), 0);
+        assert_eq!(applied.ack(R1), 3);
+    }
+
+    // ── Per-tick input consumption (review N2) ────────────────────────────────
+
+    /// **The ack must be what the host INTEGRATED, not what it received.** The host
+    /// drains the wire on the RENDER clock, so a frame can deliver K of the client's
+    /// per-fixed-tick inputs at once; physics still runs exactly one of them per
+    /// fixed tick. `cursor` is that "one per tick" watermark — acking `max(seq)` at
+    /// receive time claimed K inputs applied when one had been, the client dropped
+    /// K−1 predicted frames it had really simulated, and the divergence scaled with
+    /// how much the input CHANGED across those frames (i.e. it showed up on turns
+    /// and stops — the post-turn oscillation).
+    #[test]
+    fn buffered_inputs_are_consumed_one_per_tick_and_the_ack_follows() {
+        let mut buf = BufferedClientInputs::default();
+        let mut applied = AppliedInputSeq::default();
+        // One render frame delivers three ticks' worth of steering input.
+        buf.push(R1, 1, vec![("steer".into(), 0.0)]);
+        buf.push(R1, 2, vec![("steer".into(), 0.5)]);
+        buf.push(R1, 3, vec![("steer".into(), 1.0)]);
+        assert_eq!(buf.cursor(R1), 0, "nothing integrated yet");
+
+        for expected_seq in 1..=3u32 {
+            let writes = buf.next_for_tick(R1, 8).expect("one input per fixed tick");
+            assert_eq!(buf.cursor(R1), expected_seq);
+            applied.record(R1, Some(A), buf.cursor(R1));
+            assert_eq!(
+                applied.ack(R1),
+                expected_seq,
+                "the ack must name the seq physics actually ran this tick"
+            );
+            // …and each tick sees its OWN steer value, not just the last one.
+            let steer = writes.iter().find(|(n, _)| n == "steer").map(|(_, v)| *v);
+            assert_eq!(steer, Some((expected_seq as f64 - 1.0) * 0.5));
+        }
+        // Nothing new: the last input latches (the consumer stays the port authority)
+        // and the ack does NOT advance past what was integrated.
+        assert!(buf.next_for_tick(R1, 8).is_some());
+        assert_eq!(applied.slot(R1).seq, 3);
+    }
+
+    /// A vessel that changes hands must not hand the new owner the PREVIOUS owner's
+    /// queued-but-unintegrated inputs — that would be a control leak, not just a
+    /// stale ack. (`sync_applied_seq_owners` calls `clear_gid` for exactly this.)
+    #[test]
+    fn buffered_inputs_are_dropped_when_a_vessel_changes_hands() {
+        let mut buf = BufferedClientInputs::default();
+        buf.push(R1, 1, vec![("throttle".into(), 1.0)]);
+        buf.push(R1, 2, vec![("throttle".into(), 1.0)]);
+        buf.clear_gid(R1);
+        assert!(buf.next_for_tick(R1, 8).is_none(), "A's inputs must not drive B's vessel");
+        assert_eq!(buf.cursor(R1), 0);
+    }
+
+    // ── Desync gauge (review N3) ──────────────────────────────────────────────
+
+    /// A body that keeps diverging past the threshold raises the "I diverged" signal
+    /// exactly ONCE per streak (so the caller logs, rather than spamming per tick),
+    /// and a body that returns to tolerance resets — with the max preserved.
+    #[test]
+    fn divergence_gauge_signals_once_per_sustained_streak() {
+        let mut stats = DivergenceStats::default();
+        let over = stats.warn_m + 0.5;
+        let mut signals = 0;
+        for _ in 0..(stats.warn_streak * 3) {
+            if stats.observe(R1, PredictionKind::Owned, over) {
+                signals += 1;
+            }
+        }
+        assert_eq!(signals, 1, "one signal per sustained divergence, not one per tick");
+        assert_eq!(stats.worst(), Some((R1, over)));
+
+        // Back in tolerance → streak resets, max is remembered.
+        assert!(!stats.observe(R1, PredictionKind::Owned, 0.01));
+        assert_eq!(stats.bodies[&R1].over_streak, 0);
+        assert_eq!(stats.bodies[&R1].max_m, over);
+        // A hard snap to authority is a rebaseline, and it is counted (it used to be
+        // entirely silent — the netcode's loudest symptom, invisible in the field).
+        stats.note_rebaseline(R1);
+        assert_eq!(stats.bodies[&R1].rebaselines, 1);
     }
 
     #[test]

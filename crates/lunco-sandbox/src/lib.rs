@@ -252,6 +252,13 @@ fn run_with_mode(headless: bool) -> AppExit {
 /// sync component hooks that expect them. [`SandboxHeadlessPlugin`] adds
 /// `SyncWorldPlugin` back to keep despawns from aborting; see the note there.
 fn default_plugins(headless: bool) -> bevy::app::PluginGroupBuilder {
+    // `bevy::render` EXISTS ONLY IN A `ui` BUILD. The no-`ui` server does not link
+    // bevy_render at all (that is the point of the render decoupling), so every
+    // `bevy::render::*` path below must be gated — an ungated one does not merely link a
+    // GPU stack, it fails to compile. It did: `cargo check -p lunco-sandbox-server` was
+    // broken, and nothing caught it because `--workspace` unifies `ui` on and the CI render
+    // guard only runs `cargo tree` (which resolves the graph but never builds it).
+    #[cfg(feature = "ui")]
     use bevy::render::settings::WgpuSettings;
     // `headless` only selects render/window config in `ui` builds; a no-`ui`
     // build is always windowless, so the param is unused there.
@@ -302,8 +309,6 @@ fn default_plugins(headless: bool) -> bevy::app::PluginGroupBuilder {
     } else {
         lunco_workbench::preferred_wgpu_settings().into()
     };
-    #[cfg(not(feature = "ui"))]
-    let render_creation = WgpuSettings { backends: None, ..default() }.into();
 
     let group = DefaultPlugins
         .set(AssetPlugin {
@@ -317,8 +322,12 @@ fn default_plugins(headless: bool) -> bevy::app::PluginGroupBuilder {
             // Quieten third-party noise (rumoca JIT + diffsol per-step).
             filter: "wgpu=error,naga=warn,cranelift=warn,cranelift_jit=warn,cranelift_codegen=warn,diffsol=warn,info".into(),
             ..default()
-        })
-        .set(bevy::render::RenderPlugin { render_creation, ..default() });
+        });
+
+    // Only a `ui` build has a render stack to configure. Without `ui`, `DefaultPlugins`
+    // carries no `RenderPlugin` (bevy_render isn't linked) and there is nothing to set.
+    #[cfg(feature = "ui")]
+    let group = group.set(bevy::render::RenderPlugin { render_creation, ..default() });
 
     // Window/winit setup. With the `ui` feature the runtime `headless` flag still
     // picks the windowless variant (no primary window, WinitPlugin disabled).
@@ -1499,6 +1508,30 @@ impl Plugin for SandboxCorePlugin {
     fn build(&self, app: &mut App) {
         let args: Vec<String> = std::env::args().collect();
 
+        // THE RENDER GATE — and the whole of it.
+        //
+        // Domain crates state appearance as `lunco_render` INTENT (`PbrLook`) next
+        // to their `Mesh3d` and never name a material. `LuncoRenderPlugin` — the one
+        // `bevy_pbr` consumer in the graph — is what turns intent into a real
+        // `MeshMaterial3d`. Headless simply does not add it.
+        //
+        // That is why there is no `#[cfg(feature = "render")]` anywhere in the
+        // simulation crates: the gate is *which plugins you add*, not conditional
+        // compilation threaded through the domain. A scene therefore keeps its full
+        // appearance data on the server — inspectable, journalable, replicable — it
+        // just isn't given a GPU material.
+        //
+        // The `#[cfg(feature = "ui")]` here is the ONE place conditional compilation
+        // appears, and it has to: `lunco-render-bevy` is an OPTIONAL dependency under
+        // `ui`, which is what stops the `--no-ui` server from LINKING bevy_pbr (→
+        // bevy_render → wgpu + naga), not merely from running it. The runtime
+        // `!headless` check remains for a `ui`-built binary launched headless.
+        // See docs/architecture/render-decoupling.md.
+        #[cfg(feature = "ui")]
+        if !self.headless {
+            app.add_plugins(lunco_render_bevy::LuncoRenderPlugin);
+        }
+
         // Convenience command: `SetRhaiPolicy` authors a `LuncoPolicy` prim as USD
         // doc ops (journals → syncs → projector activates). Authoring works with or
         // without networking; the activation projector is networking-gated for now.
@@ -1586,6 +1619,15 @@ impl Plugin for SandboxCorePlugin {
             .add_plugins(CoSimPlugin)
             .add_plugins(lunco_core::LunCoCorePlugin)
             .add_plugins(lunco_core::WorldShellPlugin)
+            // Parameter telemetry — the PRODUCER of `SampledParameter`. Its consumer
+            // side (`lunco_api`'s `sampled_param_observer`, i.e. `SubscribeTelemetry`,
+            // plus `TelemetryResponse::from_sampled` and core's logger) was already
+            // shipped and wired; this plugin was the one missing link, so the API
+            // advertised parameter telemetry that could never arrive. Costs nothing
+            // until someone authors a `Parameter` (the sampler is `run_if`-gated on
+            // one existing), and it samples on the FIXED clock, so headless runs get a
+            // stable telemetry rate instead of one that tracks the frame rate.
+            .add_plugins(lunco_telemetry::LunCoTelemetryPlugin)
             // Canonical Twin change-journal (op log). CORE substrate, not UI:
             // it must exist on the headless server + every client so authored
             // edits are recorded (the domain registries' `wire_*_journal_handle`
@@ -1703,6 +1745,7 @@ impl Plugin for SandboxCorePlugin {
         // in the GUI and the headless compile server alike.
         #[cfg(feature = "lunco-api")]
         app.add_plugins(lunco_api::LunCoApiPlugin::default());
+
 
         // Durable twin history for headless (`lunco-sandbox-server` / any
         // `--no-ui` host): the SAME twin-folder-scoped persistence the GUI uses
@@ -1933,7 +1976,7 @@ struct LayerRole {
     /// USD namespace segment + log label, e.g. `"albedo"`.
     name: &'static str,
     /// Sets the matching `Option<Handle<Image>>` slot on the material.
-    set_slot: fn(&mut lunco_materials::ShaderMaterial, Handle<Image>),
+    set_slot: fn(&mut lunco_render_bevy::ShaderMaterial, Handle<Image>),
     /// Reflected `weight_*` params raised to the authored weight (surface has two).
     weights: &'static [&'static str],
 }
@@ -2003,17 +2046,24 @@ fn report_terrain_stream_status(
 #[cfg(feature = "ui")]
 fn bind_terrain_layers(
     q: Query<
-        (Entity, &lunco_usd::UsdPrimPath, &MeshMaterial3d<lunco_materials::ShaderMaterial>),
+        (Entity, &lunco_usd::UsdPrimPath, &MeshMaterial3d<lunco_render_bevy::ShaderMaterial>),
         (With<lunco_terrain_surface::DemTerrainSurface>, Without<TerrainLayersBound>),
     >,
     stages: Res<Assets<lunco_usd::UsdStageAsset>>,
     twins: Res<lunco_assets::twin_source::TwinRoots>,
     asset_server: Res<AssetServer>,
-    mut mats: ResMut<Assets<lunco_materials::ShaderMaterial>>,
+    // OPTIONAL, because `Assets<ShaderMaterial>` only exists where a renderer does:
+    // `LuncoRenderPlugin` registers the store, and `--no-ui` never adds it. A plain
+    // `ResMut` here made this system a hard panic ("Resource does not exist") on every
+    // headless start of this binary. Binding maps onto a material is meaningless without
+    // a material, so the honest headless behaviour is to skip.
+    mats: Option<ResMut<Assets<lunco_render_bevy::ShaderMaterial>>>,
     mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
     mut commands: Commands,
 ) {
     use lunco_materials::ParamValue;
+
+    let Some(mut mats) = mats else { return };
 
     const ROLES: &[LayerRole] = &[
         LayerRole { name: "albedo", set_slot: |m, h| m.albedo_map = Some(h), weights: &["weight_albedo"] },
@@ -3108,6 +3158,10 @@ impl Plugin for SandboxHeadlessPlugin {
         // Upstream shape: bevy registers hooks that assume a plugin it may not have
         // added. Re-test on the next bevy bump and drop this if it starts adding
         // `SyncWorldPlugin` unconditionally.
+        // ONLY in a `ui` build. The hooks this works around are installed by
+        // `RenderPlugin` itself — with no bevy_render linked (the `--no-ui` server) there
+        // are no render-sync hooks, so there is nothing to repair and no plugin to add.
+        #[cfg(feature = "ui")]
         app.add_plugins(bevy::render::sync_world::SyncWorldPlugin);
 
         // No winit event loop drives updates headless, so install a runner that
@@ -3262,11 +3316,26 @@ fn load_startup_scene(world: &mut World, scene_path: String) {
     world.insert_resource(StartupSceneGuard { file: scene_file.clone() });
 
     let mut twin_loaded = false;
-    if let Ok(twin_mode) = lunco_twin::TwinMode::open(&twin_root) {
-        let mut twin = match twin_mode {
-            lunco_twin::TwinMode::Twin(t) | lunco_twin::TwinMode::Folder(t) => t,
-            lunco_twin::TwinMode::Orphan(_) => panic!("expected folder or twin"),
-        };
+    // `--scene` is user-supplied, so `twin_root` may resolve to a directory that
+    // is not a twin at all. `Orphan` means exactly that — a normal outcome, not a
+    // bug. Report it and fall through to the direct `LoadScene` below; a bad path
+    // must never be a hard crash at boot.
+    let opened = match lunco_twin::TwinMode::open(&twin_root) {
+        Ok(lunco_twin::TwinMode::Twin(t)) | Ok(lunco_twin::TwinMode::Folder(t)) => Some(t),
+        Ok(lunco_twin::TwinMode::Orphan(path)) => {
+            warn!(
+                "[sandbox] `{}` is not a twin or folder (orphan `{}`) — loading `{scene_path}` directly instead",
+                twin_root.display(),
+                path.display()
+            );
+            None
+        }
+        Err(err) => {
+            warn!("[sandbox] could not open `{}` as a twin: {err} — loading `{scene_path}` directly instead", twin_root.display());
+            None
+        }
+    };
+    if let Some(mut twin) = opened {
 
         // Override or insert default_scene in the manifest
         let rel_scene_path = abs_path.strip_prefix(&twin_root)

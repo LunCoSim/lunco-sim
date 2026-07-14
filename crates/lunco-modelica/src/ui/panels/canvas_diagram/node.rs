@@ -141,10 +141,6 @@ pub(super) struct IconNodeVisual {
     /// parallel to `port_connector_paths`. See [`IconNodeData`] for
     /// the rationale (off-thread resolution to keep paint lock-free).
     pub(super) port_connector_icons: Vec<Option<crate::annotations::Icon>>,
-    /// Parent component's fully-qualified type — used as the scope
-    /// root when the indexer wrote a short connector path like
-    /// `"RealInput"` and we need to resolve it via package walk.
-    pub(super) parent_qualified_type: String,
 }
 
 impl NodeVisual for IconNodeVisual {

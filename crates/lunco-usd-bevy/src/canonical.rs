@@ -623,7 +623,11 @@ pub fn sync_canonical_stages(
     }
 }
 
+// Temp-dir USDA fixtures, native-only test code. The `std::fs` ban guards wasm
+// *runtime* paths; `clippy.toml` names tests as exempt, but cargo has no
+// path-scoped lint config, so the exemption is written out.
 #[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(clippy::disallowed_methods)]
 mod recipe_tests {
     //! Ph0′ S2d: the runtime build primitive — a `StageRecipe` (what the loader
     //! fetches off-thread) builds, on the main thread, a `CanonicalStage` whose
@@ -666,6 +670,7 @@ mod recipe_tests {
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(clippy::disallowed_methods)] // temp-dir USDA fixtures; see `recipe_tests`
 mod sync_system_tests {
     //! Ph0′ S2d-wiring: the `sync_canonical_stages` SYSTEM, in a minimal Bevy
     //! App, must turn a loaded `UsdStageAsset` (carrying a `StageRecipe`) into a
