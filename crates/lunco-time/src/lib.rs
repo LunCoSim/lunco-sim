@@ -594,17 +594,17 @@ mod tests {
     /// interpolation timeline computes `delta.div_f32(time.relative_speed())`, so
     /// a zero there yields `inf` and panics `Duration::from_secs_f32` ("cannot
     /// convert float seconds to Duration"). This crashed every networked client
-    /// the moment it loaded a DEM-terrain scene, because `hold_physics_until_dem_ready`
-    /// pauses the transport while the heightfield builds. `effective_speed` (0 when
+    /// the moment it loaded a DEM-terrain scene, because the terrain readiness wait
+    /// froze the world while the heightfield built. `effective_speed` (0 when
     /// paused) is what the tick/physics gates read, so freezing still works.
     #[test]
     fn frozen_spine_pauses_and_never_zeroes_relative_speed() {
         use bevy::ecs::system::RunSystemOnce;
 
         for (mode, rate) in [
-            (TransportMode::Paused, 1.0),   // explicit pause (the DEM hold)
-            (TransportMode::Playing, 0.0),  // rate 0 is also "frozen"
-            (TransportMode::Playing, 5e4),  // warp regime: tick frozen
+            (TransportMode::Paused, 1.0),  // explicit user pause
+            (TransportMode::Playing, 0.0), // rate 0 is also "frozen"
+            (TransportMode::Playing, 5e4), // warp regime: tick frozen
         ] {
             let mut world = bevy::prelude::World::new();
             world.insert_resource(lunco_core::SimTick(0));

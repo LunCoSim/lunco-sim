@@ -59,6 +59,7 @@ members = [
     "crates/lunco-render",
     "crates/lunco-render-bevy",
     "crates/lunco-obstacle-field",
+    "crates/lunco-physics",
     "crates/lunco-worker-transport",
     "crates/lunco-terrain-bake",
     "crates/lunco-terrain-surface",
@@ -241,6 +242,7 @@ getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
 lunco-api = { path = "crates/lunco-api" }
 lunco-terrain-globe = { path = "crates/lunco-terrain-globe" }
 lunco-terrain-core = { path = "crates/lunco-terrain-core" }
+lunco-physics = { path = "crates/lunco-physics" }
 lunco-cosim = { path = "crates/lunco-cosim" }
 lunco-environment = { path = "crates/lunco-environment" }
 lunco-theme = { path = "crates/lunco-theme" }

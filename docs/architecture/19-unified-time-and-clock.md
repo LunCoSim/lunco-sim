@@ -638,3 +638,141 @@ entities. Derived domains store nothing (pure read). ("New domain from selection
 
 **Networking:** only `SimTick` on the wire; `TimeTransport`/anchor are host-authoritative replicated
 state via the existing lightyear command path.
+
+---
+
+## 11. Amendment (2026-07-14) — rooted clock tree, celestial as a clock, USD-authored celestial
+
+§3d specified the clock tree correctly. What was *built* (`lunco-time/src/domain.rs`) implements the
+affine node and the driven playhead, but roots every chain on `WorldTime.sim_secs` — the tick-derived
+clock, which stops dead on a pause. Consequences, all observed:
+
+- **Nothing can outlive a pause.** Pausing the sim froze the planets (the epoch is tick-derived) and
+  would have frozen the avatar too — which is why `lunco-avatar` reaches around the clock system
+  entirely and reads raw `Res<Time<Real>>` (`apply_fly`), plus a bespoke `spring_arm_paused_system`
+  duplicated for the paused case. Every one of those is a symptom of a missing wall-rooted clock.
+- **The celestial epoch is not a clock at all.** `WorldTime.epoch_jd` is computed straight from
+  `MissionClock.anchor` + tick, bypassing the tree, so it cannot be re-parented, rate-scaled or seeked.
+- **`ResolvedDomains` stores only `t`, no `dt`** — so no movement system can be driven by a domain
+  (they all need a delta), which is the other half of why they reach for `Time<Real>`.
+
+### 11a. Pause propagation is free — do not add a flag
+
+The tree already gives the requested semantics with **no `paused` bit and no propagation pass**:
+
+```
+child_t = offset + scale · parent_t
+```
+
+If a parent stops advancing, `parent_t` is constant, so `child_t` is constant. **A frozen ancestor
+freezes its whole subtree, structurally.** This is how USD `LayerOffset` and every DCC time-warp
+works, and it is why the tree must be the *only* mechanism — a second "is paused" flag propagated
+down the tree would be a redundant, desynchronisable copy of information the map already carries.
+
+It also answers *"unpause only the celestial clock while physics stays paused"*: that is not a flag,
+it is **a re-parent**. A clock is frozen because of where it hangs; move it somewhere that is
+running. One operation, `SetClock { clock, parent }`, covers pause-subtree, unpause-one, and
+time-dilate-one.
+
+### 11b. The shape: two roots, siblings — NOT physics → celestial
+
+```
+  real ─ wall clock (Time<Real>). Never pauses. Non-deterministic by construction.
+   └── interaction ......... avatar fly, camera smoothing, UI easing
+  sim ── tick clock (SimTick ← TimeTransport). Deterministic, replicated, seekable.
+   ├── physics ............. avian Time<Physics>
+   ├── celestial ........... the epoch (epoch_jd = epoch0 + celestial_t/86400)
+   └── <animation domains> . per-object / per-selection driven playheads
+```
+
+Celestial hangs off **`sim`, as a sibling of `physics`** — not downstream of it. Chaining
+`physics → celestial` (the intuitive reading of "physics pauses celestial down the line") would be
+wrong: it says the planets' motion is *caused by* the rigid-body solver, so a physics readiness hold
+(a heightfield still baking!) would stop the solar system. They are siblings that happen to share a
+parent; pausing `sim` freezes both because they are both its children, which is the behaviour wanted,
+for the right reason.
+
+Detaching celestial = `SetClock { clock: celestial, parent: real }`. It now runs on wall time while
+the sim is paused. Re-parent back to `sim` to re-couple. Same operation seeks it:
+`SetClock { clock: celestial, epoch_jd: … }`.
+
+**Default is unchanged behaviour**: `celestial = derived(parent: sim, offset: 0, scale: 1)`, so
+`epoch_jd` remains exactly the tick-derived value it is today — deterministic, network-safe,
+"derive, never accumulate" intact. Independence is opt-in and explicit.
+
+### 11c. Per-body physics pause is NOT a clock — it is `RigidBodyDisabled`
+
+The request "pause physics for some avian bodies but not others" **must not** be built as per-body
+clocks. avian has exactly one `Time<Physics>`, and that is not an implementation limit — it is
+physics: two bodies in contact share an island, a solver iteration and a contact manifold. Stepping
+body A at 1× and body B at 0× *inside one solver* has no meaning; the constraint between them would
+be integrated with two different `dt`s.
+
+The correct per-entity primitive already exists and is already used here
+(`lunco-usd-sim/src/cosim.rs:1349`): **`avian3d::RigidBodyDisabled`** (+ `ColliderDisabled`). Add it
+to freeze one body, remove it to resume — no clock involved.
+
+> **The rule:** *clocks scale and gate TIME (global, tree-structured). `RigidBodyDisabled` gates one
+> BODY.* Anything that wants "this object stops but the world runs" is a body/animation concern, not
+> a clock concern. Keeping these separate is what stops the clock tree from growing into a
+> general-purpose "disable stuff" mechanism.
+
+### 11d. Where it goes in the update cycle
+
+One resolve per frame, in `PreUpdate`; everything downstream *reads* the resolved sample and nothing
+recomputes a clock:
+
+```
+PreUpdate
+  TimeSpineSet          advance_world_clock        SimTick+TimeTransport → WorldTime, Time<Virtual>
+                        resolve_clocks             walk the tree once → ResolvedClocks{ t, dt }   ← after the spine
+  ClockApplySet         apply_physics_clock        celestial/physics nodes → Time<Physics> (pause/scale)
+                        write_epoch_from_celestial WorldTime.epoch_jd ← celestial clock
+  CelestialEpochSet     ephemeris → body rotation → site anchor        .after(TimeSpineSet)
+FixedUpdate             SimTick advance; avian solver                   (frozen ⇒ zero delta, never runs)
+Update                  gameplay; animation sampler                     .after(DomainResolveSet)
+PostUpdate              avatar/camera on the INTERACTION clock's dt; then transform propagation
+```
+
+`resolve_clocks` must run **after** `advance_world_clock` (the `sim` root's `t` is written there) and
+**before** any consumer. The wall root reads `Time<Real>` in the same system. Cycles/missing parents
+are depth-capped and fall back to the root, as today.
+
+`WorldTime.epoch_jd` is retained as the **derived read-only view**, now written *from* the celestial
+clock instead of directly from the tick anchor. That keeps the ~15 existing `WorldTime.epoch_jd`
+readers in `lunco-celestial` untouched — the clock becomes the source, the view stays the interface.
+
+### 11e. Celestial is authored in USD, not enabled by a code flag
+
+`CelestialConfig.spawn_hierarchy` is a hidden boolean that decides whether a solar system exists, and
+`enable_celestial_on_site_anchor` flips it as a side effect of a scene authoring a site anchor. That
+is a code-side switch for what is really *scene content*, and it has already produced one bug: the
+trajectory layer ignored the flag and spawned Earth/Moon orbit views into every scene, including a
+sandbox that had asked for no celestial content at all.
+
+**Bodies become USD prims.** Nothing celestial exists unless the scene says so:
+
+```usda
+def Xform "Sun"   (prepend apiSchemas = ["LuncoCelestialBodyAPI"]) { int lunco:body = 10  }
+def Xform "Earth" (prepend apiSchemas = ["LuncoCelestialBodyAPI"]) { int lunco:body = 399 }
+def Xform "Moon"  (prepend apiSchemas = ["LuncoCelestialBodyAPI"]) { int lunco:body = 301 }
+```
+
+with a reusable `assets/celestial/solar_system.usda` that a scene pulls in by `references` when it
+wants the standard set. The default sandbox references nothing ⇒ no Sun, no Earth, no Moon, no orbit
+views, no ephemeris — which is the correct reading of "the sandbox is a flat test arena".
+
+The `big_space` precision scaffolding (grids, SOI, `GravityProvider`, `GlobeLod`, reference frames)
+stays in code — it is derived structure, not authored content — but it is **built from the declared
+bodies** rather than from a boolean: no body prims, no hierarchy. `spawn_hierarchy` and
+`enable_celestial_on_site_anchor` are deleted.
+
+### 11f. Phasing
+
+1. **Clock tree** (`lunco-time`): wall root + tick root as real clock entities; `ResolvedClocks{t,dt}`;
+   well-known handles (`real`, `sim`, `interaction`, `celestial`); `SetClock` command (journaled +
+   replicated — it is world state, per §6).
+2. **Celestial as a clock**: `epoch_jd` written from the celestial node. Behaviour-identical default.
+3. **Interaction clock**: `lunco-avatar` binds to it; deletes the raw `Time<Real>` reads and the
+   duplicated `spring_arm_paused_system`.
+4. **USD-authored celestial**: `LuncoCelestialBodyAPI`, `solar_system.usda`, delete the flag.

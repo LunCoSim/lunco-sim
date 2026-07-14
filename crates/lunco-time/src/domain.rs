@@ -120,23 +120,119 @@ pub struct TimeBinding {
     pub domain: Entity,
 }
 
-/// Per-frame resolved local time for every domain entity. The animation sampler
-/// reads this (via [`domain_time`]) rather than re-resolving the chain itself.
+/// What a **root** clock reads its time from. Root nodes are the only place raw
+/// time enters the tree; every other node is an affine child of one of them.
+///
+/// The two roots are not interchangeable, and the difference is the whole point:
+///
+/// * [`Tick`](ClockRoot::Tick) — the deterministic master. `t = WorldTime.sim_secs`,
+///   derived from the integer [`SimTick`](lunco_core::SimTick) and gated by
+///   [`TimeTransport`](crate::TimeTransport). Replicated, seekable, replayable.
+///   **Freezes on pause** — and so does everything hanging under it.
+/// * [`Wall`](ClockRoot::Wall) — `t = Time<Real>`. Free-running, never pauses,
+///   non-deterministic by construction. Nothing that affects sim state may hang
+///   here; it is for *interaction* (camera, UI easing) and for a deliberately
+///   detached celestial clock.
+///
+/// "Unpause only the celestial clock while the sim stays paused" is therefore not a
+/// flag — it is a **re-parent** onto the wall root (see [`SetClock`]).
+#[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq)]
+#[reflect(Component)]
+pub enum ClockRoot {
+    /// Deterministic tick master (`WorldTime.sim_secs`). Freezes on pause.
+    Tick,
+    /// Wall clock (`Time<Real>`). Never freezes.
+    Wall,
+    /// The **mission epoch projection** (`WorldTime.met_secs` — epoch seconds since
+    /// the mission epoch). This is the celestial clock's default root.
+    ///
+    /// Why not simply `derived(Tick)`? Because the epoch and the tick already
+    /// legitimately diverge in [`TimeRegime::KinematicWarp`](crate::TimeRegime):
+    /// above `MAX_REALTIME_RATE` the tick freezes (the solver cannot keep up) while
+    /// the epoch keeps advancing off a wall preview, so the sky still moves. Rooting
+    /// celestial on `Tick` would freeze the sky in warp — a regression. Rooting it on
+    /// the epoch projection makes the default **bit-identical to the old behaviour**,
+    /// warp included, while still being an ordinary node you can re-parent away.
+    Epoch,
+}
+
+/// One clock's resolved sample for this frame.
+///
+/// `dt` is what makes a clock *usable by a movement system*: without it, anything
+/// that integrates (avatar fly, camera smoothing) has to reach past the clock tree
+/// for a raw `Time<Real>`/`Time<Virtual>` delta — which is exactly why `lunco-avatar`
+/// bypassed the domains entirely before this existed.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ClockSample {
+    /// Resolved local time (seconds).
+    pub t: f64,
+    /// Local time advanced this frame (`t - t_prev`). Zero on a frozen clock, and
+    /// on the first frame a clock is seen.
+    pub dt: f64,
+}
+
+/// The well-known clocks, spawned once at startup. Handles, not state — the state
+/// lives on the entities as [`TimeDomain`] / [`Playback`] / [`ClockRoot`].
+///
+/// The standing shape (doc 19 §11b) — note `physics` and `celestial` are **siblings**
+/// under `sim`, never a chain:
+///
+/// ```text
+///   real ── ClockRoot::Wall                sim ── ClockRoot::Tick
+///    └── interaction                        ├── celestial
+///                                           └── <animation / per-object domains>
+/// ```
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct Clocks {
+    /// Wall root. Never pauses.
+    pub real: Entity,
+    /// Tick root — the deterministic sim master. Pausing this freezes its subtree.
+    pub sim: Entity,
+    /// Wall-rooted interaction clock: avatar, camera smoothing, UI easing. Keeps
+    /// running while the sim is paused (that is its entire reason to exist).
+    pub interaction: Entity,
+    /// The epoch clock. Default: derived from `sim`, scale 1 — so `epoch_jd` stays
+    /// exactly the tick-derived value and pausing the sim freezes the planets.
+    /// Re-parent to `real` to run the sky independently of the simulation.
+    pub celestial: Entity,
+}
+
+/// Per-frame resolved sample for every clock entity. The animation sampler reads
+/// this (via [`domain_time`]) rather than re-resolving the chain itself.
 #[derive(Resource, Default, Debug)]
-pub struct ResolvedDomains(pub HashMap<Entity, f64>);
+pub struct ResolvedDomains(pub HashMap<Entity, ClockSample>);
 
 impl ResolvedDomains {
     /// Resolved local time for `domain`, or `None` if unknown this frame.
     #[inline]
     pub fn get(&self, domain: Entity) -> Option<f64> {
+        self.0.get(&domain).map(|s| s.t)
+    }
+
+    /// Full sample (`t` **and** `dt`) for `domain`, or `None` if unknown this frame.
+    #[inline]
+    pub fn sample(&self, domain: Entity) -> Option<ClockSample> {
         self.0.get(&domain).copied()
+    }
+
+    /// Local seconds advanced by `domain` this frame — `0.0` if the clock is frozen
+    /// or unknown. The entry point for any system that integrates on a clock.
+    #[inline]
+    pub fn delta(&self, domain: Entity) -> f64 {
+        self.0.get(&domain).map(|s| s.dt).unwrap_or(0.0)
     }
 }
 
-/// Previous frame's `WorldTime.sim_secs`, to derive the world delta that advances
-/// driven playheads.
+/// Previous frame's resolved `t` per clock — the source of each clock's `dt`, and
+/// of the *parent* delta that advances a driven playhead.
 #[derive(Resource, Default)]
-struct LastWorldSecs(f64);
+struct LastClockT {
+    /// Previous frame's resolved `t` per clock.
+    per_clock: HashMap<Entity, f64>,
+    /// Previous frame's root times — the parent delta for a clock with no parent
+    /// entity, and the reason an unrooted driven head still advances.
+    roots: RootTimes,
+}
 
 /// System set wrapping [`advance_and_resolve_domains`] so cross-crate consumers
 /// (the USD sampler in `lunco-usd-bevy`) order their reads `.after` it.
@@ -170,42 +266,121 @@ pub fn step_playhead(pb: &Playback, world_delta: f64) -> f64 {
     h
 }
 
-/// One domain's component data, snapshotted for pure resolution.
+/// One clock's component data, snapshotted for pure resolution.
 #[derive(Debug, Clone, Copy)]
 pub struct DomainSnapshot {
-    /// Parent domain entity (`None` = world clock).
+    /// Parent clock entity (`None` = the `sim` root).
     pub parent: Option<Entity>,
     /// Affine offset over the parent.
     pub offset: f64,
     /// Affine scale over the parent.
     pub scale: f64,
-    /// Driven head (already advanced this frame), or `None` for a derived domain.
-    pub head: Option<f64>,
+    /// Playback, if this is a *driven* clock (own seekable head).
+    pub playback: Option<Playback>,
+    /// Root source, if this is a *root* clock. Roots ignore `parent`.
+    pub root: Option<ClockRoot>,
 }
 
-/// Resolve one domain's local time from a snapshot map. Driven domains return
-/// their head; derived domains compose `offset + scale·parent_t` up the chain to
-/// the world clock (`world_secs`). Depth-capped against cycles / missing parents.
-pub fn resolve_snapshot(
+/// The raw time entering the tree at the roots this frame.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RootTimes {
+    /// `WorldTime.sim_secs` — the deterministic tick master. Frozen on pause.
+    pub sim_secs: f64,
+    /// `Time<Real>` elapsed seconds. Never frozen.
+    pub wall_secs: f64,
+    /// `WorldTime.met_secs` — epoch seconds since the mission epoch. Tracks the tick,
+    /// except in `KinematicWarp` where it advances while the tick is frozen.
+    pub epoch_secs: f64,
+}
+
+/// Resolve every clock in one memoized walk, stepping driven playheads by their
+/// **parent's** delta as it goes.
+///
+/// Three node kinds, in precedence order:
+/// 1. **Root** — `t = offset + scale · (sim_secs | wall_secs)`. The only entry point
+///    for raw time.
+/// 2. **Driven** (has [`Playback`]) — `t = head`, where the head advanced by the
+///    *parent's* delta this frame. A frozen parent hands it `dt = 0`, so the head
+///    holds: pause propagates into driven clocks too, without a flag.
+/// 3. **Derived** — `t = offset + scale · parent_t`. A frozen parent freezes it
+///    structurally, because `parent_t` simply stops changing.
+///
+/// `last` is the previous frame's resolved `t` per clock, which is what makes the
+/// parent delta available without a second pass. Depth-capped against cycles;
+/// unknown/missing parents fall back to the sim root.
+pub fn resolve_clocks(
     snap: &HashMap<Entity, DomainSnapshot>,
+    last: &HashMap<Entity, f64>,
+    roots: RootTimes,
+    last_roots: RootTimes,
+    sim_root: Option<Entity>,
+) -> HashMap<Entity, ClockSample> {
+    let mut out: HashMap<Entity, ClockSample> = HashMap::new();
+    for &e in snap.keys() {
+        resolve_one(snap, last, roots, last_roots, sim_root, e, 0, &mut out);
+    }
+    out
+}
+
+/// The memoized recursion behind [`resolve_clocks`]. Returns the clock's `t`.
+#[allow(clippy::too_many_arguments)]
+fn resolve_one(
+    snap: &HashMap<Entity, DomainSnapshot>,
+    last: &HashMap<Entity, f64>,
+    roots: RootTimes,
+    last_roots: RootTimes,
+    sim_root: Option<Entity>,
     domain: Entity,
-    world_secs: f64,
     depth: u32,
+    out: &mut HashMap<Entity, ClockSample>,
 ) -> f64 {
+    if let Some(s) = out.get(&domain) {
+        return s.t;
+    }
+    // Cycle / depth guard: fall back to the deterministic master rather than spin.
     if depth > 16 {
-        return world_secs;
+        return roots.sim_secs;
     }
     let Some(s) = snap.get(&domain) else {
-        return world_secs;
+        return roots.sim_secs;
     };
-    if let Some(head) = s.head {
-        return head; // driven: head is authoritative
-    }
-    let parent_t = match s.parent {
-        Some(p) => resolve_snapshot(snap, p, world_secs, depth + 1),
-        None => world_secs,
+
+    let t = if let Some(root) = s.root {
+        let src = match root {
+            ClockRoot::Tick => roots.sim_secs,
+            ClockRoot::Wall => roots.wall_secs,
+            ClockRoot::Epoch => roots.epoch_secs,
+        };
+        derived_local_t(s.offset, s.scale, src)
+    } else {
+        // Parent defaults to the sim root.
+        let parent = s.parent.or(sim_root);
+        let parent_t = match parent {
+            Some(p) => resolve_one(snap, last, roots, last_roots, sim_root, p, depth + 1, out),
+            None => roots.sim_secs,
+        };
+        match s.playback {
+            Some(pb) => {
+                // Driven: advance the head by the PARENT's delta. A frozen parent
+                // yields 0 → the head holds. This is how a pause reaches a driven
+                // clock without anyone propagating a flag.
+                //
+                // With no parent ENTITY to look up (an unrooted domain), fall back to
+                // the previous frame's sim root time — otherwise the delta would be a
+                // constant 0 and the head would never advance at all.
+                let parent_last = match parent {
+                    Some(p) => last.get(&p).copied().unwrap_or(parent_t),
+                    None => last_roots.sim_secs,
+                };
+                step_playhead(&pb, parent_t - parent_last)
+            }
+            None => derived_local_t(s.offset, s.scale, parent_t),
+        }
     };
-    derived_local_t(s.offset, s.scale, parent_t)
+
+    let dt = t - last.get(&domain).copied().unwrap_or(t);
+    out.insert(domain, ClockSample { t, dt });
+    t
 }
 
 /// Resolve `binding`'s domain time from the per-frame [`ResolvedDomains`], falling
@@ -225,34 +400,104 @@ pub fn domain_time(
 
 // --- the Bevy system ---------------------------------------------------------
 
-/// Advance driven playheads by the world delta, then resolve every domain's local
-/// time into [`ResolvedDomains`]. One query, iterated once (snapshot), then pure
-/// resolution — so there is no mutable/immutable `Playback` aliasing.
+/// Resolve the whole clock tree once per frame into [`ResolvedDomains`].
+///
+/// Snapshot → pure resolve → write back. The snapshot is what lets the pure
+/// resolver step driven heads mid-walk without a mutable/immutable `Playback`
+/// aliasing conflict.
+///
+/// Runs in `PreUpdate`, **after** the spine (`advance_world_clock` writes the
+/// `sim` root's `sim_secs`) and **before** every consumer — nothing downstream
+/// recomputes a clock, it only reads the resolved sample.
 pub fn advance_and_resolve_domains(
     world: Res<WorldTime>,
-    mut last: ResMut<LastWorldSecs>,
-    mut q: Query<(Entity, &TimeDomain, Option<&mut Playback>)>,
+    real: Res<Time<bevy::time::Real>>,
+    clocks: Option<Res<Clocks>>,
+    mut last: ResMut<LastClockT>,
+    mut q: Query<(Entity, &TimeDomain, Option<&mut Playback>, Option<&ClockRoot>)>,
     mut resolved: ResMut<ResolvedDomains>,
 ) {
-    let world_delta = world.sim_secs - last.0;
-    last.0 = world.sim_secs;
+    let roots = RootTimes {
+        sim_secs: world.sim_secs,
+        wall_secs: real.elapsed_secs_f64(),
+        epoch_secs: world.met_secs,
+    };
+    let sim_root = clocks.map(|c| c.sim);
 
-    // Pass 1: advance driven heads + snapshot all domain components.
     let mut snap: HashMap<Entity, DomainSnapshot> = HashMap::new();
-    for (e, d, pb) in &mut q {
-        let head = pb.map(|mut pb| {
-            pb.head = step_playhead(&pb, world_delta);
-            pb.head
-        });
-        snap.insert(e, DomainSnapshot { parent: d.parent, offset: d.offset, scale: d.scale, head });
+    for (e, d, pb, root) in &q {
+        snap.insert(
+            e,
+            DomainSnapshot {
+                parent: d.parent,
+                offset: d.offset,
+                scale: d.scale,
+                playback: pb.copied(),
+                root: root.copied(),
+            },
+        );
     }
 
-    // Pass 2: resolve each domain's local time (pure over the snapshot).
-    resolved.0.clear();
-    for &e in snap.keys() {
-        let t = resolve_snapshot(&snap, e, world.sim_secs, 0);
-        resolved.0.insert(e, t);
+    let samples = resolve_clocks(&snap, &last.per_clock, roots, last.roots, sim_root);
+
+    // Write the advanced heads back onto the driven clocks — the `Playback` component
+    // stays the authority for the head, so a seek/pause lands on it directly.
+    for (e, _, pb, _) in &mut q {
+        if let Some(mut pb) = pb {
+            if let Some(s) = samples.get(&e) {
+                if pb.head != s.t {
+                    pb.head = s.t;
+                }
+            }
+        }
     }
+
+    last.per_clock.clear();
+    last.per_clock.extend(samples.iter().map(|(&e, s)| (e, s.t)));
+    last.roots = roots;
+    resolved.0 = samples;
+}
+
+/// Startup: spawn the four well-known clocks (doc 19 §11b) and publish [`Clocks`].
+///
+/// `celestial` is deliberately a **derived child of `sim` at scale 1**, so the epoch
+/// stays exactly the tick-derived value it has always been — deterministic and
+/// network-safe. Running the sky independently is an explicit [`SetClock`] away, not
+/// a default.
+fn spawn_well_known_clocks(mut commands: Commands) {
+    let real = commands
+        .spawn((
+            Name::new("Clock:Real"),
+            TimeDomain::default(),
+            ClockRoot::Wall,
+        ))
+        .id();
+    let sim = commands
+        .spawn((
+            Name::new("Clock:Sim"),
+            TimeDomain::default(),
+            ClockRoot::Tick,
+        ))
+        .id();
+    // Wall-rooted: the avatar and the camera keep moving while the sim is paused.
+    let interaction = commands
+        .spawn((
+            Name::new("Clock:Interaction"),
+            TimeDomain::derived(Some(real), 0.0, 1.0),
+        ))
+        .id();
+    // Rooted on the epoch projection, NOT on `sim` — see `ClockRoot::Epoch`. This
+    // makes `epoch_jd` exactly the value it has always been (warp included) while
+    // still being a node you can re-parent onto the wall root to run the sky
+    // independently of the simulation.
+    let celestial = commands
+        .spawn((
+            Name::new("Clock:Celestial"),
+            TimeDomain::default(),
+            ClockRoot::Epoch,
+        ))
+        .id();
+    commands.insert_resource(Clocks { real, sim, interaction, celestial });
 }
 
 /// Spawn a **derived** domain entity (`local_t = offset + scale·parent_t`).
@@ -406,7 +651,126 @@ fn on_set_mission_epoch(
     bevy::log::info!("[time] mission epoch re-anchored to JD {jd:.4}");
 }
 
-register_commands!(on_control_animation, on_set_time_transport, on_set_mission_epoch);
+/// Which well-known clock a [`SetClock`] targets.
+#[derive(serde::Serialize, serde::Deserialize, Reflect, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ClockId {
+    /// The epoch clock (the sky).
+    #[default]
+    Celestial,
+    /// The avatar / camera / UI clock.
+    Interaction,
+    /// The deterministic tick master. (Play/pause it with [`SetTimeTransport`].)
+    Sim,
+}
+
+/// Where a clock hangs. This is the pause mechanism: a clock is frozen because its
+/// ancestor is frozen, so "run it anyway" means moving it somewhere that runs.
+#[derive(serde::Serialize, serde::Deserialize, Reflect, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ClockParent {
+    /// Hang under the deterministic tick master: freezes when the sim pauses.
+    /// Deterministic and replay-safe.
+    Sim,
+    /// Hang under the wall clock: keeps running while the sim is paused.
+    /// **Non-deterministic** — never put anything that feeds sim state here.
+    Real,
+}
+
+/// Re-point, rate-scale or seek one clock —
+/// `{"command":"SetClock","params":{"clock":"celestial","parent":"real","scale":1000}}`
+/// runs the sky 1000× **while the simulation stays paused**.
+///
+/// One verb covers every case, because in an affine tree they are the same case:
+/// * **detach / re-attach** — `parent` (the pause story: a clock freezes because of
+///   *where it hangs*, so unfreezing one clock is a re-parent, not a flag),
+/// * **time-dilate** — `scale` (`1000` = the sky at 1000×; the sim is untouched),
+/// * **seek** — `epoch_jd` on the celestial clock, or `offset` in seconds.
+///
+/// World state, not a view preference: it goes through the command/journal path, so
+/// every client sees the same sky and a replay reproduces it.
+#[Command(default)]
+pub struct SetClock {
+    /// Which clock to edit.
+    pub clock: ClockId,
+    /// Re-parent it (`"sim"` = freezes with the sim; `"real"` = free-running).
+    pub parent: Option<ClockParent>,
+    /// Rate relative to the parent (1.0 = follow, 1000.0 = 1000×).
+    pub scale: Option<f64>,
+    /// Affine offset over the parent, seconds.
+    pub offset: Option<f64>,
+    /// Seek the CELESTIAL clock to an absolute date (Julian Date, TDB). Ignored on
+    /// other clocks — they have no epoch mapping.
+    pub epoch_jd: Option<f64>,
+}
+
+#[on_command(SetClock)]
+fn on_set_clock(
+    trigger: On<SetClock>,
+    clocks: Option<Res<Clocks>>,
+    mission: Res<crate::MissionClock>,
+    resolved: Res<ResolvedDomains>,
+    mut q: Query<&mut TimeDomain>,
+    mut commands: Commands,
+) {
+    let Some(clocks) = clocks else { return };
+    let cmd = trigger.event();
+    let target = match cmd.clock {
+        ClockId::Celestial => clocks.celestial,
+        ClockId::Interaction => clocks.interaction,
+        ClockId::Sim => clocks.sim,
+    };
+    let Ok(mut domain) = q.get_mut(target) else { return };
+
+    if let Some(parent) = cmd.parent {
+        // A root ignores its parent (it IS a source), so giving a clock a parent
+        // must demote it from root — otherwise re-parenting the celestial clock
+        // (whose default root is `Epoch`) would silently do nothing.
+        commands.entity(target).remove::<ClockRoot>();
+        domain.parent = Some(match parent {
+            ClockParent::Sim => clocks.sim,
+            ClockParent::Real => clocks.real,
+        });
+        // Re-parenting changes what `parent_t` *is*, so hold the clock's current
+        // local time across the seam: solve `offset` such that `local_t` is
+        // unchanged this frame. Without this, detaching the sky would jump it by
+        // the difference between wall-elapsed and sim-elapsed seconds.
+        let local_t = resolved.get(target).unwrap_or(0.0);
+        let parent_t = resolved.get(domain.parent.unwrap()).unwrap_or(0.0);
+        domain.offset = local_t - domain.scale * parent_t;
+    }
+    if let Some(scale) = cmd.scale {
+        // Same continuity rule for a rate change: re-solve the offset so the clock
+        // changes SPEED without jumping.
+        let local_t = resolved.get(target).unwrap_or(0.0);
+        let parent_t = domain
+            .parent
+            .and_then(|p| resolved.get(p))
+            .unwrap_or(local_t);
+        domain.scale = scale;
+        domain.offset = local_t - scale * parent_t;
+    }
+    if let Some(offset) = cmd.offset {
+        domain.offset = offset;
+    }
+    // Seek: `epoch_jd` is expressed in the celestial clock's own units (epoch
+    // seconds since the mission epoch), so a date becomes an offset.
+    if let Some(epoch_jd) = cmd.epoch_jd {
+        if matches!(cmd.clock, ClockId::Celestial) {
+            let want_t = (epoch_jd - mission.mission_epoch0_jd) * crate::SECS_PER_DAY;
+            let parent_t = domain.parent.and_then(|p| resolved.get(p)).unwrap_or(0.0);
+            domain.offset = want_t - domain.scale * parent_t;
+            bevy::log::info!("[time] celestial clock seeked to JD {epoch_jd:.4}");
+        }
+    }
+}
+
+register_commands!(
+    on_control_animation,
+    on_set_time_transport,
+    on_set_mission_epoch,
+    on_set_clock
+);
 
 /// Plugin wiring for the clock tree: components, [`ResolvedDomains`], the resolve
 /// system in [`DomainResolveSet`] (`Update`), the [`AnimationPreview`] domain, and
@@ -416,11 +780,57 @@ pub(crate) fn build_domain_tree(app: &mut App) {
         .register_type::<Playback>()
         .register_type::<TimeBinding>()
         .register_type::<DomainRegime>()
+        .register_type::<ClockRoot>()
         .init_resource::<ResolvedDomains>()
-        .init_resource::<LastWorldSecs>()
-        .add_systems(Update, advance_and_resolve_domains.in_set(DomainResolveSet))
-        .add_systems(Startup, spawn_animation_preview);
+        .init_resource::<LastClockT>()
+        // The tree resolves in `PreUpdate`, AFTER the spine writes the `sim` root's
+        // `sim_secs` and BEFORE any consumer reads a clock (doc 19 §11d). It used to
+        // run in `Update`, which was fine when the only consumer was the animation
+        // sampler, but the epoch is derived from a clock now — and the celestial
+        // chain runs in `PreUpdate`.
+        .add_systems(
+            PreUpdate,
+            advance_and_resolve_domains
+                .in_set(DomainResolveSet)
+                .after(crate::TimeSpineSet),
+        )
+        // The epoch is now a *projection of the celestial clock*, so it must be
+        // written after the tree resolves and before `CelestialEpochSet` reads it.
+        .add_systems(
+            PreUpdate,
+            write_epoch_from_celestial_clock.after(DomainResolveSet),
+        )
+        .add_systems(Startup, (spawn_well_known_clocks, spawn_animation_preview).chain());
     register_all_commands(app);
+}
+
+/// Write `WorldTime.epoch_jd` from the **celestial clock** (doc 19 §11d).
+///
+/// The epoch used to be computed straight from `MissionClock.anchor` + tick, which
+/// meant it was not a clock at all — it could not be re-parented, rate-scaled or
+/// seeked. It is now a projection of one tree node:
+///
+/// ```text
+/// epoch_jd = mission_epoch0_jd + celestial_t / 86400
+/// ```
+///
+/// With the default wiring (`celestial = derived(sim, offset 0, scale 1)`),
+/// `celestial_t == sim_secs`, so this reproduces the tick-derived epoch **exactly**
+/// — same determinism, same replay, no behaviour change. Re-parent the node to the
+/// wall root and the sky runs while the sim is paused; scale it and the sky runs
+/// fast; seek it and the sky jumps to a date. All without touching the simulation.
+///
+/// `WorldTime.epoch_jd` stays the read interface, so the ~15 `epoch_jd` readers in
+/// `lunco-celestial` are untouched: the clock became the source, the view stayed put.
+pub fn write_epoch_from_celestial_clock(
+    clocks: Option<Res<Clocks>>,
+    resolved: Res<ResolvedDomains>,
+    mission: Res<crate::MissionClock>,
+    mut world: ResMut<WorldTime>,
+) {
+    let Some(clocks) = clocks else { return };
+    let Some(celestial_t) = resolved.get(clocks.celestial) else { return };
+    world.epoch_jd = mission.mission_epoch0_jd + celestial_t / crate::SECS_PER_DAY;
 }
 
 #[cfg(test)]
@@ -435,7 +845,26 @@ mod tests {
     }
 
     fn snap(parent: Option<Entity>, offset: f64, scale: f64, head: Option<f64>) -> DomainSnapshot {
-        DomainSnapshot { parent, offset, scale, head }
+        DomainSnapshot {
+            parent,
+            offset,
+            scale,
+            playback: head.map(|h| Playback { head: h, ..default() }),
+            root: None,
+        }
+    }
+
+    fn root(kind: ClockRoot) -> DomainSnapshot {
+        DomainSnapshot { parent: None, offset: 0.0, scale: 1.0, playback: None, root: Some(kind) }
+    }
+
+    /// Resolve `domain`'s `t` with no prior frame (so every `dt` starts from `t`).
+    fn t_of(m: &HashMap<Entity, DomainSnapshot>, domain: Entity, sim: f64) -> f64 {
+        let roots = RootTimes { sim_secs: sim, wall_secs: 0.0, epoch_secs: 0.0 };
+        resolve_clocks(m, &HashMap::new(), roots, roots, None)
+            .get(&domain)
+            .map(|s| s.t)
+            .unwrap_or(sim)
     }
 
     #[test]
@@ -482,17 +911,18 @@ mod tests {
         m.insert(outer, snap(None, 0.0, 2.0, None));
         m.insert(inner, snap(Some(outer), 0.0, 3.0, None));
         // world_secs = 10 → outer 20 → inner 60.
-        assert!((resolve_snapshot(&m, inner, 10.0, 0) - 60.0).abs() < EPS);
-        assert!((resolve_snapshot(&m, outer, 10.0, 0) - 20.0).abs() < EPS);
+        assert!((t_of(&m, inner, 10.0) - 60.0).abs() < EPS);
+        assert!((t_of(&m, outer, 10.0) - 20.0).abs() < EPS);
     }
 
     #[test]
     fn driven_domain_returns_its_head_not_the_chain() {
         let d = e(7);
         let mut m = HashMap::new();
+        // A driven head with no prior frame gets parent delta 0 → holds at its head,
+        // regardless of world_secs.
         m.insert(d, snap(None, 0.0, 1.0, Some(42.0)));
-        // head is authoritative regardless of world_secs.
-        assert!((resolve_snapshot(&m, d, 1000.0, 0) - 42.0).abs() < EPS);
+        assert!((t_of(&m, d, 1000.0) - 42.0).abs() < EPS);
     }
 
     #[test]
@@ -503,9 +933,128 @@ mod tests {
         // a → b → a cycle: depth cap returns world_secs.
         m.insert(a, snap(Some(b), 0.0, 1.0, None));
         m.insert(b, snap(Some(a), 0.0, 1.0, None));
-        assert!((resolve_snapshot(&m, a, 5.0, 0) - 5.0).abs() < 1e-6);
+        assert!((t_of(&m, a, 5.0) - 5.0).abs() < 1e-6);
         // Missing domain → world_secs.
-        assert!((resolve_snapshot(&m, e(99), 5.0, 0) - 5.0).abs() < EPS);
+        assert!((t_of(&m, e(99), 5.0) - 5.0).abs() < EPS);
+    }
+
+    /// The load-bearing property of the whole design (doc 19 §11a): a frozen
+    /// ancestor freezes its subtree **structurally**, with no `paused` flag and no
+    /// propagation pass. `parent_t` simply stops changing, so `child_t` does too.
+    #[test]
+    fn a_frozen_parent_freezes_its_whole_subtree_with_no_flag() {
+        let sim = e(1);
+        let child = e(2);
+        let grandchild = e(3);
+        let mut m = HashMap::new();
+        m.insert(sim, root(ClockRoot::Tick));
+        m.insert(child, snap(Some(sim), 0.0, 1.0, None));
+        m.insert(grandchild, snap(Some(child), 0.0, 60.0, None)); // 60× the parent
+
+        let roots_running = RootTimes { sim_secs: 10.0, wall_secs: 99.0, epoch_secs: 0.0 };
+        let a = resolve_clocks(&m, &HashMap::new(), roots_running, roots_running, Some(sim));
+        assert!((a[&grandchild].t - 600.0).abs() < EPS);
+
+        // Sim paused: sim_secs stops at 10 while WALL time keeps running (99 → 123).
+        // Everything under `sim` must hold — including the 60× child.
+        let last: HashMap<Entity, f64> = a.iter().map(|(&k, s)| (k, s.t)).collect();
+        let roots_paused = RootTimes { sim_secs: 10.0, wall_secs: 123.0, epoch_secs: 0.0 };
+        let b = resolve_clocks(&m, &last, roots_paused, roots_running, Some(sim));
+        assert!((b[&grandchild].t - 600.0).abs() < EPS);
+        assert!(b[&grandchild].dt.abs() < EPS, "a frozen subtree must report dt = 0");
+        assert!(b[&child].dt.abs() < EPS);
+    }
+
+    /// The other half: a WALL-rooted clock keeps running while the sim is paused.
+    /// This is what lets the avatar move and the sky advance during a pause — and
+    /// "unpause only the celestial clock" is exactly a re-parent onto this root.
+    #[test]
+    fn a_wall_rooted_clock_survives_a_sim_pause() {
+        let sim = e(1);
+        let real = e(2);
+        let interaction = e(3);
+        let mut m = HashMap::new();
+        m.insert(sim, root(ClockRoot::Tick));
+        m.insert(real, root(ClockRoot::Wall));
+        m.insert(interaction, snap(Some(real), 0.0, 1.0, None));
+
+        let r1 = RootTimes { sim_secs: 10.0, wall_secs: 100.0, epoch_secs: 0.0 };
+        let a = resolve_clocks(&m, &HashMap::new(), r1, r1, Some(sim));
+        let last: HashMap<Entity, f64> = a.iter().map(|(&k, s)| (k, s.t)).collect();
+
+        // Sim frozen (10 → 10), wall advances (100 → 100.25).
+        let r2 = RootTimes { sim_secs: 10.0, wall_secs: 100.25, epoch_secs: 0.0 };
+        let b = resolve_clocks(&m, &last, r2, r1, Some(sim));
+        assert!((b[&sim].dt).abs() < EPS, "the sim clock is paused");
+        assert!(
+            (b[&interaction].dt - 0.25).abs() < EPS,
+            "the interaction clock must keep ticking through a sim pause"
+        );
+    }
+
+    /// A driven playhead advances by its PARENT's delta — so a pause reaches driven
+    /// clocks too, without anyone propagating a flag into them.
+    #[test]
+    fn driven_head_advances_by_parent_delta_and_holds_when_parent_freezes() {
+        let sim = e(1);
+        let d = e(2);
+        let mut m = HashMap::new();
+        m.insert(sim, root(ClockRoot::Tick));
+        m.insert(
+            d,
+            DomainSnapshot {
+                parent: Some(sim),
+                offset: 0.0,
+                scale: 1.0,
+                playback: Some(Playback::replay(0.0, 0.0, 2.0, false)), // 2×
+                root: None,
+            },
+        );
+
+        // Frame 1 establishes the baseline (no prior frame ⇒ parent delta 0).
+        let r1 = RootTimes { sim_secs: 5.0, wall_secs: 0.0, epoch_secs: 0.0 };
+        let a = resolve_clocks(&m, &HashMap::new(), r1, r1, Some(sim));
+        let last: HashMap<Entity, f64> = a.iter().map(|(&k, s)| (k, s.t)).collect();
+
+        // Sim advances 5 → 8 (delta 3); the 2× head advances 6.
+        let r2 = RootTimes { sim_secs: 8.0, wall_secs: 0.0, epoch_secs: 0.0 };
+        let b = resolve_clocks(&m, &last, r2, r1, Some(sim));
+        assert!((b[&d].t - 6.0).abs() < EPS);
+
+        // The live system writes the advanced head back onto the `Playback` component,
+        // so the next frame's snapshot carries it. Model that here.
+        m.get_mut(&d).unwrap().playback.as_mut().unwrap().head = b[&d].t;
+
+        // Sim pauses (8 → 8): the head holds, even though it is "Playing".
+        let last2: HashMap<Entity, f64> = b.iter().map(|(&k, s)| (k, s.t)).collect();
+        let c = resolve_clocks(&m, &last2, r2, r2, Some(sim));
+        assert!((c[&d].t - 6.0).abs() < EPS);
+        assert!(c[&d].dt.abs() < EPS);
+    }
+
+    /// The celestial clock's default root is the EPOCH projection, not the tick — so
+    /// `epoch_jd` reproduces the old tick-derived value exactly, including in
+    /// `KinematicWarp` (where the tick is frozen but the epoch still advances).
+    #[test]
+    fn celestial_defaults_to_the_epoch_projection_so_warp_still_moves_the_sky() {
+        let sim = e(1);
+        let celestial = e(2);
+        let mut m = HashMap::new();
+        m.insert(sim, root(ClockRoot::Tick));
+        m.insert(celestial, root(ClockRoot::Epoch));
+
+        // Warp: the tick is FROZEN (sim_secs constant) but the epoch advances.
+        let r1 = RootTimes { sim_secs: 42.0, wall_secs: 0.0, epoch_secs: 1000.0 };
+        let a = resolve_clocks(&m, &HashMap::new(), r1, r1, Some(sim));
+        let last: HashMap<Entity, f64> = a.iter().map(|(&k, s)| (k, s.t)).collect();
+        let r2 = RootTimes { sim_secs: 42.0, wall_secs: 0.0, epoch_secs: 3000.0 };
+        let b = resolve_clocks(&m, &last, r2, r1, Some(sim));
+
+        assert!(b[&sim].dt.abs() < EPS, "tick frozen in warp");
+        assert!(
+            (b[&celestial].dt - 2000.0).abs() < EPS,
+            "the sky must keep moving in warp — that is what warp is FOR"
+        );
     }
 
     #[test]
@@ -545,7 +1094,8 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<WorldTime>()
             .init_resource::<ResolvedDomains>()
-            .init_resource::<LastWorldSecs>()
+            .init_resource::<LastClockT>()
+            .init_resource::<Time<bevy::time::Real>>()
             .add_systems(Update, advance_and_resolve_domains);
 
         app.world_mut().resource_mut::<WorldTime>().sim_secs = 10.0;
@@ -558,9 +1108,47 @@ mod tests {
         app.update();
 
         let resolved = app.world().resource::<ResolvedDomains>();
-        // Derived: 2·world = 20.
+        // Derived: parent defaults to the sim root ⇒ 2·world = 20.
         assert_eq!(resolved.get(derived), Some(20.0));
-        // Driven: head advanced by world_delta (10−0)·rate = 10.
+        // Driven: head advanced by the sim delta (10 − 0)·rate = 10.
         assert_eq!(resolved.get(driven), Some(10.0));
+
+        // Second frame: sim advances 10 → 15, so the 1× head advances by another 5.
+        app.world_mut().resource_mut::<WorldTime>().sim_secs = 15.0;
+        app.update();
+        let resolved = app.world().resource::<ResolvedDomains>();
+        assert_eq!(resolved.get(derived), Some(30.0));
+        assert_eq!(resolved.get(driven), Some(15.0));
+        assert_eq!(resolved.delta(driven), 5.0);
+
+        // Third frame: the sim clock HOLDS ⇒ the driven head holds too, with dt = 0.
+        // A pause reaches a driven clock with no flag, purely because its parent
+        // stopped advancing.
+        app.update();
+        let resolved = app.world().resource::<ResolvedDomains>();
+        assert_eq!(resolved.get(driven), Some(15.0));
+        assert_eq!(resolved.delta(driven), 0.0);
+    }
+
+    /// The well-known clocks exist and are wired into the shape doc 19 §11b calls for:
+    /// `interaction` under the WALL root (survives a pause), `celestial` on the epoch
+    /// projection — and `celestial` is NOT a child of `physics`.
+    #[test]
+    fn well_known_clocks_spawn_in_the_documented_shape() {
+        let mut app = App::new();
+        app.add_systems(Startup, spawn_well_known_clocks);
+        app.update();
+
+        let clocks = *app.world().resource::<Clocks>();
+        let w = app.world();
+        assert_eq!(w.get::<ClockRoot>(clocks.real), Some(&ClockRoot::Wall));
+        assert_eq!(w.get::<ClockRoot>(clocks.sim), Some(&ClockRoot::Tick));
+        assert_eq!(w.get::<ClockRoot>(clocks.celestial), Some(&ClockRoot::Epoch));
+        // The interaction clock hangs off the wall root — that is what keeps the
+        // avatar moving while the sim is paused.
+        assert_eq!(
+            w.get::<TimeDomain>(clocks.interaction).unwrap().parent,
+            Some(clocks.real)
+        );
     }
 }

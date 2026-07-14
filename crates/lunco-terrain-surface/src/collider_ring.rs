@@ -406,14 +406,6 @@ pub fn despawn_orphaned_collider_tiles(
     }
 }
 
-/// Freeze state for [`hold_physics_until_dem_ready`].
-#[derive(Resource, Default)]
-pub struct DemBuildPhysicsHold {
-    /// True only while THIS system holds the freeze — so a user/manual pause is
-    /// never unpaused out from under the user (mirrors the obstacle-field hold).
-    paused_by_us: bool,
-}
-
 /// The ring node (canonical-depth quadtree coord) covering terrain-local
 /// `(x, z)`, or `None` outside the terrain footprint. Must agree with the
 /// wanted-set derivation in [`update_collider_ring`].
@@ -453,7 +445,6 @@ fn ring_node(half: f64, depth: u8, x: f64, z: f64) -> Option<QuadCoord> {
 /// frame, so the awaited tiles are exactly the ones already baking.
 #[allow(clippy::type_complexity)]
 pub fn hold_physics_until_dem_ready(
-    mut hold: ResMut<DemBuildPhysicsHold>,
     building: Query<(), With<crate::terrain::DemTerrainRequest>>,
     rings: Query<(
         &GlobalTransform,
@@ -462,9 +453,9 @@ pub fn hold_physics_until_dem_ready(
         &ColliderTiles,
     )>,
     bodies: Query<(&RigidBody, &GlobalTransform)>,
-    transport: Option<ResMut<lunco_time::TimeTransport>>,
+    holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
 ) {
-    let Some(mut transport) = transport else { return };
+    let Some(mut holds) = holds else { return };
     let mut wait = !building.is_empty();
     if !wait {
         'terrains: for (t_gt, hf, ring, tiles) in &rings {
@@ -486,14 +477,13 @@ pub fn hold_physics_until_dem_ready(
             }
         }
     }
-    if wait {
-        if matches!(transport.mode, lunco_time::TransportMode::Playing) {
-            transport.mode = lunco_time::TransportMode::Paused;
-            hold.paused_by_us = true;
-        }
-    } else if hold.paused_by_us {
-        transport.mode = lunco_time::TransportMode::Playing;
-        hold.paused_by_us = false;
+    // Gate PHYSICS, not the clock. This suspends rigid-body integration only — the
+    // transport, the tick, the epoch and the celestial chain all keep running — so
+    // the scene is not born "paused" (the user never has to press play to undo an
+    // engine wait) and the planets don't stop while a heightfield bakes. Edge-guarded
+    // so the `ResMut` is only dereferenced when the state actually flips.
+    if holds.holds(lunco_physics::PhysicsHolds::TERRAIN_READY) != wait {
+        holds.set(lunco_physics::PhysicsHolds::TERRAIN_READY, wait);
     }
 }
 

@@ -7306,6 +7306,7 @@ dependencies = [
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
+ "lunco-physics",
  "lunco-render",
  "lunco-terrain-core",
  "lunco-time",
@@ -7314,6 +7315,14 @@ dependencies = [
  "rand_chacha 0.10.0",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lunco-physics"
+version = "0.1.0-dev"
+dependencies = [
+ "avian3d",
+ "bevy",
 ]
 
 [[package]]
@@ -7383,6 +7392,7 @@ dependencies = [
  "lunco-modelica",
  "lunco-networking",
  "lunco-obstacle-field",
+ "lunco-physics",
  "lunco-render",
  "lunco-render-bevy",
  "lunco-sandbox-edit",
@@ -7609,6 +7619,7 @@ dependencies = [
  "lunco-core",
  "lunco-materials",
  "lunco-obstacle-field",
+ "lunco-physics",
  "lunco-precompute",
  "lunco-render",
  "lunco-settings",
@@ -7645,6 +7656,7 @@ dependencies = [
  "celestial-time",
  "chrono",
  "lunco-core",
+ "serde",
 ]
 
 [[package]]

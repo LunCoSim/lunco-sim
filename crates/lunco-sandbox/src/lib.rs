@@ -1595,6 +1595,10 @@ impl Plugin for SandboxCorePlugin {
             // EntityCount is cheap and useful any time we look at perf.
             .add_plugins(bevy::diagnostic::EntityCountDiagnosticsPlugin::default())
             .add_plugins(PhysicsPlugins::default().set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all()))
+            // Whoever installs physics installs its readiness gate: terrain/obstacle
+            // subsystems suspend *integration* (avian's `Time<Physics>`) while their
+            // colliders bake, instead of pausing the world clock. See `lunco-physics`.
+            .add_plugins(lunco_physics::PhysicsGatePlugin)
             // Phase 5: physics stops sharing GlobalTransform with the render
             // world. Disables ALL of avian's f32 transform sync — including
             // `propagate_before_physics`, the third plain-GT whole-tree writer

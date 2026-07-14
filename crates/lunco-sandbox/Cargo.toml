@@ -57,6 +57,7 @@ required-features = ["ui"]
 # the server. The CI guard in `.github/workflows/lint.yml` fails if it comes back.
 bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "bevy_window"] }
 avian3d = { workspace = true }
+lunco-physics = { workspace = true }
 big_space = { workspace = true }
 leafwing-input-manager = { workspace = true }
 lunco-core = { path = "../lunco-core" }

@@ -6,6 +6,8 @@ edition = "2021"
 [dependencies]
 bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }
+# `SetClock`'s typed params (ClockId / ClockParent) cross the command/API boundary.
+serde = { workspace = true }
 # Time-scale + sidereal math (UTC/TAI/TT/TDB/UT1, leap table, GMST). Zero-dep
 # pure-math crate; wrapped behind `scales.rs` so the rest of the workspace never
 # imports it directly (absorbs its pre-1.0 API churn). Same version the ephemeris

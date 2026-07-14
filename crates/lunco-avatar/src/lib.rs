@@ -942,6 +942,18 @@ pub struct ChaseCamera {
     pub vertical_offset: f32,
 }
 
+/// Appends every descendant of `root` to `out` (the root itself is the caller's).
+/// Used to exclude a followed vessel's own colliders — which live on child prims,
+/// not the root — from the spring arm's collision cast.
+fn collect_subtree(root: Entity, q_children: &Query<&Children>, out: &mut Vec<Entity>) {
+    if let Ok(children) = q_children.get(root) {
+        for &c in children {
+            out.push(c);
+            collect_subtree(c, q_children, out);
+        }
+    }
+}
+
 /// SpringArmCamera system: positions the camera behind a ground vehicle with
 /// heading-locked offset.
 ///
@@ -961,6 +973,7 @@ fn update_spring_arm_impl(
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
+    q_children: Query<&Children>,
     defaults: &CameraDefaults,
     keys: &ButtonInput<KeyCode>,
     spatial_query: &Option<avian3d::prelude::SpatialQuery>,
@@ -1049,8 +1062,17 @@ fn update_spring_arm_impl(
         let ray_dir = (desired_pos - target_pos).normalize_or(DVec3::Y);
         let ray_len = desired_pos.distance(target_pos);
         // Mask out the TRIGGER layer so the camera doesn't clip on invisible
-        // trigger-zone sensors (waypoints etc.); still excludes the followed target.
-        let mut filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([arm.target]);
+        // trigger-zone sensors (waypoints etc.).
+        //
+        // The exclusion set is the target's WHOLE SUBTREE, not just its root. On a
+        // USD vessel the root carries the RigidBody but the colliders are child
+        // prims (chassis, wheels), so excluding the root alone left the arm's ray
+        // hitting the rover's own body ~0.5 m out — `target_len` collapsed to ~0 and
+        // the camera sank into/under the rover on possess. Same set autopilot builds
+        // for its own casts (`lunco-autopilot/src/lib.rs:1508`).
+        let mut excluded = vec![arm.target];
+        collect_subtree(arm.target, &q_children, &mut excluded);
+        let mut filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities(excluded);
         filter.mask = avian3d::prelude::LayerMask(!lunco_core::TRIGGER_COLLISION_LAYER);
         let hit = if let Some(ref sq) = spatial_query {
             sq.cast_ray(
@@ -1107,6 +1129,7 @@ fn spring_arm_system(
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
+    q_children: Query<&Children>,
     defaults: Res<CameraDefaults>,
     keys: Res<ButtonInput<KeyCode>>,
     spatial_query: Option<avian3d::prelude::SpatialQuery>,
@@ -1118,6 +1141,7 @@ fn spring_arm_system(
         q_spatial,
         q_grids,
         q_dragging,
+        q_children,
         &defaults,
         &keys,
         &spatial_query,
@@ -1138,6 +1162,7 @@ fn spring_arm_paused_system(
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
+    q_children: Query<&Children>,
     defaults: Res<CameraDefaults>,
     keys: Res<ButtonInput<KeyCode>>,
     spatial_query: Option<avian3d::prelude::SpatialQuery>,
@@ -1149,6 +1174,7 @@ fn spring_arm_paused_system(
         q_spatial,
         q_grids,
         q_dragging,
+        q_children,
         &defaults,
         &keys,
         &spatial_query,
@@ -2366,11 +2392,18 @@ pub fn avatar_raycast_possession(
     // The mesh the pick resolved to (rover, prop, ground, …); resolve to its
     // clickable root. `hit.depth` is the along-ray distance to compare against
     // the analytic spheres below.
+    // Depth is recorded for ANY real mesh hit, clickable or not. Occlusion is a
+    // geometric fact, not a property of being click-targetable: the terrain has no
+    // `SelectableRoot`, but it is still solid, and a click on it must still shadow
+    // the analytic spheres below. Coupling the two (recording `depth` only when a
+    // root was found) left `min_t = INFINITY` on every ground click, so the Earth
+    // hit-sphere — which a camera standing on the surface ALWAYS intersects —
+    // passed `t < min_t` and the click "leaked" through the ground into a
+    // `FocusTarget` on the planet.
     let mut nearest_clickable: Option<Entity> = None;
-    let mut min_t = f32::INFINITY;
+    let mut min_t = if click.hit.position.is_some() { click.hit.depth } else { f32::INFINITY };
 
     if let Some(root) = find_clickable_from_hit(click.entity, &q_parents, &q_selectable, &q_ground) {
-        min_t = click.hit.depth;
         nearest_clickable = Some(root);
     }
 

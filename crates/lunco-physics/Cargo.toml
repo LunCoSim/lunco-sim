@@ -1,0 +1,12 @@
+[package]
+name = "lunco-physics"
+version = "0.1.0-dev"
+edition = "2021"
+description = "Physics readiness gate: suspend rigid-body integration (avian's Time<Physics>) while colliders bake — without touching the world clock or the user's transport"
+
+[dependencies]
+# Substrate only — no render, no window. This crate exists to be depended on by
+# the terrain/obstacle generators (which run headless and on wasm) as well as the
+# apps, so it must stay as light as avian + the bevy ECS/time core.
+bevy = { workspace = true }
+avian3d = { workspace = true }

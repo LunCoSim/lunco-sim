@@ -96,8 +96,33 @@ impl Plugin for TrajectoryPlugin {
            .register_type::<TrajectoryFrame>()
            .register_type::<TrajectoryPath>();
            
-        app.add_systems(Startup, trajectory_setup_system);
-        
+        // Trajectory views are solar-system objects: they exist only when the scene
+        // actually asked for the celestial hierarchy (`CelestialConfig.spawn_hierarchy`,
+        // which the sandbox turns on when a loaded scene authors a site anchor).
+        //
+        // This used to be an unconditional `Startup` system, so the Earth and Moon
+        // orbit views were spawned into EVERY scene — including the default sandbox,
+        // which explicitly runs with `spawn_hierarchy: false` and authors no anchor.
+        // The bodies themselves were correctly absent (their spawn is gated), so the
+        // scene got orbit geometry for planets that did not exist. Celestial content
+        // is opt-in per scene; nothing may appear that the scene did not describe.
+        //
+        // Same shape as `MissionPlugin`: in `Update`, latched by a `Local`, so it
+        // fires once and re-arms if the hierarchy is enabled later at runtime.
+        app.add_systems(
+            Update,
+            trajectory_setup_system.run_if(
+                |config: Res<crate::CelestialConfig>, mut spawned: Local<bool>| {
+                    if !config.spawn_hierarchy || *spawned {
+                        return false;
+                    }
+                    *spawned = true;
+                    true
+                },
+            ),
+        );
+
+
         // CHAINED: a rebuild must be ATOMIC within one frame.
         //
         // `handle_trajectory_tasks` writes `path.points` AND `path.anchor`

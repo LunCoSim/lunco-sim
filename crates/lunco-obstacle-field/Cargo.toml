@@ -17,6 +17,7 @@ bevy = { workspace = true, features = ["bevy_mesh", "bevy_camera", "bevy_world_s
 bevy_mesh = { workspace = true }
 lunco-render = { path = "../lunco-render" }
 avian3d = { workspace = true }
+lunco-physics = { workspace = true }
 big_space = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-time = { path = "../lunco-time" }

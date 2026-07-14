@@ -64,13 +64,11 @@ struct ObstacleFieldHeights {
     reseat_pending: bool,
 }
 
-/// Tracks a short physics freeze around field regeneration.
+/// Tracks a short physics freeze around field regeneration. The freeze itself is a
+/// reason-keyed [`SimHolds`](lunco_time::SimHolds) entry; this only counts it down.
 #[derive(Resource, Default)]
 struct PhysicsHold {
     frames_left: u32,
-    /// True only when *this* system paused time — so we never unpause a freeze
-    /// the user started manually.
-    paused_by_us: bool,
 }
 
 /// Root of a generated field; despawned (recursively) on regeneration.
@@ -149,33 +147,31 @@ impl Plugin for ObstacleFieldPlugin {
 }
 
 /// Freeze the sim for a few frames after a rebuild, then restore — long enough for
-/// the re-seated colliders to settle before physics steps again. Goes through the
-/// single transport authority (`TimeTransport.mode`, doc 19), which the spine maps
-/// onto `relative_speed = 0` (and thus avian's `Time<Physics>`). Only unpauses if
-/// *we* paused — a user's manual pause (same authority) survives a regen untouched.
+/// the re-seated colliders to settle before physics steps again.
+///
+/// Goes through [`PhysicsHolds`](lunco_physics::PhysicsHolds) — the engine
+/// readiness authority, which suspends *rigid-body integration only*. NOT
+/// `TimeTransport`, which is the user's play/pause intent and belongs to the user
+/// alone: writing it here (as this did) made a regen look like a pause the user had
+/// to undo, froze the epoch/ephemeris along with it, and forced the "did *we* pause
+/// it?" bookkeeping that a reason-keyed physics hold makes unnecessary.
 fn manage_physics_hold(
     mut hold: ResMut<PhysicsHold>,
-    transport: Option<ResMut<lunco_time::TimeTransport>>,
+    holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
 ) {
     if hold.frames_left == 0 {
         return;
     }
-    // No time spine in this context (e.g. a bare generator test) — nothing to
-    // freeze through the transport; drop the hold so we don't spin forever.
-    let Some(mut transport) = transport else {
+    // No physics gate in this context (e.g. a bare generator test) — nothing to
+    // freeze; drop the hold so we don't spin forever.
+    let Some(mut holds) = holds else {
         hold.frames_left = 0;
-        hold.paused_by_us = false;
         return;
     };
-    let is_paused = matches!(transport.mode, lunco_time::TransportMode::Paused);
-    if !hold.paused_by_us && !is_paused {
-        transport.mode = lunco_time::TransportMode::Paused;
-        hold.paused_by_us = true;
-    }
+    holds.set(lunco_physics::PhysicsHolds::OBSTACLE_FIELD, true);
     hold.frames_left -= 1;
-    if hold.frames_left == 0 && hold.paused_by_us {
-        transport.mode = lunco_time::TransportMode::Playing;
-        hold.paused_by_us = false;
+    if hold.frames_left == 0 {
+        holds.set(lunco_physics::PhysicsHolds::OBSTACLE_FIELD, false);
     }
 }
 
