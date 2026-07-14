@@ -1,7 +1,37 @@
-//! Spawn catalog — registry of all spawnable object types.
+//! Spawn catalog — the registry of everything spawnable, derived from the USD.
 //!
-//! The catalog is built at startup and contains entries for rovers, props,
-//! and terrain. Each entry knows how to spawn itself (USD file or procedural).
+//! Nothing here is hardcoded. A spawnable is any project `*.usda` that says it is
+//! one (`bool lunco:spawnable`), its palette group is its folder, and its drop
+//! height is its own `float lunco:spawnLift`. Drop a file into `assets/` or an
+//! open Twin and it is spawnable, with no Rust change and no rebuild.
+//!
+//! # The scan is asynchronous, and has to be
+//!
+//! Two questions, two different costs:
+//!
+//! - *Which files exist?* — [`lunco_assets::discovery`], synchronous. The native
+//!   build walks the directory; the web build reads a manifest baked at build
+//!   time, because HTTP has no `readdir` and a bundle's contents genuinely ARE a
+//!   build-time fact.
+//! - *What does a file say about itself?* — requires **reading it**, which on the
+//!   web is an HTTP fetch. That is not a build-time fact: it is the content of a
+//!   file we ship, and it can be read from the file we ship.
+//!
+//! The web build used to answer the second question from a `build.rs` table
+//! (`BAKED_SPAWN_META`, `BAKED_DESCRIPTIONS`) — the assets' contents *copied into
+//! the binary*, along with the weaker line-scan parser needed to produce them (a
+//! build script cannot use the crate's own USD stack). A copy that could go stale
+//! against the very files it described, and a second parser that had already
+//! drifted from the real one.
+//!
+//! So the read is async now, on both platforms, and the parse is openusd's. See
+//! [`crate::spawn_meta`] for the full account, and [`lunco_assets::asset_read`]
+//! for the bytes.
+//!
+//! The shape is dispatch/drain: [`dispatch_usd_scan`] starts one read per
+//! newly-discovered asset (Startup, and whenever the open-Twin set changes), and
+//! [`drain_usd_scan`] folds each result into [`AssetMetaStore`] and, if it is a
+//! part, [`SpawnCatalog`].
 
 use bevy::prelude::*;
 use lunco_usd_bevy::{UsdInstanceRoot, UsdPrimPath};
@@ -190,82 +220,172 @@ fn categorize(rel: &str) -> String {
         .unwrap_or_else(|| "Other".to_string())
 }
 
-/// Read the optional `float lunco:spawnLift` attribute from a USD file by a
-/// cheap line scan (no full parse). Returns `0.0` if absent/unreadable — the
-use crate::spawn_meta::SpawnMeta;
+use crate::spawn_meta::{parse_spawn_meta, SpawnMeta};
+use lunco_assets::discovery::AssetFile;
 
-#[cfg(not(target_arch = "wasm32"))]
-fn read_spawn_meta(path: &std::path::Path) -> SpawnMeta {
-    read_spawn_meta_native(path)
+/// What every project `*.usda` says about itself, keyed by its asset path.
+///
+/// The catalogue's *source*, and the Scenarios menu's tooltip source — one store
+/// for one fact. These used to be two: [`SpawnCatalog`] scanned the files for
+/// `lunco:spawnable`/`lunco:spawnLift`, and the sandbox UI kept its own
+/// `SceneDescCache` that re-parsed the *same default prim of the same files*
+/// for `lunco:description`.
+///
+/// **Eventually complete.** Filled by the async scan below — on the web each
+/// entry costs an HTTP fetch, so it lands over some frames rather than all at
+/// once. A UI reading it must tolerate a miss (show no tooltip) rather than
+/// treat absence as an answer.
+#[derive(Resource, Default)]
+pub struct AssetMetaStore {
+    by_path: std::collections::HashMap<String, SpawnMeta>,
 }
 
-/// Spawn metadata baked by `build.rs` (the browser can't line-scan the USD
-/// files). Keyed by engine-relative path.
-#[cfg(target_arch = "wasm32")]
-mod baked_spawn_meta {
-    include!(concat!(env!("OUT_DIR"), "/baked_spawn_meta.rs"));
+impl AssetMetaStore {
+    /// This asset's metadata, or `None` if it has not been read yet.
+    pub fn get(&self, asset_path: &str) -> Option<&SpawnMeta> {
+        self.by_path.get(asset_path)
+    }
+
+    /// This asset's `lunco:description` — the "what is this" blurb. `None` when
+    /// the asset authors none *or* has not been read yet; both mean "no tooltip".
+    pub fn description(&self, asset_path: &str) -> Option<&str> {
+        self.by_path.get(asset_path)?.description.as_deref()
+    }
+
+    /// How many assets have been read. Only useful for logging/tests.
+    pub fn len(&self) -> usize {
+        self.by_path.len()
+    }
+
+    /// Whether nothing has been read yet.
+    pub fn is_empty(&self) -> bool {
+        self.by_path.is_empty()
+    }
 }
 
-/// Web: look the spawn metadata up in the baked manifest. `path` is the bare
-/// engine-relative path (`discovery::list_assets` sets `abs_path` to it on
-/// wasm), matching the keys `build.rs` baked. Unknown ⇒ NOT spawnable: an asset
-/// the bake never saw cannot have claimed to be a part, and opting it in on a
-/// lookup miss is how the web palette would silently diverge from native.
-#[cfg(target_arch = "wasm32")]
-fn read_spawn_meta(path: &std::path::Path) -> SpawnMeta {
-    let key = path.to_str().unwrap_or_default();
-    for (rel, spawnable, lift) in baked_spawn_meta::BAKED_SPAWN_META {
-        if *rel == key {
-            return SpawnMeta { lift: *lift, spawnable: *spawnable };
+/// One asset's bytes, read and parsed.
+struct Scanned {
+    asset: AssetFile,
+    meta: SpawnMeta,
+}
+
+/// The in-flight metadata scan.
+///
+/// Reading an asset is **async** — on the web it is an HTTP fetch, and there is
+/// no honest way to make that synchronous. So the scan is a dispatch/drain pair:
+/// [`dispatch_usd_scan`] fires one read per newly-discovered asset, and
+/// [`drain_usd_scan`] folds the results into [`AssetMetaStore`] + [`SpawnCatalog`]
+/// as they land.
+#[derive(Resource)]
+pub struct CatalogScan {
+    tx: crossbeam_channel::Sender<Scanned>,
+    rx: crossbeam_channel::Receiver<Scanned>,
+    /// Asset paths already dispatched. An asset is read ONCE per rescan — the
+    /// scan runs on every Twin-set change, and without this it would re-fetch
+    /// the entire engine library each time a twin opened.
+    dispatched: std::collections::HashSet<String>,
+}
+
+impl Default for CatalogScan {
+    fn default() -> Self {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        Self {
+            tx,
+            rx,
+            dispatched: Default::default(),
         }
     }
-    SpawnMeta { lift: 0.0, spawnable: false }
 }
 
-/// Read a USD scene's `lunco:description` attribute — the human-readable
-/// "what is this demo" line shown as a tooltip in the Scenarios menu. Returns
-/// `None` if absent/unreadable, in which case the menu just shows no tooltip.
+impl CatalogScan {
+    /// Forget what has been read, so the next [`dispatch_usd_scan`] re-reads
+    /// every asset. Backs the manual `RescanSpawnCatalog` command — the point of
+    /// which is to pick up *edits* to files already seen.
+    pub fn forget(&mut self) {
+        self.dispatched.clear();
+    }
+}
+
+/// Read one discovered asset's metadata. The single read path, both platforms:
+/// bytes via [`lunco_assets::asset_read`], meaning via openusd.
 ///
-/// Native: parses the `.usda` source with **openusd's USDA parser**
-/// ([`lunco_usd_bevy::read_default_prim_attr`]) and reads the attribute off the
-/// stage's `defaultPrim` through the real USD data model — not a hand-rolled
-/// text scan, so string escapes and quoted runs are handled correctly. Only
-/// the single layer is parsed (no PCP composition): the description lives on
-/// the root prim, so no referenced sub-layer needs resolving.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn read_usd_description(path: &std::path::Path) -> Option<String> {
-    read_spawn_meta_native(path).description
+/// An unreadable asset yields [`SpawnMeta::default`] — *not spawnable*. A file we
+/// cannot read has not told us it is a part, and guessing "yes" is how a broken
+/// asset would end up in the palette.
+pub async fn read_asset_meta(asset: &AssetFile) -> SpawnMeta {
+    match lunco_assets::asset_read::read_asset_text(asset).await {
+        Ok(src) => parse_spawn_meta(&src),
+        Err(e) => {
+            warn!("CATALOG: {} unreadable, treating as not-spawnable: {e}", asset.rel);
+            SpawnMeta::default()
+        }
+    }
 }
 
-/// The full metadata read, so `read_spawn_meta` and `read_usd_description` share
-/// one parse of one file rather than two different ones.
-#[cfg(not(target_arch = "wasm32"))]
-fn read_spawn_meta_native(path: &std::path::Path) -> SpawnMeta {
-    std::fs::read_to_string(path)
-        .map(|src| crate::spawn_meta::parse_spawn_meta(&src))
-        .unwrap_or_default()
+/// Fire an async read for every project `*.usda` not yet dispatched. Returns how
+/// many reads were started.
+///
+/// Enumeration is still synchronous — [`lunco_assets::discovery`] answers "what
+/// files exist" from the filesystem (native) or the shipped manifest (web).
+/// It is only the *contents* that need I/O.
+pub fn dispatch_usd_scan(
+    roots: &lunco_assets::twin_source::TwinRoots,
+    scan: &mut CatalogScan,
+) -> usize {
+    let mut started = 0;
+    for asset in lunco_assets::discovery::list_usd_assets(roots) {
+        if !scan.dispatched.insert(asset.asset_path.clone()) {
+            continue;
+        }
+        let tx = scan.tx.clone();
+        let fut = async move {
+            let meta = read_asset_meta(&asset).await;
+            // Receiver lives in a resource for the app's lifetime; a send error
+            // just means shutdown raced us.
+            let _ = tx.send(Scanned { asset, meta });
+        };
+        // Native: off the main thread. Web: `spawn_local`, because a browser
+        // `fetch` future is `!Send` and cannot go on a task pool at all.
+        #[cfg(not(target_arch = "wasm32"))]
+        bevy::tasks::AsyncComputeTaskPool::get().spawn(fut).detach();
+        #[cfg(target_arch = "wasm32")]
+        wasm_bindgen_futures::spawn_local(fut);
+        started += 1;
+    }
+    started
 }
 
-/// Descriptions baked by `build.rs` (the browser has no filesystem to parse at
-/// runtime). Keyed by engine-relative path — the same string
-/// `discovery::list_assets` bakes as `asset_path`, so the wasm lookup matches.
-#[cfg(target_arch = "wasm32")]
-mod baked_descriptions {
-    include!(concat!(env!("OUT_DIR"), "/baked_descriptions.rs"));
+/// Fold completed reads into the metadata store and the spawn catalog. Cheap
+/// when idle: an empty channel drains in nothing.
+pub fn drain_usd_scan(
+    scan: Res<CatalogScan>,
+    mut store: ResMut<AssetMetaStore>,
+    mut catalog: ResMut<SpawnCatalog>,
+) {
+    let mut added = 0;
+    for Scanned { asset, meta } in scan.rx.try_iter() {
+        if meta.spawnable && catalog.add_unique(entry_for(&asset, &meta)) {
+            added += 1;
+        }
+        store.by_path.insert(asset.asset_path, meta);
+    }
+    if added > 0 {
+        info!("CATALOG_SCAN: +{added} spawnable(s)");
+    }
 }
 
-/// Web: look the description up in the baked manifest. `path` is the bare
-/// engine-relative path (`discovery::list_assets` sets `abs_path` to it on
-/// wasm), matching the keys `build.rs` baked. Unknown ⇒ no tooltip. The bake
-/// is produced by `build.rs` parsing the same `lunco:description` attribute,
-/// so the web value matches the native openusd read.
-#[cfg(target_arch = "wasm32")]
-pub fn read_usd_description(path: &std::path::Path) -> Option<String> {
-    let key = path.to_str().unwrap_or_default();
-    baked_descriptions::BAKED_DESCRIPTIONS
-        .iter()
-        .find(|(rel, _)| *rel == key)
-        .map(|(_, d)| d.to_string())
+/// The catalogue entry an asset+metadata pair describes. Pure — no I/O, so the
+/// mapping from "what the file says" to "what the palette shows" is testable
+/// without touching a disk or a network.
+pub fn entry_for(asset: &AssetFile, meta: &SpawnMeta) -> SpawnableEntry {
+    SpawnableEntry {
+        id: asset.stem.clone(),
+        display_name: title_case(&asset.stem),
+        category: categorize(&asset.rel),
+        source: SpawnSource::UsdFile(asset.asset_path.clone()),
+        spawn_lift: meta.lift,
+        default_transform: Transform::default(),
+    }
 }
 
 /// `habitat_fsh` → `Habitat Fsh`. Cheap presentable name from a file stem.
@@ -283,30 +403,23 @@ fn title_case(stem: &str) -> String {
         .join(" ")
 }
 
-/// Add every project USD asset (engine library + open Twins) to `catalog`,
-/// reading each file's `lunco:spawnable`/`lunco:spawnLift` metadata. A file
-/// with `lunco:spawnable = false` (scenes/missions opt out) is skipped — the
-/// decision is USD data, not a Rust filename rule. Idempotent (`add_unique`),
-/// so re-runs add only new files. Returns the count newly added. Called at
-/// Startup and on Twin-open (see `commands.rs`) — never per frame.
-pub fn scan_usd_into_catalog(
+/// Enumerate, read and populate in one blocking call — the async pipeline above,
+/// collapsed.
+///
+/// **Native only, and only for tests and one-shot tools.** `block_on` is sound
+/// here for the reason [`lunco_storage::Storage::read_sync`] documents: the
+/// native backend's future wraps synchronous `std::fs` and is already `Ready`.
+/// The browser's is not, which is the whole reason the running app uses the
+/// dispatch/drain pair instead.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn scan_usd_into_catalog_blocking(
     roots: &lunco_assets::twin_source::TwinRoots,
     catalog: &mut SpawnCatalog,
 ) -> usize {
     let mut added = 0;
-    for a in lunco_assets::discovery::list_usd_assets(roots) {
-        let meta = read_spawn_meta(&a.abs_path);
-        if !meta.spawnable {
-            continue;
-        }
-        if catalog.add_unique(SpawnableEntry {
-            id: a.stem.clone(),
-            display_name: title_case(&a.stem),
-            category: categorize(&a.rel),
-            source: SpawnSource::UsdFile(a.asset_path.clone()),
-            spawn_lift: meta.lift,
-            default_transform: Transform::default(),
-        }) {
+    for asset in lunco_assets::discovery::list_usd_assets(roots) {
+        let meta = futures_lite::future::block_on(read_asset_meta(&asset));
+        if meta.spawnable && catalog.add_unique(entry_for(&asset, &meta)) {
             added += 1;
         }
     }
@@ -371,47 +484,16 @@ mod tests {
         assert_eq!(c.by_category("Rovers").count(), 2);
     }
 
-    #[test]
-    fn test_read_usd_description_from_temp_file() {
-        // Round-trips a authored `lunco:description` through the real openusd
-        // parser (via `read_usd_description`'s file→parse→read path).
-        let dir = std::env::temp_dir();
-        let path = dir.join("lunco_catalog_desc_test.usda");
-        std::fs::write(
-            &path,
-            "#usda 1.0\n\
-             (defaultPrim = \"X\")\n\
-             def Xform \"X\"\n{\n\
-                custom string lunco:description = \"A plain-language scene blurb.\"\n\
-             }\n",
-        )
-        .unwrap();
-        assert_eq!(
-            read_usd_description(&path).as_deref(),
-            Some("A plain-language scene blurb.")
-        );
-    }
-
-    #[test]
-    fn test_read_usd_description_none_when_absent() {
-        let dir = std::env::temp_dir();
-        let path = dir.join("lunco_catalog_desc_none_test.usda");
-        std::fs::write(
-            &path,
-            "#usda 1.0\n\
-             (defaultPrim = \"X\")\n\
-             def Xform \"X\"\n{\n\
-                custom bool lunco:spawnable = false\n\
-             }\n",
-        )
-        .unwrap();
-        assert!(read_usd_description(&path).is_none());
-    }
-
     /// Data guard: every shipped sandbox scene must carry a non-empty
     /// `lunco:description` so the Scenarios menu can show a tooltip for it.
     /// A scene missing the attribute would silently show no tooltip — this
     /// test fails loud instead, the moment a scene is added without one.
+    ///
+    /// Reads the shipped files through the SAME parser the app uses. It used to
+    /// go through a `read_usd_description(path)` helper that no longer exists,
+    /// because reading a file is now [`lunco_assets::asset_read`]'s job and
+    /// understanding it is [`parse_spawn_meta`]'s — this test is about the
+    /// *data*, so it does its own read and asserts on the meaning.
     #[test]
     fn test_every_sandbox_scene_has_description() {
         let scenes_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -423,14 +505,40 @@ mod tests {
                 continue;
             }
             count += 1;
-            let desc = read_usd_description(&p).unwrap_or_else(|| {
-                panic!(
-                    "scene {} has no `lunco:description` attribute",
-                    p.display()
-                )
+            let src = std::fs::read_to_string(&p).expect("scene readable");
+            let desc = parse_spawn_meta(&src).description.unwrap_or_else(|| {
+                panic!("scene {} has no `lunco:description` attribute", p.display())
             });
             assert!(!desc.trim().is_empty(), "scene {} has an empty description", p.display());
         }
         assert!(count >= 14, "expected the sandbox scene set, found {count}");
+    }
+
+    /// The bake this replaced keyed its tables on the engine-relative path and
+    /// fell back to "not spawnable" on a miss — so a stale table silently
+    /// dropped assets from the web palette. The store is keyed on `asset_path`
+    /// (what the catalogue and the UI both hold), and an unread asset is
+    /// distinguishable from one that authored nothing.
+    #[test]
+    fn test_meta_store_absent_vs_authored_nothing() {
+        let mut store = AssetMetaStore::default();
+        assert!(store.get("scenes/sandbox/x.usda").is_none());
+        store.by_path.insert(
+            "scenes/sandbox/x.usda".into(),
+            SpawnMeta { spawnable: false, lift: 0.0, description: None },
+        );
+        assert!(store.get("scenes/sandbox/x.usda").is_some());
+        assert_eq!(store.description("scenes/sandbox/x.usda"), None);
+    }
+
+    /// A rescan must re-read files it has already seen — that is what it is FOR
+    /// (picking up an edit). Dispatch is deduped, `forget` clears the dedup.
+    #[test]
+    fn test_scan_dispatch_dedups_until_forgotten() {
+        let mut scan = CatalogScan::default();
+        assert!(scan.dispatched.insert("a.usda".into()));
+        assert!(!scan.dispatched.insert("a.usda".into()));
+        scan.forget();
+        assert!(scan.dispatched.insert("a.usda".into()));
     }
 }

@@ -1,11 +1,29 @@
-//! Bakes a manifest of the engine asset library (`<workspace>/assets`) into the
-//! crate so the **web build** can enumerate it.
+//! Bakes a manifest of **which files** the engine asset library
+//! (`<workspace>/assets`) contains, so the **web build** can enumerate it.
 //!
 //! On native, `discovery::list_assets` walks the filesystem. The browser has no
 //! filesystem, so the wasm path reads this compile-time manifest instead —
 //! otherwise the spawn/shader catalogs come up empty on web (the `.usda`/`.wgsl`
 //! files ship in the bundle but can't be `readdir`'d). Only the catalog
 //! extensions (`usda`, `wgsl`) are baked, keeping the manifest small.
+//!
+//! # Names only — never contents
+//!
+//! This bakes a **directory listing**, and nothing else. That is a legitimate
+//! build-time fact: what is in the bundle is decided when the bundle is built,
+//! and HTTP has no `readdir` to ask at runtime.
+//!
+//! What a file *says* is NOT a build-time fact, and must never be baked. There
+//! was a second build script (in `lunco-sandbox-edit`) that copied every
+//! asset's `lunco:spawnable` / `lunco:spawnLift` / `lunco:description` into the
+//! binary, and it is gone: we ship the assets, so the web reads them over HTTP
+//! like everything else (`lunco_assets::asset_read`). A baked copy of a file's
+//! contents is a copy that can disagree with the file — and it needed its own
+//! weaker parser to produce, because a build script cannot use the USD stack of
+//! the crate it builds.
+//!
+//! So: if you are tempted to bake a *value* out of an asset here, don't. Bake
+//! the name; read the value.
 //!
 //! Build scripts run at compile time on the *host*, never on wasm, so the
 //! workspace `disallowed_methods` ban on `std::fs` (a wasm-runtime foot-gun)

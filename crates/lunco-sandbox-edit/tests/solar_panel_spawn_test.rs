@@ -46,10 +46,14 @@ fn test_solar_panel_usda_has_material_type() {
 /// display name and folder-derived category.
 ///
 /// The catalog is fully data-driven now: `SpawnCatalog::default()` is empty and
-/// every spawnable is found at runtime by `scan_usd_into_catalog`, with its
+/// every spawnable is found at runtime by scanning the project USD, with its
 /// category derived from the parent folder (no hardcoded `SpawnCategory` enum).
 /// So `components/power/solar_panel.usda` yields display "Solar Panel" + category
 /// "Power" (the immediate folder, title-cased), not a Rust-side taxonomy.
+///
+/// Drives the *blocking* scan — the app's is async (a web read is an HTTP fetch),
+/// but both run the same enumerate → read → `parse_spawn_meta` → `entry_for`
+/// path, so this still exercises the real pipeline end to end.
 #[test]
 fn test_solar_panel_catalog_entry() {
     use lunco_assets::twin_source::TwinRoots;
@@ -61,7 +65,7 @@ fn test_solar_panel_catalog_entry() {
     roots.register("assets", assets);
 
     let mut catalog = lunco_sandbox_edit::catalog::SpawnCatalog::default();
-    lunco_sandbox_edit::catalog::scan_usd_into_catalog(&roots, &mut catalog);
+    lunco_sandbox_edit::catalog::scan_usd_into_catalog_blocking(&roots, &mut catalog);
 
     let entry = catalog
         .get("solar_panel")

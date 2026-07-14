@@ -7417,6 +7417,8 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "big_space",
+ "crossbeam-channel",
+ "futures-lite",
  "lunco-api",
  "lunco-assets",
  "lunco-autopilot",
@@ -7447,6 +7449,7 @@ dependencies = [
  "serde",
  "serde_json",
  "transform-gizmo-bevy",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]

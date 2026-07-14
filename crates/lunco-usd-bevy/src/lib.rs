@@ -1817,36 +1817,77 @@ pub fn stage_default_prim<R: UsdRead>(reader: &R) -> Option<String> {
     reader.default_prim()
 }
 
-/// Parse a single USD layer's source text with openusd's USDA parser (no PCP
-/// composition, no reference resolution) and read a `string`/`token` attribute
-/// authored directly on the stage's `defaultPrim`. Returns `None` when the text
-/// doesn't parse, the stage declares no `defaultPrim`, or the attribute is
-/// absent.
+/// A single USD layer's source text, parsed once, positioned on the stage's
+/// `defaultPrim` — with **typed** reads of the attributes authored there.
 ///
-/// For metadata that lives on the root prim (e.g. a scene's
-/// `lunco:description` tooltip) this is a cheap, composition-free alternative
-/// to [`compose_file`] / the async `AssetServer` loader — referenced sub-layers
-/// are not consulted, which is correct for root-prim metadata but NOT for
-/// attributes that a reference might override.
+/// For metadata that lives on the root prim (a scene's `lunco:description`, an
+/// asset's `lunco:spawnable`) this is a cheap, composition-free alternative to
+/// [`compose_file`] / the async `AssetServer` loader — referenced sub-layers are
+/// not consulted, which is correct for root-prim metadata but NOT for attributes
+/// that a reference might override.
 ///
-/// Reads the authored layer directly through [`UsdDataExt`], NOT through
-/// [`UsdRead`]: `UsdRead` is now the *composed-stage* contract (one impl,
-/// `StageView`), and this function exists precisely because it does **not** want
-/// composition. Conflating the two is what the retired `sdf::Data` reader did.
-pub fn read_default_prim_attr(text: &str, attr: &str) -> Option<String> {
-    let data = openusd::usda::parse(text).ok()?;
+/// Reads the authored layer directly, NOT through [`UsdRead`]: `UsdRead` is the
+/// *composed-stage* contract (one impl, `StageView`), and this exists precisely
+/// because it does **not** want composition. Conflating the two is what the
+/// retired `sdf::Data` reader did.
+///
+/// Parse ONCE, read many. A caller wanting three attributes off the same prim
+/// (spawnable + lift + description) should not parse the file three times.
+pub struct DefaultPrim {
+    data: openusd::sdf::Data,
+    path: SdfPath,
+}
 
-    // `defaultPrim` is stage metadata on the pseudo-root, authored as a Token.
-    let prim_name = data.field(&SdfPath::abs_root(), "defaultPrim")?.as_str()?;
-    if prim_name.is_empty() {
-        return None;
+impl DefaultPrim {
+    /// Parse `text` and locate its `defaultPrim`. `None` when the text doesn't
+    /// parse or the stage declares no `defaultPrim`.
+    pub fn parse(text: &str) -> Option<Self> {
+        let data = openusd::usda::parse(text).ok()?;
+        // `defaultPrim` is stage metadata on the pseudo-root, authored as a Token.
+        let name = data
+            .field(&SdfPath::abs_root(), "defaultPrim")?
+            .as_str()?
+            .to_string();
+        if name.is_empty() {
+            return None;
+        }
+        let path = SdfPath::new(&format!("/{name}")).ok()?;
+        Some(Self { data, path })
     }
-    let path = SdfPath::new(&format!("/{prim_name}")).ok()?;
 
-    // `string` / `token` / `asset` all coerce through `as_str` (same rule as
-    // `read_token`, which is the composed-stage twin of this).
-    let attr_path = path.append_property(attr).ok()?;
-    data.field(&attr_path, "default")?.as_str().map(str::to_string)
+    /// Raw default-time value of `attr`, as authored.
+    pub fn value(&self, attr: &str) -> Option<&Value> {
+        let attr_path = self.path.append_property(attr).ok()?;
+        self.data.field(&attr_path, "default")
+    }
+
+    /// Typed read, via the same `TryFrom<Value>` conversion `UsdRead::scalar`
+    /// uses — so a `bool` attribute reads as a `bool` and nothing else.
+    pub fn scalar<T: TryFrom<Value>>(&self, attr: &str) -> Option<T> {
+        self.value(attr).cloned()?.get::<T>()
+    }
+
+    /// The text of a `string`/`token`/`asset` attribute, via openusd's own
+    /// [`Value::as_str`] — the one textual coercion (see [`UsdRead::text`]).
+    pub fn text(&self, attr: &str) -> Option<String> {
+        self.value(attr)?.as_str().map(str::to_string)
+    }
+
+    /// A real scalar tolerant of `float` **or** `double` authoring — the
+    /// [`UsdRead::real_f32`] rule, so a value is never dropped for being
+    /// authored in the other precision.
+    pub fn real_f32(&self, attr: &str) -> Option<f32> {
+        self.scalar::<f32>(attr)
+            .or_else(|| self.scalar::<f64>(attr).map(|v| v as f32))
+    }
+}
+
+/// One `string`/`token` attribute off the stage's `defaultPrim`. Thin wrapper
+/// over [`DefaultPrim`] for callers that want exactly one value; a caller
+/// wanting several should [`DefaultPrim::parse`] once instead of paying for a
+/// re-parse per attribute.
+pub fn read_default_prim_attr(text: &str, attr: &str) -> Option<String> {
+    DefaultPrim::parse(text)?.text(attr)
 }
 
 /// Catalog metadata a **scene-backed** tutorial declares on its own scene, as an

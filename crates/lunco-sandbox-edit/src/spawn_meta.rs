@@ -1,26 +1,38 @@
-// The ONE parser for the spawn metadata a `*.usda` authors on its default prim.
-// Shared verbatim by the library and by `build.rs`, which `include!`s this file
-// (a build script cannot depend on the crate it builds). Inner doc comments
-// (`//!`) are therefore illegal here — an `include!`d file is spliced mid-module.
-//
-// WHY THIS FILE EXISTS. There were three copies of this logic:
-// `catalog::read_spawn_meta` (native), `build.rs::parse_meta` (the wasm bake), and
-// `catalog::read_usd_description` (native, via a *real* USD parse). The first two
-// carried a comment saying "keep all three in sync" — a comment that only gets
-// written because they already drifted, and they had: the description was read one
-// way natively and baked another way for the web, so the two platforms could
-// legitimately disagree about what a file said about itself.
-//
-// SCOPE. A deliberate line scan, not a USD parse: `build.rs` runs before the crate
-// (and its USD stack) exists. The three attributes are simple scalars on the
-// default prim, so a scan suffices — but a **multi-line** string value is not
-// supported, which the tests pin rather than leave to be discovered.
-//
-// TODO(bake): the web reads these from a table `build.rs` compiles into the
-// binary, purely because the browser has no filesystem. But we *ship* the assets —
-// the web should read them over HTTP through `lunco-storage` like everything else,
-// and the bake should not exist. That needs an asset-backed `Storage` impl (today:
-// FileStorage / WebStorage(localStorage) / OPFS only) and an async catalogue scan.
+//! The spawn/catalog metadata a `*.usda` authors on its own default prim —
+//! read with **openusd's real parser**, on every platform.
+//!
+//! # What this used to be
+//!
+//! A hand-rolled line scan (`line.split_once("lunco:spawnable")`), duplicated
+//! three ways, and a `build.rs` that baked the results of that scan into the
+//! binary as `BAKED_SPAWN_META` / `BAKED_DESCRIPTIONS` tables for the web.
+//!
+//! Every part of that existed to work around one thing: **a build script cannot
+//! depend on the crate it builds**, so the bake could not use the USD stack, so
+//! it needed a parser that was not the USD stack — and then native had to use
+//! that same weaker parser too, or the two platforms would disagree about what a
+//! file said about itself. (They already had: the description was once read one
+//! way natively and baked another.)
+//!
+//! # Why it is gone
+//!
+//! We *ship* the assets. The browser can read them — over HTTP, from the same
+//! bundle, at the same URL Bevy's `AssetServer` uses to load the file when it is
+//! spawned. Reading them is [`lunco_assets::asset_read::read_asset_bytes`]; the
+//! only thing the bake ever bought was skipping that read.
+//!
+//! So there is now ONE path: fetch the bytes, hand them to openusd. Which means:
+//!
+//! - **One parser** — the real one. `bool lunco:spawnable` reads as a `bool`,
+//!   `float lunco:spawnLift` as a float, and a description containing an `=`, a
+//!   quote, or a newline parses correctly instead of being mangled by a scan.
+//! - **No stale table.** The bake was a *copy* of the assets' contents compiled
+//!   into the binary. Edit an asset without rebuilding and the web silently
+//!   served the old metadata; ship an asset the bake never saw and it was, by
+//!   its own fallback, "not spawnable".
+//! - **No `build.rs`** in this crate at all.
+
+use lunco_usd_bevy::DefaultPrim;
 
 /// Spawn metadata authored on a `*.usda`'s default prim.
 #[derive(Debug, Clone, PartialEq)]
@@ -50,34 +62,99 @@ impl Default for SpawnMeta {
     }
 }
 
-/// Parse the spawn metadata out of USDA source.
+/// Parse the catalog metadata out of a `*.usda`'s source.
+///
+/// A file that doesn't parse, or that declares no `defaultPrim`, yields
+/// [`SpawnMeta::default`] — i.e. *not* spawnable. Unreadable is not a licence to
+/// guess: a file that cannot state it is a part is not offered as one.
 pub fn parse_spawn_meta(src: &str) -> SpawnMeta {
-    let mut meta = SpawnMeta::default();
-    for line in src.lines() {
-        if let Some((_, rhs)) = line.split_once("lunco:spawnLift") {
-            if let Some(v) = rhs.split('=').nth(1) {
-                if let Ok(f) = v.trim().parse::<f32>() {
-                    meta.lift = f;
-                }
-            }
-        } else if let Some((_, rhs)) = line.split_once("lunco:spawnable") {
-            if let Some(v) = rhs.split('=').nth(1) {
-                let v = v.trim();
-                meta.spawnable = v.starts_with("true") || v.starts_with('1');
-            }
-        } else if let Some((_, rhs)) = line.split_once("lunco:description") {
-            meta.description = parse_quoted(rhs);
-        }
+    let Some(prim) = DefaultPrim::parse(src) else {
+        return SpawnMeta::default();
+    };
+    SpawnMeta {
+        // Typed: `bool`, not the string "true". The scan this replaces accepted
+        // `true` or `1` textually and would equally have accepted `truthy`.
+        spawnable: prim.scalar::<bool>("lunco:spawnable").unwrap_or(false),
+        lift: prim.real_f32("lunco:spawnLift").unwrap_or(0.0),
+        description: prim.text("lunco:description"),
     }
-    meta
 }
 
-/// The first double-quoted run to the right of an `=`.
-fn parse_quoted(rhs: &str) -> Option<String> {
-    let after_eq = rhs.split_once('=')?.1.trim();
-    let rest = after_eq
-        .strip_prefix('"')
-        .or_else(|| after_eq.find('"').map(|i| &after_eq[i + 1..]))?;
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SRC: &str = r#"#usda 1.0
+(
+    defaultPrim = "Rover"
+)
+
+def Xform "Rover"
+{
+    custom bool lunco:spawnable = true
+    float lunco:spawnLift = 1.5
+    custom string lunco:description = "A rover."
+}
+"#;
+
+    #[test]
+    fn reads_typed_metadata_off_the_default_prim() {
+        let m = parse_spawn_meta(SRC);
+        assert!(m.spawnable);
+        assert_eq!(m.lift, 1.5);
+        assert_eq!(m.description.as_deref(), Some("A rover."));
+    }
+
+    #[test]
+    fn spawnable_defaults_to_false_when_unstated() {
+        let src = "#usda 1.0\n(\n    defaultPrim = \"X\"\n)\n\ndef Xform \"X\"\n{\n}\n";
+        let m = parse_spawn_meta(src);
+        assert!(!m.spawnable);
+        assert_eq!(m.lift, 0.0);
+        assert_eq!(m.description, None);
+    }
+
+    #[test]
+    fn unparseable_source_is_not_spawnable() {
+        assert_eq!(parse_spawn_meta("not usd at all"), SpawnMeta::default());
+    }
+
+    /// `double lunco:spawnLift` must not be silently dropped for being authored
+    /// in the other precision — the `real_f32` rule (see `UsdRead::real_f32`).
+    #[test]
+    fn lift_tolerates_double_authoring() {
+        let src = "#usda 1.0\n(\n    defaultPrim = \"X\"\n)\n\ndef Xform \"X\"\n{\n    double lunco:spawnLift = 2\n}\n";
+        assert_eq!(parse_spawn_meta(src).lift, 2.0);
+    }
+
+    /// The line scan this replaces split on `=` and took the first quoted run on
+    /// the *line*, so a description containing an `=` came back truncated. A real
+    /// parse treats the value as a value.
+    #[test]
+    fn description_survives_an_equals_sign() {
+        let src = "#usda 1.0\n(\n    defaultPrim = \"X\"\n)\n\ndef Xform \"X\"\n{\n    custom string lunco:description = \"Set thrust = 1, then go.\"\n}\n";
+        assert_eq!(
+            parse_spawn_meta(src).description.as_deref(),
+            Some("Set thrust = 1, then go.")
+        );
+    }
+
+    /// A **multi-line** description. The line scan could not represent one at all
+    /// — it read a line at a time, and its own doc said so ("a multi-line string
+    /// value is not supported, which the tests pin rather than leave to be
+    /// discovered"). openusd's parser handles the triple-quoted form natively.
+    ///
+    /// Note openusd's USDA dialect takes NO backslash escapes: the lexer keeps the
+    /// raw bytes between the delimiters, and its writer correspondingly never emits
+    /// an escape — it picks a delimiter the content cannot close (see
+    /// `usda::writer::write_quoted`). Reader and writer agree, so a quote inside a
+    /// description is expressed by the delimiter choice, exactly as here.
+    #[test]
+    fn description_can_span_lines_and_contain_quotes() {
+        let src = "#usda 1.0\n(\n    defaultPrim = \"X\"\n)\n\ndef Xform \"X\"\n{\n    custom string lunco:description = \"\"\"Line one.\nThen \"go\".\"\"\"\n}\n";
+        assert_eq!(
+            parse_spawn_meta(src).description.as_deref(),
+            Some("Line one.\nThen \"go\".")
+        );
+    }
 }

@@ -131,7 +131,6 @@ impl Plugin for SandboxUiPlugin {
                 layout.activate_perspective(lunco_workbench::PerspectiveId("sandbox_view"));
             })
             .insert_resource(CurrentScenePath::default())
-            .insert_resource(SceneDescCache::default())
             .add_systems(Startup, (
                 init_current_scene_path,
                 register_sandbox_scenarios_menu,
@@ -526,13 +525,6 @@ fn sandbox_boot_from_url(
 #[derive(Resource, Clone, Default)]
 pub(crate) struct CurrentScenePath(pub(crate) String);
 
-/// Cache of each scene's `lunco:description` (keyed by asset path) so the
-/// Scenarios menu can show a tooltip without re-parsing the USD every frame.
-/// `None` means the scene authors no description (no tooltip). Filled lazily
-/// on first hover/listing via [`lunco_sandbox_edit::catalog::read_usd_description`].
-#[derive(Resource, Default)]
-pub(crate) struct SceneDescCache(pub(crate) std::collections::HashMap<String, Option<String>>);
-
 fn init_current_scene_path(
     scene_path: Res<crate::ScenePath>,
     mut commands: Commands,
@@ -642,24 +634,19 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                     .italics(),
             );
         } else {
-            // Resolve each scene's `lunco:description` (cached so a file is
-            // parsed with openusd at most once per app lifetime — the menu
-            // redraws while open, and re-parsing every frame would stutter).
-            // The cache borrow is scoped here so `world` is free for the
-            // `LoadScene` trigger below.
+            // Each scene's `lunco:description`, straight from the catalogue's
+            // metadata store — the scan already read and parsed every project
+            // `*.usda`, so re-reading them here would be a second parse of the
+            // same default prim of the same file. (It used to be exactly that:
+            // a `SceneDescCache` that lazily re-parsed on first hover.)
+            //
+            // The store fills asynchronously, so a scene not yet read simply
+            // shows no tooltip this frame and gets one on the next redraw.
             let descs: Vec<Option<String>> = {
-                let mut cache = world.resource_mut::<SceneDescCache>();
+                let store = world.resource::<lunco_sandbox_edit::catalog::AssetMetaStore>();
                 assets
                     .iter()
-                    .map(|a| {
-                        cache
-                            .0
-                            .entry(a.asset_path.clone())
-                            .or_insert_with(|| {
-                                lunco_sandbox_edit::catalog::read_usd_description(&a.abs_path)
-                            })
-                            .clone()
-                    })
+                    .map(|a| store.description(&a.asset_path).map(str::to_string))
                     .collect()
             };
 

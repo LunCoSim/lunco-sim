@@ -38,6 +38,7 @@
 
 use std::path::PathBuf;
 
+pub mod asset_read;
 pub mod asset_sources;
 pub mod discovery;
 pub mod download;

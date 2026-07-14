@@ -67,6 +67,16 @@ lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-autopilot = { path = "../lunco-autopilot" }
 lunco-assets = { path = "../lunco-assets" }
+# The catalogue scan is async (reading a shipped asset on the web is an HTTP
+# fetch), so completed reads come back over a channel and a drain system folds
+# them in. `futures-lite::block_on` backs the native blocking scan used by tests.
+crossbeam-channel = { workspace = true }
+futures-lite = { workspace = true }
+
+# Web: a browser `fetch` future is `!Send`, so the asset reads cannot go on a
+# Bevy task pool — they are driven by `spawn_local` on the JS event loop.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = { workspace = true }
 
 [features]
 default = ["ui"]

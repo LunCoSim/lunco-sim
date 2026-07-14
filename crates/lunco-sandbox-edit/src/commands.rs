@@ -71,16 +71,20 @@ impl Default for DetachJoint {
 #[Command(default)]
 pub struct RescanSpawnCatalog {}
 
-/// Observer for [`RescanSpawnCatalog`].
+/// Observer for [`RescanSpawnCatalog`]. Forgets what has been read so far, so
+/// the dispatch below re-reads every asset — an edit to a file already scanned
+/// is exactly what a manual rescan is for. The reads land asynchronously; the
+/// catalogue fills in over the next frames (`drain_usd_scan`).
 #[on_command(RescanSpawnCatalog)]
 pub fn on_rescan_spawn_catalog(
     _trigger: On<RescanSpawnCatalog>,
     twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
-    mut catalog: ResMut<crate::catalog::SpawnCatalog>,
+    mut scan: ResMut<crate::catalog::CatalogScan>,
 ) {
     if let Some(roots) = twin_roots.as_deref() {
-        let n = crate::catalog::scan_usd_into_catalog(roots, &mut catalog);
-        info!("RESCAN_SPAWN_CATALOG: +{n} USD asset(s)");
+        scan.forget();
+        let n = crate::catalog::dispatch_usd_scan(roots, &mut scan);
+        info!("RESCAN_SPAWN_CATALOG: re-reading {n} USD asset(s)");
     }
 }
 
@@ -4537,30 +4541,21 @@ pub fn scan_wgsl_into_catalog(
     n
 }
 
-/// Populate BOTH catalogs (USD → spawn, WGSL → shaders) from the project. The
-/// single scan entry point, driven by [`maintain_catalogs`] (Startup + on
-/// Twin-set change) and the manual rescan commands — never a per-frame walk.
-pub fn scan_all_catalogs(
-    roots: &lunco_assets::twin_source::TwinRoots,
-    spawn: &mut crate::catalog::SpawnCatalog,
-    shaders: &mut lunco_materials::ShaderCatalog,
-) {
-    let s = crate::catalog::scan_usd_into_catalog(roots, spawn);
-    let w = scan_wgsl_into_catalog(roots, shaders);
-    if s > 0 || w > 0 {
-        info!("CATALOG_SCAN: +{s} USD, +{w} shader(s)");
-    }
-}
-
 /// The ONE catalog-population system. Scans the engine library once, then
 /// re-scans whenever the set of open Twins changes (so a freshly-opened Twin's
 /// files appear) — twin-open is async, so a guarded `Update` check is more
 /// robust than racing the `TwinAdded` observer that registers the twin root.
-/// It only *walks the disk* on first run and on change; every other frame it
+/// It only *enumerates* on first run and on change; every other frame it
 /// early-returns after a cheap name-set comparison (no per-frame rescan).
+///
+/// The two catalogs differ in what they need from a file. Shaders are catalogued by
+/// *name* — enumeration is the whole job, so it finishes here. Spawnables are
+/// catalogued by what the USD *says* (`lunco:spawnable`), which means reading it:
+/// this only *dispatches* those reads, and `drain_usd_scan` folds them in as
+/// they complete.
 pub fn maintain_catalogs(
     twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
-    mut spawn: ResMut<crate::catalog::SpawnCatalog>,
+    mut scan: ResMut<crate::catalog::CatalogScan>,
     mut shaders: ResMut<lunco_materials::ShaderCatalog>,
     mut last_twins: Local<Vec<String>>,
     mut did_first_scan: Local<bool>,
@@ -4572,7 +4567,12 @@ pub fn maintain_catalogs(
     }
     *did_first_scan = true;
     *last_twins = names;
-    scan_all_catalogs(roots, &mut spawn, &mut shaders);
+
+    let s = crate::catalog::dispatch_usd_scan(roots, &mut scan);
+    let w = scan_wgsl_into_catalog(roots, &mut shaders);
+    if s > 0 || w > 0 {
+        info!("CATALOG_SCAN: reading {s} USD asset(s), +{w} shader(s)");
+    }
 }
 
 /// Observer for [`RescanShaders`] — manual full re-scan of the shader catalog.
@@ -4792,7 +4792,13 @@ impl Plugin for SpawnCommandPlugin {
         // set changes (guarded — no per-frame disk walk). Replaces the old
         // per-catalog scanners (`populate_dynamic_spawn_catalog`,
         // `auto_scan_twin_shaders`, `discover_shaders`).
-        app.add_systems(Update, maintain_catalogs);
+        // Enumerate → dispatch reads → fold results in. `drain` runs after
+        // `maintain` so a read that completes between frames lands the moment
+        // the app looks, not a frame later.
+        app.add_systems(
+            Update,
+            (maintain_catalogs, crate::catalog::drain_usd_scan).chain(),
+        );
         app.add_systems(FixedPostUpdate, clear_kinematic_pulse_velocity);
         app.init_resource::<InterpBuffers>();
         app.init_resource::<PredictedStateLog>();
@@ -4808,6 +4814,12 @@ impl Plugin for SpawnCommandPlugin {
         //     command observers. Lives in `lunco_materials`; an empty one is fine on
         //     a server (shader discovery populates it but nothing renders it).
         app.init_resource::<crate::catalog::SpawnCatalog>();
+        // `CatalogScan` — the async read pipeline `maintain_catalogs` dispatches
+        // into. `AssetMetaStore` — what the scanned files said about themselves;
+        // the catalogue is derived from it, and the Scenarios menu reads its
+        // `lunco:description` straight out (no second cache, no second parse).
+        app.init_resource::<crate::catalog::CatalogScan>();
+        app.init_resource::<crate::catalog::AssetMetaStore>();
         app.init_resource::<crate::SelectedEntities>();
         app.init_resource::<lunco_materials::ShaderCatalog>();
         // Networking: instantiate host-replicated spawns, buffer + interpolate
