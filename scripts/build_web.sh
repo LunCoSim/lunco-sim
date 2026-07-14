@@ -619,18 +619,16 @@ generate_bindings() {
         # binary was compiled against; this one describes the bundle that actually
         # shipped. They are the same thing right up until they aren't — swap an
         # asset into a deployed `dist/` and a baked listing never sees it.
+        #
+        # The listing is produced by `discovery::scan_library` — the SAME scanner
+        # the native runtime walks the library with — so packaging cannot disagree
+        # with the runtime about what counts as an asset. This used to be an inline
+        # `os.walk`, a second implementation of that rule in another language, and
+        # it had already drifted: it descended hidden directories, so it listed the
+        # `.lunco/runtime/*.usda` private layers of any Twin staged above.
         info "Writing $dist_dir/assets/manifest.json"
-        ( cd "$dist_dir/assets" && python3 -c "
-import json, os, sys
-rels = sorted(
-    os.path.relpath(os.path.join(dp, f), '.').replace(os.sep, '/')
-    for dp, _, fs in os.walk('.')
-    for f in fs
-    if f.endswith(('.usda', '.wgsl'))
-)
-json.dump(rels, open('manifest.json', 'w'), indent=0)
-print(f'  {len(rels)} asset(s) listed', file=sys.stderr)
-" ) || {
+        cargo run --release -q -p lunco-assets --bin build_asset_manifest -- \
+            "$dist_dir/assets" || {
             # Without the manifest the browser cannot enumerate anything: the spawn
             # palette and the shader catalog come up empty. Fail the build rather
             # than ship a bundle whose assets are unreachable.
