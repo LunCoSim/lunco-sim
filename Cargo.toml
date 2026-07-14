@@ -22,6 +22,7 @@ members = [
     "crates/lunco-usd-avian",
     "crates/lunco-usd-bevy",
     "crates/lunco-usd-sim",
+    "crates/lunco-usd-terrain",
     "crates/lunco-usd",
     "crates/lunco-sandbox-edit",
     "crates/lunco-ui",

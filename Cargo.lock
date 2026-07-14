@@ -7397,6 +7397,7 @@ dependencies = [
  "lunco-twin-journal",
  "lunco-usd",
  "lunco-usd-bevy",
+ "lunco-usd-terrain",
  "lunco-web",
  "lunco-workbench",
  "lunco-workspace",
@@ -7799,6 +7800,21 @@ dependencies = [
  "openusd",
  "rumoca-phase-parse",
  "serde_json",
+]
+
+[[package]]
+name = "lunco-usd-terrain"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lunco-assets",
+ "lunco-doc",
+ "lunco-doc-bevy",
+ "lunco-obstacle-field",
+ "lunco-terrain-surface",
+ "lunco-usd",
+ "lunco-usd-bevy",
+ "openusd",
 ]
 
 [[package]]
