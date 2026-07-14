@@ -126,15 +126,49 @@ the side panels for tabbed dock trees.
    always the central region of the window. Not a panel, not a tile.
    Cannot be closed or docked-over. The workbench contributes only the
    viewport's *visibility* (a perspective without a viewport panel hides 3D)
-   and *rect* into `lunco_core::SceneViewport`; it never sets camera
-   `is_active` — the single-authority reconciler in `lunco-usd-bevy` actuates
-   that (see [`17-view-and-intent.md §6`](17-view-and-intent.md)).
+   into `lunco_core::SceneViewport`; it never sets camera `is_active` — the
+   single-authority reconciler in `lunco-usd-bevy` actuates that (see
+   [`17-view-and-intent.md §6`](17-view-and-intent.md)). The 3D renders
+   full-window (`SceneViewport::rect` is `None`) and the chrome is layered on
+   top of it — see § 3.1.
 6. **Properties / Inspector (right)** — context-aware content for the
    current selection and workspace. See § 6.
 7. **Bottom panel (toggleable)** — workspace-dependent: Console, Plots,
    Timeline, etc. Collapsible to zero height.
 8. **Status bar (bottom strip)** — sim time, speed, selected entity,
    celestial body, FPS.
+
+### 3.1 Rendering contract — how chrome and 3D share the window
+
+The window is drawn by **two layered cameras**, not by tiling:
+
+| Order | Camera | Role |
+|-------|--------|------|
+| 0 | scene `Camera3d` (`WorkbenchViewportCamera`) | renders the 3D **full-window**; **clears** the target |
+| 1 | egui host `Camera2d` (`WorkbenchEguiHost`, holds `PrimaryEguiContext`) | paints the chrome on top with `ClearColorConfig::None` so it does not wipe the 3D |
+
+The host is a separate camera because scene cameras are transient (USD spawns
+them, `camera_switch` swaps them) while the egui context must be stable.
+
+**Invariant: both cameras must share one main render texture.** Bevy keys a
+target's main textures by `(target, usages, format, msaa)`. If the host's key
+diverges, Bevy hands it a *private* texture that — because its clear config is
+`None` — is **never cleared**, and it silently becomes an accumulation buffer:
+chrome that stops being drawn (panels dropped by a perspective switch, a status
+bar orphaned by a resize) stays baked in and keeps compositing over the live 3D,
+frozen. Only a window resize clears it.
+
+This shipped as a real bug: `SceneCamera` defaults to MSAA ×2 while a bare
+`Camera2d` defaults to ×4, so Build's panels ghosted on top of the View
+perspective. `sync_egui_host_msaa` (`lunco-workbench/src/viewport.rs`) copies the
+scene camera's MSAA onto the host — change-driven, so it only runs when a scene
+camera's MSAA actually moves or a camera is newly tagged. **Never give the egui
+host its own MSAA / format / HDR setting** — for that camera these are not look
+choices, they are the texture-sharing key.
+
+When no window `Camera3d` is active at all (Design perspective, the Modelica
+workbench), nothing clears the target — `render_layout` handles that case by
+painting a full-window backdrop on egui's background layer.
 
 ## 4. Workspaces
 
