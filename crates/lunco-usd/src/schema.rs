@@ -95,7 +95,7 @@ pub struct PropertySpec {
     pub type_name: String,
     /// `uniform` or `varying`, per the schema.
     pub variability: sdf::Variability,
-    /// The schema that declares it — `"LuncoTerrainAPI"`, `"UsdShadeShader"`.
+    /// The schema that declares it — `"LunCoTerrainAPI"`, `"UsdShadeShader"`.
     pub declared_by: String,
 }
 
@@ -110,9 +110,9 @@ pub struct SchemaRegistry {
     /// collide with `UsdGeomCube`'s real `double size` both in this map and in USD
     /// itself.
     properties: HashMap<String, PropertySpec>,
-    /// Concrete typed schemas (`LuncoEnvironment`, `LuncoPolicy`).
+    /// Concrete typed schemas (`LunCoEnvironment`, `LunCoPolicy`).
     prim_types: Vec<String>,
-    /// Applied API schemas (`LuncoTerrainAPI`, …).
+    /// Applied API schemas (`LunCoTerrainAPI`, …).
     api_schemas: Vec<String>,
 }
 
@@ -182,8 +182,8 @@ impl SchemaRegistry {
                     }
                 }
                 SpecType::Attribute => {
-                    // `/LuncoTerrainAPI.lunco:terrain:windowM`
-                    //   → (`/LuncoTerrainAPI`, "lunco:terrain:windowM")
+                    // `/LunCoTerrainAPI.lunco:terrain:windowM`
+                    //   → (`/LunCoTerrainAPI`, "lunco:terrain:windowM")
                     let Some((prim, name)) = path.split_property() else {
                         continue;
                     };
@@ -267,16 +267,16 @@ mod tests {
     fn generated_schema_parses_and_registers_every_type() {
         let reg = SchemaRegistry::global();
         assert!(
-            reg.prim_types().contains(&"LuncoEnvironment".to_string()),
+            reg.prim_types().contains(&"LunCoEnvironment".to_string()),
             "typed schemas: {:?}",
             reg.prim_types()
         );
-        assert!(reg.prim_types().contains(&"LuncoPolicy".to_string()));
+        assert!(reg.prim_types().contains(&"LunCoPolicy".to_string()));
         for api in [
-            "LuncoTerrainAPI",
-            "LuncoTerrainLayerAPI",
-            "LuncoShadowAPI",
-            "LuncoMaterialAPI",
+            "LunCoTerrainAPI",
+            "LunCoTerrainLayerAPI",
+            "LunCoShadowAPI",
+            "LunCoMaterialAPI",
         ] {
             assert!(
                 reg.api_schemas().contains(&api.to_string()),

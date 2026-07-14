@@ -257,7 +257,7 @@ impl Plugin for LunCoScriptingPlugin {
             // *.rhai` under its hook id so the possession / authorization paths
             // consult AUTHORED rhai rules, not hardcoded Rust (spec 034 control-
             // authority takeover). These are the weakest-scope defaults; a
-            // `LuncoPolicy` USD prim projected at the same seam hot-replaces them.
+            // `LunCoPolicy` USD prim projected at the same seam hot-replaces them.
             register_builtin_policies();
             // Shared per-document diagnostics store (also init'd by Modelica;
             // init_resource is idempotent). Scenario compile/runtime errors land

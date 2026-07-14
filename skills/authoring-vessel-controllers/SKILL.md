@@ -11,7 +11,7 @@ description: >
   my controller / thruster respond?". Any request to model how a vehicle
   behaves under power, or to add/fix its self-driving or manual control,
   belongs here — the user will NOT know the internal terms. (For the agent
-  mid-code, it also covers: a `.mo` control model, a `LuncoProgram` prim, the
+  mid-code, it also covers: a `.mo` control model, a `LunCoProgram` prim, the
   `piloted` port, `external_throttle`, `possess`/`follow`, or a rumoca
   input that `set()` writes but that has no effect — and catch-yourself
   moments like putting control math in rhai, a bespoke mode flag, a
@@ -43,10 +43,10 @@ The reference is the lander: `assets/models/Lander.mo`,
 
 The model reads what the vessel **senses** and outputs force/torque. It is a PROGRAM,
 and a program is a prim: the vessel's own flight-control system is inseparable from the
-airframe, so the vessel prim applies `LuncoProgramAPI` and names the model in place —
+airframe, so the vessel prim applies `LunCoProgramAPI` and names the model in place —
 `uniform asset lunco:program:sourceAsset = @models/MyController.mo@`. Its `inputs:` ARE
 the vessel's control surface. A control law that is *bolted on* (a guidance component, a
-supervisory script) is a `def LuncoProgram` CHILD prim instead, so deleting the prim
+supervisory script) is a `def LunCoProgram` CHILD prim instead, so deleting the prim
 removes the behaviour. Ports are wired with native USD connections (§3).
 
 Because it drives a force on a body the client predicts, it must promise it steps fast
@@ -84,7 +84,7 @@ end MyController;
 
 ## 2. High-level logic → rhai, event-driven
 
-A `def LuncoProgram` child prim on the vessel, naming a `.rhai` scenario
+A `def LunCoProgram` child prim on the vessel, naming a `.rhai` scenario
 (`uniform asset lunco:program:sourceAsset = @scenarios/my_supervisor.rhai@`), does
 supervision and sequencing — **never a control loop**. React to events; don't poll or
 step.
@@ -97,9 +97,9 @@ fn on_event(me, evt) {
 ```
 
 - Phase timing comes from the mission sequencer (`wait`, `wait_for`, `wait_until`) or
-  from `LuncoPortEvent` child prims (a threshold crossing on a model port → a bus
+  from `LunCoPortEvent` child prims (a threshold crossing on a model port → a bus
   event), not `dt` counting. One prim per rule:
-  `def LuncoPortEvent "LowFuel" { uniform token lunco:event:port = "m_prop"; uniform token lunco:event:op = "lt"; double lunco:event:threshold = 200.0; uniform token lunco:event:emit = "lander_low_fuel" }`.
+  `def LunCoPortEvent "LowFuel" { uniform token lunco:event:port = "m_prop"; uniform token lunco:event:op = "lt"; double lunco:event:threshold = 200.0; uniform token lunco:event:emit = "lander_low_fuel" }`.
 - **Do not** write the vessel's command ports every tick from rhai. If you're tempted
   to, the logic belongs in the model (math) or the wiring (authority).
 
@@ -190,14 +190,14 @@ def "Controls" (
    clamps; DIRECT control path; a `piloted` gate. Der-feed any tunable gain you want
    Inspector-editable at sim-rate.
 2. Reference the sensors it needs from `assets/vessels/sensors/` and mount them.
-3. On the vessel prim: apply `LuncoProgramAPI`, name the model
+3. On the vessel prim: apply `LunCoProgramAPI`, name the model
    (`uniform asset lunco:program:sourceAsset = @models/MyController.mo@`), promise
    `uniform bool lunco:program:realtimeSafe = true`, author the connections (sensor +
    body ports → model `inputs:`, incl. `inputs:piloted`, and model force/torque → the
    body), and add a `Controls` child that `references` a profile (`</LanderControls>`)
    so the pilot's intents reach the stick ports.
-4. Add a `def LuncoProgram` child prim naming a `.rhai` supervisor for events/sequencing
-   (no control loop), with a `LuncoPortEvent` child per threshold rule.
+4. Add a `def LunCoProgram` child prim naming a `.rhai` supervisor for events/sequencing
+   (no control loop), with a `LunCoPortEvent` child per threshold rule.
 5. Verify: unpossessed → the GNC flies it; possess → the pilot drives (gate flips via
    `piloted`); release → GNC resumes. Tune live via the Inspector or `set()`.
 

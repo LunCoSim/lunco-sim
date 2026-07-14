@@ -31,7 +31,7 @@
     stable contracts the engine's projectors read by name belong in here.
 
     A PROGRAM IS A PRIM. Behaviour is not an attribute on the thing that behaves:
-    it is a [`LuncoProgram`] child prim carrying a source and typed ports, which is
+    it is a [`LunCoProgram`] child prim carrying a source and typed ports, which is
     how `UsdShade` binds a shader (`info:implementationSource` + `info:sourceAsset`
     + `inputs:`/`outputs:`) and how OmniGraph binds a compute node. Role is never
     declared, because it cannot be: the same `.py` is a plant in one prim and a
@@ -62,7 +62,7 @@ over "GLOBAL" (
 {
 }
 
-class LuncoEnvironment "LuncoEnvironment" (
+class LunCoEnvironment "LunCoEnvironment" (
     inherits = </Typed>
     doc = """Scene-wide render settings that have no natural light-prim home —
     exposure, bloom, ambient and earthshine. These apply to global/camera state
@@ -92,7 +92,7 @@ class LuncoEnvironment "LuncoEnvironment" (
     )
 }
 
-class LuncoPolicy "LuncoPolicy" (
+class LunCoPolicy "LunCoPolicy" (
     inherits = </Typed>
     doc = """A scripted authorization hook, expressed as a prim so that policy
     distribution rides the normal USD/journal plane instead of a bespoke one: a
@@ -116,7 +116,7 @@ class LuncoPolicy "LuncoPolicy" (
     )
 }
 
-class "LuncoTerrainAPI" (
+class "LunCoTerrainAPI" (
     inherits = </APISchemaBase>
     customData = {
         token apiSchemaType = "singleApply"
@@ -140,7 +140,7 @@ class "LuncoTerrainAPI" (
     )
 }
 
-class "LuncoTerrainLayerAPI" (
+class "LunCoTerrainLayerAPI" (
     inherits = </APISchemaBase>
     customData = {
         token apiSchemaType = "singleApply"
@@ -231,7 +231,7 @@ class "LuncoTerrainLayerAPI" (
     )
 }
 
-class "LuncoShadowAPI" (
+class "LunCoShadowAPI" (
     inherits = </APISchemaBase>
     customData = {
         token apiSchemaType = "singleApply"
@@ -259,7 +259,7 @@ class "LuncoShadowAPI" (
     )
 }
 
-class "LuncoMaterialAPI" (
+class "LunCoMaterialAPI" (
     inherits = </APISchemaBase>
     customData = {
         token apiSchemaType = "singleApply"
@@ -279,7 +279,7 @@ class "LuncoMaterialAPI" (
     )
 }
 
-class "LuncoCatalogAPI" (
+class "LunCoCatalogAPI" (
     inherits = </APISchemaBase>
     customData = {
         token apiSchemaType = "singleApply"
@@ -312,7 +312,7 @@ class "LuncoCatalogAPI" (
     )
 }
 
-class "LuncoTerrainEditAPI" (
+class "LunCoTerrainEditAPI" (
     inherits = </APISchemaBase>
     customData = {
         token apiSchemaType = "singleApply"
@@ -340,7 +340,7 @@ class "LuncoTerrainEditAPI" (
     )
 }
 
-class LuncoProgram "LuncoProgram" (
+class LunCoProgram "LunCoProgram" (
     inherits = </Typed>
     doc = """ONE program bound to the prim that owns it — a Modelica plant, a rhai
     controller, a Python model, a behaviour tree. It is a PRIM, not an attribute on
@@ -414,13 +414,13 @@ class LuncoProgram "LuncoProgram" (
     )
 }
 
-class "LuncoProgramAPI" (
+class "LunCoProgramAPI" (
     inherits = </APISchemaBase>
     customData = {
         token apiSchemaType = "singleApply"
     }
     doc = """A prim that IS a program, rather than one that carries programs as
-    children — the same properties as [`LuncoProgram`], applied in place.
+    children — the same properties as [`LunCoProgram`], applied in place.
 
     Which form to use is not a style question, it is a question of whether the
     program is separable from the thing. A vessel's flight-control system is its
@@ -429,7 +429,7 @@ class "LuncoProgramAPI" (
     lander with no engine. That is applied HERE, on the vessel.
 
     A guidance law, a supervisory script, a patrol tree: those are bolted on, and each
-    is a [`LuncoProgram`] child prim that arrives on its own `references` arc. Delete
+    is a [`LunCoProgram`] child prim that arrives on its own `references` arc. Delete
     the prim and the behaviour is gone, which is exactly what you want to be able to
     do to an autopilot and exactly what you must never be able to do to an engine."""
 )
@@ -450,7 +450,7 @@ class "LuncoProgramAPI" (
     )
 }
 
-class LuncoPortEvent "LuncoPortEvent" (
+class LunCoPortEvent "LunCoPortEvent" (
     inherits = </Typed>
     doc = """A threshold crossing on one port, published as a named event — the
     discrete edge of a continuous signal (`m_prop` falling below 200 becomes
@@ -477,7 +477,7 @@ class LuncoPortEvent "LuncoPortEvent" (
     )
 }
 
-class "LuncoVesselAPI" (
+class "LunCoVesselAPI" (
     inherits = </APISchemaBase>
     customData = {
         token apiSchemaType = "singleApply"
@@ -492,7 +492,7 @@ class "LuncoVesselAPI" (
     )
 }
 
-class "LuncoAvatarAPI" (
+class "LunCoAvatarAPI" (
     inherits = </APISchemaBase>
     customData = {
         token apiSchemaType = "singleApply"

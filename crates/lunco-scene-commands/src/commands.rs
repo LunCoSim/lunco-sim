@@ -1053,7 +1053,7 @@ pub fn persist_environment_light_to_runtime_layer(
 
     // Render knobs (exposure / bloom / ambient / earthshine) have no natural
     // light-prim home — they apply to global/camera state — so per the schema
-    // decision they persist onto a dedicated `LuncoEnvironment` settings prim
+    // decision they persist onto a dedicated `LunCoEnvironment` settings prim
     // (a singleton under the default prim). A projector in `lunco-sandbox` reads
     // them back on stage change and applies them, so the light loader stays pure.
     let mut env_attrs: Vec<(&str, &str, String)> = Vec::new();

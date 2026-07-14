@@ -31,7 +31,7 @@ A model is a PROGRAM, and a program is a prim with typed ports — exactly as a
 
 ```usda
 # 1. Name the model. The lander's flight-control system is inseparable from the
-#    airframe, so the vessel prim APPLIES `LuncoProgramAPI` and carries it in place
+#    airframe, so the vessel prim APPLIES `LunCoProgramAPI` and carries it in place
 #    (a bolted-on program — a guidance law, a supervisor — is a child prim instead).
 uniform asset lunco:program:sourceAsset = @models/Lander.mo@
 
@@ -45,9 +45,9 @@ float inputs:force_y.connect = </DescentLander.outputs:force_y>
 float inputs:q_w.connect     = </DescentLander.outputs:quat_w>
 #    (…see the asset for the full set of edges.)
 
-# 3. Surface threshold crossings on the bus — one `LuncoPortEvent` child prim per
+# 3. Surface threshold crossings on the bus — one `LunCoPortEvent` child prim per
 #    rule: the port, the comparison, the threshold and the name, each typed.
-def LuncoPortEvent "LowFuel" {
+def LunCoPortEvent "LowFuel" {
     uniform token lunco:event:port = "m_prop"
     uniform token lunco:event:op = "lt"
     double lunco:event:threshold = 200.0
@@ -64,13 +64,13 @@ wiring.
 ## Watch it from the side
 
 A small supervisor script (`assets/scenarios/lander_subsystems.rhai`) rides on the
-same vessel as a `def LuncoProgram "Subsystems"` child prim — bolted on, so deleting
+same vessel as a `def LunCoProgram "Subsystems"` child prim — bolted on, so deleting
 the prim removes it. It does **not** drive the lander — it only reacts, which is the
 right shape for cosim orchestration:
 
 ```rhai
 fn on_event(me, evt) {
-    // The fuel events, from the `LuncoPortEvent` prims above.
+    // The fuel events, from the `LunCoPortEvent` prims above.
     if evt.name == "lander_low_fuel"  { notify_kind("Lander low on fuel.", "warn"); }
     else if evt.name == "lander_depleted" { notify_kind("Propellant depleted.", "warn"); }
 }
@@ -108,7 +108,7 @@ equation
 
 To cosim it onto a rover:
 
-1. **Attach** — add a `def LuncoProgram "Power"` child prim on the rover with
+1. **Attach** — add a `def LunCoProgram "Power"` child prim on the rover with
    `uniform asset lunco:program:sourceAsset = @models/Battery.mo@`. It is a subsystem
    bolted on, not the rover's own control law, so it is a child prim.
 2. **Wire** — connect the rover's motor current (or a proxy proportional to throttle)

@@ -60,30 +60,30 @@ def Xform "CommsSystem" (kind = "component") {          # ── the reusable un
         prepend payload = @lunco-lib://models/hga.glb@  #     heavy mesh → deferred binary payload
         # + collider, mount frame, optional gimbal joint
     }
-    def LuncoProgram "Link" {                           # ── Layer 2: RF dynamics (Modelica)
+    def LunCoProgram "Link" {                           # ── Layer 2: RF dynamics (Modelica)
         uniform asset lunco:program:sourceAsset = @models/CommsLink.mo@   # Friis → data-rate → buffer
         float inputs:u_range.connect = </CommsSystem/Geom.outputs:range_km>
         float inputs:u_up.connect    = </CommsSystem/Geom.outputs:connected>
 
-        def LuncoPortEvent "Loss" {
+        def LunCoPortEvent "Loss" {
             uniform token lunco:event:port = "margin_db"
             uniform token lunco:event:op = "lt"
             double lunco:event:threshold = 0.0
             uniform token lunco:event:emit = "comms:loss"
         }
-        def LuncoPortEvent "Acquire" {
+        def LunCoPortEvent "Acquire" {
             uniform token lunco:event:port = "margin_db"
             uniform token lunco:event:op = "gt"
             double lunco:event:threshold = 3.0
             uniform token lunco:event:emit = "comms:acquire"
         }
     }
-    def LuncoProgram "Power" {                          # ── Layer 3: electrical draw (Modelica)
+    def LunCoProgram "Power" {                          # ── Layer 3: electrical draw (Modelica)
         uniform asset lunco:program:sourceAsset = @models/CommsPower.mo@  # TX state → DC watts
         float inputs:u_tx.connect = </CommsSystem/Link.outputs:txActive>
         # its `outputs:p_draw` is what the vehicle's EPS bus consumes
     }
-    def LuncoProgram "Policy" {                         # ── Layer 4: mode/relay policy (rhai)
+    def LunCoProgram "Policy" {                         # ── Layer 4: mode/relay policy (rhai)
         uniform asset lunco:program:sourceAsset = @scripts/comms_policy.rhai@   # handover, duty-cycle, safe-mode
     }
 }

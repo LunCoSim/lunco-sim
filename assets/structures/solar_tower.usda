@@ -19,8 +19,9 @@
 # hand-settable from the Inspector/API. See the "Cosim" tutorial to wire a
 # model to a body, and `scenes/sandbox/sun_tracker_test.usda` for the full rig.
 def Xform "SolarTower" (
+    kind = "component"
     doc = "Vertical solar tower — mast + sun-tracking PV head on a revolute joint. Base power. Site it in the open with a clear horizon; keep it clear of the landing pad's plume."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = true
@@ -73,7 +74,7 @@ def Xform "SolarTower" (
         # tracker (no physics of its own).
         def Cube "Panel"
         (
-            prepend apiSchemas = ["LuncoMaterialAPI"]
+            prepend apiSchemas = ["LunCoMaterialAPI"]
         )
         {
             double size = 1.0

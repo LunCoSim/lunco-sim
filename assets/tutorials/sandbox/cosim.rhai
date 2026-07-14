@@ -23,7 +23,7 @@ fn steps() {
 
         #{ anchor: "",
            title: "Where the model is attached",
-           body: "A program is a PRIM, like a UsdShade shader. The lander's flight-control system is inseparable from the airframe, so it applies `LuncoProgramAPI` in place: `uniform asset lunco:program:sourceAsset = @models/Lander.mo@` on the vessel prim itself. The model's `inputs:` (throttle, pitch, roll, yaw) ARE the vessel's control surface — the live command ports a session writes when it takes the stick. A program that is bolted on instead — a guidance law, a supervisory script — is a `def LuncoProgram` CHILD prim, so deleting the prim removes the behaviour." },
+           body: "A program is a PRIM, like a UsdShade shader. The lander's flight-control system is inseparable from the airframe, so it applies `LunCoProgramAPI` in place: `uniform asset lunco:program:sourceAsset = @models/Lander.mo@` on the vessel prim itself. The model's `inputs:` (throttle, pitch, roll, yaw) ARE the vessel's control surface — the live command ports a session writes when it takes the stick. A program that is bolted on instead — a guidance law, a supervisory script — is a `def LunCoProgram` CHILD prim, so deleting the prim removes the behaviour." },
 
         #{ anchor: "",
            title: "The wire",
@@ -31,7 +31,7 @@ fn steps() {
 
         #{ anchor: "panel.bottom",
            title: "The model speaks in events",
-           body: "A threshold crossing on a port is published as a named event. One `def LuncoPortEvent` child prim per rule: `lunco:event:port = \"m_prop\"`, `lunco:event:op = \"lt\"`, `lunco:event:threshold = 200`, `lunco:event:emit = \"lander_low_fuel\"` — so when propellant mass drops under 200, a `lander_low_fuel` event reaches scripts and the HUD. The lander declares a second one, `Depleted`, at 0.5. Watch for them in the Console below as the descent burns fuel." },
+           body: "A threshold crossing on a port is published as a named event. One `def LunCoPortEvent` child prim per rule: `lunco:event:port = \"m_prop\"`, `lunco:event:op = \"lt\"`, `lunco:event:threshold = 200`, `lunco:event:emit = \"lander_low_fuel\"` — so when propellant mass drops under 200, a `lander_low_fuel` event reaches scripts and the HUD. The lander declares a second one, `Depleted`, at 0.5. Watch for them in the Console below as the descent burns fuel." },
 
         #{ anchor: "",
            title: "Verify it from code",
@@ -39,7 +39,7 @@ fn steps() {
 
         #{ anchor: "",
            title: "Your turn: a battery on a rover",
-           body: "Same pattern, new model. `assets/models/Battery.mo` is a state-of-charge integrator (`current_in` → `soc_out`). Add a `def LuncoProgram \"Power\"` child prim on a rover with `uniform asset lunco:program:sourceAsset = @models/Battery.mo@`, connect the motor's current draw into its `inputs:current_in`, and SOC drains as you drive. Open the model in the Design workspace — `Lander.mo` lives there too — to see the law you are flying." },
+           body: "Same pattern, new model. `assets/models/Battery.mo` is a state-of-charge integrator (`current_in` → `soc_out`). Add a `def LunCoProgram \"Power\"` child prim on a rover with `uniform asset lunco:program:sourceAsset = @models/Battery.mo@`, connect the motor's current draw into its `inputs:current_in`, and SOC drains as you drive. Open the model in the Design workspace — `Lander.mo` lives there too — to see the law you are flying." },
     ]
 }
 

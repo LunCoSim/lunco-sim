@@ -15,8 +15,9 @@
 # or start it from the Tutorials panel.
 
 def Xform "SandboxIntro" (
+    kind = "assembly"
     doc = "A guided tour of the LunCoSim workspace: viewport, browser, inspector, and console."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
@@ -49,7 +50,7 @@ def Xform "SandboxIntro" (
     }
 
     def Xform "Avatar" (
-        prepend apiSchemas = ["LuncoAvatarAPI"]
+        prepend apiSchemas = ["LunCoAvatarAPI"]
     )
     {
         uniform bool lunco:avatar = true

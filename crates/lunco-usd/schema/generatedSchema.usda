@@ -11,7 +11,7 @@
     """
 )
 
-class LuncoEnvironment "LuncoEnvironment" (
+class LunCoEnvironment "LunCoEnvironment" (
     doc = """Scene-wide render settings with no natural light-prim home."""
 )
 {
@@ -32,7 +32,7 @@ class LuncoEnvironment "LuncoEnvironment" (
     )
 }
 
-class LuncoPolicy "LuncoPolicy" (
+class LunCoPolicy "LunCoPolicy" (
     doc = """A scripted authorization hook, expressed as a prim."""
 )
 {
@@ -50,7 +50,7 @@ class LuncoPolicy "LuncoPolicy" (
     )
 }
 
-class "LuncoTerrainAPI" (
+class "LunCoTerrainAPI" (
     doc = """A LunCoSim procedural/DEM terrain surface and its build parameters."""
     customData = {
         token apiSchemaType = "singleApply"
@@ -68,7 +68,7 @@ class "LuncoTerrainAPI" (
     )
 }
 
-class "LuncoTerrainLayerAPI" (
+class "LunCoTerrainLayerAPI" (
     doc = """One layer of a layered terrain (DEM, craters, rocks, edits)."""
     customData = {
         token apiSchemaType = "singleApply"
@@ -147,7 +147,7 @@ class "LuncoTerrainLayerAPI" (
     )
 }
 
-class "LuncoShadowAPI" (
+class "LunCoShadowAPI" (
     doc = """Cascaded-shadow tuning for a UsdLux light."""
     customData = {
         token apiSchemaType = "singleApply"
@@ -171,7 +171,7 @@ class "LuncoShadowAPI" (
     )
 }
 
-class "LuncoMaterialAPI" (
+class "LunCoMaterialAPI" (
     doc = """Selects a custom (WGSL) render material for a prim."""
     customData = {
         token apiSchemaType = "singleApply"
@@ -183,7 +183,7 @@ class "LuncoMaterialAPI" (
     )
 }
 
-class LuncoProgram "LuncoProgram" (
+class LunCoProgram "LunCoProgram" (
     doc = """One program bound to the prim that owns it — a Modelica plant, a rhai
     controller, a Python model, a behaviour tree. A prim, not an attribute: it has
     typed ports and those ports connect."""
@@ -209,7 +209,7 @@ class LuncoProgram "LuncoProgram" (
     )
 }
 
-class "LuncoProgramAPI" (
+class "LunCoProgramAPI" (
     doc = """A prim that IS a program, rather than one carrying programs as children.
     A vessel's flight-control system is its airframe; a guidance law is bolted on."""
     customData = {
@@ -236,7 +236,7 @@ class "LuncoProgramAPI" (
     )
 }
 
-class LuncoPortEvent "LuncoPortEvent" (
+class LunCoPortEvent "LunCoPortEvent" (
     doc = """A threshold crossing on one port, published as a named event. A child
     prim of the program whose port it watches."""
 )
@@ -256,7 +256,7 @@ class LuncoPortEvent "LuncoPortEvent" (
     )
 }
 
-class "LuncoVesselAPI" (
+class "LunCoVesselAPI" (
     doc = "A vessel: a thing a session can possess and drive."
     customData = {
         token apiSchemaType = "singleApply"
@@ -268,7 +268,7 @@ class "LuncoVesselAPI" (
     )
 }
 
-class "LuncoAvatarAPI" (
+class "LunCoAvatarAPI" (
     doc = "The scene's player viewpoint — where the camera starts and how it moves."
     customData = {
         token apiSchemaType = "singleApply"
@@ -287,7 +287,7 @@ class "LuncoAvatarAPI" (
     )
 }
 
-class "LuncoCatalogAPI" (
+class "LunCoCatalogAPI" (
     inherits = </APISchemaBase>
     customData = {
         token apiSchemaType = "singleApply"
@@ -329,7 +329,7 @@ class "LuncoCatalogAPI" (
     )
 }
 
-class "LuncoTerrainEditAPI" (
+class "LunCoTerrainEditAPI" (
     inherits = </APISchemaBase>
     customData = {
         token apiSchemaType = "singleApply"

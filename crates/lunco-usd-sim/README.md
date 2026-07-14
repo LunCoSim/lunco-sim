@@ -41,13 +41,13 @@ entities; `lunco-cosim` itself stays engine-agnostic.
 ### A program is a prim
 
 A model is not an attribute on the body it drives: it is a program with typed ports,
-and ports connect. A body that IS its own model applies `LuncoProgramAPI` in place; a
-model that is bolted on is a `LuncoProgram` child prim, so deleting the prim removes
+and ports connect. A body that IS its own model applies `LunCoProgramAPI` in place; a
+model that is bolted on is a `LunCoProgram` child prim, so deleting the prim removes
 the behaviour.
 
 ```usda
 def Sphere "RedBalloon" (
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "LuncoProgramAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "LunCoProgramAPI"]
 )
 {
     double radius = 1.0

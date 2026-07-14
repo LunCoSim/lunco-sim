@@ -7,7 +7,7 @@
 
 def Xform "SandboxScene" (
     doc = "The main sandbox: a large flat ground with ramps and rovers. The everyday space for driving rovers around obstacles."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "assembly"
 )
 {
@@ -33,7 +33,7 @@ def Xform "SandboxScene" (
     # non-uniform extents. The ground is a 4 km × 0.2 m × 4 km slab.
     def Cube "Ground"
     (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "LuncoMaterialAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "LunCoMaterialAPI"]
     )
     {
         double size = 1.0
@@ -59,7 +59,7 @@ def Xform "SandboxScene" (
     # --- Ramp obstacles (static terrain) ---
     def Cube "Ramp"
     (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "LuncoMaterialAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "LunCoMaterialAPI"]
     )
     {
         double size = 1.0
@@ -86,7 +86,7 @@ def Xform "SandboxScene" (
 
     def Cube "Ramp1"
     (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "LuncoMaterialAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "LunCoMaterialAPI"]
     )
     {
         double size = 1.0
@@ -115,7 +115,7 @@ def Xform "SandboxScene" (
     # Position, camera mode, and orientation defined in USD.
     # lunco:cameraMode = "freeflight" | "orbit" | "springarm"
     def Xform "Avatar" (
-        prepend apiSchemas = ["LuncoAvatarAPI"]
+        prepend apiSchemas = ["LunCoAvatarAPI"]
     )
     {
         uniform bool lunco:avatar = true
@@ -344,7 +344,7 @@ def Xform "SandboxScene" (
     # Result: the target sphere bobs ±50 N at 1 Hz.
 
     def "Oscillator" (
-        prepend apiSchemas = ["LuncoProgramAPI"]
+        prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
         uniform asset lunco:program:sourceAsset = @models/Oscillator.mo@
@@ -353,7 +353,7 @@ def Xform "SandboxScene" (
     }
 
     def "Amplifier" (
-        prepend apiSchemas = ["LuncoProgramAPI"]
+        prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
         uniform asset lunco:program:sourceAsset = @models/Amplifier.py@
@@ -366,7 +366,7 @@ def Xform "SandboxScene" (
     }
 
     def Sphere "CosimTarget" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "LuncoMaterialAPI"]
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "LunCoMaterialAPI"]
     )
     {
         double radius = 0.5

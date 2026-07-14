@@ -18,8 +18,9 @@
 # or start it from the Tutorials panel.
 
 def Xform "FirstDrive" (
+    kind = "assembly"
     doc = "Take control of a rover and drive it to the glowing flag. Click the rover (or press F) to possess it, then drive with W/A/S/D."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
@@ -64,7 +65,7 @@ def Xform "FirstDrive" (
     }
 
     def Xform "Avatar" (
-        prepend apiSchemas = ["LuncoAvatarAPI"]
+        prepend apiSchemas = ["LunCoAvatarAPI"]
     )
     {
         uniform bool lunco:avatar = true
@@ -85,7 +86,7 @@ def Xform "FirstDrive" (
     # The rover the student drives. Skid-steer vehicle; possessable.
     def Xform "Rover" (
         prepend references = @../../vessels/rovers/skid_rover.usda@</SkidRover>
-        prepend apiSchemas = ["LuncoVesselAPI"]
+        prepend apiSchemas = ["LunCoVesselAPI"]
     )
     {
         uniform bool lunco:vessel = true

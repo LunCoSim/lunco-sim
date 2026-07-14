@@ -326,7 +326,7 @@ fn process_usd_cosim_prim_read<R: UsdRead>(
         commands.entity(entity).try_insert(lunco_cosim::RealtimeSafe);
     }
 
-    // Event rules are `LuncoPortEvent` CHILD prims — one prim per rule, each with a
+    // Event rules are `LunCoPortEvent` CHILD prims — one prim per rule, each with a
     // port, a comparison, a threshold and a name. Each turns a threshold crossing on
     // a model output into a discrete TelemetryEvent (see `fire_model_port_events`).
     let rules = read_port_event_prims(reader, sdf_path);
@@ -360,7 +360,7 @@ fn solver_language(path: &str) -> Option<SolverLanguage> {
     }
 }
 
-/// Read a program's [`LuncoPortEvent`] children into threshold rules.
+/// Read a program's [`LunCoPortEvent`] children into threshold rules.
 ///
 /// One prim per rule, so each part of it — the port, the comparison, the threshold,
 /// the event name — is a typed property that validates, inspects, journals and
@@ -368,7 +368,7 @@ fn solver_language(path: &str) -> Option<SolverLanguage> {
 fn read_port_event_prims<R: UsdRead>(reader: &R, sdf_path: &SdfPath) -> Vec<PortEventRule> {
     let mut rules = Vec::new();
     for child in reader.children(sdf_path) {
-        if reader.type_name(&child).as_deref() != Some("LuncoPortEvent") {
+        if reader.type_name(&child).as_deref() != Some("LunCoPortEvent") {
             continue;
         }
         let (Some(port), Some(emit)) = (
@@ -376,7 +376,7 @@ fn read_port_event_prims<R: UsdRead>(reader: &R, sdf_path: &SdfPath) -> Vec<Port
             reader.text(&child, "lunco:event:emit"),
         ) else {
             warn!(
-                "[usd-cosim] {}: a LuncoPortEvent needs both `lunco:event:port` and \
+                "[usd-cosim] {}: a LunCoPortEvent needs both `lunco:event:port` and \
                  `lunco:event:emit` — ignoring it",
                 child.as_str(),
             );
@@ -683,7 +683,7 @@ struct PortEventRule {
     armed: bool,
 }
 
-/// Port-edge event rules on a program, read from its [`LuncoPortEvent`] children.
+/// Port-edge event rules on a program, read from its [`LunCoPortEvent`] children.
 #[derive(Component, Default)]
 pub struct ModelEventRules(Vec<PortEventRule>);
 

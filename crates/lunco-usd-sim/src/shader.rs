@@ -48,7 +48,7 @@ use std::collections::BTreeMap;
 #[derive(Component)]
 pub struct UsdShaderResolved;
 
-/// Authors [`ShaderLook`] from `LuncoMaterialAPI` — `lunco:material:type = "shader"`
+/// Authors [`ShaderLook`] from `LunCoMaterialAPI` — `lunco:material:type = "shader"`
 /// + `lunco:material:shader` — reading the shader's generic colors/params from
 /// primvars (those genuinely ARE primvars: per-prim shader inputs). Runs between
 /// `sync_usd_visuals` and the sim consumers (see module docs).
@@ -98,7 +98,7 @@ fn apply_usd_shader_material_read<R: UsdRead>(
     // From here on the prim is evaluated regardless of outcome.
     commands.entity(entity).try_insert(UsdShaderResolved);
 
-    // `LuncoMaterialAPI` (see lunco-usd/schema/schema.usda). NAMING a shader is
+    // `LunCoMaterialAPI` (see lunco-usd/schema/schema.usda). NAMING a shader is
     // SELECTING it: a prim with one renders through the WGSL pipeline, a prim without
     // one does not. There is no second attribute saying "and I mean it" — an enum
     // whose only value is implied by the presence of its neighbour is not a choice.

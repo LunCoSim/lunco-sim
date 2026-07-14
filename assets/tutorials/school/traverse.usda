@@ -39,8 +39,9 @@
 # activate relief and re-height the checkpoints together.
 # NEEDS: DEM crater/rille terrain + checkpoint re-heighting (roadmap P0.2).
 def Xform "Traverse" (
+    kind = "assembly"
     doc = "The 1000×1000 m event traverse: start NW, POI at centre, SE highland shadow, low ESE sun, Earth low on the E horizon (centre in radio-shadow). Placeholder terrain until the DEM crater/rille lands."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
@@ -128,7 +129,7 @@ def Xform "Traverse" (
 
     # Overview fly-cam from the NW, looking toward the POI and the SE highland.
     def Xform "Avatar" (
-        prepend apiSchemas = ["LuncoAvatarAPI"]
+        prepend apiSchemas = ["LunCoAvatarAPI"]
     )
     {
         uniform bool lunco:avatar = true

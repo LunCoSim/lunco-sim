@@ -15,8 +15,9 @@
 # six "Wired wheel .../Wheel_LN drive to FSW port drive_wM" lines.
 
 def Xform "SixWheelIndependentTest" (
+    kind = "assembly"
     doc = "A six-wheel rover where every wheel has its own motor. Checks that all six motors are wired up and can each be driven on its own."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
@@ -57,7 +58,7 @@ def Xform "SixWheelIndependentTest" (
     }
 
     def Xform "Avatar" (
-        prepend apiSchemas = ["LuncoAvatarAPI"]
+        prepend apiSchemas = ["LunCoAvatarAPI"]
     )
     {
         uniform bool lunco:avatar = true

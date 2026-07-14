@@ -153,7 +153,7 @@ impl EditsLayer {
     }
 }
 
-/// The `LuncoTerrainEditAPI` properties of ONE edit, by **logical** name — this crate
+/// The `LunCoTerrainEditAPI` properties of ONE edit, by **logical** name — this crate
 /// is USD-free, so the USD adapter binds these to `lunco:edit:*`.
 ///
 /// They used to be PACKED into one string (`lunco:edit = "crater 350 350 45 18"`).
@@ -167,7 +167,7 @@ pub const EDIT_CENTER: &str = "center";
 pub const EDIT_RADIUS: &str = "radius";
 pub const EDIT_AMOUNT: &str = "amount";
 
-/// Parse an edit prim's `LuncoTerrainEditAPI` attributes into an identified
+/// Parse an edit prim's `LunCoTerrainEditAPI` attributes into an identified
 /// [`EditKind`]. `id` is the prim's stable identity (its path). `None` if the prim
 /// authors no edit kind (not an edit prim) or the kind is unknown — so the layer
 /// walker can try normal layer parsing instead.

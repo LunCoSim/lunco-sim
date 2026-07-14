@@ -18,7 +18,8 @@
 # `rangeMax` it reports per `rangeOutOfRangeMode` (`IdealAltitude` = sensor world Y,
 # so guidance stays sane above the sensor's reach). Honours `lunco:sensor:offset`.
 def Xform "Altimeter" (
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    kind = "component"
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = true

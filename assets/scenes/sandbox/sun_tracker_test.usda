@@ -24,9 +24,11 @@
 #
 #   sandbox --scene scenes/sandbox/sun_tracker_test.usda
 
+# Scene root: an `assembly` — a thing you OPEN, not a part you place.
 def Xform "SunTrackerTest" (
+    kind = "assembly"
     doc = "A solar panel that turns to face the sun. A controller reads where the sun is and turns the panel to point at it; move the sun and watch the panel re-aim."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
@@ -60,7 +62,7 @@ def Xform "SunTrackerTest" (
 
     # Camera looking at the tower head from the side, so a yaw change is obvious.
     def Xform "Avatar" (
-        prepend apiSchemas = ["LuncoAvatarAPI"]
+        prepend apiSchemas = ["LunCoAvatarAPI"]
     )
     {
         uniform bool lunco:avatar = true
@@ -135,7 +137,7 @@ def Xform "SunTrackerTest" (
             # Vertical PV panel — thin cube on edge, solar_panel shader.
             def Cube "Panel"
             (
-                prepend apiSchemas = ["LuncoMaterialAPI"]
+                prepend apiSchemas = ["LunCoMaterialAPI"]
             )
             {
                 double size = 1.0
@@ -180,7 +182,7 @@ def Xform "SunTrackerTest" (
         # the solar bridge's `sun_azimuth` output into the model's `sun_azimuth`
         # input (same name on both sides — one signal).
         def Xform "Controller" (
-            prepend apiSchemas = ["LuncoProgramAPI"]
+            prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
             uniform asset lunco:program:sourceAsset = @models/SunTracker.mo@

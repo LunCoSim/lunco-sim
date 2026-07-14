@@ -12,7 +12,7 @@
 # honest middle between the forgiving Explorer LT and the punishing Hauler.
 def Xform "RoverMedium" (
     doc = "Medium rover (Standard) — neutral centre of mass, moderate power. Tips if you cross the fall-line carelessly; rewards a planned line. The default tier."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
     prepend references = @lunco://vessels/rovers/six_wheel_rover.usda@</SixWheelRover>
 )
 {

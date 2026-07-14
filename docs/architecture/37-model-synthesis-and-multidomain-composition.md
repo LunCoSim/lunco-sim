@@ -48,7 +48,7 @@ The single most important design fact, and it is physics, not preference:
 So the rule that resolves "how to do the electrical layer":
 
 > **A rover's electrical layer is ONE synthesized `Electrical.mo` (acausal, single DAE), exposed as ONE
-> `LuncoProgram` prim, whose BOUNDARY ports (bus voltage, per-load power/current, pack SoC)
+> `LunCoProgram` prim, whose BOUNDARY ports (bus voltage, per-load power/current, pack SoC)
 > scalar-wire to the other domain prims.** Kirchhoff stays inside one solve; the rest is co-sim.
 
 The rule is **not** "causal p_draw now, acausal later." Acausal is not "later" — it is the
@@ -184,7 +184,7 @@ richer structural carrier that can *export to* them.
    `compile_str` it, confirm it steps to correct bus voltage / currents. Decide MSL-import vs
    self-contained based on cold-compile feel.
 2. **Rule:** lock the two-level composition — acausal within domain (one DAE), causal across domains
-   (scalar co-sim). Document the electrical layer as one `LuncoProgram` prim + boundary ports.
+   (scalar co-sim). Document the electrical layer as one `LunCoProgram` prim + boundary ports.
 3. **Synthesizer v1 (the new Rust):** read composed USD components + `lunco:epsBus` edges → emit
    `Electrical.mo` (string/`ast_mut`) → `compile_str` → `SimulationSession`. Scaffold-and-own; explicit
    re-synthesis; hand-edits preserved (text-canonical).

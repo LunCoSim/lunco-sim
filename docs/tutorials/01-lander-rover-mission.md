@@ -79,7 +79,7 @@ def Xform "Mission"
         float physics:friction = 1.0
     }
 
-    def Xform "Avatar" ( prepend apiSchemas = ["LuncoAvatarAPI"] )
+    def Xform "Avatar" ( prepend apiSchemas = ["LunCoAvatarAPI"] )
     {
         uniform bool lunco:avatar = true
         uniform token lunco:cameraMode = "freeflight"
@@ -241,7 +241,7 @@ rover you'll pull in at Step 7. Create `assets/vessels/landers/my_lander.usda`:
     metersPerUnit = 1
 )
 
-def Cylinder "MyLander" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI", "LuncoVesselAPI", "LuncoProgramAPI"] )
+def Cylinder "MyLander" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsMassAPI", "LunCoVesselAPI", "LunCoProgramAPI"] )
 {
     uniform token axis = "Y"
     double radius = 2.5
@@ -259,7 +259,7 @@ def Cylinder "MyLander" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsC
 
     # The flight-control system. It is not something bolted onto the airframe — its
     # `inputs:` ARE the vessel's control surface, the ports the stick writes — so the
-    # vessel prim IS the program: `LuncoProgramAPI`, applied above.
+    # vessel prim IS the program: `LunCoProgramAPI`, applied above.
     uniform asset lunco:program:sourceAsset = @models/MyLander.mo@
     uniform bool lunco:program:realtimeSafe = true
 
@@ -558,7 +558,7 @@ Add two cones as children of `MyLander` — a soft outer plume and a hot inner c
         float primvars:displayOpacity = 0.4
         bool physics:collisionEnabled = false
 
-        def LuncoProgram "Plume"
+        def LunCoProgram "Plume"
         {
             uniform asset lunco:program:sourceAsset = @scenarios/flame.rhai@
             custom float lunco:param:wmax = 1.05
@@ -580,7 +580,7 @@ Add two cones as children of `MyLander` — a soft outer plume and a hot inner c
         float primvars:displayOpacity = 0.85
         bool physics:collisionEnabled = false
 
-        def LuncoProgram "Plume"
+        def LunCoProgram "Plume"
         {
             uniform asset lunco:program:sourceAsset = @scenarios/flame.rhai@
             custom float lunco:param:wmax = 0.5
@@ -593,7 +593,7 @@ Add two cones as children of `MyLander` — a soft outer plume and a hot inner c
 A few choices worth a sentence each. `displayOpacity` makes the cones see-through.
 The emissive colours are *bigger than 1* on purpose — that makes them glow like a
 light source instead of a dull painted surface, so the sun can't wash your orange
-flame into beige. And notice both cones carry their own `LuncoProgram` prim pointing at
+flame into beige. And notice both cones carry their own `LunCoProgram` prim pointing at
 the **same** script, each with its own typed parameters — `lunco:param:wmax` /
 `lunco:param:lmax` are how wide and long each gets, `lunco:param:flick` how much it
 flickers. A parameter is just an attribute on the program prim, and `param(me, "wmax",
@@ -660,14 +660,14 @@ the vehicle and let the engine watch them. Add to the `MyLander` prim:
 
 ```usda
     # One prim per rule: the port, the comparison, the threshold and the name.
-    def LuncoPortEvent "LowFuel"
+    def LunCoPortEvent "LowFuel"
     {
         uniform token lunco:event:port = "m_prop"
         uniform token lunco:event:op = "lt"
         double lunco:event:threshold = 200.0
         uniform token lunco:event:emit = "lander_low_fuel"
     }
-    def LuncoPortEvent "Depleted"
+    def LunCoPortEvent "Depleted"
     {
         uniform token lunco:event:port = "m_prop"
         uniform token lunco:event:op = "le"
@@ -676,7 +676,7 @@ the vehicle and let the engine watch them. Add to the `MyLander` prim:
     }
 
     # And the supervisor that reacts to them — bolted on, so a child program prim.
-    def LuncoProgram "Supervisor"
+    def LunCoProgram "Supervisor"
     {
         uniform asset lunco:program:sourceAsset = @scenarios/my_mission/lander_supervisor.rhai@
     }
@@ -745,7 +745,7 @@ scene (`my_mission.usda`) and clamp it to the lander with a fixed joint:
         double3 xformOp:translate = (0, 58.35, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
-        def LuncoProgram "Autopilot"
+        def LunCoProgram "Autopilot"
         {
             uniform asset lunco:program:sourceAsset = @scenarios/my_mission/rover_autopilot.rhai@
         }
@@ -846,7 +846,7 @@ Add it to `my_mission.usda`:
     {
         custom string lunco:scenario = "my-surface-ops"
 
-        def LuncoProgram "Mission"
+        def LunCoProgram "Mission"
         {
             uniform asset lunco:program:sourceAsset = @scenarios/my_mission/mission.rhai@
         }
@@ -1083,7 +1083,7 @@ or give each waypoint a time limit and fail the mission if it's missed.
 - A model line with `if … else if …`? Flatten it into separate single `if`s,
   `min`/`max`, or arithmetic; chained `else if` doesn't translate cleanly.
 - Need a model to *decide* something from a wired-in value? Don't — declare a
-  `LuncoPortEvent` threshold prim instead (Step 6).
+  `LunCoPortEvent` threshold prim instead (Step 6).
 - A trigger zone never fires? Check what's entering it. Raycast-wheeled rovers don't
   reliably overlap sensors; read a distance instead (Step 8).
 - Possessed the vehicle, and only Space does anything? Your model has no `pitch` /

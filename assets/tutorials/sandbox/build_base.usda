@@ -19,9 +19,12 @@
 #   sandbox --scene tutorials/sandbox/build_base.usda
 # or start it from the 🎓 Tutorials panel.
 
+# Scene root: an `assembly` — a thing you OPEN, not a part you place. The models
+# arrive as the student spawns them, so none are referenced in-file.
 def Xform "BuildBase" (
+    kind = "assembly"
     doc = "Lay out a working lunar surface base from the Structures kit — power, habitat, comms, ISRU and a landing pad — and learn where each one goes and why."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
@@ -83,7 +86,7 @@ def Xform "BuildBase" (
     # Fly-cam looking down over the empty plot from the south-west, so the
     # student sees the whole build area and can fly in to place each part.
     def Xform "Avatar" (
-        prepend apiSchemas = ["LuncoAvatarAPI"]
+        prepend apiSchemas = ["LunCoAvatarAPI"]
     )
     {
         uniform bool lunco:avatar = true

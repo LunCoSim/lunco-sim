@@ -11,8 +11,9 @@
 # rigid-body API (it stays put). Origin at the ground plane; the body
 # rises +8 m. Spawn the root at the terrain surface position.
 def Xform "HabitatFsh" (
+    kind = "component"
     doc = "Foundation Surface Habitat — pressurized can, dome, airlock and radiators. The crew module; site it central, uphill of the landing pad and away from the reactor."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = true

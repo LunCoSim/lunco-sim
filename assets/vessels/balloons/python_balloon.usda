@@ -9,13 +9,13 @@
 # runs the program comes from its source's extension, so a `.py` routes to the Python
 # backend and a `.mo` to Modelica — nothing else about the prim changes.
 #
-# The balloon IS its plant, so `LuncoProgramAPI` is applied here rather than the model
+# The balloon IS its plant, so `LunCoProgramAPI` is applied here rather than the model
 # being carried as a separate child program. The root is an `Xform` — the envelope is a
 # child gprim that renders and collides, and the rigid body is the root.
 
 def Xform "PythonBalloon" (
     kind = "component"
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LuncoCatalogAPI", "LuncoProgramAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI", "LunCoProgramAPI"]
 )
 {
     uniform bool lunco:spawnable = true
@@ -42,7 +42,7 @@ def Xform "PythonBalloon" (
 
     # ── The envelope: renders and collides ───────────────────────────────────
     def Sphere "Envelope" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LuncoMaterialAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoMaterialAPI"]
     )
     {
         double radius = 1.0

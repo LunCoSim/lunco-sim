@@ -13,7 +13,7 @@ description: >
   "scenario" or "rhai". (For the agent mid-code, it also covers: an `on_tick` /
   `on_event` / `on_start` hook, `RunScenario`, `nav_to` / `run_plan` / a
   sequencer step, `emit` / a `TelemetryEvent`, `this`-state that resets or
-  reads empty, a `find`/`cmd`/`query` verb, or a `LuncoProgram` prim.) These
+  reads empty, a `find`/`cmd`/`query` verb, or a `LunCoProgram` prim.) These
   rules are project-specific: rhai `fn`s are pure (they can't see top-level
   `let`, so naive state silently vanishes), `this` binds ONLY in the hook the
   engine calls, `goto` is reserved, events arrive one tick late, scripts are
@@ -116,7 +116,7 @@ see `docs/behaviour-trees.md`) over hand-rolled `on_tick` state machines.
 order-independent). Scripts interact ONLY through events + shared ECS state,
 never by calling each other's functions (isolated VMs). Producers also include
 physics (`COLLISION_START`), lifecycle (`SCENE_LOADED`), and model-port thresholds
-authored as `LuncoPortEvent` child prims of a program (one prim per rule:
+authored as `LunCoPortEvent` child prims of a program (one prim per rule:
 `lunco:event:port`, `lunco:event:op`, `lunco:event:threshold`, `lunco:event:emit`).
 
 ## 6. Running & debugging
@@ -136,12 +136,12 @@ Prefer the HTTP API (curl-first; canonical port **4101** — launch per the
 
 ## 7. Persistence — bake into the scene (USD)
 
-A script is a PRIM — give the entity a `LuncoProgram` child and it auto-runs on spawn.
+A script is a PRIM — give the entity a `LunCoProgram` child and it auto-runs on spawn.
 Delete the prim and the behaviour is gone:
 ```usda
 def Xform "Rover_01"
 {
-    def LuncoProgram "Patrol"
+    def LunCoProgram "Patrol"
     {
         uniform asset lunco:program:sourceAsset = @scenarios/patrol.rhai@
         # or author the source in place:
@@ -162,7 +162,7 @@ libraries → `<twin>/tools/*.rhai`.
 3. Drive with prelude verbs (`nav_to`/`drive`/`cmd`) — never a control loop (that's Modelica).
 4. Wire reactions through `emit`/`on_event` (remember the one-tick delay).
 5. `RunScenario` on the target gid; verify with `ScriptInspect`; iterate by re-running (hot-reload).
-6. Persist it as a `LuncoProgram` child prim on the target once it works.
+6. Persist it as a `LunCoProgram` child prim on the target once it works.
 
 ## Anti-patterns (each has cost real time)
 

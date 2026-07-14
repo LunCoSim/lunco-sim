@@ -295,16 +295,16 @@ registered by `UsdSimPlugin`) reads:
 | `float inputs:<port>` / `float outputs:<port>` | The program's ports. A `.connect` makes one a wire; a constant makes it a parameter. A prim is stepped iff it BOTH binds a program AND declares ports. |
 
 A program that is bolted onto a thing — a guidance law, a battery, a supervisory script
-— is a `def LuncoProgram` CHILD prim, so deleting the prim removes the behaviour. A prim
+— is a `def LunCoProgram` CHILD prim, so deleting the prim removes the behaviour. A prim
 that IS a program — a vessel's own flight-control system, inseparable from the airframe
-— applies `LuncoProgramAPI` in place instead.
+— applies `LunCoProgramAPI` in place instead.
 
 A wire is a native USD connection, authored on the prim that CONSUMES the value. The
 same form serves within one prim (a model's output driving the body's force input) and
 *between* prims (the target path simply names another one):
 
 ```usda
-def LuncoProgram "Amplifier"
+def LunCoProgram "Amplifier"
 {
     uniform asset lunco:program:sourceAsset = @models/Amplifier.py@
     float inputs:signal.connect = </Scene/Oscillator.outputs:signal>

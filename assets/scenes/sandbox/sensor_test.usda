@@ -15,9 +15,11 @@
 #   contact_force alongside its rigid-body ports.
 # Loaded by `sandbox --scene scenes/sandbox/sensor_test.usda`.
 
+# Scene root: an `assembly` — a thing you OPEN, not a part you place.
 def Xform "SandboxScene" (
+    kind = "assembly"
     doc = "A box resting on the ground carrying simple sensors: one that feels motion, one that measures distance to the ground, and one that feels touch. Checks that each reports sensible numbers."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
@@ -50,7 +52,7 @@ def Xform "SandboxScene" (
     }
 
     def Xform "Avatar" (
-        prepend apiSchemas = ["LuncoAvatarAPI"]
+        prepend apiSchemas = ["LunCoAvatarAPI"]
     )
     {
         uniform bool lunco:avatar = true

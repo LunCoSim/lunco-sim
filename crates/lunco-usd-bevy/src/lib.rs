@@ -867,7 +867,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
             );
         }
 
-        // Scripts are `LuncoProgram` CHILD prims whose source is a `.rhai` — read
+        // Scripts are `LunCoProgram` CHILD prims whose source is a `.rhai` — read
         // from here, the owner, because a script acts on behalf of the thing that
         // carries it: `me` is the vessel, not the program prim. The program prim is
         // what makes the binding composable (it arrives on a `references` arc and can
@@ -2609,7 +2609,7 @@ pub fn get_attribute_as_vec3<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str)
     read_vec3_f64(reader, path, attr).map(|v| Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32))
 }
 
-/// Attach the rhai programs a prim carries — its `LuncoProgram` children whose
+/// Attach the rhai programs a prim carries — its `LunCoProgram` children whose
 /// source is a `.rhai` — to `entity`, the prim that OWNS them.
 ///
 /// The script's `me` is its owner, because that is what a script is for: it acts on
@@ -2626,7 +2626,7 @@ fn attach_rhai_programs<R: UsdRead>(
     commands: &mut Commands,
 ) {
     for child in reader.children(owner) {
-        if reader.type_name(&child).as_deref() != Some("LuncoProgram") {
+        if reader.type_name(&child).as_deref() != Some("LunCoProgram") {
             continue;
         }
 

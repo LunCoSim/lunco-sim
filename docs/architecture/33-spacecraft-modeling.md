@@ -340,7 +340,7 @@ Matters for reproducibility and standards interop, not for modeling more assets.
 1. **USD prim** `/World/Lander`: `PhysicsRigidBodyAPI`, `physics:mass`,
    `physics:diagonalInertia`, `physics:centerOfMass` (needs G2), collider(s).
 2. **Bind the program**: the lander's flight-control law is inseparable from the
-   airframe, so apply `LuncoProgramAPI` on the prim and author
+   airframe, so apply `LunCoProgramAPI` on the prim and author
    `uniform asset lunco:program:sourceAsset = @models/Lander.mo@` (extend
    `RocketEngine.mo` with gimbal angles + throttle) plus
    `uniform bool lunco:program:realtimeSafe = true` — it drives a force on a predicted

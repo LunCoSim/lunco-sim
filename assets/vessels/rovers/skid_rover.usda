@@ -46,7 +46,7 @@ def Xform "SkidRover" (
         "PhysicsRigidBodyAPI", "PhysxRigidBodyAPI",
         "PhysicsMassAPI",
         "PhysxVehicleContextAPI",
-        "PhysxVehicleTankDifferentialAPI", "LuncoCatalogAPI"
+        "PhysxVehicleTankDifferentialAPI", "LunCoCatalogAPI"
     ]
     prepend variantSets = "drivetrain"
     variants = {

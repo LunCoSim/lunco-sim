@@ -57,7 +57,7 @@ fn on_event(me, evt) {
 ```
 
 (A real controller sequences phases here with `wait_for`/`wait_until` or reacts to
-events raised by `LuncoPortEvent` prims. Never write command ports every tick from rhai.)
+events raised by `LunCoPortEvent` prims. Never write command ports every tick from rhai.)
 
 ## Step 3 — sensors + wiring (USD)
 
@@ -69,7 +69,7 @@ def "Altimeter" (prepend references = @../../vessels/sensors/altimeter.usda@</Al
 { double3 xformOp:translate = (0, -1, 0); uniform token[] xformOpOrder = ["xformOp:translate"] }
 
 # on the vessel prim — its flight-control system is inseparable from the airframe, so
-# apply `LuncoProgramAPI` and name the model in place:
+# apply `LunCoProgramAPI` and name the model in place:
 uniform asset lunco:program:sourceAsset = @models/Hover.mo@
 uniform bool  lunco:program:realtimeSafe = true      # it drives a force on a predicted body
 
@@ -81,7 +81,7 @@ float inputs:piloted.connect      = </Vessel.outputs:piloted>
 float inputs:throttle.connect     = </Vessel.outputs:throttle>
 
 # the supervisor is bolted on, so it is a child program prim:
-def LuncoProgram "Supervisor" {
+def LunCoProgram "Supervisor" {
     uniform asset lunco:program:sourceAsset = @scenarios/hover_super.rhai@
 }
 ```

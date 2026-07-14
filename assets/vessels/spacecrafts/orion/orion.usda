@@ -6,7 +6,8 @@
 )
 
 def Xform "Orion" (
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    kind = "component"
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = true

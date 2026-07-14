@@ -123,7 +123,7 @@ program is a prim, not an attribute — delete the prim and the behaviour goes w
 
 ```usda
 def Xform "Rover_01" {
-    def LuncoProgram "Mission" {
+    def LunCoProgram "Mission" {
         uniform asset lunco:program:sourceAsset = @scenarios/my_rover_mission.rhai@
         # …or author the source in place:
         # uniform string lunco:program:sourceCode = '''<rhai source>'''
@@ -359,7 +359,7 @@ Available nodes include:
 
 ## I. Persistence
 
-- **Per-entity scenarios → USD (load):** a script is a `LuncoProgram` child prim, and it
+- **Per-entity scenarios → USD (load):** a script is a `LunCoProgram` child prim, and it
   auto-attaches and runs when the prim is spawned:
   - `uniform asset lunco:program:sourceAsset = @scenarios/foo.rhai@` — the file, resolved
     like every other asset the scene depends on.
@@ -370,7 +370,7 @@ Available nodes include:
     read in-script by `param(me, "<key>", default)`.
 - **Tool libraries → files:** `<twin>/tools/*.rhai` (see [§E](#e-tools-shared-libraries)).
 - **Timelines → files:** `RegisterTimeline { name, timeline }` stores to `<twin>/timelines/<name>.json`; reloaded on Twin open. Discover with `ListTimelines`/`GetTimeline`; run a stored one with `RunStoredTimeline { target, name }`.
-- **Port-threshold events → USD:** author one `def LuncoPortEvent` child prim per rule on
+- **Port-threshold events → USD:** author one `def LunCoPortEvent` child prim per rule on
   the program whose port it watches, and a telemetry event fires automatically when the
   port crosses the threshold. Each rule is four typed properties: `lunco:event:port`
   (token), `lunco:event:op` (token — `lt` \| `le` \| `gt` \| `ge`), `lunco:event:threshold`

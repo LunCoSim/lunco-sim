@@ -3029,7 +3029,7 @@ impl Plugin for SyncPlugin {
                 recompute_interest,
                 // Journal plane: both roles stream new journal entries — the
                 // host relays all (fan-out hub), clients send their own edits.
-                // Policies ride this too — a `LuncoPolicy` prim is a USD doc op —
+                // Policies ride this too — a `LunCoPolicy` prim is a USD doc op —
                 // so there is no separate policy broadcast.
                 crate::journal_plane::broadcast_journal_entries,
             ))
@@ -3086,7 +3086,7 @@ impl Plugin for SyncPlugin {
         // Scenario-distribution commands (PromoteScenario) — its own
         // `register_commands!` set in the `scenario_sync` module.
         crate::scenario_sync::register_all_commands(app);
-        // Policies are authored as `LuncoPolicy` USD prims (ordinary `ApplyUsdOp`
+        // Policies are authored as `LunCoPolicy` USD prims (ordinary `ApplyUsdOp`
         // doc ops) and activated by the projector in the assembly crate — no
         // imperative policy command to register here.
     }

@@ -8,7 +8,7 @@
 # Reusable Modelica-driven balloon.
 #
 # The balloon IS its plant: the buoyancy model is not bolted onto the sphere, it is
-# what makes the sphere a balloon — so `LuncoProgramAPI` is applied to the vessel prim
+# what makes the sphere a balloon — so `LunCoProgramAPI` is applied to the vessel prim
 # itself and `lunco:program:sourceAsset` names the Modelica source. The model's
 # `netForce` output is the body's `force_y` input; the body's height and velocity are
 # the model's inputs. One prim, one self-loop.
@@ -24,7 +24,7 @@
 
 def Xform "ModelicaBalloon" (
     kind = "component"
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LuncoCatalogAPI", "LuncoProgramAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI", "LunCoProgramAPI"]
 )
 {
     uniform bool lunco:spawnable = true
@@ -53,7 +53,7 @@ def Xform "ModelicaBalloon" (
 
     # ── The envelope: renders and collides ───────────────────────────────────
     def Sphere "Envelope" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LuncoMaterialAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoMaterialAPI"]
     )
     {
         double radius = 1.0

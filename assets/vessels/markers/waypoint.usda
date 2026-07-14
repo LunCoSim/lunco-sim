@@ -14,7 +14,7 @@
 # uses the standard `primvars:displayOpacity` (folded into base-color alpha +
 # AlphaMode::Blend by lunco-usd-bevy).
 def Xform "WaypointMarker" (
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "component"
 )
 {

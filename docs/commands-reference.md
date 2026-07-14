@@ -2442,7 +2442,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `SaveScenario`
 
- Save a live-edited rhai scenario's current source back onto its `LuncoProgram`
+ Save a live-edited rhai scenario's current source back onto its `LunCoProgram`
  prim's `lunco:program:sourceCode` — the missing half of scenario authoring.
 
  The LOAD path reads a program prim's source into a running scenario; until
@@ -2465,7 +2465,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `SetRhaiPolicy`
 
- Convenience command: author (or hot-replace) a rhai policy as a `LuncoPolicy`
+ Convenience command: author (or hot-replace) a rhai policy as a `LunCoPolicy`
  USD prim under `/World/Policies/<name>` in ONE call, instead of hand-issuing the
  underlying `ApplyUsdOp`s. Because it authors USD doc ops, the policy **journals →
  syncs to every peer → the projector activates it** (registers the rhai hook; at
@@ -2473,7 +2473,7 @@ actually call, with the fields the deserializer actually accepts. See the
  editing `lunco:policy:source`) **hot-replaces the hook live** — dynamic rhai
  editing with no file system, converging across the network.
 
- This is the ergonomic surface over the canonical form (a `LuncoPolicy` prim); the
+ This is the ergonomic surface over the canonical form (a `LunCoPolicy` prim); the
  raw `ApplyUsdOp` path still works. Single active scene doc for now (mirrors the
  journal drivers).
 

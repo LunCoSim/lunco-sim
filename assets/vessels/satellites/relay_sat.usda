@@ -11,7 +11,7 @@
 # a 6540 km, e 0.6, i 57.7°, ω 90° so apolune dwells over the lunar SOUTH pole
 # (long visibility windows from a Shackleton-area base).
 def Xform "RelaySat" (
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "component"
 )
 {

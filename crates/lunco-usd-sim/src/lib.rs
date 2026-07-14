@@ -1032,7 +1032,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             info!("Successfully initialized FSW for {}", prim_path.path);
         }
 
-        // 1b. Mission behaviour: a BT.CPP v4 XML tree, carried by a `LuncoProgram`
+        // 1b. Mission behaviour: a BT.CPP v4 XML tree, carried by a `LunCoProgram`
         // child of this prim — the vessel OWNS the tree, so the tree is read from
         // here, its owner. Inline source wins over a file: an author editing a tree in
         // place means it. The tree's spatial leaves reference WAYPOINT PRIMS by path;
@@ -1043,7 +1043,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
         // not a script, it is compiled and ticked by the behaviour engine. Extension
         // picks the engine, exactly as it does for `.mo` and `.rhai`.
         for child in reader.children(&sdf_path) {
-            if reader.type_name(&child).as_deref() != Some("LuncoProgram") {
+            if reader.type_name(&child).as_deref() != Some("LunCoProgram") {
                 continue;
             }
             if let Some(xml) = reader

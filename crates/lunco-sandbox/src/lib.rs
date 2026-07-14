@@ -1080,9 +1080,9 @@ fn apply_run_status(
 /// The USD type name of a policy prim, and the attribute names carrying its rhai
 /// hook definition — the projected form of `scripted_policy::PolicyDef`.
 #[cfg(feature = "networking")]
-const LUNCO_POLICY_TYPE: &str = "LuncoPolicy";
+const LUNCO_POLICY_TYPE: &str = "LunCoPolicy";
 
-/// Read every composed `LuncoPolicy` prim across all live stages into the desired
+/// Read every composed `LunCoPolicy` prim across all live stages into the desired
 /// policy set — the "policy is a projected USD prim" extractor. Reads the
 /// **composed** stage, so an opinion authored at any layer (global/twin/scene)
 /// resolves to one effective policy per seam. A prim missing `seam` or `source` is
@@ -1118,7 +1118,7 @@ fn extract_usd_policies(
 }
 
 /// **Policy projection** — activation half of "policy is a USD prim". On any
-/// composed-stage change, read the `LuncoPolicy` prims and project them into the
+/// composed-stage change, read the `LunCoPolicy` prims and project them into the
 /// live hook registry via
 /// [`project_policies`](lunco_networking::scripted_policy::project_policies): a new
 /// prim registers its rhai hook (and, at [`MERGE_SEAM`](lunco_networking::scripted_policy::MERGE_SEAM),
@@ -1145,7 +1145,7 @@ fn project_usd_policies(
 
 /// **Environment-settings projection** — the read half of persisting
 /// `SetEnvironmentLight` render knobs (exposure / bloom / ambient / earthshine)
-/// onto the `LuncoEnvironment` settings prim (see
+/// onto the `LunCoEnvironment` settings prim (see
 /// [`lunco_environment::LUNCO_ENVIRONMENT_PRIM_TYPE`]). On any composed-stage
 /// change, read that prim's `lunco:env:*` attrs and apply them **directly** to
 /// the live render state — never by re-triggering `SetEnvironmentLight`, which
@@ -1208,7 +1208,7 @@ fn project_env_settings(
     }
 }
 
-/// Convenience command: author (or hot-replace) a rhai policy as a `LuncoPolicy`
+/// Convenience command: author (or hot-replace) a rhai policy as a `LunCoPolicy`
 /// USD prim under `/World/Policies/<name>` in ONE call, instead of hand-issuing the
 /// underlying `ApplyUsdOp`s. Because it authors USD doc ops, the policy **journals →
 /// syncs to every peer → the projector activates it** (registers the rhai hook; at
@@ -1216,7 +1216,7 @@ fn project_env_settings(
 /// editing `lunco:policy:source`) **hot-replaces the hook live** — dynamic rhai
 /// editing with no file system, converging across the network.
 ///
-/// This is the ergonomic surface over the canonical form (a `LuncoPolicy` prim); the
+/// This is the ergonomic surface over the canonical form (a `LunCoPolicy` prim); the
 /// raw `ApplyUsdOp` path still works. Single active scene doc for now (mirrors the
 /// journal drivers).
 #[lunco_core::Command(default)]
@@ -1278,7 +1278,7 @@ fn on_set_rhai_policy(
             edit_target: root.clone(),
             parent_path: "/World/Policies".into(),
             name: name.clone(),
-            type_name: Some("LuncoPolicy".into()),
+            type_name: Some("LunCoPolicy".into()),
             reference: None,
         },
         UsdOp::SetAttribute {
@@ -1316,7 +1316,7 @@ fn on_set_rhai_policy(
     info!("[policy] SetRhaiPolicy authored `{prim}` (seam '{}') — journals + projects", cmd.seam);
 }
 
-/// Save a live-edited rhai scenario's current source back onto the `LuncoProgram`
+/// Save a live-edited rhai scenario's current source back onto the `LunCoProgram`
 /// prim it came from — the other half of scenario authoring.
 ///
 /// The source is authored onto that prim's `lunco:program:sourceCode`, which is what
@@ -1428,7 +1428,7 @@ mod policy_projection_tests {
     use super::extract_usd_policies;
     use lunco_usd_bevy::{CanonicalStage, CanonicalStages, StageRecipe};
 
-    /// A `LuncoPolicy` prim authored in the scene USD is read into a `PolicyDef` —
+    /// A `LunCoPolicy` prim authored in the scene USD is read into a `PolicyDef` —
     /// the "settable in USD" half of proper policies. The projector then hands this
     /// to `project_policies`, so a scene-authored (or journal-synced) policy
     /// activates its rhai hook with no bespoke broadcast.
@@ -1436,7 +1436,7 @@ mod policy_projection_tests {
     fn extracts_lunco_policy_prims_from_composed_stage() {
         const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\n\
             def Xform \"World\"\n{\n\
-            \x20   def LuncoPolicy \"takeover\"\n    {\n\
+            \x20   def LunCoPolicy \"takeover\"\n    {\n\
             \x20       string lunco:policy:seam = \"control.authority.take\"\n\
             \x20       string lunco:policy:entry = \"may_take_control\"\n\
             \x20       string lunco:policy:source = \"fn may_take_control(ctx){true}\"\n\
@@ -1448,7 +1448,7 @@ mod policy_projection_tests {
         stages.insert(bevy::asset::AssetId::invalid(), cs);
 
         let policies = extract_usd_policies(&stages);
-        assert_eq!(policies.len(), 1, "one LuncoPolicy prim → one PolicyDef");
+        assert_eq!(policies.len(), 1, "one LunCoPolicy prim → one PolicyDef");
         let p = &policies[0];
         assert_eq!(p.seam, "control.authority.take");
         assert_eq!(p.entry, "may_take_control");
@@ -1456,7 +1456,7 @@ mod policy_projection_tests {
         assert!(!p.deterministic, "authored deterministic=false is read");
     }
 
-    /// **Live rhai editing (no file system).** Editing a `LuncoPolicy`'s `source`
+    /// **Live rhai editing (no file system).** Editing a `LunCoPolicy`'s `source`
     /// attribute at runtime is a `SetAttribute` on the composed stage; the projector
     /// re-reads the NEW source (not a cached initial value). Wired end to end this is
     /// "dynamically edit a rover's rhai behaviour → the projector re-runs (change-
@@ -1467,7 +1467,7 @@ mod policy_projection_tests {
     fn projector_reads_live_edited_source() {
         const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\n\
             def Xform \"World\"\n{\n\
-            \x20   def LuncoPolicy \"drive\"\n    {\n\
+            \x20   def LunCoPolicy \"drive\"\n    {\n\
             \x20       string lunco:policy:seam = \"rover.drive\"\n\
             \x20       string lunco:policy:entry = \"drive\"\n\
             \x20       string lunco:policy:source = \"fn drive(c){1}\"\n\
@@ -1549,7 +1549,7 @@ impl Plugin for SandboxCorePlugin {
             app.add_plugins(lunco_render_bevy::LuncoRenderPlugin);
         }
 
-        // Convenience command: `SetRhaiPolicy` authors a `LuncoPolicy` prim as USD
+        // Convenience command: `SetRhaiPolicy` authors a `LunCoPolicy` prim as USD
         // doc ops (journals → syncs → projector activates). Authoring works with or
         // without networking; the activation projector is networking-gated for now.
         register_all_commands(app);
@@ -1858,7 +1858,7 @@ impl Plugin for SandboxCorePlugin {
                 (broadcast_run_status, apply_run_status)
                     .run_if(resource_exists::<lunco_experiments::ExperimentRegistry>),
             );
-            // Policy projection: activate `LuncoPolicy` prims from the composed
+            // Policy projection: activate `LunCoPolicy` prims from the composed
             // stage into the hook registry. Because policies are USD prims they
             // sync via the journal above — no bespoke policy broadcast.
             app.add_systems(Update, project_usd_policies);
@@ -1912,7 +1912,7 @@ impl Plugin for SandboxCorePlugin {
         // events — see `light_policy`). Render concern → `ui`-gated.
         #[cfg(feature = "ui")]
         app.add_plugins(light_policy::LightPolicyPlugin);
-        // Environment-settings projection: apply a persisted `LuncoEnvironment`
+        // Environment-settings projection: apply a persisted `LunCoEnvironment`
         // prim's render knobs (exposure/bloom/ambient/earthshine) to the live
         // render state on stage change. UI-gated (render/camera state); core
         // persistence (authoring the prim) happens in `lunco-scene-commands`.

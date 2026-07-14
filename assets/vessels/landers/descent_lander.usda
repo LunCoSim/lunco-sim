@@ -19,7 +19,7 @@
 #   )
 #   { double3 xformOp:translate = (0, 60.0, 0) }
 #
-# The airframe's flight-control system is APPLIED here (`LuncoProgramAPI`), not bolted
+# The airframe's flight-control system is APPLIED here (`LunCoProgramAPI`), not bolted
 # on, because it is not separable: its `inputs:` ARE the vessel's control surface — the
 # ports the control profile writes when a session takes the stick. A lander without it
 # is not a lander without an autopilot; it is a lander without an engine.
@@ -48,7 +48,7 @@ def Xform "DescentLander" (
     # contain component models, and the kind is what tells a browser (and the UI)
     # whether a prim is a thing you open up or a thing you place.
     kind = "assembly"
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI", "LuncoCatalogAPI", "LuncoVesselAPI", "LuncoProgramAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI", "LunCoCatalogAPI", "LunCoVesselAPI", "LunCoProgramAPI"]
 )
 {
     # Emission REQUIRES a material. `displayColor` / `displayOpacity` are real
@@ -151,14 +151,14 @@ def Xform "DescentLander" (
     # A threshold crossing on a model output, published as an event the supervisory
     # script (and anything else) reacts to. One prim per rule: the port, the
     # comparison, the threshold and the name are each a typed property.
-    def LuncoPortEvent "LowFuel"
+    def LunCoPortEvent "LowFuel"
     {
         uniform token lunco:event:port = "m_prop"
         uniform token lunco:event:op = "lt"
         double lunco:event:threshold = 200.0
         uniform token lunco:event:emit = "lander_low_fuel"
     }
-    def LuncoPortEvent "Depleted"
+    def LunCoPortEvent "Depleted"
     {
         uniform token lunco:event:port = "m_prop"
         uniform token lunco:event:op = "le"
@@ -171,7 +171,7 @@ def Xform "DescentLander" (
     # fly the descent — mission orchestration is a separate concern and lives on a
     # scene's own `Scenario` prim. A program prim, so it can be deleted, replaced, or
     # referenced in without touching the airframe.
-    def LuncoProgram "Subsystems" (
+    def LunCoProgram "Subsystems" (
         doc = "Touchdown latch and propellant-event notices. Does not fly the vehicle."
     )
     {
@@ -309,7 +309,7 @@ def Xform "DescentLander" (
         float[] primvars:displayOpacity = [0.4]
         bool physics:collisionEnabled = false
 
-        def LuncoProgram "Plume"
+        def LunCoProgram "Plume"
         {
             uniform asset lunco:program:sourceAsset = @scenarios/flame.rhai@
             custom float lunco:param:wmax = 1.05
@@ -330,7 +330,7 @@ def Xform "DescentLander" (
         float[] primvars:displayOpacity = [0.85]
         bool physics:collisionEnabled = false
 
-        def LuncoProgram "Plume"
+        def LunCoProgram "Plume"
         {
             uniform asset lunco:program:sourceAsset = @scenarios/flame.rhai@
             custom float lunco:param:wmax = 0.5
@@ -386,7 +386,7 @@ def Xform "DescentLander" (
     # visual only.
     def Cube "SolarWingPX"
     (
-        prepend apiSchemas = ["LuncoMaterialAPI"]
+        prepend apiSchemas = ["LunCoMaterialAPI"]
     )
     {
         double size = 1.0
@@ -409,7 +409,7 @@ def Xform "DescentLander" (
     }
     def Cube "SolarWingNX"
     (
-        prepend apiSchemas = ["LuncoMaterialAPI"]
+        prepend apiSchemas = ["LunCoMaterialAPI"]
     )
     {
         double size = 1.0

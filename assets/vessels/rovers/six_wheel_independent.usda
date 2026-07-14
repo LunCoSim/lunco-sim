@@ -18,11 +18,13 @@
 # `PhysxVehicleContextAPI` still provides the FlightSoftware control surface.
 
 def Xform "SixWheelIndependent" (
-    kind = "component"
+    # An ASSEMBLY: a model built out of other models. Its wheels are component models
+    # that arrive by reference, and USD forbids a `component` from containing them.
+    kind = "assembly"
     prepend apiSchemas = [
         "PhysicsRigidBodyAPI", "PhysxRigidBodyAPI",
         "PhysicsMassAPI",
-        "PhysxVehicleContextAPI", "LuncoCatalogAPI"
+        "PhysxVehicleContextAPI", "LunCoCatalogAPI"
     ]
 )
 {
@@ -62,8 +64,10 @@ def Xform "SixWheelIndependent" (
 
     # --- Left bank → drive_w0/w1/w2 -----------------------------------------
     def Cylinder "Wheel_L0" (
-        kind = "subcomponent"
-        prepend references = @../../components/mobility/wheel.usda@</Wheel>
+        prepend references = [
+            @../../components/mobility/wheel.usda@</Wheel>,
+            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+        ]
     )
     {
         uniform token axis = "X"
@@ -75,14 +79,13 @@ def Xform "SixWheelIndependent" (
         int physxVehicleWheel:index = 0
         float physxVehicleWheel:radius = 0.4
         string lunco:drivePort = "drive_w0"
-        float physxVehicleSuspension:restLength = 0.7
-        float physxVehicleSuspension:springStiffness = 15000.0
-        float physxVehicleSuspension:springDamping = 3000.0
     }
 
     def Cylinder "Wheel_L1" (
-        kind = "subcomponent"
-        prepend references = @../../components/mobility/wheel.usda@</Wheel>
+        prepend references = [
+            @../../components/mobility/wheel.usda@</Wheel>,
+            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+        ]
     )
     {
         uniform token axis = "X"
@@ -94,14 +97,13 @@ def Xform "SixWheelIndependent" (
         int physxVehicleWheel:index = 2
         float physxVehicleWheel:radius = 0.4
         string lunco:drivePort = "drive_w1"
-        float physxVehicleSuspension:restLength = 0.7
-        float physxVehicleSuspension:springStiffness = 15000.0
-        float physxVehicleSuspension:springDamping = 3000.0
     }
 
     def Cylinder "Wheel_L2" (
-        kind = "subcomponent"
-        prepend references = @../../components/mobility/wheel.usda@</Wheel>
+        prepend references = [
+            @../../components/mobility/wheel.usda@</Wheel>,
+            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+        ]
     )
     {
         uniform token axis = "X"
@@ -113,15 +115,14 @@ def Xform "SixWheelIndependent" (
         int physxVehicleWheel:index = 4
         float physxVehicleWheel:radius = 0.4
         string lunco:drivePort = "drive_w2"
-        float physxVehicleSuspension:restLength = 0.7
-        float physxVehicleSuspension:springStiffness = 15000.0
-        float physxVehicleSuspension:springDamping = 3000.0
     }
 
     # --- Right bank → drive_w3/w4/w5 ----------------------------------------
     def Cylinder "Wheel_R0" (
-        kind = "subcomponent"
-        prepend references = @../../components/mobility/wheel.usda@</Wheel>
+        prepend references = [
+            @../../components/mobility/wheel.usda@</Wheel>,
+            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+        ]
     )
     {
         uniform token axis = "X"
@@ -133,14 +134,13 @@ def Xform "SixWheelIndependent" (
         int physxVehicleWheel:index = 1
         float physxVehicleWheel:radius = 0.4
         string lunco:drivePort = "drive_w3"
-        float physxVehicleSuspension:restLength = 0.7
-        float physxVehicleSuspension:springStiffness = 15000.0
-        float physxVehicleSuspension:springDamping = 3000.0
     }
 
     def Cylinder "Wheel_R1" (
-        kind = "subcomponent"
-        prepend references = @../../components/mobility/wheel.usda@</Wheel>
+        prepend references = [
+            @../../components/mobility/wheel.usda@</Wheel>,
+            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+        ]
     )
     {
         uniform token axis = "X"
@@ -152,14 +152,13 @@ def Xform "SixWheelIndependent" (
         int physxVehicleWheel:index = 3
         float physxVehicleWheel:radius = 0.4
         string lunco:drivePort = "drive_w4"
-        float physxVehicleSuspension:restLength = 0.7
-        float physxVehicleSuspension:springStiffness = 15000.0
-        float physxVehicleSuspension:springDamping = 3000.0
     }
 
     def Cylinder "Wheel_R2" (
-        kind = "subcomponent"
-        prepend references = @../../components/mobility/wheel.usda@</Wheel>
+        prepend references = [
+            @../../components/mobility/wheel.usda@</Wheel>,
+            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+        ]
     )
     {
         uniform token axis = "X"
@@ -171,8 +170,5 @@ def Xform "SixWheelIndependent" (
         int physxVehicleWheel:index = 5
         float physxVehicleWheel:radius = 0.4
         string lunco:drivePort = "drive_w5"
-        float physxVehicleSuspension:restLength = 0.7
-        float physxVehicleSuspension:springStiffness = 15000.0
-        float physxVehicleSuspension:springDamping = 3000.0
     }
 }

@@ -8,14 +8,15 @@
 # Landing Pad — blast-hardened disc. Place >=150 m down-sun from the
 # habitat/solar field so plume ejecta doesn't sandblast them.
 def Xform "LandingPad" (
+    kind = "component"
     doc = "Blast-hardened landing pad — sintered disc with a centre hub. Where landers touch down; keep it well clear (>=150 m) of the habitat and solar field so plume ejecta can't sandblast them."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = true
 
     def Cylinder "Pad" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LuncoMaterialAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoMaterialAPI"]
     )
     {
         uniform token axis = "Y"

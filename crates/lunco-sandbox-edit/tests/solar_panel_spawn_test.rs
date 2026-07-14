@@ -34,8 +34,8 @@ fn test_solar_panel_usda_selects_its_shader() {
         "PanelSurface must point lunco:material:shader at shaders/solar_panel.wgsl"
     );
     assert!(
-        content.contains("LuncoMaterialAPI"),
-        "a prim carrying lunco:material:* must apply LuncoMaterialAPI"
+        content.contains("LunCoMaterialAPI"),
+        "a prim carrying lunco:material:* must apply LunCoMaterialAPI"
     );
 }
 

@@ -181,7 +181,7 @@ def Xform "RoverBattery" (prepend apiSchemas = ["LuncoReplicationAPI"])
 {
     token lunco:replication = "authoritative"        # local | authoritative | predicted
 
-    def LuncoProgram "Battery" {
+    def LunCoProgram "Battery" {
         uniform asset lunco:program:sourceAsset = @models/RoverBattery.mo@
         float inputs:load_w.connect = </Rover/Motor.outputs:power>
     }
@@ -371,7 +371,7 @@ end RoverBattery;
 **Deliverables (build on what exists — no Twin/BackendRegistry refactor required):**
 
 1. **Authoring** — declare the program + its connections in USD, reusing what
-   `lunco-usd-sim` already reads: a `LuncoProgram` prim naming
+   `lunco-usd-sim` already reads: a `LunCoProgram` prim naming
    `lunco:program:sourceAsset`, and native USD connections on its `inputs:`. The
    battery program connects `inputs:load_w` ← rover motor power and exposes
    `outputs:soc` / `outputs:voltage`. It drives no force, so it makes no realtime

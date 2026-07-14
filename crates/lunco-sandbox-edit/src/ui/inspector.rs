@@ -1465,7 +1465,7 @@ fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
 
     // Propagate changes to USD
     if world.get::<UsdPrimPath>(part).is_some() {
-        // `LuncoMaterialAPI`. Naming the shader IS selecting it — there is no second
+        // `LunCoMaterialAPI`. Naming the shader IS selecting it — there is no second
         // attribute to keep in step. The TYPE is the schema's, and writer and reader
         // must agree on it, not just on the name: an `asset` reads back as
         // `Value::AssetPath`, and a loader asking for a `String` gets `None`.

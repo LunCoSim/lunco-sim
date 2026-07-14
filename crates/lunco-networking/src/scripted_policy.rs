@@ -8,7 +8,7 @@
 //! peer runs the identical one** — most sharply for the merge policy, whose
 //! determinism contract is that all peers linearize history the same way.
 //!
-//! Distribution is **not** a bespoke plane. A policy is a `LuncoPolicy` **USD prim**
+//! Distribution is **not** a bespoke plane. A policy is a `LunCoPolicy` **USD prim**
 //! (`lunco:policy:{seam,entry,source,deterministic}`); authoring one is an ordinary
 //! USD doc op, so it rides the journal — persisted, per-author, RBAC-gated, and
 //! convergent — and every peer recomposes the identical stage. This module is only
@@ -35,7 +35,7 @@ pub const MERGE_SEAM: &str = "journal.merge.order";
 /// gates rhai scope reuse: convergent/replicated seams (merge, drive) must be
 /// deterministic; the host-only authorization gate need not be.
 ///
-/// This is the projected form of a `LuncoPolicy` USD prim — its
+/// This is the projected form of a `LunCoPolicy` USD prim — its
 /// `lunco:policy:{seam,entry,source,deterministic}` attributes map one-to-one — so
 /// a policy authored in USD rides the journal/sync/persist path with no
 /// policy-specific machinery.
@@ -53,7 +53,7 @@ pub struct PolicyDef {
 
 /// The **derived** set of currently-active scripted policies on this peer — the
 /// projection cache, NOT an authoritative broadcast source. Rebuilt from the
-/// composed `LuncoPolicy` prims by [`project_policies`]; a policy converges across
+/// composed `LunCoPolicy` prims by [`project_policies`]; a policy converges across
 /// peers because its prim rides the USD journal, so every peer projects the same
 /// set. Read it for a "what's active" report.
 #[derive(Resource, Default, Clone)]
@@ -87,7 +87,7 @@ pub fn apply_policy(def: &PolicyDef, journal: Option<&JournalResource>) -> Resul
 /// Deactivate a policy whose prim/definition vanished: unregister its hook, and if
 /// it drove the journal merge order, reset the strategy to the built-in
 /// [`MergeStrategy::Default`]. The counterpart of [`apply_policy`] used by
-/// [`project_policies`] when a `LuncoPolicy` prim is removed (closes the
+/// [`project_policies`] when a `LunCoPolicy` prim is removed (closes the
 /// "unregister has no production callers" gap).
 pub fn retract_policy(seam: &str, journal: Option<&JournalResource>) {
     lunco_hooks::unregister(seam);
@@ -99,7 +99,7 @@ pub fn retract_policy(seam: &str, journal: Option<&JournalResource>) {
 }
 
 /// **Reactive projection** of the full desired policy set (e.g. the composed
-/// `LuncoPolicy` prims of a stage) into the live hook registry: register every
+/// `LunCoPolicy` prims of a stage) into the live hook registry: register every
 /// `desired` policy, **retract any previously-active seam no longer present**, and
 /// leave `registry` holding exactly `desired` as the derived activation cache.
 ///
@@ -167,7 +167,7 @@ mod tests {
 
     /// The reactive projector activates every desired policy and **retracts** a
     /// seam that disappeared — the diff that makes activation track the composed
-    /// USD stage (a deleted `LuncoPolicy` prim unregisters its hook).
+    /// USD stage (a deleted `LunCoPolicy` prim unregisters its hook).
     #[test]
     fn project_policies_registers_desired_and_retracts_vanished() {
         let mut reg = ScriptedPolicyRegistry::default();
