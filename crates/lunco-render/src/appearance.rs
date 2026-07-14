@@ -93,7 +93,24 @@ pub struct PbrLook {
     pub perceptual_roughness: f32,
     /// 0 = dielectric, 1 = metal.
     pub metallic: f32,
-    /// Skip lighting entirely (gizmo-ish / emissive-flat looks).
+    /// Skip lighting entirely: output `base_color` verbatim, ignoring lights, normals
+    /// and shadows.
+    ///
+    /// **Render intent, NOT a material property — and deliberately not persisted.**
+    /// It says "this geometry is a *symbol*, not a surface": trajectory lines, the
+    /// terrain brush overlay, name labels. Asking how the sun falls on an orbit line
+    /// is a category error, which is why `UsdPreviewSurface` has no such input and is
+    /// right not to.
+    ///
+    /// It matters more here than in a terrestrial renderer: the Moon has no
+    /// atmosphere, so there is no ambient fill, and geometry facing away from the sun
+    /// renders *pure black*. A lit trajectory line would vanish on the night side —
+    /// exactly where you need to see where the spacecraft is going.
+    ///
+    /// Set from Rust at the few overlay call sites. No `.usda` authors it. If a
+    /// *scene* surface ever needs to be unlit, say so the USD way — an emissive-only
+    /// `UsdPreviewSurface` (`diffuseColor` 0, `emissiveColor` C, `specularColor` 0) —
+    /// rather than reaching for this flag.
     pub unlit: bool,
     /// Render back faces too.
     pub double_sided: bool,
@@ -106,10 +123,21 @@ pub struct PbrLook {
     pub alpha: SurfaceAlpha,
     /// Texture channels (UsdPreviewSurface authors all five).
     pub textures: PbrTextures,
-    /// Dielectric specular reflectance at normal incidence (`StandardMaterial`
-    /// default 0.5). UsdPreviewSurface authors this.
-    pub reflectance: f32,
-    /// Index of refraction.
+    /// Index of refraction — `UsdPreviewSurface`'s `inputs:ior`, default 1.5 (glass;
+    /// silicates sit at 1.5–1.6).
+    ///
+    /// This is the ONLY specular-strength knob, deliberately. IOR is the physical
+    /// cause; the normal-incidence reflectance F₀ is its consequence, via Fresnel:
+    /// `F0 = ((1 - ior) / (1 + ior))²` — so `ior` 1.5 is the familiar 4% dielectric.
+    ///
+    /// There used to be a second field, `reflectance`, carrying Bevy/Filament's
+    /// artist remap of that SAME quantity (`F0 = 0.16 · reflectance²`, where 0.5 also
+    /// means 4%). Two fields for one physical fact let a look claim to reflect like
+    /// diamond and refract like glass — a substance that does not exist, which the
+    /// renderer drew anyway. It also had nowhere to persist: USD stores `ior` and has
+    /// no `reflectance`, so the value was smuggled into a private `inputs:reflectance`
+    /// that only this codebase could read. Filament's curve is a fact about *Bevy*,
+    /// not about the material, so it now lives in `lunco-render-bevy` alone.
     pub ior: f32,
     /// Clearcoat layer strength (0 = none).
     pub clearcoat: f32,
@@ -138,8 +166,8 @@ impl Default for PbrLook {
             emissive: LinearRgba::BLACK,
             alpha: SurfaceAlpha::Opaque,
             textures: PbrTextures::default(),
-            // `StandardMaterial`'s own defaults — do not drift from them.
-            reflectance: 0.5,
+            // `StandardMaterial`'s own defaults — do not drift from them. `ior` 1.5 is
+            // also `UsdPreviewSurface`'s default, and maps to Bevy's `reflectance` 0.5.
             ior: 1.5,
             clearcoat: 0.0,
             clearcoat_perceptual_roughness: 0.0,
@@ -188,7 +216,6 @@ impl PbrLook {
             emissive: rgba(self.emissive),
             perceptual_roughness: q(self.perceptual_roughness),
             metallic: q(self.metallic),
-            reflectance: q(self.reflectance),
             ior: q(self.ior),
             clearcoat: q(self.clearcoat),
             clearcoat_perceptual_roughness: q(self.clearcoat_perceptual_roughness),
@@ -220,7 +247,6 @@ pub struct PbrLookKey {
     emissive: [i32; 4],
     perceptual_roughness: i32,
     metallic: i32,
-    reflectance: i32,
     ior: i32,
     clearcoat: i32,
     clearcoat_perceptual_roughness: i32,

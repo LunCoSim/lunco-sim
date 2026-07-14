@@ -12,10 +12,9 @@
 //! one authored precision and silently drops a value authored in the other (see
 //! [`real`](UsdRead::real)).
 
-use openusd::sdf::{Path as SdfPath, SpecType, Value};
+use openusd::sdf::{Path as SdfPath, Value};
 use openusd::usd::Stage;
 
-use crate::usd_data::UsdDataExt;
 use crate::view::StageView;
 
 /// Parsed `customData` UI hint for a scalar attribute — the bounds + unit a

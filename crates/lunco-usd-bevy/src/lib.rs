@@ -1549,8 +1549,8 @@ fn apply_standard_material<R: UsdRead>(
         .map(|v| Color::linear_rgb(v[0] as f32, v[1] as f32, v[2] as f32))
         .unwrap_or(Color::WHITE);
 
-    // Emissive, metallic, roughness and reflectance are **shader** inputs. They
-    // are NOT read from the geometry, deliberately.
+    // Emissive, metallic and roughness are **shader** inputs. They are NOT read from
+    // the geometry, deliberately.
     //
     // This used to accept `inputs:metallic` (and bare `metallic`, `roughness`,
     // `reflectance`, `emissiveColor`, `inputs:perceptual_roughness`) authored
@@ -1568,7 +1568,6 @@ fn apply_standard_material<R: UsdRead>(
     let mut emissive = LinearRgba::BLACK;
     let mut metallic = 0.0f32;
     let mut roughness = 0.5f32;
-    let mut reflectance = 0.5f32;
 
     // UsdPreviewSurface transparency + refraction. Default opaque (alpha 1) and
     // the glass-ish `ior` 1.5 USD uses; overridden only when a bound shader
@@ -1590,6 +1589,10 @@ fn apply_standard_material<R: UsdRead>(
     // Clearcoat layer.
     let mut clearcoat = 0.0f32;
     let mut clearcoat_roughness = 0.0f32;
+
+    // Specular tint — only meaningful under `useSpecularWorkflow = 1`. White (untinted)
+    // unless the shader says otherwise, matching `StandardMaterial`'s default.
+    let mut specular_tint = LinearRgba::WHITE;
 
     // A bound material shader network overrides individual channels where it
     // authors them. Channels the shader omits — or whose texture connection
@@ -1671,30 +1674,21 @@ fn apply_standard_material<R: UsdRead>(
         normal_map_texture = load_tex("inputs:normal", false);
         occlusion_texture = load_tex("inputs:occlusion", false);
 
-        if let Some(r) = get_attribute_as_f32(reader, &shader_path, "inputs:reflectance") {
-            reflectance = r;
-        }
+        // NOTE: there is no `inputs:reflectance`. `UsdPreviewSurface` has no such
+        // input — its specular strength is `inputs:ior` (read below), and Bevy's
+        // `reflectance` is derived from it in `lunco-render-bevy`. We used to author
+        // and read a private `inputs:reflectance` inside UsdShade's reserved `inputs:`
+        // namespace: writer and reader agreed with each other and with nothing else,
+        // so scenes looked right here and lost the value everywhere else. Same bug as
+        // the bare `metallic`/`roughness` on the Gprim, described above.
 
         // Specular workflow: `useSpecularWorkflow = 1` describes a dielectric by
         // `specularColor` instead of metalness → force metallic 0 (USD's specular
-        // workflow has no metalness channel).
-        //
-        // NOTE: the `specularColor` TINT is not carried. `PbrLook` has no
-        // `specular_tint` channel (`StandardMaterial::specular_tint` has no home in
-        // the appearance intent), so a specular-workflow prim authoring a coloured
-        // specular renders with an untinted (white) specular highlight. No scene in
-        // the repo authors one; adding it means one field on `PbrLook` +
-        // `standard_material()` in `lunco-render-bevy`, which is not this crate's to
-        // change. Everything else about the specular workflow (metallic = 0) is
-        // preserved.
+        // workflow has no metalness channel), and carry the tint.
         if get_attribute_as_f32(reader, &shader_path, "inputs:useSpecularWorkflow").unwrap_or(0.0) >= 0.5 {
             metallic = 0.0;
-            if get_attribute_as_vec3(reader, &shader_path, "inputs:specularColor").is_some() {
-                debug!(
-                    "[usd-bevy] {} authors inputs:specularColor — the specular TINT is \
-                     not represented in PbrLook and is dropped (metallic forced to 0).",
-                    sdf_path.as_str()
-                );
+            if let Some(c) = get_attribute_as_vec3(reader, &shader_path, "inputs:specularColor") {
+                specular_tint = LinearRgba::rgb(c[0] as f32, c[1] as f32, c[2] as f32);
             }
         }
 
@@ -1754,10 +1748,10 @@ fn apply_standard_material<R: UsdRead>(
             emissive,
             perceptual_roughness: roughness,
             metallic,
-            reflectance,
             ior,
             clearcoat,
             clearcoat_perceptual_roughness: clearcoat_roughness,
+            specular_tint,
             alpha: alpha_mode,
             textures: PbrTextures {
                 base_color: base_color_texture,
@@ -4094,16 +4088,19 @@ def Xform "HingeZ"
         0: 0.0,
         4: 90.0,
     }
+    uniform token[] xformOpOrder = ["xformOp:rotateZ"]
 }
 
 def Xform "EulerZYX"
 {
     float3 xformOp:rotateZYX = (0, 0, 90)
+    uniform token[] xformOpOrder = ["xformOp:rotateZYX"]
 }
 
 def Xform "Matrixed"
 {
     matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (3, 4, 5, 1) )
+    uniform token[] xformOpOrder = ["xformOp:transform"]
 }
 "#;
 

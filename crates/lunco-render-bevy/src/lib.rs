@@ -125,6 +125,32 @@ impl look_cache::CachedLook for PbrLook {
     }
 }
 
+/// Bevy's `reflectance` for a given index of refraction.
+///
+/// Both parameterise the SAME physical quantity — the normal-incidence specular
+/// reflectance F₀ — just on different curves:
+///
+/// ```text
+/// Fresnel (USD):      F0 = ((1 - ior) / (1 + ior))²
+/// Filament (Bevy):    F0 = 0.16 · reflectance²
+/// ```
+///
+/// Equating them and solving gives the closed form below. It is a bijection, not an
+/// approximation: `ior` 1.5 → `reflectance` 0.5, and both mean F₀ = 0.04, the 4%
+/// dielectric every non-metal has. That is why this conversion is a no-op for
+/// every existing look.
+///
+/// This function is the ONLY place in the workspace that knows Filament's curve —
+/// which is correct, because the curve is a fact about *Bevy*, not about the
+/// material. `PbrLook` carries the physics (`ior`); the backend adapter remaps.
+///
+/// Bevy's `reflectance` saturates at 1.0, which `ior` reaches at 2.33 — above a
+/// diamond's 2.42 and far above anything in a lunar scene, so the clamp is a
+/// boundary of Bevy's parameterisation, not a limit we impose.
+fn bevy_reflectance_from_ior(ior: f32) -> f32 {
+    (2.5 * (ior - 1.0) / (ior + 1.0)).clamp(0.0, 1.0)
+}
+
 /// Build the concrete `StandardMaterial` a look describes.
 fn standard_material(look: &PbrLook) -> StandardMaterial {
     StandardMaterial {
@@ -132,7 +158,7 @@ fn standard_material(look: &PbrLook) -> StandardMaterial {
         emissive: look.emissive,
         perceptual_roughness: look.perceptual_roughness,
         metallic: look.metallic,
-        reflectance: look.reflectance,
+        reflectance: bevy_reflectance_from_ior(look.ior),
         ior: look.ior,
         clearcoat: look.clearcoat,
         clearcoat_perceptual_roughness: look.clearcoat_perceptual_roughness,
@@ -353,5 +379,47 @@ mod tests {
             10,
             "under the sweep threshold the cache is retained for reuse"
         );
+    }
+
+    /// The IOR → reflectance remap must agree with Fresnel, because the two are the
+    /// same physical quantity (F₀) on different curves — not an artistic choice.
+    ///
+    /// The anchor that matters: USD's default `ior` 1.5 must land exactly on Bevy's
+    /// default `reflectance` 0.5. Both mean F₀ = 0.04, the 4% dielectric. That
+    /// equality is *why* dropping the separate `reflectance` field re-looks nothing.
+    #[test]
+    fn ior_maps_to_bevy_reflectance_via_fresnel() {
+        // F₀ from Fresnel (USD) vs from Filament's remap (Bevy) — same number.
+        let f0_fresnel = |ior: f32| ((1.0 - ior) / (1.0 + ior)).powi(2);
+        let f0_filament = |r: f32| 0.16 * r * r;
+
+        for ior in [1.0f32, 1.2, 1.5, 1.8, 2.33] {
+            let r = bevy_reflectance_from_ior(ior);
+            assert!(
+                (f0_filament(r) - f0_fresnel(ior)).abs() < 1e-6,
+                "ior {ior} → reflectance {r}: F0 {} != Fresnel {}",
+                f0_filament(r),
+                f0_fresnel(ior),
+            );
+        }
+
+        // The defaults coincide, and a vacuum reflects nothing.
+        assert!((bevy_reflectance_from_ior(1.5) - 0.5).abs() < 1e-6);
+        assert!(bevy_reflectance_from_ior(1.0).abs() < 1e-6);
+        assert!((f0_fresnel(1.5) - 0.04).abs() < 1e-6);
+
+        // Above Bevy's parameterisation ceiling the remap saturates rather than
+        // producing a reflectance > 1.
+        assert_eq!(bevy_reflectance_from_ior(3.0), 1.0);
+    }
+
+    /// `PbrLook::default()` must still produce Bevy's own `StandardMaterial` defaults.
+    /// This is the regression guard for the field deletion: if the remap ever drifts,
+    /// every material in the workspace silently changes its specular response.
+    #[test]
+    fn default_look_keeps_bevy_default_reflectance() {
+        let m = standard_material(&PbrLook::default());
+        assert!((m.reflectance - StandardMaterial::default().reflectance).abs() < 1e-6);
+        assert!((m.ior - StandardMaterial::default().ior).abs() < 1e-6);
     }
 }

@@ -110,7 +110,8 @@ so it is a no-op.
 | `drive_torque`, `brake_torque`, `friction_mu`, `wheel_radius`, `spring_k`, … | `WheelRaycast` fields (`wheel_param_setter`) | no |
 | `shader` | swaps the `ShaderLook`'s shader | no |
 | `visible` | sets `Visibility` (Hidden/Visible) | no |
-| `base_color`, `emissive`, `metallic`, `roughness`, `reflectance`, `alpha`, `unlit`, … | the entity's `PbrLook` via `apply_pbr_look` | no |
+| `base_color`, `emissive`, `metallic`, `roughness`, `ior`, `alpha`, `double_sided` | the entity's `PbrLook` via `apply_pbr_look` | **yes** — as `UsdPreviewSurface` `inputs:*` (`double_sided` → `doubleSided` on the Gprim) |
+| `unlit` | the entity's `PbrLook` | no — render-only intent (overlay geometry); USD has no equivalent, by design |
 | *(fallback)* any shader param | the entity's `ShaderLook.dyn_params` (`lunco_materials`) + `to_snake_case` | no |
 
 All five mutate **appearance intent**, never a material asset: `lunco-render-bevy`

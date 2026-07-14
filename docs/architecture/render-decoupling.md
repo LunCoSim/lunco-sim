@@ -90,7 +90,15 @@ doctrine applied to the last place that dodged it.
 
 | intent | in | binds to | notes |
 |---|---|---|---|
-| **`PbrLook`** | `lunco-render` | `MeshMaterial3d<StandardMaterial>` | a plain surface as data: colour, roughness, metallic, emissive, reflectance, IOR, clearcoat, specular tint, `SurfaceAlpha::{Opaque,Mask,Blend,Add}`, and all five `Handle<Image>` texture channels (`bevy_image` is render-free) |
+| **`PbrLook`** | `lunco-render` | `MeshMaterial3d<StandardMaterial>` | a plain surface as data: colour, roughness, metallic, emissive, IOR, clearcoat, specular tint, `SurfaceAlpha::{Opaque,Mask,Blend,Add}`, and all five `Handle<Image>` texture channels (`bevy_image` is render-free) |
+
+`PbrLook` states the **physics**, not one backend's parameterisation of it. IOR is the
+worked example: `PbrLook` carries `ior` (as does `UsdPreviewSurface`), while Bevy's
+`reflectance` — Filament's remap of the same quantity, `F0 = 0.16·r²` against Fresnel's
+`F0 = ((1−ior)/(1+ior))²` — is derived in `lunco-render-bevy::bevy_reflectance_from_ior`
+and known nowhere else. A second backend would remap from the same `ior`. Carrying both
+would let a look reflect like diamond and refract like glass, and would need to persist a
+`reflectance` that USD has no attribute for.
 | **`ShaderLook`** | `lunco-materials` | `MeshMaterial3d<ShaderMaterial>` | a custom `.wgsl` with an **open, user-defined parameter set** — see [shader-layers-and-params.md](shader-layers-and-params.md) |
 | **`SceneCamera`** | `lunco-render` | `Camera3d` + tonemapping + MSAA + bloom | because `Camera3d` was being used as the *query filter* for "which camera is the scene one?", which made domain crates link a GPU stack **merely to ask a question** |
 | **`WorldLabel`** | `lunco-render` | `Text2d` + font + colour | a spacecraft's *name* is simulation data; the glyphs are not |

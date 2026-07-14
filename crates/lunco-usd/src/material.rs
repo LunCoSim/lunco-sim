@@ -234,13 +234,20 @@ pub fn ensure_physics_material_ops(
 /// that edits a look authors the SAME USD.
 ///
 /// `None` is a real answer, not a gap:
-/// - `unlit` and `reflectance` have no `UsdPreviewSurface` input. (Bevy's
-///   `reflectance` is a remap of specular response; USD models it with `ior` /
-///   `specularColor` under a different parameterisation, so writing one to the
-///   other would be a lossy invention, not a translation.)
+/// - `unlit` has no `UsdPreviewSurface` input, and should not: it is not a claim
+///   about a surface but about the geometry's *role* ("this is a symbol, not a
+///   surface" — trajectory lines, overlays, labels). It is render-only intent, set
+///   from Rust, and no scene authors it. A genuinely unlit *surface* is spelled the
+///   USD way: emissive-only (`diffuseColor` 0, `emissiveColor` C, `specularColor` 0).
 /// - `double_sided` is NOT a surface input at all — it is `uniform bool
 ///   doubleSided` on `UsdGeomGprim`, i.e. a property of the *geometry*, not the
 ///   material. It is handled by the caller, on the geom prim.
+///
+/// There is no `reflectance` key. `UsdPreviewSurface` has no such input: specular
+/// strength is `inputs:ior`, and Bevy's `reflectance` is a remap of the same
+/// physical quantity (F₀), derived from `ior` in `lunco-render-bevy`. Mapping the
+/// two is exact, not lossy — `ior` 1.5 and `reflectance` 0.5 both mean F₀ = 0.04 —
+/// so there is nothing to preserve by keeping a second name for it.
 pub fn preview_surface_input(key: &str) -> Option<(&'static str, &'static str)> {
     Some(match key {
         "base_color" => ("inputs:diffuseColor", "color3f"),
@@ -248,6 +255,7 @@ pub fn preview_surface_input(key: &str) -> Option<(&'static str, &'static str)> 
         "metallic" => ("inputs:metallic", "float"),
         "roughness" | "perceptual_roughness" => ("inputs:roughness", "float"),
         "alpha" | "opacity" => ("inputs:opacity", "float"),
+        "ior" => ("inputs:ior", "float"),
         _ => return None,
     })
 }

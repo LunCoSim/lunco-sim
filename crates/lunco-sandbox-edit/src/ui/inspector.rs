@@ -1676,12 +1676,11 @@ fn material_pbr_section(
             [e.red, e.green, e.blue],
             look.metallic,
             look.perceptual_roughness,
-            look.reflectance,
-            look.unlit,
+            look.ior,
             look.double_sided,
         )
     };
-    let (mut base, mut alpha, mut emissive, mut metallic, mut roughness, mut reflectance, mut unlit, mut double_sided) = snap;
+    let (mut base, mut alpha, mut emissive, mut metallic, mut roughness, mut ior, mut double_sided) = snap;
 
     let mut changed = false;
     let mut base_changed = false;
@@ -1706,9 +1705,17 @@ fn material_pbr_section(
     changed |= metallic_changed;
     let roughness_changed = ui.add(egui::Slider::new(&mut roughness, 0.0..=1.0).text("Roughness")).changed();
     changed |= roughness_changed;
-    let reflectance_changed = ui.add(egui::Slider::new(&mut reflectance, 0.0..=1.0).text("Reflectance")).changed();
-    changed |= reflectance_changed;
-    changed |= ui.checkbox(&mut unlit, "Unlit").changed();
+    // Index of refraction — `UsdPreviewSurface`'s `inputs:ior`, and the ONLY specular
+    // knob. This slider used to say "Reflectance" and author a private
+    // `inputs:reflectance` that no other DCC reads; IOR is the standard spelling of the
+    // same physical quantity. 1.0 = vacuum (no Fresnel), 1.5 = glass and most
+    // silicates, 2.33 = where Bevy's derived reflectance saturates.
+    //
+    // There is no "Unlit" checkbox: `PbrLook::unlit` is render-only intent for overlay
+    // geometry (trajectory lines, brush rings, labels) with no USD equivalent, so a
+    // checkbox here could only edit a value that silently reverted on reload.
+    let ior_changed = ui.add(egui::Slider::new(&mut ior, 1.0..=2.33).text("IOR")).changed();
+    changed |= ior_changed;
     changed |= ui.checkbox(&mut double_sided, "Double-sided").changed();
     if parts.len() > 1 {
         ui.label(egui::RichText::new(format!("applies to {} parts", parts.len())).weak());
@@ -1726,8 +1733,7 @@ fn material_pbr_section(
                 look.emissive = LinearRgba::new(emissive[0], emissive[1], emissive[2], 1.0);
                 look.metallic = metallic;
                 look.perceptual_roughness = roughness;
-                look.reflectance = reflectance;
-                look.unlit = unlit;
+                look.ior = ior;
                 look.double_sided = double_sided;
                 look.alpha = if alpha >= 1.0 {
                     lunco_render::SurfaceAlpha::Opaque
@@ -1801,8 +1807,8 @@ fn material_pbr_section(
                 if roughness_changed || fresh {
                     set("inputs:roughness", "float", format!("{:.3}", roughness));
                 }
-                if reflectance_changed || fresh {
-                    set("inputs:reflectance", "float", format!("{:.3}", reflectance));
+                if ior_changed || fresh {
+                    set("inputs:ior", "float", format!("{:.3}", ior));
                 }
 
                 if let Some(doc) = resolve_doc_for_entity(world, part) {

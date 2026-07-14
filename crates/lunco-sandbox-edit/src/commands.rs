@@ -3543,7 +3543,7 @@ const PBR_LOOK_KEYS: &[&str] = &[
     "metallic",
     "roughness",
     "perceptual_roughness",
-    "reflectance",
+    "ior",
     "alpha",
     "opacity",
     "unlit",
@@ -3569,9 +3569,9 @@ const PBR_LOOK_KEYS: &[&str] = &[
 ///
 /// `double_sided` is deliberately NOT a shader input — it is `uniform bool
 /// doubleSided` on `UsdGeomGprim`, a property of the geometry — so it is authored
-/// on the geom prim instead. `unlit` and `reflectance` have no USD equivalent at
-/// all (see [`lunco_usd::material::preview_surface_input`]) and stay render-only;
-/// they are the two knobs a saved scene will not carry.
+/// on the geom prim instead. `unlit` is render-only intent with no USD equivalent
+/// (see [`lunco_usd::material::preview_surface_input`]) — it is the one knob a saved
+/// scene will not carry, deliberately.
 fn author_look_to_usd(commands: &mut Commands, target: Entity, key: &str, look: &PbrLook) {
     let look = look.clone();
     let key = key.to_string();
@@ -3598,7 +3598,7 @@ fn author_look_to_usd(commands: &mut Commands, target: Entity, key: &str, look: 
             return;
         }
         if lunco_usd::material::preview_surface_input(&key).is_none() {
-            return; // `unlit` / `reflectance` — no USD surface input to write.
+            return; // `unlit` — render-only intent, no USD surface input to write.
         }
 
         // An existing bound shader, else create the material.
@@ -3627,6 +3627,7 @@ fn author_look_to_usd(commands: &mut Commands, target: Entity, key: &str, look: 
             ("metallic", "float", look.metallic.to_string()),
             ("roughness", "float", look.perceptual_roughness.to_string()),
             ("opacity", "float", look.base_color.alpha.to_string()),
+            ("ior", "float", look.ior.to_string()),
         ] {
             // A fresh material seeds every input; an existing one writes only what
             // changed (so an unrelated authored input is not clobbered).
@@ -3678,9 +3679,12 @@ fn apply_pbr_look(look: &mut PbrLook, key: &str, value: &str) -> bool {
             let Some(v) = f.first() else { return false };
             look.perceptual_roughness = v.clamp(0.0, 1.0);
         }
-        "reflectance" => {
+        // Index of refraction — `UsdPreviewSurface`'s `inputs:ior`. The specular knob;
+        // Bevy's `reflectance` is derived from it (see `lunco-render-bevy`). 1.0 = no
+        // Fresnel at all (vacuum); nothing physical goes below it.
+        "ior" => {
             let Some(v) = f.first() else { return false };
-            look.reflectance = v.clamp(0.0, 1.0);
+            look.ior = v.max(1.0);
         }
         "alpha" | "opacity" => {
             let Some(v) = f.first() else { return false };
