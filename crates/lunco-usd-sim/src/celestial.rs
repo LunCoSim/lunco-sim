@@ -40,6 +40,22 @@ pub fn insert_celestial_comms_components<R: UsdRead>(
     sdf_path: &SdfPath,
     commands: &mut Commands,
 ) {
+    // --- Celestial body declaration (LuncoCelestialBodyAPI) ---
+    //
+    // The scene says which bodies exist; Rust does not. A prim authoring
+    // `int lunco:body = 399` IS the Earth, and its presence is what turns the whole
+    // celestial stack on (`lunco_celestial::celestial_declared`). No such prim ⇒ no
+    // sky. This replaces `CelestialConfig.spawn_hierarchy`, a code-side boolean that
+    // a scene could only trip as a side effect, never actually *request*.
+    if let Some(naif) = reader.scalar::<i32>(sdf_path, "lunco:body") {
+        if naif != 0 {
+            commands
+                .entity(entity)
+                .try_insert(lunco_celestial::CelestialBodyDecl { naif });
+            info!("[usd-celestial] scene declares celestial body {naif} at {prim_path_str}");
+        }
+    }
+
     // --- Geodetic anchor (ground stations + scene site anchor) ---
     let lat = reader.real(sdf_path, "lunco:anchor:lat");
     let lon = reader.real(sdf_path, "lunco:anchor:lon");

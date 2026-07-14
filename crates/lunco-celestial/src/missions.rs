@@ -76,15 +76,15 @@ pub struct MissionPlugin;
 impl Plugin for MissionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MissionRegistry>();
-        // Missions belong to the solar-system context: gated on the celestial
-        // hierarchy being wanted (doc 43 — the sandbox runs this plugin with
-        // the hierarchy off by default), and re-armed if it enables later.
+        // Missions belong to the solar-system context: gated on the scene actually
+        // declaring celestial bodies (`LuncoCelestialBodyAPI`), and latched so they
+        // load once — re-arming if a scene with bodies loads later.
         app.add_systems(
             Update,
             load_missions_system.run_if(
-                |config: Res<crate::CelestialConfig>,
+                |q_decl: Query<(), With<crate::CelestialBodyDecl>>,
                  mut loaded: bevy::prelude::Local<bool>| {
-                    if !config.spawn_hierarchy || *loaded {
+                    if q_decl.is_empty() || *loaded {
                         return false;
                     }
                     *loaded = true;

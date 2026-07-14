@@ -1,8 +1,8 @@
 //! Viewport view-mode switcher: Surface ⇄ Moon ⇄ Earth.
 //!
-//! Visible only while the celestial hierarchy is live — site-anchored scenes
-//! (e.g. the moonbase twin) auto-enable it via `enable_celestial_on_site_anchor`,
-//! so plain sandbox scenes never show the pill. Pure dispatch, no new machinery:
+//! Visible only while the celestial hierarchy is live — i.e. when the scene declared
+//! celestial bodies in USD (`LuncoCelestialBodyAPI`, doc 19 §11e), so plain sandbox
+//! scenes never show the pill. Pure dispatch, no new machinery:
 //! Moon/Earth trigger the existing `FocusTarget` (doc 47 Phase 6 orbital view —
 //! the camera travels, the world never re-poses); Surface triggers the existing
 //! `ReleaseVessel`, the one canonical unwind (same as Backspace/Cancel), whose

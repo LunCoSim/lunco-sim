@@ -79,17 +79,42 @@ pub struct RoverClickEvent {
     pub rover: Entity,
 }
 
-/// Host-app policy for the celestial stack (doc 43). Defaults preserve the
-/// full-client (`luncosim`) behavior: hierarchy + Observer Camera at startup.
-/// The sandbox starts with both off and flips `spawn_hierarchy` when a loaded
-/// scene authors a site anchor (`lunco:anchor:*` on its root prim) — the
-/// solar system then appears around the georeferenced scene; the avatar
-/// camera keeps the `FloatingOrigin`.
+/// A scene-authored declaration that a celestial body exists — the ECS projection
+/// of USD's `LuncoCelestialBodyAPI` (`int lunco:body = 399`).
+///
+/// **This is the switch that turns the sky on**, and it is scene data, not a code
+/// flag. No prim declares a body ⇒ no hierarchy, no globes, no orbit views, no
+/// ephemeris. See [`celestial_declared`].
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CelestialBodyDecl {
+    /// NAIF id: 10 Sun, 399 Earth, 301 Moon.
+    pub naif: i32,
+}
+
+/// Run condition: does the loaded scene actually ask for celestial content?
+///
+/// Replaces `CelestialConfig.spawn_hierarchy` — a boolean in Rust that decided
+/// whether a solar system existed, flipped as a side effect of a scene authoring a
+/// site anchor. A scene could not *say* "I want a Moon"; it could only trip a switch,
+/// and any subsystem that forgot to read the switch leaked planets into scenes that
+/// never asked for them (which is exactly what `TrajectoryPlugin` did — Earth/Moon
+/// orbit views in the flat sandbox arena).
+///
+/// Now the scene declares its bodies in USD and every celestial subsystem gates on
+/// the same authored fact. Re-armable by construction: load a scene with bodies at
+/// runtime and the hierarchy builds then.
+pub fn celestial_declared(q: Query<(), With<CelestialBodyDecl>>) -> bool {
+    !q.is_empty()
+}
+
+/// Host-app policy for the celestial stack (doc 43).
+///
+/// Note what is NOT here any more: `spawn_hierarchy`. Whether a solar system exists
+/// is the *scene's* call, authored as `LuncoCelestialBodyAPI` prims and gated by
+/// [`celestial_declared`] — not a host-app boolean. This resource now carries only
+/// genuine host policy: whether the app owns its own camera.
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct CelestialConfig {
-    /// Spawn the Sun/Earth/Moon big_space hierarchy (idempotent; may be
-    /// enabled at runtime).
-    pub spawn_hierarchy: bool,
     /// Spawn the celestial Observer Camera and let it claim the single
     /// `FloatingOrigin`. Leave off in apps that own their camera (sandbox).
     pub spawn_observer_camera: bool,
@@ -97,7 +122,7 @@ pub struct CelestialConfig {
 
 impl Default for CelestialConfig {
     fn default() -> Self {
-        Self { spawn_hierarchy: true, spawn_observer_camera: true }
+        Self { spawn_observer_camera: true }
     }
 }
 
@@ -187,16 +212,15 @@ impl Plugin for CelestialPlugin {
             app.add_plugins(GravityPlugin);
         }
 
-        // Hierarchy spawn is gated by `CelestialConfig.spawn_hierarchy` and
-        // idempotent (skipped while a `SolarSystemRoot` exists), so a host can
-        // enable it at runtime (sandbox: when a site-anchored scene loads). In
-        // `Update` rather than `Startup` so the world shell root exists and
-        // runtime enablement needs no second registration.
+        // Hierarchy spawn is gated by what the SCENE declares (`LuncoCelestialBodyAPI`
+        // prims → `CelestialBodyDecl`), not by a host boolean, and is idempotent
+        // (skipped while a `SolarSystemRoot` exists). In `Update` rather than `Startup`
+        // so it fires whenever a scene with bodies loads — including at runtime.
         app.add_systems(
             Update,
             big_space_setup::setup_big_space_hierarchy.run_if(
-                |config: Res<CelestialConfig>, q: Query<(), With<SolarSystemRoot>>| {
-                    config.spawn_hierarchy && q.is_empty()
+                |q_decl: Query<(), With<CelestialBodyDecl>>, q: Query<(), With<SolarSystemRoot>>| {
+                    !q_decl.is_empty() && q.is_empty()
                 },
             ),
         );

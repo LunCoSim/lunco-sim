@@ -7404,6 +7404,7 @@ dependencies = [
  "lunco-terrain-globe",
  "lunco-terrain-surface",
  "lunco-theme",
+ "lunco-time",
  "lunco-tutorial",
  "lunco-twin",
  "lunco-twin-journal",

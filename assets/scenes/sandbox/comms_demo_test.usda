@@ -18,6 +18,16 @@ def Xform "CommsDemoScene" (
 {
     bool lunco:spawnable = false
 
+    # This scene wants a sky: Sun, Earth and Moon. Celestial content is opt-in per
+    # scene (doc 19 §11e) — the bodies, their globes, the orbit views and the
+    # ephemeris all exist because these prims declare them, not because a Rust flag
+    # was flipped. A scene that says nothing here gets no celestial content at all.
+    def "SolarSystem" (
+        prepend references = @../../celestial/solar_system.usda@</SolarSystem>
+    )
+    {
+    }
+
     # Site frame: Shackleton–de Gerlache connecting ridge (Artemis site).
     # Malapert Massif summit region — the classic lunar comms-relay site:
     # near-continuous sunlight and Earth permanently a few degrees above the

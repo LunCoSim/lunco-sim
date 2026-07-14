@@ -32,6 +32,7 @@ mod rhai_repl_panel;
 /// Centered "Generating terrain…" overlay during the initial DEM bake.
 mod terrain_progress;
 /// Surface ⇄ Moon ⇄ Earth view-mode switcher (site-anchored scenes only).
+mod celestial_time;
 mod view_mode;
 /// Centered "Downloading <scenario>" overlay during scenario-sync asset fetch.
 /// Networking-only — the file carries its own `#![cfg(feature = "networking")]`.
@@ -162,8 +163,11 @@ impl Plugin for SandboxUiPlugin {
                 (
                     terrain_progress::draw_terrain_progress,
                     // Surface ⇄ Moon ⇄ Earth switcher — appears only when the
-                    // celestial hierarchy is live (site-anchored scenes).
+                    // celestial hierarchy is live (the scene declared bodies).
                     view_mode::draw_view_mode_switcher,
+                    // Sky clock: rate + couple/detach for the CELESTIAL clock only
+                    // (not the sim transport). Same visibility gate.
+                    celestial_time::draw_celestial_time,
                 ),
             );
         // G2: "Downloading <scenario>" overlay during scenario-sync asset fetch.
@@ -296,7 +300,9 @@ fn force_hard_shadow_filtering(
 /// celestial hierarchy — studio scenes keep their authored EV.
 fn mode_exposure(
     time: Res<Time>,
-    config: Option<Res<lunco_celestial::CelestialConfig>>,
+    // "Is there a sky?" is now the SCENE's answer, not a host flag: a celestial
+    // hierarchy exists iff the scene declared bodies (`LuncoCelestialBodyAPI`).
+    q_hierarchy: Query<(), With<lunco_celestial::SolarSystemRoot>>,
     pin: Option<Res<lunco_celestial::OrbitalViewPin>>,
     sun: Option<Res<lunco_environment::LunarSun>>,
     sun_dir: Option<Res<lunco_celestial::SunDirectionWorld>>,
@@ -311,8 +317,9 @@ fn mode_exposure(
     >,
     q_grids: Query<&Grid>,
 ) {
-    let (Some(config), Some(sun)) = (config, sun) else { return };
-    if !config.spawn_hierarchy {
+    let Some(sun) = sun else { return };
+    // No celestial hierarchy (studio / flat sandbox scenes) → keep the authored EV.
+    if q_hierarchy.is_empty() {
         return;
     }
     let orbital = pin.is_some_and(|p| p.active);

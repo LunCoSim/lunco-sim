@@ -58,6 +58,8 @@ required-features = ["ui"]
 bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "bevy_window"] }
 avian3d = { workspace = true }
 lunco-physics = { workspace = true }
+# The sky-clock panel drives the celestial clock (`SetClock`) directly.
+lunco-time = { path = "../lunco-time" }
 big_space = { workspace = true }
 leafwing-input-manager = { workspace = true }
 lunco-core = { path = "../lunco-core" }

@@ -76,7 +76,23 @@ pub struct TrajectoryPath {
     /// un-anchored (mission/spacecraft) paths. See
     /// `spawn_trajectory_update_task`.
     pub anchor: bevy::math::DVec3,
+    /// `Time<Real>` seconds at the last rebuild — the wall-clock rate limiter.
+    ///
+    /// A trajectory is a **view** of a slowly-varying ellipse, and its rebuild cost is
+    /// real (1 500–2 400 ephemeris samples, then a mesh rebuild + GPU upload). The
+    /// rebuild trigger is `|epoch − update_epoch| > sampling_step`, which is a *sim*
+    /// condition — so once the celestial clock runs fast enough (100 000× advances the
+    /// epoch ~1.2 days per WALL second, past both views' sampling steps every frame),
+    /// every frame re-samples and re-uploads both orbits, and the app grinds to a halt.
+    ///
+    /// The view does not need to track a 100 000× clock at 60 Hz to look right. This
+    /// caps rebuilds in WALL time, so the cost per second is bounded at any sky rate.
+    pub last_rebuild_real_secs: f64,
 }
+
+/// Minimum wall-clock seconds between trajectory rebuilds. The curve is a slowly-
+/// varying ellipse; 5 Hz is imperceptible on it and bounds the cost at any sky rate.
+const MIN_REBUILD_INTERVAL_SECS: f64 = 0.2;
 
 #[derive(Component)]
 pub struct TrajectoryTask(pub Task<TrajectoryData>);
@@ -96,24 +112,23 @@ impl Plugin for TrajectoryPlugin {
            .register_type::<TrajectoryFrame>()
            .register_type::<TrajectoryPath>();
            
-        // Trajectory views are solar-system objects: they exist only when the scene
-        // actually asked for the celestial hierarchy (`CelestialConfig.spawn_hierarchy`,
-        // which the sandbox turns on when a loaded scene authors a site anchor).
+        // Trajectory views are solar-system objects: they exist only when the SCENE
+        // declares celestial bodies (`LuncoCelestialBodyAPI` → `CelestialBodyDecl`).
         //
         // This used to be an unconditional `Startup` system, so the Earth and Moon
-        // orbit views were spawned into EVERY scene — including the default sandbox,
-        // which explicitly runs with `spawn_hierarchy: false` and authors no anchor.
-        // The bodies themselves were correctly absent (their spawn is gated), so the
-        // scene got orbit geometry for planets that did not exist. Celestial content
-        // is opt-in per scene; nothing may appear that the scene did not describe.
+        // orbit views were spawned into EVERY scene — including the flat sandbox
+        // arena, which asks for no sky at all. The bodies themselves were correctly
+        // absent (their spawn was gated), so the scene got orbit geometry for planets
+        // that did not exist. Nothing celestial may appear that the scene did not
+        // describe — that is the whole point of authoring bodies in USD.
         //
-        // Same shape as `MissionPlugin`: in `Update`, latched by a `Local`, so it
-        // fires once and re-arms if the hierarchy is enabled later at runtime.
+        // Same shape as `MissionPlugin`: `Update` + a latch, so it fires once and
+        // re-arms if a scene with bodies loads at runtime.
         app.add_systems(
             Update,
             trajectory_setup_system.run_if(
-                |config: Res<crate::CelestialConfig>, mut spawned: Local<bool>| {
-                    if !config.spawn_hierarchy || *spawned {
+                |q_decl: Query<(), With<crate::CelestialBodyDecl>>, mut spawned: Local<bool>| {
+                    if q_decl.is_empty() || *spawned {
                         return false;
                     }
                     *spawned = true;
@@ -405,16 +420,18 @@ pub fn trajectory_setup_system(
 
 pub fn spawn_trajectory_update_task(
     world: Res<WorldTime>,
+    real: Res<Time<bevy::time::Real>>,
     ephemeris: Res<EphemerisResource>,
     registry: Res<CelestialBodyRegistry>,
     mut commands: Commands,
-    q_views: Query<(Entity, &TrajectoryView, &TrajectoryPath), Without<TrajectoryTask>>,
+    mut q_views: Query<(Entity, &TrajectoryView, &mut TrajectoryPath), Without<TrajectoryTask>>,
     q_frames: Query<&CelestialReferenceFrame>,
 ) {
     let current_epoch = world.epoch_jd;
+    let now_real = real.elapsed_secs_f64();
     let pool = bevy::tasks::ComputeTaskPool::get();
 
-    for (entity, view, path) in q_views.iter() {
+    for (entity, view, mut path) in q_views.iter_mut() {
         // Body orbit views (the tracked id has its own reference frame in
         // the scene — Earth around the Sun, Moon around the Earth) are
         // ANCHORED: points are stored relative to the tracked body's
@@ -437,7 +454,18 @@ pub fn spawn_trajectory_update_task(
                 || path.points.is_empty()
         };
 
+        // Wall-clock rate limit. The trigger above is a SIM condition, so a fast sky
+        // makes it true every frame; this bounds the rebuild cost in real time instead.
+        // The first build (`points.is_empty()`) is never delayed.
+        if needs_update
+            && !path.points.is_empty()
+            && now_real - path.last_rebuild_real_secs < MIN_REBUILD_INTERVAL_SECS
+        {
+            continue;
+        }
+
         if needs_update {
+            path.last_rebuild_real_secs = now_real;
             let provider = Arc::clone(&ephemeris.provider);
             let registry_arc = Arc::new((*registry).clone());
             let view_copy = *view;

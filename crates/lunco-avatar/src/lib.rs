@@ -507,6 +507,13 @@ impl Plugin for LunCoAvatarPlugin {
         app.init_resource::<MouseSensitivity>()
            .init_resource::<CameraDefaults>()
            .init_resource::<SurfaceModeThreshold>();
+        // The avatar and its cameras run on the wall-rooted INTERACTION clock
+        // (`lunco_time::InteractionTime`), so they keep moving while the sim is
+        // paused. That clock is part of the time spine, so guarantee the spine
+        // rather than degrade to a raw `Time<Real>` fallback when a host forgot it.
+        if !app.is_plugin_added::<lunco_time::TimePlugin>() {
+            app.add_plugins(lunco_time::TimePlugin);
+        }
         // `science::take_photo` is registered by `lunco-workbench`'s `ScreenshotPlugin`,
         // not here: the tool's closure triggers `CaptureFromCamera`, whose observer is a
         // render-world readback this crate deliberately cannot link.
@@ -1115,6 +1122,16 @@ fn update_spring_arm_impl(
     }
 }
 
+/// SpringArm camera, fixed-step half. Runs in `FixedPostUpdate` for a CONSTANT `dt`
+/// (the camera entity carries avian's `TranslationInterpolation`/`RotationInterpolation`
+/// so the renderer eases between the 60 Hz samples).
+///
+/// TODO(doc 19 §11e-bis): this is the cadence/clock conflation. `FixedUpdate` is the
+/// SIM's tick cadence — it stops on pause and rate-scales with `TimeTransport` — so
+/// riding it to obtain a constant `dt` also inherits the sim's pause (hence the
+/// render-rate twin `spring_arm_paused_system` below: one behaviour, two systems).
+/// The fix is a constant-rate cadence that does NOT derive from the transport; until
+/// that lands, these two stay.
 fn spring_arm_system(
     time: Res<Time>,
     q_avatar: Query<(
@@ -1134,9 +1151,8 @@ fn spring_arm_system(
     keys: Res<ButtonInput<KeyCode>>,
     spatial_query: Option<avian3d::prelude::SpatialQuery>,
 ) {
-    let dt = time.delta_secs();
     update_spring_arm_impl(
-        dt,
+        time.delta_secs(),
         q_avatar,
         q_spatial,
         q_grids,
@@ -1148,8 +1164,12 @@ fn spring_arm_system(
     );
 }
 
+/// SpringArm camera, paused half — see the TODO on [`spring_arm_system`]. `FixedUpdate`
+/// stops when the sim pauses, so this render-rate twin keeps the chase camera live on
+/// the wall-rooted INTERACTION clock. It exists only because the constant-`dt` cadence
+/// and the sim cadence are currently the same schedule.
 fn spring_arm_paused_system(
-    time_real: Res<Time<Real>>,
+    time_real: lunco_time::InteractionTime,
     q_avatar: Query<(
         Entity,
         &mut Transform,
@@ -1167,9 +1187,8 @@ fn spring_arm_paused_system(
     keys: Res<ButtonInput<KeyCode>>,
     spatial_query: Option<avian3d::prelude::SpatialQuery>,
 ) {
-    let dt = time_real.delta_secs();
     update_spring_arm_impl(
-        dt,
+        time_real.delta_secs(),
         q_avatar,
         q_spatial,
         q_grids,
@@ -1186,7 +1205,11 @@ fn spring_arm_paused_system(
 /// Used for aircraft and flying vehicles. Respects the target's roll, pitch,
 /// and heading — the camera rotates with the vehicle in all axes.
 fn chase_camera_system(
-    time: Res<Time>,
+    // Interaction clock, not virtual time: the chase camera's exponential smoothing
+    // (`alpha = 1 - exp(-rate·dt)`) got `dt = 0` while the sim was paused, so the
+    // camera lerp simply stalled mid-follow. Camera smoothing is interaction, not
+    // simulation — it belongs on the wall-rooted clock.
+    time: lunco_time::InteractionTime,
     mut q_avatar: Query<(Entity, &mut Transform, &mut CellCoord, &mut ChaseCamera, &ChildOf, &mut CameraZoomInput), (With<Avatar>, Without<FrameBlend>)>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
@@ -1450,7 +1473,10 @@ fn orbital_exit_restore_system(
 /// Only runs when `OrbitCamera` is present AND no `FrameBlend` is active.
 /// The camera does NOT rotate with the target — stars stay still.
 fn orbit_system(
-    time: Res<Time>,
+    // Interaction clock (see `chase_camera_system`): orbiting a body must stay
+    // responsive with the simulation paused — that is the normal way to inspect a
+    // frozen scene.
+    time: lunco_time::InteractionTime,
     mut q_avatar: Query<(Entity, &mut Transform, &mut CellCoord, &mut OrbitCamera, &ChildOf, &mut CameraZoomInput, Option<&OrbitFrameSample>), (With<Avatar>, Without<FrameBlend>)>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
@@ -2074,7 +2100,11 @@ fn apply_fly(
     q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
     q_bodies: Query<(Entity, &CelestialBody)>,
     keys: Res<ButtonInput<KeyCode>>,
-    time: Res<Time<bevy::time::Real>>,
+    // The INTERACTION clock (wall-rooted): the avatar keeps flying while the sim is
+    // paused, because pausing the simulation is not supposed to paralyse the user.
+    // This used to be a raw `Res<Time<Real>>`, which got the same behaviour but put
+    // the avatar outside the clock tree — unable to be inspected or rate-scaled.
+    time: lunco_time::InteractionTime,
     mut commands: Commands,
 ) {
     let site_center = site_body_center(&q_site, &q_bodies).map(|(_, _, c)| c);

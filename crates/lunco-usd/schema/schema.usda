@@ -319,6 +319,49 @@ class "LuncoCatalogAPI" (
     )
 }
 
+class "LuncoCelestialBodyAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Declares that a prim IS a celestial body — a planet, moon or star whose
+    pose comes from the ephemeris rather than from an authored transform.
+
+    This exists so that celestial content is **scene data, not a code flag**. It used
+    to be `CelestialConfig.spawn_hierarchy`, a boolean in Rust that decided whether a
+    solar system existed, flipped as a side effect of a scene authoring a site anchor.
+    A scene could not say "I want a Moon" — it could only trip a switch. That produced
+    exactly the bug it invites: the trajectory layer ignored the flag and spawned Earth
+    and Moon orbit views into every scene, including the flat sandbox arena, which had
+    asked for no sky at all.
+
+    Now: no prim applies this schema ⇒ no bodies, no globes, no orbit views, no
+    ephemeris. A scene opts in by referencing `assets/celestial/solar_system.usda` (Sun
+    + Earth + Moon, the standard set) or by authoring the prims itself.
+
+    The prim's *transform is not authored* — it is driven each frame from the ephemeris
+    at the current epoch (see the celestial clock, doc 19 §11b). Author an `Xform` and
+    let the sim place it.
+
+    The `big_space` precision scaffolding (grids, reference frames, SOI, gravity, globe
+    LOD) is still built in Rust — it is derived structure, not authored content — but it
+    is built FROM the bodies declared here, rather than from a boolean."""
+)
+{
+    uniform int lunco:body = 0 (
+        doc = """NAIF id of the body this prim represents: `10` Sun, `399` Earth,
+        `301` Moon.
+
+        The NAIF id is the join key to the ephemeris provider (VSOP2013/ELP), to
+        `lunco:anchor:body` on a geodetic site, and to `lunco:orbit:body` on a Kepler
+        orbit — the same vocabulary already used across the celestial schemas, so a
+        scene never has to name a body twice in two different spellings.
+
+        Uniform: a prim does not become a different planet partway through a shot.
+        `0` is not a body — it means "unset", and such a prim is ignored."""
+    )
+}
+
 class "LuncoTerrainEditAPI" (
     inherits = </APISchemaBase>
     customData = {

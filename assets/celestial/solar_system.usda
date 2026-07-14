@@ -1,0 +1,60 @@
+#usda 1.0
+(
+    defaultPrim = "SolarSystem"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# The standard celestial set — Sun, Earth, Moon (doc 19 §11e, doc 43).
+#
+# Celestial content is OPT-IN, per scene. Nothing celestial exists unless a scene
+# declares it: no bodies, no globes, no orbit views, no ephemeris. A scene that wants
+# a sky references this file:
+#
+#   def "SolarSystem" (
+#       prepend references = @../../celestial/solar_system.usda@</SolarSystem>
+#   ) { }
+#
+# and a scene that does not (the flat sandbox arena) simply says nothing and gets a
+# black sky — which is the correct reading of "a test arena".
+#
+# This replaces `CelestialConfig.spawn_hierarchy`, a boolean in Rust that decided
+# whether a solar system existed and was flipped as a side effect of a scene authoring
+# a site anchor. A scene could not ASK for a Moon; it could only trip a switch — and
+# any subsystem that forgot to read the switch leaked planets into scenes that never
+# wanted them (Earth/Moon orbit views were being spawned into the sandbox).
+#
+# The transforms here are NOT authored: each body's pose is driven every frame from the
+# ephemeris (VSOP2013/ELP) at the current epoch — which is itself a clock you can
+# re-parent, rate-scale or seek (`SetClock`, doc 19 §11b). The `big_space` precision
+# scaffolding (grids, reference frames, SOI, gravity, globe LOD) is built in Rust FROM
+# these declarations: derived structure, not authored content.
+def Xform "SolarSystem" (
+    doc = "Sun, Earth and Moon — the standard celestial set. Reference this from a scene that wants a sky."
+    kind = "assembly"
+)
+{
+    def Xform "Sun" (
+        prepend apiSchemas = ["LuncoCelestialBodyAPI"]
+        doc = "The Sun. Origin of the solar frame and the scene's key light."
+    )
+    {
+        uniform int lunco:body = 10
+    }
+
+    def Xform "Earth" (
+        prepend apiSchemas = ["LuncoCelestialBodyAPI"]
+        doc = "Earth. Also the route root for deep-space comms (DSN ground stations anchor to it)."
+    )
+    {
+        uniform int lunco:body = 399
+    }
+
+    def Xform "Moon" (
+        prepend apiSchemas = ["LuncoCelestialBodyAPI"]
+        doc = "The Moon. Surface scenes anchor their site frame here (`int lunco:anchor:body = 301`)."
+    )
+    {
+        uniform int lunco:body = 301
+    }
+}

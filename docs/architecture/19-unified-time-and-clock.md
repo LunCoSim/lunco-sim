@@ -767,7 +767,69 @@ stays in code — it is derived structure, not authored content — but it is **
 bodies** rather than from a boolean: no body prims, no hierarchy. `spawn_hierarchy` and
 `enable_celestial_on_site_anchor` are deleted.
 
-### 11f. Phasing
+### 11e-bis. CADENCE ≠ CLOCK — the rule for choosing a schedule
+
+Two orthogonal axes, and the code kept using one as a proxy for the other:
+
+- **Cadence** — *which schedule* a system runs in. `FixedUpdate` (deterministic, one run per
+  tick, stops on pause) vs `Update`/`PostUpdate` (once per rendered frame, never stops).
+- **Clock** — *which time it integrates against* (`sim`, `celestial`, `interaction`, a driven
+  domain). §11a–b.
+
+The symptom: `spring_arm_system` was placed in `FixedPostUpdate` **to obtain a constant `dt`** —
+choosing a *schedule* to get a *clock property*. And because `FixedUpdate` stops when the sim
+pauses, a second render-rate copy (`spring_arm_paused_system`) had to exist for the paused case.
+One behaviour, two systems, gated on the transport: that duplication is what a cadence/clock
+conflation always produces.
+
+**The rule:**
+
+| System mutates… | Cadence | Clock |
+|---|---|---|
+| replicated **sim state** (physics, tick, cosim, netcode) | `FixedUpdate` — the fixed step **is** the tick | `sim` |
+| **presentation** (cameras, UI easing, HUD, notifications) | render rate (`Update`/`PostUpdate`) | `interaction` (wall-rooted) |
+
+Presentation must **never** live in `FixedUpdate`: that schedule stops on pause, and presentation
+must not. If presentation *follows* a physics body, it reads the **interpolated** transform —
+avian's `PhysicsInterpolationPlugin::interpolate_all()` already publishes a render-smooth pose for
+every body — which is what makes render-rate following smooth. **Wanting smoothness is not a
+reason to move a camera into the physics cadence**; it is a reason to read the interpolated pose.
+
+Corollary — the camera stopped needing avian's `TranslationInterpolation`/`RotationInterpolation`.
+Those existed only to ease a camera *written at 60 Hz* between fixed samples. A camera written
+every rendered frame is already at display rate; keeping them would be double-smoothing (a lerp of
+a lerp), which is a lag source, not a smoothness source.
+
+> **Do clocks need their own step?** A clock is *continuous* (sampled per frame; `dt` varies) by
+> default. Only the `sim` clock is *stepped*, and its step is the tick — that is what determinism
+> and rollback are built on. A cosim participant with its own communication step (Modelica,
+> §11f) is `DomainRegime::Causal` and gets a step of its own; that is the one case where a second
+> stepped cadence is justified, and it is bounded by co-sim communication points, not free.
+> Do **not** give every clock a step "for symmetry": each stepped cadence is an accumulator, a
+> phase relationship, and an interpolation policy that someone has to reason about.
+
+### 11f. A Modelica experiment is a driven domain (not a new concept)
+
+An experiment's internal time (`t_start … t_stop`, its own `dt`) needs no separate
+machinery: it is a **driven domain** — a clock node with a `Playback` head over a bounded
+range. That gives, for free:
+
+- **run it coupled** — parent `sim`, scale 1: the experiment advances with the world;
+- **run it fast** — `scale = 100` ("speed only the factory", §3d);
+- **replay a finished run while the world keeps moving** — `Playback { head, start, end }`
+  scrubbed independently, parent still `sim`;
+- **run it while the sim is paused** — re-parent to `real`.
+
+"Binding sim time to experiment time" is then just a `TimeBinding` from the experiment's
+entities to that domain — the same relation the USD sampler and per-selection scrub already
+use. The thing to resist is a second, parallel "experiment clock" type: it would need its own
+pause/rate/seek semantics, and they would drift from these.
+
+Caveat (§5): an experiment *integrates*, so it is `DomainRegime::Causal` — its rate is bounded
+by solver stability and co-sim communication points, unlike a `Kinematic` (baked `timeSamples`)
+domain, which can be rate-scaled freely.
+
+### 11g. Phasing
 
 1. **Clock tree** (`lunco-time`): wall root + tick root as real clock entities; `ResolvedClocks{t,dt}`;
    well-known handles (`real`, `sim`, `interaction`, `celestial`); `SetClock` command (journaled +

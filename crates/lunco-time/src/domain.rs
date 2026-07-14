@@ -1,26 +1,33 @@
-//! The clock tree (architecture doc 19 — T5): many clocks as a tree of affine
-//! children of the master, plus per-object/selection/project playback.
+//! The clock tree (architecture doc 19 — T5 / §11): many clocks as a tree of affine
+//! children of a few roots, plus per-object/selection/project playback.
 //!
 //! A **`TimeDomain`** is an affine child of a parent clock — `local_t = offset +
-//! scale·parent_t` (USD `LayerOffset`). Floating clocks are debt; *rooted* clocks
-//! are free — independently controllable yet always convertible back to the
-//! master (the world clock, [`WorldTime::sim_secs`](crate::WorldTime)).
+//! scale·parent_t` (USD `LayerOffset`). Floating clocks are debt; *rooted* clocks are
+//! free — independently controllable yet always convertible back to a root.
 //!
-//! Two node kinds (doc §3d):
+//! Node kinds:
+//! * **Root** ([`ClockRoot`]) — where raw time ENTERS the tree: `Tick` (the
+//!   deterministic `SimTick` master — freezes on pause), `Wall` (`Time<Real>` — never
+//!   freezes), `Epoch` (the mission-epoch projection; the celestial clock's default).
 //! * **Derived** — `TimeDomain` alone. `local_t = offset + scale·parent_t`. Rigidly
-//!   follows the parent. *"Speed only the factory" = a derived domain, `scale = 100`.*
-//! * **Driven** — `TimeDomain` + [`Playback`]. Its own **playhead** that advances by
-//!   the world delta when playing, but seek/pause/replay/loop independently. *"Replay
-//!   this object" = a driven domain, `head = start`, `mode = Playing`.*
+//!   follows the parent. *"Speed only the factory" = a derived clock, `scale = 100`.*
+//! * **Driven** — `TimeDomain` + [`Playback`]. Its own **playhead**, advanced by the
+//!   *parent's* delta when playing, but seek/pause/replay/loop independently. *"Replay
+//!   this object" = a driven clock, `head = start`, `mode = Playing`.*
 //!
-//! Bindings (doc §3d): an entity carries a [`TimeBinding`] to a domain entity;
-//! absent ⇒ the world domain. Per-project / per-selection / per-object are just
-//! different bound sets of the same machinery.
+//! **Pause propagates for free, with no flag** (doc §11a): if a parent stops advancing,
+//! `parent_t` is constant, so the whole subtree is constant. That is also why "run the
+//! sky while the sim is paused" is a **re-parent** onto the `Wall` root ([`SetClock`])
+//! rather than a special case — a clock is frozen because of *where it hangs*.
+//!
+//! Bindings: an entity carries a [`TimeBinding`] to a clock entity; absent ⇒ the sim
+//! clock. Per-project / per-selection / per-object are just different bound sets of the
+//! same machinery.
 //!
 //! Resolution is split into pure functions ([`derived_local_t`], [`step_playhead`],
-//! [`resolve_snapshot`]) so the math is unit-tested headless; the Bevy system
-//! [`advance_and_resolve_domains`] snapshots the domain components once per frame,
-//! advances driven heads, and fills [`ResolvedDomains`] for the sampler to read.
+//! [`resolve_clocks`]) so the math is unit-tested headless; the Bevy system
+//! [`advance_and_resolve_domains`] snapshots the clock components once per frame,
+//! resolves the tree, and fills [`ResolvedDomains`] with a `{ t, dt }` sample per clock.
 
 use std::collections::HashMap;
 
@@ -197,6 +204,41 @@ pub struct Clocks {
     pub celestial: Entity,
 }
 
+/// A [`SystemParam`](bevy::ecs::system::SystemParam) for "seconds of *interaction*
+/// time that passed this frame".
+///
+/// This is the clock the avatar, the cameras and UI easing run on: wall-rooted, so
+/// it **keeps advancing while the simulation is paused**. Systems used to reach for
+/// a raw `Res<Time<Real>>` to get that behaviour, which worked but put the camera
+/// outside the clock system entirely — it could not be inspected, rate-scaled, or
+/// slowed for a cinematic. Read it through here instead.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct InteractionTime<'w> {
+    clocks: Res<'w, Clocks>,
+    resolved: Res<'w, ResolvedDomains>,
+}
+
+impl InteractionTime<'_> {
+    /// Seconds the interaction clock advanced this frame.
+    #[inline]
+    pub fn delta_secs(&self) -> f32 {
+        self.delta_secs_f64() as f32
+    }
+
+    /// Seconds the interaction clock advanced this frame, double precision (the
+    /// avatar integrates its position in `f64` — big_space grid coordinates).
+    #[inline]
+    pub fn delta_secs_f64(&self) -> f64 {
+        self.resolved.delta(self.clocks.interaction)
+    }
+
+    /// The interaction clock's local time, seconds.
+    #[inline]
+    pub fn elapsed_secs(&self) -> f64 {
+        self.resolved.get(self.clocks.interaction).unwrap_or(0.0)
+    }
+}
+
 /// Per-frame resolved sample for every clock entity. The animation sampler reads
 /// this (via [`domain_time`]) rather than re-resolving the chain itself.
 #[derive(Resource, Default, Debug)]
@@ -225,8 +267,11 @@ impl ResolvedDomains {
 
 /// Previous frame's resolved `t` per clock — the source of each clock's `dt`, and
 /// of the *parent* delta that advances a driven playhead.
+/// Previous frame's resolved times. Public because it appears in the (public)
+/// [`advance_and_resolve_domains`] system signature; it is spine bookkeeping, not an
+/// API — read [`ResolvedDomains`] instead.
 #[derive(Resource, Default)]
-struct LastClockT {
+pub struct LastClockT {
     /// Previous frame's resolved `t` per clock.
     per_clock: HashMap<Entity, f64>,
     /// Previous frame's root times — the parent delta for a clock with no parent
@@ -653,7 +698,6 @@ fn on_set_mission_epoch(
 
 /// Which well-known clock a [`SetClock`] targets.
 #[derive(serde::Serialize, serde::Deserialize, Reflect, Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[serde(rename_all = "lowercase")]
 pub enum ClockId {
     /// The epoch clock (the sky).
     #[default]
@@ -667,7 +711,6 @@ pub enum ClockId {
 /// Where a clock hangs. This is the pause mechanism: a clock is frozen because its
 /// ancestor is frozen, so "run it anyway" means moving it somewhere that runs.
 #[derive(serde::Serialize, serde::Deserialize, Reflect, Debug, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
 pub enum ClockParent {
     /// Hang under the deterministic tick master: freezes when the sim pauses.
     /// Deterministic and replay-safe.
@@ -678,7 +721,7 @@ pub enum ClockParent {
 }
 
 /// Re-point, rate-scale or seek one clock —
-/// `{"command":"SetClock","params":{"clock":"celestial","parent":"real","scale":1000}}`
+/// `{"command":"SetClock","params":{"clock":"Celestial","parent":"Real","scale":1000}}`
 /// runs the sky 1000× **while the simulation stays paused**.
 ///
 /// One verb covers every case, because in an affine tree they are the same case:
