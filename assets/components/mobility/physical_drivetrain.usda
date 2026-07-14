@@ -23,7 +23,7 @@
 # relying on collision-disable.
 def Xform "Drivetrain" (
     kind = "component"
-    prepend apiSchemas = ["PhysicsArticulationRootAPI", "LuncoCatalogAPI"]
+    prepend apiSchemas = ["PhysicsArticulationRootAPI", "LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = true

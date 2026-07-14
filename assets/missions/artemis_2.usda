@@ -6,7 +6,7 @@
 )
 
 def Xform "Artemis2" (
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "assembly"
 )
 {

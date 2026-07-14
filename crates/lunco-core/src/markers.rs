@@ -131,11 +131,12 @@ impl Default for HorizonShadowTerrain {
 #[reflect(Component)]
 pub struct EmbeddedScenarioSource(pub String);
 
-/// A per-entity scenario referenced by FILE PATH in USD
-/// (`custom string lunco:scriptPath = "scenarios/foo.rhai"`), awaiting load.
+/// A per-entity scenario referenced by FILE PATH in USD — the
+/// `uniform asset lunco:program:sourceAsset = @scenarios/foo.rhai@` of a
+/// `LuncoProgram` prim — awaiting load.
 ///
 /// The asset-relative path to a `.rhai` source. The USD loader
-/// (`lunco-usd-bevy`) stamps this when a prim carries `lunco:scriptPath`;
+/// (`lunco-usd-bevy`) stamps this on the prim that OWNS the program;
 /// `lunco-scripting` loads the file through the `AssetServer` (wasm-safe — no
 /// `std::fs`) and, once ready, replaces it with an [`EmbeddedScenarioSource`]
 /// so the normal attach path runs. Keeps scenarios as editable, hot-reloadable,
@@ -145,6 +146,18 @@ pub struct EmbeddedScenarioSource(pub String);
 #[derive(Component, Debug, Clone, Reflect, Default)]
 #[reflect(Component)]
 pub struct EmbeddedScenarioPath(pub String);
+
+/// The USD path of the `LuncoProgram` prim a running scenario came from.
+///
+/// A script's `me` is its OWNER — the vessel it acts for — so the runtime hangs the
+/// scenario on the owner's entity. But the program is a prim of its own, and that is
+/// where its source belongs: saving a live-edited scenario authors
+/// `lunco:program:sourceCode` back onto THIS path, not onto the vessel. Without it a
+/// save has no idea which of an owner's programs it is saving, and would write the
+/// source onto a prim that runs nothing.
+#[derive(Component, Debug, Clone, Reflect, Default)]
+#[reflect(Component)]
+pub struct ScenarioProgramPrim(pub String);
 
 /// A named overlap **trigger zone** (geofence) — the discrete-event twin of a
 /// continuous port signal.

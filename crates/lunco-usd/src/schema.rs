@@ -290,7 +290,7 @@ mod tests {
     #[test]
     fn variability_is_read_from_the_schema() {
         // Declared `uniform` in luncoSchema.
-        assert_eq!(variability_of("lunco:material:type"), sdf::Variability::Uniform);
+        assert_eq!(variability_of("lunco:cameraMode"), sdf::Variability::Uniform);
         assert_eq!(variability_of("lunco:policy:seam"), sdf::Variability::Uniform);
         assert_eq!(variability_of("lunco:layer"), sdf::Variability::Uniform);
         // Declared `varying` in luncoSchema.

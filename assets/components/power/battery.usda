@@ -11,7 +11,7 @@
 # body is the root.
 def Xform "Battery" (
     kind = "component"
-    prepend apiSchemas = ["LunCoPowerComponentAPI", "LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = true

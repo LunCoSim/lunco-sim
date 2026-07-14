@@ -7,7 +7,7 @@
 
 # Angled ramp — static cuboid tilted ~17°.
 def Xform "Ramp" (
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "component"
 )
 {

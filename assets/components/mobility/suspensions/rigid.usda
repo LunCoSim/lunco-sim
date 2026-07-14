@@ -1,0 +1,33 @@
+#usda 1.0
+(
+    defaultPrim = "Suspension"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# A RIGID wheel mount — no travel. `restLength = 0` bolts the wheel to the hull: the
+# spring is stiff and heavily damped purely to keep the contact solver quiet, not to
+# give the wheel anywhere to go.
+#
+# For vehicles whose compliance lives somewhere else entirely — a wheel bolted straight
+# to a chassis, a test rig where suspension would only confuse the measurement.
+#
+# A wheel composes it as a second reference arc alongside the wheel itself:
+#
+#   def Cylinder "Wheel_FL" (
+#       prepend references = [
+#           @../../components/mobility/wheel.usda@</Wheel>,
+#           @../../components/mobility/suspensions/rigid.usda@</Suspension>,
+#       ]
+#   )
+#
+# See `standard.usda` for how the `over` composes onto the wheel that pulls it in.
+
+over "Suspension" (
+    kind = "component"
+)
+{
+    float physxVehicleSuspension:restLength = 0.0          # m — no travel
+    float physxVehicleSuspension:springStiffness = 15000.0 # N/m
+    float physxVehicleSuspension:springDamping = 5000.0    # N·s/m — heavy, to settle contacts
+}

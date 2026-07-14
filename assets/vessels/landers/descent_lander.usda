@@ -43,6 +43,11 @@
 
 def Xform "DescentLander" (
     doc = "A powered-descent lander. Possess it to take the stick: Space thrusts, WASD tilts, Q/E turns. It has no guidance of its own — a scene composes that on."
+    # An ASSEMBLY: a model built out of other models — its altimeter, its IMU, its
+    # control profile all arrive by reference. USD's rule is that a `component` may not
+    # contain component models, and the kind is what tells a browser (and the UI)
+    # whether a prim is a thing you open up or a thing you place.
+    kind = "assembly"
     prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI", "LuncoCatalogAPI", "LuncoVesselAPI", "LuncoProgramAPI"]
 )
 {

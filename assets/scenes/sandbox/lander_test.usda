@@ -35,8 +35,9 @@
 #   sandbox --scene scenes/sandbox/lander_test.usda
 
 def Xform "LanderTest" (
+    kind = "assembly"
     doc = "A lander dropping under gravity with a rocket you can fire to slow and steer it. Hold Space to thrust, WASD to tilt, Q/E to turn, G to release the rover, P to pause."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
@@ -69,7 +70,7 @@ def Xform "LanderTest" (
     }
 
     def Xform "Avatar" (
-        prepend apiSchemas = ["LuncoAvatarAPI"]
+        prepend apiSchemas = ["LunCoAvatarAPI"]
     )
     {
         uniform bool lunco:avatar = true
@@ -126,7 +127,7 @@ def Xform "LanderTest" (
         # program the SCENE adds to a stock rover — the same separation the lander's
         # guidance gets, and for the same reason: a rover asset that patrolled the
         # moment you spawned it would be a surprise, not a feature.
-        def LuncoProgram "Autopilot"
+        def LunCoProgram "Autopilot"
         {
             uniform asset lunco:program:sourceAsset = @scenarios/rover_autopilot.rhai@
         }
@@ -198,7 +199,7 @@ def Xform "LanderTest" (
         # the AssetServer → RhaiSource → EmbeddedScenarioSource). It's a declarative
         # prelude `task` — timing from internal sim time (`wait`), advancement from
         # state predicates (`wait_until`); no tick-counting / dt integration in rhai.
-        def LuncoProgram "Mission"
+        def LunCoProgram "Mission"
         {
             uniform asset lunco:program:sourceAsset = @scenarios/rover_surface_ops.rhai@
         }

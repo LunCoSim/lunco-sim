@@ -18,7 +18,8 @@
 # The root is an `Xform` — a part, not a cube — so the visible body is an ordinary child
 # gprim that both renders and collides, and the rigid body is the root.
 def Xform "Probe" (
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "LuncoCatalogAPI"]
+    kind = "component"
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = true
@@ -42,7 +43,7 @@ def Xform "Probe" (
     def Xform "Mounts"
     {
         def Xform "hub" (
-            kind = "mount"
+            kind = "subcomponent"
         )
         {
             double3 xformOp:translate = (0, 0.4, 0)

@@ -8,7 +8,7 @@
 
 def Xform "PowerBus" (
     kind = "component"
-    prepend apiSchemas = ["LunCoPowerDistributionAPI", "LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = true

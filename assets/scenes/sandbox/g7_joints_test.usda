@@ -15,9 +15,12 @@
 #   "Built USD joint PhysicsDistanceJoint ..." with NO "Unsupported" warning.
 # Loaded by `sandbox --scene scenes/sandbox/g7_joints_test.usda`.
 
+# Scene root: an `assembly` — a thing you OPEN, not a part you place (even here,
+# where the rig is authored in-file rather than referenced from part models).
 def Xform "SandboxScene" (
+    kind = "assembly"
     doc = "Three different joints on display: a ball joint that swings inside a cone, a tether that holds at a fixed distance, and a hinge that only turns around one axis."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = false
@@ -35,7 +38,7 @@ def Xform "SandboxScene" (
     }
 
     def Xform "Avatar" (
-        prepend apiSchemas = ["LuncoAvatarAPI"]
+        prepend apiSchemas = ["LunCoAvatarAPI"]
     )
     {
         uniform bool lunco:avatar = true

@@ -12,8 +12,9 @@
 # more than the coupled case — isolating the differential's leveling effect.
 
 def Xform "RockerBogieTest" (
+    kind = "assembly"
     doc = "The rocker-bogie rover over a step, but with the body-leveling linkage switched off. The body tips more, showing what the linkage normally does."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
@@ -67,7 +68,7 @@ def Xform "RockerBogieTest" (
     }
 
     def Xform "Avatar" (
-        prepend apiSchemas = ["LuncoAvatarAPI"]
+        prepend apiSchemas = ["LunCoAvatarAPI"]
     )
     {
         uniform bool lunco:avatar = true

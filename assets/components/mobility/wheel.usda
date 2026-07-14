@@ -5,65 +5,96 @@
     metersPerUnit = 1
 )
 
-# Reusable motorized wheel component for mobility. Geometry, physics and the tire
-# shader live here; the drive torque comes from the rover's drivetrain, not from a
-# program of the wheel's own.
+# A motorized wheel — the HUB: how big it is, what it weighs, how hard it can push and
+# how hard it can brake. What it grips with is a TIRE, and what it rides on is a
+# SUSPENSION, and both are separate files, because both are separate decisions.
+#
+#   def Cylinder "Wheel_FL" (
+#       prepend references = [
+#           @../../components/mobility/wheel.usda@</Wheel>,
+#           @../../components/mobility/suspensions/standard.usda@</Suspension>,
+#       ]
+#       variants = { string tire = "regolith" }
+#   )
+#   {
+#       double radius = 0.4
+#       double height = 0.3
+#       float physxVehicleWheel:radius = 0.4
+#       int physxVehicleWheel:index = 0
+#       double3 xformOp:translate = (0.8, -0.2, 1.0)
+#   }
+#
+# Re-shoe a rover by changing one variant; re-spring it by swapping one arc. Neither
+# touches the hub, and neither needs any code.
+#
+# The drive torque comes from the rover's drivetrain, not from a program of the wheel's
+# own — a wheel is a part, not an actor.
+#
+# The parameters are Omniverse's PhysX vehicle names (`physxVehicleWheel:*`,
+# `physxVehicleEngine:*`), so they mean the same thing here as in any other PhysX
+# vehicle, and `lunco_mobility::update_wheel_spin` reads exactly them.
 
 def Cylinder "Wheel" (
     kind = "component"
-    prepend apiSchemas = ["LunCoMobilityComponentAPI", "LuncoMaterialAPI", "LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+    prepend variantSets = "tire"
+    variants = {
+        string tire = "regolith"
+    }
 )
 {
     uniform bool lunco:spawnable = true
+
     # --- Geometry ---
-    # `axis = "X"` so the cylinder lies along the rover's left/right
-    # axle direction (perpendicular to forward). Instances may
-    # override `axis` (e.g. Rucheyok uses Z-forward and sets axis="Z").
+    # `axis = "X"` so the cylinder lies along the rover's left/right axle direction
+    # (perpendicular to forward). Instances may override `axis` (Rucheyok is Z-forward
+    # and sets axis="Z") and the size — a wheel is sized by the vehicle it is on.
     uniform token axis = "X"
-    double radius = 2.0
-    double height = 4.0
+    double radius = 0.4
+    double height = 0.3
     double3 xformOp:translate = (0, 0, 0)
     uniform token[] xformOpOrder = ["xformOp:translate"]
-    color3f[] primvars:displayColor = [(0.3, 0.3, 0.3)]
-
-    # Spin-revealing wheel (tire + rim + spokes) via the general ShaderMaterial,
-    # loaded at USD-load time (see assets/shaders/wheel.wgsl). Survives the
-    # physics/visual wheel split (lunco_usd_sim::setup_*_wheel carry it through).
-    uniform asset lunco:material:shader = @shaders/wheel.wgsl@
-    color3f primvars:rim_color = (0.98, 0.98, 1.00)   # spoke / rim (bright metal → white on the lit side)
-    color3f primvars:tire_color = (0.10, 0.10, 0.11)  # tire (rubber)
-    float primvars:spoke_count = 6.0    # spoke count
-    float primvars:tread_lugs = 24.0    # tread lugs
-
-    # --- Mechanical parameters ---
-    double lunco:springStiffness = 10000.0   # N/m suspension spring constant
-    double lunco:springDamping = 3000.0      # N·s/m damping coefficient
-    double lunco:restLength = 0.5            # m uncompressed suspension length
-    double lunco:frictionCoefficient = 0.8   # Tire-ground friction coefficient
-    double lunco:maxSteerAngle = 0.5         # rad maximum steering angle
-
-    # --- Motor electrical parameters ---
-    double lunco:motorPower = 2000.0         # W rated motor power
-    double lunco:motorEfficiency = 0.85      # Electrical-to-mechanical efficiency
-    double lunco:noLoadRpm = 300.0           # RPM motor speed at zero load
-
-    # --- EPS connections ---
-    rel lunco:epsBus
 
     # --- Physics ---
     bool physics:rigidBodyEnabled = true
     float physics:mass = 25.0
     bool physics:collisionEnabled = true
 
-    # --- PhysX vehicle dynamics (Omniverse schema) — drive the tire spin ---
-    # The raycast-wheel spin integrator (lunco_mobility::update_wheel_spin)
-    # reads these so the visible rotation is grounded in authored data:
+    # --- Wheel dynamics (Omniverse PhysX vehicle schema) ---
+    # The spin integrator (lunco_mobility::update_wheel_spin) reads these so the
+    # visible rotation is grounded in authored data:
     #   ω̇ = (τ_drive + τ_brake − τ_traction − dampingRate·ω) / I
-    # with I = ½·m·r² (from physics:mass + physxVehicleWheel:radius). The motor
-    # is a constant-torque source up to maxRotationSpeed; bearing drag is derived
-    # so a free (airborne) wheel terminates at maxRotationSpeed.
-    float physxVehicleEngine:peakTorque = 300.0           # N·m axle drive torque at full throttle. Joint rovers: applied to the wheel about its axle (see MotorActuator); the wheel↔ground friction propels the rover (real physics drive). Kept modest so (a) it doesn't exceed the tyre's friction-limited traction (μ·N·r ≈ 340 N·m on the Moon) and spin the wheels, and (b) its reaction couple can't wheelie the chassis. Raycast rovers reuse it as their traction force. Asset-tunable: raise with wheel friction for more speed.
+    # with I = ½·m·r² (from physics:mass + physxVehicleWheel:radius). The motor is a
+    # constant-torque source up to maxRotationSpeed; bearing drag is derived so a free
+    # (airborne) wheel terminates there.
+    float physxVehicleWheel:radius = 0.4
+    float physxVehicleEngine:peakTorque = 300.0           # N·m axle drive torque at full throttle. Joint rovers: applied to the wheel about its axle (see MotorActuator); wheel↔ground friction propels the rover. Kept modest so (a) it doesn't exceed the tyre's friction-limited traction (μ·N·r ≈ 340 N·m on the Moon) and spin the wheels, and (b) its reaction couple can't wheelie the chassis. Raycast rovers reuse it as their traction force.
     float physxVehicleEngine:maxRotationSpeed = 60.0      # rad/s free-spin (no-load) cap
     float physxVehicleWheel:maxBrakeTorque = 1500.0       # N·m brake authority (locks the wheel → skid)
-    float physxVehicleTire:longitudinalStiffness = 8000.0 # N per (m/s) of contact slip
+
+    # --- Motor electrical parameters ---
+    double lunco:motorPower = 2000.0         # W rated motor power
+    double lunco:motorEfficiency = 0.85      # Electrical-to-mechanical efficiency
+    double lunco:noLoadRpm = 300.0           # RPM motor speed at zero load
+    double lunco:maxSteerAngle = 0.5         # rad maximum steering angle
+
+    # --- EPS connections ---
+    rel lunco:epsBus
+
+    # --- Tires ---
+    # Which rubber this wheel runs. Each variant is nothing but a reference to a tire
+    # file, whose `over` composes grip and tread onto this prim — the same shape as the
+    # rover `drivetrain` variantSet, and for the same reason: a variant should CHOOSE a
+    # component, not restate one.
+    variantSet "tire" = {
+        "regolith" (
+            prepend references = @tires/regolith.usda@</Tire>
+        ) {
+        }
+
+        "hard" (
+            prepend references = @tires/hard.usda@</Tire>
+        ) {
+        }
+    }
 }

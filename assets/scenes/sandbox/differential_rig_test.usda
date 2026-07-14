@@ -10,8 +10,9 @@
 # Verify (ListPorts): HingeR.angle ≈ −HingeL.angle (rocker B mirrors A).
 
 def Xform "DiffRigTest" (
+    kind = "assembly"
     doc = "A test stand for the balancing linkage a rover uses between its left and right sides. With it switched on, the two sides move as mirror images of each other."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
@@ -47,7 +48,7 @@ def Xform "DiffRigTest" (
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }
     def Xform "Avatar" (
-        prepend apiSchemas = ["LuncoAvatarAPI"]
+        prepend apiSchemas = ["LunCoAvatarAPI"]
     )
     {
         uniform bool lunco:avatar = true

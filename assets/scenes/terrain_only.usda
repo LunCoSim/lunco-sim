@@ -6,10 +6,11 @@
     doc = "Empty staging scene for viewing a streamed DEM with no default ground plane. Spawn terrain via SpawnDemTerrain; the app environment provides the sun."
 )
 
+# A scene root is an `assembly` — the thing you OPEN, not a part you place.
 def Xform "TerrainOnly" (
     doc = "Bare scene: a free-flight camera and nothing else. Load a DEM on top with SpawnDemTerrain."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
-    kind = "component"
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+    kind = "assembly"
 )
 {
     uniform bool lunco:spawnable = false
@@ -17,7 +18,7 @@ def Xform "TerrainOnly" (
     # --- Avatar (Camera) --- freeflight, parked high so a spawned DEM (site
     #     elevation ~2 km) is in front of it before SetCameraLookAt reframes.
     def Xform "Avatar" (
-        prepend apiSchemas = ["LuncoAvatarAPI"]
+        prepend apiSchemas = ["LunCoAvatarAPI"]
     )
     {
         uniform bool lunco:avatar = true

@@ -7,7 +7,7 @@
 
 # Wall — static cuboid barrier.
 def Xform "Wall" (
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "component"
 )
 {

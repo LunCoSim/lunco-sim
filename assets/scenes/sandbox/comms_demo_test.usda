@@ -12,7 +12,7 @@
 # ports: e.g. `read_port <rover>/comms:route_earth:connected`.
 def Xform "CommsDemoScene" (
     doc = "MoonDAO comms demo: Malapert Massif site with rover, base mast, lunar relay (ELFO) and the three DSN complexes on Earth — connectivity via the generic link kernel (lunco:linkNode; link.aos/link.los events)."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "assembly"
 )
 {
@@ -54,7 +54,7 @@ def Xform "CommsDemoScene" (
         bool physics:collisionEnabled = true
     }
 
-    def LuncoEnvironment "Environment"
+    def LunCoEnvironment "Environment"
     {
         # Exposure matched to grazing polar light: at the authored epoch the sun
         # sits ~2.6° above the Malapert horizon, so flat ground receives
@@ -65,7 +65,7 @@ def Xform "CommsDemoScene" (
     }
 
     def Xform "Avatar" (
-        prepend apiSchemas = ["LuncoAvatarAPI"]
+        prepend apiSchemas = ["LunCoAvatarAPI"]
     )
     {
         uniform bool lunco:avatar = true

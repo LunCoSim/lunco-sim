@@ -28,9 +28,11 @@
 #
 # Loaded by `sandbox --scene scenes/sandbox/prismatic_drive_test.usda`.
 
+# Scene root: an `assembly` — a thing you OPEN, not a part you place.
 def Xform "SandboxScene" (
+    kind = "assembly"
     doc = "A platform that slides up and down a vertical rail. Checks that a motorized slider can move to a chosen height and hold there against gravity."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
@@ -64,7 +66,7 @@ def Xform "SandboxScene" (
 
     # Avatar so the API observer has someone to focus from.
     def Xform "Avatar" (
-        prepend apiSchemas = ["LuncoAvatarAPI"]
+        prepend apiSchemas = ["LunCoAvatarAPI"]
     )
     {
         uniform bool lunco:avatar = true

@@ -1,0 +1,41 @@
+#usda 1.0
+(
+    defaultPrim = "Suspension"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# The STANDARD rover suspension — the spring and damper between a wheel and the body.
+#
+# A wheel composes it as a second reference arc, alongside the wheel itself:
+#
+#   def Cylinder "Wheel_FL" (
+#       prepend references = [
+#           @../../components/mobility/wheel.usda@</Wheel>,
+#           @../../components/mobility/suspensions/standard.usda@</Suspension>,
+#       ]
+#   )
+#   { double3 xformOp:translate = (0.8, -0.2, 1.0) }
+#
+# One arc per wheel, and the numbers live in ONE file. A rover that re-authored its
+# spring rate on every wheel had six chances to typo it and no way to retune it in one
+# place; here, changing the ride means changing a line, or swapping the arc.
+#
+# The parameters are Omniverse's PhysX vehicle names (`physxVehicleSuspension:*`), so a
+# spring rate means the same thing here as in any other PhysX vehicle. Both wheel
+# implementations read exactly these: the raycast wheel integrates the spring
+# analytically, the joint wheel realises it as a real prismatic spring-damper. Same
+# authored data, two constructions.
+#
+# HOW IT TRAVELS. `Suspension` is a neutral stand-in for the wheel prim that composes
+# it — an `over`, defining nothing of its own, carrying opinions the reference arc
+# path-translates onto the wheel. (Same idiom as `physical_drivetrain.usda`.)
+
+over "Suspension" (
+    kind = "component"
+)
+{
+    float physxVehicleSuspension:restLength = 0.7        # m, uncompressed travel
+    float physxVehicleSuspension:springStiffness = 15000.0 # N/m
+    float physxVehicleSuspension:springDamping = 3000.0    # N·s/m
+}

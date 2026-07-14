@@ -2660,6 +2660,13 @@ fn attach_rhai_programs<R: UsdRead>(
                 .try_insert(lunco_core::ScriptParams(params));
         }
 
+        // Remember WHICH program this scenario came from. The script runs for the
+        // owner, but its source belongs to the program prim — that is where a live
+        // edit is saved back to.
+        commands
+            .entity(entity)
+            .try_insert(lunco_core::ScenarioProgramPrim(child.as_str().to_string()));
+
         if let Some(src) = inline {
             commands
                 .entity(entity)

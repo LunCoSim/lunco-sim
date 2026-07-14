@@ -8,7 +8,9 @@
 # Robustness probe: a cube that (wrongly) points its material at pbr_lit.wgsl —
 # a shader LIBRARY with no @fragment entry. The app must NOT storm the pipeline
 # cache; it should keep the StandardMaterial (displayColor) and warn once.
+# Scene root: an `assembly` — a thing you OPEN, not a part you place.
 def Xform "ShaderFallbackTest" (
+    kind = "assembly"
     doc = "Robustness probe: a cube that wrongly points its material at a shader library with no fragment entry. The app must keep the StandardMaterial and warn once instead of storming the pipeline cache."
 )
 {
@@ -20,7 +22,7 @@ def Xform "ShaderFallbackTest" (
     }
 
     def Xform "Avatar" (
-        prepend apiSchemas = ["LuncoAvatarAPI"]
+        prepend apiSchemas = ["LunCoAvatarAPI"]
     )
     {
         uniform bool lunco:avatar = true
@@ -32,7 +34,7 @@ def Xform "ShaderFallbackTest" (
 
     def Cube "BadShaderCube"
     (
-        prepend apiSchemas = ["LuncoMaterialAPI"]
+        prepend apiSchemas = ["LunCoMaterialAPI"]
     )
     {
         double size = 2.0

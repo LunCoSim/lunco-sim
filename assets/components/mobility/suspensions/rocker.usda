@@ -1,0 +1,33 @@
+#usda 1.0
+(
+    defaultPrim = "Suspension"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# The ROCKER-BOGIE suspension's wheel spring — short, soft, well damped.
+#
+# A rocker-bogie carries most of its compliance in the LINKAGE, not in the springs: the
+# rockers and bogies pivot to keep all six wheels loaded over a boulder, so the wheel
+# spring only has to absorb what the linkage cannot. Springing it like an independent
+# suspension fights the linkage and makes the body pitch.
+#
+# A wheel composes it as a second reference arc alongside the wheel itself:
+#
+#   def Cylinder "Wheel_FL" (
+#       prepend references = [
+#           @../../components/mobility/wheel.usda@</Wheel>,
+#           @../../components/mobility/suspensions/rocker.usda@</Suspension>,
+#       ]
+#   )
+#
+# See `standard.usda` for how the `over` composes onto the wheel that pulls it in.
+
+over "Suspension" (
+    kind = "component"
+)
+{
+    float physxVehicleSuspension:restLength = 0.5         # m — short: the linkage does the travelling
+    float physxVehicleSuspension:springStiffness = 12000.0 # N/m
+    float physxVehicleSuspension:springDamping = 2500.0    # N·s/m
+}

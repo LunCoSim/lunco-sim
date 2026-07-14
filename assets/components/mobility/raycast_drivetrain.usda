@@ -16,7 +16,7 @@
 # `physical` variant can supply its own drop without losing to a stronger local
 # opinion (USD LIVERPS strength: local > variant/reference).
 def Xform "Drivetrain" (
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "component"
 )
 {

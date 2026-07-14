@@ -50,7 +50,7 @@ over "DescentGuidance"
     # airframe something to consume.
     float inputs:guidance_throttle.connect = </DescentGuidance/GNC.outputs:throttle_cmd>
 
-    def LuncoProgram "GNC" (
+    def LunCoProgram "GNC" (
         doc = "Velocity-scheduled powered-descent guidance. Flies the vehicle down on its altimeter."
     )
     {

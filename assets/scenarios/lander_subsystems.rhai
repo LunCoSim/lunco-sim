@@ -1,4 +1,4 @@
-// Lander onboard SUPERVISOR — bound by the `def LuncoProgram "Subsystems"` child prim
+// Lander onboard SUPERVISOR — bound by the `def LunCoProgram "Subsystems"` child prim
 // on the lander asset (`vessels/landers/descent_lander.usda`), whose
 // `uniform asset lunco:program:sourceAsset = @scenarios/lander_subsystems.rhai@` names
 // this file, so it rides along into any scene that references one. Everything below resolves relative to `me`; nothing here names a
@@ -35,7 +35,7 @@ fn on_event(me, evt) {
     // possession status directly through the wire.
 
     // Fuel events — threshold crossings on the model's `m_prop` port, declared as
-    // `LuncoPortEvent` child prims on the lander (`LowFuel`, `Depleted`).
+    // `LunCoPortEvent` child prims on the lander (`LowFuel`, `Depleted`).
     if evt.name == "lander_low_fuel" {
         notify_kind("Lander low on fuel.", "warn");
         print("[Lander] LOW FUEL.");

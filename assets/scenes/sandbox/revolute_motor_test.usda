@@ -21,9 +21,11 @@
 #
 # Loaded by `sandbox --scene scenes/sandbox/revolute_motor_test.usda`.
 
+# Scene root: an `assembly` — a thing you OPEN, not a part you place.
 def Xform "SandboxScene" (
+    kind = "assembly"
     doc = "An arm that turns around a vertical post. Checks that a motorized hinge can rotate the arm to a chosen angle."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
@@ -57,7 +59,7 @@ def Xform "SandboxScene" (
 
     # Avatar so the API observer has someone to focus from.
     def Xform "Avatar" (
-        prepend apiSchemas = ["LuncoAvatarAPI"]
+        prepend apiSchemas = ["LunCoAvatarAPI"]
     )
     {
         uniform bool lunco:avatar = true

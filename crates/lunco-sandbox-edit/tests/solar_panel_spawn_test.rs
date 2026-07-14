@@ -24,16 +24,13 @@ fn test_solar_panel_usda_has_rigid_body_api() {
 
 /// Verifies the solar_panel.usda drives the general ShaderMaterial.
 #[test]
-fn test_solar_panel_usda_has_material_type() {
+fn test_solar_panel_usda_selects_its_shader() {
     let usda_path = std::path::Path::new("../../assets/components/power/solar_panel.usda");
     let content = std::fs::read_to_string(usda_path)
         .unwrap_or_else(|e| panic!("solar_panel.usda should exist at {:?}: {}", usda_path, e));
+    // `asset`, not `string` — naming the shader IS selecting it.
     assert!(
-        content.contains("uniform token lunco:material:type = \"shader\""),
-        "PanelSurface must have lunco:material:type = shader (LuncoMaterialAPI)"
-    );
-    assert!(
-        content.contains("shaders/solar_panel.wgsl"),
+        content.contains("uniform asset lunco:material:shader = @shaders/solar_panel.wgsl@"),
         "PanelSurface must point lunco:material:shader at shaders/solar_panel.wgsl"
     );
     assert!(

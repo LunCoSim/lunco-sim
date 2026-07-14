@@ -187,7 +187,7 @@ projections run both ways. Four representations, each edge a descriptor-supplied
 
   **3D geometry → the working path is the cosim wire fabric; auto-derived geometry is BLOCKED.**
   - *Works today:* a Modelica **output drives a USD transform** through the existing wire fabric —
-    `SunTracker.mo`'s `yaw` → wire (`lunco:wireFrom/To`, `fromPort/toPort`) → joint motor
+    `SunTracker.mo`'s `yaw` → a USD connection on the joint's `inputs:angle` → joint motor
     (`lunco-cosim/src/joint.rs`) → the USD prim's `Transform` follows (physics-solved). So *authored*
     USD geometry animated by *any* model observable is a solved problem — bind `SimulationSession` observables
     (`variable_names()`, `DescribeModelProvider`) to USD prim ports.

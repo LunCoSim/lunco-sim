@@ -1316,16 +1316,20 @@ fn on_set_rhai_policy(
     info!("[policy] SetRhaiPolicy authored `{prim}` (seam '{}') — journals + projects", cmd.seam);
 }
 
-/// Save a live-edited rhai scenario's current source back onto its USD prim's
-/// `lunco:script` attribute — the missing half of scenario authoring.
+/// Save a live-edited rhai scenario's current source back onto the `LuncoProgram`
+/// prim it came from — the other half of scenario authoring.
 ///
-/// The LOAD path reads `lunco:script` off a prim into a running scenario; until
-/// now a hot-edited scenario had no way *back* to the document. This resolves the
-/// scripted entity's live source (from [`ScriptRegistry`](lunco_scripting::ScriptRegistry)),
-/// its prim path, and the editable scene document backing it, then authors the
-/// source onto `lunco:script` via [`SetAttribute`](lunco_usd::UsdOp::SetAttribute)
-/// (whose `string` type authors the value RAW — no hand-escaping) — which journals,
-/// and on `SaveDocument` writes through to the `.usda`.
+/// The source is authored onto that prim's `lunco:program:sourceCode`, which is what
+/// the loader prefers over a `sourceAsset`: text authored in place is an author saying
+/// they mean it. The write goes through [`SetAttribute`](lunco_usd::UsdOp::SetAttribute)
+/// (whose `string` type authors the value RAW — no hand-escaping), so the whole rhai
+/// source round-trips verbatim, journals like any edit, and reaches the `.usda` on
+/// `SaveDocument`.
+///
+/// It authors onto the PROGRAM, not onto the vessel running it
+/// ([`ScenarioProgramPrim`](lunco_core::ScenarioProgramPrim) carries the path): a
+/// vessel can run several programs, and a source written onto the vessel would sit on
+/// a prim that runs nothing.
 ///
 /// Only doc-backed twin scenes have an editable document; a raw-file scene is
 /// **refused** (logged, not silently dropped) — matching the rule that the builder
@@ -1351,6 +1355,7 @@ fn on_save_scenario(
     trigger: On<SaveScenario>,
     q_model: Query<&lunco_scripting::doc::ScriptedModel>,
     q_prim: Query<&lunco_usd::UsdPrimPath>,
+    q_program: Query<&lunco_core::ScenarioProgramPrim>,
     registry: Res<lunco_scripting::ScriptRegistry>,
     backed: Res<lunco_usd::twin_projection::DocBackedTwinScenes>,
     asset_server: Res<AssetServer>,
@@ -1388,23 +1393,31 @@ fn on_save_scenario(
         return;
     };
 
-    // 3. Author the source onto `lunco:script` (root layer → durable in the .usda
-    //    on SaveDocument). A `string` value is authored RAW — `SetAttribute` handles
-    //    the escaping (writer-side), so the whole rhai source round-trips verbatim
-    //    with no hand-escaping here. Through `ApplyUsdOp` so it journals like any edit.
+    // 3. Author the source onto the PROGRAM prim's `lunco:program:sourceCode` (root
+    //    layer → durable in the .usda on SaveDocument). A `string` value is authored
+    //    RAW — `SetAttribute` handles the escaping (writer-side), so the whole rhai
+    //    source round-trips verbatim with no hand-escaping here. Through `ApplyUsdOp`
+    //    so it journals like any edit.
+    let Ok(program) = q_program.get(target) else {
+        warn!(
+            "[save-scenario] entity {target} runs a scenario that came from no program prim \
+             (it was started at runtime, not authored in the scene) — nothing to save onto"
+        );
+        return;
+    };
     commands.trigger(lunco_usd::ApplyUsdOp {
         doc: scene_doc,
         op: lunco_usd::UsdOp::SetAttribute {
             edit_target: lunco_usd::LayerId::root(),
-            path: upp.path.clone(),
-            name: "lunco:script".into(),
+            path: program.0.clone(),
+            name: "lunco:program:sourceCode".into(),
             type_name: "string".into(),
             value: source,
         },
     });
     info!(
         "[save-scenario] {target}: scenario source written onto `{}` (doc {}) — journals; SaveDocument persists to disk",
-        upp.path, scene_doc.0
+        program.0, scene_doc.0
     );
 }
 

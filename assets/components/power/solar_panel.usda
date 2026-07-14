@@ -10,7 +10,7 @@
 # children have PhysicsCollisionAPI only.
 def Xform "SolarPanel" (
     kind = "component"
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LuncoCatalogAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = true
@@ -32,7 +32,7 @@ def Xform "SolarPanel" (
 
     # Panel Surface — photovoltaic cells (very thin, on top of frame)
     def Cube "PanelSurface" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LuncoMaterialAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoMaterialAPI"]
     )
     {
         double size = 1.0

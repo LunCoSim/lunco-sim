@@ -1,0 +1,40 @@
+#usda 1.0
+(
+    defaultPrim = "Tire"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# A HARD tire — stiff compound, shallow tread, for prepared surfaces: landing pads,
+# habitat aprons, the inside of a test hall. It grips less and slips sooner than
+# `regolith.usda`, and it deforms less, so a rover on it is quicker and twitchier.
+#
+# The second tire exists to make the swap real: a wheel chooses between them through
+# its `tire` variantSet, and nothing else about the vehicle changes.
+#
+#   def Cylinder "Wheel_FL" (
+#       prepend references = @../../components/mobility/wheel.usda@</Wheel>
+#       variants = { string tire = "hard" }
+#   )
+#
+# See `regolith.usda` for how the `over` composes onto the wheel that pulls it in.
+
+over "Tire" (
+    prepend apiSchemas = ["LunCoMaterialAPI"]
+    kind = "component"
+)
+{
+    # --- Grip ---
+    # Stiffer contact patch: it builds force faster per unit of slip, and lets go
+    # sooner when it runs out of friction.
+    float physxVehicleTire:longitudinalStiffness = 14000.0
+    double lunco:frictionCoefficient = 0.55
+
+    # --- Tread ---
+    uniform asset lunco:material:shader = @shaders/wheel.wgsl@
+    color3f primvars:rim_color = (0.90, 0.90, 0.94)
+    color3f primvars:tire_color = (0.06, 0.06, 0.07)
+    float primvars:spoke_count = 6.0
+    float primvars:tread_lugs = 48.0                  # fine, dense tread — hard ground
+    color3f[] primvars:displayColor = [(0.22, 0.22, 0.24)]
+}
