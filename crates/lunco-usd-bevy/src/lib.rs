@@ -3797,6 +3797,59 @@ mod mesh_tests {
             .expect("build canonical stage")
     }
 
+    /// `UsdRead::asset` reads an `asset`-typed attribute, and `scalar::<String>`
+    /// does NOT.
+    ///
+    /// This is the type contract, pinned. `lunco:material:shader` is `asset`
+    /// (`@shaders/wheel.wgsl@`) so USD's resolver — and anything walking a layer for
+    /// the files a scene depends on — can see the `.wgsl`. As a `string` it was inert:
+    /// the scene named a shader that would not travel with it.
+    ///
+    /// The second assertion is the important one. A reader tolerant of BOTH types
+    /// would let the wrong authoring keep working, and writer and reader would go on
+    /// concealing each other — which is exactly how this attribute has been wrong
+    /// before, in both directions. `scalar::<String>` returning `None` on an `asset`
+    /// is the property that makes the schema binding, rather than advisory.
+    #[test]
+    fn asset_typed_attribute_reads_as_asset_and_not_as_string() {
+        let __cs = parse(
+            "#usda 1.0\n\
+             def Mesh \"Panel\"\n{\n\
+             uniform token lunco:material:type = \"shader\"\n\
+             uniform asset lunco:material:shader = @shaders/wheel.wgsl@\n}\n",
+        );
+        let reader = __cs.view();
+        let panel = SdfPath::new("/Panel").unwrap();
+
+        assert_eq!(
+            reader.asset(&panel, "lunco:material:shader").as_deref(),
+            Some("shaders/wheel.wgsl"),
+        );
+        assert!(
+            reader.scalar::<String>(&panel, "lunco:material:shader").is_none(),
+            "an `asset` must NOT read back as a String — tolerating both is what let \
+             the writer and reader hide each other's bugs",
+        );
+        // …and the sibling `token` reads through `text`, NOT through `scalar::<String>`.
+        //
+        // This half is the regression guard for a bug that shipped: when
+        // `primvars:materialType` (a `string`) became `lunco:material:type` (a `token`),
+        // every reader kept asking for `scalar::<String>` — which matches
+        // `Value::String` alone. It returned `None` for every prim, so `ShaderLook` was
+        // never authored and NOTHING in the scene got its WGSL shader. It failed
+        // silently: an unshaded prim is a plain grey surface, not an error.
+        assert_eq!(
+            reader.text(&panel, "lunco:material:type").as_deref(),
+            Some("shader"),
+            "a `token` must read through `text`",
+        );
+        assert!(
+            reader.scalar::<String>(&panel, "lunco:material:type").is_none(),
+            "`scalar::<String>` must NOT read a token — the whole point is that asking \
+             for the wrong USD type fails loudly in a test rather than quietly at runtime",
+        );
+    }
+
     /// A single quad fan-triangulates to 2 tris (6 unindexed verts); per-vertex
     /// `primvars:st` carries through and missing normals are computed.
     #[test]

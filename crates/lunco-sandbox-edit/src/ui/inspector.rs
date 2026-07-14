@@ -1466,10 +1466,10 @@ fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
     // Propagate changes to USD
     if world.get::<UsdPrimPath>(part).is_some() {
         // `LuncoMaterialAPI`. The types are the schema's: a `token` for the enum,
-        // a `string` for the path. They used to disagree with the reader — this
-        // authored `asset` (`@path@`) while the loader read a `String` — which is
-        // the same mutually-concealing writer/reader pair the schema exists to
-        // rule out.
+        // an `asset` for the path. Writer and reader must agree on the TYPE, not just
+        // the name — an `asset` reads back as `Value::AssetPath`, and a loader asking
+        // for a `String` gets `None`. (Both halves have been wrong here before, in
+        // both directions; the schema is what settles it.)
         apply_usd_attribute_change(
             world,
             part,
@@ -1481,8 +1481,8 @@ fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
             world,
             part,
             "lunco:material:shader",
-            "string",
-            format!("\"{}\"", path),
+            "asset",
+            format!("@{}@", path),
         );
     }
 }

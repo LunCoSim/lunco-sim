@@ -67,6 +67,53 @@ pub trait UsdRead {
         self.attr_value(prim, name).and_then(|v| v.get::<T>())
     }
 
+    /// The text of a `string`- **or** `token`-typed attribute.
+    ///
+    /// USD has three textual value types — `string`, `token`, `asset` — and they are
+    /// *distinct* `sdf::Value` variants. `scalar::<String>` matches `Value::String`
+    /// alone, so it reads a `token` as `None`. That is not a hypothetical:
+    /// `lunco:material:type` is a schema-declared `token`, every reader asked for a
+    /// `String`, and so **no prim in the scene got its WGSL shader** — silently, since
+    /// a missing look is just a default-grey surface, not an error.
+    ///
+    /// A `token` is USD's interned enum-ish string (`"shader"`, `"dem"`, `"rock"`) and
+    /// a `string` is free text; which one a property is, is the *schema's* call, not
+    /// the reader's. So a reader that wants the text should say so, and this is how —
+    /// via openusd's own [`Value::as_str`], the same coercion the `upAxis` read below
+    /// uses. It is one documented coercion, not a fallback chain: there is exactly one
+    /// place a textual value comes from.
+    ///
+    /// Use [`asset`](Self::asset) for an `asset`-typed property — not because this
+    /// could not read it, but because an asset reference is a different *thing* from a
+    /// token, and the call site should say which it means.
+    ///
+    /// Provided.
+    fn text(&self, prim: &SdfPath, name: &str) -> Option<String> {
+        self.attr_value(prim, name)
+            .and_then(|v| v.as_str().map(str::to_string))
+    }
+
+    /// The authored path of an `asset`-typed attribute, as a plain string.
+    ///
+    /// USD's `asset` is its own value type (`@shaders/wheel.wgsl@`), NOT a `string`.
+    /// The distinction is load-bearing: only an `asset` is seen by USD's asset
+    /// resolver, and only an `asset` is discoverable by anything that walks a layer
+    /// looking for the files a scene depends on — asset-sync's reference closure, a
+    /// packaging step, `usdzip`. A shader path smuggled in a `string` travels
+    /// nowhere: the scene references a `.wgsl` that does not ship with it.
+    ///
+    /// `scalar::<String>` will NOT read one — the value is `Value::AssetPath`, so a
+    /// `String` extraction returns `None`. That is the whole reason this exists: the
+    /// type is the contract, and a reader that quietly accepted both would let the
+    /// wrong one keep working. Returns the *authored* path (`AssetPath::as_str`),
+    /// which is what a Bevy asset handle wants; the resolved path is available on the
+    /// same type when we grow a resolver. Provided.
+    fn asset(&self, prim: &SdfPath, name: &str) -> Option<String> {
+        self.attr_value(prim, name)
+            .and_then(|v| v.try_as_asset_path())
+            .map(|a| a.into_string())
+    }
+
     /// A real scalar tolerant of `float` **or** `double` authoring, as `f64`.
     ///
     /// `scalar::<f64>` matches only a `Double` opinion, so a value authored in the

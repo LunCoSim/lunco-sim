@@ -36,6 +36,6 @@ def Xform "ShaderFallbackTest"
         color3f[] primvars:displayColor = [(0.9, 0.3, 0.2)]
         # INVALID: pbr_lit.wgsl is an importable library (no @fragment).
         uniform token lunco:material:type = "shader"
-        uniform string lunco:material:shader = "shaders/pbr_lit.wgsl"
+        uniform asset lunco:material:shader = @shaders/pbr_lit.wgsl@
     }
 }

@@ -390,7 +390,7 @@ def Cylinder "DescentLander" (
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.06, 0.06, 0.22)]
         uniform token lunco:material:type = "shader"
-        uniform string lunco:material:shader = "shaders/solar_panel.wgsl"
+        uniform asset lunco:material:shader = @shaders/solar_panel.wgsl@
         float primvars:v_scale = 1.7
         float primvars:cell_rows = 8.0
         float primvars:cell_cols = 14.0
@@ -414,7 +414,7 @@ def Cylinder "DescentLander" (
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.06, 0.06, 0.22)]
         uniform token lunco:material:type = "shader"
-        uniform string lunco:material:shader = "shaders/solar_panel.wgsl"
+        uniform asset lunco:material:shader = @shaders/solar_panel.wgsl@
         float primvars:v_scale = 1.7
         float primvars:cell_rows = 8.0
         float primvars:cell_cols = 14.0

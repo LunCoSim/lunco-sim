@@ -40,7 +40,7 @@ def Xform "SandboxScene" (
         double3 xformOp:scale = (4000.0, 0.2, 4000.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         uniform token lunco:material:type = "shader"
-        uniform string lunco:material:shader = "shaders/blueprint.wgsl"
+        uniform asset lunco:material:shader = @shaders/blueprint.wgsl@
         color3f primvars:surface_color = (0.15, 0.15, 0.18)
         color3f primvars:high_line_color = (0.20, 0.20, 0.23)
         color3f primvars:low_line_color = (0.20, 0.20, 0.23)
@@ -68,7 +68,7 @@ def Xform "SandboxScene" (
         double3 xformOp:scale = (60.0, 2.0, 80.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         uniform token lunco:material:type = "shader"
-        uniform string lunco:material:shader = "shaders/blueprint.wgsl"
+        uniform asset lunco:material:shader = @shaders/blueprint.wgsl@
         color3f primvars:surface_color = (0.25, 0.22, 0.18)
         color3f primvars:high_line_color = (0.30, 0.27, 0.23)
         color3f primvars:low_line_color = (0.30, 0.27, 0.23)
@@ -96,7 +96,7 @@ def Xform "SandboxScene" (
         double3 xformOp:scale = (60.0, 2.0, 80.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         uniform token lunco:material:type = "shader"
-        uniform string lunco:material:shader = "shaders/blueprint.wgsl"
+        uniform asset lunco:material:shader = @shaders/blueprint.wgsl@
         color3f primvars:surface_color = (0.25, 0.52, 0.18)
         color3f primvars:high_line_color = (0.30, 0.57, 0.23)
         color3f primvars:low_line_color = (0.30, 0.57, 0.23)
@@ -367,7 +367,7 @@ def Xform "SandboxScene" (
         # Spin-revealing checker (same general ShaderMaterial as the balloons),
         # so this cosim-driven ball shows its motion. Yellow identity via cell_a.
         uniform token lunco:material:type = "shader"
-        uniform string lunco:material:shader = "shaders/balloon.wgsl"
+        uniform asset lunco:material:shader = @shaders/balloon.wgsl@
         color3f primvars:cell_a = (0.9, 0.7, 0.2)    # cell A (yellow identity)
         color3f primvars:cell_b = (0.12, 0.12, 0.14) # cell B (dark)
         # `customData {min,max,unit}` = the UI hint the Inspector's data-driven

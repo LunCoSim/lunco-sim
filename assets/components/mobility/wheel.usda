@@ -29,7 +29,7 @@ def Cylinder "Wheel" (
     # loaded at USD-load time (see assets/shaders/wheel.wgsl). Survives the
     # physics/visual wheel split (lunco_usd_sim::setup_*_wheel carry it through).
     uniform token lunco:material:type = "shader"
-    uniform string lunco:material:shader = "shaders/wheel.wgsl"
+    uniform asset lunco:material:shader = @shaders/wheel.wgsl@
     color3f primvars:rim_color = (0.98, 0.98, 1.00)   # spoke / rim (bright metal → white on the lit side)
     color3f primvars:tire_color = (0.10, 0.10, 0.11)  # tire (rubber)
     float primvars:spoke_count = 6.0    # spoke count

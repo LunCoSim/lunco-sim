@@ -2200,7 +2200,9 @@ impl<R: UsdRead> lunco_terrain_surface::LayerAttrSource for UsdLayerAttrs<'_, R>
             .or_else(|| self.reader.scalar::<i32>(&self.sdf, &name).map(|v| v as i64))
     }
     fn get_string(&self, name: &str) -> Option<String> {
-        self.reader.scalar::<String>(&self.sdf, &layer_attr(name))
+        // Spans BOTH textual USD types: `lunco:layer:demSource` is a `string`,
+        // `lunco:layer:mode` is a `token`. `scalar::<String>` reads only the former.
+        self.reader.text(&self.sdf, &layer_attr(name))
     }
     fn get_bool(&self, name: &str) -> Option<bool> {
         self.reader.scalar::<bool>(&self.sdf, &layer_attr(name))
@@ -2215,7 +2217,7 @@ fn find_dem_layer<R: UsdRead>(
     reader
         .children(terrain)
         .into_iter()
-        .find(|c| reader.scalar::<String>(c, "lunco:layer").as_deref() == Some("dem"))
+        .find(|c| reader.text(c, "lunco:layer").as_deref() == Some("dem"))
 }
 
 /// Parse the non-ground child layer prims (`craters`/`rocks`/`shader`/…) into the
@@ -2253,7 +2255,7 @@ fn parse_terrain_layer_stack<R: UsdRead>(
             continue;
         }
         // Otherwise a normal composable layer prim (`lunco:layer = …`).
-        let Some(layer_type) = reader.scalar::<String>(&child, "lunco:layer") else {
+        let Some(layer_type) = reader.text(&child, "lunco:layer") else {
             continue;
         };
         if layer_type == "dem" {
@@ -2311,7 +2313,7 @@ fn sync_obstacle_spec_from_usd<R: UsdRead>(
             reader,
             sdf: child.clone(),
         };
-        match reader.scalar::<String>(&child, "lunco:layer").as_deref() {
+        match reader.text(&child, "lunco:layer").as_deref() {
             Some("craters") => {
                 let density = a.get_f32("density").unwrap_or(0.0);
                 let mode = a.get_f32("sizeMode").unwrap_or(22.0);

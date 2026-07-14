@@ -1128,10 +1128,10 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             // a shader but it hasn't landed, retry next frame (don't mark
             // UsdSimProcessed).
             let wants_shader = reader
-                .scalar::<String>(&sdf_path, "lunco:material:type")
+                .text(&sdf_path, "lunco:material:type")
                 .as_deref()
                 == Some("shader")
-                && reader.scalar::<String>(&sdf_path, "lunco:material:shader").is_some();
+                && reader.asset(&sdf_path, "lunco:material:shader").is_some();
             // Since the decoupling the `ShaderLook` is authored by a plain system
             // that runs headless too (it is intent, not a GPU material), so this no
             // longer deadlocks a `--no-ui` server. The wait is kept because the

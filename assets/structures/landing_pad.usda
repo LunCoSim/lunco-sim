@@ -25,7 +25,7 @@ def Xform "LandingPad"
         bool physics:collisionEnabled = true
         # Darkened regolith — sintered/compacted blast pad.
         uniform token lunco:material:type = "shader"
-        uniform string lunco:material:shader = "shaders/regolith.wgsl"
+        uniform asset lunco:material:shader = @shaders/regolith.wgsl@
         color3f primvars:colorA = (0.1, 0.1, 0.1)
     }
 

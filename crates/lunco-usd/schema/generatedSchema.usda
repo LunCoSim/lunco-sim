@@ -182,7 +182,7 @@ class "LuncoMaterialAPI" (
         allowedTokens = ["", "shader"]
         doc = "Which material implementation drives this prim."
     )
-    uniform string lunco:material:shader = "" (
+    uniform asset lunco:material:shader = @@ (
         doc = "Path to the WGSL shader declaring the pipeline's bindings."
     )
 }

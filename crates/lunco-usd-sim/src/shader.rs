@@ -103,12 +103,16 @@ fn apply_usd_shader_material_read<R: UsdRead>(
     // namespace: a primvar is interpolated geometric data that inherits to child
     // geometry and binds per-vertex, and a material-type token is none of those —
     // it was being swept up and offered to shaders as vertex data.
-    let mat_type: Option<String> = reader.scalar(sdf_path, "lunco:material:type");
+    // `token`, per luncoSchema — so `text`, not `scalar::<String>` (which matches
+    // `Value::String` alone and reads every token as `None`).
+    let mat_type = reader.text(sdf_path, "lunco:material:type");
     if mat_type.as_deref() != Some("shader") {
         return;
     }
 
-    let Some(shader_path) = reader.scalar::<String>(sdf_path, "lunco:material:shader") else {
+    // `asset`-typed, not `string` — so USD's resolver and the reference closure can
+    // see the `.wgsl` this scene depends on. `scalar::<String>` would read `None`.
+    let Some(shader_path) = reader.asset(sdf_path, "lunco:material:shader") else {
         warn!(
             "[shader] prim {} has lunco:material:type=shader but no lunco:material:shader",
             prim_path.path

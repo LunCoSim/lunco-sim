@@ -265,13 +265,14 @@ class "LuncoMaterialAPI" (
         over time."""
         allowedTokens = ["", "shader"]
     )
-    uniform string lunco:material:shader = "" (
+    uniform asset lunco:material:shader = @@ (
         doc = """Path to the WGSL shader that declares the pipeline's bindings,
         e.g. `shaders/terrain_layered.wgsl`.
 
-        TODO(asset-type): this is really a `UsdAsset` reference and should be typed
-        `asset` so USD's own resolver handles it (and so asset-sync closes over it).
-        It is `string` today because the read path threads it as a plain string; the
-        divergence corrected here was the *namespace*, not the type."""
+        `asset`, not `string`. A shader path is a genuine asset reference, and only an
+        `asset` is visible to USD's resolver and to anything that walks a layer to
+        find the files a scene depends on — asset-sync's reference closure, packaging,
+        `usdzip`. Held as a `string`, the path was inert: the scene named a `.wgsl`
+        that would not travel with it."""
     )
 }
