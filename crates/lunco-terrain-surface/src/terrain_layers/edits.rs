@@ -153,47 +153,54 @@ impl EditsLayer {
     }
 }
 
-/// The single **packed** attribute that carries an edit on its prim:
-/// `lunco:edit = "<kind> <cx> <cz> <radius> <param>"`. One prim per edit (USD
-/// authoring tier); they fold into the single [`EditsLayer`] (runtime tier). Packing
-/// keeps an edit to **two ops** (`AddPrim` + one `SetAttribute`) so undoing the
-/// attribute alone already drops the edit from the projection — no change-set needed
-/// for a clean single-step undo — and needs no array-typed attribute reader.
-pub const EDIT_ATTR: &str = "lunco:edit";
+/// The `LuncoTerrainEditAPI` properties of ONE edit, by **logical** name — this crate
+/// is USD-free, so the USD adapter binds these to `lunco:edit:*`.
+///
+/// They used to be PACKED into one string (`lunco:edit = "crater 350 350 45 18"`).
+/// That is legal USD and it is not USD: a private encoding inside a string is opaque
+/// to the type system — nothing validates it, `allowedTokens` cannot constrain the
+/// kind, and no other DCC can read it. Packing bought undo atomicity ("one attribute =
+/// one undo step"), but `apply_ops_as_change_set` commits N ops as a single labelled
+/// undo step, so the reason had outlived the encoding.
+pub const EDIT_KIND: &str = "kind";
+pub const EDIT_CENTER: &str = "center";
+pub const EDIT_RADIUS: &str = "radius";
+pub const EDIT_AMOUNT: &str = "amount";
 
-/// Parse an edit prim's packed [`EDIT_ATTR`] into an identified [`EditKind`]. `id` is
-/// the prim's stable identity (its path). `None` if the attribute is absent (not an
-/// edit prim) or malformed — so the layer walker can try normal layer parsing instead.
+/// Parse an edit prim's `LuncoTerrainEditAPI` attributes into an identified
+/// [`EditKind`]. `id` is the prim's stable identity (its path). `None` if the prim
+/// authors no edit kind (not an edit prim) or the kind is unknown — so the layer
+/// walker can try normal layer parsing instead.
 pub fn parse_edit(id: LayerId, a: &dyn LayerAttrSource) -> Option<(LayerId, EditKind)> {
-    let packed = a.get_string(EDIT_ATTR)?;
-    let mut it = packed.split_whitespace();
-    let kind = it.next()?;
-    let cx: f64 = it.next()?.parse().ok()?;
-    let cz: f64 = it.next()?.parse().ok()?;
-    let radius: f64 = it.next()?.parse().ok()?;
-    let param: f64 = it.next()?.parse().ok()?;
-    let edit = match kind {
-        "brush" => EditKind::Brush { center: [cx, cz], radius, amplitude: param },
-        "flatten" => EditKind::Flatten { center: [cx, cz], radius, target_y: param },
-        "crater" => EditKind::Crater { center: [cx, cz], radius, depth: param },
+    let kind = a.get_string(EDIT_KIND)?;
+    let center = a.get_vec2(EDIT_CENTER)?;
+    let radius = a.get_f64(EDIT_RADIUS)?;
+    let amount = a.get_f64(EDIT_AMOUNT)?;
+    let edit = match kind.as_str() {
+        "brush" => EditKind::Brush { center, radius, amplitude: amount },
+        "flatten" => EditKind::Flatten { center, radius, target_y: amount },
+        "crater" => EditKind::Crater { center, radius, depth: amount },
         _ => return None,
     };
     Some((id, edit))
 }
 
-/// The single `SetAttribute` write that authors an edit — `(name, type_name, value)`,
-/// `value` a USD-compliant string literal — so the authoring tier and [`parse_edit`]
-/// share one schema. Pairs with an `AddPrim` for the edit prim.
-pub fn edit_attr_write(kind: &EditKind) -> (&'static str, &'static str, String) {
+/// The `SetAttribute` writes that author one edit — `(logical_name, type_name, value)`,
+/// `value` a USD literal — so the authoring tier and [`parse_edit`] share one schema.
+/// The USD-aware caller namespaces each name and commits them as ONE change set, so an
+/// edit is still a single undo step.
+pub fn edit_attr_writes(kind: &EditKind) -> Vec<(&'static str, &'static str, String)> {
     let (k, c, r, p) = match *kind {
         EditKind::Brush { center, radius, amplitude } => ("brush", center, radius, amplitude),
         EditKind::Flatten { center, radius, target_y } => ("flatten", center, radius, target_y),
         EditKind::Crater { center, radius, depth } => ("crater", center, radius, depth),
     };
-    // RAW content, not a quoted USD literal: `UsdOp::SetAttribute` authors
-    // `string` values verbatim (no literal parsing) — hand-quoting here embeds
-    // the quotes in the stored value and `parse_edit` then fails on `"crater`.
-    (EDIT_ATTR, "string", format!("{k} {} {} {r} {p}", c[0], c[1]))
+    vec![
+        (EDIT_KIND, "token", format!("\"{k}\"")),
+        (EDIT_CENTER, "double2", format!("({}, {})", c[0], c[1])),
+        (EDIT_RADIUS, "double", r.to_string()),
+        (EDIT_AMOUNT, "double", p.to_string()),
+    ]
 }
 
 /// The edits list as one analytic [`HeightModifier`]: folds every edit in append

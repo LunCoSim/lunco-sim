@@ -38,7 +38,7 @@ use lunco_obstacle_field::field::HeightGrid;
 use crate::stream_viz::DemHeightField;
 
 pub use craters::{crater_layer, make_crater_layer};
-pub use edits::{edit_attr_write, parse_edit, EditKind, EditsLayer, EDIT_ATTR};
+pub use edits::{edit_attr_writes, parse_edit, EditKind, EditsLayer};
 pub use overzoom::default_overzoom_layer;
 pub use rocks::{rock_instance_layer, rock_layer, TerrainRock};
 
@@ -196,9 +196,13 @@ pub struct TerrainScatterEntity;
 /// over a prim reader so layer parsers (and 3rd-party ones) need no USD dependency.
 pub trait LayerAttrSource {
     fn get_f32(&self, name: &str) -> Option<f32>;
+    /// Full precision — terrain-local metres, where `f32` would quantise a centre.
+    fn get_f64(&self, name: &str) -> Option<f64>;
     fn get_i64(&self, name: &str) -> Option<i64>;
     fn get_string(&self, name: &str) -> Option<String>;
     fn get_bool(&self, name: &str) -> Option<bool>;
+    /// A 2-vector (USD `double2`) — an edit's centre in terrain-local XZ.
+    fn get_vec2(&self, name: &str) -> Option<[f64; 2]>;
 }
 
 /// Context handed to [`TerrainLayer::scatter`]: the terrain entity, its composed

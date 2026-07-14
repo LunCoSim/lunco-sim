@@ -276,3 +276,39 @@ class "LuncoMaterialAPI" (
         that would not travel with it."""
     )
 }
+
+class "LuncoTerrainEditAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """ONE hand edit to a terrain surface — a brush, a flatten, or a crater.
+    Applied to an edit prim (`lunco:layer = "edit"`), a child of the terrain; the
+    edits fold, in path order, into the terrain's composed height.
+
+    These parameters used to be PACKED into one string
+    (`lunco:edit = "crater 350 350 45 18"`). That is legal USD and it is not USD: a
+    private encoding hidden inside a string is opaque to the type system — no
+    validation, no `allowedTokens` on the kind, nothing to inspect or edit in usdview,
+    and no other DCC can read it. Packing was justified by undo atomicity ("one
+    attribute = one undo step"), but `apply_ops_as_change_set` already commits N ops
+    as a single labelled undo step, so the reason had outlived the encoding."""
+)
+{
+    uniform token lunco:edit:kind = "" (
+        doc = """Which edit this is. Uniform: an edit does not change kind over time.
+        `brush` displaces by `lunco:edit:amount`; `flatten` blends toward it as a
+        target height; `crater` excavates to it as a depth."""
+        allowedTokens = ["", "brush", "flatten", "crater"]
+    )
+    double2 lunco:edit:center = (0, 0) (
+        doc = "Centre in terrain-local XZ, metres."
+    )
+    double lunco:edit:radius = 0 (
+        doc = "Radius of effect, metres."
+    )
+    double lunco:edit:amount = 0 (
+        doc = """The kind's single scalar: brush amplitude, flatten target height, or
+        crater depth — all metres."""
+    )
+}

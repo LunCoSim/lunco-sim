@@ -77,7 +77,7 @@ pub use stream_viz::{
     TerrainStreamStatus, TileShadowCache,
 };
 pub use terrain_layers::{
-    default_overzoom_layer, edit_attr_write, make_crater_layer, parse_edit, rock_instance_layer,
+    default_overzoom_layer, edit_attr_writes, make_crater_layer, parse_edit, rock_instance_layer,
     EditKind, EditsLayer, LayerAttrSource, LayerEntry,
     LayerId, LayerScatterCx, TerrainLayer, TerrainLayerAppExt, TerrainLayerParser,
     TerrainLayerParserRegistry, TerrainLayerStack, TerrainLayersApplied, TerrainRock, TerrainScatterEntity,
