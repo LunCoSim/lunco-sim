@@ -4,8 +4,12 @@
 //! `set_diagram_text_string`, `remove_diagram_text`,
 //! `add_named_graphic`.
 //!
-//! Same pattern: parse → mutate → emit → reparse → assert. Headless.
-//! Integration via `host.apply` lives in `tests/op_to_patch_graphics.rs`.
+//! Every case runs through `host.apply`, i.e. the real op → splice → source
+//! route. Driving the helpers directly is no longer meaningful: a mutation's
+//! product is a byte patch against the source it was given, so two mutations
+//! cannot be chained against one AST — the second would be splicing against
+//! text the first one only produced in *its* patch. Pre-seed the source instead
+//! and do one apply, which is what the UI does anyway.
 
 use std::sync::Arc;
 
@@ -99,30 +103,47 @@ fn count_plot_nodes(class_src: &str, class: &str) -> usize {
 // add_plot_node
 // ─────────────────────────────────────────────────────────────────────
 
+/// Source with a `__LunCo(plotNodes=…)` annotation already holding `signals`.
+fn with_plot_nodes(signals: &[(&str, &str)]) -> String {
+    let entries: Vec<String> = signals
+        .iter()
+        .map(|(sig, title)| {
+            format!(
+                "LunCoAnnotations.PlotNode(extent={{{{0,0}},{{1,1}}}}, signal=\"{sig}\", title=\"{title}\")"
+            )
+        })
+        .collect();
+    format!(
+        "model M\nannotation(__LunCo(plotNodes={{{}}}));\nend M;\n",
+        entries.join(", ")
+    )
+}
+
 #[test]
-fn add_plot_node_creates_diagram_section() {
-    let mut sd = parse_to_ast("model M\nend M;\n", "t.mo").unwrap();
-    let class = ast_mut::lookup_class_mut(&mut sd, "M").unwrap();
-    ast_mut::add_plot_node(class, &plot("x", "X")).expect("add_plot_node");
-    let regen = sd.to_modelica();
-    assert_eq!(
-        count_plot_nodes(&regen, "M"),
-        1,
-        "regen:\n{regen}"
-    );
+fn add_plot_node_creates_lunco_section() {
+    let mut h = host("model M\nend M;\n");
+    h.apply(ModelicaOp::AddPlotNode {
+        class: "M".into(),
+        plot: plot("x", "X"),
+    })
+    .expect("apply AddPlotNode");
+    let src = h.document().source().to_string();
+    assert_eq!(count_plot_nodes(&src, "M"), 1, "src:\n{src}");
 }
 
 #[test]
 fn add_plot_node_replaces_same_signal() {
-    // Adding the same signal twice should produce one entry, not two —
-    // the helper de-dupes by signal.
-    let mut sd = parse_to_ast("model M\nend M;\n", "t.mo").unwrap();
-    let class = ast_mut::lookup_class_mut(&mut sd, "M").unwrap();
-    ast_mut::add_plot_node(class, &plot("x", "old")).unwrap();
-    ast_mut::add_plot_node(class, &plot("x", "new")).unwrap();
-    let regen = sd.to_modelica();
-    assert_eq!(count_plot_nodes(&regen, "M"), 1);
-    assert!(regen.contains("\"new\""), "new title not present:\n{regen}");
+    // Re-adding a signal must overwrite its entry, not append a second one.
+    let mut h = host(&with_plot_nodes(&[("x", "old")]));
+    h.apply(ModelicaOp::AddPlotNode {
+        class: "M".into(),
+        plot: plot("x", "new"),
+    })
+    .expect("apply AddPlotNode");
+    let src = h.document().source().to_string();
+    assert_eq!(count_plot_nodes(&src, "M"), 1, "duplicate entry:\n{src}");
+    assert!(src.contains("\"new\""), "new title not present:\n{src}");
+    assert!(!src.contains("\"old\""), "old title still present:\n{src}");
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -131,26 +152,31 @@ fn add_plot_node_replaces_same_signal() {
 
 #[test]
 fn remove_plot_node_drops_matching_entry() {
-    let mut sd = parse_to_ast("model M\nend M;\n", "t.mo").unwrap();
-    let class = ast_mut::lookup_class_mut(&mut sd, "M").unwrap();
-    ast_mut::add_plot_node(class, &plot("x", "")).unwrap();
-    ast_mut::add_plot_node(class, &plot("y", "")).unwrap();
-    ast_mut::remove_plot_node(class, "x").expect("remove");
-    let regen = sd.to_modelica();
-    assert_eq!(count_plot_nodes(&regen, "M"), 1);
-    assert!(regen.contains("\"y\""), "y dropped");
-    assert!(!regen.contains("\"x\""), "x still present");
+    let mut h = host(&with_plot_nodes(&[("x", "X"), ("y", "Y")]));
+    h.apply(ModelicaOp::RemovePlotNode {
+        class: "M".into(),
+        signal_path: "x".into(),
+    })
+    .expect("apply RemovePlotNode");
+    let src = h.document().source().to_string();
+    assert_eq!(count_plot_nodes(&src, "M"), 1, "src:\n{src}");
+    assert!(src.contains("\"y\""), "y dropped:\n{src}");
+    assert!(!src.contains("signal=\"x\""), "x still present:\n{src}");
 }
 
 #[test]
 fn remove_plot_node_unknown_returns_error() {
-    let mut sd = parse_to_ast("model M\nend M;\n", "t.mo").unwrap();
-    let class = ast_mut::lookup_class_mut(&mut sd, "M").unwrap();
-    let err = ast_mut::remove_plot_node(class, "missing").unwrap_err();
-    assert!(matches!(
-        err,
-        AstMutError::PlotNodeNotFound { signal, .. } if signal == "missing"
-    ));
+    let mut h = host(&with_plot_nodes(&[("x", "X")]));
+    let err = h
+        .apply(ModelicaOp::RemovePlotNode {
+            class: "M".into(),
+            signal_path: "missing".into(),
+        })
+        .expect_err("removing an absent plot node must fail");
+    assert!(
+        format!("{err:?}").contains("missing"),
+        "expected the error to name the signal, got {err:?}"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -159,28 +185,36 @@ fn remove_plot_node_unknown_returns_error() {
 
 #[test]
 fn set_plot_node_extent_updates_in_place() {
-    let mut sd = parse_to_ast("model M\nend M;\n", "t.mo").unwrap();
-    let class = ast_mut::lookup_class_mut(&mut sd, "M").unwrap();
-    ast_mut::add_plot_node(class, &plot("x", "")).unwrap();
-    ast_mut::set_plot_node_extent(class, "x", 100.0, 200.0, 300.0, 400.0).expect("extent");
-    let regen = sd.to_modelica();
-    // Numbers should appear; emitter may format as `100` or `100.0`.
+    let mut h = host(&with_plot_nodes(&[("x", "X")]));
+    h.apply(ModelicaOp::SetPlotNodeExtent {
+        class: "M".into(),
+        signal_path: "x".into(),
+        x1: 100.0,
+        y1: 200.0,
+        x2: 300.0,
+        y2: 400.0,
+    })
+    .expect("apply SetPlotNodeExtent");
+    let src = h.document().source().to_string();
     assert!(
-        regen.contains("100") && regen.contains("400"),
-        "extent not updated:\n{regen}"
+        src.contains("100") && src.contains("400"),
+        "extent not updated:\n{src}"
     );
-    assert_eq!(count_plot_nodes(&regen, "M"), 1);
+    assert_eq!(count_plot_nodes(&src, "M"), 1);
 }
 
 #[test]
 fn set_plot_node_title_updates_in_place() {
-    let mut sd = parse_to_ast("model M\nend M;\n", "t.mo").unwrap();
-    let class = ast_mut::lookup_class_mut(&mut sd, "M").unwrap();
-    ast_mut::add_plot_node(class, &plot("x", "old")).unwrap();
-    ast_mut::set_plot_node_title(class, "x", "new").expect("title");
-    let regen = sd.to_modelica();
-    assert!(regen.contains("\"new\""), "new title missing:\n{regen}");
-    assert!(!regen.contains("\"old\""), "old title still present:\n{regen}");
+    let mut h = host(&with_plot_nodes(&[("x", "old")]));
+    h.apply(ModelicaOp::SetPlotNodeTitle {
+        class: "M".into(),
+        signal_path: "x".into(),
+        title: "new".into(),
+    })
+    .expect("apply SetPlotNodeTitle");
+    let src = h.document().source().to_string();
+    assert!(src.contains("\"new\""), "new title missing:\n{src}");
+    assert!(!src.contains("\"old\""), "old title still present:\n{src}");
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -221,13 +255,19 @@ fn remove_diagram_text_drops_indexed_entry() {
 
 #[test]
 fn remove_diagram_text_out_of_range_returns_error() {
-    let mut sd = parse_to_ast("model M\nend M;\n", "t.mo").unwrap();
-    let class = ast_mut::lookup_class_mut(&mut sd, "M").unwrap();
-    let err = ast_mut::remove_diagram_text(class, 5).unwrap_err();
-    assert!(matches!(
-        err,
-        AstMutError::DiagramTextIndexOutOfRange { index: 5, .. }
-    ));
+    let mut h = host(
+        "model M\nannotation(Diagram(graphics={Text(extent={{0,0},{1,1}}, textString=\"a\")}));\nend M;\n",
+    );
+    let err = h
+        .apply(ModelicaOp::RemoveDiagramText {
+            class: "M".into(),
+            index: 5,
+        })
+        .expect_err("index past the end must fail");
+    assert!(
+        format!("{err:?}").contains('5'),
+        "expected the error to name the index, got {err:?}"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────

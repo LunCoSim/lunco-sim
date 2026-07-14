@@ -1,26 +1,22 @@
 //! TDD contract tests for [`lunco_modelica::ast_mut::set_parameter`].
 //!
-//! Per `AGENTS.md` §1, these land before the helper is wired into
-//! `document::op_to_patch`. They exercise the helper *via the AST* —
-//! parse → mutate → emit → reparse → assert structural change. No
-//! source-byte assertions; the round-trip rig from
-//! `tests/ast_roundtrip.rs` already validates emitter idempotency.
+//! Shape: parse → mutate → **splice the patch into the source** → reparse →
+//! assert the structural change. The middle step is what ships: a mutation's
+//! product is a byte patch against the original text, never a re-emission of
+//! the class (see `ast_mut/edit.rs`).
 //!
 //! ## Why integration-style and not unit
 //!
-//! The helper's contract is "post-mutation, the AST has the right
-//! modification entry, and `to_modelica` round-trips it cleanly." That
-//! contract is only meaningful when measured end-to-end through
-//! rumoca's parser and emitter — testing `IndexMap::insert` in
-//! isolation would be testing rumoca, not us.
+//! The helper's contract is "post-splice, the source reparses and carries the
+//! right modification". That is only meaningful measured end-to-end through
+//! rumoca's parser — testing `IndexMap::insert` in isolation would be testing
+//! rumoca, not us.
 
-use lunco_modelica::ast_mut::{self, AstMutError};
+use lunco_modelica::ast_mut::{self, AstMutError, Edit};
 use rumoca_phase_parse::parse_to_ast;
 
-/// End-to-end harness: parse `source`, run `op` on `class_name`, emit,
-/// reparse, return the post-mutation `Component` of `component_name`.
-/// Panics with a useful message on any step failure so individual
-/// tests stay tight.
+/// End-to-end harness: parse `source`, run `op` on `class_name`, apply the
+/// splice, reparse, return the post-mutation `Component` of `component_name`.
 fn mutate_and_reparse<F>(
     source: &str,
     class_name: &str,
@@ -28,24 +24,41 @@ fn mutate_and_reparse<F>(
     op: F,
 ) -> rumoca_compile::parsing::ast::Component
 where
-    F: FnOnce(&mut rumoca_compile::parsing::ast::ClassDef),
+    F: FnOnce(&mut rumoca_compile::parsing::ast::ClassDef, &mut Edit<'_>),
 {
-    let mut sd = parse_to_ast(source, "test.mo").expect("first parse");
-    let class = ast_mut::lookup_class_mut(&mut sd, class_name).expect("class lookup");
-    op(class);
-    let regen = sd.to_modelica();
-    let sd2 = parse_to_ast(&regen, "test.mo").unwrap_or_else(|e| {
-        panic!(
-            "post-mutation reparse failed: {e:?}\n=== regen ===\n{regen}\n============="
-        )
+    let sd = parse_to_ast(source, "test.mo").expect("first parse");
+    let (range, replacement, _) = ast_mut::class_patch(source, &sd, class_name, |c, e| {
+        op(c, e);
+        Ok(())
+    })
+    .expect("class_patch");
+    let mut patched = source.to_string();
+    patched.replace_range(range, &replacement);
+    let sd2 = parse_to_ast(&patched, "test.mo").unwrap_or_else(|e| {
+        panic!("post-splice reparse failed: {e:?}\n=== patched ===\n{patched}\n=============")
     });
     sd2.classes
         .get(class_name)
-        .unwrap_or_else(|| panic!("class `{class_name}` missing after reparse:\n{regen}"))
+        .unwrap_or_else(|| panic!("class `{class_name}` missing after reparse:\n{patched}"))
         .components
         .get(component_name)
-        .unwrap_or_else(|| panic!("component `{component_name}` missing after reparse:\n{regen}"))
+        .unwrap_or_else(|| panic!("component `{component_name}` missing after reparse:\n{patched}"))
         .clone()
+}
+
+/// Run `set_parameter` for its error, discarding any patch.
+fn set_parameter_err(
+    source: &str,
+    class_name: &str,
+    component: &str,
+    param: &str,
+    value: &str,
+) -> AstMutError {
+    let sd = parse_to_ast(source, "test.mo").expect("first parse");
+    ast_mut::class_patch(source, &sd, class_name, |c, e| {
+        ast_mut::set_parameter(c, e, component, param, value)
+    })
+    .expect_err("expected set_parameter to fail")
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -96,8 +109,8 @@ fn set_parameter_inserts_new_modification_on_unmodified_component() {
         "model M\n  Real k;\nend M;\n",
         "M",
         "k",
-        |class| {
-            ast_mut::set_parameter(class, "k", "fixed", "true").expect("set_parameter");
+        |class, e| {
+            ast_mut::set_parameter(class, e,"k", "fixed", "true").expect("set_parameter");
         },
     );
     assert!(
@@ -115,8 +128,8 @@ fn set_parameter_replaces_existing_modification() {
         "model M\n  Real k(min = 0.5);\nend M;\n",
         "M",
         "k",
-        |class| {
-            ast_mut::set_parameter(class, "k", "min", "2.0").expect("set_parameter");
+        |class, e| {
+            ast_mut::set_parameter(class, e,"k", "min", "2.0").expect("set_parameter");
         },
     );
     let rendered = format!("{:?}", comp.modifications.get("min").expect("min present"));
@@ -134,8 +147,8 @@ fn set_parameter_preserves_other_modifications() {
         "model M\n  Real k(min = 0.0, max = 10.0);\nend M;\n",
         "M",
         "k",
-        |class| {
-            ast_mut::set_parameter(class, "k", "min", "1.0").expect("set_parameter");
+        |class, e| {
+            ast_mut::set_parameter(class, e,"k", "min", "1.0").expect("set_parameter");
         },
     );
     assert!(
@@ -152,24 +165,16 @@ fn set_parameter_preserves_other_modifications() {
 
 #[test]
 fn set_parameter_does_not_disturb_sibling_components() {
-    // Mutation on `a` shouldn't touch `b`.
-    let mut sd = parse_to_ast(
+    // Mutation on `a` shouldn't touch `b`. The splice engine makes this
+    // structural: `b`'s bytes are never in the patch at all.
+    let b = mutate_and_reparse(
         "model M\n  Real a;\n  Real b(fixed = true);\nend M;\n",
-        "t.mo",
-    )
-    .unwrap();
-    let class = ast_mut::lookup_class_mut(&mut sd, "M").unwrap();
-    ast_mut::set_parameter(class, "a", "fixed", "false").expect("set_parameter");
-    let regen = sd.to_modelica();
-    let sd2 = parse_to_ast(&regen, "t.mo")
-        .unwrap_or_else(|e| panic!("reparse failed: {e:?}\n=== regen ===\n{regen}"));
-    let b = sd2
-        .classes
-        .get("M")
-        .unwrap()
-        .components
-        .get("b")
-        .expect("b still exists");
+        "M",
+        "b",
+        |class, e| {
+            ast_mut::set_parameter(class, e, "a", "fixed", "false").expect("set_parameter");
+        },
+    );
     assert!(
         b.modifications.contains_key("fixed"),
         "b's fixed modification dropped"
@@ -192,8 +197,8 @@ fn set_parameter_start_writes_to_dedicated_field() {
         "model M\n  Real k;\nend M;\n",
         "M",
         "k",
-        |class| {
-            ast_mut::set_parameter(class, "k", "start", "1.5").expect("set_parameter");
+        |class, e| {
+            ast_mut::set_parameter(class, e,"k", "start", "1.5").expect("set_parameter");
         },
     );
     // `start` field populated, flag set, no duplicate in modifications.
@@ -218,8 +223,8 @@ fn set_parameter_start_replaces_existing_start_value() {
         "model M\n  Real k(start = 0.5);\nend M;\n",
         "M",
         "k",
-        |class| {
-            ast_mut::set_parameter(class, "k", "start", "2.0").expect("set_parameter");
+        |class, e| {
+            ast_mut::set_parameter(class, e,"k", "start", "2.0").expect("set_parameter");
         },
     );
     let rendered = format!("{:?}", comp.start);
@@ -235,9 +240,13 @@ fn set_parameter_start_replaces_existing_start_value() {
 
 #[test]
 fn set_parameter_unknown_component_returns_error() {
-    let mut sd = parse_to_ast("model M\n  Real k;\nend M;\n", "t.mo").unwrap();
-    let class = ast_mut::lookup_class_mut(&mut sd, "M").unwrap();
-    let err = ast_mut::set_parameter(class, "nonexistent", "start", "1.0").unwrap_err();
+    let err = set_parameter_err(
+        "model M\n  Real k;\nend M;\n",
+        "M",
+        "nonexistent",
+        "start",
+        "1.0",
+    );
     match err {
         AstMutError::ComponentNotFound { class: c, component } => {
             assert_eq!(c, "M");
@@ -249,11 +258,9 @@ fn set_parameter_unknown_component_returns_error() {
 
 #[test]
 fn set_parameter_unparseable_value_returns_error() {
-    // `@@@` is not a Modelica expression; the stub-class parse fails
-    // and the error surfaces with the offending text.
-    let mut sd = parse_to_ast("model M\n  Real k;\nend M;\n", "t.mo").unwrap();
-    let class = ast_mut::lookup_class_mut(&mut sd, "M").unwrap();
-    let err = ast_mut::set_parameter(class, "k", "start", "@@@").unwrap_err();
+    // `@@@` is not a Modelica expression. The value is parsed *before* any
+    // splice is recorded, so a bad value can't leave a half-written edit.
+    let err = set_parameter_err("model M\n  Real k;\nend M;\n", "M", "k", "start", "@@@");
     match err {
         AstMutError::ValueParseFailed { value } => assert_eq!(value, "@@@"),
         other => panic!("expected ValueParseFailed, got {other:?}"),
@@ -270,8 +277,8 @@ fn set_parameter_accepts_integer_literal() {
         "model M\n  Integer n;\nend M;\n",
         "M",
         "n",
-        |class| {
-            ast_mut::set_parameter(class, "n", "min", "42").expect("set_parameter");
+        |class, e| {
+            ast_mut::set_parameter(class, e,"n", "min", "42").expect("set_parameter");
         },
     );
     assert!(comp.modifications.contains_key("min"));
@@ -283,8 +290,8 @@ fn set_parameter_accepts_boolean_literal() {
         "model M\n  Real k;\nend M;\n",
         "M",
         "k",
-        |class| {
-            ast_mut::set_parameter(class, "k", "fixed", "true").expect("set_parameter");
+        |class, e| {
+            ast_mut::set_parameter(class, e,"k", "fixed", "true").expect("set_parameter");
         },
     );
     assert!(comp.modifications.contains_key("fixed"));
@@ -299,8 +306,8 @@ fn set_parameter_accepts_array_literal() {
         "model M\n  Real x[3];\nend M;\n",
         "M",
         "x",
-        |class| {
-            ast_mut::set_parameter(class, "x", "nominal", "{1.0, 2.0, 3.0}")
+        |class, e| {
+            ast_mut::set_parameter(class, e,"x", "nominal", "{1.0, 2.0, 3.0}")
                 .expect("set_parameter");
         },
     );

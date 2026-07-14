@@ -1,16 +1,16 @@
 //! TDD contract tests for [`lunco_modelica::ast_mut::set_placement`].
 //!
-//! Same shape as `ast_mut_set_parameter.rs`: parse → mutate → emit →
-//! reparse → assert. Verifies the round-trip preserves an annotation
-//! identifying as `Placement(...)` on the target component, and that
-//! sibling annotations / sibling components survive.
+//! Same shape as `ast_mut_set_parameter.rs`: parse → mutate → **splice** →
+//! reparse → assert. Verifies the patched source carries a `Placement(...)`
+//! annotation on the target component, and that sibling annotations / sibling
+//! components survive.
 
-use lunco_modelica::ast_mut;
+use lunco_modelica::ast_mut::{self, AstMutError, Edit};
 use lunco_modelica::pretty::Placement;
 use rumoca_phase_parse::parse_to_ast;
 use rumoca_compile::parsing::ast::{ClassDef, Component, Expression};
 
-/// End-to-end harness — parse, run `op`, emit, reparse, return the
+/// End-to-end harness — parse, run `op`, apply its splice, reparse, return the
 /// post-mutation `Component`.
 fn mutate_and_reparse<F>(
     source: &str,
@@ -19,23 +19,25 @@ fn mutate_and_reparse<F>(
     op: F,
 ) -> Component
 where
-    F: FnOnce(&mut ClassDef),
+    F: FnOnce(&mut ClassDef, &mut Edit<'_>),
 {
-    let mut sd = parse_to_ast(source, "test.mo").expect("first parse");
-    let class = ast_mut::lookup_class_mut(&mut sd, class_name).expect("class lookup");
-    op(class);
-    let regen = sd.to_modelica();
-    let sd2 = parse_to_ast(&regen, "test.mo").unwrap_or_else(|e| {
-        panic!(
-            "post-mutation reparse failed: {e:?}\n=== regen ===\n{regen}\n============="
-        )
+    let sd = parse_to_ast(source, "test.mo").expect("first parse");
+    let (range, replacement, _) = ast_mut::class_patch(source, &sd, class_name, |c, e| {
+        op(c, e);
+        Ok(())
+    })
+    .expect("class_patch");
+    let mut patched = source.to_string();
+    patched.replace_range(range, &replacement);
+    let sd2 = parse_to_ast(&patched, "test.mo").unwrap_or_else(|e| {
+        panic!("post-splice reparse failed: {e:?}\n=== patched ===\n{patched}\n=============")
     });
     sd2.classes
         .get(class_name)
-        .unwrap_or_else(|| panic!("class `{class_name}` missing after reparse:\n{regen}"))
+        .unwrap_or_else(|| panic!("class `{class_name}` missing after reparse:\n{patched}"))
         .components
         .get(component_name)
-        .unwrap_or_else(|| panic!("component `{component_name}` missing after reparse:\n{regen}"))
+        .unwrap_or_else(|| panic!("component `{component_name}` missing after reparse:\n{patched}"))
         .clone()
 }
 
@@ -62,8 +64,8 @@ fn set_placement_appends_when_no_annotation_exists() {
         "model M\n  Real x;\nend M;\n",
         "M",
         "x",
-        |class| {
-            ast_mut::set_placement(class, "x", &Placement::at(10.0, 20.0))
+        |class, e| {
+            ast_mut::set_placement(class, e,"x", &Placement::at(10.0, 20.0))
                 .expect("set_placement");
         },
     );
@@ -82,8 +84,8 @@ fn set_placement_replaces_existing_placement() {
         "model M\n  Real x annotation(Placement(transformation(extent={{-10,-10},{10,10}})));\nend M;\n",
         "M",
         "x",
-        |class| {
-            ast_mut::set_placement(class, "x", &Placement::at(50.0, 75.0))
+        |class, e| {
+            ast_mut::set_placement(class, e,"x", &Placement::at(50.0, 75.0))
                 .expect("set_placement");
         },
     );
@@ -115,8 +117,8 @@ fn set_placement_preserves_non_placement_annotations() {
         "model M\n  Real x annotation(Dialog(group=\"k\"), Placement(transformation(extent={{-10,-10},{10,10}})));\nend M;\n",
         "M",
         "x",
-        |class| {
-            ast_mut::set_placement(class, "x", &Placement::at(0.0, 0.0))
+        |class, e| {
+            ast_mut::set_placement(class, e,"x", &Placement::at(0.0, 0.0))
                 .expect("set_placement");
         },
     );
@@ -133,18 +135,15 @@ fn set_placement_preserves_non_placement_annotations() {
 
 #[test]
 fn set_placement_does_not_disturb_sibling_components() {
-    let mut sd = parse_to_ast(
+    let b = mutate_and_reparse(
         "model M\n  Real a;\n  Real b annotation(Placement(transformation(extent={{0,0},{1,1}})));\nend M;\n",
-        "test.mo",
-    )
-    .unwrap();
-    let class = ast_mut::lookup_class_mut(&mut sd, "M").unwrap();
-    ast_mut::set_placement(class, "a", &Placement::at(99.0, 99.0))
-        .expect("set_placement");
-    let regen = sd.to_modelica();
-    let sd2 = parse_to_ast(&regen, "test.mo")
-        .unwrap_or_else(|e| panic!("reparse: {e:?}\n=== regen ===\n{regen}"));
-    let b = sd2.classes.get("M").unwrap().components.get("b").unwrap();
+        "M",
+        "b",
+        |class, e| {
+            ast_mut::set_placement(class, e, "a", &Placement::at(99.0, 99.0))
+                .expect("set_placement");
+        },
+    );
     assert!(
         b.annotation.iter().any(|e| is_call_named(e, "Placement")),
         "sibling component `b` lost its Placement annotation"
@@ -157,12 +156,14 @@ fn set_placement_does_not_disturb_sibling_components() {
 
 #[test]
 fn set_placement_unknown_component_returns_error() {
-    let mut sd = parse_to_ast("model M\n  Real x;\nend M;\n", "t.mo").unwrap();
-    let class = ast_mut::lookup_class_mut(&mut sd, "M").unwrap();
-    let err = ast_mut::set_placement(class, "nope", &Placement::at(0.0, 0.0))
-        .unwrap_err();
+    let source = "model M\n  Real x;\nend M;\n";
+    let sd = parse_to_ast(source, "t.mo").unwrap();
+    let err = ast_mut::class_patch(source, &sd, "M", |c, e| {
+        ast_mut::set_placement(c, e, "nope", &Placement::at(0.0, 0.0))
+    })
+    .expect_err("unknown component must fail");
     match err {
-        ast_mut::AstMutError::ComponentNotFound { class: c, component } => {
+        AstMutError::ComponentNotFound { class: c, component } => {
             assert_eq!(c, "M");
             assert_eq!(component, "nope");
         }
@@ -176,19 +177,29 @@ fn set_placement_unknown_component_returns_error() {
 
 #[test]
 fn set_placement_is_idempotent_on_repeated_calls() {
-    // Calling set_placement twice with the same payload must produce
-    // exactly one Placement entry, not duplicate. Pinned because the
-    // implementation could regress to "always push" if the
-    // find-and-replace branch breaks.
-    let mut sd = parse_to_ast("model M\n  Real x;\nend M;\n", "t.mo").unwrap();
-    let class = ast_mut::lookup_class_mut(&mut sd, "M").unwrap();
-    ast_mut::set_placement(class, "x", &Placement::at(5.0, 5.0)).unwrap();
-    ast_mut::set_placement(class, "x", &Placement::at(5.0, 5.0)).unwrap();
-    let regen = sd.to_modelica();
-    let sd2 = parse_to_ast(&regen, "t.mo")
-        .unwrap_or_else(|e| panic!("reparse: {e:?}\n=== regen ===\n{regen}"));
-    let comp = sd2.classes.get("M").unwrap().components.get("x").unwrap();
-    let count = comp
+    // Placing twice must leave exactly one Placement entry, not duplicate.
+    // Each apply re-parses, so the second one sees the first one's Placement
+    // in the source and replaces it rather than appending.
+    let once = mutate_and_reparse("model M\n  Real x;\nend M;\n", "M", "x", |class, e| {
+        ast_mut::set_placement(class, e, "x", &Placement::at(5.0, 5.0)).unwrap();
+    });
+    assert_eq!(
+        once.annotation
+            .iter()
+            .filter(|e| is_call_named(e, "Placement"))
+            .count(),
+        1
+    );
+
+    let twice = mutate_and_reparse(
+        "model M\n  Real x annotation(Placement(transformation(extent={{0,0},{10,10}})));\nend M;\n",
+        "M",
+        "x",
+        |class, e| {
+            ast_mut::set_placement(class, e, "x", &Placement::at(5.0, 5.0)).unwrap();
+        },
+    );
+    let count = twice
         .annotation
         .iter()
         .filter(|e| is_call_named(e, "Placement"))

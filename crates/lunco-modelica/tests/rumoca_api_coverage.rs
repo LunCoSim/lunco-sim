@@ -47,6 +47,40 @@ fn legacy_regex_scan(source: &str) -> HashSet<(String, String)> {
     out
 }
 
+/// **Chokepoint pin: `compile_str` strips bound-`input` defaults itself.**
+///
+/// rumoca demotes a bound `input Real g = 9.81` to an algebraic, so it never
+/// reaches `input_names()` (`docs/architecture/29-rumoca-workarounds.md` §2).
+/// The strip lives INSIDE `ModelicaCompiler::compile_str`, so no compile path
+/// can bypass it by forgetting to call `strip_input_defaults` first — which is
+/// exactly what `modelica_tester` used to do.
+///
+/// This test deliberately passes RAW, unstripped source. If someone moves the
+/// strip back out to the callers, `g` disappears from `input_names()` and this
+/// fails.
+#[test]
+fn compile_str_keeps_bound_input_as_runtime_slot() {
+    let src = "model M\n  input Real g = 9.81;\n  Real x;\nequation\n  der(x) = g;\nend M;\n";
+    let mut compiler = lunco_modelica::ModelicaCompiler::new();
+    let dae = compiler
+        .compile_str("M", src, "m.mo")
+        .expect("M compiles");
+
+    let opts = rumoca_sim::SimOptions {
+        t_start: 0.0,
+        t_end: 10.0,
+        ..Default::default()
+    };
+    let session = rumoca_sim::SimulationSession::new(&dae.dae, opts).expect("session builds");
+    let inputs = session.input_names().to_vec();
+
+    assert!(
+        inputs.iter().any(|n| n == "g"),
+        "a bound `input` must survive compile_str as a runtime slot; got {inputs:?} \
+         — the strip was bypassed"
+    );
+}
+
 /// **Contract pin (rumoca ≥0.9.20): `SimulationSession` clamps at `t_end`.**
 ///
 /// `step`/`advance_to` refuse to advance the model past `SimOptions::t_end`, and

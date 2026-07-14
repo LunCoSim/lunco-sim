@@ -72,6 +72,31 @@ pub enum AstMutError {
         /// `component.port` form of the missing target endpoint.
         to: String,
     },
+    /// A mutation recorded two [`super::edit::Splice`]s claiming the same
+    /// bytes. The merge would have to drop one, so we refuse instead: a
+    /// silently-dropped splice is exactly the class of bug the splice engine
+    /// exists to prevent.
+    OverlappingSplice {
+        /// Debug form of the earlier range.
+        first: String,
+        /// Debug form of the range that overlaps it.
+        second: String,
+    },
+    /// A splice pointed past the end of the source — an AST span that no longer
+    /// matches the text it was parsed from (a stale AST snapshot).
+    SpliceOutOfBounds {
+        /// End offset the splice asked for.
+        end: usize,
+        /// Actual source length.
+        len: usize,
+    },
+    /// A structural anchor could not be located in the source — e.g. a
+    /// declaration with no terminating `;`, or a class with no `end` keyword.
+    /// Indicates the AST and the source have drifted apart.
+    AnchorNotFound {
+        /// What we were looking for.
+        what: String,
+    },
 }
 
 impl std::fmt::Display for AstMutError {
@@ -104,6 +129,17 @@ impl std::fmt::Display for AstMutError {
                 f,
                 "connection `connect({from}, {to})` not found in class `{class}`"
             ),
+            AstMutError::OverlappingSplice { first, second } => write!(
+                f,
+                "internal: overlapping text splices {first} and {second}"
+            ),
+            AstMutError::SpliceOutOfBounds { end, len } => write!(
+                f,
+                "internal: text splice ends at {end}, past the {len}-byte source (stale AST)"
+            ),
+            AstMutError::AnchorNotFound { what } => {
+                write!(f, "could not locate {what} in the source (stale AST)")
+            }
         }
     }
 }
