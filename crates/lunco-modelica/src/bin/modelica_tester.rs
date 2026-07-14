@@ -66,10 +66,20 @@ pub(crate) fn main() -> anyhow::Result<()> {
         "\n--- Building stepper (atol={:.1e} rtol={:.1e} dt={:.1e} n={}) ---",
         atol, rtol, dt, n_steps
     );
-    let mut opts = rumoca_sim::SimOptions::default();
+    // Base options come from the same library helper the app and `modelica_run`
+    // use — in particular it carries the probe horizon into `SimOptions::t_end`,
+    // which the session clamps every advance at. `ATOL`/`RTOL` are then set
+    // independently: sweeping them apart is exactly what this probe is for, and
+    // `RunBounds::tolerance` is a single scalar applied to both.
+    let bounds = lunco_experiments::RunBounds {
+        t_start: 0.0,
+        t_end: t_end_hint,
+        ..Default::default()
+    };
+    let mut opts = lunco_modelica::experiments_runner::stepper_options_from_bounds(&bounds);
     opts.atol = atol;
     opts.rtol = rtol;
-    let mut stepper = match rumoca_sim::SimStepper::new(&result.dae, opts) {
+    let mut stepper = match rumoca_sim::SimulationSession::new(&result.dae, opts) {
         Ok(s) => {
             println!("Stepper built OK.");
             s

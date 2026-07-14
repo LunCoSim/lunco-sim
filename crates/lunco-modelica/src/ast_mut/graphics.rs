@@ -40,14 +40,14 @@ fn graphics_array_mut<'a>(
                         ident: synth_token(section_name.to_string()),
                         subs: None,
                     }],
-                    span: Span::default(),
+                    span: Span::DUMMY,
                     def_id: None,
                 },
                 modifications: Vec::new(),
                 each_flags: Vec::new(),
                 final_flags: Vec::new(),
                 redeclare_flags: Vec::new(),
-                span: Span::default(),
+                span: Span::DUMMY,
             });
             class.annotation.len() - 1
         }
@@ -75,15 +75,15 @@ fn graphics_array_mut<'a>(
                         ident: synth_token("graphics".to_string()),
                         subs: None,
                     }],
-                    span: Span::default(),
+                    span: Span::DUMMY,
                     def_id: None,
                 },
                 value: Arc::new(Expression::Array {
                     elements: Vec::new(),
                     is_matrix: false,
-                    span: Span::default(),
+                    span: Span::DUMMY,
                 }),
-                span: Span::default(),
+                span: Span::DUMMY,
             });
             mods.len() - 1
         }
@@ -98,7 +98,7 @@ fn graphics_array_mut<'a>(
             *other = Expression::Array {
                 elements: Vec::new(),
                 is_matrix: false,
-                span: Span::default(),
+                span: Span::DUMMY,
             };
             match other {
                 Expression::Array { elements, .. } => elements,
@@ -126,14 +126,14 @@ fn lunco_plot_nodes_array_mut(class: &mut ClassDef) -> &mut Vec<Expression> {
                         ident: synth_token("__LunCo".to_string()),
                         subs: None,
                     }],
-                    span: Span::default(),
+                    span: Span::DUMMY,
                     def_id: None,
                 },
                 modifications: Vec::new(),
                 each_flags: Vec::new(),
                 final_flags: Vec::new(),
                 redeclare_flags: Vec::new(),
-                span: Span::default(),
+                span: Span::DUMMY,
             });
             class.annotation.len() - 1
         }
@@ -159,15 +159,15 @@ fn lunco_plot_nodes_array_mut(class: &mut ClassDef) -> &mut Vec<Expression> {
                         ident: synth_token("plotNodes".to_string()),
                         subs: None,
                     }],
-                    span: Span::default(),
+                    span: Span::DUMMY,
                     def_id: None,
                 },
                 value: Arc::new(Expression::Array {
                     elements: Vec::new(),
                     is_matrix: false,
-                    span: Span::default(),
+                    span: Span::DUMMY,
                 }),
-                span: Span::default(),
+                span: Span::DUMMY,
             });
             mods.len() - 1
         }
@@ -182,7 +182,7 @@ fn lunco_plot_nodes_array_mut(class: &mut ClassDef) -> &mut Vec<Expression> {
             *other = Expression::Array {
                 elements: Vec::new(),
                 is_matrix: false,
-                span: Span::default(),
+                span: Span::DUMMY,
             };
             match other {
                 Expression::Array { elements, .. } => elements,

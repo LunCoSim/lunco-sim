@@ -47,6 +47,49 @@ fn legacy_regex_scan(source: &str) -> HashSet<(String, String)> {
     out
 }
 
+/// **Contract pin (rumoca ≥0.9.20): `SimulationSession` clamps at `t_end`.**
+///
+/// `step`/`advance_to` refuse to advance the model past `SimOptions::t_end`, and
+/// they do it *silently* — the call returns `Ok`, the clock just stops. Every
+/// interactive caller therefore has to declare its real horizon up front
+/// (`experiments_runner::stepper_options_from_bounds` is the one place that
+/// does), because with the `SimOptions::default()` horizon of 1.0 a long run
+/// parks at t=1s and reports a frozen model rather than an error.
+///
+/// If this test starts failing, the clamp is gone: the horizon plumbing in
+/// `stepper_options_from_bounds` can be revisited, and the live path's
+/// `t_end = u32::MAX` sentinel in `worker::live_stepper_options` with it.
+#[test]
+fn simulation_session_clamps_advance_at_t_end() {
+    let source = lunco_modelica::models::get_model("Balloon.mo").expect("bundled Balloon.mo");
+    let (stripped, _) = lunco_modelica::ast_extract::strip_input_defaults(source);
+    let mut compiler = lunco_modelica::ModelicaCompiler::new();
+    let dae = compiler
+        .compile_str("Balloon", &stripped, "balloon.mo")
+        .expect("Balloon compiles");
+
+    let opts = rumoca_sim::SimOptions {
+        atol: 1e-3,
+        rtol: 1e-3,
+        t_start: 0.0,
+        t_end: 0.5,
+        ..Default::default()
+    };
+    let mut session =
+        rumoca_sim::SimulationSession::new(&dae.dae, opts).expect("session builds");
+
+    // Ask for 2 s of model time against a 0.5 s horizon.
+    for _ in 0..20 {
+        session.step(0.1).expect("step stays Ok even once clamped");
+    }
+
+    assert!(
+        (session.time() - 0.5).abs() < 1e-9,
+        "session should clamp at t_end=0.5, got t={}",
+        session.time()
+    );
+}
+
 /// Build the same `(type_name, instance)` set from rumoca's typed AST.
 fn rumoca_ast_scan(source: &str, file_name: &str) -> HashSet<(String, String)> {
     let ast = rumoca_phase_parse::parse_to_ast(source, file_name).expect("parses");

@@ -189,7 +189,7 @@ projections run both ways. Four representations, each edge a descriptor-supplied
   - *Works today:* a Modelica **output drives a USD transform** through the existing wire fabric —
     `SunTracker.mo`'s `yaw` → wire (`lunco:wireFrom/To`, `fromPort/toPort`) → joint motor
     (`lunco-cosim/src/joint.rs`) → the USD prim's `Transform` follows (physics-solved). So *authored*
-    USD geometry animated by *any* model observable is a solved problem — bind `SimStepper` observables
+    USD geometry animated by *any* model observable is a solved problem — bind `SimulationSession` observables
     (`variable_names()`, `DescribeModelProvider`) to USD prim ports.
   - *Blocked:* auto-*deriving* the geometry from the model. `Modelica.Mechanics.MultiBody` (which carries
     `shapeType`, `r_0`, `lengthDirection`, `color`, `frame_a.R`) is on disk but **does not flatten in
@@ -450,12 +450,12 @@ that is the residual LunCo glue.
 
 - Keep `lunco:modelicaModel` as the behavior binding, but treat it as "*the prim's behavior model
   reference*" so it can become an **FMI/FMU reference** when the AOUSD USD+FMI standard lands (our
-  `compile_str → SimStepper` is the local FMU-equivalent). Don't hard-code Modelica-only assumptions into
+  `compile_str → SimulationSession` is the local FMU-equivalent). Don't hard-code Modelica-only assumptions into
   the cosim projection; bind through a neutral "behavior model" concept.
 
 ### What explicitly STAYS (don't churn)
 
-`PortRegistry` runtime value plane · rhai as rules runtime · `SimStepper`/rumoca + the cosim master
+`PortRegistry` runtime value plane · rhai as rules runtime · `SimulationSession`/rumoca + the cosim master
 (FMI-CS exchange) · avian physics runtime (authored via `UsdPhysics`) · `lunco-canvas` widget · the
 canonical layered document + journal · `UsdOp`/`ApplyUsdOp`. These are substrate, already correct, and
 standards-neutral.
@@ -609,7 +609,7 @@ mechanisms our §9 adopt-plan depends on **already ship in it**:
 | **A7 editor layout** | **WORKS** — `schemas/ui/` `NodeGraphNodeAPI` incl. `ui:nodegraph:node:pos` (typed) | free |
 | **A5 domain tags (`apiSchemas`)** | **PARTIAL** — author/read/compose incl. **multiple-apply** WORKS; **codeless schema *registry* is an empty stub** (`schemas/registry.rs`) | tags work now as tokens + hand-written typed views; automatic fallback/allowed-token *validation* would be a light add |
 | **A4 connection legality (`ConnectableAPIBehavior`)** | **ABSENT** (no plugin/Sdr registry) | but we author legality as **rhai/descriptor rules** anyway — not an openusd gap we must fill |
-| **runtime value plane (OpenExec)** | **ABSENT** — `ConnectionGraph` gives *topology only*, no computed-value engine | **we don't need it**: PortRegistry + cosim master + `SimStepper` *are* our execution/value plane. Use `ConnectionGraph` for topology, keep our runtime. |
+| **runtime value plane (OpenExec)** | **ABSENT** — `ConnectionGraph` gives *topology only*, no computed-value engine | **we don't need it**: PortRegistry + cosim master + `SimulationSession` *are* our execution/value plane. Use `ConnectionGraph` for topology, keep our runtime. |
 
 **The pattern in that table is the whole answer:** everything USD-*structural* we want is already in the
 crate; everything *absent* (OpenExec, a schema registry, `ConnectableAPIBehavior`) is either something we
@@ -629,7 +629,7 @@ already exist in `openusd`:
 - collapse the four Modelica-locked canvas free-functions → one `DomainDescriptor`;
 - a pile of `lunco:` conventions → USD-standard spellings that the crate already understands.
 
-What **stays** (and should — it's the engine, not plumbing): the cosim master, `SimStepper`/rumoca, avian
+What **stays** (and should — it's the engine, not plumbing): the cosim master, `SimulationSession`/rumoca, avian
 physics, rendering/terrain, rhai + hooks + synthesizers, celestial/ephemeris, the ECS projection. USD does
 not and should not shrink these.
 

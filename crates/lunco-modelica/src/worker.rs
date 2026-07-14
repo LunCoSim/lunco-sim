@@ -1,7 +1,7 @@
 //! Off-thread Modelica simulation worker + Bevy bridge.
 //!
 //! `modelica_worker` runs on its own OS thread (it owns a
-//! `!Send` `SimStepper`, so it can't live on the Bevy main loop). The
+//! `!Send` `SimulationSession`, so it can't live on the Bevy main loop). The
 //! Bevy systems `spawn_modelica_requests` and
 //! `handle_modelica_responses` exchange `ModelicaCommand` /
 //! `ModelicaResult` messages with it via crossbeam channels.
@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
-use rumoca_sim::SimStepper;
+use rumoca_sim::SimulationSession;
 use serde::{Serialize, Deserialize};
 
 use lunco_assets::modelica_dir;
@@ -70,11 +70,11 @@ fn live_stepper_options() -> rumoca_sim::SimOptions {
     opts
 }
 
-/// Build a `SimStepper` for the LIVE path from a freshly-compiled model.
+/// Build a `SimulationSession` for the LIVE path from a freshly-compiled model.
 ///
 /// **Single source of truth** for live stepper construction across the worker —
 /// every site routes through here instead of copy-pasting the `SimOptions` setup
-/// + `SimStepper::new` call (there were ~9 such copies).
+/// + `SimulationSession::new` call (there were ~9 such copies).
 ///
 /// Solver policy comes from [`live_stepper_options`] and is intentionally
 /// **distinct** from the batch/Fast-Run policy (A4). The model's
@@ -82,8 +82,8 @@ fn live_stepper_options() -> rumoca_sim::SimOptions {
 /// offline-accuracy knob and must not reach into the realtime coupling loop.
 fn build_stepper(
     comp_res: &rumoca_compile::compile::DaeCompilationResult,
-) -> Result<SimStepper, rumoca_sim::SimulationDiagnosticError> {
-    SimStepper::new(&comp_res.dae, live_stepper_options())
+) -> Result<SimulationSession, rumoca_sim::SimulationDiagnosticError> {
+    SimulationSession::new(&comp_res.dae, live_stepper_options())
 }
 
 /// Channels for communicating with the background simulation worker.
@@ -107,7 +107,7 @@ pub struct ModelicaChannels {
 /// Commands sent to the background simulation worker.
 ///
 /// Each command targets a specific Bevy `Entity` and carries a `session_id` for
-/// fencing stale results. The worker owns all `SimStepper` instances, keyed by entity.
+/// fencing stale results. The worker owns all `SimulationSession` instances, keyed by entity.
 ///
 /// Derives `Serialize`/`Deserialize` so the wasm Web Worker transport can ship
 /// commands over `postMessage`. The `Compile.stream` field carries an
@@ -126,7 +126,7 @@ pub enum ModelicaCommand {
         inputs: Vec<(String, f64)>,
         dt: f64,
     },
-    /// Compile Modelica source code into a DAE and create a new SimStepper.
+    /// Compile Modelica source code into a DAE and create a new SimulationSession.
     ///
     /// The compiled DAE is cached per entity for instant Reset and fast stepper rebuilds.
     Compile {
@@ -342,7 +342,7 @@ impl ModelicaResult {
 
 /// Cached compilation result per entity.
 ///
-/// Stores the DAE and source hash so we can instantly rebuild a SimStepper
+/// Stores the DAE and source hash so we can instantly rebuild a SimulationSession
 /// after Reset without recompiling, and detect when the Step command's
 /// model_path points to stale source.
 struct CachedModel {
@@ -361,9 +361,11 @@ struct CachedModel {
 /// plots NaN. Filtering out parameters / inputs happens downstream in
 /// [`handle_modelica_responses`]; we report everything here so the UI has
 /// the full picture and decides what goes into `model.variables`.
-pub(crate) fn collect_stepper_observables(stepper: &SimStepper) -> Vec<(String, f64)> {
-    stepper
-        .state()
+pub(crate) fn collect_stepper_observables(stepper: &SimulationSession) -> Vec<(String, f64)> {
+    let Ok(state) = stepper.state() else {
+        return Vec::new();
+    };
+    state
         .values
         .into_iter()
         .filter(|(name, val)| val.is_finite() && name != "time")
@@ -426,7 +428,7 @@ fn micro_steps_for(dt: f64) -> u32 {
 /// LIVE_MICRO_DT`; the caller reads `stepper.time()` for the truth and the Bevy
 /// side reconciles any residual against the world clock next tick.
 fn integrate_macro_step(
-    stepper: &mut SimStepper,
+    stepper: &mut SimulationSession,
     dt: f64,
 ) -> Result<(), rumoca_sim::SimulationDiagnosticError> {
     for _ in 0..micro_steps_for(dt) {
@@ -506,7 +508,7 @@ fn reset_ok(
 /// rare, but silent failure here would mean a user-set default never
 /// reaches the simulator. Logged once per init, not per-call.
 fn apply_input_defaults_validated(
-    stepper: &mut SimStepper,
+    stepper: &mut SimulationSession,
     input_defaults: &HashMap<String, f64>,
     ctx: &str,
 ) {
@@ -538,7 +540,7 @@ fn apply_input_defaults_validated(
     }
 }
 
-/// The background worker that owns the !Send SimSteppers and cached DAEs.
+/// The background worker that owns the !Send SimulationSessions and cached DAEs.
 ///
 /// **Native only.** It is spawned on a real `std::thread` (see
 /// `ModelicaPlugin::build`) and reads/writes the model file on disk. The browser
@@ -549,7 +551,7 @@ fn apply_input_defaults_validated(
 /// than shipping calls that always `Err` in a browser.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>) {
-    let mut steppers: HashMap<Entity, (u64, String, SimStepper)> = HashMap::default();
+    let mut steppers: HashMap<Entity, (u64, String, SimulationSession)> = HashMap::default();
     let mut current_sessions: HashMap<Entity, u64> = HashMap::default();
     // DAE cache per entity — enables instant Reset and fast Step auto-init
     let mut cached_models: HashMap<Entity, CachedModel> = HashMap::default();
@@ -1149,7 +1151,7 @@ fn is_squashable(last: &ModelicaCommand, next: &ModelicaCommand) -> bool {
 #[cfg(target_arch = "wasm32")]
 #[derive(Default)]
 pub struct InlineWorkerInner {
-    steppers: HashMap<Entity, (u64, String, SimStepper)>,
+    steppers: HashMap<Entity, (u64, String, SimulationSession)>,
     current_sessions: HashMap<Entity, u64>,
     cached_models: HashMap<Entity, CachedModel>,
     compiler: Option<ModelicaCompiler>,
@@ -1167,7 +1169,7 @@ impl InlineWorkerInner {
 /// Thread-safe wrapper for wasm32 inline worker state.
 ///
 /// SAFETY: wasm32-unknown-unknown has no threads, so Send/Sync are vacuously true.
-/// SimStepper internally uses Rc<RefCell<>> which is !Send, but since no threads
+/// SimulationSession internally uses Rc<RefCell<>> which is !Send, but since no threads
 /// exist on this target, we can safely implement Send/Sync.
 #[cfg(target_arch = "wasm32")]
 #[derive(Resource, Default)]
@@ -1231,7 +1233,7 @@ pub(crate) fn inline_worker_process(
 /// concrete `Sender` keeps this fn agnostic to whether results go to a
 /// crossbeam channel, a `Vec`, or a `postMessage` queue.
 ///
-/// `state` carries the per-entity `SimStepper` map, DAE cache, and the lazy
+/// `state` carries the per-entity `SimulationSession` map, DAE cache, and the lazy
 /// `ModelicaCompiler`. The wasm worker bin owns one of these for the lifetime
 /// of the page and reuses it across postMessage dispatches.
 #[cfg(target_arch = "wasm32")]
@@ -1622,7 +1624,7 @@ pub struct ModelicaModel {
 }
 
 /// Tears the model down on the worker when its `ModelicaModel` component goes away, so a
-/// despawned entity does not leave a `SimStepper` alive in the worker thread.
+/// despawned entity does not leave a `SimulationSession` alive in the worker thread.
 /// Registered in `lib.rs` (`.add_observer(worker::on_remove_modelica)`).
 pub fn on_remove_modelica(trigger: On<Remove, ModelicaModel>, channels: Res<ModelicaChannels>) {
     let entity = trigger.entity;
@@ -1650,7 +1652,7 @@ pub fn on_remove_modelica(trigger: On<Remove, ModelicaModel>, channels: Res<Mode
 /// speed, and at `rate = 10` it ran 10× too slow).
 ///
 /// While a step is in flight we do not dispatch another (one macro step per
-/// model at a time — the worker owns one `SimStepper` per entity). The deficit
+/// model at a time — the worker owns one `SimulationSession` per entity). The deficit
 /// is NOT lost: it keeps growing and the next dispatched step carries it.
 pub(crate) fn plan_macro_step(target_time: f64, current_time: f64, in_flight: bool) -> Option<f64> {
     if in_flight {
@@ -2138,7 +2140,7 @@ mod macro_step_tests {
     /// Stand-in for the worker: integrate what the worker WOULD integrate for a
     /// requested `dt` — an integer number of fixed micro-steps — and return the
     /// model's new own-clock value. This is the same arithmetic
-    /// [`integrate_macro_step`] performs, without a `SimStepper`.
+    /// [`integrate_macro_step`] performs, without a `SimulationSession`.
     fn worker_integrate(current_time: f64, dt: f64) -> f64 {
         current_time + micro_steps_for(dt) as f64 * LIVE_MICRO_DT
     }

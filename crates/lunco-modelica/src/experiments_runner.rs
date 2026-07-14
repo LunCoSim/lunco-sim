@@ -22,7 +22,7 @@
 //! each sweep point rebinds the target variables' `start` to literals via
 //! [`apply_value_bindings_to_dae`]. This relies on rumoca's
 //! `preserve_overridable_param_starts` fold (commit 6a849ac) keeping computed
-//! derived params symbolic so they recompute at `SimStepper::new` time. There
+//! derived params symbolic so they recompute at `SimulationSession::new` time. There
 //! is **no** string-injection / source-rewriting fallback: an override that
 //! can't be applied at the DAE level (non-top-level param/input, or a
 //! non-scalar value) is a hard error, not a silent recompile.
@@ -631,7 +631,7 @@ fn dae_cache_key(src: &ModelSource) -> u64 {
 /// A target is looked up first among DAE `parameters`, then `inputs`:
 /// - **Parameters** rely on rumoca's `preserve_overridable_param_starts` fold
 ///   keeping computed dependents symbolic, so overriding a base (e.g. `Isp`)
-///   recomputes its dependents (e.g. `massRatio`) at `SimStepper::new` via
+///   recomputes its dependents (e.g. `massRatio`) at `SimulationSession::new` via
 ///   `build_params`.
 /// - **Inputs**: the build seeds each input's initial value from its `start`
 ///   once (the batch solver never calls `set_input`), so rebinding `start`
@@ -663,7 +663,7 @@ pub fn apply_value_bindings_to_dae(
             ParamValue::String(s) => DaeLiteral::String(s.clone()),
             _ => return Err(format!("binding for '{}' is not a scalar literal", path.0)),
         };
-        var.start = Some(DaeExpression::Literal { value: lit, span: DaeSpan::default() });
+        var.start = Some(DaeExpression::Literal { value: lit, span: DaeSpan::DUMMY });
     }
     Ok(())
 }
@@ -874,7 +874,7 @@ pub fn drive_run(
             run_batch_sim(dae, &batch_opts, started, sink);
         }
         lunco_experiments::RuntimeMode::Interactive => {
-            let mut stepper = match rumoca_sim::SimStepper::new(dae, stepper_opts) {
+            let mut stepper = match rumoca_sim::SimulationSession::new(dae, stepper_opts) {
                 Ok(s) => s,
                 Err(e) => {
                     sink.emit(RunUpdate::Failed {
@@ -1148,16 +1148,23 @@ fn solver_choice_to_rumoca(
 /// `docs/architecture/28-modelica-realtime-physics.md` §2a.
 pub const DEFAULT_TOLERANCE: f64 = 1e-6;
 
+/// The ONE place `SimOptions` is built for an offline/batch run — the app, the
+/// wasm worker, `modelica_run` and `modelica_tester` all come through here
+/// rather than hand-rolling options, so a policy change lands everywhere at once.
+///
+/// Carrying `bounds.t_start/t_end` through is load-bearing on BOTH runtimes, and
+/// silently so:
+/// * the non-interactive batch solve (`simulate_with_diagnostics`) integrates
+///   `opts.t_start..opts.t_end`. Left at the `SimOptions::default()` `0.0..1.0`,
+///   a run stops at t=1 with a fine output grid that pins the solver onto
+///   closely spaced stop-times and collapses ("step size too small") in the
+///   first second.
+/// * `SimulationSession` (rumoca ≥0.9.20) **clamps every `step`/`advance_to` at
+///   `opts.t_end`**. With the default horizon an interactive run parks at t=1s
+///   and quietly reports a frozen model instead of erroring — the failure mode
+///   that made a 60 s rocket burn drain exactly 1 s of propellant.
 pub fn stepper_options_from_bounds(bounds: &RunBounds) -> rumoca_sim::SimOptions {
     let mut opts = rumoca_sim::SimOptions::default();
-    // The interactive `run_stepping_loop` drives the horizon from `bounds`
-    // directly, so it never read `opts.t_start/t_end`. The non-interactive
-    // batch solve (`simulate_with_diagnostics`) reads them from `opts` — if we
-    // leave them at the `SimOptions::default()` (`0.0..1.0`), a batch run stops
-    // at t=1 with a fine default output grid that pins the solver onto closely
-    // spaced stop-times and collapses ("step size too small") within the first
-    // second. Carry the real window through so both runtimes integrate the same
-    // span.
     opts.t_start = bounds.t_start;
     opts.t_end = bounds.t_end;
     opts.atol = bounds.tolerance.unwrap_or(DEFAULT_TOLERANCE);
@@ -1176,7 +1183,38 @@ pub fn stepper_options_from_bounds(bounds: &RunBounds) -> rumoca_sim::SimOptions
     opts
 }
 
-/// Drive a built [`SimStepper`](rumoca_sim::SimStepper) to `bounds.t_end`,
+/// Emit a `Failed` update carrying everything sampled so far as a partial
+/// result. The three ways a run dies mid-loop (wall-clock budget, a solver
+/// step error, an unreadable session state) all report the same shape.
+fn emit_partial_failure(
+    sink: &mut impl RunSink,
+    names: &[String],
+    all_times: &[f64],
+    all_series: &[Vec<f64>],
+    started: web_time::Instant,
+    error: String,
+    notes: String,
+) {
+    let series: BTreeMap<String, Vec<f64>> = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| (name.clone(), all_series[i].clone()))
+        .collect();
+    sink.emit(RunUpdate::Failed {
+        error,
+        partial: Some(RunResult {
+            times: all_times.to_vec(),
+            series,
+            meta: RunMeta {
+                wall_time_ms: started.elapsed().as_millis() as u64,
+                sample_count: all_times.len(),
+                notes: Some(notes),
+            },
+        }),
+    });
+}
+
+/// Drive a built [`SimulationSession`](rumoca_sim::SimulationSession) to `bounds.t_end`,
 /// accumulating output samples at the spacing
 /// [`sim_target::resolve_step_dt`](crate::sim_target::resolve_step_dt)
 /// derives, streaming throttled `Progress` deltas, and emitting the terminal
@@ -1186,7 +1224,7 @@ pub fn stepper_options_from_bounds(bounds: &RunBounds) -> rumoca_sim::SimOptions
 /// wasm worker each implement only [`RunSink`], never the loop. `started` is
 /// the run's wall-clock origin (used for `RunMeta::wall_time_ms`).
 pub fn run_stepping_loop(
-    stepper: &mut rumoca_sim::SimStepper,
+    stepper: &mut rumoca_sim::SimulationSession,
     bounds: &RunBounds,
     started: web_time::Instant,
     sink: &mut impl RunSink,
@@ -1203,10 +1241,17 @@ pub fn run_stepping_loop(
     );
 
     // Variable names from the initial state.
-    let names: Vec<String> = stepper.state().values.keys()
-        .filter(|n| *n != "time")
-        .cloned()
-        .collect();
+    let names: Vec<String> = match stepper.state() {
+        Ok(state) => state.values.keys().filter(|n| *n != "time").cloned().collect(),
+        Err(e) => {
+            bevy::log::warn!("[sim] initial state read failed: {e:?}");
+            sink.emit(RunUpdate::Failed {
+                error: format!("simulate failed before the first sample: {e:?}"),
+                partial: None,
+            });
+            return;
+        }
+    };
 
     let mut all_times: Vec<f64> = Vec::new();
     let mut all_series: Vec<Vec<f64>> = vec![Vec::new(); names.len()];
@@ -1245,18 +1290,19 @@ pub fn run_stepping_loop(
         // rather than letting a too-heavy run monopolise its worker.
         if let Some(budget) = sink.wall_budget() {
             if started.elapsed() > budget {
-                let mut series = BTreeMap::new();
-                for (i, name) in names.iter().enumerate() {
-                    series.insert(name.clone(), all_series[i].clone());
-                }
                 bevy::log::warn!(
                     "[sim] wall-time budget {:.0}s exceeded at t={:.3}/{} — aborting run",
                     budget.as_secs_f64(),
                     stepper.time(),
                     t_end
                 );
-                sink.emit(RunUpdate::Failed {
-                    error: format!(
+                emit_partial_failure(
+                    sink,
+                    &names,
+                    &all_times,
+                    &all_series,
+                    started,
+                    format!(
                         "run exceeded the {:.0}s wall-time budget at sim t={:.1}/{:.1} \
                          — model too heavy for this environment; try a shorter StopTime \
                          or a looser Tolerance",
@@ -1264,39 +1310,23 @@ pub fn run_stepping_loop(
                         stepper.time(),
                         t_end
                     ),
-                    partial: Some(RunResult {
-                        times: all_times.clone(),
-                        series,
-                        meta: RunMeta {
-                            wall_time_ms: started.elapsed().as_millis() as u64,
-                            sample_count: all_times.len(),
-                            notes: Some("aborted: wall-time budget exceeded".to_string()),
-                        },
-                    }),
-                });
+                    "aborted: wall-time budget exceeded".to_string(),
+                );
                 return;
             }
         }
 
         if let Err(e) = stepper.step(internal_dt) {
             bevy::log::warn!("[sim] simulate err: {e:?}");
-            // Pack whatever we have so far into a partial result.
-            let mut series = BTreeMap::new();
-            for (i, name) in names.iter().enumerate() {
-                series.insert(name.clone(), all_series[i].clone());
-            }
-            sink.emit(RunUpdate::Failed {
-                error: format!("simulate failed: {e:?}"),
-                partial: Some(RunResult {
-                    times: all_times.clone(),
-                    series,
-                    meta: RunMeta {
-                        wall_time_ms: started.elapsed().as_millis() as u64,
-                        sample_count: all_times.len(),
-                        notes: Some(format!("failed during step: {e:?}")),
-                    },
-                }),
-            });
+            emit_partial_failure(
+                sink,
+                &names,
+                &all_times,
+                &all_series,
+                started,
+                format!("simulate failed: {e:?}"),
+                format!("failed during step: {e:?}"),
+            );
             return;
         }
 
@@ -1310,8 +1340,23 @@ pub fn run_stepping_loop(
         if !(t + 0.5 * internal_dt >= next_output || at_end) {
             continue;
         }
+        let current_values = match stepper.state() {
+            Ok(state) => state.values,
+            Err(e) => {
+                bevy::log::warn!("[sim] state read err: {e:?}");
+                emit_partial_failure(
+                    sink,
+                    &names,
+                    &all_times,
+                    &all_series,
+                    started,
+                    format!("simulate failed: {e:?}"),
+                    format!("failed reading state at t={t}: {e:?}"),
+                );
+                return;
+            }
+        };
         all_times.push(t);
-        let current_values = stepper.state().values;
         for (i, name) in names.iter().enumerate() {
             // CQ-522: a missing variable is an honest gap, not 0.0 — match
             // the batch path (`f64::NAN`) so plots don't show a fabricated
@@ -1742,7 +1787,7 @@ mod tests {
         };
         let opts = stepper_options_from_bounds(&bounds);
         let mut stepper =
-            rumoca_sim::SimStepper::new(&compiled.dae, opts).expect("build stepper");
+            rumoca_sim::SimulationSession::new(&compiled.dae, opts).expect("build stepper");
         let step_dt =
             crate::sim_target::resolve_step_dt(0.0, bounds.t_end, bounds.dt, bounds.n_intervals);
         println!(

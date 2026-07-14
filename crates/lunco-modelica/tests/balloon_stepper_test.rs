@@ -1,7 +1,7 @@
 //! End-to-end test that exercises rumoca directly with balloon.mo.
 //!
 //! This bypasses the Bevy ECS entirely and asks two questions:
-//! 1. After compiling balloon.mo and creating a `SimStepper`, what does
+//! 1. After compiling balloon.mo and creating a `SimulationSession`, what does
 //!    `stepper.variable_names()` return?
 //! 2. Can `stepper.get("netForce")` retrieve the algebraic value by name?
 //!
@@ -11,7 +11,7 @@
 //! of the stepper (something else in lunco-modelica isn't calling `get`).
 
 use lunco_modelica::ModelicaCompiler;
-use rumoca_sim::{SimOptions, SimStepper};
+use rumoca_sim::{SimOptions, SimulationSession};
 
 fn balloon_mo() -> &'static str {
     lunco_modelica::models::get_model("Balloon.mo").expect("bundled Balloon.mo")
@@ -30,7 +30,7 @@ fn balloon_stepper_variable_names_contain_states_only() {
     let mut opts = SimOptions::default();
     opts.atol = 1e-3;
     opts.rtol = 1e-3;
-    let stepper = SimStepper::new(&dae_result.dae, opts).expect("stepper build");
+    let stepper = SimulationSession::new(&dae_result.dae, opts).expect("stepper build");
 
     // rumoca 0.9.1: variable_names() exposes states + algebraics + outputs
     // (visible_expressions_for_dae), not solver-state only.
@@ -57,7 +57,7 @@ fn balloon_stepper_get_recovers_algebraics() {
     let mut opts = SimOptions::default();
     opts.atol = 1e-3;
     opts.rtol = 1e-3;
-    let stepper = SimStepper::new(&dae_result.dae, opts).expect("stepper build");
+    let stepper = SimulationSession::new(&dae_result.dae, opts).expect("stepper build");
 
     // Names we expect to be recoverable by stepper.get() (either by being in
     // the solver index or by rumoca exposing them somehow).
@@ -82,7 +82,7 @@ fn balloon_stepper_get_recovers_algebraics() {
     // by not eliminating user-facing algebraics, or by exposing a separate
     // "residual evaluation" API.
     assert!(
-        stepper.get("netForce").is_some(),
+        stepper.get("netForce").ok().flatten().is_some(),
         "rumoca stepper should allow get(\"netForce\"), got None — \
          algebraic substitution has eliminated it from the solver index"
     );
@@ -101,14 +101,14 @@ fn balloon_stepper_initial_netforce_is_positive() {
     let mut opts = SimOptions::default();
     opts.atol = 1e-3;
     opts.rtol = 1e-3;
-    let mut stepper = SimStepper::new(&dae_result.dae, opts).expect("stepper build");
+    let mut stepper = SimulationSession::new(&dae_result.dae, opts).expect("stepper build");
 
     // Step once so algebraics get evaluated if they're only computed on step().
     let _ = stepper.step(0.016);
 
-    let net_force = stepper.get("netForce");
+    let net_force = stepper.get("netForce").ok().flatten();
     eprintln!("netForce after first step = {:?}", net_force);
-    let volume = stepper.get("volume");
+    let volume = stepper.get("volume").ok().flatten();
     eprintln!("volume after first step = {:?}", volume);
 
     // buoyancy = rho * V * g ≈ 1.225 * 4.0 * 9.81 ≈ 48 N

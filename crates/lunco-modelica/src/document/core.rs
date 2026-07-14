@@ -25,8 +25,17 @@ pub fn parse_diag_from_error(e: &rumoca_phase_parse::ParseError, source: &str) -
     use rumoca_phase_parse::ParseError;
     match e {
         ParseError::SyntaxError { message, span, .. } => {
-            let (line, column) = byte_offset_to_line_col(source, span.start.0);
-            Diagnostic::error(message.clone(), Some(line), Some(column))
+            // A syntax error carries a span only when the parser could pin one
+            // (`Option<Span>` since rumoca 0.9.20) — an unlocated error stays
+            // unlocated rather than being pinned to a fabricated line 1.
+            let (line, column) = match span {
+                Some(span) => {
+                    let (line, column) = byte_offset_to_line_col(source, span.start.0);
+                    (Some(line), Some(column))
+                }
+                None => (None, None),
+            };
+            Diagnostic::error(message.clone(), line, column)
         }
         // No-span variants — render a human description instead of the
         // raw `{:?}` debug dump (part of the rumoca-diagnostics

@@ -43,32 +43,37 @@ fn main() {
     #[cfg(not(target_arch = "wasm32"))]
     install_panic_hook();
 
-    // ── Native-only: cap rayon's global pool ────────────────────────
+    // ── Native-only: cap rumoca's compiler parallelism ──────────────
     //
     // History: when projection + ast_refresh still ran on rayon, the
     // unconfigured pool grabbed `num_cpus - 1` threads and starved the
     // renderer's pipelined extract — every Add/Move edit froze the UI
     // for 1.5–2.5 s. After the SyntaxCache refactor those run on Bevy's
-    // `AsyncComputeTaskPool`; the only remaining rayon caller is rumoca's
-    // `parse_files_parallel` (short bursts at MSL preload / file load).
-    // Policy: leave 2 cores for Bevy (renderer + main), give the rest to
-    // rumoca. On ≤4-core machines still cap at 2 — the original
-    // starvation problem dominates there. (No rayon on wasm.)
+    // `AsyncComputeTaskPool`; the only remaining global-pool caller is
+    // rumoca (`parse_files_parallel` / `Session`, short bursts at MSL
+    // preload / file load). Our indexer runs on its own bounded pool and
+    // is unaffected either way.
+    //
+    // We USED to win the pool by racing rumoca to `build_global()`. That
+    // was fragile (lose the race and the cap was silently lost) and it
+    // handed the parse threads rayon's default 2 MB stacks — rumoca sizes
+    // them at 16 MB for deep MSL class hierarchies. Since 0.9.20 rumoca
+    // takes the thread count directly and builds the pool itself, so we
+    // just state the policy: leave 2 cores for Bevy (renderer + main),
+    // give the rest to rumoca. On ≤4-core machines cap at 2 — the original
+    // starvation problem dominates there. (rumoca's own default reserves 4
+    // cores but hands ALL cores to a ≤4-core box, which is the case we most
+    // need to protect.) No rayon on wasm.
     #[cfg(not(target_arch = "wasm32"))]
     {
         let n_cpus = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4);
-        let rayon_threads = if n_cpus <= 4 { 2 } else { n_cpus.saturating_sub(2) };
-        match rayon::ThreadPoolBuilder::new()
-            .num_threads(rayon_threads)
-            .build_global()
-        {
-            Ok(()) => eprintln!(
-                "[lunica] rayon global pool capped at {rayon_threads} threads (of {n_cpus} CPUs)"
-            ),
-            Err(e) => eprintln!("[lunica] WARN: rayon already initialised, our cap LOST: {e}"),
-        }
+        let compile_threads = if n_cpus <= 4 { 2 } else { n_cpus.saturating_sub(2) };
+        rumoca_compile::parallelism::set_compiler_parallelism(compile_threads);
+        eprintln!(
+            "[lunica] rumoca compiler parallelism set to {compile_threads} threads (of {n_cpus} CPUs)"
+        );
     }
 
     // ── wasm-only: route panics to the browser console ──────────────

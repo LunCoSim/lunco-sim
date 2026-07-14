@@ -133,14 +133,17 @@ arc-swap = "1"
 lyon_tessellation = { version = "1", optional = true }
 lyon_path = { version = "1", optional = true }
 lyon_geom = { version = "1", optional = true }
-# Direct rayon dependency so `lunica` can configure the
-# global rayon pool BEFORE rumoca's `parse_files_parallel` initialises
-# it with `num_cpus - 1` threads. With rumoca's default, every
-# parse-on-Add saturates all-but-one core for ~1.5 s and starves
-# bevy_render — the `Last` schedule blocks waiting for the previous
-# frame's render. Capping rayon at 2 threads keeps cores free for
-# rendering without losing meaningful parse speed (rumoca's parallel
-# benefit is for batch parses, not the per-Add single-file path).
+# Direct rayon dependency for the indexer's own DEDICATED, bounded parse
+# pool (`indexer::parse_native_msl_bundle`), which deliberately does not
+# touch the global pool.
+#
+# It is NO LONGER used to race rumoca for the global pool: an unconfigured
+# pool grabbing `num_cpus - 1` threads saturates all-but-one core on every
+# parse-on-Add and starves bevy_render (the `Last` schedule blocks waiting
+# on the previous frame). `lunica` now states that budget through
+# `rumoca_compile::parallelism::set_compiler_parallelism()` instead, so
+# rumoca builds its pool with our thread count — and its own 16 MB stacks,
+# which deep MSL class hierarchies need.
 rayon = { workspace = true }
 # Wasm-safe replacement for `std::time::Instant`. On native it's an alias
 # for `std::time::Instant`; on wasm32 it's backed by `performance.now()`.
@@ -156,17 +159,18 @@ bincode = { workspace = true }
 # actually present in MSL Resources/Images are enabled to keep the
 # compile surface small.
 image = { workspace = true }
-# LunCoSim/rumoca fork, `wasm-asset-loader` branch (off `main`).
-# `main` already carries:
-#   - the `instant::Instant` wasm32 fix that `web-fix` was carrying
-#     (std::time::Instant panics on wasm32-unknown-unknown)
-#   - `SimStepper` reconstruction of algebraic/output variables via the
-#     retained `EliminationResult` (state()/get() now return every
-#     variable, not just solver-vector entries).
-# `wasm-asset-loader` adds:
-#   - `Session::load_source_root_in_memory(...)` so the wasm runtime can
-#     hand pre-fetched MSL bytes to the compile session without any fs.
+# LunCoSim/rumoca, `main` (see the workspace Cargo.toml for the pin). It
+# carries the wasm32 `Instant` fix (std::time::Instant panics on
+# wasm32-unknown-unknown), reconstruction of algebraic/output variables via the
+# retained `EliminationResult` (so `state()`/`get()` return every variable, not
+# just solver-vector entries), and `Session::load_source_root_in_memory(...)`,
+# which lets the wasm runtime hand pre-fetched MSL bytes to the compile session
+# with no filesystem.
 #
+# The interactive stepper is `SimulationSession` (rumoca ≥0.9.20; it replaced
+# `SimStepper`). NOTE: it clamps every advance at `SimOptions::t_end`, so build
+# it through `experiments_runner::stepper_options_from_bounds`, never from
+# `SimOptions::default()` — see the docs there.
 rumoca-sim = { workspace = true }
 lunco-experiments = { path = "../lunco-experiments" }
 rumoca-compile = { workspace = true }

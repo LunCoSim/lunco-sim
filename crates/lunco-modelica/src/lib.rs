@@ -2,7 +2,7 @@
 //!
 //! This crate provides a bridge between Bevy's ECS and Modelica simulation models.
 //! It features:
-//! - A background worker thread that owns non-Send `SimStepper` instances
+//! - A background worker thread that owns non-Send `SimulationSession` instances
 //! - Command/response architecture with session ID fencing to prevent stale data
 //! - Command squashing to handle rapid parameter changes without back-pressure
 //! - DAE caching per entity for instant Reset and fast stepper rebuilds
@@ -20,7 +20,7 @@
 //!
 //! After a successful compilation, the `CompilationResult` (including the DAE) is
 //! cached per entity. This enables:
-//! - **Instant Reset**: Rebuilds the SimStepper from the cached DAE without recompilation
+//! - **Instant Reset**: Rebuilds the SimulationSession from the cached DAE without recompilation
 //! - **Fast Step auto-init**: If the stepper was lost, rebuilds from cached DAE instead of
 //!   recompiling from the file on disk
 //! - **Parameter updates**: After UpdateParameters, the modified source is written to the
@@ -907,7 +907,7 @@ fn diagnostics_from_strict_report(
 /// the Diagnostics panel — the runtime counterpart of
 /// [`diagnostics_from_strict_report`].
 ///
-/// rumoca 0.9.1's [`rumoca_sim::SimulationDiagnosticError`] is structured: it
+/// [`rumoca_sim::SimulationDiagnosticError`] is structured: it
 /// carries a stable diagnostic code and (for the `SolveLowering` variant) a
 /// source span via `source_span()`. We surface the code-prefixed `Display`
 /// message and, when a span is present and lands inside the user's model
@@ -1664,7 +1664,7 @@ pub struct ModelicaOutput { pub variable_name: String, pub value: f64 }
 #[cfg(test)]
 mod observables_smoke {
     use super::*;
-    use rumoca_sim::{SimOptions, SimStepper};
+    use rumoca_sim::{SimOptions, SimulationSession};
 
     /// End-to-end smoke test for the observables pipeline: compile the
     /// bundled RocketEngine, run one step at full throttle, and assert
@@ -1710,7 +1710,7 @@ mod observables_smoke {
         let mut c = ModelicaCompiler::new();
         let r = c.compile_str("RocketEngine", &src, "RocketEngine.mo")
             .expect("compile ok");
-        let mut stepper = SimStepper::new(&r.dae, SimOptions::default())
+        let mut stepper = SimulationSession::new(&r.dae, SimOptions::default())
             .expect("stepper ok");
         stepper.set_input("throttle", 1.0).expect("throttle is an input");
         stepper.step(0.01).expect("step ok");

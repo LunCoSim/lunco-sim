@@ -161,9 +161,9 @@ Bevy renderer.
 
 The `output`-keyword convention works around a limitation in our
 [rumoca fork](https://github.com/LunCoSim/rumoca). Rumoca's
-`SimStepper::variable_names()` returns only the post-reduction solver state
+`SimulationSession::variable_names()` returns only the post-reduction solver state
 (`solver_names` truncated to `n_total = dae.f_x.len()`), and
-`SimStepper::get(name)` only knows about indices present in the solver — so
+`SimulationSession::get(name)` only knows about indices present in the solver — so
 after aggressive substitution, algebraic values are unreachable even by name.
 
 A cleaner upstream fix would be one of:
@@ -172,7 +172,7 @@ A cleaner upstream fix would be one of:
   `prepare_dae`. Keep them in `dae.f_x` as trivial equations. (Already
   effectively our current behavior — but we're relying on it rather than it
   being documented.)
-- **Option B:** Add a `SimStepper::evaluate_algebraic(name) -> Option<f64>`
+- **Option B:** Add a `SimulationSession::evaluate_algebraic(name) -> Option<f64>`
   API that re-evaluates an eliminated algebraic expression using the current
   state + inputs + parameters. Algebraic expressions still live in
   `dae.algebraics`; we'd just need an expression evaluator over the current
