@@ -33,6 +33,12 @@ one directly when doing that kind of task by hand.
 | [**inspect-simulation**](inspect-simulation/SKILL.md) | Observe a running sim — read ports/variables, screenshot the viewport |
 | [**test-via-api**](test-via-api/SKILL.md) | Verify a change end-to-end via the API instead of asking the user to click |
 
+## Extend the engine
+
+| Skill | Use it when you want to… |
+|---|---|
+| [**usd-projection**](usd-projection/SKILL.md) | Work ON the USD layer — teach it a new prim type or attribute, or fix an edit that saved but didn't show up |
+
 ## Build workbench UI
 
 | Skill | Use it when you want to… |
@@ -46,6 +52,9 @@ one directly when doing that kind of task by hand.
 - **curl-first** over the `mcp__lunco__*` tools; drive the app over `POST /api/commands`.
 - **Discover, don't hardcode** the command set — `DiscoverSchema` enumerates it live.
 - **Policy → rhai, identity → USD, math → Modelica** — keep logic out of the Rust core.
+- **USD is the source of truth; the ECS is a projection of it.** An edit that
+  doesn't lower to a `UsdOp` escapes save, journal, undo *and* replication —
+  silently. See [**usd-projection**](usd-projection/SKILL.md).
 - **Use the API `Exit`**, never `pkill`, to stop a running app.
 
 New to the codebase? Start with [**repo-map**](repo-map/SKILL.md), then the
