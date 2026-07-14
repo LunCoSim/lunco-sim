@@ -816,14 +816,11 @@ fn instantiate_usd_prim_read<R: UsdRead>(
             build_usd_mesh(reader, &sdf_path).map(|m| meshes.add(m))
         } else {
             match prim_type.as_deref().and_then(|ty| read_shape_dims(reader, &sdf_path, ty)) {
-                Some(ShapeDims::Cube { size, legacy_extents }) => match legacy_extents {
-                    // Legacy form — width/height/depth are *full* extents
-                    // and bake into the mesh directly.
-                    Some([w, h, d]) => Some(meshes.add(Cuboid::new(w as f32, h as f32, d as f32))),
-                    // Spec form: unit-ish Cube; xformOp:scale handles
-                    // non-uniform dimensions (set on Transform below).
-                    None => Some(meshes.add(Cuboid::new(size as f32, size as f32, size as f32))),
-                },
+                // `xformOp:scale` handles non-uniform dimensions (applied to the
+                // Transform below) — that is how UsdGeomCube spells a box.
+                Some(ShapeDims::Cube { size }) => {
+                    Some(meshes.add(Cuboid::new(size as f32, size as f32, size as f32)))
+                }
                 Some(ShapeDims::Sphere { radius }) => {
                     // Lat-long (UV) sphere, NOT an icosphere: a UV sphere has a
                     // clean rectangular UV unwrap (uv.x = longitude, uv.y =
@@ -1437,10 +1434,91 @@ pub fn parent_prim_path(target: &str) -> Option<SdfPath> {
 /// Single source of truth for the bind→shader walk shared by the renderer
 /// ([`apply_standard_material`]) and the inspector's material editor.
 pub fn resolve_bound_shader<R: UsdRead>(reader: &R, mesh_path: &SdfPath) -> Option<SdfPath> {
-    let mat_path_str = reader.rel_target(mesh_path, "material:binding")?;
-    let mat_path = SdfPath::new(&mat_path_str).ok()?;
+    let mat_path = resolve_bound_material(reader, mesh_path, MaterialPurpose::Render)?;
     let surf_conn = reader.rel_target(&mat_path, "outputs:surface")?;
     parent_prim_path(&surf_conn)
+}
+
+/// Which *purpose* of material binding to resolve.
+///
+/// USD binds a look and a physical surface with the SAME schema
+/// (`UsdShadeMaterial`) and the SAME mechanism (a `material:binding`
+/// relationship) — they differ only in the binding's **purpose** token. So a
+/// single `Material` prim can carry a `UsdPreviewSurface` *and* an applied
+/// `PhysicsMaterialAPI`, and one "Regolith" means both "looks like regolith" and
+/// "grips like regolith". That is the right model for a simulator, and it is
+/// USD's, so we don't invent a parallel one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaterialPurpose {
+    /// All-purpose binding (`material:binding`) — the rendered look.
+    Render,
+    /// Purpose-specific binding (`material:binding:physics`) — friction,
+    /// restitution, density (`UsdPhysicsMaterialAPI`).
+    Physics,
+}
+
+impl MaterialPurpose {
+    /// The relationship name this purpose binds through.
+    pub fn relationship(self) -> &'static str {
+        match self {
+            MaterialPurpose::Render => "material:binding",
+            MaterialPurpose::Physics => "material:binding:physics",
+        }
+    }
+}
+
+/// Resolve the `Material` prim bound to `prim` for a given purpose.
+///
+/// Implements the two USD binding rules that a naive `rel_target` on the prim
+/// itself misses, and that authors rely on:
+///
+/// 1. **Bindings inherit down namespace.** A material bound on a rover root
+///    applies to every mesh inside it. Nearest ancestor wins.
+/// 2. **A purpose-specific binding falls back to the all-purpose one.** So a
+///    prim bound only with `material:binding` still resolves for `Physics` — and
+///    a single Material carrying both a surface shader and `PhysicsMaterialAPI`
+///    drives look *and* friction from one binding, which is the whole point of
+///    the shared model.
+pub fn resolve_bound_material<R: UsdRead>(
+    reader: &R,
+    prim: &SdfPath,
+    purpose: MaterialPurpose,
+) -> Option<SdfPath> {
+    // ORDER MATTERS, and it is subtle. USD resolves the restricted purpose across
+    // the ENTIRE ancestor chain first, and only then falls back to the all-purpose
+    // binding across that same chain. It does NOT fall back per-prim on the way
+    // up.
+    //
+    // Get this backwards and a `material:binding:physics` authored on a rover ROOT
+    // loses to a plain (look-only) `material:binding` on one of its wheels — the
+    // authored physics material is silently dropped and the wheel gets default
+    // friction. That is the bug this ordering exists to prevent.
+    //
+    // (openusd implements this as `shade::MaterialBindingAPI::compute_bound_material`,
+    // including collection bindings and `bindMaterialAs` strength, which we do not.
+    // We can't call it from here yet: it needs a live `&Stage`, while these
+    // extractors are generic over `UsdRead` so they also run on the flattened
+    // read path. When that flattened impl retires, delete this and call openusd.)
+    let chain = |rel: &str| -> Option<SdfPath> {
+        let mut at = prim.clone();
+        loop {
+            if let Some(target) = reader.rel_target(&at, rel) {
+                return SdfPath::new(&target).ok();
+            }
+            let parent = at.prim_path().parent()?;
+            if parent.as_str() == at.as_str() || parent.as_str() == "/" {
+                return None;
+            }
+            at = parent;
+        }
+    };
+
+    chain(purpose.relationship()).or_else(|| match purpose {
+        // An all-purpose binding IS the render binding; there is nothing to fall
+        // back to.
+        MaterialPurpose::Render => None,
+        MaterialPurpose::Physics => chain(MaterialPurpose::Render.relationship()),
+    })
 }
 
 /// Maps a `UsdUVTexture` `inputs:wrapS`/`inputs:wrapT` token to a Bevy sampler
@@ -1489,8 +1567,11 @@ fn apply_standard_material<R: UsdRead>(
     // linear scene-referred, and the inspector writes `displayColor` from
     // `base_color.to_linear()`, so read them back as linear (not sRGB) to keep
     // the edit/save/reload round-trip stable.
-    let mut base_color = get_attribute_as_vec3(reader, sdf_path, "primvars:displayColor")
-        .map(|v| Color::linear_rgb(v.x, v.y, v.z))
+    //
+    // ARRAY-valued: `UsdGeomGprim` declares `color3f[] primvars:displayColor`, so
+    // this reads `Vec3fVec`, not a scalar `color3f`. See `read_primvar_vec3`.
+    let mut base_color = read_primvar_vec3(reader, sdf_path, "primvars:displayColor")
+        .map(|v| Color::linear_rgb(v[0] as f32, v[1] as f32, v[2] as f32))
         .unwrap_or(Color::WHITE);
 
     // Emissive, metallic, roughness and reflectance are **shader** inputs. They
@@ -1525,8 +1606,8 @@ fn apply_standard_material<R: UsdRead>(
     // via the rule further down.
     // `primvars:displayOpacity` ONLY — the bare `displayOpacity` alias is gone.
     // It is not a UsdGeomGprim attribute, and accepting it meant a typo'd primvar
-    // still worked here and nowhere else.
-    let mut alpha = get_attribute_as_f32(reader, sdf_path, "primvars:displayOpacity").unwrap_or(1.0);
+    // still worked here and nowhere else. ARRAY-valued (`float[]`) by schema.
+    let mut alpha = read_primvar_f32(reader, sdf_path, "primvars:displayOpacity").unwrap_or(1.0);
     let mut ior = 1.5f32;
     let mut opacity_threshold = 0.0f32;
     let mut opacity_connected = false;
@@ -1748,6 +1829,18 @@ fn apply_standard_material<R: UsdRead>(
 /// prim name (no leading slash), or `None` when the stage declares no
 /// `defaultPrim`. The metadata lives on the pseudo-root spec at the
 /// absolute root path.
+/// The `defaultPrim` authored on a **layer** (`sdf::Data`), without composition.
+///
+/// The authored-layer twin of [`stage_default_prim`], which reads the *composed*
+/// stage. A document's own root layer is the right place to ask "what prim do I
+/// mount?" when authoring into it — no references need resolving to answer that,
+/// and the two must not be conflated (the retired `sdf::Data` reader conflated
+/// exactly this by implementing the composed-stage trait over an authored layer).
+pub fn layer_default_prim(layer: &UsdData) -> Option<String> {
+    let name = layer.field(&SdfPath::abs_root(), "defaultPrim")?.as_str()?;
+    (!name.is_empty()).then(|| name.to_string())
+}
+
 pub fn stage_default_prim<R: UsdRead>(reader: &R) -> Option<String> {
     // `defaultPrim` is authored as `Value::Token` (see compose.rs). The two
     // `UsdRead` impls read it uniformly: the flatten off the pseudo-root spec,
@@ -1765,14 +1858,26 @@ pub fn stage_default_prim<R: UsdRead>(reader: &R) -> Option<String> {
 /// `lunco:description` tooltip) this is a cheap, composition-free alternative
 /// to [`compose_file`] / the async `AssetServer` loader — referenced sub-layers
 /// are not consulted, which is correct for root-prim metadata but NOT for
-/// attributes that a reference might override. The single parsed layer is the
-/// same [`UsdData`] = `sdf::Data` the composed-stage flattener produces, so
-/// [`stage_default_prim`] + [`read_token`] work on it unchanged.
+/// attributes that a reference might override.
+///
+/// Reads the authored layer directly through [`UsdDataExt`], NOT through
+/// [`UsdRead`]: `UsdRead` is now the *composed-stage* contract (one impl,
+/// `StageView`), and this function exists precisely because it does **not** want
+/// composition. Conflating the two is what the retired `sdf::Data` reader did.
 pub fn read_default_prim_attr(text: &str, attr: &str) -> Option<String> {
     let data = openusd::usda::parse(text).ok()?;
-    let prim_name = stage_default_prim(&data)?;
+
+    // `defaultPrim` is stage metadata on the pseudo-root, authored as a Token.
+    let prim_name = data.field(&SdfPath::abs_root(), "defaultPrim")?.as_str()?;
+    if prim_name.is_empty() {
+        return None;
+    }
     let path = SdfPath::new(&format!("/{prim_name}")).ok()?;
-    read_token(&data, &path, attr)
+
+    // `string` / `token` / `asset` all coerce through `as_str` (same rule as
+    // `read_token`, which is the composed-stage twin of this).
+    let attr_path = path.append_property(attr).ok()?;
+    data.field(&attr_path, "default")?.as_str().map(str::to_string)
 }
 
 /// Catalog metadata a **scene-backed** tutorial declares on its own scene, as an
@@ -1916,6 +2021,69 @@ pub fn read_vec3_f64<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Opti
         if v.len() >= 3 { return Some([v[0], v[1], v[2]]); }
     }
     None
+}
+
+/// Read a **`UsdGeomGprim` display primvar** — `primvars:displayColor`.
+///
+/// These are ARRAY-valued by schema (`color3f[]`, i.e. `Vec3fVec`), not scalar
+/// `color3f`. The interpolation defaults to `constant`, meaning one value for
+/// the whole prim, so element 0 is the prim's colour.
+///
+/// Deliberately separate from [`read_vec3_f64`], which reads genuinely *scalar*
+/// `color3f`/`float3` attributes (`inputs:diffuseColor`, `inputs:color`, the
+/// xform ops). Two USD types, two readers — a single lenient one that took
+/// either would let `color3f primvars:displayColor` (the wrong type, which every
+/// asset here used to author) keep working, and that is the bug we are removing.
+pub fn read_primvar_vec3<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<[f64; 3]> {
+    primvar_vec3_from(reader.attr_value(path, attr)?)
+}
+
+/// Time-sampled twin of [`read_primvar_vec3`].
+pub fn read_primvar_vec3_at<R: UsdRead>(
+    reader: &R,
+    path: &SdfPath,
+    attr: &str,
+    time: f64,
+) -> Option<[f64; 3]> {
+    primvar_vec3_from(reader.attr_value_at(path, attr, time)?)
+}
+
+/// First element of an array-valued vec3 primvar (`constant` interpolation).
+fn primvar_vec3_from(value: Value) -> Option<[f64; 3]> {
+    match value {
+        Value::Vec3fVec(v) => v.first().map(|c| [c.x as f64, c.y as f64, c.z as f64]),
+        Value::Vec3dVec(v) => v.first().map(|c| [c.x, c.y, c.z]),
+        Value::Vec3hVec(v) => v
+            .first()
+            .map(|c| [f32::from(c.x) as f64, f32::from(c.y) as f64, f32::from(c.z) as f64]),
+        _ => None,
+    }
+}
+
+/// Read a **`UsdGeomGprim` display primvar** — `primvars:displayOpacity`.
+/// `float[]` by schema, `constant` interpolation → element 0. See
+/// [`read_primvar_vec3`] for why this is not merged with the scalar reader.
+pub fn read_primvar_f32<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<f32> {
+    primvar_f32_from(reader.attr_value(path, attr)?)
+}
+
+/// Time-sampled twin of [`read_primvar_f32`].
+pub fn read_primvar_f32_at<R: UsdRead>(
+    reader: &R,
+    path: &SdfPath,
+    attr: &str,
+    time: f64,
+) -> Option<f32> {
+    primvar_f32_from(reader.attr_value_at(path, attr, time)?)
+}
+
+fn primvar_f32_from(value: Value) -> Option<f32> {
+    match value {
+        Value::FloatVec(v) => v.first().copied(),
+        Value::DoubleVec(v) => v.first().map(|d| *d as f32),
+        Value::HalfVec(v) => v.first().map(|h| f32::from(*h)),
+        _ => None,
+    }
 }
 
 /// Time-sampled twin of [`read_vec3_f64`]: evaluates the attribute's
@@ -2346,9 +2514,18 @@ pub fn sample_usd_material_animation(
         } else {
             None
         };
-        let color_attr = if mat.diffuse { "inputs:diffuseColor" } else { "primvars:displayColor" };
+        // Two different USD value types, so two different readers: a shader's
+        // `inputs:diffuseColor` is a SCALAR `color3f`, while the geom's
+        // `primvars:displayColor` is an ARRAY (`color3f[]`, constant
+        // interpolation). Reading either with the other's reader silently yields
+        // `None` and the animation just stops.
         if let Some(src) = color_src {
-            if let Some(c) = read_vec3_f64_at(reader, src, color_attr, t) {
+            let sampled = if mat.diffuse {
+                read_vec3_f64_at(reader, src, "inputs:diffuseColor", t)
+            } else {
+                read_primvar_vec3_at(reader, src, "primvars:displayColor", t)
+            };
+            if let Some(c) = sampled {
                 let a = look.base_color.alpha;
                 look.base_color =
                     LinearRgba::new(c[0] as f32, c[1] as f32, c[2] as f32, a);
@@ -2803,12 +2980,18 @@ pub fn usd_axis_to_quat(axis: &str) -> Option<Quat> {
 
 /// Dimensions of a USD primitive shape prim, with the spec-compliant
 /// defaults applied. One home (CQ-102) so the avian collider and the
-/// bevy mesh never desync. `Cube::size` is the spec form (default 2.0);
-/// `Cube::legacy_extents` carries the deprecated `width`/`height`/`depth`
-/// **full-extent** form when all three are authored.
+/// bevy mesh never desync.
+///
+/// `Cube::size` is the ONLY form. `UsdGeomCube` declares exactly one dimension
+/// attribute (`double size`, default 2.0) — a non-uniform box is a `size` plus an
+/// `xformOp:scale`. The reader used to also accept `width`/`height`/`depth` on a
+/// Cube; those are not UsdGeomCube attributes, no asset authored them, and
+/// accepting them meant a scene could encode its box dimensions in a form no
+/// other DCC reads. (`Plane::width`/`length` below ARE real UsdGeomPlane
+/// attributes — that is the difference.)
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ShapeDims {
-    Cube { size: f64, legacy_extents: Option<[f64; 3]> },
+    Cube { size: f64 },
     Sphere { radius: f64 },
     Cylinder { radius: f64, height: f64 },
     Cone { radius: f64, height: f64 },
@@ -2833,10 +3016,7 @@ pub fn read_shape_dims<R: UsdRead>(reader: &R, path: &SdfPath, type_name: &str) 
     }
     let m = |x: f64| conv.length(x);
     Some(match dims {
-        ShapeDims::Cube { size, legacy_extents } => ShapeDims::Cube {
-            size: m(size),
-            legacy_extents: legacy_extents.map(|[w, h, d]| [m(w), m(h), m(d)]),
-        },
+        ShapeDims::Cube { size } => ShapeDims::Cube { size: m(size) },
         ShapeDims::Sphere { radius } => ShapeDims::Sphere { radius: m(radius) },
         ShapeDims::Cylinder { radius, height } => {
             ShapeDims::Cylinder { radius: m(radius), height: m(height) }
@@ -2857,18 +3037,9 @@ fn read_shape_dims_raw<R: UsdRead>(
     type_name: &str,
 ) -> Option<ShapeDims> {
     let dims = match type_name {
-        "Cube" => {
-            let size = reader.real(path, "size").unwrap_or(2.0);
-            let legacy_extents = match (
-                reader.real(path, "width"),
-                reader.real(path, "height"),
-                reader.real(path, "depth"),
-            ) {
-                (Some(w), Some(h), Some(d)) => Some([w, h, d]),
-                _ => None,
-            };
-            ShapeDims::Cube { size, legacy_extents }
-        }
+        "Cube" => ShapeDims::Cube {
+            size: reader.real(path, "size").unwrap_or(2.0),
+        },
         "Sphere" => ShapeDims::Sphere {
             radius: reader.real(path, "radius").unwrap_or(1.0),
         },
@@ -3016,13 +3187,12 @@ pub fn build_usd_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> {
         return None;
     }
 
-    // Optional vertex attributes. `primvars:st` is the de-facto UV channel;
-    // accept the bare `st`/`st0` spellings some exporters emit.
+    // Optional vertex attributes. `primvars:st` is THE UV channel — the
+    // `primvars:st0` / bare `st` spellings are gone. A UV set is a primvar, so it
+    // is namespaced; a bare `st` is not one, and accepting it let a mesh carry UVs
+    // in a form no other DCC binds.
     let normals = read_mesh_normals(reader, path);
-    let uvs = reader
-        .scalar::<Vec<[f32; 2]>>(path, "primvars:st")
-        .or_else(|| reader.scalar::<Vec<[f32; 2]>>(path, "primvars:st0"))
-        .or_else(|| reader.scalar::<Vec<[f32; 2]>>(path, "st"));
+    let uvs = reader.scalar::<Vec<[f32; 2]>>(path, "primvars:st");
 
     let n_corners = indices.len();
     let normals_per_vertex = normals.as_ref().is_some_and(|n| n.len() == points.len());
@@ -3651,15 +3821,19 @@ mod mesh_tests {
     use super::*;
     use openusd::sdf::Path as SdfPath;
 
-    fn parse(usda: &str) -> UsdData {
-        openusd::usda::parse(usda).expect("parse USDA")
+    /// Build a real composed stage. The extractors read through `StageView` — the
+    /// live, PCP-composed stage — which is the ONLY read path now that the
+    /// flattened `sdf::Data` reader is retired. Tests read what the app reads.
+    fn parse(usda: &str) -> CanonicalStage {
+        CanonicalStage::from_recipe(&StageRecipe::from_source("t.usda", usda))
+            .expect("build canonical stage")
     }
 
     /// A single quad fan-triangulates to 2 tris (6 unindexed verts); per-vertex
     /// `primvars:st` carries through and missing normals are computed.
     #[test]
     fn quad_triangulates_with_uvs_and_computed_normals() {
-        let reader = parse(
+        let __cs = parse(
             "#usda 1.0\n\
              def Mesh \"Quad\"\n{\n\
              point3f[] points = [(0,0,0),(1,0,0),(1,1,0),(0,1,0)]\n\
@@ -3667,6 +3841,7 @@ mod mesh_tests {
              int[] faceVertexIndices = [0,1,2,3]\n\
              texCoord2f[] primvars:st = [(0,0),(1,0),(1,1),(0,1)]\n}\n",
         );
+        let reader = __cs.view();
         let mesh = build_usd_mesh(&reader, &SdfPath::new("/Quad").unwrap()).expect("mesh built");
         assert_eq!(mesh.count_vertices(), 6, "one quad → two triangles");
         assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_0).is_some(), "st preserved");
@@ -3676,13 +3851,14 @@ mod mesh_tests {
     /// Two triangles, no optional attrs → 6 verts, a zeroed UV set, flat normals.
     #[test]
     fn bare_triangles_get_default_uvs() {
-        let reader = parse(
+        let __cs = parse(
             "#usda 1.0\n\
              def Mesh \"Tris\"\n{\n\
              point3f[] points = [(0,0,0),(1,0,0),(0,1,0),(1,1,0)]\n\
              int[] faceVertexCounts = [3,3]\n\
              int[] faceVertexIndices = [0,1,2,1,3,2]\n}\n",
         );
+        let reader = __cs.view();
         let mesh = build_usd_mesh(&reader, &SdfPath::new("/Tris").unwrap()).expect("mesh built");
         assert_eq!(mesh.count_vertices(), 6);
         assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_0).is_some(), "zeroed UVs inserted");
@@ -3691,20 +3867,22 @@ mod mesh_tests {
     /// Missing topology attributes → `None` (caller falls back to no mesh).
     #[test]
     fn missing_topology_returns_none() {
-        let reader = parse("#usda 1.0\ndef Mesh \"Empty\"\n{\n}\n");
+        let __cs = parse("#usda 1.0\ndef Mesh \"Empty\"\n{\n}\n");
+        let reader = __cs.view();
         assert!(build_usd_mesh(&reader, &SdfPath::new("/Empty").unwrap()).is_none());
     }
 
     /// An index pointing past the end of `points` is rejected, not panicked on.
     #[test]
     fn out_of_range_index_is_rejected() {
-        let reader = parse(
+        let __cs = parse(
             "#usda 1.0\n\
              def Mesh \"Bad\"\n{\n\
              point3f[] points = [(0,0,0),(1,0,0),(1,1,0)]\n\
              int[] faceVertexCounts = [3]\n\
              int[] faceVertexIndices = [0,1,9]\n}\n",
         );
+        let reader = __cs.view();
         assert!(build_usd_mesh(&reader, &SdfPath::new("/Bad").unwrap()).is_none());
     }
 
@@ -3712,13 +3890,14 @@ mod mesh_tests {
     /// quad into two index triples — the form `Collider::trimesh` consumes.
     #[test]
     fn indexed_decode_keeps_points_and_fans_quad() {
-        let reader = parse(
+        let __cs = parse(
             "#usda 1.0\n\
              def Mesh \"Quad\"\n{\n\
              point3f[] points = [(0,0,0),(1,0,0),(1,1,0),(0,1,0)]\n\
              int[] faceVertexCounts = [4]\n\
              int[] faceVertexIndices = [0,1,2,3]\n}\n",
         );
+        let reader = __cs.view();
         let (verts, tris) =
             read_usd_mesh_indexed(&reader, &SdfPath::new("/Quad").unwrap()).expect("indexed mesh");
         assert_eq!(verts.len(), 4, "raw points kept (shared verts)");
@@ -3729,13 +3908,14 @@ mod mesh_tests {
     /// path, so no bad trimesh reaches the physics engine.
     #[test]
     fn indexed_decode_rejects_bad_topology() {
-        let reader = parse(
+        let __cs = parse(
             "#usda 1.0\n\
              def Mesh \"Bad\"\n{\n\
              point3f[] points = [(0,0,0),(1,0,0),(1,1,0)]\n\
              int[] faceVertexCounts = [3]\n\
              int[] faceVertexIndices = [0,1,9]\n}\n",
         );
+        let reader = __cs.view();
         assert!(read_usd_mesh_indexed(&reader, &SdfPath::new("/Bad").unwrap()).is_none());
     }
 }
@@ -3766,8 +3946,12 @@ mod animation_tests {
     use super::*;
     use openusd::sdf::Path as SdfPath;
 
-    fn parse(usda: &str) -> UsdData {
-        openusd::usda::parse(usda).expect("parse USDA")
+    /// Build a real composed stage. The extractors read through `StageView` — the
+    /// live, PCP-composed stage — which is the ONLY read path now that the
+    /// flattened `sdf::Data` reader is retired. Tests read what the app reads.
+    fn parse(usda: &str) -> CanonicalStage {
+        CanonicalStage::from_recipe(&StageRecipe::from_source("t.usda", usda))
+            .expect("build canonical stage")
     }
 
     /// translate is keyframed (animated); rotateXYZ has only a default (static);
@@ -3791,7 +3975,8 @@ def Xform "Static"
 
     #[test]
     fn detects_animated_prims_by_xform_time_samples() {
-        let reader = parse(SCENE);
+        let __cs = parse(SCENE);
+        let reader = __cs.view();
         let mover = SdfPath::new("/Mover").unwrap();
         let stat = SdfPath::new("/Static").unwrap();
         assert!(prim_has_xform_time_samples(&reader, &mover));
@@ -3803,7 +3988,8 @@ def Xform "Static"
 
     #[test]
     fn samples_animated_channel_and_leaves_static_untouched() {
-        let reader = parse(SCENE);
+        let __cs = parse(SCENE);
+        let reader = __cs.view();
         let mover = SdfPath::new("/Mover").unwrap();
 
         // Animated translate interpolates linearly: t=1.0 → halfway (10,0,0).
@@ -3831,7 +4017,8 @@ def Xform "Static"
 
     #[test]
     fn read_vec3_f64_at_falls_back_to_default_for_static() {
-        let reader = parse(SCENE);
+        let __cs = parse(SCENE);
+        let reader = __cs.view();
         let stat = SdfPath::new("/Static").unwrap();
         // The raw time-aware reader returns the default at any time (value
         // resolution), even though `sample_animated_vec3` gates it out.
@@ -3846,7 +4033,8 @@ def Xform "Static"
         // A stage that authors no `timeCodesPerSecond` reads back the USD-spec
         // fallback of 24, so the sampler's seconds→time-code map is well-defined
         // even for content that never set it.
-        let reader = parse(SCENE);
+        let __cs = parse(SCENE);
+        let reader = __cs.view();
         assert_eq!(stage_time_codes_per_second(&reader), 24.0);
     }
 
@@ -3870,7 +4058,8 @@ def Xform "Solid"
 
     #[test]
     fn read_token_at_holds_visibility_keyframes() {
-        let reader = parse(VIS_SCENE);
+        let __cs = parse(VIS_SCENE);
+        let reader = __cs.view();
         let blinker = SdfPath::new("/Blinker").unwrap();
         // On the first key.
         assert_eq!(
@@ -3905,7 +4094,8 @@ def Xform "Spinner"
 
     #[test]
     fn orient_channel_slerps_and_is_detected() {
-        let reader = parse(ORIENT_SCENE);
+        let __cs = parse(ORIENT_SCENE);
+        let reader = __cs.view();
         let spinner = SdfPath::new("/Spinner").unwrap();
         // The quaternion channel marks the prim animated.
         assert!(prim_has_xform_time_samples(&reader, &spinner));
@@ -3945,7 +4135,8 @@ def Xform "Matrixed"
 
     #[test]
     fn single_axis_rotation_is_detected_and_composed() {
-        let reader = parse(ROTATION_OPS_SCENE);
+        let __cs = parse(ROTATION_OPS_SCENE);
+        let reader = __cs.view();
         let hinge = SdfPath::new("/HingeZ").unwrap();
         // A single-axis `rotateZ` time-sample marks the prim animated.
         assert!(prim_has_xform_time_samples(&reader, &hinge));
@@ -3957,7 +4148,8 @@ def Xform "Matrixed"
 
     #[test]
     fn euler_order_zyx_composes() {
-        let reader = parse(ROTATION_OPS_SCENE);
+        let __cs = parse(ROTATION_OPS_SCENE);
+        let reader = __cs.view();
         // `rotateZYX = (0,0,90)` → 90° about Z (the X and Y angles are zero).
         let q = local_rotation_at(&reader, &SdfPath::new("/EulerZYX").unwrap(), 0.0).unwrap();
         assert!(q.abs_diff_eq(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2), 1e-5));
@@ -3973,7 +4165,8 @@ def Xform "HalfSpin"
     quath xformOp:orient = (0, 1, 0, 0)
 }
 "#;
-        let reader = parse(scene);
+        let __cs = parse(scene);
+        let reader = __cs.view();
         let q = local_rotation_at(&reader, &SdfPath::new("/HalfSpin").unwrap(), 0.0).unwrap();
         assert!(q.abs_diff_eq(Quat::from_xyzw(1.0, 0.0, 0.0, 0.0), 1e-3));
     }
@@ -4004,7 +4197,8 @@ def Xform "Std"
 
     #[test]
     fn xform_op_order_is_honored() {
-        let reader = parse(ORDER_SCENE);
+        let __cs = parse(ORDER_SCENE);
+        let reader = __cs.view();
         // `["scale","translate"]`: translate is the LAST op → applied first to the
         // geometry, then `scale` (first op) scales it → translation (2,0,0).
         let sf = compose_xform_order_at(&reader, &SdfPath::new("/ScaleFirst").unwrap(), 0.0).unwrap();
@@ -4022,7 +4216,8 @@ def Xform "Std"
         // Standard-order content (`["translate","rotateXYZ"]`, what the rover
         // assets author) decodes identically to the implicit piecewise path —
         // no regression.
-        let reader = parse(ORDER_SCENE);
+        let __cs = parse(ORDER_SCENE);
+        let reader = __cs.view();
         let tf = local_transform_at(&reader, &SdfPath::new("/Std").unwrap(), 0.0).unwrap();
         assert!(tf.translation.abs_diff_eq(Vec3::new(5.0, 6.0, 7.0), 1e-5));
         assert!(tf.rotation.abs_diff_eq(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2), 1e-5));
@@ -4031,7 +4226,8 @@ def Xform "Std"
 
     #[test]
     fn matrix_transform_decomposes_translation() {
-        let reader = parse(ROTATION_OPS_SCENE);
+        let __cs = parse(ROTATION_OPS_SCENE);
+        let reader = __cs.view();
         // Identity rotation/scale, translation in the USD matrix's last row.
         let tf = read_matrix_transform_at(&reader, &SdfPath::new("/Matrixed").unwrap(), 0.0).unwrap();
         assert!(tf.translation.abs_diff_eq(Vec3::new(3.0, 4.0, 5.0), 1e-5));
@@ -4044,7 +4240,8 @@ def Xform "Std"
 
     #[test]
     fn animated_time_range_spans_keys_in_seconds() {
-        let reader = parse(SCENE);
+        let __cs = parse(SCENE);
+        let reader = __cs.view();
         // `/Mover` translate is keyed at codes 0 and 2; default tcps = 24, so the
         // span in seconds is [0, 2/24].
         let (lo, hi) = animated_time_range(&reader, &SdfPath::new("/Mover").unwrap()).unwrap();
@@ -4056,12 +4253,14 @@ def Xform "Std"
 
     #[test]
     fn prim_is_animated_covers_visibility_and_xform_but_not_static() {
-        let reader = parse(VIS_SCENE);
+        let __cs = parse(VIS_SCENE);
+        let reader = __cs.view();
         assert!(prim_is_animated(&reader, &SdfPath::new("/Blinker").unwrap()));
         // `Solid` keyframes nothing — visibility and translate are both defaults.
         assert!(!prim_is_animated(&reader, &SdfPath::new("/Solid").unwrap()));
         // The xform-animated `Mover` from SCENE is still caught by the broader gate.
-        let mover_reader = parse(SCENE);
+        let __mover = parse(SCENE);
+        let mover_reader = __mover.view();
         assert!(prim_is_animated(&mover_reader, &SdfPath::new("/Mover").unwrap()));
         assert!(!prim_is_animated(&mover_reader, &SdfPath::new("/Static").unwrap()));
     }
@@ -4079,8 +4278,12 @@ mod stage_metrics_import_tests {
     use crate::units::{StageMetrics, UpAxis};
     use openusd::sdf::Path as SdfPath;
 
-    fn parse(usda: &str) -> UsdData {
-        openusd::usda::parse(usda).expect("parse USDA")
+    /// Build a real composed stage. The extractors read through `StageView` — the
+    /// live, PCP-composed stage — which is the ONLY read path now that the
+    /// flattened `sdf::Data` reader is retired. Tests read what the app reads.
+    fn parse(usda: &str) -> CanonicalStage {
+        CanonicalStage::from_recipe(&StageRecipe::from_source("t.usda", usda))
+            .expect("build canonical stage")
     }
 
     /// An Isaac-Sim-flavoured stage: Z-up, centimetres. `/Tower` sits 3 m up the
@@ -4134,13 +4337,13 @@ def Xform "World"
 
     #[test]
     fn reads_stage_metrics() {
-        let m = StageMetrics::from_reader(&parse(ZUP_CM));
+        let m = StageMetrics::from_reader(&parse(ZUP_CM).view());
         assert_eq!(m.up_axis, UpAxis::Z);
         assert_eq!(m.meters_per_unit, 0.01);
         assert!(!m.is_canonical());
 
         // Unauthored ⇒ the USD defaults, which are our canonical frame.
-        let m = StageMetrics::from_reader(&parse(YUP_M));
+        let m = StageMetrics::from_reader(&parse(YUP_M).view());
         assert_eq!(m.up_axis, UpAxis::Y);
         assert_eq!(m.meters_per_unit, 1.0);
         assert!(m.is_canonical(), "a Y-up metre stage must convert to the identity");
@@ -4151,7 +4354,8 @@ def Xform "World"
     /// 100× too large and with the up-axis on Z.
     #[test]
     fn zup_centimetre_stage_imports_upright_and_metre_scaled() {
-        let reader = parse(ZUP_CM);
+        let __cs = parse(ZUP_CM);
+        let reader = __cs.view();
         let tower = SdfPath::new("/World/Tower").unwrap();
 
         let tf = local_transform_at(&reader, &tower, 0.0).expect("prim authors an xform");
@@ -4197,8 +4401,10 @@ def Xform "World"
     /// pose and dimensions — the round-trip guard doc 41 §"three holes" asks for.
     #[test]
     fn zup_cm_stage_matches_its_canonical_twin() {
-        let zup = parse(ZUP_CM);
-        let yup = parse(YUP_M);
+        let __zup = parse(ZUP_CM);
+        let __yup = parse(YUP_M);
+        let zup = __zup.view();
+        let yup = __yup.view();
         let tower = SdfPath::new("/World/Tower").unwrap();
 
         let a = local_transform_at(&zup, &tower, 0.0).unwrap();
@@ -4215,7 +4421,8 @@ def Xform "World"
     /// this path, so the conversion cannot regress existing content.
     #[test]
     fn canonical_stage_is_untouched() {
-        let reader = parse(YUP_M);
+        let __cs = parse(YUP_M);
+        let reader = __cs.view();
         let tower = SdfPath::new("/World/Tower").unwrap();
         assert!(stage_convention(&reader).is_identity());
         let tf = local_transform_at(&reader, &tower, 0.0).unwrap();
@@ -4231,7 +4438,7 @@ def Xform "World"
         let bogus = parse(
             "#usda 1.0\n(\n    upAxis = \"X\"\n    metersPerUnit = 0\n)\ndef Xform \"W\"\n{\n}\n",
         );
-        let m = StageMetrics::from_reader(&bogus);
+        let m = StageMetrics::from_reader(&bogus.view());
         assert_eq!(m.up_axis, UpAxis::Y);
         assert_eq!(m.meters_per_unit, 1.0);
     }

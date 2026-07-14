@@ -55,7 +55,7 @@ pub fn resolve_camera_mounts(
         let parent = child_of.parent();
         if q_is_grid.contains(parent) {
             // Already grid-direct — nothing to rig, just mark it done.
-            commands.entity(cam).insert(CameraMountResolved);
+            commands.entity(cam).try_insert(CameraMountResolved);
             continue;
         }
 
@@ -78,7 +78,7 @@ pub fn resolve_camera_mounts(
         // offset. `follow_mounted_cameras` corrects the grid-local position the
         // same frame (Update commands flush before PostUpdate), and the camera
         // is inactive during load, so there is no visible pop.
-        commands.entity(cam).insert((
+        commands.entity(cam).try_insert((
             MountedCamera {
                 mount: parent,
                 offset: *tf,

@@ -805,7 +805,7 @@ fn author_structural_edit(
 /// is *not* itself a prim of the same scene. The per-edit, synchronous successor
 /// to the old reload-driven whole-scene rebuild (matches the viewport's former
 /// `DocumentChanged` → clear-`UsdVisualSynced`-on-scene-root refresh).
-fn refresh_scene_visuals(world: &mut World, scene_id: AssetId<UsdStageAsset>) {
+pub(crate) fn refresh_scene_visuals(world: &mut World, scene_id: AssetId<UsdStageAsset>) {
     let scene: Vec<(Entity, Option<Entity>)> = {
         let mut q = world.query::<(Entity, &UsdPrimPath, Option<&ChildOf>)>();
         q.iter(world)
@@ -845,7 +845,7 @@ fn reinstantiate_entity(world: &mut World, entity: Entity) {
 /// `material:binding` to arbitrary meshes and needs the whole-scene refresh. This
 /// avoids re-instantiating unrelated roots (including live physics bodies) on
 /// every attribute edit.
-fn refresh_prim_subtree(world: &mut World, scene_id: AssetId<UsdStageAsset>, path: &str) {
+pub(crate) fn refresh_prim_subtree(world: &mut World, scene_id: AssetId<UsdStageAsset>, path: &str) {
     let entity = {
         let mut q = world.query::<(Entity, &UsdPrimPath)>();
         q.iter(world)

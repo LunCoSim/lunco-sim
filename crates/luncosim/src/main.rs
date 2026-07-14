@@ -186,7 +186,7 @@ fn auto_focus_earth_once(
         .remove::<lunco_avatar::SpringArmCamera>()
         .remove::<lunco_avatar::OrbitCamera>()
         .remove::<lunco_avatar::FrameBlend>()
-        .insert(lunco_avatar::OrbitCamera {
+        .try_insert(lunco_avatar::OrbitCamera {
             target: earth_entity,
             distance: earth_body.radius_m * 3.0,
             yaw,

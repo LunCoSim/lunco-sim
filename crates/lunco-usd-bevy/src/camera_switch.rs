@@ -248,7 +248,7 @@ pub fn reconcile_scene_viewport(
             }
         }
         if !active_has_origin {
-            commands.entity(active).insert(FloatingOrigin);
+            commands.entity(active).try_insert(FloatingOrigin);
         }
     }
 }

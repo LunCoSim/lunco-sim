@@ -105,7 +105,7 @@ pub trait UsdRead {
 
     /// Whether `prim` applies the named API schema (its composed `apiSchemas`) —
     /// the physics extractor's body/collider/terrain detection read
-    /// (`PhysicsRigidBodyAPI` / `PhysicsCollisionAPI` / `PhysxTerrainAPI`).
+    /// (`PhysicsRigidBodyAPI` / `PhysicsCollisionAPI` / `LunCoTerrainAPI`).
     fn has_api_schema(&self, prim: &SdfPath, schema: &str) -> bool;
 
     /// First composed target of relationship `name` on `prim`, as a path string
@@ -398,133 +398,19 @@ impl UsdRead for StageView<'_> {
     }
 }
 
-impl UsdRead for openusd::sdf::Data {
-    fn type_name(&self, prim: &SdfPath) -> Option<String> {
-        UsdDataExt::prim_type_name(self, prim)
-    }
+// `impl UsdRead for openusd::sdf::Data` — the FLATTENED read path — is RETIRED.
+//
+// It read a single pre-flattened layer, so it saw no PCP composition: references,
+// variants and `over` opinions were baked in ahead of time or lost. Every read now
+// goes through `StageView` — the live, composed stage — which is what the running
+// app has always used. Keeping a second reader meant every extractor had to be
+// generic over both, which is exactly what kept openusd's typed schema APIs
+// (`MaterialBindingAPI`, `Xformable`, the geom shapes) out of reach: they need a
+// real `&Stage`, and the flattened impl could never supply one.
+//
+// `sdf::Data` is still the DOCUMENT's authored-layer storage (base ⊕ runtime) and
+// is still read via `UsdDataExt` — that is a different job and stays.
 
-    fn attr_value(&self, prim: &SdfPath, name: &str) -> Option<Value> {
-        let attr = prim.append_property(name).ok()?;
-        self.field(&attr, "default").cloned()
-    }
-
-    fn has_api_schema(&self, prim: &SdfPath, schema: &str) -> bool {
-        crate::has_api_schema(self, prim, schema)
-    }
-
-    fn rel_target(&self, prim: &SdfPath, name: &str) -> Option<String> {
-        crate::read_rel_target(self, prim, name)
-    }
-
-    fn connections(&self, prim: &SdfPath, name: &str) -> Vec<String> {
-        // The flattened reader stores the authored `connectionPaths` list-op;
-        // collect every item (explicit + the composed list-op edit fields) so a
-        // fan-in sink surfaces all its producers.
-        let Ok(attr) = prim.append_property(name) else {
-            return Vec::new();
-        };
-        match self.field(&attr, "connectionPaths") {
-            Some(Value::PathListOp(op)) => op
-                .explicit_items
-                .iter()
-                .chain(op.prepended_items.iter())
-                .chain(op.appended_items.iter())
-                .chain(op.added_items.iter())
-                .map(|p| p.to_string())
-                .collect(),
-            _ => Vec::new(),
-        }
-    }
-
-    fn children(&self, prim: &SdfPath) -> Vec<SdfPath> {
-        UsdDataExt::prim_children(self, prim)
-    }
-
-    fn prim_paths(&self) -> Vec<SdfPath> {
-        self.iter()
-            .filter(|(_, s)| s.ty == SpecType::Prim)
-            .map(|(p, _)| p.clone())
-            .collect()
-    }
-
-    fn attr_names(&self, prim: &SdfPath) -> Vec<String> {
-        // A prim's properties are child specs at `<prim>.<name>`; keep the ones
-        // directly under this prim (leaf name after the USD `.` separator).
-        let prefix = format!("{}.", prim.as_str());
-        self.iter()
-            .filter_map(|(p, _)| p.as_str().strip_prefix(&prefix).map(str::to_string))
-            .collect()
-    }
-
-    fn attr_value_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<Value> {
-        crate::value_at(self, prim, name, time)
-    }
-
-    fn resolved_asset(&self, prim: &SdfPath) -> Option<String> {
-        // The flatten already synthesized `lunco:resolvedAsset` onto the prim.
-        match self.attr_value(prim, "lunco:resolvedAsset")? {
-            Value::String(s) => Some(s),
-            Value::Token(s) => Some(s.to_string()),
-            Value::AssetPath(a) => Some(a.as_str().to_string()),
-            _ => None,
-        }
-    }
-
-    fn is_active(&self, prim: &SdfPath) -> bool {
-        UsdDataExt::prim_is_active(self, prim)
-    }
-
-    fn has_prim(&self, prim: &SdfPath) -> bool {
-        self.spec(prim).is_some()
-    }
-
-    fn default_prim(&self) -> Option<String> {
-        // `defaultPrim` is authored as `Value::Token`; `as_str` coerces
-        // Token/String/AssetPath uniformly (matches `stage_default_prim`).
-        let name = self.field(&SdfPath::abs_root(), "defaultPrim")?.as_str()?;
-        (!name.is_empty()).then(|| name.to_string())
-    }
-
-    fn has_time_samples(&self, prim: &SdfPath, name: &str) -> bool {
-        prim.append_property(name)
-            .ok()
-            .and_then(|ap| self.field(&ap, "timeSamples"))
-            .is_some_and(|v| matches!(v, Value::TimeSamples(_)))
-    }
-
-    fn time_codes_per_second(&self) -> f64 {
-        // Pseudo-root `timeCodesPerSecond` (flattened onto abs-root); default 24.0
-        // (USD spec) when unauthored. The non-positive guard lives in the free
-        // `stage_time_codes_per_second` wrapper, shared with the live path.
-        self.field_as::<f64>(&SdfPath::abs_root(), "timeCodesPerSecond")
-            .unwrap_or(24.0)
-    }
-
-    fn time_sample_times(&self, prim: &SdfPath, name: &str) -> Vec<f64> {
-        prim.append_property(name)
-            .ok()
-            .and_then(|ap| self.field(&ap, "timeSamples"))
-            .and_then(|v| match v {
-                Value::TimeSamples(s) => Some(s.iter().map(|(t, _)| *t).collect()),
-                _ => None,
-            })
-            .unwrap_or_default()
-    }
-
-    fn stage_meters_per_unit(&self) -> Option<f64> {
-        // Pseudo-root stage metadata, flattened onto abs-root (same place
-        // `timeCodesPerSecond` lives). Precision-tolerant, see the live impl.
-        self.field_as::<f64>(&SdfPath::abs_root(), "metersPerUnit")
-            .or_else(|| self.field_as::<f32>(&SdfPath::abs_root(), "metersPerUnit").map(f64::from))
-    }
-
-    fn stage_up_axis(&self) -> Option<String> {
-        self.field(&SdfPath::abs_root(), "upAxis")
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-            .filter(|s| !s.is_empty())
-    }
-}
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod real_reader_tests {

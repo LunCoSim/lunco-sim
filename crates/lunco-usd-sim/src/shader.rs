@@ -73,7 +73,7 @@ pub fn apply_usd_shader_materials(
         // frame (do NOT mark resolved).
         let Some(cs) = canonical.get(id) else { continue };
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
-            commands.entity(entity).insert(UsdShaderResolved);
+            commands.entity(entity).try_insert(UsdShaderResolved);
             continue;
         };
         apply_usd_shader_material_read(
@@ -96,7 +96,7 @@ fn apply_usd_shader_material_read<R: UsdRead>(
     enable_shaders: bool,
 ) {
     // From here on the prim is evaluated regardless of outcome.
-    commands.entity(entity).insert(UsdShaderResolved);
+    commands.entity(entity).try_insert(UsdShaderResolved);
 
     let mat_type: Option<String> = reader.scalar(sdf_path, "primvars:materialType");
     if !matches!(mat_type.as_deref(), Some("shader") | Some("usd_shader")) {
@@ -156,7 +156,7 @@ fn apply_usd_shader_material_read<R: UsdRead>(
     commands
         .entity(entity)
         .remove::<PbrLook>()
-        .insert(look);
+        .try_insert(look);
 }
 
 /// True if `shader_path` is a usable material shader — i.e. it declares a

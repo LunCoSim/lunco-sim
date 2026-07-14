@@ -55,11 +55,11 @@ pub fn insert_celestial_comms_components<R: UsdRead>(
                 reader.real(sdf_path, "lunco:anchor:height").unwrap_or(0.0),
             ),
         };
-        commands.entity(entity).insert(anchor);
+        commands.entity(entity).try_insert(anchor);
         // Root prim anchor = the scene's site frame.
         let is_root = prim_path_str.matches('/').count() == 1 && prim_path_str.starts_with('/');
         if is_root {
-            commands.entity(entity).insert(SiteAnchor);
+            commands.entity(entity).try_insert(SiteAnchor);
             info!(
                 "[usd-celestial] site anchor {}: body {} lat {:.4} lon {:.4} h {:.1} m",
                 prim_path_str, body, anchor.geodetic.lat_deg, anchor.geodetic.lon_deg,
@@ -94,7 +94,7 @@ pub fn insert_celestial_comms_components<R: UsdRead>(
                 .real(sdf_path, "lunco:orbit:epochJd")
                 .unwrap_or(lunco_time::J2000_JD),
         };
-        commands.entity(entity).insert(KeplerOrbit { body, elements });
+        commands.entity(entity).try_insert(KeplerOrbit { body, elements });
         info!(
             "[usd-celestial] orbit {}: body {} a {:.0} km e {:.2} i {:.1}°",
             prim_path_str, body, elements.semi_major_axis_m / 1000.0, elements.eccentricity,
@@ -113,7 +113,7 @@ pub fn insert_celestial_comms_components<R: UsdRead>(
     {
         commands
             .entity(entity)
-            .insert(lunco_celestial::pose::SolarTracked);
+            .try_insert(lunco_celestial::pose::SolarTracked);
     }
 
     // --- Connectivity node (generic link kernel) ---
@@ -126,7 +126,7 @@ pub fn insert_celestial_comms_components<R: UsdRead>(
         .unwrap_or(false)
     {
         let d = lunco_celestial::link::LinkNode::default();
-        commands.entity(entity).insert(lunco_celestial::link::LinkNode {
+        commands.entity(entity).try_insert(lunco_celestial::link::LinkNode {
             max_range_m: reader
                 .real(sdf_path, "lunco:link:maxRangeM")
                 .unwrap_or(d.max_range_m),

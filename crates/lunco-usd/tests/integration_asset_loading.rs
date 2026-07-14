@@ -622,8 +622,10 @@ fn test_valentine_color_override() {
     let chassis = SdfPath::new("/SandboxScene/Skid_Raycast_1/Chassis").unwrap();
     assert!(view.has_prim(&chassis), "Skid_Raycast_1/Chassis prim must exist");
 
-    let display_color = view
-        .value::<[f32; 3]>(&chassis, "primvars:displayColor")
+    // `primvars:displayColor` is ARRAY-valued (`color3f[]`, constant
+    // interpolation) per UsdGeomGprim — read element 0, not a scalar `color3f`.
+    let display_color = lunco_usd_bevy::read_primvar_vec3(&view, &chassis, "primvars:displayColor")
+        .map(|c| [c[0] as f32, c[1] as f32, c[2] as f32])
         .expect("Skid_Raycast_1/Chassis must have the composed displayColor override");
     assert!((display_color[0] - 0.8).abs() < 0.01, "Red should be 0.8, got {}", display_color[0]);
     assert!((display_color[1] - 0.2).abs() < 0.01, "Green should be 0.2, got {}", display_color[1]);

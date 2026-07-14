@@ -260,9 +260,9 @@ fn test_all_prims_have_color() {
 
     for prim_path in prims_with_color {
         let path = SdfPath::new(prim_path).unwrap();
-        // `color3f` composes to a scalar `Value::Vec3f` → read as `[f32; 3]`.
-        let _color: [f32; 3] = view
-            .value(&path, "primvars:displayColor")
+        // `primvars:displayColor` is ARRAY-valued (`color3f[]` → `Value::Vec3fVec`)
+        // per UsdGeomGprim, with `constant` interpolation → element 0.
+        let _color = lunco_usd_bevy::read_primvar_vec3(&view, &path, "primvars:displayColor")
             .unwrap_or_else(|| panic!("Prim {prim_path} should have displayColor"));
     }
 }

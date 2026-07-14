@@ -120,7 +120,7 @@ impl<'a> StageView<'a> {
     /// Whether `prim` applies the named API schema, by exact token match against
     /// its composed `apiSchemas`. Mirrors the `has_api_schema` free helper — the
     /// read `lunco-usd-avian`'s physics extractor uses for body/collider/terrain
-    /// detection (`PhysicsRigidBodyAPI` / `PhysicsCollisionAPI` / `PhysxTerrainAPI`).
+    /// detection (`PhysicsRigidBodyAPI` / `PhysicsCollisionAPI` / `LunCoTerrainAPI`).
     pub fn has_api_schema(&self, prim: &SdfPath, schema_name: &str) -> bool {
         self.stage
             .prim(prim.clone())

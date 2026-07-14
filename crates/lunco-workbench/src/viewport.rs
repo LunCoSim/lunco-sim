@@ -720,7 +720,7 @@ pub fn auto_tag_workbench_3d_cameras(
     for (entity, target) in &new_cams {
         let targets_window = matches!(target, None | Some(RenderTarget::Window(_)));
         if targets_window {
-            commands.entity(entity).insert(WorkbenchViewportCamera);
+            commands.entity(entity).try_insert(WorkbenchViewportCamera);
         }
     }
 }

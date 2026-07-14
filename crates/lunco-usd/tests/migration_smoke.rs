@@ -63,12 +63,14 @@ fn reference_geometry_composes() {
 fn over_color_override_composes() {
     let cs = compose("scenes/sandbox/sandbox_scene.usda");
     let view = cs.view();
-    let c = view
-        .value::<[f32; 3]>(
-            &SdfPath::new("/SandboxScene/Skid_Raycast_1/Chassis").unwrap(),
-            "primvars:displayColor",
-        )
-        .expect("Skid_Raycast_1/Chassis must have composed displayColor");
+    // `primvars:displayColor` is ARRAY-valued (`color3f[]`) per UsdGeomGprim.
+    let c = lunco_usd_bevy::read_primvar_vec3(
+        &view,
+        &SdfPath::new("/SandboxScene/Skid_Raycast_1/Chassis").unwrap(),
+        "primvars:displayColor",
+    )
+    .map(|c| [c[0] as f32, c[1] as f32, c[2] as f32])
+    .expect("Skid_Raycast_1/Chassis must have composed displayColor");
     assert!((c[0] - 0.8).abs() < 0.01 && (c[1] - 0.2).abs() < 0.01 && (c[2] - 0.2).abs() < 0.01,
         "override colour must be (0.8,0.2,0.2), got {c:?}");
 }

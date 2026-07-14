@@ -258,7 +258,7 @@ fn process_usd_cosim_prim_read<R: UsdRead>(
     // `UsdSourcedCosim` already inserted above; add the cosim-only markers.
     commands
         .entity(entity)
-        .insert((UsdSimProcessed, lunco_core::SelectableRoot));
+        .try_insert((UsdSimProcessed, lunco_core::SelectableRoot));
 
     // NOTE: the possessable control-surface tag (`FlightSoftware`) for a
     // `lunco:vessel="true"` prim is stamped in the general USD translator
@@ -779,7 +779,7 @@ pub fn rewire_usd_connections(
 
     // Rebuild: drop every derived edge, then re-derive from the composed stage.
     for e in q_edges.iter() {
-        commands.entity(e).despawn();
+        commands.entity(e).try_despawn();
     }
 
     for (entity, prim_path) in q_all.iter() {

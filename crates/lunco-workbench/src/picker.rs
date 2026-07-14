@@ -256,7 +256,7 @@ mod native {
                 continue;
             };
             let follow_up = in_flight.follow_up.clone();
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             match result {
                 Some(handle) => commands.trigger(PickResolved { follow_up, handle }),
                 None => commands.trigger(PickCancelled { follow_up }),

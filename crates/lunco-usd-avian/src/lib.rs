@@ -22,7 +22,7 @@
 //! | `physics:mass` | `Mass` | On the rigid body root |
 //! | `physics:linearDamping` | `LinearDamping` | |
 //! | `physics:angularDamping` | `AngularDamping` | |
-//! | `physics:friction` | `Friction` | |
+//! | `material:binding:physics` → `PhysicsMaterialAPI` | `Friction`, `Restitution` | `physics:dynamicFriction` / `physics:staticFriction` / `physics:restitution` on the bound `Material`. There is no `physics:friction` attribute in UsdPhysics — see [`read_physics_material`]. |
 //!
 //! ## Collider Mapping
 //!
@@ -54,6 +54,11 @@ use lunco_usd_bevy::{
 };
 pub use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset, UsdInstanceRoot};
 use openusd::sdf::Path as SdfPath;
+// UsdPhysics attribute + API-schema names as CONSTANTS, from openusd's own schema
+// module. Hand-written `"physics:…"` string literals are how `physics:friction`
+// (an attribute UsdPhysics does not define) got invented and lived here for
+// months: a typo in a `&str` compiles.
+use openusd::schemas::physics::tokens as ptok;
 use openusd::usd::Stage;
 
 pub mod big_space_bridge;
@@ -174,7 +179,7 @@ fn enforce_kinematic_on_animated(
             // Kinematic, matching the demoted body type.
             commands
                 .entity(entity)
-                .insert((RigidBody::Kinematic, lunco_core::Mobility::Kinematic));
+                .try_insert((RigidBody::Kinematic, lunco_core::Mobility::Kinematic));
         }
     }
 }
@@ -276,7 +281,7 @@ fn collect_child_colliders_from_usd<R: UsdRead>(
 
         // Check if child has collision enabled
         let child_collision = reader
-            .scalar::<bool>(&child_path, "physics:collisionEnabled")
+            .scalar::<bool>(&child_path, ptok::A_COLLISION_ENABLED)
             .unwrap_or(true);
         if !child_collision { continue; }
 
@@ -367,7 +372,7 @@ fn build_collider_from_usd<R: UsdRead>(reader: &R, sdf_path: &SdfPath) -> Option
         // `convexHull`/`convexDecomposition` produce the solid volumes a DYNAMIC
         // body needs (a trimesh can't be a moving rigid body in parry). Read via
         // the standard token so it works off either the live stage or the flatten.
-        let collider = match read_token_attribute(reader, sdf_path, "physics:approximation").as_deref() {
+        let collider = match read_token_attribute(reader, sdf_path, ptok::A_APPROXIMATION).as_deref() {
             Some("convexHull") => {
                 Collider::convex_hull(verts.clone()).unwrap_or_else(|| Collider::trimesh(verts, tris))
             }
@@ -385,10 +390,7 @@ fn build_collider_from_usd<R: UsdRead>(reader: &R, sdf_path: &SdfPath) -> Option
     // collider can't desync from the visual mesh. Build the INTRINSIC
     // (unscaled) shape; the scale tail below owns scaling.
     let collider = match read_shape_dims(reader, sdf_path, ty.as_str())? {
-        ShapeDims::Cube { size, legacy_extents } => match legacy_extents {
-            Some([width, height, depth]) => Collider::cuboid(width, height, depth),
-            None => Collider::cuboid(size, size, size),
-        },
+        ShapeDims::Cube { size } => Collider::cuboid(size, size, size),
         ShapeDims::Sphere { radius } => Collider::sphere(radius),
         ShapeDims::Cylinder { radius, height } => Collider::cylinder(radius, height),
         ShapeDims::Cone { radius, height } => Collider::cone(radius, height),
@@ -466,8 +468,8 @@ fn has_rigid_body_ancestor<R: UsdRead>(reader: &R, sdf_path: &SdfPath) -> bool {
         if p.is_abs_root() {
             return false;
         }
-        if reader.has_api_schema(&p, "PhysicsRigidBodyAPI")
-            || reader.scalar::<bool>(&p, "physics:rigidBodyEnabled") == Some(true)
+        if reader.has_api_schema(&p, ptok::API_RIGID_BODY)
+            || reader.scalar::<bool>(&p, ptok::A_RIGID_BODY_ENABLED) == Some(true)
         {
             return true;
         }
@@ -656,9 +658,9 @@ fn extract_avian_prim<R: UsdRead>(
         return;
     }
 
-    let has_rigid_body_api = reader.has_api_schema(sdf_path, "PhysicsRigidBodyAPI");
-    let has_collision_api = reader.has_api_schema(sdf_path, "PhysicsCollisionAPI");
-    let has_terrain_api = reader.has_api_schema(sdf_path, "PhysxTerrainAPI");
+    let has_rigid_body_api = reader.has_api_schema(sdf_path, ptok::API_RIGID_BODY);
+    let has_collision_api = reader.has_api_schema(sdf_path, ptok::API_COLLISION);
+    let has_terrain_api = reader.has_api_schema(sdf_path, "LunCoTerrainAPI");
 
     // ── TERRAIN ── static collider + TerrainTile; mesh DEMs defer their collider.
     if has_terrain_api {
@@ -703,7 +705,7 @@ fn extract_avian_prim<R: UsdRead>(
 
         // A `Dynamic`-declared body spawns `Kinematic` + `ShouldBeDynamic` and
         // settles to `Dynamic` once joints resolve (no 1-frame separation launch).
-        let kinematic = reader.scalar::<bool>(sdf_path, "physics:kinematicEnabled").unwrap_or(false);
+        let kinematic = reader.scalar::<bool>(sdf_path, ptok::A_KINEMATIC_ENABLED).unwrap_or(false);
         let (body, mobility) = if kinematic {
             (RigidBody::Kinematic, lunco_core::Mobility::Kinematic)
         } else {
@@ -726,7 +728,7 @@ fn extract_avian_prim<R: UsdRead>(
         // level down (`/Scene/Ground` under a plain `Xform`) is every bit as
         // standalone as one at `/Ground`. Keying on root-ness silently gave such a
         // prim NO collider at all — things fell straight through the floor with no
-        // error, and scenes worked around it by tacking on `PhysxTerrainAPI`.
+        // error, and scenes worked around it by tacking on `LunCoTerrainAPI`.
         if !has_rigid_body_ancestor(reader, sdf_path) {
             commands.entity(entity).try_insert((RigidBody::Static, lunco_core::Mobility::Static));
             add_collider_from_usd(commands, entity, reader, sdf_path);
@@ -734,7 +736,7 @@ fn extract_avian_prim<R: UsdRead>(
         commands.entity(entity).try_insert(UsdAvianProcessed);
     } else {
         // ── FALLBACK: legacy `physics:rigidBodyEnabled` ──
-        if let Some(true) = reader.scalar::<bool>(sdf_path, "physics:rigidBodyEnabled") {
+        if let Some(true) = reader.scalar::<bool>(sdf_path, ptok::A_RIGID_BODY_ENABLED) {
             commands.entity(entity).try_insert((
                 RigidBody::Kinematic,
                 lunco_core::Mobility::Dynamic,
@@ -743,7 +745,7 @@ fn extract_avian_prim<R: UsdRead>(
             ));
             apply_rigid_body_mass_props(commands, entity, reader, sdf_path);
             add_collider_from_usd(commands, entity, reader, sdf_path);
-        } else if let Some(false) = reader.scalar::<bool>(sdf_path, "physics:rigidBodyEnabled") {
+        } else if let Some(false) = reader.scalar::<bool>(sdf_path, ptok::A_RIGID_BODY_ENABLED) {
             commands.entity(entity).try_insert((RigidBody::Static, lunco_core::Mobility::Static));
             add_collider_from_usd(commands, entity, reader, sdf_path);
         }
@@ -1247,7 +1249,7 @@ fn apply_rigid_body_mass_props<R: UsdRead>(
     reader: &R,
     sdf_path: &SdfPath,
 ) {
-    let mass = reader.real_f32(sdf_path, "physics:mass").unwrap_or(1000.0);
+    let mass = reader.real_f32(sdf_path, ptok::A_MASS).unwrap_or(1000.0);
     commands.entity(entity).try_insert(Mass(mass));
 
     // G2 — authored principal inertia. `physics:diagonalInertia` is the diagonal
@@ -1256,7 +1258,7 @@ fn apply_rigid_body_mass_props<R: UsdRead>(
     // landers/rovers and is left to default. Off-diagonal inertia is not
     // representable here (Avian stores principal + frame), matching the
     // UsdPhysics schema.
-    if let Some(diag) = read_vec3_attribute(reader, sdf_path, "physics:diagonalInertia") {
+    if let Some(diag) = read_vec3_attribute(reader, sdf_path, ptok::A_DIAGONAL_INERTIA) {
         commands.entity(entity).try_insert(AngularInertia {
             principal: diag.as_vec3(),
             local_frame: Quat::IDENTITY,
@@ -1264,25 +1266,183 @@ fn apply_rigid_body_mass_props<R: UsdRead>(
     }
 
     // G2 — authored centre of mass (body-frame offset).
-    if let Some(com) = read_vec3_attribute(reader, sdf_path, "physics:centerOfMass") {
+    if let Some(com) = read_vec3_attribute(reader, sdf_path, ptok::A_CENTER_OF_MASS) {
         commands.entity(entity).try_insert(CenterOfMass(com.as_vec3()));
     }
 
-    if let Some(d) = reader.real_f32(sdf_path, "physics:linearDamping") {
+    if let Some(d) = reader.real_f32(sdf_path, PHYSX_LINEAR_DAMPING) {
         commands.entity(entity).try_insert(LinearDamping(d as f64));
     }
-    if let Some(d) = reader.real_f32(sdf_path, "physics:angularDamping") {
+    if let Some(d) = reader.real_f32(sdf_path, PHYSX_ANGULAR_DAMPING) {
         commands.entity(entity).try_insert(AngularDamping(d as f64));
     }
-    if let Some(f) = reader.real_f32(sdf_path, "physics:friction") {
-        commands.entity(entity).try_insert(Friction::new(f.into()));
+    // Friction/restitution come from a bound `UsdPhysicsMaterialAPI` material —
+    // NOT from a `physics:friction` attribute on the body, which is not a thing
+    // UsdPhysics defines (see `read_physics_material`).
+    //
+    // USD and Avian BOTH model dynamic and static friction separately, so map
+    // them across one-to-one rather than collapsing to a single coefficient.
+    // Either may be unauthored; fall back to Avian's own default for that one
+    // (0.5), not to the other coefficient — "sticky but slippery" is a legitimate
+    // surface, and silently mirroring one onto the other would erase it.
+    //
+    // How the ROVER's friction and the GROUND's friction interact: they don't
+    // average in USD — USD only says what each surface IS. The pairing happens in
+    // the solver, per contact: Avian takes the two bodies' `Friction` components
+    // and combines each coefficient with the `combine_rule` (default `Average`,
+    // matching PhysX). So regolith at 1.0 under a wheel at 0.8 yields 0.9 unless
+    // a material says otherwise — and a material CAN say otherwise, via
+    // `physxMaterial:frictionCombineMode` (`min` is the usual choice when you
+    // want "the slipperiest surface wins", which is the physically honest rule
+    // for a wheel on dust).
+    if let Some(pm) = read_physics_material(reader, sdf_path) {
+        if pm.dynamic_friction.is_some() || pm.static_friction.is_some() {
+            let d = Friction::default();
+            commands.entity(entity).try_insert(Friction {
+                dynamic_coefficient: pm
+                    .dynamic_friction
+                    .map_or(d.dynamic_coefficient, |f| f.into()),
+                static_coefficient: pm
+                    .static_friction
+                    .map_or(d.static_coefficient, |f| f.into()),
+                combine_rule: pm.friction_combine.unwrap_or(d.combine_rule),
+            });
+        }
+        if let Some(r) = pm.restitution {
+            let d = Restitution::default();
+            commands.entity(entity).try_insert(Restitution {
+                coefficient: r.into(),
+                combine_rule: pm.restitution_combine.unwrap_or(d.combine_rule),
+            });
+        }
     }
-    if let Some(vel) = read_vec3_attribute(reader, sdf_path, "physics:linearVelocity") {
+    if let Some(vel) = read_vec3_attribute(reader, sdf_path, ptok::A_VELOCITY) {
         commands.entity(entity).try_insert(LinearVelocity(vel));
     }
-    if let Some(ang) = read_vec3_attribute(reader, sdf_path, "physics:angularVelocity") {
+    if let Some(ang) = read_vec3_attribute(reader, sdf_path, ptok::A_ANGULAR_VELOCITY) {
         commands.entity(entity).try_insert(AngularVelocity(ang));
     }
+}
+
+/// Damping is **not** a UsdPhysics concept — the core spec has no damping
+/// attribute at all. Omniverse contributes it via `PhysxRigidBodyAPI`, and these
+/// are its names. We used to author `physics:linearDamping`, squatting the
+/// UsdPhysics namespace with an attribute it does not define.
+const PHYSX_LINEAR_DAMPING: &str = "physxRigidBody:linearDamping";
+const PHYSX_ANGULAR_DAMPING: &str = "physxRigidBody:angularDamping";
+
+/// How two contacting surfaces' coefficients are combined — `PhysxMaterialAPI`'s
+/// `physxMaterial:frictionCombineMode`. Also not core UsdPhysics: the spec says
+/// what a surface IS, and leaves the pairwise combination to the solver. This is
+/// Omniverse's (and PhysX's) name for it, and Avian implements the same rules.
+const PHYSX_FRICTION_COMBINE_MODE: &str = "physxMaterial:frictionCombineMode";
+const PHYSX_RESTITUTION_COMBINE_MODE: &str = "physxMaterial:restitutionCombineMode";
+
+/// PhysX/Omniverse combine-mode token → Avian's [`CoefficientCombine`].
+///
+/// `average` is the default in both, so an unauthored mode behaves identically.
+/// (Avian additionally offers `GeometricMean`, which PhysX has no token for; it
+/// is reachable only from Rust.)
+fn combine_mode(token: Option<&str>) -> Option<CoefficientCombine> {
+    match token? {
+        "average" => Some(CoefficientCombine::Average),
+        "min" => Some(CoefficientCombine::Min),
+        "multiply" => Some(CoefficientCombine::Multiply),
+        "max" => Some(CoefficientCombine::Max),
+        other => {
+            bevy::log::warn!(
+                "[usd-avian] unknown frictionCombineMode `{other}` — expected \
+                 average/min/multiply/max; using the default (average)"
+            );
+            None
+        }
+    }
+}
+
+/// The surface properties of a bound `UsdPhysicsMaterialAPI` material.
+///
+/// Dynamic and static friction are kept **separate**, because both USD and Avian
+/// model them separately (`physics:dynamicFriction` / `physics:staticFriction`;
+/// `Friction::dynamic_coefficient` / `static_coefficient`). Collapsing them to
+/// one number — as the old `physics:friction` did — throws away the distinction
+/// between "how hard is it to start sliding" and "how hard is it to keep
+/// sliding", which for a rover on regolith is exactly the interesting part.
+pub struct PhysicsMaterial {
+    /// `physics:dynamicFriction` — kinetic, while surfaces slide.
+    pub dynamic_friction: Option<f32>,
+    /// `physics:staticFriction` — resists the onset of sliding.
+    pub static_friction: Option<f32>,
+    /// `physics:restitution` — bounciness.
+    pub restitution: Option<f32>,
+    /// `physxMaterial:frictionCombineMode` — how THIS surface's friction combines
+    /// with whatever it touches.
+    pub friction_combine: Option<CoefficientCombine>,
+    /// `physxMaterial:restitutionCombineMode`.
+    pub restitution_combine: Option<CoefficientCombine>,
+}
+
+/// Resolve the physics material bound to `prim` and read its surface properties.
+///
+/// # Why this is not just an attribute read
+///
+/// There is no `physics:friction` in UsdPhysics. Friction is
+/// `UsdPhysicsMaterialAPI` — `physics:dynamicFriction` / `physics:staticFriction`
+/// / `physics:restitution` / `physics:density` — applied to a **`Material`** prim
+/// and bound to geometry through the purpose-specific relationship
+/// `material:binding:physics`:
+///
+/// ```usda
+/// def Scope "PhysicsMaterials" {
+///     def Material "Regolith" (prepend apiSchemas = ["PhysicsMaterialAPI"]) {
+///         float physics:dynamicFriction = 1.0
+///         float physics:staticFriction  = 1.0
+///     }
+/// }
+/// def Cube "Ground" (prepend apiSchemas = ["PhysicsCollisionAPI"]) {
+///     rel material:binding:physics = </World/PhysicsMaterials/Regolith>
+/// }
+/// ```
+///
+/// We used to read a bare `physics:friction` off the body prim: an invented
+/// attribute inside a namespace UsdPhysics owns. Omniverse and every other
+/// physics-aware consumer ignored it, and had USD ever defined that name, our
+/// value would have been silently reinterpreted.
+///
+/// Binding resolution — namespace inheritance, and the purpose→all-purpose
+/// fallback that lets ONE `Material` drive both look and friction — is SHARED
+/// with the renderer ([`lunco_usd_bevy::resolve_bound_material`]). A physical and
+/// a visual material are the same USD concept bound for different purposes, so
+/// they must resolve through the same code or they will drift.
+pub fn read_physics_material<R: UsdRead>(reader: &R, prim: &SdfPath) -> Option<PhysicsMaterial> {
+    use openusd::schemas::physics::tokens as ptok;
+
+    let mat = lunco_usd_bevy::resolve_bound_material(
+        reader,
+        prim,
+        lunco_usd_bevy::MaterialPurpose::Physics,
+    )?;
+    let dynamic_friction = reader.real_f32(&mat, ptok::A_DYNAMIC_FRICTION);
+    let static_friction = reader.real_f32(&mat, ptok::A_STATIC_FRICTION);
+    let restitution = reader.real_f32(&mat, ptok::A_RESTITUTION);
+    let friction_combine = combine_mode(
+        read_token_attribute(reader, &mat, PHYSX_FRICTION_COMBINE_MODE).as_deref(),
+    );
+    let restitution_combine = combine_mode(
+        read_token_attribute(reader, &mat, PHYSX_RESTITUTION_COMBINE_MODE).as_deref(),
+    );
+
+    // A Material bound only for LOOKS resolves here via the purpose→all-purpose
+    // fallback but carries no `PhysicsMaterialAPI` properties. That is not a
+    // physics material — don't fabricate a zero-friction one out of it.
+    (dynamic_friction.is_some() || static_friction.is_some() || restitution.is_some()).then_some(
+        PhysicsMaterial {
+            dynamic_friction,
+            static_friction,
+            restitution,
+            friction_combine,
+            restitution_combine,
+        },
+    )
 }
 
 /// Marker component to hold a rigid body as Kinematic until all joints

@@ -29,7 +29,7 @@ fn check_sandbox_colliders() {
             path.as_str(), ty, vis, col_en, rigid, size, scale, parent);
     }
 
-    // Also check: does the ground have PhysxTerrainAPI?
+    // Also check: does the ground have LunCoTerrainAPI?
     let ground = SdfPath::new("/SandboxScene/Ground").unwrap();
     println!("\n===== GROUND =====");
     dump_prim(&view, &ground);
@@ -57,7 +57,7 @@ fn dump_prim(view: &StageView<'_>, path: &SdfPath) {
 
     // Check has_api_schema the same way the avian code does
     let has_collision = view.has_api_schema(path, "PhysicsCollisionAPI");
-    let has_terrain = view.has_api_schema(path, "PhysxTerrainAPI");
+    let has_terrain = view.has_api_schema(path, "LunCoTerrainAPI");
 
     println!("  type={}", ty);
     println!("  active={}", active);
@@ -68,5 +68,5 @@ fn dump_prim(view: &StageView<'_>, path: &SdfPath) {
     println!("  scale={:?}", scale);
     println!("  children={:?}", children.iter().map(|c| c.as_str().to_string()).collect::<Vec<_>>());
     println!("  has_api_schema(PhysicsCollisionAPI) = {}", has_collision);
-    println!("  has_api_schema(PhysxTerrainAPI) = {}", has_terrain);
+    println!("  has_api_schema(LunCoTerrainAPI) = {}", has_terrain);
 }

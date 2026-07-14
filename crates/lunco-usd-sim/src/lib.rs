@@ -379,7 +379,7 @@ fn recover_stuck_usd_prims(
             STUCK_PRIM_DEADLINE_SECS,
         );
         for (e, _) in q.iter() {
-            commands.entity(e).insert(ForceBuildNoVisual);
+            commands.entity(e).try_insert(ForceBuildNoVisual);
         }
         // Recovered prims leave the query next frame; reset so any genuinely-new
         // stuck prim starts its own grace period cleanly.
@@ -490,7 +490,7 @@ fn process_usd_sim_prims(
         // prim entity to its USD-parent entity, which itself chains
         // back to the workbench-owned scene_root.
         if is_preview_only(entity, &q_child_of, &q_preview_only) {
-            commands.entity(entity).insert(UsdSimProcessed);
+            commands.entity(entity).try_insert(UsdSimProcessed);
             continue;
         }
 
@@ -578,20 +578,20 @@ fn process_usd_sim_prim_read<R: UsdRead>(
         if articulation_roots.contains(&net_key)
             || reader.has_api_schema(&sdf_path, "PhysicsArticulationRootAPI")
         {
-            commands.entity(entity).insert(lunco_core::ArticulatedVehicle);
+            commands.entity(entity).try_insert(lunco_core::ArticulatedVehicle);
         }
         if joint_targets.contains_key(&net_key) {
-            commands.entity(entity).insert(lunco_core::ArticulatedLink);
+            commands.entity(entity).try_insert(lunco_core::ArticulatedLink);
         }
         let net_replicate = reader.scalar::<bool>(&sdf_path, "lunco:net:replicate");
         let net_authority = reader.scalar::<String>(&sdf_path, "lunco:net:authority");
         let (net_excluded, net_opaque) =
             net_override_markers(net_replicate, net_authority.as_deref());
         if net_excluded {
-            commands.entity(entity).insert(lunco_core::NetExcluded);
+            commands.entity(entity).try_insert(lunco_core::NetExcluded);
         }
         if net_opaque {
-            commands.entity(entity).insert(lunco_core::NotPredictable);
+            commands.entity(entity).try_insert(lunco_core::NotPredictable);
         }
 
         // USD-authored sensors → cosim telemetry ports (lunco-cosim::sensors).
@@ -602,7 +602,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             .map(|v| DVec3::new(v[0], v[1], v[2]))
             .unwrap_or(DVec3::ZERO);
         if reader.scalar::<bool>(&sdf_path, "lunco:sensor:imu").is_some() {
-            commands.entity(entity).insert(lunco_cosim::sensors::ImuSensor::mounted(sensor_offset));
+            commands.entity(entity).try_insert(lunco_cosim::sensors::ImuSensor::mounted(sensor_offset));
         }
         if reader.scalar::<bool>(&sdf_path, "lunco:sensor:range").is_some() {
             let axis = match lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:sensor:rangeAxis").as_deref() {
@@ -624,7 +624,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             let visualize = reader
                 .scalar::<bool>(&sdf_path, "lunco:sensor:rangeVisualize")
                 .unwrap_or(false);
-            commands.entity(entity).insert(lunco_cosim::sensors::RangeSensor {
+            commands.entity(entity).try_insert(lunco_cosim::sensors::RangeSensor {
                 offset: sensor_offset,
                 axis,
                 max_distance,
@@ -635,7 +635,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             });
         }
         if reader.scalar::<bool>(&sdf_path, "lunco:sensor:contact").is_some() {
-            commands.entity(entity).insert(lunco_cosim::sensors::ContactSensor::default());
+            commands.entity(entity).try_insert(lunco_cosim::sensors::ContactSensor::default());
         }
 
         // USD-authored TELEMETRY channel → `lunco_core::telemetry::Parameter`.
@@ -673,7 +673,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                         // property of a prim. `lunco-telemetry` publishes those itself.
                         lunco_core::telemetry::ChannelSource::Diagnostic(d) => d.clone(),
                     });
-                commands.entity(entity).insert(lunco_core::telemetry::Parameter {
+                commands.entity(entity).try_insert(lunco_core::telemetry::Parameter {
                     name,
                     // The tag sits on the prim it measures — no indirection needed. (A channel
                     // created through the API is its own entity and sets `target`, because a
@@ -733,7 +733,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             // and-braces. See `ProvisionalAvatarCamera`.
             for prov in q_provisional_cameras.iter() {
                 if prov != entity {
-                    commands.entity(prov).despawn();
+                    commands.entity(prov).try_despawn();
                 }
             }
             // Same takeover for PRIOR AVATAR entities. A stage recompose can
@@ -869,7 +869,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             // Build camera based on mode, then parent to Grid for FloatingOrigin
             match camera_mode.as_str() {
                 "freeflight" => {
-                    commands.entity(entity).insert((
+                    commands.entity(entity).try_insert((
                         camera_look(),
                         FreeFlightCamera { yaw, pitch, damping: None },
                         AdaptiveNearPlane,
@@ -884,7 +884,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                     ));
                 }
                 "orbit" => {
-                    commands.entity(entity).insert((
+                    commands.entity(entity).try_insert((
                         camera_look(),
                         OrbitCamera {
                             target: Entity::PLACEHOLDER,
@@ -906,7 +906,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                     ));
                 }
                 "springarm" => {
-                    commands.entity(entity).insert((
+                    commands.entity(entity).try_insert((
                         camera_look(),
                         SpringArmCamera {
                             target: Entity::PLACEHOLDER,
@@ -933,7 +933,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                 }
                 _ => {
                     warn!("Unknown camera mode '{}' for avatar at {}, using freeflight", camera_mode, prim_path.path);
-                    commands.entity(entity).insert((
+                    commands.entity(entity).try_insert((
                         camera_look(),
                         FreeFlightCamera { yaw, pitch, damping: None },
                         AdaptiveNearPlane,
@@ -950,7 +950,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             }
             // Parent to Grid so FloatingOrigin works
             if let Some(g) = q_grids.iter().next() {
-                commands.entity(entity).insert(ChildOf(g));
+                commands.entity(entity).try_insert(ChildOf(g));
             }
         }
 
@@ -989,7 +989,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                 port_map.insert(name.clone(), port_ent);
             }
 
-            commands.entity(entity).insert((
+            commands.entity(entity).try_insert((
                 // Seed the CANONICAL rover command surface (throttle/steer/brake) that
                 // `apply_drive_mix` reads and the skid/Ackermann/driveMix kernels all
                 // consume — universal to every `PhysxVehicleContextAPI` rover here, and
@@ -1016,7 +1016,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             // are kinematically coupled even after the wheels are
             // reparented out of the Bevy hierarchy.
             if reader.has_api_schema(&sdf_path, "PhysicsArticulationRootAPI") {
-                commands.entity(entity).insert(ArticulationRoot);
+                commands.entity(entity).try_insert(ArticulationRoot);
                 info!("Detected PhysicsArticulationRootAPI on {}", prim_path.path);
             }
 
@@ -1035,14 +1035,14 @@ fn process_usd_sim_prim_read<R: UsdRead>(
         {
             commands
                 .entity(entity)
-                .insert(lunco_autopilot::usd_tree::BehaviorXml(xml));
+                .try_insert(lunco_autopilot::usd_tree::BehaviorXml(xml));
         } else if let Some(path) = reader
             .scalar::<String>(&sdf_path, "lunco:behaviorPath")
             .filter(|s| !s.trim().is_empty())
         {
             commands
                 .entity(entity)
-                .insert(lunco_autopilot::usd_tree::BehaviorXmlPath(path));
+                .try_insert(lunco_autopilot::usd_tree::BehaviorXmlPath(path));
         }
 
         // 2. Detect the drive allocation → a `DriveMix { kernel, ports, entries }`
@@ -1075,7 +1075,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             None
         };
         if let Some(mix) = drive_mix {
-            commands.entity(entity).insert(mix);
+            commands.entity(entity).try_insert(mix);
         }
 
         // 2b. G5 — rocker-bogie differential. A chassis that names two rocker
@@ -1095,7 +1095,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                 "Detected rocker-bogie differential on {} (rockers {} / {})",
                 prim_path.path, rocker_a, rocker_b
             );
-            commands.entity(entity).insert(PendingDifferential {
+            commands.entity(entity).try_insert(PendingDifferential {
                 rocker_a,
                 rocker_b,
                 axis,
@@ -1158,7 +1158,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                 reader.scalar::<String>(&sdf_path, "lunco:steerPort");
 
             // Mark for wiring — the try_wire_wheel system will connect ports once FSW exists
-            commands.entity(entity).insert(PendingWheelWiring {
+            commands.entity(entity).try_insert(PendingWheelWiring {
                 index,
                 p_drive,
                 p_steer,
@@ -1284,7 +1284,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             }
         }
 
-        commands.entity(entity).insert(UsdSimProcessed);
+        commands.entity(entity).try_insert(UsdSimProcessed);
 }
 
 /// Pure mapping of the `lunco:net:*` override attributes to replication markers,
@@ -1430,9 +1430,9 @@ fn setup_raycast_wheel(
         // two are mutually exclusive on one entity (an entity carrying both would
         // draw twice), so `remove` BOTH from the physics entity.
         if let Some(sm) = maybe_shader_mat.cloned() {
-            visual.insert(sm);
+            visual.try_insert(sm);
         } else if let Some(mat) = maybe_mat.cloned() {
-            visual.insert(mat);
+            visual.try_insert(mat);
         }
         wheel.visual_entity = Some(visual.id());
         commands.entity(entity).remove::<Mesh3d>();
@@ -1462,7 +1462,7 @@ fn setup_raycast_wheel(
     }
     ray_caster = ray_caster.with_query_filter(filter);
 
-    commands.entity(entity).insert((
+    commands.entity(entity).try_insert((
         wheel,
         ray_caster,
         RayHits::default(),
@@ -1475,7 +1475,7 @@ fn setup_raycast_wheel(
     // rotates the raycast wheel to it — identical steering across wheel kinds.
     if let Some(steer_port) = steer {
         let mount = existing_tf.translation.as_dvec3();
-        commands.entity(entity).insert(SteeringActuator {
+        commands.entity(entity).try_insert(SteeringActuator {
             port_entity: steer_port,
             max_steer_angle,
             current_ref: 0.0,
@@ -1575,9 +1575,9 @@ fn setup_physical_wheel(
         // (see `setup_raycast_wheel` for the full rationale): the `ShaderLook` wins
         // over the plain `PbrLook`, and both are removed from the physics entity.
         if let Some(sm) = maybe_shader_mat.cloned() {
-            visual.insert(sm);
+            visual.try_insert(sm);
         } else if let Some(mat) = maybe_mat.cloned() {
-            visual.insert(mat);
+            visual.try_insert(mat);
         }
         commands.entity(entity).remove::<Mesh3d>();
         commands.entity(entity).remove::<PbrLook>();
@@ -1588,7 +1588,7 @@ fn setup_physical_wheel(
         .remove::<RayCaster>()
         .remove::<RayHits>();
 
-    commands.entity(entity).insert((
+    commands.entity(entity).try_insert((
         PhysicalWheel {
             visual_entity: visual_id,
             wheel_radius: radius,
@@ -1721,7 +1721,7 @@ fn setup_physical_wheel(
     ));
     // Front wheels of an Ackermann rover also steer (frame rotation about Y).
     if let Some(steer_port) = steer {
-        joint_cmd.insert(SteeringActuator {
+        joint_cmd.try_insert(SteeringActuator {
             port_entity: steer_port,
             max_steer_angle,
             current_ref: 0.0,
@@ -1737,7 +1737,7 @@ fn setup_physical_wheel(
 
     // Logical wheel↔rover link, independent of Bevy hierarchy.
     // Reflects the OpenUSD `PhysicsArticulationRootAPI` graph.
-    commands.entity(entity).insert(WheelOf(chassis));
+    commands.entity(entity).try_insert(WheelOf(chassis));
     commands.queue(move |world: &mut World| {
         if let Some(mut rw) = world.get_mut::<RoverWheels>(chassis) {
             rw.0.push(entity);
@@ -1863,7 +1863,7 @@ fn reconstruct_proxy_wheels(
             continue; // host / owned rover — real local wheel physics
         }
         if !matches!(rb, RigidBody::Kinematic) {
-            commands.entity(e).insert(RigidBody::Kinematic);
+            commands.entity(e).try_insert(RigidBody::Kinematic);
         }
         // Front wheels: Ackermann steer from the chassis motion. Cosmetic-grade;
         // rear wheels δ = 0.
@@ -2144,7 +2144,7 @@ fn resolve_behavior_targets(
                 bindings.0.insert(path, e);
             }
         }
-        commands.entity(vessel).insert(bindings);
+        commands.entity(vessel).try_insert(bindings);
     }
 }
 
@@ -2178,7 +2178,7 @@ fn resolve_differential_coupling(
         else {
             continue; // a rocker not admitted yet — retry next frame
         };
-        commands.entity(chassis).insert(DifferentialCoupling {
+        commands.entity(chassis).try_insert(DifferentialCoupling {
             chassis,
             rocker_a,
             rocker_b,

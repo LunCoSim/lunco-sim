@@ -79,7 +79,7 @@ pub(crate) fn instantiate_camera_prim<R: UsdRead>(
     // source of the validator's spawn-frame reports. Until the resolver runs
     // (next Update at the latest), the camera is a plain Transform child of a
     // cell-entity: valid, propagated, and inactive anyway.
-    commands.entity(entity).insert((
+    commands.entity(entity).try_insert((
         Camera {
             is_active: false,
             ..default()

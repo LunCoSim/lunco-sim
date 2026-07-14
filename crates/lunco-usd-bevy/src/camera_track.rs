@@ -112,10 +112,10 @@ pub fn plan_camera_tracks(
         if keys.is_empty() {
             // Marked but no readable keys (e.g. non-token samples) — plan it
             // empty so we stop retrying; the sampler no-ops on it.
-            commands.entity(entity).insert(CameraTrackPlan::default());
+            commands.entity(entity).try_insert(CameraTrackPlan::default());
             continue;
         }
-        commands.entity(entity).insert(CameraTrackPlan {
+        commands.entity(entity).try_insert(CameraTrackPlan {
             time_codes_per_second: stage_time_codes_per_second(reader),
             keys,
             last: None,
@@ -142,7 +142,7 @@ pub fn bind_camera_tracks_to_preview(
     for (entity, prim) in &q {
         commands
             .entity(entity)
-            .insert(TimeBinding { domain: preview.domain });
+            .try_insert(TimeBinding { domain: preview.domain });
         // Union the track's key span (seconds) into the range to grow the domain.
         if let Some(cs) = canonical.get(prim.stage_handle.id()) {
             let view = cs.view();

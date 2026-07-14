@@ -171,7 +171,7 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
             };
 
             commands.insert_resource(sun.shadow_map());
-            commands.entity(entity).insert((
+            commands.entity(entity).try_insert((
                 lunco_core::SunAngularDiameter(angular_diameter_deg),
                 sun.directional_light(color, illuminance_lux),
                 sun.cascade_config(),
@@ -206,7 +206,7 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
                     get_attribute_as_f32(reader, sdf_path, "inputs:intensity").unwrap_or(0.0);
                 commands
                     .entity(entity)
-                    .insert((UsdDomeAmbient(intensity), UsdAuthoredLight));
+                    .try_insert((UsdDomeAmbient(intensity), UsdAuthoredLight));
                 info!("[usd-bevy] {} DomeLight ambient={intensity}", sdf_path.as_str());
                 return true;
             };
@@ -217,7 +217,7 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
                 env.intensity,
                 env.skybox,
             );
-            commands.entity(entity).insert((env, UsdAuthoredLight));
+            commands.entity(entity).try_insert((env, UsdAuthoredLight));
             true
         }
         Some("SphereLight") => {
@@ -253,7 +253,7 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
                 // vessel headlight), not a scene-dominant sun/sky. Stamping it
                 // would retire the binary's fallback sun the instant a rover
                 // spawns — see the marker docs.
-                commands.entity(entity).insert(SpotLight {
+                commands.entity(entity).try_insert(SpotLight {
                     color,
                     intensity: intensity_cd,
                     range,
@@ -272,7 +272,7 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
             } else {
                 // Pointlight path (standard SphereLight). No `UsdAuthoredLight`
                 // — local light, must not retire the fallback sun (see above).
-                commands.entity(entity).insert(PointLight {
+                commands.entity(entity).try_insert(PointLight {
                     color,
                     intensity: intensity_cd,
                     range,
@@ -305,7 +305,7 @@ pub(crate) fn on_usd_light_added(
 ) {
     for e in &fallbacks {
         info!("[usd-bevy] scene authored a light — despawning fallback light {e:?}");
-        commands.entity(e).despawn();
+        commands.entity(e).try_despawn();
     }
     if let Some(mut ambient) = ambient {
         ambient.brightness = domes.iter().map(|d| d.0).sum();

@@ -254,7 +254,7 @@ fn project_dome_textures(
         if source.texture_descriptor.size.depth_or_array_layers == 6 {
             commands
                 .entity(entity)
-                .insert(DomeCubemap(dome.texture.clone()))
+                .try_insert(DomeCubemap(dome.texture.clone()))
                 .remove::<DomeDirty>();
             continue;
         }
@@ -277,7 +277,7 @@ fn project_dome_textures(
             );
             commands
                 .entity(entity)
-                .insert(DomeCubemap(Handle::default()))
+                .try_insert(DomeCubemap(Handle::default()))
                 .remove::<DomeDirty>();
             continue;
         };
@@ -288,7 +288,7 @@ fn project_dome_textures(
             .spawn(async move { equirect_to_cubemap(&equirect, face_size, tint) });
         commands
             .entity(entity)
-            .insert(DomeProjection(task))
+            .try_insert(DomeProjection(task))
             .remove::<DomeDirty>();
     }
 
@@ -303,7 +303,7 @@ fn project_dome_textures(
         commands
             .entity(entity)
             .remove::<DomeProjection>()
-            .insert(DomeCubemap(images.add(cube)));
+            .try_insert(DomeCubemap(images.add(cube)));
     }
 }
 
@@ -395,7 +395,7 @@ fn bind_dome_to_cameras(
     let rotation = xform.map(|t| t.rotation()).unwrap_or(Quat::IDENTITY);
 
     for camera in &cameras {
-        commands.entity(camera).insert((
+        commands.entity(camera).try_insert((
             GeneratedEnvironmentMapLight {
                 environment_map: cube.0.clone(),
                 intensity: dome.intensity,
@@ -405,7 +405,7 @@ fn bind_dome_to_cameras(
             DomeBoundCamera,
         ));
         if dome.skybox {
-            commands.entity(camera).insert(Skybox {
+            commands.entity(camera).try_insert(Skybox {
                 image: Some(cube.0.clone()),
                 brightness: dome.intensity,
                 rotation,
