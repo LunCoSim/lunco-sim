@@ -38,6 +38,11 @@
 pub mod catalog;
 pub mod spawn_meta;
 pub mod commands;
+/// Headless-safe: resolve an entity's backing USD document + its bound shader prim.
+/// Shared by `commands` (the authoring tier) and the Inspector panel — it lived in
+/// the panel, which is what broke the `--no-ui` server build (`commands` reached
+/// into `crate::ui` for it).
+mod doc_resolve;
 /// Shaders as a journaled, synced, live-editable domain (WGSL twin of rhai's
 /// `ScriptDocument`) — edits record to the Twin journal (`DomainKind::Shader`).
 pub mod shader_doc;

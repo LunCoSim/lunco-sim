@@ -3576,7 +3576,7 @@ fn author_look_to_usd(commands: &mut Commands, target: Entity, key: &str, look: 
     let look = look.clone();
     let key = key.to_string();
     commands.queue(move |world: &mut World| {
-        let Some(doc) = crate::ui::inspector::resolve_doc_for_entity(world, target) else {
+        let Some(doc) = crate::doc_resolve::resolve_doc_for_entity(world, target) else {
             return;
         };
         let Some(prim) = world.get::<UsdPrimPath>(target).cloned() else {
@@ -3602,7 +3602,7 @@ fn author_look_to_usd(commands: &mut Commands, target: Entity, key: &str, look: 
         }
 
         // An existing bound shader, else create the material.
-        let existing = crate::ui::inspector::bound_shader_prim(world, &prim);
+        let existing = crate::doc_resolve::bound_shader_prim(world, &prim);
         let (mut ops, shader, fresh) = match existing {
             Some(sp) => (Vec::new(), sp, false),
             None => match lunco_usd::material::ensure_preview_surface_ops(&prim.path) {

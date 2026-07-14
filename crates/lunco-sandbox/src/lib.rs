@@ -46,7 +46,10 @@ use lunco_hardware::LunCoHardwarePlugin;
 use lunco_usd::{LoadScene, UsdPlugins, UsdPrimPath, UsdStageAsset};
 // The USD-reading systems read the LIVE canonical stage via `StageView`, which
 // implements `UsdRead` (the COMPOSED stage — as opposed to `UsdDataExt`, a raw
-// AUTHORED layer; the retired flattened reader used to blur the two).
+// AUTHORED layer; the retired flattened reader used to blur the two). Since the
+// terrain projector moved to `lunco-usd-terrain`, the only reader left in this crate
+// is the `ui`-gated terrain layer-map binding.
+#[cfg(feature = "ui")]
 use lunco_usd_bevy::UsdRead;
 use bevy::asset::AssetLoadFailedEvent;
 
