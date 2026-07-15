@@ -44,17 +44,6 @@ def Xform "BuildBase" (
     # Environment, not a spawnable part.
     uniform bool lunco:spawnable = false
 
-    # ── Catalog entry (hybrid: metadata rides the scene, not tutorials.json) ──
-    # This scene-backed lesson declares its own catalog row here on the default
-    # prim; the launcher (`lunco_usd_bevy::tutorial_scene_metas`) scans it and
-    # merges it with the JSON manifest. Present ⇒ this .usda IS a tutorial.
-    custom string lunco:tutorialId = "build-base"
-    custom string lunco:tutorialTitle = "Build a Lunar Base"
-    custom string lunco:tutorialBlurb = "Compose a surface base from the moonbase Structures kit — solar/fission power, a crew habitat, a comms mast, an ISRU plant and a landing pad — and learn the siting rules for each."
-    custom string lunco:tutorialDifficulty = "beginner"
-    custom string lunco:tutorialScript = "sandbox/build_base.rhai"
-    custom string lunco:tutorialNext = "script-a-rover"
-
     # ── The build plot: a wide, flat regolith plane (±250 m) so the ≥150 m
     #    landing-pad standoff is a real distance to lay out. ─────────────────
     def Cube "Ground" (

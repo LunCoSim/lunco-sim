@@ -1882,59 +1882,6 @@ impl DefaultPrim {
     }
 }
 
-/// One `string`/`token` attribute off the stage's `defaultPrim`. Thin wrapper
-/// over [`DefaultPrim`] for callers that want exactly one value; a caller
-/// wanting several should [`DefaultPrim::parse`] once instead of paying for a
-/// re-parse per attribute.
-pub fn read_default_prim_attr(text: &str, attr: &str) -> Option<String> {
-    DefaultPrim::parse(text)?.text(attr)
-}
-
-/// Catalog metadata a **scene-backed** tutorial declares on its own scene, as an
-/// alternative to a `tutorials.json` row: the `.usda` that IS the lesson
-/// environment also carries its catalog entry on the default prim
-/// (`lunco:tutorialId`, `…Title`, `…Blurb`, `…Difficulty`, `…Script`, `…Next`).
-/// The launcher merges these with the JSON manifest (idempotent on `id`). A
-/// scene without `lunco:tutorialId` is just an environment and is ignored.
-pub struct UsdTutorialMeta {
-    pub id: String,
-    pub title: String,
-    pub blurb: String,
-    pub difficulty: String,
-    /// The orchestrator `.rhai`, relative to `assets/tutorials/` (as in the JSON
-    /// manifest) — the scene names its own lesson script explicitly.
-    pub script: String,
-    pub next: Option<String>,
-}
-
-/// Scan `assets/tutorials/<app>/*.usda` for lesson scenes that declare their own
-/// catalog metadata (`lunco:tutorial*` on the default prim) and return them.
-///
-/// A composition-free single-layer read ([`read_default_prim_attr`]) per scene —
-/// native reads disk (live-editable), wasm the embed, via
-/// [`lunco_assets::tutorials::tutorial_scene_sources`]. Scenes missing
-/// `lunco:tutorialId` or `lunco:tutorialScript` are skipped (they're plain
-/// environments, not self-describing tutorials). The caller registers the
-/// results into the shared `TutorialRegistry` alongside the JSON manifest.
-pub fn tutorial_scene_metas(app: &str) -> Vec<UsdTutorialMeta> {
-    lunco_assets::tutorials::tutorial_scene_sources(app)
-        .into_iter()
-        .filter_map(|(_rel, text)| {
-            let id = read_default_prim_attr(&text, "lunco:tutorialId")?;
-            let script = read_default_prim_attr(&text, "lunco:tutorialScript")?;
-            Some(UsdTutorialMeta {
-                id,
-                title: read_default_prim_attr(&text, "lunco:tutorialTitle").unwrap_or_default(),
-                blurb: read_default_prim_attr(&text, "lunco:tutorialBlurb").unwrap_or_default(),
-                difficulty: read_default_prim_attr(&text, "lunco:tutorialDifficulty")
-                    .unwrap_or_default(),
-                script,
-                next: read_default_prim_attr(&text, "lunco:tutorialNext"),
-            })
-        })
-        .collect()
-}
-
 /// True if the prim at `path` applies the named API schema, by exact
 /// token match against its `apiSchemas` list (or list-op). Canonical
 /// shared helper — `lunco-usd-avian` and `lunco-usd-sim` both call
@@ -3898,51 +3845,48 @@ mod mesh_tests {
     /// `UsdRead::asset` reads an `asset`-typed attribute, and `scalar::<String>`
     /// does NOT.
     ///
-    /// This is the type contract, pinned. `lunco:material:shader` is `asset`
+    /// This is the type contract, pinned. A shader's source is an `asset`
     /// (`@shaders/wheel.wgsl@`) so USD's resolver — and anything walking a layer for
-    /// the files a scene depends on — can see the `.wgsl`. As a `string` it was inert:
-    /// the scene named a shader that would not travel with it.
+    /// the files a scene depends on — can see the `.wgsl`. As a `string` it is inert:
+    /// the scene names a shader that will not travel with it.
     ///
     /// The second assertion is the important one. A reader tolerant of BOTH types
     /// would let the wrong authoring keep working, and writer and reader would go on
-    /// concealing each other — which is exactly how this attribute has been wrong
-    /// before, in both directions. `scalar::<String>` returning `None` on an `asset`
-    /// is the property that makes the schema binding, rather than advisory.
+    /// concealing each other. `scalar::<String>` returning `None` on an `asset` is the
+    /// property that makes the schema binding, rather than advisory.
     #[test]
     fn asset_typed_attribute_reads_as_asset_and_not_as_string() {
         let __cs = parse(
             "#usda 1.0\n\
-             def Mesh \"Panel\"\n{\n\
-             uniform token lunco:material:type = \"shader\"\n\
-             uniform asset lunco:material:shader = @shaders/wheel.wgsl@\n}\n",
+             def Shader \"Shader\"\n{\n\
+             uniform token info:implementationSource = \"sourceAsset\"\n\
+             uniform asset info:wgsl:sourceAsset = @shaders/wheel.wgsl@\n}\n",
         );
         let reader = __cs.view();
-        let panel = SdfPath::new("/Panel").unwrap();
+        let panel = SdfPath::new("/Shader").unwrap();
 
         assert_eq!(
-            reader.asset(&panel, "lunco:material:shader").as_deref(),
+            reader.asset(&panel, "info:wgsl:sourceAsset").as_deref(),
             Some("shaders/wheel.wgsl"),
         );
         assert!(
-            reader.scalar::<String>(&panel, "lunco:material:shader").is_none(),
+            reader.scalar::<String>(&panel, "info:wgsl:sourceAsset").is_none(),
             "an `asset` must NOT read back as a String — tolerating both is what let \
              the writer and reader hide each other's bugs",
         );
         // …and the sibling `token` reads through `text`, NOT through `scalar::<String>`.
         //
-        // This half is the regression guard for a bug that shipped: when
-        // `primvars:materialType` (a `string`) became `lunco:material:type` (a `token`),
-        // every reader kept asking for `scalar::<String>` — which matches
-        // `Value::String` alone. It returned `None` for every prim, so `ShaderLook` was
-        // never authored and NOTHING in the scene got its WGSL shader. It failed
-        // silently: an unshaded prim is a plain grey surface, not an error.
+        // A `token` is its own `sdf::Value` variant, and `scalar::<String>` matches
+        // `Value::String` alone — so a reader asking for a String reads every token as
+        // `None`, for every prim, silently. A shader that never binds is a plain grey
+        // surface, not an error, which is why this half is pinned in a test.
         assert_eq!(
-            reader.text(&panel, "lunco:material:type").as_deref(),
-            Some("shader"),
+            reader.text(&panel, "info:implementationSource").as_deref(),
+            Some("sourceAsset"),
             "a `token` must read through `text`",
         );
         assert!(
-            reader.scalar::<String>(&panel, "lunco:material:type").is_none(),
+            reader.scalar::<String>(&panel, "info:implementationSource").is_none(),
             "`scalar::<String>` must NOT read a token — the whole point is that asking \
              for the wrong USD type fails loudly in a test rather than quietly at runtime",
         );
@@ -4568,10 +4512,14 @@ def Xform "World"
 
 #[cfg(test)]
 mod default_prim_attr_tests {
-    //! `read_default_prim_attr` — openusd-parse a single layer and read a
+    //! [`DefaultPrim`] — openusd-parse a single layer and read a
     //! `string`/`token` attribute off its `defaultPrim` (the path the scene
     //! `lunco:description` tooltip uses).
     use super::*;
+
+    fn attr(text: &str, name: &str) -> Option<String> {
+        DefaultPrim::parse(text)?.text(name)
+    }
 
     const SCENE: &str = "#usda 1.0\n\
         (\n\
@@ -4587,14 +4535,14 @@ mod default_prim_attr_tests {
     #[test]
     fn reads_string_attr_off_default_prim() {
         assert_eq!(
-            read_default_prim_attr(SCENE, "lunco:description").as_deref(),
+            attr(SCENE, "lunco:description").as_deref(),
             Some("Two cubes joined together.")
         );
     }
 
     #[test]
     fn missing_attr_is_none() {
-        assert!(read_default_prim_attr(SCENE, "lunco:notAuthored").is_none());
+        assert!(attr(SCENE, "lunco:notAuthored").is_none());
     }
 
     #[test]
@@ -4602,11 +4550,11 @@ mod default_prim_attr_tests {
         // Layer with no `defaultPrim` metadata — even if the attribute exists
         // on a prim, we don't know which prim is the root.
         let src = "#usda 1.0\ndef Xform \"Orphan\"\n{\n    custom string lunco:description = \"x\"\n}\n";
-        assert!(read_default_prim_attr(src, "lunco:description").is_none());
+        assert!(attr(src, "lunco:description").is_none());
     }
 
     #[test]
     fn unparseable_text_is_none() {
-        assert!(read_default_prim_attr("this is not USDA", "lunco:description").is_none());
+        assert!(attr("this is not USDA", "lunco:description").is_none());
     }
 }

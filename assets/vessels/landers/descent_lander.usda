@@ -98,6 +98,30 @@ def Xform "DescentLander" (
                 token outputs:surface
             }
         }
+
+        # The deployed arrays' photovoltaic surface — a WGSL shader, named for the
+        # `wgsl` render context exactly as the surfaces above are named for
+        # `UsdPreviewSurface`. Both wings wear it: same cells, same cut.
+        def Material "SolarWing_Mat"
+        {
+            token outputs:surface.connect = </DescentLander/Looks/SolarWing_Mat/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:wgsl:sourceAsset = @shaders/solar_panel.wgsl@
+                float inputs:v_scale = 1.7
+                float inputs:cell_rows = 8.0
+                float inputs:cell_cols = 14.0
+                float inputs:cell_gap = 0.01
+                float inputs:bus_width = 0.004
+                float inputs:border = 0.05
+                color3f inputs:cell_color = (0.04, 0.05, 0.28)
+                color3f inputs:bus_color = (0.9, 0.9, 0.95)
+                color3f inputs:frame_color = (0.15, 0.15, 0.18)
+                token outputs:surface
+            }
+        }
     }
 
     # A palette item: an airframe with no guidance does nothing surprising when it
@@ -385,9 +409,6 @@ def Xform "DescentLander" (
     # Flat cells-up wings on ±X, tilted toward the sun. Thin slabs, no collider —
     # visual only.
     def Cube "SolarWingPX"
-    (
-        prepend apiSchemas = ["LunCoMaterialAPI"]
-    )
     {
         double size = 1.0
         double3 xformOp:translate = (5.4, 1.4, 0)
@@ -395,22 +416,10 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (5.6, 0.06, 3.4)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.06, 0.06, 0.22)]
-        uniform asset lunco:material:shader = @shaders/solar_panel.wgsl@
-        float primvars:v_scale = 1.7
-        float primvars:cell_rows = 8.0
-        float primvars:cell_cols = 14.0
-        float primvars:cell_gap = 0.01
-        float primvars:bus_width = 0.004
-        float primvars:border = 0.05
-        color3f primvars:cell_color = (0.04, 0.05, 0.28)
-        color3f primvars:bus_color = (0.9, 0.9, 0.95)
-        color3f primvars:frame_color = (0.15, 0.15, 0.18)
+        rel material:binding = </DescentLander/Looks/SolarWing_Mat>
         bool physics:collisionEnabled = false
     }
     def Cube "SolarWingNX"
-    (
-        prepend apiSchemas = ["LunCoMaterialAPI"]
-    )
     {
         double size = 1.0
         double3 xformOp:translate = (-5.4, 1.4, 0)
@@ -418,16 +427,7 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (5.6, 0.06, 3.4)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.06, 0.06, 0.22)]
-        uniform asset lunco:material:shader = @shaders/solar_panel.wgsl@
-        float primvars:v_scale = 1.7
-        float primvars:cell_rows = 8.0
-        float primvars:cell_cols = 14.0
-        float primvars:cell_gap = 0.01
-        float primvars:bus_width = 0.004
-        float primvars:border = 0.05
-        color3f primvars:cell_color = (0.04, 0.05, 0.28)
-        color3f primvars:bus_color = (0.9, 0.9, 0.95)
-        color3f primvars:frame_color = (0.15, 0.15, 0.18)
+        rel material:binding = </DescentLander/Looks/SolarWing_Mat>
         bool physics:collisionEnabled = false
     }
 

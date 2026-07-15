@@ -272,12 +272,7 @@ mod tests {
             reg.prim_types()
         );
         assert!(reg.prim_types().contains(&"LunCoPolicy".to_string()));
-        for api in [
-            "LunCoTerrainAPI",
-            "LunCoTerrainLayerAPI",
-            "LunCoShadowAPI",
-            "LunCoMaterialAPI",
-        ] {
+        for api in ["LunCoTerrainAPI", "LunCoTerrainLayerAPI", "LunCoShadowAPI"] {
             assert!(
                 reg.api_schemas().contains(&api.to_string()),
                 "{api} missing from {:?}",

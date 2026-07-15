@@ -67,8 +67,7 @@ pub struct TutorialMeta {
     #[serde(default)]
     pub first_start: bool,
     /// The id of the tutorial to chain to when this one completes
-    /// (`MISSION_COMPLETE`). Data, not code — replaces the old USD `nextScene`.
-    /// `None` = the chain ends here.
+    /// (`MISSION_COMPLETE`). Data, not code. `None` = the chain ends here.
     #[serde(default)]
     pub next: Option<String>,
 }
@@ -97,9 +96,7 @@ impl TutorialRegistry {
     /// (`first_start`) and follow the `next` chain, then pick up any lesson not
     /// yet reached (a second chain / orphan) in registration order and follow
     /// its chain too. Display code iterates this so a lesson's position is its
-    /// place in the chain — independent of *where* it was registered from
-    /// (`tutorials.json` vs. a scene's `lunco:tutorial*` metadata, which merges
-    /// in later and would otherwise append out of sequence).
+    /// place in the chain — independent of the order its manifest lists it in.
     pub fn ordered(&self) -> Vec<&TutorialMeta> {
         let mut out: Vec<&TutorialMeta> = Vec::with_capacity(self.tutorials.len());
         let mut seen = std::collections::HashSet::new();

@@ -32,14 +32,26 @@ def Xform "ShaderFallbackTest" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
+    def Scope "Looks"
+    {
+        def Material "BadShader"
+        {
+            token outputs:surface.connect = </ShaderFallbackTest/Looks/BadShader/Shader.outputs:surface>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                # INVALID: pbr_lit.wgsl is an importable library (no @fragment).
+                uniform asset info:wgsl:sourceAsset = @shaders/pbr_lit.wgsl@
+                token outputs:surface
+            }
+        }
+    }
+
     def Cube "BadShaderCube"
-    (
-        prepend apiSchemas = ["LunCoMaterialAPI"]
-    )
     {
         double size = 2.0
         color3f[] primvars:displayColor = [(0.9, 0.3, 0.2)]
-        # INVALID: pbr_lit.wgsl is an importable library (no @fragment).
-        uniform asset lunco:material:shader = @shaders/pbr_lit.wgsl@
+        rel material:binding = </ShaderFallbackTest/Looks/BadShader>
     }
 }

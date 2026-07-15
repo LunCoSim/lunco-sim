@@ -17,6 +17,32 @@ def Xform "SolarPanel" (
     float physics:mass = 15.0
     float lunco:spawnLift = 2.0
 
+    # Looks — the panel's photovoltaic surface. A `Material` whose surface comes from a
+    # `Shader` named for the `wgsl` render context, with the shader's parameters as its
+    # `inputs:`.
+    def Scope "Looks"
+    {
+        def Material "SolarPanel"
+        {
+            token outputs:surface.connect = </SolarPanel/Looks/SolarPanel/Shader.outputs:surface>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:wgsl:sourceAsset = @shaders/solar_panel.wgsl@
+                color3f inputs:cell_color = (0.05, 0.05, 0.35)   # cell
+                color3f inputs:bus_color = (0.85, 0.85, 0.90)    # bus line (metal)
+                color3f inputs:frame_color = (0.35, 0.35, 0.38)  # frame border
+                float inputs:cell_rows = 12.0   # cell rows
+                float inputs:cell_cols = 6.0    # cell cols
+                float inputs:cell_gap = 0.02    # cell gap (UV)
+                float inputs:bus_width = 0.004  # bus width (UV)
+                float inputs:border = 0.05      # frame border (UV)
+                token outputs:surface
+            }
+        }
+    }
+
     # Panel Frame — structural aluminum
     def Cube "PanelFrame" (
         prepend apiSchemas = ["PhysicsCollisionAPI"]
@@ -32,7 +58,7 @@ def Xform "SolarPanel" (
 
     # Panel Surface — photovoltaic cells (very thin, on top of frame)
     def Cube "PanelSurface" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoMaterialAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
     )
     {
         double size = 1.0
@@ -41,19 +67,6 @@ def Xform "SolarPanel" (
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.05, 0.05, 0.85)] # Deep blue
         bool physics:collisionEnabled = true
-
-        # Use the general ShaderMaterial, driven entirely by the shader file
-        # + generic primvars (no bespoke Rust material).
-        uniform asset lunco:material:shader = @shaders/solar_panel.wgsl@
-
-        # Generic shader params (see assets/shaders/solar_panel.wgsl):
-        color3f primvars:cell_color = (0.05, 0.05, 0.35)   # cell
-        color3f primvars:bus_color = (0.85, 0.85, 0.90)    # bus line (metal)
-        color3f primvars:frame_color = (0.35, 0.35, 0.38)  # frame border
-        float primvars:cell_rows = 12.0   # cell rows
-        float primvars:cell_cols = 6.0    # cell cols
-        float primvars:cell_gap = 0.02    # cell gap (UV)
-        float primvars:bus_width = 0.004  # bus width (UV)
-        float primvars:border = 0.05      # frame border (UV)
+        rel material:binding = </SolarPanel/Looks/SolarPanel>
     }
 }

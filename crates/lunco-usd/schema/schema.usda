@@ -259,25 +259,16 @@ class "LunCoShadowAPI" (
     )
 }
 
-class "LunCoMaterialAPI" (
-    inherits = </APISchemaBase>
-    customData = {
-        token apiSchemaType = "singleApply"
-    }
-    doc = """Selects a custom (WGSL) render material for a prim, for looks that
-    UsdPreviewSurface cannot express (regolith, solar panels, layered terrain)."""
-)
-{
-    uniform asset lunco:material:shader = @@ (
-        doc = """The WGSL shader that declares the pipeline's bindings, e.g.
-        `@shaders/terrain_layered.wgsl@`. Naming a shader IS selecting it — a prim
-        with one renders through the WGSL pipeline, a prim without one does not.
-
-        `asset`, never `string`: only an `asset` is visible to USD's resolver and to
-        anything that walks a layer for the files a scene depends on — the reference
-        closure, packaging, `usdzip`."""
-    )
-}
+# WGSL MATERIALS ARE `UsdShade`, and there is no schema of ours for them.
+#
+# A look the `UsdPreviewSurface` node cannot express (regolith, a solar panel, layered
+# terrain) is still a `Material` whose surface comes from a `Shader`, and that `Shader`
+# names its source for its render context: `info:wgsl:sourceAsset`, exactly as an MDL
+# shader is named by `info:mdl:sourceAsset` and a GLSL one by `info:glslfx:sourceAsset`.
+# Its parameters are its `inputs:`. Geometry binds it with `rel material:binding`.
+#
+# So a WGSL material needs nothing from this file: it is a shader, bound where shaders
+# are bound, and usdview, Blender and Omniverse all find it there.
 
 class "LunCoCatalogAPI" (
     inherits = </APISchemaBase>

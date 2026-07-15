@@ -171,18 +171,6 @@ class "LunCoShadowAPI" (
     )
 }
 
-class "LunCoMaterialAPI" (
-    doc = """Selects a custom (WGSL) render material for a prim."""
-    customData = {
-        token apiSchemaType = "singleApply"
-    }
-)
-{
-    uniform asset lunco:material:shader = @@ (
-        doc = "The WGSL shader declaring the pipeline's bindings. Naming one selects it."
-    )
-}
-
 class LunCoProgram "LunCoProgram" (
     doc = """One program bound to the prim that owns it — a Modelica plant, a rhai
     controller, a Python model, a behaviour tree. A prim, not an attribute: it has

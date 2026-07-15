@@ -111,9 +111,23 @@ fn a_wheel_composes_its_tire() {
         "Wheel_FL must compose its tire's contact stiffness"
     );
 
-    // Tread — the shader the tire brings, as an `asset`.
+    // Tread — the look the tire brings, bound the way USD binds a shader: the wheel
+    // gets a `material:binding`, the `Material` names the `Shader` its surface comes
+    // from, and that `Shader`'s WGSL source is the tread. The Material is authored as a
+    // child of the tire's `over`, so the reference arc path-translates the whole chain
+    // onto the wheel — binding included.
+    let material = view
+        .rel_target(&fl, "material:binding")
+        .expect("Wheel_FL must compose its tire's material binding");
+    let surface = view
+        .connection_source(&material, "outputs:surface")
+        .expect("the bound Material must connect its surface to a Shader");
+    let (shader, _) = surface
+        .rsplit_once('.')
+        .expect("outputs:surface.connect must name a Shader property");
+    let shader = SdfPath::new(shader).unwrap();
     assert_eq!(
-        view.asset(&fl, "lunco:material:shader").as_deref(),
+        view.asset(&shader, "info:wgsl:sourceAsset").as_deref(),
         Some("shaders/wheel.wgsl"),
         "Wheel_FL must compose its tire's tread shader"
     );

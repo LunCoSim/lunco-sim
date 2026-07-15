@@ -71,10 +71,10 @@ pub trait UsdRead {
     ///
     /// USD has three textual value types — `string`, `token`, `asset` — and they are
     /// *distinct* `sdf::Value` variants. `scalar::<String>` matches `Value::String`
-    /// alone, so it reads a `token` as `None`. That is not a hypothetical:
-    /// `lunco:material:type` is a schema-declared `token`, every reader asked for a
-    /// `String`, and so **no prim in the scene got its WGSL shader** — silently, since
-    /// a missing look is just a default-grey surface, not an error.
+    /// alone, so it reads a `token` as `None`. That is not a hypothetical: a reader
+    /// asking a schema-declared `token` for a `String` gets `None` for every prim in
+    /// the scene, silently — and a look that never binds is a default-grey surface,
+    /// not an error.
     ///
     /// A `token` is USD's interned enum-ish string (`"shader"`, `"dem"`, `"rock"`) and
     /// a `string` is free text; which one a property is, is the *schema's* call, not

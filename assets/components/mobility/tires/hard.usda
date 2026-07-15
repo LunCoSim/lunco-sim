@@ -20,7 +20,6 @@
 # See `regolith.usda` for how the `over` composes onto the wheel that pulls it in.
 
 over "Tire" (
-    prepend apiSchemas = ["LunCoMaterialAPI"]
     kind = "component"
 )
 {
@@ -31,10 +30,22 @@ over "Tire" (
     double lunco:frictionCoefficient = 0.55
 
     # --- Tread ---
-    uniform asset lunco:material:shader = @shaders/wheel.wgsl@
-    color3f primvars:rim_color = (0.90, 0.90, 0.94)
-    color3f primvars:tire_color = (0.06, 0.06, 0.07)
-    float primvars:spoke_count = 6.0
-    float primvars:tread_lugs = 48.0                  # fine, dense tread — hard ground
+    rel material:binding = </Tire/TireLook>
     color3f[] primvars:displayColor = [(0.22, 0.22, 0.24)]
+
+    def Material "TireLook"
+    {
+        token outputs:surface.connect = </Tire/TireLook/Shader.outputs:surface>
+
+        def Shader "Shader"
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:wgsl:sourceAsset = @shaders/wheel.wgsl@
+            color3f inputs:rim_color = (0.90, 0.90, 0.94)
+            color3f inputs:tire_color = (0.06, 0.06, 0.07)
+            float inputs:spoke_count = 6.0
+            float inputs:tread_lugs = 48.0                  # fine, dense tread — hard ground
+            token outputs:surface
+        }
+    }
 }

@@ -179,37 +179,13 @@ impl Plugin for SandboxUiPlugin {
         // polar site).
         app.add_systems(Update, mode_exposure);
 
-        // Scene-backed tutorials declare their catalog entry on their OWN scene
-        // (`lunco:tutorial*` on the default prim), the hybrid alternative to a
-        // `tutorials.json` row — the `.usda` that IS the lesson environment
-        // doubles as the catalog entry. Scan + register them alongside the JSON
-        // manifest (loaded by `TutorialPlugin`, above; idempotent on `id`).
-        // Data-driven: a new scene lesson is a `.usda` with the block — no code
-        // here. Sandbox-only (lunica/luncosim have no scene tutorials), so
-        // `openusd` stays out of the shared launcher shell.
-        {
-            use lunco_tutorial::TutorialAppExt;
-            for m in lunco_usd_bevy::tutorial_scene_metas("sandbox") {
-                app.register_tutorial(lunco_tutorial::TutorialMeta {
-                    id: m.id,
-                    title: m.title,
-                    blurb: m.blurb,
-                    app: "sandbox".into(),
-                    difficulty: m.difficulty,
-                    script: m.script,
-                    first_start: false,
-                    next: m.next,
-                });
-            }
-        }
-
         // Extra tutorial TRACKS — Basic (rover fundamentals) and Space School
         // (the IKI event scenario). `TutorialPlugin` is added once above for the
         // primary "sandbox" app (its build() does the one-time command/panel/
         // observer setup); adding it again would panic on duplicate-plugin. So
         // these extra apps just contribute their JSON catalog into the shared
-        // `TutorialRegistry` via `register_tutorial`, exactly like the scene-metas
-        // block above. Data-driven: a new track is a `tutorials.json` + `.rhai`.
+        // `TutorialRegistry` via `register_tutorial`.
+        // Data-driven: a new track is a `tutorials.json` + `.rhai`.
         {
             use lunco_tutorial::TutorialAppExt;
             for track in ["basic"] {

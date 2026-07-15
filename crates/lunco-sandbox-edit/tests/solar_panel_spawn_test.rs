@@ -22,20 +22,22 @@ fn test_solar_panel_usda_has_rigid_body_api() {
     );
 }
 
-/// Verifies the solar_panel.usda drives the general ShaderMaterial.
+/// Verifies the solar_panel.usda binds its shader the way USD binds a shader: the
+/// surface geometry has a `material:binding`, and the bound `Material`'s `Shader` names
+/// the WGSL source for the `wgsl` render context.
 #[test]
 fn test_solar_panel_usda_selects_its_shader() {
     let usda_path = std::path::Path::new("../../assets/components/power/solar_panel.usda");
     let content = std::fs::read_to_string(usda_path)
         .unwrap_or_else(|e| panic!("solar_panel.usda should exist at {:?}: {}", usda_path, e));
+    assert!(
+        content.contains("rel material:binding = </SolarPanel/Looks/SolarPanel>"),
+        "PanelSurface must bind the SolarPanel material"
+    );
     // `asset`, not `string` — naming the shader IS selecting it.
     assert!(
-        content.contains("uniform asset lunco:material:shader = @shaders/solar_panel.wgsl@"),
-        "PanelSurface must point lunco:material:shader at shaders/solar_panel.wgsl"
-    );
-    assert!(
-        content.contains("LunCoMaterialAPI"),
-        "a prim carrying lunco:material:* must apply LunCoMaterialAPI"
+        content.contains("uniform asset info:wgsl:sourceAsset = @shaders/solar_panel.wgsl@"),
+        "the bound Material's Shader must name shaders/solar_panel.wgsl"
     );
 }
 

@@ -279,15 +279,18 @@ pub struct PendingWheelWiring {
     pub steer_port_name: Option<String>,
 }
 
-/// G5 — marker holding an authored rocker-bogie differential until its two
-/// rocker bodies have spawned + been admitted by Avian. `resolve_differential_coupling`
-/// matches the prim-path strings → entities (same deferred pattern as
-/// `try_wire_wheel` / USD joints) then attaches the [`DifferentialCoupling`].
+/// An authored `PhysxPhysicsGearJoint`, held until the bodies it gears together have
+/// spawned + been admitted by Avian. `resolve_differential_coupling` matches the
+/// prim-path strings → entities (same deferred pattern as `try_wire_wheel` / USD
+/// joints) then attaches the [`DifferentialCoupling`].
 #[derive(Component)]
 pub struct PendingDifferential {
-    /// Composed prim path of the left rocker body (`lunco:differential:rockerA`).
+    /// Composed prim path of the frame both hinges turn against — the gear's reaction
+    /// target (`physics:body0` of the hinges; a rover's chassis).
+    pub chassis: String,
+    /// Composed prim path of the body the first hinge turns.
     pub rocker_a: String,
-    /// Composed prim path of the right rocker body (`lunco:differential:rockerB`).
+    /// Composed prim path of the body the second hinge turns.
     pub rocker_b: String,
     /// Hinge axis in the chassis-local frame.
     pub axis: DVec3,
@@ -1096,31 +1099,64 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             commands.entity(entity).try_insert(mix);
         }
 
-        // 2b. G5 — rocker-bogie differential. A chassis that names two rocker
-        // bodies gets a soft coupling that averages their pitch (keeps the body
-        // level over rough ground). Defer-resolved once both rockers spawn.
-        if let (Some(rocker_a), Some(rocker_b)) = (
-            reader.rel_target(&sdf_path, "lunco:differential:rockerA"),
-            reader.rel_target(&sdf_path, "lunco:differential:rockerB"),
-        ) {
-            let read_f = |name: &str, dflt: f64| reader.real(&sdf_path, name).unwrap_or(dflt);
-            let axis = match reader.text(&sdf_path, "lunco:differential:axis").as_deref() {
-                Some("Y") => DVec3::Y,
-                Some("Z") => DVec3::Z,
-                _ => DVec3::X,
-            };
-            info!(
-                "Detected rocker-bogie differential on {} (rockers {} / {})",
-                prim_path.path, rocker_a, rocker_b
+        // 2b. A GEAR JOINT — `PhysxPhysicsGearJoint`, the PhysX schema for two hinges
+        // geared to each other. A rocker-bogie's differential is one of these: gear the
+        // left and right rocker hinges at −1 and the chassis rides the AVERAGE of them,
+        // which is what keeps the body level over rough ground.
+        //
+        // Nothing here is rocker-bogie code. A gear joint is a gear joint, and any
+        // geared linkage authored this way gets the same coupling with no new Rust.
+        // The compliance is the joint's own `PhysicsDriveAPI` — a rigid gear would fight
+        // the terrain and chatter, so it is enforced as a strong spring.
+        //
+        // Defer-resolved once both geared bodies spawn.
+        if reader.type_name(&sdf_path).as_deref() == Some("PhysxPhysicsGearJoint") {
+            let hinges = (
+                reader.rel_target(&sdf_path, "physxGearJoint:hinge0"),
+                reader.rel_target(&sdf_path, "physxGearJoint:hinge1"),
             );
-            commands.entity(entity).try_insert(PendingDifferential {
-                rocker_a,
-                rocker_b,
-                axis,
-                rest_sum: read_f("lunco:differential:restSum", 0.0),
-                stiffness: read_f("lunco:differential:stiffness", 200_000.0),
-                damping: read_f("lunco:differential:damping", 20_000.0),
-            });
+            // The bodies the gear turns are the ones its hinges turn: a hinge's `body1`
+            // is the part that moves, `body0` the frame it moves against. So the gear's
+            // reaction goes into the hinges' shared frame — the chassis.
+            let geared = |hinge: &Option<String>| -> Option<(String, String)> {
+                let h = SdfPath::new(hinge.as_deref()?).ok()?;
+                Some((
+                    reader.rel_target(&h, "physics:body1")?,
+                    reader.rel_target(&h, "physics:body0")?,
+                ))
+            };
+            if let (Some((body_a, frame)), Some((body_b, _))) =
+                (geared(&hinges.0), geared(&hinges.1))
+            {
+                let read_f = |name: &str, dflt: f64| reader.real(&sdf_path, name).unwrap_or(dflt);
+                // The hinges turn about a shared axis; take it from the first.
+                let axis = SdfPath::new(hinges.0.as_deref().unwrap_or_default())
+                    .ok()
+                    .and_then(|h| reader.text(&h, "physics:axis"))
+                    .as_deref()
+                    .map(|a| match a {
+                        "Y" => DVec3::Y,
+                        "Z" => DVec3::Z,
+                        _ => DVec3::X,
+                    })
+                    .unwrap_or(DVec3::X);
+                info!(
+                    "Gear joint {} couples {} / {} (ratio {})",
+                    prim_path.path,
+                    body_a,
+                    body_b,
+                    read_f("physxGearJoint:gearRatio", -1.0),
+                );
+                commands.entity(entity).try_insert(PendingDifferential {
+                    chassis: frame,
+                    rocker_a: body_a,
+                    rocker_b: body_b,
+                    axis,
+                    rest_sum: read_f("drive:angular:physics:targetPosition", 0.0),
+                    stiffness: read_f("drive:angular:physics:stiffness", 200_000.0),
+                    damping: read_f("drive:angular:physics:damping", 20_000.0),
+                });
+            }
         }
 
         // 3. Detect PhysxVehicleWheelAPI (The Wheel Intercept)
@@ -1145,7 +1181,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             // the plain `PbrLook` and lose the shader. If a wheel wants
             // a shader but it hasn't landed, retry next frame (don't mark
             // UsdSimProcessed).
-            let wants_shader = reader.asset(&sdf_path, "lunco:material:shader").is_some();
+            let wants_shader = reader.rel_target(&sdf_path, "material:binding").is_some();
             // Since the decoupling the `ShaderLook` is authored by a plain system
             // that runs headless too (it is intent, not a GPU material), so this no
             // longer deadlocks a `--no-ui` server. The wait is kept because the
@@ -2163,35 +2199,41 @@ fn resolve_behavior_targets(
     }
 }
 
-/// G5 — resolve a [`PendingDifferential`] into a [`DifferentialCoupling`] once
-/// both rocker bodies are spawned and Avian-admitted (the `With<Position>` gate,
-/// same as USD joints). Matches the authored prim-path strings against live
-/// `UsdPrimPath`s, scoped by stage. The chassis is the entity that carries the
-/// pending marker; gating it on `With<Position>` ensures the coupling system
-/// (which writes torques via `Forces`) never runs before the chassis is ready.
+/// Resolve a [`PendingDifferential`] — an authored gear joint — into a
+/// [`DifferentialCoupling`] once every body it names is spawned and Avian-admitted
+/// (the `With<Position>` gate, same as USD joints). Matches the authored prim-path
+/// strings against live `UsdPrimPath`s, scoped by stage and instance root, so two
+/// copies of the same rover in one scene each gear their OWN rockers.
+///
+/// The pending marker lives on the JOINT prim; the coupling is attached to the chassis,
+/// which is the body the gear's reaction torque goes into and the one the coupling
+/// system writes `Forces` through.
 fn resolve_differential_coupling(
-    q_pending: Query<(Entity, &UsdPrimPath, &PendingDifferential), With<Position>>,
+    q_pending: Query<(Entity, &UsdPrimPath, &PendingDifferential)>,
     q_bodies: Query<(Entity, &UsdPrimPath), With<Position>>,
     q_child_of: Query<&ChildOf>,
     q_usd_path: Query<&UsdPrimPath>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
     mut commands: Commands,
 ) {
-    for (chassis, chassis_path, pending) in q_pending.iter() {
-        let chassis_root = find_instance_root(chassis, &q_child_of, &q_usd_path, &q_instance_root);
+    for (joint, joint_path, pending) in q_pending.iter() {
+        let joint_root = find_instance_root(joint, &q_child_of, &q_usd_path, &q_instance_root);
         let find = |target: &str| {
             q_bodies
                 .iter()
                 .find(|(e, p)| {
                     p.path == target
-                        && p.stage_handle == chassis_path.stage_handle
-                        && find_instance_root(*e, &q_child_of, &q_usd_path, &q_instance_root) == chassis_root
+                        && p.stage_handle == joint_path.stage_handle
+                        && find_instance_root(*e, &q_child_of, &q_usd_path, &q_instance_root) == joint_root
                 })
                 .map(|(e, _)| e)
         };
-        let (Some(rocker_a), Some(rocker_b)) = (find(&pending.rocker_a), find(&pending.rocker_b))
-        else {
-            continue; // a rocker not admitted yet — retry next frame
+        let (Some(chassis), Some(rocker_a), Some(rocker_b)) = (
+            find(&pending.chassis),
+            find(&pending.rocker_a),
+            find(&pending.rocker_b),
+        ) else {
+            continue; // a geared body not admitted yet — retry next frame
         };
         commands.entity(chassis).try_insert(DifferentialCoupling {
             chassis,
@@ -2202,10 +2244,10 @@ fn resolve_differential_coupling(
             stiffness: pending.stiffness,
             damping: pending.damping,
         });
-        commands.entity(chassis).remove::<PendingDifferential>();
+        commands.entity(joint).remove::<PendingDifferential>();
         info!(
-            "Resolved rocker-bogie differential on {} ({} <-> {})",
-            chassis_path.path, pending.rocker_a, pending.rocker_b
+            "Resolved gear joint {} ({} <-> {})",
+            joint_path.path, pending.rocker_a, pending.rocker_b
         );
     }
 }

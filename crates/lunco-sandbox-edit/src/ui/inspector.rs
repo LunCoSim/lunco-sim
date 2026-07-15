@@ -1463,20 +1463,52 @@ fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
     // once, statically. (Removed reflectively — this crate may not name `bevy_pbr`.)
     crate::commands::drop_bound_pbr_material(world, part);
 
-    // Propagate changes to USD
-    if world.get::<UsdPrimPath>(part).is_some() {
-        // `LunCoMaterialAPI`. Naming the shader IS selecting it — there is no second
-        // attribute to keep in step. The TYPE is the schema's, and writer and reader
-        // must agree on it, not just on the name: an `asset` reads back as
-        // `Value::AssetPath`, and a loader asking for a `String` gets `None`.
-        apply_usd_attribute_change(
+    // Propagate to USD — onto the `Shader` prim of the `Material` this geometry is
+    // bound to. A shader is not a property of a mesh: it belongs to the material, and
+    // the material is what the mesh binds. So the edit goes where the shader lives.
+    //
+    // The TYPE is the schema's, and writer and reader must agree on it, not just on the
+    // name: an `asset` reads back as `Value::AssetPath`, and a loader asking for a
+    // `String` gets `None`.
+    if let Some(shader_prim) = bound_shader_prim_path(world, part) {
+        apply_usd_path_attribute_change(
             world,
             part,
-            "lunco:material:shader",
+            shader_prim,
+            "info:wgsl:sourceAsset",
             "asset",
             format!("@{}@", path),
         );
+    } else {
+        warn!(
+            "[inspector] this prim is bound to no material, so there is no shader to \
+             repoint. Bind it to a `Material` (with a `Shader` child) and the picker \
+             will edit that."
+        );
     }
+}
+
+/// The USD path of the `Shader` prim behind `part`'s bound material, if it has one:
+/// `rel material:binding` → `Material` → `outputs:surface.connect` → `Shader`.
+///
+/// The same two hops the loader makes (`lunco_usd_sim::shader::bound_shader_prim`), so
+/// the Inspector edits exactly the prim the renderer read.
+fn bound_shader_prim_path(world: &mut World, part: Entity) -> Option<String> {
+    use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdRead};
+
+    let prim = world.get::<UsdPrimPath>(part)?.clone();
+    let stage_id = prim.stage_handle.id();
+    let sdf = SdfPath::new(&prim.path).ok()?;
+
+    let mut canonical = world.get_non_send_resource_mut::<CanonicalStages>()?;
+    let cs = canonical.get(stage_id)?;
+    let view = cs.view();
+
+    let material = view.rel_target(&sdf, "material:binding")?;
+    let material = SdfPath::new(material.as_str()).ok()?;
+    let surface = view.connection_source(&material, "outputs:surface")?;
+    let (shader, _) = surface.rsplit_once('.')?;
+    Some(shader.to_string())
 }
 
 /// The asset path of `part`'s current shader (read via [`PanelCtx`]), or `None` if

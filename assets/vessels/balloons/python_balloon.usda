@@ -40,22 +40,37 @@ def Xform "PythonBalloon" (
     float inputs:height.connect = </PythonBalloon.outputs:height>
     float inputs:velocity.connect = </PythonBalloon.outputs:velocity_y>
 
+    # ── Looks: the envelope's skin ───────────────────────────────────────────
+    # Spin-revealing checker (see assets/shaders/balloon.wgsl), bound the way USD binds
+    # every shader: a `Material` whose surface comes from a `Shader`.
+    def Scope "Looks"
+    {
+        def Material "Envelope"
+        {
+            token outputs:surface.connect = </PythonBalloon/Looks/Envelope/Shader.outputs:surface>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:wgsl:sourceAsset = @shaders/balloon.wgsl@
+                color3f inputs:cell_a = (0.2, 0.8, 0.3)    # cell A (balloon identity)
+                color3f inputs:cell_b = (0.12, 0.12, 0.14) # cell B (dark)
+                color3f inputs:marker_color = (1.0, 1.0, 1.0) # marker wedge + poles
+                float inputs:wedge_count = 8.0             # longitude cells
+                float inputs:band_count = 6.0              # latitude cells
+                token outputs:surface
+            }
+        }
+    }
+
     # ── The envelope: renders and collides ───────────────────────────────────
     def Sphere "Envelope" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoMaterialAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
     )
     {
         double radius = 1.0
         color3f[] primvars:displayColor = [(0.2, 0.9, 0.2)]
         bool physics:collisionEnabled = true
-
-        # Spin-revealing checker via the general ShaderMaterial, loaded at USD-load
-        # time (see assets/shaders/balloon.wgsl).
-        uniform asset lunco:material:shader = @shaders/balloon.wgsl@
-        color3f primvars:cell_a = (0.2, 0.8, 0.3)    # cell A (balloon identity)
-        color3f primvars:cell_b = (0.12, 0.12, 0.14) # cell B (dark)
-        color3f primvars:marker_color = (1.0, 1.0, 1.0) # marker wedge + poles
-        float primvars:wedge_count = 8.0             # longitude cells
-        float primvars:band_count = 6.0              # latitude cells
+        rel material:binding = </PythonBalloon/Looks/Envelope>
     }
 }
