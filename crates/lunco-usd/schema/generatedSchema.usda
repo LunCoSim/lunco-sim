@@ -40,7 +40,10 @@ class LuncoPolicy "LuncoPolicy" (
         doc = "The seam this policy governs."
     )
     string lunco:policy:source = "" (
-        doc = "The rhai source of the hook."
+        doc = "The rhai source of the hook, authored inline (journal plane)."
+    )
+    asset lunco:policy:sourcePath = @@ (
+        doc = "File-backed rhai source (`@…rhai@`, content plane); inline `source` wins."
     )
     string lunco:policy:entry = "" (
         doc = "Entry-point function name."
@@ -79,7 +82,7 @@ class "LuncoTerrainLayerAPI" (
         allowedTokens = ["", "dem", "craters", "rocks", "rock", "overzoom", "shader", "edit"]
         doc = "Which layer kind this prim is."
     )
-    string lunco:layer:demSource = "" (
+    asset lunco:layer:demSource = @@ (
         doc = "Path to the DEM source (the `dem` ground layer)."
     )
     float lunco:layer:windowM = 0 (

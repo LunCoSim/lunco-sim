@@ -516,6 +516,31 @@ mod real_reader_tests {
     }
 
     #[test]
+    fn asset_reads_an_authored_asset_path_off_the_live_stage() {
+        // The exact production case that was in doubt: an `asset`-typed attribute
+        // (`lunco:layer:demSource`, `lunco:policy:sourcePath`) read off a live COMPOSED
+        // stage. `scalar::<String>` / `text` must NOT read it (it's `Value::AssetPath`,
+        // not String/Token); `asset` must return the authored `@…@` path.
+        const S: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\n\
+            def Xform \"World\"\n{\n    asset a_val = @terrain/connecting_ridge@\n}\n";
+        let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", S))
+            .expect("stage builds");
+        let view = cs.view();
+        let world = SdfPath::new("/World").unwrap();
+        assert_eq!(
+            view.asset(&world, "a_val").as_deref(),
+            Some("terrain/connecting_ridge"),
+            "asset() reads the authored @…@ path off the composed stage"
+        );
+        // A strict typed `String` read misses it — the value is `Value::AssetPath`.
+        assert_eq!(view.scalar::<String>(&world, "a_val"), None, "a String read misses an asset");
+        // `text` coerces via `as_str` (same as `upAxis`), so it ALSO yields the path —
+        // which is why the pre-migration `string demSource` read worked; the asset
+        // migration is about the type contract, not about making the read possible.
+        assert_eq!(view.text(&world, "a_val").as_deref(), Some("terrain/connecting_ridge"));
+    }
+
+    #[test]
     fn real_family_reads_either_authored_precision() {
         let cs = stage_with_mixed_precision();
         let view = cs.view();

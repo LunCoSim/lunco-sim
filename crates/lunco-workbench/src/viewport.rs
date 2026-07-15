@@ -96,7 +96,7 @@ use bevy::prelude::*;
 // `bevy::camera::*` re-exports work on *both* native and
 // `--no-default-features` wasm builds. `bevy::render::camera::*` only
 // exists when the `bevy_render` feature is on, which wasm strips.
-use bevy::camera::{ClearColorConfig, RenderTarget};
+use bevy::camera::{ClearColorConfig, Hdr, RenderTarget};
 use bevy_egui::{egui, EguiGlobalSettings, PrimaryEguiContext};
 
 use crate::{Panel, PanelCtx, PanelId, PanelSlot};
@@ -605,36 +605,56 @@ impl Panel for ViewportPanel {
 /// MSAA ×2 (`SceneCamera`, and `Off` on wasm) while a bare `Camera2d` defaults
 /// to ×4, so the keys diverged and the chrome ghosted.
 ///
-/// **Change-driven.** MSAA is a settings value that practically never moves, so
-/// the sync only runs when something could actually have broken the invariant:
-/// a scene camera's `Msaa` changed (the user flipped the setting; insertion
-/// counts as a change), a camera was newly tagged as a scene camera
-/// (`auto_tag_workbench_3d_cameras` tags USD/avatar cameras long after startup),
-/// or the host itself was just spawned. Otherwise it early-outs on two empty
-/// archetype checks.
+/// **Change-driven.** MSAA practically never moves on its own, so the system
+/// early-outs on quiet frames. The trigger set must cover EVERY way the pairing
+/// (active window scene-camera → host) can change — the earlier set missed two, which
+/// is how the ghost came back:
+/// - `Changed<Msaa>` — the user flipped the setting (insertion counts as a change);
+/// - `Added<WorkbenchViewportCamera>` — a camera newly became a scene camera
+///   (`auto_tag_workbench_3d_cameras` tags USD/avatar cameras long after startup);
+/// - `Changed<Camera>` — a DIFFERENT camera became active (`is_active` lives on
+///   `Camera`), AND a window **resize** (bevy's camera driver rewrites `Camera.computed`
+///   with the new target size). Both must re-pick/re-sync;
+/// - **removal** (`RemovedComponents`) — a scene swap (Open-Twin) DESPAWNS the old
+///   active camera and spawns the twin's. Without watching removal, the host stayed
+///   synced to the despawned camera's MSAA; the new active camera then rendered into a
+///   host texture keyed to the WRONG MSAA (a private, never-cleared one), and stale
+///   chrome accumulated over the live 3D. This is the regression.
+///
+/// It is still change-driven: on a frame where none of these fired it does two empty
+/// archetype checks and returns.
 pub fn sync_egui_host_msaa(
-    // Fires when a scene camera's MSAA is inserted or written, and when an
-    // existing camera newly becomes a scene camera.
-    // `Without<WorkbenchEguiHost>` on every scene-camera query, and
-    // `Without<WorkbenchViewportCamera>` on the host's `&mut Msaa`, keep the
-    // read and write sets disjoint — Bevy rejects the system otherwise (B0001),
-    // because `Changed<Msaa>` is an access to `Msaa` just like reading it.
+    // `Without<WorkbenchEguiHost>` on the scene-camera queries, and
+    // `Without<WorkbenchViewportCamera>` on the host's `&mut Msaa`, keep the read and
+    // write sets disjoint — Bevy rejects the system otherwise (B0001), because a
+    // `Changed<T>` filter is an access to `T` just like reading it.
     dirty: Query<
         (),
         (
             With<WorkbenchViewportCamera>,
             Without<WorkbenchEguiHost>,
-            Or<(Changed<Msaa>, Added<WorkbenchViewportCamera>)>,
+            Or<(Changed<Msaa>, Changed<Camera>, Added<WorkbenchViewportCamera>)>,
         ),
     >,
+    mut removed: RemovedComponents<WorkbenchViewportCamera>,
     host_added: Query<(), Added<WorkbenchEguiHost>>,
     scene_cams: Query<
-        (&Camera, &Msaa, &RenderTarget),
+        (&Camera, &Msaa, &RenderTarget, Has<Hdr>),
         (With<WorkbenchViewportCamera>, Without<WorkbenchEguiHost>),
     >,
-    mut host: Query<&mut Msaa, (With<WorkbenchEguiHost>, Without<WorkbenchViewportCamera>)>,
+    // The host must match the scene camera's `Hdr` too, not just MSAA. Both feed bevy's
+    // main-texture key `(target, usages, format, msaa)` — the `Hdr` marker selects the
+    // `Rgba16Float` format. A scene camera with bloom/AgX is HDR, so a non-HDR egui host
+    // gets a DIFFERENT-format private texture that never shares the (cleared) 3D texture,
+    // and stale chrome bakes into it — the ghost that returns on a perspective switch,
+    // where only panels change and no camera event fires.
+    mut host: Query<(Entity, &mut Msaa, Has<Hdr>), (With<WorkbenchEguiHost>, Without<WorkbenchViewportCamera>)>,
+    mut commands: Commands,
 ) {
-    if dirty.is_empty() && host_added.is_empty() {
+    // A removed scene camera (scene swap) must re-run the sync even though no live
+    // entity carries the change flag — drain the reader so it doesn't re-fire forever.
+    let had_removal = removed.read().count() > 0;
+    if dirty.is_empty() && host_added.is_empty() && !had_removal {
         return;
     }
     // Prefer the camera that is actually drawing the window; fall back to any
@@ -645,19 +665,28 @@ pub fn sync_egui_host_msaa(
     let is_window = |t: &RenderTarget| matches!(t, RenderTarget::Window(_));
     let want = scene_cams
         .iter()
-        .find(|(c, _, t)| c.is_active && is_window(t))
-        .or_else(|| scene_cams.iter().find(|(_, _, t)| is_window(t)))
-        .map(|(_, msaa, _)| *msaa);
-    let Some(want) = want else {
+        .find(|(c, _, t, _)| c.is_active && is_window(t))
+        .or_else(|| scene_cams.iter().find(|(_, _, t, _)| is_window(t)))
+        .map(|(_, msaa, _, hdr)| (*msaa, hdr));
+    let Some((want_msaa, want_hdr)) = want else {
         // No 3D camera on the window (Design mode, the Modelica workbench).
         // Nothing renders the scene, so nothing clears the target — but
         // `render_layout` paints a full-window backdrop in exactly that case,
         // which covers the framebuffer. Leave the host's MSAA alone.
         return;
     };
-    for mut msaa in host.iter_mut() {
-        if *msaa != want {
-            *msaa = want;
+    for (entity, mut msaa, host_hdr) in &mut host {
+        // Guarded writes: only touch state (and trip change-detection) when it actually
+        // differs, so the host doesn't churn every frame.
+        if *msaa != want_msaa {
+            *msaa = want_msaa;
+        }
+        if want_hdr != host_hdr {
+            if want_hdr {
+                commands.entity(entity).try_insert(Hdr);
+            } else {
+                commands.entity(entity).remove::<Hdr>();
+            }
         }
     }
 }

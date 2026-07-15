@@ -78,6 +78,20 @@ impl DocumentSessionCodec for UsdSessionCodec {
     }
 
     fn restore(&self, world: &mut World, snap: &DocumentSnapshot) -> Option<u64> {
+        // Restoring a document's SOURCE from the workspace-state cache is correct ONLY
+        // for a networked CLIENT: it received the scene from the host over the wire and
+        // has no local file, so the cached buffer is its only copy. In Standalone (local
+        // — the DEFAULT) and Host mode the on-disk file is authoritative and reopened
+        // from disk (a doc-backed twin scene is rebuilt from its base file + runtime
+        // overlay by `drain_pending_twin_docs`). Reading the cache off-client would
+        // SHADOW an externally-edited file with a stale buffer — the bug where the
+        // moonbase scene rendered a pre-migration version and ignored disk edits. So the
+        // local/host build never looks at the cache; it re-reads the file every open.
+        let is_client =
+            matches!(world.get_resource::<lunco_core::NetworkRole>(), Some(lunco_core::NetworkRole::Client));
+        if !is_client {
+            return None;
+        }
         let mut reg = world.get_resource_mut::<UsdDocumentRegistry>()?;
         // Fires `DocumentOpened` → the USD UI's stage registration.
         let id = reg.allocate(snap.source.clone(), snap.origin.clone());

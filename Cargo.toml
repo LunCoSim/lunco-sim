@@ -434,9 +434,18 @@ opt-level = 3
 #
 # This MASKS an upstream avian bug; it does not fix it. Revisit on an avian bump.
 # See memory: project_avian_island_contact_count_reload_crash
+#
+# SAME class, second manifestation (2026-07-15): loading the moonbase twin (many
+# rovers → wheel-joints reaped by `reap_orphaned_wheel_joints`) trips a DIFFERENT
+# island-bookkeeping panic — `attempt to subtract with overflow` at
+# islands/mod.rs:787 (a count underflow when a contact/body leaves an island during
+# teardown). That is gated by `overflow-checks`, NOT `debug-assertions`, so the
+# switch above did not cover it. Disable both — same rationale (the count has no
+# consumer; the island is dropped next line). Also an upstream bug we only mask.
 [profile.dev.package.avian3d]
 opt-level = 3
 debug-assertions = false
+overflow-checks = false
 
 # ── Release profile (native, speed-first) ────────────────────────────
 # Default `cargo build --release` targets native binaries. Wants runtime

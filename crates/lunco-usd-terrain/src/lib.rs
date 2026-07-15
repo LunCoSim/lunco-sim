@@ -146,9 +146,15 @@ impl<R: UsdRead> lunco_terrain_surface::LayerAttrSource for UsdLayerAttrs<'_, R>
             .or_else(|| self.reader.scalar::<i32>(&self.sdf, &name).map(|v| v as i64))
     }
     fn get_string(&self, name: &str) -> Option<String> {
-        // Spans BOTH textual USD types: `lunco:layer:demSource` is a `string`,
-        // `lunco:layer:mode` is a `token`. `scalar::<String>` reads only the former.
+        // Textual USD types only — `lunco:layer:mode` is a `token`. A file reference
+        // (`demSource`) is `asset`-typed and read via `get_asset`, not here.
+        // `scalar::<String>` would read only `string`; `text` also reads `token`.
         self.reader.text(&self.sdf, &self.attr(name))
+    }
+    fn get_asset(&self, name: &str) -> Option<String> {
+        // `asset`-typed reference (`lunco:layer:demSource`) — its own `Value::AssetPath`
+        // variant, which `text`/`scalar::<String>` do NOT read. Returns the authored path.
+        self.reader.asset(&self.sdf, &self.attr(name))
     }
     fn get_bool(&self, name: &str) -> Option<bool> {
         self.reader.scalar::<bool>(&self.sdf, &self.attr(name))
@@ -988,7 +994,7 @@ fn bridge_dem_prim_read<R: UsdRead>(
     };
     let attr_bool = |name: &str| -> Option<bool> { dem_attrs.as_ref()?.get_bool(name) };
 
-    let rel = dem_attrs.as_ref().and_then(|a| a.get_string("demSource"));
+    let rel = dem_attrs.as_ref().and_then(|a| a.get_asset("demSource"));
     let Some(rel) = rel else {
         warn!("[usd-dem] prim {} is a DEM terrain but has no dem-layer demSource", prim_path.path);
         return;

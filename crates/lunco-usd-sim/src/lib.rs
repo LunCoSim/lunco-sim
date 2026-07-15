@@ -706,8 +706,15 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             commands,
         );
 
-        // 0. Detect Avatar prim
-        if reader.scalar::<String>(&sdf_path, "lunco:avatar").is_some() {
+        // 0. Detect Avatar prim. `lunco:avatar` is a marker flag, but scenes author it
+        // with EITHER type — `bool true` (moonbase) or `string "true"` (sandbox). A
+        // `scalar::<String>` read silently misses the `bool`, so the avatar's camera is
+        // never set up and the viewport is blank after a scene swap. Read it
+        // type-tolerantly (same principle as the `text`/`real` reader family).
+        let is_avatar = reader
+            .scalar::<bool>(&sdf_path, "lunco:avatar")
+            .unwrap_or_else(|| reader.text(&sdf_path, "lunco:avatar").as_deref() == Some("true"));
+        if is_avatar {
             info!("Detected Avatar prim at {}, setting up camera", prim_path.path);
             // `big_space` enforces "exactly one `FloatingOrigin` per
             // `BigSpace`". Other crates (e.g. `lunco-celestial`'s

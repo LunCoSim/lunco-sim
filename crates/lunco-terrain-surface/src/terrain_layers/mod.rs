@@ -199,7 +199,14 @@ pub trait LayerAttrSource {
     /// Full precision — terrain-local metres, where `f32` would quantise a centre.
     fn get_f64(&self, name: &str) -> Option<f64>;
     fn get_i64(&self, name: &str) -> Option<i64>;
+    /// A `string`- or `token`-typed textual value (`lunco:layer:mode`). NOT for a
+    /// file reference — a DEM/asset path is `asset`-typed, read via [`Self::get_asset`].
     fn get_string(&self, name: &str) -> Option<String>;
+    /// The authored path of an `asset`-typed reference (`lunco:layer:demSource`), as a
+    /// plain string. Distinct from [`Self::get_string`]: an `asset` is its own USD value
+    /// type, visible to the resolver and to layer-dependency walks; a path smuggled in a
+    /// `string` is invisible to both. Mirrors `UsdRead::asset`.
+    fn get_asset(&self, name: &str) -> Option<String>;
     fn get_bool(&self, name: &str) -> Option<bool>;
     /// A 2-vector (USD `double2`) — an edit's centre in terrain-local XZ.
     fn get_vec2(&self, name: &str) -> Option<[f64; 2]>;

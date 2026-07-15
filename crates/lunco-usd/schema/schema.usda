@@ -90,7 +90,26 @@ class LuncoPolicy "LuncoPolicy" (
         Uniform: a policy cannot change which seam it guards over time."""
     )
     string lunco:policy:source = "" (
-        doc = "The rhai source of the hook. Editing it live re-registers the hook."
+        doc = """The rhai source of the hook, authored INLINE. Editing it live
+        re-registers the hook. Inline source rides the USD journal plane — it is a
+        per-op edit that syncs and converges like any other doc op, so it is the form
+        for live/dynamic policy editing.
+
+        For a file-backed policy, author `lunco:policy:sourcePath` instead. Inline wins
+        when both are present (mirrors `lunco:script`/`lunco:scriptPath` and
+        `lunco:behavior`/`lunco:behaviorPath`)."""
+    )
+    asset lunco:policy:sourcePath = @@ (
+        doc = """File-backed alternative to `lunco:policy:source`: an `@…rhai@`
+        reference to the hook's rhai source, loaded via the asset server (wasm-safe,
+        hot-reloadable — the same path `lunco:scriptPath` scenarios take).
+
+        `asset`, not `string`. A script reference is a genuine asset: only an `asset` is
+        seen by USD's resolver and discoverable by the whole-twin **content plane**
+        (walked, CID-addressed, fail-closed verified), so the `.rhai` ships and every
+        peer resolves byte-identical source — the convergence a policy needs. Held as a
+        `string` the path would be inert. Inline `lunco:policy:source` wins over this
+        when both are authored."""
     )
     string lunco:policy:entry = "" (
         doc = "Entry-point function name within the source."
@@ -146,9 +165,15 @@ class "LuncoTerrainLayerAPI" (
         change kind over time."""
         allowedTokens = ["", "dem", "craters", "rocks", "rock", "overzoom", "shader", "edit"]
     )
-    string lunco:layer:demSource = "" (
+    asset lunco:layer:demSource = @@ (
         doc = """Path to the DEM source, resolved against the open document —
-        the `dem` (ground) layer."""
+        the `dem` (ground) layer.
+
+        `asset`, not `string`. A DEM source is a genuine asset reference: only an
+        `asset` is seen by USD's resolver and discoverable by anything that walks a
+        layer for the files a scene depends on — asset-sync's reference closure,
+        packaging, `usdzip`. Held as a `string` the DEM travelled nowhere; the same
+        reasoning that moved `lunco:material:shader` to `asset` applies here."""
     )
     float lunco:layer:windowM = 0 (
         doc = "Half-window of the DEM patch, in metres."
