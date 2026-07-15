@@ -143,6 +143,68 @@ fn observer_camera_hangs_in_a_star_fixed_frame() {
     );
 }
 
+/// Scene reload must tear the sky down **completely** — by architecture, not a
+/// maintained despawn list. When the declarations disappear (a scene without bodies is
+/// loaded) every celestial-derived entity must be gone: no orbiting ghost bodies, no
+/// stale orbit lines, no globe tiles. This is what fixes "reload without sun/earth and
+/// it still moves".
+#[test]
+fn scene_reload_without_bodies_tears_the_whole_sky_down() {
+    let mut app = celestial_test_app(); // declares Sun/Earth/Moon
+    app.insert_resource(EphemerisResource { provider: Arc::new(StubEphemeris) });
+    // Let the hierarchy + orbit views spawn.
+    app.update();
+    app.update();
+
+    let count_derived = |app: &mut App| {
+        app.world_mut()
+            .query_filtered::<(), With<lunco_celestial::CelestialDerived>>()
+            .iter(app.world())
+            .count()
+    };
+    assert!(count_derived(&mut app) > 0, "the sky should have spawned");
+
+    // Reload into a scene WITHOUT bodies: despawn every `CelestialBodyDecl` (that is
+    // what scene-clear does to the USD-projected declaration entities).
+    let decls: Vec<Entity> = app
+        .world_mut()
+        .query_filtered::<Entity, With<lunco_celestial::CelestialBodyDecl>>()
+        .iter(app.world())
+        .collect();
+    for e in decls {
+        app.world_mut().despawn(e);
+    }
+
+    // Teardown fires on the next frame and clears everything…
+    app.update();
+    app.update();
+    assert_eq!(
+        count_derived(&mut app),
+        0,
+        "no celestial-derived entity may survive a reload into a body-less scene"
+    );
+    assert!(
+        app.world_mut()
+            .query_filtered::<(), With<lunco_celestial::SolarSystemRoot>>()
+            .iter(app.world())
+            .next()
+            .is_none(),
+        "the hierarchy root must be gone"
+    );
+
+    // …and re-declaring bodies rebuilds it (the idempotent gate, not a spent latch).
+    for naif in [10, 399, 301] {
+        app.world_mut()
+            .spawn(lunco_celestial::CelestialBodyDecl { naif });
+    }
+    app.update();
+    app.update();
+    assert!(
+        count_derived(&mut app) > 0,
+        "re-declaring bodies must rebuild the sky — teardown must not be a one-way latch"
+    );
+}
+
 #[test]
 fn test_celestial_startup_and_movement() {
     let mut app = App::new();

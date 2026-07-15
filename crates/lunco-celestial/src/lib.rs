@@ -225,6 +225,20 @@ impl Plugin for CelestialPlugin {
             ),
         );
 
+        // The mirror of spawn: when a scene reload leaves the world with a celestial
+        // hierarchy but no declarations (reloaded into a scene without a sky), tear the
+        // hierarchy down. Gated the same way, inverted — so spawn and teardown can
+        // never both run in one frame.
+        app.add_systems(
+            Update,
+            teardown_celestial_when_undeclared.run_if(
+                |q_decl: Query<(), With<CelestialBodyDecl>>,
+                 q_derived: Query<(), With<big_space_setup::CelestialDerived>>| {
+                    q_decl.is_empty() && !q_derived.is_empty()
+                },
+            ),
+        );
+
         // --- LEAD-PHASE SYNCHRONIZATION ---
         // Core celestial updates in PreUpdate for Coordinate Stability
         // for Gizmos (Update) and Physics (FixedUpdate).
@@ -296,6 +310,50 @@ impl Plugin for CelestialPlugin {
         app.add_systems(Update, update_sun_light_system);
         app.add_observer(on_restore_fallback_lights);
     }
+}
+
+/// Tear down everything the celestial subsystem spawned, when a scene reload has left
+/// the world with a hierarchy but no [`CelestialBodyDecl`] (see the run condition).
+///
+/// This is the *architecture* that prevents the reload bugs by design, not by a
+/// maintained despawn list:
+///
+/// * **Ownership marker.** Every celestial-derived entity carries
+///   [`CelestialDerived`](big_space_setup::CelestialDerived) — grids, bodies, inertial
+///   anchors, orbit views, mission spacecraft. Despawning that set (recursively, to
+///   catch unmarked children like globe tiles) removes the whole sky. A new celestial
+///   entity is covered the moment it carries the marker; the invariant lives in one
+///   line on the marker's doc.
+/// * **Idempotent re-spawn.** The spawners gate on "does my output exist yet"
+///   (`SolarSystemRoot`/`TrajectoryView`/`MissionRegistry` empty), not a `Local` latch —
+///   so once this clears them, loading a scene *with* bodies rebuilds cleanly.
+/// * **Resource state reset.** `MissionRegistry` and the terrain-curvature coupling are
+///   resources, not entities, so they are reset here explicitly.
+///
+/// The clock tree is reset separately and universally by `lunco_time::ResetTime`, fired
+/// from the scene-clear choke point — so a detached/fast sky clock is already back on
+/// its `Epoch` root by the time this runs.
+fn teardown_celestial_when_undeclared(
+    mut commands: Commands,
+    q_derived: Query<Entity, With<big_space_setup::CelestialDerived>>,
+    mut registry: ResMut<MissionRegistry>,
+    curvature: Option<Res<lunco_terrain_surface::TerrainBodyCurvature>>,
+) {
+    let mut n = 0;
+    for e in &q_derived {
+        // `try_despawn` (not `despawn`): a marked entity already parented under the
+        // hierarchy is removed by its ancestor's recursive despawn, so by the time this
+        // command applies it may be gone — `try_` makes that a no-op, not a warning.
+        commands.entity(e).try_despawn();
+        n += 1;
+    }
+
+    registry.missions.clear();
+    if curvature.is_some() {
+        commands.remove_resource::<lunco_terrain_surface::TerrainBodyCurvature>();
+    }
+
+    info!("[celestial] scene has no bodies → tore down {n} celestial entities");
 }
 
 /// Standalone gravity plugin — registers gravity configuration types.

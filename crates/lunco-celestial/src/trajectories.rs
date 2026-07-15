@@ -90,9 +90,15 @@ pub struct TrajectoryPath {
     pub last_rebuild_real_secs: f64,
 }
 
-/// Minimum wall-clock seconds between trajectory rebuilds. The curve is a slowly-
-/// varying ellipse; 5 Hz is imperceptible on it and bounds the cost at any sky rate.
-const MIN_REBUILD_INTERVAL_SECS: f64 = 0.2;
+/// Minimum wall-clock seconds between trajectory rebuilds.
+///
+/// A body's orbit is a quasi-static ellipse — over one WALL second it is
+/// imperceptibly different at any sky rate, because what actually moves is the body
+/// *along* the curve, not the curve itself. So 1 Hz is plenty, and it bounds the cost
+/// (each rebuild re-samples 800–1500 ephemeris points and re-splines the mesh on the
+/// main thread) no matter how fast the celestial clock runs. At 100 000× the sampling
+/// trigger alone wanted a rebuild every frame; this is what stops that.
+const MIN_REBUILD_INTERVAL_SECS: f64 = 1.0;
 
 #[derive(Component)]
 pub struct TrajectoryTask(pub Task<TrajectoryData>);
@@ -122,17 +128,16 @@ impl Plugin for TrajectoryPlugin {
         // that did not exist. Nothing celestial may appear that the scene did not
         // describe — that is the whole point of authoring bodies in USD.
         //
-        // Same shape as `MissionPlugin`: `Update` + a latch, so it fires once and
-        // re-arms if a scene with bodies loads at runtime.
+        // Idempotent-guarded (NOT latched): fires while the scene declares bodies and
+        // no orbit views exist yet. A `Local` latch could never be reset, so after a
+        // scene reload (teardown despawns the views) they would never come back;
+        // gating on "do my views exist" makes reload re-create them.
         app.add_systems(
             Update,
             trajectory_setup_system.run_if(
-                |q_decl: Query<(), With<crate::CelestialBodyDecl>>, mut spawned: Local<bool>| {
-                    if q_decl.is_empty() || *spawned {
-                        return false;
-                    }
-                    *spawned = true;
-                    true
+                |q_decl: Query<(), With<crate::CelestialBodyDecl>>,
+                 q_views: Query<(), With<TrajectoryView>>| {
+                    !q_decl.is_empty() && q_views.is_empty()
                 },
             ),
         );
@@ -373,6 +378,10 @@ pub fn trajectory_setup_system(
     // Initial spawning. Reference centering handled by alignment system.
     commands.spawn((
         Name::new("Earth Orbit View"),
+        // Owned by the celestial subsystem (`CelestialDerived`) so scene reload tears
+        // it down. It IS parented under the body hierarchy by `trajectory_alignment_
+        // system`, but not until it first resolves — the marker covers the gap.
+        crate::big_space_setup::CelestialDerived,
         TrajectoryView {
             tracked_id: 399,
             reference_id: 10,
@@ -396,6 +405,7 @@ pub fn trajectory_setup_system(
 
     commands.spawn((
         Name::new("Moon Orbit View"),
+        crate::big_space_setup::CelestialDerived,
         TrajectoryView {
             tracked_id: 301,
             reference_id: 399,

@@ -507,10 +507,10 @@ impl Plugin for LunCoAvatarPlugin {
         app.init_resource::<MouseSensitivity>()
            .init_resource::<CameraDefaults>()
            .init_resource::<SurfaceModeThreshold>();
-        // The avatar and its cameras run on the wall-rooted INTERACTION clock
-        // (`lunco_time::InteractionTime`), so they keep moving while the sim is
-        // paused. That clock is part of the time spine, so guarantee the spine
-        // rather than degrade to a raw `Time<Real>` fallback when a host forgot it.
+        // The avatar and its cameras run in the wall-rooted INTERACTION cadence
+        // (`lunco_time::InteractionSchedule`), so they keep moving at a constant `dt`
+        // while the sim is paused. That schedule is part of the time spine, so
+        // guarantee the spine rather than degrade to a raw `Time<Real>` fallback.
         if !app.is_plugin_added::<lunco_time::TimePlugin>() {
             app.add_plugins(lunco_time::TimePlugin);
         }
@@ -709,6 +709,26 @@ impl Plugin for LunCoAvatarPlugin {
             update_avatar_clip_planes_system,
         ).chain().in_set(AvatarCameraSet));
 
+        // The camera writers run BETWEEN restore and record inside the interaction
+        // step: restore hands them the true pose, they write the new true pose, record
+        // snapshots it. `ease_interaction_poses` (PostUpdate, render rate) then lerps
+        // between the two snapshots — so the sim integrates on the true pose and only
+        // the rendered `Transform` is interpolated. See `lunco_time::interaction`.
+        app.configure_sets(
+            lunco_time::InteractionSchedule,
+            AvatarCameraSet
+                .after(lunco_time::InteractionRestoreSet)
+                .before(lunco_time::InteractionRecordSet),
+        );
+        // Every avatar gets render-rate pose easing, from ANY spawn site (there are
+        // several — free-fly, USD-authored, provisional), so this is a marker-add
+        // system rather than a bundle field that each site must remember. Runs first
+        // in the step, before restore reads `InteractionEased`.
+        app.add_systems(
+            lunco_time::InteractionSchedule,
+            ensure_avatar_easing.before(lunco_time::InteractionRestoreSet),
+        );
+
         // `AvatarCameraSet` no longer needs a `PostUpdate` ordering: it lives inside
         // `InteractionSchedule`, and the RUNNER carries the ordering for everything in
         // it (`lunco_time::InteractionStepSet` — after avian's writeback + easing,
@@ -725,6 +745,20 @@ impl Plugin for LunCoAvatarPlugin {
 
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub struct AvatarCameraSet;
+
+/// Give every avatar render-rate pose easing ([`lunco_time::InteractionEased`]),
+/// regardless of which spawn site created it. The camera writes its pose at the
+/// constant interaction step; this lets the renderer interpolate it to display rate.
+fn ensure_avatar_easing(
+    mut commands: Commands,
+    q: Query<Entity, (With<Avatar>, Without<lunco_time::InteractionEased>)>,
+) {
+    for e in &q {
+        commands
+            .entity(e)
+            .insert(lunco_time::InteractionEased::default());
+    }
+}
 
 /// Run-condition: `true` when the 3D scene may consume raw keyboard input —
 /// i.e. egui is NOT holding the keyboard (no focused text field / drag-value).

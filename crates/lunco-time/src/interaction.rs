@@ -68,6 +68,18 @@ pub struct InteractionSchedule;
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct InteractionStepSet;
 
+/// System set (inside [`InteractionSchedule`], runs FIRST) that restores each eased
+/// entity's *authoritative* stepped pose before the step's writers run — undoing the
+/// previous frame's render interpolation so the sim never reads its own smoothing.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct InteractionRestoreSet;
+
+/// System set (inside [`InteractionSchedule`], runs LAST) that snapshots each eased
+/// entity's freshly-written pose. Pose writers order themselves
+/// `.after(InteractionRestoreSet).before(InteractionRecordSet)`.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct InteractionRecordSet;
+
 /// Accumulator + step size for the interaction cadence.
 #[derive(Resource, Debug, Clone, Copy, Reflect)]
 #[reflect(Resource)]
@@ -87,11 +99,13 @@ pub struct InteractionStep {
 impl Default for InteractionStep {
     fn default() -> Self {
         Self {
-            // 120 Hz: high enough that the camera is never more than ~8 ms stale on a
-            // 60–144 Hz display (no visible staircase), cheap enough that running the
-            // camera systems 2× per frame is free. It is NOT tied to the sim's 60 Hz
-            // tick, and it must not be — that is the coupling this module removes.
-            step_secs: 1.0 / 120.0,
+            // 60 Hz constant. The staircase this would show on a faster display is
+            // removed the correct way — a render-rate interpolation pass eases the
+            // rendered pose between steps by `overstep_fraction` (see
+            // [`InteractionEasing`]) — rather than by cranking the step rate and
+            // hoping. It is NOT tied to the sim's 60 Hz tick (they only happen to
+            // match); the interaction step never pauses or rate-scales.
+            step_secs: 1.0 / 60.0,
             accumulator: 0.0,
             overstep_fraction: 0.0,
             max_steps_per_frame: 8,
@@ -144,16 +158,111 @@ pub fn run_interaction_schedule(world: &mut World) {
     *world.resource_mut::<Time>() = virtual_clock;
 }
 
+/// Render-rate easing for an entity written on the interaction step.
+///
+/// The interaction cadence runs at a constant 60 Hz, so on a faster display a pose
+/// written there is up to one step (~16 ms) stale between writes — a visible
+/// staircase. This is the same fix avian uses for rigid bodies: keep the two most
+/// recent *stepped* poses and, every rendered frame, write the `Transform` as their
+/// interpolation by the step's [`overstep_fraction`](InteractionStep::overstep_fraction).
+/// Constant-`dt` logic, display-rate smoothness.
+///
+/// Add it to any entity whose `Transform` is authored inside [`InteractionSchedule`]
+/// (the avatar cameras do). The stepped writer keeps writing `Transform` as before;
+/// [`record_interaction_poses`] snapshots it each step, and [`ease_interaction_poses`]
+/// overwrites `Transform` with the eased value each frame.
+#[derive(Component, Debug, Clone, Copy, Reflect)]
+#[reflect(Component)]
+pub struct InteractionEased {
+    /// Pose at the previous step.
+    prev: Option<Transform>,
+    /// Pose at the latest step (what the stepped writer produced).
+    curr: Option<Transform>,
+}
+
+impl Default for InteractionEased {
+    fn default() -> Self {
+        Self { prev: None, curr: None }
+    }
+}
+
+/// START of the interaction step: restore each eased entity's authoritative pose
+/// (`curr`) into `Transform`, undoing the previous frame's render interpolation.
+///
+/// This is the piece that makes interpolation safe for *incremental* writers like
+/// `apply_fly` (`pos += vel·dt`, reading `pos` back from `Transform`). Without it, the
+/// writer would read the render-interpolated pose and integrate from there, folding
+/// smoothing lag into the actual trajectory. With it, every step starts from the true
+/// pose; only the rendered `Transform` is ever interpolated. (Same separation avian
+/// keeps between `Position` and the eased `Transform`.)
+fn restore_interaction_poses(mut q: Query<(&mut Transform, &InteractionEased)>) {
+    for (mut tf, eased) in &mut q {
+        if let Some(curr) = eased.curr {
+            *tf = curr;
+        }
+    }
+}
+
+/// End of the interaction step: snapshot each eased entity's freshly-written pose into
+/// its [`InteractionEased`] history (curr → prev, Transform → curr). Runs LAST in the
+/// schedule so it sees the final pose the camera systems produced this step.
+fn record_interaction_poses(mut q: Query<(&Transform, &mut InteractionEased)>) {
+    for (tf, mut eased) in &mut q {
+        eased.prev = eased.curr;
+        eased.curr = Some(*tf);
+    }
+}
+
+/// Render rate: write each eased entity's `Transform` as `lerp(prev, curr, overstep)`.
+///
+/// Runs in `PostUpdate` AFTER the step runner (so `curr`/`overstep` are this frame's)
+/// and before transform propagation. On a step boundary `overstep ≈ 0` and the pose is
+/// `prev`; just before the next step `overstep ≈ 1` and it reaches `curr` — the
+/// standard one-step-behind interpolation (never extrapolates, so it cannot overshoot).
+fn ease_interaction_poses(
+    step: Res<InteractionStep>,
+    mut q: Query<(&mut Transform, &InteractionEased)>,
+) {
+    let s = step.overstep_fraction.clamp(0.0, 1.0);
+    for (mut tf, eased) in &mut q {
+        if let (Some(prev), Some(curr)) = (eased.prev, eased.curr) {
+            tf.translation = prev.translation.lerp(curr.translation, s);
+            tf.rotation = prev.rotation.slerp(curr.rotation, s);
+            tf.scale = prev.scale.lerp(curr.scale, s);
+        }
+    }
+}
+
 /// Wiring for the interaction cadence. Added by [`TimePlugin`](crate::TimePlugin).
 pub(crate) fn build_interaction_cadence(app: &mut App) {
     app.init_resource::<InteractionStep>()
         .insert_resource(Time::new_with(Interaction))
         .register_type::<InteractionStep>()
+        .register_type::<InteractionEased>()
         .init_schedule(InteractionSchedule)
+        // Per step: restore the true pose FIRST (undo last frame's render ease), then
+        // the pose writers run (in `AvatarCameraSet`, ordered between these two sets),
+        // then record the true pose LAST for `ease_interaction_poses` to lerp.
+        .add_systems(
+            InteractionSchedule,
+            (
+                restore_interaction_poses.in_set(InteractionRestoreSet),
+                record_interaction_poses.in_set(InteractionRecordSet),
+            ),
+        )
+        .configure_sets(
+            InteractionSchedule,
+            InteractionRestoreSet.before(InteractionRecordSet),
+        )
         .add_systems(
             PostUpdate,
-            run_interaction_schedule
-                .in_set(InteractionStepSet)
+            (
+                // The step runner FIRST (drains wall time → N steps, updates
+                // `overstep_fraction`), then the render-rate ease using it.
+                run_interaction_schedule.in_set(InteractionStepSet),
+                ease_interaction_poses,
+            )
+                .chain()
                 .before(bevy::transform::TransformSystems::Propagate),
         );
 }
@@ -207,6 +316,60 @@ mod tests {
                 "every interaction step must see the SAME dt (got {dt})"
             );
         }
+    }
+
+    /// The interpolation must NOT feed back into an incremental writer. A system that
+    /// does `pos += 1` each step must advance by exactly one per step — even though
+    /// `ease_interaction_poses` overwrites `Transform` with an interpolated value every
+    /// render frame. This is the whole reason for the restore→step→record→ease order:
+    /// the sim reads the true pose, only the render sees the eased one.
+    #[test]
+    fn interpolation_does_not_feed_back_into_an_incremental_writer() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut app = App::new();
+        app.init_resource::<Time<Real>>()
+            .init_resource::<Time<Virtual>>()
+            .init_resource::<Time>();
+        super::build_interaction_cadence(&mut app);
+
+        let e = app.world_mut().spawn((Transform::default(), InteractionEased::default())).id();
+        // Incremental writer: pos.x += 1 each step, reading pos back from Transform.
+        // Ordered BETWEEN restore and record, exactly as the avatar camera chain is —
+        // that ordering is what makes the integration see the true pose, not the ease.
+        app.add_systems(
+            InteractionSchedule,
+            (move |mut q: Query<&mut Transform>| {
+                if let Ok(mut tf) = q.get_mut(e) {
+                    tf.translation.x += 1.0;
+                }
+            })
+            .after(InteractionRestoreSet)
+            .before(InteractionRecordSet),
+        );
+
+        // Run 3 steps' worth of wall time, then eased render happens in PostUpdate.
+        let step = app.world().resource::<InteractionStep>().step_secs;
+        app.world_mut()
+            .resource_mut::<Time<Real>>()
+            .advance_by(Duration::from_secs_f64(step * 3.0));
+        app.update();
+
+        // The AUTHORITATIVE pose advanced exactly 3 — the eased Transform the renderer
+        // sees is ≤ 3 (interpolated), but the writer's integration is uncontaminated.
+        let curr = app.world().get::<InteractionEased>(e).unwrap().curr.unwrap();
+        assert_eq!(curr.translation.x, 3.0, "the true pose must advance one per step");
+
+        // A frame with ZERO steps (fast display, or wall time not yet a full step):
+        // the writer does not run, the true pose holds, only the render ease moves.
+        // Zero the wall delta first — a bare `App` does not refresh `Time<Real>`, so it
+        // would otherwise re-apply the previous frame's delta.
+        app.world_mut()
+            .resource_mut::<Time<Real>>()
+            .advance_by(Duration::ZERO);
+        app.update();
+        let curr2 = app.world().get::<InteractionEased>(e).unwrap().curr.unwrap();
+        assert_eq!(curr2.translation.x, 3.0, "no step ⇒ the true pose must not move");
     }
 
     /// A hitch must not spiral: the accumulator is dropped at the cap, not chased.

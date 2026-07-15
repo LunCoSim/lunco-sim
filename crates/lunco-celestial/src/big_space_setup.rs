@@ -120,6 +120,20 @@ fn blueprint_tile_look(
         .with("transition", ParamValue::F32(0.0))
 }
 
+/// **The celestial ownership marker.** EVERY entity the celestial subsystem spawns in
+/// Rust — grids, bodies, inertial anchors, orbit views, mission spacecraft — carries
+/// this, and teardown despawns the whole set in one query
+/// ([`teardown_celestial_when_undeclared`](crate::teardown_celestial_when_undeclared)).
+///
+/// This is the *architecture* that keeps scene reload correct: celestial content is
+/// declared per scene (`CelestialBodyDecl`), and everything derived from that
+/// declaration is owned by this marker, so "reload into a scene without a sky" tears
+/// the sky down completely — no orbiting ghost bodies, no stale orbit lines, no sky
+/// clock — without anyone maintaining a list of what to despawn. The invariant is
+/// one line: *if the celestial subsystem spawns it, it carries `CelestialDerived`.*
+#[derive(Component)]
+pub struct CelestialDerived;
+
 /// Marker for the solar system root grid (inertial, no rotation).
 #[derive(Component)]
 pub struct SolarSystemRoot;
@@ -314,6 +328,9 @@ pub fn setup_big_space_hierarchy(
     // EXACT i64 cells of the now identity-rotation Solar Grid.
     let align_grid = commands.spawn((
         SiteAlignGrid,
+        // Subtree root: the entire body hierarchy chain-parents under this, so a
+        // recursive despawn here tears down every grid, body, anchor and globe tile.
+        CelestialDerived,
         Grid::new(2_000.0, 100.0),
         CellCoord::default(),
         Transform::default(),

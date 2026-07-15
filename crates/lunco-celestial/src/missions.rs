@@ -76,19 +76,17 @@ pub struct MissionPlugin;
 impl Plugin for MissionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MissionRegistry>();
-        // Missions belong to the solar-system context: gated on the scene actually
-        // declaring celestial bodies (`LuncoCelestialBodyAPI`), and latched so they
-        // load once — re-arming if a scene with bodies loads later.
+        // Missions belong to the solar-system context: gated on the scene declaring
+        // celestial bodies (`LuncoCelestialBodyAPI`) AND on the registry being empty.
+        // Idempotent-guarded, NOT latched — a `Local` bool could never be reset, so a
+        // scene reload (teardown clears the registry) would never re-load missions.
+        // Gating on "is my output already there" makes teardown-then-reload just work.
         app.add_systems(
             Update,
             load_missions_system.run_if(
                 |q_decl: Query<(), With<crate::CelestialBodyDecl>>,
-                 mut loaded: bevy::prelude::Local<bool>| {
-                    if q_decl.is_empty() || *loaded {
-                        return false;
-                    }
-                    *loaded = true;
-                    true
+                 registry: Res<MissionRegistry>| {
+                    !q_decl.is_empty() && registry.missions.is_empty()
                 },
             ),
         );
@@ -121,6 +119,8 @@ pub fn load_missions_system(
 
                 commands.spawn((
                     Name::new(traj.name.clone()),
+                    // Owned by the celestial subsystem — torn down on scene reload.
+                    crate::big_space_setup::CelestialDerived,
                     TrajectoryView {
                         tracked_id: traj.tracked_id,
                         reference_id: traj.reference_id,
@@ -151,6 +151,7 @@ pub fn load_missions_system(
 
                 let mut sc_ent = commands.spawn((
                     Name::new(sc.name.clone()),
+                    crate::big_space_setup::CelestialDerived,
                     Spacecraft {
                         name: sc.name.clone(),
                         ephemeris_id: sc.ephemeris_id,
