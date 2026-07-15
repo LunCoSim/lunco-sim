@@ -43,6 +43,10 @@ lunco-core = { path = "../lunco-core" }
 # is render-free and never names `Gizmos`); the BEAM is not. `sensor_beams.rs` draws
 # it from the sensor's already-stored result, re-casting nothing.
 lunco-cosim = { path = "../lunco-cosim" }
+# Ordering only: the beam draw must run AFTER `BigSpaceSystems::PropagateHighPrecision`
+# so it reads the same final `GlobalTransform` the renderer uses for the lander mesh.
+# big_space is a transform crate — it pulls no wgpu, so it stays clear of the GPU boundary.
+big_space = { workspace = true }
 
 [lints]
 workspace = true

@@ -15,6 +15,7 @@
 
 use bevy::gizmos::config::GizmoConfigStore;
 use bevy::prelude::*;
+use big_space::prelude::BigSpaceSystems;
 use lunco_cosim::sensors::RangeSensor;
 
 pub(crate) fn build(app: &mut App) {
@@ -23,9 +24,19 @@ pub(crate) fn build(app: &mut App) {
     // every headless app that happens to link this crate. The original beam system
     // in `lunco-cosim` carried this same gate for the same reason; dropping it in the
     // move is what broke three tests here.
+    //
+    // PostUpdate AFTER `BigSpaceSystems::PropagateHighPrecision`, not `Update`. The
+    // beam anchors to the sensor's `GlobalTransform`; in `Update` that value is a
+    // full frame stale (this frame's propagation runs later, in `PostUpdate`), while
+    // the lander MESH renders from this frame's propagated GT. The one-frame gap is
+    // invisible at rest and a visible "moves then snaps back" jitter at speed. Read
+    // the SAME final GT the renderer uses — the big_space high-precision pass, which
+    // is itself ordered after the f32 compat propagate (see lunco-core `world.rs`).
     app.add_systems(
-        Update,
-        draw_range_sensor_beams.run_if(resource_exists::<GizmoConfigStore>),
+        PostUpdate,
+        draw_range_sensor_beams
+            .after(BigSpaceSystems::PropagateHighPrecision)
+            .run_if(resource_exists::<GizmoConfigStore>),
     );
 }
 
