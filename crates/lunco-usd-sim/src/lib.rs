@@ -929,6 +929,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                             vertical_offset: 2.0,
                             // Authored chase cams target steerable vehicles.
                             track_heading: true,
+                            attitude: lunco_avatar::FollowAttitude::Heading,
                         },
                         avian3d::prelude::TranslationInterpolation,
                         avian3d::prelude::RotationInterpolation,

@@ -165,8 +165,39 @@ impl Default for CameraDefaults {
 
 /// Chase camera: follows a ground vehicle with smooth heading-follow.
 ///
+/// How a [`SpringArmCamera`] derives its orientation from the followed body.
+///
+/// The one axis on which the three authored `lunco:cameraFollow` modes differ.
+/// Everything else about the follow — live-target read, fixed-cadence solve,
+/// interpolation-eased render, arm-length easing, obstacle raycast — is shared,
+/// so all vessel cameras behave identically (the reason this is DRY: one
+/// component, one system, one code path). `WorldLocked` / `FullAttitude` are
+/// the 6-DOF flyer + aircraft cases that used to live in the separate
+/// (jittering) `OrbitCamera`/`ChaseCamera` solvers.
+#[derive(Reflect, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum FollowAttitude {
+    /// Heading-follow: yaw taken from the body's forward (when `track_heading`),
+    /// up = world-Y or surface normal. Ground vehicles (rovers, astronauts).
+    #[default]
+    Heading,
+    /// Stable external frame the body tumbles inside of: ignore the body's
+    /// attitude entirely, orientation is the user's yaw/pitch about world-up.
+    /// 6-DOF flyers (a lander that pitches/rolls freely). Authored `"orbit"`.
+    WorldLocked,
+    /// Cockpit frame: full body orientation (yaw+pitch+roll) times the user's
+    /// yaw/pitch offset — the camera rolls with the craft. Authored `"chase"`.
+    FullAttitude,
+}
+
+/// Unified vessel-follow camera. Position always follows the target; the
+/// [`FollowAttitude`] mode selects how orientation is derived. Runs at the
+/// fixed physics cadence (`spring_arm_system`, `FixedPostUpdate`) and reads the
+/// target's live interpolated pose, so the camera and the followed body share
+/// ONE motion basis — the fix for the fast-flyer jitter that came from solving
+/// the follow at render rate against a frame-stale target sample.
+///
 /// Position snaps directly to the desired offset (no lerp), but rotation
-/// slerps smoothly toward the rover's heading + user yaw offset. This creates
+/// slerps smoothly toward the desired attitude + user yaw offset. This creates
 /// the natural "swing-around" feel of a proper spring arm camera.
 #[derive(Component, Reflect, Clone, Debug)]
 #[reflect(Component)]
@@ -185,8 +216,10 @@ pub struct SpringArmCamera {
     /// whose body frame tumbles arbitrarily — reading their rotation would
     /// whip the camera around as the body spins. When `false`, heading is
     /// driven solely by the user's yaw (`yaw`); position still follows the
-    /// target.
+    /// target. Only consulted for [`FollowAttitude::Heading`].
     pub track_heading: bool,
+    /// How camera orientation is derived from the followed body.
+    pub attitude: FollowAttitude,
 }
 
 /// Survey camera: orbits a target fixed to the stars.
@@ -563,8 +596,8 @@ impl Plugin for LunCoAvatarPlugin {
         // bug). `register_commands!` now does both halves in one step, so the two
         // can't drift apart again.
         app.register_type::<SpringArmCamera>()
+           .register_type::<FollowAttitude>()
            .register_type::<OrbitCamera>()
-           .register_type::<ChaseCamera>()
            .register_type::<FreeFlightCamera>()
            .register_type::<FrameBlend>()
            .register_type::<AdaptiveNearPlane>()
@@ -673,19 +706,28 @@ impl Plugin for LunCoAvatarPlugin {
         // `TranslationInterpolation` + `RotationInterpolation`
         // (added at SpringArmCamera insertion) so the renderer eases between
         // fixed-step camera samples — same mechanism rigid bodies use.
-        app.add_systems(FixedPostUpdate,
-            spring_arm_system
-                .after(avian3d::schedule::PhysicsSystems::Writeback));
+        // Both target-follow solvers run on the fixed cadence: the vessel-follow
+        // (`spring_arm_system`, all three `FollowAttitude` modes) and the
+        // celestial orbital view (`orbit_system`). Writing the camera at the
+        // physics tick — same cadence the followed body's `Position` advances at
+        // — is what keeps the camera and body on ONE motion basis, so a fast
+        // flyer no longer jitters against a render-rate, frame-stale follow.
+        // Chained so the two `&mut Transform` solvers never race (an avatar
+        // carries at most one of these camera components at a time).
+        app.add_systems(
+            FixedPostUpdate,
+            (spring_arm_system, orbit_system)
+                .chain()
+                .after(avian3d::schedule::PhysicsSystems::Writeback),
+        );
 
         app.add_systems(PostUpdate, (
             orbital_exit_restore_system,
-            chase_camera_system,
-            // Entry half of the scroll transit — must see the free-flight
-            // scroll BEFORE orbit_system's zoom consumption, and its mode
-            // swap lands next frame (commands), after which orbit_system owns
-            // the camera.
+            // Entry half of the scroll transit. `orbit_system` now consumes the
+            // buffered zoom on the next FIXED tick, so this render-rate system
+            // still observes the free-flight scroll before that consumption; the
+            // mode swap lands next frame via commands, as before.
             freeflight_scroll_transit_system,
-            orbit_system,
             freeflight_system,
             surface_camera_system,
             apply_fly,
@@ -925,28 +967,12 @@ fn migrate_avatar_to_target_grid(
 
 // ─── Behavior Systems ────────────────────────────────────────────────────────
 
-/// Chase camera: follows a target in 3D, respecting full orientation
-/// (heading, pitch, roll). Used for aircraft and flying vehicles.
+/// Unified vessel-follow solver (all three [`FollowAttitude`] modes).
 ///
-/// **Reference Frame**: `Target` — the camera rotates with the target's
-/// full orientation, offset behind and above it.
-#[derive(Component, Reflect, Clone, Debug)]
-#[reflect(Component)]
-#[require(CameraZoomInput)]
-pub struct ChaseCamera {
-    pub target: Entity,
-    pub distance: f64,
-    pub yaw: f32,
-    pub pitch: f32,
-    pub damping: Option<f32>,
-    pub vertical_offset: f32,
-}
-
-/// SpringArmCamera system: positions the camera behind a ground vehicle with
-/// heading-locked offset.
-///
-/// **Ground-vehicle only** — no surface reference for spacecraft.
-/// For aircraft use `ChaseCamera`. For orbit use `OrbitCamera`.
+/// Position follows the target; [`FollowAttitude`] selects how orientation is
+/// derived (heading-lock, world-locked survey, or full-attitude cockpit). Runs
+/// in `FixedPostUpdate` so the camera shares the physics body's motion basis and
+/// the render eases both together — no fast-flyer jitter.
 fn update_spring_arm_impl(
     dt: f32,
     mut q_avatar: Query<(
@@ -997,29 +1023,42 @@ fn update_spring_arm_impl(
         // rolling rigid body (ball, balloon) tumbles its body frame, so its
         // forward vector flips around as it rolls — deriving heading from it
         // swings the camera wildly. For those, heading is user-only (yaw).
-        let target_heading_d = if arm.track_heading {
-            let target_fwd_d = t_tf.rotation.mul_vec3(Vec3::NEG_Z).as_dvec3();
-            if target_fwd_d.x.abs() > 1e-6 || target_fwd_d.z.abs() > 1e-6 {
-                -target_fwd_d.x.atan2(-target_fwd_d.z)
-            } else { 0.0 }
-        } else {
-            0.0
-        };
-
-        let final_yaw = (target_heading_d + arm.yaw as f64) as f32;
-
-        // Rotation: surface-relative or ecliptic-locked
-        let desired_rot = if surface_mode.is_some() {
-            // "Up" = surface normal at the rover's position = rover's grid-local direction from body center.
-            // Both rover and camera are on the Body's Grid; body is at Grid origin.
-            let up_v = radial_up(target_pos);
-            // Surface mode: compute rotation from scratch using local_up as "up".
-            // This avoids accumulated roll drift from incremental rotations
-            // (see surface_camera_investigation.md for root cause analysis).
-            // Combines rover heading with user yaw offset around the surface normal.
-            tangent_frame(up_v, final_yaw, arm.pitch)
-        } else {
-            Quat::from_euler(EulerRot::YXZ, final_yaw, arm.pitch, 0.0)
+        // Desired orientation — the ONE axis the three follow modes differ on.
+        let desired_rot = match arm.attitude {
+            // Cockpit frame: full body orientation × user yaw/pitch offset. The
+            // camera rolls with the craft (was the separate `ChaseCamera`).
+            FollowAttitude::FullAttitude => {
+                t_tf.rotation * Quat::from_euler(EulerRot::YXZ, arm.yaw, arm.pitch, 0.0)
+            }
+            // Stable external frame: ignore the body's attitude entirely, so a
+            // 6-DOF flyer tumbles inside a steady view. World-up, user yaw/pitch
+            // (was the celestial `OrbitCamera`, reused wrongly for vessels).
+            FollowAttitude::WorldLocked => {
+                Quat::from_euler(EulerRot::YXZ, arm.yaw, arm.pitch, 0.0)
+            }
+            // Heading-follow: yaw from the body's forward (steerable vehicles),
+            // up = surface normal or world-Y.
+            FollowAttitude::Heading => {
+                let target_heading_d = if arm.track_heading {
+                    let target_fwd_d = t_tf.rotation.mul_vec3(Vec3::NEG_Z).as_dvec3();
+                    if target_fwd_d.x.abs() > 1e-6 || target_fwd_d.z.abs() > 1e-6 {
+                        -target_fwd_d.x.atan2(-target_fwd_d.z)
+                    } else { 0.0 }
+                } else {
+                    0.0
+                };
+                let final_yaw = (target_heading_d + arm.yaw as f64) as f32;
+                if surface_mode.is_some() {
+                    // "Up" = surface normal at the rover's position = rover's grid-local direction from body center.
+                    // Both rover and camera are on the Body's Grid; body is at Grid origin.
+                    // Compute rotation from scratch using local_up as "up" —
+                    // avoids accumulated roll drift from incremental rotations
+                    // (see surface_camera_investigation.md for root cause analysis).
+                    tangent_frame(radial_up(target_pos), final_yaw, arm.pitch)
+                } else {
+                    Quat::from_euler(EulerRot::YXZ, final_yaw, arm.pitch, 0.0)
+                }
+            }
         };
 
         // Rotation: exponential decay for snappy but smooth heading follow.
@@ -1153,59 +1192,6 @@ fn spring_arm_paused_system(
         &keys,
         &spatial_query,
     );
-}
-
-/// ChaseCamera system: follows a target with full 3D orientation follow.
-///
-/// Used for aircraft and flying vehicles. Respects the target's roll, pitch,
-/// and heading — the camera rotates with the vehicle in all axes.
-fn chase_camera_system(
-    time: Res<Time>,
-    mut q_avatar: Query<(Entity, &mut Transform, &mut CellCoord, &mut ChaseCamera, &ChildOf, &mut CameraZoomInput), (With<Avatar>, Without<FrameBlend>)>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
-    q_grids: Query<&Grid>,
-    q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
-    defaults: Res<CameraDefaults>,
-    keys: Res<ButtonInput<KeyCode>>,
-) {
-    if keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight) { return; }
-
-    let dt = time.delta_secs();
-
-    for (_avatar_ent, mut tf, mut cell, mut chase, child_of, mut zoom) in q_avatar.iter_mut() {
-        // Skip follow while the target is being dragged by the editor gizmo
-        // (marker set by sandbox-edit; never present on a headless server).
-        if q_dragging.get(chase.target).is_ok() { continue; }
-
-        let Ok((t_cell, t_tf)) = q_spatial.get(chase.target) else { continue; };
-        let t_cell = t_cell.copied().unwrap_or_default();
-        let Ok(grid) = q_grids.get(child_of.0) else { continue; };
-
-        // Target position in grid-local coordinates.
-        let target_pos = grid.grid_position_double(&t_cell, t_tf);
-
-        // Multiplicative zoom using exponential scaling.
-        // Scroll up (delta > 0) -> zoom in. Scroll down (delta < 0) -> zoom out.
-        apply_scroll_zoom(&mut chase.distance, &mut zoom.delta, ZOOM_SENSITIVITY, 5.0, 1.0e6);
-
-        // Follow target's full 3D orientation (heading + pitch + roll).
-        // Same formula as SpringArmCamera: target rotation * user offset.
-        let rotation = t_tf.rotation * Quat::from_euler(EulerRot::YXZ, chase.yaw, chase.pitch, 0.0);
-
-        let offset = rotation.mul_vec3(Vec3::Z).as_dvec3() * chase.distance;
-        let desired_pos = target_pos + offset + Vec3::Y.as_dvec3() * chase.vertical_offset as f64;
-
-        // Position lerp: same formula as SpringArmCamera and old working code.
-        let damping = chase.damping.unwrap_or(defaults.damping);
-        let lerp_factor = (1.0 - (-defaults.position_rate * (1.0 - damping) * dt).exp()) as f64;
-        let current_pos = grid.grid_position_double(&cell, &tf);
-        let next_pos = current_pos.lerp(desired_pos, lerp_factor);
-
-        let (new_cell, new_tf) = grid.translation_to_grid(next_pos);
-        *cell = new_cell;
-        tf.translation = new_tf;
-        tf.rotation = rotation;
-    }
 }
 
 /// Samples the frame-consistent spatial inputs for `orbit_system` (see
@@ -1952,7 +1938,6 @@ fn freeflight_scroll_transit_system(
             commands
                 .entity(avatar_ent)
                 .remove::<SpringArmCamera>()
-                .remove::<ChaseCamera>()
                 .remove::<FreeFlightCamera>()
                 .remove::<FrameBlend>()
                 .remove::<SurfaceCamera>()
@@ -2706,79 +2691,55 @@ fn on_possess_command(
     // Detect if target is a surface vehicle (has GravityBody) and propagate surface mode.
     let is_surface_vehicle = q_vessel_gravity.get(cmd.target).is_ok();
 
-    // Exactly one camera solver may own the avatar Transform: each arm strips the
-    // other two (a leftover from a prior possession would fight the new solver
-    // every frame — last-writer-wins churn that reads as "camera frozen").
-    match follow {
+    // One follow solver for all three modes (`spring_arm_system`, FixedPostUpdate
+    // + interpolation): they differ ONLY in the derived attitude. `OrbitCamera`
+    // is NOT used here — it is the celestial orbital-view solver; reusing it for a
+    // fast-flying vessel was the source of the "jitters when flying fast" (a
+    // render-rate solve against a frame-stale target sample). Strip the celestial
+    // orbit component in case a prior focus left it on.
+    use lunco_core::CameraFollow as CF;
+    let (attitude, track_heading, damping) = match follow {
         // Stable external frame: track position, keep world up, ignore attitude.
         // The right frame for a lander that pitches/rolls — the craft tumbles
         // inside a steady view instead of dragging the camera with it.
-        CameraFollow::Orbit => {
-            commands.entity(avatar_ent)
-                .remove::<SpringArmCamera>()
-                .remove::<SurfaceRelativeMode>()
-                .remove::<ChaseCamera>()
-                .try_insert(OrbitCamera {
-                    target: cmd.target,
-                    distance: end_distance,
-                    yaw: init_yaw,
-                    pitch: init_pitch,
-                    damping: None,
-                    vertical_offset: 0.0,
-                });
-        }
+        CF::Orbit => (FollowAttitude::WorldLocked, false, None),
         // Full-attitude follow (yaw+pitch+roll) — a cockpit frame that rolls with
         // the craft. Opt-in; the camera intentionally DOES track the body.
-        CameraFollow::Chase => {
-            commands.entity(avatar_ent)
-                .remove::<SpringArmCamera>()
-                .remove::<SurfaceRelativeMode>()
-                .remove::<OrbitCamera>()
-                .try_insert((
-                    ChaseCamera {
-                        target: cmd.target,
-                        distance: end_distance,
-                        yaw: 0.0,
-                        pitch: end_pitch,
-                        damping: Some(0.1),
-                        vertical_offset: end_vert_off,
-                    },
-                    avian3d::prelude::TranslationInterpolation,
-                    avian3d::prelude::RotationInterpolation,
-                ));
+        CF::Chase => (FollowAttitude::FullAttitude, false, Some(0.1)),
+        // Heading-follow: yaw only, surface-normal up. Ground vehicles. Only
+        // steerable vessels have a meaningful heading; a ball/prop tumbles, so
+        // track user yaw only there.
+        CF::Heading => (FollowAttitude::Heading, q_vessel.contains(cmd.target), Some(0.05)),
+    };
+    let mut cmd_ent = commands.entity(avatar_ent);
+    cmd_ent
+        .remove::<OrbitCamera>()
+        .try_insert((
+            SpringArmCamera {
+                target: cmd.target,
+                distance: end_distance,
+                yaw: init_yaw,
+                pitch: init_pitch,
+                damping,
+                vertical_offset: end_vert_off,
+                track_heading,
+                attitude,
+            },
+            // Camera updates in FixedPostUpdate; ease its Transform between fixed
+            // samples so the rendered camera doesn't staircase at 60Hz.
+            avian3d::prelude::TranslationInterpolation,
+            avian3d::prelude::RotationInterpolation,
+        ));
+    // Surface-relative up only makes sense for Heading-follow ground vehicles;
+    // the flyer frames (Orbit/Chase) keep world/body up. Strip it otherwise so a
+    // prior possession's surface mode doesn't leak in.
+    if matches!(follow, CF::Heading) && is_surface_vehicle {
+        if let Ok(gb) = q_vessel_gravity.get(cmd.target) {
+            cmd_ent.try_insert(*gb);
         }
-        // Heading-follow chase: yaw only, surface-normal up. Ground vehicles.
-        CameraFollow::Heading => {
-            let mut cmd_ent = commands.entity(avatar_ent);
-            cmd_ent
-                .remove::<OrbitCamera>()
-                .remove::<ChaseCamera>()
-                .try_insert((
-                    SpringArmCamera {
-                        target: cmd.target,
-                        distance: end_distance,
-                        yaw: 0.0,
-                        pitch: end_pitch,
-                        damping: Some(0.05),
-                        vertical_offset: end_vert_off,
-                        // Only steerable vessels (rovers) have a meaningful
-                        // heading; a possessed ball/prop tumbles, so track user
-                        // yaw only.
-                        track_heading: q_vessel.contains(cmd.target),
-                    },
-                    // Camera updates in FixedPostUpdate; ease its Transform between
-                    // fixed samples so the rendered camera doesn't staircase at 60Hz.
-                    avian3d::prelude::TranslationInterpolation,
-                    avian3d::prelude::RotationInterpolation,
-                ));
-            // If possessing a surface vehicle, enable surface-relative camera mode
-            if is_surface_vehicle {
-                if let Ok(gb) = q_vessel_gravity.get(cmd.target) {
-                    cmd_ent.try_insert(*gb);
-                }
-                cmd_ent.try_insert(SurfaceRelativeMode);
-            }
-        }
+        cmd_ent.try_insert(SurfaceRelativeMode);
+    } else {
+        cmd_ent.remove::<SurfaceRelativeMode>();
     }
 
     commands.entity(avatar_ent)
@@ -2864,6 +2825,9 @@ fn on_follow_command(
                 vertical_offset: end_vert_off,
                 // Followed props (balloons, balls) tumble — heading is user-only.
                 track_heading: q_vessel.contains(cmd.target),
+                // Follow (no possession) rides behind like a rover chase: a
+                // heading frame with world/surface up, not a body-locked cockpit.
+                attitude: FollowAttitude::Heading,
             },
             avian3d::prelude::TranslationInterpolation,
             avian3d::prelude::RotationInterpolation,
@@ -2930,7 +2894,6 @@ fn on_focus_command(
 
     let mut ent = commands.entity(avatar_ent);
     ent.remove::<SpringArmCamera>()
-        .remove::<ChaseCamera>()
         .remove::<FreeFlightCamera>()
         .remove::<FrameBlend>()
         // Surface state must go too: `surface_camera_system` runs after
