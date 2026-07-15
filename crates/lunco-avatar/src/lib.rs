@@ -2593,9 +2593,9 @@ fn on_possess_command(
     q_spatial_abs: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
-    q_sc: Query<&Spacecraft>,
     q_vessel: Query<&lunco_fsw::FlightSoftware>,
     q_vessel_gravity: Query<&GravityBody>,
+    q_follow: Query<&lunco_core::CameraFollow>,
     guard: Res<lunco_core::SyncApplyGuard>,
     registry: Res<lunco_core::SessionRegistry>,
     session: Res<lunco_core::LocalSession>,
@@ -2654,20 +2654,34 @@ fn on_possess_command(
     };
 
     let target_grid = get_grid_for_entity(cmd.target, &q_parents, &q_grids);
-    let is_spacecraft = q_sc.contains(cmd.target);
-    let end_distance = if is_spacecraft { 50.0 } else { 15.0 };
-    let end_vert_off = if is_spacecraft { 0.0 } else { 2.0 };
+
+    // Camera-follow mode is authored on the vessel's control profile
+    // (`lunco_core::CameraFollow`) — that, not any hardcoded marker, decides
+    // whether the camera tracks the body's attitude. `Heading` follows yaw only
+    // (surface vehicles); `Orbit` keeps a stable external frame a 6-DOF flyer
+    // rotates inside of; `Chase` copies full orientation. A vessel with no
+    // authored mode (or no control profile) defaults to `Heading`.
+    use lunco_core::CameraFollow;
+    let follow = q_follow.get(cmd.target).copied().unwrap_or_default();
+
+    // Per-mode framing. Orbit sits well out (whole vehicle in view); the
+    // body-relative modes ride close behind.
+    let (end_distance, end_vert_off) = match follow {
+        CameraFollow::Orbit => (50.0, 0.0),
+        CameraFollow::Chase => (25.0, 3.0),
+        CameraFollow::Heading => (15.0, 2.0),
+    };
     let end_yaw = 0.0;
     let end_pitch = -0.25;
 
-    // Snap to vessel immediately.
+    // Snap to vessel immediately. Orbit/Chase preserve the current look angles so
+    // possession doesn't jerk the view; Heading adopts the fixed rover start pose.
     let (current_yaw, current_pitch, _) = cam_tf.rotation.to_euler(EulerRot::YXZ);
-    let final_rot = if is_spacecraft {
-        Quat::from_euler(EulerRot::YXZ, current_yaw, current_pitch, 0.0)
-    } else {
-        // Rovers use specific starting view angles.
-        Quat::from_euler(EulerRot::YXZ, end_yaw, end_pitch, 0.0)
+    let (init_yaw, init_pitch) = match follow {
+        CameraFollow::Heading => (end_yaw, end_pitch),
+        _ => (current_yaw, current_pitch),
     };
+    let final_rot = Quat::from_euler(EulerRot::YXZ, init_yaw, init_pitch, 0.0);
     let final_offset = final_rot.mul_vec3(Vec3::Z).as_dvec3() * end_distance;
     let final_abs_pos = target_abs + final_offset + Vec3::Y.as_dvec3() * end_vert_off as f64;
 
@@ -2692,52 +2706,78 @@ fn on_possess_command(
     // Detect if target is a surface vehicle (has GravityBody) and propagate surface mode.
     let is_surface_vehicle = q_vessel_gravity.get(cmd.target).is_ok();
 
-    if end_vert_off == 0.0 {
-        commands.entity(avatar_ent)
-            // Strip the OPPOSITE behavior component: exactly one camera solver
-            // may own the avatar Transform. A leftover SpringArmCamera (prior
-            // rover possession) would fight this OrbitCamera every frame —
-            // last-writer-wins churn that reads as "camera frozen / possession
-            // didn't take".
-            .remove::<SpringArmCamera>()
-            .remove::<SurfaceRelativeMode>()
-            .try_insert(OrbitCamera {
-                target: cmd.target,
-                distance: end_distance,
-                yaw: if is_spacecraft { current_yaw } else { end_yaw },
-                pitch: if is_spacecraft { current_pitch } else { end_pitch },
-                damping: None,
-                vertical_offset: 0.0,
-            });
-    } else {
-        let mut cmd_ent = commands.entity(avatar_ent);
-        // Same exclusivity the other way: a leftover OrbitCamera (prior focus
-        // on a body / spacecraft possession) would overwrite the spring-arm
-        // pose every frame.
-        cmd_ent.remove::<OrbitCamera>();
-        cmd_ent.try_insert((
-            SpringArmCamera {
-                target: cmd.target,
-                distance: end_distance,
-                yaw: 0.0,
-                pitch: end_pitch,
-                damping: Some(0.05),
-                vertical_offset: end_vert_off,
-                // Only steerable vessels (rovers) have a meaningful heading;
-                // a possessed ball/prop tumbles, so track user yaw only.
-                track_heading: q_vessel.contains(cmd.target),
-            },
-            // Camera updates in FixedPostUpdate; ease its Transform between
-            // fixed samples so the rendered camera doesn't staircase at 60Hz.
-            avian3d::prelude::TranslationInterpolation,
-            avian3d::prelude::RotationInterpolation,
-        ));
-        // If possessing a surface vehicle, enable surface-relative camera mode
-        if is_surface_vehicle {
-            if let Ok(gb) = q_vessel_gravity.get(cmd.target) {
-                cmd_ent.try_insert(*gb);
+    // Exactly one camera solver may own the avatar Transform: each arm strips the
+    // other two (a leftover from a prior possession would fight the new solver
+    // every frame — last-writer-wins churn that reads as "camera frozen").
+    match follow {
+        // Stable external frame: track position, keep world up, ignore attitude.
+        // The right frame for a lander that pitches/rolls — the craft tumbles
+        // inside a steady view instead of dragging the camera with it.
+        CameraFollow::Orbit => {
+            commands.entity(avatar_ent)
+                .remove::<SpringArmCamera>()
+                .remove::<SurfaceRelativeMode>()
+                .remove::<ChaseCamera>()
+                .try_insert(OrbitCamera {
+                    target: cmd.target,
+                    distance: end_distance,
+                    yaw: init_yaw,
+                    pitch: init_pitch,
+                    damping: None,
+                    vertical_offset: 0.0,
+                });
+        }
+        // Full-attitude follow (yaw+pitch+roll) — a cockpit frame that rolls with
+        // the craft. Opt-in; the camera intentionally DOES track the body.
+        CameraFollow::Chase => {
+            commands.entity(avatar_ent)
+                .remove::<SpringArmCamera>()
+                .remove::<SurfaceRelativeMode>()
+                .remove::<OrbitCamera>()
+                .try_insert((
+                    ChaseCamera {
+                        target: cmd.target,
+                        distance: end_distance,
+                        yaw: 0.0,
+                        pitch: end_pitch,
+                        damping: Some(0.1),
+                        vertical_offset: end_vert_off,
+                    },
+                    avian3d::prelude::TranslationInterpolation,
+                    avian3d::prelude::RotationInterpolation,
+                ));
+        }
+        // Heading-follow chase: yaw only, surface-normal up. Ground vehicles.
+        CameraFollow::Heading => {
+            let mut cmd_ent = commands.entity(avatar_ent);
+            cmd_ent
+                .remove::<OrbitCamera>()
+                .remove::<ChaseCamera>()
+                .try_insert((
+                    SpringArmCamera {
+                        target: cmd.target,
+                        distance: end_distance,
+                        yaw: 0.0,
+                        pitch: end_pitch,
+                        damping: Some(0.05),
+                        vertical_offset: end_vert_off,
+                        // Only steerable vessels (rovers) have a meaningful
+                        // heading; a possessed ball/prop tumbles, so track user
+                        // yaw only.
+                        track_heading: q_vessel.contains(cmd.target),
+                    },
+                    // Camera updates in FixedPostUpdate; ease its Transform between
+                    // fixed samples so the rendered camera doesn't staircase at 60Hz.
+                    avian3d::prelude::TranslationInterpolation,
+                    avian3d::prelude::RotationInterpolation,
+                ));
+            // If possessing a surface vehicle, enable surface-relative camera mode
+            if is_surface_vehicle {
+                if let Ok(gb) = q_vessel_gravity.get(cmd.target) {
+                    cmd_ent.try_insert(*gb);
+                }
+                cmd_ent.try_insert(SurfaceRelativeMode);
             }
-            cmd_ent.try_insert(SurfaceRelativeMode);
         }
     }
 

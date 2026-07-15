@@ -24,7 +24,7 @@ model Lander
   input Real inertia_xx = 6250.0 "Body inertia about X — wired from body";
   input Real inertia_yy = 6250.0 "Body inertia about Y — wired from body";
   input Real inertia_zz = 6250.0 "Body inertia about Z — wired from body";
-  input Real ang_authority = 2.0 "Attitude authority (rad/s^2 per unit stick)";
+  input Real ang_authority = 0.6 "Attitude authority = angular acceleration (rad/s^2) per unit stick. Vacuum: no damping, so rate ramps while held and holds on release (an RCS attitude-hold script stops it).";
   input Real q_w = 1.0; input Real q_x = 0.0; input Real q_y = 0.0; input Real q_z = 0.0;
 
   // ── Authority + command inputs ──
@@ -43,7 +43,7 @@ model Lander
   Real cmd_throttle;
   // LIVE (der-fed) copy of the tunable gain — a `der` stops rumoca folding it.
   // (`piloted` needs no such trick: it's WIRED, hence already a live input.)
-  Real ang_live(start = 2.0);
+  Real ang_live(start = 0.6);
   Real filter_throttle(start = 0.0), filter_pitch(start = 0.0), filter_roll(start = 0.0), filter_yaw(start = 0.0);
   Real f_loc_y, t_loc_x, t_loc_y, t_loc_z;
   Real f_world_x, f_world_y, f_world_z, t_world_x, t_world_y, t_world_z;

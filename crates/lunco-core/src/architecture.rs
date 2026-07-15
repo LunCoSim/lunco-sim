@@ -147,6 +147,46 @@ pub fn parse_user_intent(name: &str) -> Option<UserIntent> {
     }
 }
 
+/// How the possession/follow camera treats a vessel's **attitude** — the
+/// authored answer to "should the camera rotate with the body?". It is a
+/// property of how the vehicle MOVES, so it is authored on the vessel's control
+/// profile (its `Controls` scope, `uniform token lunco:cameraFollow`) right
+/// beside the intent→port binding, and read into this component during USD
+/// projection.
+///
+/// The distinction matters because "follow the heading" is right for a surface
+/// vehicle — a stable up and a meaningful forward — but wrong for a 6-DOF flyer:
+/// extracting a yaw-heading from a body that is pitching and rolling swings the
+/// camera wildly (it chases the tumble). A flyer wants a STABLE external frame
+/// it rotates INSIDE of (`Orbit`), or — for a pilot who wants the body frame —
+/// the FULL orientation (`Chase`). Absent an authored value a vessel defaults to
+/// `Heading`, the historical surface-vehicle behavior.
+#[derive(Component, Reflect, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[reflect(Component)]
+pub enum CameraFollow {
+    /// Track the body's position; follow its YAW heading only, up = surface
+    /// normal. Ground vehicles (rovers): the camera turns as the vehicle steers.
+    #[default]
+    Heading,
+    /// Track the body's position with a STABLE world/gravity up; do NOT rotate
+    /// with the body. A 6-DOF flyer (lander) tumbles inside a steady view.
+    Orbit,
+    /// Follow the body's FULL orientation (yaw+pitch+roll) — a cockpit/chase
+    /// frame that rolls with the craft. Opt-in for pilots who want it.
+    Chase,
+}
+
+/// Parse a `lunco:cameraFollow` token into a [`CameraFollow`]. Unknown/empty →
+/// `None`, so the caller keeps the default (`Heading`).
+pub fn parse_camera_follow(s: &str) -> Option<CameraFollow> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "heading" | "springarm" | "yaw" => Some(CameraFollow::Heading),
+        "orbit" | "stable" | "external" => Some(CameraFollow::Orbit),
+        "chase" | "cockpit" | "attitude" | "full" => Some(CameraFollow::Chase),
+        _ => None,
+    }
+}
+
 /// Per-vessel **intent → port** binding: while a [`UserIntent`] is active it
 /// contributes `scale` to the named input port. Multiple entries may share an
 /// intent, or a port (e.g. `MoveForward`/`MoveBackward` summing into `throttle`

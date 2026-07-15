@@ -254,6 +254,10 @@ class "LunCoVesselAPI" (
     uniform bool lunco:vessel = false (
         doc = "Whether this prim is a possessable vessel."
     )
+    uniform token lunco:cameraFollow = "heading" (
+        allowedTokens = ["heading", "orbit", "chase"]
+        doc = "How the possession/follow camera treats this vessel's attitude: 'heading' follows yaw only (ground vehicles), 'orbit' keeps a stable external frame (6-DOF flyers), 'chase' follows full orientation. Authored on the vessel's control profile."
+    )
 }
 
 class "LunCoAvatarAPI" (

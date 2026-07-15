@@ -131,6 +131,12 @@ def Xform "DescentLander" (
 
     bool physics:rigidBodyEnabled = true
     float physics:mass = 2000.0
+    # Vacuum: no aerodynamic drag. Linear damping is a tiny numerical settle only;
+    # there is deliberately NO angular damping — angular momentum is conserved, so
+    # a spin persists until a torque stops it. Arresting rotation is the job of the
+    # reaction-control system (RCS), to be added as a Modelica/rhai attitude-hold
+    # script that reads `angvel_*` and commands counter-`torque_*`. Until then the
+    # lander keeps whatever spin the pilot gives it — as a real one would.
     float physxRigidBody:linearDamping = 0.02
 
     # ── Flight control system (the airframe's own avionics) ──────────────────
@@ -169,7 +175,11 @@ def Xform "DescentLander" (
     # composes `components/gnc/descent_guidance.usda`, which authors the wire.
 
     # A parameter is an input with a constant instead of a connection.
-    float inputs:ang_authority = 2.0
+    # Attitude authority = angular ACCELERATION (rad/s^2) per unit stick. With no
+    # damping this is a pure α: hold the stick and the rate ramps; release and the
+    # rate holds (momentum conserved — an RCS script stops it later). Kept low so a
+    # tap is a gentle nudge, not a violent tumble.
+    float inputs:ang_authority = 0.6
 
     # ── Propellant events ────────────────────────────────────────────────────
     # A threshold crossing on a model output, published as an event the supervisory
@@ -406,8 +416,9 @@ def Xform "DescentLander" (
     }
 
     # ── Deployed solar arrays — the "panels on the sides" ──────────────────
-    # Flat cells-up wings on ±X, tilted toward the sun. Thin slabs, no collider —
-    # visual only.
+    # Flat cells-up wings on ±X, tilted toward the sun. Thin slabs, but they are
+    # solid: `collisionEnabled` folds each into the compound (like the pads below)
+    # so a rover cannot drive through a deployed array.
     def Cube "SolarWingPX"
     {
         double size = 1.0
@@ -417,7 +428,7 @@ def Xform "DescentLander" (
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.06, 0.06, 0.22)]
         rel material:binding = </DescentLander/Looks/SolarWing_Mat>
-        bool physics:collisionEnabled = false
+        bool physics:collisionEnabled = true
     }
     def Cube "SolarWingNX"
     {
@@ -428,12 +439,14 @@ def Xform "DescentLander" (
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.06, 0.06, 0.22)]
         rel material:binding = </DescentLander/Looks/SolarWing_Mat>
-        bool physics:collisionEnabled = false
+        bool physics:collisionEnabled = true
     }
 
     # ── Landing legs with footpads ──
-    # The pads carry the colliders, so the compound body is hull + 4 pads and the
-    # lander rests on its legs. Lowest point is the pads (y=-5.0).
+    # Both the struts and the pads carry colliders, so the compound body is
+    # hull + 4 legs + 4 pads: the lander rests on its pads, and a tipped-over
+    # lander catches on its legs instead of the struts clipping through terrain
+    # (and a rover cannot drive through a leg). Lowest point is the pads (y=-5.0).
     def Cube "LegPX"
     {
         double size = 1.0
@@ -442,7 +455,7 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.15, 7.33, 0.15)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
-        bool physics:collisionEnabled = false
+        bool physics:collisionEnabled = true
     }
     def Cylinder "PadPX"
     {
@@ -463,7 +476,7 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.15, 7.33, 0.15)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
-        bool physics:collisionEnabled = false
+        bool physics:collisionEnabled = true
     }
     def Cylinder "PadNX"
     {
@@ -484,7 +497,7 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.15, 7.33, 0.15)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
-        bool physics:collisionEnabled = false
+        bool physics:collisionEnabled = true
     }
     def Cylinder "PadPZ"
     {
@@ -505,7 +518,7 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.15, 7.33, 0.15)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
-        bool physics:collisionEnabled = false
+        bool physics:collisionEnabled = true
     }
     def Cylinder "PadNZ"
     {

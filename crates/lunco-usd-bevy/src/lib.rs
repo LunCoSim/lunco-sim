@@ -920,6 +920,20 @@ fn instantiate_usd_prim_read<R: UsdRead>(
             if let Some(binding) = lunco_core::ControlBinding::from_intent_entries(&entries) {
                 commands.entity(entity).try_insert(binding);
             }
+
+            // Camera-follow mode is a property of how the vehicle moves, so it is
+            // authored on the same control profile as the intent→port binding
+            // (`uniform token lunco:cameraFollow` on the referenced profile, which
+            // flattens onto this `Controls` prim). It answers "should the camera
+            // rotate with the body?" — `heading` (yaw, surface vehicles), `orbit`
+            // (stable frame for a 6-DOF flyer), `chase` (full attitude). Read here
+            // and consumed by `on_possess_command`; absent → the `Heading` default.
+            if let Some(mode) = reader
+                .text(&controls, "lunco:cameraFollow")
+                .and_then(|t| lunco_core::parse_camera_follow(&t))
+            {
+                commands.entity(entity).try_insert(mode);
+            }
         }
 
 
@@ -2887,96 +2901,154 @@ pub fn read_transform_from_usd<R: UsdRead>(reader: &R, path: &SdfPath) -> Transf
     }
 }
 
-/// Spawn footprint of a vehicle, derived in real time from the composed USD
-/// geometry — the single source of truth for spawn sizing (no hand-tuned
-/// per-asset table, no `lunco:spawnLift` attribute that can drift from the
-/// mesh). Computed by walking the same composed stage that `sync_usd_visuals`
-/// instantiates, so the placement solver and the live entity can never disagree.
+/// Small gap (metres) left between an asset's lowest collision point and the
+/// terrain at spawn — a "skin width" so a body never spawns interpenetrating the
+/// ground (which the solver would resolve by ejecting it). Physics is held until
+/// the terrain collider is ready, so the object then settles this last gap gently.
+/// Shared by every spawn path (GUI ghost + the authoritative `SpawnEntity`
+/// handler) so they place identically.
+pub const SPAWN_GROUND_CLEARANCE: f64 = 0.05;
+
+/// Axis-aligned bounding box of an asset's COLLISION geometry, in the asset's own
+/// root reference frame — the general, wheel-free basis for spawn placement.
+///
+/// Walks the composed USD stage from `root_prim` and, for every active gprim whose
+/// `physics:collisionEnabled` is not `false`, folds that shape's local bounding box
+/// (its 8 corners transformed into the root frame) into a running min/max. Shape
+/// dimensions come from the shared [`read_shape_dims`], so the box can't drift from
+/// the avian collider built off the same attributes. The result's
+/// [`rest_depth`](ObjectAabb::rest_depth) (`-min.y`) is the distance from the root
+/// origin down to the lowest collision point: lift a spawn by it and the object
+/// rests ON the ground with no part buried — for ANY asset (lander, rover, prop),
+/// no per-asset `lunco:spawnLift` tuning, no dependency on wheels. Computed off the
+/// same composed stage the live entity is instantiated from, so the placement
+/// solver and the physics body can never disagree.
+///
+/// Returns `None` when no collision geometry is found (a pure-visual prop, or a
+/// mesh-only asset whose shape this reader doesn't dimension) — the caller then
+/// falls back to the authored `lunco:spawnLift`.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct WheelFootprint {
-    /// Half of the wheel-track width along X (metres). The placement solver
-    /// samples terrain at `±half_w` from the click point to fit a slope normal.
-    pub half_w: f64,
-    /// Half of the wheelbase along Z (metres).
-    pub half_l: f64,
-    /// Rest height: signed distance from the root origin down to the lowest
-    /// wheel ground contact. The solver lifts the root by this along the
-    /// terrain normal so the wheels sit on — not in or above — the ground.
-    pub contact_depth: f64,
+pub struct ObjectAabb {
+    pub min: bevy::math::DVec3,
+    pub max: bevy::math::DVec3,
 }
 
-/// Derive the [`WheelFootprint`] of a vehicle by walking the composed USD stage
-/// from `root_prim` (e.g. `"/RockerBogie"`).
-///
-/// Recursively composes each prim's [`local_transform_at`] down the hierarchy;
-/// any prim carrying `physxVehicleWheel:index` (the universal wheel signal —
-/// present on every wheel across the raycast and physical drivetrains) is
-/// treated as a wheel. Its ground contact is `center - radius·Y` in the root's
-/// **level** frame; the placement solver re-orients this box to the terrain
-/// normal afterwards. Wheel authoring never tilts the cylinder, so the level
-/// frame is exact for the pre-slope-fit footprint.
-///
-/// Returns `None` when no wheel prims are found (non-vehicle assets use the
-/// caller's default footprint).
-pub fn wheel_footprint<R: UsdRead>(reader: &R, root_prim: &str) -> Option<WheelFootprint> {
-    let Ok(root) = SdfPath::new(root_prim) else { return None };
-    let mut contacts: Vec<bevy::math::DVec3> = Vec::new();
+impl ObjectAabb {
+    /// Half-width along X (metres) — the placement solver samples terrain at
+    /// `±half_w` from the click point to fit a slope normal.
+    pub fn half_w(&self) -> f64 {
+        (self.max.x - self.min.x) * 0.5
+    }
+    /// Half-length along Z (metres).
+    pub fn half_l(&self) -> f64 {
+        (self.max.z - self.min.z) * 0.5
+    }
+    /// Root origin → lowest collision point. Lift a spawn by this so the object
+    /// rests on the surface. Non-negative for any geometry reaching below origin.
+    pub fn rest_depth(&self) -> f64 {
+        -self.min.y
+    }
+}
+
+/// Derive the [`ObjectAabb`] of an asset by walking the composed USD stage from
+/// `root_prim` (e.g. `"/DescentLander"`). See [`ObjectAabb`].
+pub fn collision_aabb<R: UsdRead>(reader: &R, root_prim: &str) -> Option<ObjectAabb> {
+    let root = SdfPath::new(root_prim).ok()?;
     let root_tf = local_transform_at(reader, &root, 0.0).unwrap_or_default();
-    collect_wheel_contacts(reader, &root, root_tf, &mut contacts);
-    if contacts.is_empty() {
-        return None;
-    }
-    let mut min_x = f64::INFINITY;
-    let mut max_x = f64::NEG_INFINITY;
-    let mut min_z = f64::INFINITY;
-    let mut max_z = f64::NEG_INFINITY;
-    let mut min_y = f64::INFINITY;
-    for c in &contacts {
-        min_x = min_x.min(c.x);
-        max_x = max_x.max(c.x);
-        min_z = min_z.min(c.z);
-        max_z = max_z.max(c.z);
-        min_y = min_y.min(c.y);
-    }
-    Some(WheelFootprint {
-        half_w: (max_x - min_x) * 0.5,
-        half_l: (max_z - min_z) * 0.5,
-        contact_depth: -min_y,
-    })
+    let mut acc: Option<(bevy::math::DVec3, bevy::math::DVec3)> = None;
+    accumulate_collision_aabb(reader, &root, root_tf, &mut acc);
+    acc.map(|(min, max)| ObjectAabb { min, max })
 }
 
-/// Recursive helper for [`wheel_footprint`]: DFS the prim tree composing
-/// transforms, and record each wheel's ground contact in the root's level frame.
-fn collect_wheel_contacts<R: UsdRead>(
+/// DFS helper for [`collision_aabb`]: compose transforms down the tree (Bevy
+/// `Transform * Transform` = parent ∘ child-local, scale kept — USD propagates
+/// parent scale to child geometry) and fold each collision-enabled shape's
+/// transformed corners into `acc`.
+fn accumulate_collision_aabb<R: UsdRead>(
     reader: &R,
     path: &SdfPath,
-    parent_tf: Transform,
-    contacts: &mut Vec<bevy::math::DVec3>,
+    world_tf: Transform,
+    acc: &mut Option<(bevy::math::DVec3, bevy::math::DVec3)>,
 ) {
+    // Fold this prim's own geometry if it is a collision-enabled shape. A child
+    // that explicitly sets `physics:collisionEnabled = false` (a visual-only part
+    // like an antenna or solar panel with no collider) is skipped, so the AABB
+    // tracks the physical footprint — exactly the shapes the avian compound
+    // collider is assembled from.
+    if let Some(ty) = reader.type_name(path) {
+        let collides = reader
+            .scalar::<bool>(path, "physics:collisionEnabled")
+            .unwrap_or(true);
+        if collides {
+            if let Some(corners) = local_shape_corners(reader, path, &ty) {
+                for c in corners {
+                    let w = world_tf.transform_point(c.as_vec3()).as_dvec3();
+                    match acc {
+                        Some((min, max)) => {
+                            *min = min.min(w);
+                            *max = max.max(w);
+                        }
+                        None => *acc = Some((w, w)),
+                    }
+                }
+            }
+        }
+    }
     for child in reader.children(path) {
         if !reader.is_active(&child) {
             continue;
         }
-        // `parent_tf * local` composes the child's transform in the root frame
-        // (Bevy `Transform * Transform` = parent ∘ child-local). Scale is kept
-        // because USD propagates parent scale to child positions — stripping it
-        // would misplace wheels under any scaled intermediate Xform.
         let local = local_transform_at(reader, &child, 0.0).unwrap_or_default();
-        let world = parent_tf * local;
-        if reader
-            .scalar::<i32>(&child, "physxVehicleWheel:index")
-            .is_some()
-        {
-            let radius = reader.real(&child, "radius").unwrap_or(0.25);
-            let center = world.translation.as_dvec3();
-            contacts.push(bevy::math::DVec3::new(
-                center.x,
-                center.y - radius,
-                center.z,
-            ));
-        }
-        collect_wheel_contacts(reader, &child, world, contacts);
+        let child_world = world_tf * local;
+        accumulate_collision_aabb(reader, &child, child_world, acc);
     }
+}
+
+/// The 8 corners of a primitive shape's local bounding box, centred at its origin.
+/// `None` for a non-shape prim (Xform/Scope/Mesh/…) so the walk skips it. Uses the
+/// shared [`read_shape_dims`], and rotates a round shape's box onto its authored
+/// `axis` token, so the box matches the collider the shape produces.
+fn local_shape_corners<R: UsdRead>(
+    reader: &R,
+    path: &SdfPath,
+    ty: &str,
+) -> Option<Vec<bevy::math::DVec3>> {
+    // Half-extents in the shape's Y-axial local frame; `axial` = the `axis` token
+    // may re-orient it (round shapes only — box/sphere/plane are axis-agnostic).
+    let (half, axial) = match read_shape_dims(reader, path, ty)? {
+        ShapeDims::Cube { size } => (bevy::math::DVec3::splat(size * 0.5), false),
+        ShapeDims::Sphere { radius } => (bevy::math::DVec3::splat(radius), false),
+        ShapeDims::Cylinder { radius, height } | ShapeDims::Cone { radius, height } => {
+            (bevy::math::DVec3::new(radius, height * 0.5, radius), true)
+        }
+        // Capsule bounds include the hemispherical caps: half-length = height/2 + r.
+        ShapeDims::Capsule { radius, height } => {
+            (bevy::math::DVec3::new(radius, height * 0.5 + radius, radius), true)
+        }
+        ShapeDims::Plane { width, length } => {
+            (bevy::math::DVec3::new(width * 0.5, 0.0005, length * 0.5), false)
+        }
+    };
+    let axis_q = if axial {
+        reader
+            .text(path, "axis")
+            .as_deref()
+            .and_then(usd_axis_to_quat)
+            .unwrap_or(Quat::IDENTITY)
+    } else {
+        Quat::IDENTITY
+    };
+    let mut corners = Vec::with_capacity(8);
+    for sx in [-1.0_f64, 1.0] {
+        for sy in [-1.0_f64, 1.0] {
+            for sz in [-1.0_f64, 1.0] {
+                let local = axis_q
+                    * Vec3::new((half.x * sx) as f32, (half.y * sy) as f32, (half.z * sz) as f32);
+                corners.push(local.as_dvec3());
+            }
+        }
+    }
+    Some(corners)
 }
 
 /// Canonical `UsdGeom` `axis` token → quaternion folding. A Bevy/Avian

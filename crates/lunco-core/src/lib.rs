@@ -589,6 +589,7 @@ impl Plugin for LunCoCorePlugin {
            .register_type::<Provenance>()
            .register_type::<RestoreFallbackLights>()
            .register_type::<kernels::DriveMix>()
+           .register_type::<CameraFollow>()
            .register_type::<SimTick>();
 
         // NOTE: the `ControlKernelRegistry` resource is owned/seeded by the plugin
