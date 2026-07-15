@@ -764,6 +764,24 @@ pub fn rewire_usd_connections(
     mut dirty: ResMut<WiringDirty>,
     q_all: Query<(Entity, &UsdPrimPath)>,
     q_edges: Query<Entity, With<UsdWiredConnection>>,
+    // Wire endpoints resolve by IDENTITY, not raw prim path. Two runtime spawns of
+    // the same asset compose byte-IDENTICAL stage-relative paths (`/DescentLander`,
+    // …), so a flat path→entity map collapses them onto one entity — a lander's
+    // force self-loop would then bind to the OTHER lander's model and both bodies
+    // move as one. A prim's *instance* is named by its instance-root `GlobalEntityId`:
+    // `Provenance::Derived{parent}` for a descendant, the root's own GID for the
+    // instance root. That id is unique per spawn, identical on every peer, and
+    // STABLE across a program/script hot-swap (it is `derive_id(parent, role)`, a
+    // pure function of identity, not of the ephemeral `Entity`) — so a wire re-
+    // resolves to the same endpoints after a dynamic script change.
+    q_gid: Query<&lunco_core::GlobalEntityId>,
+    q_provenance: Query<&lunco_core::Provenance>,
+    q_instance_root: Query<(), With<UsdInstanceRoot>>,
+    // Identity is minted a frame after the prim spawns (`assign_global_entity_ids`,
+    // PostUpdate). Re-run once the ids land so the instance-scoped resolution below
+    // sees them — otherwise the first, pre-identity pass would fall back to the
+    // scene namespace and briefly cross-wire the spawns.
+    id_assigned: Query<(), Added<lunco_core::GlobalEntityId>>,
     // The realtime gate: whether the SOURCE program promised it is realtime-safe,
     // and whether the SINK is a client-predicted dynamic body (a `RigidBody` NOT
     // opted out of prediction). Absence of the promise is the dangerous case;
@@ -777,17 +795,32 @@ pub fn rewire_usd_connections(
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
 ) {
-    let structural = !added.is_empty() || removed.read().next().is_some();
+    let structural =
+        !added.is_empty() || !id_assigned.is_empty() || removed.read().next().is_some();
     if !structural && !dirty.0 {
         return;
     }
     dirty.0 = false;
 
-    // Index every prim entity by path — both endpoints of every edge resolve
-    // through it (same shape as the old wire producer's `by_path`).
-    let mut by_path: HashMap<String, Entity> = HashMap::new();
+    // A prim's instance identity: the instance-root GID it belongs to, or `None`
+    // for authored scene prims (whose composed paths are already globally unique,
+    // so they share one namespace safely). A runtime instance's descendants carry
+    // `Provenance::Derived{parent}` = the root's GID; the root itself is
+    // `Authoritative` and tagged `UsdInstanceRoot`, so it contributes its own GID.
+    let instance_of = |e: Entity| -> Option<u64> {
+        match q_provenance.get(e) {
+            Ok(lunco_core::Provenance::Derived { parent, .. }) => Some(*parent),
+            _ if q_instance_root.contains(e) => q_gid.get(e).map(|g| g.get()).ok(),
+            _ => None,
+        }
+    };
+
+    // Index every prim entity by (instance, path). Keying on the instance is what
+    // keeps two spawns of one asset distinct: their identical stage-relative paths
+    // now land under different instance keys instead of overwriting each other.
+    let mut by_path: HashMap<(Option<u64>, String), Entity> = HashMap::new();
     for (e, p) in q_all.iter() {
-        by_path.insert(p.path.clone(), e);
+        by_path.insert((instance_of(e), p.path.clone()), e);
     }
 
     // Authored constants on unconnected `inputs:` ports — a model's parameters.
@@ -817,6 +850,10 @@ pub fn rewire_usd_connections(
         let Ok(sink_sdf) = SdfPath::new(&prim_path.path) else {
             continue;
         };
+
+        // Resolve this prim's wires within its OWN instance — a source path names a
+        // prim of the same spawn, never a same-named prim of a different one.
+        let sink_instance = instance_of(entity);
 
         for attr in view.attr_names(&sink_sdf) {
             // Only `inputs:` attributes are connection sinks; connector = the leaf.
@@ -865,7 +902,8 @@ pub fn rewire_usd_connections(
                     );
                     continue;
                 };
-                let Some(&start_element) = by_path.get(src_prim) else {
+                let Some(&start_element) = by_path.get(&(sink_instance, src_prim.to_string()))
+                else {
                     // Two very different situations, and they must not look alike.
                     // A prim that EXISTS on the stage but has no entity yet is
                     // mid-spawn: its later spawn is a structural change that re-runs
