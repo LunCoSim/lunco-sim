@@ -30,6 +30,11 @@ use lunco_core::{SimTick, SECS_PER_TICK};
 pub mod domain;
 pub use domain::*;
 
+pub mod interaction;
+pub use interaction::{
+    Interaction, InteractionSchedule, InteractionStep, InteractionStepSet,
+};
+
 pub mod scales;
 pub use scales::{tdb_jd_to_utc_string, utc_jd_to_tdb_jd, utc_now_tdb_jd, TimeScales};
 
@@ -465,6 +470,9 @@ impl Plugin for TimePlugin {
         // The clock tree (T5): TimeDomain/Playback/TimeBinding + the per-frame
         // resolve into `ResolvedDomains` (in `DomainResolveSet`, `Update`).
         domain::build_domain_tree(app);
+        // The constant-rate, never-paused presentation step (doc 19 §11e-bis). Beside
+        // `FixedUpdate` (the sim's tick), not instead of it — see `interaction`.
+        interaction::build_interaction_cadence(app);
     }
 }
 

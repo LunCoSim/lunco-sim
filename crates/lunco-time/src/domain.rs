@@ -831,17 +831,23 @@ pub(crate) fn build_domain_tree(app: &mut App) {
         // run in `Update`, which was fine when the only consumer was the animation
         // sampler, but the epoch is derived from a clock now — and the celestial
         // chain runs in `PreUpdate`.
+        // Both run INSIDE `TimeSpineSet`, chained after `advance_world_clock`.
+        //
+        // They must be in the set, not merely after it: the epoch is a projection of
+        // the celestial clock now, and every epoch consumer (`CelestialEpochSet` —
+        // ephemeris, body rotation, site anchor) orders itself `.after(TimeSpineSet)`.
+        // Leaving the resolve + epoch write *outside* that set let the ephemeris read a
+        // one-frame-stale `epoch_jd`, which showed up as the Earth grid under-rotating.
+        // The spine is one indivisible step: tick → clocks → epoch.
         .add_systems(
             PreUpdate,
-            advance_and_resolve_domains
-                .in_set(DomainResolveSet)
-                .after(crate::TimeSpineSet),
-        )
-        // The epoch is now a *projection of the celestial clock*, so it must be
-        // written after the tree resolves and before `CelestialEpochSet` reads it.
-        .add_systems(
-            PreUpdate,
-            write_epoch_from_celestial_clock.after(DomainResolveSet),
+            (
+                advance_and_resolve_domains.in_set(DomainResolveSet),
+                write_epoch_from_celestial_clock,
+            )
+                .chain()
+                .in_set(crate::TimeSpineSet)
+                .after(crate::advance_world_clock),
         )
         .add_systems(Startup, (spawn_well_known_clocks, spawn_animation_preview).chain());
     register_all_commands(app);

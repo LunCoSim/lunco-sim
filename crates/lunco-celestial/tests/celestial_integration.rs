@@ -22,6 +22,12 @@ impl EphemerisProvider for StubEphemeris {
 
 /// Build the headless celestial app the tests share (see the notes in
 /// `test_celestial_startup_and_movement` for why each piece is here).
+///
+/// Note the `CelestialBodyDecl` spawns: celestial content is **opt-in per scene**
+/// (doc 19 §11e). A scene declares its bodies in USD (`LuncoCelestialBodyAPI` →
+/// `CelestialBodyDecl`), and nothing celestial — hierarchy, globes, orbit views,
+/// ephemeris — exists without them. These stand in for that declaration, exactly as
+/// `assets/celestial/solar_system.usda` does for a real scene.
 fn celestial_test_app() -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
@@ -32,6 +38,11 @@ fn celestial_test_app() -> App {
     app.init_resource::<Assets<Mesh>>();
     app.init_asset::<Image>();
     app.add_plugins(CelestialPlugin);
+    // The scene asks for a sky: Sun, Earth, Moon.
+    for naif in [10, 399, 301] {
+        app.world_mut()
+            .spawn(lunco_celestial::CelestialBodyDecl { naif });
+    }
     app
 }
 
@@ -78,6 +89,15 @@ fn observer_camera_hangs_in_a_star_fixed_frame() {
             .query_filtered::<&Transform, With<lunco_celestial::EarthRoot>>();
         q.iter(app.world()).next().unwrap().rotation
     };
+    // Second update: the hierarchy is SPAWNED in `Update`, but `body_rotation_system`
+    // runs in `PreUpdate` — so after one frame the grid still sits at identity, and
+    // `rot_before` would be identity rather than the grid's epoch rotation. The
+    // assertion below would then measure the ABSOLUTE angle at the epoch instead of the
+    // 0.33-day delta it claims to. And since the mission epoch is seeded from the WALL
+    // clock, that absolute angle is whatever today's GMST happens to be — the test
+    // passed or failed depending on the time of day it ran. Step once more so the grid
+    // carries its epoch rotation, and the comparison is a true delta.
+    app.update();
     let earth_rot_before = earth_rot_of(&mut app);
 
     // Advance a third of a sidereal day — a ~119° spin.
@@ -149,6 +169,12 @@ fn test_celestial_startup_and_movement() {
     // `GizmoPlugin` is likewise gone — it came from `bevy_gizmos` (a render feature),
     // and nothing in this crate draws gizmos.
     app.add_plugins(CelestialPlugin);
+    // The scene declares its bodies — celestial content is opt-in (doc 19 §11e), so
+    // without these there is no hierarchy, no globes and no ephemeris at all.
+    for naif in [10, 399, 301] {
+        app.world_mut()
+            .spawn(lunco_celestial::CelestialBodyDecl { naif });
+    }
     // Override the NoOp provider (installed by CelestialPlugin) with one whose
     // output depends on the epoch, so the clock seek below actually repositions
     // Earth's grid via `ephemeris_update_system`.

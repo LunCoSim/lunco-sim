@@ -672,19 +672,28 @@ impl Plugin for LunCoAvatarPlugin {
         #[cfg(feature = "ui")]
         app.add_systems(bevy_egui::EguiPrimaryContextPass, crate::ui::draw_notifications);
 
-        // Chase camera shares the rover's fixed-step time domain so its
-        // slerp/lerp uses a constant `dt = 1/60s`. Variable render-frame `dt`
-        // produced perceptible jitter (`alpha = 1 - exp(-rate * dt)` made the
-        // per-frame step proportional to whatever frame time the renderer
-        // happened to deliver). Camera entities also carry
-        // `TranslationInterpolation` + `RotationInterpolation`
-        // (added at SpringArmCamera insertion) so the renderer eases between
-        // fixed-step camera samples — same mechanism rigid bodies use.
-        app.add_systems(FixedPostUpdate,
-            spring_arm_system
-                .after(avian3d::schedule::PhysicsSystems::Writeback));
-
-        app.add_systems(PostUpdate, (
+        // Avatar movement + every camera run in the INTERACTION cadence
+        // (`lunco_time::InteractionSchedule`, doc 19 §11e-bis): a constant-`dt` step
+        // rooted on the WALL clock, so it never pauses and never rate-scales with the
+        // sim. Inside that schedule the generic `Time` IS the interaction clock — the
+        // same contract `Time` = `Time<Fixed>` has inside `FixedUpdate` — so these
+        // systems just read `Res<Time>` and get the constant step.
+        //
+        // This replaces two workarounds that were both symptoms of using a *schedule*
+        // to obtain a *clock* property:
+        //   * `spring_arm_system` rode `FixedPostUpdate` to get a constant `dt` — and
+        //     so froze whenever the sim paused, which forced a second render-rate twin
+        //     (`spring_arm_paused_system`, now deleted) purely for the paused case;
+        //   * `apply_fly`/`chase`/`orbit` rode the render frame with a variable `dt`.
+        // Both are now one system each, on one clock, always running.
+        //
+        // The runner sits in `PostUpdate` AFTER avian's writeback and after
+        // `bevy_transform_interpolation` has eased every body into its render pose, so
+        // a camera following a rover reads the body's SMOOTHED pose — which is what
+        // makes render-rate following smooth, and why the camera no longer needs
+        // avian's own `TranslationInterpolation` (that eased a camera written at the
+        // *fixed* rate; keeping it now would be a lerp of a lerp).
+        app.add_systems(lunco_time::InteractionSchedule, (
             orbital_exit_restore_system,
             chase_camera_system,
             // Entry half of the scroll transit — must see the free-flight
@@ -696,18 +705,15 @@ impl Plugin for LunCoAvatarPlugin {
             freeflight_system,
             surface_camera_system,
             apply_fly,
+            spring_arm_system,
             update_avatar_clip_planes_system,
-            spring_arm_paused_system.run_if(|transport: Option<Res<lunco_time::TimeTransport>>| {
-                transport.map_or(false, |t| matches!(t.mode, lunco_time::TransportMode::Paused))
-            }),
         ).chain().in_set(AvatarCameraSet));
 
-        app.configure_sets(
-            PostUpdate,
-            AvatarCameraSet
-                .after(avian3d::schedule::PhysicsSystems::Writeback)
-                .before(bevy::transform::TransformSystems::Propagate)
-        );
+        // `AvatarCameraSet` no longer needs a `PostUpdate` ordering: it lives inside
+        // `InteractionSchedule`, and the RUNNER carries the ordering for everything in
+        // it (`lunco_time::InteractionStepSet` — after avian's writeback + easing,
+        // before `TransformSystems::Propagate`). The set now only orders these systems
+        // relative to each other (`.chain()`).
 
         // NOTE: there used to be a second, PostUpdate registration of
         // `anchor_solar_frame_to_site` here for same-frame drag re-pins. The
@@ -1122,16 +1128,13 @@ fn update_spring_arm_impl(
     }
 }
 
-/// SpringArm camera, fixed-step half. Runs in `FixedPostUpdate` for a CONSTANT `dt`
-/// (the camera entity carries avian's `TranslationInterpolation`/`RotationInterpolation`
-/// so the renderer eases between the 60 Hz samples).
+/// SpringArm camera. Runs in the INTERACTION cadence: constant `dt`, never paused,
+/// never rate-scaled (doc 19 §11e-bis). `Res<Time>` inside `InteractionSchedule` IS the
+/// interaction clock.
 ///
-/// TODO(doc 19 §11e-bis): this is the cadence/clock conflation. `FixedUpdate` is the
-/// SIM's tick cadence — it stops on pause and rate-scales with `TimeTransport` — so
-/// riding it to obtain a constant `dt` also inherits the sim's pause (hence the
-/// render-rate twin `spring_arm_paused_system` below: one behaviour, two systems).
-/// The fix is a constant-rate cadence that does NOT derive from the transport; until
-/// that lands, these two stay.
+/// It used to ride `FixedPostUpdate` purely to get a constant `dt` — which also bought
+/// the sim's pause, so a second render-rate twin (`spring_arm_paused_system`) had to
+/// exist for the paused case. One clock, one system now.
 fn spring_arm_system(
     time: Res<Time>,
     q_avatar: Query<(
@@ -1164,52 +1167,16 @@ fn spring_arm_system(
     );
 }
 
-/// SpringArm camera, paused half — see the TODO on [`spring_arm_system`]. `FixedUpdate`
-/// stops when the sim pauses, so this render-rate twin keeps the chase camera live on
-/// the wall-rooted INTERACTION clock. It exists only because the constant-`dt` cadence
-/// and the sim cadence are currently the same schedule.
-fn spring_arm_paused_system(
-    time_real: lunco_time::InteractionTime,
-    q_avatar: Query<(
-        Entity,
-        &mut Transform,
-        &mut CellCoord,
-        &mut SpringArmCamera,
-        &ChildOf,
-        Option<&SurfaceRelativeMode>,
-        &mut CameraZoomInput,
-    ), (With<Avatar>, Without<FrameBlend>)>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
-    q_grids: Query<&Grid>,
-    q_dragging: Query<(), With<lunco_core::GizmoDragging>>,
-    q_children: Query<&Children>,
-    defaults: Res<CameraDefaults>,
-    keys: Res<ButtonInput<KeyCode>>,
-    spatial_query: Option<avian3d::prelude::SpatialQuery>,
-) {
-    update_spring_arm_impl(
-        time_real.delta_secs(),
-        q_avatar,
-        q_spatial,
-        q_grids,
-        q_dragging,
-        q_children,
-        &defaults,
-        &keys,
-        &spatial_query,
-    );
-}
-
 /// ChaseCamera system: follows a target with full 3D orientation follow.
 ///
 /// Used for aircraft and flying vehicles. Respects the target's roll, pitch,
 /// and heading — the camera rotates with the vehicle in all axes.
 fn chase_camera_system(
-    // Interaction clock, not virtual time: the chase camera's exponential smoothing
-    // (`alpha = 1 - exp(-rate·dt)`) got `dt = 0` while the sim was paused, so the
-    // camera lerp simply stalled mid-follow. Camera smoothing is interaction, not
-    // simulation — it belongs on the wall-rooted clock.
-    time: lunco_time::InteractionTime,
+    // Constant interaction step (`Res<Time>` inside `InteractionSchedule`), not virtual
+    // time: the chase camera's exponential smoothing (`alpha = 1 - exp(-rate·dt)`) used
+    // to get `dt = 0` while the sim was paused, so the camera lerp stalled mid-follow.
+    // Camera smoothing is interaction, not simulation.
+    time: Res<Time>,
     mut q_avatar: Query<(Entity, &mut Transform, &mut CellCoord, &mut ChaseCamera, &ChildOf, &mut CameraZoomInput), (With<Avatar>, Without<FrameBlend>)>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
     q_grids: Query<&Grid>,
@@ -1473,10 +1440,10 @@ fn orbital_exit_restore_system(
 /// Only runs when `OrbitCamera` is present AND no `FrameBlend` is active.
 /// The camera does NOT rotate with the target — stars stay still.
 fn orbit_system(
-    // Interaction clock (see `chase_camera_system`): orbiting a body must stay
+    // Constant interaction step (see `chase_camera_system`): orbiting a body must stay
     // responsive with the simulation paused — that is the normal way to inspect a
     // frozen scene.
-    time: lunco_time::InteractionTime,
+    time: Res<Time>,
     mut q_avatar: Query<(Entity, &mut Transform, &mut CellCoord, &mut OrbitCamera, &ChildOf, &mut CameraZoomInput, Option<&OrbitFrameSample>), (With<Avatar>, Without<FrameBlend>)>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
@@ -2100,11 +2067,11 @@ fn apply_fly(
     q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
     q_bodies: Query<(Entity, &CelestialBody)>,
     keys: Res<ButtonInput<KeyCode>>,
-    // The INTERACTION clock (wall-rooted): the avatar keeps flying while the sim is
-    // paused, because pausing the simulation is not supposed to paralyse the user.
-    // This used to be a raw `Res<Time<Real>>`, which got the same behaviour but put
-    // the avatar outside the clock tree — unable to be inspected or rate-scaled.
-    time: lunco_time::InteractionTime,
+    // The INTERACTION cadence: constant `dt`, and the avatar keeps flying while the sim
+    // is paused — pausing the simulation is not supposed to paralyse the user. This was
+    // a raw `Res<Time<Real>>`, which got the "keeps running" half but with a VARIABLE
+    // `dt`, and put the avatar outside the clock system entirely.
+    time: Res<Time>,
     mut commands: Commands,
 ) {
     let site_center = site_body_center(&q_site, &q_bodies).map(|(_, _, c)| c);
@@ -2573,8 +2540,10 @@ fn on_release_command(
         .remove::<SunlitArrival>()
         .remove::<RadialArrival>()
         .remove::<FrameBlend>()
-        // FreeFlight/Surface cameras run in PostUpdate at render rate, so
-        // strip the fixed-step interpolation that SpringArmCamera relied on.
+        // Defensive: strip the fixed-step easing a SpringArmCamera used to carry back
+        // when the camera was written in `FixedPostUpdate`. Cameras now run in the
+        // interaction cadence and are never given it, but an entity restored from an
+        // older scene/save could still have it, and it would fight the camera writer.
         .remove::<avian3d::prelude::TranslationInterpolation>()
         .remove::<avian3d::prelude::RotationInterpolation>();
 
@@ -2790,10 +2759,6 @@ fn on_possess_command(
                 // a possessed ball/prop tumbles, so track user yaw only.
                 track_heading: q_vessel.contains(cmd.target),
             },
-            // Camera updates in FixedPostUpdate; ease its Transform between
-            // fixed samples so the rendered camera doesn't staircase at 60Hz.
-            avian3d::prelude::TranslationInterpolation,
-            avian3d::prelude::RotationInterpolation,
         ));
         // If possessing a surface vehicle, enable surface-relative camera mode
         if is_surface_vehicle {
@@ -2888,8 +2853,6 @@ fn on_follow_command(
                 // Followed props (balloons, balls) tumble — heading is user-only.
                 track_heading: q_vessel.contains(cmd.target),
             },
-            avian3d::prelude::TranslationInterpolation,
-            avian3d::prelude::RotationInterpolation,
         ));
 
     // Surface-relative mode if following a body on a gravity well.

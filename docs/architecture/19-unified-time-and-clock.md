@@ -782,29 +782,49 @@ pauses, a second render-rate copy (`spring_arm_paused_system`) had to exist for 
 One behaviour, two systems, gated on the transport: that duplication is what a cadence/clock
 conflation always produces.
 
-**The rule:**
+**Two cadences, split by what they are FOR:**
 
-| System mutates… | Cadence | Clock |
-|---|---|---|
-| replicated **sim state** (physics, tick, cosim, netcode) | `FixedUpdate` — the fixed step **is** the tick | `sim` |
-| **presentation** (cameras, UI easing, HUD, notifications) | render rate (`Update`/`PostUpdate`) | `interaction` (wall-rooted) |
+| System mutates… | Cadence | `dt` | Pauses? | Rate-scales? |
+|---|---|---|---|---|
+| replicated **sim state** (physics, tick, cosim, netcode) | `FixedUpdate` — the fixed step **is** the tick | `SECS_PER_TICK` | yes | yes |
+| **presentation** (avatar, cameras, UI easing, HUD) | `InteractionSchedule` — wall-rooted | constant (120 Hz) | **never** | **never** |
 
-Presentation must **never** live in `FixedUpdate`: that schedule stops on pause, and presentation
-must not. If presentation *follows* a physics body, it reads the **interpolated** transform —
-avian's `PhysicsInterpolationPlugin::interpolate_all()` already publishes a render-smooth pose for
-every body — which is what makes render-rate following smooth. **Wanting smoothness is not a
-reason to move a camera into the physics cadence**; it is a reason to read the interpolated pose.
+`InteractionSchedule` (`lunco-time/src/interaction.rs`) is a second stepped cadence, drained from
+`Time<Real>`. Inside it the generic `Time` **is** the interaction clock — the same contract `Time`
+is `Time<Fixed>` inside `FixedUpdate` — so systems just read `Res<Time>` and get the constant step.
+There is **no path from `TimeTransport` into it**, which is what makes it unpausable *by
+construction* rather than by a guard someone has to remember to write.
+
+**Why the sim keeps Bevy's cadence** (all three verified in the dependency sources, not assumed):
+
+1. **Rate is sub-stepping, and must be.** `sim_secs = tick × SECS_PER_TICK` — a tick is a *fixed
+   size*, so 8× means eight ticks per wall-frame, never one tick of 8× the `dt`. avian's
+   `Time<Physics>::relative_speed` does the latter: `run_physics_schedule` computes
+   `timestep = driving_schedule.delta × relative_speed` (`avian3d/schedule/mod.rs:242`) — a 133 ms
+   solver step at 8×, and it breaks the tick↔seconds invariant. "More fixed runs per frame" IS the
+   mechanism, and that is exactly what `Time<Virtual>`'s `relative_speed` buys.
+2. **Netcode is keyed to it.** `SimTick` is *defined* as one tick per fixed step (`lunco-core`), and
+   prediction/rollback/input-recording are built on that 1:1 — as is lightyear's own tick manager.
+3. **avian's smoothing is keyed to it.** `bevy_transform_interpolation` captures start/end in
+   `FixedFirst`/`FixedLast` and eases on `Time<Fixed>::overstep_fraction()`. Move `PhysicsSchedule`
+   off the Bevy fixed loop and every body's smoothing silently breaks.
+
+**What IS driven from the time system:** avian's *pause*. `run_physics_schedule` gates on
+`Time<Physics>::is_paused()` (`:237`), which is precisely what `lunco_physics::PhysicsHolds` writes.
+That is the half of "control avian from time, not from the schedule" that genuinely belongs there.
 
 Corollary — the camera stopped needing avian's `TranslationInterpolation`/`RotationInterpolation`.
-Those existed only to ease a camera *written at 60 Hz* between fixed samples. A camera written
-every rendered frame is already at display rate; keeping them would be double-smoothing (a lerp of
-a lerp), which is a lag source, not a smoothness source.
+Those eased a camera *written at the fixed rate* between fixed samples; a camera written on the
+120 Hz interaction step is already ahead of the display, and keeping them would be a lerp of a lerp
+— a lag source, not a smoothness source. The runner sits in `PostUpdate` **after** avian's writeback
+and after `bevy_transform_interpolation` has eased every body into its render pose, so a camera
+following a rover reads the body's *smoothed* pose.
 
 > **Do clocks need their own step?** A clock is *continuous* (sampled per frame; `dt` varies) by
-> default. Only the `sim` clock is *stepped*, and its step is the tick — that is what determinism
-> and rollback are built on. A cosim participant with its own communication step (Modelica,
-> §11f) is `DomainRegime::Causal` and gets a step of its own; that is the one case where a second
-> stepped cadence is justified, and it is bounded by co-sim communication points, not free.
+> default. Two are stepped, and only two: the `sim` clock (step = the tick — determinism and
+> rollback are built on it) and the `interaction` cadence (step = constant, so presentation
+> integrators have a stable `dt`). A cosim participant with its own communication step (Modelica,
+> §11f) is `DomainRegime::Causal` and would be a third, bounded by co-sim communication points.
 > Do **not** give every clock a step "for symmetry": each stepped cadence is an accumulator, a
 > phase relationship, and an interpolation policy that someone has to reason about.
 
