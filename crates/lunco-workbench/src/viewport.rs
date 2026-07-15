@@ -96,6 +96,7 @@ use bevy::prelude::*;
 // `bevy::camera::*` re-exports work on *both* native and
 // `--no-default-features` wasm builds. `bevy::render::camera::*` only
 // exists when the `bevy_render` feature is on, which wasm strips.
+use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{ClearColorConfig, Hdr, RenderTarget};
 use bevy_egui::{egui, EguiGlobalSettings, PrimaryEguiContext};
 
@@ -761,6 +762,15 @@ pub fn ensure_egui_host(
             // [`sync_egui_host_msaa`] copies the scene camera's live value onto
             // this entity every frame — including when the user changes the MSAA
             // setting, which a spawn-time constant could not follow.
+            //
+            // Render NO world layers. This camera exists ONLY to paint egui chrome
+            // (a render pass that ignores `RenderLayers`); it must not also run the
+            // gizmo pass. A default (layer-0) Camera2d re-projects every 3D world
+            // gizmo — sensor beams, physics arrows — through its 2D orthographic view
+            // onto a target it never clears (`ClearColorConfig::None`), so the lines
+            // land at garbage positions and TRAIL across frames as a ghost overlay.
+            // Excluding the world layers keeps gizmos on the scene `Camera3d` only.
+            RenderLayers::none(),
             PrimaryEguiContext,
             WorkbenchEguiHost,
             Name::new("WorkbenchEguiHost"),
