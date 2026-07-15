@@ -802,18 +802,11 @@ pub fn rewire_usd_connections(
     }
     dirty.0 = false;
 
-    // A prim's instance identity: the instance-root GID it belongs to, or `None`
-    // for authored scene prims (whose composed paths are already globally unique,
-    // so they share one namespace safely). A runtime instance's descendants carry
-    // `Provenance::Derived{parent}` = the root's GID; the root itself is
-    // `Authoritative` and tagged `UsdInstanceRoot`, so it contributes its own GID.
-    let instance_of = |e: Entity| -> Option<u64> {
-        match q_provenance.get(e) {
-            Ok(lunco_core::Provenance::Derived { parent, .. }) => Some(*parent),
-            _ if q_instance_root.contains(e) => q_gid.get(e).map(|g| g.get()).ok(),
-            _ => None,
-        }
-    };
+    // A prim's instance identity (its instance-root GID, `None` for scene prims)
+    // is what keeps two spawns of one asset — byte-identical stage-relative paths
+    // and all — from collapsing onto one entity below. See `instance_key`.
+    let instance_of =
+        |e: Entity| lunco_usd_bevy::instance_key(e, &q_provenance, &q_gid, &q_instance_root);
 
     // Index every prim entity by (instance, path). Keying on the instance is what
     // keeps two spawns of one asset distinct: their identical stage-relative paths

@@ -546,6 +546,45 @@ fn instance_role(root_path: &str, prim_path: &str) -> String {
         .unwrap_or_else(|| prim_path.trim_start_matches('/').to_string())
 }
 
+/// The **instance** an entity belongs to, named by its instance-root
+/// [`GlobalEntityId`](lunco_core::GlobalEntityId).
+///
+/// This is THE disambiguator for any resolver that matches authored USD
+/// prim-path strings to entities. Two runtime spawns of one asset compose
+/// BYTE-IDENTICAL stage-relative paths (`/DescentLander`, `/DescentLander/Hull`,
+/// …), so a resolver that matches on path alone binds across copies — a lander
+/// flying on the other lander's model, a rover geared to the other rover's
+/// rockers. Scope the match to the instance and the ambiguity is gone.
+///
+/// The instance-root GID is the right name for it: unique per spawn, identical
+/// on every peer, and stable across entity churn (a descendant's id is
+/// `derive_id(parent, role)`, a pure function of identity, so a hot-swapped
+/// program re-resolves to the same endpoints). Returns:
+/// - `Some(root_gid)` for a runtime instance — a descendant reports its
+///   [`Provenance::Derived`](lunco_core::Provenance::Derived)`{ parent }` (the
+///   root's GID); the root itself (`Authoritative`, tagged [`UsdInstanceRoot`])
+///   reports its own GID.
+/// - `None` for authored scene prims, whose composed paths are already globally
+///   unique, so they share one namespace safely.
+///
+/// `None` is also the answer in the one-frame window before identity is minted
+/// (`assign_global_entity_ids`, PostUpdate). A resolver that runs every frame
+/// until it succeeds simply DEFERS — a `None` key never equals a `Some` key, so
+/// it can never mis-bind; a resolver gated on `Added` must also wake on
+/// `Added<GlobalEntityId>` to pick the ids up (see `resolve_behavior_targets`).
+pub fn instance_key(
+    entity: Entity,
+    q_provenance: &Query<&lunco_core::Provenance>,
+    q_gid: &Query<&lunco_core::GlobalEntityId>,
+    q_instance_root: &Query<(), With<UsdInstanceRoot>>,
+) -> Option<u64> {
+    match q_provenance.get(entity) {
+        Ok(lunco_core::Provenance::Derived { parent, .. }) => Some(*parent),
+        _ if q_instance_root.contains(entity) => q_gid.get(entity).map(|g| g.get()).ok(),
+        _ => None,
+    }
+}
+
 /// Translates a single USD prim into Bevy/big_space/avian components on
 /// `entity`. The caller has already verified that the stage is loaded.
 ///

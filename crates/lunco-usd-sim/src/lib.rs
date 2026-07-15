@@ -55,7 +55,7 @@ use bevy::math::{DQuat, DVec3};
 use avian3d::prelude::*;
 use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
 pub use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdInstanceRoot};
-use lunco_usd_bevy::{CanonicalStages, UsdRead};
+use lunco_usd_bevy::{instance_key, CanonicalStages, UsdRead};
 use lunco_usd_avian::ShouldBeDynamic;
 // Appearance + camera **intent** — this crate must never name `MeshMaterial3d`,
 // `StandardMaterial`, `ShaderMaterial` or `Camera3d` (all `bevy_pbr` /
@@ -2075,43 +2075,20 @@ fn on_add_usd_sim_prim(
 ///
 /// A named port that is absent from the FSW `port_map` warns and is skipped —
 /// declare custom ports with `lunco:drivePorts` on the rover root.
-fn find_instance_root(
-    entity: Entity,
-    q_child_of: &Query<&ChildOf>,
-    q_usd_path: &Query<&UsdPrimPath>,
-    q_instance_root: &Query<(), With<UsdInstanceRoot>>,
-) -> Entity {
-    let mut cursor = entity;
-    let mut best_root = entity;
-    loop {
-        if q_instance_root.get(cursor).is_ok() {
-            return cursor;
-        }
-        if q_usd_path.get(cursor).is_ok() {
-            best_root = cursor;
-        }
-        match q_child_of.get(cursor) {
-            Ok(parent) => cursor = parent.parent(),
-            Err(_) => break,
-        }
-    }
-    best_root
-}
-
 fn try_wire_wheel(
     q_pending: Query<(Entity, &UsdPrimPath, &PendingWheelWiring)>,
     q_fsw: Query<(Entity, &UsdPrimPath, &FlightSoftware)>,
-    q_child_of: Query<&ChildOf>,
-    q_usd_path: Query<&UsdPrimPath>,
+    q_provenance: Query<&lunco_core::Provenance>,
+    q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
     mut commands: Commands,
 ) {
     for (ent, prim_path, pending) in q_pending.iter() {
-        let wheel_root = find_instance_root(ent, &q_child_of, &q_usd_path, &q_instance_root);
+        let wheel_root = instance_key(ent, &q_provenance, &q_gid, &q_instance_root);
         let fsw_root = q_fsw.iter().find(|(fsw_ent, path, _)| {
             path.stage_handle == prim_path.stage_handle
                 && prim_path.path.starts_with(&path.path)
-                && find_instance_root(*fsw_ent, &q_child_of, &q_usd_path, &q_instance_root) == wheel_root
+                && instance_key(*fsw_ent, &q_provenance, &q_gid, &q_instance_root) == wheel_root
         });
 
         if let Some((_, _, fsw)) = fsw_root {
@@ -2179,20 +2156,33 @@ fn resolve_behavior_targets(
     q_prims: Query<(Entity, &UsdPrimPath)>,
     q_new_prims: Query<(), Added<UsdPrimPath>>,
     q_changed_xml: Query<(), Changed<lunco_autopilot::usd_tree::BehaviorXml>>,
+    q_new_ids: Query<(), Added<lunco_core::GlobalEntityId>>,
+    q_provenance: Query<&lunco_core::Provenance>,
+    q_gid: Query<&lunco_core::GlobalEntityId>,
+    q_instance_root: Query<(), With<UsdInstanceRoot>>,
     mut commands: Commands,
 ) {
-    // Only re-resolve when the cast could actually change: a new prim appeared, or a
-    // tree was (re)authored.
-    if q_trees.is_empty() || (q_new_prims.is_empty() && q_changed_xml.is_empty()) {
+    // Only re-resolve when the cast could actually change: a new prim appeared, a
+    // tree was (re)authored, or identity was just minted — the last so the instance
+    // scope below resolves once GIDs exist instead of binding pre-identity.
+    if q_trees.is_empty()
+        || (q_new_prims.is_empty() && q_changed_xml.is_empty() && q_new_ids.is_empty())
+    {
         return;
     }
     for (vessel, xml, vessel_path) in q_trees.iter() {
+        let vessel_instance = instance_key(vessel, &q_provenance, &q_gid, &q_instance_root);
         let mut bindings = lunco_autopilot::usd_tree::TargetBindings::default();
         for path in lunco_autopilot::usd_tree::target_paths(&xml.0) {
-            if let Some((e, _)) = q_prims
-                .iter()
-                .find(|(_, p)| p.path == path && p.stage_handle == vessel_path.stage_handle)
-            {
+            // Scope the match to the vessel's OWN instance: a target path names a
+            // prim of THIS spawn, never a same-named prim of another copy. Scene
+            // targets (globally-unique composed paths, instance `None`) are
+            // unaffected — every candidate and the vessel share `None`.
+            if let Some((e, _)) = q_prims.iter().find(|(e, p)| {
+                p.path == path
+                    && p.stage_handle == vessel_path.stage_handle
+                    && instance_key(*e, &q_provenance, &q_gid, &q_instance_root) == vessel_instance
+            }) {
                 bindings.0.insert(path, e);
             }
         }
@@ -2212,20 +2202,20 @@ fn resolve_behavior_targets(
 fn resolve_differential_coupling(
     q_pending: Query<(Entity, &UsdPrimPath, &PendingDifferential)>,
     q_bodies: Query<(Entity, &UsdPrimPath), With<Position>>,
-    q_child_of: Query<&ChildOf>,
-    q_usd_path: Query<&UsdPrimPath>,
+    q_provenance: Query<&lunco_core::Provenance>,
+    q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
     mut commands: Commands,
 ) {
     for (joint, joint_path, pending) in q_pending.iter() {
-        let joint_root = find_instance_root(joint, &q_child_of, &q_usd_path, &q_instance_root);
+        let joint_root = instance_key(joint, &q_provenance, &q_gid, &q_instance_root);
         let find = |target: &str| {
             q_bodies
                 .iter()
                 .find(|(e, p)| {
                     p.path == target
                         && p.stage_handle == joint_path.stage_handle
-                        && find_instance_root(*e, &q_child_of, &q_usd_path, &q_instance_root) == joint_root
+                        && instance_key(*e, &q_provenance, &q_gid, &q_instance_root) == joint_root
                 })
                 .map(|(e, _)| e)
         };
