@@ -123,10 +123,7 @@ pub struct UsdSimPlugin;
 
 impl Plugin for UsdSimPlugin {
     fn build(&self, app: &mut App) {
-        app.register_type::<WheelOf>()
-           .register_type::<RoverWheels>()
-           .register_type::<ArticulationRoot>()
-           .register_type::<PhysicalWheel>()
+        app.register_type::<PhysicalWheel>()
            // Client-only: reconstruct a remote rover's wheels from its chassis
            // (kinematic followers — wheels are no longer replicated), then re-derive
            // the cosmetic visual roll. Chained so the visual spin layers on the
@@ -170,10 +167,6 @@ impl Plugin for UsdSimPlugin {
         // of invisible deadlock into a loud `error!` AND recovers by building the
         // physics without the missing visual.
         app.add_systems(Update, recover_stuck_usd_prims);
-        // Wheel-joint lifecycle tether: joints are spawned DETACHED (they link two
-        // bodies, they're nobody's child), so a doc-backed scene reload despawns
-        // the rover subtree but leaves its joints behind. See the system docs.
-        app.add_systems(Update, reap_orphaned_wheel_joints);
         // USD → cosim wiring (`lunco:modelicaModel`, `lunco:scriptModel`,
         // `lunco:simWires`) — see `cosim.rs`.
         cosim::install(app);
@@ -187,43 +180,6 @@ pub use cosim::{CosimStatusProvider, UsdSourcedCosim};
 /// USD → [`ShaderMaterial`](lunco_materials::ShaderMaterial) authoring,
 /// deterministically ordered so it can never race a downstream consumer.
 pub mod shader;
-
-/// Logical link from a joint-based wheel rigid body up to its rover.
-///
-/// Decouples ownership ("this wheel belongs to that rover") from the
-/// Bevy parent-child hierarchy, which is reserved for transform
-/// propagation. Used for selection ("click on a wheel, focus the
-/// rover"), camera follow, and to find the matching `RoverWheels`
-/// list when teleporting / despawning the rover.
-///
-/// Set in `setup_physical_wheel`; mirrors the standard OpenUSD
-/// `PhysicsArticulationRootAPI` link declared on the rover Xform —
-/// when Avian gains articulation support, this component becomes a
-/// runtime reflection of the authored articulation graph.
-#[derive(Component, Debug, Clone, Copy, Reflect)]
-#[reflect(Component)]
-pub struct WheelOf(pub Entity);
-
-/// On a rover root: the wheel rigid bodies the rover owns.
-///
-/// Populated alongside [`WheelOf`] for the inverse lookup — iterating
-/// a single rover's wheels without scanning every wheel in the world.
-#[derive(Component, Debug, Default, Clone, Reflect)]
-#[reflect(Component)]
-pub struct RoverWheels(pub Vec<Entity>);
-
-/// Marker for rovers authored with `PhysicsArticulationRootAPI`.
-///
-/// Standard OpenUSD schema declaring "this Xform plus everything joint-
-/// connected below it is **one** articulated multibody, not loose
-/// rigid bodies that happen to be linked." Avian 0.6's XPBD-impulse
-/// solver doesn't natively articulate; we honour the declaration by
-/// reparenting wheels to top-level and tracking the link via
-/// `WheelOf`/`RoverWheels`. The day Avian gains articulation, this
-/// marker becomes the trigger for the engine-native path.
-#[derive(Component, Debug, Default, Clone, Copy, Reflect)]
-#[reflect(Component)]
-pub struct ArticulationRoot;
 
 /// A joint-based wheel: a full rigid body that interacts with terrain through
 /// collision, not raycast suspension. It gets `RigidBody`, `Collider`, and a
@@ -989,9 +945,13 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                 }
             }
             for name in &port_names {
+                // `ChildOf(entity)`: the FSW ports are owned by the vehicle so the
+                // recursive scene-clear reclaims them with it — no detached-at-root
+                // survivors across a scene swap (general lifecycle contract).
                 let port_ent = commands.spawn((
                     DigitalPort::default(),
                     Name::new(format!("Port_{}", name)),
+                    ChildOf(entity),
                 )).id();
                 port_map.insert(name.clone(), port_ent);
             }
@@ -1014,18 +974,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                 // Rovers have a meaningful "upright" — opt into overturn
                 // recovery (see `lunco_terrain_surface::collider_ring`).
                 lunco_core::KeepUpright,
-                RoverWheels::default(),
             ));
-
-            // OpenUSD-standard `PhysicsArticulationRootAPI` declares
-            // the rover as an articulated multibody. We mark it for
-            // downstream code that needs to know wheels and chassis
-            // are kinematically coupled even after the wheels are
-            // reparented out of the Bevy hierarchy.
-            if reader.has_api_schema(&sdf_path, "PhysicsArticulationRootAPI") {
-                commands.entity(entity).try_insert(ArticulationRoot);
-                info!("Detected PhysicsArticulationRootAPI on {}", prim_path.path);
-            }
 
             info!("Successfully initialized FSW for {}", prim_path.path);
         }
@@ -1150,9 +1099,12 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             }
             info!("Intercepted PhysxVehicleWheelAPI for {}", prim_path.path);
 
-            // Create physical ports for drive and steering
-            let p_drive = commands.spawn((PhysicalPort::default(), Name::new("PhysicalPort_Drive"))).id();
-            let p_steer = commands.spawn((PhysicalPort::default(), Name::new("PhysicalPort_Steer"))).id();
+            // Create physical ports for drive and steering. Owned by the wheel via
+            // `ChildOf` so the single recursive scene-clear reclaims them with the
+            // wheel — synthesized backing entities are never left detached at the root
+            // (the general lifecycle contract; see `setup_physical_wheel`'s joint).
+            let p_drive = commands.spawn((PhysicalPort::default(), Name::new("PhysicalPort_Drive"), ChildOf(entity))).id();
+            let p_steer = commands.spawn((PhysicalPort::default(), Name::new("PhysicalPort_Steer"), ChildOf(entity))).id();
 
             let index = reader.scalar::<i32>(&sdf_path, "physxVehicleWheel:index").unwrap_or(0);
 
@@ -1716,6 +1668,22 @@ fn setup_physical_wheel(
     let mut joint_cmd = commands.spawn((
         lunco_usd_avian::wheel_revolute_joint(chassis, entity, mount_local, axle, drive_motor),
         JointCollisionDisabled,
+        // GENERAL LIFECYCLE CONTRACT — every entity the USD build *synthesizes* to back a
+        // scene (avian joints, actuator ports, cosim wires) is parented into the grid
+        // subtree via `ChildOf`, so the ONE hierarchy-recursive `clear_scene_entities`
+        // reclaims it exactly once, in the same flush as its bodies. Authored joints (any
+        // depth of `Physics*Joint` prim in a robot arm / lander / crane) already satisfy
+        // this — they ARE prim entities under the scene. This is the *synthesized* joint,
+        // the only one not authored, so it is the one that must opt in explicitly here.
+        //
+        // A wheel joint links two bodies, so it sits in nobody's TRANSFORM subtree — but
+        // it must die WITH the rover. `ChildOf` puts it in the chassis's despawn subtree;
+        // avian resolves the constraint from the joint's body anchors, never from this
+        // entity's transform, so the parenting is physics-inert. Left detached, the joint
+        // outlived its bodies on a scene swap and was double-removed from avian's island
+        // bookkeeping — a `joint_count` underflow that corrupted the solver. Owning it here
+        // makes that structurally impossible: no orphans, no reaper, no mask.
+        ChildOf(chassis),
         // All-wheel drive. The throttle port already carries the skid rover's
         // per-side differential (drive_left/drive_right), so a single mapping here
         // yaws the skid body; on the Ackermann rover all wheels share one throttle
@@ -1743,36 +1711,10 @@ fn setup_physical_wheel(
         });
     }
 
-    // Logical wheel↔rover link, independent of Bevy hierarchy.
-    // Reflects the OpenUSD `PhysicsArticulationRootAPI` graph.
-    commands.entity(entity).try_insert(WheelOf(chassis));
-    commands.queue(move |world: &mut World| {
-        if let Some(mut rw) = world.get_mut::<RoverWheels>(chassis) {
-            rw.0.push(entity);
-        }
-    });
-}
-
-/// Reap wheel joints whose bodies are gone. The revolute joint entity is
-/// spawned DETACHED (it links two bodies — it is nobody's child), so a
-/// doc-backed scene reload (E1b re-instantiation) despawns the rover subtree
-/// but leaves the OLD joints behind: dead joints with dangling `body1`/`body2`
-/// that still carry `MotorActuator`/`SteeringActuator` port bindings under the
-/// same `PhysicalWheelJoint_<path>` name as the fresh rover's joints. The FSW
-/// port wiring then has two candidates per wheel and can bind the throttle to
-/// the dead one — the freshly reloaded rover drives nothing ("the physical
-/// rover doesn't work" after a twin open, which reloads once as the doc
-/// composes). Mirrors the collider-tile reaper in `lunco-terrain-surface`.
-fn reap_orphaned_wheel_joints(
-    mut commands: Commands,
-    joints: Query<(Entity, &RevoluteJoint), With<MotorActuator>>,
-    entities: &bevy::ecs::entity::Entities,
-) {
-    for (ent, joint) in &joints {
-        if !entities.contains(joint.body1) || !entities.contains(joint.body2) {
-            commands.entity(ent).try_despawn();
-        }
-    }
+    // The wheel↔chassis link is the wheel's `ChildOf(chassis)` — set by USD projection
+    // and read back here as `chassis = child_of.parent()`. It is the ONE canonical link:
+    // transform propagation, despawn cascade, AND parent lookup (the proxy systems below
+    // read `ChildOf` to find the chassis). No separate ownership relationship is needed.
 }
 
 /// Client-only: place a remote rover's wheels by **reconstructing** them from the
@@ -1850,7 +1792,7 @@ fn reconstruct_proxy_wheels(
         (
             Entity,
             &PhysicalWheel,
-            &WheelOf,
+            &ChildOf,
             &RigidBody,
             &mut Position,
             &mut Rotation,
@@ -1863,8 +1805,9 @@ fn reconstruct_proxy_wheels(
     if !matches!(*role, lunco_core::NetworkRole::Client) {
         return;
     }
-    for (e, wheel, wheel_of, rb, mut pos, mut rot) in q_wheels.iter_mut() {
-        let Ok((c_rb, c_pos, c_rot, motion)) = q_chassis.get(wheel_of.0) else {
+    for (e, wheel, child_of, rb, mut pos, mut rot) in q_wheels.iter_mut() {
+        // The wheel's `ChildOf` parent IS its chassis (set by USD projection).
+        let Ok((c_rb, c_pos, c_rot, motion)) = q_chassis.get(child_of.parent()) else {
             continue;
         };
         if !matches!(c_rb, RigidBody::Kinematic) {
@@ -1906,11 +1849,10 @@ fn reconstruct_proxy_wheels(
 /// Guarded to a **kinematic** chassis so it is a no-op on the host/owned rover and
 /// never fights the joint-driven body there.
 fn animate_proxy_physical_wheels(
-    // `WheelOf`, not `ChildOf`: the logical wheel→chassis link survives independent
-    // of Bevy hierarchy. `Without<NetReplicate>`: replicated wheels carry their own
-    // spin via the body's world rotation, so skip them (see docstring).
+    // The wheel's `ChildOf` parent is its chassis. `Without<NetReplicate>`: replicated
+    // wheels carry their own spin via the body's world rotation, so skip them (see docstring).
     mut q_wheels: Query<
-        (&mut PhysicalWheel, &GlobalTransform, &WheelOf),
+        (&mut PhysicalWheel, &GlobalTransform, &ChildOf),
         Without<lunco_core::NetReplicate>,
     >,
     q_chassis: Query<
@@ -1931,8 +1873,8 @@ fn animate_proxy_physical_wheels(
         return;
     }
 
-    for (mut wheel, gtf, wheel_of) in q_wheels.iter_mut() {
-        let Ok((body, pos, rot, motion)) = q_chassis.get(wheel_of.0) else { continue };
+    for (mut wheel, gtf, child_of) in q_wheels.iter_mut() {
+        let Ok((body, pos, rot, motion)) = q_chassis.get(child_of.parent()) else { continue };
         // Display proxies only; the host/owned rover spins the body via the joint.
         if !matches!(body, RigidBody::Kinematic) {
             continue;
@@ -2076,9 +2018,12 @@ fn try_wire_wheel(
                 if pending.index % 2 == 0 { "drive_left" } else { "drive_right" }.to_string()
             });
             if let Some(&d_port) = fsw.port_map.get(&drive_port_name) {
+                // Owned by the wheel (`ChildOf(ent)`) so it dies with the rover subtree
+                // on scene swap — the same general lifecycle contract the ports/joint use.
                 commands.spawn((
                     Wire { source: d_port, target: pending.p_drive, scale: 1.0 },
                     Name::new(format!("Wire_Drive_{}", drive_port_name)),
+                    ChildOf(ent),
                 ));
                 debug!("Wired wheel {} drive to FSW port {}", prim_path.path, drive_port_name);
             } else {
@@ -2099,6 +2044,7 @@ fn try_wire_wheel(
                     commands.spawn((
                         Wire { source: s_port, target: pending.p_steer, scale: 1.0 },
                         Name::new(format!("Wire_Steer_{}", name)),
+                        ChildOf(ent),
                     ));
                     info!("Wired wheel {} steering to FSW port {}", prim_path.path, name);
                 } else if pending.steer_port_name.is_some() {
@@ -2282,7 +2228,7 @@ mod proxy_wheel_tests {
                 wheelbase: 0.0,
             },
             GlobalTransform::IDENTITY,
-            WheelOf(chassis),
+            ChildOf(chassis),
         ));
 
         app.add_systems(Update, animate_proxy_physical_wheels);
@@ -2357,7 +2303,7 @@ mod proxy_wheel_tests {
                 wheelbase: 0.0,
             },
             GlobalTransform::IDENTITY,
-            WheelOf(chassis),
+            ChildOf(chassis),
             // The discriminator under test: a per-link-replicated wheel.
             lunco_core::NetReplicate,
         ));
@@ -2416,7 +2362,7 @@ mod proxy_wheel_tests {
                 wheelbase: 0.0,
             },
             GlobalTransform::from(Transform::from_translation(wheel_gtf_translation)),
-            WheelOf(chassis),
+            ChildOf(chassis),
         ));
 
         app.add_systems(Update, animate_proxy_physical_wheels);

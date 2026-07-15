@@ -457,9 +457,11 @@ fn load_ready_scenario(
 /// earlier session, a downloaded twin, or merely a different `LUNCO_PEER_ID`
 /// (which `scripts/run_host_client.sh` sets) — looks entirely foreign, so the
 /// host re-applied its whole saved history on top of files that already contained
-/// it: prims re-added, rovers churned, and `reap_orphaned_wheel_joints` despawned
-/// a wheel joint whose bodies were already gone, tripping avian's
-/// `assert!(island.joint_count > 0)` about a second after boot.
+/// it: prims re-added, rovers churned. (Historically this also double-despawned a
+/// wheel joint whose bodies were already gone and tripped avian's
+/// `assert!(island.joint_count > 0)`; that is now structurally impossible — every
+/// synthesized joint is owned by its chassis via `ChildOf`, so it dies exactly
+/// once with the rover subtree. See `setup_physical_wheel`.)
 ///
 /// The head is sampled ONCE, not read every frame: a mid-session manifest rebuild
 /// advances `journal_head`, which would move the base past client entries this

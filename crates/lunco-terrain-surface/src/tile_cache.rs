@@ -15,7 +15,7 @@
 
 use std::path::Path;
 
-use lunco_terrain_core::{QuadCoord, Square};
+use lunco_terrain_core::{HeightSource, QuadCoord, Square};
 
 use crate::oracle::SurfaceOracle;
 use crate::tile_mesh::{bake_tile_mesh, TileMesh};
@@ -31,7 +31,11 @@ use crate::tile_mesh::{bake_tile_mesh, TileMesh};
 /// features right at the sampling limit → mid-field sawtooth craters); morph
 /// targets sample a 4·step parent-gated surface (were this tile's finer heights
 /// on the 2×-spaced even lattice → aliased morph band + pop at the tile swap).
-const CACHE_FORMAT_VERSION: u64 = 4;
+/// v5: vertex Y is now rebased by the tile-centre surface height (`origin_y`), so
+/// a tile's mesh is LOCAL to its own big_space `CellCoord` in Y as well as X/Z
+/// (DEM scenes anchored at absolute lunar elevation put geometry ~2 km from the
+/// tile origin — one cell off the content — breaking LOD/culling/colliders).
+const CACHE_FORMAT_VERSION: u64 = 5;
 
 /// One tile bake as a [`lunco_precompute::Bake`] entry.
 struct TileBake<'a> {
@@ -71,6 +75,11 @@ impl lunco_precompute::Bake for TileBake<'_> {
         let step = self.region.side() / (self.res.max(2) - 1) as f64;
         let limited = self.oracle.detail_limited(2.0 * step);
         let parent_limited = self.oracle.detail_limited(4.0 * step);
+        // Anchor Y at the FULL-oracle surface height under the tile centre — the same
+        // value `spawn_tile`/the collider ring use to place the tile's `CellCoord`, so
+        // mesh geometry and entity origin agree. (Full oracle, not `limited`, so the
+        // placement matches what the visualiser samples with `hf.0.height_at`.)
+        let origin_y = self.oracle.height_at(self.region.center[0], self.region.center[1]);
         bake_tile_mesh(
             &limited,
             &parent_limited,
@@ -78,6 +87,7 @@ impl lunco_precompute::Bake for TileBake<'_> {
             self.res,
             self.dem_half_extent,
             self.origin_xz,
+            origin_y,
         )
     }
 

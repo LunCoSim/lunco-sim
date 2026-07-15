@@ -56,6 +56,13 @@ pub fn bake_tile_mesh(
     res: usize,
     dem_half_extent: f64,
     origin_xz: [f64; 2],
+    // Surface height at the tile centre, subtracted from every vertex Y so the mesh is
+    // **local to its tile's `CellCoord`** in Y as well as X/Z (see `origin_xz`). Without
+    // it, DEM tiles baked absolute Y (~+1945 m on the Moon) while the tile entity anchors
+    // at that height — putting geometry ~2 km from its own origin, one big_space cell off
+    // the content, which broke LOD/culling/colliders. Pass the same value used to place
+    // the tile (`spawn_tile`/collider ring). `0.0` = DEM-absolute Y (flat scenes).
+    origin_y: f64,
 ) -> TileMesh {
     let res = res.max(2);
     let n = res as f64;
@@ -68,7 +75,7 @@ pub fn bake_tile_mesh(
     let world = |ix: usize, iz: usize| -> (f64, f64) {
         (x0 + ix as f64 * step, z0 + iz as f64 * step)
     };
-    let height = |wx: f64, wz: f64| -> f32 { src.height_at(wx, wz) as f32 };
+    let height = |wx: f64, wz: f64| -> f32 { (src.height_at(wx, wz) - origin_y) as f32 };
 
     // Normals are sampled ANALYTICALLY from the composed source, NOT from each
     // tile's own grid — per-tile finite-difference normals don't agree at shared
@@ -98,7 +105,7 @@ pub fn bake_tile_mesh(
     for iz in (0..res).step_by(2) {
         for ix in (0..res).step_by(2) {
             let (wx, wz) = world(ix, iz);
-            parent_y[(iz / 2) * even + (ix / 2)] = morph_src.height_at(wx, wz) as f32;
+            parent_y[(iz / 2) * even + (ix / 2)] = (morph_src.height_at(wx, wz) - origin_y) as f32;
         }
     }
 
@@ -223,7 +230,7 @@ mod tests {
     fn flat_dem_bakes_flat_no_morph() {
         let res = 5;
         let dem = flat_dem();
-        let m = bake_tile_mesh(&dem, &dem, Square { center: [0.0, 0.0], half: 50.0 }, res, 100.0, [0.0, 0.0]);
+        let m = bake_tile_mesh(&dem, &dem, Square { center: [0.0, 0.0], half: 50.0 }, res, 100.0, [0.0, 0.0], 0.0);
         // Interior grid first, then appended skirt verts.
         assert!(m.positions.len() >= res * res);
         assert!(m.indices.len() >= 4 * 4 * 6);
@@ -239,7 +246,7 @@ mod tests {
         let dem = ramp_dem();
         let region = Square { center: [0.0, 0.0], half: 50.0 };
         let res = 5;
-        let m = bake_tile_mesh(&dem, &dem, region, res, 100.0, [0.0, 0.0]);
+        let m = bake_tile_mesh(&dem, &dem, region, res, 100.0, [0.0, 0.0], 0.0);
         let step = region.side() / (res as f64 - 1.0);
         let x0 = region.center[0] - region.half;
         for iz in 0..res {
@@ -263,7 +270,7 @@ mod tests {
     fn positions_carry_dem_height() {
         let dem = ramp_dem();
         let res = 5;
-        let m = bake_tile_mesh(&dem, &dem, Square { center: [0.0, 0.0], half: 50.0 }, res, 100.0, [0.0, 0.0]);
+        let m = bake_tile_mesh(&dem, &dem, Square { center: [0.0, 0.0], half: 50.0 }, res, 100.0, [0.0, 0.0], 0.0);
         // height == world x on this ramp (interior verts only; skirts hang below).
         for p in &m.positions[..res * res] {
             assert!((p[1] - p[0]).abs() < 1e-2, "pos.y {} != world x {}", p[1], p[0]);

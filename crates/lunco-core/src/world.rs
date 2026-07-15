@@ -85,7 +85,15 @@ pub struct WorldGridConfig {
 
 impl Default for WorldGridConfig {
     fn default() -> Self {
-        Self { cell_edge_length: 2000.0, switching_threshold: 100.0 }
+        // 20 km cells (max_distance_from_origin = edge/2 + threshold = 10.1 km). A
+        // surface SITE — its DEM ±8 km plus its absolute lunar-datum elevation (~2 km) —
+        // fits entirely inside cell 0, so big_space never recenters mid-site: it is the
+        // recenter of a physics body ABOVE the old 1.1 km threshold that ran the avian
+        // bridge away (the whole scene sank below the camera on moonbase). Celestial
+        // bodies at 384 000 km still bin normally (cell ≠ 0), so planetary precision is
+        // unchanged; f32 ULP at 10 km is ≈ 0.6 mm (render only — physics stays f64).
+        // See project_bigspace_cell_edge_is_precision_knob.
+        Self { cell_edge_length: 20_000.0, switching_threshold: 100.0 }
     }
 }
 

@@ -430,8 +430,13 @@ pub struct TerrainNodeErrors {
 /// re-selected later (LOD-boundary oscillation, revisiting an area) reuses its mesh
 /// handle instead of re-baking + re-uploading — the "tile caching" that was missing.
 /// Bounded: trimmed to currently-resident tiles when it grows past `CACHE_CAP`.
+/// Value: the cached mesh handle AND the `origin_y` its vertices were rebased by at
+/// bake time. `origin_y` MUST travel with the mesh — the tile is placed at it, so a
+/// recompute at spawn (against a since-changed oracle, e.g. a crater layer composed
+/// mid-load) would seat the mesh at a different height than it was baked for and the
+/// tile would jump/jitter. Stored together, mesh and placement can never disagree.
 #[derive(Resource, Default)]
-pub struct LodMeshCache(HashMap<(Entity, QuadCoord), Handle<Mesh>>);
+pub struct LodMeshCache(HashMap<(Entity, QuadCoord), (Handle<Mesh>, f64)>);
 
 impl LodMeshCache {
     /// Drop cached meshes a live height edit invalidated, scoped to one `terrain`.
@@ -483,6 +488,8 @@ struct BakedTile {
     center: [f64; 2],
     depth: u32,
     morph_end: f32,
+    /// Surface height at the tile centre the mesh Y was rebased by (see `LodMeshCache`).
+    origin_y: f64,
 }
 
 /// In-flight off-thread tile bakes for a terrain, keyed by quadtree node. The CPU
@@ -634,8 +641,13 @@ fn spawn_tile(
     maps: Option<&TerrainDerivedMaps>,
     shadow: Option<&TileShadowCache>,
     overlay: crate::overlay::OverlayUniforms,
+    // Surface height at the tile centre — the SAME value the mesh was rebased by in
+    // `bake_tile_mesh` (`origin_y`). Anchoring the tile's `CellCoord` here (not Y=0)
+    // keeps the tile in the SAME big_space cell as the content standing on it, and its
+    // rebased geometry local to that origin. On flat terrain this is ≈0 (unchanged).
+    origin_y: f64,
 ) -> Entity {
-    let (cell, local) = grid.translation_to_grid(DVec3::new(center[0], 0.0, center[1]));
+    let (cell, local) = grid.translation_to_grid(DVec3::new(center[0], origin_y, center[1]));
     // Snap the selected band onto the bucket lattice so tiles with near-identical
     // parent ranges share one batched material (`morph_start` is derived from the
     // snapped end at the fixed 0.7 ratio).
@@ -1093,7 +1105,8 @@ pub fn update_lod_tiles(
                 continue;
             }
             let handle = meshes.add(baked.mesh);
-            mesh_cache.0.insert((terrain, coord), handle.clone());
+            let oy = baked.origin_y;
+            mesh_cache.0.insert((terrain, coord), (handle.clone(), oy));
             // No longer selected while it baked → keep the cached mesh, skip spawning.
             if !wanted.contains(&coord) {
                 continue;
@@ -1103,9 +1116,12 @@ pub fn update_lod_tiles(
             // they are BORN at reveal step 0 and `animate_tile_reveal` walks them up.
             // The root has no coarser parent to grow from → born fully revealed.
             let reveal = if depth > 0 { 0 } else { REVEAL_FULL };
+            // `oy` (baked with the mesh) anchors the tile's cell to its geometry — see
+            // `spawn_tile`/`bake_tile_mesh` `origin_y`. Using the baked value (not a
+            // spawn-time recompute) keeps mesh and placement in lock-step across gens.
             let ent = spawn_tile(
                 &mut commands, grid, grid_entity, terrain, coord, handle, baked.center, depth,
-                baked.morph_end, reveal, mode, maps, shadow, overlay,
+                baked.morph_end, reveal, mode, maps, shadow, overlay, oy,
             );
             if depth > 0 {
                 commands.entity(ent).try_insert(TileReveal { elapsed: 0.0, step: 0 });
@@ -1136,11 +1152,13 @@ pub fn update_lod_tiles(
             // Per-node morph band: finite for sub-root nodes, "never" for the root
             // (the sentinel `snap_band` maps to the no-morph bucket).
             let morph_end = if s.morph_end.is_finite() { s.morph_end as f32 } else { 1.0e21 };
-            if let Some(cached) = mesh_cache.0.get(&(terrain, s.coord)) {
+            if let Some((cached, oy)) = mesh_cache.0.get(&(terrain, s.coord)) {
                 let reveal = if depth > 0 { 0 } else { REVEAL_FULL };
+                // Placed at the mesh's OWN baked `origin_y` (stored beside it), never a
+                // recompute — otherwise a cache hit against a since-composed oracle jumps.
                 let ent = spawn_tile(
                     &mut commands, grid, grid_entity, terrain, s.coord, cached.clone(),
-                    s.region.center, depth, morph_end, reveal, mode, maps, shadow, overlay,
+                    s.region.center, depth, morph_end, reveal, mode, maps, shadow, overlay, *oy,
                 );
                 if depth > 0 {
                     commands.entity(ent).try_insert(TileReveal { elapsed: 0.0, step: 0 });
@@ -1197,7 +1215,11 @@ pub fn update_lod_tiles(
                     bevy::asset::RenderAssetUsages::RENDER_WORLD,
                 );
                 mesh.insert_attribute(ATTRIBUTE_MORPH_TARGET, tm.morph_targets);
-                BakedTile { mesh, center, depth, morph_end }
+                // The SAME anchor `bake_tile_mesh_cached` rebased the mesh Y by (full
+                // oracle at the tile centre). Carried on `BakedTile` so the main thread
+                // places the tile at exactly the height its mesh was baked for.
+                let origin_y = oracle_arc.height_at(center[0], center[1]);
+                BakedTile { mesh, center, depth, morph_end, origin_y }
             });
             pending.0.insert(s.coord, (cur_gen, task));
         }
