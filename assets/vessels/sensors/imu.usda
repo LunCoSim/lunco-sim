@@ -20,7 +20,8 @@
 # god-view body pose. Honours a body-local mount `lunco:sensor:offset`.
 # Invisible: no geometry, pure telemetry.
 def Xform "Imu" (
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    kind = "component"
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = true

@@ -37,12 +37,16 @@
 #   - over "Chassis" { color3f[] primvars:displayColor = [(...)] } → colour
 
 def Xform "SkidRover" (
-    kind = "component"
+    # An ASSEMBLY: a model built out of other models. Its wheels are component models
+    # that arrive by reference, and USD's rule is that a `component` may not contain
+    # them — the kind is what tells a browser (and the UI) whether a prim is a thing you
+    # open up or a thing you place.
+    kind = "assembly"
     prepend apiSchemas = [
         "PhysicsRigidBodyAPI", "PhysxRigidBodyAPI",
         "PhysicsMassAPI",
         "PhysxVehicleContextAPI",
-        "PhysxVehicleTankDifferentialAPI", "LuncoCatalogAPI"
+        "PhysxVehicleTankDifferentialAPI", "LunCoCatalogAPI"
     ]
     prepend variantSets = "drivetrain"
     variants = {
@@ -197,8 +201,12 @@ def Xform "SkidRover" (
     # Authored at RAYCAST ride height (y=-0.15). The `physical`
     # variant drops them to y=-0.65 via `over` opinions.
     def Cylinder "Wheel_FL" (
-        kind = "subcomponent"
-        prepend references = @../../components/mobility/wheel.usda@</Wheel>
+        # No local `kind`: a wheel IS a component model, and the kind composes in from
+        # the reference along with everything else it brings.
+        prepend references = [
+            @../../components/mobility/wheel.usda@</Wheel>,
+            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+        ]
     )
     {
         uniform token axis = "X"
@@ -209,14 +217,15 @@ def Xform "SkidRover" (
 
         int physxVehicleWheel:index = 0
         float physxVehicleWheel:radius = 0.4
-        float physxVehicleSuspension:restLength = 0.7
-        float physxVehicleSuspension:springStiffness = 15000.0
-        float physxVehicleSuspension:springDamping = 3000.0
     }
 
     def Cylinder "Wheel_FR" (
-        kind = "subcomponent"
-        prepend references = @../../components/mobility/wheel.usda@</Wheel>
+        # No local `kind`: a wheel IS a component model, and the kind composes in from
+        # the reference along with everything else it brings.
+        prepend references = [
+            @../../components/mobility/wheel.usda@</Wheel>,
+            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+        ]
     )
     {
         uniform token axis = "X"
@@ -227,14 +236,15 @@ def Xform "SkidRover" (
 
         int physxVehicleWheel:index = 1
         float physxVehicleWheel:radius = 0.4
-        float physxVehicleSuspension:restLength = 0.7
-        float physxVehicleSuspension:springStiffness = 15000.0
-        float physxVehicleSuspension:springDamping = 3000.0
     }
 
     def Cylinder "Wheel_RL" (
-        kind = "subcomponent"
-        prepend references = @../../components/mobility/wheel.usda@</Wheel>
+        # No local `kind`: a wheel IS a component model, and the kind composes in from
+        # the reference along with everything else it brings.
+        prepend references = [
+            @../../components/mobility/wheel.usda@</Wheel>,
+            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+        ]
     )
     {
         uniform token axis = "X"
@@ -245,14 +255,15 @@ def Xform "SkidRover" (
 
         int physxVehicleWheel:index = 2
         float physxVehicleWheel:radius = 0.4
-        float physxVehicleSuspension:restLength = 0.7
-        float physxVehicleSuspension:springStiffness = 15000.0
-        float physxVehicleSuspension:springDamping = 3000.0
     }
 
     def Cylinder "Wheel_RR" (
-        kind = "subcomponent"
-        prepend references = @../../components/mobility/wheel.usda@</Wheel>
+        # No local `kind`: a wheel IS a component model, and the kind composes in from
+        # the reference along with everything else it brings.
+        prepend references = [
+            @../../components/mobility/wheel.usda@</Wheel>,
+            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+        ]
     )
     {
         uniform token axis = "X"
@@ -263,9 +274,6 @@ def Xform "SkidRover" (
 
         int physxVehicleWheel:index = 3
         float physxVehicleWheel:radius = 0.4
-        float physxVehicleSuspension:restLength = 0.7
-        float physxVehicleSuspension:springStiffness = 15000.0
-        float physxVehicleSuspension:springDamping = 3000.0
     }
 
     # --- Comms ---------------------------------------------------------
@@ -273,7 +281,6 @@ def Xform "SkidRover" (
     # endpoint — the comms layer publishes `comms:<peer>:*` +
     # `comms:route_earth:*` ports on it (relay via satellite/base mast).
     def Xform "Comms" (
-        kind = "subcomponent"
         prepend references = @../../components/comms/antenna.usda@</CommsAntenna>
     )
     {

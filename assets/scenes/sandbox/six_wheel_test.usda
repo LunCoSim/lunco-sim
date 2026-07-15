@@ -17,8 +17,9 @@
 # bindings, not index parity). DriveRover should yaw the body by skid steering.
 
 def Xform "SixWheelTest" (
+    kind = "assembly"
     doc = "A six-wheel rover on flat ground. Checks that all six wheels drive together and the rover can turn by skidding its left and right sides."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
@@ -58,11 +59,13 @@ def Xform "SixWheelTest" (
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }
 
-    def Xform "Avatar"
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
     {
-        string lunco:avatar = "true"
-        string lunco:cameraMode = "freeflight"
-        custom double3 lunco:cameraLookAt = (0.0, 1.0, 0.0)
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 1.0, 0.0)
         double3 xformOp:translate = (8.0, 6.0, 10.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

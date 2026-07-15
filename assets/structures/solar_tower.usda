@@ -19,11 +19,35 @@
 # hand-settable from the Inspector/API. See the "Cosim" tutorial to wire a
 # model to a body, and `scenes/sandbox/sun_tracker_test.usda` for the full rig.
 def Xform "SolarTower" (
+    kind = "component"
     doc = "Vertical solar tower — mast + sun-tracking PV head on a revolute joint. Base power. Site it in the open with a clear horizon; keep it clear of the landing pad's plume."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = true
+
+    def Scope "Looks"
+    {
+        def Material "SolarPanel"
+        {
+            token outputs:surface.connect = </SolarTower/Looks/SolarPanel/Shader.outputs:surface>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:wgsl:sourceAsset = @shaders/solar_panel.wgsl@
+                color3f inputs:cell_color = (0.05, 0.05, 0.35)
+                color3f inputs:bus_color = (0.85, 0.85, 0.90)
+                color3f inputs:frame_color = (0.35, 0.35, 0.38)
+                float inputs:cell_rows = 8.0
+                float inputs:cell_cols = 12.0
+                float inputs:cell_gap = 0.02
+                float inputs:bus_width = 0.004
+                float inputs:border = 0.04
+                token outputs:surface
+            }
+        }
+    }
 
     def Cube "Pad" (
         prepend apiSchemas = ["PhysicsCollisionAPI"]
@@ -72,25 +96,13 @@ def Xform "SolarTower" (
         # shader. Visual-only child of the head, so it swings with the
         # tracker (no physics of its own).
         def Cube "Panel"
-        (
-            prepend apiSchemas = ["LuncoMaterialAPI"]
-        )
         {
             double size = 1.0
             double3 xformOp:translate = (0, 1.2, 0)
             double3 xformOp:scale = (4.0, 3.0, 0.06)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
             color3f[] primvars:displayColor = [(0.05, 0.05, 0.35)]
-            uniform token lunco:material:type = "shader"
-            uniform asset lunco:material:shader = @shaders/solar_panel.wgsl@
-            color3f primvars:cell_color = (0.05, 0.05, 0.35)
-            color3f primvars:bus_color = (0.85, 0.85, 0.90)
-            color3f primvars:frame_color = (0.35, 0.35, 0.38)
-            float primvars:cell_rows = 8.0
-            float primvars:cell_cols = 12.0
-            float primvars:cell_gap = 0.02
-            float primvars:bus_width = 0.004
-            float primvars:border = 0.04
+            rel material:binding = </SolarTower/Looks/SolarPanel>
         }
     }
 

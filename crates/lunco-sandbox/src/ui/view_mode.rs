@@ -1,7 +1,7 @@
 //! Viewport view-mode switcher: Surface ⇄ Moon ⇄ Earth.
 //!
 //! Visible only while the celestial hierarchy is live — i.e. when the scene declared
-//! celestial bodies in USD (`LuncoCelestialBodyAPI`, doc 19 §11e), so plain sandbox
+//! celestial bodies in USD (`LunCoCelestialBodyAPI`, doc 19 §11e), so plain sandbox
 //! scenes never show the pill. Pure dispatch, no new machinery:
 //! Moon/Earth trigger the existing `FocusTarget` (doc 47 Phase 6 orbital view —
 //! the camera travels, the world never re-poses); Surface triggers the existing

@@ -7,7 +7,7 @@
 
 def Xform "SandboxScene" (
     doc = "The main sandbox: a large flat ground with ramps and rovers. The everyday space for driving rovers around obstacles."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "assembly"
 )
 {
@@ -28,30 +28,126 @@ def Xform "SandboxScene" (
     # A whole scene, not a spawnable part — excluded from the spawn catalog.
     uniform bool lunco:spawnable = false
 
+    # Looks — the scene's materials. A WGSL shader is bound the way USD binds every
+    # shader: a `Material` whose surface comes from a `Shader`, whose source is named
+    # for its render context (`info:wgsl:sourceAsset`, exactly as an MDL shader is
+    # named by `info:mdl:sourceAsset`). The shader's parameters are its `inputs:`, so
+    # they belong to the shader that consumes them, and geometry binds a look with
+    # `rel material:binding` — the same relationship every DCC already understands.
+    def Scope "Looks"
+    {
+        def Material "Blueprint_Ground"
+        {
+            token outputs:surface.connect = </SandboxScene/Looks/Blueprint_Ground/Shader.outputs:surface>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:wgsl:sourceAsset = @shaders/blueprint.wgsl@
+                color3f inputs:surface_color = (0.15, 0.15, 0.18)
+                color3f inputs:high_line_color = (0.20, 0.20, 0.23)
+                color3f inputs:low_line_color = (0.20, 0.20, 0.23)
+                float inputs:transition = 0.85
+                float inputs:roughness = 0.9
+                float inputs:major_grid_spacing = 1.0
+                float inputs:minor_grid_spacing = 0.5
+                float inputs:major_line_width = 1.0
+                float inputs:minor_line_width = 0.5
+                float inputs:minor_line_fade = 0.15
+                token outputs:surface
+            }
+        }
+
+        def Material "Blueprint_Ramp"
+        {
+            token outputs:surface.connect = </SandboxScene/Looks/Blueprint_Ramp/Shader.outputs:surface>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:wgsl:sourceAsset = @shaders/blueprint.wgsl@
+                color3f inputs:surface_color = (0.25, 0.22, 0.18)
+                color3f inputs:high_line_color = (0.30, 0.27, 0.23)
+                color3f inputs:low_line_color = (0.30, 0.27, 0.23)
+                float inputs:transition = 0.85
+                float inputs:roughness = 0.9
+                float inputs:major_grid_spacing = 1.0
+                float inputs:minor_grid_spacing = 0.5
+                float inputs:major_line_width = 1.0
+                float inputs:minor_line_width = 0.5
+                float inputs:minor_line_fade = 0.15
+                token outputs:surface
+            }
+        }
+
+        def Material "Blueprint_Ramp_Green"
+        {
+            token outputs:surface.connect = </SandboxScene/Looks/Blueprint_Ramp_Green/Shader.outputs:surface>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:wgsl:sourceAsset = @shaders/blueprint.wgsl@
+                color3f inputs:surface_color = (0.25, 0.52, 0.18)
+                color3f inputs:high_line_color = (0.30, 0.57, 0.23)
+                color3f inputs:low_line_color = (0.30, 0.57, 0.23)
+                float inputs:transition = 0.85
+                float inputs:roughness = 0.9
+                float inputs:major_grid_spacing = 1.0
+                float inputs:minor_grid_spacing = 0.5
+                float inputs:major_line_width = 1.0
+                float inputs:minor_line_width = 0.5
+                float inputs:minor_line_fade = 0.15
+                token outputs:surface
+            }
+        }
+
+        # The cosim ball's spin-revealing checker — the same shader the balloons
+        # wear, in the ball's yellow identity.
+        def Material "Checker_Yellow"
+        {
+            token outputs:surface.connect = </SandboxScene/Looks/Checker_Yellow/Shader.outputs:surface>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:wgsl:sourceAsset = @shaders/balloon.wgsl@
+                color3f inputs:cell_a = (0.9, 0.7, 0.2)    # cell A (yellow identity)
+                color3f inputs:cell_b = (0.12, 0.12, 0.14) # cell B (dark)
+                # `customData {min,max,unit}` = the UI hint the Inspector's data-driven
+                # "🎚 Parameters" section reads to render a bounded slider (doc 48 §3.5).
+                float inputs:wedge_count = 8.0 (           # longitude cells
+                    customData = {
+                        double min = 2
+                        double max = 24
+                        string unit = "cells"
+                    }
+                )
+                float inputs:band_count = 6.0 (            # latitude cells
+                    customData = {
+                        double min = 2
+                        double max = 16
+                        string unit = "cells"
+                    }
+                )
+                token outputs:surface
+            }
+        }
+    }
+
     # --- Ground plane (static terrain surface) ---
     # Spec-compliant Cube: `double size = 1` + `xformOp:scale` for
     # non-uniform extents. The ground is a 4 km × 0.2 m × 4 km slab.
     def Cube "Ground"
     (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "LuncoMaterialAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
     )
     {
         double size = 1.0
         double3 xformOp:translate = (0, -0.1, 0)
         double3 xformOp:scale = (4000.0, 0.2, 4000.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        uniform token lunco:material:type = "shader"
-        uniform asset lunco:material:shader = @shaders/blueprint.wgsl@
-        color3f primvars:surface_color = (0.15, 0.15, 0.18)
-        color3f primvars:high_line_color = (0.20, 0.20, 0.23)
-        color3f primvars:low_line_color = (0.20, 0.20, 0.23)
-        float primvars:transition = 0.85
-        float primvars:roughness = 0.9
-        float primvars:major_grid_spacing = 1.0
-        float primvars:minor_grid_spacing = 0.5
-        float primvars:major_line_width = 1.0
-        float primvars:minor_line_width = 0.5
-        float primvars:minor_line_fade = 0.15
+        rel material:binding = </SandboxScene/Looks/Blueprint_Ground>
         bool physics:rigidBodyEnabled = false
         bool physics:collisionEnabled = true
         rel material:binding:physics = </SandboxScene/PhysicsMaterials/Friction_1_0>
@@ -60,7 +156,7 @@ def Xform "SandboxScene" (
     # --- Ramp obstacles (static terrain) ---
     def Cube "Ramp"
     (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "LuncoMaterialAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
     )
     {
         double size = 1.0
@@ -68,18 +164,7 @@ def Xform "SandboxScene" (
         double3 xformOp:rotateXYZ = (0, 0, 17.1887)
         double3 xformOp:scale = (60.0, 2.0, 80.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        uniform token lunco:material:type = "shader"
-        uniform asset lunco:material:shader = @shaders/blueprint.wgsl@
-        color3f primvars:surface_color = (0.25, 0.22, 0.18)
-        color3f primvars:high_line_color = (0.30, 0.27, 0.23)
-        color3f primvars:low_line_color = (0.30, 0.27, 0.23)
-        float primvars:transition = 0.85
-        float primvars:roughness = 0.9
-        float primvars:major_grid_spacing = 1.0
-        float primvars:minor_grid_spacing = 0.5
-        float primvars:major_line_width = 1.0
-        float primvars:minor_line_width = 0.5
-        float primvars:minor_line_fade = 0.15
+        rel material:binding = </SandboxScene/Looks/Blueprint_Ramp>
         color3f[] primvars:displayColor = [(0.25, 0.22, 0.18)]
         bool physics:rigidBodyEnabled = false
         bool physics:collisionEnabled = true
@@ -88,7 +173,7 @@ def Xform "SandboxScene" (
 
     def Cube "Ramp1"
     (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "LuncoMaterialAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
     )
     {
         double size = 1.0
@@ -96,18 +181,7 @@ def Xform "SandboxScene" (
         double3 xformOp:rotateXYZ = (0, 0, 17.1887)
         double3 xformOp:scale = (60.0, 2.0, 80.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        uniform token lunco:material:type = "shader"
-        uniform asset lunco:material:shader = @shaders/blueprint.wgsl@
-        color3f primvars:surface_color = (0.25, 0.52, 0.18)
-        color3f primvars:high_line_color = (0.30, 0.57, 0.23)
-        color3f primvars:low_line_color = (0.30, 0.57, 0.23)
-        float primvars:transition = 0.85
-        float primvars:roughness = 0.9
-        float primvars:major_grid_spacing = 1.0
-        float primvars:minor_grid_spacing = 0.5
-        float primvars:major_line_width = 1.0
-        float primvars:minor_line_width = 0.5
-        float primvars:minor_line_fade = 0.15
+        rel material:binding = </SandboxScene/Looks/Blueprint_Ramp_Green>
         color3f[] primvars:displayColor = [(0.25, 0.22, 0.18)]
         bool physics:rigidBodyEnabled = false
         bool physics:collisionEnabled = true
@@ -117,11 +191,13 @@ def Xform "SandboxScene" (
     # --- Avatar (Camera) ---
     # Position, camera mode, and orientation defined in USD.
     # lunco:cameraMode = "freeflight" | "orbit" | "springarm"
-    def Xform "Avatar"
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
     {
-        string lunco:avatar = "true"
-        string lunco:cameraMode = "freeflight"
-        custom double3 lunco:cameraLookAt = (0.0, 5.0, 0.0)
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 5.0, 0.0)
         double3 xformOp:translate = (-30.0, 15.0, -20.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
@@ -316,7 +392,7 @@ def Xform "SandboxScene" (
 
     # --- Balloons (cosim entities — geometry/physics + Modelica/Python wiring all in USD) ---
 
-    def Sphere "RedBalloon" (
+    def "RedBalloon" (
         prepend references = @../../vessels/balloons/modelica_balloon.usda@</ModelicaBalloon>
     )
     {
@@ -324,7 +400,7 @@ def Xform "SandboxScene" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    def Sphere "GreenBalloon" (
+    def "GreenBalloon" (
         prepend references = @../../vessels/balloons/python_balloon.usda@</PythonBalloon>
     )
     {
@@ -344,49 +420,36 @@ def Xform "SandboxScene" (
     # resolves them to ECS entities and spawns one `SimConnection` each.
     # Result: the target sphere bobs ±50 N at 1 Hz.
 
-    def "Oscillator"
+    def "Oscillator" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
     {
-        string lunco:modelicaModel = "models/Oscillator.mo"
+        uniform asset lunco:program:sourceAsset = @models/Oscillator.mo@
         # Pure source: declares its output port (the active-cosim marker).
         float outputs:signal
     }
 
-    def "Amplifier"
+    def "Amplifier" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
     {
-        string lunco:pythonModel = "models/Amplifier.py"
+        uniform asset lunco:program:sourceAsset = @models/Amplifier.py@
+        # Its `scaled` output lands on CosimTarget's `force_y` — a force on a body
+        # the client predicts, which only a realtime-safe program may drive.
+        uniform bool lunco:program:realtimeSafe = true
         # `signal` in ← Oscillator; `scaled` out → CosimTarget.
         float inputs:signal.connect = </SandboxScene/Oscillator.outputs:signal>
         float outputs:scaled
     }
 
     def Sphere "CosimTarget" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "LuncoMaterialAPI"]
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
     )
     {
         double radius = 0.5
         color3f[] primvars:displayColor = [(0.9, 0.7, 0.2)]
-        # Spin-revealing checker (same general ShaderMaterial as the balloons),
-        # so this cosim-driven ball shows its motion. Yellow identity via cell_a.
-        uniform token lunco:material:type = "shader"
-        uniform asset lunco:material:shader = @shaders/balloon.wgsl@
-        color3f primvars:cell_a = (0.9, 0.7, 0.2)    # cell A (yellow identity)
-        color3f primvars:cell_b = (0.12, 0.12, 0.14) # cell B (dark)
-        # `customData {min,max,unit}` = the UI hint the Inspector's data-driven
-        # "🎚 Parameters" section reads to render a bounded slider (doc 48 §3.5).
-        float primvars:wedge_count = 8.0 (           # longitude cells
-            customData = {
-                double min = 2
-                double max = 24
-                string unit = "cells"
-            }
-        )
-        float primvars:band_count = 6.0 (            # latitude cells
-            customData = {
-                double min = 2
-                double max = 16
-                string unit = "cells"
-            }
-        )
+        # Spin-revealing checker, so this cosim-driven ball shows its motion.
+        rel material:binding = </SandboxScene/Looks/Checker_Yellow>
         double3 xformOp:translate = (-30.0, 5.0, 10.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         bool physics:rigidBodyEnabled = true
@@ -514,7 +577,7 @@ def Xform "SandboxScene" (
             {
                 uniform token lunco:mount:socket = "probe"
                 uniform token lunco:mount:joint  = "fixed"
-                uniform token lunco:mount:asset  = "components/mount_probe.usda"
+                uniform asset lunco:mount:asset  = @components/mount_probe.usda@
                 double3 xformOp:translate = (0, -2.5, 0)
                 uniform token[] xformOpOrder = ["xformOp:translate"]
             }

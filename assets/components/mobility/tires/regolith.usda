@@ -1,0 +1,59 @@
+#usda 1.0
+(
+    defaultPrim = "Tire"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# A REGOLITH tire — the part of a wheel that meets the ground: what it grips with, and
+# what it looks like doing it. Lugged tread, soft compound, tuned for loose lunar soil.
+#
+# The tire is a separate file because a tire is a separate DECISION. The hub does not
+# change when you re-shod a rover, and two rovers with the same wheel can run different
+# rubber. A wheel picks one through its `tire` variantSet:
+#
+#   def Cylinder "Wheel_FL" (
+#       prepend references = @../../components/mobility/wheel.usda@</Wheel>
+#       variants = { string tire = "regolith" }
+#   )
+#
+# HOW IT TRAVELS. `Tire` is a neutral stand-in for the wheel prim that composes it —
+# the same idiom `components/mobility/physical_drivetrain.usda` uses. It is an `over`,
+# so it defines nothing of its own: it carries OPINIONS (grip, tread, colour) that the
+# reference arc path-translates onto whatever wheel pulls it in. The geometry, mass and
+# collider those opinions dress are the wheel's, and stay there.
+#
+# Grip is authored with Omniverse's PhysX vehicle names (`physxVehicleTire:*`), so the
+# numbers mean the same thing here as they do in any other PhysX vehicle.
+
+over "Tire" (
+    kind = "component"
+)
+{
+    # --- Grip ---
+    float physxVehicleTire:longitudinalStiffness = 8000.0 # N per (m/s) of contact slip
+    double lunco:frictionCoefficient = 0.8                # tyre↔regolith friction
+
+    # --- Tread ---
+    # Spin-revealing tread + rim, drawn by the wheel shader. The look is a `Material`
+    # under this `over`, so it path-translates onto the wheel with everything else the
+    # tire brings: the wheel that composes this tire binds this tire's tread.
+    rel material:binding = </Tire/TireLook>
+    color3f[] primvars:displayColor = [(0.3, 0.3, 0.3)]
+
+    def Material "TireLook"
+    {
+        token outputs:surface.connect = </Tire/TireLook/Shader.outputs:surface>
+
+        def Shader "Shader"
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:wgsl:sourceAsset = @shaders/wheel.wgsl@
+            color3f inputs:rim_color = (0.98, 0.98, 1.00)   # spoke / rim (bright metal)
+            color3f inputs:tire_color = (0.10, 0.10, 0.11)  # rubber
+            float inputs:spoke_count = 6.0
+            float inputs:tread_lugs = 24.0                  # deep, widely-spaced lugs — soil
+            token outputs:surface
+        }
+    }
+}

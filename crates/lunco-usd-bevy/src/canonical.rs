@@ -483,7 +483,7 @@ impl CanonicalStages {
     }
 
     /// Iterate every live stage keyed by its asset id — the door a whole-stage
-    /// projector (e.g. the policy projector, which reads composed `LuncoPolicy`
+    /// projector (e.g. the policy projector, which reads composed `LunCoPolicy`
     /// prims across all live scenes) uses to walk the composed stages.
     pub fn iter(
         &self,

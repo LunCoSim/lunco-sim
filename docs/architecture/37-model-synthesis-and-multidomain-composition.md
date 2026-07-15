@@ -41,14 +41,14 @@ The single most important design fact, and it is physics, not preference:
   wires.** These couplings are looser and directional (motor electrical power → mechanical torque;
   battery SoC → GNC engine-enable; comms TX state → electrical draw). A one-tick Jacobi lag is
   acceptable and standard (this is what an FMI-CS master does). This is **already what the runtime
-  does**: each `lunco:modelicaModel` prim compiles to its own `SimulationSession` DAE solver on a background
+  does**: each program prim compiles to its own `SimulationSession` DAE solver on a background
   thread, and `propagate_connections` (`lunco-cosim/src/systems/propagate.rs:146`) copies
   `src·scale+offset` between them each `FixedUpdate`, summing multiple wires into one input.
 
 So the rule that resolves "how to do the electrical layer":
 
 > **A rover's electrical layer is ONE synthesized `Electrical.mo` (acausal, single DAE), exposed as ONE
-> `lunco:modelicaModel` prim, whose BOUNDARY ports (bus voltage, per-load power/current, pack SoC)
+> `LunCoProgram` prim, whose BOUNDARY ports (bus voltage, per-load power/current, pack SoC)
 > scalar-wire to the other domain prims.** Kirchhoff stays inside one solve; the rest is co-sim.
 
 The rule is **not** "causal p_draw now, acausal later." Acausal is not "later" — it is the
@@ -184,14 +184,14 @@ richer structural carrier that can *export to* them.
    `compile_str` it, confirm it steps to correct bus voltage / currents. Decide MSL-import vs
    self-contained based on cold-compile feel.
 2. **Rule:** lock the two-level composition — acausal within domain (one DAE), causal across domains
-   (scalar co-sim). Document the electrical layer as one `lunco:modelicaModel` prim + boundary ports.
+   (scalar co-sim). Document the electrical layer as one `LunCoProgram` prim + boundary ports.
 3. **Synthesizer v1 (the new Rust):** read composed USD components + `lunco:epsBus` edges → emit
    `Electrical.mo` (string/`ast_mut`) → `compile_str` → `SimulationSession`. Scaffold-and-own; explicit
    re-synthesis; hand-edits preserved (text-canonical).
 4. **Manual editing UI:** reuse the existing Modelica diagram builder — it *already* does
    drag-MSL-parts→`.mo`; point it at the synthesized `Electrical.mo`.
 5. **Boundary wiring:** scalar-wire the electrical model's V_bus/SoC/per-load ports to comms/thermal/GNC
-   prims via the existing `lunco:simWires`/wire-prim → `SimConnection` path.
+   prims via the existing native USD connection → `SimConnection` path.
 6. **Later tracks:** FMI export (rumoca `fmi2/fmi3` templates) for interop; live USD↔Modelica projection;
    `.ssp/.ssd` export; SysML v2 as the structural source-of-truth above USD.
 
@@ -249,7 +249,7 @@ or `#[Command]` reachable via `cmd()`:
 | Need | Existing primitive |
 |---|---|
 | enumerate components under the rover | `children(id)` → `bridge_core::children_of` (`bridge_core.rs:849`); `find`, `parent`, `name` |
-| read a component's params / `lunco:` attrs | `param(id,"key")` → `ScriptParams`/`lunco:params` (`bridge_core.rs:577`); `get(id,"Comp.field")` |
+| read a component's params / `lunco:` attrs | `param(id,"key")` → the prim's `lunco:param:<key>` attribute (`bridge_core.rs:577`); `get(id,"Comp.field")` |
 | emit Modelica text into a doc | `cmd("SetDocumentSource", #{doc, source})` (`lunco-modelica/src/api/doc.rs:11`, `String` field filled from a rhai string) |
 | structured emit (optional, robust) | expose `ast_mut` ops as verbs: `cmd("ApplyModelicaOp", #{op:"AddComponent", class, decl})` / `AddConnection` (`document/ops.rs:126`) — text-canonical patch |
 | compile it | `cmd("CompileModel", #{doc, class})` (`ui/commands/compile.rs:38`, GUI-free by design) |

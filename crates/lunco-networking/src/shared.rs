@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use core::time::Duration;
 use lightyear::prelude::*;
 use crate::sync::{DeclareChannelExt, SyncEnvelope};
-use lunco_core::{IsServer, NetStatus, NetworkRole, SessionId, SyncChannel};
+use lunco_core::{NetStatus, NetworkRole, SessionId, SyncChannel};
 
 use crate::NetworkMode;
 
@@ -103,7 +103,6 @@ pub(crate) fn build_networking(app: &mut App, mode: &Option<NetworkMode>) {
             #[cfg(not(target_family = "wasm"))]
             {
                 app.insert_resource(NetworkRole::Host);
-                app.insert_resource(IsServer(true));
                 app.insert_resource(NetStatus {
                     role: NetworkRole::Host,
                     endpoint: format!(":{port}"),
@@ -121,9 +120,13 @@ pub(crate) fn build_networking(app: &mut App, mode: &Option<NetworkMode>) {
                 warn!("Host mode is unsupported on wasm; use --connect");
             }
         }
-        // None (idle local) or Some(Connect) — both are client-capable.
+        // None (idle local) or Some(Connect) — both build the client stack. They
+        // differ only in `NetworkRole`, set per-branch below (`Client` vs
+        // `Standalone`); identity authority is DERIVED from that role
+        // (`NetworkRole::is_authoritative`), so there is nothing else to keep in
+        // sync — a pure client defers id-minting to the host, an idle-local
+        // sandbox is its own authority and mints.
         client_mode => {
-            app.insert_resource(IsServer(false));
             app.add_plugins(lightyear::prelude::client::ClientPlugins { tick_duration: tick });
             add_protocol(app);
             // Ferry systems, disconnect observer, JoinServer/LeaveServer commands,
@@ -131,7 +134,10 @@ pub(crate) fn build_networking(app: &mut App, mode: &Option<NetworkMode>) {
             crate::client::register_client_systems(app);
 
             if let Some(NetworkMode::Connect { server, client_id }) = client_mode {
-                // Auto-connect (CLI `--connect` / browser `?connect=`).
+                // Auto-connect (CLI `--connect` / browser `?connect=`). A pure
+                // client defers identity + authority to the host: `Client` is
+                // non-authoritative (`is_authoritative == false`), so it mints no
+                // ids — the host allocates them and replication pins them.
                 app.insert_resource(NetworkRole::Client);
                 app.insert_resource(NetStatus {
                     role: NetworkRole::Client,
@@ -148,7 +154,14 @@ pub(crate) fn build_networking(app: &mut App, mode: &Option<NetworkMode>) {
                     crate::client::spawn_client(&mut commands, &server, client_id, "");
                 });
             } else {
-                // Idle local sandbox — single-player until `JoinServer`.
+                // Idle local sandbox — single-player until `JoinServer`. `Standalone`
+                // is authoritative (`is_authoritative == true`), so it mints ids
+                // exactly like a Host — which is what makes a runtime
+                // `SkipContentStamp` spawn (any palette drop) get a `GlobalEntityId`,
+                // so possession can claim ownership and a `piloted`-gated vessel (the
+                // lander) obeys the stick. This regressed once, when authority lived
+                // in a *separate* `IsServer(false)` flag here that drifted from the
+                // `Standalone` role; deriving it from the role removed that hazard.
                 app.insert_resource(NetworkRole::Standalone);
                 app.insert_resource(NetStatus {
                     role: NetworkRole::Standalone,

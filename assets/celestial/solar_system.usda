@@ -35,7 +35,7 @@ def Xform "SolarSystem" (
 )
 {
     def Xform "Sun" (
-        prepend apiSchemas = ["LuncoCelestialBodyAPI"]
+        prepend apiSchemas = ["LunCoCelestialBodyAPI"]
         doc = "The Sun. Origin of the solar frame and the scene's key light."
     )
     {
@@ -43,7 +43,7 @@ def Xform "SolarSystem" (
     }
 
     def Xform "Earth" (
-        prepend apiSchemas = ["LuncoCelestialBodyAPI"]
+        prepend apiSchemas = ["LunCoCelestialBodyAPI"]
         doc = "Earth. Also the route root for deep-space comms (DSN ground stations anchor to it)."
     )
     {
@@ -51,7 +51,7 @@ def Xform "SolarSystem" (
     }
 
     def Xform "Moon" (
-        prepend apiSchemas = ["LuncoCelestialBodyAPI"]
+        prepend apiSchemas = ["LunCoCelestialBodyAPI"]
         doc = "The Moon. Surface scenes anchor their site frame here (`int lunco:anchor:body = 301`)."
     )
     {

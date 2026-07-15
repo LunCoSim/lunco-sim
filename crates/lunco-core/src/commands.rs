@@ -124,8 +124,8 @@ impl fmt::Display for SessionId {
 /// AUTHORITY.md`.
 ///
 /// Single-user runs treat all three identically (everything is applied
-/// locally, `IsServer = true`). The network layer (future) consults this
-/// to route correctly.
+/// locally; `NetworkRole::Standalone` is authoritative). The network layer
+/// (future) consults this to route correctly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SyncChannel {
     /// In-process only; never serialized. Camera, view toggles, editor

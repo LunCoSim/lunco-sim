@@ -23,12 +23,27 @@
     with `UsdGeomCube`'s real `double size`, which is precisely the bug this
     library exists to prevent).
 
-    WHAT IS *NOT* HERE, BY DESIGN. Per-model simulation parameters
-    (`lunco:voltage`, `lunco:capacity`, `lunco:torqueConstant`, …) are deliberately
-    NOT schema properties. They vary per Modelica model, so no fixed schema can
-    declare them — they are authored as `custom` attributes, which is exactly what
-    USD's `custom` keyword means: "not defined by this prim's schema". Only the
+    WHAT IS *NOT* HERE, BY DESIGN. A program's own parameters (a gain, a rest
+    altitude, a capacity) are not schema properties: they vary per program, so no
+    fixed schema can declare them. They are authored as that program's `inputs:`
+    ports — `float inputs:kv = 1.2` — the same namespace its wired ports use. A
+    parameter is simply an input with a constant instead of a connection. Only the
     stable contracts the engine's projectors read by name belong in here.
+
+    A PROGRAM IS A PRIM. Behaviour is not an attribute on the thing that behaves:
+    it is a [`LunCoProgram`] child prim carrying a source and typed ports, which is
+    how `UsdShade` binds a shader (`info:implementationSource` + `info:sourceAsset`
+    + `inputs:`/`outputs:`) and how OmniGraph binds a compute node. Role is never
+    declared, because it cannot be: the same `.py` is a plant in one prim and a
+    script in the next, and one program can both solve and react. What a program
+    DOES is derived from what it declares — ports make it part of the port graph,
+    its extension picks the engine that runs it.
+
+    EXTERNAL FILES ARE `asset`, ALWAYS. A path held in a `string` is inert: USD's
+    resolver cannot see it, and nothing that walks a layer for the files a scene
+    depends on — the reference closure, packaging, `usdzip` — will carry it. Four
+    component bindings in this project pointed at models that did not exist, one of
+    them a case-mismatch, and every one of them failed in silence.
     """
     subLayers = [
         @usd/schema.usda@,
@@ -47,7 +62,7 @@ over "GLOBAL" (
 {
 }
 
-class LuncoEnvironment "LuncoEnvironment" (
+class LunCoEnvironment "LunCoEnvironment" (
     inherits = </Typed>
     doc = """Scene-wide render settings that have no natural light-prim home —
     exposure, bloom, ambient and earthshine. These apply to global/camera state
@@ -77,7 +92,7 @@ class LuncoEnvironment "LuncoEnvironment" (
     )
 }
 
-class LuncoPolicy "LuncoPolicy" (
+class LunCoPolicy "LunCoPolicy" (
     inherits = </Typed>
     doc = """A scripted authorization hook, expressed as a prim so that policy
     distribution rides the normal USD/journal plane instead of a bespoke one: a
@@ -120,7 +135,7 @@ class LuncoPolicy "LuncoPolicy" (
     )
 }
 
-class "LuncoTerrainAPI" (
+class "LunCoTerrainAPI" (
     inherits = </APISchemaBase>
     customData = {
         token apiSchemaType = "singleApply"
@@ -144,7 +159,7 @@ class "LuncoTerrainAPI" (
     )
 }
 
-class "LuncoTerrainLayerAPI" (
+class "LunCoTerrainLayerAPI" (
     inherits = </APISchemaBase>
     customData = {
         token apiSchemaType = "singleApply"
@@ -241,7 +256,7 @@ class "LuncoTerrainLayerAPI" (
     )
 }
 
-class "LuncoShadowAPI" (
+class "LunCoShadowAPI" (
     inherits = </APISchemaBase>
     customData = {
         token apiSchemaType = "singleApply"
@@ -269,40 +284,18 @@ class "LuncoShadowAPI" (
     )
 }
 
-class "LuncoMaterialAPI" (
-    inherits = </APISchemaBase>
-    customData = {
-        token apiSchemaType = "singleApply"
-    }
-    doc = """Selects a custom (WGSL) render material for a prim, for looks that
-    UsdPreviewSurface cannot express (regolith, solar panels, layered terrain).
+# WGSL MATERIALS ARE `UsdShade`, and there is no schema of ours for them.
+#
+# A look the `UsdPreviewSurface` node cannot express (regolith, a solar panel, layered
+# terrain) is still a `Material` whose surface comes from a `Shader`, and that `Shader`
+# names its source for its render context: `info:wgsl:sourceAsset`, exactly as an MDL
+# shader is named by `info:mdl:sourceAsset` and a GLSL one by `info:glslfx:sourceAsset`.
+# Its parameters are its `inputs:`. Geometry binds it with `rel material:binding`.
+#
+# So a WGSL material needs nothing from this file: it is a shader, bound where shaders
+# are bound, and usdview, Blender and Omniverse all find it there.
 
-    These were previously authored as `primvars:materialType` / `primvars:shaderPath`,
-    which misused the `primvars:` namespace: a primvar is *interpolated geometric
-    data* that inherits down to child geometry and binds to shader inputs per-vertex.
-    A material-type token is none of those things. Being in `primvars:` meant it was
-    picked up by the generic primvar sweep and offered to shaders as vertex data."""
-)
-{
-    uniform token lunco:material:type = "" (
-        doc = """Which material implementation drives this prim. `shader` selects
-        the WGSL pipeline named by `lunco:material:shader`. Uniform: it cannot vary
-        over time."""
-        allowedTokens = ["", "shader"]
-    )
-    uniform asset lunco:material:shader = @@ (
-        doc = """Path to the WGSL shader that declares the pipeline's bindings,
-        e.g. `shaders/terrain_layered.wgsl`.
-
-        `asset`, not `string`. A shader path is a genuine asset reference, and only an
-        `asset` is visible to USD's resolver and to anything that walks a layer to
-        find the files a scene depends on — asset-sync's reference closure, packaging,
-        `usdzip`. Held as a `string`, the path was inert: the scene named a `.wgsl`
-        that would not travel with it."""
-    )
-}
-
-class "LuncoCatalogAPI" (
+class "LunCoCatalogAPI" (
     inherits = </APISchemaBase>
     customData = {
         token apiSchemaType = "singleApply"
@@ -313,23 +306,14 @@ class "LuncoCatalogAPI" (
 
     Applied to the stage's `defaultPrim`, because the unit of spawning is the FILE:
     the catalogue asks each asset whether it is a part, and spawning it mounts its
-    default prim. An asset that does not apply this schema is not a part, which is
-    why `lunco:spawnable` defaults to `false` — see its doc.
+    default prim.
 
-    WHAT IS NOT HERE: the human-readable "what is this thing" blurb. That was
-    `lunco:description`, an invented name for a field USD already has — every prim
-    carries `doc` metadata, which is exactly this string and which usdview and every
-    other DCC already display. It is now authored as `doc = "..."` in the prim's
-    metadata, and the invention is deleted. Do not re-add it."""
+    The human-readable "what is this thing" blurb is the prim's `doc` metadata, which
+    every prim already carries and which usdview and every other DCC already display."""
 )
 {
     uniform bool lunco:spawnable = false (
-        doc = """Whether this asset is a spawnable part.
-
-        **Opt-in**, and deliberately so. It used to default to `true`, which meant
-        the catalogue offered *every* USD file in the project — so every scene,
-        mission and scenario had to remember to disclaim it, and three scenes had
-        silently forgotten to and showed up as spawnable parts. A default that must
+        doc = """Whether this asset is a spawnable part. Opt-in: a default that has to
         be disclaimed everywhere is a default that leaks.
 
         Uniform: an asset does not stop being a part partway through a shot."""
@@ -344,7 +328,7 @@ class "LuncoCatalogAPI" (
     )
 }
 
-class "LuncoCelestialBodyAPI" (
+class "LunCoCelestialBodyAPI" (
     inherits = </APISchemaBase>
     customData = {
         token apiSchemaType = "singleApply"
@@ -387,22 +371,14 @@ class "LuncoCelestialBodyAPI" (
     )
 }
 
-class "LuncoTerrainEditAPI" (
+class "LunCoTerrainEditAPI" (
     inherits = </APISchemaBase>
     customData = {
         token apiSchemaType = "singleApply"
     }
     doc = """ONE hand edit to a terrain surface — a brush, a flatten, or a crater.
     Applied to an edit prim (`lunco:layer = "edit"`), a child of the terrain; the
-    edits fold, in path order, into the terrain's composed height.
-
-    These parameters used to be PACKED into one string
-    (`lunco:edit = "crater 350 350 45 18"`). That is legal USD and it is not USD: a
-    private encoding hidden inside a string is opaque to the type system — no
-    validation, no `allowedTokens` on the kind, nothing to inspect or edit in usdview,
-    and no other DCC can read it. Packing was justified by undo atomicity ("one
-    attribute = one undo step"), but `apply_ops_as_change_set` already commits N ops
-    as a single labelled undo step, so the reason had outlived the encoding."""
+    edits fold, in path order, into the terrain's composed height."""
 )
 {
     uniform token lunco:edit:kind = "" (
@@ -420,5 +396,187 @@ class "LuncoTerrainEditAPI" (
     double lunco:edit:amount = 0 (
         doc = """The kind's single scalar: brush amplitude, flatten target height, or
         crater depth — all metres."""
+    )
+}
+
+class LunCoProgram "LunCoProgram" (
+    inherits = </Typed>
+    doc = """ONE program bound to the prim that owns it — a Modelica plant, a rhai
+    controller, a Python model, a behaviour tree. It is a PRIM, not an attribute on
+    the thing it drives, for the same reason a `UsdShade` shader is a prim and an
+    OmniGraph node is a prim: it has typed ports, those ports CONNECT, and a thing
+    with ports and connections is a node in a graph — not a string on its neighbour.
+
+    Being a prim is what makes a program composable. A vessel carries as many as it
+    needs (a flight-control model AND a supervisory script AND a tree), each with its
+    own ports and its own parameters, none of them able to collide with the others'.
+    A program arrives through a `references` arc like any other component, and a scene
+    that does not reference it does not get it: an airframe with no guidance program
+    is an airframe that flies nowhere on its own.
+
+    ROLE IS NEVER DECLARED, because it cannot be. The same `.py` is a plant on one prim
+    and a script on the next; a rhai program can integrate state as readily as it can
+    answer an event; one program can do both at once. What a program DOES is derived
+    from what it declares — a program with `inputs:`/`outputs:` ports is a node in the
+    port graph and is stepped; a program without them runs for its effects alone. The
+    engine that runs it comes from its source's extension, exactly as USD chooses a file
+    format plugin by `.usda` / `.usdc` / `.usdz`.
+
+    PARAMETERS ARE PORTS. A gain is `float inputs:kv = 1.2` — an input with a constant
+    instead of a connection. Wire it later and nothing about the program changes."""
+)
+{
+    uniform token lunco:program:implementationSource = "sourceAsset" (
+        doc = """Which property carries this program: an external file
+        (`lunco:program:sourceAsset`) or text authored in place
+        (`lunco:program:sourceCode`). Named for `UsdShade`'s
+        `info:implementationSource`, which asks the same question of a shader."""
+        allowedTokens = ["sourceAsset", "sourceCode"]
+    )
+    uniform asset lunco:program:sourceAsset = @@ (
+        doc = """The program's file — `@models/Lander.mo@`, `@scenarios/flame.rhai@`,
+        `@behaviors/rover_patrol.xml@`.
+
+        `asset`, never `string`. Only an `asset` is visible to USD's resolver and to
+        anything that walks a layer for the files a scene depends on — the reference
+        closure, packaging, `usdzip`. A path smuggled in a `string` names a file that
+        does not travel with the scene, and cannot even be checked for existence."""
+    )
+    uniform string lunco:program:sourceCode = "" (
+        doc = """The program's text, authored in place instead of in a file. This is
+        the live-authoring path: an edit to it is an ordinary attribute edit, so it
+        journals, undoes, and replicates like every other edit."""
+    )
+    uniform token lunco:program:sourceAsset:subIdentifier = "" (
+        doc = """WHICH definition inside the source, when the file holds more than one
+        — a `.mo` that declares several models, a `.rhai` with several entry points.
+        Empty means the file's single definition, and a file with exactly one needs
+        nothing here.
+
+        Named for `UsdShade`'s `info:sourceAsset:subIdentifier`, which exists for the
+        same reason: an MDL module can define several shaders, so the prim has to say
+        which of them it means. A file path alone is not an identity."""
+    )
+    uniform bool lunco:program:realtimeSafe = false (
+        doc = """Whether this program steps fast enough to be trusted with a FORCE:
+        only a realtime-safe program may drive a `force_*` / `torque_*` port on a body
+        the client PREDICTS.
+
+        A model that takes 40ms to step, wired into a predicted body, diverges from
+        the server every frame it is late — so driving physics is a promise the author
+        makes, not a property the engine can read off the source. `false` (the default,
+        and what an unauthored program gets) means the wiring pass refuses it a force
+        port and says why.
+
+        Programs that never touch physics — a supervisory script, a battery model —
+        leave this alone. It is not a quality rating."""
+    )
+}
+
+class "LunCoProgramAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """A prim that IS a program, rather than one that carries programs as
+    children — the same properties as [`LunCoProgram`], applied in place.
+
+    Which form to use is not a style question, it is a question of whether the
+    program is separable from the thing. A vessel's flight-control system is its
+    airframe: it is what the stick talks to, its `inputs:` ARE the vessel's control
+    surface, and a lander without it is not a lander with no autopilot — it is a
+    lander with no engine. That is applied HERE, on the vessel.
+
+    A guidance law, a supervisory script, a patrol tree: those are bolted on, and each
+    is a [`LunCoProgram`] child prim that arrives on its own `references` arc. Delete
+    the prim and the behaviour is gone, which is exactly what you want to be able to
+    do to an autopilot and exactly what you must never be able to do to an engine."""
+)
+{
+    uniform token lunco:program:implementationSource = "sourceAsset" (
+        doc = "Whether the program is an external file or text authored in place."
+        allowedTokens = ["sourceAsset", "sourceCode"]
+    )
+    uniform asset lunco:program:sourceAsset = @@ (
+        doc = "The program's file. `asset`, never `string`."
+    )
+    uniform string lunco:program:sourceCode = "" (
+        doc = "The program's text, authored in place."
+    )
+    uniform bool lunco:program:realtimeSafe = false (
+        doc = """Whether this program may drive a force/torque port on a
+        client-predicted body. A promise about step latency, declared by the author."""
+    )
+}
+
+class LunCoPortEvent "LunCoPortEvent" (
+    inherits = </Typed>
+    doc = """A threshold crossing on one port, published as a named event — the
+    discrete edge of a continuous signal (`m_prop` falling below 200 becomes
+    `lander_low_fuel`).
+
+    A child prim of the program whose port it watches, one prim per rule, because a
+    rule is a thing with parts: a port, a comparison, a threshold, a name. Packed into
+    a string those parts are invisible to the type system — nothing validates the
+    comparison, nothing checks the port exists, and no other DCC can read any of it."""
+)
+{
+    uniform token lunco:event:port = "" (
+        doc = "The watched port, by name, on the owning program."
+    )
+    uniform token lunco:event:op = "lt" (
+        doc = "The comparison that fires the event."
+        allowedTokens = ["lt", "le", "gt", "ge"]
+    )
+    double lunco:event:threshold = 0 (
+        doc = "The value the port is compared against."
+    )
+    uniform token lunco:event:emit = "" (
+        doc = "The event published on the crossing."
+    )
+}
+
+class "LunCoVesselAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Marks a prim as a vessel: a thing a session can possess and drive.
+    Possession is what makes its `piloted` port true, which is how a program yields
+    the stick to whoever holds authority."""
+)
+{
+    uniform bool lunco:vessel = false (
+        doc = "Whether this prim is a possessable vessel."
+    )
+    uniform token lunco:cameraFollow = "heading" (
+        doc = """How the possession/follow camera treats this vessel's attitude —
+        i.e. should the camera rotate with the body. 'heading' follows the yaw
+        heading only, surface-normal up (ground vehicles); 'orbit' keeps a stable
+        external frame the vessel rotates inside of (a 6-DOF flyer that pitches and
+        rolls); 'chase' follows the full orientation (a cockpit frame that rolls
+        with the craft). Typically authored on the vessel's control profile
+        (`Controls` scope) so it composes through a spawn like the intent binding."""
+        allowedTokens = ["heading", "orbit", "chase"]
+    )
+}
+
+class "LunCoAvatarAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = "The scene's player viewpoint — where the camera starts and how it moves."
+)
+{
+    uniform bool lunco:avatar = false (
+        doc = "Whether this prim is the scene's avatar."
+    )
+    uniform token lunco:cameraMode = "freeflight" (
+        doc = "How the avatar's camera moves."
+        allowedTokens = ["freeflight", "orbit", "springarm"]
+    )
+    double3 lunco:cameraLookAt = (0, 0, 0) (
+        doc = "The point the avatar's camera faces on spawn."
     )
 }

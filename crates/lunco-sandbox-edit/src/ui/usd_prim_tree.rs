@@ -23,10 +23,18 @@ use std::collections::{BTreeSet, HashMap};
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdPrimPath, UsdRead, UsdStageAsset};
+use lunco_usd_bevy::{
+    instance_key, CanonicalStages, SdfPath, UsdInstanceRoot, UsdPrimPath, UsdRead, UsdStageAsset,
+};
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
 pub const USD_PRIM_TREE_PANEL_ID: PanelId = PanelId("usd_prim_tree");
+
+/// Tree-node identity: the prim's owning **instance** (its instance-root GID,
+/// `None` for authored scene prims) plus its stage-relative path. Two runtime
+/// spawns of one asset compose IDENTICAL paths, so the instance is what keeps
+/// them from collapsing into a single node — each spawn is its own root subtree.
+type NodeKey = (Option<u64>, String);
 
 /// One node in the prim tree.
 struct PrimTreeNode {
@@ -38,16 +46,16 @@ struct PrimTreeNode {
     entity: Option<Entity>,
     /// Applies `PhysicsRigidBodyAPI`.
     is_body: bool,
-    /// Child prim paths, sorted by name.
-    children: Vec<String>,
+    /// Child node keys, sorted by name.
+    children: Vec<NodeKey>,
 }
 
 /// Render-ready USD prim hierarchy. Derived, never authoritative.
 #[derive(Resource, Default)]
 pub struct UsdPrimTreeView {
-    nodes: HashMap<String, PrimTreeNode>,
-    /// Top-level prim paths (a single path segment), sorted by name.
-    roots: Vec<String>,
+    nodes: HashMap<NodeKey, PrimTreeNode>,
+    /// Top-level node keys, sorted by name.
+    roots: Vec<NodeKey>,
     /// Hash of the last projected path set; a rebuild is skipped while it holds.
     hash: u64,
     built: bool,
@@ -57,6 +65,9 @@ pub struct UsdPrimTreeView {
 /// the prim-path set changes.
 pub fn produce_usd_prim_tree(
     q: Query<(Entity, &UsdPrimPath)>,
+    q_provenance: Query<&lunco_core::Provenance>,
+    q_gid: Query<&lunco_core::GlobalEntityId>,
+    q_instance_root: Query<(), With<UsdInstanceRoot>>,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
     mut view: ResMut<UsdPrimTreeView>,
@@ -78,31 +89,35 @@ pub fn produce_usd_prim_tree(
         return;
     };
 
-    // (path → entity) for this stage; the set of paths drives the change gate.
-    let mut entity_of: HashMap<String, Entity> = HashMap::new();
+    // ((instance, path) → entity) for this stage; the set of keys drives the
+    // change gate. Keying on the instance is what gives two spawns of one asset
+    // two subtrees instead of one collapsed node (their paths are identical).
+    let mut entity_of: HashMap<NodeKey, Entity> = HashMap::new();
     for (e, p) in q.iter() {
         if p.stage_handle.id() == stage_id {
-            entity_of.insert(p.path.clone(), e);
+            let inst = instance_key(e, &q_provenance, &q_gid, &q_instance_root);
+            entity_of.insert((inst, p.path.clone()), e);
         }
     }
 
-    // Every path + all of its ancestor prefixes, so intermediate xforms appear.
-    let mut all_paths: BTreeSet<String> = BTreeSet::new();
-    for path in entity_of.keys() {
+    // Every path + all of its ancestor prefixes (within the SAME instance), so
+    // intermediate xforms appear under the right spawn.
+    let mut all_paths: BTreeSet<NodeKey> = BTreeSet::new();
+    for (inst, path) in entity_of.keys() {
         let mut acc = String::new();
         for seg in path.split('/').filter(|s| !s.is_empty()) {
             acc.push('/');
             acc.push_str(seg);
-            all_paths.insert(acc.clone());
+            all_paths.insert((*inst, acc.clone()));
         }
     }
 
     let hash = {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        for p in &all_paths {
-            p.hash(&mut h);
-            entity_of.contains_key(p).hash(&mut h);
+        for key in &all_paths {
+            key.hash(&mut h);
+            entity_of.contains_key(key).hash(&mut h);
         }
         h.finish()
     };
@@ -118,10 +133,11 @@ pub fn produce_usd_prim_tree(
     }
     let stage_view = canonical.get(stage_id).map(|cs| cs.view());
 
-    let mut nodes: HashMap<String, PrimTreeNode> = HashMap::new();
-    let mut roots: Vec<String> = Vec::new();
+    let mut nodes: HashMap<NodeKey, PrimTreeNode> = HashMap::new();
+    let mut roots: Vec<NodeKey> = Vec::new();
 
-    for path in &all_paths {
+    for key in &all_paths {
+        let (_, path) = key;
         let name = path.rsplit('/').next().unwrap_or(path).to_string();
         let (type_name, is_body) = match &stage_view {
             Some(v) => match SdfPath::new(path) {
@@ -134,28 +150,31 @@ pub fn produce_usd_prim_tree(
             None => (String::new(), false),
         };
         nodes.insert(
-            path.clone(),
+            key.clone(),
             PrimTreeNode {
                 name,
                 type_name,
-                entity: entity_of.get(path).copied(),
+                entity: entity_of.get(key).copied(),
                 is_body,
                 children: Vec::new(),
             },
         );
     }
 
-    // Wire parent → children (and collect roots).
-    for path in &all_paths {
+    // Wire parent → children (and collect roots). The parent shares this node's
+    // instance, so the prefix resolves within the same spawn.
+    for key in &all_paths {
+        let (inst, path) = key;
         match path.rsplit_once('/') {
-            Some(("", _)) | None => roots.push(path.clone()),
+            Some(("", _)) | None => roots.push(key.clone()),
             Some((parent, _)) => {
-                if let Some(p) = nodes.get_mut(parent) {
-                    p.children.push(path.clone());
+                let parent_key = (*inst, parent.to_string());
+                if let Some(p) = nodes.get_mut(&parent_key) {
+                    p.children.push(key.clone());
                 } else {
                     // Parent prefix wasn't itself a prim (shouldn't happen — we
                     // inserted every prefix — but stay total).
-                    roots.push(path.clone());
+                    roots.push(key.clone());
                 }
             }
         }
@@ -164,9 +183,10 @@ pub fn produce_usd_prim_tree(
     // Sort children + roots by leaf name for a stable tree (leaf == node name,
     // so sorting by the path's last segment avoids a borrow of `nodes`).
     for node in nodes.values_mut() {
-        node.children.sort_by_key(|c| c.rsplit('/').next().unwrap_or(c).to_string());
+        node.children
+            .sort_by_key(|(_, c)| c.rsplit('/').next().unwrap_or(c).to_string());
     }
-    roots.sort_by_key(|p| p.rsplit('/').next().unwrap_or(p).to_string());
+    roots.sort_by_key(|(_, p)| p.rsplit('/').next().unwrap_or(p).to_string());
 
     view.nodes = nodes;
     view.roots = roots;
@@ -250,13 +270,13 @@ fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
 /// (possibly selectable) label; a childless intermediate is a dim, inert label.
 fn render_prim_node(
     ui: &mut egui::Ui,
-    path: &str,
+    key: &NodeKey,
     view: &UsdPrimTreeView,
     selected: &crate::SelectedEntities,
     to_select: &mut Option<Entity>,
     depth: usize,
 ) {
-    let Some(node) = view.nodes.get(path) else {
+    let Some(node) = view.nodes.get(key) else {
         return;
     };
     let label = prim_label(node);
@@ -268,7 +288,9 @@ fn render_prim_node(
     // Top two levels open by default so the scene structure is visible without
     // drilling; deeper subtrees (a rover's per-wheel joints) start collapsed.
     let default_open = depth < 2;
-    let id = ui.make_persistent_id(("usd_prim_tree", path));
+    // Key includes the instance, so two spawns of one asset get DISTINCT egui
+    // ids (identical paths would otherwise share collapse state).
+    let id = ui.make_persistent_id(("usd_prim_tree", key));
     egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, default_open)
         .show_header(ui, |ui| {
             prim_select_label(ui, node, &label, selected, to_select);

@@ -94,7 +94,7 @@ validation. See §8.
 
 **(d) Per-domain scope — `def Scope "<Domain>"`.** A vehicle groups its domain content under scopes
 (`Rover/Electrical`, `Rover/Thermal`, `Rover/Comms`) — doc-34 sub-prim-per-model generalized. Each scope
-holds that domain's network + its synthesized model prim (`lunco:modelicaModel`). Keeps domains
+holds that domain's network + its synthesized program prim (a `LunCoProgram`). Keeps domains
 navigable and separable.
 
 **(e) Per-domain composition LAYER (the powerful part).** Ride the **canonical layered document**
@@ -187,7 +187,7 @@ projections run both ways. Four representations, each edge a descriptor-supplied
 
   **3D geometry → the working path is the cosim wire fabric; auto-derived geometry is BLOCKED.**
   - *Works today:* a Modelica **output drives a USD transform** through the existing wire fabric —
-    `SunTracker.mo`'s `yaw` → wire (`lunco:wireFrom/To`, `fromPort/toPort`) → joint motor
+    `SunTracker.mo`'s `yaw` → a USD connection on the joint's `inputs:angle` → joint motor
     (`lunco-cosim/src/joint.rs`) → the USD prim's `Transform` follows (physics-solved). So *authored*
     USD geometry animated by *any* model observable is a solved problem — bind `SimulationSession` observables
     (`variable_names()`, `DescribeModelProvider`) to USD prim ports.
@@ -371,23 +371,21 @@ maximally USD-compatible. Bias: **one canonical form, delete the parallels** (pe
 "no-backcompat / one-canonical-form" rule). Each is *current → target*, what to **delete**, and blast
 radius. Ordered by leverage.
 
-### A1 — The connection graph: three bespoke wiring encodings → ONE USD-native connection *(the crux)*
+### A1 — The connection graph: ONE USD-native connection *(the crux)*
 
-Today the *same idea* — "this output feeds that input" — is authored **three** incompatible ways:
-`lunco:simWires="out:in,…"` (self, CSV), wire-prims (`lunco:wireFrom/wireTo/fromPort/toPort/scale/offset`,
-cross-entity), and `rel lunco:epsBus` (inert electrical topology).
+"This output feeds that input" has exactly one spelling, and it is USD's own.
 
-- **Target:** components are **connectable prims** (`UsdShadeConnectableAPI`); a port is an `inputs:`/
+- **The form:** components are **connectable prims** (`UsdShadeConnectableAPI`); a port is an `inputs:`/
   `outputs:` attribute; a wire is a **USD attribute-to-attribute connection** authored on the consuming
-  input. The SSP affine `scale`/`offset` — the *only* thing USD connections don't natively carry — becomes
+  input. The SSP affine `scale`/`offset` — the *only* thing USD connections don't natively carry — is
   minimal `lunco:` metadata on the input (`lunco:factor`, `lunco:offset` — SSP LinearTransformation terms);
-that is the residual LunCo glue.
-- **Delete:** `lunco:simWires` parsing, the wire-prim schema, `rel lunco:epsBus`, `parse_wire`. `SimConnection`
-  (`lunco-cosim/connection.rs`) stops being an *authored* form and becomes a **projection of** USD
-  connections read at compose time.
-- **Blast radius:** rewrite `process_usd_cosim_prims` (`lunco-usd-sim/cosim.rs:113`) to walk USD connections;
-  re-author every asset that wires (balloon, `sun_tracker_test.usda`, rover EPS). Mechanical, high-count,
-  low-risk. **This is the load-bearing change — everything else composes with it.**
+  that is the residual LunCo glue.
+- **`SimConnection`** (`lunco-cosim/connection.rs`) is not an *authored* form: it is a **projection of** the
+  USD connections, read at compose time. Electrical topology (`rel lunco:epsBus`) is a connection like any
+  other, not a schema of its own.
+- **Blast radius:** the cosim reader walks USD connections (`lunco-usd-sim/cosim.rs`), and every asset that
+  wires (balloon, `sun_tracker_test.usda`, rover EPS) authors them. **This is the load-bearing form —
+  everything else composes with it.**
 
 ### A2 — Ports: authored USD attributes for identity, `PortRegistry` for values
 
@@ -417,8 +415,8 @@ that is the residual LunCo glue.
   applied API schemas** (USD 21.08+, `plugInfo`, no compiled C++). They become *load-bearing* identity:
   the cosim/editor/synthesizer gate on real applied schemas via the registry, multi-apply where a prim is
   in several domains.
-- **Delete:** the "gate on `lunco:simWires` presence" heuristic (`cosim.rs:149`) as the *identity* test —
-  replace with "has `LunCoModelBindingAPI`"; the decorative-label status of the existing `LunCo*API` tokens.
+- **Delete:** the decorative-label status of the existing `LunCo*API` tokens — identity is "does this prim
+  bind a program and declare ports", read off real applied schemas, never a heuristic.
 - **Blast radius:** small; `has_api_schema` already exists (`lunco-usd-bevy:1619`).
 
 ### A6 — `kind` everywhere + `PhysicsArticulationRootAPI` for robot bases
@@ -448,10 +446,11 @@ that is the residual LunCo glue.
 
 ### A10 — Shape the Modelica binding to converge with AOUSD USD+FMI
 
-- Keep `lunco:modelicaModel` as the behavior binding, but treat it as "*the prim's behavior model
-  reference*" so it can become an **FMI/FMU reference** when the AOUSD USD+FMI standard lands (our
-  `compile_str → SimulationSession` is the local FMU-equivalent). Don't hard-code Modelica-only assumptions into
-  the cosim projection; bind through a neutral "behavior model" concept.
+- `lunco:program:sourceAsset` is the behavior binding, and it is deliberately neutral — "*the program this
+  prim runs*", not "*the Modelica model*". It can become an **FMI/FMU reference** when the AOUSD USD+FMI
+  standard lands (our `compile_str → SimulationSession` is the local FMU-equivalent). No Modelica-only
+  assumption reaches the cosim projection: the engine follows the source's extension, exactly as USD picks a
+  file-format plugin by `.usda`/`.usdc`/`.usdz`.
 
 ### What explicitly STAYS (don't churn)
 
@@ -520,7 +519,7 @@ The mapping is near-total (this is why A1–A9 are "choose the standard spelling
 - **component** → connectable prim (`kind=component`); **public port** → `inputs:`/`outputs:` attribute;
   **wire** → connection; **domain container** → `NodeGraph` (a `Scope` with connectability); **connection
   legality** → `ConnectableAPIBehavior`; **layout** → `NodeGraphNodeAPI`; **fidelity** → variants;
-  **per-domain sub-model** → the `Scope`'s `lunco:modelicaModel`; **runtime values** → PortRegistry
+  **per-domain sub-model** → a `LunCoProgram` prim in the `Scope`; **runtime values** → PortRegistry
   today, OpenExec-shaped tomorrow; **behavior/rules** → connectable graph persisted, rhai executed.
 - The **two-plane split** we already have (USD authored structure + PortRegistry f64 runtime) is *exactly*
   USD's own authored-vs-computed split (connections + OpenExec). We independently arrived at USD's model.
@@ -752,26 +751,25 @@ governs:
 | a wire | attribute **connection** (`.connect`) | `SimConnection` | `connection` / `interface` |
 | a signal on a wire | connected value | f64 exchange | `flow` (item flow; item = Real) |
 | a parameter | attribute | `SimComponent.parameters` | `attribute` |
-| behavior binding | `lunco:behavior:*` | model backend | **`allocation`** (part → model) |
+| behavior binding | a `LunCoProgram` prim + `lunco:program:*` | model backend | **`allocation`** (part → model) |
 
 These are intentionally the *same* concepts, so a name in one layer is recognizable in the others — and
 the SysML-v2→USD and USD→FMI projections become near-mechanical.
 
-### 14.1 Wiring & ports — rename/delete (the core)
+### 14.1 Wiring & ports — the authored form and its standard
 
-| current | → target | standard | action |
-|---|---|---|---|
-| `lunco:port` (declare a port) | `inputs:<name>` / `outputs:<name>` attribute | USD connectable | **replace** |
-| `lunco:simWires` (CSV) | attribute **connection** (`connectionPaths`) | USD / SSP Connection | **delete** |
-| `lunco:wireFrom` / `lunco:wireTo` | the connection's source path (authored on the sink input) | USD | **delete** |
-| `lunco:fromPort` / `lunco:toPort` | the `inputs:`/`outputs:` names in the connection | USD | **delete** |
-| `lunco:scale` | **`lunco:factor`** | **SSP LinearTransformation `factor`** | **rename** (match SSP exactly — this is the correction to the earlier "gain") |
-| `lunco:offset` | `lunco:offset` (unchanged) | SSP LinearTransformation `offset` | **keep** |
-| `lunco:portEvents` | `lunco:eventPort` | (no std; our event edge) | keep, tidy |
-| Rust `PortType` + `classify` | attr `typeName` + `ConnectableAPIBehavior` | USD | **delete** |
-| Rust `PortDirection {In,Out,InOut}` | keep; = FMI causality `input/output` + SysML in/out/inout, and the `inputs:`/`outputs:` namespaces | FMI/SysML/USD (all agree) | **keep** |
-| Rust `SimPort.connector`, `SimConnection.{start,end}_connector` | keep | already SSP `Connector` | **keep** |
-| Rust `SimComponent.{inputs,outputs,parameters}` | keep | already FMI causality | **keep** |
+| authored form | standard | note |
+|---|---|---|
+| a port: `inputs:<name>` / `outputs:<name>` attribute | USD connectable | typed, composable, connectable |
+| a wire: an attribute **connection** (`connectionPaths`), authored on the consuming input | USD / SSP Connection | the source path and both port names live in the connection itself |
+| a parameter: an `inputs:` attribute with a constant instead of a connection (`float inputs:kv = 1.2`) | FMI parameter / SysML `attribute` | wire it later and nothing about the model changes |
+| `lunco:factor` | **SSP LinearTransformation `factor`** | matches SSP exactly (not "gain") |
+| `lunco:offset` | SSP LinearTransformation `offset` | |
+| a threshold event: a `LunCoPortEvent` child prim (`lunco:event:port`/`op`/`threshold`/`emit`) | (no std; our event edge) | one prim per rule — every part of the rule is typed |
+| attr `typeName` + `ConnectableAPIBehavior` (not a Rust `PortType`/`classify` taxonomy) | USD | connection legality is USD's job |
+| Rust `PortDirection {In,Out,InOut}` | FMI causality `input/output` + SysML in/out/inout + the `inputs:`/`outputs:` namespaces (all agree) | **keep** |
+| Rust `SimPort.connector`, `SimConnection.{start,end}_connector` | already SSP `Connector` | **keep** |
+| Rust `SimComponent.{inputs,outputs,parameters}` | already FMI causality | **keep** |
 
 > Two duplications to collapse: `lunco:scale`/`offset` exist as *both* USD attrs and `SimConnection`
 > fields — the authored USD connection metadata (`lunco:factor`/`lunco:offset`) is the single truth;
@@ -786,14 +784,15 @@ the SysML-v2→USD and USD→FMI projections become near-mechanical.
 | `LunCoPowerComponentAPI`, `LunCoActuatorAPI`, `LunCoMobilityComponentAPI`, `LunCoPowerDistributionAPI` (authored but **not dispatched** — dead-ish) | **make load-bearing** codeless applied schemas; keep the PascalCase+`API` convention | promote to real |
 | implicit model kind | author `kind = "component"` / `"assembly"` | USD `kind` | add |
 | rigid-body/collision/mass/drive/articulation/vehicle | `PhysicsRigidBodyAPI`, `PhysicsDriveAPI`, `PhysicsArticulationRootAPI`, `PhysxVehicle*` (already used) | USD/PhysX standard | keep |
-| `lunco:modelicaModel` / `lunco:pythonModel` / `lunco:scriptModel` | unify → **`lunco:behavior:model`** + **`lunco:behavior:kind` = "modelica"\|"python"\|"rhai"\|"fmu"** | it is a **SysML allocation** (part→behavior); converges with USD+FMI | unify |
-| `lunco:modelicaClassName` | `lunco:behavior:className` | — | rename under `behavior:` |
+| the program binding: a `LunCoProgram` prim (or `LunCoProgramAPI` applied in place) carrying `lunco:program:sourceAsset` — role is never declared, and the engine follows the file's extension | it is a **SysML allocation** (part→behavior); converges with USD+FMI | keep |
+| `lunco:program:sourceAsset:subIdentifier` — which definition inside the source, when the file holds several (the `UsdShade` `info:sourceAsset:subIdentifier` move) | — | keep |
 
 ### 14.3 Domain params — fold into model parameters, adopt standard where it exists
 
 - **EPS/motor params** (`lunco:voltage`, `lunco:capacity`, `lunco:resistance`, `lunco:torqueConstant`, …)
   are **model parameters**, not wiring. They should be the bound model's **parameters** (FMI parameter /
-  SysML `attribute`), authored via `lunco:params` (or the connectable component's attributes) — and where
+  SysML `attribute`), authored as typed attributes on the bound program (its `inputs:` ports, or a
+  `lunco:param:<key>` for a script's own settings) — and where
   an MSL class already names the quantity (Resistor `R`, etc.), **use that name**. Drop the bespoke
   `lunco:<param>` spellings that merely duplicate a model parameter.
 - **Mobility** (`lunco:drive*`, `lunco:differential:*`, `lunco:steer*`) — prefer the **`PhysxVehicle*`**
@@ -821,11 +820,11 @@ SysML v2 (OMG-final 7/2025, KerML + a standard **REST/HTTP API**) is the **feder
 - `connection`/`interface` ↔ our connection;
 - `flow` (item flow, typed payload) ↔ our directed signal wire (payload = `Real`/`f64`);
 - `attribute` ↔ model parameters;
-- **`allocation`** ↔ the behavior binding — **`lunco:behavior:model` is literally a SysML allocation**
+- **`allocation`** ↔ the behavior binding — **a `LunCoProgram` prim is literally a SysML allocation**
   (system part *allocated to* a Modelica/FMU/rhai realization). Name it as such so the mapping is explicit.
 
 **Payoff:** if our USD names mirror SysML v2 (part→prim, port→`inputs:`/`outputs:`, connection→connection,
-flow→signal, allocation→`lunco:behavior`), the future **SysML-v2-API → USD projection** (doc §11) is
+flow→signal, allocation→`LunCoProgram`), the future **SysML-v2-API → USD projection** (doc §11) is
 near-mechanical — the same "federate, don't absorb" seam, with matching vocabulary on both sides. Keep
 SysML as the requirements/architecture source of truth; project structure into USD; realize behavior in
 Modelica/rhai; exchange values via the FMI/SSP runtime. Four standards, **one concept model, four
@@ -833,10 +832,9 @@ spellings** — chosen per layer, never invented.
 
 ### 14.6 Rename cheat-sheet (verdict per group)
 
-- **DELETE:** `PortType`/`classify`, `lunco:simWires`, `lunco:wireFrom/To`, `lunco:fromPort/toPort`,
-  `lunco:port` (→ connectable attrs), the CSV workaround, `rel lunco:epsBus`.
-- **RENAME:** `lunco:scale`→`lunco:factor` (SSP); `lunco:modelica/python/scriptModel`→`lunco:behavior:model`
-  + `lunco:behavior:kind`; EPS/motor params → bound-model parameters (MSL names where they exist).
+- **DELETE:** `PortType`/`classify` — connection legality is `ConnectableAPIBehavior`'s job.
+- **NAME AS SSP DOES:** `lunco:factor` (not "gain"); EPS/motor params are the bound program's parameters
+  (MSL names where they exist), not bespoke `lunco:` spellings.
 - **PROMOTE:** `LunCo*API` → real codeless applied schemas; author `kind`.
 - **ADOPT (already/continue):** `PhysicsRigidBodyAPI`/`PhysxVehicle*`/`PhysicsDriveAPI`, `UsdGeomCamera`,
   `ui:nodegraph:node:pos`, `inputs:`/`outputs:` + connections.
@@ -878,7 +876,7 @@ never dispatched) and **muddles domain with role**. Refactor:
 | `lunco:light:range` | **`UsdLux`** light attrs (`inputs:radius`/attenuation) | lights already map to UsdLux (§7) |
 | `lunco:name` / `lunco:description` | prim **`displayName`** metadata + **`UsdUISceneGraphPrimAPI`** (`ui:displayName`/`ui:displayGroup`) | `openusd` already has `SceneGraphPrimAPI` |
 | diagram/node positions | **`UsdUINodeGraphNodeAPI`** (`ui:nodegraph:node:pos`) | §14 |
-| `lunco:params` + EPS/motor params | typed USD **attributes** (model parameters) | not a string-dict; §14.3 |
+| EPS/motor params | typed USD **attributes** (the bound program's parameters) | §14.3 |
 | `lunco:placeholder` / `lunco:resolvedAsset` / `lunco:assetMode` | USD **payloads** + Ar asset resolution | mechanism already used; the attrs shrink to a thin runtime cache/sentinel |
 | `lunco:layer` (logical grouping) / render selection | **`UsdCollectionAPI`** (membership) + **`UsdGeomImageable.purpose`** (default/render/proxy/guide) + `visibility` | `openusd` has `collection.rs` |
 | `kind`, rigid body/joint/drive/vehicle | **`kind`**, **`UsdPhysics`/`Physx*`** | §14.1–2 |
@@ -887,7 +885,7 @@ never dispatched) and **muddles domain with role**. Refactor:
 `lunco:ephemeris_id` (SPICE metadata, §11), `lunco:net:*` (replication), `lunco:scenario`/`nextScene`/
 `triggerZone`/`waypoint` (sequencing/scene semantics), `lunco:vessel`/`avatar` (role — or a `LunCoVesselAPI`
 applied schema), `lunco:sensor:*` (mirror Isaac vendor schemas, §8.5), `lunco:terrain:*`/`shadow:*` (LunCo
-render params — a partial `UsdRenderSettings` alignment is possible but not standard), `lunco:behavior:*`
+render params — a partial `UsdRenderSettings` alignment is possible but not standard), `lunco:program:*`
 (the SysML **allocation** / USD+FMI-future binding).
 
 > Rule of thumb: **geometry, camera, light, visibility/purpose, collections, display name, node layout,

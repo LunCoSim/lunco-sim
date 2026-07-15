@@ -40,7 +40,7 @@ pub fn insert_celestial_comms_components<R: UsdRead>(
     sdf_path: &SdfPath,
     commands: &mut Commands,
 ) {
-    // --- Celestial body declaration (LuncoCelestialBodyAPI) ---
+    // --- Celestial body declaration (LunCoCelestialBodyAPI) ---
     //
     // The scene says which bodies exist; Rust does not. A prim authoring
     // `int lunco:body = 399` IS the Earth, and its presence is what turns the whole

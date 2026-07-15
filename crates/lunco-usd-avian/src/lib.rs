@@ -48,7 +48,7 @@ use bevy::mesh::VertexAttributeValues;
 use avian3d::prelude::*;
 use avian3d::physics_transform::{Position, Rotation};
 use lunco_usd_bevy::{
-    local_transform_at, read_shape_dims, read_transform_from_usd,
+    instance_key, local_transform_at, read_shape_dims, read_transform_from_usd,
     read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims, StageView, UsdAnimated, UsdRead,
     UsdVisualSynced,
 };
@@ -294,7 +294,8 @@ fn collect_child_colliders_from_usd<R: UsdRead>(
         // for the entity Transform — same canonical `usd_axis_to_quat`).
         if let Some(ty) = reader.type_name(&child_path) {
             if matches!(ty.as_str(), "Cylinder" | "Cone" | "Capsule" | "Plane") {
-                let axis_tok = read_token_attribute(reader, &child_path, "axis")
+                let axis_tok = reader
+                    .text(&child_path, "axis")
                     .unwrap_or_else(|| "Z".to_string());
                 // Pre-rotate by the stage convention: the `axis` token names an
                 // axis of the STAGE's frame while the collider is built in the
@@ -372,7 +373,7 @@ fn build_collider_from_usd<R: UsdRead>(reader: &R, sdf_path: &SdfPath) -> Option
         // `convexHull`/`convexDecomposition` produce the solid volumes a DYNAMIC
         // body needs (a trimesh can't be a moving rigid body in parry). Read via
         // the standard token so it works off either the live stage or the flatten.
-        let collider = match read_token_attribute(reader, sdf_path, ptok::A_APPROXIMATION).as_deref() {
+        let collider = match reader.text(sdf_path, ptok::A_APPROXIMATION).as_deref() {
             Some("convexHull") => {
                 Collider::convex_hull(verts.clone()).unwrap_or_else(|| Collider::trimesh(verts, tris))
             }
@@ -1009,29 +1010,6 @@ fn on_add_usd_prim(
     // and avoid duplicate processing.
 }
 
-fn find_instance_root(
-    entity: Entity,
-    q_child_of: &Query<&ChildOf>,
-    q_usd_path: &Query<&UsdPrimPath>,
-    q_instance_root: &Query<(), With<UsdInstanceRoot>>,
-) -> Entity {
-    let mut cursor = entity;
-    let mut best_root = entity;
-    loop {
-        if q_instance_root.get(cursor).is_ok() {
-            return cursor;
-        }
-        if q_usd_path.get(cursor).is_ok() {
-            best_root = cursor;
-        }
-        match q_child_of.get(cursor) {
-            Ok(parent) => cursor = parent.parent(),
-            Err(_) => break,
-        }
-    }
-    best_root
-}
-
 /// Resolves pending USD joints once both body entities exist.
 ///
 /// This system runs every frame. When a `PendingUsdJoint` entity finds that both its
@@ -1050,25 +1028,25 @@ fn build_usd_physics_joints(
     // so this query is empty for the first few frames after spawn,
     // and the joint stays in `PendingUsdJoint` until ready.
     q_bodies: Query<(Entity, &UsdPrimPath), With<Position>>,
-    q_child_of: Query<&ChildOf>,
-    q_usd_path: Query<&UsdPrimPath>,
+    q_provenance: Query<&lunco_core::Provenance>,
+    q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
 ) {
     for (joint_entity, pending, joint_prim_path) in q_pending.iter() {
-        let joint_root = find_instance_root(joint_entity, &q_child_of, &q_usd_path, &q_instance_root);
+        let joint_root = instance_key(joint_entity, &q_provenance, &q_gid, &q_instance_root);
         // Find body0 and body1 entities by matching USD paths and instance roots
         let body0_ent = q_bodies.iter()
             .find(|(e, path)| {
                 path.path == pending.body0_path
                     && path.stage_handle == joint_prim_path.stage_handle
-                    && find_instance_root(*e, &q_child_of, &q_usd_path, &q_instance_root) == joint_root
+                    && instance_key(*e, &q_provenance, &q_gid, &q_instance_root) == joint_root
             })
             .map(|(e, _)| e);
         let body1_ent = q_bodies.iter()
             .find(|(e, path)| {
                 path.path == pending.body1_path
                     && path.stage_handle == joint_prim_path.stage_handle
-                    && find_instance_root(*e, &q_child_of, &q_usd_path, &q_instance_root) == joint_root
+                    && instance_key(*e, &q_provenance, &q_gid, &q_instance_root) == joint_root
             })
             .map(|(e, _)| e);
 
@@ -1207,14 +1185,6 @@ pub fn wheel_revolute_joint(
         .with_local_anchor2(DVec3::ZERO)
         .with_hinge_axis(axle)
         .with_motor(drive_motor)
-}
-
-/// Reads a USD token attribute (e.g., `uniform token axis = "X"`).
-///
-/// Thin delegate to the canonical [`lunco_usd_bevy::read_token`] — the
-/// single home for token/string parsing shared with usd-bevy.
-fn read_token_attribute<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<String> {
-    lunco_usd_bevy::read_token(reader, path, attr)
 }
 
 /// Reads a `DVec3` attribute (e.g., `double3 xformOp:translate`) at full
@@ -1424,12 +1394,10 @@ pub fn read_physics_material<R: UsdRead>(reader: &R, prim: &SdfPath) -> Option<P
     let dynamic_friction = reader.real_f32(&mat, ptok::A_DYNAMIC_FRICTION);
     let static_friction = reader.real_f32(&mat, ptok::A_STATIC_FRICTION);
     let restitution = reader.real_f32(&mat, ptok::A_RESTITUTION);
-    let friction_combine = combine_mode(
-        read_token_attribute(reader, &mat, PHYSX_FRICTION_COMBINE_MODE).as_deref(),
-    );
-    let restitution_combine = combine_mode(
-        read_token_attribute(reader, &mat, PHYSX_RESTITUTION_COMBINE_MODE).as_deref(),
-    );
+    let friction_combine =
+        combine_mode(reader.text(&mat, PHYSX_FRICTION_COMBINE_MODE).as_deref());
+    let restitution_combine =
+        combine_mode(reader.text(&mat, PHYSX_RESTITUTION_COMBINE_MODE).as_deref());
 
     // A Material bound only for LOOKS resolves here via the purpose→all-purpose
     // fallback but carries no `PhysicsMaterialAPI` properties. That is not a

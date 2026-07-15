@@ -1,0 +1,84 @@
+#usda 1.0
+(
+    defaultPrim = "DescentGuidance"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Powered-descent guidance — the AUTOPILOT, as a component you bolt onto a lander.
+#
+# A scene composes it as a SECOND reference arc on the vessel prim, alongside the
+# airframe:
+#
+#   def "Lander" (
+#       prepend references = [
+#           @../../vessels/landers/descent_lander.usda@</DescentLander>,
+#           @../../components/gnc/descent_guidance.usda@</DescentGuidance>,
+#       ]
+#   )
+#   {
+#       double3 xformOp:translate = (0, 60.0, 0)
+#   }
+#
+# One arc, wiring included — and a scene that omits it gets a lander that does not
+# fly itself. That is the whole reason this file exists apart from the airframe.
+#
+# HOW THE WIRING TRAVELS. `DescentGuidance` is a neutral stand-in for the vessel
+# root, the same trick `components/mobility/physical_drivetrain.usda` uses: every
+# path below is asset-local (`</DescentGuidance/...>`), and the reference arc
+# path-translates it onto whatever prim composed it (`</LanderTest/Lander/...>`).
+# The prims these connections point AT — the body, its `Altimeter` — are supplied by
+# the airframe arc, not by this file. Opened on its own, this file's connections
+# dangle; composed onto a lander, they resolve. That is what a component IS.
+#
+#   Altimeter.range ──────────► GNC.altitude ─┐
+#   body velocity_y ──────────► GNC.descent_rate │  velocity-scheduled descent law
+#   body mass ────────────────► GNC.vehicle_mass │
+#   possession (piloted) ─────► GNC.piloted ─────┘
+#                                    │  throttle_cmd
+#                                    ▼
+#                       Lander.mo  guidance_throttle ──► force/torque ──► body
+#
+# The airframe's own authority gate does the rest: possess the vessel and `piloted`
+# goes to 1, the guidance command is multiplied out, and the human has the stick.
+
+over "DescentGuidance"
+{
+    # The vessel's autonomous thrust command comes from the guidance program below.
+    # Authored HERE, on the vessel prim, because a connection is a property of the
+    # thing that CONSUMES it — and it is the arrival of this file that gives the
+    # airframe something to consume.
+    float inputs:guidance_throttle.connect = </DescentGuidance/GNC.outputs:throttle_cmd>
+
+    def LunCoProgram "GNC" (
+        doc = "Velocity-scheduled powered-descent guidance. Flies the vehicle down on its altimeter."
+    )
+    {
+        uniform asset lunco:program:sourceAsset = @models/DescentGuidance.mo@
+
+        # It drives the airframe's thrust every solver step, on a body the client
+        # predicts — so it must promise it steps fast enough to be trusted with it.
+        uniform bool lunco:program:realtimeSafe = true
+
+        # Sensors and body state. Cross-prim: these ports belong to prims the AIRFRAME
+        # contributes, and the reference arc rebases the paths onto the composed vessel.
+        float inputs:altitude.connect = </DescentGuidance/Altimeter.outputs:range>
+        float inputs:descent_rate.connect = </DescentGuidance.outputs:velocity_y>
+        float inputs:vehicle_mass.connect = </DescentGuidance.outputs:mass>
+        float inputs:piloted.connect = </DescentGuidance.outputs:piloted>
+
+        # Gains — a parameter is an input with a constant instead of a connection.
+        # Wire one later and nothing about the program changes.
+        float inputs:kv = 1.2
+        float inputs:rest_altitude = 1.5
+        float inputs:descent_slope = 0.6
+        float inputs:vy_max = 6.0
+        float inputs:g = 1.62
+        float inputs:max_thrust = 60000.0
+
+        # WHEN to fly is a mission decision, so a mission owns it: a script writes
+        # this port (`SetPorts`) to engage and stand down. Authored 1 so a scene that
+        # wants nothing more than "it lands" gets exactly that with no script at all.
+        float inputs:engage = 1.0
+    }
+}

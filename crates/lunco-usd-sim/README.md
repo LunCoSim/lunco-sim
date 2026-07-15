@@ -38,48 +38,61 @@ USD-driven cosim wiring — translates declarative simulation metadata into
 glue per scene. This is the authoritative path for USD-defined cosim
 entities; `lunco-cosim` itself stays engine-agnostic.
 
-### Per-prim attributes
+### A program is a prim
+
+A model is not an attribute on the body it drives: it is a program with typed ports,
+and ports connect. A body that IS its own model applies `LunCoProgramAPI` in place; a
+model that is bolted on is a `LunCoProgram` child prim, so deleting the prim removes
+the behaviour.
 
 ```usda
 def Sphere "RedBalloon" (
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "LunCoProgramAPI"]
 )
 {
     double radius = 1.0
     float physics:mass = 4.5
 
-    string lunco:modelicaModel = "models/Balloon.mo"
-    string lunco:simWires      = "netForce:force_y,volume:collider,height:height,velocity_y:velocity"
+    uniform asset lunco:program:sourceAsset = @models/Balloon.mo@
+    uniform bool lunco:program:realtimeSafe = true
+
+    # Self-loop: the model's outputs are the body's inputs, and back again.
+    float inputs:force_y.connect = </SandboxScene/RedBalloon.outputs:netForce>
+    float inputs:height.connect  = </SandboxScene/RedBalloon.outputs:height>
+    float inputs:velocity.connect = </SandboxScene/RedBalloon.outputs:velocity_y>
 }
 ```
 
-| Attribute | Purpose |
+| Property | Purpose |
 |---|---|
-| `string lunco:modelicaModel` | Path (relative to `assets/`) of a Modelica source. The translator opens it, dispatches `ModelicaCommand::Compile` to the worker, and (once `model.variables` populates) wraps the result in a `SimComponent`. |
-| `string lunco:pythonModel` | Path of a Python script. Registers a `ScriptDocument` + attaches `ScriptedModel` + `SimComponent` immediately (no compile step). |
-| `string lunco:simWires` | Comma-separated `from:to` (or `from:to:scale`) entries. Each spawns one **self-loop** `SimConnection` on the same entity (Modelica/Python ports ↔ AvianSim ports). Encoded as a single string because `string[]` arrays don't compose across `references` in the current openusd parser. |
+| `uniform asset lunco:program:sourceAsset` | The program's file. The ENGINE that runs it comes from the extension — `.mo` dispatches `ModelicaCommand::Compile` to the worker and (once `model.variables` populates) wraps the result in a `SimComponent`; `.py` registers a `ScriptDocument` + attaches `ScriptedModel` + `SimComponent` immediately (no compile step). `asset`, never `string`: only an `asset` is visible to USD's resolver and travels with the scene. |
+| `uniform token lunco:program:sourceAsset:subIdentifier` | Which definition inside the source, when the file declares more than one. |
+| `uniform string lunco:program:sourceCode` | The program's text, authored in place instead of in a file. |
+| `uniform bool lunco:program:realtimeSafe` | The author's promise that the program steps fast enough to be trusted with a FORCE. Absent ⇒ not promised, and the wiring pass refuses it a `force_*`/`torque_*` port on a client-predicted body. |
+| `float inputs:<port>` | An input port. With a `.connect` it is a wire; with a constant it is a parameter — `float inputs:kv = 1.2`. |
 
-### Cross-entity wires
+A prim is stepped iff it BOTH binds a program AND declares connectable ports. A model
+with no ports is a documentation-only reference; ports with no model are a pure physics
+sink driven through its backend.
 
-For wiring values *between* entities (e.g. Modelica generator → Python
-amplifier → Avian sphere), define a typeless prim with rels:
+### Wires
+
+A wire is a native USD connection — `inputs:x.connect = </Path/To/Prim.outputs:y>` —
+authored on the prim that CONSUMES the value, exactly as `UsdShade` wires a shader
+network. `rewire_usd_connections` derives one `SimConnection` per connection. The same
+form wires values *between* entities (Modelica generator → Python amplifier → Avian
+sphere) as within one: the target path simply names another prim.
 
 ```usda
-def "OscToAmp"
+def "Amplifier"
 {
-    rel lunco:wireFrom    = </SandboxScene/Oscillator>
-    string lunco:fromPort = "signal"
-    rel lunco:wireTo      = </SandboxScene/Amplifier>
-    string lunco:toPort   = "signal"
-    double lunco:scale    = 1.0
+    float inputs:signal.connect = </SandboxScene/Oscillator.outputs:signal>
 }
 ```
 
-`process_usd_cosim_wires` resolves the rels to ECS entities each tick
-(asset-loading-aware — defers when an endpoint hasn't spawned yet) and
-spawns one `SimConnection` per resolved wire. The participant prims
-themselves only need `lunco:simWires = ""` if they have no self-loops;
-they don't need to know about each other.
+Resolution is asset-loading-aware — a connection whose endpoint has not spawned yet is
+deferred, not dropped. Neither participant has to know about the other: the consumer
+names the producer, and nothing else changes.
 
 ### Runtime reload
 

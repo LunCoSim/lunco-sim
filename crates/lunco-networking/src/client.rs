@@ -192,6 +192,9 @@ fn on_join_server(
     }
     let address = crate::normalize_addr(&cmd.address);
     spawn_client(&mut commands, &address, crate::next_client_id(), &cmd.digest);
+    // Standalone→Client: authority follows the role automatically
+    // (`is_authoritative()` is now false), so a joined client stops minting ids —
+    // no separate flag to flip in lock-step.
     *role = NetworkRole::Client;
     status.role = NetworkRole::Client;
     status.endpoint = address;
@@ -216,6 +219,8 @@ fn on_leave_server(
     for e in &existing {
         commands.entity(e).try_despawn();
     }
+    // Back to single-player: `Standalone` is authoritative again, so the local
+    // peer resumes minting ids automatically (mirrors the idle-local startup arm).
     *role = NetworkRole::Standalone;
     status.role = NetworkRole::Standalone;
     status.connected = false;

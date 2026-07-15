@@ -8,14 +8,32 @@
 # Landing Pad — blast-hardened disc. Place >=150 m down-sun from the
 # habitat/solar field so plume ejecta doesn't sandblast them.
 def Xform "LandingPad" (
+    kind = "component"
     doc = "Blast-hardened landing pad — sintered disc with a centre hub. Where landers touch down; keep it well clear (>=150 m) of the habitat and solar field so plume ejecta can't sandblast them."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = true
 
+    def Scope "Looks"
+    {
+        # Darkened regolith — sintered/compacted blast pad.
+        def Material "BlastRegolith"
+        {
+            token outputs:surface.connect = </LandingPad/Looks/BlastRegolith/Shader.outputs:surface>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:wgsl:sourceAsset = @shaders/regolith.wgsl@
+                color3f inputs:colorA = (0.1, 0.1, 0.1)
+                token outputs:surface
+            }
+        }
+    }
+
     def Cylinder "Pad" (
-        prepend apiSchemas = ["PhysicsCollisionAPI", "LuncoMaterialAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
     )
     {
         uniform token axis = "Y"
@@ -25,10 +43,7 @@ def Xform "LandingPad" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.18, 0.17, 0.16)]
         bool physics:collisionEnabled = true
-        # Darkened regolith — sintered/compacted blast pad.
-        uniform token lunco:material:type = "shader"
-        uniform asset lunco:material:shader = @shaders/regolith.wgsl@
-        color3f primvars:colorA = (0.1, 0.1, 0.1)
+        rel material:binding = </LandingPad/Looks/BlastRegolith>
     }
 
     # Center marker hub.

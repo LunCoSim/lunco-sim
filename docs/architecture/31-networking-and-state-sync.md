@@ -118,7 +118,7 @@ Interest recompute rate is `NetworkConfig.interest_hz` (`sync.rs:586`).
 
 ## 5. Policy & RBAC ride the journal too
 
-There is **no dedicated policy-broadcast plane**. A `LuncoPolicy` USD prim
+There is **no dedicated policy-broadcast plane**. A `LunCoPolicy` USD prim
 (`lunco:policy:{seam,entry,source,deterministic}`) is authored like any doc op, so it
 persists, is RBAC-gated, and converges — see
 [`scripted_policy.rs`](../../crates/lunco-networking/src/scripted_policy.rs). Policies

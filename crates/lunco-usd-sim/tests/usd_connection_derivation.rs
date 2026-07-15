@@ -239,12 +239,17 @@ fn sandbox_scene_asset_wiring_migrated() {
     );
 }
 
-/// The lander is a REFERENCED vessel asset (`vessels/landers/descent_lander.usda`),
-/// so its wiring only exists once the reference arc is composed. `build_from_source`
-/// builds a lone in-memory layer and cannot resolve `@../../vessels/...@`; compose
-/// the file with its real layer closure instead. This is what proves the asset-local
-/// `.connect` targets (`</DescentLander.outputs:force_y>`) rebase onto the scene
-/// prim (`/LanderTest/Lander`) through the arc.
+/// The lander in a scene is TWO arcs: the airframe
+/// (`vessels/landers/descent_lander.usda`) and the guidance component
+/// (`components/gnc/descent_guidance.usda`). Their wiring only exists once both are
+/// composed, and `build_from_source` builds a lone in-memory layer that cannot resolve
+/// `@../../vessels/...@` — so compose the file with its real layer closure.
+///
+/// This is what proves the asset-local `.connect` targets rebase through their arcs:
+/// the airframe's `</DescentLander.outputs:force_y>` and the component's
+/// `</DescentGuidance/Altimeter.outputs:range>` both land on `/LanderTest/Lander`,
+/// even though neither file knows that name — and the component's targets point at
+/// prims the OTHER arc contributed.
 #[test]
 fn lander_asset_wiring_migrated() {
     let scene = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -252,18 +257,60 @@ fn lander_asset_wiring_migrated() {
     let stage = lunco_usd_bevy::compose_file_to_stage(&scene).expect("compose lander_test.usda");
     let view = lunco_usd_bevy::StageView::new(&stage);
     let lander = SdfPath::new("/LanderTest/Lander").unwrap();
-    let conns = |attr: &str| view.connections(&lander, attr);
+    let gnc = SdfPath::new("/LanderTest/Lander/GNC").unwrap();
 
-    // A representative sample of the 17 self-loops + the cross-prim altimeter edge.
-    assert_eq!(conns("inputs:force_y"), ["/LanderTest/Lander.outputs:force_y"]);
-    assert_eq!(conns("inputs:q_w"), ["/LanderTest/Lander.outputs:quat_w"]);
+    // The airframe's own loop: the flight-control program's outputs are the body's
+    // force inputs, and the body's state is the program's inputs.
     assert_eq!(
-        conns("inputs:descent_rate"),
-        ["/LanderTest/Lander.outputs:velocity_y"]
+        view.connections(&lander, "inputs:force_y"),
+        ["/LanderTest/Lander.outputs:force_y"]
     );
     assert_eq!(
-        conns("inputs:altitude"),
+        view.connections(&lander, "inputs:q_w"),
+        ["/LanderTest/Lander.outputs:quat_w"]
+    );
+
+    // The autopilot, composed on by the SCENE. The airframe authors no descent law and
+    // no altitude — it flies what it is told, and this wire is what tells it.
+    assert_eq!(
+        view.connections(&lander, "inputs:guidance_throttle"),
+        ["/LanderTest/Lander/GNC.outputs:throttle_cmd"]
+    );
+
+    // The guidance reads what a lander SENSES: the airframe's altimeter (a prim the
+    // OTHER arc supplied) and the body's vertical speed.
+    assert_eq!(
+        view.connections(&gnc, "inputs:altitude"),
         ["/LanderTest/Lander/Altimeter.outputs:range"]
+    );
+    assert_eq!(
+        view.connections(&gnc, "inputs:descent_rate"),
+        ["/LanderTest/Lander.outputs:velocity_y"]
+    );
+}
+
+/// The airframe ALONE has no autopilot — nothing wires `guidance_throttle`, so it is
+/// zero and the lander commands no thrust of its own.
+///
+/// This is the property the whole split exists for: the vehicle in the palette is a
+/// vehicle, not a mission. If a scene ever gets guidance it did not ask for, it will be
+/// because someone put it back in the airframe, and this is what will catch them.
+#[test]
+fn the_airframe_alone_has_no_guidance() {
+    let asset = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/vessels/landers/descent_lander.usda");
+    let stage = lunco_usd_bevy::compose_file_to_stage(&asset).expect("compose descent_lander.usda");
+    let view = lunco_usd_bevy::StageView::new(&stage);
+    let lander = SdfPath::new("/DescentLander").unwrap();
+
+    assert!(
+        view.connections(&lander, "inputs:guidance_throttle").is_empty(),
+        "the airframe must not wire its own guidance — an unpossessed lander that \
+         flies itself is a mission, not a vehicle"
+    );
+    assert!(
+        !view.has_prim(&SdfPath::new("/DescentLander/GNC").unwrap()),
+        "the airframe must carry no guidance program",
     );
 }
 

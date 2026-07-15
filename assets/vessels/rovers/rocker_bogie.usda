@@ -17,13 +17,15 @@
 # FOR PARAMETER EDITING GUIDE: See the accompanying README.md in this directory.
 
 def Xform "RockerBogie" (
-    kind = "component"
+    # An ASSEMBLY: a model built out of other models. Its wheels are component models
+    # that arrive by reference, and USD forbids a `component` from containing them.
+    kind = "assembly"
     prepend apiSchemas = [
         "PhysicsRigidBodyAPI", "PhysxRigidBodyAPI",
         "PhysicsMassAPI",
         "PhysicsArticulationRootAPI",
         "PhysxVehicleContextAPI",
-        "PhysxVehicleTankDifferentialAPI", "LuncoCatalogAPI"
+        "PhysxVehicleTankDifferentialAPI", "LunCoCatalogAPI"
     ]
 )
 {
@@ -309,8 +311,10 @@ def Xform "RockerBogie" (
 
         # Front Left Wheel
         def Cylinder "Wheel_FL" (
-            kind = "subcomponent"
-            prepend references = @../../components/mobility/wheel.usda@</Wheel>
+            prepend references = [
+                @../../components/mobility/wheel.usda@</Wheel>,
+                @../../components/mobility/suspensions/rocker.usda@</Suspension>,
+            ]
         )
         {
             uniform token axis = "X"
@@ -323,9 +327,6 @@ def Xform "RockerBogie" (
             # --- WHEEL DYNAMICS CONFIGURATION ---
             int physxVehicleWheel:index = 0
             float physxVehicleWheel:radius = 0.4
-            float physxVehicleSuspension:restLength = 0.5
-            float physxVehicleSuspension:springStiffness = 12000.0
-            float physxVehicleSuspension:springDamping = 2500.0
         }
     }
 
@@ -402,8 +403,10 @@ def Xform "RockerBogie" (
 
         # Front Right Wheel
         def Cylinder "Wheel_FR" (
-            kind = "subcomponent"
-            prepend references = @../../components/mobility/wheel.usda@</Wheel>
+            prepend references = [
+                @../../components/mobility/wheel.usda@</Wheel>,
+                @../../components/mobility/suspensions/rocker.usda@</Suspension>,
+            ]
         )
         {
             uniform token axis = "X"
@@ -415,9 +418,6 @@ def Xform "RockerBogie" (
 
             int physxVehicleWheel:index = 1
             float physxVehicleWheel:radius = 0.4
-            float physxVehicleSuspension:restLength = 0.5
-            float physxVehicleSuspension:springStiffness = 12000.0
-            float physxVehicleSuspension:springDamping = 2500.0
         }
     }
 
@@ -510,8 +510,10 @@ def Xform "RockerBogie" (
 
         # Middle Left Wheel
         def Cylinder "Wheel_ML" (
-            kind = "subcomponent"
-            prepend references = @../../components/mobility/wheel.usda@</Wheel>
+            prepend references = [
+                @../../components/mobility/wheel.usda@</Wheel>,
+                @../../components/mobility/suspensions/rocker.usda@</Suspension>,
+            ]
         )
         {
             uniform token axis = "X"
@@ -523,15 +525,14 @@ def Xform "RockerBogie" (
 
             int physxVehicleWheel:index = 2
             float physxVehicleWheel:radius = 0.4
-            float physxVehicleSuspension:restLength = 0.5
-            float physxVehicleSuspension:springStiffness = 12000.0
-            float physxVehicleSuspension:springDamping = 2500.0
         }
 
         # Rear Left Wheel
         def Cylinder "Wheel_RL" (
-            kind = "subcomponent"
-            prepend references = @../../components/mobility/wheel.usda@</Wheel>
+            prepend references = [
+                @../../components/mobility/wheel.usda@</Wheel>,
+                @../../components/mobility/suspensions/rocker.usda@</Suspension>,
+            ]
         )
         {
             uniform token axis = "X"
@@ -543,9 +544,6 @@ def Xform "RockerBogie" (
 
             int physxVehicleWheel:index = 4
             float physxVehicleWheel:radius = 0.4
-            float physxVehicleSuspension:restLength = 0.5
-            float physxVehicleSuspension:springStiffness = 12000.0
-            float physxVehicleSuspension:springDamping = 2500.0
         }
     }
 
@@ -631,8 +629,10 @@ def Xform "RockerBogie" (
 
         # Middle Right Wheel
         def Cylinder "Wheel_MR" (
-            kind = "subcomponent"
-            prepend references = @../../components/mobility/wheel.usda@</Wheel>
+            prepend references = [
+                @../../components/mobility/wheel.usda@</Wheel>,
+                @../../components/mobility/suspensions/rocker.usda@</Suspension>,
+            ]
         )
         {
             uniform token axis = "X"
@@ -644,15 +644,14 @@ def Xform "RockerBogie" (
 
             int physxVehicleWheel:index = 3
             float physxVehicleWheel:radius = 0.4
-            float physxVehicleSuspension:restLength = 0.5
-            float physxVehicleSuspension:springStiffness = 12000.0
-            float physxVehicleSuspension:springDamping = 2500.0
         }
 
         # Rear Right Wheel
         def Cylinder "Wheel_RR" (
-            kind = "subcomponent"
-            prepend references = @../../components/mobility/wheel.usda@</Wheel>
+            prepend references = [
+                @../../components/mobility/wheel.usda@</Wheel>,
+                @../../components/mobility/suspensions/rocker.usda@</Suspension>,
+            ]
         )
         {
             uniform token axis = "X"
@@ -664,9 +663,6 @@ def Xform "RockerBogie" (
 
             int physxVehicleWheel:index = 5
             float physxVehicleWheel:radius = 0.4
-            float physxVehicleSuspension:restLength = 0.5
-            float physxVehicleSuspension:springStiffness = 12000.0
-            float physxVehicleSuspension:springDamping = 2500.0
         }
     }
 

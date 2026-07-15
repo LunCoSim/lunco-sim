@@ -16,7 +16,7 @@
 # The comms layer places it on the (rotating) body from the ephemeris — its
 # scene transform is ignored. Elevation mask defaults to a realistic 5°.
 def Xform "GroundStation" (
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "component"
 )
 {

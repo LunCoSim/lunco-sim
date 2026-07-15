@@ -6,9 +6,8 @@ The camera system uses composable behavior components — each camera mode is it
 
 | Component | Purpose | Reference Frame |
 |---|---|---|
-| `SpringArmCamera` | Ground vehicles (rovers, astronauts) | Vehicle heading + user offset |
+| `SpringArmCamera` | Vessel follow — rovers, astronauts, aircraft (via [`FollowAttitude`]) | Heading-lock / world-locked / full-attitude |
 | `OrbitCamera` | Celestial bodies, spacecraft | Ecliptic (star-fixed) |
-| `ChaseCamera` | Aircraft, flying vehicles | Full 3D target orientation |
 | `FreeFlightCamera` | Spectator / drone view | Absolute solar coordinates |
 | `FrameBlend` | Smooth transitions between behaviors | — |
 

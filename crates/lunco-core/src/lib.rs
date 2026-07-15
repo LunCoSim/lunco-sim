@@ -68,7 +68,7 @@ pub use commands::{
 };
 pub use markers::{
     ActuatorDrivenJoint, EmbeddedScenarioPath, EmbeddedScenarioSource, FallbackSceneLight,
-    GridAnchor, HorizonShadowTerrain, NextScene, RestoreFallbackLights, ScriptParams, SoiMigrant, SunAngularDiameter, TriggerZone,
+    GridAnchor, HorizonShadowTerrain, NextScene, RestoreFallbackLights, ScenarioProgramPrim, ScriptParams, SoiMigrant, SunAngularDiameter, TriggerZone,
     TRIGGER_COLLISION_LAYER,
 };
 pub use invariants::BigSpaceInvariantsPlugin;
@@ -416,7 +416,22 @@ pub fn scene_click_ray(
     if focus.wants_pointer {
         return None;
     }
-    camera.viewport_to_world(cam_gtf, cursor).ok()
+    // `cursor` is bevy_picking's pointer position: LOGICAL pixels from the WINDOW
+    // top-left. `Camera::viewport_to_world` expects a position in the camera's own
+    // VIEWPORT space (it divides by `logical_viewport_size` and never adds the
+    // viewport origin), so it is only correct when the camera's viewport starts at
+    // the window origin. Today `apply_workbench_viewport` keeps the scene camera
+    // full-window (`SceneViewport.rect = None`), so the offset is zero and this is a
+    // no-op. It is a guard for the planned sub-rect confinement noted there ("a
+    // future sub-rect would derive it from the ViewportPanel's recorded rect"): the
+    // instant the camera is confined to the offset ViewportPanel leaf, feeding the
+    // raw WINDOW cursor here would skew every ray by the chrome offset and silently
+    // break spawn/select/possess in the middle of the Build view. Subtracting the
+    // logical viewport origin keeps both modes on one correct path.
+    let local = camera
+        .logical_viewport_rect()
+        .map_or(cursor, |rect| cursor - rect.min);
+    camera.viewport_to_world(cam_gtf, local).ok()
 }
 
 /// Marker resource indicating a terrain-sculpt tool is armed.
@@ -472,20 +487,6 @@ impl SimTick {
     /// Signed tick distance `self - other`, wrapping-safe.
     pub fn wrapping_diff(self, other: SimTick) -> i64 {
         self.0.wrapping_sub(other.0) as i64
-    }
-}
-
-/// Does this process mint [`Provenance::Authoritative`] ids? One bool, set once
-/// at startup; the networking layer (Ph1+) owns *how* it's set (host/server =
-/// `true`, pure client = `false`). Single-process today ⇒ `true` ⇒ behavior
-/// matches the pre-Ph1 "everything gets an id" world, except `Local`-tagged
-/// entities now correctly opt out and Content/Derived become deterministic.
-#[derive(Resource, Clone, Copy, Debug)]
-pub struct IsServer(pub bool);
-
-impl Default for IsServer {
-    fn default() -> Self {
-        Self(true)
     }
 }
 
@@ -588,6 +589,7 @@ impl Plugin for LunCoCorePlugin {
            .register_type::<Provenance>()
            .register_type::<RestoreFallbackLights>()
            .register_type::<kernels::DriveMix>()
+           .register_type::<CameraFollow>()
            .register_type::<SimTick>();
 
         // NOTE: the `ControlKernelRegistry` resource is owned/seeded by the plugin
@@ -632,7 +634,6 @@ impl Plugin for LunCoCorePlugin {
 /// everywhere. The `core_substrate_resources_present` test guards this.
 pub(crate) fn register_core_resources(app: &mut App) {
     app.init_resource::<SimTick>()
-        .init_resource::<IsServer>()
         // The scene viewport's active-camera binding (+ visibility/rect). The
         // single source of truth the viewport-camera reconciler actuates; the
         // switch and workbench write it. Core-guaranteed so every windowed
@@ -731,9 +732,14 @@ fn assign_global_entity_ids(
         (Entity, Option<&Provenance>, Has<session::SkipContentStamp>),
         Without<GlobalEntityId>,
     >,
-    is_server: Res<IsServer>,
+    // Authority is derived from the role, not a separate `IsServer` flag — the two
+    // used to drift (a `Standalone` sandbox with `IsServer(false)` minted no ids
+    // for runtime spawns). `Host` and `Standalone` mint; a pure `Client` never
+    // reaches the minting arms because it pins host-allocated ids via replication.
+    role: Res<session::NetworkRole>,
     mut warned: Local<bool>,
 ) {
+    let is_authoritative = role.is_authoritative();
     for (entity, prov, runtime_instance) in q_new.iter() {
         // Runtime-instanced subtree root (gap G2 / B.1): server-allocated unique
         // identity, ignoring any `Content` stamp the USD loader adds. Two
@@ -742,7 +748,7 @@ fn assign_global_entity_ids(
         // (they pin `GlobalEntityId::from_raw` directly, so they never reach
         // here for these roots).
         if runtime_instance {
-            if is_server.0 {
+            if is_authoritative {
                 commands
                     .entity(entity)
                     .try_insert(GlobalEntityId::allocate_authoritative());
@@ -757,8 +763,8 @@ fn assign_global_entity_ids(
                 }
             }
             Some(Provenance::Authoritative) => {
-                // Only the server mints; clients receive the id via replication.
-                if is_server.0 {
+                // Only an authoritative peer mints; clients receive the id via replication.
+                if is_authoritative {
                     commands
                         .entity(entity)
                         .try_insert(GlobalEntityId::allocate_authoritative());
@@ -817,10 +823,17 @@ mod ph1_identity_tests {
     //! plumbing is needed.
     use super::*;
 
-    /// App with just the Ph1 systems + resources, nothing else.
+    /// App with just the Ph1 systems + resources, nothing else. `is_server` maps
+    /// onto the authority role: an authoritative peer is `Standalone` (equally
+    /// `Host` — same minting arm), a non-authoritative one is a pure `Client`.
     fn ph1_app(is_server: bool) -> App {
+        let role = if is_server {
+            session::NetworkRole::Standalone
+        } else {
+            session::NetworkRole::Client
+        };
         let mut app = App::new();
-        app.insert_resource(IsServer(is_server))
+        app.insert_resource(role)
             .init_resource::<SimTick>()
             .add_systems(FixedUpdate, advance_sim_tick)
             .add_systems(PostUpdate, assign_global_entity_ids);
@@ -841,7 +854,6 @@ mod ph1_identity_tests {
         register_core_resources(&mut app);
         let w = app.world();
         assert!(w.get_resource::<SimTick>().is_some());
-        assert!(w.get_resource::<IsServer>().is_some());
         assert!(w.get_resource::<session::NetworkRole>().is_some());
         assert!(w.get_resource::<session::LocalSession>().is_some());
         assert!(w.get_resource::<session::SyncApplyGuard>().is_some());
@@ -890,6 +902,41 @@ mod ph1_identity_tests {
         let se = server.world_mut().spawn(Provenance::Authoritative).id();
         server.world_mut().run_schedule(PostUpdate);
         assert!(id_of(&mut server, se).is_some());
+    }
+
+    /// Authority is a pure function of the role — the single source of truth that
+    /// replaced the drift-prone `IsServer` flag.
+    #[test]
+    fn authority_derives_from_role() {
+        assert!(session::NetworkRole::Standalone.is_authoritative());
+        assert!(session::NetworkRole::Host.is_authoritative());
+        assert!(!session::NetworkRole::Client.is_authoritative());
+    }
+
+    /// Regression guard (2026-07-15): a palette/API spawn tags its root
+    /// `SkipContentStamp` (a "runtime instance"). A `Standalone` single-player
+    /// sandbox is authoritative and MUST mint an id for it — without one,
+    /// possession can't claim ownership and a `piloted`-gated lander goes dead
+    /// (the whole reason for this refactor). A pure `Client` must NOT mint — it
+    /// pins the host's id via replication.
+    #[test]
+    fn runtime_instance_root_minted_only_when_authoritative() {
+        let mut standalone = ph1_app(true);
+        let e = standalone.world_mut().spawn(session::SkipContentStamp).id();
+        standalone.world_mut().run_schedule(PostUpdate);
+        assert!(
+            id_of(&mut standalone, e).is_some(),
+            "Standalone must mint a GlobalEntityId for a runtime-instanced spawn"
+        );
+
+        let mut client = ph1_app(false);
+        let ce = client.world_mut().spawn(session::SkipContentStamp).id();
+        client.world_mut().run_schedule(PostUpdate);
+        assert_eq!(
+            id_of(&mut client, ce),
+            None,
+            "a pure Client must not mint — it pins the host-allocated id"
+        );
     }
 
     #[test]

@@ -13,8 +13,9 @@
 #
 #   sandbox --scene tutorials/basic/driving_basics.usda
 def Xform "DrivingBasics" (
+    kind = "assembly"
     doc = "Flat practice plot with one gentle ramp and a finish flag — the S1 driving-basics stage."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
@@ -103,11 +104,13 @@ def Xform "DrivingBasics" (
     }
 
     # Chase-style fly-cam over the SW corner so the rover and ramp are both framed.
-    def Xform "Avatar"
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
     {
-        string lunco:avatar = "true"
-        string lunco:cameraMode = "freeflight"
-        custom double3 lunco:cameraLookAt = (0.0, 2.0, 0.0)
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 2.0, 0.0)
         double3 xformOp:translate = (-48.0, 18.0, -30.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

@@ -546,6 +546,45 @@ fn instance_role(root_path: &str, prim_path: &str) -> String {
         .unwrap_or_else(|| prim_path.trim_start_matches('/').to_string())
 }
 
+/// The **instance** an entity belongs to, named by its instance-root
+/// [`GlobalEntityId`](lunco_core::GlobalEntityId).
+///
+/// This is THE disambiguator for any resolver that matches authored USD
+/// prim-path strings to entities. Two runtime spawns of one asset compose
+/// BYTE-IDENTICAL stage-relative paths (`/DescentLander`, `/DescentLander/Hull`,
+/// …), so a resolver that matches on path alone binds across copies — a lander
+/// flying on the other lander's model, a rover geared to the other rover's
+/// rockers. Scope the match to the instance and the ambiguity is gone.
+///
+/// The instance-root GID is the right name for it: unique per spawn, identical
+/// on every peer, and stable across entity churn (a descendant's id is
+/// `derive_id(parent, role)`, a pure function of identity, so a hot-swapped
+/// program re-resolves to the same endpoints). Returns:
+/// - `Some(root_gid)` for a runtime instance — a descendant reports its
+///   [`Provenance::Derived`](lunco_core::Provenance::Derived)`{ parent }` (the
+///   root's GID); the root itself (`Authoritative`, tagged [`UsdInstanceRoot`])
+///   reports its own GID.
+/// - `None` for authored scene prims, whose composed paths are already globally
+///   unique, so they share one namespace safely.
+///
+/// `None` is also the answer in the one-frame window before identity is minted
+/// (`assign_global_entity_ids`, PostUpdate). A resolver that runs every frame
+/// until it succeeds simply DEFERS — a `None` key never equals a `Some` key, so
+/// it can never mis-bind; a resolver gated on `Added` must also wake on
+/// `Added<GlobalEntityId>` to pick the ids up (see `resolve_behavior_targets`).
+pub fn instance_key(
+    entity: Entity,
+    q_provenance: &Query<&lunco_core::Provenance>,
+    q_gid: &Query<&lunco_core::GlobalEntityId>,
+    q_instance_root: &Query<(), With<UsdInstanceRoot>>,
+) -> Option<u64> {
+    match q_provenance.get(entity) {
+        Ok(lunco_core::Provenance::Derived { parent, .. }) => Some(*parent),
+        _ if q_instance_root.contains(entity) => q_gid.get(entity).map(|g| g.get()).ok(),
+        _ => None,
+    }
+}
+
 /// Translates a single USD prim into Bevy/big_space/avian components on
 /// `entity`. The caller has already verified that the stage is loaded.
 ///
@@ -762,7 +801,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // collider-only Cube prims hidden behind a glTF visual, and
         // raycast wheel cylinders that have no visible representation).
         let invisible = matches!(
-            read_token(reader, &sdf_path, "visibility").as_deref(),
+            reader.text(&sdf_path, "visibility").as_deref(),
             Some("invisible")
         );
 
@@ -867,41 +906,32 @@ fn instantiate_usd_prim_read<R: UsdRead>(
             );
         }
 
-        // Embedded per-entity scenario: a `custom string lunco:script` on the
-        // prim carries a rhai scenario. Stamp the lunco-core marker so
-        // `lunco-scripting` attaches + runs it (the two crates stay decoupled —
-        // neither depends on the other). Scenarios thus travel with the scene.
-        if let Some(src) =
-            read_token(reader, &sdf_path, "lunco:script").filter(|s| !s.trim().is_empty())
-        {
-            commands
-                .entity(entity)
-                .try_insert(lunco_core::EmbeddedScenarioSource(src));
-        } else if let Some(path) = read_token(reader, &sdf_path, "lunco:scriptPath")
-            .filter(|s| !s.trim().is_empty())
-        {
-            // File-backed scenario: `lunco:scriptPath` references a `.rhai` asset.
-            // Stamp a lunco_core path marker; lunco-scripting loads it via the
-            // AssetServer (wasm-safe) and swaps in EmbeddedScenarioSource. Inline
-            // `lunco:script` wins if both are present.
-            commands
-                .entity(entity)
-                .try_insert(lunco_core::EmbeddedScenarioPath(path));
-        }
+        // Scripts are `LunCoProgram` CHILD prims whose source is a `.rhai` — read
+        // from here, the owner, because a script acts on behalf of the thing that
+        // carries it: `me` is the vessel, not the program prim. The program prim is
+        // what makes the binding composable (it arrives on a `references` arc and can
+        // be deleted to take the behaviour away), and what gives the script its own
+        // typed parameters, which live on it rather than on the owner.
+        //
+        // A program with a source this engine does not run — a `.mo` solved by
+        // lunco-usd-sim, an `.xml` compiled by the behaviour-tree engine — is not
+        // ours; extension picks the engine, exactly as USD picks a file format.
+        attach_rhai_programs(reader, &sdf_path, entity, commands);
 
-        // Custom `lunco:vessel = "true"` marks this prim as possessable by
-        // stamping `FlightSoftware` — the unified control-surface tag. There is
-        // no separate `Vessel` marker: "possessable/controllable" is exactly
-        // "has a control surface", so the avatar routes plain-clicks to
-        // `PossessVessel` for anything carrying `FlightSoftware` (or a Modelica
-        // `SimComponent`). Rovers get `FlightSoftware` from `PhysxVehicleContextAPI`
-        // instead; a standalone rigid body (lander, spacecraft) needs this tag.
-        // Empty `port_map` is fine — it means "possessable, no digital actuator
-        // ports of its own" (a lander's actuation is its Modelica inputs).
-        if let Some(val) = read_token(reader, &sdf_path, "lunco:vessel") {
-            if val.eq_ignore_ascii_case("true") {
-                commands.entity(entity).try_insert(lunco_fsw::FlightSoftware::default());
-            }
+        // `lunco:vessel` marks this prim as possessable by stamping `FlightSoftware`
+        // — the unified control-surface tag. There is no separate `Vessel` marker:
+        // "possessable/controllable" is exactly "has a control surface", so the avatar
+        // routes plain-clicks to `PossessVessel` for anything carrying
+        // `FlightSoftware` (or a Modelica `SimComponent`). Rovers get it from
+        // `PhysxVehicleContextAPI` instead; a standalone rigid body (lander,
+        // spacecraft) needs this tag. Empty `port_map` is fine — it means
+        // "possessable, no digital actuator ports of its own" (a lander's actuation is
+        // its flight-control program's inputs).
+        if reader
+            .scalar::<bool>(&sdf_path, "lunco:vessel")
+            .unwrap_or(false)
+        {
+            commands.entity(entity).try_insert(lunco_fsw::FlightSoftware::default());
         }
 
         // Per-vessel intent→port control map (stage 2 of control), authored as a
@@ -929,29 +959,27 @@ fn instantiate_usd_prim_read<R: UsdRead>(
             if let Some(binding) = lunco_core::ControlBinding::from_intent_entries(&entries) {
                 commands.entity(entity).try_insert(binding);
             }
+
+            // Camera-follow mode is a property of how the vehicle moves, so it is
+            // authored on the same control profile as the intent→port binding
+            // (`uniform token lunco:cameraFollow` on the referenced profile, which
+            // flattens onto this `Controls` prim). It answers "should the camera
+            // rotate with the body?" — `heading` (yaw, surface vehicles), `orbit`
+            // (stable frame for a 6-DOF flyer), `chase` (full attitude). Read here
+            // and consumed by `on_possess_command`; absent → the `Heading` default.
+            if let Some(mode) = reader
+                .text(&controls, "lunco:cameraFollow")
+                .and_then(|t| lunco_core::parse_camera_follow(&t))
+            {
+                commands.entity(entity).try_insert(mode);
+            }
         }
 
-        // Per-prim script params: `lunco:params = "wmax=1.05, lmax=3.6"`. Parsed
-        // into a `ScriptParams` map a reusable script reads via `param(me, key,
-        // default)` — the typed, fast alternative to inferring config from a name.
-        if let Some(spec) = read_token(reader, &sdf_path, "lunco:params") {
-            let mut map = std::collections::HashMap::new();
-            for entry in spec.split(',') {
-                if let Some((k, v)) = entry.split_once('=') {
-                    if let Ok(val) = v.trim().parse::<f64>() {
-                        map.insert(k.trim().to_string(), val);
-                    }
-                }
-            }
-            if !map.is_empty() {
-                commands.entity(entity).try_insert(lunco_core::ScriptParams(map));
-            }
-        }
 
         // Tutorial chain: `lunco:nextScene = "scenes/foo.usda"` declares the scene
         // to load when this scene's mission completes. Stamped as a `NextScene`
         // marker; a generic handler (lunco-tutorial) loads it on MISSION_COMPLETE.
-        if let Some(next) = read_token(reader, &sdf_path, "lunco:nextScene")
+        if let Some(next) = reader.text(&sdf_path, "lunco:nextScene")
             .filter(|s| !s.trim().is_empty())
         {
             commands.entity(entity).try_insert(lunco_core::NextScene(next));
@@ -977,9 +1005,10 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         //   materials, and lights at the cost of being opaque to the
         //   USD prim-path tree.
         if let Some(asset_uri) = reader.resolved_asset(&sdf_path) {
-            let mode = read_token(reader, &sdf_path, "lunco:assetMode")
+            let mode = reader
+                .text(&sdf_path, "lunco:assetMode")
                 .unwrap_or_else(|| "scene".to_string());
-            let label = read_token(reader, &sdf_path, "lunco:assetLabel");
+            let label = reader.text(&sdf_path, "lunco:assetLabel");
 
             match mode.as_str() {
                 "mesh" => {
@@ -1044,7 +1073,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // an explicit `xformOp:rotateXYZ` hack. Goes after rotateXYZ so
         // it applies on top of any user-authored rotation.
         if matches!(prim_type.as_deref(), Some("Cylinder" | "Cone" | "Capsule" | "Plane")) {
-            let axis = read_token(reader, &sdf_path, "axis").unwrap_or_else(|| "Z".to_string());
+            let axis = reader.text(&sdf_path, "axis").unwrap_or_else(|| "Z".to_string());
             // The `axis` token names an axis of the STAGE's frame, while the Bevy
             // primitive is generated in the canonical one — so the axis rotation is
             // pre-rotated by the stage convention (`Q·q_axis`). On a Z-up stage an
@@ -1610,16 +1639,16 @@ fn apply_standard_material<R: UsdRead>(
         let load_tex = |input: &str, is_color: bool| -> Option<Handle<Image>> {
             let conn = reader.connection_source(&shader_path, input)?;
             let texture_path = parent_prim_path(&conn)?;
-            let asset_path = read_token(reader, &texture_path, "inputs:file")?;
+            let asset_path = reader.asset(&texture_path, "inputs:file")?;
             let resolved = resolve_texture_path(asset_server, stage_id, &asset_path)?;
 
-            let is_srgb = match read_token(reader, &texture_path, "inputs:sourceColorSpace").as_deref() {
+            let is_srgb = match reader.text(&texture_path, "inputs:sourceColorSpace").as_deref() {
                 Some("sRGB") => true,
                 Some("raw") => false,
                 _ => is_color, // "auto" / absent → channel default
             };
-            let addr_u = usd_wrap_to_address(read_token(reader, &texture_path, "inputs:wrapS").as_deref());
-            let addr_v = usd_wrap_to_address(read_token(reader, &texture_path, "inputs:wrapT").as_deref());
+            let addr_u = usd_wrap_to_address(reader.text(&texture_path, "inputs:wrapS").as_deref());
+            let addr_v = usd_wrap_to_address(reader.text(&texture_path, "inputs:wrapT").as_deref());
 
             Some(
                 asset_server
@@ -1906,59 +1935,6 @@ impl DefaultPrim {
     }
 }
 
-/// One `string`/`token` attribute off the stage's `defaultPrim`. Thin wrapper
-/// over [`DefaultPrim`] for callers that want exactly one value; a caller
-/// wanting several should [`DefaultPrim::parse`] once instead of paying for a
-/// re-parse per attribute.
-pub fn read_default_prim_attr(text: &str, attr: &str) -> Option<String> {
-    DefaultPrim::parse(text)?.text(attr)
-}
-
-/// Catalog metadata a **scene-backed** tutorial declares on its own scene, as an
-/// alternative to a `tutorials.json` row: the `.usda` that IS the lesson
-/// environment also carries its catalog entry on the default prim
-/// (`lunco:tutorialId`, `…Title`, `…Blurb`, `…Difficulty`, `…Script`, `…Next`).
-/// The launcher merges these with the JSON manifest (idempotent on `id`). A
-/// scene without `lunco:tutorialId` is just an environment and is ignored.
-pub struct UsdTutorialMeta {
-    pub id: String,
-    pub title: String,
-    pub blurb: String,
-    pub difficulty: String,
-    /// The orchestrator `.rhai`, relative to `assets/tutorials/` (as in the JSON
-    /// manifest) — the scene names its own lesson script explicitly.
-    pub script: String,
-    pub next: Option<String>,
-}
-
-/// Scan `assets/tutorials/<app>/*.usda` for lesson scenes that declare their own
-/// catalog metadata (`lunco:tutorial*` on the default prim) and return them.
-///
-/// A composition-free single-layer read ([`read_default_prim_attr`]) per scene —
-/// native reads disk (live-editable), wasm the embed, via
-/// [`lunco_assets::tutorials::tutorial_scene_sources`]. Scenes missing
-/// `lunco:tutorialId` or `lunco:tutorialScript` are skipped (they're plain
-/// environments, not self-describing tutorials). The caller registers the
-/// results into the shared `TutorialRegistry` alongside the JSON manifest.
-pub fn tutorial_scene_metas(app: &str) -> Vec<UsdTutorialMeta> {
-    lunco_assets::tutorials::tutorial_scene_sources(app)
-        .into_iter()
-        .filter_map(|(_rel, text)| {
-            let id = read_default_prim_attr(&text, "lunco:tutorialId")?;
-            let script = read_default_prim_attr(&text, "lunco:tutorialScript")?;
-            Some(UsdTutorialMeta {
-                id,
-                title: read_default_prim_attr(&text, "lunco:tutorialTitle").unwrap_or_default(),
-                blurb: read_default_prim_attr(&text, "lunco:tutorialBlurb").unwrap_or_default(),
-                difficulty: read_default_prim_attr(&text, "lunco:tutorialDifficulty")
-                    .unwrap_or_default(),
-                script,
-                next: read_default_prim_attr(&text, "lunco:tutorialNext"),
-            })
-        })
-        .collect()
-}
-
 /// True if the prim at `path` applies the named API schema, by exact
 /// token match against its `apiSchemas` list (or list-op). Canonical
 /// shared helper — `lunco-usd-avian` and `lunco-usd-sim` both call
@@ -2201,26 +2177,24 @@ pub fn stage_time_codes_per_second<R: UsdRead>(reader: &R) -> f64 {
     }
 }
 
-/// Held-sampled token/string attribute at time code `time` (USD tokens hold,
-/// never interpolate). `None` when the attribute has no `timeSamples` or the
-/// held sample isn't a token/string/asset value. The animated twin of
-/// [`read_token`] — note tokens can't go through `prim_attribute_value_at::<String>`
-/// because `String::try_from(Value::Token)` fails on openusd `main`.
+/// Held-sampled `token`/`string` attribute at time code `time` (USD tokens hold,
+/// never interpolate) — the animated twin of [`UsdRead::text`], reading the same
+/// [`Value::as_str`] coercion at a time code. `None` when the attribute has no
+/// `timeSamples` or the held sample isn't textual. An `asset`-typed channel is
+/// deliberately NOT read here: an asset reference is a different thing from a
+/// token, and no animated channel we author is one.
 pub(crate) fn read_token_at<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str, time: f64) -> Option<String> {
     // Gate on authored `timeSamples` (never fall back to `default`): a token
     // channel with no samples isn't animated. `attr_value_at` evaluates the
     // samples — for a non-lerpable token type openusd's Linear interpolation
-    // falls back to Held (the nearest previous sample), matching the prior
-    // explicit Held read.
+    // falls back to Held (the nearest previous sample).
     if !reader.has_time_samples(path, attr) {
         return None;
     }
-    match reader.attr_value_at(path, attr, time)? {
-        Value::String(s) => Some(s),
-        Value::Token(s) => Some(s.to_string()),
-        Value::AssetPath(a) => Some(a.as_str().to_string()),
-        _ => None,
-    }
+    reader
+        .attr_value_at(path, attr, time)?
+        .as_str()
+        .map(str::to_string)
 }
 
 /// Enumerate a token/string channel's authored keys as `(time_code, value)`
@@ -2635,16 +2609,76 @@ pub fn get_attribute_as_vec3<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str)
     read_vec3_f64(reader, path, attr).map(|v| Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32))
 }
 
-/// Canonical USD token/string attribute reader. Reads the attribute's
-/// `default` value at `prim.attr` and returns it as a `String` for
-/// `token`, `string`, and `asset` value types. `None` if absent or a
-/// different type.
-pub fn read_token<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<String> {
-    match reader.attr_value(path, attr)? {
-        Value::String(s) => Some(s),
-        Value::Token(s) => Some(s.to_string()),
-        Value::AssetPath(a) => Some(a.as_str().to_string()),
-        _ => None,
+/// Attach the rhai programs a prim carries — its `LunCoProgram` children whose
+/// source is a `.rhai` — to `entity`, the prim that OWNS them.
+///
+/// The script's `me` is its owner, because that is what a script is for: it acts on
+/// behalf of the vessel, reads the vessel's ports, moves the vessel's transform. The
+/// program prim exists to make the binding composable and to hold the script's own
+/// typed parameters, not to be the thing the script talks about.
+///
+/// A program whose source this engine does not run — a `.mo`, an `.xml` — belongs to
+/// another engine and is skipped here: the extension picks the engine.
+fn attach_rhai_programs<R: UsdRead>(
+    reader: &R,
+    owner: &SdfPath,
+    entity: Entity,
+    commands: &mut Commands,
+) {
+    for child in reader.children(owner) {
+        if reader.type_name(&child).as_deref() != Some("LunCoProgram") {
+            continue;
+        }
+
+        // Inline source wins over a file: `sourceCode` is the live-authoring path,
+        // and an author editing it in place means it.
+        let inline = reader
+            .scalar::<String>(&child, "lunco:program:sourceCode")
+            .filter(|s| !s.trim().is_empty());
+        let file = reader
+            .asset(&child, "lunco:program:sourceAsset")
+            .filter(|s| s.ends_with(".rhai"));
+        if inline.is_none() && file.is_none() {
+            continue;
+        }
+
+        // A script's parameters are typed attributes on its own program prim, one
+        // per key — `float lunco:param:wmax = 1.05`. Read by `param(me, key,
+        // default)`, which is how one reusable script drives many prims (each flame
+        // cone scales itself from its own numbers).
+        let params: std::collections::HashMap<String, f64> = reader
+            .attr_names(&child)
+            .iter()
+            .filter_map(|name| {
+                let key = name.strip_prefix("lunco:param:")?;
+                Some((key.to_string(), reader.real(&child, name)?))
+            })
+            .collect();
+        if !params.is_empty() {
+            commands
+                .entity(entity)
+                .try_insert(lunco_core::ScriptParams(params));
+        }
+
+        // Remember WHICH program this scenario came from. The script runs for the
+        // owner, but its source belongs to the program prim — that is where a live
+        // edit is saved back to.
+        commands
+            .entity(entity)
+            .try_insert(lunco_core::ScenarioProgramPrim(child.as_str().to_string()));
+
+        if let Some(src) = inline {
+            commands
+                .entity(entity)
+                .try_insert(lunco_core::EmbeddedScenarioSource(src));
+        } else if let Some(path) = file {
+            // lunco-scripting loads it via the AssetServer (wasm-safe) and swaps in
+            // an `EmbeddedScenarioSource`. The two crates stay decoupled: neither
+            // depends on the other, and the marker is the whole contract.
+            commands
+                .entity(entity)
+                .try_insert(lunco_core::EmbeddedScenarioPath(path));
+        }
     }
 }
 
@@ -2906,96 +2940,154 @@ pub fn read_transform_from_usd<R: UsdRead>(reader: &R, path: &SdfPath) -> Transf
     }
 }
 
-/// Spawn footprint of a vehicle, derived in real time from the composed USD
-/// geometry — the single source of truth for spawn sizing (no hand-tuned
-/// per-asset table, no `lunco:spawnLift` attribute that can drift from the
-/// mesh). Computed by walking the same composed stage that `sync_usd_visuals`
-/// instantiates, so the placement solver and the live entity can never disagree.
+/// Small gap (metres) left between an asset's lowest collision point and the
+/// terrain at spawn — a "skin width" so a body never spawns interpenetrating the
+/// ground (which the solver would resolve by ejecting it). Physics is held until
+/// the terrain collider is ready, so the object then settles this last gap gently.
+/// Shared by every spawn path (GUI ghost + the authoritative `SpawnEntity`
+/// handler) so they place identically.
+pub const SPAWN_GROUND_CLEARANCE: f64 = 0.05;
+
+/// Axis-aligned bounding box of an asset's COLLISION geometry, in the asset's own
+/// root reference frame — the general, wheel-free basis for spawn placement.
+///
+/// Walks the composed USD stage from `root_prim` and, for every active gprim whose
+/// `physics:collisionEnabled` is not `false`, folds that shape's local bounding box
+/// (its 8 corners transformed into the root frame) into a running min/max. Shape
+/// dimensions come from the shared [`read_shape_dims`], so the box can't drift from
+/// the avian collider built off the same attributes. The result's
+/// [`rest_depth`](ObjectAabb::rest_depth) (`-min.y`) is the distance from the root
+/// origin down to the lowest collision point: lift a spawn by it and the object
+/// rests ON the ground with no part buried — for ANY asset (lander, rover, prop),
+/// no per-asset `lunco:spawnLift` tuning, no dependency on wheels. Computed off the
+/// same composed stage the live entity is instantiated from, so the placement
+/// solver and the physics body can never disagree.
+///
+/// Returns `None` when no collision geometry is found (a pure-visual prop, or a
+/// mesh-only asset whose shape this reader doesn't dimension) — the caller then
+/// falls back to the authored `lunco:spawnLift`.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct WheelFootprint {
-    /// Half of the wheel-track width along X (metres). The placement solver
-    /// samples terrain at `±half_w` from the click point to fit a slope normal.
-    pub half_w: f64,
-    /// Half of the wheelbase along Z (metres).
-    pub half_l: f64,
-    /// Rest height: signed distance from the root origin down to the lowest
-    /// wheel ground contact. The solver lifts the root by this along the
-    /// terrain normal so the wheels sit on — not in or above — the ground.
-    pub contact_depth: f64,
+pub struct ObjectAabb {
+    pub min: bevy::math::DVec3,
+    pub max: bevy::math::DVec3,
 }
 
-/// Derive the [`WheelFootprint`] of a vehicle by walking the composed USD stage
-/// from `root_prim` (e.g. `"/RockerBogie"`).
-///
-/// Recursively composes each prim's [`local_transform_at`] down the hierarchy;
-/// any prim carrying `physxVehicleWheel:index` (the universal wheel signal —
-/// present on every wheel across the raycast and physical drivetrains) is
-/// treated as a wheel. Its ground contact is `center - radius·Y` in the root's
-/// **level** frame; the placement solver re-orients this box to the terrain
-/// normal afterwards. Wheel authoring never tilts the cylinder, so the level
-/// frame is exact for the pre-slope-fit footprint.
-///
-/// Returns `None` when no wheel prims are found (non-vehicle assets use the
-/// caller's default footprint).
-pub fn wheel_footprint<R: UsdRead>(reader: &R, root_prim: &str) -> Option<WheelFootprint> {
-    let Ok(root) = SdfPath::new(root_prim) else { return None };
-    let mut contacts: Vec<bevy::math::DVec3> = Vec::new();
+impl ObjectAabb {
+    /// Half-width along X (metres) — the placement solver samples terrain at
+    /// `±half_w` from the click point to fit a slope normal.
+    pub fn half_w(&self) -> f64 {
+        (self.max.x - self.min.x) * 0.5
+    }
+    /// Half-length along Z (metres).
+    pub fn half_l(&self) -> f64 {
+        (self.max.z - self.min.z) * 0.5
+    }
+    /// Root origin → lowest collision point. Lift a spawn by this so the object
+    /// rests on the surface. Non-negative for any geometry reaching below origin.
+    pub fn rest_depth(&self) -> f64 {
+        -self.min.y
+    }
+}
+
+/// Derive the [`ObjectAabb`] of an asset by walking the composed USD stage from
+/// `root_prim` (e.g. `"/DescentLander"`). See [`ObjectAabb`].
+pub fn collision_aabb<R: UsdRead>(reader: &R, root_prim: &str) -> Option<ObjectAabb> {
+    let root = SdfPath::new(root_prim).ok()?;
     let root_tf = local_transform_at(reader, &root, 0.0).unwrap_or_default();
-    collect_wheel_contacts(reader, &root, root_tf, &mut contacts);
-    if contacts.is_empty() {
-        return None;
-    }
-    let mut min_x = f64::INFINITY;
-    let mut max_x = f64::NEG_INFINITY;
-    let mut min_z = f64::INFINITY;
-    let mut max_z = f64::NEG_INFINITY;
-    let mut min_y = f64::INFINITY;
-    for c in &contacts {
-        min_x = min_x.min(c.x);
-        max_x = max_x.max(c.x);
-        min_z = min_z.min(c.z);
-        max_z = max_z.max(c.z);
-        min_y = min_y.min(c.y);
-    }
-    Some(WheelFootprint {
-        half_w: (max_x - min_x) * 0.5,
-        half_l: (max_z - min_z) * 0.5,
-        contact_depth: -min_y,
-    })
+    let mut acc: Option<(bevy::math::DVec3, bevy::math::DVec3)> = None;
+    accumulate_collision_aabb(reader, &root, root_tf, &mut acc);
+    acc.map(|(min, max)| ObjectAabb { min, max })
 }
 
-/// Recursive helper for [`wheel_footprint`]: DFS the prim tree composing
-/// transforms, and record each wheel's ground contact in the root's level frame.
-fn collect_wheel_contacts<R: UsdRead>(
+/// DFS helper for [`collision_aabb`]: compose transforms down the tree (Bevy
+/// `Transform * Transform` = parent ∘ child-local, scale kept — USD propagates
+/// parent scale to child geometry) and fold each collision-enabled shape's
+/// transformed corners into `acc`.
+fn accumulate_collision_aabb<R: UsdRead>(
     reader: &R,
     path: &SdfPath,
-    parent_tf: Transform,
-    contacts: &mut Vec<bevy::math::DVec3>,
+    world_tf: Transform,
+    acc: &mut Option<(bevy::math::DVec3, bevy::math::DVec3)>,
 ) {
+    // Fold this prim's own geometry if it is a collision-enabled shape. A child
+    // that explicitly sets `physics:collisionEnabled = false` (a visual-only part
+    // like an antenna or solar panel with no collider) is skipped, so the AABB
+    // tracks the physical footprint — exactly the shapes the avian compound
+    // collider is assembled from.
+    if let Some(ty) = reader.type_name(path) {
+        let collides = reader
+            .scalar::<bool>(path, "physics:collisionEnabled")
+            .unwrap_or(true);
+        if collides {
+            if let Some(corners) = local_shape_corners(reader, path, &ty) {
+                for c in corners {
+                    let w = world_tf.transform_point(c.as_vec3()).as_dvec3();
+                    match acc {
+                        Some((min, max)) => {
+                            *min = min.min(w);
+                            *max = max.max(w);
+                        }
+                        None => *acc = Some((w, w)),
+                    }
+                }
+            }
+        }
+    }
     for child in reader.children(path) {
         if !reader.is_active(&child) {
             continue;
         }
-        // `parent_tf * local` composes the child's transform in the root frame
-        // (Bevy `Transform * Transform` = parent ∘ child-local). Scale is kept
-        // because USD propagates parent scale to child positions — stripping it
-        // would misplace wheels under any scaled intermediate Xform.
         let local = local_transform_at(reader, &child, 0.0).unwrap_or_default();
-        let world = parent_tf * local;
-        if reader
-            .scalar::<i32>(&child, "physxVehicleWheel:index")
-            .is_some()
-        {
-            let radius = reader.real(&child, "radius").unwrap_or(0.25);
-            let center = world.translation.as_dvec3();
-            contacts.push(bevy::math::DVec3::new(
-                center.x,
-                center.y - radius,
-                center.z,
-            ));
-        }
-        collect_wheel_contacts(reader, &child, world, contacts);
+        let child_world = world_tf * local;
+        accumulate_collision_aabb(reader, &child, child_world, acc);
     }
+}
+
+/// The 8 corners of a primitive shape's local bounding box, centred at its origin.
+/// `None` for a non-shape prim (Xform/Scope/Mesh/…) so the walk skips it. Uses the
+/// shared [`read_shape_dims`], and rotates a round shape's box onto its authored
+/// `axis` token, so the box matches the collider the shape produces.
+fn local_shape_corners<R: UsdRead>(
+    reader: &R,
+    path: &SdfPath,
+    ty: &str,
+) -> Option<Vec<bevy::math::DVec3>> {
+    // Half-extents in the shape's Y-axial local frame; `axial` = the `axis` token
+    // may re-orient it (round shapes only — box/sphere/plane are axis-agnostic).
+    let (half, axial) = match read_shape_dims(reader, path, ty)? {
+        ShapeDims::Cube { size } => (bevy::math::DVec3::splat(size * 0.5), false),
+        ShapeDims::Sphere { radius } => (bevy::math::DVec3::splat(radius), false),
+        ShapeDims::Cylinder { radius, height } | ShapeDims::Cone { radius, height } => {
+            (bevy::math::DVec3::new(radius, height * 0.5, radius), true)
+        }
+        // Capsule bounds include the hemispherical caps: half-length = height/2 + r.
+        ShapeDims::Capsule { radius, height } => {
+            (bevy::math::DVec3::new(radius, height * 0.5 + radius, radius), true)
+        }
+        ShapeDims::Plane { width, length } => {
+            (bevy::math::DVec3::new(width * 0.5, 0.0005, length * 0.5), false)
+        }
+    };
+    let axis_q = if axial {
+        reader
+            .text(path, "axis")
+            .as_deref()
+            .and_then(usd_axis_to_quat)
+            .unwrap_or(Quat::IDENTITY)
+    } else {
+        Quat::IDENTITY
+    };
+    let mut corners = Vec::with_capacity(8);
+    for sx in [-1.0_f64, 1.0] {
+        for sy in [-1.0_f64, 1.0] {
+            for sz in [-1.0_f64, 1.0] {
+                let local = axis_q
+                    * Vec3::new((half.x * sx) as f32, (half.y * sy) as f32, (half.z * sz) as f32);
+                corners.push(local.as_dvec3());
+            }
+        }
+    }
+    Some(corners)
 }
 
 /// Canonical `UsdGeom` `axis` token → quaternion folding. A Bevy/Avian
@@ -3233,8 +3325,7 @@ pub fn build_usd_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> {
     let uvs_per_vertex = uvs.as_ref().is_some_and(|u| u.len() == points.len());
     let uvs_per_corner = uvs.as_ref().is_some_and(|u| u.len() == n_corners);
 
-    let left_handed =
-        read_token(reader, path, "orientation").as_deref() == Some("leftHanded");
+    let left_handed = reader.text(path, "orientation").as_deref() == Some("leftHanded");
 
     let mut positions: Vec<[f32; 3]> = Vec::with_capacity(n_corners);
     let mut out_normals: Vec<[f32; 3]> = Vec::new();
@@ -3865,51 +3956,48 @@ mod mesh_tests {
     /// `UsdRead::asset` reads an `asset`-typed attribute, and `scalar::<String>`
     /// does NOT.
     ///
-    /// This is the type contract, pinned. `lunco:material:shader` is `asset`
+    /// This is the type contract, pinned. A shader's source is an `asset`
     /// (`@shaders/wheel.wgsl@`) so USD's resolver — and anything walking a layer for
-    /// the files a scene depends on — can see the `.wgsl`. As a `string` it was inert:
-    /// the scene named a shader that would not travel with it.
+    /// the files a scene depends on — can see the `.wgsl`. As a `string` it is inert:
+    /// the scene names a shader that will not travel with it.
     ///
     /// The second assertion is the important one. A reader tolerant of BOTH types
     /// would let the wrong authoring keep working, and writer and reader would go on
-    /// concealing each other — which is exactly how this attribute has been wrong
-    /// before, in both directions. `scalar::<String>` returning `None` on an `asset`
-    /// is the property that makes the schema binding, rather than advisory.
+    /// concealing each other. `scalar::<String>` returning `None` on an `asset` is the
+    /// property that makes the schema binding, rather than advisory.
     #[test]
     fn asset_typed_attribute_reads_as_asset_and_not_as_string() {
         let __cs = parse(
             "#usda 1.0\n\
-             def Mesh \"Panel\"\n{\n\
-             uniform token lunco:material:type = \"shader\"\n\
-             uniform asset lunco:material:shader = @shaders/wheel.wgsl@\n}\n",
+             def Shader \"Shader\"\n{\n\
+             uniform token info:implementationSource = \"sourceAsset\"\n\
+             uniform asset info:wgsl:sourceAsset = @shaders/wheel.wgsl@\n}\n",
         );
         let reader = __cs.view();
-        let panel = SdfPath::new("/Panel").unwrap();
+        let panel = SdfPath::new("/Shader").unwrap();
 
         assert_eq!(
-            reader.asset(&panel, "lunco:material:shader").as_deref(),
+            reader.asset(&panel, "info:wgsl:sourceAsset").as_deref(),
             Some("shaders/wheel.wgsl"),
         );
         assert!(
-            reader.scalar::<String>(&panel, "lunco:material:shader").is_none(),
+            reader.scalar::<String>(&panel, "info:wgsl:sourceAsset").is_none(),
             "an `asset` must NOT read back as a String — tolerating both is what let \
              the writer and reader hide each other's bugs",
         );
         // …and the sibling `token` reads through `text`, NOT through `scalar::<String>`.
         //
-        // This half is the regression guard for a bug that shipped: when
-        // `primvars:materialType` (a `string`) became `lunco:material:type` (a `token`),
-        // every reader kept asking for `scalar::<String>` — which matches
-        // `Value::String` alone. It returned `None` for every prim, so `ShaderLook` was
-        // never authored and NOTHING in the scene got its WGSL shader. It failed
-        // silently: an unshaded prim is a plain grey surface, not an error.
+        // A `token` is its own `sdf::Value` variant, and `scalar::<String>` matches
+        // `Value::String` alone — so a reader asking for a String reads every token as
+        // `None`, for every prim, silently. A shader that never binds is a plain grey
+        // surface, not an error, which is why this half is pinned in a test.
         assert_eq!(
-            reader.text(&panel, "lunco:material:type").as_deref(),
-            Some("shader"),
+            reader.text(&panel, "info:implementationSource").as_deref(),
+            Some("sourceAsset"),
             "a `token` must read through `text`",
         );
         assert!(
-            reader.scalar::<String>(&panel, "lunco:material:type").is_none(),
+            reader.scalar::<String>(&panel, "info:implementationSource").is_none(),
             "`scalar::<String>` must NOT read a token — the whole point is that asking \
              for the wrong USD type fails loudly in a test rather than quietly at runtime",
         );
@@ -4535,10 +4623,14 @@ def Xform "World"
 
 #[cfg(test)]
 mod default_prim_attr_tests {
-    //! `read_default_prim_attr` — openusd-parse a single layer and read a
+    //! [`DefaultPrim`] — openusd-parse a single layer and read a
     //! `string`/`token` attribute off its `defaultPrim` (the path the scene
     //! `lunco:description` tooltip uses).
     use super::*;
+
+    fn attr(text: &str, name: &str) -> Option<String> {
+        DefaultPrim::parse(text)?.text(name)
+    }
 
     const SCENE: &str = "#usda 1.0\n\
         (\n\
@@ -4554,14 +4646,14 @@ mod default_prim_attr_tests {
     #[test]
     fn reads_string_attr_off_default_prim() {
         assert_eq!(
-            read_default_prim_attr(SCENE, "lunco:description").as_deref(),
+            attr(SCENE, "lunco:description").as_deref(),
             Some("Two cubes joined together.")
         );
     }
 
     #[test]
     fn missing_attr_is_none() {
-        assert!(read_default_prim_attr(SCENE, "lunco:notAuthored").is_none());
+        assert!(attr(SCENE, "lunco:notAuthored").is_none());
     }
 
     #[test]
@@ -4569,11 +4661,11 @@ mod default_prim_attr_tests {
         // Layer with no `defaultPrim` metadata — even if the attribute exists
         // on a prim, we don't know which prim is the root.
         let src = "#usda 1.0\ndef Xform \"Orphan\"\n{\n    custom string lunco:description = \"x\"\n}\n";
-        assert!(read_default_prim_attr(src, "lunco:description").is_none());
+        assert!(attr(src, "lunco:description").is_none());
     }
 
     #[test]
     fn unparseable_text_is_none() {
-        assert!(read_default_prim_attr("this is not USDA", "lunco:description").is_none());
+        assert!(attr("this is not USDA", "lunco:description").is_none());
     }
 }

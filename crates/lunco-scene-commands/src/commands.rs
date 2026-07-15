@@ -24,10 +24,10 @@ use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd::document::{UsdOp, LayerId};
 use lunco_usd::registry::UsdDocumentRegistry;
-use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
+use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset, CanonicalStages, collision_aabb, SPAWN_GROUND_CLEARANCE};
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{RedoDocument, UndoDocument};
-use crate::catalog::{SpawnCatalog, SpawnSource, spawn_usd_entry};
+use crate::catalog::{SpawnCatalog, SpawnSource, spawn_usd_entry, prim_path_from_entry_id};
 
 /// Spawn an entity from the catalog at a given world position.
 ///
@@ -243,6 +243,33 @@ pub fn persist_detach_to_runtime_layer(
 }
 
 /// Observer that handles SpawnEntity commands.
+/// The asset's collision-AABB rest depth — root origin → lowest collider point,
+/// in the asset's own frame — read off the composed canonical stage (built on
+/// demand from the asset's recipe). `None` until the stage is composed, or if the
+/// asset has no collision geometry (a pure-visual / mesh-only prop). This is the
+/// general, wheel-free placement basis shared with the GUI ghost. See
+/// [`lunco_usd_bevy::collision_aabb`].
+fn spawn_rest_depth(
+    asset_server: &AssetServer,
+    stages: &Assets<UsdStageAsset>,
+    canonical: &mut CanonicalStages,
+    entry: &crate::catalog::SpawnableEntry,
+) -> Option<f64> {
+    let SpawnSource::UsdFile(path) = &entry.source;
+    let handle = asset_server.load(path.clone());
+    let id = handle.id();
+    // Compose the canonical stage on first sight (idempotent — cached thereafter).
+    if canonical.get(id).is_none() {
+        let recipe = stages.get(&handle).and_then(|a| a.recipe.clone())?;
+        canonical.get_or_build(id, &recipe);
+    }
+    let root_prim = prim_path_from_entry_id(&entry.id);
+    canonical
+        .get(id)
+        .and_then(|cs| collision_aabb(&cs.view(), &root_prim))
+        .map(|a| a.rest_depth())
+}
+
 #[on_command(SpawnEntity)]
 pub fn on_spawn_entity_command(
     trigger: On<SpawnEntity>,
@@ -252,6 +279,11 @@ pub fn on_spawn_entity_command(
     q_grids: Query<Entity, With<Grid>>,
     role: Res<lunco_core::NetworkRole>,
     dem: Query<(&GlobalTransform, &lunco_terrain_surface::stream_viz::DemHeightField)>,
+    stages: Res<Assets<UsdStageAsset>>,
+    // `CanonicalStages` is a NonSend resource (holds non-Send USD stage data), so
+    // this observer takes it as `NonSendMut` — same as the GUI ghost's footprint
+    // system. Keeps it main-thread; fine for a spawn observer.
+    mut canonical: NonSendMut<CanonicalStages>,
 ) {
     let cmd = trigger.event();
 
@@ -281,19 +313,32 @@ pub fn on_spawn_entity_command(
         }
     };
 
-    // Terrain-fit the drop height: snap to the DEM surface (+ the asset's spawn
-    // lift) when streamed terrain covers this (x,z), so an API / headless / rhai
-    // spawn lands ON the surface instead of free-falling when the collider under
-    // the drop point hasn't baked yet. No DEM here (a flat scene, or an intentional
-    // altitude) → the position is used exactly as given. The GUI palette path does
-    // its own richer footprint fit before triggering, so its position arrives fitted.
+    // Terrain-fit the drop height: snap to the DEM surface when streamed terrain
+    // covers this (x,z), so ANY spawn (GUI, API, headless, rhai) lands ON the
+    // surface instead of free-falling — or, worse, spawning embedded — when the
+    // collider under the drop point hasn't baked yet. No DEM here (a flat scene, or
+    // an intentional altitude) → the position is used exactly as given.
+    //
+    // The lift is the asset's OWN collision-AABB rest depth (`-min.y` of its
+    // collider box in its own frame, from the composed stage) plus a small skin
+    // gap, so the lowest collider point rests on the surface for any asset — the
+    // lander's origin sits ~5 m above its footpads, a rover's ~wheel-radius, a box
+    // at its base. This is the single authoritative placement: the GUI ghost uses
+    // the same `collision_aabb`, so preview and spawn agree. Falls back to the
+    // authored `lunco:spawnLift` only when the composed geometry isn't available
+    // yet or the asset is pure-visual.
     let mut position = cmd.position;
     if let Some(y) = lunco_terrain_surface::stream_viz::dem_ground_height(
         dem.iter(),
         position.x as f64,
         position.z as f64,
     ) {
-        position.y = y as f32 + entry.spawn_lift;
+        // Reborrow the resource params through Deref/DerefMut to the plain refs the
+        // helper takes (`&mut *canonical` = `&mut CanonicalStages`).
+        let rest_depth = spawn_rest_depth(&asset_server, &stages, &mut *canonical, entry)
+            .map(|d| d + SPAWN_GROUND_CLEARANCE)
+            .unwrap_or(entry.spawn_lift as f64);
+        position.y = y as f32 + rest_depth as f32;
     }
 
     info!("SPAWN_ENTITY: {} at {:?}", cmd.entry_id, position);
@@ -1053,7 +1098,7 @@ pub fn persist_environment_light_to_runtime_layer(
 
     // Render knobs (exposure / bloom / ambient / earthshine) have no natural
     // light-prim home — they apply to global/camera state — so per the schema
-    // decision they persist onto a dedicated `LuncoEnvironment` settings prim
+    // decision they persist onto a dedicated `LunCoEnvironment` settings prim
     // (a singleton under the default prim). A projector in `lunco-sandbox` reads
     // them back on stage change and applies them, so the light loader stays pure.
     let mut env_attrs: Vec<(&str, &str, String)> = Vec::new();
@@ -1845,7 +1890,6 @@ pub fn apply_pending_focus(
                 .remove::<lunco_avatar::OrbitFrameSample>()
                 .remove::<lunco_avatar::SunlitArrival>()
                 .remove::<lunco_avatar::SpringArmCamera>()
-                .remove::<lunco_avatar::ChaseCamera>()
                 .remove::<lunco_avatar::SurfaceCamera>()
                 .remove::<lunco_avatar::SurfaceRelativeMode>()
                 .remove::<lunco_avatar::FrameBlend>()
@@ -1952,7 +1996,6 @@ pub fn on_set_camera_look_at(
             .remove::<lunco_avatar::OrbitFrameSample>()
             .remove::<lunco_avatar::SunlitArrival>()
             .remove::<lunco_avatar::SpringArmCamera>()
-            .remove::<lunco_avatar::ChaseCamera>()
             .remove::<lunco_avatar::SurfaceCamera>()
             .remove::<lunco_avatar::SurfaceRelativeMode>()
             .remove::<lunco_avatar::FrameBlend>()

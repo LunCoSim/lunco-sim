@@ -37,7 +37,7 @@ use bevy::prelude::Transform;
 use openusd::sdf::Path as SdfPath;
 
 use crate::read::UsdRead;
-use crate::{local_transform_at, read_token};
+use crate::local_transform_at;
 
 /// A socket advertised by a host body — `<host>/Mounts/<name>` carrying
 /// `lunco:mount:socket`. What a snap reads to place the part it holds.
@@ -120,20 +120,23 @@ pub fn read_sockets<R: UsdRead>(reader: &R, host: &str) -> Vec<MountSocket> {
     };
     let mut out = Vec::new();
     for child in reader.children(&group) {
-        let Some(accepts) = read_token(reader, &child, "lunco:mount:socket") else {
+        let Some(accepts) = reader.text(&child, "lunco:mount:socket") else {
             continue; // not a socket — skip mount groups that hold other data
         };
-        let joint = read_token(reader, &child, "lunco:mount:joint")
+        let joint = reader
+            .text(&child, "lunco:mount:joint")
             .unwrap_or_else(|| "fixed".to_string());
         // A fixed joint carries no axis; drop any stray authored one.
         let axis = if joint == "fixed" {
             None
         } else {
-            read_token(reader, &child, "lunco:mount:axis")
+            reader.text(&child, "lunco:mount:axis")
         };
         let frame = frame_in_body(reader, host, &child);
         let part = reader.rel_target(&child, "lunco:mount:part");
-        let asset = read_token(reader, &child, "lunco:mount:asset");
+        // `lunco:mount:asset` names a USD FILE, so it is an `asset` — the resolver
+        // and the reference-closure walk only see the ones typed as such.
+        let asset = reader.asset(&child, "lunco:mount:asset");
         let name = child
             .as_str()
             .rsplit('/')

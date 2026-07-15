@@ -11,7 +11,7 @@
 #
 # Drop it anywhere with `prepend references` + `xformOp:translate`.
 def Xform "LandingLocationMarker" (
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "component"
 )
 {

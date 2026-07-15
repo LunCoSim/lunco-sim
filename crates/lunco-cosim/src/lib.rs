@@ -81,7 +81,7 @@ impl Plugin for CoSimPlugin {
         app.register_type::<SimComponent>()
             .register_type::<PendingForces>()
             .register_type::<SimConnection>()
-            .register_type::<CosimTier>()
+            .register_type::<RealtimeSafe>()
             .register_type::<sensors::ImuSensor>()
             .register_type::<sensors::RangeSensor>()
             .register_type::<sensors::ContactSensor>();

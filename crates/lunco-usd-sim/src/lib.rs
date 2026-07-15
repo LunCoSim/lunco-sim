@@ -55,7 +55,7 @@ use bevy::math::{DQuat, DVec3};
 use avian3d::prelude::*;
 use big_space::prelude::{CellCoord, FloatingOrigin, Grid};
 pub use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, UsdStageAsset, UsdInstanceRoot};
-use lunco_usd_bevy::{CanonicalStages, UsdRead};
+use lunco_usd_bevy::{instance_key, CanonicalStages, UsdRead};
 use lunco_usd_avian::ShouldBeDynamic;
 // Appearance + camera **intent** — this crate must never name `MeshMaterial3d`,
 // `StandardMaterial`, `ShaderMaterial` or `Camera3d` (all `bevy_pbr` /
@@ -235,15 +235,18 @@ pub struct PendingWheelWiring {
     pub steer_port_name: Option<String>,
 }
 
-/// G5 — marker holding an authored rocker-bogie differential until its two
-/// rocker bodies have spawned + been admitted by Avian. `resolve_differential_coupling`
-/// matches the prim-path strings → entities (same deferred pattern as
-/// `try_wire_wheel` / USD joints) then attaches the [`DifferentialCoupling`].
+/// An authored `PhysxPhysicsGearJoint`, held until the bodies it gears together have
+/// spawned + been admitted by Avian. `resolve_differential_coupling` matches the
+/// prim-path strings → entities (same deferred pattern as `try_wire_wheel` / USD
+/// joints) then attaches the [`DifferentialCoupling`].
 #[derive(Component)]
 pub struct PendingDifferential {
-    /// Composed prim path of the left rocker body (`lunco:differential:rockerA`).
+    /// Composed prim path of the frame both hinges turn against — the gear's reaction
+    /// target (`physics:body0` of the hinges; a rover's chassis).
+    pub chassis: String,
+    /// Composed prim path of the body the first hinge turns.
     pub rocker_a: String,
-    /// Composed prim path of the right rocker body (`lunco:differential:rockerB`).
+    /// Composed prim path of the body the second hinge turns.
     pub rocker_b: String,
     /// Hinge axis in the chassis-local frame.
     pub axis: DVec3,
@@ -561,7 +564,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             commands.entity(entity).try_insert(lunco_cosim::sensors::ImuSensor::mounted(sensor_offset));
         }
         if reader.scalar::<bool>(&sdf_path, "lunco:sensor:range").is_some() {
-            let axis = match lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:sensor:rangeAxis").as_deref() {
+            let axis = match reader.text(&sdf_path, "lunco:sensor:rangeAxis").as_deref() {
                 Some("X") => DVec3::X,
                 Some("-X") => DVec3::NEG_X,
                 Some("Y") => DVec3::Y,
@@ -571,7 +574,10 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                 _ => DVec3::NEG_Y,
             };
             let max_distance = reader.real(&sdf_path, "lunco:sensor:rangeMax").unwrap_or(100.0);
-            let out_of_range_mode = match lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:sensor:rangeOutOfRangeMode").as_deref() {
+            let out_of_range_mode = match reader
+                .text(&sdf_path, "lunco:sensor:rangeOutOfRangeMode")
+                .as_deref()
+            {
                 Some("NegativeOne") => lunco_cosim::sensors::OutOfRangeMode::NegativeOne,
                 Some("NaN") => lunco_cosim::sensors::OutOfRangeMode::NaN,
                 Some("IdealAltitude") => lunco_cosim::sensors::OutOfRangeMode::IdealAltitude,
@@ -605,8 +611,8 @@ fn process_usd_sim_prim_read<R: UsdRead>(
         // memory, and letting someone raise the rate must not silently multiply the
         // buffer. See docs/architecture/telemetry-subsystem.md.
         if reader.scalar::<bool>(&sdf_path, "lunco:telemetry").unwrap_or(false) {
-            let port = lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:telemetry:port");
-            let reflect = lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:telemetry:reflect");
+            let port = reader.text(&sdf_path, "lunco:telemetry:port");
+            let reflect = reader.text(&sdf_path, "lunco:telemetry:reflect");
             let source = match (port, reflect) {
                 (Some(p), _) => Some(lunco_core::telemetry::ChannelSource::Port(p)),
                 (None, Some(r)) => Some(lunco_core::telemetry::ChannelSource::Reflect(r)),
@@ -621,7 +627,8 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             if let Some(source) = source {
                 // Default the mnemonic to the port/field name rather than refusing: a
                 // channel whose name you didn't bother to pick is still a channel.
-                let name = lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:telemetry:name")
+                let name = reader
+                    .text(&sdf_path, "lunco:telemetry:name")
                     .unwrap_or_else(|| match &source {
                         lunco_core::telemetry::ChannelSource::Port(p) => p.clone(),
                         lunco_core::telemetry::ChannelSource::Reflect(r) => r.clone(),
@@ -635,8 +642,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                     // created through the API is its own entity and sets `target`, because a
                     // Component caps an entity at one channel.)
                     target: None,
-                    unit: lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:telemetry:unit")
-                        .unwrap_or_default(),
+                    unit: reader.text(&sdf_path, "lunco:telemetry:unit").unwrap_or_default(),
                     source,
                     rate_hz: reader.real(&sdf_path, "lunco:telemetry:rateHz"),
                     // Absent ⇒ enabled. An authored channel is a live one; you turn it off
@@ -749,7 +755,10 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                     )>();
                 }
             }
-            let camera_mode = reader.scalar::<String>(&sdf_path, "lunco:cameraMode")
+            // `token`, per luncoSchema — so `text`, not `scalar::<String>`, which
+            // matches `Value::String` alone and reads every token as `None`.
+            let camera_mode = reader
+                .text(&sdf_path, "lunco:cameraMode")
                 .unwrap_or_else(|| "freeflight".to_string());
             let mut yaw = reader
                 .real_f32(&sdf_path, "lunco:cameraYaw")
@@ -880,6 +889,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                             vertical_offset: 2.0,
                             // Authored chase cams target steerable vehicles.
                             track_heading: true,
+                            attitude: lunco_avatar::FollowAttitude::Heading,
                         },
                         avian3d::prelude::TranslationInterpolation,
                         avian3d::prelude::RotationInterpolation,
@@ -979,26 +989,35 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             info!("Successfully initialized FSW for {}", prim_path.path);
         }
 
-        // 1b. Mission behaviour: a BT.CPP v4 XML tree, inline (`lunco:behavior`) or
-        // by asset path (`lunco:behaviorPath`). Mirrors the `lunco:script` /
-        // `lunco:scriptPath` pair exactly, inline winning over the file. The tree's
-        // spatial leaves reference WAYPOINT PRIMS by path; `resolve_behavior_targets`
-        // binds those, and `lunco_autopilot::usd_tree` bakes their live positions into
-        // the compiled tree.
-        if let Some(xml) = reader
-            .scalar::<String>(&sdf_path, "lunco:behavior")
-            .filter(|s| !s.trim().is_empty())
-        {
-            commands
-                .entity(entity)
-                .try_insert(lunco_autopilot::usd_tree::BehaviorXml(xml));
-        } else if let Some(path) = reader
-            .scalar::<String>(&sdf_path, "lunco:behaviorPath")
-            .filter(|s| !s.trim().is_empty())
-        {
-            commands
-                .entity(entity)
-                .try_insert(lunco_autopilot::usd_tree::BehaviorXmlPath(path));
+        // 1b. Mission behaviour: a BT.CPP v4 XML tree, carried by a `LunCoProgram`
+        // child of this prim — the vessel OWNS the tree, so the tree is read from
+        // here, its owner. Inline source wins over a file: an author editing a tree in
+        // place means it. The tree's spatial leaves reference WAYPOINT PRIMS by path;
+        // `resolve_behavior_targets` binds those, and `lunco_autopilot::usd_tree` bakes
+        // their live positions into the compiled tree.
+        //
+        // A `.xml` is the one program with a role of its own: a declarative tree is
+        // not a script, it is compiled and ticked by the behaviour engine. Extension
+        // picks the engine, exactly as it does for `.mo` and `.rhai`.
+        for child in reader.children(&sdf_path) {
+            if reader.type_name(&child).as_deref() != Some("LunCoProgram") {
+                continue;
+            }
+            if let Some(xml) = reader
+                .scalar::<String>(&child, "lunco:program:sourceCode")
+                .filter(|s| s.trim_start().starts_with('<'))
+            {
+                commands
+                    .entity(entity)
+                    .try_insert(lunco_autopilot::usd_tree::BehaviorXml(xml));
+            } else if let Some(path) = reader
+                .asset(&child, "lunco:program:sourceAsset")
+                .filter(|s| s.ends_with(".xml"))
+            {
+                commands
+                    .entity(entity)
+                    .try_insert(lunco_autopilot::usd_tree::BehaviorXmlPath(path));
+            }
         }
 
         // 2. Detect the drive allocation → a `DriveMix { kernel, ports, entries }`
@@ -1034,31 +1053,64 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             commands.entity(entity).try_insert(mix);
         }
 
-        // 2b. G5 — rocker-bogie differential. A chassis that names two rocker
-        // bodies gets a soft coupling that averages their pitch (keeps the body
-        // level over rough ground). Defer-resolved once both rockers spawn.
-        if let (Some(rocker_a), Some(rocker_b)) = (
-            reader.rel_target(&sdf_path, "lunco:differential:rockerA"),
-            reader.rel_target(&sdf_path, "lunco:differential:rockerB"),
-        ) {
-            let read_f = |name: &str, dflt: f64| reader.real(&sdf_path, name).unwrap_or(dflt);
-            let axis = match lunco_usd_bevy::read_token(reader, &sdf_path, "lunco:differential:axis").as_deref() {
-                Some("Y") => DVec3::Y,
-                Some("Z") => DVec3::Z,
-                _ => DVec3::X,
-            };
-            info!(
-                "Detected rocker-bogie differential on {} (rockers {} / {})",
-                prim_path.path, rocker_a, rocker_b
+        // 2b. A GEAR JOINT — `PhysxPhysicsGearJoint`, the PhysX schema for two hinges
+        // geared to each other. A rocker-bogie's differential is one of these: gear the
+        // left and right rocker hinges at −1 and the chassis rides the AVERAGE of them,
+        // which is what keeps the body level over rough ground.
+        //
+        // Nothing here is rocker-bogie code. A gear joint is a gear joint, and any
+        // geared linkage authored this way gets the same coupling with no new Rust.
+        // The compliance is the joint's own `PhysicsDriveAPI` — a rigid gear would fight
+        // the terrain and chatter, so it is enforced as a strong spring.
+        //
+        // Defer-resolved once both geared bodies spawn.
+        if reader.type_name(&sdf_path).as_deref() == Some("PhysxPhysicsGearJoint") {
+            let hinges = (
+                reader.rel_target(&sdf_path, "physxGearJoint:hinge0"),
+                reader.rel_target(&sdf_path, "physxGearJoint:hinge1"),
             );
-            commands.entity(entity).try_insert(PendingDifferential {
-                rocker_a,
-                rocker_b,
-                axis,
-                rest_sum: read_f("lunco:differential:restSum", 0.0),
-                stiffness: read_f("lunco:differential:stiffness", 200_000.0),
-                damping: read_f("lunco:differential:damping", 20_000.0),
-            });
+            // The bodies the gear turns are the ones its hinges turn: a hinge's `body1`
+            // is the part that moves, `body0` the frame it moves against. So the gear's
+            // reaction goes into the hinges' shared frame — the chassis.
+            let geared = |hinge: &Option<String>| -> Option<(String, String)> {
+                let h = SdfPath::new(hinge.as_deref()?).ok()?;
+                Some((
+                    reader.rel_target(&h, "physics:body1")?,
+                    reader.rel_target(&h, "physics:body0")?,
+                ))
+            };
+            if let (Some((body_a, frame)), Some((body_b, _))) =
+                (geared(&hinges.0), geared(&hinges.1))
+            {
+                let read_f = |name: &str, dflt: f64| reader.real(&sdf_path, name).unwrap_or(dflt);
+                // The hinges turn about a shared axis; take it from the first.
+                let axis = SdfPath::new(hinges.0.as_deref().unwrap_or_default())
+                    .ok()
+                    .and_then(|h| reader.text(&h, "physics:axis"))
+                    .as_deref()
+                    .map(|a| match a {
+                        "Y" => DVec3::Y,
+                        "Z" => DVec3::Z,
+                        _ => DVec3::X,
+                    })
+                    .unwrap_or(DVec3::X);
+                info!(
+                    "Gear joint {} couples {} / {} (ratio {})",
+                    prim_path.path,
+                    body_a,
+                    body_b,
+                    read_f("physxGearJoint:gearRatio", -1.0),
+                );
+                commands.entity(entity).try_insert(PendingDifferential {
+                    chassis: frame,
+                    rocker_a: body_a,
+                    rocker_b: body_b,
+                    axis,
+                    rest_sum: read_f("drive:angular:physics:targetPosition", 0.0),
+                    stiffness: read_f("drive:angular:physics:stiffness", 200_000.0),
+                    damping: read_f("drive:angular:physics:damping", 20_000.0),
+                });
+            }
         }
 
         // 3. Detect PhysxVehicleWheelAPI (The Wheel Intercept)
@@ -1083,11 +1135,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             // the plain `PbrLook` and lose the shader. If a wheel wants
             // a shader but it hasn't landed, retry next frame (don't mark
             // UsdSimProcessed).
-            let wants_shader = reader
-                .text(&sdf_path, "lunco:material:type")
-                .as_deref()
-                == Some("shader")
-                && reader.asset(&sdf_path, "lunco:material:shader").is_some();
+            let wants_shader = reader.rel_target(&sdf_path, "material:binding").is_some();
             // Since the decoupling the `ShaderLook` is authored by a plain system
             // that runs headless too (it is intent, not a GPU material), so this no
             // longer deadlocks a `--no-ui` server. The wait is kept because the
@@ -1973,43 +2021,20 @@ fn on_add_usd_sim_prim(
 ///
 /// A named port that is absent from the FSW `port_map` warns and is skipped —
 /// declare custom ports with `lunco:drivePorts` on the rover root.
-fn find_instance_root(
-    entity: Entity,
-    q_child_of: &Query<&ChildOf>,
-    q_usd_path: &Query<&UsdPrimPath>,
-    q_instance_root: &Query<(), With<UsdInstanceRoot>>,
-) -> Entity {
-    let mut cursor = entity;
-    let mut best_root = entity;
-    loop {
-        if q_instance_root.get(cursor).is_ok() {
-            return cursor;
-        }
-        if q_usd_path.get(cursor).is_ok() {
-            best_root = cursor;
-        }
-        match q_child_of.get(cursor) {
-            Ok(parent) => cursor = parent.parent(),
-            Err(_) => break,
-        }
-    }
-    best_root
-}
-
 fn try_wire_wheel(
     q_pending: Query<(Entity, &UsdPrimPath, &PendingWheelWiring)>,
     q_fsw: Query<(Entity, &UsdPrimPath, &FlightSoftware)>,
-    q_child_of: Query<&ChildOf>,
-    q_usd_path: Query<&UsdPrimPath>,
+    q_provenance: Query<&lunco_core::Provenance>,
+    q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
     mut commands: Commands,
 ) {
     for (ent, prim_path, pending) in q_pending.iter() {
-        let wheel_root = find_instance_root(ent, &q_child_of, &q_usd_path, &q_instance_root);
+        let wheel_root = instance_key(ent, &q_provenance, &q_gid, &q_instance_root);
         let fsw_root = q_fsw.iter().find(|(fsw_ent, path, _)| {
             path.stage_handle == prim_path.stage_handle
                 && prim_path.path.starts_with(&path.path)
-                && find_instance_root(*fsw_ent, &q_child_of, &q_usd_path, &q_instance_root) == wheel_root
+                && instance_key(*fsw_ent, &q_provenance, &q_gid, &q_instance_root) == wheel_root
         });
 
         if let Some((_, _, fsw)) = fsw_root {
@@ -2081,20 +2106,33 @@ fn resolve_behavior_targets(
     q_prims: Query<(Entity, &UsdPrimPath)>,
     q_new_prims: Query<(), Added<UsdPrimPath>>,
     q_changed_xml: Query<(), Changed<lunco_autopilot::usd_tree::BehaviorXml>>,
+    q_new_ids: Query<(), Added<lunco_core::GlobalEntityId>>,
+    q_provenance: Query<&lunco_core::Provenance>,
+    q_gid: Query<&lunco_core::GlobalEntityId>,
+    q_instance_root: Query<(), With<UsdInstanceRoot>>,
     mut commands: Commands,
 ) {
-    // Only re-resolve when the cast could actually change: a new prim appeared, or a
-    // tree was (re)authored.
-    if q_trees.is_empty() || (q_new_prims.is_empty() && q_changed_xml.is_empty()) {
+    // Only re-resolve when the cast could actually change: a new prim appeared, a
+    // tree was (re)authored, or identity was just minted — the last so the instance
+    // scope below resolves once GIDs exist instead of binding pre-identity.
+    if q_trees.is_empty()
+        || (q_new_prims.is_empty() && q_changed_xml.is_empty() && q_new_ids.is_empty())
+    {
         return;
     }
     for (vessel, xml, vessel_path) in q_trees.iter() {
+        let vessel_instance = instance_key(vessel, &q_provenance, &q_gid, &q_instance_root);
         let mut bindings = lunco_autopilot::usd_tree::TargetBindings::default();
         for path in lunco_autopilot::usd_tree::target_paths(&xml.0) {
-            if let Some((e, _)) = q_prims
-                .iter()
-                .find(|(_, p)| p.path == path && p.stage_handle == vessel_path.stage_handle)
-            {
+            // Scope the match to the vessel's OWN instance: a target path names a
+            // prim of THIS spawn, never a same-named prim of another copy. Scene
+            // targets (globally-unique composed paths, instance `None`) are
+            // unaffected — every candidate and the vessel share `None`.
+            if let Some((e, _)) = q_prims.iter().find(|(e, p)| {
+                p.path == path
+                    && p.stage_handle == vessel_path.stage_handle
+                    && instance_key(*e, &q_provenance, &q_gid, &q_instance_root) == vessel_instance
+            }) {
                 bindings.0.insert(path, e);
             }
         }
@@ -2102,35 +2140,41 @@ fn resolve_behavior_targets(
     }
 }
 
-/// G5 — resolve a [`PendingDifferential`] into a [`DifferentialCoupling`] once
-/// both rocker bodies are spawned and Avian-admitted (the `With<Position>` gate,
-/// same as USD joints). Matches the authored prim-path strings against live
-/// `UsdPrimPath`s, scoped by stage. The chassis is the entity that carries the
-/// pending marker; gating it on `With<Position>` ensures the coupling system
-/// (which writes torques via `Forces`) never runs before the chassis is ready.
+/// Resolve a [`PendingDifferential`] — an authored gear joint — into a
+/// [`DifferentialCoupling`] once every body it names is spawned and Avian-admitted
+/// (the `With<Position>` gate, same as USD joints). Matches the authored prim-path
+/// strings against live `UsdPrimPath`s, scoped by stage and instance root, so two
+/// copies of the same rover in one scene each gear their OWN rockers.
+///
+/// The pending marker lives on the JOINT prim; the coupling is attached to the chassis,
+/// which is the body the gear's reaction torque goes into and the one the coupling
+/// system writes `Forces` through.
 fn resolve_differential_coupling(
-    q_pending: Query<(Entity, &UsdPrimPath, &PendingDifferential), With<Position>>,
+    q_pending: Query<(Entity, &UsdPrimPath, &PendingDifferential)>,
     q_bodies: Query<(Entity, &UsdPrimPath), With<Position>>,
-    q_child_of: Query<&ChildOf>,
-    q_usd_path: Query<&UsdPrimPath>,
+    q_provenance: Query<&lunco_core::Provenance>,
+    q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
     mut commands: Commands,
 ) {
-    for (chassis, chassis_path, pending) in q_pending.iter() {
-        let chassis_root = find_instance_root(chassis, &q_child_of, &q_usd_path, &q_instance_root);
+    for (joint, joint_path, pending) in q_pending.iter() {
+        let joint_root = instance_key(joint, &q_provenance, &q_gid, &q_instance_root);
         let find = |target: &str| {
             q_bodies
                 .iter()
                 .find(|(e, p)| {
                     p.path == target
-                        && p.stage_handle == chassis_path.stage_handle
-                        && find_instance_root(*e, &q_child_of, &q_usd_path, &q_instance_root) == chassis_root
+                        && p.stage_handle == joint_path.stage_handle
+                        && instance_key(*e, &q_provenance, &q_gid, &q_instance_root) == joint_root
                 })
                 .map(|(e, _)| e)
         };
-        let (Some(rocker_a), Some(rocker_b)) = (find(&pending.rocker_a), find(&pending.rocker_b))
-        else {
-            continue; // a rocker not admitted yet — retry next frame
+        let (Some(chassis), Some(rocker_a), Some(rocker_b)) = (
+            find(&pending.chassis),
+            find(&pending.rocker_a),
+            find(&pending.rocker_b),
+        ) else {
+            continue; // a geared body not admitted yet — retry next frame
         };
         commands.entity(chassis).try_insert(DifferentialCoupling {
             chassis,
@@ -2141,10 +2185,10 @@ fn resolve_differential_coupling(
             stiffness: pending.stiffness,
             damping: pending.damping,
         });
-        commands.entity(chassis).remove::<PendingDifferential>();
+        commands.entity(joint).remove::<PendingDifferential>();
         info!(
-            "Resolved rocker-bogie differential on {} ({} <-> {})",
-            chassis_path.path, pending.rocker_a, pending.rocker_b
+            "Resolved gear joint {} ({} <-> {})",
+            joint_path.path, pending.rocker_a, pending.rocker_b
         );
     }
 }

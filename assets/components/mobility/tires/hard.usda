@@ -1,0 +1,51 @@
+#usda 1.0
+(
+    defaultPrim = "Tire"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# A HARD tire — stiff compound, shallow tread, for prepared surfaces: landing pads,
+# habitat aprons, the inside of a test hall. It grips less and slips sooner than
+# `regolith.usda`, and it deforms less, so a rover on it is quicker and twitchier.
+#
+# The second tire exists to make the swap real: a wheel chooses between them through
+# its `tire` variantSet, and nothing else about the vehicle changes.
+#
+#   def Cylinder "Wheel_FL" (
+#       prepend references = @../../components/mobility/wheel.usda@</Wheel>
+#       variants = { string tire = "hard" }
+#   )
+#
+# See `regolith.usda` for how the `over` composes onto the wheel that pulls it in.
+
+over "Tire" (
+    kind = "component"
+)
+{
+    # --- Grip ---
+    # Stiffer contact patch: it builds force faster per unit of slip, and lets go
+    # sooner when it runs out of friction.
+    float physxVehicleTire:longitudinalStiffness = 14000.0
+    double lunco:frictionCoefficient = 0.55
+
+    # --- Tread ---
+    rel material:binding = </Tire/TireLook>
+    color3f[] primvars:displayColor = [(0.22, 0.22, 0.24)]
+
+    def Material "TireLook"
+    {
+        token outputs:surface.connect = </Tire/TireLook/Shader.outputs:surface>
+
+        def Shader "Shader"
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:wgsl:sourceAsset = @shaders/wheel.wgsl@
+            color3f inputs:rim_color = (0.90, 0.90, 0.94)
+            color3f inputs:tire_color = (0.06, 0.06, 0.07)
+            float inputs:spoke_count = 6.0
+            float inputs:tread_lugs = 48.0                  # fine, dense tread — hard ground
+            token outputs:surface
+        }
+    }
+}

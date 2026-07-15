@@ -77,7 +77,7 @@ impl Plugin for MissionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MissionRegistry>();
         // Missions belong to the solar-system context: gated on the scene declaring
-        // celestial bodies (`LuncoCelestialBodyAPI`) AND on the registry being empty.
+        // celestial bodies (`LunCoCelestialBodyAPI`) AND on the registry being empty.
         // Idempotent-guarded, NOT latched — a `Local` bool could never be reset, so a
         // scene reload (teardown clears the registry) would never re-load missions.
         // Gating on "is my output already there" makes teardown-then-reload just work.

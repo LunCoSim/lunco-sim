@@ -162,7 +162,7 @@ Internally: `pick` the class over one borrowed `ResolveCtx` (index, drafts, cach
 | FMU `DefaultExperiment` | `RunBounds` (`h0` ≈ `stepSize`) + `experiment(...)` annotation | `lunco-experiments/src/lib.rs:97` |
 | FMI master algorithm | cosim master loop (`sync_outputs → propagate → sync_inputs → step`) | `lunco-cosim/src/lib.rs`, see [22-domain-cosim](22-domain-cosim.md) |
 | SSP System | USD Stage / active `scene.usda` | [21-domain-usd](21-domain-usd.md) |
-| SSP Component (FMU ref) | USD prim + `lunco:modelicaModel` attr + `lunco-lib://` payload | |
+| SSP Component (FMU ref) | a `LunCoProgram` prim + `lunco:program:sourceAsset` + `lunco-lib://` payload | |
 | SSP Connection (+ `factor`/`offset`) | `SimConnection { start/end element+connector, scale }` | `lunco-cosim/src/connection.rs` |
 | SSP `.ssv` parameter sets | USD attributes + layer/reference overrides; `Experiment.overrides` | |
 
@@ -194,7 +194,7 @@ The generic `resolve(source, ctx) -> Resolution` (drilled > ranked-first > `Ambi
 
 Prioritized by value.
 
-1. **No declared, typed, causal ports.** SSP requires each connector to declare causality (input/output/parameter) and data type. LunCoSim ports are untyped `String` keys in HashMaps, discovered at runtime — which is why a typo in `lunco:simWires` fails silently instead of at author time, and why a wire can't be validated before stepping. **Biggest actionable gap.** USD can carry this as a connector schema on the prim.
+1. **Ports are typed and causal in USD, but not yet at the seam.** SSP requires each connector to declare causality (input/output/parameter) and data type; USD authoring does — `float inputs:kv`, `float outputs:thrust`, and a wire is a connection between them. The *runtime* ports behind them are still untyped `String` keys in HashMaps, discovered at runtime, so a connection naming a port the compiled model does not have fails at wire-build rather than at author time. **Biggest actionable gap:** validate the authored connection against the model's declared port surface before stepping.
 2. **Connection transform is half of SSP's.** `SimConnection.scale` = SSP `factor`; there is no `offset` and no unit conversion at the boundary — directly relevant to [41-axes-and-units](41-axes-and-units.md), which is exactly the unit/transform concern SSP folds into the connection.
 3. **Run-config is not a first-class object.** Mature tools (such as Simulink configuration sets) keep solver/time/tolerance settings as named, switchable objects *separate from the model*. LunCoSim conflates target and settings; `ExperimentDrafts` is a half-step. A named `Scenario`/`RunConfig` dissolves the §4.4 precedence mess: bounds live in a Scenario; the annotation is merely the *seed* for a new Scenario, not one of four competing layers. SSP confirms the two-level split (system-level settings + per-FMU `DefaultExperiment`), which matches `twin.toml`/`.mission.ron` vs `experiment(...)`.
 4. **Time-only bounds — no stopping conditions.** GMAT and orbital sims terminate on *events* (elapsed time, apoapsis, altitude, contact, fuel depletion). LunCoSim's domain is lunar/orbital (rover thermal over a lunar day; Abdulezer antipodal hops) — `RunBounds` cannot express "run until sunrise" / "until landing." Leave a `stop_condition` slot in the type.

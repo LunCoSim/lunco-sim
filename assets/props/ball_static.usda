@@ -7,7 +7,7 @@
 
 # Static ball — collider + mesh, no rigid body (stays put).
 def Xform "BallStatic" (
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "component"
 )
 {

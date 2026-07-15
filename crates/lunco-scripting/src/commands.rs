@@ -297,7 +297,7 @@ pub fn resolve_embedded_scenario_paths(
             // (2) prefix `rel` with the active `scenario://<id>/` when a
             // `RemoteScenarioManifest` is loaded (needs that id threaded to scripting —
             // a networking→scripting coupling to avoid, so (1) is preferred). Inline
-            // `lunco:script` / `LuncoPolicy` sources are unaffected (they ride the doc).
+            // `lunco:script` / `LunCoPolicy` sources are unaffected (they ride the doc).
             asset_server.load(rel)
         });
         if asset_server.load_state(&*handle).is_failed() {

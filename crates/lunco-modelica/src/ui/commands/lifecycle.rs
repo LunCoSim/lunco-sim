@@ -1120,7 +1120,14 @@ pub fn drain_pending_tab_closes(
         let lunco_workbench::TabId::Instance { kind, instance } = tab else {
             continue;
         };
-        if kind == lunco_viz::VIZ_PANEL_KIND {
+        // Viz-backed plot tabs (the generic `lunco_viz` panel AND the Modelica
+        // `Graphs`/plot panel, both keyed by `VizId(instance)`): close the tab and
+        // drop its visualization. `modelica_plot` was previously unhandled here, so
+        // its × click queued a close that this drain silently dropped (`continue`
+        // below) — the "couldn't close the Graphs tab" bug.
+        if kind == lunco_viz::VIZ_PANEL_KIND
+            || kind == crate::ui::panels::graphs::MODELICA_PLOT_KIND
+        {
             commands.trigger(lunco_workbench::CloseTab { kind, instance });
             commands.queue(move |world: &mut World| {
                 if let Some(mut reg) =

@@ -18,12 +18,14 @@
 #     rel-targets are asset-local and translate through the reference arc.
 
 def Xform "AckermannRover" (
-    kind = "component"
+    # An ASSEMBLY: a model built out of other models. Its wheels are component models
+    # that arrive by reference, and USD forbids a `component` from containing them.
+    kind = "assembly"
     prepend apiSchemas = [
         "PhysicsRigidBodyAPI", "PhysxRigidBodyAPI",
         "PhysicsMassAPI",
         "PhysxVehicleContextAPI",
-        "PhysxVehicleAckermannSteeringAPI", "LuncoCatalogAPI"
+        "PhysxVehicleAckermannSteeringAPI", "LunCoCatalogAPI"
     ]
     prepend variantSets = "drivetrain"
     variants = {
@@ -169,8 +171,10 @@ def Xform "AckermannRover" (
 
     # --- Wheels (authored at RAYCAST ride height; physical variant drops them) ---
     def Cylinder "Wheel_FL" (
-        kind = "subcomponent"
-        prepend references = @../../components/mobility/wheel.usda@</Wheel>
+        prepend references = [
+            @../../components/mobility/wheel.usda@</Wheel>,
+            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+        ]
     )
     {
         uniform token axis = "X"
@@ -181,14 +185,13 @@ def Xform "AckermannRover" (
 
         int physxVehicleWheel:index = 0
         float physxVehicleWheel:radius = 0.4
-        float physxVehicleSuspension:restLength = 0.7
-        float physxVehicleSuspension:springStiffness = 15000.0
-        float physxVehicleSuspension:springDamping = 3000.0
     }
 
     def Cylinder "Wheel_FR" (
-        kind = "subcomponent"
-        prepend references = @../../components/mobility/wheel.usda@</Wheel>
+        prepend references = [
+            @../../components/mobility/wheel.usda@</Wheel>,
+            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+        ]
     )
     {
         uniform token axis = "X"
@@ -199,14 +202,13 @@ def Xform "AckermannRover" (
 
         int physxVehicleWheel:index = 1
         float physxVehicleWheel:radius = 0.4
-        float physxVehicleSuspension:restLength = 0.7
-        float physxVehicleSuspension:springStiffness = 15000.0
-        float physxVehicleSuspension:springDamping = 3000.0
     }
 
     def Cylinder "Wheel_RL" (
-        kind = "subcomponent"
-        prepend references = @../../components/mobility/wheel.usda@</Wheel>
+        prepend references = [
+            @../../components/mobility/wheel.usda@</Wheel>,
+            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+        ]
     )
     {
         uniform token axis = "X"
@@ -217,14 +219,13 @@ def Xform "AckermannRover" (
 
         int physxVehicleWheel:index = 2
         float physxVehicleWheel:radius = 0.4
-        float physxVehicleSuspension:restLength = 0.7
-        float physxVehicleSuspension:springStiffness = 15000.0
-        float physxVehicleSuspension:springDamping = 3000.0
     }
 
     def Cylinder "Wheel_RR" (
-        kind = "subcomponent"
-        prepend references = @../../components/mobility/wheel.usda@</Wheel>
+        prepend references = [
+            @../../components/mobility/wheel.usda@</Wheel>,
+            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+        ]
     )
     {
         uniform token axis = "X"
@@ -235,9 +236,6 @@ def Xform "AckermannRover" (
 
         int physxVehicleWheel:index = 3
         float physxVehicleWheel:radius = 0.4
-        float physxVehicleSuspension:restLength = 0.7
-        float physxVehicleSuspension:springStiffness = 15000.0
-        float physxVehicleSuspension:springDamping = 3000.0
     }
 
     # --- Drivetrain variant set (see skid_rover.usda for the contract) ---

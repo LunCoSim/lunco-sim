@@ -12,8 +12,9 @@
 # rolls it — which is the whole lesson. Slope angle is tunable via the Ramp's
 # rotateXYZ; ~18° sits on the edge for this rover.
 def Xform "SlopeTest" (
+    kind = "assembly"
     doc = "A borderline ~18° grade with the top-heavy Hauler at its base — the tip-over teaching stage."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
@@ -98,11 +99,13 @@ def Xform "SlopeTest" (
         custom int lunco:shadow:numCascades = 4
     }
 
-    def Xform "Avatar"
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
     {
-        string lunco:avatar = "true"
-        string lunco:cameraMode = "freeflight"
-        custom double3 lunco:cameraLookAt = (5.0, 4.0, 0.0)
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (5.0, 4.0, 0.0)
         double3 xformOp:translate = (-30.0, 16.0, -34.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

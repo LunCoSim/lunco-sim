@@ -19,9 +19,11 @@
 #
 # Loaded by `sandbox --scene scenes/sandbox/joint_test.usda`.
 
+# Scene root: an `assembly` — a thing you OPEN, not a part you place.
 def Xform "SandboxScene" (
+    kind = "assembly"
     doc = "Two cubes glued together by a fixed joint. Drag one with the mouse and the other should follow exactly - a basic check that the joint holds."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
@@ -54,11 +56,13 @@ def Xform "SandboxScene" (
     }
 
     # Avatar so the API observer has someone to focus from.
-    def Xform "Avatar"
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
     {
-        string lunco:avatar = "true"
-        string lunco:cameraMode = "freeflight"
-        custom double3 lunco:cameraLookAt = (0.0, 5.0, 0.0)
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 5.0, 0.0)
         double3 xformOp:translate = (0.0, 6.0, 12.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

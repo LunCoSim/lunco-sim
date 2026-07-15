@@ -17,9 +17,9 @@ below builds on that.
       intuitive to dial for feel. Play with values to find the good range.
 - [ ] **Make all of the above camera properties.** Smoothing function +
       time/rate + damping should be per-camera fields (on `SpringArmCamera`,
-      `OrbitCamera`, `ChaseCamera`), falling back to `CameraDefaults`, the same
+      `OrbitCamera`), falling back to `CameraDefaults`, the same
       way `damping` already does. A cinematic orbit can then differ from a
-      snappy chase cam.
+      snappy full-attitude chase.
 
 ### Before building our own: check existing Bevy facilities
 

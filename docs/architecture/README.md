@@ -48,7 +48,7 @@ these are the reasoning.
 | [`23-domain-environment.md`](23-domain-environment.md) | Gravity, lighting, the sun feed |
 | [`24-domain-sysml.md`](24-domain-sysml.md) | SysML |
 | [`25-experiments.md`](25-experiments.md) · [`26-parallel-experiments.md`](26-parallel-experiments.md) · [`27-target-resolution.md`](27-target-resolution.md) | Batch runs, sweeps, and how a run resolves its target |
-| [`28-modelica-realtime-physics.md`](28-modelica-realtime-physics.md) | The **Tier A/B/C** contract: which models may drive predicted physics |
+| [`28-modelica-realtime-physics.md`](28-modelica-realtime-physics.md) | The **realtime-safe** promise: which programs may drive predicted physics |
 | [`29-rumoca-workarounds.md`](29-rumoca-workarounds.md) | Confirmed rumoca bugs we work around, the probe that retires each one, and the chokepoint that must not be bypassed |
 
 ## Infrastructure (30–39)

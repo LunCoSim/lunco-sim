@@ -15,7 +15,7 @@
 //!
 //! Render-free by construction, so a headless server can project a USD terrain — and
 //! get its collider for deterministic physics — without linking a UI. The terrain's
-//! material is authored the universal way (`lunco:material:*` → `lunco-usd-bevy`), so
+//! material is a `UsdShade` binding like any other (`lunco-usd-sim`'s shader pass), so
 //! nothing here names a material. `lunco-terrain-surface` stays USD-free in turn and
 //! is read through its [`LayerAttrSource`](lunco_terrain_surface::LayerAttrSource)
 //! port, implemented here by [`UsdLayerAttrs`].
@@ -78,19 +78,19 @@ struct UsdLayerAttrs<'a, R: UsdRead> {
     reader: &'a R,
     sdf: openusd::sdf::Path,
     /// The USD namespace the logical names bind into: `lunco:layer:` for a layer
-    /// prim's parameters (`LuncoTerrainLayerAPI`), `lunco:edit:` for an edit prim's
-    /// (`LuncoTerrainEditAPI`). One adapter, because the two differ ONLY in prefix —
+    /// prim's parameters (`LunCoTerrainLayerAPI`), `lunco:edit:` for an edit prim's
+    /// (`LunCoTerrainEditAPI`). One adapter, because the two differ ONLY in prefix —
     /// and the prefix is exactly what a USD-free parser must not know.
     ns: &'static str,
 }
 
-/// `LuncoTerrainLayerAPI` — a layer prim's parameters.
+/// `LunCoTerrainLayerAPI` — a layer prim's parameters.
 const NS_LAYER: &str = "lunco:layer:";
-/// `LuncoTerrainEditAPI` — one hand edit's parameters.
+/// `LunCoTerrainEditAPI` — one hand edit's parameters.
 const NS_EDIT: &str = "lunco:edit:";
 
 /// The USD property name for a layer parameter: `"size"` → `"lunco:layer:size"`
-/// (`LuncoTerrainLayerAPI`).
+/// (`LunCoTerrainLayerAPI`).
 ///
 /// The one place the mapping lives. Layer parsers speak *logical* names (`x`,
 /// `size`, `seed`) — they are USD-free by design — and this adapter is what binds
@@ -103,7 +103,7 @@ const NS_EDIT: &str = "lunco:edit:";
 fn ns_attr(ns: &str, name: &str) -> String {
     let full = format!("{ns}{name}");
     // The mapping is stringly, so VERIFY it instead of trusting it: a parser reading
-    // a parameter `LuncoTerrainLayerAPI` does not declare is either a typo or a new
+    // a parameter `LunCoTerrainLayerAPI` does not declare is either a typo or a new
     // parameter someone forgot to add to the schema, and both should be loud. This
     // fires the first time any test or debug run touches a layer, so the schema and
     // the parsers cannot drift apart silently — which is the whole failure mode the
@@ -197,7 +197,7 @@ fn parse_terrain_layer_stack<R: UsdRead>(
     let mut children: Vec<_> = reader.children(terrain).into_iter().collect();
     children.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     for child in children {
-        // An edit prim (`LuncoTerrainEditAPI`)? Aggregate into the single edits layer,
+        // An edit prim (`LunCoTerrainEditAPI`)? Aggregate into the single edits layer,
         // keyed by its prim path (its stable identity).
         let edit_attrs = UsdLayerAttrs { reader, sdf: child.clone(), ns: NS_EDIT };
         if let Some(edit) =
@@ -416,7 +416,7 @@ fn seed_edit_seq_past_children(
 /// Author one edit onto every **doc-backed** terrain as USD ops on its document's
 /// **runtime** layer — non-destructive, ephemeral over the base DEM (Omniverse
 /// session-layer pattern): an `AddPrim` for the edit prim + a `SetAttribute` per
-/// `LuncoTerrainEditAPI` parameter. `registry.apply` records them to the journal (undo
+/// `LunCoTerrainEditAPI` parameter. `registry.apply` records them to the journal (undo
 /// / sync), then the twin projection re-projects the composed `base ⊕ runtime` →
 /// `parse_edit` → the one `EditsLayer`. The direct-path observer in
 /// lunco-terrain-surface handles document-FREE terrains (`Without<DocBackedTerrain>`),
@@ -434,7 +434,7 @@ fn author_terrain_edit(
         let name = format!("edit_{}", seq.0);
         seq.0 += 1;
         let edit_prim = format!("{}/{name}", prim_path.path.trim_end_matches('/'));
-        // The edit prim + its `LuncoTerrainEditAPI` attributes, on the ephemeral
+        // The edit prim + its `LunCoTerrainEditAPI` attributes, on the ephemeral
         // runtime layer (non-destructive), committed as ONE journal change set — so an
         // edit stays a single undo step even though it is now five ops rather than two.
         //
@@ -570,7 +570,7 @@ fn on_place_rock_authored(
         seq.0 += 1;
         let rock_prim = format!("{}/{name}", prim_path.path.trim_end_matches('/'));
 
-        // `LuncoTerrainLayerAPI`. Namespaced, not bare: a bare `size` here is
+        // `LunCoTerrainLayerAPI`. Namespaced, not bare: a bare `size` here is
         // `UsdGeomCube`'s real `double size` under a different meaning. `ns_attr` is
         // the one place the namespace is applied, and it checks the schema declares it.
         let mut ops = vec![lunco_usd::UsdOp::AddPrim {
@@ -973,7 +973,7 @@ fn bridge_dem_prim_read<R: UsdRead>(
     sync_obstacle_spec_from_usd(reader, sdf, obstacle_spec);
 
     // DEM/ground parameters live on the `dem` child LAYER prim, as
-    // `LuncoTerrainLayerAPI` (`lunco:layer:*`) — one prim, one name.
+    // `LunCoTerrainLayerAPI` (`lunco:layer:*`) — one prim, one name.
     //
     // There used to be a fallback chain: bare names (`windowM`, `demSource`) on the
     // dem prim, else `lunco:terrain:*` on the Terrain prim. Two names for one thing,

@@ -24,9 +24,11 @@
 #
 #   sandbox --scene scenes/sandbox/sun_tracker_test.usda
 
+# Scene root: an `assembly` — a thing you OPEN, not a part you place.
 def Xform "SunTrackerTest" (
+    kind = "assembly"
     doc = "A solar panel that turns to face the sun. A controller reads where the sun is and turns the panel to point at it; move the sun and watch the panel re-aim."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
@@ -45,6 +47,29 @@ def Xform "SunTrackerTest" (
     }
     uniform bool lunco:spawnable = false
 
+    def Scope "Looks"
+    {
+        def Material "SolarPanel"
+        {
+            token outputs:surface.connect = </SunTrackerTest/Looks/SolarPanel/Shader.outputs:surface>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:wgsl:sourceAsset = @shaders/solar_panel.wgsl@
+                color3f inputs:cell_color = (0.05, 0.05, 0.35)
+                color3f inputs:bus_color = (0.85, 0.85, 0.90)
+                color3f inputs:frame_color = (0.35, 0.35, 0.38)
+                float inputs:cell_rows = 8.0
+                float inputs:cell_cols = 12.0
+                float inputs:cell_gap = 0.02
+                float inputs:bus_width = 0.004
+                float inputs:border = 0.04
+                token outputs:surface
+            }
+        }
+    }
+
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
     )
@@ -59,11 +84,13 @@ def Xform "SunTrackerTest" (
     }
 
     # Camera looking at the tower head from the side, so a yaw change is obvious.
-    def Xform "Avatar"
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
     {
-        string lunco:avatar = "true"
-        string lunco:cameraMode = "freeflight"
-        custom double3 lunco:cameraLookAt = (0.0, 4.0, 0.0)
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 4.0, 0.0)
         double3 xformOp:translate = (10.0, 7.0, 12.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
@@ -132,9 +159,6 @@ def Xform "SunTrackerTest" (
 
             # Vertical PV panel — thin cube on edge, solar_panel shader.
             def Cube "Panel"
-            (
-                prepend apiSchemas = ["LuncoMaterialAPI"]
-            )
             {
                 double size = 1.0
                 double3 xformOp:translate = (0, 1.5, 0)
@@ -142,16 +166,7 @@ def Xform "SunTrackerTest" (
                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
                 color3f[] primvars:displayColor = [(0.05, 0.05, 0.35)]
                 bool physics:collisionEnabled = false
-                uniform token lunco:material:type = "shader"
-                uniform asset lunco:material:shader = @shaders/solar_panel.wgsl@
-                color3f primvars:cell_color = (0.05, 0.05, 0.35)
-                color3f primvars:bus_color = (0.85, 0.85, 0.90)
-                color3f primvars:frame_color = (0.35, 0.35, 0.38)
-                float primvars:cell_rows = 8.0
-                float primvars:cell_cols = 12.0
-                float primvars:cell_gap = 0.02
-                float primvars:bus_width = 0.004
-                float primvars:border = 0.04
+                rel material:binding = </SunTrackerTest/Looks/SolarPanel>
             }
         }
 
@@ -178,9 +193,11 @@ def Xform "SunTrackerTest" (
         # Controller — the SunTracker.mo co-sim model. Self-loop connection feeds
         # the solar bridge's `sun_azimuth` output into the model's `sun_azimuth`
         # input (same name on both sides — one signal).
-        def Xform "Controller"
+        def Xform "Controller" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
         {
-            string lunco:modelicaModel = "models/SunTracker.mo"
+            uniform asset lunco:program:sourceAsset = @models/SunTracker.mo@
             float inputs:sun_azimuth.connect = </SunTrackerTest/SolarTower/Controller.outputs:sun_azimuth>
         }
     }

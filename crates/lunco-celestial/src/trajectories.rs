@@ -119,7 +119,7 @@ impl Plugin for TrajectoryPlugin {
            .register_type::<TrajectoryPath>();
            
         // Trajectory views are solar-system objects: they exist only when the SCENE
-        // declares celestial bodies (`LuncoCelestialBodyAPI` → `CelestialBodyDecl`).
+        // declares celestial bodies (`LunCoCelestialBodyAPI` → `CelestialBodyDecl`).
         //
         // This used to be an unconditional `Startup` system, so the Earth and Moon
         // orbit views were spawned into EVERY scene — including the flat sandbox

@@ -85,15 +85,7 @@ pub struct WorldGridConfig {
 
 impl Default for WorldGridConfig {
     fn default() -> Self {
-        // 20 km cells (max_distance_from_origin = edge/2 + threshold = 10.1 km). A
-        // surface SITE — its DEM ±8 km plus its absolute lunar-datum elevation (~2 km) —
-        // fits entirely inside cell 0, so big_space never recenters mid-site: it is the
-        // recenter of a physics body ABOVE the old 1.1 km threshold that ran the avian
-        // bridge away (the whole scene sank below the camera on moonbase). Celestial
-        // bodies at 384 000 km still bin normally (cell ≠ 0), so planetary precision is
-        // unchanged; f32 ULP at 10 km is ≈ 0.6 mm (render only — physics stays f64).
-        // See project_bigspace_cell_edge_is_precision_knob.
-        Self { cell_edge_length: 20_000.0, switching_threshold: 100.0 }
+        Self { cell_edge_length: 2000.0, switching_threshold: 100.0 }
     }
 }
 
@@ -227,7 +219,13 @@ impl Plugin for WorldShellPlugin {
                 PostUpdate,
                 anchor_owns_origin_by_default
                     .before(BigSpaceSystems::RecenterLargeTransforms),
-            );
+            )
+            .add_systems(
+                PostUpdate,
+                dbg_cell_drift.before(BigSpaceSystems::RecenterLargeTransforms),
+            )
+            .add_systems(bevy::prelude::First, dbg_origin_bracket_first)
+            .add_systems(bevy::prelude::Last, dbg_origin_bracket_last);
 
         // Named companion to big_space's validator: that one dumps component
         // lists but no `Name`s, which makes chasing a violation a guessing
@@ -288,6 +286,59 @@ fn setup_world(world: &mut World) {
 /// vanish. This hands it back to the persistent anchor (exactly where a headless
 /// server keeps it), so the cleared scene correctly stays camera-less while the
 /// coordinate frame survives. No-op on every frame a camera holds the origin.
+/// TEMP DIAG: log the worst cell-drift each ~120 frames — which entity's `CellCoord`
+/// has run far from the origin, and whether it's the `FloatingOrigin`. Finds the
+/// system fighting big_space recentering.
+fn dbg_cell_drift(
+    mut n: Local<u32>,
+    q: Query<(Entity, &CellCoord, &Transform, Option<&Name>, bevy::prelude::Has<FloatingOrigin>)>,
+) {
+    *n = n.wrapping_add(1);
+    if *n % 120 != 0 {
+        return;
+    }
+    let mut worst: Option<(i64, String, CellCoord, bevy::math::Vec3, bool)> = None;
+    for (e, c, tf, name, is_origin) in &q {
+        let mag = c.x.abs() + c.y.abs() + c.z.abs();
+        if mag > 8 && worst.as_ref().is_none_or(|w| mag > w.0) {
+            let nm = name.map(|n| n.to_string()).unwrap_or_else(|| format!("{e}"));
+            worst = Some((mag, nm, *c, tf.translation, is_origin));
+        }
+    }
+    if let Some((mag, nm, c, t, o)) = worst {
+        bevy::log::warn!(
+            "[CELL-DRIFT] {nm}: cell=({},{},{}) tf={:.0?} floating_origin={o} (mag {mag})",
+            c.x, c.y, c.z, t
+        );
+    }
+}
+
+fn dbg_origin_bracket_first(
+    mut printed: Local<u32>,
+    q: Query<(&CellCoord, &Transform), With<FloatingOrigin>>,
+) {
+    if *printed > 120 { return; }
+    if let Ok((c, tf)) = q.single() {
+        if c.y.abs() > 3 {
+            *printed += 1;
+            bevy::log::warn!("[BRACKET-First] cell.y={} tf.y={:.1}", c.y, tf.translation.y);
+        }
+    }
+}
+
+fn dbg_origin_bracket_last(
+    mut printed: Local<u32>,
+    q: Query<(&CellCoord, &Transform), With<FloatingOrigin>>,
+) {
+    if *printed > 120 { return; }
+    if let Ok((c, tf)) = q.single() {
+        if c.y.abs() > 3 {
+            *printed += 1;
+            bevy::log::warn!("[BRACKET-Last ] cell.y={} tf.y={:.1}", c.y, tf.translation.y);
+        }
+    }
+}
+
 fn anchor_owns_origin_by_default(
     mut commands: Commands,
     q_origins: Query<(), With<FloatingOrigin>>,

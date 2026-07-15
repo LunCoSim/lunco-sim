@@ -5,11 +5,15 @@
 // at idle. ALL the mapping lives here — no built-in Rust drives the flame; the
 // Modelica engine model only PUBLISHES the throttle signal.
 //
-// Many cones can share this one script (attached via `lunco:scriptPath` on each):
-// each reads its OWN per-instance config from `param(me, key, default)` (USD
-// `lunco:params`) — `wmax`/`lmax` size, `flick` flicker depth — so the script is
-// generic, with NO `name(me)` inference. Works wherever the engine is mounted: it
-// WALKS UP to whatever ancestor exposes the `throttle` port (the vessel's GNC).
+// Many cones can share this one script — each mounts it as its own
+// `def LunCoProgram "Plume"` child prim with
+// `uniform asset lunco:program:sourceAsset = @scenarios/flame.rhai@`. Each program
+// prim carries its OWN per-instance config as typed attributes
+// (`custom float lunco:param:wmax = 1.05`, `lunco:param:lmax`, `lunco:param:flick`),
+// read here through `param(me, key, default)` — `wmax`/`lmax` size, `flick` flicker
+// depth — so the script is generic, with NO `name(me)` inference. Works wherever the
+// engine is mounted: it WALKS UP to whatever ancestor exposes the `throttle` port
+// (the vessel's GNC).
 
 /// Nearest ancestor that exposes a `throttle` port, or 0.0 if none. Pure rhai.
 fn nearest_throttle(me) {

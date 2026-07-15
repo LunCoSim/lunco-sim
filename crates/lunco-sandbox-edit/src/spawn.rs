@@ -13,18 +13,21 @@ use crate::SpawnState;
 #[derive(Component)]
 pub struct SpawnGhost;
 
+use lunco_usd_bevy::SPAWN_GROUND_CLEARANCE;
+
 /// Cached, real-time-derived spawn footprints per catalog entry.
 ///
 /// The footprint is computed once — when the entry's USD stage finishes loading
-/// during `SpawnState::Selecting` — by walking the composed stage geometry (see
-/// [`lunco_usd_bevy::wheel_footprint`]). It reads the same composed data that
-/// `sync_usd_visuals` instantiates, so the placement solver and the live entity
-/// can never disagree (no hand-tuned per-asset table for vehicles). For
-/// non-vehicle props (no wheels) the authored `lunco:spawnLift` is still
-/// honoured. Cached so the per-frame ghost and the click observer read a
-/// pre-computed value (frame-discipline: never recomputed every frame). The
-/// strong `Handle` keeps the stage resident while the entry is selected so the
-/// asset doesn't unload between the ghost poll and the click.
+/// during `SpawnState::Selecting` — by taking the asset's collision-geometry AABB
+/// in its own frame (see [`lunco_usd_bevy::collision_aabb`]). It reads the same
+/// composed data that `sync_usd_visuals` instantiates and that the avian compound
+/// collider is built from, so the placement solver and the live physics body can
+/// never disagree — the object rests on its lowest collider point for ANY asset
+/// (lander, rover, prop), no wheels and no per-asset table required. Cached so the
+/// per-frame ghost and the click observer read a pre-computed value
+/// (frame-discipline: never recomputed every frame). The strong `Handle` keeps the
+/// stage resident while the entry is selected so the asset doesn't unload between
+/// the ghost poll and the click.
 #[derive(Resource, Default)]
 pub struct FootprintCache {
     map: HashMap<String, CachedFootprint>,
@@ -33,11 +36,12 @@ pub struct FootprintCache {
 struct CachedFootprint {
     handle: Handle<UsdStageAsset>,
     root_prim: String,
-    /// Derived wheel footprint — `Some` once the stage is loaded AND the asset
-    /// has wheel prims. `None` for non-vehicle props (which use `spawn_lift`).
-    footprint: Option<lunco_usd_bevy::WheelFootprint>,
-    /// Authored `lunco:spawnLift` — the rest-height fallback for props with no
-    /// wheels. Ignored for vehicles (the derived `contact_depth` supersedes it).
+    /// Collision-geometry AABB in the asset's own frame — `Some` once the stage is
+    /// composed AND the asset has collision geometry. `None` for a pure-visual prop
+    /// (which then falls back to the authored `lunco:spawnLift`).
+    footprint: Option<lunco_usd_bevy::ObjectAabb>,
+    /// Authored `lunco:spawnLift` — the rest-height fallback used only when no
+    /// collision geometry is found (pure-visual / mesh-only asset).
     spawn_lift: f32,
 }
 
@@ -59,18 +63,21 @@ impl Default for ResolvedFootprint {
 }
 
 impl FootprintCache {
-    /// Resolve `entry_id`'s placement data: derived geometry for vehicles,
-    /// authored `lunco:spawnLift` for props, or a default if not yet loaded.
+    /// Resolve `entry_id`'s placement data: the collision-AABB footprint + rest
+    /// depth for any asset with colliders, the authored `lunco:spawnLift` as a
+    /// fallback for pure-visual assets, or a default if not yet loaded.
     fn resolve(&self, entry_id: &str) -> ResolvedFootprint {
         let Some(c) = self.map.get(entry_id) else { return ResolvedFootprint::default() };
         match c.footprint {
-            // Vehicle: real wheel contact patch + derived rest height.
-            Some(fp) => ResolvedFootprint {
-                half_w: fp.half_w,
-                half_l: fp.half_l,
-                lift: fp.contact_depth,
+            // Rest on the lowest collision point (+ a small skin gap), with the
+            // footprint box from the collider extents — general across landers,
+            // rovers and props, no wheel-specific path.
+            Some(aabb) => ResolvedFootprint {
+                half_w: aabb.half_w().max(0.1),
+                half_l: aabb.half_l().max(0.1),
+                lift: aabb.rest_depth() + SPAWN_GROUND_CLEARANCE,
             },
-            // Prop (no wheels): default footprint box + authored lift.
+            // No collision geometry (pure-visual / mesh-only): authored lift.
             None => ResolvedFootprint {
                 half_w: 0.75,
                 half_l: 1.0,
@@ -120,11 +127,11 @@ fn ensure_footprint(
             }
             cached.footprint = canonical
                 .get(id)
-                .and_then(|cs| lunco_usd_bevy::wheel_footprint(&cs.view(), &cached.root_prim));
-            if let Some(fp) = cached.footprint {
+                .and_then(|cs| lunco_usd_bevy::collision_aabb(&cs.view(), &cached.root_prim));
+            if let Some(aabb) = cached.footprint {
                 info!(
-                    "[spawn] derived footprint for {}: half_w={:.3} half_l={:.3} depth={:.3}",
-                    entry_id, fp.half_w, fp.half_l, fp.contact_depth
+                    "[spawn] derived footprint for {}: half_w={:.3} half_l={:.3} rest_depth={:.3}",
+                    entry_id, aabb.half_w(), aabb.half_l(), aabb.rest_depth()
                 );
             }
         }

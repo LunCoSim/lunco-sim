@@ -753,6 +753,14 @@ impl WorkbenchLayout {
         };
         let center_ids: std::collections::HashSet<PanelId> =
             self.center.iter().copied().collect();
+        // The full-window 3D scene's leaf is EXCLUSIVE: an instance tab must never
+        // be appended into it. That leaf's `ViewportPanel` renders nothing (the 3D
+        // camera paints full-window behind it) but its render is what records the
+        // scene-vs-chrome pick leaf; a co-tenant tab foregrounded there blanks the
+        // viewport and swallows every click (the "opening a Graph kills the Build
+        // controls" bug). We exclude it below and, if it's the only candidate,
+        // split a fresh leaf beneath it instead.
+        let vp_leaf = self.scene_viewport_leaf();
         let target_leaf = {
             let main = self.dock.main_surface_mut();
             // Priority 1: leaf already hosting another instance of
@@ -777,6 +785,8 @@ impl WorkbenchLayout {
                 })
                 // Priority 4: any leaf at all.
                 .or_else(|| first_leaf(main))
+                // …but never the exclusive scene-viewport leaf.
+                .filter(|n| Some(*n) != vp_leaf)
         };
 
         if let Some(leaf) = target_leaf {
@@ -797,6 +807,15 @@ impl WorkbenchLayout {
                     surface: egui_dock::SurfaceIndex::main(),
                     node: leaf,
                 });
+        } else if let Some(vp) = vp_leaf {
+            // Only the scene-viewport leaf is available (e.g. Build, whose Bottom
+            // slot is empty). Split a fresh leaf BELOW the viewport (~30% tall) and
+            // drop the tab there so the viewport keeps its own exclusive leaf.
+            self.dock.main_surface_mut().split_below(vp, 0.7, vec![tab]);
+            if let Some(path) = self.dock.find_tab(&tab) {
+                self.dock.set_focused_node_and_surface(path.node_path());
+                let _ = self.dock.set_active_tab(path);
+            }
         } else {
             // Empty dock (e.g. 3D app with no center tabs). Seed a
             // single leaf with this tab so at least something shows.
@@ -1340,7 +1359,69 @@ impl WorkbenchLayout {
         // reloaded here would panic the dock layout on the very next frame —
         // a permanent boot-crash loop until the workspace cache is wiped.
         sanitize_dock_fractions(&mut new_dock);
+        // Heal a blanked 3D viewport. The full-window scene `ViewportPanel`
+        // (`scene_target() == MainViewport`) renders nothing itself — the 3D camera
+        // paints full-window behind it — but its `render` is what records the
+        // scene-vs-chrome pick leaf. A persisted layout (or a stray drag) can leave
+        // another tab (e.g. a Modelica plot) tabbed onto the viewport's leaf;
+        // foregrounded there it blanks the viewport, which then never records its
+        // leaf, and every click in the still-visible 3D is swallowed as chrome (the
+        // "3D visible but the middle of Build is dead" regression). Evict any such
+        // co-tenant into its own leaf so the viewport is alone and live again.
+        if let Some(vp_id) = self.scene_viewport_panel_id() {
+            Self::evict_scene_viewport_cotenants(&mut new_dock, TabId::Singleton(vp_id));
+        }
         Some(new_dock)
+    }
+
+    /// The registered singleton panel that IS the full-window 3D scene
+    /// (`Panel::scene_target() == Some(SceneTarget::MainViewport)`), if any.
+    /// App-agnostic — every workbench app that hosts a 3D scene registers exactly
+    /// one such panel (the sandbox's `ViewportPanel`); tooling apps register none.
+    /// Used to keep that panel foregrounded so a co-tenant tab can never blank the
+    /// viewport controls (see [`reconcile_dock`](Self::reconcile_dock)).
+    fn scene_viewport_panel_id(&self) -> Option<PanelId> {
+        self.panels
+            .iter()
+            .find(|(_, p)| p.scene_target() == Some(SceneTarget::MainViewport))
+            .map(|(id, _)| *id)
+    }
+
+    /// The dock leaf currently hosting the scene [`ViewportPanel`], if it's in the
+    /// tree. That leaf is kept EXCLUSIVE (see [`open_instance`](Self::open_instance)
+    /// and [`evict_scene_viewport_cotenants`](Self::evict_scene_viewport_cotenants))
+    /// so no other tab can blank the 3D.
+    fn scene_viewport_leaf(&self) -> Option<NodeIndex> {
+        let vp = self.scene_viewport_panel_id()?;
+        self.dock.find_tab(&TabId::Singleton(vp)).map(|p| p.node)
+    }
+
+    /// Move any tab sharing the scene viewport's leaf out into a fresh leaf split
+    /// below it, so the viewport ends up alone. A persisted layout (or a stray
+    /// drag) can leave e.g. a Modelica plot tabbed onto the viewport; foregrounded,
+    /// it blanks the 3D and eats clicks. Operates on `dock` in place; no-op when the
+    /// viewport isn't present or already has its leaf to itself.
+    fn evict_scene_viewport_cotenants(dock: &mut DockState<TabId>, vp_tab: TabId) {
+        let Some(pos) = dock.find_tab(&vp_tab) else { return };
+        let vp_node = pos.node;
+        let cotenants: Vec<TabId> = match &dock.main_surface()[vp_node] {
+            egui_dock::Node::Leaf(leaf) => {
+                leaf.tabs.iter().copied().filter(|t| *t != vp_tab).collect()
+            }
+            _ => Vec::new(),
+        };
+        if cotenants.is_empty() {
+            // Viewport already alone — just make sure it's the active tab.
+            let _ = dock.set_active_tab(pos);
+            return;
+        }
+        let main = dock.main_surface_mut();
+        if let egui_dock::Node::Leaf(leaf) = &mut main[vp_node] {
+            leaf.tabs.retain(|t| *t == vp_tab);
+            leaf.active = egui_dock::TabIndex(0);
+        }
+        // Fresh leaf beneath the viewport (~30% tall) holds the evicted tabs.
+        main.split_below(vp_node, 0.7, cotenants);
     }
 
     /// Replace the live dock from a previously [`dock_json`](Self::dock_json)
@@ -3414,6 +3495,24 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
             // swallowed every click on bare 3D outside a dock leaf.
             let dock_rect = viewport_ui.available_rect_before_wrap();
             DockArea::new(dock).style(style).show_inside(&mut viewport_ui, &mut viewer);
+            // The scene viewport LEAF's rect, straight from egui_dock's post-layout
+            // tree. `LeafNode::rect` persists even when the leaf is COLLAPSED or the
+            // viewport sits behind another tab — cases where `ViewportPanel::render`
+            // doesn't run and so can't record the scene pick leaf itself. Feeding
+            // this to the gate keeps the full-window 3D clickable through
+            // collapse / fold / background (else a collapsed centre goes dead to
+            // clicks). `panels`/`dock` are usable again here — `viewer`'s reborrows
+            // ended at `show_inside`.
+            let scene_vp_tab = panels
+                .iter()
+                .find(|(_, p)| p.scene_target() == Some(SceneTarget::MainViewport))
+                .map(|(id, _)| TabId::Singleton(*id));
+            let scene_vp_rect = scene_vp_tab.and_then(|vp_tab| {
+                dock.main_surface().iter().find_map(|node| match node {
+                    egui_dock::Node::Leaf(leaf) if leaf.tabs.contains(&vp_tab) => Some(leaf.rect),
+                    _ => None,
+                })
+            });
             // After the dock has laid itself out, publish the area
             // rect under a generic "panel.center" anchor so the help
             // tour can spotlight the dock content as a whole.
@@ -3422,6 +3521,7 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
             }
             if let Some(mut g) = world.get_resource_mut::<viewport::ScenePickGate>() {
                 g.set_dock_rect(dock_rect);
+                g.set_scene_viewport_rect(scene_vp_rect);
             }
         }
     } else {

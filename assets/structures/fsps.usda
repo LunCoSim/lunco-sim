@@ -9,8 +9,9 @@
 # sphere) + 4 umbrella radiators on a boom. Place offset + sunk, away from
 # the habitat (radiation standoff).
 def Xform "Fsps" (
+    kind = "component"
     doc = "Fission Surface Power — reactor drum, shadow shield and umbrella radiators. Steady kilowatts through the lunar night; site it well offset from the habitat for radiation standoff."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = true

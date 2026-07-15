@@ -31,10 +31,9 @@ in with `load_scene(...)`. A lesson that needs a model just `cmd("OpenClass", �
      on real actions (`requires_event`, `done` predicates); emits `MISSION_COMPLETE`.
    - Setup: `load_scene("scenes/…")`, `cmd("OpenClass", #{ qualified })`,
      `set_subsystem(name, on)`.
-2. Declare its catalog entry — **data, not Rust**. Two homes, pick by scene:
-
-   **(a) JSON manifest** `tutorials/<app>/tutorials.json` — the default; required
-   for scene-less lessons. The app loads it via `TutorialPlugin { app: "<app>" }`.
+2. Declare its catalog entry in the **JSON manifest** `tutorials/<app>/tutorials.json`
+   — **data, not Rust**. The single catalog; a 3D lesson's `.usda` is just the
+   environment its script loads. The app loads it via `TutorialPlugin { app: "<app>" }`.
    Strict JSON — **no comments** (the `//` below are for the doc only).
    ```json
    {
@@ -45,23 +44,6 @@ in with `load_scene(...)`. A lesson that needs a model just `cmd("OpenClass", �
      "first_start": false,                // true = the once-only onboarding entry
      "next": null                         // "next-id" to chain on completion
    }
-   ```
-
-   **(b) On the scene (hybrid)** — a scene-backed 3D lesson may instead carry its
-   entry on its own `.usda`, as `lunco:tutorial*` attrs on the default prim, so
-   the environment file doubles as the catalog row. `first_drive.usda` does this;
-   `lunco_usd_bevy::tutorial_scene_metas(app)` scans `<app>/*.usda` and the
-   launcher merges it with the JSON (idempotent on `id`, ordered by `next`).
-   Presence of `lunco:tutorialId` = the scene is a tutorial. Don't also add a
-   JSON row for the same id. USD-only + per-app (sandbox scans; lunica/luncosim
-   have no scene lessons and never pull in `openusd`).
-   ```usda
-   custom string lunco:tutorialId = "first-drive"
-   custom string lunco:tutorialTitle = "First Drive"
-   custom string lunco:tutorialBlurb = "…"
-   custom string lunco:tutorialDifficulty = "beginner"
-   custom string lunco:tutorialScript = "sandbox/first_drive.rhai"
-   custom string lunco:tutorialNext = "lander-mission"   # omit = end of chain
    ```
 
 That's it — **no rebuild, no Rust**. On native the manifest *and* the script are

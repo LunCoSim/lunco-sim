@@ -34,7 +34,7 @@
 //!
 //! # The properties are real USD now
 //!
-//! `lunco:spawnable` and `lunco:spawnLift` are declared by **`LuncoCatalogAPI`**
+//! `lunco:spawnable` and `lunco:spawnLift` are declared by **`LunCoCatalogAPI`**
 //! (`lunco-usd/schema/schema.usda`), applied to the asset's default prim. They were
 //! undeclared names, and the assets disagreed about admitting it — `custom bool
 //! lunco:spawnable` was honest, while `float lunco:spawnLift` was authored *without*
@@ -94,7 +94,7 @@ pub fn parse_spawn_meta(src: &str) -> SpawnMeta {
     SpawnMeta {
         // Typed: `bool`, not the string "true". The scan this replaces accepted
         // `true` or `1` textually and would equally have accepted `truthy`.
-        // Both are declared by `LuncoCatalogAPI` (see lunco-usd/schema/schema.usda).
+        // Both are declared by `LunCoCatalogAPI` (see lunco-usd/schema/schema.usda).
         spawnable: prim.scalar::<bool>("lunco:spawnable").unwrap_or(false),
         lift: prim.real_f32("lunco:spawnLift").unwrap_or(0.0),
         // USD's `doc` prim metadata — NOT an attribute of ours. See the field doc.
@@ -113,7 +113,7 @@ mod tests {
 
 def Xform "Rover" (
     doc = "A rover."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = true

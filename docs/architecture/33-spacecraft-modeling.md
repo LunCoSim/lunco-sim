@@ -46,8 +46,9 @@ The earlier assumption "rover is hardcoded in Rust" is **largely false today**:
   `Prismatic`, `Fixed` joints from `Physics*Joint` prims (body refs, axis, anchors, limits).
 - **Compound rigid bodies** follow OpenUSD spec: `PhysicsRigidBodyAPI` on parent +
   `PhysicsCollisionAPI` on children → one body, compound collider.
-- **Cosim binding is USD-authored.** `lunco:modelicaModel="models/Foo.mo"` +
-  `lunco:simWires="out:port,in:port"` binds a model to a body and wires its I/O.
+- **Cosim binding is USD-authored.** A program is a prim: `lunco:program:sourceAsset =
+  @models/Foo.mo@` names the model, and native USD connections
+  (`inputs:x.connect = </Body.outputs:y>`) wire its I/O.
   Live example: `assets/vessels/balloons/modelica_balloon.usda`.
 - **Force application path exists.** wire → `PendingForces` accumulator →
   `apply_pending_forces` → Avian `Forces`. Gravity applied separately by
@@ -338,13 +339,17 @@ Matters for reproducibility and standards interop, not for modeling more assets.
 
 1. **USD prim** `/World/Lander`: `PhysicsRigidBodyAPI`, `physics:mass`,
    `physics:diagonalInertia`, `physics:centerOfMass` (needs G2), collider(s).
-2. **Bind model**: `lunco:modelicaModel = "models/Lander.mo"` (extend `RocketEngine.mo`
-   with gimbal angles + throttle).
-3. **Wires** (`lunco:simWires`):
-   - `thrust:force_local_z` (body-frame, needs G1)
-   - `gimbal_torque_x:torque_x`, `gimbal_torque_y:torque_y` (needs G1)
-   - `mass:mass` (propellant burn, needs G3)
-   - feedback: `height:height`, `velocity_y:velocity_y`, attitude → model inputs
+2. **Bind the program**: the lander's flight-control law is inseparable from the
+   airframe, so apply `LunCoProgramAPI` on the prim and author
+   `uniform asset lunco:program:sourceAsset = @models/Lander.mo@` (extend
+   `RocketEngine.mo` with gimbal angles + throttle) plus
+   `uniform bool lunco:program:realtimeSafe = true` — it drives a force on a predicted
+   body.
+3. **Connections** (each authored on the consumer):
+   - `inputs:force_local_z.connect = </Lander.outputs:thrust>` (body-frame, needs G1)
+   - `inputs:torque_x.connect`, `inputs:torque_y.connect` ← the gimbal torques (needs G1)
+   - `inputs:mass.connect` ← the model's burned mass (propellant burn, needs G3)
+   - feedback: the body's `height`, `velocity_y` and attitude → the model's `inputs:`
 4. **Gravity** stays on Avian. `Lander.mo` exports thrust only (mirror `Balloon.mo:53`).
 5. **Guidance/throttle controller**: rhai or a Modelica controller reading
    altitude/velocity → throttle/gimbal commands (closed-loop descent).

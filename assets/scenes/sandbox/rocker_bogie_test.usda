@@ -17,8 +17,9 @@
 # differential on /RockerBogieTest/Rover".
 
 def Xform "RockerBogieTest" (
+    kind = "assembly"
     doc = "The rocker-bogie rover (the kind Mars rovers use) driving over a small step. The linkage should keep the body level as one side lifts."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
 
@@ -73,11 +74,13 @@ def Xform "RockerBogieTest" (
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }
 
-    def Xform "Avatar"
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
     {
-        string lunco:avatar = "true"
-        string lunco:cameraMode = "freeflight"
-        custom double3 lunco:cameraLookAt = (0.0, 1.6, 0.0)
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 1.6, 0.0)
         double3 xformOp:translate = (7.0, 5.0, 8.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

@@ -19,7 +19,7 @@
 # playtest (see 05_SEMINAR_TUTORIALS.md §C).
 def Xform "RoverEasy" (
     doc = "Easy rover (Explorer LT) — low centre of mass, planted and forgiving. The trainer tier: it climbs the borderline slope and resists tipping. Start here."
-    prepend apiSchemas = ["LuncoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI"]
     prepend references = @lunco://vessels/rovers/six_wheel_rover.usda@</SixWheelRover>
 )
 {

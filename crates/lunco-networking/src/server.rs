@@ -694,7 +694,7 @@ fn on_server_connected(
             });
         }
     }
-    // Policies need no connect-time push: a `LuncoPolicy` prim is a USD doc op, so
+    // Policies need no connect-time push: a `LunCoPolicy` prim is a USD doc op, so
     // it arrives in the full journal replay above and each peer's projector
     // activates it — determinism by identical composition, not by broadcast.
     info!("[net] client connected: peer={peer:?} session={}", session.0);

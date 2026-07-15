@@ -24,7 +24,7 @@ impl EphemerisProvider for StubEphemeris {
 /// `test_celestial_startup_and_movement` for why each piece is here).
 ///
 /// Note the `CelestialBodyDecl` spawns: celestial content is **opt-in per scene**
-/// (doc 19 §11e). A scene declares its bodies in USD (`LuncoCelestialBodyAPI` →
+/// (doc 19 §11e). A scene declares its bodies in USD (`LunCoCelestialBodyAPI` →
 /// `CelestialBodyDecl`), and nothing celestial — hierarchy, globes, orbit views,
 /// ephemeris — exists without them. These stand in for that declaration, exactly as
 /// `assets/celestial/solar_system.usda` does for a real scene.

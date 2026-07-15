@@ -2,8 +2,8 @@
 //!
 //! These resources are the seam the optional `lunco-networking` layer drives,
 //! and the gate every wire-applied command passes through. In single-player
-//! ([`NetworkRole::Standalone`], [`crate::IsServer`]`(true)`) the gate trivially
-//! passes and nothing is ever serialized — the *same* codepath as multiplayer
+//! ([`NetworkRole::Standalone`], [`NetworkRole::is_authoritative`]` == true`) the
+//! gate trivially passes and nothing is ever serialized — the *same* codepath as multiplayer
 //! (the listen-server model), no second branch. This is D7: the substrate is
 //! always compiled in; only the wire is feature-gated.
 
@@ -48,6 +48,22 @@ impl NetworkRole {
     /// serialize locally-originated commands.
     pub fn is_networked(self) -> bool {
         !matches!(self, NetworkRole::Standalone)
+    }
+    /// This peer is the identity + authority owner of its own world: it **mints**
+    /// [`GlobalEntityId`](crate::GlobalEntityId)s (the `is_authoritative` gate in
+    /// `assign_global_entity_ids`) and authorizes control. `true` for `Host`
+    /// (listen/dedicated server) and `Standalone` (single-player is its own
+    /// authority); `false` only for a pure `Client`, which defers identity to the
+    /// host and pins host-allocated ids via replication.
+    ///
+    /// **This is THE single source of truth for "am I authoritative".** It used to
+    /// be duplicated in a separate `IsServer(bool)` resource set by hand at three
+    /// sites (startup / `JoinServer` / `LeaveServer`); the two drifted — a
+    /// standalone sandbox was `Standalone` *and* `IsServer(false)`, so runtime
+    /// (palette) spawns got no id and a `piloted`-gated lander went dead. Deriving
+    /// it here makes that drift unrepresentable.
+    pub fn is_authoritative(self) -> bool {
+        matches!(self, NetworkRole::Standalone | NetworkRole::Host)
     }
 }
 

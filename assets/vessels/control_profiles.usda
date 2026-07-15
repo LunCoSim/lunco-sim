@@ -17,6 +17,11 @@
 # ── Wheeled rover: forward/back -> throttle, left/right -> steer, action -> brake.
 def "RoverControls"
 {
+    # Camera-follow mode (read into `lunco_core::CameraFollow` at projection): a
+    # ground vehicle has a stable up and a meaningful forward, so the chase camera
+    # follows its YAW heading and turns as it steers.
+    uniform token lunco:cameraFollow = "heading"
+
     def "forward"
     {
         uniform string lunco:port = "throttle"
@@ -49,6 +54,13 @@ def "RoverControls"
 #    No `manual` arming port — manual/automatic is a separate flight-mode layer.
 def "LanderControls"
 {
+    # Camera-follow mode (read into `lunco_core::CameraFollow` at projection): a
+    # 6-DOF flyer pitches and rolls, so following its heading/attitude drags the
+    # camera through the tumble. `orbit` keeps a STABLE external frame the craft
+    # rotates inside of. (Author `"chase"` instead for a cockpit frame that rolls
+    # with the vehicle.)
+    uniform token lunco:cameraFollow = "orbit"
+
     def "forward"
     {
         uniform string lunco:port = "pitch"

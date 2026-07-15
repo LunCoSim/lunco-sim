@@ -239,16 +239,16 @@ doesn't revert a peer's edit.
 
 An object builder without undo is a toy. This must land.
 
-### 3.5 Parameters are an untyped string
+### 3.5 Parameters carry no bounds, units, or documentation
 
-`lunco:params = "rest_altitude=1.5, kv=1.2"` is split on `,`, then `=`, then
-`parse::<f64>()` — **non-numeric values are silently dropped** (`lunco-usd-bevy/src/lib.rs:910-925`).
-It feeds `param(me, key, default)` in Rhai and nothing else. It is not a USD-attr or
-Modelica-param override channel.
+Parameters are typed USD attributes, which is the right shape: a program's own settings are
+one attribute per key on its prim (`custom float lunco:param:wmax = 1.05`, read by
+`param(me, key, default)` in rhai), and a model's are its ports (`float inputs:kv = 1.2` —
+an input with a constant instead of a connection). Per-component config is the same
+(`wheel.usda:42-51`: `double lunco:springStiffness`, `lunco:motorPower`, …).
 
-Typed per-component config already exists the right way, as real USD attributes
-(`wheel.usda:42-51`: `double lunco:springStiffness`, `lunco:motorPower`, …). The gap is that
-nothing declares their bounds, units, or documentation, so an editor cannot derive a control.
+The gap is that nothing declares their bounds, units, or documentation, so an editor cannot
+derive a control.
 
 USD gives this for free via per-attribute `customData`:
 
@@ -292,7 +292,7 @@ built by the twin-projection work: `DocBackedTwinScenes` maps a running scene's
 - **`SaveScenario { target }`** (in `lunco-sandbox`, the only crate that depends on both
   `lunco-usd` and `lunco-scripting` — `lunco-usd-sim` can't, it would be circular). It resolves
   the entity's live source (`ScriptRegistry`), its prim path, and the backing document, then
-  authors `lunco:script` onto the root layer via `ApplyUsdOp` — so it journals, and
+  authors `lunco:program:sourceCode` on the program prim, onto the root layer via `ApplyUsdOp` — so it journals, and
   `SaveDocument` writes it through to the `.usda`.
 - **String authoring is one architectural rule, not per-call-site escaping.** `SetAttribute`
   with `type_name == "string"` authors the value **raw** (`Value::String`): the USDA writer
@@ -488,7 +488,7 @@ it). Follows `SelectedEntities`, resolves `ScriptedModel → ScriptRegistry` sou
 buffer (re-synced only on a doc/generation change with no unsaved edits, so typing is never clobbered),
 and surfaces `DocumentDiagnostics` (the line/col the rhai compile path emits) as a click-to-jump list
 plus a compile-status chip. **Save & Run** = `RunScenario{source}` (sets live source + hot-reloads the
-scenario) → `SaveScenario` (persists onto `lunco:script`), both journaled; **Revert** reloads the saved
+scenario) → `SaveScenario` (persists onto the program prim's `lunco:program:sourceCode`), both journaled; **Revert** reloads the saved
 source. Boot-verified: attaching a rhai script with a deliberate `let boost = ;` showed the source and
 the diagnostic `✗ 9:17 Unexpected ';' (line 9, position 17)`. **Follow-up:** a painted line-number
 gutter (the codebase has none; the Modelica editor deliberately deferred it — the diagnostics list is

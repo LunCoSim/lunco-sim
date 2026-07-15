@@ -5,35 +5,31 @@
     metersPerUnit = 1
 )
 
-# Reusable Python-driven balloon. Mirrors `modelica_balloon.usda` but
-# uses `lunco:pythonModel` so the cosim translator routes to the Python
-# backend rather than Modelica.
+# Reusable Python-driven balloon. Mirrors `modelica_balloon.usda`; the engine that
+# runs the program comes from its source's extension, so a `.py` routes to the Python
+# backend and a `.mo` to Modelica — nothing else about the prim changes.
+#
+# The balloon IS its plant, so `LunCoProgramAPI` is applied here rather than the model
+# being carried as a separate child program. The root is an `Xform` — the envelope is a
+# child gprim that renders and collides, and the rigid body is the root.
 
-def Sphere "PythonBalloon" (
+def Xform "PythonBalloon" (
     kind = "component"
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "LuncoMaterialAPI", "LuncoCatalogAPI"]
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI", "LunCoProgramAPI"]
 )
 {
     uniform bool lunco:spawnable = true
-    double radius = 1.0
-    color3f[] primvars:displayColor = [(0.2, 0.9, 0.2)]
-
-    # Spin-revealing checker via the general ShaderMaterial, loaded at USD-load
-    # time (see assets/shaders/balloon.wgsl).
-    uniform token lunco:material:type = "shader"
-    uniform asset lunco:material:shader = @shaders/balloon.wgsl@
-    color3f primvars:cell_a = (0.2, 0.8, 0.3)    # cell A (balloon identity)
-    color3f primvars:cell_b = (0.12, 0.12, 0.14) # cell B (dark)
-    color3f primvars:marker_color = (1.0, 1.0, 1.0) # marker wedge + poles
-    float primvars:wedge_count = 8.0             # longitude cells
-    float primvars:band_count = 6.0              # latitude cells
-
-    bool physics:rigidBodyEnabled = true
-    bool physics:collisionEnabled = true
-    float physics:mass = 4.5
     float lunco:spawnLift = 2.0
 
-    string lunco:pythonModel = "models/GreenBalloon.py"
+    bool physics:rigidBodyEnabled = true
+    float physics:mass = 4.5
+
+    # ── The plant ────────────────────────────────────────────────────────────
+    uniform asset lunco:program:sourceAsset = @models/GreenBalloon.py@
+
+    # It drives `force_y` every solver step on a body the client predicts, so it must
+    # promise it steps fast enough to be trusted with a force.
+    uniform bool lunco:program:realtimeSafe = true
 
     # Co-sim wiring — native USD `connectionPaths` (derived to `SimConnection` by
     # `reconcile_usd_connections`). Self-loop on this one prim, which carries both
@@ -43,4 +39,38 @@ def Sphere "PythonBalloon" (
     float inputs:force_y.connect = </PythonBalloon.outputs:netForce>
     float inputs:height.connect = </PythonBalloon.outputs:height>
     float inputs:velocity.connect = </PythonBalloon.outputs:velocity_y>
+
+    # ── Looks: the envelope's skin ───────────────────────────────────────────
+    # Spin-revealing checker (see assets/shaders/balloon.wgsl), bound the way USD binds
+    # every shader: a `Material` whose surface comes from a `Shader`.
+    def Scope "Looks"
+    {
+        def Material "Envelope"
+        {
+            token outputs:surface.connect = </PythonBalloon/Looks/Envelope/Shader.outputs:surface>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:wgsl:sourceAsset = @shaders/balloon.wgsl@
+                color3f inputs:cell_a = (0.2, 0.8, 0.3)    # cell A (balloon identity)
+                color3f inputs:cell_b = (0.12, 0.12, 0.14) # cell B (dark)
+                color3f inputs:marker_color = (1.0, 1.0, 1.0) # marker wedge + poles
+                float inputs:wedge_count = 8.0             # longitude cells
+                float inputs:band_count = 6.0              # latitude cells
+                token outputs:surface
+            }
+        }
+    }
+
+    # ── The envelope: renders and collides ───────────────────────────────────
+    def Sphere "Envelope" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double radius = 1.0
+        color3f[] primvars:displayColor = [(0.2, 0.9, 0.2)]
+        bool physics:collisionEnabled = true
+        rel material:binding = </PythonBalloon/Looks/Envelope>
+    }
 }

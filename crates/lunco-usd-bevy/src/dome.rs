@@ -172,7 +172,8 @@ pub fn read_dome_environment<R: crate::read::UsdRead>(
     asset_server: &AssetServer,
     stage_id: bevy::asset::AssetId<crate::UsdStageAsset>,
 ) -> Option<UsdDomeEnvironment> {
-    let texture_path = crate::read_token(reader, sdf_path, "inputs:texture:file")
+    let texture_path = reader
+        .asset(sdf_path, "inputs:texture:file")
         .filter(|p| !p.is_empty())
         .and_then(|p| crate::resolve_texture_path(asset_server, stage_id, &p))?;
 
@@ -180,7 +181,7 @@ pub fn read_dome_environment<R: crate::read::UsdRead>(
     // *decoded* image in `project_dome_textures` rather than the extension, so
     // this starts as LatLong and is corrected there if the image turns out to
     // carry 6 layers.
-    match crate::read_token(reader, sdf_path, "inputs:texture:format").as_deref() {
+    match reader.text(sdf_path, "inputs:texture:format").as_deref() {
         Some("cubeMapVerticalCross") | Some("angular") | Some("mirroredBall") => {
             warn!(
                 "[usd-bevy] {} DomeLight inputs:texture:format is unsupported (only \

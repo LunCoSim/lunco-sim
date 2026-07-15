@@ -80,7 +80,7 @@ pub struct RoverClickEvent {
 }
 
 /// A scene-authored declaration that a celestial body exists — the ECS projection
-/// of USD's `LuncoCelestialBodyAPI` (`int lunco:body = 399`).
+/// of USD's `LunCoCelestialBodyAPI` (`int lunco:body = 399`).
 ///
 /// **This is the switch that turns the sky on**, and it is scene data, not a code
 /// flag. No prim declares a body ⇒ no hierarchy, no globes, no orbit views, no
@@ -110,7 +110,7 @@ pub fn celestial_declared(q: Query<(), With<CelestialBodyDecl>>) -> bool {
 /// Host-app policy for the celestial stack (doc 43).
 ///
 /// Note what is NOT here any more: `spawn_hierarchy`. Whether a solar system exists
-/// is the *scene's* call, authored as `LuncoCelestialBodyAPI` prims and gated by
+/// is the *scene's* call, authored as `LunCoCelestialBodyAPI` prims and gated by
 /// [`celestial_declared`] — not a host-app boolean. This resource now carries only
 /// genuine host policy: whether the app owns its own camera.
 #[derive(Resource, Debug, Clone, Copy)]
@@ -212,7 +212,7 @@ impl Plugin for CelestialPlugin {
             app.add_plugins(GravityPlugin);
         }
 
-        // Hierarchy spawn is gated by what the SCENE declares (`LuncoCelestialBodyAPI`
+        // Hierarchy spawn is gated by what the SCENE declares (`LunCoCelestialBodyAPI`
         // prims → `CelestialBodyDecl`), not by a host boolean, and is idempotent
         // (skipped while a `SolarSystemRoot` exists). In `Update` rather than `Startup`
         // so it fires whenever a scene with bodies loads — including at runtime.

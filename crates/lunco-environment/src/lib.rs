@@ -28,7 +28,7 @@ use lunco_core::{Command, on_command, register_commands};
 /// projector reads it back on stage change — so those knobs journal + round-trip
 /// like every other USD edit, WITHOUT coupling the light loader to global/camera
 /// render state (they live on their own prim, read by their own system).
-pub const LUNCO_ENVIRONMENT_PRIM_TYPE: &str = "LuncoEnvironment";
+pub const LUNCO_ENVIRONMENT_PRIM_TYPE: &str = "LunCoEnvironment";
 
 /// Gravity configuration types (`Gravity`, `GravityBody`, `GravityProvider`,
 /// `GravityModel`) — environmental-state vocabulary owned here. The gravity
