@@ -215,6 +215,14 @@ pub struct ScenePickGate {
     /// true area, not the whole window). Anything outside it is bare full-window
     /// 3D and must read as scene. `None` in full-window/View mode.
     dock_rect: Option<egui::Rect>,
+    /// The scene `ViewportPanel`'s dock LEAF rect this frame, read straight from
+    /// egui_dock's post-layout tree (`LeafNode::rect`) — NOT from the panel's
+    /// render. That distinction is the whole point: when the leaf is COLLAPSED or
+    /// the viewport is a background tab, `ViewportPanel::render` (which records
+    /// [`scene_leaf`](Self::scene_leaf)) doesn't run, yet the full-window 3D still
+    /// shows in this rect and must stay clickable. `None` outside dock mode / when
+    /// the viewport isn't in the tree.
+    scene_viewport_rect: Option<egui::Rect>,
     /// Resolved scene under the pointer — the single source of truth read by
     /// [`egui_viewport_aware_picking`] and [`track_egui_focus`]. `None` = chrome.
     resolved: Option<SceneTarget>,
@@ -340,6 +348,13 @@ impl ScenePickGate {
         self.dock_rect = Some(rect);
     }
 
+    /// Record the scene viewport leaf's rect (egui points) from egui_dock's
+    /// post-layout tree. Called by `render_layout` after `show_inside`. See
+    /// [`scene_viewport_rect`](Self::scene_viewport_rect).
+    pub fn set_scene_viewport_rect(&mut self, rect: Option<egui::Rect>) {
+        self.scene_viewport_rect = rect;
+    }
+
     /// Mark that the egui pass ran this frame (so the gate's inputs are real).
     pub fn mark_rendered(&mut self) {
         self.rendered = true;
@@ -351,6 +366,7 @@ impl ScenePickGate {
         self.scene_leaf = None;
         self.chrome_cards.clear();
         self.dock_rect = None;
+        self.scene_viewport_rect = None;
     }
 
     /// The scene the pointer is over right now, or `None` for chrome. The single
@@ -382,6 +398,7 @@ impl ScenePickGate {
             self.scene_leaf,
             &self.chrome_cards,
             self.dock_rect,
+            self.scene_viewport_rect,
         );
         let latch = PressLatch {
             held: self.latched,
@@ -451,20 +468,31 @@ pub fn resolve_scene_target(
     scene_leaf: Option<SceneTarget>,
     chrome_cards: &[(egui::Rect, egui::Rect)],
     dock_rect: Option<egui::Rect>,
+    scene_viewport_rect: Option<egui::Rect>,
 ) -> Option<SceneTarget> {
     if egui_state.using_pointer || egui_state.over_egui {
         return None;
     }
     let pos = egui_state.hover_pos?;
-    // A scene-hosting leaf under the pointer wins: an offscreen preview records
-    // BOTH its own target and an opaque chrome card (it must block the MAIN scene),
-    // and we want the precise target, not just "not the main scene".
+    // A scene-hosting leaf that RENDERED under the pointer wins: an offscreen
+    // preview records BOTH its own target and an opaque chrome card (it must block
+    // the MAIN scene), and we want the precise target, not just "not the main
+    // scene". The main viewport records its target here too when its panel renders.
     if let Some(target) = scene_leaf {
         return Some(target);
     }
     let over_card = chrome_cards.iter().any(|(_, card)| card.contains(pos));
     if over_card {
         return None;
+    }
+    // The scene viewport leaf that did NOT render this frame — COLLAPSED, or the
+    // viewport sitting behind another tab — so it recorded no `scene_leaf` above.
+    // Its dock-layout `rect` still covers the full-window 3D showing there, so the
+    // click must reach the scene. Checked AFTER the cards so a genuine opaque panel
+    // still wins. This is what keeps a collapsed/folded/backgrounded viewport
+    // clickable instead of dead.
+    if scene_viewport_rect.is_some_and(|r| r.contains(pos)) {
+        return Some(SceneTarget::MainViewport);
     }
     let in_gap = chrome_cards
         .iter()
@@ -1145,7 +1173,7 @@ mod tests {
         let dock = rect((0.0, 30.0), (800.0, 400.0));
         let cards = [(rect((0.0, 30.0), (200.0, 400.0)), rect((0.0, 30.0), (200.0, 400.0)))];
         // Below the dock (y = 500) — bare 3D.
-        let out = resolve_scene_target(hovering((400.0, 500.0)), None, &cards, Some(dock));
+        let out = resolve_scene_target(hovering((400.0, 500.0)), None, &cards, Some(dock), None);
         assert_eq!(out, Some(SceneTarget::MainViewport));
     }
 
@@ -1155,7 +1183,7 @@ mod tests {
         let dock = rect((0.0, 30.0), (800.0, 400.0));
         let cards = [(rect((0.0, 60.0), (200.0, 400.0)), rect((0.0, 60.0), (200.0, 400.0)))];
         // y = 40 is the leaf's tab-bar strip: inside the dock, outside every body.
-        let out = resolve_scene_target(hovering((100.0, 40.0)), None, &cards, Some(dock));
+        let out = resolve_scene_target(hovering((100.0, 40.0)), None, &cards, Some(dock), None);
         assert_eq!(out, None);
     }
 
@@ -1163,7 +1191,7 @@ mod tests {
     /// surface is the main scene.
     #[test]
     fn full_window_mode_is_all_scene() {
-        let out = resolve_scene_target(hovering((400.0, 300.0)), None, &[], None);
+        let out = resolve_scene_target(hovering((400.0, 300.0)), None, &[], None, None);
         assert_eq!(out, Some(SceneTarget::MainViewport));
     }
 
@@ -1173,7 +1201,7 @@ mod tests {
     fn opaque_panel_body_has_no_gap() {
         let body = rect((0.0, 30.0), (200.0, 400.0));
         let cards = [(body, body)]; // opaque: card == body
-        let out = resolve_scene_target(hovering((100.0, 380.0)), None, &cards, Some(body));
+        let out = resolve_scene_target(hovering((100.0, 380.0)), None, &cards, Some(body), None);
         assert_eq!(out, None);
     }
 
@@ -1184,8 +1212,8 @@ mod tests {
         let body = rect((0.0, 30.0), (200.0, 400.0));
         let card = rect((0.0, 30.0), (200.0, 120.0)); // painted a short card
         let cards = [(body, card)];
-        let on_card = resolve_scene_target(hovering((100.0, 60.0)), None, &cards, Some(body));
-        let in_gap = resolve_scene_target(hovering((100.0, 300.0)), None, &cards, Some(body));
+        let on_card = resolve_scene_target(hovering((100.0, 60.0)), None, &cards, Some(body), None);
+        let in_gap = resolve_scene_target(hovering((100.0, 300.0)), None, &cards, Some(body), None);
         assert_eq!(on_card, None);
         assert_eq!(in_gap, Some(SceneTarget::MainViewport));
     }
@@ -1195,7 +1223,7 @@ mod tests {
     fn over_egui_is_chrome() {
         let mut st = hovering((400.0, 300.0));
         st.over_egui = true;
-        assert_eq!(resolve_scene_target(st, None, &[], None), None);
+        assert_eq!(resolve_scene_target(st, None, &[], None, None), None);
     }
 
     /// 6g — pointer gone from the window ⇒ nothing is hovered. (The old code used
@@ -1204,7 +1232,7 @@ mod tests {
     fn pointer_off_window_owns_nothing() {
         let mut st = hovering((400.0, 300.0));
         st.hover_pos = None;
-        assert_eq!(resolve_scene_target(st, None, &[], None), None);
+        assert_eq!(resolve_scene_target(st, None, &[], None, None), None);
     }
 
     /// The scene leaf the pointer is actually inside wins over the dock blanket.
@@ -1216,6 +1244,7 @@ mod tests {
             Some(SceneTarget::MainViewport),
             &[],
             Some(dock),
+            None,
         );
         assert_eq!(out, Some(SceneTarget::MainViewport));
     }
@@ -1233,9 +1262,35 @@ mod tests {
             Some(SceneTarget::Offscreen(USD_PREVIEW)),
             &cards,
             Some(dock),
+            None,
         );
         assert_eq!(out, Some(SceneTarget::Offscreen(USD_PREVIEW)));
         assert_ne!(out, Some(SceneTarget::MainViewport));
+    }
+
+    /// A COLLAPSED (or background-tab) viewport leaf records no `scene_leaf` — its
+    /// `ViewportPanel::render` didn't run — but its dock-layout `rect` still covers
+    /// the full-window 3D. The click MUST reach the scene, not die as chrome. This
+    /// is the collapse/fold/background fix.
+    #[test]
+    fn collapsed_viewport_leaf_rect_is_scene() {
+        let dock = rect((0.0, 30.0), (800.0, 400.0));
+        let vp = rect((200.0, 30.0), (800.0, 400.0)); // the viewport leaf's rect
+        // No scene_leaf (panel didn't render), no chrome card over the centre.
+        let out = resolve_scene_target(hovering((400.0, 200.0)), None, &[], Some(dock), Some(vp));
+        assert_eq!(out, Some(SceneTarget::MainViewport));
+    }
+
+    /// …but a genuine OPAQUE panel drawn over that rect still wins — chrome beats
+    /// the collapsed-viewport fallback (it's checked after the cards).
+    #[test]
+    fn opaque_panel_over_collapsed_viewport_is_chrome() {
+        let dock = rect((0.0, 30.0), (800.0, 400.0));
+        let vp = rect((0.0, 30.0), (800.0, 400.0));
+        let body = rect((0.0, 30.0), (200.0, 400.0));
+        let cards = [(body, body)]; // opaque panel on the left, over the vp rect
+        let out = resolve_scene_target(hovering((100.0, 200.0)), None, &cards, Some(dock), Some(vp));
+        assert_eq!(out, None);
     }
 
     // ── PressLatch: the drag-ownership state machine (6b) ───────────────────

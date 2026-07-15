@@ -416,7 +416,22 @@ pub fn scene_click_ray(
     if focus.wants_pointer {
         return None;
     }
-    camera.viewport_to_world(cam_gtf, cursor).ok()
+    // `cursor` is bevy_picking's pointer position: LOGICAL pixels from the WINDOW
+    // top-left. `Camera::viewport_to_world` expects a position in the camera's own
+    // VIEWPORT space (it divides by `logical_viewport_size` and never adds the
+    // viewport origin), so it is only correct when the camera's viewport starts at
+    // the window origin. Today `apply_workbench_viewport` keeps the scene camera
+    // full-window (`SceneViewport.rect = None`), so the offset is zero and this is a
+    // no-op. It is a guard for the planned sub-rect confinement noted there ("a
+    // future sub-rect would derive it from the ViewportPanel's recorded rect"): the
+    // instant the camera is confined to the offset ViewportPanel leaf, feeding the
+    // raw WINDOW cursor here would skew every ray by the chrome offset and silently
+    // break spawn/select/possess in the middle of the Build view. Subtracting the
+    // logical viewport origin keeps both modes on one correct path.
+    let local = camera
+        .logical_viewport_rect()
+        .map_or(cursor, |rect| cursor - rect.min);
+    camera.viewport_to_world(cam_gtf, local).ok()
 }
 
 /// Marker resource indicating a terrain-sculpt tool is armed.

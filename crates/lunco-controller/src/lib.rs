@@ -26,7 +26,59 @@
 
 use bevy::prelude::*;
 use leafwing_input_manager::prelude::ActionState;
-use lunco_core::UserIntent;
+use lunco_core::{on_command, register_commands, Command, UserIntent};
+
+/// Intents forced held by [`SimulateIntent`] — a headless stand-in for the keyboard.
+///
+/// `drive_from_bindings` treats a member exactly as a held key: it OR's into the
+/// `held` test, so a simulated intent flows through the SAME two-stage binding path a
+/// real keypress does (intent → `ControlBinding` → `SetPorts`). This is how a test, a
+/// script, or the API drives a possessed vessel with no physical keyboard.
+#[derive(Resource, Default)]
+pub struct SimulatedIntents(pub std::collections::HashSet<UserIntent>);
+
+/// Force an intent held or released, as if a key were pressed — the headless way to
+/// drive a possessed vessel over the API or from rhai.
+///
+/// `held = true` is "stuck" (the key is down and stays down); `held = false` is
+/// "unstuck" (released). A momentary "one" press is `held:true` then `held:false`.
+/// The named intent is the USD control vocabulary (`forward`, `action`, `yaw_left`,
+/// …), parsed by [`lunco_core::parse_user_intent`], so it matches whatever a vessel's
+/// `Controls` profile binds.
+#[Command]
+pub struct SimulateIntent {
+    /// Intent name (`forward`, `backward`, `left`, `right`, `yaw_left`, `yaw_right`,
+    /// `action`, `release`, …).
+    pub intent: String,
+    /// `true` = hold it down, `false` = release it.
+    pub held: bool,
+}
+
+impl Default for SimulateIntent {
+    fn default() -> Self {
+        Self { intent: String::new(), held: false }
+    }
+}
+
+#[on_command(SimulateIntent)]
+fn on_simulate_intent(
+    trigger: On<SimulateIntent>,
+    mut sim: ResMut<SimulatedIntents>,
+) {
+    let cmd = trigger.event();
+    let Some(intent) = lunco_core::parse_user_intent(&cmd.intent) else {
+        warn!("[simulate-intent] unknown intent '{}'", cmd.intent);
+        return;
+    };
+    if cmd.held {
+        sim.0.insert(intent);
+    } else {
+        sim.0.remove(&intent);
+    }
+    info!("[simulate-intent] {} → {}", cmd.intent, if cmd.held { "HELD" } else { "released" });
+}
+
+register_commands!(on_simulate_intent);
 
 /// Plugin for managing vessel input and command translation.
 pub struct LunCoControllerPlugin;
@@ -44,6 +96,8 @@ impl Plugin for LunCoControllerPlugin {
         // input for each replayed tick, so regenerating input from the live keyboard
         // mid-replay would overwrite the very history we are replaying (and mint new
         // seqs for ticks that already happened).
+        app.init_resource::<SimulatedIntents>();
+        register_all_commands(app);
         app.add_systems(
             FixedUpdate,
             drive_from_bindings.run_if(lunco_core::not_rolling_back),
@@ -113,6 +167,8 @@ fn drive_from_bindings(
     // doesn't also drive the vessel — see the `held` closure below. `Option` so a
     // controller-only test app without the workbench still runs (no gate).
     egui_focus: Option<Res<lunco_core::EguiFocus>>,
+    // Intents forced by `SimulateIntent` — the headless/API/rhai stand-in for keys.
+    sim_intents: Option<Res<SimulatedIntents>>,
     // Per-vessel "keys were active last tick" memory for the idle-yield below.
     mut was_active: Local<std::collections::HashMap<Entity, bool>>,
     mut commands: Commands,
@@ -124,14 +180,22 @@ fn drive_from_bindings(
     // 0 — so the vessel decelerates to a clean stop rather than latching its last
     // command (as it would if we simply skipped the system).
     let egui_keyboard = egui_focus.map_or(false, |f| f.wants_keyboard);
-    let held = |intent, intents: &ActionState<UserIntent>| !egui_keyboard && intents.pressed(&intent);
+    let sim_intents = sim_intents.as_deref();
+    // A simulated intent counts as held regardless of the egui gate (it is not a
+    // physical key that a focused text field could be swallowing).
+    let held = |intent, intents: &ActionState<UserIntent>| {
+        sim_intents.is_some_and(|s| s.0.contains(&intent))
+            || (!egui_keyboard && intents.pressed(&intent))
+    };
 
     for (link, intents) in q_ctrl.iter() {
         // Stage 1 (key→intent) is the shared leafwing `InputMap<UserIntent>`;
         // stage 2 maps this vessel's active intents → summed, clamped port writes.
         // The binding is authored ON THE VESSEL as a USD `Controls` child scope
         // (referencing a shared profile) — skip a vessel that carries none.
-        let Ok(binding) = q_binding.get(link.vessel_entity) else { continue };
+        let Ok(binding) = q_binding.get(link.vessel_entity) else {
+            continue;
+        };
 
         // The vessel's id (gid + is-it-locally-owned) — used both by the ownership
         // yield below and the client seq bookkeeping.
@@ -145,7 +209,8 @@ fn drive_from_bindings(
         if let (Some(reg), Some(local), Some((gid, _))) =
             (registry.as_ref(), local_session.as_ref(), vessel_id)
         {
-            if reg.owner_of(gid.get()).is_some_and(|owner| owner != local.0) {
+            let owner = reg.owner_of(gid.get());
+            if owner.is_some_and(|owner| owner != local.0) {
                 continue;
             }
         }

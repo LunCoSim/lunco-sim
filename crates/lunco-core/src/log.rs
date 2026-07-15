@@ -24,6 +24,12 @@ fn log_telemetry_events(trigger: On<TelemetryEvent>) {
 
 fn log_sampled_parameter(trigger: On<SampledParameter>) {
     let param = trigger.event();
-    info!("[BLACKBOX] SAMPLE: name={}, value={:?}, unit={}, ts={:.4}",
+    // `debug!`, not `info!`: a SAMPLE is CONTINUOUS telemetry — the engine emits
+    // `engine.fps` / `engine.frame_time` (and any watched port) every frame, so at
+    // 100 fps an `info!` here floods the log and, redirected to a file, fills the
+    // disk. The black-box RECORD of samples belongs in a telemetry channel/recording,
+    // not the tracing log; this line is only a debug aid. Discrete EVENTs stay at
+    // `info!` above — they are rare (touchdown, low-fuel) and worth seeing by default.
+    debug!("[BLACKBOX] SAMPLE: name={}, value={:?}, unit={}, ts={:.4}",
         param.name, param.value, param.unit, param.timestamp);
 }
