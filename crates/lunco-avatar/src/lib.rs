@@ -3508,6 +3508,48 @@ fn sync_profile(
 
 // ── Command Registration ────────────────────────────────────────────────────────
 
+/// Diagnostic read-out of every possessable vessel's *control authority* state —
+/// the chain that decides whether the stick actually flies it:
+/// `GlobalEntityId` (needed for ownership + the model's `piloted` sensor),
+/// `ControlBinding` (intent→port map from the USD `Controls` scope), and whether
+/// the `SessionRegistry` currently records an owner (⇒ `piloted = 1`). Logs one
+/// `[inspect]` line per vessel at INFO. API-driven: `{"command":"InspectVessels"}`.
+#[lunco_core::Command(default)]
+pub struct InspectVessels {}
+
+#[on_command(InspectVessels)]
+fn on_inspect_vessels(_t: On<InspectVessels>, mut commands: Commands) {
+    commands.queue(|world: &mut World| {
+        // Collect first so the &mut World query borrow ends before the immutable
+        // per-entity component reads below.
+        let mut q = world.query_filtered::<Entity, bevy::prelude::Or<(
+            bevy::prelude::With<lunco_fsw::FlightSoftware>,
+            bevy::prelude::With<lunco_cosim::SimComponent>,
+        )>>();
+        let ents: Vec<Entity> = q.iter(world).collect();
+        info!("[inspect] {} possessable vessel(s)", ents.len());
+        for e in ents {
+            let name = world.get::<Name>(e).map(|n| n.as_str().to_string()).unwrap_or_default();
+            let gid = world.get::<lunco_core::GlobalEntityId>(e).map(|g| g.get());
+            let has_fsw = world.get::<lunco_fsw::FlightSoftware>(e).is_some();
+            let has_sim = world.get::<lunco_cosim::SimComponent>(e).is_some();
+            let has_sel = world.get::<lunco_core::SelectableRoot>(e).is_some();
+            let binding = world.get::<lunco_core::ControlBinding>(e).map(|b| {
+                let ports: Vec<&str> = b.ports().collect();
+                (b.binds.len(), ports.join(","))
+            });
+            let owner = gid.and_then(|g| {
+                world.get_resource::<lunco_core::SessionRegistry>().and_then(|r| r.owner_of(g))
+            });
+            info!(
+                "[inspect] {e:?} name={name:?} gid={gid:?} fsw={has_fsw} sim={has_sim} \
+                 selectable={has_sel} binding={binding:?} owner={owner:?} piloted={}",
+                owner.is_some() as u8
+            );
+        }
+    });
+}
+
 // Wires the avatar's commands into `register_all_commands(app)`, called from
 // LunCoAvatarPlugin::build(). (`CaptureScreenshot` used to be first in this list; it
 // was a dead duplicate and is gone — the one live registration is `lunco-api`'s.
@@ -3523,5 +3565,6 @@ register_commands!(
     on_release_command,
     on_focus_command,
     on_follow_command,
-    on_update_profile
+    on_update_profile,
+    on_inspect_vessels
 );

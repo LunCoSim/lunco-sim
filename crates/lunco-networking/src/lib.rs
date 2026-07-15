@@ -1,8 +1,8 @@
 //! LunCoSim networking — a **thin lightyear (WebTransport) adapter**.
 //!
 //! Identity/session/authority primitives (`Provenance`, `GlobalEntityId`,
-//! `SimTick`, `IsServer`, `NetworkRole`, `Mutation`) live always-on in
-//! `lunco-core`. The networking **wire** (codec, command capture/apply, snapshot
+//! `SimTick`, `NetworkRole` — whose `is_authoritative()` is the sole authority
+//! flag — and `Mutation`) live always-on in `lunco-core`. The networking **wire** (codec, command capture/apply, snapshot
 //! state — see [`wire`]) lives in *this* crate behind the `networking` feature,
 //! so single-player builds that omit `lunco-networking` carry no networking code
 //! at all. On top of the wire, this crate's job is to:
