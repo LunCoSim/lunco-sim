@@ -446,6 +446,52 @@ pub fn scene_click_ray(
 #[derive(Resource, Default)]
 pub struct TerrainToolActive(pub bool);
 
+/// "A cursor-driven editor mode owns the pointer" — the one gate, in one place.
+///
+/// The waypoint placement/menu, the spawn ghost and the terrain brush all park a mode
+/// on the cursor. The click observers already consulted these flags one-by-one; this
+/// bundles them so the keyboard ([`CancelIntent`]) honours exactly the same set. A
+/// mode must not be click-suppressed but keyboard-transparent (or the reverse).
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct CursorModeActive<'w> {
+    waypoint_tool: Option<Res<'w, WaypointToolActive>>,
+    waypoint_menu: Option<Res<'w, WaypointMenuOpen>>,
+    spawn_tool: Option<Res<'w, SpawnToolActive>>,
+    terrain_tool: Option<Res<'w, TerrainToolActive>>,
+}
+
+impl CursorModeActive<'_> {
+    /// True while any editor mode is using the cursor.
+    pub fn any(&self) -> bool {
+        self.waypoint_tool.as_ref().is_some_and(|t| t.0)
+            || self.waypoint_menu.as_ref().is_some_and(|m| m.0)
+            || self.spawn_tool.as_ref().is_some_and(|t| t.0)
+            || self.terrain_tool.as_ref().is_some_and(|t| t.0)
+    }
+}
+
+/// "The user asked to back out" — the [`UserIntent::Cancel`] intent.
+///
+/// Read this instead of sniffing `KeyCode::Escape`/`Backspace`: the bindings are DATA
+/// (`assets/config/keybindings.json`), so a rebind works everywhere at once and every
+/// mode agrees on what cancelling means. Suppressed while an egui field has keyboard
+/// focus, so Backspace typed into a text box edits text rather than backing out.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct CancelIntent<'w, 's> {
+    avatars: Query<'w, 's, &'static IntentState, With<Avatar>>,
+    egui_focus: Res<'w, EguiFocus>,
+}
+
+impl CancelIntent<'_, '_> {
+    /// True on the frame the user pressed Cancel.
+    pub fn just_pressed(&self) -> bool {
+        if self.egui_focus.wants_keyboard {
+            return false;
+        }
+        self.avatars.iter().any(|i| i.just_pressed(&UserIntent::Cancel))
+    }
+}
+
 /// True while a waypoint's right-click context menu is open.
 ///
 /// Read by avatar mouse-look to hold the camera still. `Look` is bound to raw

@@ -427,22 +427,26 @@ pub fn update_spawn_ghost(
     }
 }
 
-/// Keeps `SpawnToolActive` in sync with spawn mode and handles Escape-cancel.
+/// Keeps `SpawnToolActive` in sync with spawn mode and disarms on Cancel.
 ///
 /// `SpawnToolActive` is read by possession to stay out of the way while the
 /// spawn tool is armed; it used to be set as a side effect of the old click
-/// system, so it now lives in its own Update system. Escape is keyboard-driven,
+/// system, so it now lives in its own Update system. Cancel is keyboard-driven,
 /// not a pointer pick, so it stays a system too.
+///
+/// Reads the [`lunco_core::CancelIntent`], NOT a raw `KeyCode::Escape`: the bindings
+/// are data (`assets/config/keybindings.json`), so backing out of the spawn ghost uses
+/// the same vocabulary as backing out of everything else and follows a rebind.
 pub fn spawn_tool_state_system(
     mut commands: Commands,
     mut spawn_state: ResMut<SpawnState>,
     mut tool_active: ResMut<lunco_core::SpawnToolActive>,
-    keys: Res<ButtonInput<KeyCode>>,
+    cancel: lunco_core::CancelIntent,
     q_ghost: Query<Entity, With<SpawnGhost>>,
 ) {
     tool_active.0 = matches!(spawn_state.as_ref(), SpawnState::Selecting { .. });
 
-    if tool_active.0 && keys.just_pressed(KeyCode::Escape) {
+    if tool_active.0 && cancel.just_pressed() {
         for ghost in q_ghost.iter() {
             commands.entity(ghost).try_despawn();
         }

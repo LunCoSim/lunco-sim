@@ -255,6 +255,9 @@ impl Plugin for SandboxEditUiPlugin {
                     // Mirrors an armed placement into the shared tool gate so
                     // possession/selection stand down for that one click.
                     checkpoint_click::sync_waypoint_tool_active,
+                    // `Cancel` intent (Esc/Backspace, from the data keymap) → the
+                    // CancelWaypointEdit command. Backs out of ANY waypoint mode.
+                    checkpoint_click::cancel_waypoint_edit_on_intent,
                 ),
             );
         checkpoint_click::register_all_commands(app);

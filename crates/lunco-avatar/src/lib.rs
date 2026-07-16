@@ -2518,8 +2518,18 @@ pub fn avatar_raycast_possession(
 /// Esc/defocus pattern).
 fn avatar_escape_possession(
     q_avatar: Query<(Entity, &IntentState), (With<Avatar>, Or<(With<ControllerLink>, With<SpringArmCamera>, With<OrbitCamera>)>)>,
+    cursor_mode: lunco_core::CursorModeActive,
     mut commands: Commands,
 ) {
+    // `Cancel` unwinds the INNERMOST mode first. While ANY cursor-driven mode owns the
+    // pointer — a waypoint placement/menu, the spawn ghost, the terrain brush — Cancel
+    // belongs to that mode, not to possession: releasing the vessel out from under the
+    // user as well would be two undos for one keypress. With nothing up, Cancel means
+    // what it always did and releases the vessel. Same gate family the click handlers
+    // already honour, so keyboard and mouse agree on who owns the interaction.
+    if cursor_mode.any() {
+        return;
+    }
     for (entity, intent) in q_avatar.iter() {
         if intent.just_pressed(&UserIntent::Cancel) {
             commands.trigger(ReleaseVessel { target: entity });

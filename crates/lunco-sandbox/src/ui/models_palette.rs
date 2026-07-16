@@ -200,12 +200,15 @@ pub(crate) fn on_scene_click_attach(
     *state = AttachState::Idle;
 }
 
-/// Escape cancels a pending attachment (keyboard, not a pointer pick).
+/// The `Cancel` intent drops a pending attachment (keyboard, not a pointer pick).
+///
+/// Reads [`lunco_core::CancelIntent`] rather than a raw `KeyCode::Escape`, so this
+/// backs out with the same vocabulary (and the same data keymap) as every other mode.
 pub(crate) fn attach_escape_system(
     mut state: ResMut<AttachState>,
-    keys: Res<ButtonInput<KeyCode>>,
+    cancel: lunco_core::CancelIntent,
 ) {
-    if matches!(*state, AttachState::Pending(_)) && keys.just_pressed(KeyCode::Escape) {
+    if matches!(*state, AttachState::Pending(_)) && cancel.just_pressed() {
         *state = AttachState::Idle;
     }
 }
