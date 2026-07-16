@@ -6,6 +6,10 @@ edition = "2021"
 [dependencies]
 bevy = { workspace = true }
 openusd = { workspace = true }
+# An authored `xformOp:translate` on a grid-direct prim is GRID-ABSOLUTE, so
+# consuming one live means re-splitting it into big_space's `(CellCoord,
+# Transform)` — `live_consume` needs the `Grid` to do that split.
+big_space = { workspace = true }
 # Core USD subsystems — egui-free. The server keeps these: visual sync (meshes
 # for colliders), avian physics mapping, sim/scene + cosim LoadScene.
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
@@ -46,7 +50,6 @@ ui = ["dep:bevy_egui", "dep:lunco-workbench", "dep:lunco-theme", "dep:lunco-ui",
 
 [dev-dependencies]
 avian3d = { workspace = true }
-big_space = { workspace = true }
 # DEV-ONLY `bevy_pbr`. The library is render-free (`bevy = { workspace = true }` above, no
 # pbr), and stays that way. But `examples/usd_rover_visual.rs` is a `DefaultPlugins` visual
 # demo that spawns a `StandardMaterial` ground plane, so the EXAMPLE genuinely needs the pbr

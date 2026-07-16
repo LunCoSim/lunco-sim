@@ -114,6 +114,85 @@ pub fn world_pose(
     Some((pos, rot))
 }
 
+/// Position of `entity` in its parent Grid's frame: `cell × edge + local`.
+///
+/// This is the frame **USD authors in**. A grid-direct prim's
+/// `xformOp:translate` is grid-absolute: the prim spawns at `CellCoord::ZERO`
+/// with the whole authored value sitting in `Transform`, and big_space's
+/// recentring then re-splits it into `(cell, small local)`. So a prim's
+/// `Transform.translation` is grid-absolute ONLY on the first frame, and only
+/// while it stays in cell 0 — read it back later and it is short by
+/// `cell × edge` (2 km per cell at the moonbase). Anything that authors a
+/// translate, seats a physics pose, or shows a number to the user must go
+/// through this, not `Transform.translation`.
+///
+/// A prim that is NOT grid-direct (a nested child under a referenced scene) has
+/// no cell, and its authored translate IS its parent-local `Transform` — that
+/// case returns the local translation unchanged.
+pub fn grid_absolute<F: QueryFilter>(
+    entity: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
+) -> Option<DVec3> {
+    let (cell, tf) = q_spatial.get(entity).ok()?;
+    Some(grid_absolute_seeded(
+        entity,
+        &cell.copied().unwrap_or_default(),
+        tf,
+        q_parents,
+        q_grids,
+    ))
+}
+
+/// [`grid_absolute`] seeded with an explicit `(cell, tf)` — for callers whose
+/// `Transform` access is `&mut` (a second `&Transform` query would collide) or
+/// whose entity is filtered out of their spatial query.
+pub fn grid_absolute_seeded(
+    entity: Entity,
+    cell: &CellCoord,
+    tf: &Transform,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+) -> DVec3 {
+    let Some(edge) = parent_grid(entity, q_parents, q_grids).map(|g| g.cell_edge_length() as f64)
+    else {
+        return tf.translation.as_dvec3();
+    };
+    DVec3::new(cell.x as f64 * edge, cell.y as f64 * edge, cell.z as f64 * edge)
+        + tf.translation.as_dvec3()
+}
+
+/// Split a grid-absolute position back into the `(CellCoord, Transform)` pair
+/// big_space stores — the inverse of [`grid_absolute`], and the only correct way
+/// to seat a position onto a grid-direct entity.
+///
+/// Returns `(None, abs)` when `entity` is not grid-direct: there is no cell to
+/// write and the value is already the local translation.
+pub fn grid_local_from_absolute(
+    entity: Entity,
+    abs: DVec3,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+) -> (Option<CellCoord>, Vec3) {
+    match parent_grid(entity, q_parents, q_grids) {
+        Some(grid) => {
+            let (cell, local) = grid.translation_to_grid(abs);
+            (Some(cell), local)
+        }
+        None => (None, abs.as_vec3()),
+    }
+}
+
+/// The `Grid` this entity is a direct child of, if any.
+fn parent_grid<'a>(
+    entity: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &'a Query<&Grid>,
+) -> Option<&'a Grid> {
+    q_grids.get(q_parents.get(entity).ok()?.parent()).ok()
+}
+
 /// Vector from `from` to `to` in DVec3 absolute world space.
 pub fn world_vector(
     from: Entity,
@@ -262,6 +341,68 @@ mod tests {
                 "round-trip {p:?} -> ({cell:?},{off:?}) -> {back:?}"
             );
         }
+    }
+
+    /// `grid_absolute` ↔ `grid_local_from_absolute` round-trip: the pair is the
+    /// USD-authoring contract. A prim's authored translate is grid-absolute; its
+    /// `Transform` holds only the cell remainder after big_space re-splits it.
+    /// Reading one back and authoring it as the other is what teleported a
+    /// gizmo-dragged prim exactly `cell × edge` at the moonbase — in cell 0 the
+    /// two are equal and the bug is invisible, so this test pins a NON-zero cell.
+    #[test]
+    fn grid_absolute_round_trips_through_the_cell_split() {
+        let mut world = World::new();
+        let grid_e = world
+            .spawn((grid(), CellCoord::ZERO, Transform::default(), GlobalTransform::default()))
+            .id();
+        // A prim two cells up and one over, as a moonbase prim is after spawn.
+        let cell = CellCoord::new(1, 2, 0);
+        let local = Vec3::new(-53.0, 120.5, 7.25);
+        let prim = world
+            .spawn((cell, Transform::from_translation(local), GlobalTransform::default(), ChildOf(grid_e)))
+            .id();
+        // Not grid-direct: a nested child under a referenced scene.
+        let nested = world
+            .spawn((Transform::from_translation(Vec3::new(1.0, 2.0, 3.0)), GlobalTransform::default(), ChildOf(prim)))
+            .id();
+
+        let mut state: SystemState<(
+            Query<&ChildOf>,
+            Query<&Grid>,
+            Query<(Option<&CellCoord>, &Transform)>,
+        )> = SystemState::new(&mut world);
+        let (q_parents, q_grids, q_spatial) =
+            state.get(&world).expect("read-only queries always validate");
+
+        let abs = grid_absolute(prim, &q_parents, &q_grids, &q_spatial).expect("prim is spatial");
+        let expected = DVec3::new(
+            1.0 * EDGE as f64 - 53.0,
+            2.0 * EDGE as f64 + 120.5,
+            7.25,
+        );
+        assert!(
+            (abs - expected).length() < 1e-6,
+            "grid_absolute {abs:?} != cell×edge + local {expected:?}"
+        );
+        assert!(
+            (abs - local.as_dvec3()).length() > 1000.0,
+            "the local translation must NOT pass for the absolute — that is the bug"
+        );
+
+        // Re-splitting the absolute reproduces a pose at the same place (the cell
+        // may re-bin; only the reassembly has to match).
+        let (back_cell, back_local) = grid_local_from_absolute(prim, abs, &q_parents, &q_grids);
+        let back = grid()
+            .grid_position_double(&back_cell.expect("grid-direct prim gets a cell"), &Transform::from_translation(back_local));
+        assert!((back - abs).length() < 1e-3, "round-trip {abs:?} -> {back:?}");
+
+        // A prim with no parent Grid has no cell: its translate IS its local.
+        let nested_abs =
+            grid_absolute(nested, &q_parents, &q_grids, &q_spatial).expect("nested is spatial");
+        assert_eq!(nested_abs, DVec3::new(1.0, 2.0, 3.0));
+        let (no_cell, same) = grid_local_from_absolute(nested, nested_abs, &q_parents, &q_grids);
+        assert!(no_cell.is_none(), "a non-grid-direct entity must not be given a cell");
+        assert_eq!(same, Vec3::new(1.0, 2.0, 3.0));
     }
 
     /// The `target_grid_world` offset is honoured: decompose against a grid that

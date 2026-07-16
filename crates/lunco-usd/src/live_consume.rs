@@ -147,9 +147,35 @@ pub(crate) fn apply_translates_live(
             .collect()
     };
     for (path, v) in translates {
-        if let Some(entity) = find_live_entity(world, id, &path) {
-            if let Some(mut tf) = world.entity_mut(entity).get_mut::<Transform>() {
-                tf.translation = v;
+        let Some(entity) = find_live_entity(world, id, &path) else { continue };
+        // An authored translate on a GRID-DIRECT prim is grid-absolute (the
+        // spawn path plants the whole value at cell 0 and lets big_space
+        // re-split it). Writing it straight into `Transform` — as this did —
+        // left the entity's existing `CellCoord` standing, so the prim landed at
+        // `authored + cell × edge`: a live edit to anything outside the origin
+        // cell threw it 2 km per cell across the moonbase. Re-split it the same
+        // way spawn's value gets re-split, so re-applying an unchanged translate
+        // is a no-op instead of a jump.
+        let parent_grid = world
+            .get::<bevy::prelude::ChildOf>(entity)
+            .map(|c| c.parent())
+            .and_then(|p| world.get::<big_space::prelude::Grid>(p))
+            .cloned();
+        match parent_grid {
+            Some(grid) => {
+                let (cell, local) = grid.translation_to_grid(v.as_dvec3());
+                let mut e = world.entity_mut(entity);
+                if let Some(mut tf) = e.get_mut::<Transform>() {
+                    tf.translation = local;
+                }
+                e.insert(cell);
+            }
+            // Nested under a referenced scene: no cell, and the authored value
+            // IS the parent-local transform.
+            None => {
+                if let Some(mut tf) = world.entity_mut(entity).get_mut::<Transform>() {
+                    tf.translation = v;
+                }
             }
         }
     }

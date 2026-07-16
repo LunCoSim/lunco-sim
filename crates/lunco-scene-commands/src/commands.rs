@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use bevy::math::DVec3;
 use avian3d::prelude::{LinearVelocity, RigidBody};
 use avian3d::physics_transform::Position;
-use big_space::prelude::Grid;
+use big_space::prelude::{CellCoord, Grid};
 use lunco_core::{on_command, register_commands, Command};
 use lunco_obstacle_field::ObstacleFieldRoot;
 // Appearance INTENT (render-free). `SetObjectProperty`'s PBR keys mutate `PbrLook`
@@ -551,7 +551,14 @@ pub struct MoveEntity {
     /// blamed the resolver "dropping the generation"; that was stale — the
     /// codec preserves index+generation via `Entity::to_bits()`.)
     pub entity_id: u64,
-    /// Target world-space translation.
+    /// Target translation, **grid-absolute** — the frame USD authors
+    /// `xformOp:translate` in, NOT the entity's raw `Transform.translation`.
+    ///
+    /// The two are the same thing only for an entity in cell 0, which is why
+    /// this went unnoticed in the sandbox: everything there sits in the origin
+    /// cell. At the moonbase (cells 2 km wide) a caller that passed
+    /// `Transform.translation` was short by `cell × edge`, and the move
+    /// teleported the object a whole cell — see `lunco_core::coords::grid_absolute`.
     pub translation: Vec3,
 }
 
@@ -564,9 +571,12 @@ pub fn on_move_entity_command(
     mut commands: Commands,
     mut q: Query<(
         &mut Transform,
+        Option<&CellCoord>,
         Option<&mut Position>,
         Option<&mut LinearVelocity>,
     )>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
     q_rb: Query<&RigidBody>,
     q_marker: Query<&JustMovedKinematic>,
 ) {
@@ -576,13 +586,34 @@ pub fn on_move_entity_command(
         warn!("MOVE_ENTITY: no api_id={} in registry", cmd.entity_id);
         return;
     };
-    let Ok((mut tf, pos_opt, lin_vel_opt)) = q.get_mut(target) else {
+    let Ok((mut tf, cell, pos_opt, lin_vel_opt)) = q.get_mut(target) else {
         warn!("MOVE_ENTITY: entity {:?} (api_id={}) has no Transform", target, cmd.entity_id);
         return;
     };
 
-    let prev = tf.translation;
-    tf.translation = cmd.translation;
+    // The command speaks grid-absolute; `Transform` holds the cell REMAINDER.
+    // Split the target position back into the `(cell, local)` pair big_space
+    // stores, and write BOTH — writing only `Transform` would leave the stale
+    // cell in place and land the body `cell × edge` away from where it was asked
+    // to go. The cell goes through `Commands` so this system needs no `&mut
+    // CellCoord` (which would collide with big_space's own recentring access).
+    let prev_abs = lunco_core::coords::grid_absolute_seeded(
+        target,
+        &cell.copied().unwrap_or_default(),
+        &tf,
+        &q_parents,
+        &q_grids,
+    );
+    let (new_cell, new_local) = lunco_core::coords::grid_local_from_absolute(
+        target,
+        cmd.translation.as_dvec3(),
+        &q_parents,
+        &q_grids,
+    );
+    tf.translation = new_local;
+    if let Some(new_cell) = new_cell {
+        commands.entity(target).try_insert(new_cell);
+    }
 
     // Force the body to Kinematic for the duration of the move so
     // Avian treats the new pose as authoritative. RigidBody is an
@@ -605,13 +636,19 @@ pub fn on_move_entity_command(
         commands.entity(target).try_insert(RigidBody::Kinematic);
     }
 
-    if let Some(mut pos) = pos_opt {
-        pos.0 = DVec3::new(
-            cmd.translation.x as f64,
-            cmd.translation.y as f64,
-            cmd.translation.z as f64,
-        );
-    }
+    // NO `Position` write here. `Position` lives in the BigSpace ROOT frame,
+    // and this command's translation is grid-absolute — the two coincide only
+    // for a grid sitting at the origin, and the old `pos.0 = cmd.translation`
+    // silently assumed it. Seating the pose is already owned, in the one place
+    // that knows the whole cell chain: `BigSpacePhysicsBridgePlugin`'s
+    // `pose_to_position` fires on exactly the external `(cell, Transform)` write
+    // we just made and recomputes `Position`/`Rotation` from it (and carries it
+    // to jointed descendants). Without the bridge registered, avian's own
+    // `transform_to_position` does the same job. Either way, a hand-rolled
+    // Position write here can only be a second, wronger opinion — for a
+    // Kinematic body the bridge's writeback then pushes that wrong Position back
+    // into `Transform` and the object jumps a full cell (2 km at the moonbase).
+    let _ = pos_opt;
 
     // **Joint-propagation pulse**: set `LinearVelocity` to a one-tick
     // velocity equal to (delta / dt). Avian's joint constraint solver
@@ -625,13 +662,12 @@ pub fn on_move_entity_command(
     // exactly one physics tick. Without that follow-up, the body
     // would keep drifting at this velocity each tick.
     let dt = time.delta_secs().max(1.0 / 240.0) as f64;
-    let delta = cmd.translation - prev;
+    // Grid-absolute delta: a displacement is frame-invariant across the cell
+    // split, so this is the same vector whether or not the move crossed a cell
+    // boundary — which `cmd.translation - tf.translation` was not.
+    let delta = cmd.translation.as_dvec3() - prev_abs;
     if let Some(mut lin_vel) = lin_vel_opt {
-        lin_vel.0 = DVec3::new(
-            delta.x as f64 / dt,
-            delta.y as f64 / dt,
-            delta.z as f64 / dt,
-        );
+        lin_vel.0 = delta / dt;
     }
     commands.entity(target).try_insert(JustMovedKinematic { restore });
 
