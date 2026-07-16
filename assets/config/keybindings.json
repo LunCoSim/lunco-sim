@@ -10,5 +10,5 @@
   "Release":      ["KeyG"],
   "SwitchMode":   ["KeyV"],
   "Pause":        ["KeyP"],
-  "Cancel":       ["Backspace"]
+  "Cancel":       ["Backspace", "Escape"]
 }

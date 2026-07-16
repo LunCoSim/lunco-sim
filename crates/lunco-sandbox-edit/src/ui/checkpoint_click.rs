@@ -111,18 +111,67 @@ pub fn sync_waypoint_tool_active(
 /// every frame to beat bevy_egui's write, dirtying the component forever.)
 pub fn handle_waypoint_placement_mode(
     mut contexts: bevy_egui::EguiContexts,
-    mut placement: ResMut<WaypointPlacement>,
+    placement: Res<WaypointPlacement>,
 ) {
     if placement.0.is_none() {
         return;
     }
     let Ok(ctx) = contexts.ctx_mut() else { return };
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-        info!("[waypoint] placement cancelled (Esc)");
-        placement.0 = None;
+    ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+}
+
+/// Back out of ANY in-flight waypoint edit: an armed Move/Insert placement, or the
+/// open context menu.
+///
+/// A real command, so cancelling is one verb for every waypoint mode (not a special
+/// case bolted onto Move) and is reachable from rhai/the API like anything else —
+/// rather than each mode sniffing a raw key for itself.
+#[Command]
+pub struct CancelWaypointEdit {}
+
+#[on_command(CancelWaypointEdit)]
+fn on_cancel_waypoint_edit(
+    _trigger: On<CancelWaypointEdit>,
+    mut placement: ResMut<WaypointPlacement>,
+    mut menu_state: ResMut<WaypointContextMenuState>,
+    mut menu_open: ResMut<lunco_core::WaypointMenuOpen>,
+) {
+    if let Some(p) = placement.0.take() {
+        info!("[waypoint] cancelled {:?} of '{}'", p.mode, p.coord_key);
+    }
+    menu_state.entity = None;
+    menu_open.0 = false;
+}
+
+/// Route the `Cancel` INTENT to [`CancelWaypointEdit`].
+///
+/// Reads the intent, never the raw key — so Esc/Backspace come from the DATA keymap
+/// (`assets/config/keybindings.json`) and a rebind just works, exactly like
+/// `avatar_escape_possession` does for releasing possession.
+///
+/// Only fires when there is actually something to cancel. `Cancel` is layered
+/// innermost-first: with a waypoint edit up it closes that (and
+/// `avatar_escape_possession` stands down via the shared gates); with nothing up it
+/// falls through to releasing possession as before.
+pub fn cancel_waypoint_edit_on_intent(
+    egui_focus: Res<EguiFocus>,
+    q_avatar: Query<&lunco_core::IntentState, With<Avatar>>,
+    placement: Res<WaypointPlacement>,
+    menu_state: Res<WaypointContextMenuState>,
+    mut commands: Commands,
+) {
+    if egui_focus.wants_keyboard {
+        return; // typing in a field: the key is text, not a cancel
+    }
+    if placement.0.is_none() && menu_state.entity.is_none() {
         return;
     }
-    ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+    for intent in q_avatar.iter() {
+        if intent.just_pressed(&lunco_core::UserIntent::Cancel) {
+            commands.trigger(CancelWaypointEdit {});
+            return;
+        }
+    }
 }
 
 /// Grid-frame conversion bundle for the waypoint click observer. Bundled into one
@@ -594,15 +643,16 @@ pub fn draw_waypoint_context_menu(
         });
     }
 
-    // Dismiss on a LEFT click outside, or Escape — never on "any click". The menu is
-    // opened BY a right-click and the camera is driven by the mouse, so closing on any
-    // click let the very release that opened it (and any stray right-drag) slam it shut
-    // the moment it appeared.
+    // Dismiss on a LEFT click outside — never on "any click". The menu is opened BY a
+    // right-click and the camera is driven by the mouse, so closing on any click let
+    // the very release that opened it (and any stray right-drag) slam it shut the
+    // moment it appeared. Keyboard dismissal is NOT handled here: it comes through the
+    // `Cancel` intent → `CancelWaypointEdit` command (`cancel_waypoint_edit_on_intent`),
+    // so every waypoint mode backs out the same way.
     if menu_state.just_opened {
         menu_state.just_opened = false;
-    } else if ctx.input(|i| i.key_pressed(egui::Key::Escape))
-        || (ctx.input(|i| i.pointer.button_clicked(egui::PointerButton::Primary))
-            && !response.response.hovered())
+    } else if ctx.input(|i| i.pointer.button_clicked(egui::PointerButton::Primary))
+        && !response.response.hovered()
     {
         open = false;
     }
@@ -1199,7 +1249,7 @@ fn on_toggle_autopilot(
     }
 }
 
-register_commands!(on_start_autopilot, on_toggle_autopilot);
+register_commands!(on_start_autopilot, on_toggle_autopilot, on_cancel_waypoint_edit);
 
 // ── Route ribbon (real 3D geometry, not a screen-space overlay) ───────────────
 

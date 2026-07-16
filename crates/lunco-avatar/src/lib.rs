@@ -2480,12 +2480,45 @@ pub fn avatar_raycast_possession(
 /// Esc/defocus pattern).
 fn avatar_escape_possession(
     q_avatar: Query<(Entity, &IntentState), (With<Avatar>, Or<(With<ControllerLink>, With<SpringArmCamera>, With<OrbitCamera>)>)>,
+    cursor_mode: CursorModeActive,
     mut commands: Commands,
 ) {
+    // `Cancel` unwinds the INNERMOST mode first. While ANY cursor-driven mode owns the
+    // pointer — a waypoint placement/menu, the spawn ghost, the terrain brush — Cancel
+    // belongs to that mode, not to possession: releasing the vessel out from under the
+    // user as well would be two undos for one keypress. With nothing up, Cancel means
+    // what it always did and releases the vessel. Same gate family the click handlers
+    // already honour, so keyboard and mouse agree on who owns the interaction.
+    if cursor_mode.any() {
+        return;
+    }
     for (entity, intent) in q_avatar.iter() {
         if intent.just_pressed(&UserIntent::Cancel) {
             commands.trigger(ReleaseVessel { target: entity });
         }
+    }
+}
+
+/// The "a cursor-driven mode owns the pointer" gate, in one place.
+///
+/// These flags were already consulted one-by-one by the click observers; bundling them
+/// keeps `Cancel` honouring exactly the same set, so a mode can't be click-suppressed
+/// but keyboard-transparent (or the reverse).
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct CursorModeActive<'w> {
+    waypoint_tool: Option<Res<'w, lunco_core::WaypointToolActive>>,
+    waypoint_menu: Option<Res<'w, lunco_core::WaypointMenuOpen>>,
+    spawn_tool: Option<Res<'w, lunco_core::SpawnToolActive>>,
+    terrain_tool: Option<Res<'w, lunco_core::TerrainToolActive>>,
+}
+
+impl CursorModeActive<'_> {
+    /// True while any editor mode is using the cursor.
+    pub fn any(&self) -> bool {
+        self.waypoint_tool.as_ref().is_some_and(|t| t.0)
+            || self.waypoint_menu.as_ref().is_some_and(|m| m.0)
+            || self.spawn_tool.as_ref().is_some_and(|t| t.0)
+            || self.terrain_tool.as_ref().is_some_and(|t| t.0)
     }
 }
 
