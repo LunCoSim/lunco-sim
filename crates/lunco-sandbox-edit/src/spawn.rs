@@ -238,7 +238,7 @@ pub fn update_spawn_ghost(
 
     // Ray through the ACTIVE window camera (the one you're looking through) —
     // not merely the first Camera3d, which may now be an inactive scene camera.
-    let (camera, cam_tf, cam_cell, cam_local) = match cameras
+    let (camera, cam_tf, _cam_cell, _cam_local) = match cameras
         .iter()
         .find(|(cam, _, target, _, _)| {
             cam.is_active && matches!(target, bevy::camera::RenderTarget::Window(_))
@@ -387,15 +387,15 @@ pub fn update_spawn_ghost(
         // whole cell (~2 km) underground — "the ghost never appears on the
         // ground". This lands it on the real surface at any origin cell.
         let Some((grid_ent, grid)) = grids.iter().next() else { return };
-        let ghost_abs = ghost_pos + grid.grid_position_double(cam_cell, cam_local);
+        // Render→grid-absolute via the physics frame shift (recovered from a live
+        // body), NOT `grid_position_double(cam_cell, …)`. The ray camera is not
+        // guaranteed to be the `FloatingOrigin` holder after a possession/takeover —
+        // using its absolute position then displaces the ghost by the camera→origin
+        // vector, dropping it into a stray cell ("the ghost never appears on the
+        // ground"). The frame shift is camera-independent: the same one the wheels
+        // and altimeter cast through. See `lunco_physics::spatial`.
+        let ghost_abs = raycaster.to_physics(ghost_pos);
         let (ghost_cell, ghost_local) = grid.translation_to_grid(ghost_abs);
-        bevy::log::warn!(
-            "[GHOST] render=({:.0},{:.0},{:.0}) cam_abs=({:.0},{:.0},{:.0}) ghost_abs=({:.0},{:.0},{:.0}) cell=({},{},{}) local=({:.0},{:.0},{:.0})",
-            ghost_pos.x, ghost_pos.y, ghost_pos.z,
-            grid.grid_position_double(cam_cell, cam_local).x, grid.grid_position_double(cam_cell, cam_local).y, grid.grid_position_double(cam_cell, cam_local).z,
-            ghost_abs.x, ghost_abs.y, ghost_abs.z,
-            ghost_cell.x, ghost_cell.y, ghost_cell.z, ghost_local.x, ghost_local.y, ghost_local.z,
-        );
 
         if let Some((ghost, _)) = q_ghost.iter().next() {
             commands.entity(ghost).try_insert((
@@ -467,7 +467,11 @@ pub fn on_scene_click_spawn(
     q_ghost: Query<Entity, With<SpawnGhost>>,
     cameras: Query<(&Camera, &GlobalTransform, &CellCoord, &Transform), With<Camera3d>>,
     egui_focus: Res<lunco_core::EguiFocus>,
-    raycaster: avian3d::prelude::SpatialQuery,
+    // `GridSpatialQuery`, not raw `SpatialQuery` — same choke point the ghost preview
+    // (and wheels / altimeter) use: the click ray + corner probes originate in the
+    // render frame, so they must be shifted into avian's grid-absolute frame or they
+    // miss every collider at an elevated site. See `lunco_physics::spatial`.
+    raycaster: lunco_physics::GridSpatialQuery,
     terrains: TerrainOracles,
 ) {
     use bevy::picking::pointer::PointerButton;
@@ -485,7 +489,7 @@ pub fn on_scene_click_spawn(
     // cast the ray against colliders so placement works on streamed terrain even
     // when no pickable tile is under the cursor (the old `hit.position` guard
     // silently rejected those clicks — the "can't place on the ground" bug).
-    let Some((camera, cam_gtf, cam_cell, cam_local)) = cameras.iter().find(|(c, _, _, _)| c.is_active) else {
+    let Some((camera, cam_gtf, _cam_cell, _cam_local)) = cameras.iter().find(|(c, _, _, _)| c.is_active) else {
         return;
     };
     let Some(ray) = lunco_core::scene_click_ray(&egui_focus, camera, cam_gtf, click.pointer_location.position) else {
@@ -501,7 +505,7 @@ pub fn on_scene_click_spawn(
     let origin = ray.origin.as_dvec3();
     let dir = ray.direction.as_dvec3();
     let phys = raycaster
-        .cast_ray(origin, ray.direction, 1.0e6, false, &avian3d::prelude::SpatialQueryFilter::default())
+        .cast_ray_render(origin, ray.direction, 1.0e6, false, &avian3d::prelude::SpatialQueryFilter::default())
         .map(|h| h.distance);
     let terr = terrain_ray_hit(&terrains, origin, dir, 1.0e6);
     let (point_d, terrain_primary) = match (phys, terr) {
@@ -513,7 +517,7 @@ pub fn on_scene_click_spawn(
         (None, None) => return,
     };
 
-    let Some((grid, grid_comp)) = q_grids.iter().next() else {
+    let Some((grid, _grid_comp)) = q_grids.iter().next() else {
         return;
     };
 
@@ -525,10 +529,10 @@ pub fn on_scene_click_spawn(
     let half_w = fp.half_w;
     let half_l = fp.half_l;
 
-    // 2. Get camera forward direction to orient the rover
-    let cam_forward = cameras.iter().next()
-        .map(|(_, tf, _, _)| tf.forward().as_dvec3())
-        .unwrap_or(DVec3::NEG_Z);
+    // 2. Camera forward orients the rover — the ACTIVE camera (the one the ray came
+    // through), not `cameras.iter().next()` (which can be an inactive scene camera
+    // pointing elsewhere → rover spawned facing a random direction).
+    let cam_forward = cam_gtf.forward().as_dvec3();
     let mut forward_xz = DVec3::new(cam_forward.x, 0.0, cam_forward.z);
     if forward_xz.length_squared() < 1e-5 {
         forward_xz = DVec3::NEG_Z;
@@ -555,7 +559,7 @@ pub fn on_scene_click_spawn(
         let phys_y = || {
             let ray_origin = corner + DVec3::Y * 50.0;
             raycaster
-                .cast_ray(
+                .cast_ray_render(
                     ray_origin,
                     Dir3::NEG_Y,
                     100.0,
@@ -632,10 +636,14 @@ pub fn on_scene_click_spawn(
     // The whole placement solve above ran in the render (origin-relative) frame
     // (camera ray + terrain-oracle round-trips). The spawn command plants its
     // position as a GRID-ABSOLUTE `Transform` (cell 0 + avian recenter), so lift it
-    // into grid-absolute via the camera's own (cell, transform). Without this, at an
+    // into grid-absolute via the physics frame shift — the SAME camera-independent
+    // shift the ghost preview uses (recovered from a live body, not the ray camera's
+    // absolute position: that camera is not guaranteed to be the `FloatingOrigin`
+    // holder after a possession/takeover, which displaced the spawn by the
+    // camera→origin vector — "the rover spawns behind me"). Without any lift, at an
     // elevated site the render-frame Y (~-45 m) was planted as grid-absolute and the
     // spawned body dropped ~2 km below the surface.
-    let spawn_abs = spawn_pos + grid_comp.grid_position_double(cam_cell, cam_local);
+    let spawn_abs = raycaster.to_physics(spawn_pos);
     let point3 = spawn_abs.as_vec3();
 
     commands.trigger(crate::commands::SpawnEntity {

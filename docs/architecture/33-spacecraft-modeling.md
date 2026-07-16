@@ -156,8 +156,9 @@ Rocker-bogie = chassis + rocker + bogie links via revolute joints **plus a
 differential** that averages the two rockers' pitch. Avian has no gear/differential
 joint, so this is a Rust **soft holonomic coupling**.
 
-- **USD reader** — `lunco:differential:rockerA/B` (rel) + `:axis`/`:stiffness`/
-  `:damping`/`:restSum` on a chassis prim → `PendingDifferential` →
+- **USD reader** — a standard `PhysxPhysicsGearJoint` over the two chassis↔rocker hinges
+  (`physxGearJoint:hinge0/1`) with an angular `PhysicsDriveAPI`
+  (`drive:angular:physics:stiffness`/`damping`/`targetPosition`) → `PendingDifferential` →
   `resolve_differential_coupling` (deferred, matches prim-paths → entities, gated
   on `With<Position>`, same pattern as USD joints) → `DifferentialCoupling`
   (`lunco-mobility`). Reads each rocker's chassis-frame pitch (swing-twist about the

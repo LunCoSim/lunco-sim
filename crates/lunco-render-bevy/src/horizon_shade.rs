@@ -252,6 +252,14 @@ fn scale_color(c: Color, q: f32) -> Color {
     Color::LinearRgba(LinearRgba::new(l.red * q, l.green * q, l.blue * q, l.alpha))
 }
 
+/// Fill floor for a horizon-shadowed body's albedo scale. `sun_vis` gates the
+/// SUN, but the shadowless earthshine/ambient fill is ALWAYS present, so a body
+/// in horizon shadow is dim — never a pure-black hole. Without it, a grazing sun
+/// drives an occluded chassis's albedo to 0 (`scale_color(_, 0)`), so the whole
+/// body reads black even though the terrain around it is fill-lit. Mirrors
+/// `wheel.wgsl`'s `HORIZON_AMBIENT_FLOOR` for the ShaderMaterial (wheels) path.
+const HORIZON_FILL_FLOOR: f32 = 0.22;
+
 /// Runs every mesh entity's position through the same heightfield march the
 /// terrain shader uses and darkens the entity by its sun visibility (see
 /// `lunco_environment::horizon` §3). Change-driven: a full pass only when the
@@ -369,7 +377,7 @@ pub fn shade_dynamic_entities(
                     if q < 0.999 {
                         if let Some(mut m) = std_mats.get(&handle.0).cloned() {
                             let original = m.base_color;
-                            m.base_color = scale_color(original, q);
+                            m.base_color = scale_color(original, q.max(HORIZON_FILL_FLOOR));
                             let unique = std_mats.add(m);
                             debug!("[horizon-dbg] {entity:?} {name:?} vis={q:.2} SHADE-NEW (std)");
                             commands.entity(entity).try_insert((
@@ -392,7 +400,7 @@ pub fn shade_dynamic_entities(
                         debug!("[horizon-dbg] {entity:?} {name:?} vis={q:.2} SHADE-CLEAR (std)");
                     } else if (state.last_vis - q).abs() > 1e-3 {
                         if let Some(mut m) = std_mats.get_mut(&handle.0) {
-                            m.base_color = scale_color(state.original, q);
+                            m.base_color = scale_color(state.original, q.max(HORIZON_FILL_FLOOR));
                         }
                         debug!("[horizon-dbg] {entity:?} {name:?} vis={q:.2} SHADE-UPDATE (std)");
                         state.last_vis = q;

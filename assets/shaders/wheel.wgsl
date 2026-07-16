@@ -28,6 +28,8 @@
 }
 
 const TAU: f32 = 6.28318530718;
+// Ambient/earthshine floor so a horizon-occluded wheel is dim, never pure black.
+const HORIZON_AMBIENT_FLOOR: f32 = 0.22;
 
 //!@ui      rim_color   color "Rim / spoke colour"
 //!@default rim_color   0.98,0.98,1.0
@@ -122,7 +124,13 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
     var out = pbr_functions::apply_pbr_lighting(pbr_input);
     // Smooth horizon-shadow terminator fade (engine-written visibility);
     // the layer swap that follows is binary, this eases the transition.
-    out = vec4(out.rgb * mat.sun_vis, out.a);
+    // Floor it: `sun_vis` gates the SUN, but a wheel is never pure black — at a
+    // grazing sun its ground-level footprint self-occludes in the horizon march
+    // while the terrain around it still reads lit, and ambient/earthshine is
+    // always present. Matches the terrain shader's global shadow fill, so a
+    // wheel in grazing shadow is dim, not a black hole. (Full sun: max(1,f)=1.)
+    let vis = max(mat.sun_vis, HORIZON_AMBIENT_FLOOR);
+    out = vec4(out.rgb * vis, out.a);
     out = pbr_functions::main_pass_post_lighting_processing(pbr_input, out);
     return out;
 }

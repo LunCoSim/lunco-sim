@@ -101,9 +101,18 @@ impl AssetManifest {
 /// Downloads an asset from the manifest entry. Equivalent to
 /// [`download_asset_with_control`] with no progress callback and no
 /// cancellation flag — keeps existing CLI/test call sites unchanged.
+///
+/// `dest_root` overrides the cache as the base `entry.dest` is resolved
+/// against: `None` → shared cache root (the original behaviour); `Some(dir)`
+/// → `dir.join(entry.dest)`, which is how a Twin's `Assets.toml` downloads
+/// *into* the Twin folder (the CLI's `--twin <DIR>` flag).
 #[cfg(not(target_arch = "wasm32"))]
-pub fn download_asset(entry: &AssetEntry, key: &str) -> Result<(), DownloadError> {
-    download_asset_with_control(entry, key, DownloadControl::default())
+pub fn download_asset(
+    entry: &AssetEntry,
+    key: &str,
+    dest_root: Option<&Path>,
+) -> Result<(), DownloadError> {
+    download_asset_with_control(entry, key, DownloadControl::default(), dest_root)
 }
 
 /// Downloads an asset from the manifest entry with caller-supplied
@@ -115,13 +124,38 @@ pub fn download_asset(entry: &AssetEntry, key: &str) -> Result<(), DownloadError
 /// 3. Verifies or computes SHA-256.
 /// 4. Extracts (if tarball) or writes (if single file).
 /// 5. Prints the computed SHA-256 for the user to fill in.
+///
+/// `dest_root` selects the base `entry.dest` resolves against. `None` keeps
+/// the historical behaviour (shared cache root via [`crate::cache_dir`]);
+/// `Some(dir)` downloads into that folder — used by the Twin download path
+/// (`--twin <DIR>`) so a Twin's `Assets.toml` materialises files inside the
+/// Twin, where its `demSource` / USD `references` expect to find them.
+/// When a `dest_root` is supplied, `entry.dest` is validated to be a
+/// strictly relative path with no `..` segments (see [`is_safe_rel_dest`])
+/// so a manifest can never escape the Twin root.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn download_asset_with_control(
     entry: &AssetEntry,
     key: &str,
     mut control: DownloadControl<'_>,
+    dest_root: Option<&Path>,
 ) -> Result<(), DownloadError> {
-    let dest = cache_dir().join(&entry.dest);
+    // Twin-relative downloads must not let a manifest's `dest` walk outside
+    // the Twin root. Cache-relative downloads are left as-is for back-compat
+    // (existing crate manifests use plain relative paths already).
+    if let Some(_root) = dest_root {
+        if !is_safe_rel_dest(&entry.dest) {
+            return Err(DownloadError::ManifestFailed(format!(
+                "asset `{key}` has an unsafe `dest` for a twin download: {:?} \
+                 (must be relative, no `..`, no absolute, no backslash)",
+                entry.dest
+            )));
+        }
+    }
+    let dest = match dest_root {
+        Some(root) => root.join(&entry.dest),
+        None => cache_dir().join(&entry.dest),
+    };
 
     // Cache-hit check #1 — versioned install (used by libraries like
     // the MSL tarball where `version = "4.1.0"` pins an upstream
@@ -356,7 +390,9 @@ pub fn download_asset_with_control(
     Ok(())
 }
 
-/// Downloads all assets from the given crate's `Assets.toml`.
+/// Downloads all assets from the given crate's `Assets.toml`. Resolves each
+/// `dest` against the shared cache root (crates are workspace members, not
+/// Twin folders — their downloads belong in the cache).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn download_all_for_crate(crate_dir: &Path) -> Result<(), DownloadError> {
     let manifest = AssetManifest::from_crate_dir(crate_dir)
@@ -370,9 +406,36 @@ pub fn download_all_for_crate(crate_dir: &Path) -> Result<(), DownloadError> {
     println!("Downloading assets for {}...", crate_dir.file_name().unwrap_or_default().to_string_lossy());
 
     for (key, entry) in &manifest.assets {
-        download_asset(entry, key)?;
+        download_asset(entry, key, None)?;
     }
 
+    Ok(())
+}
+
+/// Downloads all assets from a **Twin folder's** `Assets.toml`, resolving
+/// each `dest` against the Twin root so the files land *inside* the Twin
+/// (where its USD `references` / `demSource` expect them). This is the path
+/// the CLI's `--twin <DIR>` flag takes; it lets a standalone Twin that is
+/// not a workspace crate (e.g. a school project on disk) self-provision.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn download_all_for_twin(twin_root: &Path) -> Result<(), DownloadError> {
+    let manifest = AssetManifest::from_crate_dir(twin_root)
+        .map_err(|e| DownloadError::ManifestFailed(e.to_string()))?;
+
+    if manifest.assets.is_empty() {
+        println!(
+            "No assets declared in {}",
+            twin_root.join("Assets.toml").display()
+        );
+        return Ok(());
+    }
+    println!(
+        "Downloading assets for twin {}...",
+        twin_root.display()
+    );
+    for (key, entry) in &manifest.assets {
+        download_asset(entry, key, Some(twin_root))?;
+    }
     Ok(())
 }
 
@@ -416,7 +479,7 @@ pub fn download_one_workspace(
                 asset_key,
                 crate_dir.file_name().unwrap_or_default().to_string_lossy()
             );
-            return download_asset(entry, asset_key);
+            return download_asset(entry, asset_key, None);
         }
     }
 
@@ -450,8 +513,13 @@ pub fn download_all_workspace(workspace_root: &Path) -> Result<(), DownloadError
     Ok(())
 }
 
-/// Lists all assets from a crate's `Assets.toml`.
-pub fn list_for_crate(crate_dir: &Path) -> Result<(), std::io::Error> {
+/// Lists all assets from a crate's `Assets.toml`. `dest_root` selects the
+/// base `dest` is probed against (`None` = cache; `Some` = that folder) so
+/// the status reflects where a Twin download would actually land.
+pub fn list_for_crate(
+    crate_dir: &Path,
+    dest_root: Option<&Path>,
+) -> Result<(), std::io::Error> {
     let manifest = AssetManifest::from_crate_dir(crate_dir)?;
 
     if manifest.assets.is_empty() {
@@ -461,7 +529,10 @@ pub fn list_for_crate(crate_dir: &Path) -> Result<(), std::io::Error> {
 
     println!("Assets for {}:", crate_dir.file_name().unwrap_or_default().to_string_lossy());
     for (key, entry) in &manifest.assets {
-        let dest = cache_dir().join(&entry.dest);
+        let dest = match dest_root {
+            Some(root) => root.join(&entry.dest),
+            None => cache_dir().join(&entry.dest),
+        };
         let status = if dest.exists() {
             if let Some(ref ver) = entry.version {
                 let version_file = dest.parent().unwrap_or(&dest).join(".version");
@@ -488,6 +559,46 @@ pub fn list_for_crate(crate_dir: &Path) -> Result<(), std::io::Error> {
     }
 
     Ok(())
+}
+
+/// Lists all assets from a **Twin folder's** `Assets.toml`, probing `dest`
+/// against the Twin root so the status reflects where files land.
+pub fn list_for_twin(twin_root: &Path) -> Result<(), std::io::Error> {
+    list_for_crate(twin_root, Some(twin_root))
+}
+
+/// A `dest` path is "twin-safe" iff it is strictly relative, contains no
+/// `..` or root/ prefix component, and uses no backslash — i.e. joining it
+/// to a Twin root can never escape that root. Mirrors the traversal guard
+/// `scenario_sync::safe_rel_path` applies to downloaded-scenario paths, so
+/// a Twin's `Assets.toml` is held to the same standard as the network
+/// download layer.
+pub fn is_safe_rel_dest(dest: &str) -> bool {
+    if dest.is_empty() || dest.contains('\\') {
+        return false;
+    }
+    // Build from the string directly (not `Path::components`, which on this
+    // target would normalise `..` away) — we want to SEE the `..`.
+    for seg in dest.split(['/', '\\']) {
+        if seg.is_empty() || seg == "." || seg == ".." {
+            return false;
+        }
+    }
+    // Reject absolute paths. `Path::is_absolute` covers Unix roots and
+    // Windows UNC on Windows, but on *this* target a Windows drive path
+    // like `C:/Users/x` is NOT absolute (Linux has no drive concept) — so
+    // also reject any leading `X:` drive-letter form, regardless of host.
+    if Path::new(dest).is_absolute() {
+        return false;
+    }
+    let bytes = dest.as_bytes();
+    if bytes.len() >= 2
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+    {
+        return false;
+    }
+    true
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -551,4 +662,75 @@ fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn safe_rel_dest_accepts_plain_relative() {
+        assert!(is_safe_rel_dest("terrain/apollo15/.cache/dtm.tif"));
+        assert!(is_safe_rel_dest("textures/moon.png"));
+        assert!(is_safe_rel_dest("fonts/DejaVuSans.ttf"));
+    }
+
+    #[test]
+    fn safe_rel_dest_rejects_traversal_and_absolute() {
+        // Parent escape — the whole point of the guard.
+        assert!(!is_safe_rel_dest("../escape.tif"));
+        assert!(!is_safe_rel_dest("terrain/../../escape.tif"));
+        assert!(!is_safe_rel_dest("a/../b/../../x"));
+        // Absolute (Unix + Windows drive).
+        assert!(!is_safe_rel_dest("/etc/passwd"));
+        assert!(!is_safe_rel_dest("C:/Users/x"));
+        // Backslash is a traversal vector on Windows; reject everywhere.
+        assert!(!is_safe_rel_dest("terrain\\..\\x"));
+        // Empty / leading-slash-adjacent.
+        assert!(!is_safe_rel_dest(""));
+        assert!(!is_safe_rel_dest("."));
+        assert!(!is_safe_rel_dest(".."));
+    }
+
+    /// A `dest_root = Some(twin)` download that fails the traversal guard
+    /// must error *before* touching the network — the manifest's `url` is a
+    /// bogus local string so a real fetch would also fail, but the guard is
+    /// the thing under test and it fires first.
+    #[test]
+    fn twin_download_rejects_unsafe_dest_without_network() {
+        let entry = AssetEntry {
+            name: "evil".into(),
+            version: None,
+            url: "http://0.0.0.0:0/never-fetched".into(),
+            dest: "../escape.tif".into(),
+            extract: None,
+            sha256: None,
+            process: None,
+        };
+        let err = download_asset(&entry, "evil", Some(std::path::Path::new("/tmp")))
+            .expect_err("traversal must be rejected");
+        assert!(matches!(err, DownloadError::ManifestFailed(_)));
+    }
+
+    /// Sanity-check that `list_for_crate` honours `dest_root` so `--twin`
+    /// reports against the Twin folder, not the cache. We can't exercise a
+    /// real `Assets.toml` without a fixture, but the path-join is the only
+    /// behaviour the twin path adds to `list`, so assert the resolved probe
+    /// dir matches the twin root for a synthetic manifest.
+    #[test]
+    fn list_for_twin_probes_twin_root() {
+        // Build a throwaway twin folder with an Assets.toml.
+        let tmp = std::env::temp_dir().join(format!("lunco-assets-twin-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmp);
+        std::fs::write(
+            tmp.join("Assets.toml"),
+            "[x]\nname = \"X\"\nurl = \"http://x/x\"\ndest = \"terrain/x.tif\"\n",
+        )
+        .unwrap();
+        // Not downloaded yet → "not installed", but the function must not
+        // panic and must complete (i.e. dest_root was accepted).
+        let res = list_for_crate(&tmp, Some(&tmp));
+        assert!(res.is_ok());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }

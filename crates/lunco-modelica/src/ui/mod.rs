@@ -1426,7 +1426,7 @@ fn spawn_optional_library_install(
             }
         }
         bevy::log::info!("[Assets] installing {}…", entry.name);
-        match lunco_assets::download::download_asset(&entry, &key) {
+        match lunco_assets::download::download_asset(&entry, &key, None) {
             Ok(()) => bevy::log::info!("[Assets] {} installed", entry.name),
             Err(e) => bevy::log::warn!("[Assets] {} install failed: {e}", entry.name),
         }

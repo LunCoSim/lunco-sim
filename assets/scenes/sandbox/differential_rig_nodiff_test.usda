@@ -60,8 +60,12 @@ def Xform "DiffRigTest" (
         prepend references = @../../vessels/rovers/differential_rig.usda@</DiffRig>
     )
     {
-        float lunco:differential:stiffness = 0.0
-        float lunco:differential:damping = 0.0
+        # Disable the differential: zero the gear joint's angular drive (local `over`).
+        over "Differential"
+        {
+            float drive:angular:physics:stiffness = 0.0
+            float drive:angular:physics:damping = 0.0
+        }
         double3 xformOp:translate = (0, 1.5, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

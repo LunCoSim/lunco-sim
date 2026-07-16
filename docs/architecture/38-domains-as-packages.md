@@ -795,8 +795,10 @@ the SysML-v2→USD and USD→FMI projections become near-mechanical.
   `lunco:param:<key>` for a script's own settings) — and where
   an MSL class already names the quantity (Resistor `R`, etc.), **use that name**. Drop the bespoke
   `lunco:<param>` spellings that merely duplicate a model parameter.
-- **Mobility** (`lunco:drive*`, `lunco:differential:*`, `lunco:steer*`) — prefer the **`PhysxVehicle*`**
-  schemas already in use where they cover it; keep `lunco:` only for what PhysX lacks.
+- **Mobility** (`lunco:drive*`, `lunco:steer*`) — prefer the **`PhysxVehicle*`**
+  schemas already in use where they cover it; keep `lunco:` only for what PhysX lacks. The
+  rocker-bogie differential is authored as a standard **`PhysxPhysicsGearJoint`** over the two
+  chassis↔rocker hinges (no bespoke `lunco:differential:*`).
 - **Sensors** (`lunco:sensor:imu/range/contact`) — **mirror NVIDIA/Isaac sensor schema** shapes/names
   (doc §8.5); camera → `UsdGeomCamera`. Convergent-not-committal.
 

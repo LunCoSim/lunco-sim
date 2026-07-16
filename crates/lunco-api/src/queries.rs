@@ -231,9 +231,65 @@ impl ApiQueryProvider for EntitiesInRadiusProvider {
 
 /// Register the built-in transform-only spatial providers (`Nearest`,
 /// `EntitiesInRadius`). Called by [`crate::LunCoApiPlugin`].
+/// `ReadPorts` — every exposed port on an entity (model I/O, physics velocity,
+/// sensors, joints), by `api_id`. A one-shot read of the same `PortRegistry`
+/// backends the telemetry stream samples — the direct alternative to subscribing.
+/// params: `{ api_id: u64 }` · returns: `{ api_id, ports: [{ name, value, direction }] }`
+pub struct ReadPortsProvider;
+impl ApiQueryProvider for ReadPortsProvider {
+    fn name(&self) -> &'static str {
+        "ReadPorts"
+    }
+    fn execute(&self, world: &mut World, params: &serde_json::Value) -> ApiResponse {
+        let Some(api_id) = params
+            .get("api_id")
+            .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        else {
+            return ApiResponse::error(
+                ApiErrorCode::DeserializationError,
+                "ReadPorts: `api_id` (u64) required".to_string(),
+            );
+        };
+        let gid = lunco_core::GlobalEntityId::from_raw(api_id);
+        let Some(entity) = world.resource::<ApiEntityRegistry>().resolve(&gid) else {
+            return ApiResponse::error(
+                ApiErrorCode::EntityNotFound,
+                format!("ReadPorts: no entity for api_id {api_id}"),
+            );
+        };
+        // `PortRegistry` is `Clone` (a Vec of `'static` backends), so clone it out
+        // to release the immutable world borrow before `entity_ports` reborrows
+        // `&World` to read component values.
+        let Some(registry) = world
+            .get_resource::<lunco_core::ports::PortRegistry>()
+            .cloned()
+        else {
+            return ApiResponse::error(
+                ApiErrorCode::InternalError,
+                "ReadPorts: PortRegistry not present (no cosim plugin)".to_string(),
+            );
+        };
+        let ports = registry.entity_ports(world, entity);
+        let arr: Vec<_> = ports
+            .into_iter()
+            .map(|p| {
+                serde_json::json!({
+                    "name": p.name,
+                    "value": p.value,
+                    "direction": format!("{:?}", p.direction),
+                })
+            })
+            .collect();
+        ApiResponse::ok(serde_json::json!({ "api_id": api_id, "ports": arr }))
+    }
+}
+
 pub fn register_builtin_spatial_queries(registry: &mut ApiQueryRegistry) {
     registry.register(NearestProvider);
     registry.register(EntitiesInRadiusProvider);
+    // Not spatial, but built-in and transform/physics-agnostic (it only reads the
+    // `PortRegistry`), so it registers here with the other always-available queries.
+    registry.register(ReadPortsProvider);
 }
 
 // ─── ApiVisibility ─────────────────────────────────────────────────────

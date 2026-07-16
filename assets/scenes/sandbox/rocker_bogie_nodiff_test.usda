@@ -6,10 +6,10 @@
 )
 
 # G5 CONTROL scene — identical to `rocker_bogie_test.usda` but the differential
-# is DISABLED by a local `lunco:differential:stiffness = 0` opinion on the Rover
-# (a local opinion overrides the referenced rover's value). With the coupling
-# off, the step under the left-front corner should ROLL the chassis noticeably
-# more than the coupled case — isolating the differential's leveling effect.
+# is DISABLED by zeroing the differential gear joint's angular-drive stiffness/damping
+# with a local `over` on the Rover (a local opinion overrides the referenced value).
+# With the coupling off, the step under the left-front corner should ROLL the chassis
+# noticeably more than the coupled case — isolating the differential's leveling effect.
 
 def Xform "RockerBogieTest" (
     kind = "assembly"
@@ -82,9 +82,13 @@ def Xform "RockerBogieTest" (
         prepend references = @../../vessels/rovers/rocker_bogie.usda@</RockerBogie>
     )
     {
-        # Disable the differential (local opinion wins over the referenced value).
-        float lunco:differential:stiffness = 0.0
-        float lunco:differential:damping = 0.0
+        # Disable the differential: zero the gear joint's angular drive (a local
+        # `over` opinion wins over the referenced asset's value).
+        over "Differential"
+        {
+            float drive:angular:physics:stiffness = 0.0
+            float drive:angular:physics:damping = 0.0
+        }
         double3 xformOp:translate = (0, 1.6, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

@@ -930,7 +930,9 @@ fn spawn_native_install(slot: NativeInstallSlot, cancel: Arc<std::sync::atomic::
             cancel: Some(cancel_for_task.clone()),
         };
         if let Err(e) =
-            lunco_assets::download::download_asset_with_control(entry, "msl", control)
+            // `None` = cache-relative: the MSL bundle lands under the asset cache
+            // root, not a Twin. Matches the pre-`dest_root` behaviour.
+            lunco_assets::download::download_asset_with_control(entry, "msl", control, None)
         {
             let msg = match e {
                 lunco_assets::download::DownloadError::Cancelled => "cancelled".to_string(),

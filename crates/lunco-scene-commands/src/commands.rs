@@ -254,20 +254,116 @@ fn spawn_rest_depth(
     stages: &Assets<UsdStageAsset>,
     canonical: &mut CanonicalStages,
     entry: &crate::catalog::SpawnableEntry,
-) -> Option<f64> {
+) -> RestDepth {
     let SpawnSource::UsdFile(path) = &entry.source;
     let handle = asset_server.load(path.clone());
     let id = handle.id();
     // Compose the canonical stage on first sight (idempotent — cached thereafter).
     if canonical.get(id).is_none() {
-        let recipe = stages.get(&handle).and_then(|a| a.recipe.clone())?;
+        let Some(recipe) = stages.get(&handle).and_then(|a| a.recipe.clone()) else {
+            return RestDepth::StagePending;
+        };
         canonical.get_or_build(id, &recipe);
     }
     let root_prim = prim_path_from_entry_id(&entry.id);
-    canonical
-        .get(id)
-        .and_then(|cs| collision_aabb(&cs.view(), &root_prim))
-        .map(|a| a.rest_depth())
+    match canonical.get(id).and_then(|cs| collision_aabb(&cs.view(), &root_prim)) {
+        Some(a) => RestDepth::Ready(a.rest_depth()),
+        None => RestDepth::NoCollision,
+    }
+}
+
+/// Outcome of [`spawn_rest_depth`]. `StagePending` and `NoCollision` were once both
+/// `None`, which silently placed the asset with NO lift — that is how a lander whose
+/// pads sit 5 m below its root spawned embedded on its very first spawn (the stage
+/// composes asynchronously, so the FIRST spawn of any asset always lost its lift).
+/// They mean opposite things and must be handled differently: pending = wait,
+/// no-collision = there is genuinely nothing to rest on the ground.
+enum RestDepth {
+    /// Composed; `-min.y` of the collision AABB in the asset's own frame.
+    Ready(f64),
+    /// The canonical stage has not composed yet — the lift is UNKNOWN, not zero.
+    StagePending,
+    /// Composed, but the asset has no collision geometry (a pure-visual prop).
+    NoCollision,
+}
+
+/// Spawns held back until their USD stage composes, so placement is never computed
+/// against an unknown collider. Retried by [`drain_deferred_spawns`].
+///
+/// Each entry KEEPS its stage handle. `AssetServer::load` hands back a STRONG
+/// handle, so a caller that drops it — as the placement probe used to, every call —
+/// drops the asset with it and the load never lands. That is the whole reason the
+/// first spawn of an asset silently lost its lift: the probe cancelled its own load,
+/// and only a previously-spawned entity's retained handle made later spawns work.
+#[derive(Resource, Default)]
+pub struct DeferredSpawns(Vec<(SpawnEntity, Handle<UsdStageAsset>)>);
+
+/// Re-trigger a deferred spawn once its stage has loaded; drop it (loudly) if the
+/// asset failed, so a bad entry cannot spin the queue forever.
+pub fn drain_deferred_spawns(
+    mut deferred: ResMut<DeferredSpawns>,
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    stages: Res<Assets<UsdStageAsset>>,
+) {
+    if deferred.0.is_empty() {
+        return;
+    }
+    for (cmd, handle) in std::mem::take(&mut deferred.0) {
+        if stages.get(&handle).is_some() {
+            commands.trigger(cmd);
+        } else if asset_server
+            .get_load_state(&handle)
+            .is_some_and(|s| matches!(s, bevy::asset::LoadState::Failed(_)))
+        {
+            warn!("SPAWN_ENTITY: stage for '{}' failed to load; dropping spawn", cmd.entry_id);
+        } else {
+            // Still loading — keep BOTH the command and its handle alive.
+            deferred.0.push((cmd, handle));
+        }
+    }
+}
+
+/// Ground height (render-space Y) under a spawn point, or `None` if this (x,z) has
+/// no ground at all (an orbital/empty scene → honour the requested position).
+///
+/// The streamed DEM answers first when it covers the point: it is the authored
+/// surface and needs no baked collider, so it is right even mid-stream. Otherwise
+/// fall back to the physics world — a downward ray onto whatever collider is really
+/// there (the sandbox's flat slab, a static mesh, a baked tile). The cast starts
+/// well ABOVE the request so a point already below the surface still finds it;
+/// casting from `position` itself would miss upward and silently keep an embedded
+/// spawn.
+fn ground_height_under(
+    dem: &Query<(&GlobalTransform, &lunco_terrain_surface::stream_viz::DemHeightField)>,
+    raycaster: &lunco_physics::GridSpatialQuery,
+    position: Vec3,
+) -> Option<f64> {
+    if let Some(y) = lunco_terrain_surface::stream_viz::dem_ground_height(
+        dem.iter(),
+        position.x as f64,
+        position.z as f64,
+    ) {
+        return Some(y);
+    }
+    const PROBE_ABOVE: f64 = 1_000.0;
+    const PROBE_RANGE: f64 = 5_000.0;
+    let origin = DVec3::new(position.x as f64, position.y as f64 + PROBE_ABOVE, position.z as f64);
+    // `raw()`, NOT `cast_ray_render`: a spawn position is grid-local, and a fresh
+    // spawn sits at cell 0, so it is ALREADY grid-absolute — the frame avian's
+    // colliders live in. Casting it through `cast_ray_render` would add the
+    // render→physics shift a second time, which tracks the floating origin and made
+    // the "ground" wander with the avatar (6.08 → 6.59) instead of sitting at 0.
+    // `solid: true` so a probe starting inside a collider still reports a hit.
+    // The spawned entity does not exist yet, so it cannot hit itself.
+    let hit = raycaster.raw().cast_ray(
+        origin,
+        Dir3::NEG_Y,
+        PROBE_RANGE,
+        true,
+        &avian3d::prelude::SpatialQueryFilter::default(),
+    )?;
+    Some(origin.y - hit.distance)
 }
 
 #[on_command(SpawnEntity)]
@@ -279,6 +375,11 @@ pub fn on_spawn_entity_command(
     q_grids: Query<Entity, With<Grid>>,
     role: Res<lunco_core::NetworkRole>,
     dem: Query<(&GlobalTransform, &lunco_terrain_surface::stream_viz::DemHeightField)>,
+    // Ground fallback for scenes with no streamed DEM (the sandbox's flat slab).
+    // Render-space origins → grid-absolute colliders, so this must be the grid-aware
+    // wrapper, never a raw `SpatialQuery`.
+    raycaster: lunco_physics::GridSpatialQuery,
+    mut deferred: ResMut<DeferredSpawns>,
     stages: Res<Assets<UsdStageAsset>>,
     // `CanonicalStages` is a NonSend resource (holds non-Send USD stage data), so
     // this observer takes it as `NonSendMut` — same as the GUI ghost's footprint
@@ -313,11 +414,15 @@ pub fn on_spawn_entity_command(
         }
     };
 
-    // Terrain-fit the drop height: snap to the DEM surface when streamed terrain
-    // covers this (x,z), so ANY spawn (GUI, API, headless, rhai) lands ON the
-    // surface instead of free-falling — or, worse, spawning embedded — when the
-    // collider under the drop point hasn't baked yet. No DEM here (a flat scene, or
-    // an intentional altitude) → the position is used exactly as given.
+    // Terrain-fit the drop height so ANY spawn (GUI, API, headless, rhai) rests ON
+    // the surface rather than embedded in it. The ground is whatever is actually
+    // under (x,z) — the streamed DEM, or, when none covers this scene, the physics
+    // collider itself (see `ground_height_under`). Gating this on a DEM was a bug:
+    // the flat sandbox has no DEM but DOES have a ground slab, so every spawn there
+    // skipped the lift and landed embedded — a 2000 kg lander with its pads ~5 m
+    // below its root gets wedged through a 0.2 m slab, and avian's penetration
+    // recovery ejects it upward at ~5 m/s while churning degenerate contacts (which
+    // is how we corrupted the island graph: "Tail contact has no island").
     //
     // The lift is the asset's OWN collision-AABB rest depth (`-min.y` of its
     // collider box in its own frame, from the composed stage) plus a small skin
@@ -328,17 +433,34 @@ pub fn on_spawn_entity_command(
     // authored `lunco:spawnLift` only when the composed geometry isn't available
     // yet or the asset is pure-visual.
     let mut position = cmd.position;
-    if let Some(y) = lunco_terrain_surface::stream_viz::dem_ground_height(
-        dem.iter(),
-        position.x as f64,
-        position.z as f64,
-    ) {
-        // Reborrow the resource params through Deref/DerefMut to the plain refs the
-        // helper takes (`&mut *canonical` = `&mut CanonicalStages`).
-        let rest_depth = spawn_rest_depth(&asset_server, &stages, &mut *canonical, entry)
-            .map(|d| d + SPAWN_GROUND_CLEARANCE)
-            .unwrap_or(entry.spawn_lift as f64);
-        position.y = y as f32 + rest_depth as f32;
+    // Reborrow the resource params through Deref/DerefMut to the plain refs the
+    // helper takes (`&mut *canonical` = `&mut CanonicalStages`).
+    let rest_depth = match spawn_rest_depth(&asset_server, &stages, &mut *canonical, entry) {
+        RestDepth::Ready(d) => d + SPAWN_GROUND_CLEARANCE,
+        RestDepth::NoCollision => entry.spawn_lift as f64,
+        // Placing now would use a lift of ~0 and bury the asset in the ground.
+        // Wait for the stage instead — correctness beats a frame of latency.
+        RestDepth::StagePending => {
+            let SpawnSource::UsdFile(path) = &entry.source;
+            // Park the STRONG handle with the command so the load actually
+            // completes instead of being dropped and restarted every retry.
+            deferred.0.push((cmd.clone(), asset_server.load(path.clone())));
+            return;
+        }
+    };
+    let ground_probe = ground_height_under(&dem, &raycaster, position);
+    debug!(
+        "SPAWN_FIT: '{}' requested_y={} ground_y={:?} rest_depth={}",
+        cmd.entry_id, position.y, ground_probe, rest_depth
+    );
+    if let Some(ground_y) = ground_probe {
+        // Never spawn EMBEDDED: the lowest collider point must clear the surface.
+        // Only lift — a requested altitude ABOVE the rest height is honoured (an
+        // intentional drop), so this stays a floor, not a snap.
+        let min_y = ground_y + rest_depth;
+        if (position.y as f64) < min_y {
+            position.y = min_y as f32;
+        }
     }
 
     info!("SPAWN_ENTITY: {} at {:?}", cmd.entry_id, position);
@@ -2579,6 +2701,10 @@ impl Plugin for SpawnCommandPlugin {
         // whenever the second half was forgotten the command silently vanished
         // from the HTTP API / rhai / `discover_schema`).
         register_all_commands(app);
+        // A spawn whose USD stage hasn't composed yet is parked here, not placed
+        // blind — see `RestDepth::StagePending`.
+        app.init_resource::<DeferredSpawns>();
+        app.add_systems(Update, drain_deferred_spawns);
         // Dock release as an actuator on the intent→port machinery (replaces the
         // hardcoded G-to-detach): register the `release` port backend, attach a
         // ReleaseActuator to every control-bound vessel, and edge-detect → detach.

@@ -28,14 +28,25 @@ use bevy::prelude::*;
 use leafwing_input_manager::prelude::ActionState;
 use lunco_core::{on_command, register_commands, Command, UserIntent};
 
-/// Intents forced held by [`SimulateIntent`] — a headless stand-in for the keyboard.
+/// Intents forced held by [`SimulateIntent`], **keyed by the vessel they drive** —
+/// a headless stand-in for the keyboard.
 ///
 /// `drive_from_bindings` treats a member exactly as a held key: it OR's into the
 /// `held` test, so a simulated intent flows through the SAME two-stage binding path a
 /// real keypress does (intent → `ControlBinding` → `SetPorts`). This is how a test, a
 /// script, or the API drives a possessed vessel with no physical keyboard.
+///
+/// **Per-entity, not global.** A held intent is addressed to the ONE vessel it
+/// controls. This used to be a bare `HashSet<UserIntent>` consulted for every vessel
+/// `drive_from_bindings` iterated, so a single simulated press drove EVERY controlled
+/// vessel at once: two spawns of the same asset (two landers — byte-identical prim
+/// paths, distinct entities) could not be flown independently, and "control" meant
+/// "whatever happens to be possessed". Keying by the vessel entity makes the signal
+/// name its subject, exactly as the wire endpoints do via `GlobalEntityId`.
 #[derive(Resource, Default)]
-pub struct SimulatedIntents(pub std::collections::HashSet<UserIntent>);
+pub struct SimulatedIntents(
+    pub std::collections::HashMap<Entity, std::collections::HashSet<UserIntent>>,
+);
 
 /// Force an intent held or released, as if a key were pressed — the headless way to
 /// drive a possessed vessel over the API or from rhai.
@@ -52,11 +63,17 @@ pub struct SimulateIntent {
     pub intent: String,
     /// `true` = hold it down, `false` = release it.
     pub held: bool,
+    /// The **vessel this intent drives**. An intent is meaningless without the thing
+    /// it controls: two spawns of one asset are two distinct vessels, and a targetless
+    /// intent drove both (see [`SimulatedIntents`]). Over the API this takes the
+    /// vessel's `api_id` — the `GlobalEntityId` `ListEntities` reports, the same
+    /// identity the cosim wires resolve by — and is resolved to the live entity.
+    pub target: Entity,
 }
 
 impl Default for SimulateIntent {
     fn default() -> Self {
-        Self { intent: String::new(), held: false }
+        Self { intent: String::new(), held: false, target: Entity::PLACEHOLDER }
     }
 }
 
@@ -70,12 +87,31 @@ fn on_simulate_intent(
         warn!("[simulate-intent] unknown intent '{}'", cmd.intent);
         return;
     };
-    if cmd.held {
-        sim.0.insert(intent);
-    } else {
-        sim.0.remove(&intent);
+    // No target = no subject. Refuse rather than fall back to "every vessel": a
+    // silent broadcast is what made two landers fly as one.
+    if cmd.target == Entity::PLACEHOLDER {
+        warn!(
+            "[simulate-intent] '{}' names no `target` vessel — an intent must name the \
+             entity it drives (pass the vessel's api_id); ignoring",
+            cmd.intent
+        );
+        return;
     }
-    info!("[simulate-intent] {} → {}", cmd.intent, if cmd.held { "HELD" } else { "released" });
+    if cmd.held {
+        sim.0.entry(cmd.target).or_default().insert(intent);
+    } else if let Some(set) = sim.0.get_mut(&cmd.target) {
+        set.remove(&intent);
+        // Don't leak an empty set per vessel ever simulated.
+        if set.is_empty() {
+            sim.0.remove(&cmd.target);
+        }
+    }
+    info!(
+        "[simulate-intent] {} → {} on {:?}",
+        cmd.intent,
+        if cmd.held { "HELD" } else { "released" },
+        cmd.target
+    );
 }
 
 register_commands!(on_simulate_intent);
@@ -183,8 +219,14 @@ fn drive_from_bindings(
     let sim_intents = sim_intents.as_deref();
     // A simulated intent counts as held regardless of the egui gate (it is not a
     // physical key that a focused text field could be swallowing).
-    let held = |intent, intents: &ActionState<UserIntent>| {
-        sim_intents.is_some_and(|s| s.0.contains(&intent))
+    //
+    // Scoped to `vessel`: a simulated intent drives ONLY the vessel it was addressed
+    // to. The keyboard half stays per-vessel too — it always was, via that vessel's
+    // own `ActionState`. Before, the sim half was a global set consulted inside this
+    // same loop, so one `SimulateIntent` pressed the key on EVERY controlled vessel.
+    let held = |vessel: Entity, intent, intents: &ActionState<UserIntent>| {
+        sim_intents
+            .is_some_and(|s| s.0.get(&vessel).is_some_and(|set| set.contains(&intent)))
             || (!egui_keyboard && intents.pressed(&intent))
     };
 
@@ -215,7 +257,7 @@ fn drive_from_bindings(
             }
         }
 
-        let writes = binding.resolve(|intent| held(intent, intents));
+        let writes = binding.resolve(|intent| held(link.vessel_entity, intent, intents));
 
         // Owned + predicted on a client → assign a real seq (buffered for replay
         // by `record_control_input`). seq MUST be stamped HERE (the origin)
@@ -282,7 +324,8 @@ fn drive_from_bindings(
     // prediction bookkeeping. `resolve` writes every bound port (0 when idle), so a
     // released key zeroes the port and motion stops.
     for (entity, intents, binding) in q_self.iter() {
-        let writes = binding.resolve(|intent| held(intent, intents));
+        // A self-driver IS its own vessel, so it is its own intent subject.
+        let writes = binding.resolve(|intent| held(entity, intent, intents));
         commands.trigger(lunco_cosim::SetPorts { target: entity, writes, seq: 0, tick: 0 });
     }
 }

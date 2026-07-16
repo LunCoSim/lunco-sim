@@ -434,6 +434,31 @@ pub fn lunco_lib_path(relative: &str) -> String {
     format!("lunco-lib://{relative}")
 }
 
+/// Resolve a built-in engine-library asset reference to a load path that is
+/// **independent of the active document's root**.
+///
+/// A bare, scheme-less path like `shaders/wheel.wgsl` (as USD authors it in
+/// `info:wgsl:sourceAsset`, or as engine code hard-codes it) otherwise loads
+/// against Bevy's *default* source — which, once an external Twin is open, is the
+/// wrong root: the shipped shader isn't co-located with a user's scene, so the
+/// load misses (a ShaderMaterial with an unresolved shader renders as a black
+/// hole). Routing it through the `lunco://` source — registered by
+/// [`register_lunco_asset_sources`] onto the shipped `assets/` library — makes a
+/// built-in asset resolve to the engine library from anywhere, exactly like the
+/// scene author writing `@lunco://vessels/rovers/skid_rover.usda@`.
+///
+/// A reference that ALREADY carries a scheme (`lunco://…`, `twin://…`,
+/// `cached_textures://…`, `http(s)://…`) is returned unchanged — a Twin shipping
+/// its OWN shader (`twin://name/shaders/custom.wgsl`) must keep resolving against
+/// the Twin, and an already-`lunco://` path must not be double-prefixed.
+pub fn engine_asset_uri(reference: &str) -> String {
+    if reference.contains("://") {
+        reference.to_string()
+    } else {
+        format!("lunco://{reference}")
+    }
+}
+
 /// Cache `fonts/` directory — where `lunco-assets -- download`
 /// materialises font files declared in per-crate `Assets.toml`. Lives
 /// under [`cache_dir`] because these are downloaded artifacts, not

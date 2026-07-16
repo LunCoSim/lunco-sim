@@ -55,6 +55,12 @@ sha2 = { workspace = true }
 # (Node.js) is on PATH before shelling out to gltf-transform. Native
 # only — the wasm path doesn't run process steps.
 which = "6"
+# Pure-Rust GeoTIFF codec for the `process.kind = "dem"` step — decode a raw
+# LROC/NAC DTM, crop a square ROI, re-encode as a square float32 heightmap.
+# Same version the proven `lunco-terrain-bake` decoder uses (`tiff = "0.11"`);
+# the encoder side (`colortype::Gray32Float`) is what writes the heightmap the
+# runtime DEM reader expects. No GDAL / system dependency.
+tiff = "0.11"
 flate2 = "1.0"
 bzip2 = "0.4"
 tar = { workspace = true }

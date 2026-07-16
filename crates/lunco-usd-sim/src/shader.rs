@@ -149,7 +149,13 @@ fn apply_usd_shader_material_read<R: UsdRead>(
 
     debug!("[shader] applied {} to {}", resolved_shader_path, prim_path.path);
     // A path, not a `Handle<Shader>`: `bevy::shader` pulls naga. The binder loads it.
-    let look = ShaderLook { shader: resolved_shader_path, values, ..Default::default() };
+    // Route a bare built-in reference (`shaders/wheel.wgsl`) through the `lunco://`
+    // engine library so it resolves from ANYWHERE — including with an external Twin
+    // open, where Bevy's default source is the wrong root and the shipped shader
+    // would miss (→ a black-hole ShaderMaterial). An already-schemed `twin://…`
+    // custom shader is passed through untouched. See `lunco_assets::engine_asset_uri`.
+    let shader = lunco_assets::engine_asset_uri(&resolved_shader_path);
+    let look = ShaderLook { shader, values, ..Default::default() };
     // REMOVE the `PbrLook`, don't just overlay: an entity carrying both intents
     // gets two materials from the two binders and the mesh draws TWICE.
     commands

@@ -47,13 +47,6 @@ def Xform "DiffRig" (
     # tree. See lunco-usd-avian collider construction + the G5 differential rig tests.
     bool physics:kinematicEnabled = true
 
-    rel lunco:differential:rockerA = </DiffRig/RockerL>
-    rel lunco:differential:rockerB = </DiffRig/RockerR>
-    uniform token lunco:differential:axis = "X"
-    float lunco:differential:stiffness = 8000.0
-    float lunco:differential:damping = 1200.0
-    float lunco:differential:restSum = 0.0
-
     # Heavy base pillar (root rigid body). Spans y -1.5..1.5 about the root; the
     # scene places the root at y=1.5 so the base rests on the ground.
     def Cube "Base" (prepend apiSchemas = ["PhysicsCollisionAPI"])
@@ -109,5 +102,20 @@ def Xform "DiffRig" (
         uniform token physics:axis = "X"
         point3f physics:localPos0 = (1.2, 1.0, 0.0)
         point3f physics:localPos1 = (0.0, 0.0, 0.0)
+    }
+
+    # Differential coupling over the two hinges (standard PhysX gear joint): softly
+    # enforces θ_L + θ_R → targetPosition via the joint's own angular drive. This is
+    # the signal the G5 test reads — HingeR mirrors HingeL only when this resolves.
+    def PhysxPhysicsGearJoint "Differential" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+    )
+    {
+        rel physxGearJoint:hinge0 = </DiffRig/HingeL>
+        rel physxGearJoint:hinge1 = </DiffRig/HingeR>
+        float physxGearJoint:gearRatio = -1.0
+        float drive:angular:physics:targetPosition = 0.0
+        float drive:angular:physics:stiffness = 8000.0
+        float drive:angular:physics:damping = 1200.0
     }
 }

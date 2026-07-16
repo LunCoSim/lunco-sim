@@ -712,9 +712,11 @@ fn apply_wheel_steering(
 /// the one missing piece. Stiff but compliant: the body still conforms, it just
 /// can't simply fold one rocker flat while the other stays put.
 ///
-/// Author from USD on the chassis prim (e.g. `PhysxVehicleDifferentialAPI` /
-/// `lunco:differential*` → this component); inert until present, so existing
-/// vehicles are unaffected.
+/// Authored in USD as a standard `PhysxPhysicsGearJoint` over the two chassis↔rocker
+/// hinges (`physxGearJoint:hinge0/1`), softened by the joint's own angular
+/// `PhysicsDriveAPI` (stiffness/damping/targetPosition). `lunco-usd-sim` reads that
+/// into a `PendingDifferential` and `resolve_differential_coupling` attaches this
+/// component; inert until present, so existing vehicles are unaffected.
 #[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component)]
 pub struct DifferentialCoupling {

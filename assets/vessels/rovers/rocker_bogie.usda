@@ -65,17 +65,6 @@ def Xform "RockerBogie" (
     {
     }
 
-    # --- DIFFERENTIAL COUPLING (HOLONOMIC CONSTRAINT) ---
-    # stiffness: Controls how strongly the rockers are forced to mirror each other (default 15000.0)
-    # damping: Prevents differential oscillations (default 1500.0)
-    # restSum: Symmetric target sum (default 0.0 rad)
-    rel lunco:differential:rockerA = </RockerBogie/RockerL>
-    rel lunco:differential:rockerB = </RockerBogie/RockerR>
-    uniform token lunco:differential:axis = "X"
-    float lunco:differential:stiffness = 15000.0
-    float lunco:differential:damping = 1500.0
-    float lunco:differential:restSum = 0.0
-
     # --- CHASSIS GEOMETRY & VISUALS ---
     # Gold solar foil main body
     def Cube "Body" (
@@ -685,6 +674,27 @@ def Xform "RockerBogie" (
         rel physics:body0 = </RockerBogie>
         rel physics:body1 = </RockerBogie/RockerR>
         uniform token physics:axis = "X"
+    }
+
+    # ── Differential coupling (rocker-bogie holonomic constraint) ───────────
+    # The standard PhysX gear joint over the two chassis↔rocker hinges: it softly
+    # couples θ_left + θ_right → restSum (the drive's targetPosition), so the chassis
+    # pitch tracks the rocker average instead of flopping on a free pitch DOF. A rigid
+    # gear would fight the terrain and chatter, so the compliance is the joint's own
+    # angular PhysicsDriveAPI (a strong spring-damper), not an ideal constraint.
+    #   stiffness — how strongly the rockers mirror each other (default 15000)
+    #   damping   — kills differential oscillation (default 1500)
+    #   targetPosition — symmetric rest sum (0 rad)
+    def PhysxPhysicsGearJoint "Differential" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+    )
+    {
+        rel physxGearJoint:hinge0 = </RockerBogie/HingeL>
+        rel physxGearJoint:hinge1 = </RockerBogie/HingeR>
+        float physxGearJoint:gearRatio = -1.0
+        float drive:angular:physics:targetPosition = 0.0
+        float drive:angular:physics:stiffness = 15000.0
+        float drive:angular:physics:damping = 1500.0
     }
 
     # ── Lateral-axis revolute hinges (rocker ↔ bogie) ───────────────────────
