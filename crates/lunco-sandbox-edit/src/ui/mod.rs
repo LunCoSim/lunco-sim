@@ -238,6 +238,8 @@ impl Plugin for SandboxEditUiPlugin {
                 (
                     checkpoint_click::draw_waypoint_overlay,
                     checkpoint_click::draw_waypoint_context_menu,
+                    // Crosshair + Esc-to-cancel while a placement is armed.
+                    checkpoint_click::handle_waypoint_placement_mode,
                 ),
             )
             .add_systems(

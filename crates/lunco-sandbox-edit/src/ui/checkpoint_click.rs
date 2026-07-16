@@ -100,6 +100,31 @@ pub fn sync_waypoint_tool_active(
     }
 }
 
+/// Arm-mode affordance: a crosshair cursor while a placement is pending, and Esc to
+/// cancel it. What the click will DO is explained by the menu buttons' hover tooltips
+/// — once armed the crosshair alone carries it, so no text follows the cursor around.
+///
+/// The cursor goes through `ctx.set_cursor_icon` — egui is the single source of truth
+/// and bevy_egui translates its output to the window's `CursorIcon` with its own
+/// change detection, so this costs nothing per frame and never fights egui's own hover
+/// cursors. (Writing `CursorIcon` on the window directly would mean re-asserting it
+/// every frame to beat bevy_egui's write, dirtying the component forever.)
+pub fn handle_waypoint_placement_mode(
+    mut contexts: bevy_egui::EguiContexts,
+    mut placement: ResMut<WaypointPlacement>,
+) {
+    if placement.0.is_none() {
+        return;
+    }
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        info!("[waypoint] placement cancelled (Esc)");
+        placement.0 = None;
+        return;
+    }
+    ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+}
+
 /// Grid-frame conversion bundle for the waypoint click observer. Bundled into one
 /// [`SystemParam`] so the observer stays under Bevy's 16-argument limit, and so the
 /// render→world math lives in one place. `cameras` rides along because it also reads
@@ -482,7 +507,11 @@ pub fn draw_waypoint_context_menu(
                 }
                 ui.separator();
 
-                if ui.button("✋  Move — then click ground").clicked() {
+                if ui
+                    .button("✋  Move")
+                    .on_hover_text("Then click the ground to put this waypoint there  ·  Esc to cancel")
+                    .clicked()
+                {
                     placement.0 = Some(PendingPlacement {
                         vessel: visual.vessel,
                         coord_key: visual.coord_key.clone(),
@@ -490,7 +519,14 @@ pub fn draw_waypoint_context_menu(
                     });
                     open = false;
                 }
-                if ui.button("➕  Insert after — then click ground").clicked() {
+                if ui
+                    .button("➕  Insert after")
+                    .on_hover_text(
+                        "Then click the ground to add the next waypoint right after this one  ·  \
+                         Esc to cancel",
+                    )
+                    .clicked()
+                {
                     info!("[waypoint] armed Insert-after of '{}'", visual.coord_key);
                     placement.0 = Some(PendingPlacement {
                         vessel: visual.vessel,
