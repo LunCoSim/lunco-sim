@@ -147,9 +147,19 @@ impl Plugin for SandboxEditPlugin {
             PostUpdate,
             gizmo::sync_gizmo_proxies.after(bevy::transform::TransformSystems::Propagate),
         );
-        // `First` is strictly after the crate's `Last`, so this ordering can't be
-        // lost to ambiguity the way a same-schedule system would be.
-        app.add_systems(First, gizmo::apply_gizmo_proxy_drag);
+        // Must land AFTER `restore_dragged_transform` and BEFORE propagation.
+        // `restore_dragged_transform` clamps `Transform` back to `prev.local_pos`
+        // every frame to cancel Avian's writeback; applying the drag before that
+        // (e.g. in `First`) gets silently erased, and `sync_gizmo_transforms`
+        // then never advances `prev` — the gizmo draws and picks up the drag, but
+        // the object never moves. The crate used to get this for free by writing
+        // `Transform` in `Last`, after the clamp.
+        app.add_systems(
+            PostUpdate,
+            gizmo::apply_gizmo_proxy_drag
+                .after(gizmo::restore_dragged_transform)
+                .before(bevy::transform::TransformSystems::Propagate),
+        );
         app.add_systems(Update, gizmo::drive_gizmo_drag_no_shift);
         // Publish the drag state as the core `GizmoDragging` marker so transform-
         // gizmo-free crates (avatar camera follow) can read it.
