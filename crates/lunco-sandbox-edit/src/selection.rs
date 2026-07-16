@@ -287,18 +287,28 @@ pub fn on_scene_click_select(
     inspector_target.part = None;
 }
 
-/// Escape / Backspace clears the selection and gizmo. Split out of the click
-/// path because it's keyboard-driven, not a pointer pick. When an Inspector
-/// field is focused bevy_egui absorbs the key (correct); otherwise it reaches
-/// here and deselects through the same `SelectEntity` mutation path.
+/// The `Cancel` intent clears the selection and gizmo. Split out of the click
+/// path because it's keyboard-driven, not a pointer pick. Deselects through the same
+/// `SelectEntity` mutation path.
+///
+/// Reads [`lunco_core::CancelIntent`] rather than raw `Escape`/`Backspace`: the
+/// bindings live in `assets/config/keybindings.json`, so one rebind moves every
+/// "back out" at once, and the intent already stands down while an Inspector field has
+/// keyboard focus (so Backspace there edits text).
+///
+/// Gated on [`lunco_core::CursorModeActive`] so Cancel unwinds the INNERMOST mode
+/// first: while a waypoint placement/menu, the spawn ghost or the terrain brush is up,
+/// that Cancel belongs to the mode — clearing the selection as a side effect would be
+/// two undos for one keypress.
 pub fn handle_deselect_keys(
-    keys: Res<ButtonInput<KeyCode>>,
+    cancel: lunco_core::CancelIntent,
+    cursor_mode: lunco_core::CursorModeActive,
     q_selected_old: Query<Entity, With<Selected>>,
     mut selected: ResMut<SelectedEntities>,
     mut inspector_target: ResMut<crate::InspectorTarget>,
     mut commands: Commands,
 ) {
-    if !(keys.just_pressed(KeyCode::Escape) || keys.just_pressed(KeyCode::Backspace)) {
+    if cursor_mode.any() || !cancel.just_pressed() {
         return;
     }
     clear_selection(&mut commands, &mut selected, q_selected_old.iter());

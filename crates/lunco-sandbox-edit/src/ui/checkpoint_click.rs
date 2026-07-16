@@ -154,23 +154,16 @@ fn on_cancel_waypoint_edit(
 /// `avatar_escape_possession` stands down via the shared gates); with nothing up it
 /// falls through to releasing possession as before.
 pub fn cancel_waypoint_edit_on_intent(
-    egui_focus: Res<EguiFocus>,
-    q_avatar: Query<&lunco_core::IntentState, With<Avatar>>,
+    cancel: lunco_core::CancelIntent,
     placement: Res<WaypointPlacement>,
     menu_state: Res<WaypointContextMenuState>,
     mut commands: Commands,
 ) {
-    if egui_focus.wants_keyboard {
-        return; // typing in a field: the key is text, not a cancel
-    }
     if placement.0.is_none() && menu_state.entity.is_none() {
         return;
     }
-    for intent in q_avatar.iter() {
-        if intent.just_pressed(&lunco_core::UserIntent::Cancel) {
-            commands.trigger(CancelWaypointEdit {});
-            return;
-        }
+    if cancel.just_pressed() {
+        commands.trigger(CancelWaypointEdit {});
     }
 }
 

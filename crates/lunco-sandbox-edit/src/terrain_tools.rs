@@ -82,14 +82,18 @@ pub struct TerrainBrushGhost;
 
 /// Mirror the armed state into the shared [`lunco_core::TerrainToolActive`] gate
 /// (read by possession + selection so they stand down while sculpting) and
-/// disarm on Escape. Keyboard-driven, so it stays a plain system.
+/// disarm on Cancel. Keyboard-driven, so it stays a plain system.
+///
+/// Reads the [`lunco_core::CancelIntent`], NOT a raw `KeyCode::Escape`: the bindings
+/// are data (`assets/config/keybindings.json`), so disarming the brush shares one
+/// vocabulary with every other "back out" and follows a rebind.
 pub fn terrain_tool_state_system(
     mut state: ResMut<TerrainToolState>,
     mut active: ResMut<lunco_core::TerrainToolActive>,
-    keys: Res<ButtonInput<KeyCode>>,
+    cancel: lunco_core::CancelIntent,
 ) {
     active.0 = state.armed();
-    if state.armed() && keys.just_pressed(KeyCode::Escape) {
+    if state.armed() && cancel.just_pressed() {
         state.tool = TerrainTool::None;
     }
 }
