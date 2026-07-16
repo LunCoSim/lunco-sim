@@ -22,6 +22,10 @@ pub mod usd_mount;
 /// menu, routing through the existing `SetAutopilotBehavior`/`EngageAutopilot`
 /// commands (no new journal domain).
 pub mod checkpoint_click;
+/// Cinematic camera authoring — capture the current view as a `def Camera`
+/// prim (doc 50). The transport that replays it is the floating HUD in
+/// `lunco-sandbox`, not a panel: View mode has no dock.
+pub mod cinematic;
 /// Command Deck panel — the read+control surface for the selected vessel
 /// (possession status, autopilot engage/disengage, checkpoint list). Pure
 /// reader: every mutation dispatches a typed command (§4.2).
@@ -51,10 +55,19 @@ pub struct SandboxEditUiPlugin;
 
 impl Plugin for SandboxEditUiPlugin {
     fn build(&self, app: &mut App) {
+        // Camera-path overlay: state + the gizmo pass that draws it, and the
+        // tracker that tells the panel's transport which path clock to drive.
+        app.init_resource::<cinematic::CinematicViz>();
+        app.init_resource::<cinematic::CinematicTarget>();
+        app.add_systems(
+            Update,
+            (cinematic::track_active_camera_path, cinematic::draw_camera_paths),
+        );
         app.register_panel(spawn_palette::SpawnPalette)
             .register_panel(inspector::Inspector)
             .register_panel(entity_list::EntityList)
             .register_panel(terrain_tools::ToolsPanel)
+            .register_panel(cinematic::CinematicPanel)
             .register_panel(connection_canvas::UsdCanvasPanel)
             .register_panel(usd_prim_tree::UsdPrimTreePanel)
             .register_panel(command_deck::CommandDeck)
@@ -261,6 +274,7 @@ impl Plugin for SandboxEditUiPlugin {
                 ),
             );
         checkpoint_click::register_all_commands(app);
+        cinematic::register_all_commands(app);
 
         app.add_observer(on_select_progress);
         app.add_observer(on_spawn_progress);
@@ -355,6 +369,8 @@ impl Perspective for BuildPerspective {
         layout.set_side_browser_tabs(vec![
             PanelId("spawn_palette"),
             PanelId("tools_palette"),
+            // Capture the current view as a Camera prim (doc 50).
+            PanelId("cinematic_tools"),
             // Optional — registered by the rover binary; filtered out
             // in other apps.
             PanelId("rover_models"),
