@@ -135,6 +135,21 @@ pub struct CameraPathDriven {
     /// the floating origin, which is the whole reason for the grid).
     pub target_world: DVec3,
     pub target_rot: Quat,
+    /// The PREVIOUS fixed sample. Render-rate motion interpolates `prev → target`
+    /// across the fixed step; it does not chase `target` with an easing filter.
+    ///
+    /// An exponential ease (what this used to do) is a LAG filter, and it only
+    /// looked smooth while the per-step delta was tiny. On frames with no fixed
+    /// step the target is stale and the camera catches up; on frames with one it
+    /// jumps and the camera falls behind — a speed oscillation that reads as the
+    /// camera juddering back and forth. Invisible at 90 m / 60 s (~0.15 m per
+    /// step), gross at 800 m / 15 s (~5.2 m per step). The curve is an analytic
+    /// function of time, so there is nothing to guess at: bracket the render
+    /// instant with the two fixed samples and interpolate, exactly as
+    /// `bevy_transform_interpolation` does for physics.
+    pub prev_world: DVec3,
+    /// The previous fixed sample's rotation, interpolated the same way.
+    pub prev_rot: Quat,
     /// Whether the path currently owns the camera's rotation. False during an
     /// [`AimMode::Manual`] stretch, where the smoother writes position only and
     /// leaves look direction to the user — writing a stale target would fight
@@ -325,6 +340,8 @@ pub fn resolve_camera_paths(
                 CameraPathDriven {
                     target_world: DVec3::ZERO,
                     target_rot: Quat::IDENTITY,
+                    prev_world: DVec3::ZERO,
+                    prev_rot: Quat::IDENTITY,
                     aim_owned: true,
                     primed: false,
                 },
@@ -405,11 +422,24 @@ pub fn drive_camera_paths(
         };
 
         if let Ok(mut driven) = q_cams.get_mut(path.camera) {
+            // Retire the old sample before taking the new one: these two bracket
+            // the fixed step that `smooth_camera_paths` interpolates across. On
+            // the first evaluation both ends are the new sample, so the camera
+            // starts ON the path instead of sliding in from wherever it spawned.
+            if driven.primed {
+                driven.prev_world = driven.target_world;
+                driven.prev_rot = driven.target_rot;
+            } else {
+                driven.prev_world = world;
+            }
             driven.target_world = world;
             driven.aim_owned = !matches!(path.aim_at(t), AimMode::Manual);
             if let Some(dir) = look_dir {
                 if dir.length_squared() > 1e-9 {
                     driven.target_rot = Transform::default().looking_to(dir, Vec3::Y).rotation;
+                    if !driven.primed {
+                        driven.prev_rot = driven.target_rot;
+                    }
                 }
             }
             driven.primed = true;
@@ -435,10 +465,16 @@ fn find_grid(from: Entity, q_parents: &Query<&ChildOf>, q_is_grid: &Query<(), Wi
 /// would visibly step at that rate on a faster display. Mirrors how the follow
 /// camera eases its Transform between `FixedPostUpdate` writes.
 pub fn smooth_camera_paths(
-    time: Res<Time>,
+    fixed: Res<Time<Fixed>>,
     q_grids: Query<&Grid>,
     mut q: Query<(&mut CellCoord, &mut Transform, &ChildOf, &CameraPathDriven)>,
 ) {
+    // Where this render instant falls inside the current fixed step, 0..1. The
+    // camera is placed BETWEEN the two samples that bracket it, so its speed is
+    // whatever the curve says — it neither stalls on a frame without a fixed step
+    // nor lurches on one with it.
+    let s = fixed.overstep_fraction() as f64;
+
     for (mut cell, mut tf, child_of, driven) in q.iter_mut() {
         if !driven.primed {
             continue;
@@ -446,29 +482,24 @@ pub fn smooth_camera_paths(
         let Ok(grid) = q_grids.get(child_of.parent()) else {
             continue;
         };
-        // Ease in GRID-ABSOLUTE space, then re-bin. Interpolating the local
+        // Interpolate in GRID-ABSOLUTE space, then re-bin. Interpolating the local
         // `Transform` alone would be wrong across a cell boundary — the local value
         // jumps when the cell changes, so a lerp of locals would smear the camera
         // across a whole cell. Same write-back `follow_mounted_cameras` does.
-        let current: DVec3 = grid.grid_position_double(&cell, &tf);
-        let target = driven.target_world;
-        let world = if current.distance_squared(target) > 1e12 {
-            target // first frame / teleport: snap rather than sail across the map
-        } else {
-            // Exponential smoothing, frame-rate independent: stiff enough to track
-            // the shot without visible lag, soft enough to hide the fixed step.
-            let alpha = 1.0 - (-25.0 * time.delta_secs()).exp();
-            current.lerp(target, alpha as f64)
-        };
+        //
+        // Note this reads NOTHING from the camera's own current pose: the sample
+        // pair is the whole state. That is what makes it deterministic and
+        // lag-free, and it is why there is no snap-vs-ease special case left —
+        // there is no "current" to be far away from.
+        let world = driven.prev_world.lerp(driven.target_world, s);
         let (new_cell, new_local) = grid.translation_to_grid(world);
         *cell = new_cell;
         tf.translation = new_local;
 
         // Only when the path owns the aim — during a `Manual` stretch the user is
-        // steering and easing toward a stale target would fight the mouse.
+        // steering and writing a stale target would fight the mouse.
         if driven.aim_owned {
-            let alpha = 1.0 - (-25.0 * time.delta_secs()).exp();
-            tf.rotation = tf.rotation.slerp(driven.target_rot, alpha);
+            tf.rotation = driven.prev_rot.slerp(driven.target_rot, s as f32);
         }
     }
 }
