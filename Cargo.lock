@@ -7458,6 +7458,7 @@ dependencies = [
  "lunco-usd-sim",
  "lunco-workbench",
  "lunco-workspace",
+ "serde_json",
  "transform-gizmo-bevy",
 ]
 
@@ -7754,6 +7755,7 @@ dependencies = [
  "bevy_egui",
  "big_space",
  "lunco-assets",
+ "lunco-autopilot",
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",

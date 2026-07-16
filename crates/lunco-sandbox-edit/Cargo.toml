@@ -29,6 +29,7 @@ lunco-workbench = { path = "../lunco-workbench", optional = true }
 # Generic node-graph substrate for the USD connection canvas (a second projector
 # over it, mirroring lunco-modelica's diagram). Editor-only → optional, on `ui`.
 lunco-canvas = { path = "../lunco-canvas", optional = true }
+serde_json = { workspace = true }
 avian3d = { workspace = true }
 
 big_space.workspace = true

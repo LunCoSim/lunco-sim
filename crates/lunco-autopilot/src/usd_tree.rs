@@ -220,6 +220,29 @@ pub fn append_waypoint_leaf(xml: Option<&str>, prim_path: &str) -> Result<String
     crate::btcpp_xml::value_to_xml(&root)
 }
 
+/// Remove a `drive_to` leaf referencing the waypoint prim at `prim_path` from a
+/// vessel's mission, returning the new BT.CPP XML.
+pub fn remove_waypoint_leaf(xml: &str, prim_path: &str) -> Result<String, String> {
+    let mut root = crate::btcpp_xml::xml_to_value(xml)?;
+
+    // Reach into `forever.child.children` — the leg list of a patrol.
+    let legs = root
+        .get_mut("child")
+        .filter(|c| c.get("kind").and_then(|k| k.as_str()) == Some("sequence"))
+        .and_then(|c| c.get_mut("children"))
+        .and_then(|c| c.as_array_mut())
+        .ok_or_else(|| {
+            "mission is not a plain forever(sequence[…]) patrol"
+                .to_string()
+        })?;
+
+    legs.retain(|child| {
+        child.get("target").and_then(|t| t.as_str()) != Some(prim_path)
+    });
+
+    crate::btcpp_xml::value_to_xml(&root)
+}
+
 /// Replace every prim-path `target` with the prim's live world position. Returns the
 /// paths that could not be resolved — a tree naming a deleted waypoint must not
 /// compile (it would drive to the origin).
@@ -232,14 +255,31 @@ fn bake_targets(
     match v {
         Value::Object(map) => {
             let resolved = match map.get("target") {
-                Some(Value::String(s)) if s.starts_with('/') => {
-                    match bindings.0.get(s.as_str()).and_then(|e| q_gt.get(*e).ok()) {
-                        Some(gt) => {
-                            let p = gt.translation();
-                            Some(serde_json::json!([p.x, p.y, p.z]))
+                Some(Value::String(s)) => {
+                    if s.starts_with('/') {
+                        match bindings.0.get(s.as_str()).and_then(|e| q_gt.get(*e).ok()) {
+                            Some(gt) => {
+                                let p = gt.translation();
+                                Some(serde_json::json!([p.x, p.y, p.z]))
+                            }
+                            None => {
+                                missing.push(s.clone());
+                                None
+                            }
                         }
-                        None => {
-                            missing.push(s.clone());
+                    } else {
+                        let parts: Vec<&str> = s.split(';').collect();
+                        if parts.len() == 3 {
+                            if let (Ok(x), Ok(y), Ok(z)) = (
+                                parts[0].trim().parse::<f32>(),
+                                parts[1].trim().parse::<f32>(),
+                                parts[2].trim().parse::<f32>(),
+                            ) {
+                                Some(serde_json::json!([x, y, z]))
+                            } else {
+                                None
+                            }
+                        } else {
                             None
                         }
                     }

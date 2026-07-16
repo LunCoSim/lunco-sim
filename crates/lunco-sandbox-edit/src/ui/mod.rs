@@ -222,7 +222,20 @@ impl Plugin for SandboxEditUiPlugin {
         // Ctrl+LMB drops a mission waypoint by AUTHORING A USD PRIM (`ApplyUsdOp`) —
         // no checkpoint command, no checkpoint domain. Moving, deleting, undoing and
         // inspecting it are then the ordinary prim paths. See `checkpoint_click`.
-        app.add_observer(checkpoint_click::on_scene_click_checkpoint);
+        app.init_resource::<checkpoint_click::WaypointContextMenuState>()
+            .add_observer(checkpoint_click::on_scene_click_checkpoint)
+            .add_observer(checkpoint_click::on_scene_right_click_waypoint)
+            .add_systems(
+                Update,
+                (
+                    checkpoint_click::draw_waypoint_overlay,
+                    checkpoint_click::draw_waypoint_context_menu,
+                    checkpoint_click::sync_waypoint_visuals,
+                    checkpoint_click::delete_reached_waypoints,
+                    checkpoint_click::handle_autopilot_toggle_hotkey,
+                ),
+            );
+        checkpoint_click::register_all_commands(app);
 
         app.add_observer(on_select_progress);
         app.add_observer(on_spawn_progress);

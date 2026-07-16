@@ -1,0 +1,230 @@
+#usda 1.0
+
+over "SandboxScene"
+{
+    def Scope "Behaviors"
+    {
+        def "Skid_Raycast_1_wp1" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (-0.492109061394828, 0.0, -25.01599508837112)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_1_wp2" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (-9.948333315956411, 0.0, -41.49947808771293)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_1_wp3" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (-11.844883271052527, 0.0, -38.7262397905341)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_1_wp4" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (-11.98157669672998, 0.0, -38.99522131757457)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_1_wp5" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (-3.1565807187066373, 0.0, -30.070845320558384)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_1_wp6" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (102.63150941009533, 0.0, 1.4976474823120753)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_1_wp7" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (101.6507534980828, 0.0, 1.7092084826936684)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_1_wp8" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (101.56842342031695, 0.0, 2.3428516322353232)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_1_wp9" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (101.18571248910087, 0.0, 3.6818224953298824)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_1_wp10" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (100.75217058041198, 0.000000000000007105427357601002, 4.09144614988756)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_1_wp11" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (89.45290813870318, 0.0, 11.0438392412658)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_1_wp12" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (89.26199791384386, -0.000000000000007105427357601002, 11.94171682830833)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_1_wp13" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (89.16753323553948, 0.0, 12.007618291355925)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_1_wp14" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (89.08200180823951, -0.000000000000007105427357601002, 12.064969662400188)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_1_wp15" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (88.9938249796474, 0.000000000000007105427357601002, 12.121655191237792)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_1_wp16" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (-35.94334690308261, 1.4740821340632522, -22.916516454288622)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_1_wp17" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (-34.54248031252924, 0.0, -29.5156782150121)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_1_wp18" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (-36.11434727121886, -0.0000000000000008881784197001252, -36.44395925863499)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_1_wp19" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (-36.40573805916779, 3.5623842024803407, -33.3862994387157)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_1_wp20" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (-37.08997016278792, 0.0, -83.52746257632322)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_1_wp21" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (-54.85669859652702, -0.0000000000000008881784197001252, -98.10140091787969)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_2_wp1" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (-1.5902320397183676, 0.0, 2.1268968906944394)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_2_wp2" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (-39.22556953833223, 0.0, 4.941735178073081)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_2_wp3" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (-40.0610955308728, 0.0, 13.003228605256702)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_2_wp4" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (-51.25814847798743, -0.0000000000000008881784197001252, 4.26602397849174)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_2_wp5" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (-52.26363519970171, 0.0, 15.762673665378927)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+        def "Skid_Raycast_2_wp6" (
+            references = @lunco://vessels/markers/waypoint.usda@
+        )
+        {
+            custom double3 xformOp:translate = (-60.65951459297948, 0.0, 17.11881909758789)
+            custom token[] xformOpOrder = ["xformOp:translate"]
+        }
+    }
+    over "Skid_Raycast_1"
+    {
+        custom string lunco:behavior = """<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Repeat num_cycles="-1">
+      <Sequence>
+        <Action ID="drive_to" target="/SandboxScene/Behaviors/Skid_Raycast_1_wp1"/>
+        <Action ID="drive_to" target="/SandboxScene/Behaviors/Skid_Raycast_1_wp2"/>
+        <Action ID="drive_to" target="/SandboxScene/Behaviors/Skid_Raycast_1_wp3"/>
+        <Action ID="drive_to" target="/SandboxScene/Behaviors/Skid_Raycast_1_wp4"/>
+        <Action ID="drive_to" target="/SandboxScene/Behaviors/Skid_Raycast_1_wp5"/>
+      </Sequence>
+    </Repeat>
+  </BehaviorTree>
+</root>"""
+    }
+    over "Skid_Raycast_2"
+    {
+        custom string lunco:behavior = """<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Repeat num_cycles="-1">
+      <Sequence>
+        <Action ID="drive_to" target="/SandboxScene/Behaviors/Skid_Raycast_2_wp1"/>
+        <Action ID="drive_to" target="/SandboxScene/Behaviors/Skid_Raycast_2_wp2"/>
+        <Action ID="drive_to" target="/SandboxScene/Behaviors/Skid_Raycast_2_wp3"/>
+        <Action ID="drive_to" target="/SandboxScene/Behaviors/Skid_Raycast_2_wp4"/>
+        <Action ID="drive_to" target="/SandboxScene/Behaviors/Skid_Raycast_2_wp5"/>
+        <Action ID="drive_to" target="/SandboxScene/Behaviors/Skid_Raycast_2_wp6"/>
+      </Sequence>
+    </Repeat>
+  </BehaviorTree>
+</root>"""
+    }
+}
