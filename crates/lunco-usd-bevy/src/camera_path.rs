@@ -160,6 +160,34 @@ pub struct CameraPathDriven {
     pub primed: bool,
 }
 
+/// The frozen link between a camera path's clock and the clock it really hangs on.
+///
+/// Present with `TimeDomain::scale == 0` ⇒ the shot is held at its first frame:
+/// whoever owns the readiness condition releases it via [`release_camera_path_gate`].
+/// This crate deliberately does not know what "ready" means — terrain streaming is
+/// the sandbox's business, and `lunco-usd-bevy` has no terrain dependency.
+#[derive(Component)]
+pub struct CameraPathGate {
+    /// The clock the shot actually hangs on (wall or sim), gated through this domain.
+    pub parent: Entity,
+}
+
+/// Start a held shot, `parent_t` being the gate parent's resolved time NOW.
+///
+/// The offset makes the gate's own time continuous across the release (it reads 0
+/// while frozen, and 0 at the instant of release). Without it the gate would jump
+/// from 0 to `parent_t`, the path would see that whole span as one delta, and the
+/// shot would open several seconds in — the exact frames the hold existed to save.
+///
+/// Idempotent: releasing an already-running gate is a no-op.
+pub fn release_camera_path_gate(domain: &mut TimeDomain, parent_t: f64) {
+    if domain.scale != 0.0 {
+        return;
+    }
+    domain.offset = -parent_t;
+    domain.scale = 1.0;
+}
+
 /// Resolve `BasisCurves` prims carrying `lunco:path:camera` into [`CameraPath`]s,
 /// spawning each path's driven clock. Retries next frame while the camera prim
 /// has not spawned yet (async scene load).
@@ -288,10 +316,30 @@ pub fn resolve_camera_paths(
         let on_wall = reader.text(&path, "lunco:path:clock").as_deref() == Some("real");
         let parent = if on_wall { clocks.interaction } else { clocks.sim };
 
+        // The shot hangs off its real clock through a GATE domain, frozen at birth
+        // (`scale = 0`). A driven clock advances by its PARENT's delta, so a frozen
+        // parent yields 0 and the playhead holds exactly — the mechanism
+        // `resolve_one` already documents, reused rather than re-invented.
+        //
+        // Deliberately NOT `Playback::mode = Paused`: that bit is the user's
+        // play/pause intent (the transport, the P key). Engine readiness and user
+        // intent sharing one bit is what forced the `paused_by_us` bookkeeping that
+        // this codebase deleted once already — an engine hold must never be
+        // expressible as a user pause. Held here, the user can still pause, scrub
+        // and resume a shot that has not started; the two compose instead of
+        // fighting.
+        let gate = commands
+            .spawn((
+                Name::new(format!("CameraPathGate:{}", prim.path)),
+                TimeDomain::derived(Some(parent), 0.0, 0.0),
+                CameraPathGate { parent },
+            ))
+            .id();
+
         let domain = commands
             .spawn((
                 Name::new(format!("CameraPath:{}", prim.path)),
-                TimeDomain::derived(Some(parent), 0.0, 1.0),
+                TimeDomain::derived(Some(gate), 0.0, 1.0),
                 Playback {
                     start: 0.0,
                     end: duration.max(f64::EPSILON),

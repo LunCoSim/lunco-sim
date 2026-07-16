@@ -30,7 +30,9 @@
 //! by name, and is repacked the moment the schema lands. That machinery is
 //! untouched.
 
+use bevy::asset::AssetId;
 use bevy::pbr::MeshMaterial3d;
+use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use bevy::shader::Shader;
 use crate::look_cache::{sweep_look_cache, CachedLook, LookCache};
@@ -63,7 +65,9 @@ fn shader_material(look: &ShaderLook, asset_server: &AssetServer) -> ShaderMater
             .vertex_shader
             .clone()
             .map(|p| asset_server.load::<Shader>(p)),
-        values: look.values.clone(),
+        // `live` params are real shader params — they are merely absent from the
+        // sharing key, so a freshly-built material still has to carry them.
+        values: look.values.iter().chain(look.live.iter()).map(|(k, v)| (k.clone(), *v)).collect(),
         ..Default::default()
     };
     for (layer, image) in &look.textures {
@@ -125,6 +129,11 @@ fn rebind_changed_shader_look(
     asset_server: Res<AssetServer>,
     mut commands: Commands,
 ) {
+    // Shared materials already written this run. Every terrain tile carries the same
+    // global overlay values, so without this the one material they share would be
+    // re-packed once per tile per change — hundreds of redundant writes per frame.
+    let mut written: HashSet<AssetId<ShaderMaterial>> = HashSet::default();
+
     for (e, look, current) in &changed {
         if look.unshared {
             // Private material: overwrite the asset it already owns, rather than
@@ -135,7 +144,21 @@ fn rebind_changed_shader_look(
             }
         }
         let handle = material_for(look, &mut cache, &mut materials, &asset_server);
-        commands.entity(e).try_insert(MeshMaterial3d(handle));
+        let same_material = current.is_some_and(|m| m.0.id() == handle.id());
+        commands.entity(e).try_insert(MeshMaterial3d(handle.clone()));
+
+        // The look changed but resolved to the material it is ALREADY on ⇒ only
+        // `live` params moved (they are outside the key). Write them into that
+        // material rather than leaving it stale: re-keying is what mints a new,
+        // unprepared material every slider tick and makes the terrain flicker.
+        if same_material && !look.live.is_empty() && written.insert(handle.id()) {
+            if let Some(mut mat) = materials.get_mut(&handle) {
+                for (name, value) in &look.live {
+                    mat.values.insert(name.clone(), *value);
+                }
+                mat.repack();
+            }
+        }
     }
 }
 

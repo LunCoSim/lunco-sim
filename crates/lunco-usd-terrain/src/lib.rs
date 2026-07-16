@@ -1092,6 +1092,13 @@ fn bridge_dem_prim_read<R: UsdRead>(
         stack,
         lunco_terrain_surface::DemTerrainSurface,
     ));
+    // `lunco:terrain:lodFrozen` — a scripted shot pins its LOD once loaded rather
+    // than re-selecting under a moving camera. On the SURFACE prim, per the
+    // namespace split above (`lunco:terrain:*` here, `lunco:layer:*` on layers).
+    if reader.scalar::<bool>(sdf, "lunco:terrain:lodFrozen").unwrap_or(false) {
+        commands.entity(entity).try_insert(lunco_terrain_surface::LodFrozen);
+        info!("[usd-dem] {} — LOD selection frozen after first load", prim_path.path);
+    }
     // Georeference (#5): the `lunco:anchor:*` lat/lon/height anchor + the stage
     // `metersPerUnit`. The terrain math is metres, so a non-1 `metersPerUnit`
     // is recorded but flagged loudly (we don't rescale the DEM). Attach a

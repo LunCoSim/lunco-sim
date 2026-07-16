@@ -46,6 +46,22 @@ use crate::quadtree::{QuadCoord, Quadtree, Selected, Square};
 /// Higher = finer geometry per tile (smoother crater rims / slopes, fewer visible
 /// triangle "lines") at the same tile count — cheap on a modern GPU.
 const TILE_RES: usize = 49;
+
+/// Mesh resolution of the single tile a [`LodFrozen`] terrain draws — verts per side.
+///
+/// 2049² ≈ 4.2M verts / 8.4M triangles in ONE draw call: over the moonbase's ~1 km
+/// window, ~0.5 m between vertices.
+///
+/// Sized to the CLOSEST the shot gets, not to the window. At 1025 (~1 m spacing) a
+/// wide establishing orbit was fine, but a 90 m pass at 35 m altitude reads that
+/// spacing as faceting — one tile has to carry, everywhere, the detail the quadtree
+/// used to spend only where the camera was.
+///
+/// Why not finer: 4097² is 16.8M verts (~1 GB with indices) and a ~20 s bake, for
+/// 0.25 m spacing the surface cannot fill — the DEM is ~2 m/px, and below that only
+/// the analytic crater/overzoom modifiers have anything to add. 0.5 m is about where
+/// sampling stops buying real detail.
+const CINEMATIC_TILE_RES: usize = 2049;
 /// Deepest LOD the viz refines to. Bounds the tile count near the camera. With
 /// error-driven selection only feature tiles (rims, peaks) actually reach it, so
 /// 8 (≈0.65 m vertex pitch on a ±4 km DEM) stays cheap while crater rims resolve.
@@ -750,6 +766,25 @@ pub struct StreamScratch {
     wanted: HashSet<QuadCoord>,
 }
 
+/// Freeze this terrain's LOD selection once its tiles are up: authored
+/// `bool lunco:terrain:lodFrozen = true` on the Terrain prim.
+///
+/// For a SCRIPTED shot. Streaming exists to adapt an unbounded world to a viewpoint
+/// nobody predicted; a cinematic's viewpoint is authored, so there is nothing to
+/// adapt to — and adapting anyway is visible, because a camera crossing LOD bands
+/// at speed evicts and re-bakes tiles mid-shot (the ground blinking under a moving
+/// camera). Frozen, the set that streamed in before the shot started is the set that
+/// is drawn, all the way through.
+///
+/// The first selection still runs — freezing an empty terrain would draw nothing at
+/// all. It is the RE-selection that stops.
+///
+/// Not for a free-flying camera: a frozen terrain does not refine for one, so
+/// anything outside the initial set stays coarse or absent.
+#[derive(Component, Debug, Clone, Copy, Default, Reflect)]
+#[reflect(Component)]
+pub struct LodFrozen;
+
 /// Per-frame: stream the LOD tile set for each streaming terrain against the camera.
 pub fn update_lod_tiles(
     mut commands: Commands,
@@ -757,7 +792,7 @@ pub fn update_lod_tiles(
     // render-FREE `bevy_camera` equivalent for "a 3D scene camera" is a `Camera`
     // with a PERSPECTIVE `Projection` — which is also what excludes the egui host's
     // orthographic `Camera2d`. Same set of cameras as before, no GPU stack.
-    cameras: Query<(&GlobalTransform, &Projection), With<Camera>>,
+    cameras: Query<(&GlobalTransform, &Camera, &Projection)>,
     // Dynamic bodies (rovers, payloads) are FORCED refinement foci: the
     // physics collider ring under them is fixed-resolution, so the ground they
     // stand on must be drawn at matching detail even when the camera-driven
@@ -777,6 +812,7 @@ pub fn update_lod_tiles(
         Option<&TerrainShaderMode>,
         Option<&TerrainDerivedMaps>,
         Option<&TileShadowCache>,
+        Has<LodFrozen>,
     )>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mesh_cache: ResMut<LodMeshCache>,
@@ -793,12 +829,20 @@ pub fn update_lod_tiles(
     // Split-borrow the per-frame scratch buffers (see [`StreamScratch`]).
     let StreamScratch { swaps, done, keyed, missing, wanted } = &mut *scratch;
     let enable_shaders = settings.as_ref().map(|s| s.enable_shaders).unwrap_or(true);
-    // Use the first 3D camera as the focus. (Multiple cameras → the viz follows
-    // whichever; fine for a debug view.)
+    // The ACTIVE 3D camera is the focus — the one being rendered, hence the one
+    // whose view has to be baked.
+    //
+    // This used to take the first perspective camera the query yielded, from back
+    // when the selection was only a debug viz. It decides which ground gets baked
+    // now, and a scene holds several perspective cameras (the avatar's, a
+    // cinematic's, an inactive USD `Camera` prim). Query order is archetype order:
+    // it is not the camera you are looking through, and it is not even stable —
+    // when it flips, the whole wanted set is recomputed around a viewpoint nobody
+    // is at, and the tiles you ARE looking at get evicted and re-baked.
     let Some(cam) = cameras
         .iter()
-        .find(|(_, p)| matches!(p, Projection::Perspective(_)))
-        .map(|(gt, _)| gt)
+        .find(|(_, c, p)| c.is_active && matches!(p, Projection::Perspective(_)))
+        .map(|(gt, _, _)| gt)
     else {
         return;
     };
@@ -813,9 +857,17 @@ pub fn update_lod_tiles(
     // one terrain's worth of entries and thrash each other every frame.
     let terrain_count = terrains.iter().count().max(1);
 
-    for (terrain, t_gt, hf, viz, mut tiles, mut pending, mut errs, mode_opt, maps, shadow) in
+    for (terrain, t_gt, hf, viz, mut tiles, mut pending, mut errs, mode_opt, maps, shadow, frozen) in
         &mut terrains
     {
+        // Frozen and already covered ⇒ the drawn set is final. Report it as fully
+        // resident (it is — that is the point) so the status bar clears and anything
+        // gating on residency, like a camera path waiting to start, is satisfied.
+        if frozen && !tiles.tiles.is_empty() && pending.0.is_empty() {
+            stream_status.wanted += tiles.tiles.len();
+            stream_status.resident += tiles.tiles.len();
+            continue;
+        }
         let mut mode = mode_opt.copied().unwrap_or_else(TerrainShaderMode::platform_default);
         if !enable_shaders {
             mode = TerrainShaderMode::Plain;
@@ -973,7 +1025,33 @@ pub fn update_lod_tiles(
         // The previous cover drives the refine HYSTERESIS band (see `LodTiles::prev_sel`).
         let prev_sel = std::mem::take(&mut tiles.prev_sel);
         let mut sel = qt.select_with_error(focus, eye_height, &node_error, &prev_sel);
-        if sel.len() > budget {
+        if frozen {
+            // NO LOD — ONE tile, meshed at `CINEMATIC_TILE_RES`, covering the whole
+            // terrain.
+            //
+            // There is no quadtree here at all, which is the point: `pixel_error`
+            // refines by DISTANCE FROM THE CAMERA and `tile_budget` coarsens it
+            // until the selection fits, so both re-decide the cover whenever the
+            // camera moves — the ground re-loading under a moving shot. A single
+            // node cannot be split, merged, evicted or re-baked by anything a
+            // camera does.
+            //
+            // One tile rather than the whole tree at `max_depth`: that is 4^8 =
+            // 65_536 tiles (~157M verts), which does not load in any useful time.
+            // And it would buy nothing — depth 8 puts vertices 0.08 m apart, far
+            // below what the DEM carries, so it is interpolating detail that is not
+            // there. One tile at ~1025² samples the surface oracle (DEM + analytic
+            // craters) as finely as it has anything to say, in a single draw call.
+            sel = vec![Selected {
+                coord: QuadCoord::ROOT,
+                region: qt.region(QuadCoord::ROOT),
+                // Geomorph blends a tile toward its coarser parent; the root has no
+                // parent, and there is no LOD transition left to hide.
+                morph_start: f64::INFINITY,
+                morph_end: f64::INFINITY,
+            }];
+            tiles.last_fit_px = Some(base_px);
+        } else if sel.len() > budget {
             // Over budget → coarsen until it fits.
             while sel.len() > budget && pixel_error < 32.0 {
                 pixel_error = (pixel_error * 1.6).min(32.0);
@@ -1183,7 +1261,11 @@ pub fn update_lod_tiles(
             let oracle_arc = hf.0.clone();
             let coord = s.coord;
             let region = s.region;
-            let tile_res = viz.tile_res;
+            // The frozen cover is ONE tile for the whole terrain, so it carries the
+            // detail the whole quadtree used to spread over thousands — mesh it far
+            // finer than a streamed tile. `viz.tile_res` (49) over the full window
+            // would be ~20 m between vertices: one tile, and no terrain.
+            let tile_res = if frozen { CINEMATIC_TILE_RES } else { viz.tile_res };
             let half = h;
             let center = s.region.center;
             let task = pool.spawn(async move {

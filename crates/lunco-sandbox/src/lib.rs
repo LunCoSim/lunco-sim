@@ -2066,6 +2066,12 @@ impl Plugin for SandboxCorePlugin {
                 .run_if(resource_exists::<lunco_workbench::status_bus::StatusBus>),
         );
 
+        // Hold each camera path at its first frame until the ground under it is
+        // resident. NOT `ui`-gated: an offscreen render or a headless capture wants
+        // the same shot the viewport gets, and a cinematic that opens over unbaked
+        // holes is exactly as wrong when nobody is watching it live.
+        app.add_systems(Update, start_camera_paths_when_terrain_ready);
+
         // Far-field self-shadow for STREAMED terrains: bake the horizon
         // heightfield from the surface oracle (no static mesh to rasterize) and
         // mirror the environment's R8 sun-visibility cache onto the LOD tile
@@ -2185,6 +2191,63 @@ fn read_authored_layer_maps<R: UsdRead>(
             Some((role, rel, weight))
         })
         .collect()
+}
+
+/// Start each camera path once the ground under it has streamed in.
+///
+/// A cinematic that opens while tiles are still baking spends its first seconds
+/// over holes and half-resolution terrain, and those seconds do not come back — the
+/// playhead does not rewind. `resolve_camera_paths` therefore births every shot
+/// frozen; this decides when it runs.
+///
+/// The condition is the SAME read the status bar reports ("streaming terrain N/M"),
+/// not a second opinion about what loaded means. It lives here because readiness is
+/// the sandbox's business: `lunco-usd-bevy` owns the gate mechanism and has no
+/// terrain dependency.
+///
+/// Not `PhysicsHolds::TERRAIN_READY`, though that is the other readiness signal in
+/// reach: it means "the DEM is built and there are ring colliders under the dynamic
+/// bodies", which a body-less cinematic scene satisfies while the visible tiles are
+/// still baking. Right signal for the solver, wrong one for a camera.
+fn start_camera_paths_when_terrain_ready(
+    status: Res<lunco_terrain_surface::TerrainStreamStatus>,
+    resolved: Res<lunco_time::ResolvedDomains>,
+    // A scene may legitimately have no streaming terrain (`wanted` stays 0 forever);
+    // waiting on tiles that will never be wanted would hold the shot for good. But
+    // an EMPTY query is not proof of that — the terrain entity may just not have
+    // spawned yet, and releasing then would defeat the gate on every load. So a
+    // terrain that is still BUILDING counts as present.
+    terrains: Query<
+        (),
+        Or<(
+            With<lunco_terrain_surface::LodTiles>,
+            With<lunco_terrain_surface::DemTerrainRequest>,
+        )>,
+    >,
+    mut gates: Query<(&lunco_usd_bevy::camera_path::CameraPathGate, &mut lunco_time::TimeDomain)>,
+) {
+    if gates.is_empty() {
+        return;
+    }
+    if !terrains.is_empty() {
+        let streaming =
+            status.wanted == 0 || status.resident < status.wanted || status.pending > 0;
+        if streaming {
+            return;
+        }
+    }
+    for (gate, mut domain) in &mut gates {
+        let Some(parent_t) = resolved.get(gate.parent) else {
+            continue; // parent clock not resolved yet — try next frame
+        };
+        // Change-detection: `Query::iter_mut` hands out `Mut`, so touching an
+        // already-running gate would mark it changed every frame. The release is
+        // idempotent, but do not pay for it on a running shot.
+        if domain.scale == 0.0 {
+            lunco_usd_bevy::camera_path::release_camera_path_gate(&mut domain, parent_t);
+            info!("[camera-path] terrain resident ({}) — starting shot", status.resident);
+        }
+    }
 }
 
 /// Mirror [`lunco_terrain_surface::TerrainStreamStatus`] into the workbench
