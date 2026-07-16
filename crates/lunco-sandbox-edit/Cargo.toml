@@ -33,6 +33,7 @@ avian3d = { workspace = true }
 
 big_space.workspace = true
 lunco-core = { path = "../lunco-core" }
+lunco-physics = { path = "../lunco-physics" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 # NO `lunco-fsw`: its only use here was `FlightSoftware` as the "is a wheeled
 # vehicle" topology signal in the predict-membership queries, and those moved out

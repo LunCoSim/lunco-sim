@@ -8,6 +8,7 @@ edition = "2021"
 bevy.workspace = true
 avian3d.workspace = true
 lunco-core = { path = "../lunco-core" }
+lunco-physics = { path = "../lunco-physics" }
 
 [dev-dependencies]
 avian3d = { workspace = true }

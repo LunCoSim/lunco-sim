@@ -35,6 +35,9 @@
 use avian3d::prelude::{Physics, PhysicsTime};
 use bevy::prelude::*;
 
+pub mod spatial;
+pub use spatial::GridSpatialQuery;
+
 /// The set of reasons physics is currently suspended. Empty ⇒ physics integrates.
 ///
 /// This is an **engine** authority. It is not, and must never become, a mirror of

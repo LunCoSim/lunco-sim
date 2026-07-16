@@ -218,7 +218,11 @@ pub fn update_spawn_ghost(
     windows: Query<&Window>,
     q_ghost: Query<(Entity, &Transform), With<SpawnGhost>>,
     grids: Query<(Entity, &Grid)>,
-    raycaster: avian3d::prelude::SpatialQuery,
+    // `GridSpatialQuery`, not raw `SpatialQuery`: the cursor ray + corner probes
+    // originate in the render frame (the camera is the FloatingOrigin), so they must
+    // be shifted into avian's grid-absolute frame or they miss every collider at an
+    // elevated site. See `lunco_physics::spatial`.
+    raycaster: lunco_physics::GridSpatialQuery,
     terrains: TerrainOracles,
 ) {
     let SpawnState::Selecting { entry_id } = spawn_state.as_ref() else {
@@ -255,7 +259,7 @@ pub fn update_spawn_ghost(
     // surface, nearest wins. The terrain must come from the oracle, not the
     // collider ring — see `terrain_ray_hit`.
     let phys = raycaster
-        .cast_ray(origin, direction, 1000.0, false, &avian3d::prelude::SpatialQueryFilter::default())
+        .cast_ray_render(origin, direction, 1000.0, false, &avian3d::prelude::SpatialQueryFilter::default())
         .map(|h| h.distance);
     let terr = terrain_ray_hit(&terrains, origin, direction.as_dvec3(), 1000.0);
     let (hit, terrain_primary) = match (phys, terr) {
@@ -303,13 +307,15 @@ pub fn update_spawn_ghost(
             let phys_y = || {
                 let ray_origin = corner + DVec3::Y * 50.0;
                 raycaster
-                    .cast_ray(
+                    .cast_ray_render(
                         ray_origin,
                         Dir3::NEG_Y,
                         100.0,
                         false,
                         &avian3d::prelude::SpatialQueryFilter::default(),
                     )
+                    // Hit distance is frame-independent; the visual corner height is
+                    // the render-frame origin walked down by that distance.
                     .map(|h| (ray_origin + DVec3::NEG_Y * h.distance).y)
             };
             let terr_y = || terrain_height_at(&terrains, corner);

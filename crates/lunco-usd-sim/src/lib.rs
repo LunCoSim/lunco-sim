@@ -724,25 +724,6 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                     );
                     commands.entity(prior).try_remove::<(
                         SceneCamera,
-                        // The camera identity marker is not enough on its own:
-                        // `Camera` (and its required `RenderTarget`/`Projection`)
-                        // must go too. A bare `Camera` (still `is_active: true`,
-                        // still window-targeted) is rendered by
-                        // `bevy_render::extract_cameras` but the arbiter
-                        // (`reconcile_scene_viewport`, filtered `With<SceneCamera>`)
-                        // can never deactivate it: a GHOST second active order-0
-                        // window camera — the whole scene rendered twice + a
-                        // per-frame camera-order-ambiguity warning. The pipeline
-                        // half (`Camera3d`/`Tonemapping`/`Msaa`, attached by
-                        // `lunco-render-bevy`) is left behind but INERT: every
-                        // render path extracts through `Camera`, which is gone.
-                        (
-                            bevy::camera::Camera,
-                            bevy::camera::RenderTarget,
-                            bevy::camera::Projection,
-                            bevy::camera::Exposure,
-                            AdaptiveNearPlane,
-                        ),
                         Avatar,
                         LocalAvatar,
                         FreeFlightCamera,
@@ -753,6 +734,33 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                         IntentAnalogState,
                         ActionState<lunco_core::UserIntent>,
                     )>();
+                    // DEACTIVATE the prior camera — do NOT remove `Camera`.
+                    //
+                    // The old code REMOVED `Camera`/`RenderTarget`/`Projection` to
+                    // kill a GHOST second active window camera (a bare active camera
+                    // that `reconcile_scene_viewport`, filtered `With<SceneCamera>`,
+                    // could no longer reach once its `SceneCamera` was stripped). But
+                    // removing `Camera` from a still-ACTIVE, still-extracted window
+                    // camera in the SAME frame the new scene's shadow-casting sun
+                    // initialises orphaned its render-world view for one frame:
+                    // `build_directional_light_cascades` (main world) had already
+                    // dropped that entity's cascade, so `bevy_pbr::prepare_lights`
+                    // unwrapped `None` and hard-crashed the render app — deterministically
+                    // on every elevated scene load (the moonbase Sun casts shadows; the
+                    // flat sandbox sun does not, which is why it "used to work").
+                    //
+                    // Setting `is_active = false` reaches the SAME goal without the
+                    // race: an inactive camera is not extracted as a view (so it needs
+                    // no cascade) and does not render (so no ghost). Deactivation is a
+                    // normal per-frame operation bevy handles cleanly; component
+                    // REMOVAL of a live camera is what raced. `SceneCamera`
+                    // is still stripped above, so `reconcile_scene_viewport` leaves it
+                    // alone and it stays off for good.
+                    commands.queue(move |world: &mut World| {
+                        if let Some(mut cam) = world.get_mut::<bevy::camera::Camera>(prior) {
+                            cam.is_active = false;
+                        }
+                    });
                 }
             }
             // `token`, per luncoSchema — so `text`, not `scalar::<String>`, which

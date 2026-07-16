@@ -19,8 +19,8 @@
 //! sensor that isn't at the body origin reports from its true mount point.
 
 use avian3d::prelude::{
-    AngularVelocity, Collisions, LinearVelocity, Physics, Rotation, SpatialQuery,
-    SpatialQueryFilter, SubstepCount,
+    AngularVelocity, Collisions, LinearVelocity, Physics, Rotation, SpatialQueryFilter,
+    SubstepCount,
 };
 use bevy::math::{DVec3, Dir3};
 use bevy::prelude::*;
@@ -251,12 +251,18 @@ pub fn update_imu_sensors(
 /// or the configured out-of-range fallback. The sensor's own entity and its parent
 /// are excluded so it never ranges itself or the vehicle it is mounted to.
 pub fn update_range_sensors(
-    spatial: SpatialQuery,
+    // `GridSpatialQuery` (not raw `SpatialQuery`) is the sanctioned way to cast a
+    // ray whose origin comes from a render-space `GlobalTransform`: it shifts the
+    // origin into avian's grid-absolute collider frame. A raw cast would start the
+    // ray ~2 km from the terrain at an elevated site and "read through the ground".
+    // See `lunco_physics::spatial`.
+    grid: lunco_physics::GridSpatialQuery,
     q_parents: Query<&ChildOf>,
     mut q: Query<(Entity, &mut RangeSensor, &GlobalTransform)>,
 ) {
     for (e, mut s, transform) in &mut q {
-        let origin = transform.translation().as_dvec3() + transform.rotation().as_dquat() * s.offset;
+        let render_origin =
+            transform.translation().as_dvec3() + transform.rotation().as_dquat() * s.offset;
         let dir_world = transform.rotation().as_dquat() * s.axis;
         let Ok(dir) = Dir3::new(dir_world.as_vec3()) else {
             continue;
@@ -268,7 +274,7 @@ pub fn update_range_sensors(
         if let Ok(parent) = q_parents.get(e) {
             filter.excluded_entities.insert(parent.0);
         }
-        s.hit = match spatial.cast_ray(origin, dir, s.max_distance, true, &filter) {
+        s.hit = match grid.cast_ray_render(render_origin, dir, s.max_distance, true, &filter) {
             Some(hit) => {
                 s.distance = hit.distance;
                 true
@@ -278,7 +284,7 @@ pub fn update_range_sensors(
                     OutOfRangeMode::MaxDistance => s.max_distance,
                     OutOfRangeMode::NegativeOne => -1.0,
                     OutOfRangeMode::NaN => f64::NAN,
-                    OutOfRangeMode::IdealAltitude => origin.y,
+                    OutOfRangeMode::IdealAltitude => render_origin.y,
                 };
                 false
             }

@@ -7078,6 +7078,7 @@ dependencies = [
  "lunco-doc",
  "lunco-environment",
  "lunco-modelica",
+ "lunco-physics",
  "lunco-scene-commands",
  "lunco-scripting",
 ]
@@ -7448,6 +7449,7 @@ dependencies = [
  "lunco-mobility",
  "lunco-modelica",
  "lunco-obstacle-field",
+ "lunco-physics",
  "lunco-render",
  "lunco-scene-commands",
  "lunco-terrain-surface",
