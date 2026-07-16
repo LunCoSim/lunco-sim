@@ -95,8 +95,11 @@ pub struct ColliderTiles {
 /// rover crossed a tile boundary. The main thread now only spawns the finished
 /// component; the 3×3 build-ahead ring means the tile under a body always
 /// exists before it is needed.
+/// The baked collider travels with its `origin_y` — the tile-centre surface
+/// height the heightfield was rebased by — so the spawn site can anchor the
+/// tile's `CellCoord` at that same height (mirroring the visual CDLOD tiles).
 #[derive(Component, Default)]
-pub struct PendingColliderBakes(HashMap<QuadCoord, Task<Collider>>);
+pub struct PendingColliderBakes(HashMap<QuadCoord, Task<(Collider, f64)>>);
 
 /// Back-pointer from a spawned collider tile to its owning terrain. Tiles are
 /// children of the big_space **grid** (each carries its own `CellCoord`), so they
@@ -123,7 +126,7 @@ const COLLIDER_HALO_CELLS: usize = 16;
 /// it sees. Heights are conditioned through the core collider firewall
 /// (slope-limit + quantize) on a halo-padded grid (see [`COLLIDER_HALO_CELLS`])
 /// for contact stability, peer determinism, and seam-exact neighbours.
-fn sample_heights_xz(oracle: &SurfaceOracle, region: Square, res: usize) -> Vec<Vec<f64>> {
+fn sample_heights_xz(oracle: &SurfaceOracle, region: Square, res: usize, origin_y: f64) -> Vec<Vec<f64>> {
     let res = res.max(2);
     let step = region.side() / (res as f64 - 1.0);
     let halo = COLLIDER_HALO_CELLS;
@@ -143,7 +146,10 @@ fn sample_heights_xz(oracle: &SurfaceOracle, region: Square, res: usize) -> Vec<
         let wz = z0 + iz as f64 * step;
         for ix in 0..padded {
             let wx = x0 + ix as f64 * step;
-            flat[iz * padded + ix] = limited.height_at(wx, wz);
+            // Rebase to the tile-centre datum: heights become the LOCAL offset
+            // from `origin_y`, so the parry heightfield sits near its own entity
+            // origin instead of ~1945 m above it. See `spawn`-site anchoring.
+            flat[iz * padded + ix] = limited.height_at(wx, wz) - origin_y;
         }
     }
     prepare_collider_heights(&mut flat, padded, step, COLLIDER_MAX_SLOPE, COLLIDER_QUANT_STEP);
@@ -316,26 +322,34 @@ pub fn update_collider_ring(
         // Finalize completed off-thread bakes: spawn the tile entity. Each
         // anchors to its own big_space `CellCoord` (from its world centre);
         // Parry centres the heightfield at that origin.
-        let mut done: Vec<(QuadCoord, Collider)> = Vec::new();
+        let mut done: Vec<(QuadCoord, Collider, f64)> = Vec::new();
         pending.0.retain(|coord, task| match block_on(future::poll_once(&mut *task)) {
-            Some(collider) => {
-                done.push((*coord, collider));
+            Some((collider, origin_y)) => {
+                done.push((*coord, collider, origin_y));
                 false
             }
             None => true,
         });
-        for (coord, collider) in done {
+        for (coord, collider, origin_y) in done {
+            let region = qt.region(coord);
+            let center = region.center;
+            // Anchor the tile's CellCoord at the same `origin_y` its heightfield
+            // was rebased by — the SAME (cell, local) convention the visual tiles
+            // use — so the collider surface lands in the render tile's big_space
+            // cell rather than ~1945 m below it.
+            let (cell, local) = grid.translation_to_grid(DVec3::new(center[0], origin_y, center[1]));
             if let Some(&ent) = tiles.map.get(&coord) {
                 // Replacement for a stale tile: swap the collider onto the
                 // existing entity — the ground never vanishes under the rover.
+                // Re-anchor too: an edit can shift the tile-centre datum, so the
+                // rebased geometry needs its CellCoord/Transform kept in step.
                 if tiles.stale.remove(&coord) {
-                    commands.entity(ent).try_insert(collider);
+                    commands
+                        .entity(ent)
+                        .try_insert((collider, cell, Transform::from_translation(local)));
                 }
                 continue;
             }
-            let region = qt.region(coord);
-            let center = region.center;
-            let (cell, local) = grid.translation_to_grid(DVec3::new(center[0], 0.0, center[1]));
             let ent = commands
                 .spawn((
                     RigidBody::Static,
@@ -372,8 +386,17 @@ pub fn update_collider_ring(
             let task = pool.spawn(async move {
                 // Off-thread body → own Tracy zone.
                 let _span = bevy::log::info_span!("collider_ring_tile_bake").entered();
-                let heights = sample_heights_xz(&oracle_arc, region, res);
-                heightfield_collider(heights, side)
+                // Anchor the tile's geometry to its own centre surface height,
+                // exactly like the visual CDLOD tiles (`tile_mesh.rs` rebases
+                // vertices by `origin_y`, `stream_viz.rs` anchors the CellCoord
+                // there). Baking ABSOLUTE heights (~1945 m on the Moon) onto a
+                // tile anchored at cell Y=0 put the parry heightfield ~1945 m
+                // from its own entity origin; physics bodies fell straight
+                // through the visual surface. The `origin_y` travels back out so
+                // the spawn site anchors the CellCoord at the same height.
+                let origin_y = oracle_arc.height_at(region.center[0], region.center[1]);
+                let heights = sample_heights_xz(&oracle_arc, region, res, origin_y);
+                (heightfield_collider(heights, side), origin_y)
             });
             pending.0.insert(*coord, task);
         }
@@ -453,6 +476,11 @@ pub fn hold_physics_until_dem_ready(
         &ColliderTiles,
     )>,
     bodies: Query<(&RigidBody, &GlobalTransform)>,
+    // Broad-phase liveness probe. `ColliderAabb` is a REQUIRED component of
+    // `Collider`, so it exists from spawn — but initialised to `INVALID`
+    // (min=+∞, max=−∞); avian fills a real AABB only AFTER its prepare/broad-phase
+    // pass. Testing mere presence is a no-op; we must test VALIDITY.
+    q_live: Query<&avian3d::prelude::ColliderAabb>,
     holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
 ) {
     let Some(mut holds) = holds else { return };
@@ -470,7 +498,18 @@ pub fn hold_physics_until_dem_ready(
                 else {
                     continue; // off this terrain — its ring doesn't apply
                 };
-                if !tiles.map.contains_key(&coord) {
+                // Gate on avian broad-phase LIVENESS, not `tiles.map` membership.
+                // The map gains the coord the instant the tile spawn command is
+                // QUEUED (see `update_collider_ring`), one or more frames before the
+                // command flushes and avian builds the collider's `ColliderAabb`.
+                // Releasing on membership unpaused physics into that gap and a
+                // fully-Dynamic (physical) wheel free-fell through the not-yet-live
+                // collider — the tunnel. Require the tile to actually carry
+                // `ColliderAabb` so physics resumes only once it is truly collidable.
+                let live = tiles.map.get(&coord).is_some_and(|&e| {
+                    q_live.get(e).is_ok_and(|aabb| aabb.min.x.is_finite())
+                });
+                if !live {
                     wait = true;
                     break 'terrains;
                 }
@@ -486,11 +525,6 @@ pub fn hold_physics_until_dem_ready(
         holds.set(lunco_physics::PhysicsHolds::TERRAIN_READY, wait);
     }
 }
-
-/// How far BELOW the analytic surface a body must be before the rescue fires.
-/// Generous: crater bowls are part of the surface (the oracle includes them),
-/// so a legitimately-parked body is never more than its own radius below.
-const TUNNEL_RESCUE_MARGIN: f64 = 5.0;
 
 /// Clearance above the surface a rescued assembly's deepest member is placed at.
 /// Kept small: over cratered ground the OTHER members already hang higher by the
@@ -546,85 +580,82 @@ fn joint_component(seed: Entity, adj: &HashMap<Entity, Vec<Entity>>) -> Vec<Enti
     members
 }
 
-/// Safety net for tunneled bodies: any `Dynamic` body more than
-/// [`TUNNEL_RESCUE_MARGIN`] below the composed surface (inside a ring terrain's
-/// footprint) is reseated just above the surface with its velocity zeroed.
-/// Heightfields are infinitely thin one-sided surfaces — once a body gets below
-/// one (boot gap, extreme speed, a solver blow-up) no collider will ever stop
-/// it again; without this net it falls forever. Fires rarely and loudly.
+/// Clearance the settle lifts a member's CENTRE to above the local surface —
+/// generous enough to clear a wheel radius so the drop-in makes contact from
+/// ABOVE (a body already below a one-sided heightfield never recovers).
+const SETTLE_CLEARANCE: f64 = 0.6;
+
+/// ONE-TIME drop-onto-terrain placement for freshly-activated physical rovers
+/// (marked [`lunco_core::NeedsGroundSettle`] in `activate_dynamic_bodies`).
 ///
-/// Jointed assemblies are rescued as a UNIT: bodies connected by joints (a rover's
-/// chassis + wheels) get one shared lift — the deepest member's need — applied to
-/// every member, preserving relative poses. Lifting each body to its own local
-/// surface height tears the assembly (different terrain heights under each wheel),
-/// and the joints then wrench it into a tumble — rovers arrived on their roof.
-///
-/// Writes avian's f64 `Position` (the solver's authoritative pose), NOT the
-/// render `Transform`: under the big_space physics bridge (`lunco-usd-avian`
-/// `BigSpacePhysicsBridgePlugin`) a Dynamic body's `Transform` is a writeback
-/// TARGET — mutating it is silently overwritten from `Position` next step. A
-/// `Position` write is honoured in both configurations (without the bridge,
-/// avian's change-detected `transform_to_position` only overwrites `Position`
-/// when `Transform` itself changed).
-pub fn rescue_tunneled_bodies(
-    terrains: Query<
-        (&GlobalTransform, &crate::stream_viz::DemHeightField),
-        With<TerrainColliderRing>,
-    >,
+/// Authored physical rovers put the chassis at the surface with the wheels hanging
+/// below it, so at the authored pose the wheels start EMBEDDED in the one-sided
+/// terrain heightfield and sink forever (no upward contact — proven: a rover that
+/// DROPS onto the same heightfield rests perfectly). This lifts the whole
+/// joint-connected assembly, in the grid-absolute frame avian `Position` lives in,
+/// so its lowest member clears the surface, then consumes the marker. The rover
+/// then drops the last few cm and rests via normal contacts. It is NOT a per-frame
+/// rescue — it fires exactly once per assembly, at activation, and is pure initial
+/// PLACEMENT (the same job the command-spawn rest-depth lift does for GUI spawns).
+pub fn settle_grounded_assemblies(
+    terrains: Query<&crate::stream_viz::DemHeightField, With<TerrainColliderRing>>,
+    q_needs: Query<Entity, With<lunco_core::NeedsGroundSettle>>,
     mut bodies: Query<(
         Entity,
-        &RigidBody,
         &mut avian3d::prelude::Position,
         Option<&mut avian3d::prelude::LinearVelocity>,
         Option<&mut avian3d::prelude::AngularVelocity>,
     )>,
+    dynamics: Query<&RigidBody>,
     joints: JointGraph,
+    mut commands: Commands,
 ) {
-    for (t_gt, hf) in &terrains {
-        let inv = t_gt.affine().inverse();
-        let half = hf.0.half_extent() as f64;
-        // Pass 1 (read-only): how far below the surface is each dynamic body?
-        let mut depth: HashMap<Entity, f64> = HashMap::new();
-        let mut tunneled: Vec<Entity> = Vec::new();
-        for (entity, rb, pos, ..) in bodies.iter() {
-            if !matches!(rb, RigidBody::Dynamic) {
-                continue;
-            }
-            let local = inv.transform_point3(pos.0.as_vec3());
-            let (x, z) = (local.x as f64, local.z as f64);
-            if x.abs() > half || z.abs() > half {
-                continue;
-            }
-            let d = hf.0.height_at(x, z) - local.y as f64;
-            depth.insert(entity, d);
-            if d > TUNNEL_RESCUE_MARGIN {
-                tunneled.push(entity);
-            }
+    if q_needs.is_empty() {
+        return;
+    }
+    // Query the oracle in the SAME grid-absolute frame as avian `Position` (terrain
+    // owner is anchored at the grid origin cell). Wait for it if not built yet —
+    // the marker persists.
+    let Some(hf) = terrains.iter().next() else { return };
+    let half = hf.0.half_extent() as f64;
+
+    // Pass 1 (read-only): snapshot every body's grid-absolute Position.
+    let mut pos_of: HashMap<Entity, DVec3> = HashMap::default();
+    for (e, pos, _, _) in bodies.iter() {
+        pos_of.insert(e, pos.0);
+    }
+    let adj = joints.adjacency(|e| dynamics.get(e).is_ok_and(|rb| matches!(rb, RigidBody::Dynamic)));
+
+    let mut done: HashSet<Entity> = HashSet::new();
+    for seed in &q_needs {
+        if !done.insert(seed) {
+            continue;
         }
-        if tunneled.is_empty() {
-            continue; // fast path: no joint bookkeeping in the steady state
-        }
-        let adj = joints.adjacency(|e| depth.contains_key(&e));
-        // Pass 2: rescue each joint-connected component once, rigidly. `Position`
-        // is world-absolute per body (no hierarchy), so the shared lift applies
-        // uniformly to every member.
-        let mut done: HashSet<Entity> = HashSet::new();
-        for seed in tunneled {
-            if !done.insert(seed) {
-                continue;
+        let members = joint_component(seed, &adj);
+        done.extend(members.iter().copied());
+        // Lift = how far the deepest member sits below (surface + clearance). The
+        // chassis (high) never drives it; the low wheels do.
+        let mut lift = 0.0_f64;
+        let mut over_terrain = false;
+        for &m in &members {
+            let Some(p) = pos_of.get(&m) else { continue };
+            if p.x.abs() > half || p.z.abs() > half {
+                continue; // this member is off the terrain footprint
             }
-            let members = joint_component(seed, &adj);
-            done.extend(members.iter().copied());
-            // One lift for the whole assembly: the deepest member sets it.
-            let need = members
-                .iter()
-                .filter_map(|e| depth.get(e))
-                .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-            let lift_local = DVec3::new(0.0, need + RESCUE_CLEARANCE, 0.0);
-            let lift_world = t_gt.affine().transform_vector3(lift_local.as_vec3()).as_dvec3();
-            for &m in &members {
-                let Ok((_, _, mut pos, lin, ang)) = bodies.get_mut(m) else { continue };
-                pos.0 += lift_world;
+            over_terrain = true;
+            let surface = hf.0.height_at(p.x, p.z);
+            lift = lift.max(surface + SETTLE_CLEARANCE - p.y);
+        }
+        // One-shot: consume the marker on the whole assembly regardless.
+        for &m in &members {
+            commands.entity(m).try_remove::<lunco_core::NeedsGroundSettle>();
+        }
+        if !over_terrain || lift <= 0.0 {
+            continue;
+        }
+        for &m in &members {
+            if let Ok((_, mut pos, lin, ang)) = bodies.get_mut(m) {
+                pos.0.y += lift;
                 if let Some(mut v) = lin {
                     v.0 = DVec3::ZERO;
                 }
@@ -632,14 +663,15 @@ pub fn rescue_tunneled_bodies(
                     w.0 = DVec3::ZERO;
                 }
             }
-            warn!(
-                "[collider-ring] rescued tunneled assembly ({} bodies, seed {seed:?}): \
-                 deepest {need:.1} m below the surface — lifted rigidly, velocities zeroed",
-                members.len(),
-            );
         }
+        warn!(
+            "[ground-settle] dropped assembly (seed {seed:?}, {} bodies) onto the terrain: \
+             lifted {lift:.2} m so the wheels clear the one-sided heightfield",
+            members.len(),
+        );
     }
 }
+
 
 /// How long a `KeepUpright` root must rest overturned and near-motionless before
 /// auto-righting kicks in — long enough that a rover mid-tumble or being driven
@@ -664,8 +696,9 @@ pub struct OverturnedTimer(f32);
 /// by editing the scene — while a tipped ROCK staying tipped is correct, which is
 /// why this keys on the explicit marker and not on `RigidBody::Dynamic`.
 ///
-/// Operates on avian's f64 `Position`/`Rotation` (see
-/// [`rescue_tunneled_bodies`] for why `Transform` writes are wrong here).
+/// Operates on avian's f64 `Position`/`Rotation` — under the big_space physics
+/// bridge a Dynamic body's `Transform` is a writeback TARGET (overwritten from
+/// `Position` next step), so poses must be written through `Position`.
 pub fn rescue_overturned_vessels(
     time: Res<Time>,
     terrains: Query<
@@ -732,16 +765,19 @@ pub fn rescue_overturned_vessels(
         // Reseat: the deepest post-rotation member ends RESCUE_CLEARANCE above
         // its local surface (only ever lifting — gravity handles settling down).
         let mut lift = 0.0_f64;
-        for (t_gt, hf) in &terrains {
-            let inv = t_gt.affine().inverse();
+        for (_t_gt, hf) in &terrains {
             let half = hf.0.half_extent() as f64;
+            // Grid-absolute frame: `post` positions ARE avian `Position`
+            // (grid-absolute) and the oracle is sampled in that frame. The terrain
+            // render `GlobalTransform` (origin-relative) must NOT be interposed
+            // here — it desynced the surface by the FloatingOrigin cell offset
+            // (~2 km) at the elevated moonbase.
             for world in &post {
-                let local = inv.transform_point3(world.as_vec3());
-                let (x, z) = (local.x as f64, local.z as f64);
+                let (x, z) = (world.x, world.z);
                 if x.abs() > half || z.abs() > half {
                     continue;
                 }
-                lift = lift.max(hf.0.height_at(x, z) - local.y as f64 + RESCUE_CLEARANCE);
+                lift = lift.max(hf.0.height_at(x, z) - world.y + RESCUE_CLEARANCE);
             }
         }
         for &m in &members {

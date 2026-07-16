@@ -85,17 +85,20 @@ pub fn dem_ground_height<'a>(
     z: f64,
 ) -> Option<f64> {
     use lunco_terrain_core::HeightSource;
-    for (gt, hf) in terrains {
+    // GRID-ABSOLUTE in, GRID-ABSOLUTE out. The DEM owner is anchored at the grid
+    // ORIGIN cell with an identity transform (`terrain.rs`), so terrain-local ==
+    // grid-absolute and the oracle is sampled directly. This helper feeds the
+    // spawn path, which plants the returned Y as a grid-absolute `Transform` (cell
+    // 0 + avian recenter). Round-tripping through the terrain's *render*
+    // `GlobalTransform` (as this used to) returned an origin-relative Y (and shifted
+    // x,z by the floating-origin offset), so at elevation spawned bodies dropped
+    // ~2 km below the surface and free-fell. `_gt` intentionally unused.
+    for (_gt, hf) in terrains {
         let grid = hf.0.as_ref();
-        let local = gt
-            .affine()
-            .inverse()
-            .transform_point3(Vec3::new(x as f32, 0.0, z as f32));
-        if local.x.abs() > grid.half_extent() || local.z.abs() > grid.half_extent() {
+        if x.abs() > grid.half_extent() as f64 || z.abs() > grid.half_extent() as f64 {
             continue;
         }
-        let h = HeightSource::height_at(grid, local.x as f64, local.z as f64);
-        return Some(gt.transform_point(Vec3::new(local.x, h as f32, local.z)).y as f64);
+        return Some(HeightSource::height_at(grid, x, z));
     }
     None
 }

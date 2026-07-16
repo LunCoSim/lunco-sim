@@ -354,7 +354,7 @@ fn process_usd_sim_prims(
     // component names `bevy_pbr`.
     query: Query<(Entity, &UsdPrimPath, Option<&Transform>, Option<&Mesh3d>, Option<&PbrLook>, Option<&ShaderLook>, Option<&ChildOf>, Option<&ForceBuildNoVisual>), Without<UsdSimProcessed>>,
     q_all_prims: Query<&UsdPrimPath>,
-    q_grids: Query<Entity, With<Grid>>,
+    q_grids: Query<(Entity, &Grid)>,
     q_existing_floating_origins: Query<Entity, With<FloatingOrigin>>,
     q_provisional_cameras: Query<Entity, With<ProvisionalAvatarCamera>>,
     q_prior_avatars: Query<Entity, With<Avatar>>,
@@ -519,7 +519,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
     q_existing_floating_origins: &Query<Entity, With<FloatingOrigin>>,
     q_provisional_cameras: &Query<Entity, With<ProvisionalAvatarCamera>>,
     q_prior_avatars: &Query<Entity, With<Avatar>>,
-    q_grids: &Query<Entity, With<Grid>>,
+    q_grids: &Query<(Entity, &Grid)>,
     active_sun: Option<&lunco_environment::LunarSun>,
     mut commands: &mut Commands,
 ) {
@@ -783,9 +783,20 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                 }
             }
 
-            // Avatar position from USD transform
+            // Avatar position from USD transform — placed CELL-GRID AWARE. The
+            // authored translate is a WORLD position (e.g. ~1990 m on an elevated
+            // site); split it into (CellCoord, local) via the grid instead of
+            // dropping it in cell (0,0,0) with a multi-km local and leaning on
+            // big_space's `recenter_large_transforms` to migrate it a frame later.
+            // Because this camera carries the `FloatingOrigin`, that one-frame
+            // cell-0 state put the origin — and the whole world composed off it —
+            // at the wrong place on the first rendered frame at elevation.
+            let (avatar_cell, avatar_local) = match q_grids.iter().next() {
+                Some((_, grid)) => grid.translation_to_grid(existing_tf.translation.as_dvec3()),
+                None => (CellCoord::default(), existing_tf.translation),
+            };
             let avatar_tf = Transform {
-                translation: existing_tf.translation,
+                translation: avatar_local,
                 rotation: existing_tf.rotation,
                 scale: existing_tf.scale,
             };
@@ -847,7 +858,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                         AdaptiveNearPlane,
                         avatar_tf,
                         FloatingOrigin,
-                        CellCoord::default(),
+                        avatar_cell,
                         Avatar,
                         LocalAvatar,
                         IntentAnalogState::default(),
@@ -869,7 +880,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                         AdaptiveNearPlane,
                         avatar_tf,
                         FloatingOrigin,
-                        CellCoord::default(),
+                        avatar_cell,
                         Avatar,
                         LocalAvatar,
                         IntentAnalogState::default(),
@@ -896,7 +907,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                         AdaptiveNearPlane,
                         avatar_tf,
                         FloatingOrigin,
-                        CellCoord::default(),
+                        avatar_cell,
                         Avatar,
                         LocalAvatar,
                         IntentAnalogState::default(),
@@ -912,7 +923,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                         AdaptiveNearPlane,
                         avatar_tf,
                         FloatingOrigin,
-                        CellCoord::default(),
+                        avatar_cell,
                         Avatar,
                         LocalAvatar,
                         IntentAnalogState::default(),
@@ -922,7 +933,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                 }
             }
             // Parent to Grid so FloatingOrigin works
-            if let Some(g) = q_grids.iter().next() {
+            if let Some((g, _)) = q_grids.iter().next() {
                 commands.entity(entity).try_insert(ChildOf(g));
             }
         }
@@ -1596,6 +1607,18 @@ fn setup_physical_wheel(
         .remove::<RayCaster>()
         .remove::<RayHits>();
 
+    // Wheel mass via DENSITY, not a forced `Mass`. avian auto-derives
+    // `AngularInertia` from the collider at `ColliderDensity` (default 1.0) EVEN
+    // when `Mass` is set — so `Mass(100)` on a density-1 cylinder gave a 100 kg
+    // linear mass with the angular inertia of a ~0.1 kg cylinder. That
+    // mass/inertia DESYNC left the contact+joint solver unable to build enough
+    // support impulse, so the rover slowly sank THROUGH the (one-sided) terrain
+    // heightfield instead of resting. Deriving both from one density keeps them
+    // consistent while preserving the intended heavy wheel (USD-overridable via
+    // `physics:mass`). `cylinder(radius, height=radius*0.5)` ⇒ volume = π·r²·(r/2).
+    let wheel_volume = std::f64::consts::PI * (radius as f64).powi(2) * (radius as f64 * 0.5);
+    let wheel_density = (drive.wheel_mass / wheel_volume.max(1e-6)) as f32;
+
     commands.entity(entity).try_insert((
         PhysicalWheel {
             visual_entity: visual_id,
@@ -1613,13 +1636,11 @@ fn setup_physical_wheel(
         RigidBody::Kinematic,
         ShouldBeDynamic,
         collider,
-        // Heavier wheels (100 kg default vs the raycast 25) damp the
-        // joint↔solver impulse echo that produced visible idle wobble
-        // when the rover was dropped from Y=5 onto the ground. With a
-        // 1000 kg chassis the previous 40:1 mass ratio amplified
-        // lateral float-precision noise into rolling drift. USD-overridable
-        // via `physics:mass`.
-        Mass(drive.wheel_mass as f32),
+        // Heavier wheels (100 kg default vs the raycast 25) damp the joint↔solver
+        // impulse echo. Set via density so mass AND angular inertia stay consistent
+        // (see the `wheel_density` note above) — a forced `Mass` desynced them and
+        // the rover sank through the terrain.
+        avian3d::prelude::ColliderDensity(wheel_density),
         // The drive is an axle TORQUE on the wheel (see MotorActuator); wheel↔ground
         // friction propels the rover. μ is a COMPROMISE: high μ gives traction +
         // Ackermann cornering grip, but also high LATERAL grip that resists a skid
@@ -1629,6 +1650,14 @@ fn setup_physical_wheel(
         Friction::new(0.9),
         LinearDamping(0.1),
         AngularDamping(0.3),
+        // Continuous collision detection: a thin, fast-falling wheel cylinder can
+        // pass THROUGH the one-sided terrain heightfield in a single step (and once
+        // below a one-sided surface, no contact ever pushes it back — it falls
+        // forever). CCD sweeps the wheel's motion against the collider so it can
+        // never tunnel, even across a one-frame collider-warmup gap. This is what
+        // lets the tunnel-rescue safety net be deleted — the wheel physically
+        // cannot end up below the terrain.
+        avian3d::prelude::SweptCcd::default(),
         wheel_tf,
     ));
 
@@ -2207,6 +2236,9 @@ fn activate_dynamic_bodies(
     q_kinematic: Query<(Entity, &UsdPrimPath), With<ShouldBeDynamic>>,
     q_pending_joints: Query<&UsdPrimPath, With<lunco_usd_avian::PendingUsdJoint>>,
     q_pending_diffs: Query<&UsdPrimPath, With<PendingDifferential>>,
+    // Physical wheels only: they get a one-time drop-onto-terrain settle. Free
+    // Dynamic bodies (balloons, etc.) must NOT be pinned to the ground.
+    q_wheel: Query<(), With<PhysicalWheel>>,
 ) {
     // Ground still building → gravity would win the race; keep everything
     // kinematic until the terrain collider lands.
@@ -2224,6 +2256,13 @@ fn activate_dynamic_bodies(
             // would not help — it only proves validity at queue time, not apply).
             commands.entity(entity).try_insert(RigidBody::Dynamic);
             commands.entity(entity).try_remove::<ShouldBeDynamic>();
+            // A physical wheel drops from the authored pose (chassis at the surface,
+            // wheels hanging below it) — which starts the wheels embedded in the
+            // one-sided terrain heightfield. Flag the assembly for a one-time
+            // ground-settle that lifts it so the wheels clear the surface.
+            if q_wheel.contains(entity) {
+                commands.entity(entity).try_insert(lunco_core::NeedsGroundSettle);
+            }
             debug!("Activated RigidBody::Dynamic for stage: {:?}", path.stage_handle);
         }
     }

@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use bevy::math::DVec3;
-use big_space::prelude::Grid;
+use big_space::prelude::{CellCoord, Grid};
 use std::collections::HashMap;
 use lunco_usd_bevy::UsdStageAsset;
 
@@ -211,10 +211,13 @@ pub fn update_spawn_ghost(
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
     mut footprint_cache: ResMut<FootprintCache>,
-    cameras: Query<(&Camera, &GlobalTransform, &bevy::camera::RenderTarget), With<Camera3d>>,
+    cameras: Query<
+        (&Camera, &GlobalTransform, &bevy::camera::RenderTarget, &CellCoord, &Transform),
+        With<Camera3d>,
+    >,
     windows: Query<&Window>,
     q_ghost: Query<(Entity, &Transform), With<SpawnGhost>>,
-    grids: Query<Entity, With<Grid>>,
+    grids: Query<(Entity, &Grid)>,
     raycaster: avian3d::prelude::SpatialQuery,
     terrains: TerrainOracles,
 ) {
@@ -231,12 +234,12 @@ pub fn update_spawn_ghost(
 
     // Ray through the ACTIVE window camera (the one you're looking through) —
     // not merely the first Camera3d, which may now be an inactive scene camera.
-    let (camera, cam_tf) = match cameras
+    let (camera, cam_tf, cam_cell, cam_local) = match cameras
         .iter()
-        .find(|(cam, _, target)| {
+        .find(|(cam, _, target, _, _)| {
             cam.is_active && matches!(target, bevy::camera::RenderTarget::Window(_))
         })
-        .map(|(cam, tf, _)| (cam, tf))
+        .map(|(cam, tf, _, cell, local)| (cam, tf, cell, local))
     {
         Some(c) => c,
         None => return,
@@ -367,27 +370,38 @@ pub fn update_spawn_ghost(
         // terrain contact; the real root-height lift (fp.lift) is applied at
         // spawn-click time, not in the preview.
         let ghost_pos = DVec3::new(point_d.x, avg_y, point_d.z) + normal * 0.05;
-        let point3 = ghost_pos.as_vec3();
+
+        // Place the ghost CELL-GRID AWARE. Every coordinate above is in the
+        // render (origin-relative) frame — the camera IS the FloatingOrigin, and
+        // the terrain/collider rays were built from origin-relative transforms.
+        // Lift the hit into the grid-ABSOLUTE frame through the camera's own
+        // (cell, transform), then split it back into a real (CellCoord, local)
+        // via the grid. A cell-less ghost `ChildOf(grid)` composes off cell
+        // (0,0,0), so on an elevated site (origin at cell.y≠0) it rendered ~one
+        // whole cell (~2 km) underground — "the ghost never appears on the
+        // ground". This lands it on the real surface at any origin cell.
+        let Some((grid_ent, grid)) = grids.iter().next() else { return };
+        let ghost_abs = ghost_pos + grid.grid_position_double(cam_cell, cam_local);
+        let (ghost_cell, ghost_local) = grid.translation_to_grid(ghost_abs);
+        bevy::log::warn!(
+            "[GHOST] render=({:.0},{:.0},{:.0}) cam_abs=({:.0},{:.0},{:.0}) ghost_abs=({:.0},{:.0},{:.0}) cell=({},{},{}) local=({:.0},{:.0},{:.0})",
+            ghost_pos.x, ghost_pos.y, ghost_pos.z,
+            grid.grid_position_double(cam_cell, cam_local).x, grid.grid_position_double(cam_cell, cam_local).y, grid.grid_position_double(cam_cell, cam_local).z,
+            ghost_abs.x, ghost_abs.y, ghost_abs.z,
+            ghost_cell.x, ghost_cell.y, ghost_cell.z, ghost_local.x, ghost_local.y, ghost_local.z,
+        );
 
         if let Some((ghost, _)) = q_ghost.iter().next() {
-            commands.entity(ghost).try_insert(Transform {
-                translation: point3,
-                rotation,
-                ..default()
-            });
+            commands.entity(ghost).try_insert((
+                ghost_cell,
+                Transform { translation: ghost_local, rotation, ..default() },
+            ));
         } else {
-            let grid = match grids.iter().next() {
-                Some(g) => g,
-                None => return,
-            };
             commands.spawn((
                 Name::new("SpawnGhost"),
                 SpawnGhost,
-                Transform {
-                    translation: point3,
-                    rotation,
-                    ..default()
-                },
+                ghost_cell,
+                Transform { translation: ghost_local, rotation, ..default() },
                 Mesh3d(meshes.add(Sphere::new(0.5).mesh().ico(8).unwrap())),
                 // Appearance INTENT — the render binder turns this into a
                 // `StandardMaterial`. `perceptual_roughness: 0.5` reproduces
@@ -398,7 +412,7 @@ pub fn update_spawn_ghost(
                     perceptual_roughness: 0.5,
                     ..default()
                 },
-                ChildOf(grid),
+                ChildOf(grid_ent),
                 Visibility::Visible,
                 InheritedVisibility::default(),
                 ViewVisibility::default(),
@@ -443,9 +457,9 @@ pub fn on_scene_click_spawn(
     mut spawn_state: ResMut<SpawnState>,
     footprint_cache: Res<FootprintCache>,
     keys: Res<ButtonInput<KeyCode>>,
-    q_grids: Query<Entity, With<Grid>>,
+    q_grids: Query<(Entity, &Grid)>,
     q_ghost: Query<Entity, With<SpawnGhost>>,
-    cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    cameras: Query<(&Camera, &GlobalTransform, &CellCoord, &Transform), With<Camera3d>>,
     egui_focus: Res<lunco_core::EguiFocus>,
     raycaster: avian3d::prelude::SpatialQuery,
     terrains: TerrainOracles,
@@ -465,7 +479,7 @@ pub fn on_scene_click_spawn(
     // cast the ray against colliders so placement works on streamed terrain even
     // when no pickable tile is under the cursor (the old `hit.position` guard
     // silently rejected those clicks — the "can't place on the ground" bug).
-    let Some((camera, cam_gtf)) = cameras.iter().find(|(c, _)| c.is_active) else {
+    let Some((camera, cam_gtf, cam_cell, cam_local)) = cameras.iter().find(|(c, _, _, _)| c.is_active) else {
         return;
     };
     let Some(ray) = lunco_core::scene_click_ray(&egui_focus, camera, cam_gtf, click.pointer_location.position) else {
@@ -493,7 +507,7 @@ pub fn on_scene_click_spawn(
         (None, None) => return,
     };
 
-    let Some(grid) = q_grids.iter().next() else {
+    let Some((grid, grid_comp)) = q_grids.iter().next() else {
         return;
     };
 
@@ -507,7 +521,7 @@ pub fn on_scene_click_spawn(
 
     // 2. Get camera forward direction to orient the rover
     let cam_forward = cameras.iter().next()
-        .map(|(_, tf)| tf.forward().as_dvec3())
+        .map(|(_, tf, _, _)| tf.forward().as_dvec3())
         .unwrap_or(DVec3::NEG_Z);
     let mut forward_xz = DVec3::new(cam_forward.x, 0.0, cam_forward.z);
     if forward_xz.length_squared() < 1e-5 {
@@ -609,7 +623,14 @@ pub fn on_scene_click_spawn(
     // a slight embed is the stable init (solver gently resolves it). Raycast
     // drivetrains absorb this via suspension, so it's safe for both.
     let spawn_pos = DVec3::new(point_d.x, avg_y, point_d.z) + normal * (fp.lift - 0.01);
-    let point3 = spawn_pos.as_vec3();
+    // The whole placement solve above ran in the render (origin-relative) frame
+    // (camera ray + terrain-oracle round-trips). The spawn command plants its
+    // position as a GRID-ABSOLUTE `Transform` (cell 0 + avian recenter), so lift it
+    // into grid-absolute via the camera's own (cell, transform). Without this, at an
+    // elevated site the render-frame Y (~-45 m) was planted as grid-absolute and the
+    // spawned body dropped ~2 km below the surface.
+    let spawn_abs = spawn_pos + grid_comp.grid_position_double(cam_cell, cam_local);
+    let point3 = spawn_abs.as_vec3();
 
     commands.trigger(crate::commands::SpawnEntity {
         target: grid,

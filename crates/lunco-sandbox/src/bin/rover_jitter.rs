@@ -258,13 +258,55 @@ fn main() {
 }
 
 fn setup(mut commands: Commands, cfg: Res<Config>) {
-    // Static ground, top face at y = 0.
+    // Static ground, top face at y = 0. GROUND=hf swaps the solid cuboid for a
+    // parry HEIGHTFIELD built EXACTLY like the terrain collider ring
+    // (`collider_ring::heightfield_collider`) — flat (all zero heights) — to test
+    // whether the heightfield COLLIDER TYPE holds the jointed cylinder wheels.
+    let use_hf = std::env::var("GROUND").as_deref() == Ok("hf");
+    let ground_collider = if use_hf {
+        use avian3d::parry::shape::{HeightFieldFlags, SharedShape};
+        use avian3d::parry::utils::Array2;
+        let res = std::env::var("HFRES").ok().and_then(|s| s.parse().ok()).unwrap_or(65usize);
+        let side = 200.0_f64;
+        // HFRELIEF=1 → non-flat heights (gentle slope + bumps), like real terrain,
+        // to test whether SLOPED heightfield contact holds the cylinder wheels.
+        let relief = std::env::var("HFRELIEF").as_deref() == Ok("1");
+        let data: Vec<f64> = (0..res * res)
+            .map(|i| {
+                if !relief { return 0.0; }
+                let (r, c) = ((i / res) as f64, (i % res) as f64);
+                let (u, v) = (r / (res as f64 - 1.0), c / (res as f64 - 1.0));
+                // Height in heightfield-LOCAL units (scaled by scale.y=1). Amplitude
+                // ~0.02 of side (a few m over 200 m) + small bumps.
+                0.03 * (u - 0.5) + 0.01 * (v * 12.0).sin() * (u * 9.0).cos()
+            })
+            .collect();
+        let grid = Array2::new(res, res, data);
+        let shape: Collider = SharedShape::heightfield_with_flags(
+            grid,
+            bevy::math::DVec3::new(side, 1.0, side),
+            HeightFieldFlags::FIX_INTERNAL_EDGES,
+        )
+        .into();
+        eprintln!("[rover_jitter] GROUND=heightfield res={res} side={side} (top at y=0)");
+        shape
+    } else {
+        Collider::cuboid(200.0, 1.0, 200.0)
+    };
+    // BASEY offsets the WHOLE rig (ground + rover) to a large altitude, e.g. the
+    // moonbase's ~1946 m, to test whether avian physics degrades at grid-absolute
+    // coordinates (the bridge runs physics in grid-absolute, not origin-relative).
+    let base: f64 = std::env::var("BASEY").ok().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+    if base != 0.0 { eprintln!("[rover_jitter] BASEY={base} (rig offset to large altitude)"); }
+    // Heightfield surface sits at the entity origin (heights=0); cuboid top is at
+    // origin+0.5. Place accordingly so the top face is y=0 in both cases.
+    let ground_y = (if use_hf { 0.0 } else { -0.5 }) + base;
     commands.spawn((
         Name::new("Ground"),
         RigidBody::Static,
-        Collider::cuboid(200.0, 1.0, 200.0),
+        ground_collider,
         Friction::new(1.2),
-        Transform::from_xyz(0.0, -0.5, 0.0),
+        Transform::from_xyz(0.0, ground_y as f32, 0.0),
     ));
 
     // Chassis compound body.
@@ -276,7 +318,7 @@ fn setup(mut commands: Commands, cfg: Res<Config>) {
             Collider::cuboid(CHASSIS_HE.x * 2.0, CHASSIS_HE.y * 2.0, CHASSIS_HE.z * 2.0),
             Mass(CHASSIS_MASS as f32),
             Friction::new(1.2),
-            Transform::from_xyz(0.0, (CHASSIS_Y + cfg.drop) as f32, 0.0),
+            Transform::from_xyz(0.0, (CHASSIS_Y + cfg.drop + base) as f32, 0.0),
         ))
         .id();
 
@@ -297,7 +339,7 @@ fn setup(mut commands: Commands, cfg: Res<Config>) {
         // are chassis-local).
         let chassis_anchor = DVec3::new(c.x, c.y - CHASSIS_Y, c.z);
         // World spawn point, raised by the drop height.
-        let c_world = c + DVec3::new(0.0, cfg.drop, 0.0);
+        let c_world = c + DVec3::new(0.0, cfg.drop + base, 0.0);
 
         let wheel = commands
             .spawn((

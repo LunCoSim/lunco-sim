@@ -105,10 +105,18 @@ impl Plugin for TerrainSurfacePlugin {
         // play state is untouched, so the scene does not open "paused" while the
         // DEM bakes and resumes on its own the moment the terrain is safe to step.
         app.add_systems(Update, crate::collider_ring::hold_physics_until_dem_ready);
-        // Tunnel rescue: once a body slips under a heightfield no collider will
-        // ever stop it again (one-sided, infinitely thin) — reseat it on the
-        // surface, loudly. Physics cadence: only matters while the sim steps.
-        app.add_systems(FixedUpdate, crate::collider_ring::rescue_tunneled_bodies);
+        // NOTE: the "tunnel rescue" safety net was DELETED. It masked the real
+        // defect — physics resumed one frame before the ring collider was live in
+        // avian's broad-phase (`hold_physics_until_dem_ready` gated on queued map
+        // membership, now on `ColliderAabb` liveness) AND the Dynamic wheels had no
+        // CCD, so they free-fell through the one-sided heightfield. Both are fixed
+        // (`SweptCcd` on the wheels + liveness-gated hold), so a body can no longer
+        // end up under the terrain and needs no reseat.
+        // One-time drop-onto-terrain placement for freshly-activated physical
+        // rovers (marked `NeedsGroundSettle` in `activate_dynamic_bodies`): lift the
+        // assembly so its wheels clear the one-sided heightfield instead of starting
+        // embedded (authored chassis-at-surface + wheels-hang-below) and sinking.
+        app.add_systems(Update, crate::collider_ring::settle_grounded_assemblies);
         // Overturn recovery: a `KeepUpright` vessel resting on its roof gets
         // righted (whole jointed assembly, rigidly) after a settle delay.
         app.add_systems(FixedUpdate, crate::collider_ring::rescue_overturned_vessels);

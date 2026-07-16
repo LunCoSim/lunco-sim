@@ -68,7 +68,7 @@ pub use commands::{
 };
 pub use markers::{
     ActuatorDrivenJoint, EmbeddedScenarioPath, EmbeddedScenarioSource, FallbackSceneLight,
-    GridAnchor, HorizonShadowTerrain, NextScene, RestoreFallbackLights, ScenarioProgramPrim, ScriptParams, SoiMigrant, SunAngularDiameter, TriggerZone,
+    GridAnchor, HorizonShadowTerrain, NeedsGroundSettle, NextScene, RestoreFallbackLights, ScenarioProgramPrim, ScriptParams, SoiMigrant, SunAngularDiameter, TriggerZone,
     TRIGGER_COLLISION_LAYER,
 };
 pub use invariants::BigSpaceInvariantsPlugin;
@@ -566,6 +566,7 @@ impl Plugin for LunCoCorePlugin {
         app.add_plugins(LunCoLogPlugin);
         app.add_plugins(BigSpaceInvariantsPlugin);
         app.register_type::<GridAnchor>()
+           .register_type::<NeedsGroundSettle>()
            .register_type::<SoiMigrant>()
            .register_type::<ActuatorDrivenJoint>()
            // `telemetry::` — bevy 0.19's prelude exports its own `Severity`

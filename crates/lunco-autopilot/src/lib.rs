@@ -1486,12 +1486,22 @@ pub fn sense_clearance(
     spatial: avian3d::prelude::SpatialQuery,
     q_children: Query<&Children>,
     registry: Res<SessionRegistry>,
-    q_vessels: Query<(Entity, &GlobalEntityId, &GlobalTransform)>,
+    // Pose from avian `Position`/`Rotation` (GRID-ABSOLUTE, the frame `SpatialQuery`
+    // casts in) — NOT `GlobalTransform` (origin-relative). On an elevated site the
+    // floating origin is ~2 km from grid-zero, so a render-frame ray origin cast
+    // into grid-absolute colliders started ~2 km off and the fan read permanent
+    // "all clear" (autopilot/driver-assist blind).
+    q_vessels: Query<(
+        Entity,
+        &GlobalEntityId,
+        &avian3d::prelude::Position,
+        &avian3d::prelude::Rotation,
+    )>,
     mut field: ResMut<ClearanceField>,
 ) {
     use avian3d::prelude::SpatialQueryFilter;
     field.0.clear();
-    for (vessel, gid, xf) in &q_vessels {
+    for (vessel, gid, pos, rot) in &q_vessels {
         // Sense only vessels someone is actually driving (human OR autopilot). An
         // idle, unowned vessel has no consumer for its clearance, so skip it.
         if registry.owner_of(gid.get()).is_none() {
@@ -1499,7 +1509,7 @@ pub fn sense_clearance(
         }
         // Level forward: drop the pitch so the probe skims a horizontal plane instead
         // of aiming into the ground (downhill) or the sky (uphill).
-        let f = xf.forward().as_vec3();
+        let f = (rot.0 * bevy::math::DVec3::NEG_Z).as_vec3();
         let fwd = Vec3::new(f.x, 0.0, f.z).normalize_or_zero();
         if fwd == Vec3::ZERO {
             continue;
@@ -1507,7 +1517,7 @@ pub fn sense_clearance(
         let mut excluded = Vec::new();
         collect_hierarchy(vessel, &q_children, &mut excluded);
         let filter = SpatialQueryFilter::from_excluded_entities(excluded);
-        let base = xf.translation();
+        let base = pos.0.as_vec3();
         // Cast each lane at every body height, keep the nearest hit across them.
         let lane = |dir: Vec3| -> Option<f32> {
             let d = Dir3::new(dir).ok()?;
