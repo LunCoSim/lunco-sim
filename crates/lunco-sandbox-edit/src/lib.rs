@@ -136,6 +136,20 @@ impl Plugin for SandboxEditPlugin {
                 .before(bevy::transform::TransformSystems::Propagate),
         );
         app.add_systems(Update, gizmo::sync_gizmo_camera);
+        // The gizmo crate reads a target's pose from `Transform` but its camera
+        // from `GlobalTransform` — under big_space those differ by a whole cell,
+        // so it drew the handles 2 km off-screen in the twin (and looked fine in
+        // the sandbox only because that scene sits in the origin cell). The
+        // `GizmoTarget` therefore lives on an unparented proxy whose `Transform`
+        // IS its render-frame pose; the drag comes back as a delta.
+        app.add_systems(Update, (gizmo::spawn_gizmo_proxies, gizmo::despawn_gizmo_proxies));
+        app.add_systems(
+            PostUpdate,
+            gizmo::sync_gizmo_proxies.after(bevy::transform::TransformSystems::Propagate),
+        );
+        // `First` is strictly after the crate's `Last`, so this ordering can't be
+        // lost to ambiguity the way a same-schedule system would be.
+        app.add_systems(First, gizmo::apply_gizmo_proxy_drag);
         app.add_systems(Update, gizmo::drive_gizmo_drag_no_shift);
         // Publish the drag state as the core `GizmoDragging` marker so transform-
         // gizmo-free crates (avatar camera follow) can read it.
