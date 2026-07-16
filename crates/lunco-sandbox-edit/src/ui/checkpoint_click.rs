@@ -24,7 +24,6 @@ use bevy::prelude::*;
 use bevy::math::DVec3;
 use serde_json::Value;
 use lunco_render::{PbrLook, SurfaceAlpha};
-use std::collections::HashMap;
 use bevy_egui::egui;
 use lunco_autopilot::usd_tree::{append_waypoint_leaf, remove_waypoint_leaf, BehaviorXml, TargetBindings};
 use lunco_controller::ControllerLink;
@@ -53,6 +52,43 @@ pub struct WaypointContextMenuState {
     pub just_opened: bool,
 }
 
+/// Grid-frame conversion bundle for the waypoint click observer. Bundled into one
+/// [`SystemParam`] so the observer stays under Bevy's 16-argument limit, and so the
+/// render→world math lives in one place. `cameras` rides along because it also reads
+/// `GlobalTransform` (read-only, no alias with `q_gt`).
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct WaypointClickFrame<'w, 's> {
+    pub cameras: Query<'w, 's, (&'static Camera, &'static GlobalTransform), With<Camera3d>>,
+    pub q_parents: Query<'w, 's, &'static ChildOf>,
+    pub q_grids: Query<'w, 's, (Entity, &'static big_space::prelude::Grid)>,
+    pub q_grids_only: Query<'w, 's, &'static big_space::prelude::Grid>,
+    pub q_spatial:
+        Query<'w, 's, (Option<&'static big_space::grid::cell::CellCoord>, &'static Transform)>,
+    pub q_gt: Query<'w, 's, &'static GlobalTransform>,
+}
+
+impl WaypointClickFrame<'_, '_> {
+    /// Convert a point in the RENDER (floating-origin) frame to WORLD (grid-absolute)
+    /// space — the exact inverse of `bake_targets`' world→render bake, so a captured
+    /// waypoint round-trips to the same target the driver steers toward, even when the
+    /// floating origin is far from world zero or rebases mid-mission.
+    fn render_to_world(&self, p: DVec3) -> DVec3 {
+        let Some((grid_entity, _)) = self.q_grids.iter().next() else {
+            return p; // no grid → render and world coincide
+        };
+        let grid_world = lunco_core::coords::world_position(
+            grid_entity,
+            &self.q_parents,
+            &self.q_grids_only,
+            &self.q_spatial,
+        )
+        .unwrap_or(DVec3::ZERO);
+        let grid_floating =
+            self.q_gt.get(grid_entity).map(|gt| gt.translation()).unwrap_or(Vec3::ZERO);
+        grid_world + (p - grid_floating.as_dvec3())
+    }
+}
+
 /// Global `Pointer<Click>` observer: Ctrl+LMB drops a waypoint prim for the selected
 /// vessel and appends the matching `drive_to` leaf to its mission.
 ///
@@ -68,7 +104,7 @@ pub fn on_scene_click_checkpoint(
     selected: Res<SelectedEntities>,
     avatars: Query<Entity, With<Avatar>>,
     q_link: Query<&ControllerLink>,
-    cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    frame: WaypointClickFrame,
     terrains: TerrainOracles,
     raycaster: avian3d::prelude::SpatialQuery,
     q_prim: Query<&UsdPrimPath>,
@@ -126,7 +162,7 @@ pub fn on_scene_click_checkpoint(
 
     // Ground-truth terrain hit (the DEM oracle, not the band-limited collider ring) —
     // the same path `spawn::on_scene_click_spawn` uses.
-    let Some((camera, cam_gtf)) = cameras.iter().find(|(c, _)| c.is_active) else {
+    let Some((camera, cam_gtf)) = frame.cameras.iter().find(|(c, _)| c.is_active) else {
         info!("[waypoint] click ignored: no active camera");
         return;
     };
@@ -147,7 +183,7 @@ pub fn on_scene_click_checkpoint(
         .map(|h| h.distance);
     let terr = terrain_ray_hit(&terrains, origin, dir, 1.0e6);
     
-    let hit = match (phys, terr) {
+    let hit_render = match (phys, terr) {
         (Some(pd), Some((td, tp))) => {
             if td <= pd { tp } else { origin + dir * pd }
         }
@@ -158,6 +194,16 @@ pub fn on_scene_click_checkpoint(
             return;
         }
     };
+
+    // A route lives in WORLD (grid-absolute) space — every consumer of the stored
+    // "x;y;z" coord (`bake_targets`, `delete_reached_waypoints`, the visuals) treats
+    // it as grid-absolute. But the ray hit above is in the RENDER (floating-origin)
+    // frame (camera + terrain GlobalTransforms). Convert render → world here, the
+    // exact inverse of `bake_targets`' world → render bake, so the round-trip is
+    // stable even when the floating origin is far from world zero (elevated sites)
+    // or rebases mid-mission. Without this the rover baked a target offset by the
+    // origin displacement and drove off past it instead of steering to the pin.
+    let hit = frame.render_to_world(hit_render);
     
     info!("[waypoint] dropping waypoint at {:?}", hit);
 
@@ -385,10 +431,18 @@ fn collect_targets(v: &Value, out: &mut Vec<String>) {
 pub struct WaypointVisual {
     /// The vessel entity this waypoint is for.
     pub vessel: Entity,
-    /// The index of this waypoint in the patrol sequence.
+    /// Stable identity: the raw "x;y;z" coordinate string from the BehaviorXml.
+    /// Keyed by string rather than sequence index so that removing the first
+    /// waypoint (which shifts all subsequent indices down by one) does not
+    /// cause every remaining sphere to be despawned and respawned.
+    pub coord_key: String,
+    /// The index of this waypoint in the patrol sequence (for label display).
     pub index: usize,
     /// Absolute world position of the waypoint.
     pub position: DVec3,
+    /// Whether this waypoint has been reached on a previous run.
+    /// Passed waypoints render differently (grey) but stay visible.
+    pub passed: bool,
 }
 
 /// System that spawns and updates local visual-only translucent green spheres
@@ -404,15 +458,43 @@ pub fn sync_waypoint_visuals(
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
 ) {
-    // 1. Gather all desired coordinate-based waypoints from all vessels.
-    let mut desired: Vec<((Entity, usize), DVec3)> = Vec::new();
+    // 1. Gather all desired coordinate-based waypoints from ALL vessels.
+    // Key: (vessel, coord_key) → (index, world_pos, passed).
+    // coord_key is the raw "x;y;z" string — stable across sequence-index shifts.
+    // All vessels' waypoints are shown so the full mission map is visible.
+    let mut desired: std::collections::HashMap<(Entity, String), (usize, DVec3, bool)> =
+        std::collections::HashMap::new();
     for (vessel, xml) in q_vessels.iter() {
         let Ok(value) = lunco_autopilot::btcpp_xml::xml_to_value(&xml.0) else { continue; };
-        let mut targets = Vec::new();
-        collect_targets(&value, &mut targets);
 
-        let mut idx = 0;
-        for target in targets {
+        // Walk the sequence children directly so we can read the `passed` flag.
+        let legs = value
+            .get("child")
+            .and_then(|c| c.get("children"))
+            .and_then(|c| c.as_array());
+        let Some(legs) = legs else {
+            // Fallback: collect via the shared helper (no passed info).
+            let mut targets = Vec::new();
+            collect_targets(&value, &mut targets);
+            for (idx, target) in targets.iter().enumerate() {
+                let parts: Vec<&str> = target.split(';').collect();
+                if parts.len() == 3 {
+                    if let (Ok(x), Ok(y), Ok(z)) = (
+                        parts[0].trim().parse::<f64>(),
+                        parts[1].trim().parse::<f64>(),
+                        parts[2].trim().parse::<f64>(),
+                    ) {
+                        desired.insert((vessel, target.to_string()), (idx, DVec3::new(x, y, z), false));
+                    }
+                }
+            }
+            continue;
+        };
+
+        let mut idx = 0usize;
+        for leg in legs {
+            let target = leg.get("target").and_then(|t| t.as_str()).unwrap_or("");
+            let passed = leg.get("passed").and_then(|p| p.as_bool()).unwrap_or(false);
             let parts: Vec<&str> = target.split(';').collect();
             if parts.len() == 3 {
                 if let (Ok(x), Ok(y), Ok(z)) = (
@@ -420,17 +502,19 @@ pub fn sync_waypoint_visuals(
                     parts[1].trim().parse::<f64>(),
                     parts[2].trim().parse::<f64>(),
                 ) {
-                    desired.push(((vessel, idx), DVec3::new(x, y, z)));
+                    desired.insert((vessel, target.to_string()), (idx, DVec3::new(x, y, z), passed));
                     idx += 1;
                 }
             }
         }
     }
 
-    // 2. Identify existing visuals.
-    let mut existing: std::collections::HashMap<(Entity, usize), Entity> = std::collections::HashMap::new();
+    // 2. Identify existing visuals, keyed by stable (vessel, coord_key).
+    // Value is (visual_entity, current_passed_state) so we can re-spawn when colour changes.
+    let mut existing: std::collections::HashMap<(Entity, String), (Entity, bool)> =
+        std::collections::HashMap::new();
     for (entity, visual) in q_visuals.iter() {
-        existing.insert((visual.vessel, visual.index), entity);
+        existing.insert((visual.vessel, visual.coord_key.clone()), (entity, visual.passed));
     }
 
     // Get active grid for placing visuals.
@@ -439,22 +523,38 @@ pub fn sync_waypoint_visuals(
         .unwrap_or(DVec3::ZERO);
 
     // 3. Spawn or update desired visuals.
-    for ((vessel, index), pos) in desired {
+    for ((vessel, coord_key), (index, pos, passed)) in desired {
         let (cell, local_pos) = lunco_core::coords::world_to_grid_local(pos, grid_world, grid);
 
-        if let Some(entity) = existing.remove(&(vessel, index)) {
-            // Update position of existing visual
-            commands.entity(entity).insert((
-                cell,
-                Transform::from_translation(local_pos),
-            ));
-        } else {
-            // Spawn new visual: a translucent dome sphere matching the USD model
+        if let Some((entity, existing_passed)) = existing.remove(&(vessel, coord_key.clone())) {
+            if existing_passed == passed {
+                // Same colour: just update position.
+                commands.entity(entity).insert((
+                    cell,
+                    Transform::from_translation(local_pos),
+                ));
+                continue;
+            }
+            // Passed state changed (green → grey): despawn and fall through to re-spawn.
+            commands.entity(entity).despawn();
+        }
+            // Colour: green = active target, grey = already visited.
+            let (base_color, emissive) = if passed {
+                (
+                    LinearRgba::new(0.45, 0.45, 0.45, 0.18),
+                    LinearRgba::new(0.3, 0.3, 0.3, 1.0),
+                )
+            } else {
+                (
+                    LinearRgba::new(0.2, 0.95, 0.5, 0.28),
+                    LinearRgba::new(0.12, 0.85, 0.42, 1.0),
+                )
+            };
             commands.spawn((
                 Mesh3d(meshes.add(Sphere::new(2.5).mesh().ico(5).unwrap())),
                 PbrLook {
-                    base_color: LinearRgba::new(0.2, 0.95, 0.5, 0.28),
-                    emissive: LinearRgba::new(0.12, 0.85, 0.42, 1.0),
+                    base_color,
+                    emissive,
                     alpha: SurfaceAlpha::Blend,
                     unlit: true,
                     ..default()
@@ -463,13 +563,12 @@ pub fn sync_waypoint_visuals(
                 Transform::from_translation(local_pos),
                 GlobalTransform::default(),
                 ChildOf(grid_entity),
-                WaypointVisual { vessel, index, position: pos },
+                WaypointVisual { vessel, coord_key, index, position: pos, passed },
             ));
-        }
     }
 
-    // 4. Despawn any orphaned visuals.
-    for (_, entity) in existing {
+    // 4. Despawn only the visuals whose coord_key is no longer in the XML.
+    for (_, (entity, _)) in existing {
         commands.entity(entity).despawn();
     }
 }
@@ -487,6 +586,7 @@ pub fn draw_waypoint_overlay(
     q_parents: Query<&ChildOf>,
     q_grids: Query<&big_space::prelude::Grid>,
     q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
+    q_link: Query<&ControllerLink>,
     mut egui_ctx: bevy_egui::EguiContexts,
 ) {
     // Prefer the avatar camera (the one the player looks through); fall back
@@ -510,11 +610,20 @@ pub fn draw_waypoint_overlay(
     ));
 
     let primary_selected = selected.primary();
+    let possessed_vessel = q_avatar_cam
+        .iter()
+        .next()
+        .and_then(|av| q_link.get(av).ok().map(|link| link.vessel_entity));
 
     for (vessel, xml, bindings) in q_vessels.iter() {
         let empty_bindings = TargetBindings::default();
         let bindings = bindings.unwrap_or(&empty_bindings);
+
+        let is_possessed = Some(vessel) == possessed_vessel;
         let is_selected = Some(vessel) == primary_selected;
+        if !is_possessed && !is_selected {
+            continue;
+        }
 
         let line_color = if is_selected {
             egui::Color32::from_rgb(51, 242, 128) // bright green
@@ -611,18 +720,19 @@ pub struct WaypointReached;
 /// System that checks if a vessel is close to any of its waypoints.
 /// If so, deletes the waypoint from USD stage (if path-based) or updates the behavior tree XML (for both).
 pub fn delete_reached_waypoints(
-    q_vessels: Query<(Entity, &BehaviorXml, Option<&TargetBindings>, &UsdPrimPath)>,
+    mut q_vessels: Query<(Entity, &mut BehaviorXml, Option<&TargetBindings>, &UsdPrimPath)>,
     q_waypoints: Query<(Entity, &UsdPrimPath), Without<WaypointReached>>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&big_space::prelude::Grid>,
     q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    usd_registry: Option<Res<UsdDocumentRegistry>>,
     mut commands: Commands,
 ) {
     let Some(workspace) = workspace else { return };
-    let Some(doc) = workspace.0.active_document else { return };
+    let Some(doc) = workspace.0.active_document.or_else(|| usd_registry.as_ref().and_then(|r| r.ids().next())) else { return };
 
-    for (vessel, xml, bindings, vessel_path) in q_vessels.iter() {
+    for (vessel, mut xml, bindings, vessel_path) in q_vessels.iter_mut() {
         let Some(vessel_pos) = lunco_core::coords::world_position(vessel, &q_parents, &q_grids, &q_spatial) else {
             continue;
         };
@@ -644,18 +754,18 @@ pub fn delete_reached_waypoints(
                     let wp_pos = DVec3::new(x, y, z);
                     let distance = (wp_pos - vessel_pos).length();
                     if distance < 4.0 {
-                        info!("Waypoint coordinate reached: deleting {}", target);
-                        if let Ok(new_xml) = remove_waypoint_leaf(&xml.0, target) {
-                            commands.trigger(ApplyUsdOp {
-                                doc,
-                                op: UsdOp::SetAttribute {
-                                    edit_target: LayerId::runtime(),
-                                    path: vessel_path.path.clone(),
-                                    name: "lunco:behavior".to_string(),
-                                    type_name: "string".to_string(),
-                                    value: new_xml,
-                                },
-                            });
+                        if let Ok(new_xml) = lunco_autopilot::usd_tree::mark_waypoint_passed(&xml.0, target) {
+                            info!("Waypoint coordinate reached: marking passed {}", target);
+                            // RUNTIME-ONLY: mutate the live `BehaviorXml` component in
+                            // place — do NOT author it back to USD. "Passed" is ephemeral
+                            // live-scene state: it greys the pin and strips the leg from
+                            // the compiled tree for THIS session only, and must reset on
+                            // reload. Triggering `ApplyUsdOp` here would journal it, save
+                            // it to `.usda`, replicate it, and make undo see it — none of
+                            // which we want for a transient "already visited" flag. The
+                            // `xml.0` write still fires `Changed<BehaviorXml>`, so
+                            // `compile_behavior_xml` re-strips and re-routes immediately.
+                            xml.0 = new_xml;
                         }
                     }
                     continue;
@@ -684,6 +794,7 @@ pub fn delete_reached_waypoints(
                             });
 
                             if let Ok(new_xml) = remove_waypoint_leaf(&xml.0, &prim_path.path) {
+                                xml.0 = new_xml.clone();
                                 commands.trigger(ApplyUsdOp {
                                     doc,
                                     op: UsdOp::SetAttribute {
@@ -738,7 +849,6 @@ fn on_start_autopilot(
     trigger: On<StartAutopilot>,
     q_autopilot: Query<(Entity, &lunco_autopilot::Autopilot)>,
     q_spec: Query<&lunco_autopilot::AutopilotBehaviorSpec>,
-    q_gid: Query<&GlobalEntityId>,
     mut registry: ResMut<SessionRegistry>,
     mut commands: Commands,
 ) {

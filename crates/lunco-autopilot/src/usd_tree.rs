@@ -58,6 +58,7 @@
 
 use crate::{Autopilot, AutopilotBehavior, AutopilotBehaviorSpec, BehaviorSpec};
 use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
+use bevy::math::DVec3;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use serde_json::Value;
@@ -243,6 +244,73 @@ pub fn remove_waypoint_leaf(xml: &str, prim_path: &str) -> Result<String, String
     crate::btcpp_xml::value_to_xml(&root)
 }
 
+/// Mark a `drive_to` leaf as **passed** (`passed="true"`) rather than removing it.
+///
+/// Passed waypoints are skipped by [`bake_targets`] at compile time, so the running
+/// rover will no longer target them — but they remain in the XML and are therefore
+/// still visible on reload (greyed out by the renderer). This is the preferred
+/// "waypoint consumed" semantic: the mission history is preserved.
+pub fn mark_waypoint_passed(xml: &str, target_str: &str) -> Result<String, String> {
+    let mut root = crate::btcpp_xml::xml_to_value(xml)?;
+
+    let legs = root
+        .get_mut("child")
+        .filter(|c| c.get("kind").and_then(|k| k.as_str()) == Some("sequence"))
+        .and_then(|c| c.get_mut("children"))
+        .and_then(|c| c.as_array_mut())
+        .ok_or_else(|| "mission is not a plain forever(sequence[…]) patrol".to_string())?;
+
+    let mut found = false;
+    for leg in legs.iter_mut() {
+        if leg.get("target").and_then(|t| t.as_str()) == Some(target_str) {
+            if let Some(map) = leg.as_object_mut() {
+                // Only mark the FIRST unpassed occurrence — the rover advances one
+                // waypoint at a time even if the same coordinate appears twice.
+                if map.get("passed").and_then(|p| p.as_bool()) != Some(true) {
+                    map.insert("passed".into(), serde_json::Value::Bool(true));
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    if !found {
+        return Err(format!("target '{target_str}' not found or already passed"));
+    }
+
+    crate::btcpp_xml::value_to_xml(&root)
+}
+
+/// Remove all sequence legs that have `passed=true` from `value` **in memory**.
+///
+/// Called in [`compile_behavior_xml`] on the cloned JSON value before baking
+/// targets to world coordinates. This keeps `xml.0` (the on-disk source) intact
+/// for history and visualisation while ensuring the compiled `BehaviorSpec`
+/// only contains active (not-yet-reached) legs — so `serde_json::from_value`
+/// never sees a string `target` where it expects `[x, y, z]`.
+fn strip_passed_legs(v: &mut Value) {
+    match v {
+        Value::Object(map) => {
+            // Strip passed children from the sequence array.
+            if let Some(Value::Array(children)) = map.get_mut("children") {
+                children.retain(|child| {
+                    child
+                        .get("passed")
+                        .and_then(|p| p.as_bool())
+                        != Some(true)
+                });
+            }
+            // Recurse into all values.
+            for child in map.values_mut() {
+                strip_passed_legs(child);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(strip_passed_legs),
+        _ => {}
+    }
+}
+
 /// Replace every prim-path `target` with the prim's live world position. Returns the
 /// paths that could not be resolved — a tree naming a deleted waypoint must not
 /// compile (it would drive to the origin).
@@ -250,6 +318,8 @@ fn bake_targets(
     v: &mut Value,
     bindings: &TargetBindings,
     q_gt: &Query<&GlobalTransform>,
+    grid_world_pos: DVec3,
+    grid_floating_pos: Vec3,
     missing: &mut Vec<String>,
 ) {
     match v {
@@ -271,11 +341,13 @@ fn bake_targets(
                         let parts: Vec<&str> = s.split(';').collect();
                         if parts.len() == 3 {
                             if let (Ok(x), Ok(y), Ok(z)) = (
-                                parts[0].trim().parse::<f32>(),
-                                parts[1].trim().parse::<f32>(),
-                                parts[2].trim().parse::<f32>(),
+                                parts[0].trim().parse::<f64>(),
+                                parts[1].trim().parse::<f64>(),
+                                parts[2].trim().parse::<f64>(),
                             ) {
-                                Some(serde_json::json!([x, y, z]))
+                                let wp_world_pos = DVec3::new(x, y, z);
+                                let rel_pos = (wp_world_pos - grid_world_pos).as_vec3() + grid_floating_pos;
+                                Some(serde_json::json!([rel_pos.x, rel_pos.y, rel_pos.z]))
                             } else {
                                 None
                             }
@@ -290,12 +362,13 @@ fn bake_targets(
                 map.insert("target".into(), pos);
             }
             for child in map.values_mut() {
-                bake_targets(child, bindings, q_gt, missing);
+                bake_targets(child, bindings, q_gt, grid_world_pos, grid_floating_pos, missing);
             }
         }
-        Value::Array(items) => items
-            .iter_mut()
-            .for_each(|i| bake_targets(i, bindings, q_gt, missing)),
+        Value::Array(items) =>
+            items
+                .iter_mut()
+                .for_each(|i| bake_targets(i, bindings, q_gt, grid_world_pos, grid_floating_pos, missing)),
         _ => {}
     }
 }
@@ -321,11 +394,24 @@ pub fn compile_behavior_xml(
             Changed<GlobalTransform>,
         )>,
     >,
+    q_grids: Query<(Entity, &big_space::prelude::Grid)>,
+    q_grids_only: Query<&big_space::prelude::Grid>,
+    q_parents: Query<&ChildOf>,
+    q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
     mut commands: Commands,
 ) {
     if q_vessels.is_empty() || moved.is_empty() {
         return;
     }
+    let (grid_world_pos, grid_floating_pos) = if let Some((grid_entity, _)) = q_grids.iter().next() {
+        let world_pos = lunco_core::coords::world_position(grid_entity, &q_parents, &q_grids_only, &q_spatial)
+            .unwrap_or(DVec3::ZERO);
+        let floating_pos = q_gt.get(grid_entity).ok().map(|gt| gt.translation()).unwrap_or(Vec3::ZERO);
+        (world_pos, floating_pos)
+    } else {
+        (DVec3::ZERO, Vec3::ZERO)
+    };
+
     for (vessel, xml, bindings) in q_vessels.iter() {
         let empty = TargetBindings::default();
         let bindings = bindings.unwrap_or(&empty);
@@ -339,7 +425,11 @@ pub fn compile_behavior_xml(
         };
 
         let mut missing = Vec::new();
-        bake_targets(&mut value, bindings, &q_gt, &mut missing);
+        // Strip passed legs from the in-memory value BEFORE baking — so the
+        // compiled BehaviorSpec never sees a string target where [x,y,z] is
+        // expected. The on-disk xml.0 keeps all legs for history/visualisation.
+        strip_passed_legs(&mut value);
+        bake_targets(&mut value, bindings, &q_gt, grid_world_pos, grid_floating_pos, &mut missing);
         if !missing.is_empty() {
             // Dangling reference: a waypoint prim the tree names has been deleted (or
             // has not spawned yet). Keep the last good tree — compiling this one would

@@ -1423,7 +1423,17 @@ pub fn drive_autopilots(
                     pos: xf.translation(),
                     fwd: xf.forward().as_vec3(),
                     now,
-                    out: (ap.throttle, ap.steer, 0.0),
+                    // Idle default = NEUTRAL (no throttle), NOT `ap.throttle`. When a
+                    // behaviour tree is present it OWNS the setpoint: a `drive_to` writes
+                    // it every active tick, so the only ticks that keep this default are
+                    // ones where no leaf drives — an empty/completed route (every waypoint
+                    // consumed), or a `forever(sequence[])` restart. Those must STOP, not
+                    // creep forward. Seeding `ap.throttle` here made a finished patrol
+                    // drive straight ahead ("autopilot moves forward instead of following"),
+                    // because a route whose legs were all marked passed compiles to an
+                    // empty sequence that never writes the setpoint. The genuine "no tree,
+                    // just cruise" case is the `_ =>` arm below, which still uses ap.throttle.
+                    out: (0.0, 0.0, 0.0),
                     targets: targets.clone(),
                     clearance,
                     fired: Vec::new(),

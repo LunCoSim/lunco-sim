@@ -37,6 +37,7 @@ lunco-time = { path = "../lunco-time" }
 # system casts a forward ray-fan via avian `SpatialQuery` (runs fine with no render).
 # Same workspace avian as the rest of the sim, so no extra feature surface.
 avian3d = { workspace = true }
+big_space = { workspace = true }
 
 [lints]
 workspace = true

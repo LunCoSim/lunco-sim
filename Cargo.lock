@@ -6936,6 +6936,7 @@ dependencies = [
  "anyhow",
  "avian3d",
  "bevy",
+ "big_space",
  "lunco-behavior",
  "lunco-core",
  "lunco-cosim",

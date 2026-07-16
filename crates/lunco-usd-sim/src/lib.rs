@@ -2137,7 +2137,7 @@ fn resolve_behavior_targets(
         let vessel_instance = instance_key(vessel, &q_provenance, &q_gid, &q_instance_root);
         let mut bindings = lunco_autopilot::usd_tree::TargetBindings::default();
         let targets = lunco_autopilot::usd_tree::target_paths(&xml.0);
-        info!("[resolve_behavior_targets] vessel {:?} ({}) has {} targets: {:?}", vessel, vessel_path.path, targets.len(), targets);
+        debug!("[resolve_behavior_targets] vessel {:?} ({}) has {} targets: {:?}", vessel, vessel_path.path, targets.len(), targets);
         for path in targets {
             let found = q_prims.iter().find(|(e, p)| {
                 let match_path = p.path == path;
