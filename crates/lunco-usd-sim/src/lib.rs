@@ -1481,11 +1481,28 @@ fn setup_raycast_wheel(
     }
     ray_caster = ray_caster.with_query_filter(filter);
 
+    // avian's `update_ray_caster_positions` derives the ray's global origin from
+    // the entity's own `Position`/`Rotation` when present, and ONLY falls back to
+    // its `GlobalTransform` when they're absent. Without them the wheel casts from
+    // its big_space RENDER-frame `GlobalTransform` (origin-relative, ≈ −53 m at a
+    // 1945 m site) while the terrain collider lives in the grid-ABSOLUTE physics
+    // frame (≈ +1945 m) — a ~2 km divergence that makes the ray miss the ground,
+    // so `last_normal_force` stays 0 and `apply_wheel_drive` bails on its
+    // `normal_force < 1.0` gate: the rover rests on its chassis collider but never
+    // drives. Near the origin (flat sandbox) the two frames coincide and it works,
+    // which is exactly the sandbox-vs-moonbase split. Carrying explicit
+    // `Position`/`Rotation` (kept grid-absolute by `sync_raycast_wheel_physics_pose`
+    // in `lunco-mobility`) makes the ray originate in the physics frame everywhere.
+    // The wheel has no `RigidBody`/`Collider`, so avian's `position_to_transform`
+    // never writes them back and the big_space bridge (BridgeShadow-gated) ignores
+    // it — the mobility sync is the sole writer.
     commands.entity(entity).try_insert((
         wheel,
         ray_caster,
         RayHits::default(),
         wheel_tf,
+        avian3d::prelude::Position::default(),
+        avian3d::prelude::Rotation::default(),
     ));
 
     // Front Ackermann wheel: attach the SHARED steering servo. The same

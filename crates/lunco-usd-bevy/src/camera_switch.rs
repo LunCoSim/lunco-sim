@@ -163,30 +163,49 @@ pub fn bind_avatar_camera_on_add(
 /// leave zero or many active cameras.
 pub fn reconcile_scene_viewport(
     mut vp: ResMut<SceneViewport>,
-    mut q_cams: Query<(Entity, &mut Camera, &RenderTarget, Option<&ChildOf>), With<SceneCamera>>,
+    mut q_cams: Query<
+        (Entity, &mut Camera, &RenderTarget, Option<&ChildOf>, Has<bevy::camera::Projection>),
+        With<SceneCamera>,
+    >,
     q_avatar_cam: Query<Entity, (With<SceneCamera>, With<LocalAvatar>)>,
     q_grids: Query<(), With<Grid>>,
     q_origins: Query<Entity, With<FloatingOrigin>>,
     mut commands: Commands,
 ) {
     let is_window = |t: &RenderTarget| matches!(t, RenderTarget::Window(_));
+    // A camera is only ACTIVATABLE once its 3D pipeline (`Camera3d` → required
+    // `Projection`) is bound by `lunco-render-bevy`. A `SceneCamera` spawns as a
+    // bare `Camera` and gets that pipeline a frame or two later; if we activate it
+    // in that window it is extracted as a live view but SKIPPED by Bevy's
+    // `build_directional_light_cascades` (whose query requires `&Projection`), so a
+    // shadow-casting sun's `prepare_lights` then `unwrap()`s a cascade map with no
+    // entry for the view and PANICS the render app. It only bites a scene whose sun
+    // has shadows enabled (e.g. the moonbase `DistantLight`) — a shadowless sandbox
+    // sun skips the cascade path — which is exactly the "headfull crashes on the DEM
+    // project, not the flat sandbox" symptom. Requiring `Projection` here keeps the
+    // sole active window view always cascade-covered and forces any transient
+    // projectionless camera off.
+    let activatable = |q: &Query<
+        (Entity, &mut Camera, &RenderTarget, Option<&ChildOf>, Has<bevy::camera::Projection>),
+        With<SceneCamera>,
+    >,
+                       e: Entity|
+     -> bool { q.get(e).map_or(false, |(_, _, t, _, has_proj)| is_window(t) && has_proj) };
 
     // ── Resolve the bound camera (revalidate + default) ──────────────────
     // Keep the binding if it still points at a window camera; else fall back
     // to the local-avatar camera, else the lowest-entity window camera. This
     // is what makes takeover + async spawn robust.
-    let bound_valid = vp
-        .active_camera
-        .filter(|e| q_cams.get(*e).map_or(false, |(_, _, t, _)| is_window(t)));
+    let bound_valid = vp.active_camera.filter(|e| activatable(&q_cams, *e));
     let active = bound_valid.or_else(|| {
         q_avatar_cam
             .iter()
-            .find(|e| q_cams.get(*e).map_or(false, |(_, _, t, _)| is_window(t)))
+            .find(|e| activatable(&q_cams, *e))
             .or_else(|| {
                 let mut ws: Vec<Entity> = q_cams
                     .iter()
-                    .filter(|(_, _, t, _)| is_window(t))
-                    .map(|(e, _, _, _)| e)
+                    .filter(|(_, _, t, _, has_proj)| is_window(t) && *has_proj)
+                    .map(|(e, _, _, _, _)| e)
                     .collect();
                 ws.sort();
                 ws.into_iter().next()
@@ -199,7 +218,7 @@ pub fn reconcile_scene_viewport(
     // Can the active camera host the FloatingOrigin? (grid-direct only)
     let grid_direct = active
         .and_then(|e| q_cams.get(e).ok())
-        .and_then(|(_, _, _, parent)| parent)
+        .and_then(|(_, _, _, parent, _)| parent)
         .map(|c| q_grids.contains(c.parent()))
         .unwrap_or(false);
 
@@ -207,10 +226,13 @@ pub fn reconcile_scene_viewport(
     let rect = vp.rect;
 
     // ── Actuate: the ONE writer of window-camera is_active + viewport ────
-    for (e, mut cam, target, _) in q_cams.iter_mut() {
+    for (e, mut cam, target, _, _) in q_cams.iter_mut() {
         if !is_window(target) {
             continue; // RTT/offscreen cameras are self-managed
         }
+        // `active` is already Projection-gated, so a projectionless camera is
+        // never `active` → want_active=false → it is (kept) off until its 3D
+        // pipeline binds. That is the guard against the cascade-unwrap panic.
         let want_active = Some(e) == active && visible;
         if cam.is_active != want_active {
             cam.is_active = want_active;
@@ -264,6 +286,10 @@ mod tests {
                 is_active,
                 ..default()
             },
+            // A `Projection` stands in for the bound 3D pipeline: the reconciler
+            // only activates cameras whose pipeline is present (guards the shadow
+            // cascade-unwrap panic), so a test camera must carry one to be eligible.
+            bevy::camera::Projection::default(),
             RenderTarget::Window(bevy::window::WindowRef::Primary),
             Name::new(name.to_string()),
         )

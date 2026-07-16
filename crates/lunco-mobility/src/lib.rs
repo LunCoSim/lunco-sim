@@ -146,6 +146,18 @@ impl Plugin for LunCoMobilityPlugin {
                 .before(lunco_core::ControlDacSet),
         );
 
+        // Keep raycast wheels' physics `Position`/`Rotation` grid-absolute so their
+        // suspension rays originate in avian's frame (not the big_space render
+        // frame) — the fix for "rover rests but won't drive at an elevated site".
+        // Runs in the physics schedule AFTER the step (fresh chassis pose) and
+        // BEFORE the spatial query casts the rays. See the fn docs.
+        app.add_systems(
+            FixedPostUpdate,
+            sync_raycast_wheel_physics_pose
+                .after(PhysicsSystems::StepSimulation)
+                .before(SpatialQuerySystems),
+        );
+
         // ── Rollback replay ──────────────────────────────────────────────────
         // Mirror the FULL actuation chain into `RollbackReplay` with the SAME
         // relative order as `FixedUpdate`, so re-simulating a recorded input
@@ -497,6 +509,45 @@ fn apply_wheel_suspension(
             } else {
                 wheel.last_normal_force = 0.0;
             }
+        }
+    }
+}
+
+/// Keep each raycast wheel's avian `Position`/`Rotation` in the grid-ABSOLUTE
+/// physics frame so its suspension `RayCaster` originates at the true hub — not
+/// at the wheel's big_space RENDER-frame `GlobalTransform`.
+///
+/// avian's `update_ray_caster_positions` derives the ray origin from an entity's
+/// own `Position`/`Rotation` when present, falling back to its `GlobalTransform`
+/// only when they're absent. A raycast wheel now carries them (spawned in
+/// `lunco-usd-sim::setup_raycast_wheel`) but is NOT a physics body, so nothing
+/// else maintains them: the big_space bridge disables avian's
+/// `transform_to_position` and only syncs `BridgeShadow`-carrying bodies (a bare
+/// wheel has neither `RigidBody` nor `Collider`). Without this system the ray
+/// would cast from the origin-relative render frame and — at an elevated site
+/// (≈ +1945 m grid-absolute vs ≈ −53 m render, a ~2 km gap) — miss the terrain
+/// collider entirely, leaving `last_normal_force` at 0 so `apply_wheel_drive`
+/// bails on its `normal_force < 1.0` gate. That is the flat-sandbox-works /
+/// elevated-moonbase-fails split: near the origin the two frames coincide.
+///
+/// We compose the chassis' solved grid-absolute pose with the wheel's local
+/// transform via `wheel_hub_pose` — exactly how the suspension/drive force point
+/// is built — running AFTER the physics step (fresh chassis pose) and BEFORE the
+/// spatial query (which reads `Position`), so the cast sees this tick's pose.
+fn sync_raycast_wheel_physics_pose(
+    mut q_wheels: Query<(&mut Position, &mut Rotation, &Transform, &ChildOf), With<WheelRaycast>>,
+    q_chassis: Query<(&Position, &Rotation), (With<FlightSoftware>, Without<WheelRaycast>)>,
+) {
+    for (mut wpos, mut wrot, wtf, parent) in q_wheels.iter_mut() {
+        if let Ok((cpos, crot)) = q_chassis.get(parent.parent()) {
+            let (hub_pos, hub_rot) = wheel_hub_pose(
+                cpos.0,
+                crot.0,
+                wtf.translation.as_dvec3(),
+                wtf.rotation.as_dquat(),
+            );
+            wpos.0 = hub_pos;
+            wrot.0 = hub_rot;
         }
     }
 }
