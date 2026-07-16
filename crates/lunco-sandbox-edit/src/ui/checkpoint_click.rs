@@ -361,10 +361,12 @@ pub fn on_scene_click_place_waypoint(
         return;
     }
     if egui_focus.wants_pointer {
+        info!("[waypoint] placement: ignoring click, egui owns the pointer (menu?)");
         return; // clicking the menu itself, not the ground
     }
     click.propagate(false);
     let Some(pending) = placement.0.take() else { return };
+    info!("[waypoint] placement: consuming click for {:?} of '{}'", pending.mode, pending.coord_key);
 
     let Some(world) =
         pick_ground_world(&frame, &terrains, &raycaster, &egui_focus, click.pointer_location.position)
@@ -372,11 +374,15 @@ pub fn on_scene_click_place_waypoint(
         info!("[waypoint] placement cancelled: no ground under the cursor");
         return;
     };
-    let Ok((xml, vessel_prim)) = q_vessel.get(pending.vessel) else { return };
+    let Ok((xml, vessel_prim)) = q_vessel.get(pending.vessel) else {
+        warn!("[waypoint] placement failed: vessel {:?} has no BehaviorXml/UsdPrimPath", pending.vessel);
+        return;
+    };
     let Some(doc) = workspace
         .and_then(|w| w.0.active_document)
         .or_else(|| usd_registry.ids().next())
     else {
+        warn!("[waypoint] placement failed: no active document");
         return;
     };
 
@@ -485,6 +491,7 @@ pub fn draw_waypoint_context_menu(
                     open = false;
                 }
                 if ui.button("➕  Insert after — then click ground").clicked() {
+                    info!("[waypoint] armed Insert-after of '{}'", visual.coord_key);
                     placement.0 = Some(PendingPlacement {
                         vessel: visual.vessel,
                         coord_key: visual.coord_key.clone(),

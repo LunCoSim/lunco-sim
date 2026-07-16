@@ -40,6 +40,7 @@ over "SandboxScene"
         <Action ID="drive_to" target="-128.913332;0.000000;7.144366"/>
         <Action ID="drive_to" target="-103.146841;-0.000000;-66.809895"/>
         <Action ID="drive_to" target="105.198452;-0.000000;-82.754947"/>
+        <Action ID="drive_to" target="114.896400;0.000000;-51.174355"/>
         <Action ID="drive_to" target="110.322662;0.000000;-6.454551"/>
         <Action ID="drive_to" target="101.745334;0.000000;36.144420"/>
         <Action ID="drive_to" target="170.142210;0.000000;22.547475"/>
