@@ -205,7 +205,7 @@ pub use lunco_core::tools::{ToolFired, ToolInvocation};
 /// waypoint at that position with no actions and no dwell, so the legacy
 /// `waypoints: [[x,y,z], ...]` shape (used by `patrol.rhai` and Ctrl+LMB)
 /// keeps working unchanged.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PatrolWaypoint {
     /// World-space position `[x, y, z]`.
     pub pos: [f32; 3],
@@ -229,7 +229,7 @@ impl PatrolWaypoint {
 /// `RunTool` (fire a named tool via the `ToolFired` event); the enum is
 /// extensible for future core actions (sample, transmit, …) without reshaping
 /// the patrol data again.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WaypointAction {
     /// Fire a named tool call (same shape as [`BehaviorSpec::RunTool`]).
@@ -277,7 +277,7 @@ impl<'de> serde::Deserialize<'de> for PatrolWaypoint {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BehaviorSpec {
     /// Run children in order; fail on first failure, succeed when all succeed.
@@ -553,7 +553,7 @@ pub enum BehaviorSpec {
 
 /// Completion rule for a [`BehaviorSpec::Parallel`], mapped to
 /// [`ParallelPolicy`]. Defaults to `all`.
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ParallelRequire {
     /// Succeed when all children succeed; fail on the first failure.

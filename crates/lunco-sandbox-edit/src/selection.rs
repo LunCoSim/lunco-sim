@@ -213,6 +213,7 @@ pub fn on_scene_click_select(
     mut click: On<Pointer<Click>>,
     spawn_state: Res<SpawnState>,
     terrain_tool_active: Res<lunco_core::TerrainToolActive>,
+    waypoint_tool_active: Res<lunco_core::WaypointToolActive>,
     keys: Res<ButtonInput<KeyCode>>,
     egui_focus: Res<lunco_core::EguiFocus>,
     q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
@@ -243,6 +244,10 @@ pub fn on_scene_click_select(
     }
     // Terrain brush armed: clicks sculpt the terrain, not select.
     if terrain_tool_active.0 {
+        return;
+    }
+    // Waypoint Move/Insert armed: that click places the waypoint, not select.
+    if waypoint_tool_active.0 {
         return;
     }
 

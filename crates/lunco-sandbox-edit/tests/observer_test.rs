@@ -104,41 +104,26 @@ fn test_delete_reached_coordinate_waypoint() {
     schedule.add_systems(lunco_sandbox_edit::ui::checkpoint_click::delete_reached_waypoints);
     schedule.run(app.world_mut());
     
-    // Mark-passed semantic (NOT removal): a reached waypoint stays in the XML so the
-    // mission history is preserved and the pin renders greyed-out on reload. It is
-    // flagged `passed=true`; `strip_passed_legs` drops it at compile time so the
-    // driver no longer targets it. So BOTH coords remain in the XML — the first now
-    // carries `passed=true`, the second does not.
+    // "Reached" is LIVE-ONLY: it is recorded in the runtime `ReachedWaypoints`
+    // component and must NEVER touch the XML or the document. The XML is left byte-for
+    // byte alone, and NO ApplyUsdOp is emitted — otherwise the flag would be journaled,
+    // saved into the .usda and survive a reload (which is what emptied the route and
+    // made the autopilot drive forward instead of following it).
     let updated_xml = app.world().get::<lunco_autopilot::usd_tree::BehaviorXml>(vessel_entity).unwrap();
-    assert!(updated_xml.0.contains("10.0;0.0;20.0"), "reached waypoint stays in xml (marked passed, kept for history)");
-    assert!(updated_xml.0.contains("30.0;0.0;40.0"), "the next waypoint must still be present");
+    assert_eq!(updated_xml.0, xml_content, "the behaviour XML must be untouched — 'reached' is not authored");
+    assert!(!updated_xml.0.contains("passed"), "no passed flag may ever be written into the XML");
 
-    // The reached leg must be flagged passed=true; the next leg must not be.
-    let passed_of = |xml: &str, target: &str| -> Option<bool> {
-        let value = lunco_autopilot::btcpp_xml::xml_to_value(xml).ok()?;
-        let legs = value.get("child")?.get("children")?.as_array()?;
-        legs.iter()
-            .find(|l| l.get("target").and_then(|t| t.as_str()) == Some(target))
-            .and_then(|l| l.get("passed"))
-            .and_then(|p| p.as_bool())
-    };
-    assert_eq!(passed_of(&updated_xml.0, "10.0;0.0;20.0"), Some(true), "reached waypoint must be marked passed");
-    assert_ne!(passed_of(&updated_xml.0, "30.0;0.0;40.0"), Some(true), "the next waypoint must NOT be marked passed");
+    // The reached waypoint is recorded in the runtime component; the next one is not.
+    let reached = app
+        .world()
+        .get::<lunco_autopilot::usd_tree::ReachedWaypoints>(vessel_entity)
+        .expect("vessel must have gained a ReachedWaypoints component");
+    assert!(reached.0.contains("10.0;0.0;20.0"), "the reached waypoint must be recorded live-only");
+    assert!(!reached.0.contains("30.0;0.0;40.0"), "the not-yet-reached waypoint must not be recorded");
 
-    // Verify that ApplyUsdOp was triggered with the new (marked) XML so the edit is
-    // journaled / persisted / replicated through the one authoring funnel.
+    // Nothing may be authored: no journal / save / replication for a transient flag.
     let triggered = app.world().resource::<TriggeredOps>();
-    assert_eq!(triggered.0.len(), 1, "exactly one ApplyUsdOp should be triggered");
-    let op = &triggered.0[0].op;
-    if let lunco_usd::document::UsdOp::SetAttribute { path, name, type_name, value, .. } = op {
-        assert_eq!(path, "/SandboxScene/Skid_Raycast_2");
-        assert_eq!(name, "lunco:behavior");
-        assert_eq!(type_name, "string");
-        assert_eq!(passed_of(value, "10.0;0.0;20.0"), Some(true), "authored XML marks the reached waypoint passed");
-        assert_ne!(passed_of(value, "30.0;0.0;40.0"), Some(true), "authored XML leaves the next waypoint active");
-    } else {
-        panic!("ApplyUsdOp op is not SetAttribute");
-    }
+    assert!(triggered.0.is_empty(), "reaching a coordinate waypoint must author NOTHING to USD");
 }
 
 

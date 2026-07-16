@@ -223,16 +223,36 @@ impl Plugin for SandboxEditUiPlugin {
         // no checkpoint command, no checkpoint domain. Moving, deleting, undoing and
         // inspecting it are then the ordinary prim paths. See `checkpoint_click`.
         app.init_resource::<checkpoint_click::WaypointContextMenuState>()
+            .init_resource::<checkpoint_click::WaypointPlacement>()
             .add_observer(checkpoint_click::on_scene_click_checkpoint)
             .add_observer(checkpoint_click::on_scene_right_click_waypoint)
+            // Consumes the ground click that follows a Move / Insert-after.
+            .add_observer(checkpoint_click::on_scene_click_place_waypoint)
+            // egui DRAWING belongs in the egui pass, not `Update`. bevy_egui brackets
+            // a context's begin/end pass here, so a widget built outside it never joins
+            // egui's input pass: the context menu PAINTED but nothing in it could be
+            // clicked. (The overlay got away with `Update` only because it is
+            // paint-only — no widgets, no interaction.)
             .add_systems(
-                Update,
+                bevy_egui::EguiPrimaryContextPass,
                 (
                     checkpoint_click::draw_waypoint_overlay,
                     checkpoint_click::draw_waypoint_context_menu,
+                ),
+            )
+            .add_systems(
+                Update,
+                (
                     checkpoint_click::sync_waypoint_visuals,
+                    // The route line is real 3D geometry, not an egui overlay stroke.
+                    checkpoint_click::sync_waypoint_path_mesh,
                     checkpoint_click::delete_reached_waypoints,
                     checkpoint_click::handle_autopilot_toggle_hotkey,
+                    // Grabbing the controls takes the vessel back from its autopilot.
+                    checkpoint_click::manual_input_disengages_autopilot,
+                    // Mirrors an armed placement into the shared tool gate so
+                    // possession/selection stand down for that one click.
+                    checkpoint_click::sync_waypoint_tool_active,
                 ),
             );
         checkpoint_click::register_all_commands(app);

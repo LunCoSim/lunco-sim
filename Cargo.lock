@@ -7433,6 +7433,7 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "big_space",
+ "leafwing-input-manager",
  "lunco-api",
  "lunco-assets",
  "lunco-autopilot",
