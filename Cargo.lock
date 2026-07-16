@@ -6937,6 +6937,7 @@ dependencies = [
  "anyhow",
  "avian3d",
  "bevy",
+ "big_space",
  "lunco-behavior",
  "lunco-core",
  "lunco-cosim",
@@ -7434,6 +7435,7 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "big_space",
+ "leafwing-input-manager",
  "lunco-api",
  "lunco-assets",
  "lunco-autopilot",
@@ -7461,6 +7463,7 @@ dependencies = [
  "lunco-usd-sim",
  "lunco-workbench",
  "lunco-workspace",
+ "serde_json",
  "transform-gizmo-bevy",
 ]
 
@@ -7758,6 +7761,7 @@ dependencies = [
  "bevy_egui",
  "big_space",
  "lunco-assets",
+ "lunco-autopilot",
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",

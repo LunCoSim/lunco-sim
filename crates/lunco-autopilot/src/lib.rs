@@ -205,7 +205,7 @@ pub use lunco_core::tools::{ToolFired, ToolInvocation};
 /// waypoint at that position with no actions and no dwell, so the legacy
 /// `waypoints: [[x,y,z], ...]` shape (used by `patrol.rhai` and Ctrl+LMB)
 /// keeps working unchanged.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PatrolWaypoint {
     /// World-space position `[x, y, z]`.
     pub pos: [f32; 3],
@@ -229,7 +229,7 @@ impl PatrolWaypoint {
 /// `RunTool` (fire a named tool via the `ToolFired` event); the enum is
 /// extensible for future core actions (sample, transmit, …) without reshaping
 /// the patrol data again.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WaypointAction {
     /// Fire a named tool call (same shape as [`BehaviorSpec::RunTool`]).
@@ -277,7 +277,7 @@ impl<'de> serde::Deserialize<'de> for PatrolWaypoint {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BehaviorSpec {
     /// Run children in order; fail on first failure, succeed when all succeed.
@@ -553,7 +553,7 @@ pub enum BehaviorSpec {
 
 /// Completion rule for a [`BehaviorSpec::Parallel`], mapped to
 /// [`ParallelPolicy`]. Defaults to `all`.
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ParallelRequire {
     /// Succeed when all children succeed; fail on the first failure.
@@ -1423,7 +1423,17 @@ pub fn drive_autopilots(
                     pos: xf.translation(),
                     fwd: xf.forward().as_vec3(),
                     now,
-                    out: (ap.throttle, ap.steer, 0.0),
+                    // Idle default = NEUTRAL (no throttle), NOT `ap.throttle`. When a
+                    // behaviour tree is present it OWNS the setpoint: a `drive_to` writes
+                    // it every active tick, so the only ticks that keep this default are
+                    // ones where no leaf drives — an empty/completed route (every waypoint
+                    // consumed), or a `forever(sequence[])` restart. Those must STOP, not
+                    // creep forward. Seeding `ap.throttle` here made a finished patrol
+                    // drive straight ahead ("autopilot moves forward instead of following"),
+                    // because a route whose legs were all marked passed compiles to an
+                    // empty sequence that never writes the setpoint. The genuine "no tree,
+                    // just cruise" case is the `_ =>` arm below, which still uses ap.throttle.
+                    out: (0.0, 0.0, 0.0),
                     targets: targets.clone(),
                     clearance,
                     fired: Vec::new(),

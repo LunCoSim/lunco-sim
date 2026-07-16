@@ -29,6 +29,7 @@ lunco-workbench = { path = "../lunco-workbench", optional = true }
 # Generic node-graph substrate for the USD connection canvas (a second projector
 # over it, mirroring lunco-modelica's diagram). Editor-only → optional, on `ui`.
 lunco-canvas = { path = "../lunco-canvas", optional = true }
+serde_json = { workspace = true }
 avian3d = { workspace = true }
 
 big_space.workspace = true
@@ -47,6 +48,10 @@ lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-api = { path = "../lunco-api", default-features = false }
 lunco-controller = { path = "../lunco-controller" }
+# Read the avatar's `ActionState<UserIntent>` so "grab the controls" (any drive
+# intent) can take a vessel back from its autopilot — via the DATA keymap, not
+# hardcoded WASD.
+leafwing-input-manager = { workspace = true }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 # `default-features = false` keeps modelica/avatar egui-free for the headless

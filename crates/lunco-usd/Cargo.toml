@@ -11,6 +11,7 @@ openusd = { workspace = true }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
+lunco-autopilot = { path = "../lunco-autopilot" }
 lunco-core = { path = "../lunco-core" }
 lunco-doc = { path = "../lunco-doc" }
 # Only the document-lifecycle EVENTS (core); its egui systems are behind

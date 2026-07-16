@@ -76,6 +76,8 @@ impl Plugin for SandboxEditPlugin {
             .insert_resource(lunco_core::DragModeActive { active: false })
             .init_resource::<lunco_core::SpawnToolActive>()
             .init_resource::<lunco_core::TerrainToolActive>()
+            .init_resource::<lunco_core::WaypointToolActive>()
+            .init_resource::<lunco_core::WaypointMenuOpen>()
             .init_resource::<terrain_tools::TerrainToolState>()
             // Shader source is a journaled domain: edits record to the Twin
             // journal + hot-reload. The recorder attaches when the journal appears.

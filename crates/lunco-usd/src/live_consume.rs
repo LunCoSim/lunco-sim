@@ -15,6 +15,7 @@
 //! spawn/despawn (E2-2/E2-3) will later replace that structural fallback too.
 
 use bevy::prelude::*;
+use lunco_autopilot::usd_tree::{BehaviorXml, BehaviorXmlPath};
 use lunco_usd_bevy::{UsdPrimPath, UsdRead, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
 
@@ -279,10 +280,25 @@ pub(crate) fn refresh_edited_prims_live(
     // so the ones that do not split are the prim-path half of the same change and
     // are simply skipped here.
     let mut prims: Vec<String> = Vec::new();
+    let mut behavior_updates: Vec<(String, Option<String>, Option<String>)> = Vec::new();
     for p in info_only {
         let Some((prim, attr)) = p.split_once('.') else {
             continue;
         };
+        if attr == "lunco:behavior" || attr == "lunco:behaviorPath" {
+            // Read value under stage borrow
+            if let Some(stages) = world.get_non_send::<CanonicalStages>() {
+                if let Some(cs) = stages.get(id) {
+                    let view = cs.view();
+                    if let Ok(sp) = SdfPath::new(prim) {
+                        let val = view.scalar::<String>(&sp, "lunco:behavior");
+                        let path_val = view.scalar::<String>(&sp, "lunco:behaviorPath");
+                        behavior_updates.push((prim.to_string(), val, path_val));
+                    }
+                }
+            }
+            continue;
+        }
         if attr.starts_with("xformOp:") {
             continue;
         }
@@ -290,6 +306,19 @@ pub(crate) fn refresh_edited_prims_live(
             prims.push(prim.to_string());
         }
     }
+
+    // Apply any inline behavior XML or path updates directly to the entity
+    for (prim, xml, path) in behavior_updates {
+        if let Some(entity) = find_live_entity(world, id, &prim) {
+            if let Some(xml_text) = xml {
+                world.entity_mut(entity).insert(BehaviorXml(xml_text));
+            }
+            if let Some(path_text) = path {
+                world.entity_mut(entity).insert(BehaviorXmlPath(path_text));
+            }
+        }
+    }
+
     if prims.is_empty() {
         return;
     }

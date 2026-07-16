@@ -171,3 +171,23 @@ fn a_dangling_waypoint_reference_does_not_compile_a_route_to_the_origin() {
         "an unresolved target must not compile — the previous route stands"
     );
 }
+
+#[test]
+fn remove_waypoint_leaf_removes_from_route() {
+    use lunco_autopilot::usd_tree::{append_waypoint_leaf, remove_waypoint_leaf, target_paths};
+    let one = append_waypoint_leaf(None, "/W/B/wp1").unwrap();
+    let two = append_waypoint_leaf(Some(&one), "/W/B/wp2").unwrap();
+    let three = append_waypoint_leaf(Some(&two), "/W/B/wp3").unwrap();
+    
+    assert_eq!(
+        target_paths(&three),
+        vec!["/W/B/wp1".to_string(), "/W/B/wp2".to_string(), "/W/B/wp3".to_string()]
+    );
+
+    let removed = remove_waypoint_leaf(&three, "/W/B/wp2").unwrap();
+    assert_eq!(
+        target_paths(&removed),
+        vec!["/W/B/wp1".to_string(), "/W/B/wp3".to_string()],
+        "removing wp2 should leave only wp1 and wp3"
+    );
+}

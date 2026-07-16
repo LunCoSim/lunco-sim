@@ -446,6 +446,25 @@ pub fn scene_click_ray(
 #[derive(Resource, Default)]
 pub struct TerrainToolActive(pub bool);
 
+/// True while a waypoint's right-click context menu is open.
+///
+/// Read by avatar mouse-look to hold the camera still. `Look` is bound to raw
+/// `MouseMove` (always-on, FPS-style) and is only suppressed once the pointer is
+/// already OVER egui — so without this the camera spins while you travel the cursor
+/// to the menu, which made the menu effectively unusable. Set/cleared by
+/// sandbox-edit's waypoint menu. Deliberately separate from [`WaypointToolActive`]:
+/// during ground-placement you still WANT to look around.
+#[derive(Resource, Default)]
+pub struct WaypointMenuOpen(pub bool);
+
+/// True while the waypoint editor is waiting for a "click the ground to place"
+/// (Move / Insert-after, armed from a waypoint's right-click menu). Read by avatar
+/// possession and entity selection to suppress their click handling — that click
+/// belongs to the placement, not to possess/select. Mirrors [`SpawnToolActive`] and
+/// [`TerrainToolActive`]; set/cleared by sandbox-edit's waypoint systems.
+#[derive(Resource, Default)]
+pub struct WaypointToolActive(pub bool);
+
 /// Per-entity marker: this entity is currently being dragged by the editor
 /// transform gizmo.
 ///

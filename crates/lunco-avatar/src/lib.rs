@@ -574,6 +574,8 @@ impl Plugin for LunCoAvatarPlugin {
         app.init_resource::<lunco_core::DragModeActive>();
         app.init_resource::<lunco_core::SpawnToolActive>();
         app.init_resource::<lunco_core::TerrainToolActive>();
+        app.init_resource::<lunco_core::WaypointToolActive>();
+        app.init_resource::<lunco_core::WaypointMenuOpen>();
         // Populated by `lunco-workbench` when egui is present; guaranteed here so
         // the keyboard gate (`scene_keyboard_active`) has a resource to read on
         // binaries that use the avatar without the workbench (headless server) —
@@ -2174,12 +2176,18 @@ fn capture_avatar_intent(
     mut q_avatar: Query<(Entity, &IntentState, &mut IntentAnalogState), With<Avatar>>,
     world: Option<Res<WorldTime>>,
     egui_focus: Res<lunco_core::EguiFocus>,
+    waypoint_menu_open: Option<Res<lunco_core::WaypointMenuOpen>>,
     mut commands: Commands,
 ) {
     // Mouse look is a POINTER intent: suppress it while egui holds the pointer so
     // right-dragging over a panel doesn't orbit the scene. (Keyboard focus is
     // irrelevant to look — that gate guards movement/Cancel elsewhere.)
-    let pointer_captured = egui_focus.wants_pointer;
+    //
+    // A waypoint context menu counts too, and needs its own flag: `wants_pointer` only
+    // goes true once the cursor is already ON the menu, so the camera would spin all
+    // the way there and the menu could never be reached comfortably.
+    let pointer_captured = egui_focus.wants_pointer
+        || waypoint_menu_open.map(|m| m.0).unwrap_or(false);
 
     for (entity, intent_state, mut analog) in q_avatar.iter_mut() {
         let mut delta = Vec2::ZERO;
@@ -2383,6 +2391,7 @@ pub fn avatar_raycast_possession(
     drag_mode_active: Res<lunco_core::DragModeActive>,
     spawn_tool_active: Res<lunco_core::SpawnToolActive>,
     terrain_tool_active: Res<lunco_core::TerrainToolActive>,
+    waypoint_tool_active: Res<lunco_core::WaypointToolActive>,
     mut commands: Commands,
     q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     q_spacecraft: Query<(Entity, &GlobalTransform, &Spacecraft)>,
@@ -2414,6 +2423,8 @@ pub fn avatar_raycast_possession(
     if spawn_tool_active.0 { return; }
     // Terrain brush armed: clicks sculpt the terrain, don't possess.
     if terrain_tool_active.0 { return; }
+    // Waypoint Move/Insert armed: that click places the waypoint, don't possess.
+    if waypoint_tool_active.0 { return; }
 
     // This observer handles the plain click now (it passed every guard above), so
     // stop the auto-propagation to ancestor entities — otherwise a global

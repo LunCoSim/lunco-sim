@@ -1006,6 +1006,22 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             ));
 
             info!("Successfully initialized FSW for {}", prim_path.path);
+
+            if let Some(xml) = reader
+                .scalar::<String>(&sdf_path, "lunco:behavior")
+                .filter(|s| s.trim_start().starts_with('<'))
+            {
+                commands
+                    .entity(entity)
+                    .try_insert(lunco_autopilot::usd_tree::BehaviorXml(xml));
+            } else if let Some(path) = reader
+                .scalar::<String>(&sdf_path, "lunco:behaviorPath")
+                .filter(|s| s.ends_with(".xml"))
+            {
+                commands
+                    .entity(entity)
+                    .try_insert(lunco_autopilot::usd_tree::BehaviorXmlPath(path));
+            }
         }
 
         // 1b. Mission behaviour: a BT.CPP v4 XML tree, carried by a `LunCoProgram`
@@ -2166,9 +2182,6 @@ fn resolve_behavior_targets(
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
     mut commands: Commands,
 ) {
-    // Only re-resolve when the cast could actually change: a new prim appeared, a
-    // tree was (re)authored, or identity was just minted — the last so the instance
-    // scope below resolves once GIDs exist instead of binding pre-identity.
     if q_trees.is_empty()
         || (q_new_prims.is_empty() && q_changed_xml.is_empty() && q_new_ids.is_empty())
     {
@@ -2177,17 +2190,25 @@ fn resolve_behavior_targets(
     for (vessel, xml, vessel_path) in q_trees.iter() {
         let vessel_instance = instance_key(vessel, &q_provenance, &q_gid, &q_instance_root);
         let mut bindings = lunco_autopilot::usd_tree::TargetBindings::default();
-        for path in lunco_autopilot::usd_tree::target_paths(&xml.0) {
-            // Scope the match to the vessel's OWN instance: a target path names a
-            // prim of THIS spawn, never a same-named prim of another copy. Scene
-            // targets (globally-unique composed paths, instance `None`) are
-            // unaffected — every candidate and the vessel share `None`.
-            if let Some((e, _)) = q_prims.iter().find(|(e, p)| {
-                p.path == path
-                    && p.stage_handle == vessel_path.stage_handle
-                    && instance_key(*e, &q_provenance, &q_gid, &q_instance_root) == vessel_instance
-            }) {
+        let targets = lunco_autopilot::usd_tree::target_paths(&xml.0);
+        debug!("[resolve_behavior_targets] vessel {:?} ({}) has {} targets: {:?}", vessel, vessel_path.path, targets.len(), targets);
+        for path in targets {
+            let found = q_prims.iter().find(|(e, p)| {
+                let match_path = p.path == path;
+                let match_stage = p.stage_handle == vessel_path.stage_handle;
+                let is_behavior = path.contains("/Behaviors/");
+                let inst = instance_key(*e, &q_provenance, &q_gid, &q_instance_root);
+                let match_inst = is_behavior || inst == vessel_instance;
+                if match_path {
+                    debug!("[resolve_behavior_targets] candidate {:?} ({}) match_stage={} match_inst={} (is_behavior={})", e, p.path, match_stage, match_inst, is_behavior);
+                }
+                match_path && match_stage && match_inst
+            });
+            if let Some((e, _)) = found {
+                info!("[resolve_behavior_targets] resolved target {} -> entity {:?}", path, e);
                 bindings.0.insert(path, e);
+            } else {
+                warn!("[resolve_behavior_targets] failed to resolve target {} for vessel {:?}", path, vessel);
             }
         }
         commands.entity(vessel).try_insert(bindings);
