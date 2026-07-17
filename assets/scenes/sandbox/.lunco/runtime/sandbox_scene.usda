@@ -62,6 +62,7 @@ over "SandboxScene"
         <Action ID="drive_to" target="53.018125;0.000000;157.903222" smooth="true"/>
         <Action ID="drive_to" target="21.056119;0.000000;-99.689042" smooth="true"/>
         <Action ID="drive_to" target="-49.505612;0.000000;-97.710403" smooth="true"/>
+        <Action ID="drive_to" target="5.641419;-0.000000;-8.191681"/>
       </Sequence>
     </Repeat>
   </BehaviorTree>
