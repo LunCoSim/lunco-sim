@@ -1,0 +1,162 @@
+#usda 1.0
+(
+    defaultPrim = "CommsWallTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+    doc = "Connectivity occlusion scene: a rover, a base comms mast, and a wall between them. Drive the rover behind the wall and the link drops; drive around the wall and it comes back."
+)
+
+# ── Scene: Comms Wall Test ───────────────────────────────────────────────────
+# The smallest scene that proves connectivity is REAL rather than a distance
+# check. Three facts, and nothing else to distract from them:
+#
+#   Rover ──── Wall ──── Mast
+#   z = +20    z = 0     z = -20
+#
+# The rover and the mast are 40 m apart and in range of each other the whole time.
+# The only thing that changes is whether the wall's box is on the segment between
+# them. So a dropped link can only mean occlusion — not range, not the elevation
+# mask, not a body eclipse.
+#
+# ── What to do with it ───────────────────────────────────────────────────────
+# Drive the rover left or right (±x) and the link returns the moment it clears the
+# wall's 8 m width: line of sight is a GEOMETRY question, so the way out of a
+# radio shadow is to move, not to wait.
+#
+#   sandbox rhai --api 4101 -e 'print(can_reach(find("/CommsWallTest/Rover/Comms"), "base"))'
+#
+# `can_reach` takes the rover's GID and the mast's authored ROLE ("base"); see
+# `assets/scripting/prelude/links.rhai`. The kernel also emits `link.aos` /
+# `link.los` on the edges, which is what a mission script should react to rather
+# than polling.
+#
+# The wall blocks because `props/wall.usda` authors `lunco:occluder` on its Body —
+# NOT because it has a collider. Occlusion is opt-in and separate from collision on
+# purpose (a handrail collides but does not block; a radome may block but not
+# collide). See doc 49 and `LinkOccluder`.
+#
+# No globe, no sky, no DEM: the site anchor below grounds the scene on the Moon so
+# scene-local nodes get a solar pose, but no prim declares a celestial body, so the
+# celestial hierarchy stays dormant (docs 43/49). That keeps this scene fast and
+# keeps the test about occlusion.
+def Xform "CommsWallTest" (
+    kind = "assembly"
+    doc = "Rover, base comms mast, and a wall between them — the minimal proof that authored geometry severs a link."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    uniform bool lunco:spawnable = false
+
+    # Site anchor: the scene origin sits at this geodetic point (ENU axes), which
+    # is what gives every scene-local link node a solar-frame pose. Malapert-ish,
+    # to match the other comms scenes.
+    double lunco:anchor:lat = -85.0
+    double lunco:anchor:lon = 0.0
+    double lunco:anchor:height = 0.0
+    int lunco:anchor:body = 301
+
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
+
+    # Flat plot, ±100 m — enough to drive around the wall.
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.34, 0.32, 0.31)]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </CommsWallTest/PhysicsMaterials/Friction_1_0>
+    }
+
+    # The base station. Its link node is the `Antenna` child at dish height
+    # (class = "base"); see structures/comms_mast.usda.
+    def Xform "Mast" (
+        prepend references = @../../structures/comms_mast.usda@</CommsMast>
+    )
+    {
+        double3 xformOp:translate = (0, 0, -20.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # The wall — 8 m wide, 12 m tall, centred between the two nodes and straddling
+    # the sight-line. `props/wall.usda` carries both the collider and the
+    # `lunco:occluder`; the box's half-extents come from the Body's scale, so it
+    # shadows exactly the volume it draws.
+    #
+    # ── Why 12 m and not the prop's default 4 m ──────────────────────────────
+    # Because the link is not horizontal. The mast lifts its antenna to y = 10.6
+    # (that is what a mast is FOR) while the rover's sits at y = 0.84, so over this
+    # 40 m baseline the sight-line crosses this plane at **y ≈ 5.66** — a 4 m wall
+    # passes clean underneath it and blocks nothing. Verified by running the scene:
+    # the first cut of this file used the prop's default height and the link stayed
+    # up, which looked exactly like a broken occluder and was in fact a wall I had
+    # aimed the link over.
+    #
+    # The override is on `Body`, NOT on this Xform, and that matters: the occluder
+    # box is built from the geometry prim's OWN `Transform` scale, so scaling the
+    # parent would have grown the drawn wall while leaving its shadow at 4×2×0.5.
+    def Xform "Wall" (
+        prepend references = @../../props/wall.usda@</Wall>
+    )
+    {
+        double3 xformOp:translate = (0, 6.0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        over "Body"
+        {
+            double3 xformOp:scale = (8.0, 12.0, 1.0)
+        }
+    }
+
+    # The rover, behind the wall. Its antenna (`Comms`, from the shared component)
+    # is the other link endpoint; class it as "rover" so scripts can address the
+    # role as well as the GID.
+    def Xform "Rover" (
+        prepend references = @../../vessels/rovers/skid_rover.usda@</SkidRover>
+    )
+    {
+        double3 xformOp:translate = (0, 0.5, 20.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        over "Comms"
+        {
+            string lunco:link:class = "rover"
+        }
+    }
+
+    # Low sun from the east, so the wall reads as a solid object on the ground.
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 10000
+        float inputs:angle = 0.53
+        double3 xformOp:rotateXYZ = (-15.0, 90.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+        custom float lunco:shadow:maxDistance = 300.0
+        custom int lunco:shadow:numCascades = 4
+    }
+
+    # Side-on fly-cam: rover, wall and mast all in frame, so the geometry of the
+    # blockage is visible at a glance.
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 2.0, 0.0)
+        double3 xformOp:translate = (45.0, 18.0, 10.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+}

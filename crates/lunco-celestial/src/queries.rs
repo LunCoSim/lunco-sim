@@ -21,7 +21,7 @@ use crate::geo::segment_hits_sphere;
 use crate::ephemeris::EphemerisResource;
 use crate::geo::{solar_position_of_geodetic, GeodeticAnchor};
 use crate::kepler::KeplerOrbit;
-use crate::link::{node_key, LinkNode, LinkState};
+use crate::link::{node_label, LinkNode, LinkState};
 use crate::registry::CelestialBodyRegistry;
 
 /// Read a `[x,y,z]` array or `{x,y,z}` map into a solar-frame [`DVec3`].
@@ -234,13 +234,27 @@ impl ApiQueryProvider for SolarPoseProvider {
 /// plain DATA for scripts to route over. No traversal here: the core stays a pure
 /// cadence-gated geometry sweep, and reachability / preferred-path routing is
 /// authored in rhai over this snapshot **on demand** (at decision time — not per
-/// tick), which is where connectivity policy belongs. Keys are the authored
-/// [`node_key`] (class, else Name).
+/// tick), which is where connectivity policy belongs.
+///
+/// Nodes are identified by **GID** — the same `u64` `find()` returns, the API puts
+/// on the wire, and every other entity-shaped surface here speaks. Names and
+/// classes are labels carried alongside.
 ///
 /// params: none. returns
-/// `{ nodes:[key], adj:{ key:[peer,…] }, edges:[{a,b,range_m,light_time_s}] }`
-/// — `adj` lists only UP (connected) links; `edges` is the deduped undirected set.
+/// ```text
+/// { nodes:  [{ id, name, class }],           # id = GID
+///   adj:    { "<gid>": [gid,…] },            # UP links only; keys stringified (JSON)
+///   edges:  [{ a, b, range_m, light_time_s }],   # deduped, undirected; a/b = GIDs
+///   groups: { class: [gid,…] } }             # authored roles → their members
+/// ```
 /// `light_time_s` is the one-way propagation delay (1.28 s Earth↔Moon).
+///
+/// `groups` is what keeps ROLE routing working now that identity is per-node:
+/// three DSN complexes have three distinct GIDs and all three appear under
+/// `groups["earth"]`, so "can this rover reach Earth?" is a question about the
+/// group, while "what is Madrid's range?" is a question about the node. Keying the
+/// graph on the shared class collapsed the three into one and made only the last
+/// one answerable. See [`LinkPeer::peer`](crate::link::LinkPeer::peer).
 pub struct LinksProvider;
 
 impl ApiQueryProvider for LinksProvider {
@@ -249,29 +263,45 @@ impl ApiQueryProvider for LinksProvider {
     }
 
     fn execute(&self, world: &mut World, _params: &serde_json::Value) -> ApiResponse {
-        let mut nodes: Vec<String> = Vec::new();
+        let mut nodes: Vec<serde_json::Value> = Vec::new();
         let mut adj = serde_json::Map::new();
         let mut edges: Vec<serde_json::Value> = Vec::new();
-        let mut q = world.query::<(Entity, Option<&Name>, &LinkNode, &LinkState)>();
-        for (e, name, node, state) in q.iter(world) {
-            let key = node_key(node.class.as_deref(), name, e);
-            let mut peers: Vec<String> = Vec::new();
+        // class → the GIDs that carry it, so a role stays routable now that
+        // identity is per-node (see the type doc).
+        let mut groups: std::collections::BTreeMap<String, Vec<u64>> = Default::default();
+        let mut q =
+            world.query::<(Entity, Option<&Name>, &LinkNode, &LinkState, &GlobalEntityId)>();
+        for (e, name, node, state, gid) in q.iter(world) {
+            let id = gid.get();
+            let label = node_label(node.class.as_deref(), name, e);
+            if let Some(class) = node.class.as_deref().filter(|c| !c.is_empty()) {
+                groups.entry(class.to_string()).or_default().push(id);
+            }
+            let mut peers: Vec<u64> = Vec::new();
             for peer in state.peers.iter().filter(|p| p.connected) {
                 if !peers.contains(&peer.peer) {
-                    peers.push(peer.peer.clone());
+                    peers.push(peer.peer);
                 }
                 // Dedup the undirected edge (each pair is listed from both sides).
-                if key <= peer.peer {
+                if id <= peer.peer {
                     edges.push(serde_json::json!({
-                        "a": key, "b": peer.peer, "range_m": peer.range_m,
+                        "a": id, "b": peer.peer, "range_m": peer.range_m,
                         "light_time_s": peer.light_time_s,
                     }));
                 }
             }
-            adj.insert(key.clone(), serde_json::json!(peers));
-            nodes.push(key);
+            // JSON object keys are strings, so the adjacency is keyed by the GID
+            // stringified; `links.rhai` converts once, in `neighbours()`.
+            adj.insert(id.to_string(), serde_json::json!(peers));
+            nodes.push(serde_json::json!({
+                "id": id,
+                "name": label,
+                "class": node.class.clone().unwrap_or_default(),
+            }));
         }
-        ApiResponse::ok(serde_json::json!({ "nodes": nodes, "adj": adj, "edges": edges }))
+        ApiResponse::ok(serde_json::json!({
+            "nodes": nodes, "adj": adj, "edges": edges, "groups": groups,
+        }))
     }
 }
 

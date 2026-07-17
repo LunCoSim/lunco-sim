@@ -11,12 +11,17 @@
 //! string lunco:link:class = "relay"             # authored role; the core never reads it
 //! double lunco:link:maxRangeM = 100000000
 //! double lunco:link:minElevationDeg = 5
+//! bool   lunco:occluder = true       # this geometry blocks sight-lines; the box
+//!                                    # is the prim's core UsdGeom `extent`
 //! double lunco:anchor:lat = 40.4314    # + lon/height (shared with terrain
 //! int    lunco:anchor:body = 399       #   georef; body defaults to Moon 301)
 //! int    lunco:orbit:body = 301
 //! double lunco:orbit:semiMajorAxisM = 6540000   # + eccentricity/inclinationDeg/
 //!                                               #   raanDeg/argPeriapsisDeg/
 //!                                               #   meanAnomalyDeg/epochJd
+//! int    lunco:libration:primary = 399          # a libration point of a PAIR:
+//! int    lunco:libration:secondary = 301        #   Earth-Moon L1 (a parked relay)
+//! token  lunco:libration:point = "L1"           #   L1..L5
 //! ```
 //!
 //! A root prim (path depth 1) authoring an anchor is the scene's **site
@@ -25,8 +30,10 @@
 
 use bevy::prelude::*;
 
+use lunco_celestial::frames::LPoint;
 use lunco_celestial::geo::{Geodetic, GeodeticAnchor, SiteAnchor};
 use lunco_celestial::kepler::{KeplerOrbit, KeplerianElements};
+use lunco_celestial::transform::LibrationAnchor;
 use lunco_usd_bevy::UsdRead;
 use openusd::sdf::Path as SdfPath;
 
@@ -118,6 +125,42 @@ pub fn insert_celestial_comms_components<R: UsdRead>(
         );
     }
 
+    // --- Libration point (a relay parked at L1/L2 of a pair) ---
+    //
+    // The third placement kind, beside geodetic (on a body) and Kepler (around one).
+    // Keyed on `primary`, since an L-point is defined by a PAIR — the pair IS the
+    // placement, so a prim naming only one body is not half-placed, it is unplaced.
+    if let Some(primary) = reader.scalar::<i32>(sdf_path, "lunco:libration:primary") {
+        let Some(secondary) = reader.scalar::<i32>(sdf_path, "lunco:libration:secondary") else {
+            warn!(
+                "[usd-celestial] {}: `lunco:libration:primary` without `:secondary` — an \
+                 L-point is a property of a PAIR; prim left unplaced",
+                prim_path_str
+            );
+            return;
+        };
+        // `text()` — the value is an authored `token`, and a token is not a string:
+        // reading it with the wrong accessor returns None and would silently default.
+        let token = reader
+            .text(sdf_path, "lunco:libration:point")
+            .unwrap_or_else(|| "L1".to_string());
+        let Some(point) = LPoint::from_token(&token) else {
+            warn!(
+                "[usd-celestial] {}: `lunco:libration:point = \"{}\"` names no libration point \
+                 (want L1..L5); prim left unplaced rather than silently parked at L1",
+                prim_path_str, token
+            );
+            return;
+        };
+        commands
+            .entity(entity)
+            .try_insert(LibrationAnchor { primary, secondary, point });
+        info!(
+            "[usd-celestial] libration {}: {:?} of pair {}/{}",
+            prim_path_str, point, primary, secondary
+        );
+    }
+
     // --- Solar-pose tracking marker (generic celestial placement) ---
     // A scene-local subsystem prim (a rover-mounted antenna, a panel) opts in so
     // the pose system tracks its solar-frame position; anchored/orbiting prims
@@ -151,5 +194,51 @@ pub fn insert_celestial_comms_components<R: UsdRead>(
                 .unwrap_or(d.min_elevation_deg),
             class: reader.scalar::<String>(sdf_path, "lunco:link:class"),
         });
+    }
+
+    // --- Sight-line occluder (generic geometry, not a comms concept) ---
+    // Marks THIS prim's geometry as opaque to link sight-lines: any link whose
+    // segment crosses its box is severed. Author it on the geometry prim that
+    // actually blocks (the child `Cube`, not its parent `Xform`), so the box
+    // inherits that prim's pose, scale and extent.
+    //
+    // The BOX IS THE PRIM'S `extent` — core UsdGeom, no invented size vocabulary.
+    // Absent (our reader sees only authored attributes, and USD computes extent
+    // for a gprim rather than requiring it), it falls back to the unit-cube
+    // convention: a `Cube` with `size = 1` scaled by S has half-extents S/2, which
+    // is exactly how `props/wall.usda` and the sandbox slabs are written.
+    //
+    // NOT derived from `PhysicsCollisionAPI`: opacity is a material property, not
+    // a collision one (a handrail collides but does not block; a radome may block
+    // but not collide). See `LinkOccluder`.
+    if reader
+        .scalar::<bool>(sdf_path, "lunco:occluder")
+        .unwrap_or(false)
+    {
+        commands
+            .entity(entity)
+            .try_insert(read_occluder_box(reader, sdf_path));
+    }
+}
+
+/// The occluding box from the prim's UsdGeom `extent` (`float3[2]` — min, max),
+/// else the unit-cube default. Both are pre-scale, in the prim's local space; the
+/// kernel applies the `Transform` scale.
+fn read_occluder_box<R: UsdRead>(
+    reader: &R,
+    sdf_path: &SdfPath,
+) -> lunco_celestial::link::LinkOccluder {
+    use bevy::math::DVec3;
+    let extent = reader
+        .scalar::<Vec<f32>>(sdf_path, "extent")
+        .map(|v| v.into_iter().map(|f| f as f64).collect::<Vec<f64>>())
+        .or_else(|| reader.scalar::<Vec<f64>>(sdf_path, "extent"));
+    let Some(v) = extent.filter(|v| v.len() >= 6) else {
+        return lunco_celestial::link::LinkOccluder::default();
+    };
+    let (min, max) = (DVec3::new(v[0], v[1], v[2]), DVec3::new(v[3], v[4], v[5]));
+    lunco_celestial::link::LinkOccluder {
+        half_extents: (max - min) * 0.5,
+        center: (max + min) * 0.5,
     }
 }

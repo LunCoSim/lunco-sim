@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 
 use lunco_core::commands::SessionId;
 use lunco_core::session::{
-    authorize, AuthorityRole, CommandPolicyRegistry, SessionRbac, SessionRegistry, UserSession,
-    AUTHORIZE_HOOK,
+    authorize, authorize_policy, AuthorityRole, CommandPolicyRegistry, ControlPathRegistry,
+    SessionRbac, SessionRegistry, UserSession, AUTHORIZE_HOOK,
 };
 use lunco_hooks::{HookError, HookResult, HookValue, RegisteredHook, ScriptHook};
 
@@ -38,10 +38,12 @@ fn scripted_hook_tightens_an_open_command() {
     let _guard = SERIAL.lock().unwrap();
     let reg = SessionRegistry::default();
     let pol = CommandPolicyRegistry::default();
+    // No blackout declared: these tests are about the hook, not the control path.
+    let paths = ControlPathRegistry::default();
     let rbac = observer_rbac();
 
     // Baseline (no hook): an OPEN command passes.
-    assert!(authorize(&reg, &rbac, &pol, A, "OpenCmd", None).is_ok());
+    assert!(authorize(&reg, &rbac, &pol, &paths, A, "OpenCmd", None).is_ok());
 
     // A hook that denies exactly "SecretCmd", allows everything else.
     struct DenySecret;
@@ -59,13 +61,13 @@ fn scripted_hook_tightens_an_open_command() {
     });
 
     // Tightened: the OPEN "SecretCmd" is now denied…
-    assert!(authorize(&reg, &rbac, &pol, A, "SecretCmd", None).is_err());
+    assert!(authorize(&reg, &rbac, &pol, &paths, A, "SecretCmd", None).is_err());
     // …other commands the hook allows still pass.
-    assert!(authorize(&reg, &rbac, &pol, A, "OpenCmd", None).is_ok());
+    assert!(authorize(&reg, &rbac, &pol, &paths, A, "OpenCmd", None).is_ok());
 
     // Removing the hook restores the exact pre-hook behaviour.
     lunco_hooks::unregister(AUTHORIZE_HOOK);
-    assert!(authorize(&reg, &rbac, &pol, A, "SecretCmd", None).is_ok());
+    assert!(authorize(&reg, &rbac, &pol, &paths, A, "SecretCmd", None).is_ok());
 }
 
 /// A hook that faults denies (fail **closed**) — a broken security policy must
@@ -75,6 +77,8 @@ fn faulting_hook_fails_closed() {
     let _guard = SERIAL.lock().unwrap();
     let reg = SessionRegistry::default();
     let pol = CommandPolicyRegistry::default();
+    // No blackout declared: these tests are about the hook, not the control path.
+    let paths = ControlPathRegistry::default();
     let rbac = observer_rbac();
 
     struct Boom;
@@ -91,10 +95,10 @@ fn faulting_hook_fails_closed() {
     });
 
     assert!(
-        authorize(&reg, &rbac, &pol, A, "OpenCmd", None).is_err(),
+        authorize(&reg, &rbac, &pol, &paths, A, "OpenCmd", None).is_err(),
         "a faulting authorization hook must fail closed",
     );
 
     lunco_hooks::unregister(AUTHORIZE_HOOK);
-    assert!(authorize(&reg, &rbac, &pol, A, "OpenCmd", None).is_ok());
+    assert!(authorize(&reg, &rbac, &pol, &paths, A, "OpenCmd", None).is_ok());
 }

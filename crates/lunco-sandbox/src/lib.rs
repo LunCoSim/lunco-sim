@@ -1843,9 +1843,10 @@ impl Plugin for SandboxCorePlugin {
             // are authored in USD (`LunCoCelestialBodyAPI` — reference
             // `assets/celestial/solar_system.usda`), and every celestial subsystem
             // gates on that authored fact, so the flat sandbox arena gets no sky at
-            // all. The sandbox avatar keeps the FloatingOrigin either way. Comms
-            // connectivity (antenna sight-lines → `comms:*` ports) is always on; it
-            // needs no hierarchy.
+            // all. The sandbox avatar keeps the FloatingOrigin either way. The
+            // generic link kernel (doc 49) is always on — it needs no hierarchy —
+            // and publishes `LinkState` + `link.aos`/`link.los`, NOT `comms:*`
+            // ports (there is no comms subsystem to own them).
             .insert_resource(lunco_celestial::CelestialConfig {
                 spawn_observer_camera: false,
             })

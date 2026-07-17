@@ -12,7 +12,7 @@
 # follows automatically. Author `lunco:link:class` / `maxRangeM` / `minElevationDeg`
 # per instance in the scene (a rover vs a relay vs a ground station).
 def Xform "CommsAntenna" (
-    prepend apiSchemas = ["LunCoCatalogAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoLinkAPI"]
     kind = "component"
 )
 {

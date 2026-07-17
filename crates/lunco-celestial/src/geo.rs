@@ -212,6 +212,75 @@ pub fn segment_hits_sphere(p1: DVec3, p2: DVec3, center: DVec3, radius_m: f64) -
     (closest - center).length() < radius_m - 0.5
 }
 
+/// Segment–box occlusion: does `p1→p2` intersect the oriented box at `center`
+/// with orientation `rot` and `half_extents` (in the box's own frame)? The
+/// standard slab test, run in box-local space.
+///
+/// Generic geometry, exactly like [`segment_hits_sphere`] — this is the primitive
+/// behind "a wall / habitat / lander blocks the sight-line". It deliberately knows
+/// nothing about radio, sensors, or physics colliders: callers supply the box.
+///
+/// All endpoints and extents are f64 in one frame. Both endpoints INSIDE the box
+/// counts as a hit (a node buried in geometry has no line out), which the slab
+/// test gives for free.
+///
+/// # Why hand-rolled
+///
+/// Not for want of a library, and **not** for f64: `avian3d` re-exports
+/// `parry3d_f64`, so `parry::shape::Cuboid::cast_local_ray` is already reachable in
+/// double precision from this crate's dep tree, and would handle the
+/// endpoints-inside case too.
+///
+/// It is for COUPLING. This module is pure, render-free, wasm-safe geometry that the
+/// `Occultation` query and any authored sight-line test compose over; parry's API is
+/// nalgebra `Isometry`/`Point`, which `lunco-celestial` otherwise never names. Taking
+/// it would mean a `DVec3`↔nalgebra conversion at every call and a geometry primitive
+/// that leans on the physics stack to answer a question physics is not being asked —
+/// to save ~25 lines of slab test that the tests below pin exactly.
+///
+/// Revisit if this module ever needs a second shape: two hand-rolled primitives is
+/// where the trade flips.
+pub fn segment_hits_obb(
+    p1: DVec3,
+    p2: DVec3,
+    center: DVec3,
+    rot: DQuat,
+    half_extents: DVec3,
+) -> bool {
+    let he = half_extents.abs();
+    if he.min_element() <= 0.0 {
+        return false; // a degenerate box occludes nothing
+    }
+    // Into box-local space: the box becomes an AABB centred on the origin.
+    let inv = rot.conjugate();
+    let a = inv * (p1 - center);
+    let b = inv * (p2 - center);
+    let d = b - a;
+
+    // Slab test over the segment parameter t ∈ [0, 1].
+    let (mut t_min, mut t_max) = (0.0_f64, 1.0_f64);
+    for axis in 0..3 {
+        let (o, dir, h) = (a[axis], d[axis], he[axis]);
+        if dir.abs() < 1e-12 {
+            // Parallel to this slab — miss unless already between its planes.
+            if o < -h || o > h {
+                return false;
+            }
+            continue;
+        }
+        let (mut lo, mut hi) = ((-h - o) / dir, (h - o) / dir);
+        if lo > hi {
+            std::mem::swap(&mut lo, &mut hi);
+        }
+        t_min = t_min.max(lo);
+        t_max = t_max.min(hi);
+        if t_min > t_max {
+            return false;
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,6 +291,83 @@ mod tests {
             .into_iter()
             .find(|b| b.ephemeris_id == 301)
             .unwrap()
+    }
+
+    // ── segment_hits_obb ─────────────────────────────────────────────────────
+
+    /// A 1×1×1 box (half-extents 0.5) at the origin, unrotated.
+    fn unit_box(p1: DVec3, p2: DVec3) -> bool {
+        segment_hits_obb(p1, p2, DVec3::ZERO, DQuat::IDENTITY, DVec3::splat(0.5))
+    }
+
+    #[test]
+    fn obb_hit_and_miss() {
+        assert!(unit_box(DVec3::new(-5.0, 0.0, 0.0), DVec3::new(5.0, 0.0, 0.0)), "straight through");
+        assert!(!unit_box(DVec3::new(-5.0, 9.0, 0.0), DVec3::new(5.0, 9.0, 0.0)), "passes well above");
+        assert!(unit_box(DVec3::ZERO, DVec3::new(5.0, 0.0, 0.0)), "starts inside");
+        assert!(unit_box(DVec3::splat(-0.1), DVec3::splat(0.1)), "entirely inside");
+    }
+
+    /// The segment is FINITE: geometry behind an endpoint does not occlude. A ray
+    /// test here would sever every link with anything anywhere along the bearing.
+    #[test]
+    fn obb_ignores_geometry_beyond_the_segment() {
+        // The box sits at the origin; the segment lives entirely at x ≥ 5.
+        assert!(
+            !unit_box(DVec3::new(5.0, 0.0, 0.0), DVec3::new(10.0, 0.0, 0.0)),
+            "a box behind both endpoints must not occlude"
+        );
+        // …and the same segment reversed.
+        assert!(!unit_box(DVec3::new(10.0, 0.0, 0.0), DVec3::new(5.0, 0.0, 0.0)));
+    }
+
+    /// Rotation is applied — the box is oriented, not an AABB. A long thin slab
+    /// yawed 90° swaps which axis it spans.
+    #[test]
+    fn obb_applies_rotation() {
+        let he = DVec3::new(0.25, 1.0, 4.0); // thin in X, long in Z
+        let seg = (DVec3::new(0.0, 0.0, 3.0), DVec3::new(6.0, 0.0, 3.0)); // along X at z = 3
+
+        // Unrotated: the slab spans z ∈ [-4, 4] and x ∈ [-0.25, 0.25] → the
+        // segment starts at x = 0 (inside the slab) → hit.
+        assert!(segment_hits_obb(seg.0, seg.1, DVec3::ZERO, DQuat::IDENTITY, he));
+
+        // Yawed 90°: X and Z extents swap, so the slab now spans x ∈ [-4, 4],
+        // z ∈ [-0.25, 0.25] — and z = 3 is well outside → miss.
+        let yaw = DQuat::from_rotation_y(std::f64::consts::FRAC_PI_2);
+        assert!(
+            !segment_hits_obb(seg.0, seg.1, DVec3::ZERO, yaw, he),
+            "a yawed slab must be tested as an OBB, not by its axis-aligned bounds"
+        );
+    }
+
+    #[test]
+    fn obb_degenerate_box_occludes_nothing() {
+        let seg = (DVec3::new(-5.0, 0.0, 0.0), DVec3::new(5.0, 0.0, 0.0));
+        assert!(!segment_hits_obb(seg.0, seg.1, DVec3::ZERO, DQuat::IDENTITY, DVec3::ZERO));
+        assert!(!segment_hits_obb(
+            seg.0,
+            seg.1,
+            DVec3::ZERO,
+            DQuat::IDENTITY,
+            DVec3::new(1.0, 0.0, 1.0),
+        ));
+    }
+
+    /// Translated + rotated: the caller supplies grid-absolute poses, so the test
+    /// has to be right away from the origin too.
+    #[test]
+    fn obb_off_origin() {
+        let center = DVec3::new(1_737_400.0, 250.0, -900.0); // lunar-scale coordinate
+        let he = DVec3::new(4.0, 2.0, 0.5);
+        let rot = DQuat::from_rotation_y(0.3);
+        let through = (center + DVec3::new(0.0, 0.0, -20.0), center + DVec3::new(0.0, 0.0, 20.0));
+        let past = (
+            center + DVec3::new(0.0, 40.0, -20.0),
+            center + DVec3::new(0.0, 40.0, 20.0),
+        );
+        assert!(segment_hits_obb(through.0, through.1, center, rot, he), "through the box");
+        assert!(!segment_hits_obb(past.0, past.1, center, rot, he), "40 m above the box");
     }
 
     #[test]

@@ -386,7 +386,7 @@ pub fn build_world_engine() -> Engine {
     // register_hook(id, entry, src) -> bool — plug a rhai rule into ANY Rust
     // policy seam (lunco-hooks) from a scenario: merge policies, RBAC,
     // control-authority takeover, comms link availability
-    // ("comms.link.connected"), … Replaces the previously-registered hook for
+    // ("link.connected"), … Replaces the previously-registered hook for
     // that id (the built-in `assets/scripting/policy/*` rules are just earlier
     // registrations), so a scenario re-shapes policy live, no rebuild — the
     // doc-37 §8 "policy = rhai" surface. `src` must define `fn <entry>(...)`;

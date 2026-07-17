@@ -1136,6 +1136,59 @@ pub const CONTROL_AUTHORITY_HOOK: &str = "control.authority.take";
 /// Authored in `assets/scripting/policy/boot.rhai`; hot-rewritable by this id.
 pub const BOOT_HOOK: &str = "boot.entry";
 
+/// Which entities the **control path is currently down** to: commands issued now
+/// would not reach them.
+///
+/// Generic on purpose, and the name says only what is true: *the path is down*. It
+/// is NOT a comms concept and there is no comms vocabulary here (doc 49 §1) — a
+/// radio blackout, a jammer, a dead receiver, a severed harness or an OBC fault all
+/// mean the same thing to a command, and `lunco-core` cannot depend on
+/// `lunco-celestial` to learn about any of them anyway.
+///
+/// **The core never decides this.** Nothing in Rust concludes "no link ⇒ no
+/// control": that is a mission's call, and a store-and-forward or delayed-command
+/// mission would disagree. Whoever knows the domain sets it — the Space School
+/// scenario reads real `LinkState` via `can_reach` and calls [`SetControlPath`],
+/// which is exactly doc 49's split (kernel = geometry, script = meaning) applied one
+/// layer up.
+///
+/// Read into the [`AUTHORIZE_HOOK`] ctx as `target_control_path_down`, so an
+/// authored policy can refuse commands to an unreachable vessel. Keyed by
+/// [`crate::GlobalEntityId`] (raw), like [`SessionRegistry`] — a gid outlives the
+/// `Entity` and is what the gate already speaks.
+///
+/// The verb that writes it is `SetControlPath`, in `lunco-controller` (beside
+/// `drive_from_bindings`, the path it gates): the `#[Command]` macro expands to
+/// `lunco_core::…` paths, so a command cannot be declared inside this crate.
+#[derive(Resource, Debug, Clone, Default)]
+pub struct ControlPathRegistry {
+    down: std::collections::HashSet<u64>,
+}
+
+impl ControlPathRegistry {
+    /// Mark the control path to `gid` down (`true`) or restored (`false`).
+    pub fn set(&mut self, gid: u64, down: bool) {
+        if down {
+            self.down.insert(gid);
+        } else {
+            self.down.remove(&gid);
+        }
+    }
+
+    /// Is the control path to `gid` down? Unknown ⇒ `false`: a vessel nobody has
+    /// said anything about is reachable, so this resource existing changes nothing
+    /// until a mission uses it.
+    pub fn is_down(&self, gid: u64) -> bool {
+        self.down.contains(&gid)
+    }
+
+    /// Forget every blackout — e.g. on scene teardown, so a stale one cannot
+    /// silently disable a vessel in the next scene.
+    pub fn clear(&mut self) {
+        self.down.clear();
+    }
+}
+
 /// Per-command authorization policy, resolved by [`authorize`].
 ///
 /// The registry is the single seam through which RBAC is introduced later
@@ -1214,6 +1267,7 @@ pub fn authorize(
     reg: &SessionRegistry,
     rbac: &SessionRbac,
     policies: &CommandPolicyRegistry,
+    paths: &ControlPathRegistry,
     origin: SessionId,
     type_name: &str,
     target_gid: Option<u64>,
@@ -1257,14 +1311,26 @@ pub fn authorize(
     // The compiled floor allowed this. If a scripted authorization policy is
     // registered ([`AUTHORIZE_HOOK`], "policy→rhai"), it may FURTHER restrict —
     // never grant. Absent hook ⇒ no-op (identical to the pre-hook gate).
-    authz_hook_gate(rbac, origin, type_name, target_gid, owns_target)
+    authorize_policy(rbac, paths, origin, type_name, target_gid, owns_target)
 }
 
-/// Consult the optional scripted authorization hook ([`AUTHORIZE_HOOK`]). Only
-/// reached once the built-in gate already allowed, so the hook can only tighten.
+/// Consult the optional scripted authorization hook ([`AUTHORIZE_HOOK`]) ALONE,
+/// without the role/ownership floor [`authorize`] applies first.
+///
+/// **Why this is public and separate.** The floor is a *wire* concern: it decides
+/// whether a remote session may touch a vessel it may not own. The LOCAL keyboard
+/// path has deliberately looser rules — `drive_from_bindings` drives an unpossessed
+/// vessel (owner `None`), and the free avatar self-drives an entity with no gid at
+/// all — so putting the full [`authorize`] on it would deny both and break ordinary
+/// local play. What the local path *must* respect is the authored POLICY, so that a
+/// rule like "refuse tele-op while the control path is down" binds every command
+/// route rather than only the ones that happen to cross the network.
+///
+/// Only reached once any applicable floor has allowed, so the hook can only tighten.
 /// Fails **closed** (a registered hook that faults or returns a non-bool denies).
-fn authz_hook_gate(
+pub fn authorize_policy(
     rbac: &SessionRbac,
+    paths: &ControlPathRegistry,
     origin: SessionId,
     type_name: &str,
     target_gid: Option<u64>,
@@ -1282,6 +1348,15 @@ fn authz_hook_gate(
         ("target", HookValue::Int(target_gid.map(|g| g as i64).unwrap_or(-1))),
         ("owns_target", HookValue::Bool(owns_target)),
         ("role", HookValue::str(role)),
+        // Precomputed FACT, not a lookup the policy could do itself: the hook engine
+        // is a bare `Engine::new()` with no world bridge (no `find`/`query`), which
+        // is what keeps policies pure and deterministic. So a fact a policy needs
+        // must arrive in the ctx — the same reason `link.rs` passes `terrain_blocked`
+        // in rather than letting the verdict march the terrain itself.
+        (
+            "target_control_path_down",
+            HookValue::Bool(target_gid.is_some_and(|g| paths.is_down(g))),
+        ),
     ]);
     match lunco_hooks::invoke(AUTHORIZE_HOOK, &[ctx]) {
         // No hook registered → unchanged behaviour.
@@ -1342,6 +1417,187 @@ mod tests {
     const B: SessionId = SessionId(2);
     const R1: u64 = 0xA1;
     const R2: u64 = 0xB2;
+
+    // ── The control-path fact and the policy that reads it ───────────────────
+    //
+    // `lunco_hooks` is a PROCESS-GLOBAL registry and `authorize` consults it on
+    // every call, so a hook registered by one test is visible to every other test
+    // running in parallel. Serialise on the registry, not just on each other.
+    fn hook_lock() -> std::sync::MutexGuard<'static, ()> {
+        static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        L.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// A stand-in for the Summer Space School's `sim/tutorials/teleop_policy.rhai`
+    /// (authored in that TWIN, not this repo): refuse `SetPorts` to a vessel whose
+    /// control path is down, exempt autonomy, allow everything else.
+    struct TeleopPolicy;
+    impl lunco_hooks::ScriptHook for TeleopPolicy {
+        fn invoke(&self, args: &[lunco_hooks::HookValue]) -> lunco_hooks::HookResult {
+            let ctx = args.first().cloned().unwrap_or(lunco_hooks::HookValue::Unit);
+            let get = |k: &str| ctx.get(k).cloned().unwrap_or(lunco_hooks::HookValue::Unit);
+            if get("capability").as_str() != Some("SetPorts") {
+                return Ok(lunco_hooks::HookValue::Bool(true));
+            }
+            if get("role").as_str() == Some("AiAgent") {
+                return Ok(lunco_hooks::HookValue::Bool(true));
+            }
+            let down = get("target_control_path_down").as_bool().unwrap_or(false);
+            Ok(lunco_hooks::HookValue::Bool(!down))
+        }
+    }
+
+    fn owner_of_r1() -> (SessionRegistry, SessionRbac, CommandPolicyRegistry) {
+        let mut reg = SessionRegistry::default();
+        reg.claim(A, R1).unwrap();
+        let mut rbac = SessionRbac::default();
+        rbac.sessions.insert(A.0, UserSession {
+            session_id: A,
+            username: "Player A".into(),
+            role: AuthorityRole::Operator,
+            authenticated: true,
+            token: Some("srv-token-a".into()),
+        });
+        (reg, rbac, CommandPolicyRegistry::default())
+    }
+
+    /// A blackout with NO policy registered changes nothing. The fact is inert on
+    /// its own — refusing is a policy's decision, never the core's.
+    #[test]
+    fn control_path_down_alone_refuses_nothing() {
+        let _g = hook_lock();
+        lunco_hooks::unregister(AUTHORIZE_HOOK);
+        let (reg, rbac, pol) = owner_of_r1();
+        let mut paths = ControlPathRegistry::default();
+        paths.set(R1, true);
+
+        assert!(
+            authorize(&reg, &rbac, &pol, &paths, A, "SetPorts", Some(R1)).is_ok(),
+            "no policy registered ⇒ the gate is unchanged, blackout or not"
+        );
+    }
+
+    /// The school policy's actual job: refuse the human's drive in a blackout, and
+    /// only the drive.
+    #[test]
+    fn policy_refuses_drive_while_control_path_is_down() {
+        let _g = hook_lock();
+        let (mut reg, rbac, pol) = owner_of_r1();
+        // A owns R2 as well. The per-target assertion below needs a SECOND vessel A
+        // may legitimately drive — an unowned one would be refused by the ownership
+        // floor before the policy is ever consulted, and the test would pass for
+        // entirely the wrong reason.
+        reg.claim(A, R2).unwrap();
+        lunco_hooks::register(lunco_hooks::RegisteredHook {
+            id: AUTHORIZE_HOOK.to_string(),
+            backend: "rust".into(),
+            deterministic: true,
+            hook: std::sync::Arc::new(TeleopPolicy),
+        });
+
+        // Link up: the owner drives.
+        let up = ControlPathRegistry::default();
+        let drive_up = authorize(&reg, &rbac, &pol, &up, A, "SetPorts", Some(R1));
+
+        // Link down: the same owner, same vessel, refused.
+        let mut down = ControlPathRegistry::default();
+        down.set(R1, true);
+        let drive_down = authorize(&reg, &rbac, &pol, &down, A, "SetPorts", Some(R1));
+        // …but only DRIVING is refused — a blackout must not lock a student out of
+        // possessing, looking around, or the tutorial's own commands.
+        let possess_down = authorize(&reg, &rbac, &pol, &down, A, "PossessVessel", Some(R1));
+        // And a DIFFERENT vessel is unaffected: the fact is per-target.
+        let other_down = authorize(&reg, &rbac, &pol, &down, A, "SetPorts", Some(R2));
+
+        lunco_hooks::unregister(AUTHORIZE_HOOK);
+
+        assert!(drive_up.is_ok(), "link up ⇒ the owner drives");
+        assert!(drive_down.is_err(), "link down ⇒ tele-op is refused");
+        assert!(possess_down.is_ok(), "a blackout refuses driving, not everything");
+        assert!(other_down.is_ok(), "the blackout is per-target, not global");
+    }
+
+    /// `authorize_policy` is what the LOCAL keyboard path calls. It must apply the
+    /// same policy WITHOUT the ownership floor — `drive_from_bindings` legitimately
+    /// drives an unpossessed vessel, and inheriting the floor would break local play.
+    #[test]
+    fn local_gate_applies_policy_without_the_ownership_floor() {
+        let _g = hook_lock();
+        let (reg, rbac, pol) = owner_of_r1();
+        lunco_hooks::register(lunco_hooks::RegisteredHook {
+            id: AUTHORIZE_HOOK.to_string(),
+            backend: "rust".into(),
+            deterministic: true,
+            hook: std::sync::Arc::new(TeleopPolicy),
+        });
+
+        let mut down = ControlPathRegistry::default();
+        down.set(R2, true);
+
+        // R2 is UNOWNED. The full gate refuses it on ownership alone...
+        let full = authorize(&reg, &rbac, &pol, &down, A, "SetPorts", Some(R2));
+        // ...but the local path must still be able to drive an unpossessed vessel,
+        // so it consults the policy only — which here refuses R2 for the blackout,
+        // not for the ownership.
+        let local_blacked = authorize_policy(&rbac, &down, A, "SetPorts", Some(R2), false);
+        let clear = ControlPathRegistry::default();
+        let local_clear = authorize_policy(&rbac, &clear, A, "SetPorts", Some(R2), false);
+
+        lunco_hooks::unregister(AUTHORIZE_HOOK);
+
+        assert!(full.is_err(), "the wire floor refuses an unowned target");
+        assert!(local_blacked.is_err(), "the local path still honours the policy");
+        assert!(
+            local_clear.is_ok(),
+            "…and with no blackout the local path drives an unpossessed vessel — \
+             applying the ownership floor here would have broken ordinary local play"
+        );
+    }
+
+    /// Autonomy keeps driving in a blackout. That is the lesson — the rover is on
+    /// its own, not disabled.
+    #[test]
+    fn policy_exempts_autonomy_from_the_blackout() {
+        let _g = hook_lock();
+        let mut reg = SessionRegistry::default();
+        reg.claim(B, R1).unwrap();
+        let mut rbac = SessionRbac::default();
+        rbac.sessions.insert(B.0, UserSession {
+            session_id: B,
+            username: "autopilot".into(),
+            role: AuthorityRole::AiAgent,
+            authenticated: true,
+            token: Some("srv-token-b".into()),
+        });
+        let pol = CommandPolicyRegistry::default();
+        lunco_hooks::register(lunco_hooks::RegisteredHook {
+            id: AUTHORIZE_HOOK.to_string(),
+            backend: "rust".into(),
+            deterministic: true,
+            hook: std::sync::Arc::new(TeleopPolicy),
+        });
+
+        let mut down = ControlPathRegistry::default();
+        down.set(R1, true);
+        let ai_drive = authorize(&reg, &rbac, &pol, &down, B, "SetPorts", Some(R1));
+
+        lunco_hooks::unregister(AUTHORIZE_HOOK);
+        assert!(ai_drive.is_ok(), "an AiAgent drives through a blackout");
+    }
+
+    #[test]
+    fn control_path_registry_is_per_gid_and_clearable() {
+        let mut paths = ControlPathRegistry::default();
+        assert!(!paths.is_down(R1), "unknown ⇒ reachable, so the resource is inert by default");
+        paths.set(R1, true);
+        assert!(paths.is_down(R1));
+        assert!(!paths.is_down(R2));
+        paths.set(R1, false);
+        assert!(!paths.is_down(R1), "restoring must actually clear it");
+        paths.set(R1, true);
+        paths.clear();
+        assert!(!paths.is_down(R1), "clear() drops every blackout (scene teardown)");
+    }
 
     #[test]
     fn default_policy_is_exclusive() {
@@ -1660,6 +1916,8 @@ mod tests {
     #[test]
     fn authorize_drive_requires_ownership() {
         let pol = CommandPolicyRegistry::default();
+        // No mission has declared a blackout: the gate must behave exactly as before.
+        let paths = ControlPathRegistry::default();
         let mut reg = SessionRegistry::default();
         reg.claim(A, R1).unwrap();
         let mut rbac = SessionRbac::default();
@@ -1679,16 +1937,16 @@ mod tests {
         });
 
         // The owner may issue control commands.
-        assert!(authorize(&reg, &rbac, &pol, A, "SetPorts", Some(R1)).is_ok());
-        assert!(authorize(&reg, &rbac, &pol, A, "SetPorts", Some(R1)).is_ok());
+        assert!(authorize(&reg, &rbac, &pol, &paths, A, "SetPorts", Some(R1)).is_ok());
+        assert!(authorize(&reg, &rbac, &pol, &paths, A, "SetPorts", Some(R1)).is_ok());
         // A non-owner may not.
-        assert!(authorize(&reg, &rbac, &pol, B, "SetPorts", Some(R1)).is_err());
+        assert!(authorize(&reg, &rbac, &pol, &paths, B, "SetPorts", Some(R1)).is_err());
         // A control command with no target is rejected.
-        assert!(authorize(&reg, &rbac, &pol, A, "SetPorts", None).is_err());
+        assert!(authorize(&reg, &rbac, &pol, &paths, A, "SetPorts", None).is_err());
         // Possession + structural commands are always allowed (arbitration is in
         // `claim`, not the authority gate).
-        assert!(authorize(&reg, &rbac, &pol, B, "PossessVessel", Some(R1)).is_ok());
-        assert!(authorize(&reg, &rbac, &pol, B, "SpawnEntity", None).is_ok());
+        assert!(authorize(&reg, &rbac, &pol, &paths, B, "PossessVessel", Some(R1)).is_ok());
+        assert!(authorize(&reg, &rbac, &pol, &paths, B, "SpawnEntity", None).is_ok());
 
         // An authenticated Observer that *owns* the rover may still drive it:
         // ownership is the gate, not the Operator role. (A client connects as
@@ -1704,10 +1962,10 @@ mod tests {
             });
         }
         // Owner-Observer A may drive what it owns, and possess/structural commands.
-        assert!(authorize(&reg, &observer_rbac, &pol, A, "SetPorts", Some(R1)).is_ok());
-        assert!(authorize(&reg, &observer_rbac, &pol, A, "PossessVessel", Some(R1)).is_ok());
+        assert!(authorize(&reg, &observer_rbac, &pol, &paths, A, "SetPorts", Some(R1)).is_ok());
+        assert!(authorize(&reg, &observer_rbac, &pol, &paths, A, "PossessVessel", Some(R1)).is_ok());
         // An authenticated non-owner is still rejected by the ownership gate.
-        assert!(authorize(&reg, &observer_rbac, &pol, B, "SetPorts", Some(R1)).is_err());
+        assert!(authorize(&reg, &observer_rbac, &pol, &paths, B, "SetPorts", Some(R1)).is_err());
 
         // The authenticated FLOOR remains: an UNauthenticated session is rejected
         // even for an owned entity (RBAC infra stays wired, just not role-gated).
@@ -1719,7 +1977,7 @@ mod tests {
             authenticated: false,
             token: None,
         });
-        assert!(authorize(&reg, &unauth_rbac, &pol, A, "SetPorts", Some(R1)).is_err());
+        assert!(authorize(&reg, &unauth_rbac, &pol, &paths, A, "SetPorts", Some(R1)).is_err());
 
         // M2: a session that is `authenticated` but carries NO server-issued token
         // is rejected even for an entity it owns. This is the gate that stops a
@@ -1733,8 +1991,8 @@ mod tests {
             authenticated: true,
             token: None,
         });
-        assert!(authorize(&reg, &tokenless_rbac, &pol, A, "SetPorts", Some(R1)).is_err());
-        assert!(authorize(&reg, &tokenless_rbac, &pol, A, "PossessVessel", Some(R1)).is_err());
+        assert!(authorize(&reg, &tokenless_rbac, &pol, &paths, A, "SetPorts", Some(R1)).is_err());
+        assert!(authorize(&reg, &tokenless_rbac, &pol, &paths, A, "PossessVessel", Some(R1)).is_err());
     }
 
     #[test]
@@ -1743,6 +2001,8 @@ mod tests {
         // to OPEN, so any authenticated Observer may issue it with no target. This
         // keeps "everything works by default" true while the gate is data-driven.
         let pol = CommandPolicyRegistry::default();
+        // No mission has declared a blackout: the gate must behave exactly as before.
+        let paths = ControlPathRegistry::default();
         assert_eq!(pol.policy_for("SomeBrandNewCommand"), CommandPolicy::OPEN);
 
         let reg = SessionRegistry::default();
@@ -1754,7 +2014,7 @@ mod tests {
             authenticated: true,
             token: Some("srv-token-a".to_string()),
         });
-        assert!(authorize(&reg, &rbac, &pol, A, "SomeBrandNewCommand", None).is_ok());
+        assert!(authorize(&reg, &rbac, &pol, &paths, A, "SomeBrandNewCommand", None).is_ok());
     }
 
     #[test]
@@ -1762,6 +2022,7 @@ mod tests {
         // The RBAC switch: an operator locks `SpawnEntity` down to `Operator` at
         // runtime. The gate code is unchanged — only data in the registry differs.
         let mut pol = CommandPolicyRegistry::default();
+        let paths = ControlPathRegistry::default();
         pol.set_override(
             "SpawnEntity",
             CommandPolicy { min_role: AuthorityRole::Operator, ownership_gated: false },
@@ -1785,15 +2046,15 @@ mod tests {
         });
 
         // Observer is rejected for the tightened command…
-        assert!(authorize(&reg, &rbac, &pol, A, "SpawnEntity", None).is_err());
+        assert!(authorize(&reg, &rbac, &pol, &paths, A, "SpawnEntity", None).is_err());
         // …a still-open command (PossessVessel) is unaffected…
-        assert!(authorize(&reg, &rbac, &pol, A, "PossessVessel", None).is_ok());
+        assert!(authorize(&reg, &rbac, &pol, &paths, A, "PossessVessel", None).is_ok());
         // …and an Operator passes the tightened command.
-        assert!(authorize(&reg, &rbac, &pol, B, "SpawnEntity", None).is_ok());
+        assert!(authorize(&reg, &rbac, &pol, &paths, B, "SpawnEntity", None).is_ok());
 
         // Clearing the override restores open-by-default.
         pol.clear_override("SpawnEntity");
-        assert!(authorize(&reg, &rbac, &pol, A, "SpawnEntity", None).is_ok());
+        assert!(authorize(&reg, &rbac, &pol, &paths, A, "SpawnEntity", None).is_ok());
     }
     // NOTE: the scripted-authorization-hook test lives in
     // `tests/authz_hook.rs` (its own test binary), because it registers under the

@@ -7347,6 +7347,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "big_space",
+ "lunco-celestial",
  "lunco-core",
  "lunco-cosim",
  "lunco-environment",
@@ -7756,6 +7757,7 @@ dependencies = [
  "bevy_egui",
  "big_space",
  "lunco-assets",
+ "lunco-celestial",
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",

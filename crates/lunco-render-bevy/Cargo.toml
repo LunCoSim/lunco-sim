@@ -43,6 +43,12 @@ lunco-core = { path = "../lunco-core" }
 # is render-free and never names `Gizmos`); the BEAM is not. `sensor_beams.rs` draws
 # it from the sensor's already-stored result, re-casting nothing.
 lunco-cosim = { path = "../lunco-cosim" }
+# `LinkState` — the connectivity KERNEL is simulation (it must run headless, so
+# `lunco-celestial` is render-free and its Cargo.toml guards against wgpu); the
+# LINES are not. `link_viz.rs` draws them from the kernel's published state,
+# solving nothing. `default-features = false` keeps celestial's optional `ui`
+# feature (egui/workbench) out of this crate's graph.
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
 # Ordering only: the beam draw must run AFTER `BigSpaceSystems::PropagateHighPrecision`
 # so it reads the same final `GlobalTransform` the renderer uses for the lander mesh.
 # big_space is a transform crate — it pulls no wgpu, so it stays clear of the GPU boundary.

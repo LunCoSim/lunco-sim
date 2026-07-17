@@ -24,6 +24,7 @@ use crate::geo::{solar_position_of_geodetic, solar_tangent_frame, GeodeticAnchor
 use crate::kepler::KeplerOrbit;
 use crate::link::LinkNode;
 use crate::registry::CelestialBodyRegistry;
+use crate::transform::{FrameTree, LibrationAnchor};
 
 /// Opt-in marker: track this entity's solar pose even though it has no anchor or
 /// orbit (a scene-local prim positioned through the site frame — e.g. an antenna
@@ -55,10 +56,16 @@ pub fn update_solar_poses(
     ephemeris: Option<Res<EphemerisResource>>,
     registry: Option<Res<CelestialBodyRegistry>>,
     q_tracked: Query<
-        (Entity, Option<&GeodeticAnchor>, Option<&KeplerOrbit>),
+        (
+            Entity,
+            Option<&GeodeticAnchor>,
+            Option<&KeplerOrbit>,
+            Option<&LibrationAnchor>,
+        ),
         Or<(
             With<GeodeticAnchor>,
             With<KeplerOrbit>,
+            With<LibrationAnchor>,
             With<SolarTracked>,
             With<LinkNode>,
         )>,
@@ -90,7 +97,7 @@ pub fn update_solar_poses(
         ))
     });
 
-    for (entity, anchor, orbit) in q_tracked.iter() {
+    for (entity, anchor, orbit, libration) in q_tracked.iter() {
         // (solar pos, up, body) per placement kind; a diverging branch skips.
         let (pos, up, body) = if let Some(a) = anchor {
             let Some(desc) = body_of(a.body) else { continue };
@@ -105,6 +112,19 @@ pub fn update_solar_poses(
                 let Some(center) = body_center(o.body) else { continue };
                 (center.raw() + o.elements.position_bevy_m(desc.gm, jd), DVec3::ZERO, o.body)
             }
+        } else if let Some(l) = libration {
+            // A libration point of a PAIR — Earth–Moon L1/L2 for a relay. Resolved by
+            // the CR3BP solver in `transform`, which needs both bodies' positions and
+            // masses; `None` if either is missing, and we skip rather than invent one.
+            let tree = FrameTree::new(jd, &registry, ephemeris.provider.as_ref());
+            let Some(pos) = tree.libration_in_solar(l.primary, l.secondary, l.point) else {
+                continue;
+            };
+            // `up` is ZERO like an orbit: an L-point has no local horizon, so an
+            // elevation mask against it is meaningless. `body` is the SECONDARY — the
+            // body the point is parked near, which is what a range/occultation test
+            // wants to know about.
+            (pos.raw(), DVec3::ZERO, l.secondary)
         } else if let Some((body, frame)) = &site {
             let Ok((cell, tf)) = q_spatial.get(entity) else { continue };
             let cell = cell.copied().unwrap_or_default();

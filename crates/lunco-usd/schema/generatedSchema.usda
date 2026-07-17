@@ -324,6 +324,48 @@ class "LunCoCatalogAPI" (
     )
 }
 
+class "LunCoLinkAPI" (
+    doc = """A connectivity endpoint — a node in the generic link graph (doc 49). The
+    kernel computes the geometry between pairs; what it MEANS is authored policy over
+    the `link.connected` hook, not vocabulary here. Placement comes from
+    `lunco:anchor:*` (station), `lunco:orbit:*` (relay), or the site frame (a
+    rover-mounted antenna). Identity is the prim's GID, never `class`."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    uniform bool lunco:linkNode = false (
+        doc = "Marks this prim a link endpoint."
+    )
+    string lunco:link:class = "" (
+        doc = "Authored ROLE (relay/earth/rover/base). Groups nodes; never identifies one. The core does not interpret it."
+    )
+    double lunco:link:maxRangeM = 1e12 (
+        doc = "Hard geometric range cutoff, metres. Geometry, not a link budget."
+    )
+    double lunco:link:minElevationDeg = -90.0 (
+        doc = "Elevation mask above this node's local horizon, degrees."
+    )
+}
+
+class "LunCoOccluderAPI" (
+    doc = """Geometry that BLOCKS sight-lines: a link whose segment crosses its box is
+    severed. Generic — not a comms concept. Separate from `PhysicsCollisionAPI` on
+    purpose: opacity is a material property, not a collision one. The box is the prim's
+    core UsdGeom `extent` (no private size vocabulary); with none authored it falls back
+    to the unit-cube convention, scale/2. Apply to the geometry prim that blocks, not
+    its parent Xform."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    uniform bool lunco:occluder = false (
+        doc = "Marks this prim's geometry opaque to link sight-lines."
+    )
+}
+
 class "LunCoTerrainEditAPI" (
     inherits = </APISchemaBase>
     customData = {

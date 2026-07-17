@@ -63,6 +63,12 @@ lunco-fsw = { path = "../lunco-fsw" }
 # entity-pipeline tests must register `Assets<ShaderMaterial>` or
 # `process_usd_sim_prims` defers every wheel forever (no WheelRaycast).
 lunco-materials = { path = "../lunco-materials" }
+# `LinkNode` / `LinkOccluder` — `tests/link_occlusion.rs` asserts that the authored
+# comms scene still produces the components the link kernel solves over. The kernel's
+# own geometry is unit-tested in `lunco-celestial`; this guards the USD seam, which is
+# where every connectivity gap actually shipped. `default-features = false` keeps
+# celestial's optional `ui` feature out of the dev graph.
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
 tempfile = { workspace = true }
 
 [lints]

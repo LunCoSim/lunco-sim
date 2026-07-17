@@ -70,6 +70,13 @@ pub struct TutorialMeta {
     /// (`MISSION_COMPLETE`). Data, not code. `None` = the chain ends here.
     #[serde(default)]
     pub next: Option<String>,
+    /// Which twin contributed this lesson, if any. `None` = bundled with the app.
+    ///
+    /// Provenance, set at registration — never authored, hence `skip`. It is what
+    /// lets [`TutorialRegistry::retain_bundled`] unload the previous twin's
+    /// curriculum without knowing (or caring) what track it called itself.
+    #[serde(skip)]
+    pub from_twin: Option<lunco_workspace::TwinId>,
 }
 
 /// The catalog of registered tutorials. Empty until an app registers its own via
@@ -86,6 +93,18 @@ impl TutorialRegistry {
         if !self.tutorials.iter().any(|t| t.id == meta.id) {
             self.tutorials.push(meta);
         }
+    }
+
+    /// Drop every lesson a twin contributed, leaving the bundled catalog intact.
+    ///
+    /// Keyed on PROVENANCE, not on an app name. The previous version did
+    /// `retain(|t| t.app != "school")` — a magic string that made "school" a
+    /// reserved word in Rust: it deleted a bundled track that happened to share the
+    /// name, and left behind any twin whose lessons declared a different app. What
+    /// actually needs clearing is "whatever the last twin added", which is a fact
+    /// the registry can hold rather than a name it has to recognise.
+    pub fn retain_bundled(&mut self) {
+        self.tutorials.retain(|t| t.from_twin.is_none());
     }
 
     fn get(&self, id: &str) -> Option<TutorialMeta> {
@@ -555,6 +574,65 @@ fn boot_seam(world: &mut World, mut done: Local<bool>) {
     consult_boot(world, has_scene, automated);
 }
 
+// ── Twin-provided curriculum ────────────────────────────────────────────────
+
+/// The twin whose curriculum is currently loaded, so a change can unload it.
+#[derive(Resource, Default)]
+struct LoadedTwinCurriculum(Option<lunco_workspace::TwinId>);
+
+/// The manifest a twin publishes its lessons in, relative to the twin root.
+const TWIN_TUTORIALS_MANIFEST: &str = "sim/tutorials/tutorials.json";
+
+/// **A twin brings its own lessons.** On the active twin changing, drop the previous
+/// twin's curriculum and load the new one's `sim/tutorials/tutorials.json`.
+///
+/// This is a load-time concern, so it runs as a system. It used to live inside the
+/// 🎓 menu's DRAW closure — meaning a twin's lessons only appeared once someone
+/// opened the menu, and the file was re-read on a draw callback.
+///
+/// **No track is named here.** The previous version force-wrote `m.app = "school"`
+/// over every twin's manifest and cleared with `retain(|t| t.app != "school")`,
+/// which made "school" a reserved word in the engine: the Summer Space School twin
+/// already declares `"app": "school"` itself, so Rust was overwriting data with the
+/// same data — while any OTHER twin's lessons were silently relabelled school. The
+/// manifest says which track it belongs to; the engine's job is to load it, not to
+/// have an opinion about who wrote it.
+fn sync_twin_tutorials(
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    mut loaded: ResMut<LoadedTwinCurriculum>,
+    mut registry: ResMut<TutorialRegistry>,
+) {
+    let active = workspace.as_ref().and_then(|ws| ws.0.active_twin);
+    if loaded.0 == active {
+        return;
+    }
+    // The previous twin's lessons go with it — identified by provenance, not name.
+    registry.retain_bundled();
+    loaded.0 = active;
+
+    let Some((ws, id)) = workspace.as_ref().zip(active) else {
+        return;
+    };
+    let Some(twin) = ws.0.twin(id) else { return };
+    let manifest = twin.root.join(TWIN_TUTORIALS_MANIFEST);
+    let Ok(text) = std::fs::read_to_string(&manifest) else {
+        return; // a twin with no curriculum is the normal case, not an error
+    };
+    match serde_json::from_str::<Vec<TutorialMeta>>(&text) {
+        Ok(metas) => {
+            let n = metas.len();
+            for mut m in metas {
+                m.from_twin = Some(id);
+                registry.register_tutorial(m);
+            }
+            info!("[tutorial] loaded {n} lesson(s) from twin at {}", twin.root.display());
+        }
+        // Say so. A malformed manifest previously failed silently, and the lessons
+        // simply never appeared — with nothing anywhere to say why.
+        Err(e) => warn!("[tutorial] {} is invalid: {e}", manifest.display()),
+    }
+}
+
 // ── Menu + launcher panel ───────────────────────────────────────────────────
 
 /// Register the top-level **🎓 Tutorials** menu, listing the app's tutorials with
@@ -564,52 +642,6 @@ fn register_tutorials_menu(world: &mut World) {
         return;
     };
     layout.register_custom_menu("🎓 Tutorials", |ui, world| {
-        // Dynamic twin tutorials: check if active twin has a tutorials.json in sim/tutorials/
-        let active_twin_info = if let Some(ws) = world.get_resource::<lunco_workspace::WorkspaceResource>() {
-            if let Some(active_id) = ws.0.active_twin {
-                ws.0.twin(active_id).map(|t| (active_id, t.root.clone()))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        #[derive(Resource, Default)]
-        struct LastLoadedTwinTutorials(Option<lunco_workspace::TwinId>);
-
-        let last_twin = world.get_resource::<LastLoadedTwinTutorials>().map(|r| r.0).flatten();
-        let current_active_id = active_twin_info.as_ref().map(|(id, _)| *id);
-
-        if last_twin != current_active_id {
-            // Clear any previous space school tutorials
-            if let Some(mut registry) = world.get_resource_mut::<TutorialRegistry>() {
-                registry.tutorials.retain(|t| t.app != "school");
-            }
-            
-            // If there's an active twin, try to load its tutorials.json
-            if let Some((_, root)) = &active_twin_info {
-                let manifest_path = root.join("sim/tutorials/tutorials.json");
-                if let Ok(json_text) = std::fs::read_to_string(&manifest_path) {
-                    if let Ok(metas) = serde_json::from_str::<Vec<TutorialMeta>>(&json_text) {
-                        if let Some(mut registry) = world.get_resource_mut::<TutorialRegistry>() {
-                            for mut m in metas {
-                                // Force app = "school" so it groups under the Space School submenu
-                                m.app = "school".to_string();
-                                registry.register_tutorial(m);
-                            }
-                        }
-                    }
-                }
-            }
-            
-            if world.contains_resource::<LastLoadedTwinTutorials>() {
-                world.resource_mut::<LastLoadedTwinTutorials>().0 = current_active_id;
-            } else {
-                world.insert_resource(LastLoadedTwinTutorials(current_active_id));
-            }
-        }
-
         let registry = world.get_resource::<TutorialRegistry>().cloned().unwrap_or_default();
         let progress = world.get_resource::<TutorialProgress>().cloned().unwrap_or_default();
         if registry.tutorials.is_empty() {
@@ -624,11 +656,18 @@ fn register_tutorials_menu(world: &mut World) {
             grouped.entry(meta.app.clone()).or_default().push(meta);
         }
 
+        // Display labels for the tracks THIS APP SHIPS — presentation and ordering,
+        // nothing more. A track is not required to be here: anything else (a twin's
+        // curriculum, a user's own manifest) renders below under its authored `app`.
+        //
+        // `"school"` was in this table, which made the Summer Space School a special
+        // case in the engine. It is not: it is a twin like any other, and it names
+        // its own track in its manifest. Bundled tracks are listed here because the
+        // app genuinely owns them — not because the engine knows who they are.
         let tracks = [
             ("sandbox", "1️⃣ Sandbox Onboarding"),
             ("basic", "2️⃣ Rover Driving & Slopes"),
-            ("school", "3️⃣ Space School Seminar"),
-            ("lunica", "4️⃣ Modelica Workbench"),
+            ("lunica", "3️⃣ Modelica Workbench"),
         ];
 
         for &(app_key, label) in &tracks {
@@ -801,6 +840,12 @@ impl Plugin for TutorialPlugin {
         app.add_observer(on_mission_complete);
         app.add_observer(resolve_show_tutorial_intent);
         app.add_systems(Startup, register_tutorials_menu);
+        // A twin brings its own curriculum: load it when that twin is opened, and
+        // unload it when the active twin changes. A load-time concern, so a system —
+        // it used to run inside the 🎓 menu's draw closure, which meant a twin's
+        // lessons existed only once someone opened the menu.
+        app.init_resource::<LoadedTwinCurriculum>();
+        app.add_systems(Update, sync_twin_tutorials);
         app.add_systems(Update, (boot_seam, consume_tour_request));
         app.add_systems(EguiPrimaryContextPass, draw_advance_prompt);
         app.register_panel(TutorialsPanel);

@@ -5,7 +5,12 @@
     metersPerUnit = 1
 )
 
-# Wall — static cuboid barrier.
+# Wall — static cuboid barrier. Blocks bodies (collider) AND sight-lines
+# (`lunco:occluder`), so a link whose segment crosses it is severed: park a rover
+# behind one and it loses the station. The two are authored SEPARATELY on purpose
+# — opacity is a material property, not a collision one (doc 49 / `LinkOccluder`).
+# Half-extents are derived from the scale below (unit cube ⇒ scale/2 = 4×2×0.5 m),
+# so re-scaling an instance moves the shadow with the geometry.
 def Xform "Wall" (
     prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "component"
@@ -13,7 +18,7 @@ def Xform "Wall" (
 {
     uniform bool lunco:spawnable = true
     def Cube "Body" (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoOccluderAPI"]
     )
     {
         double size = 1.0
@@ -21,5 +26,6 @@ def Xform "Wall" (
         uniform token[] xformOpOrder = ["xformOp:scale"]
         color3f[] primvars:displayColor = [(0.6, 0.6, 0.6)]
         bool physics:collisionEnabled = true
+        bool lunco:occluder = true
     }
 }

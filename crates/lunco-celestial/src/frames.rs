@@ -66,13 +66,34 @@ pub enum Unit {
 pub type BodyId = i32;
 
 /// A collinear/triangular libration point of a two-body pair.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Reflect` + `Default` so it can be a field of the [`LibrationAnchor`] component
+/// (which the USD bridge authors and the network reflects).
+///
+/// [`LibrationAnchor`]: crate::transform::LibrationAnchor
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, bevy::prelude::Reflect)]
 pub enum LPoint {
+    #[default]
     L1,
     L2,
     L3,
     L4,
     L5,
+}
+
+impl LPoint {
+    /// Parse an authored token (`"L1"`…`"L5"`, case-insensitive). `None` if it names
+    /// no such point — the caller says so rather than silently placing an L1.
+    pub fn from_token(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_uppercase().as_str() {
+            "L1" => Some(Self::L1),
+            "L2" => Some(Self::L2),
+            "L3" => Some(Self::L3),
+            "L4" => Some(Self::L4),
+            "L5" => Some(Self::L5),
+            _ => None,
+        }
+    }
 }
 
 /// **What a frame is centred on.**

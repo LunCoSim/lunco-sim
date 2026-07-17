@@ -67,6 +67,14 @@ pub use lunco_terrain_core::{
     Selected, Square, TileCoord, TileGrid, TransferFn,
 };
 pub use oracle::{raycast_surface, HeightContribution, SurfaceOracle, TerrainBodyCurvature};
+/// The base raster [`SurfaceOracle`] composes over.
+///
+/// Re-exported because it is already part of this crate's PUBLIC surface —
+/// `SurfaceOracle::new`/`bare` take `Arc<HeightGrid>` — and a caller could see the
+/// constructor but had no way to name its argument without depending on
+/// `lunco-obstacle-field` directly, which is an implementation detail of where the
+/// type happens to live.
+pub use lunco_obstacle_field::field::HeightGrid;
 pub use plugin::TerrainSurfacePlugin;
 pub use derived_layers::{DerivedLayersBuilt, TerrainDerivedMaps};
 pub use georef::TerrainGeoref;

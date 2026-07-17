@@ -277,9 +277,13 @@ def Xform "SkidRover" (
     }
 
     # --- Comms ---------------------------------------------------------
-    # Rover-mounted antenna (doc 43): makes this rover a connectivity
-    # endpoint — the comms layer publishes `comms:<peer>:*` +
-    # `comms:route_earth:*` ports on it (relay via satellite/base mast).
+    # Rover-mounted antenna (doc 49): makes this rover a connectivity endpoint
+    # (`lunco:linkNode`). The kernel publishes a `LinkState` component here and
+    # emits `link.aos` / `link.los`; the live graph is `query("Links")`, and
+    # routing (relay via satellite/base mast) is authored in
+    # `assets/scripting/prelude/links.rhai` — e.g. `can_reach("rover", "earth")`.
+    # There are NO `comms:*` ports: comms is not a subsystem (doc 49 §1), so the
+    # core publishes generic link state, not comms vocabulary.
     def Xform "Comms" (
         prepend references = @../../components/comms/antenna.usda@</CommsAntenna>
     )

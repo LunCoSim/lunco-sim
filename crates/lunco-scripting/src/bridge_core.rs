@@ -360,7 +360,13 @@ pub fn enforce_script_authority(
             "'{op}' denied: script authority set but session registries are unavailable"
         ));
     };
-    authorize(reg, rbac, pol, session, op, target_gid).map_err(|r| r.to_string())
+    // `ControlPathRegistry` is a plain default when absent: an app that never
+    // declares a blackout has none down, so the gate is unchanged.
+    let paths = world
+        .get_resource::<lunco_core::session::ControlPathRegistry>()
+        .cloned()
+        .unwrap_or_default();
+    authorize(reg, rbac, pol, &paths, session, op, target_gid).map_err(|r| r.to_string())
 }
 
 /// The `#[authz_target]` gid a command authorizes against, read from the
