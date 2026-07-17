@@ -877,6 +877,49 @@ impl ModelicaDocument {
     }
 }
 
+/// The identity contract — the same one USD implements, so
+/// [`DocumentRegistry`](lunco_doc_bevy::DocumentRegistry) can enforce
+/// one-document-per-file for Modelica without knowing anything about Modelica.
+///
+/// WHY: opening the same `.mo` twice used to mint a SECOND document — two tabs,
+/// two undo stacks, both saving over each other, last writer silently winning.
+/// The rule already existed here (`find_by_path`) and the package browser called
+/// it; the `OpenFile` command didn't. It belongs to the registry, not to whoever
+/// remembers.
+impl lunco_doc::FileBacked for ModelicaDocument {
+    fn with_origin(id: DocumentId, source: String, origin: DocumentOrigin) -> Self {
+        ModelicaDocument::with_origin(id, source, origin)
+    }
+
+    fn origin(&self) -> &DocumentOrigin {
+        &self.origin
+    }
+
+    fn is_dirty(&self) -> bool {
+        ModelicaDocument::is_dirty(self)
+    }
+
+    fn reload_base(&mut self, source: &str) -> bool {
+        if self.source == source {
+            // Byte-identical to disk — no generation bump, no needless reparse.
+            return true;
+        }
+        // Route through the op, never a raw field poke: `ReplaceSource` is what
+        // keeps generation and the op log coherent (undo/redo, journal replay).
+        // It cannot fail today, but the trait signature is fallible.
+        let _ = Document::apply(self, ModelicaOp::ReplaceSource { new: source.to_string() });
+        // A re-open is a one-shot commit, not a keystroke burst — reparse on the
+        // next tick instead of waiting out the typing debounce.
+        self.waive_ast_debounce();
+        // The text came FROM disk ⇒ the document matches it ⇒ clean.
+        self.mark_saved();
+        // Always `true`: Modelica parses lazily and keeps a document with syntax
+        // errors open (that's how you edit a broken file), so there is no
+        // "unparsable, refuse to load" case the way USDA has.
+        true
+    }
+}
+
 impl Document for ModelicaDocument {
     type Op = ModelicaOp;
 

@@ -13,7 +13,7 @@
 //!   the kind is registered.
 //! - **Save**: observes
 //!   [`SaveDocument`] gated on
-//!   [`UsdDocumentRegistry::contains`].
+//!   [`DocumentRegistry::<UsdDocument>::contains`].
 //! - **Notifications**: each frame drains the registry's pending rings
 //!   into [`DocumentOpened`],
 //!   [`lunco_doc_bevy::DocumentChanged`], and
@@ -26,6 +26,7 @@
 //! so File menus, picker dialogs, and `twin.toml` parsers see USD
 //! without any central edit.
 
+use crate::document::UsdDocument;
 use std::path::PathBuf;
 
 use bevy::prelude::*;
@@ -47,7 +48,8 @@ use lunco_usd_bevy::UsdPrimPath;
 
 use crate::document::{LayerId, UsdOp};
 use lunco_usd_sim::cosim::{ClearScene, LoadScene};
-use crate::registry::UsdDocumentRegistry;
+use lunco_doc::OpenOutcome;
+use lunco_doc_bevy::DocumentRegistry;
 
 /// Stable id for the USD document kind in
 /// [`DocumentKindRegistry`].
@@ -63,7 +65,7 @@ pub struct UsdCommandsPlugin;
 
 impl Plugin for UsdCommandsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<UsdDocumentRegistry>();
+        app.init_resource::<DocumentRegistry<UsdDocument>>();
 
         // Self-register with the workbench's plugin-driven document
         // kind registry. `init_resource` defends against the case where
@@ -322,7 +324,7 @@ register_commands!(
 // observer so headless bins get both without the UI:
 //
 //   1. `on_open_file_for_usd` — document **registration**: async read via
-//      `lunco-storage`, idempotent allocate into `UsdDocumentRegistry`.
+//      `lunco-storage`, idempotent allocate into `DocumentRegistry<UsdDocument>`.
 //   2. `on_open_file` (this one) — additive **scene import** (Blender's
 //      File → Append): brings the stage into the running 3D scene so
 //      `UsdSimPlugin` can wire `lunco:modelicaModel` / `lunco:simWires`
@@ -453,23 +455,28 @@ pub(crate) fn drain_pending_usd_file_loads(world: &mut World) {
                 bevy::log::warn!("[UsdOpenFile] {}", err);
             }
             Some(Ok(source)) => {
-                // Idempotent re-open: if this exact path already lives in
-                // the registry, don't re-allocate.
-                let existing = {
-                    let reg = world.resource::<UsdDocumentRegistry>();
-                    reg.ids().find(|id| {
-                        reg.host(*id)
-                            .map(|h| match h.document().origin() {
-                                DocumentOrigin::File { path, .. } => path == &load.path,
-                                _ => false,
-                            })
-                            .unwrap_or(false)
-                    })
-                };
-                if existing.is_none() {
-                    world
-                        .resource_mut::<UsdDocumentRegistry>()
-                        .allocate(source, DocumentOrigin::writable_file(load.path.clone()));
+                // Idempotent re-open: one document per file, base refreshed from
+                // the text we just read. This used to be a hand-rolled scan plus
+                // `if existing.is_none() { allocate(source) }` — so re-opening an
+                // already-open file threw `source` away and kept the stale
+                // document, even though the read had just happened.
+                let (doc, outcome) = world
+                    .resource_mut::<DocumentRegistry<UsdDocument>>()
+                    .open_file(load.path.clone(), source);
+                match outcome {
+                    OpenOutcome::KeptDirty => bevy::log::warn!(
+                        "[UsdOpenFile] {} has unsaved edits — keeping them; disk NOT reloaded ({doc})",
+                        load.path.display()
+                    ),
+                    OpenOutcome::KeptUnparsable => bevy::log::warn!(
+                        "[UsdOpenFile] {} does not parse as USDA — keeping the open document ({doc})",
+                        load.path.display()
+                    ),
+                    OpenOutcome::Refreshed => bevy::log::info!(
+                        "[UsdOpenFile] {} already open — refreshed from disk ({doc})",
+                        load.path.display()
+                    ),
+                    OpenOutcome::Allocated => {}
                 }
             }
         }
@@ -488,7 +495,7 @@ fn on_new_document(trigger: On<NewDocument>, mut commands: Commands) {
         return;
     }
     commands.queue(|world: &mut World| {
-        let mut registry = world.resource_mut::<UsdDocumentRegistry>();
+        let mut registry = world.resource_mut::<DocumentRegistry<UsdDocument>>();
         let next = registry.ids().count() + 1;
         let doc_id = registry.allocate(
             DEFAULT_USDA_SCAFFOLD.to_string(),
@@ -512,7 +519,7 @@ const DEFAULT_USDA_SCAFFOLD: &str =
 fn on_save_document(trigger: On<SaveDocument>, mut commands: Commands) {
     let doc_id = trigger.event().doc;
     commands.queue(move |world: &mut World| {
-        let registry = world.resource::<UsdDocumentRegistry>();
+        let registry = world.resource::<DocumentRegistry<UsdDocument>>();
         let Some(host) = registry.host(doc_id) else {
             return;
         };
@@ -558,7 +565,7 @@ fn on_save_document(trigger: On<SaveDocument>, mut commands: Commands) {
         // change ring because saving doesn't change the document — it
         // only resets the dirty marker.
         if let Some(host) = world
-            .resource_mut::<UsdDocumentRegistry>()
+            .resource_mut::<DocumentRegistry<UsdDocument>>()
             .host_mut(doc_id)
         {
             host.document_mut().mark_saved();
@@ -575,7 +582,7 @@ fn on_save_document(trigger: On<SaveDocument>, mut commands: Commands) {
 ///
 /// Same shape as `lunco-modelica`'s op-dispatch commands: UI clicks,
 /// HTTP API calls, and scripts all dispatch this; the observer
-/// routes it through [`UsdDocumentRegistry::apply`] so undo/redo,
+/// routes it through [`DocumentRegistry::<UsdDocument>::apply`] so undo/redo,
 /// change notification, and read-only enforcement stay in one place.
 #[Command(default)]
 pub struct ApplyUsdOp {
@@ -595,7 +602,7 @@ fn on_apply_usd_op(trigger: On<ApplyUsdOp>, mut commands: Commands) {
         // `wire_usd_journal_recorders`, so a successful `apply` records the
         // lossless (forward, inverse) pair — no per-op recording code here,
         // and the same seam journals undo/redo too.
-        let mut registry = world.resource_mut::<UsdDocumentRegistry>();
+        let mut registry = world.resource_mut::<DocumentRegistry<UsdDocument>>();
         match registry.apply(doc, op) {
             Ok(ack) => {
                 bevy::log::debug!("[ApplyUsdOp] {} → gen {}", doc, ack.new_gen.unwrap_or(0));
@@ -614,7 +621,7 @@ fn on_apply_usd_op(trigger: On<ApplyUsdOp>, mut commands: Commands) {
 // The VERB is generic and lives in `lunco-doc-bevy`; each domain observes it and acts
 // only on documents its own registry owns (a Modelica document is handled by Modelica's
 // observer in `lunco-modelica/src/ui/commands/doc.rs`). These are USD's half, and they
-// live HERE — in the crate that owns `UsdDocumentRegistry` — not in the editor, so a
+// live HERE — in the crate that owns `DocumentRegistry<UsdDocument>` — not in the editor, so a
 // headless binary with documents but no 3D editor can still undo.
 //
 // There is no separate `UndoEdit`/`RedoEdit`: it was a second, USD-only pair of commands
@@ -638,7 +645,7 @@ fn on_apply_usd_op(trigger: On<ApplyUsdOp>, mut commands: Commands) {
 /// No-ops for a `doc` this registry doesn't own, per the `UndoDocument` ownership
 /// convention.
 #[on_command(UndoDocument)]
-pub fn on_undo_usd_document(trigger: On<UndoDocument>, mut registry: ResMut<UsdDocumentRegistry>) {
+pub fn on_undo_usd_document(trigger: On<UndoDocument>, mut registry: ResMut<DocumentRegistry<UsdDocument>>) {
     let doc = trigger.event().doc;
     let outcome = {
         let Some(host) = registry.host_mut(doc) else { return };
@@ -660,7 +667,7 @@ pub fn on_undo_usd_document(trigger: On<UndoDocument>, mut registry: ResMut<UsdD
 /// Per-domain [`RedoDocument`] handler for **USD** documents. The mirror of
 /// [`on_undo_usd_document`]; same ownership rules.
 #[on_command(RedoDocument)]
-pub fn on_redo_usd_document(trigger: On<RedoDocument>, mut registry: ResMut<UsdDocumentRegistry>) {
+pub fn on_redo_usd_document(trigger: On<RedoDocument>, mut registry: ResMut<DocumentRegistry<UsdDocument>>) {
     let doc = trigger.event().doc;
     let outcome = {
         let Some(host) = registry.host_mut(doc) else { return };
@@ -717,7 +724,7 @@ pub fn apply_ops_as_change_set(
         .cloned();
 
     let apply_all = |world: &mut World| {
-        let mut registry = world.resource_mut::<UsdDocumentRegistry>();
+        let mut registry = world.resource_mut::<DocumentRegistry<UsdDocument>>();
         let mut applied = 0usize;
         for op in ops {
             match registry.apply(doc, op) {
@@ -972,7 +979,7 @@ fn on_set_dome_light(
 /// frame the journal is installed) and never again. Headless builds without a
 /// journal never run it.
 fn wire_usd_journal_handle(
-    mut registry: ResMut<UsdDocumentRegistry>,
+    mut registry: ResMut<DocumentRegistry<UsdDocument>>,
     journal: Res<lunco_doc_bevy::JournalResource>,
 ) {
     registry.set_journal(journal.clone());
@@ -989,7 +996,7 @@ fn wire_usd_journal_handle(
 /// no-op when nothing is pending; gated implicitly by the
 /// `Vec::is_empty` checks inside `drain_pending`.
 fn drain_usd_pending_events(
-    mut registry: ResMut<UsdDocumentRegistry>,
+    mut registry: ResMut<DocumentRegistry<UsdDocument>>,
     mut commands: Commands,
 ) {
     let pending = registry.drain_pending();
@@ -1059,7 +1066,7 @@ mod change_set_tests {
         let journal = JournalResource::default();
         world.insert_resource(journal.clone());
 
-        let mut registry = UsdDocumentRegistry::default();
+        let mut registry = DocumentRegistry::<UsdDocument>::default();
         // The A3 auto-bridge, done by hand (the system that does this in-app is
         // `wire_usd_journal_handle`): the recorder is what journals each op.
         registry.set_journal(journal.clone());
@@ -1126,7 +1133,7 @@ mod change_set_tests {
         let ops = attach_component_ops(&wheel_spec());
         let n = ops.len();
         {
-            let mut registry = world.resource_mut::<UsdDocumentRegistry>();
+            let mut registry = world.resource_mut::<DocumentRegistry<UsdDocument>>();
             for op in ops {
                 registry.apply(doc, op).expect("applies");
             }
@@ -1155,7 +1162,7 @@ mod change_set_tests {
     #[test]
     fn applies_without_a_journal() {
         let mut world = World::new();
-        let mut registry = UsdDocumentRegistry::default();
+        let mut registry = DocumentRegistry::<UsdDocument>::default();
         let doc = registry.allocate(
             RIG.to_string(),
             DocumentOrigin::writable_file("/tmp/lunco_h10_nojournal.usda"),
@@ -1192,7 +1199,7 @@ mod tests {
         app.add_plugins(UsdCommandsPlugin);
         app.update();
 
-        assert!(app.world().contains_resource::<UsdDocumentRegistry>());
+        assert!(app.world().contains_resource::<DocumentRegistry<UsdDocument>>());
         let kinds = app.world().resource::<DocumentKindRegistry>();
         let meta = kinds
             .meta(&DocumentKindId::new(USD_DOCUMENT_KIND))
@@ -1226,7 +1233,7 @@ mod tests {
             app.update();
         }
 
-        let reg = app.world().resource::<UsdDocumentRegistry>();
+        let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
         assert_eq!(reg.ids().count(), 1, "exactly one USD doc opened (no duplicate)");
 
         let _ = std::fs::remove_file(&tmp_path);
@@ -1246,7 +1253,7 @@ mod tests {
             app.update();
         }
 
-        let reg = app.world().resource::<UsdDocumentRegistry>();
+        let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
         assert_eq!(reg.ids().count(), 0, "non-USD path must not allocate");
     }
 
@@ -1262,7 +1269,7 @@ mod tests {
 
         // Allocate a blank document.
         let doc_id = {
-            let mut reg = app.world_mut().resource_mut::<UsdDocumentRegistry>();
+            let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
             reg.allocate(
                 "#usda 1.0\n".to_string(),
                 DocumentOrigin::untitled("UntitledRover.usda".to_string()),
@@ -1309,7 +1316,7 @@ mod tests {
 
         use lunco_usd_bevy::usd_data::UsdDataExt;
         use openusd::sdf::Path as SdfPath;
-        let reg = app.world().resource::<UsdDocumentRegistry>();
+        let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
         let host = reg.host(doc_id).expect("doc still alive");
         // Assert on the canonical data (the document is data-canonical now;
         // exact serialized-text formatting is openusd's business, not ours).
@@ -1345,7 +1352,7 @@ mod tests {
         app.update();
 
         let doc_id = {
-            let mut reg = app.world_mut().resource_mut::<UsdDocumentRegistry>();
+            let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
             reg.allocate(
                 "#usda 1.0\n".to_string(),
                 DocumentOrigin::untitled("UntitledJournal.usda".to_string()),
@@ -1566,7 +1573,7 @@ mod tests {
         app.update();
         app.update();
 
-        let reg = app.world().resource::<UsdDocumentRegistry>();
+        let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
         assert_eq!(reg.ids().count(), 1);
         let id = reg.ids().next().unwrap();
         assert!(reg.host(id).unwrap().document().origin().is_untitled());

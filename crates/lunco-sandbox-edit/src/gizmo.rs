@@ -368,7 +368,7 @@ pub fn restore_gizmo_dynamic(
     q_parents: Query<&ChildOf>,
     q_grids: Query<&big_space::prelude::Grid>,
     q_prim: Query<&lunco_usd_bevy::UsdPrimPath>,
-    usd_registry: Option<Res<lunco_usd::registry::UsdDocumentRegistry>>,
+    usd_registry: Option<Res<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut commands: Commands,
 ) {
@@ -590,13 +590,14 @@ mod tests {
     /// the move survives a reload instead of living only in ECS.
     #[test]
     fn drag_end_authors_the_move_into_the_runtime_layer() {
-        use lunco_usd::registry::UsdDocumentRegistry;
+        use lunco_doc_bevy::DocumentRegistry;
+        use lunco_usd::document::UsdDocument;
         use lunco_usd_bevy::usd_data::UsdDataExt;
         use lunco_usd_bevy::UsdPrimPath;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        // Provides `UsdDocumentRegistry` + the `ApplyUsdOp` handler the
+        // Provides `DocumentRegistry<UsdDocument>` + the `ApplyUsdOp` handler the
         // persister dispatches into.
         app.add_plugins(lunco_usd::commands::UsdCommandsPlugin);
         app.init_resource::<lunco_api::registry::ApiEntityRegistry>();
@@ -604,7 +605,7 @@ mod tests {
         app.add_systems(Update, restore_gizmo_dynamic);
 
         let doc = {
-            let mut reg = app.world_mut().resource_mut::<UsdDocumentRegistry>();
+            let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
             reg.allocate(
                 "#usda 1.0\ndef Xform \"World\"\n{\n}\n".to_string(),
                 lunco_doc::DocumentOrigin::untitled("Scene.usda".to_string()),
@@ -643,7 +644,7 @@ mod tests {
             app.update();
         }
 
-        let reg = app.world().resource::<UsdDocumentRegistry>();
+        let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
         let docu = reg.host(doc).expect("doc alive").document();
         let world_path = lunco_usd_bevy::SdfPath::new("/World").unwrap();
         assert_eq!(

@@ -23,7 +23,8 @@ use bevy::prelude::*;
 use lunco_doc_bevy::{DocumentClosed, DocumentOpened};
 use lunco_workbench::BrowserSectionRegistry;
 
-use crate::registry::UsdDocumentRegistry;
+use crate::document::UsdDocument;
+use lunco_doc_bevy::DocumentRegistry;
 
 pub mod browser_dispatch;
 pub mod browser_section;
@@ -68,7 +69,7 @@ impl Plugin for UsdUiPlugin {
 
         // Document hot-exit: persist & restore open USD buffers via the
         // per-Twin workspace-state, mirroring Modelica. Restore replays
-        // `UsdDocumentRegistry::allocate`, which fires `DocumentOpened`
+        // `DocumentRegistry::<UsdDocument>::allocate`, which fires `DocumentOpened`
         // → the stage registration above. See `session_codec`.
         use lunco_workbench::AppDocumentSessionExt;
         app.register_document_session_codec(session_codec::UsdSessionCodec);
@@ -91,7 +92,7 @@ impl Plugin for UsdUiPlugin {
 /// are ignored, exactly mirroring the `lunco-modelica` shape.
 fn register_workspace_stage_on_doc_opened(
     trigger: On<DocumentOpened>,
-    registry: Res<UsdDocumentRegistry>,
+    registry: Res<DocumentRegistry<UsdDocument>>,
     mut loaded: ResMut<LoadedUsdStages>,
 ) {
     let doc = trigger.event().doc;
@@ -139,7 +140,7 @@ mod tests {
         app.update();
 
         let doc_id = {
-            let mut reg = app.world_mut().resource_mut::<UsdDocumentRegistry>();
+            let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
             reg.allocate(
                 "#usda 1.0\ndef Xform \"World\" {}\n".to_string(),
                 DocumentOrigin::writable_file("/tmp/scene.usda"),
@@ -169,7 +170,7 @@ mod tests {
         app.update();
 
         let doc_id = {
-            let mut reg = app.world_mut().resource_mut::<UsdDocumentRegistry>();
+            let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
             reg.allocate(
                 "#usda 1.0\n".to_string(),
                 DocumentOrigin::writable_file("/tmp/scene.usda"),
@@ -185,7 +186,7 @@ mod tests {
         // Remove from registry → drains as DocumentClosed → observer
         // drops the stage entry.
         app.world_mut()
-            .resource_mut::<UsdDocumentRegistry>()
+            .resource_mut::<DocumentRegistry<UsdDocument>>()
             .remove(doc_id);
         app.update();
         app.update();

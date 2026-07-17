@@ -35,7 +35,8 @@ use lunco_core::{Avatar, EguiFocus, SpawnToolActive, TerrainToolActive, GlobalEn
 use lunco_core::session::SessionRegistry;
 use lunco_core::commands::SessionId;
 use lunco_usd::document::{LayerId, UsdOp};
-use lunco_usd::registry::UsdDocumentRegistry;
+use lunco_usd::document::UsdDocument;
+use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd_bevy::UsdPrimPath;
 
@@ -259,7 +260,7 @@ pub fn on_scene_click_checkpoint(
     raycaster: avian3d::prelude::SpatialQuery,
     q_prim: Query<&UsdPrimPath>,
     q_xml: Query<&BehaviorXml>,
-    usd_registry: Res<UsdDocumentRegistry>,
+    usd_registry: Res<DocumentRegistry<UsdDocument>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
 
     mut commands: Commands,
@@ -420,7 +421,7 @@ pub fn on_scene_click_place_waypoint(
     terrains: TerrainOracles,
     raycaster: avian3d::prelude::SpatialQuery,
     q_vessel: Query<(&BehaviorXml, &UsdPrimPath)>,
-    usd_registry: Res<UsdDocumentRegistry>,
+    usd_registry: Res<DocumentRegistry<UsdDocument>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut commands: Commands,
 ) {
@@ -492,7 +493,7 @@ pub fn draw_waypoint_context_menu(
     mut menu_open: ResMut<lunco_core::WaypointMenuOpen>,
     q_visual: Query<&WaypointVisual>,
     q_vessel: Query<(&BehaviorXml, &UsdPrimPath)>,
-    usd_registry: Option<Res<UsdDocumentRegistry>>,
+    usd_registry: Option<Res<DocumentRegistry<UsdDocument>>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut commands: Commands,
 ) {
@@ -1005,7 +1006,7 @@ pub fn delete_reached_waypoints(
     q_grids: Query<&big_space::prelude::Grid>,
     q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-    usd_registry: Option<Res<UsdDocumentRegistry>>,
+    usd_registry: Option<Res<DocumentRegistry<UsdDocument>>>,
     mut commands: Commands,
 ) {
     let Some(workspace) = workspace else { return };

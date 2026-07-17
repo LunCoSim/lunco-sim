@@ -452,6 +452,96 @@ pub trait Document: Send + Sync + 'static {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// FileBacked — the identity contract
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// What [`FileBacked::open_file`]-style callers did with an open request.
+///
+/// Exists so "already open" can't quietly mean "keep whatever's in memory":
+/// every branch is a decision the caller can see and surface to the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenOutcome {
+    /// No document existed for this path — a fresh one was allocated.
+    Allocated,
+    /// Already open and clean: the base was refreshed from `source`, so the
+    /// document matches disk again.
+    Refreshed,
+    /// Already open with UNSAVED edits — kept as-is and `source` discarded.
+    /// Disk and memory now disagree; **the caller owns that conflict** and must
+    /// tell the user (prompt / badge). Never resolved here: reloading would
+    /// destroy work undo cannot recover.
+    ///
+    /// This is deliberately NOT what `SdfLayer::Reload()` does — USD's primitive
+    /// discards a dirty layer's edits (the mtime check is skipped *because* it's
+    /// dirty). USD leaves the policy to the app; this is that policy. Maya spells
+    /// the destructive form "Revert to File" and makes the user ask for it.
+    KeptDirty,
+    /// Already open and clean, but `source` did not parse — the resident content
+    /// was kept rather than half-applied. The file on disk is broken.
+    KeptUnparsable,
+}
+
+/// Whether two paths denote the same file. Cheap comparison first; only pays for
+/// `canonicalize` (which touches the filesystem) when the raw paths differ, so
+/// `/a/./b.usda`, `../a/b.usda` and a symlink resolve to ONE document — the
+/// split-brain (two undo stacks, two journals, racing saves onto one path) that
+/// document identity exists to prevent.
+pub fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+    if a == b {
+        return true;
+    }
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        // Unreadable/missing (synthetic test paths, files that vanish) — the raw
+        // comparison above was already the honest answer.
+        _ => false,
+    }
+}
+
+/// A [`Document`] that can be backed by a file, and therefore has an identity
+/// **that is its path** and content that can diverge from disk.
+///
+/// Splitting this out of [`Document`] keeps purely in-memory documents free of
+/// file semantics, and gives the registry the three things it needs to enforce
+/// one-document-per-file without knowing any language:
+///
+/// * where it came from ([`origin`](Self::origin))
+/// * whether memory has deliberately diverged ([`is_dirty`](Self::is_dirty))
+/// * how to re-read it ([`reload_base`](Self::reload_base))
+///
+/// WHY THIS EXISTS. Every document type reimplemented open-by-path, and each got
+/// it wrong differently: USD deduped by path but never refreshed (re-opening an
+/// edited `.usda` replayed the OLD scene until an app restart), while Modelica
+/// never deduped at all (opening the same `.mo` twice minted TWO documents, two
+/// tabs, two undo stacks, both saving over each other). One missing concept —
+/// "open a file as a document" — two opposite bugs. It lives here now, once.
+pub trait FileBacked: Document + Sized {
+    /// Build a document from `source` with an explicit origin.
+    fn with_origin(id: DocumentId, source: String, origin: DocumentOrigin) -> Self;
+
+    /// Where this document came from (drives save behaviour, tab title,
+    /// read-only badge).
+    fn origin(&self) -> &DocumentOrigin;
+
+    /// Whether the document has unsaved changes — i.e. whether memory has
+    /// **deliberately** diverged from disk. A clean document is a *cache* of the
+    /// file and must never be trusted over it; a dirty one IS the truth and disk
+    /// is the stale copy. Everything about reload policy follows from this.
+    fn is_dirty(&self) -> bool;
+
+    /// Replace the content with `source` re-read from disk — a RE-OPEN, not an
+    /// edit. Returns `false` (leaving content untouched) if `source` doesn't
+    /// parse: a half-applied document is worse than a stale one.
+    ///
+    /// The text came FROM disk, so implementors must leave the document CLEAN.
+    ///
+    /// Callers go through the registry's `open_file`, which checks
+    /// [`is_dirty`](Self::is_dirty) first — this silently discards unsaved edits
+    /// and undo cannot bring them back.
+    fn reload_base(&mut self, source: &str) -> bool;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // DocumentHost
 // ─────────────────────────────────────────────────────────────────────────────
 

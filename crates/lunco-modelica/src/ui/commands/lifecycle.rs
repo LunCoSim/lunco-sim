@@ -899,15 +899,46 @@ pub fn drain_open_file_results(world: &mut bevy::prelude::World) {
             .and_then(|s| s.to_str())
             .unwrap_or("Opened")
             .to_string();
-        let mut registry =
-            world.resource_mut::<ModelicaDocumentRegistry>();
-        let doc_id = registry.allocate_with_origin(
-            source,
-            DocumentOrigin::File {
-                path: path.clone(),
-                writable: true,
-            },
-        );
+        let mut registry = world.resource_mut::<ModelicaDocumentRegistry>();
+        // ONE DOCUMENT PER FILE. The path IS the identity: re-opening a `.mo`
+        // reuses its document and refreshes the content from what we just read.
+        //
+        // This used to `allocate_with_origin` unconditionally, so opening the
+        // same file twice minted a SECOND document — two tabs, two undo stacks,
+        // both saving over each other, last writer silently winning. The rule
+        // already existed (`find_by_path`, used by the package browser); this
+        // entry point just never called it.
+        //
+        // Mirrors `DocumentRegistry::open_file` (lunco-doc-bevy), which USD now
+        // uses; Modelica cannot share it verbatim until its registry's
+        // entity-link map is decomposed out of the shared core.
+        let doc_id = match registry.find_by_path(&path) {
+            Some(doc) => {
+                let dirty = registry
+                    .host(doc)
+                    .is_some_and(|h| h.document().is_dirty());
+                if dirty {
+                    // Unsaved edits outrank disk — reloading would destroy work
+                    // undo cannot recover. The user keeps theirs; disk and memory
+                    // now disagree and that MUST reach the user, not just a log.
+                    bevy::log::warn!(
+                        "[OpenFile] {} has unsaved edits — keeping them; disk NOT reloaded",
+                        path.display()
+                    );
+                } else if registry.checkpoint_source(doc, source) {
+                    // Text came FROM disk ⇒ the document matches it ⇒ clean.
+                    registry.mark_document_saved(doc);
+                }
+                doc
+            }
+            None => registry.allocate_with_origin(
+                source,
+                DocumentOrigin::File {
+                    path: path.clone(),
+                    writable: true,
+                },
+            ),
+        };
         let mut tabs = world.resource_mut::<ModelTabs>();
         let tab_id = tabs.ensure_for(doc_id, None);
         if let Some(tab) = tabs.get_mut(tab_id) {

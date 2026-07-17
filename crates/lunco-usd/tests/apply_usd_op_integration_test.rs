@@ -4,10 +4,12 @@
 //! USD stage documents, notifies listeners via [`DocumentChanged`], and propagates
 //! updates through to the visual synchronization layer to update Bevy materials.
 
+use lunco_doc_bevy::DocumentRegistry;
+use lunco_usd::document::UsdDocument;
 use bevy::prelude::*;
 use lunco_usd_bevy::*;
 use lunco_usd::{
-    ApplyUsdOp, UsdCommandsPlugin, UsdDocumentRegistry, UsdOp, LayerId,
+    ApplyUsdOp, UsdCommandsPlugin, UsdOp, LayerId,
     ui::{SetActiveUsdViewport, UsdViewportPlugin, UsdViewportState},
 };
 use lunco_doc::DocumentOrigin;
@@ -72,7 +74,7 @@ def Xform "World"
 
     // 4. Allocate USD document in the registry
     let doc_id = {
-        let mut reg = app.world_mut().resource_mut::<UsdDocumentRegistry>();
+        let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
         reg.allocate(
             usda_content.to_string(),
             DocumentOrigin::untitled("test_stage.usda".to_string()),

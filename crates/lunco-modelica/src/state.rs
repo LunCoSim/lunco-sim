@@ -372,8 +372,19 @@ impl ModelicaDocumentRegistry {
     /// path. Used by API / scripting to resolve `path` →
     /// `DocumentId`.
     pub fn find_by_path(&self, path: &std::path::Path) -> Option<DocumentId> {
+        // `same_file`, NOT `==`: despite its name `canonical_path()` does not
+        // canonicalize — it returns the stored path verbatim. An exact compare
+        // therefore missed `/a/./b.mo` vs `/a/b.mo` vs a symlink and minted a
+        // SECOND document for one file: two tabs, two undo stacks, both saving
+        // over each other. That is the exact split-brain this lookup exists to
+        // prevent. `same_file` compares cheaply first and only pays for
+        // `canonicalize` when the raw paths differ. Shared with USD via
+        // `lunco_doc_bevy::DocumentRegistry::doc_for_file`.
         self.hosts.iter().find_map(|(id, host)| {
-            (host.document().canonical_path() == Some(path)).then_some(*id)
+            host.document()
+                .canonical_path()
+                .is_some_and(|p| lunco_doc::same_file(p, path))
+                .then_some(*id)
         })
     }
 
@@ -503,7 +514,7 @@ impl ModelicaDocumentRegistry {
 
     /// Apply a **journal op** to `doc` for replay (journal→scene projection —
     /// the networked-edit consume path) **without recording it**. Mirror of
-    /// [`UsdDocumentRegistry::replay_op`](lunco_usd::UsdDocumentRegistry::replay_op).
+    /// [`DocumentRegistry::replay_op`](lunco_doc_bevy::DocumentRegistry::replay_op) — now generic, so this Modelica copy is redundant.
     ///
     /// The op arrived via `Journal::append_remote` and is already in the
     /// journal, so re-recording it (as `DocumentHost::apply` would via the

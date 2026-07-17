@@ -30,7 +30,8 @@ use lunco_render::SceneCamera;
 use lunco_time::{AnimationPreview, ControlAnimation, Playback, TransportMode};
 use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd::document::{LayerId, UsdOp};
-use lunco_usd::registry::UsdDocumentRegistry;
+use lunco_usd::document::UsdDocument;
+use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_bevy::camera_path::{eval_curve, AimMode, CameraPath};
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
@@ -208,7 +209,7 @@ fn on_add_camera_here(
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-    usd_registry: Res<UsdDocumentRegistry>,
+    usd_registry: Res<DocumentRegistry<UsdDocument>>,
     mut commands: Commands,
 ) {
     // The camera the user is actually looking through. `is_active` alone is not

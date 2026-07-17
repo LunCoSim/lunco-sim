@@ -481,7 +481,7 @@ fn replay_scenario_journal(
     // Host-side only (inserted by `setup_host`) — the manifest this host serves.
     local_scenario: Option<Res<lunco_networking::scenario::ScenarioManifestResource>>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
-    mut registry: ResMut<lunco_usd::UsdDocumentRegistry>,
+    mut registry: ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>,
     // Entry ids already projected onto the scene (once-per-entry guard).
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
     // The host's replay base, latched the first frame its manifest exists.
@@ -1365,7 +1365,7 @@ pub struct SetRhaiPolicy {
 #[lunco_core::on_command(SetRhaiPolicy)]
 fn on_set_rhai_policy(
     trigger: On<SetRhaiPolicy>,
-    registry: Res<lunco_usd::UsdDocumentRegistry>,
+    registry: Res<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>,
     mut commands: Commands,
 ) {
     use lunco_usd::{ApplyUsdOp, LayerId, UsdOp};

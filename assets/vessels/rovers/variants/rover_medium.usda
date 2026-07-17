@@ -26,14 +26,17 @@ def Xform "RoverMedium" (
 
     # Handling. Both knobs below ARE read (lunco-usd-sim/src/lib.rs:1258/1261).
     custom float physxVehicleEngine:peakTorque = 650.0
-    # Coulomb μ ⇒ the slip limit is atan(μ). Tuned against the SURVEYED site
-    # (summer_space_school, real Apollo 15 crater): ways into the crater run
-    # 20.1° on the SSW bearing, 24.7° on the naive straight line, 34.4° on the
-    # WSW wall. μ=0.60 ⇒ 31.0°: this rover holds the ДЗЗ route and the naive
-    # line, and CANNOT climb the steep side — so the bearing you pick decides
-    # the run, which is the whole §3.2 exercise. (Was 1.0 ⇒ 45°, i.e. it drove
-    # every wall on the site and the slope hazard was decorative.)
-    custom float lunco:frictionCoefficient = 0.6
+    # Coulomb μ ⇒ the slip limit is atan(μ). Tuned against the SURVEYED site —
+    # summer_space_school/SURVEY.md, measured on the shipped DEM over a 4 m
+    # baseline (the baseline is part of the number: 2 m is pixel noise on a
+    # 2 m/px DTM). ДЗЗ route 19.8°, naive straight line 25.5°, steep N/E half
+    # 28.4-31.1°.
+    #   μ=0.50 ⇒ 26.6°: holds the route AND the naive line (1.1° margin), and
+    #   CANNOT climb the N/E half — so the bearing you pick decides the run,
+    #   which is the whole §3.2 exercise.
+    # Was 0.6 ⇒ 31.0°, which cleared 15 of the 16 sectors' best lines: the
+    # slope hazard was decorative. (Before that 1.0 ⇒ 45°, i.e. everything.)
+    custom float lunco:frictionCoefficient = 0.5
     # RADIANS — `read_f("lunco:maxSteerAngle").unwrap_or(0.5)` feeds the steering
     # knuckle target directly (lunco-hardware/src/lib.rs:190); nothing converts.
     # This was 25.0, i.e. 25 RADIANS = 1432° — saturated, so the §5 steering tier

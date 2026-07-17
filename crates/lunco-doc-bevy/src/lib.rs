@@ -872,6 +872,302 @@ where
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// DocumentRegistry — one registry for every domain
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Pending lifecycle events drained from a [`DocumentRegistry`].
+pub struct PendingEvents {
+    /// Docs newly added since the last drain.
+    pub opened: Vec<DocumentId>,
+    /// Docs whose generation advanced since the last drain.
+    pub changed: Vec<DocumentId>,
+    /// Docs removed since the last drain.
+    pub closed: Vec<DocumentId>,
+}
+
+/// Every live document of one domain, keyed by [`DocumentId`] — **and the one
+/// place that knows a file-backed document's identity is its path.**
+///
+/// This was hand-copied per domain (`DocumentRegistry<UsdDocument>`, `ModelicaDocument
+/// Registry`, `ScriptRegistry`): same `hosts` map, same `next_doc_id`, same
+/// pending rings, same journal wiring — and each hand-rolled (or omitted) the
+/// open-by-path rule, so each broke differently:
+///
+/// * **USD** deduped by path but never refreshed the content ⇒ re-opening an
+///   edited `.usda` replayed the OLD scene until the app was restarted.
+/// * **Modelica** never deduped at all ⇒ opening one `.mo` twice minted TWO
+///   documents, two tabs, two undo stacks, both saving over each other.
+///
+/// One missing concept, two opposite bugs. [`open_file`](Self::open_file) is
+/// that concept, written once: **identity is reused, content is not.**
+///
+/// WHY IT LIVES HERE, not in `lunco-doc`:
+/// * `lunco-twin-journal` depends on `lunco-doc`, so `lunco-doc` reaching the
+///   journal is a dependency CYCLE. (`JournalResource` is in this crate anyway.)
+/// * It must be a Bevy `Resource` so each domain can alias it
+///   (`type DocumentRegistry<UsdDocument> = DocumentRegistry<UsdDocument>`) and its call
+///   sites keep working; the orphan rule blocks `impl Resource` for a foreign
+///   type from here.
+/// * `lunco-doc`'s [`OpRecorder`](lunco_doc::OpRecorder) contract already says
+///   the concrete recorder "lives in the ECS layer" — this crate IS that layer.
+///   The per-domain registries each wired the journal themselves; this hoists
+///   that up one level rather than inventing a new seam.
+///
+/// (Not because `lunco-doc` is dep-free — it isn't. Its own manifest notes it
+/// pulls bevy transitively through `lunco-core`, "a regression on the original
+/// headless data model stance".)
+#[derive(Resource)]
+pub struct DocumentRegistry<D: lunco_doc::Document> {
+    hosts: HashMap<DocumentId, lunco_doc::DocumentHost<D>>,
+    /// Twin-journal handle, wired once the [`JournalResource`] appears. When
+    /// set, every host gets a [`JournalOpRecorder`] so edits — including undo /
+    /// redo — auto-record. `None` in headless-without-journal builds.
+    journal: Option<JournalResource>,
+    next_doc_id: u64,
+    pending_opened: Vec<DocumentId>,
+    pending_changes: Vec<DocumentId>,
+    pending_closed: Vec<DocumentId>,
+}
+
+impl<D: lunco_doc::Document> Default for DocumentRegistry<D> {
+    fn default() -> Self {
+        Self {
+            hosts: HashMap::new(),
+            journal: None,
+            next_doc_id: 0,
+            pending_opened: Vec::new(),
+            pending_changes: Vec::new(),
+            pending_closed: Vec::new(),
+        }
+    }
+}
+
+impl<D: lunco_doc::Document> DocumentRegistry<D>
+where
+    D::Op: lunco_twin_journal::OpPayload,
+{
+    /// Install `doc` under a fresh id, wire its recorder, and queue its
+    /// lifecycle events. The low-level path — see
+    /// [`open_file`](Self::open_file) for anything with a filesystem path.
+    fn install(&mut self, make: impl FnOnce(DocumentId) -> D) -> DocumentId {
+        self.next_doc_id = self.next_doc_id.saturating_add(1);
+        let id = DocumentId::new(self.next_doc_id);
+        self.hosts.insert(id, lunco_doc::DocumentHost::new(make(id)));
+        // Fit the journal recorder at creation so the very first edit is
+        // journaled. No-op until `set_journal` retro-fits.
+        self.attach_recorder(id);
+        // One Opened (lifecycle) + one Changed (initial-source seed) so a
+        // subscriber that only listens to changes still sees the initial source.
+        self.pending_opened.push(id);
+        self.pending_changes.push(id);
+        id
+    }
+
+    /// Wire the Twin-journal handle and retro-fit a recorder onto every existing
+    /// host. Called once, reactively, the frame the [`JournalResource`] appears.
+    pub fn set_journal(&mut self, journal: JournalResource) {
+        self.journal = Some(journal);
+        let ids: Vec<_> = self.hosts.keys().copied().collect();
+        for id in ids {
+            self.attach_recorder(id);
+        }
+    }
+
+    fn attach_recorder(&mut self, id: DocumentId) {
+        if let Some(journal) = &self.journal {
+            if let Some(host) = self.hosts.get_mut(&id) {
+                if !host.has_recorder() {
+                    attach_journal_recorder(host, journal);
+                }
+            }
+        }
+    }
+
+    /// Borrow the host for `doc`, or `None` if unknown.
+    pub fn host(&self, doc: DocumentId) -> Option<&lunco_doc::DocumentHost<D>> {
+        self.hosts.get(&doc)
+    }
+
+    /// Mutably borrow the host for `doc`. Direct mutations through this handle
+    /// MUST be paired with [`mark_changed`](Self::mark_changed) — the registry
+    /// can't see arbitrary uses of `&mut DocumentHost`.
+    pub fn host_mut(&mut self, doc: DocumentId) -> Option<&mut lunco_doc::DocumentHost<D>> {
+        self.hosts.get_mut(&doc)
+    }
+
+    /// True iff `doc` is a document we own.
+    pub fn contains(&self, doc: DocumentId) -> bool {
+        self.hosts.contains_key(&doc)
+    }
+
+    /// Every live document id.
+    pub fn ids(&self) -> impl Iterator<Item = DocumentId> + '_ {
+        self.hosts.keys().copied()
+    }
+
+    /// Queue a `Changed` event for `doc` after a direct `host_mut` mutation.
+    pub fn mark_changed(&mut self, doc: DocumentId) {
+        self.pending_changes.push(doc);
+    }
+
+    /// Apply an op via the host and queue a Changed notification. Convenience
+    /// wrapper so callers don't have to remember [`mark_changed`](Self::mark_changed).
+    pub fn apply(
+        &mut self,
+        doc: DocumentId,
+        op: D::Op,
+    ) -> Result<lunco_doc::Ack, lunco_doc::Reject> {
+        let host = self
+            .hosts
+            .get_mut(&doc)
+            .ok_or_else(|| lunco_doc::Reject::InvalidOp(format!("unknown doc {doc}")))?;
+        let ack = host.apply(lunco_doc::Mutation::local(op))?;
+        self.pending_changes.push(doc);
+        Ok(ack)
+    }
+
+    /// Drop `doc` and queue its `Closed` event.
+    pub fn remove(&mut self, doc: DocumentId) -> Option<lunco_doc::DocumentHost<D>> {
+        let host = self.hosts.remove(&doc)?;
+        self.pending_closed.push(doc);
+        Some(host)
+    }
+
+    /// Drain the pending-events rings.
+    pub fn drain_pending(&mut self) -> PendingEvents {
+        PendingEvents {
+            opened: std::mem::take(&mut self.pending_opened),
+            changed: std::mem::take(&mut self.pending_changes),
+            closed: std::mem::take(&mut self.pending_closed),
+        }
+    }
+}
+
+impl<D: lunco_doc::Document> DocumentRegistry<D>
+where
+    D::Op: lunco_twin_journal::OpPayload + serde::de::DeserializeOwned,
+{
+    /// Apply a **journal op** to `doc` for replay (journal→scene projection, the
+    /// networked-edit consume path) **without recording it**. The op arrived via
+    /// `Journal::append_remote` and is already in the journal, so re-recording it
+    /// (as [`apply`](Self::apply) would, via the host's [`JournalOpRecorder`])
+    /// would mint a duplicate local entry. This bypasses the recorder by applying
+    /// straight to the document, then marks `doc` changed so views re-project.
+    ///
+    /// **This is the multi-user consume path**, and it is generic on purpose: any
+    /// domain whose `Op` is deserializable replays remote edits through it. How
+    /// well that behaves is decided entirely by the domain's op ADDRESSING —
+    /// path/name-addressed ops (`/World/Rover.translate`, `AddComponent{class}`)
+    /// merge per-property the way Omniverse's `.live` layer does; byte-offset ops
+    /// (`EditText{range}`) break the moment the base moves; whole-file ops
+    /// (`ScriptOp::SetSource`) mean the last writer silently erases the other.
+    ///
+    /// Returns `false` (logged, non-fatal) if the doc is unknown, the payload
+    /// doesn't parse as this domain's op, or the apply is rejected (e.g. AddPrim
+    /// of an existing prim when replaying already-reflected history — harmless).
+    pub fn replay_op(&mut self, doc: DocumentId, op: &serde_json::Value) -> bool {
+        let parsed = match serde_json::from_value::<D::Op>(op.clone()) {
+            Ok(op) => op,
+            Err(e) => {
+                warn!("[doc-replay] op payload does not parse for this domain: {e}");
+                return false;
+            }
+        };
+        let Some(host) = self.hosts.get_mut(&doc) else {
+            return false;
+        };
+        match host.document_mut().apply(parsed) {
+            Ok(_) => {
+                self.pending_changes.push(doc);
+                true
+            }
+            Err(e) => {
+                warn!("[doc-replay] apply rejected on doc {doc}: {e:?}");
+                false
+            }
+        }
+    }
+}
+
+impl<D: lunco_doc::FileBacked> DocumentRegistry<D>
+where
+    D::Op: lunco_twin_journal::OpPayload,
+{
+    /// Allocate a new document with an explicit origin.
+    ///
+    /// For origins with NO filesystem path (File→New → untitled, bundled
+    /// examples) and for session restore, which reinstates saved in-memory
+    /// (possibly dirty) state rather than disk. **For a file-backed open use
+    /// [`open_file`](Self::open_file)** — it enforces one-document-per-file and
+    /// makes the reuse-vs-refresh decision explicit. Calling this with a `File`
+    /// origin that is already open mints a SECOND document for the same path:
+    /// two undo stacks, two journal streams, racing saves.
+    pub fn allocate(&mut self, source: String, origin: lunco_doc::DocumentOrigin) -> DocumentId {
+        self.install(|id| D::with_origin(id, source, origin))
+    }
+
+    /// The document backing `path`, if that file is open. **The path IS the
+    /// identity** of a file-backed document.
+    pub fn doc_for_file(&self, path: &std::path::Path) -> Option<DocumentId> {
+        self.ids().find(|id| {
+            self.host(*id)
+                .and_then(|h| match h.document().origin() {
+                    lunco_doc::DocumentOrigin::File { path: p, .. } => {
+                        Some(lunco_doc::same_file(p, path))
+                    }
+                    _ => None,
+                })
+                .unwrap_or(false)
+        })
+    }
+
+    /// Open `path` backed by `source` (its current on-disk text), returning the
+    /// document for that file and what had to happen to get there.
+    ///
+    /// **Use this for every file-backed open, in every domain.** Identity and
+    /// content are two decisions, and the codebase used to make the second one
+    /// by accident: both USD's and Modelica's open paths were shaped
+    /// `if !already_open { allocate(source) }`, so a freshly-read `source` was
+    /// silently dropped when the file was already open (USD), or a duplicate
+    /// document was minted because nobody checked at all (Modelica). Here it's a
+    /// typed [`OpenOutcome`], not a fallthrough.
+    ///
+    /// `source` is a PARAMETER, so the registry never reads or caches a file:
+    /// the caller decides where bytes come from (local disk, or a client's
+    /// replicated bytes). "Cache only on the client" holds by construction.
+    ///
+    /// The registry deliberately keeps NO path→id index: `document_mut()` is
+    /// public and Save-As rebinds origins behind the registry's back, so a
+    /// cached index would silently rot — the exact bug class this kills. Origins
+    /// ARE the truth; we scan them. O(open documents), off the hot path.
+    pub fn open_file(
+        &mut self,
+        path: impl Into<std::path::PathBuf>,
+        source: String,
+    ) -> (DocumentId, lunco_doc::OpenOutcome) {
+        use lunco_doc::OpenOutcome;
+        let path = path.into();
+        let Some(id) = self.doc_for_file(&path) else {
+            let id = self.allocate(source, lunco_doc::DocumentOrigin::writable_file(path));
+            return (id, OpenOutcome::Allocated);
+        };
+        let Some(host) = self.hosts.get_mut(&id) else {
+            unreachable!("doc_for_file returned an id with no host");
+        };
+        if host.document().is_dirty() {
+            return (id, OpenOutcome::KeptDirty);
+        }
+        if !host.document_mut().reload_base(&source) {
+            return (id, OpenOutcome::KeptUnparsable);
+        }
+        // The content moved — same ring the mutating ops feed, so views rebuild
+        // off an open exactly as they would off an edit.
+        self.pending_changes.push(id);
+        (id, OpenOutcome::Refreshed)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Plugin
 // ─────────────────────────────────────────────────────────────────────────────
 

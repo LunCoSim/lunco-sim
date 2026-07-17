@@ -37,6 +37,7 @@
 //! Scope: the **default twin scene** only. Arbitrary `OpenFile` scenes stay on
 //! E1's path; `mem://` / `bundled://` keep the file-backed import.
 
+use crate::document::UsdDocument;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -50,7 +51,8 @@ use lunco_usd_bevy::{UsdPrimPath, UsdSourceText, UsdStageAsset, UsdVisualSynced}
 use lunco_usd_sim::cosim::LoadScene;
 
 use crate::document::UsdOp;
-use crate::registry::UsdDocumentRegistry;
+use lunco_doc::OpenOutcome;
+use lunco_doc_bevy::DocumentRegistry;
 
 /// Marks a live prim entity that refreshes its own content **in place**, so the
 /// twin projection must NOT structurally despawn/reload it on an attribute-only
@@ -150,7 +152,7 @@ impl DocBackedTwinScenes {
 /// live-edited scenario back onto its prim) must refuse rather than silently drop
 /// the edit. This is the asset↔document bridge that unblocks scenario save-back:
 /// a runtime entity carries a `UsdPrimPath { stage_handle, path }`, and this maps
-/// that stage handle to the `UsdDocumentRegistry` document you can `ApplyUsdOp` on.
+/// that stage handle to the `DocumentRegistry<UsdDocument>` document you can `ApplyUsdOp` on.
 pub fn scene_document_for(
     backed: &DocBackedTwinScenes,
     asset_server: &AssetServer,
@@ -202,17 +204,11 @@ pub struct PendingRefSpawns {
 const MAX_TWIN_DOC_ATTEMPTS: u32 = 600;
 
 /// The registered USD document whose origin is the on-disk file `abs`, if any.
-fn find_doc_for_abs(registry: &UsdDocumentRegistry, abs: &std::path::Path) -> Option<DocumentId> {
-    registry.ids().find(|id| {
-        registry
-            .host(*id)
-            .map(|h| match h.document().origin() {
-                DocumentOrigin::File { path, .. } => path == abs,
-                _ => false,
-            })
-            .unwrap_or(false)
-    })
-}
+// (`find_doc_for_abs` lived here — a hand-rolled copy of "which document backs
+// this path?", duplicated inline in the OpenFile observer too. It is now
+// `DocumentRegistry::<UsdDocument>::doc_for_file`, next to the `open_file` that pairs the
+// identity rule with the reuse-vs-refresh decision the copies kept getting
+// wrong.)
 
 /// Allocate the document for each pending twin scene once its base source text
 /// has loaded through the twin source, restore its persisted runtime overlay,
@@ -229,11 +225,12 @@ fn find_doc_for_abs(registry: &UsdDocumentRegistry, abs: &std::path::Path) -> Op
 /// stage, so the composed overlay still wins.
 pub(crate) fn drain_pending_twin_docs(
     mut pending: ResMut<PendingTwinDocs>,
-    mut registry: ResMut<UsdDocumentRegistry>,
+    mut registry: ResMut<DocumentRegistry<UsdDocument>>,
     mut backed: ResMut<DocBackedTwinScenes>,
     sources: Res<Assets<UsdSourceText>>,
     twin_roots: Res<TwinRoots>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    role: Option<Res<lunco_core::NetworkRole>>,
     mut commands: Commands,
 ) {
     if pending.items.is_empty() {
@@ -257,9 +254,31 @@ pub(crate) fn drain_pending_twin_docs(
             }
             continue;
         };
-        let doc = find_doc_for_abs(&registry, &item.abs_path).unwrap_or_else(|| {
-            registry.allocate(source.clone(), DocumentOrigin::writable_file(item.abs_path.clone()))
-        });
+        // LOCAL READS DISK. On an authoritative session (Standalone | Host) the
+        // file IS the truth, so re-read it here rather than trusting the asset
+        // store — `AssetServer::load` of an already-loaded `twin://` path hands
+        // back the cached text without consulting the reader. A client has no
+        // twin on disk, so it keeps the replicated asset text.
+        let authoritative = role.as_deref().is_none_or(|r| r.is_authoritative());
+        let from_disk = authoritative
+            .then(|| std::fs::read_to_string(&item.abs_path).ok())
+            .flatten();
+        let source = from_disk.as_deref().unwrap_or(source.as_str());
+
+        // One-document-per-file, and the base refreshed from disk when it's safe:
+        // the registry owns both halves of that rule (see `open_file`). Reusing a
+        // resident document AS-IS is what replayed the pre-edit scene and forced
+        // an app restart to see a `.usda` change.
+        let (doc, outcome) = registry.open_file(item.abs_path.clone(), source.to_string());
+        match outcome {
+            OpenOutcome::KeptDirty => warn!(
+                "[usd-e1b] `{twin_path}` has unsaved edits — keeping them; NOT re-reading from disk"
+            ),
+            OpenOutcome::KeptUnparsable => warn!(
+                "[usd-e1b] `{twin_path}` on disk does not parse as USDA — mounting the resident document"
+            ),
+            OpenOutcome::Allocated | OpenOutcome::Refreshed => {}
+        }
         // Restore the persisted `.lunco/runtime` overlay NOW, before the mount
         // below. The `DocumentOpened` observer restore fires a flush later —
         // after the stage load has already read its bytes. Guarded: whichever
@@ -299,7 +318,7 @@ pub(crate) fn drain_pending_twin_docs(
 /// (see the debounce in [`sync_twin_overlays`]), never on every edit.
 fn write_twin_overlay(world: &mut World, doc: DocumentId, name: &str, rel: &str, gen: u64) {
     let composed_source =
-        world.resource::<UsdDocumentRegistry>().host(doc).map(|h| h.document().composed_source());
+        world.resource::<DocumentRegistry<UsdDocument>>().host(doc).map(|h| h.document().composed_source());
     if let Some(src) = composed_source {
         world.resource::<TwinRoots>().set_overlay(name, rel, Arc::new(src.into_bytes()));
         if let Some(s) = world.resource_mut::<DocBackedTwinScenes>().map.get_mut(&doc) {
@@ -328,7 +347,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         // `continue` right after this check, so computing them up-front was
         // ~212µs/frame of pure waste (profiled on the moonbase twin). Read only
         // the generation here; pay for the payloads only once it has moved.
-        let cur_gen = match world.resource::<UsdDocumentRegistry>().host(doc) {
+        let cur_gen = match world.resource::<DocumentRegistry<UsdDocument>>().host(doc) {
             Some(h) => h.document().generation(),
             None => {
                 world.resource::<TwinRoots>().clear_overlay(&name, &rel);
@@ -362,7 +381,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         // `None` = the op ring overflowed (more edits than capacity since the last
         // sync) → we can't trust an incremental replay, so rebuild.
         let ops = world
-            .resource::<UsdDocumentRegistry>()
+            .resource::<DocumentRegistry<UsdDocument>>()
             .host(doc)
             .and_then(|h| h.document().ops_since(synced.unwrap_or(0)));
         let has_work = synced.is_none() || ops.as_ref().map(|o| !o.is_empty()).unwrap_or(true);
@@ -392,7 +411,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             // spawns idempotently (never replay ops → double-author). This is the
             // only consumer of the whole-stage recompose.
             let composed = {
-                let reg = world.resource::<UsdDocumentRegistry>();
+                let reg = world.resource::<DocumentRegistry<UsdDocument>>();
                 reg.host(doc)
                     .expect("doc host present: generation read above, exclusive system")
                     .document()
@@ -408,7 +427,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                 // overlay is refreshed on the next settled frame.)
                 None => {
                     let cs = world
-                        .resource::<UsdDocumentRegistry>()
+                        .resource::<DocumentRegistry<UsdDocument>>()
                         .host(doc)
                         .map(|h| h.document().composed_source())
                         .unwrap_or_default();
@@ -416,7 +435,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                 }
                 Some(ops) if ops.iter().any(op_needs_rebuild) => {
                     let cs = world
-                        .resource::<UsdDocumentRegistry>()
+                        .resource::<DocumentRegistry<UsdDocument>>()
                         .host(doc)
                         .map(|h| h.document().composed_source())
                         .unwrap_or_default();
@@ -1090,22 +1109,25 @@ mod tests {
         }
     }
 
+    /// (Was `find_doc_for_abs_matches_file_origin_only` — the rule moved to the
+    /// registry as `doc_for_file`, so the coverage follows it here rather than
+    /// re-testing a local copy that no longer exists.)
     #[test]
-    fn find_doc_for_abs_matches_file_origin_only() {
-        let mut registry = UsdDocumentRegistry::default();
+    fn doc_for_file_matches_file_origin_only() {
+        let mut registry = DocumentRegistry::<UsdDocument>::default();
         let abs = PathBuf::from("/twins/moonbase/scene.usda");
         let doc = registry.allocate(TINY.to_string(), DocumentOrigin::writable_file(abs.clone()));
         registry.allocate(TINY.to_string(), DocumentOrigin::untitled("Untitled.usda"));
 
-        assert_eq!(find_doc_for_abs(&registry, &abs), Some(doc));
-        assert_eq!(find_doc_for_abs(&registry, std::path::Path::new("/twins/x.usda")), None);
+        assert_eq!(registry.doc_for_file(&abs), Some(doc));
+        assert_eq!(registry.doc_for_file(std::path::Path::new("/twins/x.usda")), None);
     }
 
     /// The bytes pushed into the overlay are the document's *composed* source —
     /// so a runtime-layer spawn rides into the live world's composition.
     #[test]
     fn composed_source_overlay_carries_runtime_spawn() {
-        let mut registry = UsdDocumentRegistry::default();
+        let mut registry = DocumentRegistry::<UsdDocument>::default();
         let abs = PathBuf::from("/twins/moonbase/scene.usda");
         let doc = registry.allocate(TINY.to_string(), DocumentOrigin::writable_file(abs));
         registry

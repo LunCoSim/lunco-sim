@@ -46,7 +46,7 @@ pub mod ui;
 
 pub use commands::{ApplyUsdOp, UsdCommandsPlugin, USD_DOCUMENT_KIND};
 pub use document::{LayerId, UsdChange, UsdDocument, UsdOp};
-pub use registry::UsdDocumentRegistry;
+// Registry: use `lunco_doc_bevy::DocumentRegistry<UsdDocument>` — no USD-specific type.
 pub use lunco_usd_bevy::{
     FallbackSceneLight, UsdAuthoredLight, UsdData, UsdPrimPath, UsdStageAsset,
     usd_data::UsdDataExt,

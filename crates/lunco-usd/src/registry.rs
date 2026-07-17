@@ -1,225 +1,131 @@
-//! `UsdDocumentRegistry` — owns every live [`UsdDocument`] keyed by
-//! [`lunco_doc::DocumentId`].
+//! USD's binding of the generic document registry.
 //!
-//! Mirrors the small surface of `ModelicaDocumentRegistry` but stays
-//! deliberately minimal in Phase 2: allocate / host / remove plus
-//! pending-event rings that the commands plugin drains into the
-//! `lunco-doc-bevy` notification triggers
-//! ([`DocumentOpened`](lunco_doc_bevy::DocumentOpened),
-//! [`lunco_doc_bevy::DocumentChanged`](lunco_doc_bevy::DocumentChanged),
-//! [`DocumentClosed`](lunco_doc_bevy::DocumentClosed)).
+//! There is **no `DocumentRegistry<UsdDocument>`**. Every live `.usda` document lives in
+//! [`lunco_doc_bevy::DocumentRegistry<UsdDocument>`], the same type Modelica and
+//! scripting use — `allocate` / `open_file` / `host` / `apply` / `replay_op` /
+//! the pending-event rings are written once, there.
 //!
-//! Entity linking, async-load reservation, and AST-staleness tracking
-//! land in later phases when the UI / viewport actually needs them.
-
-use std::collections::HashMap;
-
-use bevy::prelude::Resource;
-use lunco_doc::{Document, DocumentHost, DocumentId, DocumentOrigin};
-
-use crate::document::UsdDocument;
-
-/// Registry of live USD documents.
-///
-/// Single source of truth for "which `.usda` files are open right
-/// now." Commands, observers, and (later) browser sections read
-/// through here; nobody else holds `DocumentHost<UsdDocument>`.
-#[derive(Resource, Default)]
-pub struct UsdDocumentRegistry {
-    hosts: HashMap<DocumentId, DocumentHost<UsdDocument>>,
-    /// Twin-journal handle, wired once the [`JournalResource`] appears (see
-    /// `wire_usd_journal_handle`). When set, every host gets a
-    /// [`JournalOpRecorder`](lunco_doc_bevy::JournalOpRecorder) so edits —
-    /// including undo/redo — auto-record (A3). `None` in headless-without-
-    /// journal builds → no recording.
-    journal: Option<lunco_doc_bevy::JournalResource>,
-    next_doc_id: u64,
-    /// Docs that were just added — drained into
-    /// [`DocumentOpened`](lunco_doc_bevy::DocumentOpened) triggers.
-    pending_opened: Vec<DocumentId>,
-    /// Docs whose generation just advanced — drained into
-    /// [`lunco_doc_bevy::DocumentChanged`](lunco_doc_bevy::DocumentChanged).
-    pending_changes: Vec<DocumentId>,
-    /// Docs that were just dropped — drained into
-    /// [`DocumentClosed`](lunco_doc_bevy::DocumentClosed).
-    pending_closed: Vec<DocumentId>,
-}
-
-impl UsdDocumentRegistry {
-    /// Allocate a new document with an explicit origin and install it.
-    ///
-    /// Use this from the OpenFile observer (origin = writable file)
-    /// and from File→New (origin = untitled).
-    pub fn allocate(&mut self, source: String, origin: DocumentOrigin) -> DocumentId {
-        self.next_doc_id = self.next_doc_id.saturating_add(1);
-        let id = DocumentId::new(self.next_doc_id);
-        let doc = UsdDocument::with_origin(id, source, origin);
-        self.hosts.insert(id, DocumentHost::new(doc));
-        // A3: fit the journal recorder at creation (reactive to the open),
-        // so the very first edit is journaled. No-op if the journal isn't
-        // wired yet — `set_journal` retro-fits when it appears.
-        self.attach_recorder(id);
-        // One Opened (lifecycle) + one Changed (initial-source seed)
-        // — same shape as `ModelicaDocumentRegistry::allocate_with_origin`.
-        self.pending_opened.push(id);
-        self.pending_changes.push(id);
-        id
-    }
-
-    /// Wire the Twin-journal handle and retro-fit a recorder onto every
-    /// existing host. Called once, reactively, the frame the
-    /// [`JournalResource`](lunco_doc_bevy::JournalResource) first appears.
-    /// Hosts opened afterwards get their recorder at [`allocate`](Self::allocate).
-    pub fn set_journal(&mut self, journal: lunco_doc_bevy::JournalResource) {
-        self.journal = Some(journal);
-        let ids: Vec<_> = self.hosts.keys().copied().collect();
-        for id in ids {
-            self.attach_recorder(id);
-        }
-    }
-
-    /// Attach a [`JournalOpRecorder`](lunco_doc_bevy::JournalOpRecorder) to
-    /// `id`'s host when a journal is wired and the host lacks one. The A3
-    /// auto-bridge seam — replaces all per-op recording.
-    fn attach_recorder(&mut self, id: DocumentId) {
-        if let Some(journal) = &self.journal {
-            if let Some(host) = self.hosts.get_mut(&id) {
-                if !host.has_recorder() {
-                    lunco_doc_bevy::attach_journal_recorder(host, journal);
-                }
-            }
-        }
-    }
-
-    /// Borrow the host for `doc`, or `None` if unknown.
-    pub fn host(&self, doc: DocumentId) -> Option<&DocumentHost<UsdDocument>> {
-        self.hosts.get(&doc)
-    }
-
-    /// Mutably borrow the host for `doc`. Direct mutations through
-    /// this handle MUST be paired with [`mark_changed`](Self::mark_changed)
-    /// — the registry can't see arbitrary uses of `&mut DocumentHost`.
-    /// `host.apply(...)` callers should use the convenience
-    /// [`apply`](Self::apply) wrapper which marks for them.
-    pub fn host_mut(&mut self, doc: DocumentId) -> Option<&mut DocumentHost<UsdDocument>> {
-        self.hosts.get_mut(&doc)
-    }
-
-    /// True iff `doc` is a USD document we own. Used by the
-    /// [`SaveDocument`](lunco_doc_bevy::SaveDocument) observer to
-    /// gate without false-positives on Modelica / SysML ids.
-    pub fn contains(&self, doc: DocumentId) -> bool {
-        self.hosts.contains_key(&doc)
-    }
-
-    /// Apply an op via the host and queue a Changed notification.
-    /// Convenience wrapper so callers don't have to remember
-    /// [`mark_changed`](Self::mark_changed).
-    pub fn apply(
-        &mut self,
-        doc: DocumentId,
-        op: <UsdDocument as lunco_doc::Document>::Op,
-    ) -> Result<lunco_doc::Ack, lunco_doc::Reject> {
-        let host = self
-            .hosts
-            .get_mut(&doc)
-            .ok_or_else(|| lunco_doc::Reject::InvalidOp(format!("unknown doc {doc}")))?;
-        let ack = host.apply(lunco_doc::Mutation::local(op))?;
-        self.pending_changes.push(doc);
-        Ok(ack)
-    }
-
-    /// Apply a **journal op** to `doc` for replay (journal→scene projection, the
-    /// networked-edit consume path) **without recording it**. The op arrived via
-    /// `Journal::append_remote` and is already in the journal, so re-recording it
-    /// (as [`apply`](Self::apply) would, via the host's `JournalOpRecorder`)
-    /// would mint a duplicate local entry. This bypasses the recorder by applying
-    /// straight to the document, then marks `doc` changed so the scene
-    /// re-projects. `op` is the journal entry's serialized `UsdOp` payload.
-    ///
-    /// Returns `false` (logged, non-fatal) if the doc is unknown, the payload
-    /// isn't a `UsdOp`, or the apply is rejected (e.g. AddPrim of an existing
-    /// prim when replaying already-reflected history — harmless).
-    pub fn replay_op(&mut self, doc: DocumentId, op: &serde_json::Value) -> bool {
-        let parsed = match serde_json::from_value::<crate::document::UsdOp>(op.clone()) {
-            Ok(op) => op,
-            Err(e) => {
-                bevy::log::warn!("[usd-replay] op payload is not a UsdOp: {e}");
-                return false;
-            }
-        };
-        let Some(host) = self.hosts.get_mut(&doc) else {
-            return false;
-        };
-        match host.document_mut().apply(parsed) {
-            Ok(_) => {
-                self.pending_changes.push(doc);
-                true
-            }
-            Err(e) => {
-                bevy::log::warn!("[usd-replay] apply rejected on doc {doc}: {e:?}");
-                false
-            }
-        }
-    }
-
-    /// Mark `doc` as changed without applying an op — for direct
-    /// `host_mut` mutations (undo/redo loops, reload-from-disk).
-    pub fn mark_changed(&mut self, doc: DocumentId) {
-        if self.hosts.contains_key(&doc) {
-            self.pending_changes.push(doc);
-        }
-    }
-
-    /// Remove a document from the registry. Returns the dropped host
-    /// (caller may inspect it before drop) or `None` if unknown.
-    pub fn remove(&mut self, doc: DocumentId) -> Option<DocumentHost<UsdDocument>> {
-        let host = self.hosts.remove(&doc)?;
-        self.pending_closed.push(doc);
-        Some(host)
-    }
-
-    /// Iterator over every live document id.
-    pub fn ids(&self) -> impl Iterator<Item = DocumentId> + '_ {
-        self.hosts.keys().copied()
-    }
-
-    /// Drain the pending-events rings. The commands plugin calls this
-    /// each frame to fire `DocumentOpened` / `DocumentChanged` /
-    /// `DocumentClosed` triggers.
-    pub fn drain_pending(&mut self) -> PendingEvents {
-        PendingEvents {
-            opened: std::mem::take(&mut self.pending_opened),
-            changed: std::mem::take(&mut self.pending_changes),
-            closed: std::mem::take(&mut self.pending_closed),
-        }
-    }
-}
-
-/// Snapshot of pending lifecycle events drained from the registry.
-pub struct PendingEvents {
-    /// Docs newly added since the last drain.
-    pub opened: Vec<DocumentId>,
-    /// Docs whose generation advanced since the last drain.
-    pub changed: Vec<DocumentId>,
-    /// Docs removed since the last drain.
-    pub closed: Vec<DocumentId>,
-}
+//! WHAT USED TO BE HERE, and why it isn't: a hand-copied registry (same `hosts`
+//! map, same `next_doc_id`, same rings, same journal wiring as Modelica's) that
+//! also hand-rolled the open-by-path rule — dedup by path, but never refresh the
+//! content. So re-opening an edited `.usda` replayed the OLD scene until the app
+//! restarted. Modelica's copy omitted the dedup instead and minted duplicate
+//! documents. One rule, two hand-rolled copies, two opposite bugs; it now lives
+//! in [`lunco_doc_bevy::DocumentRegistry::open_file`] alone.
+//!
+//! USD's own half of the contract is [`lunco_doc::FileBacked`] on
+//! [`UsdDocument`](crate::document::UsdDocument) (`crate::document`) — how to
+//! build, whether it's dirty, how to re-read it.
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::document::{LayerId, UsdOp};
+    use crate::document::{LayerId, UsdDocument, UsdOp};
+    use lunco_doc::{Document, DocumentOrigin, OpenOutcome};
+    use lunco_doc_bevy::DocumentRegistry;
 
     const TINY_USDA: &str = "#usda 1.0\ndef Xform \"World\" {}\n";
 
+    fn reg() -> DocumentRegistry<UsdDocument> {
+        DocumentRegistry::default()
+    }
+
+    /// THE REGRESSION. Re-opening a file whose text changed on disk must project
+    /// the NEW text through the SAME document.
+    ///
+    /// Both open paths used to read `if !already_open { allocate(source) }`, so a
+    /// second open dropped the freshly-read source and kept the stale document:
+    /// editing a `.usda` and re-opening the Twin replayed the pre-edit scene and
+    /// only an app restart picked it up. Identity is reused; content is not.
+    #[test]
+    fn reopen_refreshes_a_clean_document_in_place() {
+        let mut reg = reg();
+        let path = std::path::PathBuf::from("/twins/school/traverse.usda");
+
+        let (first, out) = reg.open_file(path.clone(), TINY_USDA.to_string());
+        assert_eq!(out, OpenOutcome::Allocated);
+
+        let edited = "#usda 1.0\ndef Xform \"World\" {}\ndef Xform \"POI\" {}\n";
+        let (second, out) = reg.open_file(path.clone(), edited.to_string());
+
+        assert_eq!(second, first, "same file ⇒ same document, never a second id");
+        assert_eq!(out, OpenOutcome::Refreshed);
+        assert!(
+            reg.host(first).unwrap().document().composed_source().contains("POI"),
+            "re-open must project the NEW disk text, not replay the resident base"
+        );
+        // Came from disk ⇒ clean, so nothing prompts the user to save it back.
+        assert!(!lunco_doc::FileBacked::is_dirty(reg.host(first).unwrap().document()));
+    }
+
+    /// Unsaved work outranks disk. Undo cannot recover a clobbered base, so the
+    /// registry refuses and hands the conflict back to the caller.
+    ///
+    /// Note this is deliberately NOT `SdfLayer::Reload()`'s behaviour — USD's
+    /// primitive discards a dirty layer's edits. USD leaves the policy to the
+    /// app; this is that policy.
+    #[test]
+    fn reopen_never_clobbers_unsaved_edits() {
+        let mut reg = reg();
+        let path = std::path::PathBuf::from("/twins/school/traverse.usda");
+        let (doc, _) = reg.open_file(path.clone(), TINY_USDA.to_string());
+
+        reg.host_mut(doc)
+            .unwrap()
+            .document_mut()
+            .apply(UsdOp::ReplaceSource {
+                edit_target: LayerId::root(),
+                text: "#usda 1.0\ndef Xform \"Mine\" {}\n".to_string(),
+            })
+            .unwrap();
+        assert!(lunco_doc::FileBacked::is_dirty(reg.host(doc).unwrap().document()));
+
+        let (same, out) = reg.open_file(path, TINY_USDA.to_string());
+        assert_eq!(same, doc);
+        assert_eq!(out, OpenOutcome::KeptDirty);
+        assert!(
+            reg.host(doc).unwrap().document().composed_source().contains("Mine"),
+            "the user's unsaved edit must survive a re-open"
+        );
+    }
+
+    /// A broken file on disk must not half-apply over a working document.
+    #[test]
+    fn reopen_with_unparsable_source_keeps_the_resident_base() {
+        let mut reg = reg();
+        let path = std::path::PathBuf::from("/twins/school/traverse.usda");
+        let (doc, _) = reg.open_file(path.clone(), TINY_USDA.to_string());
+
+        let (same, out) = reg.open_file(path, "this is not usda at all {{{".to_string());
+        assert_eq!(same, doc);
+        assert_eq!(out, OpenOutcome::KeptUnparsable);
+        assert!(reg.host(doc).unwrap().document().composed_source().contains("World"));
+    }
+
+    /// Identity is the FILE, not the string. `allocate` mints a second document
+    /// for the same path (two undo stacks, racing saves) — `open_file` is the
+    /// reason nobody has to remember that.
+    #[test]
+    fn open_file_is_one_document_per_path_unlike_allocate() {
+        let mut reg = reg();
+        let path = std::path::PathBuf::from("/twins/school/traverse.usda");
+
+        let (a, _) = reg.open_file(path.clone(), TINY_USDA.to_string());
+        let (b, _) = reg.open_file(path.clone(), TINY_USDA.to_string());
+        assert_eq!(a, b);
+        assert_eq!(reg.ids().count(), 1);
+
+        assert_eq!(reg.doc_for_file(&path), Some(a));
+        assert_eq!(reg.doc_for_file(std::path::Path::new("/twins/other.usda")), None);
+
+        // Untitled docs have no path and must never collide with it.
+        reg.allocate(TINY_USDA.to_string(), DocumentOrigin::untitled("Untitled.usda"));
+        assert_eq!(reg.doc_for_file(&path), Some(a));
+    }
+
     #[test]
     fn allocate_emits_opened_and_changed() {
-        let mut reg = UsdDocumentRegistry::default();
-        let id = reg.allocate(
-            TINY_USDA.to_string(),
-            DocumentOrigin::writable_file("/tmp/scene.usda"),
-        );
+        let mut reg = reg();
+        let id = reg.allocate(TINY_USDA.to_string(), DocumentOrigin::untitled("U.usda"));
         let pending = reg.drain_pending();
         assert_eq!(pending.opened, vec![id]);
         assert_eq!(pending.changed, vec![id]);
@@ -228,76 +134,17 @@ mod tests {
 
     #[test]
     fn apply_marks_changed() {
-        let mut reg = UsdDocumentRegistry::default();
-        let id = reg.allocate(
-            TINY_USDA.to_string(),
-            DocumentOrigin::writable_file("/tmp/scene.usda"),
-        );
-        reg.drain_pending(); // clear initial events
+        let mut reg = reg();
+        let id = reg.allocate(TINY_USDA.to_string(), DocumentOrigin::untitled("U.usda"));
+        let _ = reg.drain_pending();
         reg.apply(
             id,
             UsdOp::ReplaceSource {
                 edit_target: LayerId::root(),
-                text: "#usda 1.0\n".to_string(),
+                text: TINY_USDA.to_string(),
             },
         )
         .unwrap();
-        let pending = reg.drain_pending();
-        assert!(pending.opened.is_empty());
-        assert_eq!(pending.changed, vec![id]);
-    }
-
-    #[test]
-    fn replay_op_applies_without_recording_and_marks_changed() {
-        let mut reg = UsdDocumentRegistry::default();
-        let id = reg.allocate(
-            TINY_USDA.to_string(),
-            DocumentOrigin::writable_file("/tmp/scene.usda"),
-        );
-        reg.drain_pending();
-        let gen0 = reg.host(id).unwrap().document().generation();
-        // A journal op payload = a serialized UsdOp.
-        let op = serde_json::to_value(UsdOp::AddPrim {
-            edit_target: LayerId::root(),
-            parent_path: "/World".into(),
-            name: "rover".into(),
-            type_name: Some("Xform".into()),
-            reference: None,
-        })
-        .unwrap();
-        assert!(reg.replay_op(id, &op), "valid op replays");
-        // Applied (generation advanced) + marked changed for re-projection.
-        assert!(reg.host(id).unwrap().document().generation() > gen0);
         assert_eq!(reg.drain_pending().changed, vec![id]);
-        // A non-UsdOp payload and an unknown doc are rejected, not panics.
-        assert!(!reg.replay_op(id, &serde_json::json!({"nope": 1})));
-        assert!(!reg.replay_op(DocumentId::new(9999), &op));
-    }
-
-    #[test]
-    fn remove_emits_closed() {
-        let mut reg = UsdDocumentRegistry::default();
-        let id = reg.allocate(
-            TINY_USDA.to_string(),
-            DocumentOrigin::writable_file("/tmp/scene.usda"),
-        );
-        reg.drain_pending();
-        assert!(reg.remove(id).is_some());
-        let pending = reg.drain_pending();
-        assert_eq!(pending.closed, vec![id]);
-        assert!(!reg.contains(id));
-    }
-
-    #[test]
-    fn apply_to_unknown_id_errors() {
-        let mut reg = UsdDocumentRegistry::default();
-        let result = reg.apply(
-            DocumentId::new(999),
-            UsdOp::ReplaceSource {
-                edit_target: LayerId::root(),
-                text: "x".to_string(),
-            },
-        );
-        assert!(matches!(result, Err(lunco_doc::Reject::InvalidOp(_))));
     }
 }
