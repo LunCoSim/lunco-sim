@@ -110,10 +110,24 @@ impl ApiQueryProvider for TerrainHeightProvider {
             let n = HeightSource::normal_at(oracle.as_ref(), lx, lz, eps);
             let slope = HeightSource::slope_at(oracle.as_ref(), lx, lz, eps);
 
-            // Local height → world Y, and local normal → world frame, through the
-            // terrain transform (identity for an origin-anchored DEM, but correct
-            // under translation/rotation too).
-            let world_y = gt.transform_point(Vec3::new(local.x, h as f32, local.z)).y as f64;
+            // Height is returned AS THE ORACLE GIVES IT — already absolute
+            // body-datum metres (the DEM keeps the GeoTIFF's own values; see
+            // `lunco-terrain-bake::dem`). Do NOT re-transform it through `gt`.
+            //
+            // `gt` is the RENDER transform: under big_space the terrain is binned
+            // to a cell, so its GlobalTransform carries a whole cell_edge of Y
+            // (here `/Traverse/Terrain` sits at y=+2000). Feeding an already-
+            // absolute height through it double-counted that offset and returned
+            // +81 for ground that every other consumer calls -1918 — `world_pos`,
+            // the entity's own `position_y`/`height` ports, and the sibling
+            // `GroundHeight` raycast all report absolute. A scripted `nav_to`
+            // built from this was aiming ~2 km overhead, so `arrived` could never
+            // fire. (This is the render-frame-vs-grid-absolute trap: never push a
+            // grid-absolute value through a GlobalTransform.)
+            //
+            // XZ is unaffected either way — the cell offset here is pure Y — so
+            // the footprint test above still uses `gt` correctly.
+            let world_y = h;
             let wn = (gt.affine().matrix3 * Vec3A::new(n[0] as f32, n[1] as f32, n[2] as f32))
                 .normalize_or_zero();
 
