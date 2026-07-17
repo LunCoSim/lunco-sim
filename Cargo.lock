@@ -7491,6 +7491,7 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-environment",
+ "lunco-fsw",
  "lunco-materials",
  "lunco-mobility",
  "lunco-obstacle-field",
@@ -7503,6 +7504,7 @@ dependencies = [
  "lunco-usd-sim",
  "lunco-workspace",
  "serde",
+ "serde_json",
  "wasm-bindgen-futures",
 ]
 

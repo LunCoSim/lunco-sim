@@ -43,7 +43,15 @@ pub enum ApiRequest {
         command: String,
         params: serde_json::Value,
     },
-    QueryEntity { id: ApiEntityId },
+    // NO `QueryEntity` variant. Reading an entity's pose means knowing which
+    // coordinate frame it is in, and that belongs to the crate that owns the
+    // scene verbs, not to the transport: it now lives beside `MoveEntity` in
+    // `lunco-scene-commands` as an `ApiQueryProvider`, reporting the same
+    // grid-absolute frame that command accepts. As a built-in it read
+    // `GlobalTransform` — the render frame — and reported a position that shifted
+    // with the floating origin and could not be fed back. The `{"type":
+    // "QueryEntity"}` wire shape is unchanged; the envelope maps it to the
+    // provider.
     ListEntities,
     DiscoverSchema,
     SubscribeTelemetry { filter: Option<TelemetryFilter> },

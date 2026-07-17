@@ -2737,6 +2737,9 @@ impl Plugin for SpawnCommandPlugin {
         // whenever the second half was forgotten the command silently vanished
         // from the HTTP API / rhai / `discover_schema`).
         register_all_commands(app);
+        // The READ verb for the same entities. Registered here so any binary with
+        // the scene verbs answers `QueryEntity` too — the headless server included.
+        crate::entity_query::register(app);
         // A spawn whose USD stage hasn't composed yet is parked here, not placed
         // blind — see `RestDepth::StagePending`.
         app.init_resource::<DeferredSpawns>();
@@ -2840,6 +2843,105 @@ mod tests {
             rotation: None,
         };
         assert_eq!(cmd.entry_id, "test");
+    }
+
+    // ── MoveEntity's frame contract ─────────────────────────────────────
+
+    /// `MoveEntity::translation` is GRID-ABSOLUTE, so the handler must split it
+    /// into the `(CellCoord, Transform)` pair big_space stores — writing only
+    /// `Transform` would leave the stale cell in place and land the body
+    /// `cell × edge` from the requested spot.
+    ///
+    /// Pinned at a NON-zero cell: in cell 0 the grid-absolute position and the
+    /// local `Transform` are identical, which is why the sandbox never showed this
+    /// and the moonbase (2 km cells) teleported a dragged prim out of sight.
+    #[test]
+    fn move_entity_splits_a_grid_absolute_target_across_cells() {
+        use bevy::prelude::*;
+        use big_space::prelude::{CellCoord, Grid};
+        use super::*;
+
+        const EDGE: f32 = 2000.0;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<lunco_api::registry::ApiEntityRegistry>();
+        app.add_observer(on_move_entity_command);
+
+        let grid = app
+            .world_mut()
+            .spawn((Grid::new(EDGE, 0.0), CellCoord::ZERO, Transform::default(), GlobalTransform::default()))
+            .id();
+        // Starts at grid-absolute (0, 3947, 0) = cell y=2 + local y=-53.
+        let body = app
+            .world_mut()
+            .spawn((
+                CellCoord::new(0, 2, 0),
+                Transform::from_translation(Vec3::new(0.0, -53.0, 0.0)),
+                GlobalTransform::default(),
+                ChildOf(grid),
+            ))
+            .id();
+        let gid = lunco_core::GlobalEntityId::from_raw(7);
+        app.world_mut()
+            .resource_mut::<lunco_api::registry::ApiEntityRegistry>()
+            .assign(body, gid);
+
+        // Move it 100 m up, in grid-absolute terms: 3947 → 4047.
+        app.world_mut().trigger(MoveEntity {
+            entity_id: 7,
+            translation: Vec3::new(0.0, 4047.0, 0.0),
+        });
+        app.update();
+
+        let cell = app.world().get::<CellCoord>(body).copied().unwrap();
+        let tf = app.world().get::<Transform>(body).copied().unwrap();
+        let landed = cell.y as f32 * EDGE + tf.translation.y;
+        assert!(
+            (landed - 4047.0).abs() < 1e-2,
+            "reassembled position {landed} != requested 4047 (cell {cell:?}, local {:?})",
+            tf.translation
+        );
+        // The whole point: the request must NOT have been written raw into the
+        // local transform, which is what threw the object a cell away.
+        assert!(
+            tf.translation.y.abs() < EDGE,
+            "local translation {} must be a cell remainder, not the absolute",
+            tf.translation.y
+        );
+    }
+
+    /// A body that is not grid-direct has no cell, so its translation IS the
+    /// authored value and no cell may be invented for it.
+    #[test]
+    fn move_entity_leaves_a_cell_less_entity_alone() {
+        use bevy::prelude::*;
+        use big_space::prelude::CellCoord;
+        use super::*;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<lunco_api::registry::ApiEntityRegistry>();
+        app.add_observer(on_move_entity_command);
+
+        let loose = app
+            .world_mut()
+            .spawn((Transform::default(), GlobalTransform::default()))
+            .id();
+        app.world_mut()
+            .resource_mut::<lunco_api::registry::ApiEntityRegistry>()
+            .assign(loose, lunco_core::GlobalEntityId::from_raw(9));
+
+        app.world_mut().trigger(MoveEntity {
+            entity_id: 9,
+            translation: Vec3::new(1.0, 2.0, 3.0),
+        });
+        app.update();
+
+        assert_eq!(
+            app.world().get::<Transform>(loose).unwrap().translation,
+            Vec3::new(1.0, 2.0, 3.0)
+        );
+        assert!(app.world().get::<CellCoord>(loose).is_none());
     }
 
     // ── C4b: move-transform → runtime-layer persistence ─────────────────

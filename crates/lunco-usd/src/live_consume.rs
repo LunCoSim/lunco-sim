@@ -148,36 +148,139 @@ pub(crate) fn apply_translates_live(
     };
     for (path, v) in translates {
         let Some(entity) = find_live_entity(world, id, &path) else { continue };
-        // An authored translate on a GRID-DIRECT prim is grid-absolute (the
-        // spawn path plants the whole value at cell 0 and lets big_space
-        // re-split it). Writing it straight into `Transform` — as this did —
-        // left the entity's existing `CellCoord` standing, so the prim landed at
-        // `authored + cell × edge`: a live edit to anything outside the origin
-        // cell threw it 2 km per cell across the moonbase. Re-split it the same
-        // way spawn's value gets re-split, so re-applying an unchanged translate
-        // is a no-op instead of a jump.
-        let parent_grid = world
-            .get::<bevy::prelude::ChildOf>(entity)
-            .map(|c| c.parent())
-            .and_then(|p| world.get::<big_space::prelude::Grid>(p))
-            .cloned();
-        match parent_grid {
-            Some(grid) => {
-                let (cell, local) = grid.translation_to_grid(v.as_dvec3());
-                let mut e = world.entity_mut(entity);
-                if let Some(mut tf) = e.get_mut::<Transform>() {
-                    tf.translation = local;
-                }
-                e.insert(cell);
+        seat_authored_translate(world, entity, v);
+    }
+}
+
+/// Seat one authored `xformOp:translate` onto a live entity.
+///
+/// An authored translate on a GRID-DIRECT prim is **grid-absolute**: the spawn
+/// path plants the whole value at cell 0 and lets big_space re-split it into
+/// `(cell, remainder)`. Writing it straight into `Transform` — as this did — left
+/// the entity's existing `CellCoord` standing, so the prim landed at
+/// `authored + cell × edge`: a live edit to anything outside the origin cell
+/// threw it 2 km per cell across the moonbase. Re-splitting the same way spawn's
+/// value gets re-split makes re-applying an unchanged translate a no-op instead
+/// of a jump.
+///
+/// A prim with no parent `Grid` (nested under a referenced scene) has no cell,
+/// and its authored value IS the parent-local transform.
+fn seat_authored_translate(world: &mut World, entity: Entity, v: Vec3) {
+    let parent_grid = world
+        .get::<bevy::prelude::ChildOf>(entity)
+        .map(|c| c.parent())
+        .and_then(|p| world.get::<big_space::prelude::Grid>(p))
+        .cloned();
+    match parent_grid {
+        Some(grid) => {
+            let (cell, local) = grid.translation_to_grid(v.as_dvec3());
+            let mut e = world.entity_mut(entity);
+            if let Some(mut tf) = e.get_mut::<Transform>() {
+                tf.translation = local;
             }
-            // Nested under a referenced scene: no cell, and the authored value
-            // IS the parent-local transform.
-            None => {
-                if let Some(mut tf) = world.entity_mut(entity).get_mut::<Transform>() {
-                    tf.translation = v;
-                }
+            e.insert(cell);
+        }
+        None => {
+            if let Some(mut tf) = world.entity_mut(entity).get_mut::<Transform>() {
+                tf.translation = v;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod translate_seat_tests {
+    use super::*;
+    use big_space::prelude::{CellCoord, Grid};
+
+    const EDGE: f32 = 2000.0;
+
+    fn grid_world() -> (World, Entity) {
+        let mut world = World::new();
+        let grid = world
+            .spawn((Grid::new(EDGE, 0.0), CellCoord::ZERO, Transform::default()))
+            .id();
+        (world, grid)
+    }
+
+    /// The authored value is grid-absolute, so seating it must reassemble to that
+    /// value — cell AND remainder both written. Pinned outside cell 0, where the
+    /// bug was invisible.
+    #[test]
+    fn authored_translate_is_split_across_cells() {
+        let (mut world, grid) = grid_world();
+        // Sitting at grid-absolute y = 3947 (cell 2, local -53).
+        let prim = world
+            .spawn((
+                CellCoord::new(0, 2, 0),
+                Transform::from_translation(Vec3::new(0.0, -53.0, 0.0)),
+                ChildOf(grid),
+            ))
+            .id();
+
+        seat_authored_translate(&mut world, prim, Vec3::new(0.0, 4047.0, 0.0));
+
+        let cell = world.get::<CellCoord>(prim).copied().unwrap();
+        let tf = world.get::<Transform>(prim).copied().unwrap();
+        let landed = cell.y as f32 * EDGE + tf.translation.y;
+        assert!((landed - 4047.0).abs() < 1e-2, "reassembled {landed} != 4047");
+        assert!(
+            tf.translation.y.abs() < EDGE,
+            "local {} must be a remainder, not the absolute",
+            tf.translation.y
+        );
+    }
+
+    /// Re-applying the translate the prim is ALREADY at must not move it. This is
+    /// the round-trip that matters in practice: the gizmo authors grid-absolute on
+    /// drag-end and this path immediately re-consumes it. Before the fix that
+    /// round-trip was a `cell × edge` jump — the disappearing solar panel.
+    #[test]
+    fn re_seating_the_current_position_does_not_move_the_prim() {
+        let (mut world, grid) = grid_world();
+        let prim = world
+            .spawn((
+                CellCoord::new(1, 2, -1),
+                Transform::from_translation(Vec3::new(10.0, -53.0, 4.0)),
+                ChildOf(grid),
+            ))
+            .id();
+        // What the gizmo would author for this prim: cell × edge + local.
+        let authored = Vec3::new(
+            1.0 * EDGE + 10.0,
+            2.0 * EDGE - 53.0,
+            -1.0 * EDGE + 4.0,
+        );
+
+        seat_authored_translate(&mut world, prim, authored);
+
+        let cell = world.get::<CellCoord>(prim).copied().unwrap();
+        let tf = world.get::<Transform>(prim).copied().unwrap();
+        let reassembled = Vec3::new(
+            cell.x as f32 * EDGE + tf.translation.x,
+            cell.y as f32 * EDGE + tf.translation.y,
+            cell.z as f32 * EDGE + tf.translation.z,
+        );
+        assert!(
+            (reassembled - authored).length() < 1e-2,
+            "prim moved: {reassembled:?} != {authored:?}"
+        );
+    }
+
+    /// No parent grid ⇒ no cell to write, and the authored value is already local.
+    #[test]
+    fn a_nested_prim_keeps_its_parent_local_translate() {
+        let mut world = World::new();
+        let parent = world.spawn(Transform::default()).id();
+        let nested = world.spawn((Transform::default(), ChildOf(parent))).id();
+
+        seat_authored_translate(&mut world, nested, Vec3::new(1.0, 2.0, 3.0));
+
+        assert_eq!(
+            world.get::<Transform>(nested).unwrap().translation,
+            Vec3::new(1.0, 2.0, 3.0)
+        );
+        assert!(world.get::<CellCoord>(nested).is_none());
     }
 }
 
