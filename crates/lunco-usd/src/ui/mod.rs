@@ -83,6 +83,46 @@ impl Plugin for UsdUiPlugin {
         // owns `.mo`; the shared `BrowserActions` outbox is partitioned
         // by extension so the two drains coexist without ordering coupling.
         app.add_systems(Update, browser_dispatch::drain_browser_actions_for_usd);
+
+        // Surface external on-disk edits (git pull, another editor) to the user.
+        app.add_systems(Update, badge_externally_changed_usd_docs);
+    }
+}
+
+/// Poll the registry for USD documents whose file changed on disk behind the
+/// app, and raise one status badge per episode.
+///
+/// **Badge, never auto-reload.** A silent reload while a sim is running would
+/// restart the world (collaboration doc §UX), so this only notifies — the user
+/// re-opens to take the disk copy. Throttled to ~2 s because the check stats
+/// each open file; deduped via a `Local` set so a persistently-stale file
+/// nags once, not every tick, and drops from the set once it re-syncs (reload
+/// or save re-baselines the watermark), rearming for the next real change.
+fn badge_externally_changed_usd_docs(
+    time: Res<Time>,
+    registry: Res<DocumentRegistry<UsdDocument>>,
+    mut bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+    mut timer: Local<f32>,
+    mut badged: Local<std::collections::HashSet<lunco_doc::DocumentId>>,
+) {
+    *timer += time.delta_secs();
+    if *timer < 2.0 {
+        return;
+    }
+    *timer = 0.0;
+
+    let Some(bus) = bus.as_mut() else { return };
+    let stale: std::collections::HashSet<_> = registry.stale_docs().into_iter().collect();
+    // Re-arm docs that are no longer stale (re-opened, saved, or closed).
+    badged.retain(|d| stale.contains(d));
+    for doc in &stale {
+        if badged.insert(*doc) {
+            bus.push(
+                "usd",
+                lunco_workbench::status_bus::StatusLevel::Warn,
+                format!("{doc} changed on disk — re-open to load the new version"),
+            );
+        }
     }
 }
 
@@ -141,10 +181,8 @@ mod tests {
 
         let doc_id = {
             let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
-            reg.allocate(
-                "#usda 1.0\ndef Xform \"World\" {}\n".to_string(),
-                DocumentOrigin::writable_file("/tmp/scene.usda"),
-            )
+            reg.open_file("/tmp/scene.usda", "#usda 1.0\ndef Xform \"World\" {}\n".to_string())
+                .0
         };
         // Drain pending events → DocumentOpened trigger → observer
         // registers the WorkspaceStage. Two updates so the trigger
@@ -171,10 +209,7 @@ mod tests {
 
         let doc_id = {
             let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
-            reg.allocate(
-                "#usda 1.0\n".to_string(),
-                DocumentOrigin::writable_file("/tmp/scene.usda"),
-            )
+            reg.open_file("/tmp/scene.usda", "#usda 1.0\n".to_string()).0
         };
         app.update();
         app.update();

@@ -48,7 +48,18 @@ registry.open_file(path, source) -> (DocumentId, OpenOutcome)
 outcome exists so **"already open" can never quietly mean "keep whatever's in
 memory"** — the caller must see which happened.
 
-`allocate` is for path-less origins (Untitled, Bundled) and session restore only.
+`allocate` is for path-less origins only — and **the type system enforces it**. It
+takes `lunco_doc::PathlessOrigin` (`Untitled | Bundled`), which cannot express a
+filesystem path, so a file-backed document can *only* be born through `open_file`,
+where the one-document-per-path check lives. This used to be a doc comment asking
+callers nicely; a `File` origin handed to `allocate` for an already-open path minted
+the split-brain second document. The rule now rides on the signature, so a document
+type added next year inherits it for free.
+
+Session restore is the sole caller that must reinstate a stored `File` origin
+verbatim — it reloads saved in-memory state, possibly dirty, rather than re-reading
+disk. It uses `DocumentRegistry::restore(source, origin)`, which says so; nothing
+else may. Do not widen `allocate` back to `DocumentOrigin`.
 
 Three rules that are not obvious and were each paid for in bugs:
 
@@ -268,21 +279,48 @@ primitive and pushes policy to the app — Maya names it "Revert to File" and ma
 the user ask.
 
 So `OpenOutcome::KeptDirty` is *not* USD's behaviour. It is our policy layer, and
-that is the correct place for it.
+that is the correct place for it. A kept-dirty (or kept-unparsable) re-open is a
+surprise the user must *see*, not a silent no-op: the USD open path raises a status
+badge in UI builds alongside the log line. A modal "Reload / Keep my edits?" prompt
+is the eventual form; the workbench has no modal infrastructure yet, so the badge is
+the honest interim.
 
-## 10. Known gaps
+## 10. Disk staleness: detection is generic; policy is "badge, never reload"
 
-- **Referenced files and assets do not invalidate.** `SdfLayer::Reload()` consults
-  *external dependency* timestamps; `open_file` checks only the root. Editing
-  `wheel.usda` or swapping a DEM invalidates nothing, silently.
-- **`allocate` still accepts a `File` origin**, so a new document type can bypass
-  §2 and mint duplicates. The by-design fix is an origin type that *cannot express
-  a path*, plus a named `restore()` for session restore.
+A file can change **behind the app's back** — a git pull, an external editor,
+another tool. `DocumentRegistry<D>` notices, for every document type by
+construction:
+
+- A **watermark** side-table records each file's mtime at the moment its bytes were
+  read (`open_file`) or written (`note_saved`). It is a side-table, not a field on
+  `DocumentOrigin::File`, precisely so it doesn't ripple through that enum's many
+  match sites.
+- `stale_docs()` stats each watermarked file and returns those whose mtime advanced
+  past the watermark. A *vanished* file is not stale — a failed stat must never
+  masquerade as "changed".
+- `note_saved(id)` re-baselines after a save, so the app's own write is never
+  mistaken for an outside edit. Wire it wherever a generic-registry document is
+  saved (today: the USD save path; Modelica and scripting keep separate registries).
+
+**Detection is split from policy on purpose.** Per §8, an external change while a
+sim is running must **badge, never auto-reload** — a silent reload would restart the
+world. `badge_externally_changed_usd_docs` polls on a throttle, dedupes so a
+persistently-stale file nags once, and re-arms when the file re-syncs.
+
+## 10a. Remaining gaps
+
+- **Only the *root* file is watched, not the reference closure.** Editing
+  `wheel.usda` referenced by `scene.usda`, or swapping a DEM, still invalidates
+  nothing. The reference-closure walker exists (`lunco_networking::usd_closure`) but
+  is `pub(crate)` there, and `lunco-usd` does not — and by layering *should* not —
+  depend on `lunco-networking`. Closing this is a **dependency-direction decision**,
+  not a quick add: either lift the walker to a crate both can see, or duplicate the
+  small closure walk into `lunco-usd`.
 - **The fork has no `find_or_open`** (a declared TODO in `sdf::LayerRegistry`,
   which today holds only a resolver and no layer cache). §5 is blocked on it.
   When that cache lands it **must** ship with `get_modification_timestamp`
-  invalidation, or it reproduces our staleness bug inside `openusd`. Note the C++
-  registry holds **weak** pointers — clients retain the strong refs.
+  invalidation, or it reproduces the root-only staleness gap inside `openusd`. Note
+  the C++ registry holds **weak** pointers — clients retain the strong refs.
 
 ## 11. The rule that generalises
 

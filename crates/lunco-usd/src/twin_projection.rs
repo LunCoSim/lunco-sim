@@ -45,7 +45,7 @@ use std::sync::Arc;
 use bevy::asset::AssetId;
 use bevy::prelude::*;
 use lunco_assets::twin_source::TwinRoots;
-use lunco_doc::{Document, DocumentId, DocumentOrigin};
+use lunco_doc::{Document, DocumentId};
 use lunco_usd_bevy::usd_data::UsdDataExt;
 use lunco_usd_bevy::{UsdPrimPath, UsdSourceText, UsdStageAsset, UsdVisualSynced};
 use lunco_usd_sim::cosim::LoadScene;
@@ -1116,8 +1116,8 @@ mod tests {
     fn doc_for_file_matches_file_origin_only() {
         let mut registry = DocumentRegistry::<UsdDocument>::default();
         let abs = PathBuf::from("/twins/moonbase/scene.usda");
-        let doc = registry.allocate(TINY.to_string(), DocumentOrigin::writable_file(abs.clone()));
-        registry.allocate(TINY.to_string(), DocumentOrigin::untitled("Untitled.usda"));
+        let (doc, _) = registry.open_file(abs.clone(), TINY.to_string());
+        registry.allocate(TINY.to_string(), lunco_doc::PathlessOrigin::untitled("Untitled.usda"));
 
         assert_eq!(registry.doc_for_file(&abs), Some(doc));
         assert_eq!(registry.doc_for_file(std::path::Path::new("/twins/x.usda")), None);
@@ -1129,7 +1129,7 @@ mod tests {
     fn composed_source_overlay_carries_runtime_spawn() {
         let mut registry = DocumentRegistry::<UsdDocument>::default();
         let abs = PathBuf::from("/twins/moonbase/scene.usda");
-        let doc = registry.allocate(TINY.to_string(), DocumentOrigin::writable_file(abs));
+        let (doc, _) = registry.open_file(abs, TINY.to_string());
         registry
             .host_mut(doc)
             .unwrap()

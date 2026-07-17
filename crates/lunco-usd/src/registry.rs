@@ -20,7 +20,7 @@
 #[cfg(test)]
 mod tests {
     use crate::document::{LayerId, UsdDocument, UsdOp};
-    use lunco_doc::{Document, DocumentOrigin, OpenOutcome};
+    use lunco_doc::{Document, OpenOutcome};
     use lunco_doc_bevy::DocumentRegistry;
 
     const TINY_USDA: &str = "#usda 1.0\ndef Xform \"World\" {}\n";
@@ -88,6 +88,38 @@ mod tests {
         );
     }
 
+    /// A referenced `.usda` edited on disk behind the app — a git pull, an
+    /// external editor — used to invalidate nothing: the open document stayed
+    /// silently stale. `stale_docs` now notices, and a save re-baselines so the
+    /// app's own write is never mistaken for an outside change.
+    ///
+    /// Uses a real temp file and stamps mtime forward with `set_modified`, so it
+    /// tests the actual filesystem path without a sleep to cross a clock tick.
+    #[test]
+    fn stale_docs_flags_an_external_edit_and_save_clears_it() {
+        use std::time::{Duration, SystemTime};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scene.usda");
+        std::fs::write(&path, TINY_USDA).unwrap();
+
+        let mut reg = reg();
+        let (doc, _) = reg.open_file(path.clone(), TINY_USDA.to_string());
+        assert!(reg.stale_docs().is_empty(), "just read — must be in sync");
+
+        // Someone rewrites the file on disk; force mtime unambiguously forward.
+        std::fs::write(&path, "#usda 1.0\ndef Xform \"Outside\" {}\n").unwrap();
+        std::fs::File::open(&path)
+            .unwrap()
+            .set_modified(SystemTime::now() + Duration::from_secs(10))
+            .unwrap();
+        assert_eq!(reg.stale_docs(), vec![doc], "external edit must be flagged");
+
+        // The app saves (re-baseline): its own write is not an external change.
+        reg.note_saved(doc);
+        assert!(reg.stale_docs().is_empty(), "save re-baselines the watermark");
+    }
+
     /// A broken file on disk must not half-apply over a working document.
     #[test]
     fn reopen_with_unparsable_source_keeps_the_resident_base() {
@@ -118,14 +150,14 @@ mod tests {
         assert_eq!(reg.doc_for_file(std::path::Path::new("/twins/other.usda")), None);
 
         // Untitled docs have no path and must never collide with it.
-        reg.allocate(TINY_USDA.to_string(), DocumentOrigin::untitled("Untitled.usda"));
+        reg.allocate(TINY_USDA.to_string(), lunco_doc::PathlessOrigin::untitled("Untitled.usda"));
         assert_eq!(reg.doc_for_file(&path), Some(a));
     }
 
     #[test]
     fn allocate_emits_opened_and_changed() {
         let mut reg = reg();
-        let id = reg.allocate(TINY_USDA.to_string(), DocumentOrigin::untitled("U.usda"));
+        let id = reg.allocate(TINY_USDA.to_string(), lunco_doc::PathlessOrigin::untitled("U.usda"));
         let pending = reg.drain_pending();
         assert_eq!(pending.opened, vec![id]);
         assert_eq!(pending.changed, vec![id]);
@@ -135,7 +167,7 @@ mod tests {
     #[test]
     fn apply_marks_changed() {
         let mut reg = reg();
-        let id = reg.allocate(TINY_USDA.to_string(), DocumentOrigin::untitled("U.usda"));
+        let id = reg.allocate(TINY_USDA.to_string(), lunco_doc::PathlessOrigin::untitled("U.usda"));
         let _ = reg.drain_pending();
         reg.apply(
             id,

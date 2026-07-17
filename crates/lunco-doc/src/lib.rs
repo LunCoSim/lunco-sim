@@ -248,6 +248,60 @@ pub enum DocumentOrigin {
     },
 }
 
+/// An origin that **cannot express a filesystem path**, by construction.
+///
+/// This is the type `DocumentRegistry::allocate` accepts, and the whole point
+/// is what it *can't* say. **Identity of a file-backed document is its path**,
+/// so a file-backed document may only be created through `open_file`, which
+/// enforces one-document-per-path. When `allocate` took a full
+/// [`DocumentOrigin`], any caller could hand it a `File` origin and mint a
+/// second document for an already-open path — two tabs, two undo stacks, both
+/// saving over each other. That rule used to live in review comments; now the
+/// signature carries it, so a doc type added next year gets it for free.
+///
+/// The two legitimate path-less cases:
+/// - `Untitled` — never written; needs Save-As to bind a path.
+/// - `Bundled` — shipped in the binary; has a filename, but no on-disk path.
+///
+/// Session restore is the one caller that must reinstate a stored `File`
+/// origin verbatim; it uses `DocumentRegistry::restore` and says so.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PathlessOrigin {
+    /// See [`DocumentOrigin::Untitled`].
+    Untitled {
+        /// Human-readable identifier (shown on the tab until saved).
+        name: String,
+    },
+    /// See [`DocumentOrigin::Bundled`].
+    Bundled {
+        /// Original filename. Used for dedup, display, and URI synthesis.
+        filename: String,
+    },
+}
+
+impl PathlessOrigin {
+    /// Shorthand for [`PathlessOrigin::Untitled`].
+    pub fn untitled(name: impl Into<String>) -> Self {
+        Self::Untitled { name: name.into() }
+    }
+
+    /// Shorthand for [`PathlessOrigin::Bundled`].
+    pub fn bundled(filename: impl Into<String>) -> Self {
+        Self::Bundled {
+            filename: filename.into(),
+        }
+    }
+}
+
+impl From<PathlessOrigin> for DocumentOrigin {
+    fn from(o: PathlessOrigin) -> Self {
+        match o {
+            PathlessOrigin::Untitled { name } => DocumentOrigin::Untitled { name },
+            PathlessOrigin::Bundled { filename } => DocumentOrigin::Bundled { filename },
+        }
+    }
+}
+
 impl DocumentOrigin {
     /// Shorthand: a user-writable filesystem document.
     pub fn writable_file(path: impl Into<PathBuf>) -> Self {

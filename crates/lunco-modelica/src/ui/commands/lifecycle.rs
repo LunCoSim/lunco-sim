@@ -1027,10 +1027,13 @@ pub fn on_close_document(
     }
     // Despawn any `ModelicaModel` entity backing this doc *before*
     // dropping the document. The despawn fires `RemovedComponents`,
-    // which `cleanup_removed_documents` picks up to purge the doc's
+    // which `cleanup_removed_simulators` picks up to purge the doc's
     // signal histories + plot bindings from the SignalRegistry /
     // VisualizationRegistry — otherwise stale variables (der(C2.v),
     // …) linger in the Graphs X/Y picker after the doc is closed.
+    // That system is entity-scoped only; dropping the document is this
+    // observer's job, because only an explicit close means the user is
+    // done with the source (a scene reload despawns these entities too).
     for entity in registry.entities_linked_to(doc) {
         commands.entity(entity).try_despawn();
     }
@@ -1047,11 +1050,23 @@ pub fn on_document_closed_cleanup(
     mut doc_pins: Option<ResMut<crate::ui::doc_pin::DocPinState>>,
     mut experiments: Option<ResMut<lunco_experiments::ExperimentRegistry>>,
     mut drafts: Option<ResMut<crate::experiments_runner::ExperimentDrafts>>,
+    mut canvas_state: Option<ResMut<crate::ui::panels::canvas_diagram::CanvasDiagramState>>,
+    mut bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
 ) {
     let doc = trigger.event().doc;
     model_tabs.close(doc);
     cache.in_memory_models.retain(|e| e.doc != doc);
     compile_states.remove(doc);
+    // Drop the per-doc canvas entry (viewport, selection, in-flight
+    // projection task) so a later tab reusing the id starts fresh.
+    if let Some(canvas) = canvas_state.as_mut() {
+        canvas.drop_doc(doc);
+    }
+    // Drop the bus's terminal-outcome cache for this doc so `last_outcome`
+    // doesn't accumulate dead entries across long sessions.
+    if let Some(b) = bus.as_mut() {
+        b.clear_outcomes_for(lunco_workbench::status_bus::BusyScope::Document(doc.0));
+    }
     if workspace.active_document == Some(doc) {
         workspace.active_document = None;
         workbench.editor_buffer.clear();

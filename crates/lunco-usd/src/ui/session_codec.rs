@@ -95,7 +95,11 @@ impl DocumentSessionCodec for UsdSessionCodec {
         }
         let mut reg = world.get_resource_mut::<DocumentRegistry<UsdDocument>>()?;
         // Fires `DocumentOpened` → the USD UI's stage registration.
-        let id = reg.allocate(snap.source.clone(), snap.origin.clone());
+        // `restore`, not `allocate`: session snapshots carry a full origin —
+        // often a `File` — and reinstate saved (possibly dirty) in-memory state
+        // rather than re-reading disk. This is the one authorized `File`-origin
+        // allocation; `allocate` can no longer express one.
+        let id = reg.restore(snap.source.clone(), snap.origin.clone());
         Some(id.raw())
     }
 }

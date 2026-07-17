@@ -927,6 +927,18 @@ pub struct DocumentRegistry<D: lunco_doc::Document> {
     pending_opened: Vec<DocumentId>,
     pending_changes: Vec<DocumentId>,
     pending_closed: Vec<DocumentId>,
+    /// Per-document disk watermark: the file's modification time the last time
+    /// we read its bytes (open or reload). [`stale_docs`](Self::stale_docs)
+    /// compares this against the file's current mtime to spot a change made on
+    /// disk *behind the app's back* — a git pull, an external editor, another
+    /// tool. Only file-backed documents get an entry.
+    ///
+    /// Detection is deliberately split from policy: this notices the change, the
+    /// caller decides. Per the collaboration doc, an external change while a sim
+    /// is running must **badge, never auto-reload** — a silent reload would
+    /// restart the world. Works for every `D` by construction, so a doc type
+    /// added later inherits staleness detection for free.
+    watermarks: HashMap<DocumentId, std::time::SystemTime>,
 }
 
 impl<D: lunco_doc::Document> Default for DocumentRegistry<D> {
@@ -938,6 +950,7 @@ impl<D: lunco_doc::Document> Default for DocumentRegistry<D> {
             pending_opened: Vec::new(),
             pending_changes: Vec::new(),
             pending_closed: Vec::new(),
+            watermarks: HashMap::new(),
         }
     }
 }
@@ -1093,16 +1106,35 @@ impl<D: lunco_doc::FileBacked> DocumentRegistry<D>
 where
     D::Op: lunco_twin_journal::OpPayload,
 {
-    /// Allocate a new document with an explicit origin.
+    /// Allocate a new document that is **not** backed by a file: File→New
+    /// (untitled) or a bundled example.
     ///
-    /// For origins with NO filesystem path (File→New → untitled, bundled
-    /// examples) and for session restore, which reinstates saved in-memory
-    /// (possibly dirty) state rather than disk. **For a file-backed open use
-    /// [`open_file`](Self::open_file)** — it enforces one-document-per-file and
-    /// makes the reuse-vs-refresh decision explicit. Calling this with a `File`
-    /// origin that is already open mints a SECOND document for the same path:
-    /// two undo stacks, two journal streams, racing saves.
-    pub fn allocate(&mut self, source: String, origin: lunco_doc::DocumentOrigin) -> DocumentId {
+    /// It takes [`PathlessOrigin`](lunco_doc::PathlessOrigin), not
+    /// `DocumentOrigin`, so it *cannot* be handed a path. **A file-backed open
+    /// goes through [`open_file`](Self::open_file)**, which enforces
+    /// one-document-per-path. This used to accept any origin, and a `File`
+    /// origin for an already-open path minted a SECOND document for one file:
+    /// two tabs, two undo stacks, two journal streams, racing saves. The
+    /// signature now carries that rule instead of a doc comment asking nicely.
+    ///
+    /// Session restore reinstates a stored `File` origin verbatim and uses
+    /// [`restore`](Self::restore).
+    pub fn allocate(&mut self, source: String, origin: lunco_doc::PathlessOrigin) -> DocumentId {
+        self.install(|id| D::with_origin(id, source, origin.into()))
+    }
+
+    /// Reinstate a document from persisted session state, origin and all.
+    ///
+    /// **Session restore only.** This is the one caller that legitimately
+    /// reinstates a `File` origin without re-reading disk: it restores saved
+    /// in-memory state, which may be dirty, and discarding that is exactly what
+    /// restore exists to prevent. Everything else opening a file wants
+    /// [`open_file`](Self::open_file).
+    ///
+    /// Restoring a path that is already open mints a second document for it —
+    /// the split-brain `allocate` was locked down to prevent. Restore runs once
+    /// against an empty registry, so it doesn't check; don't call it elsewhere.
+    pub fn restore(&mut self, source: String, origin: lunco_doc::DocumentOrigin) -> DocumentId {
         self.install(|id| D::with_origin(id, source, origin))
     }
 
@@ -1147,24 +1179,90 @@ where
     ) -> (DocumentId, lunco_doc::OpenOutcome) {
         use lunco_doc::OpenOutcome;
         let path = path.into();
+        // The file's mtime as of this read, stamped as the watermark on any
+        // outcome that actually takes the disk bytes (Allocated / Refreshed).
+        // `None` if the path can't be stat'd — then we simply don't watch it,
+        // rather than record a bogus baseline.
+        let disk_mtime = file_mtime(&path);
         let Some(id) = self.doc_for_file(&path) else {
-            let id = self.allocate(source, lunco_doc::DocumentOrigin::writable_file(path));
+            // Straight to `install`: this is the ONE authorized way to mint a
+            // file-backed document, and it earns that by having just proved the
+            // path isn't open. `allocate` can no longer express a `File` origin.
+            let id = self.install(|id| {
+                D::with_origin(id, source, lunco_doc::DocumentOrigin::writable_file(path))
+            });
+            if let Some(m) = disk_mtime {
+                self.watermarks.insert(id, m);
+            }
             return (id, OpenOutcome::Allocated);
         };
         let Some(host) = self.hosts.get_mut(&id) else {
             unreachable!("doc_for_file returned an id with no host");
         };
         if host.document().is_dirty() {
+            // We did NOT take disk content, so the watermark stays put: the
+            // document is still ahead of (or diverged from) disk, and the caller
+            // wants to know the file moved, not be told we're in sync with it.
             return (id, OpenOutcome::KeptDirty);
         }
         if !host.document_mut().reload_base(&source) {
             return (id, OpenOutcome::KeptUnparsable);
+        }
+        // Fresh disk content landed — advance the watermark to match.
+        if let Some(m) = disk_mtime {
+            self.watermarks.insert(id, m);
         }
         // The content moved — same ring the mutating ops feed, so views rebuild
         // off an open exactly as they would off an edit.
         self.pending_changes.push(id);
         (id, OpenOutcome::Refreshed)
     }
+
+    /// Re-stamp `id`'s disk watermark to the file's current mtime. Call after a
+    /// successful **save**: the bytes on disk are now ours, so a later
+    /// [`stale_docs`](Self::stale_docs) must not flag our own write as an
+    /// external change. No-op for a document with no on-disk path.
+    pub fn note_saved(&mut self, id: DocumentId) {
+        if let Some(path) = self
+            .hosts
+            .get(&id)
+            .and_then(|h| h.document().origin().canonical_path().map(std::path::Path::to_path_buf))
+        {
+            if let Some(m) = file_mtime(&path) {
+                self.watermarks.insert(id, m);
+            }
+        }
+    }
+
+    /// File-backed documents whose file changed on disk since we last read or
+    /// wrote it — a git pull, an external editor, another tool. Compares each
+    /// watermark against the file's current mtime.
+    ///
+    /// Detection only: the caller decides what to do. Per the collaboration
+    /// doc, surface it (badge / status line) and **never auto-reload** while a
+    /// sim is running — that would restart the world. A vanished file is not
+    /// reported stale: deletion is a different event, and stat-failure must not
+    /// masquerade as "changed".
+    pub fn stale_docs(&self) -> Vec<DocumentId> {
+        self.watermarks
+            .iter()
+            .filter(|(id, &watermark)| {
+                self.hosts
+                    .get(id)
+                    .and_then(|h| h.document().origin().canonical_path())
+                    .and_then(file_mtime)
+                    .is_some_and(|current| current > watermark)
+            })
+            .map(|(id, _)| *id)
+            .collect()
+    }
+}
+
+/// Modification time of `path`, or `None` if it can't be stat'd (missing,
+/// permissions, a platform without mtime). Callers treat `None` as "don't
+/// watch" — never as a sentinel that compares as changed.
+fn file_mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -62,7 +62,7 @@ fn add_prim_projects_live_via_sink_no_reload() {
     let usda = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
     let doc = {
         let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
-        reg.allocate(usda.to_string(), DocumentOrigin::untitled("live_spawn.usda"))
+        reg.allocate(usda.to_string(), lunco_doc::PathlessOrigin::untitled("live_spawn.usda"))
     };
 
     // Install it as the active viewport → doc-backed twin scene → async mount →
@@ -125,7 +125,7 @@ fn referenced_spawn_projects_live_via_fetch_inject_author() {
     let usda = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
     let doc = {
         let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
-        reg.allocate(usda.to_string(), DocumentOrigin::untitled("ref_spawn.usda"))
+        reg.allocate(usda.to_string(), lunco_doc::PathlessOrigin::untitled("ref_spawn.usda"))
     };
 
     app.world_mut().trigger(SetActiveUsdViewport { doc });

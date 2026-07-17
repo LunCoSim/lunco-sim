@@ -316,7 +316,7 @@ mod tests {
         write_bytes(&dir.path().join(".lunco/runtime/scene.usda"), text.as_bytes()).unwrap();
 
         let mut registry = DocumentRegistry::<UsdDocument>::default();
-        let doc = registry.allocate(TINY.to_string(), DocumentOrigin::writable_file(scene_abs));
+        let (doc, _) = registry.open_file(scene_abs, TINY.to_string());
 
         restore_doc_runtime(&ws, &mut registry, doc);
         let host = registry.host(doc).unwrap();

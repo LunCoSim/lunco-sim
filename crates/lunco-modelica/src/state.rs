@@ -206,10 +206,17 @@ world
 /// before any entity is spawned and can outlive an entity (e.g. a user
 /// stops a sim but keeps editing).
 ///
-/// A secondary `entity → DocumentId` index is maintained so despawn
-/// cleanup (`ui::cleanup_removed_documents`) and "which doc does this
-/// entity view?" lookups stay cheap. The index is an optimization; the
-/// authoritative storage is `hosts`.
+/// A secondary `entity → DocumentId` index is maintained so
+/// "which doc does this entity view?" and its reverse stay cheap for
+/// panels, which have no scan surface (`PanelCtx` exposes no `query`).
+/// The index is an optimization; the authoritative storage is `hosts`,
+/// and the authoritative link is `ModelicaModel::document`.
+///
+/// The index deliberately grants **no** lifecycle authority. Despawn
+/// cleanup (`ui::cleanup_removed_simulators`) unlinks the dead entity and
+/// stops there: a scene clear despawns every `WorldGrid` child, so letting
+/// a despawn resolve `entity → doc` and drop that doc destroyed unsaved
+/// user documents on scene reload. Documents die only via `CloseDocument`.
 ///
 /// Consumers read source/parameters through
 /// [`host`](Self::host)`(doc).document().source()` — resolving
@@ -355,18 +362,6 @@ impl ModelicaDocumentRegistry {
         id
     }
 
-    /// Convenience: [`allocate_with_origin`](Self::allocate_with_origin) + [`link`](Self::link).
-    pub fn open_for_with_origin(
-        &mut self,
-        entity: Entity,
-        source: String,
-        origin: DocumentOrigin,
-    ) -> DocumentId {
-        let id = self.allocate_with_origin(source, origin);
-        self.by_entity.insert(entity, id);
-        id
-    }
-
     /// Look up a document by its canonical path. Returns `None` for
     /// untitled / bundled docs or if no document was opened from that
     /// path. Used by API / scripting to resolve `path` →
@@ -410,25 +405,41 @@ impl ModelicaDocumentRegistry {
         self.by_entity.iter().map(|(e, d)| (*e, *d))
     }
 
-    /// Entities currently linked to this document. Typically 0 (editing
-    /// without a running sim) or 1; >1 in cosim scenarios.
+    /// Entities currently linked to this document, in ascending `Entity`
+    /// order. Typically 0 (editing without a running sim) or 1; >1 in cosim
+    /// scenarios.
+    ///
+    /// **Sorted deliberately**: the backing map is a `HashMap`, so iteration
+    /// order is arbitrary and varies run to run. Callers that surface this
+    /// (API queries, panels) would otherwise emit a different order each
+    /// frame for the same unchanged state.
     pub fn entities_linked_to(&self, doc: DocumentId) -> Vec<Entity> {
-        self.by_entity
+        let mut linked: Vec<Entity> = self
+            .by_entity
             .iter()
             .filter_map(|(e, d)| (*d == doc).then_some(*e))
-            .collect()
+            .collect();
+        linked.sort_unstable();
+        linked
     }
 
-    /// First simulator entity linked to `doc`, or `None` when no
-    /// compile has spawned one yet. The canonical lookup for any
-    /// view-bound panel that needs sim state for "its" document —
-    /// canvas plots, in-canvas input controls, model-view toolbar.
-    /// Cosim cases (>1 entity per doc) take the first; if you need
-    /// all of them, call [`entities_linked_to`](Self::entities_linked_to).
+    /// The simulator entity linked to `doc` — lowest `Entity` when a cosim
+    /// scenario has several — or `None` when no compile has spawned one yet.
+    /// The canonical lookup for any view-bound panel that needs sim state for
+    /// "its" document: canvas plots, in-canvas input controls, model-view
+    /// toolbar. If you need all of them, call
+    /// [`entities_linked_to`](Self::entities_linked_to).
+    ///
+    /// **`min`, not "first"**: this used to `find_map` over a `HashMap`, so
+    /// with >1 entity on one doc it returned an arbitrary one that could
+    /// change between frames — a cosim panel would flip between two sims'
+    /// values for no reason. A stable pick is worth more than an arbitrary
+    /// one; `min` costs the same single pass.
     pub fn simulator_for(&self, doc: DocumentId) -> Option<Entity> {
         self.by_entity
             .iter()
-            .find_map(|(e, d)| (*d == doc).then_some(*e))
+            .filter_map(|(e, d)| (*d == doc).then_some(*e))
+            .min()
     }
 }
 
@@ -863,6 +874,38 @@ mod tests {
         assert!(reg.is_empty());
         assert!(reg.host(doc).is_none());
         assert_eq!(reg.document_of(e), None);
+    }
+
+    /// Cosim puts >1 entity on one document. Both lookups iterate a `HashMap`,
+    /// so without an explicit order they return an arbitrary entity that can
+    /// change between frames — a cosim panel flips between two sims' values
+    /// for no reason, and API queries emit a different order each call for
+    /// identical state. Many entities makes a chance pass unlikely.
+    #[test]
+    fn cosim_lookups_are_deterministic_not_hash_order() {
+        let mut reg = ModelicaDocumentRegistry::default();
+        let doc = reg.allocate("model M end M;".into());
+
+        // Link descending so insertion order is the reverse of the answer.
+        // Both halves must be non-zero — `Entity::from_bits` rejects a zero
+        // generation, so index `i` starts at 1.
+        let entities: Vec<Entity> = (1..=16u64)
+            .rev()
+            .map(|i| fake_entity(0x0000_0003_0000_0000 + i))
+            .collect();
+        for e in &entities {
+            reg.link(*e, doc);
+        }
+
+        let mut expected = entities.clone();
+        expected.sort_unstable();
+
+        assert_eq!(reg.entities_linked_to(doc), expected, "must be sorted, not hash order");
+        assert_eq!(
+            reg.simulator_for(doc),
+            expected.first().copied(),
+            "the picked sim must be stable across frames, not whichever the map yields first"
+        );
     }
 
     #[test]

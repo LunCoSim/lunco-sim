@@ -463,21 +463,53 @@ pub(crate) fn drain_pending_usd_file_loads(world: &mut World) {
                 let (doc, outcome) = world
                     .resource_mut::<DocumentRegistry<UsdDocument>>()
                     .open_file(load.path.clone(), source);
-                match outcome {
-                    OpenOutcome::KeptDirty => bevy::log::warn!(
-                        "[UsdOpenFile] {} has unsaved edits — keeping them; disk NOT reloaded ({doc})",
-                        load.path.display()
-                    ),
-                    OpenOutcome::KeptUnparsable => bevy::log::warn!(
-                        "[UsdOpenFile] {} does not parse as USDA — keeping the open document ({doc})",
-                        load.path.display()
-                    ),
-                    OpenOutcome::Refreshed => bevy::log::info!(
-                        "[UsdOpenFile] {} already open — refreshed from disk ({doc})",
-                        load.path.display()
-                    ),
-                    OpenOutcome::Allocated => {}
+                // A re-open that couldn't take the disk bytes is not an error,
+                // but it IS a surprise the user should see — "I opened the file
+                // and nothing happened" otherwise. `warn!` alone was invisible
+                // in the app; also raise it on the status bus (UI builds only).
+                let user_notice = match outcome {
+                    OpenOutcome::KeptDirty => {
+                        bevy::log::warn!(
+                            "[UsdOpenFile] {} has unsaved edits — keeping them; disk NOT reloaded ({doc})",
+                            load.path.display()
+                        );
+                        Some("has unsaved edits — kept them, did not reload from disk")
+                    }
+                    OpenOutcome::KeptUnparsable => {
+                        bevy::log::warn!(
+                            "[UsdOpenFile] {} does not parse as USDA — keeping the open document ({doc})",
+                            load.path.display()
+                        );
+                        Some("does not parse as USDA — kept the open document")
+                    }
+                    OpenOutcome::Refreshed => {
+                        bevy::log::info!(
+                            "[UsdOpenFile] {} already open — refreshed from disk ({doc})",
+                            load.path.display()
+                        );
+                        None
+                    }
+                    OpenOutcome::Allocated => None,
+                };
+                #[cfg(feature = "ui")]
+                if let Some(msg) = user_notice {
+                    if let Some(mut bus) =
+                        world.get_resource_mut::<lunco_workbench::status_bus::StatusBus>()
+                    {
+                        let name = load
+                            .path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| load.path.display().to_string());
+                        bus.push(
+                            "usd",
+                            lunco_workbench::status_bus::StatusLevel::Warn,
+                            format!("{name} {msg}"),
+                        );
+                    }
                 }
+                #[cfg(not(feature = "ui"))]
+                let _ = user_notice;
             }
         }
     }
@@ -499,7 +531,7 @@ fn on_new_document(trigger: On<NewDocument>, mut commands: Commands) {
         let next = registry.ids().count() + 1;
         let doc_id = registry.allocate(
             DEFAULT_USDA_SCAFFOLD.to_string(),
-            DocumentOrigin::untitled(format!("UntitledStage-{}.usda", next)),
+            lunco_doc::PathlessOrigin::untitled(format!("UntitledStage-{}.usda", next)),
         );
         bevy::log::info!("[NewUsd] created untitled USD stage as {}", doc_id);
     });
@@ -564,11 +596,14 @@ fn on_save_document(trigger: On<SaveDocument>, mut commands: Commands) {
         // Borrow mut to mark saved. `host_mut` doesn't bump the
         // change ring because saving doesn't change the document — it
         // only resets the dirty marker.
-        if let Some(host) = world
-            .resource_mut::<DocumentRegistry<UsdDocument>>()
-            .host_mut(doc_id)
         {
-            host.document_mut().mark_saved();
+            let mut reg = world.resource_mut::<DocumentRegistry<UsdDocument>>();
+            if let Some(host) = reg.host_mut(doc_id) {
+                host.document_mut().mark_saved();
+            }
+            // Re-baseline the disk watermark: the bytes on disk are now ours, so
+            // the staleness check must not flag this write as an external edit.
+            reg.note_saved(doc_id);
         }
         bevy::log::info!("[SaveUsd] {} saved to {}", doc_id, path.display());
     });
@@ -1070,10 +1105,7 @@ mod change_set_tests {
         // The A3 auto-bridge, done by hand (the system that does this in-app is
         // `wire_usd_journal_handle`): the recorder is what journals each op.
         registry.set_journal(journal.clone());
-        let doc = registry.allocate(
-            RIG.to_string(),
-            DocumentOrigin::writable_file("/tmp/lunco_h10_attach.usda"),
-        );
+        let (doc, _) = registry.open_file("/tmp/lunco_h10_attach.usda", RIG.to_string());
         world.insert_resource(registry);
         (world, doc, journal)
     }
@@ -1163,10 +1195,7 @@ mod change_set_tests {
     fn applies_without_a_journal() {
         let mut world = World::new();
         let mut registry = DocumentRegistry::<UsdDocument>::default();
-        let doc = registry.allocate(
-            RIG.to_string(),
-            DocumentOrigin::writable_file("/tmp/lunco_h10_nojournal.usda"),
-        );
+        let (doc, _) = registry.open_file("/tmp/lunco_h10_nojournal.usda", RIG.to_string());
         world.insert_resource(registry);
 
         let ops = attach_component_ops(&wheel_spec());
@@ -1272,7 +1301,7 @@ mod tests {
             let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
             reg.allocate(
                 "#usda 1.0\n".to_string(),
-                DocumentOrigin::untitled("UntitledRover.usda".to_string()),
+                lunco_doc::PathlessOrigin::untitled("UntitledRover.usda"),
             )
         };
         app.update();
@@ -1355,7 +1384,7 @@ mod tests {
             let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
             reg.allocate(
                 "#usda 1.0\n".to_string(),
-                DocumentOrigin::untitled("UntitledJournal.usda".to_string()),
+                lunco_doc::PathlessOrigin::untitled("UntitledJournal.usda"),
             )
         };
         app.update();

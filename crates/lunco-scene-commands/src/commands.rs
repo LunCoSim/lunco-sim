@@ -2969,7 +2969,7 @@ mod tests {
             let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
             reg.allocate(
                 "#usda 1.0\ndef Xform \"World\"\n{\n}\n".to_string(),
-                lunco_doc::DocumentOrigin::untitled("Scene.usda".to_string()),
+                lunco_doc::PathlessOrigin::untitled("Scene.usda"),
             )
         };
         let mut ws = lunco_workspace::Workspace::default();
@@ -3183,7 +3183,7 @@ mod tests {
             let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
             reg.allocate(
                 "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n".to_string(),
-                lunco_doc::DocumentOrigin::untitled("Scene.usda".to_string()),
+                lunco_doc::PathlessOrigin::untitled("Scene.usda"),
             )
         };
         let mut ws = lunco_workspace::Workspace::default();

@@ -77,7 +77,7 @@ def Xform "World"
         let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
         reg.allocate(
             usda_content.to_string(),
-            DocumentOrigin::untitled("test_stage.usda".to_string()),
+            lunco_doc::PathlessOrigin::untitled("test_stage.usda"),
         )
     };
     println!("[TEST-DEBUG] Allocated doc_id: {:?}", doc_id);

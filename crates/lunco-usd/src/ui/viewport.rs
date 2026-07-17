@@ -790,7 +790,6 @@ impl Panel for UsdViewportPanel {
 mod tests {
     use super::*;
     use crate::commands::UsdCommandsPlugin;
-    use lunco_doc::DocumentOrigin;
 
     /// Without any rendering plugins (`Assets<Image>` absent) the
     /// observers gracefully no-op — the state stays
@@ -805,10 +804,7 @@ mod tests {
 
         let _doc = {
             let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
-            reg.allocate(
-                "#usda 1.0\n".into(),
-                DocumentOrigin::writable_file("/tmp/x.usda"),
-            )
+            reg.open_file("/tmp/x.usda", "#usda 1.0\n".to_string()).0
         };
         // Drain pending events twice so the DocumentOpened trigger
         // fires and our observer runs.
