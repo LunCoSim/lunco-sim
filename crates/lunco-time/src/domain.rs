@@ -600,18 +600,36 @@ fn spawn_animation_preview(mut commands: Commands) {
 }
 
 /// Drive the [`AnimationPreview`] transport. Each field is optional so one verb
-/// covers run / pause / scroll(seek) / rate — `{"command":"ControlAnimation",
+/// covers run / pause / scroll(seek) / rate / loop — `{"command":"ControlAnimation",
 /// "params":{"playing":false}}` pauses, `{"seek_secs":3.0}` scrubs to 3 s,
-/// `{"rate":2.0}` doubles speed. Headless-safe: it only writes the preview
-/// domain's [`Playback`], never any UI or render resource.
+/// `{"rate":2.0}` doubles speed, `{"looping":true}` loops. Headless-safe: it only
+/// writes the preview domain's [`Playback`], never any UI or render resource.
+///
+/// Fields are orthogonal, so a **restart** is one trigger:
+/// `{"playing":true,"seek_secs":0.0}` — seek to the range start and run. Seek to
+/// [`Playback::start`] rather than a literal `0.0`: [`step_playhead`] clamps to
+/// `[start, end]`, so on a clip whose range starts late a hardcoded 0 lands
+/// outside the range and snaps forward on the next step.
 #[Command(default)]
 pub struct ControlAnimation {
+    /// Which driven domain to control. `None` = the shared [`AnimationPreview`].
+    ///
+    /// A per-object driven clock (a camera path's, say) is otherwise unreachable:
+    /// it owns its own [`Playback`], so the preview transport does not touch it and
+    /// the shot cannot be paused, scrubbed or replayed at all. Point this at the
+    /// domain entity to drive it with the same one verb.
+    pub target: Option<Entity>,
     /// Play (`Some(true)`) / pause (`Some(false)`) the animation; `None` leaves it.
     pub playing: Option<bool>,
     /// Seek the playhead to this time in **seconds**; `None` leaves it.
     pub seek_secs: Option<f64>,
     /// Playback rate (1.0 = realtime); `None` leaves it.
     pub rate: Option<f64>,
+    /// Wrap at the range end instead of clamping (`None` leaves it). Honoured by
+    /// [`step_playhead`], and only meaningful once the range is bounded — an
+    /// unbounded `Playback` ignores it, so a looping cutscene needs authored
+    /// clip spans (grown by `bind_animated_to_preview`).
+    pub looping: Option<bool>,
 }
 
 #[on_command(ControlAnimation)]
@@ -620,9 +638,12 @@ fn on_control_animation(
     preview: Option<Res<AnimationPreview>>,
     mut q: Query<&mut Playback>,
 ) {
-    let Some(preview) = preview else { return };
-    let Ok(mut pb) = q.get_mut(preview.domain) else { return };
-    apply_control_animation(&mut pb, trigger.event());
+    let cmd = trigger.event();
+    // An explicit target drives that per-object domain; otherwise the shared
+    // preview. Same verb either way.
+    let Some(domain) = cmd.target.or(preview.map(|p| p.domain)) else { return };
+    let Ok(mut pb) = q.get_mut(domain) else { return };
+    apply_control_animation(&mut pb, cmd);
 }
 
 /// Pure transport edit — apply a [`ControlAnimation`] to a [`Playback`]. Split
@@ -636,6 +657,9 @@ pub fn apply_control_animation(pb: &mut Playback, cmd: &ControlAnimation) {
     }
     if let Some(rate) = cmd.rate {
         pb.rate = rate;
+    }
+    if let Some(looping) = cmd.looping {
+        pb.looping = looping;
     }
 }
 
@@ -998,6 +1022,48 @@ mod tests {
         // A paused preview head does NOT advance with the world delta (scrub holds).
         let held = Playback { mode: TransportMode::Paused, head: 3.5, ..default() };
         assert!((step_playhead(&held, 10.0) - 3.5).abs() < EPS);
+    }
+
+    #[test]
+    fn driven_playhead_freezes_with_a_frozen_parent_and_runs_on_a_live_one() {
+        // WHY the animation clock is re-parentable at all: a driven playhead
+        // advances by its PARENT's delta, so `mode = Playing` is not enough. On a
+        // paused sim the parent delta is 0 and the camera sits still with the
+        // transport insisting it is playing — which reads as "play is broken".
+        let pb = Playback { mode: TransportMode::Playing, head: 4.0, rate: 1.0, ..default() };
+        // Sim-rooted + sim paused ⇒ parent delta 0 ⇒ frozen (the standing shape).
+        assert!((step_playhead(&pb, 0.0) - 4.0).abs() < EPS);
+        // Wall-rooted ⇒ the parent keeps advancing ⇒ the move runs regardless.
+        assert!((step_playhead(&pb, 0.5) - 4.5).abs() < EPS);
+    }
+
+    #[test]
+    fn control_animation_toggles_looping_and_restarts() {
+        // `looping` is reachable as a verb: the field was honoured by
+        // `step_playhead` long before anything could set it.
+        let mut pb = Playback { start: 0.0, end: 10.0, ..default() };
+        assert!(!pb.looping);
+        apply_control_animation(&mut pb, &ControlAnimation { looping: Some(true), ..default() });
+        assert!(pb.looping);
+        // ...and it reaches the stepper: past `end` wraps instead of clamping.
+        let wrapped = Playback { head: 9.0, ..pb.clone() };
+        assert!((step_playhead(&wrapped, 2.0) - 1.0).abs() < EPS);
+        apply_control_animation(&mut pb, &ControlAnimation { looping: Some(false), ..default() });
+        let clamped = Playback { head: 9.0, ..pb.clone() };
+        assert!((step_playhead(&clamped, 2.0) - 10.0).abs() < EPS);
+
+        // Restart = seek-to-start + play in ONE verb (the HUD's ⏮ button).
+        // Range starts late on purpose: seeking a literal 0.0 here would land
+        // outside [start, end] and snap forward on the next step.
+        let mut late = Playback { start: 5.0, end: 20.0, mode: TransportMode::Paused, head: 17.0, ..default() };
+        let restart_to = late.start;
+        apply_control_animation(
+            &mut late,
+            &ControlAnimation { playing: Some(true), seek_secs: Some(restart_to), ..default() },
+        );
+        assert!(matches!(late.mode, TransportMode::Playing));
+        assert!((late.head - 5.0).abs() < EPS);
+        assert!((step_playhead(&late, 1.0) - 6.0).abs() < EPS); // runs forward from start
     }
 
     #[test]

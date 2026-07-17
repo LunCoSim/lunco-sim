@@ -52,14 +52,20 @@ impl OverlayUniforms {
     /// The disabled state — every tile builds with this until an overlay is armed.
     pub const OFF: Self = Self { mode: 0.0, opacity: 0.0, safe_rad: 0.0, cliff_rad: 0.0 };
 
-    /// Write the four params onto a tile's [`ShaderLook`] by name. They are part of
-    /// the look's key, so every tile at the same overlay setting still shares one
-    /// material — the overlay is a *uniform*, not a re-bake (`D2`).
+    /// Write the four params onto a tile's [`ShaderLook`] as **live** params — the
+    /// overlay is a *uniform*, not a re-bake (`D2`).
+    ///
+    /// Live, not keyed: these four are global (one resource drives every tile), so
+    /// they carry no per-tile identity and have no business in the sharing key.
+    /// Keyed, each slider tick re-keyed every tile onto a freshly-minted material
+    /// whose bind group was not prepared yet — the terrain flickered for the whole
+    /// drag. Outside the key, all tiles stay on ONE material and the binder writes
+    /// the new angles into it in place.
     pub fn apply(&self, look: &mut ShaderLook) {
-        set_param(look, "overlay_mode", ParamValue::F32(self.mode));
-        set_param(look, "overlay_opacity", ParamValue::F32(self.opacity));
-        set_param(look, "overlay_safe_rad", ParamValue::F32(self.safe_rad));
-        set_param(look, "overlay_cliff_rad", ParamValue::F32(self.cliff_rad));
+        look.set_live("overlay_mode", ParamValue::F32(self.mode));
+        look.set_live("overlay_opacity", ParamValue::F32(self.opacity));
+        look.set_live("overlay_safe_rad", ParamValue::F32(self.safe_rad));
+        look.set_live("overlay_cliff_rad", ParamValue::F32(self.cliff_rad));
     }
 }
 

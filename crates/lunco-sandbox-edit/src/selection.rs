@@ -69,17 +69,17 @@ pub(crate) fn apply_selection(
     if !extend && !toggle {
         for e in old_selected {
             if e != target {
-                commands.entity(e).remove::<Selected>().remove::<GizmoTarget>();
+                commands.entity(e).remove::<Selected>().remove::<crate::gizmo::GizmoSelected>();
             }
         }
         selected.entities.clear();
     }
 
     if toggle && selected.entities.contains(&target) {
-        commands.entity(target).remove::<Selected>().remove::<GizmoTarget>();
+        commands.entity(target).remove::<Selected>().remove::<crate::gizmo::GizmoSelected>();
         selected.entities.retain(|e| *e != target);
     } else {
-        commands.entity(target).try_insert((Selected, GizmoTarget::default()));
+        commands.entity(target).try_insert((Selected, crate::gizmo::GizmoSelected));
         if !selected.entities.contains(&target) {
             selected.entities.push(target);
         }
@@ -94,7 +94,7 @@ pub(crate) fn clear_selection(
     old_selected: impl IntoIterator<Item = Entity>,
 ) {
     for e in old_selected {
-        commands.entity(e).remove::<Selected>().remove::<GizmoTarget>();
+        commands.entity(e).remove::<Selected>().remove::<crate::gizmo::GizmoSelected>();
     }
     selected.entities.clear();
 }

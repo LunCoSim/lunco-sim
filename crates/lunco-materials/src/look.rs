@@ -107,6 +107,25 @@ pub struct ShaderLook {
     /// **The open set.** Parameter name → value. Names come from the shader's own
     /// `struct Material`; Rust hardcodes none of them.
     pub values: BTreeMap<String, ParamValue>,
+    /// Params that are **not part of material identity** — excluded from
+    /// [`key`](Self::key), so changing one re-uses the same material and the binder
+    /// writes the new value into it in place.
+    ///
+    /// For a param that is *globally uniform* and *continuously tuned*: the
+    /// slope-hazard overlay's angles, dragged on a slider. Putting such a value in
+    /// [`values`](Self::values) is correct but mints a fresh material per distinct
+    /// value — every tile then rebinds to a handle whose bind group is not prepared
+    /// yet, which reads as the terrain flickering for the length of the drag. (The
+    /// old materials also survive until the cache sweep.) `unshared` would fix the
+    /// churn but hands each of ~500 tiles a private material, which is the
+    /// draw-call blow-up the sharing cache exists to prevent. This is the third
+    /// option: one shared material, mutated.
+    ///
+    /// **The invariant:** two looks that differ ONLY here share a material, so the
+    /// last writer wins. Only put a value here when every look that could share
+    /// this material carries the same one — i.e. it is driven by a single global
+    /// resource. A per-entity value belongs in `values`.
+    pub live: BTreeMap<String, ParamValue>,
     /// Named texture layers. Absent = the shader's fallback.
     pub textures: BTreeMap<TextureLayer, Handle<Image>>,
     /// Opt out of material sharing — this look gets a **private** material that the
@@ -154,6 +173,12 @@ impl ShaderLook {
     pub fn unshared(mut self) -> Self {
         self.unshared = true;
         self
+    }
+
+    /// Set one **live** param — outside the sharing key, written into the shared
+    /// material in place. See [`live`](Self::live) for when this is legitimate.
+    pub fn set_live(&mut self, name: impl Into<String>, value: ParamValue) {
+        self.live.insert(name.into(), value);
     }
 
     /// Material-sharing key.

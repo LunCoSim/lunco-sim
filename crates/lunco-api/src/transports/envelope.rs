@@ -75,11 +75,15 @@ impl From<ApiRequestUnified> for ApiRequest {
             },
             Some("DiscoverSchema") => ApiRequest::DiscoverSchema,
             Some("ListEntities") => ApiRequest::ListEntities,
-            Some("QueryEntity") => ApiRequest::QueryEntity {
-                // No id → a non-resolving sentinel (id 0 is never in the
-                // registry). Mirrors the prior behavior, where the removed
-                // `Default` minted a fresh — equally non-matching — id.
-                id: lunco_core::GlobalEntityId::from_raw(env.id.unwrap_or(0)),
+            // `QueryEntity` is a PROVIDER (owned by `lunco-scene-commands`, beside
+            // `MoveEntity` — same entities, same frame), not a built-in variant.
+            // The wire shape predates that and stays supported: this maps it onto
+            // the provider call, so `{"type":"QueryEntity","id":…}` keeps working
+            // for every existing client. No id → a non-resolving sentinel (id 0 is
+            // never in the registry), as before.
+            Some("QueryEntity") => ApiRequest::ExecuteCommand {
+                command: "QueryEntity".to_string(),
+                params: serde_json::json!({ "id": env.id.unwrap_or(0) }),
             },
             Some("QueryCommandResult") => ApiRequest::QueryCommandResult {
                 id: env.id.unwrap_or(0),
@@ -129,12 +133,19 @@ mod tests {
         serde_json::from_str::<ApiRequestUnified>(json).unwrap().into()
     }
 
+    /// The legacy `{"type":"QueryEntity"}` wire shape still reaches the provider
+    /// (which now lives in `lunco-scene-commands`), with the id carried through as
+    /// a param. Existing clients — including the `query_entity` MCP tool — see no
+    /// change.
     #[test]
-    fn query_entity_id_is_a_number() {
+    fn query_entity_maps_onto_the_provider_with_a_number_id() {
         // One id form on the wire: a JSON number (GlobalEntityId is ≤53-bit).
         match parse(r#"{"type":"QueryEntity","id":98466552102768}"#) {
-            ApiRequest::QueryEntity { id } => assert_eq!(id.get(), 98466552102768),
-            other => panic!("expected QueryEntity, got {other:?}"),
+            ApiRequest::ExecuteCommand { command, params } => {
+                assert_eq!(command, "QueryEntity");
+                assert_eq!(params["id"], 98466552102768_u64);
+            }
+            other => panic!("expected the QueryEntity provider call, got {other:?}"),
         }
     }
 

@@ -1373,8 +1373,24 @@ pub fn drive_autopilots(
     world_time: Res<lunco_time::WorldTime>,
     mut q: Query<(&Autopilot, Option<&mut AutopilotBehavior>)>,
     q_gid: Query<&GlobalEntityId>,
+    // ORIENTATION only. A rotation is the same in the render frame and the root
+    // frame (big_space rebases the origin, it does not spin it), so `forward()`
+    // is safe to read here — unlike `translation()`, see `pose` below.
     q_xf: Query<&GlobalTransform>,
-    q_targets: Query<(&GlobalEntityId, &GlobalTransform)>,
+    q_targets: Query<(Entity, &GlobalEntityId)>,
+    // POSITIONS come from the cell chain, in the BigSpace ROOT frame — the frame
+    // avian's `Position` and `SpatialQuery` use, the frame `sense_clearance`
+    // already reads, and the frame a literal `target: [x,y,z]` from rhai/the API
+    // is documented in ("a world point"). This tick used to run entirely on
+    // `GlobalTransform`, which is the RENDER frame: origin-relative, and rebased
+    // by big_space whenever the floating origin moves. In the sandbox everything
+    // sits in the origin cell so the two frames coincide and the autopilot
+    // worked; at the moonbase the origin is cells away, so an authored world
+    // target was compared against a render-frame position and the rover chased a
+    // phantom point kilometres off (or "arrived" on the spot).
+    q_parents: Query<&ChildOf>,
+    q_grids_only: Query<&big_space::prelude::Grid>,
+    q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
     clearances: Option<Res<ClearanceField>>,
     mut prev: Local<PrevTargets>,
     mut commands: Commands,
@@ -1390,8 +1406,15 @@ pub fn drive_autopilots(
     let dt = (now - prev.now).max(0.0);
     let states: TargetStates = q_targets
         .iter()
-        .map(|(gid, xf)| {
-            let pos = xf.translation();
+        .filter_map(|(e, gid)| {
+            // Root-frame, from the cell chain. A waypoint pin is a plain prim with
+            // no physics body, so this (not avian's `Position`) is what resolves
+            // every target uniformly.
+            let pos = lunco_core::coords::world_position(e, &q_parents, &q_grids_only, &q_spatial)?
+                .as_vec3();
+            Some((gid, pos))
+        })
+        .map(|(gid, pos)| {
             let vel = if dt > 1e-6 {
                 prev.poses.get(&gid.get()).map(|&p| (pos - p) / dt as f32).unwrap_or(Vec3::ZERO)
             } else {
@@ -1418,9 +1441,16 @@ pub fn drive_autopilots(
                     .as_ref()
                     .and_then(|c| c.0.get(&ap.vessel).copied())
                     .unwrap_or_default();
+                let Some(self_pos) =
+                    lunco_core::coords::world_position(ap.vessel, &q_parents, &q_grids_only, &q_spatial)
+                else {
+                    continue; // no spatial components → nothing to navigate from
+                };
                 let mut ctx = DriveCtx {
                     self_gid: gid.get(),
-                    pos: xf.translation(),
+                    // Root frame, matching `targets` above and the authored world
+                    // coordinates the leaves compare against.
+                    pos: self_pos.as_vec3(),
                     fwd: xf.forward().as_vec3(),
                     now,
                     // Idle default = NEUTRAL (no throttle), NOT `ap.throttle`. When a

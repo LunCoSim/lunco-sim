@@ -60,6 +60,7 @@ pub use camera_switch::SetActiveCamera;
 pub mod author;
 pub mod usd_data;
 pub mod view;
+pub mod camera_path;
 pub mod canonical;
 pub mod mount;
 pub mod read;
@@ -190,6 +191,20 @@ impl Plugin for UsdBevyPlugin {
             .add_systems(
                 PostUpdate,
                 camera_mount::follow_mounted_cameras
+                    .before(bevy::transform::TransformSystems::Propagate),
+            )
+            // Camera paths (`UsdGeomBasisCurves` + `lunco:path:camera`). Cadence ≠
+            // clock: the curve is EVALUATED on the fixed cadence (like the follow
+            // camera's solver), and the camera's Transform is EASED toward that
+            // target at render rate so motion is smooth between fixed steps.
+            .add_systems(Update, camera_path::resolve_camera_paths)
+            .add_systems(
+                FixedPostUpdate,
+                camera_path::drive_camera_paths.after(lunco_time::DomainResolveSet),
+            )
+            .add_systems(
+                PostUpdate,
+                camera_path::smooth_camera_paths
                     .before(bevy::transform::TransformSystems::Propagate),
             )
             // HDRI environment: project an authored `DomeLight`'s equirect into

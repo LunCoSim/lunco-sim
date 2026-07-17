@@ -580,12 +580,20 @@ fn expand_editor_route_in_place(v: &mut Value) {
 /// Replace every prim-path `target` with the prim's live world position. Returns the
 /// paths that could not be resolved — a tree naming a deleted waypoint must not
 /// compile (it would drive to the origin).
+///
+/// Everything here is the BigSpace **root frame** — the frame `drive_autopilots`
+/// ticks in, avian's `Position` uses, and an authored `x;y;z` waypoint already
+/// means. This used to bake into the RENDER frame instead (prim positions read
+/// from `GlobalTransform`, literal waypoints actively converted world→render via
+/// the grid's floating offset). That frame is origin-relative, so every baked
+/// coordinate silently expired whenever big_space moved the origin, and a JSON
+/// `target: [x,y,z]` — which this never rewrites — was left in world coordinates
+/// to be compared against render ones. In the sandbox the origin cell makes the
+/// two frames equal, which is why only the moonbase broke.
 fn bake_targets(
     v: &mut Value,
     bindings: &TargetBindings,
-    q_gt: &Query<&GlobalTransform>,
-    grid_world_pos: DVec3,
-    grid_floating_pos: Vec3,
+    pose: &dyn Fn(Entity) -> Option<DVec3>,
     missing: &mut Vec<String>,
 ) {
     match v {
@@ -593,11 +601,8 @@ fn bake_targets(
             let resolved = match map.get("target") {
                 Some(Value::String(s)) => {
                     if s.starts_with('/') {
-                        match bindings.0.get(s.as_str()).and_then(|e| q_gt.get(*e).ok()) {
-                            Some(gt) => {
-                                let p = gt.translation();
-                                Some(serde_json::json!([p.x, p.y, p.z]))
-                            }
+                        match bindings.0.get(s.as_str()).and_then(|e| pose(*e)) {
+                            Some(p) => Some(serde_json::json!([p.x, p.y, p.z])),
                             None => {
                                 missing.push(s.clone());
                                 None
@@ -611,9 +616,9 @@ fn bake_targets(
                                 parts[1].trim().parse::<f64>(),
                                 parts[2].trim().parse::<f64>(),
                             ) {
-                                let wp_world_pos = DVec3::new(x, y, z);
-                                let rel_pos = (wp_world_pos - grid_world_pos).as_vec3() + grid_floating_pos;
-                                Some(serde_json::json!([rel_pos.x, rel_pos.y, rel_pos.z]))
+                                // Verbatim: an authored waypoint is ALREADY in the
+                                // frame the tick runs in.
+                                Some(serde_json::json!([x, y, z]))
                             } else {
                                 None
                             }
@@ -628,13 +633,13 @@ fn bake_targets(
                 map.insert("target".into(), pos);
             }
             for child in map.values_mut() {
-                bake_targets(child, bindings, q_gt, grid_world_pos, grid_floating_pos, missing);
+                bake_targets(child, bindings, pose, missing);
             }
         }
         Value::Array(items) =>
             items
                 .iter_mut()
-                .for_each(|i| bake_targets(i, bindings, q_gt, grid_world_pos, grid_floating_pos, missing)),
+                .for_each(|i| bake_targets(i, bindings, pose, missing)),
         _ => {}
     }
 }
@@ -650,7 +655,6 @@ fn bake_targets(
 /// tree, and a moving *vessel* re-baking its own static targets is idempotent.
 pub fn compile_behavior_xml(
     q_vessels: Query<(Entity, &BehaviorXml, Option<&TargetBindings>)>,
-    q_gt: Query<&GlobalTransform>,
     q_autopilots: Query<(Entity, &Autopilot, Has<AutopilotBehavior>)>,
     q_spec: Query<&AutopilotBehaviorSpec>,
     q_reached: Query<&ReachedWaypoints>,
@@ -663,7 +667,6 @@ pub fn compile_behavior_xml(
             Changed<ReachedWaypoints>,
         )>,
     >,
-    q_grids: Query<(Entity, &big_space::prelude::Grid)>,
     q_grids_only: Query<&big_space::prelude::Grid>,
     q_parents: Query<&ChildOf>,
     q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
@@ -672,14 +675,10 @@ pub fn compile_behavior_xml(
     if q_vessels.is_empty() || moved.is_empty() {
         return;
     }
-    let (grid_world_pos, grid_floating_pos) = if let Some((grid_entity, _)) = q_grids.iter().next() {
-        let world_pos = lunco_core::coords::world_position(grid_entity, &q_parents, &q_grids_only, &q_spatial)
-            .unwrap_or(DVec3::ZERO);
-        let floating_pos = q_gt.get(grid_entity).ok().map(|gt| gt.translation()).unwrap_or(Vec3::ZERO);
-        (world_pos, floating_pos)
-    } else {
-        (DVec3::ZERO, Vec3::ZERO)
-    };
+    // Root-frame position of any prim, straight off the cell chain — no grid
+    // offset to subtract and no floating origin to chase, because the bake no
+    // longer targets the render frame.
+    let pose = |e: Entity| lunco_core::coords::world_position(e, &q_parents, &q_grids_only, &q_spatial);
 
     for (vessel, xml, bindings) in q_vessels.iter() {
         let empty = TargetBindings::default();
@@ -708,7 +707,7 @@ pub fn compile_behavior_xml(
         // points drop out of the curve) and BEFORE bake (legs are still
         // `target="x;y;z"` strings that the resampler parses).
         expand_editor_route_in_place(&mut value);
-        bake_targets(&mut value, bindings, &q_gt, grid_world_pos, grid_floating_pos, &mut missing);
+        bake_targets(&mut value, bindings, &pose, &mut missing);
         if !missing.is_empty() {
             // Dangling reference: a waypoint prim the tree names has been deleted (or
             // has not spawned yet). Keep the last good tree — compiling this one would
@@ -750,6 +749,89 @@ pub fn compile_behavior_xml(
                 commands.entity(actor).try_insert(AutopilotBehavior::new(&spec));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod bake_frame_tests {
+    //! The bake's frame contract. Every coordinate a compiled tree carries is in
+    //! the BigSpace ROOT frame — the frame `drive_autopilots` ticks in and avian's
+    //! `Position` uses. The bake used to target the RENDER frame instead, which is
+    //! origin-relative: every baked coordinate expired whenever big_space moved the
+    //! origin, and an authored waypoint got actively converted into it. The sandbox
+    //! sits in the origin cell, where the two frames are equal — so only the
+    //! moonbase, whose origin is cells away, showed it.
+    use super::*;
+
+    fn drive_to(target: &str) -> Value {
+        serde_json::json!({ "kind": "drive_to", "target": target })
+    }
+
+    /// An authored `x;y;z` waypoint is ALREADY root-frame; the bake must pass it
+    /// through untouched rather than rebasing it onto the floating origin.
+    #[test]
+    fn a_literal_waypoint_bakes_verbatim() {
+        let mut v = drive_to("1200.5;-53;-800");
+        let mut missing = Vec::new();
+        let pose = |_: Entity| -> Option<DVec3> { panic!("a literal target must not resolve a prim") };
+
+        bake_targets(&mut v, &TargetBindings::default(), &pose, &mut missing);
+
+        assert_eq!(v["target"], serde_json::json!([1200.5, -53.0, -800.0]));
+        assert!(missing.is_empty());
+    }
+
+    /// A prim target resolves through the cell chain — the same root frame, so a
+    /// pin two cells out bakes to its true position, not a render-frame shadow.
+    #[test]
+    fn a_prim_waypoint_bakes_its_root_frame_position() {
+        let mut world = World::new();
+        let pin = world.spawn_empty().id();
+        let mut bindings = TargetBindings::default();
+        bindings.0.insert("/Scene/Pin".to_string(), pin);
+
+        let mut v = drive_to("/Scene/Pin");
+        let mut missing = Vec::new();
+        // Two cells up on a 2 km grid, 53 m down within the cell.
+        let pose = |e: Entity| -> Option<DVec3> {
+            (e == pin).then_some(DVec3::new(10.0, 3947.0, 4.0))
+        };
+
+        bake_targets(&mut v, &bindings, &pose, &mut missing);
+
+        assert_eq!(v["target"], serde_json::json!([10.0, 3947.0, 4.0]));
+        assert!(missing.is_empty());
+    }
+
+    /// A dangling prim reference is reported, never silently baked to the origin —
+    /// that would drive the rover to grid-zero.
+    #[test]
+    fn an_unresolved_prim_target_is_reported() {
+        let mut v = drive_to("/Scene/Deleted");
+        let mut missing = Vec::new();
+        let pose = |_: Entity| -> Option<DVec3> { None };
+
+        bake_targets(&mut v, &TargetBindings::default(), &pose, &mut missing);
+
+        assert_eq!(missing, vec!["/Scene/Deleted".to_string()]);
+        // Left as the unresolved path, NOT rewritten to a coordinate.
+        assert_eq!(v["target"], serde_json::json!("/Scene/Deleted"));
+    }
+
+    /// Nested legs bake too — the walk recurses through arrays and objects.
+    #[test]
+    fn nested_legs_bake() {
+        let mut v = serde_json::json!({
+            "kind": "sequence",
+            "children": [drive_to("100;0;200"), drive_to("300;0;400")],
+        });
+        let mut missing = Vec::new();
+        let pose = |_: Entity| -> Option<DVec3> { None };
+
+        bake_targets(&mut v, &TargetBindings::default(), &pose, &mut missing);
+
+        assert_eq!(v["children"][0]["target"], serde_json::json!([100.0, 0.0, 200.0]));
+        assert_eq!(v["children"][1]["target"], serde_json::json!([300.0, 0.0, 400.0]));
     }
 }
 

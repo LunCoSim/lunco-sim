@@ -73,7 +73,8 @@ pub use georef::TerrainGeoref;
 pub use query::{register_terrain_queries, TerrainHeightProvider};
 pub use collider_ring::{ColliderTiles, TerrainColliderRing};
 pub use stream_viz::{
-    DemHeightField, LodTiles, TerrainLodConfig, TerrainLodViz, TerrainNodeErrors, TerrainShaderMode,
+    DemHeightField, LodFrozen, LodTiles, TerrainLodConfig, TerrainLodViz, TerrainNodeErrors,
+    TerrainShaderMode,
     TerrainStreamStatus, TileShadowCache,
 };
 pub use terrain_layers::{

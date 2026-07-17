@@ -136,6 +136,30 @@ impl Plugin for SandboxEditPlugin {
                 .before(bevy::transform::TransformSystems::Propagate),
         );
         app.add_systems(Update, gizmo::sync_gizmo_camera);
+        // The gizmo crate reads a target's pose from `Transform` but its camera
+        // from `GlobalTransform` — under big_space those differ by a whole cell,
+        // so it drew the handles 2 km off-screen in the twin (and looked fine in
+        // the sandbox only because that scene sits in the origin cell). The
+        // `GizmoTarget` therefore lives on an unparented proxy whose `Transform`
+        // IS its render-frame pose; the drag comes back as a delta.
+        app.add_systems(Update, (gizmo::spawn_gizmo_proxies, gizmo::despawn_gizmo_proxies));
+        app.add_systems(
+            PostUpdate,
+            gizmo::sync_gizmo_proxies.after(bevy::transform::TransformSystems::Propagate),
+        );
+        // Must land AFTER `restore_dragged_transform` and BEFORE propagation.
+        // `restore_dragged_transform` clamps `Transform` back to `prev.local_pos`
+        // every frame to cancel Avian's writeback; applying the drag before that
+        // (e.g. in `First`) gets silently erased, and `sync_gizmo_transforms`
+        // then never advances `prev` — the gizmo draws and picks up the drag, but
+        // the object never moves. The crate used to get this for free by writing
+        // `Transform` in `Last`, after the clamp.
+        app.add_systems(
+            PostUpdate,
+            gizmo::apply_gizmo_proxy_drag
+                .after(gizmo::restore_dragged_transform)
+                .before(bevy::transform::TransformSystems::Propagate),
+        );
         app.add_systems(Update, gizmo::drive_gizmo_drag_no_shift);
         // Publish the drag state as the core `GizmoDragging` marker so transform-
         // gizmo-free crates (avatar camera follow) can read it.

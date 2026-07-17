@@ -371,11 +371,23 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
             egui::CollapsingHeader::new("Transform")
                 .default_open(true)
                 .show(ui, |ui| {
-                    if let Some(t) = ctx.get::<Transform>(entity).map(|tf| tf.translation) {
+                    // GRID-ABSOLUTE, not `Transform.translation`: on a
+                    // grid-direct prim the raw local is only the cell
+                    // remainder, so the sliders showed a number that agreed with
+                    // neither the authored USD nor the object's actual place —
+                    // and committing it fed that short value to `MoveEntity`,
+                    // teleporting the object one cell. This is the same frame
+                    // the gizmo authors and the same one `MoveEntity` expects.
+                    if let Some(t) = grid_absolute_of(ctx, entity).map(|p| p.as_vec3()) {
                         let (mut x, mut y, mut z) = (t.x, t.y, t.z);
-                        let rx = ui.add(egui::Slider::new(&mut x, -1000.0..=1000.0).text("X"));
-                        let ry = ui.add(egui::Slider::new(&mut y, -1000.0..=1000.0).text("Y"));
-                        let rz = ui.add(egui::Slider::new(&mut z, -1000.0..=1000.0).text("Z"));
+                        // `DragValue`, not a ±1000 `Slider`: a grid-absolute
+                        // coordinate is unbounded (a moonbase prim sits well
+                        // outside ±1000 m of the grid origin), and a slider would
+                        // CLAMP it — merely showing the panel and nudging one axis
+                        // would have hauled the object back inside the range.
+                        let rx = ui.add(egui::DragValue::new(&mut x).speed(0.1).prefix("X: "));
+                        let ry = ui.add(egui::DragValue::new(&mut y).speed(0.1).prefix("Y: "));
+                        let rz = ui.add(egui::DragValue::new(&mut z).speed(0.1).prefix("Z: "));
                         // Author ONCE, on release — not on every `changed()` frame, which
                         // would flood the journal with an op per mouse-move for a single
                         // drag. Same rule as the gizmo's drag-end authoring.
@@ -610,6 +622,28 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
 /// asset that authors `customData {min,max,unit}` on a scalar gets a clamped
 /// slider here without any hand-coded range; edits write back through the same
 /// `ApplyUsdOp(SetAttribute)` path as every other Inspector control.
+/// Grid-absolute translation of `entity` — `cell × edge + local`, the frame USD
+/// authors `xformOp:translate` in and the frame `MoveEntity` takes.
+///
+/// The `PanelCtx` (one-component-at-a-time) spelling of
+/// [`lunco_core::coords::grid_absolute`], which needs `Query`s the panel doesn't
+/// have. Same rule: no parent `Grid` ⇒ no cell ⇒ the local translation already
+/// IS the authored value.
+fn grid_absolute_of(ctx: &PanelCtx, entity: Entity) -> Option<bevy::math::DVec3> {
+    let tf = ctx.get::<Transform>(entity)?;
+    let Some(grid) = ctx
+        .get::<ChildOf>(entity)
+        .and_then(|c| ctx.get::<big_space::prelude::Grid>(c.parent()))
+    else {
+        return Some(tf.translation.as_dvec3());
+    };
+    let cell = ctx
+        .get::<big_space::prelude::CellCoord>(entity)
+        .copied()
+        .unwrap_or_default();
+    Some(grid.grid_position_double(&cell, tf))
+}
+
 fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
     let params: Vec<crate::ui::usd_params::UsdParam> =
         match ctx.resource::<crate::ui::usd_params::UsdParamView>() {

@@ -63,11 +63,6 @@ pub fn api_request_observer(
     cmd_results: Res<lunco_core::CommandResults>,
     mut subscriptions: ResMut<TelemetrySubscriptions>,
     q_meta: Query<(Option<&Name>, Has<lunco_fsw::FlightSoftware>, Option<&lunco_core::CelestialBody>)>,
-    // World pose for QueryEntity / future telemetry. `GlobalTransform`
-    // mirrors Avian's `Position` post-writeback — we read it (instead
-    // of Avian's `Position` directly) to keep this crate free of an
-    // avian3d dep.
-    q_transforms: Query<&GlobalTransform>,
     // Which commands answer later, on the correlation id. Populated by whichever crate owns
     // them (`register_deferred_command`), never by name here.
     deferred_commands: Option<Res<DeferredCommands>>,
@@ -77,7 +72,7 @@ pub fn api_request_observer(
 
     let maybe_response = {
         let type_reg = type_registry.read();
-        execute_request(&req.request, &mut commands, &mut id_counter, &registry, &query_registry, &visibility, &type_reg, &cmd_results, &mut subscriptions, &q_meta, &q_transforms, deferred_commands.as_deref(), correlation_id)
+        execute_request(&req.request, &mut commands, &mut id_counter, &registry, &query_registry, &visibility, &type_reg, &cmd_results, &mut subscriptions, &q_meta, deferred_commands.as_deref(), correlation_id)
     };
 
     // None means the response is deferred — a deferred command or query provider will
@@ -524,7 +519,6 @@ fn execute_request(
     cmd_results: &lunco_core::CommandResults,
     subscriptions: &mut TelemetrySubscriptions,
     q_meta: &Query<(Option<&Name>, Has<lunco_fsw::FlightSoftware>, Option<&lunco_core::CelestialBody>)>,
-    q_transforms: &Query<&GlobalTransform>,
     deferred_commands: Option<&DeferredCommands>,
     correlation_id: u64,
 ) -> Option<ApiResponse> {
@@ -627,36 +621,6 @@ fn execute_request(
             });
 
             Some(ApiResponse::command_accepted(command_id))
-        }
-        ApiRequest::QueryEntity { id } => {
-            Some(match registry.resolve(id) {
-                Some(e) => {
-                    let (name, is_vehicle, body) = q_meta.get(e).unwrap_or((None, false, None));
-                    let kind = if is_vehicle { "rover" } else if body.is_some() { "planet" } else { "unknown" };
-                    // World-space pose from GlobalTransform. Translation
-                    // mirrors Avian's `Position` after physics writeback;
-                    // rotation/scale let callers read orientation too
-                    // (e.g. the solar tracker's yaw, a steered wheel) —
-                    // a revolute-driven body keeps its position but spins,
-                    // so position alone can't observe it.
-                    let (scale, rot, pos) = q_transforms.get(e).ok()
-                        .map(|gt| gt.to_scale_rotation_translation())
-                        .unwrap_or((Vec3::ONE, Quat::IDENTITY, Vec3::ZERO));
-                    // Euler YXZ (yaw, pitch, roll) — matches the sun /
-                    // steering authoring convention, handier than a quat.
-                    let (yaw, pitch, roll) = rot.to_euler(EulerRot::YXZ);
-                    ApiResponse::ok(serde_json::json!({
-                        "api_id": id,
-                        "name": name.map(|n| n.as_str()).unwrap_or(""),
-                        "type": kind,
-                        "position": [pos.x, pos.y, pos.z],
-                        "rotation": [rot.x, rot.y, rot.z, rot.w],
-                        "euler": [yaw, pitch, roll],
-                        "scale": [scale.x, scale.y, scale.z],
-                    }))
-                },
-                None => ApiResponse::error(ApiErrorCode::EntityNotFound, format!("Entity {} not found", id)),
-            })
         }
         ApiRequest::ListEntities => {
             let entities: Vec<serde_json::Value> = registry.entities()

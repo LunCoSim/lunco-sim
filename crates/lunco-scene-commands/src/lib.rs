@@ -45,6 +45,9 @@
 
 pub mod catalog;
 pub mod commands;
+/// `QueryEntity` — the READ side of the scene verbs, reporting the same
+/// grid-absolute frame [`commands::MoveEntity`] accepts.
+pub mod entity_query;
 /// Headless-safe: resolve an entity's backing USD document + its bound shader prim.
 /// Shared by `commands` (the authoring tier) and the editor's Inspector panel — it
 /// lived in the panel, which is what broke the `--no-ui` server build (`commands`
