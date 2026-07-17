@@ -76,6 +76,7 @@ these are the reasoning.
 | [`45-big-space-correct-usage.md`](45-big-space-correct-usage.md) · [`46-bigspace-deep-analysis.md`](46-bigspace-deep-analysis.md) · [`47-bigspace-option-b-execution.md`](47-bigspace-option-b-execution.md) | `big_space` contract, the jitter root cause, and the physics/render split. **`cell_edge_length` and `switching_threshold` are PRECISION knobs, not extent knobs** |
 | [`48-object-builder.md`](48-object-builder.md) | The object builder |
 | [`49-connectivity-link-kernel.md`](49-connectivity-link-kernel.md) | The generic link kernel (comms is a domain over it, not a kernel) |
+| [`50-usd-driven-visuals.md`](50-usd-driven-visuals.md) | Beams, plumes, ribbons: geometry+look authored in USD, logic in Rust, bound by name (`lunco:program:id`). **`radius`/`height` bake at instantiation — live size is `xformOp:scale`**; a `lunco:*` property needs THREE files or it is inert |
 
 ## Cross-cutting
 

@@ -17,17 +17,122 @@
 # distance to geometry on the `range` port — the altitude a GNC reads. Beyond
 # `rangeMax` it reports per `rangeOutOfRangeMode` (`IdealAltitude` = sensor world Y,
 # so guidance stays sane above the sensor's reach). Honours `lunco:sensor:offset`.
+#
+# `lunco:sensor:*` and not Omniverse's `OmniLidar`, deliberately. `OmniLidar` models a
+# SCANNING lidar — firing patterns, emitter-state arrays, per-line ray counts — and a
+# radar altimeter does not scan. NVIDIA ships no single-ray configuration to copy.
+# Reading an `OmniLidar` prim later is additive and costs this file nothing: the ray is
+# `RangeSensor` either way, so an Omniverse-authored sensor only needs a second reader
+# mapping `omni:sensor:Core:farRangeM` and friends onto the same component.
+# NOT `lunco:spawnable`. An altimeter alone on the regolith measures nothing — it is a
+# component that arrives through a `references` arc onto a vessel, never a part the
+# palette offers to place. That also keeps `SelectableRoot` off it (the flag does double
+# duty, `lunco-usd-bevy` ~1242), so a click on the beam resolves up to the VESSEL rather
+# than stopping at its instrument.
 def Xform "Altimeter" (
     kind = "component"
-    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
-    uniform bool lunco:spawnable = true
-    token visibility = "invisible"
     custom bool lunco:sensor:range = true
     custom token lunco:sensor:rangeAxis = "-Y"
     custom float lunco:sensor:rangeMax = 150.0
     custom token lunco:sensor:rangeOutOfRangeMode = "IdealAltitude"
-    custom bool lunco:sensor:rangeVisualize = true
     custom double3 lunco:sensor:offset = (0.0, 0.0, 0.0)
+
+    # The beam the sensor draws. There is no `rangeVisualize` flag: this prim IS the
+    # intent, and turning it off is `token visibility = "invisible"` here — USD's own
+    # answer, rather than a bespoke boolean that means the same thing somewhere else.
+    #
+    # A UNIT cylinder. `radius`/`height` bake into the mesh at instantiation and are
+    # never re-read, so the live length can only be `xformOp:scale` — which the
+    # `range_beam` driver writes every frame from the sensor's reported distance. Same
+    # idiom as the lander's flame cone.
+    def Cylinder "Beam"
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        rel material:binding = </Altimeter/Looks/Beam_Mat>
+        bool physics:collisionEnabled = false
+        # The beam represents light being emitted, not matter blocking it. Alpha does
+        # not say this on its own — a blended surface still rasterises opaquely into
+        # the shadow map. Omniverse's name, so RTX reads it too.
+        bool primvars:doNotCastShadows = true
+
+        def LunCoProgram "RangeBeam"
+        {
+            uniform token lunco:program:implementationSource = "id"
+            uniform token lunco:program:id = "range_beam"
+            # Half-width in metres. A beam is a RAY — it reads as a line, not a pipe,
+            # so this is deliberately thinner than the waypoint route ribbon's 0.12:
+            # the ribbon is a path you drive along, this is a measurement.
+            custom float lunco:param:width = 0.03
+            # The two alpha states, BOTH authored — the driver only picks between
+            # them, it invents neither. `hit` = the sensor is reporting real geometry;
+            # `miss` = it is reporting its out-of-range fallback. The COLOUR is
+            # `Beam_Mat`'s emissive in both cases.
+            custom float lunco:param:hitAlpha = 0.85
+            custom float lunco:param:missAlpha = 0.35
+        }
+    }
+
+    # WHERE THE RAY LANDS. Its own prim and its own program, because it is its own
+    # thing: the beam says "how far", this says "at what point". A miss has no landing
+    # point at all, so the driver HIDES it rather than parking it at the range limit
+    # and implying a contact that never happened.
+    #
+    # A UNIT sphere — `radius` bakes into the mesh at instantiation and is never
+    # re-read, exactly like the beam's cylinder. Shares `Beam_Mat`, so retinting the
+    # beam retints its endpoint and the two cannot drift apart.
+    def Sphere "Hit"
+    {
+        double radius = 1.0
+        rel material:binding = </Altimeter/Looks/Beam_Mat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+
+        def LunCoProgram "RangeHit"
+        {
+            uniform token lunco:program:implementationSource = "id"
+            uniform token lunco:program:id = "range_hit"
+            # Radius in metres — twice the beam's half-width, so it reads as a marker
+            # on the ray rather than a bead threaded onto it.
+            custom float lunco:param:radius = 0.06
+        }
+    }
+
+    def Scope "Looks"
+    {
+        def Material "Beam_Mat"
+        {
+            token outputs:surface.connect = </Altimeter/Looks/Beam_Mat/Surface.outputs:surface>
+
+            # EMISSIVE-ONLY: a constant colour that ignores lights, normals and
+            # shadows. `diffuseColor` 0 + `emissiveColor` C is the USD way to say it —
+            # `UsdPreviewSurface` has no `unlit` input and is right not to, because the
+            # question "how does the sun fall on this?" is a category error for a beam.
+            # The `PbrLook.unlit` flag exists but is render intent for RUST-SPAWNED
+            # overlays (trajectory lines, the brush, labels) and no `.usda` authors it.
+            #
+            # Not cosmetic: the Moon has no atmosphere, so there is no ambient fill and
+            # a lit surface facing away from the sun renders PURE BLACK. A lit beam
+            # would vanish on the night side — exactly where an altimeter matters.
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.0, 0.0, 0.0)
+                color3f inputs:emissiveColor = (1.0, 0.1, 0.1)
+                color3f inputs:specularColor = (0.0, 0.0, 0.0)
+                float inputs:roughness = 1.0
+                float inputs:metallic = 0.0
+                # SUB-1 ON PURPOSE, and load-bearing. A beam is a ray of light, so it
+                # should read as translucent — but this also decides the ALPHA MODE:
+                # `opacity = 1.0` resolves to `SurfaceAlpha::Opaque`, and an opaque
+                # material IGNORES alpha, so the driver's hit/miss fade would write a
+                # value the renderer discards. Sub-1 is what makes it `Blend`.
+                float inputs:opacity = 0.85
+                token outputs:surface
+            }
+        }
+    }
 }

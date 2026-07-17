@@ -6,13 +6,14 @@
 )
 
 
+# NOT `lunco:spawnable`. A bus is a wiring node — an `Xform` with no geometry, so
+# placing one on the regolith puts an invisible nothing in the scene. It arrives on a
+# `references` arc onto the vessel whose power it carries. Same reasoning as the
+# sensors, and as `components/gnc/descent_guidance.usda`, which never claimed the flag.
 def Xform "PowerBus" (
     kind = "component"
-    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
-    uniform bool lunco:spawnable = true
-
     # --- Electrical properties ---
     double lunco:nominalVoltage = 48.0
     double lunco:maxCurrent = 200.0

@@ -8,6 +8,7 @@ pub mod architecture;
 pub mod kernels;
 pub mod mocks;
 pub mod ports;
+pub mod programs;
 pub mod telemetry;
 pub mod coords;
 pub mod log;

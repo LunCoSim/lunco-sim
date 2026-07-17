@@ -583,16 +583,12 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                 Some("IdealAltitude") => lunco_cosim::sensors::OutOfRangeMode::IdealAltitude,
                 _ => lunco_cosim::sensors::OutOfRangeMode::MaxDistance,
             };
-            let visualize = reader
-                .scalar::<bool>(&sdf_path, "lunco:sensor:rangeVisualize")
-                .unwrap_or(false);
             commands.entity(entity).try_insert(lunco_cosim::sensors::RangeSensor {
                 offset: sensor_offset,
                 axis,
                 max_distance,
                 distance: max_distance,
                 out_of_range_mode,
-                visualize,
                 ..default()
             });
         }

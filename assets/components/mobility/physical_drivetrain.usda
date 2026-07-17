@@ -21,12 +21,19 @@
 # at y=-0.25) clear it by 0.10 m. Track ±0.9 keeps them under the 2.0 m body.
 # The wheel colliders never touch the body, so the joints stay stable without
 # relying on collision-disable.
+# NOT `lunco:spawnable`. This asset is an OVERLAY: every wheel below is an `over`, which
+# composes onto a wheel that must ALREADY exist on the host, and the joints target those
+# wheels by path. Spawned on its own it would lay overrides onto nothing and leave a bare
+# articulation root with joints pointing at prims that do not exist. It arrives on a
+# `references` arc onto a rover that has wheels.
+#
+# `PhysicsArticulationRootAPI` STAYS — that is what this prim is. Only the catalogue
+# claim goes.
 def Xform "Drivetrain" (
     kind = "component"
-    prepend apiSchemas = ["PhysicsArticulationRootAPI", "LunCoCatalogAPI"]
+    prepend apiSchemas = ["PhysicsArticulationRootAPI"]
 )
 {
-    uniform bool lunco:spawnable = true
     over "Wheel_FL"
     {
         double3 xformOp:translate = (-0.9, -0.65, -1.225)

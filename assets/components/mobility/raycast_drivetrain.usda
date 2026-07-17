@@ -15,12 +15,14 @@
 # Position is authored here (per-variant) rather than on the base wheel so the
 # `physical` variant can supply its own drop without losing to a stronger local
 # opinion (USD LIVERPS strength: local > variant/reference).
+# NOT `lunco:spawnable`. This asset is an OVERLAY: every prim below is an `over`, which
+# composes onto a wheel that must ALREADY exist on the host. Spawned on its own it would
+# lay overrides onto nothing and leave a bare `Xform` — meaningless by construction, not
+# merely invisible. It arrives on a `references` arc onto a rover that has wheels.
 def Xform "Drivetrain" (
-    prepend apiSchemas = ["LunCoCatalogAPI"]
     kind = "component"
 )
 {
-    uniform bool lunco:spawnable = true
     over "Wheel_FL"
     {
         double3 xformOp:translate = (-1.0, -0.15, -1.225)

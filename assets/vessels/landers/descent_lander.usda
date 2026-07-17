@@ -342,6 +342,12 @@ def Xform "DescentLander" (
         rel material:binding = </DescentLander/Looks/Flame_Mat>
         float[] primvars:displayOpacity = [0.4]
         bool physics:collisionEnabled = false
+        # Exhaust is light being EMITTED, not matter blocking it. Translucency alone
+        # does not say this: a blended surface still rasterises opaquely into the
+        # shadow map, so the plume threw a hard shadow on the terrain below.
+        # Omniverse's name (Composer's "Cast Shadows" toggle), so this reads the same
+        # in RTX as it does here.
+        bool primvars:doNotCastShadows = true
 
         def LunCoProgram "Plume"
         {
@@ -363,6 +369,7 @@ def Xform "DescentLander" (
         rel material:binding = </DescentLander/Looks/FlameCore_Mat>
         float[] primvars:displayOpacity = [0.85]
         bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
 
         def LunCoProgram "Plume"
         {

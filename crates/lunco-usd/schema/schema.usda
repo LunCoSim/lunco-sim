@@ -284,6 +284,19 @@ class "LunCoShadowAPI" (
     )
 }
 
+# PER-GPRIM SHADOW CASTING IS `primvars:doNotCastShadows`, and there is no schema of
+# ours for it.
+#
+# UsdGeom has no say in whether a gprim casts a shadow — `UsdLuxShadowAPI` governs the
+# LIGHT, not the caster — so it is tempting to invent one. Omniverse already did: RTX
+# reads `bool primvars:doNotCastShadows` on the gprim, and Composer surfaces it as the
+# mesh's "Cast Shadows" toggle. We read the same name, so a scene authored in Omniverse
+# arrives here with its shadow intent intact, and one authored here keeps it there.
+#
+# A primvar, so it travels with the geometry and needs no class of ours. Note that alpha
+# does NOT answer this question: a blended surface is still rasterised opaquely into the
+# shadow map, so a translucent plume throws a hard shadow until this says otherwise.
+
 # WGSL MATERIALS ARE `UsdShade`, and there is no schema of ours for them.
 #
 # A look the `UsdPreviewSurface` node cannot express (regolith, a solar panel, layered
@@ -427,11 +440,28 @@ class LunCoProgram "LunCoProgram" (
 )
 {
     uniform token lunco:program:implementationSource = "sourceAsset" (
-        doc = """Which property carries this program: an external file
-        (`lunco:program:sourceAsset`) or text authored in place
+        doc = """Which property carries this program: a name the runtime already
+        implements (`lunco:program:id`), an external file
+        (`lunco:program:sourceAsset`), or text authored in place
         (`lunco:program:sourceCode`). Named for `UsdShade`'s
-        `info:implementationSource`, which asks the same question of a shader."""
-        allowedTokens = ["sourceAsset", "sourceCode"]
+        `info:implementationSource`, which asks the same question of a shader — and
+        carries the same three answers, for the same reason."""
+        allowedTokens = ["id", "sourceAsset", "sourceCode"]
+    )
+    uniform token lunco:program:id = "" (
+        doc = """A program the runtime ALREADY implements, named rather than supplied
+        — `"range_beam"`, `"skid"`. Resolved against an open registry of Rust drivers,
+        exactly as `info:id = "UsdPreviewSurface"` names a shader every renderer is
+        expected to have rather than shipping its source.
+
+        This is the case `lunco:program:sourceAsset`'s extension rule cannot cover:
+        there is no source, so there is no extension to dispatch on. A built-in wins
+        over a script hook of the same name, and an id nothing implements is a
+        fail-safe no-op with a warning — never a hard error, because a scene authored
+        against a newer runtime must still open in an older one.
+
+        The registry is open: a crate registers a driver, USD SELECTS it. Adding a
+        visualization is registering a name, not editing a schema."""
     )
     uniform asset lunco:program:sourceAsset = @@ (
         doc = """The program's file — `@models/Lander.mo@`, `@scenarios/flame.rhai@`,
@@ -494,8 +524,14 @@ class "LunCoProgramAPI" (
 )
 {
     uniform token lunco:program:implementationSource = "sourceAsset" (
-        doc = "Whether the program is an external file or text authored in place."
-        allowedTokens = ["sourceAsset", "sourceCode"]
+        doc = """Whether the program is a name the runtime implements, an external
+        file, or text authored in place."""
+        allowedTokens = ["id", "sourceAsset", "sourceCode"]
+    )
+    uniform token lunco:program:id = "" (
+        doc = """A program the runtime already implements, named rather than supplied
+        — resolved against an open registry of Rust drivers, as `info:id` names a
+        shader. See `LunCoProgram`'s `lunco:program:id` for the full rationale."""
     )
     uniform asset lunco:program:sourceAsset = @@ (
         doc = "The program's file. `asset`, never `string`."

@@ -97,15 +97,6 @@ pub struct RangeSensor {
     pub distance: f64,
     /// Behavior when the sensor range is exceeded.
     pub out_of_range_mode: OutOfRangeMode,
-    /// Whether the beam should be drawn. **Authored intent, not a render handle**
-    /// — this crate never draws anything.
-    ///
-    /// The sensing is simulation and must run headless, so `lunco-cosim` never
-    /// names `Gizmos` (that pulled `bevy_gizmos → bevy_render → wgpu + naga` into
-    /// every build, including the `--no-ui` server). The beam is drawn by
-    /// `lunco-render-bevy`'s `sensor_beams`, which reads this flag.
-    /// See `docs/architecture/render-decoupling.md`.
-    pub visualize: bool,
     /// Whether the last cast actually hit geometry (vs the out-of-range fallback).
     /// Set by [`update_range_sensors`]; read by the beam viz so drawing re-casts
     /// nothing — the line shows what the sensor actually reported, and cannot
@@ -121,7 +112,6 @@ impl Default for RangeSensor {
             max_distance: 100.0,
             distance: 100.0,
             out_of_range_mode: OutOfRangeMode::MaxDistance,
-            visualize: false,
             hit: false,
         }
     }

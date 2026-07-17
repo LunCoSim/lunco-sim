@@ -916,7 +916,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // A program with a source this engine does not run — a `.mo` solved by
         // lunco-usd-sim, an `.xml` compiled by the behaviour-tree engine — is not
         // ours; extension picks the engine, exactly as USD picks a file format.
-        attach_rhai_programs(reader, &sdf_path, entity, commands);
+        attach_programs(reader, &sdf_path, entity, commands);
 
         // `lunco:vessel` marks this prim as possessable by stamping `FlightSoftware`
         // — the unified control-surface tag. There is no separate `Vessel` marker:
@@ -1790,6 +1790,22 @@ fn apply_standard_material<R: UsdRead>(
                 occlusion: occlusion_texture,
             },
             unshared: animated,
+            // `primvars:doNotCastShadows` — OMNIVERSE'S name, not one of ours. RTX
+            // reads it on the gprim and Composer surfaces it as the mesh's "Cast
+            // Shadows" toggle, so a scene authored there arrives here with its shadow
+            // intent intact. Its polarity already matches `no_shadow_cast`.
+            //
+            // Alpha does NOT answer this question: a blended surface is still
+            // rasterised opaquely into the shadow map, so a translucent plume throws a
+            // hard shadow until this says otherwise. Read on the GPRIM, not the shader
+            // — two prims sharing one material can disagree about casting, and
+            // `material:binding` is not the place to say so.
+            no_shadow_cast: light::get_attribute_as_bool(
+                reader,
+                sdf_path,
+                "primvars:doNotCastShadows",
+            )
+            .unwrap_or(false),
             ..default()
         },
     ));
@@ -2609,17 +2625,24 @@ pub fn get_attribute_as_vec3<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str)
     read_vec3_f64(reader, path, attr).map(|v| Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32))
 }
 
-/// Attach the rhai programs a prim carries — its `LunCoProgram` children whose
-/// source is a `.rhai` — to `entity`, the prim that OWNS them.
+/// Attach the programs a prim carries — its `LunCoProgram` children — to `entity`,
+/// the prim that OWNS them.
 ///
-/// The script's `me` is its owner, because that is what a script is for: it acts on
+/// The program's `me` is its owner, because that is what a program is for: it acts on
 /// behalf of the vessel, reads the vessel's ports, moves the vessel's transform. The
-/// program prim exists to make the binding composable and to hold the script's own
-/// typed parameters, not to be the thing the script talks about.
+/// program prim exists to make the binding composable and to hold the program's own
+/// typed parameters, not to be the thing the program talks about.
+///
+/// Two of `implementationSource`'s three arms land here:
+///
+/// * **`lunco:program:id`** — a name the runtime already implements, resolved from
+///   `ProgramDriverRegistry`. There is no source, so the extension rule has nothing
+///   to dispatch on; this is `info:id` beside UsdShade's `info:sourceAsset`.
+/// * **`.rhai` source** (`sourceCode` or `sourceAsset`) — the script engine.
 ///
 /// A program whose source this engine does not run — a `.mo`, an `.xml` — belongs to
-/// another engine and is skipped here: the extension picks the engine.
-fn attach_rhai_programs<R: UsdRead>(
+/// another engine and is skipped: the extension picks the engine.
+fn attach_programs<R: UsdRead>(
     reader: &R,
     owner: &SdfPath,
     entity: Entity,
@@ -2630,6 +2653,18 @@ fn attach_rhai_programs<R: UsdRead>(
             continue;
         }
 
+        // A program that NAMES its implementation rather than supplying it.
+        //
+        // `text()`, NOT `scalar::<String>()`. `lunco:program:id` is a `token` (as
+        // `info:id` is), and a token is a DISTINCT `sdf::Value` variant from a string
+        // — `scalar::<String>` silently returns `None` for one, which reads as "no id
+        // authored" and leaves the prim undriven with no error anywhere. `sourceCode`
+        // below is genuinely `uniform string`, which is what makes the wrong call
+        // look right here.
+        let driver_id = reader
+            .text(&child, "lunco:program:id")
+            .filter(|s| !s.trim().is_empty());
+
         // Inline source wins over a file: `sourceCode` is the live-authoring path,
         // and an author editing it in place means it.
         let inline = reader
@@ -2638,14 +2673,20 @@ fn attach_rhai_programs<R: UsdRead>(
         let file = reader
             .asset(&child, "lunco:program:sourceAsset")
             .filter(|s| s.ends_with(".rhai"));
-        if inline.is_none() && file.is_none() {
+        if driver_id.is_none() && inline.is_none() && file.is_none() {
             continue;
         }
 
-        // A script's parameters are typed attributes on its own program prim, one
+        // A program's parameters are typed attributes on its own program prim, one
         // per key — `float lunco:param:wmax = 1.05`. Read by `param(me, key,
-        // default)`, which is how one reusable script drives many prims (each flame
+        // default)`, which is how one reusable program drives many prims (each flame
         // cone scales itself from its own numbers).
+        //
+        // A Rust driver reads them the same way, from `ScriptParams`, and NOT off the
+        // reader: a driver is an ordinary Bevy system, and a system has no USD reader.
+        // Everything a driver needs must be projected into the ECS here, at load. That
+        // is why the f64-ness of `ScriptParams` binds drivers too — a colour cannot
+        // ride through it, and belongs in a bound `Material` regardless.
         let params: std::collections::HashMap<String, f64> = reader
             .attr_names(&child)
             .iter()
@@ -2666,6 +2707,17 @@ fn attach_rhai_programs<R: UsdRead>(
         commands
             .entity(entity)
             .try_insert(lunco_core::ScenarioProgramPrim(child.as_str().to_string()));
+
+        // A built-in: the registry resolves the name, there is no source to load. An
+        // id nothing implements is reported by `warn_unknown_program_drivers` and the
+        // prim simply is not driven — a scene authored against a newer runtime must
+        // still open.
+        if let Some(id) = driver_id {
+            commands
+                .entity(entity)
+                .try_insert(lunco_core::programs::ProgramDriverId(id));
+            continue;
+        }
 
         if let Some(src) = inline {
             commands

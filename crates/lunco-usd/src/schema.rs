@@ -338,6 +338,20 @@ mod tests {
             reg.property("lunco:layer:colliderRing").unwrap().type_name,
             "bool"
         );
+        // `primvars:doNotCastShadows` is deliberately NOT declared here — it is
+        // Omniverse's primvar, read by name so their scenes keep their shadow intent
+        // (see the note in `schema.usda`). A primvar needs no class; asserting one
+        // would be asserting our own invention.
+        assert!(reg.property("primvars:doNotCastShadows").is_none());
+        // A program names a built-in instead of supplying one — the third arm of
+        // `implementationSource`, as `UsdShade` has `info:id` beside its
+        // `info:sourceAsset`. `schema.usda` is never read at runtime, so this asserts
+        // the GENERATED file carries it; the two drift in silence otherwise.
+        assert_eq!(reg.property("lunco:program:id").unwrap().type_name, "token");
+        assert_eq!(
+            reg.property("lunco:program:id").unwrap().variability,
+            sdf::Variability::Uniform
+        );
         assert_eq!(
             reg.property("lunco:terrain:horizonShadows").unwrap().type_name,
             "bool"

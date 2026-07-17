@@ -19,12 +19,13 @@
 # 9-DOF IMU — the attitude source a GNC reads for orientation instead of a
 # god-view body pose. Honours a body-local mount `lunco:sensor:offset`.
 # Invisible: no geometry, pure telemetry.
+# NOT `lunco:spawnable`. An IMU alone on the regolith measures nothing — it is a
+# component that arrives through a `references` arc onto a vessel, never a part the
+# palette offers to place. Sibling of altimeter.usda, same reasoning.
 def Xform "Imu" (
     kind = "component"
-    prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
-    uniform bool lunco:spawnable = true
     token visibility = "invisible"
     custom bool lunco:sensor:imu = true
     custom double3 lunco:sensor:offset = (0.0, 0.0, 0.0)

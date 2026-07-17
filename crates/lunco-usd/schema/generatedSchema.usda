@@ -181,8 +181,13 @@ class LunCoProgram "LunCoProgram" (
 )
 {
     uniform token lunco:program:implementationSource = "sourceAsset" (
-        allowedTokens = ["sourceAsset", "sourceCode"]
-        doc = "Whether the program is an external file or text authored in place."
+        allowedTokens = ["id", "sourceAsset", "sourceCode"]
+        doc = """Whether the program is a name the runtime implements, an external
+        file, or text authored in place."""
+    )
+    uniform token lunco:program:id = "" (
+        doc = """A program the runtime already implements, named rather than supplied
+        — resolved against an open registry, as `info:id` names a shader."""
     )
     uniform asset lunco:program:sourceAsset = @@ (
         doc = "The program's file."
@@ -209,8 +214,13 @@ class "LunCoProgramAPI" (
 )
 {
     uniform token lunco:program:implementationSource = "sourceAsset" (
-        allowedTokens = ["sourceAsset", "sourceCode"]
-        doc = "Whether the program is an external file or text authored in place."
+        allowedTokens = ["id", "sourceAsset", "sourceCode"]
+        doc = """Whether the program is a name the runtime implements, an external
+        file, or text authored in place."""
+    )
+    uniform token lunco:program:id = "" (
+        doc = """A program the runtime already implements, named rather than supplied
+        — resolved against an open registry, as `info:id` names a shader."""
     )
     uniform asset lunco:program:sourceAsset = @@ (
         doc = "The program's file."
