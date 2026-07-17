@@ -663,17 +663,28 @@ def Xform "RockerBogie" (
     # Author a `localPos0` on a joint to override the derivation.
     #
     # ── Lateral-axis revolute hinges (chassis ↔ rocker) ─────────────────────
-    def PhysicsRevoluteJoint "HingeL"
+    # HingeL/R: chassis <-> rocker joints.
+    # NASA MER/MSL use mechanical stops limiting rocker travel to +/-30 to +/-45 degrees.
+    # We use +/-30 degrees to keep the chassis level and prevent differential lockup.
+    def PhysicsRevoluteJoint "HingeL" (
+        doc = "Chassis-to-rocker hinge. Limited to +/-30 deg to match NASA mechanical stops, preventing excessive chassis roll and differential lockup."
+    )
     {
         rel physics:body0 = </RockerBogie>
         rel physics:body1 = </RockerBogie/RockerL>
         uniform token physics:axis = "X"
+        float physics:lowerLimit = -30
+        float physics:upperLimit = 30
     }
-    def PhysicsRevoluteJoint "HingeR"
+    def PhysicsRevoluteJoint "HingeR" (
+        doc = "Chassis-to-rocker hinge. Limited to +/-30 deg to match NASA mechanical stops, preventing excessive chassis roll and differential lockup."
+    )
     {
         rel physics:body0 = </RockerBogie>
         rel physics:body1 = </RockerBogie/RockerR>
         uniform token physics:axis = "X"
+        float physics:lowerLimit = -30
+        float physics:upperLimit = 30
     }
 
     # ── Differential coupling (rocker-bogie holonomic constraint) ───────────
@@ -698,17 +709,29 @@ def Xform "RockerBogie" (
     }
 
     # ── Lateral-axis revolute hinges (rocker ↔ bogie) ───────────────────────
-    def PhysicsRevoluteJoint "BogieHingeL"
+    # BogieHingeL/R: rocker <-> bogie joints.
+    # NASA rovers limit bogie rotation to +/-20 to +/-30 degrees to prevent the
+    # middle/rear wheels from colliding with the rocker frame or chassis belly.
+    # We use +/-20 degrees as a safe operating envelope.
+    def PhysicsRevoluteJoint "BogieHingeL" (
+        doc = "Rocker-to-bogie hinge. Limited to +/-20 deg to match NASA stops, preventing middle/rear wheels from colliding with the rocker frame."
+    )
     {
         rel physics:body0 = </RockerBogie/RockerL>
         rel physics:body1 = </RockerBogie/BogieL>
         uniform token physics:axis = "X"
+        float physics:lowerLimit = -20
+        float physics:upperLimit = 20
     }
-    def PhysicsRevoluteJoint "BogieHingeR"
+    def PhysicsRevoluteJoint "BogieHingeR" (
+        doc = "Rocker-to-bogie hinge. Limited to +/-20 deg to match NASA stops, preventing middle/rear wheels from colliding with the rocker frame."
+    )
     {
         rel physics:body0 = </RockerBogie/RockerR>
         rel physics:body1 = </RockerBogie/BogieR>
         uniform token physics:axis = "X"
+        float physics:lowerLimit = -20
+        float physics:upperLimit = 20
     }
 
     # ── Wheel revolute joints (rocker/bogie ↔ wheel) ────────────────────────
