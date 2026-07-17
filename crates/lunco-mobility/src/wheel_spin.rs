@@ -181,7 +181,7 @@ pub(crate) fn update_wheel_spin(
 #[cfg(test)]
 mod tests {
     use super::update_wheel_spin;
-    use crate::WheelRaycast;
+    use crate::{WheelRaycast, Suspension};
     use avian3d::prelude::*;
     use bevy::math::DVec3;
     use bevy::prelude::*;
@@ -221,15 +221,12 @@ mod tests {
             ))
             .id();
         let visual = app.world_mut().spawn(Transform::default()).id();
-        app.world_mut().spawn((
+         app.world_mut().spawn((
             WheelRaycast {
                 suspension_port: port,
                 drive_port: port,
                 steer_port: port,
                 steer_axis: DVec3::Y,
-                rest_length: 1.0,
-                spring_k: 1000.0,
-                damping_c: 100.0,
                 wheel_radius: 0.5,
                 ray_origin_y: 0.0,
                 visual_entity: Some(visual),
@@ -245,6 +242,12 @@ mod tests {
                 contact_grip_stiffness: 1000.0,
                 brake_torque_max: 0.0,
                 drive_force_per_normal: 2.0,
+            },
+            Suspension {
+                rest_length: 1.0,
+                spring_k: 1000.0,
+                damping_c: 100.0,
+                local_axis: DVec3::Y,
             },
             Transform::from_translation(wheel_local),
             GlobalTransform::from(Transform::from_translation(wheel_gtf_translation)),

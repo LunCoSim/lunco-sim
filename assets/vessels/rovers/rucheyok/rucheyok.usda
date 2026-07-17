@@ -118,7 +118,7 @@ def Xform "Rucheyok" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.2, 0.8, 0.2)]
 
-        int physxVehicleWheel:index = 0
+        int lunco:wheel:index = 0
         float physxVehicleWheel:radius = 2.0
 
         bool physics:rigidBodyEnabled = true
@@ -142,7 +142,7 @@ def Xform "Rucheyok" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.2, 0.8, 0.2)]
 
-        int physxVehicleWheel:index = 1
+        int lunco:wheel:index = 1
         float physxVehicleWheel:radius = 2.0
 
         bool physics:rigidBodyEnabled = true
@@ -166,7 +166,7 @@ def Xform "Rucheyok" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.8, 0.2, 0.2)]
 
-        int physxVehicleWheel:index = 2
+        int lunco:wheel:index = 2
         float physxVehicleWheel:radius = 2.0
 
         bool physics:rigidBodyEnabled = true
@@ -190,7 +190,7 @@ def Xform "Rucheyok" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.8, 0.2, 0.2)]
 
-        int physxVehicleWheel:index = 3
+        int lunco:wheel:index = 3
         float physxVehicleWheel:radius = 2.0
 
         bool physics:rigidBodyEnabled = true

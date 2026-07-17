@@ -1,0 +1,21 @@
+#usda 1.0
+(
+    defaultPrim = "Tire"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# A WORN regolith tire — cleats rounded off by a few hundred klicks. μ=0.6 ⇒ a slip
+# limit of atan(0.6) = 31.0°: enough for a surveyed route, not enough for the steepest
+# wall. The rover still goes where you plan; it stops going where you merely point.
+#
+# A `regolith` tire with less bite and nothing else changed — see `cleated.usda` for
+# why this file is three lines long.
+
+over "Tire" (
+    prepend references = @regolith.usda@</Tire>
+    kind = "component"
+)
+{
+    double lunco:frictionCoefficient = 0.6
+}

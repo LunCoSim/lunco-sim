@@ -314,7 +314,7 @@ def Xform "RockerBogie" (
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
             # --- WHEEL DYNAMICS CONFIGURATION ---
-            int physxVehicleWheel:index = 0
+            int lunco:wheel:index = 0
             float physxVehicleWheel:radius = 0.4
         }
     }
@@ -405,7 +405,7 @@ def Xform "RockerBogie" (
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
-            int physxVehicleWheel:index = 1
+            int lunco:wheel:index = 1
             float physxVehicleWheel:radius = 0.4
         }
     }
@@ -512,7 +512,7 @@ def Xform "RockerBogie" (
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
-            int physxVehicleWheel:index = 2
+            int lunco:wheel:index = 2
             float physxVehicleWheel:radius = 0.4
         }
 
@@ -531,7 +531,7 @@ def Xform "RockerBogie" (
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
-            int physxVehicleWheel:index = 4
+            int lunco:wheel:index = 4
             float physxVehicleWheel:radius = 0.4
         }
     }
@@ -631,7 +631,7 @@ def Xform "RockerBogie" (
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
-            int physxVehicleWheel:index = 3
+            int lunco:wheel:index = 3
             float physxVehicleWheel:radius = 0.4
         }
 
@@ -650,7 +650,7 @@ def Xform "RockerBogie" (
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
 
-            int physxVehicleWheel:index = 5
+            int lunco:wheel:index = 5
             float physxVehicleWheel:radius = 0.4
         }
     }

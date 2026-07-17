@@ -552,12 +552,12 @@ def Xform "SandboxScene" (
         bool physics:kinematicEnabled = true
         string lunco:net:authority = "opaque"
 
-        # The socket group. A socket is a `kind = "mount"` Xform whose
+        # The socket group. A socket is a `kind = "subcomponent"` Xform whose
         # `xformOp:*` IS the socket frame (here 2.5 m above the Base origin).
         def Xform "Mounts"
         {
             def Xform "arm" (
-                kind = "mount"
+                kind = "subcomponent"
             )
             {
                 uniform token lunco:mount:socket = "arm"     # what may attach
@@ -572,7 +572,7 @@ def Xform "SandboxScene" (
             # "⊕ Attach mount_probe.usda" composes that asset, reads its plug frame,
             # and references + joints it here with the plug landed on this socket.
             def Xform "probe" (
-                kind = "mount"
+                kind = "subcomponent"
             )
             {
                 uniform token lunco:mount:socket = "probe"
@@ -603,7 +603,7 @@ def Xform "SandboxScene" (
                 # Plug at the part origin (identity) → the snap lands Arm's origin
                 # exactly on the socket.
                 def Xform "hub" (
-                    kind = "mount"
+                    kind = "subcomponent"
                 )
                 {
                     double3 xformOp:translate = (0, 0, 0)

@@ -713,3 +713,294 @@ class "LunCoAvatarAPI" (
         doc = "The point the avatar's camera faces on spawn."
     )
 }
+
+# --- LunCo vehicle extensions ------------------------------------------------
+#
+# The PhysX vehicle schema (see `core/physxSchema.usda`) covers wheel dimensions,
+# suspension spring/damper, tire friction tables and compliance graphs. Three
+# things it does NOT model are below, each in its OWN applied API — one per prim
+# role, like every other LunCo API here.
+#
+# They are deliberately not one `LunCoMobilityAPI`: an applied API schema's
+# properties join the definition of every prim it is applied to, so a bundle
+# would declare `lunco:wheel:index` (with a fallback) on a suspension prim and a
+# `restLength` on a spring visual. Applied schemas are the unit of application,
+# not a namespace — see `PhysxVehicleWheelAPI` / `…SuspensionAPI` /
+# `…WheelAttachmentAPI`, which split along exactly these lines.
+
+class "LunCoSuspensionAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """The rest length of a LunCo raycast suspension. Applied to a suspension
+    prim alongside `PhysxVehicleSuspensionAPI`, whose spring/damper attrs carry the
+    rest of the compliance (see `assets/components/mobility/suspensions/*.usda`).
+
+    LunCo extension: PhysX's `PhysxVehicleSuspensionAPI` has no `restLength` — it
+    models travel as `travelDistance` + `sprungMass` — but the raycast wheel
+    integrator needs a rest length to solve Hooke's law."""
+)
+{
+    float lunco:suspension:restLength (
+        doc = """Natural standoff of a raycast wheel below its mount, metres — the
+        distance at which the analytical spring exerts zero force. `float`, like the
+        `physxVehicleSuspension:*` attrs it sits beside (and like the
+        `travelDistance` it stands in for). Read by `resolve_suspension_params`
+        (lunco-usd-sim); required for raycast wheels (doc 53 §4), and declared with
+        no fallback so an unauthored rest length is an error, not a 0.7 m guess."""
+    )
+}
+
+class "LunCoWheelAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """The per-wheel knobs LunCo's wheel integrator needs and PhysX does not
+    model. Applied to a wheel prim alongside `PhysxVehicleWheelAPI`, which carries
+    the wheel's dimensions and spin dynamics (see
+    `assets/components/mobility/wheel.usda`, which applies both and authors the
+    values every wheel inherits through its reference arc).
+
+    NO FALLBACKS. Every property here is declared without a default and must be
+    authored — `wheel.usda` authors them all, so every wheel on every rover has
+    them by composition. They were previously `unwrap_or(...)` constants in the
+    Rust loader, which meant the authored asset was not the source of truth and an
+    unauthored knob was indistinguishable from a deliberate one."""
+)
+{
+    int lunco:wheel:index (
+        doc = """Logical wheel index on the vehicle, used for drive/steer wiring
+        parity. LunCo extension: PhysX's `physxVehicleWheelAttachment:index` lives
+        on the WheelAttachment prim, which LunCo's flat composition doesn't author
+        — the wheel prim composes wheel + suspension directly — so the index lives
+        here rather than squatting a non-existent `physxVehicleWheel:index`.
+        Authored per wheel by the rover; everything else here comes from
+        `wheel.usda`."""
+    )
+    double lunco:wheel:contactGripStiffness (
+        doc = """Slope of contact friction vs slip, before the Coulomb cone bites.
+        Read by the wheel loader (lunco-usd-sim)."""
+    )
+    double lunco:wheel:driveForcePerNormal (
+        doc = """Drive force as a multiple of the wheel's normal force — traction
+        authority before the friction cone limits it. Per wheel, so a heavy hauler
+        and a light scout can differ."""
+    )
+    double3 lunco:wheel:steerAxis (
+        doc = """Steering-head axis, wheel-local. `(0, 1, 0)` is a vertical yaw
+        axis (cars); a raked fork authors e.g. `(0, 0.91, 0.42)` for ~25°."""
+    )
+    double lunco:wheel:maxDriveOmega (
+        doc = """Joint-wheel drive tuning (rigid-axle rovers): free-spin cap of the
+        axle motor, rad/s."""
+    )
+    double lunco:wheel:driveDamping (
+        doc = """Joint-wheel drive tuning: damping of the axle motor."""
+    )
+    double lunco:wheel:stallTorqueGain (
+        doc = """Joint-wheel drive tuning: torque gain as the axle approaches
+        stall."""
+    )
+}
+
+class "LunCoTireAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """The tire's grip against the ground. Applied to a tire prim alongside
+    `PhysxVehicleTireAPI`, whose `longitudinalStiffness` carries the rest of the
+    contact model (see `assets/components/mobility/tires/*.usda`, whose `over`
+    composes onto the wheel that references it).
+
+    LunCo extension: PhysX models grip as a ground-material-dependent friction
+    TABLE (`physxVehicleTireFrictionTable`), not a scalar on the tire. LunCo's
+    drive-traction model (`apply_wheel_drive`) is a single Coulomb μ, so the μ is
+    authored here rather than squatting a PhysX name that means something else."""
+)
+{
+    double lunco:tire:frictionCoefficient (
+        doc = """Coulomb μ between this tire and the ground — the slip limit is
+        atan(μ). No fallback: a tire that does not say what it grips with is an
+        authoring bug, not a μ of 1.0."""
+    )
+}
+
+class "LunCoSuspensionVisualAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Marks a prim as a moving part of a suspension strut's VISUAL, so the
+    mobility animation system can drive it from the live compression. Applied to the
+    piston/spring subcomponents of a suspension
+    (`assets/components/mobility/suspensions/standard.usda`).
+
+    LunCo extension: the PhysX vehicle schema is physics-only — it has no notion of
+    a strut's visual parts."""
+)
+{
+    uniform token lunco:suspensionVisual:role (
+        doc = """Which moving part this prim is. `"piston"` ⇒ the prim is stamped
+        with a `SuspensionPiston` Bevy component (translates along the travel axis);
+        `"spring"` ⇒ a `SuspensionSpring` component (scales along the travel axis).
+        A `kind` token is NOT used for this — `kind` is USD's regulated model
+        taxonomy (component/assembly/subcomponent), and "piston"/"spring" are not
+        valid kinds. Read at load by `process_usd_sim_prim_read` (lunco-usd-sim).
+        No fallback and no `""`: applying the API IS the claim to be a moving part,
+        so there is no such thing as a roleless one."""
+        allowedTokens = ["piston", "spring"]
+    )
+}
+
+# --- Electrical power system (EPS) ---------------------------------------------
+#
+# USD and Omniverse have no power schema — PhysX models mechanics, not electrics —
+# so the whole EPS vocabulary is a LunCo extension. It follows the same rules as the
+# vehicle APIs above: one API per PRIM ROLE, every property namespaced by that role
+# (`lunco:motor:*`, `lunco:battery:*`), and no fallbacks.
+#
+# The namespacing is not decoration. Three components each authored a bare
+# `lunco:efficiency` — a motor's shaft efficiency (0.85), a battery's round-trip
+# efficiency (0.95) and a bus's transmission efficiency (0.98) — one name for three
+# unrelated quantities, which a schema cannot document and a reader cannot tell
+# apart. Under a role namespace each says what it is.
+#
+# TOPOLOGY: a node names its BUS, and only that (`LunCoEpsNodeAPI`). `lunco:epsBus`
+# used to mean both directions at once — "the bus I am on" when authored on a load,
+# "my members" when authored on the bus or the battery — so the graph had two
+# sources of truth that could disagree, and did: every rucheyok load pointed at the
+# BATTERY (a store, not a bus) while `power_bus.usda` went unreferenced entirely. A
+# bus's membership is derived by looking for the nodes that name it.
+
+class "LunCoEpsNodeAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """A node on an electrical bus: anything that draws power or supplies it.
+    Applied to a motor, a battery, a solar panel — beside whatever API says WHAT it
+    is (`LunCoMotorAPI`, `LunCoBatteryAPI`, `LunCoPowerSourceAPI`).
+
+    This is the ONLY direction the EPS graph is authored in: a node names its bus.
+    The bus does not list its members — that is derivable, and authoring it twice
+    invites the two lists to disagree."""
+)
+{
+    rel lunco:eps:bus (
+        doc = """The `LunCoPowerBusAPI` prim this node is wired to. One target: a
+        node draws from one bus."""
+    )
+}
+
+class "LunCoPowerBusAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """An electrical bus — the wiring node every source and load connects to.
+    Applied to the bus prim itself (`assets/components/power/power_bus.usda`)."""
+)
+{
+    double lunco:powerBus:nominalVoltage (
+        doc = "Bus voltage, volts."
+    )
+    double lunco:powerBus:maxCurrent (
+        doc = "Current the bus can carry before it is over-drawn, amps."
+    )
+    double lunco:powerBus:efficiency (
+        doc = "Transmission efficiency, 0..1 — what survives the wiring."
+    )
+    double lunco:powerBus:voltageRipple (
+        doc = "Ripple as a fraction of nominal voltage, 0..1."
+    )
+}
+
+class "LunCoPowerSourceAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """A generator of electrical power — a solar panel, an RTG. Applied beside
+    `LunCoEpsNodeAPI`, which wires it to its bus."""
+)
+{
+    double lunco:powerSource:nominalPower (
+        doc = """Power generated at nominal conditions, watts. For a solar panel,
+        that is full illumination at normal incidence."""
+    )
+}
+
+class "LunCoBatteryAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """A store of electrical energy. Applied beside `LunCoEpsNodeAPI`, which
+    wires it to its bus — a battery is a node ON a bus, not a bus itself."""
+)
+{
+    double lunco:battery:capacity (
+        doc = "Total energy capacity, watt-hours."
+    )
+    double lunco:battery:voltage (
+        doc = "Nominal terminal voltage, volts."
+    )
+    double lunco:battery:maxChargeRate (
+        doc = "Maximum charging power, watts."
+    )
+    double lunco:battery:maxDischargeRate (
+        doc = "Maximum discharging power, watts."
+    )
+    double lunco:battery:efficiency (
+        doc = "Round-trip charge/discharge efficiency, 0..1."
+    )
+    double lunco:battery:internalResistance (
+        doc = "Equivalent series resistance, ohms."
+    )
+    double lunco:battery:initialCharge (
+        doc = "State of charge at spawn, 0..1."
+    )
+}
+
+class "LunCoMotorAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """An electric drive motor's ratings. Applied to a motor prim
+    (`assets/components/mobility/motor.usda`) beside `LunCoEpsNodeAPI`, which wires
+    it to its bus.
+
+    A motor is a PART, so it is a prim: a wheel that is driven carries a `Motor`
+    child referencing the component, exactly as it carries a tire and a suspension
+    through arcs. `wheel.usda` used to restate this spec inline under a second set
+    of names (`lunco:motorPower`, `lunco:motorEfficiency`, `lunco:noLoadRpm`) with
+    identical values — one motor, two vocabularies, and the EPS power budget read
+    the copy."""
+)
+{
+    double lunco:motor:ratedPower (
+        doc = "Continuous rated shaft power, watts."
+    )
+    double lunco:motor:peakPower (
+        doc = "Short-term peak shaft power, watts."
+    )
+    double lunco:motor:ratedRpm (
+        doc = "Shaft speed at rated power, RPM."
+    )
+    double lunco:motor:efficiency (
+        doc = "Electrical-to-mechanical efficiency, 0..1."
+    )
+    double lunco:motor:torqueConstant (
+        doc = "Torque per amp, N·m/A."
+    )
+    double lunco:motor:resistance (
+        doc = "Winding resistance, ohms."
+    )
+    double lunco:motor:inductance (
+        doc = "Winding inductance, henries."
+    )
+}

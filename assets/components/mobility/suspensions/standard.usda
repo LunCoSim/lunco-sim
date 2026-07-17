@@ -21,8 +21,11 @@
 # spring rate on every wheel had six chances to typo it and no way to retune it in one
 # place; here, changing the ride means changing a line, or swapping the arc.
 #
-# The parameters are Omniverse's PhysX vehicle names (`physxVehicleSuspension:*`), so a
-# spring rate means the same thing here as in any other PhysX vehicle. Both wheel
+# The parameters use NVIDIA's canonical PhysxVehicleSuspensionAPI names
+# (`physxVehicleSuspension:springStrength` / `:springDamperRate`), so a spring rate
+# means the same thing here as in any other PhysX vehicle. `restLength` has no PhysX
+# equivalent — PhysX models travel as `travelDistance` + `sprungMass` — so LunCo's
+# raycast rest-length is authored under the lunco: namespace. Both wheel
 # implementations read exactly these: the raycast wheel integrates the spring
 # analytically, the joint wheel realises it as a real prismatic spring-damper. Same
 # authored data, two constructions.
@@ -32,10 +35,68 @@
 # path-translates onto the wheel. (Same idiom as `physical_drivetrain.usda`.)
 
 over "Suspension" (
+    prepend apiSchemas = ["PhysxVehicleSuspensionAPI", "LunCoSuspensionAPI"]
     kind = "component"
 )
 {
-    float physxVehicleSuspension:restLength = 0.7        # m, uncompressed travel
-    float physxVehicleSuspension:springStiffness = 15000.0 # N/m
-    float physxVehicleSuspension:springDamping = 3000.0    # N·s/m
+    float lunco:suspension:restLength = 0.7        # m, uncompressed travel
+    float physxVehicleSuspension:springStrength = 15000.0 # N/m
+    float physxVehicleSuspension:springDamperRate = 3000.0    # N·s/m
+
+    # Visual subcomponents for the raycast suspension. The moving parts apply
+    # `LunCoSuspensionVisualAPI` and declare their role; the loader
+    # (`process_usd_sim_prim_read` in lunco-usd-sim) stamps each with the matching
+    # Bevy marker, and the mobility system (`update_suspension_visuals` in
+    # lunco-mobility) animates them along the suspension travel axis. A `kind`
+    # token is NOT used for this — `kind` is USD's regulated model taxonomy
+    # (component/assembly/subcomponent), and "piston"/"spring" are not valid kinds.
+    # The casing never moves, so it applies nothing: it is plain geometry.
+
+    def Cylinder "SuspensionCasing" (
+        doc = "Visual housing (outer cylinder) of the suspension strut. Stays fixed to the chassis mount point."
+    )
+    {
+        uniform token axis = "Y"
+        double radius = 0.04
+        double height = 0.2
+        # Positioned at the top of the suspension strut
+        double3 xformOp:translate = (0.0, -0.1, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(0.2, 0.2, 0.2)] # Dark grey casing
+        bool physics:collisionEnabled = false
+    }
+
+    def Cylinder "SuspensionPiston" (
+        prepend apiSchemas = ["LunCoSuspensionVisualAPI"]
+        doc = "Visual piston (inner cylinder) of the suspension strut. Translates dynamically to follow the wheel's vertical displacement."
+    )
+    {
+        uniform token lunco:suspensionVisual:role = "piston"
+        uniform token axis = "Y"
+        double radius = 0.025
+        double height = 0.2
+        # Positioned at the bottom of the suspension strut, slides up/down
+        double3 xformOp:translate = (0.0, -0.2, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(0.8, 0.8, 0.8)] # Shiny metal piston
+        bool physics:collisionEnabled = false
+    }
+
+    def Cylinder "SuspensionSpring" (
+        prepend apiSchemas = ["LunCoSuspensionVisualAPI"]
+        doc = "Visual spring coil of the suspension strut. Compresses and stretches dynamically based on suspension travel."
+    )
+    {
+        uniform token lunco:suspensionVisual:role = "spring"
+        uniform token axis = "Y"
+        double radius = 0.06
+        # Spans the suspension travel between mount and wheel hub. With rest_length
+        # 0.7 and wheel_radius 0.4 the strut occupies 0.3 m at rest; the mobility
+        # system scales this Y-axis cylinder along with the live compression.
+        double height = 0.3
+        double3 xformOp:translate = (0.0, -0.15, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(0.8, 0.2, 0.2)] # Red spring coil
+        bool physics:collisionEnabled = false
+    }
 }

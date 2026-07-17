@@ -133,9 +133,9 @@ fn standalone_rover_reader_is_complete() {
         "Wheel_FL `double radius` must compose"
     );
     assert_eq!(
-        view.value::<f32>(&fl, "physxVehicleSuspension:springStiffness"),
+        view.value::<f32>(&fl, "physxVehicleSuspension:springStrength"),
         Some(15000.0),
-        "Wheel_FL `float springStiffness` must compose"
+        "Wheel_FL `float springStrength` must compose"
     );
 }
 

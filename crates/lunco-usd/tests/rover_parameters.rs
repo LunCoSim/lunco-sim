@@ -154,9 +154,9 @@ fn test_wheel_positions() {
         );
 
         let idx: i64 = view
-            .value(&path, "physxVehicleWheel:index")
+            .value(&path, "lunco:wheel:index")
             .unwrap_or_else(|| {
-                let i: i32 = view.value(&path, "physxVehicleWheel:index")
+                let i: i32 = view.value(&path, "lunco:wheel:index")
                     .unwrap_or_else(|| panic!("Wheel {path} should have index"));
                 i as i64
             });
@@ -194,10 +194,10 @@ fn test_wheel_physics() {
     assert!((radius - 2.0).abs() < 0.01, "Wheel radius should be 2.0, got {radius}");
 
     let spring_k: f64 = view
-        .value(&path, "physxVehicleSuspension:springStiffness")
+        .value(&path, "physxVehicleSuspension:springStrength")
         .unwrap_or_else(|| {
-            let k: f32 = view.value(&path, "physxVehicleSuspension:springStiffness")
-                .expect("Wheel should have springStiffness");
+            let k: f32 = view.value(&path, "physxVehicleSuspension:springStrength")
+                .expect("Wheel should have springStrength");
             k as f64
         });
     assert!(
@@ -206,10 +206,10 @@ fn test_wheel_physics() {
     );
 
     let damping: f64 = view
-        .value(&path, "physxVehicleSuspension:springDamping")
+        .value(&path, "physxVehicleSuspension:springDamperRate")
         .unwrap_or_else(|| {
-            let d: f32 = view.value(&path, "physxVehicleSuspension:springDamping")
-                .expect("Wheel should have springDamping");
+            let d: f32 = view.value(&path, "physxVehicleSuspension:springDamperRate")
+                .expect("Wheel should have springDamperRate");
             d as f64
         });
     assert!(

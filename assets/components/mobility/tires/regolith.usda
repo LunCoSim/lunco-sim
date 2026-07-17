@@ -27,6 +27,7 @@
 # numbers mean the same thing here as they do in any other PhysX vehicle.
 
 over "Tire" (
+    prepend apiSchemas = ["PhysxVehicleTireAPI", "LunCoTireAPI"]
     kind = "component"
 )
 {

@@ -3,7 +3,7 @@ use lunco_usd_bevy::*;
 use lunco_usd_avian::*;
 use lunco_usd_sim::*;
 use avian3d::prelude::*;
-use lunco_mobility::WheelRaycast;
+use lunco_mobility::{WheelRaycast, Suspension};
 
 fn main() {
     let mut app = App::new();
@@ -70,6 +70,7 @@ fn main() {
         let name = app.world().get::<Name>(entity).unwrap();
         let rb = app.world().get::<RigidBody>(entity);
         let wheel = app.world().get::<WheelRaycast>(entity);
+        let susp = app.world().get::<Suspension>(entity);
         let mass = app.world().get::<Mass>(entity);
 
         let mut report = format!("Entity: {:<15}", name);
@@ -78,9 +79,13 @@ fn main() {
             let m = mass.map(|m| m.0).unwrap_or(0.0);
             report.push_str(&format!(" | [Avian] RigidBody (Mass: {}kg)", m)); 
         }
-        
-        if let Some(w) = wheel { 
-            report.push_str(&format!(" | [Sim] WheelRaycast (Radius: {}m, Spring K: {})", w.wheel_radius, w.spring_k)); 
+
+        if let Some(w) = wheel {
+            report.push_str(&format!(" | [Sim] WheelRaycast (Radius: {}m)", w.wheel_radius));
+        }
+
+        if let Some(s) = susp {
+            report.push_str(&format!(" | [Sim] Suspension (Spring K: {})", s.spring_k));
         }
         
         println!("{}", report);

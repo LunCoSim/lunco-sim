@@ -1,0 +1,458 @@
+#usda 1.0
+(
+    """
+    RECONSTRUCTED PhysX vehicle schema subset (codeless), mirroring NVIDIA's
+    `omni.physx/schema.usda` (the file `usdGenSchema` consumes inside a Kit /
+    Isaac Sim install at `extsPhysics/omni.physx/schema.usda`).
+
+    This is NOT vendored verbatim — that file is not in the public
+    github.com/NVIDIA-Omniverse/PhysX repo (per NVIDIA staff, see
+    https://forums.developer.nvidia.com/t/source-code-for-physx-usd-schema/332407)
+    and no Kit install is available locally. It is reconstructed from the
+    authoritative Omni Physics schema reference (v107.2), which is generated
+    from that exact file:
+
+        https://docs.omniverse.nvidia.com/kit/docs/omni_physics/107.2/dev_guide/schemas/physxschema.html
+
+    SCOPE: only the vehicle APIs this project uses or needs per
+    docs/architecture/53-usd-suspension-specification.md. NVIDIA's full PhysX
+    vehicle family is larger (~15+ APIs: Brakes, Steering, MultiWheelDifferential,
+    Autobox, Clutch, Gears, EngineDrive, …) — add those here only if/when a
+    feature consumes them, to avoid reconstructing attrs that go unused and
+    unverifed.
+
+    TODO: replace this reconstructed file with a verbatim copy of
+    `extsPhysics/omni.physx/schema.usda` from a Kit/Isaac-Sim install when one
+    is available. The drift test in `crates/lunco-usd/src/schema.rs`
+    (`physx_vehicle_schemas_register_canonical_properties`) pins the canonical
+    property names, so a verbatim swap is a verified replacement, not a guess.
+
+    ATTRIBUTE NAMES ARE CANONICAL. The most common LunCo asset bug this fixes is
+    authoring `physxVehicleSuspension:springStiffness` /
+    `physxVehicleSuspension:springDamping` /
+    `physxVehicleSuspension:restLength` — none of which exist in NVIDIA's schema.
+    Canonical names: `springStrength`, `springDamperRate`, `travelDistance`.
+    There is NO `restLength` on PhysxVehicleSuspensionAPI (PhysX models travel as
+    `travelDistance` + `sprungMass`); LunCo's raycast `rest_length` is a LunCo
+    extension, authored as `lunco:suspension:restLength` (see luncoSchema).
+
+    Compliance graphs use NVIDIA's jounce convention: normalized compression
+    where 0 = max droop (fully elongated), 1 = max compression. Up to 3 points;
+    monotonically increasing; one point = constant.
+    """
+)
+
+class "PhysxVehicleContextAPI" (
+    customData = {
+        string userDocBrief = """Applied to a vehicle prim. Marks it as a PhysX vehicle and carries the
+    per-vehicle context the PhysX Vehicle SDK needs."""
+    }
+)
+{
+    int physxVehicleContext:vehicleDifferentialType = 0 (
+        customData = {
+            string userDocBrief = """The type of differential (4-wheel drive, tank drive, etc.). See the
+    PhysX PhysxVehicleDifferentialTypeEnum for the full token list."""
+        }
+        displayName = "Vehicle Differential Type"
+    )
+}
+
+class "PhysxVehicleAckermannSteeringAPI" (
+    customData = {
+        string userDocBrief = """Applied to a vehicle prim. Carries the Ackermann steering geometry for a
+    vehicle that steers by angling its front wheels (as opposed to skid steering)."""
+    }
+)
+{
+    float physxVehicleAckermannSteering:strength = 0.0 (
+        customData = {
+            string userDocBrief = """Ackermann correction strength. 0.0 is parallel steering (no Ackermann);
+    1.0 is full Ackermann geometry. Intermediate values blend."""
+        }
+        displayName = "Strength"
+    )
+    float physxVehicleAckermannSteering:maxSteerAngle = 0.0 (
+        customData = {
+            string userDocBrief = """Maximum steer angle at full steer input, RADIANS. Replaces the
+    deprecated per-wheel physxVehicleWheel:maxSteerAngle. Drives the steering-knuckle
+    motor on the wheels of the steered axle."""
+        }
+        displayName = "Max Steer Angle"
+    )
+}
+
+class "PhysxVehicleTankDifferentialAPI" (
+    customData = {
+        string userDocBrief = """Applied to a vehicle prim. Tank/skid-steer differential: drives each
+    track/wheel side independently for skid-steer yaw, rather than angling wheels."""
+    }
+)
+{
+    float physxVehicleTankDifferential:tankTrackWheelSeparation = 0.0 (
+        customData = {
+            string userDocBrief = """Track / wheel-side separation, metres. Used by the tank differential to
+    resolve yaw rate from the left/right track speed difference."""
+        }
+        displayName = "Tank Track Wheel Separation"
+    )
+    float physxVehicleTankDifferential:tankTrackWheelBase = 0.0 (
+        customData = {
+            string userDocBrief = """Track / wheel-side base, metres. Used by the tank differential."""
+        }
+        displayName = "Tank Track Wheel Base"
+    )
+}
+
+class "PhysxVehicleWheelAPI" (
+    customData = {
+        string userDocBrief = """Defines the physical dimensions and spin dynamics of a single wheel. Applied
+    to a wheel prim, typically referenced by a PhysxVehicleWheelAttachmentAPI prim."""
+    }
+)
+{
+    float physxVehicleWheel:radius (
+        customData = {
+            string userDocBrief = "Wheel radius, metres. Required."
+        }
+        displayName = "Radius"
+    )
+    float physxVehicleWheel:width (
+        customData = {
+            string userDocBrief = "Wheel width, metres. Required."
+        }
+        displayName = "Width"
+    )
+    float physxVehicleWheel:mass (
+        customData = {
+            string userDocBrief = "Wheel mass, kilograms. Required."
+        }
+        displayName = "Mass"
+    )
+    float physxVehicleWheel:moi (
+        customData = {
+            string userDocBrief = "Wheel moment of inertia about its spin axis, kg·m². Required."
+        }
+        displayName = "MOI"
+    )
+    float physxVehicleWheel:dampingRate (
+        customData = {
+            string userDocBrief = """Bearing / spin damping rate, units mass·distance²/seconds (torque·s).
+    Required. LunCo derives a default from peakTorque / maxRotationSpeed when
+    unauthored so a free (airborne) wheel terminates at the engine's free-spin cap."""
+        }
+        displayName = "Damping Rate"
+    )
+    float physxVehicleWheel:maxBrakeTorque = 0.0 (
+        customData = {
+            string userDocBrief = """DEPRECATED. Max brake torque, N·m. Use PhysxVehicleBrakesAPI. Kept for
+    back-compat with assets authored before the BrakesAPI split."""
+        }
+        displayName = "Max Brake Torque"
+    )
+    float physxVehicleWheel:maxHandBrakeTorque = 0.0 (
+        customData = {
+            string userDocBrief = """DEPRECATED. Max hand-brake torque, N·m. Use PhysxVehicleBrakesAPI."""
+        }
+        displayName = "Max Hand Brake Torque"
+    )
+    float physxVehicleWheel:maxSteerAngle = 0.0 (
+        customData = {
+            string userDocBrief = """DEPRECATED. Max steer angle, radians. Use PhysxVehicleSteeringAPI."""
+        }
+        displayName = "Max Steer Angle"
+    )
+    float physxVehicleWheel:toeAngle = 0.0 (
+        customData = {
+            string userDocBrief = """DEPRECATED. Static toe angle, radians. Use PhysxVehicleSuspensionComplianceAPI."""
+        }
+        displayName = "Toe Angle"
+    )
+}
+
+class "PhysxVehicleSuspensionAPI" (
+    customData = {
+        string userDocBrief = """Defines a wheel's suspension compliance — the spring-damper between the
+    chassis and the wheel. Applied to a suspension prim, referenced by a
+    PhysxVehicleWheelAttachmentAPI prim's :suspension relationship."""
+    }
+)
+{
+    float physxVehicleSuspension:springStrength (
+        customData = {
+            string userDocBrief = """Spring strength (stiffness), units mass/seconds² (force/distance, N/m).
+    Required. NOTE: the canonical name is springStrength, NOT springStiffness."""
+        }
+        displayName = "Spring Strength"
+    )
+    float physxVehicleSuspension:springDamperRate (
+        customData = {
+            string userDocBrief = """Spring damper rate, units mass/seconds (force·s/distance, N·s/m).
+    Required. NOTE: the canonical name is springDamperRate, NOT springDamping."""
+        }
+        displayName = "Spring Damper Rate"
+    )
+    float physxVehicleSuspension:travelDistance (
+        customData = {
+            string userDocBrief = """Total suspension travel distance, metres. Replaces the deprecated
+    maxCompression + maxDroop pair. Required."""
+        }
+        displayName = "Travel Distance"
+    )
+    float physxVehicleSuspension:sprungMass = 0.0 (
+        customData = {
+            string userDocBrief = """Sprung mass carried by this suspension, kilograms. 0 means auto-compute
+    from the vehicle's total mass and wheel count."""
+        }
+        displayName = "Sprung Mass"
+    )
+    float physxVehicleSuspension:maxCompression = 0.0 (
+        customData = {
+            string userDocBrief = """DEPRECATED. Max compression, metres. Ignored if travelDistance is authored."""
+        }
+        displayName = "Max Compression"
+    )
+    float physxVehicleSuspension:maxDroop = 0.0 (
+        customData = {
+            string userDocBrief = """DEPRECATED. Max droop, metres. Ignored if travelDistance is authored."""
+        }
+        displayName = "Max Droop"
+    )
+    float physxVehicleSuspension:camberAtRest = 0.0 (
+        customData = {
+            string userDocBrief = """DEPRECATED. Camber at rest, radians. Use PhysxVehicleSuspensionComplianceAPI."""
+        }
+        displayName = "Camber at Rest"
+    )
+    float physxVehicleSuspension:camberAtMaxCompression = 0.0 (
+        customData = {
+            string userDocBrief = """DEPRECATED. Camber at max compression, radians. Use ComplianceAPI."""
+        }
+        displayName = "Camber at Max Compression"
+    )
+    float physxVehicleSuspension:camberAtMaxDroop = 0.0 (
+        customData = {
+            string userDocBrief = """DEPRECATED. Camber at max droop, radians. Use ComplianceAPI."""
+        }
+        displayName = "Camber at Max Droop"
+    )
+}
+
+class "PhysxVehicleWheelAttachmentAPI" (
+    customData = {
+        string userDocBrief = """The connector: attaches a wheel+suspension assembly to the chassis. Owns the
+    suspension frame pose and the relationships that bind the wheel, suspension and
+    tire prims — the canonical (non-heuristic) binding model. Applied to an
+    attachment prim that is a descendant of a PhysxVehicleContextAPI vehicle."""
+    }
+)
+{
+    rel physxVehicleWheelAttachment:wheel (
+        customData = {
+            string userDocBrief = """The PhysxVehicleWheelAPI prim this attachment drives. Canonical binding —
+    explicit, not inferred from hierarchy or name."""
+        }
+        displayName = "Wheel"
+    )
+    rel physxVehicleWheelAttachment:suspension (
+        customData = {
+            string userDocBrief = "The PhysxVehicleSuspensionAPI prim governing this wheel's compliance."
+        }
+        displayName = "Suspension"
+    )
+    rel physxVehicleWheelAttachment:tire (
+        customData = {
+            string userDocBrief = "The PhysxVehicleTireAPI prim defining this wheel's tire grip model."
+        }
+        displayName = "Tire"
+    )
+    rel physxVehicleWheelAttachment:collisionGroup (
+        customData = {
+            string userDocBrief = """Optional PhysicsCollisionGroup this wheel's suspension raycast reports
+    against."""
+        }
+        displayName = "Collision Group"
+    )
+    int physxVehicleWheelAttachment:index = -1 (
+        customData = {
+            string userDocBrief = """Wheel index on the vehicle (-1 = unindexed). NOTE: index lives on the
+    ATTACHMENT, not on PhysxVehicleWheelAPI — a common authoring mistake."""
+        }
+        displayName = "Index"
+    )
+    point3f physxVehicleWheelAttachment:suspensionFramePosition (
+        customData = {
+            string userDocBrief = """Wheel centre pose at MAX compression, in the vehicle frame. The raycast
+    origin. point3f, not double3/float3."""
+        }
+        displayName = "Suspension Frame Position"
+    )
+    quatf physxVehicleWheelAttachment:suspensionFrameOrientation = (1, 0, 0, 0) (
+        customData = {
+            string userDocBrief = """Wheel orientation at the suspension frame, as a quaternion (real, x, y,
+    z). Default identity. quatf, not quatd."""
+        }
+        displayName = "Suspension Frame Orientation"
+    )
+    vector3f physxVehicleWheelAttachment:suspensionTravelDirection (
+        customData = {
+            string userDocBrief = """Direction the suspension travels (toward the wheel), in the vehicle
+    frame. vector3f. Required."""
+        }
+        displayName = "Suspension Travel Direction"
+    )
+    point3f physxVehicleWheelAttachment:wheelFramePosition = (0, 0, 0) (
+        customData = {
+            string userDocBrief = """Wheel-centre offset relative to the suspension frame, metres."""
+        }
+        displayName = "Wheel Frame Position"
+    )
+    quatf physxVehicleWheelAttachment:wheelFrameOrientation = (1, 0, 0, 0) (
+        customData = {
+            string userDocBrief = "Wheel orientation offset relative to the suspension frame."
+        }
+        displayName = "Wheel Frame Orientation"
+    )
+    float3 physxVehicleWheelAttachment:suspensionForceAppPointOffset = (0, 0, 0) (
+        customData = {
+            string userDocBrief = """DEPRECATED. Suspension force application point offset. Use
+    PhysxVehicleSuspensionComplianceAPI."""
+        }
+        displayName = "Suspension Force App Point Offset"
+    )
+    float3 physxVehicleWheelAttachment:tireForceAppPointOffset = (0, 0, 0) (
+        customData = {
+            string userDocBrief = """DEPRECATED. Tire force application point offset. Use ComplianceAPI."""
+        }
+        displayName = "Tire Force App Point Offset"
+    )
+    float3 physxVehicleWheelAttachment:wheelCenterOfMassOffset = (0, 0, 0) (
+        customData = {
+            string userDocBrief = """DEPRECATED. Wheel centre-of-mass offset. Use suspensionFramePosition."""
+        }
+        displayName = "Wheel Center of Mass Offset"
+    )
+    bool physxVehicleWheelAttachment:driven = 0 (
+        customData = {
+            string userDocBrief = """DEPRECATED. Whether this wheel is driven. Use
+    PhysxVehicleMultiWheelDifferentialAPI."""
+        }
+        displayName = "Driven"
+    )
+}
+
+class "PhysxVehicleSuspensionComplianceAPI" (
+    customData = {
+        string userDocBrief = """Dynamic wheel alignment under suspension compression. Describes how toe, camber
+    and force-application points change as the suspension travels. Applied to a
+    PhysxVehicleWheelAttachmentAPI prim.
+
+    Each property is a GRAPH: an array of points, each point pairing a normalized
+    jounce (0 = max droop / fully elongated, 1 = max compression) with a value. Up
+    to 3 points; the jounce sequence must be monotonically increasing; a single
+    point means a constant value; an empty array means 0.0 throughout."""
+    }
+)
+{
+    float2[] physxVehicleSuspensionCompliance:wheelToeAngle = [] (
+        customData = {
+            string userDocBrief = """Toe angle vs normalized jounce, radians. Each element is (jounce, angle).
+    NOTE: float2[], not float[] — the jounce is packed as the first component."""
+        }
+        displayName = "Wheel Toe Angle"
+    )
+    float2[] physxVehicleSuspensionCompliance:wheelCamberAngle = [] (
+        customData = {
+            string userDocBrief = """Camber angle vs normalized jounce, radians. Each element is (jounce,
+    angle). float2[], not float[]."""
+        }
+        displayName = "Wheel Camber Angle"
+    )
+    float4[] physxVehicleSuspensionCompliance:suspensionForceAppPoint = [] (
+        customData = {
+            string userDocBrief = """Suspension force application point offset vs normalized jounce. Each
+    element is (jounce, x, y, z). float4[], not float3[] — jounce is the first
+    component. NOTE: 'suspensionForceAppPoint', fully spelled out, matching the
+    deprecated WheelAttachment offset."""
+        }
+        displayName = "Suspension Force App Point"
+    )
+    float4[] physxVehicleSuspensionCompliance:tireForceAppPoint = [] (
+        customData = {
+            string userDocBrief = """Tire force application point offset vs normalized jounce. Each element is
+    (jounce, x, y, z). float4[], not float3[]."""
+        }
+        displayName = "Tire Force App Point"
+    )
+}
+
+class "PhysxVehicleTireAPI" (
+    customData = {
+        string userDocBrief = """Defines a tire's friction model. Applied to a tire prim, referenced by a
+    PhysxVehicleWheelAttachmentAPI prim's :tire relationship."""
+    }
+)
+{
+    float physxVehicleTire:longitudinalStiffness = 0.0 (
+        customData = {
+            string userDocBrief = """Longitudinal tire stiffness — the slope of longitudinal force vs slip
+    before saturation. Drives the traction model."""
+        }
+        displayName = "Longitudinal Stiffness"
+    )
+    float physxVehicleTire:lateralStiffness = 0.0 (
+        customData = {
+            string userDocBrief = "Lateral tire stiffness — the slope of lateral force vs slip."
+        }
+        displayName = "Lateral Stiffness"
+    )
+    float physxVehicleTire:camberStiffness = 0.0 (
+        customData = {
+            string userDocBrief = """Camber thrust stiffness — lateral force per unit camber angle. Feeds the
+    tire force model (camber does not just rotate the visual wheel)."""
+        }
+        displayName = "Camber Stiffness"
+    )
+}
+
+class "PhysxVehicleEngineAPI" (
+    customData = {
+        string userDocBrief = """Defines the vehicle's engine torque curve. Applied to an engine prim under the
+    vehicle."""
+    }
+)
+{
+    float physxVehicleEngine:peakTorque = 0.0 (
+        customData = {
+            string userDocBrief = """Peak drive torque at full throttle, N·m. Applied to the axle (joint
+    wheel) or as the traction force budget (raycast wheel)."""
+        }
+        displayName = "Peak Torque"
+    )
+    float physxVehicleEngine:maxRotationSpeed = 0.0 (
+        customData = {
+            string userDocBrief = """Maximum (no-load) rotation speed, rad/s. Caps the free-spin. LunCo
+    derives the wheel's bearing damping from peakTorque / maxRotationSpeed when
+    physxVehicleWheel:dampingRate is unauthored."""
+        }
+        displayName = "Max Rotation Speed"
+    )
+    float physxVehicleEngine:dampingRateFullThrottle = 0.0 (
+        customData = {
+            string userDocBrief = "Engine internal damping at full throttle."
+        }
+        displayName = "Damping Rate Full Throttle"
+    )
+    float physxVehicleEngine:dampingRateZeroThrottleClutchEngaged = 0.0 (
+        customData = {
+            string userDocBrief = "Engine internal damping at zero throttle, clutch engaged."
+        }
+        displayName = "Damping Rate Zero Throttle Clutch Engaged"
+    )
+    float physxVehicleEngine:dampingRateZeroThrottleClutchDisengaged = 0.0 (
+        customData = {
+            string userDocBrief = "Engine internal damping at zero throttle, clutch disengaged."
+        }
+        displayName = "Damping Rate Zero Throttle Clutch Disengaged"
+    )
+}

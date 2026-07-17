@@ -1,0 +1,24 @@
+#usda 1.0
+(
+    defaultPrim = "Tire"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# A CLEATED regolith tire — deep aggressive cleats that bite loose soil. The grippiest
+# rubber in the shed: μ=1.3 ⇒ a slip limit of atan(1.3) = 52.4°, past anything the
+# surveyed site can present, so a rover on these climbs any line it can reach.
+#
+# It is a `regolith` tire with better bite and nothing else changed: this `over`
+# references `regolith.usda`</Tire> and overrides ONE number. The tread, the shader, the
+# contact stiffness and the `LunCoTireAPI`/`PhysxVehicleTireAPI` application all arrive
+# through that arc. A tire that differs by a coefficient should say so in a line, not by
+# restating a tread it did not change.
+
+over "Tire" (
+    prepend references = @regolith.usda@</Tire>
+    kind = "component"
+)
+{
+    double lunco:frictionCoefficient = 1.3
+}

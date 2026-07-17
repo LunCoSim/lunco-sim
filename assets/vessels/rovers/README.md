@@ -27,9 +27,9 @@ The differential is a standard `PhysxPhysicsGearJoint` (`Differential`) over the
 
 ### 3. Suspension Parameters (Authored per Wheel)
 Even for joint-based physical rovers, the suspension settings are read from standard PhysX/Omniverse schema fields on each `Cylinder` wheel:
-*   `float physxVehicleSuspension:springStiffness`: Suspension spring constant (default `12000.0` N/m). Lower values make the suspension softer.
-*   `float physxVehicleSuspension:springDamping`: Suspension damper coefficient (default `2500.0` N·s/m). Prevents the vehicle from bouncing excessively.
-*   `float physxVehicleSuspension:restLength`: Uncompressed suspension length (default `0.5` m).
+*   `float physxVehicleSuspension:springStrength`: Suspension spring constant (default `12000.0` N/m). Lower values make the suspension softer.
+*   `float physxVehicleSuspension:springDamperRate`: Suspension damper coefficient (default `2500.0` N·s/m). Prevents the vehicle from bouncing excessively.
+*   `float lunco:suspension:restLength`: Uncompressed suspension length (default `0.5` m).
 
 ### 4. Drivetrain & Motor Actuation (Authored per Wheel)
 Controlling traction and speed:

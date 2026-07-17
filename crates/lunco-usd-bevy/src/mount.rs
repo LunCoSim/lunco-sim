@@ -9,7 +9,9 @@
 //!
 //! ```usda
 //! def Xform "Mounts" {
-//!     def Xform "wheel_fl" (kind = "mount") {
+//!     def Xform "wheel_fl" (
+//!         kind = "subcomponent"
+//!     ) {
 //!         uniform token   lunco:mount:socket = "wheel"       # what may attach
 //!         uniform token   lunco:mount:joint  = "revolute"    # the constraint it implies
 //!         uniform token   lunco:mount:axis   = "X"
@@ -19,6 +21,10 @@
 //!     }
 //! }
 //! ```
+//!
+//! Detection is by the authored `lunco:mount:socket` attribute ([`read_sockets`]),
+//! NOT by `kind` — `kind` is USD's regulated model taxonomy and `"mount"` is not a
+//! valid kind, so the socket discriminator is a LunCo attribute.
 //! and on the part:
 //! ```usda
 //! uniform token lunco:mount:plug  = "wheel"

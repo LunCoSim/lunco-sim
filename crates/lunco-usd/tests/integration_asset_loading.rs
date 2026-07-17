@@ -6,7 +6,7 @@ use bevy::asset::AssetPlugin;
 use lunco_usd_bevy::*;
 use lunco_usd_avian::*;
 use lunco_usd_sim::*;
-use lunco_mobility::WheelRaycast;
+use lunco_mobility::{WheelRaycast, Suspension};
 use lunco_core::kernels::DriveMix;
 use lunco_fsw::FlightSoftware;
 
@@ -282,9 +282,11 @@ fn test_rover_components_via_bevy_pipeline() {
             let wheel = app.world().get::<WheelRaycast>(*w_ent)
                 .unwrap_or_else(|| panic!("{label}: {w_name} missing WheelRaycast"));
             assert!((wheel.wheel_radius - 0.4).abs() < 0.01, "{label}: {w_name} radius ~0.4");
-            assert!((wheel.rest_length - 0.7).abs() < 0.01, "{label}: {w_name} rest ~0.7");
-            assert!((wheel.spring_k - 15000.0).abs() < 100.0, "{label}: {w_name} spring_k ~15000");
-            assert!((wheel.damping_c - 3000.0).abs() < 100.0, "{label}: {w_name} damping_c ~3000");
+            let susp = app.world().get::<Suspension>(*w_ent)
+                .unwrap_or_else(|| panic!("{label}: {w_name} missing Suspension"));
+            assert!((susp.rest_length - 0.7).abs() < 0.01, "{label}: {w_name} rest ~0.7");
+            assert!((susp.spring_k - 15000.0).abs() < 100.0, "{label}: {w_name} spring_k ~15000");
+            assert!((susp.damping_c - 3000.0).abs() < 100.0, "{label}: {w_name} damping_c ~3000");
 
             // MUST have RayCaster
             assert!(app.world().get::<RayCaster>(*w_ent).is_some(),

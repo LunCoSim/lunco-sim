@@ -46,9 +46,13 @@ LunCoSim enriches standard-compliant USD with simulation-only metadata in the
 that standard OpenUSD schemas don't define — without polluting standard visual
 or physics schemas. Concrete `lunco:` attribute → Bevy component mappings:
 
-*   `lunco:name` -> `Spacecraft::name`
 *   `lunco:ephemeris_id` -> `Spacecraft::ephemeris_id`
 *   `lunco:hit_radius_m` -> `Spacecraft::hit_radius_m`
+
+(Display names use the standard USD prim `displayName` metadata, not a `lunco:`
+attr — the old `lunco:name` was migrated to `displayName`, the field usdview and
+Omniverse read for friendly prim labels. `doc` is for documentation prose, not
+short labels.)
 
 See [docs/architecture/21-domain-usd.md](../../docs/architecture/21-domain-usd.md)
 for the full architecture.

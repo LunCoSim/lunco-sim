@@ -76,6 +76,13 @@ const CORE_SCHEMAS: &[(&str, &str)] = &[
     ("usdShade", include_str!("../schema/core/usdShade.usda")),
     ("usdLux", include_str!("../schema/core/usdLux.usda")),
     ("usdPhysics", include_str!("../schema/core/usdPhysics.usda")),
+    // Reconstructed PhysX vehicle schema subset (canonical NVIDIA names; see the
+    // file header for provenance + the swap-later TODO). The vehicle APIs the
+    // loader detects (`PhysxVehicleContextAPI`, `…AckermannSteeringAPI`,
+    // `…TankDifferentialAPI`) and the suspension/wheel/compliance APIs the spec
+    // (doc 53) needs are all defined here, so they stop being unregistered
+    // typeNames the registry is blind to.
+    ("physxSchema", include_str!("../schema/core/physxSchema.usda")),
 ];
 
 /// A `typeName` field is authored as a token; accept a plain string too rather
@@ -272,11 +279,51 @@ mod tests {
             reg.prim_types()
         );
         assert!(reg.prim_types().contains(&"LunCoPolicy".to_string()));
-        for api in ["LunCoTerrainAPI", "LunCoTerrainLayerAPI", "LunCoShadowAPI"] {
+        for api in [
+            "LunCoTerrainAPI",
+            "LunCoTerrainLayerAPI",
+            "LunCoShadowAPI",
+            // The vehicle extension APIs (doc 53) carry the LunCo-specific
+            // suspension/wheel attrs that have no PhysX equivalent. One API per
+            // prim role — see the schema. Pinned here so a schema/generatedSchema
+            // drift doesn't silently make them `custom`.
+            "LunCoSuspensionAPI",
+            "LunCoWheelAPI",
+            "LunCoSuspensionVisualAPI",
+        ] {
             assert!(
                 reg.api_schemas().contains(&api.to_string()),
                 "{api} missing from {:?}",
                 reg.api_schemas()
+            );
+        }
+    }
+
+    /// Every schema class must be registered in `plugInfo.json`.
+    ///
+    /// `plugInfo.json` is how a USD runtime (usdview, Omniverse, anything linking
+    /// pxr) discovers our codeless schema — our own registry reads the USDA
+    /// directly and never consults it. That asymmetry is the trap: an unregistered
+    /// class works perfectly here and does not exist anywhere else, so the drift is
+    /// invisible from inside the app. It had already happened to nine of them.
+    ///
+    /// Keys are matched textually rather than through a JSON parser: this is the
+    /// only JSON in the crate, and a dependency for one test is a worse trade than
+    /// a substring search over a file we control.
+    #[test]
+    fn every_schema_class_is_registered_in_pluginfo() {
+        const PLUG_INFO: &str = include_str!("../schema/plugInfo.json");
+        let reg = SchemaRegistry::global();
+
+        for name in reg.api_schemas().iter().chain(reg.prim_types().iter()) {
+            // Ours only: core USD schemas are registered by their own plugins.
+            if !name.starts_with("LunCo") {
+                continue;
+            }
+            assert!(
+                PLUG_INFO.contains(&format!("\"{name}\"")),
+                "{name} is declared in the schema but missing from plugInfo.json — \
+                 no external USD runtime can resolve it"
             );
         }
     }
@@ -356,6 +403,29 @@ mod tests {
             reg.property("lunco:terrain:horizonShadows").unwrap().type_name,
             "bool"
         );
+        // The LunCo vehicle extension attrs (doc 53) — LunCo-specific concepts with
+        // no PhysX equivalent, one API per prim role. Pinned so they register as
+        // declared, not `custom`, and so a schema/generatedSchema drift is caught.
+        // `float`, matching the sibling `physxVehicleSuspension:*` attrs and the
+        // authoring in `assets/components/mobility/suspensions/*.usda`. The
+        // loader reads it through the precision-tolerant `UsdRead::real()`, so a
+        // schema/asset type split would go unnoticed at runtime — pin it here.
+        assert_eq!(
+            reg.property("lunco:suspension:restLength").unwrap().type_name,
+            "float",
+        );
+        assert_eq!(
+            reg.property("lunco:wheel:index").unwrap().type_name,
+            "int",
+        );
+        assert_eq!(
+            reg.property("lunco:suspensionVisual:role").unwrap().type_name,
+            "token",
+        );
+        assert_eq!(
+            reg.property("lunco:suspensionVisual:role").unwrap().variability,
+            sdf::Variability::Uniform,
+        );
     }
 
     /// `custom` is asserted only where we can know it — inside our own namespace.
@@ -376,5 +446,158 @@ mod tests {
         assert!(!is_custom("physics:mass"));
         assert!(!is_custom("inputs:intensity"));
         assert!(!is_custom("primvars:displayColor"));
+    }
+
+    /// The PhysX vehicle schemas register with NVIDIA-canonical property names.
+    ///
+    /// `physxSchema.usda` is reconstructed (see `../schema/core/README.md`), so
+    /// this test is the guard against two classes of drift:
+    ///  1. the reconstruction getting a name wrong (e.g. `springStiffness` instead
+    ///     of the canonical `springStrength`),
+    ///  2. a future verbatim swap with a Kit `schema.usda` silently dropping a
+    ///     property this codebase reads.
+    ///
+    /// We assert properties, not API-schema membership: like the other vendored
+    /// core schemas (`usdPhysics`), `physxSchema` is ingested with `own=false`,
+    /// so its API names do NOT appear in `api_schemas()` (which answers "what
+    /// does *luncoSchema* define"). Their *properties* fold in regardless, and
+    /// that is what the loader reads. The API names themselves are detected at
+    /// read time via `reader.has_api_schema` against the composed `apiSchemas`
+    /// list — a separate path that does not consult this registry.
+    #[test]
+    fn physx_vehicle_schemas_register_canonical_properties() {
+        let reg = SchemaRegistry::global();
+
+        // Canonical names exist with correct types. Each is the name the loader
+        // (Phase 2) or the suspension loader (Phase 3, doc 53) reads.
+        assert_eq!(
+            reg.property("physxVehicleSuspension:springStrength")
+                .expect("canonical spring strength attr")
+                .type_name,
+            "float",
+        );
+        assert_eq!(
+            reg.property("physxVehicleSuspension:springDamperRate")
+                .expect("canonical spring damper rate attr")
+                .type_name,
+            "float",
+        );
+        assert_eq!(
+            reg.property("physxVehicleSuspension:travelDistance")
+                .expect("travel distance attr")
+                .type_name,
+            "float",
+        );
+        assert_eq!(
+            reg.property("physxVehicleWheel:radius").unwrap().type_name,
+            "float",
+        );
+        assert_eq!(
+            reg.property("physxVehicleWheel:moi").unwrap().type_name,
+            "float",
+        );
+        assert_eq!(
+            reg.property("physxVehicleWheel:dampingRate")
+                .unwrap()
+                .type_name,
+            "float",
+        );
+        assert_eq!(
+            reg.property("physxVehicleWheelAttachment:index")
+                .unwrap()
+                .type_name,
+            "int",
+        );
+        // The frame attrs are the types assets get wrong most often (double3 vs
+        // point3f, quatd vs quatf) — pin them.
+        assert_eq!(
+            reg.property("physxVehicleWheelAttachment:suspensionFramePosition")
+                .unwrap()
+                .type_name,
+            "point3f",
+        );
+        assert_eq!(
+            reg.property("physxVehicleWheelAttachment:suspensionFrameOrientation")
+                .unwrap()
+                .type_name,
+            "quatf",
+        );
+        assert_eq!(
+            reg.property("physxVehicleWheelAttachment:suspensionTravelDirection")
+                .unwrap()
+                .type_name,
+            "vector3f",
+        );
+        // Compliance graphs — float2[]/float4[], NOT float[]/float3[]. This is the
+        // single most common reconstruction mistake (the jounce is packed as the
+        // first component).
+        assert_eq!(
+            reg.property("physxVehicleSuspensionCompliance:wheelToeAngle")
+                .unwrap()
+                .type_name,
+            "float2[]",
+        );
+        assert_eq!(
+            reg.property("physxVehicleSuspensionCompliance:wheelCamberAngle")
+                .unwrap()
+                .type_name,
+            "float2[]",
+        );
+        assert_eq!(
+            reg.property("physxVehicleSuspensionCompliance:suspensionForceAppPoint")
+                .unwrap()
+                .type_name,
+            "float4[]",
+        );
+        assert_eq!(
+            reg.property("physxVehicleSuspensionCompliance:tireForceAppPoint")
+                .unwrap()
+                .type_name,
+            "float4[]",
+        );
+
+        // Steering: the lock angle lives on the steering API, in RADIANS. PhysX
+        // deprecated the per-wheel `physxVehicleWheel:maxSteerAngle` in favour of
+        // this, and only the Kit authoring wizard's UI field is in degrees.
+        assert_eq!(
+            reg.property("physxVehicleAckermannSteering:maxSteerAngle")
+                .expect("canonical Ackermann steer lock")
+                .type_name,
+            "float",
+        );
+        // `maxWheelAngleDegrees` was in this reconstruction and is attested in NO
+        // NVIDIA schema or doc — it was invented, and a rover was very nearly
+        // authored against it. A reconstructed file's risk is not just a wrong name
+        // for a real property; it is a plausible name for one that does not exist.
+        assert!(
+            reg.property("physxVehicleAckermannSteering:maxWheelAngleDegrees")
+                .is_none(),
+            "maxWheelAngleDegrees is not a PhysX property; the lock is \
+             physxVehicleAckermannSteering:maxSteerAngle, in radians"
+        );
+
+        // The NON-canonical names LunCo assets used before this refactor MUST be
+        // absent — their presence would mean the reconstruction reproduced the
+        // exact bug it exists to fix.
+        assert!(
+            reg.property("physxVehicleSuspension:springStiffness").is_none(),
+            "springStiffness is not a canonical PhysX name; use springStrength"
+        );
+        assert!(
+            reg.property("physxVehicleSuspension:springDamping").is_none(),
+            "springDamping is not a canonical PhysX name; use springDamperRate"
+        );
+        assert!(
+            reg.property("physxVehicleSuspension:restLength").is_none(),
+            "PhysxVehicleSuspensionAPI has no restLength; PhysX models travel as \
+             travelDistance + sprungMass. LunCo's rest_length is a lunco: extension."
+        );
+        // `index` belongs on WheelAttachment, NOT on Wheel. A Wheel index attr
+        // must NOT resolve — it would re-introduce the misplacement.
+        assert!(
+            reg.property("physxVehicleWheel:index").is_none(),
+            "physxVehicleWheel:index is non-canonical; index lives on \
+             physxVehicleWheelAttachment:index"
+        );
     }
 }

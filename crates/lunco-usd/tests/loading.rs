@@ -3,7 +3,7 @@ use lunco_usd_bevy::*;
 use lunco_usd_avian::*;
 use lunco_usd_sim::*;
 use avian3d::prelude::*;
-use lunco_mobility::WheelRaycast;
+use lunco_mobility::{WheelRaycast, Suspension};
 
 #[test]
 fn test_rover_loading_physics() {
@@ -40,7 +40,9 @@ def Xform "Rover" {
     }
     def Cylinder "Wheel" {
         float physxVehicleWheel:radius = 0.4
-        float physxVehicleSuspension:springStiffness = 5000.0
+        float lunco:suspension:restLength = 0.7
+        float physxVehicleSuspension:springStrength = 5000.0
+        float physxVehicleSuspension:springDamperRate = 600.0
     }
 }
 "#;
@@ -108,7 +110,8 @@ def Xform "Rover" {
     // 6. Verify Wheel (Intercepted Simulation Physics)
     let wheel_comp = app.world().get::<WheelRaycast>(wheel).expect("Wheel should have WheelRaycast");
     assert!((wheel_comp.wheel_radius - 0.4).abs() < 1e-6);
-    assert!((wheel_comp.spring_k - 5000.0).abs() < 1e-6);
+    let susp_comp = app.world().get::<Suspension>(wheel).expect("Wheel should have Suspension");
+    assert!((susp_comp.spring_k - 5000.0).abs() < 1e-6);
 
     // 7. Verify Intercept Priority (Wheel should NOT have standard physics)
     assert!(app.world().get::<RigidBody>(wheel).is_none(), "Intercepted wheel should NOT have standard RigidBody");

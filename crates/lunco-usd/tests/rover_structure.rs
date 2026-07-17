@@ -7,7 +7,7 @@ use big_space::prelude::CellCoord;
 use lunco_usd_bevy::*;
 use lunco_usd_avian::*;
 use lunco_usd_sim::*;
-use lunco_mobility::WheelRaycast;
+use lunco_mobility::{WheelRaycast, Suspension};
 use lunco_core::kernels::DriveMix;
 use avian3d::prelude::*;
 use lunco_fsw::FlightSoftware;
@@ -250,9 +250,11 @@ fn test_all_rover_files_match_procedural() {
             let wheel = app.world().get::<WheelRaycast>(w_ent)
                 .unwrap_or_else(|| panic!("{label}: {w_name} missing WheelRaycast"));
             assert!((wheel.wheel_radius - 0.4).abs() < 0.01, "{label}: {w_name} radius ~0.4");
-            assert!((wheel.rest_length - 0.7).abs() < 0.01, "{label}: {w_name} rest ~0.7");
-            assert!((wheel.spring_k - 15000.0).abs() < 100.0, "{label}: {w_name} spring_k ~15000");
-            assert!((wheel.damping_c - 3000.0).abs() < 100.0, "{label}: {w_name} damping_c ~3000");
+            let susp = app.world().get::<Suspension>(w_ent)
+                .unwrap_or_else(|| panic!("{label}: {w_name} missing Suspension"));
+            assert!((susp.rest_length - 0.7).abs() < 0.01, "{label}: {w_name} rest ~0.7");
+            assert!((susp.spring_k - 15000.0).abs() < 100.0, "{label}: {w_name} spring_k ~15000");
+            assert!((susp.damping_c - 3000.0).abs() < 100.0, "{label}: {w_name} damping_c ~3000");
 
             assert!(app.world().get::<RigidBody>(w_ent).is_none(),
                 "{label}: {w_name} must NOT have RigidBody");

@@ -411,3 +411,82 @@ class "LunCoTerrainEditAPI" (
         crater depth — all metres."""
     )
 }
+
+class "LunCoSuspensionAPI" (
+    doc = """Rest length of a LunCo raycast suspension. Applied beside
+    PhysxVehicleSuspensionAPI, which carries the spring/damper. LunCo extension:
+    PhysX has no restLength (it uses travelDistance + sprungMass)."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    float lunco:suspension:restLength (
+        doc = """Natural standoff of a raycast wheel below its mount, metres. No
+        fallback: an unauthored rest length is an error, not a guess."""
+    )
+}
+
+class "LunCoWheelAPI" (
+    doc = """The per-wheel knobs LunCo's integrator needs and PhysX does not model.
+    Applied beside PhysxVehicleWheelAPI. No fallbacks — wheel.usda authors them
+    all, and every wheel gets them through its reference arc."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    int lunco:wheel:index (
+        doc = """Logical wheel index for drive/steer wiring. LunCo extension:
+        PhysX's index lives on the WheelAttachment prim, which flat composition
+        lacks."""
+    )
+    double lunco:contactGripStiffness (
+        doc = """Slope of contact friction vs slip, before the Coulomb cone."""
+    )
+    double lunco:driveForcePerNormal (
+        doc = """Drive force as a multiple of the wheel's normal force."""
+    )
+    double3 lunco:steerAxis (
+        doc = """Steering-head axis, wheel-local. (0,1,0) is vertical yaw."""
+    )
+    double lunco:maxDriveOmega (
+        doc = """Joint-wheel drive tuning: axle free-spin cap, rad/s."""
+    )
+    double lunco:driveDamping (
+        doc = """Joint-wheel drive tuning: axle motor damping."""
+    )
+    double lunco:stallTorqueGain (
+        doc = """Joint-wheel drive tuning: torque gain approaching stall."""
+    )
+}
+
+class "LunCoTireAPI" (
+    doc = """The tire's Coulomb μ against the ground. Applied beside
+    PhysxVehicleTireAPI. LunCo extension: PhysX models grip as a ground-material
+    friction TABLE, not a scalar on the tire."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double lunco:frictionCoefficient (
+        doc = """Coulomb μ between this tire and the ground; slip limit = atan(μ).
+        No fallback: a tire that doesn't say what it grips with is a bug."""
+    )
+}
+
+class "LunCoSuspensionVisualAPI" (
+    doc = """Marks a suspension strut's moving visual part (piston/spring) for the
+    mobility animation system. NOT a `kind` token — kind is USD's model taxonomy."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    uniform token lunco:suspensionVisual:role (
+        allowedTokens = ["piston", "spring"]
+        doc = """Which moving part this prim is. Applying the API is the claim, so
+        there is no roleless one — no fallback, no ""."""
+    )
+}
