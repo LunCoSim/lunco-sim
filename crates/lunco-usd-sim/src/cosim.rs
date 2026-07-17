@@ -1281,7 +1281,7 @@ fn on_load_scene(
     stages: Res<Assets<UsdStageAsset>>,
     mut commands: Commands,
     q_grid: Query<&Children, With<WorldGrid>>,
-    q_origin: Query<(), With<OriginAnchor>>,
+    q_origin: Query<Entity, With<OriginAnchor>>,
     q_usd: Query<(Entity, &UsdPrimPath)>,
     q_wires: Query<Entity, With<SimConnection>>,
     in_flight: Option<Res<SceneLoadInFlight>>,
@@ -1379,7 +1379,7 @@ fn on_restart_scene(
     asset_server: Res<AssetServer>,
     mut commands: Commands,
     q_grid: Query<&Children, With<WorldGrid>>,
-    q_origin: Query<(), With<OriginAnchor>>,
+    q_origin: Query<Entity, With<OriginAnchor>>,
     q_usd: Query<(Entity, &UsdPrimPath)>,
     q_wires: Query<Entity, With<SimConnection>>,
 ) {
@@ -1448,7 +1448,7 @@ fn on_clear_scene(
     trigger: On<ClearScene>,
     mut commands: Commands,
     q_grid: Query<&Children, With<WorldGrid>>,
-    q_origin: Query<(), With<OriginAnchor>>,
+    q_origin: Query<Entity, With<OriginAnchor>>,
     q_wires: Query<Entity, With<SimConnection>>,
 ) {
     info!("[clear-scene] clearing viewport");
@@ -1496,7 +1496,7 @@ fn on_clear_scene(
 fn clear_scene_entities(
     commands: &mut Commands,
     q_grid: &Query<&Children, With<WorldGrid>>,
-    q_origin: &Query<(), With<OriginAnchor>>,
+    q_origin: &Query<Entity, With<OriginAnchor>>,
     q_wires: &Query<Entity, With<SimConnection>>,
 ) {
     let mut despawned = 0usize;
@@ -1509,6 +1509,17 @@ fn clear_scene_entities(
                 despawned += 1;
             }
         }
+    }
+
+    // The despawn above takes the scene camera with it, and that camera is usually
+    // what holds `FloatingOrigin` (`process_usd_sim_prims` strips it off the anchor
+    // when a USD Avatar prim claims it). Hand it back to the anchor in THIS flush.
+    // Leaving the gap for `anchor_owns_origin_by_default` to close in PostUpdate is
+    // what logged "BigSpace … has no floating origins" on every scene change: the
+    // guard is a backstop, not the handover. `try_insert` is a no-op if the anchor
+    // already holds it (the origin never left home for this scene).
+    if let Ok(anchor) = q_origin.single() {
+        commands.entity(anchor).try_insert(big_space::prelude::FloatingOrigin);
     }
 
     // Despawn any root-level derived connection wires (which are spawned as root entities)

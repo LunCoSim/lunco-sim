@@ -85,10 +85,38 @@ impl Plugin for UsdAvianPlugin {
             .register_type::<lunco_core::Mobility>()
             .add_observer(on_add_usd_prim)
             .add_observer(process_usd_avian_prims)
+            // `build_usd_physics_joints` runs in avian's `PhysicsSystems::Prepare`,
+            // NOT in `Update`, and that placement is load-bearing — it is the whole
+            // reason the authored-joint path is safe.
+            //
+            // The window it has to hit: a joint may only be attached AFTER both
+            // bodies are admitted to the island graph (else `merge_islands` panics
+            // "Neither body … is in an island", which is what the `With<Position>`
+            // gate below is for) but BEFORE the first narrow phase that could put
+            // those bodies in contact (else the born-disabled `JointGraphEdge` comes
+            // too late, `on_disable_joint_collision` deletes an already-touching
+            // contact without unlinking it from its island, and a later island op
+            // unwraps the freed `ContactId` — `islands/mod.rs:547`/`:608`).
+            //
+            // `Prepare` is exactly that window: it is chained before
+            // `PhysicsSystems::StepSimulation`, which is what runs the broad/narrow
+            // phase, while body admission (`RigidBody`'s required `Position` + the
+            // `SolverBody`/`BodyIslandNode` hop) has already flushed. In `Update` the
+            // gate could only open AFTER avian had already stepped — so the joint
+            // always arrived a tick late, into live contacts. That is not a
+            // hypothetical: `lunco-usd-sim`'s synthesized wheel joint hit this exact
+            // race and was moved to a synchronous attach for it ("raced narrow-phase
+            // contacts … crashing the Avian solver with 'Head contact has no
+            // island'"); the authored path had the same bug and kept it.
+            .add_systems(
+                bevy::app::FixedPostUpdate,
+                build_usd_physics_joints
+                    .run_if(any_with_component::<PendingUsdJoint>)
+                    .in_set(avian3d::prelude::PhysicsSystems::Prepare),
+            )
             .add_systems(
                 Update,
                 (
-                    build_usd_physics_joints.run_if(any_with_component::<PendingUsdJoint>),
                     build_terrain_mesh_colliders
                         .run_if(any_with_component::<PendingTerrainCollider>),
                     enforce_kinematic_on_animated,
@@ -1077,7 +1105,7 @@ fn build_usd_physics_joints(
                         motor_model: JOINT_DRIVE_MOTOR_MODEL,
                     };
                 }
-                commands.entity(joint_entity).try_insert((joint, JointCollisionDisabled));
+                commands.entity(joint_entity).try_insert(joint_bundle(joint));
             }
             "PhysicsRevoluteJoint" => {
                 let mut joint = RevoluteJoint::new(b0, b1)
@@ -1094,14 +1122,13 @@ fn build_usd_physics_joints(
                         motor_model: JOINT_DRIVE_MOTOR_MODEL,
                     };
                 }
-                commands.entity(joint_entity).try_insert((joint, JointCollisionDisabled));
+                commands.entity(joint_entity).try_insert(joint_bundle(joint));
             }
             "PhysicsFixedJoint" => {
-                commands.entity(joint_entity).try_insert((
+                commands.entity(joint_entity).try_insert(joint_bundle(
                     FixedJoint::new(b0, b1)
                         .with_local_anchor1(pending.local_pos0)
                         .with_local_anchor2(pending.local_pos1),
-                    JointCollisionDisabled,
                 ));
             }
             "PhysicsSphericalJoint" => {
@@ -1122,7 +1149,7 @@ fn build_usd_physics_joints(
                 if pending.limit_lower.is_finite() && pending.limit_upper.is_finite() {
                     joint = joint.with_twist_limits(pending.limit_lower, pending.limit_upper);
                 }
-                commands.entity(joint_entity).try_insert((joint, JointCollisionDisabled));
+                commands.entity(joint_entity).try_insert(joint_bundle(joint));
             }
             "PhysicsDistanceJoint" => {
                 // Tether/strut: keeps the two anchors within [min, max] distance.
@@ -1136,12 +1163,11 @@ fn build_usd_physics_joints(
                         pending.body1_path
                     );
                 }
-                commands.entity(joint_entity).try_insert((
+                commands.entity(joint_entity).try_insert(joint_bundle(
                     DistanceJoint::new(b0, b1)
                         .with_local_anchor1(pending.local_pos0)
                         .with_local_anchor2(pending.local_pos1)
                         .with_limits(min, max),
-                    JointCollisionDisabled,
                 ));
             }
             // UsdPhysics generic D6 joint has no avian primitive (avian offers
@@ -1173,6 +1199,38 @@ fn build_usd_physics_joints(
 /// supplies the drive [`AngularMotor`] and adds its mobility/hardware actuators
 /// on top. `mount_local` is the hub anchor in chassis-local space, `axle` the
 /// hinge axis (chassis-local).
+/// THE ONLY sanctioned way to hand an Avian joint to the world. Every joint in
+/// this workspace — authored USD joints here, the synthesized wheel joint in
+/// `lunco-usd-sim` — goes through this.
+///
+/// It exists to make ONE avian rule un-forgettable: **`JointCollisionDisabled`
+/// must ride the same bundle as the joint component, never a later insert.**
+///
+/// Why the bundle, specifically. Bevy writes a whole bundle before firing any
+/// hook or observer, so `add_joint_to_graph` (`joint_graph/plugin.rs:135-143`)
+/// reads `Has<JointCollisionDisabled> == true` and the `JointGraphEdge` is BORN
+/// with `collision_disabled`. The broad phase then never creates the pair at all
+/// (`bvh_broad_phase.rs:275-283`), so no contact between the jointed bodies ever
+/// exists. Add the marker one command later and you take the other road:
+/// `on_disable_joint_collision` (`joint_graph/plugin.rs:290-295`) walks the
+/// EXISTING contacts and deletes them with `remove_edge_by_id` while never
+/// calling `IslandManager::remove_contact` — leaving a freed `ContactId` in the
+/// island's linked list, which a later island op unwraps and dies on
+/// (`islands/mod.rs:547`/`:608`). That is an upstream avian bug we cannot patch
+/// from here; the bundle is how we stay out of its reach.
+///
+/// This is only half the contract. The other half is TIMING and it belongs to
+/// the caller: the bundle must land BEFORE the first narrow phase that could put
+/// the two bodies in contact. Born-disabled prevents the pair from ever forming;
+/// it does NOT clean up a contact that already exists — and if one does, this
+/// bundle walks straight into the same corrupting path. See
+/// `crates/lunco-usd-avian/tests/gizmo_body_swap_islands.rs`, where
+/// `joint_and_collision_disabled_inserted_as_one_bundle` panics for exactly that
+/// reason: correct bundle, too late.
+pub fn joint_bundle<J: Component>(joint: J) -> (J, JointCollisionDisabled) {
+    (joint, JointCollisionDisabled)
+}
+
 pub fn wheel_revolute_joint(
     chassis: Entity,
     wheel: Entity,

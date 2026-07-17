@@ -250,7 +250,12 @@ pub struct PendingDifferential {
     pub rocker_b: String,
     /// Hinge axis in the chassis-local frame.
     pub axis: DVec3,
-    pub rest_sum: f64,
+    /// Authored `physxGearJoint:gearRatio` — the `r` in `θ_a = r·θ_b`. Was read
+    /// and logged but THROWN AWAY before this field existed, so every geared
+    /// joint silently behaved as the `-1` mirror case no matter what the scene
+    /// authored.
+    pub ratio: f64,
+    pub rest_offset: f64,
     pub stiffness: f64,
     pub damping: f64,
 }
@@ -1125,19 +1130,18 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                         _ => DVec3::X,
                     })
                     .unwrap_or(DVec3::X);
+                let ratio = read_f("physxGearJoint:gearRatio", -1.0);
                 info!(
                     "Gear joint {} couples {} / {} (ratio {})",
-                    prim_path.path,
-                    body_a,
-                    body_b,
-                    read_f("physxGearJoint:gearRatio", -1.0),
+                    prim_path.path, body_a, body_b, ratio,
                 );
                 commands.entity(entity).try_insert(PendingDifferential {
                     chassis: frame,
                     rocker_a: body_a,
                     rocker_b: body_b,
                     axis,
-                    rest_sum: read_f("drive:angular:physics:targetPosition", 0.0),
+                    ratio,
+                    rest_offset: read_f("drive:angular:physics:targetPosition", 0.0),
                     stiffness: read_f("drive:angular:physics:stiffness", 200_000.0),
                     damping: read_f("drive:angular:physics:damping", 20_000.0),
                 });
@@ -1780,8 +1784,17 @@ fn setup_physical_wheel(
     // Joint construction lives in `lunco-usd-avian` (the single home for all
     // Avian joint-building); we add the mobility/hardware actuators on top.
     let mut joint_cmd = commands.spawn((
-        lunco_usd_avian::wheel_revolute_joint(chassis, entity, mount_local, axle, drive_motor),
-        JointCollisionDisabled,
+        // `joint_bundle` carries the `JointCollisionDisabled` policy — the marker
+        // MUST share the joint's bundle so the `JointGraphEdge` is born
+        // collision-disabled and the pair never reaches the narrow phase. Never
+        // insert the marker separately here; see `lunco_usd_avian::joint_bundle`.
+        lunco_usd_avian::joint_bundle(lunco_usd_avian::wheel_revolute_joint(
+            chassis,
+            entity,
+            mount_local,
+            axle,
+            drive_motor,
+        )),
         // GENERAL LIFECYCLE CONTRACT — every entity the USD build *synthesizes* to back a
         // scene (avian joints, actuator ports, cosim wires) is parented into the grid
         // subtree via `ChildOf`, so the ONE hierarchy-recursive `clear_scene_entities`
@@ -2252,7 +2265,8 @@ fn resolve_differential_coupling(
             rocker_a,
             rocker_b,
             axis: pending.axis,
-            rest_sum: pending.rest_sum,
+            ratio: pending.ratio,
+            rest_offset: pending.rest_offset,
             stiffness: pending.stiffness,
             damping: pending.damping,
         });

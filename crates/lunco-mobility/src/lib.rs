@@ -705,9 +705,9 @@ fn apply_wheel_steering(
 /// rocker pitches up, the right pitches down by the same amount and the body
 /// rides at their **average** pitch (keeping the payload level over rough
 /// ground). Avian has no gear/differential joint, so this is a soft holonomic
-/// coupling: a PD law that drives the constraint `θ_a + θ_b → rest_sum` with
-/// equal/opposite corrective torques about the hinge axis (reaction on the
-/// chassis). Everything *else* in a rocker-bogie (the rocker/bogie links) is
+/// coupling: a PD law that drives the constraint `θ_a − r·θ_b → rest_offset` with
+/// corrective torques about the hinge axis (reaction on the chassis), where `r`
+/// is the authored `physxGearJoint:gearRatio`; `r = -1` is this mirror case. Everything *else* in a rocker-bogie (the rocker/bogie links) is
 /// already buildable with today's authored `PhysicsRevoluteJoint`s — this fills
 /// the one missing piece. Stiff but compliant: the body still conforms, it just
 /// can't simply fold one rocker flat while the other stays put.
@@ -728,8 +728,11 @@ pub struct DifferentialCoupling {
     pub rocker_b: Entity,
     /// Hinge axis in the **chassis local** frame (typically lateral, ±X).
     pub axis: DVec3,
-    /// Target for `θ_a + θ_b` (rad). Zero ⇒ symmetric (mirror) rockers.
-    pub rest_sum: f64,
+    /// Authored `physxGearJoint:gearRatio` — the `r` in `θ_a = r·θ_b`.
+    /// `-1` (the default) is the mirror/rocker-bogie case.
+    pub ratio: f64,
+    /// Target for `θ_a − r·θ_b` (rad). Zero ⇒ symmetric (mirror) rockers at `r = -1`.
+    pub rest_offset: f64,
     /// Coupling stiffness (N·m per rad of constraint error).
     pub stiffness: f64,
     /// Coupling damping (N·m per rad/s of constraint-error rate).
@@ -743,7 +746,10 @@ impl Default for DifferentialCoupling {
             rocker_a: Entity::PLACEHOLDER,
             rocker_b: Entity::PLACEHOLDER,
             axis: DVec3::X,
-            rest_sum: 0.0,
+            // Mirror rockers — the rocker-bogie case, and what the coupling
+            // hardcoded before the authored ratio was threaded through.
+            ratio: -1.0,
+            rest_offset: 0.0,
             stiffness: 200_000.0,
             damping: 20_000.0,
         }
@@ -767,20 +773,28 @@ fn angle_about_axis(rel: DQuat, axis: DVec3) -> f64 {
     angle
 }
 
-/// PD corrective torque (N·m, about the hinge axis) for the differential
-/// constraint `c = θ_a + θ_b − rest_sum`. Applied **identically** to each rocker
-/// (∂c/∂θ each = 1); the chassis takes `−2·τ` as reaction. `rate_sum` is
-/// `ċ = (ω_a + ω_b − 2·ω_c)·axis`.
-fn differential_torque(
+/// PD multiplier `λ` (N·m about the hinge axis) for the geared constraint
+/// `c = θ_a − r·θ_b − rest_offset`, where `r` is the authored
+/// `physxGearJoint:gearRatio` — the `r` in `θ_a = r·θ_b`.
+///
+/// The generalized torque on each body is `τ_i = −λ·∂c/∂θ_i`, so `τ_a = −λ`,
+/// `τ_b = +λ·r`, and the chassis takes `−(τ_a + τ_b) = λ·(1 − r)`, which is what
+/// conserves angular momentum about the axis for any ratio.
+///
+/// `rate` is `ċ = (ω_a − r·ω_b − (1 − r)·ω_c) · axis`.
+///
+/// `r = −1` is the mirror/rocker-bogie case (`c = θ_a + θ_b`) and the default.
+fn differential_lambda(
     angle_a: f64,
     angle_b: f64,
-    rate_sum: f64,
-    rest_sum: f64,
+    rate: f64,
+    rest_offset: f64,
+    ratio: f64,
     stiffness: f64,
     damping: f64,
 ) -> f64 {
-    let c = angle_a + angle_b - rest_sum;
-    -(stiffness * c + damping * rate_sum)
+    let c = angle_a - ratio * angle_b - rest_offset;
+    stiffness * c + damping * rate
 }
 
 /// Enforces every [`DifferentialCoupling`] each fixed step. Reads the two
@@ -794,7 +808,8 @@ fn differential_torque(
 /// - coupling OFF: A free-falls to the pendulum bottom (`+3.06`), B untouched (`+0.06`);
 /// - coupling ON:  A held at `+1.72`, B driven to `−1.65` (mirror), `θ_A+θ_B ≈ 0.07`.
 ///
-/// So the coupling correctly enforces `θ_A + θ_B → rest_sum`. NOTE: needs a
+/// So the coupling correctly enforces `θ_A − r·θ_B → rest_offset` (that rig authors
+/// the `r = -1` mirror). NOTE: needs a
 /// non-redundant rig to *show* its effect — a passive two-rocker pair each pinned
 /// by its own two ground feet already self-levels, leaving nothing for the
 /// coupling to do (the original `rocker_bogie_test.usda` is that redundant case).
@@ -815,26 +830,29 @@ fn differential_coupling_system(
         // Rocker pitch in the chassis frame (twist about the hinge axis).
         let angle_a = angle_about_axis(rot_c.inverse() * a.rotation().0, coupling.axis);
         let angle_b = angle_about_axis(rot_c.inverse() * b.rotation().0, coupling.axis);
-        // ċ = (ω_a + ω_b − 2·ω_c) · axis_world.
+        // ċ = (ω_a − r·ω_b − (1 − r)·ω_c) · axis_world.
+        let r = coupling.ratio;
         let w_c = chassis.angular_velocity();
-        let rate_sum = (a.angular_velocity() + b.angular_velocity() - 2.0 * w_c).dot(axis_world);
-        let tau = differential_torque(
+        let rate = (a.angular_velocity() - r * b.angular_velocity() - (1.0 - r) * w_c)
+            .dot(axis_world);
+        let lambda = differential_lambda(
             angle_a,
             angle_b,
-            rate_sum,
-            coupling.rest_sum,
+            rate,
+            coupling.rest_offset,
+            r,
             coupling.stiffness,
             coupling.damping,
         );
-        if !tau.is_finite() {
+        if !lambda.is_finite() {
             continue;
         }
-        let torque = axis_world * tau;
-        a.apply_torque(torque);
-        b.apply_torque(torque);
-        // Reaction keeps the system's angular momentum conserved.
+        // τ_i = −λ·∂c/∂θ_i: ∂c/∂θ_a = 1, ∂c/∂θ_b = −r.
+        a.apply_torque(axis_world * -lambda);
+        b.apply_torque(axis_world * (lambda * r));
+        // Reaction keeps the system's angular momentum conserved for ANY ratio.
         let mut chassis = chassis;
-        chassis.apply_torque(-2.0 * torque);
+        chassis.apply_torque(axis_world * (lambda * (1.0 - r)));
     }
 }
 
@@ -1117,21 +1135,6 @@ mod force_law_tests {
         assert!((angle_about_axis(q_neg, axis) + 0.3).abs() < 1e-9);
         // Identity ⇒ zero pitch.
         assert!(angle_about_axis(DQuat::IDENTITY, axis).abs() < 1e-12);
-    }
-
-    #[test]
-    fn differential_restores_and_opposes_motion() {
-        let (k, d) = (1000.0, 100.0);
-        // Symmetric rockers at rest_sum=0, no motion ⇒ no torque.
-        assert!(differential_torque(0.0, 0.0, 0.0, 0.0, k, d).abs() < 1e-12);
-        // Both rockers pitched the SAME way (sum > 0) ⇒ restoring torque is
-        // NEGATIVE (drives the sum back toward zero / the average pitch).
-        assert!(differential_torque(0.2, 0.2, 0.0, 0.0, k, d) < 0.0);
-        // MIRRORED rockers (a up, b down) satisfy the constraint ⇒ no torque,
-        // which is exactly the differential letting the body conform.
-        assert!(differential_torque(0.2, -0.2, 0.0, 0.0, k, d).abs() < 1e-12);
-        // Damping opposes a positive constraint-rate even at zero error.
-        assert!(differential_torque(0.0, 0.0, 0.5, 0.0, k, d) < 0.0);
     }
 
     // (drive-mix parse + kernel projection now live in `lunco_core::kernels`.)
@@ -1559,3 +1562,64 @@ mod oracle {
 }
 
 
+
+#[cfg(test)]
+mod differential_tests {
+    use super::*;
+
+    /// A geared pair satisfies `θ_a = r·θ_b + rest_offset` exactly ⇒ no correction.
+    #[test]
+    fn a_satisfied_gear_needs_no_torque() {
+        for (r, a, b) in [(-1.0, 0.2, -0.2), (1.0, 0.4, 0.4), (2.0, 0.6, 0.3), (-0.5, 0.25, -0.5)] {
+            let lambda = differential_lambda(a, b, 0.0, 0.0, r, 1000.0, 100.0);
+            assert!(lambda.abs() < 1e-12, "ratio {r}: satisfied gear pulled {lambda}");
+        }
+    }
+
+    /// The ratio is what the constraint MEANS: the same pair of angles is an error
+    /// for one ratio and satisfied by another. Before the authored
+    /// `physxGearJoint:gearRatio` was threaded through, every gear ran as `-1`
+    /// regardless of what the scene said, so this distinction did not exist.
+    #[test]
+    fn the_ratio_decides_what_counts_as_error() {
+        let (a, b, k, d) = (0.4, 0.4, 1000.0, 0.0);
+        // r = -1 (mirror): c = θ_a + θ_b = 0.8 → in error.
+        assert!(differential_lambda(a, b, 0.0, 0.0, -1.0, k, d).abs() > 1.0);
+        // r = +1 (co-rotating): c = θ_a − θ_b = 0 → satisfied.
+        assert!(differential_lambda(a, b, 0.0, 0.0, 1.0, k, d).abs() < 1e-9);
+    }
+
+    /// `rest_offset` shifts the target: `c = θ_a − r·θ_b − rest_offset`.
+    #[test]
+    fn rest_offset_moves_the_target() {
+        let k = 1000.0;
+        // θ_a + θ_b = 0.5, and the gear is authored to want exactly that.
+        let at_rest = differential_lambda(0.3, 0.2, 0.0, 0.5, -1.0, k, 0.0);
+        assert!(at_rest.abs() < 1e-12, "offset target should be satisfied, got {at_rest}");
+    }
+
+    /// Damping opposes constraint-rate even at zero positional error.
+    #[test]
+    fn damping_opposes_constraint_rate() {
+        let lambda = differential_lambda(0.0, 0.0, 0.5, 0.0, -1.0, 1000.0, 100.0);
+        // τ_a = −λ must oppose a positive rate.
+        assert!(-lambda < 0.0, "damping did not oppose the rate");
+    }
+
+    /// Angular momentum: the three generalized torques must sum to zero about the
+    /// axis for ANY ratio — otherwise the coupling injects spin into the rig.
+    #[test]
+    fn reaction_conserves_angular_momentum_at_any_ratio() {
+        for r in [-2.5, -1.0, -0.5, 0.5, 1.0, 3.0] {
+            let lambda = differential_lambda(0.3, -0.1, 0.7, 0.02, r, 5000.0, 100.0);
+            let tau_a = -lambda;
+            let tau_b = lambda * r;
+            let chassis = lambda * (1.0 - r);
+            assert!(
+                (tau_a + tau_b + chassis).abs() < 1e-9,
+                "ratio {r}: torques sum to {}, not zero",
+                tau_a + tau_b + chassis
+            );
+        }
+    }
+}

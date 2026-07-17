@@ -23,8 +23,13 @@ use transform_gizmo_bevy::{GizmoCamera, GizmoDragStarted, GizmoDragging, GizmoTa
 pub struct GizmoPrevPos {
     /// Parent-local position in the previous frame (meters).
     pub local_pos: DVec3,
-    /// Original RigidBody type before drag started.
-    pub original_body: RigidBody,
+    /// Original RigidBody type before drag started, or `None` if the entity had
+    /// no `RigidBody` at all. `None` must stay `None` on restore: inserting a
+    /// `Dynamic` body onto a prim that never had one gives avian a body with no
+    /// mass or inertia ("Dynamic rigid body has no mass or inertia. This can
+    /// cause NaN values.") and hands the solver a NaN source that outlives the
+    /// drag.
+    pub original_body: Option<RigidBody>,
     /// Whether the entity had TranslationInterpolation.
     pub had_translation_interpolation: bool,
     /// Whether the entity had RotationInterpolation.
@@ -231,7 +236,7 @@ pub fn capture_gizmo_start(
         if had_translation { commands.entity(entity).remove::<TranslationInterpolation>(); }
         if had_rotation { commands.entity(entity).remove::<RotationInterpolation>(); }
 
-        let original_body = q_rigid_bodies.get(entity).copied().unwrap_or(RigidBody::Dynamic);
+        let original_body = q_rigid_bodies.get(entity).copied().ok();
 
         // Resolve initial parent-local position.
         let Ok((_, tf)) = q_spatial.get(entity) else { continue; };
@@ -254,7 +259,7 @@ pub fn capture_gizmo_start(
         // Remove FloatingOrigin from the camera. This stops big_space from shifting 
         // the world while we drag, breaking the positive feedback loop with the camera.
         for cam_ent in q_floating_origin.iter() {
-            commands.entity(cam_ent).remove::<FloatingOrigin>();
+            commands.entity(cam_ent).try_remove::<FloatingOrigin>();
             info!("GIZMO: freezing FloatingOrigin on camera {:?}", cam_ent);
         }
     }
@@ -435,9 +440,14 @@ pub fn restore_gizmo_dynamic(
             vel.0 = DVec3::ZERO;
         }
 
-        commands.entity(entity)
-            .try_insert(prev.original_body)
-            .remove::<GizmoPrevPos>();
+        // Hand the pre-drag body kind back. An entity that had NO `RigidBody`
+        // gets the drag's Kinematic taken away again rather than being handed a
+        // fabricated `Dynamic` — see `GizmoPrevPos::original_body`.
+        match prev.original_body {
+            Some(body) => { commands.entity(entity).try_insert(body); }
+            None => { commands.entity(entity).try_remove::<RigidBody>(); }
+        }
+        commands.entity(entity).try_remove::<GizmoPrevPos>();
 
         // AUTHOR THE MOVE. Queued AFTER the `original_body` insert above, so the
         // `MoveEntity` observer captures the pre-drag body kind (not the
@@ -462,11 +472,17 @@ pub fn restore_gizmo_dynamic(
     // still being dragged (re-introducing the camera/origin feedback loop the
     // capture-time freeze exists to prevent).
     let any_still_active = gizmo_targets.iter().any(|(_, gt)| gt.is_active());
-    if restored_any && !any_still_active {
+    // Take the origin off its current holder ONLY once we know who gets it next.
+    // If the scene reloaded mid-drag the avatar is gone, and stripping the origin
+    // with nobody to hand it to left the world with zero origins — big_space
+    // logs "BigSpace … has no floating origins" and stops propagating transforms
+    // until the `anchor_owns_origin_by_default` guard re-seats it a frame later.
+    // No avatar means: leave whoever holds it holding it.
+    if restored_any && !any_still_active && !q_avatar.is_empty() {
         // 1. RESTORE ORIGIN TRACKING
         // Claim FloatingOrigin from the fallback anchor.
         for origin in q_floating_origin.iter() {
-            commands.entity(origin).remove::<FloatingOrigin>();
+            commands.entity(origin).try_remove::<FloatingOrigin>();
         }
         // Re-attach FloatingOrigin to the avatar camera.
         for av_ent in q_avatar.iter() {
