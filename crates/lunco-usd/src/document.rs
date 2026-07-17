@@ -721,6 +721,16 @@ impl UsdDocument {
         match usda_to_data(source) {
             Ok(data) => {
                 self.commit(TargetLayer::Base, data, UsdChange::FullReload);
+                // The commit bumped the generation WITHOUT going through a typed
+                // op, so record a synthetic whole-source marker. The op-replay
+                // projector accounts for generations via the op ring; a
+                // generation with no op makes the ring look SHORT and it replays
+                // from the wrong point. Same reason and same shape as
+                // `restore_runtime` — the base layer is `LayerId::root()`.
+                self.record_op(UsdOp::ReplaceSource {
+                    edit_target: LayerId::root(),
+                    text: String::new(),
+                });
                 self.parse_error = None;
                 // Matches disk as of this generation ⇒ clean.
                 self.last_saved_generation = Some(self.generation);

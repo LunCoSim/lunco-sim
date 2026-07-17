@@ -925,9 +925,18 @@ pub fn drain_open_file_results(world: &mut bevy::prelude::World) {
                         "[OpenFile] {} has unsaved edits — keeping them; disk NOT reloaded",
                         path.display()
                     );
-                } else if registry.checkpoint_source(doc, source) {
-                    // Text came FROM disk ⇒ the document matches it ⇒ clean.
-                    registry.mark_document_saved(doc);
+                } else if let Some(host) = registry.host_mut(doc) {
+                    // `reload_base`, NOT `checkpoint_source`: a disk re-read is not
+                    // a user edit. `checkpoint_source` routes through
+                    // `DocumentHost::apply`, which pushes an inverse onto the UNDO
+                    // STACK and journals it — so Ctrl+Z after a re-open would
+                    // "undo" the reload and hand back pre-reload text that no
+                    // longer matches disk, leaving the document dirty with stale
+                    // content. `reload_base` goes through `Document::apply`, which
+                    // keeps generation and the op ring coherent without touching
+                    // undo. Same semantics as USD's re-open.
+                    lunco_doc::FileBacked::reload_base(host.document_mut(), &source);
+                    registry.mark_changed(doc);
                 }
                 doc
             }

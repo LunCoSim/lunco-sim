@@ -101,17 +101,27 @@ are not, uniformly:
 
 Shipping collaboration before fixing rhai's addressing would destroy work quietly.
 
-## 5. Target: the layer model
+## 5. Target: the layer model — **authoring only**
 
 **Never edit the base layer live.** Edits land in a layer *above* it; composition
 resolves by strength. Then a base reload is conflict-free — the user's opinions
 ride on top — and most conflict UX dissolves instead of needing a merge dialog.
 
 ```
-[ base layer    ]  file-backed, resolved via ar::Resolver, never live-edited
-[ live layer    ]  replicated ops, LWW per property        (Nucleus `.live`)
-[ session layer ]  local, ephemeral, never saved            (camera, selection)
+AUTHORING — USD layers. Slow to write. Composition, undo, journal, git.
+  [ base .usda        ]  authored truth, resolved via ar::Resolver, never live-edited
+  [ runtime sublayer  ]  runtime-authored state (spawns, gizmo moves, checkpoints),
+                         PERSISTED to .lunco/runtime
+  [ live layer        ]  other users' authoring deltas, LWW per property  (Nucleus `.live`)
+  [ session layer     ]  truly ephemeral, NEVER saved (camera, selection, presence)
 ```
+
+> **The `runtime` layer is a persisted sublayer, not a USD session layer.** A
+> session layer is by definition never serialized; ours round-trips through
+> `.lunco/runtime`. Do not "fix" it by calling it a session layer — the ephemeral
+> slot above is a *different*, currently-unused thing.
+
+**Per-tick simulation state is NOT in this stack, and must never be** — see §5a.
 
 This is USD's native answer, and it generalises as **"base + addressable deltas"**:
 
@@ -125,6 +135,50 @@ asset loader reads them back — a `parsed → text → parsed` round trip whose
 purpose is to hand data to ourselves, because the stage is built by a *path
 loader* when the content already exists in memory. With a real session layer the
 overlay, `Assets<UsdSourceText>` (locally), and `composed_source()` all disappear.
+
+## 5a. Runtime state lives in the ECS, not in a layer
+
+USD is an **authoring** data model. It is fast to read and **slow to write** —
+NVIDIA measures a write-back at *milliseconds to hundreds of milliseconds* — and
+their guidance is explicit: *"changing the USD data in runtime is not recommended
+because of performance reasons"*, and *"it's best not to write back to USD while
+the simulation is running."*
+
+So Omniverse splits it in two, and so do we — under different names:
+
+| concern | Omniverse | LunCoSim |
+|---|---|---|
+| authoring truth | USD layers | USD documents / layers |
+| per-tick runtime | **Fabric** (via USDRT) | **Bevy ECS + avian** |
+| USD → runtime | USDRT Population (batched) | `StageSink` projection |
+| runtime → USD | explicit, never per-frame | checkpoint / save only |
+| who reads runtime | PhysX, render delegate | avian, renderer |
+
+**The ECS *is* our Fabric.** That is what "USD = truth, ECS = projection (two
+worlds)" has always meant; it is the same architecture NVIDIA ships, not a
+LunCoSim invention.
+
+The rule that falls out:
+
+> **Never author per-tick simulation state as a USD op.** A rover's position each
+> frame belongs in the ECS and is replicated by rollback netcode (§7). It reaches
+> USD only when a human asks — save, checkpoint, promote-scenario.
+
+This is not theoretical for us: `sync_twin_overlays` already debounces its
+whole-stage serialize *because* per-stroke USD writes were unaffordable during
+terrain brushing. That was this rule, discovered locally and paid for once.
+
+**Three things, not two** — and the middle one is easy to miss:
+
+1. **Authoring edits** (user drags a gizmo, spawns a rover) → base / live layer.
+   Journaled, undoable, saved.
+2. **Runtime-authored state** (a scenario's spawns, a saved checkpoint) → runtime
+   sublayer. Persisted, but *not* the user's edit history.
+3. **Per-tick sim state** (where the rover is this frame) → **ECS only**. Never a
+   USD op, never journaled, never undoable.
+
+Today (1) and (2) share the `runtime` sublayer. That conflation is why a gizmo
+drag and a scenario checkpoint are indistinguishable to save/undo.
 
 ## 6. Target: the resolver is the only local/client seam
 
@@ -159,14 +213,20 @@ exactly this; our fork exposes `StageBuilder::resolver` and
 
 **Two planes, and they must not be conflated:**
 
-| plane | what | mechanism |
-|---|---|---|
-| **authoring** | who moved the rover's spawn point | USD ops on a live layer, LWW, Nucleus-shaped |
-| **sim** | where the rover *is* this tick | rollback netcode (lightyear), 60 Hz |
+| plane | what | lives in | replicated by |
+|---|---|---|---|
+| **authoring** | who moved the rover's spawn point | USD live layer | Nucleus-shaped op stream, LWW per property |
+| **sim** | where the rover *is* this tick | **ECS** (our Fabric) | rollback netcode (lightyear), 60 Hz |
 
-Omniverse's model is *authoring* collaboration. It is not a physics netcode and
-does not subsume one. We have only the sim plane today, and it replicates
-ECS/physics state, not USD deltas.
+Omniverse's model is *authoring* collaboration. **It is not a physics netcode and
+does not subsume one** — their own physics reads Fabric, not USD, for exactly the
+reason in §5a. We have only the sim plane today, and it replicates ECS/physics
+state, not USD deltas.
+
+The tempting mistake is to unify them — "everything is a USD op, replicate the op
+stream". That is a performance cliff, not a simplification: it puts a per-frame
+write onto a data model whose write cost is measured in milliseconds. The two
+planes stay separate, and they meet only at explicit checkpoints.
 
 ## 8. UX: we are an IDE *and* a DCC
 

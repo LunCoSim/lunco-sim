@@ -677,6 +677,83 @@ mod tests {
         Entity::from_bits(bits)
     }
 
+    /// THE DATA-LOSS REGRESSION. One file ⇒ one document.
+    ///
+    /// The `OpenFile` command used to `allocate_with_origin` unconditionally, so
+    /// opening the same `.mo` twice minted a SECOND document — two tabs, two undo
+    /// stacks, both saving to one path, last writer silently winning. The rule
+    /// (`find_by_path`) already existed and the package browser used it; the open
+    /// path just never called it.
+    #[test]
+    fn find_by_path_is_one_document_per_file() {
+        let mut reg = ModelicaDocumentRegistry::default();
+        let path = std::path::PathBuf::from("/models/Rover.mo");
+
+        let doc = reg.allocate_with_origin(
+            "model Rover end Rover;".into(),
+            DocumentOrigin::writable_file(path.clone()),
+        );
+
+        assert_eq!(reg.find_by_path(&path), Some(doc));
+        assert_eq!(reg.find_by_path(std::path::Path::new("/models/Other.mo")), None);
+
+        // An untitled document has no path and must never collide with one.
+        reg.allocate_with_origin("model U end U;".into(), DocumentOrigin::untitled("U"));
+        assert_eq!(reg.find_by_path(&path), Some(doc));
+        assert_eq!(reg.len(), 2);
+    }
+
+    /// `canonical_path()` does NOT canonicalize — it returns the stored path
+    /// verbatim. An `==` compare therefore missed `/a/./b.mo` vs `/a/b.mo` and
+    /// minted a duplicate anyway, which is the very split-brain `find_by_path`
+    /// exists to prevent. It must compare with `same_file`.
+    #[test]
+    fn find_by_path_matches_aliased_paths_not_just_identical_strings() {
+        let mut reg = ModelicaDocumentRegistry::default();
+        // A real file, so `canonicalize` can resolve both spellings.
+        let dir = std::env::temp_dir().join("lunco_find_by_path_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let real = dir.join("Rover.mo");
+        std::fs::write(&real, "model Rover end Rover;").unwrap();
+
+        let doc = reg.allocate_with_origin(
+            "model Rover end Rover;".into(),
+            DocumentOrigin::writable_file(real.clone()),
+        );
+
+        // Same file, different spelling — `==` would miss this.
+        let aliased = dir.join(".").join("Rover.mo");
+        assert_eq!(
+            reg.find_by_path(&aliased),
+            Some(doc),
+            "an aliased path must resolve to the SAME document, not a duplicate"
+        );
+
+        let _ = std::fs::remove_file(&real);
+    }
+
+    /// A re-open of a CLEAN document refreshes it from disk in place, and must
+    /// not leave it dirty — the text came from disk, so it matches disk.
+    /// (`reload_base` is what the `OpenFile` path calls; `checkpoint_source`
+    /// would route through the undo stack, making a disk reload Ctrl+Z-able.)
+    #[test]
+    fn reload_base_refreshes_in_place_and_stays_clean() {
+        use lunco_doc::FileBacked;
+        let mut reg = ModelicaDocumentRegistry::default();
+        let doc = reg.allocate_with_origin(
+            "model A end A;".into(),
+            DocumentOrigin::writable_file("/models/A.mo"),
+        );
+        assert!(!reg.host(doc).unwrap().document().is_dirty());
+
+        let host = reg.host_mut(doc).unwrap();
+        assert!(FileBacked::reload_base(host.document_mut(), "model A Real x; end A;"));
+
+        let d = reg.host(doc).unwrap().document();
+        assert!(d.source().contains("Real x"), "must project the NEW disk text");
+        assert!(!d.is_dirty(), "text came FROM disk ⇒ the document matches it ⇒ clean");
+    }
+
     #[test]
     fn allocate_creates_host() {
         let mut reg = ModelicaDocumentRegistry::default();

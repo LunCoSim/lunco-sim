@@ -179,9 +179,15 @@ impl lunco_doc::FileBacked for ScriptDocument {
             _ => ScriptLanguage::Rhai,
         };
         let mut doc = ScriptDocument::new(id.raw(), language, source);
+        // Clean ONLY if the source came from somewhere durable. An Untitled doc
+        // has never been on disk, so it is genuinely unsaved — marking it clean
+        // would let a re-open silently discard it and would hide it from a
+        // save-on-quit prompt. Mirrors `UsdDocument::with_origin`.
+        doc.last_saved_generation = match &origin {
+            DocumentOrigin::File { .. } | DocumentOrigin::Bundled { .. } => Some(doc.generation),
+            DocumentOrigin::Untitled { .. } => None,
+        };
         doc.origin = origin;
-        // Built from a file's text ⇒ matches disk ⇒ clean.
-        doc.last_saved_generation = Some(doc.generation);
         doc
     }
 
