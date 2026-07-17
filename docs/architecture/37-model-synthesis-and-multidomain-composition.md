@@ -195,7 +195,8 @@ richer structural carrier that can *export to* them.
 6. **Later tracks:** FMI export (rumoca `fmi2/fmi3` templates) for interop; live USD↔Modelica projection;
    `.ssp/.ssd` export; SysML v2 as the structural source-of-truth above USD.
 
-The reusable comms component (doc 36 §1.2) is the first consumer: its `Power` layer contributes a load to the
+The reusable comms component (`assets/components/comms/antenna.usda`, a `lunco:linkNode` — see
+[doc 49](./49-connectivity-link-kernel.md)) is the first consumer: its `Power` layer contributes a load to the
 synthesized rover electrical model, and its link dynamics stay a separate co-sim domain — exactly the
 two-level rule in action.
 
@@ -291,7 +292,10 @@ family:
 - `electrical` — USD components + `epsBus` → one acausal `Electrical.mo` (§3).
 - `thermal` — thermal nodes + conductances → `ThermalNode` network (doc-34 gap, same shape).
 - `harness` / `databus` — data topology → comms/OBC signal routing.
-- `comms-link` — the doc-36 `CommsLink.mo` from antenna params.
+- `comms-link` — a `CommsLink.mo` from antenna params. This is where a LINK BUDGET (dB, noise, bit-rate)
+  belongs if it is ever wanted: the [doc 49](./49-connectivity-link-kernel.md) kernel publishes `range_m` and
+  `light_time_s` as geometry and deliberately models no RF, so a budget is a synthesized Modelica domain or an
+  authored policy over the `link.connected` hook — never core Rust.
 - `wiring` — emit the *cross-domain* `SimConnection` boundary wires between the synthesized domain models
   (the causal half of §1), so even the co-sim wiring is a synthesizer, not hand-authored.
 - `usd-scaffold` — a spec → a component-composed rover `.usda` (structure synthesis, the inverse direction).

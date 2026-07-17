@@ -116,6 +116,16 @@ impl BodyDescriptor {
 }
 
 impl CelestialBodyRegistry {
+    /// The body with this NAIF id, or `None` if the registry does not carry it.
+    ///
+    /// The lookup every caller was open-coding as
+    /// `bodies.iter().find(|b| b.ephemeris_id == id)` — `pose.rs`, `link.rs` and
+    /// `transform.rs` each had their own copy. `None` means "not in the registry",
+    /// which callers must treat as "skip", never as a body at the origin.
+    pub fn get(&self, ephemeris_id: i32) -> Option<&BodyDescriptor> {
+        self.bodies.iter().find(|b| b.ephemeris_id == ephemeris_id)
+    }
+
     /// Generates a manifest of the primary inner solar system bodies.
     ///
     /// **Note**: rotation is authored ONCE, as the published IAU/WGCCRE

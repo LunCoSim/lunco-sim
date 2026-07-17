@@ -7,6 +7,12 @@
 
 # LunaNet Comms Mast — tall tower + shallow dish (flattened sphere) + feed.
 # Wants a high ridge point for Earth line-of-sight.
+#
+# The connectivity endpoint is the `Antenna` child at dish height, NOT this root:
+# a mast exists to lift the antenna clear of the terrain, so a node authored at its
+# base (y = 0) would defeat the whole point and take the ground's line of sight.
+# Override `lunco:link:class` per instance if a scene has more than one role of
+# mast; identity is the prim's GID either way, so two masts never collide.
 def Xform "CommsMast" (
     kind = "component"
     doc = "LunaNet comms mast — tower, dish and feed horn. The base's link home; put it on the highest ground you have for Earth line-of-sight."
@@ -14,6 +20,18 @@ def Xform "CommsMast" (
 )
 {
     uniform bool lunco:spawnable = true
+
+    # The link endpoint, at the dish. Scene-local (no anchor/orbit): the site frame
+    # poses it, so it rides whatever ground the mast is placed on.
+    def Xform "Antenna" (
+        prepend apiSchemas = ["LunCoLinkAPI"]
+    )
+    {
+        bool lunco:linkNode = true
+        string lunco:link:class = "base"
+        double3 xformOp:translate = (0, 10.6, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
 
     def Cube "FootPad" (
         prepend apiSchemas = ["PhysicsCollisionAPI"]

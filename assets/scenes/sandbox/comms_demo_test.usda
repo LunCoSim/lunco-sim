@@ -8,8 +8,10 @@
 # Comms connectivity demo (doc 43): a Shackleton-ridge site with a rover
 # (antenna aboard), a base mast, a lunar relay satellite (ELFO) and an Earth
 # DSN station. The root anchor georeferences the scene on the Moon — the site
-# frame that grounds every scene-local antenna. Link state is published as
-# ports: e.g. `read_port <rover>/comms:route_earth:connected`.
+# frame that grounds every scene-local antenna. Link state is published as a
+# `LinkState` component per node (readable via `query_entity`) plus the
+# `query("Links")` graph snapshot and `link.aos` / `link.los` events. Ask it from
+# rhai: `can_reach("rover", "earth")` (see `scripting/prelude/links.rhai`).
 def Xform "CommsDemoScene" (
     doc = "MoonDAO comms demo: Malapert Massif site with rover, base mast, lunar relay (ELFO) and the three DSN complexes on Earth — connectivity via the generic link kernel (lunco:linkNode; link.aos/link.los events)."
     prepend apiSchemas = ["LunCoCatalogAPI"]

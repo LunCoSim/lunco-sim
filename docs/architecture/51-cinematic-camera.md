@@ -1,4 +1,4 @@
-# 50 — Cinematic Camera Paths
+# 51 — Cinematic Camera Paths
 
 Status: design. Supersedes nothing; extends [35-animate-perspective](35-animate-perspective.md),
 whose build-order step 1 (camera-track cuts) is already shipped.

@@ -29,6 +29,14 @@ mod systems;
 /// this crate has already shipped (the Shackleton sun 45° below the horizon; an ecliptic sun
 /// direction published as site-ENU) into COMPILE ERRORS.
 pub mod frames;
+/// Frame CONVERSIONS over [`frames`] — hub-and-spoke through `Solar`, like SPICE.
+///
+/// This file shipped in `acc61943` and was never declared as a module, so it has never
+/// been compiled: `BodyRegistry` (a name that does not exist — the registry is
+/// [`registry::CelestialBodyRegistry`]) would have failed on the first build. Which is
+/// also why its `libration_in_solar` — the only L1/L2 solver in the tree — has never
+/// been reachable from a scene.
+pub mod transform;
 /// The frame conversions. `coords` is `pub` because `lunco-celestial-ephemeris` was
 /// re-implementing `ecliptic_to_bevy` by hand for want of access — a conversion people copy
 /// is a conversion that drifts.
@@ -175,6 +183,7 @@ impl Plugin for CelestialPlugin {
         app.init_resource::<link::LinkConfig>();
         app.register_type::<link::LinkConfig>();
         app.register_type::<link::LinkNode>();
+        app.register_type::<link::LinkOccluder>();
         app.register_type::<link::LinkState>();
         link::register_all_commands(app);
         // `update_links` is a REGULAR (non-exclusive) system — it writes through

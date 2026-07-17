@@ -14,6 +14,7 @@
 
 mod env_light;
 pub mod horizon_shade;
+pub mod link_viz;
 pub mod look_cache;
 mod scene_camera;
 mod sensor_beams;
@@ -97,6 +98,7 @@ impl Plugin for LuncoRenderPlugin {
         env_light::build(app);
         world_label::build(app);
         sensor_beams::build(app);
+        link_viz::build(app);
     }
 }
 

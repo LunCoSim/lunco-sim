@@ -57,6 +57,7 @@
 
 use bevy::math::DVec3;
 use bevy::math::DQuat;
+use bevy::prelude::{Component, Reflect, ReflectComponent};
 
 use crate::coords::ecliptic_to_bevy;
 use crate::ephemeris::EphemerisProvider;
@@ -64,7 +65,57 @@ use crate::frames::{
     BodyFixed, BodyId, BodyInertial, Center, LPoint, Pair, Pos, SiteEnu, Solar, Synodic,
 };
 use crate::geo;
-use crate::registry::BodyRegistry;
+use crate::registry::CelestialBodyRegistry;
+
+/// Places an entity at a **libration point** of a two-body pair — Earth–Moon L1 is
+/// `{ primary: 399, secondary: 301, point: L1 }`.
+///
+/// The third placement kind, beside [`GeodeticAnchor`] (on a body) and [`KeplerOrbit`]
+/// (around a body). It lives here, with the solver that resolves it, exactly as
+/// `KeplerOrbit` lives with `position_bevy_m` — [`pose.rs`] reads it and writes a
+/// [`SolarFramePose`], after which a libration relay is just another link node.
+///
+/// **`up` is ZERO**, like an orbit: an L-point has no local horizon, so an elevation
+/// mask against it is meaningless (and the kernel skips it, as it does for orbits).
+///
+/// # What this is and is not
+///
+/// It is a **frame origin**, not a trajectory. L1/L2/L3 come from the first-order
+/// CR3BP series (good to ~1% of the L-point distance for Earth–Moon); L4/L5 are
+/// exact. A station is never *at* an L-point — it flies a halo/Lissajous orbit
+/// *around* one, which you integrate in [`Synodic`]. Author this for "a relay parked
+/// at L1" and you get the point itself, which is the right level of fidelity for
+/// connectivity geometry and the wrong one for station-keeping ΔV.
+///
+/// # A warning worth authoring against
+///
+/// L1 lies ON the primary–secondary line, so from the lunar surface it is within
+/// **~1.4°** of Earth in the sky (0° at the sub-Earth point). Terrain that blocks
+/// Earth blocks L1 too — an L1 relay does NOT cure a radio shadow. **L2** serves the
+/// far side, where Earth is never visible. What L1 buys is range (~61,300 km from
+/// the Moon versus 384,400 km to Earth — 6.3× closer) and freedom from DSN handover.
+///
+/// [`GeodeticAnchor`]: crate::geo::GeodeticAnchor
+/// [`KeplerOrbit`]: crate::kepler::KeplerOrbit
+/// [`SolarFramePose`]: crate::pose::SolarFramePose
+/// [`pose.rs`]: crate::pose
+#[derive(Component, Debug, Clone, Copy, Reflect)]
+#[reflect(Component)]
+pub struct LibrationAnchor {
+    /// NAIF id of the primary (399 Earth for Earth–Moon, 10 Sun for Sun–Earth).
+    pub primary: BodyId,
+    /// NAIF id of the secondary (301 Moon for Earth–Moon).
+    pub secondary: BodyId,
+    /// Which of L1–L5.
+    pub point: LPoint,
+}
+
+impl Default for LibrationAnchor {
+    /// Earth–Moon L1 — the pair this simulator is about.
+    fn default() -> Self {
+        Self { primary: 399, secondary: 301, point: LPoint::L1 }
+    }
+}
 
 /// A frame-conversion context: the epoch, the bodies, and where they are.
 ///
@@ -72,28 +123,37 @@ use crate::registry::BodyRegistry;
 /// `Res<>`s without cloning the ephemeris.
 pub struct FrameTree<'a> {
     pub jd: f64,
-    pub registry: &'a BodyRegistry,
+    pub registry: &'a CelestialBodyRegistry,
     pub ephemeris: &'a dyn EphemerisProvider,
 }
 
 impl<'a> FrameTree<'a> {
-    pub fn new(jd: f64, registry: &'a BodyRegistry, ephemeris: &'a dyn EphemerisProvider) -> Self {
+    pub fn new(jd: f64, registry: &'a CelestialBodyRegistry, ephemeris: &'a dyn EphemerisProvider) -> Self {
         Self { jd, registry, ephemeris }
     }
 
     // ── The hub: where is a centre, in Solar? ────────────────────────────────────────────────
 
-    /// The position of any [`Center`] in the hub frame.
+    /// The position of any [`Center`] in the hub frame, or `None` when the ephemeris
+    /// does not carry the body it needs.
     ///
     /// This is the one place that knows how to *find* things, and everything else composes
     /// through it.
-    pub fn center_in_solar(&self, center: Center) -> Pos<Solar> {
+    ///
+    /// **Why `Option`.** `global_position` returns one, and the alternative — falling back
+    /// to `ZERO` — would place the body at the SUN'S CENTRE and report it with exactly the
+    /// confidence of a real answer. That is the failure `pose.rs` already refuses by name
+    /// ("skipping beats reporting a pose at the Sun's centre that looks exactly like a real
+    /// one"). A missing body is a `None` all the way up; callers skip.
+    pub fn center_in_solar(&self, center: Center) -> Option<Pos<Solar>> {
         match center {
             // The provider is heliocentric, so the Sun is the origin by construction. (The true
             // SSB differs from the Sun's centre by roughly a solar radius — under a thousandth
             // of an AU — and the provider does not model it; saying so beats pretending.)
-            Center::Ssb => Pos::<Solar>::ZERO,
-            Center::Body(id) => ecliptic_to_bevy(self.ephemeris.global_position(id, self.jd)),
+            Center::Ssb => Some(Pos::<Solar>::ZERO),
+            Center::Body(id) => {
+                self.ephemeris.global_position(id, self.jd).map(ecliptic_to_bevy)
+            }
             Center::Libration { primary, secondary, point } => {
                 self.libration_in_solar(primary, secondary, point)
             }
@@ -102,7 +162,7 @@ impl<'a> FrameTree<'a> {
             // most a body radius — but a caller that needs site precision must go through
             // `geo::solar_position_of_geodetic`, which has the anchor.
             Center::Site { body, .. } => {
-                ecliptic_to_bevy(self.ephemeris.global_position(body, self.jd))
+                self.ephemeris.global_position(body, self.jd).map(ecliptic_to_bevy)
             }
         }
     }
@@ -117,25 +177,31 @@ impl<'a> FrameTree<'a> {
     /// distance for Earth–Moon and much better for Sun–Earth. It is a *frame origin*, not a
     /// trajectory: if you are propagating a halo orbit you integrate in [`Synodic`], you do not
     /// lean on this number.
+    /// `None` if either body is missing from the ephemeris or the registry — an
+    /// L-point is defined by a PAIR, so half a pair is not a point, and a silent
+    /// fallback to the primary's centre would put a relay 61,000 km from where the
+    /// scene says it is.
     pub fn libration_in_solar(
         &self,
         primary: BodyId,
         secondary: BodyId,
         point: LPoint,
-    ) -> Pos<Solar> {
-        let p = self.center_in_solar(Center::Body(primary));
-        let s = self.center_in_solar(Center::Body(secondary));
+    ) -> Option<Pos<Solar>> {
+        let p = self.center_in_solar(Center::Body(primary))?;
+        let s = self.center_in_solar(Center::Body(secondary))?;
         let r = s - p;
         let d = r.length();
         if d <= 0.0 {
-            return p;
+            return None;
         }
 
-        let gm_p = self.registry.get(primary).map(|b| b.gm).unwrap_or(0.0);
-        let gm_s = self.registry.get(secondary).map(|b| b.gm).unwrap_or(0.0);
+        // Both masses are REQUIRED: µ is the whole model. A missing gm silently
+        // read as 0.0 gives µ = 0 or 1 and an L-point sitting exactly on a body.
+        let gm_p = self.registry.get(primary)?.gm;
+        let gm_s = self.registry.get(secondary)?.gm;
         let total = gm_p + gm_s;
         if total <= 0.0 {
-            return p;
+            return None;
         }
         // µ = m2 / (m1 + m2)
         let mu = gm_s / total;
@@ -143,7 +209,7 @@ impl<'a> FrameTree<'a> {
         let hill = (mu / 3.0).powf(1.0 / 3.0);
 
         let unit = r * (1.0 / d);
-        match point {
+        Some(match point {
             // Between the primaries, just inside the secondary.
             LPoint::L1 => s - unit * (d * hill),
             // Beyond the secondary.
@@ -153,12 +219,12 @@ impl<'a> FrameTree<'a> {
             // Equilateral — EXACT. Rotate the primary→secondary vector by ±60° about the orbit
             // normal, which we take from the pair's own motion rather than assuming the ecliptic.
             LPoint::L4 | LPoint::L5 => {
-                let normal = self.pair_orbit_normal(primary, secondary);
+                let normal = self.pair_orbit_normal(primary, secondary)?;
                 let sign = if matches!(point, LPoint::L4) { 1.0 } else { -1.0 };
                 let rot = DQuat::from_axis_angle(normal, sign * std::f64::consts::FRAC_PI_3);
                 p + Pos::<Solar>::new(rot * r.raw())
             }
-        }
+        })
     }
 
     /// The orbit normal of `secondary` about `primary`, from finite difference of the ephemeris.
@@ -166,104 +232,103 @@ impl<'a> FrameTree<'a> {
     /// Finite difference, because the provider is position-only — there are no velocities
     /// anywhere in this crate. A one-hour step is small against any orbit we model and large
     /// against `f64` noise at AU scale.
-    fn pair_orbit_normal(&self, primary: BodyId, secondary: BodyId) -> DVec3 {
+    fn pair_orbit_normal(&self, primary: BodyId, secondary: BodyId) -> Option<DVec3> {
         const DT_DAYS: f64 = 1.0 / 24.0;
-        let r0 = (self.center_in_solar(Center::Body(secondary))
-            - self.center_in_solar(Center::Body(primary)))
+        let r0 = (self.center_in_solar(Center::Body(secondary))?
+            - self.center_in_solar(Center::Body(primary))?)
         .raw();
         let later = FrameTree::new(self.jd + DT_DAYS, self.registry, self.ephemeris);
-        let r1 = (later.center_in_solar(Center::Body(secondary))
-            - later.center_in_solar(Center::Body(primary)))
+        let r1 = (later.center_in_solar(Center::Body(secondary))?
+            - later.center_in_solar(Center::Body(primary))?)
         .raw();
         let n = r0.cross(r1);
-        if n.length_squared() > 0.0 {
+        Some(if n.length_squared() > 0.0 {
             n.normalize()
         } else {
             // Degenerate (the two coincide, or the ephemeris is a stub) — fall back to ecliptic
             // north rather than producing a NaN that would silently poison every downstream
             // rotation.
             DVec3::Y
-        }
+        })
     }
 
     // ── Into the hub ────────────────────────────────────────────────────────────────────────
 
-    /// Body-fixed (rotating with the body) → Solar.
-    pub fn body_fixed_to_solar(&self, p: Pos<BodyFixed>) -> Pos<Solar> {
+    /// Body-fixed (rotating with the body) → Solar. `None` if the body is unknown.
+    pub fn body_fixed_to_solar(&self, p: Pos<BodyFixed>) -> Option<Pos<Solar>> {
         let Center::Body(id) = p.center() else {
             // A body-fixed frame centred on something that is not a body is a contradiction;
             // saying so beats silently rotating by identity.
             debug_assert!(false, "body-fixed frame centred on {:?}", p.center());
-            return Pos::<Solar>::new(p.raw());
+            return None;
         };
-        let Some(desc) = self.registry.get(id) else {
-            return Pos::<Solar>::new(p.raw());
-        };
+        let desc = self.registry.get(id)?;
         let rot = geo::body_rotation(desc, self.jd);
-        self.center_in_solar(Center::Body(id)) + Pos::<Solar>::new(rot * p.raw())
+        Some(self.center_in_solar(Center::Body(id))? + Pos::<Solar>::new(rot * p.raw()))
     }
 
     /// Body-centred inertial (NOT rotating — the frame Kepler elements live in) → Solar.
-    pub fn body_inertial_to_solar(&self, p: Pos<BodyInertial>) -> Pos<Solar> {
+    /// `None` if the body is unknown.
+    pub fn body_inertial_to_solar(&self, p: Pos<BodyInertial>) -> Option<Pos<Solar>> {
         let Center::Body(id) = p.center() else {
             debug_assert!(false, "body-inertial frame centred on {:?}", p.center());
-            return Pos::<Solar>::new(p.raw());
+            return None;
         };
-        let Some(desc) = self.registry.get(id) else {
-            return Pos::<Solar>::new(p.raw());
-        };
+        let desc = self.registry.get(id)?;
         // The equatorial lift. Skipping it is a live bug in `pose.rs` — it costs up to the
         // body's axial tilt (±23.4° of ground track on Earth), silently.
         let rot = geo::equatorial_frame(desc, self.jd);
-        self.center_in_solar(Center::Body(id)) + Pos::<Solar>::new(rot * p.raw())
+        Some(self.center_in_solar(Center::Body(id))? + Pos::<Solar>::new(rot * p.raw()))
     }
 
     /// Synodic / co-rotating (the CR3BP frame; L1–L5 are stationary here) → Solar.
     ///
     /// Basis: +X along primary→secondary, +Y the orbit normal, +Z completing it. Origin at the
     /// pair's barycentre, which is what makes L-points sit still.
-    pub fn synodic_to_solar(&self, p: Pos<Synodic>) -> Pos<Solar> {
+    pub fn synodic_to_solar(&self, p: Pos<Synodic>) -> Option<Pos<Solar>> {
         let Pair { primary, secondary } = p.pair();
-        let rot = self.synodic_basis(primary, secondary);
-        self.pair_barycenter(primary, secondary) + Pos::<Solar>::new(rot * p.raw())
+        let rot = self.synodic_basis(primary, secondary)?;
+        Some(self.pair_barycenter(primary, secondary)? + Pos::<Solar>::new(rot * p.raw()))
     }
 
     /// Solar → synodic. The inverse of [`synodic_to_solar`](Self::synodic_to_solar) — this is
     /// what turns a heliocentric trajectory into the co-rotating picture where a halo orbit
     /// looks like a halo orbit.
-    pub fn solar_to_synodic(&self, p: Pos<Solar>, pair: Pair) -> Pos<Synodic> {
-        let rot = self.synodic_basis(pair.primary, pair.secondary).inverse();
-        let rel = p - self.pair_barycenter(pair.primary, pair.secondary);
-        Pos::<Synodic>::in_pair(pair, rot * rel.raw())
+    pub fn solar_to_synodic(&self, p: Pos<Solar>, pair: Pair) -> Option<Pos<Synodic>> {
+        let rot = self.synodic_basis(pair.primary, pair.secondary)?.inverse();
+        let rel = p - self.pair_barycenter(pair.primary, pair.secondary)?;
+        Some(Pos::<Synodic>::in_pair(pair, rot * rel.raw()))
     }
 
-    fn synodic_basis(&self, primary: BodyId, secondary: BodyId) -> DQuat {
-        let p = self.center_in_solar(Center::Body(primary));
-        let s = self.center_in_solar(Center::Body(secondary));
+    fn synodic_basis(&self, primary: BodyId, secondary: BodyId) -> Option<DQuat> {
+        let p = self.center_in_solar(Center::Body(primary))?;
+        let s = self.center_in_solar(Center::Body(secondary))?;
         let x = (s - p).raw();
         if x.length_squared() <= 0.0 {
-            return DQuat::IDENTITY;
+            return Some(DQuat::IDENTITY);
         }
         let x = x.normalize();
-        let n = self.pair_orbit_normal(primary, secondary);
+        let n = self.pair_orbit_normal(primary, secondary)?;
         // Orthonormalise: the normal is already perpendicular to x up to numerical noise, but
         // building a basis from a not-quite-orthogonal pair yields a skewed frame that shows up
         // as a slow drift, not an error.
         let z = x.cross(n).normalize();
         let y = z.cross(x).normalize();
-        DQuat::from_mat3(&bevy::math::DMat3::from_cols(x, y, z))
+        Some(DQuat::from_mat3(&bevy::math::DMat3::from_cols(x, y, z)))
     }
 
-    fn pair_barycenter(&self, primary: BodyId, secondary: BodyId) -> Pos<Solar> {
-        let p = self.center_in_solar(Center::Body(primary));
-        let s = self.center_in_solar(Center::Body(secondary));
-        let gm_p = self.registry.get(primary).map(|b| b.gm).unwrap_or(0.0);
-        let gm_s = self.registry.get(secondary).map(|b| b.gm).unwrap_or(0.0);
+    fn pair_barycenter(&self, primary: BodyId, secondary: BodyId) -> Option<Pos<Solar>> {
+        let p = self.center_in_solar(Center::Body(primary))?;
+        let s = self.center_in_solar(Center::Body(secondary))?;
+        // Both masses REQUIRED — a missing gm read as 0.0 silently puts the
+        // barycentre on one of the bodies.
+        let gm_p = self.registry.get(primary)?.gm;
+        let gm_s = self.registry.get(secondary)?.gm;
         let total = gm_p + gm_s;
         if total <= 0.0 {
-            return p;
+            return None;
         }
-        p + (s - p) * (gm_s / total)
+        Some(p + (s - p) * (gm_s / total))
     }
 
     // ── Re-centring within the hub ──────────────────────────────────────────────────────────
@@ -273,8 +338,8 @@ impl<'a> FrameTree<'a> {
     /// **This is what makes "the Moon around the Sun" and "the Moon around the Earth" the same
     /// data.** Feed a trajectory through it with `Center::Body(10)` and you get the heliocentric
     /// path; with `Center::Body(399)` you get the geocentric ellipse. Nothing else changes.
-    pub fn relative_to(&self, p: Pos<Solar>, center: Center) -> Pos<Solar> {
-        p - self.center_in_solar(center)
+    pub fn relative_to(&self, p: Pos<Solar>, center: Center) -> Option<Pos<Solar>> {
+        Some(p - self.center_in_solar(center)?)
     }
 }
 
@@ -301,8 +366,11 @@ mod tests {
         }
     }
 
-    fn registry() -> BodyRegistry {
-        BodyRegistry::default()
+    /// The real catalog — the stub supplies POSITIONS, the registry supplies the
+    /// MASSES (`gm`) the CR3BP needs, and there is no second hand-written copy of
+    /// those to drift.
+    fn registry() -> CelestialBodyRegistry {
+        CelestialBodyRegistry::default_system()
     }
 
     /// THE PROPERTY THE USER ASKED FOR: the same Moon, re-expressed, is a different trajectory.
@@ -312,10 +380,10 @@ mod tests {
         let reg = registry();
         let tree = FrameTree::new(2_451_545.0, &reg, &Stub);
 
-        let moon_solar = tree.center_in_solar(Center::Body(301));
+        let moon_solar = tree.center_in_solar(Center::Body(301)).expect("stub has the Moon");
 
-        let heliocentric = tree.relative_to(moon_solar, Center::Body(10));
-        let geocentric = tree.relative_to(moon_solar, Center::Body(399));
+        let heliocentric = tree.relative_to(moon_solar, Center::Body(10)).unwrap();
+        let geocentric = tree.relative_to(moon_solar, Center::Body(399)).unwrap();
 
         let au = crate::coords::AU_TO_M;
         assert!(
@@ -335,10 +403,10 @@ mod tests {
     fn the_triangular_points_are_equilateral() {
         let reg = registry();
         let tree = FrameTree::new(2_451_545.0, &reg, &Stub);
-        let l4 = tree.libration_in_solar(10, 399, LPoint::L4);
+        let l4 = tree.libration_in_solar(10, 399, LPoint::L4).expect("Sun+Earth are known");
 
-        let sun = tree.center_in_solar(Center::Body(10));
-        let earth = tree.center_in_solar(Center::Body(399));
+        let sun = tree.center_in_solar(Center::Body(10)).unwrap();
+        let earth = tree.center_in_solar(Center::Body(399)).unwrap();
         let d_sun = (l4 - sun).length();
         let d_earth = (l4 - earth).length();
         let d_pair = (earth - sun).length();
@@ -356,10 +424,62 @@ mod tests {
         let pair = Pair { primary: 10, secondary: 399 };
 
         let original = Pos::<Solar>::new(DVec3::new(1.4e11, 3.0e9, -2.0e9));
-        let syn = tree.solar_to_synodic(original, pair);
-        let back = tree.synodic_to_solar(syn);
+        let syn = tree.solar_to_synodic(original, pair).expect("Sun+Earth are known");
+        let back = tree.synodic_to_solar(syn).expect("Sun+Earth are known");
 
         let err = (back - original).length();
         assert!(err < 1.0, "round-trip error {err} m — the basis is not orthonormal");
+    }
+
+    /// An unknown body yields `None`, never a position.
+    ///
+    /// This is the whole reason `center_in_solar` returns `Option`: the old signature
+    /// could only answer with a `Pos`, so a body the ephemeris has never heard of came
+    /// back as `ZERO` — the SUN'S CENTRE — indistinguishable from a real answer. A
+    /// relay placed there would be 1 AU from where the scene put it, silently.
+    #[test]
+    fn an_unknown_body_is_none_not_the_origin() {
+        let reg = registry();
+        let tree = FrameTree::new(2_451_545.0, &reg, &Stub);
+        assert!(tree.center_in_solar(Center::Body(499)).is_none(), "Mars is not in the stub");
+        // …and an L-point needs BOTH bodies: half a pair is not a point.
+        assert!(tree.libration_in_solar(399, 499, LPoint::L1).is_none());
+        assert!(tree.libration_in_solar(499, 301, LPoint::L2).is_none());
+    }
+
+    /// **Earth–Moon L1 sits between the two, ~61,300 km from the Moon.**
+    ///
+    /// The number the connectivity work turns on: a relay there is 6.3× closer than
+    /// Earth, and — because it lies ON the Earth–Moon line — it is within ~1.4° of
+    /// Earth in the lunar sky, so it shares Earth's terrain shadow rather than curing
+    /// it. L2 is the mirror image, beyond the far side.
+    #[test]
+    fn earth_moon_l1_sits_between_the_bodies_at_the_hill_radius() {
+        let reg = registry();
+        let tree = FrameTree::new(2_451_545.0, &reg, &Stub);
+
+        let earth = tree.center_in_solar(Center::Body(399)).unwrap();
+        let moon = tree.center_in_solar(Center::Body(301)).unwrap();
+        let l1 = tree.libration_in_solar(399, 301, LPoint::L1).unwrap();
+        let l2 = tree.libration_in_solar(399, 301, LPoint::L2).unwrap();
+
+        let d_pair = (moon - earth).length();
+        let l1_from_moon = (l1 - moon).length();
+        let l2_from_moon = (l2 - moon).length();
+
+        // Hill factor for Earth–Moon: (µ/3)^(1/3) ≈ 0.159 → ≈ 61,300 km.
+        assert!(
+            (l1_from_moon - 61_300_000.0).abs() < 2.0e6,
+            "Earth–Moon L1 should be ~61,300 km from the Moon, got {:.0} km",
+            l1_from_moon / 1000.0
+        );
+        // L1 is BETWEEN them: closer to Earth than the Moon is.
+        assert!((l1 - earth).length() < d_pair, "L1 must lie inside the pair");
+        // L2 is beyond: farther from Earth than the Moon is, by the same offset.
+        assert!((l2 - earth).length() > d_pair, "L2 must lie outside the pair");
+        assert!(
+            (l1_from_moon - l2_from_moon).abs() < 1.0,
+            "collinear L1/L2 are symmetric about the secondary in this first-order series"
+        );
     }
 }

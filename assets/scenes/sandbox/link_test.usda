@@ -1,18 +1,53 @@
 #usda 1.0
 (
     defaultPrim = "LinkTest"
-    doc = "Minimal connectivity-kernel smoke scene: a lunar relay + two DSN ground stations, all `lunco:linkNode`. No terrain/globe/rovers, so it exercises the generic link kernel (pose → pairwise → verdict → LinkState) without the avian/terrain scene issues."
+    doc = "Connectivity-kernel smoke scene: every PLACEMENT kind the kernel can pose a link node from — geodetic (Earth + Moon surface), Kepler (lunar orbit), and libration (Earth-Moon L1/L2/L4). No terrain, globe or rovers, so it exercises pose -> pairwise -> verdict -> LinkState on its own."
 )
 # Scene root: an `assembly` — a thing you OPEN, not a part you place.
+#
+# ── What this scene is for ───────────────────────────────────────────────────
+#
+# One node per PLACEMENT kind, because placement is what the pose system resolves
+# and everything downstream (range, elevation, occultation, routing) is the same
+# code regardless of how a node got its position. Authored as DATA: the kernel
+# learns nothing about "DSN" or "L1" — it sees `lunco:linkNode` prims with poses.
+#
+# The interesting geometry is REAL, not staged:
+#
+#   * The three DSN complexes are at their true coordinates and Earth ROTATES
+#     (`body_rotation(desc, jd)`), so which of them can see the Moon changes
+#     through the day — that is the handover, and it falls out of the ephemeris
+#     rather than being scripted.
+#   * L1 sits ON the Earth-Moon line, ~61,300 km from the Moon. From the lunar
+#     surface it is within ~1.4 deg of Earth in the sky, so it shares Earth's
+#     terrain shadow instead of curing it. What it buys is RANGE (6.3x closer
+#     than Earth) and no handover.
+#   * L2 is the mirror image, beyond the far side — the one that serves ground
+#     Earth can never see (Queqiao/Chang'e-4 flies a halo about it).
+#   * L4 is exact (equilateral), unlike the first-order collinear series.
+#
+# ── Frames ───────────────────────────────────────────────────────────────────
+#
+# There is deliberately NO root `lunco:anchor:*` here, so no site frame exists.
+# Every node below is placed by its OWN anchor/orbit/libration, so each resolves
+# independently. A scene-local prim (a rover mast) would need that site anchor —
+# which is exactly the trap the school twin hit.
 def Xform "LinkTest" (
     kind = "assembly"
-    doc = "Connectivity-kernel smoke scene: a lunar relay plus two DSN ground stations, all `lunco:linkNode`. No terrain, globe or rovers — it exercises the generic link kernel (pose → pairwise → verdict → LinkState) on its own."
+    doc = "Connectivity-kernel smoke scene: one link node per placement kind — Earth-surface geodetic, Moon-surface geodetic, lunar Kepler orbit, and Earth-Moon L1/L2/L4 libration points."
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
     bool lunco:spawnable = false
 
-    def Xform "Relay"
+    # An epoch, so the DSN geometry is reproducible. Earth's rotation is a
+    # function of this: change it and the stations move, which is the point.
+    double lunco:time:epochJd = 2461395.5
+
+    # ── Placement 1: Kepler — a satellite around a body ──────────────────────
+    def Xform "Relay" (
+        prepend apiSchemas = ["LunCoLinkAPI"]
+    )
     {
         bool lunco:linkNode = true
         string lunco:link:class = "relay"
@@ -23,23 +58,128 @@ def Xform "LinkTest" (
         double lunco:orbit:meanAnomalyDeg = 0
     }
 
-    def Xform "DSS_Goldstone"
+    # ── Placement 2: geodetic on Earth — the DSN, and Earth rotates ──────────
+    # Real complex coordinates. At any epoch some face the Moon and some are on
+    # the far side of Earth, which the kernel severs by body-occultation — so
+    # this trio is the handover case, from the ephemeris rather than a script.
+    def Xform "DSS_Goldstone" (
+        prepend apiSchemas = ["LunCoLinkAPI"]
+    )
     {
         bool lunco:linkNode = true
         string lunco:link:class = "earth"
         double lunco:link:minElevationDeg = 5
         double lunco:anchor:lat = 35.4267
         double lunco:anchor:lon = -116.89
+        double lunco:anchor:height = 1001
         int lunco:anchor:body = 399
     }
 
-    def Xform "DSS_Canberra"
+    def Xform "DSS_Canberra" (
+        prepend apiSchemas = ["LunCoLinkAPI"]
+    )
     {
         bool lunco:linkNode = true
         string lunco:link:class = "earth"
         double lunco:link:minElevationDeg = 5
         double lunco:anchor:lat = -35.4014
         double lunco:anchor:lon = 148.9817
+        double lunco:anchor:height = 688
         int lunco:anchor:body = 399
+    }
+
+    def Xform "DSS_Madrid" (
+        prepend apiSchemas = ["LunCoLinkAPI"]
+    )
+    {
+        bool lunco:linkNode = true
+        string lunco:link:class = "earth"
+        double lunco:link:minElevationDeg = 5
+        double lunco:anchor:lat = 40.4314
+        double lunco:anchor:lon = -4.2481
+        double lunco:anchor:height = 837
+        int lunco:anchor:body = 399
+    }
+
+    # ── Placement 3: geodetic on the MOON — a surface endpoint ───────────────
+    # Malapert Massif: the site whose whole engineering fame is connectivity —
+    # near-continuous Earth visibility from the summit (Earth sits ~4 deg up at
+    # this latitude) while the terrain around it is in radio shadow.
+    def Xform "MalapertBase" (
+        prepend apiSchemas = ["LunCoLinkAPI"]
+    )
+    {
+        bool lunco:linkNode = true
+        string lunco:link:class = "base"
+        double lunco:link:minElevationDeg = 0
+        double lunco:anchor:lat = -85.43
+        double lunco:anchor:lon = -0.94
+        int lunco:anchor:body = 301
+    }
+
+    # ── Placement 4: LIBRATION — a relay parked at an L-point of a PAIR ──────
+    #
+    # `lunco:libration:*` is the third placement kind. The pair IS the placement:
+    # primary + secondary + which point. The CR3BP solver resolves it per epoch,
+    # so these follow the real Earth-Moon geometry rather than sitting at a
+    # baked offset.
+
+    # Earth-Moon L1 — between the two, ~61,300 km from the Moon.
+    # NOTE: co-directional with Earth as seen from the lunar surface (~1.4 deg),
+    # so it does NOT cure a terrain radio-shadow. It buys range and no handover.
+    def Xform "L1_Relay" (
+        prepend apiSchemas = ["LunCoLinkAPI"]
+    )
+    {
+        bool lunco:linkNode = true
+        string lunco:link:class = "relay"
+        int lunco:libration:primary = 399
+        int lunco:libration:secondary = 301
+        token lunco:libration:point = "L1"
+    }
+
+    # Earth-Moon L2 — beyond the far side. THE farside relay: ground that can
+    # never see Earth can see this.
+    def Xform "L2_Relay" (
+        prepend apiSchemas = ["LunCoLinkAPI"]
+    )
+    {
+        bool lunco:linkNode = true
+        string lunco:link:class = "relay"
+        int lunco:libration:primary = 399
+        int lunco:libration:secondary = 301
+        token lunco:libration:point = "L2"
+    }
+
+    # Earth-Moon L4 — triangular, and EXACT (no series approximation): one leg
+    # of an equilateral triangle from both primaries.
+    def Xform "L4_Camp" (
+        prepend apiSchemas = ["LunCoLinkAPI"]
+    )
+    {
+        bool lunco:linkNode = true
+        string lunco:link:class = "relay"
+        int lunco:libration:primary = 399
+        int lunco:libration:secondary = 301
+        token lunco:libration:point = "L4"
+    }
+
+    # ── Verdict input: RANGE ─────────────────────────────────────────────────
+    # Same lunar orbit as `Relay`, but authored with a 1000 km reach — far short
+    # of the ~384,000 km to Earth. It must link to lunar-neighbourhood nodes and
+    # never to a DSN complex, with no occlusion involved. Range is a verdict
+    # input like any other; this is the node that proves it is read.
+    def Xform "ShortRangeSat" (
+        prepend apiSchemas = ["LunCoLinkAPI"]
+    )
+    {
+        bool lunco:linkNode = true
+        string lunco:link:class = "relay"
+        double lunco:link:maxRangeM = 1000000
+        int lunco:orbit:body = 301
+        double lunco:orbit:semiMajorAxisM = 6540000
+        double lunco:orbit:eccentricity = 0
+        double lunco:orbit:inclinationDeg = 90
+        double lunco:orbit:meanAnomalyDeg = 180
     }
 }

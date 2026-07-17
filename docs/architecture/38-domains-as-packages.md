@@ -842,7 +842,10 @@ spellings** — chosen per layer, never invented.
   `ui:nodegraph:node:pos`, `inputs:`/`outputs:` + connections.
 - **KEEP (FMI/SSP-correct):** `SimComponent.{inputs,outputs,parameters}`, `SimConnection.{start,end}_connector`,
   `ResolvedPort` (= FMI valueReference), `PortDirection`.
-- **KEEP (LunCo glue):** `lunco:vessel/avatar/scenario/nextScene/triggerZone/net:*/terrain:*/comms:*/celestial:*`.
+- **KEEP (LunCo glue):** `lunco:vessel/avatar/scenario/nextScene/triggerZone/net:*/terrain:*/link:*/occluder/celestial:*`.
+  (`lunco:comms:*` is **not** on this list — it is the vocabulary §14.3 records as deleted. Connectivity is
+  authored as the generic `lunco:linkNode` / `lunco:link:*` (`LunCoLinkAPI`) and `lunco:occluder`
+  (`LunCoOccluderAPI`) — see [doc 49](./49-connectivity-link-kernel.md).)
 
 ### 14.7 Three tiers: standard schema → LunCo applied schema → bare attr
 

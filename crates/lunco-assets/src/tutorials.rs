@@ -57,6 +57,38 @@ pub fn tutorial_source(rel: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Every embedded tutorial `.rhai`, as `(relative path, source)` — recursive, so it
+/// spans every track shipped from `assets/` (`basic/…`, `sandbox/…`, `lunica/…`).
+/// A Twin's own lessons are NOT here: they load from `<twin>/sim/tutorials/`, so a
+/// track like the Summer Space School is enumerated by that Twin, not by this.
+///
+/// The EMBEDDED copies specifically: this is the enumerator, and there is no
+/// on-disk walk behind it, because its purpose is to let a test hold every tutorial
+/// at once (see `lunco-scripting/tests/prelude_parses.rs`). A rhai asset is
+/// invisible to `cargo check` — a syntax error in one surfaces only when a student
+/// launches that lesson — so being able to enumerate them is what makes them
+/// testable. For LOADING one, use [`tutorial_source`], which prefers the on-disk
+/// file so live edits replay without a rebuild.
+pub fn tutorial_files() -> Vec<(String, String)> {
+    fn walk(dir: &'static Dir<'static>, out: &mut Vec<(String, String)>) {
+        for f in dir.files() {
+            if f.path().extension().and_then(|e| e.to_str()) != Some("rhai") {
+                continue;
+            }
+            if let Some(src) = f.contents_utf8() {
+                out.push((f.path().display().to_string(), src.to_string()));
+            }
+        }
+        for d in dir.dirs() {
+            walk(d, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(&TUTORIALS, &mut out);
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -66,5 +98,41 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(learning_paths_json())
             .expect("learning_paths.json must be valid JSON");
         assert!(v.get("paths").and_then(|p| p.as_array()).is_some_and(|a| !a.is_empty()));
+    }
+
+    /// Every track manifest parses, and every lesson it names actually resolves.
+    ///
+    /// A manifest is data loaded at runtime, so a typo'd `script` path is invisible
+    /// to the compiler and shows up as a lesson that opens to nothing. Enumerated
+    /// from the embedded tree rather than a hardcoded list, so a NEW track is
+    /// covered the moment it exists — the failure mode being guarded here is
+    /// precisely a track that nothing looks at.
+    #[test]
+    fn every_track_manifest_resolves_its_scripts() {
+        let mut manifests = 0;
+        for dir in TUTORIALS.dirs() {
+            let Some(f) = dir.get_file(dir.path().join("tutorials.json")) else {
+                continue; // not a track (e.g. a shared asset dir)
+            };
+            let track = dir.path().display();
+            let src = f.contents_utf8().expect("manifest is utf8");
+            let metas: Vec<serde_json::Value> = serde_json::from_str(src)
+                .unwrap_or_else(|e| panic!("tutorials/{track}/tutorials.json is invalid: {e}"));
+            assert!(!metas.is_empty(), "tutorials/{track}/tutorials.json is empty");
+            manifests += 1;
+
+            for m in metas {
+                let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("<no id>");
+                let script = m
+                    .get("script")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_else(|| panic!("tutorials/{track}: '{id}' has no script"));
+                assert!(
+                    TUTORIALS.get_file(script).is_some(),
+                    "tutorials/{track}: '{id}' names script '{script}', which does not exist"
+                );
+            }
+        }
+        assert!(manifests >= 2, "expected at least the basic + sandbox tracks, found {manifests}");
     }
 }

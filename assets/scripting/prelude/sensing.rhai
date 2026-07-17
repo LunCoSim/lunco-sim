@@ -27,10 +27,41 @@ fn obstacle_ahead(entity, dist) {
 }
 
 /// Ground/terrain height (world Y) under a world (x,z), or () if nothing below.
+///
+/// Casts a ray against COLLIDERS, so it only answers where physics has actually
+/// streamed in. On a scene with a collider ring (colliders exist only around the
+/// rovers) a point a few hundred metres away has nothing to hit and this returns ().
+/// For placing things on terrain, prefer `terrain_height` below.
 fn ground_height(x, z) {
     let r = query("GroundHeight", #{ x: x, z: z });
     if r == () { return (); }
     r.height
+}
+
+/// Terrain height (world Y) under a world (x,z) from the DEM oracle, or () if the
+/// point is outside the height field.
+///
+/// **The one to use for placing anything on the surface.** It reads the retained
+/// height grid directly, so — unlike `ground_height` — it needs no collider, works
+/// before physics streams in, works headless, and is deterministic across peers.
+///
+/// Use it instead of authoring a literal Y. Terrain heights are ABSOLUTE body-datum
+/// metres (a real DEM site sits at y ≈ -1900, not ≈ 0), and `distance`/`arrived` are
+/// 3-D — so a hardcoded `y = 1.0` is not a small error, it is a target ~1.9 km
+/// overhead that no rover can ever "arrive" at. Sample lazily (in the per-tick
+/// closure), not once at load: the terrain may not be resident yet at on_start.
+fn terrain_height(x, z) {
+    let r = query("TerrainHeight", #{ x: x, z: z });
+    if r == () || r.found != true { return (); }
+    r.height
+}
+
+/// A ground point [x, y, z] on the terrain surface under (x, z), or () off-field.
+/// The 3-D target `nav_to`/`arrived` want, built from the oracle rather than a guess.
+fn on_ground(x, z) {
+    let y = terrain_height(x, z);
+    if y == () { return (); }
+    [x, y, z]
 }
 
 /// Nearest registered entity id to a world point, or () if none. Pass `me` as

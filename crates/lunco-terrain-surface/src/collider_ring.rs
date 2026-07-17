@@ -813,15 +813,20 @@ mod tests {
     /// any hidden Y-recentering in the heightfield build would show up.
     const BASE_H: f64 = 1945.0;
 
-    /// Downward parry ray in TILE-LOCAL coordinates → surface height at (lx, lz).
-    fn surface_y(collider: &Collider, lx: f64, lz: f64) -> f64 {
-        let top = BASE_H + 500.0;
+    /// Downward parry ray in TILE-LOCAL coordinates → ABSOLUTE surface altitude at
+    /// (lx, lz). The heightfield is rebased by `origin_y` (see `sample_heights_xz`),
+    /// so it sits near its own entity origin: the ray is cast in that local frame
+    /// and `origin_y` is added back, letting the assertions below stay in the
+    /// absolute datum they are written against.
+    fn surface_y(collider: &Collider, lx: f64, lz: f64, origin_y: f64) -> f64 {
+        // Local, not `BASE_H + 500`: a rebased tile's surface lives near 0.
+        let top = 500.0;
         let ray = Ray::new(DVec3::new(lx, top, lz), DVec3::new(0.0, -1.0, 0.0));
         let toi = collider
             .shape()
             .cast_local_ray(&ray, 10_000.0, true)
             .unwrap_or_else(|| panic!("ray at local ({lx},{lz}) missed the tile"));
-        top - toi
+        origin_y + (top - toi)
     }
 
     /// DIAGNOSTIC: how faithfully does the baked collider reproduce the BOWL DEPTH
@@ -863,9 +868,12 @@ mod tests {
             );
             let oracle_center = HeightSource::height_at(&oracle, region.center[0], region.center[1]);
             let oracle_bowl = BASE_H - oracle_center;
-            let heights = sample_heights_xz(&oracle, region, COLLIDER_RES);
+            // The datum the runtime bake uses (`update_collider_ring`): the tile-centre
+            // surface height — which at this probe point IS `oracle_center`.
+            let origin_y = oracle_center;
+            let heights = sample_heights_xz(&oracle, region, COLLIDER_RES, origin_y);
             let collider = heightfield_collider(heights, side);
-            let collider_center = surface_y(&collider, 0.0, 0.0);
+            let collider_center = surface_y(&collider, 0.0, 0.0, origin_y);
             let collider_bowl = BASE_H - collider_center;
             let gap = collider_center - oracle_center; // >0 => collider ABOVE oracle (rover floats)
             println!(
@@ -879,8 +887,10 @@ mod tests {
     /// a single off-centre analytic crater over a canonical-depth region exactly
     /// the way `update_collider_ring` does, build the same `Collider::heightfield`,
     /// and ray-cast it in tile-local space. Proves (a) [x][z] layout is not
-    /// transposed, (b) scale = full side length, (c) heights stay ABSOLUTE
-    /// (no Y recentering), (d) the bowl depth survives the collider conditioning.
+    /// transposed, (b) scale = full side length, (c) heights are REBASED by the
+    /// tile-centre `origin_y` — local offsets, not absolute altitudes — and recover
+    /// the absolute datum exactly when `origin_y` is added back, (d) the bowl depth
+    /// survives the collider conditioning.
     #[test]
     fn collider_tile_reproduces_offcenter_crater_in_local_frame() {
         // Root region matching a ±4 km DEM; depth-7 tiles are 62.5 m.
@@ -916,27 +926,41 @@ mod tests {
             }],
         );
 
-        // EXACTLY the runtime bake: sample + condition, then the same collider
-        // constructor call as `update_collider_ring`.
-        let heights = sample_heights_xz(&oracle, region, COLLIDER_RES);
+        // EXACTLY the runtime bake: the tile-centre datum, then sample + condition,
+        // then the same collider constructor call as `update_collider_ring`.
+        let origin_y = HeightSource::height_at(&oracle, region.center[0], region.center[1]);
+        let heights = sample_heights_xz(&oracle, region, COLLIDER_RES, origin_y);
+
+        // (c) The rebase itself: sampled heights are LOCAL offsets from `origin_y`.
+        // The tile corner is flat base, so it must read ~0 — NOT ~1945. Asserted on
+        // the raw samples, before parry sees them: a tile baked at absolute altitude
+        // puts its heightfield ~1945 m above its own entity origin, which is the
+        // "avatar moves up" / floating-collider bug this datum exists to prevent.
+        assert!(
+            heights[0][0].abs() < 0.05,
+            "flat corner should be ~0 in the rebased local datum, got {} \
+             (heights still ABSOLUTE — origin_y rebase lost?)",
+            heights[0][0]
+        );
+
         let collider = heightfield_collider(heights, side);
 
-        // (c) Far corner: flat base at ABSOLUTE altitude — no recentering.
-        let far = surface_y(&collider, 25.0, 25.0);
+        // (c) …and adding `origin_y` back recovers the absolute datum exactly.
+        let far = surface_y(&collider, 25.0, 25.0, origin_y);
         assert!(
             (far - BASE_H).abs() < 0.05,
-            "flat field should sit at absolute {BASE_H}, got {far} (Y recentered or scaled?)"
+            "flat field should recover absolute {BASE_H}, got {far} (Y scaled, or origin_y lost?)"
         );
 
         // (a)+(d) Bowl at the crater's true local position.
-        let bowl = surface_y(&collider, dx, dz);
+        let bowl = surface_y(&collider, dx, dz, origin_y);
         assert!(
             bowl < BASE_H - 1.0,
             "crater bowl missing at local ({dx},{dz}): surface {bowl} vs base {BASE_H}"
         );
 
         // (a) NOT at the transposed position: a [z][x] mixup would dig here instead.
-        let transposed = surface_y(&collider, dz, dx);
+        let transposed = surface_y(&collider, dz, dx, origin_y);
         assert!(
             (transposed - BASE_H).abs() < 0.5,
             "surface dips at TRANSPOSED local ({dz},{dx}): {transposed} — heightfield layout is flipped"
@@ -956,7 +980,7 @@ mod tests {
                 let lx = -region.half + ix as f64 * step;
                 let lz = -region.half + iz as f64 * step;
                 let expect = HeightSource::height_at(&gated, region.center[0] + lx, region.center[1] + lz);
-                let got = surface_y(&collider, lx, lz);
+                let got = surface_y(&collider, lx, lz, origin_y);
                 assert!(
                     got <= expect + 1e-6 + 2.0 * COLLIDER_QUANT_STEP && got >= expect - slack - 1e-6,
                     "collider/oracle mismatch at local ({lx:.2},{lz:.2}): collider {got}, oracle {expect}"
@@ -1004,12 +1028,19 @@ mod tests {
                 content_key: 1,
             }],
         );
-        let ha = sample_heights_xz(&oracle, ra, COLLIDER_RES);
-        let hb = sample_heights_xz(&oracle, rb, COLLIDER_RES);
+        // Each tile is rebased by ITS OWN tile-centre datum, exactly as the runtime
+        // bakes them — so the seam must be compared in ABSOLUTE space (local +
+        // origin). Comparing the raw local columns would be meaningless: two tiles
+        // with different centres carry different origins, and identical world
+        // geometry would read as an `origin_a - origin_b` step.
+        let oya = HeightSource::height_at(&oracle, ra.center[0], ra.center[1]);
+        let oyb = HeightSource::height_at(&oracle, rb.center[0], rb.center[1]);
+        let ha = sample_heights_xz(&oracle, ra, COLLIDER_RES, oya);
+        let hb = sample_heights_xz(&oracle, rb, COLLIDER_RES, oyb);
         // Tile A's last x-column and tile B's first x-column sample the same
-        // world positions — they must be byte-identical after conditioning.
+        // world positions — they must agree once each is lifted back to absolute.
         for iz in 0..COLLIDER_RES {
-            let (ya, yb) = (ha[COLLIDER_RES - 1][iz], hb[0][iz]);
+            let (ya, yb) = (ha[COLLIDER_RES - 1][iz] + oya, hb[0][iz] + oyb);
             assert!(
                 (ya - yb).abs() < 1e-9,
                 "seam step {:.3} m at iz={iz}: {ya} vs {yb} — invisible wall",

@@ -455,10 +455,15 @@ sim-only) and declarative `timeline` (portable, stored, synced) are two authorin
 3. **Kernel bits:** `SKIPPED` status + `Ref`/SubTree (for full BT.CPP node parity).
 
 ### Tutorial tracks — wired + verified (2026-07-12)
-Basic (`assets/tutorials/basic/`, B1–B5) + Space School (`assets/tutorials/school/`, SS1–SS4) registered
+Basic (`assets/tutorials/basic/`, B1–B5) + Space School (SS1–SS4) registered
 into the shared registry (one-plugin pattern in `lunco-sandbox/src/ui/mod.rs`; `b1`/`ss1`
 `first_start:false`). Verified live on a dev build: **B1** mission+autopilot → both objectives →
 `MISSION_COMPLETE` → chain prompt (screenshot); **SS1** coach tour + `traverse.usda`; **B3** tip-over +
 the new `world_rotation`/`tilt_deg` path (`[debug] tilt at start: 0.0°`); **B4** variant spawns
 (`/RoverEasy` + `/RoverAwful`). Zero rhai errors. Core add `world_rotation` (bridge_core + world_bridge +
 catalog + prelude `world_up`/`world_right`/`tilt_deg`/`is_tipped`) compiled + exercised green.
+
+Since superseded on two points: the Space School track ships with its Twin
+(`<twin>/sim/tutorials/`), not from `assets/`, and B2 ("Reading the Terrain") was dropped when its
+`traverse.usda` moved out with it — the Basic track is B1/B3/B4/B5, numbered 1–4. A workspace lesson
+must not `load_scene` a Twin asset; that is the split those two changes enforce.

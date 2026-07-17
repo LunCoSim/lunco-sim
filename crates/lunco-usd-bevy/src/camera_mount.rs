@@ -70,7 +70,7 @@ pub struct CameraMountResolved;
 /// camera is a bug, imprecision at extreme range is a known limit. Lifting it
 /// means writing the composed pose into grid-local `CellCoord` + `Transform` from
 /// a *live* local (not a snapshot), i.e. making the follower the single writer.
-/// See `docs/architecture/50-cinematic-camera.md` §8b.
+/// See `docs/architecture/51-cinematic-camera.md` §8b.
 pub fn resolve_camera_mounts(
     q_new: Query<
         (Entity, &ChildOf, &Transform),

@@ -114,7 +114,62 @@ fn on_simulate_intent(
     );
 }
 
-register_commands!(on_simulate_intent);
+/// Declare that commands can (or cannot) currently reach `target`.
+///
+/// The generic verb behind [`lunco_core::session::ControlPathRegistry`]. A mission
+/// script computes the DOMAIN fact and states the CONSEQUENCE here; an authored
+/// policy ([`lunco_core::session::AUTHORIZE_HOOK`]) then decides what to refuse.
+/// Space School does exactly that — `ss3_radio_shadow.rhai` reads real link geometry
+/// with `can_reach(radio, "earth")` and calls this — which keeps doc 49's split one
+/// layer up: the kernel computes geometry, the script decides what it means, and
+/// nothing in Rust ever concludes "no link ⇒ no control" (a store-and-forward
+/// mission would disagree).
+///
+/// It lives here rather than in `lunco-core` for a mechanical reason: `#[Command]`
+/// expands to `lunco_core::…` paths, so a command cannot be declared inside that
+/// crate. Beside `drive_from_bindings` is the right second choice — this is the path
+/// it gates.
+#[Command]
+pub struct SetControlPath {
+    /// The vessel commands cannot reach.
+    #[authz_target]
+    pub target: Entity,
+    /// `true` ⇒ commands do not reach `target`.
+    pub down: bool,
+}
+
+// `Entity` has no `Default`, so this is hand-written rather than `#[Command(default)]`
+// — the same shape `SimulateIntent` above uses. `PLACEHOLDER` never resolves to a
+// real vessel, so a `SetControlPath` that arrives without a target is inert.
+impl Default for SetControlPath {
+    fn default() -> Self {
+        Self { target: Entity::PLACEHOLDER, down: false }
+    }
+}
+
+#[on_command(SetControlPath)]
+fn on_set_control_path(
+    trigger: On<SetControlPath>,
+    q_gid: Query<&lunco_core::GlobalEntityId>,
+    mut paths: ResMut<lunco_core::session::ControlPathRegistry>,
+) {
+    let cmd = trigger.event();
+    // No gid ⇒ no stable identity to key the blackout on, and a fabricated key
+    // would mis-bind across peers and reloads. Skip rather than guess — the same
+    // rule the link kernel applies to a node whose identity has not minted yet.
+    let Ok(gid) = q_gid.get(cmd.target) else {
+        warn!("[control-path] target has no GlobalEntityId — ignoring");
+        return;
+    };
+    paths.set(gid.get(), cmd.down);
+    info!(
+        "[control-path] gid {} {}",
+        gid.get(),
+        if cmd.down { "DOWN — commands will not reach it" } else { "restored" }
+    );
+}
+
+register_commands!(on_simulate_intent, on_set_control_path);
 
 /// Plugin for managing vessel input and command translation.
 pub struct LunCoControllerPlugin;
@@ -133,6 +188,9 @@ impl Plugin for LunCoControllerPlugin {
         // mid-replay would overwrite the very history we are replaying (and mint new
         // seqs for ticks that already happened).
         app.init_resource::<SimulatedIntents>();
+        // The blackout table the authorization gate reads. Empty by default, so an
+        // app that never declares one is byte-for-byte unchanged.
+        app.init_resource::<lunco_core::session::ControlPathRegistry>();
         register_all_commands(app);
         app.add_systems(
             FixedUpdate,
@@ -191,6 +249,11 @@ fn drive_from_bindings(
     // `Option` so a controller-only test app without the session substrate runs.
     registry: Option<Res<lunco_core::SessionRegistry>>,
     local_session: Option<Res<lunco_core::LocalSession>>,
+    // The authored authorization POLICY applies to the local keyboard too — see the
+    // gate below. All `Option` so a controller-only test app without the session
+    // substrate still runs ungated.
+    rbac: Option<Res<lunco_core::session::SessionRbac>>,
+    control_paths: Option<Res<lunco_core::session::ControlPathRegistry>>,
     q_ctrl: Query<(&ControllerLink, &ActionState<UserIntent>)>,
     q_binding: Query<&ControlBinding>,
     q_vessel: Query<(&lunco_core::GlobalEntityId, Has<lunco_core::OwnedLocally>)>,
@@ -253,6 +316,38 @@ fn drive_from_bindings(
         {
             let owner = reg.owner_of(gid.get());
             if owner.is_some_and(|owner| owner != local.0) {
+                continue;
+            }
+        }
+
+        // The authored authorization policy ([`AUTHORIZE_HOOK`]) gates the LOCAL
+        // keyboard, not just the wire and script paths. Without this a policy like
+        // "refuse tele-op while the control path is down" was true only for remote
+        // and scripted commands, while the student at the keyboard drove straight
+        // through it — `authorize()` sits on `sync.rs` and `bridge_core.rs`, and
+        // this system triggers `SetPorts` directly.
+        //
+        // `authorize_policy`, NOT the full `authorize`: the role/ownership floor is a
+        // wire concern. This loop deliberately drives an UNPOSSESSED vessel (owner
+        // `None`, per the yield above), which the ownership-gated floor would refuse
+        // — gating the floor here would break ordinary local play. The policy is what
+        // must bind everywhere; the floor stays where it belongs.
+        if let (Some(rbac), Some(paths), Some(local), Some((gid, _))) =
+            (rbac.as_ref(), control_paths.as_ref(), local_session.as_ref(), vessel_id)
+        {
+            let owns = registry
+                .as_ref()
+                .is_some_and(|reg| reg.owns(local.0, gid.get()));
+            if lunco_core::session::authorize_policy(
+                rbac,
+                paths,
+                local.0,
+                "SetPorts",
+                Some(gid.get()),
+                owns,
+            )
+            .is_err()
+            {
                 continue;
             }
         }

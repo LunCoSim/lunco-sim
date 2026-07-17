@@ -9,7 +9,7 @@
 
 fn on_start(me) {
     load_scene("tutorials/basic/slope_test.usda");
-    notify_kind("Basic 3/5 · Slopes & Tip-Over", "info");
+    notify_kind("Basic 2/4 · Slopes & Tip-Over", "info");
     hint("This is the Hauler — heavy and top-heavy on purpose. Click it (or press F) to take control.");
 }
 

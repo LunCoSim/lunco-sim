@@ -384,6 +384,103 @@ class "LunCoCelestialBodyAPI" (
     )
 }
 
+class "LunCoLinkAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Declares that a prim is a connectivity endpoint — a node in the generic
+    link graph (doc 49).
+
+    **There is no comms schema here, deliberately.** A node is a node: the kernel
+    computes the GEOMETRY between pairs (range, local elevation, body occlusion,
+    terrain relief, authored occluders) and publishes it. What that geometry MEANS —
+    whether it counts as a usable link, what relays where, what the budget is — is
+    authored policy over the `link.connected` hook and `scripting/prelude/links.rhai`,
+    not vocabulary in this file. An `Antenna` prim type or a `lunco:comms:margin`
+    attribute existed once and was deleted; author roles over this instead.
+
+    A node's placement is orthogonal and already spelled elsewhere: a ground station
+    adds `lunco:anchor:*` (geodetic), a relay adds `lunco:orbit:*` (Kepler), and a
+    rover-mounted antenna adds neither — it is a scene-local prim posed through the
+    site frame. A satellite needs no new concept.
+
+    A node's IDENTITY is its prim's GID, not anything here. `lunco:link:class` is a
+    shared role and is explicitly NOT an identifier: three DSN complexes all author
+    `class = "earth"` and remain three distinct nodes, grouped under one role."""
+)
+{
+    uniform bool lunco:linkNode = false (
+        doc = """Marks this prim a link endpoint. The kernel pairs it with every
+        other node at the `LinkConfig` cadence and publishes a `LinkState`."""
+    )
+    string lunco:link:class = "" (
+        doc = """The node's authored ROLE — `"relay"`, `"earth"`, `"rover"`, `"base"`.
+
+        **The core never interprets it.** It is passed to the verdict/routing policy
+        and used to GROUP nodes (`query("Links").groups`), so a script can ask "can
+        this rover reach any Earth station?" without naming one. The moment the core
+        branches on `class == "relay"`, the domain is back in Rust.
+
+        Not unique and not an identity: see the class note above."""
+    )
+    double lunco:link:maxRangeM = 1e12 (
+        doc = """Hard geometric range cutoff, metres. Beyond it the builtin verdict
+        reports the link down.
+
+        This is GEOMETRY, not a link budget: there is no power, frequency, antenna
+        gain or noise temperature anywhere in the core, and this value is not derived
+        from any. A real budget is authored policy over the published `range_m` (and
+        `light_time_s`), or a Modelica component — see doc 49 §8."""
+    )
+    double lunco:link:minElevationDeg = -90.0 (
+        doc = """Elevation mask, degrees above this node's local horizon. A peer below
+        it is refused. `5` is realistic for a DSN dish; the default `-90` masks
+        nothing. A node with no local horizon (a free orbit) always passes."""
+    )
+}
+
+class "LunCoOccluderAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Declares that a prim's geometry BLOCKS sight-lines: any link whose segment
+    crosses its box is severed (doc 49).
+
+    Generic, like everything else here — it says nothing about radio. A sensor, radar
+    or sunlight domain composes over the same fact.
+
+    **Deliberately separate from `PhysicsCollisionAPI`.** Opacity is a MATERIAL
+    property, not a collision one: a radio-transparent handrail has a collider and
+    must not block, and a radio-opaque radome may have no collider at all. Deriving
+    one from the other is wrong in both directions, so a prim says both or either.
+
+    The consequence is that occlusion is OPT-IN: an untagged wall does not block. That
+    is intended — name the geometry that is opaque.
+
+    Apply it to the GEOMETRY prim that does the blocking (the child `Cube`), not its
+    parent `Xform`, so the box inherits that prim's pose, scale and extent.
+
+    **The occluding box carries no vocabulary of its own.** It is the prim's UsdGeom
+    `extent` — "a three dimensional range measuring the geometric extent of the
+    authored gprim in its own local space" — which core USD already defines and every
+    DCC already authors. A `lunco:occluder:halfExtentsM` was drafted here and deleted:
+    it would have been a second, private spelling of a standard attribute, free to
+    disagree with the geometry it claims to bound.
+
+    With no authored `extent`, the box falls back to the unit-cube convention (a `Cube`
+    of `size = 1` scaled by `S` ⇒ half-extents `S/2`), which is how `props/wall.usda`
+    and the sandbox slabs are written — so tagging an existing prop is one line and no
+    measurements, and re-scaling an instance moves its shadow with the geometry."""
+)
+{
+    uniform bool lunco:occluder = false (
+        doc = """Marks this prim's geometry opaque to link sight-lines. The ONE fact
+        USD has no word for; the shape it refers to is the standard `extent`."""
+    )
+}
+
 class "LunCoTerrainEditAPI" (
     inherits = </APISchemaBase>
     customData = {

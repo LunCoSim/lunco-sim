@@ -172,9 +172,12 @@ Inspector gains a **Comms & Orbit** section (selection-based) when the selected
 prim authors anchor/orbit/comms attrs: lat/lon/height, orbital elements,
 range/elevation-mask DragValues. Edits write journaled
 `UsdOp::SetAttribute` via the existing `apply_usd_attribute_change` AND update
-the live component (the sim-prim bridge only runs once per prim). A
-settings-menu toggle draws a comms overlay (direction rays colored by link
-state).
+the live component (the sim-prim bridge only runs once per prim).
+
+The comms overlay this section once claimed had landed **did not exist** — nothing
+rendered link state at all until `lunco-render-bevy/src/link_viz.rs`, which draws a
+line per node pair coloured by state and is toggled with `ToggleLinkViz` rather than
+a settings-menu checkbox. Connectivity itself is doc 49's, not this doc's.
 
 ## 3. Implementation notes (landed with this doc)
 

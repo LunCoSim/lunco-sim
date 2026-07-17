@@ -77,6 +77,8 @@ these are the reasoning.
 | [`48-object-builder.md`](48-object-builder.md) | The object builder |
 | [`49-connectivity-link-kernel.md`](49-connectivity-link-kernel.md) | The generic link kernel (comms is a domain over it, not a kernel) |
 | [`50-usd-driven-visuals.md`](50-usd-driven-visuals.md) | Beams, plumes, ribbons: geometry+look authored in USD, logic in Rust, bound by name (`lunco:program:id`). **`radius`/`height` bake at instantiation — live size is `xformOp:scale`**; a `lunco:*` property needs THREE files or it is inert |
+| [`51-cinematic-camera.md`](51-cinematic-camera.md) | Authored camera paths (`UsdGeomBasisCurves` + a per-object driven clock). **`Ts` splines are SCALAR-ONLY** — no `double3` translate; hold via the clock tree, never `Playback.mode` |
+| [`52-connectivity-gaps-and-test-plan.md`](52-connectivity-gaps-and-test-plan.md) | Companion to 49: the connectivity gap audit and what closed it — radio shadow needs an opt-in `LinkOccluder` (occlusion is NOT the physics collider), and link ids are GIDs |
 
 ## Cross-cutting
 

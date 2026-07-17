@@ -70,6 +70,7 @@ mod render_robustness;
 mod session;
 mod viewport;
 
+pub mod control_status;
 pub mod file_ops;
 pub mod files_panel;
 pub mod perf_hud;
@@ -391,6 +392,13 @@ impl Plugin for WorkbenchPlugin {
         // the `TogglePerfHud` typed command.
         if !app.is_plugin_added::<tutorial_overlay::TutorialOverlayPlugin>() {
             app.add_plugins(tutorial_overlay::TutorialOverlayPlugin);
+        }
+        // The blackout badge — "commands are not reaching this vessel". Reads the
+        // same `ControlPathRegistry` the authorization gate refuses on, so the
+        // indicator and the refusal can never disagree. Draws nothing until a
+        // mission declares a blackout.
+        if !app.is_plugin_added::<control_status::ControlStatusPlugin>() {
+            app.add_plugins(control_status::ControlStatusPlugin);
         }
         // NOTE: guided tours are now driven by rhai scenarios (the coach card is
         // rendered by `tutorial_overlay` and advanced by the running scenario's

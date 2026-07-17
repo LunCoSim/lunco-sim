@@ -190,6 +190,11 @@ impl Plugin for SandboxUiPlugin {
         // these extra apps just contribute their JSON catalog into the shared
         // `TutorialRegistry` via `register_tutorial`.
         // Data-driven: a new track is a `tutorials.json` + `.rhai`.
+        //
+        // Only tracks this app SHIPS. Space School is not one of them — it is a
+        // TWIN (`sim/tutorials/tutorials.json`), loaded by `sync_twin_tutorials`
+        // when that twin is opened. Registering it here too would double-register
+        // the same lesson ids against a stale bundled copy of the scene.
         {
             use lunco_tutorial::TutorialAppExt;
             for track in ["basic"] {

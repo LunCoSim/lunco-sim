@@ -24,7 +24,7 @@ fn show(s, i) {
 
 fn on_start(me) {
     this.i = 0;
-    notify_kind("Basic 5/5 · Join a Team Session", "info");
+    notify_kind("Basic 4/4 · Join a Team Session", "info");
     show(steps(), 0);
 }
 
