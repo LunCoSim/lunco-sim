@@ -62,6 +62,8 @@ pub mod usd_data;
 pub mod view;
 pub mod camera_path;
 pub mod canonical;
+pub mod curve_sweep;
+pub mod nurbs;
 pub mod mount;
 pub mod read;
 pub mod units;
@@ -804,7 +806,35 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         let invisible = matches!(
             reader.text(&sdf_path, "visibility").as_deref(),
             Some("invisible")
-        );
+        )
+        // `UsdGeomImageable.purpose = "guide"` — geometry that exists for authoring,
+        // not for viewing: construction axes, alignment rigs, and (the HAB-1 case)
+        // the boolean CUTTERS that define a shell's openings. Keeping them in the
+        // file is what preserves the parametric intent — a porthole stays a
+        // diameter and a position rather than becoming a hole someone has to
+        // reverse-engineer — but a guide must never render.
+        //
+        // `purpose` is INHERITED: USD resolves it from the nearest ancestor that
+        // authors it, so marking one `Xform "Cutters"` as guide hides the whole
+        // subtree. That is why this walks up rather than reading the prim alone —
+        // reading only the prim would render every child of a guide group.
+        //
+        // `proxy` and `render` are deliberately NOT handled here. They are a
+        // level-of-detail pair (a cheap stand-in vs the full-detail version), and
+        // honouring them means choosing between them per view — a policy decision
+        // that belongs with whoever adds the LOD system, not a silent default.
+        || {
+            let mut p = sdf_path.clone();
+            loop {
+                if reader.text(&p, "purpose").as_deref() == Some("guide") {
+                    break true;
+                }
+                match p.parent() {
+                    Some(parent) if parent.as_str() != "/" => p = parent,
+                    _ => break false,
+                }
+            }
+        };
 
         // Placeholder for an async-loading glTF payload. Authors set
         // `bool lunco:placeholder = true` on a Cube prim that lives as
@@ -854,6 +884,20 @@ fn instantiate_usd_prim_read<R: UsdRead>(
             // into a Bevy mesh. (Falls through to `None` — no fallback
             // primitive — if the topology attrs are missing/malformed.)
             build_usd_mesh(reader, &sdf_path).map(|m| meshes.add(m))
+        } else if prim_type.as_deref() == Some("NurbsPatch") {
+            // Tensor-product rational surface — how USD spells a lathe, and the
+            // only way to express a PARTIAL revolution (the gprims are complete
+            // revolutions with no sweep-angle). `trimCurve:*` is not honoured;
+            // see the fn doc.
+            build_usd_nurbs_patch_mesh(reader, &sdf_path).map(|m| meshes.add(m))
+        } else if matches!(prim_type.as_deref(), Some("BasisCurves") | Some("NurbsCurves")) {
+            // A curve prim with `widths` is a TUBE — swept geometry, not a line.
+            // `build_usd_curve_mesh` returns `None` when `widths` is unauthored,
+            // which is what keeps a pure path (a camera rail carrying
+            // `lunco:path:camera`, see `camera_path.rs`) from silently becoming a
+            // visible pipe. So the two readings coexist without a gate: a camera
+            // path authors no `widths`, a conduit does.
+            build_usd_curve_mesh(reader, &sdf_path).map(|m| meshes.add(m))
         } else {
             match prim_type.as_deref().and_then(|ty| read_shape_dims(reader, &sdf_path, ty)) {
                 // `xformOp:scale` handles non-uniform dimensions (applied to the
@@ -3266,6 +3310,300 @@ fn read_mesh_normals<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Vec<[f32;
         return Some(normals);
     }
     Some(normals.into_iter().map(|n| conv.dir(Vec3::from_array(n)).to_array()).collect())
+}
+
+/// Build a swept-tube mesh from a `UsdGeomBasisCurves` prim.
+///
+/// A curve prim with `widths` is a **tube**, not a line: `widths` is a diameter in
+/// object space, so the curve is a centerline and the profile is a circle. See
+/// [`crate::curve_sweep`] for why the frames are rotation-minimizing rather than
+/// Frenet (short version: Frenet is undefined on straight runs, and flips as it
+/// approaches them — a habitat is mostly straight pipe).
+///
+/// Batches are honoured: `curveVertexCounts` partitions `points` into several
+/// curves on one prim, and each is swept and merged into a single mesh so the
+/// prim keeps its 1:1 entity mapping.
+///
+/// `widths` interpolation follows USD: one value is `constant`, otherwise it is
+/// per-vertex. Absent `widths` means an infinitely thin curve, which has no
+/// surface — returns `None` rather than inventing a radius, so a curve authored
+/// as a pure path (a camera rail) does not silently become a visible pipe.
+fn build_usd_curve_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> {
+    use crate::camera_path::CurveBasis;
+    use crate::curve_sweep::sweep_tube;
+
+    // Canonical-frame points — same conversion the mesh path takes.
+    let points = read_mesh_points(reader, path)?;
+    if points.is_empty() {
+        return None;
+    }
+    // No `widths` ⇒ no surface. Deliberately not defaulted: see the doc above.
+    let widths = reader.scalar::<Vec<f32>>(path, "widths")?;
+    if widths.is_empty() {
+        return None;
+    }
+
+    // Radii are a LENGTH, so they scale with `metersPerUnit` — `conv.length`,
+    // not `conv.point`. (`read_mesh_points` already converted the centerline.)
+    let conv = stage_convention(reader);
+    let radii: Vec<f32> = widths
+        .iter()
+        .map(|w| conv.length(*w as f64 / 2.0) as f32)
+        .collect();
+
+    // `NurbsCurves` carries its own basis: per-curve `order`, a concatenated
+    // `knots` array, and optional rational `pointWeights`. `BasisCurves` carries a
+    // `type`/`basis` token pair instead. Both are swept identically once each
+    // curve is reduced to a centerline — the only difference is how that
+    // centerline is produced.
+    let is_nurbs = reader.type_name(path).as_deref() == Some("NurbsCurves");
+    let orders = read_int_array(reader, path, "order").unwrap_or_default();
+    let all_knots = reader.scalar::<Vec<f64>>(path, "knots").unwrap_or_default();
+    let point_weights = reader.scalar::<Vec<f64>>(path, "pointWeights").unwrap_or_default();
+
+    let ty = reader.text(path, "type").unwrap_or_else(|| "cubic".to_string());
+    let basis_tok = reader.text(path, "basis").unwrap_or_else(|| "bspline".to_string());
+    let basis = if ty == "linear" {
+        // `type = "linear"` is the polygon — `basis` is meaningless and USD says
+        // so; honour the type over a stale basis token.
+        CurveBasis::Linear
+    } else {
+        match basis_tok.as_str() {
+            "bezier" => CurveBasis::Bezier,
+            // `catmullRom` is USD's default, and `bspline` currently evaluates
+            // through the same interpolating path — approximating rather than
+            // hitting its hull. Acceptable for a swept tube (the centerline shifts
+            // by less than a wall thickness); a true B-spline basis lands with the
+            // NURBS evaluator.
+            _ => CurveBasis::CatmullRom,
+        }
+    };
+    let periodic = reader.text(path, "wrap").as_deref() == Some("periodic");
+
+    // `curveVertexCounts` partitions `points` into a batch of curves. Absent ⇒ one
+    // curve over all points (tolerant: a hand-authored single curve often omits it).
+    let counts = read_int_array(reader, path, "curveVertexCounts")
+        .unwrap_or_else(|| vec![points.len() as i32]);
+
+    // Samples per control point. Linear needs none — the control points ARE the
+    // centerline, and resampling a polygon only rounds off its corners.
+    const SAMPLES_PER_SEGMENT: usize = 8;
+    let sides = 8;
+
+    let mut merged: Option<Mesh> = None;
+    let mut cursor = 0usize;
+    // `knots` is one flat array for the whole batch: curve `i` owns
+    // `vertexCount_i + order_i` of them, consumed in order. Tracked separately
+    // from the point cursor because the strides differ.
+    let mut knot_cursor = 0usize;
+    for (ci, c) in counts.into_iter().enumerate() {
+        let n = c.max(0) as usize;
+        if n < 2 || cursor + n > points.len() {
+            cursor += n;
+            continue;
+        }
+        // Captured before `cursor` advances — `pointWeights` is indexed by control
+        // point, so it slices with the same offset the points did.
+        let cursor_start = cursor;
+        let cvs: Vec<Vec3> = points[cursor..cursor + n]
+            .iter()
+            .map(|p| Vec3::from_array(*p))
+            .collect();
+        let seg_radii: Vec<f32> = if radii.len() == 1 {
+            vec![radii[0]]
+        } else {
+            radii
+                .iter()
+                .skip(cursor)
+                .take(n)
+                .copied()
+                .collect::<Vec<_>>()
+        };
+        cursor += n;
+
+        let centerline: Vec<Vec3> = if is_nurbs {
+            // Per-curve order; a single authored value applies to the whole batch
+            // (USD allows either), else default to cubic.
+            let order = orders
+                .get(ci)
+                .or_else(|| orders.first())
+                .map(|o| (*o).max(2) as usize)
+                .unwrap_or(4)
+                .min(n); // a curve cannot have order > control-point count
+            let need = n + order;
+            let knots: Vec<f64> = if knot_cursor + need <= all_knots.len() {
+                let k = all_knots[knot_cursor..knot_cursor + need].to_vec();
+                knot_cursor += need;
+                k
+            } else {
+                // Missing or short `knots` — reconstruct the standard clamped
+                // vector rather than dropping the curve. Assets omit it often
+                // enough that guessing beats losing the geometry, and clamped is
+                // what every DCC writes.
+                crate::nurbs::default_clamped_knots(n, order)
+            };
+            let w: Vec<f64> = if point_weights.len() >= cursor_start + n {
+                point_weights[cursor_start..cursor_start + n].to_vec()
+            } else {
+                Vec::new() // unauthored ⇒ polynomial, all weights 1
+            };
+            let steps = (n.saturating_sub(1)).max(1) * SAMPLES_PER_SEGMENT;
+            let pts: Vec<[f32; 3]> = cvs.iter().map(|p| p.to_array()).collect();
+            let sampled = crate::nurbs::sample_nurbs_curve(&pts, &w, order, &knots, steps);
+            if sampled.is_empty() {
+                // Malformed NURBS: skip this curve rather than emit a wrong one.
+                continue;
+            }
+            sampled.into_iter().map(Vec3::from_array).collect()
+        } else if basis == CurveBasis::Linear {
+            cvs.clone()
+        } else {
+            let steps = (n.saturating_sub(1)).max(1) * SAMPLES_PER_SEGMENT;
+            (0..=steps)
+                .map(|i| {
+                    crate::camera_path::eval_curve(
+                        &cvs,
+                        basis,
+                        periodic,
+                        i as f32 / steps as f32,
+                    )
+                })
+                .collect()
+        };
+        // Resampling changes the point count, so per-vertex radii must be
+        // resampled with it or a tapered tube would snap back to its control-point
+        // radii. Constant width (len 1) passes straight through.
+        let seg_radii = if seg_radii.len() <= 1 || centerline.len() == cvs.len() {
+            seg_radii
+        } else {
+            let last = cvs.len() - 1;
+            (0..centerline.len())
+                .map(|i| {
+                    let t = i as f32 / (centerline.len() - 1).max(1) as f32 * last as f32;
+                    let (a, f) = (t.floor() as usize, t.fract());
+                    let b = (a + 1).min(last);
+                    seg_radii[a] * (1.0 - f) + seg_radii[b] * f
+                })
+                .collect()
+        };
+
+        let Some(tube) = sweep_tube(&centerline, &seg_radii, sides, periodic) else {
+            continue;
+        };
+        merged = Some(match merged {
+            None => tube,
+            Some(mut acc) => {
+                acc.merge(&tube).ok()?;
+                acc
+            }
+        });
+    }
+    merged
+}
+
+/// Build a mesh from a `UsdGeomNurbsPatch` prim.
+///
+/// A patch is a tensor-product rational surface: a `uVertexCount × vVertexCount`
+/// control net with a knot vector and order per direction. It is how USD spells
+/// every surface of revolution — which for HAB-1 is **80.4% of the habitat's
+/// vertices** (261 lathe objects plus the ellipsoidal dome), and the only way to
+/// express a *partial* revolution at all, since `Cylinder`/`Sphere`/`Cone` are
+/// complete revolutions with no sweep-angle parameter.
+///
+/// Normals are analytic (`uder × vder`), not face-averaged — exact at the poles
+/// and seams where averaging creases, which is precisely the dome apex.
+///
+/// **`trimCurve:*` is not honoured**: `openusd` does not define those tokens (see
+/// `OPENUSD_TRIMCURVE_SPEC.md`). An authored trim is silently ignored, so a
+/// trimmed patch renders untrimmed — larger than intended, never smaller. That is
+/// the safe direction to be wrong in, but it IS wrong; the tokens are a small
+/// upstream contribution.
+fn build_usd_nurbs_patch_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> {
+    use bevy::asset::RenderAssetUsages;
+    use bevy_mesh::PrimitiveTopology;
+
+    let points = read_mesh_points(reader, path)?;
+    let u_count = reader.scalar::<i32>(path, "uVertexCount").unwrap_or(0).max(0) as usize;
+    let v_count = reader.scalar::<i32>(path, "vVertexCount").unwrap_or(0).max(0) as usize;
+    if u_count < 2 || v_count < 2 {
+        return None;
+    }
+    let u_order = reader.scalar::<i32>(path, "uOrder").unwrap_or(4).max(2) as usize;
+    let v_order = reader.scalar::<i32>(path, "vOrder").unwrap_or(4).max(2) as usize;
+    let u_knots = reader
+        .scalar::<Vec<f64>>(path, "uKnots")
+        .unwrap_or_else(|| crate::nurbs::default_clamped_knots(u_count, u_order));
+    let v_knots = reader
+        .scalar::<Vec<f64>>(path, "vKnots")
+        .unwrap_or_else(|| crate::nurbs::default_clamped_knots(v_count, v_order));
+    let weights = reader.scalar::<Vec<f64>>(path, "pointWeights").unwrap_or_default();
+
+    // Trim curves are NOT applied — the domain is tessellated whole. Warn rather
+    // than drop it silently: a trimmed patch rendered untrimmed is LARGER than
+    // authored (never smaller), so it reads as a modelling mistake rather than a
+    // reader limitation, and silence is how that misdiagnosis happens.
+    //
+    // Note the data is perfectly readable — `scalar()` is a name lookup, not
+    // schema-gated, so `trimCurve:*` reads today. What is missing is the
+    // TESSELLATION: evaluating the loops (truck already does 2D rational curves)
+    // and triangulating the trimmed domain with `spade` (vendored). Deferred
+    // deliberately: nothing authors a trim yet, and USD's own reference does not
+    // state the keep/discard winding rule — guessing it inverts every hole.
+    // See `models/habitat/OPENUSD_TRIMCURVE_SPEC.md`.
+    if reader.attr_value(path, "trimCurve:counts").is_some() {
+        bevy::log::warn_once!(
+            "[usd-bevy] {} authors `trimCurve:*`, which is not applied — the patch \
+             renders UNTRIMMED (larger than authored). See OPENUSD_TRIMCURVE_SPEC.md",
+            path.as_str()
+        );
+    }
+
+    // Tessellation density. Fixed for now — this is exactly where adaptive,
+    // curvature-driven refinement belongs, and where a coarse-while-dragging /
+    // refine-on-release policy would hang once patches are editable in-sim.
+    let u_steps = (u_count * 6).clamp(8, 128);
+    let v_steps = (v_count * 6).clamp(8, 128);
+
+    let grid = crate::nurbs::sample_nurbs_patch(
+        &points, &weights, u_count, v_count, u_order, v_order, &u_knots, &v_knots, u_steps,
+        v_steps,
+    );
+    if grid.is_empty() {
+        return None;
+    }
+
+    let cols = u_steps + 1;
+    let rows = v_steps + 1;
+    let mut positions = Vec::with_capacity(grid.len());
+    let mut normals = Vec::with_capacity(grid.len());
+    let mut uvs = Vec::with_capacity(grid.len());
+    for s in &grid {
+        positions.push(s.position);
+        normals.push(s.normal);
+        uvs.push(s.uv);
+    }
+
+    let mut indices = Vec::with_capacity(u_steps * v_steps * 6);
+    for r in 0..v_steps {
+        for c in 0..u_steps {
+            let (a, b, d, e) = (
+                (r * cols + c) as u32,
+                (r * cols + c + 1) as u32,
+                ((r + 1) * cols + c) as u32,
+                ((r + 1) * cols + c + 1) as u32,
+            );
+            indices.extend_from_slice(&[a, d, e]);
+            indices.extend_from_slice(&[a, e, b]);
+        }
+    }
+    debug_assert_eq!(positions.len(), cols * rows);
+
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_indices(bevy_mesh::Indices::U32(indices));
+    Some(mesh)
 }
 
 fn read_int_array<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<Vec<i32>> {

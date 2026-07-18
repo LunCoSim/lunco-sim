@@ -54,6 +54,51 @@ def Xform "World"
         float inputs:width = 1.2
         float inputs:height = 0.6
     }
+    def BasisCurves "Conduit"
+    {
+        uniform token type = "linear"
+        int[] curveVertexCounts = [4]
+        point3f[] points = [(0, 0, 0), (0, 0, 1), (1, 0, 1), (1, 0, 2)]
+        float[] widths = [0.08]
+    }
+    def BasisCurves "CameraRail"
+    {
+        uniform token type = "cubic"
+        uniform token basis = "catmullRom"
+        int[] curveVertexCounts = [4]
+        point3f[] points = [(0, 5, 0), (2, 5, 0), (2, 5, 2), (0, 5, 2)]
+    }
+    def Xform "Cutters" ( )
+    {
+        uniform token purpose = "guide"
+        def Cube "PortholeCutter"
+        {
+            double size = 0.42
+        }
+    }
+    def NurbsPatch "ShellQuarter"
+    {
+        int uVertexCount = 3
+        int vVertexCount = 2
+        int uOrder = 3
+        int vOrder = 2
+        double[] uKnots = [0, 0, 0, 1, 1, 1]
+        double[] vKnots = [0, 0, 1, 1]
+        double[] pointWeights = [1, 0.70710678118, 1, 1, 0.70710678118, 1]
+        point3f[] points = [
+            (1, 0, 0), (1, 0, 1), (0, 0, 1),
+            (1, 2, 0), (1, 2, 1), (0, 2, 1)
+        ]
+    }
+    def NurbsCurves "Elbow"
+    {
+        int[] curveVertexCounts = [3]
+        int[] order = [3]
+        double[] knots = [0, 0, 0, 1, 1, 1]
+        double[] pointWeights = [1, 0.70710678118, 1]
+        point3f[] points = [(1, 0, 0), (1, 1, 0), (0, 1, 0)]
+        float[] widths = [0.05]
+    }
 }
 "#;
 
@@ -156,6 +201,58 @@ fn recipe_asset_instantiates_off_live_canonical_stage() {
     // which are candela) — the authored 8000 is taken as lumens, unscaled
     // because `inputs:exposure` is unauthored (2^0 = 1).
     assert!((panel.intensity - 8000.0).abs() < 1e-2, "intensity {}", panel.intensity);
+
+    // (e) `UsdGeomBasisCurves` + `widths` → swept-tube geometry. A curve prim
+    // carrying a width is a TUBE, not a line, so it must produce a mesh.
+    let conduit_e = entity_at(&mut app, "/World/Conduit").expect("Conduit prim entity");
+    assert!(
+        app.world().get::<Mesh3d>(conduit_e).is_some(),
+        "a BasisCurves with `widths` must sweep to a Mesh3d"
+    );
+
+    // (f) …and `widths` is exactly what discriminates geometry from a pure PATH.
+    // A camera rail authors no `widths` — it is infinitely thin, has no surface,
+    // and must NOT silently become a visible pipe. This is the USD-native
+    // distinction, which is why the curve reader needs no `lunco:` gate to tell
+    // the two apart.
+    let rail_e = entity_at(&mut app, "/World/CameraRail").expect("CameraRail prim entity");
+    assert!(
+        app.world().get::<Mesh3d>(rail_e).is_none(),
+        "a BasisCurves WITHOUT `widths` has no surface and must not become geometry"
+    );
+
+    // (g) `UsdGeomNurbsCurves` sweeps through the same path — a rational quadratic
+    // quarter-arc (middle weight √2/2), i.e. the pipe-elbow case. It shares the
+    // sweep with BasisCurves; only the centerline evaluator differs, so this pins
+    // that the NURBS branch is reached and produces geometry at all.
+    let elbow_e = entity_at(&mut app, "/World/Elbow").expect("Elbow prim entity");
+    assert!(
+        app.world().get::<Mesh3d>(elbow_e).is_some(),
+        "a NurbsCurves with `widths` must sweep to a Mesh3d"
+    );
+
+    // (h) `UsdGeomNurbsPatch` → a tessellated surface. Unlike the curves, a patch
+    // needs NO `widths` — it is already a surface. This one is a rational
+    // cylindrical quarter, the shape HAB-1's shell and every lathe part are made
+    // of, and the only way USD can express a PARTIAL revolution (the gprims are
+    // all complete ones).
+    let patch_e = entity_at(&mut app, "/World/ShellQuarter").expect("ShellQuarter prim entity");
+    assert!(
+        app.world().get::<Mesh3d>(patch_e).is_some(),
+        "a NurbsPatch must tessellate to a Mesh3d"
+    );
+
+    // (i) `purpose = "guide"` is INHERITED. The cutter Cube authors no purpose of
+    // its own — only its parent `Cutters` Xform does — so this pins the ancestor
+    // walk. Reading the prim alone would render every child of a guide group,
+    // which for HAB-1 means nine boolean cutters appearing as solid boxes
+    // floating through the shell.
+    let cutter_e =
+        entity_at(&mut app, "/World/Cutters/PortholeCutter").expect("cutter prim entity");
+    assert!(
+        app.world().get::<Mesh3d>(cutter_e).is_none(),
+        "a prim under a `purpose = \"guide\"` ancestor must not render"
+    );
 }
 
 #[test]
