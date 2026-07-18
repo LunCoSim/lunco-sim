@@ -84,6 +84,19 @@ impl Plugin for ScreenshotPlugin {
         app.register_deferred_command::<CaptureScreenshot>()
             .init_resource::<PendingCapture>()
             .add_observer(deliver_screenshot);
+
+        // Offline Frame-by-Frame Recording Mode
+        app.init_resource::<lunco_core::KeepAwake>()
+            .init_resource::<OfflineRecordingState>()
+            .add_observer(deliver_offline_frame)
+            // `Last`: the strategy written here is read by `TimeSystem` in `First`
+            // next frame, so the decision is made after every other system has run.
+            .add_systems(Last, drive_offline_clock);
+
+        app.world_mut()
+            .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
+            .register(GetOfflineRecordingStatusProvider);
+
         // The `science::take_photo` tool fires `CaptureFromCamera`, so it is advertised only
         // where that command actually exists.
         register_science_tools();
@@ -153,7 +166,12 @@ fn on_capture_screenshot(
     commands.spawn(Screenshot::primary_window());
 }
 
-register_commands!(on_capture_screenshot, on_capture_from_camera);
+register_commands!(
+    on_capture_screenshot,
+    on_capture_from_camera,
+    on_start_offline_recording,
+    on_stop_offline_recording
+);
 
 /// The picture landed — crop, encode, and either save it or answer the deferred request.
 fn deliver_screenshot(
@@ -344,3 +362,240 @@ fn timestamped_name() -> String {
         .unwrap_or(0);
     format!("screenshot_{secs}.png")
 }
+
+use bevy::time::TimeUpdateStrategy;
+
+// ─── Offline Frame-by-Frame recording mode ───────────────────────────────────
+//
+// Recording touches three independent knobs. Each has exactly ONE writer — the
+// bug this design exists to prevent is two systems writing the same knob and the
+// last one each frame silently winning:
+//
+// * **How far virtual time advances** — `TimeUpdateStrategy`, written only by
+//   `drive_offline_clock`. Exactly `1/fps` per captured frame, so the output is
+//   locked to `fps` no matter how fast or slow the machine renders.
+// * **Whether the app may sleep** — `WinitSettings`, written only by the pacer
+//   (`lunco-modelica`'s `sim_focus_pace`). Recording states intent by holding a
+//   `lunco_core::KeepAwake` token; it never writes the setting itself.
+// * **How fast frames present** — `Window::present_mode`, written only here.
+//   Uncapped while recording so rendering runs at max speed.
+//
+// Wall-clock rate and output frame rate are therefore fully decoupled: rendering
+// faster changes only how long a capture takes, never what the video looks like.
+
+/// State for the lock-step offline frame recording.
+#[derive(Resource, Default, Debug, Clone)]
+pub struct OfflineRecordingState {
+    /// Whether the recording is active.
+    pub active: bool,
+    /// Sequential frame index.
+    pub frame_index: u64,
+    /// Destination directory.
+    pub output_dir: std::path::PathBuf,
+    /// Video target FPS (determines delta virtual time step per frame).
+    pub fps: u32,
+    /// Lock-step frame latch.
+    pub is_waiting_for_frame: bool,
+    /// Set by `deliver_offline_frame` when a frame lands; consumed by
+    /// `drive_offline_clock` to schedule exactly one `1/fps` time step.
+    pub frame_just_captured: bool,
+    /// Primary window present mode as it was before recording uncapped it,
+    /// restored on stop.
+    pub prev_present_mode: Option<bevy::window::PresentMode>,
+}
+
+/// Command to start frame-by-frame recording.
+#[Command(default)]
+pub struct StartOfflineRecording {
+    /// Target folder. Empty => 'recorded_frames' in the current working dir.
+    pub output_dir: String,
+    /// Video target FPS (default: 60).
+    pub fps: u32,
+}
+
+/// Command to stop frame-by-frame recording.
+#[Command(default)]
+pub struct StopOfflineRecording {}
+
+#[on_command(StartOfflineRecording)]
+fn on_start_offline_recording(
+    trigger: On<StartOfflineRecording>,
+    mut state: ResMut<OfflineRecordingState>,
+    mut keep_awake: ResMut<lunco_core::KeepAwake>,
+    mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
+    mut commands: Commands,
+) {
+    let cmd = trigger.event();
+    let dir = if cmd.output_dir.is_empty() {
+        std::env::current_dir().unwrap_or_default().join("recorded_frames")
+    } else {
+        std::path::PathBuf::from(&cmd.output_dir)
+    };
+
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        error!("[offline-record] failed to create output directory {}: {e}", dir.display());
+        return;
+    }
+
+    state.active = true;
+    state.frame_index = 0;
+    state.output_dir = dir;
+    state.fps = cmd.fps.max(1);
+    state.is_waiting_for_frame = false;
+    // Enter the cycle on the "advance" phase so the very first captured frame is
+    // rendered from a clock that has taken exactly one step, like every frame after it.
+    state.frame_just_captured = true;
+
+    // Ask to stay awake for the duration of the recording. An unattended capture
+    // has no focused window, so the `reactive_low_power` throttle would otherwise
+    // apply: the app sleeps between redraws and the lock-step advances only when
+    // the reactive timer fires — measured at 2-10 s per frame against ~50 ms
+    // awake, turning a ~1 minute episode into hours.
+    //
+    // This states intent and stops there; the pacer applies it. Writing
+    // `WinitSettings` from here would be reverted on the very next frame anyway.
+    keep_awake.acquire();
+    info!("[offline-record] power saving disabled (KeepAwake acquired)");
+
+    // Uncap the presentation rate for the same reason: recording wants frames as
+    // fast as the machine can render them. Under `Fifo` (vsync) the render loop is
+    // pinned to the display's refresh, and the lock-step spends two render frames
+    // per captured frame — a hard ~30 captured FPS ceiling on a 60 Hz panel, for
+    // output whose playback rate is `fps` regardless. Virtual time still advances
+    // exactly `1/fps` per captured frame, so rendering faster changes only how long
+    // the capture takes, never what the video looks like.
+    if let Ok(mut window) = windows.single_mut() {
+        state.prev_present_mode = Some(window.present_mode);
+        window.present_mode = bevy::window::PresentMode::AutoNoVsync;
+    }
+
+    // Freeze time initially by setting manual duration to 0.
+    // This allows guarded simulation systems to execute but see a 0 delta.
+    // `drive_offline_clock` owns the strategy from the next frame onward.
+    commands.insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::ZERO));
+    info!("[offline-record] started recording to {} at {} FPS using TimeUpdateStrategy", state.output_dir.display(), state.fps);
+}
+
+#[on_command(StopOfflineRecording)]
+fn on_stop_offline_recording(
+    _trigger: On<StopOfflineRecording>,
+    mut state: ResMut<OfflineRecordingState>,
+    mut keep_awake: ResMut<lunco_core::KeepAwake>,
+    mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
+    mut commands: Commands,
+) {
+    if state.active {
+        state.active = false;
+        state.is_waiting_for_frame = false;
+        state.frame_just_captured = false;
+
+        // Drop the wake request; the pacer restores the binary's idle policy.
+        keep_awake.release();
+        if let (Ok(mut window), Some(prev)) = (windows.single_mut(), state.prev_present_mode.take())
+        {
+            window.present_mode = prev;
+        }
+        // Restore automatic realtime ticking
+        commands.insert_resource(TimeUpdateStrategy::Automatic);
+        info!("[offline-record] stopped recording");
+    }
+}
+
+/// Sole owner of `TimeUpdateStrategy` while recording, and the only place that
+/// requests a capture.
+///
+/// Runs in `Last` so it writes the strategy that Bevy's `TimeSystem` (in `First`)
+/// will read at the top of the NEXT frame. That ordering is what makes the
+/// lock-step deterministic: exactly one strategy write per frame, decided after
+/// every other system — including the `deliver_offline_frame` observer — has run.
+///
+/// Previously the strategy was written from both `step_offline_recording` and
+/// `deliver_offline_frame`. `step` ran after `deliver` in the same frame and
+/// re-froze the clock to ZERO, overwriting the one-frame step `deliver` had just
+/// scheduled. Virtual time therefore never advanced, `FixedUpdate` never ran, and
+/// a scenario script sequencing the shots was starved — it could never reach its
+/// `StopOfflineRecording`, so recording spooled frames until the process was killed.
+///
+/// The cycle alternates two render frames per captured frame:
+///   1. **advance** — clock steps `1/fps`, sim and `FixedUpdate` run, scene renders.
+///   2. **capture** — request the screenshot, clock frozen until it lands.
+/// Freezing while a capture is in flight is what keeps a slow (multi-frame)
+/// readback from advancing time more than once per saved frame.
+fn drive_offline_clock(
+    mut state: ResMut<OfflineRecordingState>,
+    mut commands: Commands,
+) {
+    if !state.active {
+        return;
+    }
+
+    let frame_dur = std::time::Duration::from_secs_f64(1.0 / state.fps as f64);
+
+    if state.is_waiting_for_frame {
+        // Capture in flight — hold the clock so the pending frame stays the one
+        // that was rendered when it was requested.
+        commands.insert_resource(TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::ZERO,
+        ));
+    } else if state.frame_just_captured {
+        // A frame landed: let the next frame advance by exactly one step.
+        state.frame_just_captured = false;
+        commands.insert_resource(TimeUpdateStrategy::ManualDuration(frame_dur));
+    } else {
+        // Time advanced this frame and the scene is rendered — capture it, then
+        // hold the clock until the readback delivers.
+        commands.spawn(Screenshot::primary_window());
+        state.is_waiting_for_frame = true;
+        commands.insert_resource(TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::ZERO,
+        ));
+    }
+}
+
+/// Observer for Bevy's ScreenshotCaptured event.
+fn deliver_offline_frame(
+    trigger: On<ScreenshotCaptured>,
+    mut state: ResMut<OfflineRecordingState>,
+) {
+    if !state.active || !state.is_waiting_for_frame {
+        return;
+    }
+
+    let event = trigger.event();
+    let Ok(dyn_img) = event.image.clone().try_into_dynamic() else {
+        error!("[offline-record] failed to convert image for frame {}", state.frame_index);
+        state.is_waiting_for_frame = false;
+        return;
+    };
+
+    let path = state.output_dir.join(format!("frame_{:06}.png", state.frame_index));
+    
+    // Save the image synchronously to disk
+    if let Err(e) = dyn_img.save(&path) {
+        error!("[offline-record] failed to save frame {}: {e}", state.frame_index);
+    } else {
+        trace!("[offline-record] saved frame {}", state.frame_index);
+    }
+
+    state.frame_index += 1;
+    state.is_waiting_for_frame = false;
+    // `drive_offline_clock` owns `TimeUpdateStrategy`; just signal that a frame
+    // landed so it can schedule the single `1/fps` step.
+    state.frame_just_captured = true;
+}
+
+struct GetOfflineRecordingStatusProvider;
+impl lunco_api::queries::ApiQueryProvider for GetOfflineRecordingStatusProvider {
+    fn name(&self) -> &'static str {
+        "GetOfflineRecordingStatus"
+    }
+    fn execute(&self, world: &mut World, _params: &serde_json::Value) -> lunco_api::schema::ApiResponse {
+        let state = world.resource::<OfflineRecordingState>();
+        lunco_api::schema::ApiResponse::ok(serde_json::json!({
+            "active": state.active,
+            "frame_index": state.frame_index,
+            "is_waiting_for_frame": state.is_waiting_for_frame,
+        }))
+    }
+}
+

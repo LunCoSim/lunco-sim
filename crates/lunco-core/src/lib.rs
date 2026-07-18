@@ -52,8 +52,11 @@ pub mod mobility;
 
 pub mod tools;
 
+pub mod pacing;
+
 pub use architecture::*;
 pub use derived::RebuildOnChange;
+pub use pacing::KeepAwake;
 pub use mobility::Mobility;
 pub use mocks::*;
 pub use telemetry::*;
