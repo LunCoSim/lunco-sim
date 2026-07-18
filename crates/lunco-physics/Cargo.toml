@@ -35,13 +35,22 @@ description = "Physics readiness gate: suspend rigid-body integration (avian's T
 # instrumentation being wrong, or it may be OUR teardown leaving a stale island
 # id that only an assertion notices. Both remain open.
 #
-# The tempting theory — that `BodyIslandNode::on_remove` (`:1338`) frees islands
-# SYNCHRONOUSLY (`remove_island`, `:1374-1376`) while queueing its validation
-# DEFERRED (`world.commands().queue(...)`, `:1390`), so one body's check outlives
-# an island another body freed — is UNCONFIRMED. `pure_avian_mass_despawn_of_one_island`
-# in `crates/lunco-usd-avian/tests/gizmo_body_swap_islands.rs` does exactly that
-# in pure avian, one flush, no lunco, and does NOT panic. So the theory is
-# missing an ingredient and must not be repeated as fact.
+# The live backtrace is all-avian: the panicking frame is
+# `islands::{impl#8}::on_remove::{closure_env#1}` — the cfg(validate) block —
+# reached via `apply_or_drop_queued` inside `despawn_no_free_with_caller`. No
+# lunco frame appears in the unwind path.
+#
+# The tempting theory — that `on_remove` (`:1338`) frees islands SYNCHRONOUSLY
+# (`remove_island`, `:1374-1376`) while queueing its validation DEFERRED
+# (`world.commands().queue(...)`, `:1390`), so one body's check outlives an island
+# another body freed — is UNCONFIRMED. `pure_avian_recursive_despawn_of_one_island`
+# in `crates/lunco-usd-avian/tests/gizmo_body_swap_islands.rs` drives exactly that
+# in pure avian and does NOT panic — nor does any variant tried: flat despawn,
+# recursive despawn, asleep, awake, or with joints in the island. Each
+# precondition was MEASURED (`probe_island_shape_before_despawn`: one shared
+# island, 7 touching pairs, `asleep=4/4` settled vs `0/4` at 30 steps), so the
+# greens are not the "precondition never held" trap. The theory predicts a panic
+# in all of those and gets none. Do not repeat it as fact.
 #
 # Worth knowing either way: `IslandId` is an arena index from `next_push_index()`
 # (`:463`) and is RECYCLED, so a deferred check can land on a different island

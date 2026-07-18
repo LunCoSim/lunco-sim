@@ -1374,6 +1374,42 @@ pub fn authorize_policy(
     }
 }
 
+/// **The** answer to "may `session` take control of `gid` right now?" — the single
+/// predicate the whole possession path must ask.
+///
+/// It is [`SessionRegistry::may_possess`] (free, or already ours, or `LastWins`) OR an
+/// authored takeover of a *different* session's vessel via [`may_take_control`]. Both
+/// halves are the rule; either alone is not.
+///
+/// WHY THIS EXISTS: `PossessVessel` is handled by two observers — the authority leg
+/// (`record_possession_authority`, which claims/takes over) and the bind leg
+/// (`on_possess_command`, which attaches the camera + `ControllerLink`). They each used
+/// to decide possession for themselves, and only the authority leg knew about takeover.
+/// They agreed *only* because the authority leg happens to be registered first, so the
+/// bind leg re-derived its answer from an already-updated table. Registered the other way
+/// round, the bind leg would refuse a takeover the authority leg had just granted: the log
+/// would say "session N possesses entity" while the cockpit stayed empty and the vessel
+/// undrivable — a silent, order-dependent split-brain. One predicate, both legs, no
+/// ordering assumption.
+///
+/// Deliberately permissive on an *unknown* vessel (no owner recorded): a client's table is
+/// a replicated copy that can lag its own claim, and single-player's is empty until the
+/// authority leg runs. Refusing there would block the local bind waiting for a round trip.
+pub fn may_control(
+    registry: &SessionRegistry,
+    rbac: &SessionRbac,
+    session: SessionId,
+    gid: u64,
+) -> bool {
+    if registry.may_possess(session, gid) {
+        return true;
+    }
+    match registry.owner_of(gid) {
+        Some(owner) => may_take_control(rbac, session, owner, gid),
+        None => true,
+    }
+}
+
 /// Ask the rhai control-authority policy ([`CONTROL_AUTHORITY_HOOK`]) whether
 /// `taker` may take a vessel currently owned by `owner`. Used by the possession
 /// path when the vessel is owned by a *different* session, so the built-in
@@ -1445,6 +1481,55 @@ mod tests {
             let down = get("target_control_path_down").as_bool().unwrap_or(false);
             Ok(lunco_hooks::HookValue::Bool(!down))
         }
+    }
+
+    /// `may_control` is the ONE predicate both `PossessVessel` legs ask, so it must
+    /// agree with `may_possess` on the easy cases and additionally honour takeover.
+    ///
+    /// The bug it guards: the bind leg used to call `may_possess` alone, which refuses
+    /// ANY vessel another session owns, while the authority leg granted takeovers via
+    /// the rhai policy. They agreed only by registration order. If the bind leg says no
+    /// to a takeover the authority leg said yes to, you get authority with no camera —
+    /// the log reads "session N possesses entity" and the cockpit is empty.
+    #[test]
+    fn may_control_agrees_with_the_authority_leg_on_a_policy_takeover() {
+        let _g = hook_lock();
+        let (reg, rbac, _) = owner_of_r1();
+
+        // Free vessel → anyone may take it. Both predicates already agree here.
+        assert!(may_control(&reg, &rbac, B, R2));
+        assert!(reg.may_possess(B, R2));
+        // Our own vessel → still ours.
+        assert!(may_control(&reg, &rbac, A, R1));
+
+        // R1 is owned by A. `may_possess` alone refuses B outright...
+        assert!(!reg.may_possess(B, R1), "precondition: exclusive refusal");
+        // ...and with NO takeover policy registered, may_control fails closed too.
+        lunco_hooks::unregister(CONTROL_AUTHORITY_HOOK);
+        assert!(
+            !may_control(&reg, &rbac, B, R1),
+            "no policy ⇒ fail closed, current owner keeps the vessel"
+        );
+
+        // With a policy that ALLOWS the takeover, may_control must say yes — this is
+        // exactly where the old `may_possess`-only bind leg said no and split the brain.
+        struct AllowTakeover;
+        impl lunco_hooks::ScriptHook for AllowTakeover {
+            fn invoke(&self, _args: &[lunco_hooks::HookValue]) -> lunco_hooks::HookResult {
+                Ok(lunco_hooks::HookValue::Bool(true))
+            }
+        }
+        lunco_hooks::register(lunco_hooks::RegisteredHook {
+            id: CONTROL_AUTHORITY_HOOK.to_string(),
+            backend: "rust".into(),
+            deterministic: true,
+            hook: std::sync::Arc::new(AllowTakeover),
+        });
+        assert!(
+            may_control(&reg, &rbac, B, R1),
+            "policy allows takeover ⇒ BOTH legs must allow it"
+        );
+        lunco_hooks::unregister(CONTROL_AUTHORITY_HOOK);
     }
 
     fn owner_of_r1() -> (SessionRegistry, SessionRbac, CommandPolicyRegistry) {

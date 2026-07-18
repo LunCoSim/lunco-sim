@@ -3287,6 +3287,51 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
                         };
                     }
                 }
+
+                // Rate, next to the pause button because it is the same authority:
+                // `TimeTransport.rate`. ONLY the physics-real band is offered here.
+                // At or below `MAX_REALTIME_RATE` the rate multiplies the NUMBER of
+                // fixed steps per frame, so bodies genuinely integrate faster — a
+                // rover really does drive 4x faster, with identical solver fidelity.
+                // Past that ceiling `advance_clock` selects `TimeRegime::KinematicWarp`
+                // and returns relative_speed 0: the tick FREEZES and only the epoch
+                // moves. That is a sky-viewing tool, not a fast-forward, so it lives in
+                // the celestial/mission-control panels and never on the main toolbar.
+                let rate = world
+                    .get_resource::<lunco_time::TimeTransport>()
+                    .map(|t| t.rate)
+                    .unwrap_or(1.0);
+                for m in [1.0_f64, 2.0, 4.0, 8.0] {
+                    let on = !paused && (rate - m).abs() < f64::EPSILON;
+                    if ui
+                        .selectable_label(on, format!("{m:.0}x"))
+                        .on_hover_text("Run the simulation (physics included) at this rate")
+                        .clicked()
+                    {
+                        if let Some(mut t) = world.get_resource_mut::<lunco_time::TimeTransport>() {
+                            t.rate = m;
+                            t.mode = lunco_time::TransportMode::Playing;
+                        }
+                    }
+                }
+                if rate > lunco_time::MAX_REALTIME_RATE {
+                    // `Res<Theme>`, NOT `lunco_theme::active(ctx)`: the latter reads a
+                    // per-frame copy that only the Modelica canvas ever publishes, so
+                    // everywhere else it silently returns `Theme::dark()`.
+                    let warn = world
+                        .get_resource::<lunco_theme::Theme>()
+                        .map(|t| t.tokens.warning)
+                        .unwrap_or(egui::Color32::YELLOW);
+                    ui.label(
+                        egui::RichText::new(format!("{rate:.0}x sky"))
+                            .color(warn)
+                            .size(10.0),
+                    )
+                    .on_hover_text(
+                        "Kinematic warp: the sim tick is frozen. Bodies do not move; \
+                         only the epoch advances.",
+                    );
+                }
             }
 
             // Perspective tabs live in the menu bar (right-aligned).

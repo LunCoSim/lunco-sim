@@ -192,6 +192,23 @@ impl Plugin for CelestialPlugin {
         // `&mut World`, inserted a sync point that interleaved with the
         // twin/terrain despawns and tripped avian's island bookkeeping.)
         app.add_systems(Update, link::update_links);
+        // Publish the working peer's range + verdict as cosim outputs, so an authored
+        // RF model (`assets/models/CommsLink.mo`) can turn metres into bits/s off an
+        // ordinary output→input wire.
+        //
+        // `FixedUpdate` + `.before(CosimSet::Propagate)` is NOT decoration, it is the
+        // whole contract — the same one `inject_local_solar_into_cosim` keeps
+        // (`lunco-environment/src/lib.rs:515`). Propagation is what copies an output
+        // onto the wired input; publish after it and the model reads an input nobody
+        // wrote that tick. In `Update` with no ordering at all, this bridge wrote
+        // real metres and the model still saw `link_range_m = 0` — Modelica dutifully
+        // solved a 1 m link at 145 dB SNR. Cosim runs on the FIXED cycle; a bridge
+        // feeding it must too, or it is publishing into the wrong tick.
+        app.add_systems(
+            FixedUpdate,
+            link::inject_link_state_into_cosim
+                .before(lunco_cosim::systems::propagate::CosimSet::Propagate),
+        );
         // Keep a host-app gravity choice (e.g. the sandbox's flat gravity);
         // default to surface gravity for the full client.
         if app.world().get_resource::<Gravity>().is_none() {

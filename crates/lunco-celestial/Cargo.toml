@@ -63,6 +63,11 @@ lunco-time = { path = "../lunco-time" }
 # types this crate now states instead of materials: `PbrLook`, `SceneCamera`.
 lunco-render = { path = "../lunco-render" }
 lunco-environment = { path = "../lunco-environment" }
+# For the link → cosim bridge (`link::inject_link_state_into_cosim`): publishes range +
+# the geometry verdict as SimComponent outputs so an authored RF model (CommsLink.mo)
+# can read them off an ordinary wire. Same direction as lunco-environment's solar
+# bridge, and no cycle — cosim names celestial/environment only in [dev-dependencies].
+lunco-cosim = { path = "../lunco-cosim" }
 lunco-assets = { workspace = true }
 lunco-storage = { path = "../lunco-storage" }
 avian3d = { workspace = true }

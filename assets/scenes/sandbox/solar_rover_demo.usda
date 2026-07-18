@@ -1,0 +1,252 @@
+#usda 1.0
+(
+    defaultPrim = "SolarRoverTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# ── Cinematic demo: solar rover co-simulation scenario ────────────────────────
+#
+# Composes a custom scene with:
+#   1. A SkidRover base referenced from assets/vessels
+#   2. A custom-constructed rotating solar panel mounted on the rover
+#   3. A SunTracker.mo Modelica controller to yaw the panel to the sun
+#   4. A SolarRoverPower.mo Modelica program to simulate battery charging/discharging
+#   5. An autopilot Rhai script directing the navigation
+#   6. A cinematic director script executing the cuts and solar-tracking showcase
+#
+# Run locally with:
+#   cargo run -p lunco-sandbox --bin sandbox -- --scene scenes/sandbox/solar_rover_demo.usda
+
+def Xform "SolarRoverTest" (
+    kind = "assembly"
+    doc = "Solar-powered rover co-simulation scene. The rover drives Waypoints, drains its battery, then stops to track the sun and charge."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    # UsdPhysicsMaterialAPI
+    def Scope "PhysicsMaterials"
+    {
+        def Material "Friction_1_0" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1.0
+            float physics:staticFriction = 1.0
+        }
+    }
+    uniform bool lunco:spawnable = false
+
+    def Scope "Looks"
+    {
+        def Material "SolarPanel"
+        {
+            token outputs:surface.connect = </SolarRoverTest/Looks/SolarPanel/Shader.outputs:surface>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:wgsl:sourceAsset = @shaders/solar_panel.wgsl@
+                color3f inputs:cell_color = (0.05, 0.05, 0.35)
+                color3f inputs:bus_color = (0.85, 0.85, 0.90)
+                color3f inputs:frame_color = (0.35, 0.35, 0.38)
+                float inputs:cell_rows = 6.0
+                float inputs:cell_cols = 10.0
+                float inputs:cell_gap = 0.02
+                float inputs:bus_width = 0.004
+                float inputs:border = 0.04
+                token outputs:surface
+            }
+        }
+    }
+
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.32, 0.31, 0.33)]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </SolarRoverTest/PhysicsMaterials/Friction_1_0>
+    }
+
+    # Standard starting avatar location (unused in active cinematic camera mode)
+    def Xform "Avatar" (
+        prepend apiSchemas = ["LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        uniform token lunco:cameraMode = "freeflight"
+        double3 lunco:cameraLookAt = (0.0, 1.0, 0.0)
+        double3 xformOp:translate = (15.0, 8.0, 15.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # The Sun - starts at standard elevation and azimuth
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 12000
+        float inputs:angle = 0.53
+        double3 xformOp:rotateXYZ = (-30.0, 40.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    # Static camera: Wide establishing shot looking at the starting region
+    def Camera "WideTrack"
+    {
+        custom double3 lunco:cameraLookAt = (0, 0.5, 0)
+        double3 xformOp:translate = (25.0, 15.0, 25.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float focalLength = 28.0
+        float2 clippingRange = (0.1, 200000.0)
+    }
+
+    # ── The Solar Powered Rover ──────────────────────────────────────────────
+    def Xform "SolarRover" (
+        prepend references = @../../vessels/rovers/skid_rover.usda@</SkidRover>
+    )
+    {
+        double3 xformOp:translate = (0.0, 0.5, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        # ── Mast: Static part of the panel mount attached to the chassis ──
+        def Cylinder "Mast"
+        {
+            uniform token axis = "Y"
+            double radius = 0.05
+            double height = 0.7
+            double3 xformOp:translate = (0, 0.45, 0) // Lifted on top of chassis
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.5, 0.5, 0.52)]
+            bool physics:collisionEnabled = false
+        }
+
+        # ── YawHead: Rotating part of the solar tracker ──
+        # Dynamic body to let physics solve rotation under the motor torque.
+        def Cylinder "YawHead" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            uniform token axis = "Y"
+            double radius = 0.1
+            double height = 0.15
+            double3 xformOp:translate = (0, 0.85, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.4, 0.4, 0.42)]
+            float physics:mass = 2.0
+
+            # The actual Solar Panel mesh - attached to the YawHead
+            def Cube "Panel"
+            {
+                double size = 1.0
+                double3 xformOp:translate = (0, 0.4, 0)
+                double3 xformOp:scale = (1.8, 0.8, 0.04)
+                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+                color3f[] primvars:displayColor = [(0.05, 0.05, 0.35)]
+                bool physics:collisionEnabled = false
+                rel material:binding = </SolarRoverTest/Looks/SolarPanel>
+            }
+        }
+
+        # ── Hinge joint allowing solar panel to rotate on top of rover ──
+        def PhysicsRevoluteJoint "Hinge"
+        {
+            rel physics:body0 = </SolarRoverTest/SolarRover>
+            rel physics:body1 = </SolarRoverTest/SolarRover/YawHead>
+            uniform token physics:axis = "Y"
+            point3f physics:localPos0 = (0, 0.85, 0)
+            point3f physics:localPos1 = (0, 0, 0)
+
+            # Wire Hinge motor angle input to the SunTracker model output
+            float inputs:angle.connect = </SolarRoverTest/SolarRover/SunTrackerController.outputs:yaw>
+        }
+
+        # ── Sun Tracker Controller (Modelica) ──
+        def Xform "SunTrackerController" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform asset lunco:program:sourceAsset = @models/SunTracker.mo@
+            # Self-wire sun azimuth from environment solar bridge
+            float inputs:sun_azimuth.connect = </SolarRoverTest/SolarRover/SunTrackerController.outputs:sun_azimuth>
+        }
+
+        # ── Power Subsystem Model (Modelica) ──
+        def Xform "PowerSubsystem" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform asset lunco:program:sourceAsset = @models/SolarRoverPower.mo@
+            # Self-wire sun azimuth from environment solar bridge
+            float inputs:sun_azimuth.connect = </SolarRoverTest/SolarRover/PowerSubsystem.outputs:sun_azimuth>
+            # Connect actual panel yaw from SunTracker's yaw output
+            float inputs:panel_yaw.connect = </SolarRoverTest/SolarRover/SunTrackerController.outputs:yaw>
+            # Throttle will be set programmatically by the autopilot script
+        }
+
+        # ── Autopilot Script (Rhai) ──
+        def LunCoProgram "Autopilot"
+        {
+            uniform asset lunco:program:sourceAsset = @scenarios/solar_rover_demo.rhai@
+        }
+
+        # ── Chase camera riding behind the rover ──
+        def Camera "RoverCam"
+        {
+            custom double3 lunco:cameraLookAt = (0, 0.6, -9)
+            double3 xformOp:translate = (0, 2.5, 6)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            float focalLength = 26.0
+            float2 clippingRange = (0.1, 200000.0)
+        }
+
+        # ── Close-up camera pointing at the solar panel ──
+        def Camera "SideCam"
+        {
+            custom double3 lunco:cameraLookAt = (0, 1.25, 0)
+            double3 xformOp:translate = (-3.5, 2.2, 3.5)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            float focalLength = 32.0
+            float2 clippingRange = (0.1, 200000.0)
+        }
+    }
+
+    # ── Waypoint course ──
+    def Xform "RoverTarget1" (
+        prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker>
+    )
+    {
+        double3 xformOp:translate = (18.0, 0.0, 10.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Xform "RoverTarget2" (
+        prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker>
+    )
+    {
+        double3 xformOp:translate = (-15.0, 0.0, 20.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Xform "RoverTarget3" (
+        prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker>
+    )
+    {
+        double3 xformOp:translate = (8.0, 0.0, -18.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # ── Scenario director ──
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "solar-rover-ops"
+
+        def LunCoProgram "Mission"
+        {
+            uniform asset lunco:program:sourceAsset = @scenarios/solar_rover_cinematic.rhai@
+        }
+    }
+}

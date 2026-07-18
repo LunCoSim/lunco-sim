@@ -563,7 +563,7 @@ mod tests {
     fn test_gizmo_prev_pos_component() {
         let pos = GizmoPrevPos { 
             local_pos: DVec3::new(1.0, 2.0, 3.0), 
-            original_body: RigidBody::Dynamic,
+            original_body: Some(RigidBody::Dynamic),
             had_translation_interpolation: false,
             had_rotation_interpolation: false,
         };
@@ -584,7 +584,7 @@ mod tests {
             GizmoTarget::default(),
             GizmoPrevPos { 
                 local_pos: DVec3::ZERO, 
-                original_body: RigidBody::Dynamic,
+                original_body: Some(RigidBody::Dynamic),
                 had_translation_interpolation: false,
                 had_rotation_interpolation: false,
             },
@@ -598,6 +598,56 @@ mod tests {
 
         assert_eq!(app.world().get::<RigidBody>(vessel), Some(&RigidBody::Dynamic));
         assert!(app.world().get::<GizmoPrevPos>(vessel).is_none());
+    }
+
+    /// Dragging a prop that was never a rigid body must not MAKE it one.
+    ///
+    /// The drag itself inserts `RigidBody::Kinematic` so the gizmo can move the
+    /// thing without avian fighting it. Restore then has to put back what was
+    /// there before — and for plain scene geometry that is *nothing*.
+    /// `original_body` used to be a bare `RigidBody`, so the capture had to
+    /// invent a value for the had-no-body case and restore fabricated a
+    /// `RigidBody::Dynamic` on a mass-less entity. Avian then logged
+    /// "Dynamic rigid body … has no mass or inertia" every frame for an entity
+    /// the user had merely nudged. Hence `Option`: `None` means remove.
+    #[test]
+    fn dragging_a_non_body_leaves_it_a_non_body() {
+        use crate::SelectedEntities;
+
+        let mut app = App::new();
+        app.init_resource::<SelectedEntities>();
+        app.add_systems(Update, restore_gizmo_dynamic);
+
+        let prop = app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(Vec3::ZERO),
+                // What the drag put on it — not what it started with.
+                RigidBody::Kinematic,
+                GizmoTarget::default(),
+                GizmoPrevPos {
+                    local_pos: DVec3::ZERO,
+                    original_body: None,
+                    had_translation_interpolation: false,
+                    had_rotation_interpolation: false,
+                },
+                LinearVelocity::default(),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<SelectedEntities>()
+            .entities
+            .push(prop);
+
+        app.update();
+
+        assert!(
+            app.world().get::<RigidBody>(prop).is_none(),
+            "restore must REMOVE the drag's kinematic body, not swap in a \
+             fabricated Dynamic one — a mass-less Dynamic body makes avian \
+             log 'has no mass or inertia' forever"
+        );
+        assert!(app.world().get::<GizmoPrevPos>(prop).is_none());
     }
 
     /// A2: the gizmo is not an authority — a completed drag authors USD.
@@ -645,7 +695,7 @@ mod tests {
                 lunco_core::GlobalEntityId::from_raw(42),
                 GizmoPrevPos {
                     local_pos: DVec3::new(3.0, 4.0, 5.0),
-                    original_body: RigidBody::Dynamic,
+                    original_body: Some(RigidBody::Dynamic),
                     had_translation_interpolation: false,
                     had_rotation_interpolation: false,
                 },

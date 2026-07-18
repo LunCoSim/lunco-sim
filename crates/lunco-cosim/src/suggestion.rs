@@ -65,6 +65,39 @@ pub const SOLAR_AZIMUTH_CONNECTOR: &str = "sun_azimuth";
 /// entity's location. Companion to [`SOLAR_AZIMUTH_CONNECTOR`].
 pub const SOLAR_ELEVATION_CONNECTOR: &str = "sun_elevation";
 
+/// Prefix of the SimComponent **output** connectors `lunco-celestial`'s link bridge
+/// writes on every link node, one set per authored peer `class`:
+///
+/// ```text
+/// link_<class>_range_m        metres to the best peer of that class
+/// link_<class>_connected      1.0 = geometry closes, 0.0 = severed
+/// link_<class>_elevation_deg  that peer's elevation above the local horizon
+/// ```
+///
+/// Same contract as [`SOLAR_AZIMUTH_CONNECTOR`]: cosim stays domain-agnostic and a domain
+/// system writes the real value each solve, so an RF model (`CommsLink.mo`) receives it
+/// through an ordinary output→input [`crate::SimConnection`].
+///
+/// WHY PER CLASS: `LinkState` already hands every peer to anything that can hold a list
+/// (rhai, the API, the UI). Cosim is the one consumer that cannot — a Modelica port is a
+/// fixed scalar — so N peers must reduce. `class` is the authored routing group that
+/// exists for exactly this (three DSN complexes all author `class = "earth"`), which
+/// keeps the choice of link with the AUTHOR:
+///
+/// ```usda
+/// float inputs:link_range_m.connect = </…/Comms.outputs:link_relay_range_m>
+/// ```
+///
+/// The model keeps generic inputs; the connection picks the link. Same `CommsLink.mo`
+/// serves a relay uplink here and direct-to-Earth there, and a two-radio vehicle
+/// instantiates it twice — no policy in the kernel, none in the model.
+///
+/// The kernel publishes GEOMETRY and only geometry: metres and a verdict, never a data
+/// rate. Turning metres into bits/s is the authored channel model's job. And `connected`
+/// is the geometry verdict ALONE — a peer can be in plain sight and still too far to
+/// close the link budget; that verdict belongs to the model.
+pub const LINK_CONNECTOR_PREFIX: &str = "link_";
+
 /// Known input variable names that suggest a height connection.
 const KNOWN_HEIGHT_INPUTS: &[&str] = &["height", "altitude", "h", "z"];
 /// Known input variable names that suggest a velocity connection.

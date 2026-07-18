@@ -57,6 +57,17 @@ fn every_program_source_asset_exists() {
             else {
                 continue;
             };
+            // Both spellings resolve to the same place and both are correct:
+            //
+            //   @models/Battery.mo@         — asset-root relative
+            //   @lunco://models/Battery.mo@ — the asset-root SCHEME
+            //
+            // The scheme is the location-independent one (`register_lunco_asset_sources`
+            // registers it, and `asset_server.load` honours it), so it is what a shipped
+            // asset should use when the scene may be mounted from a twin — a bare path
+            // would then resolve against the twin instead of the engine's assets. Strip
+            // it and check the same file either way; anything else here is a real path.
+            let rel = rel.strip_prefix("lunco://").unwrap_or(rel);
             if !root.join(rel).exists() {
                 missing.push(format!(
                     "{}:{} names `{}`, which is not under assets/",

@@ -81,11 +81,26 @@ pub fn light_time_s(range_m: f64) -> f64 {
 pub struct LinkConfig {
     /// Seconds of sim time between recomputes (`0` = every tick).
     pub interval_s: f64,
+    /// Drop debounce: how many CONSECUTIVE recomputes a live link must read as
+    /// severed before its verdict actually flips to down. Acquisition is never
+    /// debounced — a link goes up the instant geometry closes.
+    ///
+    /// This is the fix for green↔red chatter at a grazing horizon: at a polar site
+    /// the sight-line to a relay or to Earth skims the ridge, so the DEM march flickers
+    /// hit/clear as the endpoint creeps and a raw verdict oscillates every recompute.
+    /// Requiring N consecutive downs to drop turns that flicker into one honest LOS,
+    /// the same way real AOS/LOS detection debounces contact chatter. Asymmetric on
+    /// purpose: you want to SEE a link the moment it is available, but not lose it to a
+    /// single-frame graze.
+    ///
+    /// `1` disables the debounce (flip immediately, the old behaviour). At the default
+    /// 0.25 s cadence, `3` is a 0.75 s hold — below human notice, above the flicker.
+    pub drop_debounce: u32,
 }
 
 impl Default for LinkConfig {
     fn default() -> Self {
-        Self { interval_s: 0.25 }
+        Self { interval_s: 0.25, drop_debounce: 3 }
     }
 }
 
@@ -225,7 +240,13 @@ register_commands!(on_set_link_cadence);
 #[derive(Resource, Default)]
 pub(crate) struct LinkSolverState {
     last_jd: f64,
+    /// The PUBLISHED up-set from the previous recompute — what consumers were told and
+    /// what AOS/LOS edges fire against. Debounced, not raw.
     prev_up: HashSet<(u64, u64)>,
+    /// Per-pair count of consecutive recomputes a currently-published-up link has read
+    /// as severed. Reaches [`LinkConfig::drop_debounce`] → the drop publishes. Cleared
+    /// the moment the link reads up again, so a flicker never accumulates.
+    down_streak: HashMap<(u64, u64), u32>,
 }
 
 /// One resolved node, snapshotted so the world borrow is free for the terrain
@@ -286,6 +307,8 @@ pub(crate) fn update_links(
     let (Some(config), Some(world_time)) = (config, world_time) else {
         return;
     };
+    // `1` (or a fat-fingered `0`) means "flip immediately" — the pre-debounce behaviour.
+    let debounce = config.drop_debounce.max(1);
     let jd = world_time.epoch_jd;
     if q_nodes.iter().count() < 2 {
         return;
@@ -426,13 +449,35 @@ pub(crate) fn update_links(
                 ("max_range_m", HookValue::Float(a.node.max_range_m.min(b.node.max_range_m))),
             ]);
             let builtin = cheap_ok && !terrain_blocked && !occluder_blocked;
-            let connected = match lunco_hooks::invoke(LINK_HOOK, &[ctx]) {
+            let raw = match lunco_hooks::invoke(LINK_HOOK, &[ctx]) {
                 Some(Ok(v)) => v.as_bool().unwrap_or(builtin),
                 _ => builtin,
             };
 
+            // Asymmetric drop debounce (see `LinkConfig::drop_debounce`). Acquire the
+            // instant geometry closes; drop only after N consecutive severed reads, so a
+            // grazing-horizon flicker becomes one honest LOS instead of green↔red chatter.
+            let key = pair_key(a.gid, b.gid);
+            let was_up = state.prev_up.contains(&key);
+            let connected = if raw {
+                state.down_streak.remove(&key);
+                true
+            } else if !was_up {
+                false
+            } else {
+                let n = state.down_streak.entry(key).or_insert(0);
+                *n += 1;
+                if *n >= debounce {
+                    state.down_streak.remove(&key);
+                    false
+                } else {
+                    // Hold the published link up through the flicker.
+                    true
+                }
+            };
+
             if connected {
-                up_now.insert(pair_key(a.gid, b.gid));
+                up_now.insert(key);
             }
             let delay_s = light_time_s(range_m);
             per_node.entry(a.entity).or_default().push(LinkPeer {
@@ -568,10 +613,219 @@ fn link_event(name: &str, (a, b): (u64, u64), jd: f64) -> TelemetryEvent {
     }
 }
 
+/// Publish each link node's working peer as `SimComponent` **outputs**
+/// [`LINK_RANGE_CONNECTOR`] / [`LINK_CONNECTED_CONNECTOR`], so an RF model
+/// (`assets/models/CommsLink.mo`) receives real geometry through an ordinary
+/// output→input wire.
+///
+/// The gravity/solar-bridge idiom (`lunco-environment`'s `inject_local_solar_into_cosim`):
+/// cosim stays domain-agnostic, this domain system writes the value, and the USD wiring
+/// is explicit. The kernel keeps publishing geometry and ONLY geometry — metres and a
+/// verdict. Bits per second are the channel model's business, and the channel model is
+/// authored. That split is the whole point of the comms retirement: core knows geometry,
+/// "comms" is content.
+///
+/// ## Reduced by CLASS, because a Modelica port is one scalar
+///
+/// `LinkState` already exposes EVERY peer to everything that can hold a list — rhai
+/// (`get(id, "LinkState.peers")`), the API, the UI. Cosim is the one consumer that
+/// cannot: a Modelica port is a fixed scalar, so N peers must reduce to something.
+///
+/// The reduction is by **`class`** — the authored routing group, the one that already
+/// exists precisely because identity is the wrong key here (three DSN complexes all
+/// author `class = "earth"`). Per class we publish the nearest CONNECTED peer, falling
+/// back to the nearest of that class when none is connected, so the model keeps a
+/// plausible distance to hold its input filter steady across a dropout rather than
+/// snapping to a fake value:
+///
+/// ```text
+/// outputs:link_earth_range_m / link_earth_connected / link_earth_elevation_deg
+/// outputs:link_relay_range_m / link_relay_connected / link_relay_elevation_deg
+/// ```
+///
+/// **The AUTHOR picks the link, not this function.** A model keeps generic inputs and the
+/// USD connection maps one to it:
+///
+/// ```usda
+/// float inputs:link_range_m.connect = </…/Comms.outputs:link_relay_range_m>
+/// ```
+///
+/// so the same `CommsLink.mo` models a relay uplink on one vehicle and direct-to-Earth on
+/// the next, and a two-radio vehicle instantiates it twice. No policy in Rust, none in
+/// the model.
+///
+/// This REPLACED a "nearest connected peer overall" reduction, which quietly hardcoded a
+/// routing decision in Rust while routing lives in rhai (`links.rhai`'s hop BFS to
+/// `class = "earth"`) — a second, dumber router that disagreed with the real one the
+/// moment a rover relayed via satellite instead of the nearest station. Reducing per
+/// class is a REDUCTION, not routing: it answers "my best link of this kind", which is
+/// exactly what a point-to-point budget needs, and leaves multi-hop to the layer that
+/// owns it.
+///
+/// Writes every solve (not change-driven) because a model's own output sync rewrites its
+/// outputs map — same reasoning as the gravity and solar bridges.
+pub fn inject_link_state_into_cosim(
+    q_class: Query<(&lunco_core::GlobalEntityId, &LinkNode)>,
+    mut q: Query<(&LinkState, &mut lunco_cosim::SimComponent)>,
+) {
+    // gid → class, one pass. A peer names a GID; the class lives on the PEER's node.
+    let class_of: std::collections::HashMap<u64, &str> = q_class
+        .iter()
+        .filter_map(|(gid, node)| node.class.as_deref().map(|c| (gid.get(), c)))
+        .collect();
+
+    for (state, mut comp) in &mut q {
+        // Best peer per class: connected wins over nearer, then nearest. `total_cmp`
+        // because `f64` is not `Ord` and a NaN range must not panic the comparison.
+        let mut best: std::collections::HashMap<&str, &LinkPeer> = Default::default();
+        for p in &state.peers {
+            let Some(class) = class_of.get(&p.peer).copied() else {
+                // A peer with no class is unreachable by an authored wire (there is no
+                // port name for it) — LinkState still carries it for script/UI.
+                continue;
+            };
+            best.entry(class)
+                .and_modify(|cur| {
+                    let better = match (cur.connected, p.connected) {
+                        (false, true) => true,
+                        (true, false) => false,
+                        _ => p.range_m < cur.range_m,
+                    };
+                    if better {
+                        *cur = p;
+                    }
+                })
+                .or_insert(p);
+        }
+
+        for (class, p) in best {
+            let c = sanitize_class(class);
+            comp.outputs
+                .insert(format!("link_{c}_range_m"), p.range_m);
+            comp.outputs.insert(
+                format!("link_{c}_connected"),
+                if p.connected { 1.0 } else { 0.0 },
+            );
+            comp.outputs
+                .insert(format!("link_{c}_elevation_deg"), p.elevation_deg);
+        }
+    }
+}
+
+/// A `class` is authored free text but a port name is an identifier, so fold anything
+/// that is not `[a-z0-9_]` to `_`. `"earth"` → `link_earth_range_m`; `"Deep Space"` →
+/// `link_deep_space_range_m`. Lossy by design and stable: the author reads the port name
+/// off the class they wrote.
+fn sanitize_class(class: &str) -> String {
+    class
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
+
+    /// Spawn a peer node so the bridge can resolve its GID → `class`.
+    fn peer_node(world: &mut World, gid: u64, class: &str) {
+        world.spawn((
+            lunco_core::GlobalEntityId::from_raw(gid),
+            LinkNode { max_range_m: 1.0e12, min_elevation_deg: -90.0, class: Some(class.into()) },
+        ));
+    }
+
+    /// The reduction that lets a scalar Modelica port see an N-peer graph: per CLASS,
+    /// the best peer — connected beats nearer, then nearest wins.
+    ///
+    /// This is what a hardcoded "nearest peer overall" got wrong: it would have handed
+    /// the model the 100 m station and called the link up, when the vehicle's earth link
+    /// is the 5 km one and the relay link is a separate signal entirely. Class-reduction
+    /// keeps BOTH, and lets the author wire whichever the radio actually works.
+    #[test]
+    fn bridge_publishes_the_best_peer_per_class_not_one_global_winner() {
+        let mut world = World::new();
+        peer_node(&mut world, 1, "earth");
+        peer_node(&mut world, 2, "earth");
+        peer_node(&mut world, 3, "relay");
+        let e = world
+            .spawn((
+                LinkState {
+                    peers: vec![
+                        // earth: nearest, but BLOCKED — must lose to a connected one.
+                        LinkPeer { peer: 1, connected: false, range_m: 100.0, light_time_s: 0.0, elevation_deg: 10.0 },
+                        // earth: farther but usable — the earth link we are working.
+                        LinkPeer { peer: 2, connected: true, range_m: 5000.0, light_time_s: 0.0, elevation_deg: 20.0 },
+                        // relay: a DIFFERENT link, must not compete with earth at all.
+                        LinkPeer { peer: 3, connected: true, range_m: 9000.0, light_time_s: 0.0, elevation_deg: 30.0 },
+                    ],
+                },
+                lunco_cosim::SimComponent::default(),
+            ))
+            .id();
+
+        world.run_system_once(inject_link_state_into_cosim).unwrap();
+
+        let c = world.get::<lunco_cosim::SimComponent>(e).unwrap();
+        assert_eq!(
+            c.outputs.get("link_earth_range_m"),
+            Some(&5000.0),
+            "connected must beat nearer-but-blocked within a class"
+        );
+        assert_eq!(c.outputs.get("link_earth_connected"), Some(&1.0));
+        assert_eq!(
+            c.outputs.get("link_relay_range_m"),
+            Some(&9000.0),
+            "the relay link is its own signal — a nearer EARTH peer must not shadow it"
+        );
+        assert_eq!(c.outputs.get("link_relay_connected"), Some(&1.0));
+    }
+
+    /// Every peer of a class blocked ⇒ publish the nearest one's real range with verdict
+    /// 0. The model needs a plausible distance to hold its input filter steady across a
+    /// dropout; the verdict is what gates the rate to zero, not a fabricated range.
+    #[test]
+    fn bridge_reports_range_with_a_down_verdict_when_every_peer_is_blocked() {
+        let mut world = World::new();
+        peer_node(&mut world, 1, "earth");
+        peer_node(&mut world, 2, "earth");
+        let e = world
+            .spawn((
+                LinkState {
+                    peers: vec![
+                        LinkPeer { peer: 1, connected: false, range_m: 800.0, light_time_s: 0.0, elevation_deg: 1.0 },
+                        LinkPeer { peer: 2, connected: false, range_m: 200.0, light_time_s: 0.0, elevation_deg: 2.0 },
+                    ],
+                },
+                lunco_cosim::SimComponent::default(),
+            ))
+            .id();
+
+        world.run_system_once(inject_link_state_into_cosim).unwrap();
+
+        let c = world.get::<lunco_cosim::SimComponent>(e).unwrap();
+        assert_eq!(c.outputs.get("link_earth_range_m"), Some(&200.0));
+        assert_eq!(
+            c.outputs.get("link_earth_connected"),
+            Some(&0.0),
+            "blocked geometry must reach the model as a DOWN verdict"
+        );
+    }
+
+    /// A class is authored free text; a port name is an identifier.
+    #[test]
+    fn class_names_fold_to_port_identifiers() {
+        assert_eq!(sanitize_class("earth"), "earth");
+        assert_eq!(sanitize_class("Deep Space"), "deep_space");
+        assert_eq!(sanitize_class("X-Band/2"), "x_band_2");
+    }
 
     /// A link node with an explicit GID. Real nodes get theirs from `Provenance`
     /// in `PostUpdate`; here we mint one directly so the sweep has an identity to
@@ -782,7 +1036,9 @@ mod tests {
     fn world_at_epoch(interval_s: f64) -> World {
         let mut world = World::new();
         world.insert_resource(lunco_time::WorldTime { epoch_jd: 2_451_545.0, ..Default::default() });
-        world.insert_resource(LinkConfig { interval_s });
+        // `drop_debounce: 1` = flip immediately, so every geometry test reads the raw
+        // verdict on the sweep it runs. The debounce itself is exercised on its own.
+        world.insert_resource(LinkConfig { interval_s, drop_debounce: 1 });
         world
     }
 
@@ -799,6 +1055,42 @@ mod tests {
         let peer = sa.peers.iter().find(|p| p.peer == GID_B).expect("a sees relay");
         assert!(peer.connected, "a clear 10 m link should be up: {peer:?}");
         assert!((peer.range_m - 10.0).abs() < 1e-6, "range {}", peer.range_m);
+    }
+
+    /// The green↔red chatter fix: a link that reads severed for a moment must NOT drop
+    /// until it has read severed for `drop_debounce` consecutive recomputes, and a single
+    /// re-acquire in that window resets the count. Acquisition itself is never delayed.
+    #[test]
+    fn a_dropout_debounces_but_a_reacquire_resets_it() {
+        let _g = link_lock();
+        let mut world = world_at_epoch(0.0);
+        world.resource_mut::<LinkConfig>().drop_debounce = 3;
+        let a = node(&mut world, "rover", DVec3::ZERO, 100.0);
+        let b = node(&mut world, "relay", DVec3::new(50.0, 0.0, 0.0), 100.0);
+
+        let sys = world.register_system(update_links);
+        let is_up = |w: &mut World| {
+            w.run_system(sys).unwrap();
+            w.get::<LinkState>(a).unwrap().peers.iter().find(|p| p.peer == GID_B).unwrap().connected
+        };
+        // Force the RAW verdict down by pulling the range past both nodes' max.
+        let sever = |w: &mut World| { w.get_mut::<LinkNode>(a).unwrap().max_range_m = 1.0; w.get_mut::<LinkNode>(b).unwrap().max_range_m = 1.0; };
+        let heal = |w: &mut World| { w.get_mut::<LinkNode>(a).unwrap().max_range_m = 100.0; w.get_mut::<LinkNode>(b).unwrap().max_range_m = 100.0; };
+
+        assert!(is_up(&mut world), "50 m link within 100 m range is up");
+
+        // Sever: held up through the debounce window (streak 1, then 2)…
+        sever(&mut world);
+        assert!(is_up(&mut world), "1st severed read: held up (streak 1/3)");
+        assert!(is_up(&mut world), "2nd severed read: held up (streak 2/3)");
+        // …one flicker back to up in the window RESETS the streak.
+        heal(&mut world);
+        assert!(is_up(&mut world), "re-acquired");
+        sever(&mut world);
+        assert!(is_up(&mut world), "streak restarts after a re-acquire (1/3), not 3/3");
+        assert!(is_up(&mut world), "streak 2/3");
+        // Third consecutive severed read finally publishes the drop.
+        assert!(!is_up(&mut world), "3 consecutive severed reads ⇒ LOS");
     }
 
     /// **P5 regression — propagation delay is published, not silently dropped.**

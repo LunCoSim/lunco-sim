@@ -1,0 +1,122 @@
+#usda 1.0
+(
+    defaultPrim = "LinkBeam"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Connectivity beam — a reusable visual part, referenced by any link node (a rover
+# radio, a ground station, a relay), exactly as `wheel.usda` is shared across rovers.
+#
+# Authored the SAME way the altimeter beam is (`altimeter.usda`): unit `Cylinder`s with
+# bound emissive `Material`s, plus `LunCoProgram` prims naming a driver and its
+# `lunco:param:*` tuning. Nothing about the look or the numbers lives in Rust.
+#
+# COLOUR BY STATE. There is one beam per connectivity STATE — `Up` (green) and `Down`
+# (red) — each a template the `link_beams` driver clones per peer, picking by the peer's
+# live `connected` verdict. That verdict is itself authored policy: the `link.connected`
+# rhai hook decides it, and `link.aos`/`link.los` fire on every change for a script to
+# react to (`on_event`). So the beam's colour follows a state a script owns; adding a
+# third state (a degraded amber, say) is a new template here plus a hook that returns it —
+# no driver change. The look is a material, so a future ANIMATED material drops in too.
+#
+# Reference it as a CHILD of the link node; the driver walks up to the nearest node with
+# a `LinkState`:
+#
+#     def "LinkBeam" ( prepend references = @lunco://components/comms/link_beam.usda@ ) {}
+def Xform "LinkBeam" (
+    kind = "component"
+)
+{
+    # UP (connected): the driver reads its `lunco:param:*` for width/range/mode; the Down
+    # template only needs its own material + state.
+    def Cylinder "Up" (
+        prepend apiSchemas = ["LunCoLookAPI"]
+    )
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        bool lunco:placeholder = true
+        rel material:binding = </LinkBeam/Looks/UpMat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+
+        def LunCoProgram "Driver"
+        {
+            uniform token lunco:program:implementationSource = "id"
+            uniform token lunco:program:id = "link_beams"
+            # 0 = this template draws CONNECTED peers.
+            custom float lunco:param:state = 0
+            custom float lunco:param:width = 0.04
+            custom float lunco:param:nearM = 50000
+            # Far-peer beam length, metres. A relay/Earth link is hundreds of thousands
+            # of km — a real cylinder that long jitters and clips — so the beam is a long
+            # RAY that shoots off toward the peer's true direction and far past the
+            # horizon, reading as "the link reaches to Earth". 100 km stays f32-precise.
+            custom float lunco:param:stubLen = 100000.0
+            # 0 = every connected peer, 1 = only the nearest, 2 = off.
+            custom float lunco:param:mode = 0
+            # 0 = do not draw down links, 1 = draw them (red). On so up/down colour is
+            # visible; a node that sees nothing on a class draws that link red.
+            custom float lunco:param:showDown = 1
+        }
+    }
+
+    # DOWN (severed): same geometry, red material, `state = 1`. Drawn only when the Up
+    # template's `showDown` is on.
+    def Cylinder "Down" (
+        prepend apiSchemas = ["LunCoLookAPI"]
+    )
+    {
+        uniform token axis = "Y"
+        double radius = 1.0
+        double height = 1.0
+        bool lunco:placeholder = true
+        rel material:binding = </LinkBeam/Looks/DownMat>
+        bool physics:collisionEnabled = false
+        bool primvars:doNotCastShadows = true
+
+        def LunCoProgram "Driver"
+        {
+            uniform token lunco:program:implementationSource = "id"
+            uniform token lunco:program:id = "link_beams"
+            custom float lunco:param:state = 1
+        }
+    }
+
+    def Scope "Looks"
+    {
+        # EMISSIVE-ONLY (unlit), like the altimeter beam — a signal, not a lit surface;
+        # on the lunar night side a lit beam renders pure black. Edit these to retint.
+        def Material "UpMat"
+        {
+            token outputs:surface.connect = </LinkBeam/Looks/UpMat/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.0, 0.0, 0.0)
+                color3f inputs:emissiveColor = (0.2, 0.95, 0.45)
+                float inputs:roughness = 1.0
+                float inputs:metallic = 0.0
+                float inputs:opacity = 0.85
+                token outputs:surface
+            }
+        }
+
+        def Material "DownMat"
+        {
+            token outputs:surface.connect = </LinkBeam/Looks/DownMat/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.0, 0.0, 0.0)
+                color3f inputs:emissiveColor = (0.95, 0.28, 0.2)
+                float inputs:roughness = 1.0
+                float inputs:metallic = 0.0
+                float inputs:opacity = 0.4
+                token outputs:surface
+            }
+        }
+    }
+}

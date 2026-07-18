@@ -1,0 +1,91 @@
+#usda 1.0
+(
+    defaultPrim = "CommsRadio"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Comms radio — an antenna that also KNOWS ITS LINK BUDGET.
+#
+# `antenna.usda` makes a prim a connectivity endpoint: the link kernel pairs it with
+# every other node and publishes geometry — range, elevation, a connected verdict. It
+# says nothing about how fast the link is, on purpose (the kernel is geometry-only; RF
+# is a continuous lumped-parameter subsystem, so it is authored, not built in).
+#
+# This composes that antenna with `CommsLink.mo`, which turns the geometry into
+# bits/s: Friis → thermal noise → Shannon capacity → onboard buffer. Reference THIS
+# instead of `antenna.usda` when you want a radio whose throughput is simulated rather
+# than assumed.
+#
+# ── The RF design is authored, not baked ────────────────────────────────────────
+#
+# Every `inputs:` below is an UNCONNECTED port with a constant, and that is exactly
+# what makes it a model parameter ("has no wire is exactly what makes an input a
+# parameter" — `lunco-usd-sim/src/cosim.rs`). It is the same convention UsdShade uses
+# for a shader's `inputs:`, so there is no `lunco:radio:*` vocabulary to learn: the
+# port names ARE the model's variable names, and the model is the spec.
+#
+# Override per instance — a DSN dish is not a rover whip:
+#
+#     def Xform "Dish" ( prepend references = @lunco://components/comms/radio.usda@ )
+#     {
+#         float inputs:gain_rx_db = 74.0   # 70 m antenna
+#         float inputs:tx_power_w = 20000.0
+#     }
+#
+# They are inputs rather than `parameter Real` for a second reason: SetPort can turn
+# them on a LIVE link, so tx power is a knob, not a rebuild.
+#
+# ── The class wire is the one thing to check ────────────────────────────────────
+#
+# The bridge publishes one signal set per peer CLASS it can see (`link_relay_*`,
+# `link_earth_*`, …). The wires below say THIS radio works the RELAY, which is the
+# common rover case. A direct-to-Earth station overrides them:
+#
+#     float inputs:link_range_m.connect = </…/Dish.outputs:link_earth_range_m>
+#     float inputs:link_connected.connect = </…/Dish.outputs:link_earth_connected>
+#
+# Do NOT simply delete the wires: an unconnected `inputs:link_range_m` is not "no
+# link", it is a PARAMETER pinned at 0 — the model would solve a 1 m link at ~145 dB
+# SNR and report a healthy radio that does not exist.
+def Xform "CommsRadio" (
+    prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
+    prepend apiSchemas = ["LunCoProgramAPI"]
+    kind = "component"
+)
+{
+    uniform asset lunco:program:sourceAsset = @lunco://models/CommsLink.mo@
+
+    # Geometry in, from the link kernel via the cosim bridge. Self-loop: the bridge
+    # writes these `outputs:` on this prim; the model's inputs read them back.
+    float inputs:link_range_m.connect = </CommsRadio.outputs:link_relay_range_m>
+    float inputs:link_connected.connect = </CommsRadio.outputs:link_relay_connected>
+
+    # ── Radio design: a small S-band rover radio ────────────────────────────────
+    float inputs:tx_power_w = 10.0
+    float inputs:gain_tx_db = 3.0
+    float inputs:gain_rx_db = 30.0
+    float inputs:freq_hz = 2200000000
+    float inputs:bandwidth_hz = 2000000
+    float inputs:noise_temp_k = 150.0
+    float inputs:line_loss_db = 2.0
+    float inputs:rate_efficiency = 0.6
+    float inputs:snr_required_db = 3.0
+
+    # ── Traffic: what the vehicle generates, and what it can hold ──────────────
+    float inputs:data_in_bps = 500000
+    float inputs:buffer_capacity_bits = 80000000
+
+    # ── Connectivity beams ──────────────────────────────────────────────────────
+    # The authored beam part, shared like `wheel.usda`. It carries the geometry, the
+    # emissive material and the driver params; the `link_beams` driver clones its
+    # mesh+material once per peer of THIS node's `LinkState` and aims each. A child of
+    # the node, so the driver finds the node one hop up. Override a param on the
+    # instance (e.g. `over "Driver" { float lunco:param:width = 0.1 }`) for a radio
+    # that wants a different look.
+    def "LinkBeam" (
+        prepend references = @lunco://components/comms/link_beam.usda@</LinkBeam>
+    )
+    {
+    }
+}

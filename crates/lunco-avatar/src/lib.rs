@@ -447,8 +447,12 @@ fn record_possession_authority(
         // Exclusive policy; the released autopilot then loses `owns` and stops
         // driving on its own. Fails closed (no policy ⇒ no takeover). One vessel per
         // autopilot session, so releasing that session frees exactly this vessel.
+        // `may_control` is the shared predicate (see its doc): the bind leg
+        // (`on_possess_command`) asks the SAME question, so the two legs cannot
+        // disagree about whether this possession is allowed. Here it decides whether to
+        // evict the current owner; there it decides whether to attach the camera.
         if let Some(cur) = registry.owner_of(gid.get()) {
-            if cur != origin && lunco_core::session::may_take_control(&rbac, origin, cur, gid.get()) {
+            if cur != origin && lunco_core::session::may_control(&registry, &rbac, origin, gid.get()) {
                 registry.release_session(cur);
                 info!("[auth] session {origin} took control of entity {} from {cur} (policy allowed)", gid.get());
             }
@@ -707,28 +711,28 @@ impl Plugin for LunCoAvatarPlugin {
         #[cfg(feature = "ui")]
         app.add_systems(bevy_egui::EguiPrimaryContextPass, crate::ui::draw_notifications);
 
-        // The FOLLOW cameras (`spring_arm_system`, `orbit_system`) share the followed
-        // body's FIXED-STEP time domain: they run in `FixedPostUpdate`, read the body's
-        // pose on the SAME cadence avian integrates it, and the camera entity carries
-        // avian's `TranslationInterpolation`/`RotationInterpolation` (added at camera
-        // insertion). So `bevy_transform_interpolation` eases the camera between fixed
-        // samples with the SAME `overstep` it eases the body — camera and body stay in
-        // LOCKSTEP at render rate. That lockstep is what hides the body's own big_space
-        // cell-rebase interpolation jitter (see `lunco_physics`'s `[JITTER]` probe): a
-        // follow camera on a *different* clock reads a body that jumps under it, and the
-        // jump shows as camera jitter. Chained so the two `&mut Transform` follow solvers
-        // never race (an avatar carries at most one follow camera at a time).
+        // The CHASE camera shares the followed body's FIXED-STEP time domain: it runs in
+        // `FixedPostUpdate`, reads the body's pose on the SAME cadence avian integrates
+        // it, and the camera entity carries avian's `TranslationInterpolation`/
+        // `RotationInterpolation` (added at camera insertion). So
+        // `bevy_transform_interpolation` eases the camera between fixed samples with the
+        // SAME `overstep` it eases the body — camera and body stay in LOCKSTEP at render
+        // rate. That lockstep is what hides the body's own big_space cell-rebase
+        // interpolation jitter (see `lunco_physics`'s `[JITTER]` probe): a follow camera
+        // on a *different* clock reads a body that jumps under it, and the jump shows as
+        // camera jitter. `spring_arm_paused_system` (below) is its wall-clock twin for
+        // when the sim is paused and `FixedPostUpdate` stops.
         app.add_systems(
             FixedPostUpdate,
-            (spring_arm_system, orbit_system)
-                .chain()
-                .after(avian3d::schedule::PhysicsSystems::Writeback),
+            spring_arm_system.after(avian3d::schedule::PhysicsSystems::Writeback),
         );
 
-        // The render-rate camera systems. Free-flight and the paused-follow twin read
-        // the wall-rooted INTERACTION clock (`lunco_time::InteractionTime`) so the avatar
-        // stays live while the sim is PAUSED — pausing the simulation must not paralyse
-        // the user's view. These do not follow an avian body, so they need no lockstep.
+        // The render-rate camera systems. These read the wall-rooted INTERACTION clock
+        // (`lunco_time::InteractionTime`) so the avatar stays live while the sim is
+        // PAUSED and keeps its real-time feel while the sim is WARPED — pausing or
+        // fast-forwarding the simulation must not paralyse or double-speed the user's
+        // view. None of them follow an avian body at chase range, so they need no
+        // fixed-step lockstep.
         app.add_systems(PostUpdate, (
             orbital_exit_restore_system,
             // Entry half of the scroll transit — must see the free-flight scroll BEFORE
@@ -737,6 +741,15 @@ impl Plugin for LunCoAvatarPlugin {
             freeflight_system,
             surface_camera_system,
             apply_fly,
+            // The ORBIT (survey) camera belongs here, not in `FixedPostUpdate` where it
+            // used to sit next to `spring_arm_system`. It already reads `InteractionTime`
+            // — a per-FRAME wall delta — so running it on the fixed cadence applied one
+            // whole frame's delta once PER SUBSTEP: at 4x its smoothing converged ~4x too
+            // fast, and when paused it froze outright (unlike the chase camera it has no
+            // paused twin). Its own doc asks for "a constant `dt` that does not rate-scale
+            // with the sim"; the registration was what defeated that. It is a star-fixed
+            // survey camera, so it does not need the chase camera's interpolation lockstep.
+            orbit_system,
             update_avatar_clip_planes_system,
             // Paused-follow twin: `FixedPostUpdate` stops when the sim pauses, so this
             // render-rate twin keeps the follow camera live on the wall clock while
@@ -2695,6 +2708,7 @@ fn on_possess_command(
     q_follow: Query<&lunco_core::CameraFollow>,
     guard: Res<lunco_core::SyncApplyGuard>,
     registry: Res<lunco_core::SessionRegistry>,
+    rbac: Res<lunco_core::session::SessionRbac>,
     session: Res<lunco_core::LocalSession>,
     q_owned: Query<&lunco_core::GlobalEntityId>,
 ) {
@@ -2706,16 +2720,18 @@ fn on_possess_command(
     if guard.is_from_sync() {
         return;
     }
-    // Possession arbitration (policy-driven): under the default `Exclusive`
-    // policy, refuse to bind a vessel the (synced) ownership table says another
-    // session already controls; under `LastWins` the bind is always allowed and
-    // steals the vessel. The host's `SessionRegistry` is authoritative; clients
-    // hold a replicated copy (via `OwnershipMsg`). Single-player's table is empty
-    // so this never blocks.
+    // Possession arbitration — ONE predicate, shared with the authority leg
+    // (`record_possession_authority`). `may_control` = `may_possess` (free / already
+    // ours / `LastWins`) OR an authored takeover of another session's vessel. This
+    // used to call `may_possess` alone, which does NOT know about takeover: it agreed
+    // with the authority leg only because that leg is registered first and had already
+    // rewritten the table. Asking the same question both legs ask removes the ordering
+    // assumption — otherwise a granted takeover could still be refused a camera here,
+    // logging "session N possesses entity" over an empty cockpit.
     if let Ok(gid) = q_owned.get(cmd.target) {
-        if !registry.may_possess(session.0, gid.get()) {
+        if !lunco_core::session::may_control(&registry, &rbac, session.0, gid.get()) {
             info!(
-                "[possess] vessel {} owned by another session — refused (exclusive policy)",
+                "[possess] vessel {} owned by another session — refused (policy)",
                 gid.get()
             );
             return;

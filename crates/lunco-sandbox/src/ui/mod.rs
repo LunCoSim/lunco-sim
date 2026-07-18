@@ -33,6 +33,9 @@ mod rhai_repl_panel;
 mod terrain_progress;
 /// Surface ⇄ Moon ⇄ Earth view-mode switcher (site-anchored scenes only).
 mod celestial_time;
+/// Driver cockpit overlay for the View perspective — attitude/tilt, nav readout,
+/// and the physics-real transport band. Paints only while possessing a vessel.
+mod rover_hud;
 mod view_mode;
 /// Centered "Downloading <scenario>" overlay during scenario-sync asset fetch.
 /// Networking-only — the file carries its own `#![cfg(feature = "networking")]`.
@@ -168,6 +171,11 @@ impl Plugin for SandboxUiPlugin {
                     // Sky clock: rate + couple/detach for the CELESTIAL clock only
                     // (not the sim transport). Same visibility gate.
                     celestial_time::draw_celestial_time,
+                    // Driver cockpit: attitude/tilt (bottom-left) + nav/controls
+                    // (bottom-right). Only while possessing a vessel. Transport
+                    // (pause + rate) lives on the workbench toolbar, next to the
+                    // pause button that already owns `TimeTransport`.
+                    rover_hud::draw_rover_hud,
                 ),
             );
         // G2: "Downloading <scenario>" overlay during scenario-sync asset fetch.

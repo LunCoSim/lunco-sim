@@ -785,7 +785,14 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             // is `(-sin(yaw)·cos(pitch), sin(pitch), -cos(yaw)·cos(pitch))`:
             //   pitch = asin(dir.y),  yaw = atan2(-dir.x, -dir.z).
             if let Some([lx, ly, lz]) = lunco_usd_bevy::read_vec3_f64(reader, &sdf_path, "lunco:cameraLookAt") {
-                let dir = DVec3::new(lx, ly, lz) - existing_tf.translation.as_dvec3();
+                // The EYE must be the avatar's authored position, not `existing_tf`:
+                // `maybe_tf` is `None` on this path, so `existing_tf` defaults to the
+                // origin, and aiming from (0,0,0) instead of (e.g.) (14,6,12) points the
+                // camera up at the sky. Read `xformOp:translate` directly.
+                let eye = lunco_usd_bevy::read_vec3_f64(reader, &sdf_path, "xformOp:translate")
+                    .map(|[x, y, z]| DVec3::new(x, y, z))
+                    .unwrap_or(existing_tf.translation.as_dvec3());
+                let dir = DVec3::new(lx, ly, lz) - eye;
                 if let Some(n) = dir.try_normalize() {
                     pitch = (n.y.clamp(-1.0, 1.0)).asin() as f32;
                     yaw = (-n.x).atan2(-n.z) as f32;

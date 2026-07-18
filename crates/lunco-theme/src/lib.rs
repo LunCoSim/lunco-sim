@@ -151,6 +151,12 @@ pub struct DesignTokens {
     pub error: egui::Color32,
     /// Subdued version of success (e.g. for backgrounds).
     pub success_subdued: egui::Color32,
+    /// Subdued version of warning — the inactive-track counterpart of
+    /// [`Self::warning`], for gauge bands and other "this zone exists but is not
+    /// the live reading" fills.
+    pub warning_subdued: egui::Color32,
+    /// Subdued version of error. See [`Self::warning_subdued`].
+    pub error_subdued: egui::Color32,
     /// Primary text color.
     pub text: egui::Color32,
     /// Subdued/secondary text.
@@ -186,6 +192,8 @@ impl DesignTokens {
             warning: p.yellow,
             error: p.red,
             success_subdued: p.green.linear_multiply(0.4),
+            warning_subdued: p.yellow.linear_multiply(0.4),
+            error_subdued: p.red.linear_multiply(0.4),
             text: p.text,
             text_subdued: p.subtext0,
             surface_raised: raised,
@@ -824,8 +832,35 @@ impl Plugin for ThemePlugin {
             .init_resource::<fonts::FontsInstalled>()
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
-                install_fallback_fonts_once,
+                (publish_active_theme, install_fallback_fonts_once),
             );
+    }
+}
+
+/// Publish `Res<Theme>` into the egui data cache every frame — the missing half of
+/// [`store_active`]'s contract ("the app calls this once per frame").
+///
+/// Nothing did. The only `store_active` caller was the Modelica canvas, which fills the
+/// cache inside its own render for its own subtree, so [`active`] silently returned its
+/// `Theme::dark()` fallback for every other caller — dark text on the light theme's
+/// panels, with no error. Publishing it here makes the transport true app-wide, which is
+/// what World-less paint callbacks (canvas layers, node/edge painters, overlays) depend
+/// on: they hold only a `Ui`/`Painter` and cannot read `Res<Theme>`.
+///
+/// Ordering inside the pass does not matter. egui's `insert_temp` store persists across
+/// frames, so a reader scheduled before this system sees the PREVIOUS frame's theme —
+/// identical unless the theme changed that very frame. Only the first frame of the app
+/// can fall back to the default.
+///
+/// Change-driven: the clone only happens when `Theme` actually changes (or on the first
+/// frames, until the context exists).
+fn publish_active_theme(mut contexts: bevy_egui::EguiContexts, theme: Res<Theme>) {
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+    // `is_changed()` covers insertion, so the first successful frame always publishes.
+    // The `get_temp` check re-publishes if egui evicted the entry.
+    let present = ctx.data(|d| d.get_temp::<Arc<Theme>>(active_theme_id()).is_some());
+    if theme.is_changed() || !present {
+        store_active(ctx, &theme);
     }
 }
 

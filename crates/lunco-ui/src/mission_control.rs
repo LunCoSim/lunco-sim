@@ -122,14 +122,49 @@ impl Panel for MissionControl {
                         toggle_pause = true;
                     }
                 });
+                // Two bands, because they do PHYSICALLY DIFFERENT THINGS and the
+                // difference used to be invisible. At or below MAX_REALTIME_RATE the
+                // rate multiplies the number of fixed steps per frame, so bodies
+                // genuinely integrate faster (a rover really drives 4× faster). Above
+                // it, `advance_clock` selects `TimeRegime::KinematicWarp` and returns
+                // relative_speed 0 — the tick FREEZES and only the epoch (sky, orbits)
+                // advances. The old row ran 1x → 10x, so the first click past realtime
+                // silently stopped the rover dead while the sky sped up.
                 egui::Grid::new("time_multipliers")
                     .num_columns(4)
                     .spacing([4.0, 4.0])
                     .show(ui, |ui| {
-                        let multipliers =
-                            [1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0, 1000000.0];
-                        for (i, &m) in multipliers.iter().enumerate() {
-                            if ui.selectable_label(speed == m, format!("{}x", m)).clicked() {
+                        for (i, &m) in [1.0, 2.0, 4.0, 8.0].iter().enumerate() {
+                            if ui
+                                .selectable_label(speed == m, format!("{}x", m))
+                                .on_hover_text("Physics runs at this rate")
+                                .clicked()
+                            {
+                                set_speed = Some(m);
+                            }
+                            if (i + 1) % 4 == 0 {
+                                ui.end_row();
+                            }
+                        }
+                    });
+                ui.label(
+                    egui::RichText::new("sky only — physics frozen")
+                        .weak()
+                        .size(10.0),
+                );
+                egui::Grid::new("time_multipliers_warp")
+                    .num_columns(4)
+                    .spacing([4.0, 4.0])
+                    .show(ui, |ui| {
+                        for (i, &m) in [100.0, 1000.0, 10000.0, 100000.0].iter().enumerate() {
+                            if ui
+                                .selectable_label(speed == m, format!("{}x", m))
+                                .on_hover_text(
+                                    "Kinematic warp: the sim tick freezes. \
+                                     Bodies do not move; only the epoch advances.",
+                                )
+                                .clicked()
+                            {
                                 set_speed = Some(m);
                             }
                             if (i + 1) % 4 == 0 {

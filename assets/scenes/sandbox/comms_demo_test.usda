@@ -82,8 +82,11 @@ def Xform "CommsDemoScene" (
     {
         uniform bool lunco:avatar = true
         uniform token lunco:cameraMode = "freeflight"
-        double3 xformOp:translate = (14, 6, 14)
+        # Framed on the rover (at ~(6, 1.4, 0)) from a 3/4 view, so the scene opens
+        # looking straight at it and its connectivity beams, not out at empty regolith.
+        double3 xformOp:translate = (14, 6, 12)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+        double3 lunco:cameraLookAt = (6, 1.4, 0)
     }
 
     def Xform "Rover" (
@@ -92,6 +95,30 @@ def Xform "CommsDemoScene" (
     {
         double3 xformOp:translate = (6, 1.4, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        # Give the rover's antenna a simulated link budget: `radio.usda` is
+        # `antenna.usda` (the link node) composed with `CommsLink.mo` (Friis → SNR →
+        # Shannon → buffer), with the RF design authored as ordinary `inputs:`. The
+        # component's defaults already describe a small S-band rover radio working the
+        # relay, so nothing needs overriding here — override an `inputs:` only where
+        # this vehicle genuinely differs.
+        over "Comms" (
+            prepend references = @lunco://components/comms/radio.usda@</CommsRadio>
+        )
+        {
+            # Declare the link node in the SCENE layer (strongest opinion). It should
+            # compose from the antenna reference, but wrapping in radio.usda dropped it —
+            # authoring it here is both the fix and the more honest statement: THIS prim
+            # is the rover's connectivity endpoint.
+            bool lunco:linkNode = true
+            string lunco:link:class = "rover"
+            # Antenna pointing limit — NOT a horizon proxy. A surface rover can talk to
+            # a nearby station slightly downhill (the base mast is 26 m away at −1.9°, in
+            # plain line of sight), so the mask must allow negative angles. Whether a
+            # DISTANT peer below the horizon (Earth, a set relay) links is decided by
+            # OCCLUSION — the ray through the Moon — not by this angle.
+            double lunco:link:minElevationDeg = -10.0
+        }
     }
 
     # Base comms mast — a scene-local antenna, like the moonbase one.
