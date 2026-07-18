@@ -39,15 +39,7 @@ def Cylinder "Wheel" (
     # Applied HERE, once: every wheel on every rover composes this prim, so the
     # APIs (and the loader's `PhysxVehicleWheelAPI` intercept) come with the arc.
     # A rover authors only its own values — index, radius — never the schemas.
-    # `LunCoMotorAPI`/`LunCoEpsNodeAPI` arrive with the motor arc below, not here.
     prepend apiSchemas = ["LunCoCatalogAPI", "PhysxVehicleWheelAPI", "PhysxVehicleEngineAPI", "LunCoWheelAPI"]
-    # A driven wheel has a motor in its hub. Its ratings compose from the motor
-    # component — the same way grip comes from a tire and the spring from a
-    # suspension — so there is ONE motor spec in the project and the hub is not a
-    # place where its numbers get retyped. `</MotorSpec>` is an `over`: it brings the
-    # ratings and the EPS bus link, and no body of its own (the wheel is one rigid
-    # body; a motor prim inside it would be a second).
-    prepend references = @motor.usda@</MotorSpec>
     prepend variantSets = "tire"
     variants = {
         string tire = "regolith"
@@ -84,16 +76,13 @@ def Cylinder "Wheel" (
     float physxVehicleWheel:maxBrakeTorque = 1500.0       # N·m brake authority (locks the wheel → skid)
 
     # --- LunCo wheel dynamics (LunCoWheelAPI) ---
-    # The knobs LunCo's integrator needs and PhysX does not model. They live HERE, in
-    # the asset, because the asset is the source of truth: each was previously an
-    # `unwrap_or(…)` constant in lunco-usd-sim, which made the authored wheel a
-    # suggestion and left an unauthored knob indistinguishable from a chosen one. The
-    # schema declares them with no fallback, so a wheel that fails to compose this
-    # file is an error rather than a wheel with invented handling.
+    # The knobs LunCo's integrator needs and PhysX does not model. The schema declares
+    # them with no fallback, so a wheel that composes this file has its handling and one
+    # that does not is a hard error — never a wheel silently running on Rust defaults.
     #
-    # Steering is NOT here: the max steer angle is a property of the VEHICLE's
-    # steering system, not of a wheel (a skid rover's wheels do not steer at all).
-    # It is `physxVehicleAckermannSteering:maxSteerAngle` on the rover prim.
+    # Steering is NOT here: the max steer angle is a property of the VEHICLE's steering
+    # system, not of a wheel (a skid rover's wheels do not steer at all). It is
+    # `physxVehicleAckermannSteering:maxSteerAngle` on the rover prim.
     double lunco:wheel:contactGripStiffness = 50.0  # slope of contact friction vs slip
     double lunco:wheel:driveForcePerNormal = 2.0    # traction authority, ×normal force
     double3 lunco:wheel:steerAxis = (0, 1, 0)       # steering-head axis, wheel-local: vertical yaw
@@ -101,6 +90,12 @@ def Cylinder "Wheel" (
     double lunco:wheel:maxDriveOmega = 12.0         # rad/s axle free-spin cap
     double lunco:wheel:driveDamping = 30.0          # axle motor damping
     double lunco:wheel:stallTorqueGain = 6.0        # torque gain approaching stall
+
+    # A driven wheel has a motor in its hub, but the motor's electrical draw is not a
+    # property of the wheel: it is a load on the vehicle's circuit
+    # (`LunCo.Electrical.DCMotor`, instantiated per wheel in the rover's electrical
+    # system). The MECHANICAL side is here, in the PhysX vehicle properties above, which
+    # the physics step reads. The wheel stays one rigid body.
 
     # --- Tires ---
     # Which rubber this wheel runs. Each variant is nothing but a reference to a tire

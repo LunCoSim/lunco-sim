@@ -17,5 +17,5 @@ over "Tire" (
     kind = "component"
 )
 {
-    double lunco:frictionCoefficient = 0.6
+    double lunco:tire:frictionCoefficient = 0.6
 }

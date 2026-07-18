@@ -39,7 +39,7 @@ fn steps() {
 
         #{ anchor: "",
            title: "Your turn: a battery on a rover",
-           body: "Same pattern, new model. `assets/models/Battery.mo` is a state-of-charge integrator (`current_in` → `soc_out`). Add a `def LunCoProgram \"Power\"` child prim on a rover with `uniform asset lunco:program:sourceAsset = @models/Battery.mo@`, connect the motor's current draw into its `inputs:current_in`, and SOC drains as you drive. Open the model in the Design workspace — `Lander.mo` lives there too — to see the law you are flying." },
+           body: "A whole subsystem, one model. A rover's electrical system is a CIRCUIT — a panel, a pack and the hub motors on a shared bus — and a circuit is acausal: the `LunCo.Electrical` components (`Pin` with a `flow` current) `connect()` to a node and Modelica writes Kirchhoff's law, so nothing counts or sums the loads. That is one model (`vessels/rovers/rucheyok/rucheyok_electrical.mo`), hence one `def LunCoProgram \"System\"` under a `def Scope \"Electrical\"`. Its `inputs:` are the circuit's parameters (battery capacity, panel area) plus its boundary — irradiance from the sun, each wheel's shaft speed from physics — and `outputs:soc` is the charge draining as you drive. Open it in the Design workspace to see the circuit you are flying." },
     ]
 }
 

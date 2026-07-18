@@ -299,13 +299,54 @@ mod tests {
         }
     }
 
+    /// `schema.usda` and `generatedSchema.usda` must declare the same classes.
+    ///
+    /// `schema.usda` is the authoritative source and is READ BY NOTHING: the runtime
+    /// registry parses [`GENERATED_SCHEMA`], and `usdGenSchema` is what carries one into
+    /// the other. Nothing runs it on a hook, so the two can drift — and the drift is
+    /// silent in the worst direction: a class declared in the source alone looks
+    /// authored, reviews as authored, and does not exist at runtime.
+    ///
+    /// Class NAMES only. Comparing every property would just be re-running
+    /// `usdGenSchema` in a test; the names catch a class added to one file and forgotten
+    /// in the other, which is the failure that happens.
+    #[test]
+    fn source_and_generated_schema_declare_the_same_classes() {
+        fn class_names(usda: &str) -> std::collections::BTreeSet<String> {
+            usda.lines()
+                .filter_map(|line| {
+                    // `class "LunCoFooAPI" (` and `class LunCoFoo "LunCoFoo" (`
+                    let rest = line.strip_prefix("class ")?;
+                    let start = rest.find('"')? + 1;
+                    let end = rest[start..].find('"')? + start;
+                    Some(rest[start..end].to_string())
+                })
+                .filter(|n| n.starts_with("LunCo"))
+                .collect()
+        }
+
+        let source = class_names(include_str!("../schema/schema.usda"));
+        let generated = class_names(GENERATED_SCHEMA);
+        assert!(!source.is_empty(), "parsed no classes from schema.usda");
+
+        let missing: Vec<_> = source.difference(&generated).collect();
+        let extra: Vec<_> = generated.difference(&source).collect();
+        assert!(
+            missing.is_empty() && extra.is_empty(),
+            "schema.usda and generatedSchema.usda disagree — regenerate with \
+             `usdGenSchema schema.usda .`\n  in source but NOT generated (invisible to \
+             the runtime): {missing:?}\n  in generated but NOT source (authored by \
+             hand?): {extra:?}"
+        );
+    }
+
     /// Every schema class must be registered in `plugInfo.json`.
     ///
     /// `plugInfo.json` is how a USD runtime (usdview, Omniverse, anything linking
     /// pxr) discovers our codeless schema — our own registry reads the USDA
     /// directly and never consults it. That asymmetry is the trap: an unregistered
     /// class works perfectly here and does not exist anywhere else, so the drift is
-    /// invisible from inside the app. It had already happened to nine of them.
+    /// invisible from inside the app.
     ///
     /// Keys are matched textually rather than through a JSON parser: this is the
     /// only JSON in the crate, and a dependency for one test is a worse trade than
@@ -565,10 +606,9 @@ mod tests {
                 .type_name,
             "float",
         );
-        // `maxWheelAngleDegrees` was in this reconstruction and is attested in NO
-        // NVIDIA schema or doc — it was invented, and a rover was very nearly
-        // authored against it. A reconstructed file's risk is not just a wrong name
-        // for a real property; it is a plausible name for one that does not exist.
+        // `maxWheelAngleDegrees` is attested in NO NVIDIA schema or doc: a
+        // reconstructed file's risk is not just a wrong name for a real property but a
+        // plausible name for one that does not exist. Pinned absent so it cannot return.
         assert!(
             reg.property("physxVehicleAckermannSteering:maxWheelAngleDegrees")
                 .is_none(),
@@ -576,9 +616,8 @@ mod tests {
              physxVehicleAckermannSteering:maxSteerAngle, in radians"
         );
 
-        // The NON-canonical names LunCo assets used before this refactor MUST be
-        // absent — their presence would mean the reconstruction reproduced the
-        // exact bug it exists to fix.
+        // Non-canonical PhysX names must be absent: their presence would mean the
+        // reconstruction squats a name the real schema does not define.
         assert!(
             reg.property("physxVehicleSuspension:springStiffness").is_none(),
             "springStiffness is not a canonical PhysX name; use springStrength"

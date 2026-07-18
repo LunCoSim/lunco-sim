@@ -30,43 +30,35 @@ schema reference (v107.2), which is generated from that exact file.
 `SuspensionCompliance`, `Tire`). NVIDIA's full vehicle family (~15+ APIs) is
 larger; add those only when a feature consumes them.
 
-**It has already been wrong once, and not in the way you would expect.** The
-reconstruction contained `physxVehicleAckermannSteering:maxWheelAngleDegrees` —
-a property that exists in no NVIDIA schema or document. It is not a misspelling
-of a real property: it was *invented*, complete with a plausible unit that PhysX
-does not use anywhere (PhysX is radians; only the Kit authoring wizard's UI field
-is in degrees). The real name is `physxVehicleAckermannSteering:maxSteerAngle`.
-A rover was nearly authored against the invented one.
-
-So the risk here is not merely a wrong name for a real property — it is a
-convincing name for a property that does not exist, which no amount of internal
-consistency can detect. Treat every name in this file as unverified until the
-verbatim swap. `PhysxVehicleSteeringAPI` (the non-Ackermann steering API, and the
-documented replacement for the deprecated per-wheel `maxSteerAngle`) is missing
-from this file entirely — an absence with the same cause.
+**This is a RECONSTRUCTION, and its risk is not a wrong name for a real property
+— it is a convincing name for one that does not exist.** No amount of internal
+consistency detects that. A worked example lives in the drift test as a negative
+assertion: `physxVehicleAckermannSteering:maxWheelAngleDegrees` is in no NVIDIA
+schema or document (PhysX steering is radians; the real property is
+`maxSteerAngle`), yet it reads as plausible. Treat every name in this file as
+unverified until the verbatim swap, and prefer authoring against a name you have
+confirmed against NVIDIA's docs. `PhysxVehicleSteeringAPI` — the non-Ackermann
+steering API and the documented replacement for the deprecated per-wheel
+`maxSteerAngle` — is absent from this file entirely, for the same reason.
 
 **Replace with the verbatim file when a Kit install is available.** Copy
 `extsPhysics/omni.physx/schema.usda` over this one. The drift test
-`physx_vehicle_schemas_register_canonical_properties` in `../src/schema.rs`
-pins the property names this codebase reads — including negative assertions for
-the invented ones — so a verbatim swap is a verified replacement rather than a
-guess. Note what that test can and cannot do: it catches a *swap* that drops or
-renames something we read; it cannot tell you that a name we never questioned was
-fabricated. Only the real file can.
+`physx_vehicle_schemas_register_canonical_properties` in `../src/schema.rs` pins
+the property names this codebase reads, including negative assertions for the
+fabricated ones — but note its limit: it catches a *swap* that drops or renames
+something we read; it cannot tell you a name we never questioned was fabricated.
+Only the real file can.
 
 ## Why they're here
 
 A property's **type**, its **variability** (`uniform`/`varying`) and whether it is
 `custom` are declared by its *schema*, not by whoever authors it. `lunco_usd::schema`
-is the one place that knows, and it used to know only *our* schema — core USD was a
-hand-written table of ten properties someone had looked up, whose failure mode was
-silence (author a core `uniform` property that isn't in the table and it gets written
-`varying`, with no error).
+is the one place that knows, and it must know core USD too — otherwise a core `uniform`
+property it hasn't been told about gets written `varying`, with no error.
 
-The Rust `openusd` crate has no `UsdSchemaRegistry` to ask. But it doesn't need one:
-**a `generatedSchema.usda` is just USDA, and we already parse USDA.** These files were
-never unavailable — they simply weren't read. The registry now reads them with exactly
-the parser it uses for `../generatedSchema.usda`.
+The Rust `openusd` crate has no `UsdSchemaRegistry` to ask, and does not need one:
+**a `generatedSchema.usda` is just USDA, and we already parse USDA.** The registry reads
+these files with exactly the parser it uses for `../generatedSchema.usda`.
 
 ## Updating
 

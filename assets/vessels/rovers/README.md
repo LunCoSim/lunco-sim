@@ -36,7 +36,7 @@ Controlling traction and speed:
 *   `float physxVehicleEngine:peakTorque`: Maximum motor torque (default `300.0` N·m). High torque allows climbing steep slopes but can cause wheelspin.
 *   `float physxVehicleEngine:maxRotationSpeed`: Motor free-spin angular velocity limit (default `60.0` rad/s).
 *   `float physxVehicleWheel:maxBrakeTorque`: Braking authority (default `1500.0` N·m) to decelerate or lock the wheels.
-*   `double lunco:frictionCoefficient`: Coulomb friction coefficient ($\mu$, default `0.8`).
+*   `double lunco:tire:frictionCoefficient`: Coulomb friction coefficient ($\mu$, default `0.8`) — authored on the TIRE (`components/mobility/tires/*.usda`), composed onto the wheel by its `tire` variant.
 *   `float physxVehicleTire:longitudinalStiffness`: Longitudinal tire grip stiffness (default `8000.0` N per unit slip).
 
 ---

@@ -1342,15 +1342,10 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             // Wheel brake torque caps the lock-up authority.
             let brake_torque_max = read_f("physxVehicleWheel:maxBrakeTorque")
                 .unwrap_or(drive_torque_max * 3.0);
-            // The `LunCoWheelAPI` knobs. REQUIRED, no fallbacks: they are authored
-            // in `components/mobility/wheel.usda`, which every wheel composes, so
-            // the asset is the source of truth. They used to be `unwrap_or(…)`
-            // constants here — which meant the authored value was a suggestion, an
-            // unauthored knob was indistinguishable from a chosen one, and the real
-            // defaults lived in Rust where no asset author could see them.
-            //
-            // Every missing name is collected so one bad wheel reports its whole
-            // story, not just the first attr that tripped.
+            // The `LunCoWheelAPI` knobs. REQUIRED, no fallbacks: they are authored in
+            // `components/mobility/wheel.usda`, which every wheel composes. A missing
+            // one is an asset error, not a value to invent — every missing name is
+            // collected so one bad wheel reports all of them, not just the first.
             let mut missing: Vec<&'static str> = Vec::new();
             let mut req = |name: &'static str| -> f64 {
                 match reader.real(&sdf_path, name) {
@@ -1361,13 +1356,13 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                     }
                 }
             };
-            let contact_grip_stiffness = req("lunco:contactGripStiffness");
-            let drive_force_per_normal = req("lunco:driveForcePerNormal");
+            let contact_grip_stiffness = req("lunco:wheel:contactGripStiffness");
+            let drive_force_per_normal = req("lunco:wheel:driveForcePerNormal");
             let joint_drive = JointDriveParams {
                 wheel_mass: read_f("physics:mass").unwrap_or(100.0),
-                max_omega: req("lunco:maxDriveOmega"),
-                drive_damp: req("lunco:driveDamping"),
-                stall_torque_gain: req("lunco:stallTorqueGain"),
+                max_omega: req("lunco:wheel:maxDriveOmega"),
+                drive_damp: req("lunco:wheel:driveDamping"),
+                stall_torque_gain: req("lunco:wheel:stallTorqueGain"),
             };
             // Coulomb μ for the drive-traction model (`apply_wheel_drive`), from the
             // wheel's TIRE (`LunCoTireAPI`, composed through the `tire` variant).
@@ -1375,7 +1370,7 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             // scalar on the tire, so this is a LunCo name. Required: a tire that
             // does not say what it grips with is a bug, not a μ of 1.0 — that
             // fallback silently gave every unauthored wheel perfect traction.
-            let friction_mu = req("lunco:frictionCoefficient");
+            let friction_mu = req("lunco:tire:frictionCoefficient");
             if !missing.is_empty() {
                 error!(
                     "USD wheel {} is missing required LunCoWheelAPI attributes {:?} — \
@@ -1389,17 +1384,17 @@ fn process_usd_sim_prim_read<R: UsdRead>(
                 return;
             }
 
-            // Raked steering-head axis (`lunco:steerAxis`, wheel-local). `(0,1,0)`
+            // Raked steering-head axis (`lunco:wheel:steerAxis`, wheel-local). `(0,1,0)`
             // is a vertical yaw axis (cars); a motorcycle fork authors e.g.
             // `(0, 0.91, 0.42)` for a ~25° rake. Authored in `wheel.usda` with the
             // rest of `LunCoWheelAPI` — no Rust-side `+Y` fallback.
             let Some(wheel_steer_axis) =
-                lunco_usd_bevy::read_vec3_f64(reader, &sdf_path, "lunco:steerAxis")
+                lunco_usd_bevy::read_vec3_f64(reader, &sdf_path, "lunco:wheel:steerAxis")
                     .map(|v| DVec3::new(v[0], v[1], v[2]))
             else {
                 error!(
                     "USD wheel {} is missing required LunCoWheelAPI attribute \
-                     lunco:steerAxis — refusing to spawn.",
+                     lunco:wheel:steerAxis — refusing to spawn.",
                     sdf_path.as_str()
                 );
                 commands.entity(entity).try_insert(UsdSimProcessed);
@@ -1630,7 +1625,7 @@ struct WheelSpinParams {
     brake_torque_max: f64,
     /// Drive force as a multiple of normal force (`lunco:driveForcePerNormal`).
     drive_force_per_normal: f64,
-    /// Raked steering-head axis in the wheel's local frame (`lunco:steerAxis`).
+    /// Raked steering-head axis in the wheel's local frame (`lunco:wheel:steerAxis`).
     steer_axis: DVec3,
 }
 

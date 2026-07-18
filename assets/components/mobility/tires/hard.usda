@@ -28,7 +28,7 @@ over "Tire" (
     # Stiffer contact patch: it builds force faster per unit of slip, and lets go
     # sooner when it runs out of friction.
     float physxVehicleTire:longitudinalStiffness = 14000.0
-    double lunco:frictionCoefficient = 0.55
+    double lunco:tire:frictionCoefficient = 0.55
 
     # --- Tread ---
     rel material:binding = </Tire/TireLook>

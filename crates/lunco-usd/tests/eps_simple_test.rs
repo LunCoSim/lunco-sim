@@ -1,173 +1,116 @@
-//! Simple EPS power flow test without physics mechanics.
+//! The rover's electrical system, as ASSEMBLY.
 //!
-//! This test verifies the electrical power system structure
-//! and simulates basic power flow using only USD data - no composition needed.
+//! The electrical domain is one acausal circuit solved as one DAE
+//! (`rucheyok_electrical.mo`, importing `LunCo.Electrical`), so in USD it is one
+//! `LunCoProgram` under a `def Scope "Electrical"` — not a program per component. The
+//! panel, pack and motors are geometry; their maths is the circuit's. This checks the
+//! assembly USD owns: the domain program is there, bound to its circuit, its parameters
+//! are authored, and its boundary ports exist for cosim to wire.
+//!
+//! What comes out — the power balance, the SoC curve — is the model's, checked by running
+//! it (a cosim test), never re-derived here.
 
-use lunco_usd_bevy::StageView;
+use lunco_usd_bevy::{StageView, UsdRead};
 use openusd::sdf::Path as SdfPath;
 use std::path::PathBuf;
 
-/// Represents a component on the EPS bus
-#[derive(Debug)]
-struct EPSComponent {
-    path: String,
-    /// Power generation (W) - positive for generators, negative for loads
-    power_watts: f64,
+fn assets_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("assets")
 }
 
-/// Simulates EPS power flow
-fn simulate_eps_flow(components: &[EPSComponent]) -> PowerBalance {
-    let total_generation: f64 = components
-        .iter()
-        .filter(|c| c.power_watts > 0.0)
-        .map(|c| c.power_watts)
-        .sum();
-
-    let total_consumption: f64 = components
-        .iter()
-        .filter(|c| c.power_watts < 0.0)
-        .map(|c| c.power_watts.abs())
-        .sum();
-
-    PowerBalance {
-        generation: total_generation,
-        consumption: total_consumption,
-        surplus: total_generation - total_consumption,
-    }
+fn compose_rucheyok() -> lunco_usd_bevy::CanonicalStage {
+    let path = assets_root().join("vessels/rovers/rucheyok/rucheyok.usda");
+    let stage = lunco_usd_bevy::compose_file_to_stage(&path).expect("compose rucheyok");
+    lunco_usd_bevy::CanonicalStage::from_stage(stage, path.to_string_lossy().to_string())
 }
 
-#[derive(Debug)]
-struct PowerBalance {
-    generation: f64,
-    consumption: f64,
-    surplus: f64,
-}
+const ELECTRICAL: &str = "/Rucheyok/Electrical/System";
 
-/// Load the rover, composed so referenced component parameters (e.g. the
-/// wheel's `lunco:motorPower` from wheel.usda) surface on the instance prims,
-/// and extract its EPS components.
-fn load_rover_eps() -> Vec<EPSComponent> {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let asset_root = manifest_dir.parent().unwrap().parent().unwrap();
-    let usd_path = asset_root.join("assets/vessels/rovers/rucheyok/rucheyok.usda");
-
-    let stage = lunco_usd_bevy::compose_file_to_stage(&usd_path).expect("Failed to compose rover USD");
-    let view = StageView::new(&stage);
-
-    let mut components = Vec::new();
-    for path in view.prim_paths() {
-        // Only components wired onto the EPS bus.
-        if !view.rel_targets(&path, "lunco:epsBus").is_empty() {
-            components.push(EPSComponent {
-                path: path.as_str().to_string(),
-                power_watts: get_component_power(&view, &path),
-            });
-        }
-    }
-
-    components
-}
-
-/// Power generation (+) / consumption (-) for a composed component prim.
-/// Generators author `lunco:nominalPower`; motorized loads author
-/// `lunco:motorPower` (composed in from their referenced component).
-fn get_component_power(view: &StageView<'_>, path: &SdfPath) -> f64 {
-    if let Some(power) = view.value::<f64>(path, "lunco:nominalPower") {
-        return power; // Positive = generation
-    }
-    if let Some(power) = view.value::<f64>(path, "lunco:motorPower") {
-        return -power; // Negative = consumption
-    }
-    0.0
-}
-
+/// The electrical domain is one program, bound to the rover's circuit.
 #[test]
-fn test_eps_components_exist() {
-    let components = load_rover_eps();
+fn rover_has_one_electrical_program_bound_to_its_circuit() {
+    let cs = compose_rucheyok();
+    let view = cs.view();
+    let prim = SdfPath::new(ELECTRICAL).unwrap();
 
-    // Should have at least: SolarPanel, Battery, 4 Wheels
+    let model = view
+        .asset(&prim, "lunco:program:sourceAsset")
+        .expect("the Electrical program must name a Modelica circuit");
     assert!(
-        components.len() >= 6,
-        "Should have at least 6 EPS components, got {}",
-        components.len()
+        model.ends_with("rucheyok_electrical.mo"),
+        "expected the rover's electrical circuit, got {model}"
     );
 
-    // Check expected components exist
-    let paths: Vec<&str> = components.iter().map(|c| c.path.as_str()).collect();
-    assert!(
-        paths.iter().any(|p| p.contains("SolarPanel")),
-        "Should have SolarPanel"
-    );
-    assert!(
-        paths.iter().any(|p| p.contains("Battery")),
-        "Should have Battery"
-    );
-}
-
-#[test]
-fn test_eps_power_generation() {
-    let components = load_rover_eps();
-
-    // Solar panel should generate power
-    let solar = components
-        .iter()
-        .find(|c| c.path.contains("SolarPanel"))
-        .expect("SolarPanel should exist");
-
-    assert!(
-        solar.power_watts > 0.0,
-        "Solar panel should generate power (positive), got {}",
-        solar.power_watts
-    );
-}
-
-#[test]
-fn test_eps_power_consumption() {
-    let components = load_rover_eps();
-
-    // Wheels should consume power
-    let wheels: Vec<&EPSComponent> = components
-        .iter()
-        .filter(|c| c.path.contains("Wheel"))
+    // Exactly one — the domain is one DAE, not a program per part.
+    let programs: Vec<_> = view
+        .prim_paths()
+        .into_iter()
+        .filter(|p| view.asset(p, "lunco:program:sourceAsset").is_some())
+        .filter(|p| {
+            view.asset(p, "lunco:program:sourceAsset")
+                .map(|m| m.ends_with("rucheyok_electrical.mo"))
+                .unwrap_or(false)
+        })
         .collect();
+    assert_eq!(programs.len(), 1, "expected one electrical program, got {programs:#?}");
+}
 
-    assert!(
-        wheels.len() == 4,
-        "Should have 4 wheels, got {}",
-        wheels.len()
-    );
+/// The circuit's parameters are valued in USD; its boundary ports exist for cosim.
+#[test]
+fn the_electrical_program_authors_its_parameters_and_boundary() {
+    let cs = compose_rucheyok();
+    let view = cs.view();
+    let prim = SdfPath::new(ELECTRICAL).unwrap();
+    let attrs = view.attr_names(&prim);
 
-    for wheel in wheels {
+    // Parameters — the circuit's top-level `parameter Real`s, valued here.
+    for p in [
+        "inputs:panel_area",
+        "inputs:battery_capacity",
+        "inputs:motor_rated_power",
+    ] {
         assert!(
-            wheel.power_watts < 0.0,
-            "Wheel should consume power (negative), got {}",
-            wheel.power_watts
+            view.real(&prim, p).is_some(),
+            "the Electrical program must author {p}"
+        );
+    }
+
+    // Boundary — one shaft-speed port per wheel and the environment feed, wired by cosim.
+    for port in [
+        "inputs:irradiance",
+        "inputs:omega_fl",
+        "inputs:omega_fr",
+        "inputs:omega_rl",
+        "inputs:omega_rr",
+        "outputs:soc",
+    ] {
+        assert!(
+            attrs.iter().any(|a| a == port),
+            "the Electrical program must expose {port}; has {attrs:?}"
         );
     }
 }
 
+/// The power parts are physical components, not carriers of electrical behaviour: they
+/// bind NO program. Their maths is the circuit's.
 #[test]
-fn test_eps_power_balance() {
-    let components = load_rover_eps();
-    let balance = simulate_eps_flow(&components);
-
-    println!("\n=== EPS Power Balance ===");
-    println!("  Generation:  {:.1} W", balance.generation);
-    println!("  Consumption: {:.1} W", balance.consumption);
-    println!("  Surplus:     {:.1} W", balance.surplus);
-    println!("========================\n");
-
-    // Solar panel should generate 800W (rover override)
-    assert!(
-        (balance.generation - 800.0).abs() < 10.0,
-        "Solar panel should generate ~800W, got {:.1}",
-        balance.generation
-    );
-
-    // 4 wheels × 2000W = 8000W consumption
-    assert!(
-        (balance.consumption - 8000.0).abs() < 100.0,
-        "Wheels should consume ~8000W, got {:.1}",
-        balance.consumption
-    );
+fn power_parts_are_geometry_not_programs() {
+    let cs = compose_rucheyok();
+    let view = cs.view();
+    for prim in [
+        "/Rucheyok/SolarPanel",
+        "/Rucheyok/Battery",
+        "/Rucheyok/Wheel_FL",
+    ] {
+        let p = SdfPath::new(prim).unwrap();
+        assert!(
+            view.asset(&p, "lunco:program:sourceAsset").is_none(),
+            "{prim} should be a physical part with no program of its own"
+        );
+    }
 }

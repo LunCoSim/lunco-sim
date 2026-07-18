@@ -1,35 +1,20 @@
-// tagline: Battery — state-of-charge integrator (equation-only)
+within LunCo.Electrical;
+// A battery on the bus: it sets the terminal voltage and integrates its own charge from
+// whatever current flows through its pin. `p.i > 0` is discharge (current out of the pack
+// into the bus is negative into the pin), so SoC falls when the loads outdraw the sources
+// and rises when they do not — the balance is the circuit's, not a number anyone sums.
 model Battery
-  parameter Real capacity = 1.0 "Total capacity in Ah";
-  parameter Real voltage_nom = 12.0 "Nominal voltage in V";
-  parameter Real R_internal = 0.01 "Internal resistance in Ohms";
-  parameter Real T_filter = 0.1 "Input filter time constant for stability";
-  
-  Real soc(start=1.0) "State of Charge (0.0 to 1.0)";
-  Real v_oc "Open circuit voltage";
-  Real current(start=0.0) "Filtered current";
-  Real current_saturated "Safety limited current";
-  
-  input Real current_in "Raw input current in Amperes";
-  
+  parameter Real voltage_nom = 48.0 "Nominal terminal voltage, V";
+  parameter Real R_internal = 0.01 "Equivalent series resistance, Ohm";
+  parameter Real capacity = 208.0 "Total capacity, Ah";
+  parameter Real soc_init = 0.8 "State of charge at t=0, 0..1";
+
+  Pin p;
+  Real soc(start = soc_init) "State of charge, 0..1";
   output Real soc_out;
-  output Real voltage_out;
-
 equation
-  // Input Saturation: Prevent astronomical inputs from breaking the solver
-  current_saturated = if current_in > 1000 then 1000 else if current_in < -1000 then -1000 else current_in;
-
-  // Input filtering: Converts jumps into smooth transitions for the solver
-  T_filter * der(current) + current = current_saturated;
-
-  // Smooth SOC-dependent open circuit voltage
-  v_oc = voltage_nom * (0.8 + 0.2 * (if soc > 0.0 then soc else 0.0));
-  
-  // Terminal voltage
-  voltage_out = v_oc - current * R_internal;
-  
-  // Charge balance
-  der(soc) = -current / (capacity * 3600.0);
-  
+  // Terminal voltage droops with SoC and with the current drawn through the ESR.
+  p.v = voltage_nom * (0.8 + 0.2 * soc) - p.i * R_internal;
+  der(soc) = -p.i / (capacity * 3600.0);
   soc_out = soc;
 end Battery;

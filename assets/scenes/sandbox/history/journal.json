@@ -1,7 +1,7 @@
 {
   "twin": "/home/rod/Documents/luncosim-workspace/usd/assets/scenes/sandbox",
   "local_author": "peer-0394417ed539ee2f",
-  "clock": 704,
+  "clock": 726,
   "entries": [
     {
       "id": {
@@ -19077,6 +19077,808 @@
         }
       },
       "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 705
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 704
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784307344314,
+      "twin": "/home/rod/Documents/luncosim-workspace/usd/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Lifecycle": {
+          "Opened": {
+            "source_hash": ""
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 706
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 705
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784307914172,
+      "twin": "/home/rod/Documents/luncosim-workspace/usd/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Lifecycle": {
+          "Opened": {
+            "source_hash": ""
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 707
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 706
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784307918993,
+      "twin": "/home/rod/Documents/luncosim-workspace/usd/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Lifecycle": {
+          "Opened": {
+            "source_hash": ""
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 708
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 707
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784307918993,
+      "twin": "/home/rod/Documents/luncosim-workspace/usd/assets/scenes/sandbox",
+      "doc": 2,
+      "kind": {
+        "Lifecycle": {
+          "Opened": {
+            "source_hash": ""
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 709
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 708
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784307918993,
+      "twin": "/home/rod/Documents/luncosim-workspace/usd/assets/scenes/sandbox",
+      "doc": 3,
+      "kind": {
+        "Lifecycle": {
+          "Opened": {
+            "source_hash": ""
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 710
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 709
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784308134007,
+      "twin": "/home/rod/Documents/luncosim-workspace/usd/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Lifecycle": {
+          "Opened": {
+            "source_hash": ""
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 711
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 710
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784308134895,
+      "twin": "/home/rod/Documents/luncosim-workspace/usd/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Lifecycle": {
+          "Opened": {
+            "source_hash": ""
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 712
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 711
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784308134895,
+      "twin": "/home/rod/Documents/luncosim-workspace/usd/assets/scenes/sandbox",
+      "doc": 2,
+      "kind": {
+        "Lifecycle": {
+          "Opened": {
+            "source_hash": ""
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 713
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 712
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784308134895,
+      "twin": "/home/rod/Documents/luncosim-workspace/usd/assets/scenes/sandbox",
+      "doc": 3,
+      "kind": {
+        "Lifecycle": {
+          "Opened": {
+            "source_hash": ""
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 714
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 713
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784308632779,
+      "twin": "/home/rod/Documents/luncosim-workspace/usd/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Op": {
+          "domain": "Usd",
+          "op": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-15.502701;0.000000;25.977708\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          },
+          "inverse": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-1.809837;0.000000;-1.076865\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"-16.019590;0.000000;-1.285654\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"-9.719181;0.000000;14.726850\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"-18.636282;0.000000;27.142329\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"-63.739341;0.000000;31.674713\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"-100.805948;0.000000;47.613032\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"-128.913332;0.000000;7.144366\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"-103.146841;-0.000000;-66.809895\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"105.198452;-0.000000;-82.754947\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"114.896400;0.000000;-51.174355\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"110.322662;0.000000;-6.454551\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"101.745334;0.000000;36.144420\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"170.142210;0.000000;22.547475\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"139.641120;0.000000;-64.838974\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"285.048801;0.000000;34.079742\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"199.425832;0.000000;67.512915\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"322.464852;0.000000;124.716601\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"167.940274;0.000000;93.468621\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"292.633031;0.000000;162.856468\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"162.507462;0.000000;105.561405\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"133.022749;0.000000;121.347889\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"97.042522;0.000000;130.990991\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"72.739650;0.000000;164.855589\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"101.145358;0.000000;172.682733\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"114.444947;0.000000;152.760696\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"102.183869;0.000000;185.858494\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"83.277212;0.000000;186.480499\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"52.860970;0.000000;160.786112\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"53.018125;0.000000;157.903222\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"21.056119;0.000000;-99.689042\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"-49.505612;0.000000;-97.710403\" smooth=\"true\"/>\n        <Action ID=\"drive_to\" target=\"5.641419;-0.000000;-8.191681\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 715
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 714
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784308633202,
+      "twin": "/home/rod/Documents/luncosim-workspace/usd/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Op": {
+          "domain": "Usd",
+          "op": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-16.734122;0.000000;20.235263\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          },
+          "inverse": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-15.502701;0.000000;25.977708\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 716
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 715
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784308633394,
+      "twin": "/home/rod/Documents/luncosim-workspace/usd/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Op": {
+          "domain": "Usd",
+          "op": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-16.482070;0.000000;10.468527\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          },
+          "inverse": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-16.734122;0.000000;20.235263\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 717
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 716
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784308633573,
+      "twin": "/home/rod/Documents/luncosim-workspace/usd/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Op": {
+          "domain": "Usd",
+          "op": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-14.946370;0.000000;5.292466\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          },
+          "inverse": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-16.482070;0.000000;10.468527\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 718
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 717
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784308633710,
+      "twin": "/home/rod/Documents/luncosim-workspace/usd/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Op": {
+          "domain": "Usd",
+          "op": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-14.306966;0.000000;4.291538\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          },
+          "inverse": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-14.946370;0.000000;5.292466\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 719
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 718
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784308633861,
+      "twin": "/home/rod/Documents/luncosim-workspace/usd/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Op": {
+          "domain": "Usd",
+          "op": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-14.254463;0.000000;4.314654\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          },
+          "inverse": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-14.306966;0.000000;4.291538\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 720
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 719
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784308634349,
+      "twin": "/home/rod/Documents/luncosim-workspace/usd/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Op": {
+          "domain": "Usd",
+          "op": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-13.189408;0.000000;2.861458\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          },
+          "inverse": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-14.254463;0.000000;4.314654\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 721
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 720
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784342387938,
+      "twin": "/home/rod/Documents/luncosim-workspace/usd/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Op": {
+          "domain": "Usd",
+          "op": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-28.748290;-0.000000;19.231217\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          },
+          "inverse": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-13.189408;0.000000;2.861458\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 722
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 721
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784342388373,
+      "twin": "/home/rod/Documents/luncosim-workspace/usd/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Op": {
+          "domain": "Usd",
+          "op": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-22.463587;-0.000000;14.074955\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          },
+          "inverse": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-28.748290;-0.000000;19.231217\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 723
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 722
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784342388606,
+      "twin": "/home/rod/Documents/luncosim-workspace/usd/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Op": {
+          "domain": "Usd",
+          "op": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-32.342822;0.000000;8.798402\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          },
+          "inverse": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-22.463587;-0.000000;14.074955\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 724
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 723
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784342388818,
+      "twin": "/home/rod/Documents/luncosim-workspace/usd/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Op": {
+          "domain": "Usd",
+          "op": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-31.775076;0.000000;8.779525\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          },
+          "inverse": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-32.342822;0.000000;8.798402\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 725
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 724
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784342399973,
+      "twin": "/home/rod/Documents/luncosim-workspace/usd/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Op": {
+          "domain": "Usd",
+          "op": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-24.803272;0.000000;14.991489\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          },
+          "inverse": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-31.775076;0.000000;8.779525\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          }
+        }
+      },
+      "change_set": null
+    },
+    {
+      "id": {
+        "author": "peer-0394417ed539ee2f",
+        "lamport": 726
+      },
+      "parents": [
+        {
+          "author": "peer-0394417ed539ee2f",
+          "lamport": 725
+        }
+      ],
+      "author": {
+        "user": "local",
+        "tool": "workbench"
+      },
+      "at_ms": 1784342400143,
+      "twin": "/home/rod/Documents/luncosim-workspace/usd/assets/scenes/sandbox",
+      "doc": 1,
+      "kind": {
+        "Op": {
+          "domain": "Usd",
+          "op": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-24.807858;-0.000000;15.017439\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          },
+          "inverse": {
+            "SetAttribute": {
+              "edit_target": "@runtime@",
+              "path": "/SandboxScene/Skid_Raycast_2",
+              "name": "lunco:behavior",
+              "type_name": "string",
+              "value": "<root BTCPP_format=\"4\" main_tree_to_execute=\"MainTree\">\n  <BehaviorTree ID=\"MainTree\">\n    <Repeat num_cycles=\"-1\">\n      <Sequence>\n        <Action ID=\"drive_to\" target=\"-24.803272;0.000000;14.991489\"/>\n      </Sequence>\n    </Repeat>\n  </BehaviorTree>\n</root>"
+            }
+          }
+        }
+      },
+      "change_set": null
     }
   ],
   "streams": [
@@ -19086,7 +19888,7 @@
       "composition": "Sequential",
       "head": {
         "author": "peer-0394417ed539ee2f",
-        "lamport": 704
+        "lamport": 726
       },
       "parent_streams": [],
       "created_at_ms": 1783097117973,
@@ -19102,7 +19904,7 @@
       "stream": "main",
       "head": {
         "author": "peer-0394417ed539ee2f",
-        "lamport": 704
+        "lamport": 726
       }
     }
   ],

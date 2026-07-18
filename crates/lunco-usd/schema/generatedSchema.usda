@@ -237,6 +237,21 @@ class "LunCoProgramAPI" (
     )
 }
 
+class "LunCoCelestialBodyAPI" (
+    doc = """Declares that a prim IS a celestial body — a planet, moon or star whose
+    pose comes from the ephemeris rather than from an authored transform. No prim
+    applies this schema ⇒ no bodies, no orbit views, no ephemeris."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    uniform int lunco:body = 0 (
+        doc = """NAIF id of the body this prim represents: 10 Sun, 399 Earth, 301
+        Moon. `0` means unset, and such a prim is ignored."""
+    )
+}
+
 class LunCoPortEvent "LunCoPortEvent" (
     doc = """A threshold crossing on one port, published as a named event. A child
     prim of the program whose port it watches."""
@@ -441,22 +456,22 @@ class "LunCoWheelAPI" (
         PhysX's index lives on the WheelAttachment prim, which flat composition
         lacks."""
     )
-    double lunco:contactGripStiffness (
+    double lunco:wheel:contactGripStiffness (
         doc = """Slope of contact friction vs slip, before the Coulomb cone."""
     )
-    double lunco:driveForcePerNormal (
+    double lunco:wheel:driveForcePerNormal (
         doc = """Drive force as a multiple of the wheel's normal force."""
     )
-    double3 lunco:steerAxis (
+    double3 lunco:wheel:steerAxis (
         doc = """Steering-head axis, wheel-local. (0,1,0) is vertical yaw."""
     )
-    double lunco:maxDriveOmega (
+    double lunco:wheel:maxDriveOmega (
         doc = """Joint-wheel drive tuning: axle free-spin cap, rad/s."""
     )
-    double lunco:driveDamping (
+    double lunco:wheel:driveDamping (
         doc = """Joint-wheel drive tuning: axle motor damping."""
     )
-    double lunco:stallTorqueGain (
+    double lunco:wheel:stallTorqueGain (
         doc = """Joint-wheel drive tuning: torque gain approaching stall."""
     )
 }
@@ -470,7 +485,7 @@ class "LunCoTireAPI" (
     }
 )
 {
-    double lunco:frictionCoefficient (
+    double lunco:tire:frictionCoefficient (
         doc = """Coulomb μ between this tire and the ground; slip limit = atan(μ).
         No fallback: a tire that doesn't say what it grips with is a bug."""
     )

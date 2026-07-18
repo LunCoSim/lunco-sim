@@ -779,8 +779,10 @@ pub fn sync_waypoint_visuals(
 
         if let Some((entity, existing_passed)) = existing.remove(&(vessel, coord_key.clone())) {
             if existing_passed == passed {
-                // Same colour: just update position.
-                commands.entity(entity).insert((
+                // Same colour: just update position. `try_insert`, not `insert`: a scene
+                // load can despawn this visual between the query snapshot and command
+                // application, and a bare `insert` on the dead entity panics the schedule.
+                commands.entity(entity).try_insert((
                     cell,
                     Transform::from_translation(local_pos),
                 ));

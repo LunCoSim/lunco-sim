@@ -51,7 +51,7 @@ def Xform "Rucheyok" (
         color3f[] primvars:displayColor = [(0.2, 0.5, 0.8)]
     }
 
-    # --- Solar Panel (from component, with rover-specific parameters) ---
+    # --- Solar Panel (physical part; its output is the Electrical circuit's) ---
     def Xform "SolarPanel" (
         prepend references = @../../../components/power/solar_panel.usda@</SolarPanel>
     )
@@ -64,17 +64,9 @@ def Xform "Rucheyok" (
         bool physics:rigidBodyEnabled = true
         float physics:mass = 15.0
         bool physics:collisionEnabled = true
-
-        # Override Modelica parameters for this specific rover
-        double lunco:nominalPower = 800.0        # Larger panel for lunar mission
-        double lunco:efficiency = 0.32           # High-efficiency multi-junction
-        double lunco:area = 72.0                 # 12x6m panel
-
-        # Solar panel connects to EPS bus
-        rel lunco:epsBus = [</Rucheyok/Battery>]
     }
 
-    # --- Battery (from component, with rover-specific parameters) ---
+    # --- Battery (physical part; its charge is the Electrical circuit's) ---
     def Xform "Battery" (
         prepend references = @../../../components/power/battery.usda@</Battery>
     )
@@ -87,20 +79,47 @@ def Xform "Rucheyok" (
         bool physics:rigidBodyEnabled = true
         float physics:mass = 50.0
         bool physics:collisionEnabled = true
+    }
 
-        # Override Modelica parameters for this specific rover
-        double lunco:capacity = 15000.0
-        double lunco:maxDischargeRate = 10000.0
-        double lunco:initialCharge = 0.95
+    # --- Electrical domain: one circuit, one program, one DAE ---
+    # A physical network is acausal — the panel sources, four hub motors draw, the pack
+    # balances, and Kirchhoff sums the shared node with no count of what is on it. That is
+    # one Modelica model (`rucheyok_electrical.mo`, importing `LunCo.Electrical`), so it is
+    # one `LunCoProgram`, grouped under a domain scope (doc 38). The parts above are its
+    # components; this is their maths, assembled.
+    #
+    # Its boundary is causal, where cosim crosses: irradiance from the sun, each motor's
+    # torque and shaft speed from its wheel's physics step, SoC back out. Those are wired
+    # by the twin.
+    def Scope "Electrical"
+    {
+        def LunCoProgram "System" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform asset lunco:program:sourceAsset = @vessels/rovers/rucheyok/rucheyok_electrical.mo@
+            uniform token lunco:program:sourceAsset:subIdentifier = "RucheyokElectrical"
 
-        # Battery connects to EPS bus
-        rel lunco:epsBus = [
-            </Rucheyok/SolarPanel>,
-            </Rucheyok/Wheel_FL>,
-            </Rucheyok/Wheel_FR>,
-            </Rucheyok/Wheel_RL>,
-            </Rucheyok/Wheel_RR>
-        ]
+            # This rover's ratings — the circuit's top-level parameters.
+            float inputs:panel_area = 72.0          # m2, the 12x6 m panel
+            float inputs:panel_efficiency = 0.32    # high-efficiency multi-junction
+            float inputs:battery_capacity = 312.0   # Ah — 15 kWh at 48 V
+            float inputs:battery_soc_init = 0.95    # starts nearly full
+            float inputs:motor_rated_power = 2000.0 # W per hub motor
+
+            # Boundary — wired by cosim to the sun and the four wheels.
+            float inputs:irradiance
+            float inputs:cos_incidence
+            float inputs:torque_fl
+            float inputs:torque_fr
+            float inputs:torque_rl
+            float inputs:torque_rr
+            float inputs:omega_fl
+            float inputs:omega_fr
+            float inputs:omega_rl
+            float inputs:omega_rr
+            float outputs:soc
+        }
     }
 
     # --- Wheels (from component) ---
@@ -125,7 +144,6 @@ def Xform "Rucheyok" (
         float physics:mass = 25.0
         bool physics:collisionEnabled = true
 
-        rel lunco:epsBus = [</Rucheyok/Battery>]
     }
 
     def Cylinder "Wheel_FR" (
@@ -149,7 +167,6 @@ def Xform "Rucheyok" (
         float physics:mass = 25.0
         bool physics:collisionEnabled = true
 
-        rel lunco:epsBus = [</Rucheyok/Battery>]
     }
 
     def Cylinder "Wheel_RL" (
@@ -173,7 +190,6 @@ def Xform "Rucheyok" (
         float physics:mass = 25.0
         bool physics:collisionEnabled = true
 
-        rel lunco:epsBus = [</Rucheyok/Battery>]
     }
 
     def Cylinder "Wheel_RR" (
@@ -197,6 +213,5 @@ def Xform "Rucheyok" (
         float physics:mass = 25.0
         bool physics:collisionEnabled = true
 
-        rel lunco:epsBus = [</Rucheyok/Battery>]
     }
 }

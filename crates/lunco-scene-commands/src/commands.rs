@@ -999,7 +999,7 @@ pub(crate) const WHEEL_PARAMS: &[WheelParam] = &[
     WheelParam {
         aliases: &["friction_mu", "friction"],
         set: |w, v| w.friction_mu = v,
-        usd_attr: "lunco:frictionCoefficient",
+        usd_attr: "lunco:tire:frictionCoefficient",
     },
     WheelParam {
         aliases: &["mass"],

@@ -33,9 +33,7 @@
 # do not inherit down namespace. They are per-wheel `over`s below.
 #
 # There is no steering knob. The base is a SKID rover (`PhysxVehicleTankDifferentialAPI`):
-# it steers by driving its sides at different speeds, and its wheels do not turn. A
-# steer lock would be a number nothing could read — which is exactly what the
-# `lunco:maxSteerAngle` here used to be.
+# it steers by driving its sides at different speeds, and its wheels do not turn.
 def Xform "RoverEasy" (
     doc = "Easy rover (Explorer LT) — low centre of mass, planted and forgiving. The trainer tier: it climbs the borderline slope and resists tipping. Start here."
     prepend apiSchemas = ["LunCoCatalogAPI"]

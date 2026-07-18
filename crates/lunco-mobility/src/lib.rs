@@ -317,7 +317,7 @@ pub struct WheelRaycast {
     /// Axle bearing/rolling drag in N·m·s. Derived so the free (airborne) spin
     /// terminates at the motor's no-load speed (`drive_torque_max / ω_noLoad`).
     pub bearing_damping: f64,
-    /// Tire-ground friction coefficient (USD `lunco:frictionCoefficient`).
+    /// Tire-ground friction coefficient (USD `lunco:tire:frictionCoefficient`).
     /// Caps the traction torque at `μ·N`, above which the tire breaks loose.
     pub friction_mu: f64,
     /// Longitudinal slip stiffness in N per m/s of contact slip. Governs how

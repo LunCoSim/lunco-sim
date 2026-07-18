@@ -175,7 +175,7 @@ fn a_wheel_composes_its_tire() {
 
     // Grip — `regolith` is the wheel's default tire.
     assert_eq!(
-        view.real(&fl, "lunco:frictionCoefficient"),
+        view.real(&fl, "lunco:tire:frictionCoefficient"),
         Some(0.8),
         "Wheel_FL must compose its tire's friction"
     );

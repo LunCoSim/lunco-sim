@@ -5,55 +5,19 @@
     metersPerUnit = 1
 )
 
-# A drive motor: its electrical ratings, and the part that houses them.
+# A drive motor as a spawnable part — a housing, a mass, and a collider.
 #
-# TWO PRIMS, ONE SPEC. A motor turns up in this project two ways — bolted inside a
-# wheel hub (where it is not a body of its own: the wheel is one rigid body), and as a
-# part you can spawn and bolt on. Both need the SAME ratings, so the ratings are
-# authored once in `</MotorSpec>` and both take them from there:
+# Its electrical behaviour is not here and not its own: a motor is a load on a circuit,
+# and a circuit is one Modelica model. `LunCo.Electrical.DCMotor` is the reusable model
+# class; the vehicle it drives instantiates it in its electrical system (see
+# `vessels/rovers/rucheyok/rucheyok_electrical.mo`). The MECHANICAL side is Avian's — the
+# torque and shaft speed are PhysX vehicle properties on the wheel, and the physics step
+# owns the exchange. USD assembles the part; the circuit is the maths.
 #
-#   </MotorSpec>  an `over` — the ratings, nothing else. `wheel.usda` references it, so
-#                 every driven wheel composes a motor's spec onto itself. Same idiom as
-#                 `tires/*.usda` and `suspensions/*.usda`, and for the same reason: a
-#                 wheel is one prim carrying wheel + tire + suspension + motor.
-#   </Motor>      the spawnable part — the spec plus a body, a mass and a housing that
-#                 renders and collides. It references `</MotorSpec>` internally, so a
-#                 re-rating changes one line and both follow.
-#
-# `wheel.usda` used to restate these numbers inline under a second vocabulary
-# (`lunco:motorPower`, `lunco:motorEfficiency`, `lunco:noLoadRpm` — identical values to
-# `ratedPower`/`efficiency`/`ratedRpm` here). One motor, two spellings, and the EPS
-# budget read the copy while this file went unreferenced by anything at all.
-
-# The ratings. An `over`, so it defines nothing of its own and carries opinions onto
-# whatever composes it.
-over "MotorSpec" (
-    prepend apiSchemas = ["LunCoMotorAPI", "LunCoEpsNodeAPI"]
-    kind = "component"
-)
-{
-    # --- Ratings (LunCoMotorAPI) ---
-    double lunco:motor:ratedPower = 2000.0      # W continuous shaft power
-    double lunco:motor:peakPower = 4000.0       # W short-term peak
-    double lunco:motor:ratedRpm = 300.0         # RPM at rated power
-    double lunco:motor:efficiency = 0.85        # electrical → mechanical, 0..1
-    double lunco:motor:torqueConstant = 0.1     # N·m/A
-    double lunco:motor:resistance = 0.05        # Ω winding
-    double lunco:motor:inductance = 0.001       # H winding
-
-    # --- Power (LunCoEpsNodeAPI) ---
-    # The bus this motor draws from. Retargeted by whatever composes the motor: a
-    # rover points its wheels at its own bus. A node names its bus and nothing else —
-    # the bus does not name its members (see the schema's EPS section).
-    rel lunco:eps:bus
-}
-
-# The spawnable part: the ratings above, plus the hardware that carries them. The root
-# is an `Xform` — a component, not a cylinder — so the visible housing is an ordinary
-# child gprim that both renders and collides, and the rigid body is the root.
+# The root is an `Xform` — a component, not a cylinder — so the visible housing is an
+# ordinary child gprim that both renders and collides, and the rigid body is the root.
 def Xform "Motor" (
     kind = "component"
-    prepend references = </MotorSpec>
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
