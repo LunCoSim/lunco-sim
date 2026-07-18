@@ -856,6 +856,12 @@ fn instantiate_usd_prim_read<R: UsdRead>(
             // into a Bevy mesh. (Falls through to `None` — no fallback
             // primitive — if the topology attrs are missing/malformed.)
             build_usd_mesh(reader, &sdf_path).map(|m| meshes.add(m))
+        } else if prim_type.as_deref() == Some("NurbsPatch") {
+            // Tensor-product rational surface — how USD spells a lathe, and the
+            // only way to express a PARTIAL revolution (the gprims are complete
+            // revolutions with no sweep-angle). `trimCurve:*` is not honoured;
+            // see the fn doc.
+            build_usd_nurbs_patch_mesh(reader, &sdf_path).map(|m| meshes.add(m))
         } else if matches!(prim_type.as_deref(), Some("BasisCurves") | Some("NurbsCurves")) {
             // A curve prim with `widths` is a TUBE — swept geometry, not a line.
             // `build_usd_curve_mesh` returns `None` when `widths` is unauthored,
@@ -3453,6 +3459,91 @@ fn build_usd_curve_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> 
         });
     }
     merged
+}
+
+/// Build a mesh from a `UsdGeomNurbsPatch` prim.
+///
+/// A patch is a tensor-product rational surface: a `uVertexCount × vVertexCount`
+/// control net with a knot vector and order per direction. It is how USD spells
+/// every surface of revolution — which for HAB-1 is **80.4% of the habitat's
+/// vertices** (261 lathe objects plus the ellipsoidal dome), and the only way to
+/// express a *partial* revolution at all, since `Cylinder`/`Sphere`/`Cone` are
+/// complete revolutions with no sweep-angle parameter.
+///
+/// Normals are analytic (`uder × vder`), not face-averaged — exact at the poles
+/// and seams where averaging creases, which is precisely the dome apex.
+///
+/// **`trimCurve:*` is not honoured**: `openusd` does not define those tokens (see
+/// `OPENUSD_TRIMCURVE_SPEC.md`). An authored trim is silently ignored, so a
+/// trimmed patch renders untrimmed — larger than intended, never smaller. That is
+/// the safe direction to be wrong in, but it IS wrong; the tokens are a small
+/// upstream contribution.
+fn build_usd_nurbs_patch_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> {
+    use bevy::asset::RenderAssetUsages;
+    use bevy_mesh::PrimitiveTopology;
+
+    let points = read_mesh_points(reader, path)?;
+    let u_count = reader.scalar::<i32>(path, "uVertexCount").unwrap_or(0).max(0) as usize;
+    let v_count = reader.scalar::<i32>(path, "vVertexCount").unwrap_or(0).max(0) as usize;
+    if u_count < 2 || v_count < 2 {
+        return None;
+    }
+    let u_order = reader.scalar::<i32>(path, "uOrder").unwrap_or(4).max(2) as usize;
+    let v_order = reader.scalar::<i32>(path, "vOrder").unwrap_or(4).max(2) as usize;
+    let u_knots = reader
+        .scalar::<Vec<f64>>(path, "uKnots")
+        .unwrap_or_else(|| crate::nurbs::default_clamped_knots(u_count, u_order));
+    let v_knots = reader
+        .scalar::<Vec<f64>>(path, "vKnots")
+        .unwrap_or_else(|| crate::nurbs::default_clamped_knots(v_count, v_order));
+    let weights = reader.scalar::<Vec<f64>>(path, "pointWeights").unwrap_or_default();
+
+    // Tessellation density. Fixed for now — this is exactly where adaptive,
+    // curvature-driven refinement belongs, and where a coarse-while-dragging /
+    // refine-on-release policy would hang once patches are editable in-sim.
+    let u_steps = (u_count * 6).clamp(8, 128);
+    let v_steps = (v_count * 6).clamp(8, 128);
+
+    let grid = crate::nurbs::sample_nurbs_patch(
+        &points, &weights, u_count, v_count, u_order, v_order, &u_knots, &v_knots, u_steps,
+        v_steps,
+    );
+    if grid.is_empty() {
+        return None;
+    }
+
+    let cols = u_steps + 1;
+    let rows = v_steps + 1;
+    let mut positions = Vec::with_capacity(grid.len());
+    let mut normals = Vec::with_capacity(grid.len());
+    let mut uvs = Vec::with_capacity(grid.len());
+    for s in &grid {
+        positions.push(s.position);
+        normals.push(s.normal);
+        uvs.push(s.uv);
+    }
+
+    let mut indices = Vec::with_capacity(u_steps * v_steps * 6);
+    for r in 0..v_steps {
+        for c in 0..u_steps {
+            let (a, b, d, e) = (
+                (r * cols + c) as u32,
+                (r * cols + c + 1) as u32,
+                ((r + 1) * cols + c) as u32,
+                ((r + 1) * cols + c + 1) as u32,
+            );
+            indices.extend_from_slice(&[a, d, e]);
+            indices.extend_from_slice(&[a, e, b]);
+        }
+    }
+    debug_assert_eq!(positions.len(), cols * rows);
+
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_indices(bevy_mesh::Indices::U32(indices));
+    Some(mesh)
 }
 
 fn read_int_array<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<Vec<i32>> {

@@ -68,6 +68,20 @@ def Xform "World"
         int[] curveVertexCounts = [4]
         point3f[] points = [(0, 5, 0), (2, 5, 0), (2, 5, 2), (0, 5, 2)]
     }
+    def NurbsPatch "ShellQuarter"
+    {
+        int uVertexCount = 3
+        int vVertexCount = 2
+        int uOrder = 3
+        int vOrder = 2
+        double[] uKnots = [0, 0, 0, 1, 1, 1]
+        double[] vKnots = [0, 0, 1, 1]
+        double[] pointWeights = [1, 0.70710678118, 1, 1, 0.70710678118, 1]
+        point3f[] points = [
+            (1, 0, 0), (1, 0, 1), (0, 0, 1),
+            (1, 2, 0), (1, 2, 1), (0, 2, 1)
+        ]
+    }
     def NurbsCurves "Elbow"
     {
         int[] curveVertexCounts = [3]
@@ -207,6 +221,17 @@ fn recipe_asset_instantiates_off_live_canonical_stage() {
     assert!(
         app.world().get::<Mesh3d>(elbow_e).is_some(),
         "a NurbsCurves with `widths` must sweep to a Mesh3d"
+    );
+
+    // (h) `UsdGeomNurbsPatch` → a tessellated surface. Unlike the curves, a patch
+    // needs NO `widths` — it is already a surface. This one is a rational
+    // cylindrical quarter, the shape HAB-1's shell and every lathe part are made
+    // of, and the only way USD can express a PARTIAL revolution (the gprims are
+    // all complete ones).
+    let patch_e = entity_at(&mut app, "/World/ShellQuarter").expect("ShellQuarter prim entity");
+    assert!(
+        app.world().get::<Mesh3d>(patch_e).is_some(),
+        "a NurbsPatch must tessellate to a Mesh3d"
     );
 }
 
