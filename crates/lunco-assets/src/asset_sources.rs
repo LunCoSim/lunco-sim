@@ -13,40 +13,6 @@ use bevy::prelude::*;
 use crate::twin_source::{twin_asset_source, TwinRoots};
 use crate::{cache_dir, textures_dir};
 
-/// A custom asset **scheme** contributed to the LunCo asset-source registry.
-///
-/// Any crate registers one with `inventory::submit!` so scheme ownership lives
-/// with the crate that implements the reader — no central hardcoded list. The
-/// registrar ([`register_lunco_asset_sources`]) drains every submitted provider
-/// **before** `AssetPlugin` builds (Bevy snapshots asset sources there):
-///
-/// ```ignore
-/// inventory::submit! {
-///     lunco_assets::AssetSchemeProvider { scheme: "myscheme", build: my_asset_source }
-/// }
-/// ```
-///
-/// `build` is a bare `fn` (not a closure): inventory items are `'static` with no
-/// captured state. A reader that needs shared *runtime* state (e.g. `twin://`'s
-/// `TwinRoots`, shared with a resource) can't be a stateless provider and is
-/// registered explicitly by the registrar instead.
-///
-/// TODO(interactive): schemes are fixed at startup because Bevy freezes the
-/// asset-source registry at `AssetPlugin` build. To make schemes *runtime-
-/// dynamic* and scriptable (rhai), add a single dispatcher source
-/// (`lunco://<handler>/…`) backed by a `SchemeRegistry` resource whose handlers
-/// (path → bytes, or redirect to an existing source) can be added at runtime and
-/// from scripts. This link-time registry stays the path for crate-owned schemes;
-/// the dispatcher would layer on top for dynamic/scripted aliases.
-pub struct AssetSchemeProvider {
-    /// The scheme name, e.g. `"myscheme"` → `myscheme://…`.
-    pub scheme: &'static str,
-    /// Builds the source's reader. Called once, before `AssetPlugin`.
-    pub build: fn() -> AssetSourceBuilder,
-}
-
-inventory::collect!(AssetSchemeProvider);
-
 /// Register every LunCo asset source on `app` and insert the shared
 /// [`TwinRoots`] resource. Idempotent per app; call once before `DefaultPlugins`.
 ///
@@ -57,12 +23,8 @@ inventory::collect!(AssetSchemeProvider);
 /// | `lunco://` | `<cwd>/assets` | the engine asset *library* (rovers, parts) |
 /// | `twin://<name>/…` | open Twin roots | Twin scenes AND downloaded scenarios — native fs + web OPFS, via `lunco_storage` |
 ///
-/// The first three (engine-critical, path-derived) are registered explicitly so
-/// web asset loading never depends on the collection mechanism. Every crate-
-/// contributed scheme (via [`AssetSchemeProvider`] + `inventory::submit!`) is
-/// drained in between. `twin://` is registered explicitly because its reader is
-/// stateful (it shares [`TwinRoots`] with the resource), not because of any
-/// platform limit.
+/// The first three are path-derived and stateless; `twin://` is separate only
+/// because its reader is stateful (it shares [`TwinRoots`] with the resource).
 ///
 /// A **downloaded scenario is just a Twin root** over its cache directory, so it
 /// needs no scheme of its own: one `twin://<name>/<rel>` names the scene on every
@@ -92,14 +54,6 @@ pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
         AssetSourceBuilder::platform_default(&assets_dir.to_string_lossy(), None),
     );
 
-    // Crate-contributed schemes: every `inventory::submit!`d `AssetSchemeProvider`
-    // is registered here with no edit to this function, so scheme ownership can
-    // live with the crate that implements the reader. Drained before `AssetPlugin`
-    // (this fn runs pre-DefaultPlugins).
-    for provider in inventory::iter::<AssetSchemeProvider> {
-        app.register_asset_source(provider.scheme, (provider.build)());
-    }
-
     // `twin://` — a named root, keyed by Twin name: an open Twin's directory, or a
     // downloaded scenario's cache dir. Registered on EVERY platform; the reader
     // goes through `lunco_storage`, so on web it reads the OPFS tree.
@@ -107,36 +61,4 @@ pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
     app.register_asset_source("twin", twin_asset_source(&twin_roots));
     app.insert_resource(twin_roots.clone());
     twin_roots
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The registry must actually collect submissions at LINK time, not merely
-    /// compile — a silently-empty `inventory` would drop a crate's scheme with no
-    /// error, and the reader would simply never be registered.
-    ///
-    /// Contributes its own provider rather than asserting on a production scheme:
-    /// the mechanism is what is under test, so it must not fail when the set of
-    /// real schemes changes.
-    fn test_scheme_source() -> AssetSourceBuilder {
-        AssetSourceBuilder::platform_default("/tmp/lunco-test-scheme", None)
-    }
-
-    inventory::submit! {
-        AssetSchemeProvider { scheme: "lunco-test-scheme", build: test_scheme_source }
-    }
-
-    #[test]
-    fn contributed_schemes_are_collected() {
-        let schemes: Vec<&str> = inventory::iter::<AssetSchemeProvider>
-            .into_iter()
-            .map(|p| p.scheme)
-            .collect();
-        assert!(
-            schemes.contains(&"lunco-test-scheme"),
-            "a submitted scheme must be collected through the inventory registry, got {schemes:?}",
-        );
-    }
 }

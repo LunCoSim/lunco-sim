@@ -426,6 +426,15 @@ fn load_ready_scenario(
     // the host's, so a client that already booted this scene re-triggers the SAME
     // asset id and `LoadScene`'s no-op guard short-circuits — no teardown, and no
     // race with avian's island solver from a redundant reload.
+    //
+    // TODO(verify-host-client): the two claims above — that the URI matches the
+    // host's, and that a re-trigger is a genuine no-op — are UNVERIFIED at runtime.
+    // Both fail silently if wrong: a mismatched URI gives this peer its own
+    // `GlobalEntityId`s (possession/prediction never bind), and a no-op that does
+    // NOT hold tears the live scene down mid-session and can trip avian's island
+    // solver on the client. Neither is reachable from a unit test — drive
+    // `scripts/run_host_client.sh` (and a web client, which is the case with no
+    // local checkout) and confirm both against the host's logs.
     let uri = lunco_networking::scenario_sync::mount_scenario_twin(
         &twins,
         &m.scenario_id,

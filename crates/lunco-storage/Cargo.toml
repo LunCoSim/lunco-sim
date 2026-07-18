@@ -30,6 +30,10 @@ web-sys = { workspace = true, features = [
     "FileSystemWritableFileStream",
     "File",
     "Blob",
+    # `console` — used by the OPFS blob path's warn. Declared here so this crate
+    # builds for wasm on its own, not only when some other crate happens to
+    # enable it through feature unification.
+    "console",
 ] }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }

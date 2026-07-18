@@ -1411,11 +1411,10 @@ fn on_clear_scene(
 /// The scene-owned entities a teardown touches, bundled as one `SystemParam`.
 ///
 /// Every scene-lifecycle observer — `LoadScene` (in `lunco-usd`), `ClearScene`,
-/// `RestartScene` — needs exactly this set, so it is declared once here rather
-/// than restated as three query params at each site. Bundling also keeps the
-/// mount API honest: a caller drives a teardown without naming `WorldGrid`,
-/// `OriginAnchor` or the cosim `SimConnection` wire type, so `lunco-usd` needs no
-/// dependency on `lunco-cosim` to orchestrate a scene swap.
+/// `RestartScene` — needs exactly this set. Bundling keeps the mount API honest:
+/// a caller drives a teardown without naming `WorldGrid`, `OriginAnchor` or the
+/// cosim `SimConnection` wire type, so `lunco-usd` needs no dependency on
+/// `lunco-cosim` to orchestrate a scene swap.
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct SceneEntities<'w, 's> {
     grid: Query<'w, 's, &'static Children, With<WorldGrid>>,

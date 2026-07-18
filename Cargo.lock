@@ -6905,7 +6905,6 @@ dependencies = [
  "flate2",
  "image",
  "include_dir",
- "inventory",
  "js-sys",
  "lunco-storage",
  "rayon",

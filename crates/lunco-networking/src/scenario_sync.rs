@@ -864,6 +864,19 @@ pub fn update_scenario_download_status(
 /// A twin already open locally keeps its own root: same identity, but a real
 /// checkout is the better source for the bytes, and re-pointing it at a
 /// read-only cache copy would shadow the user's editable files.
+///
+/// TODO(verify-host-client): this path has NO runtime coverage. It cannot be unit
+/// tested — it needs a real host/client pair (`scripts/run_host_client.sh`), plus
+/// a web client for the case that motivated it (a peer with no local checkout).
+///
+/// Verify by hand until that exists, and treat it as load-bearing: the failure
+/// mode is SILENT. A wrong `name` here, or a root registered after the scene
+/// loads, yields a different asset path than the host used — and since
+/// `Provenance::Content` hashes `namespace:source:path`, every prim then derives a
+/// different `GlobalEntityId` on that peer. Nothing panics and the scene renders
+/// fine; possession and client-side prediction simply never bind, which looks like
+/// a netcode bug far from here. Check the client logs agree with the host on
+/// `twin://<name>/<rel>` for the entry scene, then confirm possession binds.
 pub fn mount_scenario_twin(
     twins: &lunco_assets::twin_source::TwinRoots,
     scenario_id: &[u8; 16],
