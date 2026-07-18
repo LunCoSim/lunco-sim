@@ -377,6 +377,9 @@ pub fn on_spawn_entity_command(
     // The scene anchor a runtime spawn parents under (plain child, DRY with
     // scene-load — see `spawn_usd_entry`). Absent only before any scene loads.
     q_scene_root: Query<Entity, With<lunco_usd_sim::cosim::UsdSceneRoot>>,
+    // Present only while a scene load is still landing; tells a spawn that
+    // arrives mid-load that the anchor is COMING rather than absent.
+    scene_loading: Option<Res<lunco_usd_sim::cosim::SceneLoadInFlight>>,
     role: Res<lunco_core::NetworkRole>,
     dem: Query<(&GlobalTransform, &lunco_terrain_surface::stream_viz::DemHeightField)>,
     // Ground fallback for scenes with no streamed DEM (the sandbox's flat slab).
@@ -471,6 +474,18 @@ pub fn on_spawn_entity_command(
 
     let rotation = cmd.rotation.unwrap_or(Quat::IDENTITY);
     let scene_root = q_scene_root.iter().next();
+    // A spawn that lands MID-LOAD would not find the scene anchor yet and would
+    // fall back to a grid-DIRECT anchor — a different hierarchy from the one
+    // scene-load gives the same asset, which is exactly the divergence this
+    // spawn path exists to avoid. The anchor is coming, so wait for it: same
+    // "correctness beats a frame of latency" rule as the stage-pending case.
+    // (No load in flight and no anchor = a genuinely scene-less world, where a
+    // grid-direct anchor is the only frame there is — that path stays.)
+    if scene_root.is_none() && scene_loading.is_some() {
+        let SpawnSource::UsdFile(path) = &entry.source;
+        deferred.0.push((cmd.clone(), asset_server.load(path.clone())));
+        return;
+    }
     let result = spawn_usd_entry(&mut commands, &asset_server, entry, position, rotation, grid, scene_root);
 
     // Networked identity (gap G2): a runtime instance gets a server-allocated
