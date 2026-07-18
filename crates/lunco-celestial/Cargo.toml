@@ -90,5 +90,12 @@ lunco-terrain-core = { path = "../lunco-terrain-core" }
 # exists in this crate (zero references in `src/`). Ephemeris fetching is
 # `lunco-celestial-ephemeris`'s job. Do not re-add without a call site.
 
+[dev-dependencies]
+# `HeightGrid`, to build the minimal `SurfaceOracle` a terrain entity needs in
+# `tests/terrain_curvature_determinism.rs`. Test-only: the crate itself talks to
+# terrain through `lunco-terrain-surface`'s types and must not depend on the DEM
+# raster layer.
+lunco-obstacle-field = { path = "../lunco-obstacle-field" }
+
 [lints]
 workspace = true

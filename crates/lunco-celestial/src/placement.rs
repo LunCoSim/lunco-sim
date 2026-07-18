@@ -409,20 +409,35 @@ pub fn place_celestial_bound_entities(
 /// sagitta above it (the "terrain over the lunar surface" seam). The terrain
 /// side re-composes on resource change, so the ordering between the USD site
 /// anchor landing and the DEM build starting doesn't matter.
+///
+/// **The body comes from each terrain's own [`lunco_terrain_surface::TerrainGeoref`],
+/// never from a `SiteAnchor` query.** The radius folds into the surface oracle,
+/// so it decides the composed GEOMETRY and the `content_key` every tile/derived
+/// cache keys on. Resolving it via `q_site.iter().next()` made that a function of
+/// archetype order: a scene with a second anchor (ground stations author body 399
+/// Earth) could curve a lunar DEM to Earth's 6371 km radius, and which anchor won
+/// varied per launch with async USD load order — terrain that differed every boot
+/// and re-baked its whole cache. `SiteAnchor` still gates curvature on/off (it is
+/// what makes a scene site-anchored at all); it just no longer chooses the body.
 pub fn sync_terrain_body_curvature(
     mut commands: Commands,
     registry: Res<CelestialBodyRegistry>,
     q_site: Query<&GeodeticAnchor, With<SiteAnchor>>,
     current: Option<Res<lunco_terrain_surface::TerrainBodyCurvature>>,
-    q_dem: Query<&lunco_terrain_surface::DemHeightField>,
+    q_dem: Query<(
+        &lunco_terrain_surface::DemHeightField,
+        Option<&lunco_terrain_surface::TerrainGeoref>,
+    )>,
     q_globes: Query<(
         Entity,
         &crate::registry::CelestialBody,
         Option<&crate::globe_lod::GlobePunch>,
     )>,
 ) {
-    let anchor = q_site.iter().next();
-    let Some(anchor) = anchor else {
+    // The site anchor still places the scene on the globe (that IS its job, and it
+    // is the scene root by intent) — it just no longer decides which BODY the
+    // terrain curves to.
+    let Some(anchor) = q_site.iter().next() else {
         // Site gone (scene unload): stop curving future DEM builds and
         // restore full globe coverage.
         if current.is_some() {
@@ -435,7 +450,33 @@ pub fn sync_terrain_body_curvature(
         }
         return;
     };
-    let Some(desc) = registry.bodies.iter().find(|b| b.ephemeris_id == anchor.body) else {
+    // The body every terrain in this scene sits on, from the DOCUMENT. Reducing by
+    // the authored id (`min`, not iteration order) keeps the pick a pure function
+    // of the scene: a scene whose terrains disagree is malformed — one global
+    // curvature resource cannot serve two radii — so say so rather than let load
+    // order choose a winner.
+    let mut body: Option<i32> = None;
+    let mut mixed = false;
+    for (_, georef) in &q_dem {
+        let b = georef.map_or(lunco_terrain_surface::DEFAULT_ANCHOR_BODY, |g| g.body);
+        match body {
+            None => body = Some(b),
+            Some(prev) if prev != b => {
+                mixed = true;
+                body = Some(prev.min(b));
+            }
+            Some(_) => {}
+        }
+    }
+    let Some(body) = body else { return }; // no DEM yet — nothing to curve
+    if mixed {
+        warn_once!(
+            "terrains in this scene author different `lunco:anchor:body` values; \
+             curvature is a single global radius, so body {body} was taken. Author one \
+             body per scene."
+        );
+    }
+    let Some(desc) = registry.bodies.iter().find(|b| b.ephemeris_id == body) else {
         return;
     };
     if current.is_none_or(|c| c.radius_m != desc.radius_m) {
@@ -443,16 +484,16 @@ pub fn sync_terrain_body_curvature(
             radius_m: desc.radius_m,
         });
         info!(
-            "site anchored to body {}: DEM terrain curves to sphere radius {:.0} m",
-            anchor.body, desc.radius_m
+            "terrain anchored to body {}: DEM terrain curves to sphere radius {:.0} m",
+            body, desc.radius_m
         );
     }
     // Globe hole-punch under the DEM footprint (needs the built DEM for its
     // half extent; until then the globe stays whole — the curved terrain sits
     // `edge_lift_m` above it, so the brief overlap cannot z-fight).
-    let half_extent = q_dem.iter().map(|d| d.0.half_extent() as f64).fold(0.0, f64::max);
-    for (e, body, punch) in &q_globes {
-        if body.ephemeris_id != anchor.body {
+    let half_extent = q_dem.iter().map(|(d, _)| d.0.half_extent() as f64).fold(0.0, f64::max);
+    for (e, globe, punch) in &q_globes {
+        if globe.ephemeris_id != body {
             continue;
         }
         if half_extent <= 0.0 || half_extent >= desc.radius_m {
@@ -466,14 +507,16 @@ pub fn sync_terrain_body_curvature(
         // globe backing under the feathered terrain edge.
         let sin_theta = (half_extent * 0.999) / desc.radius_m;
         let next = crate::globe_lod::GlobePunch {
+            // WHERE on the globe to punch is the site anchor's business; only the
+            // body RADIUS (which folds into the oracle) had to become the
+            // terrain's own property.
             dir: geodetic_to_body_fixed(&anchor.geodetic, desc.radius_m).normalize(),
             cos_theta: (1.0 - sin_theta * sin_theta).sqrt(),
         };
         if punch != Some(&next) {
             commands.entity(e).try_insert(next);
             info!(
-                "globe hole-punched under site DEM (body {}, footprint ±{:.0} m)",
-                anchor.body, half_extent
+                "globe hole-punched under site DEM (body {body}, footprint ±{half_extent:.0} m)"
             );
         }
     }

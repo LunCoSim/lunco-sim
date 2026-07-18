@@ -4,7 +4,9 @@
 //! - [`quadtree`] — CDLOD quadtree selection over an abstract square region:
 //!   distance-range refinement from a fixed canonical screen metric (view-
 //!   independent → deterministic across peers), 3D-Tiles geometric-error, and
-//!   CDLOD geomorph bands. `select_3d` takes eye-height so altitude coarsens.
+//!   CDLOD geomorph bands. The production entry is [`Quadtree::select_with_error`]
+//!   (refines on MEASURED per-node error); `select`/`select_3d` are the uniform
+//!   `root / 2^depth` schedule, kept for tests and as the spine's simple form.
 //! - [`tile`] — uniform planar tile-grid math: world↔tile mapping, the resident
 //!   ring of tiles around a focus (the physics-collider-ring substrate).
 //! - [`source`] — the [`HeightSource`] trait (`height_at` as a pure function of

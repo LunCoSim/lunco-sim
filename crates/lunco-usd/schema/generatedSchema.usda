@@ -64,10 +64,7 @@ class "LunCoTerrainAPI" (
         doc = "Bake a horizon map for distant self-shadowing."
     )
     int lunco:terrain:horizonMapResolution = 0 (
-        doc = "Horizon-map bake grid resolution."
-    )
-    int lunco:terrain:horizonMapAzimuths = 0 (
-        doc = "Horizon-map bake azimuth count."
+        doc = "Terrain self-shadow heightfield bake resolution (side length; 0 = default)."
     )
 }
 

@@ -95,6 +95,14 @@ pub struct QuadCoord {
 impl QuadCoord {
     pub const ROOT: QuadCoord = QuadCoord { depth: 0, x: 0, z: 0 };
 
+    /// The coarser node whose region contains this one (depth − 1). `None` at the root.
+    ///
+    /// Region containment in a quadtree IS ancestry, so walking this chain is how a
+    /// consumer asks "what coarser node covers my area" — the basis of LOD fallback.
+    pub fn parent(self) -> Option<QuadCoord> {
+        (self.depth > 0).then(|| QuadCoord { depth: self.depth - 1, x: self.x / 2, z: self.z / 2 })
+    }
+
     /// The four children (depth + 1).
     pub fn children(self) -> [QuadCoord; 4] {
         let d = self.depth + 1;

@@ -1106,6 +1106,11 @@ fn bridge_dem_prim_read<R: UsdRead>(
     let anchor_lat = reader.real(sdf, "lunco:anchor:lat");
     let anchor_lon = reader.real(sdf, "lunco:anchor:lon");
     let anchor_height = reader.real(sdf, "lunco:anchor:height");
+    // The BODY is part of the terrain's own georeference: its radius folds into
+    // the surface oracle as curvature, so it must come from the document, not
+    // from whichever `SiteAnchor` an ECS query happened to yield first (see
+    // `TerrainGeoref::body`).
+    let anchor_body = reader.scalar::<i32>(sdf, "lunco:anchor:body");
     let meters_per_unit = reader.real(sdf, "metersPerUnit");
     if let Some(mpu) = meters_per_unit {
         if (mpu - 1.0).abs() >= 1e-6 {
@@ -1116,8 +1121,13 @@ fn bridge_dem_prim_read<R: UsdRead>(
             );
         }
     }
-    if anchor_lat.is_some() || anchor_lon.is_some() || anchor_height.is_some() {
+    if anchor_lat.is_some()
+        || anchor_lon.is_some()
+        || anchor_height.is_some()
+        || anchor_body.is_some()
+    {
         let georef = lunco_terrain_surface::TerrainGeoref {
+            body: anchor_body.unwrap_or(lunco_terrain_surface::DEFAULT_ANCHOR_BODY),
             center_lat_deg: anchor_lat.unwrap_or(0.0),
             center_lon_deg: anchor_lon.unwrap_or(0.0),
             anchor_height_m: anchor_height.unwrap_or(0.0),
