@@ -55,6 +55,11 @@ pub(crate) struct SandboxUiPlugin;
 
 impl Plugin for SandboxUiPlugin {
     fn build(&self, app: &mut App) {
+        // Driver HUD: off until a scene asks for it via `SetHud`. Possession decides
+        // control; the scene decides presentation.
+        app.init_resource::<rover_hud::HudSettings>();
+        rover_hud::register_all_commands(app);
+
         // Winit frame pacing. Continuous while focused lets vsync (Fifo present /
         // requestAnimationFrame on web) act as the frame timer; ReactiveLowPower
         // keeps fans quiet when backgrounded. Networked windows stay Continuous
