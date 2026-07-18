@@ -206,10 +206,17 @@ world
 /// before any entity is spawned and can outlive an entity (e.g. a user
 /// stops a sim but keeps editing).
 ///
-/// A secondary `entity → DocumentId` index is maintained so despawn
-/// cleanup (`ui::cleanup_removed_documents`) and "which doc does this
-/// entity view?" lookups stay cheap. The index is an optimization; the
-/// authoritative storage is `hosts`.
+/// A secondary `entity → DocumentId` index is maintained so
+/// "which doc does this entity view?" and its reverse stay cheap for
+/// panels, which have no scan surface (`PanelCtx` exposes no `query`).
+/// The index is an optimization; the authoritative storage is `hosts`,
+/// and the authoritative link is `ModelicaModel::document`.
+///
+/// The index deliberately grants **no** lifecycle authority. Despawn
+/// cleanup (`ui::cleanup_removed_simulators`) unlinks the dead entity and
+/// stops there: a scene clear despawns every `WorldGrid` child, so letting
+/// a despawn resolve `entity → doc` and drop that doc destroyed unsaved
+/// user documents on scene reload. Documents die only via `CloseDocument`.
 ///
 /// Consumers read source/parameters through
 /// [`host`](Self::host)`(doc).document().source()` — resolving
@@ -355,25 +362,24 @@ impl ModelicaDocumentRegistry {
         id
     }
 
-    /// Convenience: [`allocate_with_origin`](Self::allocate_with_origin) + [`link`](Self::link).
-    pub fn open_for_with_origin(
-        &mut self,
-        entity: Entity,
-        source: String,
-        origin: DocumentOrigin,
-    ) -> DocumentId {
-        let id = self.allocate_with_origin(source, origin);
-        self.by_entity.insert(entity, id);
-        id
-    }
-
     /// Look up a document by its canonical path. Returns `None` for
     /// untitled / bundled docs or if no document was opened from that
     /// path. Used by API / scripting to resolve `path` →
     /// `DocumentId`.
     pub fn find_by_path(&self, path: &std::path::Path) -> Option<DocumentId> {
+        // `same_file`, NOT `==`: despite its name `canonical_path()` does not
+        // canonicalize — it returns the stored path verbatim. An exact compare
+        // therefore missed `/a/./b.mo` vs `/a/b.mo` vs a symlink and minted a
+        // SECOND document for one file: two tabs, two undo stacks, both saving
+        // over each other. That is the exact split-brain this lookup exists to
+        // prevent. `same_file` compares cheaply first and only pays for
+        // `canonicalize` when the raw paths differ. Shared with USD via
+        // `lunco_doc_bevy::DocumentRegistry::doc_for_file`.
         self.hosts.iter().find_map(|(id, host)| {
-            (host.document().canonical_path() == Some(path)).then_some(*id)
+            host.document()
+                .canonical_path()
+                .is_some_and(|p| lunco_doc::same_file(p, path))
+                .then_some(*id)
         })
     }
 
@@ -399,25 +405,41 @@ impl ModelicaDocumentRegistry {
         self.by_entity.iter().map(|(e, d)| (*e, *d))
     }
 
-    /// Entities currently linked to this document. Typically 0 (editing
-    /// without a running sim) or 1; >1 in cosim scenarios.
+    /// Entities currently linked to this document, in ascending `Entity`
+    /// order. Typically 0 (editing without a running sim) or 1; >1 in cosim
+    /// scenarios.
+    ///
+    /// **Sorted deliberately**: the backing map is a `HashMap`, so iteration
+    /// order is arbitrary and varies run to run. Callers that surface this
+    /// (API queries, panels) would otherwise emit a different order each
+    /// frame for the same unchanged state.
     pub fn entities_linked_to(&self, doc: DocumentId) -> Vec<Entity> {
-        self.by_entity
+        let mut linked: Vec<Entity> = self
+            .by_entity
             .iter()
             .filter_map(|(e, d)| (*d == doc).then_some(*e))
-            .collect()
+            .collect();
+        linked.sort_unstable();
+        linked
     }
 
-    /// First simulator entity linked to `doc`, or `None` when no
-    /// compile has spawned one yet. The canonical lookup for any
-    /// view-bound panel that needs sim state for "its" document —
-    /// canvas plots, in-canvas input controls, model-view toolbar.
-    /// Cosim cases (>1 entity per doc) take the first; if you need
-    /// all of them, call [`entities_linked_to`](Self::entities_linked_to).
+    /// The simulator entity linked to `doc` — lowest `Entity` when a cosim
+    /// scenario has several — or `None` when no compile has spawned one yet.
+    /// The canonical lookup for any view-bound panel that needs sim state for
+    /// "its" document: canvas plots, in-canvas input controls, model-view
+    /// toolbar. If you need all of them, call
+    /// [`entities_linked_to`](Self::entities_linked_to).
+    ///
+    /// **`min`, not "first"**: this used to `find_map` over a `HashMap`, so
+    /// with >1 entity on one doc it returned an arbitrary one that could
+    /// change between frames — a cosim panel would flip between two sims'
+    /// values for no reason. A stable pick is worth more than an arbitrary
+    /// one; `min` costs the same single pass.
     pub fn simulator_for(&self, doc: DocumentId) -> Option<Entity> {
         self.by_entity
             .iter()
-            .find_map(|(e, d)| (*d == doc).then_some(*e))
+            .filter_map(|(e, d)| (*d == doc).then_some(*e))
+            .min()
     }
 }
 
@@ -503,7 +525,7 @@ impl ModelicaDocumentRegistry {
 
     /// Apply a **journal op** to `doc` for replay (journal→scene projection —
     /// the networked-edit consume path) **without recording it**. Mirror of
-    /// [`UsdDocumentRegistry::replay_op`](lunco_usd::UsdDocumentRegistry::replay_op).
+    /// [`DocumentRegistry::replay_op`](lunco_doc_bevy::DocumentRegistry::replay_op) — now generic, so this Modelica copy is redundant.
     ///
     /// The op arrived via `Journal::append_remote` and is already in the
     /// journal, so re-recording it (as `DocumentHost::apply` would via the
@@ -666,6 +688,83 @@ mod tests {
         Entity::from_bits(bits)
     }
 
+    /// THE DATA-LOSS REGRESSION. One file ⇒ one document.
+    ///
+    /// The `OpenFile` command used to `allocate_with_origin` unconditionally, so
+    /// opening the same `.mo` twice minted a SECOND document — two tabs, two undo
+    /// stacks, both saving to one path, last writer silently winning. The rule
+    /// (`find_by_path`) already existed and the package browser used it; the open
+    /// path just never called it.
+    #[test]
+    fn find_by_path_is_one_document_per_file() {
+        let mut reg = ModelicaDocumentRegistry::default();
+        let path = std::path::PathBuf::from("/models/Rover.mo");
+
+        let doc = reg.allocate_with_origin(
+            "model Rover end Rover;".into(),
+            DocumentOrigin::writable_file(path.clone()),
+        );
+
+        assert_eq!(reg.find_by_path(&path), Some(doc));
+        assert_eq!(reg.find_by_path(std::path::Path::new("/models/Other.mo")), None);
+
+        // An untitled document has no path and must never collide with one.
+        reg.allocate_with_origin("model U end U;".into(), DocumentOrigin::untitled("U"));
+        assert_eq!(reg.find_by_path(&path), Some(doc));
+        assert_eq!(reg.len(), 2);
+    }
+
+    /// `canonical_path()` does NOT canonicalize — it returns the stored path
+    /// verbatim. An `==` compare therefore missed `/a/./b.mo` vs `/a/b.mo` and
+    /// minted a duplicate anyway, which is the very split-brain `find_by_path`
+    /// exists to prevent. It must compare with `same_file`.
+    #[test]
+    fn find_by_path_matches_aliased_paths_not_just_identical_strings() {
+        let mut reg = ModelicaDocumentRegistry::default();
+        // A real file, so `canonicalize` can resolve both spellings.
+        let dir = std::env::temp_dir().join("lunco_find_by_path_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let real = dir.join("Rover.mo");
+        std::fs::write(&real, "model Rover end Rover;").unwrap();
+
+        let doc = reg.allocate_with_origin(
+            "model Rover end Rover;".into(),
+            DocumentOrigin::writable_file(real.clone()),
+        );
+
+        // Same file, different spelling — `==` would miss this.
+        let aliased = dir.join(".").join("Rover.mo");
+        assert_eq!(
+            reg.find_by_path(&aliased),
+            Some(doc),
+            "an aliased path must resolve to the SAME document, not a duplicate"
+        );
+
+        let _ = std::fs::remove_file(&real);
+    }
+
+    /// A re-open of a CLEAN document refreshes it from disk in place, and must
+    /// not leave it dirty — the text came from disk, so it matches disk.
+    /// (`reload_base` is what the `OpenFile` path calls; `checkpoint_source`
+    /// would route through the undo stack, making a disk reload Ctrl+Z-able.)
+    #[test]
+    fn reload_base_refreshes_in_place_and_stays_clean() {
+        use lunco_doc::FileBacked;
+        let mut reg = ModelicaDocumentRegistry::default();
+        let doc = reg.allocate_with_origin(
+            "model A end A;".into(),
+            DocumentOrigin::writable_file("/models/A.mo"),
+        );
+        assert!(!reg.host(doc).unwrap().document().is_dirty());
+
+        let host = reg.host_mut(doc).unwrap();
+        assert!(FileBacked::reload_base(host.document_mut(), "model A Real x; end A;"));
+
+        let d = reg.host(doc).unwrap().document();
+        assert!(d.source().contains("Real x"), "must project the NEW disk text");
+        assert!(!d.is_dirty(), "text came FROM disk ⇒ the document matches it ⇒ clean");
+    }
+
     #[test]
     fn allocate_creates_host() {
         let mut reg = ModelicaDocumentRegistry::default();
@@ -775,6 +874,38 @@ mod tests {
         assert!(reg.is_empty());
         assert!(reg.host(doc).is_none());
         assert_eq!(reg.document_of(e), None);
+    }
+
+    /// Cosim puts >1 entity on one document. Both lookups iterate a `HashMap`,
+    /// so without an explicit order they return an arbitrary entity that can
+    /// change between frames — a cosim panel flips between two sims' values
+    /// for no reason, and API queries emit a different order each call for
+    /// identical state. Many entities makes a chance pass unlikely.
+    #[test]
+    fn cosim_lookups_are_deterministic_not_hash_order() {
+        let mut reg = ModelicaDocumentRegistry::default();
+        let doc = reg.allocate("model M end M;".into());
+
+        // Link descending so insertion order is the reverse of the answer.
+        // Both halves must be non-zero — `Entity::from_bits` rejects a zero
+        // generation, so index `i` starts at 1.
+        let entities: Vec<Entity> = (1..=16u64)
+            .rev()
+            .map(|i| fake_entity(0x0000_0003_0000_0000 + i))
+            .collect();
+        for e in &entities {
+            reg.link(*e, doc);
+        }
+
+        let mut expected = entities.clone();
+        expected.sort_unstable();
+
+        assert_eq!(reg.entities_linked_to(doc), expected, "must be sorted, not hash order");
+        assert_eq!(
+            reg.simulator_for(doc),
+            expected.first().copied(),
+            "the picked sim must be stable across frames, not whichever the map yields first"
+        );
     }
 
     #[test]

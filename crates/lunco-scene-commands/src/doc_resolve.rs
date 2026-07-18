@@ -12,7 +12,8 @@
 
 use bevy::prelude::*;
 use lunco_doc::DocumentOrigin;
-use lunco_usd::registry::UsdDocumentRegistry;
+use lunco_usd::document::UsdDocument;
+use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_bevy::{resolve_bound_shader, SdfPath, UsdPrimPath};
 
 /// The `UsdPreviewSurface` Shader prim bound to `prim`'s geometry, or `None` when it
@@ -58,7 +59,7 @@ pub fn resolve_doc_for_entity(world: &World, entity: Entity) -> Option<lunco_doc
     let asset_path = asset_server.get_path(prim.stage_handle.id())?;
     let path_str = asset_path.path().to_string_lossy().to_string();
 
-    let doc_id = world.get_resource::<UsdDocumentRegistry>().and_then(|reg| {
+    let doc_id = world.get_resource::<DocumentRegistry<UsdDocument>>().and_then(|reg| {
         reg.ids().find(|id| {
             reg.host(*id).is_some_and(|h| match h.document().origin() {
                 DocumentOrigin::File { path, .. } => path.to_string_lossy().ends_with(&path_str),

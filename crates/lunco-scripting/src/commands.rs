@@ -202,7 +202,7 @@ pub(crate) fn attach_rhai_scenario(
     // TODO(save) — BLOCKED on a USD bridge, not a scripting task: writing a
     // live-edited scenario back onto its prim means `ApplyUsdOp` /
     // `SetAttribute(path, "lunco:script", "string", <usd-escaped src>)`, which
-    // edits an EDITABLE document in `UsdDocumentRegistry`. But a runtime entity's
+    // edits an EDITABLE document in `DocumentRegistry<UsdDocument>`. But a runtime entity's
     // `UsdPrimPath` references a read-only `Handle<UsdStageAsset>` (a flattened,
     // composed `Arc<TextReader>`) — there is no mapping from that stage asset to
     // a savable source document/layer. That asset↔document bridge must be built

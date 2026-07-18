@@ -15,6 +15,10 @@ lunco-core = { path = "../lunco-core" }
 lunco-doc = { path = "../lunco-doc" }
 # Canonical Twin-scoped op journal (Lamport-ordered, CRDT-shapable schema).
 lunco-twin-journal = { path = "../lunco-twin-journal" }
+# `DocumentRegistry::replay_op` parses a journal entry's serialized op payload
+# back into the domain's `D::Op` — the networked-edit consume path.
+serde = { workspace = true }
+serde_json = { workspace = true }
 # Durable journal persistence (headless-safe): byte-level I/O + the user config
 # dir. Both are egui-free, so they don't pull UI into the headless server.
 

@@ -35,7 +35,8 @@ use bevy::prelude::*;
 use lunco_doc::{Document, DocumentId};
 use lunco_usd_bevy::UsdData;
 
-use crate::registry::UsdDocumentRegistry;
+use crate::document::UsdDocument;
+use lunco_doc_bevy::DocumentRegistry;
 
 /// A top-level USD stage loaded into the current session.
 ///
@@ -75,7 +76,7 @@ pub trait LoadedStage: Send + Sync + 'static {
     /// change-gated [`produce_usd_browser_view`] producer — never during
     /// egui paint. Returns `None` when the backing source is gone (e.g.
     /// the document closed between the gate check and the rebuild).
-    fn build_row(&mut self, registry: &UsdDocumentRegistry) -> Option<UsdStageRow>;
+    fn build_row(&mut self, registry: &DocumentRegistry<UsdDocument>) -> Option<UsdStageRow>;
 }
 
 /// Live registry of [`crate::ui::loaded_stages::LoadedStage`] entries.
@@ -153,7 +154,7 @@ pub struct UsdBrowserView {
 /// string churn (`AGENTS.md` §7.1 frame discipline).
 pub fn produce_usd_browser_view(
     mut loaded: ResMut<LoadedUsdStages>,
-    registry: Res<UsdDocumentRegistry>,
+    registry: Res<DocumentRegistry<UsdDocument>>,
     mut view: ResMut<UsdBrowserView>,
     mut last_sig: Local<Vec<(String, u64)>>,
 ) {
@@ -195,7 +196,7 @@ pub fn produce_usd_browser_view(
 /// siblings in the browser.
 ///
 /// Reads source-of-truth from
-/// [`UsdDocumentRegistry`]:
+/// [`DocumentRegistry<UsdDocument>`]:
 /// name + dirty state come from the live document. Stateless beyond
 /// the doc id.
 pub struct WorkspaceStage {
@@ -281,7 +282,7 @@ impl LoadedStage for WorkspaceStage {
         Some(self.doc_id)
     }
 
-    fn build_row(&mut self, registry: &UsdDocumentRegistry) -> Option<UsdStageRow> {
+    fn build_row(&mut self, registry: &DocumentRegistry<UsdDocument>) -> Option<UsdStageRow> {
         // Snapshot source + generation + name; the host borrow ends
         // before we mutate `self` (parse cache) below.
         let (source, generation, name) = {

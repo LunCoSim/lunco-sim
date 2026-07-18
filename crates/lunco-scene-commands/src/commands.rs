@@ -23,7 +23,8 @@ use lunco_materials::{ParamSchema, ParamType, ParamValue, ShaderLook};
 use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd::document::{UsdOp, LayerId};
-use lunco_usd::registry::UsdDocumentRegistry;
+use lunco_usd::document::UsdDocument;
+use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset, CanonicalStages, collision_aabb, SPAWN_GROUND_CLEARANCE};
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{RedoDocument, UndoDocument};
@@ -218,7 +219,7 @@ fn joint_release_system(
 /// throwaway (no journal), so this early-returns for them.
 pub fn persist_detach_to_runtime_layer(
     trigger: On<DetachJoint>,
-    usd_registry: Res<UsdDocumentRegistry>,
+    usd_registry: Res<DocumentRegistry<UsdDocument>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     q_prim: Query<&UsdPrimPath>,
     mut commands: Commands,
@@ -692,7 +693,7 @@ pub fn on_move_entity_command(
 pub fn persist_move_to_runtime_layer(
     trigger: On<MoveEntity>,
     api_registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    usd_registry: Res<UsdDocumentRegistry>,
+    usd_registry: Res<DocumentRegistry<UsdDocument>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     q_prim: Query<&UsdPrimPath>,
     mut commands: Commands,
@@ -724,7 +725,7 @@ pub fn persist_move_to_runtime_layer(
 // document's history: Lamport-ordered, op+inverse, journaled, networked.
 // `UndoDocument`/`RedoDocument` are the generic verbs; each domain observes them
 // and acts only on documents its own registry owns. USD's observers live in
-// `lunco-usd` (the crate that owns `UsdDocumentRegistry`) — NOT here, so that a
+// `lunco-usd` (the crate that owns `DocumentRegistry<UsdDocument>`) — NOT here, so that a
 // headless binary with documents but no 3D editor can still undo. The editor's
 // only job is to bind the key.
 // ─────────────────────────────────────────────────────────────────────
@@ -783,7 +784,7 @@ pub fn handle_undo_input(
 pub fn authorable_prim(
     entity: Entity,
     q_prim: &Query<&UsdPrimPath>,
-    usd_registry: &UsdDocumentRegistry,
+    usd_registry: &DocumentRegistry<UsdDocument>,
     workspace: Option<&lunco_workspace::WorkspaceResource>,
 ) -> Option<(lunco_doc::DocumentId, String)> {
     let doc = workspace?.0.active_document?;
@@ -838,7 +839,7 @@ pub fn on_delete_entity(
 /// and undoes. Same shape as every other `persist_*` observer.
 pub fn persist_delete_to_runtime_layer(
     trigger: On<DeleteEntity>,
-    usd_registry: Res<UsdDocumentRegistry>,
+    usd_registry: Res<DocumentRegistry<UsdDocument>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     q_prim: Query<&UsdPrimPath>,
     mut commands: Commands,
@@ -883,7 +884,7 @@ pub fn persist_delete_to_runtime_layer(
 pub fn persist_property_to_runtime_layer(
     trigger: On<SetObjectProperty>,
     api_registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    usd_registry: Res<UsdDocumentRegistry>,
+    usd_registry: Res<DocumentRegistry<UsdDocument>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     q_prim: Query<&UsdPrimPath>,
     q_shader: Query<(), With<ShaderLook>>,
@@ -1052,7 +1053,7 @@ pub(crate) fn wheel_param(name: &str) -> Option<&'static WheelParam> {
 pub fn persist_wheel_and_pbr_to_runtime_layer(
     trigger: On<SetObjectProperty>,
     api_registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    usd_registry: Res<UsdDocumentRegistry>,
+    usd_registry: Res<DocumentRegistry<UsdDocument>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     q_prim: Query<&UsdPrimPath>,
     // "Is this a PBR (non-shader) prim?" — the `PbrLook` *intent*, which exists
@@ -1158,7 +1159,7 @@ pub fn persist_wheel_and_pbr_to_runtime_layer(
 /// persisters; no-op when no USD doc is active (headless).
 pub fn persist_environment_light_to_runtime_layer(
     trigger: On<lunco_environment::SetEnvironmentLight>,
-    usd_registry: Res<UsdDocumentRegistry>,
+    usd_registry: Res<DocumentRegistry<UsdDocument>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     q_sun: Query<
         (&UsdPrimPath, &Transform),
@@ -1341,7 +1342,7 @@ pub fn persist_environment_light_to_runtime_layer(
 pub fn persist_spawn_to_runtime_layer(
     trigger: On<SpawnEntity>,
     catalog: Res<SpawnCatalog>,
-    usd_registry: Res<UsdDocumentRegistry>,
+    usd_registry: Res<DocumentRegistry<UsdDocument>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     role: Res<lunco_core::NetworkRole>,
     // Monotonic per-session disambiguator for spawn prim names (the runtime
@@ -2656,7 +2657,7 @@ pub struct SpawnCommandPlugin;
 fn remove_legacy_ground_prim(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    registry: Res<UsdDocumentRegistry>,
+    registry: Res<DocumentRegistry<UsdDocument>>,
     ground: Query<(Entity, &UsdPrimPath)>,
 ) {
     for (entity, prim) in &ground {
@@ -2696,7 +2697,7 @@ fn obstacle_field_scene_changed(
 fn doc_for_stage(
     stage_handle: &Handle<UsdStageAsset>,
     asset_server: &AssetServer,
-    registry: &UsdDocumentRegistry,
+    registry: &DocumentRegistry<UsdDocument>,
 ) -> Option<DocumentId> {
     let asset_path = asset_server.get_path(stage_handle.id())?;
     let path_str = asset_path.path().to_string_lossy().into_owned();
@@ -2958,17 +2959,17 @@ mod tests {
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        // UsdCommandsPlugin inserts UsdDocumentRegistry + the `on_apply_usd_op`
+        // UsdCommandsPlugin inserts DocumentRegistry<UsdDocument> + the `on_apply_usd_op`
         // observer that processes the `ApplyUsdOp` our producer dispatches.
         app.add_plugins(lunco_usd::commands::UsdCommandsPlugin);
         app.init_resource::<lunco_api::registry::ApiEntityRegistry>();
         app.add_observer(persist_move_to_runtime_layer);
 
         let doc = {
-            let mut reg = app.world_mut().resource_mut::<UsdDocumentRegistry>();
+            let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
             reg.allocate(
                 "#usda 1.0\ndef Xform \"World\"\n{\n}\n".to_string(),
-                lunco_doc::DocumentOrigin::untitled("Scene.usda".to_string()),
+                lunco_doc::PathlessOrigin::untitled("Scene.usda"),
             )
         };
         let mut ws = lunco_workspace::Workspace::default();
@@ -3004,7 +3005,7 @@ mod tests {
             app.update();
         }
 
-        let reg = app.world().resource::<UsdDocumentRegistry>();
+        let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
         let docu = reg.host(doc).expect("doc alive").document();
         let world = lunco_usd_bevy::SdfPath::new("/World").unwrap();
         // The move landed in the RUNTIME layer...
@@ -3089,7 +3090,7 @@ mod tests {
         }
         let world_path = lunco_usd_bevy::SdfPath::new("/World").unwrap();
         let gen_after_move = {
-            let reg = app.world().resource::<UsdDocumentRegistry>();
+            let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
             let docu = reg.host(doc).unwrap().document();
             assert_eq!(
                 docu.runtime_data()
@@ -3105,7 +3106,7 @@ mod tests {
             app.update();
         }
 
-        let reg = app.world().resource::<UsdDocumentRegistry>();
+        let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
         let docu = reg.host(doc).unwrap().document();
         assert!(
             docu.generation() > gen_after_move,
@@ -3136,7 +3137,7 @@ mod tests {
             app.update();
         }
 
-        let reg = app.world().resource::<UsdDocumentRegistry>();
+        let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
         let docu = reg.host(doc).expect("doc alive").document();
         // No op authored — the ownership guard skipped a non-document entity.
         assert_eq!(docu.generation(), 0, "un-owned entity move authors nothing");
@@ -3179,10 +3180,10 @@ mod tests {
 
         // Active USD doc whose default prim is /World.
         let doc = {
-            let mut reg = app.world_mut().resource_mut::<UsdDocumentRegistry>();
+            let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
             reg.allocate(
                 "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n".to_string(),
-                lunco_doc::DocumentOrigin::untitled("Scene.usda".to_string()),
+                lunco_doc::PathlessOrigin::untitled("Scene.usda"),
             )
         };
         let mut ws = lunco_workspace::Workspace::default();
@@ -3202,7 +3203,7 @@ mod tests {
             app.update();
         }
 
-        let reg = app.world().resource::<UsdDocumentRegistry>();
+        let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
         let docu = reg.host(doc).expect("doc alive").document();
         let prim = lunco_usd_bevy::SdfPath::new("/World/test_rover_1").unwrap();
         // The referenced spawn prim landed under the default prim, in RUNTIME...

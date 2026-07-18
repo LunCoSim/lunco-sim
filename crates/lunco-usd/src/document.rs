@@ -697,6 +697,56 @@ impl UsdDocument {
         }
     }
 
+    /// Replace the **base** layer with `source` re-read from disk — a RE-OPEN of
+    /// a document that is still resident, NOT an edit. The runtime layer is kept
+    /// (the caller restores it separately), the generation bumps and a
+    /// [`UsdChange::FullReload`] is recorded so the viewport rebuilds.
+    ///
+    /// WHY THIS EXISTS. Opening a Twin whose document is already resident used to
+    /// reuse the in-memory document as-is, so a `.usda` edited on disk between
+    /// opens replayed the OLD scene and only an app restart picked the change up.
+    /// The stale text was upstream of the twin overlay and the asset store, which
+    /// is why clearing either never helped. Local sessions read disk; the document
+    /// is a projection of the file, not a cache of it.
+    ///
+    /// The text came FROM disk, so the document is clean at the new generation.
+    /// Returns `false` (leaving the layer untouched) if `source` doesn't parse —
+    /// a half-applied base would be worse than a stale one.
+    ///
+    /// NOT PUBLIC ON PURPOSE — go through
+    /// [`DocumentRegistry::<UsdDocument>::open_file`](crate::registry::DocumentRegistry::<UsdDocument>::open_file).
+    /// This silently discards unsaved base edits and undo cannot bring them
+    /// back, so the `is_dirty` check must not be a thing a caller can forget.
+    pub(crate) fn reload_base(&mut self, source: &str) -> bool {
+        match usda_to_data(source) {
+            Ok(data) => {
+                self.commit(TargetLayer::Base, data, UsdChange::FullReload);
+                // The commit bumped the generation WITHOUT going through a typed
+                // op, so record a synthetic whole-source marker. The op-replay
+                // projector accounts for generations via the op ring; a
+                // generation with no op makes the ring look SHORT and it replays
+                // from the wrong point. Same reason and same shape as
+                // `restore_runtime` — the base layer is `LayerId::root()`.
+                self.record_op(UsdOp::ReplaceSource {
+                    edit_target: LayerId::root(),
+                    text: String::new(),
+                });
+                self.parse_error = None;
+                // Matches disk as of this generation ⇒ clean.
+                self.last_saved_generation = Some(self.generation);
+                true
+            }
+            Err(e) => {
+                warn!(
+                    "[usd] document {} re-read from disk did not parse as USDA ({e}); \
+                     keeping the resident base layer",
+                    self.id.raw()
+                );
+                false
+            }
+        }
+    }
+
     /// Where this document came from (drives save behaviour, tab
     /// title, read-only badge).
     pub fn origin(&self) -> &DocumentOrigin {
@@ -867,6 +917,29 @@ fn parse_prim_path(path: &str) -> Result<SdfPath, DocumentError> {
 /// True when `data` holds a prim spec at `sdf`.
 fn prim_in(data: &sdf::Data, sdf: &SdfPath) -> bool {
     matches!(data.spec(sdf), Some(s) if s.ty == SpecType::Prim)
+}
+
+/// The identity contract: one document per file, content refreshed from disk,
+/// unsaved edits never clobbered. Everything here already existed as inherent
+/// methods — this just hands them to the generic
+/// [`DocumentRegistry`](lunco_doc_bevy::DocumentRegistry) so USD stops carrying
+/// its own copy of the open-by-path rule.
+impl lunco_doc::FileBacked for UsdDocument {
+    fn with_origin(id: DocumentId, source: String, origin: DocumentOrigin) -> Self {
+        UsdDocument::with_origin(id, source, origin)
+    }
+
+    fn origin(&self) -> &DocumentOrigin {
+        &self.origin
+    }
+
+    fn is_dirty(&self) -> bool {
+        UsdDocument::is_dirty(self)
+    }
+
+    fn reload_base(&mut self, source: &str) -> bool {
+        UsdDocument::reload_base(self, source)
+    }
 }
 
 impl Document for UsdDocument {

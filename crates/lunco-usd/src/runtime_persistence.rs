@@ -23,6 +23,7 @@
 //! non-twin docs (nowhere stable to persist) and when no `WorkspaceResource`
 //! is present.
 
+use crate::document::UsdDocument;
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
@@ -32,7 +33,7 @@ use lunco_storage::{Storage, StorageHandle};
 use lunco_workspace::WorkspaceResource;
 use openusd::sdf::SpecType;
 
-use crate::registry::UsdDocumentRegistry;
+use lunco_doc_bevy::DocumentRegistry;
 
 /// Twin-relative subfolder the runtime overlays live under. Unlike the journal
 /// (the durable, replayable edit log, kept in the visible `history/` folder), the
@@ -56,7 +57,7 @@ fn runtime_path(workspace: &WorkspaceResource, doc_path: &Path) -> Option<PathBu
 /// origin. `None` unless the doc is a USD doc with a twin-rooted file path.
 fn doc_runtime_path(
     workspace: &WorkspaceResource,
-    registry: &UsdDocumentRegistry,
+    registry: &DocumentRegistry<UsdDocument>,
     doc: DocumentId,
 ) -> Option<PathBuf> {
     let path = registry.host(doc)?.document().origin().canonical_path()?;
@@ -114,7 +115,7 @@ fn runtime_has_content(runtime: &openusd::sdf::Data) -> bool {
 /// whole-scene rebuild (every prim despawned + respawned).
 pub(crate) fn restore_doc_runtime(
     workspace: &WorkspaceResource,
-    registry: &mut UsdDocumentRegistry,
+    registry: &mut DocumentRegistry<UsdDocument>,
     doc: DocumentId,
 ) {
     let Some(path) = doc_runtime_path(workspace, registry, doc) else {
@@ -150,7 +151,7 @@ pub(crate) fn restore_doc_runtime(
 pub(crate) fn on_doc_opened_load_runtime(
     trigger: On<DocumentOpened>,
     workspace: Option<Res<WorkspaceResource>>,
-    mut registry: ResMut<UsdDocumentRegistry>,
+    mut registry: ResMut<DocumentRegistry<UsdDocument>>,
 ) {
     let Some(workspace) = workspace else { return };
     restore_doc_runtime(&workspace, &mut registry, trigger.event().doc);
@@ -161,7 +162,7 @@ pub(crate) fn on_doc_opened_load_runtime(
 // the persisted twin journal (`<twin>/history/journal.json`) is a passive log —
 // nothing local replays it. To make the journal an active reconstruct/undo
 // source: on open, replay `merged_order(journal)` for this document via
-// `UsdDocumentRegistry::replay_op` to rebuild runtime state (and the undo stack
+// `DocumentRegistry::<UsdDocument>::replay_op` to rebuild runtime state (and the undo stack
 // for cross-session undo), then demote `.lunco/runtime/*.usda` from a parallel
 // truth to a snapshot cache-of-replay. Blocker: journal entries don't currently
 // carry the owning `DocumentId` (EntityRef enrichment is deferred), so there's no
@@ -176,7 +177,7 @@ pub(crate) fn on_doc_opened_load_runtime(
 pub(crate) fn on_doc_changed_save_runtime(
     trigger: On<DocumentChanged>,
     workspace: Option<Res<WorkspaceResource>>,
-    registry: Res<UsdDocumentRegistry>,
+    registry: Res<DocumentRegistry<UsdDocument>>,
 ) {
     let doc = trigger.event().doc;
     let Some(workspace) = workspace else { return };
@@ -314,8 +315,8 @@ mod tests {
         let text = lunco_usd_bevy::author::data_to_usda(src.runtime_data()).unwrap();
         write_bytes(&dir.path().join(".lunco/runtime/scene.usda"), text.as_bytes()).unwrap();
 
-        let mut registry = UsdDocumentRegistry::default();
-        let doc = registry.allocate(TINY.to_string(), DocumentOrigin::writable_file(scene_abs));
+        let mut registry = DocumentRegistry::<UsdDocument>::default();
+        let (doc, _) = registry.open_file(scene_abs, TINY.to_string());
 
         restore_doc_runtime(&ws, &mut registry, doc);
         let host = registry.host(doc).unwrap();

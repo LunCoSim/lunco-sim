@@ -43,6 +43,17 @@ pub struct ScriptDocument {
     /// (always-compiled) module needs no `serde_json` dep.
     #[serde(default)]
     pub params: String,
+    /// Generation this document was last written to (or read from) disk at.
+    /// `None` = never saved (untitled) ⇒ always dirty. Drives
+    /// [`is_dirty`](Self::is_dirty), and therefore whether a re-open is allowed
+    /// to refresh this document from disk or must preserve the user's unsaved
+    /// work. Mirrors `ModelicaDocument` / `UsdDocument`.
+    ///
+    /// `serde(default)` ⇒ documents persisted before this field existed load as
+    /// `None` (dirty), which is the safe direction: a re-open will preserve them
+    /// rather than silently overwrite from disk.
+    #[serde(default)]
+    pub last_saved_generation: Option<u64>,
 }
 
 /// Serde fallback for documents persisted before `origin` existed.
@@ -63,7 +74,25 @@ impl ScriptDocument {
             inputs: Vec::new(),
             outputs: Vec::new(),
             params: String::new(),
+            // Untitled = never on disk ⇒ genuinely unsaved.
+            last_saved_generation: None,
         }
+    }
+
+    /// Whether the document has unsaved changes — i.e. whether memory has
+    /// **deliberately** diverged from disk. A clean document is a cache of the
+    /// file and must never be trusted over it; a dirty one IS the truth.
+    pub fn is_dirty(&self) -> bool {
+        match self.last_saved_generation {
+            Some(g) => g != self.generation,
+            None => true,
+        }
+    }
+
+    /// Mark the current generation as matching disk (after a save, or after
+    /// re-reading the file).
+    pub fn mark_saved(&mut self) {
+        self.last_saved_generation = Some(self.generation);
     }
 
     /// Where this document came from.
@@ -117,6 +146,70 @@ impl lunco_twin_journal::OpPayload for ScriptOp {
     // needs the owning `DocumentId`, which the op alone doesn't carry. Same
     // stance as the USD / Modelica `OpPayload` impls; conflict-detection
     // enrichment lands on the multi-user replication path.
+}
+
+/// The identity contract — the same one USD and Modelica implement, so
+/// [`DocumentRegistry`](lunco_doc_bevy::DocumentRegistry) enforces
+/// one-document-per-file for scripts without knowing anything about rhai.
+///
+/// ⚠ **THIS TYPE IS NOT READY FOR MULTI-USER**, and the registry cannot fix it.
+/// Identity/refresh/dirty are solved here; *merging* is not, and it's decided by
+/// op ADDRESSING, not by this trait:
+///
+/// * [`ScriptOp::SetSource`] carries the **whole file**. Two people editing one
+///   script replay through `DocumentRegistry::replay_op` as last-writer-wins over
+///   the entire text — the loser's work vanishes silently. Omniverse's `.live`
+///   layer gets away with LWW because its deltas are per-PROPERTY.
+/// * The pin ops (`AddInput`/`RemoveOutput`/…) are name-addressed and DO merge.
+///
+/// Fixing it means addressing edits at something smaller than the file (e.g.
+/// `SetFunction { name, body }`), so two people touching different functions
+/// never collide. Until then a script is single-writer; the journal will happily
+/// record and replay ops that destroy each other.
+impl lunco_doc::FileBacked for ScriptDocument {
+    fn with_origin(id: DocumentId, source: String, origin: DocumentOrigin) -> Self {
+        // Language is inferred from the origin's extension where there is one —
+        // a `.py` file opened from the Twin must not come back as rhai.
+        let language = match &origin {
+            DocumentOrigin::File { path, .. }
+                if path.extension().and_then(|e| e.to_str()) == Some("py") =>
+            {
+                ScriptLanguage::Python
+            }
+            _ => ScriptLanguage::Rhai,
+        };
+        let mut doc = ScriptDocument::new(id.raw(), language, source);
+        // Clean ONLY if the source came from somewhere durable. An Untitled doc
+        // has never been on disk, so it is genuinely unsaved — marking it clean
+        // would let a re-open silently discard it and would hide it from a
+        // save-on-quit prompt. Mirrors `UsdDocument::with_origin`.
+        doc.last_saved_generation = match &origin {
+            DocumentOrigin::File { .. } | DocumentOrigin::Bundled { .. } => Some(doc.generation),
+            DocumentOrigin::Untitled { .. } => None,
+        };
+        doc.origin = origin;
+        doc
+    }
+
+    fn origin(&self) -> &DocumentOrigin {
+        &self.origin
+    }
+
+    fn is_dirty(&self) -> bool {
+        ScriptDocument::is_dirty(self)
+    }
+
+    fn reload_base(&mut self, source: &str) -> bool {
+        if self.source == source {
+            return true;
+        }
+        // Through the op, so generation/undo/journal stay coherent.
+        let _ = Document::apply(self, ScriptOp::SetSource(source.to_string()));
+        self.mark_saved();
+        // Always `true`: a script with a syntax error is still a script you must
+        // be able to open and fix. Compilation reports the error later.
+        true
+    }
 }
 
 impl Document for ScriptDocument {

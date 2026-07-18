@@ -34,6 +34,7 @@ these are the reasoning.
 | [`13-twin-and-workflow.md`](13-twin-and-workflow.md) | What a Twin is; save / load / workflow |
 | [`14-simulation-layers.md`](14-simulation-layers.md) | Twin → Scenario → Run; `Backend`/`Participant` traits |
 | [`15-adaptive-fidelity.md`](15-adaptive-fidelity.md) | Multi-clock and level-of-detail |
+| [`16-document-identity-and-collaboration.md`](16-document-identity-and-collaboration.md) | Documents vs assets; identity = the path; op addressing decides merge; the layer/resolver/live-layer target |
 | [`17-view-and-intent.md`](17-view-and-intent.md) | Cameras and the 5-layer control model |
 | [`18-unified-journal-and-history.md`](18-unified-journal-and-history.md) | The edit journal and Twin history |
 | [`19-unified-time-and-clock.md`](19-unified-time-and-clock.md) | One clock. The fixed-step grid, warp regimes, USD animation |

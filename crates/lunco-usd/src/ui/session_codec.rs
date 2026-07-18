@@ -4,7 +4,7 @@
 //! Registers a [`DocumentSessionCodec`] so `lunco-workbench` captures
 //! every open USD document's **live buffer** into the per-Twin
 //! `workspace-state` file and recreates it on next launch. Restore
-//! replays [`UsdDocumentRegistry::allocate`], which fires the
+//! replays [`DocumentRegistry::<UsdDocument>::allocate`], which fires the
 //! `DocumentOpened` lifecycle the USD UI already reacts to (the
 //! [`WorkspaceStage`](super::WorkspaceStage) registration).
 //!
@@ -15,7 +15,8 @@
 use bevy::prelude::*;
 use lunco_workbench::{finalize_revision, revision_term, DocumentSessionCodec, DocumentSnapshot};
 
-use crate::registry::UsdDocumentRegistry;
+use crate::document::UsdDocument;
+use lunco_doc_bevy::DocumentRegistry;
 
 const KIND: &str = "usd";
 
@@ -28,7 +29,7 @@ impl DocumentSessionCodec for UsdSessionCodec {
     }
 
     fn revision(&self, world: &World) -> u64 {
-        let Some(reg) = world.get_resource::<UsdDocumentRegistry>() else {
+        let Some(reg) = world.get_resource::<DocumentRegistry<UsdDocument>>() else {
             return 0;
         };
         // Order-independent fold of (id, generation): changes on any
@@ -46,7 +47,7 @@ impl DocumentSessionCodec for UsdSessionCodec {
     }
 
     fn capture(&self, world: &mut World) -> Vec<(u64, DocumentSnapshot)> {
-        let Some(reg) = world.get_resource::<UsdDocumentRegistry>() else {
+        let Some(reg) = world.get_resource::<DocumentRegistry<UsdDocument>>() else {
             return Vec::new();
         };
         reg.ids()
@@ -92,9 +93,13 @@ impl DocumentSessionCodec for UsdSessionCodec {
         if !is_client {
             return None;
         }
-        let mut reg = world.get_resource_mut::<UsdDocumentRegistry>()?;
+        let mut reg = world.get_resource_mut::<DocumentRegistry<UsdDocument>>()?;
         // Fires `DocumentOpened` → the USD UI's stage registration.
-        let id = reg.allocate(snap.source.clone(), snap.origin.clone());
+        // `restore`, not `allocate`: session snapshots carry a full origin —
+        // often a `File` — and reinstate saved (possibly dirty) in-memory state
+        // rather than re-reading disk. This is the one authorized `File`-origin
+        // allocation; `allocate` can no longer express one.
+        let id = reg.restore(snap.source.clone(), snap.origin.clone());
         Some(id.raw())
     }
 }

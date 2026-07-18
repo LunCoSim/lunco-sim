@@ -899,15 +899,55 @@ pub fn drain_open_file_results(world: &mut bevy::prelude::World) {
             .and_then(|s| s.to_str())
             .unwrap_or("Opened")
             .to_string();
-        let mut registry =
-            world.resource_mut::<ModelicaDocumentRegistry>();
-        let doc_id = registry.allocate_with_origin(
-            source,
-            DocumentOrigin::File {
-                path: path.clone(),
-                writable: true,
-            },
-        );
+        let mut registry = world.resource_mut::<ModelicaDocumentRegistry>();
+        // ONE DOCUMENT PER FILE. The path IS the identity: re-opening a `.mo`
+        // reuses its document and refreshes the content from what we just read.
+        //
+        // This used to `allocate_with_origin` unconditionally, so opening the
+        // same file twice minted a SECOND document — two tabs, two undo stacks,
+        // both saving over each other, last writer silently winning. The rule
+        // already existed (`find_by_path`, used by the package browser); this
+        // entry point just never called it.
+        //
+        // Mirrors `DocumentRegistry::open_file` (lunco-doc-bevy), which USD now
+        // uses; Modelica cannot share it verbatim until its registry's
+        // entity-link map is decomposed out of the shared core.
+        let doc_id = match registry.find_by_path(&path) {
+            Some(doc) => {
+                let dirty = registry
+                    .host(doc)
+                    .is_some_and(|h| h.document().is_dirty());
+                if dirty {
+                    // Unsaved edits outrank disk — reloading would destroy work
+                    // undo cannot recover. The user keeps theirs; disk and memory
+                    // now disagree and that MUST reach the user, not just a log.
+                    bevy::log::warn!(
+                        "[OpenFile] {} has unsaved edits — keeping them; disk NOT reloaded",
+                        path.display()
+                    );
+                } else if let Some(host) = registry.host_mut(doc) {
+                    // `reload_base`, NOT `checkpoint_source`: a disk re-read is not
+                    // a user edit. `checkpoint_source` routes through
+                    // `DocumentHost::apply`, which pushes an inverse onto the UNDO
+                    // STACK and journals it — so Ctrl+Z after a re-open would
+                    // "undo" the reload and hand back pre-reload text that no
+                    // longer matches disk, leaving the document dirty with stale
+                    // content. `reload_base` goes through `Document::apply`, which
+                    // keeps generation and the op ring coherent without touching
+                    // undo. Same semantics as USD's re-open.
+                    lunco_doc::FileBacked::reload_base(host.document_mut(), &source);
+                    registry.mark_changed(doc);
+                }
+                doc
+            }
+            None => registry.allocate_with_origin(
+                source,
+                DocumentOrigin::File {
+                    path: path.clone(),
+                    writable: true,
+                },
+            ),
+        };
         let mut tabs = world.resource_mut::<ModelTabs>();
         let tab_id = tabs.ensure_for(doc_id, None);
         if let Some(tab) = tabs.get_mut(tab_id) {
@@ -987,10 +1027,13 @@ pub fn on_close_document(
     }
     // Despawn any `ModelicaModel` entity backing this doc *before*
     // dropping the document. The despawn fires `RemovedComponents`,
-    // which `cleanup_removed_documents` picks up to purge the doc's
+    // which `cleanup_removed_simulators` picks up to purge the doc's
     // signal histories + plot bindings from the SignalRegistry /
     // VisualizationRegistry — otherwise stale variables (der(C2.v),
     // …) linger in the Graphs X/Y picker after the doc is closed.
+    // That system is entity-scoped only; dropping the document is this
+    // observer's job, because only an explicit close means the user is
+    // done with the source (a scene reload despawns these entities too).
     for entity in registry.entities_linked_to(doc) {
         commands.entity(entity).try_despawn();
     }
@@ -1007,11 +1050,23 @@ pub fn on_document_closed_cleanup(
     mut doc_pins: Option<ResMut<crate::ui::doc_pin::DocPinState>>,
     mut experiments: Option<ResMut<lunco_experiments::ExperimentRegistry>>,
     mut drafts: Option<ResMut<crate::experiments_runner::ExperimentDrafts>>,
+    mut canvas_state: Option<ResMut<crate::ui::panels::canvas_diagram::CanvasDiagramState>>,
+    mut bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
 ) {
     let doc = trigger.event().doc;
     model_tabs.close(doc);
     cache.in_memory_models.retain(|e| e.doc != doc);
     compile_states.remove(doc);
+    // Drop the per-doc canvas entry (viewport, selection, in-flight
+    // projection task) so a later tab reusing the id starts fresh.
+    if let Some(canvas) = canvas_state.as_mut() {
+        canvas.drop_doc(doc);
+    }
+    // Drop the bus's terminal-outcome cache for this doc so `last_outcome`
+    // doesn't accumulate dead entries across long sessions.
+    if let Some(b) = bus.as_mut() {
+        b.clear_outcomes_for(lunco_workbench::status_bus::BusyScope::Document(doc.0));
+    }
     if workspace.active_document == Some(doc) {
         workspace.active_document = None;
         workbench.editor_buffer.clear();

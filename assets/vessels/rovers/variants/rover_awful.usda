@@ -30,12 +30,17 @@ def Xform "RoverAwful" (
 
     # Handling. Both knobs below ARE read (lunco-usd-sim/src/lib.rs:1258/1261).
     custom float physxVehicleEngine:peakTorque = 380.0
-    # Coulomb μ ⇒ the slip limit is atan(μ). Tuned against the SURVEYED site
-    # (real Apollo 15 crater): 20.1° SSW / 24.7° naive / 34.4° WSW.
-    # μ=0.40 ⇒ 21.8°: ONLY the 20.1° SSW line is climbable, with ~1.7° of margin.
-    # This tier gets in and out solely by flying the ДЗЗ route exactly — which is
-    # §3.2's "на грани проходимости" made literal. (Was 0.7 ⇒ 35°, which beat
-    # even the WSW wall: the "punishing" rover could drive anywhere on the site.)
+    # Coulomb μ ⇒ the slip limit is atan(μ). Tuned against the SURVEYED site —
+    # summer_space_school/SURVEY.md, 4 m baseline (the baseline is part of the
+    # number): ДЗЗ route 19.8°, naive straight line 25.5°, gentlest way out 20.3°
+    # (SSW 199°).
+    #   μ=0.40 ⇒ 21.8°: clears the ДЗЗ route with 2.0° to spare and FAILS the
+    #   naive line by 3.7°. This tier gets in and out SOLELY by flying the route —
+    #   on the bad rover the ДЗЗ map is what earns you the run, which is §3.2's
+    #   "на грани проходимости" made literal.
+    # (Was 0.7 ⇒ 35°: the "punishing" rover could drive anywhere on the site.)
+    # This tier is the reason route()'s entry waypoint must stay on the 199°
+    # radial — off it, the descent grades 26.0° and NOTHING here can drive it.
     custom float lunco:frictionCoefficient = 0.4
     # RADIANS — see rover_medium. This was 18.0 = 18 RADIANS = 1031°, saturated,
     # so the "twitchy/wide-radius" tier read identically to the others.

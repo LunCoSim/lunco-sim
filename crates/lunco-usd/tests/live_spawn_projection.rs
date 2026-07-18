@@ -6,11 +6,13 @@
 //! projection systems (`sync_twin_overlays` → `author_structural_edit` →
 //! `project_stage_changes`) now drive incremental structural edits.
 
+use lunco_doc_bevy::DocumentRegistry;
+use lunco_usd::document::UsdDocument;
 use bevy::prelude::*;
 use lunco_doc::DocumentOrigin;
 use lunco_usd::{
     ui::{SetActiveUsdViewport, UsdViewportPlugin},
-    ApplyUsdOp, LayerId, UsdCommandsPlugin, UsdDocumentRegistry, UsdOp,
+    ApplyUsdOp, LayerId, UsdCommandsPlugin, UsdOp,
 };
 use lunco_usd_bevy::*;
 
@@ -59,8 +61,8 @@ fn add_prim_projects_live_via_sink_no_reload() {
     // A minimal scene: one Xform the spawn will hang under.
     let usda = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
     let doc = {
-        let mut reg = app.world_mut().resource_mut::<UsdDocumentRegistry>();
-        reg.allocate(usda.to_string(), DocumentOrigin::untitled("live_spawn.usda"))
+        let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
+        reg.allocate(usda.to_string(), lunco_doc::PathlessOrigin::untitled("live_spawn.usda"))
     };
 
     // Install it as the active viewport → doc-backed twin scene → async mount →
@@ -122,8 +124,8 @@ fn referenced_spawn_projects_live_via_fetch_inject_author() {
 
     let usda = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
     let doc = {
-        let mut reg = app.world_mut().resource_mut::<UsdDocumentRegistry>();
-        reg.allocate(usda.to_string(), DocumentOrigin::untitled("ref_spawn.usda"))
+        let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
+        reg.allocate(usda.to_string(), lunco_doc::PathlessOrigin::untitled("ref_spawn.usda"))
     };
 
     app.world_mut().trigger(SetActiveUsdViewport { doc });

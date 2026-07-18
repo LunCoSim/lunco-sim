@@ -395,7 +395,7 @@ struct TerrainEditPrimSeq(u64);
 /// (not doc-mount time) so it cannot race the `DocumentOpened` runtime-overlay
 /// restore; `composed_arc` is memoized by generation, so this is a cheap child walk.
 fn seed_edit_seq_past_children(
-    registry: &lunco_usd::UsdDocumentRegistry,
+    registry: &lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>,
     doc: lunco_doc::DocumentId,
     terrain_path: &str,
     seq: &mut TerrainEditPrimSeq,
@@ -424,7 +424,7 @@ fn seed_edit_seq_past_children(
 fn author_terrain_edit(
     kind: lunco_terrain_surface::EditKind,
     terrains: &Query<(&lunco_usd::UsdPrimPath, &TerrainDocument), With<lunco_terrain_surface::DemTerrainSurface>>,
-    registry: &mut lunco_usd::UsdDocumentRegistry,
+    registry: &mut lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>,
     seq: &mut TerrainEditPrimSeq,
     journal: Option<&lunco_doc_bevy::JournalResource>,
 ) {
@@ -462,7 +462,7 @@ fn author_terrain_edit(
             });
         }
 
-        let apply_all = |registry: &mut lunco_usd::UsdDocumentRegistry| {
+        let apply_all = |registry: &mut lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>| {
             for op in ops {
                 if let Err(e) = registry.apply(doc, op) {
                     warn!("[terrain-edit] {edit_prim} op rejected — edit may be partial: {e:?}");
@@ -479,7 +479,7 @@ fn author_terrain_edit(
 fn on_brush_terrain_authored(
     trigger: On<lunco_terrain_surface::BrushTerrain>,
     terrains: Query<(&lunco_usd::UsdPrimPath, &TerrainDocument), With<lunco_terrain_surface::DemTerrainSurface>>,
-    registry: Option<ResMut<lunco_usd::UsdDocumentRegistry>>,
+    registry: Option<ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>>,
     mut seq: ResMut<TerrainEditPrimSeq>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) {
@@ -504,7 +504,7 @@ fn on_brush_terrain_authored(
 fn on_flatten_terrain_authored(
     trigger: On<lunco_terrain_surface::FlattenTerrain>,
     terrains: Query<(&lunco_usd::UsdPrimPath, &TerrainDocument), With<lunco_terrain_surface::DemTerrainSurface>>,
-    registry: Option<ResMut<lunco_usd::UsdDocumentRegistry>>,
+    registry: Option<ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>>,
     mut seq: ResMut<TerrainEditPrimSeq>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) {
@@ -529,7 +529,7 @@ fn on_flatten_terrain_authored(
 fn on_place_crater_authored(
     trigger: On<lunco_terrain_surface::PlaceCrater>,
     terrains: Query<(&lunco_usd::UsdPrimPath, &TerrainDocument), With<lunco_terrain_surface::DemTerrainSurface>>,
-    registry: Option<ResMut<lunco_usd::UsdDocumentRegistry>>,
+    registry: Option<ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>>,
     mut seq: ResMut<TerrainEditPrimSeq>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) {
@@ -557,7 +557,7 @@ fn on_place_crater_authored(
 fn on_place_rock_authored(
     trigger: On<lunco_terrain_surface::PlaceRock>,
     terrains: Query<(&lunco_usd::UsdPrimPath, &TerrainDocument), With<lunco_terrain_surface::DemTerrainSurface>>,
-    registry: Option<ResMut<lunco_usd::UsdDocumentRegistry>>,
+    registry: Option<ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>>,
     mut seq: ResMut<TerrainEditPrimSeq>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) {
@@ -603,7 +603,7 @@ fn on_place_rock_authored(
 
         // ONE change set: a rock is one undo step, not six. (It used to apply each op
         // on its own, so undo peeled a rock apart attribute by attribute.)
-        let apply_all = |registry: &mut lunco_usd::UsdDocumentRegistry| {
+        let apply_all = |registry: &mut lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>| {
             for op in ops {
                 if let Err(e) = registry.apply(doc, op) {
                     warn!("[terrain-edit] {rock_prim} op rejected — rock may be partial: {e:?}");
@@ -623,7 +623,7 @@ fn on_place_rock_authored(
 fn on_remove_terrain_edit_authored(
     trigger: On<lunco_terrain_surface::RemoveTerrainLayer>,
     terrains: Query<&TerrainDocument, With<lunco_terrain_surface::DemTerrainSurface>>,
-    registry: Option<ResMut<lunco_usd::UsdDocumentRegistry>>,
+    registry: Option<ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>>,
 ) {
     let Some(mut registry) = registry else { return };
     let path = trigger.event().id.clone();
@@ -688,7 +688,7 @@ struct TerrainDocGeneration(u64);
 /// generation is the re-bake trigger. One re-bake path keyed on the document, not the
 /// projected asset — covering twin default and live-imported (`OpenFile`) scenes alike.
 fn refresh_docbacked_terrain_from_doc(
-    registry: Option<Res<lunco_usd::UsdDocumentRegistry>>,
+    registry: Option<Res<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>>,
     // The live, PCP-composed stage. The terrain layer stack used to be re-parsed
     // from the DOCUMENT's merged `sdf::Data` layers, which meant the terrain
     // parser had to be generic over both a composed stage and a raw authored
@@ -762,7 +762,7 @@ fn refresh_docbacked_terrain_from_doc(
 
 /// Author one attribute onto a prim's **runtime** layer (non-destructive override).
 fn author_layer_attr(
-    registry: &mut lunco_usd::UsdDocumentRegistry,
+    registry: &mut lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>,
     doc: lunco_doc::DocumentId,
     path: &str,
     name: &str,
@@ -794,7 +794,7 @@ fn author_layer_attr(
 fn on_obstacle_spec_authored(
     trigger: On<lunco_obstacle_field::plugin::UpdateObstacleFieldSpec>,
     terrains: Query<(&lunco_usd::UsdPrimPath, &TerrainDocument), With<lunco_terrain_surface::DemTerrainSurface>>,
-    registry: Option<ResMut<lunco_usd::UsdDocumentRegistry>>,
+    registry: Option<ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>>,
 ) {
     let Some(mut registry) = registry else { return };
     let spec = &trigger.event().spec;

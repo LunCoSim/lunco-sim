@@ -40,7 +40,8 @@ use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd::document::{LayerId, UsdOp};
-use lunco_usd::registry::UsdDocumentRegistry;
+use lunco_usd::document::UsdDocument;
+use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd::ui::viewport::UsdViewportState;
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdStageAsset};
 
@@ -81,7 +82,7 @@ pub struct UsdCanvasState {
     /// Stage currently projected — used to detect a scene swap.
     stage_id: Option<AssetId<UsdStageAsset>>,
     /// Editable document backing `stage_id`, if resolvable. `None` for a
-    /// raw-file scene that has no `UsdDocumentRegistry` entry — edits are
+    /// raw-file scene that has no `DocumentRegistry<UsdDocument>` entry — edits are
     /// suppressed (they'd be silently dropped on reboot).
     doc: Option<DocumentId>,
     /// Hash of the last projected topology; a rebuild is skipped while it holds
@@ -144,7 +145,7 @@ pub fn produce_usd_canvas(
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
     asset_server: Res<AssetServer>,
-    usd_registry: Option<Res<UsdDocumentRegistry>>,
+    usd_registry: Option<Res<DocumentRegistry<UsdDocument>>>,
     viewport_state: Option<Res<UsdViewportState>>,
     mut state: ResMut<UsdCanvasState>,
 ) {
@@ -227,7 +228,7 @@ pub fn produce_usd_canvas(
 fn resolve_doc(
     handle: &Handle<UsdStageAsset>,
     asset_server: &AssetServer,
-    usd_registry: Option<&UsdDocumentRegistry>,
+    usd_registry: Option<&DocumentRegistry<UsdDocument>>,
     viewport_state: Option<&UsdViewportState>,
 ) -> Option<DocumentId> {
     let by_path = asset_server

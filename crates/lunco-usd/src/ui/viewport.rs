@@ -83,7 +83,8 @@ use lunco_workbench::{
     Panel, PanelCtx, PanelId, PanelRects, PanelSlot, ScenePickGate, SceneTarget, WorkbenchAppExt,
 };
 
-use crate::registry::UsdDocumentRegistry;
+use crate::document::UsdDocument;
+use lunco_doc_bevy::DocumentRegistry;
 
 /// Stable id of the workbench tab the viewport renders into.
 pub const USD_VIEWPORT_PANEL_ID: PanelId = PanelId("usd::viewport");
@@ -484,7 +485,7 @@ fn on_set_active_usd_viewport(
 ) {
     let doc = trigger.event().doc;
     commands.queue(move |world: &mut World| {
-        if !world.resource::<UsdDocumentRegistry>().contains(doc) {
+        if !world.resource::<DocumentRegistry<UsdDocument>>().contains(doc) {
             return;
         }
         if world.resource::<UsdViewportState>().active_doc == Some(doc) {
@@ -518,7 +519,7 @@ fn on_doc_opened_for_viewport(
     let doc = trigger.event().doc;
     commands.queue(move |world: &mut World| {
         // Gate on USD ownership so Modelica / SysML opens skip.
-        if !world.resource::<UsdDocumentRegistry>().contains(doc) {
+        if !world.resource::<DocumentRegistry<UsdDocument>>().contains(doc) {
             return;
         }
         // Make this the active doc if nothing else is showing. The
@@ -577,7 +578,7 @@ fn install_active_doc(world: &mut World, doc: DocumentId) {
         return;
     };
     let doc_generation = world
-        .resource::<UsdDocumentRegistry>()
+        .resource::<DocumentRegistry<UsdDocument>>()
         .host(doc)
         .map(|h| h.document().generation());
     let Some((name, rel)) = viewport_twin_coords(world, doc) else {
@@ -621,7 +622,7 @@ fn viewport_twin_coords(world: &World, doc: DocumentId) -> Option<(String, Strin
     {
         return Some(coords);
     }
-    let host = world.resource::<UsdDocumentRegistry>().host(doc)?;
+    let host = world.resource::<DocumentRegistry<UsdDocument>>().host(doc)?;
     let composed = host.document().composed_source();
     let (base, rel) = match host.document().origin() {
         DocumentOrigin::File { path, .. } => (
@@ -702,7 +703,7 @@ impl Panel for UsdViewportPanel {
             .unwrap_or((None, None));
         let name = active_doc
             .and_then(|d| {
-                ctx.resource::<UsdDocumentRegistry>()
+                ctx.resource::<DocumentRegistry<UsdDocument>>()
                     .and_then(|r| r.host(d))
                     .map(|h| h.document().origin().display_name())
             })
@@ -789,7 +790,6 @@ impl Panel for UsdViewportPanel {
 mod tests {
     use super::*;
     use crate::commands::UsdCommandsPlugin;
-    use lunco_doc::DocumentOrigin;
 
     /// Without any rendering plugins (`Assets<Image>` absent) the
     /// observers gracefully no-op — the state stays
@@ -803,11 +803,8 @@ mod tests {
         app.update();
 
         let _doc = {
-            let mut reg = app.world_mut().resource_mut::<UsdDocumentRegistry>();
-            reg.allocate(
-                "#usda 1.0\n".into(),
-                DocumentOrigin::writable_file("/tmp/x.usda"),
-            )
+            let mut reg = app.world_mut().resource_mut::<DocumentRegistry<UsdDocument>>();
+            reg.open_file("/tmp/x.usda", "#usda 1.0\n".to_string()).0
         };
         // Drain pending events twice so the DocumentOpened trigger
         // fires and our observer runs.

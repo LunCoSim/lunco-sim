@@ -529,6 +529,9 @@ pub fn dispatch_loaded_python_sources(
                 inputs: vec!["height".to_string(), "velocity".to_string()],
                 outputs: vec!["netForce".to_string()],
                 params: String::new(),
+                // Untitled, synthesized from a USD prim's inline source — never
+                // on disk, so it is genuinely unsaved.
+                last_saved_generation: None,
             },
         );
         commands.entity(entity).try_insert(ScriptedModel {

@@ -447,52 +447,34 @@ fn scan_twin_on_added(
     cache.twin_scan_task = Some(task);
 }
 
-/// Drop the document linked to a despawned `ModelicaModel` entity, and
-/// any compile-state bookkeeping attached to that document.
+/// Purge per-**entity** state when a `ModelicaModel` entity despawns.
 ///
-/// Behavior preserved from the entity-keyed era: when an entity is
-/// despawned, its backing [`crate::document::ModelicaDocument`](crate::document::ModelicaDocument)
-/// is also removed. The long-term design lets documents outlive entities
-/// (edit-without-running, cosim re-spawn), so this will become opt-in
-/// once the tab/view layer can explicitly unload a document.
-fn cleanup_removed_documents(
+/// Entity-scoped only, deliberately: a despawn must never drop the document.
+/// `clear_scene_entities` despawns every `WorldGrid` child on any scene
+/// clear/reload, and USD-sourced cosim models are `WorldGrid` children — so
+/// dropping the document here meant loading another scene (or a script firing
+/// `ClearScene`) silently destroyed the user's open Modelica document, unsaved
+/// edits and undo stack included, with no prompt.
+///
+/// Documents outlive entities (edit-without-running, cosim re-spawn). They are
+/// dropped only by the explicit `CloseDocument` path, which owns every
+/// doc-scoped purge; an entity dying says nothing about whether the user is
+/// done with the source.
+fn cleanup_removed_simulators(
     mut removed: RemovedComponents<ModelicaModel>,
     registry: Option<ResMut<ModelicaDocumentRegistry>>,
-    compile_states: Option<ResMut<DocumentDiagnostics>>,
-    canvas_state: Option<ResMut<panels::canvas_diagram::CanvasDiagramState>>,
     signals: Option<ResMut<lunco_viz::SignalRegistry>>,
     viz_registry: Option<ResMut<lunco_viz::VisualizationRegistry>>,
-    bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
 ) {
-    let Some(mut registry) = registry else { return };
-    let mut compile_states = compile_states;
-    let mut canvas_state = canvas_state;
+    let mut registry = registry;
     let mut signals = signals;
     let mut viz_registry = viz_registry;
-    let mut bus = bus;
     for entity in removed.read() {
-        if let Some(doc) = registry.unlink_entity(entity) {
-            registry.remove_document(doc);
-            if let Some(states) = compile_states.as_mut() {
-                states.remove(doc);
-            }
-            // Drop the per-doc canvas entry (viewport, selection,
-            // in-flight projection task) so a later tab reusing the
-            // id starts fresh. Matches how CompileStates is cleaned.
-            if let Some(canvas) = canvas_state.as_mut() {
-                canvas.drop_doc(doc);
-            }
-            // Drop the bus's terminal-outcome cache for this doc so
-            // `last_outcome` doesn't accumulate dead entries across
-            // long sessions. The doc id is monotonic — won't be
-            // reused — but bounded growth is the right hygiene.
-            if let Some(b) = bus.as_mut() {
-                b.clear_outcomes_for(
-                    lunco_workbench::status_bus::BusyScope::Document(doc.0),
-                );
-            }
-            // tab-removal handled by `ModelTabs::close` /
-            // `close_all_for_doc` already.
+        // Drop the entity→doc link — and ONLY the link. This system is the
+        // sole unlinker, so skipping it would leave the index handing panels
+        // despawned entities via `simulator_for`. The document itself stays.
+        if let Some(reg) = registry.as_mut() {
+            reg.unlink_entity(entity);
         }
         // Drop every registered signal + plot binding for this entity
         // so stale plots don't keep reading the last values forever.
@@ -507,7 +489,7 @@ fn cleanup_removed_documents(
 
 /// Link any freshly-spawned `ModelicaModel` into the
 /// [`ModelicaDocumentRegistry`] doc→entity map. The mirror image of
-/// [`cleanup_removed_documents`]: removal is centralised via
+/// [`cleanup_removed_simulators`]: removal is centralised via
 /// `RemovedComponents`, so addition is too. The Interactive Live row,
 /// [`crate::state::simulator_for`], and every doc-scoped panel resolve their
 /// entity through this map, so a spawn path that forgets the explicit
@@ -818,7 +800,7 @@ impl Plugin for ModelicaUiPlugin {
             // MSL loaded": restored/auto-opened tabs projected empty pre-MSL
             // and never recovered).
             .add_observer(panels::package_browser::on_msl_became_ready)
-            .add_systems(Update, cleanup_removed_documents)
+            .add_systems(Update, cleanup_removed_simulators)
             .add_systems(Update, link_added_simulators)
             // `drain_document_changes` + the A3 journal-wire auto-bridge moved
             // to `ModelicaCorePlugin` (so headless journals too).
@@ -1575,4 +1557,54 @@ fn fan_status_bus_to_console(
         console.push(level, format!("[{}] {}", ev.source, ev.message));
     }
     *last_total = total;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// THE DATA-LOSS REGRESSION. A despawn must not destroy the document.
+    ///
+    /// `clear_scene_entities` despawns every `WorldGrid` child on any scene
+    /// clear/reload, and USD-sourced cosim models are `WorldGrid` children.
+    /// This system used to resolve `entity → doc` and call `remove_document`,
+    /// so loading a second scene — or a rhai script firing `ClearScene` —
+    /// silently destroyed the user's open Modelica document, unsaved edits
+    /// and undo stack included, with no prompt.
+    ///
+    /// The unit-level invariant was never in doubt: `unlink_entity` already
+    /// kept the document, and a test already asserted it. The defect was that
+    /// this system did more than unlink. So the test has to drive the SYSTEM,
+    /// through a real despawn — asserting on the registry API alone passes
+    /// while the app destroys your work.
+    #[test]
+    fn despawning_a_simulator_keeps_its_document() {
+        let mut app = App::new();
+        app.init_resource::<ModelicaDocumentRegistry>();
+        app.add_systems(Update, cleanup_removed_simulators);
+
+        let entity = app.world_mut().spawn(ModelicaModel::default()).id();
+        let doc = {
+            let mut reg = app.world_mut().resource_mut::<ModelicaDocumentRegistry>();
+            let doc = reg.allocate("model M end M;".into());
+            reg.link(entity, doc);
+            doc
+        };
+
+        // A scene clear/reload despawns the entity out from under the document.
+        app.world_mut().entity_mut(entity).despawn();
+        app.update();
+
+        let reg = app.world().resource::<ModelicaDocumentRegistry>();
+        assert!(
+            reg.host(doc).is_some(),
+            "a scene reload despawned the entity and took the user's document with it"
+        );
+        assert_eq!(
+            reg.document_of(entity),
+            None,
+            "the dead entity must still be unlinked — this system is the only unlinker, \
+             so leaking it would hand panels a despawned entity via `simulator_for`"
+        );
+    }
 }
