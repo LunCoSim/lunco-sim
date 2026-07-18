@@ -48,6 +48,12 @@ def Xform "World"
     {
         float inputs:intensity = 5000
     }
+    def RectLight "CeilingPanel"
+    {
+        float inputs:intensity = 8000
+        float inputs:width = 1.2
+        float inputs:height = 0.6
+    }
 }
 "#;
 
@@ -134,6 +140,22 @@ fn recipe_asset_instantiates_off_live_canonical_stage() {
         app.world().get::<DirectionalLight>(sun_e).is_some(),
         "DistantLight must project to a DirectionalLight off the live stage"
     );
+
+    // (d) `UsdLuxRectLight` → Bevy `RectLight`. Both put the rectangle in the
+    // local XY plane emitting along -Z, so the mapping is 1:1 and `inputs:width`
+    // / `inputs:height` carry straight through. Before this arm existed, AREA
+    // lights hit the dispatcher's `_ => false` and vanished silently.
+    let panel_e = entity_at(&mut app, "/World/CeilingPanel").expect("CeilingPanel prim entity");
+    let panel = app
+        .world()
+        .get::<RectLight>(panel_e)
+        .expect("RectLight must project to a Bevy RectLight off the live stage");
+    assert!((panel.width - 1.2).abs() < 1e-4, "width {}", panel.width);
+    assert!((panel.height - 0.6).abs() < 1e-4, "height {}", panel.height);
+    // `RectLight::intensity` is luminous POWER in lumens (unlike Point/Spot,
+    // which are candela) — the authored 8000 is taken as lumens, unscaled
+    // because `inputs:exposure` is unauthored (2^0 = 1).
+    assert!((panel.intensity - 8000.0).abs() < 1e-2, "intensity {}", panel.intensity);
 }
 
 #[test]

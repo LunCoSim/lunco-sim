@@ -110,8 +110,9 @@ fn ns_attr(ns: &str, name: &str) -> String {
     // bare names had.
     debug_assert!(
         lunco_usd::schema::SchemaRegistry::global()
-            .property(&full)
-            .is_some(),
+            .read()
+            .map(|r| r.property(&full).is_some())
+            .unwrap_or(false),
         "`{full}` is not declared by luncoSchema \
          (crates/lunco-usd/schema/schema.usda) — add it there, or fix the typo"
     );
