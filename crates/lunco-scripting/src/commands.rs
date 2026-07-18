@@ -279,6 +279,7 @@ pub fn resolve_embedded_scenario_paths(
     >,
     sources: Res<Assets<crate::source_asset::RhaiSource>>,
     asset_server: Res<AssetServer>,
+    script_sources: Res<lunco_assets::script_source::ScriptSources>,
     mut pending: Local<std::collections::HashMap<Entity, Handle<crate::source_asset::RhaiSource>>>,
     mut commands: Commands,
 ) {
@@ -300,6 +301,7 @@ pub fn resolve_embedded_scenario_paths(
             // read through the resolver's `canonicalize`, which anchors it to the
             // scene's source (like `lunco:resolvedAsset`). Inline `lunco:script` /
             // `LunCoPolicy` sources are unaffected (they ride the doc).
+            info!("[scripting] loading scenario script `{}` as `{uri}`", path.0);
             asset_server.load(uri)
         });
         if asset_server.load_state(&*handle).is_failed() {
@@ -309,6 +311,16 @@ pub fn resolve_embedded_scenario_paths(
             continue;
         }
         if let Some(src) = sources.get(&*handle) {
+            // Hand the handle to the registry instead of letting it die with
+            // `pending` below. Two things depend on the asset staying resident:
+            // it is what lets the event-driven publisher register the script as an
+            // importable module at all, and it is what lets Bevy emit `Modified`
+            // for it — a released asset has no further lifecycle, so dropping the
+            // handle here silently ended hot-reload for every scenario script.
+            script_sources.retain(
+                lunco_assets::asset_path::canonicalize_root(&path.0),
+                handle.clone().untyped(),
+            );
             commands
                 .entity(entity)
                 .try_insert(lunco_core::EmbeddedScenarioSource(src.text.clone()))

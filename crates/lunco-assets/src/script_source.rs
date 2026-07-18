@@ -41,9 +41,33 @@ use bevy::prelude::*;
 #[derive(Resource, Clone, Default)]
 pub struct ScriptSources {
     sources: Arc<RwLock<HashMap<String, String>>>,
+    /// Strong handles to the loaded script assets, keeping them RESIDENT.
+    ///
+    /// Without this the registry is unfillable. A consumer that loads a script,
+    /// copies the text out and drops its handle releases the asset — so an
+    /// `AssetEvent::Added` reader finds `Assets::get` already returning `None`, and
+    /// nothing registers, silently. (Measured on the campaign scene: 3 events, 0
+    /// assets still alive.)
+    ///
+    /// Residency is also what makes hot-reload possible at all: `Modified` is only
+    /// emitted for an asset something still holds. A dropped handle does not merely
+    /// lose the registration, it ends the file's lifecycle.
+    retained: Arc<RwLock<HashMap<String, UntypedHandle>>>,
 }
 
 impl ScriptSources {
+    /// Keep `handle` alive under `id`, so the asset stays loaded and keeps
+    /// emitting change events.
+    ///
+    /// Call this from wherever a script is loaded, INSTEAD of dropping the handle
+    /// once its text has been read. Registration of the text itself is event-driven
+    /// and happens separately — that is the cheap path, and it only works because
+    /// the asset is still here.
+    pub fn retain(&self, id: impl Into<String>, handle: UntypedHandle) {
+        if let Ok(mut r) = self.retained.write() {
+            r.insert(id.into(), handle);
+        }
+    }
     /// Canonical id for a script referenced as `path` from inside `importer`.
     ///
     /// Delegates entirely to [`crate::asset_path::canonicalize`] — the SAME rule
