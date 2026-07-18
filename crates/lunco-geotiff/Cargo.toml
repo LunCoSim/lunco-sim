@@ -5,12 +5,21 @@ edition = "2021"
 description = "GeoTIFF georeferencing tags — read and write the 'geo' half of a GeoTIFF"
 
 [dependencies]
-# The only dependency, and deliberately so. This crate is the shared FORMAT layer
-# between the asset processor (which writes rasters) and the terrain baker (which
-# reads them); both already depend on `tiff = "0.11"`, and both previously carried
-# their own half of the georeferencing story with nothing in common but the spec.
-# Pure Rust, so it stays wasm-safe like the decoders it serves.
+# TIFF container I/O — the same crate (and version) the asset processor encodes
+# with and the terrain baker decodes with. Pure Rust, wasm-safe.
 tiff = "0.11"
+# The GeoTIFF spec layer: GeoKey directory build/parse, tag constants, key
+# ordering, value-offset indexing and ASCII terminators.
+#
+# ZERO transitive dependencies and I/O-agnostic — pure types — so it composes
+# with the `tiff` I/O above instead of replacing it, and cannot threaten the
+# wasm path the DEM web worker runs on.
+#
+# The first cut of this crate hand-rolled the key directory. That is the most
+# spec-bound, least-reviewable part of the format (a key count that disagrees
+# with its entries, or a missing ASCII terminator, yields a file that opens fine
+# and georeferences wrongly), and it had already been solved properly upstream.
+geotiff-core = "0.7"
 
 [lints]
 workspace = true

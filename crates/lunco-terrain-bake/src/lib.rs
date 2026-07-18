@@ -92,10 +92,9 @@ pub struct BakedGrid {
 
 /// Decode the DEM once into its full native grid — the expensive GeoTIFF decode.
 /// Kept separate from [`finish_bake`] so a coarse + full pass share ONE decode.
-pub fn decode_raw(meta_yaml: &str, tif: &[u8]) -> Result<(dem::DemMetadata, HeightGrid), String> {
-    let meta = dem::DemMetadata::from_yaml_str(meta_yaml).map_err(|e| e.to_string())?;
-    let grid = dem::height_grid_from_geotiff(tif, &meta).map_err(|e| e.to_string())?;
-    Ok((meta, grid))
+/// The raster is self-describing: its extent comes from its own GeoTIFF tags.
+pub fn decode_raw(tif: &[u8]) -> Result<HeightGrid, String> {
+    dem::height_grid_from_geotiff(tif).map_err(|e| e.to_string())
 }
 
 /// Produce ONE stage's [`BakedGrid`] from the pre-decoded native grid. The Coarse
@@ -144,9 +143,9 @@ pub fn finish_bake(raw: &HeightGrid, site: &str, job: &DemBakeJob, stage: BakeSt
 }
 
 /// Full single-pass bake (native path): decode + the Full stage in one call.
-pub fn bake_grid(meta_yaml: &str, tif: &[u8], job: &DemBakeJob) -> Result<BakedGrid, String> {
-    let (meta, raw) = decode_raw(meta_yaml, tif)?;
-    Ok(finish_bake(&raw, &meta.site_id, job, BakeStage::Full))
+pub fn bake_grid(site: &str, tif: &[u8], job: &DemBakeJob) -> Result<BakedGrid, String> {
+    let raw = decode_raw(tif)?;
+    Ok(finish_bake(&raw, site, job, BakeStage::Full))
 }
 
 // ── Web-Worker wire protocol ──────────────────────────────────────────────────
@@ -179,7 +178,7 @@ pub struct BakeReplyHeader {
 pub const GRID_CACHE_VERSION: u64 = 1;
 
 /// Cache key for a Full-stage DEM bake: FNV-1a over the format version, the raw
-/// `metadata.yaml` bytes, the raw GeoTIFF bytes, and the bincoded [`DemBakeJob`]
+/// the site id, the raw GeoTIFF bytes, and the bincoded [`DemBakeJob`]
 /// (crop/res/stamp params). Content-exact — hashing the ~40 MB tif costs ~tens
 /// of ms, and composes with the conditional-revalidation fetch: a changed DEM →
 /// different tif bytes → different key → miss.

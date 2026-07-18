@@ -34,8 +34,8 @@ use crate::cache_dir;
 ///   (Node.js) on PATH; the CLI is fetched on demand.
 /// - `kind = "dem"`: crop a square region-of-interest out of a raw LROC/NAC
 ///   DTM (a non-square float32 raster) and re-encode it as the **square**
-///   float32 `heightmap.tif` the runtime DEM reader expects, plus the
-///   matching `metadata.yaml`. Pure-Rust (no GDAL) — the DTM's
+///   float32 `heightmap.tif` the runtime DEM reader expects, georeferenced
+///   with GeoTIFF tags. Pure-Rust (no GDAL) — the DTM's
 ///   equirectangular projection is just arithmetic once the manifest
 ///   supplies its scale + center (see the `dem_*` fields below).
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -120,7 +120,8 @@ pub struct ProcessConfig {
     #[serde(default)]
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub src_max_lon: Option<f64>,
-    /// `site_id` written into the generated `metadata.yaml`.
+    /// Site identity. The runtime takes this from the DEM folder name; this
+    /// field remains for manifests that name the site explicitly.
     #[serde(default)]
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub site_id: Option<String>,
@@ -148,8 +149,8 @@ fn default_dem_pixel_scale_m() -> f64 {
 ///   historical accident at this point but kept to avoid churning the
 ///   call site.
 /// - `"dem"`: crop a square ROI from a raw LROC/NAC DTM and write the
-///   square float32 `heightmap.tif` + `metadata.yaml` the runtime DEM
-///   reader expects. `output` is a **folder** (the `demSource` target);
+///   square, georeferenced float32 `heightmap.tif` the runtime DEM reader
+///   expects. `output` is a **folder** (the `demSource` target);
 ///   the heightmap lands at `<output>/materials/textures/heightmap.tif`.
 ///
 /// `twin_root` resolves `output_root = "twin"` against a caller-supplied
@@ -366,7 +367,6 @@ fn process_image(source: &Path, output: &Path, tw: u32, th: u32) -> Result<(), s
 ///   elevation in metres. The reader rejects non-square rasters
 ///   (`lunco-terrain-bake/src/dem.rs:148`), so the output is forced square
 ///   even when the source ROI is anisotropic.
-/// - `<output>/metadata.yaml` — the sidecar the loader parses
 ///   (`DemMetadata::from_yaml_str`): `site_id`, `resolution_x`/`y`,
 ///   `size_x_m`/`y_m`, `elevation_min`/`max_m`, `coordinates`.
 ///
@@ -546,15 +546,11 @@ fn process_dem(
         let mut enc =
             TiffEncoder::new(std::fs::File::create(&tif_path)?).map_err(tiff_io_err)?;
 
-        // Write the GEO half. Until 2026-07-19 this wrote pixels only, so every
-        // heightmap we shipped was a plain TIFF that QGIS opened in pixel units —
-        // any slope computed from it was wrong by the ground-sample factor, with
-        // no warning. The extent lived in `metadata.yaml` instead, which is how
-        // one fact ended up in three places (see docs/architecture/57).
+        // The GEO half — without it QGIS opens the raster in pixel units and every
+        // slope computed from it is wrong by the ground-sample factor, silently.
         //
-        // `win * scale` is the true on-the-ground span (the same value written to
-        // `size_x_m` below), and the frame is node-based: sample 0 on the west/north
-        // edge, sample n-1 on the east/south edge.
+        // `win * scale` is the true on-the-ground span, and the frame is
+        // node-based: sample 0 on the west/north edge, sample n-1 on the east/south.
         // Body radius, for the GeoTIFF citation only — it does not enter the
         // pixel→metre mapping, which is a local metric frame.
         //
@@ -574,6 +570,8 @@ fn process_dem(
             win as f64 * scale,
             out_n,
             BODY_RADIUS_M,
+            center_lat,
+            center_lon,
         );
         let mut img = enc
             .new_image::<colortype::Gray32Float>(out_n as u32, out_n as u32)
@@ -583,35 +581,10 @@ fn process_dem(
         img.write_data(&out).map_err(tiff_io_err)?;
     }
 
-    // ── Write the metadata sidecar the loader parses. ─────────────────────
-    let site_id = cfg.site_id.clone().unwrap_or_else(|| "site".to_string());
-    // `size_x_m` MUST match the actual world extent of the cropped window: the
-    // loader maps the raster's `resolution_x` samples across `size_x_m` metres,
-    // so reporting the *requested* window here when the crop was clamped would
-    // stretch/squash the terrain. `win * scale` is the true on-the-ground span.
-    let size_m = win as f64 * scale;
-    let meta = format!(
-        "site_id: {site_id}\n\
-         display_name: {site_id}\n\
-         description: \"Square crop of the {src_label} DTM around ({center_lat:.6}, {center_lon:.6})\"\n\
-         coordinates:\n\
-         \x20 lat: {center_lat:.10}\n\
-         \x20 lon: {center_lon:.10}\n\
-         size_x_m: {size_m:.4}\n\
-         size_y_m: {size_m:.4}\n\
-         resolution_x: {out_n}\n\
-         resolution_y: {out_n}\n\
-         elevation_min_m: {min:.4}\n\
-         elevation_max_m: {max:.4}\n\
-         elevation_range_m: {range:.4}\n\
-         source: lroc_nac_dtm\n",
-        src_label = source
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("DTM"),
-        range = (max - min).max(0.0),
-    );
-    std::fs::write(output_dir.join("metadata.yaml"), meta)?;
+    // No sidecar. Extent, resolution, centre lat/lon and body radius live in the
+    // raster's geo tags; source URL and checksum in `Assets.toml`; site id in the
+    // folder name. See `docs/architecture/57-dem-georeferencing.md`.
+    let _ = (min, max);
 
     Ok(())
 }
@@ -644,7 +617,7 @@ mod tests {
     }
 
     /// `kind = "dem"` must turn a **non-square** source DTM into a **square**
-    /// float32 `heightmap.tif` and a parseable `metadata.yaml`. This is the
+    /// georeferenced float32 `heightmap.tif`. This is the
     /// one invariant the runtime DEM reader enforces (`w == h`) and the
     /// exact reason the crop step exists — so assert it directly.
     #[test]

@@ -28,7 +28,7 @@
 //!
 //! Layers:
 //! - [`dem`] — loader for real DEM assets from `lunar_terrain_exporter`
-//!   (float32 GeoTIFF + `metadata.yaml`) into a reused `HeightGrid`, which then
+//!   (a georeferenced float32 GeoTIFF) into a reused `HeightGrid`, which then
 //!   acts as a [`HeightSource`]. This replaces the analytic placeholder with
 //!   real LOLA elevation. Byte-based and filesystem-free → identical on native
 //!   and wasm (the host supplies bytes via `lunco-storage` / `AssetServer`).
@@ -61,7 +61,7 @@ pub use lunco_terrain_core::{quadtree, source, tile};
 // `crate::bake` / `crate::dem` paths — and the external API surface — are unchanged.
 pub use lunco_terrain_bake::{bake, dem};
 pub use bake::resample;
-pub use dem::{decode_geotiff_f64, height_grid_from_geotiff, DemError, DemMetadata};
+pub use dem::{decode_geotiff_f64, height_grid_from_geotiff, read_geotiff_transform, DemError};
 pub use lunco_terrain_core::{
     hazard_color, hazard_from_slope, AnalyticHeightSource, HeightSource, QuadCoord, Quadtree,
     Selected, Square, TileCoord, TileGrid, TransferFn,

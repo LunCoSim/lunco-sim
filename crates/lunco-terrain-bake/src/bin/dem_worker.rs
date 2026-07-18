@@ -1,7 +1,7 @@
 //! Off-thread DEM bake worker — wasm32-unknown-unknown only.
 //!
 //! Runs inside a Web Worker with its own wasm linear memory. Receives a bake job
-//! ({ id, job: bincode `DemBakeJob`, meta: yaml bytes, tif: transferred
+//! ({ id, job: bincode `DemBakeJob`, site: id bytes, tif: transferred
 //! GeoTIFF `ArrayBuffer` }) from the main page, decodes the GeoTIFF ONCE, then
 //! emits two `postMessage` replies — a coarse preview grid, then the full-res
 //! grid — each as { header: bincode `BakeReplyHeader`, heights: transferred f64
@@ -113,8 +113,10 @@ mod wasm {
             Ok((j, _)) => j,
             Err(e) => return post_error(id, BakeStage::Coarse, format!("job decode: {e}")),
         };
-        let meta_bytes = get_u8(&data, "meta");
-        let meta_yaml = String::from_utf8_lossy(&meta_bytes);
+        // The site id — the cache/identity key, and the one fact the raster does
+        // not carry. The raster is self-describing, so only the name travels.
+        let site_bytes = get_u8(&data, "site");
+        let site_id = String::from_utf8_lossy(&site_bytes).to_string();
         // The tif rode a transferred ArrayBuffer → view it, copy into wasm memory.
         let tif = match Reflect::get(&data, &JsValue::from_str("tif")) {
             Ok(buf) if !buf.is_undefined() => Uint8Array::new(&buf).to_vec(),
@@ -122,19 +124,18 @@ mod wasm {
         };
 
         // ONE decode shared by both stages (the expensive GeoTIFF parse).
-        let (meta, raw) = match decode_raw(&meta_yaml, &tif) {
+        let raw = match decode_raw(&tif) {
             Ok(v) => v,
             Err(e) => return post_error(id, BakeStage::Coarse, e),
         };
         drop(tif);
 
         // Coarse preview first (fast → terrain + collider appear)
-        let baked_coarse = finish_bake(&raw, &meta.site_id, &job, BakeStage::Coarse);
+        let baked_coarse = finish_bake(&raw, &site_id, &job, BakeStage::Coarse);
         post_baked(id, &baked_coarse);
 
         // Yield to the event loop so the coarse preview message is dispatched immediately,
         // then refine the full grid in the background.
-        let site_id = meta.site_id.clone();
         wasm_bindgen_futures::spawn_local(async move {
             yield_to_event_loop().await;
             let baked_full = finish_bake(&raw, &site_id, &job, BakeStage::Full);

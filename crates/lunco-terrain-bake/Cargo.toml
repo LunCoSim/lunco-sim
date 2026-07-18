@@ -22,6 +22,9 @@ lunco-terrain-core = { workspace = true }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 # Pure-Rust GeoTIFF decoder (weezl/flate2) — wasm-safe, same as terrain-surface.
 tiff = "0.11"
+# Georeferencing tags — the shared format layer with `lunco-assets`, which writes
+# what this crate reads.
+lunco-geotiff = { path = "../lunco-geotiff" }
 serde = { workspace = true }
 bincode = { workspace = true }
 # FNV-1a fold for the web OPFS grid-cache key (version + meta + tif + job) —

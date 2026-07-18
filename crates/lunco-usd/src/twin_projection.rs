@@ -144,6 +144,7 @@ impl DocBackedTwinScenes {
             overlay_synced_generation: None,
         });
     }
+
 }
 
 /// The editable document backing a running scene's stage asset, if the scene is
@@ -332,7 +333,33 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         })
         .collect();
 
+    // A twin scene projects IFF it is the scene currently mounted.
+    //
+    // This map accumulates every twin scene ever opened, and this loop composes
+    // each one into the SAME world — so opening a second twin used to leave the
+    // first one's prims standing alongside it (43 `/Hab1/*` entities survived
+    // loading the school scene, with zero documents open). Making the projector
+    // ask "am I the mounted scene?" keeps the rule in one place: no teardown path
+    // has to remember to retract, because none of them grants the permission.
+    //
+    // `None` means no scene root exists yet — mid-load, between the old root's
+    // despawn and the new one's spawn. Project nothing rather than everything:
+    // the incoming scene resumes on the tick its root appears.
+    let mounted: Option<AssetId<UsdStageAsset>> = {
+        let mut q = world.query_filtered::<&UsdPrimPath, With<lunco_usd_sim::cosim::UsdSceneRoot>>();
+        q.iter(world).next().map(|p| p.stage_handle.id())
+    };
+    let active_doc: Option<DocumentId> = mounted.and_then(|id| {
+        let path = world.resource::<AssetServer>().get_path(id)?;
+        let rel = path.path().to_string_lossy().into_owned();
+        let (name, rel) = rel.split_once('/')?;
+        world.resource::<DocBackedTwinScenes>().doc_for(name, rel)
+    });
+
     for (doc, name, rel, synced, overlay_synced) in entries {
+        if active_doc != Some(doc) {
+            continue;
+        }
         // Cheap generation probe FIRST — then early-out. The expensive payloads
         // below (`composed_source()` re-serializes the whole composed stage to a
         // String; `composed()` recomposes it) must NOT be computed every frame:

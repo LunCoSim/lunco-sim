@@ -230,15 +230,15 @@ fn handle_reply(data: JsValue) {
 /// Dispatch a bake into the worker. `tif` (the ~40 MB GeoTIFF, already fetched on
 /// the main thread) is TRANSFERRED to the worker (zero-copy, detaching this
 /// copy). The worker replies asynchronously via [`drain_replies`].
-pub fn dispatch(id: u32, job: &DemBakeJob, meta_yaml: &str, tif: &[u8]) -> Result<(), JsValue> {
+pub fn dispatch(id: u32, job: &DemBakeJob, site_id: &str, tif: &[u8]) -> Result<(), JsValue> {
     ensure_pool()?;
     let job_bytes = bincode::serde::encode_to_vec(job, bincode::config::standard())
         .map_err(|e| JsValue::from_str(&format!("job encode: {e}")))?;
 
     let job_arr = Uint8Array::new_with_length(job_bytes.len() as u32);
     job_arr.copy_from(&job_bytes);
-    let meta_arr = Uint8Array::new_with_length(meta_yaml.len() as u32);
-    meta_arr.copy_from(meta_yaml.as_bytes());
+    let site_arr = Uint8Array::new_with_length(site_id.len() as u32);
+    site_arr.copy_from(site_id.as_bytes());
     // Fresh JS-heap copy of the tif so its backing buffer can be transferred.
     let tif_arr = Uint8Array::new_with_length(tif.len() as u32);
     tif_arr.copy_from(tif);
@@ -247,7 +247,7 @@ pub fn dispatch(id: u32, job: &DemBakeJob, meta_yaml: &str, tif: &[u8]) -> Resul
     let obj = Object::new();
     Reflect::set(&obj, &"id".into(), &JsValue::from_f64(id as f64))?;
     Reflect::set(&obj, &"job".into(), &job_arr)?;
-    Reflect::set(&obj, &"meta".into(), &meta_arr)?;
+    Reflect::set(&obj, &"site".into(), &site_arr)?;
     Reflect::set(&obj, &"tif".into(), &tif_buf)?;
 
     let transfer = Array::of1(&tif_buf);

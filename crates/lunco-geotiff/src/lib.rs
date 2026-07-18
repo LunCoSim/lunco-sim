@@ -33,35 +33,37 @@
 
 use std::io::{Read, Seek, Write};
 
+use geotiff_core::geokeys::{GeoKeyDirectory, GeoKeyValue};
+use geotiff_core::tags::{
+    TAG_GEO_ASCII_PARAMS, TAG_GEO_DOUBLE_PARAMS, TAG_GEO_KEY_DIRECTORY, TAG_MODEL_PIXEL_SCALE,
+    TAG_MODEL_TIEPOINT,
+};
 use tiff::encoder::{DirectoryEncoder, TiffKind};
 use tiff::tags::Tag;
 
-/// `ModelPixelScaleTag` — (x, y, z) ground units per pixel.
-pub const TAG_MODEL_PIXEL_SCALE: u16 = 33550;
-/// `ModelTiepointTag` — (i, j, k, x, y, z), raster point ↔ model point.
-pub const TAG_MODEL_TIEPOINT: u16 = 33922;
-/// `GeoKeyDirectoryTag` — the key/value directory itself.
-pub const TAG_GEO_KEY_DIRECTORY: u16 = 34735;
-/// `GeoDoubleParamsTag` — doubles referenced by directory entries.
-pub const TAG_GEO_DOUBLE_PARAMS: u16 = 34736;
-/// `GeoAsciiParamsTag` — ASCII referenced by directory entries.
-pub const TAG_GEO_ASCII_PARAMS: u16 = 34737;
-
-// GeoKey ids used below (OGC 01-004, Annex F).
-const KEY_GT_MODEL_TYPE: u16 = 1024;
-const KEY_GT_RASTER_TYPE: u16 = 1025;
-const KEY_GEOG_TYPE: u16 = 2048;
-const KEY_GEOG_CITATION: u16 = 2049;
+// GeoKey ids (OGC 01-004, Annex F). `geotiff-core` names the ones it models; the
+// projection-parameter keys below are not in its constant set, so they are spelled
+// out here against the spec.
+use geotiff_core::geokeys::{
+    GEOG_ANGULAR_UNITS as KEY_GEOG_ANGULAR_UNITS, GEOGRAPHIC_TYPE as KEY_GEOG_TYPE,
+    GEOG_CITATION as KEY_GEOG_CITATION, GT_MODEL_TYPE as KEY_GT_MODEL_TYPE,
+    GT_RASTER_TYPE as KEY_GT_RASTER_TYPE, PROJECTED_CS_TYPE as KEY_PROJECTED_CS_TYPE,
+    PROJECTION as KEY_PROJECTION, PROJ_COORD_TRANS as KEY_PROJ_COORD_TRANS,
+    PROJ_LINEAR_UNITS as KEY_PROJ_LINEAR_UNITS,
+};
 const KEY_GEOG_SEMI_MAJOR: u16 = 2057;
 const KEY_GEOG_SEMI_MINOR: u16 = 2058;
-const KEY_PROJECTED_CS_TYPE: u16 = 3072;
-const KEY_PROJ_LINEAR_UNITS: u16 = 3076;
+const KEY_PROJ_STD_PARALLEL1: u16 = 3078;
+const KEY_PROJ_NAT_ORIGIN_LONG: u16 = 3088;
 
 const MODEL_TYPE_PROJECTED: u16 = 1;
 /// Sample positions ARE the grid nodes — see the module note.
 const RASTER_TYPE_PIXEL_IS_POINT: u16 = 2;
 const USER_DEFINED: u16 = 32767;
 const LINEAR_UNITS_METRE: u16 = 9001;
+const ANGULAR_UNITS_DEGREE: u16 = 9102;
+/// `CT_Equirectangular`.
+const COORD_TRANS_EQUIRECTANGULAR: u16 = 17;
 
 /// Where a raster sits, in the scene's own metric frame.
 ///
@@ -77,15 +79,34 @@ pub struct GeoTransform {
     /// Model Y of the upper-left sample (north edge; +Y is north, so this is
     /// positive and Y decreases with row — the sign flip that makes row 0 north).
     pub origin_y_m: f64,
-    /// Body radius the frame is on, metres (Moon = 1_737_400.0). Carried so a
-    /// consumer can tell a lunar raster from a terrestrial one.
+    /// Body radius the frame is on, metres. Carried so a consumer can tell a
+    /// lunar raster from a terrestrial one.
     pub body_radius_m: f64,
+    /// Geodetic latitude of the crop centre, degrees — the projection's standard
+    /// parallel.
+    ///
+    /// This is why the file declares an equirectangular projection rather than a
+    /// bare local grid: near its own origin, projected metres ARE local metres, so
+    /// the frame is identical — but the projection parameters carry *where on the
+    /// body* the crop sits, which a local grid cannot express. That fact used to
+    /// live only in `metadata.yaml`'s `coordinates:` block, and it is the last
+    /// thing that kept the sidecar alive.
+    pub center_lat_deg: f64,
+    /// Geodetic longitude of the crop centre, degrees — the projection's natural
+    /// origin longitude (central meridian).
+    pub center_lon_deg: f64,
 }
 
 impl GeoTransform {
     /// The transform for a square crop of `size_m` across `res` samples, centred
-    /// on the origin — the layout the DEM processor produces.
-    pub fn centred_square(size_m: f64, res: usize, body_radius_m: f64) -> Self {
+    /// on the given geodetic point — the layout the DEM processor produces.
+    pub fn centred_square(
+        size_m: f64,
+        res: usize,
+        body_radius_m: f64,
+        center_lat_deg: f64,
+        center_lon_deg: f64,
+    ) -> Self {
         let half = size_m * 0.5;
         // Node-based spacing: res-1 intervals span the full extent, matching
         // `HeightGrid`. Using `res` here would shrink the grid by one pixel.
@@ -99,6 +120,8 @@ impl GeoTransform {
             origin_x_m: -half,
             origin_y_m: half,
             body_radius_m,
+            center_lat_deg,
+            center_lon_deg,
         }
     }
 
@@ -135,35 +158,65 @@ where
         &[0.0, 0.0, 0.0, tf.origin_x_m, tf.origin_y_m, 0.0][..],
     )?;
 
-    // Doubles referenced by the directory below, in order.
-    let doubles = [tf.body_radius_m, tf.body_radius_m];
-    dir.write_tag(Tag::Unknown(TAG_GEO_DOUBLE_PARAMS), &doubles[..])?;
+    // A user-defined equirectangular projection on a sphere, with its natural
+    // origin AT the crop centre. That is what makes projected metres equal local
+    // metres near the origin, so the sim's frame and the file's frame are the same
+    // frame — no conversion, and no sign to get wrong.
+    //
+    // `geotiff-core` owns the encoding: key ordering, the value-offset indices into
+    // the doubles array, and the ASCII terminators. Hand-rolling that is how you
+    // produce a file that opens fine and georeferences wrongly.
+    let mut keys = GeoKeyDirectory::new();
+    keys.set(KEY_GT_MODEL_TYPE, GeoKeyValue::Short(MODEL_TYPE_PROJECTED));
+    keys.set(
+        KEY_GT_RASTER_TYPE,
+        GeoKeyValue::Short(RASTER_TYPE_PIXEL_IS_POINT),
+    );
+    keys.set(KEY_GEOG_TYPE, GeoKeyValue::Short(USER_DEFINED));
+    keys.set(KEY_GEOG_CITATION, GeoKeyValue::Ascii(citation.to_string()));
+    keys.set(
+        KEY_GEOG_ANGULAR_UNITS,
+        GeoKeyValue::Short(ANGULAR_UNITS_DEGREE),
+    );
+    keys.set(
+        KEY_GEOG_SEMI_MAJOR,
+        GeoKeyValue::Double(vec![tf.body_radius_m]),
+    );
+    keys.set(
+        KEY_GEOG_SEMI_MINOR,
+        GeoKeyValue::Double(vec![tf.body_radius_m]),
+    );
+    keys.set(KEY_PROJECTED_CS_TYPE, GeoKeyValue::Short(USER_DEFINED));
+    keys.set(KEY_PROJECTION, GeoKeyValue::Short(USER_DEFINED));
+    keys.set(
+        KEY_PROJ_COORD_TRANS,
+        GeoKeyValue::Short(COORD_TRANS_EQUIRECTANGULAR),
+    );
+    keys.set(KEY_PROJ_LINEAR_UNITS, GeoKeyValue::Short(LINEAR_UNITS_METRE));
+    keys.set(
+        KEY_PROJ_STD_PARALLEL1,
+        GeoKeyValue::Double(vec![tf.center_lat_deg]),
+    );
+    keys.set(
+        KEY_PROJ_NAT_ORIGIN_LONG,
+        GeoKeyValue::Double(vec![tf.center_lon_deg]),
+    );
 
-    // ASCII params: GeoTIFF requires entries be terminated with '|'.
-    let ascii = format!("{citation}|");
-    dir.write_tag(Tag::Unknown(TAG_GEO_ASCII_PARAMS), ascii.as_str())?;
-
-    // Directory: header (version, revision, minor, key-count) then 4 shorts/key:
-    // (key id, tag location, count, value-or-offset). Location 0 means the value
-    // is the short itself; 34736/34737 mean "index into doubles/ascii".
-    let keys: Vec<u16> = vec![
-        1, 1, 0, 6, // header: 6 keys follow
-        KEY_GT_MODEL_TYPE, 0, 1, MODEL_TYPE_PROJECTED,
-        KEY_GT_RASTER_TYPE, 0, 1, RASTER_TYPE_PIXEL_IS_POINT,
-        KEY_GEOG_TYPE, 0, 1, USER_DEFINED,
-        KEY_GEOG_CITATION, TAG_GEO_ASCII_PARAMS, ascii.len() as u16, 0,
-        KEY_GEOG_SEMI_MAJOR, TAG_GEO_DOUBLE_PARAMS, 1, 0,
-        KEY_GEOG_SEMI_MINOR, TAG_GEO_DOUBLE_PARAMS, 1, 1,
-    ];
-    // `ProjectedCSTypeGeoKey`/`ProjLinearUnitsGeoKey` are appended separately only
-    // to keep the key count above readable; GeoTIFF requires keys in ascending id
-    // order, which this preserves.
-    let mut keys = keys;
-    keys[3] = 8;
-    keys.extend_from_slice(&[KEY_PROJECTED_CS_TYPE, 0, 1, USER_DEFINED]);
-    keys.extend_from_slice(&[KEY_PROJ_LINEAR_UNITS, 0, 1, LINEAR_UNITS_METRE]);
-
-    dir.write_tag(Tag::Unknown(TAG_GEO_KEY_DIRECTORY), &keys[..])?;
+    // `CompressedDataCorrupt` is the only `TiffFormatError` variant carrying a free
+    // message; the geo-key encoder's failures are ours, not the codec's, so the
+    // message is what matters here rather than the variant.
+    let (directory, doubles, ascii) = keys.serialize().map_err(|e| {
+        tiff::TiffError::FormatError(tiff::TiffFormatError::CompressedDataCorrupt(format!(
+            "geo key directory: {e}"
+        )))
+    })?;
+    if !doubles.is_empty() {
+        dir.write_tag(Tag::Unknown(TAG_GEO_DOUBLE_PARAMS), &doubles[..])?;
+    }
+    if !ascii.is_empty() {
+        dir.write_tag(Tag::Unknown(TAG_GEO_ASCII_PARAMS), ascii.as_str())?;
+    }
+    dir.write_tag(Tag::Unknown(TAG_GEO_KEY_DIRECTORY), &directory[..])?;
     Ok(())
 }
 
@@ -215,20 +268,34 @@ pub fn read_geo_tags<R: Read + Seek>(
         return Err(GeoReadError::Malformed("ModelTiepoint needs 6 values"));
     }
 
-    // Semi-major axis, when the writer supplied it. Absent is not an error: a
-    // third-party raster may carry a full EPSG code instead, and the radius is
-    // informational for us.
-    let body_radius_m = dec
+    // Resolve keys through the directory, never positionally. A third-party
+    // GeoTIFF orders its doubles however it likes, so reading `doubles[2]` by
+    // index would happily return a false-easting as a latitude.
+    let doubles = dec
         .get_tag_f64_vec(Tag::Unknown(TAG_GEO_DOUBLE_PARAMS))
-        .ok()
-        .and_then(|d| d.first().copied())
-        .unwrap_or(0.0);
+        .unwrap_or_default();
+    let ascii = dec
+        .get_tag_ascii_string(Tag::Unknown(TAG_GEO_ASCII_PARAMS))
+        .unwrap_or_default();
+    let directory = dec
+        .get_tag_u16_vec(Tag::Unknown(TAG_GEO_KEY_DIRECTORY))
+        .unwrap_or_default();
+    let keys = GeoKeyDirectory::parse(&directory, &doubles, &ascii);
+    let double_key = |id: u16| -> Option<f64> {
+        keys.as_ref()
+            .and_then(|k| k.get_double(id))
+            .and_then(|v| v.first().copied())
+    };
 
     Ok(GeoTransform {
         pixel_size_m: scale[0],
         origin_x_m: tie[3],
         origin_y_m: tie[4],
-        body_radius_m,
+        // Absent is not an error: a third-party raster may carry a full EPSG code
+        // instead of user-defined axes, and the radius is informational for us.
+        body_radius_m: double_key(KEY_GEOG_SEMI_MAJOR).unwrap_or(0.0),
+        center_lat_deg: double_key(KEY_PROJ_STD_PARALLEL1).unwrap_or(0.0),
+        center_lon_deg: double_key(KEY_PROJ_NAT_ORIGIN_LONG).unwrap_or(0.0),
     })
 }
 
@@ -241,7 +308,7 @@ mod tests {
     /// samples — and getting this wrong scales the whole terrain by 512/511.
     #[test]
     fn centred_square_is_node_based() {
-        let tf = GeoTransform::centred_square(1002.0, 512, 1_737_400.0);
+        let tf = GeoTransform::centred_square(1002.0, 512, 1737.0e3, 26.0371, 3.6584);
         assert!((tf.pixel_size_m - 1002.0 / 511.0).abs() < 1e-9);
         assert!((tf.origin_x_m + 501.0).abs() < 1e-9);
         assert!((tf.origin_y_m - 501.0).abs() < 1e-9);
@@ -252,7 +319,7 @@ mod tests {
     /// an infinite pixel size.
     #[test]
     fn degenerate_single_sample_raster_does_not_divide_by_zero() {
-        let tf = GeoTransform::centred_square(10.0, 1, 1_737_400.0);
+        let tf = GeoTransform::centred_square(10.0, 1, 1737.0e3, 0.0, 0.0);
         assert!(tf.pixel_size_m.is_finite());
     }
 
@@ -278,7 +345,7 @@ mod tests {
         use tiff::encoder::{colortype, TiffEncoder};
 
         let res = 512usize;
-        let want = GeoTransform::centred_square(1002.0, res, 1737.0e3);
+        let want = GeoTransform::centred_square(1002.0, res, 1737.0e3, 26.0371, 3.6584);
 
         let mut buf = Vec::new();
         {

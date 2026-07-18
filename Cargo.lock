@@ -4732,6 +4732,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "geotiff-core"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00b6a72346d60112fc3dca193993e55df4da32e56dcf9f1bf6653334324a8cea"
+
+[[package]]
 name = "gethostname"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7106,6 +7112,7 @@ dependencies = [
 name = "lunco-geotiff"
 version = "0.6.0-dev"
 dependencies = [
+ "geotiff-core",
  "tiff",
 ]
 
@@ -7567,6 +7574,7 @@ dependencies = [
  "bincode 2.0.1",
  "console_error_panic_hook",
  "js-sys",
+ "lunco-geotiff",
  "lunco-hash",
  "lunco-obstacle-field",
  "lunco-terrain-core",

@@ -27,7 +27,7 @@ use lunco_obstacle_field::spec::{CraterLayer, Pattern};
 // heavy GeoTIFF decode; the analytic oracle composition + avian collider + Bevy
 // mesh derive stay here (on the main thread on web — they're cheap).
 use lunco_terrain_bake::bake::{crop_centered, resample};
-use lunco_terrain_bake::dem::{height_grid_from_geotiff, DemMetadata};
+use lunco_terrain_bake::dem::height_grid_from_geotiff;
 #[cfg(target_arch = "wasm32")]
 use lunco_terrain_bake::{BakedGrid, DemBakeJob};
 #[cfg(target_arch = "wasm32")]
@@ -134,7 +134,7 @@ pub(crate) fn crater_placements(
 /// `lunco-sandbox`) can place it on an authored terrain prim.
 #[derive(Component)]
 pub struct DemTerrainRequest {
-    /// DEM site directory (contains `metadata.yaml` + `materials/textures/heightmap.tif`).
+    /// DEM site directory (contains `materials/textures/heightmap.tif`).
     pub uri: String,
     /// Half side length (metres) of the centred region to realize at native
     /// resolution. `f64::INFINITY` = the whole DEM.
@@ -904,8 +904,16 @@ fn start_dem_builds(
     let curvature_radius = curvature.map(|c| c.radius_m);
     for (entity, req, stack) in &q {
         let dir = std::path::PathBuf::from(&req.uri);
-        let meta_path = dir.join("metadata.yaml");
         let tif_path = dir.join("materials/textures/heightmap.tif");
+        // Site identity = the DEM folder name (`terrain/apollo15/` → "apollo15").
+        // This is the ONE fact the raster genuinely does not carry, and the folder
+        // already states it — so it needs no sidecar either. It keys the bake cache
+        // and the streamed-tile store.
+        let site_id = dir
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("site")
+            .to_string();
         let collider_ring = req.collider_ring;
         let lod_viz = req.lod_viz;
         // Captured by-value into the 'static async build task (the query item `req`
@@ -955,21 +963,13 @@ fn start_dem_builds(
             AsyncComputeTaskPool::get()
                 .spawn(async move {
                     let tx = get_wasm_bake_failures_tx().clone();
-                    let meta = match read_bytes(meta_path).await {
-                        Ok(b) => String::from_utf8_lossy(&b).into_owned(),
-                        Err(e) => {
-                            bevy::log::error!("[dem-terrain] meta fetch failed: {e}");
-                            let _ = tx.send(id);
-                            return;
-                        }
-                    };
                     
                     // A scenario-synced twin's DEM already lives in the OPFS scenario
                     // cache — read it from there rather than re-fetching it over HTTP
                     // (where it doesn't exist: `assets/<scenario-id>/…` is a 404).
                     // Only the baked-in demo twin is staged under `assets/`. This
-                    // mirrors `read_bytes`, which the `metadata.yaml` read above goes
-                    // through; the .tif can't reuse it because it wants progress.
+                    // mirrors `read_bytes`; the .tif can't reuse it because it
+                    // wants progress reporting.
                     let opfs_tif = lunco_assets::scenarios_dir().join(&tif_path);
                     let opfs_handle = lunco_storage::StorageHandle::File(opfs_tif);
                     let opfs = lunco_storage::OpfsStorage::new();
@@ -1030,7 +1030,7 @@ fn start_dem_builds(
                     // worker is never spawned; the grid is injected through the
                     // SAME reply queue a Full worker reply uses.
                     let key =
-                        lunco_terrain_bake::grid_cache_key(meta.as_bytes(), &tif, &job);
+                        lunco_terrain_bake::grid_cache_key(site_id.as_bytes(), &tif, &job);
                     let key_hex = lunco_precompute::key_hex(key);
                     if let Some(blob) =
                         lunco_storage::opfs_blob::read(DEM_GRID_CACHE_NS, &key_hex).await
@@ -1038,9 +1038,7 @@ fn start_dem_builds(
                         if let Some((grid, native_res)) =
                             lunco_terrain_bake::decode_grid_blob(&blob)
                         {
-                            let site = DemMetadata::from_yaml_str(&meta)
-                                .map(|m| m.site_id)
-                                .unwrap_or_default();
+                            let site = site_id.clone();
                             bevy::log::info!(
                                 "[dem-terrain] OPFS grid-cache hit ({}², key {key_hex}) — skipping worker bake",
                                 grid.res
@@ -1064,7 +1062,7 @@ fn start_dem_builds(
                     }
 
                     if let Err(e) =
-                        lunco_terrain_bake::worker_client::dispatch(id, &job, &meta, &tif)
+                        lunco_terrain_bake::worker_client::dispatch(id, &job, &site_id, &tif)
                     {
                         bevy::log::error!("[dem-terrain] worker dispatch failed: {e:?}");
                         let _ = tx.send(id);
@@ -1079,12 +1077,11 @@ fn start_dem_builds(
         // oracle here (crater/edit modifiers unbounded by grid res); the avian
         // collider + Bevy mesh derive is added off-thread too.
         let task = AsyncComputeTaskPool::get().spawn(async move {
-            let meta_bytes = read_bytes(meta_path).await?;
-            let meta_str =
-                String::from_utf8(meta_bytes).map_err(|e| format!("metadata.yaml not utf-8: {e}"))?;
-            let meta = DemMetadata::from_yaml_str(&meta_str).map_err(|e| e.to_string())?;
+            // ONE file. The `metadata.yaml` read that used to precede this is gone:
+            // the raster states its own extent and position, so there is no second
+            // document to fetch, parse, or disagree with.
             let tif = read_bytes(tif_path).await?;
-            let grid = height_grid_from_geotiff(&tif, &meta).map_err(|e| e.to_string())?;
+            let grid = height_grid_from_geotiff(&tif).map_err(|e| e.to_string())?;
 
             // Crop the playable region at native resolution. The mesh and collider
             // share this surface so visuals and contact agree.
@@ -1150,7 +1147,7 @@ fn start_dem_builds(
                 half_extent,
                 res,
                 native_res,
-                site: meta.site_id,
+                site: site_id,
             })
         });
         commands.entity(entity).try_insert(DemBuildTask(task));
