@@ -68,6 +68,15 @@ def Xform "World"
         int[] curveVertexCounts = [4]
         point3f[] points = [(0, 5, 0), (2, 5, 0), (2, 5, 2), (0, 5, 2)]
     }
+    def NurbsCurves "Elbow"
+    {
+        int[] curveVertexCounts = [3]
+        int[] order = [3]
+        double[] knots = [0, 0, 0, 1, 1, 1]
+        double[] pointWeights = [1, 0.70710678118, 1]
+        point3f[] points = [(1, 0, 0), (1, 1, 0), (0, 1, 0)]
+        float[] widths = [0.05]
+    }
 }
 "#;
 
@@ -188,6 +197,16 @@ fn recipe_asset_instantiates_off_live_canonical_stage() {
     assert!(
         app.world().get::<Mesh3d>(rail_e).is_none(),
         "a BasisCurves WITHOUT `widths` has no surface and must not become geometry"
+    );
+
+    // (g) `UsdGeomNurbsCurves` sweeps through the same path — a rational quadratic
+    // quarter-arc (middle weight √2/2), i.e. the pipe-elbow case. It shares the
+    // sweep with BasisCurves; only the centerline evaluator differs, so this pins
+    // that the NURBS branch is reached and produces geometry at all.
+    let elbow_e = entity_at(&mut app, "/World/Elbow").expect("Elbow prim entity");
+    assert!(
+        app.world().get::<Mesh3d>(elbow_e).is_some(),
+        "a NurbsCurves with `widths` must sweep to a Mesh3d"
     );
 }
 

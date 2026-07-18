@@ -37,6 +37,21 @@ wgpu-types = "29"
 # a skybox/IBL cubemap must be linearly sampled. Same crate bevy_image itself
 # uses to build its gradient cubemaps.
 half = "2"
+# NURBS evaluation for `UsdGeomNurbsCurves` / `NurbsPatch`. Chosen over writing
+# one: it covers curves AND surfaces from one numeric core (a hand-written pair
+# would be two evaluators that can disagree), plus `RevolvedCurve` — which is
+# 80.4% of HAB-1's vertices, the dome included — and exact `Circle`/`Torus`
+# specifieds for the seals and chain links.
+#
+# `truck-geometry` ONLY, not the wider truck stack: this is 4 direct deps
+# (serde, thiserror, truck-base, truck-geotrait) ~ 8 transitively, cgmath-based
+# so it does NOT touch the workspace's `nalgebra` (that conflict is `curvo`'s,
+# not truck's), and its `truck-geotrait` already declares
+# `getrandom 0.2 + features = ["js"]` for wasm32 — the exact pin this workspace
+# uses. `truck-meshalgo` is deliberately absent: it pulls rayon + vtkio and we
+# tessellate ourselves (`curve_sweep.rs` owns the sweep, which truck has no
+# equivalent for — no crate implements rotation-minimizing frames).
+truck-geometry = "0.5.0"
 openusd = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 # `FlightSoftware` = the unified control-surface tag stamped on any

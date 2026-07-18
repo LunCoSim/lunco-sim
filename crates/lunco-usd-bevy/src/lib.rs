@@ -63,6 +63,7 @@ pub mod view;
 pub mod camera_path;
 pub mod canonical;
 pub mod curve_sweep;
+pub mod nurbs;
 pub mod mount;
 pub mod read;
 pub mod units;
@@ -855,7 +856,7 @@ fn instantiate_usd_prim_read<R: UsdRead>(
             // into a Bevy mesh. (Falls through to `None` — no fallback
             // primitive — if the topology attrs are missing/malformed.)
             build_usd_mesh(reader, &sdf_path).map(|m| meshes.add(m))
-        } else if prim_type.as_deref() == Some("BasisCurves") {
+        } else if matches!(prim_type.as_deref(), Some("BasisCurves") | Some("NurbsCurves")) {
             // A curve prim with `widths` is a TUBE — swept geometry, not a line.
             // `build_usd_curve_mesh` returns `None` when `widths` is unauthored,
             // which is what keeps a pure path (a camera rail carrying
@@ -3304,6 +3305,16 @@ fn build_usd_curve_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> 
         .map(|w| conv.length(*w as f64 / 2.0) as f32)
         .collect();
 
+    // `NurbsCurves` carries its own basis: per-curve `order`, a concatenated
+    // `knots` array, and optional rational `pointWeights`. `BasisCurves` carries a
+    // `type`/`basis` token pair instead. Both are swept identically once each
+    // curve is reduced to a centerline — the only difference is how that
+    // centerline is produced.
+    let is_nurbs = reader.type_name(path).as_deref() == Some("NurbsCurves");
+    let orders = read_int_array(reader, path, "order").unwrap_or_default();
+    let all_knots = reader.scalar::<Vec<f64>>(path, "knots").unwrap_or_default();
+    let point_weights = reader.scalar::<Vec<f64>>(path, "pointWeights").unwrap_or_default();
+
     let ty = reader.text(path, "type").unwrap_or_else(|| "cubic".to_string());
     let basis_tok = reader.text(path, "basis").unwrap_or_else(|| "bspline".to_string());
     let basis = if ty == "linear" {
@@ -3335,12 +3346,19 @@ fn build_usd_curve_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> 
 
     let mut merged: Option<Mesh> = None;
     let mut cursor = 0usize;
-    for c in counts {
+    // `knots` is one flat array for the whole batch: curve `i` owns
+    // `vertexCount_i + order_i` of them, consumed in order. Tracked separately
+    // from the point cursor because the strides differ.
+    let mut knot_cursor = 0usize;
+    for (ci, c) in counts.into_iter().enumerate() {
         let n = c.max(0) as usize;
         if n < 2 || cursor + n > points.len() {
             cursor += n;
             continue;
         }
+        // Captured before `cursor` advances — `pointWeights` is indexed by control
+        // point, so it slices with the same offset the points did.
+        let cursor_start = cursor;
         let cvs: Vec<Vec3> = points[cursor..cursor + n]
             .iter()
             .map(|p| Vec3::from_array(*p))
@@ -3357,7 +3375,41 @@ fn build_usd_curve_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> 
         };
         cursor += n;
 
-        let centerline: Vec<Vec3> = if basis == CurveBasis::Linear {
+        let centerline: Vec<Vec3> = if is_nurbs {
+            // Per-curve order; a single authored value applies to the whole batch
+            // (USD allows either), else default to cubic.
+            let order = orders
+                .get(ci)
+                .or_else(|| orders.first())
+                .map(|o| (*o).max(2) as usize)
+                .unwrap_or(4)
+                .min(n); // a curve cannot have order > control-point count
+            let need = n + order;
+            let knots: Vec<f64> = if knot_cursor + need <= all_knots.len() {
+                let k = all_knots[knot_cursor..knot_cursor + need].to_vec();
+                knot_cursor += need;
+                k
+            } else {
+                // Missing or short `knots` — reconstruct the standard clamped
+                // vector rather than dropping the curve. Assets omit it often
+                // enough that guessing beats losing the geometry, and clamped is
+                // what every DCC writes.
+                crate::nurbs::default_clamped_knots(n, order)
+            };
+            let w: Vec<f64> = if point_weights.len() >= cursor_start + n {
+                point_weights[cursor_start..cursor_start + n].to_vec()
+            } else {
+                Vec::new() // unauthored ⇒ polynomial, all weights 1
+            };
+            let steps = (n.saturating_sub(1)).max(1) * SAMPLES_PER_SEGMENT;
+            let pts: Vec<[f32; 3]> = cvs.iter().map(|p| p.to_array()).collect();
+            let sampled = crate::nurbs::sample_nurbs_curve(&pts, &w, order, &knots, steps);
+            if sampled.is_empty() {
+                // Malformed NURBS: skip this curve rather than emit a wrong one.
+                continue;
+            }
+            sampled.into_iter().map(Vec3::from_array).collect()
+        } else if basis == CurveBasis::Linear {
             cvs.clone()
         } else {
             let steps = (n.saturating_sub(1)).max(1) * SAMPLES_PER_SEGMENT;
