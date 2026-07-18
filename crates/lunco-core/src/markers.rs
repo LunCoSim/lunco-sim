@@ -102,17 +102,26 @@ impl Default for SunAngularDiameter {
     }
 }
 
-/// Opt-in marker for static terrain that self-shadows via a baked
-/// multi-azimuth **horizon map** instead of the realtime cascade shadow
-/// map (which cannot resolve kilometre-scale terrain shadows).
+/// Opt-in marker for static terrain that self-shadows by **ray-marching a
+/// baked heightfield**, instead of the realtime cascade shadow map (which
+/// cannot resolve kilometre-scale terrain shadows: at a grazing sun the
+/// required depth bias scales as `1/tan(elevation)`, so any bias that stops
+/// acne peter-pans the shadow tens of metres).
 ///
 /// Stamped by loaders (the USD loader reads
 /// `custom bool lunco:terrain:horizonShadows`); consumed by
-/// `lunco-environment`'s horizon-shadow system, which bakes horizon
-/// elevation angles from the terrain's `Mesh3d` for `azimuths` compass
-/// directions over a `resolution`² grid. Universal across bodies: the
-/// bake is sun-agnostic — any sun direction is evaluated against it at
-/// runtime, so it works wherever the terrain (and its star) is.
+/// `lunco-environment`'s horizon-shadow system, which bakes a `resolution`²
+/// heightfield of the terrain's local XZ bounding box and marches it per
+/// pixel. Universal across bodies: the bake is sun-agnostic — geometry only —
+/// so any sun direction is evaluated against it at runtime.
+///
+/// **Not a horizon-angle map**, despite the name. Storing horizon *angles* per
+/// grid point was tried and rejected: it low-pass-filters the casting crests
+/// and smears the terminator over tens to hundreds of metres (see
+/// `lunco-environment/src/horizon.rs`). This doc used to describe that
+/// rejected design, and an `azimuths` field survived it — declared, parsed
+/// from `lunco:terrain:horizonMapAzimuths`, and read by nothing. Both are
+/// gone; a ray-march has no azimuth slices to interpolate between.
 ///
 /// Lives in `lunco-core` so loader crates and the environment crate can
 /// share it without depending on each other (same pattern as
@@ -120,18 +129,15 @@ impl Default for SunAngularDiameter {
 #[derive(Component, Debug, Clone, Copy, Reflect)]
 #[reflect(Component)]
 pub struct HorizonShadowTerrain {
-    /// Side length of the square heightmap / visibility grid baked over
-    /// the terrain's local XZ bounding box. Default 512 — matched to
-    /// typical DEM vertex spacing; raise for finer source data.
+    /// Side length of the square heightfield baked over the terrain's local XZ
+    /// bounding box. Default 512 — matched to typical DEM vertex spacing;
+    /// raise for finer source data.
     pub resolution: u32,
-    /// Number of compass directions horizon angles are baked for.
-    /// Runtime sun azimuths interpolate between adjacent slices.
-    pub azimuths: u32,
 }
 
 impl Default for HorizonShadowTerrain {
     fn default() -> Self {
-        Self { resolution: 512, azimuths: 16 }
+        Self { resolution: 512 }
     }
 }
 

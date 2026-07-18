@@ -7007,6 +7007,7 @@ dependencies = [
  "lunco-environment",
  "lunco-hooks",
  "lunco-materials",
+ "lunco-obstacle-field",
  "lunco-render",
  "lunco-storage",
  "lunco-terrain-core",

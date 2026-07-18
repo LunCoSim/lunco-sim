@@ -317,9 +317,27 @@ fn mode_exposure(
         // Camera position in its parent grid's frame (site-ENU on the
         // surface) via exact cell math — the camera's own GlobalTransform is
         // floating-origin-relative (≈ zero) and useless for geography.
-        let cam_pos = match (cell, child_of.and_then(|c| q_grids.get(c.parent()).ok())) {
-            (Some(cell), Some(grid)) => grid.grid_position_double(cell, tf).as_vec3(),
-            _ => tf.translation,
+        //
+        // NO FALLBACK. This resolves only for a camera whose own `ChildOf` is the
+        // `Grid`; possess a vessel and the camera reparents to it, losing both its
+        // `CellCoord` and that direct edge. The old `_ => tf.translation` arm then
+        // silently substituted a metres-scale offset from the vessel for a
+        // grid-absolute geographic position — `local_up` collapsed to +Y and the
+        // sun elevation jumped to whatever it is at the site origin. At a polar
+        // site (moonbase is lat -89.46°) the elevation sits INSIDE the 0.02 rad
+        // ramp band permanently, so that jump lands mid-ramp and moves EV. A
+        // wrong frame is not a degraded answer here, it is a different question;
+        // hold the last exposure instead and let the mount fix the parenting.
+        let Some(cam_pos) = cell
+            .zip(child_of.and_then(|c| q_grids.get(c.parent()).ok()))
+            .map(|(cell, grid)| grid.grid_position_double(cell, tf).as_vec3())
+        else {
+            warn_once!(
+                "mode_exposure: avatar camera has no CellCoord/Grid parent — holding \
+                 exposure. Sun elevation needs a grid-absolute position; the camera's \
+                 local Transform is not one."
+            );
+            continue;
         };
         let target = if orbital {
             // Orbital views frame a sunlit globe: the calibrated EV is correct.

@@ -207,7 +207,86 @@ struct TileSlot {
     /// The tile's selected morph-band end (parent refine range) — kept so a live
     /// shader-mode swap can rebuild the right band material without re-selecting.
     morph_end: f32,
+    /// Whether this tile is currently VISIBLE. A tile can be resident but hidden:
+    /// the coarse base is always resident, and only draws where the finer tile
+    /// that should cover its area is not ready yet. Tracked so the `Visibility`
+    /// command is issued on a flip, not every frame.
+    drawn: bool,
 }
+
+/// Build the DRAW partition: which tiles actually render this frame.
+///
+/// For each selected node, the deepest node in its ancestor chain (itself first) that is
+/// READY — this is Cesium `ForbidHoles` / MSFS "best currently available data": when a fine
+/// tile has not baked yet, its parent draws **instead of** it. Then any node an ancestor
+/// already covers is dropped, so the result is DISJOINT — exactly one tile per point, which
+/// is what keeps a coarse stand-in from z-fighting through the fine surface it replaces.
+///
+/// Pure and separated from the streaming system on purpose: this is the invariant the whole
+/// design rests on ("never a hole, never an overlap"), it was previously three copies of the
+/// same ancestor walk inline in a 700-line system, and a bug in it renders as terrain
+/// flicker rather than as anything a type error would catch.
+///
+/// `scratch` is caller-owned to keep this allocation-free on the hot path.
+fn build_draw_partition(
+    selected: impl Iterator<Item = QuadCoord>,
+    is_ready: impl Fn(QuadCoord) -> bool,
+    draw: &mut HashSet<QuadCoord>,
+    scratch: &mut Vec<QuadCoord>,
+) {
+    draw.clear();
+    for coord in selected {
+        let mut c = coord;
+        loop {
+            if is_ready(c) {
+                draw.insert(c);
+                break;
+            }
+            match c.parent() {
+                Some(p) => c = p,
+                // Nothing ready anywhere up the chain — only reachable before the coarse
+                // base has finished baking. The area draws nothing for now.
+                None => break,
+            }
+        }
+    }
+    scratch.clear();
+    for c in draw.iter() {
+        let mut p = *c;
+        while let Some(up) = p.parent() {
+            p = up;
+            if draw.contains(&p) {
+                scratch.push(*c);
+                break;
+            }
+        }
+    }
+    for c in scratch.drain(..) {
+        draw.remove(&c);
+    }
+}
+
+/// Deepest level of the **always-resident coarse base** — depths `0..=COARSE_N` are
+/// baked at scene open and never evicted, so a fallback surface always exists over
+/// the whole footprint.
+///
+/// This is the thing whose absence made the terrain go BLACK rather than blurry.
+/// The old `CARPET_DEPTH` was only a sort key over nodes already selected, and the
+/// selection is a REPLACE cover that never contains depths 0-2 on a site DEM — so
+/// nothing was ever held in reserve, and panning somewhere new rendered clear
+/// colour until a bake landed.
+///
+/// `4` is measured, not guessed (`tests/precompute_sparse_set.rs`,
+/// `tests/precompute_bake_time.rs`): 341 tiles, ~52 MB resident, 236 ms to bake
+/// single-threaded — ~0.7 s worst case on wasm's main thread, inside a scene-open
+/// budget. Depth 4 nodes are 1 km across, so the fallback is a 1 km tile rather
+/// than a 16 km blur.
+const COARSE_N: u8 = 4;
+
+/// Frames the budget fit holds a `pixel_error` rung before it may move again. A rung
+/// change re-selects the whole cover, so it must be occasional, not a per-frame
+/// reaction to the camera drifting across the budget threshold. ~1 s at 120 FPS.
+const FIT_DWELL_FRAMES: u16 = 120;
 
 /// The LOD tile entities currently spawned for a terrain, keyed by quadtree node.
 /// `mode` is the shader the live tiles were built with (a mode change swaps their
@@ -232,6 +311,18 @@ pub struct LodTiles {
     /// base) so steady state costs ~1-2 walks and quality still recovers, a
     /// rung per selection, when the load drops. `None` = never fitted.
     last_fit_px: Option<f64>,
+    /// Frames left before the budget fit may move `pixel_error` again (see the fit).
+    fit_dwell: u16,
+    /// Whether the always-resident coarse base (`COARSE_N`) is fully baked.
+    ///
+    /// Load-bearing for correctness, not just speed: while this is false the idle
+    /// fast path MUST NOT skip the frame body. The gate gives up when nothing is
+    /// in flight and the camera has not moved — but "nothing in flight" also
+    /// happens the frame the last queued bakes land, and with a still camera the
+    /// remaining coarse tiles would then never be queued again. The base would sit
+    /// permanently incomplete and the fallback it exists to provide would silently
+    /// not be there. Also lets the enumeration be skipped once complete.
+    coarse_ready: bool,
     /// Last selection's cover — the LOD **hysteresis** memory
     /// ([`lunco_terrain_core::REFINE_HYSTERESIS`]). A node already refined last frame
     /// keeps its children until the camera backs out past `1.15 ×` its refine range,
@@ -265,6 +356,7 @@ impl LodTiles {
     /// Called by the live re-bake instead of despawning the whole tile set.
     pub fn invalidate(&mut self) {
         self.gen = self.gen.wrapping_add(1);
+        self.coarse_ready = false;
     }
 
     /// Invalidate only the tiles whose world footprint overlaps `bounds`
@@ -287,6 +379,7 @@ impl LodTiles {
             }
         }
         self.gen = new_gen;
+        self.coarse_ready = false;
     }
 
     /// Remove (and return for despawn) every tile already stale from a PRIOR
@@ -762,8 +855,14 @@ pub struct StreamScratch {
     swaps: Vec<(Entity, u32, f32)>,
     done: Vec<(QuadCoord, u32, BakedTile)>,
     keyed: Vec<(u8, u8, f64, Selected)>,
-    missing: Vec<Square>,
     wanted: HashSet<QuadCoord>,
+    /// The DRAW partition: exactly one tile per covered area — a ready wanted node,
+    /// or the deepest ready ancestor standing in for one that is not.
+    draw: HashSet<QuadCoord>,
+    /// The always-resident coarse base (`COARSE_N`), as bake targets.
+    coarse: Vec<Selected>,
+    /// Scratch for the disjointness pass over `draw`.
+    drop_covered: Vec<QuadCoord>,
 }
 
 /// Freeze this terrain's LOD selection once its tiles are up: authored
@@ -827,7 +926,8 @@ pub fn update_lod_tiles(
     let overlay = overlay_params.uniforms();
     *stream_status = TerrainStreamStatus::default();
     // Split-borrow the per-frame scratch buffers (see [`StreamScratch`]).
-    let StreamScratch { swaps, done, keyed, missing, wanted } = &mut *scratch;
+    let StreamScratch { swaps, done, keyed, wanted, draw, coarse, drop_covered } =
+        &mut *scratch;
     let enable_shaders = settings.as_ref().map(|s| s.enable_shaders).unwrap_or(true);
     // The ACTIVE 3D camera is the focus — the one being rendered, hence the one
     // whose view has to be baked.
@@ -951,7 +1051,7 @@ pub fn update_lod_tiles(
                 sig.write_u64(q(lb.z as f64));
             }
             let sig = sig.finish();
-            if pending.0.is_empty() && tiles.last_sig == Some(sig) {
+            if pending.0.is_empty() && tiles.last_sig == Some(sig) && tiles.coarse_ready {
                 // Idle: resident tiles already match. Contribute this terrain's
                 // resident count so the status bar still reads "done", not "0/0".
                 stream_status.wanted += tiles.tiles.len();
@@ -1051,24 +1151,53 @@ pub fn update_lod_tiles(
                 morph_end: f64::INFINITY,
             }];
             tiles.last_fit_px = Some(base_px);
-        } else if sel.len() > budget {
-            // Over budget → coarsen until it fits.
+        } else {
+        // A `pixel_error` change re-derives every refine distance, so the WHOLE cover is
+        // re-selected in one frame — measured on moonbase as `wanted` alternating
+        // 349 ↔ 532 EVERY FRAME, i.e. hundreds of tiles re-picked per frame forever. With
+        // unrefinement that reads as detail dipping coarse and snapping back: the jitter.
+        //
+        // It oscillated because the two thresholds overlapped: coarsen above 100% of
+        // budget, refine below 85%, and ACCEPT a refined rung right up to 100%. One rung is
+        // ~1.5x the tile count of the next, so refining from 68% landed at ~104%, which
+        // coarsened straight back under 85%, which refined again. No fixed point exists.
+        //
+        // Two changes make it settle:
+        //   * a refined rung must land inside the same 85% band the coarsen path exits at,
+        //     so the thresholds form a real hysteresis band instead of overlapping;
+        //   * after any change the rung is HELD for a dwell, so a camera drifting across a
+        //     threshold cannot re-cut the cover every frame. Large overshoot (>150%) skips
+        //     the dwell, so frame rate is never hostage to the damping.
+        tiles.fit_dwell = tiles.fit_dwell.saturating_sub(1);
+        if sel.len() > budget && (tiles.fit_dwell == 0 || sel.len() > budget * 3 / 2) {
+            tiles.fit_dwell = FIT_DWELL_FRAMES;
             while sel.len() > budget && pixel_error < 32.0 {
                 pixel_error = (pixel_error * 1.6).min(32.0);
                 qt = quadtree_for(pixel_error);
                 sel = qt.select_with_error(focus, eye_height, &node_error, &prev_sel);
             }
-        } else if pixel_error > base_px && sel.len() * 100 < budget * 85 {
-            // Comfortably under budget → try ONE refine step back toward the
-            // configured quality; keep it only if it still fits.
+        } else if tiles.fit_dwell == 0 && pixel_error > base_px && sel.len() * 100 < budget * 85
+        {
             let finer = (pixel_error / 1.6).max(base_px);
             let qt_finer = quadtree_for(finer);
             let sel_finer = qt_finer.select_with_error(focus, eye_height, &node_error, &prev_sel);
-            if sel_finer.len() <= budget {
+            if sel_finer.len() * 100 <= budget * 85 {
+                tiles.fit_dwell = FIT_DWELL_FRAMES;
                 pixel_error = finer;
                 qt = qt_finer;
                 sel = sel_finer;
             }
+        }
+        }
+        if tiles.last_fit_px.is_some_and(|p| p != pixel_error) {
+            debug!(
+                target: "terrain_stream",
+                px = pixel_error,
+                was = tiles.last_fit_px.unwrap_or(f64::NAN),
+                tiles = sel.len(),
+                budget,
+                "terrain LOD rung changed (whole cover re-selected)"
+            );
         }
         tiles.last_fit_px = Some(pixel_error);
         // Ground under dynamic bodies is ALWAYS drawn at max depth — the
@@ -1111,7 +1240,12 @@ pub fn update_lod_tiles(
         //
         // The reveal morph settles children onto the parent lattice, so the
         // out-of-depth-order coarse→fine handoff never pops.
-        const CARPET_DEPTH: u8 = 2;
+        // NOTE: the old `CARPET_DEPTH` two-tier key is gone. It bucketed depth <= 2 ahead of
+        // everything else to bake a "carpet" first — but the selection is a REPLACE cover and
+        // a site DEM never selects depths 0-2, so the branch never fired and no carpet ever
+        // existed (that absence is what made the terrain go black). The coarse base now does
+        // that job properly: it is enumerated, not selected, and queued ahead of `sel`. So
+        // this sort only has to order the SELECTION, by screen-space benefit.
         let dist2 = |s: &Selected| -> f64 {
             (s.region.center[0] - focus[0]).powi(2) + (s.region.center[1] - focus[1]).powi(2)
         };
@@ -1142,16 +1276,9 @@ pub fn update_lod_tiles(
         // Decorate-sort-undecorate: `dist2`/`benefit` pay a sqrt/dot per call and
         // the comparator re-ran them on BOTH sides of every comparison
         // (O(n log n) evaluations) — compute each tile's key once, sort on the
-        // cached key. Carpet keys order by (0, depth, dist²); benefit keys by
-        // (1, 0, benefit) — the same total order the comparator produced.
+        // cached key.
         keyed.clear();
-        keyed.extend(sel.drain(..).map(|s| {
-            if s.coord.depth <= CARPET_DEPTH {
-                (0, s.coord.depth, dist2(&s), s)
-            } else {
-                (1, 0, benefit(&s), s)
-            }
-        }));
+        keyed.extend(sel.drain(..).map(|s| (0u8, 0u8, benefit(&s), s)));
         keyed.sort_by(|a, b| {
             (a.0, a.1)
                 .cmp(&(b.0, b.1))
@@ -1210,7 +1337,7 @@ pub fn update_lod_tiles(
             // Replace any stale slot at this coord, despawning the tile it held.
             if let Some(old) = tiles.tiles.insert(
                 coord,
-                TileSlot { entity: ent, gen: cur_gen, morph_end: baked.morph_end },
+                TileSlot { entity: ent, gen: cur_gen, morph_end: baked.morph_end, drawn: true },
             ) {
                 commands.entity(old.entity).try_despawn();
             }
@@ -1222,7 +1349,35 @@ pub fn update_lod_tiles(
         // to their OWN big_space `CellCoord` (vertices baked relative to the tile
         // centre) so far-from-origin tiles keep f32 precision.
         let pool = AsyncComputeTaskPool::get();
-        for s in &sel {
+        // The always-resident coarse base (`COARSE_N`), queued BEFORE the selection so it
+        // lands first: the terrain is then complete-but-blurry within the first frames
+        // instead of absent, and every later refinement has a fallback to unrefine to.
+        //
+        // It is the whole DEM footprint at depths 0..=COARSE_N — a fixed set per terrain,
+        // independent of the camera — so it is enumerated rather than selected. Cheap:
+        // 341 tiles, ~236 ms serial, and after the first session they are cache hits.
+        // Baking runs through the same budgeted async path as everything else, so it
+        // spreads across frames and never stalls one (wasm has no worker threads, so
+        // "async" there means "a few per frame on the main thread" — still fine at
+        // 0.69 ms/tile).
+        coarse.clear();
+        let mut coarse_stack =
+            if tiles.coarse_ready { Vec::new() } else { vec![QuadCoord::ROOT] };
+        while let Some(c) = coarse_stack.pop() {
+            coarse.push(Selected {
+                coord: c,
+                region: qt.region(c),
+                // A coarse-base tile is a stand-in, not a member of the selected cover:
+                // it must not morph toward a parent of its own. The non-finite sentinel
+                // maps to the shader's no-morph bucket.
+                morph_start: f64::INFINITY,
+                morph_end: f64::INFINITY,
+            });
+            if c.depth < COARSE_N {
+                coarse_stack.extend_from_slice(&c.children());
+            }
+        }
+        for s in coarse.iter().chain(sel.iter()) {
             // Skip coords already satisfied at the current generation (resident tile
             // or in-flight current-gen bake). Stale tiles fall through → re-baked.
             let have_pending = pending.0.get(&s.coord).is_some_and(|(g, _)| *g == cur_gen);
@@ -1246,7 +1401,7 @@ pub fn update_lod_tiles(
                 }
                 if let Some(old) = tiles
                     .tiles
-                    .insert(s.coord, TileSlot { entity: ent, gen: cur_gen, morph_end })
+                    .insert(s.coord, TileSlot { entity: ent, gen: cur_gen, morph_end, drawn: true })
                 {
                     commands.entity(old.entity).try_despawn();
                 }
@@ -1309,31 +1464,79 @@ pub fn update_lod_tiles(
             pending.0.insert(s.coord, (cur_gen, task));
         }
 
-        // Despawn no-longer-wanted (or stale, replaced) tiles, but KEEP one while it
-        // still covers a wanted region that has no fresh tile yet — otherwise the
-        // despawn opens a hole showing black sky ("black squares"). This is also what
-        // makes a live re-bake progressive: on a generation bump every tile goes
-        // stale at once, all keep covering the surface, and each is reaped only when
-        // its current-gen replacement bakes in (near-camera-first).
-        missing.clear();
-        missing.extend(sel.iter().filter(|s| !fresh_tile(&tiles, &s.coord)).map(|s| s.region));
+        // The base is complete once every enumerated coarse node is resident at this
+        // generation. Latching it stops the per-frame enumeration AND re-arms the idle
+        // fast path (which is held off until then — see `LodTiles::coarse_ready`).
+        if !tiles.coarse_ready && !coarse.is_empty() {
+            tiles.coarse_ready = coarse.iter().all(|s| fresh_tile(&tiles, &s.coord));
+        }
+
+        // ── Unrefinement: draw the best READY data, never a hole ─────────────
+        // Cesium's `ForbidHoles`: "unrefine back to a parent tile when a child isn't done
+        // loading… never rendered with holes, though the tile rendered instead may have low
+        // resolution". MSFS states the same rule as "draw tiles using the best currently
+        // available data ● tiles can use data from a parent". Both draw the parent INSTEAD
+        // of its children — never underneath them, which would punch a coarse shell through
+        // the fine surface wherever the terrain is concave.
+        //
+        // So: each selected node draws itself if ready, else its deepest ready ancestor.
+        // The coarse base guarantees that walk terminates, which is what the old design
+        // lacked — it could only hold a trailing tile that happened to overlap, so panning
+        // somewhere new had nothing to fall back to and showed clear colour.
+        build_draw_partition(
+            sel.iter().map(|s| s.coord),
+            |c| fresh_tile(&tiles, &c),
+            draw,
+            drop_covered,
+        );
+
+        // Retain + visibility. The coarse base is never despawned; everything else lives
+        // while it is wanted or actively drawn as a stand-in.
         tiles.tiles.retain(|coord, slot| {
-            // Keep ANY tile whose coord is still wanted — O(1). A fresh one is final;
-            // a stale one covers the surface until its same-coord replacement bakes in
-            // (the spawn paths despawn the slot they replace). This O(1) keep is what
-            // stops a full-generation invalidation from going O(stale × missing).
-            if wanted.contains(coord) {
-                return true;
-            }
-            // Not wanted (camera moved off it): hold only while it plugs a not-yet-
-            // baked hole. This overlap runs ONLY for the small trailing-edge set.
-            let region = qt.region(*coord);
-            let covers_hole = missing.iter().any(|m| squares_overlap(region, *m));
-            if !covers_hole {
+            let keep = coord.depth <= COARSE_N || wanted.contains(coord) || draw.contains(coord);
+            if !keep {
                 commands.entity(slot.entity).try_despawn();
+                return false;
             }
-            covers_hole
+            let vis = draw.contains(coord);
+            if slot.drawn != vis {
+                slot.drawn = vis;
+                commands
+                    .entity(slot.entity)
+                    .try_insert(if vis { Visibility::Inherited } else { Visibility::Hidden });
+            }
+            true
         });
+
+        // How many selected areas have NO cover at all — the metric that must stay 0.
+        // Non-zero means something rendered as clear colour, and it can only happen
+        // before the coarse base has finished baking.
+        let uncovered = sel
+            .iter()
+            .filter(|s| {
+                let mut c = s.coord;
+                loop {
+                    if draw.contains(&c) {
+                        return false;
+                    }
+                    match c.parent() {
+                        Some(p) => c = p,
+                        None => return true,
+                    }
+                }
+            })
+            .count();
+        if uncovered > 0 {
+            debug!(
+                target: "terrain_stream",
+                uncovered,
+                wanted = wanted.len(),
+                drawn = draw.len(),
+                resident = tiles.tiles.len(),
+                backlog = pending.0.len(),
+                "terrain has uncovered area (coarse base still baking?)"
+            );
+        }
 
         // Streaming progress for the UI indicator (accumulated across terrains).
         stream_status.wanted += wanted.len();
@@ -1357,12 +1560,6 @@ pub fn update_lod_tiles(
             mesh_cache.0.retain(|(e, c), _| *e != terrain || resident.contains(c));
         }
     }
-}
-
-/// AABB overlap of two axis-aligned [`Square`] regions (XZ).
-fn squares_overlap(a: Square, b: Square) -> bool {
-    (a.center[0] - b.center[0]).abs() < a.half + b.half
-        && (a.center[1] - b.center[1]).abs() < a.half + b.half
 }
 
 /// Reap LOD tiles whose owning terrain no longer exists (or no longer streams) —
@@ -1446,6 +1643,106 @@ pub(crate) fn bind_shadow_cache_to_tiles(
         for entity in tiles.tile_entities() {
             if let Ok(mut look) = looks.get_mut(entity) {
                 apply_shadow_cache_to_look(&mut look, cache);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod draw_partition_tests {
+    use super::*;
+
+    fn c(depth: u8, x: u32, z: u32) -> QuadCoord {
+        QuadCoord { depth, x, z }
+    }
+
+    /// Every selected area must end up covered by exactly ONE drawn node — itself or an
+    /// ancestor. This is the invariant whose absence rendered as black terrain.
+    fn assert_covered_exactly_once(sel: &[QuadCoord], draw: &HashSet<QuadCoord>) {
+        for s in sel {
+            let mut covers = 0;
+            let mut cur = Some(*s);
+            while let Some(n) = cur {
+                if draw.contains(&n) {
+                    covers += 1;
+                }
+                cur = n.parent();
+            }
+            assert_eq!(covers, 1, "{s:?} covered {covers}× (want exactly 1); draw={draw:?}");
+        }
+    }
+
+    #[test]
+    fn all_ready_draws_the_leaves_themselves() {
+        let sel = c(1, 0, 0).children().to_vec();
+        let (mut draw, mut scratch) = (HashSet::new(), Vec::new());
+        build_draw_partition(sel.iter().copied(), |_| true, &mut draw, &mut scratch);
+        assert_eq!(draw.len(), 4);
+        assert_covered_exactly_once(&sel, &draw);
+    }
+
+    #[test]
+    fn unready_leaf_falls_back_to_its_ready_ancestor() {
+        // Nothing fine is ready; only the root is. Every leaf must fall back to it, and the
+        // root must be drawn ONCE — not once per leaf.
+        let sel = c(1, 0, 0).children().to_vec();
+        let (mut draw, mut scratch) = (HashSet::new(), Vec::new());
+        build_draw_partition(sel.iter().copied(), |n| n.depth == 0, &mut draw, &mut scratch);
+        assert_eq!(draw.len(), 1, "one ancestor stands in for the whole subtree");
+        assert!(draw.contains(&QuadCoord::ROOT));
+        assert_covered_exactly_once(&sel, &draw);
+    }
+
+    #[test]
+    fn ready_sibling_is_dropped_when_an_ancestor_stands_in() {
+        // THE overlap case: one child ready, its sibling not. The parent must stand in for
+        // the quad, and the ready child must NOT also draw — drawing both is the coarse
+        // surface punching through the fine one (z-fighting), which is why ForbidHoles
+        // unrefines instead of underlaying.
+        let kids = c(1, 0, 0).children();
+        let ready = kids[0];
+        let sel = kids.to_vec();
+        let (mut draw, mut scratch) = (HashSet::new(), Vec::new());
+        build_draw_partition(
+            sel.iter().copied(),
+            |n| n.depth == 0 || n == ready,
+            &mut draw,
+            &mut scratch,
+        );
+        assert!(draw.contains(&QuadCoord::ROOT));
+        assert!(!draw.contains(&ready), "ready child must not draw under a drawn ancestor");
+        assert_covered_exactly_once(&sel, &draw);
+    }
+
+    #[test]
+    fn nothing_ready_leaves_the_area_uncovered_rather_than_wrong() {
+        // Before the coarse base lands there is genuinely nothing to draw. It must degrade
+        // to "no tile" — never to a bogus one — and must not panic walking off the root.
+        let sel = vec![c(3, 5, 2)];
+        let (mut draw, mut scratch) = (HashSet::new(), Vec::new());
+        build_draw_partition(sel.iter().copied(), |_| false, &mut draw, &mut scratch);
+        assert!(draw.is_empty());
+    }
+
+    #[test]
+    fn mixed_depths_stay_disjoint() {
+        // A realistic cover: deep near-field, shallower further out, one deep node unready.
+        let deep = c(3, 0, 0);
+        let sel = vec![deep, c(3, 1, 0), c(2, 1, 0), c(2, 0, 1)];
+        let (mut draw, mut scratch) = (HashSet::new(), Vec::new());
+        build_draw_partition(
+            sel.iter().copied(),
+            |n| n != deep && n.depth >= 1,
+            &mut draw,
+            &mut scratch,
+        );
+        assert_covered_exactly_once(&sel, &draw);
+        // Disjointness: no drawn node may be an ancestor of another drawn node.
+        for a in draw.iter() {
+            let mut p = a.parent();
+            while let Some(n) = p {
+                assert!(!draw.contains(&n), "{a:?} drawn under drawn ancestor {n:?}");
+                p = n.parent();
             }
         }
     }

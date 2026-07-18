@@ -19,6 +19,21 @@ use bevy::prelude::*;
 #[derive(Component, Reflect, Debug, Clone, Copy)]
 #[reflect(Component)]
 pub struct TerrainGeoref {
+    /// NAIF id of the body this terrain sits on (301 Moon, 399 Earth) —
+    /// `lunco:anchor:body`, defaulting to [`DEFAULT_ANCHOR_BODY`].
+    ///
+    /// This is what makes the terrain's own curvature a property of the TERRAIN
+    /// rather than of ECS iteration order. The body's radius is folded into the
+    /// surface oracle as the final `BodyCurvature` modifier, so it is not
+    /// metadata — it changes the composed geometry AND the `content_key` every
+    /// downstream cache keys on. It was previously resolved by picking whatever
+    /// `SiteAnchor` a `q_site.iter().next()` returned first, i.e. by archetype
+    /// order: a scene carrying a second anchor (a ground station authors body
+    /// 399) could adopt Earth's 6371 km radius for a lunar DEM, and *which* one
+    /// won varied per launch with async USD load order. That is the "terrain is
+    /// different every launch" bug — generation must be a pure function of the
+    /// document, never of load order.
+    pub body: i32,
     /// Latitude (degrees) of the DEM frame origin (local XZ 0,0).
     pub center_lat_deg: f64,
     /// Longitude (degrees) of the DEM frame origin.
@@ -30,9 +45,15 @@ pub struct TerrainGeoref {
     pub meters_per_unit: f64,
 }
 
+/// Body a terrain anchors to when the scene does not author `lunco:anchor:body`.
+/// Matches the celestial bridge's own default (Moon) — the two MUST agree, or an
+/// unauthored scene curves to one body and pins its site frame to another.
+pub const DEFAULT_ANCHOR_BODY: i32 = 301;
+
 impl Default for TerrainGeoref {
     fn default() -> Self {
         Self {
+            body: DEFAULT_ANCHOR_BODY,
             center_lat_deg: 0.0,
             center_lon_deg: 0.0,
             anchor_height_m: 0.0,

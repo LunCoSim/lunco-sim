@@ -778,8 +778,12 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // Horizon-map terrain self-shadowing (consumed by
         // `lunco-environment`'s horizon system). Authors opt a terrain prim
         // in with `custom bool lunco:terrain:horizonShadows = true`; the
-        // bake grid is tunable via `int lunco:terrain:horizonMapResolution`
-        // and `int lunco:terrain:horizonMapAzimuths`.
+        // bake grid is tunable via `int lunco:terrain:horizonMapResolution`.
+        //
+        // `lunco:terrain:horizonMapAzimuths` is deliberately NOT read: the
+        // shadow path ray-marches a heightfield and has no azimuth slices.
+        // It was parsed into a field nothing ever read — see
+        // `lunco_core::HorizonShadowTerrain`.
         if light::get_attribute_as_bool(reader, &sdf_path, "lunco:terrain:horizonShadows")
             .unwrap_or(false)
         {
@@ -788,11 +792,6 @@ fn instantiate_usd_prim_read<R: UsdRead>(
                 get_attribute_as_f32(reader, &sdf_path, "lunco:terrain:horizonMapResolution")
             {
                 cfg.resolution = (r as u32).clamp(64, 4096);
-            }
-            if let Some(a) =
-                get_attribute_as_f32(reader, &sdf_path, "lunco:terrain:horizonMapAzimuths")
-            {
-                cfg.azimuths = (a as u32).clamp(4, 64);
             }
             commands.entity(entity).try_insert(cfg);
         }
