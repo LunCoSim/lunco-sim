@@ -927,18 +927,21 @@ pub struct DocumentRegistry<D: lunco_doc::Document> {
     pending_opened: Vec<DocumentId>,
     pending_changes: Vec<DocumentId>,
     pending_closed: Vec<DocumentId>,
-    /// Per-document disk watermark: the file's modification time the last time
-    /// we read its bytes (open or reload). [`stale_docs`](Self::stale_docs)
-    /// compares this against the file's current mtime to spot a change made on
-    /// disk *behind the app's back* — a git pull, an external editor, another
-    /// tool. Only file-backed documents get an entry.
+    /// Per-document disk watermarks: for each file this document depends on, the
+    /// modification time when we last read or wrote it.
+    /// [`stale_docs`](Self::stale_docs) compares against current mtimes to spot a
+    /// change made *behind the app's back* — a git pull, an external editor.
     ///
-    /// Detection is deliberately split from policy: this notices the change, the
-    /// caller decides. Per the collaboration doc, an external change while a sim
-    /// is running must **badge, never auto-reload** — a silent reload would
-    /// restart the world. Works for every `D` by construction, so a doc type
-    /// added later inherits staleness detection for free.
-    watermarks: HashMap<DocumentId, std::time::SystemTime>,
+    /// A document's own file is just one entry; [`watch_files`](Self::watch_files)
+    /// lets a domain add the rest of its dependency closure (a USD scene's
+    /// referenced layers, a DEM). The registry stays domain-agnostic — it never
+    /// computes a closure, it only watches what it is handed — so every document
+    /// type inherits the mechanism.
+    ///
+    /// Detection is deliberately split from policy: this notices, the caller
+    /// decides. Per the collaboration doc, an external change while a sim runs
+    /// must **badge, never auto-reload** — a silent reload restarts the world.
+    watermarks: HashMap<DocumentId, HashMap<std::path::PathBuf, std::time::SystemTime>>,
 }
 
 impl<D: lunco_doc::Document> Default for DocumentRegistry<D> {
@@ -1179,11 +1182,6 @@ where
     ) -> (DocumentId, lunco_doc::OpenOutcome) {
         use lunco_doc::OpenOutcome;
         let path = path.into();
-        // The file's mtime as of this read, stamped as the watermark on any
-        // outcome that actually takes the disk bytes (Allocated / Refreshed).
-        // `None` if the path can't be stat'd — then we simply don't watch it,
-        // rather than record a bogus baseline.
-        let disk_mtime = file_mtime(&path);
         let Some(id) = self.doc_for_file(&path) else {
             // Straight to `install`: this is the ONE authorized way to mint a
             // file-backed document, and it earns that by having just proved the
@@ -1191,9 +1189,10 @@ where
             let id = self.install(|id| {
                 D::with_origin(id, source, lunco_doc::DocumentOrigin::writable_file(path))
             });
-            if let Some(m) = disk_mtime {
-                self.watermarks.insert(id, m);
-            }
+            // Baseline the watermark off the origin we just wrote — one stamping
+            // path for open, reload, and save. The domain adds its dependency
+            // closure with its own `watch_files` call once it has parsed.
+            self.watch_files(id, []);
             return (id, OpenOutcome::Allocated);
         };
         let Some(host) = self.hosts.get_mut(&id) else {
@@ -1208,35 +1207,63 @@ where
         if !host.document_mut().reload_base(&source) {
             return (id, OpenOutcome::KeptUnparsable);
         }
-        // Fresh disk content landed — advance the watermark to match.
-        if let Some(m) = disk_mtime {
-            self.watermarks.insert(id, m);
-        }
+        // Fresh disk content landed — re-baseline. Drops any previously-watched
+        // dependency: the new content's closure may differ, and the domain
+        // re-registers it after parsing.
+        self.watch_files(id, []);
         // The content moved — same ring the mutating ops feed, so views rebuild
         // off an open exactly as they would off an edit.
         self.pending_changes.push(id);
         (id, OpenOutcome::Refreshed)
     }
 
-    /// Re-stamp `id`'s disk watermark to the file's current mtime. Call after a
-    /// successful **save**: the bytes on disk are now ours, so a later
-    /// [`stale_docs`](Self::stale_docs) must not flag our own write as an
-    /// external change. No-op for a document with no on-disk path.
-    pub fn note_saved(&mut self, id: DocumentId) {
-        if let Some(path) = self
+    /// Watch `id`'s **dependency closure** in addition to its own file: the
+    /// layers a USD scene references, a DEM it points at, anything whose change
+    /// makes the document stale.
+    ///
+    /// The registry never computes a closure — that is domain knowledge (USD
+    /// arcs, a Modelica `import`). The domain walks its own graph and hands the
+    /// paths here, which is what keeps this mechanism usable by every document
+    /// type. Call it after each open/reload, since the closure moves with the
+    /// content.
+    ///
+    /// Replaces the watched set (own file always included), so a reference the
+    /// user deleted stops being watched instead of pinning a phantom dependency.
+    pub fn watch_files(
+        &mut self,
+        id: DocumentId,
+        deps: impl IntoIterator<Item = std::path::PathBuf>,
+    ) {
+        let own = self
             .hosts
             .get(&id)
-            .and_then(|h| h.document().origin().canonical_path().map(std::path::Path::to_path_buf))
-        {
-            if let Some(m) = file_mtime(&path) {
-                self.watermarks.insert(id, m);
-            }
-        }
+            .and_then(|h| h.document().origin().canonical_path().map(std::path::Path::to_path_buf));
+        let stamped = own
+            .into_iter()
+            .chain(deps)
+            .filter_map(|p| file_mtime(&p).map(|m| (p, m)))
+            .collect();
+        self.watermarks.insert(id, stamped);
     }
 
-    /// File-backed documents whose file changed on disk since we last read or
-    /// wrote it — a git pull, an external editor, another tool. Compares each
-    /// watermark against the file's current mtime.
+    /// Re-stamp every file `id` watches to its current mtime. Call after a
+    /// successful **save**: those bytes are now ours, so a later
+    /// [`stale_docs`](Self::stale_docs) must not flag our own write as an
+    /// external change.
+    pub fn note_saved(&mut self, id: DocumentId) {
+        let Some(watched) = self.watermarks.get(&id) else {
+            return;
+        };
+        let restamped = watched
+            .keys()
+            .filter_map(|p| file_mtime(p).map(|m| (p.clone(), m)))
+            .collect();
+        self.watermarks.insert(id, restamped);
+    }
+
+    /// Documents with a dependency that changed on disk since we last read or
+    /// wrote it — a git pull, an external editor, another tool. A document is
+    /// stale if **any** file it watches moved, its own or a referenced one.
     ///
     /// Detection only: the caller decides what to do. Per the collaboration
     /// doc, surface it (badge / status line) and **never auto-reload** while a
@@ -1246,12 +1273,10 @@ where
     pub fn stale_docs(&self) -> Vec<DocumentId> {
         self.watermarks
             .iter()
-            .filter(|(id, &watermark)| {
-                self.hosts
-                    .get(id)
-                    .and_then(|h| h.document().origin().canonical_path())
-                    .and_then(file_mtime)
-                    .is_some_and(|current| current > watermark)
+            .filter(|(_, watched)| {
+                watched
+                    .iter()
+                    .any(|(path, mark)| file_mtime(path).is_some_and(|now| now > *mark))
             })
             .map(|(id, _)| *id)
             .collect()

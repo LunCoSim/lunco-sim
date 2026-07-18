@@ -55,6 +55,9 @@ anyhow = { workspace = true }
 ab_glyph = "0.2"
 lunco-assets = { workspace = true }
 
+[dev-dependencies]
+tempfile = { workspace = true }
+
 
 [lints]
 workspace = true

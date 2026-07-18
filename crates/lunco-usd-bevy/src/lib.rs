@@ -49,6 +49,7 @@ use openusd::sdf::Value;
 
 mod resolver;
 mod compose;
+pub mod closure;
 mod light;
 pub mod dome;
 mod camera;

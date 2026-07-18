@@ -7288,9 +7288,9 @@ dependencies = [
  "lunco-storage",
  "lunco-twin",
  "lunco-twin-journal",
+ "lunco-usd-bevy",
  "lunco-workbench",
  "lunco-workspace",
- "openusd",
  "rustls-pemfile",
  "serde",
  "serde_json",
@@ -7822,6 +7822,7 @@ dependencies = [
  "lunco-render",
  "lunco-time",
  "openusd",
+ "tempfile",
  "wgpu-types",
 ]
 

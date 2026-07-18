@@ -66,7 +66,8 @@ pub(crate) async fn fetch_layer_closure(
         // (driven by `flatten_stage`) so an arc authored inside a referenced
         // `.usda` wrapper anchors on its COMPOSED prim.
         let anchor = ResolvedPath::new(&id);
-        for child_asset in discover_arcs(&data) {
+        for child_asset in crate::closure::discover_arcs(&data, crate::closure::ArcFilter::LayersOnly)
+        {
             let child_id = canonicalize(&child_asset, Some(&anchor));
             if bytes.contains_key(&child_id) {
                 continue;
@@ -116,40 +117,6 @@ pub(crate) fn build_stage_with_resolver(recipe: &StageRecipe) -> Result<(Stage, 
     Ok((stage, shared))
 }
 
-/// Walk a parsed layer's specs and collect the non-binary `.usda`
-/// references/payloads/sublayers to pre-fetch. Binary-asset arcs (glTF/…) are
-/// skipped here — they are not USD layers to fetch; their `lunco:resolvedAsset`
-/// URI is synthesized post-composition by [`discover_binary_sites`]. Iterating
-/// ALL specs (not just the live prim tree) catches references authored inside
-/// variant blocks (stored at decorated paths).
-fn discover_arcs(data: &sdf::Data) -> Vec<String> {
-    let mut fetch = Vec::new();
-
-    if let Some(root) = data.spec(&SdfPath::abs_root()) {
-        if let Some(Value::StringVec(subs)) = root.get("subLayers") {
-            fetch.extend(subs.iter().filter(|s| !s.is_empty()).cloned());
-        }
-    }
-
-    for (_path, spec) in data.iter() {
-        let mut arcs: Vec<String> = Vec::new();
-        if let Some(Value::ReferenceListOp(op)) = spec.get("references") {
-            arcs.extend(op.iter().filter(|r| !r.asset_path.is_empty()).map(|r| r.asset_path.clone()));
-        }
-        match spec.get("payload") {
-            Some(Value::Payload(p)) if !p.asset_path.is_empty() => arcs.push(p.asset_path.clone()),
-            Some(Value::PayloadListOp(op)) => {
-                arcs.extend(op.iter().filter(|p| !p.asset_path.is_empty()).map(|p| p.asset_path.clone()))
-            }
-            _ => {}
-        }
-        // Binary arcs (`.glb`/`.gltf`/…) are not fetchable USD layers — the
-        // resolver stubs them during composition; skip them from the fetch set.
-        fetch.extend(arcs.into_iter().filter(|ap| !is_binary_asset(ap)));
-    }
-
-    fetch
-}
 
 /// Discover every binary-asset arc (glTF/OBJ/STL, per [`is_binary_asset`])
 /// authored across the composed stage's loaded layers, keyed by its authoring

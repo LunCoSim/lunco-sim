@@ -1150,11 +1150,11 @@ fn collect_scenario_input(
         Some(ds) => vec![twin.root.join(ds)],
         None => by_abs
             .keys()
-            .filter(|p| crate::usd_closure::is_usd_layer(p))
+            .filter(|p| lunco_usd_bevy::closure::is_usd_layer(p))
             .cloned()
             .collect(),
     };
-    for f in crate::usd_closure::reference_closure(&roots) {
+    for f in lunco_usd_bevy::closure::reference_closure(&roots) {
         if f.starts_with(&twin.root) {
             continue; // in-tree — already enumerated by the folder walk
         }

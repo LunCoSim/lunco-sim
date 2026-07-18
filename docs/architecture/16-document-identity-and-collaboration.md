@@ -307,15 +307,50 @@ sim is running must **badge, never auto-reload** — a silent reload would resta
 world. `badge_externally_changed_usd_docs` polls on a throttle, dedupes so a
 persistently-stale file nags once, and re-arms when the file re-syncs.
 
+### The dependency closure is USD domain knowledge, and lives once
+
+A document's dependencies are found by walking `subLayers` / `references` /
+`payload`. That walk had **two** implementations — the composition pre-fetch in
+`lunco-usd-bevy`, and a near-identical copy in `lunco-networking` for scenario
+manifests, whose own comment conceded it "mirrors" the first. The copy existed
+because there was no shared home, and it is why a *networking* crate depended on
+`openusd` directly.
+
+It now lives once, in `lunco_usd_bevy::closure`, with the single axis the two
+copies actually disagreed on turned into a parameter:
+
+```rust
+discover_arcs(data, ArcFilter::LayersOnly | ArcFilter::All)
+reference_closure(roots) -> BTreeSet<PathBuf>
+```
+
+`LayersOnly` for the composition pre-fetch (a `.glb` is not a layer to fetch —
+the resolver stubs it); `All` for manifests and staleness (a client must receive
+the `.glb`, and swapping a DEM must invalidate the scene pointing at it). The BFS
+*drivers* differ legitimately — async-`AssetServer` versus synchronous filesystem
+— and stay separate; only the per-layer extraction is shared.
+
+`lunco-networking` no longer talks to `openusd`. Networking is not a USD crate.
+
 ## 10a. Remaining gaps
 
-- **Only the *root* file is watched, not the reference closure.** Editing
-  `wheel.usda` referenced by `scene.usda`, or swapping a DEM, still invalidates
-  nothing. The reference-closure walker exists (`lunco_networking::usd_closure`) but
-  is `pub(crate)` there, and `lunco-usd` does not — and by layering *should* not —
-  depend on `lunco-networking`. Closing this is a **dependency-direction decision**,
-  not a quick add: either lift the walker to a crate both can see, or duplicate the
-  small closure walk into `lunco-usd`.
+- **Staleness stats the filesystem directly; USD would route it through the
+  resolver.** `ar::Resolver::get_modification_timestamp` is USD's canonical
+  staleness primitive — it is what `SdfLayer::Reload()` consults for external
+  dependencies, and per §6 the resolver is meant to be the only local/client
+  seam. Ours returns `None` **by design**: `LuncoUsdResolver` is a pure in-memory
+  byte map (the loader pre-fetches through Bevy's `AssetServer` so composition
+  never touches the filesystem, which is what makes wasm work), so it has no
+  filesystem knowledge to report a timestamp from. Routing staleness through it
+  today would therefore detect nothing.
+  Making the resolver the real seam means giving it **source provenance** —
+  which asset source each id came from and that source's version (mtime
+  natively, etag/cid on a client). That is the change that also makes staleness
+  work for a *client*, which the current filesystem stat cannot. Worth doing;
+  bigger than a bolt-on, and a change to both resolver and loader.
+  Note the layering constraint: `lunco-doc-bevy`'s watermark serves `.mo`,
+  `.rhai`, and `.usda` alike and must never call a USD resolver. The generic
+  registry watches paths it is *handed*; the domain decides what they are.
 - **The fork has no `find_or_open`** (a declared TODO in `sdf::LayerRegistry`,
   which today holds only a resolver and no layer cache). §5 is blocked on it.
   When that cache lands it **must** ship with `get_modification_timestamp`

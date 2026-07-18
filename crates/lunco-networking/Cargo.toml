@@ -17,7 +17,7 @@ required-features = ["networking"]
 default = []
 # Turns the crate from a no-op facade into the real lightyear WebTransport
 # adapter. Gated per D7 (substrate is always-on; only the wire is optional).
-networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode", "dep:interprocess", "dep:uuid", "dep:sha2", "dep:lunco-hash", "dep:crossbeam-channel", "dep:lunco-twin", "dep:lunco-twin-journal", "dep:lunco-hooks", "dep:lunco-hooks-rhai", "dep:openusd"]
+networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode", "dep:interprocess", "dep:uuid", "dep:sha2", "dep:lunco-hash", "dep:crossbeam-channel", "dep:lunco-twin", "dep:lunco-twin-journal", "dep:lunco-hooks", "dep:lunco-hooks-rhai", "dep:lunco-usd-bevy"]
 # Client-prediction diagnostics (render-jitter / velocity / correction census in
 # `diagnostics.rs`). OFF by default → not compiled into normal/shipping builds.
 # Build with it when chasing netcode jitter; once compiled it's active unless
@@ -88,12 +88,16 @@ lunco-hooks-rhai = { path = "../lunco-hooks-rhai", optional = true }
 # Scenario asset cache root (`cache_dir()`), for the Phase-3 client-side
 # `scenarios/<id>/` download target. Native + wasm-safe path helper.
 lunco-assets = { path = "../lunco-assets" }
-# USD text parser for the host-side scenario **reference closure** (`usd_closure`):
-# a scene's rovers/components live outside its own folder (`@../../vessels/…@`),
-# so the manifest must walk the `subLayers`/`references`/`payload` graph to ship
-# them. Parser only (no Bevy) — keeps the crate headless. Already in the tree
-# (lunco-assets/usd-bevy use it), so no new transitive weight. Networking-only.
-openusd = { workspace = true, optional = true }
+# Host-side scenario **reference closure** (`lunco_usd_bevy::closure`): a scene's
+# rovers/components live outside its own folder (`@../../vessels/…@`), so the
+# manifest must walk the `subLayers`/`references`/`payload` graph to ship them.
+# This crate used to depend on `openusd` directly and carry its own copy of that
+# walk, whose comment admitted it mirrored usd-bevy's. Networking is not a USD
+# crate: the walk is USD domain knowledge and lives there once, with an
+# `ArcFilter` for the single axis the two copies disagreed on (whether binary
+# leaves survive — a manifest needs them, a composition pre-fetch does not).
+# Networking-only.
+lunco-usd-bevy = { path = "../lunco-usd-bevy", optional = true }
 # Cross-platform asset persistence: native `FileStorage` (std::fs) + wasm
 # `OpfsStorage` (OPFS). Shared (not native-only) — the web client caches assets
 # through it too. Also serves the host's TLS cert file reads on native.
