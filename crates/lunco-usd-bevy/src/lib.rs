@@ -806,7 +806,35 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         let invisible = matches!(
             reader.text(&sdf_path, "visibility").as_deref(),
             Some("invisible")
-        );
+        )
+        // `UsdGeomImageable.purpose = "guide"` — geometry that exists for authoring,
+        // not for viewing: construction axes, alignment rigs, and (the HAB-1 case)
+        // the boolean CUTTERS that define a shell's openings. Keeping them in the
+        // file is what preserves the parametric intent — a porthole stays a
+        // diameter and a position rather than becoming a hole someone has to
+        // reverse-engineer — but a guide must never render.
+        //
+        // `purpose` is INHERITED: USD resolves it from the nearest ancestor that
+        // authors it, so marking one `Xform "Cutters"` as guide hides the whole
+        // subtree. That is why this walks up rather than reading the prim alone —
+        // reading only the prim would render every child of a guide group.
+        //
+        // `proxy` and `render` are deliberately NOT handled here. They are a
+        // level-of-detail pair (a cheap stand-in vs the full-detail version), and
+        // honouring them means choosing between them per view — a policy decision
+        // that belongs with whoever adds the LOD system, not a silent default.
+        || {
+            let mut p = sdf_path.clone();
+            loop {
+                if reader.text(&p, "purpose").as_deref() == Some("guide") {
+                    break true;
+                }
+                match p.parent() {
+                    Some(parent) if parent.as_str() != "/" => p = parent,
+                    _ => break false,
+                }
+            }
+        };
 
         // Placeholder for an async-loading glTF payload. Authors set
         // `bool lunco:placeholder = true` on a Cube prim that lives as
@@ -3497,6 +3525,26 @@ fn build_usd_nurbs_patch_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<
         .scalar::<Vec<f64>>(path, "vKnots")
         .unwrap_or_else(|| crate::nurbs::default_clamped_knots(v_count, v_order));
     let weights = reader.scalar::<Vec<f64>>(path, "pointWeights").unwrap_or_default();
+
+    // Trim curves are NOT applied — the domain is tessellated whole. Warn rather
+    // than drop it silently: a trimmed patch rendered untrimmed is LARGER than
+    // authored (never smaller), so it reads as a modelling mistake rather than a
+    // reader limitation, and silence is how that misdiagnosis happens.
+    //
+    // Note the data is perfectly readable — `scalar()` is a name lookup, not
+    // schema-gated, so `trimCurve:*` reads today. What is missing is the
+    // TESSELLATION: evaluating the loops (truck already does 2D rational curves)
+    // and triangulating the trimmed domain with `spade` (vendored). Deferred
+    // deliberately: nothing authors a trim yet, and USD's own reference does not
+    // state the keep/discard winding rule — guessing it inverts every hole.
+    // See `models/habitat/OPENUSD_TRIMCURVE_SPEC.md`.
+    if reader.attr_value(path, "trimCurve:counts").is_some() {
+        bevy::log::warn_once!(
+            "[usd-bevy] {} authors `trimCurve:*`, which is not applied — the patch \
+             renders UNTRIMMED (larger than authored). See OPENUSD_TRIMCURVE_SPEC.md",
+            path.as_str()
+        );
+    }
 
     // Tessellation density. Fixed for now — this is exactly where adaptive,
     // curvature-driven refinement belongs, and where a coarse-while-dragging /

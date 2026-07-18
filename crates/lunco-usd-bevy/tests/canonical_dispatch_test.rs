@@ -68,6 +68,14 @@ def Xform "World"
         int[] curveVertexCounts = [4]
         point3f[] points = [(0, 5, 0), (2, 5, 0), (2, 5, 2), (0, 5, 2)]
     }
+    def Xform "Cutters" ( )
+    {
+        uniform token purpose = "guide"
+        def Cube "PortholeCutter"
+        {
+            double size = 0.42
+        }
+    }
     def NurbsPatch "ShellQuarter"
     {
         int uVertexCount = 3
@@ -232,6 +240,18 @@ fn recipe_asset_instantiates_off_live_canonical_stage() {
     assert!(
         app.world().get::<Mesh3d>(patch_e).is_some(),
         "a NurbsPatch must tessellate to a Mesh3d"
+    );
+
+    // (i) `purpose = "guide"` is INHERITED. The cutter Cube authors no purpose of
+    // its own — only its parent `Cutters` Xform does — so this pins the ancestor
+    // walk. Reading the prim alone would render every child of a guide group,
+    // which for HAB-1 means nine boolean cutters appearing as solid boxes
+    // floating through the shell.
+    let cutter_e =
+        entity_at(&mut app, "/World/Cutters/PortholeCutter").expect("cutter prim entity");
+    assert!(
+        app.world().get::<Mesh3d>(cutter_e).is_none(),
+        "a prim under a `purpose = \"guide\"` ancestor must not render"
     );
 }
 
