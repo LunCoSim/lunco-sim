@@ -299,9 +299,8 @@ fn process_usd_cosim_prim_read<R: UsdRead>(
     // marker is inert where prediction never runs.
     commands.entity(entity).try_insert(lunco_core::NotPredictable);
 
-    // Source files are loaded through Bevy's `AssetServer` rather
-    // than `std::fs::read_to_string`. On native this reads from the
-    // workspace `assets/` source; on wasm it issues an HTTP fetch
+    // Source files are loaded through Bevy's `AssetServer`: on native it reads
+    // from the workspace `assets/` source, on wasm it issues an HTTP fetch
     // against the same path. Either way the actual Compile dispatch
     // happens later, in `dispatch_loaded_modelica_sources` /
     // `dispatch_loaded_python_sources`, once the asset is ready.
@@ -1908,11 +1907,9 @@ pub fn spawn_scene_root_with_stage(
 ///
 /// The defaultPrim lookup is deliberately deferred rather than read
 /// here: this runs synchronously at command time, before the stage
-/// asset finishes loading, and the old `std::fs::read_to_string`
-/// shortcut silently returned `None` on wasm (no filesystem) — so every
-/// web scene load mounted the whole stage at `/` instead of the
-/// defaultPrim subtree. Reading from the parsed `TextReader` at
-/// instantiate time is correct on both native and web.
+/// asset finishes loading. It is resolved from the parsed `TextReader`
+/// at instantiate time instead — correct on both native and web, and
+/// yielding the defaultPrim subtree rather than a whole-stage `/` mount.
 ///
 /// Per USD spec, `defaultPrim` is only required for files that will be
 /// *referenced* by other USD files (composition arcs need a target
@@ -2073,8 +2070,7 @@ mod tests {
     // override wins, and an empty override yields the deferred-resolution
     // sentinel (empty string). The actual `defaultPrim` lookup is done
     // from the parsed stage in `lunco_usd_bevy::instantiate_usd_prim`
-    // (covered by `stage_default_prim` tests there) — that path is
-    // correct on wasm, where the old `std::fs` read always failed.
+    // (covered by `stage_default_prim` tests there) — correct on wasm too.
 
     #[test]
     fn resolve_root_prim_override_wins() {

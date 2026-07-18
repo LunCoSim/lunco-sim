@@ -107,9 +107,15 @@ fn apply_usd_shader_material_read<R: UsdRead>(
     let Some(shader_prim) = bound_shader_prim(reader, sdf_path) else {
         return;
     };
-    let Some(shader_path) = reader.asset(&shader_prim, "info:wgsl:sourceAsset") else {
+    let Some(raw_shader_path) = reader.asset(&shader_prim, "info:wgsl:sourceAsset") else {
         return;
     };
+    // Normalise to the engine-library-relative form (strip a `lunco://` scheme) so an
+    // authored `@lunco://shaders/x.wgsl@` and a bare `@shaders/x.wgsl@` behave
+    // identically downstream: the string comparisons below, the `@fragment` pre-check,
+    // and `engine_asset_uri` re-adding the scheme for the loader. A `twin://` custom
+    // shader is left schemed and passes through untouched.
+    let shader_path = lunco_assets::engine_asset_rel(&raw_shader_path).to_string();
 
     if !enable_shaders && (shader_path == "shaders/regolith.wgsl" || shader_path == "shaders/terrain_layered.wgsl") {
         return;
@@ -176,11 +182,14 @@ fn apply_usd_shader_material_read<R: UsdRead>(
 /// never block a shader we couldn't inspect.
 #[cfg(not(target_arch = "wasm32"))]
 fn shader_has_fragment_entry(shader_path: &str) -> bool {
-    // Match the loader's resolution: `<cwd>/<assets_dir>/<shader_path>`.
-    let full = std::env::current_dir()
-        .unwrap_or_default()
-        .join(lunco_assets::assets_dir())
-        .join(shader_path);
+    // Resolve through the SAME infra the loader uses (`lunco://` → `<cwd>/assets`),
+    // so a schemed reference is inspected at its real path rather than becoming a
+    // bogus `assets/lunco://…` segment that never exists (→ a wrong veto that would
+    // starve the wheel's `ShaderLook` and deadlock physics on a render-only visual).
+    let Some(full) = lunco_assets::engine_asset_local_path(shader_path) else {
+        // Another scheme's root (`twin://…`) — can't inspect it here; don't veto.
+        return true;
+    };
     match std::fs::read_to_string(&full) {
         // Check the CODE portion of each line (before any `//`), so an EXAMPLE
         // `@fragment` inside a doc comment — as library shaders like pbr_lit.wgsl

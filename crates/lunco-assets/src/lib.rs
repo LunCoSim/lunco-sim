@@ -459,6 +459,35 @@ pub fn engine_asset_uri(reference: &str) -> String {
     }
 }
 
+/// The engine-library-relative form of a reference — the path UNDER `assets/`,
+/// with the `lunco://` scheme (if any) stripped. Bare and `lunco://` references
+/// both collapse to the same relative path (`shaders/wheel.wgsl`); a reference
+/// carrying ANOTHER scheme (`twin://`, `http…`) is returned untouched, since it
+/// does not live in the shipped library. The inverse of [`engine_asset_uri`] for
+/// the `lunco://` case — use it before string-matching or comparing a reference
+/// so an authored `@lunco://…@` and a bare `@…@` behave identically.
+pub fn engine_asset_rel(reference: &str) -> &str {
+    reference.strip_prefix("lunco://").unwrap_or(reference)
+}
+
+/// The local filesystem path a reference resolves to *within the shipped
+/// `assets/` library*, or `None` when it lives under a different scheme's root
+/// (`twin://`, `http…`) and therefore has no engine-library path.
+///
+/// This is the read-side companion of [`engine_asset_uri`]: it mirrors the
+/// `lunco://` → `<cwd>/assets` mapping that [`register_lunco_asset_sources`]
+/// installs, so code that must inspect an asset WITHOUT the `AssetServer` (e.g.
+/// the shader `@fragment` pre-validator) resolves a reference exactly as the
+/// loader will — whether it was authored bare (`shaders/wheel.wgsl`) or schemed
+/// (`lunco://shaders/wheel.wgsl`).
+pub fn engine_asset_local_path(reference: &str) -> Option<PathBuf> {
+    if reference.strip_prefix("lunco://").is_none() && reference.contains("://") {
+        return None; // another scheme's root — not in the shipped library
+    }
+    let rel = engine_asset_rel(reference);
+    Some(std::env::current_dir().unwrap_or_default().join(assets_dir()).join(rel))
+}
+
 /// Cache `fonts/` directory — where `lunco-assets -- download`
 /// materialises font files declared in per-crate `Assets.toml`. Lives
 /// under [`cache_dir`] because these are downloaded artifacts, not
