@@ -101,14 +101,12 @@ impl PhysicsHolds {
 /// script advances the world deliberately — one frame per step — instead of
 /// play/pausing it. Each queued step lets exactly one frame of physics through.
 ///
-/// This exists because pause/unpause is unusable from inside a script: pausing the
-/// world clock stops `FixedUpdate`, so the script that paused it never runs again to
-/// unpause it (an offline recording then spools frames forever). A physics hold keeps
-/// the script running, and stepping gives it deterministic control over motion —
-/// which is also exactly what frame-by-frame capture wants, since the recorder
-/// already advances virtual time by exactly `1/fps` per captured frame.
-///
-/// Defaults to zero owed frames, so a build that never touches it behaves as before.
+/// Stepping exists because pause/unpause is unusable from inside a script: pausing
+/// the world clock stops `FixedUpdate`, so the script that paused it cannot run
+/// again to unpause itself. A physics hold keeps the script running, and stepping
+/// gives it deterministic control over motion — the same guarantee frame-by-frame
+/// capture wants, since the recorder advances virtual time by exactly `1/fps` per
+/// captured frame.
 #[derive(Resource, Debug, Clone, Default)]
 pub struct PhysicsStepRequest {
     /// Frames of physics still owed. Decremented as each is granted.
@@ -134,32 +132,48 @@ impl PhysicsStepRequest {
 /// keeps advancing. Runs in `PreUpdate`, ahead of the physics schedule, and is
 /// change-driven: it only writes when the desired state differs from the actual, so
 /// it is also self-healing if anything pauses the physics clock out of band.
-pub fn apply_physics_holds(
-    holds: Res<PhysicsHolds>,
-    mut steps: ResMut<PhysicsStepRequest>,
-    mut physics_time: ResMut<Time<Physics>>,
-) {
-    // A queued step outranks the hold for exactly one frame: physics runs, the debt
-    // is paid down, and the next frame re-freezes unless another step is queued.
-    // Steps are only meaningful while held — unheld physics is already running, so
-    // granting them then would be a no-op that silently burns the request.
+pub fn apply_physics_holds(holds: Res<PhysicsHolds>, mut physics_time: ResMut<Time<Physics>>) {
     let held = holds.is_held();
-    let stepping = held && steps.steps > 0;
-    if stepping {
-        steps.steps -= 1;
-    } else if !held && steps.steps > 0 {
-        // Nothing is holding the clock, so there is nothing to step past. Drop the
-        // debt rather than let it fire later against an unrelated hold.
-        steps.clear();
-    }
-
-    let want_paused = held && !stepping;
-    if want_paused != physics_time.is_paused() {
-        if want_paused {
+    if held != physics_time.is_paused() {
+        if held {
             physics_time.pause();
         } else {
             physics_time.unpause();
         }
+    }
+}
+
+/// Release exactly one queued [`PhysicsStepRequest`] frame through a hold.
+///
+/// Runs in `FixedPreUpdate`, **inside** the fixed loop — the same clock domain that
+/// steps physics (avian integrates in `FixedPostUpdate` off `Time<Fixed>`). A step
+/// granted from a render-frame schedule is not equivalent: `Time<Fixed>` only
+/// accumulates on frames where virtual time advanced, so a grant landing on a
+/// zero-delta frame is consumed without any physics running at all. Offline
+/// recording makes that the common case, since it alternates advance and capture
+/// frames. Consuming the debt here means one granted step is always exactly one
+/// integrated step.
+pub fn grant_physics_step(
+    holds: Res<PhysicsHolds>,
+    mut steps: ResMut<PhysicsStepRequest>,
+    mut physics_time: ResMut<Time<Physics>>,
+) {
+    if !holds.is_held() {
+        // Nothing to step past. Drop the debt rather than let it fire later against
+        // an unrelated hold (a terrain bake, say).
+        if steps.steps > 0 {
+            steps.clear();
+        }
+        return;
+    }
+
+    if steps.steps > 0 {
+        steps.steps -= 1;
+        if physics_time.is_paused() {
+            physics_time.unpause();
+        }
+    } else if !physics_time.is_paused() {
+        physics_time.pause();
     }
 }
 
@@ -171,7 +185,10 @@ impl Plugin for PhysicsGatePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PhysicsHolds>()
             .init_resource::<PhysicsStepRequest>()
-            .add_systems(PreUpdate, apply_physics_holds);
+            .add_systems(PreUpdate, apply_physics_holds)
+            // Inside the fixed loop, ahead of avian's `FixedPostUpdate` integration,
+            // so a granted step coincides with a step that actually runs.
+            .add_systems(bevy::prelude::FixedPreUpdate, grant_physics_step);
     }
 }
 
@@ -215,15 +232,50 @@ mod tests {
         assert!(world.resource::<Time<Physics>>().is_paused(), "held ⇒ frozen");
 
         world.resource_mut::<PhysicsStepRequest>().request(1);
-        world.run_system_once(apply_physics_holds).unwrap();
+        world.run_system_once(grant_physics_step).unwrap();
         assert!(
             !world.resource::<Time<Physics>>().is_paused(),
             "the step frame runs"
         );
 
-        // Debt paid: the very next frame is frozen again without touching the hold.
-        world.run_system_once(apply_physics_holds).unwrap();
+        // Debt paid: the next fixed step is frozen again without touching the hold.
+        world.run_system_once(grant_physics_step).unwrap();
         assert!(world.resource::<Time<Physics>>().is_paused(), "re-freezes");
+        assert_eq!(world.resource::<PhysicsStepRequest>().steps, 0);
+    }
+
+    /// The step is consumed in the FIXED loop, not on a render frame. Physics
+    /// integrates off `Time<Fixed>`, which only accumulates when virtual time
+    /// advanced — so a grant made on a zero-delta render frame would be spent
+    /// without any physics running. `apply_physics_holds` (render frame) must
+    /// therefore leave the debt alone; only `grant_physics_step` may spend it.
+    #[test]
+    fn render_frame_projection_does_not_spend_the_step_debt() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.insert_resource(PhysicsHolds::default());
+        world.insert_resource(PhysicsStepRequest::default());
+        world.insert_resource(Time::<Physics>::default());
+
+        world
+            .resource_mut::<PhysicsHolds>()
+            .set(PhysicsHolds::CINEMATIC, true);
+        world.resource_mut::<PhysicsStepRequest>().request(1);
+
+        // Several render frames pass with no fixed step in between.
+        for _ in 0..3 {
+            world.run_system_once(apply_physics_holds).unwrap();
+        }
+        assert_eq!(
+            world.resource::<PhysicsStepRequest>().steps,
+            1,
+            "render frames must not burn the step"
+        );
+
+        // The fixed step finally runs and spends it.
+        world.run_system_once(grant_physics_step).unwrap();
+        assert!(!world.resource::<Time<Physics>>().is_paused());
         assert_eq!(world.resource::<PhysicsStepRequest>().steps, 0);
     }
 
@@ -240,14 +292,14 @@ mod tests {
         world.insert_resource(Time::<Physics>::default());
 
         world.resource_mut::<PhysicsStepRequest>().request(3);
-        world.run_system_once(apply_physics_holds).unwrap();
+        world.run_system_once(grant_physics_step).unwrap();
         assert_eq!(world.resource::<PhysicsStepRequest>().steps, 0);
-        assert!(!world.resource::<Time<Physics>>().is_paused());
 
         world
             .resource_mut::<PhysicsHolds>()
             .set(PhysicsHolds::TERRAIN_READY, true);
         world.run_system_once(apply_physics_holds).unwrap();
+        world.run_system_once(grant_physics_step).unwrap();
         assert!(
             world.resource::<Time<Physics>>().is_paused(),
             "the later hold is not stepped past by stale debt"

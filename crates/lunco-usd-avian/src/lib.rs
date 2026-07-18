@@ -1043,6 +1043,12 @@ fn on_add_usd_prim(
 /// This system runs every frame. When a `PendingUsdJoint` entity finds that both its
 /// referenced bodies have been spawned as Bevy entities with matching `UsdPrimPath`
 /// components, it creates the appropriate Avian joint and removes the pending marker.
+/// Anchor mismatch below which a joint is considered already seated.
+///
+/// Sub-millimetre slack is float noise from the USD→physics transform chain, not a
+/// scene error; correcting it would fight the solver on every reload.
+const JOINT_SEAT_EPS: f64 = 1.0e-3;
+
 fn build_usd_physics_joints(
     mut commands: Commands,
     q_pending: Query<(Entity, &PendingUsdJoint, &UsdPrimPath)>,
@@ -1059,6 +1065,7 @@ fn build_usd_physics_joints(
     q_provenance: Query<&lunco_core::Provenance>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
+    mut q_pose: Query<(&mut Position, &Rotation)>,
 ) {
     for (joint_entity, pending, joint_prim_path) in q_pending.iter() {
         let joint_root = instance_key(joint_entity, &q_provenance, &q_gid, &q_instance_root);
@@ -1081,6 +1088,41 @@ fn build_usd_physics_joints(
         let (Some(b0), Some(b1)) = (body0_ent, body1_ent) else { continue; };
 
         info!("Built USD joint {} -> {} <-> {}", pending.joint_type, pending.body0_path, pending.body1_path);
+
+        // Seat the joint at its authored anchors before the solver sees it.
+        //
+        // The authored anchors ARE the joint: `physics:localPos0/1` say where the
+        // two bodies are held together. A scene whose body transforms disagree with
+        // them (overriding one body's `xformOp:translate` and not its partner's)
+        // hands the solver a constraint violated by metres, which it resolves
+        // impulsively — the bodies are yanked together and the pair explodes.
+        //
+        // Attachment is a KINEMATIC event, not a dynamic one, so `body1` moves to
+        // satisfy the anchors and the solver starts from a consistent state. The
+        // warning is deliberate: seating silently would hide a scene error whose
+        // real fix belongs in the USD.
+        let pose0 = q_pose.get(b0).ok().map(|(p, r)| (p.0, r.0));
+        let pose1 = q_pose.get(b1).ok().map(|(p, r)| (p.0, r.0));
+        if let (Some((p0, r0)), Some((p1, r1))) = (pose0, pose1) {
+            let anchor0_world = p0 + r0 * pending.local_pos0;
+            let anchor1_world = p1 + r1 * pending.local_pos1;
+            let delta = anchor0_world - anchor1_world;
+            // Sub-millimetre slack is just float noise from the USD→physics
+            // transform chain; correcting it would fight the solver every reload.
+            if delta.length() > JOINT_SEAT_EPS {
+                warn!(
+                    "[usd-avian] joint {} starts violated by {:.3} m — seating `{}` onto \
+                     the authored anchor. The scene places these bodies inconsistently \
+                     (check `xformOp:translate` on both bodies against `physics:localPos0/1`).",
+                    joint_prim_path.path,
+                    delta.length(),
+                    pending.body1_path,
+                );
+                if let Ok((mut pos1, _)) = q_pose.get_mut(b1) {
+                    pos1.0 += delta;
+                }
+            }
+        }
 
         // Put the avian joint component ON the joint prim entity itself (it
         // already carries `UsdPrimPath` + the loader-assigned `GlobalEntityId`)
