@@ -1420,15 +1420,27 @@ fn resolve_usd_instance_identities(
 /// composition uses, so a texture reference and a layer reference spelled the same
 /// way resolve the same way. This used to re-implement it, and the copy had already
 /// drifted: it handled `scheme://` and relative refs but silently mishandled the
-/// legacy absolute-from-assets-root `/…` form that composition accepts.
+/// absolute-from-assets-root `/…` form that composition accepts.
+///
+/// A stage need not have been loaded from a path — one composed in memory
+/// (`StageRecipe::from_source`, runtime authoring) has none, which the provenance
+/// stamp above already accounts for. That is the SAME "no anchoring document"
+/// case openusd's resolver and rhai's importer hit, so it maps onto
+/// [`canonicalize_root`] here too rather than failing the whole lookup: a
+/// path-less stage referencing `@lunco://textures/foo.png@` still resolves,
+/// which is what a `has_scheme` special case used to (partially) buy.
+///
+/// [`canonicalize_root`]: lunco_assets::asset_path::canonicalize_root
 fn resolve_texture_path(
     asset_server: &AssetServer,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     asset_path: &str,
 ) -> Option<String> {
-    let stage_path = asset_server.get_path(stage_id)?;
-    let anchor = lunco_assets::asset_path::anchor_of(&stage_path);
-    Some(lunco_assets::asset_path::canonicalize(asset_path, &anchor))
+    use lunco_assets::asset_path::{anchor_of, canonicalize, canonicalize_root};
+    Some(match asset_server.get_path(stage_id) {
+        Some(stage_path) => canonicalize(asset_path, &anchor_of(&stage_path)),
+        None => canonicalize_root(asset_path),
+    })
 }
 
 /// Extractor for parent prim path from property connection target (e.g. `/World/Material/Shader.output` -> `/World/Material/Shader`)

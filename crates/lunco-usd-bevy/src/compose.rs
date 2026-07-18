@@ -32,7 +32,7 @@ use openusd::sdf::{Path as SdfPath, Value};
 use openusd::usd::{PrimPredicate, Stage};
 use openusd::usda;
 
-use lunco_assets::asset_path::{canonicalize, canonicalize_root};
+use lunco_assets::asset_path::canonicalize_root;
 
 use crate::canonical::StageRecipe;
 use crate::resolver::{
@@ -366,7 +366,7 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
         // to the wrapper bytes and the `@model.glb@` payload is stubbed — the
         // storage-based compose path, not the deleted native-fs shim.
         let root_id = canonicalize_root("scene.usda");
-        let wrapper_id = canonicalize("wrapper.usda", &root_id);
+        let wrapper_id = lunco_assets::asset_path::canonicalize("wrapper.usda", &root_id);
         let bytes = HashMap::from([
             (root_id.clone(), scene.as_bytes().to_vec()),
             (wrapper_id, wrapper.as_bytes().to_vec()),

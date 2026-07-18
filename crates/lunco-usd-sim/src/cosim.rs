@@ -24,7 +24,6 @@
 
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
-use lunco_assets::assets_dir;
 use lunco_core::{on_command, register_commands, Command, OriginAnchor, WorldGrid};
 use lunco_cosim::{SimComponent, SimConnection, SimStatus};
 use lunco_doc::{DocumentId, DocumentOrigin};
