@@ -9,7 +9,7 @@
 
 fn on_start(me) {
     load_scene("lunco://tutorials/basic/slope_test.usda");
-    notify_kind("Basic 2/4 · Slopes & Tip-Over", "info");
+    notify_kind("Basic · Slopes & Tip-Over", "info");
     hint("This is the Hauler — heavy and top-heavy on purpose. Click it (or press F) to take control.");
 }
 
@@ -22,9 +22,32 @@ fn mission(me) {
             requires_event: "cmd:PossessVessel",
             on_complete: |m| hint("First, an experiment. Drive onto the grade and steer ACROSS the slope — watch the top-heavy Hauler start to roll. If it goes over, the auto-righting sets you back on your wheels. Feel where the edge is."),
         }),
+        // The experiment the header describes was previously UNSCORED — coached in a
+        // hint, never checked, so the lesson completed for a student who drove
+        // straight up and never felt the hazard the Hauler exists to demonstrate.
+        //
+        // Deliberately keyed on TILT, not on a completed roll: 25° is reachable by
+        // anyone who steers across the grade, while requiring a full tip-over could
+        // dead-end a careful driver (an objective that never completes blocks
+        // MISSION_COMPLETE, and there is no "optional" flag).
+        objective("feel_the_edge", #{
+            text: "Steer ACROSS the grade until you feel it lean past 25°",
+            requires: ["possess"],
+            done: |m| { tilt_deg(find(rover)) > 25.0 },
+            dwell: 0.3,
+            on_complete: |m| {
+                let msg = if is_tipped(find(rover), 40.0) {
+                    "Over it went — auto-righting has you. THAT is a high centre of mass."
+                } else {
+                    "Feel that lean? A few more degrees across the fall-line and the Hauler goes over."
+                };
+                notify_kind(msg, "warn");
+                hint("Now do it properly: point straight up the fall-line and climb to the marker with small, gentle inputs.");
+            },
+        }),
         objective("reach_top", #{
             text: "Now climb straight up the fall-line to the marker at the top",
-            requires: ["possess"],
+            requires: ["feel_the_edge"],
             done: |m| { distance(find(rover), find(marker)) < 6.0 },
             dwell: 0.4,
             on_complete: |m| notify_kind("Straight up, gentle throttle — that's how a bad rover climbs a good line.", "success"),
@@ -35,7 +58,7 @@ fn mission(me) {
 fn on_event(me, evt) {
     if evt.name == "MISSION_COMPLETE" {
         hint("You've felt why a high centre of mass tips, and how to climb anyway: pick the fall-line, keep steering inputs small on a grade. Next: drive all three rovers back to back and feel the difference.");
-        notify_kind("S3 complete 🎉 — on to Rover Variants", "success");
+        notify_kind("Lesson complete 🎉 — on to Rover Variants", "success");
     }
 }
 
@@ -51,6 +74,11 @@ fn task(me) {
         once(|m| { cmd("PossessVessel", #{ target: find(rover) });
                    notify_kind(`[debug] tilt at start: ${tilt_deg(find(rover))}°`, "info"); }),
         wait(0.5),
+        // Cross the grade first so the debug run also satisfies `feel_the_edge` —
+        // the demo must exercise the same objective chain a student does, or CI
+        // proves a path nobody takes.
+        step(|m| nav_to(find(rover), world_pos(find(marker)), 0.55, 5.0),
+             |m| tilt_deg(find(rover)) > 25.0 || arrived(find(rover), world_pos(find(marker)), 5.0)),
         step(|m| nav_to(find(rover), world_pos(find(marker)), 0.55, 5.0),
              |m| arrived(find(rover), world_pos(find(marker)), 5.0)),
         once(|m| { if is_tipped(find(rover), 40.0) { notify_kind("[debug] rover tipped on the climb", "warn"); } }),

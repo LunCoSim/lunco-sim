@@ -8,7 +8,9 @@
 
 fn on_start(me) {
     load_scene("lunco://tutorials/basic/driving_basics.usda");
-    notify_kind("Basic 1/4 · Moon Driving Basics", "info");
+    // No ordinal: position lives in `tutorials.json` alone. Ordinals duplicated
+    // into scripts are how this track ended up titled "2 ·" while toasting "S3".
+    notify_kind("Basic · Moon Driving Basics", "info");
     hint("Welcome, driver. Click the rover (or press F) to take control.");
 }
 
@@ -39,7 +41,7 @@ fn mission(me) {
 fn on_event(me, evt) {
     if evt.name == "MISSION_COMPLETE" {
         hint("You can drive, climb, and stop. Next: Slopes & Tip-Over — climb a borderline grade and feel exactly why a top-heavy rover rolls.");
-        notify_kind("S1 complete 🎉 — on to Slopes & Tip-Over", "success");
+        notify_kind("Lesson complete 🎉 — on to Slopes & Tip-Over", "success");
     }
 }
 

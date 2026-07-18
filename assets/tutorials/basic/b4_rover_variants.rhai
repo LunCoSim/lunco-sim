@@ -29,7 +29,7 @@ fn on_start(me) {
     cmd("SpawnEntity", #{ entry_id: "rover_easy",  position: [-35.0, 1.0, -9.0] });
     cmd("SpawnEntity", #{ entry_id: "rover_awful", position: [-35.0, 1.0,  9.0] });
     this.i = 0;
-    notify_kind("Basic 3/4 · Rover Variants", "info");
+    notify_kind("Basic · Rover Variants", "info");
     show(steps(), 0);
 }
 
