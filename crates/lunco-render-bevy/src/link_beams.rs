@@ -222,7 +222,7 @@ fn drive_link_beams(
                         // shadow. The authored `primvars:doNotCastShadows` sits on the
                         // template prim, but cloning copies only mesh+material, so stamp
                         // the marker explicitly on each instance.
-                        bevy::pbr::NotShadowCaster,
+                        bevy::light::NotShadowCaster,
                         big_space::grid::propagation::LowPrecisionRoot,
                         LinkBeamInstance { peer: peer_gid, up: is_up },
                         ChildOf(node),

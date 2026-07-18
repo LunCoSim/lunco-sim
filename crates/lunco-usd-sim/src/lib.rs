@@ -156,6 +156,11 @@ impl Plugin for UsdSimPlugin {
                 process_usd_sim_prims
                     .run_if(any_unprocessed_usd_sim)
                     .after(lunco_usd_bevy::sync_usd_visuals),
+                // Independent link/celestial projector — runs for EVERY prim (cosim,
+                // wheel, plain), gated by its own marker, blocked by nothing.
+                project_celestial_comms_prims
+                    .run_if(any_unprojected_celestial)
+                    .after(lunco_usd_bevy::sync_usd_visuals),
                 activate_dynamic_bodies
                     .run_if(any_with_component::<ShouldBeDynamic>),
             ));
@@ -659,15 +664,9 @@ fn process_usd_sim_prim_read<R: UsdRead>(
             }
         }
 
-        // USD-authored celestial/comms vocabulary → lunco-celestial components
-        // (geodetic anchors, Kepler orbits, comms antennas — doc 43).
-        celestial::insert_celestial_comms_components(
-            reader,
-            entity,
-            &prim_path.path,
-            &sdf_path,
-            commands,
-        );
+        // (Link/celestial vocabulary is projected by the independent
+        // `project_celestial_comms_prims` system, NOT here — see its doc. Bundling it
+        // in this system made a cosim prim, which skips this system, lose its LinkNode.)
 
         // 0. Detect Avatar prim. `lunco:avatar` is a marker flag, but scenes author it
         // with EITHER type — `bool true` (moonbase) or `string "true"` (sandbox). A
@@ -2050,6 +2049,57 @@ fn animate_proxy_physical_wheels(
 /// Marker to indicate a prim has been processed by the sim system.
 #[derive(Component)]
 struct UsdSimProcessed;
+
+/// Marker: this prim's link/celestial vocabulary has been projected to components.
+#[derive(Component)]
+struct CelestialProjected;
+
+fn any_unprojected_celestial(
+    q: Query<(), (With<UsdPrimPath>, Without<CelestialProjected>)>,
+) -> bool {
+    !q.is_empty()
+}
+
+/// Project a prim's USD-authored link/celestial vocabulary (geodetic anchors, Kepler
+/// orbits, link nodes, occluders) to `lunco-celestial` components — as its OWN system,
+/// independent of `process_usd_sim_prims` (wheels/joints/avatar) and
+/// `process_usd_cosim_prims` (behaviour models).
+///
+/// These concerns are ORTHOGONAL: an antenna can be a link node AND run `CommsLink.mo`;
+/// a lander can anchor to a site AND run guidance. It used to live inside
+/// `process_usd_sim_prims`, so a cosim prim — which stamps `UsdSimProcessed` to skip that
+/// system — silently lost its `LinkNode` and never joined the link graph. One projector,
+/// one marker: every prim gets link/celestial projection exactly once and no projector
+/// blocks another, the way USD API schemas compose.
+fn project_celestial_comms_prims(
+    mut commands: Commands,
+    query: Query<(Entity, &UsdPrimPath), Without<CelestialProjected>>,
+    stages: Res<Assets<UsdStageAsset>>,
+    mut canonical: NonSendMut<CanonicalStages>,
+) {
+    for (entity, prim_path) in query.iter() {
+        // Read the live canonical stage, built on demand from the recipe — the same
+        // source `process_usd_sim_prims` reads.
+        let id = prim_path.stage_handle.id();
+        if canonical.get(id).is_none() {
+            if let Some(recipe) =
+                stages.get(&prim_path.stage_handle).and_then(|a| a.recipe.clone())
+            {
+                canonical.get_or_build(id, &recipe);
+            }
+        }
+        let Some(cs) = canonical.get(id) else { continue };
+        let Ok(sdf_path) = SdfPath::new(&prim_path.path) else { continue };
+        celestial::insert_celestial_comms_components(
+            &cs.view(),
+            entity,
+            &prim_path.path,
+            &sdf_path,
+            &mut commands,
+        );
+        commands.entity(entity).try_insert(CelestialProjected);
+    }
+}
 
 /// Walks `entity`'s `ChildOf` ancestry looking for a `UsdPreviewOnly`
 /// marker. Stops at the first ancestor that has the marker or when the

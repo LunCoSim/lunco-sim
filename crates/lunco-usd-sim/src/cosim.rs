@@ -265,24 +265,14 @@ fn process_usd_cosim_prim_read<R: UsdRead>(
     }
 
     // `UsdSourcedCosim` already inserted above; add the cosim-only markers.
+    //
+    // NB: this stamps `UsdSimProcessed`, which makes `process_usd_sim_prims` skip this
+    // prim — fine, because link/celestial projection is now its OWN system
+    // (`project_celestial_comms_prims`), gated by its OWN marker, so a cosim antenna
+    // still gets its `LinkNode`. The two concerns no longer race on one flag.
     commands
         .entity(entity)
         .try_insert((UsdSimProcessed, lunco_core::SelectableRoot));
-
-    // A prim's cosim-ness and its link/celestial-ness are ORTHOGONAL: an antenna can be
-    // a link node AND run `CommsLink.mo`; a lander can anchor to a site AND run guidance.
-    // But stamping `UsdSimProcessed` above makes `process_usd_sim_prims` skip this prim —
-    // and that system is where `insert_celestial_comms_components` (linkNode, anchors,
-    // orbits, occluders) normally runs. Without this call a cosim antenna silently loses
-    // its `LinkNode`, so it never joins the link graph and nothing downstream (LinkState,
-    // beams, routing) sees it. Run the SAME projection here so the two concerns compose.
-    crate::celestial::insert_celestial_comms_components(
-        reader,
-        entity,
-        &prim_path.path,
-        sdf_path,
-        commands,
-    );
 
     // NOTE: the possessable control-surface tag (`FlightSoftware`) for a
     // `lunco:vessel="true"` prim is stamped in the general USD translator
