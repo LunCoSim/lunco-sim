@@ -43,6 +43,22 @@ pub struct ScriptDocument {
     /// (always-compiled) module needs no `serde_json` dep.
     #[serde(default)]
     pub params: String,
+    /// Canonical asset id this script was loaded from (`twin://ep1/main.rhai`),
+    /// or `None` when the source is not file-backed (inline USD `lunco:script`,
+    /// a `RunScenario` string, a generated timeline executor).
+    ///
+    /// This is the script's LOCATION, which is a different thing from
+    /// [`origin`](Self::origin): `origin` answers "can this be saved, and where",
+    /// while this answers "what does a relative reference INSIDE it mean". The
+    /// scenario runtime stamps it onto the compiled `AST` (`AST::set_source`),
+    /// which is what rhai passes to `ModuleResolver::resolve` as the importing
+    /// script's id — so `import "shot_camera"` next to `main.rhai` resolves to
+    /// `twin://ep1/shot_camera.rhai` instead of failing.
+    ///
+    /// `None` is load-bearing, not a missing value: a script with no location
+    /// must NOT have relative imports silently anchored to some default root.
+    #[serde(default)]
+    pub asset_id: Option<String>,
     /// Generation this document was last written to (or read from) disk at.
     /// `None` = never saved (untitled) ⇒ always dirty. Drives
     /// [`is_dirty`](Self::is_dirty), and therefore whether a re-open is allowed
@@ -74,6 +90,8 @@ impl ScriptDocument {
             inputs: Vec::new(),
             outputs: Vec::new(),
             params: String::new(),
+            // Not file-backed until something says otherwise.
+            asset_id: None,
             // Untitled = never on disk ⇒ genuinely unsaved.
             last_saved_generation: None,
         }

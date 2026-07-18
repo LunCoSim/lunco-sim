@@ -187,7 +187,20 @@ pub trait ScenarioRuntime: Send + Sync + 'static {
     /// `on_stop` has already been called before this. `params` is the scenario's
     /// parameter JSON-object string (empty for none) — the backend exposes it to
     /// the script (rhai: a `params` constant) so one scenario is reusable.
-    fn compile(&mut self, entity: Entity, source: &str, params: &str) -> CompileOutcome;
+    ///
+    /// `asset_id` is the canonical id the source was loaded from
+    /// (`twin://ep1/main.rhai`), or `None` when it is not file-backed. It is the
+    /// script's IDENTITY, and a backend with a module system needs it to anchor
+    /// relative imports (rhai: `AST::set_source`, which rhai hands to
+    /// `ModuleResolver::resolve` as the importing script). Backends without one
+    /// ignore it.
+    fn compile(
+        &mut self,
+        entity: Entity,
+        source: &str,
+        params: &str,
+        asset_id: Option<&str>,
+    ) -> CompileOutcome;
 
     /// Call a lifecycle hook for `entity` — a no-op if the scenario doesn't
     /// define it or has no compiled program. Returns a runtime-error diagnostic
@@ -267,10 +280,12 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         // 1. Snapshot (entity, doc_id, gid, generation, source), releasing every
         //    World borrow before we execute scripts. `live` = all THIS-LANGUAGE
         //    entities (incl. paused) — drives despawn/detach teardown.
-        // (entity, doc_id, gid, generation, maybe (source, params-json), authority).
-        // Source+params are cloned only when a (re)compile is due (see below) — not
-        // every tick — since they're consumed solely by `runtime.compile`.
-        let mut work: Vec<(Entity, u64, i64, u64, Option<(String, String)>, Option<SessionId>)> =
+        // (entity, doc_id, gid, generation, maybe (source, params-json, asset-id),
+        // authority). Source+params+id are cloned only when a (re)compile is due
+        // (see below) — not every tick — since they're consumed solely by
+        // `runtime.compile`.
+        type CompileInput = (String, String, Option<String>);
+        let mut work: Vec<(Entity, u64, i64, u64, Option<CompileInput>, Option<SessionId>)> =
             Vec::new();
         // A predicting client only ticks scenarios scoped to run there
         // (`Client`/`Both`); the host ticks `Host`/`Both`. Read once — constant
@@ -338,8 +353,8 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         .get_resource::<ScenarioDriver<R>>()
                         .and_then(|d| d.fsm.get(&entity))
                         .map_or(true, |st| !st.compiled || st.generation != generation);
-                    let maybe_src =
-                        needs_recompile.then(|| (doc.source.clone(), doc.params.clone()));
+                    let maybe_src = needs_recompile
+                        .then(|| (doc.source.clone(), doc.params.clone(), doc.asset_id.clone()));
                     (generation, maybe_src)
                 };
                 let gid = world
@@ -398,14 +413,14 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 // (Re)compile on first sight or generation bump. Phase 1 provides
                 // `maybe_src` exactly when this is due (Some ⟺ recompile), so the
                 // presence of the source IS the gate — no per-tick source clone.
-                if let Some((source, params)) = &maybe_src {
+                if let Some((source, params, asset_id)) = &maybe_src {
                     recompiled = true;
                     // Hot-reload teardown: the OUTGOING program cleans up first.
                     if st.started && st.compiled {
                         let _ = runtime.call_hook(entity, ScenarioHook::Stop, gid);
                     }
                     st.started = false;
-                    match runtime.compile(entity, source, params) {
+                    match runtime.compile(entity, source, params, asset_id.as_deref()) {
                         CompileOutcome::Failed(diag) => {
                             st.compiled = false;
                             st.generation = generation;

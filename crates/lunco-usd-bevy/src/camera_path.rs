@@ -32,11 +32,40 @@
 //! the sim is paused — the same re-parent that runs the sky while paused. Pause is
 //! never a flag here; it is *where the clock hangs*.
 //!
-//! **Cadence ≠ clock.** The curve is evaluated in `FixedPostUpdate`
-//! ([`drive_camera_paths`]) — the same fixed cadence the follow camera solves on —
-//! and the camera's `Transform` is eased toward that target at render rate
-//! ([`smooth_camera_paths`]), so motion is smooth between fixed steps regardless of
-//! frame rate.
+//! **The path is evaluated once per RENDER frame, on the render frame's own clock.**
+//! ([`drive_camera_paths`] samples, [`apply_camera_paths`] writes; both `PostUpdate`,
+//! chained.) This is deliberate and was NOT the original design — see below.
+//!
+//! **Why not the fixed cadence.** The curve used to be evaluated in `FixedPostUpdate`
+//! and the render pose interpolated between the two bracketing fixed samples by
+//! `Time<Fixed>::overstep_fraction()`. Two independent defects, both measured:
+//!
+//! 1. **The sample pair was not a fixed-step bracket.** The time a path is evaluated
+//!    at comes from [`ResolvedDomains`], which `advance_and_resolve_domains` fills in
+//!    `PreUpdate` — once per RENDER frame, not per fixed step (`lunco-time`,
+//!    `build_domain_tree`). So on a frame running two fixed steps the driver ran twice
+//!    against the *same* resolved `t` and produced `prev == target` (the camera froze
+//!    for that frame); on a frame running none it did not run at all while the
+//!    smoother kept interpolating a stale pair. Path motion was therefore quantised to
+//!    render-frame boundaries in a way that depended on frame timing. The
+//!    `.after(DomainResolveSet)` ordering on the `FixedPostUpdate` system could not
+//!    help — that set lives in `PreUpdate`, so the constraint was silently inert.
+//!
+//! 2. **`overstep_fraction()` is wall-clock derived.** It is the residual of the fixed
+//!    accumulator, fed from `Time<Virtual>`, which by default derives from
+//!    `Time<Real>`. Two runs of the same scene reach a given recorded frame index with
+//!    different residuals, so the captured camera transform differed between runs —
+//!    offline recording was not reproducible. It only *appeared* reproducible because
+//!    `lunco-workbench`'s recorder pins the frame delta with
+//!    `TimeUpdateStrategy::ManualDuration`, which happens to make the residual
+//!    constant. Nothing stated that coupling and nothing detected its violation.
+//!
+//! A camera path is an **analytic function of time** — there is no integrated state to
+//! advance, so there is nothing a fixed cadence buys it. Sampling it directly at the
+//! render frame's resolved `t` removes both defects at once and deletes the
+//! prev/target bracket entirely: the pose is a pure function of the domain clock, so
+//! it is reproducible by construction rather than by an undocumented invariant held up
+//! by a resource the recorder happens to set.
 
 use crate::{UsdPrimPath, UsdRead};
 use bevy::math::DVec3;
@@ -113,8 +142,8 @@ impl CameraPath {
     }
 }
 
-/// Marks a camera whose pose is owned by a [`CameraPath`], and carries the
-/// fixed-step target that [`smooth_camera_paths`] eases toward.
+/// Marks a camera whose pose is owned by a [`CameraPath`], and carries the pose
+/// [`drive_camera_paths`] sampled this frame for [`apply_camera_paths`] to write.
 ///
 /// Also the "hands off" flag for `camera_mount`: a path-driven camera authors no
 /// `timeSamples`, so it is not `UsdAnimated` and the mount resolver would happily
@@ -135,29 +164,28 @@ pub struct CameraPathDriven {
     /// the floating origin, which is the whole reason for the grid).
     pub target_world: DVec3,
     pub target_rot: Quat,
-    /// The PREVIOUS fixed sample. Render-rate motion interpolates `prev → target`
-    /// across the fixed step; it does not chase `target` with an easing filter.
-    ///
-    /// An exponential ease (what this used to do) is a LAG filter, and it only
-    /// looked smooth while the per-step delta was tiny. On frames with no fixed
-    /// step the target is stale and the camera catches up; on frames with one it
-    /// jumps and the camera falls behind — a speed oscillation that reads as the
-    /// camera juddering back and forth. Invisible at 90 m / 60 s (~0.15 m per
-    /// step), gross at 800 m / 15 s (~5.2 m per step). The curve is an analytic
-    /// function of time, so there is nothing to guess at: bracket the render
-    /// instant with the two fixed samples and interpolate, exactly as
-    /// `bevy_transform_interpolation` does for physics.
-    pub prev_world: DVec3,
-    /// The previous fixed sample's rotation, interpolated the same way.
-    pub prev_rot: Quat,
     /// Whether the path currently owns the camera's rotation. False during an
-    /// [`AimMode::Manual`] stretch, where the smoother writes position only and
+    /// [`AimMode::Manual`] stretch, where the writer sets position only and
     /// leaves look direction to the user — writing a stale target would fight
     /// the mouse.
     pub aim_owned: bool,
-    /// False until the first fixed evaluation, so the camera snaps to the path
-    /// instead of easing in from wherever it spawned.
+    /// False until the first successful sample. [`drive_camera_paths`] can bail for
+    /// reasons that are transient during load (clock not resolved, the curve's grid
+    /// ancestry not yet spawned), and [`apply_camera_paths`] must not write a
+    /// zero-initialised pose over the camera in the meantime.
     pub primed: bool,
+}
+
+/// Normalised position along the curve for a domain time `t` and a playback span.
+///
+/// Extracted so the mapping is testable without an `App`: it is the one piece of
+/// [`drive_camera_paths`] that is pure arithmetic, and it is where an off-by-one in
+/// the loop/clamp policy would hide. The playhead is already wrapped or clamped by
+/// `step_playhead` per the domain's own loop policy — looping is the domain's
+/// business, not ours — so this only has to guard a degenerate span.
+fn path_u(t: f64, start: f64, end: f64) -> f32 {
+    let span = (end - start).max(f64::EPSILON);
+    (((t - start) / span) as f32).clamp(0.0, 1.0)
 }
 
 /// The frozen link between a camera path's clock and the clock it really hangs on.
@@ -306,6 +334,12 @@ pub fn resolve_camera_paths(
             warn!("[camera-path] {} needs at least 2 points", prim.path);
             continue;
         }
+        // Captured before `points` moves into the component below. The log used to
+        // re-read the attribute with a strict `scalar::<Vec<[f32; 3]>>`, so a
+        // `point3d[]` curve — which `points3` reads perfectly well — was reported as
+        // "0 pts" while working correctly. A diagnostic that contradicts the thing it
+        // is diagnosing is worse than no diagnostic.
+        let n_points = points.len();
 
         let cubic = reader.text(&path, "type").as_deref() != Some("linear");
         let basis = match reader.text(&path, "basis").as_deref() {
@@ -396,8 +430,6 @@ pub fn resolve_camera_paths(
                 CameraPathDriven {
                     target_world: DVec3::ZERO,
                     target_rot: Quat::IDENTITY,
-                    prev_world: DVec3::ZERO,
-                    prev_rot: Quat::IDENTITY,
                     aim_owned: true,
                     primed: false,
                 },
@@ -407,22 +439,27 @@ pub fn resolve_camera_paths(
             prim.path,
             camera,
             basis,
-            // periodic curves wrap, so every point starts a segment
-            reader
-                .scalar::<Vec<[f32; 3]>>(&path, "points")
-                .map(|p| p.len())
-                .unwrap_or(0),
+            n_points,
             duration,
             if on_wall { "wall clock" } else { "sim clock" }
         );
     }
 }
 
-/// Evaluate each path at its clock's time and write the camera's target pose.
+/// Evaluate each path at its clock's time and record the camera's pose for this
+/// frame. [`apply_camera_paths`] writes it.
 ///
-/// `FixedPostUpdate`: the same fixed cadence the follow camera solves on, so the
-/// motion is frame-rate independent and reproducible. Rendering interpolates
-/// ([`smooth_camera_paths`]).
+/// `PostUpdate`, once per render frame, ordered after `lunco_time::DomainResolveSet`
+/// — the resolved time this reads is itself produced once per render frame, so
+/// evaluating any more often than that only re-reads the same `t`. See the module doc
+/// for the fixed-cadence design this replaced and why it was neither smooth nor
+/// reproducible.
+///
+/// Split from the write purely to avoid a query conflict: sampling needs `&Transform`
+/// over ALL prims (to compose the curve's and the aim target's world poses), while the
+/// write needs `&mut Transform` on the cameras, and the camera is inside the former
+/// set. Two chained systems in one schedule is cheaper than a `ParamSet` and keeps
+/// each body readable.
 pub fn drive_camera_paths(
     resolved: Res<ResolvedDomains>,
     q_paths: Query<(Entity, &CameraPath)>,
@@ -439,11 +476,7 @@ pub fn drive_camera_paths(
         let Some(t) = resolved.get(path.domain) else {
             continue;
         };
-        let span = (pb.end - pb.start).max(f64::EPSILON);
-        // Normalised position along the curve. The playhead is already wrapped or
-        // clamped by `step_playhead` per the domain's own loop policy — looping is
-        // the domain's business, not ours.
-        let u = (((t - pb.start) / span) as f32).clamp(0.0, 1.0);
+        let u = path_u(t, pb.start, pb.end);
 
         // Control points are the CURVE prim's own geometry, so they are in its
         // local space. `world_pose` walks the grid hierarchy, giving the curve's
@@ -478,24 +511,15 @@ pub fn drive_camera_paths(
         };
 
         if let Ok(mut driven) = q_cams.get_mut(path.camera) {
-            // Retire the old sample before taking the new one: these two bracket
-            // the fixed step that `smooth_camera_paths` interpolates across. On
-            // the first evaluation both ends are the new sample, so the camera
-            // starts ON the path instead of sliding in from wherever it spawned.
-            if driven.primed {
-                driven.prev_world = driven.target_world;
-                driven.prev_rot = driven.target_rot;
-            } else {
-                driven.prev_world = world;
-            }
+            // The pose is the curve's value at `t` — no blend with any previous
+            // sample, so it carries no history and no dependence on when the frame
+            // happened to land. That is what makes a recorded frame index reproduce
+            // the identical transform across runs.
             driven.target_world = world;
             driven.aim_owned = !matches!(path.aim_at(t), AimMode::Manual);
             if let Some(dir) = look_dir {
                 if dir.length_squared() > 1e-9 {
                     driven.target_rot = Transform::default().looking_to(dir, Vec3::Y).rotation;
-                    if !driven.primed {
-                        driven.prev_rot = driven.target_rot;
-                    }
                 }
             }
             driven.primed = true;
@@ -515,22 +539,24 @@ fn find_grid(from: Entity, q_parents: &Query<&ChildOf>, q_is_grid: &Query<(), Wi
     None
 }
 
-/// Ease each path-driven camera toward its fixed-step target at render rate.
+/// Write each path-driven camera's sampled pose into its `(CellCoord, Transform)`.
 ///
-/// The fixed evaluation ticks at the physics cadence; without this the camera
-/// would visibly step at that rate on a faster display. Mirrors how the follow
-/// camera eases its Transform between `FixedPostUpdate` writes.
-pub fn smooth_camera_paths(
-    fixed: Res<Time<Fixed>>,
+/// **No interpolation, and deliberately so.** This used to lerp between two fixed-step
+/// samples by `Time<Fixed>::overstep_fraction()`. That fraction is a wall-clock
+/// residual (`Time<Fixed>` ← `Time<Virtual>` ← `Time<Real>`), which made the recorded
+/// transform at a given frame index differ run to run; and the pair it blended was
+/// never actually a fixed-step bracket, because the sample time comes from
+/// `ResolvedDomains`, which is filled once per render frame. See the module doc for
+/// the full measurement.
+///
+/// `drive_camera_paths` now samples the curve at exactly this frame's time, so the
+/// pose is already correct for this instant and there is nothing left to interpolate
+/// toward. Smoothness comes from the curve being continuous in `t` and `t` advancing
+/// every render frame — not from a filter.
+pub fn apply_camera_paths(
     q_grids: Query<&Grid>,
     mut q: Query<(&mut CellCoord, &mut Transform, &ChildOf, &CameraPathDriven)>,
 ) {
-    // Where this render instant falls inside the current fixed step, 0..1. The
-    // camera is placed BETWEEN the two samples that bracket it, so its speed is
-    // whatever the curve says — it neither stalls on a frame without a fixed step
-    // nor lurches on one with it.
-    let s = fixed.overstep_fraction() as f64;
-
     for (mut cell, mut tf, child_of, driven) in q.iter_mut() {
         if !driven.primed {
             continue;
@@ -538,24 +564,21 @@ pub fn smooth_camera_paths(
         let Ok(grid) = q_grids.get(child_of.parent()) else {
             continue;
         };
-        // Interpolate in GRID-ABSOLUTE space, then re-bin. Interpolating the local
-        // `Transform` alone would be wrong across a cell boundary — the local value
-        // jumps when the cell changes, so a lerp of locals would smear the camera
-        // across a whole cell. Same write-back `follow_mounted_cameras` does.
+        // Re-bin the GRID-ABSOLUTE position into `(cell, local)` — the same write-back
+        // `follow_mounted_cameras` does, and the reason the sample is kept absolute:
+        // a local `Transform` alone is meaningless across a cell boundary.
         //
-        // Note this reads NOTHING from the camera's own current pose: the sample
-        // pair is the whole state. That is what makes it deterministic and
-        // lag-free, and it is why there is no snap-vs-ease special case left —
+        // Note this reads NOTHING from the camera's own current pose. The sample is
+        // the whole state, so there is no lag, no history, and no snap-vs-ease case —
         // there is no "current" to be far away from.
-        let world = driven.prev_world.lerp(driven.target_world, s);
-        let (new_cell, new_local) = grid.translation_to_grid(world);
+        let (new_cell, new_local) = grid.translation_to_grid(driven.target_world);
         *cell = new_cell;
         tf.translation = new_local;
 
         // Only when the path owns the aim — during a `Manual` stretch the user is
         // steering and writing a stale target would fight the mouse.
         if driven.aim_owned {
-            tf.rotation = driven.prev_rot.slerp(driven.target_rot, s as f32);
+            tf.rotation = driven.target_rot;
         }
     }
 }
@@ -679,6 +702,34 @@ mod tests {
         assert!(r_lin < 0.72, "chord midpoint should cut inside: {r_lin}");
         assert!(r_cr > r_lin, "catmullRom must bulge past the chord: {r_cr} vs {r_lin}");
         assert!(r_cr < 1.05, "…without overshooting the circle: {r_cr}");
+    }
+
+    #[test]
+    fn path_u_is_a_pure_function_of_domain_time() {
+        // The determinism property the fixed-cadence + `overstep_fraction()` design
+        // did NOT have: the pose depends on the domain clock and nothing else, so a
+        // given `t` maps to a given point on the curve regardless of frame timing,
+        // frame rate, or how many fixed steps the frame happened to run.
+        let p = ring();
+        let sample = |t: f64| eval_curve(&p, CurveBasis::CatmullRom, true, path_u(t, 0.0, 8.0));
+        assert_eq!(sample(3.0), sample(3.0), "same t ⇒ same pose, bit for bit");
+        // …and distinct times genuinely move the camera (the multi-fixed-step defect
+        // was `prev == target`, i.e. two evaluations that could not differ).
+        assert!(
+            (sample(3.0) - sample(3.1)).length() > 1e-4,
+            "distinct times must produce distinct poses"
+        );
+    }
+
+    #[test]
+    fn path_u_clamps_and_survives_a_degenerate_span() {
+        assert_eq!(path_u(-5.0, 0.0, 10.0), 0.0, "before the span clamps to the start");
+        assert_eq!(path_u(50.0, 0.0, 10.0), 1.0, "after the span clamps to the end");
+        assert!((path_u(5.0, 0.0, 10.0) - 0.5).abs() < 1e-6);
+        // A zero-length `Playback` span must not divide by zero and produce NaN — a
+        // NaN `u` propagates into the camera's Transform and the view goes black,
+        // which is a spectacularly unhelpful symptom for "duration = 0".
+        assert!(path_u(1.0, 4.0, 4.0).is_finite(), "degenerate span must stay finite");
     }
 
     #[test]

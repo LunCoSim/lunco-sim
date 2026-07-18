@@ -35,7 +35,9 @@
 use avian3d::prelude::{Physics, PhysicsTime};
 use bevy::prelude::*;
 
+pub mod escape;
 pub mod spatial;
+pub use escape::{EscapeDiagnosticPlugin, WorldBounds};
 pub use spatial::GridSpatialQuery;
 
 /// The set of reasons physics is currently suspended. Empty ⇒ physics integrates.
@@ -188,7 +190,12 @@ impl Plugin for PhysicsGatePlugin {
             .add_systems(PreUpdate, apply_physics_holds)
             // Inside the fixed loop, ahead of avian's `FixedPostUpdate` integration,
             // so a granted step coincides with a step that actually runs.
-            .add_systems(bevy::prelude::FixedPreUpdate, grant_physics_step);
+            .add_systems(bevy::prelude::FixedPreUpdate, grant_physics_step)
+            // The gate exists because bodies fall through colliders that are not
+            // ready yet; the diagnostic reports the ones that got through anyway.
+            // Same owner, same plugin — a hold that fails silently is what cost
+            // two sessions of eyeballing rendered frames.
+            .add_plugins(escape::EscapeDiagnosticPlugin);
     }
 }
 

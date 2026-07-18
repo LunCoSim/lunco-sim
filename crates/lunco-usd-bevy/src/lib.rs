@@ -195,18 +195,29 @@ impl Plugin for UsdBevyPlugin {
                 camera_mount::follow_mounted_cameras
                     .before(bevy::transform::TransformSystems::Propagate),
             )
-            // Camera paths (`UsdGeomBasisCurves` + `lunco:path:camera`). Cadence ≠
-            // clock: the curve is EVALUATED on the fixed cadence (like the follow
-            // camera's solver), and the camera's Transform is EASED toward that
-            // target at render rate so motion is smooth between fixed steps.
+            // Camera paths (`UsdGeomBasisCurves` + `lunco:path:camera`). Sampled and
+            // written once per RENDER frame, chained, before transform propagation.
+            //
+            // NOT on the fixed cadence, which is where this used to live. The sample
+            // time comes from `ResolvedDomains`, which `lunco-time` fills in
+            // `PreUpdate` — once per render frame — so a `FixedPostUpdate` driver
+            // re-read the same `t` on multi-step frames and did not run at all on
+            // zero-step ones. The render-rate interpolation that papered over it keyed
+            // off `Time<Fixed>::overstep_fraction()`, a WALL-CLOCK residual, which made
+            // offline recordings differ run to run. A path is an analytic function of
+            // time and needs neither. See `camera_path`'s module doc.
+            //
+            // Ordering against `DomainResolveSet` is not spelled out because it cannot
+            // be: that set lives in `PreUpdate`, and an `.after()` naming a set from
+            // another schedule is silently vacuous — which is exactly how the old
+            // `FixedPostUpdate` registration looked correct while ordering nothing.
+            // `PostUpdate` runs after `PreUpdate` within the frame, so the sample sees
+            // this frame's resolved clock by schedule order.
             .add_systems(Update, camera_path::resolve_camera_paths)
             .add_systems(
-                FixedPostUpdate,
-                camera_path::drive_camera_paths.after(lunco_time::DomainResolveSet),
-            )
-            .add_systems(
                 PostUpdate,
-                camera_path::smooth_camera_paths
+                (camera_path::drive_camera_paths, camera_path::apply_camera_paths)
+                    .chain()
                     .before(bevy::transform::TransformSystems::Propagate),
             )
             // HDRI environment: project an authored `DomeLight`'s equirect into
@@ -3292,7 +3303,16 @@ fn read_shape_dims_raw<R: UsdRead>(
 /// both the render mesh ([`build_usd_mesh`]) and the physics trimesh
 /// ([`read_usd_mesh_indexed`]) read through it, so they cannot disagree.
 fn read_mesh_points<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Vec<[f32; 3]>> {
-    let points = reader.scalar::<Vec<[f32; 3]>>(path, "points")?;
+    // `points3`, NOT `scalar::<Vec<[f32; 3]>>`: USD's `points` is `point3f[]` by
+    // convention but `point3d[]` is legal and exporters do emit it (coordinates feel
+    // like they deserve the precision). A strict `point3f[]` read of a `point3d[]`
+    // mesh returns `None`, i.e. "this prim has no geometry" — so the mesh silently
+    // does not spawn and nothing is logged. An empty result is `None` here, matching
+    // the old contract: a points-less mesh is not a mesh.
+    let points = reader.points3(path, "points");
+    if points.is_empty() {
+        return None;
+    }
     let conv = stage_convention(reader);
     if conv.is_identity() {
         return Some(points);
@@ -3304,7 +3324,13 @@ fn read_mesh_points<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Vec<[f32; 
 /// direction, so never scaled. `None` when unauthored (the caller then computes
 /// flat normals).
 fn read_mesh_normals<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Vec<[f32; 3]>> {
-    let normals = reader.scalar::<Vec<[f32; 3]>>(path, "normals")?;
+    // `points3` for the same reason as `points` above — `normal3d[]` is legal, and a
+    // strict read of it means "unauthored", which here silently swaps authored
+    // shading normals for computed flat ones (a faceted look, not an error).
+    let normals = reader.points3(path, "normals");
+    if normals.is_empty() {
+        return None;
+    }
     let conv = stage_convention(reader);
     if conv.is_identity() {
         return Some(normals);
@@ -3338,7 +3364,11 @@ fn build_usd_curve_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> 
         return None;
     }
     // No `widths` ⇒ no surface. Deliberately not defaulted: see the doc above.
-    let widths = reader.scalar::<Vec<f32>>(path, "widths")?;
+    // `reals`, not `scalar::<Vec<f32>>`: `widths` is `float[]` per the USD spec but a
+    // `double[]` is what you get from a DCC that promotes everything, and a strict
+    // read of that is indistinguishable from "no widths" — which this function turns
+    // into `None`, i.e. the tube vanishes from the scene with no diagnostic.
+    let widths = reader.reals(path, "widths");
     if widths.is_empty() {
         return None;
     }
@@ -3348,7 +3378,7 @@ fn build_usd_curve_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> 
     let conv = stage_convention(reader);
     let radii: Vec<f32> = widths
         .iter()
-        .map(|w| conv.length(*w as f64 / 2.0) as f32)
+        .map(|w| conv.length(*w / 2.0) as f32)
         .collect();
 
     // `NurbsCurves` carries its own basis: per-curve `order`, a concatenated
@@ -3358,8 +3388,12 @@ fn build_usd_curve_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> 
     // centerline is produced.
     let is_nurbs = reader.type_name(path).as_deref() == Some("NurbsCurves");
     let orders = read_int_array(reader, path, "order").unwrap_or_default();
-    let all_knots = reader.scalar::<Vec<f64>>(path, "knots").unwrap_or_default();
-    let point_weights = reader.scalar::<Vec<f64>>(path, "pointWeights").unwrap_or_default();
+    // `reals`: `knots`/`pointWeights` are `double[]` per the NURBS schema, but a
+    // `float[]` knot vector reads as an EMPTY one under a strict read — and an empty
+    // knot vector is not an error here, it is the "fall back to a default clamped
+    // basis" path, so a mistyped NURBS curve quietly evaluates as a different curve.
+    let all_knots = reader.reals(path, "knots");
+    let point_weights = reader.reals(path, "pointWeights");
 
     let ty = reader.text(path, "type").unwrap_or_else(|| "cubic".to_string());
     let basis_tok = reader.text(path, "basis").unwrap_or_else(|| "bspline".to_string());
@@ -3530,13 +3564,18 @@ fn build_usd_nurbs_patch_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<
     }
     let u_order = reader.scalar::<i32>(path, "uOrder").unwrap_or(4).max(2) as usize;
     let v_order = reader.scalar::<i32>(path, "vOrder").unwrap_or(4).max(2) as usize;
-    let u_knots = reader
-        .scalar::<Vec<f64>>(path, "uKnots")
-        .unwrap_or_else(|| crate::nurbs::default_clamped_knots(u_count, u_order));
-    let v_knots = reader
-        .scalar::<Vec<f64>>(path, "vKnots")
-        .unwrap_or_else(|| crate::nurbs::default_clamped_knots(v_count, v_order));
-    let weights = reader.scalar::<Vec<f64>>(path, "pointWeights").unwrap_or_default();
+    // `reals` throughout — see `build_usd_curve_mesh`: a `float[]` knot vector under a
+    // strict `double[]` read is empty, which silently selects the default clamped
+    // basis below instead of the authored one.
+    let mut u_knots = reader.reals(path, "uKnots");
+    if u_knots.is_empty() {
+        u_knots = crate::nurbs::default_clamped_knots(u_count, u_order);
+    }
+    let mut v_knots = reader.reals(path, "vKnots");
+    if v_knots.is_empty() {
+        v_knots = crate::nurbs::default_clamped_knots(v_count, v_order);
+    }
+    let weights = reader.reals(path, "pointWeights");
 
     // Trim curves are NOT applied — the domain is tessellated whole. Warn rather
     // than drop it silently: a trimmed patch rendered untrimmed is LARGER than
@@ -3704,7 +3743,14 @@ pub fn build_usd_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> {
     // is namespaced; a bare `st` is not one, and accepting it let a mesh carry UVs
     // in a form no other DCC binds.
     let normals = read_mesh_normals(reader, path);
-    let uvs = reader.scalar::<Vec<[f32; 2]>>(path, "primvars:st");
+    // `points2`, NOT `scalar::<Vec<[f32; 2]>>`: Maya and Houdini export
+    // `texCoord2d[]`, Blender exports `texCoord2f[]`. A strict `2f` read of a `2d` UV
+    // set yields "no UVs", and the documented response to that is a ZEROED UV set —
+    // so the mesh samples its texture entirely at (0,0) and renders as one flat
+    // colour. That misreads as a material/texture bug, which is the wrong place to
+    // look. `None` (rather than empty) keeps the `uvs_per_vertex`/`per_corner` logic
+    // below unchanged.
+    let uvs = Some(reader.points2(path, "primvars:st")).filter(|v: &Vec<[f32; 2]>| !v.is_empty());
 
     let n_corners = indices.len();
     let normals_per_vertex = normals.as_ref().is_some_and(|n| n.len() == points.len());

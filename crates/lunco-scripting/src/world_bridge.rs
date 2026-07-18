@@ -37,7 +37,7 @@ use bevy::prelude::*;
 use std::sync::Arc;
 
 use lunco_core::{Ack, CommandResults, OpId, TelemetryEvent, TelemetryValue};
-use lunco_hash::fnv1a64;
+use lunco_hash::Fnv1a;
 
 use rhai::{Dynamic, Engine, FnPtr, ImmutableString, Map, AST};
 
@@ -320,6 +320,206 @@ fn compile_with_script_consts(engine: &Engine, source: &str) -> Result<AST, rhai
     }
 
     engine.compile_with_scope(&consts, source)
+}
+
+/// Extract the script's TOP-LEVEL `import` statements as compilable source, or
+/// `None` if it has none.
+///
+/// # Why this exists
+///
+/// MEASURED: a scenario with `import "twin://ep1/shot_camera" as cam;` at the top
+/// compiles fine, then throws `Module not found: cam` on every tick as soon as a
+/// `fn` body calls `cam::foo()`.
+///
+/// The cause is not rhai's function purity rule (that governs *variables*).
+/// Imports live in the `GlobalRuntimeState`'s import stack, and rhai does NOT
+/// clear it when entering a script function — `func/script.rs` records
+/// `orig_imports_len` on entry and only `truncate_imports(orig_imports_len)` on
+/// exit, and `eval/expr.rs::search_imports` resolves a qualified call's root
+/// against exactly that stack. So a function CAN see a top-level import — but only
+/// within the same evaluation run, because `GlobalRuntimeState` is created per
+/// `Engine::call_fn`/`eval` call and dropped with it.
+///
+/// Rhai's own answer is [`rhai::CallFnOptions::eval_ast`], documented in
+/// `api/call_fn.rs` as *"Evaluate the AST to load necessary modules before calling
+/// the function? Default `true`"* — i.e. re-run the top level so the imports are
+/// on the stack when the function runs. We cannot use it directly: this runtime
+/// deliberately sets `eval_ast(false)` because a scenario's top level touches the
+/// World and seeds `const` globals, and re-running it every tick would re-fire
+/// those side effects.
+///
+/// So we take rhai's mechanism and narrow its input: build a second AST whose
+/// STATEMENTS are only the `import`s and whose functions are the whole program
+/// (see [`CompiledProgram::hook_target`]), and call hooks against that with
+/// `eval_ast(true)`. Each hook call then re-executes the imports and nothing else.
+/// That is cheap — [`crate::module_resolver::AssetModuleResolver`] memoizes
+/// compiled modules, so a re-import is a hash lookup plus an `Arc` clone.
+///
+/// # Why not `Engine::register_static_module`
+///
+/// That is the other way `search_imports` can find a root (`eval/expr.rs` falls
+/// back to `self.global_sub_modules`), and it is wrong here: the `Engine` is an
+/// `Arc` SHARED by every scenario, so registering one scenario's `cam` alias would
+/// make it resolve inside every other scenario too — and two scenarios using the
+/// same alias for different modules would silently shadow each other. Per-scenario
+/// state must not be stored on a shared engine.
+///
+/// # Known gap
+///
+/// This covers the LIFECYCLE hooks (`on_start`/`on_tick`/`on_stop`/`on_event`),
+/// which is where scenarios live. It does not cover a closure invoked through
+/// `FnPtr::call` by the native task tree (`tick_native_task`) or the prelude
+/// drivers: `FnPtr::call` takes an `AST` but has no `eval_ast` switch, so there is
+/// no place to re-run the imports. A closure that references an imported alias
+/// still throws `Module not found`, and the author must `import` inside it. Fixing
+/// that needs a different lever than this one.
+///
+/// # Extraction
+///
+/// `AST::statements()` is behind rhai's `internals` feature, which this workspace
+/// does not enable, so the statements are recovered from the source text with a
+/// small scanner that tracks string/comment state and brace depth. Only depth-0
+/// statements whose first token is `import` are taken — an `import` inside a `fn`
+/// is already visible to that `fn` and must not be hoisted. Anything the scanner
+/// mis-reads shows up as a parse failure of the extracted snippet, which the
+/// caller treats as "no imports to hoist" (today's behaviour), never as a
+/// corrupted program.
+fn top_level_import_source(source: &str) -> Option<String> {
+    #[derive(PartialEq)]
+    enum S {
+        Code,
+        Line,
+        Block,
+        Str(char),
+    }
+    let b = source.as_bytes();
+    let mut state = S::Code;
+    let mut depth = 0i32;
+    let mut stmt_start: Option<usize> = None;
+    let mut out = String::new();
+    let mut i = 0usize;
+
+    // Take [start..=end] if it is a top-level `import` statement.
+    let take = |out: &mut String, start: usize, end: usize| {
+        let stmt = &source[start..=end];
+        let head = stmt.trim_start();
+        if head.starts_with("import") && !head[6..].starts_with(|c: char| c.is_alphanumeric() || c == '_')
+        {
+            out.push_str(stmt.trim());
+            out.push('\n');
+        }
+    };
+
+    while i < b.len() {
+        let c = b[i];
+        match state {
+            S::Line => {
+                if c == b'\n' {
+                    state = S::Code;
+                }
+            }
+            S::Block => {
+                if c == b'*' && b.get(i + 1) == Some(&b'/') {
+                    state = S::Code;
+                    i += 1;
+                }
+            }
+            S::Str(q) => {
+                // Rhai strings use `\` escapes; a literal `\"` must not end the string.
+                if c == b'\\' {
+                    i += 1;
+                } else if c == q as u8 {
+                    state = S::Code;
+                }
+            }
+            S::Code => match c {
+                b'/' if b.get(i + 1) == Some(&b'/') => {
+                    state = S::Line;
+                    i += 1;
+                }
+                b'/' if b.get(i + 1) == Some(&b'*') => {
+                    state = S::Block;
+                    i += 1;
+                }
+                b'"' | b'\'' | b'`' => {
+                    if depth == 0 && stmt_start.is_none() {
+                        stmt_start = Some(i);
+                    }
+                    state = S::Str(c as char);
+                }
+                b'{' | b'(' | b'[' => {
+                    if depth == 0 && stmt_start.is_none() {
+                        stmt_start = Some(i);
+                    }
+                    depth += 1;
+                }
+                b'}' | b')' | b']' => {
+                    depth -= 1;
+                    // A block that closes at top level ends the statement (a `fn`
+                    // definition, an `if`/`while` body): nothing to carry forward.
+                    if depth <= 0 {
+                        depth = 0;
+                        stmt_start = None;
+                    }
+                }
+                b';' if depth == 0 => {
+                    if let Some(start) = stmt_start {
+                        take(&mut out, start, i);
+                    }
+                    stmt_start = None;
+                }
+                _ if depth == 0 && stmt_start.is_none() && !c.is_ascii_whitespace() => {
+                    stmt_start = Some(i);
+                }
+                _ => {}
+            },
+        }
+        i += 1;
+    }
+
+    (!out.is_empty()).then_some(out)
+}
+
+/// Build the "imports only" AST described on [`top_level_import_source`]: the
+/// script's top-level `import` statements as the BODY, the full prelude-merged
+/// program's functions as the LIBRARY.
+///
+/// `full` is the already prelude-merged program; [`AST::clone_functions_only`]
+/// takes its functions without its statements, so merging gives exactly
+/// `imports + every callable`, which is what a hook call needs.
+///
+/// Returns `None` — meaning "hoist nothing, behave as before" — when the script
+/// has no top-level imports, or when the extracted snippet does not parse. The
+/// latter can only happen if the text scanner mis-read the source; failing soft
+/// keeps a scanner bug from turning a working scenario into a compile error, and
+/// the warning names the snippet so it is diagnosable.
+fn build_imports_ast(
+    engine: &Engine,
+    source: &str,
+    full: &AST,
+    asset_id: Option<&str>,
+) -> Option<AST> {
+    let imports = top_level_import_source(source)?;
+    let head = match engine.compile(&imports) {
+        Ok(a) => a,
+        Err(e) => {
+            warn!(
+                "[rhai] could not hoist top-level imports into function scope \
+                 ({e}); a `fn` referring to an imported alias will fail with \
+                 `Module not found`. Extracted snippet:\n{imports}"
+            );
+            return None;
+        }
+    };
+    let mut merged = head.merge(&full.clone_functions_only());
+    // `AST::merge` adopts the RIGHT operand's source and drops both if it has
+    // none, so set the id on the RESULT rather than relying on either input —
+    // this AST is the one hook calls run against, so it is the one whose
+    // `source()` rhai will hand the module resolver.
+    if let Some(id) = asset_id {
+        merged.set_source(id);
+    }
+    Some(merged)
 }
 
 fn compile_prelude_set(
@@ -830,7 +1030,28 @@ impl ProgramMask {
 /// shared or cached — that firewall is what keeps the memo determinism-safe.
 struct CompiledProgram {
     ast: AST,
+    /// Same functions, but with ONLY the script's top-level `import` statements as
+    /// its body — so a hook call can re-run those imports (and nothing else)
+    /// before the function executes, making `cam::foo()` resolve inside a `fn`.
+    /// `None` when the script imports nothing. See [`top_level_import_source`] for
+    /// why this is the shape of the fix.
+    imports_ast: Option<AST>,
     mask: ProgramMask,
+}
+
+impl CompiledProgram {
+    /// The `AST` a hook call runs against, and whether rhai must evaluate that
+    /// AST's top-level statements first (`CallFnOptions::eval_ast`).
+    ///
+    /// The two travel together and must never be mixed: `eval_ast(true)` on the
+    /// FULL `ast` would re-run the world-touching top level on every tick, and
+    /// `eval_ast(false)` on `imports_ast` would skip the imports it exists for.
+    fn hook_target(&self) -> (&AST, bool) {
+        match &self.imports_ast {
+            Some(a) => (a, true),
+            None => (&self.ast, false),
+        }
+    }
 }
 
 /// A memoized compile outcome: a shared program, or the diagnostic a bad source
@@ -1013,12 +1234,21 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         entity: Entity,
         source: &str,
         params: &str,
+        asset_id: Option<&str>,
     ) -> crate::scenario::CompileOutcome {
         use crate::scenario::CompileOutcome;
         // ── Structure: the compiled program (parse + prelude-merge + hook mask)
-        // is a pure function of `source`. Content-address it by `fnv1a64(source)`
-        // and reuse the `Arc` across every entity/replay; parse only on a miss.
-        let key = fnv1a64(source.as_bytes());
+        // is a pure function of `source` AND of `asset_id` — the id is stamped
+        // onto the AST and is what a relative `import` anchors against, so the
+        // same text loaded from two locations is genuinely two programs. Both go
+        // into the content address; keying on the source alone would serve one
+        // scenario the other's imports.
+        let key = Fnv1a::default()
+            .write_bytes(source.as_bytes())
+            // Length-delimited so ("ab", "c") and ("a", "bc") cannot collide.
+            .write_u64(source.len() as u64)
+            .write_bytes(asset_id.unwrap_or("").as_bytes())
+            .finish();
         let program = match self.compiled.get(&key) {
             Some(CacheEntry::Ok(p)) => p.clone(),
             // Cached failure: return the same diagnostic without re-parsing or
@@ -1030,16 +1260,39 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                     self.compiled.clear();
                 }
                 match compile_with_script_consts(&self.engine, source) {
-                    Ok(ast) => {
+                    Ok(mut ast) => {
+                        // Stamp the script's IDENTITY onto the AST. rhai reads it
+                        // back via `AST::source()` and hands it to
+                        // `ModuleResolver::resolve` as `source: Option<&str>` —
+                        // the anchor `ScriptSources::canonical_id` resolves a
+                        // relative `import "shot_camera"` against. Without it the
+                        // importer is `None` and a bare import is canonicalized
+                        // against the default root, i.e. the wrong place.
+                        //
+                        // A script with NO asset id (inline `lunco:script`, a
+                        // `RunScenario` string, a generated timeline) is left
+                        // unsourced on purpose: rhai then reports `None`, the
+                        // resolver takes its explicit "no anchor" branch, and a
+                        // relative import fails loudly instead of resolving
+                        // somewhere arbitrary. Absolute imports still work.
+                        if let Some(id) = asset_id {
+                            ast.set_source(id);
+                        }
                         // Merge the prelude's functions into the scenario AST so
                         // the engine-driven `__init_task`/`__note_task_event` (and
                         // every other prelude helper) are resolvable by `call_fn`.
                         // Merging prelude←user lets a user function win on any
                         // name/arity clash; the prelude has no top-level body, so
                         // the seed-run below still executes only the user's top level.
+                        //
+                        // Order matters for identity too: `AST::merge` takes the
+                        // source of the RIGHT operand (`merge_filtered_impl` in
+                        // rhai's `ast/ast.rs`), so prelude←user keeps the user
+                        // script's id and the prelude's absence of one does no harm.
                         let ast = self.prelude_ast.merge(&ast);
                         let mask = ProgramMask::from_ast(&ast);
-                        let p = Arc::new(CompiledProgram { ast, mask });
+                        let imports_ast = build_imports_ast(&self.engine, source, &ast, asset_id);
+                        let p = Arc::new(CompiledProgram { ast, imports_ast, mask });
                         self.compiled.insert(key, CacheEntry::Ok(p.clone()));
                         p
                     }
@@ -1116,8 +1369,9 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         bridge_core::rng_begin(self_gid as u64, bridge_core::sim_tick() as u64, salt);
         // Only enter the VM if the program defines this lifecycle hook (cached
         // mask bit — no AST scan). The built-in drivers below run regardless.
+        let (hook_ast, eval_ast) = st.program.hook_target();
         let user = if st.program.mask.has(hook) {
-            call_hook(&self.engine, &mut st.scope, &st.program.ast, name, self_gid, &mut st.this)
+            call_hook(&self.engine, &mut st.scope, hook_ast, eval_ast, name, self_gid, &mut st.this)
         } else {
             None
         };
@@ -1194,8 +1448,9 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         // defines `on_event` (cached mask bit — no AST scan) AND this event passes
         // the entity's subscription filter (default: all). Either fails → skip the
         // call entirely; the built-in task driver below still sees every event.
+        let (hook_ast, eval_ast) = st.program.hook_target();
         let user = if st.program.mask.event && st.filter.matches(&event.name) {
-            call_event_hook(&self.engine, &mut st.scope, &st.program.ast, self_gid, &mut st.this, evt.clone())
+            call_event_hook(&self.engine, &mut st.scope, hook_ast, eval_ast, self_gid, &mut st.this, evt.clone())
         } else {
             None
         };
@@ -1273,13 +1528,20 @@ pub fn tick_rhai_scenarios(world: &mut World) {
 
 /// Call a one-arg hook (`fn name(self)`), binding `this` to the entity's
 /// persistent state map. The caller guarantees the hook exists (via the cached
-/// `ProgramMask`), so this does no presence check. `eval_ast=false` so only the
-/// function runs (top-level already ran at compile); `rewind_scope=false` keeps
+/// `ProgramMask`), so this does no presence check. `rewind_scope=false` keeps
 /// the `const` globals available across calls. Logs any error.
+///
+/// `ast`/`eval_ast` come as a pair from [`CompiledProgram::hook_target`]: either
+/// the full program with `eval_ast=false` (the top level already ran at compile
+/// and must not re-fire its world effects), or the imports-only AST with
+/// `eval_ast=true` so the script's top-level `import`s are on rhai's import stack
+/// while the function body runs. Never mix the two — see
+/// [`top_level_import_source`].
 fn call_hook(
     engine: &Engine,
     scope: &mut rhai::Scope,
     ast: &AST,
+    eval_ast: bool,
     name: &str,
     self_id: i64,
     this: &mut Dynamic,
@@ -1288,7 +1550,7 @@ fn call_hook(
     // `ProgramMask`, so there's no per-call AST scan here.
     let args = [Dynamic::from_int(self_id)];
     let options = rhai::CallFnOptions::new()
-        .eval_ast(false)
+        .eval_ast(eval_ast)
         .rewind_scope(false)
         .bind_this_ptr(this);
     match engine.call_fn_with_options::<Dynamic>(options, scope, ast, name, args) {
@@ -1307,15 +1569,17 @@ fn call_event_hook(
     engine: &Engine,
     scope: &mut rhai::Scope,
     ast: &AST,
+    eval_ast: bool,
     self_id: i64,
     this: &mut Dynamic,
     evt: Dynamic,
 ) -> Option<(String, rhai::Position)> {
     // Presence is the caller's responsibility now — `deliver_event` gates this on
     // the cached `ProgramMask::event` bit, so no per-event AST scan here.
+    // `ast`/`eval_ast` are a pair — see [`call_hook`].
     let args = [Dynamic::from_int(self_id), evt];
     let options = rhai::CallFnOptions::new()
-        .eval_ast(false)
+        .eval_ast(eval_ast)
         .rewind_scope(false)
         .bind_this_ptr(this);
     match engine.call_fn_with_options::<Dynamic>(options, scope, ast, "on_event", args) {
@@ -1771,6 +2035,137 @@ mod tests {
         let src = "const N = [1, 2, 3].len(); fn n() { N } n()";
         let ast = super::compile_with_script_consts(&engine, src).unwrap();
         assert!(engine.eval_ast::<i64>(&ast).is_err());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Scenario identity (`AST::set_source`) + top-level imports inside functions.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Two scripts, one engine, one registry — the shape a scenario compile has.
+    fn engine_with_sibling(sibling_id: &str, sibling_src: &str) -> rhai::Engine {
+        let sources = lunco_assets::script_source::ScriptSources::default();
+        sources.insert(sibling_id, sibling_src);
+        super::build_world_engine(sources)
+    }
+
+    /// TASK A: a BARE relative `import` resolves against the scenario's own asset
+    /// id, which only works because the compiled AST carries that id.
+    ///
+    /// The whole point of threading `asset_id` from the USD loader down to
+    /// `ScenarioRuntime::compile`: rhai passes `AST::source()` to
+    /// `ModuleResolver::resolve` as the importing script, and
+    /// `ScriptSources::canonical_id` anchors the relative path against it.
+    #[test]
+    fn relative_import_resolves_against_the_scenarios_asset_id() {
+        let engine = engine_with_sibling("twin://ep1/shot_camera.rhai", "fn framing() { 7 }");
+        let src = r#"import "shot_camera" as cam; cam::framing()"#;
+
+        // Unsourced (an inline `lunco:script` / `RunScenario` string): the
+        // importer is `None`, so `shot_camera` canonicalizes against the default
+        // root and MUST NOT silently find the twin's file.
+        let anonymous = super::compile_with_script_consts(&engine, src).unwrap();
+        assert!(
+            engine.eval_ast::<i64>(&anonymous).is_err(),
+            "a script with no asset id must not resolve a relative import"
+        );
+
+        // Sourced, exactly as `RhaiScenarioRuntime::compile` does it.
+        let mut ast = super::compile_with_script_consts(&engine, src).unwrap();
+        ast.set_source("twin://ep1/main.rhai");
+        let got: i64 = engine.eval_ast(&ast).expect("relative import should resolve");
+        assert_eq!(got, 7);
+    }
+
+    /// TASK B: a top-level `import` must be usable from inside a `fn` body.
+    ///
+    /// MEASURED failure this guards: with `eval_ast(false)` (which the scenario
+    /// runtime needs, so the world-touching top level doesn't re-fire every tick)
+    /// rhai's `GlobalRuntimeState` for the hook call has an empty import stack and
+    /// `cam::framing()` throws `Module not found: cam` on EVERY tick — a stalled
+    /// shot, not a compile error. The imports-only AST is what fixes it.
+    #[test]
+    fn top_level_import_is_visible_inside_a_function() {
+        let engine = engine_with_sibling("twin://ep1/shot_camera.rhai", "fn framing() { 7 }");
+        let src = r#"
+            import "shot_camera" as cam;
+            fn on_tick(me) { cam::framing() }
+        "#;
+
+        let mut full = super::compile_with_script_consts(&engine, src).unwrap();
+        full.set_source("twin://ep1/main.rhai");
+
+        // Baseline — the bug. If rhai ever makes this work on its own, the
+        // imports-only AST stops being load-bearing and should be revisited.
+        let mut scope = rhai::Scope::new();
+        let err = engine
+            .call_fn_with_options::<rhai::Dynamic>(
+                rhai::CallFnOptions::new().eval_ast(false).rewind_scope(false),
+                &mut scope,
+                &full,
+                "on_tick",
+                [rhai::Dynamic::from_int(1)],
+            )
+            .expect_err("without the imports AST this must fail");
+        assert!(
+            err.to_string().contains("Module not found"),
+            "expected the measured `Module not found`, got: {err}"
+        );
+
+        // The fix: hook calls run against imports-only + all functions.
+        let imports_ast = super::build_imports_ast(&engine, src, &full, Some("twin://ep1/main.rhai"))
+            .expect("script has a top-level import, so an imports AST must be built");
+        let mut scope = rhai::Scope::new();
+        let got = engine
+            .call_fn_with_options::<i64>(
+                rhai::CallFnOptions::new().eval_ast(true).rewind_scope(false),
+                &mut scope,
+                &imports_ast,
+                "on_tick",
+                [rhai::Dynamic::from_int(1)],
+            )
+            .expect("the hoisted import should make `cam` resolvable inside on_tick");
+        assert_eq!(got, 7);
+    }
+
+    /// No top-level imports ⇒ no second AST ⇒ hook calls keep using the full
+    /// program with `eval_ast(false)`, i.e. today's behaviour and cost.
+    #[test]
+    fn a_script_without_imports_builds_no_imports_ast() {
+        let engine = super::build_world_engine(Default::default());
+        let src = "fn on_tick(me) { 1 }";
+        let full = super::compile_with_script_consts(&engine, src).unwrap();
+        assert!(super::build_imports_ast(&engine, src, &full, None).is_none());
+    }
+
+    /// The extractor takes only DEPTH-0 imports, and is not fooled by imports
+    /// mentioned inside strings, comments, or function bodies. An import already
+    /// inside a `fn` is visible to that `fn` and must not be hoisted.
+    #[test]
+    fn only_top_level_imports_are_extracted() {
+        let src = r#"
+            // import "commented" as c;
+            import "twin://ep1/a" as a;
+            const S = "import \"in_a_string\" as s;";
+            fn f() {
+                import "nested" as n;
+                n::go();
+            }
+            import "b" as b;
+        "#;
+        let got = super::top_level_import_source(src).expect("two top-level imports");
+        assert!(got.contains(r#"import "twin://ep1/a" as a;"#), "got:\n{got}");
+        assert!(got.contains(r#"import "b" as b;"#), "got:\n{got}");
+        assert!(!got.contains("commented"), "comment leaked:\n{got}");
+        assert!(!got.contains("in_a_string"), "string literal leaked:\n{got}");
+        assert!(!got.contains("nested"), "an in-function import was hoisted:\n{got}");
+        assert_eq!(got.lines().count(), 2, "got:\n{got}");
+    }
+
+    #[test]
+    fn a_script_with_no_imports_extracts_nothing() {
+        assert!(super::top_level_import_source("fn f() { 1 } let x = 2;").is_none());
+        // `important` is not `import`.
+        assert!(super::top_level_import_source("let important = 1;").is_none());
     }
 
     #[test]

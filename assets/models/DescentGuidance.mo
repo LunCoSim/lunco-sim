@@ -11,9 +11,17 @@ model DescentGuidance
    the program prim and the lander has no autopilot.
 
    It yields to the pilot the moment one takes the stick: `piloted` is wired from the
-   possession registry, and it zeroes the command. The airframe's own gate would
-   ignore this output anyway; zeroing it here means the autopilot also stops burning
-   propellant it is no longer flying with."
+   possession registry, and it zeroes the command. The airframe SELECTS between this
+   wire and the session's stick, so it would already be ignoring this output; zeroing
+   it here means the autopilot also stops burning propellant it is no longer flying
+   with, and that its telemetry reads as standing down rather than as commanding a
+   burn nobody applies.
+
+   Note the asymmetry with the airframe, and that it is deliberate. Here `piloted`
+   picks WHICH SOURCE commands — the correct use. It must never gate a capability the
+   vehicle physically has: `Lander.mo` used to gate attitude torque behind it, which
+   left an unpossessed vehicle unable to correct any tilt it acquired, with thrust
+   then steering it along that tilt until it flew off the terrain."
 
   // ── Schedule + gains ──
   input Real kv = 1.2 "Descent-rate tracking gain";
