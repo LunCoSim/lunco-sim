@@ -44,20 +44,27 @@ use big_space::prelude::{CellCoord, Grid};
 use leafwing_input_manager::prelude::ActionState;
 use lunco_celestial::link::LinkState;
 use lunco_controller::ControllerLink;
+use lunco_mobility::WheelRaycast;
 use lunco_core::{Avatar, GlobalEntityId, UserIntent};
 
-/// Tilt (degrees from local up) past which the readout goes amber.
+/// Fallback amber threshold, for a vessel whose limits cannot be derived.
 ///
-/// GENERIC, and deliberately not a per-vehicle limit: the real roll-over angle is
-/// `atan(half_track / com_height)` and the real slip limit is `atan(μ)`, both of
-/// which are properties of the AUTHORED vehicle, not of this crate. A rover that
-/// wants its own arcs should publish them; until it does, these are honest
-/// "you are on a meaningful slope" / "you are on a slope that rolls things"
-/// thresholds, spanning the range real lunar rovers actually cared about
-/// (Lunokhod-1 drove to ~32° operationally, with a 45° auto-brake cut-out).
-const CAUTION_TILT_DEG: f32 = 20.0;
-/// Tilt past which the readout goes red. See [`CAUTION_TILT_DEG`].
-const DANGER_TILT_DEG: f32 = 30.0;
+/// GENERIC on purpose: the real roll-over angle is `atan(half_track / com_height)`
+/// and the real slip limit is `atan(μ)`, both properties of the AUTHORED vehicle.
+/// A rover now publishes exactly those as [`VesselEnvelope`], and the HUD prefers
+/// them — see `docs/architecture/58-vessel-envelope-and-routes.md`. These remain
+/// for the unknown-vehicle case (a lander, a wheel-less body), where they are
+/// honest "meaningful slope" / "slope that rolls things" bands spanning the range
+/// real lunar rovers cared about (Lunokhod-1 drove to ~32° operationally, with a
+/// 45° auto-brake cut-out).
+///
+/// They must NOT be used for a wheeled rover. Against the Summer Space School
+/// ladder these generic bands are *inverted*: the awful tier slips at 21.8° (only
+/// just amber) while the easy tier screams red at 30° with 22° of margin left —
+/// the driver most at risk got the mildest warning.
+const FALLBACK_CAUTION_TILT_DEG: f32 = 20.0;
+/// Fallback red threshold. See [`FALLBACK_CAUTION_TILT_DEG`].
+const FALLBACK_DANGER_TILT_DEG: f32 = 30.0;
 
 /// What the HUD needs about the driven vessel, resolved once per frame.
 struct DrivenVessel {
@@ -74,6 +81,44 @@ struct DrivenVessel {
     speed: Option<f32>,
     /// Live comms link, or `None` for a vessel carrying no link node at all.
     link: Option<LinkInfo>,
+    /// Amber threshold — this vessel's own slip limit when derivable, else the
+    /// generic fallback. See [`FALLBACK_CAUTION_TILT_DEG`].
+    caution_deg: f32,
+    /// Red threshold — this vessel's own tip limit when derivable.
+    danger_deg: f32,
+    /// True when the bands above came from the vessel rather than the fallback,
+    /// so the gauge can say which it is showing. A driver reading a limit needs to
+    /// know whether it is *their* limit.
+    limits_derived: bool,
+}
+
+/// The tilt bands to paint, in degrees: (amber, red).
+///
+/// Pure arithmetic over the vessel's authored parts, kept as a free function so the
+/// derivation can be tested without a World — and so it stays obviously cheap.
+/// It is NOT cached anywhere: `atan` of a min is not worth a stored component, and
+/// a stored copy could go stale against the tire it derives from, which is the
+/// exact failure this is meant to remove.
+///
+/// * amber = slip limit = `atan(min μ)`. **min, not mean** — a vehicle slips at its
+///   weakest contact, and averaging would flatter a rover with one bald tire.
+/// * red = tip limit = `atan(half_track / CoM-height-above-contact)`.
+///
+/// `com_above_contact <= 0` has no finite tip angle (CoM at or below the contact
+/// plane), so red falls back rather than reporting ~90°, which would read as
+/// "extremely stable" when the truth is "this model does not apply".
+///
+/// See `docs/architecture/58-vessel-envelope-and-routes.md`.
+fn tilt_bands(min_mu: f64, half_track: f64, com_above_contact: f64) -> (f32, f32) {
+    let caution = min_mu.max(0.0).atan().to_degrees() as f32;
+    let danger = if com_above_contact > 1e-3 && half_track > 1e-3 {
+        (half_track / com_above_contact).atan().to_degrees() as f32
+    } else {
+        FALLBACK_DANGER_TILT_DEG
+    };
+    // Never let amber sit above red: the easy tier slips at 52.4°, past its own
+    // fallback red, and a gauge whose bands cross is worse than a generic one.
+    (caution, danger.max(caution))
 }
 
 /// The one link the driver actually cares about: can I be commanded right now,
@@ -191,6 +236,8 @@ fn resolve_driven(
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
     q_links: &Query<(Entity, &LinkState)>,
     q_ids: &Query<(Entity, &GlobalEntityId)>,
+    q_wheels: &Query<(Entity, &WheelRaycast, &Transform)>,
+    q_com: &Query<&ComputedCenterOfMass>,
 ) -> Option<DrivenVessel> {
     let vessel = q_avatar.iter().next()?.vessel_entity;
     let (pos, rot) = lunco_core::coords::world_pose(vessel, q_parents, q_grids, q_spatial)?;
@@ -218,6 +265,56 @@ fn resolve_driven(
         .or_else(|_| q_gid.get(vessel).map(|g| format!("vessel #{}", g.get())))
         .unwrap_or_else(|_| "vessel".to_string());
 
+    // Derive this vessel's own bands from its wheels, at the point of use. Six
+    // wheels, a min and an atan — cheaper per frame than the layout of the panel
+    // it labels, and with no cached copy that could disagree with the tire.
+    //
+    // Wheels hang under the chassis (often via a suspension link), so match by
+    // ancestry rather than by direct parentage — the same walk `resolve_link` uses
+    // to find a radio.
+    let mut min_mu = f64::MAX;
+    let mut half_track: f64 = 0.0;
+    // Contact plane: the lowest point any tire touches, in chassis-local space.
+    let mut contact_y = f64::MAX;
+    let mut wheels = 0usize;
+    for (wheel, w, t) in q_wheels.iter() {
+        let mut e = wheel;
+        let mut owned = false;
+        for _ in 0..8 {
+            let Ok(parent) = q_parents.get(e) else { break };
+            e = parent.parent();
+            if e == vessel {
+                owned = true;
+                break;
+            }
+        }
+        if !owned {
+            continue;
+        }
+        wheels += 1;
+        min_mu = min_mu.min(w.friction_mu);
+        half_track = half_track.max((t.translation.x as f64).abs());
+        contact_y = contact_y.min(t.translation.y as f64 - w.wheel_radius);
+    }
+
+    // No wheels ⇒ not a ground vehicle (a lander, a free camera): keep the honest
+    // generic bands rather than inventing limits for a vehicle model that does not
+    // apply.
+    let (caution_deg, danger_deg, limits_derived) = if wheels > 0 {
+        let com_above_contact = q_com
+            .get(vessel)
+            .map(|c| c.0.y - contact_y)
+            .unwrap_or(f64::NAN);
+        let (c, d) = tilt_bands(min_mu, half_track, com_above_contact);
+        (c, d, true)
+    } else {
+        (
+            FALLBACK_CAUTION_TILT_DEG,
+            FALLBACK_DANGER_TILT_DEG,
+            false,
+        )
+    };
+
     Some(DrivenVessel {
         label,
         pos,
@@ -227,7 +324,75 @@ fn resolve_driven(
         heading_deg,
         speed: q_vel.get(vessel).ok().map(|v| v.length() as f32),
         link: resolve_link(vessel, q_links, q_parents, q_name, q_ids),
+        caution_deg,
+        danger_deg,
+        limits_derived,
     })
+}
+
+#[cfg(test)]
+mod tilt_band_tests {
+    use super::*;
+
+    /// The three tiers from the Summer Space School twin's `SURVEY.md` ladder,
+    /// with the shipped `six_wheel_rover.usda` geometry: wheels at x = ±1.0,
+    /// y = −0.15, radius 0.4, so the contact plane sits at y = −0.55.
+    ///
+    /// Pinned deliberately. If these drift, either the derivation broke or the
+    /// survey needs re-checking, and both want a human to look.
+    #[test]
+    fn bands_reproduce_the_surveyed_rover_ladder() {
+        // easy: cleated μ=1.3, CoM −0.25 ⇒ 0.30 m above contact
+        let (slip, tip) = tilt_bands(1.3, 1.0, -0.25 - -0.55);
+        assert!((slip - 52.4).abs() < 0.1, "easy slip {slip}");
+        assert!((tip - 73.3).abs() < 0.1, "easy tip {tip}");
+
+        // medium: worn μ=0.5, CoM −0.05 ⇒ 0.50 m above contact
+        let (slip, tip) = tilt_bands(0.5, 1.0, -0.05 - -0.55);
+        assert!((slip - 26.6).abs() < 0.1, "medium slip {slip}");
+        assert!((tip - 63.4).abs() < 0.1, "medium tip {tip}");
+
+        // awful: bald μ=0.4, CoM +0.45 ⇒ 1.00 m above contact
+        let (slip, tip) = tilt_bands(0.4, 1.0, 0.45 - -0.55);
+        assert!((slip - 21.8).abs() < 0.1, "awful slip {slip}");
+        assert!((tip - 45.0).abs() < 0.1, "awful tip {tip}");
+    }
+
+    /// The generic bands are *inverted* against this ladder — the awful tier slips
+    /// at 21.8°, only just past a 20° amber, while the easy tier would scream red
+    /// at 30° with 22° of margin left. This test states the defect the derivation
+    /// exists to fix, so nobody restores the constants thinking they were fine.
+    #[test]
+    fn generic_bands_would_mislead_both_extremes() {
+        let (awful_slip, _) = tilt_bands(0.4, 1.0, 1.0);
+        assert!(
+            awful_slip > FALLBACK_CAUTION_TILT_DEG,
+            "awful rover slips at {awful_slip}, generic amber is {FALLBACK_CAUTION_TILT_DEG} — \
+             it would still read 'caution' while already sliding"
+        );
+        let (easy_slip, _) = tilt_bands(1.3, 1.0, 0.30);
+        assert!(
+            easy_slip > FALLBACK_DANGER_TILT_DEG,
+            "easy rover slips at {easy_slip}, generic red is {FALLBACK_DANGER_TILT_DEG} — \
+             it would read 'danger' with {} deg of real margin left",
+            easy_slip - FALLBACK_DANGER_TILT_DEG
+        );
+    }
+
+    /// CoM at or below the contact plane: fall back rather than report ~90°.
+    #[test]
+    fn tip_band_falls_back_when_com_is_at_the_contact_plane() {
+        let (_, tip) = tilt_bands(0.5, 1.0, 0.0);
+        assert_eq!(tip, FALLBACK_DANGER_TILT_DEG);
+    }
+
+    /// Amber must never sit above red, or the gauge draws crossed bands.
+    #[test]
+    fn amber_never_exceeds_red() {
+        // Easy tier on a very stable chassis: slip 52.4° vs a tip of ~45°.
+        let (slip, tip) = tilt_bands(1.3, 1.0, 1.0);
+        assert!(tip >= slip, "bands crossed: slip {slip}, tip {tip}");
+    }
 }
 
 /// The HUD's palette — every colour resolved from the ACTIVE theme's semantic
@@ -281,10 +446,10 @@ impl Palette {
     }
 
     /// Colour for a tilt reading. Success → warning → error, matching the arc zones.
-    fn tilt(&self, tilt_deg: f32) -> egui::Color32 {
-        if tilt_deg >= DANGER_TILT_DEG {
+    fn tilt(&self, tilt_deg: f32, caution_deg: f32, danger_deg: f32) -> egui::Color32 {
+        if tilt_deg >= danger_deg {
             self.danger
-        } else if tilt_deg >= CAUTION_TILT_DEG {
+        } else if tilt_deg >= caution_deg {
             self.caution
         } else {
             self.ok
@@ -319,23 +484,19 @@ fn attitude_gauge(ui: &mut egui::Ui, v: &DrivenVessel, pal: &Palette) {
         painter.add(egui::Shape::line(pts, egui::Stroke::new(w, color)));
     };
 
+    // Band edges come from the VESSEL, so the dial reads in this rover's terms.
+    // Clamped to the dial's span: the easy tier slips at 52.4°, past the end of a
+    // 45° dial, and the honest rendering of that is a dial with no red on it — not
+    // an arc drawn off the edge. The dial stays a fixed 45° across tiers on
+    // purpose, so a driver who switches rovers compares like with like.
+    let caution = v.caution_deg.clamp(0.0, MAX_DEG);
+    let danger = v.danger_deg.clamp(caution, MAX_DEG);
+
     // Bands, mirrored left and right of vertical.
     for sign in [-1.0_f32, 1.0] {
-        arc(&painter, 0.0, sign * CAUTION_TILT_DEG, pal.band_ok, 5.0);
-        arc(
-            &painter,
-            sign * CAUTION_TILT_DEG,
-            sign * DANGER_TILT_DEG,
-            pal.band_caution,
-            5.0,
-        );
-        arc(
-            &painter,
-            sign * DANGER_TILT_DEG,
-            sign * MAX_DEG,
-            pal.band_danger,
-            5.0,
-        );
+        arc(&painter, 0.0, sign * caution, pal.band_ok, 5.0);
+        arc(&painter, sign * caution, sign * danger, pal.band_caution, 5.0);
+        arc(&painter, sign * danger, sign * MAX_DEG, pal.band_danger, 5.0);
     }
 
     // Needle: lean direction follows roll, magnitude is total tilt (so a purely
@@ -343,7 +504,9 @@ fn attitude_gauge(ui: &mut egui::Ui, v: &DrivenVessel, pal: &Palette) {
     let lean = v.roll_deg.signum() * v.tilt_deg.min(MAX_DEG);
     let a = to_screen(lean);
     let tip = egui::pos2(centre.x + (radius - 8.0) * a.cos(), centre.y + (radius - 8.0) * a.sin());
-    let col = pal.tilt(v.tilt_deg);
+    // Colour against the UNCLAMPED limits — the reading must go amber at the real
+    // slip angle even when that sits past the end of the dial.
+    let col = pal.tilt(v.tilt_deg, v.caution_deg, v.danger_deg);
     painter.line_segment([centre, tip], egui::Stroke::new(2.5, col));
     painter.circle_filled(centre, 4.0, col);
 
@@ -359,6 +522,21 @@ fn attitude_gauge(ui: &mut egui::Ui, v: &DrivenVessel, pal: &Palette) {
         egui::Align2::CENTER_CENTER,
         "TILT",
         egui::FontId::proportional(9.0),
+        pal.muted,
+    );
+    // Name the limits the bands are drawn from. A driver reading a coloured arc
+    // needs to know whether it is THEIR rover's limit or a generic one — without
+    // this the same dial means different things on different vehicles and looks
+    // identical.
+    painter.text(
+        egui::pos2(centre.x, centre.y - 2.0),
+        egui::Align2::CENTER_CENTER,
+        if v.limits_derived {
+            format!("slip {:.0}° · tip {:.0}°", v.caution_deg, v.danger_deg)
+        } else {
+            "generic limits".to_string()
+        },
+        egui::FontId::proportional(8.0),
         pal.muted,
     );
 }
@@ -450,6 +628,8 @@ pub(crate) fn draw_rover_hud(
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     q_links: Query<(Entity, &LinkState)>,
     q_ids: Query<(Entity, &GlobalEntityId)>,
+    q_wheels: Query<(Entity, &WheelRaycast, &Transform)>,
+    q_com: Query<&ComputedCenterOfMass>,
 ) {
     if !hud.rover {
         return;
@@ -458,7 +638,7 @@ pub(crate) fn draw_rover_hud(
     let pal = Palette::of(&theme);
     let Some(v) = resolve_driven(
         &q_avatar, &q_name, &q_gid, &q_vel, &q_parents, &q_grids, &q_spatial, &q_links,
-        &q_ids,
+        &q_ids, &q_wheels, &q_com,
     ) else {
         return;
     };
