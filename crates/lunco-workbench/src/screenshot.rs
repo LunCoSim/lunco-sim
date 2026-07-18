@@ -516,12 +516,11 @@ fn on_stop_offline_recording(
 /// lock-step deterministic: exactly one strategy write per frame, decided after
 /// every other system — including the `deliver_offline_frame` observer — has run.
 ///
-/// Previously the strategy was written from both `step_offline_recording` and
-/// `deliver_offline_frame`. `step` ran after `deliver` in the same frame and
-/// re-froze the clock to ZERO, overwriting the one-frame step `deliver` had just
-/// scheduled. Virtual time therefore never advanced, `FixedUpdate` never ran, and
-/// a scenario script sequencing the shots was starved — it could never reach its
-/// `StopOfflineRecording`, so recording spooled frames until the process was killed.
+/// A second writer of `TimeUpdateStrategy` breaks this outright: whichever system
+/// runs later in the frame wins, and re-freezing to ZERO after a step is scheduled
+/// means virtual time never advances, `FixedUpdate` never runs, and a scenario
+/// script sequencing the shots is starved — it can never reach its
+/// `StopOfflineRecording`, so recording spools frames until the process is killed.
 ///
 /// The cycle alternates two render frames per captured frame:
 ///   1. **advance** — clock steps `1/fps`, sim and `FixedUpdate` run, scene renders.
@@ -576,13 +575,26 @@ fn deliver_offline_frame(
     };
 
     let path = state.output_dir.join(format!("frame_{:06}.png", state.frame_index));
-    
-    // Save the image synchronously to disk
+
+    // Save the image synchronously to disk. A failed write ABORTS the recording:
+    // continuing would advance `frame_index` past a frame that never landed, leaving
+    // a hole in the sequence. Nothing downstream notices — the scenario keeps
+    // sequencing off `frame_index`, and the encoder happily renders the remaining
+    // files as a continuous shot that silently jumps. A disk that fills mid-capture
+    // is the ordinary way to hit this, so fail loudly at the first bad frame rather
+    // than emit a corrupt take.
     if let Err(e) = dyn_img.save(&path) {
-        error!("[offline-record] failed to save frame {}: {e}", state.frame_index);
-    } else {
-        trace!("[offline-record] saved frame {}", state.frame_index);
+        error!(
+            "[offline-record] failed to save frame {} ({e}) — aborting recording to \
+             avoid a sequence with holes in it",
+            state.frame_index
+        );
+        state.active = false;
+        state.is_waiting_for_frame = false;
+        state.frame_just_captured = false;
+        return;
     }
+    trace!("[offline-record] saved frame {}", state.frame_index);
 
     state.frame_index += 1;
     state.is_waiting_for_frame = false;

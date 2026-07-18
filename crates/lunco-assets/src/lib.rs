@@ -38,6 +38,7 @@
 
 use std::path::{Path, PathBuf};
 
+pub mod asset_path;
 pub mod asset_read;
 pub mod asset_sources;
 pub mod discovery;
@@ -52,6 +53,7 @@ pub mod missions;
 pub mod models;
 pub mod msl;
 pub mod process;
+pub mod script_source;
 pub mod scripting;
 pub mod tutorials;
 pub mod twin_source;

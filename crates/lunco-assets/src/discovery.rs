@@ -267,8 +267,13 @@ pub fn list_usd_assets(manifest: &AssetManifest, roots: &TwinRoots) -> Vec<Asset
 
 /// Every catalogued file under `dir`, regardless of extension — the native walk
 /// that produces the manifest. Mirrors what `build_web.sh` writes for the web.
+///
+/// `rhai` is catalogued because scripts are importable assets: a scenario can
+/// `import` a module from any asset source, and on the web the manifest is the
+/// only way a file is discoverable at all. Omitting it made script modules a
+/// native-only feature by accident.
 #[cfg(not(target_arch = "wasm32"))]
-const MANIFEST_EXTS: &[&str] = &["usda", "wgsl"];
+const MANIFEST_EXTS: &[&str] = &["usda", "wgsl", "rhai"];
 
 #[cfg(not(target_arch = "wasm32"))]
 fn walk_any(base: &Path, dir: &Path, f: &mut impl FnMut(String)) {

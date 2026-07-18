@@ -2769,6 +2769,49 @@ fn doc_for_stage(
     })
 }
 
+/// Freeze physics and advance it deliberately, one frame at a time.
+///
+/// The verb a cutscene or an offline recording wants, and the reason it is NOT
+/// `SetTimeTransport`: pausing the world clock also stops `FixedUpdate`, so the
+/// scenario script that paused it never runs again to unpause itself — the shot
+/// hangs and a recording spools frames forever. A physics hold freezes
+/// `Time<Physics>` while `Time<Virtual>` (and so the script) keeps running.
+///
+/// * `{"hold": true}` — freeze the world; the script keeps ticking.
+/// * `{"steps": 1}` — let exactly one frame of physics through, then re-freeze.
+/// * `{"hold": false}` — hand the world back to normal simulation.
+///
+/// Steps only apply while held; queued with nothing holding they are dropped rather
+/// than banked against an unrelated hold (a terrain bake, say).
+#[Command(default)]
+pub struct StepPhysics {
+    /// Raise (`Some(true)`) / release (`Some(false)`) the cinematic hold; `None`
+    /// leaves it as-is so a step can be sent on its own.
+    pub hold: Option<bool>,
+    /// Frames of physics to let through the hold. `None` = 0.
+    pub steps: Option<u32>,
+}
+
+#[on_command(StepPhysics)]
+fn on_step_physics(
+    trigger: On<StepPhysics>,
+    mut holds: ResMut<lunco_physics::PhysicsHolds>,
+    mut req: ResMut<lunco_physics::PhysicsStepRequest>,
+) {
+    let cmd = trigger.event();
+    if let Some(hold) = cmd.hold {
+        holds.set(lunco_physics::PhysicsHolds::CINEMATIC, hold);
+        // Releasing drops any unspent debt: the world is running again, so owed
+        // frames are meaningless and must not survive into the next hold.
+        if !hold {
+            req.clear();
+        }
+    }
+    if let Some(steps) = cmd.steps {
+        req.request(steps);
+    }
+}
+
 // Generates `register_all_commands(app)` — every `#[Command]` this module owns,
 // each wired type + observer together. `persist_*_to_runtime_layer` are NOT here:
 // they are additional observers on the same verbs (the journaling/runtime-layer
@@ -2788,6 +2831,7 @@ register_commands!(
     on_set_object_property,
     on_set_shader_source,
     on_spawn_entity_command,
+    on_step_physics,
 );
 
 impl Plugin for SpawnCommandPlugin {

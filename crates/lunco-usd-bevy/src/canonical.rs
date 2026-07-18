@@ -291,7 +291,7 @@ impl CanonicalStage {
     /// so the injected bytes match what PCP demands.
     pub fn canonical_reference_id(&self, asset_path: &str) -> String {
         let anchor = openusd::ar::ResolvedPath::new(&self.scene_layer);
-        crate::resolver::canonicalize(asset_path, Some(&anchor))
+        crate::resolver::canonicalize(asset_path, crate::resolver::anchor_str(Some(&anchor)))
     }
 
     /// Author a `references = @asset_path@` arc onto the prim at `path` (root

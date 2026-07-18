@@ -32,9 +32,12 @@ use openusd::sdf::{Path as SdfPath, Value};
 use openusd::usd::{PrimPredicate, Stage};
 use openusd::usda;
 
+use lunco_assets::asset_path::canonicalize;
+
 use crate::canonical::StageRecipe;
 use crate::resolver::{
-    canonicalize, is_binary_asset, resolve_binary_uri, LuncoUsdResolver, SharedLayerBytes,
+    anchor_str, is_binary_asset, resolve_binary_uri, LuncoUsdResolver,
+    SharedLayerBytes,
 };
 
 /// Async BFS that fetches the full transitive `.usda` layer closure into an
@@ -96,7 +99,7 @@ fn child_layer_ids(id: &str, raw: &[u8]) -> Result<Vec<String>> {
     Ok(
         crate::closure::discover_arcs(&data, crate::closure::ArcFilter::LayersOnly)
             .iter()
-            .map(|child| canonicalize(child, Some(&anchor)))
+            .map(|child| canonicalize(child, anchor_str(Some(&anchor))))
             .collect(),
     )
 }
@@ -353,8 +356,6 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
     /// (and fire the failure placeholder) exactly like a glb referenced directly.
     #[test]
     fn glb_payload_in_referenced_wrapper_anchors_on_composed_prim() {
-        use crate::resolver::canonicalize;
-        use openusd::ar::ResolvedPath;
         // Wrapper: a `Structure` defaultPrim whose `Visual` child carries the glb
         // payload — the Perseverance "usda → glb" shape.
         let wrapper = "#usda 1.0\n(\n    defaultPrim = \"Structure\"\n)\ndef Xform \"Structure\"\n{\n    def Xform \"Visual\" (\n        prepend payload = @model.glb@\n    )\n    {\n        string lunco:assetMode = \"scene\"\n    }\n}\n";
@@ -365,7 +366,7 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
         // to the wrapper bytes and the `@model.glb@` payload is stubbed — the
         // storage-based compose path, not the deleted native-fs shim.
         let root_id = canonicalize("scene.usda", None);
-        let wrapper_id = canonicalize("wrapper.usda", Some(&ResolvedPath::new(&root_id)));
+        let wrapper_id = canonicalize("wrapper.usda", Some(root_id.as_str()));
         let bytes = HashMap::from([
             (root_id.clone(), scene.as_bytes().to_vec()),
             (wrapper_id, wrapper.as_bytes().to_vec()),

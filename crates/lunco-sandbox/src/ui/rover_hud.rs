@@ -399,8 +399,46 @@ fn key_cap(ui: &mut egui::Ui, label: &str, active: bool, pal: &Palette) {
 
 /// ATTITUDE cluster (bottom-left) + NAV/CONTROLS cluster (bottom-right).
 /// Both early-out in free flight.
+/// Whether the driver HUD is painted. **Off by default.**
+///
+/// The HUD is chrome: it belongs to a scene that wants to teach the controls, not to
+/// every scene that happens to possess a vessel. Offline recording captures the whole
+/// window, so a HUD that appears merely because something is possessed is baked into
+/// the footage — and a scripted pilot possesses the vessel exactly as a human does,
+/// which is what made it show up uninvited.
+///
+/// A scene opts in with `cmd("SetHud", #{ rover: true })`, so possession decides
+/// *control* and the scene decides *presentation*.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct HudSettings {
+    /// Paint the driver cockpit (attitude + nav/controls) while possessing.
+    pub rover: bool,
+}
+
+/// Show or hide the driver HUD. Fields left `None` are unchanged.
+#[lunco_core::Command(default)]
+pub struct SetHud {
+    /// Paint the driver cockpit while possessing a vessel.
+    pub rover: Option<bool>,
+}
+
+#[lunco_core::on_command(SetHud)]
+pub(crate) fn on_set_hud(trigger: On<SetHud>, mut hud: ResMut<HudSettings>) {
+    if let Some(rover) = trigger.event().rover {
+        hud.rover = rover;
+    }
+}
+
+// Registered from `SandboxUiPlugin`, which is itself the `ui` feature's plugin — so
+// the verb exists exactly when the HUD it controls does, with no `cfg` at the call
+// site. Visibility is a RUNTIME setting (`HudSettings`), never a build flag: the same
+// binary shows the HUD for a scene that asks for it and stays clean for one that
+// does not.
+lunco_core::register_commands!(on_set_hud);
+
 pub(crate) fn draw_rover_hud(
     mut egui_ctx: EguiContexts,
+    hud: Res<HudSettings>,
     theme: Option<Res<lunco_theme::Theme>>,
     q_avatar: Query<&ControllerLink, With<Avatar>>,
     q_intent: Query<&ActionState<UserIntent>, With<Avatar>>,
@@ -413,6 +451,9 @@ pub(crate) fn draw_rover_hud(
     q_links: Query<(Entity, &LinkState)>,
     q_ids: Query<(Entity, &GlobalEntityId)>,
 ) {
+    if !hud.rover {
+        return;
+    }
     let Some(theme) = theme else { return };
     let pal = Palette::of(&theme);
     let Some(v) = resolve_driven(

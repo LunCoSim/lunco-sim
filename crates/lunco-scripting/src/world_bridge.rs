@@ -279,13 +279,56 @@ pub(crate) fn compile_prelude(engine: &Engine) -> Result<AST, rhai::ParseError> 
     }
 }
 
+/// Compile a script so its own top-level `const`s are visible inside its `fn`s.
+///
+/// Rhai functions are **pure**: a function body cannot see script-level variables
+/// at runtime, so a top-level `const HOVER = 0.327;` referenced inside
+/// `fn descent_throttle()` is not merely absent — it throws mid-tick, which in a
+/// scenario means the shot stalls and the recorder spools frames. Authors hit this
+/// constantly, because every other language they know closes over module scope.
+///
+/// Rhai's supported answer is **constant propagation**: the optimizer folds
+/// constants into function bodies, but only ones supplied in the [`Scope`] handed
+/// to [`Engine::compile_with_scope`] — the script's own `const` statements are not
+/// in that scope, which is why a plain `Engine::compile` (an empty scope, see
+/// rhai's `api/compile.rs`) leaves them unresolved.
+///
+/// So we do the documented two-pass: parse once to read the top-level literal
+/// constants back out with [`AST::iter_literal_variables`], seed them into a scope
+/// as constants, then re-compile against it. The second pass is what folds them
+/// into the function bodies. This keeps authored scripts idiomatic — a `const` at
+/// the top of the file means what it looks like it means — instead of forcing the
+/// inline-the-magic-number workaround.
+///
+/// Only *literal* constants fold (rhai's `get_literal_value`); a `const X = f();`
+/// is not a literal and is silently skipped, retaining today's behaviour. Folding
+/// clones the value into every use site, which is why this is right for scalars
+/// and why authors should keep large arrays/maps out of `const`.
+fn compile_with_script_consts(engine: &Engine, source: &str) -> Result<AST, rhai::ParseError> {
+    let first = engine.compile(source)?;
+
+    let mut consts = rhai::Scope::new();
+    for (name, is_const, value) in first.iter_literal_variables(true, false) {
+        if is_const {
+            consts.push_constant_dynamic(name.to_string(), value);
+        }
+    }
+    // Nothing to fold — hand back the AST we already have rather than paying for
+    // an identical second parse.
+    if consts.is_empty() {
+        return Ok(first);
+    }
+
+    engine.compile_with_scope(&consts, source)
+}
+
 fn compile_prelude_set(
     engine: &Engine,
     files: Vec<(String, String)>,
 ) -> Result<AST, rhai::ParseError> {
     let mut acc: Option<AST> = None;
     for (name, src) in files {
-        match engine.compile(&src) {
+        match compile_with_script_consts(engine, &src) {
             Ok(part) => acc = Some(match acc {
                 Some(a) => a.merge(&part),
                 None => part,
@@ -302,8 +345,16 @@ fn compile_prelude_set(
 /// Build a rhai [`Engine`] with the World-bridge verbs registered, the embedded
 /// prelude loaded as a global module, and the same sandbox caps as the one-shot
 /// backend.
-pub fn build_world_engine() -> Engine {
+///
+/// `sources` backs `import`. Passing it is not optional in practice: a bare
+/// `Engine::new()` ships rhai's `FileModuleResolver`, which reads arbitrary files
+/// relative to the process working directory — a sandbox escape in a system that
+/// otherwise routes every asset through a scoped source. Installing ours closes it.
+pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -> Engine {
     let mut engine = Engine::new();
+
+    // Replace rhai's default file-reading resolver before anything can import.
+    engine.set_module_resolver(crate::module_resolver::AssetModuleResolver::new(sources));
 
     engine.set_max_operations(1_000_000);
     engine.set_max_call_levels(64);
@@ -916,11 +967,20 @@ pub struct RhaiScenarioRuntime {
     /// Tool-library generation the engine's static modules were built from; a
     /// mismatch triggers a re-`refresh` so a `RegisterToolLibrary` hot-reloads.
     tool_gen: u64,
+    /// The script registry backing `import`. Shared (`Arc`) with the engine's
+    /// module resolver and with the Bevy resource the asset side fills.
+    sources: lunco_assets::script_source::ScriptSources,
 }
 
 impl Default for RhaiScenarioRuntime {
     fn default() -> Self {
-        let mut engine = build_world_engine();
+        // The runtime OWNS the script registry and hands out clones. `ScriptSources`
+        // is an `Arc` handle, so the copy inserted as a Bevy resource (which the
+        // asset-loading side fills) and the copy captured by the engine's module
+        // resolver are the same map — a script loaded later is importable without
+        // rebuilding the engine.
+        let sources = lunco_assets::script_source::ScriptSources::default();
+        let mut engine = build_world_engine(sources.clone());
         engine.on_print(|s| info!("[rhai] {s}"));
         let prelude_ast =
             compile_prelude(&engine).unwrap_or_else(|e| panic!("prelude must compile: {e}"));
@@ -931,7 +991,19 @@ impl Default for RhaiScenarioRuntime {
             prelude_ast,
             // build_world_engine already refreshed at the current generation.
             tool_gen: crate::tool_libs::generation(),
+            sources,
         }
+    }
+}
+
+impl RhaiScenarioRuntime {
+    /// A handle to the registry backing `import`.
+    ///
+    /// Insert this as a Bevy resource so the asset side and the engine's module
+    /// resolver share ONE map — they are `Arc` clones of the same storage, which is
+    /// what lets a script loaded after engine construction still be importable.
+    pub fn script_sources(&self) -> lunco_assets::script_source::ScriptSources {
+        self.sources.clone()
     }
 }
 
@@ -957,7 +1029,7 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                 if self.compiled.len() >= COMPILED_CACHE_CAP {
                     self.compiled.clear();
                 }
-                match self.engine.compile(source) {
+                match compile_with_script_consts(&self.engine, source) {
                     Ok(ast) => {
                         // Merge the prelude's functions into the scenario AST so
                         // the engine-driven `__init_task`/`__note_task_event` (and
@@ -1519,7 +1591,16 @@ pub fn eval_with_world_as(
     use std::sync::{Arc, Mutex};
 
     // A fresh engine per call keeps state isolated; cheap relative to the work.
-    let mut engine = build_world_engine();
+    //
+    // It shares the world's script registry, so an `import` typed at the REPL
+    // resolves exactly as it would inside a scenario. A private registry here would
+    // make the REPL a place where imports mysteriously fail — the kind of
+    // inconsistency that costs an hour to diagnose.
+    let sources = world
+        .get_resource::<lunco_assets::script_source::ScriptSources>()
+        .cloned()
+        .unwrap_or_default();
+    let mut engine = build_world_engine(sources);
 
     let out = Arc::new(Mutex::new(String::new()));
     let sink = out.clone();
@@ -1650,7 +1731,46 @@ mod tests {
     #[test]
     fn prelude_loads_as_module() {
         // The full build path: verbs + prelude-as-global-module must succeed.
-        let _engine = super::build_world_engine();
+        let _engine = super::build_world_engine(Default::default());
+    }
+
+    /// A top-level `const` must be readable from inside a `fn` body.
+    ///
+    /// Rhai fns are pure and cannot see script-level state at runtime, so this
+    /// only works because `compile_with_script_consts` folds the constant in at
+    /// compile time. Guarding it matters because the failure is a RUNTIME throw
+    /// on the tick that first calls the function, not a parse error — in a
+    /// scenario that surfaces as a stalled shot, which is expensive to trace back
+    /// to a missing constant.
+    #[test]
+    fn script_const_is_visible_inside_functions() {
+        let engine = rhai::Engine::new();
+        let src = "const HOVER = 0.327; fn thrust() { HOVER * 2.0 } thrust()";
+
+        // Baseline: plain `compile` (an empty scope) leaves `HOVER` unresolved,
+        // so the call throws. If rhai ever changes this, the workaround below is
+        // no longer load-bearing and this test should be revisited.
+        let plain = engine.compile(src).unwrap();
+        assert!(
+            engine.eval_ast::<f64>(&plain).is_err(),
+            "plain compile resolved a script-level const inside a fn — rhai's \
+             semantics changed, re-evaluate compile_with_script_consts"
+        );
+
+        let folded = super::compile_with_script_consts(&engine, src).unwrap();
+        let got: f64 = engine.eval_ast(&folded).expect("const should fold into the fn body");
+        assert!((got - 0.654).abs() < 1e-9, "got {got}");
+    }
+
+    /// A `const` bound to a non-literal is not foldable, and must not become a
+    /// silent behaviour change — it keeps failing exactly as it does today.
+    #[test]
+    fn non_literal_const_is_left_alone() {
+        let engine = rhai::Engine::new();
+        // `1 + 2` folds to a literal by the optimizer; a function call does not.
+        let src = "const N = [1, 2, 3].len(); fn n() { N } n()";
+        let ast = super::compile_with_script_consts(&engine, src).unwrap();
+        assert!(engine.eval_ast::<i64>(&ast).is_err());
     }
 
     #[test]
