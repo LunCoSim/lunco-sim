@@ -98,8 +98,8 @@ impl AssetLoader for RhaiSourceLoader {
 /// (`lunco_assets::asset_path::anchor_of`) — the same identity the `AssetServer`
 /// loaded it under. So a script is importable by exactly the path that names it,
 /// through whatever source it came from: `lunco://` for engine assets, `twin://`
-/// for a campaign repo outside the engine tree, `scenario://` for content synced
-/// from a peer.
+/// for a campaign repo outside the engine tree — including content synced from a
+/// peer, which mounts as an ordinary Twin root over its cache dir.
 ///
 /// This is why the resolver needs no loading logic of its own: whatever the asset
 /// system can reach, an `import` can reach, with no second discovery pass to keep

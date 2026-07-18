@@ -1,7 +1,8 @@
 //! Script sources, addressed by canonical asset id.
 //!
 //! A script that lives outside the engine repo — a campaign scenario in
-//! `lunco-marketing`, a policy synced from a peer into `scenario://<id>/` — is
+//! `lunco-marketing`, a policy synced from a peer and mounted as a Twin root over
+//! its cache dir (`twin://<id>/`) — is
 //! reached the same way every other asset is: through an [`AssetSource`] scheme,
 //! resolved by [`crate::asset_path::canonicalize`]. This registry is where the
 //! loaded TEXT of those scripts lands, keyed by that canonical id.
@@ -15,7 +16,7 @@
 //!
 //! So loading is split from resolution: the asset pipeline fills this registry
 //! ahead of time (async, through the normal `AssetServer` path, so every scheme
-//! including networked `scenario://` works), and resolution is then a pure
+//! including a networked scenario's `twin://` root works), and resolution is then a pure
 //! synchronous lookup. `LuncoUsdResolver` solves the identical problem for USD
 //! layer composition the identical way; this is that pattern for scripts.
 //!

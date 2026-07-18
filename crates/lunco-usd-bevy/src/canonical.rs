@@ -291,7 +291,7 @@ impl CanonicalStage {
     /// so the injected bytes match what PCP demands.
     pub fn canonical_reference_id(&self, asset_path: &str) -> String {
         let anchor = openusd::ar::ResolvedPath::new(&self.scene_layer);
-        crate::resolver::canonicalize(asset_path, crate::resolver::anchor_str(Some(&anchor)))
+        lunco_assets::asset_path::canonicalize(asset_path, crate::resolver::anchor_str(Some(&anchor)))
     }
 
     /// Author a `references = @asset_path@` arc onto the prim at `path` (root
@@ -648,7 +648,7 @@ mod recipe_tests {
 
         // Recipe mirrors what `fetch_layer_closure` produces for a ref-less scene:
         // root keyed by the SAME canonical id the resolver uses.
-        let root_id = crate::resolver::canonicalize(f.to_str().unwrap(), None);
+        let root_id = lunco_assets::asset_path::canonicalize(f.to_str().unwrap(), None);
         let bytes = HashMap::from([(root_id.clone(), std::fs::read(&f).unwrap())]);
         let recipe = StageRecipe { root_id, bytes };
 
@@ -691,7 +691,7 @@ mod sync_system_tests {
         let f = dir.join("scene.usda");
         std::fs::write(&f, FIXTURE).unwrap();
 
-        let root_id = crate::resolver::canonicalize(f.to_str().unwrap(), None);
+        let root_id = lunco_assets::asset_path::canonicalize(f.to_str().unwrap(), None);
         let bytes = HashMap::from([(root_id.clone(), std::fs::read(&f).unwrap())]);
         let recipe = StageRecipe { root_id, bytes };
 

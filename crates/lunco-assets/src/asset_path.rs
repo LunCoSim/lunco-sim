@@ -2,7 +2,7 @@
 //!
 //! Every subsystem that follows a reference from inside a loaded document hits the
 //! same problem: the reference may be scheme-qualified (`lunco://…`, `twin://…`,
-//! `scenario://…`), absolute-from-assets-root (`/…`), or relative to the document
+//! absolute-from-assets-root (`/…`), or relative to the document
 //! that named it. Resolving it correctly is not obvious — a relative reference
 //! inside a document that itself came from a `scheme://` source must STAY under
 //! that source, and `Path` normalization silently collapses `scheme://` to
@@ -79,7 +79,7 @@ pub fn normalize(p: &Path) -> PathBuf {
 /// its results — a pre-fetch keyed on one spelling and a lookup keyed on another
 /// is a guaranteed cache miss (R-canon).
 pub fn canonicalize(asset_path: &str, anchor: Option<&str>) -> String {
-    if asset_path.contains("://") {
+    if crate::has_scheme(asset_path) {
         return asset_path.to_string();
     }
     if let Some(rest) = asset_path.strip_prefix('/') {

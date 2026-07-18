@@ -31,7 +31,9 @@ use std::path::{Path, PathBuf};
 use openusd::sdf::{self, Path as SdfPath, Value};
 use openusd::usda;
 
-use crate::resolver::{is_binary_asset, normalize};
+use lunco_assets::asset_path::normalize;
+
+use crate::resolver::is_binary_asset;
 
 /// Which arcs [`discover_arcs`] returns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
