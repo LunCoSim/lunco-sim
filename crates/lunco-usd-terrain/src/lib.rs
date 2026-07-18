@@ -917,20 +917,27 @@ fn bridge_usd_dem_terrain(
         // tree) has no `twin://` root, so the DEM is resolved against the
         // scene's own folder instead. `None` for in-memory stages.
         let asset_path = asset_server.get_path(id);
-        // Did this scene arrive over the wire as a `scenario://` twin? Then its
-        // `demSource` is relative to the SCENARIO, and any locally-open twin is
-        // an unrelated scene that must not capture the lookup.
-        let from_scenario = asset_path.as_ref().is_some_and(|p| {
-            matches!(
-                p.source(),
-                bevy::asset::io::AssetSourceId::Name(n)
-                    if &**n == lunco_assets::scenario_source::SCENARIO_SCHEME
-            )
-        });
-        let scene_dir = asset_path.and_then(|p| p.path().parent().map(|d| d.to_path_buf()));
+        // The root a relative `demSource` resolves against is the root the SCENE
+        // itself came from. Every twin — local or downloaded — is addressed
+        // `twin://<name>/<rel>`, and `TwinRoots` maps that name to wherever THIS
+        // peer keeps the bytes (a checkout, or a downloaded scenario's cache dir).
+        // So one lookup covers both, with no per-origin flag and no `#[cfg]`.
+        let scene_dir = asset_path
+            .as_ref()
+            .and_then(|p| p.path().parent().map(|d| d.to_path_buf()));
+        let scene_root = asset_path
+            .as_ref()
+            .filter(|p| matches!(p.source(), bevy::asset::io::AssetSourceId::Name(_)))
+            .and_then(|p| p.path().components().next())
+            .and_then(|c| c.as_os_str().to_str())
+            .and_then(|name| twins.root_of(name))
+            // A scene with no source root (the web autoload path loads from the
+            // staged `assets/` tree) resolves against its own folder. That is the
+            // scene's real location, not a guess about which twin is open.
+            .or_else(|| scene_dir.clone());
         let cs = canonical.get(id).expect("checked above");
         bridge_dem_prim_read(
-            &cs.view(), entity, prim_path, &sdf, &twins, scene_dir.as_deref(), from_scenario,
+            &cs.view(), entity, prim_path, &sdf, scene_root.as_deref(),
             &registry, obstacle_spec.bypass_change_detection(), &mut commands,
         );
     }
@@ -947,9 +954,7 @@ fn bridge_dem_prim_read<R: UsdRead>(
     entity: Entity,
     prim_path: &lunco_usd::UsdPrimPath,
     sdf: &openusd::sdf::Path,
-    twins: &lunco_assets::twin_source::TwinRoots,
-    scene_dir: Option<&std::path::Path>,
-    from_scenario: bool,
+    scene_root: Option<&std::path::Path>,
     registry: &lunco_terrain_surface::TerrainLayerParserRegistry,
     obstacle_spec: &mut lunco_obstacle_field::spec::ObstacleFieldSpec,
     commands: &mut Commands,
@@ -1001,46 +1006,25 @@ fn bridge_dem_prim_read<R: UsdRead>(
     };
     // Resolve the DEM source to a byte-readable URI.
     //
-    // A `scenario://` scene wins outright: its `demSource` is relative to the
-    // DOWNLOADED twin, and the client almost always has an unrelated twin open
-    // (it boots the local demo before joining), which would otherwise capture the
-    // lookup and resolve the DEM under `assets/scenes/sandbox/` — the terrain then
-    // fails to build and the twin arrives with no ground.
+    // `demSource` is relative to the root the SCENE came from, and `scene_root` is
+    // that root — resolved once by the caller from the scene's own asset path.
+    // There is no per-origin branch here: a local twin and a downloaded scenario
+    // are both `twin://<name>/<rel>`, and `TwinRoots` maps that name to wherever
+    // THIS peer keeps the bytes (a checkout, or the scenario cache dir).
     //
-    // `AssetPath::path()` strips the source, so `scene_dir` is the bare
-    // `<scenario-id>`. Native reads an absolute path out of the scenario cache;
-    // web keeps it cache-relative, which is what the wasm DEM reader probes
-    // against OPFS (`<cache>/scenarios/<id>/…`).
+    // Deliberately NO fallback to "whichever twin is open": a client usually has
+    // an unrelated local twin open, which would capture the lookup and resolve a
+    // downloaded twin's DEM under the wrong root.
     //
-    // Otherwise prefer an open Twin's root (native Open-Twin flow, absolute fs
-    // path), then fall back to the scene's own asset directory — the web autoload
-    // path loads the scene from the staged `assets/` tree with no `twin://` root,
-    // so `terrain/…` resolves to `twins/<name>/terrain/…` (asset-relative; the
-    // wasm DEM reader fetches it same-origin under `assets/`).
-    let uri = if from_scenario {
-        let Some(dir) = scene_dir else {
-            warn!("[usd-dem] scenario DEM source '{rel}' has no scene directory");
-            return;
-        };
-        let base = {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                lunco_assets::cache_dir().join("scenarios").join(dir)
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                dir.to_path_buf()
-            }
-        };
-        base.join(&rel).to_string_lossy().replace('\\', "/")
-    } else if let Some((_, root)) = twins.primary() {
-        root.join(&rel).to_string_lossy().to_string()
-    } else if let Some(dir) = scene_dir {
-        dir.join(&rel).to_string_lossy().replace('\\', "/")
-    } else {
-        warn!("[usd-dem] cannot resolve DEM source '{rel}': no open Twin and no scene directory");
+    // Native yields an absolute path; the web autoload path stays
+    // cache/asset-relative, which is what the wasm DEM reader probes against OPFS.
+    let Some(root) = scene_root else {
+        warn!("[usd-dem] cannot resolve DEM source '{rel}': the scene has no root directory");
         return;
     };
+    // Native gives an absolute path; the web autoload path keeps it
+    // cache/asset-relative, which is what the wasm DEM reader probes against OPFS.
+    let uri = root.join(&rel).to_string_lossy().replace('\\', "/");
     // `windowM` = side length (m) realized at native res. 0 = whole map; >0 = side;
     // absent/negative = a safe 4 km window (avoid an accidental full-map build).
     let half_window = match attr_f32("windowM") {

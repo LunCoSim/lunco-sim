@@ -16,9 +16,6 @@ bevy = { workspace = true, features = ["bevy_asset"] }
 # (native `FileStorage`, web `OpfsStorage`) rather than raw `std::fs`, so it
 # serves downloaded scenario assets uniformly on both platforms.
 lunco-storage = { path = "../lunco-storage" }
-# Backs the asset-scheme registry — crates contribute schemes via
-# `inventory::submit!`, drained by `register_lunco_asset_sources`.
-inventory = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

@@ -197,14 +197,13 @@ pub struct ScenarioManifestMsg {
     /// path (re-rooted at the reference closure's common ancestor, e.g.
     /// `scenes/sandbox/sandbox_scene.usda`).
     ///
-    /// A client that already has this Twin locally (native same-machine: the
-    /// twin is registered in `TwinRoots`) loads `twin://<name>/<twin_scene>` —
-    /// the **same asset path the host loaded** — so every prim derives the
-    /// **same `GlobalEntityId`** on both peers (identity is
-    /// `hash(namespace:source:path)`; `source` is the asset path). Loading the
-    /// `scenario://` copy instead gives a different `source` → different gids →
-    /// possession/prediction can't bind. A client WITHOUT the twin (web) has no
-    /// `twin://` to load and falls back to the `scenario://` cache path.
+    /// EVERY client loads `twin://<name>/<twin_scene>` — the **same asset path
+    /// the host loaded** — so every prim derives the **same `GlobalEntityId`** on
+    /// both peers (identity is `hash(namespace:source:path)`; `source` is the
+    /// asset path). A client without a local checkout mounts the downloaded
+    /// scenario's cache dir as that Twin's root (`mount_scenario_twin`), so the
+    /// URI is identical and only the bytes' location differs.
+
     ///
     /// Appended last (bincode positional). `None` mirrors `default_scene`.
     pub twin_scene: Option<String>,

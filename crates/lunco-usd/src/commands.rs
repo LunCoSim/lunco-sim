@@ -47,7 +47,10 @@ use lunco_workspace::{TwinAdded, WorkspaceResource};
 use lunco_usd_bevy::UsdPrimPath;
 
 use crate::document::{LayerId, UsdOp};
-use lunco_usd_sim::cosim::{ClearScene, LoadScene};
+use lunco_usd_sim::cosim::{
+    clear_scene_entities, normalize_scene_asset_path, resolve_root_prim, spawn_scene_root_world,
+    ClearScene, LoadScene, SceneEntities, SceneLoadInFlight,
+};
 use lunco_doc::OpenOutcome;
 use lunco_doc_bevy::DocumentRegistry;
 
@@ -306,7 +309,176 @@ fn update_viewport_placeholder(
     }
 }
 
+/// Mount a scene, resolving the requested path to its **document** first.
+///
+/// A scene that is backed by a registry document must mount that document's
+/// composed `base ⊕ runtime` — the runtime layer carries placed waypoints,
+/// runtime spawns and moved transforms, and it is published as the overlay on the
+/// scene's `twin://` source. Mounting the raw file instead re-reads the base
+/// `.usda` from disk and silently drops all of it, so a second
+/// `load_scene("scenes/…/scene.usda")` for an already-open scene would wipe every
+/// live edit. Asking the registry (rather than pattern-matching the path against
+/// twin roots) makes that an authoritative answer: the mount diverts exactly when
+/// a document exists to divert to.
+///
+/// The observer lives HERE, not in `lunco-usd-sim`, because
+/// [`DocumentRegistry`] does — `lunco-usd-sim` sits one layer below and owns the
+/// mount mechanics this drives ([`normalize_scene_asset_path`], [`resolve_root_prim`],
+/// [`clear_scene_entities`], [`spawn_scene_root_world`]).
+#[on_command(LoadScene)]
+fn on_load_scene(
+    trigger: On<LoadScene>,
+    // Optional: this observer is registered by `UsdCommandsPlugin`, which is
+    // headless-safe and lands in apps that never build an asset pipeline (the
+    // document-surface tests below are exactly that). Mounting a scene is
+    // meaningless without one, so a missing asset pipeline is a no-op, not a
+    // panic — a required `Res` here aborts the whole `Main` schedule.
+    asset_server: Option<Res<AssetServer>>,
+    stages: Option<Res<Assets<lunco_usd_bevy::UsdStageAsset>>>,
+    mut commands: Commands,
+    q_usd: Query<(Entity, &UsdPrimPath, Has<lunco_usd_sim::cosim::UsdSceneRoot>)>,
+    scene: SceneEntities,
+    in_flight: Option<Res<SceneLoadInFlight>>,
+    registry: Res<DocumentRegistry<UsdDocument>>,
+    backed: Option<Res<crate::twin_projection::DocBackedTwinScenes>>,
+) {
+    // Accept an absolute path (Twin manifests join `default_scene` to the Twin
+    // root) or an already-relative asset path; bail if an absolute path lies
+    // outside the assets dir.
+    let (Some(asset_server), Some(stages)) = (asset_server, stages) else {
+        return;
+    };
+    let Some(mut path) = normalize_scene_asset_path(&cmd.path) else {
+        return;
+    };
+
+    // Canonicalize to the document's own source. This also lets the no-op guard
+    // below recognise the active scene by asset id, so a redundant load is a true
+    // no-op instead of a destructive remount.
+    if let Some(backed) = backed.as_deref() {
+        if let Some(composed) = doc_backed_scene_source(&path, &registry, backed) {
+            info!("[load-scene] `{}` → `{}` (mounting the document's composed source)", path, composed);
+            path = composed;
+        }
+    }
+    let root_prim = resolve_root_prim(&path, &cmd.root_prim);
+
+    // Blender-style no-op: same stage, same root prim, already mounted.
+    //
+    // The identity is the PAIR `(stage asset, root prim)`, but the two halves of
+    // the root prim are asked differently because an empty `root_prim` is
+    // `resolve_root_prim`'s deferred sentinel, NOT a path:
+    //
+    // - sentinel (the ordinary load) means "mount the stage's `defaultPrim`". It
+    //   cannot be compared as a string: `instantiate_usd_prim` resolves it and
+    //   writes the concrete path BACK onto the scene root, so once the stage has
+    //   parsed no entity carries `""` and a string compare matches nothing —
+    //   which is why a repeat load used to tear down and remount a live scene.
+    //   What the sentinel denotes is the stage's default mount, and that mount is
+    //   exactly the `UsdSceneRoot`, so ask for that instead.
+    // - an explicit override names a real prim path, so compare it as one.
+    //
+    // Deliberately NOT "any prim from this stage": one stage legitimately mounts
+    // at two different roots (additive `OpenFile` import), and that would silently
+    // drop the second mount.
+    let new_id = asset_server.load::<lunco_usd_bevy::UsdStageAsset>(&path).id();
+    if q_usd.iter().any(|(_, upp, is_scene_root)| {
+        upp.stage_handle.id() == new_id
+            && if root_prim.is_empty() { is_scene_root } else { upp.path == root_prim }
+    }) {
+        info!("[load-scene] `{}` @ `{}` already loaded — no-op", path, root_prim);
+        return;
+    }
+
+    // Single-flight guard. A load is already in flight, so this one never
+    // proceeds — only the message differs:
+    //
+    // - SAME path: this scene is already being mounted. The `q_usd` check above
+    //   cannot see that yet (its prims have not spawned, which is exactly what
+    //   "in flight" means), so without this arm a redundant request would clear
+    //   and remount a scene that is mid-spawn. That is the client's
+    //   scenario-ready `LoadScene` landing ~1 s after its own boot load, and it
+    //   tore down the live scene — a teardown that can trip avian's island
+    //   solver. The two guards are complementary: `SceneLoadInFlight` covers the
+    //   spawn window, `q_usd` covers everything after it, so a repeat request is
+    //   a no-op at any point in a scene's life.
+    // - DIFFERENT path: the in-flight load wins. Prevents the startup race where
+    //   the boot policy's tutorial `load_scene` and the page's moonbase autoload
+    //   both fire before either scene's prims have spawned. See
+    //   `SceneLoadInFlight` for the ordering argument for why the tutorial (the
+    //   higher-priority onboarding intent on a first run) is the one that wins.
+    if let Some(g) = &in_flight {
+        if g.path == path {
+            info!("[load-scene] `{}` is already mounting — no-op", path);
+            return;
+        }
+        if g.path != path {
+            info!(
+                "[load-scene] suppressing `{}` — another scene load is in-flight (`{}`); \
+                 the in-flight load wins",
+                path, g.path
+            );
+            return;
+        }
+    }
+
+    info!("[load-scene] reload path=`{}` root=`{}`", path, root_prim);
+
+    // Record the in-flight load so a concurrent `LoadScene` (different path) is
+    // suppressed until this scene's prims have all spawned.
+    commands.insert_resource(SceneLoadInFlight { path: path.clone(), stage_id: new_id });
+
+    // Despawn the old scene + free worker-side state (shared with `ClearScene`).
+    clear_scene_entities(&mut commands, &scene);
+
+    // Force a fresh disk read ONLY for a genuine re-open — i.e. the asset is
+    // already RESIDENT (loaded earlier, then switched away). On a FIRST load the
+    // asset isn't in the store yet, so this `reload` is redundant AND fires a
+    // SECOND `LoadedWithDependencies` after the initial load → a duplicate
+    // instantiation pass (doubled crater-overlay meshes / rocks that z-fight).
+    // The no-op guard above already prevents reloading the *active* scene.
+    if stages.get(new_id).is_some() {
+        asset_server.reload(&path);
+    }
+
+    // Spawn via shared helper, deferred so despawns flush first.
+    commands.queue(move |world: &mut World| {
+        spawn_scene_root_world(world, &path, &root_prim);
+    });
+}
+
+/// The composed source of the document backing the scene at asset-relative
+/// `path`, if one backs it — `twin://<name>/<rel>`, whose overlay the twin source
+/// serves as `base ⊕ runtime`. `None` for an already-scheme'd path, or a plain
+/// file with no document (nothing composed to preserve — mount it from disk).
+fn doc_backed_scene_source(
+    path: &str,
+    registry: &DocumentRegistry<UsdDocument>,
+    backed: &crate::twin_projection::DocBackedTwinScenes,
+) -> Option<String> {
+    if path.contains("://") {
+        return None;
+    }
+    // Resolving asset-relative → absolute is the only environment-dependent step
+    // (it reads the process CWD); the lookup itself is pure, and split out so it
+    // can be exercised without one.
+    let abs = lunco_assets::engine_asset_local_path(path)?;
+    doc_backed_source_for_abs(&abs, registry, backed)
+}
+
+/// [`doc_backed_scene_source`] for an already-resolved absolute path.
+fn doc_backed_source_for_abs(
+    abs: &std::path::Path,
+    registry: &DocumentRegistry<UsdDocument>,
+    backed: &crate::twin_projection::DocBackedTwinScenes,
+) -> Option<String> {
+    let doc = registry.doc_for_file(abs)?;
+    let (name, rel) = backed.coords_of(doc)?;
+    Some(format!("twin://{name}/{rel}"))
+}
+
 register_commands!(
+    on_load_scene,
     on_apply_usd_op,
     // The USD half of the generic `UndoDocument`/`RedoDocument` verbs. Registering the
     // observers here (not in the editor) is what lets a headless binary undo.
@@ -1212,6 +1384,87 @@ mod change_set_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `LoadScene` must mount a doc-backed scene through the document's own
+    /// `twin://` source — that source serves the composed `base ⊕ runtime`, so
+    /// mounting the raw file instead re-reads the base from disk and silently
+    /// drops every runtime edit (placed waypoints, runtime spawns, moved
+    /// transforms). The redirect is driven by the REGISTRY, so it must divert
+    /// exactly when a backing document exists — never on path shape alone.
+    #[test]
+    fn a_doc_backed_scene_mounts_its_document_source() {
+        use crate::twin_projection::DocBackedTwinScenes;
+
+        let mut registry = DocumentRegistry::<UsdDocument>::default();
+        let mut backed = DocBackedTwinScenes::default();
+        let scene = std::path::Path::new("/twins/moonbase/scenes/sandbox.usda");
+
+        let (doc, _) = registry.open_file(scene.to_path_buf(), "#usda 1.0\n".to_string());
+        backed.track(doc, "moonbase".into(), "scenes/sandbox.usda".into());
+
+        assert_eq!(
+            doc_backed_source_for_abs(scene, &registry, &backed).as_deref(),
+            Some("twin://moonbase/scenes/sandbox.usda"),
+            "a doc-backed scene routes through the source that composes its runtime overlay"
+        );
+    }
+
+    /// The two ways a scene is NOT doc-backed. A registered document that no twin
+    /// scene backs, and a file with no document at all, must both mount straight
+    /// from disk: there is no composed state to preserve, so diverting would be a
+    /// lie about where the bytes come from.
+    #[test]
+    fn an_unbacked_scene_is_not_diverted() {
+        use crate::twin_projection::DocBackedTwinScenes;
+
+        let mut registry = DocumentRegistry::<UsdDocument>::default();
+        let mut backed = DocBackedTwinScenes::default();
+        let tracked = std::path::Path::new("/twins/moonbase/scenes/sandbox.usda");
+        let untracked = std::path::Path::new("/twins/moonbase/scenes/other.usda");
+
+        let (doc, _) = registry.open_file(tracked.to_path_buf(), "#usda 1.0\n".to_string());
+        backed.track(doc, "moonbase".into(), "scenes/sandbox.usda".into());
+        // A document exists for this file, but no twin scene is backed by it.
+        registry.open_file(untracked.to_path_buf(), "#usda 1.0\n".to_string());
+
+        assert_eq!(
+            doc_backed_source_for_abs(untracked, &registry, &backed),
+            None,
+            "a document with no twin backing has no composed source to mount"
+        );
+        assert_eq!(
+            doc_backed_source_for_abs(
+                std::path::Path::new("/twins/moonbase/scenes/never_opened.usda"),
+                &registry,
+                &backed
+            ),
+            None,
+            "a plain file with no document mounts from disk"
+        );
+    }
+
+    /// An already-scheme'd path is its own mount identity — `twin://`,
+    /// `lunco://`, `lunco-lib://` all name a source directly. Re-resolving one
+    /// against the assets dir would be nonsense, so the redirect must short-circuit
+    /// before it touches the registry.
+    #[test]
+    fn a_schemed_path_is_left_alone() {
+        use crate::twin_projection::DocBackedTwinScenes;
+
+        let registry = DocumentRegistry::<UsdDocument>::default();
+        let backed = DocBackedTwinScenes::default();
+        for path in [
+            "twin://moonbase/scenes/sandbox.usda",
+            "lunco-lib://models/rover.usda",
+            "lunco://vessels/rovers/skid_rover.usda",
+        ] {
+            assert_eq!(
+                doc_backed_scene_source(path, &registry, &backed),
+                None,
+                "`{path}` already names its source"
+            );
+        }
+    }
 
     #[test]
     fn is_usd_path_recognises_extensions() {

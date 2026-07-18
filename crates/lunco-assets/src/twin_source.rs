@@ -11,7 +11,12 @@
 //! and library refs (`@lunco://vessels/…@`) — never an absolute path. But Bevy's
 //! `AssetServer` only reads from sources registered at app-build time, and on
 //! the web there is no filesystem at all, so we can't lean on `std::fs`. So we
-//! register ONE `twin://` source backed by a small **registry of Twin roots**.
+//! register ONE `twin://` source backed by a small **registry of Twin roots**,
+//! reading through [`lunco_storage`] so the SAME scheme serves native and web.
+//!
+//! A root is an open Twin's directory OR a downloaded scenario's cache directory.
+//! One scheme for both is what keeps a scene's asset path identical on every peer,
+//! and therefore its `Provenance::Content`-derived `GlobalEntityId` identical too.
 //!
 //! ## Path shape — `twin://<name>/<relative>`
 //! The first path segment is the **Twin name** (from its `twin.toml`); the rest
@@ -178,6 +183,25 @@ impl TwinRoots {
     }
 }
 
+/// Read a Twin-root file through the storage backend. The ONLY native/web
+/// divergence in this source: native = `FileStorage` (std::fs, via the sync
+/// wrapper — this runs on Bevy's async IO pool); web = `OpfsStorage` (async OPFS
+/// read), which is the same tree the networking client writes a downloaded
+/// scenario into. Going through storage is what lets `twin://` serve a downloaded
+/// scenario on the web, where there is no filesystem.
+#[cfg(not(target_arch = "wasm32"))]
+async fn read_bytes(full: &Path) -> Option<Vec<u8>> {
+    lunco_storage::read_file_sync(full).ok()
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn read_bytes(full: &Path) -> Option<Vec<u8>> {
+    lunco_storage::OpfsStorage::new()
+        .read(&lunco_storage::StorageHandle::File(full.to_path_buf()))
+        .await
+        .ok()
+}
+
 /// Build the `twin://` [`AssetSourceBuilder`] over `roots`. Register in each
 /// binary BEFORE `AssetPlugin` builds, and insert the same `roots` handle as a
 /// resource so the Twin-open flow can register roots.
@@ -198,20 +222,25 @@ struct TwinReader {
 
 impl TwinReader {
     /// Resolve `twin://`-relative `<name>/<rel>` to an absolute filesystem path.
+    ///
+    /// Rejects path traversal: only `Normal` components are joined, so a scene can
+    /// never reach outside its Twin root. That guard is not optional — a Twin root
+    /// may be a **downloaded scenario's cache directory**, whose relative paths were
+    /// authored by a remote host, and escaping it would let a peer read arbitrary
+    /// local files. Shipped assets are addressed by scheme (`@lunco://…@`), so no
+    /// authored ref needs to climb out (verified across the shipped tree and the
+    /// twins: zero `@../…@` refs).
     fn resolve(&self, path: &Path) -> Option<PathBuf> {
         let mut comps = path.components();
-        let first = comps.next()?;
-        let first_str = first.as_os_str().to_str()?;
-        if first_str == ".." {
-            // Relative path escaped the Twin root!
-            // Resolve relative to the parent of the primary Twin root.
-            let (_, primary_root) = self.roots.primary()?;
-            let parent = primary_root.parent()?;
-            Some(parent.join(path))
-        } else {
-            let root = self.roots.root_for(first_str)?;
-            Some(root.join(comps.as_path()))
+        let name = comps.next()?.as_os_str().to_str()?;
+        let mut full = self.roots.root_for(name)?;
+        for comp in comps {
+            match comp {
+                std::path::Component::Normal(seg) => full.push(seg),
+                _ => return None,
+            }
         }
+        Some(full)
     }
 }
 
@@ -226,12 +255,9 @@ impl AssetReader for TwinReader {
         let Some(full) = self.resolve(path) else {
             return Err::<VecReader, _>(AssetReaderError::NotFound(path.to_path_buf()));
         };
-        match std::fs::read(&full) {
-            Ok(bytes) => Ok(VecReader::new(bytes)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                Err(AssetReaderError::NotFound(full))
-            }
-            Err(e) => Err(e.into()),
+        match read_bytes(&full).await {
+            Some(bytes) => Ok(VecReader::new(bytes)),
+            None => Err::<VecReader, _>(AssetReaderError::NotFound(full)),
         }
     }
 

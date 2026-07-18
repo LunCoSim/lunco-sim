@@ -202,7 +202,7 @@ fn a_wheel_composes_its_tire() {
     let shader = SdfPath::new(shader).unwrap();
     assert_eq!(
         view.asset(&shader, "info:wgsl:sourceAsset").as_deref(),
-        Some("shaders/wheel.wgsl"),
-        "Wheel_FL must compose its tire's tread shader"
+        Some("lunco://shaders/wheel.wgsl"),
+        "Wheel_FL must compose its tire's tread shader, with the shipped-asset scheme intact"
     );
 }

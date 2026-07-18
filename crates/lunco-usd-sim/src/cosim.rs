@@ -1281,110 +1281,13 @@ pub struct LoadScene {
     pub root_prim: String,
 }
 
-#[on_command(LoadScene)]
-fn on_load_scene(
-    trigger: On<LoadScene>,
-    asset_server: Res<AssetServer>,
-    stages: Res<Assets<UsdStageAsset>>,
-    mut commands: Commands,
-    q_grid: Query<&Children, With<WorldGrid>>,
-    q_origin: Query<Entity, With<OriginAnchor>>,
-    q_usd: Query<(Entity, &UsdPrimPath)>,
-    q_wires: Query<Entity, With<SimConnection>>,
-    in_flight: Option<Res<SceneLoadInFlight>>,
-    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
-) {
-    // Accept an absolute path (Twin manifests join `default_scene` to
-    // the Twin root) or an already-relative asset path; bail if an
-    // absolute path lies outside the assets dir.
-    let Some(mut path) = normalize_scene_asset_path(&cmd.path) else {
-        return;
-    };
-
-    // A workspace scene under an open Twin root must load THROUGH its `twin://`
-    // source, never its raw file path. The `twin://` source resolves to the
-    // document's composed `base ⊕ runtime` overlay (placed waypoints, runtime
-    // spawns, moved transforms); a raw `asset_server.reload` re-reads the base
-    // `.usda` from disk and silently drops all of it. So a second
-    // `load_scene("scenes/…/scene.usda")` for an already-open scene mounts a fresh
-    // base-only stage and wipes every live edit. Rewriting to the twin source both
-    // fixes that and lets the no-op guard below recognise the active scene (same
-    // asset id) so it is a true no-op — the loaded state, overlay included, stands.
-    if let Some(twin_roots) = twin_roots.as_deref() {
-        if let Some(twin_path) = twin_source_for_workspace_scene(&path, twin_roots) {
-            if twin_path != path {
-                info!("[load-scene] `{}` → `{}` (twin source composes the runtime overlay)", path, twin_path);
-                path = twin_path;
-            }
-        }
-    }
-    let root_prim = resolve_root_prim(&path, &cmd.root_prim);
-
-    // Blender-style no-op: same path + root prim already loaded.
-    let new_id = asset_server.load::<UsdStageAsset>(&path).id();
-    if q_usd
-        .iter()
-        .any(|(_, upp)| upp.stage_handle.id() == new_id && upp.path == root_prim)
-    {
-        info!(
-            "[load-scene] `{}` @ `{}` already loaded — no-op",
-            path, root_prim
-        );
-        return;
-    }
-
-    // Single-flight guard: if a DIFFERENT scene is still spawning (its
-    // prims haven't all drained through `sync_usd_visuals` yet), this
-    // load is suppressed — the in-flight load wins. Prevents the
-    // startup race where the boot policy's tutorial `load_scene` and
-    // the page's moonbase autoload both fire before either scene's
-    // prims have spawned. See `SceneLoadInFlight` for the policy + the
-    // ordering argument for why the tutorial (the higher-priority
-    // onboarding intent on a first run) is the one that wins.
-    if let Some(g) = &in_flight {
-        if g.path != path {
-            info!(
-                "[load-scene] suppressing `{}` — another scene load is in-flight (`{}`); \
-                 the in-flight load wins",
-                path, g.path
-            );
-            return;
-        }
-    }
-
-    info!("[load-scene] reload path=`{}` root=`{}`", path, root_prim);
-
-    // Record the in-flight load so a concurrent `LoadScene` (different
-    // path) is suppressed until this scene's prims have all spawned.
-    commands.insert_resource(SceneLoadInFlight {
-        path: path.clone(),
-        stage_id: new_id,
-    });
-
-    // Despawn the old scene + free worker-side state (shared with
-    // `ClearScene`).
-    clear_scene_entities(
-        &mut commands,
-        &q_grid,
-        &q_origin,
-        &q_wires,
-    );
-
-    // Force a fresh disk read ONLY for a genuine re-open — i.e. the asset is
-    // already RESIDENT (loaded earlier, then switched away). On a FIRST load the
-    // asset isn't in the store yet, so this `reload` is redundant AND fires a
-    // SECOND `LoadedWithDependencies` after the initial load → a duplicate
-    // instantiation pass (doubled crater-overlay meshes / rocks that z-fight).
-    // The no-op guard above already prevents reloading the *active* scene.
-    if stages.get(new_id).is_some() {
-        asset_server.reload(&path);
-    }
-
-    // Spawn via shared helper, deferred so despawns flush first.
-    commands.queue(move |world: &mut World| {
-        spawn_scene_root_world(world, &path, &root_prim);
-    });
-}
+// The `LoadScene` OBSERVER lives in `lunco-usd`
+// (`commands.rs::on_load_scene`), not here: mounting a scene has to resolve the
+// requested path to its DOCUMENT first (a doc-backed scene must mount its
+// composed `base ⊕ runtime`, never the base file), and the document registry
+// lives one layer up. This crate owns the mount MECHANICS the observer drives —
+// [`normalize_scene_asset_path`], [`resolve_root_prim`], [`clear_scene_entities`],
+// [`spawn_scene_root_world`], [`SceneLoadInFlight`] — as its public mount API.
 
 /// Reload the CURRENTLY-ACTIVE scene from disk — the "restart" verb.
 ///
@@ -1404,14 +1307,12 @@ fn on_restart_scene(
     trigger: On<RestartScene>,
     asset_server: Res<AssetServer>,
     mut commands: Commands,
-    q_grid: Query<&Children, With<WorldGrid>>,
-    q_origin: Query<Entity, With<OriginAnchor>>,
     q_usd: Query<(Entity, &UsdPrimPath)>,
-    q_wires: Query<Entity, With<SimConnection>>,
+    scene: SceneEntities,
 ) {
     // Every loaded prim shares the scene's stage handle. REUSE that handle (not a
     // freshly-resolved path) so the exact same asset — INCLUDING its source scheme
-    // (`twin://…`, `scenario://…`) — is respawned. Resolving via `.path()` would
+    // (`twin://…`, `lunco://…`) — is respawned. Resolving via `.path()` would
     // drop the scheme and load a *different* raw-file asset, breaking twin routing
     // (avatar/camera setup, composed runtime edits) and leaving a stale camera.
     let Some((_, upp)) = q_usd.iter().next() else {
@@ -1434,12 +1335,7 @@ fn on_restart_scene(
     // Every scene-authored entity (incl. the Avatar camera) carries `UsdPrimPath`,
     // so `try_despawn` (hierarchy-recursive) tears the old camera down here — no
     // stale window camera survives into the fresh scene.
-    clear_scene_entities(
-        &mut commands,
-        &q_grid,
-        &q_origin,
-        &q_wires,
-    );
+    clear_scene_entities(&mut commands, &scene);
 
     // Force a fresh disk read so on-disk edits actually apply (the whole point).
     // Reloading by the full path (scheme intact) targets the SAME asset id the
@@ -1473,17 +1369,10 @@ pub struct ClearScene {}
 fn on_clear_scene(
     trigger: On<ClearScene>,
     mut commands: Commands,
-    q_grid: Query<&Children, With<WorldGrid>>,
-    q_origin: Query<Entity, With<OriginAnchor>>,
-    q_wires: Query<Entity, With<SimConnection>>,
+    scene: SceneEntities,
 ) {
     info!("[clear-scene] clearing viewport");
-    clear_scene_entities(
-        &mut commands,
-        &q_grid,
-        &q_origin,
-        &q_wires,
-    );
+    clear_scene_entities(&mut commands, &scene);
 }
 
 /// Despawn the current scene's USD entities + cosim wires.
@@ -1519,12 +1408,22 @@ fn on_clear_scene(
 /// before this despawn flushes, so its targets can already be dead. A plain
 /// `remove`/`insert` panics in `apply_deferred` and takes the app down mid-reload
 /// (that was the `sync_gizmo_camera` crash).
-fn clear_scene_entities(
-    commands: &mut Commands,
-    q_grid: &Query<&Children, With<WorldGrid>>,
-    q_origin: &Query<Entity, With<OriginAnchor>>,
-    q_wires: &Query<Entity, With<SimConnection>>,
-) {
+/// The scene-owned entities a teardown touches, bundled as one `SystemParam`.
+///
+/// Every scene-lifecycle observer — `LoadScene` (in `lunco-usd`), `ClearScene`,
+/// `RestartScene` — needs exactly this set. Bundling keeps the mount API honest:
+/// a caller drives a teardown without naming `WorldGrid`, `OriginAnchor` or the
+/// cosim `SimConnection` wire type, so `lunco-usd` needs no dependency on
+/// `lunco-cosim` to orchestrate a scene swap.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct SceneEntities<'w, 's> {
+    grid: Query<'w, 's, &'static Children, With<WorldGrid>>,
+    origin: Query<'w, 's, Entity, With<OriginAnchor>>,
+    wires: Query<'w, 's, Entity, With<SimConnection>>,
+}
+
+pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
+    let (q_grid, q_origin, q_wires) = (&scene.grid, &scene.origin, &scene.wires);
     let mut despawned = 0usize;
 
     // Despawn all children of the WorldGrid (recursively), except the persistent OriginAnchor
@@ -1694,7 +1593,7 @@ pub fn spawn_usd_child_with_translate(
 /// scenes as twin-root-relative; the caller joins them to an absolute
 /// path) or an already-relative asset path. Returns `None` (with a warn)
 /// if an absolute path lies outside the assets dir.
-fn normalize_scene_asset_path(path_in: &str) -> Option<String> {
+pub fn normalize_scene_asset_path(path_in: &str) -> Option<String> {
     // Already a scheme path (`abs://`, `lunco://`, …) — the AssetServer routes
     // it to the named source as-is.
     if path_in.contains("://") {
@@ -1730,36 +1629,6 @@ fn normalize_scene_asset_path(path_in: &str) -> Option<String> {
     } else {
         Some(path_in.to_string())
     }
-}
-
-/// Rewrite a raw workspace scene path (`scenes/…/scene.usda`) to the `twin://`
-/// source of the open Twin that contains it, if any.
-///
-/// Loading a workspace scene by its raw file path mounts a fresh base-only asset,
-/// bypassing the doc-backed `twin://` source whose overlay carries the composed
-/// `base ⊕ runtime` state (placed waypoints, runtime spawns, moved transforms). A
-/// scene inside an open Twin therefore MUST route through `twin://<name>/<rel>` — a
-/// no-op when no overlay is set (falls back to disk), and the runtime-preserving
-/// path when one is. Returns `None` for an already-`twin://` path or a scene under
-/// no open Twin root (a plain file with no document to compose).
-fn twin_source_for_workspace_scene(
-    path: &str,
-    twin_roots: &lunco_assets::twin_source::TwinRoots,
-) -> Option<String> {
-    if path.contains("://") {
-        return None;
-    }
-    let abs = std::env::current_dir().ok()?.join(assets_dir()).join(path);
-    let abs = std::fs::canonicalize(&abs).unwrap_or(abs);
-    for name in twin_roots.names() {
-        let Some(root) = twin_roots.root_of(&name) else { continue };
-        let root = std::fs::canonicalize(&root).unwrap_or(root);
-        if let Ok(rel) = abs.strip_prefix(&root) {
-            let rel = rel.to_string_lossy().replace('\\', "/");
-            return Some(format!("twin://{name}/{rel}"));
-        }
-    }
-    None
 }
 
 /// Spawn a USD scene root under the first `Grid` entity.
@@ -2050,7 +1919,7 @@ pub(crate) fn install(app: &mut App) {
     register_all_commands(app);
 }
 
-register_commands!(on_load_scene, on_clear_scene, on_restart_scene,);
+register_commands!(on_clear_scene, on_restart_scene,);
 
 
 

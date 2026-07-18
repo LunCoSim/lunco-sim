@@ -841,10 +841,9 @@ async fn read_bytes(path: std::path::PathBuf) -> Result<Vec<u8>, String> {
         use lunco_storage::{OpfsStorage, StorageHandle};
         // Two DEM origins on web, disambiguated by where the file actually lives:
         //  • a **scenario-sync twin** — fetched over the network into the OPFS
-        //    scenario cache `<cache>/scenarios/<id>/…`. The scene loads via
-        //    `scenario://`, whose `AssetPath::path()` strips the source, so the
-        //    DEM source resolves to `<id>/terrain/…` (no scheme prefix). Read it
-        //    straight from OPFS at `<cache>/scenarios/<id>/terrain/…`.
+        //    scenario cache `<cache>/scenarios/<id>/…`, which is mounted as that
+        //    Twin's root, so the DEM source resolves to an absolute path under
+        //    that cache dir. Read it straight from OPFS.
         //  • the **baked-in demo twin** — staged next to the wasm under `assets/`,
         //    fetched same-origin over HTTP, cached in Cache-Storage. Those URLs
         //    are MUTABLE — a host-side twin update can replace the file in place —
