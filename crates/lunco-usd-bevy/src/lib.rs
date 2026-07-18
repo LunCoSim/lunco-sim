@@ -62,6 +62,7 @@ pub mod usd_data;
 pub mod view;
 pub mod camera_path;
 pub mod canonical;
+pub mod curve_sweep;
 pub mod mount;
 pub mod read;
 pub mod units;
@@ -854,6 +855,14 @@ fn instantiate_usd_prim_read<R: UsdRead>(
             // into a Bevy mesh. (Falls through to `None` — no fallback
             // primitive — if the topology attrs are missing/malformed.)
             build_usd_mesh(reader, &sdf_path).map(|m| meshes.add(m))
+        } else if prim_type.as_deref() == Some("BasisCurves") {
+            // A curve prim with `widths` is a TUBE — swept geometry, not a line.
+            // `build_usd_curve_mesh` returns `None` when `widths` is unauthored,
+            // which is what keeps a pure path (a camera rail carrying
+            // `lunco:path:camera`, see `camera_path.rs`) from silently becoming a
+            // visible pipe. So the two readings coexist without a gate: a camera
+            // path authors no `widths`, a conduit does.
+            build_usd_curve_mesh(reader, &sdf_path).map(|m| meshes.add(m))
         } else {
             match prim_type.as_deref().and_then(|ty| read_shape_dims(reader, &sdf_path, ty)) {
                 // `xformOp:scale` handles non-uniform dimensions (applied to the
@@ -3254,6 +3263,144 @@ fn read_mesh_normals<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Vec<[f32;
         return Some(normals);
     }
     Some(normals.into_iter().map(|n| conv.dir(Vec3::from_array(n)).to_array()).collect())
+}
+
+/// Build a swept-tube mesh from a `UsdGeomBasisCurves` prim.
+///
+/// A curve prim with `widths` is a **tube**, not a line: `widths` is a diameter in
+/// object space, so the curve is a centerline and the profile is a circle. See
+/// [`crate::curve_sweep`] for why the frames are rotation-minimizing rather than
+/// Frenet (short version: Frenet is undefined on straight runs, and flips as it
+/// approaches them — a habitat is mostly straight pipe).
+///
+/// Batches are honoured: `curveVertexCounts` partitions `points` into several
+/// curves on one prim, and each is swept and merged into a single mesh so the
+/// prim keeps its 1:1 entity mapping.
+///
+/// `widths` interpolation follows USD: one value is `constant`, otherwise it is
+/// per-vertex. Absent `widths` means an infinitely thin curve, which has no
+/// surface — returns `None` rather than inventing a radius, so a curve authored
+/// as a pure path (a camera rail) does not silently become a visible pipe.
+fn build_usd_curve_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> {
+    use crate::camera_path::CurveBasis;
+    use crate::curve_sweep::sweep_tube;
+
+    // Canonical-frame points — same conversion the mesh path takes.
+    let points = read_mesh_points(reader, path)?;
+    if points.is_empty() {
+        return None;
+    }
+    // No `widths` ⇒ no surface. Deliberately not defaulted: see the doc above.
+    let widths = reader.scalar::<Vec<f32>>(path, "widths")?;
+    if widths.is_empty() {
+        return None;
+    }
+
+    // Radii are a LENGTH, so they scale with `metersPerUnit` — `conv.length`,
+    // not `conv.point`. (`read_mesh_points` already converted the centerline.)
+    let conv = stage_convention(reader);
+    let radii: Vec<f32> = widths
+        .iter()
+        .map(|w| conv.length(*w as f64 / 2.0) as f32)
+        .collect();
+
+    let ty = reader.text(path, "type").unwrap_or_else(|| "cubic".to_string());
+    let basis_tok = reader.text(path, "basis").unwrap_or_else(|| "bspline".to_string());
+    let basis = if ty == "linear" {
+        // `type = "linear"` is the polygon — `basis` is meaningless and USD says
+        // so; honour the type over a stale basis token.
+        CurveBasis::Linear
+    } else {
+        match basis_tok.as_str() {
+            "bezier" => CurveBasis::Bezier,
+            // `catmullRom` is USD's default, and `bspline` currently evaluates
+            // through the same interpolating path — approximating rather than
+            // hitting its hull. Acceptable for a swept tube (the centerline shifts
+            // by less than a wall thickness); a true B-spline basis lands with the
+            // NURBS evaluator.
+            _ => CurveBasis::CatmullRom,
+        }
+    };
+    let periodic = reader.text(path, "wrap").as_deref() == Some("periodic");
+
+    // `curveVertexCounts` partitions `points` into a batch of curves. Absent ⇒ one
+    // curve over all points (tolerant: a hand-authored single curve often omits it).
+    let counts = read_int_array(reader, path, "curveVertexCounts")
+        .unwrap_or_else(|| vec![points.len() as i32]);
+
+    // Samples per control point. Linear needs none — the control points ARE the
+    // centerline, and resampling a polygon only rounds off its corners.
+    const SAMPLES_PER_SEGMENT: usize = 8;
+    let sides = 8;
+
+    let mut merged: Option<Mesh> = None;
+    let mut cursor = 0usize;
+    for c in counts {
+        let n = c.max(0) as usize;
+        if n < 2 || cursor + n > points.len() {
+            cursor += n;
+            continue;
+        }
+        let cvs: Vec<Vec3> = points[cursor..cursor + n]
+            .iter()
+            .map(|p| Vec3::from_array(*p))
+            .collect();
+        let seg_radii: Vec<f32> = if radii.len() == 1 {
+            vec![radii[0]]
+        } else {
+            radii
+                .iter()
+                .skip(cursor)
+                .take(n)
+                .copied()
+                .collect::<Vec<_>>()
+        };
+        cursor += n;
+
+        let centerline: Vec<Vec3> = if basis == CurveBasis::Linear {
+            cvs.clone()
+        } else {
+            let steps = (n.saturating_sub(1)).max(1) * SAMPLES_PER_SEGMENT;
+            (0..=steps)
+                .map(|i| {
+                    crate::camera_path::eval_curve(
+                        &cvs,
+                        basis,
+                        periodic,
+                        i as f32 / steps as f32,
+                    )
+                })
+                .collect()
+        };
+        // Resampling changes the point count, so per-vertex radii must be
+        // resampled with it or a tapered tube would snap back to its control-point
+        // radii. Constant width (len 1) passes straight through.
+        let seg_radii = if seg_radii.len() <= 1 || centerline.len() == cvs.len() {
+            seg_radii
+        } else {
+            let last = cvs.len() - 1;
+            (0..centerline.len())
+                .map(|i| {
+                    let t = i as f32 / (centerline.len() - 1).max(1) as f32 * last as f32;
+                    let (a, f) = (t.floor() as usize, t.fract());
+                    let b = (a + 1).min(last);
+                    seg_radii[a] * (1.0 - f) + seg_radii[b] * f
+                })
+                .collect()
+        };
+
+        let Some(tube) = sweep_tube(&centerline, &seg_radii, sides, periodic) else {
+            continue;
+        };
+        merged = Some(match merged {
+            None => tube,
+            Some(mut acc) => {
+                acc.merge(&tube).ok()?;
+                acc
+            }
+        });
+    }
+    merged
 }
 
 fn read_int_array<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<Vec<i32>> {

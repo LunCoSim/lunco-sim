@@ -54,6 +54,20 @@ def Xform "World"
         float inputs:width = 1.2
         float inputs:height = 0.6
     }
+    def BasisCurves "Conduit"
+    {
+        uniform token type = "linear"
+        int[] curveVertexCounts = [4]
+        point3f[] points = [(0, 0, 0), (0, 0, 1), (1, 0, 1), (1, 0, 2)]
+        float[] widths = [0.08]
+    }
+    def BasisCurves "CameraRail"
+    {
+        uniform token type = "cubic"
+        uniform token basis = "catmullRom"
+        int[] curveVertexCounts = [4]
+        point3f[] points = [(0, 5, 0), (2, 5, 0), (2, 5, 2), (0, 5, 2)]
+    }
 }
 "#;
 
@@ -156,6 +170,25 @@ fn recipe_asset_instantiates_off_live_canonical_stage() {
     // which are candela) — the authored 8000 is taken as lumens, unscaled
     // because `inputs:exposure` is unauthored (2^0 = 1).
     assert!((panel.intensity - 8000.0).abs() < 1e-2, "intensity {}", panel.intensity);
+
+    // (e) `UsdGeomBasisCurves` + `widths` → swept-tube geometry. A curve prim
+    // carrying a width is a TUBE, not a line, so it must produce a mesh.
+    let conduit_e = entity_at(&mut app, "/World/Conduit").expect("Conduit prim entity");
+    assert!(
+        app.world().get::<Mesh3d>(conduit_e).is_some(),
+        "a BasisCurves with `widths` must sweep to a Mesh3d"
+    );
+
+    // (f) …and `widths` is exactly what discriminates geometry from a pure PATH.
+    // A camera rail authors no `widths` — it is infinitely thin, has no surface,
+    // and must NOT silently become a visible pipe. This is the USD-native
+    // distinction, which is why the curve reader needs no `lunco:` gate to tell
+    // the two apart.
+    let rail_e = entity_at(&mut app, "/World/CameraRail").expect("CameraRail prim entity");
+    assert!(
+        app.world().get::<Mesh3d>(rail_e).is_none(),
+        "a BasisCurves WITHOUT `widths` has no surface and must not become geometry"
+    );
 }
 
 #[test]
