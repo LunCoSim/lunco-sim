@@ -40,20 +40,19 @@ pub struct AssetModuleResolver {
     sources: ScriptSources,
     /// Compiled-module memo, keyed by canonical id. A module imported by twenty
     /// scenarios is evaluated once.
-    cache: Arc<RwLock<HashMap<String, Shared<Module>>>>,
+    ///
+    /// The SOURCE TEXT is stored beside the module so the memo invalidates itself:
+    /// a hot-reload replaces the text in the registry, the next import sees the
+    /// mismatch and recompiles. The alternative — an `invalidate()` the asset layer
+    /// must remember to call — is a cache that silently serves stale code the first
+    /// time someone forgets, and staleness in a scenario module is very hard to
+    /// recognise from the symptom.
+    cache: Arc<RwLock<HashMap<String, (String, Shared<Module>)>>>,
 }
 
 impl AssetModuleResolver {
     pub fn new(sources: ScriptSources) -> Self {
         Self { sources, cache: Arc::new(RwLock::new(HashMap::new())) }
-    }
-
-    /// Drop memoized modules, so the next import recompiles from the registry.
-    /// Called when a script asset hot-reloads.
-    pub fn invalidate(&self) {
-        if let Ok(mut c) = self.cache.write() {
-            c.clear();
-        }
     }
 }
 
@@ -68,10 +67,6 @@ impl ModuleResolver for AssetModuleResolver {
         // `source` is the importing script's id, which rhai threads through for
         // exactly this purpose: it is the anchor a relative import resolves against.
         let id = ScriptSources::canonical_id(path, source, SCRIPT_EXT);
-
-        if let Some(m) = self.cache.read().ok().and_then(|c| c.get(&id).cloned()) {
-            return Ok(m);
-        }
 
         let Some(text) = self.sources.get(&id) else {
             // The detail goes to the LOG, not the error: rhai discards a resolver's
@@ -95,6 +90,15 @@ impl ModuleResolver for AssetModuleResolver {
             return Err(Box::new(EvalAltResult::ErrorModuleNotFound(id, pos)));
         };
 
+        // Serve the memo only if it was compiled from the text now in the registry.
+        if let Some((cached_text, m)) =
+            self.cache.read().ok().and_then(|c| c.get(&id).cloned())
+        {
+            if cached_text == text {
+                return Ok(m);
+            }
+        }
+
         // Compile and evaluate the module body. `eval_ast_as_new` RUNS the module's
         // top level, and resolution happens mid-tick inside another script — so a
         // module whose top level calls world verbs fires them at import time. Module
@@ -108,7 +112,7 @@ impl ModuleResolver for AssetModuleResolver {
 
         let shared: Shared<Module> = module.into();
         if let Ok(mut c) = self.cache.write() {
-            c.insert(id, shared.clone());
+            c.insert(id, (text, shared.clone()));
         }
         Ok(shared)
     }
