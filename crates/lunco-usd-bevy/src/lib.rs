@@ -46,7 +46,6 @@ pub use openusd::sdf::Path as SdfPath;
 // Send-safe `sdf::Data` (see `compose`), queried via the `usd_data` helpers.
 pub use openusd::sdf::Data as UsdData;
 use openusd::sdf::Value;
-use big_space::prelude::CellCoord;
 
 mod resolver;
 mod compose;
@@ -500,18 +499,6 @@ pub struct MaterialPlan {
 #[derive(Component, Default, Debug, Clone, Copy)]
 pub struct UsdPreviewOnly;
 
-/// Attached to a scene-root entity to tell the USD instantiator where to
-/// place top-level USD prims. When this component is present, each
-/// direct USD child spawns as a `GridAnchor` parented to the target
-/// Grid — *not* as a Bevy child of this entity.
-///
-/// This is what enforces the architectural rule: top-level USD prims
-/// (rovers, balls, terrain) become Grid-direct entities so big_space's
-/// `propagate_high_precision` runs on them; their own descendants
-/// remain plain-`Transform` children of their USD parent's Bevy entity.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct LoadIntoGrid(pub Entity);
-
 /// Marker placed on an entity whose `UsdPrimPath` was added before the
 /// referenced `UsdStageAsset` finished loading. `on_stage_loaded`
 /// processes it once the asset becomes available.
@@ -612,8 +599,9 @@ pub fn instance_key(
 /// 1. Looks up the prim's attributes from the loaded USD stage.
 /// 2. Creates a mesh based on prim type (Cube, Cylinder, Sphere).
 /// 3. Applies the prim's transform (position + rotation + scale).
-/// 4. Spawns child entities for each prim child, applying the natural
-///    anchor rule via `LoadIntoGrid` (top-level → `GridAnchor`).
+/// 4. Spawns child entities for each prim child as PLAIN Bevy children, so
+///    they inherit the scene root's grid frame (see the anchoring contract
+///    at the child spawn below).
 /// 5. Marks the entity with `UsdVisualSynced` to prevent re-processing.
 ///
 /// Custom materials (solar panels, blueprint grids, etc.) are applied
@@ -626,7 +614,6 @@ fn instantiate_usd_prim(
     prim_path: &UsdPrimPath,
     existing_vis: Option<&Visibility>,
     existing_tf: Option<&Transform>,
-    load_into_grid: Option<&LoadIntoGrid>,
     is_instance_root: bool,
     inherited_member: Option<&UsdInstanceMember>,
     commands: &mut Commands,
@@ -654,7 +641,7 @@ fn instantiate_usd_prim(
         return;
     };
     instantiate_usd_prim_read(
-        &cs.view(), entity, prim_path, existing_vis, existing_tf, load_into_grid,
+        &cs.view(), entity, prim_path, existing_vis, existing_tf,
         is_instance_root, inherited_member, commands, asset_server, meshes,
     );
 }
@@ -670,7 +657,6 @@ fn instantiate_usd_prim_read<R: UsdRead>(
     prim_path: &UsdPrimPath,
     existing_vis: Option<&Visibility>,
     existing_tf: Option<&Transform>,
-    load_into_grid: Option<&LoadIntoGrid>,
     is_instance_root: bool,
     inherited_member: Option<&UsdInstanceMember>,
     commands: &mut Commands,
@@ -1202,11 +1188,16 @@ fn instantiate_usd_prim_read<R: UsdRead>(
                 ViewVisibility::default(),
             );
 
-            // Top-level USD prims (children of a scene root tagged with
-            // `LoadIntoGrid`) become Grid-direct anchors so big_space's
-            // `propagate_high_precision` updates their GlobalTransform.
-            // Anything deeper stays as plain `Transform` children of
-            // their USD parent's Bevy entity.
+            // ANCHORING CONTRACT: every prim spawns as a PLAIN child of its USD
+            // parent's Bevy entity. The scene root is the ONE grid anchor;
+            // everything beneath it inherits that frame through big_space's
+            // low-precision propagation. A prim must never carry its own
+            // `CellCoord` under the grid — avian derives a body's local transform
+            // from its parent's `GlobalTransform` and ignores the cell, so a
+            // grid-direct body's render freezes at its spawn pose while physics
+            // keeps integrating. `spawn_usd_entry`'s `SpawnAnchor` encodes the
+            // same rule for runtime spawns.
+            //
             // ChildOf must be set atomically with UsdPrimPath so that
             // observers triggered by the spawn (on_usd_prim_added →
             // instantiate_usd_prim → UsdVisualSynced → process_usd_avian_prims)
@@ -1222,23 +1213,11 @@ fn instantiate_usd_prim_read<R: UsdRead>(
             // bundle: the `on_usd_prim_added` observer reads it to decide the
             // child's identity regime, so a later `insert` would race the
             // observer and let the child take a colliding `Content` id.
-            let child_entity = match (load_into_grid, &child_member) {
-                (Some(LoadIntoGrid(grid)), Some(member)) => commands
-                    .spawn((
-                        base_components,
-                        CellCoord::default(),
-                        lunco_core::GridAnchor,
-                        ChildOf(*grid),
-                        member.clone(),
-                    ))
-                    .id(),
-                (Some(LoadIntoGrid(grid)), None) => commands
-                    .spawn((base_components, CellCoord::default(), lunco_core::GridAnchor, ChildOf(*grid)))
-                    .id(),
-                (None, Some(member)) => {
+            let child_entity = match &child_member {
+                Some(member) => {
                     commands.spawn((base_components, ChildOf(entity), member.clone())).id()
                 }
-                (None, None) => commands.spawn((base_components, ChildOf(entity))).id(),
+                None => commands.spawn((base_components, ChildOf(entity))).id(),
             };
 
             // A prim that declares `lunco:spawnable = true` — authored on the prim
@@ -1278,7 +1257,6 @@ fn on_usd_prim_added(
             &UsdPrimPath,
             Option<&Visibility>,
             Option<&Transform>,
-            Option<&LoadIntoGrid>,
             Has<UsdInstanceRoot>,
             Option<&UsdInstanceMember>,
         ),
@@ -1291,7 +1269,7 @@ fn on_usd_prim_added(
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     let entity = trigger.entity;
-    let Ok((prim_path, vis, tf, load_into, is_instance_root, member)) = q.get(entity) else { return; };
+    let Ok((prim_path, vis, tf, is_instance_root, member)) = q.get(entity) else { return; };
 
     if stages.get(&prim_path.stage_handle).is_none() {
         commands.entity(entity).try_insert(UsdAwaitingStage);
@@ -1303,7 +1281,6 @@ fn on_usd_prim_added(
         prim_path,
         vis,
         tf,
-        load_into,
         is_instance_root,
         member,
         &mut commands,
@@ -1357,7 +1334,6 @@ pub fn sync_usd_visuals(
             &UsdPrimPath,
             Option<&Visibility>,
             Option<&Transform>,
-            Option<&LoadIntoGrid>,
             Has<UsdInstanceRoot>,
             Option<&UsdInstanceMember>,
         ),
@@ -1378,7 +1354,7 @@ pub fn sync_usd_visuals(
     }
     if loaded.is_empty() { return; }
 
-    for (entity, prim_path, vis, tf, load_into, is_instance_root, member) in q.iter() {
+    for (entity, prim_path, vis, tf, is_instance_root, member) in q.iter() {
         if loaded.iter().any(|id| prim_path.stage_handle.id() == *id) {
             commands.entity(entity).remove::<UsdAwaitingStage>();
             instantiate_usd_prim(
@@ -1386,7 +1362,6 @@ pub fn sync_usd_visuals(
                 prim_path,
                 vis,
                 tf,
-                load_into,
                 is_instance_root,
                 member,
                 &mut commands,

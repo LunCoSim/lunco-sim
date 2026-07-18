@@ -6,23 +6,21 @@
 //!
 //! SCOPE, honestly: this does NOT reproduce the intermittent "spawned body's mesh
 //! freezes at its spawn pose while physics climbs" symptom seen in the running
-//! app — it passes with either spawn anchoring in this harness, so it is a
-//! smoke test for the sync path, not a guard for that specific freeze. What the
-//! anchoring convergence itself guards is asserted structurally in
+//! app, so treat it as a smoke test for the sync path rather than a guard for
+//! that specific freeze. The anchoring shape itself is pinned in
 //! `catalog::spawn_anchor_tests`.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
-use lunco_scene_commands::catalog::{spawn_usd_entry, SpawnSource, SpawnableEntry};
+use lunco_scene_commands::catalog::{spawn_usd_entry, SpawnAnchor, SpawnSource, SpawnableEntry};
 use lunco_usd_bevy::{UsdInstanceRoot, UsdStageAsset};
 use std::time::Duration;
 
 #[derive(Resource)]
 struct Args {
     entry: SpawnableEntry,
-    grid: Entity,
-    scene_root: Option<Entity>,
+    scene_root: Entity,
 }
 
 const SPAWN_Y: f32 = 2.0;
@@ -36,8 +34,7 @@ fn spawn_once(mut commands: Commands, assets: Res<AssetServer>, args: Res<Args>)
         &args.entry,
         Vec3::new(0.0, SPAWN_Y, 0.0),
         Quat::IDENTITY,
-        args.grid,
-        args.scene_root,
+        SpawnAnchor::scene_root(args.scene_root),
     );
 }
 
@@ -60,9 +57,8 @@ fn a_spawned_bodys_render_follows_its_physics_position_over_time() {
         TransformPlugin,
         bevy::asset::AssetPlugin::default(),
         bevy::mesh::MeshPlugin,
-        // REAL big_space propagation — without it a `CellCoord` is inert and the
-        // grid-direct anchoring would look identical to the plain-child one, so
-        // this test would pass either way and guard nothing.
+        // Real big_space propagation, so the body inherits its frame the way it
+        // does in the app rather than through a stand-in hierarchy.
         big_space::prelude::BigSpaceDefaultPlugins,
         // `interpolate_all` matches production: avian owns every body's Transform.
         PhysicsPlugins::default().set(PhysicsInterpolationPlugin::interpolate_all()),
@@ -94,8 +90,7 @@ fn a_spawned_bodys_render_follows_its_physics_position_over_time() {
 
     app.insert_resource(Args {
         entry: balloon_entry(),
-        grid,
-        scene_root: Some(scene_root),
+        scene_root,
     });
     app.add_systems(Startup, spawn_once);
     app.finish();

@@ -28,7 +28,7 @@ use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset, CanonicalStages, collision_aabb, SPAWN_GROUND_CLEARANCE};
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{RedoDocument, UndoDocument};
-use crate::catalog::{SpawnCatalog, SpawnSource, spawn_usd_entry, prim_path_from_entry_id};
+use crate::catalog::{SpawnAnchor, SpawnCatalog, SpawnSource, spawn_usd_entry, prim_path_from_entry_id};
 
 /// Spawn an entity from the catalog at a given world position.
 ///
@@ -473,20 +473,31 @@ pub fn on_spawn_entity_command(
     info!("SPAWN_ENTITY: {} at {:?}", cmd.entry_id, position);
 
     let rotation = cmd.rotation.unwrap_or(Quat::IDENTITY);
-    let scene_root = q_scene_root.iter().next();
-    // A spawn that lands MID-LOAD would not find the scene anchor yet and would
-    // fall back to a grid-DIRECT anchor — a different hierarchy from the one
-    // scene-load gives the same asset, which is exactly the divergence this
-    // spawn path exists to avoid. The anchor is coming, so wait for it: same
-    // "correctness beats a frame of latency" rule as the stage-pending case.
-    // (No load in flight and no anchor = a genuinely scene-less world, where a
-    // grid-direct anchor is the only frame there is — that path stays.)
-    if scene_root.is_none() && scene_loading.is_some() {
-        let SpawnSource::UsdFile(path) = &entry.source;
-        deferred.0.push((cmd.clone(), asset_server.load(path.clone())));
+    // The scene root is the ONLY legal anchor (see `SpawnAnchor`). Mid-load it
+    // does not exist YET, so wait for it — same "correctness beats a frame of
+    // latency" rule as the stage-pending case above. With no load in flight
+    // there is no scene to place anything in, which is a caller error, not a
+    // cue to invent a second hierarchy.
+    let Some(scene_root) = q_scene_root.iter().next() else {
+        if scene_loading.is_some() {
+            let SpawnSource::UsdFile(path) = &entry.source;
+            deferred.0.push((cmd.clone(), asset_server.load(path.clone())));
+        } else {
+            warn!(
+                "SPAWN_ENTITY: no scene mounted — nothing to anchor '{}' under",
+                cmd.entry_id
+            );
+        }
         return;
-    }
-    let result = spawn_usd_entry(&mut commands, &asset_server, entry, position, rotation, grid, scene_root);
+    };
+    let result = spawn_usd_entry(
+        &mut commands,
+        &asset_server,
+        entry,
+        position,
+        rotation,
+        SpawnAnchor::scene_root(scene_root),
+    );
 
     // Networked identity (gap G2): a runtime instance gets a server-allocated
     // unique id (SkipContentStamp → assign_global_entity_ids mints
@@ -517,11 +528,11 @@ pub fn apply_replicated_spawns(
     if pending.0.is_empty() {
         return;
     }
-    // Wait until a grid exists (scene still loading) — keep the queue.
-    let Some(grid) = q_grids.iter().next() else {
+    // Wait until the scene anchor exists (scene still loading) — keep the queue.
+    // It is the only legal anchor, so there is nothing to do without it.
+    let Some(scene_root) = q_scene_root.iter().next() else {
         return;
     };
-    let scene_root = q_scene_root.iter().next();
     // Drain in place — the loop body touches only `commands`/`catalog`/
     // `asset_server`, never `pending`, so the old `.collect::<Vec<_>>()`
     // was a pure-waste allocation (CQ-216).
@@ -531,7 +542,14 @@ pub fn apply_replicated_spawns(
             continue;
         };
         let pos = job.position;
-        let result = spawn_usd_entry(&mut commands, &asset_server, entry, pos, Quat::IDENTITY, grid, scene_root);
+        let result = spawn_usd_entry(
+            &mut commands,
+            &asset_server,
+            entry,
+            pos,
+            Quat::IDENTITY,
+            SpawnAnchor::scene_root(scene_root),
+        );
         // Pin the host id; mark runtime instance + replication target. Forced
         // Kinematic by `force_kinematic_proxies` so snapshots drive it.
         commands.entity(result.root_entity).try_insert((

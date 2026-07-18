@@ -39,7 +39,7 @@ use lunco_scripting::{
     ScriptRegistry,
 };
 use lunco_usd_bevy::{
-    CanonicalStages, LoadIntoGrid, UsdAwaitingStage, UsdInstanceMember, UsdInstanceRoot,
+    CanonicalStages, UsdAwaitingStage, UsdInstanceMember, UsdInstanceRoot,
     UsdPrimPath, UsdRead, UsdStageAsset,
 };
 use openusd::sdf::Path as SdfPath;
@@ -1656,7 +1656,6 @@ pub fn spawn_usd_child_with_translate(
 
     // Inherit grid-anchoring + instance membership from the parent exactly as
     // `instantiate_usd_prim` derives them for its children.
-    let load_into = world.get::<LoadIntoGrid>(parent_entity).cloned();
     let parent_member = world.get::<UsdInstanceMember>(parent_entity).cloned();
     let parent_is_root = world.get::<UsdInstanceRoot>(parent_entity).is_some();
     let member = parent_member.or_else(|| {
@@ -1678,26 +1677,13 @@ pub fn spawn_usd_child_with_translate(
         InheritedVisibility::VISIBLE,
         ViewVisibility::default(),
     );
-    let entity = match (load_into, member) {
-        (Some(LoadIntoGrid(grid)), Some(m)) => world
-            .spawn((
-                base,
-                CellCoord::default(),
-                lunco_core::GridAnchor,
-                ChildOf(grid),
-                m,
-            ))
-            .id(),
-        (Some(LoadIntoGrid(grid)), None) => world
-            .spawn((
-                base,
-                CellCoord::default(),
-                lunco_core::GridAnchor,
-                ChildOf(grid),
-            ))
-            .id(),
-        (None, Some(m)) => world.spawn((base, ChildOf(parent_entity), m)).id(),
-        (None, None) => world.spawn((base, ChildOf(parent_entity))).id(),
+    // Plain child of its USD parent, per the anchoring contract: the scene root
+    // is the one grid anchor and everything under it inherits that frame. A prim
+    // carrying its own `CellCoord` under the grid fights avian's writeback and
+    // freezes its render (see `instantiate_usd_prim` / `SpawnAnchor`).
+    let entity = match member {
+        Some(m) => world.spawn((base, ChildOf(parent_entity), m)).id(),
+        None => world.spawn((base, ChildOf(parent_entity))).id(),
     };
     info!("[scene] incremental spawn: `{}` (entity {})", path, entity);
     Some(entity)
