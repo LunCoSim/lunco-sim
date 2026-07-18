@@ -87,7 +87,6 @@ use lunco_usd_bevy::author::{
     self, extract_root_layer_data, open_doc_stage, parse_attribute_value, usda_to_data,
 };
 use lunco_usd_bevy::usd_data::UsdDataExt;
-use lunco_usd_bevy::UsdRead;
 use openusd::sdf::{self, Path as SdfPath, SpecType};
 
 /// How many recent changes to keep in the per-document ring buffer.

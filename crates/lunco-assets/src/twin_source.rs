@@ -98,6 +98,36 @@ impl TwinRoots {
         self.overlays.read().ok().and_then(|m| m.get(path).cloned())
     }
 
+    /// The `twin://<name>/<rel>` source that serves the on-disk file `abs` **with a
+    /// composed overlay**, if one is registered.
+    ///
+    /// This is the canonical mount identity for a doc-backed scene. Loading such a
+    /// scene by its raw file path would read the base `.usda` from disk and drop the
+    /// whole runtime overlay (placed waypoints, runtime spawns, moved transforms);
+    /// routing through the returned `twin://` source composes `base ⊕ runtime`
+    /// instead. Answering from the overlay map — rather than inferring "is this under
+    /// a twin root?" from the filesystem — keeps the redirect **authoritative**: a
+    /// path only diverts when there is real composed state to preserve, so a plain
+    /// file under a twin root still loads straight from disk.
+    /// `abs` is matched against each root in **canonical** form on both sides: a
+    /// root registered through a symlink (or with `..` in it) would otherwise fail
+    /// the prefix match against a canonicalized `abs`, silently skipping the
+    /// redirect and wiping the very overlay this exists to preserve. Canonicalizing
+    /// falls back to the path as-given where the filesystem can't answer (wasm).
+    pub fn overlay_source_for_path(&self, abs: &Path) -> Option<String> {
+        let abs = std::fs::canonicalize(abs).unwrap_or_else(|_| abs.to_path_buf());
+        let overlays = self.overlays.read().ok()?;
+        for name in self.names() {
+            let Some(root) = self.root_for(&name) else { continue };
+            let root = std::fs::canonicalize(&root).unwrap_or(root);
+            let Ok(rel) = abs.strip_prefix(&root) else { continue };
+            if overlays.contains_key(&overlay_key(&name, &rel.to_string_lossy())) {
+                return Some(format!("twin://{name}/{}", rel.to_string_lossy().replace('\\', "/")));
+            }
+        }
+        None
+    }
+
     fn root_for(&self, name: &str) -> Option<PathBuf> {
         self.roots.read().ok().and_then(|m| m.get(name).cloned())
     }
@@ -241,5 +271,71 @@ mod tests {
             roots.overlay_for(Path::new("moonbase/scenes/sandbox.usda")).is_none(),
             "cleared overlay falls back to disk"
         );
+    }
+
+    /// A doc-backed scene must resolve to its `twin://` source so the mount
+    /// composes `base ⊕ runtime`; a scene under the same root with NO overlay must
+    /// NOT divert — there is no composed state to preserve, so it loads from disk.
+    #[test]
+    fn overlay_source_is_authoritative_not_positional() {
+        let roots = TwinRoots::default();
+        roots.register("moonbase", "/twins/moonbase");
+        roots.set_overlay("moonbase", "scenes/sandbox.usda", Arc::new(b"#usda 1.0\n".to_vec()));
+
+        assert_eq!(
+            roots.overlay_source_for_path(Path::new("/twins/moonbase/scenes/sandbox.usda")),
+            Some("twin://moonbase/scenes/sandbox.usda".to_string()),
+            "doc-backed scene routes through the composing twin source"
+        );
+        assert_eq!(
+            roots.overlay_source_for_path(Path::new("/twins/moonbase/scenes/other.usda")),
+            None,
+            "same twin root but no overlay — nothing to preserve, load from disk"
+        );
+        assert_eq!(
+            roots.overlay_source_for_path(Path::new("/elsewhere/scenes/sandbox.usda")),
+            None,
+            "outside every twin root"
+        );
+
+        // Once the overlay is dropped the scene stops diverting — the redirect
+        // tracks composed state, not the file's location.
+        roots.clear_overlay("moonbase", "scenes/sandbox.usda");
+        assert_eq!(
+            roots.overlay_source_for_path(Path::new("/twins/moonbase/scenes/sandbox.usda")),
+            None,
+            "cleared overlay ⇒ no redirect"
+        );
+    }
+
+    /// A root registered through a **symlink** must still match a canonicalized
+    /// scene path. Comparing the two in mixed form fails the prefix match, skips
+    /// the redirect, and mounts base-only — silently wiping the overlay this
+    /// redirect exists to preserve.
+    #[cfg(unix)]
+    #[test]
+    fn non_canonical_root_still_matches() {
+        let tmp = std::env::temp_dir().join(format!("lunco-twinroot-{}", std::process::id()));
+        let real = tmp.join("real_twin");
+        let link = tmp.join("linked_twin");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(real.join("scenes")).expect("create twin root");
+        std::fs::write(real.join("scenes/sandbox.usda"), b"#usda 1.0\n").expect("write scene");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink twin root");
+
+        let roots = TwinRoots::default();
+        // Registered through the symlink; the scene path arrives canonicalized.
+        roots.register("moonbase", &link);
+        roots.set_overlay("moonbase", "scenes/sandbox.usda", Arc::new(b"#usda 1.0\n".to_vec()));
+
+        let canonical_scene =
+            std::fs::canonicalize(real.join("scenes/sandbox.usda")).expect("canonicalize scene");
+        assert_eq!(
+            roots.overlay_source_for_path(&canonical_scene),
+            Some("twin://moonbase/scenes/sandbox.usda".to_string()),
+            "symlinked root must still resolve to the composing twin source"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

@@ -203,13 +203,6 @@ pub struct PendingRefSpawns {
 /// loading (a missing / unreadable scene), so it doesn't retry forever.
 const MAX_TWIN_DOC_ATTEMPTS: u32 = 600;
 
-/// The registered USD document whose origin is the on-disk file `abs`, if any.
-// (`find_doc_for_abs` lived here — a hand-rolled copy of "which document backs
-// this path?", duplicated inline in the OpenFile observer too. It is now
-// `DocumentRegistry::<UsdDocument>::doc_for_file`, next to the `open_file` that pairs the
-// identity rule with the reuse-vs-refresh decision the copies kept getting
-// wrong.)
-
 /// Allocate the document for each pending twin scene once its base source text
 /// has loaded through the twin source, restore its persisted runtime overlay,
 /// publish the composed (`base ⊕ runtime`) source as the twin overlay — and only

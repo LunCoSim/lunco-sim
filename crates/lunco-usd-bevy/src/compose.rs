@@ -58,16 +58,7 @@ pub(crate) async fn fetch_layer_closure(
 
     while let Some(id) = queue.pop() {
         let raw = bytes.get(&id).cloned().expect("queued id is present in map");
-        let text = String::from_utf8(raw).map_err(|e| anyhow!("layer {id} is not UTF-8: {e}"))?;
-        let data = usda::parse(&text).map_err(|e| anyhow!("USD parse error in {id}: {e}"))?;
-
-        // Only the non-binary `.usda` closure is pre-fetched here; binary-asset
-        // arcs (glTF/…) are discovered post-composition by `discover_binary_sites`
-        // (driven by `flatten_stage`) so an arc authored inside a referenced
-        // `.usda` wrapper anchors on its COMPOSED prim.
-        let anchor = ResolvedPath::new(&id);
-        for child_asset in discover_arcs(&data) {
-            let child_id = canonicalize(&child_asset, Some(&anchor));
+        for child_id in child_layer_ids(&id, &raw)? {
             if bytes.contains_key(&child_id) {
                 continue;
             }
@@ -87,6 +78,25 @@ pub(crate) async fn fetch_layer_closure(
     }
 
     Ok(StageRecipe { root_id, bytes })
+}
+
+/// The closure ids a layer's bytes reference, canonicalized against that layer as
+/// anchor — the discovery half of the pre-fetch BFS, shared by both fetchers
+/// ([`fetch_layer_closure`] over Bevy's `AssetServer`, [`compose_file_to_stage`]
+/// over the filesystem). Only they differ in how bytes arrive; *which* layers a
+/// closure needs is one rule, so it lives in one place.
+///
+/// Only the non-binary `.usda` closure is walked: binary-asset arcs (glTF/…) are
+/// discovered post-composition by [`discover_binary_sites`] so an arc authored
+/// inside a referenced `.usda` wrapper anchors on its COMPOSED prim.
+fn child_layer_ids(id: &str, raw: &[u8]) -> Result<Vec<String>> {
+    let text = std::str::from_utf8(raw).map_err(|e| anyhow!("layer {id} is not UTF-8: {e}"))?;
+    let data = usda::parse(text).map_err(|e| anyhow!("USD parse error in {id}: {e}"))?;
+    let anchor = ResolvedPath::new(id);
+    Ok(discover_arcs(&data)
+        .iter()
+        .map(|child| canonicalize(child, Some(&anchor)))
+        .collect())
 }
 
 /// Test-only convenience: the composed [`Stage`] alone, discarding the resolver
@@ -208,10 +218,69 @@ pub(crate) fn discover_binary_sites(stage: &Stage) -> BinarySites {
 /// directory, so the on-disk reference tree resolves exactly as authored.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn compose_file_to_stage(path: &std::path::Path) -> Result<Stage> {
-    let id = path
-        .to_str()
-        .ok_or_else(|| anyhow!("non-UTF8 USD path: {path:?}"))?;
-    Stage::open(id).map_err(|e| anyhow!("USD composition error for {id}: {e}"))
+    // Anchor the root at `lunco://` when the file lives under a shipped-asset
+    // root. `canonicalize` passes `scheme://` ids through and PRESERVES the scheme
+    // when anchoring a relative child, so one `lunco://` root makes every id in the
+    // closure uniformly `lunco://` — a single resolution rule for the whole walk.
+    let assets_root = shipped_asset_root(path);
+    let root_id = match assets_root.and_then(|root| path.strip_prefix(root).ok()) {
+        Some(rel) => format!("lunco://{}", rel.to_string_lossy().replace('\\', "/")),
+        // NOT the raw path: every id in the map must be keyed by `canonicalize`,
+        // the same function the resolver's `create_identifier` applies, or the
+        // lookup misses and composition fails to resolve its own root layer.
+        None => canonicalize(&path.to_string_lossy(), None),
+    };
+
+    let root_bytes =
+        std::fs::read(path).map_err(|e| anyhow!("cannot read {}: {e}", path.display()))?;
+    let mut bytes: HashMap<String, Vec<u8>> = HashMap::new();
+    bytes.insert(root_id.clone(), root_bytes);
+    let mut queue = vec![root_id.clone()];
+
+    while let Some(id) = queue.pop() {
+        let raw = bytes.get(&id).cloned().expect("queued id is present in map");
+        for child_id in child_layer_ids(&id, &raw)? {
+            if bytes.contains_key(&child_id) {
+                continue;
+            }
+            let file = id_to_disk_path(&child_id, assets_root)?;
+            let fetched = std::fs::read(&file).map_err(|e| {
+                anyhow!("failed to fetch sublayer {child_id} from {}: {e}", file.display())
+            })?;
+            bytes.insert(child_id.clone(), fetched);
+            queue.push(child_id);
+        }
+    }
+
+    Ok(build_stage_with_resolver(&StageRecipe { root_id, bytes })?.0)
+}
+
+/// The shipped-asset root (`…/assets`) an on-disk USD file lives under, if any —
+/// where `lunco://` is anchored.
+fn shipped_asset_root(path: &std::path::Path) -> Option<&std::path::Path> {
+    path.ancestors()
+        .find(|a| a.file_name() == Some(std::ffi::OsStr::new("assets")))
+}
+
+/// Map a closure id back to the file holding its bytes: `lunco://<rel>` resolves
+/// against the shipped-asset root, anything else is a filesystem path.
+///
+/// `canonicalize` strips the leading `/` off an absolute path (its ids are
+/// source-relative), so a rooted id has to be re-rooted to become a readable path
+/// again. A drive-qualified Windows path is already absolute and passes through.
+fn id_to_disk_path(
+    id: &str,
+    assets_root: Option<&std::path::Path>,
+) -> Result<std::path::PathBuf> {
+    match id.strip_prefix("lunco://") {
+        Some(rel) => assets_root.map(|root| root.join(rel)).ok_or_else(|| {
+            anyhow!("`{id}` is a shipped-asset ref, but the composed file is outside any `assets/` root")
+        }),
+        None => {
+            let p = std::path::PathBuf::from(id);
+            Ok(if p.is_absolute() { p } else { std::path::Path::new("/").join(id) })
+        }
+    }
 }
 
 
