@@ -295,12 +295,38 @@ fn on_show_open_folder_picker(
 fn on_open_file(
     trigger: On<OpenFile>,
     _registry: Res<DocumentKindRegistry>,
-    _commands: Commands,
+    mut workspace: ResMut<WorkspaceResource>,
+    mut pending: ResMut<PendingTwinOpens>,
+    mut commands: Commands,
 ) {
     let path = trigger.event().path.clone();
     if path.is_empty() {
         warn!("[OpenFile] fired with empty path — ignoring (use ShowOpenFilePicker for dialog)");
+        return;
     }
+    // A scene file is opened through its ROOT (see `spawn_twin_from_scene`), so
+    // File→Open on a `.usda` anywhere on disk works — including outside the
+    // workspace `assets/` dir — with no separate "Open Scene" command. Scheme
+    // paths (`lunco://`, `twin://`, `mem://`) already name their root and are
+    // handled by the USD-side observer.
+    if is_scene_path(&path) {
+        // VS Code semantics, same as OpenFolder: opening replaces the workspace
+        // root rather than accumulating one per scene.
+        close_all_open_folders(&mut workspace, &mut commands, "OpenFile");
+        spawn_twin_from_scene(std::path::Path::new(&path), &mut pending, "OpenFile");
+    }
+}
+
+/// A bare filesystem path to a USD scene — the case that must be opened through
+/// its root. Scheme paths already carry their root, so they are excluded.
+fn is_scene_path(path: &str) -> bool {
+    if path.contains("://") {
+        return false;
+    }
+    let lower = path.to_ascii_lowercase();
+    [".usda", ".usdc", ".usdz", ".usd"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
 }
 
 #[on_command(OpenFolder)]
@@ -456,6 +482,10 @@ struct TwinOpenTask {
     task: Task<Result<TwinMode, TwinError>>,
     path: std::path::PathBuf,
     log_tag: String,
+    /// Scene to select once the scan lands, relative to the scanned folder.
+    /// `Some` when the user opened a *scene file* rather than a folder — see
+    /// [`spawn_twin_from_scene`].
+    scene: Option<String>,
 }
 
 /// Shared helper for Open Folder / Open Twin / Add Folder / Add Twin.
@@ -468,15 +498,53 @@ fn spawn_twin_from_path(
     pending: &mut PendingTwinOpens,
     log_tag: &str,
 ) {
+    spawn_twin_scan(folder, pending, log_tag, None);
+}
+
+/// Open the root that owns `scene` and select that scene.
+///
+/// Opening a scene file *is* opening its root — USD references are relative, so
+/// a scene loaded without its root cannot resolve co-located assets. The root is
+/// [`lunco_twin::root_for_file`]: the nearest `twin.toml` ancestor, else the
+/// containing folder (a folder-Twin, a first-class mode, no manifest required).
+///
+/// This is why a scene anywhere on disk opens with no new command: `OpenFile`
+/// routes here and reuses the same mount as Open Folder / Open Twin.
+fn spawn_twin_from_scene(
+    scene: &std::path::Path,
+    pending: &mut PendingTwinOpens,
+    log_tag: &str,
+) {
+    let abs = std::fs::canonicalize(scene).unwrap_or_else(|_| scene.to_path_buf());
+    let root = lunco_twin::root_for_file(&abs);
+    let rel = abs
+        .strip_prefix(&root)
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| {
+            abs.file_name().unwrap_or_default().to_string_lossy().into_owned()
+        });
+    spawn_twin_scan(&root, pending, log_tag, Some(rel));
+}
+
+fn spawn_twin_scan(
+    folder: &std::path::Path,
+    pending: &mut PendingTwinOpens,
+    log_tag: &str,
+    scene: Option<String>,
+) {
     let path = folder.to_path_buf();
     let scan_path = path.clone();
     let task = AsyncComputeTaskPool::get()
         .spawn(async move { TwinMode::open(&scan_path) });
-    info!("[{log_tag}] scanning {} (off-thread)…", path.display());
+    match &scene {
+        Some(rel) => info!("[{log_tag}] scanning {} for `{rel}` (off-thread)…", path.display()),
+        None => info!("[{log_tag}] scanning {} (off-thread)…", path.display()),
+    }
     pending.tasks.push(TwinOpenTask {
         task,
         path,
         log_tag: log_tag.to_string(),
+        scene,
     });
 }
 
@@ -496,10 +564,19 @@ pub(crate) fn drain_pending_twin_opens(
     for mut entry in pending.tasks.drain(..) {
         match future::block_on(future::poll_once(&mut entry.task)) {
             None => still_running.push(entry),
-            Some(Ok(TwinMode::Twin(twin))) | Some(Ok(TwinMode::Folder(twin))) => {
+            Some(Ok(TwinMode::Twin(mut twin))) | Some(Ok(TwinMode::Folder(mut twin))) => {
+                // Opened by scene file → select it, so the doc-first mount that
+                // `TwinAdded` kicks off loads that scene rather than whatever
+                // `twin.toml` happened to name as default.
+                if let Some(rel) = &entry.scene {
+                    twin.set_default_scene(rel.clone());
+                }
                 let twin_id = workspace.add_twin(twin);
                 commands.trigger(TwinAdded { twin: twin_id });
-                info!("[{}] opened {}", entry.log_tag, entry.path.display());
+                match &entry.scene {
+                    Some(rel) => info!("[{}] opened {} @ `{rel}`", entry.log_tag, entry.path.display()),
+                    None => info!("[{}] opened {}", entry.log_tag, entry.path.display()),
+                }
             }
             Some(Ok(TwinMode::Orphan(_))) => {
                 warn!(

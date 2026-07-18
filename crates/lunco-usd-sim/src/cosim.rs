@@ -1709,11 +1709,19 @@ fn normalize_scene_asset_path(path_in: &str) -> Option<String> {
         match pb.strip_prefix(&assets_abs) {
             Ok(rel) => Some(rel.to_string_lossy().into_owned()),
             Err(_) => {
-                // Bare absolute paths outside `assets/` aren't loadable: an
-                // external Twin scene must arrive through a source scheme
-                // (`twin://…`, set by the Twin-open flow), handled above.
+                // `LoadScene` takes SCHEME-QUALIFIED addresses (`lunco://`,
+                // `twin://`) — it loads an already-addressable asset and has no
+                // access to the workspace/Twin layer, so it cannot resolve a
+                // bare filesystem path to a root or mount it doc-first.
+                //
+                // `OpenFile` is the entry point that owns that step: it resolves
+                // the scene's root, registers it, and mounts through the document
+                // overlay. Routing a raw path here instead would mount a
+                // base-only stage and silently drop runtime edits.
                 warn!(
-                    "[scene] `{}` is outside assets dir — load it via the Twin (`twin://`) source",
+                    "[scene] `{}` is a bare filesystem path — `LoadScene` takes \
+                     scheme addresses (`lunco://…`, `twin://…`). Use `OpenFile` \
+                     to open a scene by path; it resolves the owning root.",
                     path_in
                 );
                 None

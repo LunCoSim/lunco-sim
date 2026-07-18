@@ -7003,7 +7003,6 @@ dependencies = [
  "lunco-assets",
  "lunco-controller",
  "lunco-core",
- "lunco-cosim",
  "lunco-environment",
  "lunco-hooks",
  "lunco-materials",

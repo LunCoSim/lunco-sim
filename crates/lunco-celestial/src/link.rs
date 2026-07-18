@@ -209,6 +209,15 @@ pub struct LinkPeer {
     /// is what the mission actually has to design around.
     pub light_time_s: f64,
     pub elevation_deg: f64,
+    /// The PEER's authored `class`, denormalized here at solve time.
+    ///
+    /// Identity stays the GID above; this is the peer's ROLE, copied because the
+    /// solver already holds both endpoints' [`LinkNode`] in the pairwise loop. It
+    /// exists so a port read is a pure local component read: without it, resolving
+    /// "which class is peer GID 7" from a `&World` port backend would mean a full
+    /// entity scan per read. `None` for a peer whose node authored no class — such
+    /// a peer is still a real link, it just has no port name.
+    pub class: Option<String>,
 }
 
 /// The verdict seam consulted per pair. `ctx` (a [`HookValue`] map): `a`, `b`
@@ -480,12 +489,15 @@ pub(crate) fn update_links(
                 up_now.insert(key);
             }
             let delay_s = light_time_s(range_m);
+            // Each side records the OTHER's gid AND the other's class — a node's
+            // peer list describes who it can see, so both fields name the far end.
             per_node.entry(a.entity).or_default().push(LinkPeer {
                 peer: b.gid,
                 connected,
                 range_m,
                 light_time_s: delay_s,
                 elevation_deg: elev_a,
+                class: b.node.class.clone(),
             });
             per_node.entry(b.entity).or_default().push(LinkPeer {
                 peer: a.gid,
@@ -493,6 +505,7 @@ pub(crate) fn update_links(
                 range_m,
                 light_time_s: delay_s,
                 elevation_deg: elev_b,
+                class: a.node.class.clone(),
             });
         }
     }
@@ -664,53 +677,92 @@ fn link_event(name: &str, (a, b): (u64, u64), jd: f64) -> TelemetryEvent {
 ///
 /// Writes every solve (not change-driven) because a model's own output sync rewrites its
 /// outputs map — same reasoning as the gravity and solar bridges.
-pub fn inject_link_state_into_cosim(
-    q_class: Query<(&lunco_core::GlobalEntityId, &LinkNode)>,
-    mut q: Query<(&LinkState, &mut lunco_cosim::SimComponent)>,
-) {
-    // gid → class, one pass. A peer names a GID; the class lives on the PEER's node.
-    let class_of: std::collections::HashMap<u64, &str> = q_class
-        .iter()
-        .filter_map(|(gid, node)| node.class.as_deref().map(|c| (gid.get(), c)))
-        .collect();
-
-    for (state, mut comp) in &mut q {
-        // Best peer per class: connected wins over nearer, then nearest. `total_cmp`
-        // because `f64` is not `Ord` and a NaN range must not panic the comparison.
-        let mut best: std::collections::HashMap<&str, &LinkPeer> = Default::default();
-        for p in &state.peers {
-            let Some(class) = class_of.get(&p.peer).copied() else {
-                // A peer with no class is unreachable by an authored wire (there is no
-                // port name for it) — LinkState still carries it for script/UI.
-                continue;
-            };
-            best.entry(class)
-                .and_modify(|cur| {
-                    let better = match (cur.connected, p.connected) {
-                        (false, true) => true,
-                        (true, false) => false,
-                        _ => p.range_m < cur.range_m,
-                    };
-                    if better {
-                        *cur = p;
-                    }
-                })
-                .or_insert(p);
-        }
-
-        for (class, p) in best {
-            let c = sanitize_class(class);
-            comp.outputs
-                .insert(format!("link_{c}_range_m"), p.range_m);
-            comp.outputs.insert(
-                format!("link_{c}_connected"),
-                if p.connected { 1.0 } else { 0.0 },
-            );
-            comp.outputs
-                .insert(format!("link_{c}_elevation_deg"), p.elevation_deg);
-        }
+fn best_per_class(state: &LinkState) -> std::collections::HashMap<String, &LinkPeer> {
+    let mut best: std::collections::HashMap<String, &LinkPeer> = Default::default();
+    for p in &state.peers {
+        // A peer with no class is unreachable by an authored wire (there is no port
+        // name for it) — `LinkState` still carries it for script/UI.
+        let Some(class) = p.class.as_deref() else { continue };
+        best.entry(sanitize_class(class))
+            .and_modify(|cur| {
+                let better = match (cur.connected, p.connected) {
+                    (false, true) => true,
+                    (true, false) => false,
+                    // `total_cmp`-equivalent ordering: a NaN range must not panic.
+                    _ => p.range_m < cur.range_m,
+                };
+                if better {
+                    *cur = p;
+                }
+            })
+            .or_insert(p);
     }
+    best
 }
+
+/// The three scalars a class publishes, as `(suffix, value)`.
+fn class_ports(p: &LinkPeer) -> [(&'static str, f64); 3] {
+    [
+        ("range_m", p.range_m),
+        ("connected", if p.connected { 1.0 } else { 0.0 }),
+        ("elevation_deg", p.elevation_deg),
+    ]
+}
+
+/// Link state as first-class **ports**, read on demand.
+///
+/// This used to be a system that wrote `link_<class>_*` keys into every link node's
+/// [`SimComponent::outputs`] — i.e. into the *Modelica* backend's private storage.
+/// That had three costs, all gone now:
+///
+/// 1. **A scheduling contract.** Pushing a value one tick early or late is a real
+///    bug, and it happened: with no ordering the model read `link_range_m = 0` and
+///    solved a 1 m link at 145 dB SNR, so the writer had to be pinned to
+///    `FixedUpdate` `.before(CosimSet::Propagate)`. A backend is PULLED at read
+///    time, so there is no tick to publish into wrongly and no ordering to keep.
+/// 2. **A Modelica model as a prerequisite.** The old query was
+///    `(&LinkState, &mut SimComponent)`, so a link node without an authored model
+///    published nothing at all. Ports now exist wherever `LinkState` does.
+/// 3. **Silent clobbering.** A model whose own variable was named
+///    `link_earth_range_m` had it overwritten every tick. Registration order is
+///    precedence and Modelica registers first, so now the model wins its own name.
+///
+/// Outputs only: link geometry is computed by the solver and is not writable. The
+/// per-class reduction (connected beats nearer, then nearest) is unchanged — it is
+/// what lets a scalar Modelica port see an N-peer graph.
+pub const LINK_PORT_BACKEND: lunco_core::ports::PortBackend = lunco_core::ports::PortBackend {
+    list: |world, entity, out| {
+        let Some(state) = world.get::<LinkState>(entity) else { return };
+        for (class, p) in best_per_class(state) {
+            for (suffix, value) in class_ports(p) {
+                out.push(lunco_core::ports::PortRef {
+                    name: format!("link_{class}_{suffix}"),
+                    direction: lunco_core::ports::PortDirection::Out,
+                    value,
+                });
+            }
+        }
+    },
+    read_output: |world, entity, name| {
+        let state = world.get::<LinkState>(entity)?;
+        let rest = name.strip_prefix("link_")?;
+        best_per_class(state).into_iter().find_map(|(class, p)| {
+            let suffix = rest.strip_prefix(&class)?.strip_prefix('_')?;
+            class_ports(p)
+                .into_iter()
+                .find_map(|(s, v)| (s == suffix).then_some(v))
+        })
+    },
+    // Link geometry is solver-derived: there is no input to read and nothing to
+    // write. Returning `None`/`false` is what lets the registry fall through to a
+    // backend that DOES own the name.
+    read_input: |_, _, _| None,
+    write_input: |_, _, _, _| false,
+    resolve_output: None,
+    resolve_input: None,
+    read_slot: None,
+    write_slot: None,
+};
 
 /// A `class` is authored free text but a port name is an identifier, so fold anything
 /// that is not `[a-z0-9_]` to `_`. `"earth"` → `link_earth_range_m`; `"Deep Space"` →
@@ -734,12 +786,22 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
 
-    /// Spawn a peer node so the bridge can resolve its GID → `class`.
-    fn peer_node(world: &mut World, gid: u64, class: &str) {
-        world.spawn((
-            lunco_core::GlobalEntityId::from_raw(gid),
-            LinkNode { max_range_m: 1.0e12, min_elevation_deg: -90.0, class: Some(class.into()) },
-        ));
+    /// A peer entry. `class` is denormalized onto the peer by the solver, so a port
+    /// test needs no second entity — which is the point: reads are purely local.
+    fn peer(gid: u64, class: &str, connected: bool, range_m: f64, elevation_deg: f64) -> LinkPeer {
+        LinkPeer {
+            peer: gid,
+            connected,
+            range_m,
+            light_time_s: 0.0,
+            elevation_deg,
+            class: Some(class.into()),
+        }
+    }
+
+    /// Read one port through the backend, exactly as the registry would.
+    fn port(world: &World, entity: Entity, name: &str) -> Option<f64> {
+        (LINK_PORT_BACKEND.read_output)(world, entity, name)
     }
 
     /// The reduction that lets a scalar Modelica port see an N-peer graph: per CLASS,
@@ -752,40 +814,93 @@ mod tests {
     #[test]
     fn bridge_publishes_the_best_peer_per_class_not_one_global_winner() {
         let mut world = World::new();
-        peer_node(&mut world, 1, "earth");
-        peer_node(&mut world, 2, "earth");
-        peer_node(&mut world, 3, "relay");
         let e = world
-            .spawn((
-                LinkState {
-                    peers: vec![
-                        // earth: nearest, but BLOCKED — must lose to a connected one.
-                        LinkPeer { peer: 1, connected: false, range_m: 100.0, light_time_s: 0.0, elevation_deg: 10.0 },
-                        // earth: farther but usable — the earth link we are working.
-                        LinkPeer { peer: 2, connected: true, range_m: 5000.0, light_time_s: 0.0, elevation_deg: 20.0 },
-                        // relay: a DIFFERENT link, must not compete with earth at all.
-                        LinkPeer { peer: 3, connected: true, range_m: 9000.0, light_time_s: 0.0, elevation_deg: 30.0 },
-                    ],
-                },
-                lunco_cosim::SimComponent::default(),
-            ))
+            .spawn(LinkState {
+                peers: vec![
+                    // earth: nearest, but BLOCKED — must lose to a connected one.
+                    peer(1, "earth", false, 100.0, 10.0),
+                    // earth: farther but usable — the earth link we are working.
+                    peer(2, "earth", true, 5000.0, 20.0),
+                    // relay: a DIFFERENT link, must not compete with earth at all.
+                    peer(3, "relay", true, 9000.0, 30.0),
+                ],
+            })
             .id();
 
-        world.run_system_once(inject_link_state_into_cosim).unwrap();
-
-        let c = world.get::<lunco_cosim::SimComponent>(e).unwrap();
         assert_eq!(
-            c.outputs.get("link_earth_range_m"),
-            Some(&5000.0),
+            port(&world, e, "link_earth_range_m"),
+            Some(5000.0),
             "connected must beat nearer-but-blocked within a class"
         );
-        assert_eq!(c.outputs.get("link_earth_connected"), Some(&1.0));
+        assert_eq!(port(&world, e, "link_earth_connected"), Some(1.0));
         assert_eq!(
-            c.outputs.get("link_relay_range_m"),
-            Some(&9000.0),
+            port(&world, e, "link_relay_range_m"),
+            Some(9000.0),
             "the relay link is its own signal — a nearer EARTH peer must not shadow it"
         );
-        assert_eq!(c.outputs.get("link_relay_connected"), Some(&1.0));
+        assert_eq!(port(&world, e, "link_relay_connected"), Some(1.0));
+    }
+
+    /// The capability the old push-bridge did NOT have: its query was
+    /// `(&LinkState, &mut SimComponent)`, so a link node with no authored Modelica
+    /// model published nothing. Ports live wherever `LinkState` does.
+    #[test]
+    fn ports_exist_without_any_modelica_model_on_the_entity() {
+        let mut world = World::new();
+        let e = world
+            .spawn(LinkState { peers: vec![peer(1, "base", true, 674.0, -4.9)] })
+            .id();
+
+        assert_eq!(port(&world, e, "link_base_range_m"), Some(674.0));
+        assert_eq!(port(&world, e, "link_base_connected"), Some(1.0));
+
+        let mut listed = Vec::new();
+        (LINK_PORT_BACKEND.list)(&world, e, &mut listed);
+        assert_eq!(listed.len(), 3, "range + verdict + elevation, enumerable");
+        assert!(listed
+            .iter()
+            .all(|p| p.direction == lunco_core::ports::PortDirection::Out));
+    }
+
+    /// A peer whose node authored no class has no port name, and must not be
+    /// mistaken for one — nor drag a neighbouring class's read down with it.
+    #[test]
+    fn a_classless_peer_publishes_nothing() {
+        let mut world = World::new();
+        let e = world
+            .spawn(LinkState {
+                peers: vec![
+                    LinkPeer {
+                        peer: 1,
+                        connected: true,
+                        range_m: 10.0,
+                        light_time_s: 0.0,
+                        elevation_deg: 0.0,
+                        class: None,
+                    },
+                    peer(2, "base", true, 674.0, -4.9),
+                ],
+            })
+            .id();
+
+        let mut listed = Vec::new();
+        (LINK_PORT_BACKEND.list)(&world, e, &mut listed);
+        assert_eq!(listed.len(), 3, "only the classed peer is addressable");
+        assert_eq!(port(&world, e, "link_base_range_m"), Some(674.0));
+    }
+
+    /// An unknown name must return `None` rather than a wrong class's value, or the
+    /// registry could not fall through to the backend that really owns it.
+    #[test]
+    fn unknown_names_do_not_resolve() {
+        let mut world = World::new();
+        let e = world
+            .spawn(LinkState { peers: vec![peer(1, "base", true, 674.0, -4.9)] })
+            .id();
+
+        assert_eq!(port(&world, e, "link_earth_range_m"), None);
+        assert_eq!(port(&world, e, "link_base_bogus"), None);
+        assert_eq!(port(&world, e, "throttle"), None);
     }
 
     /// Every peer of a class blocked ⇒ publish the nearest one's real range with verdict
@@ -794,27 +909,19 @@ mod tests {
     #[test]
     fn bridge_reports_range_with_a_down_verdict_when_every_peer_is_blocked() {
         let mut world = World::new();
-        peer_node(&mut world, 1, "earth");
-        peer_node(&mut world, 2, "earth");
         let e = world
-            .spawn((
-                LinkState {
-                    peers: vec![
-                        LinkPeer { peer: 1, connected: false, range_m: 800.0, light_time_s: 0.0, elevation_deg: 1.0 },
-                        LinkPeer { peer: 2, connected: false, range_m: 200.0, light_time_s: 0.0, elevation_deg: 2.0 },
-                    ],
-                },
-                lunco_cosim::SimComponent::default(),
-            ))
+            .spawn(LinkState {
+                peers: vec![
+                    peer(1, "earth", false, 800.0, 1.0),
+                    peer(2, "earth", false, 200.0, 2.0),
+                ],
+            })
             .id();
 
-        world.run_system_once(inject_link_state_into_cosim).unwrap();
-
-        let c = world.get::<lunco_cosim::SimComponent>(e).unwrap();
-        assert_eq!(c.outputs.get("link_earth_range_m"), Some(&200.0));
+        assert_eq!(port(&world, e, "link_earth_range_m"), Some(200.0));
         assert_eq!(
-            c.outputs.get("link_earth_connected"),
-            Some(&0.0),
+            port(&world, e, "link_earth_connected"),
+            Some(0.0),
             "blocked geometry must reach the model as a DOWN verdict"
         );
     }

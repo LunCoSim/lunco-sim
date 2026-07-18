@@ -192,23 +192,21 @@ impl Plugin for CelestialPlugin {
         // `&mut World`, inserted a sync point that interleaved with the
         // twin/terrain despawns and tripped avian's island bookkeeping.)
         app.add_systems(Update, link::update_links);
-        // Publish the working peer's range + verdict as cosim outputs, so an authored
-        // RF model (`assets/models/CommsLink.mo`) can turn metres into bits/s off an
-        // ordinary output→input wire.
+        // Expose the working peer's range + verdict as PORTS, so an authored RF model
+        // (`assets/models/CommsLink.mo`) can turn metres into bits/s off an ordinary
+        // output→input wire.
         //
-        // `FixedUpdate` + `.before(CosimSet::Propagate)` is NOT decoration, it is the
-        // whole contract — the same one `inject_local_solar_into_cosim` keeps
-        // (`lunco-environment/src/lib.rs:515`). Propagation is what copies an output
-        // onto the wired input; publish after it and the model reads an input nobody
-        // wrote that tick. In `Update` with no ordering at all, this bridge wrote
-        // real metres and the model still saw `link_range_m = 0` — Modelica dutifully
-        // solved a 1 m link at 145 dB SNR. Cosim runs on the FIXED cycle; a bridge
-        // feeding it must too, or it is publishing into the wrong tick.
-        app.add_systems(
-            FixedUpdate,
-            link::inject_link_state_into_cosim
-                .before(lunco_cosim::systems::propagate::CosimSet::Propagate),
-        );
+        // Registered as a backend rather than pushed into `SimComponent.outputs` by a
+        // system: ports are read on demand, so there is no publish tick to get wrong.
+        // The previous bridge needed `FixedUpdate` + `.before(CosimSet::Propagate)` to
+        // be correct at all — see `link::LINK_PORT_BACKEND` for what that cost.
+        //
+        // Registration order is resolution precedence, and cosim's builtins (Modelica
+        // first) are already in by now, so a model that authors its own `link_*`
+        // variable keeps it.
+        app.world_mut()
+            .get_resource_or_init::<lunco_core::ports::PortRegistry>()
+            .register(link::LINK_PORT_BACKEND);
         // Keep a host-app gravity choice (e.g. the sandbox's flat gravity);
         // default to surface gravity for the full client.
         if app.world().get_resource::<Gravity>().is_none() {

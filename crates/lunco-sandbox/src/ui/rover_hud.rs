@@ -8,8 +8,15 @@
 //!
 //! - **ATTITUDE** (bottom-left) — tilt, roll, pitch, speed. Tilt is the number
 //!   that matters on a slope: it is what puts a rover on its roof.
-//! - **NAV + CONTROLS** (bottom-right) — position and heading in the stable root
-//!   frame, plus the live drive inputs.
+//! - **NAV + COMMS + CONTROLS** (bottom-right) — position and heading in the stable
+//!   root frame, the live link home, plus the drive inputs.
+//!
+//! COMMS reads the generic link kernel (`lunco_celestial::link`, doc 49) — real
+//! range/elevation/occlusion, never a scripted flag. It is the driver-facing half of
+//! the same state `ss3_radio_shadow.rhai` turns into a tele-op refusal: when this
+//! says NO LINK, commands genuinely cannot reach the vessel, so the readout has to
+//! answer "why is it not responding" without the student going to a panel for it.
+//! Shown only for a vessel that carries a link node — see `resolve_link`.
 //!
 //! TRANSPORT (pause + rate) is deliberately NOT here: the workbench toolbar already
 //! owns the pause button and the same `TimeTransport` authority, and it explicitly
@@ -35,6 +42,7 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 use big_space::prelude::{CellCoord, Grid};
 use leafwing_input_manager::prelude::ActionState;
+use lunco_celestial::link::LinkState;
 use lunco_controller::ControllerLink;
 use lunco_core::{Avatar, GlobalEntityId, UserIntent};
 
@@ -64,6 +72,112 @@ struct DrivenVessel {
     heading_deg: f32,
     /// Metres/second, or `None` for a body avian is not integrating.
     speed: Option<f32>,
+    /// Live comms link, or `None` for a vessel carrying no link node at all.
+    link: Option<LinkInfo>,
+}
+
+/// The one link the driver actually cares about: can I be commanded right now,
+/// and by whom.
+///
+/// A node may have many peers; the HUD shows ONE. Choosing the nearest CONNECTED
+/// peer (falling back to the nearest severed one) matches how
+/// `inject_link_state_into_cosim` reduces a class to a single set of ports, so the
+/// HUD and the cosim ports never disagree about which peer is "the" link.
+struct LinkInfo {
+    connected: bool,
+    /// Peer prim name, or a GID fallback if the peer has no `Name`.
+    peer_label: String,
+    range_m: f64,
+    elevation_deg: f64,
+    /// True when the node has no peers at all — a different failure from "severed":
+    /// nothing to talk to, rather than something in the way.
+    no_peers: bool,
+}
+
+/// Find the driven vessel's link node and reduce it to one headline peer.
+///
+/// The link node is usually NOT the vessel entity: scenes author the radio as a
+/// CHILD prim (`/Traverse/Rover/Comms` in the school twin), because the antenna has
+/// its own pose and the vessel is the thing commands address. So walk descendants
+/// rather than reading `LinkState` off the vessel and concluding "no comms".
+fn resolve_link(
+    vessel: Entity,
+    q_links: &Query<(Entity, &LinkState)>,
+    q_parents: &Query<&ChildOf>,
+    q_name: &Query<&Name>,
+    q_ids: &Query<(Entity, &GlobalEntityId)>,
+) -> Option<LinkInfo> {
+    // Depth cap: a radio hangs a hop or two under its vessel. This also makes the
+    // walk terminate on a malformed hierarchy instead of spinning.
+    const MAX_DEPTH: usize = 8;
+    let owned_by_vessel = |mut e: Entity| {
+        if e == vessel {
+            return true;
+        }
+        for _ in 0..MAX_DEPTH {
+            let Ok(parent) = q_parents.get(e) else { return false };
+            e = parent.parent();
+            if e == vessel {
+                return true;
+            }
+        }
+        false
+    };
+
+    let (_, state) = q_links.iter().find(|(e, _)| owned_by_vessel(*e))?;
+
+    if state.peers.is_empty() {
+        return Some(LinkInfo {
+            connected: false,
+            peer_label: "—".into(),
+            range_m: 0.0,
+            elevation_deg: 0.0,
+            no_peers: true,
+        });
+    }
+
+    // Nearest connected peer, else nearest peer at all.
+    let pick = state
+        .peers
+        .iter()
+        .filter(|p| p.connected)
+        .min_by(|a, b| a.range_m.total_cmp(&b.range_m))
+        .or_else(|| state.peers.iter().min_by(|a, b| a.range_m.total_cmp(&b.range_m)))?;
+
+    // `LinkPeer` names its peer by GID (identity survives despawn/reload; an Entity
+    // would not), so resolve GID → entity → `Name` for a label the driver can read.
+    // Same GID→entity resolution `link_beams` does to aim a beam at its peer.
+    //
+    // Prefer the peer's PARENT name when the peer is an antenna child: the driver
+    // thinks in terms of "Base", not "Antenna".
+    let peer_label = q_ids
+        .iter()
+        .find(|(_, g)| g.get() == pick.peer)
+        .map(|(e, _)| {
+            let own = q_name.get(e).ok().map(|n| n.as_str().to_string());
+            let parent = q_parents
+                .get(e)
+                .ok()
+                .and_then(|p| q_name.get(p.parent()).ok())
+                .map(|n| n.as_str().to_string());
+            match (own, parent) {
+                // An "Antenna"/"Comms" node under a named structure reads better as
+                // its owner; anything else keeps its own name.
+                (Some(o), Some(p)) if o == "Antenna" || o == "Comms" => p,
+                (Some(o), _) => o,
+                (None, Some(p)) => p,
+                (None, None) => format!("#{}", pick.peer),
+            }
+        })
+        .unwrap_or_else(|| format!("#{}", pick.peer));
+
+    Some(LinkInfo {
+        connected: pick.connected,
+        peer_label,
+        range_m: pick.range_m,
+        elevation_deg: pick.elevation_deg,
+        no_peers: false,
+    })
 }
 
 /// Resolve the vessel the local avatar is driving, or `None` in free flight.
@@ -75,6 +189,8 @@ fn resolve_driven(
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
+    q_links: &Query<(Entity, &LinkState)>,
+    q_ids: &Query<(Entity, &GlobalEntityId)>,
 ) -> Option<DrivenVessel> {
     let vessel = q_avatar.iter().next()?.vessel_entity;
     let (pos, rot) = lunco_core::coords::world_pose(vessel, q_parents, q_grids, q_spatial)?;
@@ -110,6 +226,7 @@ fn resolve_driven(
         pitch_deg,
         heading_deg,
         speed: q_vel.get(vessel).ok().map(|v| v.length() as f32),
+        link: resolve_link(vessel, q_links, q_parents, q_name, q_ids),
     })
 }
 
@@ -293,11 +410,14 @@ pub(crate) fn draw_rover_hud(
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
+    q_links: Query<(Entity, &LinkState)>,
+    q_ids: Query<(Entity, &GlobalEntityId)>,
 ) {
     let Some(theme) = theme else { return };
     let pal = Palette::of(&theme);
     let Some(v) = resolve_driven(
-        &q_avatar, &q_name, &q_gid, &q_vel, &q_parents, &q_grids, &q_spatial,
+        &q_avatar, &q_name, &q_gid, &q_vel, &q_parents, &q_grids, &q_spatial, &q_links,
+        &q_ids,
     ) else {
         return;
     };
@@ -343,6 +463,65 @@ pub(crate) fn draw_rover_hud(
                     readout(ui, "N", format!("{:+.1}", -v.pos.z), pal.value);
                     readout(ui, "elev", format!("{:.1}", v.pos.y), pal.value);
                     readout(ui, "hdg", format!("{:.0}°", v.heading_deg), pal.accent);
+
+                    // COMMS — only for a vessel that actually carries a link node.
+                    // A rover with no radio shows nothing rather than a permanent
+                    // "NO LINK", which would read as a fault instead of an absence.
+                    if let Some(link) = &v.link {
+                        ui.separator();
+                        let (status, color) = if link.no_peers {
+                            ("NO PEERS", pal.muted)
+                        } else if link.connected {
+                            ("LINK", pal.ok)
+                        } else {
+                            ("NO LINK", pal.danger)
+                        };
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("COMMS").weak().size(9.0));
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.label(
+                                        egui::RichText::new(status)
+                                            .color(color)
+                                            .strong()
+                                            .size(11.0),
+                                    );
+                                },
+                            );
+                        });
+                        if !link.no_peers {
+                            readout(
+                                ui,
+                                "peer",
+                                link.peer_label.clone(),
+                                if link.connected { pal.value } else { pal.muted },
+                            );
+                            // Range stays legible across the whole span the kernel
+                            // covers: metres on a site, km once a peer is orbital or
+                            // on another body (Earth is ~384,000 km out).
+                            let range = if link.range_m >= 10_000.0 {
+                                format!("{:.0} km", link.range_m / 1000.0)
+                            } else {
+                                format!("{:.0} m", link.range_m)
+                            };
+                            readout(ui, "range", range, pal.value);
+                            readout(
+                                ui,
+                                "elev",
+                                format!("{:+.0}°", link.elevation_deg),
+                                pal.value,
+                            );
+                            if !link.connected {
+                                ui.label(
+                                    egui::RichText::new("no line of sight — autonomy only")
+                                        .color(pal.danger)
+                                        .size(9.0),
+                                );
+                            }
+                        }
+                    }
+
                     ui.separator();
                     ui.label(egui::RichText::new("CONTROLS").weak().size(9.0));
                     ui.add_space(2.0);

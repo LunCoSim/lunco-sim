@@ -2605,107 +2605,48 @@ fn load_startup_scene(world: &mut World, scene_path: String) {
         std::env::current_dir().unwrap_or_default().join("assets").join(pb)
     };
 
-    // Find the enclosing Twin root folder (walk up to find twin.toml or use the parent dir)
-    let mut current = abs_path.parent().map(|p| p.to_path_buf());
-    let mut twin_root = None;
-    while let Some(dir) = current {
-        if dir.join(lunco_twin::MANIFEST_FILENAME).is_file() {
-            twin_root = Some(dir);
-            break;
-        }
-        current = dir.parent().map(|p| p.to_path_buf());
-    }
-    let twin_root = twin_root.unwrap_or_else(|| {
-        abs_path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
-    });
+    // The root that owns this scene — nearest `twin.toml` ancestor, else the
+    // containing folder. Shared with the runtime open path (`OpenFile` →
+    // `spawn_twin_from_scene`) so boot and commands cannot disagree about what
+    // "the root" is for a given file.
+    let twin_root = lunco_twin::root_for_file(&abs_path);
 
     let scene_file = abs_path.file_name().unwrap_or_default().to_string_lossy().into_owned();
     world.insert_resource(StartupSceneGuard { file: scene_file.clone() });
 
-    let mut twin_loaded = false;
-    // `--scene` is user-supplied, so `twin_root` may resolve to a directory that
-    // is not a twin at all. `Orphan` means exactly that — a normal outcome, not a
-    // bug. Report it and fall through to the direct `LoadScene` below; a bad path
-    // must never be a hard crash at boot.
-    let opened = match lunco_twin::TwinMode::open(&twin_root) {
-        Ok(lunco_twin::TwinMode::Twin(t)) | Ok(lunco_twin::TwinMode::Folder(t)) => Some(t),
+    // `--scene` is user-supplied, so `twin_root` may not be openable. There is
+    // deliberately NO direct-`LoadScene` fallback here: a raw load mounts a
+    // base-only stage and silently drops the doc overlay (placed waypoints,
+    // runtime spawns, moved transforms). A fallback that discards user edits is
+    // worse than a loud failure, so a bad path reports and stops — the
+    // `StartupSceneGuard` failguard turns it into a visible error rather than an
+    // empty viewport.
+    match lunco_twin::TwinMode::open(&twin_root) {
+        Ok(lunco_twin::TwinMode::Twin(mut twin)) | Ok(lunco_twin::TwinMode::Folder(mut twin)) => {
+            let rel_scene_path = abs_path
+                .strip_prefix(&twin_root)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| scene_file.clone());
+            twin.set_default_scene(rel_scene_path);
+
+            let twin_id = world
+                .resource_mut::<lunco_workspace::WorkspaceResource>()
+                .add_twin(twin);
+            world.trigger(lunco_workspace::TwinAdded { twin: twin_id });
+        }
         Ok(lunco_twin::TwinMode::Orphan(path)) => {
-            warn!(
-                "[sandbox] `{}` is not a twin or folder (orphan `{}`) — loading `{scene_path}` directly instead",
+            error!(
+                "[sandbox] `{}` resolved to an orphan (`{}`) — cannot open a root for `{scene_path}`",
                 twin_root.display(),
                 path.display()
             );
-            None
         }
         Err(err) => {
-            warn!("[sandbox] could not open `{}` as a twin: {err} — loading `{scene_path}` directly instead", twin_root.display());
-            None
+            error!(
+                "[sandbox] could not open `{}` as a root for `{scene_path}`: {err}",
+                twin_root.display()
+            );
         }
-    };
-    if let Some(mut twin) = opened {
-
-        // Override or insert default_scene in the manifest
-        let rel_scene_path = abs_path.strip_prefix(&twin_root)
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or(scene_file.clone());
-
-        if let Some(manifest) = &mut twin.manifest {
-            if let Some(usd) = &mut manifest.usd {
-                usd.default_scene = Some(rel_scene_path);
-            } else {
-                manifest.usd = Some(lunco_twin::UsdManifest {
-                    default_scene: Some(rel_scene_path),
-                });
-            }
-        } else {
-            // It was loaded as Folder, create a default manifest.
-            // `uuid` is left `None`: this is an in-memory synthetic
-            // manifest for a folder with no `twin.toml`. The networking
-            // scenario-sync layer derives a stable id (path digest)
-            // when `uuid` is absent, so the server's scenario stays
-            // stable across restarts without writing a `twin.toml`.
-            twin.manifest = Some(lunco_twin::TwinManifest {
-                name: twin_root.file_name().unwrap_or_default().to_string_lossy().into_owned(),
-                description: None,
-                version: "0.1.0".into(),
-                uuid: None,
-                default_perspective: None,
-                children: Vec::new(),
-                usd: Some(lunco_twin::UsdManifest {
-                    default_scene: Some(rel_scene_path),
-                }),
-            });
-        }
-
-        let twin_id = world.resource_mut::<lunco_workspace::WorkspaceResource>().add_twin(twin);
-        world.trigger(lunco_workspace::TwinAdded { twin: twin_id });
-        twin_loaded = true;
-    }
-
-    if !twin_loaded {
-        let load_path = {
-            let pb = std::path::PathBuf::from(&scene_path);
-            match (
-                pb.is_absolute(),
-                pb.parent(),
-                pb.parent().and_then(|p| p.file_name()),
-                pb.file_name(),
-            ) {
-                (true, Some(parent), Some(key), Some(file)) => {
-                    let key = key.to_string_lossy().into_owned();
-                    world
-                        .resource::<lunco_assets::twin_source::TwinRoots>()
-                        .register(&key, parent);
-                    format!("twin://{}/{}", key, file.to_string_lossy())
-                }
-                _ => scene_path.clone(),
-            }
-        };
-        info!("Failed to load Twin; falling back to direct load of sandbox scene `{}` via LoadScene", load_path);
-        world.trigger(LoadScene {
-            path: load_path,
-            root_prim: String::new(),
-        });
     }
     // `--scene` is doc-backed through the same path as any workspace Twin: the
     // `TwinAdded` above runs the doc-first mount (`open_usd_docs_on_twin_added` →

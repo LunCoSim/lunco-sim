@@ -1333,6 +1333,12 @@ impl WorkbenchLayout {
         let valid_kinds: HashSet<&'static str> =
             self.instance_panels.keys().map(|p| p.0).collect();
 
+        // A NaN fraction (see `sanitize_dock_fractions`) serializes to JSON
+        // `null`, which won't deserialize back into `f32` — so the load-time
+        // sanitize below is unreachable unless we heal the `Value` first.
+        let mut value = value;
+        heal_non_finite_nulls(&mut value);
+
         let mut new_dock: DockState<TabId> = match serde_json::from_value(value) {
             Ok(d) => d,
             Err(e) => {
@@ -2147,6 +2153,38 @@ fn maintain_dock_widths(
 /// (guard `range > 0`); until then we re-assert this invariant around every
 /// `show`. The load-time call in `set_dock_from_json` is independent and stays
 /// regardless — it heals a NaN already serialized to disk.
+/// Replace the `null`s a serialized dock tree uses for non-finite `f32`s.
+///
+/// JSON has no NaN/Inf, so `serde_json` writes any non-finite `f32` as `null`
+/// — which then refuses to deserialize back into `f32`, failing the *entire*
+/// layout parse. Two independent sources produce them:
+///
+/// - `"fraction": null` — a split poisoned by the egui_dock `0.0 / 0.0` bug
+///   (see [`sanitize_dock_fractions`]). Healed to `0.5`.
+/// - `rect` / `viewport` coordinates — `egui::Rect::NOTHING` is `±infinity`,
+///   so any node egui hasn't laid out yet serializes as `null`. Healed to
+///   `0.0`; egui recomputes every rect on the next `show`, so the value is
+///   irrelevant as long as it parses.
+///
+/// Without this pre-pass the user silently loses their dock on every launch,
+/// and `sanitize_dock_fractions` never gets to run — there is no `DockState`
+/// to sanitize yet.
+fn heal_non_finite_nulls(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, v) in map.iter_mut() {
+                match (key.as_str(), v.is_null()) {
+                    ("fraction", true) => *v = serde_json::json!(0.5),
+                    ("x" | "y", true) => *v = serde_json::json!(0.0),
+                    _ => heal_non_finite_nulls(v),
+                }
+            }
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(heal_non_finite_nulls),
+        _ => {}
+    }
+}
+
 fn sanitize_dock_fractions(dock: &mut DockState<TabId>) {
     for (_surface, node) in dock.iter_all_nodes_mut() {
         if let egui_dock::Node::Horizontal(s) | egui_dock::Node::Vertical(s) = node {
@@ -4183,6 +4221,56 @@ mod tests {
             "reset restored the cached tab instead of a clean preset"
         );
         assert_eq!(layout.side_browser, vec![PanelId("panel_a")]);
+    }
+
+    /// A NaN split fraction (egui_dock poisons the tree from inside `show`)
+    /// serializes to JSON `null`, which used to fail `from_value` outright —
+    /// so the user's whole dock silently reset on every launch. Build a real
+    /// split, poison it, and round-trip through serde rather than asserting on
+    /// a hand-written JSON literal, so this stays honest if egui_dock changes
+    /// its wire format.
+    #[test]
+    fn nan_split_fraction_survives_a_dock_json_round_trip() {
+        let mut dock: DockState<TabId> =
+            DockState::new(vec![TabId::Singleton(PanelId("a"))]);
+        dock.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![TabId::Singleton(PanelId("b"))],
+        );
+
+        // Reproduce the upstream `0.0 / 0.0` poisoning.
+        for (_surface, node) in dock.iter_all_nodes_mut() {
+            if let egui_dock::Node::Horizontal(s) | egui_dock::Node::Vertical(s) = node {
+                s.fraction = f32::NAN;
+            }
+        }
+
+        let mut value = serde_json::to_value(&dock).expect("dock serializes");
+        assert!(
+            serde_json::from_value::<DockState<TabId>>(value.clone()).is_err(),
+            "expected non-finite floats to serialize as null and fail to parse \
+             — if this now succeeds, serde_json changed and the heal is dead code"
+        );
+
+        heal_non_finite_nulls(&mut value);
+        let restored: DockState<TabId> =
+            serde_json::from_value(value).expect("healed dock must parse");
+
+        let fractions: Vec<f32> = restored
+            .iter_all_nodes()
+            .filter_map(|(_surface, node)| match node {
+                egui_dock::Node::Horizontal(s) | egui_dock::Node::Vertical(s) => {
+                    Some(s.fraction)
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(!fractions.is_empty(), "split node did not survive the round trip");
+        assert!(
+            fractions.iter().all(|f| (*f - 0.5).abs() < f32::EPSILON),
+            "healed fractions should default to 0.5, got {fractions:?}"
+        );
     }
 
     #[test]

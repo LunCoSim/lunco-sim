@@ -107,6 +107,31 @@ pub enum TwinMode {
     Twin(Twin),
 }
 
+/// The root folder that owns `file` — the nearest ancestor holding a
+/// `twin.toml`, else the file's own parent directory.
+///
+/// A document opened by its file path still needs a *root*: USD references are
+/// relative (`@terrain/apollo15@`, `@./wheel.usda@`), so without one a scene's
+/// co-located assets cannot resolve. Falling back to the parent directory is
+/// the [`TwinMode::Folder`] case — a folder with no manifest is a first-class
+/// mode, not a degraded one — so a lone `.usda` anywhere on disk opens with its
+/// siblings reachable and no `twin.toml` required.
+///
+/// Shared by the `--scene` boot path and the runtime scene-load commands so
+/// both agree on what "the root" means for a given file.
+pub fn root_for_file(file: &Path) -> PathBuf {
+    let mut current = file.parent().map(|p| p.to_path_buf());
+    while let Some(dir) = current {
+        if dir.join(MANIFEST_FILENAME).is_file() {
+            return dir;
+        }
+        current = dir.parent().map(|p| p.to_path_buf());
+    }
+    file.parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+}
+
 impl TwinMode {
     /// Open a path, returning the appropriate mode.
     ///
@@ -243,6 +268,45 @@ pub struct Twin {
 }
 
 impl Twin {
+    /// Point this Twin's `default_scene` at `rel` (a path relative to
+    /// [`Twin::root`]), synthesising a manifest if the folder has none.
+    ///
+    /// Opening a *scene file* is opening its root with that scene selected, so
+    /// every entry point — the `--scene` boot arg, `OpenFile` on a `.usda`, a
+    /// recents reopen — funnels through here rather than re-deriving the
+    /// manifest shape. Keeping it in one place is what stops the boot path and
+    /// the command path from drifting.
+    ///
+    /// The synthetic manifest leaves `uuid` as `None` on purpose: the
+    /// networking scenario-sync layer derives a stable id (path digest) when
+    /// `uuid` is absent, so a folder-Twin keeps a stable identity across
+    /// restarts without anyone writing a `twin.toml` into the user's folder.
+    pub fn set_default_scene(&mut self, rel: impl Into<String>) {
+        let rel = rel.into();
+        match &mut self.manifest {
+            Some(manifest) => match &mut manifest.usd {
+                Some(usd) => usd.default_scene = Some(rel),
+                None => manifest.usd = Some(UsdManifest { default_scene: Some(rel) }),
+            },
+            None => {
+                self.manifest = Some(TwinManifest {
+                    name: self
+                        .root
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                    description: None,
+                    version: "0.1.0".into(),
+                    uuid: None,
+                    default_perspective: None,
+                    children: Vec::new(),
+                    usd: Some(UsdManifest { default_scene: Some(rel) }),
+                });
+            }
+        }
+    }
+
     /// Walk the folder and classify every file by extension.
     ///
     /// Does *not* touch the manifest; callers pre-load that if present.
