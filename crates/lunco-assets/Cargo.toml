@@ -58,6 +58,10 @@ which = "6"
 # the encoder side (`colortype::Gray32Float`) is what writes the heightmap the
 # runtime DEM reader expects. No GDAL / system dependency.
 tiff = "0.11"
+# The georeferencing tags themselves — shared with `lunco-terrain-bake`, which
+# reads what this crate writes. One leaf crate is what stops the writer and the
+# reader disagreeing about the frame.
+lunco-geotiff = { path = "../lunco-geotiff" }
 flate2 = "1.0"
 bzip2 = "0.4"
 tar = { workspace = true }

@@ -1,0 +1,16 @@
+[package]
+name = "lunco-geotiff"
+version = "0.6.0-dev"
+edition = "2021"
+description = "GeoTIFF georeferencing tags — read and write the 'geo' half of a GeoTIFF"
+
+[dependencies]
+# The only dependency, and deliberately so. This crate is the shared FORMAT layer
+# between the asset processor (which writes rasters) and the terrain baker (which
+# reads them); both already depend on `tiff = "0.11"`, and both previously carried
+# their own half of the georeferencing story with nothing in common but the spec.
+# Pure Rust, so it stays wasm-safe like the decoders it serves.
+tiff = "0.11"
+
+[lints]
+workspace = true

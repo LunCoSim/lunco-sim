@@ -545,8 +545,42 @@ fn process_dem(
         use tiff::encoder::{colortype, TiffEncoder};
         let mut enc =
             TiffEncoder::new(std::fs::File::create(&tif_path)?).map_err(tiff_io_err)?;
-        enc.write_image::<colortype::Gray32Float>(out_n as u32, out_n as u32, &out)
+
+        // Write the GEO half. Until 2026-07-19 this wrote pixels only, so every
+        // heightmap we shipped was a plain TIFF that QGIS opened in pixel units —
+        // any slope computed from it was wrong by the ground-sample factor, with
+        // no warning. The extent lived in `metadata.yaml` instead, which is how
+        // one fact ended up in three places (see docs/architecture/57).
+        //
+        // `win * scale` is the true on-the-ground span (the same value written to
+        // `size_x_m` below), and the frame is node-based: sample 0 on the west/north
+        // edge, sample n-1 on the east/south edge.
+        // Body radius, for the GeoTIFF citation only — it does not enter the
+        // pixel→metre mapping, which is a local metric frame.
+        //
+        // ⚠ THE ENGINE HAS NO CANONICAL MOON RADIUS. Three values are in the tree
+        // and they disagree: `1737.0e3` (`lunco-celestial/src/registry.rs:178`,
+        // the one the sim actually places bodies with), `1.7374e6`
+        // (`lunco-sandbox/src/ui/mod.rs:363`) and `1_737_400.0`
+        // (`lunco-celestial/tests/terrain_curvature_determinism.rs:19`). The 400 m
+        // spread is a real altitude bias the moment anything prints a height —
+        // flagged as an open decision in the school twin's driver-UI doc.
+        //
+        // We follow the registry, because a raster should describe the body the
+        // simulation puts it on, not a more defensible number. Reconcile the three
+        // and this follows.
+        const BODY_RADIUS_M: f64 = 1737.0e3;
+        let geo = lunco_geotiff::GeoTransform::centred_square(
+            win as f64 * scale,
+            out_n,
+            BODY_RADIUS_M,
+        );
+        let mut img = enc
+            .new_image::<colortype::Gray32Float>(out_n as u32, out_n as u32)
             .map_err(tiff_io_err)?;
+        lunco_geotiff::write_geo_tags(img.encoder(), &geo, "Moon 2000")
+            .map_err(tiff_io_err)?;
+        img.write_data(&out).map_err(tiff_io_err)?;
     }
 
     // ── Write the metadata sidecar the loader parses. ─────────────────────

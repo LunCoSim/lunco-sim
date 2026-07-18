@@ -36,7 +36,7 @@
 //! (East +X, Up +Y, North −Z), which is the frame the survey and any route
 //! waypoints are already expressed in.
 
-use avian3d::prelude::LinearVelocity;
+use avian3d::prelude::{ComputedCenterOfMass, LinearVelocity};
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};

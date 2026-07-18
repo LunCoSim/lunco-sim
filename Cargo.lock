@@ -6840,6 +6840,7 @@ dependencies = [
  "image",
  "include_dir",
  "js-sys",
+ "lunco-geotiff",
  "lunco-storage",
  "rayon",
  "resvg 0.47.0",
@@ -7068,6 +7069,13 @@ name = "lunco-fsw"
 version = "0.6.0-dev"
 dependencies = [
  "bevy",
+]
+
+[[package]]
+name = "lunco-geotiff"
+version = "0.6.0-dev"
+dependencies = [
+ "tiff",
 ]
 
 [[package]]
