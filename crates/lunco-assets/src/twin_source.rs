@@ -63,13 +63,58 @@ pub struct TwinRoots {
 }
 
 impl TwinRoots {
-    /// Map a Twin `name` to its absolute root folder. Call when a Twin opens,
-    /// before loading `twin://<name>/<default_scene>`. Re-registering the same
-    /// name (e.g. reopening from a new location) just updates the root.
-    pub fn register(&self, name: impl Into<String>, root: impl Into<PathBuf>) {
-        if let Ok(mut m) = self.roots.write() {
-            m.insert(name.into(), root.into());
+    /// Map a Twin `name` to its absolute root folder, returning the name
+    /// actually assigned — **callers must use the returned name**, not the one
+    /// they passed.
+    ///
+    /// Call when a Twin opens, before loading `twin://<name>/<default_scene>`.
+    ///
+    /// The name is the `twin://` authority, so it must stay human-readable and
+    /// machine-independent (it is the stable provenance identity — see
+    /// `docs/architecture/21-domain-usd.md`). That rules out keying by
+    /// canonical path. But names are *not* unique: the name comes from
+    /// `twin.toml`, falling back to the folder's basename, so two unrelated
+    /// folders can both be `scenes`. Blindly inserting silently repointed the
+    /// first Twin's root, breaking every `twin://first/…` read already in
+    /// flight, with no diagnostic.
+    ///
+    /// So: re-registering the *same* root under a name is idempotent (a reopen),
+    /// while a *different* root gets the next free `name-2`, `name-3`, … .
+    #[must_use = "use the RETURNED name to build `twin://` URIs — the requested \
+                  name may already belong to a different root"]
+    pub fn register(&self, name: impl Into<String>, root: impl Into<PathBuf>) -> String {
+        let requested = name.into();
+        let root = root.into();
+        let canonical = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
+        let Ok(mut m) = self.roots.write() else {
+            return requested;
+        };
+        let same_root = |existing: &PathBuf| {
+            std::fs::canonicalize(existing).unwrap_or_else(|_| existing.clone()) == canonical
+        };
+        let mut candidate = requested.clone();
+        let mut n = 1u32;
+        loop {
+            match m.get(&candidate) {
+                // Free, or already this exact root (reopen) — take it.
+                None => break,
+                Some(existing) if same_root(existing) => break,
+                // Taken by a different folder — try the next suffix.
+                Some(_) => {
+                    n += 1;
+                    candidate = format!("{requested}-{n}");
+                }
+            }
         }
+        if candidate != requested {
+            warn!(
+                "[twin-roots] name `{requested}` is already bound to a different folder — \
+                 registering `{}` as `{candidate}`",
+                root.display()
+            );
+        }
+        m.insert(candidate.clone(), root);
+        candidate
     }
 
     /// Serve `bytes` in place of the on-disk file at `twin://<name>/<rel>`. The
@@ -241,5 +286,44 @@ mod tests {
             roots.overlay_for(Path::new("moonbase/scenes/sandbox.usda")).is_none(),
             "cleared overlay falls back to disk"
         );
+    }
+
+    /// Two unrelated folders can carry the same name (`twin.toml` name, or a
+    /// basename like `scenes`). Registering the second must NOT repoint the
+    /// first — that silently broke every `twin://first/…` read already in
+    /// flight, with no diagnostic.
+    #[test]
+    fn same_name_different_root_does_not_repoint() {
+        let roots = TwinRoots::default();
+
+        let a = roots.register("scenes", "/tmp/project-a/scenes");
+        let b = roots.register("scenes", "/tmp/project-b/scenes");
+
+        assert_eq!(a, "scenes");
+        assert_ne!(b, a, "second root must not take the first root's name");
+        assert_eq!(
+            roots.root_of(&a),
+            Some(PathBuf::from("/tmp/project-a/scenes")),
+            "first Twin still resolves to its own folder"
+        );
+        assert_eq!(
+            roots.root_of(&b),
+            Some(PathBuf::from("/tmp/project-b/scenes")),
+            "second Twin resolves to its own folder under the assigned name"
+        );
+    }
+
+    /// Reopening the SAME folder is idempotent — it must reuse the name rather
+    /// than accumulating `scenes-2`, `scenes-3`, … on every reopen.
+    #[test]
+    fn reregistering_same_root_reuses_the_name() {
+        let roots = TwinRoots::default();
+
+        let first = roots.register("moonbase", "/tmp/moonbase");
+        let again = roots.register("moonbase", "/tmp/moonbase");
+
+        assert_eq!(first, "moonbase");
+        assert_eq!(again, first, "reopen must reuse the existing name");
+        assert_eq!(roots.names().len(), 1, "no duplicate registration");
     }
 }

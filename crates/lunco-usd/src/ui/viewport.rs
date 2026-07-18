@@ -641,7 +641,11 @@ fn viewport_twin_coords(world: &World, doc: DocumentId) -> Option<(String, Strin
     let name = format!("__viewport_{doc}")
         .replace(|c: char| !c.is_ascii_alphanumeric() && c != '_', "_");
     let roots = world.resource::<TwinRoots>();
-    roots.register(&name, base);
+    // Use the ASSIGNED name: if this synthetic name is already bound to a
+    // different base (same doc re-registered from a new location), the registry
+    // hands back a disambiguated one — and the overlay must be keyed to that,
+    // or the viewport serves its composed source under a name nobody reads.
+    let name = roots.register(&name, base);
     roots.set_overlay(&name, &rel, std::sync::Arc::new(composed.into_bytes()));
     Some((name, rel))
 }

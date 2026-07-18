@@ -228,7 +228,11 @@ fn open_usd_docs_on_twin_added(
     // meant a folder opened without a declared starting scene never registered,
     // so its parts never reached the Spawn palette even though the folder was
     // open. Keyed by the folder we actually opened (`twin.root`).
-    twin_roots.register(&twin_name, &twin.root);
+    // Use the name the registry ASSIGNED: if another open Twin already holds
+    // this name for a different folder, it hands back a disambiguated one, and
+    // every `twin://…` URI below must be built from that — not from the
+    // requested name, which now resolves to someone else's root.
+    let twin_name = twin_roots.register(&twin_name, &twin.root);
     match default_scene {
         Some(scene) => {
             // Load the scene THROUGH the `twin://` source registered above —
