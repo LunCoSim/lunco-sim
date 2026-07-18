@@ -18,11 +18,12 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::{self, Cursor};
-use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 use std::time::SystemTime;
 
 use openusd::ar::{self, Asset, ResolvedPath};
+
+pub(crate) use lunco_assets::asset_path::canonicalize;
 
 /// The layer-byte map a [`LuncoUsdResolver`] resolves against, wrapped for
 /// **shared interior mutability**. openusd captures the resolver at stage-build
@@ -51,27 +52,8 @@ pub(crate) const BINARY_STUB_ID: &str = "__lunco_binary_stub__.usda";
 
 const EMPTY_USDA: &[u8] = b"#usda 1.0\n";
 
-/// Resolve `..` / `.` segments without touching the filesystem (wasm-safe).
-pub(crate) fn normalize(p: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for c in p.components() {
-        match c {
-            Component::ParentDir => {
-                // Pop a real directory segment, but PRESERVE a leading `..`
-                // that has nothing to pop (e.g. `../../assets/...`) — otherwise
-                // relative anchors resolve to the wrong place.
-                if matches!(out.components().next_back(), Some(Component::Normal(_))) {
-                    out.pop();
-                } else {
-                    out.push("..");
-                }
-            }
-            Component::CurDir => {}
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
-}
+// `normalize` moved to `lunco_assets::asset_path` along with `canonicalize` — it
+// was only ever a helper for it, and nothing else in this crate used it.
 
 /// True if `asset_path` names a non-USD binary asset (see
 /// [`BINARY_ASSET_EXTENSIONS`]). Strips URL query (`?…`) / fragment (`#…`)
@@ -92,43 +74,14 @@ pub(crate) fn is_binary_asset(asset_path: &str) -> bool {
     }
 }
 
-/// THE shared canonicalization. Maps an authored asset path + its referencing
-/// layer (`anchor`) to a stable identifier == an asset-source-relative path
-/// (the form `LoadContext::read_asset_bytes` expects). Three forms:
-///   * `scheme://…` → passthrough (Bevy `AssetServer` source handles it).
-///   * `/…` (legacy absolute-from-assets-root) → strip the leading slash.
-///   * relative → resolved against the anchor layer's directory.
+/// openusd's `ResolvedPath` as the `&str` anchor [`canonicalize`] takes.
 ///
-/// A relative ref inside a layer that itself lives under a `scheme://` source
-/// (e.g. a rover loaded from `lunco://vessels/rovers/skid_rover.usda` that
-/// references `../../components/mobility/wheel.usda`) must STAY under that
-/// source. `Path` normalization collapses `scheme://` → `scheme:/` (losing the
-/// source), so we split the scheme off the anchor, resolve the path part, and
-/// reattach the `scheme://` prefix.
-///
-/// MUST stay identical between the pre-fetch BFS and the resolver (R-canon).
-pub(crate) fn canonicalize(asset_path: &str, anchor: Option<&ResolvedPath>) -> String {
-    if asset_path.contains("://") {
-        return asset_path.to_string();
-    }
-    if let Some(rest) = asset_path.strip_prefix('/') {
-        return normalize(Path::new(rest)).to_string_lossy().into_owned();
-    }
-    // Split a `scheme://` prefix off the anchor before Path-based resolution.
-    let anchor_str = anchor.and_then(|a| a.to_str()).unwrap_or_default();
-    let (scheme, anchor_path) = match anchor_str.split_once("://") {
-        Some((s, rest)) => (Some(s), rest),
-        None => (None, anchor_str),
-    };
-    let base = Path::new(anchor_path)
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
-    let resolved = normalize(&base.join(asset_path)).to_string_lossy().into_owned();
-    match scheme {
-        Some(s) => format!("{s}://{resolved}"),
-        None => resolved,
-    }
+/// The canonicalization RULE lives in `lunco-assets`, which owns every asset-path
+/// operation, so USD composition, texture lookup, terrain, the scene loader and the
+/// rhai module resolver cannot drift apart on what a reference means. All this
+/// crate contributes is the openusd-specific type conversion.
+pub(crate) fn anchor_str(anchor: Option<&ResolvedPath>) -> Option<&str> {
+    anchor.and_then(|a| a.to_str())
 }
 
 /// Resolve a binary asset path to a URI the Bevy `AssetServer` can load
@@ -152,7 +105,7 @@ pub(crate) fn resolve_binary_uri(asset_path: &str, anchor: Option<&ResolvedPath>
     if asset_path.contains("://") {
         return asset_path.to_string();
     }
-    canonicalize(asset_path, anchor)
+    canonicalize(asset_path, anchor_str(anchor))
 }
 
 /// In-memory resolver over pre-fetched layer bytes, keyed by [`canonicalize`]d
@@ -183,7 +136,7 @@ impl ar::Resolver for LuncoUsdResolver {
         if is_binary_asset(asset_path) {
             return BINARY_STUB_ID.to_string();
         }
-        canonicalize(asset_path, anchor)
+        canonicalize(asset_path, anchor_str(anchor))
     }
 
     fn resolve(&self, asset_path: &str) -> Option<ResolvedPath> {

@@ -1413,26 +1413,20 @@ fn resolve_usd_instance_identities(
 }
 
 /// Resolves a USD texture asset path relative to the stage it belongs to.
+///
+/// The rule is [`lunco_assets::asset_path::canonicalize`] — the same one USD layer
+/// composition uses, so a texture reference and a layer reference spelled the same
+/// way resolve the same way. This used to re-implement it, and the copy had already
+/// drifted: it handled `scheme://` and relative refs but silently mishandled the
+/// legacy absolute-from-assets-root `/…` form that composition accepts.
 fn resolve_texture_path(
     asset_server: &AssetServer,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     asset_path: &str,
 ) -> Option<String> {
-    if asset_path.contains("://") {
-        return Some(asset_path.to_string());
-    }
     let stage_path = asset_server.get_path(stage_id)?;
-    let parent = stage_path.path().parent()?;
-    let resolved_path = parent.join(asset_path);
-    
-    match stage_path.source() {
-        bevy::asset::io::AssetSourceId::Name(name) => {
-            Some(format!("{}://{}", name, resolved_path.to_string_lossy()))
-        }
-        bevy::asset::io::AssetSourceId::Default => {
-            Some(resolved_path.to_string_lossy().into_owned())
-        }
-    }
+    let anchor = lunco_assets::asset_path::anchor_of(&stage_path);
+    Some(lunco_assets::asset_path::canonicalize(asset_path, Some(&anchor)))
 }
 
 /// Extractor for parent prim path from property connection target (e.g. `/World/Material/Shader.output` -> `/World/Material/Shader`)

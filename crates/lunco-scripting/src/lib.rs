@@ -20,6 +20,10 @@ pub mod source_asset;
 /// World-bound rhai execution (the `cmd`/`world_pos`/`get`/`find` bridge).
 #[cfg(feature = "rhai")]
 pub mod world_bridge;
+/// `import` resolution over the asset pipeline. Holds no path logic of its own —
+/// ids come from `lunco_assets::script_source::ScriptSources`.
+#[cfg(feature = "rhai")]
+pub mod module_resolver;
 /// rhai task maps compiled onto the `lunco-behavior` kernel — the native tick
 /// engine behind the prelude's `seq`/`par_*`/`repeat`/`wait_*` task vocabulary
 /// (replaces the prelude's retired `__tick*` rhai recursion).
@@ -268,6 +272,17 @@ impl Plugin for LunCoScriptingPlugin {
             // (owns the on_start/on_tick/on_event/on_stop + hot-reload + pause +
             // teardown lifecycle; rhai supplies only the mechanics).
             app.init_resource::<scenario::ScenarioDriver<world_bridge::RhaiScenarioRuntime>>();
+            // Publish the runtime's script registry so the asset side can fill the
+            // SAME map the engine's module resolver reads. `ScriptSources` is an
+            // `Arc` handle, so this is one storage with two owners — a script
+            // registered after engine construction is importable without a rebuild.
+            // Must run AFTER the driver exists, since the driver owns the registry.
+            let sources = app
+                .world()
+                .resource::<scenario::ScenarioDriver<world_bridge::RhaiScenarioRuntime>>()
+                .runtime
+                .script_sources();
+            app.insert_resource(sources);
             // Mints document ids for scenarios attached via RunScenario.
             app.init_resource::<commands::ScenarioDocAllocator>();
             // Event channel: scenarios subscribe to the existing TelemetryEvent

@@ -345,8 +345,16 @@ fn compile_prelude_set(
 /// Build a rhai [`Engine`] with the World-bridge verbs registered, the embedded
 /// prelude loaded as a global module, and the same sandbox caps as the one-shot
 /// backend.
-pub fn build_world_engine() -> Engine {
+///
+/// `sources` backs `import`. Passing it is not optional in practice: a bare
+/// `Engine::new()` ships rhai's `FileModuleResolver`, which reads arbitrary files
+/// relative to the process working directory — a sandbox escape in a system that
+/// otherwise routes every asset through a scoped source. Installing ours closes it.
+pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -> Engine {
     let mut engine = Engine::new();
+
+    // Replace rhai's default file-reading resolver before anything can import.
+    engine.set_module_resolver(crate::module_resolver::AssetModuleResolver::new(sources));
 
     engine.set_max_operations(1_000_000);
     engine.set_max_call_levels(64);
@@ -959,11 +967,20 @@ pub struct RhaiScenarioRuntime {
     /// Tool-library generation the engine's static modules were built from; a
     /// mismatch triggers a re-`refresh` so a `RegisterToolLibrary` hot-reloads.
     tool_gen: u64,
+    /// The script registry backing `import`. Shared (`Arc`) with the engine's
+    /// module resolver and with the Bevy resource the asset side fills.
+    sources: lunco_assets::script_source::ScriptSources,
 }
 
 impl Default for RhaiScenarioRuntime {
     fn default() -> Self {
-        let mut engine = build_world_engine();
+        // The runtime OWNS the script registry and hands out clones. `ScriptSources`
+        // is an `Arc` handle, so the copy inserted as a Bevy resource (which the
+        // asset-loading side fills) and the copy captured by the engine's module
+        // resolver are the same map — a script loaded later is importable without
+        // rebuilding the engine.
+        let sources = lunco_assets::script_source::ScriptSources::default();
+        let mut engine = build_world_engine(sources.clone());
         engine.on_print(|s| info!("[rhai] {s}"));
         let prelude_ast =
             compile_prelude(&engine).unwrap_or_else(|e| panic!("prelude must compile: {e}"));
@@ -974,7 +991,19 @@ impl Default for RhaiScenarioRuntime {
             prelude_ast,
             // build_world_engine already refreshed at the current generation.
             tool_gen: crate::tool_libs::generation(),
+            sources,
         }
+    }
+}
+
+impl RhaiScenarioRuntime {
+    /// A handle to the registry backing `import`.
+    ///
+    /// Insert this as a Bevy resource so the asset side and the engine's module
+    /// resolver share ONE map — they are `Arc` clones of the same storage, which is
+    /// what lets a script loaded after engine construction still be importable.
+    pub fn script_sources(&self) -> lunco_assets::script_source::ScriptSources {
+        self.sources.clone()
     }
 }
 
@@ -1562,7 +1591,16 @@ pub fn eval_with_world_as(
     use std::sync::{Arc, Mutex};
 
     // A fresh engine per call keeps state isolated; cheap relative to the work.
-    let mut engine = build_world_engine();
+    //
+    // It shares the world's script registry, so an `import` typed at the REPL
+    // resolves exactly as it would inside a scenario. A private registry here would
+    // make the REPL a place where imports mysteriously fail — the kind of
+    // inconsistency that costs an hour to diagnose.
+    let sources = world
+        .get_resource::<lunco_assets::script_source::ScriptSources>()
+        .cloned()
+        .unwrap_or_default();
+    let mut engine = build_world_engine(sources);
 
     let out = Arc::new(Mutex::new(String::new()));
     let sink = out.clone();
@@ -1693,7 +1731,7 @@ mod tests {
     #[test]
     fn prelude_loads_as_module() {
         // The full build path: verbs + prelude-as-global-module must succeed.
-        let _engine = super::build_world_engine();
+        let _engine = super::build_world_engine(Default::default());
     }
 
     /// A top-level `const` must be readable from inside a `fn` body.

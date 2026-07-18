@@ -34,7 +34,8 @@ use openusd::usda;
 
 use crate::canonical::StageRecipe;
 use crate::resolver::{
-    canonicalize, is_binary_asset, resolve_binary_uri, LuncoUsdResolver, SharedLayerBytes,
+    anchor_str, canonicalize, is_binary_asset, resolve_binary_uri, LuncoUsdResolver,
+    SharedLayerBytes,
 };
 
 /// Async BFS that fetches the full transitive `.usda` layer closure into an
@@ -67,7 +68,7 @@ pub(crate) async fn fetch_layer_closure(
         // `.usda` wrapper anchors on its COMPOSED prim.
         let anchor = ResolvedPath::new(&id);
         for child_asset in discover_arcs(&data) {
-            let child_id = canonicalize(&child_asset, Some(&anchor));
+            let child_id = canonicalize(&child_asset, anchor_str(Some(&anchor)));
             if bytes.contains_key(&child_id) {
                 continue;
             }
@@ -342,7 +343,7 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
         // to the wrapper bytes and the `@model.glb@` payload is stubbed — the
         // storage-based compose path, not the deleted native-fs shim.
         let root_id = canonicalize("scene.usda", None);
-        let wrapper_id = canonicalize("wrapper.usda", Some(&ResolvedPath::new(&root_id)));
+        let wrapper_id = canonicalize("wrapper.usda", Some(root_id.as_str()));
         let bytes = HashMap::from([
             (root_id.clone(), scene.as_bytes().to_vec()),
             (wrapper_id, wrapper.as_bytes().to_vec()),
