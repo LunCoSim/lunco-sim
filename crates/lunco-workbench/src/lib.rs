@@ -74,6 +74,7 @@ pub mod control_status;
 pub mod file_ops;
 pub mod files_panel;
 pub mod perf_hud;
+pub mod input_overlay;
 /// Screenshot capture — the render-bound half of `CaptureScreenshot`. Here, and not in
 /// `lunco-api`, so that crate cannot link a GPU stack; and not in `lunco-render-bevy`,
 /// because lunica screenshots its egui workbench with no 3D renderer.
@@ -406,6 +407,10 @@ impl Plugin for WorkbenchPlugin {
         // had zero registrants once lunica moved to rhai tutorials and was removed.
         if !app.is_plugin_added::<perf_hud::PerfHudPlugin>() {
             app.add_plugins(perf_hud::PerfHudPlugin);
+        }
+        // Input overlay visualizer for video recording & AI observation.
+        if !app.world().contains_resource::<input_overlay::InputOverlaySettings>() {
+            input_overlay::build_input_overlay(app);
         }
         if !app.is_plugin_added::<theme_command::ThemeCommandPlugin>() {
             app.add_plugins(theme_command::ThemeCommandPlugin);

@@ -136,6 +136,8 @@ FLAGS:
                          POST /api/commands  {{\"command\":\"Name\",\"params\":{{…}}}}
         --scene PATH     Load this USD scene at startup, relative to assets/.
         --window-pos SPEC  Place the OS window, e.g. 1920x1080+0+0.
+        --record-offline DIR Arm cinematic offline recording to DIR on startup.
+        --record-fps FPS Set target frame rate for offline recording (default 60).
 
 NETWORKING:
         --host [PORT]    Host a session over WebTransport (default {net}).
@@ -332,6 +334,9 @@ fn default_plugins(headless: bool) -> bevy::app::PluginGroupBuilder {
     #[cfg(feature = "ui")]
     let group = group.set(bevy::render::RenderPlugin { render_creation, ..default() });
 
+    #[cfg(feature = "ui")]
+    let vertical = std::env::args().any(|a| a == "--vertical");
+
     // Window/winit setup. With the `ui` feature the runtime `headless` flag still
     // picks the windowless variant (no primary window, WinitPlugin disabled).
     // Without `ui` there's no winit crate to disable, so just declare a
@@ -348,19 +353,24 @@ fn default_plugins(headless: bool) -> bevy::app::PluginGroupBuilder {
             .disable::<bevy::winit::WinitPlugin>()
     } else {
         group.set(WindowPlugin {
-            primary_window: Some(Window {
-                // On wasm, attach to the `#bevy` canvas and mirror its CSS size.
-                #[cfg(target_arch = "wasm32")]
-                canvas: Some("#bevy".to_string()),
-                #[cfg(target_arch = "wasm32")]
-                fit_canvas_to_parent: true,
-                // NB: the web render-scale cap lives in index.html (capping
-                // `devicePixelRatio` before winit init). Bevy's
-                // `WindowResolution::with_scale_factor_override` is IGNORED under
-                // `fit_canvas_to_parent`, so it can't be done here.
-                present_mode,
-                // Centralized merged-titlebar chrome + persisted geometry.
-                ..lunco_workbench::restored_window(window_title)
+            primary_window: Some({
+                let mut window = Window {
+                    // On wasm, attach to the `#bevy` canvas and mirror its CSS size.
+                    #[cfg(target_arch = "wasm32")]
+                    canvas: Some("#bevy".to_string()),
+                    #[cfg(target_arch = "wasm32")]
+                    fit_canvas_to_parent: true,
+                    present_mode,
+                    // Centralized merged-titlebar chrome + persisted geometry.
+                    ..lunco_workbench::restored_window(window_title)
+                };
+                if vertical {
+                    window.resolution = bevy::window::WindowResolution::new(540, 960);
+                } else {
+                    window.resolution = bevy::window::WindowResolution::new(1280, 720);
+                }
+                window.resizable = false;
+                window
             }),
             ..default()
         })
@@ -1710,6 +1720,43 @@ impl Plugin for SandboxCorePlugin {
         #[cfg(feature = "ui")]
         if !self.headless {
             app.add_plugins(lunco_render_bevy::LuncoRenderPlugin);
+        }
+
+        #[cfg(all(feature = "ui", feature = "lunco-api"))]
+        if !self.headless {
+            let mut record_dir = None;
+            let mut record_fps = 60;
+            for i in 0..args.len() {
+                if args[i] == "--record-offline" && i + 1 < args.len() {
+                    record_dir = Some(args[i + 1].clone());
+                }
+                if args[i] == "--record-fps" && i + 1 < args.len() {
+                    if let Ok(fps) = args[i + 1].parse::<u32>() {
+                        record_fps = fps;
+                    }
+                }
+            }
+            if let Some(dir) = record_dir {
+                let path = std::path::PathBuf::from(dir);
+                if let Err(e) = std::fs::create_dir_all(&path) {
+                    error!("[offline-record] CLI failed to create output directory {}: {e}", path.display());
+                } else {
+                    info!("[offline-record] CLI mode armed: recording to {} at {} FPS", path.display(), record_fps);
+                    app.insert_resource(lunco_workbench::screenshot::OfflineRecordingState {
+                        active: true,
+                        frame_index: 0,
+                        output_dir: path,
+                        fps: record_fps.max(1),
+                        is_waiting_for_frame: false,
+                        // Enter on the "advance" phase, matching `StartOfflineRecording`.
+                        frame_just_captured: true,
+                        // CLI-armed recording starts before `WinitSettings` exists to
+                        // override; `StartOfflineRecording` is what forces Continuous.
+ 
+                        prev_present_mode: None,
+                    });
+                }
+            }
         }
 
         // Convenience command: `SetRhaiPolicy` authors a `LunCoPolicy` prim as USD

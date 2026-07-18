@@ -1545,14 +1545,22 @@ fn sim_focus_pace(
     settings: Option<ResMut<bevy::winit::WinitSettings>>,
     pending: Option<Res<experiments_runner::PendingHandles>>,
     models: Query<&worker::ModelicaModel>,
+    keep_awake: Option<Res<lunco_core::KeepAwake>>,
     mut idle: Local<Option<bevy::winit::UpdateMode>>,
 ) {
     let Some(mut settings) = settings else { return };
     if idle.is_none() {
         *idle = Some(settings.unfocused_mode);
     }
+    // This system runs every frame and is the last writer of `unfocused_mode`, so
+    // it must honour other subsystems' pacing intent rather than stomp it: a crate
+    // that merely sets `WinitSettings` would have its choice reverted here on the
+    // next frame. Offline frame recording is the case that matters — an unattended
+    // capture has no focused window and is not a Modelica sim, so without this it
+    // gets throttled to the reactive timer (~1 s/frame instead of ~50 ms).
     let sim_active = pending.map(|p| !p.0.is_empty()).unwrap_or(false)
-        || models.iter().any(|m| !m.paused && m.is_compiled);
+        || models.iter().any(|m| !m.paused && m.is_compiled)
+        || keep_awake.map(|k| k.wanted()).unwrap_or(false);
     let desired = if sim_active {
         bevy::winit::UpdateMode::Continuous
     } else {
