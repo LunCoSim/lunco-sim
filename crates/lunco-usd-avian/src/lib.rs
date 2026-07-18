@@ -845,10 +845,19 @@ fn derive_joint_anchor<R: UsdRead>(reader: &R, body0: &str, body1: &str) -> Opti
 fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoint> {
     use openusd::schemas::physics::{self, JointAxis, JointBase};
 
-    let axis_of = |ax: Option<JointAxis>| match ax.unwrap_or_default() {
-        JointAxis::X => DVec3::X,
-        JointAxis::Y => DVec3::Y,
-        JointAxis::Z => DVec3::Z,
+    let view = StageView::new(stage);
+    // **Units/axes convert here** (doc 41). `axis` names an axis of the STAGE's
+    // frame, so on a Z-up stage an authored `"Z"` is *up* — canonical up is +Y.
+    // Read raw it would hinge about the wrong axis while the meshes and colliders
+    // (which do convert, via `local_transform_at`) sit correctly: a silently
+    // wrong joint in a visually right assembly.
+    let conv = lunco_usd_bevy::stage_convention(&view);
+    let axis_of = |ax: Option<JointAxis>| {
+        conv.dir_d(match ax.unwrap_or_default() {
+            JointAxis::X => DVec3::X,
+            JointAxis::Y => DVec3::Y,
+            JointAxis::Z => DVec3::Z,
+        })
     };
     // Shared JointBase reads (both bodies + local anchors). `None` unless BOTH
     // bodies are authored — world-anchored joints aren't mapped to avian here.
@@ -856,8 +865,15 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
     // [`derive_joint_anchor`]) so an asset need not type the wheel's position twice
     // — once as its `xformOp:translate` and again as the joint's `localPos0`. An
     // authored anchor always wins.
+    //
+    // An AUTHORED anchor is a point in the stage's frame and units, so it converts
+    // here. A DERIVED one must not: `derive_joint_anchor` builds it from
+    // `world_transform` → `local_transform_at`, which already converted. Applying
+    // the convention to both would double-convert the derived path.
     fn base<J: JointBase, R: UsdRead>(j: &J, reader: &R) -> Option<(String, String, DVec3, DVec3)> {
-        let to_dvec = |a: [f32; 3]| DVec3::new(a[0] as f64, a[1] as f64, a[2] as f64);
+        let conv = lunco_usd_bevy::stage_convention(reader);
+        let to_dvec =
+            move |a: [f32; 3]| conv.point_d(DVec3::new(a[0] as f64, a[1] as f64, a[2] as f64));
         let b0 = j.body0_rel().targets().ok()?.into_iter().next()?.to_string();
         let b1 = j.body1_rel().targets().ok()?.into_iter().next()?.to_string();
         let lp0_auth = j.local_pos0_attr().get::<[f32; 3]>().ok().flatten().map(to_dvec);
@@ -873,7 +889,6 @@ fn read_joint_spec_typed(stage: &Stage, path: &SdfPath) -> Option<PendingUsdJoin
         };
         Some((b0, b1, lp0, lp1))
     }
-    let view = StageView::new(stage);
     let read_drive = |ns: &str| -> Option<JointDrive> {
         let d = physics::DriveAPI::get(stage, path.clone(), ns).ok().flatten()?;
         let tp = d.target_position_attr().get::<f32>().ok().flatten().map(|v| v as f64);
@@ -1664,6 +1679,69 @@ def PhysicsRevoluteJoint "Hinge" (
         std::fs::write(&f, "#usda 1.0\ndef Xform \"Plain\" {}\n").unwrap();
         let stage = compose_file_to_stage(&f).expect("compose stage");
         assert!(read_joint_spec_typed(&stage, &SdfPath::new("/Plain").unwrap()).is_none());
+    }
+
+    /// A Z-up / centimetre stage — the Omniverse and Isaac Sim default — must
+    /// convert the joint's AXIS and its AUTHORED anchors, exactly as meshes and
+    /// colliders already do through `local_transform_at`.
+    ///
+    /// Before doc 41's conversion reached this reader, both were taken raw: the
+    /// hinge rotated about the stage's +Z while the canonical frame's up is +Y,
+    /// and a 100 cm anchor stayed "100 m". Meshes and colliders converted
+    /// correctly, so the assembly LOOKED right and only the physics was wrong —
+    /// the failure mode a regression test has to pin down.
+    const ZUP_CM_FIXTURE: &str = r#"#usda 1.0
+(
+    upAxis = "Z"
+    metersPerUnit = 0.01
+)
+def Xform "Chassis" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] ) {}
+def Xform "Wheel" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] ) {}
+def PhysicsRevoluteJoint "Hinge"
+{
+    rel physics:body0 = </Chassis>
+    rel physics:body1 = </Wheel>
+    uniform token physics:axis = "Z"
+    point3f physics:localPos0 = (0, 0, 100)
+    point3f physics:localPos1 = (0, 0, 0)
+}
+"#;
+
+    #[test]
+    fn zup_centimetre_stage_converts_joint_axis_and_authored_anchors() {
+        let dir = std::env::temp_dir().join("lunco_joint_typed");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("hinge_zup_cm.usda");
+        std::fs::write(&f, ZUP_CM_FIXTURE).unwrap();
+        let stage = compose_file_to_stage(&f).expect("compose stage");
+
+        let j = read_joint_spec_typed(&stage, &SdfPath::new("/Hinge").unwrap())
+            .expect("revolute joint reads off a Z-up stage");
+
+        // Tolerance is 1e-6, not machine epsilon: `ConventionTransform` stores its
+        // up-axis rotation as an `f32` `Quat`, so `Rx(-90°)` carries ~3e-8 of f32
+        // error that `point_d`/`dir_d` faithfully propagate. That is the real
+        // guarantee — the f64 arms preserve the precision of the INPUT and of the
+        // metres-per-unit multiply, not the rotation's own accuracy. 1e-6 still
+        // catches the bug this test exists for: an unconverted axis is off by a
+        // full 90°, not 3e-8.
+        //
+        // `axis = "Z"` names the STAGE's up. Canonical up is +Y, so Rx(-90°)
+        // must carry it there: (x,y,z) -> (x, z, -y).
+        assert!(
+            (j.axis - DVec3::Y).length() < 1e-6,
+            "joint axis not converted to canonical: {:?} (want +Y)",
+            j.axis
+        );
+
+        // Anchor (0,0,100) cm -> Q*(0,0,100) = (0,100,0), x0.01 -> (0,1,0) m.
+        let want = DVec3::new(0.0, 1.0, 0.0);
+        assert!(
+            (j.local_pos0 - want).length() < 1e-6,
+            "authored localPos0 not converted: {:?} (want {want:?})",
+            j.local_pos0
+        );
+        assert_eq!(j.local_pos1, DVec3::ZERO, "origin anchor stays the origin");
     }
 
     /// Anchors round-trip through `[f32;3]` both when authored and when derived, so
