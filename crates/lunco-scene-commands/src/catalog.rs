@@ -169,14 +169,14 @@ pub fn spawn_usd_entry(
     world_pos: Vec3,
     rotation: Quat,
     grid: Entity,
+    scene_root: Option<Entity>,
 ) -> SpawnResult {
     let SpawnSource::UsdFile(path) = &entry.source;
     let handle = asset_server.load(path.clone());
 
-    let root = commands.spawn((
+    let mut ent = commands.spawn((
         Name::new(entry.display_name.clone()),
         lunco_core::SelectableRoot,
-        lunco_core::GridAnchor,
         // Seeds hierarchical instance identity (gap G2/B.1): the USD loader
         // gives this runtime spawn's descendants `Derived` ids off this root's
         // unique id, so two spawns of the same asset don't collide. Atomic with
@@ -198,14 +198,36 @@ pub fn spawn_usd_entry(
             rotation,
             ..default()
         },
-        big_space::prelude::CellCoord::default(),
-        ChildOf(grid),
         Visibility::Visible,
         InheritedVisibility::VISIBLE,
         ViewVisibility::default(),
-    )).id();
+    ));
 
-    SpawnResult { root_entity: root }
+    // ANCHOR IDENTICALLY TO SCENE-LOAD (DRY). A scene's own top-level prims are
+    // PLAIN children of the `UsdSceneRoot` anchor — they carry no `CellCoord` of
+    // their own and inherit the grid frame through big_space's low-precision
+    // propagation. A runtime spawn must be the same shape: a grid-DIRECT
+    // `CellCoord` anchor fights avian's `Position`→`Transform` writeback (avian
+    // computes the local transform ignoring the cell), which froze a moving
+    // cosim body's render at its spawn pose while its physics rose. `world_pos`
+    // is grid-absolute at cell 0 and the scene-root sits at cell 0 / identity,
+    // so it is already the correct scene-root-relative local transform.
+    match scene_root {
+        Some(root) => {
+            ent.insert(ChildOf(root));
+        }
+        // No scene loaded (e.g. a bare spawn before any `LoadScene`): fall back
+        // to a grid-direct anchor so the entity still has a valid big_space frame.
+        None => {
+            ent.insert((
+                lunco_core::GridAnchor,
+                big_space::prelude::CellCoord::default(),
+                ChildOf(grid),
+            ));
+        }
+    }
+
+    SpawnResult { root_entity: ent.id() }
 }
 
 /// Derive a dynamic category label from a discovered asset's path — the name
@@ -426,6 +448,126 @@ pub fn scan_usd_into_catalog_blocking(
         }
     }
     added
+}
+
+#[cfg(test)]
+mod spawn_anchor_tests {
+    use super::*;
+
+    #[derive(Resource)]
+    struct SpawnArgs {
+        entry: SpawnableEntry,
+        grid: Entity,
+        scene_root: Option<Entity>,
+    }
+
+    const POS: Vec3 = Vec3::new(1.0, 2.0, 3.0);
+
+    fn spawn_once(mut commands: Commands, assets: Res<AssetServer>, args: Res<SpawnArgs>) {
+        spawn_usd_entry(
+            &mut commands,
+            &assets,
+            &args.entry,
+            POS,
+            Quat::IDENTITY,
+            args.grid,
+            args.scene_root,
+        );
+    }
+
+    /// Drives the REAL spawn through `Commands` + a flush, then returns the world
+    /// so assertions see the anchoring as it actually lands (a bare function call
+    /// would prove nothing — the components only exist after the queue applies).
+    fn spawn_with(scene_root_present: bool) -> (App, Entity, Entity, Entity) {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default())
+            .init_asset::<lunco_usd_bevy::UsdStageAsset>();
+
+        let grid = app.world_mut().spawn(Name::new("WorldGrid")).id();
+        let scene_root = app.world_mut().spawn(Name::new("Scene:test")).id();
+
+        app.insert_resource(SpawnArgs {
+            entry: SpawnableEntry {
+                id: "modelica_balloon".into(),
+                display_name: "Modelica Balloon".into(),
+                category: "Vessels".into(),
+                source: SpawnSource::UsdFile("vessels/balloons/modelica_balloon.usda".into()),
+                spawn_lift: 0.0,
+                default_transform: Transform::default(),
+            },
+            grid,
+            scene_root: scene_root_present.then_some(scene_root),
+        });
+        app.add_systems(Startup, spawn_once);
+        app.update();
+
+        let world = app.world_mut();
+        let mut q = world.query_filtered::<Entity, With<UsdInstanceRoot>>();
+        let root = q.iter(world).next().expect("spawn produced a root entity");
+        (app, root, grid, scene_root)
+    }
+
+    /// THE REGRESSION THIS GUARDS: a runtime spawn must be anchored EXACTLY like a
+    /// scene-loaded top-level prim — a plain child of the `UsdSceneRoot` anchor with
+    /// NO `CellCoord` of its own.
+    ///
+    /// A grid-DIRECT `CellCoord` anchor fights avian's `Position`→`Transform`
+    /// writeback (avian computes the local transform from the parent's
+    /// `GlobalTransform`, ignoring the cell), so a spawned cosim body's render froze
+    /// at its spawn pose while its physics kept rising. Scene-loaded bodies were
+    /// unaffected because they are plain children — hence "the scene balloon works,
+    /// the spawned one doesn't".
+    #[test]
+    fn spawn_under_scene_root_is_a_plain_child_with_no_cell_of_its_own() {
+        let (app, root, _grid, scene_root) = spawn_with(true);
+        let world = app.world();
+
+        assert_eq!(
+            world.get::<ChildOf>(root).map(|c| c.parent()),
+            Some(scene_root),
+            "a runtime spawn must parent to the scene-root anchor, not the grid"
+        );
+        assert!(
+            world.get::<big_space::prelude::CellCoord>(root).is_none(),
+            "a spawned body must NOT carry its own CellCoord — a grid-direct cell \
+             anchor fights avian's Position→Transform writeback and freezes its render"
+        );
+        assert!(
+            world.get::<lunco_core::GridAnchor>(root).is_none(),
+            "only the scene-root is the grid anchor; a spawn inherits its frame"
+        );
+    }
+
+    /// The spawn position is grid-absolute at cell 0 and the scene-root sits at
+    /// cell 0 / identity, so re-anchoring must leave the authored coordinate intact.
+    #[test]
+    fn spawn_preserves_the_requested_coordinate_under_the_scene_root() {
+        let (app, root, _grid, _scene_root) = spawn_with(true);
+        assert_eq!(
+            app.world().get::<Transform>(root).map(|t| t.translation),
+            Some(POS),
+            "re-anchoring must not shift the spawn coordinate"
+        );
+    }
+
+    /// Fallback only: with no scene loaded there is no anchor to inherit, so the
+    /// spawn is a grid-direct anchor and needs its own cell to have a valid frame.
+    #[test]
+    fn spawn_without_a_scene_root_falls_back_to_a_grid_anchor() {
+        let (app, root, grid, _scene_root) = spawn_with(false);
+        let world = app.world();
+
+        assert_eq!(
+            world.get::<ChildOf>(root).map(|c| c.parent()),
+            Some(grid),
+            "with no scene-root the spawn anchors directly under the grid"
+        );
+        assert!(
+            world.get::<big_space::prelude::CellCoord>(root).is_some(),
+            "a grid-direct anchor needs its own CellCoord"
+        );
+    }
 }
 
 #[cfg(test)]

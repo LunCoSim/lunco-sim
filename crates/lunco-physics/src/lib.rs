@@ -112,41 +112,7 @@ pub struct PhysicsGatePlugin;
 impl Plugin for PhysicsGatePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PhysicsHolds>()
-            .add_systems(PreUpdate, apply_physics_holds)
-            .add_systems(bevy::prelude::Last, dbg_render_vs_physics_jump);
-    }
-}
-
-/// TEMP DIAGNOSTIC. Flags entities whose rendered `GlobalTransform` moved much
-/// more this frame than their frame-invariant avian `Position` did — the exact
-/// signature of a big_space cell-rebase leaking into a render-rate `Transform`
-/// interpolator (jitter with no real motion). Runs in `Last`, after
-/// `PropagateHighPrecision`.
-fn dbg_render_vs_physics_jump(
-    mut prev: bevy::prelude::Local<std::collections::HashMap<Entity, (bevy::math::DVec3, bevy::math::Vec3)>>,
-    q: bevy::prelude::Query<
-        (Entity, &avian3d::prelude::Position, &bevy::prelude::GlobalTransform, Option<&bevy::prelude::Name>),
-        bevy::prelude::With<avian3d::prelude::RigidBody>,
-    >,
-) {
-    for (e, pos, gt, name) in &q {
-        let gpos = gt.translation();
-        if let Some((ppos, pgt)) = prev.get(&e).copied() {
-            let phys_delta = (pos.0 - ppos).length();
-            let render_delta = (gpos.as_dvec3() - pgt.as_dvec3()).length();
-            // Render trajectory diverging from the frame-invariant physics
-            // trajectory by >5 cm in a frame = jitter (render moving where
-            // physics is not, or vice versa). Skip fully-static bodies.
-            let diverge = (render_delta - phys_delta).abs();
-            if diverge > 0.05 && (phys_delta > 1e-4 || render_delta > 1e-4) {
-                let nm = name.map(|n| n.to_string()).unwrap_or_else(|| format!("{e}"));
-                bevy::log::warn!(
-                    "[JITTER] {nm}: phys d={:.3} render d={:.3} (diverge {:.3}) | phys_y={:.2} render_y={:.2}",
-                    phys_delta, render_delta, diverge, pos.0.y, gpos.y
-                );
-            }
-        }
-        prev.insert(e, (pos.0, gpos));
+            .add_systems(PreUpdate, apply_physics_holds);
     }
 }
 

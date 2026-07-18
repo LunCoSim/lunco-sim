@@ -374,6 +374,9 @@ pub fn on_spawn_entity_command(
     catalog: Res<SpawnCatalog>,
     asset_server: Res<AssetServer>,
     q_grids: Query<Entity, With<Grid>>,
+    // The scene anchor a runtime spawn parents under (plain child, DRY with
+    // scene-load — see `spawn_usd_entry`). Absent only before any scene loads.
+    q_scene_root: Query<Entity, With<lunco_usd_sim::cosim::UsdSceneRoot>>,
     role: Res<lunco_core::NetworkRole>,
     dem: Query<(&GlobalTransform, &lunco_terrain_surface::stream_viz::DemHeightField)>,
     // Ground fallback for scenes with no streamed DEM (the sandbox's flat slab).
@@ -467,7 +470,8 @@ pub fn on_spawn_entity_command(
     info!("SPAWN_ENTITY: {} at {:?}", cmd.entry_id, position);
 
     let rotation = cmd.rotation.unwrap_or(Quat::IDENTITY);
-    let result = spawn_usd_entry(&mut commands, &asset_server, entry, position, rotation, grid);
+    let scene_root = q_scene_root.iter().next();
+    let result = spawn_usd_entry(&mut commands, &asset_server, entry, position, rotation, grid, scene_root);
 
     // Networked identity (gap G2): a runtime instance gets a server-allocated
     // unique id (SkipContentStamp → assign_global_entity_ids mints
@@ -493,6 +497,7 @@ pub fn apply_replicated_spawns(
     catalog: Res<SpawnCatalog>,
     asset_server: Res<AssetServer>,
     q_grids: Query<Entity, With<Grid>>,
+    q_scene_root: Query<Entity, With<lunco_usd_sim::cosim::UsdSceneRoot>>,
 ) {
     if pending.0.is_empty() {
         return;
@@ -501,6 +506,7 @@ pub fn apply_replicated_spawns(
     let Some(grid) = q_grids.iter().next() else {
         return;
     };
+    let scene_root = q_scene_root.iter().next();
     // Drain in place — the loop body touches only `commands`/`catalog`/
     // `asset_server`, never `pending`, so the old `.collect::<Vec<_>>()`
     // was a pure-waste allocation (CQ-216).
@@ -510,7 +516,7 @@ pub fn apply_replicated_spawns(
             continue;
         };
         let pos = job.position;
-        let result = spawn_usd_entry(&mut commands, &asset_server, entry, pos, Quat::IDENTITY, grid);
+        let result = spawn_usd_entry(&mut commands, &asset_server, entry, pos, Quat::IDENTITY, grid, scene_root);
         // Pin the host id; mark runtime instance + replication target. Forced
         // Kinematic by `force_kinematic_proxies` so snapshots drive it.
         commands.entity(result.root_entity).try_insert((
