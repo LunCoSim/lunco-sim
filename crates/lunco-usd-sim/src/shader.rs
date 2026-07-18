@@ -161,7 +161,16 @@ fn apply_usd_shader_material_read<R: UsdRead>(
     // would miss (→ a black-hole ShaderMaterial). An already-schemed `twin://…`
     // custom shader is passed through untouched. See `lunco_assets::engine_asset_uri`.
     let shader = lunco_assets::engine_asset_uri(&resolved_shader_path);
-    let look = ShaderLook { shader, values, ..Default::default() };
+    // `primvars:doNotCastShadows` — read on the GPRIM, not on the shader, because
+    // two prims sharing one material can legitimately disagree about casting. Same
+    // attribute and same polarity the `PbrLook` path reads in `lunco-usd-bevy`;
+    // it has to be carried here too because taking the shader path REMOVES the
+    // `PbrLook`, which dropped the author's shadow intent on the floor the moment a
+    // prim gained a `.wgsl`.
+    let no_shadow_cast =
+        lunco_usd_bevy::get_attribute_as_bool(reader, sdf_path, "primvars:doNotCastShadows")
+            .unwrap_or(false);
+    let look = ShaderLook { shader, values, no_shadow_cast, ..Default::default() };
     // REMOVE the `PbrLook`, don't just overlay: an entity carrying both intents
     // gets two materials from the two binders and the mesh draws TWICE.
     commands

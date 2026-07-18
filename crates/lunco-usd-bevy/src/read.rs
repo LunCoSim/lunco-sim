@@ -178,6 +178,29 @@ pub trait UsdRead {
         }
     }
 
+    /// The 2-vector counterpart of [`points3`](Self::points3) — `texCoord2f[]`,
+    /// `float2[]` (both `Vec2fVec`) **or** their double spellings `texCoord2d[]` /
+    /// `double2[]` (`Vec2dVec`).
+    ///
+    /// This exists for `primvars:st`. UV sets are the one array where the authoring
+    /// tool, not the author, picks the precision: Maya and Houdini both emit
+    /// `texCoord2d[]` by default while Blender's USD exporter emits `texCoord2f[]`.
+    /// A strict `scalar::<Vec<[f32; 2]>>` reads the double spelling as "no UVs", and
+    /// the mesh builder's documented response to absent UVs is to substitute a ZEROED
+    /// UV set — so the texture is not missing, it is sampled entirely at (0,0) and the
+    /// whole surface takes on one flat colour. That reads as a material bug, which is
+    /// the wrong place to look. Doubles are narrowed to `f32`, which is what a Bevy
+    /// `ATTRIBUTE_UV_0` wants. Provided.
+    fn points2(&self, prim: &SdfPath, name: &str) -> Vec<[f32; 2]> {
+        match self.attr_value(prim, name) {
+            Some(Value::Vec2fVec(v)) => v.into_iter().map(|p| [p.x, p.y]).collect(),
+            Some(Value::Vec2dVec(v)) => {
+                v.into_iter().map(|p| [p.x as f32, p.y as f32]).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
     /// The [`real`](Self::real) counterpart for `f32` consumers (mesh sizes, shader
     /// params, physics gains). Tolerant of `double` **or** `float` authoring, so a
     /// `double`-authored value is not dropped by a strict `scalar::<f32>`. Provided.
@@ -588,6 +611,36 @@ mod real_reader_tests {
         // which is why the pre-migration `string demSource` read worked; the asset
         // migration is about the type contract, not about making the read possible.
         assert_eq!(view.text(&world, "a_val").as_deref(), Some("terrain/connecting_ridge"));
+    }
+
+    #[test]
+    fn points2_reads_either_authored_uv_precision() {
+        // `primvars:st` is `texCoord2f[]` from Blender and `texCoord2d[]` from Maya /
+        // Houdini. A strict `2f` read of the `2d` spelling reports "no UVs", and the
+        // mesh builder answers that with a ZEROED UV set — the whole surface then
+        // samples its texture at (0,0) and renders flat, which misreads as a material
+        // bug rather than a type mismatch.
+        const S: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\n\
+            def Xform \"World\"\n{\n\
+            \x20   texCoord2f[] st_f = [(0, 0), (1, 0), (1, 1)]\n\
+            \x20   texCoord2d[] st_d = [(0, 0), (1, 0), (1, 1)]\n}\n";
+        let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", S))
+            .expect("stage builds");
+        let view = cs.view();
+        let world = SdfPath::new("/World").unwrap();
+
+        // The bug this exists to prevent: the strict read drops the double spelling.
+        assert_eq!(
+            view.scalar::<Vec<[f32; 2]>>(&world, "st_d"),
+            None,
+            "strict texCoord2f[] read drops a texCoord2d[] UV set"
+        );
+
+        let want = vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]];
+        assert_eq!(view.points2(&world, "st_f"), want, "points2 reads float UVs");
+        assert_eq!(view.points2(&world, "st_d"), want, "points2 reads double UVs");
+        // Tolerance is not fabrication: an absent attribute is still empty.
+        assert!(view.points2(&world, "missing").is_empty(), "absent attr stays empty");
     }
 
     #[test]

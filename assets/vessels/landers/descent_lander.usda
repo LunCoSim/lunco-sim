@@ -73,6 +73,21 @@ def Xform "DescentLander" (
             }
         }
 
+        # PLUME CHEMISTRY — LOX/RP-1 (kerosene). The two emissives below say so:
+        # a yellow-white core, `FlameCore_Mat` (6.0, 3.5, 0.9), inside an orange
+        # shroud, `Flame_Mat` (3.0, 1.0, 0.12). That is the signature of a SOOTY,
+        # carbon-rich hydrocarbon flame — incandescent carbon particulate
+        # radiating as a roughly 2300 K grey body. Hypergolics (Aerozine-50/N2O4,
+        # as on the Apollo LM) and LOX/LH2 both burn far cleaner and nearly
+        # invisibly, and would want a pale blue at a small fraction of this
+        # radiance.
+        #
+        # These values are load-bearing beyond the shader: `scenarios/flame.rhai`
+        # READS `FlameCore_Mat`'s `inputs:emissiveColor` back through the standard
+        # UsdShade chain and derives the plume light's colour and brightness from
+        # it, so this is the one place the plume's radiance is stated. Switch the
+        # engine to hydrogen here and the light that falls on the regolith changes
+        # with it — there is no second constant to remember.
         def Material "Flame_Mat"
         {
             token outputs:surface.connect = </DescentLander/Looks/Flame_Mat/Surface.outputs:surface>
@@ -396,6 +411,54 @@ def Xform "DescentLander" (
             custom float lunco:param:wmax = 0.5
             custom float lunco:param:lmax = 2.5
             custom float lunco:param:flick = 0.5
+            # The light half of the same program. `exitance` is lm/m^2 per unit
+            # emissive radiance — the ONE authored photometric constant; the
+            # colour and the brightness scale are both READ from this cone's
+            # bound `FlameCore_Mat` emissive, so retinting the flame retints and
+            # rebalances its light automatically. `lightflick` is the light's
+            # flicker depth (shallower than the mesh's, and one tick behind it).
+            custom float lunco:param:exitance = 44200
+            custom float lunco:param:rmax = 0.6
+            custom float lunco:param:lightflick = 0.35
+        }
+
+        # The plume as a LIGHT SOURCE — a CHILD of the cone it is the light of.
+        #
+        # Emissive geometry in a forward renderer illuminates nothing. During a
+        # descent burn that left the regolith directly beneath the vehicle — and
+        # the vehicle's own underside — lit only by the sun, so a 60 kN engine
+        # firing metres above the ground made no difference to the ground. On an
+        # airless body, with hard shadows and no atmospheric scatter to hide the
+        # error, that is the most obviously wrong thing in frame.
+        #
+        # WHY IT LIVES HERE, INSIDE THE CONE, WITH NO PROGRAM OF ITS OWN
+        # It used to be a sibling with its own script and its own copy of the
+        # throttle walk, flicker state and brightness constant. Parenting it to
+        # the cone makes "plume visible <=> light on" structural instead of an
+        # invariant two files maintain: it is destroyed with the cone, hidden with
+        # the cone (Bevy inherited visibility), and — authored at the cone's LOCAL
+        # ORIGIN — it rides the plume centroid the program already positions each
+        # tick, while being immune to the parent's animated non-uniform scale and
+        # 180-degree flip. A child at the origin has no transform to keep in sync.
+        #
+        # `SphereLight` (deliberately WITHOUT `UsdLuxShapingAPI` — authoring cone
+        # attrs would make it a SpotLight instead) loads as a Bevy `PointLight`.
+        #
+        # Intensity and colour are NOT authored here: the program derives both
+        # from this cone's bound `UsdPreviewSurface` emissive, read through the
+        # standard `material:binding` -> `Material` -> `outputs:surface.connect`
+        # -> `Shader` -> `inputs:emissiveColor` chain. Authored 0 so a scene that
+        # loads paused never flashes a plume before the first tick.
+        #
+        # Shadows are left OFF (the loader's default for local lights): a
+        # shadow-casting point light re-renders the scene into a cubemap every
+        # frame, and this one sits inside the plume pointing at open ground with
+        # nothing meaningful to occlude.
+        def SphereLight "PlumeLight"
+        {
+            float inputs:intensity = 0
+            float inputs:radius = 0.06
+            float lunco:light:range = 25.0
         }
     }
 

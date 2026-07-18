@@ -139,6 +139,25 @@ pub struct ShaderLook {
     /// The cost is a material and a bind group of your own: correct for the handful
     /// of animated prims, ruinous if you set it on 6000 rocks.
     pub unshared: bool,
+    /// This mesh must not be rasterised into the sun's shadow map
+    /// (`primvars:doNotCastShadows` — Omniverse's name, the same one
+    /// [`lunco_render::PbrLook`] reads).
+    ///
+    /// [`PbrLook`](lunco_render::PbrLook) already carried this and the shader path
+    /// did not, which is a real asymmetry: taking the shader path *removes* the
+    /// `PbrLook`, so a prim that authored the primvar silently started casting the
+    /// moment it was given a `.wgsl`.
+    ///
+    /// It is load-bearing for anything that ENCLOSES the scene. A sky dome is the
+    /// worked example: a shell of radius R sits between the sun and every cascade,
+    /// so the shadow pass sees a solid occluder covering the whole frustum and the
+    /// entire scene renders in shadow. The mesh is emissive and infinitely distant
+    /// in intent — it has no business in a shadow map at all.
+    ///
+    /// **Not part of [`key`](Self::key).** It is an entity-level render flag, not
+    /// material state, so two looks that differ only here still share one material
+    /// and one bind group.
+    pub no_shadow_cast: bool,
 }
 
 impl ShaderLook {

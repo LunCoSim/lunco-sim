@@ -2,15 +2,27 @@
 //!
 //! Visualizes simulator inputs for video generation or AI agent observation.
 //! Persisted via `lunco-settings` under the `"input_overlay"` key.
+//!
+//! **Off by default, opted into per scenario.** This answers "which keys is the
+//! demonstrator pressing", which is a question only a TEACHING context asks — a
+//! tutorial beat, or a recorded shot where someone is actively flying. Everywhere
+//! else it is chrome: it occupies the bottom of frame, it is baked into every
+//! captured frame by the offline recorder, and on a shot where nobody is touching
+//! the controls it shows an empty keyboard, which is worse than absent.
+//!
+//! Contrast with the vehicle HUD (`lunco-sandbox`'s rover HUD), which is NOT gated:
+//! attitude, speed and telemetry describe the VEHICLE and are wanted whenever one is
+//! on screen. This describes the OPERATOR, and is only wanted when the operator is
+//! the subject.
+//!
+//! Turn it on with `ToggleInputOverlay { enabled: true }`.
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 use lunco_core::{Command, on_command, register_commands};
-use lunco_settings::{AppSettingsExt, SettingsSection};
-use serde::{Deserialize, Serialize};
 
 /// Persisted settings for the input overlay HUD.
-#[derive(Resource, Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
+#[derive(Resource, Clone, Copy, PartialEq, Debug)]
 pub struct InputOverlaySettings {
     /// Whether the overlay is rendered.
     pub enabled: bool,
@@ -18,13 +30,25 @@ pub struct InputOverlaySettings {
 
 impl Default for InputOverlaySettings {
     fn default() -> Self {
-        Self { enabled: true }
+        // OFF. A key-press readout is only meaningful while someone is demonstrating
+        // controls; the rest of the time it is burnt-in chrome, and the offline
+        // recorder captures the whole window, so every frame of every shot carries it.
+        Self { enabled: false }
     }
 }
 
-impl SettingsSection for InputOverlaySettings {
-    const KEY: &'static str = "input_overlay";
-}
+// DELIBERATELY NOT a `SettingsSection` — this is not a user preference.
+//
+// Whether the key readout is on belongs to the SCENE: a tutorial teaching the
+// controls wants it, a landing film does not. Persisting it makes that choice
+// outlive the scene that made it, so a tutorial run turns it on and every later
+// session — including an unattended recording — inherits it. That is a leak
+// across scenes and across sessions, and it is invisible until it shows up baked
+// into finished footage.
+//
+// So it resets to off on every launch and is opted into per scene, exactly like
+// the camera paths and the HUD state a scenario drives. A setting persists when
+// the USER owns the choice; this one the CONTENT owns.
 
 /// Command to toggle the input overlay visibility.
 #[Command(default)]
@@ -114,7 +138,9 @@ register_commands!(on_toggle_input_overlay);
 
 /// Registers the input overlay resources, settings, commands, and systems.
 pub fn build_input_overlay(app: &mut App) {
-    app.register_settings_section::<InputOverlaySettings>();
+    // No `register_settings_section` — see the note on `InputOverlaySettings`. The
+    // resource starts at its `Default` (off) on every launch, so nothing a previous
+    // scene or session did can turn it on here.
     app.init_resource::<InputOverlaySettings>();
     app.add_systems(bevy_egui::EguiPrimaryContextPass, draw_input_overlay);
     

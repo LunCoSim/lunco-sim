@@ -61,6 +61,24 @@ use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::coords::world_pose_seeded;
 
+/// The bridge's two passes, as orderable sets.
+///
+/// These exist because the bridge OWNS `Position` initialisation in this app —
+/// avian's `transform_to_position` is switched off below, so
+/// `PhysicsTransformSystems::TransformToPosition` is an empty set and ordering
+/// against it is silently vacuous. Anything that must read a real `Position`
+/// (the authored-joint seat in `build_usd_physics_joints`) has to say
+/// `.after(PhysicsBridgeSystems::Read)` and mean it.
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PhysicsBridgeSystems {
+    /// READ: `(cell, Transform)` → `Position`/`Rotation`. After this has run,
+    /// a body's `Position` is its authored world pose rather than
+    /// `RigidBody`'s required-component default of zero.
+    Read,
+    /// WRITEBACK: solved `Position`/`Rotation` → `Transform`.
+    Writeback,
+}
+
 /// Decouple avian from the f32 render transforms entirely; own the f64
 /// `Position` ↔ (cell, `Transform`) sync.
 pub struct BigSpacePhysicsBridgePlugin;
@@ -86,6 +104,7 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         app.add_systems(
             PhysicsSchedule,
             pose_to_position
+                .in_set(PhysicsBridgeSystems::Read)
                 .in_set(PhysicsSystems::Prepare)
                 // Before the physics STEP consumes Position/Rotation. Pinning
                 // against PhysicsStepSystems::First (not PhysicsSystems::
@@ -99,6 +118,7 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         app.add_systems(
             PhysicsSchedule,
             position_to_pose
+                .in_set(PhysicsBridgeSystems::Writeback)
                 .in_set(PhysicsSystems::Writeback)
                 .after(PhysicsStepSystems::Last)
                 .after(PhysicsTransformSystems::PositionToTransform)
@@ -153,6 +173,24 @@ impl BridgeShadow {
         self.translation = tf.translation;
         self.rotation = tf.rotation;
     }
+
+    /// Has [`pose_to_position`] written a real world pose for this entity yet?
+    ///
+    /// The bridge owns `Position` initialisation in this app (avian's own
+    /// `transform_to_position` is switched OFF above), and the default shadow is
+    /// the NaN sentinel that forces the first READ. "No longer NaN" is therefore
+    /// exactly the signal that the READ pass has run at least once and `Position`
+    /// holds the authored world pose — as opposed to `RigidBody`'s required-
+    /// component default of `(0,0,0)`, which is present from the instant the body
+    /// spawns and is indistinguishable from a real pose at the origin.
+    ///
+    /// This exists because consumers that seat against `Position` (the authored
+    /// joint path in `build_usd_physics_joints`) have no other way to tell an
+    /// uninitialised body from a placed one. `With<Position>` proves only that the
+    /// body was admitted to the island graph, never that its pose is real.
+    pub fn is_seeded(&self) -> bool {
+        self.translation.is_finite() && !self.rotation.is_nan()
+    }
 }
 
 /// Bodies and standalone colliders the bridge syncs. Child colliders of a
@@ -162,6 +200,10 @@ type BridgeSynced = Or<(With<RigidBody>, Without<ColliderOf>)>;
 
 /// READ: externally-moved `(cell, Transform)` → f64 `Position`/`Rotation`,
 /// carrying the change to descendant bodies (chassis teleport moves wheels).
+///
+/// Order against this via [`PhysicsBridgeSystems::Read`], not by name — it is the
+/// system that makes `Position` real, and anything seating against `Position`
+/// before it has run reads zeros for every body.
 #[allow(clippy::type_complexity)]
 fn pose_to_position(
     mut commands: Commands,

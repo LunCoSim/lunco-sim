@@ -163,6 +163,35 @@ fn ramp(x: f32, lo: f32, hi: f32) -> f32 {
     return saturate((x - lo) / (hi - lo));
 }
 
+// World-space to-sun read straight from the scene lights — the FALLBACK when
+// the engine has not filled `mat.sun_dir_world`.
+//
+// `sun_dir_world` is written by `wire_terrain_materials` (horizon_shade.rs),
+// whose query requires a `HorizonMap` — i.e. only genuine heightfield terrain
+// gets it. This shader is also bound to ordinary meshes with no DEM behind
+// them (the landing pad disc, and the marketing scenes' ground plate), and on
+// those the uniform stays at its zero default. Without a fallback the whole
+// lunar BRDF silently disengaged (`lunar_k = 1.0`) on exactly the surfaces
+// that most need it, leaving flat Lambert grey.
+//
+// Picks the BRIGHTEST directional light rather than `directional_lights[0]`,
+// so the dim earthshine fill (`lunco:env:earthshineIntensity`) can never be
+// mistaken for the sun — same rule as `terrain_geomorph.wgsl::sun_to_light`.
+fn sun_to_light() -> vec3<f32> {
+    var best = vec3(0.0, 1.0, 0.0);
+    var best_lum = -1.0;
+    let n = lights.n_directional_lights;
+    for (var i = 0u; i < n; i = i + 1u) {
+        let dl = lights.directional_lights[i];
+        let lum = dot(dl.color.rgb, vec3(0.2126, 0.7152, 0.0722));
+        if (lum > best_lum) {
+            best_lum = lum;
+            best = dl.direction_to_light;
+        }
+    }
+    return best;
+}
+
 // Analytic anti-aliasing weight for a noise layer of `scale` periods/metre
 // against pixel footprint `pw` (metres). Full strength only while features
 // span ≥24 px, gone by 6 px: features a few pixels wide still read as
@@ -283,8 +312,16 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // completes the response. World-space to-sun comes from the engine (the
     // CPU-picked canonical sun), not directional_lights[0] — the earthshine
     // fill light can shuffle that. Guarded against the zero (unfilled) default.
+    // Prefer the engine-filled canonical sun; fall back to the brightest scene
+    // directional light on non-heightfield meshes, where nothing fills it (see
+    // `sun_to_light`). The BRDF is geometry-only, so the fallback is exact
+    // whenever the scene's brightest directional light IS the sun — which is
+    // the definition of a lunar scene.
+    var sw = mat.sun_dir_world;
+    if (dot(sw, sw) <= 0.25) {
+        sw = sun_to_light();
+    }
     var lunar_k = 1.0;
-    let sw = mat.sun_dir_world;
     if (dot(sw, sw) > 0.25) {
         lunar_k = regolith_factor(pbr_input.N, normalize(sw), pbr_input.V);
     }

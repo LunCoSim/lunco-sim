@@ -62,7 +62,7 @@ use openusd::schemas::physics::tokens as ptok;
 use openusd::usd::Stage;
 
 pub mod big_space_bridge;
-pub use big_space_bridge::BigSpacePhysicsBridgePlugin;
+pub use big_space_bridge::{BigSpacePhysicsBridgePlugin, PhysicsBridgeSystems};
 
 /// Bevy plugin for USD physics mapping.
 ///
@@ -109,25 +109,52 @@ impl Plugin for UsdAvianPlugin {
             // contacts … crashing the Avian solver with 'Head contact has no
             // island'"); the authored path had the same bug and kept it.
             //
-            // Within `Prepare` it must ALSO run after
-            // `PhysicsTransformSystems::TransformToPosition`. `Position` is a required
-            // component of `RigidBody`, so it EXISTS from the moment the body spawns —
-            // holding its default of zero until avian derives it from `Transform`. The
-            // `With<Position>` gate therefore proves admission to the island graph and
-            // nothing about the pose being real. Unordered, this system won the race
-            // and read (0,0,0) for every body, which silently broke joint seating
-            // below: it measured `localPos0 - localPos1` instead of the actual anchor
-            // violation, so a scene misplaced by metres was never corrected and a
-            // correctly-placed one was nudged by the anchor offset. Both failures are
-            // invisible — the seat "succeeds" either way.
+            // Within `Prepare` it must ALSO run after whatever makes `Position` REAL.
+            // `Position` is a required component of `RigidBody`, so it EXISTS from the
+            // moment the body spawns — holding its default of zero until something
+            // derives it from the authored transform. The `With<Position>` gate
+            // therefore proves admission to the island graph and nothing about the
+            // pose being real. Read too early, every body is at (0,0,0), and the seat
+            // below measures `localPos0 - localPos1` instead of the actual anchor
+            // violation: a scene misplaced by metres is never corrected, a
+            // correctly-placed one is nudged by the anchor offset. Both are silent —
+            // the seat "succeeds" either way.
+            //
+            // WHICH system makes it real is the subtle part, and the reason the
+            // obvious ordering did not work. In THIS app it is NOT avian's
+            // `transform_to_position`: `BigSpacePhysicsBridgePlugin` sets
+            // `PhysicsTransformConfig { transform_to_position: false, .. }`
+            // (`big_space_bridge.rs`), and avian gates that system on exactly that
+            // flag (`avian3d-0.7.0/src/physics_transform/mod.rs:108-110`). The system
+            // never runs, `PhysicsTransformSystems::TransformToPosition` is an EMPTY
+            // set, and ordering `.after` it is vacuous — measured: bodies still read
+            // (0,0,0). The bridge owns the sync instead, in `pose_to_position`.
+            //
+            // The second half: `pose_to_position` lives in `PhysicsSchedule`, whereas
+            // this system used to live in `FixedPostUpdate`. Those are different
+            // schedules — `PhysicsSchedule` is run by avian's `run_physics_schedule`
+            // from inside `FixedPostUpdate`'s `PhysicsSystems::StepSimulation`
+            // (`avian3d-0.7.0/src/schedule/mod.rs:110-113`). A `FixedPostUpdate`
+            // `Prepare` system is therefore ordered strictly BEFORE the whole physics
+            // schedule, so no amount of `.after(...)` inside `FixedPostUpdate` could
+            // ever have seen a bridge-written `Position`. Cross-schedule ordering is
+            // silently a no-op, which is why the failure looked like a race.
+            //
+            // Moving into `PhysicsSchedule` fixes both and keeps the original window:
+            // `.before(PhysicsStepSystems::First)` is still ahead of the broad/narrow
+            // phase (stricter than the old placement), and `.after(pose_to_position)`
+            // is now a REAL edge in a REAL shared schedule. When the bridge is absent
+            // (plain-avian tests), `.after` degrades to a no-op — but then avian's own
+            // `transform_to_position` is enabled and runs in `FixedPostUpdate`, i.e.
+            // still before `PhysicsSchedule`. Correct in both configurations.
             .add_systems(
-                bevy::app::FixedPostUpdate,
+                avian3d::schedule::PhysicsSchedule,
                 build_usd_physics_joints
                     .run_if(any_with_component::<PendingUsdJoint>)
                     .in_set(avian3d::prelude::PhysicsSystems::Prepare)
-                    .after(
-                        avian3d::physics_transform::PhysicsTransformSystems::TransformToPosition,
-                    ),
+                    .after(avian3d::prelude::PhysicsSystems::First)
+                    .after(big_space_bridge::PhysicsBridgeSystems::Read)
+                    .before(avian3d::schedule::PhysicsStepSystems::First),
             )
             .add_systems(
                 Update,
@@ -1095,7 +1122,7 @@ const JOINT_SEAT_ERROR_THRESHOLD: f64 = 0.1;
 fn build_usd_physics_joints(
     mut commands: Commands,
     q_pending: Query<(Entity, &PendingUsdJoint, &UsdPrimPath)>,
-    // **Avian readiness gate**: matching on `&Position` (added by
+    // **Avian ADMISSION gate**: matching on `&Position` (added by
     // Avian's body-init systems alongside `BodyIslandNode`) ensures
     // we don't create a joint before Avian has admitted both bodies
     // into its island graph — without this the solver panics with
@@ -1104,7 +1131,16 @@ fn build_usd_physics_joints(
     // initialisation runs in its `PhysicsSchedule` (FixedUpdate),
     // so this query is empty for the first few frames after spawn,
     // and the joint stays in `PendingUsdJoint` until ready.
+    //
+    // Admission is NOT pose readiness. `Position` is a required component of
+    // `RigidBody` and exists at its default zero from the instant the body
+    // spawns, so this filter says nothing about the pose being real — that is
+    // what `q_shadow` below is for. Conflating the two is the bug that made
+    // joint seating measure `localPos0 - localPos1` for its whole life.
     q_bodies: Query<(Entity, &UsdPrimPath), With<Position>>,
+    // **Pose readiness gate**: has the physics-transform bridge written a real
+    // world pose into `Position` yet? See `BridgeShadow::is_seeded`.
+    q_shadow: Query<&big_space_bridge::BridgeShadow>,
     q_provenance: Query<&lunco_core::Provenance>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
@@ -1130,6 +1166,37 @@ fn build_usd_physics_joints(
             .map(|(e, _)| e);
 
         let (Some(b0), Some(b1)) = (body0_ent, body1_ent) else { continue; };
+
+        // Is `Position` the authored pose yet, or still `RigidBody`'s required-
+        // component default of zero? Scheduling (see `UsdAvianPlugin`) puts this
+        // system after the bridge's `pose_to_position`, so it normally is — but
+        // "normally" is exactly what failed silently before, so the precondition is
+        // CHECKED rather than assumed. A body the bridge has not reached stays
+        // `PendingUsdJoint` for another tick instead of being welded against zeros;
+        // this is the same deferral the admission gate above already relies on.
+        //
+        // `BridgeShadow::is_seeded` is the honest signal: the shadow starts as a NaN
+        // sentinel and becomes finite exactly when the bridge first writes a real
+        // world pose. An ABSENT shadow means `BigSpacePhysicsBridgePlugin` is not
+        // installed, so avian's own `transform_to_position` owns `Position` and has
+        // already run in `FixedPostUpdate` — ready by construction.
+        //
+        // This replaces a stopgap that inferred readiness from the two bodies being
+        // coincident (`p0.distance_squared(p1) <= JOINT_SEAT_EPS` ⇒ "not real yet").
+        // That heuristic was papering over the actual defect — cross-schedule
+        // ordering against a system that never ran — and it is wrong in both
+        // directions: it cannot see two bodies genuinely stacked at one origin, and
+        // it calls uninitialised poses "ready" as soon as anything perturbs one.
+        let seeded = |e: Entity| q_shadow.get(e).map(|s| s.is_seeded()).unwrap_or(true);
+        if !seeded(b0) || !seeded(b1) {
+            debug!(
+                "[usd-avian] joint {} — body poses not seeded by the physics-transform \
+                 bridge yet; deferring the joint rather than seating it against \
+                 uninitialised positions.",
+                joint_prim_path.path,
+            );
+            continue;
+        }
 
         info!("Built USD joint {} -> {} <-> {}", pending.joint_type, pending.body0_path, pending.body1_path);
 
@@ -1167,31 +1234,7 @@ fn build_usd_physics_joints(
         let pose0 = q_pose.get(b0).ok().map(|(p, r)| (p.0, r.0));
         let pose1 = q_pose.get(b1).ok().map(|(p, r)| (p.0, r.0));
 
-        // Two distinct rigid bodies cannot share an origin, so coincident poses mean
-        // the poses are not real yet — `Position` is a REQUIRED component of
-        // `RigidBody`, present at its default zero from the moment the body spawns and
-        // only later derived from the authored transform. Seating against that reads
-        // `localPos0 - localPos1` as if it were an anchor violation: a scene misplaced
-        // by metres is scored as fine, and a correctly-placed one is nudged by the
-        // anchor offset. Both are silent.
-        //
-        // Skipping is strictly better than seating on garbage — the constraint is
-        // still created, and avian resolves any genuine violation itself; we simply
-        // decline to "help" using numbers we know are not the scene's.
-        let poses_ready = match (pose0, pose1) {
-            (Some((p0, _)), Some((p1, _))) => p0.distance_squared(p1) > JOINT_SEAT_EPS,
-            _ => false,
-        };
-        if !poses_ready {
-            debug!(
-                "[usd-avian] joint {} — body poses not initialised at attach time \
-                 (both at the origin); skipping the anchor seat rather than seating \
-                 against uninitialised positions.",
-                joint_prim_path.path,
-            );
-        }
-
-        if let (true, Some((p0, r0)), Some((p1, r1))) = (poses_ready, pose0, pose1) {
+        if let (Some((p0, r0)), Some((p1, r1))) = (pose0, pose1) {
             // Seat orientation FIRST, then measure position against the corrected
             // orientation: rotating body1 swings its anchor through `local_pos1`,
             // so a delta computed from the old rotation would leave a residual

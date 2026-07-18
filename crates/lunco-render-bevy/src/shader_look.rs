@@ -31,6 +31,7 @@
 //! untouched.
 
 use bevy::asset::AssetId;
+use bevy::light::NotShadowCaster;
 use bevy::pbr::MeshMaterial3d;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
@@ -112,6 +113,26 @@ fn bind_shader_look(
     let Ok(look) = looks.get(e) else { return };
     let handle = material_for(look, &mut cache, &mut materials, &asset_server);
     commands.entity(e).try_insert(MeshMaterial3d(handle));
+    apply_shadow_intent(&mut commands, e, look);
+}
+
+/// Mirror [`ShaderLook::no_shadow_cast`] onto the entity as `NotShadowCaster`.
+///
+/// `NotShadowCaster` is `bevy_light`, which is render-FREE — but it is applied
+/// *here*, in the only crate that binds materials, so the render-free half of the
+/// graph states the intent and never names the flag.
+///
+/// **Insert-only, deliberately.** `horizon_shade` also stamps `NotShadowCaster` on
+/// terrain entities that carry a `ShaderLook`, and it tracks its own insertions
+/// precisely so it never removes one it did not make. Clearing the flag here
+/// whenever a look says nothing about shadows would undo that from the other side.
+/// The cost is that turning `primvars:doNotCastShadows` back off needs a reload
+/// rather than taking effect live — a fair trade against silently re-enabling a
+/// shadow pass someone else switched off.
+fn apply_shadow_intent(commands: &mut Commands, e: Entity, look: &ShaderLook) {
+    if look.no_shadow_cast {
+        commands.entity(e).try_insert(NotShadowCaster);
+    }
 }
 
 /// Re-bind when a look is edited in place — a terrain tile changing mode,
@@ -135,6 +156,7 @@ fn rebind_changed_shader_look(
     let mut written: HashSet<AssetId<ShaderMaterial>> = HashSet::default();
 
     for (e, look, current) in &changed {
+        apply_shadow_intent(&mut commands, e, look);
         if look.unshared {
             // Private material: overwrite the asset it already owns, rather than
             // adding one per change (that would leak a material per frame).

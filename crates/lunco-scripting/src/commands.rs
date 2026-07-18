@@ -144,6 +144,9 @@ fn on_run_scenario(
         cmd.target,
         cmd.source.clone(),
         cmd.params.clone(),
+        // A `RunScenario` carries SOURCE TEXT, not a location — there is no asset
+        // id to anchor a relative import against.
+        None,
         guard.and_then(|g| g.0),
         &mut registry,
         &mut alloc,
@@ -163,6 +166,13 @@ pub(crate) fn attach_rhai_scenario(
     target: Entity,
     source: String,
     params: String,
+    // Canonical asset id this source was loaded from (`twin://ep1/main.rhai`), or
+    // `None` for a source that is not file-backed — an inline USD `lunco:script`,
+    // a `RunScenario` string off the wire, a generated timeline executor. `None`
+    // is a real, expected state, not a missing value: such a script has no
+    // location, so a RELATIVE `import` in it cannot be anchored and must fail
+    // rather than silently resolve against some invented root.
+    asset_id: Option<String>,
     authority: Option<lunco_core::SessionId>,
     registry: &mut ScriptRegistry,
     alloc: &mut ScenarioDocAllocator,
@@ -194,6 +204,12 @@ pub(crate) fn attach_rhai_scenario(
     // Scenario parameters (JSON object string) — the runtime exposes them to the
     // script as a `params` constant, so the same source serves many entities.
     doc.params = params;
+    // Script IDENTITY. Carried on the document (not just used at attach time)
+    // because the runtime recompiles from the document on every hot-reload, and
+    // the compiled `AST` needs its id each time: rhai hands `AST::source()` to
+    // `ModuleResolver::resolve` as the importing script's location, which is the
+    // anchor a relative `import "shot_camera"` resolves against.
+    doc.asset_id = asset_id;
     // USD-embedded persistence: the LOAD half is done — a prim's `lunco:script`
     // is read by lunco-usd-bevy into `EmbeddedScenarioSource` and attached by
     // `attach_embedded_scenarios` below, so scene-authored scenarios run on
@@ -239,17 +255,23 @@ pub(crate) fn attach_rhai_scenario(
 /// runtime stay decoupled via the lunco-core marker.
 #[cfg(feature = "rhai")]
 pub fn attach_embedded_scenarios(
-    q: Query<(Entity, &lunco_core::EmbeddedScenarioSource), Without<ScriptedModel>>,
+    q: Query<
+        (Entity, &lunco_core::EmbeddedScenarioSource, Option<&ScenarioAssetId>),
+        Without<ScriptedModel>,
+    >,
     mut registry: ResMut<ScriptRegistry>,
     mut alloc: ResMut<ScenarioDocAllocator>,
     q_existing: Query<&ScriptedModel>,
     mut commands: Commands,
 ) {
-    for (entity, embedded) in q.iter() {
+    for (entity, embedded, asset_id) in q.iter() {
         attach_rhai_scenario(
             entity,
             embedded.0.clone(),
             String::new(),
+            // Present only for the FILE-backed path below; an inline `lunco:script`
+            // authored straight into USD legitimately has no asset id.
+            asset_id.map(|id| id.0.clone()),
             // Scene-authored (loaded by the host from USD) → host-trusted, ungated.
             None,
             &mut registry,
@@ -259,9 +281,30 @@ pub fn attach_embedded_scenarios(
         );
         commands
             .entity(entity)
-            .remove::<lunco_core::EmbeddedScenarioSource>();
+            .remove::<lunco_core::EmbeddedScenarioSource>()
+            .remove::<ScenarioAssetId>();
     }
 }
+
+/// The canonical asset id (`twin://ep1/main.rhai`) a pending
+/// [`lunco_core::EmbeddedScenarioSource`] was loaded from — the anchor a relative
+/// `import` inside that script resolves against.
+///
+/// A SIBLING component rather than a second field on `EmbeddedScenarioSource`,
+/// for two reasons:
+///
+/// 1. `EmbeddedScenarioSource` is also stamped by `lunco-usd-bevy` for INLINE
+///    `lunco:script` sources, which have no asset id at all. A second field would
+///    force that construction site (and the tests) to supply a value for
+///    something that genuinely does not exist, and the natural filler — `""` —
+///    is exactly the "empty anchor that silently resolves against another root"
+///    that `ScriptSources::canonical_id` is written to avoid. Absence of the
+///    component says "not file-backed" unambiguously.
+/// 2. Only this crate can compute the id (it owns the load) and only this crate
+///    consumes it, so the contract does not need to live in `lunco-core`.
+#[cfg(feature = "rhai")]
+#[derive(Component, Debug, Clone)]
+pub struct ScenarioAssetId(pub String);
 
 /// LOAD half for FILE-backed scenarios: entities the USD loader stamped with
 /// [`lunco_core::EmbeddedScenarioPath`] (a `lunco:scriptPath` attribute). Loads
@@ -321,9 +364,27 @@ pub fn resolve_embedded_scenario_paths(
                 lunco_assets::asset_path::canonicalize_root(&path.0),
                 handle.clone().untyped(),
             );
+            // Carry the script's IDENTITY alongside its text. Taken from the
+            // handle's resolved `AssetPath` via `anchor_of` — the same function
+            // `publish_rhai_sources` keys the import registry by — so the id a
+            // scenario is compiled under is byte-identical to the id it (and its
+            // siblings) are registered under. Deriving it from `path.0` by hand
+            // instead would be a second canonicalization that can disagree.
+            let id = asset_server
+                .get_path(&*handle)
+                .map(|p| lunco_assets::asset_path::anchor_of(&p))
+                // The handle should always have a path (we loaded it by uri); if it
+                // somehow doesn't, fall back to canonicalizing the authored ref
+                // rather than dropping identity and breaking relative imports.
+                .unwrap_or_else(|| {
+                    lunco_assets::script_source::ScriptSources::canonical_id(&path.0, None, "rhai")
+                });
             commands
                 .entity(entity)
-                .try_insert(lunco_core::EmbeddedScenarioSource(src.text.clone()))
+                .try_insert((
+                    lunco_core::EmbeddedScenarioSource(src.text.clone()),
+                    ScenarioAssetId(id),
+                ))
                 .remove::<lunco_core::EmbeddedScenarioPath>();
             pending.remove(&entity);
         }
@@ -519,6 +580,8 @@ fn on_run_timeline(
         source,
         // Timelines are pure data; the generated executor doesn't read `params`.
         String::new(),
+        // Generated source — no file, no id, no relative imports.
+        None,
         guard.and_then(|g| g.0),
         &mut registry,
         &mut alloc,
@@ -621,6 +684,8 @@ fn on_run_stored_timeline(
         cmd.target,
         source,
         String::new(),
+        // Generated source — no file, no id, no relative imports.
+        None,
         guard.and_then(|g| g.0),
         &mut registry,
         &mut alloc,

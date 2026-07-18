@@ -527,6 +527,11 @@ pub fn dispatch_loaded_python_sources(
                 inputs: vec!["height".to_string(), "velocity".to_string()],
                 outputs: vec!["netForce".to_string()],
                 params: String::new(),
+                // No asset id: this source is SYNTHESIZED from a USD prim's inline
+                // script, so it has no location for a relative `import` to anchor
+                // against. `None` is the honest answer — an invented id would let a
+                // relative import silently resolve against some unrelated root.
+                asset_id: None,
                 // Untitled, synthesized from a USD prim's inline source — never
                 // on disk, so it is genuinely unsaved.
                 last_saved_generation: None,

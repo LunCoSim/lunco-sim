@@ -577,46 +577,18 @@ fn key_cap(ui: &mut egui::Ui, label: &str, active: bool, pal: &Palette) {
 
 /// ATTITUDE cluster (bottom-left) + NAV/CONTROLS cluster (bottom-right).
 /// Both early-out in free flight.
-/// Whether the driver HUD is painted. **Off by default.**
-///
-/// The HUD is chrome: it belongs to a scene that wants to teach the controls, not to
-/// every scene that happens to possess a vessel. Offline recording captures the whole
-/// window, so a HUD that appears merely because something is possessed is baked into
-/// the footage — and a scripted pilot possesses the vessel exactly as a human does,
-/// which is what made it show up uninvited.
-///
-/// A scene opts in with `cmd("SetHud", #{ rover: true })`, so possession decides
-/// *control* and the scene decides *presentation*.
-#[derive(Resource, Debug, Clone, Copy, Default)]
-pub struct HudSettings {
-    /// Paint the driver cockpit (attitude + nav/controls) while possessing.
-    pub rover: bool,
-}
-
-/// Show or hide the driver HUD. Fields left `None` are unchanged.
-#[lunco_core::Command(default)]
-pub struct SetHud {
-    /// Paint the driver cockpit while possessing a vessel.
-    pub rover: Option<bool>,
-}
-
-#[lunco_core::on_command(SetHud)]
-pub(crate) fn on_set_hud(trigger: On<SetHud>, mut hud: ResMut<HudSettings>) {
-    if let Some(rover) = trigger.event().rover {
-        hud.rover = rover;
-    }
-}
-
-// Registered from `SandboxUiPlugin`, which is itself the `ui` feature's plugin — so
-// the verb exists exactly when the HUD it controls does, with no `cfg` at the call
-// site. Visibility is a RUNTIME setting (`HudSettings`), never a build flag: the same
-// binary shows the HUD for a scene that asks for it and stays clean for one that
-// does not.
-lunco_core::register_commands!(on_set_hud);
+// The driver HUD is NOT gated. It paints whenever a vessel is possessed.
+//
+// It describes the VEHICLE — attitude, speed, position, wheel state — which is
+// information you want whenever a vehicle is being driven, including in recorded
+// footage. It was briefly put behind a `SetHud` opt-in along with the key-press
+// readout; that conflated two different things. The thing that needs gating is the
+// INPUT OVERLAY (`lunco-workbench`'s `input_overlay`), which shows which keys the
+// operator is holding: that answers a question only a teaching context asks, and is
+// noise everywhere else. Vehicle state is not chrome; operator state is.
 
 pub(crate) fn draw_rover_hud(
     mut egui_ctx: EguiContexts,
-    hud: Res<HudSettings>,
     theme: Option<Res<lunco_theme::Theme>>,
     q_avatar: Query<&ControllerLink, With<Avatar>>,
     q_intent: Query<&ActionState<UserIntent>, With<Avatar>>,
@@ -631,9 +603,6 @@ pub(crate) fn draw_rover_hud(
     q_wheels: Query<(Entity, &WheelRaycast, &Transform)>,
     q_com: Query<&ComputedCenterOfMass>,
 ) {
-    if !hud.rover {
-        return;
-    }
     let Some(theme) = theme else { return };
     let pal = Palette::of(&theme);
     let Some(v) = resolve_driven(
