@@ -523,10 +523,26 @@ fn on_stop_offline_recording(
 /// readback from advancing time more than once per saved frame.
 fn drive_offline_clock(
     mut state: ResMut<OfflineRecordingState>,
+    vtime: Res<Time<bevy::time::Virtual>>,
+    tick: Res<lunco_core::SimTick>,
     mut commands: Commands,
 ) {
     if !state.active {
         return;
+    }
+
+    // TEMP DIAGNOSTIC: a stalled recording (frames spooling, scene frozen, scenario
+    // script never ticking) is ambiguous from the outside — the clock could be
+    // stopped at `Time<Virtual>`, or the tick could be frozen downstream. Log both
+    // periodically so the next stall names its own cause.
+    if state.frame_index % 100 == 0 {
+        info!(
+            "[offline-record] diag frame={} vpaused={} vspeed={:.3} tick={}",
+            state.frame_index,
+            vtime.is_paused(),
+            vtime.relative_speed_f64(),
+            tick.0
+        );
     }
 
     let frame_dur = std::time::Duration::from_secs_f64(1.0 / state.fps as f64);

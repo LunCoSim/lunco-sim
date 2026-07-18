@@ -52,6 +52,14 @@ impl PhysicsHolds {
     pub const TERRAIN_READY: &'static str = "terrain-ready";
     /// Obstacle-field regeneration settle window (`lunco-obstacle-field`).
     pub const OBSTACLE_FIELD: &'static str = "obstacle-field";
+    /// A scripted cutscene / offline recording is choosing when the world moves.
+    ///
+    /// Held, physics is frozen but `Time<Virtual>` keeps running, so `FixedUpdate` —
+    /// and the scenario script driving the shot — stays alive. That is the whole
+    /// point: pausing the *world* clock (`lunco_time::TimeTransport`) also stops the
+    /// script, so a paused scene can never run the script that would unpause it.
+    /// Advance the world from a script with [`PhysicsStepRequest`] instead.
+    pub const CINEMATIC: &'static str = "cinematic";
 
     /// Is any subsystem holding physics?
     #[inline]
@@ -87,6 +95,38 @@ impl PhysicsHolds {
     }
 }
 
+/// Frames of physics owed to a caller that is otherwise holding the clock.
+///
+/// The step half of "hold, then step": with [`PhysicsHolds::CINEMATIC`] raised, a
+/// script advances the world deliberately — one frame per step — instead of
+/// play/pausing it. Each queued step lets exactly one frame of physics through.
+///
+/// This exists because pause/unpause is unusable from inside a script: pausing the
+/// world clock stops `FixedUpdate`, so the script that paused it never runs again to
+/// unpause it (an offline recording then spools frames forever). A physics hold keeps
+/// the script running, and stepping gives it deterministic control over motion —
+/// which is also exactly what frame-by-frame capture wants, since the recorder
+/// already advances virtual time by exactly `1/fps` per captured frame.
+///
+/// Defaults to zero owed frames, so a build that never touches it behaves as before.
+#[derive(Resource, Debug, Clone, Default)]
+pub struct PhysicsStepRequest {
+    /// Frames of physics still owed. Decremented as each is granted.
+    pub steps: u32,
+}
+
+impl PhysicsStepRequest {
+    /// Queue `n` more frames of physics.
+    pub fn request(&mut self, n: u32) {
+        self.steps = self.steps.saturating_add(n);
+    }
+
+    /// Drop any owed frames (e.g. when the hold is released outright).
+    pub fn clear(&mut self) {
+        self.steps = 0;
+    }
+}
+
 /// Project [`PhysicsHolds`] onto avian's `Time<Physics>`.
 ///
 /// Pausing the physics clock zeroes the physics delta, so the solver does not step
@@ -94,10 +134,28 @@ impl PhysicsHolds {
 /// keeps advancing. Runs in `PreUpdate`, ahead of the physics schedule, and is
 /// change-driven: it only writes when the desired state differs from the actual, so
 /// it is also self-healing if anything pauses the physics clock out of band.
-pub fn apply_physics_holds(holds: Res<PhysicsHolds>, mut physics_time: ResMut<Time<Physics>>) {
+pub fn apply_physics_holds(
+    holds: Res<PhysicsHolds>,
+    mut steps: ResMut<PhysicsStepRequest>,
+    mut physics_time: ResMut<Time<Physics>>,
+) {
+    // A queued step outranks the hold for exactly one frame: physics runs, the debt
+    // is paid down, and the next frame re-freezes unless another step is queued.
+    // Steps are only meaningful while held — unheld physics is already running, so
+    // granting them then would be a no-op that silently burns the request.
     let held = holds.is_held();
-    if held != physics_time.is_paused() {
-        if held {
+    let stepping = held && steps.steps > 0;
+    if stepping {
+        steps.steps -= 1;
+    } else if !held && steps.steps > 0 {
+        // Nothing is holding the clock, so there is nothing to step past. Drop the
+        // debt rather than let it fire later against an unrelated hold.
+        steps.clear();
+    }
+
+    let want_paused = held && !stepping;
+    if want_paused != physics_time.is_paused() {
+        if want_paused {
             physics_time.pause();
         } else {
             physics_time.unpause();
@@ -112,6 +170,7 @@ pub struct PhysicsGatePlugin;
 impl Plugin for PhysicsGatePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PhysicsHolds>()
+            .init_resource::<PhysicsStepRequest>()
             .add_systems(PreUpdate, apply_physics_holds);
     }
 }
@@ -136,6 +195,65 @@ mod tests {
         assert!(!h.is_held());
     }
 
+    /// A queued step lets exactly ONE frame of physics through a hold, then the
+    /// clock re-freezes. This is what lets a cutscene script advance the world
+    /// deliberately instead of play/pausing it — pausing the world clock would stop
+    /// `FixedUpdate` and the script could never run again to unpause itself.
+    #[test]
+    fn step_grants_exactly_one_frame_through_a_hold() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.insert_resource(PhysicsHolds::default());
+        world.insert_resource(PhysicsStepRequest::default());
+        world.insert_resource(Time::<Physics>::default());
+
+        world
+            .resource_mut::<PhysicsHolds>()
+            .set(PhysicsHolds::CINEMATIC, true);
+        world.run_system_once(apply_physics_holds).unwrap();
+        assert!(world.resource::<Time<Physics>>().is_paused(), "held ⇒ frozen");
+
+        world.resource_mut::<PhysicsStepRequest>().request(1);
+        world.run_system_once(apply_physics_holds).unwrap();
+        assert!(
+            !world.resource::<Time<Physics>>().is_paused(),
+            "the step frame runs"
+        );
+
+        // Debt paid: the very next frame is frozen again without touching the hold.
+        world.run_system_once(apply_physics_holds).unwrap();
+        assert!(world.resource::<Time<Physics>>().is_paused(), "re-freezes");
+        assert_eq!(world.resource::<PhysicsStepRequest>().steps, 0);
+    }
+
+    /// Steps queued with nothing holding are dropped, not banked — otherwise they
+    /// would fire later against an unrelated hold (a terrain bake, say) and leak a
+    /// frame of motion into whatever that hold was protecting.
+    #[test]
+    fn steps_do_not_bank_against_a_future_hold() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.insert_resource(PhysicsHolds::default());
+        world.insert_resource(PhysicsStepRequest::default());
+        world.insert_resource(Time::<Physics>::default());
+
+        world.resource_mut::<PhysicsStepRequest>().request(3);
+        world.run_system_once(apply_physics_holds).unwrap();
+        assert_eq!(world.resource::<PhysicsStepRequest>().steps, 0);
+        assert!(!world.resource::<Time<Physics>>().is_paused());
+
+        world
+            .resource_mut::<PhysicsHolds>()
+            .set(PhysicsHolds::TERRAIN_READY, true);
+        world.run_system_once(apply_physics_holds).unwrap();
+        assert!(
+            world.resource::<Time<Physics>>().is_paused(),
+            "the later hold is not stepped past by stale debt"
+        );
+    }
+
     /// The contract: a hold pauses the PHYSICS clock and leaves the virtual clock
     /// (tick → epoch → ephemeris → animation) running. This is what stopped the
     /// sandbox from booting paused, and what keeps the planets moving while a
@@ -146,6 +264,7 @@ mod tests {
 
         let mut world = World::new();
         world.insert_resource(PhysicsHolds::default());
+        world.insert_resource(PhysicsStepRequest::default());
         world.insert_resource(Time::<Physics>::default());
         world.insert_resource(Time::<Virtual>::default());
 
