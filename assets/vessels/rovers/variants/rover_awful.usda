@@ -31,10 +31,11 @@ def Xform "RoverAwful" (
     float physxRigidBody:angularDamping = 0.8
 
     # Handling, per wheel. `bald` tires: μ=0.40 ⇒ slip limit 21.8°, against a SURVEYED
-    # site (real Apollo 15 crater) whose ways in run 20.1° SSW / 24.7° naive / 34.4°
-    # WSW. ONLY the 20.1° SSW line is climbable, with ~1.7° of margin: this tier gets
-    # in and out solely by flying the ДЗЗ route exactly, which is §3.2's "на грани
-    # проходимости" made literal. Weak motors to match.
+    # site (real Apollo 15 crater) whose ways in run 19.8° on the ДЗЗ route / 25.5°
+    # naive / 31.1° up the steepest sector (N). ONLY the ДЗЗ route is climbable, with
+    # ~2.0° of margin, and the naive line FAILS by 3.7°: this tier gets in and out
+    # solely by flying the route exactly, which is §3.2's "на грани проходимости"
+    # made literal. Weak motors to match.
     over "Wheel_L0" (variants = { string tire = "bald" }) { float physxVehicleEngine:peakTorque = 380.0 }
     over "Wheel_L1" (variants = { string tire = "bald" }) { float physxVehicleEngine:peakTorque = 380.0 }
     over "Wheel_L2" (variants = { string tire = "bald" }) { float physxVehicleEngine:peakTorque = 380.0 }

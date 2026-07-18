@@ -232,7 +232,7 @@ pub(crate) fn drain_pending_twin_docs(
     let taken = std::mem::take(&mut pending.items);
     let mut still = Vec::new();
     for mut item in taken {
-        let twin_path = format!("twin://{}/{}", item.name, item.rel);
+        let twin_path = lunco_assets::twin_uri(&item.name, &item.rel);
         let Some(UsdSourceText(source)) = sources.get(&item.handle) else {
             item.attempts += 1;
             if item.attempts < MAX_TWIN_DOC_ATTEMPTS {
@@ -365,7 +365,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         // replay the **typed ops** the document recorded since the last sync
         // directly onto that stage — the op is the single delta description, so we
         // never re-derive an edit's value by reading it back out of `composed`.
-        let twin_path = format!("twin://{}/{}", name, rel);
+        let twin_path = lunco_assets::twin_uri(&name, &rel);
         let scene_id = world
             .resource::<AssetServer>()
             .load::<UsdStageAsset>(twin_path.clone())

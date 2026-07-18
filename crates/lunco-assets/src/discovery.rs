@@ -245,7 +245,7 @@ pub fn list_assets(manifest: &AssetManifest, roots: &TwinRoots, ext: &str) -> Ve
         if let Some(root) = roots.root_of(&name) {
             walk(&root, &root, ext, &mut |rel| {
                 out.push(AssetFile {
-                    asset_path: format!("twin://{name}/{rel}"),
+                    asset_path: crate::twin_uri(&name, &rel),
                     stem: stem_of(&rel),
                     abs_path: root.join(&rel),
                     twin: Some(name.clone()),

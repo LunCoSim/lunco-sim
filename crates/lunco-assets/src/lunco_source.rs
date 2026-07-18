@@ -23,7 +23,7 @@
 //! over HTTP exactly as native resolves two directories — the fallback is not a
 //! native-only convenience that silently disappears on web.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use bevy::asset::io::{
     AssetReader, AssetReaderError, AssetSource, AssetSourceBuilder, ErasedAssetReader, PathStream,
@@ -34,6 +34,54 @@ use crate::cache_dir;
 
 /// The asset-source scheme for the engine asset library.
 pub const LUNCO_SCHEME: &str = "lunco";
+
+/// `lunco://` — the scheme with its separator, for prefix tests and URI building.
+pub const LUNCO_PREFIX: &str = "lunco://";
+
+/// The library-relative path of a `lunco://<rel>` reference, or `None` for a bare
+/// or differently-schemed one. Unlike [`crate::engine_asset_rel`] (which treats a
+/// bare path as already-relative), this distinguishes "explicitly addressed to
+/// the engine library" — what a caller re-rooting an id back onto disk needs.
+pub fn parse_lunco_uri(uri: &str) -> Option<&str> {
+    uri.strip_prefix(LUNCO_PREFIX)
+}
+
+/// The directory name the shipped asset library lives under (`assets`). The
+/// `lunco://` source is anchored on it, so code walking a path's ancestors to
+/// find that root must ask here rather than spell the literal again.
+pub const ASSETS_DIR_NAME: &str = "assets";
+
+/// The shipped-asset root (`…/assets`) an on-disk file lives under, if any —
+/// the directory `lunco://` is anchored at *for that file*.
+///
+/// Distinct from [`crate::assets_dir_abs`], which anchors on the process CWD:
+/// this answers the question for a file that may live outside the running
+/// project (a tool composing a `.usda` by absolute path), so it walks ancestors
+/// instead of assuming the CWD is the project.
+pub fn shipped_asset_root(path: &Path) -> Option<&Path> {
+    path.ancestors()
+        .find(|a| a.file_name() == Some(std::ffi::OsStr::new(ASSETS_DIR_NAME)))
+}
+
+/// Map an asset id back to the file holding its bytes: `lunco://<rel>` resolves
+/// against `assets_root`, anything else is treated as a filesystem path.
+///
+/// `None` when the id names the shipped library but no library root was found —
+/// the caller composed a file that lives outside any `assets/` tree, so a
+/// `lunco://` reference in it cannot be reached.
+///
+/// A source-relative id (one whose leading `/` was stripped when it was
+/// canonicalized) is re-rooted, since it has to become absolute to be readable
+/// again. A drive-qualified Windows path is already absolute and passes through.
+pub fn id_to_disk_path(id: &str, assets_root: Option<&Path>) -> Option<PathBuf> {
+    match parse_lunco_uri(id) {
+        Some(rel) => Some(assets_root?.join(rel)),
+        None => {
+            let p = PathBuf::from(id);
+            Some(if p.is_absolute() { p } else { Path::new("/").join(id) })
+        }
+    }
+}
 
 /// Build the `lunco://` [`AssetSourceBuilder`]: `assets/`, then the cache.
 pub fn lunco_asset_source(assets_dir: &Path) -> AssetSourceBuilder {

@@ -12,9 +12,9 @@ description = "Unified asset management for LunCoSim — cache resolution, versi
 # unify it in — otherwise the standalone `build_msl_assets` host bin fails to
 # compile (E0433: `bevy::asset` not found).
 bevy = { workspace = true, features = ["bevy_asset"] }
-# The `scenario://` AssetReader routes byte reads through the storage backend
-# (native `FileStorage`, web `OpfsStorage`) rather than raw `std::fs`, so it
-# serves downloaded scenario assets uniformly on both platforms.
+# The `twin://` AssetReader routes byte reads through the storage backend
+# (native `FileStorage`, web `OpfsStorage`) rather than raw `std::fs`, so an open
+# Twin and a downloaded scenario are served uniformly on both platforms.
 lunco-storage = { path = "../lunco-storage" }
 serde = { workspace = true }
 serde_json = { workspace = true }

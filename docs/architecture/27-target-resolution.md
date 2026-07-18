@@ -162,7 +162,7 @@ Internally: `pick` the class over one borrowed `ResolveCtx` (index, drafts, cach
 | FMU `DefaultExperiment` | `RunBounds` (`h0` ≈ `stepSize`) + `experiment(...)` annotation | `lunco-experiments/src/lib.rs:97` |
 | FMI master algorithm | cosim master loop (`sync_outputs → propagate → sync_inputs → step`) | `lunco-cosim/src/lib.rs`, see [22-domain-cosim](22-domain-cosim.md) |
 | SSP System | USD Stage / active `scene.usda` | [21-domain-usd](21-domain-usd.md) |
-| SSP Component (FMU ref) | a `LunCoProgram` prim + `lunco:program:sourceAsset` + `lunco-lib://` payload | |
+| SSP Component (FMU ref) | a `LunCoProgram` prim + `lunco:program:sourceAsset` + `lunco://` payload | |
 | SSP Connection (+ `factor`/`offset`) | `SimConnection { start/end element+connector, scale }` | `lunco-cosim/src/connection.rs` |
 | SSP `.ssv` parameter sets | USD attributes + layer/reference overrides; `Experiment.overrides` | |
 

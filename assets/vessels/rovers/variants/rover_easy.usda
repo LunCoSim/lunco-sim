@@ -16,12 +16,18 @@
 #   * Ample torque + high grip → climbs without drama.
 #
 # The three tiers are a LADDER OVER THE SURVEYED SITE, not vibes. Slip limit is
-# atan(frictionCoefficient); the crater's ways in measure 20.1° (SSW) / 24.7°
-# (naive straight line) / 34.4° (WSW wall):
-#   easy   μ=1.3 → 52.4°  drives every line          (this file)
-#   medium μ=0.6 → 31.0°  ДЗЗ route + naive; NOT the WSW wall
-#   awful  μ=0.4 → 21.8°  ONLY the 20.1° SSW line, ~1.7° of margin
+# atan(frictionCoefficient). Per the twin's SURVEY.md (4 m baseline, re-measured
+# 2026-07-17) the site's ways in measure 19.8° (ДЗЗ route, worst leg — the descent
+# on the 199°/SSW radial) / 25.5° (naive straight line) / 31.1° (N, the steepest
+# SECTOR) / 39.9° (336°/NNW, the steepest individual line):
+#   easy   μ=1.3 → 52.4°  drives every line, including the NNW wall  (this file)
+#   medium μ=0.5 → 26.6°  ДЗЗ route + naive (by 1.1°); NOTHING at 28°+
+#   awful  μ=0.4 → 21.8°  ONLY the ДЗЗ route, ~2.0° of margin
 # Re-survey the site ⇒ re-check these three numbers, or the ladder is decorative.
+#
+# The steep side is N/NNW, NOT WSW. WSW (237°) is 22.2° — one of the EASIER ways
+# out. Earlier revisions of these files recorded "34.4° WSW" as the steepest wall;
+# that figure is wrong and SURVEY.md calls it out by name.
 # Tip limit is atan(half_track / CoM-above-contact); the base puts wheels at
 # x=±1.0 with contact at y=-0.55, so easy=73°, medium=63°, awful=45° — tipping is
 # a DYNAMIC across-slope failure, not a static one.
@@ -49,10 +55,10 @@ def Xform "RoverEasy" (
     float physxRigidBody:angularDamping = 3.0
 
     # Handling, per wheel. Grip comes from the TIRE — μ is a property of rubber, so
-    # the tier fits `cleated` tires (μ=1.3 ⇒ slip limit 52.4°, past the SURVEYED
-    # site's steepest wall at 34.4°, so this tier drives ANY line into the crater and
-    # back — the terrain never punishes you, so you learn the route before the route
-    # matters). Torque is the wheel's own motor.
+    # the tier fits `cleated` tires (μ=1.3 ⇒ slip limit 52.4°, well past the SURVEYED
+    # site's steepest line at 39.9° NNW, so this tier drives ANY line into the crater
+    # and back — the terrain never punishes you, so you learn the route before the
+    # route matters). Torque is the wheel's own motor.
     over "Wheel_L0" (variants = { string tire = "cleated" }) { float physxVehicleEngine:peakTorque = 900.0 }
     over "Wheel_L1" (variants = { string tire = "cleated" }) { float physxVehicleEngine:peakTorque = 900.0 }
     over "Wheel_L2" (variants = { string tire = "cleated" }) { float physxVehicleEngine:peakTorque = 900.0 }

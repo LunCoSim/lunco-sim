@@ -993,7 +993,7 @@ pub fn on_open(trigger: On<Open>, mut commands: Commands) {
         return;
     }
 
-    if uri.contains("://") {
+    if lunco_assets::has_scheme(&uri) {
         commands.trigger(OpenFile { path: uri });
         return;
     }

@@ -133,7 +133,7 @@ pub fn reference_closure(roots: &[PathBuf]) -> BTreeSet<PathBuf> {
         };
         let base = path.parent().map(Path::to_path_buf).unwrap_or_default();
         for arc in discover_arcs(&data, ArcFilter::All) {
-            if arc.contains("://") || arc.starts_with('/') {
+            if lunco_assets::has_scheme(&arc) || arc.starts_with('/') {
                 continue;
             }
             queue.push(normalize(&base.join(&arc)));
@@ -147,7 +147,7 @@ mod tests {
     use super::*;
 
     /// The walk must leave the scene's own folder — the bug that motivated it: a
-    /// client's `scenario://` load 404'd on a rover referenced two levels up.
+    /// client's `twin://` load 404'd on a rover referenced two levels up.
     #[test]
     fn closure_follows_out_of_tree_reference() {
         let dir = tempfile::tempdir().unwrap();

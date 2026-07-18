@@ -36,7 +36,7 @@
 // they break wasm32; lunco-assets is on the documented allow-list.
 #![allow(clippy::disallowed_methods)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub mod asset_read;
 pub mod asset_sources;
@@ -62,6 +62,11 @@ pub mod twin_source;
 pub mod web_fetch;
 
 pub use asset_sources::register_lunco_asset_sources;
+pub use lunco_source::{
+    id_to_disk_path, parse_lunco_uri, shipped_asset_root, ASSETS_DIR_NAME, LUNCO_PREFIX,
+    LUNCO_SCHEME,
+};
+pub use twin_source::{parse_twin_uri, twin_uri, TwinRoots, TWIN_PREFIX, TWIN_SCHEME};
 
 // ============================================================================
 // User Config Directory Resolution
@@ -389,7 +394,29 @@ pub fn msl_source_root_path() -> Option<PathBuf> {
 /// For tests and examples that need a stable path regardless of CWD, prefer
 /// passing the asset root explicitly rather than relying on this function.
 pub fn assets_dir() -> PathBuf {
-    PathBuf::from("assets")
+    PathBuf::from(lunco_source::ASSETS_DIR_NAME)
+}
+
+/// [`assets_dir`] resolved against the process CWD — the ABSOLUTE shipped-library
+/// root, and the exact path Bevy's `AssetPlugin.file_path` is configured with.
+///
+/// Anything reaching library bytes off the `AssetServer` must anchor here rather
+/// than joining `"assets"` itself: a bare relative join silently follows the CWD
+/// of whoever calls it, which is how the same reference resolved two ways.
+pub fn assets_dir_abs() -> PathBuf {
+    std::env::current_dir().unwrap_or_default().join(assets_dir())
+}
+
+/// Cache `scenarios/` directory — where a downloaded scenario's files are
+/// materialised, one subdirectory per scenario id. A downloaded scenario is
+/// mounted as an ordinary Twin root over that subdirectory, which is why it
+/// needs no URI scheme of its own.
+///
+/// The `<cache>/scenarios/…` layout is a **private** detail of that staging:
+/// three crates previously rebuilt the join by hand, so a client probing for
+/// cached bytes could look somewhere the writer had never written.
+pub fn scenarios_dir() -> PathBuf {
+    cache_subdir("scenarios")
 }
 
 /// Cache `models/` directory — where `lunco-assets -- download`
@@ -419,8 +446,19 @@ pub fn models_dir() -> PathBuf {
 /// `cached_textures://…`, `http(s)://…`) is returned unchanged — a Twin shipping
 /// its OWN shader (`twin://name/shaders/custom.wgsl`) must keep resolving against
 /// the Twin, and an already-`lunco://` path must not be double-prefixed.
+/// Whether a reference already names its own asset source (`lunco://`, `twin://`,
+/// `cached_textures://`, `http(s)://`, …) and so must be passed through untouched
+/// rather than re-anchored against a root.
+///
+/// The predicate is one line, but it is the same *decision* everywhere it is
+/// made — "is this already addressable?" — so it is named once here instead of
+/// open-coded as `contains("://")` in every crate that loads an asset.
+pub fn has_scheme(reference: impl AsRef<str>) -> bool {
+    reference.as_ref().contains("://")
+}
+
 pub fn engine_asset_uri(reference: &str) -> String {
-    if reference.contains("://") {
+    if has_scheme(reference) {
         reference.to_string()
     } else {
         format!("lunco://{reference}")
@@ -449,11 +487,43 @@ pub fn engine_asset_rel(reference: &str) -> &str {
 /// loader will — whether it was authored bare (`shaders/wheel.wgsl`) or schemed
 /// (`lunco://shaders/wheel.wgsl`).
 pub fn engine_asset_local_path(reference: &str) -> Option<PathBuf> {
-    if reference.strip_prefix("lunco://").is_none() && reference.contains("://") {
+    if reference.strip_prefix("lunco://").is_none() && has_scheme(reference) {
         return None; // another scheme's root — not in the shipped library
     }
-    let rel = engine_asset_rel(reference);
-    Some(std::env::current_dir().unwrap_or_default().join(assets_dir()).join(rel))
+    Some(assets_dir_abs().join(engine_asset_rel(reference)))
+}
+
+/// The local filesystem path ANY reference resolves to, whichever root owns it —
+/// a `twin://<name>/<rel>` against the open Twin's root, anything else against
+/// the shipped engine library. `None` when the Twin is not open or the reference
+/// belongs to a scheme with no local path (`http…`).
+///
+/// This is the single read-side resolution entry point for code that must reach
+/// bytes WITHOUT the `AssetServer` (scenario sync, shader pre-validation, file
+/// dialogs). Callers previously re-implemented the `twin://` split-and-join next
+/// to a hardcoded `"assets"` literal, which drifted from the readers this crate
+/// registers — same URI, two different answers depending on who asked.
+/// The library-relative form of an ABSOLUTE filesystem path that lives under the
+/// shipped `assets/` root, or `None` when it lives elsewhere. The inverse of
+/// [`engine_asset_local_path`].
+///
+/// Callers hand an absolute path to the `AssetServer`, which prepends its own
+/// configured root to every load string — so a path under the library has to be
+/// reduced to its relative form or the load resolves to `<assets>/<assets>/…`.
+pub fn library_rel(path: &Path) -> Option<String> {
+    path.strip_prefix(assets_dir_abs())
+        .ok()
+        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+}
+
+/// `twins` is optional because a caller may run before any Twin is open — then a
+/// `twin://` reference simply has no local path yet, while a library reference
+/// still resolves.
+pub fn local_path(reference: &str, twins: Option<&TwinRoots>) -> Option<PathBuf> {
+    match parse_twin_uri(reference) {
+        Some((name, rel)) => Some(twins?.root_of(name)?.join(rel)),
+        None => engine_asset_local_path(reference),
+    }
 }
 
 /// Cache `fonts/` directory — where `lunco-assets -- download`

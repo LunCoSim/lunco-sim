@@ -993,7 +993,8 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // `payload`/`references` point at a non-USD binary (`.glb`,
         // `.gltf`, `.obj`, `.stl`). We hand the URI to Bevy's
         // `AssetServer` directly — the registered asset sources
-        // (`lunco-lib://` for shipped fixtures, default `assets://` for
+        // (`lunco://` for library assets, `twin://` for Twin-local ones,
+        // default `assets://` for
         // in-tree paths) handle the lookup.
         //
         // - `lunco:assetMode = "mesh"` (default `"scene"`): pull a
@@ -1419,7 +1420,7 @@ fn resolve_texture_path(
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     asset_path: &str,
 ) -> Option<String> {
-    if asset_path.contains("://") {
+    if lunco_assets::has_scheme(asset_path) {
         return Some(asset_path.to_string());
     }
     let stage_path = asset_server.get_path(stage_id)?;
@@ -3857,7 +3858,7 @@ pub fn reveal_placeholder_on_failure(
 
             debug!("[usd-bevy] Computed stub scale: {:?}", scale);
 
-            // Just the filename — strip the `lunco-lib://…/` path prefix and
+            // Just the filename — strip the `lunco://…/` path prefix and
             // the `#Scene0` glTF sub-label.
             let file_name = uri
                 .0

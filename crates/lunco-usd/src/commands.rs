@@ -262,7 +262,7 @@ fn open_usd_docs_on_twin_added(
                     twin.root.display()
                 );
                 let handle = asset_server
-                    .load::<lunco_usd_bevy::UsdSourceText>(format!("twin://{}/{}", twin_name, scene));
+                    .load::<lunco_usd_bevy::UsdSourceText>(lunco_assets::twin_uri(&twin_name, &scene));
                 pending_twin.push(handle, twin_name.clone(), scene.to_string(), twin.root.join(scene));
             } else {
                 info!(
@@ -272,7 +272,7 @@ fn open_usd_docs_on_twin_added(
                     twin.root.display()
                 );
                 commands.trigger(LoadScene {
-                    path: format!("twin://{}/{}", twin_name, scene),
+                    path: lunco_assets::twin_uri(&twin_name, &scene),
                     root_prim: String::new(),
                 });
             }
@@ -456,7 +456,7 @@ fn doc_backed_scene_source(
     registry: &DocumentRegistry<UsdDocument>,
     backed: &crate::twin_projection::DocBackedTwinScenes,
 ) -> Option<String> {
-    if path.contains("://") {
+    if lunco_assets::has_scheme(path) {
         return None;
     }
     // Resolving asset-relative → absolute is the only environment-dependent step
@@ -474,7 +474,7 @@ fn doc_backed_source_for_abs(
 ) -> Option<String> {
     let doc = registry.doc_for_file(abs)?;
     let (name, rel) = backed.coords_of(doc)?;
-    Some(format!("twin://{name}/{rel}"))
+    Some(lunco_assets::twin_uri(name, rel))
 }
 
 register_commands!(
@@ -1444,7 +1444,7 @@ mod tests {
     }
 
     /// An already-scheme'd path is its own mount identity — `twin://`,
-    /// `lunco://`, `lunco-lib://` all name a source directly. Re-resolving one
+    /// `lunco://`, `cached_textures://` all name a source directly. Re-resolving one
     /// against the assets dir would be nonsense, so the redirect must short-circuit
     /// before it touches the registry.
     #[test]
@@ -1455,7 +1455,7 @@ mod tests {
         let backed = DocBackedTwinScenes::default();
         for path in [
             "twin://moonbase/scenes/sandbox.usda",
-            "lunco-lib://models/rover.usda",
+            "cached_textures://terrain/albedo.ktx2",
             "lunco://vessels/rovers/skid_rover.usda",
         ] {
             assert_eq!(

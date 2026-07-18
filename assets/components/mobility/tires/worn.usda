@@ -5,9 +5,16 @@
     metersPerUnit = 1
 )
 
-# A WORN regolith tire — cleats rounded off by a few hundred klicks. μ=0.6 ⇒ a slip
-# limit of atan(0.6) = 31.0°: enough for a surveyed route, not enough for the steepest
+# A WORN regolith tire — cleats rounded off by a few hundred klicks. μ=0.5 ⇒ a slip
+# limit of atan(0.5) = 26.6°: enough for a surveyed route, not enough for the steepest
 # wall. The rover still goes where you plan; it stops going where you merely point.
+#
+# The value is load-bearing, not flavour. Against the summer_space_school site it
+# clears the naive straight line (25.5°) by 1.1° and fails every sector at 28°+ —
+# which is what makes "the map is advice, the bearing decides the run" a real lesson
+# rather than a slogan. It was 0.6 (31.0°) until 2026-07-18; at that value the tier
+# also cleared the steepest sector (N, 31.1°) and the exercise had no teeth. See the
+# twin's SURVEY.md ladder table, which is canonical for these three numbers.
 #
 # A `regolith` tire with less bite and nothing else changed — see `cleated.usda` for
 # why this file is three lines long.
@@ -17,5 +24,5 @@ over "Tire" (
     kind = "component"
 )
 {
-    double lunco:tire:frictionCoefficient = 0.6
+    double lunco:tire:frictionCoefficient = 0.5
 }

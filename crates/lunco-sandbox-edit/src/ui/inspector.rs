@@ -834,12 +834,15 @@ fn attach_component_at_socket(
     socket_frame: Transform,
 ) {
     use lunco_usd::attach::AttachSpec;
-    // Asset paths are relative to the asset source root (`<cwd>/assets`), which is
-    // how the running app resolves them (see `AssetPlugin.file_path`).
-    let fs_path = std::env::current_dir()
-        .unwrap_or_default()
-        .join("assets")
-        .join(&asset);
+    // Ask `lunco-assets` where the reference lives — do NOT assume the shipped
+    // library. A component authored by an open Twin is `twin://<name>/…`, which
+    // has no path under `assets/` at all; joining one produced a path that never
+    // existed and the attach was skipped with a "no plug frame" warning.
+    let twins = world.get_resource::<lunco_assets::TwinRoots>().cloned();
+    let Some(fs_path) = lunco_assets::local_path(&asset, twins.as_ref()) else {
+        bevy::log::warn!("[mount] `{asset}` resolves to no local file; attach skipped");
+        return;
+    };
     let Some(plug) = lunco_usd_bevy::mount::read_asset_plug_frame(&fs_path) else {
         bevy::log::warn!("[mount] no plug frame in asset `{asset}` ({}); attach skipped", fs_path.display());
         return;

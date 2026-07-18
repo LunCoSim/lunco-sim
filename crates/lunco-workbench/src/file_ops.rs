@@ -320,7 +320,7 @@ fn on_open_file(
 /// A bare filesystem path to a USD scene — the case that must be opened through
 /// its root. Scheme paths already carry their root, so they are excluded.
 fn is_scene_path(path: &str) -> bool {
-    if path.contains("://") {
+    if lunco_assets::has_scheme(path) {
         return false;
     }
     let lower = path.to_ascii_lowercase();

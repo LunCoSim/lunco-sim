@@ -70,11 +70,16 @@ The composer passes through three URI shapes for the resolved attribute:
 | `/abs/path` (filesystem) | `/`-prefixed USD asset path resolved against the workspace `assets/` root. | `/ws/assets/models/x.glb` |
 | `./relative.glb` | Relative to the layer's parent directory. | `./body.glb` |
 
-**Removed**: `lunco-lib://` no longer exists. It pointed at `<cache>/`, which
-put a machine-local storage location into authored `.usda` files — the file
-then resolved only inside our pipeline. Use `lunco://`; the cache is a
-resolution step, not an address. A future collaborative/Nucleus-like protocol
-should take a distinct scheme (e.g. `lunco-net://`).
+The cache is a **resolution step, not an address** — no scheme points at it, or
+an authored `.usda` would carry a machine-local storage location and resolve
+only inside our pipeline. A future collaborative/Nucleus-like protocol should
+take a distinct scheme (e.g. `lunco-net://`).
+
+**Resolution itself belongs to `lunco-assets`.** This crate owns `canonicalize`
+and `LuncoUsdResolver` — anchoring a *relative* reference to its referencing
+layer, which is USD composition semantics. It must not re-derive where a scheme
+points: ask `lunco_assets` (`has_scheme`, `local_path`, `shipped_asset_root`,
+`id_to_disk_path`, `engine_asset_uri`/`_rel`).
 
 ## When the asset is missing
 

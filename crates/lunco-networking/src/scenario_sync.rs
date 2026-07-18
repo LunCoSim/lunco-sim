@@ -305,7 +305,7 @@ impl Default for CachedTwinsIndex {
 
 /// `<cache>/scenarios/index.json` — the top-level list of cached scenarios.
 fn scenarios_index_path() -> PathBuf {
-    lunco_assets::cache_dir().join("scenarios").join("index.json")
+    lunco_assets::scenarios_dir().join("index.json")
 }
 
 /// Client-side queue: raw chunks pushed by the `AssetChunk` arm of
@@ -376,7 +376,7 @@ pub struct AssetServeTasks(pub Vec<(SessionId, Task<Vec<AssetChunkMsg>>)>);
 
 /// Root of a scenario's local asset cache: `<cache_dir>/scenarios/<hex id>/`.
 pub fn scenario_cache_root(scenario_id: &[u8; 16]) -> PathBuf {
-    lunco_assets::cache_dir().join("scenarios").join(hex16(scenario_id))
+    lunco_assets::scenarios_dir().join(hex16(scenario_id))
 }
 
 /// A safe *relative* `PathBuf` from a `/`-separated manifest asset path,
@@ -886,7 +886,7 @@ pub fn mount_scenario_twin(
     if twins.root_of(name).is_none() {
         twins.register(name, scenario_cache_root(scenario_id));
     }
-    format!("twin://{name}/{rel}")
+    lunco_assets::twin_uri(name, rel)
 }
 
 /// The storage handle for a scenario asset's cache location. A

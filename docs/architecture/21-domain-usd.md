@@ -389,10 +389,10 @@ The `lunco-sandbox-edit` crate provides the interactive layer (palette, gizmo, i
 > now the engine library scheme. A collaborative/Nucleus-like protocol, if added,
 > should pick a distinct scheme (e.g. `lunco-net://`).
 >
-> **`lunco-lib://` was removed.** It addressed the download cache *directly*, so
-> a shipped `.usda` baked a machine-local location into authored content and
-> resolved only inside our pipeline. Downloaded binaries now live at their
-> logical `lunco://` address; the `lunco://` reader resolves `assets/` first,
+> The cache is **not addressable**: a scheme pointing at it would bake a
+> machine-local location into authored content, and the file would resolve only
+> inside our pipeline. Downloaded binaries live at their logical `lunco://`
+> address; the `lunco://` reader resolves `assets/` first,
 > then the cache. Large binaries still stay out of git — they are *resolved*
 > into the library, not *addressed* in the cache. See
 > [`56-asset-resolution-and-cache.md`](56-asset-resolution-and-cache.md).

@@ -852,7 +852,7 @@ async fn read_bytes(path: std::path::PathBuf) -> Result<Vec<u8>, String> {
         //    next reload.
         // The baked demo's `twins/…` path never exists under `scenarios/`, so an
         // OPFS existence check cleanly picks the right backend.
-        let opfs_candidate = lunco_assets::cache_dir().join("scenarios").join(&path);
+        let opfs_candidate = lunco_assets::scenarios_dir().join(&path);
         let opfs = OpfsStorage::new();
         if opfs.exists(&StorageHandle::File(opfs_candidate.clone())).await {
             return opfs
@@ -975,7 +975,7 @@ fn start_dem_builds(
                     // Only the baked-in demo twin is staged under `assets/`. This
                     // mirrors `read_bytes`, which the `metadata.yaml` read above goes
                     // through; the .tif can't reuse it because it wants progress.
-                    let opfs_tif = lunco_assets::cache_dir().join("scenarios").join(&tif_path);
+                    let opfs_tif = lunco_assets::scenarios_dir().join(&tif_path);
                     let opfs_handle = lunco_storage::StorageHandle::File(opfs_tif);
                     let opfs = lunco_storage::OpfsStorage::new();
                     let tif = if opfs.exists(&opfs_handle).await {

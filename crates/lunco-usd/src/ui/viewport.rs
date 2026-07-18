@@ -587,7 +587,7 @@ fn install_active_doc(world: &mut World, doc: DocumentId) {
     };
     let handle = world
         .resource::<AssetServer>()
-        .load::<UsdStageAsset>(format!("twin://{name}/{rel}"));
+        .load::<UsdStageAsset>(lunco_assets::twin_uri(&name, &rel));
     // Track so `sync_twin_overlays` keeps the overlay + preview in step with the
     // document generation (it owns rebuilds — the viewport no longer re-parses).
     world

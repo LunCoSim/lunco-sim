@@ -2327,7 +2327,7 @@ pub fn shader_asset_path_for(
     stem: &str,
 ) -> String {
     match twin_roots.and_then(|t| t.primary()) {
-        Some((name, _)) => format!("twin://{name}/shaders/{stem}.wgsl"),
+        Some((name, _)) => lunco_assets::twin_uri(&name, format!("shaders/{stem}.wgsl")),
         None => format!("shaders/{stem}.wgsl"),
     }
 }
@@ -2377,12 +2377,12 @@ fn install_shader(
     let (asset_path, disk_path): (String, std::path::PathBuf) =
         match twin_roots.and_then(|t| t.primary()) {
             Some((name, root)) => (
-                format!("twin://{name}/shaders/{stem}.wgsl"),
+                lunco_assets::twin_uri(&name, format!("shaders/{stem}.wgsl")),
                 root.join("shaders").join(format!("{stem}.wgsl")),
             ),
             None => (
                 format!("shaders/{stem}.wgsl"),
-                std::path::PathBuf::from("assets/shaders").join(format!("{stem}.wgsl")),
+                lunco_assets::assets_dir_abs().join("shaders").join(format!("{stem}.wgsl")),
             ),
         };
 
@@ -2646,20 +2646,17 @@ pub fn on_rescan_shaders(
 }
 
 /// Resolve a shader **asset path** to its **disk path**: `twin://<name>/<rel>` →
-/// `<twin_root>/<rel>`; an engine path like `shaders/foo.wgsl` → `assets/<path>`.
+/// `<twin_root>/<rel>`; an engine path like `shaders/foo.wgsl` → the shipped
+/// library. Both cases are [`lunco_assets::local_path`] — this crate must not
+/// re-derive either root, since a copy drifts from the readers `lunco-assets`
+/// actually registers (this one joined a bare relative `"assets"`, resolving
+/// against the CWD instead of the library path the loader uses).
 #[cfg(not(target_arch = "wasm32"))]
 fn asset_path_to_disk(
     path: &str,
     twin_roots: Option<&lunco_assets::twin_source::TwinRoots>,
 ) -> Option<std::path::PathBuf> {
-    if let Some(rest) = path.strip_prefix("twin://") {
-        let mut it = rest.splitn(2, '/');
-        let name = it.next()?;
-        let rel = it.next()?;
-        Some(twin_roots?.root_of(name)?.join(rel))
-    } else {
-        Some(std::path::PathBuf::from("assets").join(path))
-    }
+    lunco_assets::local_path(path, twin_roots)
 }
 
 /// Delete a shader: unregister it from the picker [`ShaderCatalog`] and remove

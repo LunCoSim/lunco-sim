@@ -317,7 +317,7 @@ fn default_plugins(headless: bool) -> bevy::app::PluginGroupBuilder {
 
     let group = DefaultPlugins
         .set(AssetPlugin {
-            file_path: std::env::current_dir().unwrap_or_default().join("assets").to_string_lossy().to_string(),
+            file_path: lunco_assets::assets_dir_abs().to_string_lossy().to_string(),
             // Don't probe for `.meta` sidecars: we ship none, so every asset
             // load would otherwise fire a failed `<asset>.meta` fetch.
             meta_check: AssetMetaCheck::Never,
@@ -2215,7 +2215,7 @@ struct LayerRole {
 /// `lunco:terrain:layer:<role>:map` (a path **relative to the open Twin**, e.g.
 /// `terrain/connecting_ridge/color.png`) + optional `:weight` (default `1.0`) off
 /// the terrain prim, loads the map through the `twin://` asset source (so it
-/// travels with the Twin — no engine-global `lunco-lib://` link), sets the
+/// travels with the Twin — no engine-global `lunco://` link), sets the
 /// matching slot, and raises the role's blend weight(s).
 ///
 /// Roles: `albedo` (real colour), `mineral` (classification tint), `surface`
@@ -2615,7 +2615,7 @@ fn load_startup_scene(world: &mut World, scene_path: String) {
     let abs_path = if pb.is_absolute() {
         pb
     } else {
-        std::env::current_dir().unwrap_or_default().join("assets").join(pb)
+        lunco_assets::assets_dir_abs().join(pb)
     };
 
     // The root that owns this scene — nearest `twin.toml` ancestor, else the

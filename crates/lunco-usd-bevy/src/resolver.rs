@@ -108,7 +108,7 @@ pub(crate) fn is_binary_asset(asset_path: &str) -> bool {
 ///
 /// MUST stay identical between the pre-fetch BFS and the resolver (R-canon).
 pub(crate) fn canonicalize(asset_path: &str, anchor: Option<&ResolvedPath>) -> String {
-    if asset_path.contains("://") {
+    if lunco_assets::has_scheme(asset_path) {
         return asset_path.to_string();
     }
     if let Some(rest) = asset_path.strip_prefix('/') {
@@ -149,7 +149,7 @@ pub(crate) fn canonicalize(asset_path: &str, anchor: Option<&ResolvedPath>) -> S
 //     `Mesh` specs) fed to the composer instead of `discover_arcs` stubbing.
 // Until then the binary side-channel is retained — it works native + web.
 pub(crate) fn resolve_binary_uri(asset_path: &str, anchor: Option<&ResolvedPath>) -> String {
-    if asset_path.contains("://") {
+    if lunco_assets::has_scheme(asset_path) {
         return asset_path.to_string();
     }
     canonicalize(asset_path, anchor)

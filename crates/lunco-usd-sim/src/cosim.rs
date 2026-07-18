@@ -1596,18 +1596,17 @@ pub fn spawn_usd_child_with_translate(
 pub fn normalize_scene_asset_path(path_in: &str) -> Option<String> {
     // Already a scheme path (`abs://`, `lunco://`, …) — the AssetServer routes
     // it to the named source as-is.
-    if path_in.contains("://") {
+    if lunco_assets::has_scheme(path_in) {
         return Some(path_in.to_string());
     }
     let pb = std::path::PathBuf::from(path_in);
     if pb.is_absolute() {
         // Under the project `assets/` dir → asset-relative (default source).
-        let assets_abs = std::env::current_dir()
-            .unwrap_or_default()
-            .join(assets_dir());
-        match pb.strip_prefix(&assets_abs) {
-            Ok(rel) => Some(rel.to_string_lossy().into_owned()),
-            Err(_) => {
+        // `lunco-assets` owns that mapping; this only decides what `LoadScene`
+        // does when it does NOT apply.
+        match lunco_assets::library_rel(&pb) {
+            Some(rel) => Some(rel),
+            None => {
                 // `LoadScene` takes SCHEME-QUALIFIED addresses (`lunco://`,
                 // `twin://`) — it loads an already-addressable asset and has no
                 // access to the workspace/Twin layer, so it cannot resolve a

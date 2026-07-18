@@ -1,48 +1,77 @@
 # Asset Resolution and the Cache
 
-**Status:** proposal. Companion to
-[`55-scene-addressing-and-roots.md`](55-scene-addressing-and-roots.md) — same
-principle (*identity is not location*), applied to referenced assets rather than
-scenes.
+Companion to [`55-scene-addressing-and-roots.md`](55-scene-addressing-and-roots.md)
+— same principle (*identity is not location*), applied to referenced assets
+rather than scenes.
 
-## The defect
+## The rule
 
-`lunco-lib://` puts a **storage location** into **authored content**:
+**Authored content names logical identities; only the resolver knows locations.**
 
-```usda
-Xform "Visual" ( payload = @lunco-lib://models/perseverance.glb@ )
-```
+Two authored forms, both location-independent and both resolvable by third-party
+USD tools when the bytes are present:
 
-`lunco-lib://` resolves to `cache_dir()` — a machine-local, generated directory.
-The `.usda` therefore asserts "this asset lives in my download cache", which is
-an environment fact, not an identity fact. The workspace manifest says as much:
+- `@lunco://models/perseverance.glb@` — the engine asset library
+- `@terrain/apollo15@` — root-relative, resolved against the owning root
 
-> resolves through that source — *only in our pipeline*. Third-party USD tools
-> fall back to the prim's local Cube placeholder.
+A cache directory is never an address. If authored USDA can name the cache, the
+file asserts "this asset lives in my download cache" — an environment fact, not
+an identity fact — and stops being portable. This is why there is no `cache://`
+scheme: naming the mistake legibly would make it permanent.
 
-A file that only resolves inside one pipeline is not a portable USD file.
+## Schemes
 
-**Renaming the scheme to `cache://` does not fix this.** It makes the mistake
-legible and permanent: the cache would still be an address space that authored
-files reference. The cache must not be addressable at all.
-
-## The pattern we already have right
-
-The `summer_space_school` Twin solves this correctly today:
-
-| | Downloads to | Scene authors |
+| Scheme | Resolves to | For |
 |---|---|---|
-| Twin `apollo15_dtm` | `output_root = "twin"` → **inside the Twin** | `@terrain/apollo15@` (relative) |
-| Workspace `perseverance` | shared `<cache>/` | `@lunco-lib://…@` (cache-addressed) |
+| `lunco://` | `<cwd>/assets`, then `<cache>` | the shipped engine library (rovers, parts, shaders, stock textures) |
+| `twin://<name>/…` | the open Twin's root | Twin-owned content, and downloaded scenarios |
+| `cached_textures://` | texture cache dir | *derived* pipeline outputs |
 
-The Twin's `.cache/NAC_DTM_APOLLO15.TIF` staging file is an implementation
-detail *inside* the Twin; the authored reference is an ordinary relative path
-that any USD tool can follow. The Twin is the model to generalise — the
-workspace is the outlier.
+`lunco://` resolves `assets/` **first**, then the download cache, so a large
+binary pulled by `cargo run -p lunco-assets -- download` is reachable at its
+logical address without any authored file naming the cache.
 
-This also answers "how should it work in a user's own Twin?": it already does.
-The fix is to make the workspace behave like a Twin, not to invent a second
-mechanism for users.
+A **downloaded scenario is just a Twin root** over its cache directory, so it
+needs no scheme of its own: one `twin://<name>/<rel>` names the scene on every
+peer regardless of where that peer's bytes live. That is what keeps
+`Provenance::Content`-derived ids identical across host and client.
+
+## `lunco-assets` owns resolution
+
+Every URI↔location mapping lives in `crates/lunco-assets`, and no other crate
+re-derives one:
+
+| Concern | Entry point |
+|---|---|
+| Register the sources | `asset_sources::register_lunco_asset_sources` |
+| Build a Twin URI | `twin_uri(name, rel)` |
+| Parse a Twin URI | `parse_twin_uri` |
+| "already addressable?" | `has_scheme` |
+| Library URI ⇄ relative | `engine_asset_uri` / `engine_asset_rel` |
+| Any URI → local path | `local_path(reference, twins)` |
+| Library root (CWD) | `assets_dir_abs` |
+| Library root (of a file) | `shipped_asset_root` |
+| Id → disk path | `id_to_disk_path` |
+| Scenario staging dir | `scenarios_dir` |
+
+The reason this is a hard rule rather than a preference: a copy of the mapping
+drifts from the readers actually registered, and then the *same URI resolves two
+ways* depending on which crate asked. A hand-rolled `PathBuf::from("assets")`
+join resolved against the caller's CWD while the loader used the absolute
+library path — same reference, different file, no error.
+
+**No crate outside `lunco-assets` performs filesystem path resolution.** Not a
+style rule: a path derived anywhere else is native-only by construction, so it
+breaks on web (where bytes live in OPFS) and on any Twin-owned asset (which has
+no path under `assets/` at all). If code needs bytes, it goes through the
+`AssetServer` or `lunco-storage`; if it needs to know *where* a reference points,
+it asks `lunco-assets`. Joining `"assets"`, stripping a scheme prefix, or
+splitting a `twin://` authority by hand are all the same defect.
+
+What legitimately stays outside: `lunco-usd-bevy`'s `canonicalize` and
+`LuncoUsdResolver`. Those anchor a *relative* reference to its **referencing
+layer** and plug into `openusd`'s `ar::Resolver` — USD composition semantics that
+must sit next to the `Stage`, not asset-source knowledge.
 
 ## Industry practice
 
@@ -55,97 +84,47 @@ Every mature system separates *declared identity* from *materialised bytes*:
 | Nix / Bazel | derivation / target | local or remote store | content hash |
 | **OpenUSD** | asset path in layer | **`ArResolver`** | resolver context |
 
-The USD-native answer is the **asset resolver** (`Ar` 2.0): layers reference
-logical asset paths, and a pluggable resolver maps them to bytes — that is
-precisely the seam studios use to attach asset-management systems. We already
-have a resolver seam (`crates/lunco-usd-bevy/src/resolver.rs`); the sustainable
-move is to extend it, not to add one Bevy `AssetSource` per storage backend.
+The USD-native answer is the asset resolver (`Ar` 2.0): layers reference logical
+asset paths and a pluggable resolver maps them to bytes — the seam studios use
+to attach asset-management systems. We have that seam
+(`crates/lunco-usd-bevy/src/resolver.rs`); it is extended rather than
+supplemented with one Bevy `AssetSource` per storage backend.
 
-Note what our `Assets.toml` already carries: `url`, `dest`, `sha256`. That is a
-lockfile. We are one step away from the standard design and currently spend that
-step on an extra URI scheme instead.
+`Assets.toml` already carries `url`, `dest`, `sha256`. That is a lockfile.
 
-## Target design
+## Open: resolver-driven materialisation
 
-### 1. Authored content uses logical references only
-
-Two forms, both location-independent, both resolvable by third-party tools when
-the bytes are present:
-
-- `@lunco://models/perseverance.glb@` — the engine asset library
-- `@terrain/apollo15@` — Twin-relative, resolved against the Twin root
-
-`lunco-lib://` disappears from authored files entirely.
-
-### 2. The resolver consults `Assets.toml`
-
-`Assets.toml` becomes the resolver's input, not just a download script's input.
-Resolution order for a logical id:
+`Assets.toml` is still only a download script's input, not the resolver's.
+The target resolution order for a logical id:
 
 1. present under the owning root (`assets/` or the Twin) → serve it
 2. else present in the content-addressed cache (keyed by `sha256`) → serve it
 3. else declared in an `Assets.toml` → **materialise on demand**, verify hash, serve
-4. else → unresolved: report it (see *Failure is visible*)
+4. else → unresolved: report it on the `StatusBus`
 
 Step 3 is the "realtime cache resolution" worth having: a missing declared asset
-is a fetch, not an error. The cache stays an implementation detail of step 2/3 —
-never a name anything can reference.
-
-### 3. One mechanism, workspace and Twin alike
-
-The workspace `assets/` dir is just a root with an `Assets.toml`, exactly like a
-Twin. A user's custom Twin gets identical behaviour with no extra concepts:
-declare in `Assets.toml`, reference relatively, let the resolver materialise.
-
-Per-root manifests compose — the resolver reads the manifest of whichever root
-owns the reference, so a Twin cannot be broken by a workspace rename, and
-neither can shadow the other.
-
-### 4. Content addressing, not path addressing
-
-`sha256` is already declared, so the cache should be keyed by it. That buys
-what path-keyed caches cannot: two roots requesting the same asset share one
-copy, a changed URL with an unchanged hash is a cache hit, and a corrupted or
-truncated download is detected rather than served.
-
-### 5. Failure is visible
-
-An unresolved reference must surface on the `StatusBus` naming the reference and
-the manifest that should declare it. Today a missing `lunco-lib://` payload
+is a fetch, not an error. Step 4 matters because a missing payload currently
 yields a prim with no geometry and no error — indistinguishable from a modelling
 mistake. Silence is the expensive part.
 
-## Migration
+Content addressing (2) buys what path-keyed caches cannot: two roots requesting
+the same asset share one copy, a changed URL with an unchanged hash is a cache
+hit, and a truncated download is detected rather than served.
 
-1. Extend the resolver to read `Assets.toml` for the owning root.
-2. Cache keyed by `sha256`; `dest` becomes staging, not identity.
-3. Re-point the one real consumer (`perseverance`) at
-   `output_root`-in-`assets/` + `@lunco://models/perseverance.glb@`.
-4. Delete the `lunco-lib://` `AssetSource` and the `lunco_lib_path()` helper.
-5. Add unresolved-reference reporting.
+Per-root manifests compose — the resolver reads the manifest of whichever root
+owns the reference, so a Twin cannot be broken by a workspace rename, and
+neither can shadow the other. The workspace `assets/` dir is just a root with an
+`Assets.toml`, exactly like a Twin; a user's custom Twin gets identical
+behaviour with no extra concepts.
 
-Step 3 is small — `lunco-lib://` has one real authored consumer despite 32
-mentions, because most of those are docs and comments about the scheme itself.
-That is the clearest signal that it is a concept carrying its own weight rather
-than the project's.
+## Open: bodies and their textures belong in USD
 
-## Consequence: bodies and their textures belong in USD
-
-The same "identity is not location" argument reaches one layer further up.
-Celestial bodies are currently a **hardcoded Rust registry**:
-
-```rust
-// crates/lunco-celestial/src/registry.rs
-texture_path: Some("textures/earth.png".to_string()),
-// crates/lunco-celestial/src/big_space_setup.rs
-asset_server.load_with_settings("cached_textures://earth.png", seam_wrap);
-```
-
-Which bodies exist, and which map each one wears, is **scene content** — yet it
-lives in Rust, where a Twin cannot change it without a recompile. That conflicts
-with "USD is truth, ECS is a projection", and with celestial being opt-in per
-scene: the scene decides whether there is an Earth, so the scene should also say
-what it looks like.
+The same argument reaches one layer up. Celestial bodies are a **hardcoded Rust
+registry** (`lunco-celestial/src/registry.rs` `texture_path`,
+`big_space_setup.rs` loading `cached_textures://earth.png`). Which bodies exist,
+and which map each wears, is **scene content** — yet it lives in Rust, where a
+Twin cannot change it without a recompile. That conflicts with "USD is truth,
+ECS is a projection", and with celestial being opt-in per scene.
 
 Authored instead as an ordinary prim with an ordinary asset reference:
 
@@ -156,63 +135,44 @@ def Xform "Earth" ( prepend apiSchemas = ["LunCoCelestialBodyAPI"] )
 }
 ```
 
-This is not a new mechanism — it is the pattern terrain already uses
-(`demSource = @terrain/apollo15@`), that materials use
-(`lunco:material:shader` as an asset path), and that HDRI uses
-(`UsdLuxDomeLight`). What it buys:
+Not a new mechanism — it is what terrain already does
+(`demSource = @terrain/apollo15@`), what materials do (`lunco:material:shader`),
+and what HDRI does (`UsdLuxDomeLight`). It buys: the texture becomes a normal
+USD reference inheriting cache fallback and web staging with no
+celestial-specific path; a Twin can ship its own body map; third-party tools see
+a material instead of a Rust constant; and `cached_textures://` collapses back to
+genuinely derived outputs only.
 
-- the texture becomes a **normal USD reference**, resolved by the `lunco://`
-  resolver above — so it inherits cache fallback and web staging for free, with
-  no celestial-specific code path
-- a Twin can ship its own body map by authoring a different asset path
-- third-party USD tools see the material instead of a Rust constant
-- `cached_textures://` stops being needed for these, collapsing another address
-  space (it remains for genuinely derived pipeline outputs)
-
-### Why the default textures still ship
-
-Because scenarios are dynamic. A scenario or Twin that authors an Earth at
-runtime must find `lunco://textures/earth.png` already present — otherwise every
-scene that wants a stock body would need its own download. Shipping the stock
-maps in the engine library (declared `web = true`, resolved through the cache)
-is what makes an authored body work immediately, while leaving a Twin free to
-override with its own asset.
-
-`lunar_color` is the same story in advance: it is declared but unshipped today
-because nothing samples it (the runtime *derives* albedo from relief in
-`derived_layers::albedo_map`). Once a body or terrain layer authors it as an
-asset reference, it becomes a real consumer and flips to `web = true`.
+The stock maps still ship, because scenarios are dynamic: a Twin authoring an
+Earth at runtime must find `lunco://textures/earth.png` already present, or every
+scene wanting a stock body needs its own download. `lunar_color` is the same
+story in advance — declared but unshipped because nothing samples it (the runtime
+*derives* albedo from relief in `derived_layers::albedo_map`); once something
+authors it as an asset reference it flips to `web = true`.
 
 ## Open: manifest-driven web staging
 
 `scripts/build_web.sh` hardcodes which assets a web bundle carries — the DejaVu
 font by name, `for tex in earth.png moon.png`, and a `*.glb` glob gated on the
-binary. That list duplicates what the per-crate `Assets.toml` files already
-declare, so a newly declared runtime asset silently 404s in the browser until
-someone edits the script too.
+binary. That duplicates what per-crate `Assets.toml` files already declare, so a
+newly declared runtime asset silently 404s in the browser until someone edits the
+script too.
 
-The fix is a manifest-driven staging step, mirroring `build_asset_manifest`
-(which re-uses the runtime's own `scan_library` rather than reimplementing the
-walk in shell). It is blocked on one question: **how does a manifest state "the
-runtime fetches this from the bundle, and at what path"?**
+The fix mirrors `build_asset_manifest` (which re-uses the runtime's own
+`scan_library` rather than reimplementing the walk in shell). It is blocked on
+one question: **how does a manifest state "the runtime fetches this from the
+bundle, and at what path"?**
 
-That is not derivable from the fields we have. "Has a `[process]` step" is the
-tempting proxy and is wrong in both directions — the DejaVu font has no process
-step and is required at runtime, while the MSL and ThermofluidStream tarballs
-also have none and must never ship (~200MB; they reach the web through
-`build_msl_assets`). The destination varies too: egui fetches the font outside
-any `AssetSource`, so it lives at `/fonts/…` rather than under `.cache/`.
+Not derivable from today's fields. "Has a `[process]` step" is the tempting proxy
+and is wrong in both directions — the DejaVu font has no process step and is
+required at runtime, while the MSL and ThermofluidStream tarballs also have none
+and must never ship (~200MB; they reach the web through `build_msl_assets`). The
+destination varies too: egui fetches the font outside any `AssetSource`, so it
+lives at `/fonts/…` rather than under `.cache/`.
 
 A `web` field (`true` → `.cache/<rel>`, or an explicit bundle path) was
-prototyped on 2026-07-18 and **backed out** — it worked, and staging was
-verified, but it grows a shared manifest schema and that call belongs to whoever
-owns the format. Alternatives if the schema is unwelcome: process runtime
-artifacts to `output_root = "assets"` (already supported, already staged
-wholesale — costs a gitignore entry for generated files), or derive the set from
+prototyped and backed out — it worked, but it grows a shared manifest schema and
+that call belongs to whoever owns the format. Alternatives if the schema is
+unwelcome: process runtime artifacts to `output_root = "assets"` (already
+supported and staged wholesale — costs a gitignore entry), or derive the set from
 what the asset closure actually references.
-
-## What does not change
-
-`lunco://`, `twin://`, and `scenario://` keep their roles. `cached_textures://`
-remains for *derived* pipeline outputs — but per the section above, the celestial
-maps are not that, and should move to `lunco://` when bodies become USD prims.

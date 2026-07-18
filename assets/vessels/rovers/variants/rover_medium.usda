@@ -27,12 +27,16 @@ def Xform "RoverMedium" (
     float3 physics:diagonalInertia = (2400.0, 3000.0, 1200.0)
     float physxRigidBody:angularDamping = 2.0
 
-    # Handling, per wheel. `worn` tires: μ=0.60 ⇒ slip limit 31.0°. Tuned against the
+    # Handling, per wheel. `worn` tires: μ=0.50 ⇒ slip limit 26.6°. Tuned against the
     # SURVEYED site (summer_space_school, real Apollo 15 crater), whose ways in run
-    # 20.1° on the SSW bearing, 24.7° on the naive straight line and 34.4° on the WSW
-    # wall — so this rover holds the ДЗЗ route and the naive line, and CANNOT climb the
-    # steep side. The bearing you pick decides the run, which is the whole §3.2
-    # exercise.
+    # 19.8° on the ДЗЗ route, 25.5° on the naive straight line, and 31.1° up the
+    # steepest SECTOR (N) — so this rover holds the route comfortably, clears the naive
+    # line by just 1.1°, and CANNOT climb the steep side at all. The bearing you pick
+    # decides the run, which is the whole §3.2 exercise.
+    #
+    # That 1.1° margin is the design. Widen μ and the naive line stops being a gamble;
+    # narrow it and the tier collapses onto `awful`. See `worn.usda` — μ is authored on
+    # the TIRE, and rover_medium is its only consumer.
     over "Wheel_L0" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0 }
     over "Wheel_L1" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0 }
     over "Wheel_L2" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0 }
