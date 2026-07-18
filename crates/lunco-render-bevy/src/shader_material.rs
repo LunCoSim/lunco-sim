@@ -64,7 +64,9 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
 use lunco_materials::dyn_params::{self, ParamSchema, ParamType, ParamValue};
-use lunco_materials::{to_snake_case, ShaderCatalog, ATTRIBUTE_MORPH_TARGET};
+use lunco_materials::{
+    to_snake_case, ShaderCatalog, ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
+};
 
 /// A general custom-shader material whose parameters are **dynamic**: each
 /// `.wgsl` declares its own `Material` uniform struct (real field names), the
@@ -301,8 +303,8 @@ impl Material for ShaderMaterial {
             // our geomorph `.wgsl` defines only a main-pass `@vertex`, so the
             // prepass keeps Bevy's default vertex shader (un-morphed depth — a
             // sub-tile mismatch acceptable for the debug LOD view). When set, the
-            // mesh carries `ATTRIBUTE_MORPH_TARGET`, so rebuild the vertex layout to
-            // feed `@location(8)`. Meshes without it use the fragment-only path
+            // mesh carries `ATTRIBUTE_MORPH_TARGET` + `ATTRIBUTE_MORPH_NORMAL`, so rebuild
+            // the vertex layout to feed `@location(8)` and `@location(9)`. Meshes without it use the fragment-only path
             // above and never reach here (`vertex_shader` is `None`).
             if let Some(vertex) = &key.bind_group_data.vertex_shader {
                 descriptor.vertex.shader = vertex.clone();
@@ -311,6 +313,7 @@ impl Material for ShaderMaterial {
                     Mesh::ATTRIBUTE_NORMAL.at_shader_location(1),
                     Mesh::ATTRIBUTE_UV_0.at_shader_location(2),
                     ATTRIBUTE_MORPH_TARGET.at_shader_location(8),
+                    ATTRIBUTE_MORPH_NORMAL.at_shader_location(9),
                 ])?;
                 descriptor.vertex.buffers = vec![vertex_layout];
             }

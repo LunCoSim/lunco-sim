@@ -30,7 +30,7 @@ use bevy::prelude::*;
 use lunco_core::{on_command, register_commands, Command};
 use lunco_materials::{ParamValue, ShaderLook};
 
-use crate::stream_viz::{set_param, LodTiles, TerrainShaderMode};
+use crate::stream_viz::{LodTiles, TerrainShaderMode};
 
 /// The overlay's shader uniforms — the compact, per-material form of
 /// [`TerrainOverlayParams`]. `Copy` so it threads cheaply through the tile-spawn path.

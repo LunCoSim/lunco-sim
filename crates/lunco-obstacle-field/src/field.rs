@@ -92,24 +92,103 @@ impl HeightGrid {
         }
     }
 
-    /// Bilinear-interpolated ground height at world `(x, z)`, clamped to region.
+    /// Height sample at integer grid coords. The cubic needs one sample either
+    /// side of the interpolated cell, so it reaches up to 1 before and 2 past the
+    /// grid; out-of-range indices are **linearly extrapolated** from the two
+    /// outermost rows.
+    ///
+    /// Not clamped. Clamping duplicates the edge row, which reads to the cubic as
+    /// the surface abruptly levelling off, so the interpolant bends near every
+    /// border — it stamps a faint rim around the whole DEM and stops reproducing
+    /// even a flat ramp there. Extrapolation continues the existing trend instead,
+    /// which keeps a plane exact right to the edge.
+    #[inline]
+    fn sample_extrapolated(&self, ix: isize, iz: isize) -> f64 {
+        let last = self.res as isize - 1;
+        // Resolve each axis to an in-range anchor plus how far outside it lies.
+        let (ax, dx) = if ix < 0 {
+            (0isize, ix)
+        } else if ix > last {
+            (last, ix - last)
+        } else {
+            (ix, 0)
+        };
+        let (az, dz) = if iz < 0 {
+            (0isize, iz)
+        } else if iz > last {
+            (last, iz - last)
+        } else {
+            (iz, 0)
+        };
+        // Inward neighbour on each axis, used for the outward slope.
+        let inx = if dx < 0 { 1 } else if dx > 0 { last - 1 } else { ax };
+        let inz = if dz < 0 { 1 } else if dz > 0 { last - 1 } else { az };
+        let at = |x: isize, z: isize| self.heights[self.idx(x as usize, z as usize)];
+
+        let h = at(ax, az);
+        let mut out = h;
+        if dx != 0 {
+            out += dx.unsigned_abs() as f64 * (h - at(inx, az));
+        }
+        if dz != 0 {
+            out += dz.unsigned_abs() as f64 * (h - at(ax, inz));
+        }
+        out
+    }
+
+    /// Catmull-Rom cubic through `p1`/`p2`, using `p0`/`p3` to set the end slopes.
+    ///
+    /// Chosen over a B-spline because it is **interpolating**: at `t = 0` it is
+    /// exactly `p1` and at `t = 1` exactly `p2`. The DEM's measured heights are
+    /// therefore reproduced bit-for-bit at every post — only the values *between*
+    /// posts change — so colliders, queries and visuals keep agreeing on the same
+    /// surface and no physics behaviour shifts under this.
+    #[inline]
+    fn catmull_rom(p0: f64, p1: f64, p2: f64, p3: f64, t: f64) -> f64 {
+        let t2 = t * t;
+        let t3 = t2 * t;
+        0.5 * ((2.0 * p1)
+            + (-p0 + p2) * t
+            + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+            + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
+    }
+
+    /// Bicubic (Catmull-Rom) ground height at world `(x, z)`, clamped to region.
+    ///
+    /// This was bilinear, and bilinear is only C0: its gradient is *constant
+    /// within each cell* and jumps at cell borders. Normals are probed by finite
+    /// difference at a fixed sub-metre `eps` (`tile_mesh`), so every probe inside
+    /// one ~4 m DEM cell returned the SAME normal — the terrain shaded as flat
+    /// facets one DEM cell across, the "blocky terrain" artifact. Widening `eps`
+    /// to the cell size hid the facets but erased the sub-cell relief the analytic
+    /// overzoom layer synthesises, which is why that fix was rejected.
+    ///
+    /// Catmull-Rom is C1, so the gradient varies continuously across cell borders
+    /// and a fine probe reports a genuinely different normal at each vertex. The
+    /// cure is in the interpolant, where the discontinuity actually lives, rather
+    /// than in the probe that merely revealed it.
     pub fn height_at(&self, x: f32, z: f32) -> f32 {
         let s = self.spacing();
         let fx = ((x + self.half_extent) / s).clamp(0.0, self.res as f32 - 1.0);
         let fz = ((z + self.half_extent) / s).clamp(0.0, self.res as f32 - 1.0);
-        let x0 = fx.floor() as usize;
-        let z0 = fz.floor() as usize;
-        let x1 = (x0 + 1).min(self.res - 1);
-        let z1 = (z0 + 1).min(self.res - 1);
-        let tx = fx - x0 as f32;
-        let tz = fz - z0 as f32;
-        let h00 = self.heights[self.idx(x0, z0)] as f32;
-        let h10 = self.heights[self.idx(x1, z0)] as f32;
-        let h01 = self.heights[self.idx(x0, z1)] as f32;
-        let h11 = self.heights[self.idx(x1, z1)] as f32;
-        let a = h00 + (h10 - h00) * tx;
-        let b = h01 + (h11 - h01) * tx;
-        a + (b - a) * tz
+        let x0 = fx.floor() as isize;
+        let z0 = fz.floor() as isize;
+        let tx = (fx - x0 as f32) as f64;
+        let tz = (fz - z0 as f32) as f64;
+
+        // Four rows through z-1..z+2, each collapsed along x, then across in z.
+        let mut rows = [0.0f64; 4];
+        for (r, row) in rows.iter_mut().enumerate() {
+            let iz = z0 + r as isize - 1;
+            *row = Self::catmull_rom(
+                self.sample_extrapolated(x0 - 1, iz),
+                self.sample_extrapolated(x0, iz),
+                self.sample_extrapolated(x0 + 1, iz),
+                self.sample_extrapolated(x0 + 2, iz),
+                tx,
+            );
+        }
+        Self::catmull_rom(rows[0], rows[1], rows[2], rows[3], tz) as f32
     }
 
     /// Convert to Avian's heightfield layout: `Vec<Vec<f64>>` indexed `[x][z]`,
@@ -253,6 +332,113 @@ mod tests {
         // Rim lip is raised above the surrounding plain.
         let rim = g.height_at(10.0, 0.0);
         assert!(rim > 0.0, "rim {rim} should be raised");
+    }
+
+    /// A tilted plane, so every interpolant should reproduce it EXACTLY: cubic
+    /// interpolation of collinear samples is that same line.
+    fn ramp(res: usize, half: f32, slope: f64) -> HeightGrid {
+        let mut g = HeightGrid::new_flat(res, half);
+        let s = g.spacing() as f64;
+        for iz in 0..res {
+            for ix in 0..res {
+                let x = -half as f64 + ix as f64 * s;
+                let i = g.idx(ix, iz);
+                g.heights[i] = x * slope;
+            }
+        }
+        g
+    }
+
+    /// The interpolant must pass THROUGH the DEM's measured samples. This is what
+    /// makes the bilinear -> Catmull-Rom swap safe for physics: colliders and
+    /// queries still see the same heights at every post, so nothing that rests on
+    /// or collides with the terrain moves.
+    #[test]
+    fn interpolation_reproduces_the_samples_exactly() {
+        let mut g = HeightGrid::new_flat(33, 16.0);
+        g.stamp_crater(Vec2::new(3.0, -2.0), 7.0, 2.5, 0.4);
+        let s = g.spacing();
+        for iz in 0..g.res {
+            for ix in 0..g.res {
+                let x = -g.half_extent + ix as f32 * s;
+                let z = -g.half_extent + iz as f32 * s;
+                let want = g.heights[g.idx(ix, iz)] as f32;
+                let got = g.height_at(x, z);
+                assert!(
+                    (got - want).abs() < 1e-3,
+                    "post ({ix},{iz}): interpolant {got} != sample {want}"
+                );
+            }
+        }
+    }
+
+    /// Exactness on a plane — guards against a mis-signed Catmull-Rom coefficient,
+    /// which would still look plausible on noisy data.
+    #[test]
+    fn a_plane_is_reproduced_between_samples_too() {
+        let g = ramp(33, 16.0, 0.25);
+        for k in 0..40 {
+            let x = -12.0 + k as f32 * 0.6;
+            assert!(
+                (g.height_at(x, 1.7) as f64 - x as f64 * 0.25).abs() < 1e-4,
+                "ramp not reproduced at x={x}"
+            );
+        }
+    }
+
+    /// The cubic reaches outside the grid near every border, so the edge rule is
+    /// load-bearing. Clamping (duplicating the edge row) bends the interpolant
+    /// there and stamps a faint rim around the DEM; linear extrapolation keeps the
+    /// ramp exact right up to the boundary.
+    ///
+    /// A tiny grid is deliberate — at res=3 EVERY cell is a boundary cell, which
+    /// is exactly the case that caught this.
+    #[test]
+    fn a_plane_survives_the_dem_boundary() {
+        let g = ramp(3, 10.0, 0.1);
+        for k in 0..21 {
+            let x = -10.0 + k as f32; // includes both extreme edges
+            let got = g.height_at(x, 0.0) as f64;
+            assert!(
+                (got - x as f64 * 0.1).abs() < 1e-5,
+                "boundary bends the plane at x={x}: {got} != {}",
+                x as f64 * 0.1
+            );
+        }
+    }
+
+    /// THE REGRESSION TEST for blocky terrain.
+    ///
+    /// Bilinear is C0: within a single cell its x-gradient does not depend on x at
+    /// all, so a sub-cell finite-difference normal probe returns an identical
+    /// normal at every vertex in that cell and the surface shades as one flat
+    /// facet. Catmull-Rom is C1, so the gradient genuinely varies across the cell.
+    ///
+    /// Probing at 0.5 m inside one cell mirrors what `tile_mesh` actually does.
+    #[test]
+    fn gradient_varies_within_a_single_cell() {
+        let mut g = HeightGrid::new_flat(65, 128.0);
+        // Curvature is required: on a plane every interpolant is correctly linear.
+        g.stamp_crater(Vec2::ZERO, 60.0, 8.0, 1.0);
+        let s = g.spacing();
+        assert!(s > 2.0, "cell {s} m must be wider than the probe for this to bite");
+
+        // Two probe points inside the SAME cell, away from the crater centre where
+        // the profile is curved.
+        let cell_x = (30.0f32 / s).floor() * s - g.half_extent + g.half_extent;
+        let base = (30.0f32 / s).floor() * s;
+        let eps = 0.5f32;
+        let grad_at = |x: f32| {
+            (g.height_at(x + eps, 0.0) - g.height_at(x - eps, 0.0)) as f64 / (2.0 * eps) as f64
+        };
+        let _ = cell_x;
+        let g1 = grad_at(base + 0.25 * s);
+        let g2 = grad_at(base + 0.75 * s);
+        assert!(
+            (g1 - g2).abs() > 1e-4,
+            "gradient is constant across the cell ({g1} vs {g2}) — the interpolant \
+             is C0 and terrain will shade as flat per-cell facets"
+        );
     }
 
     #[test]

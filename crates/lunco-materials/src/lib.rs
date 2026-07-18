@@ -39,4 +39,4 @@ pub use catalog::{
 pub use dyn_params::{ParamField, ParamSchema, ParamType, ParamValue, UiKind};
 pub use look::{ShaderLook, ShaderLookKey, TextureLayer};
 pub use naming::to_snake_case;
-pub use vertex::ATTRIBUTE_MORPH_TARGET;
+pub use vertex::{ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET};

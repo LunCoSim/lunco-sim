@@ -50,7 +50,7 @@ use lunco_render::{PbrLook, PbrLookKey, SurfaceAlpha};
 ///
 /// The look binders cache by *content*, so identical looks share one material and
 /// one bind group. That sharing is not an optimisation afterthought: the rock
-/// scatter and the terrain LOD band/reveal lattice depend on it for batching.
+/// scatter and the terrain LOD band lattice depend on it for batching.
 ///
 /// It also hosts the render-only code that has **no intent form** and therefore had
 /// to move here bodily rather than be expressed as a component:

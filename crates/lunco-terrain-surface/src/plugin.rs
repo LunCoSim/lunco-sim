@@ -54,7 +54,6 @@ impl Plugin for TerrainSurfacePlugin {
             Update,
             (
                 crate::stream_viz::update_lod_tiles,
-                crate::stream_viz::animate_tile_reveal,
                 // Late-bind: derived maps / shadow cache finish baking seconds
                 // after the first tiles exist — restate the resident tiles' looks
                 // (no tile churn, no re-bake).

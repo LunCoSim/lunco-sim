@@ -35,7 +35,7 @@ use crate::tile_mesh::{bake_tile_mesh, TileMesh};
 /// a tile's mesh is LOCAL to its own big_space `CellCoord` in Y as well as X/Z
 /// (DEM scenes anchored at absolute lunar elevation put geometry ~2 km from the
 /// tile origin — one cell off the content — breaking LOD/culling/colliders).
-const CACHE_FORMAT_VERSION: u64 = 5;
+const CACHE_FORMAT_VERSION: u64 = 6;
 
 /// One tile bake as a [`lunco_precompute::Bake`] entry.
 struct TileBake<'a> {
@@ -118,7 +118,7 @@ pub fn bake_tile_mesh_cached(
 
 fn tile_mesh_to_bytes(m: &TileMesh) -> Vec<u8> {
     let verts = m.positions.len();
-    let mut out = Vec::with_capacity(16 + verts * (3 + 3 + 3 + 2) * 4 + m.indices.len() * 4);
+    let mut out = Vec::with_capacity(16 + verts * (3 + 3 + 3 + 3 + 2) * 4 + m.indices.len() * 4);
     out.extend_from_slice(&(verts as u64).to_le_bytes());
     out.extend_from_slice(&(m.indices.len() as u64).to_le_bytes());
     let push3 = |v: &[[f32; 3]], out: &mut Vec<u8>| {
@@ -130,6 +130,7 @@ fn tile_mesh_to_bytes(m: &TileMesh) -> Vec<u8> {
     };
     push3(&m.positions, &mut out);
     push3(&m.morph_targets, &mut out);
+    push3(&m.morph_normals, &mut out);
     push3(&m.normals, &mut out);
     for p in &m.uvs {
         for c in p {
@@ -152,7 +153,7 @@ fn tile_mesh_from_bytes(b: &[u8]) -> Option<TileMesh> {
     let verts = u64::from_le_bytes(take(&mut off, 8)?.try_into().ok()?) as usize;
     let idx_count = u64::from_le_bytes(take(&mut off, 8)?.try_into().ok()?) as usize;
     // Sanity: total size must match exactly (corrupt / truncated → rebake).
-    let expect = 16 + verts * (3 + 3 + 3 + 2) * 4 + idx_count * 4;
+    let expect = 16 + verts * (3 + 3 + 3 + 3 + 2) * 4 + idx_count * 4;
     if b.len() != expect {
         return None;
     }
@@ -170,6 +171,7 @@ fn tile_mesh_from_bytes(b: &[u8]) -> Option<TileMesh> {
     };
     let positions = read3(&mut off)?;
     let morph_targets = read3(&mut off)?;
+    let morph_normals = read3(&mut off)?;
     let normals = read3(&mut off)?;
     let mut uvs = Vec::with_capacity(verts);
     for _ in 0..verts {
@@ -183,7 +185,7 @@ fn tile_mesh_from_bytes(b: &[u8]) -> Option<TileMesh> {
     for _ in 0..idx_count {
         indices.push(u32::from_le_bytes(take(&mut off, 4)?.try_into().ok()?));
     }
-    Some(TileMesh { positions, morph_targets, normals, uvs, indices })
+    Some(TileMesh { positions, morph_targets, morph_normals, normals, uvs, indices })
 }
 
 #[cfg(test)]
@@ -195,6 +197,9 @@ mod tests {
         let m = TileMesh {
             positions: vec![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
             morph_targets: vec![[1.5, 2.0, 3.0], [4.0, 5.5, 6.0]],
+            // Deliberately distinct from `normals` so a serializer that dropped or
+            // aliased this array fails the roundtrip instead of passing by luck.
+            morph_normals: vec![[0.0, 0.6, 0.8], [1.0, 0.0, 0.0]],
             normals: vec![[0.0, 1.0, 0.0], [0.0, 0.8, 0.6]],
             uvs: vec![[0.0, 0.0], [1.0, 1.0]],
             indices: vec![0, 1, 0],

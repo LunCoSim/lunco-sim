@@ -41,7 +41,6 @@
 //!@engine  csm_far
 //!@default morph_start  1.0e20
 //!@default morph_end    1.0e21
-//!@default reveal       1.0
 //!@default overlay_mode      0
 //!@default overlay_opacity   0
 //!@default overlay_safe_rad  0
@@ -63,7 +62,6 @@ struct Material {
     csm_far:           f32,  // engine-filled: CSM far bound (m); cache fades in beyond ~half
     morph_start:       f32,  // distance where geomorph toward the parent begins
     morph_end:         f32,  // distance where the parent fully takes over
-    reveal:            f32,  // 1 = own geometry; <1 = settling in from the parent lattice
     overlay_mode:      f32,  // analysis overlay: 0 = off, 1 = slope hazard
     overlay_opacity:   f32,  // blend weight of the overlay colour over the lit surface
     overlay_safe_rad:  f32,  // slope (rad) at/below which ground is green (safe)
@@ -185,6 +183,7 @@ struct GeoVertex {
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
     @location(8) morph_target: vec3<f32>,
+    @location(9) morph_normal: vec3<f32>,
 };
 
 @vertex
@@ -200,10 +199,15 @@ fn vertex(vertex: GeoVertex) -> VertexOutput {
     }
     let m = max(morph, 1.0 - mat.reveal);
     let local_pos = mix(vertex.position, vertex.morph_target, m);
+    // Shade the surface we actually DRAW: the position lerps toward the parent
+    // lattice, so the normal must lerp with it. Leaving the fine normal here made
+    // a fully-morphed tile shade with detail its geometry no longer has — up to ~22 deg of error,
+    // flipping N.L negative on some quads, i.e. new LOD tiles appearing BLACK.
+    let local_normal = normalize(mix(vertex.normal, vertex.morph_normal, m));
 
     out.world_position = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(local_pos, 1.0));
     out.position = position_world_to_clip(out.world_position.xyz);
-    out.world_normal = mesh_functions::mesh_normal_local_to_world(vertex.normal, vertex.instance_index);
+    out.world_normal = mesh_functions::mesh_normal_local_to_world(local_normal, vertex.instance_index);
 #ifdef VERTEX_UVS_A
     out.uv = vertex.uv;
 #endif
