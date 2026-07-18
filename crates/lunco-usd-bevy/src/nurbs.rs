@@ -144,6 +144,41 @@ pub fn sample_nurbs_patch(
     u_steps: usize,
     v_steps: usize,
 ) -> Vec<PatchSample> {
+    let uvs: Vec<[f64; 2]> = {
+        let (us, vs) = (u_steps.max(1), v_steps.max(1));
+        let mut g = Vec::with_capacity((us + 1) * (vs + 1));
+        for iv in 0..=vs {
+            for iu in 0..=us {
+                g.push([iu as f64 / us as f64, iv as f64 / vs as f64]);
+            }
+        }
+        g
+    };
+    sample_nurbs_patch_at(
+        points, weights, u_count, v_count, u_order, v_order, u_knots, v_knots, &uvs,
+    )
+}
+
+/// Sample a patch at arbitrary **normalised** `(u, v)` in `[0, 1]²`.
+///
+/// The grid sampler above is this with a regular lattice. Trimming needs the
+/// general form: a trimmed domain is an irregular triangulation, not a lattice,
+/// so its vertices land wherever the trim boundary puts them.
+///
+/// Normalised rather than raw knot-space so callers never have to know how the
+/// patch was knotted — `trim.rs` works in `[0, 1]²` throughout.
+#[allow(clippy::too_many_arguments)]
+pub fn sample_nurbs_patch_at(
+    points: &[[f32; 3]],
+    weights: &[f64],
+    u_count: usize,
+    v_count: usize,
+    u_order: usize,
+    v_order: usize,
+    u_knots: &[f64],
+    v_knots: &[f64],
+    uvs: &[[f64; 2]],
+) -> Vec<PatchSample> {
     if u_order < 2 || v_order < 2 || u_count < u_order || v_count < v_order {
         return Vec::new();
     }
@@ -195,14 +230,11 @@ pub fn sample_nurbs_patch(
         return Vec::new();
     }
 
-    let (us, vs) = (u_steps.max(1), v_steps.max(1));
-    let mut out = Vec::with_capacity((us + 1) * (vs + 1));
-    for iv in 0..=vs {
-        let tv = iv as f64 / vs as f64;
-        let v = v0 + (v1 - v0) * tv;
-        for iu in 0..=us {
-            let tu = iu as f64 / us as f64;
-            let u = u0 + (u1 - u0) * tu;
+    let mut out = Vec::with_capacity(uvs.len());
+    {
+        for &[tu, tv] in uvs {
+            let u = u0 + (u1 - u0) * tu.clamp(0.0, 1.0);
+            let v = v0 + (v1 - v0) * tv.clamp(0.0, 1.0);
             let p = surface.subs(u, v);
             let n = surface.normal(u, v);
             if !p.x.is_finite() || !p.y.is_finite() || !p.z.is_finite() {

@@ -64,6 +64,7 @@ pub mod camera_path;
 pub mod canonical;
 pub mod curve_sweep;
 pub mod nurbs;
+pub mod trim;
 pub mod mount;
 pub mod read;
 pub mod units;
@@ -3538,22 +3539,92 @@ fn build_usd_nurbs_patch_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<
         .unwrap_or_else(|| crate::nurbs::default_clamped_knots(v_count, v_order));
     let weights = reader.scalar::<Vec<f64>>(path, "pointWeights").unwrap_or_default();
 
-    // Trim curves are NOT applied — the domain is tessellated whole. Warn rather
-    // than drop it silently: a trimmed patch rendered untrimmed is LARGER than
-    // authored (never smaller), so it reads as a modelling mistake rather than a
-    // reader limitation, and silence is how that misdiagnosis happens.
+    // ── Trim curves ─────────────────────────────────────────────────────────
+    // `trimCurve:*` IS applied — see `crate::trim`. A trimmed patch gets an
+    // irregular triangulation of its surviving domain instead of a lattice.
     //
-    // Note the data is perfectly readable — `scalar()` is a name lookup, not
-    // schema-gated, so `trimCurve:*` reads today. What is missing is the
-    // TESSELLATION: evaluating the loops (truck already does 2D rational curves)
-    // and triangulating the trimmed domain with `spade` (vendored). Deferred
-    // deliberately: nothing authors a trim yet, and USD's own reference does not
-    // state the keep/discard winding rule — guessing it inverts every hole.
-    // See `models/habitat/OPENUSD_TRIMCURVE_SPEC.md`.
-    if reader.attr_value(path, "trimCurve:counts").is_some() {
-        bevy::log::warn_once!(
-            "[usd-bevy] {} authors `trimCurve:*`, which is not applied — the patch \
-             renders UNTRIMMED (larger than authored). See OPENUSD_TRIMCURVE_SPEC.md",
+    // Two things that used to block this are handled there rather than guessed:
+    // USD never states the keep/discard winding rule, so classification is
+    // even-odd with the domain rectangle as an implicit outer loop
+    // (orientation-independent); and `spade` panics when constraints cross, so
+    // loops are inserted with `add_constraint_and_split` rather than gated with
+    // `can_add_constraint` — gating would silently drop part of a loop and leave
+    // the hole with a missing side.
+    let trim_loops = read_int_array(reader, path, "trimCurve:counts")
+        .filter(|c| !c.is_empty())
+        .and_then(|counts| {
+            let orders = read_int_array(reader, path, "trimCurve:orders")?;
+            let vertex_counts = read_int_array(reader, path, "trimCurve:vertexCounts")?;
+            let tknots = reader.scalar::<Vec<f64>>(path, "trimCurve:knots")?;
+            let tpoints = reader.scalar::<Vec<[f32; 3]>>(path, "trimCurve:points")?;
+            // `ranges` is optional: fall back to each curve's full knot span.
+            let ranges = read_double2_array(reader, path, "trimCurve:ranges").unwrap_or_default();
+
+            // Trim curves live in the patch's PARAMETER space, so they are not
+            // touched by `ConventionTransform` — a Z-up or centimetre stage
+            // changes where the surface is in the world, never what its (u, v)
+            // domain means. Converting them would be a subtle, hard-to-see bug.
+            let u_span = [u_knots[u_order - 1], u_knots[u_count]];
+            let v_span = [v_knots[v_order - 1], v_knots[v_count]];
+            let loops = crate::trim::assemble_loops(
+                &counts,
+                &orders,
+                &vertex_counts,
+                &tknots,
+                &ranges,
+                &tpoints,
+                u_span,
+                v_span,
+                24,
+            );
+            if loops.is_empty() {
+                bevy::log::warn!(
+                    "[usd-bevy] {} authors `trimCurve:*` but no usable loop was \
+                     assembled — rendering UNTRIMMED (larger than authored)",
+                    path.as_str()
+                );
+                None
+            } else {
+                Some(loops)
+            }
+        });
+
+    if let Some(loops) = trim_loops {
+        let grid = (u_count.max(v_count) * 6).clamp(12, 96);
+        if let Some(domain) = crate::trim::triangulate_trimmed(&loops, grid) {
+            let samples = crate::nurbs::sample_nurbs_patch_at(
+                &points,
+                &weights,
+                u_count,
+                v_count,
+                u_order,
+                v_order,
+                &u_knots,
+                &v_knots,
+                &domain.uvs,
+            );
+            if !samples.is_empty() {
+                let mut positions = Vec::with_capacity(samples.len());
+                let mut normals = Vec::with_capacity(samples.len());
+                let mut uvs = Vec::with_capacity(samples.len());
+                for s in &samples {
+                    positions.push(s.position);
+                    normals.push(s.normal);
+                    uvs.push(s.uv);
+                }
+                let mut mesh = Mesh::new(
+                    PrimitiveTopology::TriangleList,
+                    RenderAssetUsages::default(),
+                );
+                mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+                mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+                mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+                mesh.insert_indices(bevy_mesh::Indices::U32(domain.indices));
+                return Some(mesh);
+            }
+        }
+        bevy::log::warn!(
+            "[usd-bevy] {} trim produced no geometry — falling back to UNTRIMMED",
             path.as_str()
         );
     }
@@ -3610,6 +3681,22 @@ fn read_int_array<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<
     match reader.attr_value(path, attr)? {
         Value::IntVec(v) => Some(v),
         Value::Int64Vec(v) => Some(v.iter().map(|&x| x as i32).collect()),
+        _ => None,
+    }
+}
+
+/// Reads a `double2[]` / `float2[]` array as `Vec<[f64; 2]>`.
+///
+/// Same gap as [`read_int_array`]: the fixed-array `TryFrom<Value>` impls do not
+/// cover 2-component arrays, so `trimCurve:ranges` has to be matched directly.
+fn read_double2_array<R: UsdRead>(
+    reader: &R,
+    path: &SdfPath,
+    attr: &str,
+) -> Option<Vec<[f64; 2]>> {
+    match reader.attr_value(path, attr)? {
+        Value::Vec2dVec(v) => Some(v.iter().map(|p| [p[0], p[1]]).collect()),
+        Value::Vec2fVec(v) => Some(v.iter().map(|p| [p[0] as f64, p[1] as f64]).collect()),
         _ => None,
     }
 }

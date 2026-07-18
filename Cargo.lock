@@ -7792,6 +7792,7 @@ dependencies = [
  "lunco-render",
  "lunco-time",
  "openusd",
+ "spade",
  "tempfile",
  "truck-geometry",
  "wgpu-types",
