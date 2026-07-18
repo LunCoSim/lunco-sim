@@ -83,7 +83,7 @@ pub(crate) fn get_attribute_as_f32<R: UsdRead>(reader: &R, path: &SdfPath, attr:
 /// Read a UsdLux light's authored intensity scaled by its exposure stops:
 /// `inputs:intensity` × 2^`inputs:exposure`. Used wherever a UsdLux light is
 /// turned into a Bevy light — the *unit* of the result depends on the target
-/// component (lux for `DirectionalLight`, candela for `Point`/`SpotLight`),
+/// component (lux for `DirectionalLight`, lumens for `Point`/`Spot`/`RectLight`),
 /// but the photometric conversion is identical, so it lives here once.
 pub(crate) fn read_intensity_with_exposure<R: UsdRead>(
     reader: &R,
@@ -96,7 +96,11 @@ pub(crate) fn read_intensity_with_exposure<R: UsdRead>(
 }
 
 /// Bool attribute reader (also accepts `int` 0/1 authoring).
-pub(crate) fn get_attribute_as_bool<R: UsdRead>(
+///
+/// Public because the shader-look authoring in `lunco-usd-sim` reads
+/// `primvars:doNotCastShadows` through the same rules the `PbrLook` path uses —
+/// two spellings of one primvar would be a drift bug waiting to happen.
+pub fn get_attribute_as_bool<R: UsdRead>(
     reader: &R,
     path: &SdfPath,
     attr: &str,
@@ -233,9 +237,24 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
             true
         }
         Some("SphereLight") => {
-            // Bevy interprets `Point`/`SpotLight::intensity` as luminous
-            // intensity in candela (lm/sr), not total lumens.
-            let intensity_cd = read_intensity_with_exposure(reader, sdf_path, 1000.0);
+            // UNITS — this was documented backwards, and the error is a factor of
+            // 4π (≈12.6x) that presents as "the light is authored but does nothing".
+            //
+            // Bevy's `PointLight::intensity` is luminous POWER in **lumens**, not
+            // luminous intensity in candela. For an isotropic emitter the two are
+            // related by `I = Φ / 4π`, so the illuminance a Bevy point light puts on
+            // a surface at distance d is
+            //
+            //     E = Φ / (4π d²)      NOT      E = I / d²
+            //
+            // i.e. authoring the candela figure gives a light 12.6x too DIM. A
+            // 1000 lm value here is roughly a 75 W-equivalent domestic bulb at ~1 m
+            // — a plausible default for a rover work lamp, and it is a lumens-scale
+            // number precisely because Bevy wants lumens.
+            //
+            // (`DirectionalLight::illuminance` really is lux, and `RectLight` really
+            // is lumens — see below. The three are not interchangeable.)
+            let intensity_lm = read_intensity_with_exposure(reader, sdf_path, 1000.0);
             let color = crate::get_attribute_as_vec3(reader, sdf_path, "inputs:color")
                 .map(|c| Color::linear_rgb(c.x, c.y, c.z))
                 .unwrap_or(Color::WHITE);
@@ -267,7 +286,7 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
                 // spawns — see the marker docs.
                 commands.entity(entity).try_insert(SpotLight {
                     color,
-                    intensity: intensity_cd,
+                    intensity: intensity_lm,
                     range,
                     shadow_maps_enabled,
                     inner_angle,
@@ -275,9 +294,9 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
                     ..default()
                 });
                 info!(
-                    "[usd-bevy] {} SphereLight (SpotLight) intensity={} cd, range={} m, cone={} deg",
+                    "[usd-bevy] {} SphereLight (SpotLight) intensity={} lm, range={} m, cone={} deg",
                     sdf_path.as_str(),
-                    intensity_cd,
+                    intensity_lm,
                     range,
                     cone_angle_deg
                 );
@@ -286,15 +305,15 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
                 // — local light, must not retire the fallback sun (see above).
                 commands.entity(entity).try_insert(PointLight {
                     color,
-                    intensity: intensity_cd,
+                    intensity: intensity_lm,
                     range,
                     shadow_maps_enabled,
                     ..default()
                 });
                 info!(
-                    "[usd-bevy] {} SphereLight (PointLight) intensity={} cd, range={} m",
+                    "[usd-bevy] {} SphereLight (PointLight) intensity={} lm, range={} m",
                     sdf_path.as_str(),
-                    intensity_cd,
+                    intensity_lm,
                     range
                 );
             }
@@ -307,12 +326,12 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
             // shared transform path in `instantiate_usd_prim` already places it,
             // the same deal `DistantLight` gets.
             //
-            // INTENSITY UNITS DIFFER from the SphereLight arm above. Bevy's
-            // `PointLight`/`SpotLight::intensity` is luminous intensity in
-            // candela; `RectLight::intensity` is luminous POWER in lumens. UsdLux
-            // `inputs:intensity` is a dimensionless scale either way, so it is
-            // taken as lumens here and the default is a lumens-scale number — not
-            // the 1000.0 candela the sphere path uses.
+            // Luminous POWER in lumens, the same unit `PointLight`/`SpotLight`
+            // take (see the SphereLight arm above — that comment used to claim
+            // candela, and it was wrong). UsdLux `inputs:intensity` is a
+            // dimensionless scale, so it is read as lumens here; the larger
+            // default simply reflects that an area light stands in for a panel
+            // rather than a bulb.
             let intensity_lm = read_intensity_with_exposure(reader, sdf_path, 10_000.0);
             let color = crate::get_attribute_as_vec3(reader, sdf_path, "inputs:color")
                 .map(|c| Color::linear_rgb(c.x, c.y, c.z))

@@ -73,6 +73,21 @@ def Xform "DescentLander" (
             }
         }
 
+        # PLUME CHEMISTRY — LOX/RP-1 (kerosene). The two emissives below say so:
+        # a yellow-white core, `FlameCore_Mat` (6.0, 3.5, 0.9), inside an orange
+        # shroud, `Flame_Mat` (3.0, 1.0, 0.12). That is the signature of a SOOTY,
+        # carbon-rich hydrocarbon flame — incandescent carbon particulate
+        # radiating as a roughly 2300 K grey body. Hypergolics (Aerozine-50/N2O4,
+        # as on the Apollo LM) and LOX/LH2 both burn far cleaner and nearly
+        # invisibly, and would want a pale blue at a small fraction of this
+        # radiance.
+        #
+        # These values are load-bearing beyond the shader: `scenarios/flame.rhai`
+        # READS `FlameCore_Mat`'s `inputs:emissiveColor` back through the standard
+        # UsdShade chain and derives the plume light's colour and brightness from
+        # it, so this is the one place the plume's radiance is stated. Switch the
+        # engine to hydrogen here and the light that falls on the regolith changes
+        # with it — there is no second constant to remember.
         def Material "Flame_Mat"
         {
             token outputs:surface.connect = </DescentLander/Looks/Flame_Mat/Surface.outputs:surface>
@@ -396,85 +411,54 @@ def Xform "DescentLander" (
             custom float lunco:param:wmax = 0.5
             custom float lunco:param:lmax = 2.5
             custom float lunco:param:flick = 0.5
-        }
-    }
-
-    # The plume as a LIGHT SOURCE.
-    #
-    # The two cones above are emissive geometry, and emissive materials in a
-    # forward renderer illuminate nothing. During a descent burn that left the
-    # regolith directly beneath the vehicle — and the vehicle's own underside —
-    # lit only by the sun, so a 60 kN engine firing metres above the ground made
-    # no difference to the ground. On an airless body, with hard shadows and no
-    # atmospheric scatter to hide the error, that is the most obviously wrong
-    # thing in frame.
-    #
-    # `SphereLight` (deliberately WITHOUT `UsdLuxShapingAPI` — authoring cone
-    # attrs would make it a SpotLight instead) loads as a Bevy `PointLight`,
-    # whose intensity is LUMINOUS POWER IN LUMENS — not candela. Bevy 0.19 spells
-    # this out on the field itself ("Luminous power in lumens, representing the
-    # amount of light emitted by this source in all directions",
-    # `bevy_light-0.19.0/src/point_light.rs`). The distinction is a factor of 4*pi
-    # and it is easy to get backwards, because USD's own `inputs:intensity` on a
-    # UsdLux light is NOT lumens — the loader reinterprets it. Its child program drives
-    # intensity and radius from the same `throttle` port that scales the cones,
-    # so the light and the flame cannot disagree; at zero throttle it contributes
-    # exactly nothing.
-    #
-    # COLOUR — LOX/RP-1 (kerosene), chosen to stay consistent with what the cones
-    # already imply: `FlameCore_Mat` is emissive (6.0, 3.5, 0.9) inside
-    # `Flame_Mat`'s (3.0, 1.0, 0.12) — a yellow-white core in an orange shroud,
-    # which is the signature of a SOOTY, carbon-rich hydrocarbon flame
-    # (incandescent carbon particulate radiating as a roughly 2300 K grey body).
-    # Hypergolics (Aerozine-50/N2O4, as on the Apollo LM) and LOX/LH2 both burn
-    # far cleaner and nearly invisibly, and would want a pale blue at a small
-    # fraction of this intensity. The value below follows the core's ratio rather
-    # than the outer shroud's, which would tint the regolith orange much more
-    # strongly than a real plume does.
-    #
-    # INTENSITY — 680000 lm at full throttle. For an isotropic point source the
-    # illuminance is E = phi / (4*pi*d^2), NOT phi/d^2: the flux spreads over the
-    # whole sphere. So regolith ~3 m below the nozzle sees
-    #   680000 / (4*pi*9) ~= 6000 lux
-    # against this scene's 12000 lux sun (`lander_test.usda`'s DistantLight) — a
-    # clearly visible pool that reads as a second light source without flattening
-    # the scene. It falls off fast: ~540 lux at 10 m, ~90 lux at the 25 m
-    # `lunco:light:range` cap, i.e. under 1% of the sun, so it cannot quietly
-    # become scene fill.
-    #
-    # This value was 55000 with the arithmetic done as phi/d^2, which is the
-    # candela formula. Under the correct 4*pi law that is ~490 lux at 3 m — 4% of
-    # the sun, and invisible next to a DomeLight ambient of the same 12000 — so
-    # the light was authored but did nothing you could see. The corrected figure
-    # also lands in the same order as this project's other "must read in daylight"
-    # lights (the rovers' 1000000 lm headlights), which is the sanity check that
-    # the units are now right.
-    #
-    # Shadows are left OFF (the loader's default for local lights): a
-    # shadow-casting point light re-renders the scene into a cubemap every frame,
-    # and this one sits below the vehicle pointing at open ground with nothing
-    # meaningful to occlude.
-    def SphereLight "PlumeLight"
-    {
-        # Authored intensity is 0: the engine is off until the program says
-        # otherwise, so a scene that loads paused never flashes a plume.
-        float inputs:intensity = 0
-        float inputs:radius = 0.06
-        color3f inputs:color = (1.0, 0.62, 0.26)
-        float lunco:light:range = 25.0
-
-        # At the nozzle exit, inside the plume. The cones extend downward from
-        # about y = -2.7, so this sits just below that and throws its pool under
-        # the vehicle rather than inside its own body.
-        double3 xformOp:translate = (0, -3.0, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-
-        def LunCoProgram "PlumeLight"
-        {
-            uniform asset lunco:program:sourceAsset = @lunco://scenarios/flame_light.rhai@
-            custom float lunco:param:imax = 680000
+            # The light half of the same program. `exitance` is lm/m^2 per unit
+            # emissive radiance — the ONE authored photometric constant; the
+            # colour and the brightness scale are both READ from this cone's
+            # bound `FlameCore_Mat` emissive, so retinting the flame retints and
+            # rebalances its light automatically. `lightflick` is the light's
+            # flicker depth (shallower than the mesh's, and one tick behind it).
+            custom float lunco:param:exitance = 44200
             custom float lunco:param:rmax = 0.6
-            custom float lunco:param:flick = 0.35
+            custom float lunco:param:lightflick = 0.35
+        }
+
+        # The plume as a LIGHT SOURCE — a CHILD of the cone it is the light of.
+        #
+        # Emissive geometry in a forward renderer illuminates nothing. During a
+        # descent burn that left the regolith directly beneath the vehicle — and
+        # the vehicle's own underside — lit only by the sun, so a 60 kN engine
+        # firing metres above the ground made no difference to the ground. On an
+        # airless body, with hard shadows and no atmospheric scatter to hide the
+        # error, that is the most obviously wrong thing in frame.
+        #
+        # WHY IT LIVES HERE, INSIDE THE CONE, WITH NO PROGRAM OF ITS OWN
+        # It used to be a sibling with its own script and its own copy of the
+        # throttle walk, flicker state and brightness constant. Parenting it to
+        # the cone makes "plume visible <=> light on" structural instead of an
+        # invariant two files maintain: it is destroyed with the cone, hidden with
+        # the cone (Bevy inherited visibility), and — authored at the cone's LOCAL
+        # ORIGIN — it rides the plume centroid the program already positions each
+        # tick, while being immune to the parent's animated non-uniform scale and
+        # 180-degree flip. A child at the origin has no transform to keep in sync.
+        #
+        # `SphereLight` (deliberately WITHOUT `UsdLuxShapingAPI` — authoring cone
+        # attrs would make it a SpotLight instead) loads as a Bevy `PointLight`.
+        #
+        # Intensity and colour are NOT authored here: the program derives both
+        # from this cone's bound `UsdPreviewSurface` emissive, read through the
+        # standard `material:binding` -> `Material` -> `outputs:surface.connect`
+        # -> `Shader` -> `inputs:emissiveColor` chain. Authored 0 so a scene that
+        # loads paused never flashes a plume before the first tick.
+        #
+        # Shadows are left OFF (the loader's default for local lights): a
+        # shadow-casting point light re-renders the scene into a cubemap every
+        # frame, and this one sits inside the plume pointing at open ground with
+        # nothing meaningful to occlude.
+        def SphereLight "PlumeLight"
+        {
+            float inputs:intensity = 0
+            float inputs:radius = 0.06
+            float lunco:light:range = 25.0
         }
     }
 

@@ -74,7 +74,7 @@ pub use canonical::{CanonicalStage, CanonicalStages, RawStageChange, StageRecipe
 pub use read::{AttrUiHint, UsdRead};
 #[cfg(not(target_arch = "wasm32"))]
 pub use compose::compose_file_to_stage;
-pub use light::{FallbackSceneLight, UsdAuthoredLight};
+pub use light::{get_attribute_as_bool, FallbackSceneLight, UsdAuthoredLight};
 
 /// Bevy plugin for USD visual synchronization.
 ///

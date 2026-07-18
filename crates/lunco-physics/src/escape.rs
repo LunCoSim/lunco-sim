@@ -252,11 +252,24 @@ impl Plugin for EscapeDiagnosticPlugin {
             // body that left the world is reported on the tick it left rather
             // than one tick later. Bounds are refreshed first so newly-paged
             // terrain widens the world before anything is judged against it.
+            //
+            // `PhysicsStepSystems::Last`/`PhysicsSystems::Last` are the load-bearing
+            // part, not decoration. `PhysicsSchedule` runs with
+            // `ambiguity_detection: LogLevel::Error`, and the `PhysicsSystems` chain
+            // is configured on `FixedPostUpdate` — NOT inside `PhysicsSchedule` — so
+            // `in_set(Writeback)` alone leaves these systems unordered against every
+            // solver system here and bevy PANICS at schedule init ("8 pairs of
+            // systems with conflicting data access", on `Position`, `LinearVelocity`
+            // and `ColliderAabb`). Pinning against `PhysicsStepSystems` is what
+            // actually places them after the solver; the bridge's own writeback pass
+            // resolves the identical problem the identical way.
             .add_systems(
                 avian3d::schedule::PhysicsSchedule,
                 (update_world_bounds, report_escaped_bodies)
                     .chain()
-                    .in_set(PhysicsSystems::Writeback),
+                    .in_set(PhysicsSystems::Writeback)
+                    .after(avian3d::schedule::PhysicsStepSystems::Last)
+                    .before(PhysicsSystems::Last),
             );
     }
 }
@@ -302,6 +315,69 @@ mod tests {
             max: Vector::new(600.0, Scalar::INFINITY, 600.0),
         };
         assert!(!b.escaped(Vector::new(0.0, 1.0e9, 0.0)));
+    }
+
+    /// End-to-end wiring: a static ground collider must actually produce bounds,
+    /// and a dynamic body dropped far below it must actually be reported.
+    ///
+    /// Without this the live-scene result ("no escape logged") would be vacuous —
+    /// it would look identical to a diagnostic that never computed any bounds at
+    /// all and therefore had no opinion about anything.
+    #[test]
+    fn static_ground_produces_bounds_and_a_body_below_it_is_reported() {
+        use bevy::time::TimeUpdateStrategy;
+        use core::time::Duration;
+
+        let mut app = App::new();
+        // AssetPlugin + Mesh: avian's collider cache reads `AssetEvent<Mesh>`
+        // messages and panics on the first step if they were never initialised.
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin::default(),
+            TransformPlugin,
+            PhysicsPlugins::default(),
+            EscapeDiagnosticPlugin,
+        ));
+        app.init_asset::<Mesh>();
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_micros(
+            15625,
+        )));
+        app.finish();
+        app.cleanup();
+
+        // A 1 km square of static ground at the origin.
+        app.world_mut().spawn((
+            RigidBody::Static,
+            Collider::cuboid(1000.0, 1.0, 1000.0),
+            Transform::default(),
+        ));
+        // A dynamic body far beneath it — the shape of the measured failure.
+        app.world_mut().spawn((
+            RigidBody::Dynamic,
+            Collider::sphere(0.5),
+            Name::new("Escapee"),
+            Transform::from_xyz(0.0, -1510.0, 0.0),
+        ));
+
+        for _ in 0..8 {
+            app.update();
+        }
+
+        let bounds = *app.world().resource::<WorldBounds>();
+        assert!(
+            matches!(bounds, WorldBounds::Some { .. }),
+            "static ground must define the world, got {bounds:?} — if this is `None` \
+             the diagnostic is inert and reports nothing, which is indistinguishable \
+             from a healthy scene"
+        );
+        assert!(
+            bounds.escaped(Vector::new(0.0, -1510.0, 0.0)),
+            "a body 1.5 km below a 1 km ground plane must read as escaped: {bounds:?}"
+        );
+        assert!(
+            app.world().resource::<ReportedEscapes>().0.len() == 1,
+            "exactly one body should have been reported"
+        );
     }
 
     /// Once per entity, never per frame — the anti-spam contract.

@@ -35,6 +35,7 @@
 
 use avian3d::physics_transform::{Position, PhysicsTransformSystems};
 use avian3d::prelude::*;
+use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use big_space::prelude::{BigSpace, CellCoord, FloatingOrigin, Grid};
@@ -154,9 +155,13 @@ fn spawn_scene(app: &mut App) {
 fn joint_slot_reads_the_authored_pose_not_the_required_component_default() {
     let mut app = make_app();
     spawn_scene(&mut app);
-    // One frame is enough: the body exists, and both probes latch the FIRST
-    // Position they ever see for it.
-    app.update();
+    // A few frames, because `Time<Fixed>` has to accumulate before `FixedPostUpdate`
+    // (and with it the whole `PhysicsSchedule`) runs at all. Both probes latch the
+    // FIRST `Position` they ever see, so extra frames cannot mask an early zero —
+    // they only give each slot a chance to observe the body once.
+    for _ in 0..4 {
+        app.update();
+    }
 
     let new_slot = app
         .world()

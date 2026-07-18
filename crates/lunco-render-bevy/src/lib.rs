@@ -74,6 +74,27 @@ pub struct LuncoRenderPlugin;
 impl Plugin for LuncoRenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PbrLookCache>()
+            // `PbrLook` derives `Reflect` but was never REGISTERED, which left it
+            // invisible to every generic reflection surface in the codebase:
+            // `get(id, "PbrLook.emissive.red")` from any scripting language, the
+            // HTTP API's component reads and the MCP bridge all resolve a
+            // component by short type path through `AppTypeRegistry`, and an
+            // unregistered type is simply not there.
+            //
+            // That gap mattered the moment anything wanted to ASK what a surface
+            // looks like rather than assert it. `PbrLook` is already the resolved
+            // answer to exactly that question: the USD loader fills it by walking
+            // the standard UsdShade chain — `material:binding` → `Material` →
+            // `outputs:surface.connect` → `Shader` → `inputs:*`
+            // (`lunco_usd_bevy::resolve_bound_shader`) — so the component holds the
+            // scene's authored `UsdPreviewSurface` intent in typed, render-free
+            // form. Registering it is what turns that from an internal detail into
+            // a UNIVERSAL read surface: one line, no new verb, no per-language
+            // shim. The engine plume light reads its own emissive radiance through
+            // it (`assets/scenarios/flame.rhai`) and derives its output from it,
+            // instead of carrying a hand-tuned brightness constant that no material
+            // change can ever reach.
+            .register_type::<PbrLook>()
             .add_observer(bind_pbr_look)
             .add_systems(
                 Update,
