@@ -808,9 +808,9 @@ fn instantiate_usd_prim_read<R: UsdRead>(
 
         // Placeholder for an async-loading glTF payload. Authors set
         // `bool lunco:placeholder = true` on a Cube prim that lives as
-        // a sibling of an `Xform "Visual" (payload = @lunco-lib://...@)`.
+        // a sibling of an `Xform "Visual" (payload = @lunco://...@)`.
         // Third-party USD tools render it (they don't know our
-        // attribute or the `lunco-lib://` scheme); our pipeline starts
+        // attribute or the `lunco://` scheme); our pipeline starts
         // it `Visibility::Hidden` so the user doesn't see a brief
         // tan-cube flash before the photoreal glTF replaces it. Mesh
         // is still built — visibility is the toggle. (Future: reveal

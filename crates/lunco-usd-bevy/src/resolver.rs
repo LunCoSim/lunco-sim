@@ -2,7 +2,7 @@
 //!
 //! openusd 0.5.0 composes a stage by calling a **synchronous** [`ar::Resolver`]
 //! to resolve + open every `@asset@` arc. `ar::DefaultResolver` uses `std::fs`
-//! unconditionally — wrong on wasm and wrong for our `lunco-lib://` scheme. We
+//! unconditionally — wrong on wasm and wrong for our `lunco://` scheme. We
 //! supply [`LuncoUsdResolver`], a pure in-memory byte-map: the loader pre-fetches
 //! every transitively-referenced `.usda` through Bevy's `AssetServer`
 //! (`LoadContext::read_asset_bytes`, native + wasm) and hands the bytes here. The

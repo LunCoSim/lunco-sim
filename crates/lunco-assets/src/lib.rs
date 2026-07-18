@@ -43,6 +43,11 @@ pub mod asset_sources;
 pub mod discovery;
 pub mod download;
 pub mod font;
+/// `lunco://` asset source — the engine asset *library*. Resolves `assets/`
+/// first, then the download cache, so a logical `lunco://` address covers both
+/// git-tracked content and externally-fetched binaries without any authored
+/// file naming the cache. See `docs/architecture/56-asset-resolution-and-cache.md`.
+pub mod lunco_source;
 pub mod missions;
 pub mod models;
 pub mod msl;
@@ -392,46 +397,12 @@ pub fn assets_dir() -> PathBuf {
 
 /// Cache `models/` directory — where `lunco-assets -- download`
 /// materialises 3D model binaries declared in per-crate `Assets.toml`
-/// (`.glb`, `.gltf`, `.obj`, `.stl`). Served at runtime via the
-/// `lunco-lib://` Bevy `AssetSource` registered in `lunco-sandbox`.
+/// (`.glb`, `.gltf`, `.obj`, `.stl`). Reached at runtime through the
+/// `lunco://` source, which falls back to the cache after `assets/`, so
+/// authored content never names this directory.
 /// Mirrors [`textures_dir`] for textures.
 pub fn models_dir() -> PathBuf {
     cache_subdir("models")
-}
-
-/// Constructs a `lunco-lib://` asset path from a relative path inside
-/// the LunCoSim shipped library.
-///
-/// `lunco-lib://` resolves through a Bevy `AssetSource` bound to the
-/// shared cache root. It's the equivalent of Unreal's `/Engine/`
-/// content namespace or Blender's "Essentials" library — the URI
-/// makes the "this asset ships with LunCoSim" intent explicit at
-/// every call site.
-///
-/// **`.usda` placeholder pattern**: when this URI is used in a USD
-/// `payload`, third-party tools (Blender, usdview, Houdini) cannot
-/// resolve it and fall back to the prim's local definition. Authors
-/// pair it with a `def Cube` of approximate bbox dimensions — that
-/// Cube is the placeholder you'd see in those tools, while our
-/// pipeline overlays the real glTF SceneRoot on top.
-///
-/// **Distinct from `lunco://`** — that scheme is reserved for the
-/// future LunCoSim asset/scene service (multi-user, collaborative,
-/// network-backed — analogous to Omniverse's Nucleus). Keeping the
-/// two separate lets the future protocol design `lunco://` from a
-/// blank slate.
-///
-/// # Example
-///
-/// ```
-/// use lunco_assets::lunco_lib_path;
-/// assert_eq!(
-///     lunco_lib_path("models/perseverance.glb"),
-///     "lunco-lib://models/perseverance.glb"
-/// );
-/// ```
-pub fn lunco_lib_path(relative: &str) -> String {
-    format!("lunco-lib://{relative}")
 }
 
 /// Resolve a built-in engine-library asset reference to a load path that is
@@ -620,15 +591,6 @@ mod tests {
         assert_eq!(cached_texture_path("earth.png"), "cached_textures://earth.png");
         assert_eq!(cached_texture_path("moon.png"), "cached_textures://moon.png");
     }
-
-    #[test]
-    fn lunco_lib_path_format() {
-        assert_eq!(
-            lunco_lib_path("models/perseverance.glb"),
-            "lunco-lib://models/perseverance.glb"
-        );
-    }
-
 
     #[test]
     fn ephemeris_path_format() {

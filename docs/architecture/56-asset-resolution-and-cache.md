@@ -129,9 +129,90 @@ mentions, because most of those are docs and comments about the scheme itself.
 That is the clearest signal that it is a concept carrying its own weight rather
 than the project's.
 
+## Consequence: bodies and their textures belong in USD
+
+The same "identity is not location" argument reaches one layer further up.
+Celestial bodies are currently a **hardcoded Rust registry**:
+
+```rust
+// crates/lunco-celestial/src/registry.rs
+texture_path: Some("textures/earth.png".to_string()),
+// crates/lunco-celestial/src/big_space_setup.rs
+asset_server.load_with_settings("cached_textures://earth.png", seam_wrap);
+```
+
+Which bodies exist, and which map each one wears, is **scene content** — yet it
+lives in Rust, where a Twin cannot change it without a recompile. That conflicts
+with "USD is truth, ECS is a projection", and with celestial being opt-in per
+scene: the scene decides whether there is an Earth, so the scene should also say
+what it looks like.
+
+Authored instead as an ordinary prim with an ordinary asset reference:
+
+```usda
+def Xform "Earth" ( prepend apiSchemas = ["LunCoCelestialBodyAPI"] )
+{
+    asset lunco:body:albedoMap = @lunco://textures/earth.png@
+}
+```
+
+This is not a new mechanism — it is the pattern terrain already uses
+(`demSource = @terrain/apollo15@`), that materials use
+(`lunco:material:shader` as an asset path), and that HDRI uses
+(`UsdLuxDomeLight`). What it buys:
+
+- the texture becomes a **normal USD reference**, resolved by the `lunco://`
+  resolver above — so it inherits cache fallback and web staging for free, with
+  no celestial-specific code path
+- a Twin can ship its own body map by authoring a different asset path
+- third-party USD tools see the material instead of a Rust constant
+- `cached_textures://` stops being needed for these, collapsing another address
+  space (it remains for genuinely derived pipeline outputs)
+
+### Why the default textures still ship
+
+Because scenarios are dynamic. A scenario or Twin that authors an Earth at
+runtime must find `lunco://textures/earth.png` already present — otherwise every
+scene that wants a stock body would need its own download. Shipping the stock
+maps in the engine library (declared `web = true`, resolved through the cache)
+is what makes an authored body work immediately, while leaving a Twin free to
+override with its own asset.
+
+`lunar_color` is the same story in advance: it is declared but unshipped today
+because nothing samples it (the runtime *derives* albedo from relief in
+`derived_layers::albedo_map`). Once a body or terrain layer authors it as an
+asset reference, it becomes a real consumer and flips to `web = true`.
+
+## Open: manifest-driven web staging
+
+`scripts/build_web.sh` hardcodes which assets a web bundle carries — the DejaVu
+font by name, `for tex in earth.png moon.png`, and a `*.glb` glob gated on the
+binary. That list duplicates what the per-crate `Assets.toml` files already
+declare, so a newly declared runtime asset silently 404s in the browser until
+someone edits the script too.
+
+The fix is a manifest-driven staging step, mirroring `build_asset_manifest`
+(which re-uses the runtime's own `scan_library` rather than reimplementing the
+walk in shell). It is blocked on one question: **how does a manifest state "the
+runtime fetches this from the bundle, and at what path"?**
+
+That is not derivable from the fields we have. "Has a `[process]` step" is the
+tempting proxy and is wrong in both directions — the DejaVu font has no process
+step and is required at runtime, while the MSL and ThermofluidStream tarballs
+also have none and must never ship (~200MB; they reach the web through
+`build_msl_assets`). The destination varies too: egui fetches the font outside
+any `AssetSource`, so it lives at `/fonts/…` rather than under `.cache/`.
+
+A `web` field (`true` → `.cache/<rel>`, or an explicit bundle path) was
+prototyped on 2026-07-18 and **backed out** — it worked, and staging was
+verified, but it grows a shared manifest schema and that call belongs to whoever
+owns the format. Alternatives if the schema is unwelcome: process runtime
+artifacts to `output_root = "assets"` (already supported, already staged
+wholesale — costs a gitignore entry for generated files), or derive the set from
+what the asset closure actually references.
+
 ## What does not change
 
-`lunco://`, `twin://`, `cached_textures://`, and `scenario://` keep their roles.
-`cached_textures://` is a *derived* pipeline output (processed textures), not a
-download cache for authored references — the argument here does not apply to it,
-though it deserves the same "is this addressable or derived?" question later.
+`lunco://`, `twin://`, and `scenario://` keep their roles. `cached_textures://`
+remains for *derived* pipeline outputs — but per the section above, the celestial
+maps are not that, and should move to `lunco://` when bodies become USD prims.

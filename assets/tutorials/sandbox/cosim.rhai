@@ -46,7 +46,7 @@ fn steps() {
 fn on_start(me) {
     // One source: the tutorial loads its own environment so the ideas have a
     // live, cosim-flown lander to look at. (Same load as lander_mission.rhai.)
-    load_scene("scenes/sandbox/lander_test.usda");
+    load_scene("lunco://scenes/sandbox/lander_test.usda");
     this.i = 0;
     coach_step(steps(), 0);
     notify_kind("Tutorial: Cosim — Model meets Physics", "info");

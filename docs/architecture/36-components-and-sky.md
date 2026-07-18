@@ -57,7 +57,7 @@ def Xform "CommsSystem" (kind = "component") {          # ── the reusable un
         custom bool   lunco:linkNode             = 1    #     a generic connectivity endpoint
         custom string lunco:link:class           = "hga"
         custom double lunco:link:minElevationDeg = 5.0
-        prepend payload = @lunco-lib://models/hga.glb@  #     heavy mesh → deferred binary payload
+        prepend payload = @lunco://models/hga.glb@  #     heavy mesh → deferred binary payload
         # + collider, mount frame, optional gimbal joint
     }
     def LunCoProgram "Link" {                           # ── Layer 2: RF dynamics (Modelica)

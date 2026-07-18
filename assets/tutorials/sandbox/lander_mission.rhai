@@ -30,7 +30,7 @@
 fn on_start(me) {
     // One source: the tutorial loads its own environment. The scene's embedded
     // scenarios do the flying; the mission() below coaches over their events.
-    load_scene("scenes/sandbox/lander_test.usda");
+    load_scene("lunco://scenes/sandbox/lander_test.usda");
     hint("A powered descent is landing a rover. Watch it touch down — then you'll take control and drive.");
     notify_kind("Tutorial: Lander & Rover Mission", "info");
 }

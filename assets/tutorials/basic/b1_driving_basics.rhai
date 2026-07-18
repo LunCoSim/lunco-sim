@@ -7,7 +7,7 @@
 //! timer (see first_drive.rhai for the pattern this follows).
 
 fn on_start(me) {
-    load_scene("tutorials/basic/driving_basics.usda");
+    load_scene("lunco://tutorials/basic/driving_basics.usda");
     notify_kind("Basic 1/4 · Moon Driving Basics", "info");
     hint("Welcome, driver. Click the rover (or press F) to take control.");
 }

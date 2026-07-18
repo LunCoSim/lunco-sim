@@ -217,7 +217,7 @@ fn run_with_mode(headless: bool) -> AppExit {
         app.insert_resource(inbox);
     }
 
-    // Register every LunCo asset source (lunco://, lunco-lib://, twin://,
+    // Register every LunCo asset source (lunco://, twin://,
     // cached_textures://) + the shared `TwinRoots` resource in ONE shared place
     // (`lunco-assets`), so all binaries get identical schemes. MUST run before
     // `DefaultPlugins`/`AssetPlugin` snapshots the source registry.

@@ -643,6 +643,24 @@ generate_bindings() {
         cp "$PROJECT_DIR/scripts/copy_to_html_folder.sh" "$dist_dir/"
     fi
 
+    # TODO(asset-staging): the three blocks below (DejaVu font above, these
+    # textures, the glTF models further down) each hardcode WHICH assets exist —
+    # `for tex in earth.png moon.png`, a `*.glb` glob, a font by name. That list
+    # is a second copy of what the per-crate `Assets.toml` files already declare,
+    # so declaring a new runtime asset does NOT reach the web bundle until
+    # someone also edits this script, and the failure is a silent 404 in the
+    # browser. Replace with a manifest-driven staging step (the same reasoning as
+    # `build_asset_manifest` above, which re-uses the runtime's own scanner
+    # instead of reimplementing the walk in shell).
+    #
+    # Blocked on: deciding how a manifest states "the runtime fetches this from
+    # the bundle, at this path". It is not derivable from the existing fields —
+    # the DejaVu font has no `[process]` step yet is required, while the MSL and
+    # ThermofluidStream tarballs also have none and must never ship (~200MB, and
+    # they reach the web via `build_msl_assets` instead). An added `web` field
+    # was prototyped and backed out (2026-07-18) to avoid growing the shared
+    # manifest schema; see `docs/architecture/56-asset-resolution-and-cache.md`.
+
     # luncosim renders Earth/Moon as celestial bodies; their PROCESSED textures
     # (`cached_textures://earth.png|moon.png`) load over HTTP same-origin —
     # `cache_dir()` resolves to ".cache" on wasm, so the bevy HTTP reader fetches
@@ -668,8 +686,10 @@ the browser. Run: cargo run -p lunco-assets -- download && cargo run -p lunco-as
         done
     fi
 
-    # sandbox references glTF models via `lunco-lib://models/<name>.glb`, which
-    # resolves to `<origin>/.cache/models/<name>.glb` on wasm (cache_dir() = ".cache").
+    # sandbox references glTF models via `lunco://models/<name>.glb`. The
+    # `lunco://` reader resolves `assets/` first, then the cache root — on wasm
+    # both are HTTP roots — so a model staged here is fetched from
+    # `<origin>/.cache/models/<name>.glb` (cache_dir() = ".cache").
     # Stage the PROCESSED models (e.g. NASA Perseverance) next to the wasm — same
     # idea as the luncosim textures above. Populate the cache first with:
     #   cargo run -p lunco-assets --bin lunco-assets -- download -a perseverance \

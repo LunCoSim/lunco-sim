@@ -11,12 +11,17 @@
 # the file via `npx @gltf-transform/cli`. Node.js / `npx` must be on
 # PATH for the process step.
 #
-# The processed `.glb` lives in `<cache>/models/perseverance.glb` and
-# is served at runtime via the `lunco-lib://` Bevy AssetSource. USD
-# `payload = @lunco-lib://models/perseverance.glb@` resolves through
-# that source — *only in our pipeline*. Third-party USD tools fall
-# back to the prim's local Cube placeholder definition (see the
-# `def Cube "Perseverance"` in `assets/scenes/sandbox/sandbox_scene.usda`).
+# The processed `.glb` lands in `<cache>/models/perseverance.glb`, but
+# nothing authored refers to the cache. USD authors the LOGICAL address
+# `payload = @lunco://models/perseverance.glb@`; the `lunco://` reader
+# resolves `assets/` first, then the cache, so the binary is reachable
+# without its storage location leaking into a shipped `.usda`.
+#
+# Third-party USD tools (Blender, usdview) still can't fetch it and fall
+# back to the prim's local Cube placeholder (see `def Cube "Perseverance"`
+# in `assets/scenes/sandbox/sandbox_scene.usda`) — but the reference is now
+# a plain library path rather than a scheme naming our download cache.
+# See `docs/architecture/56-asset-resolution-and-cache.md`.
 
 [perseverance]
 name = "NASA Mars 2020 Perseverance Rover (glTF)"

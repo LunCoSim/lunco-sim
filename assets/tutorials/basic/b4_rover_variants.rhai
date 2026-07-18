@@ -23,7 +23,7 @@ fn show(s, i) {
 }
 
 fn on_start(me) {
-    load_scene("tutorials/basic/driving_basics.usda");
+    load_scene("lunco://tutorials/basic/driving_basics.usda");
     // The medium rover is already in the scene; flank it with the easy and awful
     // variants so all three are lined up at the SW corner.
     cmd("SpawnEntity", #{ entry_id: "rover_easy",  position: [-35.0, 1.0, -9.0] });

@@ -30,7 +30,7 @@ fn main() {
     console_error_panic_hook::set_once();
 
     let mut app = App::new();
-    // Register every LunCo asset source (cached_textures://, lunco-lib://,
+    // Register every LunCo asset source (cached_textures://, lunco://,
     // lunco://, twin://) + the shared `TwinRoots` resource in ONE shared place
     // (`lunco-assets`), identical across all binaries — no per-`main()` drift.
     // Must run before `DefaultPlugins`/`AssetPlugin` snapshots the registry.

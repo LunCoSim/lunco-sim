@@ -317,7 +317,7 @@ projects each to an *inactive* Bevy `Camera3d` (see [`17-view-and-intent.md §6`
 
 ### glTF Payloads & Placeholders
 
-For glTFs that ship via `Assets.toml` (e.g. Perseverance), we pair a `lunco-lib://` payload with a **`def Cube` placeholder**. 
+For glTFs that ship via `Assets.toml` (e.g. Perseverance), we pair a `lunco://` payload with a **`def Cube` placeholder**. 
 - Third-party tools (Blender, usdview) fall back to the Cube.
 - Our pipeline overlays the photoreal glTF and hides the Cube.
 
@@ -355,7 +355,7 @@ config only, no conversion, no engine code. This is the proper interop path.
 USD references (e.g., `@/components/mobility/wheel.usda@`) are resolved relative to the **USD asset root** (`assets/`). The `UsdComposer` resolves:
 - `/`-prefixed paths anchor at the asset root.
 - Plain relative paths anchor at the layer's directory.
-- URI schemes (`lunco-lib://`) pass through to the `AssetSource`.
+- URI schemes (`lunco://`, `twin://`) pass through to the `AssetSource`.
 
 ### Sandbox Editing Tools (UX Bridge)
 The `lunco-sandbox-edit` crate provides the interactive layer (palette, gizmo, inspector).
@@ -381,14 +381,21 @@ The `lunco-sandbox-edit` crate provides the interactive layer (palette, gizmo, i
 
 | Scheme | Purpose | Resolves to |
 |---|---|---|
-| (none) | In-tree authored content / scene-relative | `assets/...` or the layer's source |
-| `lunco-lib://` | Workspace-shipped fixtures (downloaded models) | `<cache>/...` |
-| `lunco://` | **Engine asset library** (rovers, parts, vessels) — location-independent ref usable from external Twins | `assets/...` |
+| (none) | Layer-relative refs **inside a Twin** (co-located terrain, textures) | the layer's own source |
+| `lunco://` | **Engine asset library** (rovers, parts, vessels, downloaded binaries) — location-independent ref usable from external Twins | `assets/...`, then `<cache>/...` |
 | `twin://<name>/...` | **Internal, runtime-only.** The currently-open Twin's root, keyed by Twin name. Reads an external Twin scene + its co-located assets (fs on native, http on web). Never authored into a file. | the opened Twin folder |
 
 > `lunco://` was previously *reserved* for a future collaborative protocol; it's
 > now the engine library scheme. A collaborative/Nucleus-like protocol, if added,
 > should pick a distinct scheme (e.g. `lunco-net://`).
+>
+> **`lunco-lib://` was removed.** It addressed the download cache *directly*, so
+> a shipped `.usda` baked a machine-local location into authored content and
+> resolved only inside our pipeline. Downloaded binaries now live at their
+> logical `lunco://` address; the `lunco://` reader resolves `assets/` first,
+> then the cache. Large binaries still stay out of git — they are *resolved*
+> into the library, not *addressed* in the cache. See
+> [`56-asset-resolution-and-cache.md`](56-asset-resolution-and-cache.md).
 >
 > **External Twins:** a scene living outside the project (its own repo) is opened
 > via File → Open Folder. The Twin-open flow registers the folder under

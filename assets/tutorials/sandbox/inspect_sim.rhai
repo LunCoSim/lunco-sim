@@ -17,7 +17,7 @@ fn steps() {
 fn show(s, i) { let step = s[i]; coach(i, s.len(), step.anchor, step.title, step.body); }
 
 fn on_start(me) {
-    load_scene("tutorials/sandbox/first_drive.usda");
+    load_scene("lunco://tutorials/sandbox/first_drive.usda");
     this.i = 0;
     show(steps(), 0);
     notify_kind("Tutorial: Inspect the Simulation", "info");

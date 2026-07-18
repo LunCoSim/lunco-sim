@@ -108,7 +108,7 @@ pub fn is_usd_layer(path: &Path) -> bool {
 /// document staleness (what, if changed on disk, makes an open document stale).
 /// Both want the same answer, which is why they now ask the same function.
 ///
-/// - Arcs carrying a `scheme://` (`lunco-lib://`, `twin://`, …) are skipped:
+/// - Arcs carrying a `scheme://` (`lunco://`, `twin://`, …) are skipped:
 ///   they resolve through their own asset source, not this file tree.
 /// - Leading-`/` (assets-root-relative) arcs are skipped — the assets root is
 ///   not known here.

@@ -66,7 +66,7 @@ Wins beyond wasm support:
 - **Change detection.** `AssetEvent<ModelicaSource>` for free.
 - **Single resolver.** Asset paths route through the registered
   `AssetSource` (default `assets://`, plus `embedded://`, future
-  `https://`, `lunco-lib://`), so swapping out where the bytes come
+  `https://`, `lunco://`), so swapping out where the bytes come
   from doesn't ripple into domain code.
 
 ## Asset loaders we maintain

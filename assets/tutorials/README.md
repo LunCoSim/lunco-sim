@@ -29,8 +29,10 @@ in with `load_scene(...)`. A lesson that needs a model just `cmd("OpenClass", �
    - `hint(...)`, `spotlight(anchor, caption)`, `notify_kind(...)` — HUD.
    - `mission(me)` with `objective(...)` — auto-published objectives that advance
      on real actions (`requires_event`, `done` predicates); emits `MISSION_COMPLETE`.
-   - Setup: `load_scene("scenes/…")`, `cmd("OpenClass", #{ qualified })`,
-     `set_subsystem(name, on)`.
+   - Setup: `load_scene("lunco://scenes/…")`, `cmd("OpenClass", #{ qualified })`,
+     `set_subsystem(name, on)`. Scene paths are **scheme-qualified** — a bare
+     path is ambiguous once a Twin is open (it would resolve against the Twin)
+     and is rejected; see `docs/architecture/55-scene-addressing-and-roots.md`.
 2. Declare its catalog entry in the **JSON manifest** `tutorials/<app>/tutorials.json`
    — **data, not Rust**. The single catalog; a 3D lesson's `.usda` is just the
    environment its script loads. The app loads it via `TutorialPlugin { app: "<app>" }`.

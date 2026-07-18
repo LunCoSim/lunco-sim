@@ -344,14 +344,15 @@ def Xform "SandboxScene" (
     # spawn transform (translate/rotate); the placeholder Cube and the
     # glTF-loading Xform are siblings underneath.
     #
-    #   * Blender / usdview / Houdini  →  `lunco-lib://` payload fails
+    #   * Blender / usdview / Houdini  →  `lunco://` payload fails
     #     to resolve, the placeholder Cube renders → tan box at the
     #     correct location and bbox dimensions.
     #   * LunCoSim                     →  composer detects `.glb`
-    #     extension, the registered `lunco-lib://` AssetSource resolves
-    #     to `<cache>/models/perseverance.glb`, glTF SceneRoot spawns
-    #     under `Visual`. The `hide_glb_placeholder_meshes` observer
-    #     drops the Cube `Mesh3d` once the Scene asset is loaded.
+    #     extension, the `lunco://` resolver finds the binary — under
+    #     `assets/` if committed, else in the download cache — and the
+    #     glTF SceneRoot spawns under `Visual`. The
+    #     `hide_glb_placeholder_meshes` observer drops the Cube
+    #     `Mesh3d` once the Scene asset is loaded.
     #
     # Fresh clone (no `cargo run -p lunco-assets -- download` yet) →
     # AssetServer fails, Cube stays as the visible fallback.
@@ -375,7 +376,7 @@ def Xform "SandboxScene" (
             # `lunco:placeholder = true` keeps the Cube hidden in our
             # pipeline — third-party USD tools (Blender, usdview) still
             # render it because they ignore the custom attribute and
-            # the `lunco-lib://` payload fails to resolve, so the
+            # the `lunco://` payload fails to resolve, so the
             # local Cube definition is the only thing left to draw.
             # Hiding by default in our renderer prevents a brief
             # placeholder flash while the glTF Scene is async-loading.
@@ -383,7 +384,7 @@ def Xform "SandboxScene" (
         }
 
         def Xform "Visual" (
-            prepend payload = @lunco-lib://models/perseverance.glb@
+            prepend payload = @lunco://models/perseverance.glb@
         )
         {
             string lunco:assetMode = "scene"

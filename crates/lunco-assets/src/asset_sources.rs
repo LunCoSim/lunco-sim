@@ -10,8 +10,9 @@
 use bevy::asset::io::AssetSourceBuilder;
 use bevy::prelude::*;
 
+use crate::lunco_source::lunco_asset_source;
 use crate::twin_source::{twin_asset_source, TwinRoots};
-use crate::{cache_dir, textures_dir};
+use crate::textures_dir;
 
 /// A custom asset **scheme** contributed to the LunCo asset-source registry.
 ///
@@ -53,8 +54,7 @@ inventory::collect!(AssetSchemeProvider);
 /// | Scheme | Resolves to | Notes |
 /// |---|---|---|
 /// | `cached_textures://` | texture cache dir | processed textures |
-/// | `lunco-lib://` | shared cache dir | shipped/downloaded fixtures (glTF models) |
-/// | `lunco://` | `<cwd>/assets` | the engine asset *library* (rovers, parts) |
+/// | `lunco://` | `<cwd>/assets`, then `<cache>` | the engine asset *library* (rovers, parts, downloaded binaries) |
 /// | `twin://<name>/…` | open Twin roots | external Twin scenes — **native fs**; web = TODO http |
 /// | `scenario://<id>/…` | `<cache_dir>/scenarios/<id>` | downloaded scenario assets (native + web OPFS) — contributed via the registry |
 ///
@@ -73,19 +73,16 @@ pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
         "cached_textures",
         AssetSourceBuilder::platform_default(&textures_dir().to_string_lossy(), None),
     )
-    // Shipped/downloaded fixture library (glTF models), populated by
-    // `cargo run -p lunco-assets -- download / process`.
-    .register_asset_source(
-        "lunco-lib",
-        AssetSourceBuilder::platform_default(&cache_dir().to_string_lossy(), None),
-    )
     // Engine asset *library* under a NAMED, location-independent scheme so a
     // scene living OUTSIDE the project (an external Twin) can still reference
     // shared parts: `@lunco://vessels/rovers/skid_rover.usda@`.
-    .register_asset_source(
-        "lunco",
-        AssetSourceBuilder::platform_default(&assets_dir.to_string_lossy(), None),
-    );
+    //
+    // Resolves `assets/` FIRST, then the download cache — so a large binary
+    // pulled by `cargo run -p lunco-assets -- download` is reachable at its
+    // logical `lunco://` address without any authored file naming the cache.
+    // (This replaced `lunco-lib://`, which addressed the cache directly and so
+    // baked a machine-local location into shipped `.usda` files.)
+    .register_asset_source("lunco", lunco_asset_source(&assets_dir));
 
     // Crate-contributed schemes: every `inventory::submit!`d `AssetSchemeProvider`
     // is registered here with no edit to this function. lunco-assets itself

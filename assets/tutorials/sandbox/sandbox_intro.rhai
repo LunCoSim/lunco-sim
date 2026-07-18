@@ -38,7 +38,7 @@ fn show(s, i) {
 }
 
 fn on_start(me) {
-    load_scene("tutorials/sandbox/sandbox_intro.usda");
+    load_scene("lunco://tutorials/sandbox/sandbox_intro.usda");
     this.i = 0;
     show(steps(), 0);
 }

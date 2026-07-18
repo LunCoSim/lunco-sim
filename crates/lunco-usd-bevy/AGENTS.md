@@ -66,20 +66,21 @@ The composer passes through three URI shapes for the resolved attribute:
 
 | Shape | Meaning | Example |
 |---|---|---|
-| `lunco-lib://...` | LunCoSim shipped library — registered in the `luncosim`/`lunco-sandbox` binary main, points at `<cache>/`. Populated by `cargo run -p lunco-assets -- download`. | `lunco-lib://models/perseverance.glb` |
+| `lunco://...` | LunCoSim asset **library** — a logical address. The reader resolves `assets/` first, then `<cache>/` (populated by `cargo run -p lunco-assets -- download`), so git-tracked content and downloaded binaries share one address space. | `lunco://models/perseverance.glb` |
 | `/abs/path` (filesystem) | `/`-prefixed USD asset path resolved against the workspace `assets/` root. | `/ws/assets/models/x.glb` |
 | `./relative.glb` | Relative to the layer's parent directory. | `./body.glb` |
 
-**Reserved**: `lunco://` is held for the future LunCoSim asset/scene service
-(multi-user, collaborative, network-backed — analogous to Omniverse's
-Nucleus). It is **not** a synonym for `lunco-lib://`. Do not register it as
-an alias today; that would constrain the future protocol's URI grammar.
+**Removed**: `lunco-lib://` no longer exists. It pointed at `<cache>/`, which
+put a machine-local storage location into authored `.usda` files — the file
+then resolved only inside our pipeline. Use `lunco://`; the cache is a
+resolution step, not an address. A future collaborative/Nucleus-like protocol
+should take a distinct scheme (e.g. `lunco-net://`).
 
 ## When the asset is missing
 
 `AssetServer::load` returns a `Handle` immediately and surfaces load failure
 through `AssetEvent::Failed`. Today we don't observe those — a missing
-`lunco-lib://...` results in the prim having no visible geometry but no
+`lunco://...` results in the prim having no visible geometry but no
 crash. If you change this to surface user-facing errors, do it via observers
 on `AssetEvent`, not a system that polls every frame.
 
