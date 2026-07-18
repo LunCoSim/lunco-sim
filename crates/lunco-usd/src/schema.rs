@@ -124,10 +124,51 @@ pub struct SchemaRegistry {
 }
 
 impl SchemaRegistry {
-    /// The process-wide registry, parsed once.
-    pub fn global() -> &'static SchemaRegistry {
-        static REGISTRY: OnceLock<SchemaRegistry> = OnceLock::new();
-        REGISTRY.get_or_init(SchemaRegistry::load)
+    /// The process-wide registry. Built once from the embedded schemas, then
+    /// **extensible** — see [`register_extension`](Self::register_extension).
+    ///
+    /// `RwLock`, not `OnceLock<SchemaRegistry>`, because a schema library can
+    /// arrive with an ASSET: a twin ships its own domain schema (a habitat's
+    /// `habitat:` properties, a rover's) alongside its `.usda`, and which twin
+    /// is open is not known when this is first touched. Reads dominate
+    /// overwhelmingly (every authored attribute asks for a variability), so a
+    /// read-write lock is the right shape and matches the in-tree precedent in
+    /// `lunco-hooks::registry`.
+    ///
+    /// Callers that only need a variability or a custom-flag should prefer the
+    /// free [`variability_of`] / [`is_custom`], which take and drop the read
+    /// lock internally and hand back owned values.
+    pub fn global() -> &'static std::sync::RwLock<SchemaRegistry> {
+        static REGISTRY: OnceLock<std::sync::RwLock<SchemaRegistry>> = OnceLock::new();
+        REGISTRY.get_or_init(|| std::sync::RwLock::new(SchemaRegistry::load()))
+    }
+
+    /// Fold an asset-shipped schema library into the process-wide registry.
+    ///
+    /// `src` is a `generatedSchema.usda` — the `usdGenSchema` output, exactly
+    /// what [`GENERATED_SCHEMA`] is for `luncoSchema`. Its prim types and API
+    /// schemas are recorded as REGISTERED (not custom), which is the whole
+    /// point: without this an asset's `habitat:pressureVessel` composes and
+    /// reads but carries no declared variability, no fallbacks and no
+    /// validation — the "unregistered typeName" failure `schema.usda`'s own
+    /// header warns about.
+    ///
+    /// Deliberately takes TEXT, not a path: the registry must work on wasm,
+    /// where an asset-shipped schema arrives through the asset server rather
+    /// than `std::fs`. The caller (the twin loader) does the resolving.
+    ///
+    /// Idempotent in effect — re-registering the same library re-ingests the
+    /// same declarations over themselves. Returns `false` if `src` does not
+    /// parse, matching [`load`](Self::load)'s tolerate-don't-panic policy: a
+    /// bad extension degrades that library to "everything varying" rather than
+    /// taking the process down.
+    pub fn register_extension(src: &str) -> bool {
+        let Ok(mut reg) = Self::global().write() else {
+            return false;
+        };
+        let before = reg.properties.len();
+        reg.ingest(src, true);
+        reg.properties.len() >= before
     }
 
     /// Parse [`CORE_SCHEMAS`] and [`GENERATED_SCHEMA`] — every schema, one parser.
@@ -252,15 +293,30 @@ impl SchemaRegistry {
 }
 
 /// Variability to author `name` with, per the schema. Convenience over
-/// [`SchemaRegistry::global`].
+/// [`SchemaRegistry::global`] — takes and drops the read lock, returns an owned
+/// value, so callers never hold a guard.
+///
+/// A poisoned lock degrades to USD's default (`varying`) rather than panicking:
+/// the same tolerate-don't-panic policy a malformed schema gets.
 pub fn variability_of(name: &str) -> sdf::Variability {
-    SchemaRegistry::global().variability(name)
+    SchemaRegistry::global()
+        .read()
+        .map(|r| r.variability(name))
+        .unwrap_or(sdf::Variability::Varying)
 }
 
 /// Whether `name` must be authored `custom`. Convenience over
-/// [`SchemaRegistry::global`].
+/// [`SchemaRegistry::global`] — see [`variability_of`] for the locking note.
+///
+/// A poisoned lock degrades to `false` (do not force `custom`), which is the
+/// conservative answer: wrongly stamping `custom` on a schema-declared property
+/// would be a real authoring error, whereas omitting it is what USD does anyway
+/// for everything this registry does not know.
 pub fn is_custom(name: &str) -> bool {
-    SchemaRegistry::global().is_custom(name)
+    SchemaRegistry::global()
+        .read()
+        .map(|r| r.is_custom(name))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -272,7 +328,7 @@ mod tests {
     /// restore the "everything is varying" bug.
     #[test]
     fn generated_schema_parses_and_registers_every_type() {
-        let reg = SchemaRegistry::global();
+        let reg = SchemaRegistry::global().read().unwrap();
         assert!(
             reg.prim_types().contains(&"LunCoEnvironment".to_string()),
             "typed schemas: {:?}",
@@ -354,7 +410,7 @@ mod tests {
     #[test]
     fn every_schema_class_is_registered_in_pluginfo() {
         const PLUG_INFO: &str = include_str!("../schema/plugInfo.json");
-        let reg = SchemaRegistry::global();
+        let reg = SchemaRegistry::global().read().unwrap();
 
         for name in reg.api_schemas().iter().chain(reg.prim_types().iter()) {
             // Ours only: core USD schemas are registered by their own plugins.
@@ -393,17 +449,75 @@ mod tests {
         // replaced could not tell those two cases apart, which is exactly why a core
         // `uniform` property missing from it was authored wrong in silence.
         assert_eq!(variability_of("physics:mass"), sdf::Variability::Varying);
-        assert!(SchemaRegistry::global().property("physics:mass").is_some());
+        assert!(SchemaRegistry::global().read().unwrap().property("physics:mass").is_some());
         // Genuinely unknown (no schema we vendor declares it) → USD's default.
         assert_eq!(variability_of("nonesuch:madeUp"), sdf::Variability::Varying);
-        assert!(SchemaRegistry::global().property("nonesuch:madeUp").is_none());
+        assert!(SchemaRegistry::global().read().unwrap().property("nonesuch:madeUp").is_none());
+    }
+
+    /// An ASSET-SHIPPED schema library registers at runtime.
+    ///
+    /// This is the seam that makes a domain schema portable. A twin's own
+    /// properties (`habitat:` for a pressurised habitat) belong to the MODEL,
+    /// not to LunCoSim, so they must not be squatted into `luncoSchema` — but
+    /// until the library can register, they compose and read while carrying no
+    /// declared variability, no fallbacks and no validation. That is precisely
+    /// the "unregistered typeName" failure this module's header warns about.
+    ///
+    /// Uses a `uniform` property on purpose: `uniform` is the half a registry
+    /// gets WRONG when it has never heard of the name (USD's default is
+    /// `varying`), so asserting it proves the declaration was really ingested
+    /// rather than coincidentally matching the fallback.
+    #[test]
+    fn asset_shipped_schema_library_registers_and_declares_its_properties() {
+        const HABITAT_SCHEMA: &str = r#"#usda 1.0
+(
+    upAxis = "Y"
+)
+class "HabitatShieldingAPI" (
+    customData = { token apiSchemaType = "singleApply" }
+)
+{
+    uniform token habitat:shielding:medium = "sinteredRegolith"
+    double habitat:shielding:thicknessM = 1.5696
+}
+"#;
+        // Unknown before registration — the fallback, not a declaration.
+        assert_eq!(
+            variability_of("habitat:shielding:medium"),
+            sdf::Variability::Varying,
+            "precondition: the habitat library must not already be registered"
+        );
+
+        assert!(SchemaRegistry::register_extension(HABITAT_SCHEMA), "extension must ingest");
+
+        let reg = SchemaRegistry::global().read().unwrap();
+        let medium = reg
+            .property("habitat:shielding:medium")
+            .expect("registered extension declares habitat:shielding:medium");
+        assert_eq!(medium.type_name, "token");
+        assert_eq!(
+            medium.variability,
+            sdf::Variability::Uniform,
+            "the DECLARED uniform must win over USD's varying default"
+        );
+        assert_eq!(
+            reg.property("habitat:shielding:thicknessM").unwrap().type_name,
+            "double"
+        );
+        // The library's API schema is now a REGISTERED type, not a custom one.
+        assert!(
+            reg.api_schemas().contains(&"HabitatShieldingAPI".to_string()),
+            "api schemas: {:?}",
+            reg.api_schemas()
+        );
     }
 
     /// Core USD types come from the real schema too — not a table of what someone
     /// remembered, and not left blank for the call site to assert.
     #[test]
     fn core_schema_declares_property_types() {
-        let reg = SchemaRegistry::global();
+        let reg = SchemaRegistry::global().read().unwrap();
         assert_eq!(reg.property("physics:mass").unwrap().type_name, "float");
         assert_eq!(reg.property("xformOpOrder").unwrap().type_name, "token[]");
         assert_eq!(reg.property("radius").unwrap().type_name, "double");
@@ -415,7 +529,7 @@ mod tests {
     /// caught rather than silently coerced.
     #[test]
     fn schema_declares_property_types() {
-        let reg = SchemaRegistry::global();
+        let reg = SchemaRegistry::global().read().unwrap();
         assert_eq!(reg.property("lunco:env:exposureEv100").unwrap().type_name, "float");
         assert_eq!(
             reg.property("lunco:env:earthshineColor").unwrap().type_name,
@@ -507,7 +621,7 @@ mod tests {
     /// list — a separate path that does not consult this registry.
     #[test]
     fn physx_vehicle_schemas_register_canonical_properties() {
-        let reg = SchemaRegistry::global();
+        let reg = SchemaRegistry::global().read().unwrap();
 
         // Canonical names exist with correct types. Each is the name the loader
         // (Phase 2) or the suspension loader (Phase 3, doc 53) reads.
