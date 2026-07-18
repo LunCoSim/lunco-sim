@@ -279,6 +279,15 @@ pub(crate) fn compile_prelude(engine: &Engine) -> Result<AST, rhai::ParseError> 
     }
 }
 
+/// TODO(rhai-consts): TUTORIAL SCRIPTS DO NOT GET THIS TREATMENT.
+///
+/// Lessons loaded through `lunco-tutorial` are compiled without the two-pass
+/// below, so a top-level `const` in a lesson is invisible inside its own `fn`s and
+/// fails at RUNTIME with "Variable not found: global::…" — mid-lesson, not at load.
+/// Several Space School lessons now carry `fn x() { … }` shims in place of
+/// constants, each marked `TODO(rhai-consts)`; route the tutorial compile through
+/// this same path and those revert to plain `const` + `global::`.
+///
 /// Compile a script so its own top-level `const`s are visible inside its `fn`s.
 ///
 /// Rhai functions are **pure**: a function body cannot see script-level variables
