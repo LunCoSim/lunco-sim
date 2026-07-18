@@ -1,21 +1,15 @@
 within;
-// The solar rover demo's power system, as ONE acausal circuit — the doc-54 shape.
+// The solar rover demo's power system: one acausal circuit solved as a DAE.
 //
-// This USED to hand-roll its own battery/panel/motor equations. That was the mistake doc
-// 54 §2 names: three components modelled as signals, with the charge balance summed by
-// hand (`net_current = current_motor - current_solar`). The reusable maths now lives in
-// `LunCo.Electrical`, so this model does what `rucheyok_electrical.mo` does — import the
-// component classes, instantiate them, and `connect()` them to a shared bus node. The
-// battery's SoC then falls out of Kirchhoff at the node; nothing here sums a current.
+// Battery, SolarPanel and DCMotor from `LunCo.Electrical`, connected on one bus node so
+// Kirchhoff balances source against load — SoC falls out of the circuit, nothing sums a
+// current. Top-level (`within;`), bound to the scene's `PowerSubsystem` prim via
+// `lunco:program:sourceAsset` and importing the seated `LunCo` library: components in the
+// library, the assembly per vehicle (the `rucheyok_electrical.mo` shape).
 //
-// It stays top-level (`within;`) and is bound to the scene's `PowerSubsystem` prim through
-// `lunco:program:sourceAsset`, importing the seated `LunCo` library — the vehicle-model
-// half of the split (components in the library, the assembly per vehicle).
-//
-// Boundary (causal, where cosim crosses): `sun_azimuth` from the environment solar bridge,
-// `panel_yaw` from the SunTracker, `vehicle_throttle` set live by the autopilot rhai. The
-// demo does NOT wire a wheel's shaft speed, so the motor runs at a nominal cruise `omega`
-// (a full rover wires real per-wheel `omega`, as `rucheyok_electrical.mo` shows).
+// Boundary (where cosim crosses): `sun_azimuth` from the solar bridge, `panel_yaw` from
+// the SunTracker, `vehicle_throttle` from the autopilot. The demo wires no wheel speed, so
+// the motor runs at a nominal cruise `omega` (a full rover wires real per-wheel `omega`).
 model SolarRoverPower "Solar charging vs. motor draw on one battery bus, from LunCo.Electrical."
   import LunCo.Electrical.*;
 

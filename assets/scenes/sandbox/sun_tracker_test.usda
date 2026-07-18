@@ -56,7 +56,7 @@ def Xform "SunTrackerTest" (
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @shaders/solar_panel.wgsl@
+                uniform asset info:wgsl:sourceAsset = @lunco://shaders/solar_panel.wgsl@
                 color3f inputs:cell_color = (0.05, 0.05, 0.35)
                 color3f inputs:bus_color = (0.85, 0.85, 0.90)
                 color3f inputs:frame_color = (0.35, 0.35, 0.38)
@@ -197,7 +197,7 @@ def Xform "SunTrackerTest" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
-            uniform asset lunco:program:sourceAsset = @models/SunTracker.mo@
+            uniform asset lunco:program:sourceAsset = @lunco://models/SunTracker.mo@
             float inputs:sun_azimuth.connect = </SunTrackerTest/SolarTower/Controller.outputs:sun_azimuth>
         }
     }

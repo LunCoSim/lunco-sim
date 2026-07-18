@@ -30,7 +30,7 @@ def Xform "Rucheyok" (
     # arc so it composes through a spawn/reference like the wheels. This asset
     # lives one dir deeper, so the path is `../../`.
     def "Controls" (
-        prepend references = @../../control_profiles.usda@</RoverControls>
+        prepend references = @lunco://vessels/control_profiles.usda@</RoverControls>
     )
     {
     }
@@ -53,7 +53,7 @@ def Xform "Rucheyok" (
 
     # --- Solar Panel (physical part; its output is the Electrical circuit's) ---
     def Xform "SolarPanel" (
-        prepend references = @../../../components/power/solar_panel.usda@</SolarPanel>
+        prepend references = @lunco://components/power/solar_panel.usda@</SolarPanel>
     )
     {
         double3 xformOp:translate = (0, 4.5, 0)
@@ -68,7 +68,7 @@ def Xform "Rucheyok" (
 
     # --- Battery (physical part; its charge is the Electrical circuit's) ---
     def Xform "Battery" (
-        prepend references = @../../../components/power/battery.usda@</Battery>
+        prepend references = @lunco://components/power/battery.usda@</Battery>
     )
     {
         double3 xformOp:translate = (0, 0.8, 0)
@@ -97,7 +97,7 @@ def Xform "Rucheyok" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
-            uniform asset lunco:program:sourceAsset = @vessels/rovers/rucheyok/rucheyok_electrical.mo@
+            uniform asset lunco:program:sourceAsset = @lunco://vessels/rovers/rucheyok/rucheyok_electrical.mo@
             uniform token lunco:program:sourceAsset:subIdentifier = "RucheyokElectrical"
 
             # This rover's ratings — the circuit's top-level parameters.
@@ -125,8 +125,8 @@ def Xform "Rucheyok" (
     # --- Wheels (from component) ---
     def Cylinder "Wheel_FL" (
         prepend references = [
-            @../../../components/mobility/wheel.usda@</Wheel>,
-            @../../../components/mobility/suspensions/rigid.usda@</Suspension>,
+            @lunco://components/mobility/wheel.usda@</Wheel>,
+            @lunco://components/mobility/suspensions/rigid.usda@</Suspension>,
         ]
     )
     {
@@ -148,8 +148,8 @@ def Xform "Rucheyok" (
 
     def Cylinder "Wheel_FR" (
         prepend references = [
-            @../../../components/mobility/wheel.usda@</Wheel>,
-            @../../../components/mobility/suspensions/rigid.usda@</Suspension>,
+            @lunco://components/mobility/wheel.usda@</Wheel>,
+            @lunco://components/mobility/suspensions/rigid.usda@</Suspension>,
         ]
     )
     {
@@ -171,8 +171,8 @@ def Xform "Rucheyok" (
 
     def Cylinder "Wheel_RL" (
         prepend references = [
-            @../../../components/mobility/wheel.usda@</Wheel>,
-            @../../../components/mobility/suspensions/rigid.usda@</Suspension>,
+            @lunco://components/mobility/wheel.usda@</Wheel>,
+            @lunco://components/mobility/suspensions/rigid.usda@</Suspension>,
         ]
     )
     {
@@ -194,8 +194,8 @@ def Xform "Rucheyok" (
 
     def Cylinder "Wheel_RR" (
         prepend references = [
-            @../../../components/mobility/wheel.usda@</Wheel>,
-            @../../../components/mobility/suspensions/rigid.usda@</Suspension>,
+            @lunco://components/mobility/wheel.usda@</Wheel>,
+            @lunco://components/mobility/suspensions/rigid.usda@</Suspension>,
         ]
     )
     {

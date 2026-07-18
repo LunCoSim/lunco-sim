@@ -9,7 +9,7 @@
 # it onto any vessel with `prepend references` + a local `xformOp:translate` for the
 # mount point, exactly like the markers:
 #
-#   def "IMU" (prepend references = @../../vessels/sensors/imu.usda@</Imu>)
+#   def "IMU" (prepend references = @lunco://vessels/sensors/imu.usda@</Imu>)
 #   { double3 xformOp:translate = (0, 0, 0); uniform token[] xformOpOrder = ["xformOp:translate"] }
 #
 # Backed by `lunco_cosim::sensors::ImuSensor` (gated on `lunco:sensor:imu`). It

@@ -89,7 +89,7 @@ def Xform "SkidRover" (
     # Override a single intent by redefining `Controls/<intent>` locally; the
     # key->intent half is the shared leafwing UserIntent map.
     def "Controls" (
-        prepend references = @../control_profiles.usda@</RoverControls>
+        prepend references = @lunco://vessels/control_profiles.usda@</RoverControls>
     )
     {
     }
@@ -204,8 +204,8 @@ def Xform "SkidRover" (
         # No local `kind`: a wheel IS a component model, and the kind composes in from
         # the reference along with everything else it brings.
         prepend references = [
-            @../../components/mobility/wheel.usda@</Wheel>,
-            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+            @lunco://components/mobility/wheel.usda@</Wheel>,
+            @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
         ]
     )
     {
@@ -223,8 +223,8 @@ def Xform "SkidRover" (
         # No local `kind`: a wheel IS a component model, and the kind composes in from
         # the reference along with everything else it brings.
         prepend references = [
-            @../../components/mobility/wheel.usda@</Wheel>,
-            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+            @lunco://components/mobility/wheel.usda@</Wheel>,
+            @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
         ]
     )
     {
@@ -242,8 +242,8 @@ def Xform "SkidRover" (
         # No local `kind`: a wheel IS a component model, and the kind composes in from
         # the reference along with everything else it brings.
         prepend references = [
-            @../../components/mobility/wheel.usda@</Wheel>,
-            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+            @lunco://components/mobility/wheel.usda@</Wheel>,
+            @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
         ]
     )
     {
@@ -261,8 +261,8 @@ def Xform "SkidRover" (
         # No local `kind`: a wheel IS a component model, and the kind composes in from
         # the reference along with everything else it brings.
         prepend references = [
-            @../../components/mobility/wheel.usda@</Wheel>,
-            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+            @lunco://components/mobility/wheel.usda@</Wheel>,
+            @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
         ]
     )
     {
@@ -285,7 +285,7 @@ def Xform "SkidRover" (
     # There are NO `comms:*` ports: comms is not a subsystem (doc 49 §1), so the
     # core publishes generic link state, not comms vocabulary.
     def Xform "Comms" (
-        prepend references = @../../components/comms/antenna.usda@</CommsAntenna>
+        prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
     )
     {
         double3 xformOp:translate = (0, 0.15, -0.5)
@@ -300,12 +300,12 @@ def Xform "SkidRover" (
     # the articulation root + per-wheel revolute joints.
     variantSet "drivetrain" = {
         "raycast" (
-            prepend references = @../../components/mobility/raycast_drivetrain.usda@</Drivetrain>
+            prepend references = @lunco://components/mobility/raycast_drivetrain.usda@</Drivetrain>
         ) {
         }
 
         "physical" (
-            prepend references = @../../components/mobility/physical_drivetrain.usda@</Drivetrain>
+            prepend references = @lunco://components/mobility/physical_drivetrain.usda@</Drivetrain>
         ) {
         }
     }

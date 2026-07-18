@@ -11,8 +11,8 @@
 #
 #   def Cylinder "Wheel_FL" (
 #       prepend references = [
-#           @../../components/mobility/wheel.usda@</Wheel>,
-#           @../../components/mobility/suspensions/standard.usda@</Suspension>,
+#           @lunco://components/mobility/wheel.usda@</Wheel>,
+#           @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
 #       ]
 #       variants = { string tire = "regolith" }
 #   )
@@ -104,12 +104,12 @@ def Cylinder "Wheel" (
     # component, not restate one.
     variantSet "tire" = {
         "regolith" (
-            prepend references = @tires/regolith.usda@</Tire>
+            prepend references = @lunco://components/mobility/tires/regolith.usda@</Tire>
         ) {
         }
 
         "hard" (
-            prepend references = @tires/hard.usda@</Tire>
+            prepend references = @lunco://components/mobility/tires/hard.usda@</Tire>
         ) {
         }
 
@@ -117,17 +117,17 @@ def Cylinder "Wheel" (
         # variants (`vessels/rovers/variants/*.usda`) select these to set their
         # difficulty: μ is a property of the rubber, so a tier changes its tires.
         "cleated" (
-            prepend references = @tires/cleated.usda@</Tire>
+            prepend references = @lunco://components/mobility/tires/cleated.usda@</Tire>
         ) {
         }
 
         "worn" (
-            prepend references = @tires/worn.usda@</Tire>
+            prepend references = @lunco://components/mobility/tires/worn.usda@</Tire>
         ) {
         }
 
         "bald" (
-            prepend references = @tires/bald.usda@</Tire>
+            prepend references = @lunco://components/mobility/tires/bald.usda@</Tire>
         ) {
         }
     }

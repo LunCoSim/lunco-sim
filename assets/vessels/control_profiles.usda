@@ -2,7 +2,7 @@
 (
     doc = """Shared vessel control profiles (stage 2 of control: intent -> port).
 
-    A vessel adds a child `def "Controls" (references = @control_profiles.usda@</RoverControls>)`
+    A vessel adds a child `def "Controls" (references = @lunco://vessels/control_profiles.usda@</RoverControls>)`
     to receive this intent->port scope. The entity translator walks
     `<Vessel>/Controls/<intent>` (child prim NAME = intent, `string lunco:port` +
     `double lunco:scale`) and builds a `lunco_core::ControlBinding`. Delivered as a

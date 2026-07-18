@@ -42,7 +42,7 @@ def Xform "ShaderFallbackTest" (
             {
                 uniform token info:implementationSource = "sourceAsset"
                 # INVALID: pbr_lit.wgsl is an importable library (no @fragment).
-                uniform asset info:wgsl:sourceAsset = @shaders/pbr_lit.wgsl@
+                uniform asset info:wgsl:sourceAsset = @lunco://shaders/pbr_lit.wgsl@
                 token outputs:surface
             }
         }

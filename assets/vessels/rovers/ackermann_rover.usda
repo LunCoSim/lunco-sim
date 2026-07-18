@@ -74,7 +74,7 @@ def Xform "AckermannRover" (
     # Control profile (intent -> port). Child `references` arc so it composes
     # through a spawn/reference exactly like the wheels below.
     def "Controls" (
-        prepend references = @../control_profiles.usda@</RoverControls>
+        prepend references = @lunco://vessels/control_profiles.usda@</RoverControls>
     )
     {
     }
@@ -184,8 +184,8 @@ def Xform "AckermannRover" (
     # --- Wheels (authored at RAYCAST ride height; physical variant drops them) ---
     def Cylinder "Wheel_FL" (
         prepend references = [
-            @../../components/mobility/wheel.usda@</Wheel>,
-            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+            @lunco://components/mobility/wheel.usda@</Wheel>,
+            @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
         ]
     )
     {
@@ -201,8 +201,8 @@ def Xform "AckermannRover" (
 
     def Cylinder "Wheel_FR" (
         prepend references = [
-            @../../components/mobility/wheel.usda@</Wheel>,
-            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+            @lunco://components/mobility/wheel.usda@</Wheel>,
+            @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
         ]
     )
     {
@@ -218,8 +218,8 @@ def Xform "AckermannRover" (
 
     def Cylinder "Wheel_RL" (
         prepend references = [
-            @../../components/mobility/wheel.usda@</Wheel>,
-            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+            @lunco://components/mobility/wheel.usda@</Wheel>,
+            @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
         ]
     )
     {
@@ -235,8 +235,8 @@ def Xform "AckermannRover" (
 
     def Cylinder "Wheel_RR" (
         prepend references = [
-            @../../components/mobility/wheel.usda@</Wheel>,
-            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+            @lunco://components/mobility/wheel.usda@</Wheel>,
+            @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
         ]
     )
     {
@@ -256,12 +256,12 @@ def Xform "AckermannRover" (
     # targets onto THIS rover's wheels + root.
     variantSet "drivetrain" = {
         "raycast" (
-            prepend references = @../../components/mobility/raycast_drivetrain.usda@</Drivetrain>
+            prepend references = @lunco://components/mobility/raycast_drivetrain.usda@</Drivetrain>
         ) {
         }
 
         "physical" (
-            prepend references = @../../components/mobility/physical_drivetrain.usda@</Drivetrain>
+            prepend references = @lunco://components/mobility/physical_drivetrain.usda@</Drivetrain>
         ) {
         }
     }

@@ -1,12 +1,9 @@
 within;
 // tagline: CommsLink — Friis link budget → SNR → Shannon rate → downlink buffer
 //
-// Top-level (`within;`) and bound to a link node's prim via `lunco:program:sourceAsset`,
-// the vehicle-model half of the doc-54 split. Unlike the electrical domain this is ONE
-// self-contained model with no `LunCo.Electrical`-style component library behind it: the
-// RF budget is a single lumped equation set, not a network of parts wired on a bus, so
-// there is nothing to decompose into reusable classes or `connect()`. It therefore needs
-// no seated library import — it compiles standalone from its sourceAsset.
+// Top-level (`within;`), bound to a link node's prim via `lunco:program:sourceAsset`. A
+// self-contained RF budget — one lumped equation set, no `LunCo.Electrical`-style library
+// import — so it compiles standalone from its sourceAsset.
 //
 // The RF layer the connectivity kernel deliberately does not have. `lunco-celestial`'s
 // link kernel is GEOMETRY ONLY: it answers "can these two see each other" (range,

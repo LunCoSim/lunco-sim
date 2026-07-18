@@ -43,7 +43,7 @@ def Xform "SandboxScene" (
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @shaders/blueprint.wgsl@
+                uniform asset info:wgsl:sourceAsset = @lunco://shaders/blueprint.wgsl@
                 color3f inputs:surface_color = (0.15, 0.15, 0.18)
                 color3f inputs:high_line_color = (0.20, 0.20, 0.23)
                 color3f inputs:low_line_color = (0.20, 0.20, 0.23)
@@ -65,7 +65,7 @@ def Xform "SandboxScene" (
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @shaders/blueprint.wgsl@
+                uniform asset info:wgsl:sourceAsset = @lunco://shaders/blueprint.wgsl@
                 color3f inputs:surface_color = (0.25, 0.22, 0.18)
                 color3f inputs:high_line_color = (0.30, 0.27, 0.23)
                 color3f inputs:low_line_color = (0.30, 0.27, 0.23)
@@ -87,7 +87,7 @@ def Xform "SandboxScene" (
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @shaders/blueprint.wgsl@
+                uniform asset info:wgsl:sourceAsset = @lunco://shaders/blueprint.wgsl@
                 color3f inputs:surface_color = (0.25, 0.52, 0.18)
                 color3f inputs:high_line_color = (0.30, 0.57, 0.23)
                 color3f inputs:low_line_color = (0.30, 0.57, 0.23)
@@ -111,7 +111,7 @@ def Xform "SandboxScene" (
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @shaders/balloon.wgsl@
+                uniform asset info:wgsl:sourceAsset = @lunco://shaders/balloon.wgsl@
                 color3f inputs:cell_a = (0.9, 0.7, 0.2)    # cell A (yellow identity)
                 color3f inputs:cell_b = (0.12, 0.12, 0.14) # cell B (dark)
                 # `customData {min,max,unit}` = the UI hint the Inspector's data-driven
@@ -240,7 +240,7 @@ def Xform "SandboxScene" (
     # === Skid-Steer, Raycast Wheels ===
 
     def Xform "Skid_Raycast_1" (
-        prepend references = @../../vessels/rovers/skid_rover.usda@</SkidRover>
+        prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
     )
     {
         double3 xformOp:translate = (15.0, 5.0, -10.0)
@@ -268,7 +268,7 @@ def Xform "SandboxScene" (
     }
 
     def Xform "Skid_Raycast_2" (
-        prepend references = @../../vessels/rovers/skid_rover.usda@</SkidRover>
+        prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
     )
     {
         double3 xformOp:translate = (15.0, 5.0, 10.0)
@@ -290,7 +290,7 @@ def Xform "SandboxScene" (
     # dispatcher. The joint rel-targets are asset-local in the variant and
     # path-translate into this instance's namespace through the reference.
     def Xform "Skid_Physical_1" (
-        prepend references = @../../vessels/rovers/skid_rover.usda@</SkidRover>
+        prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
         variants = {
             string drivetrain = "physical"
         }
@@ -308,7 +308,7 @@ def Xform "SandboxScene" (
     # === Ackermann, Raycast Wheels ===
 
     def Xform "Ackermann_Raycast_1" (
-        prepend references = @../../vessels/rovers/ackermann_rover.usda@</AckermannRover>
+        prepend references = @lunco://vessels/rovers/ackermann_rover.usda@</AckermannRover>
     )
     {
         double3 xformOp:translate = (-15.0, 5.0, 10.0)
@@ -323,7 +323,7 @@ def Xform "SandboxScene" (
     # === Ackermann, Physical Wheels ===
 
     def Xform "Ackermann_Physical_1" (
-        prepend references = @../../vessels/rovers/ackermann_rover.usda@</AckermannRover>
+        prepend references = @lunco://vessels/rovers/ackermann_rover.usda@</AckermannRover>
         variants = {
             string drivetrain = "physical"
         }
@@ -393,7 +393,7 @@ def Xform "SandboxScene" (
     # --- Balloons (cosim entities — geometry/physics + Modelica/Python wiring all in USD) ---
 
     def "RedBalloon" (
-        prepend references = @../../vessels/balloons/modelica_balloon.usda@</ModelicaBalloon>
+        prepend references = @lunco://vessels/balloons/modelica_balloon.usda@</ModelicaBalloon>
     )
     {
         double3 xformOp:translate = (10.0, 5.0, 0.0)
@@ -401,7 +401,7 @@ def Xform "SandboxScene" (
     }
 
     def "GreenBalloon" (
-        prepend references = @../../vessels/balloons/python_balloon.usda@</PythonBalloon>
+        prepend references = @lunco://vessels/balloons/python_balloon.usda@</PythonBalloon>
     )
     {
         double3 xformOp:translate = (-10.0, 5.0, 0.0)
@@ -424,7 +424,7 @@ def Xform "SandboxScene" (
         prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
-        uniform asset lunco:program:sourceAsset = @models/Oscillator.mo@
+        uniform asset lunco:program:sourceAsset = @lunco://models/Oscillator.mo@
         # Pure source: declares its output port (the active-cosim marker).
         float outputs:signal
     }
@@ -433,7 +433,7 @@ def Xform "SandboxScene" (
         prepend apiSchemas = ["LunCoProgramAPI"]
     )
     {
-        uniform asset lunco:program:sourceAsset = @models/Amplifier.py@
+        uniform asset lunco:program:sourceAsset = @lunco://models/Amplifier.py@
         # Its `scaled` output lands on CosimTarget's `force_y` — a force on a body
         # the client predicts, which only a realtime-safe program may drive.
         uniform bool lunco:program:realtimeSafe = true
@@ -577,7 +577,7 @@ def Xform "SandboxScene" (
             {
                 uniform token lunco:mount:socket = "probe"
                 uniform token lunco:mount:joint  = "fixed"
-                uniform asset lunco:mount:asset  = @components/mount_probe.usda@
+                uniform asset lunco:mount:asset  = @lunco://components/mount_probe.usda@
                 double3 xformOp:translate = (0, -2.5, 0)
                 uniform token[] xformOpOrder = ["xformOp:translate"]
             }

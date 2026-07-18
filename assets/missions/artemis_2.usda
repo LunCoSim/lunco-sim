@@ -13,7 +13,7 @@ def Xform "Artemis2" (
     uniform bool lunco:spawnable = false
 
     def Xform "Orion" (
-        prepend references = @../vessels/spacecrafts/orion/orion.usda@
+        prepend references = @lunco://vessels/spacecrafts/orion/orion.usda@
         displayName = "Artemis 2 Orion"
     )
     {

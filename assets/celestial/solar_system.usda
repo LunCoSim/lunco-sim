@@ -12,7 +12,7 @@
 # a sky references this file:
 #
 #   def "SolarSystem" (
-#       prepend references = @../../celestial/solar_system.usda@</SolarSystem>
+#       prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
 #   ) { }
 #
 # and a scene that does not (the flat sandbox arena) simply says nothing and gets a

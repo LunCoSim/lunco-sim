@@ -11,8 +11,8 @@
 #
 #   def Cylinder "Wheel_FL" (
 #       prepend references = [
-#           @../../components/mobility/wheel.usda@</Wheel>,
-#           @../../components/mobility/suspensions/standard.usda@</Suspension>,
+#           @lunco://components/mobility/wheel.usda@</Wheel>,
+#           @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
 #       ]
 #   )
 #   { double3 xformOp:translate = (0.8, -0.2, 1.0) }

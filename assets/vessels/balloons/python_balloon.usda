@@ -25,7 +25,7 @@ def Xform "PythonBalloon" (
     float physics:mass = 4.5
 
     # ── The plant ────────────────────────────────────────────────────────────
-    uniform asset lunco:program:sourceAsset = @models/GreenBalloon.py@
+    uniform asset lunco:program:sourceAsset = @lunco://models/GreenBalloon.py@
 
     # It drives `force_y` every solver step on a body the client predicts, so it must
     # promise it steps fast enough to be trusted with a force.
@@ -52,7 +52,7 @@ def Xform "PythonBalloon" (
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @shaders/balloon.wgsl@
+                uniform asset info:wgsl:sourceAsset = @lunco://shaders/balloon.wgsl@
                 color3f inputs:cell_a = (0.2, 0.8, 0.3)    # cell A (balloon identity)
                 color3f inputs:cell_b = (0.12, 0.12, 0.14) # cell B (dark)
                 color3f inputs:marker_color = (1.0, 1.0, 1.0) # marker wedge + poles

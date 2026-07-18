@@ -72,7 +72,7 @@ def Xform "SixWheelTest" (
 
     # The six-wheel rover, referenced from its reusable component definition.
     def Xform "Rover" (
-        prepend references = @../../vessels/rovers/six_wheel_rover.usda@</SixWheelRover>
+        prepend references = @lunco://vessels/rovers/six_wheel_rover.usda@</SixWheelRover>
     )
     {
         double3 xformOp:translate = (0, 1.0, 0)

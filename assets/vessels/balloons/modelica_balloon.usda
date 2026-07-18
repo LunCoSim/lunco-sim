@@ -17,7 +17,7 @@
 # ordinary child gprim that both renders and collides, and the rigid body is the root.
 #
 # Instantiate in scenes via reference + overrides:
-#   def Xform "RedBalloon" (prepend references = @../balloons/modelica_balloon.usda@</ModelicaBalloon>) {
+#   def Xform "RedBalloon" (prepend references = @lunco://vessels/balloons/modelica_balloon.usda@</ModelicaBalloon>) {
 #       double3 xformOp:translate = (10, 5, 0)
 #       uniform token[] xformOpOrder = ["xformOp:translate"]
 #   }
@@ -36,7 +36,7 @@ def Xform "ModelicaBalloon" (
     # ── The plant ────────────────────────────────────────────────────────────
     # Buoyancy, drag and envelope volume. `asset`, so the resolver and the reference
     # closure can see the file this scene depends on.
-    uniform asset lunco:program:sourceAsset = @models/Balloon.mo@
+    uniform asset lunco:program:sourceAsset = @lunco://models/Balloon.mo@
 
     # It drives `force_y` every solver step on a body the client predicts, so it must
     # promise it steps fast enough to be trusted with a force.
@@ -63,7 +63,7 @@ def Xform "ModelicaBalloon" (
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @shaders/balloon.wgsl@
+                uniform asset info:wgsl:sourceAsset = @lunco://shaders/balloon.wgsl@
                 color3f inputs:cell_a = (0.9, 0.2, 0.2)    # cell A (balloon identity)
                 color3f inputs:cell_b = (0.12, 0.12, 0.14) # cell B (dark)
                 color3f inputs:marker_color = (1.0, 1.0, 1.0) # marker wedge + poles

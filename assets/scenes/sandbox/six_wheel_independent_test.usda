@@ -69,7 +69,7 @@ def Xform "SixWheelIndependentTest" (
     }
 
     def Xform "Rover" (
-        prepend references = @../../vessels/rovers/six_wheel_independent.usda@</SixWheelIndependent>
+        prepend references = @lunco://vessels/rovers/six_wheel_independent.usda@</SixWheelIndependent>
     )
     {
         double3 xformOp:translate = (0, 1.0, 0)

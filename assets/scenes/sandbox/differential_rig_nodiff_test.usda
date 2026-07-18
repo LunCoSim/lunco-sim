@@ -57,7 +57,7 @@ def Xform "DiffRigTest" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
     def Xform "Rig" (
-        prepend references = @../../vessels/rovers/differential_rig.usda@</DiffRig>
+        prepend references = @lunco://vessels/rovers/differential_rig.usda@</DiffRig>
     )
     {
         # Disable the differential: zero the gear joint's angular drive (local `over`).

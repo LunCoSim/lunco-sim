@@ -83,7 +83,7 @@ def Xform "CommsWallTest" (
     # The base station. Its link node is the `Antenna` child at dish height
     # (class = "base"); see structures/comms_mast.usda.
     def Xform "Mast" (
-        prepend references = @../../structures/comms_mast.usda@</CommsMast>
+        prepend references = @lunco://structures/comms_mast.usda@</CommsMast>
     )
     {
         double3 xformOp:translate = (0, 0, -20.0)
@@ -108,7 +108,7 @@ def Xform "CommsWallTest" (
     # box is built from the geometry prim's OWN `Transform` scale, so scaling the
     # parent would have grown the drawn wall while leaving its shadow at 4×2×0.5.
     def Xform "Wall" (
-        prepend references = @../../props/wall.usda@</Wall>
+        prepend references = @lunco://props/wall.usda@</Wall>
     )
     {
         double3 xformOp:translate = (0, 6.0, 0)
@@ -124,7 +124,7 @@ def Xform "CommsWallTest" (
     # is the other link endpoint; class it as "rover" so scripts can address the
     # role as well as the GID.
     def Xform "Rover" (
-        prepend references = @../../vessels/rovers/skid_rover.usda@</SkidRover>
+        prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
     )
     {
         double3 xformOp:translate = (0, 0.5, 20.0)

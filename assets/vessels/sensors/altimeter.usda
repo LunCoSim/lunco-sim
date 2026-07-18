@@ -9,7 +9,7 @@
 # imu.usda. Reference it onto a vessel with `prepend references` + a local mount
 # translate; override `rangeMax` / `rangeAxis` on the referencing prim as needed:
 #
-#   def "Altimeter" (prepend references = @../../vessels/sensors/altimeter.usda@</Altimeter>)
+#   def "Altimeter" (prepend references = @lunco://vessels/sensors/altimeter.usda@</Altimeter>)
 #   { double3 xformOp:translate = (0, -3.3, 0); uniform token[] xformOpOrder = ["xformOp:translate"] }
 #
 # Backed by `lunco_cosim::sensors::RangeSensor` (gated on `lunco:sensor:range`). It

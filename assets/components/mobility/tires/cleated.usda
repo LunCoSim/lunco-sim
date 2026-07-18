@@ -16,7 +16,7 @@
 # restating a tread it did not change.
 
 over "Tire" (
-    prepend references = @regolith.usda@</Tire>
+    prepend references = @lunco://components/mobility/tires/regolith.usda@</Tire>
     kind = "component"
 )
 {

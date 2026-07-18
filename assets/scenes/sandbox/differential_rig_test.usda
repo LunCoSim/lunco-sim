@@ -58,7 +58,7 @@ def Xform "DiffRigTest" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
     def Xform "Rig" (
-        prepend references = @../../vessels/rovers/differential_rig.usda@</DiffRig>
+        prepend references = @lunco://vessels/rovers/differential_rig.usda@</DiffRig>
     )
     {
         double3 xformOp:translate = (0, 1.5, 0)

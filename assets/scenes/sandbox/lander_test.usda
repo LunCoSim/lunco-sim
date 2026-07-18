@@ -103,8 +103,8 @@ def Xform "LanderTest" (
     # `Xform` composes in through the arc.
     def "Lander" (
         prepend references = [
-            @../../vessels/landers/descent_lander.usda@</DescentLander>,
-            @../../components/gnc/descent_guidance.usda@</DescentGuidance>,
+            @lunco://vessels/landers/descent_lander.usda@</DescentLander>,
+            @lunco://components/gnc/descent_guidance.usda@</DescentGuidance>,
         ]
     )
     {
@@ -115,7 +115,7 @@ def Xform "LanderTest" (
 
     # ── The rover attached to the lander ──
     def Xform "SkidRover" (
-        prepend references = @../../vessels/rovers/skid_rover.usda@</SkidRover>
+        prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
     )
     {
         double3 xformOp:translate = (0, 58.35, 0)
@@ -129,7 +129,7 @@ def Xform "LanderTest" (
         # moment you spawned it would be a surprise, not a feature.
         def LunCoProgram "Autopilot"
         {
-            uniform asset lunco:program:sourceAsset = @scenarios/rover_autopilot.rhai@
+            uniform asset lunco:program:sourceAsset = @lunco://scenarios/rover_autopilot.rhai@
         }
     }
 
@@ -149,21 +149,21 @@ def Xform "LanderTest" (
     # `rover_surface_ops.rhai` judges arrival with a distance read and emits its own
     # `waypoint_reached` event for anything downstream (the tutorial) to wait on.
     def Xform "RoverTarget1" (
-        prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker>
+        prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
     )
     {
         double3 xformOp:translate = (14.0, 0.0, 9.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
     def Xform "RoverTarget2" (
-        prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker>
+        prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
     )
     {
         double3 xformOp:translate = (-11.0, 0.0, 16.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
     def Xform "RoverTarget3" (
-        prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker>
+        prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
     )
     {
         double3 xformOp:translate = (5.0, 0.0, -15.0)
@@ -173,7 +173,7 @@ def Xform "LanderTest" (
     # Visual touchdown target. The lander's GNC descends on its altimeter, not on a
     # commanded pad pose, so this marker is a landmark for the player, not a wire.
     def Xform "LandingLocation" (
-        prepend references = @../../vessels/markers/landing_location.usda@</LandingLocationMarker>
+        prepend references = @lunco://vessels/markers/landing_location.usda@</LandingLocationMarker>
     )
     {
         double3 xformOp:translate = (0.0, 0.0, 0.0)
@@ -201,7 +201,7 @@ def Xform "LanderTest" (
         # state predicates (`wait_until`); no tick-counting / dt integration in rhai.
         def LunCoProgram "Mission"
         {
-            uniform asset lunco:program:sourceAsset = @scenarios/rover_surface_ops.rhai@
+            uniform asset lunco:program:sourceAsset = @lunco://scenarios/rover_surface_ops.rhai@
         }
     }
 }

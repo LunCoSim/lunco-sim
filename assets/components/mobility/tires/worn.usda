@@ -13,7 +13,7 @@
 # why this file is three lines long.
 
 over "Tire" (
-    prepend references = @regolith.usda@</Tire>
+    prepend references = @lunco://components/mobility/tires/regolith.usda@</Tire>
     kind = "component"
 )
 {

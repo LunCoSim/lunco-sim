@@ -60,7 +60,7 @@ def Xform "RockerBogie" (
     # Intent->port control (stage 2): shared rover profile as a child `references`
     # arc so it composes through a spawn/reference like the wheels.
     def "Controls" (
-        prepend references = @../control_profiles.usda@</RoverControls>
+        prepend references = @lunco://vessels/control_profiles.usda@</RoverControls>
     )
     {
     }
@@ -301,8 +301,8 @@ def Xform "RockerBogie" (
         # Front Left Wheel
         def Cylinder "Wheel_FL" (
             prepend references = [
-                @../../components/mobility/wheel.usda@</Wheel>,
-                @../../components/mobility/suspensions/rocker.usda@</Suspension>,
+                @lunco://components/mobility/wheel.usda@</Wheel>,
+                @lunco://components/mobility/suspensions/rocker.usda@</Suspension>,
             ]
         )
         {
@@ -393,8 +393,8 @@ def Xform "RockerBogie" (
         # Front Right Wheel
         def Cylinder "Wheel_FR" (
             prepend references = [
-                @../../components/mobility/wheel.usda@</Wheel>,
-                @../../components/mobility/suspensions/rocker.usda@</Suspension>,
+                @lunco://components/mobility/wheel.usda@</Wheel>,
+                @lunco://components/mobility/suspensions/rocker.usda@</Suspension>,
             ]
         )
         {
@@ -500,8 +500,8 @@ def Xform "RockerBogie" (
         # Middle Left Wheel
         def Cylinder "Wheel_ML" (
             prepend references = [
-                @../../components/mobility/wheel.usda@</Wheel>,
-                @../../components/mobility/suspensions/rocker.usda@</Suspension>,
+                @lunco://components/mobility/wheel.usda@</Wheel>,
+                @lunco://components/mobility/suspensions/rocker.usda@</Suspension>,
             ]
         )
         {
@@ -519,8 +519,8 @@ def Xform "RockerBogie" (
         # Rear Left Wheel
         def Cylinder "Wheel_RL" (
             prepend references = [
-                @../../components/mobility/wheel.usda@</Wheel>,
-                @../../components/mobility/suspensions/rocker.usda@</Suspension>,
+                @lunco://components/mobility/wheel.usda@</Wheel>,
+                @lunco://components/mobility/suspensions/rocker.usda@</Suspension>,
             ]
         )
         {
@@ -619,8 +619,8 @@ def Xform "RockerBogie" (
         # Middle Right Wheel
         def Cylinder "Wheel_MR" (
             prepend references = [
-                @../../components/mobility/wheel.usda@</Wheel>,
-                @../../components/mobility/suspensions/rocker.usda@</Suspension>,
+                @lunco://components/mobility/wheel.usda@</Wheel>,
+                @lunco://components/mobility/suspensions/rocker.usda@</Suspension>,
             ]
         )
         {
@@ -638,8 +638,8 @@ def Xform "RockerBogie" (
         # Rear Right Wheel
         def Cylinder "Wheel_RR" (
             prepend references = [
-                @../../components/mobility/wheel.usda@</Wheel>,
-                @../../components/mobility/suspensions/rocker.usda@</Suspension>,
+                @lunco://components/mobility/wheel.usda@</Wheel>,
+                @lunco://components/mobility/suspensions/rocker.usda@</Suspension>,
             ]
         )
         {

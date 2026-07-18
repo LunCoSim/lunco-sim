@@ -25,7 +25,7 @@ def Xform "CommsDemoScene" (
     # ephemeris all exist because these prims declare them, not because a Rust flag
     # was flipped. A scene that says nothing here gets no celestial content at all.
     def "SolarSystem" (
-        prepend references = @../../celestial/solar_system.usda@</SolarSystem>
+        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
     )
     {
     }
@@ -90,7 +90,7 @@ def Xform "CommsDemoScene" (
     }
 
     def Xform "Rover" (
-        prepend references = @../../vessels/rovers/skid_rover.usda@</SkidRover>
+        prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
     )
     {
         double3 xformOp:translate = (6, 1.4, 0)
@@ -123,7 +123,7 @@ def Xform "CommsDemoScene" (
 
     # Base comms mast — a scene-local antenna, like the moonbase one.
     def Xform "BaseMast" (
-        prepend references = @../../components/comms/antenna.usda@</CommsAntenna>
+        prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
     )
     {
         double3 xformOp:translate = (-8, 0, -4)
@@ -135,7 +135,7 @@ def Xform "CommsDemoScene" (
     # reposition). Placed on the Moon's grid by the celestial systems when the
     # solar hierarchy is enabled; hidden otherwise — comms math is unaffected.
     def Xform "RelaySat" (
-        prepend references = @../../vessels/satellites/relay_sat.usda@</RelaySat>
+        prepend references = @lunco://vessels/satellites/relay_sat.usda@</RelaySat>
     )
     {
     }
@@ -143,7 +143,7 @@ def Xform "CommsDemoScene" (
     # Earth ground stations — the three DSN complexes, ~120° apart so at
     # least one always sees the Moon (that's WHY there are three).
     def Xform "DSS_Madrid" (
-        prepend references = @../../components/comms/ground_station.usda@</GroundStation>
+        prepend references = @lunco://components/comms/ground_station.usda@</GroundStation>
     )
     {
         double lunco:anchor:lat = 40.4314
@@ -153,7 +153,7 @@ def Xform "CommsDemoScene" (
     }
 
     def Xform "DSS_Goldstone" (
-        prepend references = @../../components/comms/ground_station.usda@</GroundStation>
+        prepend references = @lunco://components/comms/ground_station.usda@</GroundStation>
     )
     {
         double lunco:anchor:lat = 35.4267
@@ -163,7 +163,7 @@ def Xform "CommsDemoScene" (
     }
 
     def Xform "DSS_Canberra" (
-        prepend references = @../../components/comms/ground_station.usda@</GroundStation>
+        prepend references = @lunco://components/comms/ground_station.usda@</GroundStation>
     )
     {
         double lunco:anchor:lat = -35.4014

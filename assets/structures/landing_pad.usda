@@ -25,7 +25,7 @@ def Xform "LandingPad" (
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @shaders/regolith.wgsl@
+                uniform asset info:wgsl:sourceAsset = @lunco://shaders/regolith.wgsl@
                 color3f inputs:colorA = (0.1, 0.1, 0.1)
                 token outputs:surface
             }

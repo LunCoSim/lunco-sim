@@ -39,7 +39,7 @@ def Xform "SixWheelRover" (
     # Intent->port control (stage 2): shared rover profile as a child `references`
     # arc so it composes through a spawn/reference like the wheels.
     def "Controls" (
-        prepend references = @../control_profiles.usda@</RoverControls>
+        prepend references = @lunco://vessels/control_profiles.usda@</RoverControls>
     )
     {
     }
@@ -65,8 +65,8 @@ def Xform "SixWheelRover" (
     # --- Left bank (binds to drive_left) ------------------------------------
     def Cylinder "Wheel_L0" (
         prepend references = [
-            @../../components/mobility/wheel.usda@</Wheel>,
-            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+            @lunco://components/mobility/wheel.usda@</Wheel>,
+            @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
         ]
     )
     {
@@ -84,8 +84,8 @@ def Xform "SixWheelRover" (
 
     def Cylinder "Wheel_L1" (
         prepend references = [
-            @../../components/mobility/wheel.usda@</Wheel>,
-            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+            @lunco://components/mobility/wheel.usda@</Wheel>,
+            @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
         ]
     )
     {
@@ -103,8 +103,8 @@ def Xform "SixWheelRover" (
 
     def Cylinder "Wheel_L2" (
         prepend references = [
-            @../../components/mobility/wheel.usda@</Wheel>,
-            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+            @lunco://components/mobility/wheel.usda@</Wheel>,
+            @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
         ]
     )
     {
@@ -123,8 +123,8 @@ def Xform "SixWheelRover" (
     # --- Right bank (binds to drive_right) ----------------------------------
     def Cylinder "Wheel_R0" (
         prepend references = [
-            @../../components/mobility/wheel.usda@</Wheel>,
-            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+            @lunco://components/mobility/wheel.usda@</Wheel>,
+            @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
         ]
     )
     {
@@ -142,8 +142,8 @@ def Xform "SixWheelRover" (
 
     def Cylinder "Wheel_R1" (
         prepend references = [
-            @../../components/mobility/wheel.usda@</Wheel>,
-            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+            @lunco://components/mobility/wheel.usda@</Wheel>,
+            @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
         ]
     )
     {
@@ -161,8 +161,8 @@ def Xform "SixWheelRover" (
 
     def Cylinder "Wheel_R2" (
         prepend references = [
-            @../../components/mobility/wheel.usda@</Wheel>,
-            @../../components/mobility/suspensions/standard.usda@</Suspension>,
+            @lunco://components/mobility/wheel.usda@</Wheel>,
+            @lunco://components/mobility/suspensions/standard.usda@</Suspension>,
         ]
     )
     {

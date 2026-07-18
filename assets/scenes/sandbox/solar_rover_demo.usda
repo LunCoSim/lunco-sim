@@ -46,7 +46,7 @@ def Xform "SolarRoverTest" (
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @shaders/solar_panel.wgsl@
+                uniform asset info:wgsl:sourceAsset = @lunco://shaders/solar_panel.wgsl@
                 color3f inputs:cell_color = (0.05, 0.05, 0.35)
                 color3f inputs:bus_color = (0.85, 0.85, 0.90)
                 color3f inputs:frame_color = (0.35, 0.35, 0.38)
@@ -106,7 +106,7 @@ def Xform "SolarRoverTest" (
 
     # ── The Solar Powered Rover ──────────────────────────────────────────────
     def Xform "SolarRover" (
-        prepend references = @../../vessels/rovers/skid_rover.usda@</SkidRover>
+        prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
     )
     {
         double3 xformOp:translate = (0.0, 0.5, 0.0)
@@ -170,7 +170,7 @@ def Xform "SolarRoverTest" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
-            uniform asset lunco:program:sourceAsset = @models/SunTracker.mo@
+            uniform asset lunco:program:sourceAsset = @lunco://models/SunTracker.mo@
             # Self-wire sun azimuth from environment solar bridge
             float inputs:sun_azimuth.connect = </SolarRoverTest/SolarRover/SunTrackerController.outputs:sun_azimuth>
         }
@@ -180,7 +180,7 @@ def Xform "SolarRoverTest" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
-            uniform asset lunco:program:sourceAsset = @models/SolarRoverPower.mo@
+            uniform asset lunco:program:sourceAsset = @lunco://models/SolarRoverPower.mo@
             # Self-wire sun azimuth from environment solar bridge
             float inputs:sun_azimuth.connect = </SolarRoverTest/SolarRover/PowerSubsystem.outputs:sun_azimuth>
             # Connect actual panel yaw from SunTracker's yaw output
@@ -191,7 +191,7 @@ def Xform "SolarRoverTest" (
         # ── Autopilot Script (Rhai) ──
         def LunCoProgram "Autopilot"
         {
-            uniform asset lunco:program:sourceAsset = @scenarios/solar_rover_demo.rhai@
+            uniform asset lunco:program:sourceAsset = @lunco://scenarios/solar_rover_demo.rhai@
         }
 
         # ── Chase camera riding behind the rover ──
@@ -217,7 +217,7 @@ def Xform "SolarRoverTest" (
 
     # ── Waypoint course ──
     def Xform "RoverTarget1" (
-        prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker>
+        prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
     )
     {
         double3 xformOp:translate = (18.0, 0.0, 10.0)
@@ -225,7 +225,7 @@ def Xform "SolarRoverTest" (
     }
 
     def Xform "RoverTarget2" (
-        prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker>
+        prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
     )
     {
         double3 xformOp:translate = (-15.0, 0.0, 20.0)
@@ -233,7 +233,7 @@ def Xform "SolarRoverTest" (
     }
 
     def Xform "RoverTarget3" (
-        prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker>
+        prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
     )
     {
         double3 xformOp:translate = (8.0, 0.0, -18.0)
@@ -247,7 +247,7 @@ def Xform "SolarRoverTest" (
 
         def LunCoProgram "Mission"
         {
-            uniform asset lunco:program:sourceAsset = @scenarios/solar_rover_cinematic.rhai@
+            uniform asset lunco:program:sourceAsset = @lunco://scenarios/solar_rover_cinematic.rhai@
         }
     }
 }

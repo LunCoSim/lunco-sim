@@ -73,7 +73,7 @@ def Xform "FirstDrive" (
 
     # The rover the student drives. Skid-steer vehicle; possessable.
     def Xform "Rover" (
-        prepend references = @../../vessels/rovers/skid_rover.usda@</SkidRover>
+        prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
         prepend apiSchemas = ["LunCoVesselAPI"]
     )
     {
@@ -85,7 +85,7 @@ def Xform "FirstDrive" (
     # The goal: a glowing dome with an overlap-only "waypoint" trigger zone that
     # fires `enter:waypoint` when the rover reaches it — the mission's arrival event.
     def Xform "Flag" (
-        prepend references = @../../vessels/markers/waypoint.usda@</WaypointMarker>
+        prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
     )
     {
         double3 xformOp:translate = (14.0, 0.0, 8.0)

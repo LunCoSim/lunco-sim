@@ -16,8 +16,8 @@
 #
 #   def Cylinder "Wheel_FL" (
 #       prepend references = [
-#           @../../components/mobility/wheel.usda@</Wheel>,
-#           @../../components/mobility/suspensions/rocker.usda@</Suspension>,
+#           @lunco://components/mobility/wheel.usda@</Wheel>,
+#           @lunco://components/mobility/suspensions/rocker.usda@</Suspension>,
 #       ]
 #   )
 #

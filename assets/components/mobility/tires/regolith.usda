@@ -13,7 +13,7 @@
 # rubber. A wheel picks one through its `tire` variantSet:
 #
 #   def Cylinder "Wheel_FL" (
-#       prepend references = @../../components/mobility/wheel.usda@</Wheel>
+#       prepend references = @lunco://components/mobility/wheel.usda@</Wheel>
 #       variants = { string tire = "regolith" }
 #   )
 #
@@ -49,7 +49,7 @@ over "Tire" (
         def Shader "Shader"
         {
             uniform token info:implementationSource = "sourceAsset"
-            uniform asset info:wgsl:sourceAsset = @shaders/wheel.wgsl@
+            uniform asset info:wgsl:sourceAsset = @lunco://shaders/wheel.wgsl@
             color3f inputs:rim_color = (0.98, 0.98, 1.00)   # spoke / rim (bright metal)
             color3f inputs:tire_color = (0.10, 0.10, 0.11)  # rubber
             float inputs:spoke_count = 6.0

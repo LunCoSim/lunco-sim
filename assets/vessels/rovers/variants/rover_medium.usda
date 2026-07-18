@@ -27,27 +27,18 @@ def Xform "RoverMedium" (
     float3 physics:diagonalInertia = (2400.0, 3000.0, 1200.0)
     float physxRigidBody:angularDamping = 2.0
 
-    # Handling, per wheel. `worn` tires, but this tier is tuned FINER than stock worn
-    # (μ=0.60 ⇒ 31.0°): μ is overridden to 0.50 per wheel. Measured against the SURVEYED
-    # site — summer_space_school/SURVEY.md, on the shipped DEM over a 4 m baseline (the
-    # baseline is part of the number: 2 m is pixel noise on a 2 m/px DTM). ДЗЗ route
-    # 19.8°, naive straight line 25.5°, steep N/E half 28.4-31.1°.
-    #   μ=0.50 ⇒ 26.6°: holds the route AND the naive line (1.1° margin) and CANNOT
-    #   climb the N/E half — so the bearing you pick decides the run, the whole §3.2
-    #   exercise. Stock worn (0.60 ⇒ 31.0°) cleared 15 of 16 sectors' best lines, making
-    #   the slope hazard decorative — hence the per-wheel override rather than the tire.
-    over "Wheel_L0" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0
-        double lunco:tire:frictionCoefficient = 0.5 }
-    over "Wheel_L1" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0
-        double lunco:tire:frictionCoefficient = 0.5 }
-    over "Wheel_L2" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0
-        double lunco:tire:frictionCoefficient = 0.5 }
-    over "Wheel_R0" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0
-        double lunco:tire:frictionCoefficient = 0.5 }
-    over "Wheel_R1" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0
-        double lunco:tire:frictionCoefficient = 0.5 }
-    over "Wheel_R2" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0
-        double lunco:tire:frictionCoefficient = 0.5 }
+    # Handling, per wheel. `worn` tires: μ=0.60 ⇒ slip limit 31.0°. Tuned against the
+    # SURVEYED site (summer_space_school, real Apollo 15 crater), whose ways in run
+    # 20.1° on the SSW bearing, 24.7° on the naive straight line and 34.4° on the WSW
+    # wall — so this rover holds the ДЗЗ route and the naive line, and CANNOT climb the
+    # steep side. The bearing you pick decides the run, which is the whole §3.2
+    # exercise.
+    over "Wheel_L0" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0 }
+    over "Wheel_L1" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0 }
+    over "Wheel_L2" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0 }
+    over "Wheel_R0" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0 }
+    over "Wheel_R1" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0 }
+    over "Wheel_R2" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0 }
 
     # Livery — amber (medium).
     over "Chassis" { color3f[] primvars:displayColor = [(0.85, 0.65, 0.15)] }

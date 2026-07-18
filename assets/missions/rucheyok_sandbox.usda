@@ -13,7 +13,7 @@ def Xform "RucheyokSandbox" (
     uniform bool lunco:spawnable = false
 
     def Xform "Rucheyok" (
-        prepend references = @../vessels/rovers/rucheyok/rucheyok.usda@
+        prepend references = @lunco://vessels/rovers/rucheyok/rucheyok.usda@
         displayName = "Rucheyok Rover"
     )
     {

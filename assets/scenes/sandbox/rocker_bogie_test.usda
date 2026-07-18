@@ -86,7 +86,7 @@ def Xform "RockerBogieTest" (
     }
 
     def Xform "Rover" (
-        prepend references = @../../vessels/rovers/rocker_bogie.usda@</RockerBogie>
+        prepend references = @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>
     )
     {
         double3 xformOp:translate = (0, 1.6, 0)

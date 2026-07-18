@@ -13,8 +13,8 @@
 #
 #   def "Lander" (
 #       prepend references = [
-#           @../../vessels/landers/descent_lander.usda@</DescentLander>,
-#           @../../components/gnc/descent_guidance.usda@</DescentGuidance>,
+#           @lunco://vessels/landers/descent_lander.usda@</DescentLander>,
+#           @lunco://components/gnc/descent_guidance.usda@</DescentGuidance>,
 #       ]
 #   )
 #   { double3 xformOp:translate = (0, 60.0, 0) }
@@ -109,7 +109,7 @@ def Xform "DescentLander" (
             def Shader "Surface"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @shaders/solar_panel.wgsl@
+                uniform asset info:wgsl:sourceAsset = @lunco://shaders/solar_panel.wgsl@
                 float inputs:v_scale = 1.7
                 float inputs:cell_rows = 8.0
                 float inputs:cell_cols = 14.0
@@ -145,7 +145,7 @@ def Xform "DescentLander" (
     # see `models/Lander.mo`. Its `inputs:` are the vessel's control surface: the
     # control profile writes `external_throttle` / `pitch` / `roll` / `yaw` into them
     # when a session possesses this prim.
-    uniform asset lunco:program:sourceAsset = @models/Lander.mo@
+    uniform asset lunco:program:sourceAsset = @lunco://models/Lander.mo@
 
     # It drives thrust every solver step on a body the client predicts, so it must
     # promise it steps fast enough to be trusted with a force.
@@ -209,14 +209,14 @@ def Xform "DescentLander" (
         doc = "Touchdown latch and propellant-event notices. Does not fly the vehicle."
     )
     {
-        uniform asset lunco:program:sourceAsset = @scenarios/lander_subsystems.rhai@
+        uniform asset lunco:program:sourceAsset = @lunco://scenarios/lander_subsystems.rhai@
     }
 
     # Intent->port control: shared lander profile as a child `references` arc
     # (forward/back->pitch, left/right->roll, yaw_left/right->yaw, action->throttle).
     # Composes through a spawn/reference like a component.
     def "Controls" (
-        prepend references = @../control_profiles.usda@</LanderControls>
+        prepend references = @lunco://vessels/control_profiles.usda@</LanderControls>
     )
     {
     }
@@ -243,7 +243,7 @@ def Xform "DescentLander" (
     # what reads it is somebody else's business (the guidance component wires it).
     # Mounted at the nozzle bottom, casting -Y.
     def "Altimeter" (
-        prepend references = @../sensors/altimeter.usda@</Altimeter>
+        prepend references = @lunco://vessels/sensors/altimeter.usda@</Altimeter>
     )
     {
         double3 xformOp:translate = (0.0, -3.3, 0.0) # nozzle bottom
@@ -252,7 +252,7 @@ def Xform "DescentLander" (
 
     # IMU: 9-DOF attitude + accel source. Mounted at the body centre of mass.
     def "IMU" (
-        prepend references = @../sensors/imu.usda@</Imu>
+        prepend references = @lunco://vessels/sensors/imu.usda@</Imu>
     )
     {
         double3 xformOp:translate = (0.0, 0.0, 0.0) # at CoM
@@ -351,7 +351,7 @@ def Xform "DescentLander" (
 
         def LunCoProgram "Plume"
         {
-            uniform asset lunco:program:sourceAsset = @scenarios/flame.rhai@
+            uniform asset lunco:program:sourceAsset = @lunco://scenarios/flame.rhai@
             custom float lunco:param:wmax = 1.05
             custom float lunco:param:lmax = 3.6
             custom float lunco:param:flick = 1.0
@@ -373,7 +373,7 @@ def Xform "DescentLander" (
 
         def LunCoProgram "Plume"
         {
-            uniform asset lunco:program:sourceAsset = @scenarios/flame.rhai@
+            uniform asset lunco:program:sourceAsset = @lunco://scenarios/flame.rhai@
             custom float lunco:param:wmax = 0.5
             custom float lunco:param:lmax = 2.5
             custom float lunco:param:flick = 0.5

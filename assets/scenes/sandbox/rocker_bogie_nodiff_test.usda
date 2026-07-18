@@ -79,7 +79,7 @@ def Xform "RockerBogieTest" (
     }
 
     def Xform "Rover" (
-        prepend references = @../../vessels/rovers/rocker_bogie.usda@</RockerBogie>
+        prepend references = @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>
     )
     {
         # Disable the differential: zero the gear joint's angular drive (a local

@@ -70,7 +70,7 @@ def Xform "SandboxIntro" (
 
     # A rover in view so the "Viewport" step has something to frame.
     def Xform "Rover" (
-        prepend references = @../../vessels/rovers/skid_rover.usda@</SkidRover>
+        prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
     )
     {
         double3 xformOp:translate = (0, 1.0, 0)
