@@ -51,7 +51,7 @@
 use std::f32::consts::FRAC_PI_2;
 
 use bevy::log::{error_once, warn_once};
-use bevy::math::{Quat, Vec3};
+use bevy::math::{DVec3, Quat, Vec3};
 use bevy::prelude::Transform;
 
 use crate::read::UsdRead;
@@ -194,6 +194,28 @@ impl ConventionTransform {
     /// axes, unit vectors.
     pub fn dir(&self, v: Vec3) -> Vec3 {
         self.rot * v
+    }
+
+    /// [`point`](Self::point) in `f64`, for the values the physics bridge keeps
+    /// in [`DVec3`] — joint anchors (`physics:localPos0/1`). Routing those
+    /// through the `f32` [`point`](Self::point) would discard exactly the
+    /// precision `DVec3` exists to preserve, so the physics path gets its own
+    /// arm rather than a round-trip.
+    ///
+    /// What this does and does not buy: the INPUT and the `metersPerUnit`
+    /// multiply stay in `f64`, but [`rot`](Self::rot) is an `f32` [`Quat`], so
+    /// the rotation itself still carries ~3e-8 of `f32` error — identical to
+    /// every other consumer. Full `f64` would mean storing the up-axis rotation
+    /// in `f64` too, which is not worth it for a value USD restricts to the
+    /// identity or one ±90° axis swap.
+    pub fn point_d(&self, p: DVec3) -> DVec3 {
+        (self.rot.as_dquat() * p) * self.scale
+    }
+
+    /// [`dir`](Self::dir) in `f64` — a joint's rotation axis. Rotated, never
+    /// scaled. Same `f32`-rotation caveat as [`point_d`](Self::point_d).
+    pub fn dir_d(&self, v: DVec3) -> DVec3 {
+        self.rot.as_dquat() * v
     }
 
     /// A **geometry orientation** authored in stage-local coordinates (e.g. the

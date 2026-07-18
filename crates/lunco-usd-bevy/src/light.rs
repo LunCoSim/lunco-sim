@@ -11,6 +11,18 @@
 //! - `DomeLight` — sky fill. UsdLux deliberately has no "ambient light"
 //!   property; a dome is the standard expression of one. Its intensity
 //!   drives the `GlobalAmbientLight` resource.
+//! - `SphereLight` — a local point/spot (spot when `UsdLuxShapingAPI`'s
+//!   `inputs:shaping:cone:angle` is authored).
+//! - `RectLight` — a rectangular area light (deck-ceiling panels, softbox
+//!   fills). UsdLux and Bevy agree on the geometry — XY plane, emitting along
+//!   local **-Z** — so it maps 1:1 with no axis fixup. **Requires the
+//!   `area_light_luts` cargo feature** (enabled on `lunco-render-bevy`); the
+//!   component is render-free and authors fine without it, but samples no LTC
+//!   tables and therefore renders as nothing.
+//!
+//! `DiskLight` / `CylinderLight` are deliberately NOT mapped: Bevy has no
+//! equivalent, and approximating a disk with a rect would silently change the
+//! authored lighting rather than admit the gap.
 //!
 //! ## Fallback policy
 //!
@@ -286,6 +298,49 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
                     range
                 );
             }
+            true
+        }
+        Some("RectLight") => {
+            // `UsdLuxRectLight` and Bevy's `RectLight` share a geometry
+            // convention exactly: the rectangle lies in the local XY plane and
+            // emits along local **-Z**. So orientation needs no fixup — the
+            // shared transform path in `instantiate_usd_prim` already places it,
+            // the same deal `DistantLight` gets.
+            //
+            // INTENSITY UNITS DIFFER from the SphereLight arm above. Bevy's
+            // `PointLight`/`SpotLight::intensity` is luminous intensity in
+            // candela; `RectLight::intensity` is luminous POWER in lumens. UsdLux
+            // `inputs:intensity` is a dimensionless scale either way, so it is
+            // taken as lumens here and the default is a lumens-scale number — not
+            // the 1000.0 candela the sphere path uses.
+            let intensity_lm = read_intensity_with_exposure(reader, sdf_path, 10_000.0);
+            let color = crate::get_attribute_as_vec3(reader, sdf_path, "inputs:color")
+                .map(|c| Color::linear_rgb(c.x, c.y, c.z))
+                .unwrap_or(Color::WHITE);
+            // `inputs:width` / `inputs:height` are the UsdLuxRectLight schema's
+            // own properties; 1 m square is the schema fallback.
+            let width = get_attribute_as_f32(reader, sdf_path, "inputs:width").unwrap_or(1.0);
+            let height = get_attribute_as_f32(reader, sdf_path, "inputs:height").unwrap_or(1.0);
+            let range = get_attribute_as_f32(reader, sdf_path, "lunco:light:range").unwrap_or(30.0);
+
+            // No `UsdAuthoredLight`: like SphereLight, a rect is a LOCAL light (a
+            // deck-ceiling panel, a softbox fill), not a scene-dominant sun/sky.
+            // Stamping it would retire the binary's fallback sun.
+            commands.entity(entity).try_insert(RectLight {
+                color,
+                intensity: intensity_lm,
+                range,
+                width,
+                height,
+            });
+            info!(
+                "[usd-bevy] {} RectLight intensity={} lm, {}x{} m, range={} m",
+                sdf_path.as_str(),
+                intensity_lm,
+                width,
+                height,
+                range
+            );
             true
         }
         _ => false,
