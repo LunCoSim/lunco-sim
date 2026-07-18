@@ -32,11 +32,11 @@ use openusd::sdf::{Path as SdfPath, Value};
 use openusd::usd::{PrimPredicate, Stage};
 use openusd::usda;
 
-use lunco_assets::asset_path::canonicalize;
+use lunco_assets::asset_path::{canonicalize, canonicalize_root};
 
 use crate::canonical::StageRecipe;
 use crate::resolver::{
-    anchor_str, is_binary_asset, resolve_binary_uri, LuncoUsdResolver,
+    canonicalize_at, is_binary_asset, LuncoUsdResolver,
     SharedLayerBytes,
 };
 
@@ -52,7 +52,7 @@ pub(crate) async fn fetch_layer_closure(
     root_asset_path: &str,
     root_bytes: Vec<u8>,
 ) -> Result<StageRecipe> {
-    let root_id = canonicalize(root_asset_path, None);
+    let root_id = canonicalize_root(root_asset_path);
 
     // 1. Pre-fetch BFS — keyed by the SAME canonical id the resolver will use.
     let mut bytes: HashMap<String, Vec<u8>> = HashMap::new();
@@ -99,7 +99,7 @@ fn child_layer_ids(id: &str, raw: &[u8]) -> Result<Vec<String>> {
     Ok(
         crate::closure::discover_arcs(&data, crate::closure::ArcFilter::LayersOnly)
             .iter()
-            .map(|child| canonicalize(child, anchor_str(Some(&anchor))))
+            .map(|child| canonicalize_at(child, Some(&anchor)))
             .collect(),
     )
 }
@@ -172,7 +172,7 @@ pub(crate) fn discover_binary_sites(stage: &Stage) -> BinarySites {
             }
             for ap in arcs {
                 if is_binary_asset(&ap) {
-                    sites.insert((layer_id.clone(), path.clone()), resolve_binary_uri(&ap, Some(&anchor)));
+                    sites.insert((layer_id.clone(), path.clone()), canonicalize_at(&ap, Some(&anchor)));
                 }
             }
         }
@@ -201,7 +201,7 @@ pub fn compose_file_to_stage(path: &std::path::Path) -> Result<Stage> {
         // NOT the raw path: every id in the map must be keyed by `canonicalize`,
         // the same function the resolver's `create_identifier` applies, or the
         // lookup misses and composition fails to resolve its own root layer.
-        None => canonicalize(&path.to_string_lossy(), None),
+        None => canonicalize_root(&path.to_string_lossy()),
     };
 
     let root_bytes =
@@ -365,8 +365,8 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
         // does (`canonicalize`), so the scene's `@wrapper.usda@` reference resolves
         // to the wrapper bytes and the `@model.glb@` payload is stubbed — the
         // storage-based compose path, not the deleted native-fs shim.
-        let root_id = canonicalize("scene.usda", None);
-        let wrapper_id = canonicalize("wrapper.usda", Some(root_id.as_str()));
+        let root_id = canonicalize_root("scene.usda");
+        let wrapper_id = canonicalize("wrapper.usda", &root_id);
         let bytes = HashMap::from([
             (root_id.clone(), scene.as_bytes().to_vec()),
             (wrapper_id, wrapper.as_bytes().to_vec()),

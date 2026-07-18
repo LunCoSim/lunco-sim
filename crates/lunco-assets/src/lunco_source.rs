@@ -32,18 +32,18 @@ use bevy::asset::io::{
 
 use crate::cache_dir;
 
-/// The asset-source scheme for the engine asset library.
+/// The asset-source scheme for the engine asset library — the name it is
+/// registered under, both as a Bevy `AssetSource` and in the
+/// [`SchemeRegistry`](crate::scheme_registry::SchemeRegistry).
 pub const LUNCO_SCHEME: &str = "lunco";
-
-/// `lunco://` — the scheme with its separator, for prefix tests and URI building.
-pub const LUNCO_PREFIX: &str = "lunco://";
 
 /// The library-relative path of a `lunco://<rel>` reference, or `None` for a bare
 /// or differently-schemed one. Unlike [`crate::engine_asset_rel`] (which treats a
 /// bare path as already-relative), this distinguishes "explicitly addressed to
 /// the engine library" — what a caller re-rooting an id back onto disk needs.
 pub fn parse_lunco_uri(uri: &str) -> Option<&str> {
-    uri.strip_prefix(LUNCO_PREFIX)
+    let (scheme, rel) = crate::asset_path::split_scheme(uri)?;
+    (scheme == LUNCO_SCHEME).then_some(rel)
 }
 
 /// The directory name the shipped asset library lives under (`assets`). The

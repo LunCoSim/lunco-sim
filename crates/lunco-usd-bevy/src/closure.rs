@@ -135,7 +135,7 @@ pub fn reference_closure(roots: &[PathBuf]) -> BTreeSet<PathBuf> {
         };
         let base = path.parent().map(Path::to_path_buf).unwrap_or_default();
         for arc in discover_arcs(&data, ArcFilter::All) {
-            if lunco_assets::has_scheme(&arc) || arc.starts_with('/') {
+            if lunco_assets::asset_path::is_anchored(&arc) {
                 continue;
             }
             queue.push(normalize(&base.join(&arc)));

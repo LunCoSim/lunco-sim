@@ -248,9 +248,9 @@ pub fn setup_big_space_hierarchy(
         });
     };
     let earth_texture: Handle<Image> =
-        asset_server.load_with_settings("cached_textures://earth.png", seam_wrap);
+        asset_server.load_with_settings("lunco://textures/earth.png", seam_wrap);
     let moon_texture: Handle<Image> =
-        asset_server.load_with_settings("cached_textures://moon.png", seam_wrap);
+        asset_server.load_with_settings("lunco://textures/moon.png", seam_wrap);
 
     // The blueprint grid shader is named by PATH in the `ShaderLook` (see
     // `blueprint_tile_look`) and loaded by the binder, so it still hot-reloads on

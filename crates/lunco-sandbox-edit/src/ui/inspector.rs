@@ -838,8 +838,8 @@ fn attach_component_at_socket(
     // library. A component authored by an open Twin is `twin://<name>/…`, which
     // has no path under `assets/` at all; joining one produced a path that never
     // existed and the attach was skipped with a "no plug frame" warning.
-    let twins = world.get_resource::<lunco_assets::TwinRoots>().cloned();
-    let Some(fs_path) = lunco_assets::local_path(&asset, twins.as_ref()) else {
+    let schemes = world.get_resource::<lunco_assets::SchemeRegistry>().cloned().unwrap_or_default();
+    let Some(fs_path) = schemes.local_path(&asset) else {
         bevy::log::warn!("[mount] `{asset}` resolves to no local file; attach skipped");
         return;
     };

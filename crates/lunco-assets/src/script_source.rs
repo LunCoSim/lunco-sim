@@ -54,7 +54,13 @@ impl ScriptSources {
     /// binding calls it and does no path handling of its own; that is what keeps
     /// an `import` and an asset load from disagreeing about where a file is.
     pub fn canonical_id(path: &str, importer: Option<&str>, default_ext: &str) -> String {
-        let id = crate::asset_path::canonicalize(path, importer);
+        // rhai hands the importing script's id as an `Option` (absent for a
+        // top-level script), so absence maps onto the explicit root case rather
+        // than an empty anchor that would silently resolve against another root.
+        let id = match importer {
+            Some(anchor) => crate::asset_path::canonicalize(path, anchor),
+            None => crate::asset_path::canonicalize_root(path),
+        };
         // Only the final segment can carry the extension; a dot earlier in the
         // path (a versioned directory, say) must not suppress it.
         let has_ext = id

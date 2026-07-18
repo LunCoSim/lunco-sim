@@ -23,7 +23,7 @@ use std::time::SystemTime;
 
 use openusd::ar::{self, Asset, ResolvedPath};
 
-use lunco_assets::asset_path::canonicalize;
+use lunco_assets::asset_path::{canonicalize, canonicalize_root};
 
 /// The layer-byte map a [`LuncoUsdResolver`] resolves against, wrapped for
 /// **shared interior mutability**. openusd captures the resolver at stage-build
@@ -71,20 +71,23 @@ pub(crate) fn is_binary_asset(asset_path: &str) -> bool {
     }
 }
 
-/// openusd's `ResolvedPath` as the `&str` anchor [`canonicalize`] takes.
+/// [`canonicalize`] against an openusd `ResolvedPath` anchor.
 ///
 /// The canonicalization RULE lives in `lunco-assets`, which owns every asset-path
 /// operation, so USD composition, texture lookup, terrain, the scene loader and the
 /// rhai module resolver cannot drift apart on what a reference means. All this
 /// crate contributes is the openusd-specific type conversion.
-pub(crate) fn anchor_str(anchor: Option<&ResolvedPath>) -> Option<&str> {
-    anchor.and_then(|a| a.to_str())
+///
+/// openusd hands the anchor as an `Option` (absent when it is resolving a ROOT
+/// layer), so this is where that absence is mapped onto the explicit
+/// [`canonicalize_root`] rather than smuggled through as an empty anchor.
+pub(crate) fn canonicalize_at(asset_path: &str, anchor: Option<&ResolvedPath>) -> String {
+    match anchor.and_then(|a| a.to_str()) {
+        Some(a) => canonicalize(asset_path, a),
+        None => canonicalize_root(asset_path),
+    }
 }
 
-/// Resolve a binary asset path to a URI the Bevy `AssetServer` can load
-/// (consumed via the synthesized `lunco:resolvedAsset`). `scheme://` passes
-/// through; everything else is treated as an asset-source-relative path.
-///
 // TODO(glb-composability): binary assets (`.glb`/`.gltf`/…) are currently a
 // side-channel — stubbed out of USD composition and surfaced via
 // `lunco:resolvedAsset` for Bevy's glTF loader. The *proper* USD way is a
@@ -98,12 +101,6 @@ pub(crate) fn anchor_str(anchor: Option<&ResolvedPath>) -> Option<&str> {
 //     small glTF→USD-layer shim in `compose.rs` (points/indices/normals/uvs →
 //     `Mesh` specs) fed to the composer instead of `discover_arcs` stubbing.
 // Until then the binary side-channel is retained — it works native + web.
-pub(crate) fn resolve_binary_uri(asset_path: &str, anchor: Option<&ResolvedPath>) -> String {
-    if lunco_assets::has_scheme(asset_path) {
-        return asset_path.to_string();
-    }
-    canonicalize(asset_path, anchor_str(anchor))
-}
 
 /// In-memory resolver over pre-fetched layer bytes, keyed by [`canonicalize`]d
 /// identifier. Binary assets resolve to an empty stub (see [`BINARY_STUB_ID`]).
@@ -133,7 +130,7 @@ impl ar::Resolver for LuncoUsdResolver {
         if is_binary_asset(asset_path) {
             return BINARY_STUB_ID.to_string();
         }
-        canonicalize(asset_path, anchor_str(anchor))
+        canonicalize_at(asset_path, anchor)
     }
 
     fn resolve(&self, asset_path: &str) -> Option<ResolvedPath> {

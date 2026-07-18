@@ -860,12 +860,7 @@ async fn read_bytes(path: std::path::PathBuf) -> Result<Vec<u8>, String> {
                 .await
                 .map_err(|e| e.to_string());
         }
-        let rel = path.to_string_lossy().replace('\\', "/");
-        let url = if rel.starts_with("assets/") || rel.starts_with("http") || rel.starts_with('/') {
-            rel
-        } else {
-            format!("assets/{rel}")
-        };
+        let url = lunco_assets::asset_path::web_url(&path.to_string_lossy());
         lunco_assets::web_fetch::fetch_bytes_cached_conditional("lunco-twin-v1", &url).await
     }
 }
@@ -996,12 +991,7 @@ fn start_dem_builds(
                             }
                         }
                     } else {
-                        let rel = tif_path.to_string_lossy().replace('\\', "/");
-                        let url = if rel.starts_with("assets/") || rel.starts_with("http") || rel.starts_with('/') {
-                            rel
-                        } else {
-                            format!("assets/{rel}")
-                        };
+                        let url = lunco_assets::asset_path::web_url(&tif_path.to_string_lossy());
 
                         let progress_slot = download_progress.clone();
                         let progress_cb = wasm_bindgen::closure::Closure::<dyn FnMut(f64, f64)>::new(move |done: f64, total: f64| {

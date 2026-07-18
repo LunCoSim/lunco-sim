@@ -291,10 +291,7 @@ pub fn resolve_embedded_scenario_paths(
             // `lunco-assets` gets to decide what that means. A ref that already
             // carries its own scheme (`twin://…`) is passed through untouched, so
             // a Twin-owned script resolves against the Twin.
-            let rel = lunco_assets::engine_asset_rel(&path.0);
-            let uri = lunco_assets::engine_asset_uri(lunco_assets::engine_asset_rel(
-                rel.strip_prefix("assets/").unwrap_or(rel),
-            ));
+            let uri = lunco_assets::engine_asset_uri(&path.0);
             // TODO(scenario-resolve): a `.rhai` fetched into a peer's scenario cache
             // is NOT found here — a bare ref resolves to the engine library, not the
             // loaded scene's `twin://<name>/` source. So a twin/imported policy or

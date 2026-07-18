@@ -66,7 +66,7 @@ pub fn normalize(p: &Path) -> PathBuf {
 ///
 /// Three forms:
 ///   * `scheme://…` → passthrough; the Bevy `AssetServer` source handles it.
-///   * `/…` (legacy absolute-from-assets-root) → strip the leading slash.
+///   * `/…` (absolute-from-assets-root) → strip the leading slash.
 ///   * relative → resolved against the anchor document's directory, KEEPING the
 ///     anchor's scheme.
 ///
@@ -75,20 +75,23 @@ pub fn normalize(p: &Path) -> PathBuf {
 /// different (nonexistent) source. That is the subtle failure this function
 /// exists to prevent.
 ///
+/// The anchor is NOT optional. It used to be, defaulting to `""`, which meant a
+/// relative reference with no anchor resolved against the *default* source rather
+/// than the caller's root — silently, and differently from every subsystem that
+/// did pass one. That is the precise "loads here, 404s there" split this module
+/// exists to close, so a caller that has no anchoring document now has to say so
+/// by calling [`canonicalize_root`] instead of passing `None`.
+///
 /// MUST stay identical between any pre-fetch pass and the resolver that consumes
 /// its results — a pre-fetch keyed on one spelling and a lookup keyed on another
 /// is a guaranteed cache miss (R-canon).
-pub fn canonicalize(asset_path: &str, anchor: Option<&str>) -> String {
-    if crate::has_scheme(asset_path) {
-        return asset_path.to_string();
+pub fn canonicalize(asset_path: &str, anchor: &str) -> String {
+    if is_anchored(asset_path) {
+        return canonicalize_root(asset_path);
     }
-    if let Some(rest) = asset_path.strip_prefix('/') {
-        return normalize(Path::new(rest)).to_string_lossy().into_owned();
-    }
-    let anchor_str = anchor.unwrap_or_default();
-    let (scheme, anchor_path) = match anchor_str.split_once("://") {
+    let (scheme, anchor_path) = match split_scheme(anchor) {
         Some((s, rest)) => (Some(s), rest),
-        None => (None, anchor_str),
+        None => (None, anchor),
     };
     let base = Path::new(anchor_path)
         .parent()
@@ -96,8 +99,82 @@ pub fn canonicalize(asset_path: &str, anchor: Option<&str>) -> String {
         .unwrap_or_default();
     let resolved = normalize(&base.join(asset_path)).to_string_lossy().into_owned();
     match scheme {
-        Some(s) => format!("{s}://{resolved}"),
+        Some(s) => uri(s, &resolved),
         None => resolved,
+    }
+}
+
+/// Canonicalize a reference that NAMES a root — no document anchors it: the scene
+/// layer a stage is opened from, or a filesystem path handed in from outside.
+///
+/// This is the honest spelling of what passing `None` used to mean. A relative
+/// reference here is assets-root-relative by definition rather than by accident,
+/// which is what makes the distinction worth a second entry point: the two cases
+/// are genuinely different questions, and collapsing them into one nullable
+/// argument is what let callers ask the wrong one without noticing.
+pub fn canonicalize_root(reference: &str) -> String {
+    if crate::has_scheme(reference) {
+        return reference.to_string();
+    }
+    let rel = reference.strip_prefix('/').unwrap_or(reference);
+    normalize(Path::new(rel)).to_string_lossy().into_owned()
+}
+
+/// Split `scheme://rest` into its two halves, or `None` for a bare reference.
+///
+/// The ONE place `://` is spelled when taking a reference APART, as [`uri`] is
+/// the one place it is spelled when putting one together. Every scheme used to
+/// also carry a hand-written `"<name>://"` prefix constant beside its name — two
+/// literals per scheme that had to agree, checked by nobody.
+pub fn split_scheme(reference: &str) -> Option<(&str, &str)> {
+    reference.split_once("://")
+}
+
+/// Build `scheme://rel`. The inverse of [`split_scheme`].
+pub fn uri(scheme: &str, rel: &str) -> String {
+    format!("{scheme}://{rel}")
+}
+
+/// Whether a reference resolves WITHOUT an anchor — either already addressable
+/// (`scheme://…`) or already rooted at the assets root (`/…`).
+///
+/// These are exactly the two [`canonicalize`] branches that ignore their anchor,
+/// so a caller deciding "does this one need anchoring?" must agree with them.
+/// Named here so that agreement is structural rather than two `starts_with`
+/// chains that have to be kept in step by hand.
+pub fn is_anchored(reference: &str) -> bool {
+    crate::has_scheme(reference) || reference.starts_with('/')
+}
+
+/// The same-origin URL a reference is fetched from on the web.
+///
+/// The engine library is staged next to the wasm bundle under
+/// [`ASSETS_DIR_NAME`](crate::ASSETS_DIR_NAME), so a library-relative reference
+/// has to be rooted there — and one that is ALREADY addressable must not be.
+///
+/// This is a *resolution* rule, so it lives here rather than in the subsystems
+/// that fetch. Terrain open-coded it twice as
+/// `starts_with("assets/") || starts_with("http") || starts_with('/')`, which
+/// recognised no scheme but `http` — a `lunco://` DEM silently became
+/// `assets/lunco://…` and 404'd, web-only, invisible from the native path.
+pub fn web_url(reference: &str) -> String {
+    let raw = reference.replace('\\', "/");
+    // Absolute — server-rooted or a full URL. Nothing to anchor.
+    if raw.starts_with('/') || raw.starts_with("http://") || raw.starts_with("https://") {
+        return raw;
+    }
+    // `lunco://x` names the shipped library, which IS this directory: reduce it to
+    // its library-relative form rather than rooting a URI. Any OTHER scheme has a
+    // root this same-origin mount cannot serve, so it passes through untouched.
+    let rel = crate::engine_asset_rel(&raw);
+    if crate::has_scheme(rel) {
+        return rel.to_string();
+    }
+    let root = crate::ASSETS_DIR_NAME;
+    if rel.starts_with(&format!("{root}/")) {
+        rel.to_string()
+    } else {
+        format!("{root}/{rel}")
     }
 }
 
@@ -107,17 +184,17 @@ mod tests {
 
     #[test]
     fn scheme_qualified_passes_through() {
-        assert_eq!(canonicalize("lunco://a/b.usda", None), "lunco://a/b.usda");
+        assert_eq!(canonicalize_root("lunco://a/b.usda"), "lunco://a/b.usda");
         // Even with an anchor — an absolute reference is absolute.
         assert_eq!(
-            canonicalize("twin://ep1/lib.rhai", Some("lunco://scenes/x.usda")),
+            canonicalize("twin://ep1/lib.rhai", "lunco://scenes/x.usda"),
             "twin://ep1/lib.rhai"
         );
     }
 
     #[test]
     fn leading_slash_is_assets_root_relative() {
-        assert_eq!(canonicalize("/scenes/x.usda", None), "scenes/x.usda");
+        assert_eq!(canonicalize_root("/scenes/x.usda"), "scenes/x.usda");
     }
 
     /// The case the scheme-splitting exists for: a relative reference inside a
@@ -125,11 +202,11 @@ mod tests {
     #[test]
     fn relative_keeps_the_anchors_scheme() {
         assert_eq!(
-            canonicalize("../../components/wheel.usda", Some("lunco://vessels/rovers/skid.usda")),
+            canonicalize("../../components/wheel.usda", "lunco://vessels/rovers/skid.usda"),
             "lunco://components/wheel.usda"
         );
         assert_eq!(
-            canonicalize("lib.rhai", Some("twin://ep1/main.rhai")),
+            canonicalize("lib.rhai", "twin://ep1/main.rhai"),
             "twin://ep1/lib.rhai"
         );
     }
@@ -140,8 +217,39 @@ mod tests {
         assert_eq!(normalize(Path::new("a/./b/../c")), PathBuf::from("a/c"));
     }
 
+    /// The regression the terrain copies had: only `http` was recognised, so every
+    /// other scheme got the library root prepended to a URI.
     #[test]
-    fn relative_without_anchor_is_bare() {
-        assert_eq!(canonicalize("scenes/x.usda", None), "scenes/x.usda");
+    fn web_url_roots_library_paths_and_passes_addressable_ones_through() {
+        assert_eq!(web_url("dem/site.tif"), "assets/dem/site.tif");
+        // Already rooted — must not be doubled.
+        assert_eq!(web_url("assets/dem/site.tif"), "assets/dem/site.tif");
+        // `lunco://` IS the library mount: reduced, not rooted.
+        assert_eq!(web_url("lunco://dem/site.tif"), "assets/dem/site.tif");
+        assert_eq!(web_url("https://h/x.tif"), "https://h/x.tif");
+        assert_eq!(web_url("/abs/x.tif"), "/abs/x.tif");
+        // Another scheme's root — this mount cannot serve it, so it is untouched
+        // rather than turned into `assets/twin://…`.
+        assert_eq!(web_url("twin://ep1/x.tif"), "twin://ep1/x.tif");
+        assert_eq!(web_url("dem\\site.tif"), "assets/dem/site.tif");
+    }
+
+    #[test]
+    fn anchored_matches_the_branches_canonicalize_ignores_its_anchor_on() {
+        for r in ["lunco://a.usda", "twin://e/a.usda", "/a.usda"] {
+            assert!(is_anchored(r), "{r} should be anchored");
+            // An anchored reference means the same thing however it is asked.
+            assert_eq!(canonicalize(r, "lunco://other/x.usda"), canonicalize_root(r));
+        }
+        assert!(!is_anchored("a.usda"));
+    }
+
+    /// A root reference is assets-root-relative BY DECLARATION. Previously this
+    /// was what `canonicalize(_, None)` did by accident, so a caller that simply
+    /// had no anchor to hand got this silently — now it has to say so.
+    #[test]
+    fn a_relative_root_reference_is_assets_root_relative() {
+        assert_eq!(canonicalize_root("scenes/x.usda"), "scenes/x.usda");
+        assert_eq!(canonicalize_root("a/./b/../c.usda"), "a/c.usda");
     }
 }

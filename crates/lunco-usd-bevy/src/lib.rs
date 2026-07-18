@@ -1426,15 +1426,9 @@ fn resolve_texture_path(
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     asset_path: &str,
 ) -> Option<String> {
-    // Short-circuit BEFORE `get_path`: an already-addressable reference resolves
-    // even when the stage has no path (runtime-authored / in-memory stages), where
-    // the `?` below would otherwise drop it to `None` and the texture never loads.
-    if lunco_assets::has_scheme(asset_path) {
-        return Some(asset_path.to_string());
-    }
     let stage_path = asset_server.get_path(stage_id)?;
     let anchor = lunco_assets::asset_path::anchor_of(&stage_path);
-    Some(lunco_assets::asset_path::canonicalize(asset_path, Some(&anchor)))
+    Some(lunco_assets::asset_path::canonicalize(asset_path, &anchor))
 }
 
 /// Extractor for parent prim path from property connection target (e.g. `/World/Material/Shader.output` -> `/World/Material/Shader`)

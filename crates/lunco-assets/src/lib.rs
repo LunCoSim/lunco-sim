@@ -53,6 +53,9 @@ pub mod missions;
 pub mod models;
 pub mod msl;
 pub mod process;
+/// Scheme → local filesystem root, as an open registry — the read-side mirror of
+/// [`register_lunco_asset_sources`].
+pub mod scheme_registry;
 pub mod script_source;
 pub mod scripting;
 pub mod tutorials;
@@ -65,10 +68,10 @@ pub mod web_fetch;
 
 pub use asset_sources::register_lunco_asset_sources;
 pub use lunco_source::{
-    id_to_disk_path, parse_lunco_uri, shipped_asset_root, ASSETS_DIR_NAME, LUNCO_PREFIX,
-    LUNCO_SCHEME,
+    id_to_disk_path, parse_lunco_uri, shipped_asset_root, ASSETS_DIR_NAME, LUNCO_SCHEME,
 };
-pub use twin_source::{parse_twin_uri, twin_uri, TwinRoots, TWIN_PREFIX, TWIN_SCHEME};
+pub use scheme_registry::SchemeRegistry;
+pub use twin_source::{parse_twin_uri, twin_uri, TwinRoots, TWIN_SCHEME};
 
 // ============================================================================
 // User Config Directory Resolution
@@ -286,8 +289,9 @@ pub fn cache_subdir(name: &str) -> PathBuf {
 
 /// Returns the `textures` subdirectory within the cache.
 ///
-/// Shorthand for `cache_subdir("textures")`. Used by texture loaders
-/// and the `cached_textures://` asset source.
+/// Shorthand for `cache_subdir("textures")`. This is the cache half of
+/// `lunco://textures/…`, which the `lunco://` source reaches via its cache
+/// fallback — authored content names that address, never this directory.
 pub fn textures_dir() -> PathBuf {
     cache_subdir("textures")
 }
@@ -421,16 +425,6 @@ pub fn scenarios_dir() -> PathBuf {
     cache_subdir("scenarios")
 }
 
-/// Cache `models/` directory — where `lunco-assets -- download`
-/// materialises 3D model binaries declared in per-crate `Assets.toml`
-/// (`.glb`, `.gltf`, `.obj`, `.stl`). Reached at runtime through the
-/// `lunco://` source, which falls back to the cache after `assets/`, so
-/// authored content never names this directory.
-/// Mirrors [`textures_dir`] for textures.
-pub fn models_dir() -> PathBuf {
-    cache_subdir("models")
-}
-
 /// Resolve a built-in engine-library asset reference to a load path that is
 /// **independent of the active document's root**.
 ///
@@ -444,10 +438,6 @@ pub fn models_dir() -> PathBuf {
 /// built-in asset resolve to the engine library from anywhere, exactly like the
 /// scene author writing `@lunco://vessels/rovers/skid_rover.usda@`.
 ///
-/// A reference that ALREADY carries a scheme (`lunco://…`, `twin://…`,
-/// `cached_textures://…`, `http(s)://…`) is returned unchanged — a Twin shipping
-/// its OWN shader (`twin://name/shaders/custom.wgsl`) must keep resolving against
-/// the Twin, and an already-`lunco://` path must not be double-prefixed.
 /// Whether a reference already names its own asset source (`lunco://`, `twin://`,
 /// `cached_textures://`, `http(s)://`, …) and so must be passed through untouched
 /// rather than re-anchored against a root.
@@ -456,15 +446,30 @@ pub fn models_dir() -> PathBuf {
 /// made — "is this already addressable?" — so it is named once here instead of
 /// open-coded as `contains("://")` in every crate that loads an asset.
 pub fn has_scheme(reference: impl AsRef<str>) -> bool {
-    reference.as_ref().contains("://")
+    asset_path::split_scheme(reference.as_ref()).is_some()
 }
 
+/// The addressable `lunco://` form of an engine-library reference.
+///
+/// A reference that ALREADY carries a scheme (`lunco://…`, `twin://…`,
+/// `cached_textures://…`, `http(s)://…`) is returned unchanged — a Twin shipping
+/// its OWN shader (`twin://name/shaders/custom.wgsl`) must keep resolving against
+/// the Twin, and an already-`lunco://` path must not be double-prefixed.
+///
+/// A leading `assets/` is stripped first: that directory is the *root* the
+/// `lunco://` source is mounted on, so `assets/foo.rhai` and `foo.rhai` name one
+/// file. Callers used to strip it themselves next to this call, which is the same
+/// knowledge in two places — and the literal `"assets"` belongs to
+/// [`ASSETS_DIR_NAME`], not to a caller.
 pub fn engine_asset_uri(reference: &str) -> String {
     if has_scheme(reference) {
-        reference.to_string()
-    } else {
-        format!("lunco://{reference}")
+        return reference.to_string();
     }
+    let rel = reference
+        .strip_prefix(ASSETS_DIR_NAME)
+        .and_then(|r| r.strip_prefix('/'))
+        .unwrap_or(reference);
+    asset_path::uri(LUNCO_SCHEME, rel)
 }
 
 /// The engine-library-relative form of a reference — the path UNDER `assets/`,
@@ -475,7 +480,7 @@ pub fn engine_asset_uri(reference: &str) -> String {
 /// the `lunco://` case — use it before string-matching or comparing a reference
 /// so an authored `@lunco://…@` and a bare `@…@` behave identically.
 pub fn engine_asset_rel(reference: &str) -> &str {
-    reference.strip_prefix("lunco://").unwrap_or(reference)
+    parse_lunco_uri(reference).unwrap_or(reference)
 }
 
 /// The local filesystem path a reference resolves to *within the shipped
@@ -489,10 +494,11 @@ pub fn engine_asset_rel(reference: &str) -> &str {
 /// loader will — whether it was authored bare (`shaders/wheel.wgsl`) or schemed
 /// (`lunco://shaders/wheel.wgsl`).
 pub fn engine_asset_local_path(reference: &str) -> Option<PathBuf> {
-    if reference.strip_prefix("lunco://").is_none() && has_scheme(reference) {
+    let rel = engine_asset_rel(reference);
+    if has_scheme(rel) {
         return None; // another scheme's root — not in the shipped library
     }
-    Some(assets_dir_abs().join(engine_asset_rel(reference)))
+    Some(assets_dir_abs().join(rel))
 }
 
 /// The local filesystem path ANY reference resolves to, whichever root owns it —
@@ -518,15 +524,6 @@ pub fn library_rel(path: &Path) -> Option<String> {
         .map(|rel| rel.to_string_lossy().replace('\\', "/"))
 }
 
-/// `twins` is optional because a caller may run before any Twin is open — then a
-/// `twin://` reference simply has no local path yet, while a library reference
-/// still resolves.
-pub fn local_path(reference: &str, twins: Option<&TwinRoots>) -> Option<PathBuf> {
-    match parse_twin_uri(reference) {
-        Some((name, rel)) => Some(twins?.root_of(name)?.join(rel)),
-        None => engine_asset_local_path(reference),
-    }
-}
 
 /// Cache `fonts/` directory — where `lunco-assets -- download`
 /// materialises font files declared in per-crate `Assets.toml`. Lives
@@ -550,23 +547,6 @@ pub fn fonts_dir() -> PathBuf {
 /// `crates/lunco-theme/Assets.toml` entry.
 pub fn dejavu_sans_path() -> PathBuf {
     fonts_dir().join("DejaVuSans.ttf")
-}
-
-/// Constructs a `cached_textures://` asset path from a filename.
-///
-/// This is the canonical way to reference textures that live in the cache
-/// directory. On desktop, the `cached_textures://` asset source points to
-/// [`textures_dir()`]; on wasm32, these are embedded at compile time.
-///
-/// # Example
-///
-/// ```
-/// use lunco_assets::cached_texture_path;
-/// let path = cached_texture_path("earth.png");
-/// assert_eq!(path, "cached_textures://earth.png");
-/// ```
-pub fn cached_texture_path(filename: &str) -> String {
-    format!("cached_textures://{filename}")
 }
 
 /// Constructs an ephemeris cache file path for a given target ID.
@@ -653,12 +633,6 @@ mod tests {
         let _ = std::fs::create_dir_all(&test_subdir);
         assert!(test_subdir.exists());
         let _ = std::fs::remove_dir_all(&test_subdir);
-    }
-
-    #[test]
-    fn cached_texture_path_format() {
-        assert_eq!(cached_texture_path("earth.png"), "cached_textures://earth.png");
-        assert_eq!(cached_texture_path("moon.png"), "cached_textures://moon.png");
     }
 
     #[test]

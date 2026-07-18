@@ -2645,20 +2645,6 @@ pub fn on_rescan_shaders(
     }
 }
 
-/// Resolve a shader **asset path** to its **disk path**: `twin://<name>/<rel>` →
-/// `<twin_root>/<rel>`; an engine path like `shaders/foo.wgsl` → the shipped
-/// library. Both cases are [`lunco_assets::local_path`] — this crate must not
-/// re-derive either root, since a copy drifts from the readers `lunco-assets`
-/// actually registers (this one joined a bare relative `"assets"`, resolving
-/// against the CWD instead of the library path the loader uses).
-#[cfg(not(target_arch = "wasm32"))]
-fn asset_path_to_disk(
-    path: &str,
-    twin_roots: Option<&lunco_assets::twin_source::TwinRoots>,
-) -> Option<std::path::PathBuf> {
-    lunco_assets::local_path(path, twin_roots)
-}
-
 /// Delete a shader: unregister it from the picker [`ShaderCatalog`] and remove
 /// its `.wgsl` from disk (the twin's `shaders/` folder, or `assets/shaders`).
 /// Entities currently using it keep their in-memory material for the session.
@@ -2677,7 +2663,7 @@ pub struct DeleteShader {
 #[on_command(DeleteShader)]
 pub fn on_delete_shader(
     trigger: On<DeleteShader>,
-    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
+    schemes: Option<Res<lunco_assets::SchemeRegistry>>,
     mut catalog: ResMut<lunco_materials::ShaderCatalog>,
 ) {
     let path = trigger.event().path.trim().to_string();
@@ -2686,8 +2672,12 @@ pub fn on_delete_shader(
         return;
     }
     let removed = catalog.remove(&path);
+    // `twin://<name>/<rel>` → the Twin root, a bare `shaders/foo.wgsl` → the
+    // shipped library: both are the registry's job, so this crate re-derives
+    // neither root (a copy here once joined a bare relative `"assets"`, resolving
+    // against the CWD instead of the library path the loader uses).
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(disk) = asset_path_to_disk(&path, twin_roots.as_deref()) {
+    if let Some(disk) = schemes.as_ref().and_then(|s| s.local_path(&path)) {
         match std::fs::remove_file(&disk) {
             Ok(()) => info!("DELETE_SHADER: removed {path} ({})", disk.display()),
             Err(e) => warn!("DELETE_SHADER: unregistered {path}, file remove failed: {e}"),

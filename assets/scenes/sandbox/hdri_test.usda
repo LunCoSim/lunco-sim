@@ -28,12 +28,13 @@ def Xform "HdriTest" (
         # Equirectangular ("latlong") — the format every HDRI library ships and
         # the only one USD's `automatic` will resolve to for a 2:1 image.
         #
-        # `cached_textures://` is the same downloaded-asset source the Earth and
-        # Moon globe maps use, so the 5.6 MB .hdr is fetched once into the shared
-        # cache instead of living in git. Populate it with:
+        # `lunco://` is the same library address the Earth and Moon globe maps
+        # use: it resolves `assets/` first, then the download cache, so the 5.6 MB
+        # .hdr is fetched once into the shared cache instead of living in git.
+        # Populate it with:
         #     cargo run -p lunco-assets --bin lunco-assets -- download
         # (declared in crates/lunco-usd-bevy/Assets.toml — Poly Haven, CC0.)
-        asset inputs:texture:file = @cached_textures://kloppenheim_02_puresky_2k.hdr@
+        asset inputs:texture:file = @lunco://textures/kloppenheim_02_puresky_2k.hdr@
         token inputs:texture:format = "latlong"
 
         # Sky luminance in cd/m². The cameras run at a physically-calibrated

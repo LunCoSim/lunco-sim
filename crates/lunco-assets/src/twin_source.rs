@@ -36,7 +36,9 @@ use bevy::asset::io::{
 };
 use bevy::prelude::*;
 
-/// The asset-source scheme for Twin-root-relative assets.
+/// The asset-source scheme for Twin-root-relative assets — the name it is
+/// registered under, both as a Bevy `AssetSource` and in the
+/// [`SchemeRegistry`](crate::scheme_registry::SchemeRegistry).
 pub const TWIN_SCHEME: &str = "twin";
 
 /// The `twin://<name>/<rel>` URI naming `rel` inside the Twin `name` — the ONE
@@ -49,16 +51,17 @@ pub const TWIN_SCHEME: &str = "twin";
 /// every peer — the identity has to be byte-identical across the wire.
 pub fn twin_uri(name: impl AsRef<str>, rel: impl AsRef<Path>) -> String {
     let rel = rel.as_ref().to_string_lossy().replace('\\', "/");
-    format!("{TWIN_PREFIX}{}/{}", name.as_ref(), rel.trim_start_matches('/'))
+    crate::asset_path::uri(
+        TWIN_SCHEME,
+        &format!("{}/{}", name.as_ref(), rel.trim_start_matches('/')),
+    )
 }
-
-/// `twin://` — the scheme with its separator, for prefix tests and URI building.
-pub const TWIN_PREFIX: &str = "twin://";
 
 /// Split a `twin://<name>/<rel>` URI into its parts, or `None` when it carries a
 /// different scheme (or no scheme at all). The parsing inverse of [`twin_uri`].
 pub fn parse_twin_uri(uri: &str) -> Option<(&str, &str)> {
-    uri.strip_prefix(TWIN_PREFIX)?.split_once('/')
+    let (scheme, rest) = crate::asset_path::split_scheme(uri)?;
+    (scheme == TWIN_SCHEME).then_some(rest)?.split_once('/')
 }
 
 /// The key an overlay is stored under — the reader-facing relative path

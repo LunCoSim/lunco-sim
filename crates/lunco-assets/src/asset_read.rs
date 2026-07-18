@@ -54,7 +54,7 @@ pub async fn read_asset_bytes(asset: &AssetFile) -> Result<Vec<u8>, String> {
 /// trip per asset.
 #[cfg(target_arch = "wasm32")]
 pub async fn read_asset_bytes(asset: &AssetFile) -> Result<Vec<u8>, String> {
-    let url = format!("assets/{}", asset.rel);
+    let url = crate::asset_path::web_url(&asset.rel);
     crate::web_fetch::fetch_bytes_cached(ASSET_CACHE_BUCKET, &url).await
 }
 

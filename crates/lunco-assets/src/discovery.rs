@@ -118,7 +118,7 @@ impl Plugin for AssetDiscoveryPlugin {
 /// is no artifact to go stale against.
 #[cfg(not(target_arch = "wasm32"))]
 fn load_manifest_native(mut manifest: ResMut<AssetManifest>) {
-    let dir = std::env::current_dir().unwrap_or_default().join("assets");
+    let dir = crate::assets_dir_abs();
     let rels = scan_library(&dir);
     info!("ASSET_MANIFEST: {} file(s) under {}", rels.len(), dir.display());
     manifest.set(rels);
@@ -224,7 +224,7 @@ pub fn list_assets(manifest: &AssetManifest, roots: &TwinRoots, ext: &str) -> Ve
 
     // Engine library, addressed by the default source (plain relative paths).
     #[cfg(not(target_arch = "wasm32"))]
-    let assets_dir = std::env::current_dir().unwrap_or_default().join("assets");
+    let assets_dir = crate::assets_dir_abs();
     for rel in manifest.rels().iter().filter(|r| r.ends_with(&suffix)) {
         out.push(AssetFile {
             asset_path: rel.clone(),

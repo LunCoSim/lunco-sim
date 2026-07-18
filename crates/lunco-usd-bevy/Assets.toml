@@ -14,10 +14,11 @@
 # is thousands of nits; LDR clamps it to white and image-based lighting goes
 # flat and grey). The `.hdr` is used exactly as downloaded.
 #
-# Reference from a scene as `@cached_textures://<filename>@`:
+# Reference from a scene as `@lunco://<dest>@` — `lunco://` falls back to the
+# download cache, so the `dest` below IS the address:
 #
 #   def DomeLight "Sky" {
-#       asset inputs:texture:file = @cached_textures://kloppenheim_02_puresky_2k.hdr@
+#       asset inputs:texture:file = @lunco://textures/kloppenheim_02_puresky_2k.hdr@
 #   }
 #
 # To add another, copy an entry — any Poly Haven HDRI's URL follows the same

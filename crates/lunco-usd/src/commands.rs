@@ -1443,8 +1443,8 @@ mod tests {
         );
     }
 
-    /// An already-scheme'd path is its own mount identity — `twin://`,
-    /// `lunco://`, `cached_textures://` all name a source directly. Re-resolving one
+    /// An already-scheme'd path is its own mount identity — `twin://` and
+    /// `lunco://` both name a source directly. Re-resolving one
     /// against the assets dir would be nonsense, so the redirect must short-circuit
     /// before it touches the registry.
     #[test]
@@ -1455,7 +1455,6 @@ mod tests {
         let backed = DocBackedTwinScenes::default();
         for path in [
             "twin://moonbase/scenes/sandbox.usda",
-            "cached_textures://terrain/albedo.ktx2",
             "lunco://vessels/rovers/skid_rover.usda",
         ] {
             assert_eq!(
