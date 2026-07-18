@@ -332,7 +332,7 @@ fn on_load_scene(
     asset_server: Option<Res<AssetServer>>,
     stages: Option<Res<Assets<lunco_usd_bevy::UsdStageAsset>>>,
     mut commands: Commands,
-    q_usd: Query<(Entity, &UsdPrimPath)>,
+    q_usd: Query<(Entity, &UsdPrimPath, Has<lunco_usd_sim::cosim::UsdSceneRoot>)>,
     scene: SceneEntities,
     in_flight: Option<Res<SceneLoadInFlight>>,
     registry: Res<DocumentRegistry<UsdDocument>>,
@@ -359,24 +359,55 @@ fn on_load_scene(
     }
     let root_prim = resolve_root_prim(&path, &cmd.root_prim);
 
-    // Blender-style no-op: same path + root prim already loaded.
+    // Blender-style no-op: same stage, same root prim, already mounted.
+    //
+    // The identity is the PAIR `(stage asset, root prim)`, but the two halves of
+    // the root prim are asked differently because an empty `root_prim` is
+    // `resolve_root_prim`'s deferred sentinel, NOT a path:
+    //
+    // - sentinel (the ordinary load) means "mount the stage's `defaultPrim`". It
+    //   cannot be compared as a string: `instantiate_usd_prim` resolves it and
+    //   writes the concrete path BACK onto the scene root, so once the stage has
+    //   parsed no entity carries `""` and a string compare matches nothing —
+    //   which is why a repeat load used to tear down and remount a live scene.
+    //   What the sentinel denotes is the stage's default mount, and that mount is
+    //   exactly the `UsdSceneRoot`, so ask for that instead.
+    // - an explicit override names a real prim path, so compare it as one.
+    //
+    // Deliberately NOT "any prim from this stage": one stage legitimately mounts
+    // at two different roots (additive `OpenFile` import), and that would silently
+    // drop the second mount.
     let new_id = asset_server.load::<lunco_usd_bevy::UsdStageAsset>(&path).id();
-    if q_usd
-        .iter()
-        .any(|(_, upp)| upp.stage_handle.id() == new_id && upp.path == root_prim)
-    {
+    if q_usd.iter().any(|(_, upp, is_scene_root)| {
+        upp.stage_handle.id() == new_id
+            && if root_prim.is_empty() { is_scene_root } else { upp.path == root_prim }
+    }) {
         info!("[load-scene] `{}` @ `{}` already loaded — no-op", path, root_prim);
         return;
     }
 
-    // Single-flight guard: if a DIFFERENT scene is still spawning (its prims
-    // haven't all drained through `sync_usd_visuals` yet), this load is
-    // suppressed — the in-flight load wins. Prevents the startup race where the
-    // boot policy's tutorial `load_scene` and the page's moonbase autoload both
-    // fire before either scene's prims have spawned. See `SceneLoadInFlight` for
-    // the policy + the ordering argument for why the tutorial (the
-    // higher-priority onboarding intent on a first run) is the one that wins.
+    // Single-flight guard. A load is already in flight, so this one never
+    // proceeds — only the message differs:
+    //
+    // - SAME path: this scene is already being mounted. The `q_usd` check above
+    //   cannot see that yet (its prims have not spawned, which is exactly what
+    //   "in flight" means), so without this arm a redundant request would clear
+    //   and remount a scene that is mid-spawn. That is the client's
+    //   scenario-ready `LoadScene` landing ~1 s after its own boot load, and it
+    //   tore down the live scene — a teardown that can trip avian's island
+    //   solver. The two guards are complementary: `SceneLoadInFlight` covers the
+    //   spawn window, `q_usd` covers everything after it, so a repeat request is
+    //   a no-op at any point in a scene's life.
+    // - DIFFERENT path: the in-flight load wins. Prevents the startup race where
+    //   the boot policy's tutorial `load_scene` and the page's moonbase autoload
+    //   both fire before either scene's prims have spawned. See
+    //   `SceneLoadInFlight` for the ordering argument for why the tutorial (the
+    //   higher-priority onboarding intent on a first run) is the one that wins.
     if let Some(g) = &in_flight {
+        if g.path == path {
+            info!("[load-scene] `{}` is already mounting — no-op", path);
+            return;
+        }
         if g.path != path {
             info!(
                 "[load-scene] suppressing `{}` — another scene load is in-flight (`{}`); \

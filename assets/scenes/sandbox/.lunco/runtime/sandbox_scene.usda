@@ -31,15 +31,7 @@ over "SandboxScene"
   <BehaviorTree ID="MainTree">
     <Repeat num_cycles="-1">
       <Sequence>
-        <Action ID="drive_to" target="-24.807858;-0.000000;15.017439" smooth="true"/>
-        <Action ID="drive_to" target="-64.551836;0.000000;22.211846" smooth="true"/>
-        <Action ID="drive_to" target="-88.382890;0.000000;9.033226" smooth="true"/>
-        <Action ID="drive_to" target="-93.670193;0.000000;-8.575343" smooth="true"/>
-        <Action ID="drive_to" target="-72.871290;-0.000000;-48.153632" smooth="true"/>
-        <Action ID="drive_to" target="-81.981855;0.000000;-63.390021" smooth="true"/>
-        <Action ID="drive_to" target="-94.402200;0.000000;-56.554965"/>
-        <Action ID="drive_to" target="-97.797423;0.000000;-45.227422"/>
-        <Action ID="drive_to" target="-100.733869;0.000000;-61.236942"/>
+        <Action ID="drive_to" target="-24.807858;-0.000000;15.017439"/>
       </Sequence>
     </Repeat>
   </BehaviorTree>

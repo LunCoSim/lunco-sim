@@ -424,17 +424,20 @@ fn load_ready_scenario(
     // Mounting registers the scenario's cache dir as this twin's root (unless the
     // twin is already open locally, which keeps its own). Either way the URI is
     // the host's, so a client that already booted this scene re-triggers the SAME
-    // asset id and `LoadScene`'s no-op guard short-circuits — no teardown, and no
-    // race with avian's island solver from a redundant reload.
+    // asset path and `LoadScene` no-ops instead of remounting.
     //
-    // TODO(verify-host-client): the two claims above — that the URI matches the
-    // host's, and that a re-trigger is a genuine no-op — are UNVERIFIED at runtime.
-    // Both fail silently if wrong: a mismatched URI gives this peer its own
-    // `GlobalEntityId`s (possession/prediction never bind), and a no-op that does
-    // NOT hold tears the live scene down mid-session and can trip avian's island
-    // solver on the client. Neither is reachable from a unit test — drive
-    // `scripts/run_host_client.sh` (and a web client, which is the case with no
-    // local checkout) and confirm both against the host's logs.
+    // Verified on a native host/client pair (`scripts/run_host_client.sh`): both
+    // peers mount `twin://sandbox/sandbox_scene.usda`, and this load lands ~1 s
+    // after the client's own boot load — INSIDE the spawn window, so the no-op
+    // depends on `LoadScene`'s `SceneLoadInFlight` arm, not on its
+    // already-spawned-prims arm.
+    //
+    // TODO(verify-web-client): the case this addressing exists for — a peer with
+    // NO local checkout, resolving through the mounted cache dir — is still
+    // unverified. A native pair takes the "twin already open locally" branch, so
+    // it exercises URI agreement but never the cache-root mount. It fails
+    // silently: a wrong root gives that peer its own `GlobalEntityId`s, so
+    // possession and client prediction never bind while the scene still renders.
     let uri = lunco_networking::scenario_sync::mount_scenario_twin(
         &twins,
         &m.scenario_id,
