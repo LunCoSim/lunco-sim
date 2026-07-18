@@ -1140,7 +1140,7 @@ fn collect_scenario_input(
 
     // 2. Reference closure. A sandbox scene references its rovers/components from
     //    OUTSIDE its own folder (`@../../vessels/rovers/ackermann_rover.usda@`),
-    //    which the folder walk never sees — so the client's `scenario://` load
+    //    which the folder walk never sees — so the client's `twin://` load
     //    404'd on the sublayer and rendered an empty scene. Walk the entry
     //    scene's transitive subLayers/references/payload graph and add every
     //    reached file that lives outside the Twin root (in-tree deps are already
@@ -1163,8 +1163,8 @@ fn collect_scenario_input(
     }
 
     // 3. Re-root at the common ancestor of the Twin root and every asset, so an
-    //    out-of-tree file gets a `..`-free manifest key (the client's
-    //    `scenario://` resolver rejects `..` — scenario_source::resolve). A
+    //    out-of-tree file gets a `..`-free manifest key (the client's `twin://`
+    //    resolver rejects `..` — `twin_source::TwinReader::resolve`). A
     //    self-contained scenario (no external refs) keeps `manifest_root ==
     //    twin.root`, so its paths stay byte-identical to before — moonbase and
     //    every terrain twin are unaffected.
@@ -1210,7 +1210,8 @@ fn collect_scenario_input(
     //      client holding the Twin locally loads `twin://<name>/<twin_scene>` —
     //      the *same asset path the host loaded* → matching per-prim gids.
     //    - `default_scene` = re-rooted to the manifest root, so a client WITHOUT
-    //      the Twin (web) loads `scenario://<id>/<default_scene>` from the cache.
+    //      a local checkout resolves it against the cache dir mounted as that
+    //      Twin's root.
     let twin_scene = default_scene_raw.clone();
     let default_scene = default_scene_raw.map(|ds| {
         twin.root

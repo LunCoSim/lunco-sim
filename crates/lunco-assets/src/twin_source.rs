@@ -11,7 +11,12 @@
 //! and library refs (`@lunco://vessels/…@`) — never an absolute path. But Bevy's
 //! `AssetServer` only reads from sources registered at app-build time, and on
 //! the web there is no filesystem at all, so we can't lean on `std::fs`. So we
-//! register ONE `twin://` source backed by a small **registry of Twin roots**.
+//! register ONE `twin://` source backed by a small **registry of Twin roots**,
+//! reading through [`lunco_storage`] so the SAME scheme serves native and web.
+//!
+//! A root is an open Twin's directory OR a downloaded scenario's cache directory.
+//! One scheme for both is what keeps a scene's asset path identical on every peer,
+//! and therefore its `Provenance::Content`-derived `GlobalEntityId` identical too.
 //!
 //! ## Path shape — `twin://<name>/<relative>`
 //! The first path segment is the **Twin name** (from its `twin.toml`); the rest
@@ -98,36 +103,6 @@ impl TwinRoots {
         self.overlays.read().ok().and_then(|m| m.get(path).cloned())
     }
 
-    /// The `twin://<name>/<rel>` source that serves the on-disk file `abs` **with a
-    /// composed overlay**, if one is registered.
-    ///
-    /// This is the canonical mount identity for a doc-backed scene. Loading such a
-    /// scene by its raw file path would read the base `.usda` from disk and drop the
-    /// whole runtime overlay (placed waypoints, runtime spawns, moved transforms);
-    /// routing through the returned `twin://` source composes `base ⊕ runtime`
-    /// instead. Answering from the overlay map — rather than inferring "is this under
-    /// a twin root?" from the filesystem — keeps the redirect **authoritative**: a
-    /// path only diverts when there is real composed state to preserve, so a plain
-    /// file under a twin root still loads straight from disk.
-    /// `abs` is matched against each root in **canonical** form on both sides: a
-    /// root registered through a symlink (or with `..` in it) would otherwise fail
-    /// the prefix match against a canonicalized `abs`, silently skipping the
-    /// redirect and wiping the very overlay this exists to preserve. Canonicalizing
-    /// falls back to the path as-given where the filesystem can't answer (wasm).
-    pub fn overlay_source_for_path(&self, abs: &Path) -> Option<String> {
-        let abs = std::fs::canonicalize(abs).unwrap_or_else(|_| abs.to_path_buf());
-        let overlays = self.overlays.read().ok()?;
-        for name in self.names() {
-            let Some(root) = self.root_for(&name) else { continue };
-            let root = std::fs::canonicalize(&root).unwrap_or(root);
-            let Ok(rel) = abs.strip_prefix(&root) else { continue };
-            if overlays.contains_key(&overlay_key(&name, &rel.to_string_lossy())) {
-                return Some(format!("twin://{name}/{}", rel.to_string_lossy().replace('\\', "/")));
-            }
-        }
-        None
-    }
-
     fn root_for(&self, name: &str) -> Option<PathBuf> {
         self.roots.read().ok().and_then(|m| m.get(name).cloned())
     }
@@ -163,6 +138,25 @@ impl TwinRoots {
     }
 }
 
+/// Read a Twin-root file through the storage backend. The ONLY native/web
+/// divergence in this source: native = `FileStorage` (std::fs, via the sync
+/// wrapper — this runs on Bevy's async IO pool); web = `OpfsStorage` (async OPFS
+/// read), which is the same tree the networking client writes a downloaded
+/// scenario into. Going through storage is what lets `twin://` serve a downloaded
+/// scenario on the web, where there is no filesystem.
+#[cfg(not(target_arch = "wasm32"))]
+async fn read_bytes(full: &Path) -> Option<Vec<u8>> {
+    lunco_storage::read_file_sync(full).ok()
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn read_bytes(full: &Path) -> Option<Vec<u8>> {
+    lunco_storage::OpfsStorage::new()
+        .read(&lunco_storage::StorageHandle::File(full.to_path_buf()))
+        .await
+        .ok()
+}
+
 /// Build the `twin://` [`AssetSourceBuilder`] over `roots`. Register in each
 /// binary BEFORE `AssetPlugin` builds, and insert the same `roots` handle as a
 /// resource so the Twin-open flow can register roots.
@@ -183,20 +177,25 @@ struct TwinReader {
 
 impl TwinReader {
     /// Resolve `twin://`-relative `<name>/<rel>` to an absolute filesystem path.
+    ///
+    /// Rejects path traversal: only `Normal` components are joined, so a scene can
+    /// never reach outside its Twin root. That guard is not optional — a Twin root
+    /// may be a **downloaded scenario's cache directory**, whose relative paths were
+    /// authored by a remote host, and escaping it would let a peer read arbitrary
+    /// local files. Shipped assets are addressed by scheme (`@lunco://…@`), so no
+    /// authored ref needs to climb out (verified across the shipped tree and the
+    /// twins: zero `@../…@` refs).
     fn resolve(&self, path: &Path) -> Option<PathBuf> {
         let mut comps = path.components();
-        let first = comps.next()?;
-        let first_str = first.as_os_str().to_str()?;
-        if first_str == ".." {
-            // Relative path escaped the Twin root!
-            // Resolve relative to the parent of the primary Twin root.
-            let (_, primary_root) = self.roots.primary()?;
-            let parent = primary_root.parent()?;
-            Some(parent.join(path))
-        } else {
-            let root = self.roots.root_for(first_str)?;
-            Some(root.join(comps.as_path()))
+        let name = comps.next()?.as_os_str().to_str()?;
+        let mut full = self.roots.root_for(name)?;
+        for comp in comps {
+            match comp {
+                std::path::Component::Normal(seg) => full.push(seg),
+                _ => return None,
+            }
         }
+        Some(full)
     }
 }
 
@@ -211,12 +210,9 @@ impl AssetReader for TwinReader {
         let Some(full) = self.resolve(path) else {
             return Err::<VecReader, _>(AssetReaderError::NotFound(path.to_path_buf()));
         };
-        match std::fs::read(&full) {
-            Ok(bytes) => Ok(VecReader::new(bytes)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                Err(AssetReaderError::NotFound(full))
-            }
-            Err(e) => Err(e.into()),
+        match read_bytes(&full).await {
+            Some(bytes) => Ok(VecReader::new(bytes)),
+            None => Err::<VecReader, _>(AssetReaderError::NotFound(full)),
         }
     }
 
@@ -271,71 +267,5 @@ mod tests {
             roots.overlay_for(Path::new("moonbase/scenes/sandbox.usda")).is_none(),
             "cleared overlay falls back to disk"
         );
-    }
-
-    /// A doc-backed scene must resolve to its `twin://` source so the mount
-    /// composes `base ⊕ runtime`; a scene under the same root with NO overlay must
-    /// NOT divert — there is no composed state to preserve, so it loads from disk.
-    #[test]
-    fn overlay_source_is_authoritative_not_positional() {
-        let roots = TwinRoots::default();
-        roots.register("moonbase", "/twins/moonbase");
-        roots.set_overlay("moonbase", "scenes/sandbox.usda", Arc::new(b"#usda 1.0\n".to_vec()));
-
-        assert_eq!(
-            roots.overlay_source_for_path(Path::new("/twins/moonbase/scenes/sandbox.usda")),
-            Some("twin://moonbase/scenes/sandbox.usda".to_string()),
-            "doc-backed scene routes through the composing twin source"
-        );
-        assert_eq!(
-            roots.overlay_source_for_path(Path::new("/twins/moonbase/scenes/other.usda")),
-            None,
-            "same twin root but no overlay — nothing to preserve, load from disk"
-        );
-        assert_eq!(
-            roots.overlay_source_for_path(Path::new("/elsewhere/scenes/sandbox.usda")),
-            None,
-            "outside every twin root"
-        );
-
-        // Once the overlay is dropped the scene stops diverting — the redirect
-        // tracks composed state, not the file's location.
-        roots.clear_overlay("moonbase", "scenes/sandbox.usda");
-        assert_eq!(
-            roots.overlay_source_for_path(Path::new("/twins/moonbase/scenes/sandbox.usda")),
-            None,
-            "cleared overlay ⇒ no redirect"
-        );
-    }
-
-    /// A root registered through a **symlink** must still match a canonicalized
-    /// scene path. Comparing the two in mixed form fails the prefix match, skips
-    /// the redirect, and mounts base-only — silently wiping the overlay this
-    /// redirect exists to preserve.
-    #[cfg(unix)]
-    #[test]
-    fn non_canonical_root_still_matches() {
-        let tmp = std::env::temp_dir().join(format!("lunco-twinroot-{}", std::process::id()));
-        let real = tmp.join("real_twin");
-        let link = tmp.join("linked_twin");
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(real.join("scenes")).expect("create twin root");
-        std::fs::write(real.join("scenes/sandbox.usda"), b"#usda 1.0\n").expect("write scene");
-        std::os::unix::fs::symlink(&real, &link).expect("symlink twin root");
-
-        let roots = TwinRoots::default();
-        // Registered through the symlink; the scene path arrives canonicalized.
-        roots.register("moonbase", &link);
-        roots.set_overlay("moonbase", "scenes/sandbox.usda", Arc::new(b"#usda 1.0\n".to_vec()));
-
-        let canonical_scene =
-            std::fs::canonicalize(real.join("scenes/sandbox.usda")).expect("canonicalize scene");
-        assert_eq!(
-            roots.overlay_source_for_path(&canonical_scene),
-            Some("twin://moonbase/scenes/sandbox.usda".to_string()),
-            "symlinked root must still resolve to the composing twin source"
-        );
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

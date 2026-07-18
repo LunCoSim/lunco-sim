@@ -388,7 +388,8 @@ fn default_plugins(headless: bool) -> bevy::app::PluginGroupBuilder {
 
 /// Scenario distribution Phase 4 (client consume): when the connected client has
 /// downloaded + verified **every** asset of the host's advertised scenario, load
-/// its entry scene (`default_scene`) from the `scenario://` cache. Loaded once per
+/// its entry scene (`default_scene`) from the cache, mounted as a Twin root.
+/// Loaded once per
 /// scenario **revision** (a mid-session swap bumps the revision → reload).
 ///
 /// This is a transient, read-only consume: the scene is mounted via `LoadScene`
@@ -401,8 +402,8 @@ fn load_ready_scenario(
     role: Res<lunco_core::NetworkRole>,
     remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
     downloads: Res<lunco_networking::scenario_sync::AssetDownloads>,
-    // Locally-registered Twins (native same-machine): lets a client that already
-    // has the host's Twin load `twin://` host-identically instead of `scenario://`.
+    // Twin roots: a downloaded scenario is mounted here as a root over its cache
+    // dir, so it loads under the SAME `twin://<name>/<rel>` the host uses.
     twins: Res<lunco_assets::twin_source::TwinRoots>,
     // Last scenario revision we triggered a load for — reload only on change.
     mut last_loaded: Local<Option<[u8; 32]>>,
@@ -420,26 +421,17 @@ fn load_ready_scenario(
     if *last_loaded == Some(m.revision) || !downloads.all_cached(m) {
         return;
     }
-    // If this scenario's Twin is registered locally (native same-machine dev),
-    // the client already booted on that Twin's default scene — the SAME asset
-    // path the host loaded (`twin://<name>/<scene>`), so every prim already
-    // shares the host's `GlobalEntityId` (identity = `hash(namespace:source:path)`,
-    // `source` = asset path) and possession + client prediction bind across the
-    // wire. Do NOT re-load it: a redundant teardown+reload of the live scene
-    // races avian's island solver (`assert!(island.body_count > 0)` → client
-    // panic). Mark the revision handled and keep the host-identical scene. A
-    // client WITHOUT the Twin (web) has no `twin://` to load and falls through to
-    // the `scenario://` cache copy — whose different `source` gives each prim a
-    // per-peer gid (the identity-binding limitation tracked separately).
-    if m.twin_scene.is_some() && twins.names().contains(&m.name) {
-        info!(
-            "[net] scenario twin '{}' is local — keeping the host-identical twin:// scene (no scenario:// swap)",
-            m.name
-        );
-        *last_loaded = Some(m.revision);
-        return;
-    }
-    let uri = lunco_networking::scenario_sync::scenario_asset_uri(&m.scenario_id, scene);
+    // Mounting registers the scenario's cache dir as this twin's root (unless the
+    // twin is already open locally, which keeps its own). Either way the URI is
+    // the host's, so a client that already booted this scene re-triggers the SAME
+    // asset id and `LoadScene`'s no-op guard short-circuits — no teardown, and no
+    // race with avian's island solver from a redundant reload.
+    let uri = lunco_networking::scenario_sync::mount_scenario_twin(
+        &twins,
+        &m.scenario_id,
+        &m.name,
+        scene,
+    );
     info!("[net] scenario fully cached; loading entry scene (read-only): {scene}");
     commands.trigger(LoadScene { path: uri, root_prim: String::new() });
     *last_loaded = Some(m.revision);
@@ -1169,7 +1161,7 @@ enum PolicySource {
 /// `AssetServer` (wasm-safe — no `std::fs`), caching the handle so the asset isn't
 /// dropped mid-load. Mirrors `lunco_scripting::commands::resolve_embedded_scenario_paths`
 /// — and shares its `TODO(scenario-resolve)`: a `.rhai` fetched into a peer's
-/// `scenario://<id>/` cache is loaded against the DEFAULT asset source here, so a
+/// scenario cache is loaded against the DEFAULT asset source here, so a
 /// twin/imported file policy syncs (whole-twin content plane) but needs the resolver's
 /// `canonicalize` anchoring to load on the peer. Inline source is unaffected (rides the doc).
 #[cfg(feature = "networking")]
@@ -2015,7 +2007,7 @@ impl Plugin for SandboxCorePlugin {
             app.add_plugins(lunco_networking::prediction::NetcodePredictionPlugin);
             // Scenario distribution Phase 4: once a connected client has fully
             // downloaded the host's advertised scenario, load its entry scene from
-            // the `scenario://` cache (read-only consume). The bridge lives here —
+            // the cache mounted as a Twin root (read-only consume). The bridge lives here —
             // the assembly crate that owns both the wire (`lunco-networking`) and
             // the scene loader (`lunco_usd::LoadScene`) — keeping each of those
             // crates free of the other.
@@ -2383,29 +2375,38 @@ fn bind_terrain_layers(
             commands.entity(entity).try_insert(TerrainLayersBound);
             continue;
         }
-        // Resolve against whatever the SCENE came from. A `scenario://` scene (a
-        // twin downloaded from a host) carries layer paths relative to itself, and
-        // the client normally has the local demo twin open — binding those layers
-        // under `twin://sandbox/…` silently loads the wrong (missing) textures.
-        // `AssetPath::path()` strips the source, so the parent dir is the bare
-        // `<scenario-id>`. Otherwise resolve relative to the open Twin.
-        let asset_path = asset_server.get_path(id);
-        let scenario_root = asset_path.as_ref().and_then(|p| {
-            if !matches!(
-                p.source(),
-                bevy::asset::io::AssetSourceId::Name(n)
-                    if &**n == lunco_assets::scenario_source::SCENARIO_SCHEME
-            ) {
-                return None;
+        // Layer paths are root-relative (`{base_uri}/{rel}` below), and the scene's
+        // OWN asset path is the only authority on which root that is: every scene
+        // — an open Twin or a downloaded scenario — is addressed
+        // `twin://<name>/<rel>`, so its source + first segment give the root.
+        //
+        // There is deliberately NO fallback. Guessing the "primary" open Twin for a
+        // scene we cannot identify is what bound a downloaded twin's layers under
+        // the local demo twin and silently loaded the wrong textures. A scene from
+        // a source with no root (a bare default-source asset) has no twin root to
+        // resolve against, so binding is skipped and said out loud.
+        let Some(asset_path) = asset_server.get_path(id) else { continue };
+        let source = match asset_path.source() {
+            bevy::asset::io::AssetSourceId::Name(n) => n.to_string(),
+            bevy::asset::io::AssetSourceId::Default => {
+                warn!(
+                    "[usd-dem] terrain layers on `{}` are root-relative, but the scene \
+                     carries no source root to resolve them against — skipping",
+                    asset_path.path().display()
+                );
+                commands.entity(entity).try_insert(TerrainLayersBound);
+                continue;
             }
-            p.path().parent().and_then(|d| d.to_str()).map(str::to_owned)
-        });
-        let base_uri = if let Some(root) = &scenario_root {
-            format!("scenario://{root}")
-        } else {
-            let Some((twin_name, _)) = twins.primary() else { continue };
-            format!("twin://{twin_name}")
         };
+        let Some(root) = asset_path
+            .path()
+            .components()
+            .next()
+            .and_then(|c| c.as_os_str().to_str())
+        else {
+            continue;
+        };
+        let base_uri = format!("{source}://{root}");
         // Wait for the material to exist before binding (created async by the USD
         // shader system); retry next frame until it does.
         let Some(mut material) = mats.get_mut(&mat3d.0) else { continue };

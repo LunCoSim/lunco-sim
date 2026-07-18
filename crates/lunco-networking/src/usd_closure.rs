@@ -9,7 +9,7 @@
 //!
 //! The manifest builder's folder walk ([`collect_scenario_input`]) only sees
 //! files under the Twin root, so those out-of-tree layers were never shipped and
-//! a client's `scenario://` load 404'd on the sublayer (the resolver also rejects
+//! a client's `twin://` load 404'd on the sublayer (the resolver also rejects
 //! the `..` needed to reach them). This module parses the scene's transitive
 //! `subLayers` / `references` / `payload` graph and returns every file it reaches,
 //! so the builder can add the external ones and re-root all paths at their common
@@ -98,7 +98,7 @@ fn discover_arcs(data: &sdf::Data) -> Vec<String> {
 /// every reachable file — USD layers plus referenced leaf assets — including the
 /// roots themselves.
 ///
-/// - Arcs carrying a `scheme://` (`lunco-lib://`, `twin://`, `scenario://`, …)
+/// - Arcs carrying a `scheme://` (`lunco://`, `lunco-lib://`, `twin://`, …)
 ///   are skipped: they resolve through their own asset source, not the scenario
 ///   file tree.
 /// - Leading-`/` (assets-root-relative) arcs are skipped — the assets root is

@@ -288,16 +288,13 @@ pub fn resolve_embedded_scenario_paths(
             // already `assets/`, so strip it (mirrors lunco-usd-sim).
             let rel = path.0.strip_prefix("assets/").unwrap_or(&path.0).to_string();
             // TODO(scenario-resolve): a `.rhai` fetched into a peer's scenario cache
-            // (`scenario://<id>/…`) is NOT found here — this loads against the DEFAULT
-            // asset source, not the loaded scene's source. So a twin/imported policy
-            // or scenario script syncs (whole-twin content plane) but fails to load on
-            // the peer. Fix (pick one): (1) author the ref as a USD `asset` attribute
-            // (`@…rhai@`) read through the resolver's `canonicalize`, which anchors it
-            // to the scene's `scenario://<id>/` source (like `lunco:resolvedAsset`); or
-            // (2) prefix `rel` with the active `scenario://<id>/` when a
-            // `RemoteScenarioManifest` is loaded (needs that id threaded to scripting —
-            // a networking→scripting coupling to avoid, so (1) is preferred). Inline
-            // `lunco:script` / `LunCoPolicy` sources are unaffected (they ride the doc).
+            // is NOT found here — this loads against the DEFAULT asset source, not the
+            // loaded scene's source. So a twin/imported policy or scenario script syncs
+            // (whole-twin content plane) but fails to load on the peer. Fix: author the
+            // ref as a USD `asset` attribute (`@…rhai@`) read through the resolver's
+            // `canonicalize`, which anchors it to the scene's `twin://<name>/` source
+            // (like `lunco:resolvedAsset`). Inline `lunco:script` / `LunCoPolicy`
+            // sources are unaffected (they ride the doc).
             asset_server.load(rel)
         });
         if asset_server.load_state(&*handle).is_failed() {

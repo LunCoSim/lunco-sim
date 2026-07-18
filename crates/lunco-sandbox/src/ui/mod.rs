@@ -585,7 +585,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
 
         // ── Downloaded Twins (scenario-sync cache, G3) ───────────────────
         // Twins fetched from a server into the local cache — loadable offline
-        // via `scenario://`. Networking-only; the registry rebuilds from
+        // as a `twin://` root over the cache dir. Networking-only; the registry rebuilds from
         // `<cache>/scenarios/index.json` at boot and updates as downloads finish.
         #[cfg(feature = "networking")]
         {
@@ -611,8 +611,15 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                     };
                     if ui.button(label).clicked() {
                         if let Some(scene) = entry.default_scene.clone() {
-                            let path = lunco_networking::scenario_sync::scenario_asset_uri(
+                            // Mounts the cache dir as this twin's root and yields the
+                            // same `twin://<name>/<rel>` the host uses for the scene.
+                            let twins = world
+                                .resource::<lunco_assets::twin_source::TwinRoots>()
+                                .clone();
+                            let path = lunco_networking::scenario_sync::mount_scenario_twin(
+                                &twins,
                                 &entry.scenario_id,
+                                &entry.name,
                                 &scene,
                             );
                             world.trigger(lunco_usd::LoadScene {

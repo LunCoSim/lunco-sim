@@ -108,7 +108,7 @@ pub struct AssetDownloads {
 impl AssetDownloads {
     /// True once **every** asset CID in `manifest` has been downloaded, verified,
     /// and persisted — i.e. the entry scene and all its co-located refs are on
-    /// disk/OPFS and a [`scenario_asset_uri`] load will resolve. `false` for an
+    /// disk/OPFS and a [`mount_scenario_twin`] load will resolve. `false` for an
     /// empty manifest (nothing to consume).
     pub fn all_cached(&self, manifest: &ScenarioManifestMsg) -> bool {
         !manifest.assets.is_empty()
@@ -543,7 +543,7 @@ pub fn reassemble_asset_chunks(
         // async backend (never blocks this system). A CID can appear at SEVERAL paths
         // (two byte-identical files share one content id — the transfer is
         // content-addressed, so the host sends those bytes once). Every path must be
-        // materialized, or a `scenario://` load misses the duplicate's second path.
+        // materialized, or the scene's `twin://` load misses the duplicate's second path.
         let targets: Vec<StorageHandle> = remote
             .manifest
             .as_ref()
@@ -850,12 +850,30 @@ pub fn update_scenario_download_status(
     };
 }
 
-/// The `scenario://` asset URI for a downloaded scenario asset (e.g. the entry
-/// scene). Resolves through the `scenario` asset source to
-/// `<cache_dir>/scenarios/<id>/<rel>` — where the download wrote it. Used by the
-/// consumer (Phase 4) to `LoadScene` a fully-cached scenario.
-pub fn scenario_asset_uri(scenario_id: &[u8; 16], rel: &str) -> String {
-    format!("scenario://{}/{}", hex16(scenario_id), rel)
+/// Mount a downloaded scenario as a Twin root and return the asset URI for one of
+/// its files (e.g. the entry scene).
+///
+/// A downloaded scenario **is** a Twin whose root happens to be its cache
+/// directory, so it needs no scheme of its own: the returned
+/// `twin://<name>/<rel>` is byte-identical to the URI the HOST loads for the same
+/// scene. That identity is load-bearing — `Provenance::Content` hashes
+/// `namespace:source:path`, so addressing the same scene two ways (the host by
+/// twin, a web client by a cache-only scheme) gave every prim a different
+/// `GlobalEntityId` per peer and broke possession + client prediction.
+///
+/// A twin already open locally keeps its own root: same identity, but a real
+/// checkout is the better source for the bytes, and re-pointing it at a
+/// read-only cache copy would shadow the user's editable files.
+pub fn mount_scenario_twin(
+    twins: &lunco_assets::twin_source::TwinRoots,
+    scenario_id: &[u8; 16],
+    name: &str,
+    rel: &str,
+) -> String {
+    if twins.root_of(name).is_none() {
+        twins.register(name, scenario_cache_root(scenario_id));
+    }
+    format!("twin://{name}/{rel}")
 }
 
 /// The storage handle for a scenario asset's cache location. A
@@ -1021,7 +1039,9 @@ fn on_promote_scenario(
 /// scenario's own assets), writes a `twin.toml` that **preserves the scenario
 /// identity as the Twin uuid** (so a future re-download / bidirectional sync
 /// recognizes it), then `add_twin` + `TwinAdded` — which the USD observer turns
-/// into a `twin://` scene load, replacing the read-only `scenario://` view.
+/// into a `twin://` scene load backed by the promoted folder instead of the
+/// read-only cache dir. The scene URI is unchanged by promotion — only the root
+/// that Twin name resolves to moves.
 #[cfg(not(target_arch = "wasm32"))]
 fn promote_scenario_to_folder(
     manifest: &ScenarioManifestMsg,
@@ -1100,7 +1120,7 @@ mod tests {
     /// Two byte-identical files share ONE CID (the transfer is content-addressed,
     /// so the host streams those bytes once). The client must materialize the blob
     /// at EVERY manifest path that carries the CID — resolving with `.find()` wrote
-    /// only the first, and a `scenario://` load then 404'd on the duplicate's path.
+    /// only the first, and the scene's `twin://` load then 404'd on the duplicate's path.
     #[test]
     fn duplicate_cid_resolves_to_every_manifest_path() {
         let id = [3u8; 16];
