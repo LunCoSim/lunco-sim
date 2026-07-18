@@ -10,6 +10,9 @@
 # a neutral centre of mass and moderate power. It WILL tip if driven carelessly
 # across the fall-line, and needs a deliberate line up the borderline wall — the
 # honest middle between the forgiving Explorer LT and the punishing Hauler.
+#
+# See `rover_easy.usda` for the tier ladder, and for why grip and torque are
+# authored per wheel rather than on this prim.
 def Xform "RoverMedium" (
     doc = "Medium rover (Standard) — neutral centre of mass, moderate power. Tips if you cross the fall-line carelessly; rewards a planned line. The default tier."
     prepend apiSchemas = ["LunCoCatalogAPI"]
@@ -24,24 +27,27 @@ def Xform "RoverMedium" (
     float3 physics:diagonalInertia = (2400.0, 3000.0, 1200.0)
     float physxRigidBody:angularDamping = 2.0
 
-    # Handling. Both knobs below ARE read (lunco-usd-sim/src/lib.rs:1258/1261).
-    custom float physxVehicleEngine:peakTorque = 650.0
-    # Coulomb μ ⇒ the slip limit is atan(μ). Tuned against the SURVEYED site —
-    # summer_space_school/SURVEY.md, measured on the shipped DEM over a 4 m
-    # baseline (the baseline is part of the number: 2 m is pixel noise on a
-    # 2 m/px DTM). ДЗЗ route 19.8°, naive straight line 25.5°, steep N/E half
-    # 28.4-31.1°.
-    #   μ=0.50 ⇒ 26.6°: holds the route AND the naive line (1.1° margin), and
-    #   CANNOT climb the N/E half — so the bearing you pick decides the run,
-    #   which is the whole §3.2 exercise.
-    # Was 0.6 ⇒ 31.0°, which cleared 15 of the 16 sectors' best lines: the
-    # slope hazard was decorative. (Before that 1.0 ⇒ 45°, i.e. everything.)
-    custom float lunco:frictionCoefficient = 0.5
-    # RADIANS — `read_f("lunco:maxSteerAngle").unwrap_or(0.5)` feeds the steering
-    # knuckle target directly (lunco-hardware/src/lib.rs:190); nothing converts.
-    # This was 25.0, i.e. 25 RADIANS = 1432° — saturated, so the §5 steering tier
-    # meant nothing. 0.44 rad = 25°, the value that was intended.
-    custom float lunco:maxSteerAngle = 0.44
+    # Handling, per wheel. `worn` tires, but this tier is tuned FINER than stock worn
+    # (μ=0.60 ⇒ 31.0°): μ is overridden to 0.50 per wheel. Measured against the SURVEYED
+    # site — summer_space_school/SURVEY.md, on the shipped DEM over a 4 m baseline (the
+    # baseline is part of the number: 2 m is pixel noise on a 2 m/px DTM). ДЗЗ route
+    # 19.8°, naive straight line 25.5°, steep N/E half 28.4-31.1°.
+    #   μ=0.50 ⇒ 26.6°: holds the route AND the naive line (1.1° margin) and CANNOT
+    #   climb the N/E half — so the bearing you pick decides the run, the whole §3.2
+    #   exercise. Stock worn (0.60 ⇒ 31.0°) cleared 15 of 16 sectors' best lines, making
+    #   the slope hazard decorative — hence the per-wheel override rather than the tire.
+    over "Wheel_L0" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0
+        double lunco:tire:frictionCoefficient = 0.5 }
+    over "Wheel_L1" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0
+        double lunco:tire:frictionCoefficient = 0.5 }
+    over "Wheel_L2" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0
+        double lunco:tire:frictionCoefficient = 0.5 }
+    over "Wheel_R0" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0
+        double lunco:tire:frictionCoefficient = 0.5 }
+    over "Wheel_R1" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0
+        double lunco:tire:frictionCoefficient = 0.5 }
+    over "Wheel_R2" (variants = { string tire = "worn" }) { float physxVehicleEngine:peakTorque = 650.0
+        double lunco:tire:frictionCoefficient = 0.5 }
 
     # Livery — amber (medium).
     over "Chassis" { color3f[] primvars:displayColor = [(0.85, 0.65, 0.15)] }

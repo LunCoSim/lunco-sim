@@ -7,7 +7,7 @@ use lunco_usd_bevy::*;
 use lunco_usd_avian::*;
 use lunco_usd_sim::*;
 use avian3d::prelude::*;
-use lunco_mobility::WheelRaycast;
+use lunco_mobility::{WheelRaycast, Suspension};
 use lunco_fsw::FlightSoftware;
 use std::path::Path;
 use big_space::prelude::CellCoord;
@@ -191,8 +191,11 @@ fn dump_components(app: &App, entity: Entity) {
         println!("  FlightSoftware: YES");
     }
     if let Some(wheel) = app.world().get::<WheelRaycast>(entity) {
-        println!("  WheelRaycast: radius={}, rest={}, k={}, c={}",
-            wheel.wheel_radius, wheel.rest_length, wheel.spring_k, wheel.damping_c);
+        println!("  WheelRaycast: radius={}", wheel.wheel_radius);
+    }
+    if let Some(susp) = app.world().get::<Suspension>(entity) {
+        println!("  Suspension: rest={}, k={}, c={}",
+            susp.rest_length, susp.spring_k, susp.damping_c);
     }
     if let Some(rc) = app.world().get::<RayCaster>(entity) {
         println!("  RayCaster: dir={:?}", rc.direction);

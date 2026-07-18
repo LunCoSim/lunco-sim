@@ -30,9 +30,7 @@ def Xform "LinkBeam" (
 {
     # UP (connected): the driver reads its `lunco:param:*` for width/range/mode; the Down
     # template only needs its own material + state.
-    def Cylinder "Up" (
-        prepend apiSchemas = ["LunCoLookAPI"]
-    )
+    def Cylinder "Up"
     {
         uniform token axis = "Y"
         double radius = 1.0
@@ -65,9 +63,7 @@ def Xform "LinkBeam" (
 
     # DOWN (severed): same geometry, red material, `state = 1`. Drawn only when the Up
     # template's `showDown` is on.
-    def Cylinder "Down" (
-        prepend apiSchemas = ["LunCoLookAPI"]
-    )
+    def Cylinder "Down"
     {
         uniform token axis = "Y"
         double radius = 1.0

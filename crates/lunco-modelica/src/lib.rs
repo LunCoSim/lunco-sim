@@ -250,6 +250,14 @@ pub struct ModelicaCompiler {
     /// this and never pays the MSL cost. Latches `true` after one install
     /// so subsequent compiles skip the gate entirely.
     msl_installed: bool,
+    /// Whether the shipped `LunCo` Modelica library (`assets/models/LunCo`, a
+    /// standard structured package) has been seated into this session. Same
+    /// demand-driven gate as [`Self::msl_installed`], but the library is tiny and
+    /// always embedded, so the install is a handful of in-memory documents rather
+    /// than MSL's 316 MB bundle. Seated on the first compile whose failure rumoca
+    /// attributes to an unresolved reference — e.g. a rover's `rucheyok_electrical.mo`
+    /// referencing `LunCo.Electrical.Battery`.
+    lunco_installed: bool,
     /// URIs of the user documents currently seated as overlays in this
     /// reused session (NOT the MSL/library source roots). Every compile is
     /// HERMETIC with respect to prior compiles: before seating its own
@@ -292,6 +300,7 @@ impl ModelicaCompiler {
         let mut compiler = Self {
             session: Session::new(SessionConfig::default()),
             msl_installed: false,
+            lunco_installed: false,
             seated_user_uris: std::collections::HashSet::new(),
         };
         // Escape hatch: `LUNCO_MODELICA_PRELOAD_MSL=1` forces the old eager
@@ -326,6 +335,27 @@ impl ModelicaCompiler {
             self.msl_installed = true;
         }
         self.msl_installed
+    }
+
+    /// Seat the shipped `LunCo` Modelica library into this session, once.
+    ///
+    /// The library is `assets/models/LunCo` — a standard structured package
+    /// (`package.mo` + `package.order` + members), embedded at compile time by
+    /// `lunco_assets::models` so it is present on every target including wasm. This
+    /// loads it via [`Session`]'s in-memory source-root path, the same call bundled
+    /// examples use; rumoca then resolves `import LunCo.Electrical` the standard way,
+    /// from the packages' `within` declarations. Idempotent; cheap (a few small docs).
+    pub fn ensure_lunco_installed(&mut self) -> bool {
+        if self.lunco_installed {
+            return true;
+        }
+        let files = lunco_assets::models::package_files("LunCo");
+        if files.is_empty() {
+            return false;
+        }
+        let _ = self.load_source_root_in_memory("LunCo", "LunCo", files);
+        self.lunco_installed = true;
+        true
     }
 
     /// If a process-wide MSL has been installed, preload it into the
@@ -717,25 +747,32 @@ impl ModelicaCompiler {
             .session
             .compile_model_dae_strict_reachable_uncached_with_recovery(model_name);
 
-        // Demand-driven MSL (Layer A). If the compile failed and we have not
-        // installed the library set yet, ask rumoca *why*: only if the
-        // failure carries an unresolved-reference code (`ER002`) — i.e. a
-        // class/component a library could supply — do we install MSL and
-        // retry once. A library-free model (Balloon) succeeds on the first
-        // pass and never reaches here; a genuinely broken model (syntax
-        // error, real typo) fails with a different code and is returned
-        // as-is without paying the install. The gate short-circuits once
-        // `msl_installed` latches, so this runs at most once per compiler.
+        // Demand-driven libraries. If the compile failed, ask rumoca *why*: only an
+        // unresolved-reference code (`ER002`/`ER003`) — a class a library could supply
+        // — triggers an install. A library-free model (Balloon) succeeds first pass and
+        // never reaches here; a genuinely broken model (syntax error, typo) fails with a
+        // different code and is returned as-is, paying no install.
+        //
+        // CHEAPEST FIRST, and each gated independently so a model needing only one does
+        // not pay the other. `LunCo` is a handful of embedded docs, so any unresolved
+        // reference earns it. MSL is a 316 MB bundle, so it is reached for ONLY if the
+        // target STILL has unresolved refs after `LunCo` — otherwise every EPS model
+        // (which references `LunCo` but not MSL) would drag MSL in for nothing.
+        if result.is_err() && !self.lunco_installed && self.target_has_unresolved_refs(model_name) {
+            if self.ensure_lunco_installed() {
+                log::info!("[ModelicaCompiler] `{model_name}` had unresolved refs — installed LunCo, retrying");
+                result = self
+                    .session
+                    .compile_model_dae_strict_reachable_uncached_with_recovery(model_name);
+            }
+        }
         if result.is_err()
             && !self.msl_installed
             && msl_is_available()
             && self.target_has_unresolved_refs(model_name)
             && self.ensure_msl_installed()
         {
-            log::info!(
-                "[ModelicaCompiler] `{}` had unresolved refs — installed MSL on demand, retrying",
-                model_name
-            );
+            log::info!("[ModelicaCompiler] `{model_name}` still had unresolved refs — installed MSL, retrying");
             result = self
                 .session
                 .compile_model_dae_strict_reachable_uncached_with_recovery(model_name);
@@ -1201,6 +1238,10 @@ impl Plugin for ModelicaPlugin {
         // into a rumoca compile session. No loads yet — the registry
         // just enumerates so PR-B's gate has something to look up.
         app.insert_resource(source_roots::SourceRootRegistry::build());
+        // A mounted twin may ship its own Modelica packages under `<twin>/models`;
+        // load them into the compile session so twin-authored programs resolve their
+        // imports (the shipped `LunCo` library is seated by the compiler itself).
+        app.add_systems(Update, source_roots::load_twin_source_roots);
         app.add_plugins(ui::ModelicaUiPlugin);
         app.add_plugins(lunco_doc_bevy::ViewSyncPlugin);
         // Self-register with the workbench's plugin-driven document-

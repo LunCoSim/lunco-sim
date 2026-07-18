@@ -5,9 +5,15 @@
     metersPerUnit = 1
 )
 
-# Solar Panel Assembly — compound rigid body
-# Per OpenUSD spec: root Xform has PhysicsRigidBodyAPI,
-# children have PhysicsCollisionAPI only.
+# A solar panel — a frame, a photovoltaic surface, and the mass and colliders the
+# physics engine carries. Per OpenUSD spec the root Xform holds PhysicsRigidBodyAPI and
+# the children hold PhysicsCollisionAPI only.
+#
+# What the panel GENERATES is not here: a source's output is an equation
+# (`LunCo.Electrical.SolarPanel`), and it is one component of a circuit. The vessel that
+# mounts this panel instantiates it in its electrical system
+# (`vessels/rovers/rucheyok/rucheyok_electrical.mo`) and sets this panel's area and
+# efficiency there. USD assembles the part; the circuit is the maths.
 def Xform "SolarPanel" (
     kind = "component"
     prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI"]

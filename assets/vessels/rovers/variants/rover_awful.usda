@@ -10,10 +10,12 @@
 # "ровер «высокой сложности» можно сделать намеренно очень неудобным — чтобы и
 # опрокидывался, и слабые моторы имел"). It tips easily and climbs poorly.
 #
-# The tip-over is driven by the CONFIRMED knob: a HIGH centre of mass (mass sitting
-# well above the axles) plus light damping, so any across-slope steering rolls it.
-# Weak torque + low grip are authored so it also struggles up the borderline wall
-# — feel-check that the drivetrain honours them (05_SEMINAR_TUTORIALS.md §C).
+# The tip-over is driven by a HIGH centre of mass (mass sitting well above the axles)
+# plus light damping, so any across-slope steering rolls it. Weak torque + low grip
+# make it struggle up the borderline wall.
+#
+# See `rover_easy.usda` for the tier ladder, and for why grip and torque are authored
+# per wheel rather than on this prim.
 def Xform "RoverAwful" (
     doc = "Awful rover (Overloaded Hauler) — top-heavy, weak motors, poor grip. Tips at the slightest across-slope steer and barely climbs. The expert tier: only a careful straight-up line and gentle inputs get it to the floor and back."
     prepend apiSchemas = ["LunCoCatalogAPI"]
@@ -28,24 +30,17 @@ def Xform "RoverAwful" (
     float3 physics:diagonalInertia = (1600.0, 2000.0, 900.0)
     float physxRigidBody:angularDamping = 0.8
 
-    # Handling. Both knobs below ARE read (lunco-usd-sim/src/lib.rs:1258/1261).
-    custom float physxVehicleEngine:peakTorque = 380.0
-    # Coulomb μ ⇒ the slip limit is atan(μ). Tuned against the SURVEYED site —
-    # summer_space_school/SURVEY.md, 4 m baseline (the baseline is part of the
-    # number): ДЗЗ route 19.8°, naive straight line 25.5°, gentlest way out 20.3°
-    # (SSW 199°).
-    #   μ=0.40 ⇒ 21.8°: clears the ДЗЗ route with 2.0° to spare and FAILS the
-    #   naive line by 3.7°. This tier gets in and out SOLELY by flying the route —
-    #   on the bad rover the ДЗЗ map is what earns you the run, which is §3.2's
-    #   "на грани проходимости" made literal.
-    # (Was 0.7 ⇒ 35°: the "punishing" rover could drive anywhere on the site.)
-    # This tier is the reason route()'s entry waypoint must stay on the 199°
-    # radial — off it, the descent grades 26.0° and NOTHING here can drive it.
-    custom float lunco:frictionCoefficient = 0.4
-    # RADIANS — see rover_medium. This was 18.0 = 18 RADIANS = 1031°, saturated,
-    # so the "twitchy/wide-radius" tier read identically to the others.
-    # 0.31 rad = 18°: the narrowest lock of the three ⇒ widest turning circle.
-    custom float lunco:maxSteerAngle = 0.31
+    # Handling, per wheel. `bald` tires: μ=0.40 ⇒ slip limit 21.8°, against a SURVEYED
+    # site (real Apollo 15 crater) whose ways in run 20.1° SSW / 24.7° naive / 34.4°
+    # WSW. ONLY the 20.1° SSW line is climbable, with ~1.7° of margin: this tier gets
+    # in and out solely by flying the ДЗЗ route exactly, which is §3.2's "на грани
+    # проходимости" made literal. Weak motors to match.
+    over "Wheel_L0" (variants = { string tire = "bald" }) { float physxVehicleEngine:peakTorque = 380.0 }
+    over "Wheel_L1" (variants = { string tire = "bald" }) { float physxVehicleEngine:peakTorque = 380.0 }
+    over "Wheel_L2" (variants = { string tire = "bald" }) { float physxVehicleEngine:peakTorque = 380.0 }
+    over "Wheel_R0" (variants = { string tire = "bald" }) { float physxVehicleEngine:peakTorque = 380.0 }
+    over "Wheel_R1" (variants = { string tire = "bald" }) { float physxVehicleEngine:peakTorque = 380.0 }
+    over "Wheel_R2" (variants = { string tire = "bald" }) { float physxVehicleEngine:peakTorque = 380.0 }
 
     # Livery — hazard red (hard).
     over "Chassis" { color3f[] primvars:displayColor = [(0.85, 0.20, 0.15)] }

@@ -27,16 +27,16 @@ The differential is a standard `PhysxPhysicsGearJoint` (`Differential`) over the
 
 ### 3. Suspension Parameters (Authored per Wheel)
 Even for joint-based physical rovers, the suspension settings are read from standard PhysX/Omniverse schema fields on each `Cylinder` wheel:
-*   `float physxVehicleSuspension:springStiffness`: Suspension spring constant (default `12000.0` N/m). Lower values make the suspension softer.
-*   `float physxVehicleSuspension:springDamping`: Suspension damper coefficient (default `2500.0` N·s/m). Prevents the vehicle from bouncing excessively.
-*   `float physxVehicleSuspension:restLength`: Uncompressed suspension length (default `0.5` m).
+*   `float physxVehicleSuspension:springStrength`: Suspension spring constant (default `12000.0` N/m). Lower values make the suspension softer.
+*   `float physxVehicleSuspension:springDamperRate`: Suspension damper coefficient (default `2500.0` N·s/m). Prevents the vehicle from bouncing excessively.
+*   `float lunco:suspension:restLength`: Uncompressed suspension length (default `0.5` m).
 
 ### 4. Drivetrain & Motor Actuation (Authored per Wheel)
 Controlling traction and speed:
 *   `float physxVehicleEngine:peakTorque`: Maximum motor torque (default `300.0` N·m). High torque allows climbing steep slopes but can cause wheelspin.
 *   `float physxVehicleEngine:maxRotationSpeed`: Motor free-spin angular velocity limit (default `60.0` rad/s).
 *   `float physxVehicleWheel:maxBrakeTorque`: Braking authority (default `1500.0` N·m) to decelerate or lock the wheels.
-*   `double lunco:frictionCoefficient`: Coulomb friction coefficient ($\mu$, default `0.8`).
+*   `double lunco:tire:frictionCoefficient`: Coulomb friction coefficient ($\mu$, default `0.8`) — authored on the TIRE (`components/mobility/tires/*.usda`), composed onto the wheel by its `tire` variant.
 *   `float physxVehicleTire:longitudinalStiffness`: Longitudinal tire grip stiffness (default `8000.0` N per unit slip).
 
 ---

@@ -3,7 +3,7 @@ use lunco_usd_bevy::*;
 use lunco_usd_avian::*;
 use lunco_usd_sim::*;
 use avian3d::prelude::*;
-use lunco_mobility::WheelRaycast;
+use lunco_mobility::{WheelRaycast, Suspension};
 
 #[test]
 fn test_rover_loading_physics() {
@@ -32,15 +32,44 @@ fn test_rover_loading_physics() {
     ));
 
     // 1. Setup a mock USD stage with a Chassis and a Wheel
+    // A wheel DECLARES itself with `PhysxVehicleWheelAPI` — the loader detects the
+    // applied schema, not the presence of a radius. And every `LunCoWheelAPI` knob is
+    // required: they have no fallbacks, in the schema or in Rust.
+    //
+    // Real wheels get all of this from one reference arc onto
+    // `components/mobility/wheel.usda` (plus a suspension arc and a tire variant), so
+    // a rover authors an index and a radius and nothing else. This fixture is the only
+    // wheel in the project that composes nothing, which is exactly why it has to spell
+    // out what a wheel is — and why it is worth keeping that way: it pins the contract
+    // the arcs are satisfying.
     let usda_content = r#"#usda 1.0
 def Xform "Rover" {
     def Cube "Chassis" {
         bool physics:rigidBodyEnabled = true
         float physics:mass = 500.0
     }
-    def Cylinder "Wheel" {
+    def Cylinder "Wheel" (
+        prepend apiSchemas = [
+            "PhysxVehicleWheelAPI", "LunCoWheelAPI",
+            "PhysxVehicleSuspensionAPI", "LunCoSuspensionAPI",
+            "PhysxVehicleTireAPI", "LunCoTireAPI",
+        ]
+    ) {
         float physxVehicleWheel:radius = 0.4
-        float physxVehicleSuspension:springStiffness = 5000.0
+        int lunco:wheel:index = 0
+
+        float lunco:suspension:restLength = 0.7
+        float physxVehicleSuspension:springStrength = 5000.0
+        float physxVehicleSuspension:springDamperRate = 600.0
+
+        double lunco:tire:frictionCoefficient = 0.8
+
+        double lunco:wheel:contactGripStiffness = 50.0
+        double lunco:wheel:driveForcePerNormal = 2.0
+        double3 lunco:wheel:steerAxis = (0, 1, 0)
+        double lunco:wheel:maxDriveOmega = 12.0
+        double lunco:wheel:driveDamping = 30.0
+        double lunco:wheel:stallTorqueGain = 6.0
     }
 }
 "#;
@@ -108,7 +137,8 @@ def Xform "Rover" {
     // 6. Verify Wheel (Intercepted Simulation Physics)
     let wheel_comp = app.world().get::<WheelRaycast>(wheel).expect("Wheel should have WheelRaycast");
     assert!((wheel_comp.wheel_radius - 0.4).abs() < 1e-6);
-    assert!((wheel_comp.spring_k - 5000.0).abs() < 1e-6);
+    let susp_comp = app.world().get::<Suspension>(wheel).expect("Wheel should have Suspension");
+    assert!((susp_comp.spring_k - 5000.0).abs() < 1e-6);
 
     // 7. Verify Intercept Priority (Wheel should NOT have standard physics)
     assert!(app.world().get::<RigidBody>(wheel).is_none(), "Intercepted wheel should NOT have standard RigidBody");

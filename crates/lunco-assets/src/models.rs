@@ -43,6 +43,41 @@ pub fn model_source(filename: &str) -> Option<&'static str> {
         .and_then(|f| f.contents_utf8())
 }
 
+/// Every `.mo` under a package subdirectory of `assets/models/`, as
+/// `(path-relative-to-models, source)` — e.g. `("LunCo/Electrical/Battery.mo", …)`.
+///
+/// RECURSIVE, unlike [`model_files`]: a structured Modelica package is a directory
+/// tree (`package.mo` + subpackages + members), so a top-level-only scan misses
+/// everything below the root. Used to seat a shipped library into a compile session,
+/// which is why the paths are kept qualified — each is a stable, unique document URI.
+pub fn package_files(package: &str) -> Vec<(String, String)> {
+    fn walk(dir: &Dir, out: &mut Vec<(String, String)>) {
+        for f in dir.files() {
+            let is_mo = f
+                .path()
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("mo"))
+                .unwrap_or(false);
+            if is_mo {
+                if let Some(src) = f.contents_utf8() {
+                    out.push((f.path().to_string_lossy().into_owned(), src.to_string()));
+                }
+            }
+        }
+        for sub in dir.dirs() {
+            walk(sub, out);
+        }
+    }
+
+    let mut out = Vec::new();
+    if let Some(dir) = MODELS_DIR.get_dir(package) {
+        walk(dir, &mut out);
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

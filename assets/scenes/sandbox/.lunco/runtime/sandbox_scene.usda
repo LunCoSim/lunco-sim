@@ -31,40 +31,28 @@ over "SandboxScene"
   <BehaviorTree ID="MainTree">
     <Repeat num_cycles="-1">
       <Sequence>
-        <Action ID="drive_to" target="-1.809837;0.000000;-1.076865" smooth="true"/>
-        <Action ID="drive_to" target="-16.019590;0.000000;-1.285654" smooth="true"/>
-        <Action ID="drive_to" target="-9.719181;0.000000;14.726850" smooth="true"/>
-        <Action ID="drive_to" target="-18.636282;0.000000;27.142329" smooth="true"/>
-        <Action ID="drive_to" target="-63.739341;0.000000;31.674713" smooth="true"/>
-        <Action ID="drive_to" target="-100.805948;0.000000;47.613032" smooth="true"/>
-        <Action ID="drive_to" target="-128.913332;0.000000;7.144366" smooth="true"/>
-        <Action ID="drive_to" target="-103.146841;-0.000000;-66.809895" smooth="true"/>
-        <Action ID="drive_to" target="105.198452;-0.000000;-82.754947" smooth="true"/>
-        <Action ID="drive_to" target="114.896400;0.000000;-51.174355" smooth="true"/>
-        <Action ID="drive_to" target="110.322662;0.000000;-6.454551" smooth="true"/>
-        <Action ID="drive_to" target="101.745334;0.000000;36.144420" smooth="true"/>
-        <Action ID="drive_to" target="170.142210;0.000000;22.547475" smooth="true"/>
-        <Action ID="drive_to" target="139.641120;0.000000;-64.838974" smooth="true"/>
-        <Action ID="drive_to" target="285.048801;0.000000;34.079742" smooth="true"/>
-        <Action ID="drive_to" target="199.425832;0.000000;67.512915" smooth="true"/>
-        <Action ID="drive_to" target="322.464852;0.000000;124.716601" smooth="true"/>
-        <Action ID="drive_to" target="167.940274;0.000000;93.468621" smooth="true"/>
-        <Action ID="drive_to" target="292.633031;0.000000;162.856468" smooth="true"/>
-        <Action ID="drive_to" target="162.507462;0.000000;105.561405" smooth="true"/>
-        <Action ID="drive_to" target="133.022749;0.000000;121.347889" smooth="true"/>
-        <Action ID="drive_to" target="97.042522;0.000000;130.990991" smooth="true"/>
-        <Action ID="drive_to" target="72.739650;0.000000;164.855589" smooth="true"/>
-        <Action ID="drive_to" target="101.145358;0.000000;172.682733" smooth="true"/>
-        <Action ID="drive_to" target="114.444947;0.000000;152.760696" smooth="true"/>
-        <Action ID="drive_to" target="102.183869;0.000000;185.858494" smooth="true"/>
-        <Action ID="drive_to" target="83.277212;0.000000;186.480499" smooth="true"/>
-        <Action ID="drive_to" target="52.860970;0.000000;160.786112" smooth="true"/>
-        <Action ID="drive_to" target="53.018125;0.000000;157.903222" smooth="true"/>
-        <Action ID="drive_to" target="21.056119;0.000000;-99.689042" smooth="true"/>
-        <Action ID="drive_to" target="-49.505612;0.000000;-97.710403" smooth="true"/>
-        <Action ID="drive_to" target="5.641419;-0.000000;-8.191681"/>
+        <Action ID="drive_to" target="-24.807858;-0.000000;15.017439" smooth="true"/>
+        <Action ID="drive_to" target="-64.551836;0.000000;22.211846" smooth="true"/>
+        <Action ID="drive_to" target="-88.382890;0.000000;9.033226" smooth="true"/>
+        <Action ID="drive_to" target="-93.670193;0.000000;-8.575343" smooth="true"/>
+        <Action ID="drive_to" target="-72.871290;-0.000000;-48.153632" smooth="true"/>
+        <Action ID="drive_to" target="-81.981855;0.000000;-63.390021" smooth="true"/>
+        <Action ID="drive_to" target="-94.402200;0.000000;-56.554965"/>
+        <Action ID="drive_to" target="-97.797423;0.000000;-45.227422"/>
+        <Action ID="drive_to" target="-100.733869;0.000000;-61.236942"/>
       </Sequence>
     </Repeat>
+  </BehaviorTree>
+</root>"""
+    }
+    over "Skid_Physical_1"
+    {
+        custom string lunco:behavior = """<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence>
+      <Action ID="drive_to" target="5.0;0.0;-15.0"/>
+      <Action ID="drive_to" target="-5.0;0.0;-20.0"/>
+    </Sequence>
   </BehaviorTree>
 </root>"""
     }

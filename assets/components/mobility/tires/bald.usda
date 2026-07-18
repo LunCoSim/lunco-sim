@@ -1,0 +1,21 @@
+#usda 1.0
+(
+    defaultPrim = "Tire"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# A BALD regolith tire — the cleats are gone. μ=0.4 ⇒ a slip limit of atan(0.4) = 21.8°,
+# which clears the gentlest surveyed line into the crater (20.3° SSW) by about 1.5° and
+# nothing else. Every metre is a traction decision. That is the point.
+#
+# A `regolith` tire with almost no bite and nothing else changed — see `cleated.usda`
+# for why this file is three lines long.
+
+over "Tire" (
+    prepend references = @regolith.usda@</Tire>
+    kind = "component"
+)
+{
+    double lunco:tire:frictionCoefficient = 0.4
+}

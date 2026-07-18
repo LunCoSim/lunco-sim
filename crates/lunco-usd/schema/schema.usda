@@ -713,3 +713,144 @@ class "LunCoAvatarAPI" (
         doc = "The point the avatar's camera faces on spawn."
     )
 }
+
+# --- LunCo vehicle extensions ------------------------------------------------
+#
+# The PhysX vehicle schema (see `core/physxSchema.usda`) covers wheel dimensions,
+# suspension spring/damper, tire friction tables and compliance graphs. Three
+# things it does NOT model are below, each in its OWN applied API — one per prim
+# role, like every other LunCo API here.
+#
+# They are deliberately not one `LunCoMobilityAPI`: an applied API schema's
+# properties join the definition of every prim it is applied to, so a bundle
+# would declare `lunco:wheel:index` (with a fallback) on a suspension prim and a
+# `restLength` on a spring visual. Applied schemas are the unit of application,
+# not a namespace — see `PhysxVehicleWheelAPI` / `…SuspensionAPI` /
+# `…WheelAttachmentAPI`, which split along exactly these lines.
+
+class "LunCoSuspensionAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """The rest length of a LunCo raycast suspension. Applied to a suspension
+    prim alongside `PhysxVehicleSuspensionAPI`, whose spring/damper attrs carry the
+    rest of the compliance (see `assets/components/mobility/suspensions/*.usda`).
+
+    LunCo extension: PhysX's `PhysxVehicleSuspensionAPI` has no `restLength` — it
+    models travel as `travelDistance` + `sprungMass` — but the raycast wheel
+    integrator needs a rest length to solve Hooke's law."""
+)
+{
+    float lunco:suspension:restLength (
+        doc = """Natural standoff of a raycast wheel below its mount, metres — the
+        distance at which the analytical spring exerts zero force. `float`, like the
+        `physxVehicleSuspension:*` attrs it sits beside (and like the
+        `travelDistance` it stands in for). Read by `resolve_suspension_params`
+        (lunco-usd-sim); required for raycast wheels (doc 53 §4), and declared with
+        no fallback so an unauthored rest length is an error, not a 0.7 m guess."""
+    )
+}
+
+class "LunCoWheelAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """The per-wheel knobs LunCo's wheel integrator needs and PhysX does not
+    model. Applied to a wheel prim alongside `PhysxVehicleWheelAPI`, which carries
+    the wheel's dimensions and spin dynamics (see
+    `assets/components/mobility/wheel.usda`, which applies both and authors the
+    values every wheel inherits through its reference arc).
+
+    NO FALLBACKS. Every property here is declared without a default and must be
+    authored — `wheel.usda` authors them all, so every wheel on every rover has
+    them by composition. They were previously `unwrap_or(...)` constants in the
+    Rust loader, which meant the authored asset was not the source of truth and an
+    unauthored knob was indistinguishable from a deliberate one."""
+)
+{
+    int lunco:wheel:index (
+        doc = """Logical wheel index on the vehicle, used for drive/steer wiring
+        parity. LunCo extension: PhysX's `physxVehicleWheelAttachment:index` lives
+        on the WheelAttachment prim, which LunCo's flat composition doesn't author
+        — the wheel prim composes wheel + suspension directly — so the index lives
+        here rather than squatting a non-existent `physxVehicleWheel:index`.
+        Authored per wheel by the rover; everything else here comes from
+        `wheel.usda`."""
+    )
+    double lunco:wheel:contactGripStiffness (
+        doc = """Slope of contact friction vs slip, before the Coulomb cone bites.
+        Read by the wheel loader (lunco-usd-sim)."""
+    )
+    double lunco:wheel:driveForcePerNormal (
+        doc = """Drive force as a multiple of the wheel's normal force — traction
+        authority before the friction cone limits it. Per wheel, so a heavy hauler
+        and a light scout can differ."""
+    )
+    double3 lunco:wheel:steerAxis (
+        doc = """Steering-head axis, wheel-local. `(0, 1, 0)` is a vertical yaw
+        axis (cars); a raked fork authors e.g. `(0, 0.91, 0.42)` for ~25°."""
+    )
+    double lunco:wheel:maxDriveOmega (
+        doc = """Joint-wheel drive tuning (rigid-axle rovers): free-spin cap of the
+        axle motor, rad/s."""
+    )
+    double lunco:wheel:driveDamping (
+        doc = """Joint-wheel drive tuning: damping of the axle motor."""
+    )
+    double lunco:wheel:stallTorqueGain (
+        doc = """Joint-wheel drive tuning: torque gain as the axle approaches
+        stall."""
+    )
+}
+
+class "LunCoTireAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """The tire's grip against the ground. Applied to a tire prim alongside
+    `PhysxVehicleTireAPI`, whose `longitudinalStiffness` carries the rest of the
+    contact model (see `assets/components/mobility/tires/*.usda`, whose `over`
+    composes onto the wheel that references it).
+
+    LunCo extension: PhysX models grip as a ground-material-dependent friction
+    TABLE (`physxVehicleTireFrictionTable`), not a scalar on the tire. LunCo's
+    drive-traction model (`apply_wheel_drive`) is a single Coulomb μ, so the μ is
+    authored here rather than squatting a PhysX name that means something else."""
+)
+{
+    double lunco:tire:frictionCoefficient (
+        doc = """Coulomb μ between this tire and the ground — the slip limit is
+        atan(μ). No fallback: a tire that does not say what it grips with is an
+        authoring bug, not a μ of 1.0."""
+    )
+}
+
+class "LunCoSuspensionVisualAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Marks a prim as a moving part of a suspension strut's VISUAL, so the
+    mobility animation system can drive it from the live compression. Applied to the
+    piston/spring subcomponents of a suspension
+    (`assets/components/mobility/suspensions/standard.usda`).
+
+    LunCo extension: the PhysX vehicle schema is physics-only — it has no notion of
+    a strut's visual parts."""
+)
+{
+    uniform token lunco:suspensionVisual:role (
+        doc = """Which moving part this prim is. `"piston"` ⇒ the prim is stamped
+        with a `SuspensionPiston` Bevy component (translates along the travel axis);
+        `"spring"` ⇒ a `SuspensionSpring` component (scales along the travel axis).
+        A `kind` token is NOT used for this — `kind` is USD's regulated model
+        taxonomy (component/assembly/subcomponent), and "piston"/"spring" are not
+        valid kinds. Read at load by `process_usd_sim_prim_read` (lunco-usd-sim).
+        No fallback and no `""`: applying the API IS the claim to be a moving part,
+        so there is no such thing as a roleless one."""
+        allowedTokens = ["piston", "spring"]
+    )
+}

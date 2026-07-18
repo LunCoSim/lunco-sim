@@ -27,12 +27,13 @@
 # numbers mean the same thing here as they do in any other PhysX vehicle.
 
 over "Tire" (
+    prepend apiSchemas = ["PhysxVehicleTireAPI", "LunCoTireAPI"]
     kind = "component"
 )
 {
     # --- Grip ---
     float physxVehicleTire:longitudinalStiffness = 8000.0 # N per (m/s) of contact slip
-    double lunco:frictionCoefficient = 0.8                # tyre↔regolith friction
+    double lunco:tire:frictionCoefficient = 0.8                # tyre↔regolith friction
 
     # --- Tread ---
     # Spin-revealing tread + rim, drawn by the wheel shader. The look is a `Material`

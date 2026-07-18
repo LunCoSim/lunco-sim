@@ -1293,13 +1293,32 @@ fn on_load_scene(
     q_usd: Query<(Entity, &UsdPrimPath)>,
     q_wires: Query<Entity, With<SimConnection>>,
     in_flight: Option<Res<SceneLoadInFlight>>,
+    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
 ) {
     // Accept an absolute path (Twin manifests join `default_scene` to
     // the Twin root) or an already-relative asset path; bail if an
     // absolute path lies outside the assets dir.
-    let Some(path) = normalize_scene_asset_path(&cmd.path) else {
+    let Some(mut path) = normalize_scene_asset_path(&cmd.path) else {
         return;
     };
+
+    // A workspace scene under an open Twin root must load THROUGH its `twin://`
+    // source, never its raw file path. The `twin://` source resolves to the
+    // document's composed `base ⊕ runtime` overlay (placed waypoints, runtime
+    // spawns, moved transforms); a raw `asset_server.reload` re-reads the base
+    // `.usda` from disk and silently drops all of it. So a second
+    // `load_scene("scenes/…/scene.usda")` for an already-open scene mounts a fresh
+    // base-only stage and wipes every live edit. Rewriting to the twin source both
+    // fixes that and lets the no-op guard below recognise the active scene (same
+    // asset id) so it is a true no-op — the loaded state, overlay included, stands.
+    if let Some(twin_roots) = twin_roots.as_deref() {
+        if let Some(twin_path) = twin_source_for_workspace_scene(&path, twin_roots) {
+            if twin_path != path {
+                info!("[load-scene] `{}` → `{}` (twin source composes the runtime overlay)", path, twin_path);
+                path = twin_path;
+            }
+        }
+    }
     let root_prim = resolve_root_prim(&path, &cmd.root_prim);
 
     // Blender-style no-op: same path + root prim already loaded.
@@ -1718,6 +1737,36 @@ fn normalize_scene_asset_path(path_in: &str) -> Option<String> {
     } else {
         Some(path_in.to_string())
     }
+}
+
+/// Rewrite a raw workspace scene path (`scenes/…/scene.usda`) to the `twin://`
+/// source of the open Twin that contains it, if any.
+///
+/// Loading a workspace scene by its raw file path mounts a fresh base-only asset,
+/// bypassing the doc-backed `twin://` source whose overlay carries the composed
+/// `base ⊕ runtime` state (placed waypoints, runtime spawns, moved transforms). A
+/// scene inside an open Twin therefore MUST route through `twin://<name>/<rel>` — a
+/// no-op when no overlay is set (falls back to disk), and the runtime-preserving
+/// path when one is. Returns `None` for an already-`twin://` path or a scene under
+/// no open Twin root (a plain file with no document to compose).
+fn twin_source_for_workspace_scene(
+    path: &str,
+    twin_roots: &lunco_assets::twin_source::TwinRoots,
+) -> Option<String> {
+    if path.contains("://") {
+        return None;
+    }
+    let abs = std::env::current_dir().ok()?.join(assets_dir()).join(path);
+    let abs = std::fs::canonicalize(&abs).unwrap_or(abs);
+    for name in twin_roots.names() {
+        let Some(root) = twin_roots.root_of(&name) else { continue };
+        let root = std::fs::canonicalize(&root).unwrap_or(root);
+        if let Ok(rel) = abs.strip_prefix(&root) {
+            let rel = rel.to_string_lossy().replace('\\', "/");
+            return Some(format!("twin://{name}/{rel}"));
+        }
+    }
+    None
 }
 
 /// Spawn a USD scene root under the first `Grid` entity.

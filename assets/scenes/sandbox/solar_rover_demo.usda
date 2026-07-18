@@ -118,7 +118,8 @@ def Xform "SolarRoverTest" (
             uniform token axis = "Y"
             double radius = 0.05
             double height = 0.7
-            double3 xformOp:translate = (0, 0.45, 0) // Lifted on top of chassis
+            # Lifted to sit on top of the chassis.
+            double3 xformOp:translate = (0, 0.45, 0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
             color3f[] primvars:displayColor = [(0.5, 0.5, 0.52)]
             bool physics:collisionEnabled = false

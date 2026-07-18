@@ -5,28 +5,23 @@
     metersPerUnit = 1
 )
 
-# A drive motor, as a spawnable part. It carries its electrical ratings and its power
-# connection; the root is an `Xform` — a component, not a cylinder — so the visible
-# housing is an ordinary child gprim that both renders and collides, and the rigid body
-# is the root.
+# A drive motor as a spawnable part — a housing, a mass, and a collider.
+#
+# Its electrical behaviour is not here and not its own: a motor is a load on a circuit,
+# and a circuit is one Modelica model. `LunCo.Electrical.DCMotor` is the reusable model
+# class; the vehicle it drives instantiates it in its electrical system (see
+# `vessels/rovers/rucheyok/rucheyok_electrical.mo`). The MECHANICAL side is Avian's — the
+# torque and shaft speed are PhysX vehicle properties on the wheel, and the physics step
+# owns the exchange. USD assembles the part; the circuit is the maths.
+#
+# The root is an `Xform` — a component, not a cylinder — so the visible housing is an
+# ordinary child gprim that both renders and collides, and the rigid body is the root.
 def Xform "Motor" (
     kind = "component"
     prepend apiSchemas = ["LunCoCatalogAPI"]
 )
 {
     uniform bool lunco:spawnable = true
-
-    # --- Motor properties ---
-    double lunco:ratedPower = 2000.0
-    double lunco:peakPower = 4000.0
-    double lunco:ratedRpm = 300.0
-    double lunco:efficiency = 0.85
-    double lunco:torqueConstant = 0.1
-    double lunco:resistance = 0.05
-    double lunco:inductance = 0.001
-
-    # --- Power connections ---
-    rel lunco:powerInput
 
     # --- Physics ---
     bool physics:rigidBodyEnabled = true

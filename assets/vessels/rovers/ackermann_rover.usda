@@ -34,6 +34,18 @@ def Xform "AckermannRover" (
 )
 {
     uniform bool lunco:spawnable = true
+
+    # --- Steering (PhysxVehicleAckermannSteeringAPI, applied above) ---
+    # The steer lock belongs to the VEHICLE, not to a wheel: it is one property of one
+    # steering system, and a rover's wheels do not each get an opinion about it. PhysX
+    # agrees — `physxVehicleWheel:maxSteerAngle` is deprecated in favour of this.
+    # RADIANS, as everywhere in PhysX (only the authoring wizard's UI is in degrees).
+    # 0.5 rad = 28.6°, the lock this rover has always driven with.
+    float physxVehicleAckermannSteering:maxSteerAngle = 0.5
+    # 0.0 = parallel steering. The wheels are steered by a shared angle today; full
+    # Ackermann geometry (inner wheel turns tighter) is not modelled yet.
+    float physxVehicleAckermannSteering:strength = 0.0
+
     # Emission REQUIRES a material: USD has no "display emissive" primvar the way
     # it has `displayColor`/`displayOpacity`, so the headlight glow is a
     # UsdPreviewSurface input on a Shader, bound to both lenses.
@@ -183,7 +195,7 @@ def Xform "AckermannRover" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(1.0, 0.0, 0.0)]
 
-        int physxVehicleWheel:index = 0
+        int lunco:wheel:index = 0
         float physxVehicleWheel:radius = 0.4
     }
 
@@ -200,7 +212,7 @@ def Xform "AckermannRover" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(1.0, 0.0, 0.0)]
 
-        int physxVehicleWheel:index = 1
+        int lunco:wheel:index = 1
         float physxVehicleWheel:radius = 0.4
     }
 
@@ -217,7 +229,7 @@ def Xform "AckermannRover" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.0, 0.0, 1.0)]
 
-        int physxVehicleWheel:index = 2
+        int lunco:wheel:index = 2
         float physxVehicleWheel:radius = 0.4
     }
 
@@ -234,7 +246,7 @@ def Xform "AckermannRover" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.0, 0.0, 1.0)]
 
-        int physxVehicleWheel:index = 3
+        int lunco:wheel:index = 3
         float physxVehicleWheel:radius = 0.4
     }
 

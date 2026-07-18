@@ -1000,7 +1000,7 @@ pub(crate) const WHEEL_PARAMS: &[WheelParam] = &[
     WheelParam {
         aliases: &["friction_mu", "friction"],
         set: |w, v| w.friction_mu = v,
-        usd_attr: "lunco:frictionCoefficient",
+        usd_attr: "lunco:tire:frictionCoefficient",
     },
     WheelParam {
         aliases: &["mass"],
@@ -1016,21 +1016,6 @@ pub(crate) const WHEEL_PARAMS: &[WheelParam] = &[
         aliases: &["wheel_radius", "radius"],
         set: |w, v| w.wheel_radius = v,
         usd_attr: "physxVehicleWheel:radius",
-    },
-    WheelParam {
-        aliases: &["rest_length"],
-        set: |w, v| w.rest_length = v,
-        usd_attr: "physxVehicleSuspension:restLength",
-    },
-    WheelParam {
-        aliases: &["spring_k", "spring_stiffness"],
-        set: |w, v| w.spring_k = v,
-        usd_attr: "physxVehicleSuspension:springStiffness",
-    },
-    WheelParam {
-        aliases: &["damping_c", "spring_damping"],
-        set: |w, v| w.damping_c = v,
-        usd_attr: "physxVehicleSuspension:springDamping",
     },
 ];
 
@@ -1073,6 +1058,21 @@ pub fn persist_wheel_and_pbr_to_runtime_layer(
                 .parse::<f32>()
                 .ok()
                 .map(|v| (param.usd_attr.to_string(), "float", v.to_string()))
+        } else if matches!(cmd.property.as_str(), "rest_length" | "spring_k" | "spring_stiffness" | "damping_c" | "spring_damping") {
+            // `springStrength` / `springDamperRate` are NVIDIA's canonical
+            // PhysxVehicleSuspensionAPI names; `restLength` has no PhysX
+            // equivalent, so it lives under the lunco: namespace.
+            let usd_attr = match cmd.property.as_str() {
+                "rest_length" => "lunco:suspension:restLength",
+                "spring_k" | "spring_stiffness" => "physxVehicleSuspension:springStrength",
+                "damping_c" | "spring_damping" => "physxVehicleSuspension:springDamperRate",
+                _ => unreachable!(),
+            };
+            cmd.value
+                .trim()
+                .parse::<f32>()
+                .ok()
+                .map(|v| (usd_attr.to_string(), "float", v.to_string()))
         } else if cmd.property == "visible" {
             // Visibility → standard USD `token visibility`, which the prim
             // instantiator already reads back (`inherited` / `invisible`), so a
@@ -1780,6 +1780,7 @@ pub fn on_set_object_property(
     q_mesh: Query<(), With<Mesh3d>>,
     mut q_vis: Query<&mut Visibility>,
     mut q_wheel: Query<&mut lunco_mobility::WheelRaycast>,
+    mut q_susp: Query<&mut lunco_mobility::Suspension>,
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
@@ -1788,6 +1789,29 @@ pub fn on_set_object_property(
         warn!("SET_PROPERTY: no api_id={} in registry", cmd.entity_id);
         return;
     };
+
+    // Per-wheel suspension tuning (both joint-based and raycast).
+    match cmd.property.as_str() {
+        "rest_length" | "spring_k" | "spring_stiffness" | "damping_c" | "spring_damping" => {
+            let Ok(value) = cmd.value.trim().parse::<f64>() else {
+                warn!("SET_PROPERTY: '{}' expects a number, got '{}'", cmd.property, cmd.value);
+                return;
+            };
+            let Ok(mut susp) = q_susp.get_mut(target) else {
+                warn!("SET_PROPERTY: entity {} has no Suspension component", cmd.entity_id);
+                return;
+            };
+            match cmd.property.as_str() {
+                "rest_length" => { susp.rest_length = value; }
+                "spring_k" | "spring_stiffness" => { susp.spring_k = value; }
+                "damping_c" | "spring_damping" => { susp.damping_c = value; }
+                _ => {}
+            }
+            info!("SET_PROPERTY: suspension {} {} = {}", cmd.entity_id, cmd.property, value);
+            return;
+        }
+        _ => {}
+    }
 
     // Per-wheel tire-spin dynamics. Each wheel is its own entity, so addressing
     // a single `api_id` sets the field on just that wheel — independent control.

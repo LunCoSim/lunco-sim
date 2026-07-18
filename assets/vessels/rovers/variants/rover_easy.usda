@@ -10,28 +10,30 @@
 # shared six-wheel base (via the asset-root `lunco://` scheme, so it resolves
 # wherever this twin is mounted) and OVERRIDES only the handling knobs.
 #
-# Design intent (task §5 — CoM / torque / grip / steering):
+# Design intent (task §5 — CoM / torque / grip):
 #   * LOW centre of mass  → very hard to tip, even on the borderline wall.
 #   * Heavier, well-damped → planted, predictable.
-#   * Ample torque + high grip + wide steer lock → climbs and turns without drama.
+#   * Ample torque + high grip → climbs without drama.
 #
 # The three tiers are a LADDER OVER THE SURVEYED SITE, not vibes. Slip limit is
-# atan(frictionCoefficient). Numbers from summer_space_school/SURVEY.md, measured
-# on the shipped DEM over a 4 m baseline (the baseline is PART of the number —
-# 2 m is adjacent-pixel noise on a 2 m/px DTM): ДЗЗ route 19.8°, naive straight
-# line 25.5°, gentlest way out 20.3° (SSW 199°), steep N/E half 28.4-31.1°.
-#   easy   μ=1.3 → 52.4°  drives every line              (this file)
-#   medium μ=0.5 → 26.6°  route + naive; NOT the N/E half
-#   awful  μ=0.4 → 21.8°  route ONLY (2.0° margin); naive FAILS by 3.7°
+# atan(frictionCoefficient); the crater's ways in measure 20.1° (SSW) / 24.7°
+# (naive straight line) / 34.4° (WSW wall):
+#   easy   μ=1.3 → 52.4°  drives every line          (this file)
+#   medium μ=0.6 → 31.0°  ДЗЗ route + naive; NOT the WSW wall
+#   awful  μ=0.4 → 21.8°  ONLY the 20.1° SSW line, ~1.7° of margin
 # Re-survey the site ⇒ re-check these three numbers, or the ladder is decorative.
-# NB an earlier comment here called the WSW wall the steepest at 34.4°. It is not:
-# at a 4 m baseline WSW's best line is 22.2°, one of the EASIER ways out. The
-# steep side is N/NNW (sector best 31.1°, worst individual line 39.9° @ 336°).
 # Tip limit is atan(half_track / CoM-above-contact); the base puts wheels at
 # x=±1.0 with contact at y=-0.55, so easy=73°, medium=63°, awful=45° — tipping is
 # a DYNAMIC across-slope failure, not a static one.
-# `physics:centerOfMass` is read in lunco-usd-avian; `lunco:frictionCoefficient`
-# and `lunco:maxSteerAngle` in lunco-usd-sim/src/lib.rs:1258/1261.
+#
+# WHERE THE KNOBS LIVE, AND WHY NOT HERE. Mass properties are the BODY's, so they
+# are authored on this prim and read from it (`physics:centerOfMass` et al, in
+# lunco-usd-avian). Grip and torque are the WHEEL's — the loader reads them off each
+# wheel prim — so authoring them on this root prim did nothing at all: USD attributes
+# do not inherit down namespace. They are per-wheel `over`s below.
+#
+# There is no steering knob. The base is a SKID rover (`PhysxVehicleTankDifferentialAPI`):
+# it steers by driving its sides at different speeds, and its wheels do not turn.
 def Xform "RoverEasy" (
     doc = "Easy rover (Explorer LT) — low centre of mass, planted and forgiving. The trainer tier: it climbs the borderline slope and resists tipping. Start here."
     prepend apiSchemas = ["LunCoCatalogAPI"]
@@ -46,16 +48,17 @@ def Xform "RoverEasy" (
     float3 physics:diagonalInertia = (2200.0, 2800.0, 1100.0)
     float physxRigidBody:angularDamping = 3.0
 
-    # Handling. Both knobs below ARE read (lunco-usd-sim/src/lib.rs:1258/1261).
-    custom float physxVehicleEngine:peakTorque = 900.0
-    # Coulomb μ ⇒ the slip limit is atan(μ). μ=1.3 ⇒ 52.4°, well past the
-    # SURVEYED site's worst individual line (39.9° @ 336° NNW), so this tier
-    # drives ANY line into the crater and back. That is the point of the trainer:
-    # the terrain never punishes you, so you learn the route before it matters.
-    custom float lunco:frictionCoefficient = 1.3
-    # RADIANS — see rover_medium. This was 30.0 = 30 RADIANS = 1719°, saturated.
-    # 0.52 rad = 30°: the widest lock of the three ⇒ tightest turning circle.
-    custom float lunco:maxSteerAngle = 0.52
+    # Handling, per wheel. Grip comes from the TIRE — μ is a property of rubber, so
+    # the tier fits `cleated` tires (μ=1.3 ⇒ slip limit 52.4°, past the SURVEYED
+    # site's steepest wall at 34.4°, so this tier drives ANY line into the crater and
+    # back — the terrain never punishes you, so you learn the route before the route
+    # matters). Torque is the wheel's own motor.
+    over "Wheel_L0" (variants = { string tire = "cleated" }) { float physxVehicleEngine:peakTorque = 900.0 }
+    over "Wheel_L1" (variants = { string tire = "cleated" }) { float physxVehicleEngine:peakTorque = 900.0 }
+    over "Wheel_L2" (variants = { string tire = "cleated" }) { float physxVehicleEngine:peakTorque = 900.0 }
+    over "Wheel_R0" (variants = { string tire = "cleated" }) { float physxVehicleEngine:peakTorque = 900.0 }
+    over "Wheel_R1" (variants = { string tire = "cleated" }) { float physxVehicleEngine:peakTorque = 900.0 }
+    over "Wheel_R2" (variants = { string tire = "cleated" }) { float physxVehicleEngine:peakTorque = 900.0 }
 
     # Livery — calm green, so teams read difficulty at a glance (easy=green).
     over "Chassis" { color3f[] primvars:displayColor = [(0.30, 0.72, 0.35)] }

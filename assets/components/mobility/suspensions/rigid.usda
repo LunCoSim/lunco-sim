@@ -24,10 +24,11 @@
 # See `standard.usda` for how the `over` composes onto the wheel that pulls it in.
 
 over "Suspension" (
+    prepend apiSchemas = ["PhysxVehicleSuspensionAPI", "LunCoSuspensionAPI"]
     kind = "component"
 )
 {
-    float physxVehicleSuspension:restLength = 0.0          # m — no travel
-    float physxVehicleSuspension:springStiffness = 15000.0 # N/m
-    float physxVehicleSuspension:springDamping = 5000.0    # N·s/m — heavy, to settle contacts
+    float lunco:suspension:restLength = 0.0          # m — no travel
+    float physxVehicleSuspension:springStrength = 15000.0 # N/m
+    float physxVehicleSuspension:springDamperRate = 5000.0    # N·s/m — heavy, to settle contacts
 }

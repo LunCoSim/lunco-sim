@@ -14,7 +14,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
-use lunco_mobility::WheelRaycast;
+use lunco_mobility::{WheelRaycast, Suspension};
 use lunco_cosim::{joint_angle_holder, JOINT_ANGLE_PORT};
 use lunco_core::ports::PortRegistry;
 // Appearance INTENT. The Material (PBR) section edits this component, not the
@@ -474,31 +474,46 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
             egui::CollapsingHeader::new("Wheel (Raycast)")
                 .default_open(false)
                 .show(ui, |ui| {
-                    if let Some((rest0, k0, d0, r0)) = ctx.get::<WheelRaycast>(entity).map(|w| {
+                    if let Some(r0) = ctx.get::<WheelRaycast>(entity).map(|w| w.wheel_radius as f32) {
+                        let mut radius = r0;
+                        let r_changed = ui.add(egui::Slider::new(&mut radius, 0.1..=2.0).text("Wheel Radius (m)")).changed();
+                        if r_changed {
+                            ctx.defer(move |world| {
+                                if let Some(mut wheel) = world.get_mut::<WheelRaycast>(entity) {
+                                    wheel.wheel_radius = radius as f64;
+                                }
+                            });
+                        }
+                    }
+                });
+        }
+
+        // ── Suspension component ─────────────────────────────────────
+        if ctx.get::<Suspension>(entity).is_some() {
+            egui::CollapsingHeader::new("Suspension")
+                .default_open(false)
+                .show(ui, |ui| {
+                    if let Some((rest0, k0, d0)) = ctx.get::<Suspension>(entity).map(|s| {
                         (
-                            w.rest_length as f32,
-                            w.spring_k as f32,
-                            w.damping_c as f32,
-                            w.wheel_radius as f32,
+                            s.rest_length as f32,
+                            s.spring_k as f32,
+                            s.damping_c as f32,
                         )
                     }) {
                         let mut rest = rest0;
                         let mut k = k0;
                         let mut d = d0;
-                        let mut radius = r0;
 
                         let rest_changed = ui.add(egui::Slider::new(&mut rest, 0.1..=2.0).text("Rest Length (m)")).changed();
                         let k_changed = ui.add(egui::Slider::new(&mut k, 100.0..=100000.0).text("Spring K (N/m)").logarithmic(true)).changed();
                         let d_changed = ui.add(egui::Slider::new(&mut d, 100.0..=10000.0).text("Damping C (N·s/m)").logarithmic(true)).changed();
-                        let r_changed = ui.add(egui::Slider::new(&mut radius, 0.1..=2.0).text("Wheel Radius (m)")).changed();
 
-                        if rest_changed || k_changed || d_changed || r_changed {
+                        if rest_changed || k_changed || d_changed {
                             ctx.defer(move |world| {
-                                if let Some(mut wheel) = world.get_mut::<WheelRaycast>(entity) {
-                                    if rest_changed { wheel.rest_length = rest as f64; }
-                                    if k_changed { wheel.spring_k = k as f64; }
-                                    if d_changed { wheel.damping_c = d as f64; }
-                                    if r_changed { wheel.wheel_radius = radius as f64; }
+                                if let Some(mut susp) = world.get_mut::<Suspension>(entity) {
+                                    if rest_changed { susp.rest_length = rest as f64; }
+                                    if k_changed { susp.spring_k = k as f64; }
+                                    if d_changed { susp.damping_c = d as f64; }
                                 }
                             });
                         }

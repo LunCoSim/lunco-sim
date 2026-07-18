@@ -251,7 +251,7 @@ pub const DEFAULT_MAX_DIAGRAM_NODES: usize = 1000;
 
 /// Build a [`VisualDiagram`] from an already-parsed AST. Returns
 /// `None` if the model has no component instantiations (e.g.
-/// equation-based models like Battery.mo, SpringMass.mo).
+/// equation-based models like LunCo.Electrical.Battery, SpringMass.mo).
 ///
 /// All callers must source the AST from
 /// [`ModelicaDocument::ast`](crate::document::ModelicaDocument::ast)

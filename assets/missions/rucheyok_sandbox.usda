@@ -14,9 +14,9 @@ def Xform "RucheyokSandbox" (
 
     def Xform "Rucheyok" (
         prepend references = @../vessels/rovers/rucheyok/rucheyok.usda@
+        displayName = "Rucheyok Rover"
     )
     {
-        custom string lunco:name = "Rucheyok Rover"
         double3 xformOp:translate = (0, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

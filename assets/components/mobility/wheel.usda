@@ -20,7 +20,7 @@
 #       double radius = 0.4
 #       double height = 0.3
 #       float physxVehicleWheel:radius = 0.4
-#       int physxVehicleWheel:index = 0
+#       int lunco:wheel:index = 0
 #       double3 xformOp:translate = (0.8, -0.2, 1.0)
 #   }
 #
@@ -36,7 +36,10 @@
 
 def Cylinder "Wheel" (
     kind = "component"
-    prepend apiSchemas = ["LunCoCatalogAPI"]
+    # Applied HERE, once: every wheel on every rover composes this prim, so the
+    # APIs (and the loader's `PhysxVehicleWheelAPI` intercept) come with the arc.
+    # A rover authors only its own values — index, radius — never the schemas.
+    prepend apiSchemas = ["LunCoCatalogAPI", "PhysxVehicleWheelAPI", "PhysxVehicleEngineAPI", "LunCoWheelAPI"]
     prepend variantSets = "tire"
     variants = {
         string tire = "regolith"
@@ -72,14 +75,27 @@ def Cylinder "Wheel" (
     float physxVehicleEngine:maxRotationSpeed = 60.0      # rad/s free-spin (no-load) cap
     float physxVehicleWheel:maxBrakeTorque = 1500.0       # N·m brake authority (locks the wheel → skid)
 
-    # --- Motor electrical parameters ---
-    double lunco:motorPower = 2000.0         # W rated motor power
-    double lunco:motorEfficiency = 0.85      # Electrical-to-mechanical efficiency
-    double lunco:noLoadRpm = 300.0           # RPM motor speed at zero load
-    double lunco:maxSteerAngle = 0.5         # rad maximum steering angle
+    # --- LunCo wheel dynamics (LunCoWheelAPI) ---
+    # The knobs LunCo's integrator needs and PhysX does not model. The schema declares
+    # them with no fallback, so a wheel that composes this file has its handling and one
+    # that does not is a hard error — never a wheel silently running on Rust defaults.
+    #
+    # Steering is NOT here: the max steer angle is a property of the VEHICLE's steering
+    # system, not of a wheel (a skid rover's wheels do not steer at all). It is
+    # `physxVehicleAckermannSteering:maxSteerAngle` on the rover prim.
+    double lunco:wheel:contactGripStiffness = 50.0  # slope of contact friction vs slip
+    double lunco:wheel:driveForcePerNormal = 2.0    # traction authority, ×normal force
+    double3 lunco:wheel:steerAxis = (0, 1, 0)       # steering-head axis, wheel-local: vertical yaw
+    # Joint-wheel (rigid-axle) drive tuning — reproduces the verified feel.
+    double lunco:wheel:maxDriveOmega = 12.0         # rad/s axle free-spin cap
+    double lunco:wheel:driveDamping = 30.0          # axle motor damping
+    double lunco:wheel:stallTorqueGain = 6.0        # torque gain approaching stall
 
-    # --- EPS connections ---
-    rel lunco:epsBus
+    # A driven wheel has a motor in its hub, but the motor's electrical draw is not a
+    # property of the wheel: it is a load on the vehicle's circuit
+    # (`LunCo.Electrical.DCMotor`, instantiated per wheel in the rover's electrical
+    # system). The MECHANICAL side is here, in the PhysX vehicle properties above, which
+    # the physics step reads. The wheel stays one rigid body.
 
     # --- Tires ---
     # Which rubber this wheel runs. Each variant is nothing but a reference to a tire
@@ -94,6 +110,24 @@ def Cylinder "Wheel" (
 
         "hard" (
             prepend references = @tires/hard.usda@</Tire>
+        ) {
+        }
+
+        # Grip tiers — regolith tread, three states of wear. The scored-run rover
+        # variants (`vessels/rovers/variants/*.usda`) select these to set their
+        # difficulty: μ is a property of the rubber, so a tier changes its tires.
+        "cleated" (
+            prepend references = @tires/cleated.usda@</Tire>
+        ) {
+        }
+
+        "worn" (
+            prepend references = @tires/worn.usda@</Tire>
+        ) {
+        }
+
+        "bald" (
+            prepend references = @tires/bald.usda@</Tire>
         ) {
         }
     }

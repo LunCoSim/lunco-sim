@@ -43,8 +43,8 @@ const HUB_MASS: f64 = 40.0;
 const HUB_RADIUS: f64 = 0.15; // hub collider radius — only used for inertia
 const WHEEL_RADIUS: f64 = 0.4;
 const WHEEL_WIDTH: f64 = 0.3;
-const SPRING_K: f64 = 15000.0; // physxVehicleSuspension:springStiffness (N/m)
-const SPRING_C: f64 = 3000.0; // physxVehicleSuspension:springDamping  (N·s/m)
+const SPRING_K: f64 = 15000.0; // physxVehicleSuspension:springStrength (N/m)
+const SPRING_C: f64 = 3000.0; // physxVehicleSuspension:springDamperRate (N·s/m)
 const SUSP_TRAVEL: f64 = 0.3; // prismatic limit (m)
 const DRIVE_PEAK_TORQUE: f64 = 12000.0; // drive:angular:physics:maxForce (N·m)
 

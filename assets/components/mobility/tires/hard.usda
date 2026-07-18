@@ -20,6 +20,7 @@
 # See `regolith.usda` for how the `over` composes onto the wheel that pulls it in.
 
 over "Tire" (
+    prepend apiSchemas = ["PhysxVehicleTireAPI", "LunCoTireAPI"]
     kind = "component"
 )
 {
@@ -27,7 +28,7 @@ over "Tire" (
     # Stiffer contact patch: it builds force faster per unit of slip, and lets go
     # sooner when it runs out of friction.
     float physxVehicleTire:longitudinalStiffness = 14000.0
-    double lunco:frictionCoefficient = 0.55
+    double lunco:tire:frictionCoefficient = 0.55
 
     # --- Tread ---
     rel material:binding = </Tire/TireLook>

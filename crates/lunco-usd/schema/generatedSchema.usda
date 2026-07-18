@@ -237,6 +237,21 @@ class "LunCoProgramAPI" (
     )
 }
 
+class "LunCoCelestialBodyAPI" (
+    doc = """Declares that a prim IS a celestial body — a planet, moon or star whose
+    pose comes from the ephemeris rather than from an authored transform. No prim
+    applies this schema ⇒ no bodies, no orbit views, no ephemeris."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    uniform int lunco:body = 0 (
+        doc = """NAIF id of the body this prim represents: 10 Sun, 399 Earth, 301
+        Moon. `0` means unset, and such a prim is ignored."""
+    )
+}
+
 class LunCoPortEvent "LunCoPortEvent" (
     doc = """A threshold crossing on one port, published as a named event. A child
     prim of the program whose port it watches."""
@@ -409,5 +424,84 @@ class "LunCoTerrainEditAPI" (
     double lunco:edit:amount = 0 (
         doc = """The kind's single scalar: brush amplitude, flatten target height, or
         crater depth — all metres."""
+    )
+}
+
+class "LunCoSuspensionAPI" (
+    doc = """Rest length of a LunCo raycast suspension. Applied beside
+    PhysxVehicleSuspensionAPI, which carries the spring/damper. LunCo extension:
+    PhysX has no restLength (it uses travelDistance + sprungMass)."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    float lunco:suspension:restLength (
+        doc = """Natural standoff of a raycast wheel below its mount, metres. No
+        fallback: an unauthored rest length is an error, not a guess."""
+    )
+}
+
+class "LunCoWheelAPI" (
+    doc = """The per-wheel knobs LunCo's integrator needs and PhysX does not model.
+    Applied beside PhysxVehicleWheelAPI. No fallbacks — wheel.usda authors them
+    all, and every wheel gets them through its reference arc."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    int lunco:wheel:index (
+        doc = """Logical wheel index for drive/steer wiring. LunCo extension:
+        PhysX's index lives on the WheelAttachment prim, which flat composition
+        lacks."""
+    )
+    double lunco:wheel:contactGripStiffness (
+        doc = """Slope of contact friction vs slip, before the Coulomb cone."""
+    )
+    double lunco:wheel:driveForcePerNormal (
+        doc = """Drive force as a multiple of the wheel's normal force."""
+    )
+    double3 lunco:wheel:steerAxis (
+        doc = """Steering-head axis, wheel-local. (0,1,0) is vertical yaw."""
+    )
+    double lunco:wheel:maxDriveOmega (
+        doc = """Joint-wheel drive tuning: axle free-spin cap, rad/s."""
+    )
+    double lunco:wheel:driveDamping (
+        doc = """Joint-wheel drive tuning: axle motor damping."""
+    )
+    double lunco:wheel:stallTorqueGain (
+        doc = """Joint-wheel drive tuning: torque gain approaching stall."""
+    )
+}
+
+class "LunCoTireAPI" (
+    doc = """The tire's Coulomb μ against the ground. Applied beside
+    PhysxVehicleTireAPI. LunCo extension: PhysX models grip as a ground-material
+    friction TABLE, not a scalar on the tire."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    double lunco:tire:frictionCoefficient (
+        doc = """Coulomb μ between this tire and the ground; slip limit = atan(μ).
+        No fallback: a tire that doesn't say what it grips with is a bug."""
+    )
+}
+
+class "LunCoSuspensionVisualAPI" (
+    doc = """Marks a suspension strut's moving visual part (piston/spring) for the
+    mobility animation system. NOT a `kind` token — kind is USD's model taxonomy."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    uniform token lunco:suspensionVisual:role (
+        allowedTokens = ["piston", "spring"]
+        doc = """Which moving part this prim is. Applying the API is the claim, so
+        there is no roleless one — no fallback, no ""."""
     )
 }

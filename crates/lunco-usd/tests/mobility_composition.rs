@@ -37,9 +37,9 @@ fn spring(view: &StageView<'_>, wheel: &str) -> (f32, f32, f32) {
             .unwrap_or_else(|| panic!("{wheel} has no {name} — its suspension arc is missing"))
     };
     (
-        get("physxVehicleSuspension:restLength"),
-        get("physxVehicleSuspension:springStiffness"),
-        get("physxVehicleSuspension:springDamping"),
+        get("lunco:suspension:restLength"),
+        get("physxVehicleSuspension:springStrength"),
+        get("physxVehicleSuspension:springDamperRate"),
     )
 }
 
@@ -92,6 +92,80 @@ fn each_rover_composes_the_suspension_it_asked_for() {
     }
 }
 
+/// The APIs arrive by composition too — and the loader spawns nothing without them.
+///
+/// `apiSchemas` is applied ONCE per component (`wheel.usda`'s `Wheel`, each
+/// `suspensions/*.usda`'s `Suspension`) and reaches all 30 wheels through the
+/// reference arcs, because `apiSchemas` is a list-op and composes. A rover authors
+/// values, never schemas.
+///
+/// This is load-bearing, not decorative: `process_usd_sim_prim_read` detects a wheel
+/// by `has_api_schema("PhysxVehicleWheelAPI")`, so an arc that stopped delivering the
+/// API would mean a rover with no wheels at all — and the composed *values* asserted
+/// above would still be perfectly correct.
+#[test]
+fn every_rover_wheel_composes_its_applied_schemas() {
+    for (asset, wheel) in [
+        ("vessels/rovers/skid_rover.usda", "/SkidRover/Wheel_FL"),
+        ("vessels/rovers/ackermann_rover.usda", "/AckermannRover/Wheel_FL"),
+        ("vessels/rovers/six_wheel_rover.usda", "/SixWheelRover/Wheel_L0"),
+        ("vessels/rovers/six_wheel_independent.usda", "/SixWheelIndependent/Wheel_L0"),
+        ("vessels/rovers/rocker_bogie.usda", "/RockerBogie/RockerL/Wheel_FL"),
+        ("vessels/rovers/rucheyok/rucheyok.usda", "/Rucheyok/Wheel_FL"),
+    ] {
+        let cs = compose(asset);
+        let view = cs.view();
+        let p = SdfPath::new(wheel).unwrap();
+        for api in [
+            // from wheel.usda</Wheel>
+            "PhysxVehicleWheelAPI",
+            "LunCoWheelAPI",
+            // from suspensions/*.usda</Suspension>
+            "PhysxVehicleSuspensionAPI",
+            "LunCoSuspensionAPI",
+        ] {
+            assert!(
+                view.has_api_schema(&p, api),
+                "{asset}: {wheel} must compose {api} — without it the loader does \
+                 not see a wheel here at all"
+            );
+        }
+    }
+}
+
+/// A strut's moving visuals declare themselves; the casing does not.
+///
+/// The piston and spring apply `LunCoSuspensionVisualAPI` and carry a role token;
+/// the casing never moves, so it applies nothing and stays plain geometry. The
+/// loader gates on the API, so a role token without the API animates nothing.
+#[test]
+fn suspension_visuals_declare_their_role() {
+    let cs = compose("vessels/rovers/skid_rover.usda");
+    let view = cs.view();
+
+    for (prim, role) in [
+        ("/SkidRover/Wheel_FL/SuspensionPiston", "piston"),
+        ("/SkidRover/Wheel_FL/SuspensionSpring", "spring"),
+    ] {
+        let p = SdfPath::new(prim).unwrap();
+        assert!(
+            view.has_api_schema(&p, "LunCoSuspensionVisualAPI"),
+            "{prim} must apply LunCoSuspensionVisualAPI"
+        );
+        assert_eq!(
+            view.text(&p, "lunco:suspensionVisual:role").as_deref(),
+            Some(role),
+            "{prim} must declare role {role:?}"
+        );
+    }
+
+    let casing = SdfPath::new("/SkidRover/Wheel_FL/SuspensionCasing").unwrap();
+    assert!(
+        !view.has_api_schema(&casing, "LunCoSuspensionVisualAPI"),
+        "the casing does not move — it must not claim a visual role"
+    );
+}
+
 /// A wheel's grip and tread come from its `tire` variant, not from the hub.
 #[test]
 fn a_wheel_composes_its_tire() {
@@ -101,7 +175,7 @@ fn a_wheel_composes_its_tire() {
 
     // Grip — `regolith` is the wheel's default tire.
     assert_eq!(
-        view.real(&fl, "lunco:frictionCoefficient"),
+        view.real(&fl, "lunco:tire:frictionCoefficient"),
         Some(0.8),
         "Wheel_FL must compose its tire's friction"
     );

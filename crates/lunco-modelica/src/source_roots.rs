@@ -356,6 +356,58 @@ fn is_builtin_root(root: &str) -> bool {
 /// progress entries during source-root loads.
 pub const STATUS_BUS_SOURCE: &str = "source-roots";
 
+/// Load a mounted twin's Modelica packages into the compile session.
+///
+/// A twin is a folder of assets. If it ships Modelica under `<twin>/models` — the
+/// same convention as the engine's own `assets/models` — those packages must reach
+/// the compiler, or a program authored in the twin (and any cosim model the twin
+/// defines) cannot `import` them. This watches [`TwinRoots`] and, for each newly
+/// mounted twin whose `models/` directory exists, sends one `LoadSourceRoot` carrying
+/// rumoca's standard disk-package loader (`load_source_root_tolerant`, which reads
+/// `package.mo`/`package.order` the Modelica-standard way).
+///
+/// Session roots persist across compiles, so once loaded a twin's classes resolve on
+/// both the editor and the cosim compile paths — the same reason the shipped `LunCo`
+/// library is seated once. `Local` tracks what has been sent (`TwinRoots` mutates
+/// through interior handles and so never triggers `Changed`); a twin with no `models/`
+/// dir is recorded too, so it is not re-probed every frame.
+pub fn load_twin_source_roots(
+    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
+    channels: Option<Res<crate::ModelicaChannels>>,
+    mut seen: Local<HashSet<String>>,
+) {
+    let (Some(twin_roots), Some(channels)) = (twin_roots, channels) else {
+        return;
+    };
+    for name in twin_roots.names() {
+        if seen.contains(&name) {
+            continue;
+        }
+        let Some(root) = twin_roots.root_of(&name) else {
+            continue;
+        };
+        let models_dir = root.join("models");
+        // Record the twin either way: a `models/`-less twin has nothing to load and
+        // must not be re-probed every frame.
+        seen.insert(name.clone());
+        if !models_dir.is_dir() {
+            continue;
+        }
+        let cmd = crate::worker::ModelicaCommand::LoadSourceRoot {
+            id: format!("twin:{name}"),
+            payload: crate::worker::LoadSourceRootPayload::Disk {
+                root_dir: models_dir.clone(),
+            },
+        };
+        if channels.tx.send(cmd).is_ok() {
+            log::info!(
+                "[source-roots] loading twin `{name}` Modelica packages from {}",
+                models_dir.display()
+            );
+        }
+    }
+}
+
 pub fn ensure_loaded(
     registry: &mut SourceRootRegistry,
     id: &str,

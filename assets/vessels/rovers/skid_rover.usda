@@ -215,7 +215,7 @@ def Xform "SkidRover" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(1.0, 0.0, 0.0)]
 
-        int physxVehicleWheel:index = 0
+        int lunco:wheel:index = 0
         float physxVehicleWheel:radius = 0.4
     }
 
@@ -234,7 +234,7 @@ def Xform "SkidRover" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(1.0, 0.0, 0.0)]
 
-        int physxVehicleWheel:index = 1
+        int lunco:wheel:index = 1
         float physxVehicleWheel:radius = 0.4
     }
 
@@ -253,7 +253,7 @@ def Xform "SkidRover" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.0, 0.0, 1.0)]
 
-        int physxVehicleWheel:index = 2
+        int lunco:wheel:index = 2
         float physxVehicleWheel:radius = 0.4
     }
 
@@ -272,7 +272,7 @@ def Xform "SkidRover" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.0, 0.0, 1.0)]
 
-        int physxVehicleWheel:index = 3
+        int lunco:wheel:index = 3
         float physxVehicleWheel:radius = 0.4
     }
 
