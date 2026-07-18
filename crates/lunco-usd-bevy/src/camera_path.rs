@@ -240,12 +240,13 @@ pub fn resolve_camera_paths(
         //
         // Absent ⇒ fall back to the whole-path `lunco:path:lookAt` rel, else
         // tangent. So the simple case stays a one-liner and the track is opt-in.
-        let times = reader
-            .scalar::<Vec<f64>>(&path, "lunco:path:aim:times")
-            .unwrap_or_default();
-        let modes = reader
-            .scalar::<Vec<String>>(&path, "lunco:path:aim:modes")
-            .unwrap_or_default();
+        // Tolerant reads: `modes` is naturally authored `token[]` (it is an enum) but
+        // reads fine as `string[]`, and `times` is naturally `double[]` but authors
+        // reach for `float[]`. A strict read of either degrades to an EMPTY array,
+        // which silently turns every aim key into the tangent fallback rather than
+        // reporting anything — see `UsdRead::texts`/`reals`.
+        let times = reader.reals(&path, "lunco:path:aim:times");
+        let modes = reader.texts(&path, "lunco:path:aim:modes");
         let targets: Vec<Entity> = reader
             .rel_targets(&path, "lunco:path:aim:targets")
             .iter()
@@ -289,13 +290,18 @@ pub fn resolve_camera_paths(
             aim.push(AimKey { t: 0.0, mode });
         }
 
-        let Some(points) = reader
-            .scalar::<Vec<[f32; 3]>>(&path, "points")
-            .map(|v| v.into_iter().map(Vec3::from).collect::<Vec<_>>())
-        else {
+        // `points3` accepts both `point3f[]` and `point3d[]` — a curve authored in
+        // double precision is still a curve, and a strict `point3f[]` read reported
+        // it as "no points", which is a misleading diagnostic for a type mismatch.
+        let points: Vec<Vec3> = reader
+            .points3(&path, "points")
+            .into_iter()
+            .map(Vec3::from)
+            .collect();
+        if points.is_empty() {
             warn!("[camera-path] {} has no `points`", prim.path);
             continue;
-        };
+        }
         if points.len() < 2 {
             warn!("[camera-path] {} needs at least 2 points", prim.path);
             continue;
@@ -309,7 +315,9 @@ pub fn resolve_camera_paths(
             _ => CurveBasis::CatmullRom,
         };
         let periodic = reader.text(&path, "wrap").as_deref() == Some("periodic");
-        let duration = reader.scalar::<f64>(&path, "lunco:path:duration").unwrap_or(60.0);
+        // `real`, not `scalar::<f64>`: a `float lunco:path:duration = 8` would
+        // otherwise read as unauthored and silently run the shot for 60 s.
+        let duration = reader.real(&path, "lunco:path:duration").unwrap_or(60.0);
         // Pause is WHERE THE CLOCK HANGS, not a flag: "real" keeps the shot
         // running while the sim is paused, "sim" freezes with it (the default —
         // authored motion is part of the scene, doc 19 §11b).

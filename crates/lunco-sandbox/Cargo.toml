@@ -280,11 +280,6 @@ net-diag = ["networking", "lunco-networking/net-diag"]
 # won't move / snaps back; see lunco-mobility's `drive_diag!`.
 drive-diag = ["lunco-mobility/drive-diag"]
 python = ["lunco-scripting/python"]
-# Built-in screen recording (Ctrl+Shift+R). Forwards to lunco-avatar's encoder,
-# which links libx264 — native Linux/macOS only, NOT Windows or wasm. Build with
-# `cargo run --bin sandbox --features recording`. Without it the recording
-# settings/hotkey exist but capture nothing.
-recording = ["lunco-avatar/recording"]
 # Tracy profiler. Enable with `--features tracy` and connect a Tracy
 # GUI to see per-system flame graphs. Match the GUI version to the
 # tracy-client version pulled in by Bevy 0.18 (check `cargo tree -p

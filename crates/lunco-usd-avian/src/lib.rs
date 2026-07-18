@@ -108,11 +108,26 @@ impl Plugin for UsdAvianPlugin {
             // race and was moved to a synchronous attach for it ("raced narrow-phase
             // contacts … crashing the Avian solver with 'Head contact has no
             // island'"); the authored path had the same bug and kept it.
+            //
+            // Within `Prepare` it must ALSO run after
+            // `PhysicsTransformSystems::TransformToPosition`. `Position` is a required
+            // component of `RigidBody`, so it EXISTS from the moment the body spawns —
+            // holding its default of zero until avian derives it from `Transform`. The
+            // `With<Position>` gate therefore proves admission to the island graph and
+            // nothing about the pose being real. Unordered, this system won the race
+            // and read (0,0,0) for every body, which silently broke joint seating
+            // below: it measured `localPos0 - localPos1` instead of the actual anchor
+            // violation, so a scene misplaced by metres was never corrected and a
+            // correctly-placed one was nudged by the anchor offset. Both failures are
+            // invisible — the seat "succeeds" either way.
             .add_systems(
                 bevy::app::FixedPostUpdate,
                 build_usd_physics_joints
                     .run_if(any_with_component::<PendingUsdJoint>)
-                    .in_set(avian3d::prelude::PhysicsSystems::Prepare),
+                    .in_set(avian3d::prelude::PhysicsSystems::Prepare)
+                    .after(
+                        avian3d::physics_transform::PhysicsTransformSystems::TransformToPosition,
+                    ),
             )
             .add_systems(
                 Update,
@@ -1049,6 +1064,19 @@ fn on_add_usd_prim(
 /// scene error; correcting it would fight the solver on every reload.
 const JOINT_SEAT_EPS: f64 = 1.0e-3;
 
+/// Angular mismatch below which a weld is considered already seated (radians).
+///
+/// Same rationale as [`JOINT_SEAT_EPS`], in the rotational DOF: a milliradian is
+/// quaternion round-tripping, not an authoring error.
+const JOINT_SEAT_ANGLE_EPS: f64 = 1.0e-3;
+
+/// Seat magnitude above which the scene is certainly wrong rather than slack.
+///
+/// A metre- or radian-scale correction is never authoring tolerance — it means
+/// two bodies were placed inconsistently — and it must not be losable in a
+/// normal log stream, so it is reported at `error!` instead of `warn!`.
+const JOINT_SEAT_ERROR_THRESHOLD: f64 = 0.1;
+
 fn build_usd_physics_joints(
     mut commands: Commands,
     q_pending: Query<(Entity, &PendingUsdJoint, &UsdPrimPath)>,
@@ -1065,7 +1093,8 @@ fn build_usd_physics_joints(
     q_provenance: Query<&lunco_core::Provenance>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
-    mut q_pose: Query<(&mut Position, &Rotation)>,
+    mut q_pose: Query<(&mut Position, &mut Rotation)>,
+    mut q_vel: Query<(&mut LinearVelocity, &mut AngularVelocity)>,
 ) {
     for (joint_entity, pending, joint_prim_path) in q_pending.iter() {
         let joint_root = instance_key(joint_entity, &q_provenance, &q_gid, &q_instance_root);
@@ -1101,25 +1130,127 @@ fn build_usd_physics_joints(
         // satisfy the anchors and the solver starts from a consistent state. The
         // warning is deliberate: seating silently would hide a scene error whose
         // real fix belongs in the USD.
+        //
+        // Seating covers POSITION, ORIENTATION and VELOCITY, because a constraint
+        // is violated in all three and the solver resolves each one impulsively.
+        // Position alone is not enough: two bodies welded at a common anchor but
+        // carrying different velocities must have that difference nulled in a
+        // single step, and the resulting impulse acts at the anchor's lever arm
+        // from each centre of mass — i.e. it arrives as a torque and the pair
+        // tumbles. Seating position and then handing the solver a 7 m/s velocity
+        // discontinuity trades an explosion for a slower explosion.
+        //
+        // Orientation and velocity are only seated for a WELD. `PhysicsFixedJoint`
+        // is built with identity `JointFrame`s on both bodies, so it holds
+        // `rot1 == rot0` and the two move as one rigid body — both corrections are
+        // then unambiguous. Every other joint type leaves rotational or linear DOF
+        // free by design, and forcing agreement across a free DOF would destroy
+        // authored state (a revolute joint's whole purpose is that the bodies'
+        // orientations differ). For those, position remains the only safe seat.
+        let rigid = pending.joint_type == "PhysicsFixedJoint";
+
         let pose0 = q_pose.get(b0).ok().map(|(p, r)| (p.0, r.0));
         let pose1 = q_pose.get(b1).ok().map(|(p, r)| (p.0, r.0));
-        if let (Some((p0, r0)), Some((p1, r1))) = (pose0, pose1) {
+
+        // Two distinct rigid bodies cannot share an origin, so coincident poses mean
+        // the poses are not real yet — `Position` is a REQUIRED component of
+        // `RigidBody`, present at its default zero from the moment the body spawns and
+        // only later derived from the authored transform. Seating against that reads
+        // `localPos0 - localPos1` as if it were an anchor violation: a scene misplaced
+        // by metres is scored as fine, and a correctly-placed one is nudged by the
+        // anchor offset. Both are silent.
+        //
+        // Skipping is strictly better than seating on garbage — the constraint is
+        // still created, and avian resolves any genuine violation itself; we simply
+        // decline to "help" using numbers we know are not the scene's.
+        let poses_ready = match (pose0, pose1) {
+            (Some((p0, _)), Some((p1, _))) => p0.distance_squared(p1) > JOINT_SEAT_EPS,
+            _ => false,
+        };
+        if !poses_ready {
+            debug!(
+                "[usd-avian] joint {} — body poses not initialised at attach time \
+                 (both at the origin); skipping the anchor seat rather than seating \
+                 against uninitialised positions.",
+                joint_prim_path.path,
+            );
+        }
+
+        if let (true, Some((p0, r0)), Some((p1, r1))) = (poses_ready, pose0, pose1) {
+            // Seat orientation FIRST, then measure position against the corrected
+            // orientation: rotating body1 swings its anchor through `local_pos1`,
+            // so a delta computed from the old rotation would leave a residual
+            // exactly as large as that swing.
+            let r1_seated = if rigid { r0 } else { r1 };
+            let angle = if rigid { r1.angle_between(r0) } else { 0.0 };
+
             let anchor0_world = p0 + r0 * pending.local_pos0;
-            let anchor1_world = p1 + r1 * pending.local_pos1;
+            let anchor1_world = p1 + r1_seated * pending.local_pos1;
             let delta = anchor0_world - anchor1_world;
-            // Sub-millimetre slack is just float noise from the USD→physics
-            // transform chain; correcting it would fight the solver every reload.
-            if delta.length() > JOINT_SEAT_EPS {
-                warn!(
-                    "[usd-avian] joint {} starts violated by {:.3} m — seating `{}` onto \
-                     the authored anchor. The scene places these bodies inconsistently \
-                     (check `xformOp:translate` on both bodies against `physics:localPos0/1`).",
+
+            // Sub-millimetre / sub-milliradian slack is just float noise from the
+            // USD→physics transform chain; correcting it would fight the solver
+            // every reload.
+            let seat_pos = delta.length() > JOINT_SEAT_EPS;
+            let seat_rot = angle > JOINT_SEAT_ANGLE_EPS;
+
+            if seat_pos || seat_rot {
+                let worst = delta.length().max(angle);
+                // The anchors are printed because a violation is ambiguous without
+                // them: the same delta arises from bodies placed wrongly AND from
+                // anchors that failed to read and defaulted to zero, and those have
+                // opposite fixes. Zeros here with a non-zero delta mean the anchor
+                // read/derive fell through, not that the scene is misplaced.
+                let detail = format!(
+                    "[usd-avian] joint {} starts violated by {:.3} m / {:.3} rad — seating \
+                     `{}` onto the authored anchor. anchors: localPos0={:?} localPos1={:?}, \
+                     body0 at {:?}, body1 at {:?}. (Check `xformOp:translate`, any \
+                     rotate/orient op, and `physics:velocity` on BOTH bodies against \
+                     `physics:localPos0/1`.)",
                     joint_prim_path.path,
                     delta.length(),
+                    angle,
                     pending.body1_path,
+                    pending.local_pos0,
+                    pending.local_pos1,
+                    p0,
+                    p1,
                 );
-                if let Ok((mut pos1, _)) = q_pose.get_mut(b1) {
-                    pos1.0 += delta;
+                // A metre-scale seat is a scene bug every time; do not let it hide
+                // among ordinary warnings.
+                if worst > JOINT_SEAT_ERROR_THRESHOLD {
+                    error!("{detail}");
+                } else {
+                    warn!("{detail}");
+                }
+
+                if let Ok((mut pos1, mut rot1)) = q_pose.get_mut(b1) {
+                    if seat_rot {
+                        rot1.0 = r0;
+                    }
+                    if seat_pos {
+                        pos1.0 += delta;
+                    }
+                }
+
+                // Match body1's motion to body0's rigid motion about the seated
+                // pose. `v = v0 + ω0 × r` is the velocity of the point of body0
+                // that body1's centre now coincides with — the only assignment
+                // consistent with a weld.
+                if rigid {
+                    let motion0 = q_vel.get(b0).ok().map(|(l, a)| (l.0, a.0));
+                    if let Some((lin0, ang0)) = motion0 {
+                        let p1_seated = p1 + delta;
+                        let target_lin = lin0 + ang0.cross(p1_seated - p0);
+                        if let Ok((mut lin1, mut ang1)) = q_vel.get_mut(b1) {
+                            if (lin1.0 - target_lin).length() > JOINT_SEAT_EPS
+                                || (ang1.0 - ang0).length() > JOINT_SEAT_ANGLE_EPS
+                            {
+                                lin1.0 = target_lin;
+                                ang1.0 = ang0;
+                            }
+                        }
+                    }
                 }
             }
         }

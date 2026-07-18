@@ -170,9 +170,16 @@ def Xform "DescentLander" (
     float inputs:piloted.connect = </DescentLander.outputs:piloted>
     float inputs:throttle.connect = </DescentLander.outputs:throttle>
 
-    # `guidance_throttle` is deliberately NOT connected. Unwired, it is 0, and the
-    # lander commands no thrust of its own. A scene that wants it to fly itself
-    # composes `components/gnc/descent_guidance.usda`, which authors the wire.
+    # Angular rate feedback for the attitude stabiliser below. State in, torque out —
+    # the same self-loop shape as the quaternion wires above.
+    float inputs:omega_x.connect = </DescentLander.outputs:angvel_x>
+    float inputs:omega_y.connect = </DescentLander.outputs:angvel_y>
+    float inputs:omega_z.connect = </DescentLander.outputs:angvel_z>
+
+    # `guidance_throttle` and the `guidance_pitch/roll/yaw` attitude wires are
+    # deliberately NOT connected. Unwired, they are 0, and the lander commands nothing
+    # of its own. A scene that wants it to fly itself composes
+    # `components/gnc/descent_guidance.usda`, which authors the wires.
 
     # A parameter is an input with a constant instead of a connection.
     # Attitude authority = angular ACCELERATION (rad/s^2) per unit stick. With no
@@ -180,6 +187,18 @@ def Xform "DescentLander" (
     # rate holds (momentum conserved — an RCS script stops it later). Kept low so a
     # tap is a gentle nudge, not a violent tumble.
     float inputs:ang_authority = 0.6
+
+    # RCS stability augmentation ON. A powered-descent lander has attitude control
+    # thrusters; a vehicle that cannot hold its own attitude is not a lander, it is a
+    # brick with an engine. Concretely: without this, any tilt is permanent, and since
+    # thrust points along body +Y the vehicle then flies its own tilt — one bad spawn
+    # transient is unrecoverable and the descent diverges.
+    #
+    # This is the VEHICLE's stabiliser, so it holds whoever is commanding — pilot,
+    # guidance program, or nobody. It only holds attitude; it never touches throttle,
+    # so it cannot land anything by itself and does not make the vehicle a mission.
+    # A scene that wants the raw unaugmented airframe overrides this to 0.
+    float inputs:attitude_hold = 1.0
 
     # ── Propellant events ────────────────────────────────────────────────────
     # A threshold crossing on a model output, published as an event the supervisory

@@ -128,6 +128,56 @@ pub trait UsdRead {
             .or_else(|| self.scalar::<f32>(prim, name).map(f64::from))
     }
 
+    /// The ARRAY counterpart of [`text`](Self::text): a `token[]` **or** `string[]`.
+    ///
+    /// Same trap, one dimension up, and a nastier one — an array read that misses
+    /// yields an *empty* vec, which most call sites treat as "not authored" and
+    /// substitute a default for. So the wrong element type does not fail, it silently
+    /// selects fallback behaviour for every entry. Returns empty when unauthored or
+    /// not a textual array. Provided.
+    fn texts(&self, prim: &SdfPath, name: &str) -> Vec<String> {
+        match self.attr_value(prim, name) {
+            // A `Token` is interned, so it is its own type rather than a `String`;
+            // `to_string` is the same coercion `prim_type_name` uses.
+            Some(Value::TokenVec(v)) => v.iter().map(ToString::to_string).collect(),
+            Some(Value::StringVec(v)) => v,
+            _ => Vec::new(),
+        }
+    }
+
+    /// The ARRAY counterpart of [`real`](Self::real): a `double[]` **or** `float[]`.
+    ///
+    /// Every real-valued array read should use this rather than
+    /// `scalar::<Vec<f64>>`, for the reason given on [`texts`](Self::texts):
+    /// precision mismatch degrades to "unauthored", not to an error. Provided.
+    fn reals(&self, prim: &SdfPath, name: &str) -> Vec<f64> {
+        match self.attr_value(prim, name) {
+            Some(Value::DoubleVec(v)) => v,
+            Some(Value::FloatVec(v)) => v.into_iter().map(f64::from).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// A 3-vector array tolerant of authored precision — `point3f[]`, `float3[]`,
+    /// `normal3f[]`, `vector3f[]`, `color3f[]` (all `Vec3fVec`) **or** their `…3d[]`
+    /// double-precision spellings (`Vec3dVec`).
+    ///
+    /// Point arrays are the one place authors reach for `double` most naturally,
+    /// because coordinates feel like they deserve the precision — and a strict
+    /// `scalar::<Vec<[f32; 3]>>` drops exactly those, reporting the attribute as
+    /// absent. Doubles are narrowed to `f32`, which is what mesh and curve consumers
+    /// want. Provided.
+    fn points3(&self, prim: &SdfPath, name: &str) -> Vec<[f32; 3]> {
+        match self.attr_value(prim, name) {
+            Some(Value::Vec3fVec(v)) => v.into_iter().map(|p| [p.x, p.y, p.z]).collect(),
+            Some(Value::Vec3dVec(v)) => v
+                .into_iter()
+                .map(|p| [p.x as f32, p.y as f32, p.z as f32])
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
     /// The [`real`](Self::real) counterpart for `f32` consumers (mesh sizes, shader
     /// params, physics gains). Tolerant of `double` **or** `float` authoring, so a
     /// `double`-authored value is not dropped by a strict `scalar::<f32>`. Provided.
