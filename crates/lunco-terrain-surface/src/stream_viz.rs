@@ -16,13 +16,17 @@
 //! # Appearance is INTENT here, not a material
 //!
 //! A tile carries a [`ShaderLook`] — the shader path, its named parameters (morph
-//! band, reveal step, overlay uniforms, per-depth map weights) and its texture
-//! layers — and **nothing in this crate names a material**. `lunco-render-bevy`
-//! binds it, caching by `ShaderLook::key()`, so tiles in the same LOD band and
-//! reveal step share ONE material and ONE bind group. That cache *is* the old
-//! hand-rolled `LodMaterials`/`MatKey` table, done generically: the `(mode, depth,
-//! band bucket, reveal step)` that `MatKey` encoded are simply the look's own
-//! content now. See `docs/architecture/render-decoupling.md`.
+//! band, overlay uniforms, per-depth map weights) and its texture layers — and
+//! **nothing in this crate names a material**. `lunco-render-bevy` binds it,
+//! caching by `ShaderLook::key()`, so every tile in the same mode and LOD band
+//! shares ONE material and ONE bind group. That cache *is* the old hand-rolled
+//! `LodMaterials`/`MatKey` table, done generically: the `(mode, depth, band
+//! bucket)` that `MatKey` encoded is simply the look's own content now.
+//!
+//! Keep the key COARSE. It is what lets tiles batch, so any per-tile parameter
+//! added here mints a material per tile and costs draw calls — removing the old
+//! per-tile reveal step from this key roughly halved frame time on moonbase
+//! (33.8 -> 79.2 FPS). See `docs/architecture/render-decoupling.md`.
 //!
 //! The companion canonical-res collider ring is [`crate::collider_ring`].
 
@@ -35,8 +39,10 @@ use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use big_space::prelude::Grid;
 use lunco_core::WorldGrid;
 use lunco_obstacle_field::grid_mesh;
-use lunco_materials::{ParamValue, ShaderLook, TextureLayer, ATTRIBUTE_MORPH_TARGET};
-use lunco_terrain_core::{measure_node_error, HeightSource};
+use lunco_materials::{
+    ParamValue, ShaderLook, TextureLayer, ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
+};
+use lunco_terrain_core::{measure_node_error, HeightSource, REFINE_HYSTERESIS};
 
 use crate::derived_layers::TerrainDerivedMaps;
 use crate::oracle::SurfaceOracle;
@@ -228,9 +234,172 @@ struct TileSlot {
 /// flicker rather than as anything a type error would catch.
 ///
 /// `scratch` is caller-owned to keep this allocation-free on the hot path.
+/// Every node of the always-resident coarse base, **shallowest depth first**.
+///
+/// The ordering is the guarantee, not an implementation detail. Enumerated
+/// depth-first (the natural `Vec::pop` stack this replaced) the bake descends to
+/// `COARSE_N` in one corner while the rest of the terrain has nothing at all, so
+/// for the whole startup window there is no complete cover at ANY depth — pan onto
+/// an un-baked region and there is no ready ancestor to unrefine to, leaving the
+/// clear colour, i.e. a black flash. Level by level, depth 0 covers everything
+/// after a single tile and each finer level re-covers it, so the fallback is total
+/// from the first frames.
+///
+/// A free function so the test exercises the REAL enumeration rather than a copy
+/// of it — the caller lives inside a system that needs a full `App` to drive.
+fn coarse_base_coords() -> impl Iterator<Item = QuadCoord> {
+    (0..=COARSE_N).flat_map(|d| {
+        let side = 1u32 << d;
+        (0..side).flat_map(move |z| (0..side).map(move |x| QuadCoord { depth: d, x, z }))
+    })
+}
+
+/// Choose what to draw for each selected node: itself if ready, else its deepest
+/// ready ancestor.
+///
+/// `is_drawable` is **residency, not freshness** — and that distinction is the
+/// whole fix for the terrain blanking.
+///
+/// `invalidate()` bumps the generation and KEEPS every tile (see its docs): the
+/// tiles are marked stale, not removed, and each is still geometrically valid —
+/// same coord, same region, mesh baked with its own `origin_y`. Only the heights
+/// are a generation old. Keying this walk on freshness therefore hid every tile in
+/// the same frame on any invalidation, caught live as
+/// `uncovered=265 drawn=0 resident=510`: five hundred good tiles in memory, none
+/// drawn, terrain to clear colour until the re-bakes landed.
+///
+/// A stale tile keeps drawing ITSELF until its own replacement is ready, and
+/// `tiles.insert` then swaps that replacement in at the same coord and despawns the
+/// old entity — an atomic per-coord hand-off. Freshness still drives BAKING (a
+/// stale tile is re-baked); it just no longer decides visibility.
+///
+/// NOT to be confused with the earlier rejected attempt, which fell back to a stale
+/// *ancestor* when the exact node was stale: that made tiles alternate between a
+/// stale deep tile and a fresh coarse one as re-bakes landed, and looked worse.
+/// Substituting a DIFFERENT node is the thing that fails; keeping the SAME node on
+/// screen until it is replaced is what works.
+/// Cover edits (splits + merges) applied per frame. Bounds churn: the cover is
+/// PERSISTENT state now, so a frame changes a handful of nodes instead of
+/// re-deriving hundreds. High enough that a fast camera converges in a few frames.
+const MAX_COVER_EDITS: usize = 64;
+
+/// Evolve the PERSISTENT cover one bounded step toward what the metric wants.
+///
+/// This replaces the global budget fit. That fit re-derived `pixel_error` every
+/// frame to hit the tile budget, and because every refine distance is a function of
+/// `pixel_error`, ANY change re-selected the entire cover — measured on moonbase as
+/// `wanted` alternating 349 <-> 532 every frame. It also had no fixed point (coarsen
+/// above 100% of budget, refine below 85%, accept up to 100%, rungs ~1.5x apart), so
+/// it oscillated and needed a dwell timer to damp a loop that should not exist.
+///
+/// Here the budget is enforced by REFUSING FURTHER SPLITS, not by moving a global
+/// metric, so there is nothing to re-derive and no mass republish is possible. The
+/// metric itself is fixed (the configured `pixel_error`), which also restores
+/// view-independent, peer-identical selection.
+///
+/// Split priority is `dist / refine_range`, so the budget is spent nearest-first.
+/// Merges run before splits (they free budget) and only past the same
+/// [`REFINE_HYSTERESIS`] band the recursive walk uses, so a camera parked on a
+/// threshold cannot flip a quad every frame.
+///
+/// The cover stays an exact, disjoint REPLACE cover throughout: a split swaps one
+/// node for its four children, a merge swaps four siblings for their parent, and
+/// nothing else touches it.
+fn evolve_cover(
+    qt: &Quadtree,
+    cover: &mut HashSet<QuadCoord>,
+    focus: [f64; 2],
+    eye_height: f64,
+    node_error: &impl Fn(QuadCoord, Square) -> f64,
+    budget: usize,
+) {
+    if cover.is_empty() {
+        cover.insert(QuadCoord::ROOT);
+    }
+    let range = |c: QuadCoord| qt.error_refine_range(node_error(c, qt.region(c)));
+    let dist = |c: QuadCoord| qt.focus_distance(c, focus, eye_height);
+    // How far past its refine range a node sits: < 1 wants to be finer, > 1 coarser.
+    let slack = |c: QuadCoord| dist(c) / range(c).max(1e-9);
+
+    // Full quads whose parent could take over, ranked by how far past the band.
+    let mut parents: HashSet<QuadCoord> = HashSet::new();
+    for c in cover.iter() {
+        if let Some(p) = c.parent() {
+            parents.insert(p);
+        }
+    }
+    let mut merges: Vec<(f64, QuadCoord)> = parents
+        .into_iter()
+        .filter(|p| p.children().iter().all(|k| cover.contains(k)))
+        .map(|p| (slack(p), p))
+        .collect();
+    merges.sort_by(|a, b| b.0.total_cmp(&a.0));
+
+    let mut edits = 0usize;
+    let mut merge_one = |cover: &mut HashSet<QuadCoord>, p: QuadCoord| {
+        // Re-check: an earlier merge in this pass may have consumed these children.
+        if !p.children().iter().all(|k| cover.contains(k)) {
+            return false;
+        }
+        for k in p.children() {
+            cover.remove(&k);
+        }
+        cover.insert(p);
+        true
+    };
+
+    // 1. Voluntary merges — the node is genuinely past the hysteresis band.
+    for &(s, p) in merges.iter() {
+        if edits >= MAX_COVER_EDITS {
+            break;
+        }
+        if s < REFINE_HYSTERESIS {
+            break; // sorted: nothing further out remains
+        }
+        if merge_one(cover, p) {
+            edits += 1;
+        }
+    }
+
+    // 2. Forced merges — over budget (the budget shrank, or forced splits pushed us
+    //    past it). Give up the LEAST valuable quad first. Not bounded by
+    //    `MAX_COVER_EDITS`: being over budget is a frame-rate problem, and unlike a
+    //    global metric change this only touches the quads it actually drops.
+    if cover.len() > budget {
+        for &(_, p) in merges.iter().rev() {
+            if cover.len() <= budget {
+                break;
+            }
+            merge_one(cover, p);
+        }
+    }
+
+    // 3. Splits, nearest-first, until the budget is spent.
+    let mut splits: Vec<(f64, QuadCoord)> = cover
+        .iter()
+        .copied()
+        .filter(|c| c.depth < qt.max_depth)
+        .map(|c| (slack(c), c))
+        .filter(|&(s, _)| s < 1.0)
+        .collect();
+    splits.sort_by(|a, b| a.0.total_cmp(&b.0));
+    for &(_, c) in splits.iter() {
+        if edits >= MAX_COVER_EDITS || cover.len() + 3 > budget {
+            break;
+        }
+        if !cover.remove(&c) {
+            continue;
+        }
+        for k in c.children() {
+            cover.insert(k);
+        }
+        edits += 1;
+    }
+}
+
 fn build_draw_partition(
     selected: impl Iterator<Item = QuadCoord>,
-    is_ready: impl Fn(QuadCoord) -> bool,
+    is_drawable: impl Fn(QuadCoord) -> bool,
     draw: &mut HashSet<QuadCoord>,
     scratch: &mut Vec<QuadCoord>,
 ) {
@@ -238,14 +407,14 @@ fn build_draw_partition(
     for coord in selected {
         let mut c = coord;
         loop {
-            if is_ready(c) {
+            if is_drawable(c) {
                 draw.insert(c);
                 break;
             }
             match c.parent() {
                 Some(p) => c = p,
-                // Nothing ready anywhere up the chain — only reachable before the coarse
-                // base has finished baking. The area draws nothing for now.
+                // Nothing RESIDENT anywhere up the chain — only reachable before the
+                // coarse base has baked at all. The area draws nothing for now.
                 None => break,
             }
         }
@@ -283,10 +452,6 @@ fn build_draw_partition(
 /// than a 16 km blur.
 const COARSE_N: u8 = 4;
 
-/// Frames the budget fit holds a `pixel_error` rung before it may move again. A rung
-/// change re-selects the whole cover, so it must be occasional, not a per-frame
-/// reaction to the camera drifting across the budget threshold. ~1 s at 120 FPS.
-const FIT_DWELL_FRAMES: u16 = 120;
 
 /// The LOD tile entities currently spawned for a terrain, keyed by quadtree node.
 /// `mode` is the shader the live tiles were built with (a mode change swaps their
@@ -303,16 +468,10 @@ pub struct LodTiles {
     /// resident tile set is already correct and the whole reselection is skipped —
     /// the idle-camera fast path (see [`update_lod_tiles`]). `None` = never selected.
     last_sig: Option<u64>,
-    /// `pixel_error` that satisfied the tile budget on the last selection — the
-    /// budget-fit warm start. The coarsening loop re-runs a full
-    /// `select_with_error` walk per ×1.6 step, and always starting from the
-    /// configured base re-paid every failing rung (~9 walks/frame on a loaded
-    /// scene). The next selection starts ONE step below this (clamped to the
-    /// base) so steady state costs ~1-2 walks and quality still recovers, a
-    /// rung per selection, when the load drops. `None` = never fitted.
-    last_fit_px: Option<f64>,
-    /// Frames left before the budget fit may move `pixel_error` again (see the fit).
-    fit_dwell: u16,
+    /// The PERSISTENT cover: the leaves currently selected. Evolved incrementally by
+    /// `evolve_cover` instead of re-derived each frame, which is what removes the
+    /// mass re-selection the old global budget fit caused.
+    cover: HashSet<QuadCoord>,
     /// Whether the always-resident coarse base (`COARSE_N`) is fully baked.
     ///
     /// Load-bearing for correctness, not just speed: while this is false the idle
@@ -323,13 +482,6 @@ pub struct LodTiles {
     /// permanently incomplete and the fallback it exists to provide would silently
     /// not be there. Also lets the enumeration be skipped once complete.
     coarse_ready: bool,
-    /// Last selection's cover — the LOD **hysteresis** memory
-    /// ([`lunco_terrain_core::REFINE_HYSTERESIS`]). A node already refined last frame
-    /// keeps its children until the camera backs out past `1.15 ×` its refine range,
-    /// so a camera hovering ON a refine boundary no longer re-splits and re-merges
-    /// that node every frame (a despawn + spawn + 0.35 s reveal per flip on a tile
-    /// whose LOD never changed). Empty = first selection → the bare metric.
-    prev_sel: HashSet<QuadCoord>,
 }
 
 impl LodTiles {
@@ -422,24 +574,6 @@ fn node_overlaps_aabb(coord: QuadCoord, root_half_extent: f64, aabb: [f64; 4]) -
 /// the terrain is gone (e.g. on twin reload) instead of leaking under the grid.
 #[derive(Component)]
 pub struct LodTileOf(pub Entity);
-
-/// Quantisation steps of the reveal tween (`reveal` 0 → 1). 8 steps at
-/// [`REVEAL_SECS`] = 0.35 s is a step every ~44 ms — below the perceptual
-/// threshold for this soft lattice settle.
-///
-/// Quantising matters as much as it ever did, it just no longer needs a bespoke
-/// table: the reveal step is a PARAMETER VALUE in the tile's [`ShaderLook`], and
-/// the binder's content cache turns the 8 steps of a band into 8 shared materials
-/// rather than one per tile. (Reveal used to clone the shared material per tile and
-/// `get_mut` it every frame for 0.35 s: the uniform buffer + bind group were
-/// re-prepared every frame, batching died — ≈84 unique materials alive at 4
-/// bakes/frame × 60 fps — and the continuous `AssetEvent::Modified` defeated the
-/// `mat_changed` early-out in `lunco-materials`. A tile now changes its look ONLY on
-/// a step boundary, and the binder swaps a cached handle. Nothing mutates an asset.)
-const REVEAL_STEPS: u8 = 8;
-/// The `reveal == 1` (steady-state, batched) look — the one a tile keeps once its
-/// settle finishes, and the one every non-revealing tile draws with.
-const REVEAL_FULL: u8 = REVEAL_STEPS;
 
 /// Quantise a morph-band end onto the shared bucket lattice. `u32::MAX` = the
 /// "never morphs" root sentinel.
@@ -575,23 +709,30 @@ const CACHE_CAP: usize = 1024;
 /// Max bake tasks in flight per terrain (backpressure so a big move doesn't queue
 /// thousands of tasks). New tasks wait for slots to free.
 const MAX_INFLIGHT_BAKES: usize = 64;
-/// A freshly-spawned LOD tile **refines in** from its parent's coarse lattice over
-/// this many seconds (a CDLOD "settle") instead of popping — this both animates LOD
-/// refinement as you move and makes live height re-bakes resolve smoothly.
-const REVEAL_SECS: f32 = 0.35;
-
-/// A LOD tile currently playing its reveal "settle" (refine from the parent lattice
-/// to its own geometry). The tile walks the [`REVEAL_STEPS`] quantised reveal values
-/// of its band — written into its own [`ShaderLook`], so the binder resolves each
-/// step to one SHARED material — and settles on the fully-revealed look when done.
-/// No per-tile material clone, no per-frame `Assets::get_mut`. Bounded by the
-/// per-frame spawn rate × [`REVEAL_SECS`].
-#[derive(Component)]
-pub(crate) struct TileReveal {
-    elapsed: f32,
-    /// The reveal step currently written into the tile's look.
-    step: u8,
-}
+// REMOVED: the per-tile reveal "settle" (`REVEAL_SECS` / `TileReveal` /
+// `animate_tile_reveal`). Tiles are now born fully revealed.
+//
+// It broke CDLOD's core invariant. The morph factor MUST be a pure function of
+// world position — that is precisely why the shader derives `dist` per vertex —
+// because it is what makes two independently-built neighbours compute identical
+// positions at their shared edge without communicating. Reveal added a per-tile,
+// TIME-varying term (`m = max(morph, 1.0 - reveal)`), so two adjacent tiles at the
+// same depth and distance that spawned a few frames apart disagreed at that edge:
+// a crack opened, the skirt behind it caught the light, and the seam shimmered as
+// the reveal animated. Movement staggers spawn times, so the artifact tracked
+// movement — which is exactly how it was reported.
+//
+// Reveal existed to hide BAKE LATENCY, from before there was a fallback: tiles
+// used to appear out of nothing, so they were eased in. The always-resident coarse
+// base solves that properly (a blurry parent instead of a hole — Cesium's
+// `ForbidHoles`, MSFS's "best currently available data"), which is why
+// `docs/architecture/terrain-precompute-plan.md` already lists this machinery under
+// "What this deletes". Two mechanisms were solving one problem and the older one
+// was geometrically wrong.
+//
+// Do not reintroduce a per-tile fade to smooth LOD changes. Anything that varies
+// per tile must not enter the vertex position, or neighbours crack. A legitimate
+// cross-fade would have to be a function of position only, or live in shading.
 
 /// Result of an off-thread tile bake: the finished CPU `Mesh` (not yet uploaded)
 /// plus the spawn metadata the main thread needs.
@@ -626,7 +767,7 @@ pub struct TileShadowCache {
 }
 
 /// Write one named parameter into a look, reusing the existing slot when the key is
-/// already present so the hot re-write path (the reveal step, the overlay sync)
+/// already present so the hot re-write path (the overlay sync)
 /// doesn't allocate a `String` per call.
 pub(crate) fn set_param(look: &mut ShaderLook, name: &str, v: ParamValue) {
     if let Some(slot) = look.values.get_mut(name) {
@@ -676,34 +817,23 @@ pub(crate) fn apply_maps_to_look(look: &mut ShaderLook, maps: &TerrainDerivedMap
     set_param(look, "weight_tone", ParamValue::F32(w_tone));
 }
 
-/// The `reveal` uniform a quantised reveal step stands for (`REVEAL_FULL` → 1.0).
-fn reveal_value(step: u8) -> f32 {
-    if step >= REVEAL_FULL {
-        1.0
-    } else {
-        step as f32 / REVEAL_STEPS as f32
-    }
-}
-
 /// The appearance INTENT of one LOD tile: the geomorph shader (it drives both the
-/// `@vertex` morph and the `@fragment` stage), its morph band, its reveal step, and
-/// — in `Lit` mode — the derived maps, the far-shadow cache and the analysis
-/// overlay.
+/// `@vertex` morph and the `@fragment` stage), its morph band, and — in `Lit`
+/// mode — the derived maps, the far-shadow cache and the analysis overlay.
 ///
-/// THE SHARING CONTRACT: two tiles in the same mode, band bucket and reveal step
+/// THE SHARING CONTRACT: two tiles in the same mode and band bucket
 /// produce an EQUAL `ShaderLook::key()`, so `lunco-render-bevy` hands them the same
 /// `ShaderMaterial` handle — one bind group, one batch. This is the property the
 /// hand-rolled `MatKey`/`LodMaterials` cache existed for; it is now a consequence of
 /// the look's content rather than a table anyone has to remember to consult.
 /// Anything that varies per-tile (a raw `morph_end` instead of the snapped band, an
 /// un-bucketed value) would mint a material per tile and destroy batching — which is
-/// exactly why the band is snapped and the reveal is quantised before it lands here.
+/// exactly why the band is snapped before it lands here.
 fn tile_look(
     mode: TerrainShaderMode,
     depth: u32,
     morph_start: f32,
     morph_end: f32,
-    reveal: u8,
     maps: Option<&TerrainDerivedMaps>,
     shadow: Option<&TileShadowCache>,
     overlay: crate::overlay::OverlayUniforms,
@@ -712,7 +842,6 @@ fn tile_look(
     let mut look = ShaderLook::new(path).with_vertex_shader(path);
     set_param(&mut look, "morph_start", ParamValue::F32(morph_start));
     set_param(&mut look, "morph_end", ParamValue::F32(morph_end));
-    set_param(&mut look, "reveal", ParamValue::F32(reveal_value(reveal)));
     match mode {
         TerrainShaderMode::DebugLod => {
             set_param(&mut look, "base_color", ParamValue::Vec3(lod_rgb(depth)))
@@ -748,7 +877,6 @@ fn spawn_tile(
     center: [f64; 2],
     depth: u32,
     morph_end: f32,
-    reveal: u8,
     mode: TerrainShaderMode,
     maps: Option<&TerrainDerivedMaps>,
     shadow: Option<&TileShadowCache>,
@@ -767,7 +895,7 @@ fn spawn_tile(
     commands
         .spawn((
             Mesh3d(mesh),
-            tile_look(mode, depth, ms, me, reveal, maps, shadow, overlay),
+            tile_look(mode, depth, ms, me, maps, shadow, overlay),
             cell,
             Transform::from_translation(local),
             Visibility::Inherited,
@@ -785,47 +913,6 @@ fn spawn_tile(
             bevy::light::NotShadowReceiver,
         ))
         .id()
-}
-
-/// Per-frame: step each revealing tile through the quantised reveal lattice, then
-/// settle it on the fully-revealed value.
-///
-/// The tile's [`ShaderLook`] is touched **only when it crosses a step boundary** —
-/// so no asset is mutated, no uniform is re-uploaded, and the binder simply swaps in
-/// the cached material for that step. (Getting this wrong is the R5 regression: an
-/// unconditional `look.values` write would mark `Changed<ShaderLook>` every frame
-/// for every revealing tile and drag the binder along with it.) See [`TileReveal`] /
-/// [`REVEAL_SECS`].
-pub(crate) fn animate_tile_reveal(
-    mut commands: Commands,
-    time: Res<Time>,
-    mut q: Query<(Entity, &mut TileReveal, &mut ShaderLook)>,
-) {
-    let dt = time.delta_secs();
-    for (ent, mut rev, mut look) in &mut q {
-        rev.elapsed += dt;
-        let t = (rev.elapsed / REVEAL_SECS).clamp(0.0, 1.0);
-        if t >= 1.0 {
-            set_param(&mut look, "reveal", ParamValue::F32(reveal_value(REVEAL_FULL)));
-            // A live re-bake (e.g. a brush/flatten edit or an obstacle-field
-            // regen) can despawn this tile in the same frame, before these
-            // deferred commands apply — `try_*` no-ops on a stale entity
-            // instead of panicking the command buffer.
-            commands.entity(ent).try_remove::<TileReveal>();
-            continue;
-        }
-        // smoothstep ease so the settle starts/ends gently, quantised to the
-        // shared step lattice.
-        let s = t * t * (3.0 - 2.0 * t);
-        let step = ((s * REVEAL_STEPS as f32) as u8).min(REVEAL_STEPS - 1);
-        if step == rev.step {
-            // NOT a step boundary: leave `ShaderLook` untouched so change detection
-            // stays quiet (touching it here is the per-frame-mutation trap).
-            continue;
-        }
-        rev.step = step;
-        set_param(&mut look, "reveal", ParamValue::F32(reveal_value(step)));
-    }
 }
 
 /// Cross-terrain tile-streaming progress, derived fresh each frame by
@@ -988,11 +1075,8 @@ pub fn update_lod_tiles(
             for &(ent, depth, morph_end) in swaps.iter() {
                 // Each tile carries its own morph band; restate it under the new mode.
                 let (ms, me, _) = snap_band(morph_end);
-                let look = tile_look(mode, depth, ms, me, REVEAL_FULL, maps, shadow, overlay);
-                // A tile mid-settle would otherwise keep stepping the OLD mode's
-                // reveal values — end the settle instead; the mode swap is a rare,
-                // explicit Inspector action.
-                commands.entity(ent).try_insert(look).try_remove::<TileReveal>();
+                let look = tile_look(mode, depth, ms, me, maps, shadow, overlay);
+                commands.entity(ent).try_insert(look);
             }
             tiles.mode = mode;
         }
@@ -1075,19 +1159,13 @@ pub fn update_lod_tiles(
             )
         };
         let base_px = cfg.pixel_error.clamp(0.5, 32.0);
-        // Warm-start the budget fit (see [`LodTiles::last_fit_px`]): resume at the
-        // value that satisfied the budget last time, clamped to the configured base
-        // so quality can climb back when the load drops.
-        //
-        // HYSTERESIS: the old warm start began one rung FINER (`px / 1.6`) and then
-        // coarsened back, so near the budget boundary it alternated between two
-        // `pixel_error` rungs every frame — which moves `morph_end` → moves
-        // `band_bucket` → swapped EVERY tile's material on alternating frames. Now
-        // we only COARSEN when over budget, and only try one refine step when the
-        // selection is comfortably (15%) under it — and keep the refinement only if
-        // it still fits. Both ends are one-way, so the fit settles.
-        let mut pixel_error = tiles.last_fit_px.unwrap_or(base_px).max(base_px);
-        let mut qt = quadtree_for(pixel_error);
+        // FIXED metric. `pixel_error` is a pure quality knob again — it is never
+        // moved to chase the tile budget, so every refine distance (and therefore
+        // every tile's `morph_end` and material band bucket) is stable frame to
+        // frame. The budget is enforced incrementally instead; see `evolve_cover`.
+        // This also restores view-independent, peer-identical selection.
+        let pixel_error = base_px;
+        let qt = quadtree_for(pixel_error);
         // ERROR-DRIVEN selection: refine where the MEASURED surface error says
         // there is detail worth refining toward (crater rims, peaks), not on the
         // uniform per-depth schedule. Errors are memoized per node against the
@@ -1122,9 +1200,10 @@ pub fn update_lod_tiles(
         // TOGETHER and the LOD edge stays a blend. Node errors are memoized, so
         // the re-walks are cheap; the loop is bounded by the 32 px clamp.
         let budget = cfg.tile_budget.max(16);
-        // The previous cover drives the refine HYSTERESIS band (see `LodTiles::prev_sel`).
-        let prev_sel = std::mem::take(&mut tiles.prev_sel);
-        let mut sel = qt.select_with_error(focus, eye_height, &node_error, &prev_sel);
+        // NOT a full `select_with_error` walk. The cover is persistent state now
+        // (`evolve_cover` below); walking the whole tree here and discarding it would
+        // reintroduce the per-frame cost this change exists to remove.
+        let mut sel: Vec<Selected>;
         if frozen {
             // NO LOD — ONE tile, meshed at `CINEMATIC_TILE_RES`, covering the whole
             // terrain.
@@ -1150,7 +1229,6 @@ pub fn update_lod_tiles(
                 morph_start: f64::INFINITY,
                 morph_end: f64::INFINITY,
             }];
-            tiles.last_fit_px = Some(base_px);
         } else {
         // A `pixel_error` change re-derives every refine distance, so the WHOLE cover is
         // re-selected in one frame — measured on moonbase as `wanted` alternating
@@ -1168,38 +1246,22 @@ pub fn update_lod_tiles(
         //   * after any change the rung is HELD for a dwell, so a camera drifting across a
         //     threshold cannot re-cut the cover every frame. Large overshoot (>150%) skips
         //     the dwell, so frame rate is never hostage to the damping.
-        tiles.fit_dwell = tiles.fit_dwell.saturating_sub(1);
-        if sel.len() > budget && (tiles.fit_dwell == 0 || sel.len() > budget * 3 / 2) {
-            tiles.fit_dwell = FIT_DWELL_FRAMES;
-            while sel.len() > budget && pixel_error < 32.0 {
-                pixel_error = (pixel_error * 1.6).min(32.0);
-                qt = quadtree_for(pixel_error);
-                sel = qt.select_with_error(focus, eye_height, &node_error, &prev_sel);
-            }
-        } else if tiles.fit_dwell == 0 && pixel_error > base_px && sel.len() * 100 < budget * 85
-        {
-            let finer = (pixel_error / 1.6).max(base_px);
-            let qt_finer = quadtree_for(finer);
-            let sel_finer = qt_finer.select_with_error(focus, eye_height, &node_error, &prev_sel);
-            if sel_finer.len() * 100 <= budget * 85 {
-                tiles.fit_dwell = FIT_DWELL_FRAMES;
-                pixel_error = finer;
-                qt = qt_finer;
-                sel = sel_finer;
-            }
+        // INCREMENTAL: evolve the persistent cover a bounded step, then read the
+        // selection off it. No global metric moves, so no mass re-selection exists to
+        // oscillate — see `evolve_cover`.
+        evolve_cover(&qt, &mut tiles.cover, focus, eye_height, &node_error, budget);
+        sel = tiles
+            .cover
+            .iter()
+            .map(|&c| {
+                let parent_range = c
+                    .parent()
+                    .map(|p| qt.error_refine_range(node_error(p, qt.region(p))))
+                    .unwrap_or(f64::INFINITY);
+                qt.selected(c, parent_range)
+            })
+            .collect();
         }
-        }
-        if tiles.last_fit_px.is_some_and(|p| p != pixel_error) {
-            debug!(
-                target: "terrain_stream",
-                px = pixel_error,
-                was = tiles.last_fit_px.unwrap_or(f64::NAN),
-                tiles = sel.len(),
-                budget,
-                "terrain LOD rung changed (whole cover re-selected)"
-            );
-        }
-        tiles.last_fit_px = Some(pixel_error);
         // Ground under dynamic bodies is ALWAYS drawn at max depth — the
         // fixed-resolution collider ring under a rover carries small-crater
         // relief a coarse camera-driven tile doesn't, and the rover visibly
@@ -1221,8 +1283,6 @@ pub fn update_lod_tiles(
         // Remember this cover as the next selection's hysteresis memory. Stored AFTER
         // the body-forced splits so a node force-refined under a rover is also held
         // through the band instead of flipping back the moment the rover drifts.
-        tiles.prev_sel.clear();
-        tiles.prev_sel.extend(wanted.iter().copied());
 
         // Intelligent baking, two phases:
         //
@@ -1238,8 +1298,10 @@ pub fn update_lod_tiles(
         //    camera — the user watched FAR detail land while the near ground
         //    lagged coarse.
         //
-        // The reveal morph settles children onto the parent lattice, so the
-        // out-of-depth-order coarse→fine handoff never pops.
+        // The DISTANCE morph settles children onto the parent lattice, so the
+        // out-of-depth-order coarse->fine handoff never pops. It is a pure function
+        // of world position, which is what keeps neighbouring tiles agreeing at
+        // their shared edge — see the note where the per-tile reveal was removed.
         // NOTE: the old `CARPET_DEPTH` two-tier key is gone. It bucketed depth <= 2 ahead of
         // everything else to bake a "carpet" first — but the selection is a REPLACE cover and
         // a site DEM never selects depths 0-2, so the branch never fired and no carpet ever
@@ -1320,20 +1382,13 @@ pub fn update_lod_tiles(
                 continue;
             }
             let depth = baked.depth;
-            // Sub-root tiles settle in from their parent's coarse lattice (no pop):
-            // they are BORN at reveal step 0 and `animate_tile_reveal` walks them up.
-            // The root has no coarser parent to grow from → born fully revealed.
-            let reveal = if depth > 0 { 0 } else { REVEAL_FULL };
             // `oy` (baked with the mesh) anchors the tile's cell to its geometry — see
             // `spawn_tile`/`bake_tile_mesh` `origin_y`. Using the baked value (not a
             // spawn-time recompute) keeps mesh and placement in lock-step across gens.
             let ent = spawn_tile(
                 &mut commands, grid, grid_entity, terrain, coord, handle, baked.center, depth,
-                baked.morph_end, reveal, mode, maps, shadow, overlay, oy,
+                baked.morph_end, mode, maps, shadow, overlay, oy,
             );
-            if depth > 0 {
-                commands.entity(ent).try_insert(TileReveal { elapsed: 0.0, step: 0 });
-            }
             // Replace any stale slot at this coord, despawning the tile it held.
             if let Some(old) = tiles.tiles.insert(
                 coord,
@@ -1361,20 +1416,28 @@ pub fn update_lod_tiles(
         // "async" there means "a few per frame on the main thread" — still fine at
         // 0.69 ms/tile).
         coarse.clear();
-        let mut coarse_stack =
-            if tiles.coarse_ready { Vec::new() } else { vec![QuadCoord::ROOT] };
-        while let Some(c) = coarse_stack.pop() {
-            coarse.push(Selected {
-                coord: c,
-                region: qt.region(c),
-                // A coarse-base tile is a stand-in, not a member of the selected cover:
-                // it must not morph toward a parent of its own. The non-finite sentinel
-                // maps to the shader's no-morph bucket.
-                morph_start: f64::INFINITY,
-                morph_end: f64::INFINITY,
-            });
-            if c.depth < COARSE_N {
-                coarse_stack.extend_from_slice(&c.children());
+        if !tiles.coarse_ready {
+            // BREADTH-FIRST, shallowest depth first. This ordering is the whole point
+            // of the coarse base, not a detail: enumerated depth-first (a LIFO stack)
+            // the bake dives to `COARSE_N` in ONE corner before touching the others,
+            // so for the entire startup window there is no complete cover at ANY
+            // depth — and a camera panned at an un-baked region falls through every
+            // fallback to the clear colour, i.e. flashes BLACK.
+            //
+            // Level by level, the terrain is completely covered by depth 0 after a
+            // single tile, then re-covered at each finer level. There is a full (if
+            // blurry) cover within a frame or two of load, which is what makes the
+            // "unrefine to a ready ancestor" fallback total rather than best-effort.
+            for c in coarse_base_coords() {
+                coarse.push(Selected {
+                    coord: c,
+                    region: qt.region(c),
+                    // A coarse-base tile is a stand-in, not a member of the selected
+                    // cover: it must not morph toward a parent of its own. The
+                    // non-finite sentinel maps to the shader's no-morph bucket.
+                    morph_start: f64::INFINITY,
+                    morph_end: f64::INFINITY,
+                });
             }
         }
         for s in coarse.iter().chain(sel.iter()) {
@@ -1389,16 +1452,12 @@ pub fn update_lod_tiles(
             // (the sentinel `snap_band` maps to the no-morph bucket).
             let morph_end = if s.morph_end.is_finite() { s.morph_end as f32 } else { 1.0e21 };
             if let Some((cached, oy)) = mesh_cache.0.get(&(terrain, s.coord)) {
-                let reveal = if depth > 0 { 0 } else { REVEAL_FULL };
                 // Placed at the mesh's OWN baked `origin_y` (stored beside it), never a
                 // recompute — otherwise a cache hit against a since-composed oracle jumps.
                 let ent = spawn_tile(
                     &mut commands, grid, grid_entity, terrain, s.coord, cached.clone(),
-                    s.region.center, depth, morph_end, reveal, mode, maps, shadow, overlay, *oy,
+                    s.region.center, depth, morph_end, mode, maps, shadow, overlay, *oy,
                 );
-                if depth > 0 {
-                    commands.entity(ent).try_insert(TileReveal { elapsed: 0.0, step: 0 });
-                }
                 if let Some(old) = tiles
                     .tiles
                     .insert(s.coord, TileSlot { entity: ent, gen: cur_gen, morph_end, drawn: true })
@@ -1455,6 +1514,7 @@ pub fn update_lod_tiles(
                     bevy::asset::RenderAssetUsages::RENDER_WORLD,
                 );
                 mesh.insert_attribute(ATTRIBUTE_MORPH_TARGET, tm.morph_targets);
+                mesh.insert_attribute(ATTRIBUTE_MORPH_NORMAL, tm.morph_normals);
                 // The SAME anchor `bake_tile_mesh_cached` rebased the mesh Y by (full
                 // oracle at the tile centre). Carried on `BakedTile` so the main thread
                 // places the tile at exactly the height its mesh was baked for.
@@ -1485,7 +1545,9 @@ pub fn update_lod_tiles(
         // somewhere new had nothing to fall back to and showed clear colour.
         build_draw_partition(
             sel.iter().map(|s| s.coord),
-            |c| fresh_tile(&tiles, &c),
+            // RESIDENCY. A stale tile keeps drawing itself until its own re-bake
+            // replaces it in place — see this function's docs.
+            |c| tiles.tiles.contains_key(&c),
             draw,
             drop_covered,
         );
@@ -1656,6 +1718,46 @@ mod draw_partition_tests {
         QuadCoord { depth, x, z }
     }
 
+    /// The coarse base must be enumerated SHALLOWEST-FIRST, so each depth is a
+    /// COMPLETE cover before any deeper tile is queued.
+    ///
+    /// Enumerated depth-first (the natural `Vec::pop` stack) the bake descends to
+    /// `COARSE_N` in one corner while the rest of the terrain has nothing at all —
+    /// during that window a pan onto an unbaked region has no ancestor to fall back
+    /// to and renders the clear colour, i.e. a black flash. Ordering IS the
+    /// guarantee, so it is pinned here rather than left to the container's LIFO/FIFO
+    /// behaviour.
+    #[test]
+    fn coarse_base_is_enumerated_shallowest_first() {
+        let order: Vec<QuadCoord> = coarse_base_coords().collect();
+        assert_eq!(order.len(), 341, "N=4 base is 1+4+16+64+256 tiles");
+
+        // Depth never decreases: no deep tile is queued before a shallower one.
+        for w in order.windows(2) {
+            assert!(
+                w[0].depth <= w[1].depth,
+                "depth went backwards: {:?} then {:?} — enumeration is not \
+                 breadth-first and the cover is incomplete mid-bake",
+                w[0],
+                w[1]
+            );
+        }
+
+        // Every depth is a COMPLETE cover of the root: that is what makes the
+        // fallback total. A partial level would leave holes exactly where the
+        // camera has not been.
+        let mut seen = 0usize;
+        for d in 0..=COARSE_N {
+            let side = 1u32 << d;
+            let n = (side * side) as usize;
+            let level = &order[seen..seen + n];
+            assert!(level.iter().all(|q| q.depth == d), "level {d} is not contiguous");
+            let uniq: HashSet<QuadCoord> = level.iter().copied().collect();
+            assert_eq!(uniq.len(), n, "level {d} has duplicates — cover is not exact");
+            seen += n;
+        }
+    }
+
     /// Every selected area must end up covered by exactly ONE drawn node — itself or an
     /// ancestor. This is the invariant whose absence rendered as black terrain.
     fn assert_covered_exactly_once(sel: &[QuadCoord], draw: &HashSet<QuadCoord>) {
@@ -1687,7 +1789,12 @@ mod draw_partition_tests {
         // root must be drawn ONCE — not once per leaf.
         let sel = c(1, 0, 0).children().to_vec();
         let (mut draw, mut scratch) = (HashSet::new(), Vec::new());
-        build_draw_partition(sel.iter().copied(), |n| n.depth == 0, &mut draw, &mut scratch);
+        build_draw_partition(
+            sel.iter().copied(),
+            |n| n.depth == 0,
+            &mut draw,
+            &mut scratch,
+        );
         assert_eq!(draw.len(), 1, "one ancestor stands in for the whole subtree");
         assert!(draw.contains(&QuadCoord::ROOT));
         assert_covered_exactly_once(&sel, &draw);
@@ -1722,6 +1829,127 @@ mod draw_partition_tests {
         let (mut draw, mut scratch) = (HashSet::new(), Vec::new());
         build_draw_partition(sel.iter().copied(), |_| false, &mut draw, &mut scratch);
         assert!(draw.is_empty());
+    }
+
+    /// THE REGRESSION TEST for the terrain blanking on a generation bump.
+    ///
+    /// `invalidate()` keeps every tile and only marks it stale. Keying visibility on
+    /// freshness hid all of them at once — caught live as
+    /// `uncovered=265 drawn=0 resident=510`. Keyed on residency, each tile keeps
+    /// drawing ITSELF until its own re-bake replaces it in place.
+    ///
+    /// The check that matters is `draw == sel`: every node draws itself, so nothing
+    /// is substituted for anything. The earlier rejected fix satisfied "not empty"
+    /// while swapping in coarse ancestors, which alternated and looked worse.
+    #[test]
+    fn a_generation_bump_keeps_each_tile_drawing_itself() {
+        let sel = vec![c(3, 0, 0), c(3, 1, 0), c(2, 1, 0), c(2, 0, 1)];
+        // Everything resident, nothing fresh — exactly the post-invalidate state.
+        let resident: HashSet<QuadCoord> = sel.iter().copied().collect();
+
+        let (mut draw, mut scratch) = (HashSet::new(), Vec::new());
+        build_draw_partition(
+            sel.iter().copied(),
+            |n| resident.contains(&n),
+            &mut draw,
+            &mut scratch,
+        );
+
+        let want: HashSet<QuadCoord> = sel.iter().copied().collect();
+        assert_eq!(
+            draw, want,
+            "each stale-but-resident tile must keep drawing ITSELF; substituting a \
+             different node is the rejected fix that looked worse"
+        );
+        assert_covered_exactly_once(&sel, &draw);
+    }
+
+    // ── incremental cover (`evolve_cover`) ───────────────────────────────────
+
+    fn test_qt() -> Quadtree {
+        // range_factor 1.0 → refine_range == node error, so the tests state
+        // distances directly in metres.
+        Quadtree::new(1000.0, 6, 1.0, 100.0)
+    }
+
+    /// The cover must remain an exact, disjoint REPLACE cover of the root after any
+    /// number of evolution steps: every point covered by exactly one node.
+    fn assert_exact_cover(cover: &HashSet<QuadCoord>) {
+        assert!(!cover.is_empty(), "cover went empty");
+        // No node may be an ancestor of another (disjointness).
+        for a in cover.iter() {
+            let mut p = a.parent();
+            while let Some(n) = p {
+                assert!(!cover.contains(&n), "{a:?} lies under {n:?} — cover overlaps");
+                p = n.parent();
+            }
+        }
+        // Total area must equal the root's: sum of 4^-depth == 1.
+        let area: f64 = cover.iter().map(|c| 0.25f64.powi(c.depth as i32)).sum();
+        assert!((area - 1.0).abs() < 1e-9, "cover area {area} != 1 — holes or overlaps");
+    }
+
+    /// Driving the camera around must never break the cover, and must never exceed
+    /// the tile budget. This is the invariant the old global budget fit enforced by
+    /// re-deriving everything; here it has to survive incremental edits.
+    #[test]
+    fn evolving_cover_stays_exact_and_within_budget() {
+        let qt = test_qt();
+        let err = |_c: QuadCoord, _r: Square| 120.0f64;
+        let budget = 40;
+        let mut cover = HashSet::new();
+
+        // Sweep the focus across the terrain, then back out to a distance.
+        for step in 0..60 {
+            let x = -900.0 + (step as f64) * 30.0;
+            evolve_cover(&qt, &mut cover, [x, 0.0], 2.0, &err, budget);
+            assert_exact_cover(&cover);
+            assert!(cover.len() <= budget, "cover {} exceeded budget {budget}", cover.len());
+        }
+        for step in 0..30 {
+            let h = 100.0 + (step as f64) * 400.0;
+            evolve_cover(&qt, &mut cover, [0.0, 0.0], h, &err, budget);
+            assert_exact_cover(&cover);
+            assert!(cover.len() <= budget);
+        }
+    }
+
+    /// A STATIONARY camera must reach a fixed point and then stop editing. The old
+    /// fit could not: it alternated `wanted` 349 <-> 532 every frame forever, which
+    /// is what re-cut hundreds of tiles per frame and read as jitter.
+    #[test]
+    fn a_still_camera_reaches_a_fixed_point() {
+        let qt = test_qt();
+        let err = |_c: QuadCoord, _r: Square| 120.0f64;
+        let mut cover = HashSet::new();
+        for _ in 0..200 {
+            evolve_cover(&qt, &mut cover, [0.0, 0.0], 5.0, &err, 64);
+        }
+        let settled = cover.clone();
+        for _ in 0..50 {
+            evolve_cover(&qt, &mut cover, [0.0, 0.0], 5.0, &err, 64);
+            assert_eq!(
+                cover, settled,
+                "cover still churning on a stationary camera — no fixed point"
+            );
+        }
+    }
+
+    /// Lowering the budget must be absorbed by merging, not by blowing past it.
+    #[test]
+    fn shrinking_the_budget_merges_down() {
+        let qt = test_qt();
+        let err = |_c: QuadCoord, _r: Square| 120.0f64;
+        let mut cover = HashSet::new();
+        for _ in 0..200 {
+            evolve_cover(&qt, &mut cover, [0.0, 0.0], 5.0, &err, 256);
+        }
+        assert!(cover.len() > 16, "expected a refined cover to shrink from");
+        for _ in 0..50 {
+            evolve_cover(&qt, &mut cover, [0.0, 0.0], 5.0, &err, 16);
+        }
+        assert_exact_cover(&cover);
+        assert!(cover.len() <= 16, "cover {} did not shrink to budget 16", cover.len());
     }
 
     #[test]

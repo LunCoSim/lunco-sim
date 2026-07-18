@@ -21,3 +21,18 @@ use bevy::mesh::{MeshVertexAttribute, VertexFormat};
 /// Shader side: `@location(8)`.
 pub const ATTRIBUTE_MORPH_TARGET: MeshVertexAttribute =
     MeshVertexAttribute::new("Lunco_MorphTarget", 0x4d_4f_52_50, VertexFormat::Float32x3);
+
+/// Custom vertex attribute: the surface normal **of the parent lattice** — the
+/// normal belonging to [`ATTRIBUTE_MORPH_TARGET`], not to `POSITION`.
+///
+/// The geomorph vertex shader lerps `POSITION → morph target`, so during a morph
+/// (and for the whole of a freshly-spawned tile's reveal, which starts fully
+/// morphed) the surface actually drawn is the PARENT surface. Shading it with the
+/// child's fine normal makes geometry and lighting disagree: measured at up to
+/// ~22 deg on lunar relief, flipping the sign of `N·L` on ~4% of quads under a
+/// grazing sun — those quads shade BLACK, which is the "new LOD tiles appear dark
+/// then correct themselves" artifact. Lerping normal alongside position by the
+/// same factor keeps shading attached to the geometry being drawn.
+/// Shader side: `@location(9)`.
+pub const ATTRIBUTE_MORPH_NORMAL: MeshVertexAttribute =
+    MeshVertexAttribute::new("Lunco_MorphNormal", 0x4d_4f_52_51, VertexFormat::Float32x3);

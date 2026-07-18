@@ -13,13 +13,13 @@
 //!
 //! [`ShaderLookCache`] maps [`ShaderLookKey`] → one `Handle<ShaderMaterial>`. The
 //! terrain LOD path depends on it: the ~150–500 resident tiles collapse onto a
-//! handful of distinct looks (mode × morph-band bucket × reveal step), and they
+//! handful of distinct looks (mode x morph-band bucket), and they
 //! MUST resolve to the same material — one bind group, one batch. This is exactly
 //! the hand-rolled `LodMaterials`/`MatKey` cache the terrain used to carry, done
 //! once, generically, keyed by the look's own content.
 //!
 //! Nothing here mutates a material after it is built: a tile that changes (a
-//! reveal step, an overlay re-tune, a late-bound derived map) edits its
+//! an overlay re-tune, a late-bound derived map) edits its
 //! `ShaderLook`, and the binder swaps the *handle* to another cached material. No
 //! per-frame `Assets::get_mut`, so no uniform re-upload and no `AssetEvent`
 //! storm — the property `R5` bought and this must not give back.
@@ -114,7 +114,7 @@ fn bind_shader_look(
     commands.entity(e).try_insert(MeshMaterial3d(handle));
 }
 
-/// Re-bind when a look is edited in place — a terrain tile crossing a reveal step,
+/// Re-bind when a look is edited in place — a terrain tile changing mode,
 /// an overlay re-tune, a late-bound derived map, an Inspector edit.
 ///
 /// Change-driven, and it swaps a *handle* from the cache; it never touches the
@@ -224,7 +224,7 @@ mod tests {
             .clone()
     }
 
-    /// THE property the cache exists for: N tiles in the same LOD band + reveal
+    /// THE property the cache exists for: N tiles in the same LOD band
     /// step must share ONE material and ONE bind group. If this regresses, terrain
     /// batching dies and the draw-call count goes linear in the tile count.
     #[test]
@@ -251,10 +251,10 @@ mod tests {
     fn different_looks_get_different_materials() {
         let mut app = app();
         app.world_mut().spawn(
-            ShaderLook::new("shaders/terrain_geomorph.wgsl").with("reveal", ParamValue::F32(0.0)),
+            ShaderLook::new("shaders/terrain_geomorph.wgsl").with("morph_start", ParamValue::F32(0.0)),
         );
         app.world_mut().spawn(
-            ShaderLook::new("shaders/terrain_geomorph.wgsl").with("reveal", ParamValue::F32(1.0)),
+            ShaderLook::new("shaders/terrain_geomorph.wgsl").with("morph_start", ParamValue::F32(1.0)),
         );
         // A different shader path is also a different material.
         app.world_mut().spawn(ShaderLook::new("shaders/terrain_geomorph_flat.wgsl"));
@@ -262,38 +262,38 @@ mod tests {
         assert_eq!(app.world().resource::<Assets<ShaderMaterial>>().len(), 3);
     }
 
-    /// A `Changed<ShaderLook>` re-binds — this is how a tile's reveal step and the
+    /// A `Changed<ShaderLook>` re-binds — this is how a tile's late-bound maps and the
     /// live overlay re-tune reach the GPU, WITHOUT mutating any material asset.
     #[test]
     fn changed_look_rebinds_from_the_cache() {
         let mut app = app();
         let e = app
             .world_mut()
-            .spawn(ShaderLook::new("shaders/terrain_geomorph.wgsl").with("reveal", ParamValue::F32(0.0)))
+            .spawn(ShaderLook::new("shaders/terrain_geomorph.wgsl").with("morph_start", ParamValue::F32(0.0)))
             .id();
         app.update();
         let first = material_of(&app, e);
 
-        // Step the reveal — the same edit `animate_tile_reveal` makes.
+        // Edit a param in place — the same shape of edit the tile pipeline makes.
         app.world_mut()
             .entity_mut(e)
             .get_mut::<ShaderLook>()
             .unwrap()
             .values
-            .insert("reveal".into(), ParamValue::F32(0.5));
+            .insert("morph_start".into(), ParamValue::F32(0.5));
         app.update();
         let second = material_of(&app, e);
         assert_ne!(first, second, "a changed look must bind a different material");
         assert_eq!(app.world().resource::<Assets<ShaderMaterial>>().len(), 2);
 
         // …and stepping BACK to a look already seen reuses the cached material
-        // instead of minting a third (the reveal lattice is a small shared set).
+        // instead of minting a third (the band lattice is a small shared set).
         app.world_mut()
             .entity_mut(e)
             .get_mut::<ShaderLook>()
             .unwrap()
             .values
-            .insert("reveal".into(), ParamValue::F32(0.0));
+            .insert("morph_start".into(), ParamValue::F32(0.0));
         app.update();
         assert_eq!(material_of(&app, e), first);
         assert_eq!(app.world().resource::<Assets<ShaderMaterial>>().len(), 2);

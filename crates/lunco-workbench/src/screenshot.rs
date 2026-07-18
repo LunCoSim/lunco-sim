@@ -93,6 +93,13 @@ impl Plugin for ScreenshotPlugin {
             // next frame, so the decision is made after every other system has run.
             .add_systems(Last, drive_offline_clock);
 
+        // `init_resource` first: the registry is shared by every plugin that
+        // publishes a query, so whether it already exists depends on plugin
+        // ORDER. Reaching straight for `resource_mut` made this plugin panic
+        // whenever it was built before whichever plugin happened to insert the
+        // registry. `init_resource` is idempotent and leaves an existing
+        // registry (and its already-registered providers) untouched.
+        app.init_resource::<lunco_api::queries::ApiQueryRegistry>();
         app.world_mut()
             .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
             .register(GetOfflineRecordingStatusProvider);

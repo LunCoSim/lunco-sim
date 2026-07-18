@@ -240,6 +240,31 @@ impl Quadtree {
     /// output on every platform). It is called only for nodes the walk visits (lazy,
     /// O(visited) — no eager error map). To bound the coarsest tile size over a truly
     /// flat region, have the caller clamp `node_error` to a floor.
+    /// Distance at which a node with MEASURED surface `error` refines — the same
+    /// `range_factor · error` the recursive walk uses, exposed so an incremental
+    /// selector evolves the cover under the identical metric instead of a copy of
+    /// it that can drift.
+    pub fn error_refine_range(&self, error: f64) -> f64 {
+        self.range_factor * error.max(0.0)
+    }
+
+    /// Camera distance the refine test compares against (horizontal distance to the
+    /// node's square, lifted by the eye height).
+    pub fn focus_distance(&self, coord: QuadCoord, focus_xz: [f64; 2], eye_height: f64) -> f64 {
+        let horizontal = self.region(coord).distance_to(focus_xz);
+        (horizontal * horizontal + eye_height * eye_height).sqrt()
+    }
+
+    /// The [`Selected`] record for a leaf drawn at `coord`, given the refine range of
+    /// its PARENT (`f64::INFINITY` for the root). Shares the geomorph-window rule
+    /// with the recursive walk, so a cover built either way morphs identically.
+    pub fn selected(&self, coord: QuadCoord, parent_refine_range: f64) -> Selected {
+        let morph_end = parent_refine_range;
+        let morph_start =
+            if morph_end.is_finite() { self.morph_ratio * morph_end } else { f64::INFINITY };
+        Selected { coord, region: self.region(coord), morph_start, morph_end }
+    }
+
     pub fn select_with_error(
         &self,
         focus_xz: [f64; 2],
