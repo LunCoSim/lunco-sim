@@ -568,13 +568,26 @@ fn deliver_offline_frame(
     };
 
     let path = state.output_dir.join(format!("frame_{:06}.png", state.frame_index));
-    
-    // Save the image synchronously to disk
+
+    // Save the image synchronously to disk. A failed write ABORTS the recording:
+    // continuing would advance `frame_index` past a frame that never landed, leaving
+    // a hole in the sequence. Nothing downstream notices — the scenario keeps
+    // sequencing off `frame_index`, and the encoder happily renders the remaining
+    // files as a continuous shot that silently jumps. A disk that fills mid-capture
+    // is the ordinary way to hit this, so fail loudly at the first bad frame rather
+    // than emit a corrupt take.
     if let Err(e) = dyn_img.save(&path) {
-        error!("[offline-record] failed to save frame {}: {e}", state.frame_index);
-    } else {
-        trace!("[offline-record] saved frame {}", state.frame_index);
+        error!(
+            "[offline-record] failed to save frame {} ({e}) — aborting recording to \
+             avoid a sequence with holes in it",
+            state.frame_index
+        );
+        state.active = false;
+        state.is_waiting_for_frame = false;
+        state.frame_just_captured = false;
+        return;
     }
+    trace!("[offline-record] saved frame {}", state.frame_index);
 
     state.frame_index += 1;
     state.is_waiting_for_frame = false;
