@@ -175,8 +175,8 @@ fn on_set_terrain_overlay(
         params.opacity = opacity.clamp(0.0, 1.0);
     }
     debug!(
-        "[terrain-overlay] enabled={} safe={}° cliff={}° opacity={}",
-        params.enabled, params.safe_deg, params.cliff_deg, params.opacity
+        "[terrain-overlay] enabled={} lod_depth={} safe={}° cliff={}° opacity={}",
+        params.enabled, params.lod_depth, params.safe_deg, params.cliff_deg, params.opacity
     );
 }
 
