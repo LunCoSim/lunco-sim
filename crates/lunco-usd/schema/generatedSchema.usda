@@ -171,6 +171,27 @@ class "LunCoShadowAPI" (
     )
 }
 
+class "LunCoLightAPI" (
+    doc = """Engine-side falloff for a local UsdLux light.
+
+    UsdLux has no attenuation-cutoff concept: a `SphereLight`/`DiskLight` falls
+    off physically and forever. Real-time renderers need a finite radius to bound
+    the light's influence volume, so this declares it explicitly rather than
+    leaving each asset to invent a `custom` attribute.
+
+    Declared here so it is a SCHEMA attribute and needs no `custom` qualifier at
+    the authoring site — `usdchecker` flags a non-`custom` attribute that no
+    schema defines."""
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+)
+{
+    float lunco:light:range = 0 (
+        doc = "Attenuation cutoff radius, metres. 0 = engine default."
+    )
+}
+
 class LunCoProgram "LunCoProgram" (
     doc = """One program bound to the prim that owns it — a Modelica plant, a rhai
     controller, a Python model, a behaviour tree. A prim, not an attribute: it has

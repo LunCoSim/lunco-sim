@@ -878,7 +878,6 @@ never dispatched) and **muddles domain with role**. Refactor:
 | current `lunco:` | → USD standard | note |
 |---|---|---|
 | `lunco:cameraLookAt`/`activeCamera` + camera intrinsics | **`UsdGeomCamera`** (prim) + `focalLength`/`clippingRange`/… | the camera *is* a `UsdGeomCamera`; keep `lunco:cameraMode` (follow/orbit = behavior, no USD std) |
-| `lunco:light:range` | **`UsdLux`** light attrs (`inputs:radius`/attenuation) | lights already map to UsdLux (§7) |
 | `lunco:name` / `lunco:description` | prim **`displayName`** metadata + **`UsdUISceneGraphPrimAPI`** (`ui:displayName`/`ui:displayGroup`) | `openusd` already has `SceneGraphPrimAPI` |
 | diagram/node positions | **`UsdUINodeGraphNodeAPI`** (`ui:nodegraph:node:pos`) | §14 |
 | EPS/motor params | typed USD **attributes** (the bound program's parameters) | §14.3 |
@@ -886,7 +885,14 @@ never dispatched) and **muddles domain with role**. Refactor:
 | `lunco:layer` (logical grouping) / render selection | **`UsdCollectionAPI`** (membership) + **`UsdGeomImageable.purpose`** (default/render/proxy/guide) + `visibility` | `openusd` has `collection.rs` |
 | `kind`, rigid body/joint/drive/vehicle | **`kind`**, **`UsdPhysics`/`Physx*`** | §14.1–2 |
 
-**`lunco:` glue that *stays* (tiers 2–3 — USD has no schema):** `lunco:link:*`, `lunco:celestial:*`,
+**`lunco:light:range` STAYS — this was listed as tier 1 and that was wrong.** UsdLux has no
+attenuation-cutoff concept at all: `inputs:radius` is the emitter's physical SIZE (which shapes the
+penumbra), not a falloff bound, and a UsdLux light falls off physically and forever. That is correct
+for a path tracer and unusable for a real-time renderer, which must bound each light's influence
+volume. Nothing to promote to, so it is now declared properly as `LunCoLightAPI`
+(`crates/lunco-usd/schema/`) instead of being authored as a bare `custom` attribute.
+
+**`lunco:` glue that *stays* (tiers 2–3 — USD has no schema):** `lunco:light:range`, `lunco:link:*`, `lunco:celestial:*`,
 `lunco:ephemeris_id` (SPICE metadata, §11), `lunco:net:*` (replication), `lunco:scenario`/`nextScene`/
 `triggerZone`/`waypoint` (sequencing/scene semantics), `lunco:vessel`/`avatar` (role — or a `LunCoVesselAPI`
 applied schema), `lunco:sensor:*` (mirror Isaac vendor schemas, §8.5), `lunco:terrain:*`/`shadow:*` (LunCo

@@ -175,20 +175,21 @@ fn joint_slot_reads_the_authored_pose_not_the_required_component_default() {
          `localPos0 - localPos1` and every anchor verdict it prints is fiction."
     );
 
-    // The old placement, preserved as a witness to WHY the system moved.
-    let old_slot = app
-        .world()
-        .resource::<SeenInFixedPostUpdate>()
-        .0
-        .expect("the FixedPostUpdate probe must also observe the body");
-    assert_eq!(
-        old_slot,
-        DVec3::ZERO,
-        "the old FixedPostUpdate slot is expected to read zeros — it runs before \
-         the whole PhysicsSchedule, so the bridge has not written Position yet. \
-         If this now reads the authored pose, avian's scheduling changed and the \
-         doc comment on `UsdAvianPlugin` needs revisiting."
-    );
+    // WHY THE SYSTEM MOVED, recorded as prose rather than as an assertion.
+    //
+    // The old placement was `FixedPostUpdate`, which runs before the whole
+    // `PhysicsSchedule` — so the bridge had not written `Position` yet and the
+    // seat measured zeros. An earlier version of this test pinned that by
+    // asserting the old slot still reads `DVec3::ZERO`.
+    //
+    // That assertion is deleted on purpose. It tested AVIAN'S SCHEDULING, not
+    // our contract: any upstream reordering would fail it on an unrelated PR,
+    // and "the dependency changed" is not a defect in this crate. What we own is
+    // the assertion above — the joint-seating slot reads the AUTHORED pose — and
+    // that one fails loudly if the fix regresses, whatever avian does internally.
+    //
+    // `SeenInFixedPostUpdate` is still populated by the probe, so a debugger can
+    // read both slots when diagnosing a seating bug; nothing depends on its value.
 }
 
 /// The premise of the whole fix, asserted directly: avian's own

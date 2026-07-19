@@ -444,20 +444,29 @@ def Xform "DescentLander" (
         # `SphereLight` (deliberately WITHOUT `UsdLuxShapingAPI` — authoring cone
         # attrs would make it a SpotLight instead) loads as a Bevy `PointLight`.
         #
-        # Intensity and colour are NOT authored here: the program derives both
-        # from this cone's bound `UsdPreviewSurface` emissive, read through the
-        # standard `material:binding` -> `Material` -> `outputs:surface.connect`
-        # -> `Shader` -> `inputs:emissiveColor` chain. Authored 0 so a scene that
-        # loads paused never flashes a plume before the first tick.
+        # Intensity and colour are not authored as VALUES here: the program
+        # derives both each tick from this cone's bound `UsdPreviewSurface`
+        # emissive, read through the standard `material:binding` -> `Material`
+        # -> `outputs:surface.connect` -> `Shader` -> `inputs:emissiveColor`
+        # chain. Nothing below is a tuned brightness.
+        #
+        # `inputs:intensity = 0` IS authored, and is an initial STATE rather than
+        # a value: a scene that loads paused never runs the program, so an
+        # unauthored (default non-zero) intensity would flash a full-brightness
+        # plume before the first tick. Zero is the only safe starting point.
         #
         # Shadows are left OFF (the loader's default for local lights): a
         # shadow-casting point light re-renders the scene into a cubemap every
         # frame, and this one sits inside the plume pointing at open ground with
         # nothing meaningful to occlude.
-        def SphereLight "PlumeLight"
+        def SphereLight "PlumeLight" (
+            prepend apiSchemas = ["LunCoLightAPI"]
+        )
         {
             float inputs:intensity = 0
             float inputs:radius = 0.06
+            # Schema-declared (LunCoLightAPI), so no `custom` — that qualifier is
+            # for attributes no schema defines.
             float lunco:light:range = 25.0
         }
     }

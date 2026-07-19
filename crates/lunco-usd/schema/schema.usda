@@ -281,6 +281,30 @@ class "LunCoShadowAPI" (
     )
 }
 
+class "LunCoLightAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Engine-side falloff for a local UsdLux light.
+
+    UsdLux has no attenuation-cutoff concept: a `SphereLight`/`DiskLight` falls off
+    physically and forever, which is correct for a path tracer and unusable for a
+    real-time renderer that must bound each light's influence volume. So the cutoff
+    is ours, namespaced as such rather than invented into the `inputs:` namespace
+    UsdLux already owns.
+
+    Declaring it here is what lets an asset author it WITHOUT `custom`: a
+    non-`custom` attribute that no schema defines is exactly what `usdchecker`
+    flags. Several rover assets still carry the un-declared form — see
+    38-domains-as-packages.md."""
+)
+{
+    float lunco:light:range = 0 (
+        doc = "Attenuation cutoff radius, metres. 0 = engine default."
+    )
+}
+
 # PER-GPRIM SHADOW CASTING IS `primvars:doNotCastShadows`, and there is no schema of
 # ours for it.
 #

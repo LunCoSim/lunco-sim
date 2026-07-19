@@ -99,7 +99,7 @@ def Xform "AckermannRover" (
 
         def SphereLight "Light"
         (
-            prepend apiSchemas = ["ShapingAPI", "ShadowAPI"]
+            prepend apiSchemas = ["ShapingAPI", "ShadowAPI", "LunCoLightAPI"]
         )
         {
             float inputs:intensity = 1000000.0  # 1M lumens for daylight exposure visibility
@@ -144,7 +144,7 @@ def Xform "AckermannRover" (
 
         def SphereLight "Light"
         (
-            prepend apiSchemas = ["ShapingAPI", "ShadowAPI"]
+            prepend apiSchemas = ["ShapingAPI", "ShadowAPI", "LunCoLightAPI"]
         )
         {
             float inputs:intensity = 1000000.0
