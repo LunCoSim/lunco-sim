@@ -22,6 +22,18 @@ use big_space::prelude::CellCoord;
 #[reflect(Component)]
 pub struct GridAnchor;
 
+/// A vessel's human name — "Kestrel", not "/Episode01Recording/Lander".
+///
+/// Sourced from the STANDARD UsdUI `ui:displayName` attribute
+/// (SceneGraphPrimAPI) by the USD loader — not a custom field; USD already
+/// has a word for "what this thing is called". Driver-facing UI (the HUD
+/// title, comms panels) prefers it over the `Name` component, which holds the
+/// prim PATH and reads as plumbing on camera. A vessel without one simply
+/// shows its path — absence is not an error.
+#[derive(Component, Debug, Clone, Reflect)]
+#[reflect(Component)]
+pub struct Callsign(pub String);
+
 /// Marker: this camera's **pose is owned by an authored cinematic driver** (a
 /// USD camera path), not by the interactive camera stack.
 ///

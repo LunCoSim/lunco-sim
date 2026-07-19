@@ -1054,6 +1054,22 @@ fn instantiate_usd_prim_read<R: UsdRead>(
             commands.entity(entity).try_insert(lunco_fsw::FlightSoftware::default());
         }
 
+        // `ui:displayName` — the STANDARD UsdUI attribute for a prim's human
+        // name (SceneGraphPrimAPI), the field every DCC shows in its outliner.
+        // Deliberately not a `lunco:*` invention: USD already has a word for
+        // "what this thing is called", so we read that word. Ingested as
+        // [`Callsign`]; driver-facing UI (HUD title) prefers it over `Name`,
+        // which carries the prim PATH and reads as plumbing on camera. Read on
+        // ANY prim — habitats and trailers deserve names too.
+        if let Some(display) = reader.text(&sdf_path, "ui:displayName") {
+            let trimmed = display.trim();
+            if !trimmed.is_empty() {
+                commands
+                    .entity(entity)
+                    .try_insert(lunco_core::markers::Callsign(trimmed.to_string()));
+            }
+        }
+
         // Per-vessel intent→port control map (stage 2 of control), authored as a
         // `Controls` child scope: each child prim's NAME is the intent, with
         // `string lunco:port` + `double lunco:scale`. Authored inline OR pulled in

@@ -381,40 +381,11 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = false
     }
 
-    # ── Comms mast + spike — OFF for the film (director, 2026-07-20: "still
-    # a f***ing antenna", third ask). The whole comms cluster (mast, spike,
-    # dish) is deactivated; the film ship flies clean-topped. All three stay
-    # authored for the parametric-antenna/Earth-tracking work.
-    def Cylinder "Antenna" (
-        active = false
-    )
-    {
-        uniform token axis = "Y"
-        double radius = 0.06
-        double height = 1.4
-        double3 xformOp:translate = (0.0, 2.35, 0.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.7, 0.7, 0.72)]
-        bool physics:collisionEnabled = false
-    }
-
-    # The SPIKE — a slender pointed antenna standing straight up on the mast.
-    # (Bevy renders an axis-Y cone apex-down, so a 180° flip makes it point UP.)
-    def Cone "CommSpike" (
-        active = false
-    )
-    {
-        uniform token axis = "Y"
-        double radius = 0.13
-        double height = 1.5
-        double3 xformOp:translate = (0.0, 3.6, 0.0)
-        double3 xformOp:rotateXYZ = (180.0, 0, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-        color3f[] primvars:displayColor = [(0.82, 0.82, 0.86)]
-        bool physics:collisionEnabled = false
-    }
-
     # ── High-gain antenna: a REAL parabolic dish, not a sphere placeholder ──
+    # The airframe carries exactly ONE comms structure. A mast, a spike and a
+    # sphere "dish" each lived here at some point and are gone rather than
+    # deactivated: a library asset that ships switched-off geometry makes every
+    # consumer read three prims to learn which one is real.
     # The reflector is a rational NurbsPatch: u is an EXACT circle (9 CVs, the
     # classic 4-arc rational form — √2/2 weights on the diagonal CVs and doubled
     # interior knots), v a cubic parabola profile y = r²/4f, f = 0.35 m. This is
@@ -425,15 +396,20 @@ def Xform "DescentLander" (
     # story is carried by the mast + spike. The NURBS reflector stays authored
     # — it is the parametric-antenna base for the Earth-tracking gimbal work —
     # flip active when that lands.
-    def Xform "HighGainDish" (
-        active = false
-    )
+    # ACTIVE and mounted ON TOP of the mast, scaled ×2.6 → ~3 m across: a
+    # high-gain dish the audience can actually SEE at video size and read as
+    # comms hardware. (Authored at 0.58 m radius for the parametric work; the
+    # scale is the film's call, the geometry stays the real paraboloid.)
+    def Xform "HighGainDish"
     {
-        double3 xformOp:translate = (1.35, 2.5, 0.0)
+        # Sits straight on the upper deck now the mast is gone (deck top is
+        # y≈1.63; the dish's own boom carries the rest).
+        double3 xformOp:translate = (0.0, 2.05, 0.0)
         # Face the dish up-and-outboard, like a parked high-gain waiting for
         # Earth: boresight ~35° off vertical toward +X.
         double3 xformOp:rotateXYZ = (0.0, 0.0, -35.0)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        double3 xformOp:scale = (2.6, 2.6, 2.6)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
 
         def NurbsPatch "Reflector"
         {

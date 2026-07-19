@@ -25,11 +25,28 @@ impl SettingsSection for ThemePreference {
     const KEY: &'static str = "theme";
 }
 
+/// A theme mode applied WITHOUT touching the persisted preference — a film
+/// scene declaring "this take records dark" must not rewrite the operator's
+/// editor preference. While the live `Theme` equals this override, the
+/// pref-sync below stands down; the moment anything ELSE changes the theme
+/// (menu toggle, a persisting `SetTheme`), the override clears and normal
+/// persistence resumes.
+///
+/// This is deliberately the seam for the planned USD-schema theme
+/// (`lunco:ui:*` authored on a scene prim): scene-authored appearance should
+/// land as a non-persisted override through this same resource, so the
+/// command path and the future declarative path share one mechanism.
+#[derive(Resource, Default)]
+pub struct NonPersistedThemeOverride(pub Option<ThemeMode>);
+
 /// Set or toggle the active theme mode. Omit `mode` to toggle.
 #[Command(default)]
 pub struct SetTheme {
     /// `"dark"` / `"light"` (case-insensitive). When `None`, toggles.
     pub mode: Option<String>,
+    /// `false` = apply for this session only, leave `settings.json` alone.
+    /// Default `true` (the historical behavior).
+    pub persist: Option<bool>,
 }
 
 #[on_command(SetTheme)]
@@ -37,6 +54,7 @@ fn on_set_theme(
     trigger: On<SetTheme>,
     mut theme: ResMut<Theme>,
     mut pref: ResMut<ThemePreference>,
+    mut override_mode: ResMut<NonPersistedThemeOverride>,
 ) {
     let target = trigger.event().mode.as_deref().map(|s| s.to_ascii_lowercase());
     let explicit = match target.as_deref() {
@@ -50,6 +68,11 @@ fn on_set_theme(
         Some(m) => theme.set_mode(m),
         None => theme.toggle_mode(),
     }
+    if trigger.event().persist == Some(false) {
+        override_mode.0 = Some(theme.mode);
+        return;
+    }
+    override_mode.0 = None;
     if pref.mode != theme.mode {
         pref.mode = theme.mode;
     }
@@ -57,9 +80,23 @@ fn on_set_theme(
 
 /// Settings menu's `Theme` button also flips the mode directly on
 /// `Theme` (see `lib.rs`). Mirror that change into the persisted
-/// preference so closing and reopening the app remembers it.
-fn sync_pref_from_theme(theme: Res<Theme>, mut pref: ResMut<ThemePreference>) {
-    if theme.is_changed() && pref.mode != theme.mode {
+/// preference so closing and reopening the app remembers it — unless the
+/// current mode is a scene's non-persisted override, which must not leak
+/// into the operator's saved settings.
+fn sync_pref_from_theme(
+    theme: Res<Theme>,
+    mut pref: ResMut<ThemePreference>,
+    mut override_mode: ResMut<NonPersistedThemeOverride>,
+) {
+    if !theme.is_changed() {
+        return;
+    }
+    if override_mode.0 == Some(theme.mode) {
+        return;
+    }
+    // Any change AWAY from the override ends it.
+    override_mode.0 = None;
+    if pref.mode != theme.mode {
         pref.mode = theme.mode;
     }
 }
@@ -80,6 +117,7 @@ pub struct ThemeCommandPlugin;
 
 impl Plugin for ThemeCommandPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<NonPersistedThemeOverride>();
         app.register_settings_section::<ThemePreference>();
         // Apply persisted preference once at startup, then keep
         // preference in sync with any subsequent theme changes

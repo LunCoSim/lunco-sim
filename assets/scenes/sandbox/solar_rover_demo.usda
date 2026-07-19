@@ -170,7 +170,7 @@ def Xform "SolarRoverTest" (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )
         {
-            uniform asset lunco:program:sourceAsset = @lunco://models/SunTracker.mo@
+            uniform asset lunco:program:sourceAsset = @lunco://models/LunCo/Pointing/SunTracker.mo@
             # Self-wire sun azimuth from environment solar bridge
             float inputs:sun_azimuth.connect = </SolarRoverTest/SolarRover/SunTrackerController.outputs:sun_azimuth>
         }
