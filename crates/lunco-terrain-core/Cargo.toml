@@ -2,6 +2,7 @@
 name = "lunco-terrain-core"
 version = "0.1.0-dev"
 edition = "2021"
+license.workspace = true
 description = "Projection-agnostic terrain LOD spine: quadtree-CDLOD selection, tile-grid math, and the HeightSource trait. Pure (std + serde only), no bevy/avian/DEM/sphere — shared by both the planar DEM streamer and the cube-sphere planetary tiler."
 
 [dependencies]

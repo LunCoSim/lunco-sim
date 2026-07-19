@@ -2,6 +2,7 @@
 name = "lunco-precompute"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "Content-addressed precompute disk cache — `bake_or_load`: run an expensive PURE function once, persist the artifact keyed by a content hash, and load it on every later run and peer. Built on lunco-hash (fast key + optional CID) over the lunco-storage I/O seam; runtime-agnostic (no bevy). Home for terrain derived layers, horizon bakes, collider/mesh bakes, USD flatten artifacts."
 
 [dependencies]

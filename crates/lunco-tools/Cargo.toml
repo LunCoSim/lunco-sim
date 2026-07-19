@@ -2,6 +2,7 @@
 name = "lunco-tools"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 # Runtime-agnostic tool registry: a tool is a named bundle of callable functions
 # with metadata, independent of HOW it is implemented (rhai, native Rust, future

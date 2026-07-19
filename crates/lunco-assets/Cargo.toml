@@ -2,6 +2,7 @@
 name = "lunco-assets"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "Unified asset management for LunCoSim — cache resolution, versioned downloads, texture processing, and loading abstraction"
 
 [dependencies]

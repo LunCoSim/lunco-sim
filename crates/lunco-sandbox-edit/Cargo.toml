@@ -2,6 +2,7 @@
 name = "lunco-sandbox-edit"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 [dependencies]
 # THE COMMAND LAYER, now its own crate. Spawn/move/delete/set-property, the spawn +

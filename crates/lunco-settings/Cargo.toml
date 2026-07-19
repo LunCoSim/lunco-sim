@@ -2,6 +2,7 @@
 name = "lunco-settings"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "Centralised user-settings system for LunCoSim. One JSON file (~/.lunco/settings.json), namespaced sections, auto-persist on change."
 
 [dependencies]

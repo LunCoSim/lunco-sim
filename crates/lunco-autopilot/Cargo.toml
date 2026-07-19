@@ -2,6 +2,7 @@
 name = "lunco-autopilot"
 version = "0.6.0-dev"
 edition = "2021"
+license.workspace = true
 
 [dependencies]
 bevy = { workspace = true }
@@ -25,7 +26,10 @@ anyhow = { workspace = true }
 # BehaviorTree.CPP v4 XML interchange: the `btcpp_xml` codec round-trips a tree's
 # JSON to/from the de-facto robotics format (Groot2 editor, ROS/Nav2), so a
 # behaviour authored here can be edited/run by real flight software and back.
-quick-xml = "0.39"
+# 0.41 to match the copy already in the tree — two majors of the same parser
+# would otherwise both build, and this one sits on the user-XML path (BehaviorTree
+# .btcpp files), so it is the copy that wants the newer parser fixes.
+quick-xml = "0.41"
 # Control is the ONE generic `SetPorts` command (a batch of named input-port
 # writes); the autopilot emits it exactly like the keyboard and scripts do.
 lunco-cosim = { path = "../lunco-cosim" }

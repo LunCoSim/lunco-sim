@@ -285,7 +285,28 @@ impl WorkspaceState {
             .read_sync(&lunco_storage::StorageHandle::File(path.clone()))
             .ok()?;
         let text = String::from_utf8(bytes).ok()?;
-        let mut state: WorkspaceState = serde_json::from_str(&text).ok()?;
+        let mut state: WorkspaceState = match serde_json::from_str(&text) {
+            Ok(state) => state,
+            Err(e) => {
+                // Falling back to defaults means the next save overwrites this
+                // file, taking the user's whole dock arrangement with it.
+                // Preserve it as `workspace.json.bad` (the `lunco-settings`
+                // pattern) so a hand-fixable typo stays recoverable.
+                let bad = path.with_extension("json.bad");
+                warn!(
+                    "[WorkspaceState] {} is not valid JSON ({e}); preserving as {} and starting fresh",
+                    path.display(),
+                    bad.display(),
+                );
+                if let Err(e) = lunco_storage::write_file_sync(&bad, text.as_bytes()) {
+                    warn!(
+                        "[WorkspaceState] could not preserve corrupt state to {}: {e}",
+                        bad.display(),
+                    );
+                }
+                return None;
+            }
+        };
         if state.twin_root != twin_root {
             warn!(
                 "[WorkspaceState] {} stores a different twin_root ({}); ignoring (hash collision?)",

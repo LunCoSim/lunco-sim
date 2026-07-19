@@ -2,6 +2,7 @@
 name = "lunco-terrain-surface"
 version = "0.1.0-dev"
 edition = "2021"
+license.workspace = true
 description = "Local high-detail DEM ground terrain (surface scale): heightfield colliders, CDLOD tile streaming, big_space per-tile anchoring. The 'surface' projection of the terrain family; pairs with lunco-terrain-globe over the shared lunco-terrain-core LOD spine."
 
 [dependencies]

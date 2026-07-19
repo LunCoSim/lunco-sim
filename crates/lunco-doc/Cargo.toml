@@ -2,6 +2,7 @@
 name = "lunco-doc"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "Document System foundation for LunCoSim — Document, DocumentOp, DocumentHost with undo/redo. UI-free, headless-capable."
 
 [dependencies]

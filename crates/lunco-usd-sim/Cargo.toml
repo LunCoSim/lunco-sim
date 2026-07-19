@@ -2,6 +2,7 @@
 name = "lunco-usd-sim"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 [dependencies]
 # RENDER-FREE by construction (docs/architecture/render-decoupling.md): NO

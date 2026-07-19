@@ -2,6 +2,7 @@
 name = "lunco-experiments"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "Backend-agnostic experiment / batch-run registry. Models a single Fast Run as a first-class artifact (params, bounds, trajectory). The simulation backend is plugged in by another crate via the ExperimentRunner trait."
 
 [dependencies]

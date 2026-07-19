@@ -2,6 +2,7 @@
 name = "lunco-hooks-rhai"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "rhai binding for the runtime-agnostic lunco-hooks registry: implements ScriptHook once for rhai so a rhai function can fill ANY internal hook point (merge policy, authorization, …). wasm-clean (rhai only; no bevy)."
 
 [dependencies]

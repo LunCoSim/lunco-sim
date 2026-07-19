@@ -2,6 +2,7 @@
 name = "lunco-usd-terrain"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 # The USD→terrain projector: authored terrain prims (`lunco:assetMode = "dem"` +
 # `lunco:layer:*` child layer prims) → `lunco-terrain-surface`'s DEM request +

@@ -2,6 +2,7 @@
 name = "lunco-scene-commands"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "The scene/document command layer: every runtime mutation of the scene (spawn, move, delete, set-property, shader edits) authored as journaled USD ops on the open document's runtime layer. Render-free and UI-free, so the headless server links it without the editor."
 
 [dependencies]

@@ -2,6 +2,7 @@
 name = "luncosim"
 version = "0.6.0-dev"
 edition = "2021"
+license.workspace = true
 description = "LunCoSim — the full lunar-mission simulator: celestial bodies + ephemeris, solar-system-scale big_space, an orbital camera (auto-focus Earth), and the whole FSW / hardware / mobility / robotics / avatar stack under the workbench. The flagship windowed app (cf. `sandbox` = ground-physics test bed, `lunica` = Modelica workbench)."
 
 # The app is a single `src/main.rs` (bin name = crate name = `luncosim`):

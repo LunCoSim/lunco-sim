@@ -2,6 +2,7 @@
 name = "lunco-canvas"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "LunCoSim's generic canvas — stateful Scene + Viewport + pluggable Tools/Layers/Overlays. Domain-agnostic; drives Modelica diagrams, node-graphs, annotations, and anything else that needs a 2D scene editor."
 
 [features]

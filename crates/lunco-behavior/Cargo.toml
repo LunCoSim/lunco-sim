@@ -2,6 +2,7 @@
 name = "lunco-behavior"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "Language- and engine-agnostic behaviour-tree kernel (node model + tick traversal + event-match predicates). No rhai/python/avian/bevy dependency."
 
 # Intentionally DEPENDENCY-FREE: the whole point of the crate is that the autonomy

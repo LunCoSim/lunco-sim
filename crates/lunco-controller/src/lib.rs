@@ -194,7 +194,13 @@ impl Plugin for LunCoControllerPlugin {
         register_all_commands(app);
         app.add_systems(
             FixedUpdate,
-            drive_from_bindings.run_if(lunco_core::not_rolling_back),
+            // Ahead of the DAC, so the `DigitalPort` writes this tick emits reach
+            // `PhysicalPort` in the same tick. Unordered, the DAC may read the port
+            // before or after this system depending on the schedule's parallel
+            // layout, and prediction diverges from the host on that coin flip.
+            drive_from_bindings
+                .run_if(lunco_core::not_rolling_back)
+                .before(lunco_core::ControlDacSet),
         );
         // The SINGLE input-bookkeeping chokepoint: every `SetPorts` — keyboard,
         // API, or wire-replayed — flows through this observer, so the client

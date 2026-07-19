@@ -2,6 +2,7 @@
 name = "lunco-doc-bevy"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "Bevy integration for the LunCoSim Document System — generic document-lifecycle events and the Twin-level change journal."
 
 [dependencies]

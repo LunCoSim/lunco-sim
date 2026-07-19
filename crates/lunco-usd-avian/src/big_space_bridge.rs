@@ -304,10 +304,16 @@ fn position_to_pose(
         &mut BridgeShadow,
         &RigidBody,
     )>,
+    // Scratch reused across ticks. This runs every physics tick over every body,
+    // so building a fresh map per tick and a fresh chain Vec per BODY was a
+    // steady-state allocation cost even when nothing moved. Both are cleared
+    // where they were previously constructed — same contents, same order.
+    mut body_poses: Local<EntityHashMap<(DVec3, DQuat)>>,
+    mut chain: Local<Vec<(DVec3, Quat)>>,
 ) {
     // Pass A: solved world poses of every body — the parent frames for
     // jointed sub-bodies, fresher than any Transform this tick.
-    let mut body_poses: EntityHashMap<(DVec3, DQuat)> = EntityHashMap::default();
+    body_poses.clear();
     for (e, p, r) in &q_poses {
         body_poses.insert(e, (p.0, r.0));
     }
@@ -338,7 +344,7 @@ fn position_to_pose(
             GridEntity(Entity),
             Root,
         }
-        let mut chain: Vec<(DVec3, Quat)> = Vec::new();
+        chain.clear();
         let mut anchor = Anchor::Root;
         let mut cur = e;
         for _ in 0..32 {
@@ -440,10 +446,11 @@ fn propagate_collider_transforms_rootless(
     q_transforms: Query<&Transform>,
     q_rb: Query<(), With<RigidBody>>,
     mut q_colliders: Query<(Entity, &mut ColliderTransform)>,
+    mut path: Local<Vec<Entity>>,
 ) {
     for (e, mut ct) in &mut q_colliders {
         // Path root → collider (inclusive).
-        let path = ancestor_path(e, &q_parents);
+        ancestor_path(e, &q_parents, &mut path);
 
         let mut acc = ColliderTransform::default();
         for &n in path.iter().rev() {
@@ -483,9 +490,11 @@ fn propagate_collider_transforms_rootless(
     }
 }
 
-/// Collect `e`'s ancestor path as `[e, parent, …, root]` (walk capped at 32).
-fn ancestor_path(e: Entity, q_parents: &Query<&ChildOf>) -> Vec<Entity> {
-    let mut path = Vec::with_capacity(8);
+/// Write `e`'s ancestor path into `path` as `[e, parent, …, root]` (walk capped
+/// at 32). Caller-owned buffer: this runs per collider per tick, so the Vec is
+/// reused rather than reallocated.
+fn ancestor_path(e: Entity, q_parents: &Query<&ChildOf>, path: &mut Vec<Entity>) {
+    path.clear();
     let mut cur = e;
     path.push(cur);
     for _ in 0..32 {
@@ -497,7 +506,6 @@ fn ancestor_path(e: Entity, q_parents: &Query<&ChildOf>) -> Vec<Entity> {
             Err(_) => break,
         }
     }
-    path
 }
 
 #[cfg(test)]

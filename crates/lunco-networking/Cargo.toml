@@ -2,6 +2,7 @@
 name = "lunco-networking"
 version = "0.1.0-dev"
 edition = "2021"
+license.workspace = true
 description = "Networking layer for LunCoSim — thin lightyear (WebTransport) adapter over the always-on wire substrate in lunco-api/lunco-core."
 
 [[bin]]
@@ -145,28 +146,16 @@ lightyear_aeronet = { version = "0.28.0", default-features = false }
 
 
 # Native (desktop / dedicated server): full client+server WebTransport.
-# TODO(backlog): the lightyear version + shared feature list is duplicated across
-# this block and the wasm block below — hoist the version to [workspace.dependencies]
-# when this manifest is next restructured; see the engineering-backlog doc in
-# docs/architecture (lightyear dep dedup).
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 # Native byte-GET for the HTTP asset plane (`http_fetch`). Already in the workspace
 # tree (lunco-assets/celestial use it), so this pulls no new transitive deps. Web
 # uses `lunco_assets::web_fetch` (browser `fetch`) instead.
 ureq = { workspace = true }
-lightyear = { version = "0.28.0", default-features = false, optional = true, features = [
-  "client",
+# Shared version + feature set come from [workspace.dependencies]; these two are
+# the native-only additions. `webtransport_dangerous_configuration` accepts the
+# self-signed cert digest and must never reach the browser build.
+lightyear = { workspace = true, optional = true, features = [
   "server",
-  # 0.27 split these out of an implicit bundle into standalone features (they're
-  # in lightyear's `default`, which we disable). `replication` is mandatory —
-  # lightyear's lib unconditionally `use`s `lightyear_replication`. We replicate
-  # snapshots + client-predict, so prediction/interpolation are needed too.
-  "replication",
-  "prediction",
-  "interpolation",
-  "netcode",
-  "webtransport",
-  "webtransport_self_signed",
   "webtransport_dangerous_configuration",
 ] }
 # Host TLS identity loading (production certbot cert via env paths). File reads
@@ -184,16 +173,9 @@ interprocess = { version = "2", optional = true }
 
 # Browser (wasm): client-only WebTransport. Cert digest comes from the URL hash.
 [target.'cfg(target_family = "wasm")'.dependencies]
-lightyear = { version = "0.28.0", default-features = false, optional = true, features = [
-  "client",
-  # See native block: 0.27 made these standalone; `replication` is mandatory.
-  "replication",
-  "prediction",
-  "interpolation",
-  "netcode",
-  "webtransport",
-  "webtransport_self_signed",
-] }
+# Client-only: exactly the shared set from [workspace.dependencies], with none of
+# the native block's server/dangerous-config additions.
+lightyear = { workspace = true, optional = true }
 # Non-optional: `NetworkMode::from_url` (query parse + `performance.now()` for a
 # per-tab client id) and the client adapter's cert-digest read both need it, and
 # the crate is only ever compiled when the `networking` feature pulls it in.

@@ -2,6 +2,7 @@
 name = "lunco-workbench"
 version = "0.1.0-dev"
 edition = "2021"
+license.workspace = true
 build = "build.rs"
 description = "LunCoSim's own workbench shell — activity bar, side browsers, central viewport, right inspector, bottom dock, status bar. Native replacement for bevy_workbench."
 

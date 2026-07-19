@@ -2,6 +2,7 @@
 name = "lunco-worker-transport"
 version = "0.1.0-dev"
 edition = "2021"
+license.workspace = true
 description = "Generic Web Worker pool transport (spawn / boot handshake / byte + Transferable-ArrayBuffer post / crash respawn) shared by the Modelica Fast-Run workers and the DEM bake worker. wasm-only."
 
 # Browser-only: wasm32 has no OS threads, so companion work runs in Web Workers

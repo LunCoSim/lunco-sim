@@ -2,6 +2,7 @@
 name = "lunco-workspace"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "LunCoSim's editor session (VS Code Workspace analog). Tracks open Twins + loose documents, the active Twin / Document / Perspective, and a recents list. Headless and UI-free — depends only on the bevy ECS/app substrate (no render/winit/egui), so it runs identically in a windowed editor and a `--no-ui` server."
 
 [dependencies]

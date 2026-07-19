@@ -1,0 +1,57 @@
+LunCoSim — third-party attribution
+==================================
+
+LunCoSim itself is licensed under Apache-2.0 (see LICENSE). This file records
+attribution required by the licences of third-party font software that ships
+inside, or is fetched at build time by, LunCoSim binaries and web bundles.
+
+Rust crate dependencies carry their own licences; this NOTICE covers fonts
+only, because font licences (OFL-1.1, UFL-1.0, Bitstream Vera) require the
+notice to travel with the distributed binary.
+
+
+DejaVu Sans (DejaVuSans.ttf), version 2.37
+------------------------------------------
+Used as the proportional fallback face so math, Greek and arrow glyphs render
+without tofu (crates/lunco-theme/src/fonts.rs).
+
+Not vendored in this repository. It is downloaded from the upstream release
+tarball declared in crates/lunco-theme/Assets.toml and copied into
+dist/<bin>/fonts/ by scripts/build_web.sh.
+
+Licence: the DejaVu Fonts License — the DejaVu glyphs derived from Bitstream
+Vera remain under the Bitstream Vera Fonts Copyright, and the DejaVu changes
+were released into the public domain. The full licence text ships as LICENSE
+inside the upstream dejavu-fonts-ttf-2.37 archive and is not vendored here;
+confirm against that archive before redistributing.
+
+
+Fonts embedded by dependencies
+------------------------------
+These are compiled into LunCoSim binaries via `include_bytes!` in upstream
+crates, so they are redistributed by us. Licence text lives with each crate's
+source in the Cargo registry at the paths noted.
+
+Fira Mono (FiraMono-subset.ttf)
+  Bevy's default font, embedded by bevy_text (src/lib.rs, DEFAULT_FONT_DATA).
+  Licence: NEEDS CONFIRMATION — bevy_text ships no licence file alongside the
+  TTF. Fira Mono is published under OFL-1.1 upstream; verify against the Bevy
+  distribution before relying on this.
+
+The four fonts below are embedded by epaint_default_fonts (egui), which does
+vendor their licence texts in its `fonts/` directory:
+
+Ubuntu Light (Ubuntu-Light.ttf)
+  Licence: Ubuntu Font Licence 1.0 (UFL.txt).
+
+Noto Emoji Regular (NotoEmoji-Regular.ttf)
+  Licence: SIL Open Font License 1.1 (OFL.txt). The vendored OFL.txt carries
+  the generic licence body with no copyright-holder line.
+
+Hack Regular (Hack-Regular.ttf)
+  Licence: MIT. Copyright 2018 Source Foundry Authors (Hack-Regular.txt).
+  Its Bitstream Vera / DejaVu derived work is noted there as public domain.
+
+emoji-icon-font (emoji-icon-font.ttf)
+  Licence: MIT. Copyright (c) 2014 John Slegers
+  (emoji-icon-font-mit-license.txt).

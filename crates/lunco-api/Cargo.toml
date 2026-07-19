@@ -2,6 +2,7 @@
 name = "lunco-api"
 version = "0.1.0-dev"
 edition = "2021"
+license.workspace = true
 description = "Transport-agnostic API layer for LunCoSim — HTTP, ROS2, IPC, etc."
 
 [features]

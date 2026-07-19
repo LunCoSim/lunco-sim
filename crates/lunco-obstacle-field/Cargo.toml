@@ -2,6 +2,7 @@
 name = "lunco-obstacle-field"
 version = "0.1.0-dev"
 edition = "2021"
+license.workspace = true
 description = "Procedural crater + rock field generation for rover testing in LunCoSim"
 
 [dependencies]

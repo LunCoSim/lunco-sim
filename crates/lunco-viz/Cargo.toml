@@ -2,6 +2,7 @@
 name = "lunco-viz"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "LunCoSim's visualization framework — signals, viz kinds, and view targets. Domain-agnostic: Modelica, Avian, USD, SysML all push into one SignalRegistry and share viz kinds."
 
 [features]

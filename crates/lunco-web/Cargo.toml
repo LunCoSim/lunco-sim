@@ -2,6 +2,7 @@
 name = "lunco-web"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "Shared web-frontend boot library for LunCoSim wasm apps: the streaming loader (web/lunco-boot.{js,css}) plus WebReadyPlugin, which signals the HTML loader once Bevy paints its first frame."
 
 [dependencies]

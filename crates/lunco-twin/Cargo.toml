@@ -2,6 +2,7 @@
 name = "lunco-twin"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "Twin — LunCoSim's top-level persistent artifact. Folder + twin.toml manifest. Headless, UI-free; the optional `bevy` feature exposes the DocumentKindRegistry as a Resource for ECS-side consumers."
 
 [dependencies]

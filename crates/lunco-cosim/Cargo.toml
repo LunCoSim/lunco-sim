@@ -3,6 +3,7 @@ name = "lunco-cosim"
 version = "0.1.0"
 description = "Co-simulation orchestration for LunCoSim — connects multiple simulation models (Modelica, FMU, GMAT, Avian) via explicit wires."
 edition = "2021"
+license.workspace = true
 
 [dependencies]
 bevy.workspace = true

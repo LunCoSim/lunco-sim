@@ -74,6 +74,13 @@ pub struct KeplerOrbit {
 /// that exits the iteration budget with a residual above tolerance logs the
 /// degraded result rather than returning it silently.
 pub fn solve_kepler(mean_anomaly_rad: f64, e: f64) -> f64 {
+    // Callers are expected to hand in an elliptical eccentricity; the clamp keeps
+    // release builds finite, but a debug build should surface the bad orbit at the
+    // source rather than silently propagating a quietly reinterpreted one.
+    debug_assert!(
+        (0.0..1.0).contains(&e),
+        "solve_kepler is elliptic-only, got e={e}"
+    );
     let e = e.clamp(0.0, 0.999_999);
     let m = mean_anomaly_rad.rem_euclid(TAU);
     // High-eccentricity orbits converge better seeded at π.
@@ -81,6 +88,13 @@ pub fn solve_kepler(mean_anomaly_rad: f64, e: f64) -> f64 {
     for _ in 0..30 {
         let f = ecc_anom - e * ecc_anom.sin() - m;
         let fp = 1.0 - e * ecc_anom.cos();
+        // Near-parabolic eccentricities drive the derivative towards zero at
+        // periapsis; taking the step there throws the iterate to infinity and
+        // poisons every later pass. Keep the best iterate so far and let the
+        // residual check below report the degraded solve.
+        if fp.abs() < 1e-12 {
+            break;
+        }
         let step = f / fp;
         ecc_anom -= step;
         if step.abs() < 1e-13 {

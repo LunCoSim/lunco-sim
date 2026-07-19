@@ -222,6 +222,14 @@ pub fn update_collider_ring(
         &mut PendingColliderBakes,
         Option<&ColliderDirtyRegion>,
     )>,
+    // Scratch reused across frames. The ring runs every frame even when the
+    // terrain is settled and nothing is wanted or baking, so a fresh
+    // HashSet/Vec per frame (per terrain, for `wanted`) was pure allocator
+    // traffic for zero work. Each is cleared at the point it was previously
+    // constructed, so the logic is unchanged.
+    mut foci: Local<Vec<Vec3>>,
+    mut wanted: Local<HashSet<QuadCoord>>,
+    mut done: Local<Vec<(QuadCoord, Collider, f64)>>,
 ) {
     let Ok((grid_entity, grid)) = grids.single() else { return };
     let pool = AsyncComputeTaskPool::get();
@@ -240,11 +248,13 @@ pub fn update_collider_ring(
     let mut bake_budget: usize = usize::MAX;
 
     // World positions of the dynamic bodies the ring should cover.
-    let foci: Vec<Vec3> = bodies
-        .iter()
-        .filter(|(rb, _)| matches!(rb, RigidBody::Dynamic))
-        .map(|(_, gt)| gt.translation())
-        .collect();
+    foci.clear();
+    foci.extend(
+        bodies
+            .iter()
+            .filter(|(rb, _)| matches!(rb, RigidBody::Dynamic))
+            .map(|(_, gt)| gt.translation()),
+    );
 
     for (terrain, t_gt, hf, ring, mut tiles, mut pending, dirty_region) in &mut terrains {
         let oracle = &hf.0;
@@ -285,9 +295,9 @@ pub fn update_collider_ring(
 
         // The canonical-depth node set wanted this frame: each focus's node + its
         // 8 neighbours (3×3 build-ahead), deduped across all bodies.
-        let mut wanted: HashSet<QuadCoord> = HashSet::new();
+        wanted.clear();
         let inv = t_gt.affine().inverse();
-        for f in &foci {
+        for f in foci.iter() {
             let local = inv.transform_point3(*f);
             let (lx, lz) = (local.x as f64, local.z as f64);
             if lx.abs() > h || lz.abs() > h {
@@ -322,7 +332,8 @@ pub fn update_collider_ring(
         // Finalize completed off-thread bakes: spawn the tile entity. Each
         // anchors to its own big_space `CellCoord` (from its world centre);
         // Parry centres the heightfield at that origin.
-        let mut done: Vec<(QuadCoord, Collider, f64)> = Vec::new();
+        done.clear();
+        let done = &mut *done;
         pending.0.retain(|coord, task| match block_on(future::poll_once(&mut *task)) {
             Some((collider, origin_y)) => {
                 done.push((*coord, collider, origin_y));
@@ -330,7 +341,7 @@ pub fn update_collider_ring(
             }
             None => true,
         });
-        for (coord, collider, origin_y) in done {
+        for (coord, collider, origin_y) in done.drain(..) {
             let region = qt.region(coord);
             let center = region.center;
             // Anchor the tile's CellCoord at the same `origin_y` its heightfield
@@ -367,7 +378,7 @@ pub fn update_collider_ring(
         // Queue bakes for newly-wanted (or stale-resident) tiles OFF-THREAD
         // (oracle sampling + parry heightfield build used to stall the frame at
         // every tile-boundary cross).
-        for coord in &wanted {
+        for coord in wanted.iter() {
             if pending.0.contains_key(coord)
                 || (tiles.map.contains_key(coord) && !tiles.stale.contains(coord))
             {

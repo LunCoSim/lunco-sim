@@ -2,6 +2,7 @@
 name = "lunco-environment"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "Per-entity environmental state (gravity, atmosphere, radiation, lighting) computed from celestial body providers. RENDER-FREE."
 
 [dependencies]

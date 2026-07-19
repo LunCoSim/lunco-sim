@@ -2,6 +2,7 @@
 name = "lunco-robotics"
 version = "0.6.0-dev"
 edition = "2021"
+license.workspace = true
 
 [dependencies]
 # Substrate only. This crate uses nothing but `bevy::prelude` — it spawns no

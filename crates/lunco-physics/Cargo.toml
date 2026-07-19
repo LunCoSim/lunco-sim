@@ -2,6 +2,7 @@
 name = "lunco-physics"
 version = "0.1.0-dev"
 edition = "2021"
+license.workspace = true
 description = "Physics readiness gate: suspend rigid-body integration (avian's Time<Physics>) while colliders bake — without touching the world clock or the user's transport"
 
 [features]

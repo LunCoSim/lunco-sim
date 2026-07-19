@@ -2,6 +2,7 @@
 name = "lunco-sandbox-server"
 version = "0.6.0-dev"
 edition = "2021"
+license.workspace = true
 description = "Headless launcher for the LunCo sandbox — the same app as `sandbox`, built without the GUI (no winit/egui) and with the API + networking host. Exists as its own crate purely so it can default to headless: Cargo default features are per-package, so a bin that's headless-by-default needs its own package."
 
 [[bin]]

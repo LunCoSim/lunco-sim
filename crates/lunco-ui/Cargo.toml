@@ -2,6 +2,7 @@
 name = "lunco-ui"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "Thin UI adapter layer for LunCoSim on top of lunco-workbench"
 
 [dependencies]

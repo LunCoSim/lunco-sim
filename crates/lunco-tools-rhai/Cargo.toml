@@ -2,6 +2,7 @@
 name = "lunco-tools-rhai"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 # rhai adapter for the runtime-agnostic lunco-tools registry: concrete tool
 # impls (rhai-source + native Rust) and the binding that exposes every

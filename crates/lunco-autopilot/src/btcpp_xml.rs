@@ -709,7 +709,14 @@ fn read_attrs(e: &BytesStart) -> Result<Vec<(String, String)>, String> {
     for a in e.attributes() {
         let a = a.map_err(|x| x.to_string())?;
         let k = String::from_utf8_lossy(a.key.as_ref()).into_owned();
-        let v = a.unescape_value().map_err(|x| x.to_string())?.into_owned();
+        // `Implicit1_0`: BehaviorTree.CPP `.btcpp` files carry no XML declaration,
+        // and the spec says an entity without one is XML 1.0 — the same rule the
+        // superseded `unescape_value` applied unconditionally, so escaping
+        // behaviour is unchanged.
+        let v = a
+            .normalized_value(quick_xml::XmlVersion::Implicit1_0)
+            .map_err(|x| x.to_string())?
+            .into_owned();
         out.push((k, v));
     }
     Ok(out)

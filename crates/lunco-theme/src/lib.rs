@@ -255,6 +255,27 @@ pub struct DesignTokens {
     /// live control in its off state: the affordance must stay visible while
     /// losing decisively to the active one.
     pub inactive: egui::Color32,
+    /// Fill for a node card on a graph canvas.
+    pub node_card: egui::Color32,
+    /// Fill for a node card whose subject is a physics body — the warm
+    /// counterpart of [`Self::node_card`], so "this is simulated" survives the
+    /// zoom levels at which the type label is hidden.
+    pub node_card_body: egui::Color32,
+    /// Fill for a selected node card.
+    pub node_card_selected: egui::Color32,
+    /// Keyline around a node card, and the fallback for a port whose kind is
+    /// neither input nor output.
+    pub node_border: egui::Color32,
+    /// Keyline for the selected node, and the wire colour for the selected
+    /// edge — one colour so selection reads identically on both.
+    pub node_border_selected: egui::Color32,
+    /// Input port dot on a node card.
+    pub port_input: egui::Color32,
+    /// Output port dot. Must differ from [`Self::port_input`] in hue, not just
+    /// lightness: direction is the only thing a dot conveys.
+    pub port_output: egui::Color32,
+    /// Hairline around a port dot, separating it from the card fill beneath.
+    pub port_outline: egui::Color32,
 }
 
 impl DesignTokens {
@@ -298,6 +319,20 @@ impl DesignTokens {
             },
             overlay_border: p.overlay0,
             inactive: p.overlay1,
+            // Node cards are raised tiles that happen to live on a canvas, so
+            // the body/selected variants are *tints* of the raised fill rather
+            // than colours of their own — a tinted card still reads as a card,
+            // whereas an accent-coloured one reads as a button. Gamma lerp
+            // keeps them opaque; a premultiplied `linear_multiply` would let
+            // the canvas grid show through the card.
+            node_card: raised,
+            node_card_body: raised.lerp_to_gamma(p.peach, 0.18),
+            node_card_selected: raised.lerp_to_gamma(p.blue, 0.35),
+            node_border: raised_border,
+            node_border_selected: p.blue,
+            port_input: p.sky,
+            port_output: p.green,
+            port_outline: sunken,
         }
     }
 }

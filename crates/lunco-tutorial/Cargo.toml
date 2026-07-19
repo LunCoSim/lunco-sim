@@ -2,6 +2,7 @@
 name = "lunco-tutorial"
 version = "0.1.0-dev"
 edition = "2021"
+license.workspace = true
 description = "Unified tutorial launcher for every workbench app: a registry of tutorials, a dockable launcher panel + menu, progress persistence, F1, and the runtime-fidelity toggle. A tutorial is ONE thing — a `.rhai` scenario — which the launcher runs on a host entity; the scenario sets up its own environment (`load_scene`, `open_class`). No scene-vs-script duality, no simulation logic of its own."
 
 [dependencies]

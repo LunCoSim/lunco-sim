@@ -195,26 +195,31 @@ fn resolve_link(
     //
     // Prefer the peer's PARENT name when the peer is an antenna child: the driver
     // thinks in terms of "Base", not "Antenna".
-    let peer_label = q_ids
-        .iter()
-        .find(|(_, g)| g.get() == pick.peer)
-        .map(|(e, _)| {
-            let own = q_name.get(e).ok().map(|n| n.as_str().to_string());
+    //
+    // The candidate names stay borrowed until the winner is picked — this runs
+    // every frame per driven vessel, and eagerly copying both names allocated two
+    // Strings to throw one away. Exactly one allocation happens now, on the
+    // branch that survives.
+    let peer_ent = q_ids.iter().find(|(_, g)| g.get() == pick.peer).map(|(e, _)| e);
+    let peer_label = match peer_ent {
+        Some(e) => {
+            let own = q_name.get(e).ok().map(|n| n.as_str());
             let parent = q_parents
                 .get(e)
                 .ok()
                 .and_then(|p| q_name.get(p.parent()).ok())
-                .map(|n| n.as_str().to_string());
+                .map(|n| n.as_str());
             match (own, parent) {
                 // An "Antenna"/"Comms" node under a named structure reads better as
                 // its owner; anything else keeps its own name.
-                (Some(o), Some(p)) if o == "Antenna" || o == "Comms" => p,
-                (Some(o), _) => o,
-                (None, Some(p)) => p,
+                (Some(o), Some(p)) if o == "Antenna" || o == "Comms" => p.to_string(),
+                (Some(o), _) => o.to_string(),
+                (None, Some(p)) => p.to_string(),
                 (None, None) => format!("#{}", pick.peer),
             }
-        })
-        .unwrap_or_else(|| format!("#{}", pick.peer));
+        }
+        None => format!("#{}", pick.peer),
+    };
 
     Some(LinkInfo {
         connected: pick.connected,

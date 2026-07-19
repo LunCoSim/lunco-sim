@@ -2,6 +2,7 @@
 name = "lunco-core"
 version = "0.6.0-dev"
 edition = "2021"
+license.workspace = true
 
 [dependencies]
 # `bevy_camera`: Camera / Visibility / ViewVisibility types (ECS-level, no

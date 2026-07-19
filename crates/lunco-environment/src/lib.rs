@@ -385,13 +385,20 @@ fn on_set_environment_light(
                 // canonical lunar-sun cascade defaults (see their declaration).
                 let cur_first = cfg.bounds.first().copied().unwrap_or(FALLBACK_FIRST_CASCADE_FAR_BOUND);
                 let cur_max = cfg.bounds.last().copied().unwrap_or(FALLBACK_MAX_SHADOW_DISTANCE);
-                let first = cmd.shadow_first_cascade_bound.unwrap_or(cur_first);
-                let max = cmd.shadow_max_distance.unwrap_or(cur_max);
+                // The first bound has to stay a metre inside the max, so the max is
+                // floored at 2 m first: clamping the other way round (bound, then
+                // max) lets a sub-2 m max pull the first bound to zero or negative,
+                // which produces a degenerate cascade and a black shadow pass.
+                let max = cmd.shadow_max_distance.unwrap_or(cur_max).max(2.0);
+                let first = cmd
+                    .shadow_first_cascade_bound
+                    .unwrap_or(cur_first)
+                    .clamp(1.0, max - 1.0);
                 *cfg = CascadeShadowConfigBuilder {
                     num_cascades: cfg.bounds.len().max(1),
                     minimum_distance: cfg.minimum_distance,
-                    first_cascade_far_bound: first.max(1.0).min(max - 1.0),
-                    maximum_distance: max.max(first + 1.0),
+                    first_cascade_far_bound: first,
+                    maximum_distance: max,
                     overlap_proportion: cfg.overlap_proportion,
                 }
                 .build();

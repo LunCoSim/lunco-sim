@@ -144,6 +144,11 @@ transform-gizmo-bevy = { git = "https://github.com/LunCoSim/mitchty-transform-gi
 
 [workspace.package]
 description = "Initialize multi-crate workspace architecture for vessel control simulation"
+# Matches the Apache-2.0 text in ./LICENSE. Declared here so every member inherits
+# it: cargo emits no licence metadata without this field, so the published form of
+# any crate in this workspace would otherwise carry no licence at all — which reads
+# as "all rights reserved" regardless of what the repository root says.
+license = "Apache-2.0"
 
 [workspace.dependencies]
 # Slim Bevy: drop everything Modelica/rover workbench provably doesn't
@@ -236,7 +241,27 @@ smallvec = "1.13"
 # does not define: nothing could catch the typo, because it was a `&str`.
 # Enabling them makes those names compile-checked constants.
 openusd = { version = "=0.5.0", features = ["physics", "geom", "shade", "lux"] }
-instant = "0.1"
+# The version and the feature set SHARED by both wire targets. `lunco-networking`
+# builds lightyear twice — a native client+server block and a wasm client-only one
+# — and holding the version in two places meant a bump could land on one target
+# and not the other, which surfaces as a wire mismatch rather than a build error.
+# Target-specific extras (`server`, `webtransport_dangerous_configuration`) stay in
+# the native block: cargo unions features per target, so listing them here would
+# hand the browser build a server it must not have.
+#
+# `replication` is mandatory — lightyear's lib unconditionally `use`s
+# `lightyear_replication`. 0.27 split these out of an implicit bundle into
+# standalone features (they sit in lightyear's `default`, which we disable), and we
+# replicate snapshots + client-predict, so prediction/interpolation are needed too.
+lightyear = { version = "0.28.0", default-features = false, features = [
+  "client",
+  "replication",
+  "prediction",
+  "interpolation",
+  "netcode",
+  "webtransport",
+  "webtransport_self_signed",
+] }
 # Drop-in replacement for `std::time::Instant` / `SystemTime` that works on
 # wasm32-unknown-unknown (where the std types panic at runtime). Backed by
 # `performance.now()` in the browser, `std::time` on native. Used by Bevy

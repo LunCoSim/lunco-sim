@@ -9,27 +9,6 @@ use lunco_canvas::{DrawCtx, EdgeVisual, Node, NodeVisual, Pos};
 
 use super::projection::{UsdPrimNodeData, UsdWireData, WireKind};
 
-// Palette (fixed, theme-independent for v1 — matches the canvas placeholder
-// visuals' self-contained style).
-//
-// TODO(theme): migrate to lunco-theme once the token set covers this.
-// Node-graph domain visuals: card fills by node kind (generic / body / selected),
-// card + selection strokes, title vs type-name label, input vs output port dots,
-// and wire colour by kind (dataflow / joint). `SchematicTokens` already models
-// exactly this shape for Modelica (wire-by-domain, badge-by-class); the right fix
-// is to read it here rather than to map these onto `DesignTokens` one by one.
-const CARD_FILL: egui::Color32 = egui::Color32::from_rgb(40, 46, 58);
-const CARD_FILL_BODY: egui::Color32 = egui::Color32::from_rgb(52, 46, 40);
-const CARD_FILL_SEL: egui::Color32 = egui::Color32::from_rgb(58, 82, 120);
-const STROKE: egui::Color32 = egui::Color32::from_rgb(90, 100, 120);
-const STROKE_SEL: egui::Color32 = egui::Color32::from_rgb(120, 170, 255);
-const LABEL: egui::Color32 = egui::Color32::from_rgb(226, 230, 236);
-const TYPE_LABEL: egui::Color32 = egui::Color32::from_rgb(150, 158, 170);
-const PORT_IN: egui::Color32 = egui::Color32::from_rgb(120, 200, 255);
-const PORT_OUT: egui::Color32 = egui::Color32::from_rgb(140, 230, 170);
-const WIRE_DATAFLOW: egui::Color32 = egui::Color32::from_rgb(120, 200, 255);
-const WIRE_JOINT: egui::Color32 = egui::Color32::from_rgb(230, 190, 120);
-
 /// Card visual for a `"usd.prim"` node.
 pub(crate) struct UsdPrimNodeVisual {
     pub type_name: String,
@@ -44,16 +23,22 @@ impl NodeVisual for UsdPrimNodeVisual {
             egui::pos2(sr.max.x, sr.max.y),
         );
         let painter = ctx.ui.painter().clone().with_clip_rect(ctx.ui.clip_rect());
+        let theme = lunco_theme::active(ctx.ui.ctx());
+        let t = &theme.tokens;
 
         let fill = if selected {
-            CARD_FILL_SEL
+            t.node_card_selected
         } else if self.is_body {
-            CARD_FILL_BODY
+            t.node_card_body
         } else {
-            CARD_FILL
+            t.node_card
         };
         painter.rect_filled(rect, 6.0, fill);
-        let stroke_col = if selected { STROKE_SEL } else { STROKE };
+        let stroke_col = if selected {
+            t.node_border_selected
+        } else {
+            t.node_border
+        };
         painter.rect_stroke(
             rect,
             6.0,
@@ -69,7 +54,7 @@ impl NodeVisual for UsdPrimNodeVisual {
                 egui::Align2::CENTER_CENTER,
                 &node.label,
                 egui::FontId::proportional((rect.height() * 0.22).clamp(9.0, 15.0)),
-                LABEL,
+                t.text,
             );
             if !self.type_name.is_empty() && rect.height() > 40.0 {
                 painter.text(
@@ -77,7 +62,7 @@ impl NodeVisual for UsdPrimNodeVisual {
                     egui::Align2::CENTER_CENTER,
                     &self.type_name,
                     egui::FontId::proportional((rect.height() * 0.16).clamp(8.0, 11.0)),
-                    TYPE_LABEL,
+                    t.text_subdued,
                 );
             }
         }
@@ -97,15 +82,15 @@ impl NodeVisual for UsdPrimNodeVisual {
             );
             let p = ctx.viewport.world_to_screen(world, ctx.screen_rect);
             let col = match port.kind.as_str() {
-                "input" => PORT_IN,
-                "output" => PORT_OUT,
-                _ => STROKE,
+                "input" => t.port_input,
+                "output" => t.port_output,
+                _ => t.node_border,
             };
             painter.circle_filled(egui::pos2(p.x, p.y), r, col);
             painter.circle_stroke(
                 egui::pos2(p.x, p.y),
                 r,
-                egui::Stroke::new(1.0, egui::Color32::from_rgb(20, 22, 28)),
+                egui::Stroke::new(1.0, t.port_outline),
             );
         }
     }
@@ -115,8 +100,7 @@ impl NodeVisual for UsdPrimNodeVisual {
     }
 }
 
-/// Straight wire visual for a `"usd.wire"` edge — cyan for dataflow, amber for
-/// joints.
+/// Straight wire visual for a `"usd.wire"` edge, coloured by wire kind.
 pub(crate) struct UsdWireVisual {
     pub kind: WireKind,
 }
@@ -130,11 +114,19 @@ impl EdgeVisual for UsdWireVisual {
         _waypoints_screen: &[Pos],
         selected: bool,
     ) {
+        let theme = lunco_theme::active(ctx.ui.ctx());
+        // Wire-by-domain is exactly what `SchematicTokens` models for Modelica;
+        // USD dataflow is a signal connection and a joint is a mechanical one,
+        // so they read in the same colours as their schematic counterparts.
         let base = match self.kind {
-            WireKind::Dataflow => WIRE_DATAFLOW,
-            WireKind::Joint => WIRE_JOINT,
+            WireKind::Dataflow => theme.schematic.wire_signal,
+            WireKind::Joint => theme.schematic.wire_mechanical,
         };
-        let col = if selected { STROKE_SEL } else { base };
+        let col = if selected {
+            theme.tokens.node_border_selected
+        } else {
+            base
+        };
         let width = if selected { 2.5 } else { 1.6 };
         let a = egui::pos2(from_screen.x, from_screen.y);
         let b = egui::pos2(to_screen.x, to_screen.y);

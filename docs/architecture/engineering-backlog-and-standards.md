@@ -244,10 +244,6 @@ remains is the Storage-API migration, which needs a dependency line from
 - **pyo3 0.23 (SUP-3)** — carries two unpatched RustSec advisories, and it is
   on the **live Python-cosim path**, not a dev-dependency. Upgrade when the
   cosim backend is next touched; until then this is accepted, known risk.
-- **lightyear duplication** — the version + feature lists are duplicated
-  across the two target-cfg blocks in `crates/lunco-networking/Cargo.toml`.
-  Hoist the version to workspace deps when the file is next touched; skew
-  between the two blocks would be a confusing wasm-vs-native failure.
 - **cargo-machete pass** — likely-unused dependencies were flagged but not
   verified (see also
   [`../../DEFERRED-2026-07-19.md`](../../DEFERRED-2026-07-19.md) §C on why

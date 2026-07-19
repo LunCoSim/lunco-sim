@@ -2,6 +2,7 @@
 name = "lunco-render"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 description = "Shared render-look configuration for LunCoSim: the single source of truth for lunar sun shadows, and the future home for exposure/AA/sky look settings."
 
 [dependencies]
