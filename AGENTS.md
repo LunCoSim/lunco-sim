@@ -43,6 +43,15 @@ Both campaign fixes followed this: a per-frame trigonometry camera in rhai becam
 `BasisCurves` prim (a curve you can drag beats code you cannot see until you record it);
 a hand-rolled shot state machine duplicated across two episodes became one behaviour tree.
 
+**Prefer a USD feature to scripting it in rhai.** Before writing a script that computes
+something about the scene, check whether USD already expresses it — curves, xform ops,
+composition arcs (`references`/`over`/`payload`/variants), relationships, time samples,
+`UsdSkel`, `UsdPhysics` joints. A prim is inspectable in usdview, editable without a
+rebuild, diffable, and composes with layers; the equivalent rhai is none of those, and it
+only runs when the scenario runs. The camera above is the canonical case: the *same* move
+as 30 authored control points is a thing you can see, drag, and hand to someone else.
+Script the parts USD genuinely cannot express — decisions, timing, vehicle commands.
+
 **3. No legacy, shims, or fallbacks.** Replace a mechanism and delete the old one in the
 *same* change. Two spellings of one fact means two writers, and which wins becomes a
 function of load order — that is exactly how a scene that rendered correctly went dark
