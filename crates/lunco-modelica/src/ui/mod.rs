@@ -1309,7 +1309,9 @@ fn bundled_asset_manifest() -> &'static Result<lunco_assets::download::AssetMani
     use lunco_assets::download::AssetManifest;
     static CACHE: std::sync::OnceLock<Result<AssetManifest, String>> = std::sync::OnceLock::new();
     CACHE.get_or_init(|| {
-        AssetManifest::from_str(crate::msl_remote::BUNDLED_ASSETS_TOML).map_err(|e| e.to_string())
+        crate::msl_remote::BUNDLED_ASSETS_TOML
+            .parse::<AssetManifest>()
+            .map_err(|e| e.to_string())
     })
 }
 

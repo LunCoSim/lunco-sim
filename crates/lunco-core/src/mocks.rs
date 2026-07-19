@@ -3,7 +3,6 @@ use bevy::prelude::*;
 /// To satisfy the Testability Mandate (FR-010) we use Mocks
 /// These structs are used during unit testing and integration testing 
 /// without needing the full f64 physics environment or rendering.
-
 pub struct MockObcPlugin;
 impl Plugin for MockObcPlugin {
     fn build(&self, _app: &mut App) {

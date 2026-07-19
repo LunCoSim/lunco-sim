@@ -11,6 +11,13 @@ use super::projection::{UsdPrimNodeData, UsdWireData, WireKind};
 
 // Palette (fixed, theme-independent for v1 — matches the canvas placeholder
 // visuals' self-contained style).
+//
+// TODO(theme): migrate to lunco-theme once the token set covers this.
+// Node-graph domain visuals: card fills by node kind (generic / body / selected),
+// card + selection strokes, title vs type-name label, input vs output port dots,
+// and wire colour by kind (dataflow / joint). `SchematicTokens` already models
+// exactly this shape for Modelica (wire-by-domain, badge-by-class); the right fix
+// is to read it here rather than to map these onto `DesignTokens` one by one.
 const CARD_FILL: egui::Color32 = egui::Color32::from_rgb(40, 46, 58);
 const CARD_FILL_BODY: egui::Color32 = egui::Color32::from_rgb(52, 46, 40);
 const CARD_FILL_SEL: egui::Color32 = egui::Color32::from_rgb(58, 82, 120);

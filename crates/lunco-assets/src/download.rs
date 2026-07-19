@@ -73,15 +73,25 @@ pub struct AssetManifest {
     pub assets: BTreeMap<String, AssetEntry>,
 }
 
-impl AssetManifest {
-    /// Parse an `Assets.toml` blob from a string. Used by callers that
-    /// have the manifest text embedded via `include_str!` (packaged
-    /// binaries can't read the workspace source tree at runtime).
-    pub fn from_str(s: &str) -> Result<Self, std::io::Error> {
+/// Parse an `Assets.toml` blob from a string. Used by callers that have the
+/// manifest text embedded via `include_str!` (packaged binaries can't read the
+/// workspace source tree at runtime).
+///
+/// This is the `FromStr` TRAIT rather than an inherent `from_str`: the
+/// signature was already exactly the trait's, so an inherent method of that
+/// name shadowed `std::str::FromStr::from_str` at every call site and a reader
+/// could not tell which one they were getting. Implementing the trait removes
+/// the ambiguity and makes `text.parse::<AssetManifest>()` work for free.
+impl std::str::FromStr for AssetManifest {
+    type Err = std::io::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         toml::from_str(s)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
     }
+}
 
+impl AssetManifest {
     /// Reads and parses `Assets.toml` from the given crate directory.
     pub fn from_crate_dir(crate_dir: &Path) -> Result<Self, std::io::Error> {
         let path = crate_dir.join("Assets.toml");

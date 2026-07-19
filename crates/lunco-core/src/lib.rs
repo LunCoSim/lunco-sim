@@ -341,16 +341,10 @@ pub struct CelestialBody {
 ///
 /// Used by sandbox editing systems to signal other systems (like avatar possession)
 /// to disable conflicting interactions during drag operations.
-#[derive(Resource)]
+#[derive(Resource, Default)]
 pub struct DragModeActive {
     /// Whether dragging is currently active.
     pub active: bool,
-}
-
-impl Default for DragModeActive {
-    fn default() -> Self {
-        Self { active: false }
-    }
 }
 
 /// Marker resource indicating a click-to-place spawn tool is armed.
@@ -761,11 +755,7 @@ pub fn sync_applied_seq_owners(
     // Any gid whose owner changed loses BOTH its ack watermark and whatever the
     // previous owner had queued but unintegrated — replaying A's inputs into B's
     // vessel would be a control leak, not just a stale ack.
-    for gid in applied
-        .changed_owner_gids(&registry)
-        .into_iter()
-        .collect::<Vec<_>>()
-    {
+    for gid in applied.changed_owner_gids(&registry) {
         buffered.clear_gid(gid);
     }
     applied.sync_owners(&registry);
@@ -781,7 +771,7 @@ pub fn sync_applied_seq_owners(
 /// `Time<Virtual>` is read optionally: a bare world without Bevy's
 /// `TimePlugin` (e.g. a headless unit test) is treated as running.
 fn advance_sim_tick(mut tick: ResMut<SimTick>, vtime: Option<Res<Time<Virtual>>>) {
-    let running = vtime.map_or(true, |t| !t.is_paused() && t.relative_speed_f64() > 0.0);
+    let running = vtime.is_none_or(|t| !t.is_paused() && t.relative_speed_f64() > 0.0);
     if running {
         tick.0 = tick.0.wrapping_add(1);
     }

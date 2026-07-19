@@ -130,6 +130,10 @@ impl Panel for RhaiEditorPanel {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        let theme = ctx
+            .resource::<lunco_theme::Theme>()
+            .cloned()
+            .unwrap_or_else(lunco_theme::Theme::dark);
         ctx.resource_scope::<RhaiEditorVm, ()>(|ctx, vm| {
             if vm.entity.is_none() {
                 empty_hint(ui, "Select a prim to edit its Rhai behaviour.");
@@ -159,10 +163,10 @@ impl Panel for RhaiEditorPanel {
                         do_revert = true;
                     }
                 });
-                let (txt, col) = status_label(&vm.state, &vm.diagnostics);
+                let (txt, col) = status_label(&vm.state, &vm.diagnostics, &theme);
                 ui.label(egui::RichText::new(txt).color(col));
                 if vm.dirty {
-                    ui.label(egui::RichText::new("● unsaved").color(egui::Color32::from_rgb(230, 190, 120)));
+                    ui.label(egui::RichText::new("● unsaved").color(theme.tokens.warning));
                 }
             });
             ui.separator();
@@ -198,7 +202,7 @@ impl Panel for RhaiEditorPanel {
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
                         for d in &vm.diagnostics {
-                            let col = severity_color(d.severity);
+                            let col = severity_color(d.severity, &theme);
                             let loc = match (d.line, d.col) {
                                 (Some(l), Some(c)) => format!("{l}:{c}"),
                                 (Some(l), None) => format!("{l}"),
@@ -270,30 +274,34 @@ fn diagnostics_height(diags: &[Diagnostic]) -> f32 {
     }
 }
 
-fn status_label(state: &CompileState, diags: &[Diagnostic]) -> (String, egui::Color32) {
+fn status_label(
+    state: &CompileState,
+    diags: &[Diagnostic],
+    theme: &lunco_theme::Theme,
+) -> (String, egui::Color32) {
     let errors = diags.iter().filter(|d| d.severity == DiagnosticSeverity::Error).count();
     let warnings = diags.iter().filter(|d| d.severity == DiagnosticSeverity::Warning).count();
     match state {
-        CompileState::Ready => ("✓ compiled".to_string(), egui::Color32::from_rgb(140, 210, 150)),
+        CompileState::Ready => ("✓ compiled".to_string(), theme.tokens.success),
         CompileState::Error if errors > 0 => (
             format!("✗ {errors} error{}", if errors == 1 { "" } else { "s" }),
-            egui::Color32::from_rgb(230, 120, 120),
+            theme.tokens.error,
         ),
-        CompileState::Error => ("✗ error".to_string(), egui::Color32::from_rgb(230, 120, 120)),
+        CompileState::Error => ("✗ error".to_string(), theme.tokens.error),
         _ if warnings > 0 => (
             format!("⚠ {warnings} warning{}", if warnings == 1 { "" } else { "s" }),
-            egui::Color32::from_rgb(230, 190, 120),
+            theme.tokens.warning,
         ),
-        _ => ("—".to_string(), egui::Color32::from_rgb(150, 158, 170)),
+        _ => ("—".to_string(), theme.tokens.text_subdued),
     }
 }
 
-fn severity_color(s: DiagnosticSeverity) -> egui::Color32 {
+fn severity_color(s: DiagnosticSeverity, theme: &lunco_theme::Theme) -> egui::Color32 {
     match s {
-        DiagnosticSeverity::Error => egui::Color32::from_rgb(230, 120, 120),
-        DiagnosticSeverity::Warning => egui::Color32::from_rgb(230, 190, 120),
-        DiagnosticSeverity::Info => egui::Color32::from_rgb(140, 190, 230),
-        DiagnosticSeverity::Hint => egui::Color32::from_rgb(150, 158, 170),
+        DiagnosticSeverity::Error => theme.tokens.error,
+        DiagnosticSeverity::Warning => theme.tokens.warning,
+        DiagnosticSeverity::Info => theme.colors.blue,
+        DiagnosticSeverity::Hint => theme.tokens.text_subdued,
     }
 }
 

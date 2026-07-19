@@ -845,7 +845,11 @@ pub fn draw_waypoint_overlay(
     q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
     q_link: Query<&ControllerLink>,
     mut egui_ctx: bevy_egui::EguiContexts,
+    theme: Option<Res<lunco_theme::Theme>>,
 ) {
+    let theme = theme
+        .map(|t| t.clone())
+        .unwrap_or_else(lunco_theme::Theme::dark);
     // Prefer the avatar camera (the one the player looks through); fall back
     // to the first active Camera3d if no avatar is spawned yet.
     let cam_result = q_avatar_cam
@@ -882,12 +886,16 @@ pub fn draw_waypoint_overlay(
             continue;
         }
 
+        // TODO(theme): migrate to lunco-theme once the token set covers this.
+        // Route-line colour, selected vs unselected vessel. Currently dead (the
+        // path is 3D geometry now — see the NOTE below), so the selected/dimmed
+        // pair wants deciding alongside whatever replaces it.
         let line_color = if is_selected {
             egui::Color32::from_rgb(51, 242, 128) // bright green
         } else {
             egui::Color32::from_rgb(102, 128, 102) // dim green
         };
-        let label_color = egui::Color32::WHITE;
+        let label_color = theme.tokens.text;
 
         let wp_positions = get_waypoint_positions(&xml.0, bindings, &q_parents, &q_grids, &q_spatial);
 
@@ -942,6 +950,10 @@ pub fn draw_waypoint_overlay(
             let top_left = wp.screen - egui::vec2(size.x * 0.5, size.y + 8.0);
 
             let bg = egui::Rect::from_min_size(top_left, size).expand2(egui::vec2(4.0, 2.0));
+            // TODO(theme): migrate to lunco-theme once the token set covers this.
+            // Distance-faded chip behind a waypoint number over the 3D scene.
+            // `overlay_backdrop` is the nearest token but carries its own fixed
+            // alpha, which this needs to modulate per-waypoint.
             painter.rect_filled(bg, 3.0, egui::Color32::from_black_alpha((180.0 * fade) as u8));
             painter.galley(top_left, galley, tc);
         }

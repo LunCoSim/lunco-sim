@@ -1168,6 +1168,10 @@ fn draw_slope_legend(ui: &mut egui::Ui, safe_deg: f32, cliff_deg: f32) {
         let x = rect.left() + rect.width() * (deg / MAX_DEG).clamp(0.0, 1.0);
         painter.line_segment(
             [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+            // TODO(theme): migrate to lunco-theme once the token set covers this.
+            // Tick mark drawn ON TOP of the data-derived hazard gradient, so it
+            // must contrast with an arbitrary sampled colour rather than with a
+            // theme surface — `tokens.text` is not automatically safe here.
             egui::Stroke::new(1.0, egui::Color32::WHITE),
         );
     }

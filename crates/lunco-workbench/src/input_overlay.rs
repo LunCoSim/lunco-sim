@@ -23,19 +23,12 @@ use lunco_core::{Command, on_command, register_commands};
 
 /// Persisted settings for the input overlay HUD.
 #[derive(Resource, Clone, Copy, PartialEq, Debug)]
+#[derive(Default)]
 pub struct InputOverlaySettings {
     /// Whether the overlay is rendered.
     pub enabled: bool,
 }
 
-impl Default for InputOverlaySettings {
-    fn default() -> Self {
-        // OFF. A key-press readout is only meaningful while someone is demonstrating
-        // controls; the rest of the time it is burnt-in chrome, and the offline
-        // recorder captures the whole window, so every frame of every shot carries it.
-        Self { enabled: false }
-    }
-}
 
 // DELIBERATELY NOT a `SettingsSection` — this is not a user preference.
 //
@@ -76,12 +69,16 @@ pub fn draw_input_overlay(
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    theme: Option<Res<lunco_theme::Theme>>,
 ) {
     if !settings.enabled {
         return;
     }
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
     let Ok(window) = windows.single() else { return };
+    let theme = theme
+        .map(|t| t.clone())
+        .unwrap_or_else(lunco_theme::Theme::dark);
 
     let panel_w = 340.0;
     let panel_h = 45.0;
@@ -93,8 +90,8 @@ pub fn draw_input_overlay(
         .fixed_pos(egui::pos2(x, y))
         .show(ctx, |ui| {
             egui::Frame::new()
-                .fill(egui::Color32::from_rgba_unmultiplied(15, 23, 42, 220)) // Slate 900
-                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(99, 102, 241))) // Indigo 500
+                .fill(theme.tokens.overlay_backdrop)
+                .stroke(egui::Stroke::new(1.0, theme.tokens.overlay_border))
                 .inner_margin(egui::Margin::symmetric(12, 8))
                 .corner_radius(6.0)
                 .show(ui, |ui| {
@@ -102,9 +99,9 @@ pub fn draw_input_overlay(
                         // Keyboard Key visualizer
                         let draw_key = |ui: &mut egui::Ui, text: &str, is_pressed: bool| {
                             let color = if is_pressed {
-                                egui::Color32::from_rgb(129, 140, 248) // Active Indigo
+                                theme.tokens.accent
                             } else {
-                                egui::Color32::from_rgb(71, 85, 105) // Inactive Gray
+                                theme.tokens.inactive
                             };
                             ui.colored_label(color, egui::RichText::new(text).strong().size(13.0));
                         };

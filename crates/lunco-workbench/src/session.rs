@@ -15,7 +15,7 @@ use lunco_workspace::WorkspaceResource;
 /// Plugin: load the recents list at startup and persist it on change.
 /// Added by [`WorkbenchPlugin`](crate::WorkbenchPlugin) alongside
 /// `lunco_workspace::WorkspacePlugin` (which installs the resource itself).
-pub struct RecentsPlugin;
+pub(crate) struct RecentsPlugin;
 
 impl Plugin for RecentsPlugin {
     fn build(&self, app: &mut App) {

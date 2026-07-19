@@ -418,7 +418,7 @@ impl ScenePickGate {
 /// slider over the viewport hands the pointer to the scene camera mid-drag, and
 /// orbiting the scene into the inspector freezes the camera mid-orbit.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct PressLatch {
+pub(crate) struct PressLatch {
     /// A button has been held since the press that decided `owner`.
     pub held: bool,
     /// The owner decided at that press (or, when idle, the live geometric answer).
@@ -433,7 +433,7 @@ impl PressLatch {
     ///   and latch it.
     /// - Button still down (`held`) → hold the latched owner, ignore geometry.
     #[must_use]
-    pub fn update(self, any_down: bool, candidate: Option<SceneTarget>) -> Self {
+    pub(crate) fn update(self, any_down: bool, candidate: Option<SceneTarget>) -> Self {
         match (any_down, self.held) {
             (false, _) => Self { held: false, owner: candidate },
             (true, false) => Self { held: true, owner: candidate },
@@ -464,7 +464,7 @@ impl PressLatch {
 ///    the whole window — menu bar and status bar are drawn into the same root Ui —
 ///    so `in_dock` was true everywhere and the chrome blanket swallowed every bare
 ///    3D click.)
-pub fn resolve_scene_target(
+pub(crate) fn resolve_scene_target(
     egui_state: EguiPointerState,
     scene_leaf: Option<SceneTarget>,
     chrome_cards: &[(egui::Rect, egui::Rect)],
@@ -652,7 +652,7 @@ impl Panel for ViewportPanel {
 ///
 /// It is still change-driven: on a frame where none of these fired it does two empty
 /// archetype checks and returns.
-pub fn sync_egui_host_msaa(
+pub(crate) fn sync_egui_host_msaa(
     // `Without<WorkbenchEguiHost>` on the scene-camera queries, and
     // `Without<WorkbenchViewportCamera>` on the host's `&mut Msaa`, keep the read and
     // write sets disjoint — Bevy rejects the system otherwise (B0001), because a
@@ -726,7 +726,7 @@ pub fn sync_egui_host_msaa(
 /// nothing else (e.g. bevy_egui's startup auto-promoter) can pick a
 /// different camera as primary. Idempotent: re-running won't spawn
 /// duplicates.
-pub fn ensure_egui_host(
+pub(crate) fn ensure_egui_host(
     mut commands: Commands,
     mut egui_global: ResMut<EguiGlobalSettings>,
     existing: Query<(), With<PrimaryEguiContext>>,
@@ -783,7 +783,7 @@ pub fn ensure_egui_host(
 /// viewport-camera reconciler in `lunco-usd-bevy` actuates it onto the actual
 /// cameras; this system deliberately does NOT touch `Camera::is_active` so the
 /// workbench and the camera switch stop fighting over it.
-pub fn apply_workbench_viewport(
+pub(crate) fn apply_workbench_viewport(
     layout: Option<Res<crate::WorkbenchLayout>>,
     vp: Option<ResMut<lunco_core::SceneViewport>>,
 ) {
@@ -844,10 +844,10 @@ pub(crate) fn layout_is_empty(layout: &crate::WorkbenchLayout) -> bool {
 }
 
 pub(crate) fn layout_contains_panel(layout: &crate::WorkbenchLayout, panel: PanelId) -> bool {
-    if layout.side_browser.iter().any(|p| *p == panel)
-        || layout.center.iter().any(|p| *p == panel)
-        || layout.right_inspector.iter().any(|p| *p == panel)
-        || layout.bottom.iter().any(|p| *p == panel)
+    if layout.side_browser.contains(&panel)
+        || layout.center.contains(&panel)
+        || layout.right_inspector.contains(&panel)
+        || layout.bottom.contains(&panel)
     {
         return true;
     }
@@ -870,7 +870,7 @@ pub(crate) fn layout_contains_panel(layout: &crate::WorkbenchLayout, panel: Pane
 /// USD/avatar-spawned cameras (which can land many frames after
 /// startup) are still validated, and so deleting + respawning the host
 /// during teardown doesn't yield false negatives.
-pub fn check_camera_invariants(
+pub(crate) fn check_camera_invariants(
     new_cams: Query<
         (Entity, Option<&RenderTarget>),
         (Added<Camera3d>, Without<WorkbenchViewportCamera>),
@@ -934,7 +934,7 @@ pub fn auto_tag_workbench_3d_cameras(
 /// themselves (legacy paths) — they'll have done so by the time this
 /// fires. After that, anything other than 1 is a bug worth panicking
 /// over in debug builds.
-pub fn check_host_invariant_once(
+pub(crate) fn check_host_invariant_once(
     hosts: Query<(), With<PrimaryEguiContext>>,
     time: Res<Time>,
     mut done: Local<bool>,
@@ -962,7 +962,7 @@ pub fn check_host_invariant_once(
 /// We replace it with [`egui_viewport_aware_picking`], which captures only over
 /// real chrome and never over the live viewport rect. Idempotent; the change
 /// guard keeps it from dirtying the component every frame.
-pub fn disable_egui_pointer_capture(
+pub(crate) fn disable_egui_pointer_capture(
     mut q: Query<&mut bevy_egui::EguiContextSettings, With<PrimaryEguiContext>>,
 ) {
     for mut s in q.iter_mut() {
@@ -978,7 +978,7 @@ pub fn disable_egui_pointer_capture(
 /// `render_workbench`). That is what makes the gate's input lifetime honest:
 /// `rendered == false` then tells [`resolve_scene_pointer`] to hold its previous
 /// answer rather than resolve against empty inputs.
-pub fn reset_scene_pick_gate(mut gate: ResMut<ScenePickGate>) {
+pub(crate) fn reset_scene_pick_gate(mut gate: ResMut<ScenePickGate>) {
     gate.begin_frame();
 }
 
@@ -990,7 +990,7 @@ pub fn reset_scene_pick_gate(mut gate: ResMut<ScenePickGate>) {
 /// The decision itself is [`resolve_scene_target`] (pure, unit-tested); the
 /// press-latch is [`PressLatch`] (pure, unit-tested). This system's only job is to
 /// read egui's `Context` and hand those two the inputs.
-pub fn resolve_scene_pointer(
+pub(crate) fn resolve_scene_pointer(
     mut gate: ResMut<ScenePickGate>,
     mut q: Query<&mut bevy_egui::EguiContext, With<PrimaryEguiContext>>,
 ) {
@@ -1024,7 +1024,7 @@ pub fn resolve_scene_pointer(
 /// world position so consumers can tell chrome from a real mesh pick). Unlike the
 /// stock capture it does NOT gate on `egui_wants_pointer_input()` (button-masked —
 /// see [`resolve_scene_pointer`]); the resolved signal is unconditional.
-pub fn egui_viewport_aware_picking(
+pub(crate) fn egui_viewport_aware_picking(
     pointers: Query<(
         &bevy::picking::pointer::PointerId,
         &bevy::picking::pointer::PointerLocation,
@@ -1086,7 +1086,7 @@ pub fn egui_viewport_aware_picking(
 /// Runs in `PostUpdate` after `EguiPostUpdateSet::ProcessOutput` (same slot as
 /// the picking backend) so the flags are this-frame-fresh; consumers in `Update`
 /// read them one frame later, which is imperceptible for held input.
-pub fn track_egui_focus(
+pub(crate) fn track_egui_focus(
     mut focus: ResMut<lunco_core::EguiFocus>,
     mut q: Query<&mut bevy_egui::EguiContext, With<PrimaryEguiContext>>,
     gate: Res<ScenePickGate>,

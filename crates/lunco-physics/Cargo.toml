@@ -66,3 +66,13 @@ avian-validate = ["avian3d/validate"]
 # apps, so it must stay as light as avian + the bevy ECS/time core.
 bevy = { workspace = true }
 avian3d = { workspace = true }
+
+# This was the ONE crate of 65 without this section, so the workspace
+# `disallowed_methods` ban list — std::fs, std::thread::spawn, Instant::now,
+# TextReader::clone, GridAnchor re-parenting — was not enforced here at all.
+# Per the note above, this crate is depended on by generators that "run headless
+# and on wasm", making it exactly where the wasm-portability bans matter most:
+# a `std::fs` or blocking `Instant::now` added here compiles and passes
+# `cargo test` on native, then breaks only in the browser.
+[lints]
+workspace = true

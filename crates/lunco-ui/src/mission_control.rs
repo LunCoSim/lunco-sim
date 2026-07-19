@@ -233,9 +233,16 @@ impl Panel for MissionControl {
                         // Ownership chip (only meaningful with the wire live).
                         if networked {
                             if *mine {
-                                ui.colored_label(egui::Color32::from_rgb(0x4c, 0xff, 0x88), "●")
+                                let mine_dot = theme
+                                    .as_ref()
+                                    .map(|t| t.tokens.success)
+                                    .unwrap_or(egui::Color32::from_rgb(0x4c, 0xff, 0x88));
+                                ui.colored_label(mine_dot, "●")
                                     .on_hover_text("You control this rover");
                             } else if *taken_by_other {
+                                // TODO(theme): migrate to lunco-theme once the token set covers this.
+                                // "Owned by another session" — unavailable, not broken. Neither
+                                // `error` (nothing failed) nor `warning` (yellow, wrong hue) fits.
                                 ui.colored_label(egui::Color32::from_rgb(0xff, 0x6b, 0x4c), "🔒")
                                     .on_hover_text(format!(
                                         "Controlled by session {}",

@@ -461,8 +461,12 @@ impl Panel for TwinBrowserPanel {
         });
 
         if present.is_none() {
+            let error_color = ctx
+                .resource::<lunco_theme::Theme>()
+                .map(|t| t.tokens.error)
+                .unwrap_or(egui::Color32::LIGHT_RED);
             ui.colored_label(
-                egui::Color32::LIGHT_RED,
+                error_color,
                 "BrowserSectionRegistry resource missing",
             );
         }

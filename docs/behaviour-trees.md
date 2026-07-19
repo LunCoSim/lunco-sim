@@ -20,6 +20,11 @@ JSON/rhai `BehaviorSpec` an autopilot compiles and can hot-swap at runtime).
 - **Related:** [scripting-guide.md](./scripting-guide.md) (the task-tree verbs +
   the Layer-1 linear sequencer), spec
   [034-control-authority-arbiter](../specs/034-control-authority-arbiter).
+- **Also built on this kernel:** [offline-recording.md](./offline-recording.md) — the
+  shot sequencer (`assets/scripting/lib/shots.rhai`) is an episode expressed as a `seq`
+  of shots, each a task node that opens capture, holds for *N* recorded frames, and closes
+  it. It is the worked example of a rhai library composed on the task tree rather than on
+  the autopilot's `BehaviorSpec` catalogue below.
 
 ---
 

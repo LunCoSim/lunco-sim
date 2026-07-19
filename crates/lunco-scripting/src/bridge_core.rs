@@ -1052,6 +1052,34 @@ pub fn elapsed_seconds() -> f64 {
     .unwrap_or(0.0)
 }
 
+/// `twin_root()` — absolute path of the ACTIVE twin's folder, or `""` if none.
+///
+/// The twin is how a scene reaches files that ship beside it rather than inside the
+/// engine: `load_startup_scene` resolves the scene's root with `lunco_twin::root_for_file`
+/// and registers it via `Workspace::add_twin`, which sets `active_twin` when nothing else
+/// has claimed it. So for a scene loaded by path, this is the directory containing that
+/// scene.
+///
+/// It exists so a scenario can name a sibling file WITHOUT hardcoding an absolute path.
+/// The campaign recording scripts previously spelled their output directory in full,
+/// which meant a checkout on any other machine silently wrote to a path that did not
+/// exist. `twin_root() + "/shots"` is the same string, derived.
+///
+/// Returns `""` rather than an error when no twin is active (a bare test world, or a
+/// scene loaded from the engine's own `assets/`): a script concatenating onto it then
+/// produces a relative path, which fails visibly at the write rather than silently
+/// targeting `/`.
+#[cfg(feature = "rhai")]
+pub fn twin_root() -> String {
+    with_world(|w| {
+        let ws = w.get_resource::<lunco_workspace::WorkspaceResource>()?;
+        let id = ws.0.active_twin?;
+        Some(ws.0.twin(id)?.root.to_string_lossy().into_owned())
+    })
+    .flatten()
+    .unwrap_or_default()
+}
+
 // ── Deterministic RNG ───────────────────────────────────────────────────────
 //
 // Scripts WILL want randomness (scatter, jitter, exploration, retry backoff). A

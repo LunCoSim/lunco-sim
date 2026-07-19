@@ -177,7 +177,7 @@ impl<Ctx: ?Sized> Node<Ctx> for Parallel<Ctx> {
                 self.latched[i] = self.children[i].tick(ctx);
             }
         }
-        let any = |s: Status| self.latched.iter().any(|l| *l == s);
+        let any = |s: Status| self.latched.contains(&s);
         let all = |s: Status| self.latched.iter().all(|l| *l == s);
         let outcome = match self.policy {
             ParallelPolicy::RequireAll => {

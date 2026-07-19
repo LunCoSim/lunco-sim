@@ -463,6 +463,9 @@ pub fn draw_rover_name_tags(
         let size = galley.size();
         let top_left = pos - egui::vec2(size.x * 0.5, size.y);
         let bg = egui::Rect::from_min_size(top_left, size).expand2(egui::vec2(4.0, 2.0));
+        // TODO(theme): migrate to lunco-theme once the token set covers this.
+        // Distance/idle-faded backing behind a player name tag over the 3D scene.
+        // Blocked on the dep, as with the toasts below.
         painter.rect_filled(bg, 3.0, egui::Color32::from_black_alpha((150.0 * fade) as u8));
         painter.galley(top_left, galley, text_color);
     }
@@ -495,6 +498,12 @@ pub fn draw_notifications(
         // Fully opaque until the final second, then linearly fade out.
         let fade = t.remaining.clamp(0.0, 1.0);
         let a = |base: f32| (base * fade) as u8;
+        // TODO(theme): migrate to lunco-theme once the token set covers this.
+        // Toast bg/fg per severity (success / warn / error / info) drawn over the
+        // 3D viewport, each modulating alpha by `fade`. `tokens.success|warning|
+        // error` cover the foregrounds; the dark tinted backgrounds have no token.
+        // BLOCKED: `lunco-avatar` is reachable from `lunco-sandbox-server`, so it
+        // must not gain an unconditional `lunco-theme` edge (bevy_egui -> wgpu).
         let (bg, fg) = match t.kind.as_str() {
             "success" => (
                 egui::Color32::from_rgba_unmultiplied(28, 92, 44, a(225.0)),

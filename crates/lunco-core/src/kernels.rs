@@ -144,6 +144,7 @@ pub type ControlKernel = fn(DriveInputs, &DriveMix) -> Vec<(String, f64)>;
 ///      schema, instead of hand-authored coefficients.
 ///   5. **Command-layer arbitration** — auto vs. manual writing one command port
 ///      (priority/blend); the takeover problem.
+///
 /// Once all kinds read/write via the `PortRegistry`, "behaviour" collapses to one
 /// port→port transform concept and this becomes the general mechanism.
 #[derive(Resource, Default, Clone)]

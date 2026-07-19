@@ -101,7 +101,7 @@ fn set_error_handler(device: Res<RenderDevice>) {
                          must be a whole shader with an `@fragment` entry, not a library). \
                          Identical errors are now rate-limited."
                     );
-                } else if n % 600 == 0 {
+                } else if n.is_multiple_of(600) {
                     warn!(
                         "wgpu validation error persists ({} frames dropped): {description}",
                         n + 1

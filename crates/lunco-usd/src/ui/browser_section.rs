@@ -65,10 +65,7 @@ impl BrowserSection for UsdSceneSection {
         let rows: Vec<UsdStageRow> = match ctx.resource::<UsdBrowserView>() {
             Some(view) => view.stages.clone(),
             None => {
-                ui.colored_label(
-                    egui::Color32::LIGHT_RED,
-                    "UsdBrowserView resource missing",
-                );
+                ui.colored_label(error_color, "UsdBrowserView resource missing");
                 return;
             }
         };

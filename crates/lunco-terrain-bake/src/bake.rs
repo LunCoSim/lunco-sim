@@ -28,7 +28,13 @@ use lunco_terrain_core::source::HeightSource;
 pub fn crop_centered(grid: &HeightGrid, half_window: f64) -> HeightGrid {
     let n = grid.res;
     let s = grid.spacing() as f64;
-    if !(half_window > 0.0) || half_window >= grid.half_extent as f64 || s <= 0.0 {
+    // `!half_window.is_finite() || half_window <= 0.0`, NOT `half_window <= 0.0`
+    // alone: NaN compares false against everything, so the bare `<=` would let a
+    // NaN window through to the `floor() as usize` below. This was previously
+    // written `!(half_window > 0.0)`, which catches NaN by the same negation
+    // trick but relies on the reader spotting it — and clippy's suggested
+    // "simplification" of that form drops the NaN case outright.
+    if !half_window.is_finite() || half_window <= 0.0 || half_window >= grid.half_extent as f64 || s <= 0.0 {
         return grid.clone();
     }
     let k = (half_window / s).floor() as usize; // native cells each side of centre

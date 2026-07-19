@@ -1,6 +1,62 @@
 //! # lunco-theme
 //!
 //! Core design tokens and theming system for LunCoSim.
+//!
+//! # TODO: split into a render-free core + an egui binding
+//!
+//! **This crate links the GPU stack.** Measured with
+//! `cargo tree -p lunco-theme -i bevy_render -e normal`:
+//!
+//! ```text
+//! bevy_render <- bevy_core_pipeline <- bevy_egui <- lunco-theme
+//! ```
+//!
+//! So `lunco-theme` transitively pulls `bevy_render` → wgpu/naga, and any crate
+//! depending on it **unconditionally** relinks that whole stack — including into
+//! the `--no-ui` server and the wasm worker. That is the exact failure
+//! `docs/architecture/render-decoupling.md` exists to prevent, and it has
+//! already happened twice in this repo by this mechanism.
+//!
+//! ## The consequence today
+//!
+//! `lunco-networking` and `lunco-avatar` are both reachable from
+//! `lunco-sandbox-server` (verified with
+//! `cargo tree -p lunco-sandbox-server -i <crate> -e normal`). Neither may take
+//! a plain dependency on this crate. If they need tokens, the dep must be
+//! **optional and behind their existing `ui` feature** — which is already how
+//! `lunco-networking` gates egui
+//! (`ui = ["networking", "dep:bevy_egui", "workbench"]`, CQ-601).
+//! `lunco-tutorial` has no `[features]` section at all, so it currently has
+//! nowhere safe to hang such a dep.
+//!
+//! ## The split, when it is worth doing
+//!
+//! Follow the established pair pattern — `lunco-doc`/`lunco-doc-bevy`,
+//! `lunco-usd`/`lunco-usd-bevy`, `lunco-render`/`lunco-render-bevy`:
+//!
+//! * **`lunco-theme` (core, render-free)** — [`ColorPalette`], [`DesignTokens`],
+//!   [`SchematicTokens`], [`PlotTokens`], [`JournalTokens`], [`ThemeMode`] and
+//!   the override map, with colours expressed as `bevy_color::Srgba`
+//!   (render-free and already in the graph — do not invent a colour type).
+//! * **`lunco-theme-egui` (binding)** — `From<Srgba> for egui::Color32`,
+//!   [`ColorAlpha`], [`store_active`] / [`active`], and the egui-styling half of
+//!   [`ThemePlugin`].
+//!
+//! Do it as a **crate split, not `#[cfg(feature = "egui")]`**: the
+//! render-decoupling work deliberately reached its result "without a single
+//! `#[cfg(feature = \"render\")]` inside domain code", on the grounds that the
+//! gate should be *which crate you depend on*, not conditional compilation
+//! sprinkled through the source.
+//!
+//! ## Why it is NOT done yet
+//!
+//! No render-free consumer needs colour values today — every `Color32` site
+//! surveyed across the workspace sits in an egui panel or overlay. The cost is
+//! real: this crate's entire API surface is `egui::Color32`, so a split means a
+//! neutral colour type plus conversions at every boundary and every consumer.
+//! **The trigger for this work is the first render-free consumer that needs a
+//! colour.** Until then it is speculative; after that the pattern above makes it
+//! a known path rather than a redesign.
 
 use bevy::prelude::*;
 use bevy_egui::egui;
@@ -173,6 +229,32 @@ pub struct DesignTokens {
     /// Border for raised tiles. Visible against both the panel and
     /// the raised surface in both modes.
     pub surface_raised_border: egui::Color32,
+    /// Full-viewport dimming wash behind a modal or help overlay.
+    ///
+    /// Semi-transparent BLACK in both modes, deliberately not a palette
+    /// colour: a scrim darkens what is behind it, and a light-mode scrim built
+    /// from a light surface would *brighten* the backdrop and destroy the depth
+    /// cue it exists to create. Only the alpha varies by mode — a light UI needs
+    /// less wash to read as the same separation.
+    pub scrim: egui::Color32,
+    /// Background for a floating HUD panel drawn OVER the 3D viewport
+    /// (input overlay, tutorial card, telemetry readout).
+    ///
+    /// Distinct from [`Self::surface_raised`], which is opaque and sits on a
+    /// panel: this is translucent so the scene stays partly legible through it,
+    /// and it must therefore stay dark enough to carry [`Self::text`] over
+    /// arbitrary scene content — including a blown-out lunar surface.
+    pub overlay_backdrop: egui::Color32,
+    /// Border/keyline for a floating HUD panel. Pairs with
+    /// [`Self::overlay_backdrop`].
+    pub overlay_border: egui::Color32,
+    /// Foreground for a control that exists but is not currently active — an
+    /// unpressed key in the input overlay, a disabled button's label.
+    ///
+    /// Not [`Self::text_subdued`], which is for secondary *content*. This is a
+    /// live control in its off state: the affordance must stay visible while
+    /// losing decisively to the active one.
+    pub inactive: egui::Color32,
 }
 
 impl DesignTokens {
@@ -199,6 +281,23 @@ impl DesignTokens {
             surface_raised: raised,
             surface_sunken: sunken,
             surface_raised_border: raised_border,
+            // Black wash in BOTH modes — see the field docs on why a light-mode
+            // scrim must not be built from a light surface. Latte needs less of
+            // it because the contrast step from a light backdrop is larger.
+            scrim: match mode {
+                ThemeMode::Dark => egui::Color32::from_black_alpha(160),
+                ThemeMode::Light => egui::Color32::from_black_alpha(96),
+            },
+            // `mantle`/`crust` are the darkest palette steps, so they carry
+            // `text` over a bright viewport. Alpha is high enough to stay
+            // legible against a sunlit regolith frame and low enough to keep
+            // the scene readable behind a HUD.
+            overlay_backdrop: match mode {
+                ThemeMode::Dark => p.mantle.alpha(235),
+                ThemeMode::Light => p.crust.alpha(235),
+            },
+            overlay_border: p.overlay0,
+            inactive: p.overlay1,
         }
     }
 }

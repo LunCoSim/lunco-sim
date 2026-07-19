@@ -641,7 +641,7 @@ fn on_control_animation(
     let cmd = trigger.event();
     // An explicit target drives that per-object domain; otherwise the shared
     // preview. Same verb either way.
-    let Some(domain) = cmd.target.or(preview.map(|p| p.domain)) else { return };
+    let Some(domain) = cmd.target.or_else(|| preview.map(|p| p.domain)) else { return };
     let Ok(mut pb) = q.get_mut(domain) else { return };
     apply_control_animation(&mut pb, cmd);
 }
@@ -869,7 +869,9 @@ fn on_reset_time(
     if let Ok(mut d) = q_domain.get_mut(clocks.celestial) {
         *d = TimeDomain::default();
     }
-    commands.entity(clocks.celestial).insert(ClockRoot::Epoch);
+    commands
+        .entity(clocks.celestial)
+        .try_insert(ClockRoot::Epoch);
 
     // Interaction: wall-rooted identity (what `spawn_well_known_clocks` builds).
     if let Ok(mut d) = q_domain.get_mut(clocks.interaction) {

@@ -76,14 +76,30 @@
 ///   idx      — 0-based shot index
 ///   frames   — captured frames to hold the shot for (25 fps ⇒ 200 = 8 s)
 ///   fps      — capture rate, default 25
-///   frozen   — hold physics for this beat (exposition), else let the world run
+///   frozen   — physics advances ONLY by an explicit `shot_step()`, never by
+///              wall-clock. This is a DETERMINISM control, not an on/off switch for
+///              motion, and the distinction matters:
+///                * `frozen: true`, no `frame` closure      → motionless (exposition)
+///                * `frozen: true` + `frame` calling
+///                  `shot_step()`                           → deterministically stepped,
+///                                                            one sim step per captured
+///                                                            frame, identical on any
+///                                                            machine
+///                * `frozen: false`                         → physics free-runs on the
+///                                                            virtual clock; sim time per
+///                                                            captured frame is not pinned
+///              A flown beat therefore normally wants `frozen: true` WITH a stepping
+///              `frame` closure — not `frozen: false`. Note that scene comments in the
+///              wild tend to say "frozen" loosely, meaning only the first case.
 ///   overlay  — show the key-press readout; only true on beats being FLOWN, since
-///              over a frozen shot it is an empty keyboard burnt into the frame
+///              over a motionless shot it is an empty keyboard burnt into the frame
 ///   begin    — optional `|m|` run once when the shot opens
 ///   frame    — optional `|m, f|` run every tick with the recorder's frame index
 ///
 /// The shot ends at `frames - 1`, matching the retired hand-rolled advance exactly:
 /// frame indices 0..frames-1 are captured, so a 200-frame shot writes 199 files.
+///
+/// Full reference: `docs/offline-recording.md`.
 fn shot(spec) {
     let out     = spec.out;
     let idx     = spec.idx;

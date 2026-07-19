@@ -617,6 +617,9 @@ impl StatusBus {
 /// [`ELAPSED_AFTER`]: crate::status_bus::StatusBus
 #[derive(Resource, Default, Clone, Copy)]
 pub struct BusyDebug {
+    /// Minimum wall-clock lifetime for a busy entry. An entry is held in
+    /// `active_progress` until `entry.at + min_duration` even after its handle
+    /// drops. Zero (the default) disables the delay entirely.
     pub min_duration: std::time::Duration,
 }
 

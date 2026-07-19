@@ -79,11 +79,12 @@ class LunCoEnvironment "LunCoEnvironment" (
     float lunco:env:bloomIntensity = 0 (
         doc = "Bloom intensity, 0 = off."
     )
-    float lunco:env:ambientBrightness = 0 (
-        doc = """Flat ambient term. A *textured* dome light contributes real
-        image-based lighting and so contributes NO flat ambient — this is the
-        knob for scenes without one."""
-    )
+    # `lunco:env:ambientBrightness` was REMOVED, not deprecated. UsdLux already
+    # standardises uniform environment illumination as an untextured
+    # `DomeLight`, so this was a second spelling of a standard thing — and the
+    # two spellings fought over `GlobalAmbientLight`, order-dependently. Author
+    # an untextured `DomeLight` instead; the scene ambient is the SUM over them.
+    # The ambient slider owns `<Environment>/AmbientFill` for exactly this.
     float lunco:env:earthshineIntensity = 0 (
         doc = "Earthshine illuminance in lux."
     )

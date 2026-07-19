@@ -36,6 +36,47 @@ needs no scheme of its own: one `twin://<name>/<rel>` names the scene on every
 peer regardless of where that peer's bytes live. That is what keeps
 `Provenance::Content`-derived ids identical across host and client.
 
+## Choosing a form when you author
+
+A scene loaded by **absolute path** is mounted by `load_startup_scene`, which makes the
+containing directory a twin root named after it. So a scene may live anywhere on disk —
+including outside the engine repo entirely. What matters is not where the scene sits but
+**how it names what it references**:
+
+| Target | Author it as |
+|---|---|
+| Engine asset library (`assets/`) | `@lunco://vessels/rovers/six_wheel_rover.usda@` |
+| A file co-located with the scene | `@twin://<scene_dir_name>/<file>@` |
+| A scene inside `assets/` referencing `assets/` | a plain path from the assets root, e.g. `@scenarios/foo.rhai@` |
+| ❌ A relative escape | ~~`@../../vessels/…@`~~ |
+
+`lunco://` exists for exactly this case — so a scene living **outside** the project can
+still reference shared parts (`lunco-assets/src/asset_sources.rs`). This is what removes any
+need to symlink external content into the engine tree.
+
+> [!WARNING]
+> **A relative `../` path escapes the twin root (or the asset root) and fails to load.**
+> For `lunco:program:sourceAsset` on a `LunCoProgram` prim this failure is **silent**: the
+> prim is simply never driven, with nothing in the log. If a scenario doesn't run, check
+> the path before you debug the script.
+
+### rhai `import` does NOT use `lunco://` — the asymmetry
+
+Script module ids are registered by `asset_path::anchor_of`, which returns a **bare relative
+path** for Bevy's default asset source. So the engine script library registers as
+`scripting/lib/shots.rhai`, with **no scheme**, and:
+
+```rhai
+import "/scripting/lib/shots" as shots;      // ✅ absolute from the assets root
+import "lunco://scripting/lib/shots";        // ❌ MEASURED: "Module not found"
+```
+
+`lunco://…` has a scheme, so `canonicalize` passes it through untouched and the lookup
+misses. The leading slash is the "absolute from the assets root" form, resolved *without*
+the importing script's anchor — a bare `"scripting/lib/shots"` would instead anchor to the
+importer's own root. Since `lunco://` **is** the right spelling for a USD reference, this
+asymmetry is an easy mistake to make twice.
+
 ## `lunco-assets` owns resolution
 
 Every URI↔location mapping lives in `crates/lunco-assets`, and no other crate

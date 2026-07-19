@@ -41,11 +41,17 @@ use bevy::prelude::*;
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowPlacement {
+    /// Left half of the monitor, spanning its full height.
     LeftHalf,
+    /// Right half of the monitor, spanning its full height.
     RightHalf,
+    /// Top-left quarter.
     TopLeft,
+    /// Top-right quarter.
     TopRight,
+    /// Bottom-left quarter.
     BottomLeft,
+    /// Bottom-right quarter.
     BottomRight,
 }
 

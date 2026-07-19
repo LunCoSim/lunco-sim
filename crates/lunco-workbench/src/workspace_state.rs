@@ -215,17 +215,24 @@ pub struct PerspectiveDockSnapshot {
     /// arrangement, active leaf. Parsed + reconciled on restore.
     #[serde(default)]
     pub dock: serde_json::Value,
-    /// Slot intent at save time (the perspective's declared side/centre/
-    /// right/bottom panel ids + which centre tab was active). Restored into
-    /// the cache slot verbatim.
+    // The five fields below are the SLOT INTENT at save time — the
+    // perspective's declared panel ids per slot, plus which centre tab was
+    // active. Restored into the cache slot verbatim, so a later rebuild/reset
+    // reproduces the saved layout even though `dock` above already encodes the
+    // live tree.
+    /// Panel ids declared for the left/side browser slot.
     #[serde(default)]
     pub side_browser: Vec<PanelId>,
+    /// Panel ids declared for the centre slot (one tab each).
     #[serde(default)]
     pub center: Vec<PanelId>,
+    /// Index into [`center`](Self::center) of the tab that was active.
     #[serde(default)]
     pub active_center_tab: usize,
+    /// Panel ids declared for the right inspector slot.
     #[serde(default)]
     pub right_inspector: Vec<PanelId>,
+    /// Panel ids declared for the bottom slot.
     #[serde(default)]
     pub bottom: Vec<PanelId>,
 }
@@ -778,6 +785,23 @@ fn persist_workspace_state(world: &mut World) {
     last.json = current;
 }
 
+/// Registers per-Twin workspace-state load/save. Added by
+/// [`WorkbenchPlugin`](crate::WorkbenchPlugin) (which owns
+/// [`WorkbenchLayout`]). Idempotent.
+pub struct WorkspaceStatePlugin;
+
+impl Plugin for WorkspaceStatePlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<WorkspaceStateLast>()
+            .init_resource::<AppliedTwin>()
+            .init_resource::<DocumentSessionRegistry>()
+            .add_systems(
+                Update,
+                (restore_workspace_state, persist_workspace_state).chain(),
+            );
+    }
+}
+
 // Test fixtures live on disk — the case `clippy.toml`'s allow-list already names
 // but cannot express (cargo has no path-scoped lint config). Tests never run on
 // wasm, so the ban's failure mode is unreachable here. Production `save()` goes
@@ -855,7 +879,7 @@ mod tests {
 
         // Tamper the stored root → load must reject it.
         let path = workspace_state_path(&root);
-        let mut bad = state.clone();
+        let mut bad = state;
         bad.twin_root = PathBuf::from("/totally/different");
         std::fs::write(&path, serde_json::to_string(&bad).unwrap()).unwrap();
         assert!(WorkspaceState::load(&root).is_none(), "collision guard");
@@ -936,22 +960,5 @@ mod tests {
             serde_json::json!({"surfaces": []}),
             "legacy dock seeded under the saved perspective"
         );
-    }
-}
-
-/// Registers per-Twin workspace-state load/save. Added by
-/// [`WorkbenchPlugin`](crate::WorkbenchPlugin) (which owns
-/// [`WorkbenchLayout`]). Idempotent.
-pub struct WorkspaceStatePlugin;
-
-impl Plugin for WorkspaceStatePlugin {
-    fn build(&self, app: &mut App) {
-        app.init_resource::<WorkspaceStateLast>()
-            .init_resource::<AppliedTwin>()
-            .init_resource::<DocumentSessionRegistry>()
-            .add_systems(
-                Update,
-                (restore_workspace_state, persist_workspace_state).chain(),
-            );
     }
 }

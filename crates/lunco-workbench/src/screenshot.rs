@@ -810,6 +810,7 @@ fn start_recording_when_scene_ready(
 /// The cycle alternates two render frames per captured frame:
 ///   1. **advance** — clock steps `1/fps`, sim and `FixedUpdate` run, scene renders.
 ///   2. **capture** — request the screenshot, clock frozen until it lands.
+///
 /// Freezing while a capture is in flight is what keeps a slow (multi-frame)
 /// readback from advancing time more than once per saved frame.
 fn drive_offline_clock(

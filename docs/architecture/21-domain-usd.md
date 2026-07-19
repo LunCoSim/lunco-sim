@@ -357,6 +357,22 @@ USD references (e.g., `@/components/mobility/wheel.usda@`) are resolved relative
 - Plain relative paths anchor at the layer's directory.
 - URI schemes (`lunco://`, `twin://`) pass through to the `AssetSource`.
 
+See [`56-asset-resolution-and-cache.md`](56-asset-resolution-and-cache.md) for which form to
+author, and why a relative `../` escape fails (silently, for `LunCoProgram` source assets).
+
+> [!WARNING]
+> **Never try to remove a referenced arc by re-authoring `references =` in an `over`.**
+> References **compose**; they do not overwrite. Re-authoring the arc adds a **second** copy
+> of the asset onto the same prim — duplicate rigid body, collider and sensors — which
+> yields a non-finite raycast origin and panics `avian3d` at load.
+>
+> To drop a referenced child, deactivate it instead:
+> ```usd
+> over "GNC" ( active = false ) { }
+> ```
+> Deactivating a prim drops its whole subtree, which is the intended way to subtract from a
+> composed asset.
+
 ### Sandbox Editing Tools (UX Bridge)
 The `lunco-sandbox-edit` crate provides the interactive layer (palette, gizmo, inspector).
 - **Spawning**: `SpawnEntity` command is wired to `UsdOp::AddReference` against the active stage.

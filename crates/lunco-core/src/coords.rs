@@ -109,7 +109,7 @@ pub fn world_pose(
     let mut rot = DQuat::IDENTITY;
     for (off, local_rot) in chain.iter().rev() {
         pos += rot * off;
-        rot = rot * local_rot.as_dquat();
+        rot *= local_rot.as_dquat();
     }
     Some((pos, rot))
 }
@@ -285,7 +285,7 @@ pub fn world_pose_seeded<F: QueryFilter>(
     let mut rot = DQuat::IDENTITY;
     for (off, local_rot) in chain.iter().rev() {
         pos += rot * off;
-        rot = rot * local_rot.as_dquat();
+        rot *= local_rot.as_dquat();
     }
     (pos, rot)
 }

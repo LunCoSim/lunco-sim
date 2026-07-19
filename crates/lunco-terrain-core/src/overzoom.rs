@@ -57,6 +57,12 @@ pub struct Overzoom {
 impl Default for Overzoom {
     fn default() -> Self {
         Self {
+            // Grouped to spell "5EED 0F DE7A11" — SEED OF DETAIL. clippy's
+            // `unusual_byte_groupings` wants even 4-nibble groups
+            // (`0x5EED_0FDE_7A11`), which is the same number with the word
+            // broken across the boundary. The grouping IS the documentation
+            // here, so the lint is silenced rather than obeyed.
+            #[allow(clippy::unusual_byte_groupings)]
             seed: 0x5EED_0F_DE7A11,
             // Hand off at 2 m to the analytic crater layer, whose power-law size
             // floor is 2 m — together they cover 0.4 m…60 m without doubling up.

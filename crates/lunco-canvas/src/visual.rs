@@ -257,6 +257,10 @@ impl NodeVisual for PlaceholderNodeVisual {
             egui::pos2(screen_rect.max.x, screen_rect.max.y),
         );
         let painter = ctx.ui.painter();
+        // TODO(theme): migrate to lunco-theme once the token set covers this.
+        // Placeholder node card: fill + stroke in selected/unselected states and
+        // the centred label. `DrawCtx` carries no theme today, so this also needs
+        // a transport decision (`lunco_theme::active(ctx.ui.ctx())` vs a field).
         let fill = if selected {
             egui::Color32::from_rgb(58, 82, 120)
         } else {
@@ -303,6 +307,9 @@ impl EdgeVisual for PlaceholderEdgeVisual {
         _waypoints_screen: &[Pos],
         selected: bool,
     ) {
+        // TODO(theme): migrate to lunco-theme once the token set covers this.
+        // Placeholder edge line, selected vs unselected. Same transport question
+        // as `PlaceholderNodeVisual::draw` above.
         let col = if selected {
             egui::Color32::from_rgb(120, 170, 255)
         } else {

@@ -543,6 +543,85 @@ Housekeeping: test-debris cameras (`View_1`, `View_2`, `S0`–`S19`, `Probe_t*`)
 `~/Documents/lunco/moonbase/twin/history/journal.json` and will replay on load. The `.usda` on disk is
 clean.
 
+## 8f. AS-BUILT — authoring a path against the shipped driver
+
+The evaluator decided on in §8c is **implemented** (`lunco-usd-bevy/src/camera_path.rs`).
+This section is the authoring contract for it; the rest of this doc remains design.
+
+```usda
+def BasisCurves "ShotPath"
+{
+    uniform token type  = "cubic"
+    uniform token basis = "catmullRom"    # passes THROUGH its control points
+    uniform token wrap  = "nonperiodic"   # open arc, plays once (periodic loops)
+    int[] curveVertexCounts = [30]
+    point3f[] points = [ ... ]
+
+    rel    lunco:path:camera   = </Scene/ShotCam>
+    rel    lunco:path:lookAt   = </Scene/Lander>   # whole-path aim
+    double lunco:path:duration = 58
+    token  lunco:path:clock    = "sim"             # "real" | "sim" (default)
+}
+```
+
+`points` accepts both `point3f[]` and `point3d[]` — a curve authored in double precision is
+still a curve, and the earlier strict `point3f[]` read reported it as "no points", which is
+a misleading diagnostic for a type mismatch.
+
+### A control point's INDEX is its time
+
+The curve is parameterised **uniformly in the curve parameter, not by arc length** (this is
+item 7 of §9, stated from the authoring side). The practical consequence:
+
+> *N* points = *N−1* segments, each getting an **equal** slice of `lunco:path:duration`.
+
+So 30 points over a 58 s path is 29 segments of exactly 2.000 s, and **the index of a
+control point is its timestamp**. That is a constraint, not a bug, and it is usable: spacing
+points on a regular time grid rather than where the geometry wants them is what lets a shot
+boundary land exactly on a knot.
+
+Two rules follow, and both are silent when broken:
+
+- **Total path duration must equal total sequenced time.** If a shot list and
+  `lunco:path:duration` disagree, the camera arrives early or late with no error.
+- **Change the beat lengths, change the point grid.** A grid chosen so every beat boundary
+  is a whole number of segments stops being one the moment a beat is retimed. Pick beat
+  durations with a common divisor and keep the point count consistent with it.
+
+> [!WARNING]
+> Because spacing *is* timing, **knot spacing is also speed control** — points bunched
+> together are traversed slowly and sparse ones quickly. Do not add a control point purely
+> to fix framing without re-checking the grid; that is the "camera surges" failure in §9
+> item 7, seen from the authoring side.
+
+### Aim: a `rel`, re-resolved every frame
+
+`lunco:path:lookAt` is the **whole-path** aim: a relationship to a prim, not baked
+keyframes, so the target's world pose is re-resolved every frame. A descending vehicle is
+tracked for free and nothing in the path assumes *when* it lands.
+
+Aim resolution order, per `camera_path.rs`:
+
+1. The **aim track** — `lunco:path:aim:times` + `lunco:path:aim:modes` (+ a
+   `lunco:path:aim:targets` rel, one entry per `"target"` mode, in order). Held keys: each
+   rules until the next. Modes are `"target"` / `"manual"` / tangent.
+2. Absent ⇒ the whole-path `lunco:path:lookAt` rel.
+3. Absent ⇒ **tangent** (aim along direction of travel).
+
+> [!WARNING]
+> **The aim-track reads are tolerant, and a strict read degrades to silence.** `modes` is
+> naturally `token[]` but reads fine as `string[]`; `times` is naturally `double[]` but
+> authors reach for `float[]`. A strict read of either yields an EMPTY array, which turns
+> every aim key into the tangent fallback **without reporting anything**. A path that
+> suddenly aims down its own tangent is this, not a maths bug.
+
+**Recording a path.** Camera paths are evaluated once per *render* frame on the path's own
+clock — the earlier fixed-cadence + `overstep_fraction()` smoothing was not reproducible,
+because that residual is wall-clock derived. For frame-exact capture see
+[`../offline-recording.md`](../offline-recording.md).
+
+---
+
 ## 9. Missing features, ranked
 
 Phase 0 needs **nothing** — it is authored USD against shipped machinery. This is what the

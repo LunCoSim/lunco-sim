@@ -375,6 +375,26 @@ manual_unwrap_or = "warn"
 useless_conversion = "warn"
 redundant_closure = "warn"
 needless_pass_by_value = "allow"
+# Bevy system signatures are inherently complex TYPES, and the complexity is
+# load-bearing documentation. `Query<(Entity, &ChildOf, Option<&Name>),
+# (Added<CellCoord>, Without<Grid>)>` states the system's whole contract —
+# what it reads, and precisely which entities it runs for. The lint's remedy
+# is a type alias, which moves that contract somewhere the reader is not
+# looking and leaves the signature saying nothing. Bevy's own CI allows this
+# lint for the same reason; there is no version of "fixing" these ~19 sites
+# that leaves the code more readable than it is now.
+#
+# This is an ALLOW, not a deferral: these are not debt to pay down later.
+type_complexity = "allow"
+# Same reasoning, different shape. A Bevy system or observer's parameters are
+# INJECTED by the scheduler, not passed by a caller — `api_request_observer`'s
+# 11 "arguments" are the resources and queries it declares it needs, and no
+# human ever writes that call. The lint's remedy (bundle them into a struct)
+# means inventing a `SystemParam` aggregate purely to reduce a number, which
+# adds indirection and hides the access set the scheduler uses for parallelism
+# and conflict detection. Grouping params is worth doing when it expresses a
+# real concept — never to satisfy an arity threshold meant for ordinary fns.
+too_many_arguments = "allow"
 # Asset I/O policy AND the GridAnchor atomic-re-parenting invariant.
 # Domain crates may not bypass `AssetServer` with raw `std::fs` /
 # `std::thread` / blocking `Instant` (those break wasm32 — the bug only

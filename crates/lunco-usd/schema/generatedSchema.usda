@@ -21,9 +21,8 @@ class LunCoEnvironment "LunCoEnvironment" (
     float lunco:env:bloomIntensity = 0 (
         doc = "Bloom intensity, 0 = off."
     )
-    float lunco:env:ambientBrightness = 0 (
-        doc = "Flat ambient term."
-    )
+    # `lunco:env:ambientBrightness` removed — uniform ambient is an untextured
+    # `DomeLight` (standard UsdLux), summed into `GlobalAmbientLight`.
     float lunco:env:earthshineIntensity = 0 (
         doc = "Earthshine illuminance in lux."
     )

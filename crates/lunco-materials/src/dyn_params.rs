@@ -146,7 +146,7 @@ impl ParamValue {
 }
 
 /// How a parameter should be presented in an editor.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub enum UiKind {
     /// Continuous slider.
     Slider { min: f32, max: f32 },
@@ -155,6 +155,7 @@ pub enum UiKind {
     /// RGB(A) colour swatch.
     Color,
     /// Free numeric field (no fixed range).
+    #[default]
     Free,
     /// Engine-provided (Rust fills it each frame) — hidden from the editor.
     Engine,
@@ -305,12 +306,6 @@ struct Annotation {
     label: Option<String>,
     ui: UiKind,
     default: Option<String>,
-}
-
-impl Default for UiKind {
-    fn default() -> Self {
-        UiKind::Free
-    }
 }
 
 /// Parses `//!@ui` / `//!@engine` / `//!@default` annotation lines into a

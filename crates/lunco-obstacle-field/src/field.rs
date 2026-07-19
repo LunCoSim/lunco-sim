@@ -196,9 +196,13 @@ impl HeightGrid {
     /// heightfield at the origin, matching our `[-h, h]` region.
     pub fn to_avian_heights(&self) -> Vec<Vec<f64>> {
         let mut out = vec![vec![0.0f64; self.res]; self.res];
-        for z in 0..self.res {
-            for x in 0..self.res {
-                out[x][z] = self.heights[self.idx(x, z)];
+        // Iterate the OUTPUT, whose layout is `[x][z]`, and read the source
+        // through `idx(x, z)`. Same values as the old index loops, but the
+        // transpose is now carried by the reader rather than by which of two
+        // bare range loops happened to be outermost.
+        for (x, row) in out.iter_mut().enumerate() {
+            for (z, cell) in row.iter_mut().enumerate() {
+                *cell = self.heights[self.idx(x, z)];
             }
         }
         out

@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
-pub use crate::{PerspectiveId, WorkbenchLayout};
+pub(crate) use crate::{PerspectiveId, WorkbenchLayout};
 
 /// A single keyboard shortcut entry.
 #[derive(Debug, Clone, Default)]
@@ -172,7 +172,7 @@ fn render_help_popup(
             let (rect, resp) =
                 ui.allocate_exact_size(viewport.size(), egui::Sense::click());
             ui.painter()
-                .rect_filled(rect, 0.0, egui::Color32::from_black_alpha(160));
+                .rect_filled(rect, 0.0, theme.tokens.scrim);
             if resp.clicked() {
                 close = true;
             }

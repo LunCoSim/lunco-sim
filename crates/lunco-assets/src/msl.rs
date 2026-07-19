@@ -259,8 +259,9 @@ fn collect_mo_files(dir: &std::path::Path, files: &mut std::collections::HashSet
 /// On native this resource is inserted as `Ready` immediately when MSL is
 /// already on disk, or `Failed` when it isn't. On wasm it starts in
 /// `Loading` while the fetch task runs.
-#[derive(Resource, Debug, Clone)]
+#[derive(Resource, Debug, Clone, Default)]
 pub enum MslLoadState {
+    #[default]
     NotStarted,
     Loading {
         phase: MslLoadPhase,
@@ -274,12 +275,6 @@ pub enum MslLoadState {
         uncompressed_bytes: u64,
     },
     Failed(String),
-}
-
-impl Default for MslLoadState {
-    fn default() -> Self {
-        MslLoadState::NotStarted
-    }
 }
 
 impl MslLoadState {

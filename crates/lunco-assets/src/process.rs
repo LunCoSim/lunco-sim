@@ -328,7 +328,7 @@ fn process_svg(source: &Path, output: &Path, tw: u32, th: u32) -> Result<(), std
     );
     resvg::render(&tree, transform, &mut pixmap.as_mut());
     pixmap.save_png(output)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+        .map_err(|e| std::io::Error::other(e.to_string()))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -350,7 +350,7 @@ fn process_image(source: &Path, output: &Path, tw: u32, th: u32) -> Result<(), s
     let processed = image::DynamicImage::ImageRgb8(processed.to_rgb8());
 
     processed.save(output)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+        .map_err(|e| std::io::Error::other(e.to_string()))
 }
 
 /// `kind = "dem"` pipeline — produce a runtime-loadable terrain site folder.

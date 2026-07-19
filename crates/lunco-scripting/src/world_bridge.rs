@@ -898,6 +898,12 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     // unavailable.
     engine.register_fn("elapsed_seconds", || -> f64 { bridge_core::elapsed_seconds() });
 
+    // twin_root() -> String — absolute path of the ACTIVE twin's folder, i.e. the
+    // directory a path-loaded scene lives in ("" if none). Lets a scenario name a
+    // sibling file without hardcoding a machine-specific absolute path:
+    // `twin_root() + "/shots"`. See `bridge_core::twin_root`.
+    engine.register_fn("twin_root", || -> String { bridge_core::twin_root() });
+
     // is_debug() -> bool / env(key) -> bool — the SCENARIO ENVIRONMENT, so a
     // script can branch on it: `if is_debug() { autopilot() }` runs an autopilot in
     // debug and lets a human play in release. Defaults to the BUILD PROFILE

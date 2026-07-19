@@ -23,7 +23,14 @@ use lunco_core::{Command, on_command, register_commands};
 /// USD prim type for the scene-level **environment settings** prim (a singleton
 /// under the default prim, e.g. `/World/Environment`). It carries the render
 /// knobs that have no natural light-prim home — `lunco:env:exposureEv100`,
-/// `bloomIntensity`, `ambientBrightness`, `earthshineIntensity`, `earthshineColor`.
+/// `bloomIntensity`, `earthshineIntensity`, `earthshineColor`.
+///
+/// **Ambient is not among them.** Uniform environment illumination is standard
+/// UsdLux — an untextured `DomeLight` — and `GlobalAmbientLight` is composed as
+/// the sum over those domes. The ambient slider therefore persists onto a
+/// `DomeLight` child of this prim (`<Environment>/AmbientFill`), not onto a
+/// custom attribute here; a custom attribute would be a second spelling of a
+/// standard thing, and the two spellings fought over the same field.
 /// The sandbox persists a `SetEnvironmentLight` render tweak onto this prim and a
 /// projector reads it back on stage change — so those knobs journal + round-trip
 /// like every other USD edit, WITHOUT coupling the light loader to global/camera
