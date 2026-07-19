@@ -225,6 +225,16 @@ impl StatusEvent {
     }
 }
 
+/// The bus source name terrain streaming publishes under.
+///
+/// Shared rather than spelled twice. The publisher (`lunco-sandbox`'s
+/// `report_terrain_stream_status`) and the consumer (the screenshot readiness
+/// gate's `VISUAL_BUSY_SOURCES`) were previously coupled by two independent
+/// `"terrain"` literals: renaming one silently stopped the gate from gating, with
+/// no compile error and no log, so recordings quietly started over streaming
+/// terrain again. One `const`, one compile error if it ever moves.
+pub const TERRAIN_SOURCE: &str = "terrain";
+
 /// Workbench-wide status bus. Insert via [`StatusBusPlugin`].
 ///
 /// Carries two flavours of state — discrete history events (info / warn /

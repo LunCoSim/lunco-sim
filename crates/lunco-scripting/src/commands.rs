@@ -370,15 +370,27 @@ pub fn resolve_embedded_scenario_paths(
             // scenario is compiled under is byte-identical to the id it (and its
             // siblings) are registered under. Deriving it from `path.0` by hand
             // instead would be a second canonicalization that can disagree.
-            let id = asset_server
+            // No fallback ON PURPOSE. Deriving the id from `path.0` by hand here is
+            // exactly the second canonicalization the paragraph above rules out: it
+            // can disagree with the registry, and a script compiled under a
+            // different id than its siblings are registered under resolves relative
+            // imports to the WRONG FILE — silently, since a plausible id looks like
+            // a working one. We loaded this handle by uri, so a missing path is an
+            // engine invariant break, not a case to paper over: say so and skip.
+            let Some(id) = asset_server
                 .get_path(&*handle)
                 .map(|p| lunco_assets::asset_path::anchor_of(&p))
-                // The handle should always have a path (we loaded it by uri); if it
-                // somehow doesn't, fall back to canonicalizing the authored ref
-                // rather than dropping identity and breaking relative imports.
-                .unwrap_or_else(|| {
-                    lunco_assets::script_source::ScriptSources::canonical_id(&path.0, None, "rhai")
-                });
+            else {
+                error!(
+                    "[rhai] loaded script asset {:?} has no resolved AssetPath — cannot \
+                     establish its identity, so it is NOT compiled (a guessed id would \
+                     resolve its relative imports to the wrong file). This is a bug in \
+                     asset loading, not in the script.",
+                    path.0
+                );
+                pending.remove(&entity);
+                continue;
+            };
             commands
                 .entity(entity)
                 .try_insert((

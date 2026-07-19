@@ -113,23 +113,34 @@ impl Tool for NativeRhaiTool {
 }
 
 /// Build the rhai module for one tool: run a native tool's builder, else compile
-/// any source-defined tool. `Err` if the tool can't be bound to rhai.
-fn build_module(tool: &Arc<dyn Tool>, engine: &Engine) -> Result<Module, String> {
+/// any source-defined tool.
+///
+/// Three outcomes, deliberately distinct:
+/// - `Ok(Some(module))` — bound, register it.
+/// - `Ok(None)` — **the tool has no rhai surface, and is not supposed to have one.**
+/// - `Err(e)` — a tool that SHOULD have bound failed to; a real defect.
+///
+/// `Ok(None)` exists because the registry holds more than rhai tools. A closure
+/// tool (`lunco_tools::register_closure_tool`, e.g. `science::take_photo`) is
+/// invoked by a behaviour-tree `run_tool` leaf through `world.trigger`, and never
+/// had a rhai module to build. Reporting that as an error logged
+/// `[rhai] tool 'science::take_photo' failed to bind` at ERROR on every twin open
+/// — a permanent false alarm in a codebase whose lesson smoke test is "zero
+/// `[rhai]` lines", i.e. exactly the noise that trains people to ignore the log.
+fn build_module(tool: &Arc<dyn Tool>, engine: &Engine) -> Result<Option<Module>, String> {
     if let Some(native) = tool.as_any().downcast_ref::<NativeRhaiTool>() {
-        return (native.build)(engine);
+        return (native.build)(engine).map(Some);
     }
     if let Some(src) = tool.source() {
         let ast = engine
             .compile(src)
             .map_err(|e| format!("compile error: {e}"))?;
         return Module::eval_ast_as_new(Scope::new(), &ast, engine)
+            .map(Some)
             .map_err(|e| format!("build error: {e}"));
     }
-    Err(format!(
-        "tool '{}' (backend {}) is neither native nor source-defined; cannot bind to rhai",
-        tool.name(),
-        tool.backend()
-    ))
+    // Not a rhai tool at all — nothing to bind, nothing wrong.
+    Ok(None)
 }
 
 /// Bind every tool in the global registry into `engine` as a static module
@@ -141,9 +152,11 @@ pub fn refresh(engine: &mut Engine) -> Vec<(String, String)> {
     let mut errors = Vec::new();
     for tool in lunco_tools::all() {
         match build_module(&tool, engine) {
-            Ok(module) => {
+            Ok(Some(module)) => {
                 engine.register_static_module(tool.name().to_string(), module.into());
             }
+            // No rhai surface by design (e.g. a behaviour-tree closure tool) — skip.
+            Ok(None) => {}
             Err(e) => errors.push((tool.name().to_string(), e)),
         }
     }
@@ -198,5 +211,39 @@ mod tests {
             .collect();
         assert_eq!(backends.get("nat").map(String::as_str), Some("rust"));
         assert_eq!(backends.get("lib").map(String::as_str), Some("rhai"));
+    }
+
+    /// A tool with no rhai surface is SKIPPED, not reported as a failure.
+    ///
+    /// Behaviour-tree closure tools (`science::take_photo`) are invoked through
+    /// `world.trigger`, never as a rhai module. Treating them as bind failures put
+    /// a permanent `[rhai] … failed to bind` ERROR in every session's log.
+    #[test]
+    fn a_tool_with_no_rhai_surface_is_skipped_not_an_error() {
+        struct BtOnlyTool;
+        impl Tool for BtOnlyTool {
+            fn name(&self) -> &str {
+                "bt_only"
+            }
+            fn backend(&self) -> &str {
+                "rust"
+            }
+            fn functions(&self) -> Vec<String> {
+                vec!["fire/0".into()]
+            }
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+        }
+        lunco_tools::register(Arc::new(BtOnlyTool));
+
+        let mut engine = Engine::new();
+        let errs = refresh(&mut engine);
+        assert!(
+            !errs.iter().any(|(n, _)| n == "bt_only"),
+            "a BT-only tool must not be reported as a bind failure: {errs:?}"
+        );
+        // It is still discoverable — skipping the rhai binding is not deregistering.
+        assert!(lunco_tools::index().iter().any(|i| i.name == "bt_only"));
     }
 }

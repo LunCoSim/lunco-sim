@@ -2316,7 +2316,9 @@ fn report_terrain_stream_status(
     bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
 ) {
     let Some(mut bus) = bus else { return };
-    const SOURCE: &str = "terrain";
+    // Shared with the screenshot readiness gate's `VISUAL_BUSY_SOURCES` — see the
+    // const's docs for why this must not be a local literal.
+    const SOURCE: &str = lunco_workbench::status_bus::TERRAIN_SOURCE;
     if status.wanted > 0 && status.resident < status.wanted {
         bus.push_progress(
             SOURCE,

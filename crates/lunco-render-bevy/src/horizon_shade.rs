@@ -37,7 +37,11 @@ pub(crate) fn build(app: &mut App) {
     app.init_resource::<HorizonShadowCacheConfig>();
     app.add_systems(
         Update,
-        (wire_terrain_materials, shade_dynamic_entities)
+        (
+            wire_terrain_materials,
+            wire_sun_for_non_terrain_materials,
+            shade_dynamic_entities,
+        )
             .chain()
             .after(finish_shadow_cache_bake)
             // The bake half is gated on the asset stores existing; the material
@@ -234,6 +238,51 @@ pub fn wire_terrain_materials(
                 .remove::<MeshMaterial3d<StandardMaterial>>()
                 .remove::<lunco_render::PbrLook>()
                 .try_insert(MeshMaterial3d(handle));
+        }
+    }
+}
+
+/// Fill `sun_dir_world` on every OTHER `ShaderMaterial` — the ones with no
+/// `HorizonMap` behind them.
+///
+/// [`wire_terrain_materials`] only sees genuine heightfield terrain, but
+/// `regolith.wgsl` is bound to ordinary meshes too (the landing pad disc, the
+/// marketing scenes' ground plate). On those the uniform kept its zero default,
+/// and the shader covered for it by picking the brightest directional light —
+/// a GUESS that is exact only while the brightest light happens to be the sun,
+/// and silent when it is not. A scene with a bright artificial fill keyed the
+/// whole lunar BRDF off the wrong vector with nothing in the log to say so.
+///
+/// The sun is a scene-global fact, so the fix is to write it everywhere rather
+/// than let each shader re-derive it. `set_many` addresses fields by reflected
+/// name: a material whose shader declares no `sun_dir_world` is untouched, so
+/// this is safe to run across every `ShaderMaterial` in the scene.
+///
+/// Terrain is EXCLUDED (`Without<HorizonMap>`) — it is already written above,
+/// with the local-space `sun_dir` this system has no business computing.
+pub fn wire_sun_for_non_terrain_materials(
+    sun: SunQuery,
+    shader_mats: Option<ResMut<Assets<ShaderMaterial>>>,
+    meshes: Query<&MeshMaterial3d<ShaderMaterial>, (Without<HorizonMap>, Without<RenderLayers>)>,
+) {
+    let Some(mut shader_mats) = shader_mats else { return };
+    let Some((sun_gt, tan_r, _csm_far)) = pick_sun(&sun) else { return };
+    let to_sun_world: Vec3 = sun_gt.back().into();
+    let sun_dir_world = ParamValue::Vec3([to_sun_world.x, to_sun_world.y, to_sun_world.z]);
+
+    for handle in &meshes {
+        // Compare before `get_mut`, or every frame re-uploads the asset (MAT-3).
+        let needs = shader_mats.get(&handle.0).is_some_and(|m| {
+            m.get_vec4("sun_dir_world")
+                .is_none_or(|v| (v.truncate() - to_sun_world).length() > 1e-4)
+        });
+        if needs {
+            if let Some(mut m) = shader_mats.get_mut(&handle.0) {
+                m.set_many([
+                    ("sun_dir_world", sun_dir_world),
+                    ("sun_tan_radius", ParamValue::F32(tan_r)),
+                ]);
+            }
         }
     }
 }

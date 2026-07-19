@@ -279,16 +279,16 @@ pub(crate) fn compile_prelude(engine: &Engine) -> Result<AST, rhai::ParseError> 
     }
 }
 
-/// TODO(rhai-consts): TUTORIAL SCRIPTS DO NOT GET THIS TREATMENT.
-///
-/// Lessons loaded through `lunco-tutorial` are compiled without the two-pass
-/// below, so a top-level `const` in a lesson is invisible inside its own `fn`s and
-/// fails at RUNTIME with "Variable not found: global::…" — mid-lesson, not at load.
-/// Several Space School lessons now carry `fn x() { … }` shims in place of
-/// constants, each marked `TODO(rhai-consts)`; route the tutorial compile through
-/// this same path and those revert to plain `const` + `global::`.
-///
 /// Compile a script so its own top-level `const`s are visible inside its `fn`s.
+///
+/// # Scope: this folds bare `X`, NOT `global::X`
+///
+/// Constant propagation rewrites *identifier* uses inside function bodies. A
+/// script that reads its constant as `global::X` is doing a namespaced lookup,
+/// which the optimizer does not touch and which resolves at runtime against the
+/// `GlobalRuntimeState` — see [`top_level_hoist_source`] for the half that makes
+/// `global::X` work. The two mechanisms are complementary and every script gets
+/// both; there is no per-caller variation.
 ///
 /// Rhai functions are **pure**: a function body cannot see script-level variables
 /// at runtime, so a top-level `const HOVER = 0.327;` referenced inside
@@ -393,7 +393,29 @@ fn compile_with_script_consts(engine: &Engine, source: &str) -> Result<AST, rhai
 /// mis-reads shows up as a parse failure of the extracted snippet, which the
 /// caller treats as "no imports to hoist" (today's behaviour), never as a
 /// corrupted program.
-fn top_level_import_source(source: &str) -> Option<String> {
+///
+/// # Why `const` is hoisted alongside `import`
+///
+/// Identical mechanism, identical cause. A top-level `const HOVER = 0.327;` read
+/// inside a `fn` as `global::HOVER` is a namespaced lookup resolved against the
+/// `GlobalRuntimeState`'s constants, which rhai populates by EVALUATING the AST's
+/// top level. This runtime sets `eval_ast(false)` (see above), so that never
+/// happened and every such read threw `Variable not found: global::HOVER` mid-tick
+/// — the exact shape of the `Module not found` bug this function already fixes for
+/// imports. Hoisting the `const`s into the same statements-only AST means the hook
+/// call re-runs them and the global namespace is seeded.
+///
+/// [`compile_with_script_consts`] is the other half: it folds bare `X`. Neither
+/// subsumes the other, and both apply to EVERY script — scenario, lesson, inline
+/// `lunco:script` — because they sit on the single compile path in
+/// [`ScriptRuntime::compile`]. Tutorials are not special: `StartTutorial` triggers
+/// `RunScenario`, which lands here like anything else.
+///
+/// ⚠ COST: a hoisted `const` re-evaluates on every hook call. That is free for the
+/// literals this is meant for and wrong for `const X = expensive();` — but such a
+/// const is not literal, so it never folded either, and re-running it is strictly
+/// more correct than the previous "throws at runtime".
+fn top_level_hoist_source(source: &str) -> Option<String> {
     #[derive(PartialEq)]
     enum S {
         Code,
@@ -408,12 +430,18 @@ fn top_level_import_source(source: &str) -> Option<String> {
     let mut out = String::new();
     let mut i = 0usize;
 
-    // Take [start..=end] if it is a top-level `import` statement.
+    // A statement opens with `kw` as a WHOLE token — `importer_count` and
+    // `constant` must not match `import`/`const`.
+    let opens_with = |stmt: &str, kw: &str| {
+        let head = stmt.trim_start();
+        head.starts_with(kw)
+            && !head[kw.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_')
+    };
+
+    // Take [start..=end] if it is a top-level `import` or `const` statement.
     let take = |out: &mut String, start: usize, end: usize| {
         let stmt = &source[start..=end];
-        let head = stmt.trim_start();
-        if head.starts_with("import") && !head[6..].starts_with(|c: char| c.is_alphanumeric() || c == '_')
-        {
+        if opens_with(stmt, "import") || opens_with(stmt, "const") {
             out.push_str(stmt.trim());
             out.push('\n');
         }
@@ -466,9 +494,21 @@ fn top_level_import_source(source: &str) -> Option<String> {
                     depth -= 1;
                     // A block that closes at top level ends the statement (a `fn`
                     // definition, an `if`/`while` body): nothing to carry forward.
+                    //
+                    // EXCEPT a hoistable statement whose VALUE is a brace/bracket
+                    // literal — `const P = #{ hover: 0.3 };`, `const R = [1, 2];`.
+                    // Its closing brace is mid-statement, not a block end, and it is
+                    // still waiting for its `;`. Clearing here dropped it silently,
+                    // which is the failure mode this whole function exists to remove.
                     if depth <= 0 {
                         depth = 0;
-                        stmt_start = None;
+                        let holds = stmt_start.is_some_and(|s| {
+                            let stmt = &source[s..=i];
+                            opens_with(stmt, "import") || opens_with(stmt, "const")
+                        });
+                        if !holds {
+                            stmt_start = None;
+                        }
                     }
                 }
                 b';' if depth == 0 => {
@@ -489,33 +529,35 @@ fn top_level_import_source(source: &str) -> Option<String> {
     (!out.is_empty()).then_some(out)
 }
 
-/// Build the "imports only" AST described on [`top_level_import_source`]: the
-/// script's top-level `import` statements as the BODY, the full prelude-merged
-/// program's functions as the LIBRARY.
+/// Build the "hoisted statements only" AST described on [`top_level_hoist_source`]:
+/// the script's top-level `import` and `const` statements as the BODY, the full
+/// prelude-merged program's functions as the LIBRARY.
 ///
 /// `full` is the already prelude-merged program; [`AST::clone_functions_only`]
 /// takes its functions without its statements, so merging gives exactly
 /// `imports + every callable`, which is what a hook call needs.
 ///
 /// Returns `None` — meaning "hoist nothing, behave as before" — when the script
-/// has no top-level imports, or when the extracted snippet does not parse. The
+/// has no top-level imports or consts, or when the extracted snippet does not
+/// parse. The
 /// latter can only happen if the text scanner mis-read the source; failing soft
 /// keeps a scanner bug from turning a working scenario into a compile error, and
 /// the warning names the snippet so it is diagnosable.
-fn build_imports_ast(
+fn build_hoisted_ast(
     engine: &Engine,
     source: &str,
     full: &AST,
     asset_id: Option<&str>,
 ) -> Option<AST> {
-    let imports = top_level_import_source(source)?;
-    let head = match engine.compile(&imports) {
+    let hoisted = top_level_hoist_source(source)?;
+    let head = match engine.compile(&hoisted) {
         Ok(a) => a,
         Err(e) => {
             warn!(
-                "[rhai] could not hoist top-level imports into function scope \
+                "[rhai] could not hoist top-level imports/consts into function scope \
                  ({e}); a `fn` referring to an imported alias will fail with \
-                 `Module not found`. Extracted snippet:\n{imports}"
+                 `Module not found`, and one reading `global::X` with \
+                 `Variable not found`. Extracted snippet:\n{hoisted}"
             );
             return None;
         }
@@ -1042,7 +1084,7 @@ struct CompiledProgram {
     /// Same functions, but with ONLY the script's top-level `import` statements as
     /// its body — so a hook call can re-run those imports (and nothing else)
     /// before the function executes, making `cam::foo()` resolve inside a `fn`.
-    /// `None` when the script imports nothing. See [`top_level_import_source`] for
+    /// `None` when the script imports nothing. See [`top_level_hoist_source`] for
     /// why this is the shape of the fix.
     imports_ast: Option<AST>,
     mask: ProgramMask,
@@ -1300,7 +1342,7 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                         // script's id and the prelude's absence of one does no harm.
                         let ast = self.prelude_ast.merge(&ast);
                         let mask = ProgramMask::from_ast(&ast);
-                        let imports_ast = build_imports_ast(&self.engine, source, &ast, asset_id);
+                        let imports_ast = build_hoisted_ast(&self.engine, source, &ast, asset_id);
                         let p = Arc::new(CompiledProgram { ast, imports_ast, mask });
                         self.compiled.insert(key, CacheEntry::Ok(p.clone()));
                         p
@@ -1545,7 +1587,7 @@ pub fn tick_rhai_scenarios(world: &mut World) {
 /// and must not re-fire its world effects), or the imports-only AST with
 /// `eval_ast=true` so the script's top-level `import`s are on rhai's import stack
 /// while the function body runs. Never mix the two — see
-/// [`top_level_import_source`].
+/// [`top_level_hoist_source`].
 fn call_hook(
     engine: &Engine,
     scope: &mut rhai::Scope,
@@ -2121,7 +2163,7 @@ mod tests {
         );
 
         // The fix: hook calls run against imports-only + all functions.
-        let imports_ast = super::build_imports_ast(&engine, src, &full, Some("twin://ep1/main.rhai"))
+        let imports_ast = super::build_hoisted_ast(&engine, src, &full, Some("twin://ep1/main.rhai"))
             .expect("script has a top-level import, so an imports AST must be built");
         let mut scope = rhai::Scope::new();
         let got = engine
@@ -2143,7 +2185,7 @@ mod tests {
         let engine = super::build_world_engine(Default::default());
         let src = "fn on_tick(me) { 1 }";
         let full = super::compile_with_script_consts(&engine, src).unwrap();
-        assert!(super::build_imports_ast(&engine, src, &full, None).is_none());
+        assert!(super::build_hoisted_ast(&engine, src, &full, None).is_none());
     }
 
     /// The extractor takes only DEPTH-0 imports, and is not fooled by imports
@@ -2161,20 +2203,75 @@ mod tests {
             }
             import "b" as b;
         "#;
-        let got = super::top_level_import_source(src).expect("two top-level imports");
+        let got = super::top_level_hoist_source(src).expect("two imports + one const");
         assert!(got.contains(r#"import "twin://ep1/a" as a;"#), "got:\n{got}");
         assert!(got.contains(r#"import "b" as b;"#), "got:\n{got}");
         assert!(!got.contains("commented"), "comment leaked:\n{got}");
-        assert!(!got.contains("in_a_string"), "string literal leaked:\n{got}");
         assert!(!got.contains("nested"), "an in-function import was hoisted:\n{got}");
-        assert_eq!(got.lines().count(), 2, "got:\n{got}");
+        // `const S` IS hoisted (it is a top-level const), carried whole. The point
+        // is that the `import` inside its string literal did not become a statement
+        // of its own — one const line, not a const line plus a bogus import.
+        assert!(got.contains(r#"const S = "#), "const not hoisted:\n{got}");
+        assert_eq!(
+            got.lines().filter(|l| l.trim_start().starts_with("import")).count(),
+            2,
+            "string literal leaked as an import:\n{got}"
+        );
+        assert_eq!(got.lines().count(), 3, "got:\n{got}");
     }
 
     #[test]
-    fn a_script_with_no_imports_extracts_nothing() {
-        assert!(super::top_level_import_source("fn f() { 1 } let x = 2;").is_none());
-        // `important` is not `import`.
-        assert!(super::top_level_import_source("let important = 1;").is_none());
+    fn a_script_with_nothing_to_hoist_extracts_nothing() {
+        assert!(super::top_level_hoist_source("fn f() { 1 } let x = 2;").is_none());
+        // `important`/`constant` are not `import`/`const` — whole-token match only.
+        assert!(super::top_level_hoist_source("let important = 1;").is_none());
+        assert!(super::top_level_hoist_source("let constant = 1;").is_none());
+    }
+
+    /// A `const` whose value is a map/array literal must survive the scanner.
+    ///
+    /// Its closing `}` returns brace depth to 0 mid-statement, which the block-end
+    /// rule used to read as "statement over" — silently dropping the const, i.e.
+    /// exactly the `Variable not found: global::X` this hoist exists to prevent.
+    #[test]
+    fn a_const_holding_a_brace_literal_is_hoisted_whole() {
+        let src = r#"
+            const P = #{ hover: 0.327, tip: 40.0 };
+            const R = [1, 2, 3];
+            fn go() { global::P.hover }
+        "#;
+        let got = super::top_level_hoist_source(src).expect("two top-level consts");
+        assert!(got.contains("const P = #{ hover: 0.327, tip: 40.0 };"), "got:\n{got}");
+        assert!(got.contains("const R = [1, 2, 3];"), "got:\n{got}");
+        assert!(!got.contains("fn go"), "a fn body was hoisted:\n{got}");
+        assert_eq!(got.lines().count(), 2, "got:\n{got}");
+    }
+
+    /// The end-to-end contract: a top-level `const` read as `global::X` inside a
+    /// `fn` resolves. This is what every Space School lesson depends on, and it is
+    /// the SAME path scenarios use — `StartTutorial` triggers `RunScenario`.
+    #[test]
+    fn a_fn_can_read_a_top_level_const_via_global() {
+        let engine = rhai::Engine::new();
+        let src = r#"
+            const TIP_DEG = 40.0;
+            fn limit() { global::TIP_DEG }
+        "#;
+        let full = super::compile_with_script_consts(&engine, src).unwrap();
+        let hoisted = super::build_hoisted_ast(&engine, src, &full, None)
+            .expect("a top-level const must produce a hoist AST");
+
+        let mut scope = rhai::Scope::new();
+        let got: f64 = engine
+            .call_fn_with_options(
+                rhai::CallFnOptions::new().eval_ast(true),
+                &mut scope,
+                &hoisted,
+                "limit",
+                (),
+            )
+            .expect("global::TIP_DEG must resolve inside a fn");
+        assert_eq!(got, 40.0);
     }
 
     #[test]

@@ -627,9 +627,9 @@ const SETTLE_FRAMES: u32 = 5;
 /// on the whole bus would therefore stall every shot until [`READY_TIMEOUT`], adding
 /// minutes to an episode and burying the timeout `warn!` under false positives.
 ///
-/// `"terrain"` is the source `report_terrain_stream_status`
-/// (`crates/lunco-sandbox/src/lib.rs:2311`) publishes under.
-const VISUAL_BUSY_SOURCES: &[&str] = &["terrain"];
+/// The entries are the SAME consts the publishers push under, not copies of their
+/// spelling — see [`TERRAIN_SOURCE`](crate::status_bus::TERRAIN_SOURCE).
+const VISUAL_BUSY_SOURCES: &[&str] = &[crate::status_bus::TERRAIN_SOURCE];
 
 /// **The one definition of "this scene is presentable".** Returns `None` when the
 /// scene's visuals have finished loading, or `Some(reason)` naming what is still

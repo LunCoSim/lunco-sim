@@ -137,12 +137,16 @@ pub struct ReportedEscapes(EntityHashSet);
 /// and an incremental union cannot).
 fn update_world_bounds(
     q_changed: Query<(), (Changed<ColliderAabb>, With<ColliderOf>)>,
-    q_removed: RemovedComponents<ColliderAabb>,
+    mut q_removed: RemovedComponents<ColliderAabb>,
     q_static: Query<(&ColliderAabb, &ColliderOf)>,
     q_bodies: Query<&RigidBody>,
     mut bounds: ResMut<WorldBounds>,
 ) {
-    if q_changed.is_empty() && q_removed.is_empty() {
+    // DRAIN, don't peek: `is_empty()` leaves the events queued for their whole
+    // retention window, so every removal re-fired this full static union for
+    // several extra frames.
+    let removed_any = q_removed.read().count() > 0;
+    if q_changed.is_empty() && !removed_any {
         return;
     }
 
@@ -200,7 +204,6 @@ fn report_escaped_bodies(
             Option<&Name>,
             &RigidBody,
         ),
-        With<RigidBody>,
     >,
 ) {
     for (entity, pos, vel, name, rb) in &q {
@@ -231,11 +234,25 @@ fn report_escaped_bodies(
     }
 }
 
-/// Clear the once-per-entity report set when a scene is torn down, so a reloaded
-/// scene can report the same failure again. Entity ids are recycled, and a stale
-/// id in the set would silence a genuinely new escape.
-pub fn clear_reported_escapes(mut reported: ResMut<ReportedEscapes>) {
-    reported.0.clear();
+/// Forget an entity's report the moment its body dies, so a scene reload — or any
+/// id reuse — reports afresh.
+///
+/// Entity ids are RECYCLED. A stale id left in the set silences a genuinely new
+/// escape by a different body that happens to inherit the id, which is the same
+/// unattributable-silence this module exists to remove.
+///
+/// This prunes on death rather than clearing on scene teardown. `lunco-physics`
+/// deliberately depends on no `lunco-*` crate (see [`report_escaped_bodies`]) so
+/// it cannot observe `ClearScene` — but it does not need to: despawning is what
+/// teardown *does*, so the death signal covers scene reload, single-body despawn
+/// and id reuse alike, with no coupling. Change-driven — empty in steady state.
+fn forget_dead_bodies(
+    mut dead: RemovedComponents<RigidBody>,
+    mut reported: ResMut<ReportedEscapes>,
+) {
+    for e in dead.read() {
+        reported.0.remove(&e);
+    }
 }
 
 /// Installs the "left the world" diagnostic. Registered by [`PhysicsGatePlugin`]
@@ -265,7 +282,10 @@ impl Plugin for EscapeDiagnosticPlugin {
             // resolves the identical problem the identical way.
             .add_systems(
                 avian3d::schedule::PhysicsSchedule,
-                (update_world_bounds, report_escaped_bodies)
+                // `forget_dead_bodies` first: a body despawned this tick must leave
+                // the set before anything is judged, or a recycled id starts life
+                // already-reported and its first real escape is silent.
+                (forget_dead_bodies, update_world_bounds, report_escaped_bodies)
                     .chain()
                     .in_set(PhysicsSystems::Writeback)
                     .after(avian3d::schedule::PhysicsStepSystems::Last)
@@ -387,11 +407,35 @@ mod tests {
         let e = Entity::from_raw_u32(7).unwrap();
         assert!(reported.0.insert(e), "first sighting reports");
         assert!(!reported.0.insert(e), "every later tick is silent");
-        clear_reported_escapes_inner(&mut reported);
-        assert!(reported.0.insert(e), "a scene reload reports afresh");
     }
 
-    fn clear_reported_escapes_inner(r: &mut ReportedEscapes) {
-        r.0.clear();
+    /// Despawning a body must clear its report, or a recycled id inherits the
+    /// silence and its first genuine escape is never logged.
+    ///
+    /// Drives the REAL system through a real despawn — an earlier version of this
+    /// test called a private copy of the clear logic, so it stayed green while the
+    /// production function was never registered at all.
+    #[test]
+    fn a_despawned_body_is_forgotten() {
+        let mut app = App::new();
+        app.init_resource::<ReportedEscapes>();
+        app.add_systems(Update, forget_dead_bodies);
+
+        let e = app.world_mut().spawn(RigidBody::Dynamic).id();
+        app.world_mut().resource_mut::<ReportedEscapes>().0.insert(e);
+
+        // No death yet: the report stands.
+        app.update();
+        assert!(
+            app.world().resource::<ReportedEscapes>().0.contains(&e),
+            "a live body must keep its once-only report"
+        );
+
+        app.world_mut().entity_mut(e).despawn();
+        app.update();
+        assert!(
+            app.world().resource::<ReportedEscapes>().0.is_empty(),
+            "a despawned body must be forgotten so a reused id reports afresh"
+        );
     }
 }
