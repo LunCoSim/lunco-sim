@@ -120,6 +120,16 @@ impl TerrainLayer for RockScatterLayer {
     fn id(&self) -> &'static str {
         "rocks"
     }
+
+    fn scatter_fingerprint(&self) -> Option<u64> {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        // Debug covers every nested field (RockLayer / SizeDist / Pattern), so a
+        // future param can't be silently missed. Runtime-only — never persisted.
+        format!("{:?}|{:?}|{}|{}", self.rocks, self.pattern, self.region_half_extent, self.seed)
+            .hash(&mut h);
+        Some(h.finish())
+    }
     fn scatter(&self, cx: &mut LayerScatterCx) {
         // WEB: scatter no rocks at all. Each rock is a distinct ECS entity with a
         // Static sphere Collider, and on WebGL the `VisibilityRange` distance cull
@@ -264,6 +274,14 @@ struct RockInstanceLayer {
 impl TerrainLayer for RockInstanceLayer {
     fn id(&self) -> &'static str {
         "rock"
+    }
+
+    fn scatter_fingerprint(&self) -> Option<u64> {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (self.position[0].to_bits(), self.position[1].to_bits(), self.size.to_bits(), self.seed)
+            .hash(&mut h);
+        Some(h.finish())
     }
     fn scatter(&self, cx: &mut LayerScatterCx) {
         let oracle = cx.oracle;

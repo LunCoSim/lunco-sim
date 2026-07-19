@@ -1684,6 +1684,8 @@ pub(crate) fn finish_dem_restamp(
         Has<DemRestampPending>,
         Option<&TerrainDirty>,
         Has<TerrainRescatter>,
+        &crate::terrain_layers::TerrainLayerStack,
+        Option<&crate::terrain_layers::ScatteredContent>,
     )>,
     scattered: Query<Entity, With<crate::terrain_layers::TerrainScatterEntity>>,
     mut meshes: Option<ResMut<Assets<Mesh>>>,
@@ -1704,6 +1706,8 @@ pub(crate) fn finish_dem_restamp(
         was_pending,
         dirty,
         rescatter,
+        stack,
+        scattered_content,
     ) in &mut tasks
     {
         let Some(oracle) = future::block_on(future::poll_once(&mut task.0)) else {
@@ -1717,6 +1721,33 @@ pub(crate) fn finish_dem_restamp(
         let scoped = dirty_bounds.is_some();
         // Consume the mark so the NEXT change starts clean.
         commands.entity(entity).try_remove::<TerrainDirty>();
+
+        // IDEMPOTENT SWAP (content-addressed): if the recompose produced the very
+        // surface already live — `surface_key` folds the base grid + every height
+        // layer's content key — AND the scatter content is unchanged, this restamp
+        // is a NO-OP: swap nothing, invalidate nothing, re-scatter nothing.
+        // Redundant triggers (the startup Added-as-changed stack observation, USD
+        // recompose echoes, identical re-inserts) become harmless BY DESIGN
+        // instead of each needing bespoke suppression. The visible defect this
+        // kills: rocks and crater tiles despawning ~2 s after startup and
+        // reappearing seconds later, while the horizon/collider/derived-map
+        // pipelines all re-ran for nothing.
+        let same_heights = oracle.surface_key() == hf.0.surface_key();
+        let same_scatter =
+            scattered_content.is_some_and(|c| c.0 == stack.scatter_fingerprint());
+        if same_heights && same_scatter && !rescatter {
+            if was_pending {
+                // A further change landed mid-task: let it recompose (and be
+                // judged on ITS content) rather than dropping it.
+                commands.entity(entity).try_remove::<DemRestampPending>();
+                commands.entity(entity).try_insert(DemRestampDebounce(Timer::from_seconds(
+                    RESTAMP_DEBOUNCE_SECS,
+                    TimerMode::Once,
+                )));
+            }
+            debug!("[dem-terrain] recompose produced identical content — no-op");
+            continue;
+        }
 
         let half = oracle.half_extent() as f64;
 

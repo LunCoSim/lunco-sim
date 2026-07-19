@@ -24,7 +24,7 @@
 
 use std::sync::Arc;
 
-use crate::crater::{crater_profile, CRATER_REACH};
+use crate::crater::{crater_profile_rim_limited, CRATER_REACH};
 use crate::modifier::HeightModifier;
 use crate::source::{hash01, vnoise};
 
@@ -224,7 +224,27 @@ impl Overzoom {
                     // Deep (fresh) craterlets are paraboloid, shallow (degraded)
                     // ones flat dishes — same morphology tie as the crater layer.
                     let bowl_power = 6.0 - 4.0 * ud;
-                    sum += crater_profile(dist, depth, rim, bowl_power) * fade;
+                    // Rim lip vs consumer sampling: the fade above guarantees the
+                    // BOWL is resolvable, but the thin lip (σ = 0.14·r) falls
+                    // between coarse vertices and aliases away — mid-field
+                    // craterlets rendered as rimless "dough" dimples. Widen the
+                    // lip to the sampling step (σ = 0.5·wavelength, normalised
+                    // by r) at FULL height so it stays a crisp, representable
+                    // ring. The residual at the reach is subtracted so the
+                    // field still cuts off continuously (the bare profile left
+                    // a ~2.6%-of-rim ledge at 1.6·r — a faint bright ring line
+                    // under raking light).
+                    let rim_sigma_n = 0.5 * self.min_wavelength / r;
+                    let prof =
+                        crater_profile_rim_limited(dist, depth, rim, bowl_power, rim_sigma_n);
+                    let tail = crater_profile_rim_limited(
+                        CRATER_REACH,
+                        depth,
+                        rim,
+                        bowl_power,
+                        rim_sigma_n,
+                    );
+                    sum += (prof - tail) * fade;
                 }
             }
         }
@@ -321,6 +341,45 @@ mod tests {
             }
         }
         assert!(hi - lo > 0.05, "spread {} too flat", hi - lo);
+    }
+
+    #[test]
+    fn coarse_sampling_keeps_the_rim_lip() {
+        // 10 m craterlet under a 5.2 m sampling wavelength (depth-6 vertex pitch
+        // on the moonbase DEM): the bowl resolves but the exact lip (σ = 1.4 m)
+        // is sub-vertex. The old path lost it — mid-field craters as rimless
+        // dough. The rim-limited profile must keep the lip at ~full height.
+        use crate::crater::{crater_profile, crater_profile_rim_limited};
+        let (depth, rim, p) = (1.5, 0.6, 3.0);
+        let sigma_n = 0.5 * 5.2 / 10.0;
+        let exact = crater_profile(0.98, depth, rim, p);
+        let wide = crater_profile_rim_limited(0.98, depth, rim, p, sigma_n);
+        assert!(
+            (wide - exact).abs() < 0.05 * exact.abs().max(0.1),
+            "widened lip should hold full height: exact {exact}, wide {wide}"
+        );
+        // …and rim_sigma_n = 0 is bit-for-bit the exact profile (ungated
+        // consumers see no change).
+        for d in [0.0, 0.5, 0.98, 1.15, 1.4] {
+            assert_eq!(
+                crater_profile_rim_limited(d, depth, rim, p, 0.0),
+                crater_profile(d, depth, rim, p)
+            );
+        }
+    }
+
+    #[test]
+    fn gated_field_is_continuous_at_the_craterlet_reach() {
+        // The tail subtraction must hold under a coarse gate too: walk radially
+        // out of a band cell and require no step anywhere (the old bare-profile
+        // path left a small apron ledge at exactly 1.6·r).
+        let s = Overzoom { min_wavelength: 5.2, ..Default::default() };
+        let eps = 1e-4;
+        for k in 0..400 {
+            let x = k as f64 * 0.25;
+            let d = (s.delta_at(x + eps, 7.7) - s.delta_at(x - eps, 7.7)).abs();
+            assert!(d < 0.05, "step {d} at x={x} under a 5.2 m gate");
+        }
     }
 
     #[test]

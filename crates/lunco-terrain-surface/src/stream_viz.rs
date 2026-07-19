@@ -37,7 +37,7 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use big_space::prelude::Grid;
-use lunco_core::WorldGrid;
+use lunco_core::{on_command, register_commands, Command, WorldGrid};
 use lunco_obstacle_field::grid_mesh;
 use lunco_materials::{
     ParamValue, ShaderLook, TextureLayer, ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
@@ -87,7 +87,13 @@ const CINEMATIC_TILE_RES: usize = 2049;
 const MAX_DEPTH: u8 = 8;
 /// On-screen error (px, at the canonical viewport) at which a node refines —
 /// the ONE detail-vs-cost knob of the error-driven metric. Smaller = finer.
-const TARGET_PIXEL_ERROR: f64 = 3.0;
+///
+/// 3.0 → 2.0 (2026-07-19): refine range scales as 1/pixel_error, so 2.0 pushes
+/// every detail ring 1.5× farther out. At 3.0 the craterlet-bearing depths
+/// (6–8) hugged the camera closely enough that craters visibly popped in as you
+/// drove toward them; the point of a crater is to be seen BEFORE you reach it.
+/// Cost is bounded by `tile_budget` + nearest-first splits either way.
+const TARGET_PIXEL_ERROR: f64 = 2.0;
 /// Canonical viewport for the screen metric (fixed → selection is independent of
 /// any client's real resolution/FOV; peers select identically).
 const CANON_SCREEN_H_PX: f64 = 1080.0;
@@ -387,7 +393,7 @@ fn evolve_cover(
     eye_height: f64,
     node_error: &impl Fn(QuadCoord, Square) -> f64,
     budget: usize,
-) {
+) -> usize {
     if cover.is_empty() {
         cover.insert(QuadCoord::ROOT);
     }
@@ -411,7 +417,8 @@ fn evolve_cover(
     merges.sort_by(|a, b| b.0.total_cmp(&a.0));
 
     let mut edits = 0usize;
-    let mut merge_one = |cover: &mut HashSet<QuadCoord>, p: QuadCoord| {
+    let mut budget_refused = 0usize;
+    let merge_one = |cover: &mut HashSet<QuadCoord>, p: QuadCoord| {
         // Re-check: an earlier merge in this pass may have consumed these children.
         if !p.children().iter().all(|k| cover.contains(k)) {
             return false;
@@ -506,7 +513,14 @@ fn evolve_cover(
         // The whole chain lands or none of it does — a partial cascade would leave
         // the violation it exists to prevent. `continue`, not `break`: a later,
         // cheaper split (no cascade) may still fit the remaining budget.
-        if edits + chain.len() > MAX_COVER_EDITS || cover.len() + 3 * chain.len() > budget {
+        if edits + chain.len() > MAX_COVER_EDITS {
+            continue; // transient: retried next pass once the edit budget frees up
+        }
+        if cover.len() + 3 * chain.len() > budget {
+            // TILE-budget refusal — unlike the edit cap this does not resolve by
+            // waiting, so it is counted and surfaced (`TerrainStreamStatus`): at a
+            // fixed point the wanted set simply exceeds the budget.
+            budget_refused += 1;
             continue;
         }
         // Coarsest first, so every forced split lands on an already-conforming rim.
@@ -521,6 +535,7 @@ fn evolve_cover(
             edits += 1;
         }
     }
+    budget_refused
 }
 
 fn build_draw_partition(
@@ -608,6 +623,11 @@ pub struct LodTiles {
     /// permanently incomplete and the fallback it exists to provide would silently
     /// not be there. Also lets the enumeration be skipped once complete.
     coarse_ready: bool,
+    /// Budget-refused split count from the LAST live `evolve_cover` pass. Kept on
+    /// the component (not recomputed into the status resource directly) because
+    /// the idle fast path skips selection entirely — a starved-but-idle terrain
+    /// must keep reporting its starvation, not read as healthy.
+    budget_refused: usize,
 }
 
 impl LodTiles {
@@ -765,7 +785,12 @@ impl Default for TerrainLodConfig {
         #[cfg(target_arch = "wasm32")]
         let tile_budget = 64;
         #[cfg(not(target_arch = "wasm32"))]
-        let tile_budget = 512;
+        // 512 → 768 with pixel_error 2.0 (2026-07-19): the finer metric's wanted
+        // set exceeded 512, and budget enforcement REFUSES the excess splits —
+        // correct mechanics, wrong tuning: the far field then sits on coarse
+        // parents forever, a permanent "cell not loaded" seam. The budget must
+        // roughly fit the metric's steady-state want or refusal becomes the look.
+        let tile_budget = 768;
         // On wasm32 the `AsyncComputeTaskPool` has NO threads: the "off-thread"
         // bake future runs to completion on the MAIN thread the instant it is
         // polled. A tile bake is ~12k composed-oracle samples (2401 verts ×
@@ -775,7 +800,9 @@ impl Default for TerrainLodConfig {
         #[cfg(target_arch = "wasm32")]
         let bakes_per_frame = 1;
         #[cfg(not(target_arch = "wasm32"))]
-        let bakes_per_frame = 4;
+        // 4 → 8 (2026-07-19): pixel_error 2.0 grew the fill work ~2.25x; at 4 the
+        // coarse-parent fallback lingered long enough to read as missing terrain.
+        let bakes_per_frame = 8;
         TerrainLodConfig {
             pixel_error: TARGET_PIXEL_ERROR,
             max_depth: MAX_DEPTH,
@@ -784,6 +811,39 @@ impl Default for TerrainLodConfig {
         }
     }
 }
+
+/// Live-tune the terrain streaming knobs — the same [`TerrainLodConfig`] fields
+/// the Inspector's "Terrain LOD" section edits, addressable from the API and
+/// scripts (controlled A/Bs, automation). Partial: omitted fields keep their
+/// current values. Values are written through raw; the selection pass clamps at
+/// its use sites (`pixel_error` to [0.5, 32], `tile_budget` to ≥16, `max_depth`
+/// to ≥1), so command and Inspector edits go through the same guards.
+#[Command(default)]
+pub struct SetTerrainLod {
+    pub pixel_error: Option<f64>,
+    pub max_depth: Option<u8>,
+    pub bakes_per_frame: Option<usize>,
+    pub tile_budget: Option<usize>,
+}
+
+#[on_command(SetTerrainLod)]
+fn on_set_terrain_lod(trigger: On<SetTerrainLod>, mut cfg: ResMut<TerrainLodConfig>) {
+    let ev = trigger.event();
+    if let Some(v) = ev.pixel_error {
+        cfg.pixel_error = v;
+    }
+    if let Some(v) = ev.max_depth {
+        cfg.max_depth = v;
+    }
+    if let Some(v) = ev.bakes_per_frame {
+        cfg.bakes_per_frame = v;
+    }
+    if let Some(v) = ev.tile_budget {
+        cfg.tile_budget = v;
+    }
+}
+
+register_commands!(on_set_terrain_lod);
 
 /// Memoized per-node measured geometric error for a terrain's current oracle —
 /// the cache behind error-driven CDLOD selection. Keyed by quadtree node; wiped
@@ -1060,6 +1120,13 @@ pub struct TerrainStreamStatus {
     pub resident: usize,
     /// Off-thread bakes in flight.
     pub pending: usize,
+    /// Splits the selection WANTED but `tile_budget` refused (summed over
+    /// terrains, from each terrain's last live selection pass). Non-zero at a
+    /// still camera means the far field is sitting on coarser parents by budget
+    /// enforcement — the "cell not loaded" look — and raising `tile_budget` (or
+    /// coarsening `pixel_error`) is the fix. Distinct from `pending`, which is
+    /// transient fill work.
+    pub budget_refused: usize,
 }
 
 /// Per-frame scratch for [`update_lod_tiles`] — the five collections the streaming
@@ -1270,6 +1337,9 @@ pub fn update_lod_tiles(
                 // resident count so the status bar still reads "done", not "0/0".
                 stream_status.wanted += tiles.tiles.len();
                 stream_status.resident += tiles.tiles.len();
+                // Starvation is a property of the last live selection, not of this
+                // frame's (skipped) pass — keep reporting it while idle.
+                stream_status.budget_refused += tiles.budget_refused;
                 continue;
             }
             tiles.last_sig = Some(sig);
@@ -1379,7 +1449,8 @@ pub fn update_lod_tiles(
         // INCREMENTAL: evolve the persistent cover a bounded step, then read the
         // selection off it. No global metric moves, so no mass re-selection exists to
         // oscillate — see `evolve_cover`.
-        evolve_cover(&qt, &mut tiles.cover, focus, eye_height, &node_error, budget);
+        tiles.budget_refused =
+            evolve_cover(&qt, &mut tiles.cover, focus, eye_height, &node_error, budget);
         sel = tiles
             .cover
             .iter()
@@ -1734,6 +1805,7 @@ pub fn update_lod_tiles(
         stream_status.wanted += wanted.len();
         stream_status.resident += wanted.iter().filter(|c| tiles.tiles.contains_key(c)).count();
         stream_status.pending += pending.0.len();
+        stream_status.budget_refused += tiles.budget_refused;
 
         // Bound the mesh cache: when it grows past the cap, drop THIS terrain's
         // non-resident meshes (deterministic geometry → they re-bake on demand).
@@ -2167,6 +2239,30 @@ mod draw_partition_tests {
                 "cover still churning on a stationary camera — no fixed point"
             );
         }
+    }
+
+    /// A budget too small for the metric's wanted set must REPORT the refused
+    /// splits (the "cell not loaded" self-diagnosis signal), and a budget that
+    /// fits must report none — the counter is starvation, not fill progress.
+    #[test]
+    fn budget_starvation_is_reported() {
+        let qt = test_qt();
+        let err = |_c: QuadCoord, _r: Square| 120.0f64;
+        let mut cover = HashSet::new();
+        // Budget large enough that the metric's want fits entirely.
+        for _ in 0..200 {
+            evolve_cover(&qt, &mut cover, [0.0, 0.0], 5.0, &err, 1_000_000);
+        }
+        // Settled within budget: nothing refused at the fixed point.
+        let refused = evolve_cover(&qt, &mut cover, [0.0, 0.0], 5.0, &err, 1_000_000);
+        assert_eq!(refused, 0, "fixed point within budget must not report refusals");
+        // Same metric, starved budget: the wanted splits must surface as refusals.
+        let mut cover = HashSet::new();
+        for _ in 0..200 {
+            evolve_cover(&qt, &mut cover, [0.0, 0.0], 5.0, &err, 16);
+        }
+        let refused = evolve_cover(&qt, &mut cover, [0.0, 0.0], 5.0, &err, 16);
+        assert!(refused > 0, "starved cover reached a fixed point without reporting refusals");
     }
 
     /// Lowering the budget must be absorbed by merging, not by blowing past it.

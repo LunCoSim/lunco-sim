@@ -35,7 +35,10 @@ use crate::tile_mesh::{bake_tile_mesh, TileMesh};
 /// a tile's mesh is LOCAL to its own big_space `CellCoord` in Y as well as X/Z
 /// (DEM scenes anchored at absolute lunar elevation put geometry ~2 km from the
 /// tile origin — one cell off the content — breaking LOD/culling/colliders).
-const CACHE_FORMAT_VERSION: u64 = 6;
+/// v7: over-zoom craterlet rims are sampling-width-widened at full height
+/// (`crater_profile_rim_limited`) + reach-tail subtracted — tile heights change,
+/// so v6 tiles must not be reused.
+const CACHE_FORMAT_VERSION: u64 = 7;
 
 /// One tile bake as a [`lunco_precompute::Bake`] entry.
 struct TileBake<'a> {
