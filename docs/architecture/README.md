@@ -82,6 +82,10 @@ these are the reasoning.
 | [`52-connectivity-gaps-and-test-plan.md`](52-connectivity-gaps-and-test-plan.md) | Companion to 49: the connectivity gap audit and what closed it — radio shadow needs an opt-in `LinkOccluder` (occlusion is NOT the physics collider), and link ids are GIDs |
 | [`53-usd-suspension-specification.md`](53-usd-suspension-specification.md) | Wheels and suspensions in canonical PhysX names (`springStrength`/`springDamperRate`), the three `LunCo*API` extensions PhysX doesn't model, and detection **by applied schema, never by attribute presence**. A raycast wheel with no resolvable suspension refuses to spawn — no silent defaults |
 | [`54-electrical-domain-and-modelica-libraries.md`](54-electrical-domain-and-modelica-libraries.md) | USD assembles / Modelica is the maths / rhai is behaviour, worked on EPS. A physical bus is **one acausal circuit** (`Pin` + `flow`, `connect()` → Kirchhoff for free), one `LunCoProgram` under a domain scope. The shipped `LunCo` library loads demand-driven in the compiler; a twin's `<twin>/models` via a `TwinRoots` watcher — both rumoca built-ins |
+| [`55-scene-addressing-and-roots.md`](55-scene-addressing-and-roots.md) · [`56-asset-resolution-and-cache.md`](56-asset-resolution-and-cache.md) | **Identity is not location.** A scene is addressed by a root-relative source (`twin://`), a referenced asset by a logical identity (`@lunco://models/x.glb@`) — only the resolver knows paths. A bare relative path outside `assets/` is the failure both close |
+| [`57-dem-georeferencing.md`](57-dem-georeferencing.md) · [`59-georeferenced-rasters-as-assets.md`](59-georeferenced-rasters-as-assets.md) | **The raster carries its own spatial reference.** Writing it out (a self-describing GeoTIFF, never a sidecar restating the transform) and reading it back in (an external GIS raster enters as an asset, not through an import subsystem) |
+| [`58-vessel-envelope-and-routes.md`](58-vessel-envelope-and-routes.md) | Vehicle capability is **derived, not copied** — slip limit is `atan(μ)`, not a constant retyped into six files. HUD derivation and rhai accessors are built; routes and tiers are proposed |
+| [`60-curvature-elevation-and-gravity.md`](60-curvature-elevation-and-gravity.md) | **PLANNED.** The measured curvature-feather defect (the edge feather descends ABSOLUTE relief, so a 1 km site renders as kilometre-tall spikes) and the plan for radial gravity on curved ground |
 
 ## Cross-cutting
 
@@ -91,6 +95,8 @@ these are the reasoning.
 | [**`shader-layers-and-params.md`**](shader-layers-and-params.md) | Shader looks: WGSL-reflected `dyn_params` and named texture layers. Parameter names, ranges and defaults come from the shader source — **adding a parameter is editing a shader, not editing Rust** |
 | [`command-journal.md`](command-journal.md) | One op log for identity, undo and sync. **Document-domain ops are journaled; command/session replay is not built** |
 | [`terrain-substrate.md`](terrain-substrate.md) · [`terrain-layered-rendering.md`](terrain-layered-rendering.md) | The height oracle (one `HeightSource` from orbit to rover) and the layered Data→Transfer→Blend rendering pipeline |
+| [`terrain-lod-audit.md`](terrain-lod-audit.md) · [`terrain-precompute-plan.md`](terrain-precompute-plan.md) | The CDLOD streamer audited against the real moonbase DEM (surface only; the globe is out of scope), and the precomputed-tile architecture that replaces its finding #6 |
+| [`telemetry-subsystem.md`](telemetry-subsystem.md) | Channels, rates and clock binding. **Phases 0–1 landed; 2–5 are proposal** |
 | [`ports-system-design.md`](ports-system-design.md) | `PortRegistry` — the one scalar-port surface (Substrate D) |
 | [`derive-substrate.md`](derive-substrate.md) · [`precompute-substrate.md`](precompute-substrate.md) · [`hashing-substrate.md`](hashing-substrate.md) · [`mobility-substrate.md`](mobility-substrate.md) | The derived-artifact substrates (A–E) |
 | [`caching-and-precompute-strategy.md`](caching-and-precompute-strategy.md) · [`scenario-program-cache.md`](scenario-program-cache.md) | Caching strategy; the rhai program cache |
@@ -117,5 +123,7 @@ there describes running code.
 | `20`–`29` | Per-domain design |
 | `30`–`39` | Infrastructure & deployment |
 | `40`–`49` | Low-level subsystems |
+| `50`–`59` | Authoring contracts — what a scene, an asset or a vessel may state, and how it resolves |
+| `60`+ | Physical fidelity — planned work on the world model itself |
 | un-numbered | Cross-cutting substrates and boundaries |
 | `research/` | Historical / inspiration |

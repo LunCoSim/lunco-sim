@@ -218,6 +218,27 @@ pub fn get_attribute_as_bool<R: UsdRead>(
     }
 }
 
+/// Attenuation cutoff for a local light, in metres.
+///
+/// `LunCoLightAPI` declares `lunco:light:range` with a fallback of `0` and defines
+/// that value as "engine default", so an unauthored attribute and an attribute that
+/// resolves to the schema fallback must land on the same number. Reading it with a
+/// plain `unwrap_or` honours only the first: a prim that applies the API without
+/// overriding the range reads back `0` and gets a light with no influence volume at
+/// all — lit in the authoring tool, black in the engine. Non-positive therefore
+/// means default here, not "zero metres".
+///
+/// 30 m bounds a light to the deck or cabin it belongs to, which is the scale every
+/// local light in the asset library is authored at.
+const DEFAULT_LIGHT_RANGE_M: f32 = 30.0;
+
+fn read_light_range<R: UsdRead>(reader: &R, path: &SdfPath) -> f32 {
+    match get_attribute_as_f32(reader, path, "lunco:light:range") {
+        Some(r) if r > 0.0 => r,
+        _ => DEFAULT_LIGHT_RANGE_M,
+    }
+}
+
 /// If `prim_type` is a supported UsdLux light, attach the corresponding
 /// Bevy light components to `entity` and return `true`. Called from
 /// `instantiate_usd_prim`; the prim's transform/visibility are applied by
@@ -421,10 +442,9 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
             // it also blows past Bevy's per-cluster shadow-caster cap. The light
             // still ILLUMINATES; it just doesn't cast. A scene that genuinely
             // wants a hero cast shadow opts in per-light with
-            // `inputs:shadow:enable = true`. (Was `unwrap_or(true)` — the
-            // TODO(review #2) fix.)
+            // `inputs:shadow:enable = true`.
             let shadow_maps_enabled = get_attribute_as_bool(reader, sdf_path, "inputs:shadow:enable").unwrap_or(false);
-            let range = get_attribute_as_f32(reader, sdf_path, "lunco:light:range").unwrap_or(30.0);
+            let range = read_light_range(reader, sdf_path);
 
             if let Some(cone_angle_deg) = get_attribute_as_f32(reader, sdf_path, "inputs:shaping:cone:angle") {
                 // Spotlight path (UsdLuxShapingAPI applied)
@@ -510,7 +530,7 @@ pub(crate) fn instantiate_light_prim<R: UsdRead>(
             // own properties; 1 m square is the schema fallback.
             let width = get_attribute_as_f32(reader, sdf_path, "inputs:width").unwrap_or(1.0);
             let height = get_attribute_as_f32(reader, sdf_path, "inputs:height").unwrap_or(1.0);
-            let range = get_attribute_as_f32(reader, sdf_path, "lunco:light:range").unwrap_or(30.0);
+            let range = read_light_range(reader, sdf_path);
 
             // No `UsdAuthoredLight`: like SphereLight, a rect is a LOCAL light (a
             // deck-ceiling panel, a softbox fill), not a scene-dominant sun/sky.

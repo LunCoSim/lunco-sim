@@ -8,9 +8,10 @@
 //! pure data — no projection is applied here; full lat/lon↔XZ reprojection (polar
 //! stereographic for the lunar sites) is a deferred upgrade.
 //!
-//! `DemMetadata` already carries `center_lat`/`center_lon` parsed from the DEM's
-//! `metadata.yaml`; USD `lunco:anchor:*` lets a scene override/author it
-//! declaratively, the same way `lunco:terrain:*` authors the build.
+//! The DEM raster already states its own extent and projection in its GeoTIFF tags
+//! (see [`lunco_terrain_bake::dem::read_geotiff_transform`]); USD `lunco:anchor:*`
+//! lets a scene override or author the anchor declaratively, the same way
+//! `lunco:terrain:*` authors the build.
 
 use bevy::prelude::*;
 

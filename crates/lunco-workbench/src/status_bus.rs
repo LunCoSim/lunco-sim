@@ -235,6 +235,15 @@ impl StatusEvent {
 /// terrain again. One `const`, one compile error if it ever moves.
 pub const TERRAIN_SOURCE: &str = "terrain";
 
+/// The bus source name USD scene spawning publishes under.
+///
+/// Shared for the same reason as [`TERRAIN_SOURCE`]: the publisher
+/// (`lunco-sandbox`'s `report_scene_spawn_status`, mirroring
+/// `lunco_usd_sim::cosim::SceneLoadInFlight` + `UsdAwaitingStage`) and the
+/// screenshot readiness gate must agree on the spelling, and a silent
+/// disagreement degrades into recordings that open on a half-spawned scene.
+pub const SCENE_SOURCE: &str = "scene";
+
 /// Workbench-wide status bus. Insert via [`StatusBusPlugin`].
 ///
 /// Carries two flavours of state — discrete history events (info / warn /

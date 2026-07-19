@@ -110,8 +110,8 @@ trail.
 
 | Layer | Catches | Where |
 |---|---|---|
-| `ci/wasm-lint/clippy.toml` + the **`wasm-lint`** CI job | The wasm-portability bans — `std::fs::*`, `std::thread::spawn`, `std::time::Instant::now` — run with `--target wasm32-unknown-unknown` on the crates that actually ship to the browser | `.github/workflows/lint.yml` (`CLIPPY_CONF_DIR=ci/wasm-lint`) |
-| `clippy.toml` at the repo root + the **`clippy`** CI job | Everything that is genuinely wrong *on native* too: the `big_space` re-parenting atomicity contract (`add_child` / `set_parent_in_place` → `migrate_to_grid`) and the USD stage deep-clone (`TextReader::clone`) | `clippy.toml`, `.github/workflows/lint.yml` |
+| `ci/wasm-lint/clippy.toml` — **config only; no workflow invokes it** | The wasm-portability bans — `std::fs::*`, `std::thread::spawn`, `std::time::Instant::now` — intended to run with `--target wasm32-unknown-unknown` and `CLIPPY_CONF_DIR=ci/wasm-lint` on the crates that ship to the browser | `ci/wasm-lint/clippy.toml` |
+| `clippy.toml` at the repo root — **config only; no workflow invokes it** | Everything that is genuinely wrong *on native* too: the `big_space` re-parenting atomicity contract (`add_child` / `set_parent_in_place` → `migrate_to_grid`) and the USD stage deep-clone (`TextReader::clone`) | `clippy.toml` |
 | `scripts/check_wasm.sh` — **run by hand; no workflow invokes it** | **Anything** that breaks the wasm *link*, including transitive deps that pull `mio`/`tokio-fs`/`std::thread`. Strongest check, but it is not a gate until something calls it. | `scripts/check_wasm.sh` |
 | This file | Human awareness | here |
 

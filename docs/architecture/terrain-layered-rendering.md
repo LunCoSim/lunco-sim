@@ -308,7 +308,8 @@ it in `TerrainGeoref`:
 - `TerrainGeoref` should therefore carry: projection type
   (`Equirectangular | PolarStereographic { south }`), centre lat/lon, reference
   radius, scale / standard parallel, and implement **forward + inverse**. The DEM's
-  `metadata.yaml` / GeoTIFF label already declares these — parse them. The inverse
+  GeoTIFF tags already declare all of it — read them
+  (`lunco_geotiff` / `dem::read_geotiff_transform`), never restate them. The inverse
   (XZ → lat/lon) is what both the graticule *and* the orbit→surface
   `CompositeHeightSource` need, so implement it once here.
 

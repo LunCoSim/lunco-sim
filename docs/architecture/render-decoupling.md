@@ -3,20 +3,28 @@
 **Status: DONE (2026-07-13).** The `--no-ui` server links no GPU stack:
 
 ```
-$ cargo tree -p lunco-sandbox-server -i wgpu               # package ID not found
-$ cargo tree -p lunco-sandbox-server -i bevy_render        # package ID not found
-$ cargo tree -p lunco-sandbox-server -i bevy_pbr           # package ID not found
-$ cargo tree -p lunco-sandbox-server -i bevy_core_pipeline # package ID not found
-$ cargo tree -p lunco-sandbox-server -i egui               # package ID not found
-$ cargo tree -p lunco-sandbox-server -i winit              # package ID not found
+$ cargo tree -e normal -p lunco-sandbox-server -i wgpu               # warning: nothing to print.
+$ cargo tree -e normal -p lunco-sandbox-server -i bevy_render        # warning: nothing to print.
+$ cargo tree -e normal -p lunco-sandbox-server -i bevy_pbr           # warning: nothing to print.
+$ cargo tree -e normal -p lunco-sandbox-server -i bevy_core_pipeline # warning: nothing to print.
+$ cargo tree -e normal -p lunco-sandbox-server -i egui               # warning: nothing to print.
+$ cargo tree -e normal -p lunco-sandbox-server -i winit              # warning: nothing to print.
 ```
+
+Both flags are load-bearing. Absence is reported as `warning: nothing to print.` on
+**stdout with exit code 0** — not a non-zero exit — so a check that keys on the exit
+status passes unconditionally. And without `-e normal`, `-i` also walks dev- and
+build-dependencies, where wgpu legitimately appears (visual examples, `lunco-usd`'s
+dev-only `bevy_pbr`), reporting a regression that is not one.
 
 `naga` remains, via `bevy_shader` — the WGSL **compiler**, kept for live shader editing
 (`SetShaderSource` / `CreateShader` compile WGSL into `Assets<Shader>` so an edit renders without a
 disk round-trip). A compiler, not a GPU stack. Moving it behind the gate is a separate, smaller job.
 
-The [`render-decoupling` CI job](../../.github/workflows/lint.yml) enforces all of the above. **Do not
-delete it** — see [Why this needs a machine, not vigilance](#why-this-needs-a-machine-not-vigilance).
+[`scripts/check_render_decoupling.sh`](../../scripts/check_render_decoupling.sh) enforces all of the
+above. **Run it after any dependency change; do not delete it** — see
+[Why this needs a machine, not vigilance](#why-this-needs-a-machine-not-vigilance). No workflow
+invokes it, so it is a gate only when something calls it.
 
 **Goal:** a headless build (`--no-ui`, the wasm worker, every integration test) that does not link
 wgpu, naga, or `bevy_render` — achieved **without a single `#[cfg(feature = "render")]` inside domain
@@ -174,7 +182,7 @@ And the last edge before that one was a **single billboard `Text2d` label on a s
 `bevy_sprite_render` pulls `bevy_render`. Nobody would guess the server links a GPU driver because of a
 text label. **Only `cargo tree` sees any of this.**
 
-Hence the `render-decoupling` job in [`.github/workflows/lint.yml`](../../.github/workflows/lint.yml):
+Hence [`scripts/check_render_decoupling.sh`](../../scripts/check_render_decoupling.sh):
 it asserts the server links none of `wgpu`/`bevy_render`/`bevy_pbr`/`bevy_core_pipeline`/`egui`/`winit`,
 and that no crate other than `lunco-render-bevy` enables `bevy_pbr`. The review's central lesson was
 *the craft is high, the enforcement is absent.* This is the enforcement.

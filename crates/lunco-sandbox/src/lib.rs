@@ -2453,8 +2453,9 @@ fn report_terrain_stream_status(
 }
 
 /// Mirror USD scene-spawn progress into the workbench
-/// [`StatusBus`](lunco_workbench::status_bus::StatusBus) under source `"scene"`,
-/// the twin of [`report_terrain_stream_status`].
+/// [`StatusBus`](lunco_workbench::status_bus::StatusBus) under
+/// [`SCENE_SOURCE`](lunco_workbench::status_bus::SCENE_SOURCE), the twin of
+/// [`report_terrain_stream_status`].
 ///
 /// Two signals, because they cover different windows and neither subsumes the
 /// other:
@@ -2479,7 +2480,7 @@ fn report_scene_spawn_status(
     bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
 ) {
     let Some(mut bus) = bus else { return };
-    const SOURCE: &str = "scene";
+    const SOURCE: &str = lunco_workbench::status_bus::SCENE_SOURCE;
     let pending = awaiting.iter().count();
     if let Some(g) = in_flight {
         // `total = 0` is the bus's "indeterminate" encoding — the number of prims

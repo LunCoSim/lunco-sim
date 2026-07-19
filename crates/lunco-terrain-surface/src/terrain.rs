@@ -368,8 +368,9 @@ fn update_terrain_gen_status(
 }
 
 /// Build a DEM terrain from a site directory at **native resolution**. `uri`
-/// points at a `lunar_terrain_exporter` output dir (containing `metadata.yaml`
-/// and `materials/textures/heightmap.tif`).
+/// points at a `lunar_terrain_exporter` output dir; the one file read is
+/// `materials/textures/heightmap.tif`, a georeferenced GeoTIFF that states its own
+/// extent and projection.
 ///
 /// `window_m` is the side length (metres) of the centred region realized as one
 /// full-5 m-resolution tile (mesh + collider). `0` = the whole DEM (heavy — a

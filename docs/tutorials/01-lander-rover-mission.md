@@ -414,9 +414,32 @@ further children of `MyLander`:
         bool physics:collisionEnabled = false
     }
 
-    # Solar wings on +/-X, tilted toward the sun. These are the one place we reach
-    # for a real shader: `solar_panel.wgsl` draws the cells, busbars and frame
-    # procedurally, and every `primvars:*` below is one of its parameters.
+    # The wings' look is a real shader, so it is a real UsdShade material: a
+    # `Material` whose surface connects to a `Shader` naming the WGSL under the
+    # `wgsl` render context. Every `inputs:` on that shader is one of its
+    # parameters. Materials live under a `Looks` scope by convention.
+    def Scope "Looks"
+    {
+        def Material "SolarWing_Mat"
+        {
+            token outputs:surface.connect = </Lander/Looks/SolarWing_Mat/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:wgsl:sourceAsset = @lunco://shaders/solar_panel.wgsl@
+                float inputs:cell_rows = 8.0
+                float inputs:cell_cols = 14.0
+                color3f inputs:cell_color = (0.04, 0.05, 0.28)
+                color3f inputs:bus_color = (0.9, 0.9, 0.95)
+                color3f inputs:frame_color = (0.15, 0.15, 0.18)
+                token outputs:surface
+            }
+        }
+    }
+
+    # Solar wings on +/-X, tilted toward the sun. They bind the material above;
+    # both wings wear the same one.
     def Cube "SolarWingPX"
     {
         double size = 1.0
@@ -424,28 +447,25 @@ further children of `MyLander`:
         double3 xformOp:rotateXYZ = (0, 0, -12.0)
         double3 xformOp:scale = (5.6, 0.06, 3.4)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
-        color3f primvars:displayColor = (0.06, 0.06, 0.22)
-        string primvars:materialType = "shader"
-        string primvars:shaderPath = "shaders/solar_panel.wgsl"
-        float primvars:cell_rows = 8.0
-        float primvars:cell_cols = 14.0
-        color3f primvars:cell_color = (0.04, 0.05, 0.28)
-        color3f primvars:bus_color = (0.9, 0.9, 0.95)
-        color3f primvars:frame_color = (0.15, 0.15, 0.18)
+        rel material:binding = </Lander/Looks/SolarWing_Mat>
         bool physics:collisionEnabled = false
     }
     # Mirror it onto -X: negate the translate X and the rotate Z.
 ```
 
 Two things to notice. The hull's warm gold is just `displayColor` — that's
-multi-layer insulation foil, and a plain PBR surface renders it fine. The
-wings, by contrast, set `materialType = "shader"` and point at a real WGSL shader,
-whose knobs are ordinary `primvars` you can tune per instance. Reach for a shader
-when the surface has *structure* (cells, busbars); reach for `displayColor` when it
-just has a colour.
+multi-layer insulation foil, and a plain PBR surface renders it fine. The wings, by
+contrast, bind a UsdShade material whose shader names a real WGSL file, and its
+knobs are ordinary `inputs:` you can tune. Reach for a shader when the surface has
+*structure* (cells, busbars); reach for `displayColor` when it just has a colour.
 
-Beware one trap: `shaderPath` must name a whole shader with a `@fragment` entry
-point. Point it at a shader *library* like `pbr_lit.wgsl` (which only exports
+Binding is the **only** way to dress a prim with a shader. There is no
+`primvars:materialType` and no `primvars:shaderPath` — both were LunCo inventions for
+a thing UsdShade already expresses, and both are deleted. A `Material` composes,
+round-trips, and opens in usdview; a bespoke primvar does none of that.
+
+Beware one trap: `info:wgsl:sourceAsset` must name a whole shader with a `@fragment`
+entry point. Point it at a shader *library* like `pbr_lit.wgsl` (which only exports
 functions) and you build an invalid render pipeline — the viewport blinks, the log
 fills with validation spam, and nothing tells you why.
 
