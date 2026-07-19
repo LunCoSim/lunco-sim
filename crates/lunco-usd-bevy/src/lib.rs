@@ -3550,11 +3550,19 @@ fn build_usd_curve_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> 
 /// Normals are analytic (`uder × vder`), not face-averaged — exact at the poles
 /// and seams where averaging creases, which is precisely the dome apex.
 ///
-/// **`trimCurve:*` is not honoured**: `openusd` does not define those tokens (see
-/// `OPENUSD_TRIMCURVE_SPEC.md`). An authored trim is silently ignored, so a
-/// trimmed patch renders untrimmed — larger than intended, never smaller. That is
-/// the safe direction to be wrong in, but it IS wrong; the tokens are a small
-/// upstream contribution.
+/// **`trimCurve:*` IS honoured** — see [`crate::trim`]. A trimmed patch gets an
+/// irregular triangulation of its surviving domain instead of a lattice, which is
+/// what puts a genuine arched doorway in a wall.
+///
+/// Trim data that is missing or malformed falls back to rendering UNTRIMMED, with
+/// a warning naming the prim — larger than authored, never smaller. That is the
+/// safe direction to fail in, and it is loud rather than silent.
+///
+/// (This paragraph previously said trimming was unimplemented and silently
+/// ignored. It was stale, and it cost a debugging session: the claim was taken at
+/// face value while the code underneath was working, so a missing surface was
+/// blamed on trim support that in fact existed. A doc comment that describes a
+/// capability the code no longer lacks is worse than no comment.)
 fn build_usd_nurbs_patch_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> {
     use bevy::asset::RenderAssetUsages;
     use bevy_mesh::PrimitiveTopology;

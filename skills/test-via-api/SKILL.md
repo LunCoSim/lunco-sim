@@ -81,6 +81,51 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
 
 Successful response: `{"command_id": N}`. Error: `{"error":"..."}`.
 
+**Arguments MUST be nested inside `params`.** `{"command":"X","eye":[...]}` is
+accepted with HTTP 200 and the arguments are **silently discarded** — the
+envelope's named `params` slot is what the legacy branch reads, and everything
+else lands in a flatten-catch-all that branch ignores
+(`crates/lunco-api/src/transports/envelope.rs`). The command then runs with
+`Default::default()` for every field. Symptom to recognise: the log shows zeroed
+arguments, e.g.
+
+```
+SET_CAMERA: eye=(0.00,0.00,0.00) target=(0.00,0.00,0.00)
+```
+
+which reads as "the geometry is broken" when it actually means "the camera never
+moved". If a command appears to do nothing, grep the log for zeroed arguments
+before you touch the asset.
+
+**`{"command_id": N}` means QUEUED, not succeeded.** It is not an
+acknowledgement that the command ran, validated, or had any effect. Rejections
+and warnings appear **only in the log**, so the log is the real return channel —
+tail it after every batch. `QueryCommandResult` (by `command_id`) exists for
+commands that produce values.
+
+### Sandbox: loading a model
+
+Two commands, two different argument types, and mixing them up is a silent no-op:
+
+| command | takes | notes |
+|---|---|---|
+| `OpenTwin` | a **folder** containing `twin.toml` | auto-loads `[usd] default_scene` |
+| `LoadScene` | a path the asset resolver understands (`twin://<name>/<rel>`, or one relative to the assets root) | **not** an absolute filesystem path |
+
+Passing the `.usda` *file* to `OpenTwin` fails the `twin.toml` check and is
+refused with a `warn!`. Passing an absolute path to `LoadScene` logs
+
+```
+[load-scene] reload path=`` root=``
+```
+
+and clears the scene without loading anything. Confirm the load by reading the
+status bar in the screenshot — a stale scene name there has invalidated
+verification runs before.
+
+`CaptureScreenshot` returns the PNG as the **response body**; write those bytes
+yourself rather than relying on `save_to_file`.
+
 ## Command catalog
 
 All commands live under `crates/lunco-modelica/src/ui/commands/` as
