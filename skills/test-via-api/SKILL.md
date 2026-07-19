@@ -81,6 +81,68 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
 
 Successful response: `{"command_id": N}`. Error: `{"error":"..."}`.
 
+**With the `command` spelling, arguments MUST be nested inside `params`.**
+`{"command":"X","eye":[...]}` is accepted with HTTP 200 and the arguments are
+**silently discarded**, so the command runs with `Default::default()` for every
+field.
+
+Which spelling you use decides this, and only one of the two is forgiving
+(`crates/lunco-api/src/transports/envelope.rs`):
+
+| you send | top-level extras |
+|---|---|
+| `{"command":"X", …}` | **dropped** — this branch reads the named `params` slot and nothing else |
+| `{"type":"X", …}` | **promoted into `params`** when you did not send `params` yourself |
+
+So `{"type":"SetCamera","eye":[…]}` works while `{"command":"SetCamera","eye":[…]}`
+does not. Nesting under `params` is correct for both, which is why the examples
+here always do — it is the one shape that cannot bite you.
+
+Symptom to recognise: the log shows zeroed arguments, e.g.
+
+```
+SET_CAMERA: eye=(0.00,0.00,0.00) target=(0.00,0.00,0.00)
+```
+
+which reads as "the geometry is broken" when it actually means "the camera never
+moved". If a command appears to do nothing, grep the log for zeroed arguments
+before you touch the asset.
+
+**`{"command_id": N}` means QUEUED, not succeeded.** It is not an
+acknowledgement that the command ran, validated, or had any effect. Rejections
+and warnings appear **only in the log**, so the log is the real return channel —
+tail it after every batch. `QueryCommandResult` (by `command_id`) exists for
+commands that produce values.
+
+### Sandbox: loading a model
+
+Two commands, two different argument types, and mixing them up is a silent no-op:
+
+| command | takes | notes |
+|---|---|---|
+| `OpenTwin` | a **folder** containing `twin.toml` | auto-loads `[usd] default_scene` |
+| `LoadScene` | a scheme address — `twin://<name>/<rel>`, `lunco://<rel>` — or a path under the assets root | for an arbitrary file on disk, use `OpenFile` |
+| `OpenFile` | any `.usda` path on disk | resolves the owning root, registers the document, mounts through the overlay |
+
+Passing the `.usda` *file* to `OpenTwin` fails the `twin.toml` check and is
+refused with a `warn!`.
+
+`LoadScene` is not a general file opener. An absolute path **under the assets
+dir** is accepted and rewritten asset-relative; anything else is refused with
+
+```
+[scene] `…` is a bare filesystem path — `LoadScene` takes scheme addresses
+```
+
+and the load is a no-op — the previous scene stays up, so a screenshot taken
+afterwards shows the OLD scene rather than an empty one. That is the trap: it
+looks like the command worked until you read the status bar. Reach for `OpenFile`
+instead; `LoadScene` has no access to the workspace layer, so routing a raw path
+through it would mount a base-only stage and silently drop runtime edits.
+
+`CaptureScreenshot` returns the PNG as the **response body**; write those bytes
+yourself rather than relying on `save_to_file`.
+
 ## Command catalog
 
 All commands live under `crates/lunco-modelica/src/ui/commands/` as

@@ -64,6 +64,7 @@ pub mod camera_path;
 pub mod canonical;
 pub mod curve_sweep;
 pub mod nurbs;
+pub mod trim;
 pub mod mount;
 pub mod read;
 pub mod units;
@@ -826,10 +827,32 @@ fn instantiate_usd_prim_read<R: UsdRead>(
         // `invisible` suppresses mesh creation entirely (used for
         // collider-only Cube prims hidden behind a glTF visual, and
         // raycast wheel cylinders that have no visible representation).
-        let invisible = matches!(
-            reader.text(&sdf_path, "visibility").as_deref(),
-            Some("invisible")
-        )
+        //
+        // `visibility` is INHERITED, exactly like `purpose` below —
+        // `UsdGeomImageable` defines it as such, and the nearest ancestor that
+        // authors `invisible` hides the whole subtree. Reading only the prim's
+        // own path (as this did) means marking one `Xform` invisible leaves every
+        // child drawing, which is both wrong per spec and a surprising way to
+        // lose an afternoon: HAB-1's collider ring stayed on screen because the
+        // `invisible` sat on the group rather than on each box.
+        //
+        // Visibility PRUNES: an `invisible` ancestor hides the subtree outright,
+        // and a descendant cannot re-reveal itself. `inherited` means "take the
+        // parent's answer", NOT "force visible" — so it keeps walking rather
+        // than stopping. Getting that backwards would let a child override a
+        // hidden parent, which USD does not permit.
+        let invisible = {
+            let mut p = sdf_path.clone();
+            loop {
+                if reader.text(&p, "visibility").as_deref() == Some("invisible") {
+                    break true;
+                }
+                match p.parent() {
+                    Some(parent) if parent.as_str() != "/" => p = parent,
+                    _ => break false,
+                }
+            }
+        }
         // `UsdGeomImageable.purpose = "guide"` — geometry that exists for authoring,
         // not for viewing: construction axes, alignment rigs, and (the HAB-1 case)
         // the boolean CUTTERS that define a shell's openings. Keeping them in the
@@ -1198,9 +1221,15 @@ fn instantiate_usd_prim_read<R: UsdRead>(
 
         // Honour `token visibility = "invisible"` and the
         // `lunco:placeholder = true` author flag — both apply as
-        // `Visibility::Hidden`. Children inherit unless they
-        // override their own visibility (Placeholder Cubes have no
-        // children, so propagation is a no-op).
+        // `Visibility::Hidden`.
+        //
+        // `invisible` is the ANCESTOR-RESOLVED answer (see where it is computed),
+        // and that is load-bearing rather than redundant with Bevy's propagation.
+        // Bevy lets a child holding `Visibility::Visible` override a hidden parent;
+        // USD does not — an `invisible` ancestor PRUNES the subtree and no
+        // descendant can re-reveal itself. Because every descendant re-walks and
+        // reaches `Hidden` on its own, USD's rule holds no matter what Bevy's
+        // propagation would have done.
         let final_vis = if invisible || is_placeholder {
             Visibility::Hidden
         } else {
@@ -1854,6 +1883,20 @@ fn apply_standard_material<R: UsdRead>(
                 occlusion: occlusion_texture,
             },
             unshared: animated,
+            // `doubleSided` — core `UsdGeomGprim`, and it was not being read at all.
+            //
+            // It matters most for TRIMMED surfaces. A trim cuts a genuine hole, and
+            // the moment there is a hole you can see the far side of the shell
+            // through it. Single-sided, those backfaces are culled and the opening
+            // reads as a hole from outside but as nothing at all from within — which
+            // is exactly how HAB-1's arched doorway presented: visible from one side
+            // only, with a black interior.
+            //
+            // USD's fallback is `false`, and that is kept: back-face culling is the
+            // right default for closed solids and halves the fragment work. An asset
+            // that opens itself up asks for the other behaviour explicitly.
+            double_sided: light::get_attribute_as_bool(reader, sdf_path, "doubleSided")
+                .unwrap_or(false),
             // `primvars:doNotCastShadows` — OMNIVERSE'S name, not one of ours. RTX
             // reads it on the gprim and Composer surfaces it as the mesh's "Cast
             // Shadows" toggle, so a scene authored there arrives here with its shadow
@@ -2850,20 +2893,6 @@ fn quat_from_value(v: &Value) -> Option<Quat> {
     }
 }
 
-/// One attribute's value at time code `time` — `timeSamples` interpolated
-/// (held/linear; quaternions slerp) when authored, else the `default` opinion.
-/// `None` when the attribute is absent. The shared read for the rotation /
-/// matrix composers, which serve both static decode and the animation sampler.
-fn value_at(reader: &UsdData, path: &SdfPath, attr: &str, time: f64) -> Option<Value> {
-    let ap = path.append_property(attr).ok()?;
-    if let Some(Value::TimeSamples(s)) = reader.field(&ap, "timeSamples") {
-        if let Some(v) = openusd::usd::evaluate(s, time, openusd::usd::InterpolationType::Linear) {
-            return Some(v);
-        }
-    }
-    reader.field(&ap, "default").cloned()
-}
-
 /// A scalar numeric attribute (`float`/`double`, or integer-authored angles) at
 /// time `time` (timeSamples-or-default). The int fallback avoids the silent-`None`
 /// trap when an angle is authored as a bare integer (`rotateZ = 90`). `None` when
@@ -3559,11 +3588,19 @@ fn build_usd_curve_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> 
 /// Normals are analytic (`uder × vder`), not face-averaged — exact at the poles
 /// and seams where averaging creases, which is precisely the dome apex.
 ///
-/// **`trimCurve:*` is not honoured**: `openusd` does not define those tokens (see
-/// `OPENUSD_TRIMCURVE_SPEC.md`). An authored trim is silently ignored, so a
-/// trimmed patch renders untrimmed — larger than intended, never smaller. That is
-/// the safe direction to be wrong in, but it IS wrong; the tokens are a small
-/// upstream contribution.
+/// **`trimCurve:*` IS honoured** — see [`crate::trim`]. A trimmed patch gets an
+/// irregular triangulation of its surviving domain instead of a lattice, which is
+/// what puts a genuine arched doorway in a wall.
+///
+/// Trim data that is missing or malformed falls back to rendering UNTRIMMED, with
+/// a warning naming the prim — larger than authored, never smaller. That is the
+/// safe direction to fail in, and it is loud rather than silent.
+///
+/// (This paragraph previously said trimming was unimplemented and silently
+/// ignored. It was stale, and it cost a debugging session: the claim was taken at
+/// face value while the code underneath was working, so a missing surface was
+/// blamed on trim support that in fact existed. A doc comment that describes a
+/// capability the code no longer lacks is worse than no comment.)
 fn build_usd_nurbs_patch_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<Mesh> {
     use bevy::asset::RenderAssetUsages;
     use bevy_mesh::PrimitiveTopology;
@@ -3589,22 +3626,138 @@ fn build_usd_nurbs_patch_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<
     }
     let weights = reader.reals(path, "pointWeights");
 
-    // Trim curves are NOT applied — the domain is tessellated whole. Warn rather
-    // than drop it silently: a trimmed patch rendered untrimmed is LARGER than
-    // authored (never smaller), so it reads as a modelling mistake rather than a
-    // reader limitation, and silence is how that misdiagnosis happens.
+    // ── Trim curves ─────────────────────────────────────────────────────────
+    // `trimCurve:*` IS applied — see `crate::trim`. A trimmed patch gets an
+    // irregular triangulation of its surviving domain instead of a lattice.
     //
-    // Note the data is perfectly readable — `scalar()` is a name lookup, not
-    // schema-gated, so `trimCurve:*` reads today. What is missing is the
-    // TESSELLATION: evaluating the loops (truck already does 2D rational curves)
-    // and triangulating the trimmed domain with `spade` (vendored). Deferred
-    // deliberately: nothing authors a trim yet, and USD's own reference does not
-    // state the keep/discard winding rule — guessing it inverts every hole.
-    // See `models/habitat/OPENUSD_TRIMCURVE_SPEC.md`.
-    if reader.attr_value(path, "trimCurve:counts").is_some() {
-        bevy::log::warn_once!(
-            "[usd-bevy] {} authors `trimCurve:*`, which is not applied — the patch \
-             renders UNTRIMMED (larger than authored). See OPENUSD_TRIMCURVE_SPEC.md",
+    // Two things that used to block this are handled there rather than guessed:
+    // USD never states the keep/discard winding rule, so classification is
+    // even-odd with the domain rectangle as an implicit outer loop
+    // (orientation-independent); and `spade` panics when constraints cross, so
+    // loops are inserted with `add_constraint_and_split` rather than gated with
+    // `can_add_constraint` — gating would silently drop part of a loop and leave
+    // the hole with a missing side.
+    let trim_loops = read_int_array(reader, path, "trimCurve:counts")
+        .filter(|c| !c.is_empty())
+        .and_then(|counts| {
+            // Every component is REQUIRED once `counts` is authored, and a missing one
+            // must say so. Returning `None` here drops straight to the untrimmed
+            // branch, which renders a solid wall where a doorway was authored — the
+            // one failure this whole path is supposed to be loud about.
+            let missing = |attr: &str| {
+                bevy::log::warn!(
+                    "[usd-bevy] {} authors `trimCurve:counts` but `{}` is absent or has \
+                     an unreadable type — rendering UNTRIMMED (larger than authored)",
+                    path.as_str(),
+                    attr
+                );
+            };
+            let orders = read_int_array(reader, path, "trimCurve:orders")
+                .or_else(|| {
+                    missing("trimCurve:orders");
+                    None
+                })?;
+            let vertex_counts = read_int_array(reader, path, "trimCurve:vertexCounts")
+                .or_else(|| {
+                    missing("trimCurve:vertexCounts");
+                    None
+                })?;
+            // `reals` / `points3`, not `scalar::<Vec<f64>>` / `scalar::<Vec<[f32; 3]>>`:
+            // the trim arrays get the same tolerant reads as the patch's own `uKnots`
+            // and `points` above. A `float[]` knot vector or a `point3d[]` control
+            // hull is legal USD and is what a promoting DCC emits, and a strict read
+            // of either is indistinguishable from "no trim authored" — silently
+            // filling the hole back in.
+            let tknots = reader.reals(path, "trimCurve:knots");
+            if tknots.is_empty() {
+                missing("trimCurve:knots");
+                return None;
+            }
+            let tpoints = reader.points3(path, "trimCurve:points");
+            if tpoints.is_empty() {
+                missing("trimCurve:points");
+                return None;
+            }
+            // `ranges` is optional: fall back to each curve's full knot span.
+            let ranges = read_double2_array(reader, path, "trimCurve:ranges").unwrap_or_default();
+
+            // Trim curves live in the patch's PARAMETER space, so they are not
+            // touched by `ConventionTransform` — a Z-up or centimetre stage
+            // changes where the surface is in the world, never what its (u, v)
+            // domain means. Converting them would be a subtle, hard-to-see bug.
+            let u_span = [u_knots[u_order - 1], u_knots[u_count]];
+            let v_span = [v_knots[v_order - 1], v_knots[v_count]];
+            let loops = crate::trim::assemble_loops(
+                &counts,
+                &orders,
+                &vertex_counts,
+                &tknots,
+                &ranges,
+                &tpoints,
+                u_span,
+                v_span,
+                24,
+            );
+            if loops.is_empty() {
+                bevy::log::warn!(
+                    "[usd-bevy] {} authors `trimCurve:*` but no usable loop was \
+                     assembled — rendering UNTRIMMED (larger than authored)",
+                    path.as_str()
+                );
+                None
+            } else {
+                Some(loops)
+            }
+        });
+
+    if let Some(loops) = trim_loops {
+        let grid = (u_count.max(v_count) * 6).clamp(12, 96);
+        bevy::log::info!(
+            "[usd-bevy] {} trimming: {} loop(s), grid {}",
+            path.as_str(),
+            loops.loops.len(),
+            grid
+        );
+        if let Some(domain) = crate::trim::triangulate_trimmed(&loops, grid) {
+            bevy::log::info!(
+                "[usd-bevy] {} trimmed domain: {} verts, {} tris",
+                path.as_str(),
+                domain.uvs.len(),
+                domain.indices.len() / 3
+            );
+            let samples = crate::nurbs::sample_nurbs_patch_at(
+                &points,
+                &weights,
+                u_count,
+                v_count,
+                u_order,
+                v_order,
+                &u_knots,
+                &v_knots,
+                &domain.uvs,
+            );
+            if !samples.is_empty() {
+                let mut positions = Vec::with_capacity(samples.len());
+                let mut normals = Vec::with_capacity(samples.len());
+                let mut uvs = Vec::with_capacity(samples.len());
+                for s in &samples {
+                    positions.push(s.position);
+                    normals.push(s.normal);
+                    uvs.push(s.uv);
+                }
+                let mut mesh = Mesh::new(
+                    PrimitiveTopology::TriangleList,
+                    RenderAssetUsages::default(),
+                );
+                mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+                mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+                mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+                mesh.insert_indices(bevy_mesh::Indices::U32(domain.indices));
+                return Some(mesh);
+            }
+        }
+        bevy::log::warn!(
+            "[usd-bevy] {} trim produced no geometry — falling back to UNTRIMMED",
             path.as_str()
         );
     }
@@ -3620,8 +3773,27 @@ fn build_usd_nurbs_patch_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<
         v_steps,
     );
     if grid.is_empty() {
+        // `sample_nurbs_patch_at` has already warned WHICH guard fired; this
+        // adds the prim path, which it has no way to know.
+        bevy::log::warn!(
+            "[usd-bevy] {} untrimmed patch produced no samples — no mesh",
+            path.as_str()
+        );
         return None;
     }
+    // Parity with the trimmed branch above, which logs its vert/tri counts. The
+    // untrimmed branch used to be completely SILENT, so a patch that reached
+    // here and built correctly was indistinguishable in the log from one whose
+    // prim was never traversed at all. Telling those two apart is exactly what
+    // you need when a surface is missing from the render, and not being able to
+    // is what made the HAB-1 dome expensive to diagnose.
+    bevy::log::info!(
+        "[usd-bevy] {} untrimmed patch: {}x{} grid, {} verts",
+        path.as_str(),
+        u_steps + 1,
+        v_steps + 1,
+        grid.len()
+    );
 
     let cols = u_steps + 1;
     let rows = v_steps + 1;
@@ -3661,6 +3833,27 @@ fn read_int_array<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<
     match reader.attr_value(path, attr)? {
         Value::IntVec(v) => Some(v),
         Value::Int64Vec(v) => Some(v.iter().map(|&x| x as i32).collect()),
+        _ => None,
+    }
+}
+
+/// Reads a `double2[]` / `float2[]` array as `Vec<[f64; 2]>`.
+///
+/// Tolerant of authored precision on the same principle as
+/// [`points2`](read::UsdRead::points2), which this deliberately does NOT reuse:
+/// `points2` narrows to `f32` because its consumers are vertex attributes, whereas
+/// `trimCurve:ranges` is a pair of KNOT values. Those are compared against the
+/// `f64` knot vector to decide where each curve's span starts and ends, so
+/// round-tripping them through `f32` can move a span end just past a knot and drop
+/// or duplicate a segment of a trim loop.
+fn read_double2_array<R: UsdRead>(
+    reader: &R,
+    path: &SdfPath,
+    attr: &str,
+) -> Option<Vec<[f64; 2]>> {
+    match reader.attr_value(path, attr)? {
+        Value::Vec2dVec(v) => Some(v.iter().map(|p| [p[0], p[1]]).collect()),
+        Value::Vec2fVec(v) => Some(v.iter().map(|p| [p[0] as f64, p[1] as f64]).collect()),
         _ => None,
     }
 }

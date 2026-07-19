@@ -52,6 +52,11 @@ half = "2"
 # tessellate ourselves (`curve_sweep.rs` owns the sweep, which truck has no
 # equivalent for — no crate implements rotation-minimizing frames).
 truck-geometry = "0.5.0"
+# Constrained Delaunay triangulation for `NurbsPatch` trim tessellation
+# (`src/trim.rs`). NOT a new dependency in substance: 2.15.1 is already compiled
+# into this tree via `parry3d-f64`, so declaring it directly adds no crate to the
+# build graph — it only makes an existing one nameable.
+spade = "2.15.1"
 openusd = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 # `FlightSoftware` = the unified control-surface tag stamped on any
