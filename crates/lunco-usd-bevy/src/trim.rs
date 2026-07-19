@@ -130,7 +130,31 @@ fn eval_rational_2d(cvs: &[[f64; 3]], knots: &[f64], order: usize, t: f64) -> Op
     Some([x / w, y / w])
 }
 
-/// Discretise one trim curve into a polyline of `steps` segments.
+/// Discretise one trim curve into a polyline.
+///
+/// Samples at `steps` uniform positions **plus every distinct knot** in range.
+///
+/// THE KNOTS ARE NOT OPTIONAL. A knot is where the curve loses continuity — for
+/// an order-2 (linear) curve, the knots are precisely its corners. Sampling only
+/// uniformly cuts every corner that happens to fall between two samples, and
+/// replaces it with a chord.
+///
+/// This is not hypothetical: it is the HAB-1 doorway bug. That loop is one
+/// order-2 curve with 16 control points, knots `0,0,1..15,15`, so its corners
+/// sit at integer `t` over the range `[0, 15]`. Tessellated with the default 24
+/// uniform steps, samples land at `t = 0.625·i`, which is integral only at
+/// `i = 8, 16, 24`. Twelve of the fourteen interior corners were therefore
+/// missed and chamfered off.
+///
+/// The signature was diagnostic: `t = 0` is always sampled, so one bottom corner
+/// of the door came out square while the other — at `t = 1`, straddled by
+/// samples at 0.625 and 1.25 — came out as a diagonal. A stray triangle across
+/// one corner of the opening, stable across every camera angle, which is what
+/// made it look like a triangulation fault rather than a sampling one.
+///
+/// Deduplicating on `t` matters: knots repeat (clamped ends, and any interior
+/// multiplicity), and a duplicated parameter yields a zero-length segment, which
+/// is exactly the degenerate constraint edge the CDT should never be handed.
 fn tessellate_curve(
     cvs: &[[f64; 3]],
     knots: &[f64],
@@ -140,11 +164,23 @@ fn tessellate_curve(
 ) -> Vec<[f64; 2]> {
     let steps = steps.max(2);
     let (t0, t1) = (range[0], range[1]);
-    (0..=steps)
-        .filter_map(|i| {
-            let t = t0 + (t1 - t0) * (i as f64 / steps as f64);
-            eval_rational_2d(cvs, knots, order, t)
-        })
+    if !(t1 > t0) {
+        return Vec::new();
+    }
+
+    let mut ts: Vec<f64> = (0..=steps)
+        .map(|i| t0 + (t1 - t0) * (i as f64 / steps as f64))
+        .collect();
+    ts.extend(knots.iter().copied().filter(|&k| k > t0 && k < t1));
+
+    ts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    // Relative to the span so this behaves the same whether the curve is knotted
+    // 0..1 or 0..15.
+    let eps = (t1 - t0) * 1e-9;
+    ts.dedup_by(|a, b| (*a - *b).abs() <= eps);
+
+    ts.into_iter()
+        .filter_map(|t| eval_rational_2d(cvs, knots, order, t))
         .collect()
 }
 
@@ -288,12 +324,58 @@ pub fn triangulate_trimmed(loops: &TrimLoops, grid: usize) -> Option<TrimmedDoma
         }
     }
 
+    // Domain boundary as constraints.
+    //
+    // Without these the triangulation's outer edge is just the convex hull of
+    // whatever got seeded. That is *usually* the unit square, but a loop meeting
+    // the boundary removes the seeds that would have pinned that stretch, and the
+    // hull then cuts the corner — producing a long thin triangle that spans the
+    // opening. Constraining the rectangle explicitly makes the domain edge a
+    // hard edge regardless of what the loops do near it.
+    let corners: Vec<_> = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+        .iter()
+        .filter_map(|&[u, v]| cdt.insert(Point2::new(u, v)).ok())
+        .collect();
+    if corners.len() == 4 {
+        for i in 0..4 {
+            let (a, b) = (corners[i], corners[(i + 1) % 4]);
+            if a != b {
+                cdt.add_constraint_and_split(a, b, |p| p);
+            }
+        }
+    }
+
     // Loop vertices + constraint edges.
     for l in &loops.loops {
-        let handles: Vec<_> = l
-            .iter()
-            .filter_map(|&[u, v]| cdt.insert(Point2::new(u, v)).ok())
-            .collect();
+        // Insert every vertex FIRST, and bail on the whole loop if any fails.
+        //
+        // Silently dropping one vertex (what `filter_map` used to do) is the
+        // worst outcome available: the loop stays "closed" but short-circuits
+        // across the gap, so the constraint chain cuts a chord through the hole
+        // instead of following its boundary. That is precisely the shape of a
+        // stray triangle spanning an opening. A dropped vertex must invalidate
+        // the loop, not deform it.
+        let mut handles = Vec::with_capacity(l.len());
+        let mut ok = true;
+        for &[u, v] in l {
+            match cdt.insert(Point2::new(u, v)) {
+                Ok(h) => handles.push(h),
+                Err(_) => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if !ok || handles.len() < 4 {
+            bevy::log::warn!(
+                "[usd-bevy] trim loop dropped: {} of {} vertices inserted — \
+                 rendering this patch WITHOUT that loop rather than with a \
+                 corrupted one",
+                handles.len(),
+                l.len()
+            );
+            continue;
+        }
         for w in handles.windows(2) {
             if w[0] == w[1] {
                 continue;
@@ -302,6 +384,16 @@ pub fn triangulate_trimmed(loops: &TrimLoops, grid: usize) -> Option<TrimmedDoma
             // panics when loops cross, and skipping the edge would leave the
             // hole with a missing side. See the module docs.
             cdt.add_constraint_and_split(w[0], w[1], |p| p);
+        }
+        // Close the ring explicitly. `assemble_loops` appends the first point to
+        // close the loop, so the final windows(2) pair already spans last->first
+        // — but only when that duplicate actually resolved to the same handle.
+        // If floating-point drift made it a distinct vertex, the ring is open by
+        // one edge and the hole leaks. Constraining first<->last is idempotent
+        // when already closed and repairs it when not.
+        let (first, last) = (handles[0], handles[handles.len() - 1]);
+        if first != last {
+            cdt.add_constraint_and_split(first, last, |p| p);
         }
     }
 
@@ -362,6 +454,146 @@ mod tests {
         ]
     }
 
+    /// The HAB-1 main doorway trim loop, copied VERBATIM from
+    /// `hab1/twin/components/shell_can.usda` `OuterSurface`: one order-2 curve,
+    /// 16 control points, sill / jambs / semicircular head.
+    ///
+    /// Kept as literal authored data rather than generated, so the test fails if
+    /// the real asset would fail.
+    fn hab1_door_curve() -> (Vec<[f64; 3]>, Vec<f64>, [f64; 2]) {
+        let cvs: Vec<[f64; 3]> = vec![
+            [2.911488, 0.004000, 1.0],
+            [3.088512, 0.004000, 1.0],
+            [3.088512, 0.161111, 1.0],
+            [3.085549, 0.194901, 1.0],
+            [3.076843, 0.226389, 1.0],
+            [3.062939, 0.253428, 1.0],
+            [3.044701, 0.274176, 1.0],
+            [3.023268, 0.287218, 1.0],
+            [3.000000, 0.291667, 1.0],
+            [2.976732, 0.287218, 1.0],
+            [2.955299, 0.274176, 1.0],
+            [2.937061, 0.253428, 1.0],
+            [2.923157, 0.226389, 1.0],
+            [2.914451, 0.194901, 1.0],
+            [2.911488, 0.161111, 1.0],
+            [2.911488, 0.004000, 1.0],
+        ];
+        // Authored knots: 0,0,1..15,15 — 18 values for vc 16 + order 2.
+        let mut knots = vec![0.0, 0.0];
+        knots.extend((1..=15).map(|i| i as f64));
+        knots.push(15.0);
+        (cvs, knots, [0.0, 15.0])
+    }
+
+    /// THE DOORWAY CHAMFER. An order-2 curve is a polyline, so tessellating it
+    /// must reproduce its control points EXACTLY — every one is a corner.
+    ///
+    /// Before the knot-aware fix this failed on 12 of the 14 interior corners:
+    /// with 24 uniform steps over a 15-span range, samples land at t = 0.625·i
+    /// and hit an integer only at i = 8, 16, 24. Each missed corner became a
+    /// chord across it — the stray triangle in the corner of the opening.
+    #[test]
+    fn order_two_trim_curve_reproduces_every_corner() {
+        let (cvs, knots, range) = hab1_door_curve();
+        let poly = tessellate_curve(&cvs, &knots, 2, range, 24);
+
+        for (i, cv) in cvs.iter().enumerate() {
+            let hit = poly
+                .iter()
+                .any(|p| (p[0] - cv[0]).abs() < 1e-6 && (p[1] - cv[1]).abs() < 1e-6);
+            assert!(
+                hit,
+                "corner {i} ({}, {}) was cut off — a chord replaced it, which \
+                 renders as a triangle across that corner of the opening",
+                cv[0], cv[1]
+            );
+        }
+    }
+
+    /// Corners must survive the whole authored pipeline, not just the sampler:
+    /// `assemble_loops` also normalises into [0,1]², and a bug there would undo
+    /// the fix above. Checks the two sill corners, which is where the visible
+    /// artifact was.
+    #[test]
+    fn hab1_door_loop_keeps_square_sill_corners() {
+        let (cvs, knots, _) = hab1_door_curve();
+        let points: Vec<[f32; 3]> = cvs
+            .iter()
+            .map(|c| [c[0] as f32, c[1] as f32, c[2] as f32])
+            .collect();
+
+        let loops = assemble_loops(
+            &[1], &[2], &[16], &knots, &[], &points,
+            [0.0, 4.0], // uRange, as authored on the patch
+            [0.0, 1.0], // vRange
+            24,
+        );
+        assert_eq!(loops.loops.len(), 1, "one door loop expected");
+        let l = &loops.loops[0];
+
+        // Both sill corners, normalised: u/4, v/1.
+        for (name, u, v) in [
+            ("left sill", 2.911488 / 4.0, 0.004),
+            ("right sill", 3.088512 / 4.0, 0.004),
+        ] {
+            assert!(
+                l.iter().any(|p| (p[0] - u).abs() < 1e-6 && (p[1] - v).abs() < 1e-6),
+                "{name} corner missing from the assembled loop — it will render chamfered"
+            );
+        }
+    }
+
+    /// The whole point of the loop: no surviving triangle may lie inside it.
+    /// Runs the REAL door loop through the REAL grid density (54, as
+    /// `build_usd_nurbs_patch_mesh` computes for this patch).
+    #[test]
+    fn hab1_door_opening_contains_no_geometry() {
+        let (cvs, knots, _) = hab1_door_curve();
+        let points: Vec<[f32; 3]> = cvs
+            .iter()
+            .map(|c| [c[0] as f32, c[1] as f32, c[2] as f32])
+            .collect();
+        let loops = assemble_loops(
+            &[1], &[2], &[16], &knots, &[], &points, [0.0, 4.0], [0.0, 1.0], 24,
+        );
+        let domain = triangulate_trimmed(&loops, 54).expect("door patch must triangulate");
+
+        let door = &loops.loops[0];
+        for tri in domain.indices.chunks(3) {
+            let p: Vec<[f64; 2]> = tri.iter().map(|&i| domain.uvs[i as usize]).collect();
+            let c = [
+                (p[0][0] + p[1][0] + p[2][0]) / 3.0,
+                (p[0][1] + p[1][1] + p[2][1]) / 3.0,
+            ];
+            assert!(
+                !point_in_loop(c, door),
+                "triangle {p:?} sits inside the doorway — the opening is not clear"
+            );
+            // Sample STRICTLY INSIDE the triangle, not on its edges. A triangle
+            // that straddles the boundary has interior area inside the loop, so
+            // interior samples catch it while the centroid alone might not.
+            //
+            // Edge midpoints are the obvious choice and are WRONG here: a
+            // triangle legitimately outside the loop may still have an edge
+            // lying ALONG the loop boundary — the sliver of wall between the
+            // domain edge v=0 and the sill at v=0.004 does exactly that. Its
+            // midpoint is on the boundary, where a ray-crossing test is
+            // undefined and answers arbitrarily. Barycentric interior points
+            // have no such ambiguity.
+            for w in [[0.6, 0.2, 0.2], [0.2, 0.6, 0.2], [0.2, 0.2, 0.6]] {
+                let q = [
+                    w[0] * p[0][0] + w[1] * p[1][0] + w[2] * p[2][0],
+                    w[0] * p[0][1] + w[1] * p[1][1] + w[2] * p[2][1],
+                ];
+                assert!(
+                    !point_in_loop(q, door),
+                    "triangle {p:?} overlaps the doorway — chord across a corner"
+                );
+            }
+        }
+    }
+
     #[test]
     fn point_in_loop_basic() {
         let s = square(0.5, 0.5, 0.2);
@@ -408,6 +640,69 @@ mod tests {
             })
             .sum();
         assert!((area - 1.0).abs() < 1e-6, "expected unit area, got {area}");
+    }
+
+    /// A loop shaped like the HAB-1 doorway — flat sill, vertical jambs,
+    /// semicircular head — sitting near the domain edge. This is the case that
+    /// produced a triangle spanning the opening in the real scene.
+    #[test]
+    fn arch_loop_near_domain_edge_leaves_no_spanning_triangle() {
+        let (uc, half, sill, spring, crown) = (0.75, 0.025, 0.004, 0.16, 0.29);
+        let mut l = vec![[uc - half, sill], [uc + half, sill], [uc + half, spring]];
+        for i in 1..12 {
+            let th = std::f64::consts::PI * i as f64 / 12.0;
+            l.push([uc + half * th.cos(), spring + (crown - spring) * th.sin()]);
+        }
+        l.push([uc - half, spring]);
+        l.push([uc - half, sill]);
+        let loops = TrimLoops { loops: vec![l] };
+        let d = triangulate_trimmed(&loops, 54).expect("triangulates");
+        for t in d.indices.chunks(3) {
+            let (a, b, c) = (
+                d.uvs[t[0] as usize],
+                d.uvs[t[1] as usize],
+                d.uvs[t[2] as usize],
+            );
+            let ctr = [(a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0];
+            assert!(
+                !point_in_loop(ctr, &loops.loops[0]),
+                "triangle {a:?}/{b:?}/{c:?} survived spanning the doorway"
+            );
+        }
+    }
+
+    /// The domain edge must be a hard edge: total surviving area is the unit
+    /// square minus the hole, never more. A hull that cuts a corner shows up
+    /// here as missing area.
+    #[test]
+    fn domain_boundary_is_constrained() {
+        let loops = TrimLoops {
+            loops: vec![vec![
+                [0.5, 0.0],
+                [0.6, 0.0],
+                [0.6, 0.2],
+                [0.5, 0.2],
+                [0.5, 0.0],
+            ]],
+        };
+        let d = triangulate_trimmed(&loops, 20).expect("triangulates");
+        let area: f64 = d
+            .indices
+            .chunks(3)
+            .map(|t| {
+                let (a, b, c) = (
+                    d.uvs[t[0] as usize],
+                    d.uvs[t[1] as usize],
+                    d.uvs[t[2] as usize],
+                );
+                ((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])).abs() / 2.0
+            })
+            .sum();
+        // unit square (1.0) minus a 0.1 x 0.2 hole (0.02)
+        assert!(
+            (area - 0.98).abs() < 1e-3,
+            "expected 0.98 of domain to survive, got {area}"
+        );
     }
 
     #[test]

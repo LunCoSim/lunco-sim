@@ -1854,6 +1854,20 @@ fn apply_standard_material<R: UsdRead>(
                 occlusion: occlusion_texture,
             },
             unshared: animated,
+            // `doubleSided` — core `UsdGeomGprim`, and it was not being read at all.
+            //
+            // It matters most for TRIMMED surfaces. A trim cuts a genuine hole, and
+            // the moment there is a hole you can see the far side of the shell
+            // through it. Single-sided, those backfaces are culled and the opening
+            // reads as a hole from outside but as nothing at all from within — which
+            // is exactly how HAB-1's arched doorway presented: visible from one side
+            // only, with a black interior.
+            //
+            // USD's fallback is `false`, and that is kept: back-face culling is the
+            // right default for closed solids and halves the fragment work. An asset
+            // that opens itself up asks for the other behaviour explicitly.
+            double_sided: light::get_attribute_as_bool(reader, sdf_path, "doubleSided")
+                .unwrap_or(false),
             // `primvars:doNotCastShadows` — OMNIVERSE'S name, not one of ours. RTX
             // reads it on the gprim and Composer surfaces it as the mesh's "Cast
             // Shadows" toggle, so a scene authored there arrives here with its shadow
@@ -3674,8 +3688,27 @@ fn build_usd_nurbs_patch_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<
         v_steps,
     );
     if grid.is_empty() {
+        // `sample_nurbs_patch_at` has already warned WHICH guard fired; this
+        // adds the prim path, which it has no way to know.
+        bevy::log::warn!(
+            "[usd-bevy] {} untrimmed patch produced no samples — no mesh",
+            path.as_str()
+        );
         return None;
     }
+    // Parity with the trimmed branch above, which logs its vert/tri counts. The
+    // untrimmed branch used to be completely SILENT, so a patch that reached
+    // here and built correctly was indistinguishable in the log from one whose
+    // prim was never traversed at all. Telling those two apart is exactly what
+    // you need when a surface is missing from the render, and not being able to
+    // is what made the HAB-1 dome expensive to diagnose.
+    bevy::log::info!(
+        "[usd-bevy] {} untrimmed patch: {}x{} grid, {} verts",
+        path.as_str(),
+        u_steps + 1,
+        v_steps + 1,
+        grid.len()
+    );
 
     let cols = u_steps + 1;
     let rows = v_steps + 1;

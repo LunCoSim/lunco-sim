@@ -36,6 +36,7 @@
 // traits that carry `subs` / `range_tuple`) alongside `nurbs::*`. Naming the
 // sub-paths individually does NOT work — the traits must be in scope for their
 // methods to resolve, and `truck_geotrait` is not a direct dependency.
+use bevy::log::warn;
 use truck_geometry::prelude::*;
 
 /// Sample a `UsdGeomNurbsCurves` curve into a polyline of `steps + 1` points.
@@ -179,16 +180,43 @@ pub fn sample_nurbs_patch_at(
     v_knots: &[f64],
     uvs: &[[f64; 2]],
 ) -> Vec<PatchSample> {
+    // Every early return below is a SILENT SKIP at the call site: the caller turns
+    // an empty vec into `None` and the surface simply is not there. A patch that
+    // vanishes with no log line is the worst failure mode available — it cost most
+    // of a session on the HAB-1 dome. Each path therefore names itself.
     if u_order < 2 || v_order < 2 || u_count < u_order || v_count < v_order {
+        warn!(
+            u_count, v_count, u_order, v_order,
+            "NurbsPatch skipped: order/count invalid (need order >= 2 and count >= order)"
+        );
         return Vec::new();
     }
     if points.len() < u_count * v_count {
+        warn!(
+            got = points.len(),
+            need = u_count * v_count,
+            u_count,
+            v_count,
+            "NurbsPatch skipped: too few control points for the declared net"
+        );
         return Vec::new();
     }
     if u_knots.len() < u_count + u_order || v_knots.len() < v_count + v_order {
+        warn!(
+            u_knots = u_knots.len(),
+            u_need = u_count + u_order,
+            v_knots = v_knots.len(),
+            v_need = v_count + v_order,
+            "NurbsPatch skipped: knot vector shorter than count + order"
+        );
         return Vec::new();
     }
     if !weights.is_empty() && weights.len() < u_count * v_count {
+        warn!(
+            got = weights.len(),
+            need = u_count * v_count,
+            "NurbsPatch skipped: fewer weights than control points"
+        );
         return Vec::new();
     }
 
@@ -217,8 +245,18 @@ pub fn sample_nurbs_patch_at(
     let vk = KnotVec::from(v_knots[..v_count + v_order].to_vec());
     // `try_new` for the same reason the curve path uses it — `new` panics, and a
     // zero-range knot vector passes every check above.
-    let Ok(bsp) = BSplineSurface::try_new((uk, vk), ctrl) else {
-        return Vec::new();
+    let bsp = match BSplineSurface::try_new((uk, vk), ctrl) {
+        Ok(b) => b,
+        Err(e) => {
+            warn!(
+                error = %e,
+                u_count, v_count, u_order, v_order,
+                u_knots = ?&u_knots[..(u_count + u_order).min(u_knots.len())],
+                v_knots = ?&v_knots[..(v_count + v_order).min(v_knots.len())],
+                "NurbsPatch skipped: truck rejected the control net / knot vectors"
+            );
+            return Vec::new();
+        }
     };
     let surface = NurbsSurface::new(bsp);
 
@@ -227,6 +265,10 @@ pub fn sample_nurbs_patch_at(
         || u1 <= u0
         || v1 <= v0
     {
+        warn!(
+            u0, u1, v0, v1,
+            "NurbsPatch skipped: degenerate parameter range (non-finite or zero-width)"
+        );
         return Vec::new();
     }
 
@@ -238,6 +280,10 @@ pub fn sample_nurbs_patch_at(
             let p = surface.subs(u, v);
             let n = surface.normal(u, v);
             if !p.x.is_finite() || !p.y.is_finite() || !p.z.is_finite() {
+                warn!(
+                    u, v, x = p.x, y = p.y, z = p.z,
+                    "NurbsPatch skipped: non-finite point evaluated (check for zero weights)"
+                );
                 return Vec::new();
             }
             // A degenerate row (a dome apex, where every control point collapses to
@@ -469,5 +515,104 @@ mod tests {
         assert!(sample_nurbs_curve(&pts, &[], 4, &knots, 4).is_empty(), "cv < order");
         assert!(sample_nurbs_curve(&pts, &[], 2, &[0.0, 0.0], 4).is_empty(), "short knots");
         assert!(sample_nurbs_curve(&pts, &[1.0], 2, &knots, 4).is_empty(), "weight mismatch");
+    }
+
+    /// Builds the HAB-1 dome net: a half-ellipsoid, springline to apex, as a
+    /// 9x3 rational patch. This is the surface that rendered NOTHING in the
+    /// sandbox with no log line, which is what motivated the warns above.
+    ///
+    /// Returns (points, weights) in USD's v-major order.
+    fn hab1_dome_net(a: f32, b: f32) -> (Vec<[f32; 3]>, Vec<f64>) {
+        const C: f64 = std::f64::consts::FRAC_1_SQRT_2; // cos 45
+        // 4 quarter spans: on-circle points at 0/90/180/270, corners between.
+        let ring = |r: f32, y: f32| -> Vec<[f32; 3]> {
+            vec![
+                [r, y, 0.0],
+                [r, y, r],
+                [0.0, y, r],
+                [-r, y, r],
+                [-r, y, 0.0],
+                [-r, y, -r],
+                [0.0, y, -r],
+                [r, y, -r],
+                [r, y, 0.0],
+            ]
+        };
+        let w_u = [1.0, C, 1.0, C, 1.0, C, 1.0, C, 1.0];
+        let w_v = [1.0, C, 1.0];
+
+        let mut points = Vec::new();
+        points.extend(ring(a, 0.0)); // v0: springline
+        points.extend(ring(a, b)); // v1: the quarter-ellipse middle CV
+        points.extend(ring(0.0, b)); // v2: apex — DEGENERATE, all identical
+
+        let mut weights = Vec::new();
+        for wv in w_v {
+            for wu in w_u {
+                weights.push(wu * wv);
+            }
+        }
+        (points, weights)
+    }
+
+    /// THE DOME REGRESSION. Pins the answer to "why did the patch vanish".
+    #[test]
+    fn hab1_dome_half_ellipsoid_patch_evaluates() {
+        let (points, weights) = hab1_dome_net(7.345, 4.300);
+        let u_knots = [0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 4.0];
+        let v_knots = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+
+        let g = sample_nurbs_patch(
+            &points, &weights, 9, 3, 3, 3, &u_knots, &v_knots, 32, 8,
+        );
+        assert!(
+            !g.is_empty(),
+            "dome patch produced no samples — read the warn to see which guard fired"
+        );
+
+        // Springline must sit on the 7.345 circle, INCLUDING at the 45 degree
+        // diagonal, which is exactly where an unweighted net bulges to 7.791.
+        for s in g.iter().filter(|s| s.uv[1] < 1e-9) {
+            let r = (s.position[0].powi(2) + s.position[2].powi(2)).sqrt();
+            assert!(
+                (r - 7.345).abs() < 1e-3,
+                "springline radius {r} != 7.345 at uv {:?}",
+                s.uv
+            );
+            assert!(s.position[1].abs() < 1e-3, "springline must be at y=0");
+        }
+
+        // Apex closes to the axis at the fitted semi-height.
+        for s in g.iter().filter(|s| s.uv[1] > 1.0 - 1e-9) {
+            let r = (s.position[0].powi(2) + s.position[2].powi(2)).sqrt();
+            assert!(r < 1e-3, "apex must collapse to the axis, got r={r}");
+            assert!((s.position[1] - 4.300).abs() < 1e-3, "apex must be at b");
+        }
+    }
+
+    /// The mid-latitude ring must lie ON the ellipse, not inside or outside it.
+    /// A polynomial (unweighted) net passes the endpoint checks above and still
+    /// fails here, so this is the assertion that actually pins rationality.
+    #[test]
+    fn hab1_dome_is_a_true_ellipsoid_not_a_bulged_approximation() {
+        let (points, weights) = hab1_dome_net(7.345, 4.300);
+        let u_knots = [0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 4.0];
+        let v_knots = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let g = sample_nurbs_patch(
+            &points, &weights, 9, 3, 3, 3, &u_knots, &v_knots, 32, 8,
+        );
+        assert!(!g.is_empty());
+
+        for s in &g {
+            let (x, y, z) = (s.position[0] as f64, s.position[1] as f64, s.position[2] as f64);
+            let r = (x * x + z * z).sqrt();
+            // (r/a)^2 + (y/b)^2 == 1 everywhere on a true half-ellipsoid.
+            let f = (r / 7.345).powi(2) + (y / 4.300).powi(2);
+            assert!(
+                (f - 1.0).abs() < 1e-4,
+                "point {:?} off the ellipsoid: implicit {f}",
+                s.position
+            );
+        }
     }
 }
