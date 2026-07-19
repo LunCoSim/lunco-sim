@@ -567,6 +567,13 @@ def Xform "DescentLander" (
     # hull + 4 legs + 4 pads: the lander rests on its pads, and a tipped-over
     # lander catches on its legs instead of the struts clipping through terrain
     # (and a rover cannot drive through a leg). Lowest point is the pads (y=-5.0).
+    #
+    # Each strut carries a `leg_spring.rhai` program — a damped visual shock
+    # absorber that compresses the strut along its own axis at touchdown and
+    # settles slightly loaded (see that script for what moves and what does
+    # not). Params are the strut's FOOT point and foot→hull unit axis in the
+    # vessel frame; they must agree with the authored translate/rotate/scale,
+    # which the program reproduces exactly at full extension.
     def Cube "LegPX"
     {
         double size = 1.0
@@ -576,6 +583,17 @@ def Xform "DescentLander" (
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
         bool physics:collisionEnabled = true
+
+        def LunCoProgram "Spring"
+        {
+            uniform asset lunco:program:sourceAsset = @lunco://scenarios/leg_spring.rhai@
+            custom float lunco:param:bx = 5.5
+            custom float lunco:param:by = -5.0
+            custom float lunco:param:bz = 0.0
+            custom float lunco:param:ux = -0.4226
+            custom float lunco:param:uy = 0.9063
+            custom float lunco:param:uz = 0.0
+        }
     }
     def Cylinder "PadPX"
     {
@@ -597,6 +615,17 @@ def Xform "DescentLander" (
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
         bool physics:collisionEnabled = true
+
+        def LunCoProgram "Spring"
+        {
+            uniform asset lunco:program:sourceAsset = @lunco://scenarios/leg_spring.rhai@
+            custom float lunco:param:bx = -5.5
+            custom float lunco:param:by = -5.0
+            custom float lunco:param:bz = 0.0
+            custom float lunco:param:ux = 0.4226
+            custom float lunco:param:uy = 0.9063
+            custom float lunco:param:uz = 0.0
+        }
     }
     def Cylinder "PadNX"
     {
@@ -618,6 +647,17 @@ def Xform "DescentLander" (
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
         bool physics:collisionEnabled = true
+
+        def LunCoProgram "Spring"
+        {
+            uniform asset lunco:program:sourceAsset = @lunco://scenarios/leg_spring.rhai@
+            custom float lunco:param:bx = 0.0
+            custom float lunco:param:by = -5.0
+            custom float lunco:param:bz = 5.5
+            custom float lunco:param:ux = 0.0
+            custom float lunco:param:uy = 0.9063
+            custom float lunco:param:uz = -0.4226
+        }
     }
     def Cylinder "PadPZ"
     {
@@ -639,6 +679,17 @@ def Xform "DescentLander" (
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
         bool physics:collisionEnabled = true
+
+        def LunCoProgram "Spring"
+        {
+            uniform asset lunco:program:sourceAsset = @lunco://scenarios/leg_spring.rhai@
+            custom float lunco:param:bx = 0.0
+            custom float lunco:param:by = -5.0
+            custom float lunco:param:bz = -5.5
+            custom float lunco:param:ux = 0.0
+            custom float lunco:param:uy = 0.9063
+            custom float lunco:param:uz = 0.4226
+        }
     }
     def Cylinder "PadNZ"
     {

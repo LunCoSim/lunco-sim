@@ -1757,20 +1757,19 @@ impl Plugin for SandboxCorePlugin {
                 if let Err(e) = std::fs::create_dir_all(&path) {
                     error!("[offline-record] CLI failed to create output directory {}: {e}", path.display());
                 } else {
-                    info!("[offline-record] CLI mode armed: recording to {} at {} FPS", path.display(), record_fps);
-                    app.insert_resource(lunco_workbench::screenshot::OfflineRecordingState {
-                        active: true,
-                        frame_index: 0,
-                        output_dir: path,
-                        fps: record_fps.max(1),
-                        is_waiting_for_frame: false,
-                        // Enter on the "advance" phase, matching `StartOfflineRecording`.
-                        frame_just_captured: true,
-                        // CLI-armed recording starts before `WinitSettings` exists to
-                        // override; `StartOfflineRecording` is what forces Continuous.
- 
-                        prev_present_mode: None,
-                    });
+                    info!(
+                        "[offline-record] CLI mode armed: recording to {} at {} FPS — \
+                         starts once the scene's visuals are ready",
+                        path.display(),
+                        record_fps
+                    );
+                    // Arms through the workbench recorder's readiness gate, NOT a
+                    // hand-built active state: this path once listed its own fields
+                    // and drifted (skipped the KeepAwake/present-mode setup → recorded
+                    // through the power-save throttle at 2-10 s per frame), and
+                    // starting `active` here captured black opening frames from the
+                    // not-yet-loaded scene.
+                    lunco_workbench::screenshot::arm_recording_at_startup(app, path, record_fps);
                 }
             }
         }
