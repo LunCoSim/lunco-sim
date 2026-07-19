@@ -3745,6 +3745,8 @@ fn build_usd_nurbs_patch_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<
                     normals.push(s.normal);
                     uvs.push(s.uv);
                 }
+                let mut indices = domain.indices;
+                apply_patch_orientation(reader, path, &mut normals, &mut indices);
                 let mut mesh = Mesh::new(
                     PrimitiveTopology::TriangleList,
                     RenderAssetUsages::default(),
@@ -3752,7 +3754,7 @@ fn build_usd_nurbs_patch_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<
                 mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
                 mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
                 mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-                mesh.insert_indices(bevy_mesh::Indices::U32(domain.indices));
+                mesh.insert_indices(bevy_mesh::Indices::U32(indices));
                 return Some(mesh);
             }
         }
@@ -3820,6 +3822,7 @@ fn build_usd_nurbs_patch_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<
         }
     }
     debug_assert_eq!(positions.len(), cols * rows);
+    apply_patch_orientation(reader, path, &mut normals, &mut indices);
 
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
@@ -3827,6 +3830,59 @@ fn build_usd_nurbs_patch_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
     mesh.insert_indices(bevy_mesh::Indices::U32(indices));
     Some(mesh)
+}
+
+/// Apply a `NurbsPatch`'s `orientation` token to its generated normals + winding.
+///
+/// A NURBS surface normal is defined by the parameterisation — `N = dP/du x
+/// dP/dv` — so which way it faces is a property of how the control net was
+/// WOUND, not of the shape. Wind the `u` ring the other way round and the same
+/// dome has normals pointing at its own centre.
+///
+/// USD's answer to that is [`orientation`] on every gprim: `"leftHanded"` means
+/// "my winding is reversed, flip me". We honoured it for `Mesh`
+/// ([`build_mesh_from_prim`]) and ignored it for `NurbsPatch`, which left an
+/// author with a net they could not correct without re-authoring geometry.
+///
+/// That gap cost real time. HAB-1's shells and dome are wound `+X -> +Z`, giving
+/// `N = Z x Y = -X` — inward. The habitat rendered with a pitch-black dome and
+/// sunlight on the INNER face of its wall, and looked for all the world like a
+/// broken light rig. Rewinding `u` was not an option: the surfaces carry twelve
+/// trim loops whose `(u, v)` coordinates would all have had to be mirrored.
+///
+/// Flipping normals alone is not enough — back-face culling keys off winding, so
+/// a flipped normal on unflipped triangles renders lit-but-invisible from the
+/// side you want. Both must move together, which is why they are one function.
+fn apply_patch_orientation<R: UsdRead>(
+    reader: &R,
+    path: &SdfPath,
+    normals: &mut [[f32; 3]],
+    indices: &mut [u32],
+) {
+    if reader.text(path, "orientation").as_deref() != Some("leftHanded") {
+        return;
+    }
+    // Telemetry, for the same reason the trimmed/untrimmed patch build logs:
+    // a silent geometry transform is indistinguishable from one that never ran,
+    // and "is the flag even reaching the builder" cost a debugging session on
+    // HAB-1's dome. Reports the first normal so the direction is visible, not
+    // merely the fact that the branch was taken.
+    bevy::log::info!(
+        "[usd-bevy] {} orientation=leftHanded: flipped {} normals, {} tris (n[0] now {:?})",
+        path.as_str(),
+        normals.len(),
+        indices.len() / 3,
+        normals.first().map(|n| [-n[0], -n[1], -n[2]]),
+    );
+    for n in normals.iter_mut() {
+        n[0] = -n[0];
+        n[1] = -n[1];
+        n[2] = -n[2];
+    }
+    // Reverse each triangle's winding by swapping two of its corners.
+    for tri in indices.chunks_exact_mut(3) {
+        tri.swap(1, 2);
+    }
 }
 
 fn read_int_array<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<Vec<i32>> {

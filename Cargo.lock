@@ -7488,6 +7488,7 @@ dependencies = [
  "lunco-usd-bevy",
  "lunco-usd-sim",
  "lunco-workspace",
+ "openusd",
  "serde",
  "serde_json",
  "wasm-bindgen-futures",

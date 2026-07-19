@@ -590,6 +590,71 @@ mod tests {
         }
     }
 
+    /// THE LIGHTING REGRESSION. A closed shell's normals must point OUT.
+    ///
+    /// Geometry can be exact and the object still render as a black hole: the
+    /// surface normal follows the parameterisation, `N = dP/du x dP/dv`, so a net
+    /// wound the wrong way round in `u` yields inward normals. HAB-1 showed this
+    /// as a pitch-black dome and a can that "let light inside" — lit on the
+    /// surfaces facing AWAY from the sun, because every normal was reversed.
+    ///
+    /// Why no existing test caught it: `flat_patch_is_planar_with_correct_normals`
+    /// asserts `normal[1].abs() > 0.99`. The `abs()` accepts both directions, so
+    /// it passed with the normals inverted — the same shape of gap that let the
+    /// trim-corner and shell-offset bugs ship. Orientation needs a SIGNED
+    /// assertion or it is not being tested at all.
+    ///
+    /// For a surface of revolution about +Y, "outward" is well defined: at any
+    /// non-apex sample the normal must have a positive component along the
+    /// sample's own radial direction.
+    ///
+    /// This test pins the RAW net's handedness: HAB-1's rings are wound
+    /// `+X -> +Z`, so `dU x dV` points INWARD and every sample here has a
+    /// negative radial dot. That is a fact about the authored net, not a bug to
+    /// fix in this function — the surfaces carry twelve trim loops whose `(u, v)`
+    /// coordinates would all need mirroring to rewind them. The correction is
+    /// `orientation = "leftHanded"` on the prim, applied at mesh-build time by
+    /// `apply_patch_orientation`, and the assertion below is what makes that
+    /// flag's necessity explicit instead of folklore.
+    #[test]
+    fn hab1_dome_raw_net_is_left_handed_so_the_prim_must_say_so() {
+        let (points, weights) = hab1_dome_net(7.345, 4.300);
+        let u_knots = [0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 4.0];
+        let v_knots = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+
+        let g = sample_nurbs_patch(
+            &points, &weights, 9, 3, 3, 3, &u_knots, &v_knots, 32, 8,
+        );
+        assert!(!g.is_empty(), "dome patch produced no samples");
+
+        let mut checked = 0;
+        for s in &g {
+            let (x, z) = (s.position[0], s.position[2]);
+            let r = (x * x + z * z).sqrt();
+            // Skip the apex, where the radial direction is undefined.
+            if r < 1e-3 {
+                continue;
+            }
+            let dot = (s.normal[0] * x + s.normal[2] * z) / r;
+            // NEGATIVE: the raw net faces inward. If this ever flips positive,
+            // someone rewound the rings — and every `orientation = "leftHanded"`
+            // authored to compensate has just become a bug that turns the shells
+            // black again. Fail loudly rather than let the two changes cancel.
+            assert!(
+                dot < 0.0,
+                "raw net normal at uv {:?} points OUTWARD (position {:?}, normal {:?}, \
+                 radial dot {dot}). The rings were rewound — now REMOVE \
+                 `orientation = \"leftHanded\"` from the HAB-1 patches, or they will \
+                 render inside-out.",
+                s.uv,
+                s.position,
+                s.normal
+            );
+            checked += 1;
+        }
+        assert!(checked > 100, "expected many non-apex samples, got {checked}");
+    }
+
     /// The mid-latitude ring must lie ON the ellipse, not inside or outside it.
     /// A polynomial (unweighted) net passes the endpoint checks above and still
     /// fails here, so this is the assertion that actually pins rationality.

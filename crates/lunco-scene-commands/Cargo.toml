@@ -41,6 +41,9 @@ lunco-mobility = { path = "../lunco-mobility" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+# `QueryUsdPrim` addresses prims by `sdf::Path`, so the read side needs the same
+# path type the stage is keyed on — no conversion layer in between.
+openusd = { workspace = true }
 # Active-document resolution for C4b runtime-layer persistence (ECS-only, no UI).
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
