@@ -51,7 +51,7 @@ use crate::cache_dir;
 ///   world-space normal map PNG from the heights (RGB = `n*0.5+0.5`,
 ///   the encoding `terrain_layered.wgsl` decodes — same convention as
 ///   `lunco-terrain-core`'s derived bake: `normalize(-dh/dx, 1, -dh/dz)`).
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct ProcessConfig {
     /// Pipeline selector. Defaults to `"texture"` for backwards
     /// compatibility with Earth/Moon entries.
@@ -78,7 +78,7 @@ pub struct ProcessConfig {
     ///   resolves them, and so does Blender / usdview / Houdini.
     /// - `"twin"` — writes into a **Twin folder** whose root is supplied
     ///   by the caller (the CLI's `--twin <DIR>` flag, threaded through
-    ///   [`process_texture`]'s `twin_root` arg). This is what makes a
+    ///   [`process_asset`]'s `twin_root` arg). This is what makes a
     ///   standalone Twin (which is not a workspace crate, e.g. a school
     ///   project on disk) able to download + process its own assets
     ///   in place. `output` is interpreted relative to that root.
@@ -167,19 +167,19 @@ fn default_dem_pixel_scale_m() -> f64 {
 ///   save as PNG. Supports JPEG, PNG, TIFF, BMP, WebP, SVG inputs.
 /// - `"gltf"`: clean a `.glb` for Bevy 0.18 — decode Draco geometry,
 ///   re-encode WebP textures as PNG. Shells out to `npx
-///   @gltf-transform/cli`; the function name `process_texture` is a
-///   historical accident at this point but kept to avoid churning the
-///   call site.
+///   @gltf-transform/cli`.
 /// - `"dem"`: crop a square ROI from a raw LROC/NAC DTM and write the
 ///   square, georeferenced float32 `heightmap.tif` the runtime DEM reader
 ///   expects. `output` is a **folder** (the `demSource` target);
 ///   the heightmap lands at `<output>/materials/textures/heightmap.tif`.
+/// - `"map"` / `"normalmap"`: co-registered ROI crops — see the
+///   [`ProcessConfig`] kind list.
 ///
 /// `twin_root` resolves `output_root = "twin"` against a caller-supplied
 /// Twin folder (the CLI's `--twin <DIR>`); `None` falls back to cache for
 /// the `"cache"` / unrecognised roots (see [`ProcessConfig::output_root`]).
 #[cfg(not(target_arch = "wasm32"))]
-pub fn process_texture(
+pub fn process_asset(
     source_path: &Path,
     process: &ProcessConfig,
     twin_root: Option<&Path>,
@@ -227,6 +227,21 @@ pub fn process_texture(
         std::fs::create_dir_all(parent)?;
     }
 
+    // ── Bake-key staleness check ──────────────────────────────────────────
+    // The processed output is a pure function of (source bytes, this config,
+    // pipeline version). Content-address it: a stamp beside the output holds
+    // the key of the bake that produced it, and a matching key skips the
+    // whole decode (the expensive part — a big mosaic decodes to GBs of f64).
+    // Anything that could change the result — new source, edited ROI, a
+    // pipeline fix (bump PIPELINE_VERSION) — changes the key and rebakes.
+    // Never time-based: a cache that can't go stale beats one that expires.
+    let stamp_path = bake_stamp_path(&output_path);
+    let key = bake_key(source_path, process)?;
+    if std::fs::read_to_string(&stamp_path).is_ok_and(|s| s.trim() == key) {
+        println!("  ✓ up-to-date (bake key match) → {}", output_path.display());
+        return Ok(());
+    }
+
     match process.kind.as_str() {
         "gltf" => process_gltf(source_path, &output_path)?,
         "dem" => process_dem(source_path, &output_path, process)?,
@@ -268,8 +283,58 @@ pub fn process_texture(
         }
     }
 
+    // Stamp only after a fully successful bake, so a failed/interrupted run
+    // never masquerades as fresh.
+    std::fs::write(&stamp_path, &key)?;
+
     println!("  ✓ processed → {}", output_path.display());
     Ok(())
+}
+
+/// Bump when any pipeline's OUTPUT changes for identical inputs (resampling
+/// fix, encoding change, new geo tags) — invalidates every stamped bake.
+const PIPELINE_VERSION: u32 = 1;
+
+/// Where the bake stamp lives: inside the output folder for folder outputs
+/// (`dem`), beside the file for file outputs. Both land under the twin's
+/// gitignored terrain artifacts, never in tracked source.
+#[cfg(not(target_arch = "wasm32"))]
+fn bake_stamp_path(output_path: &Path) -> std::path::PathBuf {
+    if output_path.extension().is_none() {
+        output_path.join(".bakekey")
+    } else {
+        let mut name = output_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        name.push_str(".bakekey");
+        output_path.with_file_name(name)
+    }
+}
+
+/// Content-address of a bake: sha256 over the SOURCE BYTES (streamed — a
+/// 908 MB mosaic hashes in seconds vs decoding to ~2 GB of f64), the full
+/// serialized [`ProcessConfig`], and [`PIPELINE_VERSION`]. Deliberately not
+/// size+mtime: mtimes differ across machines and bundle unpacks, and a bake
+/// key must mean the same thing on every peer.
+#[cfg(not(target_arch = "wasm32"))]
+fn bake_key(source: &Path, cfg: &ProcessConfig) -> Result<String, std::io::Error> {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    let mut f = std::fs::File::open(source)?;
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = std::io::Read::read(&mut f, &mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let cfg_json = serde_json::to_string(cfg)
+        .map_err(|e| io_err(format!("serializing ProcessConfig for bake key: {e}")))?;
+    hasher.update(cfg_json.as_bytes());
+    hasher.update(PIPELINE_VERSION.to_le_bytes());
+    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// glb cleanup pipeline. Runs `gltf-transform` twice in series:

@@ -37,7 +37,15 @@ pub struct AssetEntry {
     pub version: Option<String>,
     /// URL to download from.
     pub url: String,
-    /// Destination path relative to the shared cache root.
+    /// Destination path — **optional**. Omit it for plain source downloads:
+    /// the file then lands in the shared pool
+    /// `<cache>/sources/<sha256(url)[..16]>/<basename>`, so one URL is
+    /// downloaded exactly once and reused by every entry, twin, and
+    /// worktree ([`shared_source_path`]).
+    ///
+    /// Author `dest` only when the file must live at a specific path:
+    /// relative to the shared cache root for crate manifests, relative to
+    /// the Twin root for `--twin` runs (safety-checked).
     ///
     /// For tarballs without `extract`: the archive is extracted into
     /// this directory.
@@ -47,7 +55,8 @@ pub struct AssetEntry {
     /// output file, not a directory).
     ///
     /// For single-file downloads: the bytes are written directly here.
-    pub dest: String,
+    #[serde(default)]
+    pub dest: Option<String>,
     /// Optional archive-internal path of the file to pull out of a
     /// tarball, relative to the tarball root after the usual
     /// "first-directory" prefix is stripped. When set, only this one
@@ -64,6 +73,50 @@ pub struct AssetEntry {
     /// Optional post-processing step (resize, convert).
     #[serde(default)]
     pub process: Option<ProcessConfig>,
+}
+
+/// Where a manifest entry's downloaded file lives on disk — the ONE
+/// resolver both the download and the process steps use, so they can never
+/// disagree.
+///
+/// - Authored `dest` → `dest_root.join(dest)` for twins, cache-relative
+///   otherwise (the historical behaviour, for files that must sit at a
+///   specific path).
+/// - No `dest` → the shared source pool via [`shared_source_path`]:
+///   downloaded once per URL, reused by every entry, twin, and worktree.
+pub fn entry_dest_path(entry: &AssetEntry, dest_root: Option<&Path>) -> PathBuf {
+    match entry.dest.as_deref() {
+        Some(d) => match dest_root {
+            Some(root) => root.join(d),
+            None => cache_dir().join(d),
+        },
+        None => shared_source_path(&entry.url),
+    }
+}
+
+/// The shared source pool path for a URL:
+/// `<cache>/sources/<sha256(url)[..16]>/<basename>`.
+///
+/// Keyed by URL hash (not just basename) so two products that happen to
+/// share a filename never collide; the basename is kept alongside so the
+/// pool stays human-readable. Integrity is the manifest's `sha256` — the
+/// pool only decides WHERE bytes live, never whether to trust them.
+pub fn shared_source_path(url: &str) -> PathBuf {
+    use sha2::{Digest, Sha256};
+    let hash: String = Sha256::digest(url.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    // Basename: last path segment, query-string stripped; anything unsafe
+    // (empty, traversal, absolute) falls back to a neutral name — the hash
+    // dir already guarantees uniqueness.
+    let base = url
+        .split(['?', '#'])
+        .next()
+        .and_then(|u| u.rsplit('/').next())
+        .filter(|s| !s.is_empty() && is_safe_rel_dest(s))
+        .unwrap_or("download.bin");
+    cache_dir().join("sources").join(&hash[..16]).join(base)
 }
 
 /// Parsed `Assets.toml` from a crate.
@@ -151,21 +204,16 @@ pub fn download_asset_with_control(
     dest_root: Option<&Path>,
 ) -> Result<(), DownloadError> {
     // Twin-relative downloads must not let a manifest's `dest` walk outside
-    // the Twin root. Cache-relative downloads are left as-is for back-compat
-    // (existing crate manifests use plain relative paths already).
-    if let Some(_root) = dest_root {
-        if !is_safe_rel_dest(&entry.dest) {
+    // the Twin root. Cache-relative downloads are plain relative paths.
+    if let (Some(_root), Some(d)) = (dest_root, entry.dest.as_deref()) {
+        if !is_safe_rel_dest(d) {
             return Err(DownloadError::ManifestFailed(format!(
-                "asset `{key}` has an unsafe `dest` for a twin download: {:?} \
-                 (must be relative, no `..`, no absolute, no backslash)",
-                entry.dest
+                "asset `{key}` has an unsafe `dest` for a twin download: {d:?} \
+                 (must be relative, no `..`, no absolute, no backslash)"
             )));
         }
     }
-    let dest = match dest_root {
-        Some(root) => root.join(&entry.dest),
-        None => cache_dir().join(&entry.dest),
-    };
+    let dest = entry_dest_path(entry, dest_root);
 
     // Cache-hit check #1 — versioned install (used by libraries like
     // the MSL tarball where `version = "4.1.0"` pins an upstream
@@ -557,10 +605,7 @@ pub fn list_for_crate(
 
     println!("Assets for {}:", crate_dir.file_name().unwrap_or_default().to_string_lossy());
     for (key, entry) in &manifest.assets {
-        let dest = match dest_root {
-            Some(root) => root.join(&entry.dest),
-            None => cache_dir().join(&entry.dest),
-        };
+        let dest = entry_dest_path(entry, dest_root);
         let status = if dest.exists() {
             if let Some(ref ver) = entry.version {
                 let version_file = dest.parent().unwrap_or(&dest).join(".version");
@@ -730,7 +775,7 @@ mod tests {
             name: "evil".into(),
             version: None,
             url: "http://0.0.0.0:0/never-fetched".into(),
-            dest: "../escape.tif".into(),
+            dest: Some("../escape.tif".into()),
             extract: None,
             sha256: None,
             process: None,

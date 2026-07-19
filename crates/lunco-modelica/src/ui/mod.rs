@@ -1349,7 +1349,7 @@ fn render_optional_libraries(ui: &mut bevy_egui::egui::Ui, _world: &mut World) {
             .small(),
     );
     for (key, entry) in optional {
-        let dest = lunco_assets::cache_dir().join(&entry.dest);
+        let dest = lunco_assets::download::entry_dest_path(entry, None);
         let installed = dest.exists()
             && std::fs::read_dir(&dest)
                 .map(|mut d| d.next().is_some())
@@ -1399,7 +1399,7 @@ fn spawn_optional_library_install(
         // For a reinstall, wipe the existing dest first so the
         // version-file cache-hit check doesn't short-circuit.
         if is_reinstall {
-            let dest = lunco_assets::cache_dir().join(&entry.dest);
+            let dest = lunco_assets::download::entry_dest_path(&entry, None);
             if let Err(e) = std::fs::remove_dir_all(&dest) {
                 if e.kind() != std::io::ErrorKind::NotFound {
                     bevy::log::warn!(
