@@ -92,6 +92,9 @@ impl Plugin for ScreenshotPlugin {
             // `drive_offline_clock`, which only acts once `state.active` is set —
             // so the shot begins on the same frame it was cleared to begin.
             .add_systems(Update, start_recording_when_scene_ready)
+            // One-shot contracts: `--record-frames <n>` bounds the take, and
+            // `--offscreen` exits the process once the take is on disk.
+            .add_systems(Update, (stop_recording_at_limit, exit_when_recording_drained))
             // `Last`: the strategy written here is read by `TimeSystem` in `First`
             // next frame, so the decision is made after every other system has run.
             .add_systems(Last, drive_offline_clock);
@@ -441,6 +444,37 @@ pub struct StartOfflineRecording {
 /// Command to stop frame-by-frame recording.
 #[Command(default)]
 pub struct StopOfflineRecording {}
+
+/// Does this recording destination mean "encode a video file" rather than
+/// "write a PNG sequence into this directory"? This recorder always writes a
+/// PNG sequence; callers (the `--record-offline` CLI) use this only to decide
+/// whether the path itself or its PARENT is the directory to create.
+pub fn output_is_video(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref(),
+        Some("mp4" | "mkv" | "mov")
+    )
+}
+
+/// When present, offline recording captures THIS image each frame instead of
+/// the primary window — the offscreen (`--offscreen`) mode's render target.
+/// Inserted by the binary that owns the mode (`SandboxOffscreenPlugin`); the
+/// recorder itself stays target-agnostic.
+#[derive(Resource)]
+pub struct OfflineCaptureTarget(pub Handle<bevy::image::Image>);
+
+/// Stop the recording automatically once `frame_index` reaches this count —
+/// the CLI `--record-frames <n>` one-shot contract. Routed through the SAME
+/// `StopOfflineRecording` command a scenario would send, so the teardown and
+/// status behaviour cannot diverge between the two.
+#[derive(Resource)]
+pub struct OfflineRecordLimit(pub u64);
+
+/// Marker: exit the app once a recording has finished (recorder inactive with
+/// frames on disk — saves here are synchronous, so inactive IS drained).
+/// Inserted by one-shot modes (`--offscreen`); a windowed session never wants it.
+#[derive(Resource)]
+pub struct ExitAfterRecording;
 
 /// **Arms** the recorder; it does not start it.
 ///
@@ -853,6 +887,9 @@ fn drive_offline_clock(
     // of `TimeUpdateStrategy`, which is the exact failure this system's doc warns
     // about.
     pending: Option<Res<PendingShotStart>>,
+    // `--offscreen` mode: capture the offscreen render target, not the
+    // (nonexistent) primary window.
+    capture_target: Option<Res<OfflineCaptureTarget>>,
     mut commands: Commands,
 ) {
     // PHASE 0 — armed, waiting for the scene. Freeze virtual time.
@@ -901,7 +938,10 @@ fn drive_offline_clock(
     } else {
         // Time advanced this frame and the scene is rendered — capture it, then
         // hold the clock until the readback delivers.
-        commands.spawn(Screenshot::primary_window());
+        commands.spawn(match &capture_target {
+            Some(target) => Screenshot::image(target.0.clone()),
+            None => Screenshot::primary_window(),
+        });
         state.is_waiting_for_frame = true;
         commands.insert_resource(TimeUpdateStrategy::ManualDuration(
             std::time::Duration::ZERO,
@@ -959,6 +999,53 @@ fn deliver_offline_frame(
     // `drive_offline_clock` owns `TimeUpdateStrategy`; just signal that a frame
     // landed so it can schedule the single `1/fps` step.
     state.frame_just_captured = true;
+}
+
+/// The CLI `--record-frames <n>` one-shot contract: once the recorder has
+/// captured `n` frames, stop — through the SAME `StopOfflineRecording` command
+/// a scenario would send, so the two stop paths cannot diverge. This is what
+/// bounds an unattended capture; without it a CLI-armed recording spools frames
+/// until the process is killed.
+fn stop_recording_at_limit(
+    state: Res<OfflineRecordingState>,
+    limit: Option<Res<OfflineRecordLimit>>,
+    mut commands: Commands,
+) {
+    let Some(limit) = limit else { return };
+    if state.active && state.frame_index >= limit.0 {
+        info!(
+            "[offline-record] reached the requested {} frames — stopping",
+            limit.0
+        );
+        commands.trigger(StopOfflineRecording {});
+    }
+}
+
+/// One-shot process contract (`--offscreen`): exit once the recording has
+/// finished. Saves here are synchronous — a frame is on disk before
+/// `frame_index` advances — so "recorder inactive, nothing armed, no readback
+/// in flight, at least one frame captured" IS the drained condition. The
+/// `frame_index > 0` clause keeps an `--offscreen` session launched for
+/// API-driven work (no `--record-offline`) from exiting the moment it boots.
+fn exit_when_recording_drained(
+    exit_requested: Option<Res<ExitAfterRecording>>,
+    state: Res<OfflineRecordingState>,
+    pending: Option<Res<PendingShotStart>>,
+    mut exit: bevy::ecs::message::MessageWriter<bevy::app::AppExit>,
+    mut fired: Local<bool>,
+) {
+    if exit_requested.is_none() || *fired {
+        return;
+    }
+    if pending.is_some() || state.active || state.is_waiting_for_frame || state.frame_index == 0 {
+        return;
+    }
+    info!(
+        "[offline-record] recording drained ({} frames) — exiting (ExitAfterRecording)",
+        state.frame_index
+    );
+    *fired = true;
+    exit.write(bevy::app::AppExit::Success);
 }
 
 struct GetOfflineRecordingStatusProvider;
