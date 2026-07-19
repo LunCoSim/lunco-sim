@@ -3130,9 +3130,17 @@ fn on_focus_command(
 ///
 /// Inserts `FreeFlightCamera` as the default behavior with the entity's
 /// current transform orientation.
+///
+/// `Without<CinematicCameraLock>` is load-bearing, not hygiene: a path-driven
+/// camera has NO mode component by design (the janitor strips them), and
+/// without the guard this system re-inserted `FreeFlightCamera` every frame
+/// while the janitor removed it every frame — a permanent insert/remove war
+/// (measured: 8 590 strip rounds in one 63 s recording) whose per-frame
+/// archetype churn on the camera entity destabilised scene bring-up
+/// (terrain/sky visuals raced and lost) and multiplied run time.
 fn avatar_init_system(
     mut commands: Commands,
-    q_avatar: Query<(Entity, &Transform), (With<Avatar>, Without<SpringArmCamera>, Without<OrbitCamera>, Without<FreeFlightCamera>, Without<FrameBlend>)>,
+    q_avatar: Query<(Entity, &Transform), (With<Avatar>, Without<SpringArmCamera>, Without<OrbitCamera>, Without<FreeFlightCamera>, Without<FrameBlend>, Without<lunco_core::CinematicCameraLock>)>,
     q_proj: Query<Entity, (With<Avatar>, Without<AdaptiveNearPlane>, With<Projection>)>,
 ) {
     for (entity, tf) in q_avatar.iter() {
