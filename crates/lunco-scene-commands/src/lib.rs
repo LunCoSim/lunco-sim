@@ -48,6 +48,9 @@ pub mod commands;
 /// `QueryEntity` — the READ side of the scene verbs, reporting the same
 /// grid-absolute frame [`commands::MoveEntity`] accepts.
 pub mod entity_query;
+/// `QueryUsdPrim` — the AUTHORED read: composed USD attributes off the live
+/// stage, for asset invariants that scripts (not just Rust) can check.
+pub mod usd_prim_query;
 /// Headless-safe: resolve an entity's backing USD document + its bound shader prim.
 /// Shared by `commands` (the authoring tier) and the editor's Inspector panel — it
 /// lived in the panel, which is what broke the `--no-ui` server build (`commands`
