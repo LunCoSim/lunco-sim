@@ -32,6 +32,36 @@ frame index and nothing else.
 
 ---
 
+## 1a. One command in, one video out
+
+The recording CLI arms through the same readiness gate and recorder state as the
+commands below — never a parallel implementation:
+
+```sh
+# Windowed: record the live window once the scene's visuals are ready
+sandbox --record-offline take.mp4 --record-fps 30
+
+# Windowless (offscreen): full GPU render stack, NO window/egui; renders into an
+# offscreen target and EXITS BY ITSELF when the take drains
+sandbox --offscreen --record-offline take.mp4 --record-fps 30 --record-frames 300
+```
+
+| Flag | Meaning |
+|---|---|
+| `--record-offline <dir\|out.mp4>` | Arm recording; destination picks PNG sequence vs video (§3). |
+| `--record-fps N` | Output frame rate (default 60). |
+| `--record-frames N` | Stop automatically after N frames. |
+| `--offscreen` | Windowless GPU mode. The scene renders into an offscreen target image; the process exits when the recording drains. Also usable with `--api` for a windowless interactive instance (API `CaptureScreenshot` reads the offscreen target). |
+| `--record-size WxH` | Offscreen target resolution (default 1280x720 — the windowed default, so offscreen takes match windowed ones). |
+
+Offscreen has no workbench, so no viewport camera exists: it activates the scene's first
+**authored** `SceneCamera` whose render pipeline is bound (the scene's own framing intent
+— cinematic paths drive authored cameras anyway) and points every window-targeting camera
+at the offscreen image. A scene that authors no camera records black and says so in the
+log.
+
+---
+
 ## 2. The three knobs — one writer each
 
 Recording touches three independent pieces of engine state. **Each has exactly one
@@ -57,19 +87,37 @@ system has run.
 
 ---
 
-## 3. The advance / capture cycle
+## 3. The pipelined advance / capture cycle
 
-The recorder alternates two render frames per captured frame:
+Every render frame advances the clock exactly `1/fps` **and** requests a capture of the
+frame just stepped — capture-before-advance, so a taken step is always captured. The
+expensive halves overlap instead of serialising:
 
-1. **Advance** — the clock steps `1/fps`; simulation and `FixedUpdate` run; the scene
-   renders.
-2. **Capture** — a screenshot is requested and **the clock is frozen until the readback
-   lands**, so a slow multi-frame readback can never advance time more than once per saved
-   frame. The PNG is written **synchronously** — unbounded async saves previously caused
-   wgpu buffer exhaustion and OOM.
+- **GPU readback** snapshots pixels at request time and delivers frames later — several
+  captures are in flight at once, each carrying its own frame index and destination.
+- **Encode + write** runs on worker tasks, never on the main thread (the main thread does
+  zero per-pixel work; the image buffer is *stolen* from the delivery event in O(1)).
+- **Back-pressure, not freezing:** when too many captures or saves are in flight
+  (`MAX_OUTSTANDING_CAPTURES` / `MAX_IN_FLIGHT_SAVES`), the clock **pauses advancing**
+  until the pipeline drains. Determinism is untouched — output is still a pure function
+  of frame index; only wall-clock throughput varies.
+- **Failure policy is drain-and-abort:** a failed save aborts the recording loudly and
+  names the lost frame; frames already handed to workers still land. Never a silent
+  mid-sequence hole. All writes go through `lunco_storage` (atomic temp+rename), so a
+  killed run leaves ignorable `.tmp` files, never a corrupt frame.
 
 The consequence for anything sequencing shots: **several `FixedUpdate` ticks can elapse
 per captured frame**, and the count varies with machine speed. See §5.
+
+### Destination decides the format
+
+`output_dir` ending in `.mp4` / `.mkv` / `.mov` streams frames straight into a spawned
+`ffmpeg` (libx264, one file, ~2 MB per 10 s at 720p instead of ~1.2 GB of PNGs); anything
+else is a directory receiving a `frame_%06d.png` sequence. `ffmpeg` is probed at start —
+missing, the recorder **warns loudly and demotes to a PNG sequence** in `<name>.frames/`;
+it never crashes the take. A dedicated writer thread owns frame ordering (video is the
+one strictly-sequential sink in the pipeline) and finalizes the container when the
+recording drains.
 
 ---
 
@@ -80,14 +128,17 @@ Fired from rhai as `cmd(name, #{…})` / `query(name)`; the full generated surfa
 
 | Command | Params | Effect |
 |---|---|---|
-| `StartOfflineRecording` | `#{ output_dir: String, fps: i64 }` | Take over the virtual clock and begin step-by-step capture into `output_dir`. |
+| `StartOfflineRecording` | `#{ output_dir: String, fps: i64 }` | Take over the virtual clock and begin step-by-step capture. `output_dir` ending in `.mp4`/`.mkv`/`.mov` streams to video (§3); else a PNG-sequence directory. |
 | `StopOfflineRecording` | `#{}` | End capture, restore automatic real-time ticking. |
 | `StepPhysics` | `#{ hold: bool }` / `#{ steps: i64 }` | `hold` freezes/releases physics integration; `steps` advances a held world by exactly that many fixed steps. |
 | `ToggleInputOverlay` | `#{ enabled: bool }` | Show/hide the key-press readout (it is burnt into captured frames). |
 | `CloseWindow` | `#{}` | Close the window and exit cleanly — what lets an unattended run terminate. |
 
 ```rhai
-query("GetOfflineRecordingStatus")   // #{ active: bool, frame_index: i64, is_waiting_for_frame: bool }
+query("GetOfflineRecordingStatus")
+// #{ active, frame_index, is_waiting_for_frame, video,
+//    outstanding_captures,   // GPU readbacks not yet delivered
+//    pending_saves }         // encode/write workers still running
 ```
 
 > [!WARNING]

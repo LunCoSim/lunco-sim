@@ -136,8 +136,24 @@ FLAGS:
                          POST /api/commands  {{\"command\":\"Name\",\"params\":{{…}}}}
         --scene PATH     Load this USD scene at startup, relative to assets/.
         --window-pos SPEC  Place the OS window, e.g. 1920x1080+0+0.
-        --record-offline DIR Arm cinematic offline recording to DIR on startup.
-        --record-fps FPS Set target frame rate for offline recording (default 60).
+
+RECORDING:
+        --record-offline <dir|out.mp4>
+                         Record deterministic frames once the scene is ready:
+                         a directory gets a PNG sequence; an .mp4/.mkv/.mov
+                         path streams straight into ffmpeg (falls back to a
+                         PNG sequence, loudly, if ffmpeg is not installed).
+        --record-fps N   Recording output frame rate (default 60).
+        --record-frames N
+                         Stop the recording automatically after N frames.
+        --offscreen      GPU-full windowless recording: no window opens, the
+                         scene renders into an offscreen target and the process
+                         exits when the recording drains. Use with
+                         --record-offline [--record-frames] for a one-command
+                         take.
+        --record-size WxH
+                         Offscreen render-target resolution (default 1280x720,
+                         the windowed default).
 
 NETWORKING:
         --host [PORT]    Host a session over WebTransport (default {net}).
@@ -182,6 +198,14 @@ fn print_help_if_requested() -> bool {
 /// or the headless runner. Nothing UI-specific lives here beyond selecting the
 /// windowing backend in [`default_plugins`].
 fn run_with_mode(headless: bool) -> AppExit {
+    // `--offscreen`: GPU-FULL windowless recording mode. Real render stack and
+    // visuals, no window/winit/egui — the scene renders into an offscreen target
+    // image and the offline recorder captures that. Only meaningful in a `ui`
+    // build (it needs the render stack) and mutually exclusive with headless
+    // (which is the no-GPU server); headless wins if both are given.
+    let offscreen = cfg!(all(feature = "ui", feature = "lunco-api"))
+        && !headless
+        && std::env::args().any(|a| a == "--offscreen");
     // Answer `--help` without building an app (see `print_help_if_requested`).
     // Placed in the composition root, not in one bin's `main`, so EVERY entry
     // point that runs the sandbox — GUI `sandbox`, headless `sandbox-server` —
@@ -197,7 +221,7 @@ fn run_with_mode(headless: bool) -> AppExit {
     // forward exits without opening a window. The returned inbox is inserted
     // below; a Bevy system drains it into the confirm prompt. Headless skips it.
     #[cfg(all(feature = "networking", not(target_family = "wasm")))]
-    let deeplink_inbox = if !headless {
+    let deeplink_inbox = if !headless && !offscreen {
         use lunco_networking::single_instance::{acquire, LaunchOutcome};
         url_scheme::register_best_effort();
         match acquire() {
@@ -223,13 +247,18 @@ fn run_with_mode(headless: bool) -> AppExit {
     // `DefaultPlugins`/`AssetPlugin` snapshots the source registry.
     lunco_assets::register_lunco_asset_sources(&mut app);
 
-    app.add_plugins(default_plugins(headless));
+    app.add_plugins(default_plugins(headless, offscreen));
     app.add_plugins(SandboxCorePlugin { headless });
 
 
     #[cfg(feature = "ui")]
-    if !headless {
+    if !headless && !offscreen {
         app.add_plugins(ui::SandboxUiPlugin);
+    }
+
+    #[cfg(all(feature = "ui", feature = "lunco-api"))]
+    if offscreen {
+        app.add_plugins(SandboxOffscreenPlugin);
     }
 
     if headless {
@@ -256,7 +285,7 @@ fn run_with_mode(headless: bool) -> AppExit {
 /// `ExtractPlugin`/`SyncWorldPlugin` entirely, while still installing the render-
 /// sync component hooks that expect them. [`SandboxHeadlessPlugin`] adds
 /// `SyncWorldPlugin` back to keep despawns from aborting; see the note there.
-fn default_plugins(headless: bool) -> bevy::app::PluginGroupBuilder {
+fn default_plugins(headless: bool, offscreen: bool) -> bevy::app::PluginGroupBuilder {
     // `bevy::render` EXISTS ONLY IN A `ui` BUILD. The no-`ui` server does not link
     // bevy_render at all (that is the point of the render decoupling), so every
     // `bevy::render::*` path below must be gated — an ungated one does not merely link a
@@ -265,10 +294,10 @@ fn default_plugins(headless: bool) -> bevy::app::PluginGroupBuilder {
     // guard only runs `cargo tree` (which resolves the graph but never builds it).
     #[cfg(feature = "ui")]
     use bevy::render::settings::WgpuSettings;
-    // `headless` only selects render/window config in `ui` builds; a no-`ui`
-    // build is always windowless, so the param is unused there.
+    // `headless`/`offscreen` only select render/window config in `ui` builds; a
+    // no-`ui` build is always windowless, so the params are unused there.
     #[cfg(not(feature = "ui"))]
-    let _ = headless;
+    let _ = (headless, offscreen);
 
     // Window title (advertises the `--api` port so side-by-side instances are
     // distinguishable) + present mode are windowed-only and must be known at
@@ -338,11 +367,15 @@ fn default_plugins(headless: bool) -> bevy::app::PluginGroupBuilder {
     let vertical = std::env::args().any(|a| a == "--vertical");
 
     // Window/winit setup. With the `ui` feature the runtime `headless` flag still
-    // picks the windowless variant (no primary window, WinitPlugin disabled).
+    // picks the windowless variant (no primary window, WinitPlugin disabled) —
+    // and so does `offscreen`, which is windowless WITH a GPU (the
+    // `render_creation` above stays `preferred_wgpu_settings` because
+    // `offscreen` never sets `headless`; wgpu renders surfaceless into the
+    // offscreen target image).
     // Without `ui` there's no winit crate to disable, so just declare a
     // windowless `WindowPlugin`.
     #[cfg(feature = "ui")]
-    let group = if headless {
+    let group = if headless || offscreen {
         group
             .set(WindowPlugin {
                 primary_window: None,
@@ -1742,6 +1775,7 @@ impl Plugin for SandboxCorePlugin {
         if !self.headless {
             let mut record_dir = None;
             let mut record_fps = 60;
+            let mut record_frames: Option<u64> = None;
             for i in 0..args.len() {
                 if args[i] == "--record-offline" && i + 1 < args.len() {
                     record_dir = Some(args[i + 1].clone());
@@ -1751,11 +1785,33 @@ impl Plugin for SandboxCorePlugin {
                         record_fps = fps;
                     }
                 }
+                if args[i] == "--record-frames" && i + 1 < args.len() {
+                    match args[i + 1].parse::<u64>() {
+                        Ok(n) if n > 0 => record_frames = Some(n),
+                        _ => warn!(
+                            "--record-frames expects a positive frame count, got {:?} — ignoring",
+                            args[i + 1]
+                        ),
+                    }
+                }
+            }
+            if let Some(n) = record_frames {
+                app.insert_resource(lunco_workbench::screenshot::OfflineRecordLimit(n));
             }
             if let Some(dir) = record_dir {
                 let path = std::path::PathBuf::from(dir);
-                if let Err(e) = std::fs::create_dir_all(&path) {
-                    error!("[offline-record] CLI failed to create output directory {}: {e}", path.display());
+                // A video destination (`out.mp4`) needs its PARENT, not itself,
+                // to exist as a directory — see `output_is_video`.
+                let dir_to_create = if lunco_workbench::screenshot::output_is_video(&path) {
+                    path.parent().map(std::path::Path::to_path_buf).unwrap_or_default()
+                } else {
+                    path.clone()
+                };
+                if let Err(e) = (!dir_to_create.as_os_str().is_empty())
+                    .then(|| std::fs::create_dir_all(&dir_to_create))
+                    .unwrap_or(Ok(()))
+                {
+                    error!("[offline-record] CLI failed to create output directory {}: {e}", dir_to_create.display());
                 } else {
                     info!("[offline-record] CLI mode armed: recording to {} at {} FPS", path.display(), record_fps);
                     app.insert_resource(lunco_workbench::screenshot::OfflineRecordingState {
@@ -2602,6 +2658,183 @@ fn bind_terrain_layers(
 /// The headless runner: the Modelica/spawn cores a windowed build gets
 /// transitively from its UI plugins, plus the `ScheduleRunnerPlugin` that ticks
 /// the app in winit's place. Added only when running headless.
+/// GPU-full WINDOWLESS recording mode (`--offscreen`): the render stack is real
+/// (wgpu device, render world, `LuncoRenderPlugin` visuals) but no window ever
+/// opens — the scene renders into an offscreen target image sized by
+/// `--record-size WxH` (default 1280x720, the same resolution the windowed
+/// sandbox opens at) and the offline recorder captures that image. Combined
+/// with `--record-offline out.mp4 --record-frames N` this is the one-command
+/// take: the process exits by itself once the recording drains.
+///
+/// Contrast with [`SandboxHeadlessPlugin`] (the `--no-ui` SERVER: no GPU at
+/// all, `backends: None`): offscreen must NOT insert `NoRenderVisuals` (meshes
+/// really load) and must NOT re-add `SyncWorldPlugin` (a real backend builds
+/// the render world itself — adding it again would double-register).
+#[cfg(all(feature = "ui", feature = "lunco-api"))]
+pub struct SandboxOffscreenPlugin;
+
+#[cfg(all(feature = "ui", feature = "lunco-api"))]
+impl Plugin for SandboxOffscreenPlugin {
+    fn build(&self, app: &mut App) {
+        // Same non-UI cores the headless server needs (see the twin comments in
+        // `SandboxHeadlessPlugin`): the Modelica compile channels and the
+        // spawn-command registry both normally arrive via UI plugins.
+        app.add_plugins(lunco_modelica::ModelicaCorePlugin);
+        app.add_plugins(lunco_scene_commands::commands::SpawnCommandPlugin);
+
+        // The workspace session (WorkspaceResource + journal persistence) —
+        // the GUI gets this from `WorkbenchPlugin`, which this mode skips.
+        // `setup_sandbox`'s twin-load path panics without it.
+        app.add_plugins(lunco_workspace::WorkspacePlugin);
+
+        // The offline recorder itself — normally added by `WorkbenchPlugin`,
+        // which this mode skips (egui needs a window).
+        app.add_plugins(lunco_workbench::screenshot::ScreenshotPlugin);
+
+        // No winit event loop, so tick the app ourselves — flat out, zero wait:
+        // while recording, `drive_offline_clock` paces the sim (one 1/fps step
+        // per frame, back-pressure holds the clock), so a faster tick rate means
+        // faster-than-realtime capture, never a wrong-speed video.
+        app.add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(
+            std::time::Duration::ZERO,
+        ));
+
+        // One-shot contract: when the recording fully drains (frames delivered,
+        // saves done, video trailer written), exit the process.
+        app.insert_resource(lunco_workbench::screenshot::ExitAfterRecording);
+
+        app.add_systems(Startup, setup_offscreen_target);
+        app.add_systems(
+            Update,
+            (retarget_cameras_to_offscreen, activate_offscreen_camera),
+        );
+
+        info!("[offscreen] GPU-full windowless recording mode: no window, scene renders to an offscreen target");
+    }
+}
+
+/// Create the offscreen render-target image and expose it to the recorder as
+/// [`lunco_workbench::screenshot::OfflineCaptureTarget`].
+#[cfg(all(feature = "ui", feature = "lunco-api"))]
+fn setup_offscreen_target(
+    mut images: ResMut<Assets<bevy::image::Image>>,
+    mut commands: Commands,
+) {
+    let (width, height) = parse_record_size();
+    let mut image = bevy::image::Image::new_target_texture(
+        width,
+        height,
+        bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+        None,
+    );
+    // `new_target_texture` sets RENDER_ATTACHMENT|TEXTURE_BINDING|COPY_DST;
+    // the screenshot readback additionally copies OUT of the texture.
+    image.texture_descriptor.usage |= bevy::render::render_resource::TextureUsages::COPY_SRC;
+    let handle = images.add(image);
+    info!("[offscreen] render target {width}x{height} (override with --record-size WxH)");
+    commands.insert_resource(lunco_workbench::screenshot::OfflineCaptureTarget(handle));
+}
+
+/// Point every camera that targets a window at the offscreen image instead.
+/// Runs every frame because cameras spawn throughout a session (scene loads,
+/// camera paths, possession) and each spawns targeting the — nonexistent —
+/// primary window; the rewrite is a cheap match on a handful of entities.
+#[cfg(all(feature = "ui", feature = "lunco-api"))]
+fn retarget_cameras_to_offscreen(
+    target: Option<Res<lunco_workbench::screenshot::OfflineCaptureTarget>>,
+    mut cameras: Query<(
+        &mut bevy::camera::RenderTarget,
+        Option<&mut bevy::camera::Projection>,
+    )>,
+) {
+    let Some(target) = target else { return };
+    for (mut rt, projection) in &mut cameras {
+        if matches!(*rt, bevy::camera::RenderTarget::Window(_)) {
+            *rt = bevy::camera::RenderTarget::Image(target.0.clone().into());
+            // BEVY QUIRK (0.19): `camera_system` recomputes a camera's target
+            // info on window/image EVENTS, `is_added`, or PROJECTION changes —
+            // NOT on `RenderTarget` component changes. A camera whose
+            // projection bound while its target was still the nonexistent
+            // primary window resolves to nothing, and pointing it at the image
+            // afterwards leaves `computed_size = None` FOREVER — the render
+            // world silently skips it (black take, no log). Touching the
+            // projection's change tick forces the recompute.
+            if let Some(mut projection) = projection {
+                projection.set_changed();
+            }
+        }
+    }
+}
+
+/// Windowed mode always has an active camera — the workbench VIEWPORT camera,
+/// which this mode skips along with the rest of the workbench. Every camera a
+/// scene brings spawns `is_active: false` by design (see the camera-ambiguity
+/// fix), so without this nothing renders and the recording is black frames.
+/// When NO camera is active, activate the first authored [`lunco_render::SceneCamera`]
+/// — the scene's own framing intent (e.g. the sandbox `WideShot`), and the same
+/// camera its cinematic paths drive. Scenes without an authored camera get a
+/// loud once-per-run warning rather than a silent black take.
+#[cfg(all(feature = "ui", feature = "lunco-api"))]
+fn activate_offscreen_camera(
+    mut cameras: Query<(
+        Entity,
+        &mut Camera,
+        bevy::ecs::query::Has<Camera3d>,
+    )>,
+    scene_cams: Query<(), With<lunco_render::SceneCamera>>,
+    mut warned: Local<bool>,
+) {
+    // "Active" must mean RENDERING: a bare `Camera` with no `Camera3d` has no
+    // render graph and draws nothing (the avatar rig spawns one such), so it
+    // neither counts as coverage nor may keep the take black by squatting on
+    // the active slot.
+    if cameras.iter().any(|(_, c, has_pipeline)| c.is_active && has_pipeline) {
+        return;
+    }
+    let target = cameras
+        .iter()
+        .find(|(e, _, has_pipeline)| *has_pipeline && scene_cams.contains(*e))
+        .map(|(e, ..)| e);
+    if let Some(target) = target {
+        for (e, mut cam, _) in &mut cameras {
+            if e == target {
+                info!("[offscreen] activating authored scene camera {e}");
+                cam.is_active = true;
+            } else if cam.is_active {
+                info!("[offscreen] deactivating non-rendering active camera {e}");
+                cam.is_active = false;
+            }
+        }
+    } else if !*warned && !cameras.is_empty() {
+        *warned = true;
+        warn!(
+            "[offscreen] no renderable camera yet (SceneCamera binding pending or the \
+             scene authors none) — the recording stays black until one exists"
+        );
+    }
+}
+
+/// Parse `--record-size WxH`; default 1280x720 — the resolution the windowed
+/// sandbox authors for its window (see `default_plugins`), so offscreen
+/// recordings match windowed ones by default.
+#[cfg(all(feature = "ui", feature = "lunco-api"))]
+fn parse_record_size() -> (u32, u32) {
+    let args: Vec<String> = std::env::args().collect();
+    for i in 0..args.len() {
+        if args[i] == "--record-size" {
+            if let Some(spec) = args.get(i + 1) {
+                if let Some((w, h)) = spec.split_once('x') {
+                    if let (Ok(w), Ok(h)) = (w.trim().parse(), h.trim().parse()) {
+                        return (w, h);
+                    }
+                }
+                warn!("--record-size expects WxH (e.g. 1920x1080), got {spec:?} — using 1280x720");
+            }
+        }
+    }
+    (1280, 720)
+}
+
 pub struct SandboxHeadlessPlugin;
 
 impl Plugin for SandboxHeadlessPlugin {
