@@ -114,6 +114,58 @@ def Xform "DescentLander" (
             }
         }
 
+        # Landing-strut load glow. The COLOUR of a strut under load is authored
+        # HERE — the actuator (`scenarios/leg_spring.rhai`) reads this emissive
+        # through the standard material:binding chain (exactly as `flame.rhai`
+        # reads its cone's), takes it as the chroma at `load_ref`, and writes
+        # it back scaled by the strut model's live `load` output each tick. So:
+        # Modelica publishes the force, USD declares the shader and the wire,
+        # rhai only plumbs. Retint this material and the landing glow follows;
+        # no script edit.
+        def Material "StrutGlow_Mat"
+        {
+            token outputs:surface.connect = </DescentLander/Looks/StrutGlow_Mat/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.4, 0.42, 0.46)
+                # The glow at NOMINAL load — instrument GREEN, "the structure
+                # is working and happy". The actuator grades this toward the
+                # overload red authored in its `hot_r/g/b` params as the strut
+                # model's live `load` climbs past `load_ref`: green = good,
+                # red = heavily compressed. Both endpoints are authored data —
+                # retint either and the landing reads differently, no script
+                # edit.
+                color3f inputs:emissiveColor = (0.4, 3.4, 0.9)
+                token outputs:surface
+            }
+        }
+
+        # MLI blanket — the gold crinkled foil, from the engine's shader
+        # library (`lunco://shaders/mli_foil.wgsl`). Procedural facet noise:
+        # each foil patch leans its own way and catches the sun in patches,
+        # which is what makes a hull read as insulation blanket instead of
+        # painted metal. `v_scale` matches the hull's circumference/height
+        # ratio so the crinkle cells stay square on the barrel.
+        def Material "MliFoil_Mat"
+        {
+            token outputs:surface.connect = </DescentLander/Looks/MliFoil_Mat/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:wgsl:sourceAsset = @lunco://shaders/mli_foil.wgsl@
+                color3f inputs:foil_color = (0.83, 0.62, 0.18)
+                color3f inputs:shade_color = (0.45, 0.30, 0.08)
+                float inputs:crinkle = 26.0
+                float inputs:facet_depth = 0.55
+                float inputs:sheen = 0.85
+                float inputs:v_scale = 0.19
+                token outputs:surface
+            }
+        }
+
         # The deployed arrays' photovoltaic surface — a WGSL shader, named for the
         # `wgsl` render context exactly as the surfaces above are named for
         # `UsdPreviewSurface`. Both wings wear it: same cells, same cut.
@@ -355,14 +407,81 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = false
     }
 
-    # High-gain dish, angled off the deck to the side (secondary detail).
-    def Sphere "AntennaDish"
+    # ── High-gain antenna: a REAL parabolic dish, not a sphere placeholder ──
+    # The reflector is a rational NurbsPatch: u is an EXACT circle (9 CVs, the
+    # classic 4-arc rational form — √2/2 weights on the diagonal CVs and doubled
+    # interior knots), v a cubic parabola profile y = r²/4f, f = 0.35 m. This is
+    # the "lathe" spelling the engine's NURBS reader exists for; the sampled
+    # surface is a true paraboloid, which a scaled Sphere never was.
+    def Xform "HighGainDish"
     {
-        double radius = 0.3
-        double3 xformOp:translate = (1.3, 1.9, 0.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.9, 0.9, 0.92)]
-        bool physics:collisionEnabled = false
+        double3 xformOp:translate = (1.35, 2.5, 0.0)
+        # Face the dish up-and-outboard, like a parked high-gain waiting for
+        # Earth: boresight ~35° off vertical toward +X.
+        double3 xformOp:rotateXYZ = (0.0, 0.0, -35.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+
+        def NurbsPatch "Reflector"
+        {
+            int uVertexCount = 9
+            int vVertexCount = 4
+            int uOrder = 3
+            int vOrder = 3
+            double[] uKnots = [0, 0, 0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1, 1, 1]
+            # vKnots unauthored → reader defaults to clamped, which is what a
+            # profile curve wants.
+            double[] pointWeights = [
+                1, 0.70710678, 1, 0.70710678, 1, 0.70710678, 1, 0.70710678, 1,
+                1, 0.70710678, 1, 0.70710678, 1, 0.70710678, 1, 0.70710678, 1,
+                1, 0.70710678, 1, 0.70710678, 1, 0.70710678, 1, 0.70710678, 1,
+                1, 0.70710678, 1, 0.70710678, 1, 0.70710678, 1, 0.70710678, 1]
+            # 4 profile rings (r, y): (0.02, 0) (0.20, 0.03) (0.40, 0.11) (0.58, 0.24),
+            # u varying fastest; corner CVs sit at (±r, y, ±r) per the rational form.
+            point3f[] points = [
+                (0.02, 0, 0), (0.02, 0, 0.02), (0, 0, 0.02), (-0.02, 0, 0.02), (-0.02, 0, 0), (-0.02, 0, -0.02), (0, 0, -0.02), (0.02, 0, -0.02), (0.02, 0, 0),
+                (0.20, 0.03, 0), (0.20, 0.03, 0.20), (0, 0.03, 0.20), (-0.20, 0.03, 0.20), (-0.20, 0.03, 0), (-0.20, 0.03, -0.20), (0, 0.03, -0.20), (0.20, 0.03, -0.20), (0.20, 0.03, 0),
+                (0.40, 0.11, 0), (0.40, 0.11, 0.40), (0, 0.11, 0.40), (-0.40, 0.11, 0.40), (-0.40, 0.11, 0), (-0.40, 0.11, -0.40), (0, 0.11, -0.40), (0.40, 0.11, -0.40), (0.40, 0.11, 0),
+                (0.58, 0.24, 0), (0.58, 0.24, 0.58), (0, 0.24, 0.58), (-0.58, 0.24, 0.58), (-0.58, 0.24, 0), (-0.58, 0.24, -0.58), (0, 0.24, -0.58), (0.58, 0.24, -0.58), (0.58, 0.24, 0)]
+            color3f[] primvars:displayColor = [(0.92, 0.92, 0.95)]
+            bool physics:collisionEnabled = false
+        }
+
+        # Feed arm: a NURBS curve swept into a TUBE by its authored `widths` —
+        # rim to focus (f = 0.35 above the apex) in one smooth cubic.
+        def NurbsCurves "FeedArm"
+        {
+            int[] curveVertexCounts = [4]
+            int[] order = [4]
+            double[] knots = [0, 0, 0, 0, 1, 1, 1, 1]
+            point3f[] points = [(0.56, 0.25, 0), (0.44, 0.44, 0), (0.16, 0.47, 0), (0.0, 0.38, 0)]
+            float[] widths = [0.03]
+            color3f[] primvars:displayColor = [(0.75, 0.75, 0.78)]
+            bool physics:collisionEnabled = false
+        }
+
+        # The feed horn at the focus, looking back into the reflector.
+        def Cylinder "FeedHorn"
+        {
+            uniform token axis = "Y"
+            double radius = 0.045
+            double height = 0.09
+            double3 xformOp:translate = (0.0, 0.36, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.3, 0.3, 0.34)]
+            bool physics:collisionEnabled = false
+        }
+
+        # Mounting boom, dish back down to the deck edge.
+        def Cylinder "Boom"
+        {
+            uniform token axis = "Y"
+            double radius = 0.05
+            double height = 0.7
+            double3 xformOp:translate = (0.0, -0.38, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            color3f[] primvars:displayColor = [(0.55, 0.55, 0.58)]
+            bool physics:collisionEnabled = false
+        }
     }
 
     # Engine bell — flares WIDE at the exit (bottom), narrowing to the throat (top).
@@ -539,6 +658,12 @@ def Xform "DescentLander" (
     # Flat cells-up wings on ±X, tilted toward the sun. Thin slabs, but they are
     # solid: `collisionEnabled` folds each into the compound (like the pads below)
     # so a rover cannot drive through a deployed array.
+    # Each wing is TWO slabs: a structural backsheet (dark, both faces plain —
+    # this is the collider) and a thin CELLS layer riding 0.045 m above it on
+    # the wing's own normal, wearing the photovoltaic shader. Real arrays have
+    # cells on the sun side only; the old single slab shaded cells onto the
+    # underside too. The cells slab is inset (5.45 × 3.25 vs 5.6 × 3.4) so the
+    # backsheet shows as a frame border around the array.
     def Cube "SolarWingPX"
     {
         double size = 1.0
@@ -546,9 +671,20 @@ def Xform "DescentLander" (
         double3 xformOp:rotateXYZ = (0, 0, -12.0)
         double3 xformOp:scale = (5.6, 0.06, 3.4)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.16, 0.16, 0.19)]
+        bool physics:collisionEnabled = true
+    }
+    def Cube "SolarCellsPX"
+    {
+        double size = 1.0
+        # Wing normal is Rz(-12°)·(0,1,0) = (0.2079, 0.978, 0); offset 0.045 m.
+        double3 xformOp:translate = (5.409, 1.444, 0)
+        double3 xformOp:rotateXYZ = (0, 0, -12.0)
+        double3 xformOp:scale = (5.45, 0.02, 3.25)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.06, 0.06, 0.22)]
         rel material:binding = </DescentLander/Looks/SolarWing_Mat>
-        bool physics:collisionEnabled = true
+        bool physics:collisionEnabled = false
     }
     def Cube "SolarWingNX"
     {
@@ -557,9 +693,110 @@ def Xform "DescentLander" (
         double3 xformOp:rotateXYZ = (0, 0, 12.0)
         double3 xformOp:scale = (5.6, 0.06, 3.4)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.16, 0.16, 0.19)]
+        bool physics:collisionEnabled = true
+    }
+    def Cube "SolarCellsNX"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (-5.409, 1.444, 0)
+        double3 xformOp:rotateXYZ = (0, 0, 12.0)
+        double3 xformOp:scale = (5.45, 0.02, 3.25)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.06, 0.06, 0.22)]
         rel material:binding = </DescentLander/Looks/SolarWing_Mat>
-        bool physics:collisionEnabled = true
+        bool physics:collisionEnabled = false
+    }
+
+    # ── Wing yokes — the wings visibly HANG from something ─────────────────
+    # A boom from the hull side to each wing root, in the wing's own 12° plane,
+    # plus a hinge block at the hull end. Pure display (the wings already carry
+    # the colliders); what these buy is the eye no longer reading the arrays as
+    # floating props.
+    def Cylinder "WingYokePX"
+    {
+        uniform token axis = "X"
+        double radius = 0.09
+        double height = 1.9
+        double3 xformOp:translate = (3.15, 1.65, 0.0)
+        double3 xformOp:rotateXYZ = (0, 0, -12.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        color3f[] primvars:displayColor = [(0.5, 0.5, 0.54)]
+        bool physics:collisionEnabled = false
+    }
+    def Cube "WingHingePX"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (2.5, 1.72, 0.0)
+        double3 xformOp:scale = (0.28, 0.24, 0.34)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.44)]
+        bool physics:collisionEnabled = false
+    }
+    def Cylinder "WingYokeNX"
+    {
+        uniform token axis = "X"
+        double radius = 0.09
+        double height = 1.9
+        double3 xformOp:translate = (-3.15, 1.65, 0.0)
+        double3 xformOp:rotateXYZ = (0, 0, 12.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        color3f[] primvars:displayColor = [(0.5, 0.5, 0.54)]
+        bool physics:collisionEnabled = false
+    }
+    def Cube "WingHingeNX"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (-2.5, 1.72, 0.0)
+        double3 xformOp:scale = (0.28, 0.24, 0.34)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.4, 0.4, 0.44)]
+        bool physics:collisionEnabled = false
+    }
+
+    # ── RCS quads — the attitude authority the flight model exercises ──────
+    # Four thruster blocks on the upper hull diagonals. The Modelica airframe
+    # applies attitude torque every shot (the righting in shot 1, the banks in
+    # shot 4); these give that force a visible source. Display-only.
+    def Cube "RcsQuadPXPZ"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (1.8, 1.15, 1.8)
+        double3 xformOp:rotateXYZ = (0, 45.0, 0)
+        double3 xformOp:scale = (0.3, 0.22, 0.3)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.28, 0.28, 0.32)]
+        bool physics:collisionEnabled = false
+    }
+    def Cube "RcsQuadNXPZ"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (-1.8, 1.15, 1.8)
+        double3 xformOp:rotateXYZ = (0, -45.0, 0)
+        double3 xformOp:scale = (0.3, 0.22, 0.3)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.28, 0.28, 0.32)]
+        bool physics:collisionEnabled = false
+    }
+    def Cube "RcsQuadPXNZ"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (1.8, 1.15, -1.8)
+        double3 xformOp:rotateXYZ = (0, -45.0, 0)
+        double3 xformOp:scale = (0.3, 0.22, 0.3)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.28, 0.28, 0.32)]
+        bool physics:collisionEnabled = false
+    }
+    def Cube "RcsQuadNXNZ"
+    {
+        double size = 1.0
+        double3 xformOp:translate = (-1.8, 1.15, -1.8)
+        double3 xformOp:rotateXYZ = (0, 45.0, 0)
+        double3 xformOp:scale = (0.3, 0.22, 0.3)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.28, 0.28, 0.32)]
+        bool physics:collisionEnabled = false
     }
 
     # ── Landing legs with footpads ──
@@ -568,12 +805,17 @@ def Xform "DescentLander" (
     # lander catches on its legs instead of the struts clipping through terrain
     # (and a rover cannot drive through a leg). Lowest point is the pads (y=-5.0).
     #
-    # Each strut carries a `leg_spring.rhai` program — a damped visual shock
-    # absorber that compresses the strut along its own axis at touchdown and
-    # settles slightly loaded (see that script for what moves and what does
-    # not). Params are the strut's FOOT point and foot→hull unit axis in the
-    # vessel frame; they must agree with the authored translate/rotate/scale,
-    # which the program reproduces exactly at full extension.
+    # Each strut is SPRUNG, structured across the three authoring layers:
+    #   models/LegStrut.mo      — the physics: contact-gated spring-damper,
+    #                             one instance per leg (`Strut` below), wired
+    #                             to the altimeter and body vertical speed
+    #   scenarios/leg_spring.rhai — the actuator (`Actuator` below): applies
+    #                             the model's `stroke` to the strut geometry,
+    #                             foot pinned, sliding it into its piston
+    #   Piston* cylinders       — the fixed outer tube the strut slides into
+    # Actuator params are the strut's FOOT point and foot→hull unit axis in
+    # the vessel frame; they must agree with the authored translate/rotate/
+    # scale, which the actuator reproduces exactly at zero stroke.
     def Cube "LegPX"
     {
         double size = 1.0
@@ -582,11 +824,41 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.15, 7.33, 0.15)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
+        rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
         bool physics:collisionEnabled = true
 
-        def LunCoProgram "Spring"
+        # The strut's PHYSICS — a Modelica spring-damper (one instance per
+        # leg), wired to the airframe's own sensors exactly the way the GNC
+        # component wires its inputs. The Actuator beside it reads `stroke`
+        # and slides the strut into its piston sleeve. No Rust anywhere.
+        def LunCoProgram "Strut"
+        {
+            uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
+            float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
+
+            # The spring, EXPOSED TO USD — a parameter is an input with a
+            # constant instead of a connection (the GNC convention). Re-tune a
+            # leg from any scene with an `over`; wire one later and nothing
+            # about the model changes. The live `stroke` comes back the same
+            # way: it is this prim's `outputs:stroke` port on the composed
+            # stage, which is exactly what the sibling Actuator (and usdview)
+            # reads.
+            float inputs:k = 4000.0
+            float inputs:c = 2200.0
+            float inputs:m_eff = 500.0
+            float inputs:contact_alt = 1.8
+            float inputs:gate_width = 0.4
+            float inputs:kv_impact = 900.0
+            float inputs:stroke_max = 0.8
+        }
+        def LunCoProgram "Actuator"
         {
             uniform asset lunco:program:sourceAsset = @lunco://scenarios/leg_spring.rhai@
+            # Load (N) at which the strut glow reaches the material's authored
+            # colour; static settle (m_eff*g = 810 N) glows at ~54%.
+            custom float lunco:param:load_ref = 1500.0
             custom float lunco:param:bx = 5.5
             custom float lunco:param:by = -5.0
             custom float lunco:param:bz = 0.0
@@ -606,6 +878,57 @@ def Xform "DescentLander" (
         bool physics:collisionEnabled = true
     }
 
+    # Shock-absorber PISTON sleeves — one per leg, fixed at the strut's HULL
+    # anchor and reaching 2.6 m down the strut axis. The sleeve does not move;
+    # on touchdown `leg_spring.rhai` shortens the strut upward from the foot,
+    # so the strut visibly slides INTO its sleeve — the compression reads as a
+    # mechanism, not as a scale trick. Wider than the strut (r 0.12 over the
+    # 0.15 cube) so the overlap hides the strut's sliding end. Visual only.
+    def Cylinder "PistonPX"
+    {
+        uniform token axis = "Y"
+        double radius = 0.12
+        double height = 2.6
+        double3 xformOp:translate = (2.949, 0.462, 0)
+        double3 xformOp:rotateXYZ = (0, 0, 25.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        color3f[] primvars:displayColor = [(0.32, 0.33, 0.38)]
+        bool physics:collisionEnabled = false
+    }
+    def Cylinder "PistonNX"
+    {
+        uniform token axis = "Y"
+        double radius = 0.12
+        double height = 2.6
+        double3 xformOp:translate = (-2.949, 0.462, 0)
+        double3 xformOp:rotateXYZ = (0, 0, -25.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        color3f[] primvars:displayColor = [(0.32, 0.33, 0.38)]
+        bool physics:collisionEnabled = false
+    }
+    def Cylinder "PistonPZ"
+    {
+        uniform token axis = "Y"
+        double radius = 0.12
+        double height = 2.6
+        double3 xformOp:translate = (0, 0.462, 2.949)
+        double3 xformOp:rotateXYZ = (-25.0, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        color3f[] primvars:displayColor = [(0.32, 0.33, 0.38)]
+        bool physics:collisionEnabled = false
+    }
+    def Cylinder "PistonNZ"
+    {
+        uniform token axis = "Y"
+        double radius = 0.12
+        double height = 2.6
+        double3 xformOp:translate = (0, 0.462, -2.949)
+        double3 xformOp:rotateXYZ = (25.0, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+        color3f[] primvars:displayColor = [(0.32, 0.33, 0.38)]
+        bool physics:collisionEnabled = false
+    }
+
     def Cube "LegNX"
     {
         double size = 1.0
@@ -614,11 +937,37 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.15, 7.33, 0.15)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
+        rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
         bool physics:collisionEnabled = true
 
-        def LunCoProgram "Spring"
+        def LunCoProgram "Strut"
+        {
+            uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
+            float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
+
+            # The spring, EXPOSED TO USD — a parameter is an input with a
+            # constant instead of a connection (the GNC convention). Re-tune a
+            # leg from any scene with an `over`; wire one later and nothing
+            # about the model changes. The live `stroke` comes back the same
+            # way: it is this prim's `outputs:stroke` port on the composed
+            # stage, which is exactly what the sibling Actuator (and usdview)
+            # reads.
+            float inputs:k = 4000.0
+            float inputs:c = 2200.0
+            float inputs:m_eff = 500.0
+            float inputs:contact_alt = 1.8
+            float inputs:gate_width = 0.4
+            float inputs:kv_impact = 900.0
+            float inputs:stroke_max = 0.8
+        }
+        def LunCoProgram "Actuator"
         {
             uniform asset lunco:program:sourceAsset = @lunco://scenarios/leg_spring.rhai@
+            # Load (N) at which the strut glow reaches the material's authored
+            # colour; static settle (m_eff*g = 810 N) glows at ~54%.
+            custom float lunco:param:load_ref = 1500.0
             custom float lunco:param:bx = -5.5
             custom float lunco:param:by = -5.0
             custom float lunco:param:bz = 0.0
@@ -646,11 +995,37 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.15, 7.33, 0.15)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
+        rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
         bool physics:collisionEnabled = true
 
-        def LunCoProgram "Spring"
+        def LunCoProgram "Strut"
+        {
+            uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
+            float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
+
+            # The spring, EXPOSED TO USD — a parameter is an input with a
+            # constant instead of a connection (the GNC convention). Re-tune a
+            # leg from any scene with an `over`; wire one later and nothing
+            # about the model changes. The live `stroke` comes back the same
+            # way: it is this prim's `outputs:stroke` port on the composed
+            # stage, which is exactly what the sibling Actuator (and usdview)
+            # reads.
+            float inputs:k = 4000.0
+            float inputs:c = 2200.0
+            float inputs:m_eff = 500.0
+            float inputs:contact_alt = 1.8
+            float inputs:gate_width = 0.4
+            float inputs:kv_impact = 900.0
+            float inputs:stroke_max = 0.8
+        }
+        def LunCoProgram "Actuator"
         {
             uniform asset lunco:program:sourceAsset = @lunco://scenarios/leg_spring.rhai@
+            # Load (N) at which the strut glow reaches the material's authored
+            # colour; static settle (m_eff*g = 810 N) glows at ~54%.
+            custom float lunco:param:load_ref = 1500.0
             custom float lunco:param:bx = 0.0
             custom float lunco:param:by = -5.0
             custom float lunco:param:bz = 5.5
@@ -678,11 +1053,37 @@ def Xform "DescentLander" (
         double3 xformOp:scale = (0.15, 7.33, 0.15)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
         color3f[] primvars:displayColor = [(0.55, 0.55, 0.57)]
+        rel material:binding = </DescentLander/Looks/StrutGlow_Mat>
         bool physics:collisionEnabled = true
 
-        def LunCoProgram "Spring"
+        def LunCoProgram "Strut"
+        {
+            uniform asset lunco:program:sourceAsset = @lunco://models/LegStrut.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            float inputs:altitude.connect = </DescentLander/Altimeter.outputs:range>
+            float inputs:descent_rate.connect = </DescentLander.outputs:velocity_y>
+
+            # The spring, EXPOSED TO USD — a parameter is an input with a
+            # constant instead of a connection (the GNC convention). Re-tune a
+            # leg from any scene with an `over`; wire one later and nothing
+            # about the model changes. The live `stroke` comes back the same
+            # way: it is this prim's `outputs:stroke` port on the composed
+            # stage, which is exactly what the sibling Actuator (and usdview)
+            # reads.
+            float inputs:k = 4000.0
+            float inputs:c = 2200.0
+            float inputs:m_eff = 500.0
+            float inputs:contact_alt = 1.8
+            float inputs:gate_width = 0.4
+            float inputs:kv_impact = 900.0
+            float inputs:stroke_max = 0.8
+        }
+        def LunCoProgram "Actuator"
         {
             uniform asset lunco:program:sourceAsset = @lunco://scenarios/leg_spring.rhai@
+            # Load (N) at which the strut glow reaches the material's authored
+            # colour; static settle (m_eff*g = 810 N) glows at ~54%.
+            custom float lunco:param:load_ref = 1500.0
             custom float lunco:param:bx = 0.0
             custom float lunco:param:by = -5.0
             custom float lunco:param:bz = -5.5

@@ -2547,9 +2547,6 @@ fn render_layout(ctx: &egui::Context, layout: &mut WorkbenchLayout, world: &mut 
     // drawn by their own systems and survive. Scoped to `active`, so the
     // editor comes back the instant the recorder stops — and between shots,
     // where no frame is captured, any flicker is invisible in the footage.
-    // Gated like the `screenshot` module itself: without `api` there is no
-    // recorder, so there is nothing to hide the chrome from.
-    #[cfg(feature = "api")]
     if world
         .get_resource::<screenshot::OfflineRecordingState>()
         .is_some_and(|r| r.active)
