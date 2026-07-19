@@ -3819,8 +3819,38 @@ fn build_usd_nurbs_patch_mesh<R: UsdRead>(reader: &R, path: &SdfPath) -> Option<
                 ((r + 1) * cols + c) as u32,
                 ((r + 1) * cols + c + 1) as u32,
             );
-            indices.extend_from_slice(&[a, d, e]);
-            indices.extend_from_slice(&[a, e, b]);
+            // WINDING MUST AGREE WITH THE VERTEX NORMALS, and it did not.
+            //
+            // These were `[a, d, e]` / `[a, e, b]`, winding each quad so its
+            // FACE normal is dP/dv x dP/du. But the vertex normals in `grid`
+            // come from `sample_nurbs_patch_at` as dP/du x dP/dv — the opposite
+            // sign. Every untrimmed patch therefore shipped with its triangles
+            // facing one way and its normals the other.
+            //
+            // The mismatch is invisible until something flips one of them.
+            // `apply_patch_orientation` below flips BOTH, which preserves the
+            // disagreement instead of fixing it — so on a `leftHanded` patch the
+            // normals come out correct and the winding comes out backwards. With
+            // `doubleSided = true` Bevy then draws the back face and NEGATES its
+            // normal, pointing it inward again, and the surface is black under
+            // any light from any direction.
+            //
+            // That is the HAB-1 dome. Telemetry confirmed its normals outward
+            // ("flipped 1045 normals ... n[0] now [1.0, -0.0, -0.0]") while it
+            // still rendered black, which is why it read as a lighting or
+            // material fault for so long: the normals really were right, and the
+            // rasteriser was discarding them.
+            //
+            // `[a, e, d]` / `[a, b, e]` makes the face normal dP/du x dP/dv, so
+            // it matches the vertex normals. Both are inward for a +X -> +Z wound
+            // net, and `apply_patch_orientation` then flips them together to
+            // outward — which is what the token is for.
+            //
+            // The trimmed branch needs no such change: `triangulate_trimmed`
+            // already emits triangles in the same handedness as the normals,
+            // which is why the shells looked right while the dome did not.
+            indices.extend_from_slice(&[a, e, d]);
+            indices.extend_from_slice(&[a, b, e]);
         }
     }
     debug_assert_eq!(positions.len(), cols * rows);
