@@ -2221,6 +2221,41 @@ mod tests {
     }
 
     #[test]
+    /// Two closures over one outer local SHARE it when either mutates it.
+    ///
+    /// Lessons depend on this. Objective callbacks (`on_complete`, `done`) are
+    /// closures, and a closure is not a hook — `this` is unbound inside one — so
+    /// per-objective state has nowhere to live EXCEPT a captured local. If rhai's
+    /// `closure` feature were off, capture would be by-value: the writer would
+    /// mutate a private copy, the reader would see the initial value forever, and
+    /// the objective would never complete — silently, with nothing in the log.
+    /// Pin the behaviour rather than assume the feature flag.
+    #[test]
+    fn closures_share_a_captured_local_they_mutate() {
+        let engine = rhai::Engine::new();
+        let src = r#"
+            fn make() {
+                let captured = ();
+                let write = || { captured = 42; };
+                let read = || { captured };
+                write.call();
+                read.call()
+            }
+        "#;
+        let ast = engine.compile(src).expect("must compile");
+        let got: rhai::Dynamic = engine
+            .call_fn(&mut rhai::Scope::new(), &ast, "make", ())
+            .expect("closures must share the captured local");
+        assert_eq!(
+            got.as_int().ok(),
+            Some(42),
+            "a closure's write was not visible to a sibling closure — captured by \
+             value, so a lesson objective holding state in a captured local would \
+             never complete"
+        );
+    }
+
+    #[test]
     fn a_script_with_nothing_to_hoist_extracts_nothing() {
         assert!(super::top_level_hoist_source("fn f() { 1 } let x = 2;").is_none());
         // `important`/`constant` are not `import`/`const` — whole-token match only.

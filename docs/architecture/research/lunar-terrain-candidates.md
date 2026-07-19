@@ -84,10 +84,66 @@ domes** (`NAC_DTM_GRUITHUI_2M` exists, Lunar-VISE target, but no comms story).
 
 | Gate | Blocks | Note |
 |---|---|---|
-| **Polar stereographic GeoTIFF** | #1, #2, #5, #9, #18 | `lunco-geotiff` currently assumes equirectangular-at-crop-centre; polar NAC DTMs and all PGDA polar products ship polar stereo |
+| **Polar stereographic GeoTIFF** | #1, #2, #5, #9, #18 | **Confirmed from the products' own `.LBL`s**: every polar NAC DTM (Malapert, Nobile, Shackleton ridge, Schrödinger, Vikram) and every PGDA product ships polar stereographic. `lunco-geotiff` currently assumes equirectangular-at-crop-centre |
+| **Datum: 1737.4 km, not ours** | every new site | LROC RDR DTM elevations are metres relative to the **1737.4 km** sphere (PGDA likewise, MOON_ME/DE421); the engine registry uses 1737.0 km — the ~400 m bias doc 13 §1 gap 7 warned about is a confirmed property of every product above. Reconcile at ingest |
+| Projection-centre ≠ crop centre | all nearside sites | Nearside NAC DTMs are equirectangular but with a **per-site projection-centre latitude** authored in the product (e.g. clat 8.0 for TRANQPIT1) — honor the file's tags, don't re-derive |
 | Pit interior voids | #3, #6, #7 | DTMs have interpolated floors inside shadowed pits; author the pit as geometry |
 | Real Earth az/el (libration) | #2, #9 (and honesty at #1, #5) | Near 0° elevation, ±8° libration decides whether Earth is up at all; the ephemeris subsystem already knows where Earth is — use it rather than authoring a constant |
 | LOLA smoothness | #2, #9 | 5 m LOLA products carry no boulder-scale roughness; either accept (and say so) or add the overzoom layer honestly labelled synthetic |
+| Mixed resolutions/projections | heritage textures | Not everything is 2 m (APOLLO17_11 is 3 m, VSCHROTERI2 4 m, several 5 m); the USGS Apollo 17 50 cm ortho is **Transverse Mercator** and needs reprojection before pairing with a PDS DTM |
+
+## Download verification — 2026-07-19, all candidates PASS
+
+Every product below was live-checked (directory listing + HTTP HEAD on the
+raster; `.LBL` read for pixel scale/projection). **Anonymous HTTPS, zero
+auth/login anywhere.** All NAC DTMs are float32 GeoTIFF named
+`NAC_DTM_<SITE>.TIF` inside a flat per-site directory, alongside `_SLOPE`,
+`_SHADE`, `_CONF` and orthophoto `.IMG` companions.
+
+`BASE` = `https://pds.lroc.im-ldi.com/data/LRO-L-LROC-5-RDR-V1.0/LROLRC_2001/DATA/SDP/NAC_DTM/`
+
+| Candidate | Product dir under `BASE` | DTM size | px | Projection |
+|---|---|---|---|---|
+| Malapert | `MALAPERT01` 48M · `MALAPERT02` 44M · `MALAPERT03` 26M · `MALAPERTA01` 310M | — | 3–4 m | polar stereo (−90) |
+| Nobile | `NOBILE01` 265M · `NOBILE02` 87M · `NOBILE03` **6.6M** · `NOBILE04` 686M | — | 3–4 m | polar stereo (−90) |
+| Shackleton ridge | `SHACKRDGE02` (only 02 exists) | 9.6M | 3.5 m | polar stereo (−90) |
+| Schrödinger | `SCHRODNGR01–03` 5.8–14M · `SCHRODVENT1–4` 26–178M · `SCHRODVENT` mosaic 218M | — | 3–5 m | polar stereo |
+| Vikram/Chandrayaan-3 | `VIKRAMSITE1` | 465M | 3 m | polar stereo (−69.3) |
+| Apollo 17 | `APOLLO17_2M` **908M** (+ 60 cm ortho 9.9G `.IMG`) · `APOLLO17_1…_11` 133–225M | — | 2–3 m | equirect (clat 20.1) |
+| Apollo 15 (current) | `APOLLO15_2` | 122M | 5 m | equirect (clat 26.0) |
+| Lunokhod 2 | `LUNOKHOD2` 178M · `LUNOKHOD2_1` 139M · `LUNOKHOD2_2` 147M | — | 5 m | equirect |
+| Tycho peak | `TYCHOPK` **1.4G** · `TYCHOPK01` 203M · `TYCHOPK02` 244M (…PK08) | — | 2 m | equirect |
+| Vallis Schröteri | `VSCHROTERI` 171M · `VSCHROTERI2` 162M · `ARISTPLAT1` 143M | — | 2–5 m | equirect |
+| Ina | `INACALDER2M` 224M · `INACALDERA1` 121M | — | 2 m | equirect |
+| Hyginus | `HYGINUS` | 72M | 5 m | equirect |
+| Tranquillitatis pit | `TRANQPIT1` | 130M | 2 m | equirect (clat 8.0) |
+| Marius Hills | `MARIUSPIT01` 159M · `MARIUS` 414M · `MARIUSDOME1/2` 212/198M | — | 2–4 m | equirect |
+| Ingenii | `INGENIIPIT` 212M · `MRINGENII` 762M · `MRINGENII1–6` ~122M ea | — | 2 m | equirect (clat −36) |
+| Chang'e | `CHANGE3` 209M · `CHANGE4` **46M** · `CHANGE501` 24M · `CHANGE6` 187M | — | 3–5 m | equirect |
+| Reiner Gamma | `REINER_2M` 399M · `REINER1` 114M | — | 2–5 m | equirect (clat 7.0) |
+| Compton-Belkovich | `COMPTONBELK` 160M · `CMPTNBELK2` 206M · `CMPTNBELK3` 195M | — | 2 m | equirect (clat 61) |
+| Gruithuisen | `GRUITHUI_2M` | 2.2G | 2 m | equirect |
+
+PGDA (exact filenames required — the directories have no index):
+
+| Product | Direct URL | Size | px |
+|---|---|---|---|
+| Site01 Connecting Ridge | `pgda.gsfc.nasa.gov/data/LOLA_5mpp/Site01/Site01_final_adj_5mpp_surf.tif` | 41 MB | 5 m |
+| Site04 Shackleton rim | `…/Site04/Site04_final_adj_5mpp_surf.tif` | 41 MB | 5 m |
+| Site11 de Gerlache rim | `…/Site11/Site11_final_adj_5mpp_surf.tif` | 41 MB | 5 m |
+| Site23 Malapert massif | `…/Site23/Site23_final_adj_5mpp_surf.tif` | 71 MB | 5 m |
+| 87°S 5 m mosaic | `…/data/LOLA_5mpp/87S/ldem_87s_5mpp.tif` | 3.5 GB | 5 m |
+| South-pole 20 m mosaic | `…/data/LOLA_20mpp/LDEM_80S_20MPP_ADJ.TIF` | 2.7 GB | 20 m |
+| South-pole 10 m mosaic | `…/data/LOLA_20mpp/LDEM_83S_10MPP_ADJ.TIF` (83°S poleward — **no 80S 10 m product exists**) | 5.1 GB | 10 m |
+
+USGS Apollo 17 extras (S3, direct): 50 cm orthomosaic
+`asc-astropedia.s3.us-west-2.amazonaws.com/Moon/Apollo/Traverse/Apollo17/ancillary/APOLLO17_ORTHOMOSAIC_50CM.TIFF`
+(0.66 GB, Transverse Mercator) · companion 1.5 m DTM
+`planetarymaps.usgs.gov/mosaic/Apollo17/APOLLO17_DTM_150CM.TIFF` (0.29 GB).
+
+Machine-readable catalog: footprint shapefiles
+`…/LROLRC_2001/EXTRAS/SHAPEFILE/NAC_DTMS/NAC_DTMS_360.ZIP` (4.2 MB; `_180`
+variant too) and the volume index `…/LROLRC_2001/INDEX/CUMINDEX.TAB`.
 
 ## Data products cheat sheet
 

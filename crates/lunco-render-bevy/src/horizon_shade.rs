@@ -199,12 +199,19 @@ pub fn wire_terrain_materials(
             // Compare before `get_mut` — a blind `get_mut` re-uploads the
             // asset every frame. Sun direction + heightfield identity + csm
             // bound + cache handle/flag cover everything that changes.
+            //
+            // `sun_dir` compares the stored `ParamValue`, NOT `get_vec4`. It is
+            // written as a `Vec3` (see `write_engine`) and `get_vec4` matches only
+            // `ParamValue::Vec4` — so it answered `None` for a value that was
+            // present and correct, `needs` was permanently true, and EVERY terrain
+            // material was re-uploaded every frame. That is the precise cost this
+            // comment says the compare exists to avoid. Same input GT each frame ⇒
+            // bit-identical value, so an exact compare settles.
             let needs = shader_mats.get(&handle.0).is_some_and(|m| {
                 m.height_map.as_ref() != Some(&map.image)
                     || m.shadow_cache != cache_image
                     || m.get_scalar("shadow_cache_on").is_none_or(|s| (s - shadow_cache_on).abs() > 1e-3)
-                    || m.get_vec4("sun_dir")
-                        .is_none_or(|v| (v.truncate() - sun_local).length() > 1e-4)
+                    || m.get("sun_dir") != Some(sun_dir)
                     || m.get_scalar("csm_far").is_none_or(|c| (c - csm_far).abs() > 1e-3)
             });
             if needs {
@@ -254,9 +261,10 @@ pub fn wire_terrain_materials(
 /// whole lunar BRDF off the wrong vector with nothing in the log to say so.
 ///
 /// The sun is a scene-global fact, so the fix is to write it everywhere rather
-/// than let each shader re-derive it. `set_many` addresses fields by reflected
-/// name: a material whose shader declares no `sun_dir_world` is untouched, so
-/// this is safe to run across every `ShaderMaterial` in the scene.
+/// than let each shader re-derive it. Running across every non-terrain
+/// `ShaderMaterial` is safe: a name the shader does not declare is kept in the
+/// material's `values` map but has no schema offset, so `repack()` never packs it
+/// into the uniform block — it costs a map entry and reaches no GPU binding.
 ///
 /// Terrain is EXCLUDED (`Without<HorizonMap>`) — it is already written above,
 /// with the local-space `sun_dir` this system has no business computing.
@@ -272,10 +280,15 @@ pub fn wire_sun_for_non_terrain_materials(
 
     for handle in &meshes {
         // Compare before `get_mut`, or every frame re-uploads the asset (MAT-3).
-        let needs = shader_mats.get(&handle.0).is_some_and(|m| {
-            m.get_vec4("sun_dir_world")
-                .is_none_or(|v| (v.truncate() - to_sun_world).length() > 1e-4)
-        });
+        //
+        // Compare the STORED `ParamValue`, not `get_vec4`. `sun_dir_world` is
+        // written as a `Vec3`, and `get_vec4` matches only `ParamValue::Vec4` — so
+        // it answers `None` for a value that is present and correct, `needs` is
+        // always true, and the asset is re-uploaded every frame. Same input GT each
+        // frame ⇒ bit-identical value, so an exact compare settles.
+        let needs = shader_mats
+            .get(&handle.0)
+            .is_some_and(|m| m.get("sun_dir_world") != Some(sun_dir_world));
         if needs {
             if let Some(mut m) = shader_mats.get_mut(&handle.0) {
                 m.set_many([
@@ -467,5 +480,186 @@ pub fn shade_dynamic_entities(
         } else if shadowed && vis > 0.65 {
             commands.entity(entity).remove::<(NotShadowCaster, HorizonShadowed)>();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build an app with just enough to run the sun-wiring system.
+    fn test_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(bevy::asset::AssetPlugin::default());
+        // Fresh app, so this cannot clobber an existing store (`init_asset` is
+        // destructive, not idempotent).
+        app.init_asset::<ShaderMaterial>();
+        app.add_systems(Update, wire_sun_for_non_terrain_materials);
+        app
+    }
+
+    /// A `ShaderMaterial` on a mesh with NO `HorizonMap` must still get the sun.
+    ///
+    /// This is the contract that replaced `regolith.wgsl`'s `sun_to_light()` guess.
+    /// `wire_terrain_materials` only sees heightfield terrain, so the landing pad
+    /// disc and the marketing ground plate used to keep a zero `sun_dir_world` and
+    /// the shader silently substituted the brightest directional light. If this
+    /// test fails, those surfaces lose the lunar BRDF entirely — there is no
+    /// fallback behind it any more, by design.
+    #[test]
+    fn a_non_terrain_shader_material_gets_the_sun() {
+        let mut app = test_app();
+
+        // Sun: identity rotation ⇒ `GlobalTransform::back()` is +Z.
+        app.world_mut().spawn((
+            GlobalTransform::IDENTITY,
+            DirectionalLight { illuminance: 10_000.0, ..Default::default() },
+        ));
+
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<ShaderMaterial>>()
+            .add(ShaderMaterial::default());
+        app.world_mut().spawn(MeshMaterial3d(handle.clone()));
+
+        app.update();
+
+        let mats = app.world().resource::<Assets<ShaderMaterial>>();
+        let got = mats.get(&handle).and_then(|m| m.get("sun_dir_world"));
+        assert_eq!(
+            got,
+            Some(ParamValue::Vec3([0.0, 0.0, 1.0])),
+            "a non-terrain ShaderMaterial must receive the world-space to-sun vector"
+        );
+    }
+
+    /// The brightest directional light wins — an earthshine fill must not be
+    /// mistaken for the sun. Mirrors `pick_sun`'s rule.
+    #[test]
+    fn the_brightest_light_is_the_sun() {
+        let mut app = test_app();
+
+        // Dim fill pointing +Z, bright sun pointing +X. Brightness, not order, decides.
+        app.world_mut().spawn((
+            GlobalTransform::IDENTITY,
+            DirectionalLight { illuminance: 10.0, ..Default::default() },
+        ));
+        app.world_mut().spawn((
+            GlobalTransform::from(Transform::from_rotation(Quat::from_rotation_y(
+                std::f32::consts::FRAC_PI_2,
+            ))),
+            DirectionalLight { illuminance: 100_000.0, ..Default::default() },
+        ));
+
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<ShaderMaterial>>()
+            .add(ShaderMaterial::default());
+        app.world_mut().spawn(MeshMaterial3d(handle.clone()));
+
+        app.update();
+
+        let mats = app.world().resource::<Assets<ShaderMaterial>>();
+        let Some(ParamValue::Vec3(v)) = mats.get(&handle).and_then(|m| m.get("sun_dir_world"))
+        else {
+            panic!("sun_dir_world missing or not a Vec3");
+        };
+        assert!(v[0] > 0.99, "expected the BRIGHT light's +X direction, got {v:?}");
+    }
+
+    /// STEADY STATE COSTS NOTHING. Running the system twice with an unmoved sun
+    /// must not touch the material the second time.
+    ///
+    /// This is the assertion whose absence hid a permanent re-upload: the guard
+    /// compared a `Vec3`-stored param with `get_vec4`, always answered "changed",
+    /// and every material was rewritten every frame. Nothing failed — it was just
+    /// silently expensive, which is why only an explicit steady-state check catches
+    /// it. `Assets::get_mut` bumps the change tick, so that is what we observe.
+    #[test]
+    fn an_unmoved_sun_does_not_rewrite_the_material() {
+        let mut app = test_app();
+        app.world_mut().spawn((
+            GlobalTransform::IDENTITY,
+            DirectionalLight { illuminance: 10_000.0, ..Default::default() },
+        ));
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<ShaderMaterial>>()
+            .add(ShaderMaterial::default());
+        app.world_mut().spawn(MeshMaterial3d(handle.clone()));
+
+        // `Assets::get_mut` emits `AssetEvent::Modified` — that IS the re-upload
+        // signal, so count them per frame rather than inspect the value.
+        #[derive(Resource, Default)]
+        struct Modified(usize);
+        app.init_resource::<Modified>();
+        app.add_systems(
+            Update,
+            (|mut ev: MessageReader<AssetEvent<ShaderMaterial>>, mut n: ResMut<Modified>| {
+                n.0 += ev
+                    .read()
+                    .filter(|e| matches!(e, AssetEvent::Modified { .. }))
+                    .count();
+            })
+            .after(wire_sun_for_non_terrain_materials),
+        );
+
+        // Count the TOTAL over several frames rather than diffing per frame:
+        // `MessageReader` sees a frame's messages on the NEXT frame, so a per-frame
+        // diff reads as one-behind and proves nothing.
+        const FRAMES: usize = 6;
+        for _ in 0..FRAMES {
+            app.update();
+        }
+        assert_eq!(
+            app.world().resource::<Assets<ShaderMaterial>>().get(&handle).map(|m| m.get("sun_dir_world")),
+            Some(Some(ParamValue::Vec3([0.0, 0.0, 1.0]))),
+            "the sun must be written"
+        );
+        // Exactly ONE modification: the initial write. Anything more is the guard
+        // failing open and re-uploading every frame.
+        assert_eq!(
+            app.world().resource::<Modified>().0,
+            1,
+            "expected a single write over {FRAMES} frames; an unmoved sun is \
+             re-uploading the material — the change guard is not holding"
+        );
+    }
+
+    /// Terrain is excluded: `wire_terrain_materials` owns it, and this system has
+    /// no business computing the heightfield-local `sun_dir` it also needs.
+    #[test]
+    fn terrain_is_left_to_the_terrain_wiring() {
+        let mut app = test_app();
+        app.world_mut().spawn((
+            GlobalTransform::IDENTITY,
+            DirectionalLight { illuminance: 10_000.0, ..Default::default() },
+        ));
+
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<ShaderMaterial>>()
+            .add(ShaderMaterial::default());
+        // A HorizonMap marks this as terrain. Smallest valid field — the contents
+        // are irrelevant, only the component's PRESENCE gates this system.
+        let field = lunco_environment::HeightField::from_grid(
+            2,
+            Vec2::ZERO,
+            Vec2::splat(1.0),
+            std::sync::Arc::new(vec![0.0; 4]),
+        );
+        app.world_mut().spawn((
+            MeshMaterial3d(handle.clone()),
+            HorizonMap { field, image: Handle::default() },
+        ));
+
+        app.update();
+
+        let mats = app.world().resource::<Assets<ShaderMaterial>>();
+        assert_eq!(
+            mats.get(&handle).and_then(|m| m.get("sun_dir_world")),
+            None,
+            "terrain must be wired by wire_terrain_materials, not this system"
+        );
     }
 }

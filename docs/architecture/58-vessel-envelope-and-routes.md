@@ -89,7 +89,7 @@ contact, and averaging would flatter a rover with one bald tire.
 | Consumer | Where the derivation lives |
 |---|---|
 | Driver HUD (per frame, Rust) | `tilt_bands()` — a free function in `rover_hud.rs`, fed by the wheel query the system already has |
-| Lessons (one-shot, rhai) | `slip_limit()` / `slip_limit_or()` / `exceeds_slip()` in `assets/scripting/prelude/vessel.rhai`, reading `WheelRaycast.friction_mu` by reflection |
+| Lessons (one-shot, rhai) | `slip_limit()` / `exceeds_slip()` in `assets/scripting/prelude/vessel.rhai`, reading `WheelRaycast.friction_mu` by reflection |
 
 The cost profile is the right way round: the per-frame consumer is Rust, where six
 wheels and an `atan` are cheaper than the layout of the panel they label; the
@@ -118,7 +118,7 @@ arc at all.
 | Consumer | Before | After |
 |---|---|---|
 | Driver HUD | fixed 20°/30° constants | amber = `atan(min μ)`, red = `atan(half_track / com_height)` |
-| Lessons (rhai) | four hand-copied constants | `slip_limit_or(rover, fallback)` |
+| Lessons (rhai) | four hand-copied constants | `slip_limit(rover)`, and the caller REFUSES on `()` |
 | Terrain hazard overlay | `cliff_deg` typed per lesson | `cliff_deg` passed from `slip_limit(rover)` |
 
 The overlay case is what makes this worth doing at all: *the ground turns red

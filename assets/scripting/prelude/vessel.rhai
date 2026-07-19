@@ -49,30 +49,6 @@ fn slip_limit(id) {
     mu.atan() * 57.29577951308232
 }
 
-/// ⚠ SHIM — silent substitution.
-///
-/// TODO(vessel-envelope): a caller cannot tell "this rover's limit is 26.6°" from
-/// "I could not read the wheels, here is a plausible number" — so a lesson can
-/// paint a hazard threshold that was never derived, and say nothing. That is the
-/// untrackable-fallback shape we are trying to remove elsewhere.
-///
-/// The fix is not a better default: it is for the caller to be able to ASK whether
-/// the envelope resolved, and to refuse + report when it did not. `slip_limit`
-/// already returns `()` for exactly that; this wrapper throws the distinction away.
-/// Keep it only while lessons need to run before the wheels have loaded, and drop
-/// it once load ordering is deterministic.
-///
-/// Slip limit, or `fallback` when the vessel has no wheels.
-///
-/// For the common shape "colour the terrain by what THIS rover can hold", where a
-/// default beats doing nothing — but the default is passed at the call site, where
-/// a reader can see it.
-fn slip_limit_or(id, fallback) {
-    let v = slip_limit(id);
-    if v == () { return fallback; }
-    v
-}
-
 /// True when `grade_deg` is steeper than this vessel can hold.
 ///
 /// An unknown vessel answers `false`: refuse to call a route undriveable on the
