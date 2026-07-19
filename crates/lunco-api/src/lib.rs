@@ -214,7 +214,12 @@ impl Plugin for LunCoApiPlugin {
             use transports::HttpBridge;
             use crate::{http_bridge_request_router, http_response_observer, ApiHttpResponsePending};
 
-            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            // BOUNDED: an unbounded channel turns a slow drain into unbounded
+            // memory growth, and this queue is fed by external HTTP traffic. The
+            // router drains it every tick, so 256 sits far above any real backlog
+            // while still capping the worst case; senders await when it is full
+            // (see `HttpBridge::execute`).
+            let (tx, rx) = tokio::sync::mpsc::channel(256);
             #[allow(unused_mut)]
             let mut bridge = HttpBridge::new(tx);
 
@@ -297,7 +302,7 @@ pub fn rhai_request(code: &str) -> Result<schema::ApiRequest, String> {
 #[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
 #[derive(Resource)]
 pub struct ApiHttpBridgeReceiver(
-    tokio::sync::mpsc::UnboundedReceiver<transports::BridgeMessage>,
+    tokio::sync::mpsc::Receiver<transports::BridgeMessage>,
 );
 
 /// Pending response senders (correlation_id → oneshot).

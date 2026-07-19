@@ -58,13 +58,13 @@ pub type ApiWaker = std::sync::Arc<dyn Fn() + Send + Sync>;
 #[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
 #[derive(Clone)]
 pub struct HttpBridge {
-    pub tx: tokio::sync::mpsc::UnboundedSender<BridgeMessage>,
+    pub tx: tokio::sync::mpsc::Sender<BridgeMessage>,
     pub waker: Option<ApiWaker>,
 }
 
 #[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
 impl HttpBridge {
-    pub fn new(tx: tokio::sync::mpsc::UnboundedSender<BridgeMessage>) -> Self {
+    pub fn new(tx: tokio::sync::mpsc::Sender<BridgeMessage>) -> Self {
         Self { tx, waker: None }
     }
 
@@ -75,7 +75,18 @@ impl HttpBridge {
 
     pub async fn execute(&self, request: crate::schema::ApiRequest) -> Result<crate::schema::ApiResponse, ()> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.tx.send(BridgeMessage { request, reply: tx }).map_err(|_| ())?;
+        // AWAIT a full queue rather than dropping. This is the command funnel: a
+        // dropped request is an unattributable failure — the caller sees a timeout
+        // with nothing in the log explaining it — which is exactly what this
+        // codebase spends its diagnostics budget avoiding. `try_send` + warn would
+        // still lose the command.
+        //
+        // Suspending costs nothing structurally: every caller is already async and
+        // already awaits the `oneshot` below, and the HTTP client's own timeout is
+        // the natural shed valve when the app genuinely cannot keep up. An `Err`
+        // here means the ECS receiver is gone (app shutting down), which is the
+        // existing contract for `Err(())`.
+        self.tx.send(BridgeMessage { request, reply: tx }).await.map_err(|_| ())?;
         if let Some(waker) = &self.waker {
             waker();
         }

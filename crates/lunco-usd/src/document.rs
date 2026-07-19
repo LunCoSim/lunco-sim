@@ -81,11 +81,13 @@
 use std::collections::VecDeque;
 
 use bevy::log::warn;
+use bevy::math::{DVec3, EulerRot, Quat, Vec3};
 use bevy::reflect::Reflect;
 use lunco_doc::{Document, DocumentError, DocumentId, DocumentOp, DocumentOrigin};
 use lunco_usd_bevy::author::{
     self, extract_root_layer_data, open_doc_stage, parse_attribute_value, usda_to_data,
 };
+use lunco_usd_bevy::units::{ConventionTransform, StageMetrics};
 use lunco_usd_bevy::usd_data::UsdDataExt;
 use openusd::sdf::{self, Path as SdfPath, SpecType};
 
@@ -920,6 +922,39 @@ fn prim_in(data: &sdf::Data, sdf: &SdfPath) -> bool {
 
 /// The `xformOpOrder` tokens `data` holds for `prim`, flattening any list-op
 /// authoring. Empty when unauthored.
+/// A canonical `xformOp:rotateXYZ` Euler triple (degrees) in the STAGE's frame.
+///
+/// A Euler triple has no axis remap of its own — the remap is defined on the
+/// rotation it denotes — so the value round-trips through a quaternion. That
+/// costs `f32` precision, which is why callers skip this entirely when the
+/// conversion is the identity.
+///
+/// `EulerRot::XYZ` matches `UsdGeomXformable`'s `rotateXYZ`: rotate about X, then
+/// Y, then Z. The same pairing the read path uses for this op token.
+fn rotate_xyz_to(conv: &ConventionTransform, deg: [f64; 3]) -> [f64; 3] {
+    let q = Quat::from_euler(
+        EulerRot::XYZ,
+        (deg[0] as f32).to_radians(),
+        (deg[1] as f32).to_radians(),
+        (deg[2] as f32).to_radians(),
+    );
+    let (x, y, z) = conv.stage_rotation(q).to_euler(EulerRot::XYZ);
+    [x.to_degrees() as f64, y.to_degrees() as f64, z.to_degrees() as f64]
+}
+
+/// The inverse of [`rotate_xyz_to`]: a stage-frame `rotateXYZ` triple back to
+/// canonical, for the value an undo op carries.
+fn rotate_xyz_from(conv: &ConventionTransform, deg: [f64; 3]) -> [f64; 3] {
+    let q = Quat::from_euler(
+        EulerRot::XYZ,
+        (deg[0] as f32).to_radians(),
+        (deg[1] as f32).to_radians(),
+        (deg[2] as f32).to_radians(),
+    );
+    let (x, y, z) = conv.rotation(q).to_euler(EulerRot::XYZ);
+    [x.to_degrees() as f64, y.to_degrees() as f64, z.to_degrees() as f64]
+}
+
 fn xform_op_order_tokens(data: &sdf::Data, prim: &SdfPath) -> Vec<String> {
     let Ok(attr) = prim.append_property("xformOpOrder") else {
         return Vec::new();
@@ -1103,10 +1138,24 @@ impl Document for UsdDocument {
                 let append_op = !composed_order.iter().any(|t| t == "xformOp:translate");
 
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                // CANONICAL IN, STAGE ON DISK. A `UsdOp`'s spatial values are always
+                // canonical (Y-up, metres) — that is what makes an op portable: the
+                // same journalled edit replays correctly against a centimetre stage
+                // and a metre one. The stage's own frame exists only inside the
+                // layer, so the conversion belongs here, at the boundary, and not at
+                // the dozen producers (gizmo, inspector, API, scripts) that would
+                // each have to remember it.
+                //
+                // Identity for canonical stages — every asset we author ourselves —
+                // so this changes nothing except for imported Omniverse/Isaac
+                // content, which is exactly where silent frame corruption would be
+                // hardest to spot.
+                let conv = ConventionTransform::from_stage_metrics(&StageMetrics::from_stage(&stage));
+                let authored = conv.stage_point_d(DVec3::from_array(value)).to_array();
                 stage
                     .create_attribute(format!("{path}.xformOp:translate"), "double3")
                     .map_err(author_err)?
-                    .set(value)
+                    .set(authored)
                     .map_err(author_err)?;
                 if append_op {
                     let mut order = composed_order;
@@ -1123,10 +1172,16 @@ impl Document for UsdDocument {
                 // translate in this layer (no `xformOpOrder` was authored).
                 let inverse = if translate_existed && !append_op {
                     old_translate
+                        // Back to canonical: `old_translate` was read raw out of the
+                        // layer, so it is in the STAGE's frame, while a `SetTranslate`
+                        // is defined to carry canonical values. Packaging it unconverted
+                        // made undo restore a stage-frame number as though it were
+                        // canonical — on a centimetre stage, an undo moved the prim to
+                        // 1/100th of where it had been.
                         .map(|old| UsdOp::SetTranslate {
                             edit_target: id.clone(),
                             path: path.clone(),
-                            value: old,
+                            value: conv.point_d(DVec3::from_array(old)).to_array(),
                         })
                         .unwrap_or_else(|| self.coarse_inverse(target, &id))
                 } else {
@@ -1159,10 +1214,20 @@ impl Document for UsdDocument {
                 let append_op = !composed_order.iter().any(|t| t == "xformOp:rotateXYZ");
 
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                // Canonical in, stage on disk — see `SetTranslate`.
+                //
+                // Rotations convert through a quaternion (a Euler triple has no
+                // meaningful axis remap of its own), and that round-trip is `f32`
+                // while the op carries `f64`. So it is SKIPPED outright when the
+                // conversion is the identity — the canonical stages we author
+                // ourselves keep their authored digits exactly, and only genuinely
+                // non-canonical stages pay the precision of the remap they need.
+                let conv = ConventionTransform::from_stage_metrics(&StageMetrics::from_stage(&stage));
+                let authored = if conv.is_identity() { value } else { rotate_xyz_to(&conv, value) };
                 stage
                     .create_attribute(format!("{path}.xformOp:rotateXYZ"), "double3")
                     .map_err(author_err)?
-                    .set(value)
+                    .set(authored)
                     .map_err(author_err)?;
                 if append_op {
                     let mut order = composed_order;
@@ -1177,10 +1242,11 @@ impl Document for UsdDocument {
 
                 let inverse = if rotate_existed && !append_op {
                     old_rotate
+                        // Stage frame on the way back out — see `SetTranslate`'s inverse.
                         .map(|old| UsdOp::SetRotate {
                             edit_target: id.clone(),
                             path: path.clone(),
-                            value: old,
+                            value: if conv.is_identity() { old } else { rotate_xyz_from(&conv, old) },
                         })
                         .unwrap_or_else(|| self.coarse_inverse(target, &id))
                 } else {
@@ -1596,6 +1662,106 @@ mod tests {
             reference: None,
         })
         .is_ok()
+    }
+
+    /// A centimetre, Z-up stage must be authored in ITS OWN frame.
+    ///
+    /// The op carries canonical metres (Y-up); the layer must come back holding the
+    /// stage's own numbers. On a `metersPerUnit = 0.01` stage a canonical 1 m is
+    /// 100 stage units, and Z-up sends canonical +Y to stage +Z — so authoring
+    /// `[0, 1, 0]` must land `[0, 0, 100]`, not `[0, 1, 0]`.
+    ///
+    /// Without the conversion this writes the canonical triple straight through and
+    /// the prim sits 1 stage-unit (= 1 cm) off the origin, on the wrong axis.
+    #[test]
+    fn a_non_canonical_stage_is_authored_in_its_own_frame() {
+        let src = "#usda 1.0\n(\n    metersPerUnit = 0.01\n    upAxis = \"Z\"\n)\n\ndef Xform \"World\"\n{\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(77),
+            src,
+            DocumentOrigin::writable_file("/tmp/units_write.usda"),
+        );
+
+        doc.apply(UsdOp::SetTranslate {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            value: [0.0, 1.0, 0.0],
+        })
+        .expect("translate applies");
+
+        let authored = doc
+            .data()
+            .prim_attribute_value::<[f64; 3]>(&SdfPath::new("/World").unwrap(), "xformOp:translate")
+            .expect("translate authored");
+
+        assert!(
+            authored[0].abs() < 1e-6 && authored[1].abs() < 1e-6 && (authored[2] - 100.0).abs() < 1e-3,
+            "canonical [0,1,0] m on a cm/Z-up stage must author as [0,0,100]; got {authored:?}"
+        );
+    }
+
+    /// A canonical stage must be untouched, to the digit.
+    ///
+    /// The conversion is the identity here, and the guard exists because a
+    /// round-trip that merely *approximates* the identity would quietly rewrite
+    /// every authored coordinate in every asset we ship the first time it is saved.
+    #[test]
+    fn a_canonical_stage_authors_the_value_verbatim() {
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(78),
+            TINY_USDA,
+            DocumentOrigin::writable_file("/tmp/units_identity.usda"),
+        );
+
+        let value = [1.234_567_891_23, -9.876_543_21, 0.000_000_5];
+        doc.apply(UsdOp::SetTranslate {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            value,
+        })
+        .expect("translate applies");
+
+        let authored = doc
+            .data()
+            .prim_attribute_value::<[f64; 3]>(&SdfPath::new("/World").unwrap(), "xformOp:translate")
+            .expect("translate authored");
+        assert_eq!(authored, value, "a canonical stage must not perturb the authored value");
+    }
+
+    /// UNDO MUST LAND WHERE IT STARTED on a non-canonical stage.
+    ///
+    /// The inverse op is built from a value read raw out of the layer — i.e. in the
+    /// stage's frame — while a `SetTranslate` is defined to carry canonical values.
+    /// Unconverted, undo restored a stage-frame number as though it were canonical:
+    /// on a centimetre stage it moved the prim to 1/100th of where it had been, in
+    /// the wrong axis. This is the assertion that the two frames agree.
+    #[test]
+    fn undo_on_a_non_canonical_stage_restores_the_original_position() {
+        let src = "#usda 1.0\n(\n    metersPerUnit = 0.01\n    upAxis = \"Z\"\n)\n\ndef Xform \"World\"\n{\n    double3 xformOp:translate = (0, 0, 250)\n    uniform token[] xformOpOrder = [\"xformOp:translate\"]\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(79),
+            src,
+            DocumentOrigin::writable_file("/tmp/units_undo.usda"),
+        );
+
+        let inverse = doc
+            .apply(UsdOp::SetTranslate {
+                edit_target: LayerId::root(),
+                path: "/World".into(),
+                value: [0.0, 1.0, 0.0],
+            })
+            .expect("translate applies");
+
+        doc.apply(inverse).expect("undo applies");
+
+        let restored = doc
+            .data()
+            .prim_attribute_value::<[f64; 3]>(&SdfPath::new("/World").unwrap(), "xformOp:translate")
+            .expect("translate authored");
+        assert!(
+            restored[0].abs() < 1e-6 && restored[1].abs() < 1e-6 && (restored[2] - 250.0).abs() < 1e-3,
+            "undo must restore the stage's original (0,0,250); got {restored:?}"
+        );
     }
 
     #[test]

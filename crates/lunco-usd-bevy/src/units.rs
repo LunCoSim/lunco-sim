@@ -141,6 +141,42 @@ impl StageMetrics {
         metrics
     }
 
+    /// The same metrics off an authoring [`Stage`](openusd::usd::Stage).
+    ///
+    /// The AUTHORING counterpart to [`from_reader`](Self::from_reader). The write
+    /// path opens the document's layer as a transient stage to author through
+    /// (`open_doc_stage`), so it reads the metadata from THAT stage rather than
+    /// poking the flattened `sdf::Data` behind it — the same `stage_metadata` call
+    /// `StageView` makes on the read side.
+    ///
+    /// That symmetry is the point: read and write must agree on the stage's frame
+    /// or a round-trip is not the identity. Going through the composed stage on
+    /// both sides means a layered `upAxis`/`metersPerUnit` opinion resolves the
+    /// same way for both, which a per-layer `sdf::Data` read cannot promise.
+    ///
+    /// Silent on a non-canonical stage: `from_reader` warned already at import, and
+    /// this runs once per edit.
+    pub fn from_stage(stage: &openusd::usd::Stage) -> Self {
+        let up_axis = match stage
+            .stage_metadata("upAxis")
+            .ok()
+            .flatten()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .as_deref()
+        {
+            Some("Z") => UpAxis::Z,
+            _ => UpAxis::Y,
+        };
+        let meters_per_unit = stage
+            .stage_metadata("metersPerUnit")
+            .ok()
+            .flatten()
+            .and_then(|v| v.clone().get::<f64>().or_else(|| v.get::<f32>().map(f64::from)))
+            .filter(|m| m.is_finite() && *m > 0.0)
+            .unwrap_or(1.0);
+        Self { meters_per_unit, up_axis }
+    }
+
     /// Whether the stage is already in the canonical frame (Y-up, metres) ⇒ the
     /// conversion is the identity and import is bit-for-bit what it was before
     /// this module existed. **True for every asset we ship.**
