@@ -123,8 +123,16 @@ content. On wasm there are no compute threads to hide that in
 (`AsyncComputeTaskPool` runs on main), so it is a guaranteed hitch. The worker
 already knows what it computed; it should say so.
 
-**Scope:** small. One field on the reply message (wire-version bump — see
-above), delete the main-thread hash.
+**Scope:** small in code, but it lands as a WIRE change and must ship in
+lockstep. The reply and `BakeReplyHeader` gain a `base_key`; the worker folds it
+per stage; the OPFS-hit path folds it inside its async task. The trap is that
+the key must be **bit-identical** to `oracle.rs`'s `grid_key` (FNV-1a over
+`res`, `half_extent.to_bits()` and each height's `to_bits()`) or native and web
+keys silently occupy different domains — and `oracle` folds with
+`lunco_precompute::Fnv1a` while bake uses `lunco_hash::Fnv1a`, so one of them
+has to move. Because the header layout changes, the wasm worker bundle must be
+rebuilt with the main bundle or `LUNCO_WIRE_BUILD_ID` skew presents as a stale
+worker rather than a version error.
 
 ## 5. USD conformance
 
@@ -141,62 +149,110 @@ spot-checked. Findings are fixed in the fork
 
 **Scope:** medium; mostly harness work, then a burn-down of findings.
 
-### Units write-back inversion
+### USDA nesting depth is unguarded in the fork
 
-**What:** Invert `StageMetrics`/`ConventionTransform` when authoring onto
-non-canonical stages.
+**What:** Bound recursion depth in the fork's USDA text parser.
 
-**Why:** [`41-axes-and-units.md`](41-axes-and-units.md) is "convert once, at
-the importer" — reads are correct. But **authoring onto a Z-up/cm stage
-currently writes canonical (Y-up/m) values**, corrupting the stage for any
-other tool. Round-tripping someone else's stage is exactly the interop story
-USD is for.
+**Why:** The USDC/USDZ readers were hardened — allocations grow with the bytes
+actually delivered, decompression is bounded by LZ4's maximum expansion, table
+indices resolve through checked accessors, and dictionary decode carries a depth
+guard. The USDA text parser did not get its guard: `parse_block` is re-entered by
+every nested construct, so a deeply nested file recurses until the stack
+overflows. A stack overflow ABORTS — it is not an `Err` any caller can catch — so
+no error handling above it can contain the failure.
 
-**Scope:** small–medium. Apply the inverse convention transform in the
-authoring path (`ApplyUsdOp` boundary); tests pin a Z-up/cm round trip.
+An attempt was reverted rather than shipped: a limit of 256 still overflowed a
+2 MiB test thread before the guard could fire, which means the ceiling has to be
+chosen against the smallest stack the library runs on (test threads and wasm,
+not the 8 MiB main thread), and the test has to run somewhere with a known stack
+to prove the guard rather than the platform.
 
-### Schema registry `(schema, property)` keying
+**Scope:** small, in `../openusd` (`src/usda/parser.rs`). The single choke point
+is `parse_block`; a depth counter there covers the whole mutually-recursive
+family. Low urgency while only local, authored files are parsed — it matters when
+untrusted `.usda` can reach the parser.
 
-**What:** Key the schema registry by `(schema, property)` instead of property
-name alone.
+### Time-sampled values are not unit-converted
 
-**Why:** Two applied schemas can legitimately declare the same property name
-with different types/defaults; a flat key makes one silently shadow the other.
-Warn-on-conflict shipped as the interim — collisions are now *visible*, but
-still wrong.
+**What:** Apply the canonical→stage conversion to `UsdOp::SetTimeSample` as
+`SetAttribute` already does.
 
-**Scope:** small. Registry key change + lookup-site sweep in `lunco-usd`.
+**Why:** The write-back inversion landed for `SetTranslate`, `SetRotate` and
+`SetAttribute` — the last of those dispatching on the attribute's USD type role
+and, for scalars, on the schema's declared linear unit. `SetTimeSample` carries
+the same `type_name`/`value` pair and goes through the same authoring boundary,
+but was not wired, so an **animated** position authored onto a Z-up/cm stage is
+still written in canonical values while its static counterpart is written
+correctly. A file where the static and sampled forms of one attribute disagree
+is worse than one that is uniformly wrong.
 
-### `!resetXformStack!` ECS detachment
+**Scope:** small. The conversion helpers exist and are tested; this is the same
+two call sites (author + inverse) in the `SetTimeSample` arm of
+`UsdDocument::apply`.
 
-**What:** Project `!resetXformStack!` as ECS re-parenting (detach from parent
-transform), not just composed-value correctness.
+### `!resetXformStack!` detaches to the stage root, not to the world
 
-**Why:** Composition handles the op correctly — the *values* are right — but
-the ECS projection still parents the entity under its prim parent, so anything
-that walks the entity hierarchy (frames, follow cameras, physics attachment)
-sees a lie.
+**What:** Let a `!resetXformStack!` prim ignore the stage root's own authored
+xform, as strict USD does.
 
-**Scope:** small–medium in the StageSink projection; the subtlety is the
-interaction with `big_space` grid parenting.
+**Why:** The detachment itself landed — such a prim now reparents onto the
+topmost prim of its own stage instead of hanging under its authored parent. It
+anchors to the stage-root ENTITY rather than to nothing, deliberately: detaching
+to nothing would drop the twin's mount placement and teleport the prim out of
+the scene it belongs to, and a prim that is never grid-direct is an anchoring
+contract avian depends on. The residual is that if the stage root itself authors
+an xform, that one transform still applies where USD would drop it.
+
+**Scope:** medium, and it is not really a USD problem — it needs the twin's
+mount placement separated from the root prim's authored xform, so that
+"detached" can mean the mount without meaning the authored value.
 
 ## 6. Architecture debt
 
-### Core purity: `DriveInputs`/`DriveMix` and the `SUBSYSTEMS` allowlist
+### Core purity: the `SUBSYSTEMS` allowlist
 
-**What:** Move `DriveInputs`/`DriveMix` out of `lunco-core` into the vehicle
-domain; replace the hardcoded `SUBSYSTEMS` allowlist with dynamic
-registration.
+**What:** Replace the hardcoded `SUBSYSTEMS` allowlist in `lunco-core` with
+dynamic registration.
 
-**Why:** The standing rule is that nothing domain-specific enters
-`lunco-core` ([`38-domains-as-packages.md`](38-domains-as-packages.md)) —
-these two types are vehicle-domain vocabulary that leaked into the substrate,
-and every leak makes the next one look normal. The static allowlist is the
-same disease in registry form: adding a subsystem should be registration, not
-a core edit.
+**Why:** The standing rule is that nothing domain-specific enters `lunco-core`
+([`38-domains-as-packages.md`](38-domains-as-packages.md)). The drive kernels
+half of this has landed — `DriveInputs`/`DriveMix`/`ControlKernelRegistry` now
+live in `lunco-mobility` with the systems that consume them, and core no longer
+names a vehicle concept. The static allowlist is the same disease in registry
+form: adding a subsystem should be registration, not a core edit.
 
-**Scope:** medium; mechanical move + a registration API, but the import sweep
-touches many crates.
+**Scope:** small–medium; a registration API plus the sites that read the
+allowlist.
+
+### `UsdDocument` stores `sdf::Data`, so every edit round-trips through text
+
+**What:** Stop serializing the whole document to USDA and reparsing it on every
+edit.
+
+**Why:** `UsdDocument` holds `sdf::Data` layers, and `apply()` authors by calling
+`open_doc_stage`, which does `data_to_usda(data)` → parse → `Stage` → author →
+`extract_root_layer_data`. That is a full serialize-and-reparse of the ENTIRE
+document per edit — dragging a gizmo pays it once per frame. It is also the last
+place `sdf::Data` is load-bearing: the read path already retired its flattened
+reader in favour of the composed `StageView`, because a flattened layer sees no
+PCP composition.
+
+**Scope:** two very different options, and the difference matters.
+
+*(a) Wrap the existing data, no text.* `sdf::Layer::new(identifier, Box<dyn
+AbstractData>)` already exists in the fork — it is what `new_in_memory` calls —
+but is `pub(crate)`. Exposing it, plus a `StageBuilder` entry that accepts a
+prepared root layer, lets `open_doc_stage` wrap the document's `sdf::Data`
+directly. Two small fork additions, no concurrency change, no API churn here,
+and it removes the dominant per-edit cost. **This is the recommended step.**
+
+*(b) Hold a live `Stage` in the document.* Blocked, and not by us: `Stage` is
+`!Send + !Sync` — `pcp/layer_graph.rs` holds an `Rc` and `StageInner` is
+`RefCell`-based throughout — so it cannot live in a Bevy resource. Unblocking it
+means converting the fork to `Arc`/`RwLock` across `StageInner` and `pcp`: a
+permanent divergence from the tracked `mxpv/openusd` upstream, and atomics on
+every composition operation. That is a product decision about the fork, not a
+refactor, and should be taken explicitly rather than arrived at.
 
 ### Modelica compile-core split
 
@@ -261,6 +317,36 @@ remains is the Storage-API migration, which needs a dependency line from
   refactor the logic into `proc_macro2`-typed helper functions the entry
   points delegate to. The refactor is the better end state; trybuild is the
   cheaper first step.
+
+### Shaders are never compiled by CI
+
+**What:** Validate the WGSL at build or test time, not only when a scene renders.
+
+**Why:** `cargo check` does not compile shaders — naga_oil does, at startup, when
+a material is first bound. So the entire shader tree can be broken by a rename
+and every check stays green. The import graph is real code: `lunco::noise`,
+`lunco::pbr_lit`, `lunco::horizon` and `lunco::transfer` are shared modules with
+call sites across 20 files, and a symbol both `#import`ed and defined locally is
+a hard naga_oil error. A static import/redefinition check catches most of it
+cheaply; a headless run that binds one material of each family catches the rest.
+
+**Scope:** small for the static check; small–medium for a headless render smoke
+test.
+
+### Per-crate builds are never exercised
+
+**What:** Build each workspace member on its own (or `cargo hack --each-feature`)
+in CI.
+
+**Why:** `cargo check --workspace` unifies features across the graph, so a crate
+whose code depends on a feature it does not itself enable still compiles as long
+as SOME member turns that feature on. `lunco-workbench` was exactly this: a use
+of `screenshot::` while `pub mod screenshot` sits behind `#[cfg(feature =
+"api")]`. The workspace check was green; `cargo test -p lunco-workbench` was not.
+Nothing rules out more of these, and the failure only appears to someone
+depending on a single crate.
+
+**Scope:** small — a CI matrix over members, or one `cargo hack` invocation.
 
 ## 9. Known parked bugs
 

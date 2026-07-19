@@ -100,6 +100,15 @@ pub fn usda_to_data(text: &str) -> Result<sdf::Data> {
 /// stage and then pass it to [`extract_root_layer_data`].
 ///
 /// `Stage` is `!Send`; keep it on the stack of one synchronous edit.
+///
+/// TODO(backlog): this serializes `data` to USDA text and reparses it, so EVERY
+/// edit pays a full round-trip of the whole document — a gizmo drag pays it once
+/// per frame. `sdf::Layer::new(identifier, Box<dyn AbstractData>)` already exists
+/// in the fork (it backs `new_in_memory`) but is `pub(crate)`; exposing it plus a
+/// `StageBuilder` entry taking a prepared root layer would let this wrap `data`
+/// directly, with no text and no reparse. See "`UsdDocument` stores `sdf::Data`"
+/// in docs/architecture/engineering-backlog-and-standards.md, which also records
+/// why holding a live `Stage` instead is a separate, larger decision.
 pub fn open_doc_stage(data: &sdf::Data) -> Result<Stage> {
     let text = data_to_usda(data)?;
     let resolver = DocResolver {

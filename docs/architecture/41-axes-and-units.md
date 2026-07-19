@@ -1,8 +1,8 @@
 # 41 — Axes and Units (coordinate + unit conversion boundary)
 
-> Status: Active — **the USD import spoke is built**; the remaining spokes, the
-> mass/stiffness/damping dimension machinery, and the save-side inversion are
-> design · Audience: contributors importing/exporting coordinates & units
+> Status: Active — **the USD spoke is built in both directions** (import and
+> save); the remaining spokes and the mass/stiffness/damping dimension machinery
+> are design · Audience: contributors importing/exporting coordinates & units
 >
 > External tools disagree on **up-axis** and **units**; LunCoSim must not.
 > The engine runs in **one fixed canonical frame** (spec 009: f64, Y-up, RH,
@@ -63,13 +63,44 @@ import of our own content is bit-for-bit what it was before this module existed.
 The seam exists, is exercised by unit tests (Z-up remap, centimetre stage,
 identity stage, and a conjugated-chain property test), and costs nothing.
 
-### The known gap: save is not yet inverted
+### Save: the same map, backwards, at one seam
 
-`from_canonical` on write-back **does not exist**. Authoring a transform onto a
-**non-canonical** stage (gizmo drag, `ApplyUsdOp`) writes canonical values into a
-stage that declares other metrics. `StageMetrics::from_reader` says so, loudly,
-once, when it sees such a stage. This is step 4 of the staged plan below and is
-**not** built.
+Every read-side conversion has a `stage_*` counterpart applying `S⁻¹ = (1/k)·Q⁻¹`,
+and they are applied inside `UsdDocument::apply` — the single dispatch path every
+editor, the API, MCP and scripts already funnel through. The invariant is worth
+stating plainly:
+
+> **A `UsdOp`'s spatial values are always canonical. Stage frame exists only
+> inside the layer.**
+
+That is what makes an op *portable*: the same journalled edit replays correctly
+against a centimetre stage and a metre one. It also means the conversion belongs
+at the boundary rather than at the dozen producers, each of which would otherwise
+have to remember — and one forgotten producer is a silently corrupt file.
+
+Both directions are converted at that seam. The forward path converts before
+authoring; the INVERSE op converts the value it reads back out of the layer. That
+second half is easy to miss and was its own bug: an undo op built from a raw
+layer read carries stage-frame numbers, so on a centimetre stage undo moved a
+prim to 1/100th of where it had been.
+
+Three kinds of value, three mechanisms:
+
+| Value | How the frame is known |
+|---|---|
+| `xformOp:translate` / `rotateXYZ` | the op itself is spatial by definition |
+| `point3f`, `vector3f`, `normal3f`, `quatf`… | the USD **type role** — `point3f` and `color3f` are the same `Vec3f` once decoded, and only the type says which one scales |
+| `radius`, `height`, `focalLength`… | the **schema**, via the registry's `(schema, property)` key — USD has no role type for a scalar length |
+
+The scalar case carries a factor, not a flag: `UsdGeomCamera` defines focal
+length and apertures in *tenths* of a world unit, so "this is a length" alone
+would still author them 10× wrong.
+
+Anything unannotated is left alone. Under-reach misplaces a value; over-reach
+destroys one, so conversion is opt-in per declaration.
+
+**Still open:** `UsdOp::SetTimeSample` does not yet convert — see the engineering
+backlog.
 
 ## How other software does this (prior art)
 
@@ -315,15 +346,15 @@ Plus `#[must_use]` on `ConventionTransform` so an unused gate warns.
   wrong everywhere else.
 - **Authoritative source keeps its convention.** The USD document stays in its
   declared metrics — we never rewrite the stage's `upAxis`/`metersPerUnit`. The
-  matching `from_canonical`-on-save is the **open** half of this (see the staged
-  plan); until it lands, edits authored onto a non-canonical stage are written in
-  canonical units, and the importer warns about exactly that.
+  matching `from_canonical`-on-save is applied at the `UsdDocument::apply`
+  boundary, so an edit authored onto a non-canonical stage is written in that
+  stage's own units and a read-modify-write round trip is the identity.
 
 ## Spokes
 
 | Spoke | Convention source | Status |
 |---|---|---|
-| **USD** | stage metrics: `upAxis`, `metersPerUnit` | **built (import)** — `StageMetrics` / `ConventionTransform`. Save-side inversion is not built. `kilogramsPerUnit` is not read. |
+| **USD** | stage metrics: `upAxis`, `metersPerUnit` | **built, both directions** — `StageMetrics` / `ConventionTransform`, with save applied at the `UsdDocument::apply` seam. `SetTimeSample` and `kilogramsPerUnit` are not covered. |
 | glTF | fixed Y-up / metres (≈ identity spoke) | not built — additive |
 | Blender (live) | Z-up / −Y-fwd / metres, via USD interchange | not built — the USD spoke already covers a Z-up Blender export |
 | Isaac Sim | USD Z-up + centimetres | **covered by the USD spoke** — this is the exact stage the spoke was built for |
@@ -342,7 +373,9 @@ its keep (YAGNI).
    now imports correctly instead of rotated 90° and 100× too small.
 2. **Round-trip tests — DONE for import.** Unit tests cover the Z-up remap, the
    centimetre stage, the identity stage, and the conjugated-chain property
-   (`S·W·p = L₁'·L₂'·S·p`). The **save**-side round-trip test is blocked on step 4.
+   (`S·W·p = L₁'·L₂'·S·p`). The **save**-side round trip is pinned by
+   `a_non_canonical_stage_is_authored_in_its_own_frame` and
+   `undo_on_a_non_canonical_stage_restores_the_original_position` in `lunco-usd`.
 3. **Promote to a `lunco-axes-and-units` crate + `CanonicalScene` trait** when a
    *second* format spoke actually arrives. Speculative today — USD is the
    interchange hub, so Blender/Isaac arrive *through* USD, not beside it.

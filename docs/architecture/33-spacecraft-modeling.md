@@ -138,7 +138,7 @@ now USD-authorable:
 
 **G4b — authored mix  [DONE]:** `lunco:driveMix` on the rover root declares a
 **linear per-port mix** — whitespace-separated `port=forward,steer[,brake]` terms
-→ a data-driven `DriveMix` component (`lunco-core`; allocated by the `linear`
+→ a data-driven `DriveMix` component (`lunco-mobility`; allocated by the `linear`
 kernel in `ControlKernelRegistry`). The kernel projects the drive inputs onto
 every named port (`value = fwd·f + steer·s + brake·b`,
 clamped, scaled to i16), taking precedence over the built-in skid/Ackermann

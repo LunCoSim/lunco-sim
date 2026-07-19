@@ -9,7 +9,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-core`** | Core primitives (`DigitalPort`, `PhysicalPort`, the typed `Mutation<P>` command substrate, `SimTick`), coordinate systems, the `SceneViewport` (active-camera binding), the `ControlKernelRegistry` (drive-allocation kernels), and canonical diagram data types. |
+| **`lunco-core`** | Core primitives (`DigitalPort`, `PhysicalPort`, the typed `Mutation<P>` command substrate, `SimTick`), coordinate systems, the `SceneViewport` (active-camera binding), and canonical diagram data types. Vehicle vocabulary — the drive kernels, `DriveMix` and `ControlKernelRegistry` — lives in `lunco-mobility`, not here: core carries no domain. |
 | **`lunco-command-macro`** | Procedural macros for the typed command system (`#[Command]`, `#[on_command]`, `register_commands!`; re-exported by `lunco-core`). |
 | **`lunco-workspace`** | Headless editor session management: open Twins, active documents, perspectives, and recents. |
 | **`lunco-twin`** | The simulation unit on disk: folder structure, `twin.toml` manifest parsing, and file indexing. |
@@ -218,7 +218,7 @@ Backend-agnostic experiment / batch-run registry. Models a single Fast Run as a 
 ### Vessel Control & Hardware
 
 **`lunco-mobility`**
-Physics models for surface mobility and traction — the parameterized substrate (a vehicle is a USD file, not a Rust struct). Raycast wheel model with contact-plane traction (supports leaning single-track bikes), suspension (spring-damper), a data-driven `DriveMix` allocated by a named kernel from `lunco-core`'s `ControlKernelRegistry` (`skid`/`linear`), and a soft rocker-bogie `DifferentialCoupling`.
+Physics models for surface mobility and traction — the parameterized substrate (a vehicle is a USD file, not a Rust struct). Raycast wheel model with contact-plane traction (supports leaning single-track bikes), suspension (spring-damper), a data-driven `DriveMix` allocated by a named kernel from this crate's own `ControlKernelRegistry` (`skid`/`linear`), and a soft rocker-bogie `DifferentialCoupling`.
 
 **`lunco-robotics`**
 High-level vessel assembly and spawning logic. Orchestrates the composition of complex robots from constituent parts, linking chassis, wheels, software, and sensors into a cohesive simulation unit.

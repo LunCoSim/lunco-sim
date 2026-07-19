@@ -95,8 +95,72 @@ fn token_or_string(v: sdf::Value) -> Option<String> {
     }
 }
 
+/// How an attribute's scalar value relates to a length in the stage's linear units.
+///
+/// USD has no role type for scalar lengths — `radius` is a bare `double` — so this
+/// is carried per (schema, property) instead, which is the only place the fact is
+/// actually known.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum LinearUnit {
+    /// Not a linear quantity. The DEFAULT and the safe answer: an unannotated
+    /// attribute is left alone rather than guessed at.
+    #[default]
+    None,
+    /// A length. `stage_units_per_unit` is how many stage linear units one
+    /// authored unit represents — `1.0` for ordinary lengths, `0.1` for
+    /// `UsdGeomCamera`'s focal length and apertures, which USD defines in TENTHS
+    /// of a world unit.
+    Length { stage_units_per_unit: f64 },
+}
+
+/// The linear-unit facts core USD states in prose but encodes in no type.
+///
+/// `point3f`/`vector3f`/`normal3f` carry their role in the type system and are
+/// handled by the role types. A `UsdGeomSphere`'s `radius` is a bare `double`, and
+/// on a stage whose `metersPerUnit` is `0.01` it must be authored in centimetres —
+/// a fact that lives in the schema's documentation and nowhere a program can read.
+/// Keyed by `(schema, property)` for the same reason the registry itself is: core
+/// declares `radius` and `height` on four different gprims.
+///
+/// Every entry is checked against the vendored `generatedSchema.usda` this registry
+/// loads; a name core does not declare does not belong here.
+const CORE_LINEAR_UNITS: &[(&str, &str, LinearUnit)] = &[
+    // Gprim dimensions — plain lengths in stage linear units.
+    ("Sphere", "radius", LinearUnit::Length { stage_units_per_unit: 1.0 }),
+    ("Cube", "size", LinearUnit::Length { stage_units_per_unit: 1.0 }),
+    ("Cylinder", "radius", LinearUnit::Length { stage_units_per_unit: 1.0 }),
+    ("Cylinder", "height", LinearUnit::Length { stage_units_per_unit: 1.0 }),
+    ("Cone", "radius", LinearUnit::Length { stage_units_per_unit: 1.0 }),
+    ("Cone", "height", LinearUnit::Length { stage_units_per_unit: 1.0 }),
+    ("Capsule", "radius", LinearUnit::Length { stage_units_per_unit: 1.0 }),
+    ("Capsule", "height", LinearUnit::Length { stage_units_per_unit: 1.0 }),
+    // `Cylinder_1` / `Capsule_1` are USD's own axis-agnostic successors, declared
+    // in the same file. Omitting them would leave the successor schema silently
+    // unannotated while its predecessor resolved.
+    ("Cylinder_1", "radius", LinearUnit::Length { stage_units_per_unit: 1.0 }),
+    ("Cylinder_1", "height", LinearUnit::Length { stage_units_per_unit: 1.0 }),
+    ("Capsule_1", "radius", LinearUnit::Length { stage_units_per_unit: 1.0 }),
+    ("Capsule_1", "height", LinearUnit::Length { stage_units_per_unit: 1.0 }),
+    ("Plane", "width", LinearUnit::Length { stage_units_per_unit: 1.0 }),
+    ("Plane", "length", LinearUnit::Length { stage_units_per_unit: 1.0 }),
+    // `UsdGeomCamera` states its focal length and aperture in TENTHS of a world
+    // unit, so that the schema's default 50 / 20.955 / 15.2908 read as the
+    // photographer's millimetres on a stage authored in centimetres. This is USD's
+    // documented convention, not a rounding of ours — see the class documentation
+    // in `usdGeom`'s generated schema.
+    ("Camera", "focalLength", LinearUnit::Length { stage_units_per_unit: 0.1 }),
+    ("Camera", "horizontalAperture", LinearUnit::Length { stage_units_per_unit: 0.1 }),
+    ("Camera", "verticalAperture", LinearUnit::Length { stage_units_per_unit: 0.1 }),
+    ("Camera", "horizontalApertureOffset", LinearUnit::Length { stage_units_per_unit: 0.1 }),
+    ("Camera", "verticalApertureOffset", LinearUnit::Length { stage_units_per_unit: 0.1 }),
+    // `focusDistance` is a distance in the scene, not through the lens, so it is an
+    // ordinary world-unit length — the exception that makes the tenths above easy
+    // to get wrong.
+    ("Camera", "focusDistance", LinearUnit::Length { stage_units_per_unit: 1.0 }),
+];
+
 /// What a schema declares about one property.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PropertySpec {
     /// The schema's declared USD type name (`"float"`, `"uniform token"` → `"token"`).
     pub type_name: String,
@@ -104,6 +168,10 @@ pub struct PropertySpec {
     pub variability: sdf::Variability,
     /// The schema that declares it — `"LunCoTerrainAPI"`, `"UsdShadeShader"`.
     pub declared_by: String,
+    /// Whether the value is a length, and in what multiple of the stage's linear
+    /// unit. From [`CORE_LINEAR_UNITS`] for core USD, from a `lunco:unit` entry in
+    /// the property's `customData` for schemas of ours.
+    pub linear: LinearUnit,
 }
 
 /// The parsed `luncoSchema` plus the core `uniform` table.
@@ -209,8 +277,29 @@ impl SchemaRegistry {
             // property declarations are folded in.
             reg.ingest(src, false);
         }
+        reg.apply_core_linear_units();
         reg.ingest(GENERATED_SCHEMA, true);
         reg
+    }
+
+    /// Stamp [`CORE_LINEAR_UNITS`] onto the declarations core USD just contributed.
+    ///
+    /// Applied after the core ingest rather than consulted at lookup time so that a
+    /// table entry naming a property core does not declare cannot sit there unnoticed:
+    /// the only way to be sure the fact attaches to a real declaration is to attach it.
+    fn apply_core_linear_units(&mut self) {
+        for (schema, name, unit) in CORE_LINEAR_UNITS {
+            match self
+                .properties
+                .get_mut(&(schema.to_string(), name.to_string()))
+            {
+                Some(prop) => prop.linear = *unit,
+                None => bevy::log::warn!(
+                    "[schema] linear-unit table names {schema}.{name}, which no vendored \
+                     core schema declares — the entry is dead and the unit is unknown"
+                ),
+            }
+        }
     }
 
     /// Fold one `generatedSchema.usda` into the registry. `own` records the file's
@@ -256,8 +345,37 @@ impl SchemaRegistry {
                     let Some(type_name) = spec.get("typeName").cloned().and_then(token_or_string) else {
                         continue;
                     };
+                    // `customData` is USD's per-spec escape hatch: a dictionary any
+                    // schema may carry, needing no plugInfo registration and surviving
+                    // `usdGenSchema` verbatim. It is where a `lunco:` property states
+                    // the one thing USD's type system cannot — that its scalar is a
+                    // length. Core USD annotates nothing this way, so it is stamped
+                    // from `CORE_LINEAR_UNITS` instead.
+                    let linear = match spec.get("customData") {
+                        Some(sdf::Value::Dictionary(d)) => {
+                            match d.get("lunco:unit").cloned().and_then(token_or_string) {
+                                None => LinearUnit::None,
+                                Some(u) if u == "length" => {
+                                    LinearUnit::Length { stage_units_per_unit: 1.0 }
+                                }
+                                // A typo here would otherwise degrade to "not a length"
+                                // in silence, which is indistinguishable from an
+                                // attribute nobody annotated.
+                                Some(other) => {
+                                    bevy::log::warn!(
+                                        "[schema] {}.{name}: unrecognised lunco:unit \
+                                         '{other}' — treated as not a linear quantity",
+                                        prim,
+                                    );
+                                    LinearUnit::None
+                                }
+                            }
+                        }
+                        _ => LinearUnit::None,
+                    };
                     let prop = PropertySpec {
                         type_name,
+                        linear,
                         // Unauthored ⇒ `varying`, USD's default. `uniform` is
                         // the only variability USDA actually writes out.
                         variability: match spec.get("variability") {
@@ -325,6 +443,19 @@ impl SchemaRegistry {
     /// fallback to another schema's declaration of the same name.
     pub fn property_in(&self, schema: &str, name: &str) -> Option<&PropertySpec> {
         self.properties.get(&(schema.to_string(), name.to_string()))
+    }
+
+    /// Whether `schema`'s `name` is a length, and in what multiple of the stage's
+    /// linear unit. [`LinearUnit::None`] when the pair is unknown or unannotated —
+    /// a unit conversion must never be invented for a property nobody described.
+    ///
+    /// Takes the schema explicitly, not a bare name: `radius` is a length on
+    /// `Sphere` and on `Cylinder`, and there is no reason a future schema's
+    /// `radius` must be one at all.
+    pub fn linear_unit(&self, schema: &str, name: &str) -> LinearUnit {
+        self.property_in(schema, name)
+            .map(|p| p.linear)
+            .unwrap_or_default()
     }
 
     /// Every schema this registry knows that declares `name`, in no fixed order.
@@ -701,6 +832,116 @@ class "SquatterAPI" (
             reg.property("lunco:suspensionVisual:role").unwrap().variability,
             sdf::Variability::Uniform,
         );
+    }
+
+    /// A scalar length is knowable only from the schema, so the registry must be
+    /// where it is known.
+    ///
+    /// The pairs below are all bare `double`/`float` in USD's type system — nothing
+    /// about the authored value says "metres". Without this, code scaling a stage
+    /// authored in centimetres has to carry its own list of which numbers are
+    /// distances, which is the hand-table failure the module header describes.
+    #[test]
+    fn linear_units_come_from_the_schema() {
+        let reg = SchemaRegistry::global().read().unwrap();
+
+        assert_eq!(
+            reg.linear_unit("Sphere", "radius"),
+            LinearUnit::Length { stage_units_per_unit: 1.0 }
+        );
+        assert_eq!(
+            reg.linear_unit("Plane", "width"),
+            LinearUnit::Length { stage_units_per_unit: 1.0 }
+        );
+
+        // `UsdGeomCamera` defines these in TENTHS of a world unit. Getting the factor
+        // wrong is a 10x field of view, and nothing about the `float` says so.
+        assert_eq!(
+            reg.linear_unit("Camera", "focalLength"),
+            LinearUnit::Length { stage_units_per_unit: 0.1 }
+        );
+        assert_eq!(
+            reg.linear_unit("Camera", "horizontalAperture"),
+            LinearUnit::Length { stage_units_per_unit: 0.1 }
+        );
+        // …but the focus distance is a distance in the SCENE, so it is not.
+        assert_eq!(
+            reg.linear_unit("Camera", "focusDistance"),
+            LinearUnit::Length { stage_units_per_unit: 1.0 }
+        );
+
+        // Unannotated properties are left alone rather than guessed at — including
+        // one that is dimensionless (`fStop`) and one that is a real quantity in
+        // units this mechanism does not cover (`physics:mass`).
+        assert_eq!(reg.linear_unit("Camera", "fStop"), LinearUnit::None);
+        assert_eq!(reg.linear_unit("MassAPI", "physics:mass"), LinearUnit::None);
+        // An unknown pair answers None too: no unit is ever invented.
+        assert_eq!(reg.linear_unit("Sphere", "nonesuch"), LinearUnit::None);
+        assert_eq!(reg.linear_unit("Nonesuch", "radius"), LinearUnit::None);
+    }
+
+    /// The reason the unit is keyed by `(schema, name)` and not by name: `radius` is
+    /// declared by four core gprims, and each must be able to answer for itself.
+    #[test]
+    fn same_name_in_two_schemas_carries_its_own_unit() {
+        let reg = SchemaRegistry::global().read().unwrap();
+        for schema in ["Sphere", "Cylinder", "Cone", "Capsule"] {
+            assert_eq!(
+                reg.linear_unit(schema, "radius"),
+                LinearUnit::Length { stage_units_per_unit: 1.0 },
+                "{schema}.radius must resolve independently"
+            );
+        }
+        // A name-keyed answer could not distinguish these: `height` is a length on
+        // Cylinder, while `Camera.focalLength` — also a length — is in a different
+        // multiple entirely.
+        assert_eq!(
+            reg.linear_unit("Cylinder", "height"),
+            LinearUnit::Length { stage_units_per_unit: 1.0 }
+        );
+        assert_ne!(
+            reg.linear_unit("Camera", "focalLength"),
+            reg.linear_unit("Cylinder", "height")
+        );
+    }
+
+    /// Our own schemas self-describe through `customData`, USD's per-spec escape
+    /// hatch — no plugInfo registration, no parallel table to keep in step.
+    #[test]
+    fn our_schemas_declare_their_lengths_in_custom_data() {
+        const RIG_SCHEMA: &str = r#"#usda 1.0
+(
+    upAxis = "Y"
+)
+class "RigUnitsAPI" (
+    customData = { token apiSchemaType = "singleApply" }
+)
+{
+    double rig:boomLength = 3.2 (
+        customData = {
+            string lunco:unit = "length"
+        }
+    )
+    double rig:gearRatio = 4
+    double rig:mystery = 1 (
+        customData = {
+            string lunco:unit = "furlong"
+        }
+    )
+}
+"#;
+        assert!(SchemaRegistry::register_extension(RIG_SCHEMA));
+        let reg = SchemaRegistry::global().read().unwrap();
+
+        assert_eq!(
+            reg.linear_unit("RigUnitsAPI", "rig:boomLength"),
+            LinearUnit::Length { stage_units_per_unit: 1.0 }
+        );
+        // Declared, but says nothing about units — so nothing is claimed.
+        assert_eq!(reg.linear_unit("RigUnitsAPI", "rig:gearRatio"), LinearUnit::None);
+        // An unrecognised value is not a length either; it warns at ingest so the
+        // typo is visible rather than silently reading as "unannotated".
+        assert_eq!(reg.linear_unit("RigUnitsAPI", "rig:mystery"), LinearUnit::None);
     }
 
     /// `custom` is asserted only where we can know it — inside our own namespace.

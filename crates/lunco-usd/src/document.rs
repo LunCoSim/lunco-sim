@@ -81,7 +81,7 @@
 use std::collections::VecDeque;
 
 use bevy::log::warn;
-use bevy::math::{DVec3, EulerRot, Quat, Vec3};
+use bevy::math::{DVec3, EulerRot, Quat};
 use bevy::reflect::Reflect;
 use lunco_doc::{Document, DocumentError, DocumentId, DocumentOp, DocumentOrigin};
 use lunco_usd_bevy::author::{
@@ -813,6 +813,37 @@ impl UsdDocument {
     // ─── internal ──────────────────────────────────────────────────────
 
     /// Borrow the data for layer `t`.
+    /// The linear unit of `attr` on `prim`, per the schema that declares it.
+    ///
+    /// Resolved by the prim's TYPE first, because a scalar length means different
+    /// things on different schemas — `radius` on a `Sphere` and on a `Cylinder` are
+    /// separate declarations, which is the reason the registry keys on the
+    /// declaring schema rather than the bare name.
+    ///
+    /// The namespaced fallback covers our own `lunco:*` properties, which come from
+    /// applied API schemas rather than the prim's type. Their names are globally
+    /// unique by construction (that is what the namespace is for), so resolving one
+    /// by name is unambiguous and saves walking the `apiSchemas` list op for a
+    /// lookup that could only ever have one answer.
+    fn linear_unit_of(&self, prim: &SdfPath, attr: &str) -> crate::schema::LinearUnit {
+        use crate::schema::{LinearUnit, SchemaRegistry};
+        let Ok(reg) = SchemaRegistry::global().read() else {
+            return LinearUnit::None;
+        };
+        if let Some(ty) = self.composed_arc().prim_type_name(prim) {
+            let u = reg.linear_unit(&ty, attr);
+            if u != LinearUnit::None {
+                return u;
+            }
+        }
+        if attr.contains(':') {
+            if let Some(spec) = reg.property(attr) {
+                return spec.linear;
+            }
+        }
+        LinearUnit::None
+    }
+
     fn layer(&self, t: TargetLayer) -> &sdf::Data {
         match t {
             TargetLayer::Base => &self.base,
@@ -922,6 +953,22 @@ fn prim_in(data: &sdf::Data, sdf: &SdfPath) -> bool {
 
 /// The `xformOpOrder` tokens `data` holds for `prim`, flattening any list-op
 /// authoring. Empty when unauthored.
+/// Rescale a scalar attribute value in place, leaving every non-scalar shape alone.
+///
+/// Lengths reach USD as bare `float`/`double` — there is no role type for them —
+/// so the conversion cannot be chosen from the payload and is handed in by the
+/// caller, which resolved it from the schema.
+fn scale_scalar_value(v: sdf::Value, f: impl Fn(f64) -> f64) -> sdf::Value {
+    use sdf::Value as V;
+    match v {
+        V::Float(x) => V::Float(f(x as f64) as f32),
+        V::Double(x) => V::Double(f(x)),
+        V::FloatVec(xs) => V::FloatVec(xs.into_iter().map(|x| f(x as f64) as f32).collect()),
+        V::DoubleVec(xs) => V::DoubleVec(xs.into_iter().map(|x| f(x)).collect()),
+        other => other,
+    }
+}
+
 /// A canonical `xformOp:rotateXYZ` Euler triple (degrees) in the STAGE's frame.
 ///
 /// A Euler triple has no axis remap of its own — the remap is defined on the
@@ -1299,6 +1346,36 @@ impl Document for UsdDocument {
                     })?
                 };
 
+                // Canonical in, stage on disk — the same contract `SetTranslate`
+                // keeps, applied here by the attribute's USD type ROLE. Dispatching
+                // on the type rather than the value is not a shortcut: `point3f`,
+                // `vector3f` and `color3f` all decode to the same `Vec3f`, and only
+                // the type says which of them scales with `metersPerUnit`.
+                //
+                // Runs on the TYPED value, after parsing and before authoring, so no
+                // literal is ever re-formatted to convert it — a string round-trip
+                // here would risk changing values it was only meant to move.
+                let conv_stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let conv = ConventionTransform::from_stage_metrics(&StageMetrics::from_stage(&conv_stage));
+                let val = conv.stage_value(&type_name, val);
+
+                // SCALAR LENGTHS, which no USD type can announce. `radius` is a bare
+                // `double`, so the fact that it scales with `metersPerUnit` lives in
+                // the SCHEMA and is resolved through the registry — never guessed
+                // from the attribute's name, which would convert every unrelated
+                // attribute that happened to share it.
+                //
+                // `stage_units_per_unit` is not always 1: `UsdGeomCamera` defines
+                // focal length and aperture in TENTHS of a world unit, so a bare
+                // "is a length" flag would still author those wrong by 10x.
+                let linear = self.linear_unit_of(&prim_sdf, &name);
+                let val = match linear {
+                    crate::schema::LinearUnit::Length { stage_units_per_unit } if !conv.is_identity() => {
+                        scale_scalar_value(val, |m| conv.stage_length(m) / stage_units_per_unit)
+                    }
+                    _ => val,
+                };
+
                 // Typed inverse: restore the attribute's prior value in THIS layer,
                 // so undo replays incrementally (the projector's `apply_incremental_
                 // op_to_stage` path) instead of a `ReplaceSource` that forces a
@@ -1319,7 +1396,20 @@ impl Document for UsdDocument {
                         _ => None,
                     }
                 } else {
-                    prior.and_then(|old| author::value_to_literal(&type_name, old))
+                    // Back to canonical before it becomes an op literal: `prior` came
+                    // straight out of the layer, so it is in the stage's frame, and a
+                    // `SetAttribute` carries canonical values.
+                    prior
+                        .map(|old| conv.canonical_value(&type_name, old))
+                        .map(|old| match linear {
+                            crate::schema::LinearUnit::Length { stage_units_per_unit }
+                                if !conv.is_identity() =>
+                            {
+                                scale_scalar_value(old, |v| conv.length(v * stage_units_per_unit))
+                            }
+                            _ => old,
+                        })
+                        .and_then(|old| author::value_to_literal(&type_name, old))
                 };
                 let inverse = match recovered {
                     Some(v) => UsdOp::SetAttribute {
@@ -1361,6 +1451,15 @@ impl Document for UsdDocument {
                 ..
             } => {
                 let prim_sdf = self.require_prim_anywhere(&path)?;
+                // TODO(backlog): this arm does NOT apply the canonical→stage
+                // conversion that `SetAttribute` does, so an animated value
+                // authored onto a Z-up/centimetre stage is written in canonical
+                // units while its static counterpart is written correctly — the two
+                // forms of one attribute disagree in the same file. The helpers
+                // exist and are tested (`ConventionTransform::stage_value`, plus
+                // `linear_unit_of` for scalars); this needs the same two call sites
+                // (author + inverse). See "Time-sampled values are not
+                // unit-converted" in docs/architecture/engineering-backlog-and-standards.md.
                 let val = parse_attribute_value(&type_name, &value).map_err(|e| {
                     DocumentError::ValidationFailed(format!(
                         "SetTimeSample `{name}` ({type_name}) @ {time}: {e}"
@@ -1762,6 +1861,159 @@ mod tests {
             restored[0].abs() < 1e-6 && restored[1].abs() < 1e-6 && (restored[2] - 250.0).abs() < 1e-3,
             "undo must restore the stage's original (0,0,250); got {restored:?}"
         );
+    }
+
+    /// A POINT scales with `metersPerUnit`; a NORMAL does not — and both are
+    /// `Vec3f` on the wire.
+    ///
+    /// This is the whole reason the conversion dispatches on the USD type name
+    /// rather than the value: `point3f`, `normal3f` and `color3f` are
+    /// indistinguishable once decoded. Treating them alike would either shrink
+    /// every normal by 100 on a centimetre stage or leave every point unscaled.
+    #[test]
+    fn a_point_scales_but_a_normal_only_rotates() {
+        let src = "#usda 1.0\n(\n    metersPerUnit = 0.01\n    upAxis = \"Z\"\n)\n\ndef Xform \"World\"\n{\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(80),
+            src,
+            DocumentOrigin::writable_file("/tmp/units_roles.usda"),
+        );
+
+        // Canonical +Y, one metre out.
+        doc.apply(UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            name: "customPoint".into(),
+            type_name: "point3f".into(),
+            value: "(0, 1, 0)".into(),
+        })
+        .expect("point applies");
+
+        // Canonical +Y, a unit normal.
+        doc.apply(UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            name: "customNormal".into(),
+            type_name: "normal3f".into(),
+            value: "(0, 1, 0)".into(),
+        })
+        .expect("normal applies");
+
+        let prim = SdfPath::new("/World").unwrap();
+        let p = doc
+            .data()
+            .prim_attribute_value::<[f32; 3]>(&prim, "customPoint")
+            .expect("point authored");
+        let n = doc
+            .data()
+            .prim_attribute_value::<[f32; 3]>(&prim, "customNormal")
+            .expect("normal authored");
+
+        // Z-up sends canonical +Y to stage +Z for both; only the point takes the
+        // 1 m → 100 cm scale.
+        assert!(
+            (p[2] - 100.0).abs() < 1e-2,
+            "a point must scale with metersPerUnit; got {p:?}"
+        );
+        assert!(
+            (n[2] - 1.0).abs() < 1e-4,
+            "a normal must rotate but NOT scale; got {n:?}"
+        );
+    }
+
+    /// A scalar LENGTH is authored in the stage's units, though no USD type says so.
+    ///
+    /// `radius` is a bare `double` — the role system that carries `point3f` cannot
+    /// help here, and the fact only exists in the schema. On a centimetre stage a
+    /// canonical 2 m radius must land as 200.
+    #[test]
+    fn a_scalar_length_is_authored_in_stage_units() {
+        let src = "#usda 1.0\n(\n    metersPerUnit = 0.01\n)\n\ndef Sphere \"Ball\"\n{\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(81),
+            src,
+            DocumentOrigin::writable_file("/tmp/units_scalar.usda"),
+        );
+
+        doc.apply(UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: "/Ball".into(),
+            name: "radius".into(),
+            type_name: "double".into(),
+            value: "2.0".into(),
+        })
+        .expect("radius applies");
+
+        let r = doc
+            .data()
+            .prim_attribute_value::<f64>(&SdfPath::new("/Ball").unwrap(), "radius")
+            .expect("radius authored");
+        assert!((r - 200.0).abs() < 1e-6, "2 m on a cm stage must author as 200; got {r}");
+    }
+
+    /// The camera's TENTHS-of-a-unit quirk survives the conversion.
+    ///
+    /// `UsdGeomCamera` defines focal length and aperture in tenths of a world unit,
+    /// so a flag that merely said "this is a length" would author them 10x wrong.
+    /// The registry carries the factor, and this is what proves it is applied.
+    #[test]
+    fn the_cameras_tenths_of_a_unit_factor_is_honored() {
+        let src = "#usda 1.0\n(\n    metersPerUnit = 0.01\n)\n\ndef Camera \"Cam\"\n{\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(82),
+            src,
+            DocumentOrigin::writable_file("/tmp/units_camera.usda"),
+        );
+
+        // Canonical 0.05 m (50 mm) of focal length. On a cm stage that is 5 stage
+        // units, and focalLength counts in tenths of one — so 50.
+        doc.apply(UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: "/Cam".into(),
+            name: "focalLength".into(),
+            type_name: "float".into(),
+            value: "0.05".into(),
+        })
+        .expect("focalLength applies");
+
+        let f = doc
+            .data()
+            .prim_attribute_value::<f32>(&SdfPath::new("/Cam").unwrap(), "focalLength")
+            .expect("focalLength authored");
+        assert!(
+            (f - 50.0).abs() < 1e-3,
+            "0.05 m on a cm stage in tenths-of-a-unit must author as 50; got {f}"
+        );
+    }
+
+    /// A dimensionless scalar must be left ALONE.
+    ///
+    /// The guard against over-reach: `fStop` is a ratio, and scaling it by the
+    /// stage's units would corrupt a value that was never spatial. Conversion is
+    /// opt-in per schema declaration, so anything unannotated passes through.
+    #[test]
+    fn a_dimensionless_scalar_is_not_converted() {
+        let src = "#usda 1.0\n(\n    metersPerUnit = 0.01\n)\n\ndef Camera \"Cam\"\n{\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(83),
+            src,
+            DocumentOrigin::writable_file("/tmp/units_ratio.usda"),
+        );
+
+        doc.apply(UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: "/Cam".into(),
+            name: "fStop".into(),
+            type_name: "float".into(),
+            value: "2.8".into(),
+        })
+        .expect("fStop applies");
+
+        let v = doc
+            .data()
+            .prim_attribute_value::<f32>(&SdfPath::new("/Cam").unwrap(), "fStop")
+            .expect("fStop authored");
+        assert!((v - 2.8).abs() < 1e-6, "a ratio must pass through untouched; got {v}");
     }
 
     #[test]

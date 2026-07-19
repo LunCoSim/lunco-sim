@@ -220,6 +220,141 @@ impl ConventionTransform {
         };
         Self { rot, scale: m.meters_per_unit }
     }
+    /// Convert a typed attribute value CANONICAL → the stage's frame, choosing the
+    /// transform from the attribute's USD type ROLE.
+    ///
+    /// The role cannot be recovered from the value: `point3f`, `vector3f`,
+    /// `normal3f` and `color3f` all decode to `Value::Vec3f`. USD keeps them
+    /// distinct in the TYPE precisely because they transform differently — a point
+    /// is affected by unit scale, a direction is not, and a colour is not spatial at
+    /// all. So the type name is the input that matters here, not the payload.
+    ///
+    /// Anything whose role is not spatial is returned untouched. That deliberately
+    /// includes bare `float`/`double` lengths (`radius`, `height`, extents): USD
+    /// gives them no role, so there is nothing to dispatch on, and converting on a
+    /// guessed attribute-name list would corrupt every same-named attribute that
+    /// meant something else. A missed conversion misplaces a value; a wrong one
+    /// destroys it.
+    pub fn stage_value(&self, type_name: &str, v: openusd::sdf::Value) -> openusd::sdf::Value {
+        self.map_by_role(type_name, v, true)
+    }
+
+    /// The inverse of [`stage_value`](Self::stage_value): a value read out of the
+    /// layer, in the stage's frame, converted back to canonical.
+    pub fn canonical_value(&self, type_name: &str, v: openusd::sdf::Value) -> openusd::sdf::Value {
+        self.map_by_role(type_name, v, false)
+    }
+
+    fn map_by_role(&self, type_name: &str, v: openusd::sdf::Value, to_stage: bool) -> openusd::sdf::Value {
+        use openusd::gf;
+        use openusd::sdf::Value as V;
+
+        // The identity short-circuit is not just a speed win: every branch below
+        // round-trips through `Vec3`/`Quat`, and for f64 payloads that would narrow
+        // to f32 and back. On a canonical stage — every asset we author — the value
+        // must come through with its authored digits intact.
+        if self.is_identity() {
+            return v;
+        }
+
+        // `[]` is USD's array suffix; an array transforms element-wise, by the same
+        // role as its element type.
+        let base = type_name.strip_suffix("[]").unwrap_or(type_name);
+
+        #[derive(Clone, Copy)]
+        enum Role {
+            Point,
+            Direction,
+            Orientation,
+            None,
+        }
+        let role = match base {
+            "point3f" | "point3d" | "point3h" => Role::Point,
+            "vector3f" | "vector3d" | "vector3h" | "normal3f" | "normal3d" | "normal3h" => Role::Direction,
+            "quatf" | "quatd" | "quath" => Role::Orientation,
+            _ => Role::None,
+        };
+
+        let f = move |p: Vec3| match role {
+            Role::Point => {
+                if to_stage {
+                    self.stage_point(p)
+                } else {
+                    self.point(p)
+                }
+            }
+            Role::Direction => {
+                if to_stage {
+                    self.stage_dir(p)
+                } else {
+                    self.dir(p)
+                }
+            }
+            _ => p,
+        };
+        let fd = move |p: DVec3| match role {
+            Role::Point => {
+                if to_stage {
+                    self.stage_point_d(p)
+                } else {
+                    self.point_d(p)
+                }
+            }
+            Role::Direction => {
+                if to_stage {
+                    self.stage_dir_d(p)
+                } else {
+                    self.dir_d(p)
+                }
+            }
+            _ => p,
+        };
+        let fq = move |q: Quat| {
+            if to_stage {
+                self.stage_orient(q)
+            } else {
+                self.orient(q)
+            }
+        };
+
+        match (role, v) {
+            (Role::None, v) => v,
+            (_, V::Vec3f(a)) => {
+                let r = f(Vec3::new(a.x, a.y, a.z));
+                V::Vec3f(gf::Vec3f { x: r.x, y: r.y, z: r.z })
+            }
+            (_, V::Vec3d(a)) => {
+                let r = fd(DVec3::new(a.x, a.y, a.z));
+                V::Vec3d(gf::Vec3d { x: r.x, y: r.y, z: r.z })
+            }
+            (_, V::Vec3fVec(xs)) => V::Vec3fVec(
+                xs.into_iter()
+                    .map(|a| {
+                        let r = f(Vec3::new(a.x, a.y, a.z));
+                        gf::Vec3f { x: r.x, y: r.y, z: r.z }
+                    })
+                    .collect(),
+            ),
+            (_, V::Vec3dVec(xs)) => V::Vec3dVec(
+                xs.into_iter()
+                    .map(|a| {
+                        let r = fd(DVec3::new(a.x, a.y, a.z));
+                        gf::Vec3d { x: r.x, y: r.y, z: r.z }
+                    })
+                    .collect(),
+            ),
+            (Role::Orientation, V::Quatf(q)) => {
+                let r = fq(Quat::from_xyzw(q.x, q.y, q.z, q.w));
+                V::Quatf(gf::Quatf { w: r.w, x: r.x, y: r.y, z: r.z })
+            }
+            (Role::Orientation, V::Quatd(q)) => {
+                let r = fq(Quat::from_xyzw(q.x as f32, q.y as f32, q.z as f32, q.w as f32));
+                V::Quatd(gf::Quatd { w: r.w as f64, x: r.x as f64, y: r.y as f64, z: r.z as f64 })
+            }
+            (_, other) => other,
+        }
+    }
+
 
     /// Whether this is the no-op conversion (the common case: our own assets).
     /// Hot decoders early-out on it, so a canonical stage pays nothing.
