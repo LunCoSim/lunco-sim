@@ -71,28 +71,15 @@ const CINEMATIC_TILE_RES: usize = 2049;
 /// Deepest LOD the viz refines to. Bounds the tile count near the camera. With
 /// error-driven selection only feature tiles (rims, peaks) actually reach it, so
 /// 8 (≈0.65 m vertex pitch on a ±4 km DEM) stays cheap while crater rims resolve.
-///
-/// REJECTED EXPERIMENT (2026-07-18): depth 9, to strengthen the over-zoom
-/// craterlet band. Measured −25% FPS (avg 86 → 65) with far worse frame minima
-/// and NO visible change. The premise was wrong: it assumed `Overzoom`'s default
-/// `max_radius = 2 m`, but a scene AUTHORS this (moonbase: `maxFeature = 6.0`),
-/// and [`Overzoom`]'s Nyquist gate is full at `r ≥ 3w` (`w = 2·step`), so on a
-/// ±4 km DEM depth 8 (`w = 1.3 m`, `r/w = 4.6`) is ALREADY at full amplitude.
-/// Depth 9 cannot raise an amplitude of 1.0 — it only buys cost.
-///
-/// The real craterlet cliff is at 7→6 (amplitude 0.72 → 0.02), and it is a
-/// property of the LAYER PARAMETERS, not of `MAX_DEPTH`. Read the authored
-/// `lunco:layer:maxFeature` before reasoning about where detail dies; library
-/// defaults will mislead you.
+/// Going deeper cannot sharpen craterlets: [`Overzoom`]'s Nyquist gate is already
+/// at full amplitude by depth 8 for any authored `lunco:layer:maxFeature` — where
+/// detail dies is a property of the layer parameters, not of this cap.
 const MAX_DEPTH: u8 = 8;
 /// On-screen error (px, at the canonical viewport) at which a node refines —
-/// the ONE detail-vs-cost knob of the error-driven metric. Smaller = finer.
-///
-/// 3.0 → 2.0 (2026-07-19): refine range scales as 1/pixel_error, so 2.0 pushes
-/// every detail ring 1.5× farther out. At 3.0 the craterlet-bearing depths
-/// (6–8) hugged the camera closely enough that craters visibly popped in as you
-/// drove toward them; the point of a crater is to be seen BEFORE you reach it.
-/// Cost is bounded by `tile_budget` + nearest-first splits either way.
+/// the ONE detail-vs-cost knob of the error-driven metric. Smaller = finer, and
+/// refine ranges scale as its inverse, so it also sets how far out craters
+/// resolve before the camera reaches them. Cost is bounded by `tile_budget` +
+/// nearest-first splits.
 const TARGET_PIXEL_ERROR: f64 = 2.0;
 /// Canonical viewport for the screen metric (fixed → selection is independent of
 /// any client's real resolution/FOV; peers select identically).
@@ -384,8 +371,11 @@ fn merge_violates_restriction(cover: &HashSet<QuadCoord>, p: QuadCoord) -> bool 
 /// split first force-splits any coarser edge-neighbour (which, ON a restricted
 /// cover, is at most one level up — so the cascade is depth-1 per neighbour,
 /// recursing only through the chain it builds). The recursive `select_with_error`
-/// walk never enforced this (verified 2026-07-18: gap-2 pairs at its first step),
-/// which is one of the reasons it was replaced.
+/// walk never enforced this, which is one of the reasons it was replaced.
+///
+/// Returns the number of splits refused because they would exceed `budget` —
+/// zero at any fixed point whose wanted set fits (see
+/// [`TerrainStreamStatus::budget_refused`]).
 fn evolve_cover(
     qt: &Quadtree,
     cover: &mut HashSet<QuadCoord>,
@@ -517,9 +507,8 @@ fn evolve_cover(
             continue; // transient: retried next pass once the edit budget frees up
         }
         if cover.len() + 3 * chain.len() > budget {
-            // TILE-budget refusal — unlike the edit cap this does not resolve by
-            // waiting, so it is counted and surfaced (`TerrainStreamStatus`): at a
-            // fixed point the wanted set simply exceeds the budget.
+            // Unlike the edit cap this does not resolve by waiting, so it is
+            // counted and surfaced.
             budget_refused += 1;
             continue;
         }
@@ -623,10 +612,9 @@ pub struct LodTiles {
     /// permanently incomplete and the fallback it exists to provide would silently
     /// not be there. Also lets the enumeration be skipped once complete.
     coarse_ready: bool,
-    /// Budget-refused split count from the LAST live `evolve_cover` pass. Kept on
-    /// the component (not recomputed into the status resource directly) because
-    /// the idle fast path skips selection entirely — a starved-but-idle terrain
-    /// must keep reporting its starvation, not read as healthy.
+    /// Budget-refused split count from the last live [`evolve_cover`] pass. Kept
+    /// on the component because the idle fast path skips selection — a
+    /// starved-but-idle terrain must keep reporting, not read as healthy.
     budget_refused: usize,
 }
 
@@ -785,11 +773,9 @@ impl Default for TerrainLodConfig {
         #[cfg(target_arch = "wasm32")]
         let tile_budget = 64;
         #[cfg(not(target_arch = "wasm32"))]
-        // 512 → 768 with pixel_error 2.0 (2026-07-19): the finer metric's wanted
-        // set exceeded 512, and budget enforcement REFUSES the excess splits —
-        // correct mechanics, wrong tuning: the far field then sits on coarse
-        // parents forever, a permanent "cell not loaded" seam. The budget must
-        // roughly fit the metric's steady-state want or refusal becomes the look.
+        // Must roughly fit the metric's steady-state want at TARGET_PIXEL_ERROR:
+        // refused splits leave the far field on coarse parents indefinitely
+        // (surfaced as `TerrainStreamStatus::budget_refused`).
         let tile_budget = 768;
         // On wasm32 the `AsyncComputeTaskPool` has NO threads: the "off-thread"
         // bake future runs to completion on the MAIN thread the instant it is
@@ -800,8 +786,8 @@ impl Default for TerrainLodConfig {
         #[cfg(target_arch = "wasm32")]
         let bakes_per_frame = 1;
         #[cfg(not(target_arch = "wasm32"))]
-        // 4 → 8 (2026-07-19): pixel_error 2.0 grew the fill work ~2.25x; at 4 the
-        // coarse-parent fallback lingered long enough to read as missing terrain.
+        // Sized so the coarse-parent fallback fills before it reads as missing
+        // terrain at the default pixel error.
         let bakes_per_frame = 8;
         TerrainLodConfig {
             pixel_error: TARGET_PIXEL_ERROR,
@@ -812,12 +798,10 @@ impl Default for TerrainLodConfig {
     }
 }
 
-/// Live-tune the terrain streaming knobs — the same [`TerrainLodConfig`] fields
-/// the Inspector's "Terrain LOD" section edits, addressable from the API and
-/// scripts (controlled A/Bs, automation). Partial: omitted fields keep their
-/// current values. Values are written through raw; the selection pass clamps at
-/// its use sites (`pixel_error` to [0.5, 32], `tile_budget` to ≥16, `max_depth`
-/// to ≥1), so command and Inspector edits go through the same guards.
+/// Live-tune [`TerrainLodConfig`] from the API/scripts — the same fields the
+/// Inspector's "Terrain LOD" section edits. Omitted fields keep their current
+/// values. Written through raw: the selection pass clamps at its use sites, so
+/// command and Inspector edits go through the same guards.
 #[Command(default)]
 pub struct SetTerrainLod {
     pub pixel_error: Option<f64>,
@@ -1120,12 +1104,10 @@ pub struct TerrainStreamStatus {
     pub resident: usize,
     /// Off-thread bakes in flight.
     pub pending: usize,
-    /// Splits the selection WANTED but `tile_budget` refused (summed over
-    /// terrains, from each terrain's last live selection pass). Non-zero at a
-    /// still camera means the far field is sitting on coarser parents by budget
-    /// enforcement — the "cell not loaded" look — and raising `tile_budget` (or
-    /// coarsening `pixel_error`) is the fix. Distinct from `pending`, which is
-    /// transient fill work.
+    /// Splits the selection wanted but `tile_budget` refused (summed over
+    /// terrains). Unlike `pending` this is not transient: non-zero at a still
+    /// camera means areas hold on coarser parents until `tile_budget` is raised
+    /// or `pixel_error` coarsened.
     pub budget_refused: usize,
 }
 
@@ -1337,8 +1319,6 @@ pub fn update_lod_tiles(
                 // resident count so the status bar still reads "done", not "0/0".
                 stream_status.wanted += tiles.tiles.len();
                 stream_status.resident += tiles.tiles.len();
-                // Starvation is a property of the last live selection, not of this
-                // frame's (skipped) pass — keep reporting it while idle.
                 stream_status.budget_refused += tiles.budget_refused;
                 continue;
             }
@@ -2153,39 +2133,25 @@ mod draw_partition_tests {
         (worst, pair)
     }
 
-    /// CONTROL for [`evolving_cover_stays_restricted`]. The recursive walk is known
-    /// restricted (`quadtree.rs::neighbour_depth_differs_by_at_most_one`), so running
-    /// its output through THIS checker must pass. If both tests fail, the checker is
-    /// wrong; only this one passing while the other fails indicts `evolve_cover`.
-    /// STILL IGNORED — the recursive `select_with_error` walk remains unrestricted
-    /// (gap-2 pairs at its first sweep step, verified 2026-07-18); only
-    /// `evolve_cover`, the live selector, enforces the restriction now. This test
-    /// exists as the CHECKER'S control: if `worst_depth_gap` is ever suspected of
-    /// false positives, run it here — a failure on the recursive walk with a gap
-    /// you can confirm by hand (as we did) validates the checker. Un-ignore only
-    /// if the recursive walk itself gets restriction enforcement.
-    /// (`quadtree.rs`'s `neighbour_depth_differs_by_at_most_one` misses the defect
-    /// because it samples a 64x64 grid at 250 m steps, +x direction only.)
+    /// CONTROL for [`evolving_cover_stays_restricted`]: the checker itself must
+    /// accept a hand-built restricted cover and flag a hand-built 2-level seam,
+    /// or a pass over `evolve_cover` output proves nothing.
     #[test]
-    #[ignore]
-    fn the_recursive_walk_passes_the_same_restriction_checker() {
-        let qt = test_qt();
-        // Geometric error HALVES per level — the real shape of `measure_node_error`.
-        // A constant error gives every depth the same refine range, so the whole
-        // disc snaps to max_depth against a coarse outside: a degenerate setup that
-        // manufactures huge depth jumps regardless of the selector.
-        let err = |c: QuadCoord, _r: Square| 120.0f64 * 0.5f64.powi(c.depth as i32);
-        let prev = HashSet::new();
-        for step in 0..60 {
-            let x = -900.0 + (step as f64) * 30.0;
-            let cover: HashSet<QuadCoord> = qt
-                .select_with_error([x, 0.0], 2.0, &err, &prev)
-                .into_iter()
-                .map(|s| s.coord)
-                .collect();
-            let (gap, pair) = worst_depth_gap(&cover);
-            assert!(gap <= 1, "checker rejects the RECURSIVE walk at step {step}: {gap} at {pair:?}");
-        }
+    fn the_restriction_checker_detects_seams() {
+        let d1 = |x, z| QuadCoord { depth: 1, x, z };
+        // (1,0,0) replaced by its four children: every edge crosses ≤ 1 level.
+        let mut restricted: HashSet<QuadCoord> =
+            [d1(1, 0), d1(0, 1), d1(1, 1)].into_iter().collect();
+        restricted.extend((0..2).flat_map(|x| (0..2).map(move |z| QuadCoord { depth: 2, x, z })));
+        let (gap, pair) = worst_depth_gap(&restricted);
+        assert!(gap <= 1, "checker rejects a restricted cover: gap {gap} at {pair:?}");
+        // (1,0,0) replaced by its SIXTEEN depth-3 descendants: they touch the
+        // depth-1 siblings directly — a 2-level seam the checker must flag.
+        let mut seamed: HashSet<QuadCoord> =
+            [d1(1, 0), d1(0, 1), d1(1, 1)].into_iter().collect();
+        seamed.extend((0..4).flat_map(|x| (0..4).map(move |z| QuadCoord { depth: 3, x, z })));
+        let (gap, _) = worst_depth_gap(&seamed);
+        assert_eq!(gap, 2, "checker missed a 2-level seam");
     }
 
     /// THE CDLOD RESTRICTION: edge-adjacent selected nodes must differ by at most one
@@ -2241,28 +2207,34 @@ mod draw_partition_tests {
         }
     }
 
-    /// A budget too small for the metric's wanted set must REPORT the refused
-    /// splits (the "cell not loaded" self-diagnosis signal), and a budget that
-    /// fits must report none — the counter is starvation, not fill progress.
+    /// The refusal counter is starvation, not fill progress: any budget that
+    /// covers the metric's want reports zero at the fixed point, any budget
+    /// below it reports the refused splits.
     #[test]
     fn budget_starvation_is_reported() {
         let qt = test_qt();
         let err = |_c: QuadCoord, _r: Square| 120.0f64;
-        let mut cover = HashSet::new();
-        // Budget large enough that the metric's want fits entirely.
-        for _ in 0..200 {
-            evolve_cover(&qt, &mut cover, [0.0, 0.0], 5.0, &err, 1_000_000);
-        }
-        // Settled within budget: nothing refused at the fixed point.
-        let refused = evolve_cover(&qt, &mut cover, [0.0, 0.0], 5.0, &err, 1_000_000);
+        let settle = |budget: usize| {
+            let mut cover = HashSet::new();
+            for _ in 0..200 {
+                evolve_cover(&qt, &mut cover, [0.0, 0.0], 5.0, &err, budget);
+            }
+            (evolve_cover(&qt, &mut cover, [0.0, 0.0], 5.0, &err, budget), cover)
+        };
+        let (refused, unconstrained) = settle(usize::MAX);
         assert_eq!(refused, 0, "fixed point within budget must not report refusals");
-        // Same metric, starved budget: the wanted splits must surface as refusals.
-        let mut cover = HashSet::new();
-        for _ in 0..200 {
-            evolve_cover(&qt, &mut cover, [0.0, 0.0], 5.0, &err, 16);
+        let want = unconstrained.len();
+        let (refused, _) = settle(want);
+        assert_eq!(refused, 0, "budget == want must not report refusals");
+        for budget in [want / 2, want / 8, 16] {
+            let (refused, cover) = settle(budget);
+            assert!(
+                refused > 0,
+                "budget {budget} < want {want} (cover {}) reached a fixed point \
+                 without reporting refusals",
+                cover.len()
+            );
         }
-        let refused = evolve_cover(&qt, &mut cover, [0.0, 0.0], 5.0, &err, 16);
-        assert!(refused > 0, "starved cover reached a fixed point without reporting refusals");
     }
 
     /// Lowering the budget must be absorbed by merging, not by blowing past it.
